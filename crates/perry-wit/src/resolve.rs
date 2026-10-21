@@ -107,15 +107,10 @@ impl Converter<'_> {
                 WorldItem::Function(function) => root.functions.push(self.function(function)?),
                 WorldItem::Type { id, .. } => {
                     self.definition(*id)?;
-                    let resource = resource_id(self.resolve, *id);
-                    if matches!(self.resolve.types[resource].kind, TypeDefKind::Resource) {
-                        root.resources
-                            .insert(self.resolve.name_world_key(key), self.definition(resource)?);
-                    }
                 }
             }
         }
-        if !root.functions.is_empty() || !root.resources.is_empty() {
+        if !root.functions.is_empty() {
             interfaces.insert(0, root);
         }
         Ok(interfaces)

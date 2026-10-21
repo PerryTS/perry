@@ -3,7 +3,7 @@ use super::*;
 const TRANSFORM: &str = include_str!("../../../test-wasi/components/transform/world.wit");
 
 #[test]
-fn imported_resource_factories_keep_aliases_and_root_world_resources() {
+fn imported_resource_factories_keep_aliases_without_inventing_world_imports() {
     let world = parse(
         r#"package test:host;
         interface items { resource item; }
@@ -11,14 +11,14 @@ fn imported_resource_factories_keep_aliases_and_root_world_resources() {
         world plugin {
             import items;
             import aliases;
-            import root-item: resource;
+            use items.{item};
+            export echo: func(value: own<item>) -> own<item>;
         }"#,
         None,
     )
     .unwrap();
-    let root = world.imports.iter().find(|i| i.name.is_empty()).unwrap();
-    assert!(root.functions.is_empty());
-    assert_eq!(root.resources.len(), 1);
+    // A world-level use is a type alias, not an additional canonical import.
+    assert!(world.imports.iter().all(|i| !i.name.is_empty()));
     let items = world
         .imports
         .iter()

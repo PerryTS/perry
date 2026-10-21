@@ -25,8 +25,8 @@ Each component has its own store, resource table, memory budget, fuel budget,
 and interrupt handle. There are no implicit filesystem, network, environment,
 or stdio capabilities. Application imports must be supplied explicitly.
 Opt-in WASI Preview 2 providers are available through `ComponentOptions.wasi`.
-General host-defined resource imports remain unimplemented; command worlds
-and `wasi:http` are not yet qualified.
+Application-defined resource imports use the factories described below.
+Command worlds and `wasi:http` are not yet qualified.
 
 ### Per-instance WASI providers
 
@@ -105,6 +105,48 @@ GC finalizers release native engine memory without executing guest or
 JavaScript callbacks. Deferred guest-resource cleanup is still outstanding;
 GC is not a substitute for explicit disposal in this implementation.
 
+## Resources supplied by a native Perry host
+
+Generated `load` accepts an imports builder as well as an ordinary imports
+object. The builder receives resource factories bound to the new instance;
+they are usable before component initialization invokes imported constructors.
+
+```ts
+const plugin = load(bytes, (resources) => {
+  const counter = resources["example:counters/api@1.0.0"].counter;
+  return {
+    "example:counters/api@1.0.0": {
+      "[constructor]counter": (value: number) =>
+        counter.create({ value }, (payload) => release(payload)),
+      "[method]counter.read": (handle) =>
+        (counter.value(handle) as { value: number }).value,
+    },
+  };
+});
+```
+
+Factories retain the canonical WIT identity through `use` aliases. A handle
+from another instance or another resource type is rejected. Payloads remain
+GC roots while the component owns the resource; canonical representations
+contain opaque integers, never Perry heap addresses. Receiving ownership back
+creates a new wrapper generation, so the earlier owner and its borrows stay
+invalid. Borrowed callback arguments expire when the callback returns.
+
+Argument conversion validates the complete input before committing transfers.
+Invalid later arguments, duplicate owners, and an owner borrowed in the same
+call leave ownership unchanged. Host destructors remove payload roots before
+calling application code and run at most once. Explicit component disposal
+also cleans up host resources still held by the guest, including after a
+guest trap. Cleanup continues after a destructor throws and preserves the
+first JavaScript exception. Failed initialization releases payloads created
+by the builder or imported constructors.
+
+The native host ABI is version 2. Rebuild the component-host archive and native
+runtime together. Explicit disposal remains required: GC finalizers release
+engine memory without invoking application destructors. Built-in WASI resource
+providers remain controlled by `options.wasi`; application factories do not
+grant access to those providers.
+
 ## Resources in Perry-authored guests
 
 Guest bindings export `resources[interfaceName][resourceName]` factories.
@@ -147,8 +189,7 @@ version 2; rebuild the
 adapter and WASI runtime together rather than mixing earlier archives.
 
 The guest resource profile is qualified on Linux with the independent Rust
-provider/caller described below. Native Perry providers for application-defined
-resource imports remain separate work.
+provider/caller described below.
 
 ## Acceptance work
 
@@ -223,8 +264,8 @@ blocking-I/O cancellation, command worlds or HTTP.
 
 Still required before claiming the full milestone:
 
-- Implement host-defined resource imports and deferred cleanup, and qualify
-  the remaining capability operations, command worlds, and HTTP independently.
+- Complete host-resource qualification and deferred cleanup, and qualify the
+  remaining capability operations, command worlds, and HTTP independently.
 - Qualify supported host platforms and promote the demonstrated execution
   check into the required PR checks.
 
