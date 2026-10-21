@@ -298,10 +298,15 @@ fn freeze_unit(
         .lines()
         .filter_map(|line| {
             let line = line.trim_start();
-            (line.starts_with("declare ") || line.starts_with("define ")).then_some(line)
+            if let Some(name) = crate::module::global_symbol_name(line) {
+                return Some(name.trim_start_matches('@').to_string());
+            }
+            if line.starts_with("declare ") || line.starts_with("define ") {
+                let (_, tail) = line.split_once('@')?;
+                return tail.split_once('(').map(|(name, _)| name.to_string());
+            }
+            None
         })
-        .filter_map(|line| line.split_once('@').map(|(_, tail)| tail))
-        .filter_map(|tail| tail.split_once('(').map(|(name, _)| name.to_string()))
         .collect();
     for (name, line) in external_declarations {
         if declared.insert(name.clone()) {
@@ -433,16 +438,14 @@ fn compile_module_units_native_with_workers(
     if llmod.deduped_function_refs().len() <= 1 || n <= 1 {
         return compile_module_native(llmod, target, module_prefix);
     }
-    // #10399: this table is pushed into EVERY unit, and the dedup set in
-    // `freeze_unit` only covers functions — a global declaration is never
-    // deduped against the unit that defines it. So a declaration that omits
+    // #10399: this stream is pushed into every unit. A declaration omitting
     // `thread_local` for a global this module defines thread-local lands in
-    // the defining unit AND every other one, and `ld -r` rejects the object:
+    // a unit with a different symbol identity, and `ld -r` rejects the object:
     //   "TLS definition ... mismatches non-TLS reference".
     // Make the table agree with the definitions before it is handed out.
     let tls_globals = llmod.thread_local_global_names();
     let tls = llmod.thread_local_specifier();
-    let external_declarations: Vec<(String, String)> = llmod
+    let mut external_declarations: std::collections::BTreeMap<String, String> = llmod
         .declaration_lines()
         .filter(|(name, _)| !llmod.has_function(name))
         .map(|(name, line)| {
@@ -457,6 +460,20 @@ fn compile_module_units_native_with_workers(
             (name.to_string(), line)
         })
         .collect();
+    // Import metadata can precede the generated definition. Derive data
+    // declarations from that definition, including hidden binding and TLS,
+    // just as layout_codegen_units does for the text stream.
+    for definition in llmod.global_definition_lines() {
+        let Some(name) = crate::module::global_symbol_name(definition) else {
+            continue;
+        };
+        if let Some(slot) = external_declarations.get_mut(name.trim_start_matches('@')) {
+            if let Some(declaration) = crate::module::external_decl_for_global(definition) {
+                *slot = declaration;
+            }
+        }
+    }
+    let external_declarations: Vec<_> = external_declarations.into_iter().collect();
     let target_triple = llmod.target_triple.clone();
     let owned_module = std::mem::replace(llmod, LlModule::new(target_triple));
     // Every function is frozen as the unit layout renders it, and its

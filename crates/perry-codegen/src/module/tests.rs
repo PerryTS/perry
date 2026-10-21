@@ -49,7 +49,7 @@ fn external_decl_keeps_thread_local() {
     assert_eq!(
         external_decl_for_global("@__perry_init_done_m = internal thread_local global i8 0")
             .as_deref(),
-        Some("@__perry_init_done_m = external thread_local global i8")
+        Some("@__perry_init_done_m = external hidden thread_local global i8")
     );
     // The non-TLS form is unchanged.
     assert_eq!(
@@ -62,7 +62,7 @@ fn external_decl_keeps_thread_local() {
             "@perry_class_header_m__C = internal thread_local global <2 x i64> zeroinitializer"
         )
         .as_deref(),
-        Some("@perry_class_header_m__C = external thread_local global <2 x i64>")
+        Some("@perry_class_header_m__C = external hidden thread_local global <2 x i64>")
     );
 }
 
@@ -73,11 +73,11 @@ fn unit_promotion_keeps_thread_local() {
     use crate::module::linkage::{make_unique_owner_global, promote_global_for_units};
     assert_eq!(
         promote_global_for_units("@g = internal thread_local global i8 0"),
-        "@g = linkonce_odr thread_local global i8 0"
+        "@g = linkonce_odr hidden thread_local global i8 0"
     );
     assert_eq!(
         make_unique_owner_global("@g = internal thread_local global i8 0"),
-        "@g = thread_local global i8 0"
+        "@g = hidden thread_local global i8 0"
     );
 }
 use super::*;
@@ -149,7 +149,7 @@ fn render_codegen_units_partitions_and_links() {
     // count and broke clang's translation-unit limit on real bundles.
     let global_defs = units
         .iter()
-        .filter(|u| u.contains("@perry_global_x = global double 0.0"))
+        .filter(|u| u.contains("@perry_global_x = hidden global double 0.0"))
         .count();
     assert_eq!(global_defs, 1, "global must be defined in exactly one unit");
     let str_defs = units
@@ -163,8 +163,8 @@ fn render_codegen_units_partitions_and_links() {
     for u in &units {
         if u.contains("@perry_global_x") {
             assert!(
-                u.contains("@perry_global_x = global double 0.0")
-                    || u.contains("@perry_global_x = external global double"),
+                u.contains("@perry_global_x = hidden global double 0.0")
+                    || u.contains("@perry_global_x = external hidden global double"),
                 "referencing unit must define or externally declare the global"
             );
         }
@@ -262,8 +262,8 @@ fn split_modules_do_not_export_colliding_string_constants() {
         ("route_js", &name_b, "beta", &units_b),
     ] {
         let ty = format!("[{} x i8]", literal.len() + 1);
-        let def = format!("@{name} = unnamed_addr constant {ty}");
-        let decl = format!("@{name} = external constant {ty}");
+        let def = format!("@{name} = hidden unnamed_addr constant {ty}");
+        let decl = format!("@{name} = external hidden constant {ty}");
         assert_eq!(
             units.iter().filter(|u| u.contains(&def)).count(),
             1,
@@ -285,7 +285,7 @@ fn split_modules_do_not_export_colliding_string_constants() {
         assert!(!units.iter().any(
             |u| u.contains("@perry_null_guard_zero ") || u.contains("@perry_null_guard_zero,")
         ));
-        let guard_def = format!("@perry_null_guard_zero_{prefix} = global i32 0");
+        let guard_def = format!("@perry_null_guard_zero_{prefix} = hidden global i32 0");
         assert_eq!(
             units.iter().filter(|u| u.contains(&guard_def)).count(),
             1,
@@ -547,7 +547,7 @@ fn mach_o_split_promotes_only_globals_two_units_define() {
     // *local* copies would be two distinct storages for one runtime slot.
     let shared_defs = units
         .iter()
-        .filter(|u| u.contains("@perry_class_keys_m__C = linkonce_odr global i64 0"))
+        .filter(|u| u.contains("@perry_class_keys_m__C = linkonce_odr hidden global i64 0"))
         .count();
     assert_eq!(
         shared_defs, 2,

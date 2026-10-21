@@ -133,6 +133,16 @@ impl LlModule {
             .map(|(name, line)| (name.as_str(), line.as_str()))
     }
 
+    /// Generated data definitions are authoritative for declarations in every
+    /// unit, including the complete declaration stream used by native emission.
+    pub(crate) fn global_definition_lines(&self) -> impl Iterator<Item = &str> {
+        self.string_constants
+            .iter()
+            .chain(&self.globals)
+            .map(String::as_str)
+            .filter(|line| !line.contains(" = external "))
+    }
+
     /// #10399: names of the globals this module DEFINES thread-local.
     ///
     /// The TLS specifier is part of a symbol's identity. A stale non-TLS
@@ -174,6 +184,15 @@ impl LlModule {
             fn_infos: Rc::new(RefCell::new(crate::fn_info::FnInfoState::default())),
             gc_effects: None,
             local_exec_tls: false,
+        }
+    }
+
+    /// An executable's generated data cannot be preempted. Encode that in
+    /// its definitions before splitting; library output keeps exported data
+    /// visible. Private/internal definitions stay local until unit promotion.
+    pub(crate) fn bind_generated_globals_to_image(&mut self) {
+        for line in self.string_constants.iter_mut().chain(&mut self.globals) {
+            *line = hidden_global_definition(line);
         }
     }
 
@@ -1246,7 +1265,7 @@ impl LlModule {
         // which is how three prettier plugins stopped compiling. Synthesize
         // the declaration from the definition, exactly as the function arm
         // does, so the two always agree.
-        for def in &shared_globals {
+        for def in shared_strings.iter().chain(&shared_globals) {
             if def.contains(" = external ") {
                 continue;
             }
@@ -1528,7 +1547,10 @@ impl LlModule {
                 }
             }
             for (name, decl) in &decl_by_name {
-                if defined.contains(name.as_str()) || !needed.contains(name.as_str()) {
+                if defined.contains(name.as_str())
+                    || !needed.contains(name.as_str())
+                    || global_index.contains_key(format!("@{name}").as_str())
+                {
                     continue;
                 }
                 pre.push_str(decl);

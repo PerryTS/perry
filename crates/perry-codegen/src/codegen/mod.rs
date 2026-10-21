@@ -4454,6 +4454,9 @@ fn emit_lowered_module(lowered: LoweredModule) -> Result<Vec<u8>> {
         decide_codegen_units(callable_count, llmod.estimated_function_ir_bytes())
     };
     if n_units > 1 {
+        if opts.output_type == "executable" {
+            llmod.bind_generated_globals_to_image();
+        }
         progress.phase(2, &format!("partitioning into {n_units} codegen units"));
         if let Some(result) =
             try_native_units(&mut llmod, n_units, opts.target.as_deref(), &module_prefix)

@@ -161,6 +161,27 @@ pub(crate) fn has_local_linkage(line: &str) -> bool {
     }
 }
 
+/// Bind a generated definition to this image. Imports and LLVM's appending
+/// lists retain their contracts; local linkage already implies dso_local.
+/// Visibility is part of the IR, so both unit emitters see the same fact.
+pub(crate) fn hidden_global_definition(line: &str) -> String {
+    let Some((name, rhs)) = line.split_once(" = ") else {
+        return line.to_string();
+    };
+    if has_local_linkage(line)
+        || rhs.starts_with("external ")
+        || rhs.starts_with("appending ")
+        || name.starts_with("@llvm.")
+    {
+        return line.to_string();
+    }
+    let rest = strip_leading_linkage(rhs);
+    let linkage = &rhs[..rhs.len() - rest.len()];
+    let (_, rest) = take_keyword(rest, &["dso_local", "dso_preemptable"]);
+    let (_, rest) = take_keyword(rest, &["default", "hidden", "protected"]);
+    format!("{name} = {linkage}hidden {rest}")
+}
+
 /// Rewrite a module-global definition so it is safe to duplicate across
 /// codegen units (#5391). Local-linkage (`private`/`internal`) and bare
 /// external definitions are promoted to `linkonce_odr`, so the linker keeps a
@@ -179,11 +200,11 @@ pub(crate) fn promote_global_for_units(line: &str) -> String {
         return line.to_string();
     }
     match line.split_once(" = ") {
-        Some((lhs, rhs)) => format!(
+        Some((lhs, rhs)) => hidden_global_definition(&format!(
             "{} = linkonce_odr {}",
             lhs,
             strip_leading_linkage(rhs.trim_start())
-        ),
+        )),
         None => line.to_string(),
     }
 }
@@ -217,7 +238,7 @@ pub(crate) fn promote_external_global_for_units(line: &str) -> String {
 /// `linkonce_odr` lets LLVM discard it when all references in the owner happen
 /// to optimize away, even though other object files still reference it.
 ///
-/// The result is a plain STRONG definition with default visibility, so the
+/// The result is a plain STRONG definition; promoted locals are hidden. The
 /// symbol's NAME must be unique across the whole program, not just the
 /// module: `.str.N` constants only satisfy that through
 /// [`LlModule::set_symbol_prefix`].
@@ -229,14 +250,26 @@ pub(crate) fn make_unique_owner_global(line: &str) -> String {
     // modules, not merely across this module's units. Keep that ownership
     // contract; weak_odr is non-discardable even when the owner's references
     // optimize away. Image strings carry no function/associative targets.
-    if line
-        .split_once(" = ")
-        .is_some_and(|(_, rhs)| rhs.starts_with("weak_odr constant "))
-    {
+    if line.split_once(" = ").is_some_and(|(_, rhs)| {
+        let Some(rhs) = rhs.strip_prefix("weak_odr ") else {
+            return false;
+        };
+        let (_, rhs) = take_keyword(rhs, &["dso_local", "dso_preemptable"]);
+        let (_, rhs) = take_keyword(rhs, &["default", "hidden", "protected"]);
+        let (_, rhs) = take_keyword(rhs, &["unnamed_addr", "local_unnamed_addr"]);
+        rhs.starts_with("constant ")
+    }) {
         return line.to_string();
     }
     match line.split_once(" = ") {
-        Some((lhs, rhs)) => format!("{} = {}", lhs, strip_leading_linkage(rhs.trim_start())),
+        Some((lhs, rhs)) => {
+            let definition = format!("{} = {}", lhs, strip_leading_linkage(rhs.trim_start()));
+            if has_local_linkage(line) {
+                hidden_global_definition(&definition)
+            } else {
+                definition
+            }
+        }
         None => line.to_string(),
     }
 }
@@ -275,6 +308,12 @@ pub(crate) fn external_decl_for_global(line: &str) -> Option<String> {
     // replicated, every cross-unit reference to one is declared here.
     let (preemption, rhs) = take_keyword(rhs, &["dso_local", "dso_preemptable"]);
     let (visibility, rhs) = take_keyword(rhs, &["default", "hidden", "protected"]);
+    // Promoting a local definition must not introduce symbol preemption.
+    let visibility = if has_local_linkage(line) {
+        "hidden"
+    } else {
+        visibility
+    };
     // #10399: keep the TLS specifier — `@g = external global i8` and
     // `@g = external thread_local global i8` are different symbols to LLVM.
     let (tls, rhs) = split_thread_local(rhs);
