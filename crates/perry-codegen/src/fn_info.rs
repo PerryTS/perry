@@ -28,7 +28,7 @@ use crate::runtime_abi::{
     FN_ARROW, FN_ASYNC, FN_ASYNC_GENERATOR, FN_COMPILED_BODY, FN_GENERATOR, FN_HAS_DECLARED,
     FN_HAS_LENGTH, FN_HAS_NAME, FN_HAS_SOURCE, FN_NAME_IMAGE, FN_NON_CONSTRUCTOR,
     FN_NON_STRICT_ORDINARY, FN_PERMANENT_IMAGE, FN_REST_SYNTHETIC_ARGUMENTS, FN_REST_USER,
-    FN_REST_USER_AND_ARGUMENTS, FN_STRICT, NOT_PLAIN,
+    FN_REST_USER_AND_ARGUMENTS, FN_SOURCE_BLOCKS, FN_STRICT, NOT_PLAIN,
 };
 
 /// The LLVM type of a `JsFunctionInfo`, field for field (perry-abi's
@@ -62,6 +62,7 @@ pub(crate) struct CloneTarget {
 pub(crate) struct RetainedSource {
     pub global: String,
     pub offset: usize,
+    pub decoded_offset: Option<usize>,
     pub byte_len: usize,
     pub is_non_strict_ordinary: bool,
 }
@@ -296,6 +297,11 @@ fn render_definition(
     let info = info_symbol(body);
     let source_flags = facts.source.as_ref().map_or(0, |source| {
         FN_HAS_SOURCE
+            | if source.decoded_offset.is_some() {
+                FN_SOURCE_BLOCKS
+            } else {
+                0
+            }
             | if source.is_non_strict_ordinary {
                 FN_NON_STRICT_ORDINARY
             } else {
@@ -335,7 +341,7 @@ fn render_definition(
         );
         let byte_len = u32::try_from(source.byte_len)
             .expect("a retained function source must fit the u32 info encoding");
-        (delta, byte_len)
+        (delta, byte_len, source.decoded_offset)
     });
     // A versioned clone owns the final mask word. Almost every function has
     // no such clone, so use that already-present word for source metadata and
@@ -352,10 +358,27 @@ fn render_definition(
     } else {
         (versioned_mask as i64).to_string()
     };
+    // Preserve the C layout while emitting two independent 32-bit values.
+    // A masked 64-bit symbol difference is not a portable object relocation.
+    let compressed_in_mask = source_in_mask && source_encoding.as_ref().unwrap().2.is_some();
+    let info_type = if compressed_in_mask {
+        INFO_TYPE.strip_suffix("i64 }").unwrap().to_string() + "{ i32, i32 } }"
+    } else {
+        INFO_TYPE.to_string()
+    };
+    let mask_field = if compressed_in_mask {
+        let (delta, _, offset) = source_encoding.as_ref().unwrap();
+        format!(
+            "{{ i32, i32 }} {{ i32 trunc (i64 {delta} to i32), i32 {} }}",
+            offset.unwrap()
+        )
+    } else {
+        format!("i64 {versioned_mask_value}")
+    };
     let value = format!(
         "{{ ptr @{body}, i16 {params}, i16 {rest}, i32 {flags}, i32 {length}, i32 {tcap}, \
          ptr {tcode}, i64 {tmask}, ptr {vcode}, i32 {vcap}, i16 {declared}, i16 {plain}, \
-         i64 {vmask} }}",
+         {mask_field} }}",
         params = saturate_u16(def.params as u64),
         plain = plain_params(def.params, flags),
         rest = facts.rest_fixed,
@@ -366,18 +389,24 @@ fn render_definition(
         vcode = versioned_code,
         vcap = versioned_captures_value,
         declared = facts.declared,
-        vmask = versioned_mask_value,
     );
     // Optional immutable ranges follow the unchanged 64-byte base info.
     // Source precedes name only when it cannot use the idle clone fields.
-    let mut types = vec![INFO_TYPE.to_string()];
-    let mut fields = vec![format!("{INFO_TYPE} {value}")];
-    if let Some((delta, byte_len)) = source_encoding.filter(|_| !source_in_mask) {
+    let mut types = vec![info_type.clone()];
+    let mut fields = vec![format!("{info_type} {value}")];
+    if let Some((delta, byte_len, decoded_offset)) = source_encoding.filter(|_| !source_in_mask) {
         types.extend(["i32".to_string(), "i32".to_string()]);
-        fields.extend([
-            format!("i32 trunc (i64 {delta} to i32)"),
-            format!("i32 {byte_len}"),
-        ]);
+        fields.push(format!("i32 trunc (i64 {delta} to i32)"));
+        if let Some(offset) = decoded_offset {
+            types.extend(["i32".to_string(), "i32".to_string()]);
+            fields.extend([
+                format!("i32 {offset}"),
+                format!("i32 {byte_len}"),
+                "i32 0".to_string(),
+            ]);
+        } else {
+            fields.push(format!("i32 {byte_len}"));
+        }
     }
     if let Some(name) = facts.name {
         let pointer = if name.global.starts_with("getelementptr ") {
@@ -403,7 +432,7 @@ fn render_definition(
         ));
     }
     if types.len() == 1 {
-        format!("@{info} = {linkage}constant {INFO_TYPE} {value}")
+        format!("@{info} = {linkage}constant {info_type} {value}")
     } else {
         format!(
             "@{info} = {linkage}constant {{ {} }} {{ {} }}",
@@ -425,6 +454,45 @@ mod tests {
     }
 
     #[test]
+    fn compressed_source_parts_are_direct_and_keep_the_common_info_size() {
+        for versioned in [false, true] {
+            let mut state = FnInfoState::default();
+            let facts = state.facts_mut("compressed");
+            facts.source = Some(RetainedSource {
+                global: "frames".into(),
+                offset: 13,
+                decoded_offset: Some(31),
+                byte_len: 79,
+                is_non_strict_ordinary: false,
+            });
+            facts.name = Some(RetainedName {
+                global: "name".into(),
+                byte_len: 5,
+                image: false,
+            });
+            if versioned {
+                facts.versioned = Some(CloneTarget {
+                    symbol: "clone".into(),
+                    captures: 2,
+                    boxed_mask: 3,
+                });
+            }
+            let ir = state
+                .render_globals(|_| defined(1, "internal"), [], true)
+                .join("\n");
+            assert!(ir.contains("ptr @frames"));
+            assert!(ir.contains("i32 31"));
+            if versioned {
+                assert!(ir.contains(", i32, i32, i32, i32, i32, i32 }"), "{ir}");
+                assert!(ir.contains("i32 31, i32 79, i32 0, i32 trunc"), "{ir}");
+            } else {
+                assert!(ir.contains("i16, { i32, i32 } }, i32, i32 }"), "{ir}");
+                assert!(ir.contains("ptr null, i32 79, i16"), "{ir}");
+            }
+        }
+    }
+
+    #[test]
     fn immutable_name_follows_the_optional_source_tail() {
         for versioned in [false, true] {
             let mut state = FnInfoState::default();
@@ -437,6 +505,7 @@ mod tests {
             facts.source = Some(RetainedSource {
                 global: "source_bytes".into(),
                 offset: 0,
+                decoded_offset: None,
                 byte_len: 21,
                 is_non_strict_ordinary: false,
             });
@@ -636,6 +705,7 @@ mod tests {
             .set_source(RetainedSource {
                 global: "m_.perry.retained_source".to_string(),
                 offset: 17,
+                decoded_offset: None,
                 byte_len: 31,
                 is_non_strict_ordinary: true,
             });
@@ -668,6 +738,7 @@ mod tests {
         facts.set_source(RetainedSource {
             global: "m_.perry.retained_source".to_string(),
             offset: 0,
+            decoded_offset: None,
             byte_len: 31,
             is_non_strict_ordinary: false,
         });
@@ -696,6 +767,7 @@ mod constructor_tail_tests {
         facts.source = Some(RetainedSource {
             global: "source".into(),
             offset: 0,
+            decoded_offset: None,
             byte_len: 7,
             is_non_strict_ordinary: false,
         });

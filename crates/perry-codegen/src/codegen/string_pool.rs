@@ -248,12 +248,27 @@ pub(super) fn emit_string_pool(
     // #4101/#9413: mint source globals BEFORE `init_fn` borrows `llmod`.
     // Sharing changes only the backing bytes, never registration order, source
     // lengths, strictness flags, or the copying/static ownership contract.
+    let compressed_sources: Vec<&str> = user_fn_source
+        .iter()
+        .filter(|(symbol, source, _)| {
+            !source.is_empty() && strings_outlive_registry && llmod.can_attach_fn_source(symbol)
+        })
+        .map(|(_, source, _)| source.as_ref())
+        .collect();
+    let raw_sources: Vec<&str> = user_fn_source
+        .iter()
+        .filter(|(symbol, source, _)| {
+            !symbol.is_empty()
+                && !source.is_empty()
+                && !(strings_outlive_registry && llmod.can_attach_fn_source(symbol))
+        })
+        .map(|(_, source, _)| source.as_ref())
+        .collect();
+    let compressed_pool = SourcePool::emit_compressed(llmod, compressed_sources.into_iter());
     let source_pool = SourcePool::emit(
         llmod,
-        user_fn_source
-            .iter()
-            .filter(|(symbol, source, _)| !symbol.is_empty() && !source.is_empty())
-            .map(|(_, source, _)| source.as_ref())
+        raw_sources
+            .into_iter()
             .chain(class_sources.iter().map(|(_, source)| source.as_str())),
     );
     let mut user_fn_source_constants: Vec<(String, SourceRange, bool)> = Vec::new();
@@ -261,12 +276,18 @@ pub(super) fn emit_string_pool(
         if wrapper_sym.is_empty() || source_text.is_empty() {
             continue;
         }
-        let source = source_pool.get(source_text);
-        if strings_outlive_registry
+        let in_info = strings_outlive_registry && llmod.can_attach_fn_source(wrapper_sym);
+        let source = if in_info {
+            compressed_pool.get(source_text)
+        } else {
+            source_pool.get(source_text)
+        };
+        if in_info
             && llmod.attach_fn_source(
                 wrapper_sym,
                 &source.global,
                 source.offset,
+                source.decoded_offset,
                 source.byte_len,
                 *is_non_strict_ordinary,
             )

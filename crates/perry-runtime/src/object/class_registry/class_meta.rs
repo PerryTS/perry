@@ -191,6 +191,7 @@ pub fn class_source_for_id(class_id: u32) -> Option<Cow<'static, str>> {
 /// uses for callables with no recoverable source. Mirrors
 /// `builtins::function_source_for_func_ptr` for the INT32 class-ref encoding.
 pub fn class_ref_to_string(class_id: u32) -> Cow<'static, str> {
+    crate::source_read_count::note(crate::source_read_count::ReadKind::Class);
     if let Some(src) = class_source_for_id(class_id) {
         return src;
     }

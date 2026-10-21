@@ -25,10 +25,15 @@ pub(super) struct SourceRange {
     pub(super) global: String,
     pub(super) offset: usize,
     pub(super) byte_len: usize,
+    pub(super) decoded_offset: Option<usize>,
 }
 
 impl SourceRange {
     pub(super) fn constant_pointer(&self) -> String {
+        assert!(
+            self.decoded_offset.is_none(),
+            "compressed ranges belong in infos"
+        );
         let base = format!("@{}", self.global);
         if self.offset == 0 {
             base
@@ -38,6 +43,10 @@ impl SourceRange {
     }
 
     pub(super) fn pointer(&self, block: &mut LlBlock) -> String {
+        assert!(
+            self.decoded_offset.is_none(),
+            "compressed ranges belong in infos"
+        );
         let base = format!("@{}", self.global);
         if self.offset == 0 {
             base
@@ -51,6 +60,21 @@ pub(super) struct SourcePool<'a>(HashMap<&'a str, SourceRange>);
 
 impl<'a> SourcePool<'a> {
     pub(super) fn emit(llmod: &mut LlModule, sources: impl Iterator<Item = &'a str>) -> Self {
+        Self::emit_impl(llmod, sources, false)
+    }
+
+    pub(super) fn emit_compressed(
+        llmod: &mut LlModule,
+        sources: impl Iterator<Item = &'a str>,
+    ) -> Self {
+        Self::emit_impl(llmod, sources, true)
+    }
+
+    fn emit_impl(
+        llmod: &mut LlModule,
+        sources: impl Iterator<Item = &'a str>,
+        compressed: bool,
+    ) -> Self {
         // Intern before building the matcher. Hash iteration never determines
         // emission order: first occurrence supplies every stable index.
         let mut unique = Vec::new();
@@ -77,19 +101,59 @@ impl<'a> SourcePool<'a> {
                 blob.push_str(unique[idx]);
             }
         }
-        let global = llmod.add_retained_source_constant(&blob).0;
+        let (global, frame_offsets) = if compressed {
+            let mut encoded = Vec::new();
+            let mut frame_offsets = Vec::new();
+            use std::io::Write;
+            for block in blob
+                .as_bytes()
+                .chunks(perry_abi::RETAINED_SOURCE_BLOCK_BYTES)
+            {
+                frame_offsets.push(encoded.len());
+                let mut encoder =
+                    flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::new(6));
+                encoder.write_all(block).expect("compress source into Vec");
+                let payload = encoder.finish().expect("finish source into Vec");
+                encoded.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+                encoded.extend_from_slice(&(block.len() as u32).to_le_bytes());
+                encoded.extend_from_slice(&payload);
+            }
+            // Empty sources are not attached to infos. Keep pool queries
+            // well-defined for compiler tests that include an empty source.
+            if frame_offsets.is_empty() {
+                frame_offsets.push(0);
+            }
+            (
+                llmod.add_compressed_retained_source_constant(&encoded).0,
+                frame_offsets,
+            )
+        } else {
+            (llmod.add_retained_source_constant(&blob).0, Vec::new())
+        };
         Self(
             unique
                 .into_iter()
                 .enumerate()
                 .map(|(idx, source)| {
                     let (parent, offset) = plan[idx];
+                    let original = parent_offsets[&parent] + offset;
+                    let (offset, decoded_offset) = if compressed {
+                        let block = (original / perry_abi::RETAINED_SOURCE_BLOCK_BYTES)
+                            .min(frame_offsets.len() - 1);
+                        (
+                            frame_offsets[block],
+                            Some(original - block * perry_abi::RETAINED_SOURCE_BLOCK_BYTES),
+                        )
+                    } else {
+                        (original, None)
+                    };
                     (
                         source,
                         SourceRange {
                             global: global.clone(),
-                            offset: parent_offsets[&parent] + offset,
+                            offset,
                             byte_len: source.len(),
+                            decoded_offset,
                         },
                     )
                 })
@@ -310,6 +374,29 @@ mod tests {
                 .filter(|line| line.contains(".perry.retained_source = private constant"))
                 .count(),
             1
+        );
+    }
+
+    #[test]
+    fn compressed_ranges_directly_name_frames_and_preserve_nested_offsets() {
+        let child = "function nested() { return '世界😀'; }";
+        let parent = format!("/*{}*/{child}/*{}*/", "é".repeat(2300), "tail".repeat(3000));
+        let mut module = LlModule::new("x86_64-unknown-linux-gnu");
+        let pool = SourcePool::emit_compressed(&mut module, [parent.as_str(), child].into_iter());
+        let inner = pool.get(child);
+        assert_eq!(pool.get(&parent).offset, 0);
+        assert!(inner.offset > 0, "child must name a later frame directly");
+        assert_eq!(
+            inner.decoded_offset,
+            Some(parent.find(child).unwrap() % perry_abi::RETAINED_SOURCE_BLOCK_BYTES)
+        );
+        assert_eq!(inner.byte_len, child.len());
+        let ir = module.to_ir();
+        assert!(ir.contains(".perry.retained_source.deflate = private constant"));
+        assert!(ir.contains("section \".perry_src\""));
+        assert!(
+            !ir.contains(child),
+            "compiled infos retain compressed bytes only"
         );
     }
 

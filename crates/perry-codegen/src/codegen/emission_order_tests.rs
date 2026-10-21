@@ -637,22 +637,25 @@ fn retained_source_ranges_preserve_registrations_and_ownership() {
         );
         let source_globals: Vec<_> = emitted
             .lines()
-            .filter(|line| {
-                line.starts_with('@') && line.contains("constant") && line.contains(inner)
-            })
+            .filter(|line| line.starts_with('@') && line.contains(".perry.retained_source ="))
             .collect();
         assert_eq!(
             source_globals.len(),
             1,
-            "all retained text must share one physical module blob"
+            "legacy raw text must share one physical module blob"
         );
         assert!(
             source_globals[0].contains("perry_src"),
             "retained text must live outside the ordinary literal section"
         );
         let base = source_globals[0].split_whitespace().next().unwrap();
+        let raw_blob = if output_type == "executable" {
+            format!("{method}{class}")
+        } else {
+            outer.clone()
+        };
         let pointer = |source: &str| {
-            let offset = outer.find(source).unwrap();
+            let offset = raw_blob.find(source).unwrap();
             if offset == 0 {
                 return base.to_owned();
             }
@@ -705,7 +708,7 @@ fn retained_source_ranges_preserve_registrations_and_ownership() {
                     "source length must reuse the idle versioned-captures field: {info}"
                 );
                 assert!(
-                    info.contains(&format!("constant {{ {}, i32, i32 }}", crate::fn_info::INFO_TYPE)),
+                    info.contains(&format!("constant {{ {}, i32, i32 }}", crate::fn_info::INFO_TYPE.strip_suffix("i64 }").unwrap().to_string() + "{ i32, i32 } }")),
                     "ordinary source must reuse the base fields; only the name range follows: {info}"
                 );
             }
@@ -770,7 +773,7 @@ fn retained_source_ranges_preserve_registrations_and_ownership() {
              contract: {}",
             class_calls[0]
         );
-        let class_offset = outer.find(class.as_str()).unwrap();
+        let class_offset = raw_blob.find(class.as_str()).unwrap();
         let class_pointer = if class_offset == 0 {
             base.to_owned()
         } else {

@@ -223,6 +223,7 @@ pub(super) fn compile_env_value(name: &str) -> Option<String> {
 
 #[cfg(test)]
 const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
+    ("PERRY_SOURCE_READ_COUNT", "Runtime-only reflection call census; emitted code does not depend on this report."),
     ("PERRY_ENUM_IMAGE_CENSUS", "Prints enum-image census diagnostics only; no lowering decision depends on this report."),
     ("PERRY_FALLBACK_DIAG", "Opt-in sidecar labels; all caches are bypassed while enabled. Off leaves emitted code and cache identity unchanged."),
     (

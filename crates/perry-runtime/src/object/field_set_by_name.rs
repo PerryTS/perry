@@ -520,6 +520,9 @@ pub extern "C" fn js_object_set_field_by_name(
                             )
                             .is_some_and(|(writable, _, _)| !writable)
                         {
+                            crate::source_read_count::note(
+                                crate::source_read_count::ReadKind::ClassError,
+                            );
                             let class_name = super::class_registry::class_ref_to_string(class_id);
                             let message = if let Some(name) = name_str {
                                 format!(

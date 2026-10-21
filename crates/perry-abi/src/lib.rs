@@ -549,7 +549,8 @@ pub struct JsFunctionInfo {
     plain_params: u16,
     /// The versioned-loop clone's boxed-capture mask. When
     /// [`FN_HAS_SOURCE`] is set and `versioned_code` is null, this otherwise
-    /// idle word instead carries the signed 64-bit source displacement.
+    /// idle word instead carries the signed 64-bit raw-source displacement,
+    /// or the two 32-bit source-block parts licensed by FN_SOURCE_BLOCKS.
     pub versioned_boxed_mask: u64,
 }
 
@@ -627,7 +628,8 @@ pub const FN_COMPILED_BODY: u32 = 1 << 13;
 /// A compiler-emitted info carries retained source. When `versioned_code` is
 /// null, its otherwise idle versioned-captures fields carry byte length and
 /// signed displacement; an info that also has a versioned clone is followed
-/// by two `i32`s. Runtime/native infos stay [`JS_FUNCTION_INFO_SIZE`] bytes.
+/// by two `i32`s (four with FN_SOURCE_BLOCKS). Runtime/native infos stay
+/// [`JS_FUNCTION_INFO_SIZE`] bytes.
 pub const FN_HAS_SOURCE: u32 = 1 << 14;
 /// The retained source describes an ordinary non-strict function. Methods,
 /// arrows and strict ordinary functions leave this clear.
@@ -641,6 +643,26 @@ pub const FN_HAS_NAME: u32 = 1 << 21;
 pub const FN_NAME_IMAGE: u32 = 1 << 22;
 /// An immutable constructor-layout record follows source/name tails.
 pub const FN_HAS_CONSTRUCTOR_LAYOUT: u32 = 1 << 23;
+/// With FN_HAS_SOURCE: the range names independent raw-DEFLATE frames.
+/// The idle mask contains `{ i32 block displacement, u32 decoded offset }`;
+/// versioned_captures remains the source length. A live versioned clone uses
+/// an optional `{ i32 displacement, u32 offset, u32 length, u32 reserved }` tail.
+/// This is an immutable representation discriminator, not a validity bit.
+pub const FN_SOURCE_BLOCKS: u32 = 1 << 24;
+/// Independent retained-source frames bound uncached small-range decoding.
+pub const RETAINED_SOURCE_BLOCK_BYTES: usize = 4096;
+
+/// Size of the optional source tail; the common source uses idle base fields.
+#[inline(always)]
+pub fn function_source_tail_size(info: &JsFunctionInfo) -> usize {
+    if info.flags & FN_HAS_SOURCE == 0 || info.versioned_code.is_null() {
+        0
+    } else if info.flags & FN_SOURCE_BLOCKS != 0 {
+        16
+    } else {
+        8
+    }
+}
 
 /// Byte offsets of the fields codegen emits and emitted code reads.
 pub const JS_FUNCTION_INFO_CODE_OFFSET: usize = 0;
@@ -917,10 +939,10 @@ pub const BYTES_RESIZABLE: u16 = 1 << 8;
 pub const BYTES_DETACHED: u16 = 1 << 14;
 pub const BYTES_ELEMENT_SHIFT: [u8; 19] = [0, 0, 0, 1, 1, 2, 2, 1, 2, 3, 3, 3, 0, 0, 0, 0, 0, 0, 0];
 
+pub mod component_guest;
+pub mod component_host;
 pub mod native_class_ids;
 pub mod wasm_host;
-pub mod component_host;
-pub mod component_guest;
 
 /// Slot 3: address of the existing compiled-class function directory.
 pub const AGENT_PTR_CLASS_VALUES: usize = 3;
