@@ -38,6 +38,11 @@ function setup(input = bytes) {
           escaped = value;
           collect();
           return (token.value(value) as { value: number }).value;
+        },
+        consume(value) {
+          collect();
+          check((token.value(value) as { value: number }).value === 66, "owned callback argument");
+          value.dispose(); value.dispose();
         }
       },
       "perry:host-resources/aliases@1.0.0": {
@@ -87,6 +92,8 @@ check(dropped.filter(value => value === 42).length === 1, "guest drop count");
 const local = token.create({ value: 7 }, (payload) => { collect(); dropped.push((payload as { value: number }).value); });
 local.dispose(); local.dispose();
 check(dropped.filter(value => value === 7).length === 1, "local drop count");
+api["consume-imported"](api.make(66));
+check(dropped.filter(value => value === 66).length === 1, "owned callback disposal");
 const throwing = api.make(13);
 let caught: unknown;
 try { throwing.dispose(); } catch (error) { caught = error; }

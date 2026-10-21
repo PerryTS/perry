@@ -21,6 +21,9 @@ impl Guest for Runner {
     fn consume(value: Token) {
         drop(value);
     }
+    fn consume_imported(value: Token) {
+        perry::host_resources::tokens::consume(value);
+    }
     fn consume_pair(value: Pair) {
         drop(value);
     }

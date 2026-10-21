@@ -10,6 +10,7 @@ package perry:host-resources@1.0.0;
 interface tokens {
   resource token { constructor(); read: func() -> u32; }
   resource other;
+  consume: func(value: own<token>);
 }
 world plugin {
   import tokens;
@@ -18,6 +19,7 @@ world plugin {
   export echo: func(value: own<token>) -> own<token>;
   export read: func(value: borrow<token>) -> u32;
   export consume: func(value: own<token>);
+  export consume-imported: func(value: own<token>);
   export consume-two: func(first: own<token>, second: own<token>);
   export checked: func(value: own<token>, amount: u8);
   export mixed: func(owner: own<token>, borrowed: borrow<token>);
@@ -32,23 +34,28 @@ const COMPONENT: &str = r#"
     (export "token" (type $token (sub resource)))
     (export "other" (type (sub resource)))
     (export "[constructor]token" (func (result (own $token))))
-    (export "[method]token.read" (func (param "self" (borrow $token)) (result u32)))))
+    (export "[method]token.read" (func (param "self" (borrow $token)) (result u32)))
+    (export "consume" (func (param "value" (own $token))))))
   (alias export $tokens "token" (type $token))
   (alias export $tokens "[constructor]token" (func $make))
   (alias export $tokens "[method]token.read" (func $read))
+  (alias export $tokens "consume" (func $consume))
   (core func $make (canon lower (func $make)))
   (core func $read (canon lower (func $read)))
+  (core func $consume (canon lower (func $consume)))
   (core func $drop (canon resource.drop $token))
-  (core instance $ops (export "make" (func $make)) (export "read" (func $read)) (export "drop" (func $drop)))
+  (core instance $ops (export "make" (func $make)) (export "read" (func $read)) (export "drop" (func $drop)) (export "consume" (func $consume)))
   (core module $code
     (import "ops" "make" (func $make (result i32)))
     (import "ops" "read" (func $read (param i32) (result i32)))
     (import "ops" "drop" (func $drop (param i32)))
+    (import "ops" "consume" (func $consume (param i32)))
     (global $held (mut i32) (i32.const 0))
     (func (export "make") (result i32) (call $make))
     (func (export "echo") (param i32) (result i32) (local.get 0))
     (func (export "read") (param i32) (result i32) (call $read (local.get 0)))
     (func (export "consume") (param i32) (call $drop (local.get 0)))
+    (func (export "consume-imported") (param i32) (call $consume (local.get 0)))
     (func (export "consume-two") (param i32 i32) (call $drop (local.get 0)) (call $drop (local.get 1)))
     (func (export "checked") (param i32 i32) (call $drop (local.get 0)))
     (func (export "mixed") (param i32 i32) (call $drop (local.get 0)))
@@ -61,6 +68,7 @@ const COMPONENT: &str = r#"
   (func (export "echo") (param "value" (own $token)) (result (own $token)) (canon lift (core func $code "echo")))
   (func (export "read") (param "value" (borrow $token)) (result u32) (canon lift (core func $code "read")))
   (func (export "consume") (param "value" (own $token)) (canon lift (core func $code "consume")))
+  (func (export "consume-imported") (param "value" (own $token)) (canon lift (core func $code "consume-imported")))
   (func (export "consume-two") (param "first" (own $token)) (param "second" (own $token)) (canon lift (core func $code "consume-two")))
   (func (export "checked") (param "value" (own $token)) (param "amount" u8) (canon lift (core func $code "checked")))
   (func (export "mixed") (param "owner" (own $token)) (param "borrowed" (borrow $token)) (canon lift (core func $code "mixed")))
@@ -80,6 +88,21 @@ fn fresh(token: &str) -> Value {
 }
 
 fn host(component: &str, events: Arc<Mutex<Vec<ResourceEvent>>>, trap_drop: bool) -> Result<Host> {
+    let pending = Arc::new(Mutex::new(Vec::new()));
+    let pending_import = pending.clone();
+    let consume: Import = Arc::new(move |args| {
+        ensure!(args[0]["owned"] == true, "expected owned callback argument");
+        pending_import.lock().unwrap().push(ResourceRef {
+            token: args[0]["$hostResource"].as_str().unwrap().into(),
+            type_key: args[0]["type"].as_str().unwrap().into(),
+            generation: args[0]["generation"].as_u64().unwrap() as u32,
+        });
+        ensure!(
+            args[0]["$hostResource"] != "bad-import",
+            "deliberate import failure"
+        );
+        Ok(None)
+    });
     let next = AtomicU32::new(0);
     let make: Import = Arc::new(move |_| {
         Ok(Some(fresh(&format!(
@@ -99,6 +122,7 @@ fn host(component: &str, events: Arc<Mutex<Vec<ResourceEvent>>>, trap_drop: bool
         BTreeMap::from([
             ("[constructor]token".into(), make),
             ("[method]token.read".into(), read),
+            ("consume".into(), consume),
         ]),
     )]);
     Host::new_with_resource_hook(
@@ -107,10 +131,13 @@ fn host(component: &str, events: Arc<Mutex<Vec<ResourceEvent>>>, trap_drop: bool
         &imports,
         &Options::default(),
         Arc::new(move |event| {
+            if matches!(event, ResourceEvent::Drain) {
+                return Ok(std::mem::take(&mut *pending.lock().unwrap()));
+            }
             let fail = matches!(&event, ResourceEvent::Drop { resource } if trap_drop && resource.token == "bad");
             events.lock().unwrap().push(event);
             ensure!(!fail, "deliberate host payload destructor failure");
-            Ok(())
+            Ok(Vec::new())
         }),
     )
 }
@@ -125,6 +152,19 @@ fn drops(events: &Arc<Mutex<Vec<ResourceEvent>>>) -> Vec<String> {
             _ => None,
         })
         .collect()
+}
+
+#[test]
+fn owned_import_arguments_can_be_disposed_without_store_reentry_even_on_failure() {
+    for token in ["imported", "bad-import"] {
+        let events: Arc<Mutex<Vec<ResourceEvent>>> = Arc::default();
+        let mut host = host(COMPONENT, events.clone(), false).unwrap();
+        let result = host.call("", "consume-imported", &[fresh(token)]);
+        assert_eq!(result.is_err(), token == "bad-import");
+        assert_eq!(drops(&events), [token]);
+        host.dispose().unwrap();
+        assert_eq!(drops(&events), [token]);
+    }
 }
 
 #[test]

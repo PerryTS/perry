@@ -140,12 +140,18 @@ pub(super) unsafe extern "C" fn resource_invoke(
     let outcome = crate::exception::catch_js_throw(|| {
         parsed = serde_json::from_slice(std::slice::from_raw_parts(event, event_len))
             .unwrap_or_else(|_| fail("Invalid component resource event"));
-        super::host_resource::payload::event(frame.owner.get_nanbox_f64(), &parsed);
+        if parsed["kind"] == "drain" {
+            let context = context::get(frame.owner.get_nanbox_f64());
+            serde_json::to_vec(&std::mem::take(&mut (*context).pending_resource_drops)).unwrap()
+        } else {
+            super::host_resource::payload::event(frame.owner.get_nanbox_f64(), &parsed);
+            b"[]".to_vec()
+        }
     });
     drop(parsed);
     match outcome {
-        Ok(()) => {
-            reply(output, Vec::new());
+        Ok(bytes) => {
+            reply(output, bytes);
             perry_abi::component_host::OK
         }
         Err(error) => {

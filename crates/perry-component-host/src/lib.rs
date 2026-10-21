@@ -77,7 +77,7 @@ impl Interrupt {
 
 impl Host {
     pub fn new(bytes: &[u8], world: &World, imports: &Imports, options: &Options) -> Result<Self> {
-        Self::new_with_resource_hook(bytes, world, imports, options, Arc::new(|_| Ok(())))
+        Self::new_with_resource_hook(bytes, world, imports, options, Arc::new(|_| Ok(Vec::new())))
     }
 
     pub fn new_with_resource_hook(
@@ -141,7 +141,10 @@ impl Host {
                             .iter()
                             .map(|value| transport::lift(store.as_context_mut(), value))
                             .collect::<Result<Vec<_>>>()?;
-                        let value = callback(&args)?;
+                        let value = callback(&args);
+                        let cleanup = host_resources::drain(store.as_context_mut());
+                        let value = value?;
+                        cleanup?;
                         let types: Vec<_> = ty.results().collect();
                         ensure!(
                             results.len() == usize::from(value.is_some()),

@@ -48,7 +48,10 @@ fn live(resource: f64) -> (f64, f64) {
         fail("Host resource was transferred to the guest");
     }
     let lifetime = get(fields, LIFETIME);
-    if !JSValue::from_bits(lifetime.to_bits()).is_undefined() && get(lifetime, 0) != 1.0 {
+    if get(fields, STATE) == BORROWED
+        && !JSValue::from_bits(lifetime.to_bits()).is_undefined()
+        && get(lifetime, 0) != 1.0
+    {
         fail("Host resource borrow has expired");
     }
     let parent = get(fields, PARENT);
@@ -151,14 +154,7 @@ pub(super) fn decode(owner: f64, value: &Value, lifetime: f64) -> f64 {
     if !owned && JSValue::from_bits(lifetime.to_bits()).is_undefined() {
         fail("A host resource borrow needs a live callback");
     }
-    wrap(
-        owner,
-        id,
-        generation,
-        owned,
-        if owned { undefined() } else { lifetime },
-        undefined(),
-    )
+    wrap(owner, id, generation, owned, lifetime, undefined())
 }
 
 extern "C" fn borrow(
@@ -203,6 +199,16 @@ extern "C" fn dispose(
         if get(record, payload::MATERIALIZED) == 0.0 {
             set(fields, STATE, DISPOSED);
             payload::destroy(frame.owner.get_nanbox_f64(), id);
+            return undefined();
+        }
+        let lifetime = get(fields, LIFETIME);
+        if !JSValue::from_bits(lifetime.to_bits()).is_undefined() && get(lifetime, 0) == 1.0 {
+            // This owner arrived as an owned import argument. Its canonical
+            // handle is retired immediately after the callback returns. An
+            // existing owner borrowed by the active call has no such origin
+            // and must still pass through the engine's reentry guard.
+            set(fields, STATE, DISPOSED);
+            payload::retire(frame.owner.get_nanbox_f64(), id);
             return undefined();
         }
         token = (id as u32).to_string();

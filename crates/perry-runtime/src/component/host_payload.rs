@@ -10,6 +10,7 @@ pub(super) const STATE: u32 = 4;
 pub(super) const MATERIALIZED: u32 = 5;
 pub(super) const LOCAL: f64 = 1.0;
 const GUEST: f64 = 2.0;
+const RETIRED: f64 = 3.0;
 
 fn map_pointer(map: f64) -> *mut crate::map::MapHeader {
     crate::map::map_ptr_from_receiver_bits(map.to_bits())
@@ -215,6 +216,28 @@ pub(super) fn event(owner: f64, event: &Value) {
     }
 }
 
+/// Release the JS payload now; the embedding retires its canonical handle
+/// when the import callback returns. Keep only identity metadata until then.
+pub(super) fn retire(owner: f64, id: f64) {
+    let scope = RuntimeHandleScope::new();
+    let owner = scope.root_nanbox_f64(owner);
+    let row = scope.root_nanbox_f64(record(owner.get_nanbox_f64(), id));
+    let callback = scope.root_nanbox_f64(get(row.get_nanbox_f64(), DESTRUCTOR));
+    let payload = scope.root_nanbox_f64(get(row.get_nanbox_f64(), PAYLOAD));
+    let reference = serde_json::json!({"token":(id as u32).to_string(),
+        "type":string(get(row.get_nanbox_f64(), TYPE)),
+        "generation":get(row.get_nanbox_f64(), GENERATION) as u32});
+    unsafe {
+        (*context::get(owner.get_nanbox_f64()))
+            .pending_resource_drops
+            .push(reference);
+    }
+    set(row.get_nanbox_f64(), STATE, RETIRED);
+    set(row.get_nanbox_f64(), PAYLOAD, undefined());
+    set(row.get_nanbox_f64(), DESTRUCTOR, undefined());
+    invoke_destructor(callback.get_nanbox_f64(), payload.get_nanbox_f64());
+}
+
 pub(super) fn destroy(owner: f64, id: f64) {
     let scope = RuntimeHandleScope::new();
     let owner = scope.root_nanbox_f64(owner);
@@ -223,6 +246,13 @@ pub(super) fn destroy(owner: f64, id: f64) {
     crate::map::js_map_delete(map_pointer(map.get_nanbox_f64()), id);
     let callback = scope.root_nanbox_f64(get(row.get_nanbox_f64(), DESTRUCTOR));
     let payload = scope.root_nanbox_f64(get(row.get_nanbox_f64(), PAYLOAD));
+    invoke_destructor(callback.get_nanbox_f64(), payload.get_nanbox_f64());
+}
+
+fn invoke_destructor(callback: f64, payload: f64) {
+    let scope = RuntimeHandleScope::new();
+    let callback = scope.root_nanbox_f64(callback);
+    let payload = scope.root_nanbox_f64(payload);
     if !JSValue::from_bits(callback.get_nanbox_f64().to_bits()).is_undefined() {
         let args = [payload.get_nanbox_f64()];
         unsafe {
@@ -241,6 +271,9 @@ pub(super) fn dispose_owner(owner: f64) {
     let owner = scope.root_nanbox_f64(owner);
     unsafe {
         (*context::get(owner.get_nanbox_f64())).alive = false;
+        (*context::get(owner.get_nanbox_f64()))
+            .pending_resource_drops
+            .clear();
     }
     let map = scope.root_nanbox_f64(table(owner.get_nanbox_f64(), false));
     if JSValue::from_bits(map.get_nanbox_f64().to_bits()).is_undefined() {

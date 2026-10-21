@@ -217,6 +217,69 @@ extern "C-unwind" fn destroy(
 }
 
 #[test]
+fn disposing_an_owned_callback_argument_releases_payload_before_canonical_drain() {
+    let scope = RuntimeHandleScope::new();
+    let owner = scope.root_nanbox_f64(context::publish(world(), undefined()));
+    let ty = text(&scope, "t0");
+    let counter = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+        crate::object::js_object_alloc(0, 0) as i64,
+    ));
+    set_field(counter.get_nanbox_f64(), b"count", 0.0);
+    let destructor = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
+        crate::fn_info!(unwind destroy, 1),
+        1,
+    ));
+    crate::closure::js_closure_set_capture_f64(
+        destructor.get_raw_mut_ptr(),
+        0,
+        counter.get_nanbox_f64(),
+    );
+    payload::js_component_host_resource_create(
+        owner.get_nanbox_f64(),
+        ty.get_nanbox_f64(),
+        77.0,
+        crate::value::js_nanbox_pointer(
+            destructor.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64,
+        ),
+    );
+    transfer(owner.get_nanbox_f64());
+    payload::event(
+        owner.get_nanbox_f64(),
+        &json!({"kind":"lift","resource":reference(2)}),
+    );
+    let lifetime = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+        crate::array::js_array_alloc_with_length(1) as i64,
+    ));
+    crate::array::js_array_set_f64(array_pointer(lifetime.get_nanbox_f64()).unwrap(), 0, 1.0);
+    let owned = scope.root_nanbox_f64(host_resource::decode(
+        owner.get_nanbox_f64(),
+        &wire(2, true),
+        lifetime.get_nanbox_f64(),
+    ));
+    assert_eq!(
+        crate::exception::catch_js_throw(|| method(owned.get_nanbox_f64(), b"dispose"))
+            .unwrap_err(),
+        77.0
+    );
+    method(owned.get_nanbox_f64(), b"dispose");
+    assert_eq!(field(counter.get_nanbox_f64(), b"count"), 1.0);
+    let pending = unsafe {
+        std::mem::take(&mut (*context::get(owner.get_nanbox_f64())).pending_resource_drops)
+    };
+    assert_eq!(pending, [reference(2)]);
+    payload::event(
+        owner.get_nanbox_f64(),
+        &json!({"kind":"drop","resource":pending[0]}),
+    );
+    context::finish_disposal(owner.get_nanbox_f64(), perry_abi::component_host::OK);
+    assert_eq!(
+        field(counter.get_nanbox_f64(), b"count"),
+        1.0,
+        "canonical retirement must not repeat the destructor"
+    );
+}
+
+#[test]
 fn throwing_host_destructors_run_once_and_cleanup_preserves_the_first_exception() {
     let scope = RuntimeHandleScope::new();
     let owner = scope.root_nanbox_f64(context::publish(world(), undefined()));

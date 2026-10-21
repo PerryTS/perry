@@ -163,6 +163,10 @@ pub unsafe extern "C" fn perry_component_host_new(
         }
         let resource_current = current.clone();
         let resource_hook: ResourceHook = Arc::new(move |event| {
+            // Older callers without host resources need no lifecycle channel.
+            if resource_callback.is_none() && matches!(event, crate::ResourceEvent::Drain) {
+                return Ok(Vec::new());
+            }
             let callback =
                 resource_callback.context("host resources require a resource callback")?;
             let free = free_callback.context("host resources require a reply deallocator")?;
@@ -177,7 +181,7 @@ pub unsafe extern "C" fn perry_component_host_new(
                     String::from_utf8_lossy(bytes(reply.0.data, reply.0.len)?)
                 );
             }
-            Ok(())
+            Ok(serde_json::from_slice(bytes(reply.0.data, reply.0.len)?)?)
         });
         let host = Host::new_with_resource_hook(
             bytes(wasm, wasm_len)?,

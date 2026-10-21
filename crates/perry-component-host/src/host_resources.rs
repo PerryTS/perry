@@ -23,6 +23,9 @@ pub struct ResourceRef {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum ResourceEvent {
+    /// After an import returns (including failure), retire owned arguments
+    /// disposed by that callback without reentering the active Store.
+    Drain,
     Lower {
         created: Vec<ResourceRef>,
         transferred: Vec<ResourceRef>,
@@ -34,7 +37,7 @@ pub enum ResourceEvent {
         resource: ResourceRef,
     },
 }
-pub type ResourceHook = Arc<dyn Fn(ResourceEvent) -> Result<()> + Send + Sync>;
+pub type ResourceHook = Arc<dyn Fn(ResourceEvent) -> Result<Vec<ResourceRef>> + Send + Sync>;
 
 pub(crate) struct Entry {
     pub reference: ResourceRef,
@@ -108,6 +111,35 @@ pub(crate) fn destroy(mut store: StoreContextMut<'_, StoreData>, rep: u32, ty: u
     hook(ResourceEvent::Drop {
         resource: reference,
     })
+    .map(|_| ())
+}
+
+pub(crate) fn drain(mut store: StoreContextMut<'_, StoreData>) -> Result<()> {
+    let hook = store.data().host_resources.hook.clone();
+    let pending = hook(ResourceEvent::Drain)?;
+    let mut first = None;
+    for reference in pending {
+        let result = (|| -> Result<()> {
+            let entry = store
+                .data_mut()
+                .host_resources
+                .entries
+                .get_mut(&reference.token)
+                .context("unknown disposed host resource")?;
+            ensure!(entry.reference == reference, "stale disposed host resource");
+            let handle = entry
+                .handle
+                .take()
+                .context("disposed resource is guest-owned")?;
+            handle
+                .resource_drop(store.as_context_mut())
+                .map_err(anyhow::Error::from)
+        })();
+        if let Err(error) = result {
+            first.get_or_insert(error);
+        }
+    }
+    first.map_or(Ok(()), Err)
 }
 
 /// Teardown also releases host payloads held by the guest, whose canonical

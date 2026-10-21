@@ -11,6 +11,8 @@ pub(super) struct Context {
     pub host: *mut c_void,
     pub world: Value,
     pub alive: bool,
+    // Native identity metadata only; never contains managed JS values.
+    pub pending_resource_drops: Vec<Value>,
 }
 
 impl Drop for Context {
@@ -31,6 +33,7 @@ pub(super) fn publish(world: Value, imports: f64) -> f64 {
         host: std::ptr::null_mut(),
         world,
         alive: true,
+        pending_resource_drops: Vec::new(),
     }));
     let cell = unsafe {
         crate::native_handle::native_handle_new_rust_payload(
