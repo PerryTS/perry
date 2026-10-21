@@ -888,6 +888,11 @@ jobs:
           sudo apt-get update || echo "::warning::apt-get update reported errors; the install below is the real gate"
           sudo apt-get install -y musl-tools
 
+      - name: Set up MSVC for component packaging and Git Bash
+        if: runner.os == 'Windows' && env.PERRY_RELEASE_COMPONENTS == '1'
+        shell: pwsh
+        run: ./scripts/setup_wasi_host_msvc.ps1
+
       - name: Build perry
         # Build only the CLI crate; the runtime libraries are built in
         # the next step. (Perry is V8-free — the former perry-jsruntime
