@@ -849,6 +849,7 @@ js_component_load	f64	f64,f64,f64,f64
 js_component_register	f64	f64,f64
 js_component_resource_create	f64	f64,f64,f64
 js_component_resource_value	f64	f64,f64
+js_component_run_command	f64	f64,f64
 js_component_set_guest_ops	i32s	ptr
 js_compose_api_logs	ptr	f64,f64
 js_compose_config	ptr	f64

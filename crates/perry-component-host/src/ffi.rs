@@ -87,6 +87,29 @@ pub unsafe extern "C" fn perry_component_host_buffer_drop(buffer: Buffer) {
     }
 }
 
+/// A command owns its store for this call only; no callback bridge is exposed.
+#[no_mangle]
+pub unsafe extern "C" fn perry_component_host_run_command(
+    wasm: *const u8,
+    wasm_len: usize,
+    options: *const u8,
+    options_len: usize,
+    out: *mut Buffer,
+) -> i32 {
+    respond(
+        out,
+        (|| {
+            let options = if options_len == 0 {
+                Options::default()
+            } else {
+                serde_json::from_slice(bytes(options, options_len)?)?
+            };
+            let status = crate::run_command(bytes(wasm, wasm_len)?, &options)?;
+            Ok(serde_json::to_vec(&status)?)
+        })(),
+    )
+}
+
 struct Reply(Buffer, FreeCallback);
 impl Drop for Reply {
     fn drop(&mut self) {

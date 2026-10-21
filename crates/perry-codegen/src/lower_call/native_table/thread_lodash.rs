@@ -40,6 +40,15 @@ pub(super) const THREAD_LODASH_ROWS: &[NativeModSig] = &[
     NativeModSig {
         module: "perry/component",
         has_receiver: false,
+        method: "runComponentCommand",
+        class_filter: None,
+        runtime: "js_component_run_command",
+        args: &[NA_F64, NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "perry/component",
+        has_receiver: false,
         method: "loadComponent",
         class_filter: None,
         runtime: "js_component_load",

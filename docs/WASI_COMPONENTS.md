@@ -28,6 +28,39 @@ Opt-in WASI Preview 2 providers are available through `ComponentOptions.wasi`.
 General host-defined resource imports remain unimplemented; command worlds
 and `wasi:http` are not yet qualified.
 
+### Native WASI commands (qualification pending)
+
+`runComponentCommand` executes a `wasi:cli/run` component once in a fresh
+native store and releases its provider resources when the call ends:
+
+```ts
+import { runComponentCommand } from "perry/component";
+const status = runComponentCommand(bytes, {
+  fuel: 10_000_000,
+  wasi: { args: ["example", "--version"], inheritStdout: true }
+});
+```
+
+This entry point enables the pinned Wasmtime-WASI P2 providers. Omitted grants
+have the same closed filesystem, network, environment and stdio defaults as
+`wasi: {}`. Each call receives independent arguments, environment, preopens
+and resource tables. It does not accept application imports. Reusable
+libraries use generated WIT bindings and explicit instance lifetimes.
+
+A returned `ok` or `err` becomes status 0 or 1. An explicit WASI exit request
+returns its status without terminating the native Perry process. Invalid
+components, missing/mistyped command exports, guest traps and exhausted
+budgets throw `ERR_COMPONENT`. Export validation happens before component
+initializers execute. Initialization and execution share one fuel budget;
+fuel does not interrupt time spent in synchronous host I/O.
+
+The component-host boundary uses ABI 3; compiler, runtime and optional host
+archive must be built together. This API is native-only. Unit fixtures and
+`scripts/component_command_acceptance.py` cover return/exit behavior,
+initializer failures, limits and a Rust `wasm32-wasip2` command hosted by
+Perry in ordinary and moving-GC modes. Qualification is pending actual
+execution; this does not establish HTTP, P3 async or I/O cancellation support.
+
 ### Per-instance WASI providers
 
 ```ts
