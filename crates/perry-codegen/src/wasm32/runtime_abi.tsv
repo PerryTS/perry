@@ -808,6 +808,7 @@ js_closure_call8	f64	ptr,i64,f64,f64,f64,f64,f64,f64,f64,f64
 js_closure_call9	f64	ptr,i64,f64,f64,f64,f64,f64,f64,f64,f64,f64
 js_closure_call_apply_with_spread	f64	f64,i64,ptr,i64,i64
 js_closure_call_array	f64	i64,i64,ptr,i64
+js_closure_entry_bundle	void	ptr,ptr,usize,i32u,i32u,ptr,ptr
 js_closure_exact_func_guard	i64	f64,ptr
 js_closure_get_capture_bits	i64	ptr,i32u
 js_closure_get_capture_f64	f64	ptr,i32u

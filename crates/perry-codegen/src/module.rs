@@ -501,6 +501,24 @@ impl LlModule {
     /// may allocate; an `external` declaration for every allocated body
     /// another module defines. Runs once, after every function exists.
     pub(crate) fn emit_fn_infos(&mut self, permanent_image: bool) {
+        let exported: Vec<String> = self
+            .functions
+            .iter()
+            .filter(|f| {
+                f.linkage.is_empty() && f.name.starts_with("__perry_wrap_") && is_js_body(f)
+            })
+            .map(|f| f.name.clone())
+            .collect();
+        let entries = self.fn_infos.borrow().entry_bodies(&exported);
+        for body in entries {
+            let Some(function) = self.function_named(&body).filter(|f| has_js_call_abi(f)) else {
+                continue;
+            };
+            let params = function.params.len() - 2;
+            let facts = self.fn_infos.borrow().facts(&body);
+            let entry = crate::call_entry::emit(self, &body, params, &facts);
+            self.note_fn_info(&body, |facts| facts.call_entry = Some(entry));
+        }
         let lines = {
             let functions = &self.functions;
             let by_name: std::collections::HashMap<&str, &LlFunction> =
@@ -1719,3 +1737,17 @@ fn is_js_body(f: &LlFunction) -> bool {
 
 #[cfg(test)]
 mod text_stream_tests;
+
+/// Function-info ownership proves this is a callable operation. Check its
+/// ABI types rather than parameter spelling: class method function objects
+/// use `callee`/`this`, ordinary closures use `this_closure`/`js_this`.
+fn has_js_call_abi(function: &LlFunction) -> bool {
+    function.return_type == crate::types::DOUBLE
+        && function.params.len() >= 2
+        && function.params[..2]
+            .iter()
+            .all(|(ty, _)| *ty == crate::types::I64)
+        && function.params[2..]
+            .iter()
+            .all(|(ty, _)| *ty == crate::types::DOUBLE)
+}

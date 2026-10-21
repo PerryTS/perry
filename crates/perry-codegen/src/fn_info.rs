@@ -100,6 +100,8 @@ pub(crate) struct FnInfoFacts {
     pub constructor_layout: Option<ConstructorLayout>,
     /// Compiler-private synchronous continuation: mutable captures are its state slots.
     pub fixed_generator_state: bool,
+    /// The one generic entry for this body's fixed-signature operation.
+    pub call_entry: Option<String>,
 }
 
 /// The rest kind of a body with a rest / `arguments` array.
@@ -212,6 +214,18 @@ impl FnInfoState {
         self.facts.entry(body.to_string()).or_default()
     }
 
+    /// Bodies whose immutable info will be defined by this module.
+    pub(crate) fn entry_bodies(&self, exported: &[String]) -> Vec<String> {
+        let mut bodies = self.requested.clone();
+        bodies.extend(self.facts.keys().cloned());
+        bodies.extend(exported.iter().cloned());
+        bodies.into_iter().collect()
+    }
+
+    pub(crate) fn facts(&self, body: &str) -> FnInfoFacts {
+        self.facts.get(body).cloned().unwrap_or_default()
+    }
+
     /// The `@...$info` global lines: a definition for every body this module
     /// defines that is requested or has recorded facts or is `exported`
     /// (an external value wrapper another module may allocate), and an
@@ -255,7 +269,7 @@ impl FnInfoState {
 /// when a call reaches it directly, else zero (legacy records stay on the
 /// dispatcher). A compiled
 /// body is plain unless it bundles a rest or `arguments` array: that body
-/// takes its arguments through the dispatcher's bundling arm. Every other
+/// takes its arguments through its callee-owned generic entry. Every other
 /// compiled body (async and generator bodies included: the body itself
 /// builds the promise or the generator) takes the call's registers as they
 /// are, the extra ones ignored.
@@ -303,6 +317,11 @@ fn render_definition(
             }
     });
     let flags = facts.flags
+        | if facts.call_entry.is_some() {
+            crate::runtime_abi::FN_HAS_CALL_ENTRY
+        } else {
+            0
+        }
         | FN_COMPILED_BODY
         | source_flags
         | if facts.constructor_layout.is_some() {
@@ -401,6 +420,10 @@ fn render_definition(
             "{tail_type} {{ ptr @{}, ptr @{}, i32 {}, i32 0 }}",
             layout.descriptor, layout.operands, layout.symbols
         ));
+    }
+    if let Some(entry) = facts.call_entry {
+        types.push("ptr".to_string());
+        fields.push(format!("ptr @{entry}"));
     }
     if types.len() == 1 {
         format!("@{info} = {linkage}constant {INFO_TYPE} {value}")

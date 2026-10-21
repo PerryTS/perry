@@ -290,3 +290,60 @@ pub unsafe fn call_value(func: f64, this: JsThis, args: &[f64]) -> f64 {
     };
     crate::closure::native_call_value_this(func, this, ptr, args.len())
 }
+
+/// Enter the function's generic callee-owned argument adapter. Cells, unlike
+/// a borrowed f64 slice, explicitly permit the collector to update the caller's
+/// actual argument storage. No argument-value copy is required in the callee.
+#[inline(always)]
+pub(crate) unsafe fn call_entry_cells(
+    callee: *const crate::closure::ClosureHeader,
+    entry: *const u8,
+    this: JsThis,
+    args: &[std::cell::UnsafeCell<f64>],
+) -> f64 {
+    #[cfg(panic = "abort")]
+    let body = std::mem::transmute::<
+        *const u8,
+        crate::codegen_abi::JsCallEntry<crate::closure::ClosureHeader>,
+    >(entry);
+    #[cfg(not(panic = "abort"))]
+    let body = std::mem::transmute::<
+        *const u8,
+        unsafe extern "C-unwind" fn(
+            *const crate::closure::ClosureHeader,
+            JsThis,
+            *const std::cell::UnsafeCell<f64>,
+            usize,
+        ) -> f64,
+    >(entry);
+    body(callee, this, args.as_ptr(), args.len())
+}
+
+/// Stage a borrowed runtime argument slice in caller-owned mutable cells.
+/// The ordinary closure-call register width fits on the stack; wider calls
+/// use storage sized to the same argument count. Both enter the same ABI.
+#[inline]
+pub(crate) unsafe fn call_entry_slice(
+    callee: *const crate::closure::ClosureHeader,
+    entry: *const u8,
+    this: JsThis,
+    args: &[f64],
+) -> f64 {
+    use std::cell::UnsafeCell;
+    use std::mem::MaybeUninit;
+    const WIDTH: usize = crate::codegen_abi::JS_CLOSURE_CALL_MAX_ARGS;
+    if args.len() <= WIDTH {
+        let mut cells: [MaybeUninit<UnsafeCell<f64>>; WIDTH] =
+            [const { MaybeUninit::uninit() }; WIDTH];
+        for (cell, value) in cells.iter_mut().zip(args) {
+            cell.write(UnsafeCell::new(*value));
+        }
+        // Only the initialized prefix is borrowed, and UnsafeCell permits
+        // the collector to rewrite it for this activation.
+        let cells = std::slice::from_raw_parts(cells.as_ptr().cast(), args.len());
+        call_entry_cells(callee, entry, this, cells)
+    } else {
+        let cells: Vec<_> = args.iter().copied().map(UnsafeCell::new).collect();
+        call_entry_cells(callee, entry, this, &cells)
+    }
+}
