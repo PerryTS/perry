@@ -6281,7 +6281,8 @@ jobs:
       - uses: ./.github/actions/setup-llvm22
       - name: Set up MSVC environment
         if: runner.os == 'Windows'
-        uses: ./.github/actions/perry/ilammy/msvc-dev-cmd
+        shell: pwsh
+        run: ./scripts/setup_wasi_host_msvc.ps1
       - uses: ./.github/actions/perry/actions/setup-node
         with:
           node-version-file: .node-version
