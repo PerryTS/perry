@@ -58,3 +58,8 @@ export interface WasiOptions {
  * The type identity is generated from the component's WIT world. */
 export function createComponentResource<T extends string>(type: number, payload: unknown, destructor?: (payload: unknown) => void): OwnedResource<T>;
 export function getComponentResourceValue<T extends string>(type: number, resource: BorrowedResource<T>): unknown;
+
+/** Native host resource operations. Generated load() builders supply factories
+ * bound to the component instance and canonical WIT resource type. */
+export function createComponentHostResource<T extends string>(handle: ComponentHandle, type: string, payload: unknown, destructor?: (payload: unknown) => void): OwnedResource<T>;
+export function getComponentHostResourceValue<T extends string>(handle: ComponentHandle, type: string, resource: BorrowedResource<T>): unknown;

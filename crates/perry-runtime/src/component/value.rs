@@ -5,7 +5,13 @@ use crate::{gc::RuntimeHandleScope, value::JSValue};
 use serde_json::{json, Value};
 
 pub(super) fn encode(value: f64) -> Value {
-    encode_at(value, 0).unwrap_or_else(|error| crate::exception::js_throw(error))
+    encode_at(value, 0, None).unwrap_or_else(|error| crate::exception::js_throw(error))
+}
+
+pub(super) fn encode_for(value: f64, owner: f64) -> Value {
+    let scope = RuntimeHandleScope::new();
+    let owner = scope.root_nanbox_f64(owner);
+    encode_at(value, 0, Some(&owner)).unwrap_or_else(|error| crate::exception::js_throw(error))
 }
 
 fn encoding_error(message: &str) -> f64 {
@@ -14,7 +20,11 @@ fn encoding_error(message: &str) -> f64 {
 
 // Native containers live outside each throwing JS operation. A getter or
 // rejected child returns Err through Rust so partially encoded values drop.
-fn encode_at(value: f64, depth: usize) -> Result<Value, f64> {
+fn encode_at(
+    value: f64,
+    depth: usize,
+    owner: Option<&crate::gc::RuntimeHandle<'_>>,
+) -> Result<Value, f64> {
     if depth >= 128 {
         return Err(encoding_error(
             "Component value nesting exceeds 128 (or contains a cycle)",
@@ -65,7 +75,7 @@ fn encode_at(value: f64, depth: usize) -> Result<Value, f64> {
         let mut values = Vec::with_capacity(len as usize);
         for i in 0..len {
             let child = catch_js_throw(|| crate::array::js_array_get_f64(pointer(), i))?;
-            values.push(encode_at(child, depth + 1)?);
+            values.push(encode_at(child, depth + 1, owner)?);
         }
         return Ok(Value::Array(values));
     }
@@ -81,6 +91,14 @@ fn encode_at(value: f64, depth: usize) -> Result<Value, f64> {
         .map_err(|_| encoding_error("Detached component byte list"));
     }
     if object_pointer(root.get_nanbox_f64()).is_some() {
+        if let Some(resource) = catch_js_throw(|| {
+            super::host_resource::encode(
+                root.get_nanbox_f64(),
+                owner.map_or_else(super::undefined, |owner| owner.get_nanbox_f64()),
+            )
+        })? {
+            return Ok(resource);
+        }
         if let Some(resource) = catch_js_throw(|| super::resource::encode(root.get_nanbox_f64()))? {
             return Ok(resource);
         }
@@ -101,7 +119,7 @@ fn encode_at(value: f64, depth: usize) -> Result<Value, f64> {
                 ));
             }
             let value = catch_js_throw(|| field(root.get_nanbox_f64(), key.as_bytes()))?;
-            object.insert(key, encode_at(value, depth + 1)?);
+            object.insert(key, encode_at(value, depth + 1, owner)?);
         }
         return Ok(Value::Object(object));
     }
@@ -124,9 +142,20 @@ fn resolved<'a>(world: &'a Value, mut ty: &'a Value) -> &'a Value {
 }
 
 pub(super) fn decode(value: &Value, ty: &Value, world: &Value, owner: f64) -> f64 {
+    decode_with_lifetime(value, ty, world, owner, super::undefined())
+}
+
+pub(super) fn decode_with_lifetime(
+    value: &Value,
+    ty: &Value,
+    world: &Value,
+    owner: f64,
+    lifetime: f64,
+) -> f64 {
     let scope = RuntimeHandleScope::new();
     let owner = scope.root_nanbox_f64(owner);
-    decode_at(value, ty, world, &owner, 0)
+    let lifetime = scope.root_nanbox_f64(lifetime);
+    decode_at(value, ty, world, &owner, &lifetime, 0)
 }
 
 fn decode_at(
@@ -134,6 +163,7 @@ fn decode_at(
     ty: &Value,
     world: &Value,
     owner: &crate::gc::RuntimeHandle<'_>,
+    lifetime: &crate::gc::RuntimeHandle<'_>,
     depth: usize,
 ) -> f64 {
     if depth >= 128 {
@@ -187,7 +217,7 @@ fn decode_at(
                 } else {
                     &ty["value"]
                 };
-                let value = decode_at(value, item_type, world, owner, depth + 1);
+                let value = decode_at(value, item_type, world, owner, lifetime, depth + 1);
                 crate::array::js_array_set_f64(array.get_raw_mut_ptr(), i as u32, value);
             }
             crate::value::js_nanbox_pointer(
@@ -195,6 +225,13 @@ fn decode_at(
             )
         }
         Value::Object(object) => {
+            if object.contains_key("$hostResource") {
+                return super::host_resource::decode(
+                    owner.get_nanbox_f64(),
+                    value,
+                    lifetime.get_nanbox_f64(),
+                );
+            }
             if let Some(text) = object.get("$bigint").and_then(Value::as_str) {
                 return crate::value::js_nanbox_bigint(crate::bigint::js_bigint_from_string(
                     text.as_ptr(),
@@ -222,7 +259,7 @@ fn decode_at(
             ));
             for (key, value) in object {
                 let field_type = member_type(ty, key, object.get("tag"));
-                let child = decode_at(value, field_type, world, owner, depth + 1);
+                let child = decode_at(value, field_type, world, owner, lifetime, depth + 1);
                 set_field(output.get_nanbox_f64(), key.as_bytes(), child);
             }
             output.get_nanbox_f64()

@@ -5,6 +5,10 @@ use std::sync::atomic::{AtomicPtr, Ordering};
 
 static OPS: AtomicPtr<ComponentHostOps> = AtomicPtr::new(std::ptr::null_mut());
 
+/// # Safety
+/// A non-null table must be immutable and remain valid for the process lifetime.
+/// Its entries are code addresses, never Perry-managed heap values. The native
+/// engine installer passes its image's static `ffi::OPS` table.
 #[no_mangle]
 pub unsafe extern "C" fn js_runtime_set_component_host_ops(ops: *const ComponentHostOps) {
     if !ops.is_null()

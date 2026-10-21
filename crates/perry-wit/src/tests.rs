@@ -3,6 +3,44 @@ use super::*;
 const TRANSFORM: &str = include_str!("../../../test-wasi/components/transform/world.wit");
 
 #[test]
+fn imported_resource_factories_keep_aliases_without_inventing_world_imports() {
+    let world = parse(
+        r#"package test:host;
+        interface items { resource item; }
+        interface aliases { use items.{item as alias}; }
+        world plugin {
+            import items;
+            import aliases;
+            use items.{item};
+            export echo: func(value: own<item>) -> own<item>;
+        }"#,
+        None,
+    )
+    .unwrap();
+    // A world-level use is a type alias, not an additional canonical import.
+    assert!(world.imports.iter().all(|i| !i.name.is_empty()));
+    let items = world
+        .imports
+        .iter()
+        .find(|i| i.name == "test:host/items")
+        .unwrap();
+    let aliases = world
+        .imports
+        .iter()
+        .find(|i| i.name == "test:host/aliases")
+        .unwrap();
+    assert_eq!(items.resources["item"], aliases.resources["alias"]);
+    let ts = typescript(&world);
+    assert!(ts.contains("export interface HostResources"));
+    assert!(ts.contains("imports(hostResources(handle))"));
+    for interface in &world.imports {
+        for key in interface.resources.values() {
+            assert!(ts.contains(&format!("createComponentHostResource(handle, \"{key}\"")));
+        }
+    }
+}
+
+#[test]
 fn preserves_versioned_interfaces_and_structured_types() {
     let world = parse(TRANSFORM, Some("plugin")).unwrap();
     assert_eq!(world.name, "perry:transform/plugin@1.0.0");
