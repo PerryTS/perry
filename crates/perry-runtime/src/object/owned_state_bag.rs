@@ -6,6 +6,13 @@ use crate::array::ArrayHeader;
 pub(crate) const ASYNC_RESOURCE: u32 = 4;
 pub(crate) const WASM_INSTANCE: u32 = 5;
 pub(crate) const WASI_CONTEXT: u32 = 6;
+pub(crate) const COMPONENT_CONTEXT: u32 = 7;
+pub(crate) const COMPONENT_IMPORTS: u32 = 8;
+pub(crate) const COMPONENT_RESOURCE_OWNER: u32 = 9;
+pub(crate) const COMPONENT_RESOURCE_TOKEN: u32 = 10;
+pub(crate) const COMPONENT_RESOURCE_STATE: u32 = 11;
+pub(crate) const COMPONENT_EXPORTS: u32 = 12;
+pub(crate) const COMPONENT_GUEST: u32 = 13;
 
 pub(crate) unsafe fn bag(owner: usize, create: bool, last_slot: u32) -> *mut ArrayHeader {
     let _publication = crate::gc::GcSuppressScope::new();

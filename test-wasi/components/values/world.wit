@@ -1,0 +1,19 @@
+package perry:all-values@1.0.0;
+interface values {
+    type octet = u8;
+    type bytes = list<octet>;
+    flags permissions { bit0, bit1, bit2, bit3, bit4, bit5, bit6, bit7, bit8, bit9, bit10, bit11, bit12, bit13, bit14, bit15, bit16, bit17, bit18, bit19, bit20, bit21, bit22, bit23, bit24, bit25, bit26, bit27, bit28, bit29, bit30, bit31 }
+    enum color { red, green, blue }
+    variant choice { absent, text(string), colors(list<color>) }
+    record data {
+        a: s8, b: u8, c: s16, d: u16, e: s32, f: u32,
+        g: s64, h: u64, i: f32, j: f64, k: char, l: bool,
+        text: string, bytes: bytes, permissions: permissions,
+        choice: choice, nested: option<option<string>>,
+        pair: tuple<string, list<u16>>,
+    }
+    echo: func(value: data) -> result<data, choice>;
+    notify: func(value: string);
+    scalar: func() -> u64;
+}
+world plugin { import values; export values; }

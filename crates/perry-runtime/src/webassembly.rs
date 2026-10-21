@@ -144,16 +144,6 @@ fn extract_string_bytes(jsval: f64) -> Option<(*const u8, usize)> {
     Some((data, byte_len))
 }
 
-fn emit_error_to_stderr(prefix: &str, err: *mut c_char) {
-    if !err.is_null() {
-        let cs = unsafe { std::ffi::CStr::from_ptr(err) };
-        eprintln!("{prefix}: {}", cs.to_string_lossy());
-        unsafe { perry_wasm_host_string_free(err) };
-    } else {
-        eprintln!("{prefix}: <unknown>");
-    }
-}
-
 pub(crate) fn drop_host_extern_handle(handle: usize) {
     if handle != 0 {
         unsafe { perry_wasm_host_extern_drop(handle as *mut c_void) };

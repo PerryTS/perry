@@ -1,0 +1,5 @@
+Add an optional native Component Model host and `perry-wit` bindings for synchronous, versioned WIT interfaces. Native Perry can call Rust components with typed values, callbacks and owned/borrowed resources. Perry static libraries can be linked through generated canonical C adapters into reusable WASI 0.2 components, called by a Rust host and directly composed with Rust components.
+
+Keep adapter values rooted across moving GC; distinguish rejected disposal from completed disposal whose destructor failed; preserve original JS callback exceptions and idempotent resource disposal. Match the binary format’s 1–32 flag limit and allocate lifted flag arrays at their actual length.
+
+Linux validation covers native transform/resource calls with instrumented moving GC, Perry guest calls, direct Rust/Perry composition, and an independent all-values oracle. Guest resource adapters, host-defined resources, built-in native WASI/HTTP providers, P3 async interfaces and cross-platform component qualification remain follow-up work; this is the initial synchronous component implementation.

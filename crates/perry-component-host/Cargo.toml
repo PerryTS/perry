@@ -1,0 +1,24 @@
+[package]
+name = "perry-component-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Optional Component Model host for Perry"
+
+[lib]
+crate-type = ["rlib", "staticlib"]
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+perry-wit = { path = "../perry-wit" }
+perry-abi.workspace = true
+wasmtime = { version = "48.0.0", default-features = false, features = ["anyhow", "std", "runtime", "cranelift", "component-model", "gc-drc"] }
+
+[dev-dependencies]
+wat = "1.254"

@@ -1,0 +1,23 @@
+[package]
+name = "perry-wit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "WIT contracts and TypeScript bindings for Perry components"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+wit-parser = "0.254.0"
+wit-bindgen-c = "=0.60.0"
+wit-bindgen-core = "=0.60.0"
+heck = "0.5"
+
+[dev-dependencies]
+tempfile = "3"
+wit-component = "0.254.0"

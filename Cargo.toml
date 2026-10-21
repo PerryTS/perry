@@ -43,6 +43,8 @@ members = [
     "crates/perry-ext-parcel-watcher",
     "crates/perry-ext-typescript",
     "crates/perry-wasm-host",
+    "crates/perry-wit",
+    "crates/perry-component-host",
     "crates/perry-container-compose",
     "crates/perry-container-e2e",
     "crates/perry-stdlib",

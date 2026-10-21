@@ -436,7 +436,7 @@ pub(crate) fn build_and_run_link(
     let archive_group = ElfArchiveGroup::open(
         &mut cmd,
         !is_windows && (is_linux || is_android || is_harmonyos),
-        !skip_runtime || ctx.needs_stdlib,
+        !skip_runtime || ctx.needs_stdlib || !well_known_libs.is_empty(),
     );
     if !skip_runtime {
         if ctx.needs_stdlib || is_windows {
@@ -559,6 +559,16 @@ pub(crate) fn build_and_run_link(
             }
         } else {
             eprintln!("Warning: stdlib required but libperry_stdlib.a not found");
+        }
+    }
+    // Optional archives can provide runtime-level services (for example the
+    // component engine) without requiring perry-stdlib. The branches above
+    // append them only when a stdlib archive is actually linked.
+    let wrappers_linked_with_stdlib =
+        (ctx.needs_stdlib || (!skip_runtime && is_windows)) && stdlib_lib.is_some();
+    if !wrappers_linked_with_stdlib {
+        for library in &well_known_libs {
+            cmd.arg(library);
         }
     }
     archive_group.close(&mut cmd);

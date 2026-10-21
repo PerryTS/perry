@@ -154,6 +154,11 @@ pub(crate) fn declare_core(module: &mut LlModule) {
 
     // ========== GC ==========
     module.declare_function("js_gc_collect", VOID, &[]);
+    module.declare_function("js_component_load", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_component_call", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_component_dispose", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_component_register", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_component_import", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
 
     // ========== Console ==========
     module.declare_function("js_console_assert", VOID, &[DOUBLE, I64]);

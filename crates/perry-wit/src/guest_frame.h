@@ -1,0 +1,87 @@
+#ifndef PERRY_COMPONENT_FRAME_H
+#define PERRY_COMPONENT_FRAME_H
+#include <stdint.h>
+#include <stddef.h>
+#include <stdbool.h>
+#include <stdlib.h>
+#include <string.h>
+#include <limits.h>
+
+typedef uint32_t (*perry_guest_import)(void *, uint32_t, uint32_t, uint32_t);
+typedef struct {
+    uint32_t abi_version;
+    size_t size;
+    const uint8_t *contract;
+    size_t contract_len;
+    perry_guest_import import;
+} perry_guest_ops;
+int32_t js_component_set_guest_ops(const perry_guest_ops *);
+void *perry_component_frame_new(void);
+void perry_component_frame_drop(void *);
+int32_t perry_component_frame_failed(void *);
+void perry_component_frame_fail(void *, const uint8_t *, size_t);
+void perry_component_frame_initialize(void *, const void *);
+uint32_t perry_component_frame_number(void *, double);
+uint32_t perry_component_frame_bool(void *, int32_t);
+uint32_t perry_component_frame_s64(void *, int64_t);
+uint32_t perry_component_frame_u64(void *, uint64_t);
+uint32_t perry_component_frame_string(void *, const uint8_t *, size_t);
+uint32_t perry_component_frame_char(void *, uint32_t);
+uint32_t perry_component_frame_bytes(void *, const uint8_t *, size_t);
+uint32_t perry_component_frame_array(void *, uint32_t);
+uint32_t perry_component_frame_object(void *);
+void perry_component_frame_set(void *, uint32_t, const uint8_t *, size_t, uint32_t);
+uint32_t perry_component_frame_get(void *, uint32_t, const uint8_t *, size_t);
+void perry_component_frame_array_set(void *, uint32_t, uint32_t, uint32_t);
+uint32_t perry_component_frame_array_get(void *, uint32_t, uint32_t);
+uint32_t perry_component_frame_array_len(void *, uint32_t);
+double perry_component_frame_get_number(void *, uint32_t);
+double perry_component_frame_get_integer(void *, uint32_t, double, double);
+int32_t perry_component_frame_get_bool(void *, uint32_t);
+uint64_t perry_component_frame_get_u64(void *, uint32_t);
+int64_t perry_component_frame_get_s64(void *, uint32_t);
+uint32_t perry_component_frame_get_char(void *, uint32_t);
+size_t perry_component_frame_string_len(void *, uint32_t);
+void perry_component_frame_string_copy(void *, uint32_t, uint8_t *, size_t);
+size_t perry_component_frame_bytes_len(void *, uint32_t);
+void perry_component_frame_bytes_copy(void *, uint32_t, uint8_t *, size_t);
+uint32_t perry_component_frame_call(void *, uint32_t, uint32_t, uint32_t);
+
+/* Only native C allocations live here. Every JS value is a rooted frame slot. */
+typedef struct perry_allocation {
+    void *pointer;
+    struct perry_allocation *next;
+} perry_allocation;
+typedef struct { perry_allocation *head; } perry_allocations;
+static void perry_bad(void *f, const char *message) {
+    perry_component_frame_fail(f, (const uint8_t *)message, strlen(message));
+}
+static void *perry_allocate(void *f, perry_allocations *a, size_t count, size_t size) {
+    if (perry_component_frame_failed(f) || count == 0) return NULL;
+    if (size && count > SIZE_MAX / size) { perry_bad(f, "Component allocation overflow"); return NULL; }
+    perry_allocation *record = malloc(sizeof(*record));
+    void *pointer = calloc(count, size);
+    if (!record || !pointer) {
+        free(record); free(pointer); perry_bad(f, "Component allocation failed"); return NULL;
+    }
+    record->pointer = pointer; record->next = a->head; a->head = record;
+    return pointer;
+}
+static void perry_allocations_end(perry_allocations *a, bool transferred) {
+    while (a->head) {
+        perry_allocation *record = a->head; a->head = record->next;
+        if (!transferred) free(record->pointer);
+        free(record);
+    }
+}
+static bool perry_tag(void *f, uint32_t slot, const char *expected, size_t len) {
+    size_t actual = perry_component_frame_string_len(f, slot);
+    if (perry_component_frame_failed(f) || actual != len) return false;
+    uint8_t *bytes = len ? malloc(len) : NULL;
+    if (len && !bytes) { perry_bad(f, "Component allocation failed"); return false; }
+    perry_component_frame_string_copy(f, slot, bytes, len);
+    bool matches = !perry_component_frame_failed(f) && (!len || memcmp(bytes, expected, len) == 0);
+    free(bytes);
+    return matches;
+}
+#endif

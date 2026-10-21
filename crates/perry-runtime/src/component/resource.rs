@@ -1,0 +1,134 @@
+//! Resource capabilities are private object-owned state, never public tokens.
+//! The engine remains authoritative for ownership, type and call lifetimes.
+use super::*;
+use crate::object::owned_state_bag::{
+    self as bag, COMPONENT_RESOURCE_OWNER as OWNER, COMPONENT_RESOURCE_STATE as STATE,
+    COMPONENT_RESOURCE_TOKEN as TOKEN,
+};
+
+fn load(resource: f64, slot: u32) -> f64 {
+    unsafe {
+        bag::load(
+            object_pointer(resource).unwrap_or_else(|| fail("Expected a component resource"))
+                as usize,
+            slot,
+        )
+    }
+}
+
+fn store(resource: f64, slot: u32, value: f64) {
+    unsafe {
+        bag::store(object_pointer(resource).unwrap() as usize, slot, value);
+    }
+}
+
+pub(super) fn encode(resource: f64) -> Option<Value> {
+    object_pointer(resource)?;
+    let token = load(resource, TOKEN);
+    if JSValue::from_bits(token.to_bits()).is_undefined() {
+        return None;
+    }
+    let state = load(resource, STATE);
+    if state == 2.0 {
+        fail("Component resource is disposed");
+    }
+    Some(serde_json::json!({"$resource":string(token), "owned":state == 1.0}))
+}
+
+pub(super) fn wrap(owner: f64, token: &str, owned: bool) -> f64 {
+    let scope = RuntimeHandleScope::new();
+    let owner = scope.root_nanbox_f64(owner);
+    let resource = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+        crate::object::js_object_alloc(0, 0) as i64,
+    ));
+    let token = scope.root_nanbox_f64(crate::value::js_nanbox_string(
+        crate::string::js_string_from_bytes(token.as_ptr(), token.len() as u32) as i64,
+    ));
+    store(resource.get_nanbox_f64(), OWNER, owner.get_nanbox_f64());
+    store(resource.get_nanbox_f64(), TOKEN, token.get_nanbox_f64());
+    store(
+        resource.get_nanbox_f64(),
+        STATE,
+        if owned { 1.0 } else { 0.0 },
+    );
+    if owned {
+        for (name, info) in [
+            ("borrow", crate::fn_info!(borrow, 0)),
+            ("dispose", crate::fn_info!(dispose, 0)),
+        ] {
+            let function = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(info, 1));
+            crate::closure::js_closure_set_capture_f64(
+                function.get_raw_mut_ptr(),
+                0,
+                resource.get_nanbox_f64(),
+            );
+            crate::object::set_builtin_closure_non_constructable(
+                function.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as usize,
+            );
+            let value = crate::value::js_nanbox_pointer(
+                function.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64,
+            );
+            set_field(resource.get_nanbox_f64(), name.as_bytes(), value);
+        }
+    }
+    resource.get_nanbox_f64()
+}
+
+extern "C" fn borrow(
+    closure: *const crate::closure::ClosureHeader,
+    _: crate::closure::JsThis,
+) -> f64 {
+    let scope = RuntimeHandleScope::new();
+    let resource = scope.root_nanbox_f64(crate::closure::js_closure_get_capture_f64(closure, 0));
+    if load(resource.get_nanbox_f64(), STATE) != 1.0 {
+        fail("Component resource is not owned");
+    }
+    let token = string(load(resource.get_nanbox_f64(), TOKEN));
+    wrap(load(resource.get_nanbox_f64(), OWNER), &token, false)
+}
+
+extern "C" fn dispose(
+    closure: *const crate::closure::ClosureHeader,
+    _: crate::closure::JsThis,
+) -> f64 {
+    let scope = RuntimeHandleScope::new();
+    let resource = scope.root_nanbox_f64(crate::closure::js_closure_get_capture_f64(closure, 0));
+    let state = load(resource.get_nanbox_f64(), STATE);
+    if state == 2.0 {
+        return undefined();
+    }
+    if state != 1.0 {
+        fail("A borrowed component resource cannot be disposed");
+    }
+    let frame = callback::Frame::new(&scope, load(resource.get_nanbox_f64(), OWNER));
+    let context = context::get(frame.owner.get_nanbox_f64());
+    let mut token = String::new();
+    let mut error = Vec::new();
+    let result = crate::exception::catch_js_throw(|| {
+        token = string(load(resource.get_nanbox_f64(), TOKEN));
+        let mut buffer = Buffer::default();
+        let status = unsafe {
+            (host::ops().perry_component_host_resource_drop)(
+                (*context).host,
+                token.as_ptr(),
+                token.len(),
+                frame.token(),
+                &mut buffer,
+            )
+        };
+        error = unsafe { take(buffer) };
+        if matches!(
+            status,
+            perry_abi::component_host::OK | perry_abi::component_host::RELEASED_ERROR
+        ) {
+            store(resource.get_nanbox_f64(), STATE, 2.0);
+        }
+        frame.rethrow();
+        if status != perry_abi::component_host::OK {
+            fail(&String::from_utf8_lossy(&error));
+        }
+        undefined()
+    });
+    drop((token, error));
+    finish(result)
+}

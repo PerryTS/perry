@@ -1500,6 +1500,9 @@ fn collect_module_one(
             if import.source == "perry/plugin" {
                 ctx.needs_plugins = true;
             }
+            if import.source == "perry/component" {
+                ctx.native_module_imports.insert(import.source.clone());
+            }
             if import.source == "perry/thread" {
                 // perry/thread spawns OS workers and translates panics to
                 // promise rejections via `catch_unwind` — auto-mode keeps

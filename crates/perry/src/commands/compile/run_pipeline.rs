@@ -3669,7 +3669,7 @@ pub fn run_with_parse_cache(
     // program needs, and the linker drops the rest. `--no-auto-optimize` and
     // the legacy `--minimal-stdlib` are accepted no-ops: nothing is rebuilt.
     let _ = args.no_auto_optimize;
-    let optimized_libs: Option<OptimizedLibs> = if native_link_set_skipped {
+    let mut optimized_libs: Option<OptimizedLibs> = if native_link_set_skipped {
         None
     } else {
         Some(build_optimized_libs(
@@ -3680,6 +3680,12 @@ pub fn run_with_parse_cache(
             verbose,
         ))
     };
+    let component_host_lib = super::component_host::library(&ctx, target.as_deref())?;
+    if let (Some(libs), Some(component)) = (&mut optimized_libs, &component_host_lib) {
+        // Reuse the optional-archive path: symbol scanning, deduplication,
+        // link grouping and cache fingerprints must all see this archive.
+        libs.well_known_libs.push(component.clone());
+    }
     // The runtime call-effect table, one per compilation (GC effects design
     // §4.3, slice 6): read from the sidecar of the archives the link set just
     // resolved, before codegen. Every module is lowered under it and its digest
@@ -7085,16 +7091,21 @@ pub fn run_with_parse_cache(
     // below (auto-optimize, stdlib, stubs, link cache) applies.
     #[cfg(feature = "target-wasi")]
     if target.as_deref() == Some("wasi") {
+        if args.output_type == "dylib" {
+            return Err(anyhow!(
+                "WASI library components use --output-type staticlib and a canonical WIT adapter"
+            ));
+        }
+        let is_staticlib = args.output_type == "staticlib";
         let stem = args
             .input
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("output");
         let stem = super::super::sanitize::sanitize_for_linker_argv(stem);
-        let exe_path = args
-            .output
-            .clone()
-            .unwrap_or_else(|| output_path::default_output_path(false, false, Some("wasi"), &stem));
+        let exe_path = args.output.clone().unwrap_or_else(|| {
+            output_path::default_output_path(false, is_staticlib, Some("wasi"), &stem)
+        });
         // `--no-link`: the objects, already written where `-o` points
         // (#7167), are the product. Linking would read that object and
         // overwrite it with the component.
@@ -7104,16 +7115,26 @@ pub fn run_with_parse_cache(
                 super::link::wasi::feature_installer(&ctx, &compiled_features, &object_output_dir)?;
             obj_cleanup_paths.push(installer.clone());
             obj_paths.push(installer);
-            super::link::wasi::link_wasi(&obj_paths, &runtime_lib, &exe_path, verbose)?;
+            if is_staticlib {
+                super::link::wasi::archive_library(
+                    &obj_paths, &runtime_lib, &exe_path, verbose,
+                )?;
+            } else {
+                super::link::wasi::link_wasi(&obj_paths, &runtime_lib, &exe_path, verbose)?;
+            }
             if let OutputFormat::Text = format {
-                println!("Wrote WASI component: {}", exe_path.display());
+                println!(
+                    "Wrote WASI {}: {}",
+                    if is_staticlib { "static archive" } else { "component" },
+                    exe_path.display()
+                );
             }
         }
         return Ok(CompileResult {
             output_path: exe_path,
             target: "wasi".to_string(),
             bundle_id: None,
-            is_dylib: false,
+            is_dylib: is_staticlib,
             codegen_cache_stats: None,
             link_cache_stats: None,
             build_cache_stats: None,
@@ -7148,11 +7169,14 @@ pub fn run_with_parse_cache(
         // The wasm host registers its entry points with the runtime before
         // `main` (`perry_abi::wasm_host`), so `js_runtime_install_wasm_host`
         // finds them.
-        let registrations: Vec<String> = wasm_host_lib_resolved
+        let mut registrations: Vec<String> = wasm_host_lib_resolved
             .is_some()
             .then(|| crate::commands::stdlib_installs::WASM_HOST_REGISTER_SYMBOL.to_string())
             .into_iter()
             .collect();
+        if component_host_lib.is_some() {
+            registrations.push(super::component_host::REGISTER.to_string());
+        }
         let installer_bytes = perry_codegen::stubs::generate_feature_installer_object(
             &runtime_symbols,
             stdlib_symbols.as_deref(),

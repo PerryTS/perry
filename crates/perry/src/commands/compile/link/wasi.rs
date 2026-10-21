@@ -92,7 +92,46 @@ pub(crate) fn feature_installer(
     Ok(path)
 }
 
-/// Link `objects` into the WASI component at `output`.
+/// Archive the reusable library objects for a separate canonical adapter link.
+pub(crate) fn archive_library(
+    objects: &[PathBuf],
+    runtime: &Path,
+    output: &Path,
+    verbose: u8,
+) -> Result<()> {
+    let sdk = wasi_sdk()?;
+    let archiver = sdk.join("bin").join(if cfg!(windows) {
+        "llvm-ar.exe"
+    } else {
+        "llvm-ar"
+    });
+    // Use LLVM's Wasm-aware indexer, including on hosts whose system ar only
+    // recognizes native objects. Recreate so removed modules cannot linger.
+    if output.exists() {
+        std::fs::remove_file(output)?;
+    }
+    let mut command = Command::new(&archiver);
+    command.arg("crs").arg(output).args(objects);
+    let status = super::super::tool_output::run_internal_tool(&mut command, verbose)?;
+    if !status.success() {
+        bail!("WASI static archive creation failed");
+    }
+    let manifest = serde_json::json!({
+        "version": 1,
+        "archive": output.canonicalize()?.display().to_string(),
+        "entry_symbol": "perry_module_init",
+        "target": "wasi",
+        "link_archives": [{"role": "runtime", "path": runtime.canonicalize()?.display().to_string()}],
+        "system_libraries": ["setjmp"]
+    });
+    std::fs::write(
+        output.with_extension("linkdeps.json"),
+        serde_json::to_vec_pretty(&manifest)?,
+    )?;
+    Ok(())
+}
+
+/// Link `objects` into the WASI command component at `output`.
 pub(crate) fn link_wasi(
     objects: &[PathBuf],
     runtime: &Path,

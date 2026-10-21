@@ -117,13 +117,16 @@ pub(super) fn new(options: &ValidatedOptions) -> f64 {
             "Perry.WASI.Context",
             false,
         );
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let value = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(cell as i64));
         crate::native_handle::native_handle_set_external_bytes(
             cell,
             std::mem::size_of::<Context>(),
         );
-        let scope = crate::gc::RuntimeHandleScope::new();
-        let value = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(cell as i64));
         if host_linked() {
+            let cell = JSValue::from_bits(value.get_nanbox_f64().to_bits())
+                .as_pointer::<crate::native_handle::NativeHandleHeader>()
+                as *mut _;
             let resource = crate::native_handle::native_handle_rust_payload_ptr(cell, TYPE_ID)
                 .cast::<Context>();
             (*resource).open();

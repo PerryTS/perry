@@ -1,6 +1,51 @@
 use super::*;
 
 pub(super) const THREAD_LODASH_ROWS: &[NativeModSig] = &[
+    NativeModSig {
+        module: "perry/component",
+        has_receiver: false,
+        method: "registerComponentExports",
+        class_filter: None,
+        runtime: "js_component_register",
+        args: &[NA_F64, NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "perry/component",
+        has_receiver: false,
+        method: "callComponentImport",
+        class_filter: None,
+        runtime: "js_component_import",
+        args: &[NA_F64, NA_F64, NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "perry/component",
+        has_receiver: false,
+        method: "loadComponent",
+        class_filter: None,
+        runtime: "js_component_load",
+        args: &[NA_F64, NA_F64, NA_F64, NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "perry/component",
+        has_receiver: false,
+        method: "callComponent",
+        class_filter: None,
+        runtime: "js_component_call",
+        args: &[NA_F64, NA_F64, NA_F64, NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "perry/component",
+        has_receiver: false,
+        method: "disposeComponent",
+        class_filter: None,
+        runtime: "js_component_dispose",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
     // ========== perry (embedded-asset API, #5731) ==========
     // `readEmbedded(path)` takes the NaN-boxed path string as-is (decoded
     // runtime-side via `decode_path_value`, like the fs APIs) and returns a

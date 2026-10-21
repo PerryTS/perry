@@ -283,6 +283,7 @@ pub mod v8;
 pub mod validators;
 pub mod value;
 pub mod wasi;
+pub mod component;
 mod wasm_instance_state;
 pub mod web_storage;
 /// WebAssembly host shims (issue #76). The wasmi-backed engine lives in the

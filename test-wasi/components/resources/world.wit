@@ -1,0 +1,18 @@
+package perry:resources@1.0.0;
+
+interface observe {
+  dropped: func(value: u32);
+}
+
+interface counters {
+  resource counter {
+    constructor(value: u32);
+    read: func() -> u32;
+  }
+  consume: func(value: own<counter>);
+}
+
+world plugin {
+  import observe;
+  export counters;
+}
