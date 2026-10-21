@@ -6289,6 +6289,7 @@ jobs:
       - uses: ./.github/actions/perry/Swatinem/rust-cache
         with:
           shared-key: wasi-hosts-${{ matrix.target }}
+          cache-on-failure: true
           workspaces: |
             . -> target
             . -> target-instr

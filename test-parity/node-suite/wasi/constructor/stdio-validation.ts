@@ -1,13 +1,17 @@
 import { WASI } from "node:wasi";
+import { openSync, closeSync } from "node:fs";
 
 const W: any = WASI;
+// Descriptor 3 may belong to Node's event loop but be absent in Perry.
+// Use an explicitly opened descriptor to compare the same valid input.
+const positiveFd = openSync("test-parity/node-suite/wasi/constructor/stdio-validation.ts", "r");
 
 for (const option of ["stdin", "stdout", "stderr"] as const) {
   for (
     const [label, value] of [
       ["undefined", undefined],
       ["zero", 0],
-      ["positive", 3],
+      ["positive", positiveFd],
       ["negative", -1],
       ["fraction", 1.5],
       ["nan", NaN],
@@ -28,3 +32,5 @@ for (const option of ["stdin", "stdout", "stderr"] as const) {
     }
   }
 }
+
+closeSync(positiveFd);

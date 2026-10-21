@@ -10,3 +10,9 @@ and artifact identities alongside retained logs. The suite summary rejects
 skipped, missing, failed and cancelled platform jobs. This starts as a manual
 qualification suite; platform support is not claimed before execution evidence,
 and existing required gates are unchanged.
+
+Use an explicitly opened descriptor in the P1 stdio-constructor fixture. A
+hard-coded descriptor 3 can name Node's internal event-loop handle but be absent
+in Perry, making that comparison depend on process internals. All validation
+cases remain. Initialize Windows C++ tools through Developer PowerShell because
+the vendored CommonJS action is incompatible with the repository's ESM scope.
