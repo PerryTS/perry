@@ -85,8 +85,11 @@ Other prebuilt targets do not yet include this component payload.
 directory outside the source checkout. It generates TypeScript and canonical C
 bindings, proves ordinary programs still work with the engine withheld, rejects
 a component host without that engine, and then executes typed Rust-component
-calls, resource ownership, callbacks, collection, disposal and TCP/UDP/DNS
-interoperability with the packaged engine restored.
+calls, guest and host resource ownership, callbacks, collection, disposal and
+TCP/UDP/DNS interoperability with the packaged engine restored. It also executes
+WASI commands, including commands nested inside active library callbacks. All
+20 normal library phases and five command phases must pass; partial or duplicate
+phase sets cannot qualify an archive.
 The receipt records archive, installed-file and executable identities. This
 packaging change still requires release-profile execution qualification; it
 does not establish that a release has been published.

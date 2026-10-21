@@ -42,7 +42,9 @@ pub(crate) const PLACE_SAFEPOINTS_OPTIONS: [&str; 3] =
 /// external linkage only so the module link keeps it (an unreferenced local
 /// definition is dropped by the linker); [`place`] deletes it once every use
 /// is inlined, so no unit ever exports it.
-const POLL_IR: &str = r#"
+// Inkwell's copy constructor requires and strips a trailing NUL.
+const POLL_IR: &str = concat!(
+    r#"
 @PERRY_LOOP_INTERRUPT_ARMED = external global i32
 declare void @js_loop_interrupt() #0
 define void @gc.safepoint_poll() {
@@ -59,7 +61,9 @@ done:
 attributes #0 = { cold }
 attributes #1 = { cold "gc-leaf-function" }
 !0 = !{!"branch_weights", i32 1, i32 1048575}
-"#;
+"#,
+    "\0"
+);
 
 const POLL_FN: &str = "gc.safepoint_poll";
 const STRATEGY: &std::ffi::CStr = c"statepoint-example";

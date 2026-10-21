@@ -72,6 +72,16 @@ class ComponentPackages(unittest.TestCase):
 
 
 class ArchivePayload(unittest.TestCase):
+    def test_partial_duplicate_and_failed_execution_cannot_qualify_archive(self):
+        for expected, count in [(release.NATIVE_PHASES, 20), (release.COMMAND_PHASES, 5)]:
+            self.assertEqual(len(expected), count)
+            rows = [{'name': name, 'exitCode': 0} for name in sorted(expected)]
+            release.require_phases(rows, expected)
+            for bad in (rows[:-1], rows[:-1] + rows[:1], rows + rows[:1],
+                        [dict(row, exitCode=1) for row in rows]):
+                with self.assertRaises(RuntimeError):
+                    release.require_phases(bad, expected)
+
     def test_tar_and_zip_extract_the_complete_host_payload_only(self):
         for target in release.TARGETS:
             with self.subTest(target=target), tempfile.TemporaryDirectory() as temporary:

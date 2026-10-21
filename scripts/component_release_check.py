@@ -15,6 +15,19 @@ import zipfile
 ROOT = Path(__file__).resolve().parent.parent
 TARGETS = {'aarch64-apple-darwin', 'x86_64-unknown-linux-gnu', 'x86_64-pc-windows-msvc'}
 MARKER = 'PASS Rust component: 51 calls, typed results, callback GC, disposal'
+NATIVE_PHASES = {
+    'rust-guest', 'componentize', 'bindings', 'compile-host', 'run-host',
+    *(f'{prefix}-{phase}' for prefix in ('resources', 'network', 'host-resources')
+      for phase in ('guest', 'componentize', 'bindings', 'compile', 'run')),
+}
+COMMAND_PHASES = {'rust-command', 'command-compile', 'command-run',
+                  'command-library-compile', 'command-library-run'}
+
+
+def require_phases(rows, expected):
+    if (len(rows) != len(expected) or {row['name'] for row in rows} != expected
+            or any(row['exitCode'] != 0 for row in rows)):
+        raise RuntimeError('Incomplete packaged component acceptance')
 
 
 def required(target):
@@ -137,22 +150,33 @@ def main():
         '--perry', perry, '--wit', wit, '--runtime-dir', installed,
         '--componentize', args.componentize.resolve(), '--output', acceptance], timeout=1800)
     phases = json.loads((acceptance/'results.json').read_text())
-    names = {row['name'] for row in phases}
-    if len(phases) < 15 or len(names) != len(phases) or not all(row['exitCode'] == 0 for row in phases):
-        raise RuntimeError('Incomplete packaged native component acceptance')
-    if not {'run-host', 'resources-run', 'network-run'}.issubset(names):
-        raise RuntimeError('Packaged transform, resource and network execution are required')
+    require_phases(phases, NATIVE_PHASES)
     peer = json.loads((acceptance/'network-peer.json').read_text())
-    if not peer['passed'] or len(peer['received']) != 6 or len(peer['tcpReceived']) != 3:
+    udp = [f'{mode}:{i}'.encode().hex() for i in range(3) for mode in ('connected', 'unconnected')]
+    tcp = [f'tcp:{i}\n'.encode().hex() for i in range(3)]
+    if (not peer['passed'] or peer['hostExit'] != 0 or peer['errors']
+            or [row['payloadHex'] for row in peer['received']] != udp
+            or [row['payloadHex'] for row in peer['tcpReceived']] != tcp):
         raise RuntimeError('Packaged networking did not observe all expected traffic')
+    commands = out/'commands'
+    run('command-acceptance', [sys.executable, ROOT/'scripts/component_command_acceptance.py',
+        '--perry', perry, '--runtime-dir', installed, '--output', commands,
+        '--library-component', acceptance/'transform/transform.component.wasm',
+        '--library-bindings', acceptance/'transform/generated'], timeout=1800)
+    command_phases = json.loads((commands/'results.json').read_text())
+    require_phases(command_phases, COMMAND_PHASES)
     artifacts = [args.componentize.resolve()]
-    for directory, component in [('transform', 'transform'), ('resources', 'resources'), ('network', 'network')]:
+    for directory, component in [('transform', 'transform'), ('resources', 'resources'),
+                                  ('network', 'network'), ('host-resources', 'host-resources')]:
         artifacts += [acceptance/directory/(component+'.component.wasm'), acceptance/directory/('host'+suffix)]
+    artifacts += [commands/('command'+suffix), commands/('command-library'+suffix),
+                  commands/'rust-target/wasm32-wasip2/release/perry-component-command-fixture.wasm']
     receipt = {'sourceRevision': revision, 'target': args.target, 'passed': True,
         'archive': {'name': archive.name, 'sha256': sha(archive), 'bytes': archive.stat().st_size},
         'installedFiles': files, 'phases': rows, 'nativeAcceptance': phases,
+        'commandAcceptance': command_phases,
         'acceptanceArtifactSha256': {str(path): sha(path) for path in artifacts},
-        'scope': 'Final release archive: isolated linking, WIT generators, typed calls, resources, callbacks, GC, disposal and TCP/UDP/DNS; no instrumented-GC claim'}
+        'scope': 'Final release archive: isolated linking, WIT generators, typed calls, guest/host resources, callbacks, GC, disposal, TCP/UDP/DNS, commands and nested command/library execution; no instrumented-GC claim'}
     (out/'qualification.json').write_text(json.dumps(receipt, indent=2)+'\n')
     print(json.dumps(receipt, indent=2))
 
