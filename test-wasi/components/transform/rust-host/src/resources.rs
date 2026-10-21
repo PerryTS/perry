@@ -207,6 +207,7 @@ pub(super) fn run(store: &mut Store<State>, instance: &Instance) -> Result<()> {
             call(store, instance, "check-expired", &[], 1)? == [Val::Bool(true)],
             "escaped borrow remained live"
         );
+        store.set_fuel(RESOURCE_FUEL)?;
         resource.resource_drop(&mut *store)?;
         ensure!(
             store.data().logs.last() == Some(&format!("guest:{value}")),
@@ -223,9 +224,16 @@ pub(super) fn run(store: &mut Store<State>, instance: &Instance) -> Result<()> {
     let Val::Resource(resource) = results[0] else {
         anyhow::bail!("missing trap resource");
     };
+    store.set_fuel(RESOURCE_FUEL)?;
+    let error = resource
+        .resource_drop(&mut *store)
+        .expect_err("destructor trap was swallowed");
     ensure!(
-        resource.resource_drop(&mut *store).is_err(),
-        "destructor trap was swallowed"
+        matches!(
+            error.downcast_ref::<wasmtime::Trap>(),
+            Some(wasmtime::Trap::UnreachableCodeReached)
+        ),
+        "expected the adapter trap after the JS destructor throws, got {error:#}"
     );
     ensure!(
         store.data().logs.len() == 55,
