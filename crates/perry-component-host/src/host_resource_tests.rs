@@ -53,12 +53,16 @@ const COMPONENT: &str = r#"
     (global $held (mut i32) (i32.const 0))
     (func (export "make") (result i32) (call $make))
     (func (export "echo") (param i32) (result i32) (local.get 0))
-    (func (export "read") (param i32) (result i32) (call $read (local.get 0)))
+    ;; Unlike a resource defined here, an imported borrow is a table handle.
+    ;; Release it after forwarding the borrow, while preserving the read value.
+    (func (export "read") (param i32) (result i32)
+      (call $read (local.get 0)) (call $drop (local.get 0)))
     (func (export "consume") (param i32) (call $drop (local.get 0)))
     (func (export "consume-imported") (param i32) (call $consume (local.get 0)))
     (func (export "consume-two") (param i32 i32) (call $drop (local.get 0)) (call $drop (local.get 1)))
     (func (export "checked") (param i32 i32) (call $drop (local.get 0)))
-    (func (export "mixed") (param i32 i32) (call $drop (local.get 0)))
+    (func (export "mixed") (param i32 i32)
+      (call $drop (local.get 0)) (call $drop (local.get 1)))
     (func (export "keep") (param i32) (global.set $held (local.get 0)))
     (func (export "fail") (param i32) unreachable)
     ;; INITIALIZER
@@ -176,10 +180,12 @@ fn host_resources_round_trip_borrow_and_drop_with_distinct_generations() {
     assert_eq!(returned["$hostResource"], "local");
     assert_eq!(returned["generation"], 2);
     assert!(host.call("", "echo", &[original]).is_err());
-    assert_eq!(
-        host.call("", "read", &[returned.clone()]).unwrap(),
-        Some(json!(42))
-    );
+    for _ in 0..3 {
+        assert_eq!(
+            host.call("", "read", &[returned.clone()]).unwrap(),
+            Some(json!(42))
+        );
+    }
     host.call("", "consume", &[returned.clone()]).unwrap();
     assert!(host.call("", "consume", &[returned]).is_err());
     assert_eq!(drops(&events), ["local"]);
@@ -245,6 +251,17 @@ fn failed_lowering_rolls_back_new_handles_and_preserves_owners() {
     let value = host.call("", "echo", &[value]).unwrap().unwrap();
     host.call("", "consume", &[value]).unwrap();
     assert_eq!(drops(&events), ["rollback"]);
+    // Distinct owners can be transferred and borrowed in the same call.
+    let borrowed = host
+        .call("", "echo", &[fresh("borrowed")])
+        .unwrap()
+        .unwrap();
+    host.call("", "mixed", &[fresh("transferred"), borrowed.clone()])
+        .unwrap();
+    assert_eq!(drops(&events), ["rollback", "transferred"]);
+    assert_eq!(host.call("", "read", &[borrowed]).unwrap(), Some(json!(42)));
+    host.drop_resource("borrowed").unwrap();
+    assert_eq!(drops(&events), ["rollback", "transferred", "borrowed"]);
 }
 
 #[test]
