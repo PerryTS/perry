@@ -187,8 +187,35 @@ fn host_resources_round_trip_borrow_and_drop_with_distinct_generations() {
     assert_eq!(made["generation"], 2);
     host.drop_resource(made["$hostResource"].as_str().unwrap())
         .unwrap();
+    assert_eq!(
+        drops(&events),
+        ["local", "made-0"],
+        "explicit disposal must not wait for instance teardown"
+    );
     host.dispose().unwrap();
     assert_eq!(drops(&events), ["local", "made-0"]);
+}
+
+#[test]
+fn explicit_host_drop_preserves_a_destructor_failure_and_never_retries_it() {
+    let events: Arc<Mutex<Vec<ResourceEvent>>> = Arc::default();
+    let mut host = host(COMPONENT, events.clone(), true).unwrap();
+    host.call("", "echo", &[fresh("bad")]).unwrap();
+    let mut released = false;
+    let error = host
+        .drop_resource_tracked("bad", &mut released)
+        .unwrap_err();
+    assert!(released);
+    assert!(format!("{error:#}").contains("deliberate host payload destructor failure"));
+    assert_eq!(drops(&events), ["bad"]);
+    released = false;
+    assert!(host.drop_resource_tracked("bad", &mut released).is_err());
+    assert!(
+        !released,
+        "a rejected second drop must not claim to release ownership"
+    );
+    host.dispose().unwrap();
+    assert_eq!(drops(&events), ["bad"]);
 }
 
 #[test]
