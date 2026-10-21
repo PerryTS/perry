@@ -139,4 +139,39 @@ check(dropped.filter(value => value === 68).length === 1, "owned callback destru
 const count = dropped.filter(value => value === 900).length;
 rejects(() => setup(new Uint8Array([0, 1, 2])), "invalid component accepted");
 check(dropped.filter(value => value === 900).length === count + 1, "failed load leaked host payload");
-console.log("PASS host resources: aliases, ownership, moving payloads, borrows, rollback, cleanup, original exceptions");
+const deferred = setup();
+const deferredApi = deferred.component.exports["perry:host-resources/runner@1.0.0"];
+const deferredToken = deferred.factories["perry:host-resources/tokens@1.0.0"].token;
+function abandonLocal() { deferredToken.create({ value: 601 }, payload => { collect(); dropped.push((payload as {value:number}).value); }); }
+function abandonMaterialized() { deferredApi.make(602); }
+function retainBorrowOnly() { return deferredApi.make(603).borrow(); }
+function renewOwner() { return deferredApi.echo(deferredApi.make(604)); }
+function leaveInGuest() { deferredApi.keep(deferredApi.make(605)); }
+abandonLocal();
+abandonMaterialized();
+let liveBorrow: ReturnType<typeof retainBorrowOnly> | undefined = retainBorrowOnly();
+const renewed = renewOwner();
+leaveInGuest();
+collect();
+setImmediate(() => {
+  collect();
+  setImmediate(() => {
+    check(dropped.filter(value => value === 601).length === 1, "unmaterialized payload was not collected");
+    check(dropped.filter(value => value === 602).length === 1, "materialized payload was not collected");
+    check(!dropped.includes(603) && deferredApi.read(liveBorrow!) === 603, "borrow did not retain host owner");
+    check(!dropped.includes(604) && deferredApi.read(renewed.borrow()) === 604, "late finalizer destroyed renewed owner");
+    check(!dropped.includes(605), "late finalizer destroyed guest-held resource");
+    const fromGuest = deferredApi.take();
+    check(deferredApi.read(fromGuest.borrow()) === 605, "guest-held resource was lost");
+    fromGuest.dispose();
+    renewed.dispose();
+    liveBorrow = undefined;
+    collect();
+    setImmediate(() => {
+      check(dropped.filter(value => value === 603).length === 1, "borrowed host owner was not collected");
+      deferred.component.dispose();
+      for (const id of [601, 602, 603, 604, 605]) check(dropped.filter(value => value === id).length === 1, "host finalizer repeated destructor");
+      console.log("PASS host resources: aliases, ownership, moving payloads, borrows, rollback, cleanup, original exceptions");
+    });
+  });
+});

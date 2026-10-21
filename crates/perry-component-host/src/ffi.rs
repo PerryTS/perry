@@ -304,6 +304,37 @@ pub unsafe extern "C" fn perry_component_host_interrupt(handle: *mut c_void) {
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn perry_component_host_resource_collect(
+    handle: *mut c_void,
+    request: *const u8,
+    len: usize,
+    context: u64,
+    out: *mut Buffer,
+) -> i32 {
+    // Check before forming a mutable Host reference. Finalization jobs can be
+    // delivered by a nested microtask pump inside a guest's host callback.
+    if bridge(handle).is_ok_and(|bridge| bridge.busy.get()) {
+        return perry_abi::component_host::DEFERRED;
+    }
+    let mut released = false;
+    let status = respond(
+        out,
+        (|| {
+            let request = serde_json::from_slice(bytes(request, len)?)?;
+            bridge(handle)?.with(context, |host| {
+                host.collect_resource(request, &mut released)
+            })?;
+            Ok(Vec::new())
+        })(),
+    );
+    if released && status == ERROR {
+        RELEASED_ERROR
+    } else {
+        status
+    }
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn perry_component_host_drop(handle: *mut c_void) {
     if !handle.is_null() {
         let bridge = Box::from_raw(handle.cast::<Bridge>());

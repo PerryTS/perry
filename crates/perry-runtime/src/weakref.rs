@@ -491,21 +491,23 @@ pub extern "C" fn js_finreg_new(callback: f64) -> *mut ObjectHeader {
     // #1766: sentinel-name internal slots so `(fr as any).callback` /
     // `.entries` return `undefined` like Node.
     let packed = b"__perry_fr_callback\0__perry_fr_entries\0";
-    let obj = js_object_alloc_with_shape(FINREG_SHAPE_ID, 2, packed.as_ptr(), packed.len() as u32);
+    let obj = scope.root_raw_mut_ptr(js_object_alloc_with_shape(
+        FINREG_SHAPE_ID, 2, packed.as_ptr(), packed.len() as u32,
+    ));
     js_object_set_field(
-        obj,
+        obj.get_raw_mut_ptr(),
         FINREG_CALLBACK_FIELD as u32,
         JSValue::from_bits(callback_handle.get_nanbox_u64()),
     );
     let entries_arr = js_array_alloc(0);
     js_object_set_field(
-        obj,
+        obj.get_raw_mut_ptr(),
         FINREG_ENTRIES_FIELD as u32,
         JSValue::array_ptr(entries_arr),
     );
     unsafe {
-        (*obj).class_id = CLASS_ID_FINALIZATION_REGISTRY;
-        crate::object::shapes::restamp_object_proto_id(obj);
+        (*obj.get_raw_mut_ptr::<ObjectHeader>()).class_id = CLASS_ID_FINALIZATION_REGISTRY;
+        crate::object::shapes::restamp_object_proto_id(obj.get_raw_mut_ptr());
     }
     // #6182: the FinalizationRegistry itself is the registered holder (not its
     // per-`register()` records). The copied-minor weak pass dispatches on
@@ -515,8 +517,8 @@ pub extern "C" fn js_finreg_new(callback: f64) -> *mut ObjectHeader {
     // cleanup job (the #6192 automatic-cycle behavior). A registry that is
     // created but never `.register()`ed processes an empty entries array (a
     // cheap no-op) and is pruned when it dies.
-    weak_holder_register(obj);
-    obj
+    weak_holder_register(obj.get_raw_mut_ptr());
+    obj.get_raw_mut_ptr()
 }
 
 fn js_finreg_record_new(target: f64, held: f64, token: f64) -> *mut ObjectHeader {

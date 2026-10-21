@@ -111,6 +111,15 @@ fn wrap(owner: f64, id: u32, generation: u32, owned: bool, lifetime: f64, parent
                 ),
             );
         }
+        let row = payload::record(owner.get_nanbox_f64(), id as f64);
+        cleanup::register(
+            owner.get_nanbox_f64(),
+            wrapper.get_nanbox_f64(),
+            serde_json::json!({
+                "kind":"host", "resource":{"token":id.to_string(),
+                    "type":string(get(row, payload::TYPE)), "generation":generation}
+            }),
+        );
     }
     wrapper.get_nanbox_f64()
 }
@@ -198,6 +207,7 @@ extern "C" fn dispose(
         let id = get(fields, ID);
         if get(record, payload::MATERIALIZED) == 0.0 {
             set(fields, STATE, DISPOSED);
+            cleanup::unregister(frame.owner.get_nanbox_f64(), resource.get_nanbox_f64());
             payload::destroy(frame.owner.get_nanbox_f64(), id);
             return undefined();
         }
@@ -208,6 +218,7 @@ extern "C" fn dispose(
             // existing owner borrowed by the active call has no such origin
             // and must still pass through the engine's reentry guard.
             set(fields, STATE, DISPOSED);
+            cleanup::unregister(frame.owner.get_nanbox_f64(), resource.get_nanbox_f64());
             payload::retire(frame.owner.get_nanbox_f64(), id);
             return undefined();
         }
@@ -229,6 +240,7 @@ extern "C" fn dispose(
             perry_abi::component_host::OK | perry_abi::component_host::RELEASED_ERROR
         ) {
             set(self::fields(resource.get_nanbox_f64()), STATE, DISPOSED);
+            cleanup::unregister(frame.owner.get_nanbox_f64(), resource.get_nanbox_f64());
         }
         frame.rethrow();
         if status != perry_abi::component_host::OK {
@@ -237,7 +249,7 @@ extern "C" fn dispose(
         undefined()
     });
     drop((token, error));
-    finish(result)
+    cleanup::finish_call(frame.owner.get_nanbox_f64(), result)
 }
 
 #[no_mangle]

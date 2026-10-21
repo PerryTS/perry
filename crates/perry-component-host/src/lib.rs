@@ -1,5 +1,6 @@
 //! Optional native Component Model engine. A host owns its Store, resource
 //! handles and limits. No Perry heap pointer crosses this crate boundary.
+mod cleanup;
 mod contract;
 pub mod ffi;
 mod host_resources;

@@ -102,8 +102,21 @@ The same distinction applies to individual resource drops: a wrapper becomes
 disposed even if the guest destructor traps without invoking a JS callback.
 
 GC finalizers release native engine memory without executing guest or
-JavaScript callbacks. Deferred guest-resource cleanup is still outstanding;
-GC is not a substitute for explicit disposal in this implementation.
+JavaScript callbacks. Native resource wrappers now register deferred cleanup
+jobs; execution qualification of this new path is pending. A live borrow
+keeps its owned wrapper reachable. Collected owners are released at a safe
+job/call boundary, with identity and generation checks protecting resources
+that have been transferred or returned to a new owner. Cleanup encountered
+during an active engine call waits until the call has returned. A primary
+call exception takes precedence over a cleanup exception; cleanup continues
+through the remaining collected identities after a destructor fails.
+
+Unreachable whole instances still release native memory without invoking
+application callbacks. Collection timing and poisoned guest destructors are
+not deterministic: explicit disposal remains the reliable lifecycle API.
+Automatic cleanup of wrappers inside Perry-authored WASI guests remains
+separate work. The native host ABI is 4 for this cleanup implementation;
+matching runtime and engine archives are required.
 
 ## Resources supplied by a native Perry host
 

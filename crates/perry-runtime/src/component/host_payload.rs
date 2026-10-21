@@ -249,6 +249,35 @@ pub(super) fn destroy(owner: f64, id: f64) {
     invoke_destructor(callback.get_nanbox_f64(), payload.get_nanbox_f64());
 }
 
+/// Native canonical handles are collected by the engine. A host-created
+/// resource not yet passed to it has only a local payload to release.
+pub(in crate::component) fn collect_local(owner: f64, request: &Value) {
+    if request["kind"] != "host" || !unsafe { (*context::get(owner)).alive } {
+        return;
+    }
+    let identity = &request["resource"];
+    let Some(id) = identity["token"]
+        .as_str()
+        .and_then(|token| token.parse::<u32>().ok())
+    else {
+        return;
+    };
+    let map = table(owner, false);
+    if JSValue::from_bits(map.to_bits()).is_undefined() {
+        return;
+    }
+    let row = crate::map::js_map_get(map_pointer(map), id as f64);
+    if array_pointer(row).is_none()
+        || get(row, STATE) != LOCAL
+        || get(row, MATERIALIZED) != 0.0
+        || identity["generation"].as_u64() != Some(get(row, GENERATION) as u64)
+        || identity["type"].as_str() != Some(string(get(row, TYPE)).as_str())
+    {
+        return;
+    }
+    destroy(owner, id as f64);
+}
+
 fn invoke_destructor(callback: f64, payload: f64) {
     let scope = RuntimeHandleScope::new();
     let callback = scope.root_nanbox_f64(callback);
@@ -273,6 +302,9 @@ pub(in crate::component) fn dispose_owner(owner: f64) {
         (*context::get(owner.get_nanbox_f64())).alive = false;
         (*context::get(owner.get_nanbox_f64()))
             .pending_resource_drops
+            .clear();
+        (*context::get(owner.get_nanbox_f64()))
+            .pending_collections
             .clear();
     }
     let map = scope.root_nanbox_f64(table(owner.get_nanbox_f64(), false));

@@ -1,6 +1,7 @@
 //! Perry's typed component boundary. Native engines and guest canonical
 //! adapters are optional; module code owns all JS roots and exceptions.
 mod callback;
+mod cleanup;
 mod context;
 mod guest;
 mod host;
@@ -10,6 +11,8 @@ mod value;
 
 #[cfg(test)]
 mod host_resource_tests;
+#[cfg(test)]
+mod cleanup_tests;
 #[cfg(test)]
 mod tests;
 
@@ -172,6 +175,7 @@ pub extern "C" fn js_component_load(bytes: f64, contract: f64, imports: f64, opt
         if let Some(error) = &error {
             fail(&String::from_utf8_lossy(error));
         }
+        cleanup::drain(owner.get_nanbox_f64());
         owner.get_nanbox_f64()
     });
     let result = match result {
@@ -255,7 +259,7 @@ pub extern "C" fn js_component_call(owner: f64, interface: f64, function: f64, a
         }
     });
     drop((interface, function, args, output, parsed));
-    finish(result)
+    cleanup::finish_call(owner.get_nanbox_f64(), result)
 }
 
 #[no_mangle]

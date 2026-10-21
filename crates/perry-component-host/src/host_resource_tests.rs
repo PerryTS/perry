@@ -159,6 +159,64 @@ fn drops(events: &Arc<Mutex<Vec<ResourceEvent>>>) -> Vec<String> {
 }
 
 #[test]
+fn deferred_host_cleanup_checks_generation_and_current_ownership() {
+    use crate::cleanup::CollectedResource;
+    let events: Arc<Mutex<Vec<ResourceEvent>>> = Arc::default();
+    let mut host = host(COMPONENT, events.clone(), false).unwrap();
+    let original = fresh("collected");
+    let returned = host.call("", "echo", &[original.clone()]).unwrap().unwrap();
+    let reference = |value: &Value| ResourceRef {
+        token: value["$hostResource"].as_str().unwrap().into(),
+        type_key: value["type"].as_str().unwrap().into(),
+        generation: value["generation"].as_u64().unwrap() as u32,
+    };
+    let mut released = false;
+    host.collect_resource(
+        CollectedResource::Host {
+            resource: reference(&original),
+        },
+        &mut released,
+    )
+    .unwrap();
+    assert!(!released);
+    assert!(drops(&events).is_empty());
+    let mut borrowed = returned.clone();
+    borrowed["owned"] = json!(false);
+    assert_eq!(host.call("", "read", &[borrowed]).unwrap(), Some(json!(42)));
+    host.collect_resource(
+        CollectedResource::Host {
+            resource: reference(&returned),
+        },
+        &mut released,
+    )
+    .unwrap();
+    assert!(released);
+    released = false;
+    host.collect_resource(
+        CollectedResource::Host {
+            resource: reference(&returned),
+        },
+        &mut released,
+    )
+    .unwrap();
+    assert!(!released);
+
+    let kept = fresh("guest-held");
+    host.call("", "keep", &[kept.clone()]).unwrap();
+    host.collect_resource(
+        CollectedResource::Host {
+            resource: reference(&kept),
+        },
+        &mut released,
+    )
+    .unwrap();
+    assert!(!released);
+    assert_eq!(drops(&events), ["collected"]);
+    host.dispose().unwrap();
+    assert_eq!(drops(&events), ["collected", "guest-held"]);
+}
+
+#[test]
 fn owned_import_arguments_can_be_disposed_without_store_reentry_even_on_failure() {
     for token in ["imported", "bad-import"] {
         let events: Arc<Mutex<Vec<ResourceEvent>>> = Arc::default();
