@@ -1015,7 +1015,7 @@ fn extract_archive(bytes: &[u8], artifact_name: &str, dest: &std::path::Path) ->
             {
                 bail!("archive contains an encrypted or symlink entry");
             }
-            let rel = safe_archive_path(std::path::Path::new(entry.name()))?;
+            let rel = safe_archive_path(std::path::Path::new(entry.name()?.as_ref()))?;
             let output = dest.join(rel);
             if entry.is_dir() {
                 fs::create_dir_all(&output)?;

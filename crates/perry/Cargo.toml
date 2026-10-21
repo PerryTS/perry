@@ -69,7 +69,7 @@ perry-base64.workspace = true
 # Our release ZIPs, IPAs and generated HAPs use Stored/Deflate. Enable
 # uncommon third-party archive codecs explicitly with extended-zip.
 # Keep deflate-flate2: zip/deflate forces a different node:zlib backend (#10810).
-zip = { version = "8", default-features = false, features = ["deflate-flate2"] }
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
 tempfile.workspace = true
 libc.workspace = true
 zstd.workspace = true
