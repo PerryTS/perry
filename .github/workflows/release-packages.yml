@@ -1617,6 +1617,8 @@ jobs:
           path: |
             ${{ runner.temp }}/perry-component-release-validation/*.json
             ${{ runner.temp }}/perry-component-release-validation/*.log
+            ${{ runner.temp }}/perry-component-release-validation/acceptance/*.json
+            ${{ runner.temp }}/perry-component-release-validation/acceptance/*.log
           if-no-files-found: warn
 
       # SHA256 sidecars uploaded next to each archive so package-manager

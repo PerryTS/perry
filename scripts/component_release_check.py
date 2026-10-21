@@ -95,7 +95,7 @@ def main():
     for name in ('PERRY_RUNTIME_DIR', 'PERRY_LIB_DIR'):
         env.pop(name, None)
     env.update(PERRY_NO_AUTO_OPTIMIZE='1', PERRY_NO_CACHE='1', PERRY_CODEGEN_CPU_SLOTS='4',
-               CARGO_BUILD_JOBS='4', CARGO_INCREMENTAL='0', CARGO_TARGET_DIR=str(out/'rust-target'))
+               CARGO_BUILD_JOBS='4', CARGO_INCREMENTAL='0')
     suffix = '.exe' if args.target.endswith('-msvc') else ''
     perry, wit = installed/('perry'+suffix), installed/('perry-wit'+suffix)
     rows = []
@@ -112,11 +112,6 @@ def main():
         if not passed:
             raise RuntimeError('Release component check failed: ' + str(log))
 
-    run('guest', ['cargo', 'build', '--locked', '--release', '--target', 'wasm32-unknown-unknown',
-        '--manifest-path', fixture/'rust/Cargo.toml'], cwd=ROOT)
-    core = out/'rust-target/wasm32-unknown-unknown/release/perry_component_transform_fixture.wasm'
-    component = fixture/'transform.component.wasm'
-    run('componentize', [args.componentize.resolve(), core, component])
     run('bindings', [wit, fixture/'world.wit', fixture/'generated', 'plugin'])
     run('guest-bindings', [wit, '--guest-c', fixture/'world.wit', fixture/'guest-generated', 'plugin'])
     for name in ('bindings.ts', 'guest.ts', 'world.json'):
@@ -137,14 +132,27 @@ def main():
             '-o', fixture/('missing'+suffix)], expected=1, marker='perry/component requires')
     finally:
         withheld.rename(engine)
-    executable = fixture/('host'+suffix)
-    run('host-compile', [perry, 'compile', fixture/'host.ts', '--no-auto-optimize', '--no-cache', '-o', executable])
-    run('host-run', [executable, component], marker=MARKER, timeout=60)
+    acceptance = out/'acceptance'
+    run('native-acceptance', [sys.executable, ROOT/'scripts/component_host_acceptance.py',
+        '--perry', perry, '--wit', wit, '--runtime-dir', installed,
+        '--componentize', args.componentize.resolve(), '--output', acceptance], timeout=1800)
+    phases = json.loads((acceptance/'results.json').read_text())
+    names = {row['name'] for row in phases}
+    if len(phases) < 15 or len(names) != len(phases) or not all(row['exitCode'] == 0 for row in phases):
+        raise RuntimeError('Incomplete packaged native component acceptance')
+    if not {'run-host', 'resources-run', 'network-run'}.issubset(names):
+        raise RuntimeError('Packaged transform, resource and network execution are required')
+    peer = json.loads((acceptance/'network-peer.json').read_text())
+    if not peer['passed'] or len(peer['received']) != 6 or len(peer['tcpReceived']) != 3:
+        raise RuntimeError('Packaged networking did not observe all expected traffic')
+    artifacts = [args.componentize.resolve()]
+    for directory, component in [('transform', 'transform'), ('resources', 'resources'), ('network', 'network')]:
+        artifacts += [acceptance/directory/(component+'.component.wasm'), acceptance/directory/('host'+suffix)]
     receipt = {'sourceRevision': revision, 'target': args.target, 'passed': True,
         'archive': {'name': archive.name, 'sha256': sha(archive), 'bytes': archive.stat().st_size},
-        'installedFiles': files, 'componentSha256': sha(component), 'hostSha256': sha(executable),
-        'componentizeSha256': sha(args.componentize.resolve()), 'phases': rows,
-        'scope': 'Final release archive: isolated executable-relative linking, WIT generators, typed calls, callback GC and disposal; no instrumented-GC claim'}
+        'installedFiles': files, 'phases': rows, 'nativeAcceptance': phases,
+        'acceptanceArtifactSha256': {str(path): sha(path) for path in artifacts},
+        'scope': 'Final release archive: isolated linking, WIT generators, typed calls, resources, callbacks, GC, disposal and TCP/UDP/DNS; no instrumented-GC claim'}
     (out/'qualification.json').write_text(json.dumps(receipt, indent=2)+'\n')
     print(json.dumps(receipt, indent=2))
 
