@@ -168,8 +168,12 @@ unsafe fn existing_own_data_overwrite(
     let own_idx = match key {
         OverwriteKey::Interned(key) => {
             let key_addr = key as usize;
-            let mut own_idx =
-                super::prop_plan::read_plan_lookup(keys_addr, key_addr, keys_view.count());
+            let mut own_idx = super::prop_plan::read_plan_lookup(
+                (*obj).shape_word(),
+                keys_addr,
+                key_addr,
+                keys_view.count(),
+            );
             if own_idx.is_none() {
                 let key_count = keys_view.count() as usize;
                 if key_count > 4096 {
@@ -188,7 +192,7 @@ unsafe fn existing_own_data_overwrite(
                     crate::object::keys_find_property_slot_by_key_ptr(keys, key_count as u32, key)
                 };
                 if let Some(i) = own_idx {
-                    super::prop_plan::read_plan_record(keys_addr, key_addr, i);
+                    super::prop_plan::read_plan_record((*obj).shape_word(), keys_addr, key_addr, i);
                 }
             }
             own_idx

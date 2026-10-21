@@ -46,7 +46,7 @@ fn emitted_transition_probe_matches_runtime_slot() {
             "content id drift for {key}"
         );
         assert_eq!(
-            transition_cache_slot(shape_id, kid),
+            transition_cache_slot(shape_id, kid, marker),
             emitted_slot(shape_id, kid as u64),
             "slot hash drift for ({shape_id:#x}, {key})"
         );
@@ -112,7 +112,7 @@ fn transition_cache_hits_a_content_entry_through_a_fresh_key() {
         "a fresh key with equal bytes must reach the cached edge"
     );
 
-    let slot = transition_cache_slot(PREDECESSOR, transition_key_id(inserted).0);
+    let slot = transition_cache_slot(PREDECESSOR, transition_key_id(inserted).0, 7);
     with_transition_cache(|t| unsafe {
         // GC_STORE_AUDIT(ROOT): test cleanup writes non-pointer sentinels into scanned TRANSITION_CACHE_GLOBAL roots.
         (*t)[slot] = TransitionEntry {

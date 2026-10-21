@@ -273,7 +273,10 @@ pub(crate) fn test_seed_transition_cache_entry(
     key_ptr: usize,
     next_keys: usize,
 ) {
-    let slot = transition_cache_slot(prev_shape_id, key_ptr);
+    // A synthetic weak key need not contain an initialized StringHeader.
+    // This seam tests GC ownership, not lookup, so choose a stable slot from
+    // the predecessor alone without dereferencing that synthetic address.
+    let slot = transition_cache_slot(prev_shape_id, 0, 0);
     // The seed writes `slot_idx: 0`, i.e. no length marker, so `key_ptr` is an
     // address here — which is the `len_marker == 0` arm of the shared predicate.
     arm_transition_cache_young(slot, next_keys, key_ptr, 0);

@@ -1,0 +1,1 @@
+Runtime transition and property-plan slots now use existing atom content hashes and receiver ShapeIds, so moving an executable does not change which keys collide. Canonical-pointer equality and all existing validity checks remain unchanged; no runtime state or tables are added.

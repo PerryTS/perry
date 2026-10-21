@@ -60,8 +60,8 @@ pub use spread::js_object_spread_fresh;
 mod spread_tests;
 pub use alloc::{
     js_object_alloc, js_object_alloc_fast, js_object_alloc_fast_with_parent,
-    js_object_alloc_null_proto, js_object_alloc_null_proto_entries, js_object_alloc_plain, js_object_alloc_with_parent,
-    js_object_coerce,
+    js_object_alloc_null_proto, js_object_alloc_null_proto_entries, js_object_alloc_plain,
+    js_object_alloc_with_parent, js_object_coerce,
 };
 #[cfg(feature = "regex-engine")]
 pub(crate) use alloc_basic::object_alloc_plain_born;
@@ -950,7 +950,7 @@ unsafe impl crate::zeroed_cache::ZeroEmpty for TransitionEntry {}
 /// `emitted_transition_probe_matches_runtime_slot` below:
 ///
 /// * the entry layout (`#[repr(C)]`, 32 bytes, field offsets 0/8/16/20/24/28),
-/// * the two hash multipliers and the `key id >> 3` pre-shift,
+/// * the two hash multipliers and content-namespace `key id >> 3` pre-shift,
 /// * `transition_key_id`'s content rule (LE u64 of the first 6..=8 bytes),
 /// * the table size/mask.
 ///
@@ -1119,11 +1119,38 @@ fn transition_key_id(key: *const crate::StringHeader) -> (usize, u32) {
 
 const TRANSITION_SLOT_IDX_MASK: u32 = 0x00FF_FFFF;
 
+/// Hash only stable key properties. The namespace changes how identity is
+/// checked, but an interned address must never select a table slot.
 #[inline(always)]
-fn transition_cache_slot(prev_shape_id: u32, key_id: usize) -> usize {
+fn transition_cache_slot(prev_shape_id: u32, key_id: usize, namespace: u32) -> usize {
+    let hash = match namespace {
+        0 => interned_key_slot_hash(key_id),
+        spread::SPREAD_TRANSITION_NAMESPACE => key_id as u64,
+        // Preserve the content namespace's established slot arithmetic.
+        _ => (key_id >> 3) as u64,
+    };
     let mixed = (prev_shape_id as u64).wrapping_mul(TRANSITION_HASH_MUL_SHAPE)
-        ^ ((key_id >> 3) as u64).wrapping_mul(TRANSITION_HASH_MUL_KEY);
+        ^ hash.wrapping_mul(TRANSITION_HASH_MUL_KEY);
     (mixed as usize) & (TRANSITION_CACHE_SIZE - 1)
+}
+
+/// A content hash selects a bucket; canonical-pointer equality still proves
+/// the key. Property atoms already store their hash after the payload. Older
+/// interned strings do not, so those read their immutable bytes directly.
+#[inline(always)]
+fn interned_key_slot_hash(key_ptr: usize) -> u64 {
+    if key_ptr == 0 {
+        return 0;
+    }
+    unsafe {
+        let key = key_ptr as *const crate::StringHeader;
+        let hash = if crate::string::is_property_atom(key) {
+            crate::string::property_atom_hash(key)
+        } else {
+            key_content_hash(key)
+        };
+        hash ^ (hash >> 32)
+    }
 }
 
 /// #6006: verify the cached transition edge really adds `key` at `slot_idx`,
@@ -1185,7 +1212,7 @@ fn transition_cache_lookup(
     interned_key: *const crate::StringHeader,
 ) -> Option<(ObjectKeys, u32, u32)> {
     let (kid, len_marker) = transition_key_id(interned_key);
-    let slot = transition_cache_slot(prev_shape_id, kid);
+    let slot = transition_cache_slot(prev_shape_id, kid, len_marker);
     let entry = with_transition_cache(|t| unsafe { (*t)[slot] });
     if entry.next_keys != 0
         && entry.prev_shape_id == prev_shape_id
@@ -1345,7 +1372,7 @@ fn transition_cache_insert(
         return;
     }
     let (kid, len_marker) = transition_key_id(interned_key);
-    let slot = transition_cache_slot(prev_shape_id, kid);
+    let slot = transition_cache_slot(prev_shape_id, kid, len_marker);
     let mut target_len = 0;
     unsafe {
         if slot_idx < TRANSITION_CACHE_EAGER_SHARE_MAX_SLOT
@@ -1813,3 +1840,6 @@ pub(crate) use packed_keys::packed_key_names;
 pub(crate) use iterator_prototypes::array_record_close_is_absent;
 #[cfg(test)]
 mod record_layout_tests;
+
+#[cfg(test)]
+mod address_free_slots_tests;

@@ -49,9 +49,7 @@ fn spread_key(source: u32) -> usize {
 
 #[inline]
 pub(super) fn cache_slot(prefix: u32, source: u32) -> usize {
-    // The common authority hashes aligned key words after dropping three
-    // alignment bits. A scalar ShapeId has no alignment bits to discard.
-    transition_cache_slot(prefix, spread_key(source).wrapping_shl(3))
+    transition_cache_slot(prefix, spread_key(source), SPREAD_TRANSITION_NAMESPACE)
 }
 
 #[inline]

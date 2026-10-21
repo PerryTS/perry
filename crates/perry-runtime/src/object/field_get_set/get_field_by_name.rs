@@ -779,6 +779,7 @@ fn get_field_by_name_past_data_probe(
                         {
                             let alloc_limit = crate::object::object_inline_capacity(o) as usize;
                             if let Some(idx) = super::super::prop_plan::read_plan_lookup(
+                                (*o).shape_word(),
                                 keys as usize,
                                 key as usize,
                                 keys_view.count(),
@@ -817,6 +818,7 @@ fn get_field_by_name_past_data_probe(
                                         )
                                     {
                                         super::super::prop_plan::read_plan_record(
+                                            (*o).shape_word(),
                                             keys as usize,
                                             key as usize,
                                             i,

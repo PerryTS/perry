@@ -1237,9 +1237,19 @@ mod tests {
         });
         let record = unsafe { shapes::object_shape_record(obj).unwrap() };
         let actual_keys = record.keys() as usize;
-        super::super::prop_plan::read_plan_record(actual_keys, key as usize, 0);
+        super::super::prop_plan::read_plan_record(
+            unsafe { (*obj).shape_word() },
+            actual_keys,
+            key as usize,
+            0,
+        );
         assert_eq!(
-            super::super::prop_plan::read_plan_lookup(actual_keys, key as usize, 2),
+            super::super::prop_plan::read_plan_lookup(
+                unsafe { (*obj).shape_word() },
+                actual_keys,
+                key as usize,
+                2
+            ),
             Some(0),
             "the stale prefix hint must be present before testing the guard"
         );
