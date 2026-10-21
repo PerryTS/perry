@@ -114,6 +114,30 @@ pub(crate) fn destroy(mut store: StoreContextMut<'_, StoreData>, rep: u32, ty: u
     .map(|_| ())
 }
 
+/// Handles recreated from ResourceDynamic have no canonical destructor.
+/// Release that table entry first, then explicitly destroy the host payload.
+/// A rejected release preserves ownership; a throwing payload destructor does
+/// not revive it. Guest-side resource.drop uses the linker's destructor instead.
+pub(crate) fn drop_owned(
+    mut store: StoreContextMut<'_, StoreData>,
+    token: &str,
+    released: &mut bool,
+) -> Result<()> {
+    let entry = store
+        .data()
+        .host_resources
+        .entries
+        .get(token)
+        .context("unknown host resource")?;
+    let handle = entry
+        .handle
+        .context("host resource is owned by the guest")?;
+    let (rep, ty) = (entry.rep, entry.ty);
+    handle.resource_drop(store.as_context_mut())?;
+    *released = true;
+    destroy(store, rep, ty)
+}
+
 pub(crate) fn drain(mut store: StoreContextMut<'_, StoreData>) -> Result<()> {
     let hook = store.data().host_resources.hook.clone();
     let pending = hook(ResourceEvent::Drain)?;
@@ -121,19 +145,13 @@ pub(crate) fn drain(mut store: StoreContextMut<'_, StoreData>) -> Result<()> {
     for reference in pending {
         let result = (|| -> Result<()> {
             let entry = store
-                .data_mut()
+                .data()
                 .host_resources
                 .entries
-                .get_mut(&reference.token)
+                .get(&reference.token)
                 .context("unknown disposed host resource")?;
             ensure!(entry.reference == reference, "stale disposed host resource");
-            let handle = entry
-                .handle
-                .take()
-                .context("disposed resource is guest-owned")?;
-            handle
-                .resource_drop(store.as_context_mut())
-                .map_err(anyhow::Error::from)
+            drop_owned(store.as_context_mut(), &reference.token, &mut false)
         })();
         if let Err(error) = result {
             first.get_or_insert(error);

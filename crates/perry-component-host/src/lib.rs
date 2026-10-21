@@ -270,15 +270,10 @@ impl Host {
 
     pub(crate) fn drop_resource_tracked(&mut self, id: &str, released: &mut bool) -> Result<()> {
         let live = self.live.as_mut().context("component is disposed")?;
-        let resource = if let Some(entry) = live.store.data_mut().host_resources.entries.get_mut(id)
-        {
-            entry
-                .handle
-                .take()
-                .context("host resource is owned by the guest")?
-        } else {
-            live.store.data_mut().resources.remove(id)?
-        };
+        if live.store.data().host_resources.entries.contains_key(id) {
+            return host_resources::drop_owned(live.store.as_context_mut(), id, released);
+        }
+        let resource = live.store.data_mut().resources.remove(id)?;
         // Ownership is gone even when the destructor traps. Report that
         // separately from rejection, which leaves the wrapper live.
         *released = true;
