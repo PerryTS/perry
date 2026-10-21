@@ -939,25 +939,14 @@ pub(crate) struct TransitionEntry {
 // SAFETY: all integer fields; `key_ptr == 0` is the miss (#11507).
 unsafe impl crate::zeroed_cache::ZeroEmpty for TransitionEntry {}
 
-/// ── Emitted transition-IC ABI (#9287) ──────────────────────────────────────
+/// Transition-entry layout and packed-key contract.
 ///
-/// The emitted per-site transition hit probes THIS cache inline: hash the
-/// (prev ShapeId, key id) pair exactly as `transition_cache_slot` does —
-/// key id per `transition_key_id`'s content namespace, computable call-free
-/// from a FRESH string — load the entry, compare (including the length
-/// marker), and on a match perform the stamp + slot store with zero calls. Everything the emitted
-/// code depends on is fixed here and pinned by
-/// `emitted_transition_probe_matches_runtime_slot` below:
-///
-/// * the entry layout (`#[repr(C)]`, 32 bytes, field offsets 0/8/16/20/24/28),
-/// * the two hash multipliers and content-namespace `key id >> 3` pre-shift,
-/// * `transition_key_id`'s content rule (LE u64 of the first 6..=8 bytes),
-/// * the table size/mask.
-///
-/// The table lives in thread-local state (`ObjectHotTables`), and worker
-/// threads each have their own — so the emitted code takes the base from
-/// `perry_transition_cache_base()` ONCE per function/loop preheader, never
-/// from a link-time constant.
+/// The entry layout is fixed (`#[repr(C)]`, 32 bytes, offsets 0/8/16/20/24/28).
+/// Packed 6..=8-byte keys retain their existing little-endian identity and a
+/// length marker. Slot placement mixes all payload bytes and the marker;
+/// interned-pointer keys use their content hash. Every hit still checks the
+/// full identity. The earlier emitted inline transition probe has been
+/// replaced by runtime dispatch; no generated pointer-bit hash remains.
 pub const TRANSITION_HASH_MUL_SHAPE: u64 = 0x9E3779B97F4A7C15;
 pub const TRANSITION_HASH_MUL_KEY: u64 = 0xC6BC279692B5C323;
 pub const TRANSITION_ENTRY_SIZE: usize = 32;
@@ -977,13 +966,6 @@ pub extern "C" fn js_transition_ic_probe_report() {
 }
 
 const TRANSITION_CACHE_SIZE: usize = 16384;
-/// Mask for slot computation: TRANSITION_CACHE_SIZE - 1
-///
-/// #854: kept alongside the size constant so future cache-resizing edits
-/// touch both in one place. Codegen-emitted slot-index expressions match
-/// against this value even when no Rust path consults it directly.
-#[allow(dead_code)]
-const TRANSITION_CACHE_MASK: usize = TRANSITION_CACHE_SIZE - 1;
 crate::perry_thread_local! {
     /// #9754: transition-cache slots whose `key_ptr` / `next_keys` may still be
     /// acted on by a minor (see `gc/young_log.rs`); a minor-scoped
@@ -1126,12 +1108,16 @@ fn transition_cache_slot(prev_shape_id: u32, key_id: usize, namespace: u32) -> u
     let hash = match namespace {
         0 => interned_key_slot_hash(key_id),
         spread::SPREAD_TRANSITION_NAMESPACE => key_id as u64,
-        // Preserve the content namespace's established slot arithmetic.
-        _ => (key_id >> 3) as u64,
+        // Packed keys have no alignment bits. Include the length so a
+        // zero-padded shorter name is not forced to alias a longer one.
+        _ => key_id as u64 ^ (u64::from(namespace) << 56),
     };
     let mixed = (prev_shape_id as u64).wrapping_mul(TRANSITION_HASH_MUL_SHAPE)
         ^ hash.wrapping_mul(TRANSITION_HASH_MUL_KEY);
-    (mixed as usize) & (TRANSITION_CACHE_SIZE - 1)
+    // Multiplicative hashing selects the high bits: low-bit masking would
+    // ignore a packed key's later bytes (e.g. literal/literals), forcing
+    // those edges to evict one another at every construction.
+    (mixed >> (64 - TRANSITION_CACHE_SIZE.trailing_zeros())) as usize
 }
 
 /// A content hash selects a bucket; canonical-pointer equality still proves

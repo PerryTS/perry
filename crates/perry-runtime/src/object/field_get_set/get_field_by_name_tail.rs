@@ -1496,9 +1496,10 @@ pub(crate) fn get_field_by_name_object_tail(
         // #6759 C3c: prefer the header-stamped stable shape id as the cache
         // key — it survives owned grow-reallocs AND GC moves of the keys
         // array, both of which change `keys_id` and orphaned the entry.
-        // Unstamped objects keep the address key; either way every hit below
-        // re-validates the stored key, so a colliding or foreign key can only
-        // miss, never mis-resolve.
+        // Unstamped objects retain the address as ENTRY IDENTITY. Slot
+        // placement uses only the stamp (including 0) and content hash, so
+        // loading the same executable elsewhere cannot change its collisions.
+        // Every hit below still re-validates the stored key.
         //
         // #6759 C3 rung 1: `object_shape_stamp` has no `class_id` gate, so a
         // stamped CLASS INSTANCE keys on its id here too — which is the point
@@ -1524,7 +1525,7 @@ pub(crate) fn get_field_by_name_object_tail(
         // nursery reset can reuse a keys-array address, so cache hits still
         // validate the key slot before returning a field.
         let st = crate::state::state();
-        let cache_idx = (shape_key.wrapping_add(key_hash as usize)) % super::FIELD_CACHE_SIZE;
+        let cache_idx = (stamp as usize).wrapping_add(key_hash as usize) % super::FIELD_CACHE_SIZE;
         let cached = if table_owned {
             None
         } else {
@@ -1626,7 +1627,7 @@ pub(crate) fn get_field_by_name_object_tail(
                     };
                     let store_key = if id != 0 { id as usize } else { keys_id };
                     let store_idx =
-                        (store_key.wrapping_add(key_hash as usize)) % super::FIELD_CACHE_SIZE;
+                        (id as usize).wrapping_add(key_hash as usize) % super::FIELD_CACHE_SIZE;
                     let cache = &mut *st.field_lookup.field_cache.get();
                     cache[store_idx] = (store_key, key_hash, i as u32);
                 }

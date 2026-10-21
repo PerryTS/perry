@@ -58,11 +58,15 @@ fn slots_follow_content_when_a_key_moves() {
     );
     assert_eq!(prop_plan::read_plan_lookup(0x8000_0042, 0x1234, b, 3), None);
     assert_eq!(prop_plan::read_plan_lookup(0x8000_0042, 0x5678, a, 3), None);
+    // The synthetic headers are Rust-owned rather than GC-owned; invalidate
+    // their weak plan metadata before releasing that storage.
+    prop_plan::prop_plan_epoch_bump();
 }
 
 #[test]
 fn stored_atom_hash_and_plain_string_hash_choose_one_slot() {
-    let atom = crate::string::canonical_key(b"stable-property");
+    let atom =
+        unsafe { crate::string::property_atom(crate::string::canonical_key(b"stable-property")) };
     let plain = crate::string::js_string_from_bytes(b"stable-property".as_ptr(), 15);
     assert!(unsafe { crate::string::is_property_atom(atom) });
     assert_eq!(

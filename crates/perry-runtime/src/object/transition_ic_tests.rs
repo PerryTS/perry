@@ -4,51 +4,26 @@
 
 use super::*;
 
-/// #9287: the emitted transition-IC probe replicates `transition_cache_slot`
-/// and `transition_key_id` as raw arithmetic in codegen. Drift there is
-/// invisible in program output — a probe that hashes to the wrong slot is
-/// correct, only slow — so the contract is pinned here.
-///
-/// This is not hypothetical: the probe first shipped with a hand-transcribed
-/// decimal for `TRANSITION_HASH_MUL_KEY` that was off, and every write missed
-/// while the benchmark still printed the right answer.
-
+/// Every payload byte and the length must affect packed-key placement. The
+/// old low-bit mask ignored later bytes and forced literal/literals to
+/// collide throughout Effect schema construction, at every load address.
+#[cfg(target_pointer_width = "64")]
 #[test]
-fn emitted_transition_probe_matches_runtime_slot() {
-    // Transcribed from `lower_put_value_dyn_ic_inline`'s trans.entry block.
-    fn emitted_slot(shape_id: u32, key_id: u64) -> usize {
-        let h1 = (shape_id as u64).wrapping_mul(TRANSITION_HASH_MUL_SHAPE);
-        let h2 = (key_id >> 3).wrapping_mul(TRANSITION_HASH_MUL_KEY);
-        ((h1 ^ h2) & 16383) as usize
-    }
-    // The emitted content id: an i64 load at key+20 masked down to byte_len.
-    fn emitted_key_id(bytes: &[u8]) -> u64 {
-        let mut word = [0u8; 8];
-        word[..bytes.len()].copy_from_slice(bytes);
-        u64::from_le_bytes(word) & (u64::MAX >> ((8 - bytes.len() as u32) * 8))
-    }
-
-    for (shape_id, key) in [
-        (0x8000_0002u32, "field_0"),
-        (0x8000_0003, "field_19"),
-        (0xBFFF_FFFF, "abcdef"),
+fn content_transition_slots_use_every_payload_byte_and_length() {
+    for (a, b) in [
+        (b"literal".as_slice(), b"literals".as_slice()),
+        (b"aField".as_slice(), b"bField".as_slice()),
+        (b"aaaaaaaA".as_slice(), b"aaaaaaaB".as_slice()),
+        (b"abcdef".as_slice(), b"abcdef\0".as_slice()),
     ] {
-        let s = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
-        let (kid, marker) = transition_key_id(s);
-        assert_eq!(
-            marker,
-            key.len() as u32,
-            "{key} must take the content namespace"
-        );
-        assert_eq!(
-            kid as u64,
-            emitted_key_id(key.as_bytes()),
-            "content id drift for {key}"
-        );
-        assert_eq!(
-            transition_cache_slot(shape_id, kid, marker),
-            emitted_slot(shape_id, kid as u64),
-            "slot hash drift for ({shape_id:#x}, {key})"
+        let a = crate::string::js_string_from_bytes(a.as_ptr(), a.len() as u32);
+        let b = crate::string::js_string_from_bytes(b.as_ptr(), b.len() as u32);
+        let (aid, alen) = transition_key_id(a);
+        let (bid, blen) = transition_key_id(b);
+        assert_ne!(
+            transition_cache_slot(0x8000_0042, aid, alen),
+            transition_cache_slot(0x8000_0042, bid, blen),
+            "content differences must not be discarded before slot selection",
         );
     }
 }
