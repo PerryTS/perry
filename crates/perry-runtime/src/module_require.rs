@@ -620,7 +620,7 @@ fn cjs_record_field(value: f64, name: &str) -> Option<f64> {
 /// "did it already run?" read that `require()` needs before it decides to run
 /// one.
 fn registered_path_module_value(path: &str) -> Option<f64> {
-    let key = canonicalize_module_path(path);
+    let key = module_lookup_key(path);
     MODULE_PATH_REGISTRY
         .with(|registry| registry.published_exports(&key))
         .map(f64::from_bits)
@@ -1065,77 +1065,25 @@ crate::perry_thread_local! {
     static PENDING_REQUIRE_PARENT: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
 }
 
-crate::perry_thread_local! {
-    /// Memo for [`canonicalize_module_path`]. Module registration canonicalizes
-    /// one absolute path per module, and `std::fs::canonicalize` is a full
-    /// realpath: a `readlink` for EVERY component, every time.
-    ///
-    /// The components repeat massively. Compiling OpenCode 1.18.30 and running
-    /// `--version` issued 86,745 `readlink` calls over only 9,467 distinct
-    /// paths — 98% of every syscall the process made and 0.32s of system time.
-    /// `/root/.../oc` alone was resolved 7,501 times and
-    /// `node_modules/.bun` 5,580 times, because each of ~7,500 module paths
-    /// re-walked the same prefixes from the root down.
-    ///
-    /// Node caches realpath during module resolution for the same reason. The
-    /// memo is per path STRING, so a path that resolves once keeps its answer
-    /// for the life of the process; module paths are registered during startup
-    /// and are not expected to change underneath a running program.
-    static CANONICAL_MODULE_PATHS: std::cell::RefCell<
-        std::collections::HashMap<String, String>,
-    > = std::cell::RefCell::new(std::collections::HashMap::new());
-    /// Memo of canonicalized DIRECTORIES, which is what sibling modules share.
-    static CANONICAL_MODULE_DIRS: std::cell::RefCell<
-        std::collections::HashMap<String, std::path::PathBuf>,
-    > = std::cell::RefCell::new(std::collections::HashMap::new());
-}
-
-/// Canonicalize the DIRECTORY `dir`, memoized per directory.
+/// The canonical spelling of a module path that was computed at RUN time
+/// (`require(path.join(__dirname, x))`, a resolved filename, a turbopack chunk
+/// path). Registered keys never come through here: the compiler emits each
+/// module's key as `std::fs::canonicalize` of its source path, which is what
+/// this function returns for that path on the build host.
 ///
-/// This is where the redundancy lives: sibling modules share every ancestor,
-/// so resolving each module path independently re-walks the same prefixes
-/// thousands of times. Resolving a directory once makes each additional module
-/// in it cost one `readlink` for its own basename instead of one per component.
-fn canonical_dir(dir: &std::path::Path) -> std::path::PathBuf {
-    let key = dir.to_string_lossy().into_owned();
-    if let Some(hit) = CANONICAL_MODULE_DIRS.with(|memo| memo.borrow().get(&key).cloned()) {
-        return hit;
-    }
-    // One `canonicalize` per NEW directory, memoized — the same budget the
-    // parent-join form had (it spent a `read_link` per new directory), and the
-    // same answer on Unix, where a canonical parent joined to a non-symlink
-    // component is already canonical.
-    //
-    // #10851: the join form was WRONG on Windows. It rebuilt the path from
-    // literal component names, so an 8.3 short name survived: a path typed
-    // `C:\Users\RUNNER~1\...` stayed short, while the same file reached via a
-    // `..` component took the `canonicalize` branch and came back long
-    // (`runneradmin`). `PathModuleRegistry` is keyed on this string, so two
-    // spellings of one module produced two keys and two initializers —
-    // breaking CJS singleton identity. `canonicalize` resolves short names,
-    // casing and symlinks in one step, which is what this function claims to
-    // return.
-    //
-    // Falls back to the literal path when the directory does not exist, as
-    // before: callers treat an unresolvable path as itself.
-    let resolved =
-        std::fs::canonicalize(dir).unwrap_or_else(|_| match (dir.parent(), dir.file_name()) {
-            (Some(parent), Some(name)) if parent != dir => canonical_dir(parent).join(name),
-            _ => dir.to_path_buf(),
-        });
-    CANONICAL_MODULE_DIRS.with(|memo| {
-        memo.borrow_mut().insert(key, resolved.clone());
-    });
-    resolved
-}
-
+/// #10851: `canonicalize` resolves Windows 8.3 short names, casing and
+/// symlinks in one step, so two spellings of one module meet at one key.
+/// Rebuilding a path from its literal component names (the old per-directory
+/// join) kept a short name alive and gave one module two keys.
+///
+/// A path that does not exist on this machine (a binary built elsewhere runs
+/// with the build host's paths) canonicalizes its deepest existing ancestor and
+/// keeps the rest literally; a path with `.`/`..` that does not resolve stays
+/// as written. Both are what callers treat an unresolvable path as.
 fn canonicalize_module_path(path: &str) -> String {
-    if let Some(hit) = CANONICAL_MODULE_PATHS.with(|memo| memo.borrow().get(path).cloned()) {
-        return hit;
-    }
     let candidate = std::path::Path::new(path);
-    // Only take the fast route for an absolute, already-normalized path: `..`
-    // and `.` change what a prefix means, and `canonicalize` resolves those.
+    // Only an absolute, already-normalized path may keep a literal suffix:
+    // `..` and `.` change what a prefix means.
     let normal = candidate.is_absolute()
         && !candidate.components().any(|c| {
             matches!(
@@ -1143,29 +1091,49 @@ fn canonicalize_module_path(path: &str) -> String {
                 std::path::Component::ParentDir | std::path::Component::CurDir
             )
         });
-    let resolved = match (normal, candidate.parent(), candidate.file_name()) {
-        (true, Some(parent), Some(name)) => {
-            let base = canonical_dir(parent);
-            let joined = base.join(name);
-            match std::fs::read_link(&joined) {
-                Err(_) => joined,
-                Ok(_) => std::fs::canonicalize(&joined).unwrap_or(joined),
-            }
+    let resolved = if normal {
+        canonical_or_literal_suffix(candidate)
+    } else {
+        std::fs::canonicalize(candidate).unwrap_or_else(|_| candidate.to_path_buf())
+    };
+    resolved.to_string_lossy().into_owned()
+}
+
+fn canonical_or_literal_suffix(path: &std::path::Path) -> std::path::PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| match (path.parent(), path.file_name()) {
+        (Some(parent), Some(name)) if parent != path => {
+            canonical_or_literal_suffix(parent).join(name)
         }
-        _ => std::fs::canonicalize(candidate).unwrap_or_else(|_| candidate.to_path_buf()),
+        _ => path.to_path_buf(),
+    })
+}
+
+/// The registry key that a run-time module path names. Registered keys are
+/// canonical by construction (see [`js_register_path_init`]), so a spelling
+/// that IS a key names that module, on the build host and on any other
+/// machine, without touching the filesystem. Any other spelling is
+/// canonicalized first, so it still meets the module's one key.
+fn module_lookup_key(path: &str) -> String {
+    if MODULE_PATH_REGISTRY.with(|registry| registry.contains_registered(path)) {
+        return path.to_string();
     }
-    .to_string_lossy()
-    .into_owned();
-    CANONICAL_MODULE_PATHS.with(|memo| {
-        memo.borrow_mut().insert(path.to_string(), resolved.clone());
-    });
-    resolved
+    canonicalize_module_path(path)
 }
 
 /// Codegen FFI: record that `<prefix>__init` (address `init_addr`) initializes
 /// the module whose absolute source path is `path_value`. Emitted once per
 /// Deferred `.next/server/**` module at the top of the executable or app-dylib
 /// entry point. The registry records the address without executing it.
+///
+/// The path is the module's KEY, registered verbatim. The compiler canonicalized
+/// it when it collected the module (`ctx.native_modules` is keyed by
+/// `std::fs::canonicalize` of each source path), and the CommonJS wrapper's
+/// partial/final publications and `__filename` carry the same string, so every
+/// compiler-emitted spelling of a module is its one key. Registration therefore
+/// never touches the filesystem: canonicalizing 6,877 OpenCode paths again at
+/// startup cost 19.7k `readlink` calls and ~50 ms, and on any machine other
+/// than the build host those paths do not exist, so it answered nothing.
+/// Run-time spellings go through [`module_lookup_key`].
 /// # Safety
 /// `path_ptr`/`path_len` describe a valid UTF-8 byte range (a codegen string
 /// constant). `init_addr` is the address of an `extern "C" fn()` module
@@ -1173,8 +1141,7 @@ fn canonicalize_module_path(path: &str) -> String {
 #[no_mangle]
 pub unsafe extern "C" fn js_register_path_init(path_ptr: *const u8, path_len: i64, init_addr: i64) {
     let slice = std::slice::from_raw_parts(path_ptr, path_len as usize);
-    let path = String::from_utf8_lossy(slice).into_owned();
-    let key = canonicalize_module_path(&path);
+    let key = String::from_utf8_lossy(slice).into_owned();
     if !MODULE_PATH_REGISTRY.with(|r| r.register_init(key.clone(), init_addr as usize)) {
         eprintln!("perry: rejected duplicate path-module initializer for canonical path {key}");
     }
@@ -1186,8 +1153,7 @@ pub unsafe extern "C" fn js_register_path_init(path_ptr: *const u8, path_len: i6
 /// generated initializer to complete.
 #[no_mangle]
 pub extern "C" fn js_register_path_module_partial(path_value: f64, exports: f64) {
-    let path = value_to_string(path_value, "path");
-    let key = canonicalize_module_path(&path);
+    let key = value_to_string(path_value, "path");
     if !MODULE_PATH_REGISTRY.with(|r| r.register_partial_exports(key, exports.to_bits())) {
         crate::fs::validate::throw_error_with_code(
             "Perry rejected path-module partial exports from a non-owner initializer",
@@ -1232,8 +1198,7 @@ pub extern "C" fn js_link_path_module_parent(record: f64) {
 pub extern "C" fn js_register_path_module(path_value: f64, exports: f64) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let exports = scope.root_nanbox_f64(exports);
-    let path = value_to_string(path_value, "path");
-    let key = canonicalize_module_path(&path);
+    let key = value_to_string(path_value, "path");
     if !MODULE_PATH_REGISTRY
         .with(|r| r.register_final_exports(key, exports.get_nanbox_f64().to_bits()))
     {
@@ -1352,7 +1317,7 @@ fn require_path_key(key: &str) -> Result<Option<u64>, PathModuleRequireError> {
 #[no_mangle]
 pub extern "C" fn js_require_path_module(path_value: f64) -> f64 {
     let path = value_to_string(path_value, "id");
-    let key = canonicalize_module_path(&path);
+    let key = module_lookup_key(&path);
     match require_path_key(&key) {
         Ok(Some(bits)) => return path_module_exports(bits),
         Err(PathModuleRequireError::Initializer(error)) => {
@@ -1367,7 +1332,7 @@ pub extern "C" fn js_require_path_module(path_value: f64) -> f64 {
         Ok(None) => {}
     }
     for candidate in directory_module_candidates(&key) {
-        let candidate = canonicalize_module_path(&candidate);
+        let candidate = module_lookup_key(&candidate);
         match require_path_key(&candidate) {
             Ok(Some(bits)) => return path_module_exports(bits),
             Err(PathModuleRequireError::Initializer(error)) => {
@@ -1391,12 +1356,12 @@ pub extern "C" fn js_require_path_module(path_value: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_has_path_module(path_value: f64) -> f64 {
     let path = value_to_string(path_value, "id");
-    let key = canonicalize_module_path(&path);
+    let key = module_lookup_key(&path);
     let found = MODULE_PATH_REGISTRY.with(|registry| {
         registry.has_exports(&key)
             || directory_module_candidates(&key)
                 .into_iter()
-                .map(|candidate| canonicalize_module_path(&candidate))
+                .map(|candidate| module_lookup_key(&candidate))
                 .any(|candidate| registry.has_exports(&candidate))
     });
     f64::from_bits(if found { TAG_TRUE } else { TAG_FALSE })

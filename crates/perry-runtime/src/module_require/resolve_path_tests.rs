@@ -135,3 +135,68 @@ fn compiled_modules_resolve_without_build_host_files() {
     }
     assert!(resolve_request(&base, "./gone/missing.json").is_err());
 }
+
+extern "C" fn verbatim_key_test_init() {}
+
+/// The compiler emits each module's key already canonical, so registration
+/// stores it verbatim and never asks the filesystem; only run-time spellings
+/// canonicalize, and they meet the same key.
+#[cfg(unix)]
+#[test]
+fn registered_keys_are_verbatim_and_runtime_spellings_meet_them() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let fixture = Fixture::new();
+    let base = fixture.0.canonicalize().unwrap();
+    std::fs::create_dir_all(base.join("real/sub")).unwrap();
+    std::fs::write(base.join("real/m.js"), "module.exports = 1;").unwrap();
+    std::os::unix::fs::symlink(base.join("real"), base.join("link")).unwrap();
+
+    // Registration does not canonicalize: a key spelled through a symlink
+    // stays that spelling (the old registration resolved it to `real/`).
+    let through_link = base
+        .join("link/registered.js")
+        .to_string_lossy()
+        .into_owned();
+    unsafe {
+        js_register_path_init(
+            through_link.as_ptr(),
+            through_link.len() as i64,
+            verbatim_key_test_init as usize as i64,
+        );
+    }
+    let resolved = base
+        .join("real/registered.js")
+        .to_string_lossy()
+        .into_owned();
+    MODULE_PATH_REGISTRY.with(|registry| {
+        assert!(registry.contains_registered(&through_link));
+        assert!(!registry.contains_registered(&resolved));
+    });
+
+    // A canonical key, as the compiler emits it, published like a CJS wrapper.
+    let key = base.join("real/m.js").to_string_lossy().into_owned();
+    let _registered = RegisteredFiles(vec![key.clone()]);
+    assert!(
+        MODULE_PATH_REGISTRY
+            .with(|registry| registry
+                .register_final_exports(key.clone(), crate::value::TAG_UNDEFINED))
+    );
+    // The key itself names the module; aliases computed at run time
+    // canonicalize to the same key (one spelling per module, #10851).
+    for spelling in [
+        key.clone(),
+        base.join("link/m.js").to_string_lossy().into_owned(),
+        base.join("real/sub/../m.js").to_string_lossy().into_owned(),
+    ] {
+        assert_eq!(module_lookup_key(&spelling), key, "{spelling}");
+    }
+
+    // A key whose build-host directory does not exist on this machine (the
+    // binary runs elsewhere) is still found by its own spelling.
+    let foreign = base.join("gone/dir/x.js").to_string_lossy().into_owned();
+    let _foreign = RegisteredFiles(vec![foreign.clone()]);
+    assert!(MODULE_PATH_REGISTRY.with(|registry| {
+        registry.register_final_exports(foreign.clone(), crate::value::TAG_UNDEFINED)
+    }));
+    assert_eq!(module_lookup_key(&foreign), foreign);
+}

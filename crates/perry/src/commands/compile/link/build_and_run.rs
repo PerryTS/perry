@@ -198,17 +198,34 @@ pub(crate) fn build_and_run_link(
     if !is_windows {
         if is_android || is_linux || is_harmonyos {
             cmd.arg("-Wl,--gc-sections");
-            // Native glibc Linux only: not the static musl target, not a
-            // cross link (the probe tests the host toolchain), not Android or
-            // HarmonyOS. Falls back silently to today's link when unsupported.
+            // Native glibc Linux executables link at a fixed base (ET_EXEC),
+            // as bun does. Every pointer in perry's static data (class method
+            // slots, shape/key tables, string and closure headers, stack-map
+            // function addresses) is then final at link time. As a PIE the
+            // same pointers were relative relocations that ld.so applied at
+            // every start: 1.74M of them for OpenCode, dirtying 32 MB of
+            // `.data.rel.ro` copy-on-write before `main`.
+            //
+            // Why this is safe for the runtime: every image-address consumer
+            // reads the load bias (`dl_iterate_phdr`'s `dlpi_addr`, `dladdr`)
+            // instead of assuming one, and the fixed base (0x400000) sits
+            // above the NaN-box handle band (`HANDLE_BAND_MAX` = 0x200000), so
+            // a static object never classifies as a registry handle. Generated
+            // and Rust objects stay PIC, and a PIC object links into a
+            // fixed-base executable as is. Shared objects (plugins, Node-API
+            // addons) are unaffected and still resolve the host's exports
+            // dynamically. With no relative relocations left, DT_RELR
+            // (`-z pack-relative-relocs`) has nothing to pack.
+            //
+            // Native glibc Linux only: not the static musl target, not a cross
+            // link, not Android or HarmonyOS (those produce shared objects).
             if is_linux
                 && !is_musl
                 && !is_android
                 && !is_harmonyos
                 && matches!(target, None | Some("linux"))
-                && super::platform_cmd::linux_pack_relative_relocs_supported()
             {
-                cmd.arg("-Wl,-z,pack-relative-relocs");
+                cmd.arg("-no-pie");
             }
         } else if is_cross_ios || is_cross_visionos || is_cross_macos || is_cross_tvos {
             // ld64.lld called directly — no -Wl, prefix needed
