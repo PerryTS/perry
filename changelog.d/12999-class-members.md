@@ -1,6 +1,7 @@
-fix(codegen): visit class bodies during structural region splitting
+fix(codegen): size namespace expansions when splitting class bodies
 
 Offer constructors, methods, accessors, computed members and field initializer
-closures to the existing splitter. Preserve frame-operation refusals and shared
-constructor captures, and include field-only closure bindings when allocating
-region local IDs.
+closures to the structural splitter. Include the cost of whole namespace values
+from the existing dependency HIR when admitting bodies and cutting statements;
+qualified member reads keep their direct binding cost. Preserve frame operations,
+shared constructor captures and field-only closure local IDs.

@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 // Deep visitors
 // ---------------------------------------------------------------------------
 
-fn for_each_child_list<'a>(s: &'a Stmt, f: &mut dyn FnMut(&'a [Stmt])) {
+pub(super) fn for_each_child_list<'a>(s: &'a Stmt, f: &mut dyn FnMut(&'a [Stmt])) {
     match s {
         Stmt::If {
             then_branch,
@@ -51,7 +51,7 @@ fn for_each_child_list<'a>(s: &'a Stmt, f: &mut dyn FnMut(&'a [Stmt])) {
 }
 
 /// The expressions a statement holds directly (not those of nested lists).
-fn for_each_own_expr<'a>(s: &'a Stmt, f: &mut dyn FnMut(&'a Expr)) {
+pub(super) fn for_each_own_expr<'a>(s: &'a Stmt, f: &mut dyn FnMut(&'a Expr)) {
     match s {
         Stmt::Let { init: Some(e), .. }
         | Stmt::Expr(e)

@@ -351,3 +351,56 @@ fn mutable_class_capture_parameters_stay_in_the_parent() {
         );
     }
 }
+
+#[test]
+fn namespace_values_have_their_expanded_size_but_qualified_reads_do_not() {
+    let limits = Limits {
+        min_body: 4000,
+        target: 1500,
+        chunk_min: 200,
+        interface_nodes: 40,
+        ..tiny(false)
+    };
+    for (value, expected) in [
+        ("factory({ typescript: ns })", true),
+        ("ns.member(factory)", false),
+    ] {
+        let mut m = lower_src(&format!(
+            r#"
+            import * as ns from './many';
+            class C {{ method(factory: any) {{
+                const result = {value}; return result;
+            }} }}
+        "#
+        ));
+        m.imports[0].resolved_path = Some("/virtual/many.ts".into());
+        let made = super::split_regions::split_large_bodies_with_cost(&mut m, limits, &|source| {
+            assert_eq!(source, "/virtual/many.ts");
+            2000
+        });
+        assert_eq!(made > 0, expected, "namespace use: {value}");
+    }
+}
+
+#[test]
+fn namespace_expansion_in_a_closure_does_not_inflate_its_parent() {
+    let mut m = lower_src(
+        r#"
+        import * as ns from './many';
+        class C { method(factory: any) {
+            return () => { const result = factory(ns); return result; };
+        } }
+    "#,
+    );
+    let limits = Limits {
+        min_body: 4000,
+        target: 1500,
+        chunk_min: 200,
+        interface_nodes: 40,
+        ..tiny(false)
+    };
+    assert!(super::split_regions::split_large_bodies_with_cost(&mut m, limits, &|_| 2000,) > 0);
+    assert!(regions(&m)
+        .iter()
+        .all(|f| !f.name.starts_with("C::method#region_")));
+}
