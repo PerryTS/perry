@@ -233,8 +233,8 @@ pub(crate) fn promote_external_global_for_units(line: &str) -> String {
 }
 
 /// Give a generated global one non-discardable definition. On every
-/// non-Mach-O target (ELF and COFF — see `replicate_globals`) each global has
-/// a unique owning codegen unit; leaving that sole definition as
+/// ELF/COFF global, and for aliases on Mach-O, there is a unique owning
+/// codegen unit; leaving that sole definition as
 /// `linkonce_odr` lets LLVM discard it when all references in the owner happen
 /// to optimize away, even though other object files still reference it.
 ///

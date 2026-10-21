@@ -252,3 +252,52 @@ fn hidden_image_literals_keep_cross_module_coalescing() {
     );
     assert_eq!(make_unique_owner_global(&definition), definition);
 }
+
+#[test]
+fn mach_o_offset_alias_has_one_hidden_owner() {
+    fn fixture() -> LlModule {
+        let mut module = LlModule::new("arm64-apple-macosx15.0.0");
+        module.add_raw_global("@payload = weak_odr constant [4 x i8] c\"abc\\00\"".into());
+        module.add_raw_global(
+            "@fnname = private alias i8, getelementptr (i8, ptr @payload, i64 1)".into(),
+        );
+        for name in ["first", "second"] {
+            module
+                .define_function(name, PTR, vec![])
+                .create_block("entry")
+                .ret(PTR, "@fnname");
+        }
+        module.bind_generated_globals_to_image();
+        module
+    }
+    let units = fixture().render_codegen_units(2);
+    assert_eq!(
+        units
+            .iter()
+            .filter(|unit| unit.contains("@fnname = hidden alias i8,"))
+            .count(),
+        1
+    );
+    assert_eq!(
+        units
+            .iter()
+            .filter(|unit| unit.contains("@fnname = external hidden global i8"))
+            .count(),
+        1
+    );
+    assert!(units
+        .iter()
+        .all(|unit| !unit.contains("@fnname = linkonce_odr")));
+    #[cfg(all(feature = "llvm-inprocess", target_os = "macos"))]
+    {
+        let _native = crate::codegen::helpers::NativeRootsPin::native();
+        let object = crate::native_emit::compile_module_units_native(
+            &mut fixture(),
+            2,
+            None,
+            "hidden_offset_alias",
+        )
+        .expect("hidden Mach-O offset aliases must survive the partial link");
+        assert!(!object.is_empty());
+    }
+}

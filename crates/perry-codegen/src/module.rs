@@ -1389,22 +1389,16 @@ impl LlModule {
             })
             .collect();
         let replicate_globals = self.target_triple.contains("apple");
-        // An alias must name a DEFINITION in its own object ("Alias must
-        // point to a definition"), so with one owner per global it is owned
-        // by its aliasee's owner. Owning it by its own first reference put a
-        // layout id alias (`@perry_array_layout_*_id`, which nothing loads,
-        // so unit 0 kept it) beside a mere declaration of its descriptor,
-        // defined in the unit that attaches the layout; three Next.js
-        // bundles failed to compile that way. Other units that name the
-        // alias declare it like any global (`external_decl_for_global`).
-        // Under replication every unit emitting the alias also emits the
-        // aliasee (the reference closure above), so Mach-O needs nothing.
-        if !replicate_globals {
-            for gi in 0..all_globals.len() {
-                if let Some(aliasee) = alias_target(all_globals[gi]) {
-                    if let Some(&ai) = global_index.get(aliasee) {
-                        global_owners[gi] = global_owners[ai];
-                    }
+        // An alias must name a definition in its own object, so its owner
+        // follows the aliasee. This applies to Mach-O too: LLVM emits hidden
+        // offset aliases as strong symbols even with linkonce_odr linkage;
+        // replicating them makes ld -r reject duplicate .fnname symbols.
+        // Other units declare the alias; the aliasee may still be replicated
+        // under Mach-O's dead-strip policy.
+        for gi in 0..all_globals.len() {
+            if let Some(aliasee) = alias_target(all_globals[gi]) {
+                if let Some(&ai) = global_index.get(aliasee) {
+                    global_owners[gi] = global_owners[ai];
                 }
             }
         }
@@ -1451,7 +1445,9 @@ impl LlModule {
         if replicate_globals {
             for need in &bucket_needs {
                 for &gi in need {
-                    defining_unit_count[gi] += 1;
+                    if alias_target(all_globals[gi]).is_none() {
+                        defining_unit_count[gi] += 1;
+                    }
                 }
             }
         }
@@ -1486,8 +1482,9 @@ impl LlModule {
                 // Unreferenced globals (anchors, `llvm.*`, appending lists)
                 // keep a home in unit 0 so nothing is lost.
                 let owns = global_owners[gi] == bi;
-                if (replicate_globals && referenced) || owns {
-                    if replicate_globals {
+                let replicated = replicate_globals && alias_target(def).is_none();
+                if (replicated && referenced) || owns {
+                    if replicated {
                         if !has_local_linkage(def) {
                             // External: another object may name it, so it must
                             // coalesce without ever being discarded.
@@ -1538,7 +1535,9 @@ impl LlModule {
                 // initializer still requires a cross-unit function declare.
                 // Merely external declarations in non-owning COFF units have
                 // no initializer, so they contribute no symbol references.
-                let emits_definition = (replicate_globals && referenced) || owns;
+                let emits_definition =
+                    (replicate_globals && referenced && alias_target(all_globals[gi]).is_none())
+                        || owns;
                 if !emits_definition {
                     continue;
                 }
