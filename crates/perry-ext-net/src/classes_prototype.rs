@@ -118,7 +118,6 @@ unsafe extern "C" fn rules(_: *const RawClosureHeader, this: JsThis) -> f64 {
 }
 unsafe extern "C" fn from_json(_: *const RawClosureHeader, this: JsThis, value: f64) -> f64 {
     let handle = handle_from_value(this.as_f64()).unwrap_or(0);
-    block_list(handle);
     js_net_block_list_from_json(handle, value)
 }
 unsafe extern "C" fn address(_: *const RawClosureHeader, this: JsThis) -> f64 {

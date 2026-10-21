@@ -35,6 +35,10 @@ extern "C" {
 pub unsafe extern "C" fn js_ext_net_nm_install() {
     js_set_native_net_dispatch(js_ext_net_native_dispatch);
     js_nm_install_net();
+    // Adopt the cached constructor's canonical prototype before an export is
+    // observed. The payload installer runs once, so later namespace installs
+    // and construction preserve both identity and user edits.
+    crate::classes::prepare_block_list_prototype();
     // perry-stdlib's `tls` module dispatch reaches `tls.connect` through this
     // when its archive has no link-time provider (the prebuilt `full` one).
     js_set_tls_connect_provider(crate::tls::js_tls_connect);

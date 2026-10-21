@@ -1,8 +1,6 @@
 use perry_ffi::native_payload::{self as np, PayloadFamily, PayloadMiss};
 use perry_ffi::TransientRootScope;
-use perry_ffi::{
-    alloc_string, js_array_alloc, js_array_get, js_array_push, ArrayHeader, JsValue, StringHeader,
-};
+use perry_ffi::{alloc_string, js_array_alloc, js_array_push, ArrayHeader, JsValue, StringHeader};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 #[path = "classes_prototype.rs"]
 mod prototype;
@@ -29,6 +27,10 @@ static SOCKET_ADDRESS: PayloadFamily = PayloadFamily::new::<SocketAddressState>(
 use crate::{get_object_value_field, jsvalue_to_owned_string, string_from_header_i64};
 
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
+
+pub(crate) fn prepare_block_list_prototype() {
+    np::prototype(&BLOCK_LIST, "net");
+}
 
 #[derive(Clone)]
 struct BlockListState {
@@ -83,6 +85,10 @@ fn throw_miss<T>(miss: PayloadMiss) -> T {
 
 extern "C" {
     fn js_get_string_pointer_unified(value: f64) -> i64;
+    fn js_array_is_array(value: f64) -> f64;
+    fn js_json_parse(text: *const StringHeader) -> JsValue;
+    fn js_object_get_property_key(object: f64, key: f64) -> f64;
+    fn js_runtime_describe_received(value: f64) -> f64;
     fn js_net_throw_invalid_address() -> !;
     fn js_net_validate_block_list_prefix(prefix: f64, max: f64) -> i32;
     fn js_net_validate_listen_port(value: f64);
@@ -217,28 +223,126 @@ fn rule_contains(rule: &BlockRule, ip: IpAddr) -> bool {
     }
 }
 
-fn parse_rule_string(rule: &str) -> Option<BlockRule> {
-    let (kind, rest) = rule.split_once(": ")?;
-    let (family, value) = rest.split_once(' ')?;
-    let family = family.to_ascii_lowercase();
-    match kind {
-        "Address" => Some(BlockRule::Address(parse_ip_string(value, Some(&family))?)),
-        "Range" => {
-            let (start, end) = value.split_once('-')?;
-            Some(BlockRule::Range(
-                parse_ip_string(start, Some(&family))?,
-                parse_ip_string(end, Some(&family))?,
-            ))
-        }
-        "Subnet" => {
-            let (addr, prefix) = value.split_once('/')?;
-            Some(BlockRule::Subnet(
-                parse_ip_string(addr, Some(&family))?,
-                prefix.parse().ok()?,
-            ))
-        }
-        _ => None,
+// Node's JSON importer searches these unanchored textual patterns in order;
+// unmatched strings are ignored, but matched invalid addresses/rules throw.
+fn json_ip_span(text: &str, ipv6: bool) -> Option<usize> {
+    if ipv6 {
+        let len = text
+            .bytes()
+            .take(39)
+            .take_while(|b| b.is_ascii_hexdigit() || *b == b':')
+            .count();
+        return (len > 0).then_some(len);
     }
+    let mut offset = 0;
+    for part in 0..4 {
+        let count = text[offset..]
+            .bytes()
+            .take(3)
+            .take_while(u8::is_ascii_digit)
+            .count();
+        if count == 0 {
+            return None;
+        }
+        offset += count;
+        if part < 3 {
+            if text.as_bytes().get(offset) != Some(&b'.') {
+                return None;
+            }
+            offset += 1;
+        }
+    }
+    Some(offset)
+}
+
+fn parse_rule_string(rule: &str) -> Option<BlockRule> {
+    for (family, ipv6) in [("IPv4", false), ("IPv6", true)] {
+        if !rule.contains(family) {
+            continue;
+        }
+        for kind in ["Subnet", "Address", "Range"] {
+            let marker = format!("{kind}: {family} ");
+            // IPv6 patterns are case insensitive after the case-sensitive
+            // includes('IPv6') admission, matching the pinned Node parser.
+            let search = if ipv6 {
+                rule.to_ascii_lowercase()
+            } else {
+                rule.to_owned()
+            };
+            let needle = if ipv6 {
+                marker.to_ascii_lowercase()
+            } else {
+                marker
+            };
+            for (offset, _) in search.match_indices(&needle) {
+                let rest = &rule[offset + needle.len()..];
+                let Some(len) = json_ip_span(rest, ipv6) else {
+                    continue;
+                };
+                let first = &rest[..len];
+                let tail = &rest[len..];
+                let suffix = match kind {
+                    "Subnet" => {
+                        let Some(prefix) = tail.strip_prefix('/') else {
+                            continue;
+                        };
+                        let len = prefix
+                            .bytes()
+                            .take(if ipv6 { 3 } else { 2 })
+                            .take_while(u8::is_ascii_digit)
+                            .count();
+                        if len == 0 {
+                            continue;
+                        }
+                        &prefix[..len]
+                    }
+                    "Range" => {
+                        let Some(end) = tail.strip_prefix('-') else {
+                            continue;
+                        };
+                        let Some(len) = json_ip_span(end, ipv6) else {
+                            continue;
+                        };
+                        &end[..len]
+                    }
+                    _ => "",
+                };
+                let family = if ipv6 { "ipv6" } else { "ipv4" };
+                let parse = |text| {
+                    parse_ip_string(text, Some(family))
+                        .unwrap_or_else(|| unsafe { js_net_throw_invalid_address() })
+                };
+                let start = parse(first);
+                return Some(match kind {
+                    "Subnet" => {
+                        let prefix = suffix.parse::<u32>().ok()? as f64;
+                        let prefix = unsafe {
+                            js_net_validate_block_list_prefix(
+                                prefix,
+                                if ipv6 { 128.0 } else { 32.0 },
+                            )
+                        };
+                        BlockRule::Subnet(start, prefix as u8)
+                    }
+                    "Range" => {
+                        let end = parse(suffix);
+                        if addr_to_u128(start) > addr_to_u128(end) {
+                            perry_ffi::throw_with_code(
+                                &format!(
+                                    "The argument 'start' must come before end. Received '{first}'"
+                                ),
+                                "ERR_INVALID_ARG_VALUE",
+                                perry_ffi::ErrorKind::TypeError,
+                            );
+                        }
+                        BlockRule::Range(start, end)
+                    }
+                    _ => BlockRule::Address(start),
+                });
+            }
+        }
+    }
+    None
 }
 
 fn parse_ip_string(value: &str, family: Option<&str>) -> Option<IpAddr> {
@@ -247,15 +351,6 @@ fn parse_ip_string(value: &str, family: Option<&str>) -> Option<IpAddr> {
         Some(ip)
     } else {
         None
-    }
-}
-
-fn string_from_js_value(value: JsValue) -> Option<String> {
-    if value.is_string() {
-        unsafe { string_from_header_i64(value.as_string_ptr() as i64) }
-    } else {
-        let ptr = unsafe { js_get_string_pointer_unified(f64::from_bits(value.bits())) };
-        unsafe { string_from_header_i64(ptr) }
     }
 }
 
@@ -459,28 +554,67 @@ pub extern "C" fn js_net_block_list_rules(handle: i64) -> *mut ArrayHeader {
 pub unsafe extern "C" fn js_net_block_list_from_json(handle: i64, value: f64) -> f64 {
     let scope = TransientRootScope::enter();
     let receiver = scope.root_addr(handle);
-    let value = JsValue::from_bits(value.to_bits());
-    if !value.is_pointer() {
-        return undefined();
-    }
-    let arr = value.as_pointer::<ArrayHeader>();
-    if arr.is_null() {
-        return undefined();
-    }
-    let arr = scope.root_addr(arr as i64);
-    let mut parsed = Vec::new();
-    let length = (*(arr.get() as *mut ArrayHeader)).length;
-    for i in 0..length {
-        if let Some(rule) = string_from_js_value(js_array_get(arr.get() as *mut ArrayHeader, i))
-            .and_then(|s| parse_rule_string(&s))
-        {
-            parsed.push(rule);
+    let mut data = scope.root_nanbox(value);
+    if !JsValue::from_bits(js_array_is_array(data.get()).to_bits()).to_bool() {
+        if !JsValue::from_bits(data.get().to_bits()).is_any_string() {
+            throw_json_data(data.get());
+        }
+        let text = scope.root_addr(js_get_string_pointer_unified(data.get()));
+        data = scope.root_nanbox(f64::from_bits(
+            js_json_parse(text.get() as *const StringHeader).bits(),
+        ));
+        if !JsValue::from_bits(js_array_is_array(data.get()).to_bits()).to_bool() {
+            throw_json_data(data.get());
         }
     }
-    block_list(receiver.get()).rules = parsed;
-    let bytes = block_list(receiver.get()).rules.capacity() * std::mem::size_of::<BlockRule>();
-    np::set_external_bytes(boxed_handle(receiver.get()), &BLOCK_LIST_VTABLE, bytes);
+    // Array.isArray includes proxies, lazy JSON arrays and Array subclasses.
+    // Use the existing boxed property path, never cast their carrier to an
+    // ArrayHeader. Every receiver/key is rooted across getters and allocation.
+    let length_key = scope.root_nanbox(f64::from_bits(
+        JsValue::from_string_ptr(alloc_string("length").as_raw()).bits(),
+    ));
+    let length = || {
+        let value =
+            JsValue::from_bits(js_object_get_property_key(data.get(), length_key.get()).to_bits());
+        if value.is_int32() {
+            value.to_int32() as u32
+        } else {
+            value.to_number() as u32
+        }
+    };
+    let element = |index: u32| js_object_get_property_key(data.get(), index as f64);
+    let mut index = 0;
+    while index < length() {
+        if !JsValue::from_bits(element(index).to_bits()).is_any_string() {
+            throw_json_data(data.get());
+        }
+        index += 1;
+    }
+    // Node validates input before checking its private receiver brand. Once
+    // admitted, rules append in order, and an invalid later rule leaves earlier
+    // insertions visible; element-type rejection above leaves state untouched.
+    block_list(receiver.get());
+    let mut index = 0;
+    while index < length() {
+        let value = scope.root_nanbox(element(index));
+        if let Some(text) = JsValue::from_bits(value.get().to_bits()).to_owned_string() {
+            if let Some(rule) = parse_rule_string(&text) {
+                block_list_insert(receiver.get(), rule);
+            }
+        }
+        index += 1;
+    }
     undefined()
+}
+
+unsafe fn throw_json_data(value: f64) -> ! {
+    let received = JsValue::from_bits(js_runtime_describe_received(value).to_bits())
+        .to_owned_string()
+        .unwrap_or_default();
+    perry_ffi::throw_with_code(
+        &format!("The \"data\" argument must be of type string or an instance of string[]. Received {received}"),
+        "ERR_INVALID_ARG_TYPE", perry_ffi::ErrorKind::TypeError,
+    )
 }
 
 fn socket_address_new(address: IpAddr, port: u16, flowlabel: u32) -> f64 {
