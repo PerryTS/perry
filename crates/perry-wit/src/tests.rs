@@ -243,6 +243,19 @@ fn canonical_guest_resource_adapters_compile_for_both_directions() {
                 "imported and exported resources are distinct nominal types"
             );
         }
+        for interface in &contract.exports {
+            for key in interface
+                .resources
+                .values()
+                .filter(|key| key.starts_with('e'))
+            {
+                let id = key[1..].parse::<u32>().unwrap() * 2 + 1;
+                assert!(
+                    c.contains(&format!("case {id}:\n")),
+                    "guest factory {key} must select its generated canonical resource operation"
+                );
+            }
+        }
         let guest = typescript_guest(&contract);
         assert_eq!(
             guest.contains("create: (payload:"),

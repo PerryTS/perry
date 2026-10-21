@@ -94,8 +94,10 @@ fn main() -> Result<()> {
     wasi.allow_tcp(false)
         .allow_udp(false)
         .allow_ip_name_lookup(false);
-    if moving_resources {
+    if resource_profile {
         wasi.inherit_stderr();
+    }
+    if moving_resources {
         for name in [
             "PERRY_GC_FORCE_EVACUATE",
             "PERRY_GC_VERIFY_EVACUATION",

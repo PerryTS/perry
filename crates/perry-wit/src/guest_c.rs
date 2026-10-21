@@ -20,6 +20,9 @@ pub fn canonical_guest(path: &Path, selected: Option<&str>) -> Result<BTreeMap<S
     let mut resolve = Resolve::default();
     let (package, _) = resolve.push_path(path)?;
     let id = resolve.select_world(&[package], selected)?;
+    // C generation nominalizes the graph. Do this before the manifest too,
+    // so its resource factories and the generated callbacks share TypeIds.
+    resolve.generate_nominal_type_ids(id);
     let world = crate::resolve::convert(&resolve, id)?;
     let mut files = Files::default();
     wit_bindgen_c::Opts {

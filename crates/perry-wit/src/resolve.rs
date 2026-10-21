@@ -10,6 +10,9 @@ pub fn parse_file(path: &Path, world: Option<&str>) -> Result<World> {
     let mut resolve = Resolve::default();
     let (package, _) = resolve.push_path(path)?;
     let world = resolve.select_world(&[package], world)?;
+    // Match the maintained C backend before assigning manifest/factory IDs.
+    // It clones interfaces used as both imports and exports.
+    resolve.generate_nominal_type_ids(world);
     convert(&resolve, world)
 }
 
@@ -17,6 +20,9 @@ pub fn parse(source: &str, world: Option<&str>) -> Result<World> {
     let mut resolve = Resolve::default();
     let package = resolve.push_str("component.wit", source)?;
     let world = resolve.select_world(&[package], world)?;
+    // Match the maintained C backend before assigning manifest/factory IDs.
+    // It clones interfaces used as both imports and exports.
+    resolve.generate_nominal_type_ids(world);
     convert(&resolve, world)
 }
 

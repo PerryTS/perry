@@ -12,6 +12,10 @@ world and writes `bindings.ts`, `guest.ts`, and `world.json`. Native callers
 import `load` from `bindings.ts`; the generated `exports` object has the WIT
 function signatures. Interface identifiers retain their package versions.
 
+The native embedding and Rust component oracle use the lockfile-pinned
+Wasmtime 48.0.5 engine. The standalone command runner is qualified separately
+with Wasmtime CLI 48.0.0.
+
 The native `perry/component` module links a separate
 `libperry_component_host.a` (or `perry_component_host.lib`). Applications that
 do not import this module do not acquire its Wasmtime engine. The existing
@@ -86,7 +90,7 @@ The Wasmtime synchronous store becomes poisoned after a trap and forbids
 further guest execution, including guest destructors. Disposal still releases
 store memory and callback captures, and reports the original failure. It
 cannot promise execution of every guest destructor after a trap. See the
-[Wasmtime resource-drop implementation](https://docs.rs/wasmtime/48.0.0/src/wasmtime/runtime/component/resources/any.rs.html).
+[Wasmtime resource-drop implementation](https://docs.rs/wasmtime/48.0.5/src/wasmtime/runtime/component/resources/any.rs.html).
 
 The embedding distinguishes a failed destructor after completed disposal
 from a disposal rejected during an active call. Completed disposal severs
