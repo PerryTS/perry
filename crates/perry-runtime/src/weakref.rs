@@ -1228,12 +1228,23 @@ unsafe fn process_finreg_record_after_mark(
 
 pub(crate) fn queue_pending_finalization_callbacks_after_gc() {
     let jobs = PENDING_FINALIZATION_JOBS.with(|jobs| std::mem::take(&mut *jobs.borrow_mut()));
-    for job in jobs {
-        let scope = crate::gc::RuntimeHandleScope::new();
-        let registry = scope.root_nanbox_f64(job.registry);
-        let record = scope.root_nanbox_f64(job.record);
-        let callback = scope.root_nanbox_f64(job.callback);
-        let held = scope.root_nanbox_f64(job.held);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    // The pending-jobs scanner no longer owns this snapshot. Queueing a tick
+    // allocates and can invoke an async_hooks init callback, so root EVERY job
+    // before delivering the first one, including records of other registries.
+    let rooted: Vec<_> = jobs
+        .iter()
+        .map(|job| {
+            (
+                scope.root_nanbox_f64(job.registry),
+                scope.root_nanbox_f64(job.record),
+                scope.root_nanbox_f64(job.callback),
+                scope.root_nanbox_f64(job.held),
+            )
+        })
+        .collect();
+    drop(jobs);
+    for (registry, record, callback, held) in rooted {
         let callback_ptr = js_nanbox_get_pointer(callback.get_nanbox_f64()) as usize;
         if callback_ptr >= 0x1000 && crate::closure::is_closure_ptr(callback_ptr) {
             let held_arg = held.get_nanbox_f64();
@@ -1260,7 +1271,9 @@ fn remove_finalization_record_from_registry(registry: f64, record: f64) {
     if reg_ptr.is_null() {
         return;
     }
-    let entries_key = crate::string::js_string_from_bytes(b"__perry_fr_entries".as_ptr(), 18);
+    let (entries_key, registry) = registry_handle
+        .across_nanbox(|| crate::string::js_string_from_bytes(b"__perry_fr_entries".as_ptr(), 18));
+    let reg_ptr = js_nanbox_get_pointer(registry) as *mut ObjectHeader;
     let entries_val = js_object_get_field_by_name(reg_ptr, entries_key);
     let entries_ptr = (entries_val.bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ArrayHeader;
     if entries_ptr.is_null() {
