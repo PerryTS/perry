@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 import tarfile
 import tempfile
+import subprocess
+import sys
 import unittest
 
 import wasi_release as release
@@ -100,6 +102,15 @@ class BundleTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             release.package(self.runtime, output, REVISION, VERSION)
         self.assertFalse((output / release.BUNDLE).exists())
+
+    def test_cli_cannot_stamp_a_different_version_onto_the_release_checkout(self):
+        output = self.root / "wrong-version"
+        result = subprocess.run([sys.executable, str(release.ROOT / "scripts/wasi_release.py"),
+            "package", "--runtime", str(self.runtime), "--output", str(output),
+            "--revision", REVISION, "--version", "0.0.0-invalid"], capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("package version must match", result.stderr)
+        self.assertFalse(output.exists())
 
 
 if __name__ == "__main__":

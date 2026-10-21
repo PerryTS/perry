@@ -33,6 +33,8 @@ def digest(stream):
 
 def verify(bundle, revision, version):
     """Validate the complete bundle before publishing or extracting any file."""
+    if not re.fullmatch(r"[0-9a-f]{40}", revision):
+        raise ValueError("Expected a full source revision")
     with tarfile.open(bundle, "r:gz") as archive:
         entries = archive.getmembers()
         if (len(entries) != 2 or {item.name for item in entries} != {LIBRARY, "manifest.json"}
@@ -115,10 +117,13 @@ def main():
     parser.add_argument("--bundle", type=Path)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
-    version = args.version or tomllib.loads((ROOT / "Cargo.toml").read_text())["workspace"]["package"]["version"]
+    checkout_version = tomllib.loads((ROOT / "Cargo.toml").read_text())["workspace"]["package"]["version"]
+    version = args.version or checkout_version
     if args.action == "package":
         if not args.runtime or not args.output:
             parser.error("package requires --runtime and --output")
+        if version != checkout_version:
+            parser.error("package version must match the release checkout")
         actual = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
         if actual != args.revision:
             parser.error("checkout does not match the expected release source")
