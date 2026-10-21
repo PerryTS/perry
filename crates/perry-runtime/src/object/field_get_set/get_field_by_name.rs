@@ -88,7 +88,7 @@ pub extern "C" fn js_object_get_field_by_name(
             return JSValue::from_bits(value.to_bits());
         }
     }
-    if let Some(value) = unsafe { super::super::native_get::try_data_get_by_name(obj, key) } {
+    if let Some(value) = unsafe { super::super::native_get::try_settled_get_by_name(obj, key) } {
         return value;
     }
     get_field_by_name_past_data_probe(obj, key)
@@ -586,7 +586,7 @@ pub(crate) fn get_field_by_name_after_site_miss(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
 ) -> JSValue {
-    if let Some(value) = unsafe { super::super::native_get::try_data_get_by_name(obj, key) } {
+    if let Some(value) = unsafe { super::super::native_get::try_settled_get_by_name(obj, key) } {
         return value;
     }
     get_field_by_name_past_data_probe(obj, key)
@@ -600,7 +600,7 @@ pub(super) fn test_get_past_data_probe(
     get_field_by_name_past_data_probe(obj, key)
 }
 
-/// The generic read after `try_data_get_by_name` has already declined.
+/// The generic read after `try_settled_get_by_name` has already declined.
 fn get_field_by_name_past_data_probe(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,

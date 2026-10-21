@@ -21,11 +21,24 @@ pub(crate) unsafe fn try_data_get(receiver: JSValue, key: JSValue) -> Option<JSV
 
 /// Raw-pointer sibling for the named-field ABI, which accepts both raw and
 /// NaN-boxed object pointers. Reject other encodings before touching memory.
+/// The named reads settle through [`try_settled_get_by_name`]; this positive-only
+/// form is kept for the lookup tests.
+#[cfg(test)]
 #[inline]
 pub(crate) unsafe fn try_data_get_by_name(
     object: *const ObjectHeader,
     key: *const crate::StringHeader,
 ) -> Option<JSValue> {
+    try_data_lookup_by_name(object, key).flatten()
+}
+
+/// The named-field ABI's receiver, key text and key bits, or `None` for an
+/// encoding or key header this lane does not read.
+#[inline]
+unsafe fn named_lookup_inputs<'a>(
+    object: *const ObjectHeader,
+    key: *const crate::StringHeader,
+) -> Option<(JSValue, &'a [u8], u64)> {
     if key.is_null() || !crate::value::addr_class::is_plausible_heap_addr(key as usize) {
         return None;
     }
@@ -40,8 +53,40 @@ pub(crate) unsafe fn try_data_get_by_name(
     };
     let bytes =
         std::slice::from_raw_parts(crate::string::string_data(key), (*key).byte_len as usize);
-    let key_bits = crate::value::nanbox_string_key(key).to_bits();
-    try_data_lookup_key(receiver, key_bits, bytes).flatten()
+    Some((
+        receiver,
+        bytes,
+        crate::value::nanbox_string_key(key).to_bits(),
+    ))
+}
+
+/// [`try_data_get_by_name`] that also answers a definite miss, with the
+/// contract of [`try_data_lookup_bytes`].
+#[inline]
+pub(crate) unsafe fn try_data_lookup_by_name(
+    object: *const ObjectHeader,
+    key: *const crate::StringHeader,
+) -> Option<Option<JSValue>> {
+    let (receiver, bytes, key_bits) = named_lookup_inputs(object, key)?;
+    try_data_lookup_key(receiver, key_bits, bytes)
+}
+
+/// The settled `[[Get]]` of a named read on an ordinary receiver: its data
+/// value, or `undefined` once the shapes prove the key is on no link of the
+/// chain AND the receiver is one whose reads the shapes alone decide (see
+/// [`shapes::plain_receiver_miss_is_final`]). `None` leaves the read to the
+/// generic path, which owns every other receiver and every accessor.
+#[inline]
+pub(crate) unsafe fn try_settled_get_by_name(
+    object: *const ObjectHeader,
+    key: *const crate::StringHeader,
+) -> Option<JSValue> {
+    let (receiver, bytes, key_bits) = named_lookup_inputs(object, key)?;
+    match try_data_lookup_key(receiver, key_bits, bytes)? {
+        Some(value) => Some(value),
+        None => shapes::plain_receiver_miss_is_final(receiver.as_pointer::<ObjectHeader>(), bytes)
+            .then(JSValue::undefined),
+    }
 }
 
 /// Borrowed-name API for native callers. The keys lookup is consult-only:

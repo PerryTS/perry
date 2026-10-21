@@ -598,7 +598,7 @@ crate::perry_thread_local! {
 ///    for `__AnonShape_*`). A future lowering that admitted an accessor into
 ///    the closed-shape path would arm a missed thenable — a HANG — silently.
 ///    Checking the registry converts that assumption into an observed fact.
-fn class_id_admissible(class_id: u32) -> bool {
+pub(crate) fn class_id_admissible(class_id: u32) -> bool {
     if class_id == 0 {
         return true;
     }

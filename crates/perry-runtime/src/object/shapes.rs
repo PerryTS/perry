@@ -44,7 +44,7 @@ mod shapes_spread;
 
 #[path = "shapes_own_data.rs"]
 mod shapes_own_data;
-pub(crate) use shapes_own_data::own_data_shape;
+pub(crate) use shapes_own_data::{own_data_shape, plain_receiver_miss_is_final};
 
 #[path = "shapes_branded_birth.rs"]
 mod shapes_branded_birth;

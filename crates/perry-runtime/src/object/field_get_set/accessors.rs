@@ -380,13 +380,45 @@ unsafe fn default_object_prototype_property_value(
             crate::value::js_nanbox_get_pointer(receiver_h.get_nanbox_f64()) as usize;
         let key = crate::value::js_nanbox_get_pointer(key_h.get_nanbox_f64())
             as *const crate::StringHeader;
+        if let Some(settled) = object_prototype_data_read(proto_addr, receiver_addr, key) {
+            return settled;
+        }
         return prototype_property_value_with_guard(proto_addr, receiver_addr, key);
     }
     let proto_addr = crate::array::object_prototype_addr();
     if proto_addr == 0 {
         return None;
     }
+    if let Some(settled) = object_prototype_data_read(proto_addr, receiver_addr, key) {
+        return settled;
+    }
     prototype_property_value_with_guard(proto_addr, receiver_addr, key)
+}
+
+/// The inherited read of `%Object.prototype%` itself, answered from its shape
+/// when that can decide it: a data property (the inherited value, `undefined`
+/// reading as absent) or a key none of its own listings carries (`None`).
+/// `Some(answer)` is final; `None` leaves the read to
+/// [`prototype_property_value_with_guard`], which owns accessors, a receiver
+/// that is the intrinsic itself, and every shape the data walk declines.
+///
+/// This is the generic read's own first step on the prototype
+/// (`js_object_get_field_by_name`): the same data lookup, without the rooting
+/// scope, the accessor-receiver override or the exotic-receiver ladder an
+/// ordinary miss would run first. A lookup allocates nothing and runs no user
+/// code, so no handle needs to outlive it.
+#[inline]
+unsafe fn object_prototype_data_read(
+    proto_addr: usize,
+    receiver_addr: usize,
+    key: *const crate::StringHeader,
+) -> Option<Option<JSValue>> {
+    if proto_addr == receiver_addr {
+        return None;
+    }
+    let verdict =
+        super::super::native_get::try_data_lookup_by_name(proto_addr as *const ObjectHeader, key)?;
+    Some(verdict.filter(|value| !value.is_undefined()))
 }
 
 /// Read an inherited property after resolving its prototype. Keeping
