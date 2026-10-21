@@ -166,14 +166,10 @@ pub(super) struct CopyingNurseryCollector {
     pub(super) sticky: StickyRememberedSet,
     pub(super) stats: CopyingNurseryTraceStats,
     pub(super) live_from_bytes: usize,
-    /// Per-cycle snapshot of the adaptive tenuring threshold (gc/tenuring.rs)
-    /// so every object in one cycle sees the same policy. Deliberately the
-    /// ONLY per-cycle promotion input: an earlier mid-cycle overflow valve
-    /// ("stop copying once N bytes are in to-space") made the
-    /// copied/promoted split depend on root traversal order, which is
-    /// address-dependent — the gc-ratchet's bit-identical-counters contract
-    /// caught it as a ±2-object jitter on the first heavy cycle.
-    pub(super) tenuring_survivals: u8,
+    /// Immutable per-cycle age and parent-probe policy. Decisions depend on
+    /// this snapshot and the object's authoritative GC type, never on an
+    /// evolving copy budget or root traversal order (#7432).
+    pub(super) promotion_policy: super::tenuring::PromotionPolicy,
     /// #7742: every remembered-set insertion this cycle could make is provably
     /// impossible, so the passes that make them are skipped.
     ///
@@ -255,7 +251,8 @@ pub(super) fn note_survivor_count_for_presizing(count: usize) {
 
 impl CopyingNurseryCollector {
     pub(super) fn new(ptrs: CopyingPointerSet) -> Self {
-        let tenuring_survivals = tenuring_survivals();
+        let promotion_policy = super::tenuring::PromotionPolicy::snapshot();
+        let tenuring_survivals = promotion_policy.survivals();
         let estimate = PREVIOUS_SURVIVOR_ESTIMATE.load(std::sync::atomic::Ordering::Relaxed);
         Self {
             ptrs,
@@ -271,7 +268,7 @@ impl CopyingNurseryCollector {
                 ..CopyingNurseryTraceStats::default()
             },
             live_from_bytes: 0,
-            tenuring_survivals,
+            promotion_policy,
             skip_remembering: false,
             survival: crate::gc::gc_diag_enabled()
                 .then(|| Box::new(super::survival_diag::SurvivalDiag::new())),
@@ -571,7 +568,7 @@ impl CopyingNurseryCollector {
         // I1: a never-move object is promoted at its first survival, so the
         // memos that ask for it are admitted after this minor.
         let promote = flags & GC_FLAG_TENURED != 0
-            || next_age >= self.tenuring_survivals
+            || next_age >= self.promotion_policy.for_type((*header).obj_type)
             || super::never_move::promotes_now((*header).obj_type, (*header)._reserved);
         let new_user = if promote {
             // The promotion's live page accounting rides on the allocation's
@@ -1088,6 +1085,11 @@ pub(super) fn run_copied_minor_attempt(
 
     let phase_start = trace_phase_start(trace);
     let from_space_bytes = crate::arena::copying_from_space_in_use_bytes();
+    let entry_survivor_bytes = crate::arena::copying_active_survivor_in_use_bytes();
+    let eden_allocated_bytes = from_space_bytes.saturating_sub(entry_survivor_bytes);
+    let entry_nursery_cap = super::tenuring::scavenge_nursery_cap_effective_bytes();
+    let entry_eden_budget =
+        super::tenuring::eden_allocation_window_bytes(entry_nursery_cap, entry_survivor_bytes);
     let pre_collection_live_bytes = crate::arena::arena_live_allocated_bytes();
     // #7901: the LIVE share of from-space inside `pre_collection_live_bytes`.
     // Captured here, before anything moves or resets.
@@ -1842,6 +1844,7 @@ pub(super) fn run_copied_minor_attempt(
         collector.stats.eden_live_bytes,
         collector.stats.eden_copied_bytes,
         collector.stats.survivor_first_round_live_bytes,
+        eden_allocated_bytes >= entry_eden_budget,
     );
     if let Some(d) = collector.survival.as_ref() {
         d.report(super::survival_diag::next_minor_seq());
@@ -1852,6 +1855,7 @@ pub(super) fn run_copied_minor_attempt(
     report_forwarding_refusals("copying_minor");
     let scan_us = super::scanner_profile::report_and_reset("copying_minor");
     if crate::gc::gc_diag_enabled() {
+        super::tenuring::report_nursery_policy(collector.stats.eden_live_bytes);
         // This is intentionally the last diagnostic action before returning to
         // the mutator: `pause_us` prices the whole copied-minor path, including
         // finalization, pruning, policy feedback and the diagnostic work above.
@@ -1872,11 +1876,16 @@ pub(super) fn run_copied_minor_attempt(
                 &finalization,
             );
         eprintln!(
-            "[gc-copy-minor] ran pause_us={} scan_us={} phases: {} in_place={} untraced={} untraced_cycles={} untraced_objects={} in_place_blocks={} in_place_dead_bytes={} sparse_blocks={} survival_permille={} copied_objects={} copied_bytes={} promoted_objects={} promoted_bytes={} freed_bytes={} tenuring_survivals={} eden_live_bytes={} eden_copied_bytes={} survivor_live_bytes={} survivor_first_round_live_bytes={} trigger={:?} declared_safepoint={}",
+            "[gc-copy-minor] ran pause_us={} scan_us={} phases: {} in_place={} parent_probe={} eden_allocated_bytes={} entry_nursery_cap={} entry_survivor_bytes={} entry_eden_budget={} untraced={} untraced_cycles={} untraced_objects={} in_place_blocks={} in_place_dead_bytes={} sparse_blocks={} survival_permille={} copied_objects={} copied_bytes={} promoted_objects={} promoted_bytes={} freed_bytes={} tenuring_survivals={} eden_live_bytes={} eden_copied_bytes={} survivor_live_bytes={} survivor_first_round_live_bytes={} trigger={:?} declared_safepoint={}",
             pause_us,
             scan_us,
             phases,
             collector.stats.in_place_promotion,
+            collector.promotion_policy.parent_probe_active(),
+            eden_allocated_bytes,
+            entry_nursery_cap,
+            entry_survivor_bytes,
+            entry_eden_budget,
             untraced,
             super::untraced_promotion_cycles(),
             super::untraced_promoted_objects(),

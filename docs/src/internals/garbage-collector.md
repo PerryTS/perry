@@ -173,6 +173,20 @@ shows the aging round is filtering nothing. The loop is always on and has no env
 knob; `crates/perry-runtime/src/gc/tenuring.rs` is its definition and states the
 feedback signal it uses.
 
+While the first nursery-growth sample is awaiting its first survivor round,
+copying minors keep pointer-bearing parents young for one additional round.
+Otherwise a parent can become old before its sample reaches the controller,
+then keep fresh children alive through a remembered edge after the parent dies.
+The collection snapshots this policy once and reads the GC type's pointer-free
+fact; leaf objects retain the ordinary age. Explicit diagnostic age pins also
+retain their exact age. The existing `PERRY_GC_DIAG` stream reports
+`parent_probe=` on copying minors and `[gc-nursery-policy]` feedback decisions.
+Quiet unlock hysteresis advances only after fresh allocation covers the entry
+Eden budget: the nursery cap minus carried survivor occupancy, credited only
+up to the existing survivor target (and at most half the cap). Normal carried
+survivors do not stall the clock; excessive carryover cannot make a retaining
+workload leave its measured promotion lock early.
+
 **Whole-block in-place promotion.** When the previous cycle measured a
 young-survival ratio at or above 95%
 <!-- gc-fact: PROMOTE_SURVIVAL_THRESHOLD_PERMILLE = 950 in crates/perry-runtime/src/gc/promote_in_place.rs -->,

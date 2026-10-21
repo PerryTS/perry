@@ -2219,9 +2219,8 @@ pub(super) fn copied_minor_promotable_active_survivor_bytes() -> usize {
     // order with the same global block-index bases, so the filter is exactly
     // equivalent to the previous in-callback range check.
     let active_range = crate::arena::active_survivor_block_index_range();
-    // Snapshot the same effective (including saturated env pins) threshold as
-    // CopyingNurseryCollector::new, once for this pacing estimate.
-    let promotion_threshold = tenuring_survivals();
+    // Match the per-type, per-cycle policy the copier will snapshot.
+    let promotion_policy = super::tenuring::PromotionPolicy::snapshot();
     let mut promotable = 0usize;
     crate::arena::arena_walk_objects_filtered(
         |block_idx| active_range.contains(&block_idx),
@@ -2237,7 +2236,8 @@ pub(super) fn copied_minor_promotable_active_survivor_bytes() -> usize {
                 // Mirror move_young's promotion predicate, including the
                 // adaptive threshold (gc/tenuring.rs), so this pacing estimate
                 // matches what the next copying minor will actually promote.
-                if flags & GC_FLAG_TENURED != 0 || next_age >= promotion_threshold {
+                let threshold = promotion_policy.for_type((*header).obj_type);
+                if flags & GC_FLAG_TENURED != 0 || next_age >= threshold {
                     promotable = promotable.saturating_add((*header).size as usize);
                 }
             }

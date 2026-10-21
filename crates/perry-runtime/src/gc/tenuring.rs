@@ -306,6 +306,55 @@ pub(super) fn tenuring_survivals() -> u8 {
     TENURING_SURVIVALS.with(Cell::get)
 }
 
+/// An immutable per-minor promotion decision. A pending nursery-growth sample
+/// must be rated before its pointer-bearing parents become old roots: promoting
+/// them while measuring their first round makes their later-dead remembered
+/// edges retain arbitrary amounts of new Eden data. One extra young round keeps
+/// those parents collectible until the sample reaches the controller. Leaf
+/// objects cannot retain a younger graph and keep the ordinary threshold.
+#[derive(Clone, Copy)]
+pub(super) struct PromotionPolicy {
+    survivals: u8,
+    parent_probe: bool,
+}
+
+impl PromotionPolicy {
+    pub(super) fn snapshot() -> Self {
+        #[cfg(test)]
+        let pinned = TENURING_SURVIVALS_TEST_OVERRIDE.with(Cell::get).is_some();
+        #[cfg(not(test))]
+        let pinned = false;
+        let pinned = pinned || tenuring_survivals_override().is_some();
+        Self {
+            survivals: tenuring_survivals(),
+            parent_probe: !pinned
+                && !PROMOTE_LOCK.with(Cell::get)
+                && !SURVIVOR_ROUND_MEASURED.with(Cell::get)
+                && PREV_COPIED_BYTES.with(Cell::get) != 0
+                && CAP_GROW_STREAK.with(Cell::get) != 0,
+        }
+    }
+
+    pub(super) fn survivals(self) -> u8 {
+        self.survivals
+    }
+
+    pub(super) fn parent_probe_active(self) -> bool {
+        self.parent_probe
+    }
+
+    #[inline]
+    pub(super) fn for_type(self, obj_type: u8) -> u8 {
+        if self.parent_probe && gc_type_info(obj_type).is_none_or(|info| !info.pointer_free) {
+            // The usual floor produces a first-round sample; one further age
+            // keeps its parents young until that sample can guide a later GC.
+            self.survivals.max(OCCUPANCY_MIN_SURVIVALS + 1)
+        } else {
+            self.survivals
+        }
+    }
+}
+
 /// Pin the promotion age for a threshold-sensitive test on this thread.
 /// Restores the previous pin on drop; the adaptive policy continues to run
 /// underneath it, but every copying minor snapshots the explicitly pinned age.
@@ -652,7 +701,22 @@ const TENURED_EDEN_DIVISOR: usize = 2;
 /// 27.6 MB of cohorts that die in the survivor space at 16 MB (+26% peak RSS).
 /// The survivor space this keeps is bounded by the target itself, 1 MB.
 pub(super) fn desired_survivor_bytes() -> usize {
-    scavenge_nursery_cap_effective_bytes().max(gc_scavenge_nursery_cap_bytes()) / 16
+    desired_survivor_bytes_at_cap(scavenge_nursery_cap_effective_bytes())
+}
+
+fn desired_survivor_bytes_at_cap(cap: usize) -> usize {
+    cap.max(gc_scavenge_nursery_cap_bytes()) / 16
+}
+
+/// Fresh allocation needed for one complete Eden lifetime observation.
+/// Ordinary survivors already consume part of the nursery's trigger budget.
+/// Credit that occupancy only up to its target: excessive carryover must not
+/// turn a short allocation interval into another quiet lifetime sample.
+pub(super) fn eden_allocation_window_bytes(cap: usize, survivor_bytes: usize) -> usize {
+    let survivor_budget =
+        desired_survivor_bytes_at_cap(cap).min(cap / usize::from(OCCUPANCY_MIN_SURVIVALS));
+    cap.saturating_sub(survivor_bytes.min(survivor_budget))
+        .max(1)
 }
 
 /// The effective influx-driven cap at the floor of the ladder, before the
@@ -683,6 +747,10 @@ pub(super) fn compute_target_survivals(eden_live_bytes: usize, desired_bytes: us
 /// alive with a stored age of 1, i.e. members of the cohort that the
 /// *previous* cycle's `eden_copied_bytes` counted.
 ///
+/// `full_eden_window` says fresh allocation covered the entry Eden budget,
+/// crediting carried survivors only within their occupancy target. Excessive
+/// survivor pressure or an early trigger cannot advance the quiet unlock clock.
+///
 /// Why not the whole space. The survivor spaces are a strict semispace pair,
 /// so the from-space at cycle N holds exactly what cycle N-1 copied, and
 /// `survivor_live_bytes / prev_copied_bytes` is a well-formed survival ratio —
@@ -699,6 +767,7 @@ pub(super) fn retune_after_scavenge(
     eden_live_bytes: usize,
     eden_copied_bytes: usize,
     first_round_live_bytes: usize,
+    full_eden_window: bool,
 ) {
     retune_nursery_cap_scale(eden_live_bytes);
     let desired = desired_survivor_bytes();
@@ -713,10 +782,15 @@ pub(super) fn retune_after_scavenge(
     let current = TENURING_SURVIVALS.with(Cell::get);
 
     if PROMOTE_LOCK.with(Cell::get) {
-        // Locked: stay at 1 while the influx stays substantial. The exit
-        // signal is the influx itself — measurable every cycle, unlike
-        // survivor occupancy, which is identically zero at S=1.
+        // A short Eden interval may mainly collect the previous survivors.
+        // It cannot rate fresh allocation's lifetime: counting it as quiet
+        // lets an extra aging round advance the unlock clock. Only completed
+        // Eden allocation windows advance quiet hysteresis. A substantial
+        // influx still refutes quietness, even on an early collection.
         if eden_live_bytes < substantial {
+            if !full_eden_window {
+                return;
+            }
             let streak = UNLOCK_STREAK.with(|s| s.get()).saturating_add(1);
             if streak >= RAISE_DEBOUNCE_CYCLES {
                 PROMOTE_LOCK.with(|l| l.set(false));
@@ -948,6 +1022,21 @@ pub(super) fn seed_promote_lock_from_sweep(eden_live_bytes: usize, eden_dead_byt
     set_survivals(current, 1, eden_live_bytes, "sweep-seed");
 }
 
+/// Called from the collector's existing diagnostic block, with no extra
+/// diagnostic check or state reads on the disabled path.
+pub(super) fn report_nursery_policy(eden_live_bytes: usize) {
+    eprintln!(
+        "[gc-nursery-policy] next_scale={} next_cap={} influx={eden_live_bytes} mean={} grow_streak={} shrink_streak={} promote_locked={} next_survivals={}",
+        NURSERY_CAP_SCALE.with(TriggerInput::get),
+        scavenge_nursery_cap_effective_bytes(),
+        MEAN_SURVIVING_OBJECT_BYTES.with(TriggerInput::get),
+        CAP_GROW_STREAK.with(Cell::get),
+        CAP_SHRINK_STREAK.with(Cell::get),
+        PROMOTE_LOCK.with(Cell::get),
+        TENURING_SURVIVALS.with(Cell::get),
+    );
+}
+
 fn diag_cap_scale(from: u8, to: u8, eden_live_bytes: usize) {
     if crate::gc::gc_diag_enabled() {
         eprintln!(
@@ -1002,6 +1091,77 @@ mod tests {
     use super::*;
 
     const MB: usize = 1024 * 1024;
+
+    // Existing cases describe completed Eden windows. Early survivor-driven
+    // collections exercise the explicit fourth input below.
+    fn retune_after_scavenge(eden_live: usize, copied: usize, first_round: usize) {
+        super::retune_after_scavenge(eden_live, copied, first_round, true);
+    }
+
+    #[test]
+    fn partial_eden_quiet_cycles_do_not_unlock_a_measured_promotion_lock() {
+        reset_for_test();
+        let d = desired_survivor_bytes();
+        retune_after_scavenge(2 * d, 2 * d, 0);
+        retune_after_scavenge(2 * d, 2 * d, 2 * d);
+        assert_eq!(tenuring_survivals(), 1);
+        for _ in 0..3 {
+            super::retune_after_scavenge(0, 0, 0, false);
+        }
+        assert_eq!(
+            tenuring_survivals(),
+            1,
+            "survivor-only minors are not quiet Eden windows"
+        );
+        super::retune_after_scavenge(0, 0, 0, true);
+        assert_eq!(tenuring_survivals(), 1);
+        super::retune_after_scavenge(0, 0, 0, false);
+        assert_eq!(
+            tenuring_survivals(),
+            1,
+            "an early minor cannot advance the streak"
+        );
+        super::retune_after_scavenge(0, 0, 0, true);
+        assert_eq!(tenuring_survivals(), 2);
+        reset_for_test();
+    }
+
+    #[test]
+    fn pending_first_growth_preserves_parents_until_the_sample_is_measured() {
+        reset_for_test();
+        let d = desired_survivor_bytes();
+        assert!(!PromotionPolicy::snapshot().parent_probe_active());
+        retune_after_scavenge(2 * d, 2 * d, 0);
+        let probing = PromotionPolicy::snapshot();
+        assert!(probing.parent_probe_active());
+        assert_eq!(probing.for_type(GC_TYPE_ARRAY), OCCUPANCY_MIN_SURVIVALS + 1);
+        assert_eq!(
+            probing.for_type(GC_TYPE_OBJECT),
+            OCCUPANCY_MIN_SURVIVALS + 1
+        );
+        assert_eq!(probing.for_type(GC_TYPE_STRING), OCCUPANCY_MIN_SURVIVALS);
+        // A real first round consumes the uncertainty. The existing promotion
+        // lock and cap feedback then proceed from the measured cohort.
+        retune_after_scavenge(2 * d, 2 * d, 2 * d);
+        assert!(!PromotionPolicy::snapshot().parent_probe_active());
+        assert_eq!(tenuring_survivals(), 1);
+        // A collection's snapshot cannot change as later feedback is written.
+        assert_eq!(probing.for_type(GC_TYPE_ARRAY), OCCUPANCY_MIN_SURVIVALS + 1);
+        reset_for_test();
+    }
+
+    #[test]
+    fn a_diagnostic_age_pin_overrides_the_parent_probe() {
+        reset_for_test();
+        let d = desired_survivor_bytes();
+        retune_after_scavenge(2 * d, 2 * d, 0);
+        assert!(PromotionPolicy::snapshot().parent_probe_active());
+        let _pin = set_survivals_for_test(2);
+        let pinned = PromotionPolicy::snapshot();
+        assert!(!pinned.parent_probe_active());
+        assert_eq!(pinned.for_type(GC_TYPE_ARRAY), 2);
+        reset_for_test();
+    }
 
     /// #7929: the constant band must buy a CONSTANT NUMBER OF OBJECTS.
     ///
