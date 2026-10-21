@@ -169,3 +169,58 @@ fn disposal_releases_callback_captures_but_rejected_reentry_keeps_them_alive() {
         );
     }
 }
+
+#[test]
+fn wasi_imports_are_provider_owned_only_when_enabled() {
+    let scope = RuntimeHandleScope::new();
+    let imports = object(&scope);
+    let namespace = object(&scope);
+    let callback = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+        crate::closure::js_closure_alloc(crate::fn_info!(unwind throwing_getter, 0), 0) as i64,
+    ));
+    set_field(
+        namespace.get_nanbox_f64(),
+        b"log",
+        callback.get_nanbox_f64(),
+    );
+    set_field(
+        imports.get_nanbox_f64(),
+        b"app:logging",
+        namespace.get_nanbox_f64(),
+    );
+    let world = json!({"imports":[
+        {"name":"wasi:cli/environment@0.2.0","functions":[{"name":"get-arguments"}]},
+        {"name":"app:logging","functions":[{"name":"log"}]}
+    ]});
+    let snapshot = scope.root_nanbox_f64(context::snapshot_imports(
+        &world,
+        imports.get_nanbox_f64(),
+        true,
+    ));
+    set_field(namespace.get_nanbox_f64(), b"log", undefined());
+    let captured = field(field(snapshot.get_nanbox_f64(), b"app:logging"), b"log");
+    assert_eq!(captured.to_bits(), callback.get_nanbox_f64().to_bits());
+    // Custom functions still must exist with providers enabled.
+    assert!(
+        crate::exception::catch_js_throw(|| context::snapshot_imports(
+            &world,
+            imports.get_nanbox_f64(),
+            true
+        ))
+        .is_err()
+    );
+    set_field(
+        namespace.get_nanbox_f64(),
+        b"log",
+        callback.get_nanbox_f64(),
+    );
+    // Omitting the opt-in never silently supplies a declared WASI import.
+    assert!(
+        crate::exception::catch_js_throw(|| context::snapshot_imports(
+            &world,
+            imports.get_nanbox_f64(),
+            false
+        ))
+        .is_err()
+    );
+}

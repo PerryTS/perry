@@ -101,14 +101,26 @@ pub extern "C" fn js_component_load(bytes: f64, contract: f64, imports: f64, opt
     let mut world = Value::Null;
     let mut wasm = Vec::new();
     let mut options = Vec::new();
+    let mut options_value = Value::Null;
     let mut error = None;
     let result = crate::exception::catch_js_throw(|| {
         let ops = host::ops();
         contract = string(contract_input.get_nanbox_f64());
         world =
             serde_json::from_str(&contract).unwrap_or_else(|_| fail("Invalid WIT manifest JSON"));
-        let imports =
-            scope.root_nanbox_f64(context::snapshot_imports(&world, imports.get_nanbox_f64()));
+        options_value =
+            if JSValue::from_bits(options_input.get_nanbox_f64().to_bits()).is_undefined() {
+                serde_json::json!({})
+            } else {
+                value::encode(options_input.get_nanbox_f64())
+            };
+        options = serde_json::to_vec(&options_value).unwrap();
+        let wasi = options_value.get("wasi").is_some_and(Value::is_object);
+        let imports = scope.root_nanbox_f64(context::snapshot_imports(
+            &world,
+            imports.get_nanbox_f64(),
+            wasi,
+        ));
         owner.set_nanbox_f64(context::publish(
             std::mem::take(&mut world),
             imports.get_nanbox_f64(),
@@ -119,11 +131,6 @@ pub extern "C" fn js_component_load(bytes: f64, contract: f64, imports: f64, opt
             crate::buffer::bytes::bytes(bytes.get_nanbox_f64(), no_gc).map(<[u8]>::to_vec)
         })
         .unwrap_or_else(|_| fail("Expected component bytes"));
-        options = if JSValue::from_bits(options_input.get_nanbox_f64().to_bits()).is_undefined() {
-            b"{}".to_vec()
-        } else {
-            serde_json::to_vec(&value::encode(options_input.get_nanbox_f64())).unwrap()
-        };
         let mut buffer = Buffer::default();
         unsafe {
             let pointer = (ops.perry_component_host_new)(
@@ -149,7 +156,7 @@ pub extern "C" fn js_component_load(bytes: f64, contract: f64, imports: f64, opt
         }
         owner.get_nanbox_f64()
     });
-    drop((contract, world, wasm, options, error));
+    drop((contract, world, wasm, options, options_value, error));
     finish(result)
 }
 

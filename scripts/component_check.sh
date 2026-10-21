@@ -35,4 +35,5 @@ python3 scripts/component_guest_acceptance.py \
   --wit "$CARGO_TARGET_DIR/perry-dev/perry-wit" \
   --componentize "$CARGO_TARGET_DIR/perry-dev/examples/componentize" \
   --runtime-dir "$CARGO_TARGET_DIR/wasm32-wasip2/release" \
-  --wasi-sdk "$WASI_SDK_PATH" --output "$out/guest"
+  --wasi-sdk "$WASI_SDK_PATH" --output "$out/guest" \
+  --native-runtime-dir "$CARGO_TARGET_DIR/perry-dev" --moving-gc

@@ -1,8 +1,9 @@
 # WASI hosting and reusable components
 
 Implementation roadmap, 2026-10-21. The P2 restoration is implemented in
-main, and P1 hosting is now implemented. Typed components and P3 async
-remain future work.
+main, and P1 hosting is now implemented. The initial synchronous typed
+component profile is qualified on Linux. The remaining P2 component work
+and P3 native async are still in progress.
 The audited baseline is
 `20fde48d3fa03d0a77699b7374f55e38cb143b59`.
 See [WASI_SUPPORT.md](WASI_SUPPORT.md) for the implemented standalone profile.
@@ -60,9 +61,11 @@ missing macro-export signatures, internal array FFI pointer mismatches and a
 WASI link path that omitted the runtime feature installer. Linux validation:
 6/6 smoke, 20/20 acceptance and 10/10 pinned-Node comparisons pass; see
 [the support document](WASI_SUPPORT.md) for the exact scope and tools.
-The same artifacts also pass all 36 execution checks on macOS ARM64, with
-fresh pinned-Node comparisons. Cross-platform compiler/runtime rebuilds and
-a required execution CI gate remain outstanding.
+Fresh compiler/runtime builds pass all 36 execution checks on Linux and
+macOS ARM64, with pinned-Node comparisons. The Windows object-buffer defect
+is repaired in PR #12954; fresh Windows execution qualification is pending.
+PR #12955 promotes the qualified Linux command profile into the required
+execution gate. Shipping matching compiler/runtime artifacts remains open.
 
 Acceptance:
 

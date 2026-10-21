@@ -9,6 +9,7 @@ actual exit status and a separate log; compilation alone is not acceptance.
 import argparse
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -24,7 +25,12 @@ def main():
     parser.add_argument("--runtime-dir", required=True, type=Path)
     parser.add_argument("--wasi-sdk", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--native-runtime-dir", type=Path,
+                        help="also qualify native Perry hosting with WASI providers")
+    parser.add_argument("--moving-gc", action="store_true")
     args = parser.parse_args()
+    if args.moving_gc and not args.native_runtime_dir:
+        parser.error("--moving-gc requires --native-runtime-dir")
     root = Path(__file__).resolve().parent.parent
     fixture = root / "test-wasi/components/transform"
     output = args.output.resolve()
@@ -50,13 +56,13 @@ def main():
     # Clear a previous verdict before any build can fail.
     (output / "results.json").write_text("[]\n")
 
-    def run(name, command, expected=None, timeout=600):
+    def run(name, command, expected=None, timeout=600, environment=None, moving=False):
         log = output / (name + ".log")
         start = time.monotonic()
         try:
             with log.open("w") as stream:
                 completed = subprocess.run([str(x) for x in command], cwd=root if command[0] == "cargo" else work,
-                    env=env, stdout=stream, stderr=subprocess.STDOUT, timeout=timeout)
+                    env=environment if environment is not None else env, stdout=stream, stderr=subprocess.STDOUT, timeout=timeout)
             status = completed.returncode
         except (OSError, subprocess.TimeoutExpired) as error:
             with log.open("a") as stream:
@@ -64,6 +70,13 @@ def main():
             status = 124
         if status == 0 and expected and expected not in log.read_text():
             status = 1
+        if status == 0 and moving:
+            contents = log.read_text()
+            moved = sum(int(n) for n in re.findall(r"\[gc-copy-minor\][^\n]*\bcopied_objects=(\d+)", contents))
+            if moved == 0 or "[gc-fromspace-protect]" not in contents:
+                with log.open("a") as stream:
+                    stream.write("FAIL: moving-GC/quarantine witness was not observed\n")
+                status = 1
         results.append({"name": name, "exitCode": status,
                         "seconds": round(time.monotonic() - start, 3), "log": str(log)})
         (output / "results.json").write_text(json.dumps(results, indent=2) + "\n")
@@ -116,6 +129,47 @@ def main():
     values_component = build_guest(values, "values-")
     run("run-values", [host, values_component, "--values"], timeout=120,
         expected="PASS canonical values: 14 import/export calls")
+    if args.native_runtime_dir:
+        native_env = env.copy()
+        native_env["PERRY_RUNTIME_DIR"] = str(args.native_runtime_dir.resolve())
+        native_env["PERRY_COMPONENT_AMBIENT"] = "must-not-leak"
+
+        def native_host(directory, guest, source, marker, extra=(), moving=False):
+            run(source + "-bindings", [args.wit.resolve(), directory / "world.wit",
+                directory / "generated", "plugin"])
+            executable = directory / (source + suffix)
+            host_env = native_env.copy()
+            if moving:
+                for knob in ["PERRY_GC_FORCE_EVACUATE", "PERRY_GC_VERIFY_EVACUATION",
+                             "PERRY_GC_PROTECT_FROMSPACE", "PERRY_GC_DIAG", "PERRY_GC_INSTRUMENTS"]:
+                    host_env[knob] = "1"
+            run(source + "-compile", [args.perry.resolve(), "compile", directory / (source + ".ts"),
+                "--no-auto-optimize", "--no-cache", "-o", executable], environment=host_env)
+            run(source + "-run", [executable, guest, *extra], expected=marker,
+                timeout=120, environment=host_env, moving=moving)
+
+        shutil.copyfile(fixture / "perry-host.ts", work / "perry-host.ts")
+        marker = "PASS Perry to Perry: 51 calls, typed results, callback GC, disposal"
+        native_host(work, component, "perry-host", marker)
+        if args.moving_gc:
+            shutil.copyfile(fixture / "perry-host.ts", work / "perry-host-moving.ts")
+            native_host(work, component, "perry-host-moving", marker, moving=True)
+        capabilities = output / "capabilities"
+        shutil.copytree(fixture.parent / "capabilities", capabilities, dirs_exist_ok=True)
+        capability_component = build_guest(capabilities, "capabilities-")
+        data = capabilities / "data"
+        for name in ["one", "two"]:
+            directory = data / name
+            directory.mkdir(parents=True, exist_ok=True)
+            (directory / "input.txt").write_text(name)
+            (directory / "output.txt").unlink(missing_ok=True)
+        (data / "outside.txt").write_text("must-not-leak")
+        escape = data / "one/escape.txt"
+        escape.unlink(missing_ok=True)
+        escape.symlink_to("../outside.txt")
+        native_host(capabilities, capability_component, "host",
+            "PASS WASI providers: opt-in, instance isolation, args, env, read-only, write grants, escape denial",
+            extra=[data])
     return 0
 
 

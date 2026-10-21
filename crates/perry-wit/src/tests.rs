@@ -236,3 +236,22 @@ fn flags_respect_the_component_binary_format_limit() {
         }
     }
 }
+
+#[test]
+fn provider_imports_can_be_omitted_without_erasing_application_requirements() {
+    let mut world = parse(TRANSFORM, None).unwrap();
+    let mut wasi = world.imports[0].clone();
+    wasi.name = "wasi:cli/environment@0.2.0".into();
+    world.imports.push(wasi);
+    let host = typescript(&world);
+    let application = host
+        .split("export interface ApplicationImports")
+        .nth(1)
+        .unwrap()
+        .split("export interface Component")
+        .next()
+        .unwrap();
+    assert!(application.contains("perry:transform/logging@1.0.0"));
+    assert!(!application.contains("wasi:"));
+    assert!(typescript_guest(&world).contains("wasi:cli/environment@0.2.0"));
+}

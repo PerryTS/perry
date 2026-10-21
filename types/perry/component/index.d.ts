@@ -7,6 +7,8 @@ export interface ComponentOptions {
   fuel?: number;
   /** Maximum core instances, memories and tables. Default: 64. */
   instances?: number;
+  /** Enable Preview 2 providers. Omission links no WASI providers. */
+  wasi?: WasiOptions;
 }
 
 declare const componentBrand: unique symbol;
@@ -30,3 +32,24 @@ export function disposeComponent(handle: ComponentHandle): void;
 /** Registers the exports of a Perry-authored library component. */
 export function registerComponentExports(contract: string, exports: unknown): void;
 export function callComponentImport(interfaceName: string, functionName: string, args: unknown[]): unknown;
+
+/** Explicit per-instance grants. An empty object enables clocks and randomness;
+ * stdin is closed, stdout/stderr are sinks, and files/network/env/args are denied. */
+export interface WasiOptions {
+  args?: string[];
+  env?: Record<string, string>;
+  inheritStdin?: boolean;
+  inheritStdout?: boolean;
+  inheritStderr?: boolean;
+  /** Directory grants default to read-only. Symlinks cannot escape the grant. */
+  preopens?: { hostPath: string; guestPath: string; readOnly?: boolean }[];
+  /** Protocols default off; addresses default empty. DNS grants name resolution,
+   * not access to the resolved addresses. Grants apply to binds and connects. */
+  network?: {
+    tcp?: boolean;
+    udp?: boolean;
+    dns?: boolean;
+    /** IP literals only. Omitted port explicitly permits every port on that IP. */
+    addresses?: { address: string; port?: number }[];
+  };
+}

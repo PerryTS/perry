@@ -244,8 +244,18 @@ fn generate(world: &World, guest: bool) -> String {
         out.push_str(&generator.wrappers(&world.imports, "callComponentImport("));
         out.push_str(";\n");
     } else {
+        generator.interface(
+            &mut out,
+            "ApplicationImports",
+            &world
+                .imports
+                .iter()
+                .filter(|interface| !interface.name.starts_with("wasi:"))
+                .cloned()
+                .collect::<Vec<_>>(),
+        );
         out.push_str("export interface Component { exports: Exports; dispose(): void; }\n");
-        out.push_str("export function load(bytes: Uint8Array, imports: Imports, options?: ComponentOptions): Component {\n  const handle = loadComponent(bytes, contract, imports, options);\n  return {\n    dispose: () => disposeComponent(handle),\n    exports: ");
+        out.push_str("export function load(bytes: Uint8Array, imports: Imports | ApplicationImports, options?: ComponentOptions): Component {\n  const handle = loadComponent(bytes, contract, imports, options);\n  return {\n    dispose: () => disposeComponent(handle),\n    exports: ");
         out.push_str(&generator.wrappers(&world.exports, "callComponent(handle, "));
         out.push_str("\n  };\n}\n\n");
     }

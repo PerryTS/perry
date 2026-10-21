@@ -19,9 +19,50 @@ do not import this module do not acquire its Wasmtime engine. The existing
 
 Each component has its own store, resource table, memory budget, fuel budget,
 and interrupt handle. There are no implicit filesystem, network, environment,
-or stdio capabilities. Imports must be supplied explicitly. Host-defined
-resource imports and built-in WASI providers are not implemented yet;
-consequently, this is not qualification of command worlds or `wasi:http`.
+or stdio capabilities. Application imports must be supplied explicitly.
+Opt-in WASI Preview 2 providers are available through `ComponentOptions.wasi`.
+General host-defined resource imports remain unimplemented; command worlds
+and `wasi:http` are not yet qualified.
+
+### Per-instance WASI providers
+
+```ts
+const plugin = load(bytes, applicationImports, {
+  wasi: {
+    args: ["plugin", "--mode=preview"],
+    env: { MODE: "preview" },
+    preopens: [{ hostPath: "./data", guestPath: "/data" }],
+  },
+});
+```
+
+Omitting `wasi` links no built-in WASI providers. `wasi: {}` enables clocks
+and random numbers, with closed stdin, discarded stdout/stderr, no arguments,
+no environment variables, no preopened directories and no network access.
+Each stream can explicitly inherit its host counterpart with `inheritStdin`,
+`inheritStdout` or `inheritStderr`. Arguments and environment are copied from
+options; there is no ambient environment inheritance option.
+
+Each preopen defaults to read-only. `readOnly: false` explicitly permits
+writes. Paths are resolved inside Wasmtime's directory capabilities, including
+symlink and parent traversal checks. Permissions apply to the host directory
+at component creation; a nonexistent host directory fails the load.
+
+Network access requires both a protocol grant (`network.tcp` or `network.udp`)
+and a matching entry in `network.addresses`. Entries contain an IP literal
+and optional port; omitting the port explicitly grants all ports on that IP.
+These grants cover binds and connections. `network.dns` separately enables
+name resolution and does not authorize access to resolved addresses. All
+three switches default to false, and the address list defaults to empty.
+This is a synchronous host: fuel and epoch interruption bound guest execution,
+not time spent in blocking host I/O. Host I/O cancellation remains future work.
+
+With providers enabled, the `wasi:` import namespace is provider-owned;
+application callbacks cannot override it. Generated `ApplicationImports`
+omits those interfaces while preserving required custom functions. Unsupported
+interfaces still fail instantiation; enabling WASI does not enable `wasi:http`.
+The provider dependency is pinned to Wasmtime-WASI 48.0.5. This implements P2
+interfaces, not the P3 native async component ABI.
 
 Flag declarations are limited to 1–32 labels, matching the
 [Component Model binary format](https://github.com/WebAssembly/component-model/blob/main/design/mvp/Binary.md#type-definitions).

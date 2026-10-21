@@ -117,6 +117,9 @@ pub unsafe extern "C" fn perry_component_host_new(
         let current = Arc::new(AtomicU64::new(context));
         let mut imports = Imports::new();
         for interface in &world.imports {
+            if options.wasi.is_some() && interface.name.starts_with("wasi:") {
+                continue;
+            }
             for function in &interface.functions {
                 let callback = callback.context("component imports require a callback")?;
                 let free =

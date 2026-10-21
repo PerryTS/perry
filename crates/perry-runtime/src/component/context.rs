@@ -129,11 +129,15 @@ pub(super) fn signature<'a>(
 
 /// Resolve getters and check callable imports before entering Wasmtime. The
 /// private snapshot roots the actual functions used for subsequent calls.
-pub(super) fn snapshot_imports(world: &Value, input: f64) -> f64 {
-    snapshot_functions(world, "imports", input)
+pub(super) fn snapshot_imports(world: &Value, input: f64, wasi: bool) -> f64 {
+    snapshot_filtered(world, "imports", input, wasi)
 }
 
 pub(super) fn snapshot_functions(world: &Value, side: &str, input: f64) -> f64 {
+    snapshot_filtered(world, side, input, false)
+}
+
+fn snapshot_filtered(world: &Value, side: &str, input: f64, wasi: bool) -> f64 {
     let scope = RuntimeHandleScope::new();
     let input = scope.root_nanbox_f64(input);
     let output = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
@@ -146,6 +150,9 @@ pub(super) fn snapshot_functions(world: &Value, side: &str, input: f64) -> f64 {
         let name = interface["name"]
             .as_str()
             .unwrap_or_else(|| fail("Invalid WIT interface name"));
+        if wasi && name.starts_with("wasi:") {
+            continue;
+        }
         let source = scope.root_nanbox_f64(if name.is_empty() {
             input.get_nanbox_f64()
         } else {

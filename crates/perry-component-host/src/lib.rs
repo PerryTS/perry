@@ -4,7 +4,9 @@ mod contract;
 pub mod ffi;
 mod limits;
 mod resources;
+mod wasi;
 mod wire;
+pub use wasi::{Address, Network, Preopen, WasiOptions};
 
 use anyhow::{bail, ensure, Context, Result};
 use perry_wit::World;
@@ -27,6 +29,8 @@ pub struct Options {
     pub fuel: u64,
     /// Maximum core instances used by one component/composition.
     pub instances: usize,
+    /// Opt-in Preview 2 providers with per-instance capabilities.
+    pub wasi: Option<WasiOptions>,
 }
 
 impl Default for Options {
@@ -35,6 +39,7 @@ impl Default for Options {
             memory_bytes: 64 * 1024 * 1024,
             fuel: 10_000_000,
             instances: 64,
+            wasi: None,
         }
     }
 }
@@ -42,6 +47,7 @@ impl Default for Options {
 struct StoreData {
     limits: limits::Limits,
     resources: resources::Resources,
+    wasi: Option<wasi::State>,
 }
 
 struct Live {
@@ -83,7 +89,13 @@ impl Host {
             .context("compiling component")?;
         contract::validate(&engine, &component, world)?;
         let mut linker = Linker::<StoreData>::new(&engine);
+        if options.wasi.is_some() {
+            wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
+        }
         for interface in &world.imports {
+            if options.wasi.is_some() && interface.name.starts_with("wasi:") {
+                continue;
+            }
             ensure!(
                 interface.resources.is_empty(),
                 "host-defined resource imports require a resource implementation"
@@ -143,6 +155,7 @@ impl Host {
             StoreData {
                 limits,
                 resources: resources::Resources::default(),
+                wasi: options.wasi.as_ref().map(WasiOptions::build).transpose()?,
             },
         );
         store.limiter(|data| &mut data.limits);
