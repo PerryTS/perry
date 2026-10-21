@@ -3,3 +3,5 @@ Store permanent function reflection source in independent 4 KiB raw-DEFLATE bloc
 Add exact nested, Unicode, class, arrow, async and generator reflection coverage, plus an opt-in `PERRY_SOURCE_READ_COUNT=1` runtime census. The pure Rust decoder reuses miniz_oxide already present in the workspace and introduces no native codec dependency.
 
 The opt-in source-read census also reports before an explicit `process.exit()`, which intentionally skips ordinary cleanup handlers.
+
+Stop the final frame at the requested source range end, avoiding unused suffix decoding while preserving exact property-key coercion. Cover partial backreferences, frame-end ranges, implicit function property keys and Unicode class identifiers.

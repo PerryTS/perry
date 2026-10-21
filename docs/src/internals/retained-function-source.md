@@ -16,7 +16,10 @@ displacement, decoded offset, source length and padding. Name and constructor
 tails follow that authoritative layout. Raw legacy info ranges remain readable.
 
 A source read decodes into call-local scratch storage, copies the requested
-intersection, then follows adjacent headers if the range spans frames. No
+intersection, then follows adjacent headers if the range spans frames. The
+last frame produces only the prefix through the requested range end; its
+unneeded suffix is not inflated. Fully traversed frames still validate stream
+completion and lengths. Frames are trusted compiler-owned image data. No
 decoded block, decoder state or runtime lookup index survives the call. Nested
 ranges share frames. Frame boundaries may split Unicode sequences; byte slicing
 and assembly happen before the original range becomes a string. Nothing

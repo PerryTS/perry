@@ -27,21 +27,33 @@ pub(super) unsafe fn decode_range(
             compressed <= block.len() + 256,
             "invalid retained source frame size"
         );
+        let take = len.min(decoded - offset);
+        let end = offset + take;
         let input = std::slice::from_raw_parts(frame.add(8), compressed);
         let mut state = DecompressorOxide::new();
         let (status, consumed, written) = decompress(
             &mut state,
             input,
-            &mut block[..decoded],
+            &mut block[..end],
             0,
             TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF,
         );
-        assert_eq!(
-            (status, consumed, written),
-            (TINFLStatus::Done, compressed, decoded),
-            "invalid retained source DEFLATE bytes"
-        );
-        let take = len.min(decoded - offset);
+        // Compiler-owned frames are trusted image data. A range ending inside
+        // this frame needs only its decoded prefix; do not inflate the suffix.
+        // Complete frames still validate the stream's end and byte lengths.
+        if end == decoded {
+            assert_eq!(
+                (status, consumed, written),
+                (TINFLStatus::Done, compressed, decoded),
+                "invalid retained source DEFLATE bytes"
+            );
+        } else {
+            assert_eq!(
+                (status, written),
+                (TINFLStatus::HasMoreOutput, end),
+                "invalid retained source DEFLATE prefix"
+            );
+        }
         result.extend_from_slice(&block[offset..offset + take]);
         len -= take;
         offset = 0;
@@ -85,5 +97,28 @@ mod tests {
             let got = unsafe { decode_range(encoded.as_ptr(), offset, len) };
             assert_eq!(got, bytes[offset..offset + len]);
         }
+    }
+    #[test]
+    fn compressed_ranges_stop_inside_matches_and_at_frame_end() {
+        // Independent zlib raw-DEFLATE fixture, containing long backreferences.
+        let payload: &[u8] = &[
+            43, 40, 74, 77, 203, 172, 80, 120, 178, 99, 218, 243, 169, 61, 10, 111, 23, 52, 48, 40,
+            20, 151, 166, 129, 132, 10, 70, 101, 70, 101, 70, 101, 70, 101, 70, 101, 70, 101, 70,
+            101, 70, 101, 70, 101, 70, 101, 70, 101, 70, 101, 70, 101, 70, 101, 70, 101, 134, 137,
+            12, 0,
+        ];
+        let pattern = b"prefix \xe4\xb8\x96\xe7\x95\x8c \xed\xa0\x80\0 suffix ";
+        let bytes: Vec<u8> = pattern.iter().copied().cycle().take(4096).collect();
+        let mut encoded = Vec::new();
+        encoded.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        encoded.extend_from_slice(&4096u32.to_le_bytes());
+        encoded.extend_from_slice(payload);
+        encoded.extend_from_slice(&frame(b"next frame"));
+        for (offset, len) in [(0, 1), (951, 323), (3418, 323), (4095, 1), (0, 4096)] {
+            let got = unsafe { decode_range(encoded.as_ptr(), offset, len) };
+            assert_eq!(got, bytes[offset..offset + len]);
+        }
+        let got = unsafe { decode_range(encoded.as_ptr(), 4093, 7) };
+        assert_eq!(got, [&bytes[4093..], b"next"].concat());
     }
 }
