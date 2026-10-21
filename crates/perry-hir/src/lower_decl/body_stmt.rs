@@ -343,6 +343,10 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
             }
         }
         ast::Stmt::Decl(ast::Decl::Class(class_decl)) => {
+            // A closure created earlier in this scope captured the class
+            // binding (`forward_class_bindings`): this declaration initializes
+            // it. Out of name resolution until then; see the helper.
+            let forward_binding = crate::lower_decl::take_forward_class_binding(ctx, class_decl);
             // Class declared inside a function body (e.g., noble-curves' Point class)
             // Resolve through any scope-local rename: a disambiguated duplicate
             // has a unique name, so it is NOT a real redeclaration and must be
@@ -574,7 +578,13 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                     // bypassing this evaluation's private brand and own static
                     // fields whenever another nested class already claimed C.
                     let binding_name = class_decl.ident.sym.to_string();
-                    let class_local = ctx.define_local(binding_name.clone(), Type::Any);
+                    let class_local = match forward_binding {
+                        Some(id) => {
+                            ctx.locals.push((binding_name.clone(), id, Type::Any));
+                            id
+                        }
+                        None => ctx.define_local(binding_name.clone(), Type::Any),
+                    };
                     ctx.record_local_source_span(class_local, class_decl.ident.span);
                     if shares_first_evaluation {
                         ctx.shared_first_decl_locals
@@ -613,6 +623,18 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                     });
                 }
                 result.extend(deferred_capture_snapshot);
+                // The class shares its template after all: the forward
+                // binding holds the template class value, and later
+                // references keep resolving to the class itself.
+                if let (false, Some(id)) = (fresh_binding, forward_binding) {
+                    result.push(Stmt::Let {
+                        id,
+                        name: class_decl.ident.sym.to_string(),
+                        ty: Type::Any,
+                        init: Some(Expr::ClassRef(class_name.clone())),
+                        mutable: false,
+                    });
+                }
                 // #5251 follow-up — a function-nested `class X { … }` whose
                 // name collides with an OUTER same-named local must SHADOW
                 // that local within this scope, exactly as a nested
@@ -647,6 +669,15 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                 // member keys for their spec-mandated side effects. See
                 // `push_deduped_class_computed_keys`.
                 push_deduped_class_computed_keys(ctx, &class_decl.class, &mut result)?;
+                if let Some(id) = forward_binding {
+                    result.push(Stmt::Let {
+                        id,
+                        name: class_decl.ident.sym.to_string(),
+                        ty: Type::Any,
+                        init: Some(Expr::ClassRef(class_name.clone())),
+                        mutable: false,
+                    });
+                }
                 // A duplicate-named class is skipped above, so its `extends`
                 // expression is never evaluated and its IsConstructor check
                 // never fires. Test262's superclass-* / invalid-extends cases

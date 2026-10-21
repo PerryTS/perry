@@ -10,12 +10,15 @@ use crate::lower::LoweringContext;
 use super::*;
 
 mod closure_ident_scan;
+mod forward_class_bindings;
 #[cfg(test)]
 mod hoisting_tests;
 mod switch_case_tdz;
 mod var_names;
 
 use closure_ident_scan::{cic_expr, cic_stmt};
+pub(crate) use forward_class_bindings::take_forward_class_binding;
+use forward_class_bindings::class_decl_binds_evaluated_class;
 pub(crate) use switch_case_tdz::register_switch_case_tdz_lets;
 pub(crate) use var_names::{
     collect_annexb_block_fn_decl_names, collect_lexical_decl_names,
@@ -93,6 +96,16 @@ pub(crate) fn rebind_nested_forward_scope_lets(
         return tdz_boxes;
     }
     for stmt in stmts {
+        if let ast::Stmt::Decl(ast::Decl::Class(class_decl)) = stmt {
+            if let Some(&id) = ctx.lexical_forward_decls.get(&class_decl.ident.span.lo.0) {
+                if ctx.nested_forward_scope_ids.contains(&id) {
+                    ctx.locals
+                        .push((class_decl.ident.sym.to_string(), id, Type::Any));
+                    tdz_boxes.push(id);
+                }
+            }
+            continue;
+        }
         let ast::Stmt::Decl(ast::Decl::Var(var_decl)) = stmt else {
             continue;
         };
@@ -250,7 +263,59 @@ pub(crate) fn pre_register_forward_captured_lets(
         // set rather than trusting the parser).
         let mut registered_here: std::collections::HashSet<String> =
             std::collections::HashSet::new();
+        // Class declarations of this scope that bind a per-evaluation class
+        // value (see `forward_class_bindings`).
+        let mut evaluated_classes: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        let scope_classes: std::collections::HashSet<String> = scope_stmts
+            .iter()
+            .filter_map(|stmt| match stmt {
+                ast::Stmt::Decl(ast::Decl::Class(class_decl)) => {
+                    Some(class_decl.ident.sym.to_string())
+                }
+                _ => None,
+            })
+            .collect();
         for stmt in scope_stmts {
+            if let ast::Stmt::Decl(ast::Decl::Class(class_decl)) = stmt {
+                let name = class_decl.ident.sym.to_string();
+                if class_decl_binds_evaluated_class(
+                    ctx,
+                    class_decl,
+                    &scope_classes,
+                    &evaluated_classes,
+                ) {
+                    evaluated_classes.insert(name.clone());
+                    // A closure created EARLIER in this scope reads the class
+                    // through its binding: pre-register it like a forward
+                    // `let` (boxed, TDZ until the declaration runs).
+                    let span_lo = class_decl.ident.span.lo.0;
+                    if seen_closure_refs.contains(&name)
+                        && !registered_here.contains(&name)
+                        && !ctx.lexical_forward_decls.contains_key(&span_lo)
+                    {
+                        if is_nested {
+                            let id = ctx.fresh_local();
+                            ctx.var_hoisted_ids.insert(id);
+                            ctx.tdz_forward_ids.insert(id);
+                            ctx.nested_forward_scope_ids.insert(id);
+                            ctx.lexical_forward_decls.insert(span_lo, id);
+                            registered_here.insert(name);
+                        } else if ctx
+                            .locals
+                            .lookup_index_in_scope(&name, body_entry_locals_len)
+                            .is_none()
+                        {
+                            let id = ctx.define_local(name.clone(), Type::Any);
+                            ctx.var_hoisted_ids.insert(id);
+                            ctx.tdz_forward_ids.insert(id);
+                            forward_boxed_ids.push(id);
+                            ctx.lexical_forward_decls.insert(span_lo, id);
+                            registered_here.insert(name);
+                        }
+                    }
+                }
+            }
             if let ast::Stmt::Decl(ast::Decl::Var(var_decl)) = stmt {
                 if matches!(
                     var_decl.kind,
