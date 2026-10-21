@@ -758,7 +758,12 @@ fn array_ptr(array: f64) -> *mut ArrayHeader {
     JsValue::from_bits(array.to_bits()).as_pointer()
 }
 
-fn register_callback(owner: f64, callback: f64) -> u64 {
+enum CallbackKind {
+    Write,
+    End,
+}
+
+fn register_callback(owner: f64, callback: f64, kind: CallbackKind) -> u64 {
     if !is_callback(callback) {
         return 0;
     }
@@ -785,7 +790,7 @@ fn register_callback(owner: f64, callback: f64) -> u64 {
     let callbacks = scope.root_nanbox(p::record_get(state.get(), "callbacks"));
     // SAFETY: This allocation runs on the owning agent; its array result is rooted or installed
     // into a rooted record before further allocation.
-    let entry = scope.root_addr(unsafe { perry_ffi::js_array_alloc(2) } as i64);
+    let entry = scope.root_addr(unsafe { perry_ffi::js_array_alloc(3) } as i64);
     // SAFETY: The binding-created arrays and each element are rooted; push reloads their addresses
     // and its result is rooted before another allocation.
     unsafe {
@@ -797,6 +802,11 @@ fn register_callback(owner: f64, callback: f64) -> u64 {
         let entry_ptr = perry_ffi::js_array_push(
             entry.get() as *mut ArrayHeader,
             JsValue::from_bits(callback.get().to_bits()),
+        );
+        let entry = scope.root_addr(entry_ptr as i64);
+        let entry_ptr = perry_ffi::js_array_push(
+            entry.get() as *mut ArrayHeader,
+            JsValue::from_bool(matches!(kind, CallbackKind::End)),
         );
         let entry = scope.root_addr(entry_ptr as i64);
         let updated = perry_ffi::js_array_push(
@@ -842,21 +852,59 @@ unsafe extern "C" fn cancel_tick(closure: *const RawClosureHeader, _: JsThis) ->
     let callbacks = scope.root_nanbox(perry_ffi::closure_capture_f64(closure, 1));
     let error = scope.root_nanbox(perry_ffi::closure_capture_f64(closure, 2));
     let resource = scope.root_nanbox(perry_ffi::closure_capture_f64(closure, 3));
+    // End callbacks use their actual dispatch array as `this`, as Node does.
+    // Move them out of the detached queue entries, leaving only their indices;
+    // the array below is the invocation source, not a receiver-only copy.
+    let mut end_callbacks = scope.root_addr(perry_ffi::js_array_alloc(0) as i64);
+    let count = perry_ffi::js_array_length(array_ptr(callbacks.get()));
+    for index in 0..count {
+        let entry = scope.root_nanbox(f64::from_bits(
+            perry_ffi::js_array_get(array_ptr(callbacks.get()), index).bits(),
+        ));
+        if perry_ffi::js_array_get(array_ptr(entry.get()), 2).bits() == JsValue::TRUE.bits() {
+            let callback = scope.root_nanbox(f64::from_bits(
+                perry_ffi::js_array_get(array_ptr(entry.get()), 1).bits(),
+            ));
+            let position = perry_ffi::js_array_length(end_callbacks.get() as *mut ArrayHeader);
+            end_callbacks = scope.root_addr(perry_ffi::js_array_push(
+                end_callbacks.get() as *mut ArrayHeader,
+                JsValue::from_bits(callback.get().to_bits()),
+            ) as i64);
+            perry_ffi::js_array_set(
+                array_ptr(entry.get()),
+                1,
+                JsValue::from_number(position as f64),
+            );
+        }
+    }
     loop {
-        let callbacks_ptr = array_ptr(callbacks.get());
-        if perry_ffi::js_array_length(callbacks_ptr) == 0 {
+        if perry_ffi::js_array_length(array_ptr(callbacks.get())) == 0 {
             break;
         }
-        let entry = scope.root_nanbox(js_array_shift_f64(callbacks_ptr));
-        let callback = scope.root_nanbox(f64::from_bits(
-            perry_ffi::js_array_get(array_ptr(entry.get()), 1).bits(),
-        ));
-        events::call_in(
-            resource.get(),
-            callback.get(),
-            JsThis::UNDEFINED,
-            &[error.get()],
-        );
+        let entry = scope.root_nanbox(js_array_shift_f64(array_ptr(callbacks.get())));
+        if perry_ffi::js_array_get(array_ptr(entry.get()), 2).bits() == JsValue::TRUE.bits() {
+            let position = perry_ffi::js_array_get(array_ptr(entry.get()), 1).to_number() as u32;
+            let callback = scope.root_nanbox(f64::from_bits(
+                perry_ffi::js_array_get(end_callbacks.get() as *mut ArrayHeader, position).bits(),
+            ));
+            // The real queued TickObject already owns context/exception restoration.
+            // Reload the rooted dispatch array after each potentially reentrant call.
+            events::call(
+                callback.get(),
+                JsThis::from_f64(p::boxed_addr(end_callbacks.get())),
+                &[error.get()],
+            );
+        } else {
+            let callback = scope.root_nanbox(f64::from_bits(
+                perry_ffi::js_array_get(array_ptr(entry.get()), 1).bits(),
+            ));
+            events::call_in(
+                resource.get(),
+                callback.get(),
+                JsThis::UNDEFINED,
+                &[error.get()],
+            );
+        }
     }
     let _ = owner;
     p::undefined()
@@ -905,7 +953,7 @@ fn unopened_write_failure(owner: f64, callback: f64) {
     let scope = TransientRootScope::enter();
     let owner = scope.root_nanbox(owner);
     let callback = scope.root_nanbox(callback);
-    register_callback(owner.get(), callback.get());
+    register_callback(owner.get(), callback.get(), CallbackKind::Write);
     let state = scope.root_nanbox(state(owner.get()));
     if JsValue::from_bits(p::record_get(state.get(), "unconnectedWriteFailed").to_bits()).to_bool()
     {
@@ -989,7 +1037,7 @@ pub(crate) fn write(owner: f64, chunk: f64, encoding: f64, callback: f64) -> f64
         return f64::from_bits(JsValue::FALSE.bits());
     }
     let (user, window) = if is_callback(callback.get()) {
-        let user = register_callback(owner.get(), callback.get());
+        let user = register_callback(owner.get(), callback.get(), CallbackKind::Write);
         // Callback registration allocates, so its old projection ends here.
         // SAFETY: The receiver is rooted and projection validates its agent, family and open
         // lifecycle; the pointer is consumed before allocation/JS or freshly projected afterward.
@@ -1232,7 +1280,7 @@ pub(crate) fn end(owner: f64, chunk: f64, encoding: f64, callback: f64) -> f64 {
         }
         return owner.get();
     }
-    let user = register_callback(owner.get(), callback.get());
+    let user = register_callback(owner.get(), callback.get(), CallbackKind::End);
     // SAFETY: The retained link belongs to this agent; projection checks family/open lifecycle, and
     // field/core access ends before allocation or JS.
     let already_ended = unsafe {
