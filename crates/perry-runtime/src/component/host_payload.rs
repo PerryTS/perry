@@ -168,7 +168,7 @@ fn reference(owner: f64, value: &Value, generation_delta: u32) -> (f64, f64) {
     (id, row)
 }
 
-pub(super) fn event(owner: f64, event: &Value) {
+pub(in crate::component) fn event(owner: f64, event: &Value) {
     match event["kind"].as_str() {
         Some("lower") => {
             let created = event["created"]
@@ -266,7 +266,7 @@ fn invoke_destructor(callback: f64, payload: f64) {
     }
 }
 
-pub(super) fn dispose_owner(owner: f64) {
+pub(in crate::component) fn dispose_owner(owner: f64) {
     let scope = RuntimeHandleScope::new();
     let owner = scope.root_nanbox_f64(owner);
     unsafe {
