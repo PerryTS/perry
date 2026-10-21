@@ -198,6 +198,7 @@ pub fn map_cons(
         MCall { key, call } => MCall { key, call: k(call) },
         Chain { origin, key, act } => Chain { origin, key, act: act_map(act, &mut n, &mut k) },
         TopSink { reason } => TopSink { reason },
+        ContractThis { tmpl, reason } => ContractThis { tmpl, reason },
         TopIfAny { dst, from, reason } => TopIfAny { dst: n(dst), from: n(from), reason },
         Hard { kind, reason } => Hard { kind, reason },
         AddsKeys => AddsKeys,
@@ -288,6 +289,7 @@ fn gen_kind(c: &Cons) -> bool {
             | SuperCtor { .. }
             | MCall { .. }
             | TopSink { .. }
+            | ContractThis { .. }
             | TopIfAny { .. }
             | Hard { .. }
             | AddsKeys
@@ -726,9 +728,13 @@ impl Model {
             let inst = self.instance((2, 0, ft));
             dsts.push(self.sum.insts[inst as usize].this);
         }
+        let inst = self.published_this.get(&f).copied();
         for d in dsts {
             self.add_top(d, why);
             self.add_prim(d, prim::ALL);
+            if let Some(i) = inst {
+                self.add_tok(d, i);
+            }
         }
     }
 
@@ -898,17 +904,27 @@ impl Model {
         let why = |m: &Self| format!("param of escaped function: {}", m.reasons[reason as usize]);
         let terms = self.sum.insts[inst as usize].params.clone();
         let fparams = self.funcs[f as usize].params.clone();
+        let contract = self.contract_fns.contains(&f);
         for (i, &p) in fparams.iter().enumerate() {
+            let mk = contract.then(|| self.param_marker_tok(f, i as u32));
             for d in [terms[i], p] {
                 if d != NO_NODE {
                     self.add_top(d, why);
                     self.add_prim(d, prim::ALL);
+                    if let Some(mk) = mk {
+                        self.add_tok(d, mk);
+                    }
                 }
             }
         }
         let r = self.sum.insts[inst as usize].ret;
         if r != NO_NODE {
-            self.sink_node(r, reason);
+            if contract {
+                // Design §11.2: the result is checked after the solve.
+                self.contract_rets.push((f, r));
+            } else {
+                self.sink_node(r, reason);
+            }
         }
     }
 

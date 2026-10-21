@@ -332,6 +332,10 @@ pub enum Cons {
     },
     /// Every token escapes (goes to ⊤), with the reason.
     TopSink { reason: u32 },
+    /// The `this` of a contract stand-in of another unit's class `tmpl`
+    /// (design §11.2): its instances are inside the contract; any other
+    /// receiver escapes (that unit runs the method on it unseen).
+    ContractThis { tmpl: TmplId, reason: u32 },
     /// Once anything (a token or a primitive) reaches the node, `dst` holds
     /// ⊤ and everything `from` holds: the result of a call that exists only
     /// when an argument reaches it.
@@ -470,6 +474,7 @@ impl Cons {
             Cons::MCall { .. } => "mcall",
             Cons::Chain { .. } => "chain",
             Cons::TopSink { .. } => "top",
+            Cons::ContractThis { .. } => "contractthis",
             Cons::TopIfAny { .. } => "topifany",
             Cons::Hard { .. } => "hard",
             Cons::AddsKeys => "addskeys",
@@ -777,6 +782,32 @@ pub struct Model {
     pub cw9_shared: FxHashMap<(u32, u32, u8, u32), u32>,
     pub cw9_modkind: Vec<u8>,
     pub fn_inst: FxHashMap<FnIdx, TmplId>,
+    /// Per-unit contracts (design §11.2): the methods of a published class
+    /// run on its receiver token (`Model::publish_class`).
+    pub published_this: FxHashMap<FnIdx, Tok>,
+    /// A published class's receiver token -> the instance other units
+    /// construct: what a method does to its receiver happens to that
+    /// instance.
+    pub contract_recv: FxHashMap<Tok, Tok>,
+    /// Another unit's templates this unit sees through a contract, with the
+    /// facts their defining unit published (design §11.2).
+    pub foreign: FxHashMap<TmplId, crate::TemplateFacts>,
+    /// Foreign templates this unit stored into (a census report).
+    pub foreign_written: crate::pts::FxHashSet<TmplId>,
+    /// Published functions with a contract (design §11.2): their results
+    /// are checked after the solve instead of escaping.
+    pub contract_fns: crate::pts::FxHashSet<FnIdx>,
+    pub contract_rets: Vec<(FnIdx, NodeId)>,
+    /// A contract function's parameter markers: one object token per
+    /// parameter standing for everything the caller passes (anything read
+    /// from it is the marker again), and what the callee did with it
+    /// (`MARK_*`).
+    pub param_marker: FxHashMap<Tok, (FnIdx, u32)>,
+    pub marker_of: FxHashMap<(FnIdx, u32), Tok>,
+    pub marker_use: FxHashMap<Tok, u8>,
+    /// The `this` node of each instance method / accessor of a class: the
+    /// binding its entry guard tests (design §11.4).
+    pub this_class: FxHashMap<NodeId, TmplId>,
     /// Birth keys / definite keys of `new f()` instances, from the
     /// construction-phase analysis of `f`'s body.
     pub fn_birth: FxHashMap<FnIdx, (Vec<Atom>, Vec<Atom>)>,
@@ -1235,4 +1266,57 @@ pub fn esc_key(s: &str) -> String {
         }
     }
     o
+}
+
+/// A contract parameter's marker was read through (the caller's getters
+/// may run), touched by a builtin protocol (ToPrimitive, iteration …: the
+/// caller's methods may run), or used beyond that (stored into, opened,
+/// called, a method called on it, escaped: the argument escapes).
+pub const MARK_READ: u8 = 1;
+pub const MARK_TOUCH: u8 = 2;
+pub const MARK_ESCAPE: u8 = 4;
+
+impl Model {
+    /// Record what the callee did to a parameter marker.
+    #[inline]
+    pub(crate) fn mark_use(&mut self, t: Tok, bits: u8) {
+        if !self.param_marker.is_empty() && self.param_marker.contains_key(&t) {
+            if let Some(pat) = crate::solve::cwu2_esc() { // TEMP CWU2
+                if self.tok_name(t).contains(pat.as_str()) && bits & MARK_ESCAPE != 0 {
+                    let bt = std::backtrace::Backtrace::force_capture().to_string();
+                    let fr: Vec<&str> = bt.lines().filter(|l| l.contains("perry_wpfacts::")).take(6).collect();
+                    eprintln!("CWU2 use {} bits={bits} {:?}", self.tok_name(t), fr);
+                }
+            }
+            *self.marker_use.entry(t).or_default() |= bits;
+        }
+    }
+
+    /// The marker of parameter `i` of contract function `f`.
+    pub(crate) fn param_marker_tok(&mut self, f: FnIdx, i: u32) -> Tok {
+        if let Some(&t) = self.marker_of.get(&(f, i)) {
+            return t;
+        }
+        let tm = self.tmpls.len() as TmplId;
+        let display = format!("{}:param{i}", self.funcs[f as usize].name);
+        self.tmpls.push(Template {
+            kind: TmplKind::BObj { module: 0, site: 0, what: "parameter marker" },
+            display,
+            birth_keys: Vec::new(),
+            definite: Vec::new(),
+            parent: None,
+            ctor: None,
+            native_parent: None,
+            accessor_keys: Vec::new(),
+            has_computed_members: false,
+            field_init: None,
+            proto_members: Vec::new(),
+        });
+        let t = self.tok(TokKind::Obj(tm, NO_CTX));
+        let any = self.field_any(t);
+        self.add_tok(any, t);
+        self.param_marker.insert(t, (f, i));
+        self.marker_of.insert((f, i), t);
+        t
+    }
 }

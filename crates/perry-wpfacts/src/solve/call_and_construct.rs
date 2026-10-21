@@ -49,6 +49,9 @@ impl Model {
             | TokKind::ModNs(_) => {
                 // Not callable (TypeError) — unless it is a builtin object
                 // that is a function (Proxy over a function etc., ⊤ anyway).
+                // A parameter marker stands for the caller's values: one may
+                // be a function.
+                self.mark_use(t, crate::model::MARK_ESCAPE);
             }
         }
     }
@@ -316,6 +319,9 @@ impl Model {
     /// The token `new` at `call` gives template `tm`: one per birth site. A
     /// template-wide mark already on the template's own token holds for it.
     pub(crate) fn site_tok(&mut self, tm: TmplId, call: CallId) -> Tok {
+        // Another unit's class: one token for all its instances here (its
+        // facts are its defining unit's).
+        let call = if self.foreign.contains_key(&tm) { NO_CTX } else { call };
         let k = TokKind::Obj(tm, call);
         if let Some(&t) = self.tok_index.get(&k) {
             return t;
@@ -497,6 +503,13 @@ impl Model {
 
     /// `recv.key(args)` on token `t`.
     pub(super) fn method_on(&mut self, t: Tok, key: Key, call: CallId) {
+        // A builtin protocol call (ToPrimitive, iteration ...) is a touch.
+        let bits = if self.protocol_calls.contains(&call) {
+            crate::model::MARK_TOUCH
+        } else {
+            crate::model::MARK_ESCAPE
+        };
+        self.mark_use(t, bits);
         if t == TOP {
             self.call_tok(call, TOP, Some(TOP));
             return;
@@ -603,6 +616,16 @@ impl Model {
             self.add_top(p, why);
             self.add_prim(p, prim::ALL);
         }
+        if self.contract_fns.contains(&f) {
+            // Design §11.2: other units call it through its contract.
+            for (i, &p) in fi.params.iter().enumerate() {
+                let mk = self.param_marker_tok(f, i as u32);
+                self.add_tok(p, mk);
+            }
+            self.add_top(fi.args_all, why);
+            self.contract_rets.push((f, fi.ret));
+            return;
+        }
         if let Some(rest) = fi.rest {
             let r = self.field_any_node_of_node(rest);
             self.add_top(r, why);
@@ -611,7 +634,116 @@ impl Model {
         self.sink_node(fi.ret, reason);
     }
 
+    /// A class published to other units as a contract (design §11.2), not
+    /// an escape: they may construct it with unknown arguments, read every
+    /// field of what they construct (getters run, contents leave), call its
+    /// methods and accessors on those instances, and use its static members
+    /// as unknown code does. Its methods run with `this` = ⊤ (any receiver)
+    /// and that instance. Everything else they do to it (stores, opening
+    /// operations, the prototype or a method used as a value, passing it to
+    /// code outside the program) is their census report; a broken class is
+    /// published as an escape instead.
+    ///
+    /// A method called by another unit runs on one of those instances: its
+    /// `this` holds the class's receiver token. Reading through it gives ⊤
+    /// (as reading through ⊤ does: the method sees whatever other units did),
+    /// and storing into it, an opening operation on it or its escape happen
+    /// to the constructed instance (`contract_recv`). Reading the instance's
+    /// own contents there would run every method over every value other
+    /// units can put in it (commander's Command: 217 receiver layouts per
+    /// method).
+    pub(crate) fn publish_class(&mut self, tm: TmplId, reason: u32) {
+        let cobj = self.tok(TokKind::ClassObj(tm));
+        let inst = self.tok(TokKind::Obj(tm, NO_CTX));
+        let rt = self.tmpls.len() as TmplId;
+        let display = format!("{}:receiver", self.tmpls[tm as usize].display);
+        self.tmpls.push(Template {
+            kind: TmplKind::BObj { module: 0, site: 0, what: "contract receiver" },
+            display,
+            birth_keys: Vec::new(),
+            definite: Vec::new(),
+            parent: None,
+            ctor: None,
+            native_parent: None,
+            accessor_keys: Vec::new(),
+            has_computed_members: false,
+            field_init: None,
+            proto_members: Vec::new(),
+        });
+        let recv = self.tok(TokKind::Obj(rt, NO_CTX));
+        let any = self.field_any(recv);
+        self.add_top(any, |m| format!("receiver of a method another unit calls: {}", m.reasons[reason as usize]));
+        self.add_prim(any, prim::ALL);
+        self.contract_recv.insert(recv, inst);
+        // Static members and the class object's own fields.
+        let pa = self.atom("prototype");
+        let mut statics: Vec<NodeId> = self
+            .fields
+            .iter()
+            .filter(|(&(h, a), _)| h == cobj && a != pa)
+            .map(|(_, &n)| n)
+            .collect();
+        statics.extend(self.field_any.get(&cobj).copied());
+        statics.sort_unstable();
+        for n in statics {
+            self.sink_node(n, reason);
+        }
+        // Methods along the chain inside the unit: they run on `inst` and on
+        // unknown receivers.
+        let ca = self.atom("constructor");
+        let mut cur = Some(tm);
+        let mut members: Vec<NodeId> = Vec::new();
+        while let Some(c) = cur {
+            let proto = self.tok(TokKind::Proto(c));
+            members.extend(
+                self.fields
+                    .iter()
+                    .filter(|(&(h, a), _)| h == proto && a != ca)
+                    .map(|(_, &n)| n),
+            );
+            members.extend(self.field_any.get(&proto).copied());
+            cur = self.tmpls[c as usize].parent;
+        }
+        members.sort_unstable();
+        for &n in &members {
+            for t in self.nodes[n as usize].pts.to_sorted() {
+                if let TokKind::Func(f, _) = self.toks[t as usize] {
+                    self.published_this.insert(f, recv);
+                }
+            }
+        }
+        for n in members {
+            self.sink_node(n, reason);
+        }
+        // Other units construct it with unknown arguments.
+        let ret = self.node_l("contract-new");
+        let args_n = self.node_l("contract-args");
+        self.add_top(args_n, |m| {
+            format!("constructor args from another unit: {}", m.reasons[reason as usize])
+        });
+        self.add_prim(args_n, prim::ALL);
+        let call = self.calls.len() as CallId;
+        self.calls.push(CallSite {
+            this: ThisArg::Undef,
+            args: vec![args_n; 8],
+            spread: vec![],
+            ret,
+            site: 0,
+        });
+        self.construct(call, cobj);
+        // ... and read every field of what they construct.
+        let all = self.all_fields(inst);
+        self.cons(all, Cons::TopSink { reason });
+        let r = self.node_l("contract-load");
+        self.sink_node(r, reason);
+        self.accessor_walk(inst, inst, Key::Any, ChainAct::Load(r));
+    }
+
     pub(super) fn escape_inner(&mut self, t: Tok, reason: u32) {
+        self.mark_use(t, crate::model::MARK_ESCAPE);
+        if let Some(&i) = self.contract_recv.get(&t) {
+            self.escape(i, reason);
+        }
         if matches!(self.toks[t as usize], TokKind::Proto(_)) {
             self.mark_escaped(t, reason);
             self.resume_stopped(t);
@@ -736,6 +868,10 @@ impl Model {
         if t == TOP {
             return;
         }
+        if let Some(&i) = self.contract_recv.get(&t) {
+            self.mark_hard(i, kind, reason);
+        }
+        self.mark_use(t, crate::model::MARK_ESCAPE);
         // `Object.setPrototypeOf(Object.prototype, p)` throws unless `p` is
         // null (its [[Prototype]] already): nothing changes (immutable
         // prototype exotic object). A ⊤ target that may be it is no E6 on it.
