@@ -6,6 +6,7 @@ let escaped: Parameters<typeof counter.value>[0] | undefined;
 function check(ok: boolean, message: string): void { if (!ok) throw new Error(message); }
 register({
   "perry:guest-resources/counters@1.0.0": {
+    "read-imported"(value) { collect(); return foreign["[method]token.read"](value); },
     "[constructor]counter"(value) {
       return counter.create({ value }, (payload) => {
         collect();

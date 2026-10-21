@@ -304,3 +304,50 @@ fn provider_imports_can_be_omitted_without_erasing_application_requirements() {
     assert!(!application.contains("wasi:"));
     assert!(typescript_guest(&world).contains("wasi:cli/environment@0.2.0"));
 }
+
+#[test]
+fn resource_aliases_preserve_nominal_identity_and_compile() {
+    let source = r#"package test:resource-alias;
+        interface origin { resource item { constructor(); read: func() -> u32; } }
+        interface api {
+            use origin.{item as renamed};
+            forward: func(value: own<renamed>) -> own<renamed>;
+            inspect: func(value: borrow<renamed>) -> u32;
+        }
+        world plugin { import origin; export api; }
+    "#;
+    let world = parse(source, None).unwrap();
+    assert_eq!(
+        world.imports[0].resources["item"],
+        world.exports[0].resources["renamed"]
+    );
+    let guest = typescript_guest(&world);
+    assert!(
+        !guest.contains("create: (payload:"),
+        "an alias must not introduce a new resource factory"
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("world.wit");
+    std::fs::write(&input, source).unwrap();
+    let files = canonical_guest(&input, None).unwrap();
+    for (name, content) in &files {
+        std::fs::write(dir.path().join(name), content).unwrap();
+    }
+    let output = std::process::Command::new("clang")
+        .args([
+            "-std=c11",
+            "-Wall",
+            "-Werror",
+            "-Wno-unused-function",
+            "-fsyntax-only",
+        ])
+        .arg(dir.path().join("perry_adapter.c"))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&files["perry_adapter.c"])
+    );
+}

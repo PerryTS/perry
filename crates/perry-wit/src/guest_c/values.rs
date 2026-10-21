@@ -167,6 +167,7 @@ impl<'a> Emitter<'a> {
                     wit_parser::Handle::Own(id) => (*id, true),
                     wit_parser::Handle::Borrow(id) => (*id, false),
                 };
+                let resource = crate::resolve::resource_id(self.resolve, resource);
                 let info = &self.resources[&resource];
                 let handle = if info.local && !owned {
                     "0".into()
@@ -355,6 +356,7 @@ impl<'a> Emitter<'a> {
                     wit_parser::Handle::Own(id) => (*id, true),
                     wit_parser::Handle::Borrow(id) => (*id, false),
                 };
+                let resource = crate::resolve::resource_id(self.resolve, resource);
                 let info = &self.resources[&resource];
                 let local = info.local;
                 let value = format!(

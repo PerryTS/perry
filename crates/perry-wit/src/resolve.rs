@@ -20,6 +20,13 @@ pub fn parse(source: &str, world: Option<&str>) -> Result<World> {
     convert(&resolve, world)
 }
 
+pub(super) fn resource_id(resolve: &Resolve, mut id: TypeId) -> TypeId {
+    while let TypeDefKind::Type(wit_parser::Type::Id(next)) = resolve.types[id].kind {
+        id = next;
+    }
+    id
+}
+
 pub(crate) fn convert(resolve: &Resolve, id: WorldId) -> Result<World> {
     let world = &resolve.worlds[id];
     let name = world.package.map_or_else(
@@ -73,9 +80,10 @@ impl Converter<'_> {
                     let mut functions = Vec::new();
                     let mut resources = BTreeMap::new();
                     for (name, id) in &interface.types {
-                        let key = self.definition(*id)?;
-                        if matches!(self.resolve.types[*id].kind, TypeDefKind::Resource) {
-                            resources.insert(name.clone(), key);
+                        self.definition(*id)?;
+                        let resource = resource_id(self.resolve, *id);
+                        if matches!(self.resolve.types[resource].kind, TypeDefKind::Resource) {
+                            resources.insert(name.clone(), self.definition(resource)?);
                         }
                     }
                     for function in interface.functions.values() {
@@ -177,9 +185,11 @@ impl Converter<'_> {
         let ty = match &def.kind {
             TypeDefKind::Type(ty) => self.ty(*ty)?,
             TypeDefKind::Resource => Type::Resource,
-            TypeDefKind::Handle(wit_parser::Handle::Own(id)) => Type::Own(self.definition(*id)?),
+            TypeDefKind::Handle(wit_parser::Handle::Own(id)) => {
+                Type::Own(self.definition(resource_id(self.resolve, *id))?)
+            }
             TypeDefKind::Handle(wit_parser::Handle::Borrow(id)) => {
-                Type::Borrow(self.definition(*id)?)
+                Type::Borrow(self.definition(resource_id(self.resolve, *id))?)
             }
             TypeDefKind::Record(record) => Type::Record(
                 record

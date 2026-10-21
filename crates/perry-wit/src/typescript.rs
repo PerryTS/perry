@@ -80,6 +80,17 @@ impl Typescript<'_> {
         }
     }
 
+    fn is_resource<'b>(&'b self, mut ty: &'b Type) -> bool {
+        for _ in 0..=self.world.types.len() {
+            match ty {
+                Type::Resource => return true,
+                Type::Ref(key) => ty = &self.world.types[key].ty,
+                _ => return false,
+            }
+        }
+        false
+    }
+
     fn is_byte<'b>(&'b self, mut ty: &'b Type) -> bool {
         // WIT aliases preserve canonical representation. Keep declarations in
         // agreement with the runtime, which resolves aliases before lifting.
@@ -226,7 +237,7 @@ fn generate(world: &World, guest: bool) -> String {
     )
     .unwrap();
     for (key, definition) in &world.types {
-        if !matches!(definition.ty, Type::Resource) {
+        if !generator.is_resource(&definition.ty) {
             writeln!(
                 out,
                 "export type {} = {};",

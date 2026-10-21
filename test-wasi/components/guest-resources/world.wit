@@ -7,6 +7,8 @@ interface foreign {
 }
 interface observe { dropped: func(value: u32); }
 interface counters {
+  use foreign.{token as imported-token};
+  read-imported: func(value: borrow<imported-token>) -> u32;
   resource counter { constructor(value: u32); read: func() -> u32; }
   consume: func(value: own<counter>);
   keep-borrow: func(value: borrow<counter>);

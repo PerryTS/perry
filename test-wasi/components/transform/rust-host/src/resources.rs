@@ -6,6 +6,10 @@ use wasmtime::component::{
 };
 use wasmtime::{Store, StoreContextMut};
 
+// Forced evacuation plus verification walks the guest heap on every collect.
+// Keep a finite per-call budget, with headroom for this instrumented profile.
+const RESOURCE_FUEL: u64 = 1_000_000_000;
+
 struct Token(u32);
 #[derive(ComponentType, Lift, Lower)]
 #[component(record)]
@@ -75,7 +79,7 @@ fn call_interface(
     params: &[Val],
     count: usize,
 ) -> Result<Vec<Val>> {
-    store.set_fuel(100_000_000)?;
+    store.set_fuel(RESOURCE_FUEL)?;
     let namespace = instance
         .get_export_index(&mut *store, None, interface)
         .context("missing resource interface")?;
@@ -147,6 +151,26 @@ pub(super) fn run_dual(store: &mut Store<State>, instance: &Instance) -> Result<
 }
 
 pub(super) fn run(store: &mut Store<State>, instance: &Instance) -> Result<()> {
+    store.set_fuel(RESOURCE_FUEL)?;
+    let host_token = store.data_mut().table.push(Token(77))?;
+    let namespace = instance
+        .get_export_index(&mut *store, None, "perry:guest-resources/counters@1.0.0")
+        .context("missing counters")?;
+    let index = instance
+        .get_export_index(&mut *store, Some(&namespace), "read-imported")
+        .context("missing resource alias probe")?;
+    let read = instance
+        .get_func(&mut *store, &index)
+        .context("missing alias function")?
+        .typed::<(Resource<Token>,), (u32,)>(&*store)?;
+    ensure!(
+        read.call(&mut *store, (Resource::new_borrow(host_token.rep()),))? == (77,),
+        "borrowed imported resource alias changed identity"
+    );
+    ensure!(
+        store.data_mut().table.delete(host_token)?.0 == 77,
+        "borrow consumed host ownership"
+    );
     ensure!(
         call(store, instance, "exercise-imports", &[], 1)? == [Val::U32(4)],
         "import exercise did not finish"
