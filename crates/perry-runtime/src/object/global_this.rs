@@ -38,6 +38,7 @@ mod math_temporal;
 
 // Complete namespace construction, reached through feature hooks.
 mod builtin_namespace;
+mod json_reflect_namespaces;
 mod math_namespace;
 
 mod object_intrinsic;
@@ -179,9 +180,8 @@ pub use install_static::js_promise_static_function_value;
 pub(crate) use install_static::{
     builtin_species_getter_thunk, install_atomics_namespace_members,
     install_builtin_constructor_statics, install_builtin_species_accessor,
-    install_constructor_static, install_json_namespace_members, install_noop_proto_methods,
-    install_proto_method, install_proto_method_alias, install_proto_method_rest,
-    install_proto_method_rest_with_length, install_reflect_namespace_members,
+    install_constructor_static, install_noop_proto_methods, install_proto_method,
+    install_proto_method_alias, install_proto_method_rest, install_proto_method_rest_with_length,
     subtle_crypto_decapsulate_bits_thunk, subtle_crypto_decapsulate_key_thunk,
     subtle_crypto_encapsulate_bits_thunk, subtle_crypto_encapsulate_key_thunk,
     url_pattern_exec_thunk, url_pattern_test_thunk, ConstructorStatics,

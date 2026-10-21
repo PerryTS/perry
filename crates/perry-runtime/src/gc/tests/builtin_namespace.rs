@@ -71,3 +71,67 @@ fn builtin_namespace_survives_copying_and_is_independent_per_thread() {
             .expect("realm passed");
     }
 }
+
+#[test]
+fn json_reflect_namespace_methods_survive_copying_and_thread_mutation() {
+    for (namespace, method, count) in [("JSON", "parse", 5), ("Reflect", "isExtensible", 14)] {
+        for _ in 0..2 {
+            std::thread::Builder::new()
+                .stack_size(16 << 20)
+                .spawn(move || {
+                    let _guard = CopyingNurseryTestGuard::new(0);
+                    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+                    register_runtime_handle_root_scanner_for_tests();
+                    let scope = RuntimeHandleScope::new();
+                    let ns =
+                        scope.root_nanbox_f64(crate::object::js_get_global_this_builtin_value(
+                            namespace.as_ptr(),
+                            namespace.len(),
+                        ));
+                    let get = || unsafe {
+                        crate::value::js_dynamic_object_get_property(
+                            ns.get_nanbox_f64(),
+                            method.as_ptr().cast(),
+                            method.len(),
+                        )
+                    };
+                    let function = scope.root_nanbox_f64(get());
+                    assert!(crate::JSValue::from_bits(function.get_nanbox_u64()).is_pointer());
+                    let ptr = crate::value::js_nanbox_get_pointer(ns.get_nanbox_f64());
+                    assert_eq!(
+                        unsafe { crate::object::object_live_slot_count(ptr as *const _) },
+                        count,
+                        "subject: complete inline namespace"
+                    );
+                    let before = function.get_nanbox_u64();
+                    let trace = collect_minor_trace(GcTriggerKind::Direct);
+                    assert!(trace.copying_nursery.copied_objects > 0);
+                    assert_ne!(before, function.get_nanbox_u64(), "method must relocate");
+                    assert_eq!(get().to_bits(), function.get_nanbox_u64());
+                    let (argument, expected) = if namespace == "JSON" {
+                        (7.0, 7.0f64.to_bits())
+                    } else {
+                        (ns.get_nanbox_f64(), crate::value::TAG_TRUE)
+                    };
+                    let result = unsafe {
+                        crate::closure::call_value(
+                            function.get_nanbox_f64(),
+                            crate::closure::plain_call_receiver(),
+                            &[argument],
+                        )
+                    };
+                    assert_eq!(result.to_bits(), expected, "detached call after moving GC");
+                    {
+                        let _no_move = GcSuppressScope::new();
+                        let key = crate::string::canonical_key(method.as_bytes());
+                        let ptr = crate::value::js_nanbox_get_pointer(ns.get_nanbox_f64());
+                        crate::object::js_object_set_field_by_name(ptr as *mut _, key, 19.0);
+                    }
+                    assert_eq!(get(), 19.0);
+                })
+                .expect("spawn namespace realm")
+                .join()
+                .expect("realm passed");
+        }
+    }
+}

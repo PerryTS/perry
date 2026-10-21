@@ -796,6 +796,10 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
             js_create_native_module_namespace(name_bytes.as_ptr(), name_bytes.len())
         } else if name == "Math" {
             crate::value::js_nanbox_pointer(super::web_hooks::math_namespace() as i64)
+        } else if name == "JSON" {
+            crate::value::js_nanbox_pointer(super::web_hooks::json_namespace() as i64)
+        } else if name == "Reflect" {
+            crate::value::js_nanbox_pointer(super::web_hooks::reflect_namespace() as i64)
         } else if name == "WebAssembly" {
             super::global_this_webassembly::create_webassembly_namespace()
         } else {
@@ -807,17 +811,9 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
             // properties so the reflection APIs (`getOwnPropertyDescriptor`,
             // `getOwnPropertyNames`) observe them. Call sites (`Math.max(...)`,
             // `JSON.stringify(...)`, `Reflect.get(...)`) are codegen intrinsics
-            // gated on the AST shape and never read these fields. Math uses the
-            // richer install that also exposes per-method name/length descriptors.
+            // gated on the AST shape and never read these fields. Complete
+            // Math/JSON/Reflect namespaces are constructed above.
             match name {
-                "JSON" => {
-                    super::web_hooks::json_members(ns_obj);
-                    set_intrinsic_to_string_tag(ns_obj, "JSON");
-                }
-                "Reflect" => {
-                    super::web_hooks::reflect_members(ns_obj);
-                    set_intrinsic_to_string_tag(ns_obj, "Reflect");
-                }
                 "Atomics" => {
                     super::web_hooks::atomics_members(ns_obj);
                     set_intrinsic_to_string_tag(ns_obj, "Atomics");

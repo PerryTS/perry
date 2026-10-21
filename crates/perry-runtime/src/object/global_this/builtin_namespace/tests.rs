@@ -99,3 +99,70 @@ fn math_birth_has_complete_inline_storage_and_independent_functions() {
         );
     }
 }
+
+#[test]
+fn json_reflect_namespace_births_preserve_order_and_use_inline_storage() {
+    let _guard = crate::gc::CopyingNurseryTestGuard::new(0);
+    let _no_move = crate::gc::GcSuppressScope::new();
+    type Factory = fn() -> *mut ObjectHeader;
+    let cases: [(Factory, &[&str]); 2] = [
+        (
+            super::super::json_reflect_namespaces::create_json_namespace,
+            &["parse", "stringify", "rawJSON", "isRawJSON"],
+        ),
+        (
+            super::super::json_reflect_namespaces::create_reflect_namespace,
+            &[
+                "defineProperty",
+                "deleteProperty",
+                "apply",
+                "construct",
+                "get",
+                "getOwnPropertyDescriptor",
+                "getPrototypeOf",
+                "has",
+                "isExtensible",
+                "ownKeys",
+                "preventExtensions",
+                "set",
+                "setPrototypeOf",
+            ],
+        ),
+    ];
+    for (create, methods) in cases {
+        let a = create();
+        let b = create();
+        unsafe {
+            let keys = object::object_keys(a);
+            let count = (methods.len() + 1) as u32;
+            assert_eq!(keys.count(), count);
+            assert_eq!(object::object_live_slot_count(a), count);
+            assert_eq!(keys.arr(), object::object_keys(b).arr());
+            assert!(!object::overflow::has_overflow(a));
+            let elements = crate::array::array_elements_ptr(keys.arr());
+            for (i, method) in methods.iter().enumerate() {
+                let expected = f64::from_bits(JSValue::string_ptr(name(method).cast_mut()).bits());
+                assert_eq!(
+                    crate::string::js_string_equals_value(
+                        f64::from_bits(*elements.add(i)),
+                        expected
+                    ),
+                    1
+                );
+                assert_eq!(
+                    key_attrs::keys_entry(keys.arr(), i as u32),
+                    key_attrs::ENTRY_NON_ENUMERABLE
+                );
+                assert_ne!(
+                    object::js_object_get_field_by_name(a, name(method)).bits(),
+                    object::js_object_get_field_by_name(b, name(method)).bits(),
+                    "method allocations are independent"
+                );
+            }
+            assert_eq!(
+                key_attrs::keys_entry(keys.arr(), count - 1),
+                key_attrs::ENTRY_NON_ENUMERABLE | key_attrs::ENTRY_NON_WRITABLE
+            );
+        }
+    }
+}

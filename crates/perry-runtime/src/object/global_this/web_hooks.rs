@@ -56,8 +56,8 @@ static WEBSOCKET: Slots = Slots::empty();
 static WEBCRYPTO: Slots = Slots::empty();
 static WEBFETCH: Slots = Slots::empty();
 static MATH_NAMESPACE: Hook<fn() -> *mut ObjectHeader> = Hook::empty();
-static JSON_MEMBERS: Hook<fn(*mut ObjectHeader)> = Hook::empty();
-static REFLECT_MEMBERS: Hook<fn(*mut ObjectHeader)> = Hook::empty();
+static JSON_NAMESPACE: Hook<fn() -> *mut ObjectHeader> = Hook::empty();
+static REFLECT_NAMESPACE: Hook<fn() -> *mut ObjectHeader> = Hook::empty();
 static ATOMICS_MEMBERS: Hook<fn(*mut ObjectHeader)> = Hook::empty();
 static URL_PROTOTYPE_ACCESSORS: Hook<fn(*mut ObjectHeader)> = Hook::empty();
 
@@ -161,23 +161,21 @@ macro_rules! namespace_members {
 }
 
 namespace_members! {
-    JSON_MEMBERS, json_members, install_json, super::install_json_namespace_members;
-    REFLECT_MEMBERS, reflect_members, install_reflect, super::install_reflect_namespace_members;
     ATOMICS_MEMBERS, atomics_members, install_atomics, super::install_atomics_namespace_members;
 }
 
-/// A factory lets Math be born with its complete layout when its feature is
-/// installed. The absent hook retains the existing tag-only namespace.
+/// Factories construct complete namespaces only when their feature is installed.
+/// An absent hook retains the existing tag-only namespace.
 pub(crate) fn math_namespace() -> *mut ObjectHeader {
-    math_namespace_from(MATH_NAMESPACE.get())
+    namespace_from(MATH_NAMESPACE.get(), "Math")
 }
 
-fn math_namespace_from(factory: Option<fn() -> *mut ObjectHeader>) -> *mut ObjectHeader {
+fn namespace_from(factory: Option<fn() -> *mut ObjectHeader>, tag: &str) -> *mut ObjectHeader {
     if let Some(create) = factory {
         create()
     } else {
         let object = crate::object::js_object_alloc(0, 0);
-        super::set_intrinsic_to_string_tag(object, "Math");
+        super::set_intrinsic_to_string_tag(object, tag);
         object
     }
 }
@@ -186,21 +184,39 @@ pub(crate) fn install_math() {
     MATH_NAMESPACE.set(super::math_namespace::create_math_namespace);
 }
 
+pub(crate) fn json_namespace() -> *mut ObjectHeader {
+    namespace_from(JSON_NAMESPACE.get(), "JSON")
+}
+
+pub(crate) fn install_json() {
+    JSON_NAMESPACE.set(super::json_reflect_namespaces::create_json_namespace);
+}
+
+pub(crate) fn reflect_namespace() -> *mut ObjectHeader {
+    namespace_from(REFLECT_NAMESPACE.get(), "Reflect")
+}
+
+pub(crate) fn install_reflect() {
+    REFLECT_NAMESPACE.set(super::json_reflect_namespaces::create_reflect_namespace);
+}
+
 #[cfg(test)]
 #[test]
 fn builtin_namespace_without_feature_has_only_its_tag() {
     let _guard = crate::gc::CopyingNurseryTestGuard::new(0);
     let _no_move = crate::gc::GcSuppressScope::new();
-    let object = math_namespace_from(None);
-    unsafe {
-        let keys = crate::object::object_keys(object);
-        assert_eq!(keys.count(), 1);
-        let symbol = crate::symbol::well_known_symbol("toStringTag");
-        assert_eq!(
-            crate::object::shaped_symbols::position(object, symbol as usize),
-            Some(0)
-        );
+    for (tag, method) in [("Math", "abs"), ("JSON", "parse"), ("Reflect", "ownKeys")] {
+        let object = namespace_from(None, tag);
+        unsafe {
+            let keys = crate::object::object_keys(object);
+            assert_eq!(keys.count(), 1);
+            let symbol = crate::symbol::well_known_symbol("toStringTag");
+            assert_eq!(
+                crate::object::shaped_symbols::position(object, symbol as usize),
+                Some(0)
+            );
+        }
+        let name = crate::string::canonical_key(method.as_bytes());
+        assert!(crate::object::js_object_get_field_by_name(object, name).is_undefined());
     }
-    let name = crate::string::canonical_key(b"abs");
-    assert!(crate::object::js_object_get_field_by_name(object, name).is_undefined());
 }
