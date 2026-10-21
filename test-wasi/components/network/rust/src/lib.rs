@@ -8,7 +8,7 @@ use wasi::sockets::{
 struct Probe;
 
 fn error(error: network::ErrorCode) -> String {
-    format!("{error:?}")
+    error.name().to_string()
 }
 
 fn address(port: u16) -> network::IpSocketAddress {
