@@ -225,8 +225,7 @@ Still required before claiming the full milestone:
 
 - Implement host-defined resource imports and deferred cleanup, and qualify
   the remaining capability operations, command worlds, and HTTP independently.
-- Qualify supported host platforms and promote the demonstrated execution
-  check into the required PR checks.
+- Qualify supported component host platforms beyond Linux.
 
 P3 async support remains a subsequent milestone.
 
@@ -238,7 +237,10 @@ harnesses. Configure wasi-sdk first, as for the standalone WASI checks. Fixture
 Cargo builds run from the checkout so they use its pinned Rust toolchain and
 unwind configuration; `CARGO_BUILD_JOBS` is respected.
 
-The Linux `wasi-check / wasi-codegen` CI job invokes this script after the
-standalone suites. It retains phase logs, JSON verdicts, component artifacts
-and the source revision. The extended-suite routing and PR-label condition
-still apply; this check is not yet required on every relevant PR.
+The Linux `wasi-execution` job invokes this script after the standalone suites
+in the core PR, sweep and full tiers. Its result feeds the required `pr-gate`;
+a failed or skipped planned execution blocks the gate. Phase logs, JSON
+verdicts, component artifacts and the source revision are retained even on
+failure. Docs-only PRs skip this build. The extended `wasi-check / wasi-codegen`
+recipe also retains component execution on Linux; its wider platform matrix
+does not yet qualify native component hosting outside Linux.

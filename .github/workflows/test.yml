@@ -5241,7 +5241,7 @@ jobs:
     needs: plan
     if: needs.plan.result == 'success' && fromJSON(needs.plan.outputs.plan).jobs.wasi_execution
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 120
     env:
       CARGO_BUILD_JOBS: '2'
       CARGO_INCREMENTAL: '0'
@@ -5304,12 +5304,19 @@ jobs:
       run: |
         compiler=target/perry-dev/perry
         python scripts/wasi_run.py "$compiler" --suite gap --output target/wasi-validation/gap --keep-intermediates
-    - name: Retain WASI execution evidence
+    - name: Typed components, resources, moving GC and cross-language composition
+      run: ./scripts/component_check.sh
+    - name: Retain WASI and component execution evidence
       uses: ./.github/actions/perry/actions/upload-artifact
       with:
         name: wasi-required-${{ github.sha }}
         retention-days: '7'
-        path: target/wasi-validation/
+        path: |
+          target/wasi-validation/
+          target/component-validation/**/*.log
+          target/component-validation/**/results.json
+          target/component-validation/**/*.component.wasm
+          target/component-validation/source-revision.txt
       if: always()
   gate:
     name: ${{ github.event_name == 'pull_request' && 'pr-gate' || (needs.plan.outputs.tier == 'full' && 'full-suite-gate' || 'main-gate') }}

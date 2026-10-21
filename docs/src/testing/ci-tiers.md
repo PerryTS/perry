@@ -286,13 +286,17 @@ For example, `gh workflow run compiler-runtime.yml -f suite=performance` runs th
 
 After a consolidation lands, Repository automatically deletes completed runs whose repository workflow file no longer exists. It allows queued/running jobs to finish before deleting their history and leaves GitHub's dynamic registrations alone. This removes retired entries from the sidebar as their last runs are cleaned up.
 
-### Required WASI command execution
+### Required WASI command and component execution
 
 `wasi-execution` joins the core PR, sweep and full tiers. On Linux it builds
 Perry with `target-wasi` and a matching wasm32-wasip2 runtime, checks the IR
 ABI, then runs all six smoke cases, twenty acceptance cases and ten pinned-Node
-comparisons. Per-case logs and intermediate objects are retained. The required
+comparisons. It then builds matching native component tools and instrumented
+runtimes and runs both component harnesses: native hosting, Perry-authored
+guests, resource lifetimes, forced moving GC and direct Rust/Perry composition.
+The job has a 120-minute budget for the combined build and execution. Per-case
+logs, component phase verdicts, source revision and artifacts are retained. The required
 `pr-gate` rejects a skipped or missing planned WASI job as well as failures and
 cancellation. Docs-only PRs skip this build. The wider Windows/macOS matrix
-and component execution recipe remain in the extended suite while their
-qualification proceeds.
+remains in the extended suite. Native component execution is currently
+qualified on Linux.
