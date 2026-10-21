@@ -589,6 +589,10 @@ fn judge(
                         }
                     });
                 }
+                // A closed function's parameter marker (decision 13): what
+                // its callers pass is the stand-ins beside it; the marker
+                // only records the uses for its contract.
+                TokKind::Obj(..) if m.param_marker.get(&t).is_some_and(|(f, _)| m.closed_params.contains_key(f)) => {}
                 TokKind::Obj(tm, _) => {
                     let Some(tf) = by_id.get(tm) else {
                         receivers.push(m.tok_name(t));

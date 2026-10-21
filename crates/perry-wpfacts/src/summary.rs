@@ -198,7 +198,7 @@ pub fn map_cons(
         MCall { key, call } => MCall { key, call: k(call) },
         Chain { origin, key, act } => Chain { origin, key, act: act_map(act, &mut n, &mut k) },
         TopSink { reason } => TopSink { reason },
-        ContractThis { tmpl, reason } => ContractThis { tmpl, reason },
+        ContractThis { tmpl, reason, statics } => ContractThis { tmpl, reason, statics },
         TopIfAny { dst, from, reason } => TopIfAny { dst: n(dst), from: n(from), reason },
         Hard { kind, reason } => Hard { kind, reason },
         AddsKeys => AddsKeys,
@@ -905,12 +905,20 @@ impl Model {
         let terms = self.sum.insts[inst as usize].params.clone();
         let fparams = self.funcs[f as usize].params.clone();
         let contract = self.contract_fns.contains(&f);
+        // A closed function's callers are known: what they pass, through
+        // its publication only (decision 19).
+        let closed = if self.closed_pub_reason == Some(reason) { self.closed_params.get(&f).cloned() } else { None };
         for (i, &p) in fparams.iter().enumerate() {
             let mk = contract.then(|| self.param_marker_tok(f, i as u32));
             for d in [terms[i], p] {
                 if d != NO_NODE {
-                    self.add_top(d, why);
-                    self.add_prim(d, prim::ALL);
+                    match closed.as_ref().and_then(|c| c.get(i).copied()) {
+                        Some(a) => self.edge(a, d),
+                        None => {
+                            self.add_top(d, why);
+                            self.add_prim(d, prim::ALL);
+                        }
+                    }
                     if let Some(mk) = mk {
                         self.add_tok(d, mk);
                     }

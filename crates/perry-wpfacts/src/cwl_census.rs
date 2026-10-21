@@ -195,7 +195,36 @@ pub fn run(m: &Model, unit: &str) {
     }
     let mut fv: Vec<_> = fc.into_iter().collect();
     fv.sort_by_key(|x| std::cmp::Reverse(x.1));
+    // CWL census: the enclosing chain of a function (who makes its contexts).
+    let chain = |f: crate::model::FnIdx| -> Vec<String> {
+        let mut out = Vec::new();
+        let mut c = m.funcs[f as usize].parent;
+        while c != crate::model::NO_FN && out.len() < 6 {
+            out.push(m.funcs[c as usize].name.clone());
+            c = m.funcs[c as usize].parent;
+        }
+        out
+    };
     for (f, c) in fv.iter().take(10) {
-        eprintln!("CWL fntok {} ctxs={c}", m.funcs[*f as usize].name);
+        eprintln!("CWL fntok {} ctxs={c} chain={:?}", m.funcs[*f as usize].name, chain(*f));
+    }
+    // CWL census: instances and contexts per outermost enclosing function.
+    let mut by_root: FxHashMap<String, (usize, usize, usize)> = FxHashMap::default();
+    for (f, c) in &fv {
+        let ch = chain(*f);
+        let root = ch.last().cloned().unwrap_or_else(|| m.funcs[*f as usize].name.clone());
+        let e = by_root.entry(root).or_default();
+        e.0 += 1;
+        e.1 += *c as usize;
+    }
+    for i in &s.insts {
+        let ch = chain(i.f);
+        let root = ch.last().cloned().unwrap_or_else(|| m.funcs[i.f as usize].name.clone());
+        by_root.entry(root).or_default().2 += 1;
+    }
+    let mut br: Vec<_> = by_root.into_iter().collect();
+    br.sort_by_key(|x| std::cmp::Reverse(x.1 .2));
+    for (r, (nf, nc, ni)) in br.iter().take(15) {
+        eprintln!("CWL root {r} closures={nf} ctxs={nc} instances={ni}");
     }
 }

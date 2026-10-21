@@ -234,6 +234,14 @@ pub struct CallSite {
     pub site: SiteId,
 }
 
+/// What a published class's method did to its receiver (`Model::recv_log`).
+#[derive(Clone, Copy, Debug)]
+pub enum RecvEffect {
+    Store(Key, NodeId, SiteId),
+    Hard(Hard, u32),
+    Escape(u32),
+}
+
 /// A property key: a named atom, or any key (computed).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Key {
@@ -335,7 +343,9 @@ pub enum Cons {
     /// The `this` of a contract stand-in of another unit's class `tmpl`
     /// (design §11.2): its instances are inside the contract; any other
     /// receiver escapes (that unit runs the method on it unseen).
-    ContractThis { tmpl: TmplId, reason: u32 },
+    /// `this` of another unit's method: only that class's instances (and,
+    /// for a static method, its class object); any other receiver escapes.
+    ContractThis { tmpl: TmplId, reason: u32, statics: bool },
     /// Once anything (a token or a primitive) reaches the node, `dst` holds
     /// ⊤ and everything `from` holds: the result of a call that exists only
     /// when an argument reaches it.
@@ -785,18 +795,37 @@ pub struct Model {
     /// Per-unit contracts (design §11.2): the methods of a published class
     /// run on its receiver token (`Model::publish_class`).
     pub published_this: FxHashMap<FnIdx, Tok>,
-    /// A published class's receiver token -> the instance other units
-    /// construct: what a method does to its receiver happens to that
-    /// instance.
-    pub contract_recv: FxHashMap<Tok, Tok>,
+    /// A published class's receiver token -> the instances other units
+    /// hold: the one they construct, then each one this unit gives them
+    /// through a contract (`Model::give_out`). What a method does to its
+    /// receiver happens to each of them.
+    pub contract_recv: FxHashMap<Tok, Vec<Tok>>,
+    /// What the methods did to a receiver token so far: replayed on an
+    /// instance given out later.
+    pub recv_log: FxHashMap<Tok, Vec<RecvEffect>>,
+    /// A published class -> its receiver token.
+    pub contract_recv_of: FxHashMap<TmplId, Tok>,
     /// Another unit's templates this unit sees through a contract, with the
     /// facts their defining unit published (design §11.2).
     pub foreign: FxHashMap<TmplId, crate::TemplateFacts>,
     /// Foreign templates this unit stored into (a census report).
     pub foreign_written: crate::pts::FxHashSet<TmplId>,
+    /// Existing data fields of other units' literal layouts this unit
+    /// stored into: store effects, not census reports (decision 17).
+    pub foreign_stores: crate::pts::FxHashSet<(TmplId, Atom)>,
     /// Published functions with a contract (design §11.2): their results
     /// are checked after the solve instead of escaping.
     pub contract_fns: crate::pts::FxHashSet<FnIdx>,
+    /// Closed functions (decision 13): per parameter the node holding what
+    /// the other units' calls pass (`Gen::closed_params`), instead of ⊤.
+    pub closed_params: FxHashMap<FnIdx, Vec<NodeId>>,
+    /// Decision 19: the reason a closed function is published to the
+    /// module's other units (`Gen::unit_boundary`). Published that way its
+    /// token does not escape: its parameters hold the closed contract's
+    /// stand-ins (`escape_fn_params`). Any other escape is a real one
+    /// (unknown code may call it): ⊤ parameters.
+    pub closed_pub_reason: Option<u32>,
+    pub closed_pub: crate::pts::FxHashSet<Tok>,
     pub contract_rets: Vec<(FnIdx, NodeId)>,
     /// A contract function's parameter markers: one object token per
     /// parameter standing for everything the caller passes (anything read
@@ -805,6 +834,8 @@ pub struct Model {
     pub param_marker: FxHashMap<Tok, (FnIdx, u32)>,
     pub marker_of: FxHashMap<(FnIdx, u32), Tok>,
     pub marker_use: FxHashMap<Tok, u8>,
+    /// The markers of what a parameter reaches (not the argument itself).
+    pub reach_marker: crate::pts::FxHashSet<Tok>,
     /// The `this` node of each instance method / accessor of a class: the
     /// binding its entry guard tests (design §11.4).
     pub this_class: FxHashMap<NodeId, TmplId>,
@@ -1313,9 +1344,21 @@ impl Model {
             proto_members: Vec::new(),
         });
         let t = self.tok(TokKind::Obj(tm, NO_CTX));
+        // What the argument reaches has its own marker (fields of fields
+        // reach it again), so a result can tell the argument itself from
+        // values reachable from it (§11.2 "the return").
+        let rm = self.tmpls.len() as TmplId;
+        let mut reach = self.tmpls[tm as usize].clone();
+        reach.display = format!("{}:param{i}:reach", self.funcs[f as usize].name);
+        self.tmpls.push(reach);
+        let r = self.tok(TokKind::Obj(rm, NO_CTX));
         let any = self.field_any(t);
-        self.add_tok(any, t);
+        self.add_tok(any, r);
+        let rany = self.field_any(r);
+        self.add_tok(rany, r);
         self.param_marker.insert(t, (f, i));
+        self.param_marker.insert(r, (f, i));
+        self.reach_marker.insert(r);
         self.marker_of.insert((f, i), t);
         t
     }
