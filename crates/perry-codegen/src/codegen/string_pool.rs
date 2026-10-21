@@ -8,7 +8,6 @@ use crate::types::{DOUBLE, I32, I64, I8, PTR, VOID};
 
 use super::ctor_arity::constructor_layout_params;
 use super::helpers::scoped_static_method_name;
-use super::retained_source_pool::SourceRange;
 use super::spec_function_length;
 
 mod class_birth_image;
