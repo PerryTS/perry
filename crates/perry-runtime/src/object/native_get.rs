@@ -74,7 +74,10 @@ pub(crate) unsafe fn try_data_lookup_by_name(
 /// The settled `[[Get]]` of a named read on an ordinary receiver: its data
 /// value, or `undefined` once the shapes prove the key is on no link of the
 /// chain AND the receiver is one whose reads the shapes alone decide (see
-/// [`shapes::plain_receiver_miss_is_final`]). `None` leaves the read to the
+/// [`shapes::plain_receiver_miss_is_final`]), or, for an instance of a declared
+/// class, what its class chain's shapes answer
+/// ([`super::native_call_method::class_holder::class_instance_inherited_read`]).
+/// `None` leaves the read to the
 /// generic path, which owns every other receiver and every accessor.
 #[inline]
 pub(crate) unsafe fn try_settled_get_by_name(
@@ -82,10 +85,21 @@ pub(crate) unsafe fn try_settled_get_by_name(
     key: *const crate::StringHeader,
 ) -> Option<JSValue> {
     let (receiver, bytes, key_bits) = named_lookup_inputs(object, key)?;
-    match try_data_lookup_key(receiver, key_bits, bytes)? {
-        Some(value) => Some(value),
-        None => shapes::plain_receiver_miss_is_final(receiver.as_pointer::<ObjectHeader>(), bytes)
-            .then(JSValue::undefined),
+    match try_data_lookup_key(receiver, key_bits, bytes) {
+        Some(Some(value)) => Some(value),
+        Some(None) => {
+            shapes::plain_receiver_miss_is_final(receiver.as_pointer::<ObjectHeader>(), bytes)
+                .then(JSValue::undefined)
+        }
+        // The data walk declines at a declared class's prototype hop: an
+        // instance of one is settled by its class chain's shapes instead.
+        None => {
+            #[cfg(test)]
+            if FORCE_SLOW.with(|value| value.get()) {
+                return None;
+            }
+            super::native_call_method::class_holder::class_instance_inherited_read(receiver, bytes)
+        }
     }
 }
 

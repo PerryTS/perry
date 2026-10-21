@@ -712,3 +712,169 @@ fn deleting_and_re_adding_keys_keeps_the_settled_miss_exact() {
     assert_eq!(by_name(boxed(object), "late"), undefined);
     assert_eq!(by_name(boxed(object), "toString"), undefined);
 }
+
+extern "C" fn class_method(_this: f64) -> f64 {
+    1.0
+}
+
+/// A declared class (a name and one method with a compiled entry) in the
+/// compiled-id band, as codegen registers it.
+fn declared_class(class_id: u32, method: &str, parent: Option<u32>) {
+    unsafe {
+        crate::object::js_register_class_name(class_id, b"Declared".as_ptr(), 8);
+        crate::object::class_registry::js_register_class_method_with_entry(
+            class_id as i64,
+            method.as_ptr(),
+            method.len() as i64,
+            class_method as *const () as usize as i64,
+            0,
+            0,
+            0,
+            0,
+        );
+    }
+    if let Some(parent) = parent {
+        crate::object::class_registry::js_register_class_parent(class_id, parent);
+    }
+}
+
+fn declared_prototype(class_id: u32) -> *mut ObjectHeader {
+    crate::value::js_nanbox_get_pointer(crate::object::class_registry::class_decl_prototype_value(
+        class_id,
+    )) as *mut ObjectHeader
+}
+
+fn settled_bits(object: *mut ObjectHeader, name: &str) -> Option<u64> {
+    unsafe { try_settled_get_by_name(object, key(name)).map(|value| value.bits()) }
+}
+
+#[test]
+fn a_declared_class_instance_settles_from_its_chain_and_matches_the_generic_read() {
+    let _no_gc = crate::gc::GcSuppressScope::new();
+    let _ = crate::object::builtin_prototype_value("Object");
+    let undefined = crate::value::TAG_UNDEFINED;
+    let (base, derived) = (0x7C00, 0x7C01);
+    declared_class(base, "m", None);
+    declared_class(derived, "n", Some(base));
+    let instance = crate::object::js_object_alloc(derived, 0);
+    js_object_set_field_by_name(instance, key("a"), 1.0);
+    assert_eq!(settled_bits(instance, "a"), Some(1.0f64.to_bits()));
+    assert_eq!(by_name(boxed(instance), "missing"), undefined);
+    declared_prototype(base);
+    declared_prototype(derived);
+    // Now a name no link lists settles to undefined, and an Object.prototype
+    // data property to its value; a class member never settles (the generic
+    // read binds it).
+    assert_eq!(settled_bits(instance, "missing"), Some(undefined));
+    assert_eq!(settled_bits(instance, "stop"), Some(undefined));
+    let to_string = settled_bits(instance, "toString").expect("Object.prototype data");
+    assert_ne!(to_string, undefined);
+    assert_eq!(to_string, by_name(boxed(instance), "toString"));
+    for member in ["m", "n", "constructor", "__proto__", "@@iterator", "#p"] {
+        assert_eq!(settled_bits(instance, member), None, "{member}");
+    }
+    settled_matches_generic(boxed(instance), "declared class instance");
+    let base_instance = crate::object::js_object_alloc(base, 0);
+    settled_matches_generic(boxed(base_instance), "declared base class instance");
+}
+
+#[test]
+fn a_declared_class_settled_miss_follows_prototype_mutation() {
+    let _no_gc = crate::gc::GcSuppressScope::new();
+    let object_prototype = crate::object::builtin_prototype_value("Object");
+    let object_prototype_ptr =
+        crate::value::js_nanbox_get_pointer(object_prototype) as *mut ObjectHeader;
+    let undefined = crate::value::TAG_UNDEFINED;
+    let (base, derived) = (0x7C10, 0x7C11);
+    declared_class(base, "m", None);
+    declared_class(derived, "n", Some(base));
+    let instance = crate::object::js_object_alloc(derived, 0);
+    let base_proto = declared_prototype(base);
+    let derived_proto = declared_prototype(derived);
+    let name = "class_settled_probe_added_later";
+    assert_eq!(settled_bits(instance, name), Some(undefined));
+    // A data property added to a class prototype after the miss settled.
+    js_object_set_field_by_name(base_proto, key(name), 5.0);
+    assert_eq!(settled_bits(instance, name), None);
+    assert_eq!(by_name(boxed(instance), name), 5.0f64.to_bits());
+    assert_eq!(js_object_delete_field(base_proto, key(name)), 1);
+    // A deleted key may leave the holder's shape unsettled; it must never
+    // settle to anything but the generic answer.
+    assert!(settled_bits(instance, name).is_none_or(|bits| bits == undefined));
+    assert_eq!(by_name(boxed(instance), name), undefined);
+    // A getter defined on a class prototype after the miss settled.
+    GETTER_CALLS.store(0, Ordering::Relaxed);
+    install_getter(derived_proto, name, true);
+    assert_eq!(settled_bits(instance, name), None);
+    assert_eq!(by_name(boxed(instance), name), 47.0f64.to_bits());
+    assert_eq!(GETTER_CALLS.load(Ordering::Relaxed), 1);
+    install_getter(derived_proto, name, false);
+    // Object.prototype gains and loses the name.
+    let other = "class_settled_probe_on_object_prototype";
+    assert_eq!(settled_bits(instance, other), Some(undefined));
+    js_object_set_field_by_name(object_prototype_ptr, key(other), 7.0);
+    assert_eq!(settled_bits(instance, other), Some(7.0f64.to_bits()));
+    assert_eq!(by_name(boxed(instance), other), 7.0f64.to_bits());
+    assert_eq!(js_object_delete_field(object_prototype_ptr, key(other)), 1);
+    assert_eq!(settled_bits(instance, other), Some(undefined));
+    // An own property of the instance shadows every holder.
+    js_object_set_field_by_name(instance, key(other), 8.0);
+    assert_eq!(settled_bits(instance, other), Some(8.0f64.to_bits()));
+}
+
+#[test]
+fn a_relinked_prototype_or_instance_leaves_the_declared_class_settled_miss() {
+    let _no_gc = crate::gc::GcSuppressScope::new();
+    let _ = crate::object::builtin_prototype_value("Object");
+    let undefined = crate::value::TAG_UNDEFINED;
+    let late = "class_relink_probe";
+    // `Object.setPrototypeOf(instance, other)`.
+    let (a, b) = (0x7C20, 0x7C21);
+    declared_class(a, "m", None);
+    declared_class(b, "n", Some(a));
+    let instance = crate::object::js_object_alloc(b, 0);
+    declared_prototype(a);
+    declared_prototype(b);
+    assert_eq!(settled_bits(instance, late), Some(undefined));
+    let donor = object(late, 9.0);
+    crate::object::prototype_chain::object_set_user_prototype(
+        instance as usize,
+        boxed(donor).to_bits(),
+    );
+    assert_eq!(settled_bits(instance, late), None);
+    assert_eq!(by_name(boxed(instance), late), 9.0f64.to_bits());
+    crate::object::prototype_chain::object_set_user_prototype(
+        instance as usize,
+        f64::from_bits(crate::value::TAG_NULL).to_bits(),
+    );
+    assert_eq!(settled_bits(instance, "toString"), None);
+    assert_eq!(by_name(boxed(instance), late), undefined);
+    // `Object.setPrototypeOf(Derived.prototype, other)`.
+    let (c, d) = (0x7C22, 0x7C23);
+    declared_class(c, "m", None);
+    declared_class(d, "n", Some(c));
+    let other_instance = crate::object::js_object_alloc(d, 0);
+    declared_prototype(c);
+    let d_proto = declared_prototype(d);
+    assert_eq!(settled_bits(other_instance, late), Some(undefined));
+    crate::object::prototype_chain::object_set_user_prototype(
+        d_proto as usize,
+        boxed(donor).to_bits(),
+    );
+    assert_eq!(settled_bits(other_instance, late), None);
+    assert_eq!(by_name(boxed(other_instance), late), 9.0f64.to_bits());
+}
+
+#[test]
+fn a_class_extending_a_native_never_settles() {
+    let _no_gc = crate::gc::GcSuppressScope::new();
+    let _ = crate::object::builtin_prototype_value("Object");
+    let class_id = 0x7C30;
+    declared_class(class_id, "m", None);
+    // The reserved native band codegen registers for `extends Map`.
+    crate::object::class_registry::js_register_class_parent(class_id, 0xFFFF_0001);
+    let instance = crate::object::js_object_alloc(class_id, 0);
+    declared_prototype(class_id);
+    assert_eq!(settled_bits(instance, "missing"), None);
+    assert_eq!(settled_bits(instance, "toString"), None);
+}
