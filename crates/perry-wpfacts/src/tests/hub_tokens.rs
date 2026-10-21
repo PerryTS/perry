@@ -13,7 +13,12 @@ fn site<'a>(pf: &'a ProgramFacts, key: &str) -> &'a crate::SiteFacts {
 fn classes(s: &crate::SiteFacts) -> Vec<String> {
     // Class receivers only: a builtin function value or primitive
     // stand-in on a read is the model's convention, not a merge.
-    let mut v: Vec<String> = s.receivers.iter().filter(|r| r.contains(':')).map(|r| r.rsplit(':').next().unwrap().to_string()).collect();
+    let mut v: Vec<String> = s
+        .receivers
+        .iter()
+        .filter(|r| r.contains(':'))
+        .map(|r| r.rsplit(':').next().unwrap().to_string())
+        .collect();
     v.sort();
     v
 }
@@ -51,6 +56,11 @@ fn builtin_function_values_hold_nothing() {
         "#,
     );
     let s = site(&pf, "a");
-    assert!(classes(s).is_empty(), "{:?}\n{}", s.receivers, pf.dump_text());
+    assert!(
+        classes(s).is_empty(),
+        "{:?}\n{}",
+        s.receivers,
+        pf.dump_text()
+    );
     assert!(s.top, "{}", pf.dump_text());
 }

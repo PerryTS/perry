@@ -11,7 +11,12 @@ fn site<'a>(pf: &'a ProgramFacts, key: &str) -> &'a crate::SiteFacts {
 }
 
 fn classes(s: &crate::SiteFacts) -> Vec<String> {
-    let mut v: Vec<String> = s.receivers.iter().filter(|r| r.contains(':')).map(|r| r.rsplit(':').next().unwrap().to_string()).collect();
+    let mut v: Vec<String> = s
+        .receivers
+        .iter()
+        .filter(|r| r.contains(':'))
+        .map(|r| r.rsplit(':').next().unwrap().to_string())
+        .collect();
     v.sort();
     v
 }

@@ -644,7 +644,11 @@ impl<'a> Gen<'a> {
                 let (Some(it), Some(v)) = (arg(0), arg(1)) else {
                     return self.extern_fail(name, &args, &spread);
                 };
-                let k = if name == "js_iterator_delegate_throw" { "throw" } else { "return" };
+                let k = if name == "js_iterator_delegate_throw" {
+                    "throw"
+                } else {
+                    "return"
+                };
                 let a = self.m.atom(k);
                 let out = self.mcall(it, Key::Named(a), vec![v], vec![]);
                 if k == "throw" {

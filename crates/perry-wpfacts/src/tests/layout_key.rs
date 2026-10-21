@@ -14,7 +14,13 @@ fn exact(pf: &ProgramFacts, key: &str, n: usize) {
     let v: Vec<_> = pf.sites.iter().filter(|s| s.key == key).collect();
     assert!(!v.is_empty(), "site {key} in\n{}", pf.dump_text());
     for s in v {
-        assert!(!s.top && s.receivers.len() == n, "{key}: {:?} top={}\n{}", s.receivers, s.top, pf.dump_text());
+        assert!(
+            !s.top && s.receivers.len() == n,
+            "{key}: {:?} top={}\n{}",
+            s.receivers,
+            s.top,
+            pf.dump_text()
+        );
     }
 }
 
@@ -28,7 +34,11 @@ fn method_instances_are_per_layout_not_per_site() {
     }
     let pf = facts(&src);
     assert!(pf.stats.instances <= 3, "{}", pf.dump_text());
-    let site = pf.sites.iter().find(|s| s.key == "v" && !s.is_call).expect("site");
+    let site = pf
+        .sites
+        .iter()
+        .find(|s| s.key == "v" && !s.is_call)
+        .expect("site");
     assert_eq!(site.verdict, Verdict::T0Mono, "{}", pf.dump_text());
 }
 
@@ -90,8 +100,19 @@ fn only_a_generator_step_closure_is_its_own_iterator() {
     // The computed method is unknown (the receiver escapes: `this` is ⊤
     // besides `o`), but `m` itself is not a receiver.
     for s in pf.sites.iter().filter(|s| s.key == "k") {
-        assert!(s.receivers.iter().all(|r| !r.starts_with("fn:")), "{:?}\n{}", s.receivers, pf.dump_text());
-        assert_eq!(s.receivers.len(), 1, "{:?}\n{}", s.receivers, pf.dump_text());
+        assert!(
+            s.receivers.iter().all(|r| !r.starts_with("fn:")),
+            "{:?}\n{}",
+            s.receivers,
+            pf.dump_text()
+        );
+        assert_eq!(
+            s.receivers.len(),
+            1,
+            "{:?}\n{}",
+            s.receivers,
+            pf.dump_text()
+        );
     }
 }
 
@@ -122,16 +143,21 @@ fn an_escaped_value_binds_no_layout_instance() {
     // value ran with `this` = the value per layout (commander: `opts()`'s
     // result holds every Command method; each ran on it, its fields made
     // function receivers, functions x methods instances).
-    let src = |esc: &str| format!(
-        "class C {{ a() {{ return this.b(); }} b() {{ return 1; }} c() {{ return 2; }} }}
+    let src = |esc: &str| {
+        format!(
+            "class C {{ a() {{ return this.b(); }} b() {{ return 1; }} c() {{ return 2; }} }}
         const o = new C(); console.log(o.a());
         const r: any = {{}};
         for (const k of [\"a\", \"b\", \"c\"]) r[k] = (o as any)[k];
         console.log(r.length);
         {esc}"
-    );
+        )
+    };
     let base = facts(&src("")).stats.instances;
     let esc = facts(&src("(globalThis as any).out = r;")).stats.instances;
     assert!(esc > base, "the value must escape: {base} -> {esc}");
-    assert!(esc - base <= 3, "{base} -> {esc}: more than one entry instance per function");
+    assert!(
+        esc - base <= 3,
+        "{base} -> {esc}: more than one entry instance per function"
+    );
 }

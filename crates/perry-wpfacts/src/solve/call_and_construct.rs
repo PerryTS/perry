@@ -102,7 +102,9 @@ impl Model {
         };
         if !self.sum.ready {
             // Summaries do not exist yet: bind once they do.
-            self.sum.deferred.push(crate::summary::Deferred::Bind(call, t));
+            self.sum
+                .deferred
+                .push(crate::summary::Deferred::Bind(call, t));
             return;
         }
         if self.sum.templates.contains(&call) {
@@ -306,7 +308,9 @@ impl Model {
     /// `new Name(...)` of a builtin constructor, once per call.
     pub(crate) fn new_named(&mut self, name: Atom, call: CallId) {
         if !self.sum.ready {
-            self.sum.deferred.push(crate::summary::Deferred::NewNamed(name, call));
+            self.sum
+                .deferred
+                .push(crate::summary::Deferred::NewNamed(name, call));
             return;
         }
         if !self.construct_done.insert((call, TOP)) {
@@ -321,7 +325,11 @@ impl Model {
     pub(crate) fn site_tok(&mut self, tm: TmplId, call: CallId) -> Tok {
         // Another unit's class: one token for all its instances here (its
         // facts are its defining unit's).
-        let call = if self.foreign.contains_key(&tm) { NO_CTX } else { call };
+        let call = if self.foreign.contains_key(&tm) {
+            NO_CTX
+        } else {
+            call
+        };
         let k = TokKind::Obj(tm, call);
         if let Some(&t) = self.tok_index.get(&k) {
             return t;
@@ -348,7 +356,9 @@ impl Model {
 
     pub fn construct(&mut self, call: CallId, t: Tok) {
         if !self.sum.ready {
-            self.sum.deferred.push(crate::summary::Deferred::Construct(call, t));
+            self.sum
+                .deferred
+                .push(crate::summary::Deferred::Construct(call, t));
             return;
         }
         if !self.construct_done.insert((call, t)) {
@@ -456,7 +466,9 @@ impl Model {
     /// result when summarized, so known once bindings run).
     pub(crate) fn ctor_ret_objects(&mut self, call: CallId, f: Tok, dst: NodeId) {
         if !self.sum.ready {
-            self.sum.deferred.push(crate::summary::Deferred::RetObjects(call, f, dst));
+            self.sum
+                .deferred
+                .push(crate::summary::Deferred::RetObjects(call, f, dst));
             return;
         }
         let r = self.ret_for(call, f);
@@ -574,7 +586,10 @@ impl Model {
             let what = format!("reaches unmodeled code ({})", self.reasons[reason as usize]);
             crate::builtins::note_native_write(self, t, None, &what);
         }
-        if matches!(self.toks[t as usize], TokKind::Builtin(BuiltinNs::GlobalThis)) {
+        if matches!(
+            self.toks[t as usize],
+            TokKind::Builtin(BuiltinNs::GlobalThis)
+        ) {
             crate::builtins::note_global_in_top(self);
         }
         // Runtime-owned objects do not "escape": unknown code already holds
@@ -612,7 +627,9 @@ impl Model {
     /// Unknown code calls `f`: unknown arguments, the result escapes.
     pub(crate) fn escape_fn_params(&mut self, ft: Tok, reason: u32) {
         if !self.sum.ready {
-            self.sum.deferred.push(crate::summary::Deferred::Escape(ft, reason));
+            self.sum
+                .deferred
+                .push(crate::summary::Deferred::Escape(ft, reason));
             return;
         }
         let f = self.tok_fn(ft);
@@ -625,7 +642,11 @@ impl Model {
         // A closed function's callers are known: what they pass. Only
         // through its publication (decision 19); any other escape lets
         // unknown code call it.
-        let closed = if self.closed_pub_reason == Some(reason) { self.closed_params.get(&f).cloned() } else { None };
+        let closed = if self.closed_pub_reason == Some(reason) {
+            self.closed_params.get(&f).cloned()
+        } else {
+            None
+        };
         for (i, &p) in fi.params.iter().enumerate() {
             match closed.as_ref().and_then(|c| c.get(i).copied()) {
                 Some(a) => self.edge(a, p),
@@ -681,7 +702,11 @@ impl Model {
         let rt = self.tmpls.len() as TmplId;
         let display = format!("{}:receiver", self.tmpls[tm as usize].display);
         self.tmpls.push(Template {
-            kind: TmplKind::BObj { module: 0, site: 0, what: "contract receiver" },
+            kind: TmplKind::BObj {
+                module: 0,
+                site: 0,
+                what: "contract receiver",
+            },
             display,
             birth_keys: Vec::new(),
             definite: Vec::new(),
@@ -695,7 +720,12 @@ impl Model {
         });
         let recv = self.tok(TokKind::Obj(rt, NO_CTX));
         let any = self.field_any(recv);
-        self.add_top(any, |m| format!("receiver of a method another unit calls: {}", m.reasons[reason as usize]));
+        self.add_top(any, |m| {
+            format!(
+                "receiver of a method another unit calls: {}",
+                m.reasons[reason as usize]
+            )
+        });
         self.add_prim(any, prim::ALL);
         self.contract_recv.insert(recv, vec![inst]);
         self.contract_recv_of.insert(tm, recv);
@@ -759,7 +789,10 @@ impl Model {
         let ret = self.node_l("contract-new");
         let args_n = self.node_l("contract-args");
         self.add_top(args_n, |m| {
-            format!("constructor args from another unit: {}", m.reasons[reason as usize])
+            format!(
+                "constructor args from another unit: {}",
+                m.reasons[reason as usize]
+            )
         });
         self.add_prim(args_n, prim::ALL);
         let call = self.calls.len() as CallId;
@@ -795,7 +828,9 @@ impl Model {
         given.push(t);
         for e in self.recv_log.get(&recv).cloned().unwrap_or_default() {
             match e {
-                crate::model::RecvEffect::Store(key, src, site) => self.store_into(t, key, src, site),
+                crate::model::RecvEffect::Store(key, src, site) => {
+                    self.store_into(t, key, src, site)
+                }
                 crate::model::RecvEffect::Hard(kind, reason) => self.mark_hard(t, kind, reason),
                 crate::model::RecvEffect::Escape(reason) => self.escape(t, reason),
             }
@@ -806,7 +841,10 @@ impl Model {
     pub(super) fn escape_inner(&mut self, t: Tok, reason: u32) {
         self.mark_use(t, crate::model::MARK_ESCAPE);
         if let Some(is) = self.contract_recv.get(&t).cloned() {
-            self.recv_log.entry(t).or_default().push(crate::model::RecvEffect::Escape(reason));
+            self.recv_log
+                .entry(t)
+                .or_default()
+                .push(crate::model::RecvEffect::Escape(reason));
             for i in is {
                 self.escape(i, reason);
             }
@@ -873,7 +911,10 @@ impl Model {
                 let ret = self.node_l("top-new");
                 let args_n = self.node_l("top-args");
                 self.add_top(args_n, |m| {
-                    format!("constructor args from unknown code: {}", m.reasons[reason as usize])
+                    format!(
+                        "constructor args from unknown code: {}",
+                        m.reasons[reason as usize]
+                    )
                 });
                 self.add_prim(args_n, prim::ALL);
                 let call = self.calls.len() as CallId;
@@ -936,7 +977,10 @@ impl Model {
             return;
         }
         if let Some(is) = self.contract_recv.get(&t).cloned() {
-            self.recv_log.entry(t).or_default().push(crate::model::RecvEffect::Hard(kind, reason));
+            self.recv_log
+                .entry(t)
+                .or_default()
+                .push(crate::model::RecvEffect::Hard(kind, reason));
             for i in is {
                 self.mark_hard(i, kind, reason);
             }

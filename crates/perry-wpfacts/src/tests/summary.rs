@@ -18,15 +18,29 @@ fn sites<'a>(pf: &'a ProgramFacts, key: &str) -> Vec<&'a crate::SiteFacts> {
 /// Every read of `key` sees exactly `n` receivers and no ⊤.
 fn exact(pf: &ProgramFacts, key: &str, n: usize) {
     for s in sites(pf, key) {
-        assert!(!s.top && s.receivers.len() == n, "{key}: {:?} top={}\n{}", s.receivers, s.top, pf.dump_text());
+        assert!(
+            !s.top && s.receivers.len() == n,
+            "{key}: {:?} top={}\n{}",
+            s.receivers,
+            s.top,
+            pf.dump_text()
+        );
     }
 }
 
 /// Every read of `key` sees `class` among its receivers (or ⊤).
 fn sees(pf: &ProgramFacts, key: &str, class: &str) {
     for s in sites(pf, key) {
-        let hit = s.receivers.iter().any(|r| r.ends_with(&format!(":{class}")));
-        assert!(s.top || hit, "{key}: {:?} lacks {class}\n{}", s.receivers, pf.dump_text());
+        let hit = s
+            .receivers
+            .iter()
+            .any(|r| r.ends_with(&format!(":{class}")));
+        assert!(
+            s.top || hit,
+            "{key}: {:?} lacks {class}\n{}",
+            s.receivers,
+            pf.dump_text()
+        );
     }
 }
 
@@ -132,11 +146,19 @@ fn recursion_stays_sound() {
     ));
     for k in ["x", "y", "a"] {
         for s in sites(&pf, k) {
-            assert!(!s.receivers.is_empty() || s.top, "{k}: lost receivers\n{}", pf.dump_text());
+            assert!(
+                !s.receivers.is_empty() || s.top,
+                "{k}: lost receivers\n{}",
+                pf.dump_text()
+            );
         }
     }
     let x = &sites(&pf, "x")[0];
-    assert!(x.top || x.receivers.iter().any(|r| r.ends_with(":A")), "{:?}", x.receivers);
+    assert!(
+        x.top || x.receivers.iter().any(|r| r.ends_with(":A")),
+        "{:?}",
+        x.receivers
+    );
 }
 
 /// Unknown code handed a summarized helper's argument: the argument
@@ -154,7 +176,9 @@ fn sabotage_unknown_code_writes_a_helper_argument() {
     assert!(tmpl(&pf, "A").escape.is_some(), "{}", pf.dump_text());
     assert_eq!(tmpl(&pf, "B").escape, None);
     let direct = facts_with(
-        &format!("{CLASSES} const a = new A(); (new Function('o', 'o.x = 1'))(a); console.log(a.x);"),
+        &format!(
+            "{CLASSES} const a = new A(); (new Function('o', 'o.x = 1'))(a); console.log(a.x);"
+        ),
         interp_cfg(),
     );
     let helper = facts_with(
@@ -166,7 +190,10 @@ fn sabotage_unknown_code_writes_a_helper_argument() {
         ),
         interp_cfg(),
     );
-    assert_eq!(tmpl(&direct, "A").escape.is_some(), tmpl(&helper, "A").escape.is_some());
+    assert_eq!(
+        tmpl(&direct, "A").escape.is_some(),
+        tmpl(&helper, "A").escape.is_some()
+    );
     assert_eq!(direct.interp_guard.is_some(), helper.interp_guard.is_some());
 }
 
@@ -192,7 +219,10 @@ fn sabotage_user_write_to_a_builtin_through_a_helper() {
         "function patch(p: any, f: any) { p.bind = f; }
          patch(Object.prototype, function () {}); console.log(1);",
     );
-    assert_eq!(direct.fnproto_bind_written.is_some(), pf.fnproto_bind_written.is_some());
+    assert_eq!(
+        direct.fnproto_bind_written.is_some(),
+        pf.fnproto_bind_written.is_some()
+    );
     assert!(pf.fnproto_bind_written.is_some(), "{}", pf.dump_text());
 }
 
@@ -236,9 +266,24 @@ fn callback_instance_per_passing_call() {
 fn debug_file() {
     let path = std::env::var("CW_SRC").expect("CW_SRC");
     let src = std::fs::read_to_string(&path).expect("read");
-    let pf = facts_with(&src, FactsConfig { explain: true, unit: std::env::var_os("CW_UNIT").is_some(), ..Default::default() });
-    let proven = pf.sites.iter().filter(|s| matches!(s.verdict, Verdict::T0Mono | Verdict::T0Set)).count();
-    eprintln!("proven {proven} of {} work {}", pf.sites.len(), pf.stats.work);
+    let pf = facts_with(
+        &src,
+        FactsConfig {
+            explain: true,
+            unit: std::env::var_os("CW_UNIT").is_some(),
+            ..Default::default()
+        },
+    );
+    let proven = pf
+        .sites
+        .iter()
+        .filter(|s| matches!(s.verdict, Verdict::T0Mono | Verdict::T0Set))
+        .count();
+    eprintln!(
+        "proven {proven} of {} work {}",
+        pf.sites.len(),
+        pf.stats.work
+    );
     if let Ok(out) = std::env::var("CW_DUMP") {
         std::fs::write(out, pf.dump_text()).unwrap();
     }

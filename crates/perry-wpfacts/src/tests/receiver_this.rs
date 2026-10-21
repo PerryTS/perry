@@ -13,9 +13,19 @@ fn sites<'a>(pf: &'a ProgramFacts, key: &str) -> Vec<&'a crate::SiteFacts> {
 /// Every read of `key` sees exactly the receivers `want` (class names).
 fn only(pf: &ProgramFacts, key: &str, want: &[&str]) {
     for s in sites(pf, key) {
-        let mut got: Vec<String> = s.receivers.iter().map(|r| r.rsplit(':').next().unwrap().to_string()).collect();
+        let mut got: Vec<String> = s
+            .receivers
+            .iter()
+            .map(|r| r.rsplit(':').next().unwrap().to_string())
+            .collect();
         got.sort();
-        assert!(!s.top && got == want, "{key}: {:?} top={} want {want:?}\n{}", s.receivers, s.top, pf.dump_text());
+        assert!(
+            !s.top && got == want,
+            "{key}: {:?} top={} want {want:?}\n{}",
+            s.receivers,
+            s.top,
+            pf.dump_text()
+        );
     }
 }
 

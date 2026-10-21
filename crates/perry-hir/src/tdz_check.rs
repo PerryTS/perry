@@ -216,7 +216,9 @@ fn stmt_deep(stmt: &Stmt, f: &mut dyn FnMut(&Stmt)) {
     f(stmt);
     match stmt {
         Stmt::Labeled { body, .. } => return stmt_deep(body, f),
-        Stmt::For { init: Some(init), .. } => f(init),
+        Stmt::For {
+            init: Some(init), ..
+        } => f(init),
         _ => {}
     }
     for_each_stmt_part(stmt, &mut |part| match part {
@@ -234,7 +236,10 @@ pub fn for_each_stmt_shallow(list: &[Stmt], f: &mut dyn FnMut(&Stmt)) {
             for_each_stmt_shallow(std::slice::from_ref(&**body), f);
             continue;
         }
-        if let Stmt::For { init: Some(init), .. } = stmt {
+        if let Stmt::For {
+            init: Some(init), ..
+        } = stmt
+        {
             f(init);
         }
         for_each_stmt_part(stmt, &mut |part| {

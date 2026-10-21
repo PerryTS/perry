@@ -44,7 +44,9 @@ impl Model {
             // builtin functions and primitives (`tok_load`), or ⊤ once any
             // builtin function value has been written.
             if self.bf_written.is_some() {
-                self.add_top(dst, |_| "property of a written builtin function value".into());
+                self.add_top(dst, |_| {
+                    "property of a written builtin function value".into()
+                });
             } else {
                 self.bf_reads.push(dst);
             }
@@ -534,7 +536,9 @@ impl Model {
     pub(crate) fn group_bind(&mut self, holder: Tok, key: Key, ft: Tok, setter: bool) {
         let f = self.tok_fn(ft);
         if !self.sum.ready {
-            self.sum.deferred.push(crate::summary::Deferred::Group(holder, key, ft, setter));
+            self.sum
+                .deferred
+                .push(crate::summary::Deferred::Group(holder, key, ft, setter));
             return;
         }
         let (sp, ar) = {
@@ -632,7 +636,10 @@ impl Model {
             return;
         }
         self.rel(|| format!("callthis {callee} {call} {origin}"));
-        self.via_calls.entry((callee, origin)).or_default().push(call);
+        self.via_calls
+            .entry((callee, origin))
+            .or_default()
+            .push(call);
         if self.this_done.insert((callee, origin)) {
             self.cons(callee, Cons::ThisTo { origin });
         } else {

@@ -110,9 +110,7 @@ impl Model {
         let source = &self.nodes[src as usize];
         let target = &self.nodes[dst as usize];
         let len = source.pts.len();
-        if count == 0
-            || len.checked_sub(count) != Some(target.pts.len())
-        {
+        if count == 0 || len.checked_sub(count) != Some(target.pts.len()) {
             return false;
         }
         let batch = delta.batch_for(dst);

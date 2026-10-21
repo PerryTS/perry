@@ -17,30 +17,6 @@ use crate::delta::{Targets, Tokens};
 use crate::model::*;
 
 impl Model {
-    /// TEMP CW9: module of a token's template/function.
-    pub fn cw9_tok_mod(&self, t: Tok) -> Option<u32> {
-        match self.toks[t as usize] {
-            TokKind::Obj(tm, _) | TokKind::Proto(tm) | TokKind::ClassObj(tm) => match self.tmpls[tm as usize].kind {
-                TmplKind::Class { module, .. } | TmplKind::Lit { module, .. } | TmplKind::ObjCreate { module, .. } | TmplKind::Arr { module, .. } | TmplKind::BObj { module, .. } => Some(module),
-                TmplKind::FnInst { func } => Some(self.funcs[func as usize].module),
-            },
-            TokKind::Func(f, _) => Some(self.funcs[f as usize].module),
-            _ => None,
-        }
-    }
-    /// TEMP CW9: a token of benchmark module A delivered into a node of a different benchmark module B.
-    pub fn cw9_cross(&self, s: NodeId, delta: impl Iterator<Item = Tok>) -> Option<Tok> {
-        let f = self.node_fn[s as usize];
-        if f == NO_FN { return None; }
-        let ms = self.funcs[f as usize].module;
-        if self.cw9_modkind.get(ms as usize).copied() != Some(1) { return None; }
-        for t in delta {
-            if let Some(mt) = self.cw9_tok_mod(t) {
-                if mt != ms && self.cw9_modkind.get(mt as usize).copied() == Some(1) { return Some(t); }
-            }
-        }
-        None
-    }
     // ---------------------------------------------------------------- nodes
 
     /// Add tokens/prims to a node; schedules it when anything is new.
@@ -65,21 +41,6 @@ impl Model {
                 changed = true;
                 self.pts_entries += 1;
                 top_new |= t == TOP;
-                if self.cwl_trace.is_some() {
-                    self.cwl_prov.entry((n, t)).or_insert((self.cur_src, self.cwl_why));
-                    if self.cwl_tok == Some(t) {
-                        self.cwl_tokhit = n;
-                    }
-                }
-            }
-        }
-        if self.cwl_tokhit != 0 && self.cwl_tokhit != NO_NODE {
-            let h = std::mem::replace(&mut self.cwl_tokhit, 0);
-            if let Some(&(f, _)) = self.cw9_inst_fn.get(&h) {
-                if self.cwl_tokfns.len() < 12 && self.cwl_tokfns.insert(f) {
-                    eprintln!("CWL tokhit fn={} work={}", self.funcs[f as usize].name, self.work);
-                    self.cwl_trace_tok(h, self.cwl_tok.unwrap());
-                }
             }
         }
         if top_new && self.explain {
@@ -332,7 +293,6 @@ impl Model {
                 let e = self.label_work.entry(self.labels[n as usize]).or_default();
                 e.1 += delta.len() as u64 * ncons0 as u64;
                 e.2 += 1;
-                *self.cw9_node_work.entry(n).or_default() += delta.len() as u64 * ncons0 as u64;
             }
             if self.max_work != 0 && self.work > self.max_work {
                 self.aborted = true;
@@ -341,11 +301,6 @@ impl Model {
             let mut i = 0;
             while i < self.nodes[n as usize].succ.len() {
                 let s = self.nodes[n as usize].succ[i];
-                if self.profile.is_some() && self.cw9_events.len() < 40 && !self.cw9_events.iter().any(|e| e.1 == n) {
-                    if let Some(t) = self.cw9_cross(s, delta.iter().copied()) {
-                        self.cw9_events.push((self.pops, n, s, t));
-                    }
-                }
                 if self.try_copy_delivery(n, s, &delta, dprim) {
                     self.work += 1 + delivery_overhead;
                     if self.max_work != 0 && self.work > self.max_work {
@@ -372,7 +327,6 @@ impl Model {
                         .entry(self.labels[n as usize])
                         .or_default()
                         .0 += visits;
-                    *self.cw9_node_work.entry(n).or_default() += visits;
                 }
                 if self.max_work != 0 && self.work > self.max_work {
                     self.aborted = true;
@@ -444,12 +398,18 @@ impl Model {
         }
         if d == TOP || matches!(self.toks[d as usize], TokKind::BuiltinFn) {
             let r = self.reason("spread into a value from unmodeled code");
-            let all = if s == TOP { self.top_tok_node } else { self.all_fields(s) };
+            let all = if s == TOP {
+                self.top_tok_node
+            } else {
+                self.all_fields(s)
+            };
             self.sink_node(all, r);
             return;
         }
         let opaque = match &self.toks[s as usize] {
-            TokKind::Top | TokKind::Builtin(_) | TokKind::BuiltinFn | TokKind::NativeProto(_) => true,
+            TokKind::Top | TokKind::Builtin(_) | TokKind::BuiltinFn | TokKind::NativeProto(_) => {
+                true
+            }
             TokKind::Obj(tm, _) => matches!(self.tmpls[*tm as usize].kind,
                 TmplKind::BObj { what, .. } if what != "CjsMain"),
             _ => false,
@@ -543,7 +503,9 @@ impl Model {
                 (None, None) => self.add_tok(n, objproto),
             },
             TokKind::NativeProto(_) => self.add_tok(n, objproto),
-            TokKind::Func(_, _) | TokKind::Bound(_) | TokKind::BuiltinFn => self.add_tok(n, objproto),
+            TokKind::Func(_, _) | TokKind::Bound(_) | TokKind::BuiltinFn => {
+                self.add_tok(n, objproto)
+            }
             TokKind::ClassObj(tm) => match self.tmpls[tm as usize].parent {
                 Some(p) => {
                     let pc = self.tok(TokKind::ClassObj(p));
@@ -582,13 +544,6 @@ impl Model {
     }
 
     fn apply_inner(&mut self, n: NodeId, c: &Cons, toks: Tokens<'_>, prim: u16) {
-        // TEMP CWL: the constraint kind being applied.
-        let prev = std::mem::replace(&mut self.cwl_why, c.kind_name());
-        self.apply_inner2(n, c, toks, prim);
-        self.cwl_why = prev;
-    }
-
-    fn apply_inner2(&mut self, n: NodeId, c: &Cons, toks: Tokens<'_>, prim: u16) {
         match *c {
             Cons::Load { key, dst } => {
                 if prim != 0 {
@@ -680,16 +635,14 @@ impl Model {
             }
             Cons::TopSink { reason } => {
                 for &t in toks {
-                    if let Some(pat) = cwu2_esc() { // TEMP CWU2: who sinks a token
-                        if !self.is_escaped(t) && self.tok_name(t).contains(pat.as_str()) {
-                            let f = self.node_fn.get(n as usize).copied().filter(|&f| f != crate::model::NO_FN).map(|f| self.funcs[f as usize].name.to_string()).unwrap_or_default();
-                            eprintln!("CWU2 esc {} via {}#{n} fn={f} reason={}", self.tok_name(t), self.labels.get(n as usize).copied().unwrap_or("?"), self.reasons[reason as usize]);
-                        }
-                    }
                     self.escape(t, reason);
                 }
             }
-            Cons::ContractThis { tmpl, reason, statics } => {
+            Cons::ContractThis {
+                tmpl,
+                reason,
+                statics,
+            } => {
                 for &t in toks {
                     let own_class = statics && self.toks[t as usize] == TokKind::ClassObj(tmpl);
                     if self.tmpl_of(t) != Some(tmpl) && !own_class {
@@ -713,7 +666,12 @@ impl Model {
             }
             Cons::AddsKeys => {
                 for &t in toks {
-                    let t = self.contract_recv.get(&t).and_then(|v| v.first()).copied().unwrap_or(t);
+                    let t = self
+                        .contract_recv
+                        .get(&t)
+                        .and_then(|v| v.first())
+                        .copied()
+                        .unwrap_or(t);
                     if let Some(tm) = self.tmpl_of(t) {
                         *self.adds_keys.entry(tm).or_default() += 1;
                     }
@@ -1045,23 +1003,11 @@ impl Model {
                 }
             }
             Cons::ThisTo { origin } => {
-                let calls = self.via_calls.get(&(n, origin)).cloned().unwrap_or_default();
-                // TEMP CWL: a function value as receiver finds program methods: where.
-                if self.profile.is_some() && matches!(self.toks[origin as usize], TokKind::Func(..)) && self.cwl_seen.len() < 6 {
-                    if let Some(&t) = toks.iter().find(|&&t| matches!(self.toks[t as usize], TokKind::Func(f, _) if self.summarized(f) && self.sum.of[&f].this != NO_NODE)) {
-                        let key = self.cwl_seen.len() as CallId + 1_000_000;
-                        self.cwl_seen.insert(key);
-                        let holder = self.fields.iter().find(|(_, &x)| x == n).map(|((h, a), _)| format!("field {}#{h}.{}", self.tok_name(*h), self.atoms[*a as usize]));
-                        let cvh = self.cv_nodes.iter().find(|(_, &x)| x == n).map(|((h, k), _)| format!("cv {}#{h} {}", self.tok_name(*h), self.key_name(*k)));
-                        let any = self.field_any.iter().find(|(_, &x)| x == n).map(|(h, _)| format!("fieldany {}#{h}", self.tok_name(*h)));
-                        let preds: Vec<String> = self.nodes.iter().enumerate().filter(|(_, nd)| nd.succ.contains(&n)).take(6).map(|(i, nd)| format!("{}#{i}({})", self.labels[i], nd.pts.len())).collect();
-                        if let Some(&fa) = self.field_any.get(&origin) {
-                            let p2: Vec<String> = self.nodes.iter().enumerate().filter(|(_, nd)| nd.succ.contains(&fa)).take(8).map(|(i, nd)| { let f = self.node_fn[i]; format!("{}#{i}({}) fn={} cons={:?}", self.labels[i], nd.pts.len(), if f == NO_FN { "-".into() } else { self.funcs[f as usize].name.clone() }, nd.cons.iter().take(3).map(|c| c.kind_name()).collect::<Vec<_>>()) }).collect();
-                            eprintln!("CWL anypreds of fieldany({})#{fa}: {p2:?}", self.tok_name(origin));
-                        }
-                        eprintln!("CWL thisto callee={}#{n} toks={} holder={holder:?} cv={cvh:?} any={any:?} preds={preds:?} origin={} callee_fn={} calls={}", self.labels[n as usize], toks.len(), self.tok_name(origin), self.tok_name(t), calls.len());
-                    }
-                }
+                let calls = self
+                    .via_calls
+                    .get(&(n, origin))
+                    .cloned()
+                    .unwrap_or_default();
                 for &t in toks {
                     // Each receiver binds every call looked up through
                     // this node: solve work per call.
@@ -1159,7 +1105,9 @@ impl Model {
 
     pub(crate) fn store_into(&mut self, t: Tok, key: Key, src: NodeId, site: SiteId) {
         // A program-owned global: an ordinary field of the global object.
-        if let (TokKind::Builtin(BuiltinNs::GlobalThis), Key::Named(a)) = (&self.toks[t as usize], key) {
+        if let (TokKind::Builtin(BuiltinNs::GlobalThis), Key::Named(a)) =
+            (&self.toks[t as usize], key)
+        {
             if builtins::global_user_key(&self.atoms[a as usize])
                 && !builtins::native_written(self, t, a)
             {
@@ -1196,13 +1144,18 @@ impl Model {
             if self.bf_written.is_none() {
                 self.bf_written = Some(r);
                 for dst in std::mem::take(&mut self.bf_reads) {
-                    self.add_top(dst, |_| "property of a written builtin function value".into());
+                    self.add_top(dst, |_| {
+                        "property of a written builtin function value".into()
+                    });
                 }
             }
             return;
         }
         if let Some(is) = self.contract_recv.get(&t).cloned() {
-            self.recv_log.entry(t).or_default().push(crate::model::RecvEffect::Store(key, src, site));
+            self.recv_log
+                .entry(t)
+                .or_default()
+                .push(crate::model::RecvEffect::Store(key, src, site));
             for i in is {
                 self.store_into(i, key, src, site);
             }
@@ -1220,7 +1173,11 @@ impl Model {
         // every other unit reads that field as unknown.
         let effect = match (tm.and_then(|tm| self.foreign.get(&tm)), key) {
             (Some(facts), Key::Named(a)) if matches!(self.toks[t as usize], TokKind::Obj(..)) => {
-                facts.kind == "litclass" && facts.fields.iter().any(|f| f.data_field && f.key == self.atoms[a as usize])
+                facts.kind == "litclass"
+                    && facts
+                        .fields
+                        .iter()
+                        .any(|f| f.data_field && f.key == self.atoms[a as usize])
             }
             _ => false,
         };
@@ -1354,14 +1311,24 @@ impl Model {
             Cons::Call { call } => format!("call {n} {call}"),
             Cons::CallThis { call, this } => format!("callthis {n} {call} {this}"),
             Cons::New { call } => format!("new {n} {call}"),
-            Cons::NewNamed { name, call } => format!("newnamed {n} {} {call}", esc_key(&self.atoms[*name as usize])),
+            Cons::NewNamed { name, call } => format!(
+                "newnamed {n} {} {call}",
+                esc_key(&self.atoms[*name as usize])
+            ),
             Cons::MCall { key, call } => format!("mcall {n} {} {call}", self.key_name(*key)),
             Cons::Chain { origin, key, act } => {
                 format!("chain {n} {origin} {} {act:?}", self.key_name(*key))
             }
             Cons::TopSink { reason } => format!("top {n} {reason}"),
-            Cons::ContractThis { tmpl, reason, statics } => format!("contractthis {n} {tmpl} {reason} {}", *statics as u8),
-            Cons::TopIfAny { dst, from, reason } => format!("topifany {n} {dst} {from} {}", reason.map_or(-1, |r| r as i64)),
+            Cons::ContractThis {
+                tmpl,
+                reason,
+                statics,
+            } => format!("contractthis {n} {tmpl} {reason} {}", *statics as u8),
+            Cons::TopIfAny { dst, from, reason } => format!(
+                "topifany {n} {dst} {from} {}",
+                reason.map_or(-1, |r| r as i64)
+            ),
             Cons::Hard { kind, reason } => format!("hard {n} {} {reason}", kind.code()),
             Cons::AddsKeys => format!("addskeys {n}"),
             Cons::Implicit { reason } => format!("implicit {n} {reason}"),
@@ -1405,7 +1372,9 @@ impl Model {
                 )
             }
             Cons::ProtoFrom { src } => format!("protofrom {n} {src}"),
-            Cons::BirthField { key, src } => format!("birthfield {n} {} {src}", self.key_name(*key)),
+            Cons::BirthField { key, src } => {
+                format!("birthfield {n} {} {src}", self.key_name(*key))
+            }
             Cons::ProtoOf { dst } => format!("protoof {n} {dst}"),
             Cons::IterNext { dst } => format!("iternext {n} {dst}"),
             Cons::NewTargetHard { reason } => format!("newtargethard {n} {reason}"),
@@ -1454,10 +1423,4 @@ impl Model {
     pub fn fn_tokens(&self, n: NodeId) -> Vec<Tok> {
         self.fns_of(n)
     }
-}
-
-/// TEMP CWU2: `CWU2_ESC=<token-name substring>` prints the node that sinks it.
-pub(crate) fn cwu2_esc() -> Option<&'static String> {
-    static P: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-    P.get_or_init(|| std::env::var("CWU2_ESC").ok()).as_ref()
 }

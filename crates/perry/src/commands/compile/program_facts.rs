@@ -177,7 +177,11 @@ pub(crate) fn run(
                 u.pts_entries,
                 u.work,
                 u.gen_ms + u.solve_ms + u.derive_ms,
-                if u.aborted { ", OVER the bound: no facts" } else { "" }
+                if u.aborted {
+                    ", OVER the bound: no facts"
+                } else {
+                    ""
+                }
             );
         }
     }

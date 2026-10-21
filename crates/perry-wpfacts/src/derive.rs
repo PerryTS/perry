@@ -159,7 +159,10 @@ pub fn derive(g: &mut Gen) -> (Vec<TemplateFacts>, Vec<SiteFacts>) {
         // Another unit's class: the facts its defining unit published; what
         // this unit does beyond the contract is its census report (§11.3).
         if let Some(f) = m.foreign.get(&tm) {
-            out.push(crate::TemplateFacts { id: tm, ..f.clone() });
+            out.push(crate::TemplateFacts {
+                id: tm,
+                ..f.clone()
+            });
             continue;
         }
         let tf = template_facts(m, tm, &global, &objproto_hard);
@@ -387,7 +390,10 @@ fn template_facts(
 /// The field holds only typed-array objects, none exposed, transferred,
 /// resized or escaped.
 fn ta_only_sealed(m: &Model, ts: &[Tok], a: Atom) -> bool {
-    let ns: Vec<NodeId> = ts.iter().filter_map(|&t| m.fields.get(&(t, a)).copied()).collect();
+    let ns: Vec<NodeId> = ts
+        .iter()
+        .filter_map(|&t| m.fields.get(&(t, a)).copied())
+        .collect();
     !ns.is_empty()
         && ns.iter().all(|&n| {
             let node = &m.nodes[n as usize];
@@ -515,9 +521,14 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
         // typed with an object type is decided after the census.
         let mut guard_keys = None;
         if let Verdict::No(_) = verdict {
-            let guards: Option<Vec<&crate::gen::ParamGuard>> = recvs.iter().map(|r| g.param_guard.get(r)).collect();
+            let guards: Option<Vec<&crate::gen::ParamGuard>> =
+                recvs.iter().map(|r| g.param_guard.get(r)).collect();
             match guards.as_deref() {
-                Some([crate::gen::ParamGuard::Keys(k), rest @ ..]) if rest.iter().all(|x| matches!(x, crate::gen::ParamGuard::Keys(k2) if k2 == k)) => {
+                Some([crate::gen::ParamGuard::Keys(k), rest @ ..])
+                    if rest
+                        .iter()
+                        .all(|x| matches!(x, crate::gen::ParamGuard::Keys(k2) if k2 == k)) =>
+                {
                     guard_keys = Some(k.clone());
                 }
                 _ => {}
@@ -529,11 +540,15 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
                     _ => m.this_class.get(r).copied(),
                 })
                 .collect::<Option<Vec<_>>>();
-            if let Some(tm) = guarded.filter(|g| g.windows(2).all(|w| w[0] == w[1])).and_then(|g| g.first().copied()) {
+            if let Some(tm) = guarded
+                .filter(|g| g.windows(2).all(|w| w[0] == w[1]))
+                .and_then(|g| g.first().copied())
+            {
                 if let Some(&it) = class_tok.get(&tm) {
                     let (r2, _, v2, f2, t2) = judge(m, &by_id, s, &key, &[it], 0, top_recv);
                     if matches!(v2, Verdict::T0Mono | Verdict::T0Set) {
-                        (receivers, top, verdict, fixed_shape, targets) = (r2, true, Verdict::E0, f2, t2);
+                        (receivers, top, verdict, fixed_shape, targets) =
+                            (r2, true, Verdict::E0, f2, t2);
                     }
                 }
             }
@@ -567,127 +582,125 @@ fn judge(
     prim: u16,
     top_recv: NodeId,
 ) -> (Vec<String>, bool, Verdict, bool, FxHashMap<FnIdx, String>) {
-        let mut receivers = Vec::new();
-        let mut top = false;
-        let mut verdict: Option<Verdict> = None;
-        let mut slots: Vec<Option<u32>> = Vec::new();
-        let mut fixed_shape = true;
-        // Keyed by the function itself: two methods may share a name.
-        let mut targets: FxHashMap<FnIdx, String> = FxHashMap::default();
-        for &t in toks {
-            match &m.toks[t as usize] {
-                TokKind::Top => {
-                    top = true;
-                    verdict.get_or_insert_with(|| {
-                        if m.explain {
-                            Verdict::No(format!(
-                                "receiver from unmodeled code (TOP) <- {}",
-                                m.top_origin(top_recv)
-                            ))
-                        } else {
-                            Verdict::No("receiver from unmodeled code (TOP)".into())
-                        }
-                    });
-                }
-                // A closed function's parameter marker (decision 13): what
-                // its callers pass is the stand-ins beside it; the marker
-                // only records the uses for its contract.
-                TokKind::Obj(..) if m.param_marker.get(&t).is_some_and(|(f, _)| m.closed_params.contains_key(f)) => {}
-                TokKind::Obj(tm, _) => {
-                    let Some(tf) = by_id.get(tm) else {
-                        receivers.push(m.tok_name(t));
-                        verdict.get_or_insert(Verdict::No("receiver is not a fact unit".into()));
-                        continue;
+    let mut receivers = Vec::new();
+    let mut top = false;
+    let mut verdict: Option<Verdict> = None;
+    let mut slots: Vec<Option<u32>> = Vec::new();
+    let mut fixed_shape = true;
+    // Keyed by the function itself: two methods may share a name.
+    let mut targets: FxHashMap<FnIdx, String> = FxHashMap::default();
+    for &t in toks {
+        match &m.toks[t as usize] {
+            TokKind::Top => {
+                top = true;
+                verdict.get_or_insert_with(|| {
+                    if m.explain {
+                        Verdict::No(format!(
+                            "receiver from unmodeled code (TOP) <- {}",
+                            m.top_origin(top_recv)
+                        ))
+                    } else {
+                        Verdict::No("receiver from unmodeled code (TOP)".into())
+                    }
+                });
+            }
+            // A closed function's parameter marker (decision 13): what
+            // its callers pass is the stand-ins beside it; the marker
+            // only records the uses for its contract.
+            TokKind::Obj(..)
+                if m.param_marker
+                    .get(&t)
+                    .is_some_and(|(f, _)| m.closed_params.contains_key(f)) => {}
+            TokKind::Obj(tm, _) => {
+                let Some(tf) = by_id.get(tm) else {
+                    receivers.push(m.tok_name(t));
+                    verdict.get_or_insert(Verdict::No("receiver is not a fact unit".into()));
+                    continue;
+                };
+                receivers.push(tf.display.clone());
+                if !tf.prefix_stable {
+                    let why = if let Some(e) = &tf.escape {
+                        format!("escape: {e}")
+                    } else if let Some(h) = &tf.hard {
+                        format!("hard: {h}")
+                    } else {
+                        format!("chain: {}", tf.chain.clone().unwrap_or_default())
                     };
-                    receivers.push(tf.display.clone());
-                    if !tf.prefix_stable {
-                        let why = if let Some(e) = &tf.escape {
-                            format!("escape: {e}")
-                        } else if let Some(h) = &tf.hard {
-                            format!("hard: {h}")
-                        } else {
-                            format!("chain: {}", tf.chain.clone().unwrap_or_default())
-                        };
-                        verdict.get_or_insert(Verdict::No(why));
-                        continue;
-                    }
-                    if !tf.fixed_layout {
-                        fixed_shape = false;
-                    }
-                    if s.is_call {
-                        // F5: the method resolves through the (stable) chain.
-                        let tgt = resolve_method(m, t, s.key);
-                        match tgt {
-                            Some((f, name)) => {
-                                targets.insert(f, name);
-                            }
-                            None => {
-                                verdict.get_or_insert(Verdict::No(
-                                    "method not resolved to one body".into(),
-                                ));
-                            }
+                    verdict.get_or_insert(Verdict::No(why));
+                    continue;
+                }
+                if !tf.fixed_layout {
+                    fixed_shape = false;
+                }
+                if s.is_call {
+                    // F5: the method resolves through the (stable) chain.
+                    let tgt = resolve_method(m, t, s.key);
+                    match tgt {
+                        Some((f, name)) => {
+                            targets.insert(f, name);
                         }
-                        continue;
-                    }
-                    match tf.fields.iter().find(|f| f.key == *key) {
-                        Some(f) if f.definite && f.data_field && f.slot.is_some() => {
-                            slots.push(f.slot)
-                        }
-                        Some(f) if !f.data_field => {
-                            verdict.get_or_insert(Verdict::No("accessor key (E25)".into()));
-                        }
-                        Some(_) | None => {
-                            // Not a definite birth field: a prototype member
-                            // or a key added after birth.
+                        None => {
                             verdict.get_or_insert(Verdict::No(
-                                "key not a definite birth field".into(),
+                                "method not resolved to one body".into(),
                             ));
                         }
                     }
+                    continue;
                 }
-                other => {
-                    receivers.push(m.tok_name(t));
-                    let _ = other;
-                    verdict
-                        .get_or_insert(Verdict::No("receiver is a builtin/function value".into()));
-                }
-            }
-        }
-        // Birth-site tokens of one template are one receiver layout.
-        let mut seen_r: FxHashSet<String> = FxHashSet::default();
-        receivers.retain(|r| seen_r.insert(r.clone()));
-        if toks.is_empty() && prim == 0 {
-            verdict.get_or_insert(Verdict::No("dead site (no receiver flows)".into()));
-        }
-        if toks.is_empty() && prim != 0 {
-            verdict.get_or_insert(Verdict::No("primitive receiver".into()));
-        }
-        let verdict = match verdict {
-            Some(v) => v,
-            None if s.is_call => {
-                if targets.len() == 1 {
-                    if receivers.len() == 1 {
-                        Verdict::T0Mono
-                    } else {
-                        Verdict::T0Set
+                match tf.fields.iter().find(|f| f.key == *key) {
+                    Some(f) if f.definite && f.data_field && f.slot.is_some() => slots.push(f.slot),
+                    Some(f) if !f.data_field => {
+                        verdict.get_or_insert(Verdict::No("accessor key (E25)".into()));
                     }
-                } else {
-                    Verdict::No(format!("{} method targets", targets.len()))
-                }
-            }
-            None => {
-                let first = slots.first().copied().flatten();
-                if slots.iter().all(|s| *s == first) {
-                    if receivers.len() == 1 {
-                        Verdict::T0Mono
-                    } else {
-                        Verdict::T0Set
+                    Some(_) | None => {
+                        // Not a definite birth field: a prototype member
+                        // or a key added after birth.
+                        verdict.get_or_insert(Verdict::No("key not a definite birth field".into()));
                     }
-                } else {
-                    Verdict::No("slots differ across the receiver set".into())
                 }
             }
-        };
+            other => {
+                receivers.push(m.tok_name(t));
+                let _ = other;
+                verdict.get_or_insert(Verdict::No("receiver is a builtin/function value".into()));
+            }
+        }
+    }
+    // Birth-site tokens of one template are one receiver layout.
+    let mut seen_r: FxHashSet<String> = FxHashSet::default();
+    receivers.retain(|r| seen_r.insert(r.clone()));
+    if toks.is_empty() && prim == 0 {
+        verdict.get_or_insert(Verdict::No("dead site (no receiver flows)".into()));
+    }
+    if toks.is_empty() && prim != 0 {
+        verdict.get_or_insert(Verdict::No("primitive receiver".into()));
+    }
+    let verdict = match verdict {
+        Some(v) => v,
+        None if s.is_call => {
+            if targets.len() == 1 {
+                if receivers.len() == 1 {
+                    Verdict::T0Mono
+                } else {
+                    Verdict::T0Set
+                }
+            } else {
+                Verdict::No(format!("{} method targets", targets.len()))
+            }
+        }
+        None => {
+            let first = slots.first().copied().flatten();
+            if slots.iter().all(|s| *s == first) {
+                if receivers.len() == 1 {
+                    Verdict::T0Mono
+                } else {
+                    Verdict::T0Set
+                }
+            } else {
+                Verdict::No("slots differ across the receiver set".into())
+            }
+        }
+    };
     (receivers, top, verdict, fixed_shape, targets)
 }
 

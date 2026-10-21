@@ -240,10 +240,16 @@ pub(crate) fn published_surface(
             for s in &imp.specifiers {
                 match s {
                     ImportSpecifier::Named { imported, .. } => {
-                        p.names.entry(t.clone()).or_default().insert(imported.clone());
+                        p.names
+                            .entry(t.clone())
+                            .or_default()
+                            .insert(imported.clone());
                     }
                     ImportSpecifier::Default { .. } => {
-                        p.names.entry(t.clone()).or_default().insert("default".into());
+                        p.names
+                            .entry(t.clone())
+                            .or_default()
+                            .insert("default".into());
                     }
                     ImportSpecifier::Namespace { .. } => {
                         p.whole.insert(t.clone());
@@ -253,7 +259,9 @@ pub(crate) fn published_surface(
         }
         for e in exports.iter() {
             match e {
-                Export::ReExport { source, imported, .. } => {
+                Export::ReExport {
+                    source, imported, ..
+                } => {
                     if let Some(t) = resolve(source) {
                         p.names.entry(t).or_default().insert(imported.clone());
                     }
@@ -304,7 +312,11 @@ fn owner_of(out: &[Solve], t: &std::ops::Range<usize>, name: &str) -> Option<usi
 }
 
 fn solves<'a>(sorted: &[(&'a str, &'a Module)], flats: &'a [Option<Module>]) -> Vec<Solve<'a>> {
-    let index: FxHashMap<&str, usize> = sorted.iter().enumerate().map(|(i, (p, _))| (*p, i)).collect();
+    let index: FxHashMap<&str, usize> = sorted
+        .iter()
+        .enumerate()
+        .map(|(i, (p, _))| (*p, i))
+        .collect();
     let mut out: Vec<Solve<'a>> = Vec::new();
     let mut range: Vec<std::ops::Range<usize>> = Vec::with_capacity(sorted.len());
     for (mi, (path, module)) in sorted.iter().enumerate() {
@@ -313,7 +325,10 @@ fn solves<'a>(sorted: &[(&'a str, &'a Module)], flats: &'a [Option<Module>]) -> 
         // for the cut (N5, §12.5): the module's run-once view, one per
         // module, shared by all its units.
         let module: &'a Module = flats[mi].as_ref().unwrap_or(module);
-        for (k, (view, deps)) in crate::decl_units::views(path, module).into_iter().enumerate() {
+        for (k, (view, deps)) in crate::decl_units::views(path, module)
+            .into_iter()
+            .enumerate()
+        {
             let deps: Vec<usize> = deps.into_iter().map(|d| base + d).collect();
             out.push(Solve {
                 mi,
@@ -330,7 +345,12 @@ fn solves<'a>(sorted: &[(&'a str, &'a Module)], flats: &'a [Option<Module>]) -> 
         let (path, module) = sorted[out[si].mi];
         let mut after: Vec<usize> = Vec::new();
         for imp in &module.imports {
-            let Some(&t) = imp.resolved_path.as_deref().filter(|t| *t != path).and_then(|t| index.get(t)) else {
+            let Some(&t) = imp
+                .resolved_path
+                .as_deref()
+                .filter(|t| *t != path)
+                .and_then(|t| index.get(t))
+            else {
                 continue;
             };
             out[si].deps.extend(range[t].clone());
@@ -407,12 +427,28 @@ fn dependency_order(solves: &[Solve]) -> Vec<usize> {
 /// only grows, so this ends.
 
 pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts {
-    let ucfg = FactsConfig { unit: true, ..cfg.clone() };
-    let flats: Vec<Option<Module>> = sorted.iter().map(|(_, m)| crate::decl_units::run_once_flat(m)).collect();
+    let ucfg = FactsConfig {
+        unit: true,
+        ..cfg.clone()
+    };
+    let flats: Vec<Option<Module>> = sorted
+        .iter()
+        .map(|(_, m)| crate::decl_units::run_once_flat(m))
+        .collect();
     let solves = solves(sorted, &flats);
     let viewed: Vec<(&str, Vec<&Import>, &[Export])> = solves
         .iter()
-        .map(|s| (sorted[s.mi].0, s.module.imports.iter().chain(s.view.imports.iter()).collect(), s.view.exports.as_slice()))
+        .map(|s| {
+            (
+                sorted[s.mi].0,
+                s.module
+                    .imports
+                    .iter()
+                    .chain(s.view.imports.iter())
+                    .collect(),
+                s.view.exports.as_slice(),
+            )
+        })
         .collect();
     let mut input = published_surface(&viewed, cfg);
     let order = dependency_order(&solves);
@@ -477,7 +513,9 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
                 continue;
             }
             for (nm, ac) in &u.args_out {
-                args.entry((path.to_string(), nm.clone())).or_default().join(ac);
+                args.entry((path.to_string(), nm.clone()))
+                    .or_default()
+                    .join(ac);
             }
         }
         let mut seeds: Vec<usize> = Vec::new();
@@ -522,10 +560,20 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
             }
         }
         input.stores = stores;
-        let fresh: Vec<String> = reports.into_iter().filter(|d| !input.broken.contains(d)).collect();
+        let fresh: Vec<String> = reports
+            .into_iter()
+            .filter(|d| !input.broken.contains(d))
+            .collect();
         if !fresh.is_empty() || !seeds.is_empty() {
-            dirty = if fresh.is_empty() { vec![false; solves.len()] } else { resolve_again(&solves, &per_unit, &fresh) };
-            for (si, d) in dependents(&solves, &per_unit, seeds).into_iter().enumerate() {
+            dirty = if fresh.is_empty() {
+                vec![false; solves.len()]
+            } else {
+                resolve_again(&solves, &per_unit, &fresh)
+            };
+            for (si, d) in dependents(&solves, &per_unit, seeds)
+                .into_iter()
+                .enumerate()
+            {
                 dirty[si] |= d;
             }
             input.broken.extend(fresh);
@@ -580,7 +628,13 @@ fn dependency_levels(solves: &[Solve], order: &[usize]) -> Vec<Vec<usize>> {
     let mut level = vec![0usize; solves.len()];
     let mut out: Vec<Vec<usize>> = Vec::new();
     for &si in order {
-        let l = solves[si].after.iter().filter(|&&w| pos[w] < pos[si]).map(|&w| level[w] + 1).max().unwrap_or(0);
+        let l = solves[si]
+            .after
+            .iter()
+            .filter(|&&w| pos[w] < pos[si])
+            .map(|&w| level[w] + 1)
+            .max()
+            .unwrap_or(0);
         level[si] = l;
         if out.len() <= l {
             out.resize_with(l + 1, Vec::new);
@@ -603,7 +657,10 @@ fn solve_level(
     let solve = |si: usize| {
         let s = &solves[si];
         let list = [(sorted[s.mi].0.to_string(), s.module)];
-        (si, crate::compute_in(&list, ucfg, Some(input), Some(&s.view)))
+        (
+            si,
+            crate::compute_in(&list, ucfg, Some(input), Some(&s.view)),
+        )
     };
     let jobs = ucfg.jobs.clamp(1, todo.len().max(1));
     if jobs == 1 {
@@ -619,7 +676,9 @@ fn solve_level(
                     .stack_size(256 << 20)
                     .spawn_scoped(sc, || {
                         let mut mine = Vec::new();
-                        while let Some(&si) = todo.get(next.fetch_add(1, std::sync::atomic::Ordering::Relaxed)) {
+                        while let Some(&si) =
+                            todo.get(next.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+                        {
                             mine.push(solve(si));
                         }
                         mine
@@ -627,7 +686,10 @@ fn solve_level(
                     .expect("spawn a unit solver")
             })
             .collect();
-        workers.into_iter().flat_map(|w| w.join().expect("a unit solve panicked")).collect()
+        workers
+            .into_iter()
+            .flat_map(|w| w.join().expect("a unit solve panicked"))
+            .collect()
     })
 }
 
@@ -683,7 +745,12 @@ fn unit_io(
         o.sort();
         o.dedup();
         outs.push(o);
-        let mut w: Vec<String> = u.templates.iter().filter(|t| t.module == Some(0)).map(|t| t.display.clone()).collect();
+        let mut w: Vec<String> = u
+            .templates
+            .iter()
+            .filter(|t| t.module == Some(0))
+            .map(|t| t.display.clone())
+            .collect();
         w.extend(u.fns_defined.iter().cloned());
         owned.push(w);
     }
@@ -691,7 +758,12 @@ fn unit_io(
     for (si, s) in solves.iter().enumerate() {
         let u = per_unit[si].as_ref().expect("every unit solved");
         let path = sorted[s.mi].0;
-        let mut after: Vec<usize> = s.after.iter().copied().filter(|&w| pos[w] < pos[si]).collect();
+        let mut after: Vec<usize> = s
+            .after
+            .iter()
+            .copied()
+            .filter(|&w| pos[w] < pos[si])
+            .collect();
         after.sort();
         after.dedup();
         let mut h = FNV_OFFSET;
@@ -705,13 +777,29 @@ fn unit_io(
         closed.sort();
         let closed_names: Vec<&str> = closed.iter().map(|n| n.as_str()).collect();
         for nm in closed {
-            fnv(&mut h, &format!("arg {nm} {:?}", input.args.get(&(path.to_string(), nm.clone()))));
+            fnv(
+                &mut h,
+                &format!(
+                    "arg {nm} {:?}",
+                    input.args.get(&(path.to_string(), nm.clone()))
+                ),
+            );
         }
-        let mut seen: Vec<&String> = owned[si].iter().chain(after.iter().flat_map(|&w| owned[w].iter())).collect();
+        let mut seen: Vec<&String> = owned[si]
+            .iter()
+            .chain(after.iter().flat_map(|&w| owned[w].iter()))
+            .collect();
         seen.sort();
         seen.dedup();
         for d in seen {
-            fnv(&mut h, &format!("store {d} {:?} broken {}", input.stores.get(d), input.broken.contains(d)));
+            fnv(
+                &mut h,
+                &format!(
+                    "store {d} {:?} broken {}",
+                    input.stores.get(d),
+                    input.broken.contains(d)
+                ),
+            );
         }
         let mut f = FNV_OFFSET;
         for t in u.templates.iter().filter(|t| t.module == Some(0)) {
@@ -724,14 +812,29 @@ fn unit_io(
         }
         let st = &u.stats;
         // Its declarations by name (the first few): where an edit lands.
-        let mut decls: Vec<String> = s.view.classes.iter().map(|&k| format!("class:{}", s.module.classes[k].name)).collect();
-        decls.extend(s.view.funcs.iter().map(|&k| s.module.functions[k].name.clone()));
+        let mut decls: Vec<String> = s
+            .view
+            .classes
+            .iter()
+            .map(|&k| format!("class:{}", s.module.classes[k].name))
+            .collect();
+        decls.extend(
+            s.view
+                .funcs
+                .iter()
+                .map(|&k| s.module.functions[k].name.clone()),
+        );
         let more = decls.len().saturating_sub(6);
         decls.truncate(6);
         if more > 0 {
             decls.push(format!("+{more}"));
         }
-        let keys = |v: &[usize]| v.iter().map(|&w| solves[w].key.as_str()).collect::<Vec<_>>().join(",");
+        let keys = |v: &[usize]| {
+            v.iter()
+                .map(|&w| solves[w].key.as_str())
+                .collect::<Vec<_>>()
+                .join(",")
+        };
         let mut deps = s.deps.clone();
         deps.sort();
         deps.dedup();
@@ -758,7 +861,11 @@ fn unit_io(
 /// and publishes nothing whatever its inputs, so it keeps its result and
 /// passes no change on: solving it again would only pay the bound again. A
 /// display no unit defines makes every unit dirty.
-fn resolve_again(solves: &[Solve], per_unit: &[Option<ProgramFacts>], fresh: &[String]) -> Vec<bool> {
+fn resolve_again(
+    solves: &[Solve],
+    per_unit: &[Option<ProgramFacts>],
+    fresh: &[String],
+) -> Vec<bool> {
     let n = solves.len();
     let owner = owners(per_unit);
     let mut work: Vec<usize> = Vec::new();
@@ -789,7 +896,11 @@ fn owners(per_unit: &[Option<ProgramFacts>]) -> FxHashMap<String, Vec<usize>> {
 
 /// Units `work` and every unit depending on one of them, transitively;
 /// a unit over the bound keeps its result (`resolve_again`).
-fn dependents(solves: &[Solve], per_unit: &[Option<ProgramFacts>], mut work: Vec<usize>) -> Vec<bool> {
+fn dependents(
+    solves: &[Solve],
+    per_unit: &[Option<ProgramFacts>],
+    mut work: Vec<usize>,
+) -> Vec<bool> {
     let n = solves.len();
     let mut importers: Vec<Vec<usize>> = vec![Vec::new(); n];
     for (si, s) in solves.iter().enumerate() {
@@ -818,7 +929,10 @@ fn merge_unit(pf: &mut ProgramFacts, mi: usize, path: &str, u: ProgramFacts) {
         t.id = pf.templates.len() as crate::model::TmplId;
         pf.templates.push(t);
     }
-    pf.sites.extend(u.sites.into_iter().map(|s| SiteFacts { module: mi as u32, ..s }));
+    pf.sites.extend(u.sites.into_iter().map(|s| SiteFacts {
+        module: mi as u32,
+        ..s
+    }));
     if let Some(b) = u.bindings.into_iter().next() {
         let into = &mut pf.bindings[mi];
         into.locals.extend(b.locals);
@@ -855,7 +969,9 @@ fn merge_unit(pf: &mut ProgramFacts, mi: usize, path: &str, u: ProgramFacts) {
 fn typed_param_verdicts(pf: &mut ProgramFacts) {
     let mut cand_of: FxHashMap<Vec<String>, Vec<usize>> = FxHashMap::default();
     for s in pf.sites.iter_mut() {
-        let Some(keys) = s.guard_keys.take() else { continue };
+        let Some(keys) = s.guard_keys.take() else {
+            continue;
+        };
         if !matches!(s.verdict, crate::Verdict::No(_)) || s.is_call {
             continue;
         }
@@ -865,7 +981,11 @@ fn typed_param_verdicts(pf: &mut ProgramFacts) {
                 .filter(|&i| {
                     let t = &tfs[i];
                     t.class_id.is_some()
-                        && keys.iter().all(|k| t.fields.iter().any(|f| &f.key == k && f.definite && f.data_field))
+                        && keys.iter().all(|k| {
+                            t.fields
+                                .iter()
+                                .any(|f| &f.key == k && f.definite && f.data_field)
+                        })
                 })
                 .collect()
         });
@@ -873,10 +993,17 @@ fn typed_param_verdicts(pf: &mut ProgramFacts) {
             continue;
         }
         let slot = |t: &TemplateFacts| {
-            t.fields.iter().find(|f| f.key == s.key && f.definite && f.data_field).and_then(|f| f.slot)
+            t.fields
+                .iter()
+                .find(|f| f.key == s.key && f.definite && f.data_field)
+                .and_then(|f| f.slot)
         };
         let first = slot(&tfs[cands[0]]);
-        if first.is_some() && cands.iter().all(|&i| tfs[i].prefix_stable && slot(&tfs[i]) == first) {
+        if first.is_some()
+            && cands
+                .iter()
+                .all(|&i| tfs[i].prefix_stable && slot(&tfs[i]) == first)
+        {
             s.receivers = cands.iter().map(|&i| tfs[i].display.clone()).collect();
             s.verdict = crate::Verdict::E0;
         }

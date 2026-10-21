@@ -345,12 +345,20 @@ pub enum Cons {
     /// receiver escapes (that unit runs the method on it unseen).
     /// `this` of another unit's method: only that class's instances (and,
     /// for a static method, its class object); any other receiver escapes.
-    ContractThis { tmpl: TmplId, reason: u32, statics: bool },
+    ContractThis {
+        tmpl: TmplId,
+        reason: u32,
+        statics: bool,
+    },
     /// Once anything (a token or a primitive) reaches the node, `dst` holds
     /// ⊤ and everything `from` holds: the result of a call that exists only
     /// when an argument reaches it.
     /// (`reason` `None`: only `from`, no ⊤.)
-    TopIfAny { dst: NodeId, from: NodeId, reason: Option<u32> },
+    TopIfAny {
+        dst: NodeId,
+        from: NodeId,
+        reason: Option<u32>,
+    },
     /// Every object token reaches a HARD operation.
     Hard { kind: Hard, reason: u32 },
     /// Every token gains keys after birth (computed store …).
@@ -771,26 +779,6 @@ pub struct Model {
     /// With the profile: propagation work by source-node label
     /// (delta × successors, delta × constraints).
     pub label_work: FxHashMap<&'static str, (u64, u64, u64)>,
-    /// TEMP CW s9: per-node propagation work (profile only).
-    pub cw9_node_work: FxHashMap<u32, u64>,
-    pub cw9_inst_fn: FxHashMap<u32, (u32, u32)>,
-    /// TEMP CWL: (fn, this shape, ret label, protocol, bound-synth, program call) -> (n, first receiver, site).
-    pub cwl_recv: FxHashMap<(FnIdx, String, &'static str, bool, bool, bool), (u32, String, u32)>,
-    pub cwl_seen: crate::pts::FxHashSet<CallId>,
-    pub cwl_why: &'static str,
-    /// TEMP CWL: first arrival of a token in a node: (source node, constraint kind).
-    pub cwl_prov: FxHashMap<(NodeId, Tok), (NodeId, &'static str)>,
-    pub cwl_trace: Option<NodeId>,
-    pub cwl_slot: FxHashMap<NodeId, NodeId>,
-    pub cwl_firstfn: crate::pts::FxHashSet<FnIdx>,
-    pub cwl_tok: Option<Tok>,
-    pub cwl_inst_probe: bool,
-    pub cwl_tokhit: NodeId,
-    pub cwl_tokfns: crate::pts::FxHashSet<FnIdx>,
-    pub cwl_thisinst: FxHashMap<(&'static str, FnIdx), u32>,
-    pub cw9_events: Vec<(u64, u32, u32, u32)>,
-    pub cw9_shared: FxHashMap<(u32, u32, u8, u32), u32>,
-    pub cw9_modkind: Vec<u8>,
     pub fn_inst: FxHashMap<FnIdx, TmplId>,
     /// Per-unit contracts (design §11.2): the methods of a published class
     /// run on its receiver token (`Model::publish_class`).
@@ -994,7 +982,12 @@ impl Model {
 
     /// The template token of `tm` and every birth-site token of it.
     pub fn tmpl_toks(&self, tm: TmplId) -> Vec<Tok> {
-        let mut v: Vec<Tok> = self.tok_index.get(&TokKind::Obj(tm, NO_CTX)).copied().into_iter().collect();
+        let mut v: Vec<Tok> = self
+            .tok_index
+            .get(&TokKind::Obj(tm, NO_CTX))
+            .copied()
+            .into_iter()
+            .collect();
         if let Some(s) = self.site_toks.get(&tm) {
             v.extend_from_slice(s);
         }
@@ -1312,13 +1305,6 @@ impl Model {
     #[inline]
     pub(crate) fn mark_use(&mut self, t: Tok, bits: u8) {
         if !self.param_marker.is_empty() && self.param_marker.contains_key(&t) {
-            if let Some(pat) = crate::solve::cwu2_esc() { // TEMP CWU2
-                if self.tok_name(t).contains(pat.as_str()) && bits & MARK_ESCAPE != 0 {
-                    let bt = std::backtrace::Backtrace::force_capture().to_string();
-                    let fr: Vec<&str> = bt.lines().filter(|l| l.contains("perry_wpfacts::")).take(6).collect();
-                    eprintln!("CWU2 use {} bits={bits} {:?}", self.tok_name(t), fr);
-                }
-            }
             *self.marker_use.entry(t).or_default() |= bits;
         }
     }
@@ -1331,7 +1317,11 @@ impl Model {
         let tm = self.tmpls.len() as TmplId;
         let display = format!("{}:param{i}", self.funcs[f as usize].name);
         self.tmpls.push(Template {
-            kind: TmplKind::BObj { module: 0, site: 0, what: "parameter marker" },
+            kind: TmplKind::BObj {
+                module: 0,
+                site: 0,
+                what: "parameter marker",
+            },
             display,
             birth_keys: Vec::new(),
             definite: Vec::new(),
