@@ -21,8 +21,8 @@ WASI versions here mean 0.1 (Preview 1), 0.2 (Preview 2), and 0.3
 | Browser `wasm` / `web` output | Core Wasm with Perry's JavaScript bridge | Not standalone WASI; raw Wasm output omits generated async JavaScript |
 | WASI 0.1 output | No supported compiler target | Defer until a concrete P1-only deployment requires it |
 | WASI 0.1 hosting in native Perry | Partial `node:wasi` lifecycle/import surface over wasmi | Most syscalls, operational preopens, correct randomness/clocks, guest exit |
-| WASI 0.2 output | Experimental command component; Linux execution requalified on 2026-10-21 | General WIT imports/exports; broader host/platform qualification |
-| WASI 0.2 component hosting | Not implemented | Component-capable engine and typed binding/lifetime integration |
+| WASI 0.2 output | Command components on Linux/macOS; initial synchronous library components qualified on Linux | Guest resources, HTTP and broader component qualification |
+| WASI 0.2 component hosting | Optional native `perry/component` host with typed WIT values and guest resources; Linux qualified | Host-defined resources, built-in WASI/HTTP providers and other platforms |
 | WASI 0.3 output/hosting | Not implemented | Native component async ABI, futures/streams, scheduling and cancellation |
 
 Perry's existing `perry/plugin` API loads native shared libraries; it does
@@ -73,8 +73,9 @@ TLS interoperability is not established by the TCP acceptance probes. UDP
 (`mod-dgram`), Unix-domain/named pipes, native addons, host process creation,
 and general platform-specific Node/Bun APIs are outside the tested profile.
 This is not a claim of complete Node API compatibility. Fresh compiler/runtime
-builds of the current repair still need Windows and macOS qualification;
-macOS execution of the Linux-produced artifacts is covered below.
+builds pass on Linux and macOS. Windows currently fails during linking, as
+detailed below. Typed library components have a separate
+[implementation and qualification record](WASI_COMPONENTS.md).
 
 ## Acceptance and CI
 
@@ -118,6 +119,16 @@ records the cases, tool versions, and hashes. This qualifies execution on that
 host, not a macOS build of Perry. Logs and the artifact manifest are in the local audit's
 `reports/2026-10-21-wasi-macos` directory.
 
+Fresh Linux and macOS CI builds subsequently passed **6/6 smoke**, **20/20
+acceptance**, **10/10 Node comparisons**, and **7,458 IR runtime-call ABI
+checks** on 2026-10-21. See the [Linux job](https://github.com/PerryTS/perry/actions/runs/39574495557/job/119136673285)
+and [macOS job](https://github.com/PerryTS/perry/actions/runs/39574495557/job/119136673071).
+These jobs built both Perry and the WASI runtime from source on their hosts.
+The [Windows job](https://github.com/PerryTS/perry/actions/runs/39574495557/job/119136673535)
+built the compiler and runtime, but all six smoke links failed with
+`wasm-ld: malformed uleb128, extends past end`. Current Windows execution
+is therefore unqualified; the older success below does not supersede this failure.
+
 Verified on Windows x64 on 2026-10-08 with the standard release runtime build:
 **18/18 acceptance**, **6/6 smoke**, and **10/10 Node comparisons** pass. Native
 GC regressions pass **171 tests** (one existing ignored test); WASI codegen unit
@@ -137,11 +148,12 @@ compared against the pinned Node 26.5.1 oracle, including advanced classes,
 objects, JSON, regexp and async behavior.
 
 The WASI codegen CI job is configured to run the complete acceptance, smoke and ten-case gap
-suites on Windows, Linux and macOS. The newly added macOS build leg still needs
-its first successful CI run. It retains the existing compatibility routing and
+suites on Windows, Linux and macOS. Linux and macOS pass; Windows has the
+linker failure described above. It retains the existing compatibility routing and
 `run-extended-tests` PR-label condition; it is not a required check on every PR.
 The baseline repair landed in [PR #12931](https://github.com/PerryTS/perry/pull/12931);
-the results above are local/validation-host measurements, not a full CI pass.
+the initial measurements above came from local/validation hosts, with the
+subsequent per-platform CI results linked separately.
 Build and per-case logs are retained under `/root/codex-wasi-20261021/logs` and
 copied to the local audit's `reports/2026-10-21-wasi-implementation` directory.
 

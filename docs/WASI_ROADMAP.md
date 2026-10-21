@@ -117,6 +117,13 @@ This is a substantial host integration, not an extra compiler-target flag.
 
 ## 3. Add typed P2 components in both directions
 
+The initial synchronous slice is implemented and qualified on Linux: native
+Perry hosting a Rust component, a Rust host calling a Perry component,
+direct Rust/Perry composition, structured-value round trips and native
+resource disposal under moving GC. See [the component record](WASI_COMPONENTS.md)
+for evidence and outstanding guest-resource, capability-provider, HTTP,
+CI and platform work. This milestone is not complete.
+
 Introduce an optional component-capable host boundary, for example a separate
 `perry-component-host` crate backed by Wasmtime. Keep it off the default native
 link path. The existing wasmi-based `WebAssembly.*` API has shared-memory,
