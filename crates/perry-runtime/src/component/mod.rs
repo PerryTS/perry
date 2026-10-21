@@ -2,6 +2,8 @@
 //! adapters are optional; module code owns all JS roots and exceptions.
 mod callback;
 mod cleanup;
+mod command;
+
 mod context;
 mod guest;
 mod host;

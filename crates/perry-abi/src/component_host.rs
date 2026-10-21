@@ -1,7 +1,9 @@
 //! Versioned C boundary for the optional Component Model engine.
 //! Byte buffers are freed by the allocator that produced them. Neither WIT
 //! values nor callbacks expose Perry heap addresses to component guests.
-pub const ABI_VERSION: u32 = 4;
+// Combined command, host-resource and deferred-cleanup operations.
+pub const ABI_VERSION: u32 = 5;
+
 pub const OK: i32 = 0;
 pub const ERROR: i32 = 1;
 /// The store or resource was released, but its destructor failed. Embeddings
@@ -55,6 +57,7 @@ pub type ResourceCallback = unsafe extern "C" fn(
 #[macro_export]
 macro_rules! component_host_entry_points {
     ($m:ident) => { $m! {
+        perry_component_host_run_command(bytes: *const u8, len: usize, options: *const u8, options_len: usize, output: *mut $crate::component_host::Buffer) -> i32;
         perry_component_host_buffer_drop(buffer: $crate::component_host::Buffer) -> ();
         perry_component_host_new(bytes: *const u8, len: usize, contract: *const u8, contract_len: usize, options: *const u8, options_len: usize, callback: Option<$crate::component_host::Callback>, free_callback: Option<$crate::component_host::FreeCallback>, resource_callback: Option<$crate::component_host::ResourceCallback>, context: u64, error: *mut $crate::component_host::Buffer) -> *mut core::ffi::c_void;
         perry_component_host_call(handle: *mut core::ffi::c_void, interface: *const u8, interface_len: usize, function: *const u8, function_len: usize, args: *const u8, args_len: usize, context: u64, output: *mut $crate::component_host::Buffer) -> i32;
