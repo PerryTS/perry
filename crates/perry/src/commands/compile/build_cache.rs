@@ -614,6 +614,10 @@ fn eligibility(args: &CompileArgs, project_root: &Path) -> Result<(), String> {
     if !args.asset_module.is_empty() {
         return Err("asset-module".to_string());
     }
+    // Aliases change resolution without appearing in any source file.
+    if !args.module_alias.is_empty() {
+        return Err("module-alias".to_string());
+    }
     if args.enable_wasm_runtime {
         return Err("wasm-runtime".to_string());
     }

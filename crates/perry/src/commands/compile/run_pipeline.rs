@@ -897,6 +897,7 @@ pub fn run_with_parse_cache(
     // `opencode-web-ui.gen.ts`) after upstream preparation has populated the
     // asset directory and before the import graph is resolved.
     asset_modules::generate(&args.asset_module, &mut ctx, format)?;
+    module_aliases::register(&args.module_alias, &mut ctx)?;
 
     // #1681 (Phase 3 of #1677): self-hosted build-time `precompile(...)`.
     // If this is the capture subprocess, enter capture mode; otherwise, when

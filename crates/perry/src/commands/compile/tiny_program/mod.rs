@@ -244,6 +244,7 @@ fn build_eligibility(
         || args.app_bundle_id.is_some()
         || !args.embed.is_empty()
         || !args.asset_module.is_empty()
+        || !args.module_alias.is_empty()
         || args.bunfs_root.is_some()
         || args.features.is_some()
         || args.minimal_stdlib
@@ -347,6 +348,7 @@ mod tests {
             |a: &mut CompileArgs| a.app_bundle_id = Some("app".into()),
             |a: &mut CompileArgs| a.embed.push("asset".into()),
             |a: &mut CompileArgs| a.asset_module.push("asset".into()),
+            |a: &mut CompileArgs| a.module_alias.push("alias=file.ts".into()),
             |a: &mut CompileArgs| a.features = Some("full".into()),
             |a: &mut CompileArgs| a.minimal_stdlib = true,
             |a: &mut CompileArgs| a.enable_geisterhand = true,
