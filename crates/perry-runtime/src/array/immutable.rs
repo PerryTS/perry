@@ -410,7 +410,12 @@ pub extern "C" fn js_array_copy_within(
         // would then copy stale storage; run the per-index spec loop
         // (HasProperty / Get / Set / Delete against the CURRENT state, with
         // the ORIGINAL captured len driving the bounds) instead.
-        if (*arr).length as i64 != len_i64 {
+        //
+        // A pre-sized `new Array(n)` above the dense limit has a logical length
+        // over its small backing store, so a memmove over `[s, e)` would read
+        // and write past the allocation; the per-index loop reads the slots
+        // beyond the store as holes and grows the store for a write.
+        if (*arr).length as i64 != len_i64 || (*arr).length > (*arr).capacity {
             copy_within_spec_dense(arr, len_i64, t, s, e);
             return arr;
         }

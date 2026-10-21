@@ -370,6 +370,11 @@ unsafe fn js_array_flat_into(
             }
             crate::array::array_spec_get(live_src, i as u32)
         } else {
+            // Slots at or past capacity (a pre-sized `new Array(n)` above the
+            // dense limit) are holes: stop at the backing store.
+            if i >= (*live_src).capacity as usize {
+                break;
+            }
             let elements =
                 crate::array::array_elements_ptr(live_src as *const ArrayHeader) as *const f64;
             let element = *elements.add(i);
@@ -404,7 +409,9 @@ pub extern "C" fn js_array_flat(arr: *const ArrayHeader) -> *mut ArrayHeader {
         return js_array_alloc(0);
     }
     unsafe {
-        let len = (*arr).length as usize;
+        // Slots at or past capacity are holes (a pre-sized `new Array(n)` above
+        // the dense limit keeps a small store under a long logical length).
+        let len = ((*arr).length as usize).min((*arr).capacity as usize);
         let elements = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64;
         let mut result = js_array_alloc(0);
 
@@ -419,6 +426,7 @@ pub extern "C" fn js_array_flat(arr: *const ArrayHeader) -> *mut ArrayHeader {
                 let sub_len = (*sub_arr).length as usize;
                 // Sanity check: if length is unreasonably large, treat as non-array.
                 if sub_len <= 1_000_000 {
+                    let sub_len = sub_len.min((*sub_arr).capacity as usize);
                     let sub_elements =
                         crate::array::array_elements_ptr(sub_arr as *const ArrayHeader)
                             as *const f64;
