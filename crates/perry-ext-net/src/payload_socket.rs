@@ -985,11 +985,18 @@ pub(crate) fn write(owner: f64, chunk: f64, encoding: f64, callback: f64) -> f64
     } else {
         callback.get()
     });
-    // Conversion may materialize an SSO string. Prove the receiver only after
-    // that allocation, then retain the same native window until JS can run.
+    // Validation/decoding may allocate or inspect an invalid encoding. Prove
+    // the receiver only afterward, then retain the native window until JS runs.
     // SAFETY: The argument is a live JS value on this agent; conversions finish before any payload
     // projection, and allocating paths retain their rooted operands.
-    let bytes = unsafe { crate::jsvalue_to_socket_bytes(chunk.get()) }.unwrap_or_default();
+    let encoding_value = if is_callback(encoding.get()) {
+        p::undefined()
+    } else {
+        encoding.get()
+    };
+    let bytes =
+        unsafe { crate::jsvalue::jsvalue_to_encoded_socket_bytes(chunk.get(), encoding_value) }
+            .unwrap_or_default();
     // SAFETY: The receiver is rooted and projection validates its agent, family and open lifecycle;
     // the pointer is consumed before allocation/JS or freshly projected afterward.
     let window = match unsafe { super::native_transport::transport_window(owner.get()) } {

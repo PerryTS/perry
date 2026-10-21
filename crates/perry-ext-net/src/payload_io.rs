@@ -453,7 +453,11 @@ pub(crate) fn wrote(owner: f64, user: u64, len: usize, queued: usize) {
     unsafe {
         if let Ok(window) = np::project::<p::SocketPayload>(owner.get(), &p::SOCKET) {
             let payload = &mut *window.payload;
-            if user == 0 && payload.ext.coalesced_users.is_empty() && !payload.ext.need_drain {
+            if user == 0
+                && !payload.ext.tls_parent
+                && payload.ext.coalesced_users.is_empty()
+                && !payload.ext.need_drain
+            {
                 if tl::link_snapshot_handle(&mut payload.core, window.link).is_none() {
                     return;
                 }
