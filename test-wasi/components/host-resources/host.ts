@@ -16,6 +16,7 @@ function setup(input = bytes) {
   let factories!: HostResources;
   let escaped: unknown;
   let retained: unknown;
+  let probe: () => void = () => {};
   const component = load(input, (resources) => {
     factories = resources;
     const token = resources["perry:host-resources/tokens@1.0.0"].token;
@@ -32,17 +33,19 @@ function setup(input = bytes) {
             collect();
             const value = (payload as { value: number }).value;
             dropped.push(value);
-            if (value === 13) throw original;
+            if (value === 13 || value === 68) throw original;
           });
         },
         "[method]token.read"(value) {
           escaped = value;
+          probe();
           collect();
           return (token.value(value) as { value: number }).value;
         },
         consume(value) {
           collect();
-          check((token.value(value) as { value: number }).value === 66, "owned callback argument");
+          const amount = (token.value(value) as { value: number }).value;
+          check(amount === 66 || amount === 68, "owned callback argument");
           value.dispose(); value.dispose();
         },
         hold(value) { retained = value; collect(); }
@@ -55,7 +58,8 @@ function setup(input = bytes) {
       }
     };
   });
-  return { component, factories, escaped: () => escaped, retained: () => retained };
+  return { component, factories, escaped: () => escaped, retained: () => retained,
+    setProbe: (value: () => void) => { probe = value; } };
 }
 
 const a = setup();
@@ -63,8 +67,10 @@ const api = a.component.exports["perry:host-resources/runner@1.0.0"];
 const token = a.factories["perry:host-resources/tokens@1.0.0"].token;
 const first = api.make(42);
 const borrow = first.borrow();
+a.setProbe(() => rejects(() => first.dispose(), "active borrowed owner was disposed"));
 collect();
 check(api.read(borrow) === 42, "borrow payload");
+a.setProbe(() => {});
 check(api["read-alias"](borrow) === 42, "nominal alias payload");
 rejects(() => token.value(a.escaped() as Parameters<typeof token.value>[0]), "callback borrow escaped");
 rejects(() => api["consume-pair"]({ first, second: first }), "duplicate own accepted");
@@ -120,6 +126,13 @@ check(caught === original, "cleanup lost first destructor exception");
 trapped.component.dispose();
 check(dropped.filter(value => value === 88).length === 1, "cleanup stopped after failing destructor");
 check(dropped.filter(value => value === 13).length === 2, "throwing destructor repeated");
+const failedCallback = setup();
+const failedApi = failedCallback.component.exports["perry:host-resources/runner@1.0.0"];
+caught = undefined;
+try { failedApi["consume-imported"](failedApi.make(68)); } catch (error) { caught = error; }
+check(caught === original, "owned callback destructor exception lost");
+failedCallback.component.dispose(); failedCallback.component.dispose();
+check(dropped.filter(value => value === 68).length === 1, "owned callback destructor repeated");
 const count = dropped.filter(value => value === 900).length;
 rejects(() => setup(new Uint8Array([0, 1, 2])), "invalid component accepted");
 check(dropped.filter(value => value === 900).length === count + 1, "failed load leaked host payload");
