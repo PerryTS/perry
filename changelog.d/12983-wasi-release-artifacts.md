@@ -8,3 +8,9 @@ checksum. Packaging verifies that identity and runs the smoke, acceptance and
 pinned-Node comparison suites with the compiler installed outside its checkout.
 A missing-runtime check prevents an ambient archive from masking a packaging
 failure. Republishing older tags preserves their original feature profile.
+
+Build-only staging passed 36 WASI cases on each of the three host profiles.
+Downloaded final archives contain the exact compiler and runtime bytes from
+the qualified installations; their manifests and checksums were verified.
+The execution receipt records all three platforms. No release was published
+by this validation run.

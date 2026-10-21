@@ -75,9 +75,19 @@ tar -xzf perry-cross-wasm32-wasip2.tar.gz -C "$HOME/.perry/wasi-runtime"
 PERRY_RUNTIME_DIR="$HOME/.perry/wasi-runtime" perry compile app.ts --target wasi -o app.wasm
 ```
 
-Older published releases may not contain these assets. The packaging workflow
-must pass before its artifacts are considered qualified; the source-build
-qualification results below do not themselves prove release packaging.
+The [staging run](https://github.com/PerryTS/perry/actions/runs/39607165661)
+qualified source `9ed1d5a0164fa711cc404571b3fd8355e23a9c89` on Linux x86_64 GNU,
+macOS ARM64 and Windows x64. Each isolated installation rejected a missing
+runtime, then passed all 36 cases (6 smoke, 20 acceptance and 10 pinned-Node).
+The final release archives were downloaded and checked against GitHub's
+artifact digests and their archive checksum sidecars. Their compiler and WASI
+runtime bytes exactly match the tested installations; every runtime manifest
+names the tested source. The [packaging receipt](validation/wasi-release-artifacts-20261021.json)
+records the artifact identities, checksums and per-platform results.
+
+This was a build-only staging run with no tag or publication. Older published
+releases may not contain these assets; qualification of staged archives does
+not establish their availability in a published release.
 
 ## Implemented contracts
 

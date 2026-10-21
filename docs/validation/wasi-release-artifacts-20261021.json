@@ -1,0 +1,72 @@
+{
+  "sourceRevision": "9ed1d5a0164fa711cc404571b3fd8355e23a9c89",
+  "workflowRun": 39607165661,
+  "mode": "stage",
+  "platforms": {
+    "linux": {
+      "artifact": 12358000709,
+      "job": 119259974785,
+      "artifactSha256": "7e42bed3f1e9b9e148fcb6f5bc447f2017192e079aa0e07609ea5de4b4417847",
+      "suites": {
+        "smoke": 6,
+        "acceptance": 20,
+        "gap": 10
+      },
+      "fileSha256": {
+        "install/wasm32-wasip2/release/libperry_runtime.a": "90e1142097c916bf45e19971e6ece10818296c3d13bdb32f4ab3a0bf1ee6f034",
+        "install/perry": "8cc9ced9d6496905000ccf52ca14acc720d84024046983fd06906f0d8223a60c"
+      },
+      "releaseArchive": {
+        "artifact": 12357665920,
+        "artifactSha256": "eff55bd9fb56d3e624cc5fdca61643c656a16b9b8ff682f5da0f8de9892785e3",
+        "archiveSha256": "a23b819c37296750830c17e28dc3b6037384c64349ede0cf6d18feb851279b83",
+        "compilerAndRuntimeMatchQualification": true,
+        "manifestSourceVerified": true
+      }
+    },
+    "windows": {
+      "artifact": 12356429227,
+      "job": 119259974956,
+      "artifactSha256": "d0d6a65d50598b0f39f5e4f3d4ed798f43fcc16f94f9b86586c733afe2e0cdd6",
+      "suites": {
+        "smoke": 6,
+        "acceptance": 20,
+        "gap": 10
+      },
+      "fileSha256": {
+        "install/wasm32-wasip2/release/libperry_runtime.a": "90e1142097c916bf45e19971e6ece10818296c3d13bdb32f4ab3a0bf1ee6f034",
+        "install/perry.exe": "47a596d369323734f7762bbd65d16b2e71a7302f53ab66c33adf4d3eb0810c28"
+      },
+      "releaseArchive": {
+        "artifact": 12357565495,
+        "artifactSha256": "89e70f71ee0b26beda05ca42905e2e01caa99a0e511d1619f29a109ccbe912bd",
+        "archiveSha256": "cc9545e1b81b75d2ad4fce34756050f3852f1a90e3b16245df805cfc0cecc05d",
+        "compilerAndRuntimeMatchQualification": true,
+        "manifestSourceVerified": true
+      }
+    },
+    "macosArm64": {
+      "artifact": 12361592491,
+      "job": 119259974677,
+      "artifactSha256": "bd4405ab3ac26b28a863b1dd4246f89e42444c5f8bb065c1faa5e1b56dbf2ea6",
+      "suites": {
+        "smoke": 6,
+        "acceptance": 20,
+        "gap": 10
+      },
+      "fileSha256": {
+        "install/perry": "addb35b0f09544fccc467ee5a27a3285aefdfa27811e70f42a57b5200db70466",
+        "install/wasm32-wasip2/release/libperry_runtime.a": "90e1142097c916bf45e19971e6ece10818296c3d13bdb32f4ab3a0bf1ee6f034"
+      },
+      "releaseArchive": {
+        "artifact": 12363550695,
+        "artifactSha256": "5f92caa97b291898d722d717ac6696ee1dc91db2c687755b11a6516a336e1541",
+        "archiveSha256": "f62a9c18baabaf515610f04335df4c9a7dfe297065dc99badcc39fd89a31b8b3",
+        "compilerAndRuntimeMatchQualification": true,
+        "manifestSourceVerified": true
+      },
+      "nativeCompilerArchitecture": "arm64"
+    }
+  },
+  "publicationPerformed": false
+}
