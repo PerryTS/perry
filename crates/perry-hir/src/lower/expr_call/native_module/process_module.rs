@@ -34,6 +34,18 @@ pub(super) fn try_process_module_methods(
         if let ast::MemberProp::Ident(method_ident) = &member.prop {
             let method_name = method_ident.sym.as_ref();
             match method_name {
+                // IPC methods exist only in an IPC child. Read the live
+                // property so an ordinary process still throws TypeError.
+                "send" | "disconnect" => {
+                    return Ok(Ok(Expr::Call {
+                        callee: Box::new(crate::lower::expr_member::process_native_property(
+                            method_name,
+                        )),
+                        args,
+                        type_args: vec![],
+                        byte_offset: member.span.lo.0,
+                    }));
+                }
                 "uptime" => return Ok(Ok(Expr::ProcessUptime)),
                 "cwd" => return Ok(Ok(Expr::ProcessCwd)),
                 "memoryUsage" => return Ok(Ok(Expr::ProcessMemoryUsage)),

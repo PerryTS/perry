@@ -596,8 +596,9 @@ pub extern "C" fn js_process_argv() -> *mut ArrayHeader {
 
     let mut result = arr;
     if let Some(binary_path) = args.first() {
-        // argv[0]: binary path (mimics node executable path)
-        let bytes = binary_path.as_bytes();
+        // Node exposes execPath here; argv0 separately retains the launch name.
+        let exec_path = crate::process::process_exec_path_string();
+        let bytes = exec_path.as_bytes();
         let str_ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
         let nanboxed = js_nanbox_string(str_ptr as i64);
         result = js_array_push_f64(result, nanboxed);
@@ -837,9 +838,9 @@ pub use signal::{js_process_kill, js_util_convert_process_signal_to_exit_code};
 mod process_stream_write;
 #[path = "os_process_streams.rs"]
 mod process_streams;
+pub use process_streams::process_stdin_is_owned_here;
 pub(crate) use process_streams::process_stdin_needs_pump;
 pub(crate) use process_streams::refresh_tty_stream_sizes;
-pub use process_streams::process_stdin_is_owned_here;
 #[cfg(test)]
 pub(crate) use process_streams::test_set_stdin_data_listener;
 pub use process_streams::{

@@ -479,7 +479,7 @@ pub(crate) fn cp_command_for_program(program: &str, opts_val: f64) -> Command {
 /// Whether a self-launch uses a Node CLI mode that evaluates source text.
 fn cp_should_use_node_interpreter(cmd: &str, args: &[String]) -> bool {
     let is_self = crate::process::process_args_lossy().next().as_deref() == Some(cmd)
-        || std::env::current_exe().is_ok_and(|current| current == std::path::Path::new(cmd));
+        || crate::process::process_exec_path_string() == cmd;
     is_self
         && args
             .iter()

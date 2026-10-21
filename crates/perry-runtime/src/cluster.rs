@@ -1040,16 +1040,8 @@ fn default_args_array_value() -> f64 {
 }
 
 fn default_exec_path() -> String {
-    crate::process::process_args_lossy()
-        .nth(1)
-        .filter(|s| !s.is_empty())
-        .or_else(|| {
-            std::env::current_exe()
-                .ok()
-                .map(|p| p.to_string_lossy().into_owned())
-        })
-        .or_else(|| crate::process::process_args_lossy().next())
-        .unwrap_or_default()
+    // A compiled entry is the executable; OS argv[1] is already a user arg.
+    crate::process::process_exec_path_string()
 }
 
 fn copy_object_fields(src: f64, dst: f64) {
@@ -1082,10 +1074,7 @@ fn build_fork_options(settings: f64, env_arg: f64) -> *mut ObjectHeader {
     // doubles as argv[1], matching Node's worker argv convention.
     if JSValue::from_bits(get_field(settings, b"execPath").to_bits()).is_undefined() {
         if let Some(exec) = value_to_string(get_field(settings, b"exec")) {
-            let is_self = std::env::current_exe()
-                .ok()
-                .map(|p| p.to_string_lossy().into_owned())
-                .is_some_and(|me| me == exec);
+            let is_self = crate::process::process_exec_path_string() == exec;
             if is_self {
                 set_field(opts_val, b"execPath", box_string(&exec));
             }
