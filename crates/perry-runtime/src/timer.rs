@@ -1023,6 +1023,19 @@ pub fn schedule_native_callback_chain(
     )
 }
 
+/// Runtime-owned intervals use the cancellation ID, not a JS handle pointer.
+/// Keep scheduling, context capture and rooting identical to public intervals.
+pub(crate) fn schedule_interval_callback(callback: i64, interval_ms: f64) -> i64 {
+    schedule_callback_timer(
+        callback,
+        interval_ms,
+        Vec::new(),
+        "Timeout",
+        Class::Interval,
+        None,
+    )
+}
+
 /// JS-style setInterval that takes a callback function and interval.
 #[no_mangle]
 pub extern "C" fn setInterval(callback: i64, interval_ms: f64) -> i64 {

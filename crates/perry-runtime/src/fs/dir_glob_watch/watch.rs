@@ -403,7 +403,44 @@ fn emit_listener0(object_value: f64, callback: f64) {
     });
 }
 
+// Keep the provider cell alive even when a listener closes its own watcher.
+// Re-read its token after arbitrary JS; cells are GC-managed, not public IDs.
+fn with_fs_watch_scope(
+    ids: crate::async_hooks::AsyncResourceIds,
+    state: Option<&crate::gc::RuntimeHandle<'_>>,
+    completion: impl FnOnce(),
+) {
+    let current_id = || {
+        state.map_or(ids.async_id, |state| {
+            state.get_raw_mut_ptr::<crate::async_hooks::resource_state::ResourceState>() as u64
+        })
+    };
+    with_watcher_uncaught_trap(|| {
+        let ids = crate::async_hooks::AsyncResourceIds {
+            async_id: current_id(),
+            ..ids
+        };
+        if let Err(error) = crate::async_hooks::try_enter_resource_scope(ids) {
+            crate::exception::js_throw(error);
+        }
+        let outcome = crate::exception::js_call_catching(|| {
+            completion();
+            undefined_value()
+        });
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let error = outcome.err().map(|error| scope.root_nanbox_f64(error));
+        let leave = crate::async_hooks::try_leave_resource_scope(current_id());
+        if let Some(error) = error {
+            crate::exception::js_throw(error.get_nanbox_f64());
+        }
+        if let Err(error) = leave {
+            crate::exception::js_throw(error);
+        }
+    });
+}
+
 fn emit_fs_watch_event(
+    ids: crate::async_hooks::AsyncResourceIds,
     object_value: f64,
     callbacks: Vec<WatchListener>,
     event: &WatchEvent,
@@ -414,6 +451,8 @@ fn emit_fs_watch_event(
     }
     let raw_callbacks: Vec<f64> = callbacks.iter().map(|listener| listener.callback).collect();
     let scope = crate::gc::RuntimeHandleScope::new();
+    let state = crate::async_hooks::resource_state::get(ids.async_id)
+        .map(|state| scope.root_raw_mut_ptr(state));
     let callback_handles = scope.root_nanbox_f64_slice(&raw_callbacks);
     let object_handle = scope.root_nanbox_f64(object_value);
     let event_type = string_value(event.event_type.as_bytes());
@@ -421,23 +460,22 @@ fn emit_fs_watch_event(
     let filename = filename_arg_value(&event.filename, encoding);
     let args = [event_type_handle.get_nanbox_f64(), filename];
     let arg_handles = scope.root_nanbox_f64_slice(&args);
-    let refreshed_callbacks =
-        crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&callback_handles);
-    let refreshed_args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
-    for callback in refreshed_callbacks {
-        let cb = extract_closure_ptr(callback);
-        if cb.is_null() {
-            continue;
+    with_fs_watch_scope(ids, state.as_ref(), || {
+        for callback in &callback_handles {
+            let cb = extract_closure_ptr(callback.get_nanbox_f64());
+            if cb.is_null() {
+                continue;
+            }
+            with_watcher_uncaught_trap(|| {
+                crate::closure::js_closure_call2(
+                    cb,
+                    crate::closure::JsThis::from_f64(object_handle.get_nanbox_f64()),
+                    arg_handles[0].get_nanbox_f64(),
+                    arg_handles[1].get_nanbox_f64(),
+                );
+            });
         }
-        with_watcher_uncaught_trap(|| {
-            crate::closure::js_closure_call2(
-                cb,
-                crate::closure::JsThis::from_f64(object_handle.get_nanbox_f64()),
-                refreshed_args[0],
-                refreshed_args[1],
-            );
-        });
-    }
+    });
 }
 
 fn emit_watch_file_change(
@@ -802,10 +840,15 @@ fn deliver_event(id: usize, event: WatchEvent) {
         let mut watchers = watchers.borrow_mut();
         let state = watchers.get_mut(&id)?;
         let callbacks = take_event_listeners(&mut state.listeners, "change");
-        Some((state.object_value, callbacks, state.encoding.clone()))
+        Some((
+            state.object_value,
+            callbacks,
+            state.encoding.clone(),
+            state.async_ids,
+        ))
     });
-    if let Some((object_value, callbacks, encoding)) = fs_target {
-        emit_fs_watch_event(object_value, callbacks, &event, &encoding);
+    if let Some((object_value, callbacks, encoding, ids)) = fs_target {
+        emit_fs_watch_event(ids, object_value, callbacks, &event, &encoding);
         return;
     }
     let mut event = Some(event);
@@ -839,10 +882,15 @@ fn deliver_error(id: usize, error: WatchError) {
         let mut watchers = watchers.borrow_mut();
         let state = watchers.get_mut(&id)?;
         let callbacks = take_event_listeners(&mut state.listeners, "error");
-        Some((state.object_value, callbacks, state.path.clone()))
+        Some((
+            state.object_value,
+            callbacks,
+            state.path.clone(),
+            state.async_ids,
+        ))
     });
-    if let Some((object_value, callbacks, path)) = fs_target {
-        emit_fs_watch_error(object_value, callbacks, &error.to_io_error(), &path);
+    if let Some((object_value, callbacks, path, ids)) = fs_target {
+        emit_fs_watch_error(ids, object_value, callbacks, &error.to_io_error(), &path);
         return;
     }
     let promise_path = PROMISE_WATCHERS.with(|watchers| {
@@ -867,6 +915,7 @@ fn deliver_error(id: usize, error: WatchError) {
 /// `'error'` delivery. With no listener Node's EventEmitter throws the error
 /// as an uncaught exception; do the same through the process funnel.
 fn emit_fs_watch_error(
+    ids: crate::async_hooks::AsyncResourceIds,
     object_value: f64,
     callbacks: Vec<WatchListener>,
     error: &std::io::Error,
@@ -874,29 +923,31 @@ fn emit_fs_watch_error(
 ) {
     let raw_callbacks: Vec<f64> = callbacks.iter().map(|listener| listener.callback).collect();
     let scope = crate::gc::RuntimeHandleScope::new();
+    let state = crate::async_hooks::resource_state::get(ids.async_id)
+        .map(|state| scope.root_raw_mut_ptr(state));
     let callback_handles = scope.root_nanbox_f64_slice(&raw_callbacks);
     let object_handle = scope.root_nanbox_f64(object_value);
     let err_value = unsafe { build_fs_error_value(error, "watch", path) };
-    if callbacks.is_empty() {
-        crate::os::emit_process_uncaught_exception(err_value);
-        return;
-    }
     let err_handle = scope.root_nanbox_f64(err_value);
-    let refreshed_callbacks =
-        crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&callback_handles);
-    for callback in refreshed_callbacks {
-        let cb = extract_closure_ptr(callback);
-        if cb.is_null() {
-            continue;
+    with_fs_watch_scope(ids, state.as_ref(), || {
+        if callbacks.is_empty() {
+            crate::os::emit_process_uncaught_exception(err_handle.get_nanbox_f64());
+            return;
         }
-        with_watcher_uncaught_trap(|| {
-            crate::closure::js_closure_call1(
-                cb,
-                crate::closure::JsThis::from_f64(object_handle.get_nanbox_f64()),
-                err_handle.get_nanbox_f64(),
-            );
-        });
-    }
+        for callback in &callback_handles {
+            let cb = extract_closure_ptr(callback.get_nanbox_f64());
+            if cb.is_null() {
+                continue;
+            }
+            with_watcher_uncaught_trap(|| {
+                crate::closure::js_closure_call1(
+                    cb,
+                    crate::closure::JsThis::from_f64(object_handle.get_nanbox_f64()),
+                    err_handle.get_nanbox_f64(),
+                );
+            });
+        }
+    });
 }
 
 fn start_promise_watcher(id: usize, state: &mut PromiseWatchState) {
@@ -1753,7 +1804,7 @@ pub extern "C" fn js_fs_watch_file(path_value: f64, arg1: f64, arg2: f64) -> f64
         crate::fn_info!(watch_file_poll_impl, 0; with_declared(0)),
         id,
     );
-    let timer_id = crate::timer::setInterval(timer_callback as i64, interval);
+    let timer_id = crate::timer::schedule_interval_callback(timer_callback as i64, interval);
     if !persistent {
         crate::timer::js_timer_unref(timer_id);
     }
