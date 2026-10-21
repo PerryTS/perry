@@ -98,7 +98,7 @@ pub(crate) use builtin_prototype_atoms::*;
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
 #[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_atoms"
 )]
 #[linkage = "weak_odr"]
@@ -110,6 +110,7 @@ static ATOM_SYMBOL_HAS_INSTANCE: StaticAtom = StaticAtom {
     _pad: [0; 3],
     index: WELL_KNOWN_SYMBOL_HAS_INSTANCE,
 };
+wasm_atom!(ATOM_SYMBOL_HAS_INSTANCE);
 const WELL_KNOWN_SYMBOL_HAS_INSTANCE: u32 = 2;
 const _: () = assert!(
     crate::codegen_abi::WELL_KNOWN_SYMBOLS[WELL_KNOWN_SYMBOL_HAS_INSTANCE as usize].len() == 11,

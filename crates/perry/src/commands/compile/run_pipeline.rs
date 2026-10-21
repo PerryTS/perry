@@ -7100,6 +7100,10 @@ pub fn run_with_parse_cache(
         // overwrite it with the component.
         if !args.no_link {
             let runtime_lib = find_runtime_library(Some("wasi"))?;
+            let installer =
+                super::link::wasi::feature_installer(&ctx, &compiled_features, &object_output_dir)?;
+            obj_cleanup_paths.push(installer.clone());
+            obj_paths.push(installer);
             super::link::wasi::link_wasi(&obj_paths, &runtime_lib, &exe_path, verbose)?;
             if let OutputFormat::Text = format {
                 println!("Wrote WASI component: {}", exe_path.display());

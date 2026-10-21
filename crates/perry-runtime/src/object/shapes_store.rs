@@ -1111,20 +1111,34 @@ fn locate(id: u32) -> (usize, usize) {
 #[repr(C, align(64))]
 pub(crate) struct BandDir {
     pages: std::cell::Cell<*const Page>,
+    #[cfg(target_pointer_width = "32")]
+    _pages_high: u32,
     len: std::cell::Cell<usize>,
+    #[cfg(target_pointer_width = "32")]
+    _len_high: u32,
     base_rel: u32,
+    #[cfg(target_pointer_width = "32")]
+    _base_rel_pad: u32,
     /// The ordinary band's records at fixed addresses (`flat.rs`): record
     /// `rel` is `flat_base + rel` for every `rel < flat_ids`; null and 0 for
     /// every other band, every target without the reservation, and a slab
     /// that publishes nothing. Offsets 24 and 32 (`FLAT_BASE_OFFSET`).
     flat_base: std::cell::Cell<*mut ShapeRecord>,
+    #[cfg(target_pointer_width = "32")]
+    _flat_base_high: u32,
     flat_ids: std::cell::Cell<usize>,
+    #[cfg(target_pointer_width = "32")]
+    _flat_ids_high: u32,
     /// This agent's `Object.prototype` cell (`array::prototype_addr`), for
     /// the probe's prototype walk; null when not published. Offset 40.
     pub(crate) proto_cell: std::cell::Cell<*const usize>,
+    #[cfg(target_pointer_width = "32")]
+    _proto_cell_high: u32,
     /// This agent's identity-word directory (`shapes_prototype`), for the
     /// probe's class-holder hop; null when not published. Offset 48.
     pub(crate) word_dir: std::cell::Cell<*const u8>,
+    #[cfg(target_pointer_width = "32")]
+    _word_dir_high: u32,
 }
 
 /// `BandDir.flat_base`'s offset; `flat_ids` follows at +8.
@@ -1138,12 +1152,26 @@ impl BandDir {
     const fn empty(band: usize) -> BandDir {
         BandDir {
             pages: std::cell::Cell::new(std::ptr::null()),
+            #[cfg(target_pointer_width = "32")]
+            _pages_high: 0,
             len: std::cell::Cell::new(0),
+            #[cfg(target_pointer_width = "32")]
+            _len_high: 0,
             base_rel: BAND_BASE_REL[band],
+            #[cfg(target_pointer_width = "32")]
+            _base_rel_pad: 0,
             flat_base: std::cell::Cell::new(std::ptr::null_mut()),
+            #[cfg(target_pointer_width = "32")]
+            _flat_base_high: 0,
             flat_ids: std::cell::Cell::new(0),
+            #[cfg(target_pointer_width = "32")]
+            _flat_ids_high: 0,
             proto_cell: std::cell::Cell::new(std::ptr::null()),
+            #[cfg(target_pointer_width = "32")]
+            _proto_cell_high: 0,
             word_dir: std::cell::Cell::new(std::ptr::null()),
+            #[cfg(target_pointer_width = "32")]
+            _word_dir_high: 0,
         }
     }
 }

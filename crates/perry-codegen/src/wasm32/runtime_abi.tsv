@@ -42,7 +42,7 @@ js_argon2_verify	ptr	ptr,ptr
 js_argon2_verify_sync	i32s	ptr,ptr
 js_arguments_bundle_get_slow	f64	f64,f64,f64,ptr,i32s
 js_arguments_bundle_index_get	f64	f64,f64
-js_arguments_call_spread	f64	f64,ptr,f64,i64,f64,f64
+js_arguments_call_spread	f64	f64,f64,i64,f64,f64
 js_arguments_forward_apply	f64	f64,f64,f64,f64
 js_arguments_length_value	f64	f64
 js_arguments_object_alloc	ptr	f64,f64,i32s
@@ -125,6 +125,7 @@ js_array_keys	ptr	ptr
 js_array_keys_iter_obj	i64	ptr
 js_array_last_index_of_jsvalue	i64	ptr,f64,f64,i32s
 js_array_length	i32u	ptr
+js_array_length__Arr	i32u	ptr
 js_array_length_leaf	i64	ptr
 js_array_like_to_array	ptr	f64
 js_array_live_head	i64	i64
@@ -157,14 +158,14 @@ js_array_push_u31_with_length	ptr	ptr,i32u,ptr
 js_array_record_abrupt	void	f64,f64,f64,i32u
 js_array_record_close	f64	f64,f64,f64,f64,f64
 js_array_record_close_absent	i32s	
-js_array_record_enter	i32s	f64,ptr,ptr
-js_array_record_enter_counted	i32s	f64,ptr,ptr
+js_array_record_enter	i32s	f64,ptr,i32u
+js_array_record_enter_counted	i32s	f64,ptr,i32u
 js_array_record_finish	f64	f64,f64,f64,i32u
 js_array_record_literal	f64	ptr,i32u
-js_array_record_literal_needs_iterator	i32s	ptr
+js_array_record_literal_needs_iterator	i32s	i32u
 js_array_record_needs_iterator	i32s	f64
 js_array_record_stack_dispatch	f64	ptr,i32u
-js_array_record_stack_enter	i32s	ptr,ptr,i32u
+js_array_record_stack_enter	i32s	ptr,i32u,i32u
 js_array_reduce	f64	ptr,ptr,i32s,f64
 js_array_reduce_right	f64	ptr,ptr,i32s,f64
 js_array_refresh_local_head	f64	f64
@@ -376,6 +377,111 @@ js_blob_slice	f64	f64,f64,f64,ptr
 js_blob_stream	f64	f64
 js_blob_text	ptr	f64
 js_blob_type	ptr	f64
+js_bm_add1	f64	i64,f64,i64,i64,f64
+js_bm_apply0	f64	i64,f64,i64,i64
+js_bm_apply1	f64	i64,f64,i64,i64,f64
+js_bm_apply2	f64	i64,f64,i64,i64,f64,f64
+js_bm_at0	f64	i64,f64,i64,i64
+js_bm_at1	f64	i64,f64,i64,i64,f64
+js_bm_call0	f64	i64,f64,i64,i64
+js_bm_call1	f64	i64,f64,i64,i64,f64
+js_bm_call2	f64	i64,f64,i64,i64,f64,f64
+js_bm_call3	f64	i64,f64,i64,i64,f64,f64,f64
+js_bm_call4	f64	i64,f64,i64,i64,f64,f64,f64,f64
+js_bm_charAt0	f64	i64,f64,i64,i64
+js_bm_charAt1	f64	i64,f64,i64,i64,f64
+js_bm_charCodeAt0	f64	i64,f64,i64,i64
+js_bm_charCodeAt1	f64	i64,f64,i64,i64,f64
+js_bm_codePointAt0	f64	i64,f64,i64,i64
+js_bm_codePointAt1	f64	i64,f64,i64,i64,f64
+js_bm_concat0	f64	i64,f64,i64,i64
+js_bm_concat1	f64	i64,f64,i64,i64,f64
+js_bm_concat2	f64	i64,f64,i64,i64,f64,f64
+js_bm_delete1	f64	i64,f64,i64,i64,f64
+js_bm_endsWith0	f64	i64,f64,i64,i64
+js_bm_endsWith1	f64	i64,f64,i64,i64,f64
+js_bm_endsWith2	f64	i64,f64,i64,i64,f64,f64
+js_bm_entries0	f64	i64,f64,i64,i64
+js_bm_every1	f64	i64,f64,i64,i64,f64
+js_bm_filter1	f64	i64,f64,i64,i64,f64
+js_bm_find1	f64	i64,f64,i64,i64,f64
+js_bm_findIndex1	f64	i64,f64,i64,i64,f64
+js_bm_findLast1	f64	i64,f64,i64,i64,f64
+js_bm_findLastIndex1	f64	i64,f64,i64,i64,f64
+js_bm_flat0	f64	i64,f64,i64,i64
+js_bm_flatMap1	f64	i64,f64,i64,i64,f64
+js_bm_forEach1	f64	i64,f64,i64,i64,f64
+js_bm_get1	f64	i64,f64,i64,i64,f64
+js_bm_has1	f64	i64,f64,i64,i64,f64
+js_bm_includes0	f64	i64,f64,i64,i64
+js_bm_includes1	f64	i64,f64,i64,i64,f64
+js_bm_includes2	f64	i64,f64,i64,i64,f64,f64
+js_bm_indexOf0	f64	i64,f64,i64,i64
+js_bm_indexOf1	f64	i64,f64,i64,i64,f64
+js_bm_indexOf2	f64	i64,f64,i64,i64,f64,f64
+js_bm_join0	f64	i64,f64,i64,i64
+js_bm_join1	f64	i64,f64,i64,i64,f64
+js_bm_keys0	f64	i64,f64,i64,i64
+js_bm_lastIndexOf0	f64	i64,f64,i64,i64
+js_bm_lastIndexOf1	f64	i64,f64,i64,i64,f64
+js_bm_lastIndexOf2	f64	i64,f64,i64,i64,f64,f64
+js_bm_localeCompare0	f64	i64,f64,i64,i64
+js_bm_localeCompare1	f64	i64,f64,i64,i64,f64
+js_bm_lookup	f64	ptr,f64,i64,i64,i64,i64
+js_bm_map1	f64	i64,f64,i64,i64,f64
+js_bm_match0	f64	i64,f64,i64,i64
+js_bm_match1	f64	i64,f64,i64,i64,f64
+js_bm_matchAll0	f64	i64,f64,i64,i64
+js_bm_matchAll1	f64	i64,f64,i64,i64,f64
+js_bm_normalize0	f64	i64,f64,i64,i64
+js_bm_normalize1	f64	i64,f64,i64,i64,f64
+js_bm_padEnd1	f64	i64,f64,i64,i64,f64
+js_bm_padEnd2	f64	i64,f64,i64,i64,f64,f64
+js_bm_padStart1	f64	i64,f64,i64,i64,f64
+js_bm_padStart2	f64	i64,f64,i64,i64,f64,f64
+js_bm_pop0	f64	i64,f64,i64,i64
+js_bm_push1	f64	i64,f64,i64,i64,f64
+js_bm_reduce1	f64	i64,f64,i64,i64,f64
+js_bm_reduce2	f64	i64,f64,i64,i64,f64,f64
+js_bm_reduceRight1	f64	i64,f64,i64,i64,f64
+js_bm_reduceRight2	f64	i64,f64,i64,i64,f64,f64
+js_bm_repeat1	f64	i64,f64,i64,i64,f64
+js_bm_replace0	f64	i64,f64,i64,i64
+js_bm_replace1	f64	i64,f64,i64,i64,f64
+js_bm_replace2	f64	i64,f64,i64,i64,f64,f64
+js_bm_replaceAll0	f64	i64,f64,i64,i64
+js_bm_replaceAll1	f64	i64,f64,i64,i64,f64
+js_bm_replaceAll2	f64	i64,f64,i64,i64,f64,f64
+js_bm_search0	f64	i64,f64,i64,i64
+js_bm_search1	f64	i64,f64,i64,i64,f64
+js_bm_set2	f64	i64,f64,i64,i64,f64,f64
+js_bm_shift0	f64	i64,f64,i64,i64
+js_bm_slice0	f64	i64,f64,i64,i64
+js_bm_slice1	f64	i64,f64,i64,i64,f64
+js_bm_slice2	f64	i64,f64,i64,i64,f64,f64
+js_bm_some1	f64	i64,f64,i64,i64,f64
+js_bm_sort1	f64	i64,f64,i64,i64,f64
+js_bm_split0	f64	i64,f64,i64,i64
+js_bm_split1	f64	i64,f64,i64,i64,f64
+js_bm_split2	f64	i64,f64,i64,i64,f64,f64
+js_bm_startsWith0	f64	i64,f64,i64,i64
+js_bm_startsWith1	f64	i64,f64,i64,i64,f64
+js_bm_startsWith2	f64	i64,f64,i64,i64,f64,f64
+js_bm_substr1	f64	i64,f64,i64,i64,f64
+js_bm_substr2	f64	i64,f64,i64,i64,f64,f64
+js_bm_substring0	f64	i64,f64,i64,i64
+js_bm_substring1	f64	i64,f64,i64,i64,f64
+js_bm_substring2	f64	i64,f64,i64,i64,f64,f64
+js_bm_toLowerCase0	f64	i64,f64,i64,i64
+js_bm_toReversed0	f64	i64,f64,i64,i64
+js_bm_toSorted0	f64	i64,f64,i64,i64
+js_bm_toSorted1	f64	i64,f64,i64,i64,f64
+js_bm_toUpperCase0	f64	i64,f64,i64,i64
+js_bm_trim0	f64	i64,f64,i64,i64
+js_bm_trimEnd0	f64	i64,f64,i64,i64
+js_bm_trimStart0	f64	i64,f64,i64,i64
+js_bm_values0	f64	i64,f64,i64,i64
+js_bm_with2	f64	i64,f64,i64,i64,f64,f64
 js_bool_box_alloc	ptr	i32s
 js_bool_box_get	i32s	ptr
 js_bool_box_release	void	ptr
@@ -509,6 +615,9 @@ js_buffer_write_uint8	void	f64,f64,i32s
 js_buffer_write_uint_be	void	f64,f64,i32s,i32s
 js_buffer_write_uint_le	void	f64,f64,i32s,i32s
 js_build_class_keys_array	ptr	i32u,i32u,ptr,i32u,i64
+js_builtin_namespace_contract_check	void	i64,ptr,usize
+js_builtin_namespace_member	f64	f64,ptr,usize
+js_builtin_namespace_value	f64	i64
 js_builtin_proto_contract_check	void	i64
 js_builtin_proto_generic_call	f64	i32s,f64,i64,ptr,usize
 js_builtin_proto_generic_call0	f64	f64,i64
@@ -680,6 +789,23 @@ js_closure_alloc_singleton	ptr	ptr
 js_closure_alloc_small	ptr	ptr,i64,i64,i64,i64
 js_closure_alloc_with_captures_singleton	ptr	ptr,i32u,ptr
 js_closure_births_to_scope	void	ptr,i32u,ptr,i32u,ptr,i32u
+js_closure_call0	f64	ptr,i64
+js_closure_call1	f64	ptr,i64,f64
+js_closure_call10	f64	ptr,i64,f64,f64,f64,f64,f64,f64,f64,f64,f64,f64
+js_closure_call11	f64	ptr,i64,f64,f64,f64,f64,f64,f64,f64,f64,f64,f64,f64
+js_closure_call12	f64	ptr,i64,f64,f64,f64,f64,f64,f64,f64,f64,f64,f64,f64,f64
+js_closure_call13	f64	ptr,i64,f64,f64,f64,f64,f64,f64,f64,f64,f64,f64,f64,f64,f64
+js_closure_call14	f64	ptr,i64,f64,f64,f64,f64,f64,f64,f64,f64,f64,f64,f64,f64,f64,f64
+js_closure_call15	f64	ptr,i64,f64,f64,f64,f64,f64,f64,f64,f64,f64,f64,f64,f64,f64,f64,f64
+js_closure_call16	f64	ptr,i64,f64,f64,f64,f64,f64,f64,f64,f64,f64,f64,f64,f64,f64,f64,f64,f64
+js_closure_call2	f64	ptr,i64,f64,f64
+js_closure_call3	f64	ptr,i64,f64,f64,f64
+js_closure_call4	f64	ptr,i64,f64,f64,f64,f64
+js_closure_call5	f64	ptr,i64,f64,f64,f64,f64,f64
+js_closure_call6	f64	ptr,i64,f64,f64,f64,f64,f64,f64
+js_closure_call7	f64	ptr,i64,f64,f64,f64,f64,f64,f64,f64
+js_closure_call8	f64	ptr,i64,f64,f64,f64,f64,f64,f64,f64,f64
+js_closure_call9	f64	ptr,i64,f64,f64,f64,f64,f64,f64,f64,f64,f64
 js_closure_call_apply_with_spread	f64	f64,i64,ptr,i64,i64
 js_closure_call_array	f64	i64,i64,ptr,i64
 js_closure_exact_func_guard	i64	f64,ptr
@@ -687,6 +813,7 @@ js_closure_get_capture_bits	i64	ptr,i32u
 js_closure_get_capture_f64	f64	ptr,i32u
 js_closure_get_capture_ptr	i64	ptr,i32u
 js_closure_get_func	ptr	ptr
+js_closure_info__Closure	ptr	ptr
 js_closure_resolve_plain_direct_call	ptr	ptr,i32u
 js_closure_resolve_versioned_loop_direct_call	ptr	ptr,i32u
 js_closure_set_box_capture_ptr	void	ptr,i32u,i64
@@ -813,6 +940,7 @@ js_container_start	ptr	ptr
 js_container_stop	ptr	ptr,i32s
 js_count_queuing_strategy_new	f64	f64
 js_create_callback	f64	i64,i64,i64
+js_create_family_contract_check	void	ptr,f64
 js_create_namespace	f64	i32s,ptr,ptr,ptr,ptr
 js_create_native_module_namespace	f64	ptr,usize
 js_cron_timer_has_pending	i32s	
@@ -1093,7 +1221,6 @@ js_domain_remove	f64	i64,f64
 js_domain_run	f64	i64,f64,ptr
 js_drain_queued_microtasks	void	
 js_dyn_index_get	f64	f64,f64
-js_dyn_index_get_site	f64	ptr,f64,f64
 js_dyn_index_set	f64	f64,f64,f64
 js_dyn_index_set_strict	f64	f64,f64,f64,i32s
 js_dynamic_add	f64	f64,f64
@@ -1119,12 +1246,14 @@ js_dynamic_string_equals	i32s	f64,f64
 js_dynamic_string_or_number_add	f64	f64,f64
 js_dynamic_sub	f64	f64,f64
 js_dynamic_ushr	f64	f64,f64
-js_eh_try_push	void	
+js_eh_handle_height	i64	
+js_eh_pad_enter	void	ptr,i64
 js_encode_uri	i64	f64
 js_encode_uri_component	i64	f64
 js_encoding_tag_from_value	i32s	f64
 js_ensure_string_ptr	i64	f64
 js_enter_finally	void	
+js_enum_from_literal_descriptor	f64	ptr,i32u,ptr,i32u,ptr,i32u,i32s
 js_eq	i64	i64,i64
 js_error_apply_cause_to_object	void	ptr,f64
 js_error_capture_stack_trace	f64	f64,f64
@@ -1155,6 +1284,7 @@ js_ethers_get_address	ptr	ptr
 js_ethers_parse_ether	ptr	ptr
 js_ethers_parse_units	ptr	ptr,f64
 js_ethers_wallet_create_random	ptr	
+js_eval_in_scope	f64	f64,f64,f64,f64,f64,f64
 js_evalerror_new	ptr	ptr
 js_event_emitter_async_resource_call	f64	f64
 js_event_emitter_async_resource_object_new	f64	f64
@@ -1522,7 +1652,7 @@ js_get_string_pointer_unified	i64	f64
 js_getenv	ptr	ptr
 js_getenv_value	f64	ptr
 js_global_assign_existing_or_throw	f64	f64,f64
-js_global_get_field_ic_slow	f64	i64,ptr,ptr,ptr
+js_global_get_field_slow	f64	i64,ptr
 js_global_get_optional	f64	f64
 js_global_get_or_throw_unresolved	f64	f64
 js_global_or_console_property_by_name	f64	ptr
@@ -1687,7 +1817,6 @@ js_immediate_has_pending	i32s
 js_import_meta_resolve	f64	f64,f64,f64
 js_import_meta_resolve_value	f64	f64
 js_in_operator	f64	f64,f64
-js_in_operator_presence_ic	f64	f64,f64,ptr
 js_inline_arena_slow_alloc	ptr	ptr,usize,usize
 js_inline_arena_state	ptr	
 js_install_global_value_surfaces	void	
@@ -1821,6 +1950,7 @@ js_lodash_unescape	f64
 js_lodash_uniq	ptr	ptr
 js_lodash_upper_case	ptr	ptr
 js_lodash_upper_first	f64	
+js_loop_interrupt	void	
 js_loose_eq	i64	i64,i64
 js_lt	i64	i64,i64
 js_main_thread_notified	i32s	
@@ -1843,6 +1973,7 @@ js_map_foreach	void	ptr,f64,f64
 js_map_from_array	ptr	ptr
 js_map_from_iterable	ptr	f64
 js_map_get	f64	ptr,f64
+js_map_get__Map	f64	ptr,f64
 js_map_get_number_key	f64	ptr,f64
 js_map_get_string_key	f64	ptr,ptr
 js_map_group_by	f64	f64,f64
@@ -1862,6 +1993,7 @@ js_map_set_string_string	ptr	ptr,ptr,ptr
 js_map_set_string_u32	ptr	ptr,ptr,i32u
 js_map_set_subclass_init	f64	f64,i32s,f64
 js_map_size	i32u	ptr
+js_map_size__Map	i32u	ptr
 js_map_values	ptr	ptr
 js_map_values_iter_obj	i64	ptr
 js_mark_entry_module_esm	void	
@@ -1902,20 +2034,14 @@ js_math_to_number	f64	f64
 js_math_trunc	f64	f64
 js_message_channel_new	f64	
 js_message_port_constructor_error	f64	
+js_method_call_slow	f64	i64,f64,i64,i64,ptr,usize
+js_method_call_split	f64	f64,i64,f64,i64,ptr,usize
+js_method_call_value	f64	f64,f64,ptr,usize
+js_method_call_value_apply	f64	f64,f64,i64
 js_method_direct_shape_class	i32u	f64,ptr
 js_method_direct_shape_guard	i32s	f64,i32u,i32u
-js_method_site_call_split	f64	f64,ptr,i64,f64,i64,ptr,usize
-js_method_site_call_value	f64	f64,f64,ptr,usize
-js_method_site_call_value_apply	f64	f64,f64,i64
-js_method_site_chain_value	i64	ptr
-js_method_site_lookup	f64	ptr,f64,i64,usize,ptr
-js_method_site_miss	f64	ptr,i64,f64,i64,ptr,usize
-js_method_site_miss0	f64	ptr,i64,f64,i64
-js_method_site_miss1	f64	ptr,i64,f64,i64,f64
-js_method_site_miss2	f64	ptr,i64,f64,i64,f64,f64
-js_method_site_miss3	f64	ptr,i64,f64,i64,f64,f64,f64
-js_method_site_prepare	f64	ptr,f64,i64,usize
-js_method_site_stats	f64	i32s
+js_method_lookup	f64	ptr,f64,i64,i64,i64
+js_method_prepare	f64	f64,i64
 js_microtasks_pending	i32s	
 js_migrate_stdin_listeners_to_provider	void	
 js_mod	i64	i64,i64
@@ -2008,15 +2134,12 @@ js_native_call_method	f64	f64,ptr,usize,ptr,usize
 js_native_call_method_apply	f64	f64,ptr,usize,i64
 js_native_call_method_apply_by_id	f64	f64,i64,i64
 js_native_call_method_by_id	f64	f64,i64,ptr,usize
-js_native_call_method_by_id_learn	f64	f64,i64,ptr,usize,ptr,i32u
 js_native_call_method_nullsafe	f64	f64,ptr,usize,ptr,usize
 js_native_call_method_patched_proto	f64	f64,ptr,usize,ptr,usize
 js_native_call_method_patched_proto_apply	f64	f64,ptr,usize,i64
 js_native_call_method_str_key	f64	f64,i64,ptr,usize
-js_native_call_method_str_key_memo	f64	f64,i64,ptr,usize,ptr
 js_native_call_method_value	f64	f64,f64,ptr,usize
 js_native_call_method_value_apply	f64	f64,f64,i64
-js_native_call_method_value_memo	f64	f64,f64,ptr,usize,ptr
 js_native_call_value	f64	f64,i64,ptr,usize
 js_native_handle_dispose	i32s	f64
 js_native_handle_mark_main_thread	void	
@@ -2083,6 +2206,7 @@ js_net_socket_address_get_address	ptr	i64
 js_net_socket_address_get_family	ptr	i64
 js_net_socket_address_get_flowlabel	f64	i64
 js_net_socket_address_get_port	f64	i64
+js_net_socket_address_is_socket_address	f64	f64
 js_net_socket_address_new	i64	f64
 js_net_socket_address_parse	f64	i64
 js_net_socket_address_parse_value	f64	f64
@@ -2149,6 +2273,9 @@ js_net_validate_create_server_options	void	f64
 js_net_validate_default_auto_select_family	i32s	f64
 js_net_validate_default_auto_select_family_attempt_timeout	i32s	f64
 js_net_validate_listen_port	void	f64
+js_net_validate_socket_address_family	i32s	f64
+js_net_validate_socket_address_flowlabel	i32u	f64
+js_net_validate_socket_address_options	void	f64
 js_net_validate_socket_address_parse_input	i64	f64
 js_net_validate_socket_timeout	void	f64
 js_net_validate_tos	i32s	f64
@@ -2158,7 +2285,9 @@ js_new_function_construct_apply	f64	f64,f64
 js_new_function_construct_site	f64	f64,ptr,usize,ptr
 js_new_function_construct_with_new_target	f64	f64,ptr,usize,f64
 js_new_instance	f64	i64,i64,i64,i64,i64
+js_new_target_enter	f64	f64
 js_new_target_get	f64	
+js_new_target_leave	void	
 js_new_target_set	f64	f64
 js_new_target_value	f64	
 js_nm_enable_install_all	void	
@@ -2246,7 +2375,10 @@ js_node_http_im_signal	f64	i64
 js_node_http_im_trailers_distinct_json	ptr	i64
 js_node_http_im_trailers_json	ptr	i64
 js_node_http_im_url	ptr	i64
+js_node_http_incoming_message_init	void	f64,f64
 js_node_http_incoming_message_standalone_new	i64	f64
+js_node_http_method_fallback	f64	ptr,i64,f64,f64,f64
+js_node_http_outgoing_message_init	void	f64
 js_node_http_outgoing_message_new	i64	
 js_node_http_res_add_trailers	void	i64,f64
 js_node_http_res_append_header	i64	i64,ptr,f64
@@ -2290,6 +2422,7 @@ js_node_http_res_write_full	f64	i64,f64,i64,i64
 js_node_http_res_write_head	i64	i64,f64,i64,i64
 js_node_http_res_write_processing	void	i64
 js_node_http_res_write_with_cb	i32s	i64,f64,i64
+js_node_http_response_layout_receiver	i32s	f64
 js_node_http_response_state_get	f64	f64
 js_node_http_response_state_set	void	f64,f64
 js_node_http_server_address_json	ptr	i64
@@ -2312,6 +2445,8 @@ js_node_http_server_ref	i64	i64
 js_node_http_server_remove_all_listeners	f64	i64,ptr
 js_node_http_server_remove_listener	f64	i64,ptr,i64
 js_node_http_server_request_timeout	f64	i64
+js_node_http_server_response_birth	f64	f64,f64
+js_node_http_server_response_init	void	f64,f64
 js_node_http_server_response_standalone_new	i64	f64
 js_node_http_server_set_headers_timeout	f64	i64,f64
 js_node_http_server_set_idle_timeout	f64	i64,f64
@@ -2524,6 +2659,7 @@ js_number_is_finite	f64	f64
 js_number_is_integer	f64	f64
 js_number_is_nan	f64	f64
 js_number_is_safe_integer	f64	f64
+js_number_mod	f64	f64,f64
 js_number_to_exponential	ptr	f64,f64
 js_number_to_fixed	ptr	f64,f64
 js_number_to_locale_string	ptr	f64
@@ -2574,25 +2710,17 @@ js_object_freeze	f64	f64
 js_object_from_entries	f64	f64
 js_object_get_class_id	i32u	ptr
 js_object_get_field	i64	ptr,i32u
-js_object_get_field_by_key_site	f64	ptr,i64,ptr,f64,f64
 js_object_get_field_by_name	i64	ptr,ptr
 js_object_get_field_by_name_boxed	f64	f64,ptr
 js_object_get_field_by_name_f64	f64	ptr,ptr
 js_object_get_field_by_property_id_f64	f64	ptr,i64
 js_object_get_field_f64	f64	ptr,i32u
-js_object_get_field_ic	f64	i64,ptr,i64,ptr
-js_object_get_field_ic_fast	f64	i64,ptr,i64,ptr
-js_object_get_field_ic_fast_miss	f64	i64,ptr,i64,ptr
-js_object_get_field_ic_front	f64	ptr,i64,i64,ptr,ptr
-js_object_get_field_ic_miss	f64	ptr,ptr,ptr
-js_object_get_field_ic_miss_packed	f64	ptr,ptr,ptr,ptr
-js_object_get_field_ic_nonptr	f64	i64,ptr,i64
-js_object_get_field_ic_overflow_load	f64	ptr,ptr,i32s,ptr
-js_object_get_field_ic_slow	f64	i64,ptr,ptr,ptr
+js_object_get_field_nonptr	f64	i64,ptr,i64
+js_object_get_field_slow	f64	i64,ptr
+js_object_get_field_value	f64	i64,ptr,i64
 js_object_get_index_polymorphic	f64	i64,f64
-js_object_get_own_field_ic_front	f64	ptr,i64,i64,ptr,ptr
+js_object_get_keyed_slow	f64	f64,f64,i64,i32u
 js_object_get_own_field_or_undef	f64	f64,ptr,usize
-js_object_get_own_field_or_undef_learn	f64	f64,ptr,usize,ptr
 js_object_get_own_property_descriptor	f64	f64,f64
 js_object_get_own_property_descriptors	f64	f64
 js_object_get_own_property_names	f64	f64
@@ -2600,8 +2728,6 @@ js_object_get_own_property_symbols	i64	f64
 js_object_get_property_key	f64	f64,f64
 js_object_get_prototype_of	f64	f64
 js_object_get_symbol_property	f64	f64,f64
-js_object_get_symbol_property_ic_miss	f64	f64,f64,ptr
-js_object_get_symbol_then_field_ic_miss	f64	f64,f64,ptr,i64,ptr,ptr
 js_object_group_by	f64	f64,f64
 js_object_has_own	f64	f64,f64
 js_object_has_own_symbol	bool	f64,f64
@@ -2623,7 +2749,6 @@ js_object_live_slot_count	i32u	ptr
 js_object_lookup_getter	f64	f64,f64
 js_object_lookup_setter	f64	f64,f64
 js_object_mark_class	void	i64
-js_object_own_method_cache_miss	i64	f64,i32u,i32u,ptr,usize,ptr,ptr
 js_object_prevent_extensions	f64	f64
 js_object_property_is_enumerable	f64	f64,f64
 js_object_record_get_by_bytes	i64	ptr,ptr,usize
@@ -2684,9 +2809,7 @@ js_os_user_info	ptr
 js_os_user_info_buffer	ptr	
 js_os_user_info_options	ptr	i64
 js_os_version	ptr	
-js_packed_add_chain_valid	i32s	i64
-js_packed_add_refused	void	ptr,ptr,i32u,i32u,i32u
-js_packed_arraylike_index_get	f64	f64,f64,ptr
+js_packed_arraylike_index_get	f64	f64,f64
 js_packed_arraylike_loop_guard	i32s	f64,f64,i32s,ptr
 js_packed_arraylike_loop_guard_live	i64	f64,f64,i32s,ptr
 js_packed_arraylike_loop_revalidate_live	i64	f64,f64,i32s,ptr
@@ -2881,6 +3004,7 @@ js_perry_payload_close_attached	i32s	f64,ptr
 js_perry_payload_external_bytes	void	f64,ptr,usize
 js_perry_payload_get	ptr	f64,ptr
 js_perry_payload_get_attached	ptr	f64,ptr
+js_perry_payload_has_attached	i32s	f64,ptr
 js_perry_payload_js_state	f64	f64,ptr,i32s
 js_perry_payload_lifecycle	i32s	f64,ptr
 js_perry_payload_link_close	i32s	usize,ptr
@@ -3147,11 +3271,9 @@ js_promise_try_spec	f64	f64,f64,f64
 js_promise_value	f64	ptr
 js_promise_with_resolvers	ptr	
 js_promise_with_resolvers_spec	f64	f64
-js_property_rmw	f64	f64,ptr,f64,i32s,ptr,ptr
-js_property_rmw_fast	f64	f64,f64,i32s,ptr
-js_proto_constant_contract_check	void	f64,i64,i32,i64
+js_proto_constant_contract_check	void	f64,i64,i32s,i64
 js_proto_holder_contract_check	void	f64,f64,i64
-js_proto_shadow_contract_check	void	i32,f64,i64
+js_proto_shadow_contract_check	void	i32s,f64,i64
 js_proxy_apply	f64	f64,f64,f64
 js_proxy_construct	f64	f64,f64,f64
 js_proxy_delete	f64	f64,f64
@@ -3174,11 +3296,7 @@ js_punycode_to_unicode	f64	f64
 js_punycode_ucs2_decode	f64	f64
 js_punycode_ucs2_encode	f64	f64
 js_put_value_set	f64	f64,f64,f64,f64,i32s
-js_put_value_set_dyn_ic	f64	ptr,f64,f64,f64,i32s
-js_put_value_set_dyn_ic_miss	f64	ptr,f64,f64,f64,i32s
-js_put_value_set_ic_miss	f64	f64,ptr,f64,i32s,ptr,i32s
-js_put_value_set_packed_fast	f64	f64,f64,ptr
-js_put_value_set_packed_miss	f64	f64,ptr,f64,i32s,ptr,ptr
+js_put_value_set_dynamic	f64	f64,f64,f64,i32s
 js_querystring_escape	f64	f64
 js_querystring_native_dispatch	f64	ptr,usize,ptr,usize
 js_querystring_parse	ptr	f64,f64,f64,f64
@@ -3288,7 +3406,6 @@ js_regexp_literal	ptr	i64
 js_regexp_new	ptr	ptr,ptr
 js_regexp_test	i32s	ptr,ptr
 js_regexp_to_string	ptr	ptr
-js_region_holder_read	i32u	ptr,f64,ptr,i32u,ptr,i32u
 js_region_loop_pack	i64	i32u,i32u,i64,i64,i64,i64,i64,i32u,i32u
 js_region_loop_prime	i64	ptr,i32u,i32u,i64,i64,i64,i64,i64,i32u,i32u,i32u,i32u
 js_register_agent_aux_pump	void	ptr
@@ -3445,15 +3562,36 @@ js_runtime_describe_received	f64	f64
 js_runtime_init	void	
 js_runtime_install_bun_cli_utils	void	
 js_runtime_install_compiled	void	
+js_runtime_install_diagnostics	void	
 js_runtime_install_dyn_eval	void	
+js_runtime_install_global_atomics	void	
+js_runtime_install_global_json	void	
+js_runtime_install_global_math	void	
+js_runtime_install_global_reflect	void	
+js_runtime_install_global_text	void	
+js_runtime_install_global_url	void	
+js_runtime_install_global_webcrypto	void	
+js_runtime_install_global_webfetch	void	
+js_runtime_install_global_websocket	void	
 js_runtime_install_intl_datetime	void	
+js_runtime_install_intl_locale	void	
 js_runtime_install_intl_namespace	void	
+js_runtime_install_intl_segmenter	void	
+js_runtime_install_mod_dgram	void	
+js_runtime_install_mod_http2_constants	void	
+js_runtime_install_mod_node_test	void	
+js_runtime_install_node_api_host	void	
+js_runtime_install_proc_ipc	void	
 js_runtime_install_regex_engine	void	
+js_runtime_install_string_normalize	void	
 js_runtime_install_temporal	void	
 js_runtime_install_url_engine	void	
+js_runtime_install_wasm_host	void	
 js_runtime_register_feature_installer	void	ptr
+js_runtime_set_wasm_host_ops	void	ptr
 js_runtime_state_key_call	f64	f64,ptr,usize,ptr,usize
 js_runtime_state_key_get	f64	f64,ptr,usize
+js_runtime_state_key_set	void	f64,ptr,usize,f64
 js_runtime_validate_crypto_key_arg	void	f64,ptr,i32u
 js_runtime_validate_integer_arg	void	f64,ptr,i32u,f64,f64
 js_runtime_validate_string_arg	void	f64,ptr,i32u
@@ -3506,6 +3644,7 @@ js_set_handle_object_get_property	void	ptr
 js_set_handle_to_string	void	ptr
 js_set_handle_typeof	void	ptr
 js_set_has	i32s	ptr,f64
+js_set_has__Set	i32s	ptr,f64
 js_set_has_bool	i32s	ptr,i32s
 js_set_has_f32	i32s	ptr,f32
 js_set_has_i32	i32s	ptr,i32s
@@ -3539,6 +3678,7 @@ js_set_process_entry_path	void	ptr,i32u
 js_set_property	void	f64,i64,i64,f64
 js_set_prototype_property	f64	f64,f64,i32s
 js_set_size	i32u	ptr
+js_set_size__Set	i32u	ptr
 js_set_symmetric_difference	ptr	ptr,f64
 js_set_timeout	ptr	f64
 js_set_timeout_callback	i64	i64,f64
@@ -3555,6 +3695,7 @@ js_setenv	void	ptr,f64
 js_shadow_frame_enter	ptr	i32u
 js_shadow_frame_pop	void	i64
 js_shadow_frame_push	i64	i32u
+js_shadow_frame_restore_to	void	i64
 js_shadow_slot_bind	void	i32u,ptr
 js_shadow_slot_get	i64	i32u
 js_shadow_slot_set	void	i32u,i64
@@ -3637,6 +3778,8 @@ js_stdlib_install_events	void
 js_stdlib_install_external_http_client_pump	void	
 js_stdlib_install_external_http_server_pump	void	
 js_stdlib_install_external_net_pump	void	
+js_stdlib_install_external_net_tls	void	
+js_stdlib_install_external_tls_server	void	
 js_stdlib_install_external_zlib_pump	void	
 js_stdlib_install_tls_runtime	void	
 js_stdlib_install_turnloop_http_client	void	
@@ -3710,6 +3853,7 @@ js_string_italics	ptr	ptr
 js_string_last_index_of	i32s	ptr,ptr
 js_string_last_index_of_from	i32s	ptr,ptr,f64,i32s
 js_string_length	i32u	ptr
+js_string_length__Str	i32u	ptr
 js_string_link	ptr	ptr,ptr
 js_string_locale_compare	f64	ptr,ptr
 js_string_locale_compare_resolved	f64	ptr,ptr,i32s
@@ -3730,6 +3874,8 @@ js_string_pool_atom	ptr	ptr,i32u,i64,i32s
 js_string_position_to_index	i32s	f64
 js_string_print	void	ptr
 js_string_raw	ptr	f64,f64
+js_string_register_property_atom	void	ptr
+js_string_register_property_atoms	void	ptr,i32u
 js_string_repeat	ptr	ptr,f64
 js_string_replace_all_js	f64	f64,f64,f64
 js_string_replace_all_regex	ptr	ptr,ptr,ptr
@@ -3941,11 +4087,10 @@ js_transform_stream_new_from_transformer_object	f64	f64,f64,f64
 js_transform_stream_readable	f64	f64
 js_transform_stream_subclass_init	f64	f64,f64,f64,f64
 js_transform_stream_writable	f64	f64
-js_transition_ic_note_hit	void	
 js_transition_ic_probe_report	void	
-js_transition_ic_spill_append	i32s	f64,i64,i32u,f64
+js_trap_call	i32s	ptr,ptr
 js_try_end	void	
-js_try_push	ptr	
+js_try_push	ptr	ptr
 js_tty_isatty	f64	f64
 js_tty_read_stream_new	f64	f64
 js_tty_read_stream_set_raw_mode	f64	ptr,i64,f64
@@ -4252,13 +4397,11 @@ js_value_concat_string	ptr	f64,ptr
 js_value_from_const_descriptor	f64	ptr,i32u
 js_value_from_literal_descriptor	f64	ptr,i32u,ptr,i32u
 js_value_from_literal_descriptor_closures	f64	ptr,i32u,ptr,i32u,ptr,i32u,ptr,i32u,ptr,i32u
-js_enum_from_literal_descriptor	f64	ptr,i32u,ptr,i32u,ptr,i32u,i32
 js_value_is_closure	i32s	i64
 js_value_is_promise	i32s	f64
 js_value_length_f64	f64	f64
 js_value_length_property_f64	f64	f64
-js_value_length_property_ic_f64	f64	f64,ptr
-js_value_length_property_key_ic_f64	f64	f64,ptr,ptr
+js_value_length_property_key_f64	f64	f64,ptr
 js_value_to_locale_string	f64	f64
 js_value_to_object	ptr	i64
 js_value_to_str_ptr_for_ffi	i64	f64
@@ -4681,6 +4824,9 @@ node_api_create_syntax_error	i32s	ptr,ptr,ptr,ptr
 node_api_get_module_file_name	i32s	ptr,ptr
 node_api_symbol_for	i32s	ptr,ptr,usize,ptr
 node_api_throw_syntax_error	i32s	ptr,ptr,ptr
+perry_alloc_class_family	ptr	ptr,i32u,i32u
+perry_alloc_layout	ptr	ptr
+perry_alloc_runtime_record	ptr	ptr
 perry_app_group_init	void	ptr,i32s
 perry_app_group_suite_name	ptr	ptr
 perry_arkts_drain_toast	f64	
@@ -4692,7 +4838,12 @@ perry_arkts_set_content_view	void	f64,f64
 perry_arkts_set_text	void	f64,f64
 perry_arkts_set_visibility	void	f64,f64
 perry_arkts_show_toast	void	f64
+perry_array_attach_layout	f64	f64,ptr
+perry_array_element_kind	i32s	ptr
+perry_array_iteration_init	void	i32u
 perry_array_read_cold_shared	f64	f64,f64,i64
+perry_bind_family_prototype	f64	ptr,f64,ptr,ptr,i32u
+perry_build_runtime_record	ptr	ptr,ptr
 perry_class_value_dir_cell	ptr	
 perry_cluster_compute_key_id	i32u	ptr,i32u,i32s,i32s
 perry_cluster_is_worker	i32s	
@@ -4700,9 +4851,12 @@ perry_cluster_worker_listening	void	ptr,i32u,i32s,i32s
 perry_cluster_worker_query_listen	i32s	ptr,i32u,i32s,i32s,i32s
 perry_cluster_worker_recv_fd	i32s	i32u
 perry_cluster_worker_sched_is_rr	i32s	
+perry_create_family	f64	ptr,f64
 perry_debug_trace_init	void	i64,ptr,i64
 perry_debug_trace_init_done	void	i64
 perry_eh_personality	i32s	i32s,i32s,i64,ptr,ptr
+perry_family_run_admits	i32s	ptr,i64,i64,i32u,i32u,i32u
+perry_family_slot_verify	void	i64,i64,i32u
 perry_ffi_callback_dispatch	i64	usize,ptr,ptr
 perry_ffi_gc_register_fetch_trace	void	ptr,ptr
 perry_ffi_gc_register_mutable_root_scanner	void	ptr
@@ -4728,6 +4882,7 @@ perry_ffi_promise_resolve_bits	void	ptr,i64
 perry_ffi_promise_resolve_deferred	void	ptr,ptr,ptr
 perry_ffi_run_pending	void	i64
 perry_ffi_spawn_blocking	void	ptr,ptr
+perry_function_family_symbol_set	f64	ptr,i32u,f64,f64,f64,i32s
 perry_geisterhand_find_by_shortcut	f64	ptr,usize
 perry_geisterhand_free_string	void	ptr,usize
 perry_geisterhand_get_closure	f64	i64,i8u
@@ -4774,10 +4929,11 @@ perry_i18n_set_currencies	void	ptr,i32u
 perry_i18n_set_locale_index	void	i32s
 perry_i18n_set_plural_locales	void	ptr,ptr,i32u
 perry_init_guard_check_and_set	i32s	i64
-perry_intrinsic_proto	ptr	i32
+perry_intrinsic_proto	ptr	i32u
 perry_ios_classes_registered	void	
 perry_ios_get_connected_scene	i64	
 perry_key_content_hash	i64	ptr
+perry_layout_index_probe	i32s	ptr,ptr
 perry_macos_bundle_chdir	void	
 perry_media_create_player	i64	i64
 perry_media_destroy	void	f64
@@ -4794,9 +4950,11 @@ perry_media_set_now_playing	void	f64,i64,i64,i64,i64
 perry_media_set_rate	void	f64,f64
 perry_media_set_volume	void	f64,f64
 perry_media_stop	void	f64
-perry_native_iterator_cleanup_before_trap	i32s	
 perry_next_wake_ms	f64	
 perry_object_header_abi_revision	i32u	
+perry_overflow_delete	bool	ptr,ptr
+perry_overflow_get	i64	ptr,ptr
+perry_overflow_set	void	ptr,ptr,i64,i8u
 perry_plugin_count	i64	
 perry_plugin_discover	f64	f64
 perry_plugin_emit	f64	i64,f64,f64
@@ -4826,16 +4984,22 @@ perry_plugin_unregister_service	f64	i64,f64
 perry_plugin_unregister_tool	f64	i64,f64
 perry_poll	i32s	
 perry_probe_family_method	i64	ptr,i64,i64,i64,i32u
+perry_probe_get	f64	ptr,i64,i64,i64
+perry_probe_get_binding	f64	ptr,i64,i64,i64
+perry_probe_get_keyed	f64	ptr,i64,i64
+perry_probe_get_length	f64	ptr,i64,i64,i64
+perry_probe_get_value	f64	ptr,i64,i64,i64
+perry_probe_own_method	f64	ptr,f64,i64,i64
+perry_probe_set	i32s	ptr,i64,i64,i64,f64
 perry_register_static_plugin	void	ptr,f64
 perry_resolve_static_plugin	f64	ptr
+perry_runtime_image_result	i64	i64,f64,f64
 perry_runtime_widget_init	void	
 perry_safe_area_insets_make	f64	f64,f64,f64,f64
 perry_set_wake_callback	void	ptr,ptr
 perry_shape_dir_cell	ptr	
-perry_store_census_arm	void	
 perry_string_header_abi_revision	i32u	
 perry_stub_warn_ffi	void	ptr,ptr,ptr
-perry_transition_cache_base	ptr	
 perry_tui_state_setter_trampoline	f64	ptr,i64,f64
 perry_update_notify_startup	void	ptr,i32s
 perry_updater_check_headers	ptr	f64

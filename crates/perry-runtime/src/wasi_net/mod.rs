@@ -18,8 +18,13 @@ pub mod abi;
 pub(crate) mod errors;
 #[path = "../turnloop_net/sink.rs"]
 mod sink;
+pub mod transport;
 pub use errors::NodeError;
-pub use sink::{register_sink, sink_installed, NetCompletion, MAX_SUBSYSTEMS};
+pub use sink::{
+    register_link_sink, register_sink, sink_installed, NetCompletion, MAX_LINK_ROUTES,
+    MAX_SUBSYSTEMS,
+};
+pub use transport::{TransportCore, TRANSPORT_CORE_WORDS};
 type NetResult<T> = Result<T, NodeError>;
 
 extern "C" {
@@ -54,6 +59,7 @@ struct Write {
     user: u64,
 }
 struct Handle {
+    owner: Option<transport::Pin>,
     fd: i32,
     subsystem: u8,
     listener: bool,
@@ -71,6 +77,7 @@ impl Handle {
     fn new(fd: i32, subsystem: u8) -> Self {
         Self {
             fd,
+            owner: None,
             subsystem,
             listener: false,
             accepting: false,
@@ -96,12 +103,13 @@ impl Drop for Handle {
     }
 }
 struct Timer {
+    owner: Option<transport::Pin>,
     subsystem: u8,
     deadline: Option<Instant>,
 }
 enum Event {
-    Completion(u8, NetCompletion, Vec<u8>),
-    Accepted(u8, i64, i32),
+    Completion(u8, NetCompletion, Vec<u8>, Option<transport::Pin>),
+    Accepted(u8, i64, Handle, Option<transport::Pin>),
 }
 #[derive(Default)]
 struct State {
@@ -282,6 +290,7 @@ pub fn close(id: i64) -> NetResult<()> {
                 h.subsystem,
                 NetCompletion::closed(id),
                 Vec::new(),
+                h.owner.clone(),
             ));
         }
         state.timers.remove(&id);
@@ -324,6 +333,7 @@ pub fn timer_arm(id: i64, subsystem: u8, delay_ms: u64) -> NetResult<()> {
         s.borrow_mut().timers.insert(
             id,
             Timer {
+                owner: None,
                 subsystem,
                 deadline: Some(deadline),
             },
@@ -408,8 +418,13 @@ pub(crate) fn next_wake_ms() -> f64 {
         }
     })
 }
-fn completion(events: &mut VecDeque<Event>, subsystem: u8, c: NetCompletion) {
-    events.push_back(Event::Completion(subsystem, c, Vec::new()));
+fn completion(
+    events: &mut VecDeque<Event>,
+    subsystem: u8,
+    owner: Option<&transport::Pin>,
+    c: NetCompletion,
+) {
+    events.push_back(Event::Completion(subsystem, c, Vec::new(), owner.cloned()));
 }
 
 extern "C" fn pump() -> i32 {
@@ -432,6 +447,7 @@ extern "C" fn pump() -> i32 {
                     completion(
                         events,
                         h.subsystem,
+                        h.owner.as_ref(),
                         NetCompletion::error(
                             id,
                             0,
@@ -445,7 +461,12 @@ extern "C" fn pump() -> i32 {
             }
             if h.connected_event {
                 h.connected_event = false;
-                completion(events, h.subsystem, NetCompletion::connect(id));
+                completion(
+                    events,
+                    h.subsystem,
+                    h.owner.as_ref(),
+                    NetCompletion::connect(id),
+                );
             }
             if h.accepting {
                 for _ in 0..32 {
@@ -457,11 +478,17 @@ extern "C" fn pump() -> i32 {
                         completion(
                             events,
                             h.subsystem,
+                            h.owner.as_ref(),
                             NetCompletion::error(id, 0, 0, errors::from_os(-fd, "accept"), false),
                         );
                         break;
                     }
-                    events.push_back(Event::Accepted(h.subsystem, id, fd));
+                    events.push_back(Event::Accepted(
+                        h.subsystem,
+                        id,
+                        Handle::new(fd, h.subsystem),
+                        h.owner.clone(),
+                    ));
                 }
             }
             while let Some(w) = h.writes.front_mut() {
@@ -483,6 +510,7 @@ extern "C" fn pump() -> i32 {
                         completion(
                             events,
                             h.subsystem,
+                            h.owner.as_ref(),
                             NetCompletion::error(
                                 id,
                                 user,
@@ -502,6 +530,7 @@ extern "C" fn pump() -> i32 {
                 completion(
                     events,
                     h.subsystem,
+                    h.owner.as_ref(),
                     NetCompletion::wrote(id, w.user, w.bytes.len(), h.queued()),
                 );
             }
@@ -511,6 +540,7 @@ extern "C" fn pump() -> i32 {
                     completion(
                         events,
                         h.subsystem,
+                        h.owner.as_ref(),
                         if result < 0 {
                             NetCompletion::error(
                                 id,
@@ -539,6 +569,7 @@ extern "C" fn pump() -> i32 {
                         completion(
                             events,
                             h.subsystem,
+                            h.owner.as_ref(),
                             if n == 0 {
                                 NetCompletion::eof(id)
                             } else {
@@ -558,6 +589,7 @@ extern "C" fn pump() -> i32 {
                         h.subsystem,
                         NetCompletion::data(id, &bytes),
                         bytes,
+                        h.owner.clone(),
                     ));
                 }
             }
@@ -565,7 +597,12 @@ extern "C" fn pump() -> i32 {
         let now = Instant::now();
         timers.retain(|&id, t| {
             if t.deadline.is_some_and(|d| d <= now) {
-                completion(events, t.subsystem, NetCompletion::timer(id));
+                completion(
+                    events,
+                    t.subsystem,
+                    t.owner.as_ref(),
+                    NetCompletion::timer(id),
+                );
                 false
             } else {
                 true
@@ -576,15 +613,18 @@ extern "C" fn pump() -> i32 {
     let count = events.len().min(i32::MAX as usize) as i32;
     while let Some(event) = events.pop_front() {
         match event {
-            Event::Completion(subsystem, c, bytes) => {
+            Event::Completion(subsystem, c, bytes, owner) => {
                 if c.kind == sink::NET_CLOSED || c.kind == sink::NET_TIMER || is_live(c.id) {
-                    sink::emit(subsystem, c);
+                    transport::emit(subsystem, c, owner.as_ref());
                 }
                 drop(bytes); // The read payload stays alive through the sink call.
             }
-            Event::Accepted(subsystem, server, fd) => {
-                let handle = Handle::new(fd, subsystem);
+            Event::Accepted(subsystem, server, handle, owner) => {
                 if !is_live(server) {
+                    continue;
+                }
+                if let Some(owner) = owner.as_ref() {
+                    transport::accepted(subsystem, server, handle, owner);
                     continue;
                 }
                 let Some(id) = sink::allocate_id(subsystem) else {

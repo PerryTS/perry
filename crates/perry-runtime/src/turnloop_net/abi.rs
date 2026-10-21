@@ -887,13 +887,7 @@ pub unsafe extern "C" fn js_perry_net_link_adopt_stream(
     err: *mut PerryNetError,
 ) -> i32 {
     if socket < 0 {
-        return finish(
-            Err(super::map_error(
-                turnloop::Error::new(turnloop::ErrorKind::InvalidInput),
-                "adopt",
-            )),
-            err,
-        );
+        return finish(Err(super::errors::invalid_input("adopt")), err);
     }
     #[cfg(unix)]
     {
@@ -915,16 +909,17 @@ pub unsafe extern "C" fn js_perry_net_link_adopt_stream(
             err,
         )
     }
-    #[cfg(not(any(unix, windows)))]
+    #[cfg(target_os = "wasi")]
     {
-        let _ = (core, link);
         finish(
-            Err(super::map_error(
-                turnloop::Error::new(turnloop::ErrorKind::Unsupported),
-                "adopt",
-            )),
+            transport::adopt_stream(core.cast(), link_arg(link), socket as i32),
             err,
         )
+    }
+    #[cfg(not(any(unix, windows, target_os = "wasi")))]
+    {
+        let _ = (core, link);
+        finish(Err(super::errors::unsupported("adopt")), err)
     }
 }
 

@@ -15,10 +15,11 @@ mod ascii_char_images {
             #[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
             #[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
             #[cfg_attr(
-                not(any(target_vendor = "apple", target_os = "windows")),
+                not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
                 link_section = "perry_strings"
             )]
             static $name: ImageString<2> = image_bytes(concat!($bytes, "\0").as_bytes());
+            wasm_string_image!($name);
         };
     }
     ascii_image!(I00, "\u{0}", "00");

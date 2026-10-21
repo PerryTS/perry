@@ -28,11 +28,12 @@ macro_rules! runtime_atom {
             #[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
             #[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
             #[cfg_attr(
-                not(any(target_vendor = "apple", target_os = "windows")),
+                not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
                 link_section = "perry_strings"
             )]
             pub(super) static IMAGE: ImageString<{ $bytes.len() + 1 }> =
                 image_bytes(concat!($bytes, "\0").as_bytes());
+            wasm_string_image!(IMAGE);
         }
         #[used(linker)]
         #[linkage = "weak_odr"]
@@ -40,7 +41,7 @@ macro_rules! runtime_atom {
         #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
         #[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
         #[cfg_attr(
-            not(any(target_vendor = "apple", target_os = "windows")),
+            not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
             link_section = "perry_atoms"
         )]
         pub(crate) static $name: StaticAtom = StaticAtom {
@@ -50,6 +51,7 @@ macro_rules! runtime_atom {
             _pad: [0; 3],
             index: 0,
         };
+        wasm_atom!($name);
     };
 }
 
@@ -143,7 +145,7 @@ macro_rules! runtime_layout {
         #[used(linker)]
         #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_layouts")]
         #[cfg_attr(target_os = "windows", link_section = ".perrylay$m")]
-        #[cfg_attr(not(any(target_vendor = "apple", target_os = "windows")), link_section = "perry_layouts")]
+        #[cfg_attr(not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")), link_section = "perry_layouts")]
         #[export_name = concat!("perry_runtime_layout_", stringify!($name))]
         /// Declared layout of a checked runtime record.
         pub static mut $name: PerryLayoutDesc = PerryLayoutDesc {
@@ -156,6 +158,7 @@ macro_rules! runtime_layout {
             index: $name::INDEX.as_ptr(),
             class_id: 0, parent_class_id: 0, methods: std::ptr::null(),
         };
+wasm_layout!($name);
     };
 }
 
@@ -453,10 +456,11 @@ pub(crate) unsafe fn layout_id(desc: *const PerryLayoutDesc) -> u32 {
 #[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
 #[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_strings"
 )]
 static IMAGE_0: ImageString<14> = image(*b"highWaterMark\0");
+wasm_string_image!(IMAGE_0);
 
 #[cfg(test)]
 pub(crate) fn test_image_string() -> *const StringHeader {
@@ -467,7 +471,7 @@ pub(crate) fn test_image_string() -> *const StringHeader {
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
 #[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_atoms"
 )]
 static ATOM_0: StaticAtom = StaticAtom {
@@ -477,22 +481,24 @@ static ATOM_0: StaticAtom = StaticAtom {
     _pad: [0; 3],
     index: 0,
 };
+wasm_atom!(ATOM_0);
 
 #[used(linker)]
 #[export_name = "perry_image_literal_0_627566666572"]
 #[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
 #[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_strings"
 )]
 static IMAGE_1: ImageString<7> = image(*b"buffer\0");
+wasm_string_image!(IMAGE_1);
 #[used(linker)]
 #[export_name = "perry_atom_627566666572"]
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
 #[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_atoms"
 )]
 static ATOM_1: StaticAtom = StaticAtom {
@@ -502,22 +508,24 @@ static ATOM_1: StaticAtom = StaticAtom {
     _pad: [0; 3],
     index: 0,
 };
+wasm_atom!(ATOM_1);
 
 #[used(linker)]
 #[export_name = "perry_image_literal_0_627566666572496e646578"]
 #[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
 #[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_strings"
 )]
 static IMAGE_2: ImageString<12> = image(*b"bufferIndex\0");
+wasm_string_image!(IMAGE_2);
 #[used(linker)]
 #[export_name = "perry_atom_627566666572496e646578"]
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
 #[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_atoms"
 )]
 static ATOM_2: StaticAtom = StaticAtom {
@@ -527,22 +535,24 @@ static ATOM_2: StaticAtom = StaticAtom {
     _pad: [0; 3],
     index: 0,
 };
+wasm_atom!(ATOM_2);
 
 #[used(linker)]
 #[export_name = "perry_image_literal_0_6c656e677468"]
 #[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
 #[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_strings"
 )]
 static IMAGE_3: ImageString<7> = image(*b"length\0");
+wasm_string_image!(IMAGE_3);
 #[used(linker)]
 #[export_name = "perry_atom_6c656e677468"]
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
 #[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_atoms"
 )]
 static ATOM_3: StaticAtom = StaticAtom {
@@ -552,22 +562,24 @@ static ATOM_3: StaticAtom = StaticAtom {
     _pad: [0; 3],
     index: 0,
 };
+wasm_atom!(ATOM_3);
 
 #[used(linker)]
 #[export_name = "perry_image_literal_0_7069706573"]
 #[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
 #[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_strings"
 )]
 static IMAGE_4: ImageString<6> = image(*b"pipes\0");
+wasm_string_image!(IMAGE_4);
 #[used(linker)]
 #[export_name = "perry_atom_7069706573"]
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
 #[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_atoms"
 )]
 static ATOM_4: StaticAtom = StaticAtom {
@@ -577,22 +589,24 @@ static ATOM_4: StaticAtom = StaticAtom {
     _pad: [0; 3],
     index: 0,
 };
+wasm_atom!(ATOM_4);
 
 #[used(linker)]
 #[export_name = "perry_image_literal_0_6177616974447261696e57726974657273"]
 #[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
 #[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_strings"
 )]
 static IMAGE_5: ImageString<18> = image(*b"awaitDrainWriters\0");
+wasm_string_image!(IMAGE_5);
 #[used(linker)]
 #[export_name = "perry_atom_6177616974447261696e57726974657273"]
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
 #[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_atoms"
 )]
 static ATOM_5: StaticAtom = StaticAtom {
@@ -602,22 +616,24 @@ static ATOM_5: StaticAtom = StaticAtom {
     _pad: [0; 3],
     index: 0,
 };
+wasm_atom!(ATOM_5);
 
 #[used(linker)]
 #[export_name = "perry_image_literal_0_636f726b6564"]
 #[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
 #[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_strings"
 )]
 static IMAGE_6: ImageString<7> = image(*b"corked\0");
+wasm_string_image!(IMAGE_6);
 #[used(linker)]
 #[export_name = "perry_atom_636f726b6564"]
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
 #[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_atoms"
 )]
 static ATOM_6: StaticAtom = StaticAtom {
@@ -627,22 +643,24 @@ static ATOM_6: StaticAtom = StaticAtom {
     _pad: [0; 3],
     index: 0,
 };
+wasm_atom!(ATOM_6);
 
 #[used(linker)]
 #[export_name = "perry_image_literal_0_6f6e7772697465"]
 #[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
 #[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_strings"
 )]
 static IMAGE_7: ImageString<8> = image(*b"onwrite\0");
+wasm_string_image!(IMAGE_7);
 #[used(linker)]
 #[export_name = "perry_atom_6f6e7772697465"]
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
 #[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_atoms"
 )]
 static ATOM_7: StaticAtom = StaticAtom {
@@ -652,22 +670,24 @@ static ATOM_7: StaticAtom = StaticAtom {
     _pad: [0; 3],
     index: 0,
 };
+wasm_atom!(ATOM_7);
 
 #[used(linker)]
 #[export_name = "perry_image_literal_0_77726974656c656e"]
 #[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
 #[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_strings"
 )]
 static IMAGE_8: ImageString<9> = image(*b"writelen\0");
+wasm_string_image!(IMAGE_8);
 #[used(linker)]
 #[export_name = "perry_atom_77726974656c656e"]
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
 #[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_atoms"
 )]
 static ATOM_8: StaticAtom = StaticAtom {
@@ -677,22 +697,24 @@ static ATOM_8: StaticAtom = StaticAtom {
     _pad: [0; 3],
     index: 0,
 };
+wasm_atom!(ATOM_8);
 
 #[used(linker)]
 #[export_name = "perry_image_literal_0_6275666665726564496e646578"]
 #[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
 #[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_strings"
 )]
 static IMAGE_9: ImageString<14> = image(*b"bufferedIndex\0");
+wasm_string_image!(IMAGE_9);
 #[used(linker)]
 #[export_name = "perry_atom_6275666665726564496e646578"]
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
 #[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_atoms"
 )]
 static ATOM_9: StaticAtom = StaticAtom {
@@ -702,22 +724,24 @@ static ATOM_9: StaticAtom = StaticAtom {
     _pad: [0; 3],
     index: 0,
 };
+wasm_atom!(ATOM_9);
 
 #[used(linker)]
 #[export_name = "perry_image_literal_0_70656e64696e676362"]
 #[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
 #[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_strings"
 )]
 static IMAGE_10: ImageString<10> = image(*b"pendingcb\0");
+wasm_string_image!(IMAGE_10);
 #[used(linker)]
 #[export_name = "perry_atom_70656e64696e676362"]
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
 #[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_atoms"
 )]
 static ATOM_10: StaticAtom = StaticAtom {
@@ -727,22 +751,24 @@ static ATOM_10: StaticAtom = StaticAtom {
     _pad: [0; 3],
     index: 0,
 };
+wasm_atom!(ATOM_10);
 
 #[used(linker)]
 #[export_name = "perry_image_literal_0_233c70657272793a75726c2d7365617263682d706172616d732d656e74726965733e"]
 #[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
 #[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_strings"
 )]
 static IMAGE_11: ImageString<35> = image(*b"#<perry:url-search-params-entries>\0");
+wasm_string_image!(IMAGE_11);
 #[used(linker)]
 #[export_name = "perry_atom_233c70657272793a75726c2d7365617263682d706172616d732d656e74726965733e"]
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
 #[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_atoms"
 )]
 static ATOM_11: StaticAtom = StaticAtom {
@@ -752,22 +778,24 @@ static ATOM_11: StaticAtom = StaticAtom {
     _pad: [0; 3],
     index: 0,
 };
+wasm_atom!(ATOM_11);
 
 #[used(linker)]
 #[export_name = "perry_image_literal_0_233c70657272793a75726c2d7365617263682d706172616d732d6f776e65723e"]
 #[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
 #[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_strings"
 )]
 static IMAGE_12: ImageString<33> = image(*b"#<perry:url-search-params-owner>\0");
+wasm_string_image!(IMAGE_12);
 #[used(linker)]
 #[export_name = "perry_atom_233c70657272793a75726c2d7365617263682d706172616d732d6f776e65723e"]
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
 #[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_atoms"
 )]
 static ATOM_12: StaticAtom = StaticAtom {
@@ -777,22 +805,24 @@ static ATOM_12: StaticAtom = StaticAtom {
     _pad: [0; 3],
     index: 0,
 };
+wasm_atom!(ATOM_12);
 
 #[used(linker)]
 #[export_name = "perry_image_literal_0_233c70657272793a75726c2d687265663e"]
 #[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
 #[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_strings"
 )]
 static IMAGE_13: ImageString<18> = image(*b"#<perry:url-href>\0");
+wasm_string_image!(IMAGE_13);
 #[used(linker)]
 #[export_name = "perry_atom_233c70657272793a75726c2d687265663e"]
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
 #[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_atoms"
 )]
 static ATOM_13: StaticAtom = StaticAtom {
@@ -802,22 +832,24 @@ static ATOM_13: StaticAtom = StaticAtom {
     _pad: [0; 3],
     index: 0,
 };
+wasm_atom!(ATOM_13);
 
 #[used(linker)]
 #[export_name = "perry_image_literal_0_233c70657272793a75726c2d70726f746f636f6c3e"]
 #[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
 #[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_strings"
 )]
 static IMAGE_14: ImageString<22> = image(*b"#<perry:url-protocol>\0");
+wasm_string_image!(IMAGE_14);
 #[used(linker)]
 #[export_name = "perry_atom_233c70657272793a75726c2d70726f746f636f6c3e"]
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
 #[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_atoms"
 )]
 static ATOM_14: StaticAtom = StaticAtom {
@@ -827,22 +859,24 @@ static ATOM_14: StaticAtom = StaticAtom {
     _pad: [0; 3],
     index: 0,
 };
+wasm_atom!(ATOM_14);
 
 #[used(linker)]
 #[export_name = "perry_image_literal_0_233c70657272793a75726c2d686f73743e"]
 #[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
 #[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_strings"
 )]
 static IMAGE_15: ImageString<18> = image(*b"#<perry:url-host>\0");
+wasm_string_image!(IMAGE_15);
 #[used(linker)]
 #[export_name = "perry_atom_233c70657272793a75726c2d686f73743e"]
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
 #[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_atoms"
 )]
 static ATOM_15: StaticAtom = StaticAtom {
@@ -852,22 +886,24 @@ static ATOM_15: StaticAtom = StaticAtom {
     _pad: [0; 3],
     index: 0,
 };
+wasm_atom!(ATOM_15);
 
 #[used(linker)]
 #[export_name = "perry_image_literal_0_233c70657272793a75726c2d686f73746e616d653e"]
 #[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
 #[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_strings"
 )]
 static IMAGE_16: ImageString<22> = image(*b"#<perry:url-hostname>\0");
+wasm_string_image!(IMAGE_16);
 #[used(linker)]
 #[export_name = "perry_atom_233c70657272793a75726c2d686f73746e616d653e"]
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
 #[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_atoms"
 )]
 static ATOM_16: StaticAtom = StaticAtom {
@@ -877,22 +913,24 @@ static ATOM_16: StaticAtom = StaticAtom {
     _pad: [0; 3],
     index: 0,
 };
+wasm_atom!(ATOM_16);
 
 #[used(linker)]
 #[export_name = "perry_image_literal_0_233c70657272793a75726c2d706f72743e"]
 #[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
 #[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_strings"
 )]
 static IMAGE_17: ImageString<18> = image(*b"#<perry:url-port>\0");
+wasm_string_image!(IMAGE_17);
 #[used(linker)]
 #[export_name = "perry_atom_233c70657272793a75726c2d706f72743e"]
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
 #[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_atoms"
 )]
 static ATOM_17: StaticAtom = StaticAtom {
@@ -902,22 +940,24 @@ static ATOM_17: StaticAtom = StaticAtom {
     _pad: [0; 3],
     index: 0,
 };
+wasm_atom!(ATOM_17);
 
 #[used(linker)]
 #[export_name = "perry_image_literal_0_233c70657272793a75726c2d706174686e616d653e"]
 #[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
 #[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_strings"
 )]
 static IMAGE_18: ImageString<22> = image(*b"#<perry:url-pathname>\0");
+wasm_string_image!(IMAGE_18);
 #[used(linker)]
 #[export_name = "perry_atom_233c70657272793a75726c2d706174686e616d653e"]
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
 #[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_atoms"
 )]
 static ATOM_18: StaticAtom = StaticAtom {
@@ -927,22 +967,24 @@ static ATOM_18: StaticAtom = StaticAtom {
     _pad: [0; 3],
     index: 0,
 };
+wasm_atom!(ATOM_18);
 
 #[used(linker)]
 #[export_name = "perry_image_literal_0_233c70657272793a75726c2d7365617263683e"]
 #[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
 #[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_strings"
 )]
 static IMAGE_19: ImageString<20> = image(*b"#<perry:url-search>\0");
+wasm_string_image!(IMAGE_19);
 #[used(linker)]
 #[export_name = "perry_atom_233c70657272793a75726c2d7365617263683e"]
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
 #[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_atoms"
 )]
 static ATOM_19: StaticAtom = StaticAtom {
@@ -952,22 +994,24 @@ static ATOM_19: StaticAtom = StaticAtom {
     _pad: [0; 3],
     index: 0,
 };
+wasm_atom!(ATOM_19);
 
 #[used(linker)]
 #[export_name = "perry_image_literal_0_233c70657272793a75726c2d686173683e"]
 #[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
 #[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_strings"
 )]
 static IMAGE_20: ImageString<18> = image(*b"#<perry:url-hash>\0");
+wasm_string_image!(IMAGE_20);
 #[used(linker)]
 #[export_name = "perry_atom_233c70657272793a75726c2d686173683e"]
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
 #[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_atoms"
 )]
 static ATOM_20: StaticAtom = StaticAtom {
@@ -977,22 +1021,24 @@ static ATOM_20: StaticAtom = StaticAtom {
     _pad: [0; 3],
     index: 0,
 };
+wasm_atom!(ATOM_20);
 
 #[used(linker)]
 #[export_name = "perry_image_literal_0_233c70657272793a75726c2d6f726967696e3e"]
 #[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
 #[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_strings"
 )]
 static IMAGE_21: ImageString<20> = image(*b"#<perry:url-origin>\0");
+wasm_string_image!(IMAGE_21);
 #[used(linker)]
 #[export_name = "perry_atom_233c70657272793a75726c2d6f726967696e3e"]
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
 #[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_atoms"
 )]
 static ATOM_21: StaticAtom = StaticAtom {
@@ -1002,22 +1048,24 @@ static ATOM_21: StaticAtom = StaticAtom {
     _pad: [0; 3],
     index: 0,
 };
+wasm_atom!(ATOM_21);
 
 #[used(linker)]
 #[export_name = "perry_image_literal_0_233c70657272793a75726c2d7365617263682d706172616d733e"]
 #[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
 #[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_strings"
 )]
 static IMAGE_22: ImageString<27> = image(*b"#<perry:url-search-params>\0");
+wasm_string_image!(IMAGE_22);
 #[used(linker)]
 #[export_name = "perry_atom_233c70657272793a75726c2d7365617263682d706172616d733e"]
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
 #[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_atoms"
 )]
 static ATOM_22: StaticAtom = StaticAtom {
@@ -1027,22 +1075,24 @@ static ATOM_22: StaticAtom = StaticAtom {
     _pad: [0; 3],
     index: 0,
 };
+wasm_atom!(ATOM_22);
 
 #[used(linker)]
 #[export_name = "perry_image_literal_0_233c70657272793a75726c2d757365726e616d653e"]
 #[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
 #[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_strings"
 )]
 static IMAGE_23: ImageString<22> = image(*b"#<perry:url-username>\0");
+wasm_string_image!(IMAGE_23);
 #[used(linker)]
 #[export_name = "perry_atom_233c70657272793a75726c2d757365726e616d653e"]
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
 #[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_atoms"
 )]
 static ATOM_23: StaticAtom = StaticAtom {
@@ -1052,22 +1102,24 @@ static ATOM_23: StaticAtom = StaticAtom {
     _pad: [0; 3],
     index: 0,
 };
+wasm_atom!(ATOM_23);
 
 #[used(linker)]
 #[export_name = "perry_image_literal_0_233c70657272793a75726c2d70617373776f72643e"]
 #[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
 #[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_strings"
 )]
 static IMAGE_24: ImageString<22> = image(*b"#<perry:url-password>\0");
+wasm_string_image!(IMAGE_24);
 #[used(linker)]
 #[export_name = "perry_atom_233c70657272793a75726c2d70617373776f72643e"]
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
 #[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_atoms"
 )]
 static ATOM_24: StaticAtom = StaticAtom {
@@ -1077,22 +1129,24 @@ static ATOM_24: StaticAtom = StaticAtom {
     _pad: [0; 3],
     index: 0,
 };
+wasm_atom!(ATOM_24);
 
 #[used(linker)]
 #[export_name = "perry_image_literal_0_76616c7565"]
 #[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
 #[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_strings"
 )]
 static IMAGE_25: ImageString<6> = image(*b"value\0");
+wasm_string_image!(IMAGE_25);
 #[used(linker)]
 #[export_name = "perry_atom_76616c7565"]
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
 #[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_atoms"
 )]
 static ATOM_25: StaticAtom = StaticAtom {
@@ -1102,22 +1156,24 @@ static ATOM_25: StaticAtom = StaticAtom {
     _pad: [0; 3],
     index: 0,
 };
+wasm_atom!(ATOM_25);
 
 #[used(linker)]
 #[export_name = "perry_image_literal_0_646f6e65"]
 #[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
 #[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_strings"
 )]
 static IMAGE_26: ImageString<5> = image(*b"done\0");
+wasm_string_image!(IMAGE_26);
 #[used(linker)]
 #[export_name = "perry_atom_646f6e65"]
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
 #[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_atoms"
 )]
 static ATOM_26: StaticAtom = StaticAtom {
@@ -1127,6 +1183,7 @@ static ATOM_26: StaticAtom = StaticAtom {
     _pad: [0; 3],
     index: 0,
 };
+wasm_atom!(ATOM_26);
 
 static READABLE_STATE_KEYS: [PerryLayoutKey; 6] = [
     PerryLayoutKey {
@@ -1188,7 +1245,7 @@ static READABLE_STATE_INDEX: [u32; 16] = [
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_layouts")]
 #[cfg_attr(target_os = "windows", link_section = ".perrylay$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_layouts"
 )]
 pub(crate) static mut READABLE_STATE: PerryLayoutDesc = PerryLayoutDesc {
@@ -1208,6 +1265,7 @@ pub(crate) static mut READABLE_STATE: PerryLayoutDesc = PerryLayoutDesc {
     parent_class_id: 0,
     methods: std::ptr::null(),
 };
+wasm_layout!(READABLE_STATE);
 
 static WRITABLE_STATE_KEYS: [PerryLayoutKey; 7] = [
     PerryLayoutKey {
@@ -1275,7 +1333,7 @@ static WRITABLE_STATE_INDEX: [u32; 16] = [
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_layouts")]
 #[cfg_attr(target_os = "windows", link_section = ".perrylay$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_layouts"
 )]
 pub(crate) static mut WRITABLE_STATE: PerryLayoutDesc = PerryLayoutDesc {
@@ -1295,6 +1353,7 @@ pub(crate) static mut WRITABLE_STATE: PerryLayoutDesc = PerryLayoutDesc {
     parent_class_id: 0,
     methods: std::ptr::null(),
 };
+wasm_layout!(WRITABLE_STATE);
 
 static URL_SEARCH_PARAMS_KEYS: [PerryLayoutKey; 2] = [
     PerryLayoutKey {
@@ -1315,7 +1374,7 @@ static URL_SEARCH_PARAMS_INDEX: [u32; 4] = [0, 1, u32::MAX, u32::MAX];
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_layouts")]
 #[cfg_attr(target_os = "windows", link_section = ".perrylay$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_layouts"
 )]
 pub(crate) static mut URL_SEARCH_PARAMS: PerryLayoutDesc = PerryLayoutDesc {
@@ -1335,6 +1394,7 @@ pub(crate) static mut URL_SEARCH_PARAMS: PerryLayoutDesc = PerryLayoutDesc {
     parent_class_id: 0,
     methods: std::ptr::null(),
 };
+wasm_layout!(URL_SEARCH_PARAMS);
 
 static URL_COMPONENTS_KEYS: [PerryLayoutKey; 12] = [
     PerryLayoutKey {
@@ -1448,7 +1508,7 @@ static URL_COMPONENTS_INDEX: [u32; 32] = [
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_layouts")]
 #[cfg_attr(target_os = "windows", link_section = ".perrylay$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_layouts"
 )]
 pub(crate) static mut URL_COMPONENTS: PerryLayoutDesc = PerryLayoutDesc {
@@ -1468,6 +1528,7 @@ pub(crate) static mut URL_COMPONENTS: PerryLayoutDesc = PerryLayoutDesc {
     parent_class_id: 0,
     methods: std::ptr::null(),
 };
+wasm_layout!(URL_COMPONENTS);
 
 static ITERATOR_RESULT_KEYS: [PerryLayoutKey; 2] = [
     PerryLayoutKey {
@@ -1488,7 +1549,7 @@ static ITERATOR_RESULT_INDEX: [u32; 4] = [u32::MAX, 1, 0, u32::MAX];
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_layouts")]
 #[cfg_attr(target_os = "windows", link_section = ".perrylay$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_layouts"
 )]
 pub(crate) static mut ITERATOR_RESULT: PerryLayoutDesc = PerryLayoutDesc {
@@ -1508,6 +1569,7 @@ pub(crate) static mut ITERATOR_RESULT: PerryLayoutDesc = PerryLayoutDesc {
     parent_class_id: 0,
     methods: std::ptr::null(),
 };
+wasm_layout!(ITERATOR_RESULT);
 
 static ITERATOR_RESULT_DONE_FIRST_KEYS: [PerryLayoutKey; 2] = [
     PerryLayoutKey {
@@ -1528,7 +1590,7 @@ static ITERATOR_RESULT_DONE_FIRST_INDEX: [u32; 4] = [u32::MAX, 0, 1, u32::MAX];
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_layouts")]
 #[cfg_attr(target_os = "windows", link_section = ".perrylay$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_layouts"
 )]
 pub(crate) static mut ITERATOR_RESULT_DONE_FIRST: PerryLayoutDesc = PerryLayoutDesc {
@@ -1548,6 +1610,7 @@ pub(crate) static mut ITERATOR_RESULT_DONE_FIRST: PerryLayoutDesc = PerryLayoutD
     parent_class_id: 0,
     methods: std::ptr::null(),
 };
+wasm_layout!(ITERATOR_RESULT_DONE_FIRST);
 
 static TIMEOUT_KEYS: [PerryLayoutKey; 0] = [];
 static TIMEOUT_INDEX: [u32; 2] = [u32::MAX, u32::MAX];
@@ -1555,7 +1618,7 @@ static TIMEOUT_INDEX: [u32; 2] = [u32::MAX, u32::MAX];
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_layouts")]
 #[cfg_attr(target_os = "windows", link_section = ".perrylay$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_layouts"
 )]
 pub(crate) static mut TIMEOUT: PerryLayoutDesc = PerryLayoutDesc {
@@ -1575,6 +1638,7 @@ pub(crate) static mut TIMEOUT: PerryLayoutDesc = PerryLayoutDesc {
     parent_class_id: 0,
     methods: std::ptr::null(),
 };
+wasm_layout!(TIMEOUT);
 
 static IMMEDIATE_KEYS: [PerryLayoutKey; 0] = [];
 static IMMEDIATE_INDEX: [u32; 2] = [u32::MAX, u32::MAX];
@@ -1582,7 +1646,7 @@ static IMMEDIATE_INDEX: [u32; 2] = [u32::MAX, u32::MAX];
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_layouts")]
 #[cfg_attr(target_os = "windows", link_section = ".perrylay$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_layouts"
 )]
 pub(crate) static mut IMMEDIATE: PerryLayoutDesc = PerryLayoutDesc {
@@ -1602,6 +1666,7 @@ pub(crate) static mut IMMEDIATE: PerryLayoutDesc = PerryLayoutDesc {
     parent_class_id: 0,
     methods: std::ptr::null(),
 };
+wasm_layout!(IMMEDIATE);
 
 pub(crate) const URL_CLASS_ID: u32 = 0xFFFF0063;
 
@@ -1616,16 +1681,17 @@ pub(crate) use http_instances::*;
 #[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
 #[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_strings"
 )]
 static IMAGE_27: ImageString<6> = image(*b"index\0");
+wasm_string_image!(IMAGE_27);
 #[used(linker)]
 #[export_name = "perry_atom_696e646578"]
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
 #[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_atoms"
 )]
 static ATOM_27: StaticAtom = StaticAtom {
@@ -1635,21 +1701,23 @@ static ATOM_27: StaticAtom = StaticAtom {
     _pad: [0; 3],
     index: 0,
 };
+wasm_atom!(ATOM_27);
 #[used(linker)]
 #[export_name = "perry_image_literal_0_696e707574"]
 #[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
 #[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_strings"
 )]
 static IMAGE_28: ImageString<6> = image(*b"input\0");
+wasm_string_image!(IMAGE_28);
 #[used(linker)]
 #[export_name = "perry_atom_696e707574"]
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
 #[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_atoms"
 )]
 static ATOM_28: StaticAtom = StaticAtom {
@@ -1659,21 +1727,23 @@ static ATOM_28: StaticAtom = StaticAtom {
     _pad: [0; 3],
     index: 0,
 };
+wasm_atom!(ATOM_28);
 #[used(linker)]
 #[export_name = "perry_image_literal_0_67726f757073"]
 #[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
 #[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_strings"
 )]
 static IMAGE_29: ImageString<7> = image(*b"groups\0");
+wasm_string_image!(IMAGE_29);
 #[used(linker)]
 #[export_name = "perry_atom_67726f757073"]
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
 #[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_atoms"
 )]
 static ATOM_29: StaticAtom = StaticAtom {
@@ -1683,21 +1753,23 @@ static ATOM_29: StaticAtom = StaticAtom {
     _pad: [0; 3],
     index: 0,
 };
+wasm_atom!(ATOM_29);
 #[used(linker)]
 #[export_name = "perry_image_literal_0_696e6469636573"]
 #[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
 #[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_strings"
 )]
 static IMAGE_30: ImageString<8> = image(*b"indices\0");
+wasm_string_image!(IMAGE_30);
 #[used(linker)]
 #[export_name = "perry_atom_696e6469636573"]
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
 #[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_atoms"
 )]
 static ATOM_30: StaticAtom = StaticAtom {
@@ -1707,12 +1779,13 @@ static ATOM_30: StaticAtom = StaticAtom {
     _pad: [0; 3],
     index: 0,
 };
+wasm_atom!(ATOM_30);
 /// `Symbol.iterator` as a layout key (§6a, a well-known symbol atom).
 #[used(linker)]
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
 #[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_atoms"
 )]
 #[export_name = "perry_atom_well_known_iterator"]
@@ -1725,6 +1798,7 @@ static ATOM_SYMBOL_ITERATOR: StaticAtom = StaticAtom {
     _pad: [0; 3],
     index: crate::codegen_abi::WELL_KNOWN_SYMBOL_ITERATOR,
 };
+wasm_atom!(ATOM_SYMBOL_ITERATOR);
 static REGEX_EXEC_NAMED_KEYS: [PerryLayoutKey; 4] = [
     PerryLayoutKey {
         atom: std::ptr::addr_of!(ATOM_SYMBOL_ITERATOR),
@@ -1758,7 +1832,7 @@ static REGEX_EXEC_NAMED_INDEX: [u32; 8] = [u32::MAX, u32::MAX, u32::MAX, 1, 2, 0
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_layouts")]
 #[cfg_attr(target_os = "windows", link_section = ".perrylay$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_layouts"
 )]
 pub(crate) static mut REGEX_EXEC_NAMED: PerryLayoutDesc = PerryLayoutDesc {
@@ -1778,6 +1852,7 @@ pub(crate) static mut REGEX_EXEC_NAMED: PerryLayoutDesc = PerryLayoutDesc {
     parent_class_id: 0,
     methods: std::ptr::null(),
 };
+wasm_layout!(REGEX_EXEC_NAMED);
 static REGEX_EXEC_INDICES_NAMED_KEYS: [PerryLayoutKey; 5] = [
     PerryLayoutKey {
         atom: std::ptr::addr_of!(ATOM_SYMBOL_ITERATOR),
@@ -1833,7 +1908,7 @@ static REGEX_EXEC_INDICES_NAMED_INDEX: [u32; 16] = [
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_layouts")]
 #[cfg_attr(target_os = "windows", link_section = ".perrylay$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_layouts"
 )]
 pub(crate) static mut REGEX_EXEC_INDICES_NAMED: PerryLayoutDesc = PerryLayoutDesc {
@@ -1853,6 +1928,7 @@ pub(crate) static mut REGEX_EXEC_INDICES_NAMED: PerryLayoutDesc = PerryLayoutDes
     parent_class_id: 0,
     methods: std::ptr::null(),
 };
+wasm_layout!(REGEX_EXEC_INDICES_NAMED);
 static REGEX_INDICES_GROUPS_NAMED_KEYS: [PerryLayoutKey; 2] = [
     PerryLayoutKey {
         atom: std::ptr::addr_of!(ATOM_SYMBOL_ITERATOR),
@@ -1873,7 +1949,7 @@ static REGEX_INDICES_GROUPS_NAMED_INDEX: [u32; 4] = [u32::MAX, 0, 1, u32::MAX];
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_layouts")]
 #[cfg_attr(target_os = "windows", link_section = ".perrylay$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_layouts"
 )]
 pub(crate) static mut REGEX_INDICES_GROUPS_NAMED: PerryLayoutDesc = PerryLayoutDesc {
@@ -1893,6 +1969,7 @@ pub(crate) static mut REGEX_INDICES_GROUPS_NAMED: PerryLayoutDesc = PerryLayoutD
     parent_class_id: 0,
     methods: std::ptr::null(),
 };
+wasm_layout!(REGEX_INDICES_GROUPS_NAMED);
 static ARRAY_NAMED_KEYS: [PerryLayoutKey; 1] = [PerryLayoutKey {
     atom: std::ptr::addr_of!(ATOM_SYMBOL_ITERATOR),
     slot: 0,
@@ -1905,7 +1982,7 @@ static ARRAY_NAMED_INDEX: [u32; 2] = [u32::MAX, 0];
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_layouts")]
 #[cfg_attr(target_os = "windows", link_section = ".perrylay$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_layouts"
 )]
 pub(crate) static mut ARRAY_NAMED: PerryLayoutDesc = PerryLayoutDesc {
@@ -1925,6 +2002,7 @@ pub(crate) static mut ARRAY_NAMED: PerryLayoutDesc = PerryLayoutDesc {
     parent_class_id: 0,
     methods: std::ptr::null(),
 };
+wasm_layout!(ARRAY_NAMED);
 
 // Fixed legacy SQLite column metadata; the five data properties are all present.
 #[used(linker)]
@@ -1932,15 +2010,16 @@ pub(crate) static mut ARRAY_NAMED: PerryLayoutDesc = PerryLayoutDesc {
 #[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
 #[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_strings"
 )]
 static SQLITE_IMAGE_0: ImageString<7> = image(*b"column\0");
+wasm_string_image!(SQLITE_IMAGE_0);
 #[used(linker)]
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
 #[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_atoms"
 )]
 #[export_name = "perry_atom_636f6c756d6e"]
@@ -1951,20 +2030,22 @@ static SQLITE_ATOM_0: StaticAtom = StaticAtom {
     _pad: [0; 3],
     index: 0,
 };
+wasm_atom!(SQLITE_ATOM_0);
 #[used(linker)]
 #[export_name = "perry_image_literal_0_6461746162617365"]
 #[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
 #[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_strings"
 )]
 static SQLITE_IMAGE_1: ImageString<9> = image(*b"database\0");
+wasm_string_image!(SQLITE_IMAGE_1);
 #[used(linker)]
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
 #[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_atoms"
 )]
 #[export_name = "perry_atom_6461746162617365"]
@@ -1975,20 +2056,22 @@ static SQLITE_ATOM_1: StaticAtom = StaticAtom {
     _pad: [0; 3],
     index: 0,
 };
+wasm_atom!(SQLITE_ATOM_1);
 #[used(linker)]
 #[export_name = "perry_image_literal_0_6e616d65"]
 #[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
 #[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_strings"
 )]
 static SQLITE_IMAGE_2: ImageString<5> = image(*b"name\0");
+wasm_string_image!(SQLITE_IMAGE_2);
 #[used(linker)]
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
 #[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_atoms"
 )]
 #[export_name = "perry_atom_6e616d65"]
@@ -1999,20 +2082,22 @@ static SQLITE_ATOM_2: StaticAtom = StaticAtom {
     _pad: [0; 3],
     index: 0,
 };
+wasm_atom!(SQLITE_ATOM_2);
 #[used(linker)]
 #[export_name = "perry_image_literal_0_7461626c65"]
 #[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
 #[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_strings"
 )]
 static SQLITE_IMAGE_3: ImageString<6> = image(*b"table\0");
+wasm_string_image!(SQLITE_IMAGE_3);
 #[used(linker)]
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
 #[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_atoms"
 )]
 #[export_name = "perry_atom_7461626c65"]
@@ -2023,20 +2108,22 @@ static SQLITE_ATOM_3: StaticAtom = StaticAtom {
     _pad: [0; 3],
     index: 0,
 };
+wasm_atom!(SQLITE_ATOM_3);
 #[used(linker)]
 #[export_name = "perry_image_literal_0_74797065"]
 #[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
 #[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_strings"
 )]
 static SQLITE_IMAGE_4: ImageString<5> = image(*b"type\0");
+wasm_string_image!(SQLITE_IMAGE_4);
 #[used(linker)]
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
 #[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_atoms"
 )]
 #[export_name = "perry_atom_74797065"]
@@ -2047,6 +2134,7 @@ static SQLITE_ATOM_4: StaticAtom = StaticAtom {
     _pad: [0; 3],
     index: 0,
 };
+wasm_atom!(SQLITE_ATOM_4);
 static SQLITE_COLUMN_KEYS: [PerryLayoutKey; 5] = [
     PerryLayoutKey {
         atom: std::ptr::addr_of!(SQLITE_ATOM_0),
@@ -2101,7 +2189,7 @@ static SQLITE_COLUMN_INDEX: [u32; 16] = [
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_layouts")]
 #[cfg_attr(target_os = "windows", link_section = ".perrylay$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_layouts"
 )]
 pub static mut SQLITE_COLUMN_METADATA: PerryLayoutDesc = PerryLayoutDesc {
@@ -2121,6 +2209,7 @@ pub static mut SQLITE_COLUMN_METADATA: PerryLayoutDesc = PerryLayoutDesc {
     parent_class_id: 0,
     methods: std::ptr::null(),
 };
+wasm_layout!(SQLITE_COLUMN_METADATA);
 
 #[cfg(test)]
 #[path = "runtime_layouts/slot_order_tests.rs"]

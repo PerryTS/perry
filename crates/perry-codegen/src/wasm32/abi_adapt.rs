@@ -587,4 +587,45 @@ mod tests {
         let s = &t["js_string_from_bytes"];
         assert_eq!(s.ir_shape(), ("ptr", vec!["ptr", "i32"]));
     }
+
+    #[test]
+    fn macro_entries_keep_pointer_width_and_receiver_bits_distinct() {
+        let ir = "declare double @js_closure_call1(i64, i64, double)\n\
+                  declare i32 @js_set_size__Set(i64)\n\
+                  define double @f(i64 %closure, i64 %this, double %arg, i64 %set) {\n\
+                  entry:\n\
+                    %size = call i32 @js_set_size__Set(i64 %set)\n\
+                    %result = call double @js_closure_call1(i64 %closure, i64 %this, double %arg)\n\
+                    ret double %result\n\
+                  }\n";
+        let out = adapt_runtime_abi(ir, &HashMap::new());
+        assert!(
+            out.contains("declare double @js_closure_call1(ptr, i64, double)"),
+            "{out}"
+        );
+        assert!(out.contains("declare i32 @js_set_size__Set(ptr)"), "{out}");
+        assert!(out.contains("inttoptr i64 %a0 to ptr"), "{out}");
+        assert!(
+            out.contains("call double @js_closure_call1(ptr %c1, i64 %a1, double %a2)"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn wasi_exception_handler_keeps_its_stack_mark() {
+        // The WASI runtime restores managed stacks to this mark when an
+        // exception crosses a runtime frame. A stale zero-argument table
+        // entry silently discarded it, even though the generated call was
+        // correct. Exercise the real table through the lowering pass.
+        let ir = "declare ptr @js_try_push(ptr)\n\
+                  define ptr @handler(ptr %mark) {\n\
+                  entry:\n\
+                    %handler = call ptr @js_try_push(ptr %mark)\n\
+                    ret ptr %handler\n\
+                  }\n";
+        let out = adapt_runtime_abi(ir, &HashMap::new());
+        assert!(out.contains("declare ptr @js_try_push(ptr)"), "{out}");
+        assert!(out.contains("call ptr @js_try_push(ptr %mark)"), "{out}");
+        assert!(!out.contains("@__perry_wabi.js_try_push"), "{out}");
+    }
 }

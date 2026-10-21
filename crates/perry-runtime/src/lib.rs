@@ -81,6 +81,9 @@ static GLOBAL: alloc_census::CensusAlloc<std::alloc::System> =
 #[macro_use]
 pub mod per_test_global;
 
+#[macro_use]
+mod wasm_image;
+
 pub mod abi_trampoline;
 pub mod agent;
 #[cfg(test)]

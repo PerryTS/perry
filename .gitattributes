@@ -3,3 +3,6 @@
 # whitespace, so diff --check must not rewrite or reject those generated files.
 upstream/** whitespace=-trailing-space,-space-before-tab
 .github/actions/perry/** whitespace=-trailing-space,-space-before-tab
+
+# Empty parameter lists are the final, empty column of this generated TSV.
+crates/perry-codegen/src/wasm32/runtime_abi.tsv whitespace=-blank-at-eol

@@ -570,7 +570,7 @@ pub extern "C-unwind" fn js_throw(value: f64) -> ! {
     {
         let jb = with_exception_state(|s| unsafe {
             let depth = (*s).handlers.len().checked_sub(1)?;
-            Some(((*s).handlers[depth], (*s).jump_buffer_ptr(depth)))
+            Some(((&(*s).handlers)[depth], (*s).jump_buffer_ptr(depth)))
         });
         let Some((handler, jb)) = jb else {
             exit_uncaught(value)

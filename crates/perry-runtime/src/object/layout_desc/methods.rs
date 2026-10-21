@@ -24,8 +24,22 @@ pub struct PerryMethodHolder {
 unsafe impl Sync for PerryFamilyMethods {}
 unsafe impl Sync for PerryFamilyMethod {}
 unsafe impl Sync for PerryMethodHolder {}
-const _: () = assert!(std::mem::size_of::<PerryFamilyMethods>() == 16);
-const _: () = assert!(std::mem::size_of::<PerryFamilyMethod>() == 24);
+const _: () = assert!(
+    std::mem::size_of::<PerryFamilyMethods>()
+        == if cfg!(target_pointer_width = "32") {
+            12
+        } else {
+            16
+        }
+);
+const _: () = assert!(
+    std::mem::size_of::<PerryFamilyMethod>()
+        == if cfg!(target_pointer_width = "32") {
+            16
+        } else {
+            24
+        }
+);
 const _: () = assert!(std::mem::size_of::<PerryMethodHolder>() == 8);
 
 /// The carried descriptor band (including possible class method tables).

@@ -295,15 +295,64 @@ pub struct PerryLayoutDesc {
     pub methods: *const methods::PerryFamilyMethods,
 }
 
-const _: () = assert!(std::mem::size_of::<PerryLayoutDesc>() == 72);
-const _: () = assert!(std::mem::offset_of!(PerryLayoutDesc, class_id) == 56);
+const _: () = assert!(
+    std::mem::size_of::<PerryLayoutDesc>()
+        == if cfg!(target_pointer_width = "32") {
+            56
+        } else {
+            72
+        }
+);
+const _: () = assert!(
+    std::mem::offset_of!(PerryLayoutDesc, class_id)
+        == if cfg!(target_pointer_width = "32") {
+            44
+        } else {
+            56
+        }
+);
 const _: () = assert!(std::mem::offset_of!(PerryLayoutDesc, layout_id) == 12);
-const _: () = assert!(std::mem::offset_of!(PerryLayoutDesc, keys) == 32);
-const _: () = assert!(std::mem::offset_of!(PerryLayoutDesc, index) == 48);
-const _: () = assert!(std::mem::size_of::<PerryLayoutKey>() == 16);
+const _: () = assert!(
+    std::mem::offset_of!(PerryLayoutDesc, keys)
+        == if cfg!(target_pointer_width = "32") {
+            28
+        } else {
+            32
+        }
+);
+const _: () = assert!(
+    std::mem::offset_of!(PerryLayoutDesc, index)
+        == if cfg!(target_pointer_width = "32") {
+            40
+        } else {
+            48
+        }
+);
+const _: () = assert!(
+    std::mem::size_of::<PerryLayoutKey>()
+        == if cfg!(target_pointer_width = "32") {
+            12
+        } else {
+            16
+        }
+);
 const _: () = assert!(std::mem::size_of::<StaticAtom>() == 24);
-const _: () = assert!(std::mem::offset_of!(StaticAtom, kind) == 16);
-const _: () = assert!(std::mem::offset_of!(StaticAtom, index) == 20);
+const _: () = assert!(
+    std::mem::offset_of!(StaticAtom, kind)
+        == if cfg!(target_pointer_width = "32") {
+            12
+        } else {
+            16
+        }
+);
+const _: () = assert!(
+    std::mem::offset_of!(StaticAtom, index)
+        == if cfg!(target_pointer_width = "32") {
+            16
+        } else {
+            20
+        }
+);
 
 /// `PerryLayoutDesc.layout_id` as emitted for a layout some object carries:
 /// [`register_static_layouts`] replaces it with the registered id. Every other
@@ -531,7 +580,7 @@ unsafe fn atom_bytes<'a>(atom: *const StaticAtom) -> Option<&'a [u8]> {
 pub(crate) fn coloured_atoms() -> Vec<(&'static [u8], u64, u32, u32)> {
     let mut out = Vec::new();
     unsafe {
-        for atom in records::<StaticAtom>(atom_bounds()) {
+        for atom in image_atoms() {
             if (*atom)._pad[0] != 1 {
                 continue;
             }
@@ -583,9 +632,14 @@ pub(crate) unsafe fn atom_symbol(
 /// Pre-seed the agent's atom table, then register every layout. Runs once per
 /// agent from `js_shape_run_static_seed`, after the hash-band literal seeds.
 pub(crate) fn seed_static_atoms() {
+    #[cfg(target_family = "wasm")]
+    assert!(
+        image_atoms().next().is_some(),
+        "Wasm image constructors did not run"
+    );
     super::runtime_layouts::seed_ascii_char_atoms();
     unsafe {
-        for atom in records::<StaticAtom>(atom_bounds()) {
+        for atom in image_atoms() {
             if let Some(bytes) = atom_bytes(atom) {
                 crate::string::seed_static_atom(bytes, (*atom).hash, (*atom).string);
             }
@@ -595,8 +649,13 @@ pub(crate) fn seed_static_atoms() {
 }
 
 pub(crate) fn register_static_layouts() {
+    #[cfg(target_family = "wasm")]
+    assert!(
+        image_layouts().next().is_some(),
+        "Wasm layout constructors did not run"
+    );
     unsafe {
-        for (index, desc) in records::<PerryLayoutDesc>(layout_bounds()).enumerate() {
+        for (index, desc) in image_layouts().enumerate() {
             if (*desc).family == SENTINEL_FAMILY || (*desc).keys.is_null() && (*desc).key_count != 0
             {
                 continue;
@@ -2670,5 +2729,32 @@ pub(crate) unsafe fn prepare_hole_define(receiver: u64, key: u64) {
     if super::key_view::own_key_is_hole(obj, crate::JSValue::from_bits(key)) {
         note_install_cause(install_cause::DEFINE);
         super::overflow::ensure(obj);
+    }
+}
+
+// Wasm uses the same records and registration logic; only image enumeration
+// differs because relocated data cannot live in Rust's Wasm custom sections.
+fn image_atoms() -> impl Iterator<Item = *mut StaticAtom> {
+    #[cfg(target_family = "wasm")]
+    {
+        inventory::iter::<crate::wasm_image::Atom>
+            .into_iter()
+            .map(|item| item.0.cast_mut())
+    }
+    #[cfg(not(target_family = "wasm"))]
+    {
+        records::<StaticAtom>(atom_bounds())
+    }
+}
+fn image_layouts() -> impl Iterator<Item = *mut PerryLayoutDesc> {
+    #[cfg(target_family = "wasm")]
+    {
+        inventory::iter::<crate::wasm_image::Layout>
+            .into_iter()
+            .map(|item| item.0)
+    }
+    #[cfg(not(target_family = "wasm"))]
+    {
+        records::<PerryLayoutDesc>(layout_bounds())
     }
 }

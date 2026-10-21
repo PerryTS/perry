@@ -59,7 +59,7 @@ unsafe fn heap_cell(v: f64) -> Option<*const crate::gc::GcHeader> {
         return None;
     }
     let addr = (bits & POINTER_MASK) as usize;
-    if !crate::value::addr_class::is_above_handle_band(addr) || addr >= 1 << 47 {
+    if !crate::value::addr_class::is_above_handle_band(addr) || addr as u64 >= 1u64 << 47 {
         return None;
     }
     let header = (addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
@@ -75,7 +75,7 @@ unsafe fn heap_cell_any(v: f64) -> Option<*const crate::gc::GcHeader> {
         return None;
     }
     let addr = (bits & POINTER_MASK) as usize;
-    if !crate::value::addr_class::is_above_handle_band(addr) || addr >= 1 << 47 {
+    if !crate::value::addr_class::is_above_handle_band(addr) || addr as u64 >= 1u64 << 47 {
         return None;
     }
     Some((addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader)
@@ -92,7 +92,7 @@ unsafe fn array_recv(v: f64) -> Option<f64> {
         return None;
     }
     let addr = (bits & POINTER_MASK) as usize;
-    if !crate::value::addr_class::is_above_handle_band(addr) || addr >= 1 << 47 {
+    if !crate::value::addr_class::is_above_handle_band(addr) || addr as u64 >= 1u64 << 47 {
         return None;
     }
     let mut header = (addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;

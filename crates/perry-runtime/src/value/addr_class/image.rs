@@ -79,7 +79,10 @@ fn bounds() -> (usize, usize) {
 #[inline(never)]
 pub(super) unsafe fn header(addr: usize) -> Option<std::ptr::NonNull<GcHeader>> {
     use crate::string::StringHeader;
+    #[cfg(not(target_family = "wasm"))]
     let (start, end) = bounds();
+    #[cfg(target_family = "wasm")]
+    let (start, end) = crate::wasm_image::bounds(addr.checked_sub(GC_HEADER_SIZE)?)?;
     let header_addr = addr.checked_sub(GC_HEADER_SIZE)?;
     let data = addr.checked_add(std::mem::size_of::<StringHeader>())?;
     if header_addr < start || data >= end || addr % 8 != 0 {

@@ -510,40 +510,16 @@ mod tests;
 // predicate's global gate. A miss takes the real `Get`; a builtin found
 // there runs the body below on the re-read operands.
 
+#[path = "builtin_array_abi.rs"]
+mod array_abi;
+use array_abi::*;
+
 extern "C" {
     fn js_receiver_may_own_named_method(recv: f64, key: f64) -> i32;
     fn js_validate_array_callback(cb_boxed: f64) -> i64;
     fn js_validate_array_map_callback(arr: i64, cb_boxed: f64) -> i64;
     fn js_validate_array_comparator(cmp_boxed: f64) -> i64;
-    fn js_array_forEach(arr: i64, callback: i64);
-    fn js_array_map(arr: i64, callback: i64) -> i64;
-    fn js_array_map_discard(arr: i64, callback: i64);
-    fn js_array_filter(arr: i64, callback: i64) -> i64;
-    fn js_array_find(arr: i64, callback: i64) -> f64;
-    fn js_array_findIndex(arr: i64, callback: i64) -> i32;
-    fn js_array_find_last(arr: i64, callback: i64) -> f64;
-    fn js_array_find_last_index(arr: i64, callback: i64) -> i32;
-    fn js_array_some(arr: i64, callback: i64) -> f64;
-    fn js_array_every(arr: i64, callback: i64) -> f64;
-    fn js_array_flatMap(arr: i64, callback: i64) -> i64;
-    fn js_array_sort_with_comparator(arr: i64, comparator: i64) -> i64;
-    fn js_array_reduce(arr: i64, callback: i64, has_initial: i32, initial: f64) -> f64;
-    fn js_array_reduce_right(arr: i64, callback: i64, has_initial: i32, initial: f64) -> f64;
-    fn js_array_indexOf_jsvalue(arr: i64, value: f64, from_index: f64, has_from: i32) -> i64;
-    fn js_array_last_index_of_jsvalue(arr: i64, value: f64, from_index: f64, has_from: i32) -> i64;
-    fn js_array_includes_jsvalue(arr: i64, value: f64, from_index: f64, has_from: i32) -> i32;
-    fn js_array_at(arr: i64, index: f64) -> f64;
-    fn js_array_join_value(arr: i64, separator_value: f64) -> *mut StringHeader;
-    fn js_array_flat(arr: i64) -> i64;
-    fn js_array_to_reversed(arr: i64) -> i64;
-    fn js_array_to_sorted_default(arr: i64) -> i64;
-    fn js_array_to_sorted_with_comparator(arr: i64, comparator: i64) -> i64;
-    fn js_array_with(arr: i64, index: f64, value: f64) -> i64;
-    fn js_array_entries_iter_obj(arr: i64) -> i64;
-    fn js_array_keys_iter_obj(arr: i64) -> i64;
-    fn js_array_values_iter_obj(arr: i64) -> i64;
-    fn js_array_slice_values(arr: i64, start_value: f64, end_value: f64) -> i64;
-    fn js_array_shift_f64(arr: i64) -> f64;
+
 }
 
 /// Cell bits that say an array may not read `name` from
@@ -631,7 +607,7 @@ unsafe fn array_fast_admits(recv: f64) -> bool {
         return true;
     }
     let addr = (bits & POINTER_MASK) as usize;
-    if !crate::value::addr_class::is_above_handle_band(addr) || addr >= 1 << 47 {
+    if !crate::value::addr_class::is_above_handle_band(addr) || addr as u64 >= 1u64 << 47 {
         return false;
     }
     let header = (addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;

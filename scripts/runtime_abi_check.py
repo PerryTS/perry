@@ -296,7 +296,7 @@ def parse_rust(files: dict[str, str]) -> tuple[dict[str, list[RustFn]], dict[str
             if inner:
                 aliases[m.group(1)].add(" ".join(inner.split()))
         scan_extern_fns(text, lambda off: f"{path}:{line_of(text, off)}", defs)
-        for where_off, expanded in expand_macros(text):
+        for where_off, expanded in expand_macros(text) + expand_signature_macros(text):
             scan_extern_fns(expanded, lambda _off: f"{path}:{line_of(text, where_off)}", defs)
     return defs, aliases
 
@@ -360,7 +360,11 @@ def arm_regex(pattern: str) -> re.Pattern | None:
     out, pos = [], 0
     for m in METAVAR_RE.finditer(pattern):
         out.append(r"\s*".join(re.escape(t) for t in pattern[pos : m.start()].split()))
-        out.append(rf"\s*(?P<{m.group(1)}>.+?)\s*")
+        # Identifiers cannot absorb commas/whitespace. Besides being more
+        # accurate, bounding them avoids exponential backtracking when an
+        # invocation has unsupported repeated arguments or long doc comments.
+        fragment = r"[A-Za-z_]\w*" if m.group(2) == "ident" else r".+?"
+        out.append(rf"\s*(?P<{m.group(1)}>{fragment})\s*")
         pos = m.end()
     out.append(r"\s*".join(re.escape(t) for t in pattern[pos:].split()))
     try:
@@ -381,7 +385,9 @@ def expand_macros(text: str) -> list[tuple[int, str]]:
         if body_end < 0:
             continue
         arms = [(arm_regex(p), b) for p, b in macro_arms(text, md.end(), body_end - 1)]
-        arms = [(rx, b) for rx, b in arms if rx and EXTERN_FN_RE.search(b.replace("$", ""))]
+        arms = [(rx, b) for rx, b in arms
+                if rx and ("no_mangle" in b or "export_name" in b)
+                and EXTERN_FN_RE.search(b.replace("$", ""))]
         if not arms:
             continue
         for inv in re.finditer(rf"\b{md.group(1)}!\s*([(\[{{])", text):
@@ -401,6 +407,57 @@ def expand_macros(text: str) -> list[tuple[int, str]]:
                     expanded = expanded.replace(f"${var}", val)
                 out.append((inv.start(), expanded))
                 break
+    return out
+
+
+def expand_signature_macros(text: str) -> list[tuple[int, str]]:
+    """Read the two exported-entry forms the simple local expander cannot.
+
+    kind_entry! carries its full signature at each (often cross-file) use.
+    closure_call_entry! forwards to an @define arm and repeats typed args;
+    derive those types from that arm, not a second hardcoded ABI signature.
+    """
+    out = []
+    for inv in re.finditer(r"\bkind_entry!\s*([({])", text):
+        opener = inv.group(1)
+        end = balanced(text, inv.end() - 1, opener, {"(": ")", "{": "}"}[opener])
+        if end < 0:
+            raise ValueError("unterminated kind_entry! invocation")
+        args = text[inv.end():end - 1]
+        match = re.match(r"\s*\w+\s*,\s*fn\s+(\w+\s*\(.*)", args, re.S)
+        if match:
+            out.append((inv.start(), '#[no_mangle] pub extern "C" fn ' + match.group(1)))
+
+    for md in MACRO_DEF_RE.finditer(text):
+        if md.group(1) != "closure_call_entry":
+            continue
+        end = balanced(text, md.end() - 1, "{", "}")
+        arms = macro_arms(text, md.end(), end - 1)
+        bodies = [b for p, b in arms if p.lstrip().startswith("@define")]
+        if len(bodies) != 1:
+            raise ValueError("closure_call_entry! must have one signature-bearing @define arm")
+        for inv in re.finditer(r"\bclosure_call_entry!\s*\(", text):
+            if md.start() <= inv.start() < end:
+                continue  # internal forwarding arms, not exported entries
+            close = balanced(text, inv.end() - 1)
+            args = re.sub(r"#\[[^\]]*\]", " ", text[inv.end():close - 1])
+            match = re.fullmatch(
+                r"\s*(?:unwind\s+)?(\w+)\s*,\s*(\w+)\s*,\s*(\w+)\s*,\s*(\d+)\s*;\s*(.*?)\s*", args, re.S)
+            if not match:
+                raise ValueError("unrecognized closure_call_entry! invocation")
+            entry, slow, dispatch, count, arg_text = match.groups()
+            names = [a.strip() for a in arg_text.split(",") if a.strip()]
+            if len(names) != int(count):
+                raise ValueError(f"{entry}: closure arity disagrees with argument list")
+            body = bodies[0]
+            # Expand the typed argument repetition before dropping attributes
+            # and non-signature repetitions from the implementation body.
+            body = re.sub(r"\$\(,\s*\$a:\s*([^$()]+)\)\*",
+                          lambda m: "".join(f", {a}: {m.group(1).strip()}" for a in names), body)
+            body = REPETITION_RE.sub(" ", body)
+            for key, val in (("abi", '\"C\"'), ("entry", entry), ("slow", slow), ("dispatch", dispatch)):
+                body = body.replace("$" + key, val)
+            out.append((inv.start(), body))
     return out
 
 
@@ -473,6 +530,10 @@ def type_list(text: str, at: int, expr: str) -> list[str] | None:
     expr = expr.strip()
     m = re.fullmatch(r"(?:&\s*|vec!\s*)\[(.*)\]", expr, re.S)
     if m:
+        repeated = split_top(m.group(1), ";")
+        if len(repeated) == 2:
+            ty, count = repeated
+            return [codegen_type(ty)] * int(count) if re.fullmatch(r"\d+", count) else None
         return [codegen_type(p) for p in split_top(m.group(1))]
     if re.fullmatch(r"\w+", expr):
         lets = list(re.finditer(rf"let\s+{expr}\s*(?::[^=]+)?=\s*(&\s*\[[^\]]*\])\s*;", text[max(0, at - 3000):at]))
@@ -1092,6 +1153,34 @@ def self_test() -> int:
         failures.append("empty WASI ABI emission must fail before overwriting the table")
     except ValueError:
         pass
+    repeated = check({"cg.rs": 'm.declare_function("six", DOUBLE, &[DOUBLE; 6]);'}, {
+        "rt.rs": '#[no_mangle] pub extern "C" fn six(a:f64,b:f64,c:f64,d:f64,e:f64,f:f64)->f64 {}',
+    })
+    if any(repeated.entries.values()):
+        failures.append("repeated codegen types must retain their declared arity")
+    if type_list("", 0, "&[I64; 0]") != [] or type_list("", 0, "&[I64; N]") is not None:
+        failures.append("array repeats must handle zero and decline nonliteral counts")
+
+    # Real macro sources are the contract: include their exported signatures,
+    # and preserve the receiver's raw bits separately from the pointer width.
+    macro_sources = load([
+        CRATES / "perry-runtime/src/closure/dispatch/calln.rs",
+        CRATES / "perry-runtime/src/set.rs",
+    ])
+    macro_defs, _ = parse_rust(macro_sources)
+    for arity in range(17):
+        name = f"js_closure_call{arity}"
+        entries = macro_defs.get(name, [])
+        expected_params = ["*const ClosureHeader", "JsThis"] + ["f64"] * arity
+        if len(entries) != 1 or entries[0].params != expected_params or entries[0].ret != "f64":
+            failures.append(f"{name}: missing or incorrect macro signature: {entries}")
+    for name, params, ret in (
+        ("js_set_size__Set", ["*const SetHeader"], "u32"),
+        ("js_set_has__Set", ["*const SetHeader", "f64"], "i32"),
+    ):
+        entries = macro_defs.get(name, [])
+        if len(entries) != 1 or entries[0].params != params or entries[0].ret != ret:
+            failures.append(f"{name}: incorrect kind-entry signature: {entries}")
     if failures:
         print("runtime_abi_check self-test FAILED:", file=sys.stderr)
         for f in failures:

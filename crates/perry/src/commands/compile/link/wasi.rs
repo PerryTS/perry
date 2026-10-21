@@ -66,6 +66,31 @@ pub(super) fn link_args(
     args
 }
 
+/// WASI uses the same feature selection and constructor registration as
+/// native links. Omitting this object silently leaves optional runtime hooks
+/// empty (for example Unicode normalization and URL prototype accessors).
+pub(crate) fn feature_installer(
+    ctx: &super::super::CompilationContext,
+    cli_features: &[String],
+    directory: &Path,
+) -> Result<PathBuf> {
+    use crate::commands::stdlib_installs::{runtime_installer_callees, FeatureInstalls};
+    let selected = super::super::optimized_libs::auto_optimized_cross_features(
+        ctx,
+        &std::collections::BTreeSet::new(),
+        cli_features,
+    )
+    .into_iter()
+    .filter_map(|feature| feature.strip_prefix("perry-runtime/").map(str::to_string))
+    .collect();
+    let symbols = runtime_installer_callees(&FeatureInstalls::Selected(selected));
+    let bytes =
+        perry_codegen::stubs::generate_feature_installer_object(&symbols, None, &[], Some("wasi"))?;
+    let path = directory.join("_perry_feature_installs.o");
+    std::fs::write(&path, bytes)?;
+    Ok(path)
+}
+
 /// Link `objects` into the WASI component at `output`.
 pub(crate) fn link_wasi(
     objects: &[PathBuf],
@@ -87,7 +112,7 @@ pub(crate) fn link_wasi(
         let stderr = String::from_utf8_lossy(&out.stderr);
         let hint = if stderr.contains("undefined symbol") {
             "\n\nA symbol the runtime does not provide on WASI yet: most Node \
-             APIs beyond the core runtime (net, http, fetch, zlib, …) live in \
+             APIs beyond the core runtime (http, fetch, zlib, …) live in \
              perry-stdlib, which is not available for --target wasi (#11377)."
         } else {
             ""
