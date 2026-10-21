@@ -1,0 +1,1 @@
+Add a node-suite regression for native constructor heritage on user subclasses of `AsyncLocalStorage`: implicit and explicit constructors, repeated class-expression evaluation, per-evaluation `Object.setPrototypeOf` retargeting, and null parents. The runtime behavior itself shipped with #12859.
