@@ -23,6 +23,16 @@ impl Guest for Probe {
         let network = instance_network::instance_network();
         let socket =
             tcp_create_socket::create_tcp_socket(network::IpAddressFamily::Ipv4).map_err(error)?;
+        // Grant and bind one loopback endpoint explicitly. An unbound connect
+        // would request permission for the wildcard implicit bind instead.
+        socket.start_bind(&network, address(0)).map_err(error)?;
+        loop {
+            match socket.finish_bind() {
+                Ok(()) => break,
+                Err(network::ErrorCode::WouldBlock) => socket.subscribe().block(),
+                Err(e) => return Err(error(e)),
+            }
+        }
         socket
             .start_connect(&network, address(port))
             .map_err(error)?;

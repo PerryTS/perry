@@ -46,17 +46,19 @@ const tcpRemote = { address: "127.0.0.1", port: tcpPort };
 const wrongTcpPort = tcpPort === 65535 ? 65534 : tcpPort + 1;
 for (const network of [
   {},
-  { udp: true, addresses: [tcpRemote] },
+  { udp: true, addresses: [local, tcpRemote] },
   { tcp: true },
-  { tcp: true, addresses: [{ address: "127.0.0.2" }] },
-  { tcp: true, addresses: [{ address: "127.0.0.1", port: wrongTcpPort }] },
+  { tcp: true, addresses: [tcpRemote] },
+  { tcp: true, addresses: [local] },
+  { tcp: true, addresses: [local, { address: "127.0.0.2", port: tcpPort }] },
+  { tcp: true, addresses: [local, { address: "127.0.0.1", port: wrongTcpPort }] },
 ]) {
   const plugin = instance(network);
   const result = probe(plugin).connect(tcpPort, "denied");
   check(result.tag === "err" && result.value === "access-denied", "TCP denial must come from capability checks: " + JSON.stringify(result) + " network=" + JSON.stringify(network));
   plugin.dispose();
 }
-const tcp = instance({ tcp: true, addresses: [tcpRemote] });
+const tcp = instance({ tcp: true, addresses: [local, tcpRemote] });
 for (let i = 0; i < 3; i++) {
   gc();
   const text = "tcp:" + i;
