@@ -49,7 +49,7 @@ fn encode_at(value: f64, depth: usize) -> Result<Value, f64> {
             json!(number)
         });
     }
-    if js.is_string() {
+    if js.is_any_string() {
         return Ok(json!(string(root.get_nanbox_f64())));
     }
     if js.is_bigint() {
