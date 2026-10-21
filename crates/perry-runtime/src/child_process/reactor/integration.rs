@@ -5,7 +5,16 @@ use super::*;
 /// Whether any live child is keeping the event loop alive — OR'd into
 /// `js_stdlib_has_active_handles`.
 pub(crate) fn cp_reactor_has_live() -> bool {
-    CP_REFED_COUNT.load(Ordering::Relaxed) > 0
+    // The count is process-wide; only this agent's own ref'd children keep
+    // this agent's loop alive (a worker's `git` must not hold the main
+    // thread's loop open, nor the reverse).
+    if CP_REFED_COUNT.load(Ordering::Relaxed) == 0 {
+        return false;
+    }
+    cp_live_lock().as_ref().is_some_and(|map| {
+        map.values()
+            .any(|lc| crate::agent::owns(lc.owner) && lc.refed && !lc.closed)
+    })
 }
 
 /// Toggle one live child's event-loop keepalive bit. Returns `false` after the
@@ -41,7 +50,9 @@ pub(crate) fn cp_reactor_scan_roots_mut(visitor: &mut crate::gc::RuntimeRootVisi
         return;
     }
     if let Some(map) = cp_live_lock().as_mut() {
-        for child in map.values_mut() {
+        // Each agent's collector roots only the children it spawned: the
+        // values of another agent's child live on that agent's heap.
+        for child in map.values_mut().filter(|lc| crate::agent::owns(lc.owner)) {
             visitor.visit_nanbox_u64_slot(&mut child.cp_bits);
             if child.abort_signal_bits != 0 {
                 visitor.visit_nanbox_u64_slot(&mut child.abort_signal_bits);

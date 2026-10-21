@@ -57,8 +57,13 @@ enum PtyEvent {
 
 static PTY_EVENT_QUEUE: Mutex<Vec<PtyEvent>> = Mutex::new(Vec::new());
 
-/// Per-pty reactor state owned by the main thread.
+/// Per-pty reactor state, owned by the agent that spawned the pty.
 struct LivePty {
+    /// The agent (main thread or worker) that spawned the pty. Its IPty
+    /// object lives on that agent's heap, so only that agent's pump emits its
+    /// events, roots it and counts it as a loop handle (see the child-process
+    /// reactor's `LiveChild::owner`).
+    owner: crate::agent::AgentId,
     /// NaN-boxed IPty object — a GC root (see `pty_reactor_scan_roots_mut`).
     ipty_bits: u64,
     #[cfg(unix)]
@@ -111,6 +116,16 @@ fn pty_queue_lock() -> std::sync::MutexGuard<'static, Vec<PtyEvent>> {
     PTY_EVENT_QUEUE
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
+}
+
+impl PtyEvent {
+    fn handle(&self) -> u64 {
+        match self {
+            PtyEvent::Data { handle, .. }
+            | PtyEvent::Eof { handle }
+            | PtyEvent::Exited { handle, .. } => *handle,
+        }
+    }
 }
 
 fn pty_push_event(ev: PtyEvent) {
@@ -201,6 +216,7 @@ pub(super) fn pty_register_live(ipty: f64, child: native::PtyChild) -> u64 {
         map.insert(
             handle,
             LivePty {
+                owner: crate::agent::current_agent(),
                 ipty_bits: ipty.to_bits(),
                 #[cfg(unix)]
                 pid: child.pid,
@@ -410,8 +426,13 @@ fn pty_reactor_pump_inner() {
     // a brief lock, emit OUTSIDE it (handlers allocate / can trigger GC, and
     // the GC root scanner takes the same lock on this thread). ---
     let mut events = Vec::new();
+    let mut foreign = std::collections::HashSet::new();
     if let Some(map) = pty_live_lock().as_mut() {
         for (handle, lp) in map {
+            if !crate::agent::owns(lp.owner) {
+                foreign.insert(*handle);
+                continue;
+            }
             if !lp.paused {
                 events.extend(std::mem::take(&mut lp.pending).into_iter().map(|bytes| {
                     PtyEvent::Data {
@@ -422,7 +443,19 @@ fn pty_reactor_pump_inner() {
             }
         }
     }
-    events.extend(std::mem::take(&mut *pty_queue_lock()));
+    // Events of another agent's pty stay queued, in order, for its pump.
+    {
+        let mut queue = pty_queue_lock();
+        if foreign.is_empty() {
+            events.extend(std::mem::take(&mut *queue));
+        } else {
+            let (kept, own): (Vec<PtyEvent>, Vec<PtyEvent>) = std::mem::take(&mut *queue)
+                .into_iter()
+                .partition(|ev| foreign.contains(&ev.handle()));
+            *queue = kept;
+            events.extend(own);
+        }
+    }
     for ev in events {
         match ev {
             PtyEvent::Data { handle, bytes } => {
@@ -487,7 +520,7 @@ fn pty_reactor_pump_inner() {
         let mut out = Vec::new();
         if let Some(map) = guard.as_mut() {
             for (h, lp) in map.iter_mut() {
-                if lp.closed {
+                if !crate::agent::owns(lp.owner) || lp.closed {
                     continue;
                 }
                 if let Some((code, signal)) = lp.exited {
@@ -565,7 +598,14 @@ fn pty_reactor_pump_inner() {
 /// Whether any live pty is keeping the event loop alive — OR'd into
 /// `js_stdlib_has_active_handles`.
 pub(crate) fn pty_reactor_has_live() -> bool {
-    PTY_REFED_COUNT.load(Ordering::Relaxed) > 0
+    // Process-wide count; only this agent's own ref'd ptys keep its loop alive.
+    if PTY_REFED_COUNT.load(Ordering::Relaxed) == 0 {
+        return false;
+    }
+    pty_live_lock().as_ref().is_some_and(|map| {
+        map.values()
+            .any(|lp| crate::agent::owns(lp.owner) && lp.refed && !lp.closed)
+    })
 }
 
 /// GC mutable-root scanner: keep every live IPty (and, through its fields,
@@ -576,7 +616,7 @@ pub(crate) fn pty_reactor_scan_roots_mut(visitor: &mut crate::gc::RuntimeRootVis
         return;
     }
     if let Some(map) = pty_live_lock().as_mut() {
-        for lp in map.values_mut() {
+        for lp in map.values_mut().filter(|lp| crate::agent::owns(lp.owner)) {
             visitor.visit_nanbox_u64_slot(&mut lp.ipty_bits);
         }
     }
@@ -638,6 +678,7 @@ pub fn pty_register_idle_live_for_test(ipty: f64) -> u64 {
     pty_live_lock().get_or_insert_with(HashMap::new).insert(
         handle,
         LivePty {
+            owner: crate::agent::current_agent(),
             ipty_bits: ipty.to_bits(),
             pid: 0,
             master: -1,

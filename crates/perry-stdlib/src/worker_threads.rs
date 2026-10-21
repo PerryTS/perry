@@ -820,7 +820,11 @@ extern "C" {
 fn pump_worker_microtasks() {
     // Bounded so a job queue that re-arms itself cannot wedge the worker here.
     for _ in 0..4096 {
-        let mut ran = perry_runtime::promise::microtasks::js_promise_run_microtasks_await_loop();
+        // This worker's own events first (its child processes, ptys, fs
+        // watchers and extension streams; every queue is filtered by owner
+        // agent), so the jobs their listeners queue run in this same pass.
+        let mut ran = unsafe { js_run_agent_pumps() };
+        ran += perry_runtime::promise::microtasks::js_promise_run_microtasks_await_loop();
         // Owner-FILTERED timer tick: with this thread holding its own agent id
         // (see the spawn body), this fires only timers whose closures live in
         // this worker's arena. That is what lets `await` of a timer — or of
@@ -832,9 +836,6 @@ fn pump_worker_microtasks() {
         // collects it, and nothing else ever settles it.
         ran += crate::worker_threads::async_shim::js_stdlib_process_pending();
         ran += js_worker_threads_channels_process_pending();
-        // Extension events this worker made (its zlib streams): their queues
-        // are per agent, and only this thread may deliver them.
-        ran += unsafe { js_run_agent_pumps() };
         if ran == 0 {
             break;
         }
