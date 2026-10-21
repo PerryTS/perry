@@ -1416,6 +1416,11 @@ fn cp_reactor_pump_inner() {
     };
     for item in to_finish {
         if !item.close {
+            // `close` (or the exec callback) is this child's next pump, and no
+            // producer will wake the loop for it: every pipe is at EOF and the
+            // waiter is done. Ask this agent's loop for that turn, or it parks
+            // until some unrelated wake (its idle cap: a 1 s stall per child).
+            crate::event_pump::js_notify_main_thread();
             let Some(cp_bits) = cp_lookup_cp_bits(item.handle) else {
                 continue;
             };
