@@ -137,7 +137,9 @@ running all destructors after an instance trap are not implemented.
 
 Resources from an interface imported and exported by the same world have
 distinct nominal identities. Generated declarations and runtime handles keep
-those identities separate. Guest adapters use ABI version 2; rebuild the
+those identities separate. WIT `use` aliases preserve the original resource
+identity and do not introduce a new guest factory. Guest adapters use ABI
+version 2; rebuild the
 adapter and WASI runtime together rather than mixing earlier archives.
 
 The resource execution profile is under validation; the results below still
