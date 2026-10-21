@@ -21,7 +21,7 @@ WASI versions here mean 0.1 (Preview 1), 0.2 (Preview 2), and 0.3
 | Browser `wasm` / `web` output | Core Wasm with Perry's JavaScript bridge | Not standalone WASI; raw Wasm output omits generated async JavaScript |
 | WASI 0.1 output | No supported compiler target | Defer until a concrete P1-only deployment requires it |
 | WASI 0.1 hosting in native Perry | Operational `node:wasi` over wasmi and wasi-common; all 46 P1 imports dispatch to the provider; Linux qualified | Other host platforms, socket grants, scheduling and execution quotas; see [P1 limits](WASI_P1_HOSTING.md#limits) |
-| WASI 0.2 output | Command components on Linux/macOS; initial synchronous library components qualified on Linux | Guest resources, HTTP and broader component qualification |
+| WASI 0.2 output | Command components on Linux/macOS/Windows; initial synchronous library components qualified on Linux | Guest resources, HTTP and broader component qualification |
 | WASI 0.2 component hosting | Optional native `perry/component` host with typed WIT values, guest resources and opt-in P2 WASI providers | Host-defined resources, HTTP providers and broader platform qualification |
 | WASI 0.3 output/hosting | Not implemented | Native component async ABI, futures/streams, scheduling and cancellation |
 
@@ -33,7 +33,7 @@ component contracts, their priorities, and acceptance criteria.
 
 WASI components run through a host such as Wasmtime. The current repair was
 tested on Linux x86_64 with Wasmtime 48.0.0, wasi-sdk 34,
-nightly-2026-10-04 and LLVM 22. Earlier Windows x64 results are recorded below. See
+nightly-2026-10-04 and LLVM 22. Fresh Windows x64 qualification is recorded below. See
 [Wasmtime platform support](https://docs.wasmtime.dev/stability-platform-support.html)
 and [the agreed scope, #11375](https://github.com/PerryTS/perry/issues/11375).
 
@@ -73,8 +73,8 @@ TLS interoperability is not established by the TCP acceptance probes. UDP
 (`mod-dgram`), Unix-domain/named pipes, native addons, host process creation,
 and general platform-specific Node/Bun APIs are outside the tested profile.
 This is not a claim of complete Node API compatibility. Fresh compiler/runtime
-builds pass on Linux and macOS. Windows currently fails during linking, as
-detailed below. Typed library components have a separate
+builds pass on Linux, macOS and Windows, as detailed below. Typed library
+components have a separate
 [implementation and qualification record](WASI_COMPONENTS.md).
 
 ## Acceptance and CI
@@ -126,8 +126,12 @@ and [macOS job](https://github.com/PerryTS/perry/actions/runs/39574495557/job/11
 These jobs built both Perry and the WASI runtime from source on their hosts.
 The [Windows job](https://github.com/PerryTS/perry/actions/runs/39574495557/job/119136673535)
 built the compiler and runtime, but all six smoke links failed with
-`wasm-ld: malformed uleb128, extends past end`. Current Windows execution
-is therefore unqualified; the older success below does not supersede this failure.
+`wasm-ld: malformed uleb128, extends past end`. [PR #12954](https://github.com/PerryTS/perry/pull/12954)
+repaired the LLVM object-buffer length handling. A [fresh Windows x64 run](https://github.com/PerryTS/perry/actions/runs/39583374325/job/119166310790)
+on `44d754947860a101f27131b22c2363b5cc3f6e26` then rebuilt both compiler
+and runtime and passed **6/6 smoke**, **20/20 acceptance**, and **10/10 Node
+comparisons**. Windows IR inspection and component-host qualification are
+not covered by that command-profile result.
 
 Verified on Windows x64 on 2026-10-08 with the standard release runtime build:
 **18/18 acceptance**, **6/6 smoke**, and **10/10 Node comparisons** pass. Native
@@ -148,9 +152,8 @@ compared against the pinned Node 26.5.1 oracle, including advanced classes,
 objects, JSON, regexp and async behavior.
 
 The WASI codegen CI job is configured to run the complete acceptance, smoke and ten-case gap
-suites on Windows, Linux and macOS. Linux and macOS pass; Windows has the
-linker failure described above, repaired by [PR #12954](https://github.com/PerryTS/perry/pull/12954)
-with fresh Windows qualification pending. The full platform matrix retains its
+suites on Windows, Linux and macOS; fresh builds pass on all three platforms.
+The full platform matrix retains its
 extended-suite routing. A separate Linux `wasi-execution` job runs the complete
 command smoke, acceptance and pinned-Node comparison suites for core PRs and
 in the sweep/full tiers. It builds the compiler and WASI runtime from the same

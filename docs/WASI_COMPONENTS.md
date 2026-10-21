@@ -146,12 +146,24 @@ through an interface used as both an import and an export. All 14 calls
 pass against the independent Rust oracle, including imports invoked from
 Perry and values returned after guest collection.
 
+The native WASI-provider profile has passed on Linux with freshly built
+compiler, native runtimes and wasm32-wasip2 runtime. Native Perry hosted a
+Perry-authored component for 51 typed calls in both normal and moving-GC
+modes; the latter required copied objects and protected retired from-space.
+Three interleaved component instances retained separate arguments,
+environments and preopens. The execution checks rejected ambient environment
+access, reads without preopens, writes through read-only preopens, and parent
+or symlink escapes; an explicit write grant produced the expected host file.
+Unit tests additionally executed a declared WASI clock import and actual TCP
+bind grants/denials. These results do not qualify UDP/DNS interoperability,
+blocking-I/O cancellation, command worlds or HTTP.
+
 Still required before claiming the full milestone:
 
 - Implement guest resource adapters and qualify ownership and destruction
   in Perry-authored components.
 - Implement host-defined resource imports and deferred cleanup, and qualify
-  capability providers, command worlds, and HTTP independently.
+  the remaining capability operations, command worlds, and HTTP independently.
 - Qualify supported host platforms and promote the demonstrated execution
   check into the required PR checks.
 

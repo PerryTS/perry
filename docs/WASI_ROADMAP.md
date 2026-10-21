@@ -61,9 +61,9 @@ missing macro-export signatures, internal array FFI pointer mismatches and a
 WASI link path that omitted the runtime feature installer. Linux validation:
 6/6 smoke, 20/20 acceptance and 10/10 pinned-Node comparisons pass; see
 [the support document](WASI_SUPPORT.md) for the exact scope and tools.
-Fresh compiler/runtime builds pass all 36 execution checks on Linux and
-macOS ARM64, with pinned-Node comparisons. The Windows object-buffer defect
-is repaired in PR #12954; fresh Windows execution qualification is pending.
+Fresh compiler/runtime builds pass all 36 execution checks on Linux,
+macOS ARM64 and Windows x64, with pinned-Node comparisons. PR #12954
+repaired the Windows object-buffer defect; its fresh Windows CI run passes.
 PR #12955 promotes the qualified Linux command profile into the required
 execution gate. Shipping matching compiler/runtime artifacts remains open.
 
