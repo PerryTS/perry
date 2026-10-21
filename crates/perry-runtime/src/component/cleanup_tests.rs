@@ -25,7 +25,10 @@ fn finalization_delivery_keeps_every_pending_job_rooted_across_init_hook_collect
     let _nursery = crate::gc::CopyingNurseryTestGuard::new(0);
     let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _evacuate = crate::gc::knob_overrides::ForcedEvacuationTestGuard::on();
-    crate::gc::register_runtime_handle_root_scanner_for_tests();
+    // The isolation guard removes production scanners. This test delivers
+    // real async hooks and queued jobs across collections, so their roots
+    // must be installed too, not just this function's RuntimeHandles.
+    crate::gc::gc_init();
     let scope = RuntimeHandleScope::new();
     let owner = scope.root_nanbox_f64(context::publish(json!({}), undefined()));
     for token in ["pending:1", "pending:2", "pending:3"] {
