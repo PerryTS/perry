@@ -19,7 +19,7 @@ pub const HANDLE_SNAPSHOT_WORDS: usize = 4;
 pub struct HandleSnapshot(i64);
 const _: () = assert!(std::mem::size_of::<HandleSnapshot>() <= HANDLE_SNAPSHOT_WORDS * 8);
 
-thread_local! { static NEXT_ID: Cell<i64> = const { Cell::new(1 << 48) }; }
+crate::perry_thread_local! { static NEXT_ID: Cell<i64> = const { Cell::new(1 << 48) }; }
 fn next_id() -> i64 {
     NEXT_ID.with(|id| {
         let next = id.get();
