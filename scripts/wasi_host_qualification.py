@@ -19,6 +19,22 @@ MOVING_KNOBS = (
     "PERRY_GC_INSTRUMENTS", "PERRY_GC_FORCE_EVACUATE", "PERRY_GC_VERIFY_EVACUATION",
     "PERRY_GC_PROTECT_FROMSPACE", "PERRY_GC_DIAG",
 )
+P2_PHASES = {
+    "rust-guest", "componentize", "bindings", "compile-host", "run-host",
+    "compile-host-moving", "run-host-moving",
+    *(f"{prefix}-{phase}" for prefix in ("resources", "host-resources", "network")
+      for phase in ("guest", "componentize", "bindings", "compile", "run", "compile-moving", "run-moving")),
+}
+COMMAND_PHASES = {
+    "rust-command",
+    *(f"{prefix}-{phase}" for prefix in ("command", "command-moving")
+      for phase in ("compile", "run", "library-compile", "library-run")),
+}
+
+
+def complete_phases(rows: list[dict], expected: set[str]) -> bool:
+    return (len(rows) == len(expected) and {row["name"] for row in rows} == expected
+            and all(row["exitCode"] == 0 for row in rows))
 
 
 def discover(root: Path) -> list[Path]:
@@ -153,15 +169,26 @@ def main() -> int:
                    "--output", str(output / "p2"), "--moving-gc"]
         result = subprocess.run(command, cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT, timeout=3600)
     p2 = json.loads((output / "p2/results.json").read_text(encoding="utf-8"))
-    p2_passed = result.returncode == 0 and len(p2) >= 14 and len({r["name"] for r in p2}) == len(p2)
-    p2_passed = p2_passed and all(row["exitCode"] == 0 for row in p2)
-    p2_passed = p2_passed and {"run-host", "run-host-moving", "resources-run", "resources-run-moving"}.issubset(
-        {row["name"] for row in p2})
+    p2_passed = result.returncode == 0 and complete_phases(p2, P2_PHASES)
     p2_witnesses = {}
-    for phase in ("run-host-moving", "resources-run-moving"):
+    for phase in ("run-host-moving", "resources-run-moving", "network-run-moving", "host-resources-run-moving"):
         log = output / "p2" / (phase + ".log")
         p2_witnesses[phase] = moving_witness(log.read_bytes() if log.is_file() else b"")
     p2_passed = p2_passed and all(w["passed"] for w in p2_witnesses.values())
+    with (output / "command-driver.log").open("wb") as log:
+        command = [sys.executable, str(ROOT / "scripts/component_command_acceptance.py"),
+                   "--perry", str(args.perry.resolve()), "--runtime-dir", str(runtime),
+                   "--output", str(output / "command"), "--moving-gc",
+                   "--library-component", str(output / "p2/transform/transform.component.wasm"),
+                   "--library-bindings", str(output / "p2/transform/generated")]
+        result = subprocess.run(command, cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT, timeout=3600)
+    commands = json.loads((output / "command/results.json").read_text(encoding="utf-8"))
+    command_witnesses = {}
+    for phase in ("command-moving-run", "command-moving-library-run"):
+        log = output / "command" / (phase + ".log")
+        command_witnesses[phase] = moving_witness(log.read_bytes() if log.is_file() else b"")
+    commands_passed = (result.returncode == 0 and complete_phases(commands, COMMAND_PHASES)
+                       and all(w["passed"] for w in command_witnesses.values()))
     artifacts = [args.perry.resolve(), args.wit.resolve(), args.componentize.resolve()]
     for stem in ("perry_runtime", "perry_runtime_instr", "perry_stdlib", "perry_stdlib_instr",
                  "perry_wasm_host", "perry_component_host"):
@@ -169,10 +196,12 @@ def main() -> int:
         if not archive.is_file():
             raise SystemExit(f"Missing matching archive: {archive}")
         artifacts.append(archive)
-    passed = all(not row["errors"] for row in results) and p2_passed
+    passed = all(not row["errors"] for row in results) and p2_passed and commands_passed
     report = {"sourceRevision": revision, "host": platform.platform(), "machine": platform.machine(),
               "nodeVersion": actual, "p1Cases": len(results), "p1Passed": sum(not r["errors"] for r in results),
               "p2Phases": len(p2), "p2Passed": p2_passed, "allPassed": passed,
+              "commandPhases": len(commands), "commandsPassed": commands_passed,
+              "commandMovingGc": command_witnesses,
               "hostUnitTests": units, "unitLogSha256": sha(unit_log),
               "p2MovingGc": p2_witnesses,
               "artifactSha256": {path.name: sha(path) for path in artifacts}}

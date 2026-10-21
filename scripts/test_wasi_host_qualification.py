@@ -2,10 +2,23 @@ import tempfile
 from pathlib import Path
 import unittest
 
-from wasi_host_qualification import discover, moving_witness, unit_results, verdict
+from wasi_host_qualification import (
+    COMMAND_PHASES, P2_PHASES, complete_phases, discover, moving_witness, unit_results, verdict,
+)
 
 
 class QualificationTests(unittest.TestCase):
+    def test_incomplete_or_duplicate_component_phases_cannot_pass(self):
+        for expected, count in [(P2_PHASES, 28), (COMMAND_PHASES, 9)]:
+            self.assertEqual(len(expected), count)
+            rows = [{"name": name, "exitCode": 0} for name in sorted(expected)]
+            self.assertTrue(complete_phases(rows, expected))
+            self.assertFalse(complete_phases(rows[:-1], expected))
+            self.assertFalse(complete_phases(rows[:-1] + rows[:1], expected))
+            self.assertFalse(complete_phases(rows + rows[:1], expected))
+            rows[0]["exitCode"] = 1
+            self.assertFalse(complete_phases(rows, expected))
+
     def test_unit_evidence_requires_both_complete_host_suites(self):
         def suite(package, count, failed=0):
             return (f"Running unittests src/lib.rs (target/perry-dev/{package}-abc.exe)\n"

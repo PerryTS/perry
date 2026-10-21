@@ -6276,7 +6276,7 @@ jobs:
         run: |
           set -euo pipefail
           rustup toolchain install nightly-2026-10-04 --profile minimal
-          rustup target add wasm32-unknown-unknown
+          rustup target add wasm32-unknown-unknown wasm32-wasip2
           rustc -vV
           test "$(rustc -vV | sed -n 's/^host: //p')" = "$EXPECTED_HOST_TARGET"
       - uses: ./.github/actions/setup-llvm22
@@ -6310,6 +6310,12 @@ jobs:
           scripts/gc_call_effects/sidecars.sh target/perry-dev
           PERRY_INSTR_PACKAGES=runtime scripts/build_instr_runtime.sh '' perry-dev \
             2>&1 | tee target/wasi-host-qualification/instrumented-build.log
+      - name: Verify loop interrupt IR construction and placement
+        run: |
+          set -euo pipefail
+          cargo test --locked --profile perry-dev -p perry-codegen --lib inprocess::loop_interrupt::tests -- --test-threads=1 \
+            2>&1 | tee target/wasi-host-qualification/loop-interrupt-units.log
+          grep -F 'test result: ok. 4 passed; 0 failed;' target/wasi-host-qualification/loop-interrupt-units.log
       - name: Execute both native host unit suites
         run: |
           set -euo pipefail
@@ -6336,7 +6342,10 @@ jobs:
             target/wasi-host-qualification/*.json
             target/wasi-host-qualification/p1*/**/*.log
             target/wasi-host-qualification/p2/*.log
-            target/wasi-host-qualification/p2/results.json
+            target/wasi-host-qualification/p2/*.json
+            target/wasi-host-qualification/command/*.log
+            target/wasi-host-qualification/command/results.json
+            target/wasi-host-qualification/command/**/*.wasm
             target/wasi-host-qualification/p2/**/*.wasm
   wasi-hosts:
     name: wasi-hosts / suite result

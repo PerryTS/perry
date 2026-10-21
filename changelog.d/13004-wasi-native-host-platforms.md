@@ -16,3 +16,13 @@ hard-coded descriptor 3 can name Node's internal event-loop handle but be absent
 in Perry, making that comparison depend on process internals. All validation
 cases remain. Initialize Windows C++ tools through Developer PowerShell because
 the vendored CommonJS action is incompatible with the repository's ESM scope.
+
+Qualify the merged native ABI 5 implementation: all 28 library phases (including
+host resources and networking) plus nine command phases, including commands run
+inside active library callbacks. Require complete phase sets and moving-GC
+witnesses for all six native workloads.
+
+The Windows execution run exposed a compiler panic in loop-interrupt poll IR
+construction: Inkwell requires a trailing NUL in copied memory buffers. Terminate
+the poll IR and execute the four existing loop-placement regressions on every
+qualification platform before running P1/P2 acceptance.
