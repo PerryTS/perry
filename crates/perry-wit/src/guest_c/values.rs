@@ -1,4 +1,4 @@
-use super::{literal, Names};
+use super::{literal, Names, Resources};
 use anyhow::{bail, Result};
 use std::fmt::Write;
 use wit_parser::{Resolve, Type, TypeDefKind};
@@ -6,16 +6,23 @@ use wit_parser::{Resolve, Type, TypeDefKind};
 pub(super) struct Emitter<'a> {
     resolve: &'a Resolve,
     names: &'a Names,
+    resources: &'a Resources,
     world: &'a str,
     serial: usize,
     pub source: String,
 }
 
 impl<'a> Emitter<'a> {
-    pub fn new(resolve: &'a Resolve, names: &'a Names, world: &'a str) -> Self {
+    pub fn new(
+        resolve: &'a Resolve,
+        names: &'a Names,
+        resources: &'a Resources,
+        world: &'a str,
+    ) -> Self {
         Self {
             resolve,
             names,
+            resources,
             world,
             serial: 0,
             source: String::new(),
@@ -155,6 +162,33 @@ impl<'a> Emitter<'a> {
         let Type::Id(id) = ty else { unreachable!() };
         let resolve = self.resolve;
         match &resolve.types[id].kind {
+            TypeDefKind::Handle(handle) => {
+                let (resource, owned) = match handle {
+                    wit_parser::Handle::Own(id) => (*id, true),
+                    wit_parser::Handle::Borrow(id) => (*id, false),
+                };
+                let info = &self.resources[&resource];
+                let handle = if info.local && !owned {
+                    "0".into()
+                } else {
+                    format!("{input}.__handle")
+                };
+                let rep = if !info.local {
+                    "0".into()
+                } else if owned {
+                    format!(
+                        "(uint32_t)(uintptr_t){}_rep({input})",
+                        info.name.strip_suffix("_t").unwrap()
+                    )
+                } else {
+                    format!("(uint32_t)(uintptr_t){input}")
+                };
+                Ok(self.slot(&format!(
+                    "perry_component_frame_resource_lift(f, {}, (uint32_t){handle}, {rep}, {})",
+                    resource.index(),
+                    u8::from(owned)
+                )))
+            }
             TypeDefKind::Type(ty) => self.lift(*ty, &input),
             TypeDefKind::Record(record) => {
                 let output = self.slot("perry_component_frame_object(f)");
@@ -316,6 +350,28 @@ impl<'a> Emitter<'a> {
         };
         let resolve = self.resolve;
         match &resolve.types[id].kind {
+            TypeDefKind::Handle(handle) => {
+                let (resource, owned) = match handle {
+                    wit_parser::Handle::Own(id) => (*id, true),
+                    wit_parser::Handle::Borrow(id) => (*id, false),
+                };
+                let local = self.resources[&resource].local;
+                let value = format!(
+                    "perry_component_frame_resource_lower(f, {slot}, {}, {}, {})",
+                    resource.index(),
+                    u8::from(owned),
+                    u8::from(local)
+                );
+                if local && !owned {
+                    writeln!(
+                        self.source,
+                        "{dst} = ({}) (uintptr_t){value};",
+                        self.ctype(ty)
+                    )?;
+                } else {
+                    writeln!(self.source, "{dst}.__handle = (int32_t){value};")?;
+                }
+            }
             TypeDefKind::Type(ty) => self.lower(*ty, slot, dst)?,
             TypeDefKind::Record(record) => {
                 for field in &record.fields {

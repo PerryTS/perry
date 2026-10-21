@@ -2,6 +2,7 @@
 //! in GC-owned private global state; the adapter table contains only image
 //! bytes and code addresses. No JS value crosses the C boundary unrooted.
 mod frame;
+mod resources;
 #[cfg(test)]
 #[path = "guest/tests.rs"]
 mod tests;

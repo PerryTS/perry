@@ -2,7 +2,7 @@
 //! typed C functions to Perry's rooted frame API; it never invents Wasm layouts.
 mod values;
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 use heck::ToSnakeCase;
 use std::{
     collections::{BTreeMap, HashMap},
@@ -21,20 +21,10 @@ pub fn canonical_guest(path: &Path, selected: Option<&str>) -> Result<BTreeMap<S
     let (package, _) = resolve.push_path(path)?;
     let id = resolve.select_world(&[package], selected)?;
     let world = crate::resolve::convert(&resolve, id)?;
-    // Fail before wit-bindgen's C backend reaches a type it cannot represent.
-    let mut live = LiveTypes::default();
-    live.add_world(&resolve, id);
-    for ty in live.iter() {
-        match &resolve.types[ty].kind {
-            TypeDefKind::Resource | TypeDefKind::Handle(_) => {
-                bail!("canonical Perry guest resource adapters are not implemented yet")
-            }
-            _ => {}
-        }
-    }
     let mut files = Files::default();
     wit_bindgen_c::Opts {
         no_sig_flattening: true,
+        autodrop_borrows: wit_bindgen_c::Enabled::Yes,
         ..Default::default()
     }
     .build()
@@ -49,6 +39,7 @@ pub fn canonical_guest(path: &Path, selected: Option<&str>) -> Result<BTreeMap<S
         id,
         world: &world,
         names: BTreeMap::new(),
+        resources: BTreeMap::new(),
         source: format!("#include \"{snake}.h\"\n#include \"perry_component_frame.h\"\n"),
         imports: Vec::new(),
     };
@@ -61,11 +52,19 @@ pub fn canonical_guest(path: &Path, selected: Option<&str>) -> Result<BTreeMap<S
     Ok(output)
 }
 
+#[derive(Clone)]
+struct Resource {
+    name: String,
+    local: bool,
+}
+type Resources = BTreeMap<TypeId, Resource>;
+
 struct Generator<'a> {
     resolve: &'a Resolve,
     id: WorldId,
     world: &'a crate::World,
     names: Names,
+    resources: Resources,
     source: String,
     imports: Vec<(usize, usize)>,
 }
@@ -95,7 +94,17 @@ impl Generator<'_> {
                     &HashMap::new(),
                 ),
             };
-            self.names.insert(id, format!("{namespace}_{encoded}_t"));
+            let name = format!("{namespace}_{encoded}_t");
+            if matches!(self.resolve.types[id].kind, TypeDefKind::Resource) {
+                self.resources.insert(
+                    id,
+                    Resource {
+                        name: name.clone(),
+                        local: !import,
+                    },
+                );
+            }
+            self.names.insert(id, name);
         }
     }
 
@@ -154,6 +163,7 @@ impl Generator<'_> {
                 }
             }
         }
+        self.resource_adapters()?;
         self.source.push_str("static uint32_t perry_import(void *f, uint32_t interface, uint32_t function, uint32_t args) {\n");
         for (interface, function) in &self.imports {
             writeln!(self.source, "if (interface == {interface} && function == {function}) return perry_import_{interface}_{function}(f, args);")?;
@@ -170,7 +180,7 @@ impl Generator<'_> {
                 .collect::<Vec<_>>()
                 .join(",")
         )?;
-        self.source.push_str("static const perry_guest_ops perry_ops = {1, sizeof(perry_guest_ops), perry_contract, sizeof(perry_contract), perry_import};\n");
+        self.source.push_str("static const perry_guest_ops perry_ops = {2, sizeof(perry_guest_ops), perry_contract, sizeof(perry_contract), perry_import, perry_resource};\n");
         self.source.push_str(r#"
 extern void perry_module_init(void);
 static unsigned perry_initialized;
@@ -183,6 +193,39 @@ static void perry_initialize(void *f) {
     perry_initialized = perry_component_frame_failed(f) ? 3 : 2;
 }
 "#);
+        Ok(())
+    }
+
+    fn resource_adapters(&mut self) -> Result<()> {
+        for (id, resource) in &self.resources {
+            if !resource.local {
+                continue;
+            }
+            let stem = resource.name.strip_suffix("_t").unwrap();
+            let ty = id.index();
+            // wit-bindgen uses a pointer-shaped rep, but the canonical ABI
+            // permits an opaque i32. Never allocate or dereference a JS address.
+            writeln!(self.source, "void {stem}_destructor({} *rep) {{\nvoid *f = perry_component_frame_new();\nperry_component_frame_resource_destroy(f, {ty}, (uint32_t)(uintptr_t)rep);\nbool failed = perry_component_frame_failed(f);\nperry_component_frame_drop(f);\nif (failed) __builtin_trap();\n}}", resource.name)?;
+        }
+        self.source.push_str("static uint32_t perry_resource(void *f, uint32_t type, uint32_t operation, uint32_t value) {\nswitch (type) {\n");
+        for (id, resource) in &self.resources {
+            let stem = resource.name.strip_suffix("_t").unwrap();
+            // Handle typedef names are supplied by the maintained C backend.
+            let resource_name = self.resolve.types[*id]
+                .name
+                .as_ref()
+                .unwrap()
+                .to_snake_case();
+            let namespace = stem.strip_suffix(&format!("_{resource_name}")).unwrap();
+            let own = format!("{namespace}_own_{resource_name}_t");
+            writeln!(self.source, "case {}:\nif (operation == 1) {{ {stem}_drop_own(({own}){{ (int32_t)value }}); return 0; }}", id.index())?;
+            if resource.local {
+                writeln!(self.source, "if (operation == 0) return (uint32_t){stem}_new(({} *)(uintptr_t)value).__handle;", resource.name)?;
+            }
+            self.source.push_str("break;\n");
+        }
+        self.source
+            .push_str("}\nperry_bad(f, \"Unknown guest resource operation\"); return 0;\n}\n");
         Ok(())
     }
 
@@ -210,7 +253,7 @@ static void perry_initialize(void *f) {
             .position(|item| item.name == function.name)
             .unwrap();
         let snake = self.resolve.worlds[self.id].name.to_snake_case();
-        let mut emitter = values::Emitter::new(self.resolve, &self.names, &snake);
+        let mut emitter = values::Emitter::new(self.resolve, &self.names, &self.resources, &snake);
         let cname = wit_bindgen_c::c_func_name(
             import,
             self.resolve,
@@ -257,7 +300,7 @@ static void perry_initialize(void *f) {
             }
             emitter
                 .source
-                .push_str("if (!perry_component_frame_failed(f)) {\n");
+                .push_str("perry_component_frame_resource_commit(f);\nif (!perry_component_frame_failed(f)) {\n");
             writeln!(
                 emitter.source,
                 "{}{cname}({});",
@@ -337,7 +380,7 @@ static void perry_initialize(void *f) {
                 }
                 emitter.lower(ty, &value, if indirect { "*result" } else { "result" })?;
             }
-            emitter.source.push_str("bool failed = perry_component_frame_failed(f);\nperry_allocations_end(&arena, !failed);\nperry_component_frame_drop(f);\nif (failed) __builtin_trap();\n");
+            emitter.source.push_str("perry_component_frame_resource_commit(f);\nbool failed = perry_component_frame_failed(f);\nperry_allocations_end(&arena, !failed);\nperry_component_frame_drop(f);\nif (failed) __builtin_trap();\n");
             if function.result.is_some() && !indirect {
                 emitter.source.push_str("return result;\n");
             }

@@ -2,10 +2,15 @@
 //! A slot is local to one frame; it is never a Perry heap address.
 use core::ffi::c_void;
 
-pub const GUEST_ABI_VERSION: u32 = 1;
+pub const GUEST_ABI_VERSION: u32 = 2;
 
 pub type GuestImport =
     unsafe extern "C" fn(frame: *mut c_void, interface: u32, function: u32, args: u32) -> u32;
+
+/// Canonical resource operations: 0 creates an exported resource from a stable
+/// representation ID, 1 drops an owned canonical handle. No heap pointers cross.
+pub type GuestResource =
+    unsafe extern "C" fn(frame: *mut c_void, resource: u32, operation: u32, value: u32) -> u32;
 
 #[repr(C)]
 pub struct ComponentGuestOps {
@@ -15,4 +20,5 @@ pub struct ComponentGuestOps {
     pub contract: *const u8,
     pub contract_len: usize,
     pub import: GuestImport,
+    pub resource: GuestResource,
 }

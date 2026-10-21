@@ -26,6 +26,7 @@ fn imports_work_during_initialization_before_exports_are_registered() {
         contract: CONTRACT.as_ptr(),
         contract_len: CONTRACT.len(),
         import: echo,
+        resource: unused_resource,
     };
     struct Restore<'a> {
         global: crate::gc::RuntimeHandle<'a>,
@@ -95,4 +96,8 @@ fn imports_work_during_initialization_before_exports_are_registered() {
         outcome.is_ok(),
         "initialization import or registration threw"
     );
+}
+
+unsafe extern "C" fn unused_resource(_: *mut std::ffi::c_void, _: u32, _: u32, _: u32) -> u32 {
+    0
 }

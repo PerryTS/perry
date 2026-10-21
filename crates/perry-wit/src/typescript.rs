@@ -207,7 +207,7 @@ fn generate(world: &World, guest: bool) -> String {
     let mut out = String::from("// Generated from WIT by perry-wit. Do not edit.\n");
     if guest {
         out.push_str(
-            "import { registerComponentExports, callComponentImport } from \"perry/component\";\n",
+            "import { registerComponentExports, callComponentImport, createComponentResource, getComponentResourceValue } from \"perry/component\";\n",
         );
         out.push_str(
             "import type { OwnedResource, BorrowedResource } from \"perry/component\";\n\n",
@@ -242,7 +242,30 @@ fn generate(world: &World, guest: bool) -> String {
     if guest {
         out.push_str("export function register(exports: Exports): void {\n  registerComponentExports(contract, exports);\n}\n\nexport const imports: Imports = ");
         out.push_str(&generator.wrappers(&world.imports, "callComponentImport("));
-        out.push_str(";\n");
+        out.push_str(";\n\nexport const resources = {\n");
+        for interface in &world.exports {
+            let resources: Vec<_> = interface
+                .resources
+                .iter()
+                .filter(|(_, key)| {
+                    !world
+                        .imports
+                        .iter()
+                        .any(|i| i.resources.values().any(|k| k == *key))
+                })
+                .collect();
+            if resources.is_empty() {
+                continue;
+            }
+            writeln!(out, "  {}: {{", quoted(&interface.name)).unwrap();
+            for (name, key) in resources {
+                let id = key.strip_prefix('t').unwrap().parse::<u32>().unwrap();
+                let tag = quoted(&format!("{}/{key}", world.name));
+                writeln!(out, "    {}: {{\n      create: (payload: unknown, destructor?: (payload: unknown) => void): OwnedResource<{tag}> => createComponentResource({id}, payload, destructor),\n      value: (resource: BorrowedResource<{tag}>): unknown => getComponentResourceValue({id}, resource),\n    }},", quoted(name)).unwrap();
+            }
+            out.push_str("  },\n");
+        }
+        out.push_str("};\n");
     } else {
         generator.interface(
             &mut out,

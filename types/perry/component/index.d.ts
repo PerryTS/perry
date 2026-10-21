@@ -53,3 +53,8 @@ export interface WasiOptions {
     addresses?: { address: string; port?: number }[];
   };
 }
+
+/** Guest-only resource operations. Prefer the generated WIT resource factories.
+ * The type identity is generated from the component's WIT world. */
+export function createComponentResource<T extends string>(type: number, payload: unknown, destructor?: (payload: unknown) => void): OwnedResource<T>;
+export function getComponentResourceValue<T extends string>(type: number, resource: BorrowedResource<T>): unknown;

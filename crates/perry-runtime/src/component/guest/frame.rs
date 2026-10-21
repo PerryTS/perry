@@ -12,6 +12,9 @@ pub(super) struct Frame {
     scope: RuntimeHandleScope,
     values: Vec<Box<UnsafeCell<f64>>>,
     failed: bool,
+    pub(super) transfers: Vec<u32>,
+    pub(super) borrows: Vec<u32>,
+    lifetime: Option<u32>,
 }
 
 impl Frame {
@@ -20,6 +23,9 @@ impl Frame {
             scope: RuntimeHandleScope::new(),
             values: Vec::new(),
             failed: false,
+            transfers: Vec::new(),
+            borrows: Vec::new(),
+            lifetime: None,
         };
         frame.add(undefined()); // Slot zero retains the original exception.
         frame
@@ -44,6 +50,18 @@ impl Frame {
         unsafe { *cell.get() }
     }
 
+    pub(super) fn lifetime(&mut self) -> f64 {
+        if let Some(slot) = self.lifetime {
+            return self.get(slot);
+        }
+        let value =
+            crate::value::js_nanbox_pointer(crate::array::js_array_alloc_with_length(1) as i64);
+        let slot = self.add(value);
+        crate::array::js_array_set_f64(array(self.get(slot)), 0, 1.0);
+        self.lifetime = Some(slot);
+        self.get(slot)
+    }
+
     pub fn error(&self) -> Option<f64> {
         self.failed.then(|| self.get(0))
     }
@@ -66,7 +84,15 @@ impl Frame {
     }
 }
 
-unsafe fn frame<'a>(pointer: *mut c_void) -> &'a mut Frame {
+impl Drop for Frame {
+    fn drop(&mut self) {
+        if let Some(slot) = self.lifetime {
+            crate::array::js_array_set_f64(array(self.get(slot)), 0, 0.0);
+        }
+    }
+}
+
+pub(super) unsafe fn frame<'a>(pointer: *mut c_void) -> &'a mut Frame {
     &mut *pointer.cast::<Frame>()
 }
 unsafe fn span<'a>(pointer: *const u8, len: usize) -> &'a [u8] {
@@ -466,7 +492,13 @@ const fn adapter_entry(code: *const ()) -> AdapterEntry {
 }
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
-static KEEP_ADAPTER_ENTRIES: [AdapterEntry; 30] = [
+static KEEP_ADAPTER_ENTRIES: [AdapterEntry; 36] = [
+    adapter_entry(super::resources::payload::js_component_resource_create as *const ()),
+    adapter_entry(super::resources::payload::js_component_resource_value as *const ()),
+    adapter_entry(super::resources::payload::perry_component_frame_resource_destroy as *const ()),
+    adapter_entry(super::resources::perry_component_frame_resource_lift as *const ()),
+    adapter_entry(super::resources::perry_component_frame_resource_lower as *const ()),
+    adapter_entry(super::resources::perry_component_frame_resource_commit as *const ()),
     adapter_entry(perry_component_frame_new as *const ()),
     adapter_entry(perry_component_frame_drop as *const ()),
     adapter_entry(perry_component_frame_failed as *const ()),

@@ -198,16 +198,55 @@ fn canonical_guest_adapters_compile_against_the_maintained_c_headers() {
 }
 
 #[test]
-fn canonical_guest_rejects_unimplemented_resource_adapters_before_emitting_files() {
-    let dir = tempfile::tempdir().unwrap();
-    let input = dir.path().join("world.wit");
-    std::fs::write(
-        &input,
-        "package test:resources; interface api { resource item; } world plugin { export api; }",
-    )
-    .unwrap();
-    let error = canonical_guest(&input, None).unwrap_err();
-    assert!(error.to_string().contains("resource adapters"), "{error:#}");
+fn canonical_guest_resource_adapters_compile_for_both_directions() {
+    for world in ["import api;", "export api;", "import api; export api;"] {
+        let source = format!(
+            r#"package test:resources;
+            interface api {{
+                resource item {{ constructor(value: string); read: func() -> string; }}
+                record bundle {{ label: string, items: list<own<item>> }}
+                take: func(value: bundle) -> own<item>;
+                inspect: func(value: borrow<item>) -> string;
+            }}
+            world plugin {{ {world} }}"#
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("world.wit");
+        std::fs::write(&input, &source).unwrap();
+        let files = canonical_guest(&input, None).unwrap();
+        for (name, contents) in &files {
+            std::fs::write(dir.path().join(name), contents).unwrap();
+        }
+        let output = std::process::Command::new("clang")
+            .args([
+                "-std=c11",
+                "-Wall",
+                "-Werror",
+                "-Wno-unused-function",
+                "-fsyntax-only",
+            ])
+            .arg(dir.path().join("perry_adapter.c"))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stderr),
+            String::from_utf8_lossy(&files["perry_adapter.c"])
+        );
+        let c = String::from_utf8(files["perry_adapter.c"].clone()).unwrap();
+        assert!(c.contains("perry_component_frame_resource_commit(f)"));
+        let guest = typescript_guest(&parse(&source, None).unwrap());
+        assert_eq!(guest.contains("create: (payload:"), world == "export api;");
+        // The maintained backend frees transferred buffers separately from
+        // explicit resource-drop helpers. A list cleanup must not drop owners
+        // which the runtime has adopted.
+        let core = String::from_utf8(files["plugin.c"].clone()).unwrap();
+        let free = core.split("void test_resources_api_bundle_free(").nth(1);
+        if let Some(free) = free {
+            assert!(!free.split("\n}\n").next().unwrap().contains("drop_own"));
+        }
+    }
 }
 
 #[test]

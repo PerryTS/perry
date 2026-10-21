@@ -14,6 +14,7 @@ typedef struct {
     const uint8_t *contract;
     size_t contract_len;
     perry_guest_import import;
+    uint32_t (*resource)(void *, uint32_t, uint32_t, uint32_t);
 } perry_guest_ops;
 int32_t js_component_set_guest_ops(const perry_guest_ops *);
 void *perry_component_frame_new(void);
@@ -46,6 +47,11 @@ void perry_component_frame_string_copy(void *, uint32_t, uint8_t *, size_t);
 size_t perry_component_frame_bytes_len(void *, uint32_t);
 void perry_component_frame_bytes_copy(void *, uint32_t, uint8_t *, size_t);
 uint32_t perry_component_frame_call(void *, uint32_t, uint32_t, uint32_t);
+
+uint32_t perry_component_frame_resource_lift(void *, uint32_t, uint32_t, uint32_t, int32_t);
+uint32_t perry_component_frame_resource_lower(void *, uint32_t, uint32_t, int32_t, int32_t);
+void perry_component_frame_resource_commit(void *);
+void perry_component_frame_resource_destroy(void *, uint32_t, uint32_t);
 
 /* Only native C allocations live here. Every JS value is a rooted frame slot. */
 typedef struct perry_allocation {
