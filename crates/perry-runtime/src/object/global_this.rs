@@ -35,6 +35,11 @@ mod generator;
 mod generator_state;
 mod install_static;
 mod math_temporal;
+
+// Complete namespace construction, reached through feature hooks.
+mod builtin_namespace;
+mod math_namespace;
+
 mod object_intrinsic;
 mod populate;
 mod proto_methods;
@@ -187,7 +192,8 @@ pub(crate) use math_temporal::install_temporal_namespace;
 pub(crate) use math_temporal::temporal_ctor_kind_impl;
 #[cfg(feature = "temporal")]
 pub(crate) use math_temporal::temporal_kind_prototype;
-pub(crate) use math_temporal::{install_math_namespace, temporal_ctor_kind};
+
+pub(crate) use math_temporal::temporal_ctor_kind;
 pub(crate) use object_intrinsic::{
     ensure_object_intrinsics, ensure_object_prototype_shape, object_intrinsics_for_realm,
     object_prototype_intrinsic_bits,

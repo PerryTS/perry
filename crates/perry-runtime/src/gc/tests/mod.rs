@@ -15,6 +15,7 @@ mod boxes;
 mod budgeted_step_api;
 mod buffer_bound_method_name;
 mod buffer_side_tables;
+mod builtin_namespace;
 mod bulk_closure_captures;
 mod burst_pacing;
 mod canonical_keys_holders;

@@ -855,6 +855,27 @@ pub(crate) fn install_proto_method(
     install_proto_method_with_key(proto_obj, method_name, info, arity, std::ptr::null())
 }
 
+/// Allocate the same builtin function for individual installs and bulk births.
+/// Keep the individual installer's allocation/boxing order and inlined body.
+#[inline(always)]
+pub(super) fn create_builtin_method(
+    method_name: &str,
+    info: *const crate::closure::JsFunctionInfo,
+    arity: u32,
+) -> *mut crate::closure::ClosureHeader {
+    let closure = crate::closure::js_closure_alloc(info, 0);
+    if closure.is_null() {
+        return closure;
+    }
+    super::super::native_module::set_bound_native_closure_metadata(closure, method_name, arity);
+    // The allocation's body record already owns this immutable capability.
+    // Shared bodies without the bit still need an instance-specific entry.
+    if info.is_null() || unsafe { (*info).flags & crate::closure::FN_NON_CONSTRUCTOR == 0 } {
+        super::super::native_module::set_builtin_closure_non_constructable(closure as usize);
+    }
+    closure
+}
+
 /// Install through the same attributed store with an already owned key atom.
 pub(crate) fn install_proto_method_with_key(
     proto_obj: *mut ObjectHeader,
@@ -863,15 +884,9 @@ pub(crate) fn install_proto_method_with_key(
     arity: u32,
     key: *const crate::StringHeader,
 ) -> f64 {
-    let closure = crate::closure::js_closure_alloc(info, 0);
+    let closure = create_builtin_method(method_name, info, arity);
     if closure.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
-    }
-    super::super::native_module::set_bound_native_closure_metadata(closure, method_name, arity);
-    // The allocation's body record already owns this immutable capability.
-    // Shared bodies without the bit still need an instance-specific entry.
-    if info.is_null() || unsafe { (*info).flags & crate::closure::FN_NON_CONSTRUCTOR == 0 } {
-        super::super::native_module::set_builtin_closure_non_constructable(closure as usize);
     }
     let key = if key.is_null() {
         crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32)
@@ -994,7 +1009,7 @@ pub(crate) fn install_json_namespace_members(ns_obj: *mut ObjectHeader) {
 }
 
 /// #4139: reify the `Reflect` namespace's own methods for reflection parity.
-/// See `install_math_namespace` for the rationale.
+/// See `math_namespace` for the corresponding bulk birth.
 pub(crate) fn install_reflect_namespace_members(ns_obj: *mut ObjectHeader) {
     // Every member is REAL as a value (#5989 for `construct`, then the rest):
     // primordials-style captures (`const ReflectOwnKeys = Reflect.ownKeys`)

@@ -794,6 +794,8 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
             // `js_install_global_value_surfaces` at every site that can yield
             // one of these values (see perry-codegen `global_value_installs`).
             js_create_native_module_namespace(name_bytes.as_ptr(), name_bytes.len())
+        } else if name == "Math" {
+            crate::value::js_nanbox_pointer(super::web_hooks::math_namespace() as i64)
         } else if name == "WebAssembly" {
             super::global_this_webassembly::create_webassembly_namespace()
         } else {
@@ -808,10 +810,6 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
             // gated on the AST shape and never read these fields. Math uses the
             // richer install that also exposes per-method name/length descriptors.
             match name {
-                "Math" => {
-                    super::web_hooks::math_members(ns_obj);
-                    set_intrinsic_to_string_tag(ns_obj, "Math");
-                }
                 "JSON" => {
                     super::web_hooks::json_members(ns_obj);
                     set_intrinsic_to_string_tag(ns_obj, "JSON");
