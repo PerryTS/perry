@@ -4679,6 +4679,7 @@ js_zlib_unzip_init	f64	f64,f64
 js_zlib_unzip_sync	f64	f64
 js_zlib_validate_buffer_arg	void	i64
 js_zlib_validate_callback	i64	f64
+js_zlib_validate_crc32_args	i32u	f64,f64
 js_zlib_validate_options	void	f64,i32s
 js_zlib_validate_params	i32s	f64,f64
 js_zlib_zstd_compress	void	f64,f64,f64
