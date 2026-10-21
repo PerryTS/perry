@@ -1,0 +1,5 @@
+- Publish existing `net.BlockList` JSON instance methods early on the canonical prototype.
+- Replace the unsafe `ArrayHeader` cast with strict array/JSON-text admission and boxed property reads.
+- Preserve Node's input-before-receiver validation, append behavior, and partial-rule failure semantics.
+- Independent verification: final 31-case/103-row and existing 9-row fixtures RED → GREEN; four controls remain byte-exact.
+- NET compatibility remains incomplete, including T25 branding; this is not whole-module parity.
