@@ -113,6 +113,9 @@ pub struct TemplateFacts {
 pub enum Verdict {
     T0Mono,
     T0Set,
+    /// Proven in the typed body behind the entry guard on the receiver
+    /// binding (design §11.4); the generic body keeps the site.
+    E0,
     No(String),
 }
 
@@ -127,6 +130,10 @@ pub struct SiteFacts {
     pub verdict: Verdict,
     pub fixed_shape: bool,
     pub call_target: Option<String>,
+    /// Per-unit run: the receiver is a parameter whose TS object type
+    /// names these keys; its verdict is decided after the census
+    /// (`units::typed_param_verdicts`).
+    pub(crate) guard_keys: Option<Vec<String>>,
 }
 
 pub fn derive(g: &mut Gen) -> (Vec<TemplateFacts>, Vec<SiteFacts>) {
@@ -149,10 +156,18 @@ pub fn derive(g: &mut Gen) -> (Vec<TemplateFacts>, Vec<SiteFacts>) {
         if !m.tmpls[tm as usize].kind.is_fact_unit() {
             continue;
         }
+        // Another unit's class: the facts its defining unit published; what
+        // this unit does beyond the contract is its census report (§11.3).
+        if let Some(f) = m.foreign.get(&tm) {
+            out.push(crate::TemplateFacts { id: tm, ..f.clone() });
+            continue;
+        }
         let tf = template_facts(m, tm, &global, &objproto_hard);
         out.push(tf);
     }
     let sites = site_facts(g, &out);
+    let foreign = &g.m.foreign;
+    out.retain(|t| !foreign.contains_key(&t.id));
     (out, sites)
 }
 
@@ -452,6 +467,15 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
     let by_id: crate::pts::FxHashMap<TmplId, &TemplateFacts> =
         tfs.iter().map(|t| (t.id, t)).collect();
     let mut out = Vec::new();
+    // One instance token per class: the receiver an entry guard admits.
+    let mut class_tok: FxHashMap<TmplId, Tok> = FxHashMap::default();
+    for (i, t) in m.toks.iter().enumerate() {
+        if let TokKind::Obj(tm, c) = t {
+            if *c == NO_CTX || !class_tok.contains_key(tm) {
+                class_tok.insert(*tm, i as Tok);
+            }
+        }
+    }
     // One fact per read site: records of the same site (a body walked
     // twice) unite their receivers.
     let mut first: FxHashMap<(u32, u32, u32, bool), usize> = FxHashMap::default();
@@ -481,6 +505,68 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
             .find(|&r| m.nodes[r as usize].pts.to_sorted().contains(&TOP))
             .unwrap_or(s.recv);
         let key = m.atoms[s.key as usize].clone();
+        let (mut receivers, mut top, mut verdict, mut fixed_shape, mut targets) =
+            judge(m, &by_id, s, &key, &toks, prim, top_recv);
+        // Design §11.4: a site whose receiver is the `this` of a method of
+        // class C runs, in the typed body behind the entry guard
+        // `class_id(this) == C`, on C's instances only: E0 when it is T0
+        // over C's layout (the generic body keeps the full site). A
+        // parameter typed with a class type is guarded the same way; one
+        // typed with an object type is decided after the census.
+        let mut guard_keys = None;
+        if let Verdict::No(_) = verdict {
+            let guards: Option<Vec<&crate::gen::ParamGuard>> = recvs.iter().map(|r| g.param_guard.get(r)).collect();
+            match guards.as_deref() {
+                Some([crate::gen::ParamGuard::Keys(k), rest @ ..]) if rest.iter().all(|x| matches!(x, crate::gen::ParamGuard::Keys(k2) if k2 == k)) => {
+                    guard_keys = Some(k.clone());
+                }
+                _ => {}
+            }
+            let guarded = recvs
+                .iter()
+                .map(|r| match g.param_guard.get(r) {
+                    Some(crate::gen::ParamGuard::Class(tm)) => Some(*tm),
+                    _ => m.this_class.get(r).copied(),
+                })
+                .collect::<Option<Vec<_>>>();
+            if let Some(tm) = guarded.filter(|g| g.windows(2).all(|w| w[0] == w[1])).and_then(|g| g.first().copied()) {
+                if let Some(&it) = class_tok.get(&tm) {
+                    let (r2, _, v2, f2, t2) = judge(m, &by_id, s, &key, &[it], 0, top_recv);
+                    if matches!(v2, Verdict::T0Mono | Verdict::T0Set) {
+                        (receivers, top, verdict, fixed_shape, targets) = (r2, true, Verdict::E0, f2, t2);
+                    }
+                }
+            }
+        }
+        let mut t: Vec<String> = targets.into_values().collect();
+        t.sort();
+        out.push(SiteFacts {
+            module: s.module,
+            byte_offset: s.byte_offset,
+            key,
+            is_call: s.is_call,
+            receivers,
+            top,
+            verdict,
+            fixed_shape,
+            call_target: t.first().cloned(),
+            guard_keys,
+        });
+    }
+    out
+}
+
+/// The verdict of one site over receiver tokens `toks` (and primitive kinds
+/// `prim`): receivers, ⊤, verdict, fixed shape, method targets.
+fn judge(
+    m: &Model,
+    by_id: &FxHashMap<TmplId, &TemplateFacts>,
+    s: &crate::gen::ReadSite,
+    key: &str,
+    toks: &[Tok],
+    prim: u16,
+    top_recv: NodeId,
+) -> (Vec<String>, bool, Verdict, bool, FxHashMap<FnIdx, String>) {
         let mut receivers = Vec::new();
         let mut top = false;
         let mut verdict: Option<Verdict> = None;
@@ -488,7 +574,7 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
         let mut fixed_shape = true;
         // Keyed by the function itself: two methods may share a name.
         let mut targets: FxHashMap<FnIdx, String> = FxHashMap::default();
-        for &t in &toks {
+        for &t in toks {
             match &m.toks[t as usize] {
                 TokKind::Top => {
                     top = true;
@@ -539,7 +625,7 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
                         }
                         continue;
                     }
-                    match tf.fields.iter().find(|f| f.key == key) {
+                    match tf.fields.iter().find(|f| f.key == *key) {
                         Some(f) if f.definite && f.data_field && f.slot.is_some() => {
                             slots.push(f.slot)
                         }
@@ -598,21 +684,7 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
                 }
             }
         };
-        let mut t: Vec<String> = targets.into_values().collect();
-        t.sort();
-        out.push(SiteFacts {
-            module: s.module,
-            byte_offset: s.byte_offset,
-            key,
-            is_call: s.is_call,
-            receivers,
-            top,
-            verdict,
-            fixed_shape,
-            call_target: t.first().cloned(),
-        });
-    }
-    out
+    (receivers, top, verdict, fixed_shape, targets)
 }
 
 /// F5: the single function `key` resolves to on token `t` (own field or

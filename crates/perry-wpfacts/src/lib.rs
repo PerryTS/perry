@@ -33,6 +33,7 @@ pub mod model;
 pub mod pts;
 mod solve;
 mod summary;
+mod units;
 #[cfg(test)]
 mod tests;
 
@@ -145,17 +146,39 @@ pub struct ProgramFacts {
     pub bindings: Vec<ModuleBindings>,
     /// Per-unit mode: each unit's path and statistics.
     pub units: Vec<(String, Stats)>,
+    /// Per-unit mode: driver rounds (1 + census re-solves) and the classes
+    /// the census broke (design §11.3).
+    pub rounds: u32,
+    pub broken: Vec<String>,
+    /// Solve work of every unit, per round (`stats.work` is their sum).
+    pub round_work: Vec<u64>,
+    /// One unit's class contracts and census reports (design §11).
+    pub(crate) contracts_out: Vec<((String, String), units::ClassContract)>,
+    pub(crate) fn_contracts_out: Vec<((String, String), units::FnContract)>,
+    pub(crate) layouts_out: Vec<units::ClassContract>,
+    pub(crate) reports: Vec<String>,
     module_digests: Vec<u64>,
 }
 
 /// Run the analysis over every module (paths must be the keys the caller
 /// uses for `digest_for` / `contract_section`).
 pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts {
+    compute_in(modules, cfg, None)
+}
+
+/// [`compute`] for one unit of a per-unit run: `published` is what the other
+/// units can name of its modules (`units::published_surface`).
+pub(crate) fn compute_in<'a>(
+    modules: &'a [(String, &'a Module)],
+    cfg: &FactsConfig,
+    published: Option<&'a units::Published>,
+) -> ProgramFacts {
     let t0 = std::time::Instant::now();
     let mut sorted: Vec<(&str, &Module)> = modules.iter().map(|(p, m)| (p.as_str(), *m)).collect();
     sorted.sort_by(|a, b| a.0.cmp(b.0));
     let mut g = gen::Gen::new(sorted.clone(), cfg.relations, cfg.explain);
     g.export_sources = cfg.export_sources.clone();
+    g.unit_in = published;
     if cfg.profile { // TEMP CW9: module kinds for the cross-module event recorder (1 = benchmark, 2 = shared)
         g.m.cw9_modkind = sorted.iter().map(|(p, _)| if ["harness.js", "run.js", "benchmark.js", "som.js", "webpack.config.js"].iter().any(|s| p.ends_with(s)) { 2u8 } else { 1u8 }).collect();
     }
@@ -188,7 +211,7 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
     g.link_exports();
     g.walk_all();
     if cfg.unit {
-        g.unit_boundary();
+        g.unit_boundary(published);
     }
     let gen_ms = t0.elapsed().as_secs_f64() * 1000.0;
     if cfg.profile {
@@ -213,6 +236,9 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
         eprintln!("perry: wpfacts {}", g.m.sum.stats);
     }
     g.m.solve();
+    while cfg.unit && g.contract_check() {
+        g.m.solve();
+    }
     if cfg.profile || cfg.explain {
         let mut kinds = [0usize; 6];
         let mut fnkeyed = 0;
@@ -427,6 +453,7 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
         interp_guard = Some(format!("E14 dynamic_code_reach: {first}"));
     }
     let t2 = std::time::Instant::now();
+    g.resolve_param_guards();
     let (mut templates, mut sites) = if g.m.aborted {
         (Vec::new(), Vec::new())
     } else {
@@ -509,6 +536,108 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
             })
             .collect()
     };
+    // Per-unit run: the classes this unit publishes as contracts, and what
+    // it did beyond other units' contracts (design §11.2, §11.3).
+    let reports = if cfg.unit { g.reports() } else { Vec::new() };
+    let contracts_out: Vec<((String, String), units::ClassContract)> = if cfg.unit && !g.m.aborted {
+        g.class_contracts
+            .iter()
+            .filter_map(|&((mi, a), _, tm)| {
+                let facts = templates.iter().find(|t| t.id == tm)?.clone();
+                let model::TmplKind::Class { name, class_id, literal_shape, .. } = g.m.tmpls[tm as usize].kind.clone() else {
+                    return None;
+                };
+                let mut methods = Vec::new();
+                let mut native_parent = None;
+                let ca = g.m.atoms.iter().position(|x| x == "constructor");
+                let mut cur = Some(tm);
+                while let Some(c) = cur {
+                    let proto = g.m.tok_index.get(&model::TokKind::Proto(c)).copied();
+                    let mut own: Vec<(String, String)> = g
+                        .m
+                        .fields
+                        .iter()
+                        .filter(|(&(h, k), _)| Some(h) == proto && Some(k as usize) != ca)
+                        .filter_map(|(&(_, k), &n)| {
+                            let ts = g.m.nodes[n as usize].pts.to_sorted();
+                            let f = g.m.tok_fn(*ts.first()?);
+                            (ts.len() == 1 && f != model::NO_FN)
+                                .then(|| (g.m.atoms[k as usize].clone(), g.m.funcs[f as usize].name.clone()))
+                        })
+                        .filter(|(k, _)| !methods.iter().any(|(m, _): &(String, String)| m == k))
+                        .collect();
+                    own.sort();
+                    methods.extend(own);
+                    native_parent = g.m.tmpls[c as usize].native_parent.clone();
+                    cur = g.m.tmpls[c as usize].parent;
+                }
+                let key = (sorted[mi as usize].0.to_string(), g.m.atoms[a as usize].clone());
+                Some((key, units::ClassContract {
+                    display: g.m.tmpls[tm as usize].display.clone(),
+                    name,
+                    class_id,
+                    literal_shape,
+                    facts,
+                    methods,
+                    native_parent,
+                }))
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    // Its function contracts and the layouts they return (design §11.2).
+    let mut layouts_out: Vec<units::ClassContract> = Vec::new();
+    let fn_contracts_out: Vec<((String, String), units::FnContract)> = if cfg.unit && !g.m.aborted {
+        let mut out = Vec::new();
+        for &((mi, a), f) in &g.fn_contracts {
+            let fi = &g.m.funcs[f as usize];
+            let params = (0..fi.params.len() as u32)
+                .map(|i| g.m.marker_of.get(&(f, i)).and_then(|t| g.m.marker_use.get(t)).copied().unwrap_or(0))
+                .collect();
+            let rets: Vec<model::NodeId> = g.m.contract_rets.iter().filter(|(g2, _)| *g2 == f).map(|&(_, n)| n).collect();
+            let ret = (!g.ret_top.contains(&f) && !rets.is_empty()).then(|| {
+                let mut ds: Vec<String> = Vec::new();
+                for n in rets {
+                    for t in g.m.nodes[n as usize].pts.to_sorted() {
+                        let Some(tm) = g.m.tmpl_of(t) else { continue };
+                        let display = g.m.tmpls[tm as usize].display.clone();
+                        if ds.contains(&display) {
+                            continue;
+                        }
+                        if let (Some(facts), model::TmplKind::Class { name, class_id, literal_shape, .. }) =
+                            (templates.iter().find(|x| x.id == tm), g.m.tmpls[tm as usize].kind.clone())
+                        {
+                            if !layouts_out.iter().any(|c| c.display == display) {
+                                layouts_out.push(units::ClassContract {
+                                    display: display.clone(),
+                                    name,
+                                    class_id,
+                                    literal_shape,
+                                    facts: facts.clone(),
+                                    methods: Vec::new(),
+                                    native_parent: None,
+                                });
+                            }
+                        }
+                        ds.push(display);
+                    }
+                }
+                ds.sort();
+                ds
+            });
+            let key = (sorted[mi as usize].0.to_string(), g.m.atoms[a as usize].clone());
+            out.push((key, units::FnContract {
+                name: fi.name.clone(),
+                params,
+                variadic: fi.rest.is_some() || fi.has_arguments,
+                ret,
+            }));
+        }
+        out
+    } else {
+        Vec::new()
+    };
     let mut pf = ProgramFacts {
         super_unrelinked,
         fnproto_bind_written,
@@ -523,6 +652,13 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
         tok_names,
         bindings,
         units: Vec::new(),
+        rounds: 0,
+        broken: Vec::new(),
+        round_work: Vec::new(),
+        contracts_out,
+        fn_contracts_out,
+        layouts_out,
+        reports,
         module_digests: Vec::new(),
     };
     pf.module_digests = dump::module_digests(&pf);
@@ -537,48 +673,7 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
 pub fn compute_units(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts {
     let mut sorted: Vec<(&str, &Module)> = modules.iter().map(|(p, m)| (p.as_str(), *m)).collect();
     sorted.sort_by(|a, b| a.0.cmp(b.0));
-    let ucfg = FactsConfig { unit: true, ..cfg.clone() };
-    let mut pf = ProgramFacts {
-        module_paths: sorted.iter().map(|(p, _)| p.to_string()).collect(),
-        dynamic_code_reach: cfg.dynamic_code_reach.clone(),
-        sabotage: cfg.sabotage.clone(),
-        ..Default::default()
-    };
-    for (mi, (path, module)) in sorted.iter().enumerate() {
-        let u = compute(&[(path.to_string(), *module)], &ucfg);
-        for mut t in u.templates {
-            if t.module != Some(0) {
-                continue;
-            }
-            t.module = Some(mi as u32);
-            t.id = pf.templates.len() as model::TmplId;
-            pf.templates.push(t);
-        }
-        pf.sites.extend(u.sites.into_iter().map(|s| SiteFacts { module: mi as u32, ..s }));
-        pf.bindings.push(u.bindings.into_iter().next().unwrap_or_default());
-        pf.super_unrelinked.extend(u.super_unrelinked);
-        pf.interp_guard = pf.interp_guard.or(u.interp_guard);
-        pf.fnproto_bind_written = pf.fnproto_bind_written.or(u.fnproto_bind_written);
-        let (a, s) = (&mut pf.stats, &u.stats);
-        a.modules += s.modules;
-        a.templates += s.templates;
-        a.fact_units += s.fact_units;
-        a.nodes += s.nodes;
-        a.constraints += s.constraints;
-        a.tokens += s.tokens;
-        a.functions += s.functions;
-        a.gen_ms += s.gen_ms;
-        a.solve_ms += s.solve_ms;
-        a.derive_ms += s.derive_ms;
-        a.pops += s.pops;
-        a.instances += s.instances;
-        a.shared_instances += s.shared_instances;
-        a.composed += s.composed;
-        a.work += s.work;
-        a.top_calls += s.top_calls;
-        a.pts_entries += s.pts_entries;
-        pf.units.push((path.to_string(), u.stats));
-    }
+    let mut pf = units::run(&sorted, cfg);
     pf.module_digests = dump::module_digests(&pf);
     pf
 }
@@ -607,6 +702,27 @@ impl ProgramFacts {
             Some(i) => dump::contract_section(self, i as u32),
             None => Vec::new(),
         }
+    }
+
+    /// The classes whose layout facts hold for every instance, by class id.
+    /// A class id names one runtime class, and structurally identical
+    /// literal classes of several modules share it: its facts hold only when
+    /// every template with that id is prefix-stable and they agree.
+    pub fn stable_classes(&self) -> std::collections::HashMap<u32, &TemplateFacts> {
+        let mut by_class: std::collections::HashMap<u32, Vec<&TemplateFacts>> = Default::default();
+        for t in &self.templates {
+            if let Some(c) = t.class_id {
+                by_class.entry(c).or_default().push(t);
+            }
+        }
+        by_class
+            .into_iter()
+            .filter(|(_, ts)| {
+                ts.iter().all(|t| t.prefix_stable)
+                    && ts.iter().all(|t| format!("{:?}", t.fields) == format!("{:?}", ts[0].fields))
+            })
+            .map(|(c, ts)| (c, ts[0]))
+            .collect()
     }
 
     /// Receiver facts of module `path`'s bindings (empty when unknown).

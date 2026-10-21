@@ -19,6 +19,14 @@ pub struct ReadSite {
     pub func: FnIdx,
 }
 
+/// The candidates a parameter's TS type picks for its entry guard: one
+/// class, or the object type's keys (resolved after the census).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum ParamGuard {
+    Class(TmplId),
+    Keys(Vec<String>),
+}
+
 pub(crate) struct ModInfo {
     pub path: String,
     pub locals: FxHashMap<u32, NodeId>,
@@ -51,6 +59,29 @@ pub struct Gen<'a> {
     pub cjs_unknown_path: NodeId,
     pub cjs_main: Option<NodeId>,
     pub read_sites: Vec<ReadSite>,
+    /// Exports whose value is a class declaration (design §11.2).
+    pub export_class: FxHashMap<(u32, Atom), TmplId>,
+    /// Exports whose value is a function declaration, and the published
+    /// ones with a contract.
+    pub export_fn: FxHashMap<(u32, Atom), FnIdx>,
+    pub fn_contracts: Vec<((u32, Atom), FnIdx)>,
+    /// Contract results accepted so far (their fields were sunk once).
+    pub ret_ok: crate::pts::FxHashSet<Tok>,
+    pub ret_top: crate::pts::FxHashSet<FnIdx>,
+    /// Stand-ins of other units' functions (by name): value node, token.
+    pub stand_in_fns: FxHashMap<String, (NodeId, Tok)>,
+    /// Parameters with a TS type that picks entry-guard candidates
+    /// (design §11.4), by parameter node.
+    pub param_guard: FxHashMap<NodeId, ParamGuard>,
+    param_ty: Vec<(NodeId, u32, perry_hir::types::Type)>,
+    /// Published class exports: (export, export node, class), checked after
+    /// the solve (`Gen::contract_check`).
+    pub class_contracts: Vec<((u32, Atom), NodeId, TmplId)>,
+    /// Per-unit run: what the unit publishes and the contracts it imports.
+    pub unit_in: Option<&'a crate::units::Published>,
+    /// Stand-ins of other units' classes (by template display), with the
+    /// tokens whose use beyond the contract is a census report.
+    pub stand_ins: FxHashMap<String, (NodeId, TmplId, Vec<Tok>)>,
     pub ctor_phase: FxHashMap<TmplId, CtorPhase>,
     pub fn_inst_of: FxHashMap<FnIdx, TmplId>,
     pub field_init_fn: FxHashMap<TmplId, FnIdx>,
@@ -166,6 +197,17 @@ impl<'a> Gen<'a> {
             cjs_unknown_path,
             cjs_main: None,
             read_sites: Vec::new(),
+            export_class: FxHashMap::default(),
+            export_fn: FxHashMap::default(),
+            fn_contracts: Vec::new(),
+            ret_ok: Default::default(),
+            ret_top: Default::default(),
+            stand_in_fns: FxHashMap::default(),
+            param_guard: FxHashMap::default(),
+            param_ty: Vec::new(),
+            class_contracts: Vec::new(),
+            unit_in: None,
+            stand_ins: FxHashMap::default(),
             ctor_phase: FxHashMap::default(),
             fn_inst_of: FxHashMap::default(),
             field_init_fn: FxHashMap::default(),
@@ -306,6 +348,25 @@ impl<'a> Gen<'a> {
                             self.m.add_tok(n, tok);
                             (local.clone(), n)
                         }
+                        // Another unit's class with a contract (§11.2).
+                        (ImportSpecifier::Named { imported, local }, None)
+                            if self.contract_for(imp, imported).is_some() =>
+                        {
+                            let c = self.contract_for(imp, imported).unwrap();
+                            (local.clone(), self.stand_in_class(mi, c))
+                        }
+                        (ImportSpecifier::Default { local }, None)
+                            if self.contract_for(imp, "default").is_some() =>
+                        {
+                            let c = self.contract_for(imp, "default").unwrap();
+                            (local.clone(), self.stand_in_class(mi, c))
+                        }
+                        (ImportSpecifier::Named { imported, local }, None)
+                            if self.fn_contract_for(imp, imported).is_some() =>
+                        {
+                            let c = self.fn_contract_for(imp, imported).unwrap();
+                            (local.clone(), self.stand_in_fn(mi, c))
+                        }
                         // Native / builtin / unresolved modules: ⊤ values.
                         (ImportSpecifier::Named { local, .. }, None)
                         | (ImportSpecifier::Default { local }, None)
@@ -318,6 +379,277 @@ impl<'a> Gen<'a> {
                     self.mods[mi as usize].imports.insert(local, node);
                 }
             }
+        }
+    }
+
+    fn fn_contract_for(&self, imp: &perry_hir::Import, name: &str) -> Option<&'a crate::units::FnContract> {
+        self.unit_in?.fn_contract(imp.resolved_path.as_deref()?, name)
+    }
+
+    /// Another unit's function as this unit sees it through its contract
+    /// (design §11.2): an argument the callee uses beyond reading and
+    /// protocol touches escapes; for one it only reads or touches, those
+    /// happen here to everything reachable from it (getters and protocol
+    /// methods of this unit's objects run); the result is the layouts the
+    /// contract names (stand-ins) or ⊤.
+    fn stand_in_fn(&mut self, mi: u32, c: &'a crate::units::FnContract) -> NodeId {
+        use crate::model::{MARK_ESCAPE, MARK_TOUCH};
+        if let Some(&(n, _)) = self.stand_in_fns.get(&c.name) {
+            return n;
+        }
+        let r = self.m.reason("passed to another unit's function");
+        let fx = self.m.funcs.len() as FnIdx;
+        let tok = self.m.tok(TokKind::Func(fx, NO_CTX));
+        let outer_fn = std::mem::replace(&mut self.m.cur_fn, fx);
+        let this = self.m.node_named("this", || format!("this({})", c.name));
+        let ret = self.m.node_named("ret", || format!("ret({})", c.name));
+        let args_all = self.m.node_named("args", || format!("args({})", c.name));
+        let params: Vec<NodeId> = if c.variadic {
+            Vec::new()
+        } else {
+            (0..c.params.len()).map(|i| self.m.node_named("param", || format!("param{i}({})", c.name))).collect()
+        };
+        self.m.own(ret);
+        self.m.own(this);
+        for &p in &params {
+            self.m.own(p);
+        }
+        self.m.cur_fn = outer_fn;
+        self.m.funcs.push(FuncInfo {
+            module: mi,
+            func_id: u32::MAX,
+            name: c.name.clone(),
+            params: params.clone(),
+            rest: None,
+            this,
+            ret,
+            args_all,
+            has_arguments: c.variadic,
+            token: tok,
+            ctor_of: None,
+            lexical_this: false,
+            no_summary: true,
+            gen_step: false,
+            parent: NO_FN,
+        });
+        self.m.sink_node(args_all, r);
+        self.m.sink_node(this, r);
+        for (i, &p) in params.iter().enumerate() {
+            let u = c.params[i];
+            if u & MARK_ESCAPE != 0 {
+                self.m.sink_node(p, r);
+            } else if u != 0 {
+                // Everything reachable from the argument.
+                self.m.cons(p, Cons::Load { key: crate::model::Key::Any, dst: p });
+                if u & MARK_TOUCH != 0 {
+                    self.m.cons(p, Cons::Implicit { reason: r });
+                }
+            }
+        }
+        self.m.add_prim(ret, prim::ALL);
+        match &c.ret {
+            Some(ds) => {
+                for d in ds {
+                    match self.unit_in.and_then(|u| u.layout(d)) {
+                        Some(cc) => {
+                            self.stand_in_class(mi, cc);
+                            let tm = self.stand_ins[&cc.display].1;
+                            let inst = self.m.tok(TokKind::Obj(tm, NO_CTX));
+                            self.m.add_tok(ret, inst);
+                        }
+                        None => self.m.add_top(ret, |_| "result of another unit's function".into()),
+                    }
+                }
+            }
+            None => self.m.add_top(ret, |_| "result of another unit's function".into()),
+        }
+        let n = self.m.node_named("fnval", || format!("fnval({})", c.name));
+        self.m.add_tok(n, tok);
+        self.stand_in_fns.insert(c.name.clone(), (n, tok));
+        n
+    }
+
+    fn contract_for(&self, imp: &perry_hir::Import, name: &str) -> Option<&'a crate::units::ClassContract> {
+        self.unit_in?.class_contract(imp.resolved_path.as_deref()?, name)
+    }
+
+    /// Another unit's class as this unit sees it through its contract
+    /// (design §11.2): `new` gives an instance of its template, whose facts
+    /// are the defining unit's; its methods and constructor are stand-ins
+    /// that hand the arguments to that unit's code and return unknown
+    /// values; its fields and statics hold unknown values. Using it beyond
+    /// that is this unit's census report (`Gen::reports`).
+    fn stand_in_class(&mut self, mi: u32, c: &crate::units::ClassContract) -> NodeId {
+        if let Some((n, _, _)) = self.stand_ins.get(&c.display) {
+            return *n;
+        }
+        let r = self.m.reason("another unit's class used beyond its contract");
+        let tm = self.m.tmpls.len() as TmplId;
+        let ctor = self.stub_fn(mi, &format!("{}.constructor", c.name), tm, false, r);
+        self.m.tmpls.push(Template {
+            kind: TmplKind::Class {
+                module: mi,
+                name: c.name.clone(),
+                class_id: c.class_id,
+                literal_shape: c.literal_shape,
+            },
+            display: c.display.clone(),
+            birth_keys: Vec::new(),
+            definite: Vec::new(),
+            parent: None,
+            ctor: Some(ctor),
+            native_parent: c.native_parent.clone(),
+            accessor_keys: Vec::new(),
+            has_computed_members: false,
+            field_init: None,
+            proto_members: Vec::new(),
+        });
+        self.m.funcs[ctor as usize].ctor_of = Some(tm);
+        self.m.foreign.insert(tm, c.facts.clone());
+        let proto = self.m.tok(TokKind::Proto(tm));
+        let cobj = self.m.tok(TokKind::ClassObj(tm));
+        let inst = self.m.tok(TokKind::Obj(tm, NO_CTX));
+        let pa = self.m.atom("prototype");
+        let pf = self.m.field(cobj, pa);
+        self.m.add_tok(pf, proto);
+        let ca = self.m.atom("constructor");
+        let cf = self.m.field(proto, ca);
+        self.m.add_tok(cf, cobj);
+        let any = self.m.field_any(cobj);
+        self.m.add_top(any, |_| "static member of another unit's class".into());
+        self.m.add_prim(any, prim::ALL);
+        let mut toks = vec![inst, cobj, proto, self.m.funcs[ctor as usize].token];
+        for (key, fname) in &c.methods {
+            let f = self.stub_fn(mi, fname, tm, true, r);
+            let a = self.m.atom(key);
+            let n = self.m.field(proto, a);
+            let t = self.m.funcs[f as usize].token;
+            self.m.add_tok(n, t);
+            toks.push(t);
+        }
+        for fld in &c.facts.fields {
+            let a = self.m.atom(&fld.key);
+            let n = self.m.field(inst, a);
+            self.m.add_top(n, |_| "field of another unit's class".into());
+            self.m.add_prim(n, prim::ALL);
+        }
+        if !c.facts.fixed_layout {
+            let n = self.m.field_any(inst);
+            self.m.add_top(n, |_| "field of another unit's class".into());
+            self.m.add_prim(n, prim::ALL);
+        }
+        let n = self.m.node_named("classval", || format!("classval({})", c.name));
+        self.m.add_tok(n, cobj);
+        self.stand_ins.insert(c.display.clone(), (n, tm, toks));
+        n
+    }
+
+    /// A function of another unit seen through a contract: its arguments go
+    /// to that unit's code, `this` admits only `class`'s instances (any other
+    /// receiver escapes), the result is unknown (`ret_top`).
+    fn stub_fn(&mut self, mi: u32, name: &str, class: TmplId, ret_top: bool, reason: u32) -> FnIdx {
+        let fx = self.m.funcs.len() as FnIdx;
+        let tok = self.m.tok(TokKind::Func(fx, NO_CTX));
+        let outer_fn = std::mem::replace(&mut self.m.cur_fn, fx);
+        let this = self.m.node_named("this", || format!("this({name})"));
+        let ret = self.m.node_named("ret", || format!("ret({name})"));
+        let args_all = self.m.node_named("args", || format!("args({name})"));
+        self.m.own(ret);
+        self.m.own(this);
+        self.m.cur_fn = outer_fn;
+        self.m.funcs.push(FuncInfo {
+            module: mi,
+            func_id: u32::MAX,
+            name: name.to_string(),
+            params: Vec::new(),
+            rest: None,
+            this,
+            ret,
+            args_all,
+            has_arguments: true,
+            token: tok,
+            ctor_of: None,
+            lexical_this: false,
+            no_summary: true,
+            gen_step: false,
+            parent: NO_FN,
+        });
+        self.m.sink_node(args_all, reason);
+        if ret_top {
+            self.m.add_top(ret, |_| "result of another unit's method".into());
+            self.m.add_prim(ret, prim::ALL);
+        }
+        self.m.cons(this, Cons::ContractThis { tmpl: class, reason });
+        fx
+    }
+
+    /// After the solve: the other units' classes this unit used beyond their
+    /// contract (census reports, design §11.3), by template display. An
+    /// aborted unit reports every contract it consumed.
+    pub(crate) fn reports(&self) -> Vec<String> {
+        let mut out: Vec<String> = self
+            .stand_ins
+            .iter()
+            .filter(|(_, (_, tm, toks))| {
+                self.m.aborted
+                    || self.m.foreign_written.contains(tm)
+                    || self.m.adds_keys.get(tm).is_some_and(|&k| k > 0)
+                    || toks.iter().any(|&t| self.m.is_escaped(t) || self.m.hard.contains_key(&t))
+            })
+            .map(|(d, _)| d.clone())
+            .collect();
+        for (name, &(_, t)) in &self.stand_in_fns {
+            if self.m.aborted || self.m.is_escaped(t) || self.m.hard.contains_key(&t) {
+                out.push(format!("fn:{name}"));
+            }
+        }
+        out.sort();
+        out
+    }
+
+    /// Resolve the typed parameters' entry-guard candidates (every class and
+    /// import is known by now).
+    pub(crate) fn resolve_param_guards(&mut self) {
+        for (n, mi, ty) in std::mem::take(&mut self.param_ty) {
+            if let Some(gd) = self.guard_of(mi, &ty) {
+                self.param_guard.insert(n, gd);
+            }
+        }
+    }
+
+    /// The candidates parameter type `ty` of module `mi` picks for an entry
+    /// guard (design §11.4): a class (this unit's or another's through a
+    /// contract), or the keys of an object type / interface / alias.
+    pub(crate) fn guard_of(&self, mi: u32, ty: &perry_hir::types::Type) -> Option<ParamGuard> {
+        use perry_hir::types::Type;
+        match ty {
+            Type::Named(n) => {
+                if let Some(&tm) = self.mods[mi as usize].classes.get(n) {
+                    return Some(ParamGuard::Class(tm));
+                }
+                if let Some(&node) = self.mods[mi as usize].imports.get(n) {
+                    return self.m.nodes[node as usize].pts.to_sorted().iter().find_map(|&t| match self.m.toks[t as usize] {
+                        TokKind::ClassObj(tm) => Some(ParamGuard::Class(tm)),
+                        _ => None,
+                    });
+                }
+                let module = self.modules[mi as usize].1;
+                if let Some(i) = module.interfaces.iter().find(|i| &i.name == n) {
+                    if !i.extends.is_empty() || !i.type_params.is_empty() {
+                        return None;
+                    }
+                    let keys: Vec<String> = i.properties.iter().filter(|p| !p.optional).map(|p| p.name.clone()).collect();
+                    return (!keys.is_empty()).then_some(ParamGuard::Keys(keys));
+                }
+                let a = module.type_aliases.iter().find(|a| &a.name == n && a.type_params.is_empty())?;
+                self.guard_of(mi, &a.ty)
+            }
+            Type::Object(o) => {
+                let mut keys: Vec<String> = o.properties.iter().filter(|(_, p)| !p.optional).map(|(k, _)| k.clone()).collect();
+                keys.sort();
+                (!keys.is_empty()).then_some(ParamGuard::Keys(keys))
+            }
+            _ => None,
         }
     }
 
@@ -367,6 +699,9 @@ impl<'a> Gen<'a> {
                 }
                 rest = Some(n);
             } else {
+                if matches!(p.ty, perry_hir::types::Type::Named(_) | perry_hir::types::Type::Object(_)) {
+                    self.param_ty.push((n, mi, p.ty.clone()));
+                }
                 ps.push(n);
             }
         }
@@ -469,6 +804,8 @@ impl<'a> Gen<'a> {
             let n = self.m.field(proto, a);
             let t = self.m.funcs[f as usize].token;
             self.m.add_tok(n, t);
+            let this = self.m.funcs[f as usize].this;
+            self.m.this_class.insert(this, tm);
         }
         for meth in &c.static_methods {
             let f = self.register_fn(mi, meth.id, &meth.name, &meth.params, false, false);
@@ -479,6 +816,8 @@ impl<'a> Gen<'a> {
         }
         for (name, g) in &c.getters {
             let f = self.register_fn(mi, g.id, &g.name, &g.params, false, false);
+            let this = self.m.funcs[f as usize].this;
+            self.m.this_class.insert(this, tm);
             let a = self.m.atom(name);
             self.m.accessor_atoms.insert(a);
             let ft = self.m.funcs[f as usize].token;
@@ -487,6 +826,8 @@ impl<'a> Gen<'a> {
         }
         for (name, s) in &c.setters {
             let f = self.register_fn(mi, s.id, &s.name, &s.params, false, false);
+            let this = self.m.funcs[f as usize].this;
+            self.m.this_class.insert(this, tm);
             let a = self.m.atom(name);
             self.m.accessor_atoms.insert(a);
             let ft = self.m.funcs[f as usize].token;
@@ -731,6 +1072,14 @@ impl<'a> Gen<'a> {
                     Export::Named { local, exported } => {
                         let a = self.m.atom(exported);
                         let en = self.export_node(mi, a);
+                        if let Some(&tm) = self.mods[mi as usize].classes.get(local) {
+                            self.export_class.insert((mi, a), tm);
+                        }
+                        if let Some(f) = module.functions.iter().find(|f| &f.name == local) {
+                            if let Some(&fx) = self.mods[mi as usize].funcs.get(&f.id) {
+                                self.export_fn.insert((mi, a), fx);
+                            }
+                        }
                         let src = self.scope_value(mi, local);
                         self.m.edge(src, en);
                         let f = self.m.field(ns, a);
@@ -792,6 +1141,7 @@ impl<'a> Gen<'a> {
                 if let Some(&fx) = self.mods[mi as usize].funcs.get(fid) {
                     let a = self.m.atom(name);
                     let en = self.export_node(mi, a);
+                    self.export_fn.insert((mi, a), fx);
                     let t = self.m.funcs[fx as usize].token;
                     self.m.add_tok(en, t);
                     let f = self.m.field(ns, a);
@@ -803,6 +1153,7 @@ impl<'a> Gen<'a> {
                     let a = self.m.atom(&f.name);
                     let en = self.export_node(mi, a);
                     let fx = self.mods[mi as usize].funcs[&f.id];
+                    self.export_fn.insert((mi, a), fx);
                     let t = self.m.funcs[fx as usize].token;
                     self.m.add_tok(en, t);
                     let fl = self.m.field(ns, a);
@@ -814,6 +1165,7 @@ impl<'a> Gen<'a> {
                     let a = self.m.atom(&c.name);
                     let en = self.export_node(mi, a);
                     let tm = self.mods[mi as usize].classes[&c.name];
+                    self.export_class.insert((mi, a), tm);
                     let t = self.m.tok(TokKind::ClassObj(tm));
                     self.m.add_tok(en, t);
                     let fl = self.m.field(ns, a);
@@ -849,16 +1201,50 @@ impl<'a> Gen<'a> {
     /// registry are here); and that code stores through what it holds, the
     /// intrinsic prototypes and globals included: one ⊤ store under any key
     /// through ⊤, as a store in compiled code with a ⊤ receiver is.
-    pub fn unit_boundary(&mut self) {
+    ///
+    /// Only what another unit can name is published (`published`, design
+    /// §11.1): an export no module imports, re-exports or reaches as a
+    /// namespace stays inside the unit (the CommonJS wrap exports every
+    /// hoisted class, named by the module's source or not). `None` publishes
+    /// every export and namespace.
+    pub(crate) fn unit_boundary(&mut self, published: Option<&crate::units::Published>) {
         let r = self.m.reason("published to another unit");
-        let mut exports: Vec<NodeId> = self.exports.values().copied().collect();
+        let path_of = |g: &Self, mi: u32| g.modules[mi as usize].0;
+        let mut exports: Vec<((u32, Atom), NodeId)> =
+            self.exports.iter().map(|(&k, &n)| (k, n)).collect();
         exports.sort_unstable();
-        for n in exports {
-            self.m.sink_node(n, r);
+        for ((mi, a), n) in exports {
+            let name = &self.m.atoms[a as usize];
+            if !published.is_none_or(|p| p.names(path_of(self, mi), name)) {
+                continue;
+            }
+            // A published class is a contract (§11.2), unless the census
+            // broke it: then it escapes, as everything did in P1.
+            match self.export_class.get(&(mi, a)).copied() {
+                Some(tm) if published.is_some_and(|p| !p.broken(&self.m.tmpls[tm as usize].display)) => {
+                    self.m.publish_class(tm, r);
+                    self.class_contracts.push(((mi, a), n, tm));
+                }
+                _ => {
+                    // A published function is a contract (§11.2): it still
+                    // escapes (anyone may call it), but its parameters carry
+                    // markers and its result is checked after the solve.
+                    if let Some(&f) = self.export_fn.get(&(mi, a)) {
+                        let name = format!("fn:{}", self.m.funcs[f as usize].name);
+                        if published.is_some_and(|p| !p.broken(&name)) {
+                            self.m.contract_fns.insert(f);
+                            self.fn_contracts.push(((mi, a), f));
+                        }
+                    }
+                    self.m.sink_node(n, r)
+                }
+            }
         }
         for mi in 0..self.mods.len() {
-            let t = self.mods[mi].ns_tok;
-            self.m.escape(t, r);
+            if published.is_none_or(|p| p.whole(path_of(self, mi as u32))) {
+                let t = self.mods[mi].ns_tok;
+                self.m.escape(t, r);
+            }
         }
         let mut paths: Vec<(String, NodeId)> =
             self.cjs_paths.iter().map(|(k, &n)| (k.clone(), n)).collect();
@@ -882,6 +1268,55 @@ impl<'a> Gen<'a> {
         self.m.add_tok(holder, TOP);
         let src = self.m.top_tok_node;
         self.m.cons(holder, Cons::Store { key: Key::Any, src, site: 0 });
+    }
+
+    /// After a solve: a published class export holds its class value only
+    /// (a module may rebind the name); otherwise it escapes after all. True
+    /// when something changed (solve again).
+    pub(crate) fn contract_check(&mut self) -> bool {
+        let r = self.m.reason("published to another unit");
+        let mut changed = false;
+        for (e, n, tm) in std::mem::take(&mut self.class_contracts) {
+            let c = self.m.tok(TokKind::ClassObj(tm));
+            let node = &self.m.nodes[n as usize];
+            if node.prim != 0 || node.pts.to_sorted().iter().any(|&t| t != c) {
+                self.m.sink_node(n, r);
+                changed = true;
+            } else {
+                self.class_contracts.push((e, n, tm));
+            }
+        }
+        // A contract function's result: literal-shape objects only (their
+        // fields go to the caller's unit, so they leave); anything else and
+        // it escapes as before.
+        let rets = self.m.contract_rets.clone();
+        for (f, ret) in rets {
+            if self.ret_top.contains(&f) {
+                continue;
+            }
+            let toks = self.m.nodes[ret as usize].pts.to_sorted();
+            let ok = toks.iter().all(|&t| match self.m.toks[t as usize] {
+                TokKind::Obj(tm, _) => matches!(self.m.tmpls[tm as usize].kind, TmplKind::Class { literal_shape: true, .. }),
+                _ => false,
+            });
+            if !ok {
+                self.ret_top.insert(f);
+                self.m.sink_node(ret, r);
+                changed = true;
+                continue;
+            }
+            for t in toks {
+                if self.ret_ok.insert(t) {
+                    let all = self.m.all_fields(t);
+                    self.m.cons(all, Cons::TopSink { reason: r });
+                    let rl = self.m.node_l("contract-ret-load");
+                    self.m.sink_node(rl, r);
+                    self.m.accessor_walk(t, t, crate::model::Key::Any, crate::model::ChainAct::Load(rl));
+                    changed = true;
+                }
+            }
+        }
+        changed
     }
 
     /// The module an `export … from source` of module `mi` reads: the

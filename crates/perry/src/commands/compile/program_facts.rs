@@ -295,12 +295,7 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
     let Some(mb) = pf.bindings_for(path) else {
         return out;
     };
-    let stable: std::collections::HashMap<u32, &perry_wpfacts::TemplateFacts> = pf
-        .templates
-        .iter()
-        .filter(|t| t.prefix_stable)
-        .filter_map(|t| Some((t.class_id?, t)))
-        .collect();
+    let stable = pf.stable_classes();
     let recv = |b: &perry_wpfacts::BindingFacts| -> Option<FactsRecv> {
         let class_ids: Vec<u32> = b
             .class_ids

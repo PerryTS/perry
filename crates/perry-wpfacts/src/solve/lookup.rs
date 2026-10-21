@@ -6,6 +6,7 @@ use crate::model::*;
 impl Model {
     /// dst ⊇ value of `key` read on object `t` (receiver `origin`).
     pub fn load_from(&mut self, origin: Tok, t: Tok, key: Key, dst: NodeId) {
+        self.mark_use(t, crate::model::MARK_READ);
         if self.is_iter_key(key) {
             match self.toks[t as usize] {
                 TokKind::Top
@@ -89,7 +90,7 @@ impl Model {
     /// Accessors run with the receiver as `this`. Named keys an accessor
     /// may be defined under walk the chain per receiver; computed keys
     /// visit, through the prototype closure, only holders with accessors.
-    pub(super) fn accessor_walk(&mut self, origin: Tok, t: Tok, key: Key, act: ChainAct) {
+    pub(crate) fn accessor_walk(&mut self, origin: Tok, t: Tok, key: Key, act: ChainAct) {
         if !self.needs_accessor_walk(key) {
             return;
         }

@@ -107,6 +107,12 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
         "# stats modules={} templates={} fact_units={} nodes={} constraints={} tokens={} functions={} gen_ms={:.1} solve_ms={:.1} derive_ms={:.1} pops={} work={} aborted={}\n",
         s.modules, s.templates, s.fact_units, s.nodes, s.constraints, s.tokens, s.functions, s.gen_ms, s.solve_ms, s.derive_ms, s.pops, s.work, s.aborted
     ));
+    if pf.rounds > 0 {
+        out.push_str(&format!(
+            "# rounds {} work_per_round={:?} broken={:?}\n",
+            pf.rounds, pf.round_work, pf.broken
+        ));
+    }
     for (path, u) in &pf.units {
         out.push_str(&format!(
             "# unit {path} nodes={} constraints={} tokens={} pts_entries={} instances={} gen_ms={:.1} solve_ms={:.1} derive_ms={:.1} pops={} work={} aborted={}\n",
@@ -153,6 +159,7 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
         let v = match &st.verdict {
             Verdict::T0Mono => "T0".to_string(),
             Verdict::T0Set => "T0set".to_string(),
+            Verdict::E0 => "E0".to_string(),
             Verdict::No(r) => format!("no:{r}"),
         };
         out.push_str(&format!(

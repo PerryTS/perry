@@ -58,6 +58,9 @@ pub(super) fn facts_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> Arc<Fac
             perry_wpfacts::Verdict::T0Set => {
                 "whole-program family-set proof recorded; generic guard/path emitted".into()
             }
+            perry_wpfacts::Verdict::E0 => {
+                "proof behind the entry guard recorded; generic guard/path emitted".into()
+            }
         };
         let key = (site.byte_offset, site.key.clone(), site.is_call);
         if ambiguous.contains(&key) {

@@ -680,7 +680,20 @@ impl Model {
             }
             Cons::TopSink { reason } => {
                 for &t in toks {
+                    if let Some(pat) = cwu2_esc() { // TEMP CWU2: who sinks a token
+                        if !self.is_escaped(t) && self.tok_name(t).contains(pat.as_str()) {
+                            let f = self.node_fn.get(n as usize).copied().filter(|&f| f != crate::model::NO_FN).map(|f| self.funcs[f as usize].name.to_string()).unwrap_or_default();
+                            eprintln!("CWU2 esc {} via {}#{n} fn={f} reason={}", self.tok_name(t), self.labels.get(n as usize).copied().unwrap_or("?"), self.reasons[reason as usize]);
+                        }
+                    }
                     self.escape(t, reason);
+                }
+            }
+            Cons::ContractThis { tmpl, reason } => {
+                for &t in toks {
+                    if self.tmpl_of(t) != Some(tmpl) {
+                        self.escape(t, reason);
+                    }
                 }
             }
             Cons::TopIfAny { dst, from, reason } => {
@@ -699,6 +712,7 @@ impl Model {
             }
             Cons::AddsKeys => {
                 for &t in toks {
+                    let t = self.contract_recv.get(&t).copied().unwrap_or(t);
                     if let Some(tm) = self.tmpl_of(t) {
                         *self.adds_keys.entry(tm).or_default() += 1;
                     }
@@ -1186,7 +1200,14 @@ impl Model {
             }
             return;
         }
+        if let Some(&i) = self.contract_recv.get(&t) {
+            self.store_into(i, key, src, site);
+        }
+        self.mark_use(t, crate::model::MARK_ESCAPE);
         let tm = self.tmpl_of(t);
+        if let Some(tm) = tm.filter(|tm| self.foreign.contains_key(tm)) {
+            self.foreign_written.insert(tm);
+        }
         match key {
             Key::Named(a) => {
                 let f = self.field(t, a);
@@ -1265,6 +1286,7 @@ impl Model {
     /// inspect …): every function reachable as a property of `t` or its
     /// chain runs with `this` = `t` and unknown primitive arguments.
     pub fn implicit(&mut self, t: Tok, reason: u32) {
+        self.mark_use(t, crate::model::MARK_TOUCH);
         if t == TOP || !self.implicit_done.insert(t) {
             return;
         }
@@ -1309,6 +1331,7 @@ impl Model {
                 format!("chain {n} {origin} {} {act:?}", self.key_name(*key))
             }
             Cons::TopSink { reason } => format!("top {n} {reason}"),
+            Cons::ContractThis { tmpl, reason } => format!("contractthis {n} {tmpl} {reason}"),
             Cons::TopIfAny { dst, from, reason } => format!("topifany {n} {dst} {from} {}", reason.map_or(-1, |r| r as i64)),
             Cons::Hard { kind, reason } => format!("hard {n} {} {reason}", kind.code()),
             Cons::AddsKeys => format!("addskeys {n}"),
@@ -1402,4 +1425,10 @@ impl Model {
     pub fn fn_tokens(&self, n: NodeId) -> Vec<Tok> {
         self.fns_of(n)
     }
+}
+
+/// TEMP CWU2: `CWU2_ESC=<token-name substring>` prints the node that sinks it.
+pub(crate) fn cwu2_esc() -> Option<&'static String> {
+    static P: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    P.get_or_init(|| std::env::var("CWU2_ESC").ok()).as_ref()
 }
