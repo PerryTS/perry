@@ -26,7 +26,7 @@ for (const network of denied) {
   const plugin = instance(network);
   for (const connected of [true, false]) {
     const result = probe(plugin).exchange(port, connected, "denied");
-    check(result.tag === "err" && result.value === "AccessDenied", "UDP denial must come from capability checks");
+    check(result.tag === "err" && result.value === "AccessDenied", "UDP denial must come from capability checks: " + JSON.stringify(result) + " network=" + JSON.stringify(network) + " connected=" + connected);
   }
   plugin.dispose();
 }
@@ -53,7 +53,7 @@ for (const network of [
 ]) {
   const plugin = instance(network);
   const result = probe(plugin).connect(tcpPort, "denied");
-  check(result.tag === "err" && result.value === "AccessDenied", "TCP denial must come from capability checks");
+  check(result.tag === "err" && result.value === "AccessDenied", "TCP denial must come from capability checks: " + JSON.stringify(result) + " network=" + JSON.stringify(network));
   plugin.dispose();
 }
 const tcp = instance({ tcp: true, addresses: [tcpRemote] });
