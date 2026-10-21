@@ -21,6 +21,14 @@ set -euo pipefail
 
 PERRY="$(realpath "${1:?usage: $0 <perry built with --features target-wasi>}")"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if command -v timeout >/dev/null 2>&1; then
+  TIMEOUT=timeout
+elif command -v gtimeout >/dev/null 2>&1; then
+  TIMEOUT=gtimeout
+else
+  echo "::error::GNU timeout is required (on macOS: brew install coreutils)" >&2
+  exit 1
+fi
 OUT="$(mktemp -d)"
 trap 'rm -rf "$OUT"' EXIT
 
@@ -61,7 +69,7 @@ for name in "${SAMPLES[@]}"; do
   # The link may fail (no wasi-sdk here); the IR is saved before it runs.
   status=0
   ( cd "$dir" && PERRY_SAVE_LL="$dir" PERRY_NO_AUTO_OPTIMIZE=1 PERRY_NO_CACHE=1 \
-      timeout 300 "$PERRY" compile "$src" -o "$dir/out" --target wasi >"$dir/log.txt" 2>&1 ) || status=$?
+      "$TIMEOUT" 300 "$PERRY" compile "$src" -o "$dir/out" --target wasi >"$dir/log.txt" 2>&1 ) || status=$?
   # A link failure is an ordinary error exit; a timeout (124) or a death by
   # signal (128+N) can land after the IR is saved and before objects exist.
   if ((status == 124 || status >= 128)); then

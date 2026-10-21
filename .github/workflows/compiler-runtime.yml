@@ -1695,6 +1695,9 @@ jobs:
           node-version-file: .node-version
       - name: Build perry with the WASI target
         run: cargo build --locked --profile perry-dev -p perry --features target-wasi
+      - name: Install timeout for the macOS IR check
+        if: runner.os == 'macOS'
+        run: brew install coreutils
       - name: wasm32 IR matches the runtime ABI
         if: runner.os != 'Windows'
         run: ./scripts/wasi_ir_check.sh target/perry-dev/perry
