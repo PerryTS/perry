@@ -4,6 +4,9 @@ shape transitions and overflow-property installation during bootstrap while
 preserving method metadata, descriptors, property order, feature gating and
 ordinary mutation behavior. Each namespace still receives fresh function
 objects; no heap-pointer caches or additional GC roots are introduced.
+Keep the builder inline inside each cold namespace factory so the compiler
+can specialize its fixed declaration without losing Math's existing
+specialization when more namespaces use the implementation.
 
 Add coverage for inline storage, key sharing, independent functions, detached
 calls and optional arguments, descriptor mutation, inheritance, freezing,

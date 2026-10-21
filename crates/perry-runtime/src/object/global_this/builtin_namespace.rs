@@ -53,7 +53,10 @@ impl Member {
 /// run here, and no partial object escapes. Function allocation deliberately
 /// retains the individual installer's metadata and non-constructor behavior.
 #[cold]
-#[inline(never)]
+// Keep the fixed declaration visible in each cold factory. Outlining one
+// shared slice walker prevents the compiler from specializing Math's existing
+// birth as soon as another namespace starts using this helper.
+#[inline(always)]
 pub(super) fn create(members: &[Member]) -> *mut ObjectHeader {
     // This is the same bounded bootstrap window as individual builtin
     // installation. It also makes the factory safe to exercise independently.
