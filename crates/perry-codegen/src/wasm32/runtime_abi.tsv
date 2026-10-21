@@ -730,7 +730,7 @@ js_child_process_validate_command	f64	f64,ptr,i32u
 js_child_process_validate_fork_module	f64	f64
 js_child_process_validate_options	f64	f64,i32s,i32s
 js_child_process_validate_spawn_args	f64	f64,i32s,i32s
-js_class_accessor_shape_guard	i32s	f64,i32u,ptr,usize
+js_class_accessor_shape_guard	i32s	f64,i32u,i64,ptr,usize
 js_class_capture_value	f64	i32u,i32u
 js_class_capture_value_for_receiver	f64	f64,i32u,i32u
 js_class_capture_value_or	f64	i32u,i32u,f64
