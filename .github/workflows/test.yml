@@ -249,6 +249,8 @@ jobs:
     # downloading the MSVC sysroot and checking cold; main caches the sysroot.
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      formatting: ${{ steps.formatting.outputs.result }}
     steps:
       - name: Checkout repository (inline git)
         shell: bash
@@ -334,6 +336,8 @@ jobs:
 
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-10-04 --profile minimal --component rustfmt --component clippy
+      - name: Check formatting
+        run: cargo fmt --all -- --check
       - uses: ./.github/actions/setup-llvm22
 
       - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
@@ -382,10 +386,6 @@ jobs:
         with:
           path: ~/.cache/cargo-xwin
           key: cargo-xwin-${{ runner.os }}-0.23.0
-
-      - name: Check formatting
-        if: ${{ !cancelled() }}
-        run: cargo fmt --all -- --check
 
       # The CI tier policy (scripts/ci_plan.py) is code; its self-test asserts
       # the invariants CLAUDE.md cares about (gc-stress main-line reachable,
@@ -3681,9 +3681,14 @@ jobs:
   # Linux reuses gap-suite-build's archives; in the full tier, where
   # gap-suite-build does not run, it builds them.
   gc-call-effects-linux:
-    needs: [plan, gap-suite-build]
+    needs: [plan, gap-suite-build, lint]
     if: >-
       always() && needs.plan.result == 'success' &&
+      (needs.lint.result == 'success' ||
+       (needs.lint.result == 'failure' &&
+        fromJSON(needs.plan.outputs.plan).jobs.gap_suite &&
+        fromJSON(needs.plan.outputs.plan).gap.mode == 'fast' &&
+        needs.lint.outputs.formatting == 'failure')) &&
       fromJSON(needs.plan.outputs.plan).jobs.gc_call_effects &&
       (needs.gap-suite-build.result == 'success' || needs.gap-suite-build.result == 'skipped')
     runs-on: ubuntu-latest
@@ -3713,7 +3718,7 @@ jobs:
           fi
       - uses: ./.github/actions/setup-llvm22
       - name: Download the shared fast-mode build
-        if: fromJSON(needs.plan.outputs.plan).gap.mode == 'fast'
+        if: fromJSON(needs.plan.outputs.plan).gap.mode == 'fast' && needs.lint.result == 'success'
         uses: ./.github/actions/perry/actions/download-artifact # v8
         with:
           name: gap-suite-fast-build
@@ -3727,7 +3732,7 @@ jobs:
           shared-key: "${{ runner.os }}-perry"
           save-if: false
       - name: Build runtime archives (no shared build in this tier)
-        if: fromJSON(needs.plan.outputs.plan).gap.mode != 'fast'
+        if: fromJSON(needs.plan.outputs.plan).gap.mode != 'fast' || needs.lint.result == 'failure'
         run: |
           cargo build-perry --release
           scripts/gc_call_effects/sidecars.sh target/release
@@ -3742,8 +3747,14 @@ jobs:
   # with cargo-xwin on Linux (the same toolchain lint's Windows type-check
   # uses). Each leg writes its own sidecars and checks the pinned facts.
   gc-call-effects:
-    needs: plan
-    if: fromJSON(needs.plan.outputs.plan).jobs.gc_call_effects
+    needs: [plan, lint]
+    if: >-
+      fromJSON(needs.plan.outputs.plan).jobs.gc_call_effects &&
+      (needs.lint.result == 'success' ||
+       (needs.lint.result == 'failure' &&
+        fromJSON(needs.plan.outputs.plan).jobs.gap_suite &&
+        fromJSON(needs.plan.outputs.plan).gap.mode == 'fast' &&
+        needs.lint.outputs.formatting == 'failure'))
     strategy:
       fail-fast: false
       matrix:
@@ -3797,6 +3808,9 @@ jobs:
           echo "$RUNNER_TEMP/cargo-xwin-bin" >> "$GITHUB_PATH"
           echo "$LLVM_SYS_221_PREFIX/bin" >> "$GITHUB_PATH"
           rustup target add x86_64-pc-windows-msvc
+      - name: Install Windows cross-build tools
+        if: matrix.target == 'windows-x86_64'
+        uses: ./.github/actions/setup-llvm22
       - name: Install Perl for the vendored OpenSSL cross-build
         if: matrix.target == 'windows-x86_64'
         run: |
@@ -3815,6 +3829,9 @@ jobs:
         env:
           CONFIGURE_INSIST: ${{ matrix.target == 'windows-x86_64' && '1' || '' }}
         run: |
+          if [[ "${{ matrix.target }}" == windows-x86_64 ]]; then
+            rustup target add x86_64-pc-windows-msvc
+          fi
           unset RUSTFLAGS
           if [[ "${{ matrix.target }}" == windows-x86_64 ]]; then
             cargo xwin build --release --target x86_64-pc-windows-msvc -p perry-runtime-static -p perry-stdlib-static
