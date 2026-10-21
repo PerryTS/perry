@@ -1,0 +1,28 @@
+{
+  "sourceRevision": "f1ab9243d9daea26294bdbabc9421b5b07733222",
+  "baseRevision": "1c3a11dd5d5a6867db72801f9fa5cdae06938723",
+  "host": "Linux x86_64",
+  "wasmtimeEngine": "48.0.5",
+  "wasiSdk": "34",
+  "targetedTests": {
+    "host": 19,
+    "wit": 12,
+    "runtime": 19
+  },
+  "acceptancePhases": {
+    "native": 14,
+    "guest": 34
+  },
+  "allAcceptancePassed": true,
+  "guestCopyingCollections": 206,
+  "guestCopiedObjects": 4579,
+  "guestEvacuationChecks": 206,
+  "nativeQuarantineObserved": true,
+  "sha256": {
+    "guest-resources-target/perry-dev/perry": "535d4c63da78bedd9a5318da358c7d6950d949e58158d5b50968d5dd498e2b84",
+    "guest-resources-target/perry-dev/perry-wit": "295941a025d73055ef09a867a7b6ff01c4c24702e0d6757694e518288dfd4fee",
+    "guest-resources-target-wasi/wasm32-wasip2/release/libperry_runtime.a": "d3b9e6200c86e4774ef3708837db228cdf8a285c27189630793938c1856efb5e",
+    "guest-resources-acceptance/guest/resources/transform.component.wasm": "f23aa4742d4a24a622084af7c175db9c0dbf3ac2cabb0623227510e591c8ef41",
+    "guest-resources-acceptance/guest/dual-resources/transform.component.wasm": "b66924f7607931fa6f1c7694db173725b09e9b04c9643530ff2581c4fac38002"
+  }
+}

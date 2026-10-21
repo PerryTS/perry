@@ -206,7 +206,8 @@ and requires actual copied objects and evacuation verification. Both normal
 and forced-moving runs pass. Wasm execution does not claim native from-space
 memory protection. A second fixture imports and exports the same resource
 interface, rejects cross-type substitutions, and passes nested ownership
-transfer and destruction checks from Rust.
+transfer and destruction checks from Rust. The [execution receipt](validation/component-guest-resources-20261021.json)
+records the exact source, artifact hashes and moving-GC witnesses.
 
 The native WASI-provider profile has passed on Linux with freshly built
 compiler, native runtimes and wasm32-wasip2 runtime. Native Perry hosted a
