@@ -4,6 +4,17 @@ This suite compares small, fixed `node:zlib` contracts. Node 26.5.0 is the
 oracle. Each fixture prints semantic state or error shape; no fixture compares
 backend-specific compressed bytes.
 
+## Chunk-size contract
+
+`options/chunk-size-contract.ts` covers the pinned Node 26.12.1 numeric
+contract through named, namespace, and captured factories, sibling DEFLATE
+factories, and options-consuming sync calls. Undefined and NaN use the default;
+null is a type error, infinities require a finite-number range error, and finite
+sizes retain the 64-byte minimum (including accepted fractions). Throwing getters
+and small high-water-mark differential controls preserve the existing boundary.
+No large-allocation/OOM probes, decoder modes, dictionary application, or general
+getter-order coverage are added. Historical audit measurements below are unchanged.
+
 ## Locked sources
 
 - Node 26.5.0 commit [`bebd1b8d92bf4cc917844d6335ed1ecf9c2a75fb`][node-tree]:

@@ -175,20 +175,32 @@ fn validate_option_range(
     }
 }
 
-/// Validate the `chunkSize` option. Node only enforces a lower bound
-/// (`Z_MIN_CHUNK` = 64) and rejects `NaN`, with a `It must be >= 64` message
-/// that omits the upper bound the ranged options carry.
-fn validate_option_chunk_size(ptr: *const crate::object::ObjectHeader) {
-    let Some(n) = option_number(read_option_field(ptr, b"chunkSize"), "options.chunkSize") else {
-        return;
-    };
-    if n < 64.0 || n.is_nan() {
+/// Resolve `chunkSize` consistently for option validation and stream allocation.
+/// Undefined and NaN use Node's default; all other values must be finite
+/// numbers >= Z_MIN_CHUNK (64). Fractional sizes remain accepted.
+fn validate_option_chunk_size(value: f64) -> f64 {
+    if crate::value::JSValue::from_bits(value.to_bits()).is_undefined() {
+        return 16384.0;
+    }
+    let n = crate::validators::validate_number(value, "options.chunkSize", None, None);
+    if n.is_nan() {
+        return 16384.0;
+    }
+    if !n.is_finite() {
+        let received = crate::fs::validate::format_received_number(n);
+        let message = format!(
+            "The value of \"options.chunkSize\" is out of range. It must be a finite number. Received {received}"
+        );
+        crate::fs::validate::throw_range_error_with_code(&message);
+    }
+    if n < 64.0 {
         let received = crate::fs::validate::format_received_number(n);
         let message = format!(
             "The value of \"options.chunkSize\" is out of range. It must be >= 64. Received {received}"
         );
         crate::fs::validate::throw_range_error_with_code(&message);
     }
+    n
 }
 
 /// Validate a `node:zlib` options object the way Node's `Zlib`/`ZlibBase`
@@ -234,7 +246,7 @@ pub extern "C" fn js_zlib_validate_options(opts: f64, min_window_bits: i32) {
     validate_option_range(options_ptr(), b"level", "options.level", -1, 9);
     validate_option_range(options_ptr(), b"memLevel", "options.memLevel", 1, 9);
     validate_option_range(options_ptr(), b"strategy", "options.strategy", 0, 4);
-    validate_option_chunk_size(options_ptr());
+    validate_option_chunk_size(read_option_field(options_ptr(), b"chunkSize"));
     validate_option_range(options_ptr(), b"flush", "options.flush", 0, 5);
 
     // #4917: `level` is honored and the ranged options above are validated,
@@ -381,6 +393,9 @@ pub extern "C" fn js_zlib_stream_option(opts: f64, which: i32) -> usize {
         let live = crate::value::JSValue::from_bits(opts.get_nanbox_f64().to_bits());
         read_option_field(live.as_pointer::<crate::object::ObjectHeader>(), name)
     };
+    if which == 0 {
+        return validate_option_chunk_size(read(field)) as usize;
+    }
     let mut v = read(field);
     if which != 0 {
         let common = read(b"highWaterMark");
