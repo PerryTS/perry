@@ -844,11 +844,14 @@ js_collection_method_dispatch	f64	f64,ptr,usize,f64,f64
 js_color_parse_channel	f64	f64,i32s
 js_component_call	f64	f64,f64,f64,f64
 js_component_dispose	f64	f64
+js_component_host_resource_create	f64	f64,f64,f64,f64
+js_component_host_resource_value	f64	f64,f64,f64
 js_component_import	f64	f64,f64,f64
 js_component_load	f64	f64,f64,f64,f64
 js_component_register	f64	f64,f64
 js_component_resource_create	f64	f64,f64,f64
 js_component_resource_value	f64	f64,f64
+js_component_run_command	f64	f64,f64
 js_component_set_guest_ops	i32s	ptr
 js_compose_api_logs	ptr	f64,f64
 js_compose_config	ptr	f64
@@ -4676,6 +4679,7 @@ js_zlib_unzip_init	f64	f64,f64
 js_zlib_unzip_sync	f64	f64
 js_zlib_validate_buffer_arg	void	i64
 js_zlib_validate_callback	i64	f64
+js_zlib_validate_crc32_args	i32u	f64,f64
 js_zlib_validate_options	void	f64,i32s
 js_zlib_validate_params	i32s	f64,f64
 js_zlib_zstd_compress	void	f64,f64,f64

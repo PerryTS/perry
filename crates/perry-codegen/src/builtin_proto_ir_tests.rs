@@ -99,11 +99,21 @@ fn a_borrowed_prototype_call_proves_array_and_function_and_a_binding_does_not() 
             call(ArrayLikeSource::Prototype),
         ],
     );
+    // Each family's proof is its own intrinsic's shadow bit OR'd with
+    // `%Object.prototype%`'s (every family inherits it): Array (agent slot
+    // INTRINSIC_PROTO+2) and Function (+1) each add the shared Object word.
     assert_eq!(
         proto.matches(PATCHED).count(),
-        2,
-        "a prototype read proves Array (byte 2) and Function (byte 1):\n{proto}"
+        4,
+        "a prototype read proves Array (byte 2) and Function (byte 1), each \
+         with %Object.prototype%:\n{proto}"
     );
+    for slot in ["i64 48", "i64 40", "i64 32"] {
+        assert!(
+            proto.contains(&format!("getelementptr i8, ptr @PERRY_AGENT_PTRS, {slot}")),
+            "the Array, Function and Object intrinsics are all tested ({slot}):\n{proto}"
+        );
+    }
     assert!(
         proto.contains("@js_builtin_proto_generic_call("),
         "and its generic arm reads %Array.prototype%:\n{proto}"

@@ -476,6 +476,14 @@ pub unsafe extern "C" fn perry_component_frame_call(
         frame.add(value)
     });
     drop(values);
+    // A reactor has no command event loop. Complete a job checkpoint after
+    // a successful export while its arguments and result remain rooted in
+    // this frame, before the C adapter reads them. This delivers resource
+    // finalizers recorded by explicit or automatic collection as ordinary
+    // jobs; it does not wait for timers, I/O or asynchronous WIT results.
+    frame(pointer).guard(|_| {
+        crate::promise::microtasks::js_promise_run_microtasks_checkpoint();
+    });
     result
 }
 

@@ -109,6 +109,11 @@ fn entry_opts() -> CompileOptions {
     }
 }
 
+/// Where an array literal's birth begins in the emitted IR. A literal is born
+/// by the inline nursery bump (the `arrlit.fast`/`arrlit.slow` diamond, its
+/// outlined arm `js_inline_arena_slow_alloc`), not by a `js_array_alloc` call.
+const ARRAY_BIRTH: &str = "label %arrlit.fast.";
+
 fn shadow_hygiene_module() -> Module {
     Module {
         script_global_functions: Vec::new(),
@@ -720,9 +725,9 @@ fn function_shadow_slots_clear_dead_values_and_skip_numeric_roots() {
         .map(|offset| dead_write + offset)
         .expect("dead shadow slot should be cleared after its last top-level statement");
     let live_alloc = ir[dead_clear..]
-        .find("call i64 @js_array_alloc")
+        .find(ARRAY_BIRTH)
         .map(|offset| dead_clear + offset)
-        .expect("later allocation should remain after dead slot clear");
+        .unwrap_or_else(|| panic!("later allocation should remain after dead slot clear:\n{ir}"));
 
     assert!(dead_write < dead_clear);
     assert!(dead_clear < live_alloc);
@@ -838,9 +843,9 @@ fn entry_module_top_level_shadow_slots_update_and_clear() {
         .map(|offset| dead_write + offset)
         .expect("top-level dead shadow slot should be cleared after last use");
     let later_alloc = main_ir[dead_clear..]
-        .find("call i64 @js_array_alloc")
+        .find(ARRAY_BIRTH)
         .map(|offset| dead_clear + offset)
-        .expect("later allocation should remain after dead slot clear");
+        .unwrap_or_else(|| panic!("later allocation should remain after dead slot clear:\n{ir}"));
 
     assert!(dead_write < dead_clear);
     assert!(dead_clear < later_alloc);
@@ -1040,8 +1045,8 @@ fn reassigned_any_from_number_to_pointer_reserves_and_updates_shadow_slot() {
         "Any local with a later pointer write must reserve a shadow slot"
     );
     let array_alloc = fn_ir
-        .find("call i64 @js_array_alloc")
-        .expect("pointer reassignment should allocate an array");
+        .find(ARRAY_BIRTH)
+        .unwrap_or_else(|| panic!("pointer reassignment should allocate an array:\n{ir}"));
     let slot_update = fn_ir[array_alloc..]
         .find("call void @js_shadow_slot_bind(i32 0, ptr %")
         .map(|offset| array_alloc + offset)

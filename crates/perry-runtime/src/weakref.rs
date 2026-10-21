@@ -491,21 +491,26 @@ pub extern "C" fn js_finreg_new(callback: f64) -> *mut ObjectHeader {
     // #1766: sentinel-name internal slots so `(fr as any).callback` /
     // `.entries` return `undefined` like Node.
     let packed = b"__perry_fr_callback\0__perry_fr_entries\0";
-    let obj = js_object_alloc_with_shape(FINREG_SHAPE_ID, 2, packed.as_ptr(), packed.len() as u32);
+    let obj = scope.root_raw_mut_ptr(js_object_alloc_with_shape(
+        FINREG_SHAPE_ID,
+        2,
+        packed.as_ptr(),
+        packed.len() as u32,
+    ));
     js_object_set_field(
-        obj,
+        obj.get_raw_mut_ptr(),
         FINREG_CALLBACK_FIELD as u32,
         JSValue::from_bits(callback_handle.get_nanbox_u64()),
     );
     let entries_arr = js_array_alloc(0);
     js_object_set_field(
-        obj,
+        obj.get_raw_mut_ptr(),
         FINREG_ENTRIES_FIELD as u32,
         JSValue::array_ptr(entries_arr),
     );
     unsafe {
-        (*obj).class_id = CLASS_ID_FINALIZATION_REGISTRY;
-        crate::object::shapes::restamp_object_proto_id(obj);
+        (*obj.get_raw_mut_ptr::<ObjectHeader>()).class_id = CLASS_ID_FINALIZATION_REGISTRY;
+        crate::object::shapes::restamp_object_proto_id(obj.get_raw_mut_ptr());
     }
     // #6182: the FinalizationRegistry itself is the registered holder (not its
     // per-`register()` records). The copied-minor weak pass dispatches on
@@ -515,8 +520,8 @@ pub extern "C" fn js_finreg_new(callback: f64) -> *mut ObjectHeader {
     // cleanup job (the #6192 automatic-cycle behavior). A registry that is
     // created but never `.register()`ed processes an empty entries array (a
     // cheap no-op) and is pruned when it dies.
-    weak_holder_register(obj);
-    obj
+    weak_holder_register(obj.get_raw_mut_ptr());
+    obj.get_raw_mut_ptr()
 }
 
 fn js_finreg_record_new(target: f64, held: f64, token: f64) -> *mut ObjectHeader {
@@ -1226,12 +1231,23 @@ unsafe fn process_finreg_record_after_mark(
 
 pub(crate) fn queue_pending_finalization_callbacks_after_gc() {
     let jobs = PENDING_FINALIZATION_JOBS.with(|jobs| std::mem::take(&mut *jobs.borrow_mut()));
-    for job in jobs {
-        let scope = crate::gc::RuntimeHandleScope::new();
-        let registry = scope.root_nanbox_f64(job.registry);
-        let record = scope.root_nanbox_f64(job.record);
-        let callback = scope.root_nanbox_f64(job.callback);
-        let held = scope.root_nanbox_f64(job.held);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    // The pending-jobs scanner no longer owns this snapshot. Queueing a tick
+    // allocates and can invoke an async_hooks init callback, so root EVERY job
+    // before delivering the first one, including records of other registries.
+    let rooted: Vec<_> = jobs
+        .iter()
+        .map(|job| {
+            (
+                scope.root_nanbox_f64(job.registry),
+                scope.root_nanbox_f64(job.record),
+                scope.root_nanbox_f64(job.callback),
+                scope.root_nanbox_f64(job.held),
+            )
+        })
+        .collect();
+    drop(jobs);
+    for (registry, record, callback, held) in rooted {
         let callback_ptr = js_nanbox_get_pointer(callback.get_nanbox_f64()) as usize;
         if callback_ptr >= 0x1000 && crate::closure::is_closure_ptr(callback_ptr) {
             let held_arg = held.get_nanbox_f64();
@@ -1258,7 +1274,9 @@ fn remove_finalization_record_from_registry(registry: f64, record: f64) {
     if reg_ptr.is_null() {
         return;
     }
-    let entries_key = crate::string::js_string_from_bytes(b"__perry_fr_entries".as_ptr(), 18);
+    let (entries_key, registry) = registry_handle
+        .across_nanbox(|| crate::string::js_string_from_bytes(b"__perry_fr_entries".as_ptr(), 18));
+    let reg_ptr = js_nanbox_get_pointer(registry) as *mut ObjectHeader;
     let entries_val = js_object_get_field_by_name(reg_ptr, entries_key);
     let entries_ptr = (entries_val.bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ArrayHeader;
     if entries_ptr.is_null() {

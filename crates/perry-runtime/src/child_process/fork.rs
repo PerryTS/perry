@@ -58,9 +58,7 @@ pub extern "C" fn js_child_process_fork(module_ptr: i64, args_ptr: i64, opts_ptr
         })
         .or_else(|| {
             (entry_path.as_deref() == Some(module.as_str()))
-                .then(|| std::env::current_exe().ok())
-                .flatten()
-                .map(|path| path.to_string_lossy().into_owned())
+                .then(crate::process::process_exec_path_string)
         })
         .unwrap_or_else(|| "node".to_string());
 
@@ -203,13 +201,8 @@ pub extern "C" fn js_child_process_fork(module_ptr: i64, args_ptr: i64, opts_ptr
     cp_set_field(cp, b"spawnfile", cp_box_string(&exec_path));
 
     // Build the command: <execPath> [execArgv] <module> [args].
-    let native_self = std::env::current_exe()
-        .ok()
-        .map(|path| path.to_string_lossy().into_owned())
-        .is_some_and(|path| {
-            path == exec_path
-                && (module == exec_path || entry_path.as_deref() == Some(module.as_str()))
-        });
+    let native_self = crate::process::process_exec_path_string() == exec_path
+        && (module == exec_path || entry_path.as_deref() == Some(module.as_str()));
     let mut command = Command::new(&exec_path);
     let native_exec_argv = if native_self {
         command.args(&arg_strs);

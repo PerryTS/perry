@@ -226,7 +226,7 @@ fn artifact_records_write_barrier_child_js_value_bits() {
 }
 
 #[test]
-fn artifact_records_raw_numeric_class_field_f64_fast_paths_and_fallback_reasons() {
+fn artifact_records_unproven_class_field_store_claims_no_raw_f64_facts() {
     // `x = 0`: a number field is an F64 birth lane only when the construction
     // writes it, as real classes do.
     let point = class(
@@ -258,70 +258,41 @@ fn artifact_records_raw_numeric_class_field_f64_fast_paths_and_fallback_reasons(
 
     let artifact = compile_artifact_json_for_module(module);
     let records = artifact["records"].as_array().unwrap();
+    // A declared-`number` field written through a class-TYPED PARAMETER is not
+    // a proof of the receiver's layout (an annotation is never a proof, and a
+    // class-field store is the static-key store site: #12483), so the artifact
+    // must NOT claim a raw-f64 slot store, load, layout fact or barrier
+    // elision for it. The store is recorded as the dynamic property set on
+    // boxed JSValue bits; the layout probe and the complete `[[Set]]` own its
+    // semantics and its write barrier.
+    for consumer in [
+        "class_field_set.raw_f64_store",
+        "class_field_get.raw_f64_load",
+        "write_barrier.elided_raw_f64_class_field",
+    ] {
+        assert!(
+            !records.iter().any(|record| record["consumer"] == consumer),
+            "an unproven class-typed receiver must not record `{consumer}`:\n{artifact:#}"
+        );
+    }
     assert!(
         records.iter().any(|record| {
-            record["expr_kind"] == "ClassFieldSet"
-                && record["consumer"] == "class_field_set.raw_f64_store"
-                && record["native_rep_name"] == "f64"
-                && record["access_mode"] == "checked_native"
-                && record_has_raw_f64_layout_fact(record, "consumed_facts", "consumed")
-                && record_has_note(
-                    record,
-                    "receiver_proof=declared_named_receiver_guarded_exact_class"
-                )
-                && record_has_note(record, "field_layout=raw_f64_slot_array")
-                && record_has_note(record, "pointer_bitmap=non_pointer")
+            record["expr_kind"] == "PropertySet"
+                && record["consumer"] == "property_set.dynamic_value_bits"
+                && record["native_rep_name"] == "js_value_bits"
+                && record_has_note(record, "boxed_at=dynamic_property_set_helper_edge")
         }),
-        "expected raw numeric class field f64 store record with exact receiver proof:\n{artifact:#}"
+        "expected the store to be recorded as a dynamic property set on JSValue bits:\n{artifact:#}"
     );
-    assert!(
-        records.iter().any(|record| {
-            record["expr_kind"] == "ClassFieldGet"
-                && record["consumer"] == "class_field_get.raw_f64_load"
-                && record["native_rep_name"] == "f64"
-                && record["access_mode"] == "checked_native"
-                && record_has_raw_f64_layout_fact(record, "consumed_facts", "consumed")
-                && record_has_note(
-                    record,
-                    "receiver_proof=declared_named_receiver_guarded_exact_class",
-                )
-                && record_has_note(record, "field_layout=raw_f64_slot_array")
-                && record_has_note(record, "pointer_bitmap=non_pointer")
-        }),
-        "expected raw numeric class field f64 load record with exact receiver proof:\n{artifact:#}"
+    let summary = &artifact["summary"];
+    assert_eq!(
+        summary["raw_f64_layout_fact_counts"]["consumed"].as_u64(),
+        Some(0),
+        "no raw-f64 layout fact may be consumed for an unproven receiver:\n{artifact:#}"
     );
-    assert!(
-        records.iter().any(|record| {
-            record["expr_kind"] == "WriteBarrierElided"
-                && record["consumer"] == "write_barrier.elided_raw_f64_class_field"
-                && record["native_rep_name"] == "f64"
-                && record_has_note(record, "reason=raw_f64_class_field_pointer_free")
-                && record_has_note(record, "pointer_bitmap=non_pointer")
-        }),
-        "expected pointer-free raw numeric class field store to record barrier elision:\n{artifact:#}"
-    );
-    assert!(
-        records.iter().any(|record| {
-            record["access_mode"] == "dynamic_fallback"
-                && record["materialization_reason"] == "runtime_api"
-                && record["fallback_reason"] == "runtime_api"
-                && record_has_raw_f64_layout_fact(record, "rejected_facts", "rejected")
-                && record_has_raw_f64_layout_fact(record, "rejected_facts", "invalidated")
-        }),
-        "expected boxed raw-field fallback reason records:\n{artifact:#}"
-    );
-    assert!(
-        artifact["summary"]["raw_f64_layout_fact_counts"]["consumed"]
-            .as_u64()
-            .unwrap_or(0)
-            >= 2,
-        "expected raw-f64 layout consumed summary:\n{artifact:#}"
-    );
-    assert!(
-        artifact["summary"]["write_barrier_elided_count"]
-            .as_u64()
-            .unwrap_or(0)
-            >= 1,
-        "expected raw numeric class-field barrier elision summary:\n{artifact:#}"
+    assert_eq!(
+        summary["write_barrier_elided_count"].as_u64(),
+        Some(0),
+        "no barrier may be elided on the strength of an unproven receiver:\n{artifact:#}"
     );
 }

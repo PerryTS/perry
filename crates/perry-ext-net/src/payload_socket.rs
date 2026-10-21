@@ -1223,14 +1223,16 @@ pub(crate) fn end(owner: f64, chunk: f64, encoding: f64, callback: f64) -> f64 {
     let chunk = scope.root_nanbox(chunk);
     let encoding = scope.root_nanbox(encoding);
     let callback = scope.root_nanbox(callback);
-    let (chunk_value, callback_value) = if is_callback(chunk.get()) {
-        (p::undefined(), chunk.get())
+    // Normalize end's overload before write can interpret an encoding as its own callback.
+    let (chunk_value, encoding_value, callback_value) = if is_callback(chunk.get()) {
+        (p::undefined(), p::undefined(), chunk.get())
     } else if is_callback(encoding.get()) {
-        (chunk.get(), encoding.get())
+        (chunk.get(), p::undefined(), encoding.get())
     } else {
-        (chunk.get(), callback.get())
+        (chunk.get(), encoding.get(), callback.get())
     };
     let chunk = scope.root_nanbox(chunk_value);
+    let encoding = scope.root_nanbox(encoding_value);
     let callback = scope.root_nanbox(callback_value);
     let socket = link(owner.get());
     let _account = p::AccountSocket(socket);

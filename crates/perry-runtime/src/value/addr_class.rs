@@ -448,12 +448,17 @@ pub(crate) unsafe fn try_read_tracked_arena_header_of_type(
 
 /// Test-only count of tracked-resolver probes, so a fast path can pin that
 /// it answered without one.
+///
+/// Per thread: it is read as a before/after delta, so a process-wide counter
+/// would also count every concurrently running test's probes.
 #[cfg(test)]
-static TRACKED_HEADER_PROBES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+thread_local! {
+    static TRACKED_HEADER_PROBES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
 
 #[cfg(test)]
 pub(crate) fn tracked_header_probe_count_for_tests() -> u64 {
-    TRACKED_HEADER_PROBES.load(std::sync::atomic::Ordering::Relaxed)
+    TRACKED_HEADER_PROBES.with(std::cell::Cell::get)
 }
 
 /// Locate a `GcHeader` only after allocator-owned metadata proves that `addr`
@@ -560,7 +565,7 @@ unsafe fn tracked_gc_header_admitting(
     admit: impl Fn(u8) -> bool,
 ) -> Option<std::ptr::NonNull<GcHeader>> {
     #[cfg(test)]
-    TRACKED_HEADER_PROBES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    TRACKED_HEADER_PROBES.with(|probes| probes.set(probes.get() + 1));
     let Some((header_addr, storage)) = classify_tracked_gc_header_with(
         addr,
         |candidate| crate::arena::classify_heap_space_in_range(candidate).map(|(_, base, _)| base),

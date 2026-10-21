@@ -30,6 +30,9 @@ fn placement_capacity_and_native_output_copies() {
 
 #[test]
 fn large_concat_uses_native_store_and_preserves_buffer_identity() {
+    let Some(_isolated) = crate::test_support::isolated_process_guard() else {
+        return;
+    };
     let _lock = crate::gc::global_side_table_test_lock();
     crate::gc::register_runtime_handle_root_scanner_for_tests();
     let scope = crate::gc::RuntimeHandleScope::new();

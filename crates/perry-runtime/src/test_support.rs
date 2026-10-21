@@ -53,6 +53,45 @@ pub(crate) fn isolated_test(body: impl FnOnce()) {
     );
 }
 
+/// Marker line the isolated child prints when its test body has finished.
+#[must_use]
+pub(crate) struct IsolatedDone(String);
+
+impl Drop for IsolatedDone {
+    fn drop(&mut self) {
+        println!("perry isolated test completed: {}", self.0);
+    }
+}
+
+/// Statement form of [`isolated_test`], for a test whose body should not be
+/// re-indented into a closure:
+///
+/// ```ignore
+/// let Some(_isolated) = crate::test_support::isolated_process_guard() else {
+///     return;
+/// };
+/// ```
+///
+/// In the parent (the ordinary parallel run) this re-executes the test binary
+/// for just this test (`--exact`, one thread), asserts the child succeeded and
+/// printed its completion marker, and returns `None` so the caller returns. In
+/// the child it returns a guard that prints the marker when the body ends, so
+/// the parent can tell a body that ran from a filter that selected nothing.
+/// For tests that read a process-wide counter as a before/after delta
+/// (`PAYLOAD_FINALIZED`, `LIVE_BACKINGS`): no lock shared by a few tests can
+/// stop an unrelated test from moving such a counter, only owning the process
+/// can.
+pub(crate) fn isolated_process_guard() -> Option<IsolatedDone> {
+    const CHILD_ENV: &str = "PERRY_RUNTIME_ISOLATED_TEST_NAME";
+    let thread = std::thread::current();
+    let name = thread.name().expect("libtest must name the test thread");
+    if std::env::var(CHILD_ENV).ok().as_deref() == Some(name) {
+        return Some(IsolatedDone(name.to_string()));
+    }
+    isolated_test(|| unreachable!("the parent never runs the body"));
+    None
+}
+
 std::thread_local! {
     static PRISTINE_ARENA_FIXTURE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }

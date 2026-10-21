@@ -1,4 +1,8 @@
 //! Per-instance WASI Preview 2 capabilities. Nothing inherits ambient authority.
+#[cfg(test)]
+#[path = "wasi_network_tests.rs"]
+mod network_execution_tests;
+
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -60,6 +64,15 @@ pub(crate) struct State {
     table: ResourceTable,
 }
 
+impl State {
+    pub(crate) fn view(&mut self) -> WasiCtxView<'_> {
+        WasiCtxView {
+            ctx: &mut self.ctx,
+            table: &mut self.table,
+        }
+    }
+}
+
 impl WasiOptions {
     pub(crate) fn build(&self) -> Result<State> {
         let mut builder = WasiCtxBuilder::new();
@@ -112,10 +125,7 @@ impl WasiView for super::StoreData {
             .wasi
             .as_mut()
             .expect("WASI providers require explicit options");
-        WasiCtxView {
-            ctx: &mut state.ctx,
-            table: &mut state.table,
-        }
+        state.view()
     }
 }
 
@@ -289,3 +299,7 @@ mod provider_execution_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "wasi_contract_tests.rs"]
+mod contract_tests;

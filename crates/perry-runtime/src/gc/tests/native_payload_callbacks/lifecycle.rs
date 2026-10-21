@@ -40,6 +40,9 @@ fn subclass_attachment_reopens_the_same_cell_and_rejects_open_or_finalized() {
 
 #[test]
 fn l4_release_then_unrooted_sweep_finalizes_without_another_drop() {
+    let Some(_isolated) = crate::test_support::isolated_process_guard() else {
+        return;
+    };
     let _guard = CopyingNurseryTestGuard::new(0);
     let _reset = Reset::new();
     let _no_stack = ConservativeScanDisabledGuard::new();
@@ -230,6 +233,9 @@ fn reopen_preserves_object_cell_properties_and_serial_identity() {
 
 #[test]
 fn terminal_item_keeps_closed_owner_through_moves_and_reads_late_listener() {
+    let Some(_isolated) = crate::test_support::isolated_process_guard() else {
+        return;
+    };
     let _guard = CopyingNurseryTestGuard::new(0);
     let _reset = Reset::new();
     let _no_stack = ConservativeScanDisabledGuard::new();
@@ -284,6 +290,9 @@ fn terminal_item_keeps_closed_owner_through_moves_and_reads_late_listener() {
 
 #[test]
 fn l8_worker_discards_queued_items_before_finalization_without_dispatch() {
+    let Some(_isolated) = crate::test_support::isolated_process_guard() else {
+        return;
+    };
     let _guard = CopyingNurseryTestGuard::new(0);
     let _reset = Reset::new();
     let before = finalized();
@@ -358,6 +367,9 @@ fn l9_callback_throw_wins_over_deferred_close() {
 
 #[test]
 fn two_hundred_thousand_released_cells_have_flat_rss_and_exact_counts() {
+    let Some(_isolated) = crate::test_support::isolated_process_guard() else {
+        return;
+    };
     let _guard = CopyingNurseryTestGuard::new(0);
     let _reset = Reset::new();
     let _no_stack = ConservativeScanDisabledGuard::new();

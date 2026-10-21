@@ -1,4 +1,8 @@
 //! Constructor super lowering when the live heritage can change.
+#[cfg(test)]
+#[path = "super_constructor_no_heritage_tests.rs"]
+mod no_heritage_tests;
+
 use super::{lower_expr, FnCtx};
 use crate::types::{DOUBLE, I32, I64, PTR};
 use anyhow::Result;
@@ -26,6 +30,19 @@ pub(crate) fn lexical_class_id(ctx: &FnCtx<'_>, class: &Class) -> u32 {
 /// constructor has a whole-program no-relink proof. An own body handles its
 /// next edge itself, so it terminates this walk.
 pub(crate) fn requires_live(ctx: &FnCtx<'_>, class: &Class) -> bool {
+    // A class with no heritage has no super constructor, so nothing about a
+    // live-changing parent applies. The lookups below are keyed on a bare
+    // class name, and a type-only import cycle can register an entry under
+    // the name of a class this module DECLARES (#12889), which made an
+    // undeclared parent look live and emitted a super-construct that throws
+    // `Super constructor is not a constructor` at run time.
+    if class.extends_name.is_none()
+        && class.extends_expr.is_none()
+        && class.extends.is_none()
+        && class.native_extends.is_none()
+    {
+        return false;
+    }
     if ctx
         .imported_class_ctors
         .get(&class.name)

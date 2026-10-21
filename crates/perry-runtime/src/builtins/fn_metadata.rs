@@ -1108,9 +1108,12 @@ mod tests {
             js_register_function_name_static(key_image, b"imageFrame".as_ptr(), 10);
             js_register_function_name(key_owned, owned.as_ptr(), owned.len() as u32);
         }
-        assert_eq!(
-            function_name_registry_len().expect("registry lock"),
-            before + 2,
+        // At least two more: the registry is process-wide, and a test running
+        // beside this one may register names of its own meanwhile. Each of the
+        // two registrations above lands in a different map, and the length is
+        // their sum.
+        assert!(
+            function_name_registry_len().expect("registry lock") >= before + 2,
             "both maps count toward the resolver's staleness check"
         );
 

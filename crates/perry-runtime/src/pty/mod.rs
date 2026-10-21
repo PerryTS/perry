@@ -523,6 +523,9 @@ mod platform_impl {
         /// the reactor pump — what compiled TS does, minus codegen.
         #[test]
         fn js_pty_spawn_shell_data_and_exit() {
+            if !native::host_has_ptys() {
+                return;
+            }
             let _guard = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
             DATA_SINK.lock().unwrap().clear();
             *EXIT_SINK.lock().unwrap() = None;
@@ -579,6 +582,9 @@ mod platform_impl {
         /// kill(SIGTERM) must surface as `onExit {signal: 15}`.
         #[test]
         fn js_pty_kill_reports_signal() {
+            if !native::host_has_ptys() {
+                return;
+            }
             let _guard = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
             *EXIT_SINK.lock().unwrap() = None;
 

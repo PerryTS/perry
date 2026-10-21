@@ -1165,6 +1165,8 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
     method_sig("perry/gc", "collect", false, None, &[], TypeSpec::Void),
     method_sig("perry/gc", "minor", false, None, &[], TypeSpec::Number),
     method_sig("perry/gc", "idleHint", false, None, &[], TypeSpec::Bool),
+    method_sig("perry/component", "runComponentCommand", false, None,
+        &[p_any("bytes"), ParamSpec::Named { name: "options", ty: TypeSpec::Any, optional: true }], TypeSpec::Number),
     method_sig("perry/component", "loadComponent", false, None,
         &[p_any("bytes"), p_str("contract"), p_any("imports"), p_any("options")], TypeSpec::Any),
     method_sig("perry/component", "callComponent", false, None,

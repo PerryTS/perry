@@ -68,15 +68,30 @@ fn module_top_class_expr_keeps_the_shared_template() {
 
 #[test]
 fn native_module_parent_keeps_the_shared_template() {
-    // #10623: an implicit constructor over a native-module base forwards its
-    // `new` arguments only on the shared-template construct path.
+    // #10623: an implicit constructor over a native-module base must forward
+    // its `new` arguments to the base. That used to need the shared-template
+    // construct path; a native-module parent is now a fresh evaluation (as in
+    // node, `make() !== make()`) whose parent is the EVALUATED native export,
+    // and the construct path forwards the arguments through that parent. Pin
+    // the shape: a fresh evaluation carrying the evaluated native parent, and
+    // no static `New` of the template.
     let module = lower(
         r#"import { EventEmitter } from "node:events";
         function make() { return class extends EventEmitter {}; }"#,
     );
     let body = body_of(&module, "make");
     assert!(
-        !body.contains("ClassExprFresh{"),
-        "a native-module parent must stay on the shared template: {body}"
+        body.contains("ClassExprFresh{"),
+        "each evaluation of a native-parent class is a distinct class: {body}"
+    );
+    assert!(
+        body.contains(
+            "evaluated_parent:Some(Call{callee:ExternFuncRef{name:\"js_native_module_named_esm_export_value\""
+        ) && body.contains("args:[String(\"events\"),String(\"EventEmitter\")]"),
+        "the parent must be the evaluated native-module export: {body}"
+    );
+    assert!(
+        !body.contains("New{class_name:"),
+        "the class must not be constructed statically from the template: {body}"
     );
 }

@@ -173,7 +173,9 @@ mod tests {
         assert_eq!(emit(&mut am, a.entry(ai)), emit(&mut bm, b.entry(bi)));
         assert_eq!(am.to_ir(), bm.to_ir());
         let ir = am.to_ir();
-        assert!(ir.contains("i32 3, i32 5, i32 5, i32 0, i32 28"));
+        // units, byte length, capacity, 0, flags: the encoding-proof word is
+        // the validated-WTF-8 base (28), plus 1 for a lone surrogate below.
+        assert!(ir.contains("i32 3, i32 5, i32 5, i32 0, i32 28"), "{ir}");
         assert!(ir.contains("weak_odr constant"));
         assert!(!ir.contains("call "));
         let wi = a.intern_wtf8(b"\xed\xa0\x80");

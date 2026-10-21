@@ -33,10 +33,22 @@ use crate::hot_diag::{sink_from_env, write_sink, Sink};
 /// booleans: a thread that loses the resolve race under the two-boolean form
 /// answered "off" and dropped its events, which is the same class of error as
 /// a census reading a partial counter.
-static STATE: AtomicU8 = AtomicU8::new(0);
+///
+/// `STATE`, `MEMO_HITS`, `MINTS`, `CENSUS` and the `TC_*` counters are
+/// `per_test_global!`: the gate tests arm the census and then assert on its
+/// totals, so with process-wide storage every other test's concurrent shape
+/// mint landed in the armed census (and moved the counters) and the gate read
+/// the whole parallel suite instead of its own workload. Each test thread
+/// gets its own state in a test build; outside one these are the plain
+/// statics.
+per_test_global! {
+    static STATE: AtomicU8 = AtomicU8::new(0);
+}
 static SINK: OnceLock<Option<Sink>> = OnceLock::new();
-static MEMO_HITS: AtomicU64 = AtomicU64::new(0);
-static MINTS: AtomicU64 = AtomicU64::new(0);
+per_test_global! {
+    static MEMO_HITS: AtomicU64 = AtomicU64::new(0);
+    static MINTS: AtomicU64 = AtomicU64::new(0);
+}
 
 /// How a mint differs from the nearest descriptor already indexed under the
 /// same keys-array address.
@@ -184,7 +196,9 @@ struct Census {
     events: HashMap<&'static str, u64>,
 }
 
-static CENSUS: OnceLock<Mutex<Census>> = OnceLock::new();
+per_test_global! {
+    static CENSUS: OnceLock<Mutex<Census>> = OnceLock::new();
+}
 
 fn census() -> &'static Mutex<Census> {
     crate::once_init::get_or_init(&CENSUS, || Mutex::new(Census::default()))
@@ -248,24 +262,28 @@ pub(crate) enum TcMiss {
     Unstable,
 }
 
-static TC_HITS: AtomicU64 = AtomicU64::new(0);
-static TC_MISS_EMPTY: AtomicU64 = AtomicU64::new(0);
-static TC_MISS_COLLIDE: AtomicU64 = AtomicU64::new(0);
-static TC_MISS_PLACES: AtomicU64 = AtomicU64::new(0);
-static TC_MISS_UNSHARED: AtomicU64 = AtomicU64::new(0);
-static TC_MISS_TARGET_LEN: AtomicU64 = AtomicU64::new(0);
-static TC_MISS_UNSTABLE: AtomicU64 = AtomicU64::new(0);
-/// Hits the value class refused (charter step 5, T2): counted in `TC_HITS`
-/// too, since the lookup matched before the class guard ran.
-static TC_REP_REFUSED: AtomicU64 = AtomicU64::new(0);
+per_test_global! {
+    static TC_HITS: AtomicU64 = AtomicU64::new(0);
+    static TC_MISS_EMPTY: AtomicU64 = AtomicU64::new(0);
+    static TC_MISS_COLLIDE: AtomicU64 = AtomicU64::new(0);
+    static TC_MISS_PLACES: AtomicU64 = AtomicU64::new(0);
+    static TC_MISS_UNSHARED: AtomicU64 = AtomicU64::new(0);
+    static TC_MISS_TARGET_LEN: AtomicU64 = AtomicU64::new(0);
+    static TC_MISS_UNSTABLE: AtomicU64 = AtomicU64::new(0);
+    /// Hits the value class refused (charter step 5, T2): counted in `TC_HITS`
+    /// too, since the lookup matched before the class guard ran.
+    static TC_REP_REFUSED: AtomicU64 = AtomicU64::new(0);
+}
 
 pub(crate) fn note_transition_rep_refused() {
     if armed() {
         TC_REP_REFUSED.fetch_add(1, Ordering::Relaxed);
     }
 }
-static TC_INSERTS: AtomicU64 = AtomicU64::new(0);
-static TC_EVICTIONS: AtomicU64 = AtomicU64::new(0);
+per_test_global! {
+    static TC_INSERTS: AtomicU64 = AtomicU64::new(0);
+    static TC_EVICTIONS: AtomicU64 = AtomicU64::new(0);
+}
 
 #[cfg_attr(not(feature = "shape-mint-diag"), allow(dead_code))]
 #[inline]

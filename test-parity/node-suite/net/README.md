@@ -57,3 +57,14 @@ remain pending; see `EVIDENCE.md` for the source-only port boundary.
 
 2026-10-21: T101 recorded three raw-Node-exact half-open targets on NET_F99.
 See the dated self-verification record in `EVIDENCE.md` for its source and limits.
+
+## Successful end overloads
+
+`connection/end-callback-order.ts` retains the original successful shutdown
+scenario and compares callback-only, data/callback, data/UTF-8/callback, and
+repeated callback registrations while connecting and after connection. Owned
+numeric-loopback cases are bounded and print received bytes, callback counts,
+finish/close counts, and event order. Reusing one callback for two `end` calls
+must retain both registrations; this is not callback-identity deduplication.
+This fixture does not certify other string encodings or native shutdown
+cancellation/lifetime behavior.

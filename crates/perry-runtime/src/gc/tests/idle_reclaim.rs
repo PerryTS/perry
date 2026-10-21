@@ -646,6 +646,10 @@ fn idle_reclaim_full_reaches_the_allocator_purge() {
 /// one attempt per four collections inside a minute of idle).
 #[test]
 fn a_full_is_productive_on_swept_bytes_when_occupancy_cannot_move() {
+    // Priced from the process-wide old-generation size; see the mirror test.
+    let Some(_isolated) = crate::test_support::isolated_process_guard() else {
+        return;
+    };
     let _reducer = IdleReclaimTestGuard::new(0);
     // Price against the live occupancy, so the completion below sees no delta
     // at all — the production shape, reproduced without the fragmentation.
@@ -672,6 +676,13 @@ fn a_full_is_productive_on_swept_bytes_when_occupancy_cannot_move() {
 /// change cannot be satisfied by calling every full productive.
 #[test]
 fn a_full_that_freed_less_than_the_bar_still_backs_off() {
+    // The bar is priced from the process-wide old-generation size, which any
+    // concurrently running GC test moves between this test reading it and the
+    // cycle note reading it again: only an exclusively owned process can pin
+    // "one byte short of the bar".
+    let Some(_isolated) = crate::test_support::isolated_process_guard() else {
+        return;
+    };
     let _reducer = IdleReclaimTestGuard::new(0);
     let before = crate::arena::old_gen_in_use_bytes();
     set_old_in_use_at_start(before);

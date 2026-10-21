@@ -177,3 +177,65 @@ fn resource_from_another_instance_cannot_select_a_local_handle() {
         Some(json!(2))
     );
 }
+
+#[test]
+fn deferred_guest_cleanup_ignores_transferred_tokens_and_drops_live_owners_once() {
+    use crate::cleanup::CollectedResource;
+    let drops: Arc<Mutex<Vec<Value>>> = Arc::default();
+    let mut host = host(drops.clone());
+    for value in [31, 32] {
+        let resource = host
+            .call(INTERFACE, "[constructor]counter", &[json!(value)])
+            .unwrap()
+            .unwrap();
+        let token = resource["$resource"].as_str().unwrap().to_string();
+        if value == 31 {
+            host.call(INTERFACE, "consume", &[resource]).unwrap();
+        }
+        for attempt in 0..2 {
+            let mut released = false;
+            host.collect_resource(
+                CollectedResource::Guest {
+                    token: token.clone(),
+                },
+                &mut released,
+            )
+            .unwrap();
+            assert_eq!(released, value == 32 && attempt == 0);
+        }
+    }
+    host.dispose().unwrap();
+    assert_eq!(*drops.lock().unwrap(), [json!(31), json!(32)]);
+}
+
+#[test]
+fn deferred_destructor_failure_retires_ownership_before_reporting_the_error() {
+    use crate::cleanup::CollectedResource;
+    let drops: Arc<Mutex<Vec<Value>>> = Arc::default();
+    let observed = drops.clone();
+    let mut host = host_with_observer(Arc::new(move |args| {
+        observed.lock().unwrap().extend_from_slice(args);
+        bail!("deferred destructor failed")
+    }));
+    let resource = host
+        .call(INTERFACE, "[constructor]counter", &[json!(7)])
+        .unwrap()
+        .unwrap();
+    let token = resource["$resource"].as_str().unwrap().to_string();
+    let mut released = false;
+    assert!(host
+        .collect_resource(
+            CollectedResource::Guest {
+                token: token.clone()
+            },
+            &mut released
+        )
+        .is_err());
+    assert!(released);
+    released = false;
+    host.collect_resource(CollectedResource::Guest { token }, &mut released)
+        .unwrap();
+    assert!(!released);
+    host.dispose().unwrap();
+    assert_eq!(*drops.lock().unwrap(), [json!(7)]);
+}

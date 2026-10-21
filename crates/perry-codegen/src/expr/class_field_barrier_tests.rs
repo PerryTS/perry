@@ -281,6 +281,13 @@ pub(super) fn ir() -> String {
 
 /// Five boxed fields exceed the compact birth budget. Their constructor-free
 /// stores must still exercise the ordinary value/generation barrier tier.
+///
+/// The barrier-bearing prologue is the FAMILY birth's: a class born on its
+/// program family layout (`class_born_on_family`, which production compiles
+/// always have) whose complete prologue the emitted birth image cannot hold
+/// stores its fields from the `new` site with the barrier. The fixture
+/// therefore compiles with the program's real family layouts; a fresh
+/// nursery-bump birth (what an options-default compile gives) omits the barrier.
 pub(super) fn wide_prologue_ir() -> String {
     let mut module = probe_module();
     let class = &mut module.classes[0];
@@ -298,8 +305,15 @@ pub(super) fn wide_prologue_ir() -> String {
                 value: Box::new(Expr::LocalGet(PARAM_ID)),
             }));
     }
-    String::from_utf8(compile_module(&module, ir_opts()).expect("wide module compiles"))
-        .expect("LLVM IR should be UTF-8")
+    let mut opts = ir_opts();
+    opts.program_layouts = std::sync::Arc::new(crate::layout_families::compute(
+        [(module.name.as_str(), &module)],
+        true,
+        &Default::default(),
+    ));
+    let ir = String::from_utf8(compile_module(&module, opts).expect("wide module compiles"))
+        .expect("LLVM IR should be UTF-8");
+    ir
 }
 
 /// A class-field store is the static-key store site (#12483): the constructor's

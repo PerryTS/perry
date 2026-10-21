@@ -1531,12 +1531,16 @@ fn alloc_shape_id_of_kind(
 /// mint except a dictionary or exotic shape's.
 fn alloc_shape_id(proto_id: u64) -> Result<u32, ShapeIdExhausted> {
     let kind = proto_id_kind(proto_id);
+    #[cfg(test)]
+    note_thread_mint();
     alloc_shape_id_of_kind(&SHAPE_ID_NEXT[kind as usize], SITE_SHAPE_ID_END, kind)
 }
 
 /// An exotic-band ShapeId ([`EXOTIC_SHAPE_ID_BASE`]).
 fn alloc_exotic_shape_id(proto_id: u64) -> Result<u32, ShapeIdExhausted> {
     let kind = proto_id_kind(proto_id);
+    #[cfg(test)]
+    note_thread_mint();
     alloc_shape_id_of_kind(&EXOTIC_SHAPE_ID_NEXT[kind as usize], SHAPE_ID_END, kind)
 }
 
@@ -1547,17 +1551,31 @@ fn alloc_shape_id_for_generation(
     alloc_shape_id(proto_id)
 }
 
-/// The ordinary-band ids this process has handed out, as a counter.
+#[cfg(test)]
+thread_local! {
+    /// ShapeIds minted by THIS thread (test builds only).
+    static THREAD_SHAPE_MINTS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn note_thread_mint() {
+    THREAD_SHAPE_MINTS.with(|mints| mints.set(mints.get().wrapping_add(1)));
+}
+
+/// The ShapeIds the CALLING THREAD has minted, as a counter.
 ///
 /// Tests assert the DELTA across a workload, because ids come from a 2^30
 /// range that is never reused and parks (fail-stop) at the end: a path that
 /// mints one id per operation is a process-LIFETIME bug, not merely a memory
 /// cost, and nothing in the program's output ever reveals it.
+///
+/// Per thread rather than per process: libtest runs one thread per test, and
+/// a process-wide counter is moved by whichever other test happens to mint
+/// meanwhile, so a delta over it read the whole parallel suite instead of the
+/// workload (the id range itself is, and must stay, process-wide).
 #[cfg(test)]
 pub(crate) fn test_shape_id_counter() -> u32 {
-    SHAPE_ID_NEXT.iter().fold(0u32, |sum, next| {
-        sum.wrapping_add(next.load(std::sync::atomic::Ordering::Relaxed))
-    })
+    THREAD_SHAPE_MINTS.with(std::cell::Cell::get)
 }
 
 /// Get or create the exact structural descriptor. The public allocation and

@@ -920,7 +920,7 @@ pub extern "C" fn js_unsettled_top_level_await_exit() {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Mutex as StdMutex};
@@ -931,7 +931,21 @@ mod tests {
     /// transiently-due timer from one can't change another's wait
     /// budget. (`js_wait_for_event`'s budget is computed from global
     /// timer state — there is no per-thread injection point.)
+    ///
+    /// It also serializes every test that needs the PRIMARY agent's route
+    /// (the process-wide wake route one thread at a time may hold): the loop
+    /// tests here, `agent_loop`'s, and the child-process lifecycle fixtures all
+    /// claim it, so a test that holds it while waiting starves the others. Take
+    /// it through [`serial`], which tolerates poisoning so one failing test
+    /// does not fail every test queued behind it.
     pub(in crate::event_pump) static SERIAL: StdMutex<()> = StdMutex::new(());
+
+    /// Take [`SERIAL`], recovering from poisoning.
+    pub(crate) fn serial() -> std::sync::MutexGuard<'static, ()> {
+        SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
 
     /// A promise settled while promise jobs are already draining must not
     /// leave a redundant event-loop wake behind. The active runner consumes
@@ -939,7 +953,7 @@ mod tests {
     /// helper must still publish a wake.
     #[test]
     fn promise_progress_notify_is_suppressed_during_job_drain() {
-        let _g = SERIAL.lock().unwrap();
+        let _g = serial();
 
         NOTIFIED.store(false, Ordering::Release);
         js_notify_promise_progress();
@@ -990,7 +1004,7 @@ mod tests {
     /// idle cap (1 s).
     #[test]
     fn notify_wakes_within_5ms() {
-        let _g = SERIAL.lock().unwrap();
+        let _g = serial();
         // Consume any prior pending notify so this test starts clean.
         js_wait_for_event();
 
@@ -1026,7 +1040,7 @@ mod tests {
     /// Spec: a notify sent BEFORE the consumer waits is not lost.
     #[test]
     fn notify_before_wait_is_preserved() {
-        let _g = SERIAL.lock().unwrap();
+        let _g = serial();
         // Drain.
         js_wait_for_event();
 
@@ -1065,7 +1079,7 @@ mod tests {
     /// timers polluting the budget, and reaps its own timer afterward.
     #[test]
     fn wait_returns_when_timer_due() {
-        let _g = SERIAL.lock().unwrap();
+        let _g = serial();
         let mut last_elapsed = Duration::ZERO;
         let mut blocked_for_timer = false;
         for _ in 0..40 {
@@ -1122,7 +1136,7 @@ mod tests {
     /// of resets. That makes it deterministic, not flaky.
     #[test]
     fn sustained_budget_zero_spin_is_throttled() {
-        let _g = SERIAL.lock().unwrap();
+        let _g = serial();
         assert!(
             spin_throttle_enabled(),
             "throttle must be on by default for this test"
@@ -1225,7 +1239,7 @@ mod tests {
     /// budget-0 calls after the warm-up sleeps for the throttle delay.
     #[test]
     fn notified_interleave_does_not_mask_wedge() {
-        let _g = SERIAL.lock().unwrap();
+        let _g = serial();
         assert!(
             spin_throttle_enabled(),
             "throttle must be on by default for this test"

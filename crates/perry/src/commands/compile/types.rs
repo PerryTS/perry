@@ -196,6 +196,16 @@ pub struct CompileArgs {
     #[arg(long, value_name = "SPECIFIER=DIR")]
     pub asset_module: Vec<String>,
 
+    /// Resolve a module to the given source file, the way a bundler
+    /// plugin's onResolve hook maps a virtual module to a file
+    /// (`<specifier>=<file>`) or its onLoad hook replaces a module's source
+    /// (`<module-file>=<file>`, the module file written as a path starting
+    /// with `./`, `../` or `/`; the replacement's imports resolve from the
+    /// module file's location). Relative paths are taken from the nearest
+    /// package.json/perry.toml project root. Repeatable.
+    #[arg(long, value_name = "SPECIFIER=FILE")]
+    pub module_alias: Vec<String>,
+
     /// Enable type checking via tsgo (Microsoft's native TypeScript checker).
     /// Resolves cross-file types, interfaces, and generics for better optimization.
     /// Requires: npm install -g @typescript/native-preview
@@ -782,6 +792,11 @@ pub struct CompilationContext {
     pub file_loader_asset_names: HashMap<PathBuf, String>,
     /// Bare module specifier -> generated source and provenance.
     pub generated_asset_modules: BTreeMap<String, GeneratedAssetModule>,
+    /// `--module-alias` specifier -> canonical source file.
+    pub module_aliases: BTreeMap<String, PathBuf>,
+    /// `--module-alias` module file -> canonical replacement file. The
+    /// replacement's own imports resolve from the module file it replaces.
+    pub module_file_aliases: BTreeMap<PathBuf, PathBuf>,
     /// #1681 (Phase 3 of #1677): true when this is the build-time capture
     /// stage (the `current_exe` subprocess), so `precompile(EXPR)` sites
     /// emit their build-time value instead of substituting. Re-installed on
@@ -1333,6 +1348,8 @@ impl CompilationContext {
             file_loader_asset_paths: HashSet::new(),
             file_loader_asset_names: HashMap::new(),
             generated_asset_modules: BTreeMap::new(),
+            module_aliases: BTreeMap::new(),
+            module_file_aliases: BTreeMap::new(),
             precompile_capture: false,
             precompile_results: HashMap::new(),
             fast_math: false,

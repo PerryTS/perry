@@ -1,31 +1,44 @@
 //! Internal transport values. WIT remains the type authority: an untyped JSON
 //! number is never accepted for s64/u64, and every aggregate is checked against
 //! the component's actual canonical type before entering guest code.
+#[cfg(test)]
 use crate::resources::Resources;
 use anyhow::{bail, ensure, Context, Result};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
-use wasmtime::component::{Type, Val};
+use wasmtime::component::{ResourceAny, ResourceType, Type, Val};
 
+#[cfg(test)]
 pub(crate) fn lower(
     value: &Value,
     ty: &Type,
     resources: &Resources,
     transfers: &mut BTreeSet<String>,
 ) -> Result<Val> {
-    lower_at(value, ty, resources, transfers, 0)
+    lower_with(value, ty, &mut |value, ty, owned| {
+        let id = value["$resource"]
+            .as_str()
+            .context("expected component resource")?;
+        resources.get(id, ty, owned, transfers)
+    })
+}
+
+pub(crate) fn lower_with(
+    value: &Value,
+    ty: &Type,
+    resource: &mut impl FnMut(&Value, ResourceType, bool) -> Result<ResourceAny>,
+) -> Result<Val> {
+    lower_at(value, ty, resource, 0)
 }
 
 fn lower_at(
     value: &Value,
     ty: &Type,
-    resources: &Resources,
-    transfers: &mut BTreeSet<String>,
+    resource: &mut impl FnMut(&Value, ResourceType, bool) -> Result<ResourceAny>,
     depth: usize,
 ) -> Result<Val> {
     ensure!(depth < 128, "component value nesting exceeds 128");
-    let mut nested =
-        |value: &Value, ty: &Type| lower_at(value, ty, resources, transfers, depth + 1);
+    let mut nested = |value: &Value, ty: &Type| lower_at(value, ty, resource, depth + 1);
     macro_rules! integer {
         ($name:ident, $native:ty, $read:ident) => {
             Val::$name(
@@ -163,10 +176,7 @@ fn lower_at(
                 !matches!(ty, Type::Own(_)) || value["owned"] == true,
                 "a borrowed resource cannot be transferred as an owner"
             );
-            let id = value["$resource"]
-                .as_str()
-                .context("expected component resource")?;
-            Val::Resource(resources.get(id, *resource_ty, matches!(ty, Type::Own(_)), transfers)?)
+            Val::Resource(resource(value, *resource_ty, matches!(ty, Type::Own(_)))?)
         }
         _ => bail!("type is unsupported by the synchronous P2 transport: {ty:?}"),
     })
@@ -217,7 +227,17 @@ fn float_wire(value: f64) -> Value {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn lift(value: &Val, resources: &mut Resources) -> Result<Value> {
+    lift_with(value, &mut |value| {
+        Ok(json!({"$resource":resources.insert(value),"owned":value.owned()}))
+    })
+}
+
+pub(crate) fn lift_with(
+    value: &Val,
+    resource: &mut impl FnMut(ResourceAny) -> Result<Value>,
+) -> Result<Value> {
     let tagged = |tag: &str, value: Option<Value>| match value {
         Some(value) => json!({"tag":tag,"value":value}),
         None => json!({"tag":tag}),
@@ -238,25 +258,34 @@ pub(crate) fn lift(value: &Val, resources: &mut Resources) -> Result<Value> {
         Val::Char(v) => json!(v.to_string()),
         Val::List(v) | Val::Tuple(v) => Value::Array(
             v.iter()
-                .map(|v| lift(v, resources))
+                .map(|v| lift_with(v, resource))
                 .collect::<Result<_>>()?,
         ),
         Val::Record(v) => Value::Object(
             v.iter()
-                .map(|(k, v)| Ok((k.clone(), lift(v, resources)?)))
+                .map(|(k, v)| Ok((k.clone(), lift_with(v, resource)?)))
                 .collect::<Result<_>>()?,
         ),
-        Val::Variant(tag, v) => tagged(tag, v.as_deref().map(|v| lift(v, resources)).transpose()?),
+        Val::Variant(tag, v) => tagged(
+            tag,
+            v.as_deref().map(|v| lift_with(v, resource)).transpose()?,
+        ),
         Val::Option(v) => tagged(
             if v.is_some() { "some" } else { "none" },
-            v.as_deref().map(|v| lift(v, resources)).transpose()?,
+            v.as_deref().map(|v| lift_with(v, resource)).transpose()?,
         ),
         Val::Result(v) => match v {
-            Ok(v) => tagged("ok", v.as_deref().map(|v| lift(v, resources)).transpose()?),
-            Err(v) => tagged("err", v.as_deref().map(|v| lift(v, resources)).transpose()?),
+            Ok(v) => tagged(
+                "ok",
+                v.as_deref().map(|v| lift_with(v, resource)).transpose()?,
+            ),
+            Err(v) => tagged(
+                "err",
+                v.as_deref().map(|v| lift_with(v, resource)).transpose()?,
+            ),
         },
         Val::Flags(v) => json!(v),
-        Val::Resource(v) => json!({"$resource":resources.insert(*v),"owned":v.owned()}),
+        Val::Resource(v) => resource(*v)?,
         _ => bail!("value is unsupported by the synchronous P2 transport"),
     })
 }

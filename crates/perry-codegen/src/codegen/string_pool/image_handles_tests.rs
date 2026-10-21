@@ -96,7 +96,20 @@ fn executable_image_handles_are_boxed_at_runtime_for_relocation_limited_targets(
     assert!(linux.contains("add (i64 ptrtoint"));
     assert!(linux.contains("@perry_image_literal_0_6c69746572616c = weak_odr constant"));
     assert!(!linux.contains("js_nanbox_string"));
-    assert!(!linux.contains("__perry_agent_strings_ready_probe"));
+    // The agent-strings chunk exists on every target (it registers the
+    // property atoms once per agent), but where the handle is a link-time
+    // constant it only does that: nothing is boxed or stored at runtime.
+    let chunk = &linux[linux
+        .find("define void @__perry_agent_strings_probe_literal_chunk0()")
+        .expect("the chunk is emitted")..];
+    let chunk = &chunk[..chunk.find("\n}\n").unwrap()];
+    assert!(
+        chunk.contains(
+            "call void @js_string_register_property_atoms(ptr @perry_property_atoms_probe, i32 1)"
+        ) && !chunk.contains("js_nanbox_string")
+            && !chunk.contains("store double"),
+        "{chunk}"
+    );
 }
 
 #[test]

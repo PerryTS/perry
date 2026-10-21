@@ -20,7 +20,10 @@ use perry_codegen::{compile_module, CompileOptions};
 use perry_hir::types::Type;
 use perry_hir::{Class, ClassField, Expr, Function, Module, ModuleInitKind, Stmt};
 
-const CAPTURE_STACK: &str = "@js_error_subclass_capture_stack(";
+/// `super()` into a built-in Error base is the generic class-value super
+/// construct (the Error family has no arm of its own any more: the base is
+/// constructed through its class value, and `js_class_super_parent` names it).
+const SUPER_CONSTRUCT: &str = "@js_class_value_super_construct_site(";
 const FIELD_INSTALL: [&str; 2] = ["@js_class_field_add(", "@js_object_set_field_by_name("];
 
 fn ir_opts() -> CompileOptions {
@@ -208,9 +211,9 @@ fn field_install_offsets(ir: &str) -> Vec<usize> {
 /// Assert `body` installs exactly `expected` fields, all of them after the
 /// Error base's `super()` work.
 fn assert_installs_after_super(body: &str, expected: usize, what: &str) {
-    let super_at = body
-        .find(CAPTURE_STACK)
-        .unwrap_or_else(|| panic!("{what}: the Error super() arm must run:\n{body}"));
+    let super_at = body.find(SUPER_CONSTRUCT).unwrap_or_else(|| {
+        panic!("{what}: the super() construct of the Error base must run:\n{body}")
+    });
     let installs = field_install_offsets(body);
     assert_eq!(
         installs.len(),
@@ -280,8 +283,26 @@ fn an_error_rooted_chain_installs_each_level_once() {
     );
     let ir = ir_for(vec![mid, leaf], vec![Stmt::Expr(new_expr("Leaf"))]);
 
-    // Leaf's constructor inlines Mid's body: `m` and `n`, once each.
-    assert_installs_after_super(function_body(&ir, "Leaf_constructor"), 2, "Leaf ctor");
+    // Leaf's `super()` is checked against the parent it was compiled for. The
+    // DIRECT arm inlines Mid's body and installs `m` then `n`; the LIVE arm (the
+    // parent binding was replaced) constructs through the live parent, which
+    // installs `m` itself, so it installs only `n`. Three install sites, but
+    // each execution path installs every declared field exactly once.
+    let leaf = function_body(&ir, "Leaf_constructor");
+    assert_installs_after_super(leaf, 3, "Leaf ctor");
+    // By initializer value (`m = 1`, `n = 2`): `m` is installed once (direct
+    // arm only) and `n` twice (once per arm).
+    let installs_of = |value: &str| {
+        leaf.lines()
+            .filter(|l| l.contains("@js_class_field_add(") && l.trim_end().ends_with(value))
+            .count()
+    };
+    assert_eq!(installs_of(", double 1.0)"), 1, "m installs once:\n{leaf}");
+    assert_eq!(
+        installs_of(", double 2.0)"),
+        2,
+        "n installs once per arm:\n{leaf}"
+    );
     // Mid's own standalone symbol installs only Mid's field.
     assert_installs_after_super(function_body(&ir, "Mid_constructor"), 1, "Mid ctor");
 }
