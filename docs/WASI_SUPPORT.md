@@ -44,8 +44,9 @@ runtime bundle from the same pinned source revision as its compilers. Its
 manifest records the Perry version, source commit, target triple, archive
 size and SHA256. It contains no native stdlib or UI archives.
 
-The qualified release host profiles are Linux x86_64 GNU, macOS ARM64 and
-Windows x64. Their compiler builds enable `perry/target-wasi`, including later
+Release packaging enables WASI on three source-qualified host profiles:
+Linux x86_64 GNU, macOS ARM64 and Windows x64. Their compiler builds enable
+`perry/target-wasi`, including later
 extension-library builds that can relink the compiler. Their release archives
 place the WASI runtime under `wasm32-wasip2/release/` beside the executable,
 where the compiler discovers it automatically. Other release host profiles
