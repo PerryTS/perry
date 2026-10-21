@@ -184,6 +184,12 @@ static SIGTERM_PENDING: AtomicUsize = AtomicUsize::new(0);
 static SIGTERM_LISTENERS: AtomicUsize = AtomicUsize::new(0);
 #[cfg(unix)]
 static SIGTERM_INSTALLED: AtomicBool = AtomicBool::new(false);
+#[cfg(unix)]
+static SIGWINCH_PENDING: AtomicUsize = AtomicUsize::new(0);
+#[cfg(unix)]
+static SIGWINCH_LISTENERS: AtomicUsize = AtomicUsize::new(0);
+#[cfg(unix)]
+static SIGWINCH_INSTALLED: AtomicBool = AtomicBool::new(false);
 
 #[cfg(unix)]
 struct ProcessSignalSlot {
@@ -259,6 +265,14 @@ static PROCESS_SIGNAL_SLOTS: &[ProcessSignalSlot] = &[
         listeners: &SIGTERM_LISTENERS,
         installed: &SIGTERM_INSTALLED,
     },
+    // A TUI's resize listener (`process.on("SIGWINCH", …)`, opentui's).
+    ProcessSignalSlot {
+        name: "SIGWINCH",
+        number: libc::SIGWINCH,
+        pending: &SIGWINCH_PENDING,
+        listeners: &SIGWINCH_LISTENERS,
+        installed: &SIGWINCH_INSTALLED,
+    },
 ];
 
 #[cfg(unix)]
@@ -273,8 +287,14 @@ fn slot_by_number(number: libc::c_int) -> Option<&'static ProcessSignalSlot> {
         .find(|slot| slot.number == number)
 }
 
+/// The one `sigaction` handler of every process-signal slot. SIGWINCH is also
+/// `tty`'s window-change source (`stdout.on("resize")`), which installs this
+/// same handler, so whichever of the two installs last serves both.
 #[cfg(unix)]
-extern "C" fn process_signal_handler(sig: libc::c_int) {
+pub(crate) extern "C" fn process_signal_handler(sig: libc::c_int) {
+    if sig == libc::SIGWINCH {
+        crate::tty::note_window_change();
+    }
     if let Some(slot) = slot_by_number(sig) {
         slot.pending.fetch_add(1, Ordering::Release);
         let fd = SIGNAL_WAKE_WRITE_FD.load(Ordering::Relaxed);
@@ -393,7 +413,8 @@ static TURNLOOP_SIGNALS: AtomicUsize = AtomicUsize::new(0);
 /// derived from the signal number, because an `off()`/`on()` pair for the same
 /// signal produces two entries whose lifetimes overlap.
 #[cfg(unix)]
-static TURNLOOP_SIGNAL_IDS: [AtomicUsize; 9] = [
+static TURNLOOP_SIGNAL_IDS: [AtomicUsize; 10] = [
+    AtomicUsize::new(0),
     AtomicUsize::new(0),
     AtomicUsize::new(0),
     AtomicUsize::new(0),
@@ -411,7 +432,8 @@ static TURNLOOP_SIGNAL_IDS: [AtomicUsize; 9] = [
 /// that agent retires, [`release_signal_subscriptions_of_agent`] finds its
 /// slots here and unwinds them.
 #[cfg(unix)]
-static TURNLOOP_SIGNAL_OWNERS: [AtomicU64; 9] = [
+static TURNLOOP_SIGNAL_OWNERS: [AtomicU64; 10] = [
+    AtomicU64::new(0),
     AtomicU64::new(0),
     AtomicU64::new(0),
     AtomicU64::new(0),
@@ -653,7 +675,9 @@ fn uninstall_process_signal_handler(slot: &'static ProcessSignalSlot) {
             }
         }
         mark_on_turnloop(slot, false);
-    } else {
+    } else if slot.number != libc::SIGWINCH {
+        // SIGWINCH keeps the shared handler: `tty`'s resize source may still
+        // need it, and the default disposition ignores the signal anyway.
         unsafe {
             let mut sa: libc::sigaction = std::mem::zeroed();
             sa.sa_sigaction = libc::SIG_DFL;

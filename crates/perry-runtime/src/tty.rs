@@ -271,12 +271,12 @@ fn callback_ptr_from_value(value: f64) -> i64 {
 // SIGWINCH handler (Unix only)
 // ---------------------------------------------------------------------------
 
+/// Called from the shared SIGWINCH handler (`os::signal::process_signal_handler`).
+/// Async-signal-safe: ONLY set the atomic flag. Don't do ioctl here, don't
+/// touch JS state, don't allocate. The drain reads the flag and does the real
+/// work on the next event-loop tick.
 #[cfg(unix)]
-extern "C" fn sigwinch_handler(_sig: libc::c_int) {
-    // Async-signal-safe: ONLY set the atomic flag. Don't do ioctl here
-    // (TIOCGWINSZ is technically AS-safe but tradition says no), don't
-    // touch JS state, don't allocate. The drain reads the flag and
-    // does the real work on the next event-loop tick.
+pub(crate) fn note_window_change() {
     RESIZE_PENDING.store(true, Ordering::Release);
 }
 
@@ -290,7 +290,9 @@ fn install_sigwinch() {
     }
     unsafe {
         let mut sa: libc::sigaction = std::mem::zeroed();
-        sa.sa_sigaction = sigwinch_handler as *const () as usize;
+        // The process-signal handler, so `process.on("SIGWINCH")` and this
+        // resize source never replace each other's disposition.
+        sa.sa_sigaction = crate::os::signal::process_signal_handler as *const () as usize;
         // SA_RESTART so a stray SIGWINCH during a `read` doesn't return
         // EINTR — important for the readline byte-mode reader.
         sa.sa_flags = libc::SA_RESTART;
@@ -913,6 +915,7 @@ pub extern "C" fn js_tty_write_stream_new(fd: f64) -> f64 {
         0,
     );
     add_write_stream_listener_fields(obj);
+    refresh_write_stream_size(obj, fd as i32);
     ptr_value(obj)
 }
 
@@ -1063,13 +1066,21 @@ fn winsize_value(fd: i32) -> Option<(i32, i32)> {
     })
 }
 
-pub(crate) fn tty_write_stream_dimension(property: &str) -> Option<f64> {
-    let (cols, rows) = winsize_value(1)?;
-    match property {
-        "columns" => Some(cols as f64),
-        "rows" => Some(rows as f64),
-        _ => None,
+/// Node's `WriteStream` size: `columns` and `rows` are the stream's own data
+/// properties, set from its fd's window size at construction and by
+/// `_refreshSize` (Node's SIGWINCH listener). Reads of a stream value are then
+/// ordinary own-key reads that its shape answers; a failed size query leaves
+/// the properties as they were, as in Node.
+pub(crate) fn refresh_write_stream_size(obj: *mut ObjectHeader, fd: i32) {
+    if obj.is_null() {
+        return;
     }
+    let Some((cols, rows)) = winsize_value(fd) else {
+        return;
+    };
+    let _no_move = crate::gc::GcSuppressScope::new();
+    crate::object::js_object_set_field_by_name(obj, named_key(b"columns"), cols as f64);
+    crate::object::js_object_set_field_by_name(obj, named_key(b"rows"), rows as f64);
 }
 
 #[no_mangle]
@@ -1100,7 +1111,13 @@ pub extern "C" fn js_tty_write_stream_refresh_size(
     _closure: *const ClosureHeader,
     this: crate::closure::JsThis,
 ) -> f64 {
-    let _ = winsize_value(current_fd(1, this));
+    let fd = current_fd(1, this);
+    match this_object(this) {
+        Some(obj) => refresh_write_stream_size(obj, fd),
+        None => {
+            let _ = winsize_value(fd);
+        }
+    }
     TAG_UNDEFINED_F64
 }
 
@@ -1279,6 +1296,7 @@ pub extern "C" fn js_tty_resize_drain() -> i32 {
         CACHED_COLS.store(cols, Ordering::Relaxed);
         CACHED_ROWS.store(rows, Ordering::Relaxed);
     }
+    crate::os::refresh_tty_stream_sizes();
     let cb = RESIZE_CALLBACK.with(|c| *c.borrow());
     if let Some(cb_i64) = cb {
         let closure = cb_i64 as *const ClosureHeader;

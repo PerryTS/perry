@@ -254,6 +254,16 @@ static STDIN_END_ONCE: std::sync::Mutex<Vec<i64>> = std::sync::Mutex::new(Vec::n
 static STDIN_LISTENERS_ARMED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// fd 0 is the primary agent's: Node gives a Worker its own `process.stdin`,
+/// never the terminal. The byte buffer and every listener list here are
+/// process-global and hold closures of the heap that registered them, so only
+/// the primary agent registers into them, drains them or is kept alive by
+/// them. A worker's event loop draining them swallowed the main thread's input
+/// and ran main-heap closures on the worker thread.
+pub fn process_stdin_is_owned_here() -> bool {
+    crate::agent::current_agent() == crate::agent::PRIMARY_AGENT
+}
+
 fn arm_stdin_listeners() {
     // #11471: the hook must exist before the first entry does.
     static REGISTER_THREAD_EXIT_HOOK: std::sync::Once = std::sync::Once::new();
@@ -793,6 +803,9 @@ pub fn is_process_stdin_handle(handle: i64) -> bool {
 /// the keypress parser too, and lets `removeAllListeners("data")` remove the
 /// plumbing exactly as Node does.
 pub fn enable_process_stdin_keypress_events(callback: i64) {
+    if !process_stdin_is_owned_here() {
+        return;
+    }
     if STDIN_KEYPRESS_EVENTS_ENABLED.swap(true, std::sync::atomic::Ordering::AcqRel) {
         return;
     }
@@ -812,6 +825,9 @@ extern "C" fn process_stdin_add_listener(
     event: f64,
     callback: f64,
 ) -> f64 {
+    if !process_stdin_is_owned_here() {
+        return stdin_this_value();
+    }
     if let Some((on, _, _)) = stdin_ops_provider() {
         let name = stdin_event_name(event).unwrap_or_default();
         let cb = stdin_callback_ptr(callback);
@@ -830,6 +846,9 @@ extern "C" fn process_stdin_add_listener_once(
     event: f64,
     callback: f64,
 ) -> f64 {
+    if !process_stdin_is_owned_here() {
+        return stdin_this_value();
+    }
     if let Some((on, _, _)) = stdin_ops_provider() {
         let name = stdin_event_name(event).unwrap_or_default();
         let cb = stdin_callback_ptr(callback);
@@ -1045,7 +1064,10 @@ pub(crate) fn test_set_stdin_data_listener(cb: Option<i64>) {
 }
 
 pub fn stdin_listeners_keep_loop_alive() -> bool {
-    if !STDIN_LISTENERS_ARMED.load(std::sync::atomic::Ordering::Acquire) || stdin_is_detached() {
+    if !process_stdin_is_owned_here()
+        || !STDIN_LISTENERS_ARMED.load(std::sync::atomic::Ordering::Acquire)
+        || stdin_is_detached()
+    {
         return false;
     }
     let non_empty =
@@ -1124,7 +1146,7 @@ fn register_stdin_listener(
     is_once: bool,
 ) {
     let cb = stdin_callback_ptr(callback);
-    if cb == 0 {
+    if cb == 0 || !process_stdin_is_owned_here() {
         return;
     }
     let target = if is_once { once } else { persistent };
@@ -1330,6 +1352,9 @@ extern "C" fn process_stdin_resume(
 /// listeners (ink's flowing path) get the bytes directly; otherwise `readable`
 /// listeners are notified and pull via `read()`.
 pub fn pump_process_stdin() {
+    if !process_stdin_is_owned_here() {
+        return;
+    }
     // Deliver any buffered bytes as `'data'`/`'readable'` first, then — once the
     // reader has hit EOF and the buffer is empty — dispatch `'end'`/`'close'`.
     pump_stdin_data_chunks();
@@ -1341,6 +1366,9 @@ pub fn pump_process_stdin() {
 /// has exited. `stdin_push_bytes` can also populate the buffer without one.
 pub(crate) fn process_stdin_needs_pump() -> bool {
     use std::sync::atomic::Ordering;
+    if !process_stdin_is_owned_here() {
+        return false;
+    }
     STDIN_READER_STARTED.load(Ordering::Acquire)
         || (STDIN_EOF_SEEN.load(Ordering::Acquire) && !STDIN_END_FIRED.load(Ordering::Acquire))
         || STDIN_BUFFER.lock().map(|b| !b.is_empty()).unwrap_or(true)
@@ -1636,6 +1664,18 @@ pub extern "C" fn js_process_stdout() -> f64 {
         *slot as *mut crate::object::ObjectHeader
     });
     f64::from_bits(JSValue::pointer(obj as *const u8).bits())
+}
+
+/// Node's SIGWINCH listener on a TTY `process.stdout` / `process.stderr`
+/// (`_refreshSize`): re-read the window size into each built TTY stream's own
+/// `columns` / `rows`. Streams not built yet read it when they are.
+pub(crate) fn refresh_tty_stream_sizes() {
+    for (slot, fd) in [(&STDOUT_STREAM_SINGLETON, 1), (&STDERR_STREAM_SINGLETON, 2)] {
+        let obj = slot.with(|slot| *slot.borrow()) as *mut crate::object::ObjectHeader;
+        if !obj.is_null() && unsafe { (*obj).class_id } == crate::tty::CLASS_ID_TTY_WRITE_STREAM {
+            crate::tty::refresh_write_stream_size(obj, fd);
+        }
+    }
 }
 
 /// process.stderr -> stream object whose `.write(s)` writes `s` to fd 2.

@@ -1682,7 +1682,7 @@ pub extern "C" fn js_readline_stdin_on(event_ptr: *const StringHeader, callback:
     // (bypassing stdin_on_op) — the listener lists it fills are GC roots the
     // moving collector must rewrite.
     ensure_gc_scanner_registered();
-    if event_ptr.is_null() {
+    if event_ptr.is_null() || !perry_runtime::os::process_stdin_is_owned_here() {
         return undefined();
     }
     if STDIN_DESTROYED.load(Ordering::Acquire) {

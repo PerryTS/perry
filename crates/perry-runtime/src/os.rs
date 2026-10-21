@@ -838,6 +838,8 @@ mod process_stream_write;
 #[path = "os_process_streams.rs"]
 mod process_streams;
 pub(crate) use process_streams::process_stdin_needs_pump;
+pub(crate) use process_streams::refresh_tty_stream_sizes;
+pub use process_streams::process_stdin_is_owned_here;
 #[cfg(test)]
 pub(crate) use process_streams::test_set_stdin_data_listener;
 pub use process_streams::{
