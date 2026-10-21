@@ -3233,8 +3233,24 @@ pub(crate) mod verify {
             return;
         }
         let boxed = f64::from_bits(POINTER_TAG | obj as u64);
-        let reference =
-            crate::object::js_object_lookup_getter(boxed, f64::from_bits(key_bits)).to_bits();
+        let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+        let namespace_name = ((*(obj as *const ObjectHeader)).class_id
+            == crate::object::namespace_create::MODULE_NAMESPACE_CLASS_ID)
+            .then(|| {
+                crate::string::js_string_key_bytes(crate::JSValue::from_bits(key_bits), &mut sso)
+            })
+            .flatten();
+        let reference = match namespace_name {
+            // A namespace's live binding is an accessor inside and a data
+            // property to reflection (10.4.6.5): the reference is the
+            // complete own-descriptor walk beneath reflection.
+            Some(name) => {
+                crate::object::descriptors::namespace_binding_getter(obj as *mut ObjectHeader, name)
+            }
+            None => {
+                crate::object::js_object_lookup_getter(boxed, f64::from_bits(key_bits)).to_bits()
+            }
+        };
         let n = CHECKED.fetch_add(1, Relaxed) + 1;
         let agrees = if acc.get != 0 {
             reference == acc.get

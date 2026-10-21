@@ -666,12 +666,44 @@ pub(crate) fn register_static_layouts() {
             let Some(id) = layout_id_of_index(index as u32) else {
                 break;
             };
-            let got = register_one(desc, id);
+            let got = if (*desc).variant == crate::codegen_abi::LAYOUT_VARIANT_NAMESPACE {
+                reserve_namespace_layout(desc)
+            } else {
+                register_one(desc, id)
+            };
             // Every agent writes the same id (same seeds, same order).
             (*(std::ptr::addr_of_mut!((*desc).layout_id) as *const std::sync::atomic::AtomicU32))
                 .store(got, std::sync::atomic::Ordering::Relaxed);
         }
     }
+}
+
+/// A module namespace layout's id, drawn at startup in section order (so
+/// every agent draws the same one) without building its key list or shape:
+/// [`register_namespace_layout`] installs them at the namespace's birth. Most
+/// compiled namespaces are never built.
+unsafe fn reserve_namespace_layout(desc: *const PerryLayoutDesc) -> u32 {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    let word = AtomicU32::from_ptr(std::ptr::addr_of!((*desc).layout_id).cast_mut());
+    if let Some(id) = registered_layout_id(word.load(Ordering::Acquire)) {
+        return id;
+    }
+    debug_assert_eq!((*desc).proto, LAYOUT_PROTO_NULL);
+    let proposed = super::shapes::allocate_declared_layout_id(super::shapes::PROTO_ID_NULL);
+    match word.compare_exchange(LAYOUT_ID_CARRIED, proposed, Ordering::AcqRel, Ordering::Acquire) {
+        Ok(_) => proposed,
+        Err(other) => {
+            registered_layout_id(other).expect("a carried layout word holds the sentinel or a ShapeId")
+        }
+    }
+}
+
+/// The installed layout of module namespace descriptor `desc`, installing
+/// its key list and shape under the id startup reserved on the first birth
+/// in this agent; `None` when this runtime cannot represent it.
+pub(crate) unsafe fn register_namespace_layout(desc: *const PerryLayoutDesc) -> Option<u32> {
+    let id = register_one(desc, 0);
+    (id != 0).then_some(id)
 }
 
 /// The shape kind a descriptor's `kind` code declares, among the ordinary

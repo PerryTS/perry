@@ -836,11 +836,14 @@ pub(crate) unsafe fn own_property(obj_value: f64, key_value: f64) -> Option<OwnP
             .then(|| super::shapes::object_shape_descriptor(obj))
             .flatten()
         {
+            // A namespace's live binding is an accessor inside, a data
+            // property to reflection: the namespace arm below answers it.
             if matches!(
                 shape.object_kind,
                 super::shapes::ShapeObjectKind::Ordinary
                     | super::shapes::ShapeObjectKind::OrdinaryUnmarked
             ) && shape.proto_id != super::shapes::PROTO_ID_PER_OBJECT
+                && (*obj).class_id != MODULE_NAMESPACE_CLASS_ID
             {
                 let mut short = [0; crate::value::SHORT_STRING_MAX_LEN];
                 if let Some(name) = crate::string::js_string_key_bytes(
@@ -1016,9 +1019,22 @@ pub(crate) unsafe fn own_property(obj_value: f64, key_value: f64) -> Option<OwnP
         }
 
         if (*obj).class_id == MODULE_NAMESPACE_CLASS_ID {
+            // 10.4.6.5: an export is a data property holding the binding's
+            // value; a name the namespace does not export is no property.
+            ordinary_own_property(obj, key_rust.as_deref()?.as_bytes())?;
             return OwnProperty::public(module_namespace_own_property_descriptor(obj, key_str));
         }
         ordinary_own_property(obj, key_rust.as_deref()?.as_bytes())
+    }
+}
+
+/// The getter of module namespace `obj`'s live binding `name`: the internal
+/// accessor that reflection reports as a data property (10.4.6.5).
+/// `TAG_UNDEFINED` when `name` is no live binding of `obj`.
+pub(crate) unsafe fn namespace_binding_getter(obj: *mut ObjectHeader, name: &[u8]) -> u64 {
+    match ordinary_own_property(obj, name) {
+        Some(OwnProperty::Accessor(get, _, _)) => get.to_bits(),
+        _ => crate::value::TAG_UNDEFINED,
     }
 }
 

@@ -373,6 +373,8 @@ fn emit_image_descriptor(
     keys: &[(String, u64, u8)],
     family: u32,
     proto: &str,
+    variant: u16,
+    integrity: u8,
 ) {
     let count = keys.len();
     let cap = (count * 2).next_power_of_two().max(2);
@@ -406,8 +408,7 @@ fn emit_image_descriptor(
         index_items.join(", ")
     ));
     llmod.add_raw_global(format!(
-        "@{desc_name} = global {DESC_TY} {{ i32 {family}, i16 {}, i8 0, i8 0, i32 {}, i32 {}, i64 0, i64 {proto}, ptr @{keys_name}, i32 {count}, i32 {}, ptr @{index_name}, i32 0, i32 0, ptr null }}, section \"{sect}\", align 8",
-        crate::runtime_abi::LAYOUT_VARIANT_PROTOTYPE_IMAGE,
+        "@{desc_name} = global {DESC_TY} {{ i32 {family}, i16 {variant}, i8 0, i8 {integrity}, i32 {}, i32 {}, i64 0, i64 {proto}, ptr @{keys_name}, i32 {count}, i32 {}, ptr @{index_name}, i32 0, i32 0, ptr null }}, section \"{sect}\", align 8",
         count.max(1),
         LAYOUT_ID_CARRIED as i32,
         cap - 1
@@ -738,6 +739,7 @@ pub(crate) fn emit_module_layouts(
     output_type: &str,
     layouts: &ProgramLayouts,
     is_entry_module: bool,
+    namespace: &[crate::NamespaceEntry],
 ) -> usize {
     if !layouts_enabled(output_type, &llmod.target_triple) {
         return 0;
@@ -847,7 +849,16 @@ pub(crate) fn emit_module_layouts(
             Some(None) => "1".to_string(),
             Some(Some(fam)) => format!("ptrtoint (ptr @{fam} to i64)"),
         };
-        emit_image_descriptor(llmod, &sect, &image.desc_global, &keys, family, &proto);
+        emit_image_descriptor(
+            llmod,
+            &sect,
+            &image.desc_global,
+            &keys,
+            family,
+            &proto,
+            crate::runtime_abi::LAYOUT_VARIANT_PROTOTYPE_IMAGE,
+            0,
+        );
         llmod.add_raw_global(format!(
             "@{} = internal alias i32, getelementptr (i8, ptr @{}, i64 {DESC_LAYOUT_ID_OFFSET})",
             layout_id_global(&image.desc_global),
@@ -1060,6 +1071,42 @@ pub(crate) fn emit_module_layouts(
             ));
         }
     }
+    // The module's namespace object (ECMA-262 10.4.6): one carried layout,
+    // born complete (`js_create_namespace_layout`).
+    let triple = llmod.target_triple.clone();
+    if let Some(ns_keys) = namespace_layout(namespace, module_prefix, output_type, &triple) {
+        let mut keys: Vec<(String, u64, u8)> = ns_keys
+            .iter()
+            .map(|(k, attrs)| {
+                let name = atom(llmod, strings, &mut atoms, k)
+                    .expect("a namespace layout key is an atom (`namespace_layout`)");
+                (name, fnv1a(k.as_bytes()), *attrs)
+            })
+            .collect();
+        // 10.4.6: `@@toStringTag` is an own non-writable, non-enumerable,
+        // non-configurable data property holding "Module", after the names.
+        let (tag, tag_hash) = symbol_atom(
+            llmod,
+            strings,
+            &mut atoms,
+            module_prefix,
+            &create_families::ImageKey::WellKnown(NAMESPACE_TAG_SYMBOL),
+        );
+        keys.push((tag, tag_hash, NAMESPACE_TAG_ATTRS));
+        let desc = namespace_desc_symbol(module_prefix);
+        let family = (fnv1a(desc.as_bytes()) as u32) & 0x7FFF_FFFF;
+        emit_image_descriptor(
+            llmod,
+            &sect,
+            &desc,
+            &keys,
+            family,
+            "1",
+            crate::runtime_abi::LAYOUT_VARIANT_NAMESPACE,
+            crate::runtime_abi::LAYOUT_INTEGRITY_NON_EXTENSIBLE,
+        );
+        n += 1;
+    }
     // Append missing seeded atoms after existing layout atoms. This retains
     // the startup ordering of unrelated keys while covering spilled contents.
     for key in crate::codegen::static_shape_ids::module_seed_keys() {
@@ -1068,6 +1115,82 @@ pub(crate) fn emit_module_layouts(
 
     function_families::emit(llmod, strings, &mut atoms);
     n
+}
+
+/// The well-known symbol number of `Symbol.toStringTag`.
+const NAMESPACE_TAG_SYMBOL: u32 = 4;
+const _: () =
+    assert!(crate::runtime_abi::WELL_KNOWN_SYMBOLS[NAMESPACE_TAG_SYMBOL as usize].len() == 11);
+/// A namespace's `@@toStringTag` attributes: non-writable, non-enumerable,
+/// non-configurable data.
+const NAMESPACE_TAG_ATTRS: u8 = crate::runtime_abi::LAYOUT_KEY_NON_WRITABLE
+    | crate::runtime_abi::LAYOUT_KEY_NON_ENUMERABLE
+    | crate::runtime_abi::LAYOUT_KEY_NON_CONFIGURABLE;
+/// The value of a namespace's `@@toStringTag` (ECMA-262 10.4.6).
+pub(crate) const NAMESPACE_TAG: &str = "Module";
+
+/// The descriptor of module `prefix`'s namespace layout.
+pub(crate) fn namespace_desc_symbol(prefix: &str) -> String {
+    format!("perry_layout_ns_{prefix}")
+}
+
+/// Whether namespace entry `entry` of module `module_prefix` is a live
+/// binding: its key is an accessor whose getter reads the binding at access
+/// time. A variable's value can change after the namespace is built (and may
+/// be in its TDZ), and `export * as Self from "./self"` names this module's
+/// own namespace, which is stored only after it is built (#10160).
+pub(crate) fn namespace_entry_is_live(entry: &crate::NamespaceEntry, module_prefix: &str) -> bool {
+    match &entry.kind {
+        crate::NamespaceEntryKind::LocalVar { .. }
+        | crate::NamespaceEntryKind::ForeignVar { .. } => true,
+        crate::NamespaceEntryKind::NestedNamespace { source_prefix } => {
+            source_prefix == module_prefix
+        }
+        _ => false,
+    }
+}
+
+/// A module namespace object's compiler-owned layout (ECMA-262 10.4.6): its
+/// export names in entry order (the driver sorts them; slot = position),
+/// each with its attribute entry, followed in the descriptor by
+/// `@@toStringTag` ([`NAMESPACE_TAG`]). A live binding is a non-configurable
+/// enumerable accessor with a getter, every other export a writable,
+/// enumerable, non-configurable data property. The descriptor also says
+/// `null` [[Prototype]] and non-extensible.
+///
+/// `None` when this compile emits no layouts, a name repeats, or a name is
+/// no atom: then the namespace is built key by key. The populator and the
+/// descriptor emitter both ask this one function.
+pub(crate) fn namespace_layout(
+    entries: &[crate::NamespaceEntry],
+    module_prefix: &str,
+    output_type: &str,
+    target_triple: &str,
+) -> Option<Vec<(String, u8)>> {
+    use crate::runtime_abi::{
+        LAYOUT_KEY_ACCESSOR, LAYOUT_KEY_HAS_GET, LAYOUT_KEY_NON_CONFIGURABLE,
+        LAYOUT_KEY_NON_WRITABLE,
+    };
+    if !layouts_enabled(output_type, target_triple) {
+        return None;
+    }
+    let mut seen = std::collections::HashSet::with_capacity(entries.len());
+    let mut keys = Vec::with_capacity(entries.len());
+    for entry in entries {
+        if !key_is_atom(&entry.name) || !seen.insert(entry.name.as_str()) {
+            return None;
+        }
+        let attrs = if namespace_entry_is_live(entry, module_prefix) {
+            LAYOUT_KEY_ACCESSOR
+                | LAYOUT_KEY_HAS_GET
+                | LAYOUT_KEY_NON_WRITABLE
+                | LAYOUT_KEY_NON_CONFIGURABLE
+        } else {
+            LAYOUT_KEY_NON_CONFIGURABLE
+        };
+        keys.push((entry.name.clone(), attrs));
+    }
+    Some(keys)
 }
 
 /// Descriptor of a compiler-declared completed literal shape.

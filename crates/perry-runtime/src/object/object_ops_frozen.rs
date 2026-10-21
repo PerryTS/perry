@@ -799,6 +799,17 @@ pub extern "C" fn js_object_is_frozen(obj_value: f64) -> f64 {
         if obj.is_null() || (obj as usize) <= 0x10000 {
             return f64::from_bits(TAG_TRUE); // non-objects are vacuously frozen
         }
+        if (*obj).class_id == super::namespace_create::MODULE_NAMESPACE_CLASS_ID {
+            // 10.4.6.5: every export is a writable data property (its live
+            // binding's accessor is internal), so a namespace is frozen only
+            // when it exports nothing.
+            let names = super::js_object_keys(obj);
+            return f64::from_bits(if crate::array::js_array_length(names) == 0 {
+                TAG_TRUE
+            } else {
+                TAG_FALSE
+            });
+        }
         let gc = gc_header_for(obj);
         // Fast path: the FROZEN flag is authoritative when set.
         if (*gc)._reserved & crate::gc::OBJ_FLAG_FROZEN != 0 {

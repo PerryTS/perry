@@ -1470,3 +1470,71 @@ fn resolve_through_a_tdz_checked_const_read() {
         other => panic!("expected Set, got {other:?}"),
     }
 }
+
+fn named(m: &mut Module, name: &str) {
+    m.exports.push(Export::Named {
+        local: name.into(),
+        exported: name.into(),
+    });
+}
+
+/// ECMA-262 GetExportedNames: `export *` never re-exports `default`, and an
+/// explicit export of the module wins over a star export of the same name,
+/// whatever their declaration order.
+#[test]
+fn flatten_export_star_skips_default_and_loses_to_explicit() {
+    let mut inner = Module::new("inner");
+    named(&mut inner, "default");
+    named(&mut inner, "x");
+    named(&mut inner, "y");
+    let mut barrel = Module::new("barrel");
+    named(&mut barrel, "x");
+    barrel.exports.push(Export::ExportAll {
+        source: "inner".into(),
+    });
+    let map = std::collections::HashMap::from([
+        ("inner".to_string(), inner.clone()),
+        ("barrel".to_string(), barrel.clone()),
+    ]);
+    let lookup = |s: &str| map.get(s);
+    let flat = flatten_exports("barrel", &lookup);
+    let names: Vec<(&str, &str)> = flat
+        .iter()
+        .map(|e| (e.name.as_str(), e.source_module.as_str()))
+        .collect();
+    assert_eq!(names, vec![("x", "barrel"), ("y", "inner")]);
+}
+
+/// ResolveExport: a name two `export *` sources provide with different
+/// bindings is ambiguous and not exported; the same binding reached through
+/// both is not ambiguous.
+#[test]
+fn flatten_export_star_conflict_is_ambiguous() {
+    let mut a = Module::new("a");
+    named(&mut a, "dup");
+    named(&mut a, "shared");
+    let mut b = Module::new("b");
+    named(&mut b, "dup");
+    b.exports.push(Export::ReExport {
+        source: "a".into(),
+        imported: "shared".into(),
+        exported: "shared".into(),
+    });
+    let mut barrel = Module::new("barrel");
+    barrel
+        .exports
+        .push(Export::ExportAll { source: "a".into() });
+    barrel
+        .exports
+        .push(Export::ExportAll { source: "b".into() });
+    let map = std::collections::HashMap::from([
+        ("a".to_string(), a.clone()),
+        ("b".to_string(), b.clone()),
+        ("barrel".to_string(), barrel.clone()),
+    ]);
+    let lookup = |s: &str| map.get(s);
+    let flat = flatten_exports("barrel", &lookup);
+    let names: Vec<&str> = flat.iter().map(|e| e.name.as_str()).collect();
+    assert_eq!(names, vec!["shared"]);
+    assert_eq!(flat[0].source_module, "a");
+}

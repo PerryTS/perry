@@ -177,6 +177,127 @@ pub extern "C" fn js_create_namespace(
     }
 }
 
+/// A module namespace born in its compiler-owned final layout: `desc` is the
+/// module's namespace descriptor (`perry-codegen` `layout_desc::
+/// namespace_layout`): its export names in sorted order (ECMA-262 10.4.6,
+/// [[OwnPropertyKeys]]), slot = position, each key's attributes (a live
+/// binding is an accessor whose getter reads the binding; every other export
+/// a data property), then `@@toStringTag`, a `null` [[Prototype]], and born
+/// non-extensible. So the
+/// object carries its final shape from its first instruction: no key-add,
+/// attribute, prototype or integrity transition, and no shape is minted.
+///
+/// `values` holds one NaN-boxed value per key, in key order: the getter
+/// closure of an accessor key, the value of a data key, and last the
+/// `@@toStringTag` value "Module".
+///
+/// # Safety
+/// `desc` is a registered namespace descriptor of this program and `values`
+/// points at `desc.key_count` values.
+#[no_mangle]
+pub unsafe extern "C" fn js_create_namespace_layout(
+    desc: *const super::layout_desc::PerryLayoutDesc,
+    values: *const f64,
+) -> f64 {
+    use super::key_attrs::ENTRY_ACCESSOR;
+    let d = &*desc;
+    let count = d.key_count as usize;
+    let keys = if count == 0 {
+        &[][..]
+    } else {
+        std::slice::from_raw_parts(d.keys, count)
+    };
+    if super::layout_desc::register_namespace_layout(desc).is_none() {
+        // This runtime could not register the layout: the same namespace,
+        // built key by key from the descriptor's own names and attributes.
+        return namespace_from_unregistered_layout(keys, values);
+    }
+    // The values arrive in a caller stack buffer the collector does not
+    // scan, and each accessor's pair allocation can collect: root them all,
+    // then each pair, before the object exists.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let raw: Vec<f64> = if count == 0 {
+        Vec::new()
+    } else {
+        std::slice::from_raw_parts(values, count).to_vec()
+    };
+    let value_handles = scope.root_nanbox_f64_slice(&raw);
+    let mut words = Vec::with_capacity(count);
+    for (key, value) in keys.iter().zip(value_handles.iter()) {
+        if key.attrs & ENTRY_ACCESSOR != 0 {
+            let pair = super::accessor_pair::pair_new(super::accessor_pair::Accessor {
+                get: value.get_nanbox_u64(),
+                ..Default::default()
+            });
+            words.push(Some(scope.root_nanbox_u64(
+                crate::value::js_nanbox_pointer(pair as i64).to_bits(),
+            )));
+        } else {
+            words.push(None);
+        }
+    }
+    // Nothing below collects: the birth and its slot stores are one step.
+    let _no_gc = crate::gc::GcSuppressScope::new();
+    let obj = super::layout_desc::perry_alloc_layout(desc);
+    (*obj).class_id = MODULE_NAMESPACE_CLASS_ID;
+    let fields = obj
+        .cast::<u8>()
+        .add(std::mem::size_of::<ObjectHeader>())
+        .cast::<u64>();
+    let old = crate::arena::pointer_in_old_gen(obj as usize);
+    for (i, key) in keys.iter().enumerate() {
+        let bits = match &words[i] {
+            Some(pair) => pair.get_nanbox_u64(),
+            None => value_handles[i].get_nanbox_u64(),
+        };
+        let slot = fields.add(key.slot as usize);
+        // GC_STORE_AUDIT(INIT): a declared slot of the unpublished birth.
+        *slot = bits;
+        if old {
+            crate::gc::runtime_write_barrier_slot(obj as usize, slot as usize, bits);
+        }
+    }
+    crate::value::js_nanbox_pointer(obj as i64)
+}
+
+/// [`js_create_namespace_layout`] for a descriptor this runtime did not
+/// register: the generic per-key construction, from the descriptor's export
+/// names (its string atoms) and accessor bits.
+#[cold]
+unsafe fn namespace_from_unregistered_layout(
+    keys: &[super::layout_desc::PerryLayoutKey],
+    values: *const f64,
+) -> f64 {
+    let mut names = Vec::with_capacity(keys.len());
+    let mut lens = Vec::with_capacity(keys.len());
+    let mut live = Vec::with_capacity(keys.len());
+    let mut ordered = Vec::with_capacity(keys.len());
+    debug_assert!(keys.iter().enumerate().all(|(i, k)| k.slot as usize == i));
+    for (i, key) in keys.iter().enumerate() {
+        // `@@toStringTag` is the generic construction's own business.
+        if (*key.atom).kind != crate::codegen_abi::ATOM_KIND_STRING {
+            continue;
+        }
+        let s = (*key.atom).string;
+        names.push(crate::string::string_data(s));
+        lens.push((*s).byte_len as i32);
+        live.push(u8::from(key.attrs & super::key_attrs::ENTRY_ACCESSOR != 0));
+        ordered.push(*values.add(i));
+    }
+    js_create_namespace(
+        names.len() as i32,
+        names.as_ptr(),
+        lens.as_ptr(),
+        ordered.as_ptr(),
+        live.as_ptr(),
+    )
+}
+
+// The namespace descriptor's integrity byte is the runtime's flag.
+const _: () = assert!(
+    crate::codegen_abi::LAYOUT_INTEGRITY_NON_EXTENSIBLE as u16 == crate::gc::OBJ_FLAG_NO_EXTEND
+);
+
 #[cfg(test)]
 mod sso_tests_1781 {
     use super::*;

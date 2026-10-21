@@ -53,6 +53,11 @@ pub const LAYOUT_KEY_NON_CONFIGURABLE: u8 = 0x04;
 pub const LAYOUT_KEY_ACCESSOR: u8 = 0x08;
 pub const LAYOUT_KEY_HAS_GET: u8 = 0x10;
 pub const LAYOUT_KEY_HAS_SET: u8 = 0x20;
+/// `PerryLayoutDesc.integrity` of a layout born non-extensible (the runtime's
+/// `gc::OBJ_FLAG_NO_EXTEND`, pinned there): a module namespace object
+/// (ECMA-262 10.4.6) is born on such a layout, so no later
+/// `preventExtensions` transition mints a further shape.
+pub const LAYOUT_INTEGRITY_NON_EXTENSIBLE: u8 = 0x04;
 /// `PerryLayoutKey.attrs` of a private field's element (the runtime's
 /// `key_attrs::PRIVATE_FIELD_ENTRY`: `ENTRY_PRIVATE | ENTRY_NON_ENUMERABLE`):
 /// the key is the field's qualified private name, never a property. A class
@@ -85,6 +90,10 @@ pub const ATOM_KIND_BINDING_SYMBOL: u8 = 4;
 pub const LAYOUT_VARIANT_PROTOTYPE_IMAGE: u16 = 1;
 /// Ordinary function constructor family, with a live per-object prototype.
 pub const LAYOUT_VARIANT_FUNCTION_CONSTRUCTOR: u16 = 2;
+/// A module namespace object's layout. Startup only reserves its id; the
+/// namespace's birth installs it, so a module whose namespace is never built
+/// costs no key list and no shape.
+pub const LAYOUT_VARIANT_NAMESPACE: u16 = 3;
 /// The well-known symbols by number (`StaticAtom.index` of a kind-1 atom),
 /// spelled as `Symbol.<name>`.
 pub const WELL_KNOWN_SYMBOLS: [&str; 15] = [

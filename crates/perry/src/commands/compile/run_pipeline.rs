@@ -3283,6 +3283,9 @@ pub fn run_with_parse_cache(
                 });
             }
         }
+        // ECMA-262 10.4.6: a namespace's string keys are its export names
+        // in code-unit order; the namespace layout is that sequence.
+        entries.sort_by(|a, b| a.name.encode_utf16().cmp(b.name.encode_utf16()));
         per_module_namespace_entries.insert(target_path.clone(), entries);
     }
     // Namespace entries own their results; release the normalized edge views.

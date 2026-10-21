@@ -1359,6 +1359,7 @@ pub(super) fn emit_namespace_populator(
     entries: &[NamespaceEntry],
     key_globals: &[(String, usize)],
     module_prefix: &str,
+    output_type: &str,
 ) {
     debug_assert_eq!(entries.len(), key_globals.len());
     // Issue #842: side-effect-only dynamic-import targets land here
@@ -1370,12 +1371,24 @@ pub(super) fn emit_namespace_populator(
     // per-entry loop simply doesn't execute.
     let n = entries.len();
     let buf_len = n.max(1);
+    // The namespace's compiler-owned layout, when it has one: the object is
+    // born in its final shape and only the values are passed.
+    let layout = crate::layout_desc::namespace_layout(
+        entries,
+        module_prefix,
+        output_type,
+        ctx.target_triple,
+    )
+    .is_some();
 
     // Alloca the four parallel buffers — in the entry block, like every
     // alloca (#10463).
     let keys_buf = ctx.func.alloca_entry_array(PTR, buf_len);
     let lens_buf = ctx.func.alloca_entry_array(I32, buf_len);
-    let vals_buf = ctx.func.alloca_entry_array(DOUBLE, buf_len);
+    // A layout's last slot is `@@toStringTag`'s value.
+    let vals_buf = ctx
+        .func
+        .alloca_entry_array(DOUBLE, buf_len + usize::from(layout));
     let live_buf = ctx.func.alloca_entry_array(I8, buf_len);
 
     // #7210 (2): `vals_buf` is a plain stack alloca, not a shadow slot the
@@ -1398,13 +1411,17 @@ pub(super) fn emit_namespace_populator(
             let idx_str = format!("{}", i);
             let blk = ctx.block();
 
-            // keys[i] = @<key_global> as ptr
-            let key_slot = blk.gep(PTR, &keys_buf, &[(I64, &idx_str)]);
-            blk.store(PTR, &format!("@{}", key_global), &key_slot);
+            // The generic construction takes each key's name and length; a
+            // layout names them itself.
+            if !layout {
+                // keys[i] = @<key_global> as ptr
+                let key_slot = blk.gep(PTR, &keys_buf, &[(I64, &idx_str)]);
+                blk.store(PTR, &format!("@{}", key_global), &key_slot);
 
-            // key_lens[i] = byte_len
-            let len_slot = blk.gep(I32, &lens_buf, &[(I64, &idx_str)]);
-            blk.store(I32, &format!("{}", key_len), &len_slot);
+                // key_lens[i] = byte_len
+                let len_slot = blk.gep(I32, &lens_buf, &[(I64, &idx_str)]);
+                blk.store(I32, &format!("{}", key_len), &len_slot);
+            }
 
             // #10160: `export * as Self from "./self"` — this module's own
             // `@__perry_ns_<prefix>` is only stored after `js_create_namespace`
@@ -1416,13 +1433,12 @@ pub(super) fn emit_namespace_populator(
                 &entry.kind,
                 NamespaceEntryKind::NestedNamespace { source_prefix } if source_prefix == module_prefix
             );
-            let is_live_binding = is_self_namespace
-                || matches!(
-                    entry.kind,
-                    NamespaceEntryKind::LocalVar { .. } | NamespaceEntryKind::ForeignVar { .. }
-                );
-            let live_slot = blk.gep(I8, &live_buf, &[(I64, &idx_str)]);
-            blk.store(I8, if is_live_binding { "1" } else { "0" }, &live_slot);
+            if !layout {
+                let is_live_binding =
+                    crate::layout_desc::namespace_entry_is_live(entry, module_prefix);
+                let live_slot = blk.gep(I8, &live_buf, &[(I64, &idx_str)]);
+                blk.store(I8, if is_live_binding { "1" } else { "0" }, &live_slot);
+            }
 
             // Materialise the value per kind. We drop the `blk` borrow so
             // each sub-emission can re-borrow ctx mutably for runtime calls
@@ -1525,18 +1541,41 @@ pub(super) fn emit_namespace_populator(
     // aren't in `module_globals`. Register the address as a root here
     // so the object survives subsequent GC cycles.
     let n_str = format!("{}", n);
+    let tag = if layout {
+        let idx = ctx.strings.intern(crate::layout_desc::NAMESPACE_TAG);
+        Some(format!("@{}", ctx.strings.entry(idx).handle_global))
+    } else {
+        None
+    };
     let blk = ctx.block();
-    let result = blk.call(
-        DOUBLE,
-        "js_create_namespace",
-        &[
-            (I32, &n_str),
-            (PTR, &keys_buf),
-            (PTR, &lens_buf),
-            (PTR, &vals_buf),
-            (PTR, &live_buf),
-        ],
-    );
+    let result = if let Some(tag) = tag {
+        // The interned tag string: no call runs between this load and the
+        // birth that reads it.
+        let tag_value = blk.load(DOUBLE, &tag);
+        let tag_slot = blk.gep(DOUBLE, &vals_buf, &[(I64, &n_str)]);
+        blk.store(DOUBLE, &tag_value, &tag_slot);
+        let desc = format!(
+            "@{}",
+            crate::layout_desc::namespace_desc_symbol(module_prefix)
+        );
+        blk.call(
+            DOUBLE,
+            "js_create_namespace_layout",
+            &[(PTR, &desc), (PTR, &vals_buf)],
+        )
+    } else {
+        blk.call(
+            DOUBLE,
+            "js_create_namespace",
+            &[
+                (I32, &n_str),
+                (PTR, &keys_buf),
+                (PTR, &lens_buf),
+                (PTR, &vals_buf),
+                (PTR, &live_buf),
+            ],
+        )
+    };
     let ns_name = format!("__perry_ns_{}", module_prefix);
     crate::expr::emit_root_nanbox_store_on_block(blk, &result, &format!("@{}", ns_name));
     let addr_i64 = blk.ptrtoint(&format!("@{}", ns_name), I64);

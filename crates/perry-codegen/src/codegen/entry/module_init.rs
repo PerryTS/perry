@@ -658,6 +658,7 @@ pub(super) fn compile_module_init(
             &cross_module.namespace_entries,
             namespace_key_globals,
             module_prefix,
+            output_type,
         );
     }
 
