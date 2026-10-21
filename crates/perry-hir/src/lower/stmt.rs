@@ -842,33 +842,37 @@ fn lower_stmt_inner(
                                 ..
                             } = s
                             {
-                                let class_name = match (mod_name.as_str(), method.as_str()) {
-                                    ("net", "createConnection" | "connect") => Some("Socket"),
-                                    // tls.connect returns the same Socket class — reuses
-                                    // all the write/end/destroy/on/upgradeToTLS dispatch.
-                                    ("tls", "connect") => Some("Socket"),
-                                    // Issue #422: `new net.Socket()` lowers to a
-                                    // receiver-less `Expr::NativeMethodCall` whose
-                                    // method is the constructor name "Socket"; this
-                                    // arm registers the binding so `sock.connect/...`
-                                    // dispatches via the class-filtered entries.
-                                    ("net", "Socket") => Some("Socket"),
-                                    ("net", "Server") => Some("Server"),
-                                    ("net", "BlockList") => Some("BlockList"),
-                                    ("net", "SocketAddress") => Some("SocketAddress"),
-                                    ("vm", "SourceTextModule") => Some("SourceTextModule"),
-                                    ("vm", "SyntheticModule") => Some("SyntheticModule"),
-                                    _ => None,
-                                };
-                                if let Some(cn) = class_name {
-                                    let instance_module =
-                                        if mod_name == "vm" { "vm" } else { "net" };
+                                let socket_factory =
+                                    super::native_factory::native_factory_result_class(
+                                        mod_name, method,
+                                    )
+                                    .filter(|result| *result == ("net", "Socket"));
+                                let native_class = socket_factory.or_else(|| {
+                                    match (mod_name.as_str(), method.as_str()) {
+                                        // Issue #422: `new net.Socket()` lowers to a
+                                        // receiver-less `Expr::NativeMethodCall` whose
+                                        // method is the constructor name "Socket"; this
+                                        // arm registers the binding so `sock.connect/...`
+                                        // dispatches via the class-filtered entries.
+                                        ("net", "Socket") => Some(("net", "Socket")),
+                                        ("net", "Server") => Some(("net", "Server")),
+                                        ("net", "BlockList") => Some(("net", "BlockList")),
+                                        ("net", "SocketAddress") => Some(("net", "SocketAddress")),
+                                        ("vm", "SourceTextModule") => {
+                                            Some(("vm", "SourceTextModule"))
+                                        }
+                                        ("vm", "SyntheticModule") => {
+                                            Some(("vm", "SyntheticModule"))
+                                        }
+                                        _ => None,
+                                    }
+                                });
+                                if let Some((instance_module, cn)) = native_class {
                                     ctx.register_native_instance(
                                         name.clone(),
                                         instance_module.to_string(),
                                         cn.to_string(),
                                     );
-                                    let _ = mod_name; // suppress unused on tls branch
                                 }
                                 // Issue #577 — node:http / node:https / node:http2 server
                                 // factories. `const s = createServer(...)` (named import)

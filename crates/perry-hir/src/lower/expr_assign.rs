@@ -207,7 +207,20 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
             };
             // Check for NativeModule.method() call (e.g., MongoClient.connect(uri))
             if let ast::Expr::Call(call_expr) = inner_rhs {
-                if let ast::Callee::Expr(callee) = &call_expr.callee {
+                // Socket factories must agree with declarations and chains.
+                // Register before lowering the RHS so its callbacks see the
+                // same LocalId-scoped identity as later reads of the binding.
+                let socket_factory = super::native_factory::factory_call_class(ctx, call_expr)
+                    .filter(|result| *result == ("net", "Socket"));
+                if let Some((module_name, class_name)) = socket_factory {
+                    register_assignment_native_instance(
+                        ctx,
+                        var_name.clone(),
+                        module_name.to_string(),
+                        class_name.to_string(),
+                        false,
+                    );
+                } else if let ast::Callee::Expr(callee) = &call_expr.callee {
                     if let ast::Expr::Member(member) = callee.as_ref() {
                         if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
                             let obj_name = obj_ident.sym.as_ref();
