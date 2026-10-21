@@ -44,7 +44,7 @@ def main():
     env = os.environ.copy()
     env.update(PERRY_RUNTIME_DIR=str(runtime.parent), WASI_SDK_PATH=str(sdk),
                CARGO_TARGET_DIR=str(output / "rust-host-target"),
-               CARGO_BUILD_JOBS="4", CARGO_INCREMENTAL="0",
+               CARGO_BUILD_JOBS=env.get("CARGO_BUILD_JOBS", "4"), CARGO_INCREMENTAL="0",
                PERRY_CODEGEN_CPU_SLOTS="4", PERRY_NO_AUTO_OPTIMIZE="1")
     results = []
     # Clear a previous verdict before any build can fail.
@@ -55,7 +55,7 @@ def main():
         start = time.monotonic()
         try:
             with log.open("w") as stream:
-                completed = subprocess.run([str(x) for x in command], cwd=work,
+                completed = subprocess.run([str(x) for x in command], cwd=root if command[0] == "cargo" else work,
                     env=env, stdout=stream, stderr=subprocess.STDOUT, timeout=timeout)
             status = completed.returncode
         except (OSError, subprocess.TimeoutExpired) as error:
@@ -94,12 +94,12 @@ def main():
         return component
 
     component = build_guest(work)
-    run("build-rust-host", ["cargo", "build", "--release", "--manifest-path",
+    run("build-rust-host", ["cargo", "build", "--locked", "--release", "--manifest-path",
                             work / "rust-host/Cargo.toml"], timeout=1800)
     host = output / "rust-host-target/release" / ("perry-component-rust-host" + suffix)
     run("run-rust-host", [host, component], timeout=120,
         expected="PASS Perry component: Rust host, 51 typed calls, Unicode, bytes, guest GC, imports")
-    run("build-rust-logger", ["cargo", "build", "--release", "--target",
+    run("build-rust-logger", ["cargo", "build", "--locked", "--release", "--target",
         "wasm32-unknown-unknown", "--manifest-path", work / "rust-logger/Cargo.toml"])
     core = output / "rust-host-target/wasm32-unknown-unknown/release/perry_component_rust_logger.wasm"
     logger = work / "logger.component.wasm"

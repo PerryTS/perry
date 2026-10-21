@@ -222,3 +222,10 @@ available for quick diagnostics; CI gates the complete `acceptance` suite.
 Running third-party Preview 1 core modules inside native Perry is a separate
 profile. See [WASI_P1_HOSTING.md](WASI_P1_HOSTING.md) for the `node:wasi` host,
 capability ownership, execution tests and limitations.
+
+CI preserves per-case logs, reports, Wasm outputs, generated LLVM IR and
+compiler objects under the `wasi-validation-<OS>-<SHA>` artifact. Failed
+Windows jobs additionally retain the matching WASI runtime archive for
+linker diagnosis. Locally, use `scripts/wasi_run.py --output <directory>
+--keep-intermediates` to retain the same evidence without changing the
+compiler backend. These test artifacts are not shipping release packages.

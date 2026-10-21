@@ -1658,7 +1658,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    timeout-minutes: ${{ matrix.os == 'ubuntu-latest' && 120 || 60 }}
     steps:
       - name: Checkout repository (inline git)
         shell: bash
@@ -1725,14 +1725,39 @@ jobs:
         run: |
           compiler=target/perry-dev/perry
           if [[ "$RUNNER_OS" == Windows ]]; then compiler="$compiler.exe"; fi
-          python scripts/wasi_run.py "$compiler" --suite smoke
-          python scripts/wasi_run.py "$compiler" --suite acceptance
+          python scripts/wasi_run.py "$compiler" --suite smoke --output target/wasi-validation/smoke --keep-intermediates
+          python scripts/wasi_run.py "$compiler" --suite acceptance --output target/wasi-validation/acceptance --keep-intermediates
       - name: All WASI gap probes match the pinned Node oracle
         shell: bash
         run: |
           compiler=target/perry-dev/perry
           if [[ "$RUNNER_OS" == Windows ]]; then compiler="$compiler.exe"; fi
-          python scripts/wasi_run.py "$compiler" --suite gap
+          python scripts/wasi_run.py "$compiler" --suite gap --output target/wasi-validation/gap --keep-intermediates
+      - name: Typed component calls, resources, moving GC and direct composition
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          CARGO_BUILD_JOBS: "2"
+        run: ./scripts/component_check.sh
+      - name: Retain WASI and component execution evidence
+        if: always()
+        uses: ./.github/actions/perry/actions/upload-artifact
+        with:
+          name: wasi-validation-${{ runner.os }}-${{ github.sha }}
+          retention-days: 7
+          path: |
+            target/wasi-validation/
+            target/component-validation/**/*.log
+            target/component-validation/**/results.json
+            target/component-validation/**/*.component.wasm
+            target/component-validation/source-revision.txt
+      - name: Retain the Windows runtime archive for linker diagnosis
+        if: failure() && runner.os == 'Windows'
+        uses: ./.github/actions/perry/actions/upload-artifact
+        with:
+          name: wasi-link-runtime-Windows-${{ github.sha }}
+          retention-days: 7
+          path: target/wasm32-wasip2/release/libperry_runtime.a
     needs:
       - route-compatibility
     env:

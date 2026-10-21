@@ -107,10 +107,24 @@ Perry and values returned after guest collection.
 
 Still required before claiming the full milestone:
 
-- Extend canonical guest qualification beyond the transform fixture and
-  implement guest resource adapters.
+- Implement guest resource adapters and qualify ownership and destruction
+  in Perry-authored components.
 - Implement host-defined resource imports and deferred cleanup, and qualify
   capability providers, command worlds, and HTTP independently.
-- Add the execution CI gate and qualify supported host platforms.
+- Qualify supported host platforms and promote the demonstrated execution
+  check into the required PR checks.
 
 P3 async support remains a subsequent milestone.
+
+## Continuous execution checks
+
+`scripts/component_check.sh` builds matching native tools, ordinary and
+instrumented runtime archives, and the WASI runtime, then runs both acceptance
+harnesses. Configure wasi-sdk first, as for the standalone WASI checks. Fixture
+Cargo builds run from the checkout so they use its pinned Rust toolchain and
+unwind configuration; `CARGO_BUILD_JOBS` is respected.
+
+The Linux `wasi-check / wasi-codegen` CI job invokes this script after the
+standalone suites. It retains phase logs, JSON verdicts, component artifacts
+and the source revision. The extended-suite routing and PR-label condition
+still apply; this check is not yet required on every relevant PR.

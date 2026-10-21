@@ -32,7 +32,8 @@ def normalized(data: bytes) -> str:
 
 
 def run_case(perry: Path, wasmtime: str, source: Path, output: Path,
-             timeout: int, expected_output: str | None = None) -> dict:
+             timeout: int, expected_output: str | None = None,
+             keep_intermediates: bool = False) -> dict:
     name = source.stem
     wasm = output / f"{name}.wasm"
     wasm.unlink(missing_ok=True)
@@ -40,9 +41,18 @@ def run_case(perry: Path, wasmtime: str, source: Path, output: Path,
     config = json.loads(config_path.read_text()) if config_path.exists() else {}
     result = {"name": name, "stage": "compile", "passed": False}
     env = dict(os.environ, PERRY_NO_AUTO_OPTIMIZE="1", PERRY_NO_CACHE="1")
+    command = [str(perry), "compile", str(source), "--target", "wasi", "-o", str(wasm)]
+    if keep_intermediates:
+        # Keep all diagnostic inputs inside this case's retained output tree.
+        # PERRY_SAVE_LL does not switch away from the in-process LLVM backend.
+        temporary = output.resolve() / "intermediates"
+        temporary.mkdir(exist_ok=True)
+        env.update(TMPDIR=str(temporary), TMP=str(temporary), TEMP=str(temporary),
+                   PERRY_SAVE_LL=str(output.resolve() / "ir"))
+        command.append("--keep-intermediates")
     try:
         compiled = subprocess.run(
-            [str(perry), "compile", str(source), "--target", "wasi", "-o", str(wasm)],
+            command,
             cwd=output, env=env, capture_output=True, timeout=timeout)
         (output / f"{name}.compile.log").write_bytes(compiled.stdout + compiled.stderr)
         result["compile_status"] = compiled.returncode
@@ -83,7 +93,11 @@ def main() -> int:
     parser.add_argument("--filter", action="append", default=[], help="name substring; repeat to select a union")
     parser.add_argument("--timeout", type=int, default=120, help="seconds per compile/run")
     parser.add_argument("--output", type=Path, help="retain logs and JSON report here")
+    parser.add_argument("--keep-intermediates", action="store_true",
+                        help="retain compiler objects and IR inside --output for link diagnosis")
     args = parser.parse_args()
+    if args.keep_intermediates and args.output is None:
+        parser.error("--keep-intermediates requires --output")
     fixtures = ROOT / "scripts" / ("wasi_smoke" if args.suite == "smoke" else "wasi_acceptance")
     sources = ([ROOT / "test-files" / f"{name}.ts" for name in GAP_SAMPLES]
                if args.suite == "gap" else sorted(fixtures.glob("*.ts")))
@@ -127,7 +141,8 @@ def main() -> int:
                     continue
                 expected = normalized(oracle.stdout) + "exit 0\n"
                 (case_output / "oracle.stdout").write_text(expected, encoding="utf-8")
-            result = run_case(perry, args.wasmtime, source, case_output, args.timeout, expected)
+            result = run_case(perry, args.wasmtime, source, case_output, args.timeout, expected,
+                              args.keep_intermediates)
             results.append(result)
             print(f"{'ok' if result['passed'] else 'FAIL'} {result['name']} ({result['stage']})", flush=True)
             if not result["passed"]:

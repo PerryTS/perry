@@ -41,7 +41,7 @@ def main():
     env["PERRY_RUNTIME_DIR"] = str(args.runtime_dir.resolve())
     env["CARGO_TARGET_DIR"] = str(output / "rust-target")
     env["CARGO_INCREMENTAL"] = "0"
-    env["CARGO_BUILD_JOBS"] = "4"
+    env["CARGO_BUILD_JOBS"] = env.get("CARGO_BUILD_JOBS", "4")
     env["PERRY_CODEGEN_CPU_SLOTS"] = "4"
     # Use the exact supplied archives, not an automatically rebuilt feature set.
     env["PERRY_NO_AUTO_OPTIMIZE"] = "1"
@@ -54,7 +54,7 @@ def main():
         log = output / (name + ".log")
         try:
             with log.open("w") as stream:
-                completed = subprocess.run([str(x) for x in command], cwd=work,
+                completed = subprocess.run([str(x) for x in command], cwd=root if command[0] == "cargo" else work,
                     env=env, stdout=stream, stderr=subprocess.STDOUT, timeout=timeout)
             status = completed.returncode
         except (OSError, subprocess.TimeoutExpired) as error:
@@ -78,7 +78,7 @@ def main():
         if status:
             raise SystemExit(status if status > 0 else 1)
 
-    run("rust-guest", ["cargo", "build", "--release", "--target", "wasm32-unknown-unknown",
+    run("rust-guest", ["cargo", "build", "--locked", "--release", "--target", "wasm32-unknown-unknown",
         "--manifest-path", work / "rust/Cargo.toml"])
     core = output / "rust-target/wasm32-unknown-unknown/release/perry_component_transform_fixture.wasm"
     component = work / "transform.component.wasm"
@@ -103,7 +103,7 @@ def main():
     resources = output / "resources"
     shutil.copytree(fixture.parent / "resources", resources, dirs_exist_ok=True,
                     ignore=shutil.ignore_patterns("target"))
-    run("resources-guest", ["cargo", "build", "--release", "--target", "wasm32-unknown-unknown",
+    run("resources-guest", ["cargo", "build", "--locked", "--release", "--target", "wasm32-unknown-unknown",
         "--manifest-path", resources / "rust/Cargo.toml"])
     core = output / "rust-target/wasm32-unknown-unknown/release/perry_component_resource_fixture.wasm"
     component = resources / "resources.component.wasm"

@@ -719,7 +719,19 @@
                 "crates/perry-codegen/src/**",
                 "crates/perry/src/commands/compile/**",
                 ".github/workflows/wasi-check.yml",
-                ".github/workflows/compiler-runtime.yml"
+                ".github/workflows/compiler-runtime.yml",
+                "crates/perry-abi/**",
+                "crates/perry-wit/**",
+                "crates/perry-component-host/**",
+                "types/perry/component/**",
+                "test-wasi/components/**",
+                "scripts/component_*.py",
+                "scripts/component_check.sh",
+                "scripts/wasi_run.py",
+                "scripts/test_wasi_run.py",
+                "scripts/wasi_build_runtime.py",
+                "scripts/wasi_toolchain.ps1",
+                "scripts/wasi_acceptance/**"
               ]
             },
             "schedule": [

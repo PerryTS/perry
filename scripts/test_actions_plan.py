@@ -84,6 +84,20 @@ class CategoryRoutingTests(unittest.TestCase):
         self.assertIn("gc-ratchet",selected_ids)
         self.assertEqual(selected("gc","pull_request",{"action":"labeled","label":{"name":"skip-changelog"},"pull_request":{"base":{"ref":"main"},"labels":[{"name":"run-extended-tests"}]}},paths=["crates/perry-runtime/src/gc/mod.rs"]),[])
 
+    def test_component_and_wasi_evidence_changes_select_wasi_suite(self):
+        event = {"action": "synchronize", "pull_request": {
+            "base": {"ref": "main"}, "labels": [{"name": "run-extended-tests"}]}}
+        for path in ["crates/perry-wit/src/guest_c.rs",
+                     "crates/perry-component-host/src/resources.rs",
+                     "crates/perry-abi/src/component_guest.rs",
+                     "test-wasi/components/values/world.wit",
+                     "scripts/component_check.sh",
+                     "scripts/component_guest_acceptance.py",
+                     "scripts/wasi_run.py", "scripts/test_wasi_run.py",
+                     "scripts/wasi_acceptance/tcp.ts"]:
+            with self.subTest(path=path):
+                self.assertIn("wasi-check", selected("compatibility", "pull_request", event, paths=[path]))
+
     def test_cc_parity_uses_its_separate_label(self):
         event={"action":"synchronize","pull_request":{"base":{"ref":"main"},"labels":[]}}
         paths=["crates/perry-codegen/src/lib.rs"]

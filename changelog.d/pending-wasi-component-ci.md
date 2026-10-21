@@ -1,0 +1,3 @@
+Run synchronous component execution checks in Linux WASI CI: native hosting and resources under moving GC, Perry guests in a Rust host, direct composition, and canonical value round trips. Build matching tools/archives, use the checkout’s pinned Rust configuration for fixture builds, and respect the configured Cargo job count.
+
+Retain WASI/component reports and link inputs in CI artifacts, including the WASI runtime archive when Windows fails. The portable runner can retain objects and IR under an explicit output directory without changing the compiler backend. Extend suite routing to component crates, fixtures and tooling. Required-check promotion and release packaging remain follow-ups after demonstrated CI success.

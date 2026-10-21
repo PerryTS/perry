@@ -34,6 +34,22 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(result["stage"], "compile")
         self.assertEqual(run.call_count, 1)
 
+    def test_retained_inputs_use_case_local_paths_without_switching_backend(self):
+        with patch("wasi_run.subprocess.run", return_value=subprocess.CompletedProcess([], 1, b"", b"link failed")) as run:
+            result = wasi_run.run_case(self.root / "perry.exe", "wasmtime", self.source,
+                                       self.output, 1, keep_intermediates=True)
+        self.assertFalse(result["passed"])
+        self.assertEqual(run.call_count, 1)
+        command = run.call_args.args[0]
+        env = run.call_args.kwargs["env"]
+        self.assertIn("--keep-intermediates", command)
+        for name in ["TMP", "TEMP", "TMPDIR"]:
+            self.assertEqual(Path(env[name]), self.output.resolve() / "intermediates")
+            self.assertTrue(Path(env[name]).is_dir())
+        self.assertEqual(Path(env["PERRY_SAVE_LL"]), self.output.resolve() / "ir")
+        self.assertNotIn("PERRY_LLVM_KEEP_IR", env)
+        self.assertEqual((self.output / "fixture.compile.log").read_bytes(), b"link failed")
+
     def test_success_without_output_cannot_reuse_a_stale_component(self):
         (self.output / "fixture.wasm").write_bytes(b"stale")
         with patch("wasi_run.subprocess.run", return_value=subprocess.CompletedProcess([], 0, b"", b"")) as run:
