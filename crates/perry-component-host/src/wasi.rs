@@ -1,4 +1,8 @@
 //! Per-instance WASI Preview 2 capabilities. Nothing inherits ambient authority.
+#[cfg(test)]
+#[path = "wasi_network_tests.rs"]
+mod network_execution_tests;
+
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
