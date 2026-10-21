@@ -671,6 +671,7 @@ jobs:
             target: aarch64-apple-darwin
             artifact: perry-macos-aarch64
             wasi: true
+            components: true
             old_glibc_image: ""
           # macos-15-intel, NOT macos-15: the bare label is the Arm64 image
           # (see actions/runner-images). Building x86_64-apple-darwin there
@@ -687,6 +688,7 @@ jobs:
             target: x86_64-unknown-linux-gnu
             artifact: perry-linux-x86_64
             wasi: true
+            components: true
             old_glibc_image: debian:bullseye-slim@sha256:f313b4bd62667092a59b3a664d7d3ab8b5e65f41675f48e81455a15dc5abe792
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
@@ -713,6 +715,7 @@ jobs:
             target: x86_64-pc-windows-msvc
             artifact: perry-windows-x86_64
             wasi: true
+            components: true
             old_glibc_image: ""
           - os: windows-11-arm
             target: aarch64-pc-windows-msvc
@@ -724,6 +727,7 @@ jobs:
       # Public, rotation-capable CLI update keyring baked into every release.
       # It is intentionally a repository variable (not fetched at runtime).
       PERRY_CLI_UPDATE_PUBLIC_KEYS: ${{ vars.PERRY_CLI_UPDATE_PUBLIC_KEYS }}
+      PERRY_RELEASE_COMPONENTS: ${{ matrix.components && '1' || '0' }}
       PERRY_RELEASE_WASI: ${{ matrix.wasi && needs.build-wasi.outputs.enabled == 'true' && '1' || '0' }}
       # Pin the macOS deployment target so bottle object files carry a
       # stable LC_VERSION_MIN / LC_BUILD_VERSION tag regardless of which
@@ -900,7 +904,7 @@ jobs:
           # The WebAssembly host archive, co-built with the archives it links
           # beside: perry links it for a WebAssembly program and never builds
           # it while compiling one.
-          ${{ runner.os == 'Windows' && 'cargo' || 'mbx' }} build --profile prod --target ${{ matrix.target }} -p perry -p perry-runtime-static -p perry-stdlib-static -p perry-wasm-host ${{ matrix.wasi && needs.build-wasi.outputs.enabled == 'true' && '--features perry/target-wasi' || '' }}
+          ${{ runner.os == 'Windows' && 'cargo' || 'mbx' }} build --profile prod --target ${{ matrix.target }} -p perry -p perry-runtime-static -p perry-stdlib-static -p perry-wasm-host ${{ matrix.components && '-p perry-component-host -p perry-wit' || '' }} ${{ matrix.wasi && needs.build-wasi.outputs.enabled == 'true' && '--features perry/target-wasi' || '' }}
 
       - name: Build panic=abort runtime variant (Unix)
         # Out-of-tree installs can't rebuild the runtime, so ship the
@@ -942,7 +946,7 @@ jobs:
           while IFS= read -r name; do
             echo "::group::build $name"
             mbx build --profile prod --target ${{ matrix.target }} \
-              -p perry -p perry-runtime-static -p perry-stdlib-static -p perry-wasm-host -p "$name" ${{ matrix.wasi && needs.build-wasi.outputs.enabled == 'true' && '--features perry/target-wasi' || '' }} \
+              -p perry -p perry-runtime-static -p perry-stdlib-static -p perry-wasm-host ${{ matrix.components && '-p perry-component-host -p perry-wit' || '' }} -p "$name" ${{ matrix.wasi && needs.build-wasi.outputs.enabled == 'true' && '--features perry/target-wasi' || '' }} \
               || echo "  (skipped $name — failed to build on this host)"
             echo "::endgroup::"
           done <<< "$governed_ext_packages"
@@ -998,6 +1002,7 @@ jobs:
             --env CARGO_TARGET_DIR=/work/target-glibc231 \
             --env PERRY_ABORT_TARGET_DIR=/work/target-glibc231-abort \
             --env PERRY_RELEASE_WASI \
+            --env PERRY_RELEASE_COMPONENTS \
             --env PERRY_CLI_UPDATE_PUBLIC_KEYS \
             --volume "$HOME/.cargo:/tmp/cargo-home" \
             --volume "$HOME/.rustup:/tmp/rustup-home" \
@@ -1020,6 +1025,12 @@ jobs:
             test -s "$src/$artifact"
             cp "$src/$artifact" "$dst/$artifact"
           done
+          if [[ "$PERRY_RELEASE_COMPONENTS" == 1 ]]; then
+            for artifact in perry-wit libperry_component_host.a; do
+              test -s "$src/$artifact"
+              cp "$src/$artifact" "$dst/$artifact"
+            done
+          fi
           for archive in "$src"/libperry_ext_*.a "$src"/libperry_wasm_host.a; do
             [ -f "$archive" ] && cp "$archive" "$dst/"
           done
@@ -1360,6 +1371,12 @@ jobs:
         run: |
           mkdir -p staging
           cp target/${{ matrix.target }}/prod/perry staging/
+          if [[ "$PERRY_RELEASE_COMPONENTS" == 1 ]]; then
+            for artifact in perry-wit libperry_component_host.a; do
+              test -s "target/${{ matrix.target }}/prod/$artifact"
+              cp "target/${{ matrix.target }}/prod/$artifact" staging/
+            done
+          fi
           if [[ "$PERRY_RELEASE_WASI" == 1 ]]; then
             cp -R target/${{ matrix.target }}/prod/wasm32-wasip2 staging/
           fi
@@ -1513,6 +1530,15 @@ jobs:
 
           New-Item -ItemType Directory -Force -Path staging
           Copy-Item $binary staging/
+          if ($env:PERRY_RELEASE_COMPONENTS -eq "1") {
+            foreach ($artifact in @('perry-wit.exe', 'perry_component_host.lib')) {
+              $source = "target/${{ matrix.target }}/prod/$artifact"
+              if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+                throw "Missing required component-host artifact: $source"
+              }
+              Copy-Item $source staging/
+            }
+          }
           if ($env:PERRY_RELEASE_WASI -eq "1") {
             Copy-Item -Recurse "target/${{ matrix.target }}/prod/wasm32-wasip2" staging/
           }
@@ -1560,6 +1586,38 @@ jobs:
             }
           }
           Compress-Archive -Path staging/* -DestinationPath "${{ matrix.artifact }}.zip"
+
+      - name: Qualify packaged Component Model tools
+        if: env.PERRY_RELEASE_COMPONENTS == '1'
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ needs.preflight.outputs.checkout-sha }}
+          CARGO_BUILD_JOBS: '4'
+          CARGO_INCREMENTAL: '0'
+        run: |
+          set -euo pipefail
+          rustup target add wasm32-unknown-unknown
+          CARGO_TARGET_DIR=target-component-release-tools \
+            cargo build --locked --profile prod -p perry-wit --example componentize
+          componentize=target-component-release-tools/prod/examples/componentize
+          archive="${{ matrix.artifact }}.tar.gz"
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            componentize="$componentize.exe"
+            archive="${{ matrix.artifact }}.zip"
+          fi
+          python scripts/component_release_check.py --archive "$archive" \
+            --componentize "$componentize" --target "${{ matrix.target }}" \
+            --revision "$EXPECTED_SHA" --output "$RUNNER_TEMP/perry-component-release-validation"
+
+      - name: Retain packaged component qualification evidence
+        if: always() && env.PERRY_RELEASE_COMPONENTS == '1'
+        uses: ./.github/actions/perry/actions/upload-artifact
+        with:
+          name: component-release-validation-${{ matrix.target }}
+          path: |
+            ${{ runner.temp }}/perry-component-release-validation/*.json
+            ${{ runner.temp }}/perry-component-release-validation/*.log
+          if-no-files-found: warn
 
       # SHA256 sidecars uploaded next to each archive so package-manager
       # manifests (Scoop autoupdate, future winget/chocolatey/Homebrew bumps)
@@ -2503,12 +2561,13 @@ jobs:
             def install
               if OS.mac?
                 bin.install "perry"
+                bin.install "perry-wit" if File.exist?("perry-wit")
                 lib.install Dir["libperry_*.a"] + Dir["libperry_*.a.gc-effects"]
               else
                 system "cargo", "build", "--profile", "prod"
-                system "cargo", "build", "--profile", "prod", "-p", "perry-runtime", "-p", "perry-stdlib", "-p", "perry-runtime-static", "-p", "perry-stdlib-static"
+                system "cargo", "build", "--profile", "prod", "-p", "perry", "-p", "perry-runtime-static", "-p", "perry-stdlib-static", "-p", "perry-wasm-host", "-p", "perry-component-host", "-p", "perry-wit"
                 system "cargo", "run", "--release", "-p", "perry-gc-effects", "--", "sidecars", "target/prod"
-                bin.install "target/prod/perry"
+                bin.install "target/prod/perry", "target/prod/perry-wit"
                 lib.install Dir["target/prod/libperry_*.a"] + Dir["target/prod/libperry_*.a.gc-effects"]
               end
             end
@@ -2754,6 +2813,20 @@ jobs:
             "Static standard library archive required by the Perry compiler when linking generated executables."
           copy_static_archive libperry_stdlib.a "$STDLIB_PKG"
           build_deb "$STDLIB_PKG"
+
+          if [ -f staging/perry-wit ]; then
+            require_staging_file libperry_component_host.a
+            COMPONENT_PKG="perry-components_${VERSION}_${ARCH}"
+            init_package "$COMPONENT_PKG" \
+              "perry-components" \
+              "perry (= ${VERSION})" \
+              "Perry Component Model tools and native host library" \
+              "WIT binding generator and optional native engine for programs importing perry/component."
+            mkdir -p "${COMPONENT_PKG}/usr/bin"
+            install -m 755 staging/perry-wit "${COMPONENT_PKG}/usr/bin/perry-wit"
+            copy_static_archive libperry_component_host.a "$COMPONENT_PKG"
+            build_deb "$COMPONENT_PKG"
+          fi
 
           if [ -f staging/libperry_ui_gtk4.a ]; then
             UI_PKG="perry-ui-gtk4_${VERSION}_${ARCH}"

@@ -63,6 +63,10 @@ if ! command -v mbx >/dev/null 2>&1; then
   exit 1
 fi
 cargo_build=(mbx build)
+component_packages=()
+if [[ "${PERRY_RELEASE_COMPONENTS:-0}" == 1 ]]; then
+  component_packages=(-p perry-component-host -p perry-wit)
+fi
 wasi_features=()
 if [[ "${PERRY_RELEASE_WASI:-0}" == 1 ]]; then
   wasi_features=(--features perry/target-wasi)
@@ -71,6 +75,9 @@ fi
 "${cargo_build[@]}" --profile prod --target "$target" -p perry "${wasi_features[@]}"
 "${cargo_build[@]}" --profile prod --target "$target" -p perry-runtime -p perry-runtime-static
 "${cargo_build[@]}" --profile prod --target "$target" -p perry-stdlib -p perry-stdlib-static
+"${cargo_build[@]}" --profile prod --target "$target" \
+  -p perry -p perry-runtime-static -p perry-stdlib-static -p perry-wasm-host \
+  "${component_packages[@]}" "${wasi_features[@]}"
 
 # Ship the panic=abort runtime variant from the same old sysroot.
 CARGO_TARGET_DIR="$abort_target_dir" CARGO_PROFILE_PROD_PANIC=abort \
@@ -86,7 +93,7 @@ governed_ext_packages=$(./scripts/release_ext_packages.sh)
 while IFS= read -r package; do
   echo "::group::build $package"
   "${cargo_build[@]}" --profile prod --target "$target" \
-    -p perry -p perry-runtime-static -p perry-stdlib-static -p perry-wasm-host -p "$package" "${wasi_features[@]}" \
+    -p perry -p perry-runtime-static -p perry-stdlib-static -p perry-wasm-host "${component_packages[@]}" -p "$package" "${wasi_features[@]}" \
     || echo "  (skipped $package -- failed to build on the glibc 2.31 sysroot)"
   echo "::endgroup::"
 done <<< "$governed_ext_packages"

@@ -403,6 +403,7 @@ jobs:
           python3 scripts/ci_pr_files.py --self-test
           python3 scripts/test_actions_plan.py
           python3 scripts/test_component_network_peer.py
+          python3 scripts/test_component_packaging.py
           python3 scripts/test_delete_retired_workflow_runs.py
           python3 scripts/check_actions_topology.py
           python3 scripts/test_release_gate_runs.py
@@ -6117,6 +6118,7 @@ jobs:
         with:
           node-version-file: .node-version
       - run: node npm/perry/test/detect.test.cjs
+      - run: node npm/perry/test/wit-launcher.test.cjs
       - name: install.sh is valid POSIX sh
         run: sh -n packaging/install.sh
     needs:

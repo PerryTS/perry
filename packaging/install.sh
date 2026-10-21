@@ -163,15 +163,23 @@ fi
 if [ -w "$INSTALL_DIR" ]; then
   cp "$TMPDIR/perry" "$INSTALL_DIR/perry"
   chmod 755 "$INSTALL_DIR/perry"
+  if [ -f "$TMPDIR/perry-wit" ]; then
+    cp "$TMPDIR/perry-wit" "$INSTALL_DIR/perry-wit"
+    chmod 755 "$INSTALL_DIR/perry-wit"
+  fi
   # Install libraries alongside binary
-  for lib in "$TMPDIR"/libperry_*.a; do
+  for lib in "$TMPDIR"/libperry_*.a "$TMPDIR"/libperry_*.a.gc-effects; do
     [ -f "$lib" ] && cp "$lib" "$LIB_DIR/"
   done
 else
   echo "Installing to $INSTALL_DIR (requires sudo)..."
   sudo cp "$TMPDIR/perry" "$INSTALL_DIR/perry"
   sudo chmod 755 "$INSTALL_DIR/perry"
-  for lib in "$TMPDIR"/libperry_*.a; do
+  if [ -f "$TMPDIR/perry-wit" ]; then
+    sudo cp "$TMPDIR/perry-wit" "$INSTALL_DIR/perry-wit"
+    sudo chmod 755 "$INSTALL_DIR/perry-wit"
+  fi
+  for lib in "$TMPDIR"/libperry_*.a "$TMPDIR"/libperry_*.a.gc-effects; do
     [ -f "$lib" ] && sudo cp "$lib" "$LIB_DIR/"
   done
 fi

@@ -21,11 +21,14 @@ mkdir -p \
 cp "$REPO_ROOT/scripts/stage-npm.sh" "$FIXTURE_REPO/scripts/stage-npm.sh"
 cp "$REPO_ROOT/npm/perry/package.json.tmpl" "$FIXTURE_REPO/npm/perry/package.json.tmpl"
 cp "$REPO_ROOT/npm/perry/bin/perry.js" "$FIXTURE_REPO/npm/perry/bin/perry.js"
+cp "$REPO_ROOT/npm/perry/bin/perry-wit.js" "$FIXTURE_REPO/npm/perry/bin/perry-wit.js"
 cp "$REPO_ROOT/npm/perry-win32-x64/package.json.tmpl" \
   "$FIXTURE_REPO/npm/perry-win32-x64/package.json.tmpl"
 
 printf '[workspace.package]\nversion = "0.0.0-test"\n' > "$FIXTURE_REPO/Cargo.toml"
 printf 'fixture executable\n' > "$WIN_ARTIFACT/perry.exe"
+printf 'fixture WIT tool\n' > "$WIN_ARTIFACT/perry-wit.exe"
+printf 'fixture component engine\n' > "$WIN_ARTIFACT/perry_component_host.lib"
 printf 'fixture LLVM runtime\n' > "$WIN_ARTIFACT/LLVM-C.dll"
 
 SKIP_MISSING=1 PERRY_NPM_NO_COMPRESS=1 \

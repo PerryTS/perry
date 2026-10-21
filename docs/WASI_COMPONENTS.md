@@ -28,6 +28,24 @@ Opt-in WASI Preview 2 providers are available through `ComponentOptions.wasi`.
 General host-defined resource imports remain unimplemented; command worlds
 and `wasi:http` are not yet qualified.
 
+### Packaging
+
+The release recipe includes `perry-wit` and the optional native component-host
+archive for macOS ARM64, Linux x86_64 GNU and Windows x86_64. npm exposes the
+`perry-wit` command from the matching platform package. Homebrew and the shell
+installer retain the tool and host archive; Debian installs expose them through
+`perry-components`, which requires the exact matching compiler package version.
+Other prebuilt targets do not yet include this component payload.
+
+`scripts/component_release_check.py` checks the final release archive in a fresh
+directory outside the source checkout. It generates TypeScript and canonical C
+bindings, proves ordinary programs still work with the engine withheld, rejects
+a component host without that engine, and then executes typed Rust-component
+calls, callbacks, collection and disposal with the packaged engine restored.
+The receipt records archive, installed-file and executable identities. This
+packaging change still requires release-profile execution qualification; it
+does not establish that a release has been published.
+
 ### Per-instance WASI providers
 
 ```ts
