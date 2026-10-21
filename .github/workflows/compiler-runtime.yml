@@ -1624,6 +1624,14 @@ jobs:
         with:
           shared-key: "${{ runner.os }}-wasi-check"
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Install the WASI C compiler and sysroot
+        shell: bash
+        run: |
+          toolchain_env="$(./scripts/wasi_toolchain.sh "$RUNNER_TEMP/wasi")"
+          eval "$toolchain_env"
+          for key in WASI_SDK_PATH WASMTIME CC_wasm32_wasip2 AR_wasm32_wasip2 CFLAGS_wasm32_wasip2 CC_SHELL_ESCAPED_FLAGS; do
+            printf '%s=%s\n' "$key" "${!key}" >> "$GITHUB_ENV"
+          done
       - name: perry-runtime builds for wasm32-wasip2
         run: ./scripts/wasi_check.sh
       - name: Runtime ABI check (self-test)
