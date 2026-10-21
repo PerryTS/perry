@@ -4720,8 +4720,9 @@ AS1_DEF_RE = re.compile(
     # unrecognised bundle operands the first time this ran, every one of them
     # a `%.N = phi ptr addrspace(1) [ ... ]`. Exactly the dead-alternative
     # failure `--audit-alloc-re` exists for, in a different regex.
-    r"|(?:phi|select|freeze)\s+ptr\s+addrspace\(1\)"
-    r'|(?:call|invoke)\s+[^%@"]*\bptr\s+addrspace\(1\)\s+[@%(]'
+    r"|(?:phi|freeze)\s+ptr\s+addrspace\(1\)"
+    r'|select\s+i1\s+(?:%[\w.$]+|%"[^"]+"|true|false|poison|undef|zeroinitializer|0|1)\s*,\s*ptr\s+addrspace\(1\)'
+    r'|(?:(?:(?:tail|musttail|notail)\s+)?call|invoke)\s+[^%@"]*\bptr\s+addrspace\(1\)\s+[@%(]'
     r"|(?:load|getelementptr)\s+[^%@]*\bptr\s+addrspace\(1\)[,\s]"
     r")")
 
@@ -4970,17 +4971,23 @@ def _back_closure(def_of, reg, limit=64):
 def _untracked_bundle_members(f, tracked):
     """`"gc-live"` operands `AS1_DEF_RE` failed to recognise.
 
-    Non-vacuity for the tracked/untracked predicate. Every bundle operand is
-    spelled `ptr addrspace(1) %r`, so one whose definition this cannot classify
-    means the predicate is narrower than the IR — and a narrow predicate does
+    Non-vacuity for the tracked/untracked predicate. Managed operands are
+    spelled `ptr addrspace(1) %r`; direct alloca addresses are immovable stack
+    homes. Any other unclassified operand means the predicate is narrower
+    than the IR — and a narrow predicate does
     not fail quietly here, it turns correct relocated code into reported
     hazards. Reported as an error rather than absorbed.
     """
+    # A stack-home array may also be listed in gc-live. Its AS0 address
+    # cannot move; do not pretend that it is an AS1 managed pointer.
+    stack_homes = {ins.result for b in f.blocks for ins in f.insns[b]
+                   if ins.result and re.match(r"^\s*%[\w.$]+\s*=\s*alloca\b", ins.text)}
     missing = set()
     for b in f.blocks:
         for ins in f.insns[b]:
             if ins.is_statepoint:
-                missing.update(r for r in ins.live if r not in tracked)
+                missing.update(r for r in ins.live
+                               if r not in tracked and r not in stack_homes)
     return missing
 
 
@@ -6031,6 +6038,21 @@ def statepoint_self_test():
         ("  %r = call coldcc ptr addrspace(1) "
          "@llvm.experimental.gc.relocate.p1(token %t, i32 0, i32 0)", True,
          "the relocated value itself"),
+        ("  %s = select i1 %c, ptr addrspace(1) null, ptr addrspace(1) %p", True,
+         "a pointer select spells the condition type before its result type"),
+        ("  %r = tail call coldcc ptr addrspace(1) @relocate()", True,
+         "a tail marker does not change the returned pointer type"),
+        ("  %r = musttail call ptr addrspace(1) @relocate()", True,
+         "a musttail marker keeps the managed result type"),
+        ("  %r = notail call ptr addrspace(1) @relocate()", True,
+         "a notail marker keeps the managed result type"),
+        ("  %r = select i1 %c, i64 0, i64 1", False,
+         "an integer select must stay outside the managed domain"),
+        ("  %raw = select i1 icmp eq (ptr addrspace(1) null, "
+         "ptr addrspace(1) @g), i64 0, i64 1", False,
+         "a managed pointer in the condition does not make an integer result managed"),
+        ("  %raw = tail call ptr @malloc(i64 64)", False,
+         "an AS0 return must not enter the AS1 domain"),
         ("  %raw = ptrtoint ptr addrspace(1) %s to i64", False,
          "the cast OUT of it -- an i64, which LLVM does not relocate. "
          "Classifying it tracked would silence the entire mode"),
@@ -6042,6 +6064,21 @@ def statepoint_self_test():
             print(f"self-test FAIL: AS1_DEF_RE should{'' if want else ' not'} "
                   f"match {text.strip()!r} -- {why}", file=sys.stderr)
             ok = False
+
+    # A gc-live stack-home address is immovable, but another unknown value
+    # must still fail closed; accepting the home must not absorb the unknown.
+    from types import SimpleNamespace
+    home = SimpleNamespace(result="home", text="%home = alloca [2 x ptr addrspace(1)]",
+                           is_statepoint=False)
+    raw = SimpleNamespace(result="raw", text="%raw = call ptr @malloc(i64 64)",
+                          is_statepoint=False)
+    point = SimpleNamespace(result="sp", text="", is_statepoint=True,
+                            live=("home", "raw", "unknown"))
+    homes_fn = SimpleNamespace(blocks=("entry",), insns={"entry": (home, raw, point)})
+    if _untracked_bundle_members(homes_fn, set()) != {"raw", "unknown"}:
+        print("self-test FAIL: stack homes must be immovable without absorbing "
+              "an unclassified gc-live operand", file=sys.stderr)
+        ok = False
 
     # --- LLVM's trailing annotations are not uses ------------------------
     annotated = ("  %s.relocated = call coldcc ptr addrspace(1) "
