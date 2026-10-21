@@ -920,9 +920,20 @@ pub(crate) enum ShapeObjectKind {
     /// Ordinary ObjectHeader slots with a birth-declared [[Call]] method.
     /// Unlike Function kinds, this is not a ClosureHeader allocation.
     CallableOrdinary,
+    /// Runtime-born ordinary storage with native read forwarding, without
+    /// the plain-store admission carried by OrdinaryNativeAlias.
+    OrdinaryUnmarkedNativeAlias,
 }
 
 impl ShapeObjectKind {
+    #[inline]
+    pub(crate) fn is_native_alias(self) -> bool {
+        matches!(
+            self,
+            Self::OrdinaryNativeAlias | Self::OrdinaryUnmarkedNativeAlias
+        )
+    }
+
     #[inline]
     pub(crate) fn is_function_layout(self) -> bool {
         matches!(
@@ -960,6 +971,7 @@ impl ShapeObjectKind {
                 | ShapeObjectKind::NativeNamespace
                 | ShapeObjectKind::OrdinaryNativeAlias
                 | ShapeObjectKind::CallableOrdinary
+                | ShapeObjectKind::OrdinaryUnmarkedNativeAlias
         )
     }
 
@@ -980,6 +992,7 @@ impl ShapeObjectKind {
             ShapeObjectKind::FunctionBound => 9,
             ShapeObjectKind::OrdinaryNativeAlias => 10,
             ShapeObjectKind::CallableOrdinary => 11,
+            ShapeObjectKind::OrdinaryUnmarkedNativeAlias => 12,
         }
     }
 }

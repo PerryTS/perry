@@ -49,6 +49,7 @@ fn kind_codes_round_trip() {
         ShapeObjectKind::FunctionBoundApply,
         ShapeObjectKind::FunctionBound,
         ShapeObjectKind::OrdinaryNativeAlias,
+        ShapeObjectKind::OrdinaryUnmarkedNativeAlias,
         ShapeObjectKind::CallableOrdinary,
     ] {
         assert_eq!(kind as u8, kind.code() as u8, "kind cache decoding ordinal");
@@ -970,6 +971,7 @@ fn plain_birth_validation_checks_presence_kind_and_width() {
         ShapeObjectKind::FunctionBoundApply,
         ShapeObjectKind::FunctionBound,
         ShapeObjectKind::OrdinaryNativeAlias,
+        ShapeObjectKind::OrdinaryUnmarkedNativeAlias,
     ] {
         let mut record = ShapeRecord::new(0, 0, 2, 0, kind, 0);
         assert_eq!(

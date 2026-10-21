@@ -362,7 +362,7 @@ pub(crate) unsafe fn dynamic_own_or_absent(
         return None;
     }
     let shape = object_shape_descriptor(recv)?;
-    if shape.object_kind == crate::object::shapes::ShapeObjectKind::OrdinaryNativeAlias {
+    if shape.object_kind.is_native_alias() {
         return None;
     }
     if !shape.object_kind.is_ordinary_layout() {
