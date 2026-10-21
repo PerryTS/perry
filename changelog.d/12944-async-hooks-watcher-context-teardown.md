@@ -1,0 +1,5 @@
+- Fix `fs.watch` async context by entering the existing `FSEVENTWRAP` provider around event/error delivery, rooting provider and error values, and restoring context after hooks.
+- Fix `watchFile` teardown by retaining the internal interval's numeric cancellation ID instead of its raw JavaScript handle; public timer handles remain unchanged.
+- Writer validation: three failing cases (one parity mismatch, two timeouts) now pass; nine passing controls remain byte-for-byte unchanged.
+- Independent validation confirms all three target repairs and three unchanged controls.
+- The pre-existing second-listener-after-throw advisory remains; this bounded repair does not establish whole-module completion.
