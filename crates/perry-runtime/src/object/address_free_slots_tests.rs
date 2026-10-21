@@ -64,13 +64,20 @@ fn slots_follow_content_when_a_key_moves() {
 }
 
 #[test]
-fn stored_atom_hash_and_plain_string_hash_choose_one_slot() {
+fn stored_atom_slot_uses_its_existing_content_hash() {
     let atom =
         unsafe { crate::string::property_atom(crate::string::canonical_key(b"stable-property")) };
-    let plain = crate::string::js_string_from_bytes(b"stable-property".as_ptr(), 15);
-    assert!(unsafe { crate::string::is_property_atom(atom) });
-    assert_eq!(
-        interned_key_slot_hash(atom as usize),
-        interned_key_slot_hash(plain as usize)
-    );
+    let hash = unsafe { crate::string::property_atom_hash(atom) };
+    assert_eq!(interned_key_slot_hash(atom as usize), hash ^ (hash >> 32));
+}
+
+#[test]
+fn legacy_slot_hash_reads_every_word_and_tail_byte() {
+    let original = *b"long-property-with-a-tail!";
+    for i in 0..original.len() {
+        let mut changed = original;
+        changed[i] ^= 1;
+        let (_storage, a, b) = relocated_keys(&original, &changed);
+        assert_ne!(interned_key_slot_hash(a), interned_key_slot_hash(b));
+    }
 }

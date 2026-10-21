@@ -1121,8 +1121,9 @@ fn transition_cache_slot(prev_shape_id: u32, key_id: usize, namespace: u32) -> u
 }
 
 /// A content hash selects a bucket; canonical-pointer equality still proves
-/// the key. Property atoms already store their hash after the payload. Older
-/// interned strings do not, so those read their immutable bytes directly.
+/// the key. Property atoms use the hash stored after their payload. Legacy
+/// interned strings hash every immutable byte in full-width chunks: replaying
+/// byte-at-a-time FNV at each slot probe dominates their transition fast path.
 #[inline(always)]
 fn interned_key_slot_hash(key_ptr: usize) -> u64 {
     if key_ptr == 0 {
@@ -1133,10 +1134,31 @@ fn interned_key_slot_hash(key_ptr: usize) -> u64 {
         let hash = if crate::string::is_property_atom(key) {
             crate::string::property_atom_hash(key)
         } else {
-            key_content_hash(key)
+            legacy_key_slot_hash(key)
         };
         hash ^ (hash >> 32)
     }
+}
+
+/// A slot digest for legacy strings, which have no stored creation hash.
+/// Word and tail reads stay within byte_len; the length and every payload
+/// byte participate. This does not change interning or key identity.
+#[inline]
+unsafe fn legacy_key_slot_hash(key: *const crate::StringHeader) -> u64 {
+    let len = (*key).byte_len as usize;
+    let data = crate::string::string_data(key);
+    let mut h = 0xcbf29ce484222325u64 ^ len as u64;
+    let mut offset = 0;
+    while len - offset >= 8 {
+        let word = u64::from_le(std::ptr::read_unaligned(data.add(offset).cast::<u64>()));
+        h = (h ^ word).wrapping_mul(0x100000001b3);
+        offset += 8;
+    }
+    while offset < len {
+        h = (h ^ u64::from(*data.add(offset))).wrapping_mul(0x100000001b3);
+        offset += 1;
+    }
+    h
 }
 
 /// #6006: verify the cached transition edge really adds `key` at `slot_idx`,
