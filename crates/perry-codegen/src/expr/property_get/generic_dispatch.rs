@@ -660,6 +660,11 @@ fn lower_property_site_tail(
     // test (tag and a payload above the native-handle band in one compare).
     let inline_string_length = property == "length";
     let inline_collection_size = property == "size";
+    // Ordinary named reads share one complete read after either the receiver
+    // test or the noncollecting probe refuses. Length retains its primitive
+    // and array/string arms; a global binding must still distinguish absence
+    // from an own value of undefined before invoking a getter.
+    let shared_refusal = !inline_string_length && !global_binding;
     let obj_tag = ctx.block().lshr(I64, &obj_bits, "48");
     let is_valid = if inline_string_length {
         let obj_tag_masked = ctx.block().and(I64, &obj_tag, "65533"); // 0xFFFD
@@ -683,7 +688,8 @@ fn lower_property_site_tail(
     ctx.block().cond_br(&is_valid, &recv_label, &other_label);
 
     // Off the pointer path: an SSO string's `.length` is a byte of the
-    // NaN-box; every other receiver is the non-pointer entry's tag ladder.
+    // NaN-box. Ordinary reads join the probe's refusal below; length and
+    // required global bindings retain their separate primitive entry.
     ctx.current_block = other_idx;
     let sso_arm = inline_string_length.then(|| {
         let sso_idx = ctx.new_block("pget.recv_sso");
@@ -699,26 +705,28 @@ fn lower_property_site_tail(
         ctx.current_block = nonptr_idx;
         (sso_val, sso_end_label)
     });
-    let val_nonptr = if inline_string_length {
-        ctx.block().call(
-            DOUBLE,
-            "js_value_length_property_f64",
-            &[(DOUBLE, &obj_box)],
-        )
+    let nonptr_arm = if shared_refusal {
+        ctx.block().br(&call_label);
+        None
     } else {
-        let nonptr_key_handle = emit_key_handle(ctx, &key_handle_global);
-        ctx.block().call(
-            DOUBLE,
-            "js_object_get_field_nonptr",
-            &[
-                (I64, &obj_bits),
-                (I64, &nonptr_key_handle),
-                (I64, &feedback_site_id),
-            ],
-        )
+        let value = if inline_string_length {
+            ctx.block().call(
+                DOUBLE,
+                "js_value_length_property_f64",
+                &[(DOUBLE, &obj_box)],
+            )
+        } else {
+            let key = emit_key_handle(ctx, &key_handle_global);
+            ctx.block().call(
+                DOUBLE,
+                "js_object_get_field_nonptr",
+                &[(I64, &obj_bits), (I64, &key), (I64, &feedback_site_id)],
+            )
+        };
+        let end = ctx.block().label.clone();
+        ctx.block().br(&merge_label);
+        Some((value, end))
     };
-    let nonptr_end_label = ctx.block().label.clone();
-    ctx.block().br(&merge_label);
 
     ctx.current_block = recv_idx;
     if fused_recv.is_some() {
@@ -868,29 +876,44 @@ fn lower_property_site_tail(
     ctx.block().cond_br(&served, &merge_label, &call_label);
 
     // The complete read: what the probe declined (an accessor, an exotic
-    // receiver), and a small native handle at a `.length` site.
+    // receiver), ordinary non-pointer receivers, and a small native handle
+    // at a `.length` site. Reload the key only on this refusal edge.
     ctx.current_block = call_idx;
     crate::expr::emit_versioned_loop_callback_deopt(ctx);
     let miss_key_handle = emit_key_handle(ctx, &key_handle_global);
-    let miss_handle = recv_handle(ctx, fused_recv.as_ref(), &entry_handle);
-    let val_miss = ctx.block().call(
-        DOUBLE,
-        if global_binding {
-            "js_global_get_field_slow"
-        } else {
-            "js_object_get_field_slow"
-        },
-        &[(I64, &miss_handle), (I64, &miss_key_handle)],
-    );
+    let val_miss = if shared_refusal {
+        // Preserve the original boxed receiver: the shared entry classifies
+        // primitives and native handles as well as declined object pointers.
+        ctx.block().call(
+            DOUBLE,
+            "js_object_get_field_value",
+            &[
+                (I64, &obj_bits),
+                (I64, &miss_key_handle),
+                (I64, &feedback_site_id),
+            ],
+        )
+    } else {
+        let miss_handle = recv_handle(ctx, fused_recv.as_ref(), &entry_handle);
+        ctx.block().call(
+            DOUBLE,
+            if global_binding {
+                "js_global_get_field_slow"
+            } else {
+                "js_object_get_field_slow"
+            },
+            &[(I64, &miss_handle), (I64, &miss_key_handle)],
+        )
+    };
     let miss_end_label = ctx.block().label.clone();
     ctx.block().br(&merge_label);
 
     ctx.current_block = merge_idx;
-    let mut incoming: Vec<(&str, &str)> = vec![
-        (&answered, &probe_end_label),
-        (&val_miss, &miss_end_label),
-        (&val_nonptr, &nonptr_end_label),
-    ];
+    let mut incoming: Vec<(&str, &str)> =
+        vec![(&answered, &probe_end_label), (&val_miss, &miss_end_label)];
+    if let Some((value, end)) = nonptr_arm.as_ref() {
+        incoming.push((value, end));
+    }
     if let Some((sso_val, sso_end_label)) = sso_arm.as_ref() {
         incoming.push((sso_val, sso_end_label));
     }

@@ -165,13 +165,13 @@ fn imported_variable_read_preserves_class_tags_and_calls_the_live_getter_once() 
     );
     // #9366's invariant, one indirection later: T1 moved the INT32 class-ref
     // arm (and its `js_typed_feedback_object_get_field_by_name_f64` call) into
-    // the non-pointer read exit (`js_object_get_field_nonptr`), which routes on
+    // the shared read exit (`js_object_get_field_value`), which routes on
     // the tag — so the bits it
     // receives must still be the getter's UNMASKED value. A masked handle here
     // would lose the 0x7FFE tag and the class would dispatch as an object.
     assert!(
         ir.lines().any(|line| {
-            line.contains("call double @js_object_get_field_nonptr(")
+            line.contains("call double @js_object_get_field_value(")
                 && bits.iter().any(|b| line.contains(&format!("(i64 {b},")))
         }),
         "class dispatch must receive the getter's unmasked value bits:\n{ir}"
@@ -441,8 +441,8 @@ fn tower_cond_br(body: &[String]) -> (String, String, String) {
 /// The probe is asked BEFORE anything that collects. The receiver-pointer
 /// test's true edge is the probe's block; the probe's answer is compared with
 /// the `TAG_HOLE` decline; the served edge is the merge and the declined edge
-/// is the one collecting exit, `js_object_get_field_slow`. (This replaced the
-/// polymorphic-ways ordering test: the ways are gone, the layout probe is the
+/// is the shared collecting exit, `js_object_get_field_value`. (This replaced
+/// the polymorphic-ways ordering test: the ways are gone, the layout probe is the
 /// whole of the first stage.)
 #[test]
 fn generic_property_get_tries_ways_before_calling_the_miss_handler() {
@@ -458,13 +458,13 @@ fn generic_property_get_tries_ways_before_calling_the_miss_handler() {
     assert!(
         !probe_block
             .iter()
-            .any(|l| l.contains("@js_object_get_field_slow(")),
+            .any(|l| l.contains("@js_object_get_field_value(")),
         "the slow call must not sit inside the probe block: {probe_block:?}"
     );
     let (_, served, declined) = tower_cond_br(probe_block);
     assert!(served.starts_with("pget.recv_merge"), "{probe_block:?}");
     assert!(declined.starts_with("pget.slow"), "{probe_block:?}");
-    // The slow block's predecessors: the probe's decline only.
+    // The slow block joins the probe decline and the receiver-test refusal.
     let (slow_label, _) = tower_block(&blocks, "pget.slow");
     let preds: Vec<&str> = blocks
         .iter()
@@ -475,44 +475,48 @@ fn generic_property_get_tries_ways_before_calling_the_miss_handler() {
         .map(|(l, _)| l.as_str())
         .collect();
     assert_eq!(
-        preds,
-        vec![probe_label],
-        "the slow call is reached from the probe's decline only"
+        preds.len(),
+        2,
+        "receiver and probe refusals share the slow call"
     );
+    assert!(preds.contains(&probe_label));
+    assert!(preds.contains(&tower_block(&blocks, "pget.recv_other").0));
 }
 
-/// The slow block must not re-derive anything the probe block computed: it
-/// takes the receiver handle already extracted by the receiver test, makes
-/// exactly one call and no comparison, and the probe itself holds no
-/// per-site state (no ShapeId load, no site cache word).
+/// The shared refusal classifies the original boxed receiver in the runtime.
+/// It reloads the key on the refusal edge, makes exactly one call and no
+/// comparison, and the probe itself holds no per-site state.
 #[test]
-fn pic_miss_reuses_the_token_blocks_values_instead_of_re_deriving_them() {
+fn generic_refusal_keeps_boxed_receiver_and_reloads_key_on_the_join() {
     let ir = emit(false, None);
     let blocks = tower_blocks(&ir);
     let (_, slow) = tower_block(&blocks, "pget.slow");
-    assert_eq!(
-        slow.iter().filter(|l| l.contains("icmp ")).count(),
-        0,
-        "the slow block re-derives a predicate: {slow:?}"
-    );
-    assert_eq!(
-        slow.iter().filter(|l| l.contains(" call ")).count(),
-        1,
-        "the slow block is one call: {slow:?}"
-    );
-    let (_, ok) = tower_block(&blocks, "pget.recv_ok");
-    let recv_handle = ok
+    assert_eq!(slow.iter().filter(|l| l.contains("icmp ")).count(), 0);
+    assert_eq!(slow.iter().filter(|l| l.contains(" call ")).count(), 1);
+    let call = slow
         .iter()
-        .find(|l| l.contains("call double @perry_probe_get("))
-        .and_then(|l| l.split("(ptr ").nth(1))
-        .and_then(|a| a.split(", i64 ").nth(1))
-        .map(|a| a.split(',').next().unwrap().to_string())
-        .unwrap_or_else(|| panic!("the probe's receiver operand: {ok:?}"));
+        .find(|l| l.contains("@js_object_get_field_value("))
+        .unwrap();
+    let bits = call
+        .split_once("(i64 ")
+        .unwrap()
+        .1
+        .split(',')
+        .next()
+        .unwrap();
     assert!(
-        slow.iter()
-            .any(|l| l.contains(&format!("add i64 {recv_handle},"))),
-        "the slow call must be fed by the handle the receiver test computed \
-         ({recv_handle}): {slow:?}"
+        blocks.iter().flat_map(|(_, body)| body).any(|line| line
+            .starts_with(&format!("{bits} = bitcast double "))
+            && line.ends_with(" to i64")),
+        "original receiver bits: {call}"
+    );
+    assert!(
+        slow.iter().any(|l| l.contains("load double, ptr @")),
+        "fallback key is reloaded at the refusal join: {slow:?}"
+    );
+    assert!(
+        !slow.iter().any(|l| l.contains("add i64")),
+        "the shared call cannot use a pointer-only handle: {slow:?}"
     );
     let all: Vec<&String> = blocks.iter().flat_map(|(_, b)| b.iter()).collect();
     assert!(
@@ -766,13 +770,12 @@ fn the_front_reads_its_directory_without_a_call_where_the_target_allows() {
 /// calls, with only the probe inline.
 ///
 /// This is a ratchet, so it is an EXACT count in both dimensions: the probe
-/// (a GC-leaf, nounwind call), the one collecting slow exit for a probe
-/// decline, and the non-pointer exit for a receiver that is not a heap
-/// pointer. Each extra property-GET call site is a statepoint whose live GC
-/// values are written into `.perry_gcmap`; one creeping back inline is a
+/// (a GC-leaf, nounwind call) and one collecting exit shared by a probe
+/// decline and a receiver that is not a heap pointer. Each extra property-GET
+/// call site is a statepoint whose live GC values are written into `.perry_gcmap`; one creeping back inline is a
 /// regression measured in `.text` that nothing else in the suite reports.
 #[test]
-fn the_generic_tower_is_one_leaf_call_two_exits_and_a_bounded_number_of_blocks() {
+fn the_generic_tower_is_one_leaf_call_one_exit_and_a_bounded_number_of_blocks() {
     let ir = emit(false, None);
     let func = ir
         .split("\ndefine ")
@@ -795,12 +798,8 @@ fn the_generic_tower_is_one_leaf_call_two_exits_and_a_bounded_number_of_blocks()
     sorted.sort();
     assert_eq!(
         sorted,
-        vec![
-            "js_object_get_field_nonptr",
-            "js_object_get_field_slow",
-            "perry_probe_get"
-        ],
-        "the read must expand the probe and exactly two exits:\n{func}"
+        vec!["js_object_get_field_value", "perry_probe_get"],
+        "the read must expand the probe and exactly one collecting exit:\n{func}"
     );
     // The probe is nounwind and GC-leaf: a plain call, never an invoke.
     let probes: Vec<&str> = func
@@ -829,9 +828,9 @@ fn the_generic_tower_is_one_leaf_call_two_exits_and_a_bounded_number_of_blocks()
     let mut expected = vec![
         // the receiver test and the inline probe
         "pget.recv_ok",
-        // the non-pointer exit, off the tag test's false edge
+        // the tag test's refusal edge joins the collecting exit
         "pget.recv_other",
-        // the probe's decline: the one collecting exit
+        // the shared collecting refusal
         "pget.slow",
         // the join
         "pget.recv_merge",
@@ -856,18 +855,17 @@ fn the_generic_tower_is_one_leaf_call_two_exits_and_a_bounded_number_of_blocks()
     );
 }
 
-/// The generic read's collecting slow entry belongs on the probe's decline.
-/// The call keeps both operands (the receiver handle and the key), and the
-/// merge uses the value returned by that one slow entry.
+/// The generic read's collecting entry is shared by both refusals. It takes
+/// the boxed receiver, key and feedback-site ID; the merge uses its answer.
 #[test]
-fn the_generic_slow_read_is_called_only_after_the_front_declines() {
+fn the_generic_shared_read_receives_boxed_receiver_key_and_feedback() {
     let ir = emit(false, None);
     let blocks = tower_blocks(&ir);
     let slow_callers: Vec<(&str, &String)> = blocks
         .iter()
         .flat_map(|(l, body)| {
             body.iter()
-                .filter(|t| t.contains("@js_object_get_field_slow("))
+                .filter(|t| t.contains("@js_object_get_field_value("))
                 .map(move |t| (l.as_str(), t))
         })
         .collect();
@@ -878,8 +876,8 @@ fn the_generic_slow_read_is_called_only_after_the_front_declines() {
         "the slow entry must be called from the one exit: {slow_callers:?}"
     );
     assert!(
-        slow_line.contains("(i64 %") && slow_line.matches(", i64 %").count() == 1,
-        "the slow entry must receive the receiver and the key:\n{slow_line}"
+        slow_line.contains("(i64 %") && slow_line.matches(", i64 ").count() == 2,
+        "the shared entry must receive boxed receiver, key and feedback ID:\n{slow_line}"
     );
     let (_, probe_block) = front_call_block(&blocks);
     let (cond, served, declined) = tower_cond_br(probe_block);
@@ -924,3 +922,6 @@ mod global_read;
 
 #[path = "computed_admission_tests.rs"]
 mod computed_admission;
+
+#[path = "refusal_join_tests.rs"]
+mod refusal_join;
