@@ -1,6 +1,9 @@
 wit_bindgen::generate!({ path: "..", world: "plugin" });
 use exports::perry::host_resources::runner::{Guest, Pair};
-use perry::host_resources::{aliases, tokens::Token};
+use perry::host_resources::{
+    aliases,
+    tokens::{Other, Token},
+};
 use std::cell::RefCell;
 
 thread_local! { static HELD: RefCell<Option<Token>> = const { RefCell::new(None) }; }
@@ -19,6 +22,9 @@ impl Guest for Runner {
         aliases::read_alias(value)
     }
     fn consume(value: Token) {
+        drop(value);
+    }
+    fn consume_other(value: Other) {
         drop(value);
     }
     fn consume_imported(value: Token) {

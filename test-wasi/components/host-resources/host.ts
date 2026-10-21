@@ -83,9 +83,12 @@ rejects(() => api.echo(first), "old owner revived");
 check(api.read(returned.borrow()) === 42, "roundtrip payload");
 const b = setup();
 rejects(() => b.component.exports["perry:host-resources/runner@1.0.0"].read(returned.borrow()), "foreign instance accepted");
-const other = a.factories["perry:host-resources/tokens@1.0.0"].other.create({ value: 1 });
+const other = a.factories["perry:host-resources/tokens@1.0.0"].other.create({ value: 1 }, (payload) => {
+  collect(); dropped.push((payload as { value: number }).value);
+});
 rejects(() => api.read(other as unknown as Parameters<typeof api.read>[0]), "wrong nominal type accepted");
-other.dispose();
+api["consume-other"](other);
+check(dropped.filter(value => value === 1).length === 1, "second resource type was not consumed");
 rejects(() => api.read({ $hostResource: "1", owned: false } as unknown as Parameters<typeof api.read>[0]), "forged wrapper accepted");
 api.keep(returned);
 for (let i = 0; i < 50; i++) {
