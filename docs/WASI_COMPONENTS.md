@@ -115,7 +115,7 @@ Unreachable whole instances still release native memory without invoking
 application callbacks. Collection timing and poisoned guest destructors are
 not deterministic: explicit disposal remains the reliable lifecycle API.
 Cleanup of wrappers inside Perry-authored WASI guests is described below;
-its execution qualification is pending. The native host ABI is 4 for this cleanup implementation;
+its Linux execution qualification is recorded below. The native host ABI is 4 for this cleanup implementation;
 matching runtime and engine archives are required.
 
 ## Resources supplied by a native Perry host
@@ -210,8 +210,8 @@ synchronous export, while its arguments and result remain rooted and before
 the adapter lowers the result. This delivers ready finalizers, nextTick and
 Promise jobs without a command event loop. It leaves timers and immediates
 pending, does not wait for I/O, and does not implement asynchronous WIT
-results. Execution qualification of
-these new cleanup and checkpoint paths is pending.
+results. Linux execution qualification of these cleanup and checkpoint paths
+is recorded below.
 
 Collection timing is nondeterministic, and payloads or destructors that retain
 their own wrapper can keep it reachable. Explicit disposal provides predictable
@@ -323,10 +323,25 @@ only one of three jobs; the fixed implementation delivers all three and
 retains their identities. The [cleanup receipt](validation/component-cleanup-20261021.json)
 records both source revisions, acceptance reports and artifact/log hashes.
 
+Guest deferred cleanup is qualified on source
+`23b5c3aadc18237488d6c978ece554483d774c78`: all 28 runtime component tests,
+21 native acceptance phases and 34 guest acceptance phases pass. Independent
+Rust-host execution covers abandoned imported/local owners, live borrows,
+transfer, explicit disposal, rooted return values and exactly-once destruction.
+The guest resource run copied 5,225 objects and passed 217 evacuation checks;
+WASI has no native from-space page protection. Native stress runs also observed
+quarantined from-space.
+
+The checkpoint regression fails against the old implementation because it
+runs an immediate during the export checkpoint. The fixed implementation runs
+only the microtask, retains the returned value across an observed move during
+that checkpoint, and leaves the immediate for explicit later dispatch. The
+[guest cleanup receipt](validation/component-guest-cleanup-20261021.json)
+records both revisions and the matching artifact/log identities.
+
 Still required before claiming the full milestone:
 
-- Qualify cleanup of owners inside Perry-authored WASI guests.
-  Qualify the remaining capability operations,
+- Qualify the remaining capability operations,
   command worlds, and HTTP independently.
 - Qualify supported host platforms. [PR #12985](https://github.com/PerryTS/perry/pull/12985)
   added the component acceptance suite to required execution checks; integration

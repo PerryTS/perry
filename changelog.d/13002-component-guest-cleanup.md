@@ -11,5 +11,9 @@ compatible. Collection timing and cleanup after a trap remain nondeterministic.
 
 Add moving-GC ownership tests and independent Rust-host acceptance coverage
 for imported and guest-defined owners, live borrows, transfer, explicit
-disposal, return-value rooting and exactly-once destruction. Execution
-qualification is pending.
+disposal, return-value rooting and exactly-once destruction. On Linux, all
+28 runtime component tests and 55 acceptance phases pass at
+`23b5c3aadc18237488d6c978ece554483d774c78`. A negative control reproduces the
+old checkpoint dispatching an immediate; the fixed checkpoint leaves it pending
+and preserves a returned value across an actual moving collection. Evidence:
+`docs/validation/component-guest-cleanup-20261021.json`.
