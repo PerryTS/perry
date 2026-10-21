@@ -499,6 +499,51 @@ pub(super) fn max_local_id(hir: &HirModule) -> u32 {
         note(body);
     }
     let mut max = max;
+    for e in module_field_exprs(hir) {
+        let mut refs = Vec::new();
+        perry_hir::collect_local_refs_expr(e, &mut refs, &mut HashSet::new());
+        max = max.max(refs.into_iter().max().unwrap_or(0));
+        let field_max = std::cell::Cell::new(max);
+        let note = |id: u32| field_max.set(field_max.get().max(id));
+        visit_expr(
+            e,
+            true,
+            &mut |s| match s {
+                Stmt::Let { id, .. } => note(*id),
+                Stmt::Try { catch: Some(c), .. } => {
+                    if let Some((id, _)) = &c.param {
+                        note(*id);
+                    }
+                }
+                Stmt::PreallocateBoxes(ids)
+                | Stmt::PreallocateTdzBoxes(ids)
+                | Stmt::ReleaseBoxes(ids) => {
+                    for id in ids {
+                        note(*id);
+                    }
+                }
+                _ => {}
+            },
+            &mut |e| match e {
+                Expr::ScopedTemp { id, .. } => note(*id),
+                Expr::Closure {
+                    params,
+                    captures,
+                    mutable_captures,
+                    ..
+                } => {
+                    for p in params {
+                        note(p.id);
+                    }
+                    for id in captures.iter().chain(mutable_captures) {
+                        note(*id);
+                    }
+                }
+                _ => {}
+            },
+        );
+        max = field_max.get();
+    }
     let mut fns: Vec<&Function> = hir.functions.iter().collect();
     for c in &hir.classes {
         fns.extend(c.constructor.iter());

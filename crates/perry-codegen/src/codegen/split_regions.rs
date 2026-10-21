@@ -223,13 +223,12 @@ pub(crate) fn region_number_params(f: &Function) -> HashSet<u32> {
 
 #[path = "split_regions_facts.rs"]
 mod facts;
-#[cfg(test)]
-use facts::visit_expr;
 use facts::{
     all_module_bodies, closure_captured_ids, declarations_to_assignments, declared_ids, let_counts,
     max_local_id, module_facts, ref_counts, ref_set, visit_stmt, visit_stmts, written_ids,
     ModuleFacts,
 };
+use facts::{module_field_exprs, visit_expr};
 
 // ---------------------------------------------------------------------------
 // Statement admission
@@ -1570,7 +1569,15 @@ fn split_body(
         sink_hoisted_functions(body, facts);
     }
     let declared = declared_ids(body, false);
-    let captured = closure_captured_ids(body);
+    let mut captured = closure_captured_ids(body);
+    // Constructor capture params are also read by member/field closures,
+    // which are stored outside this body. Preserve their shared cells using
+    // lowering's reserved capture names, just like captures found in-body.
+    captured.extend(params.iter().filter_map(|p| {
+        p.name
+            .starts_with(perry_hir::cap_fields::CAP_FIELD_PREFIX)
+            .then_some(p.id)
+    }));
     let boxed: HashSet<u32> = captured
         .iter()
         .filter(|id| facts.writes.contains(id))
@@ -1655,6 +1662,48 @@ fn split_body(
     }
 }
 
+fn split_closures_in_expr(
+    e: &mut Expr,
+    names: &HashMap<u32, String>,
+    facts: &ModuleFacts,
+    sh: &mut Shared<'_>,
+) {
+    if let Expr::Closure {
+        func_id,
+        params,
+        body,
+        captures,
+        is_async,
+        is_generator,
+        is_strict,
+        ..
+    } = e
+    {
+        split_closures_in(body, names, facts, sh);
+        let parent = names
+            .get(func_id)
+            .filter(|n| !n.is_empty())
+            .cloned()
+            .unwrap_or_else(|| format!("closure{func_id}"));
+        let caps = captures.clone();
+        split_body(
+            body,
+            params,
+            &caps,
+            &parent,
+            *is_strict,
+            *is_async,
+            *is_generator,
+            facts,
+            sh,
+        );
+        return;
+    }
+    perry_hir::walker::walk_expr_children_mut(e, &mut |c| {
+        split_closures_in_expr(c, names, facts, sh)
+    });
+}
+
 /// Closures nested in `stmts`, innermost first, then the body itself.
 fn split_closures_in(
     stmts: &mut [Stmt],
@@ -1662,45 +1711,6 @@ fn split_closures_in(
     facts: &ModuleFacts,
     sh: &mut Shared<'_>,
 ) {
-    fn in_expr(
-        e: &mut Expr,
-        names: &HashMap<u32, String>,
-        facts: &ModuleFacts,
-        sh: &mut Shared<'_>,
-    ) {
-        if let Expr::Closure {
-            func_id,
-            params,
-            body,
-            captures,
-            is_async,
-            is_generator,
-            is_strict,
-            ..
-        } = e
-        {
-            split_closures_in(body, names, facts, sh);
-            let parent = names
-                .get(func_id)
-                .filter(|n| !n.is_empty())
-                .cloned()
-                .unwrap_or_else(|| format!("closure{func_id}"));
-            let caps = captures.clone();
-            split_body(
-                body,
-                params,
-                &caps,
-                &parent,
-                *is_strict,
-                *is_async,
-                *is_generator,
-                facts,
-                sh,
-            );
-            return;
-        }
-        perry_hir::walker::walk_expr_children_mut(e, &mut |c| in_expr(c, names, facts, sh));
-    }
     fn in_stmt(
         s: &mut Stmt,
         names: &HashMap<u32, String>,
@@ -1711,20 +1721,20 @@ fn split_closures_in(
             Stmt::Let { init: Some(e), .. }
             | Stmt::Expr(e)
             | Stmt::Throw(e)
-            | Stmt::Return(Some(e)) => in_expr(e, names, facts, sh),
+            | Stmt::Return(Some(e)) => split_closures_in_expr(e, names, facts, sh),
             Stmt::If {
                 condition,
                 then_branch,
                 else_branch,
             } => {
-                in_expr(condition, names, facts, sh);
+                split_closures_in_expr(condition, names, facts, sh);
                 split_closures_in(then_branch, names, facts, sh);
                 if let Some(e) = else_branch {
                     split_closures_in(e, names, facts, sh);
                 }
             }
             Stmt::While { condition, body } | Stmt::DoWhile { condition, body } => {
-                in_expr(condition, names, facts, sh);
+                split_closures_in_expr(condition, names, facts, sh);
                 split_closures_in(body, names, facts, sh);
             }
             Stmt::For {
@@ -1737,10 +1747,10 @@ fn split_closures_in(
                     in_stmt(i, names, facts, sh);
                 }
                 if let Some(c) = condition {
-                    in_expr(c, names, facts, sh);
+                    split_closures_in_expr(c, names, facts, sh);
                 }
                 if let Some(u) = update {
-                    in_expr(u, names, facts, sh);
+                    split_closures_in_expr(u, names, facts, sh);
                 }
                 split_closures_in(body, names, facts, sh);
             }
@@ -1762,10 +1772,10 @@ fn split_closures_in(
                 discriminant,
                 cases,
             } => {
-                in_expr(discriminant, names, facts, sh);
+                split_closures_in_expr(discriminant, names, facts, sh);
                 for c in cases {
                     if let Some(t) = &mut c.test {
-                        in_expr(t, names, facts, sh);
+                        split_closures_in_expr(t, names, facts, sh);
                     }
                     split_closures_in(&mut c.body, names, facts, sh);
                 }
@@ -1776,6 +1786,27 @@ fn split_closures_in(
     for s in stmts.iter_mut() {
         in_stmt(s, names, facts, sh);
     }
+}
+
+fn split_function(
+    f: &mut Function,
+    parent: &str,
+    names: &HashMap<u32, String>,
+    facts: &ModuleFacts,
+    sh: &mut Shared<'_>,
+) {
+    split_closures_in(&mut f.body, names, facts, sh);
+    split_body(
+        &mut f.body,
+        &f.params,
+        &f.captures,
+        parent,
+        f.is_strict,
+        f.is_async || f.was_plain_async,
+        f.is_generator,
+        facts,
+        sh,
+    );
 }
 
 /// Split every oversized function and closure body of `hir`. Returns the
@@ -1809,6 +1840,15 @@ pub(crate) fn split_large_bodies_with(hir: &mut HirModule, limits: Limits) -> us
                 }
             });
         }
+        if !big {
+            for e in module_field_exprs(hir) {
+                visit_expr(e, true, &mut |_| {}, &mut |e| {
+                    if let Expr::Closure { body, .. } = e {
+                        big |= crate::collectors::count_body_nodes(body) > min;
+                    }
+                });
+            }
+        }
         big
     };
     if !any_big {
@@ -1831,22 +1871,28 @@ pub(crate) fn split_large_bodies_with(hir: &mut HirModule, limits: Limits) -> us
         closure_names: Vec::new(),
     };
     split_closures_in(&mut init, &names, &facts, &mut sh);
-    for f in functions.iter_mut() {
-        split_closures_in(&mut f.body, &names, &facts, &mut sh);
-        let params = f.params.clone();
-        let caps = f.captures.clone();
-        let name = f.name.clone();
-        split_body(
-            &mut f.body,
-            &params,
-            &caps,
-            &name,
-            f.is_strict,
-            f.is_async || f.was_plain_async,
-            f.is_generator,
-            &facts,
-            &mut sh,
-        );
+    for f in &mut functions {
+        let parent = f.name.clone();
+        split_function(f, &parent, &names, &facts, &mut sh);
+    }
+    for c in &mut hir.classes {
+        for f in c
+            .constructor
+            .iter_mut()
+            .chain(c.methods.iter_mut())
+            .chain(c.static_methods.iter_mut())
+            .chain(c.getters.iter_mut().map(|(_, f)| f))
+            .chain(c.setters.iter_mut().map(|(_, f)| f))
+            .chain(c.computed_members.iter_mut().map(|m| &mut m.function))
+        {
+            let parent = format!("{}::{}", c.name, f.name);
+            split_function(f, &parent, &names, &facts, &mut sh);
+        }
+        for field in c.fields.iter_mut().chain(&mut c.static_fields) {
+            for e in field.key_expr.iter_mut().chain(field.init.iter_mut()) {
+                split_closures_in_expr(e, &names, &facts, &mut sh);
+            }
+        }
     }
     let made = sh.out.len() + sh.closure_names.len();
     let report = std::mem::take(&mut sh.report);
