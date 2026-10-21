@@ -99,3 +99,29 @@ console.log("nullish", nullishRejected);
          nullish true\n"
     );
 }
+
+#[test]
+fn own_accessor_and_custom_prototype_methods_are_observable() {
+    let stdout = compile_and_run(
+        r#"
+class Holder {
+  constructor(public readonly values: ReadonlyMap<number, string>) {}
+  call(key: number) { return this.values.get(key); }
+}
+const own = new Map([[1, "one"]]);
+const original = Map.prototype.get;
+let reads = 0;
+Object.defineProperty(own, "get", {get() { reads++; return original; }});
+console.log("own", new Holder(own).call(1), reads);
+const custom = new Map([[1, "one"]]);
+Object.setPrototypeOf(custom, {get(key: number) { return "override"; }});
+console.log("prototype", new Holder(custom).call(99));
+let rejected = false;
+const broken = new Map([[1, "one"]]);
+Object.defineProperty(broken, "get", {value: 3});
+try { new Holder(broken).call(1); } catch (_) { rejected = true; }
+console.log("noncallable", rejected);
+"#,
+    );
+    assert_eq!(stdout, "own one 1\nprototype override\nnoncallable true\n");
+}

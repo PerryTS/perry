@@ -129,6 +129,19 @@ pub extern "C" fn js_array_from_value(boxed: f64) -> *mut ArrayHeader {
         let result = array_from_full(undefined, boxed, undefined, undefined);
         return crate::value::js_nanbox_get_pointer(result) as *mut ArrayHeader;
     }
+    // Ordinary objects and proxies must perform GetMethod and then drive the
+    // selected iterator or indexed array-like protocol, just as the mapped
+    // entry does. Cloning a Proxy's native header cannot observe its traps.
+    if crate::value::addr_class::pointer_value_header(bits).is_some_and(|header| {
+        matches!(
+            header.obj_type,
+            crate::gc::GC_TYPE_OBJECT | crate::gc::GC_TYPE_PROXY
+        )
+    }) {
+        let undefined = f64::from_bits(TAG_UNDEFINED);
+        let result = array_from_full(undefined, boxed, undefined, undefined);
+        return crate::value::js_nanbox_get_pointer(result) as *mut ArrayHeader;
+    }
     // #9846: the Map / Set / String families have the same hole. Their arms end
     // in `js_array_clone`'s element copies (the Set backing, the Map entry
     // pairs, the string's codepoint cut), none of which calls `.next()`, so a

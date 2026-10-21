@@ -176,14 +176,13 @@ pub(crate) fn builtin_parent_reserved_class_id(name: &str) -> Option<u32> {
 
 /// #10477: HIR hands `x instanceof F` with an IMPORTED `F` to codegen as a
 /// dynamic RHS (the binding's `ExternFuncRef` value), because only codegen
-/// knows what the import resolved to. Returns `true` when the static
-/// `js_instanceof(v, <class id>)` path below still answers the question, so the
-/// value is never materialized:
+/// knows what the import resolved to. Returns `true` when the metadata
+/// below resolves the constructor without lowering a placeholder import value:
 ///
-/// - an imported CLASS: its value is the INT32 class-ref immediate that
-///   `js_instanceof_dynamic` would only unpack back to the same id. The filter
-///   mirrors `ExternFuncRef`'s value lowering (`dyn_extern_i18n.rs`), so class
-///   metadata that is not this lexical binding never claims it;
+/// - an imported class: this skips lowering the placeholder import value;
+///   the class-id arm below materializes its pinned constructor object and
+///   performs dynamic GetMethod. Class metadata that is not this lexical
+///   binding never claims it;
 /// - a binding that is not a compiled source-module import (a V8-fallback or
 ///   node-submodule import, an FFI `declare function`, an unresolved name): its
 ///   value form is a placeholder, and these keep their reserved-id mapping.
@@ -480,9 +479,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // user classes (local `hir.classes` + cross-module imported
             // user classes); plain built-in names never appear in it, so
             // unshadowed built-ins keep their reserved ids.
-            let user_cid = ctx.class_ids.get(ty).copied();
+            if let Some(cid) = ctx.class_ids.get(ty).copied() {
+                // The declaration's function object owns computed static
+                // members, including @@hasInstance. A class id alone loses
+                // that observable GetMethod (even for a primitive LHS).
+                // js_class_value is non-collecting and returns a pinned value.
+                let rhs = super::emit_class_value(ctx.block(), cid);
+                return Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_instanceof_dynamic",
+                    &[(DOUBLE, &v), (DOUBLE, &rhs)],
+                ));
+            }
             let cid = match ty.as_str() {
-                _ if user_cid.is_some() => user_cid.unwrap(),
                 "Error" => 0xFFFF0001u32,
                 "TypeError" => 0xFFFF0010u32,
                 "RangeError" => 0xFFFF0011u32,

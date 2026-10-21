@@ -10,10 +10,9 @@
 //!   `js_instanceof_dynamic`, which resolves the constructor value and walks
 //!   the prototype chain. Before #10477 it folded to `js_instanceof(v, 0)` —
 //!   a well-formed call that always answers `false`;
-//! * an imported CLASS must keep the static `js_instanceof(v, <class id>)`
-//!   check. Routing it through the dynamic helper would still be correct, so
-//!   only an IR census catches the regression: the class fast path would just
-//!   get slower.
+//! * an imported class must resolve its pinned function object, whose
+//!   computed static members hold @@hasInstance. Class ids alone cannot
+//!   establish that the observable GetMethod would select the default.
 
 use crate::{compile_module, CompileOptions, ImportedClass};
 use perry_hir::types::Type;
@@ -108,7 +107,7 @@ fn imported_function_constructor_rhs_resolves_the_constructor_value() {
 }
 
 #[test]
-fn imported_class_rhs_keeps_the_static_class_id_check() {
+fn imported_class_rhs_resolves_its_constructor_object() {
     let mut opts = CompileOptions {
         emit_ir_only: true,
         ..Default::default()
@@ -119,12 +118,12 @@ fn imported_class_rhs_keeps_the_static_class_id_check() {
     let ir = compile(&instanceof_imported("Klass"), opts);
 
     assert!(
-        ir.contains(STATIC_CALL),
-        "an imported class must keep the static class-id check:\n{ir}"
+        ir.contains("call double @js_class_value(i32 7701)") && ir.contains(DYNAMIC_CALL),
+        "an imported class must read @@hasInstance from its function object:\n{ir}"
     );
     assert!(
-        !ir.contains(DYNAMIC_CALL),
-        "the dynamic helper would only unpack the same class id back out:\n{ir}"
+        !ir.contains(STATIC_CALL),
+        "the class-id check misses computed static hooks:\n{ir}"
     );
 }
 

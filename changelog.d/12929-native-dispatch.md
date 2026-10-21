@@ -1,0 +1,1 @@
+Fix declared-class instanceof to consult computed static Symbol.hasInstance methods, preserve Map/Set subclass and property overrides on structurally typed calls, and materialize Proxy Array.from inputs through their observable iterator protocol. Existing regression programs cover each failure.

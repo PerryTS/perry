@@ -2117,10 +2117,16 @@ pub unsafe extern "C-unwind" fn js_declared_map_get(receiver: f64, key: f64) -> 
     let receiver_value = crate::value::JSValue::from_bits(receiver.to_bits());
     if receiver_value.is_pointer() {
         let raw = receiver_value.as_pointer::<MapHeader>();
+        // Metadata carries subclass brands, custom prototypes and own
+        // properties. Only an unmodified native receiver proves the builtin.
         if matches!(
             crate::value::addr_class::try_read_gc_header(raw as usize),
             Some(header) if header.obj_type == crate::gc::GC_TYPE_MAP
-        ) {
+        ) && (*raw).meta.is_null()
+            && crate::object::builtin_proto::pristine(
+                crate::object::builtin_proto::BuiltinProto::Map,
+            )
+        {
             return map_get_resolved(raw, key);
         }
     }
@@ -2130,11 +2136,14 @@ pub unsafe extern "C-unwind" fn js_declared_map_get(receiver: f64, key: f64) -> 
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver_handle = scope.root_nanbox_f64(receiver);
     let key_handle = scope.root_nanbox_f64(key);
+    let method =
+        crate::object::method_call::spec_get_value(receiver_handle.get_nanbox_f64(), b"get");
+    // Get may run an accessor that collects. Refresh both operands before
+    // calling the selected value, including a borrowed builtin method.
     let refreshed_key = key_handle.get_nanbox_f64();
-    crate::object::js_native_call_method(
+    crate::object::method_call::js_method_call_value(
+        method,
         receiver_handle.get_nanbox_f64(),
-        b"get".as_ptr() as *const i8,
-        3,
         &refreshed_key,
         1,
     )
