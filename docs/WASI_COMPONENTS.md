@@ -58,7 +58,8 @@ fuel does not interrupt time spent in synchronous host I/O.
 
 The combined component-host boundary uses ABI 5; compiler, runtime and
 optional host archive must be built together. The separate command feature
-was qualified using ABI 3; combined integration qualification is pending. This API is native-only. Unit fixtures and
+was qualified using ABI 3; combined integration qualification is pending.
+This API is native-only. Unit fixtures and
 `scripts/component_command_acceptance.py` cover return/exit behavior,
 initializer failures, limits and a Rust `wasm32-wasip2` command hosted by
 Perry in ordinary and moving-GC modes. Linux qualification passes all five
