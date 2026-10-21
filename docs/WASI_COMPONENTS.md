@@ -41,7 +41,9 @@ const status = runComponentCommand(bytes, {
 });
 ```
 
-This entry point enables the pinned Wasmtime-WASI P2 providers. Omitted grants
+This entry point enables the pinned Wasmtime-WASI 48.0.5 P2 providers
+(`wasi:cli@0.2.12`, including `exit-with-code`; the original `exit(result)`
+operation is covered at 0.2.0). Omitted grants
 have the same closed filesystem, network, environment and stdio defaults as
 `wasi: {}`. Each call receives independent arguments, environment, preopens
 and resource tables. It does not accept application imports. Reusable

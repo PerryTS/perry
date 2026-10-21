@@ -15,10 +15,10 @@ fn component(body: &str) -> Vec<u8> {
 }
 
 fn exit_component(code: u8, with_code: bool, start: bool, export: bool) -> Vec<u8> {
-    let (name, ty, version) = if with_code {
-        ("exit-with-code", "u8", "0.2.6")
+    let (name, param, ty, version) = if with_code {
+        ("exit-with-code", "status-code", "u8", "0.2.12")
     } else {
-        ("exit", "(result)", "0.2.0")
+        ("exit", "status", "(result)", "0.2.0")
     };
     let call = format!("(call $exit (i32.const {code})) unreachable");
     let run = if start { "i32.const 0" } else { &call };
@@ -35,7 +35,7 @@ fn exit_component(code: u8, with_code: bool, start: bool, export: bool) -> Vec<u
     wat::parse_str(format!(
         r#"(component
           (import "wasi:cli/exit@{version}" (instance $exit
-            (export "{name}" (func (param "status" {ty})))))
+            (export "{name}" (func (param "{param}" {ty})))))
           (alias export $exit "{name}" (func $exit))
           (core func $exit (canon lower (func $exit)))
           (core instance $env (export "exit" (func $exit)))
