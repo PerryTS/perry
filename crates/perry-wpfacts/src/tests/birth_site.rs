@@ -30,8 +30,17 @@ fn two_vector_objects_of_one_layout_share_appends() {
         "#,
     );
     for key in ["a", "b"] {
-        let site = pf.sites.iter().find(|s| s.key == key && !s.is_call).expect("site");
-        assert_eq!(site.receivers, vec!["t.ts:A".to_string(), "t.ts:B".to_string()], "{}", pf.dump_text());
+        let site = pf
+            .sites
+            .iter()
+            .find(|s| s.key == key && !s.is_call)
+            .expect("site");
+        assert_eq!(
+            site.receivers,
+            vec!["t.ts:A".to_string(), "t.ts:B".to_string()],
+            "{}",
+            pf.dump_text()
+        );
     }
     let t = tmpl(&pf, "Vec");
     assert!(t.escape.is_none() && t.hard.is_none(), "{}", pf.dump_text());
@@ -47,7 +56,12 @@ fn many_sites_of_one_class_are_one_layout() {
     }
     let pf = facts(&src);
     let site = pf.sites.iter().find(|s| s.key == "x").expect("site");
-    assert_eq!(site.receivers, vec!["t.ts:P".to_string()], "{}", pf.dump_text());
+    assert_eq!(
+        site.receivers,
+        vec!["t.ts:P".to_string()],
+        "{}",
+        pf.dump_text()
+    );
     assert_eq!(site.verdict, Verdict::T0Mono, "{}", pf.dump_text());
     let t = tmpl(&pf, "P");
     assert!(t.escape.is_none() && t.hard.is_none(), "{}", pf.dump_text());
@@ -98,7 +112,16 @@ fn subclass_objects_of_one_layout_share_appends() {
         "#,
     );
     for key in ["a", "b"] {
-        let site = pf.sites.iter().find(|s| s.key == key && !s.is_call).expect("site");
-        assert_eq!(site.receivers, vec!["t.ts:A".to_string(), "t.ts:B".to_string()], "{}", pf.dump_text());
+        let site = pf
+            .sites
+            .iter()
+            .find(|s| s.key == key && !s.is_call)
+            .expect("site");
+        assert_eq!(
+            site.receivers,
+            vec!["t.ts:A".to_string(), "t.ts:B".to_string()],
+            "{}",
+            pf.dump_text()
+        );
     }
 }

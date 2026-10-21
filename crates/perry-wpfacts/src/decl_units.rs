@@ -30,8 +30,6 @@ pub(crate) struct UnitView {
     /// (and globals). The driver orders it after the units owning them
     /// (decision 21).
     pub ext_names: FxHashSet<String>,
-    /// TEMP CWL census: the unit's path (`unit_path`).
-    pub key: String,
     /// Its items, as indices into the one module it is cut from: a view
     /// borrows the module, it copies nothing of it (phase 03m, CWN3M: the
     /// per-unit module clones were 16.4 GB of tscwork's 23 GB). `classes`
@@ -174,12 +172,20 @@ fn expr_refs(e: &Expr, r: &mut Refs) {
         | Expr::ArrayCopyWithin { array_id, .. }
         | Expr::ArrayPop(array_id)
         | Expr::ArrayShift(array_id)
-        | Expr::SetAdd { set_id: array_id, .. } => r.join_locals.push(*array_id),
+        | Expr::SetAdd {
+            set_id: array_id, ..
+        } => r.join_locals.push(*array_id),
         Expr::GlobalGet(id) => r.globals.push(*id),
         Expr::GlobalSet(id, _) => r.join_globals.push(*id),
         Expr::FuncRef(id) => r.funcs.push(*id),
         Expr::ClassRef(n) | Expr::ExternFuncRef { name: n, .. } => r.names.push(n.clone()),
-        Expr::Closure { captures, mutable_captures, params, func_id, .. } => {
+        Expr::Closure {
+            captures,
+            mutable_captures,
+            params,
+            func_id,
+            ..
+        } => {
             r.closures.push(*func_id);
             r.declared.extend(params.iter().map(|p| p.id));
             param_types(params, r);
@@ -188,7 +194,8 @@ fn expr_refs(e: &Expr, r: &mut Refs) {
             // closure; its own writes are `LocalSet`s in its body, walked
             // with the item (tsc: every function capturing `var Debug`,
             // assigned once by `Debug || (Debug = {})`, joined one unit).
-            r.locals.extend(captures.iter().chain(mutable_captures).copied());
+            r.locals
+                .extend(captures.iter().chain(mutable_captures).copied());
         }
         // A store through a declaration's name is that declaration's
         // state (`ZodString.create = …`).
@@ -215,7 +222,10 @@ fn class_name_refs(e: &Expr, r: &mut Refs) {
         | Expr::PrivateBrandCheck { class_name, .. }
         | Expr::PrivateGuard { class_name, .. }
         | Expr::EnumImage { class_name, .. } => r.names.push(class_name.clone()),
-        Expr::NativeMethodCall { class_name: Some(class_name), .. } => r.names.push(class_name.clone()),
+        Expr::NativeMethodCall {
+            class_name: Some(class_name),
+            ..
+        } => r.names.push(class_name.clone()),
         Expr::StaticFieldSet { class_name, .. }
         | Expr::ClassStaticSymbolSet { class_name, .. }
         | Expr::ClassEnvSet { class_name, .. }
@@ -253,10 +263,20 @@ pub(crate) fn run_once_flat(module: &Module) -> Option<Module> {
         Expr::FuncRef(id) => *names.entry(*id).or_default() += 1,
         // Every use of a local, in a closure body too (capture lists only
         // mirror these uses).
-        Expr::LocalGet(id) | Expr::LocalSet(id, _) | Expr::Update { id, .. } => *locals.entry(*id).or_default() += 1,
+        Expr::LocalGet(id) | Expr::LocalSet(id, _) | Expr::Update { id, .. } => {
+            *locals.entry(*id).or_default() += 1
+        }
         _ => {}
     });
-    let mut flat = Flat { module, names, locals, inlined: FxHashSet::default(), fn_lets: FxHashMap::default(), out: Vec::new(), changed: false };
+    let mut flat = Flat {
+        module,
+        names,
+        locals,
+        inlined: FxHashSet::default(),
+        fn_lets: FxHashMap::default(),
+        out: Vec::new(),
+        changed: false,
+    };
     for s in &module.init {
         flat.stmt(s);
     }
@@ -289,12 +309,18 @@ impl Flat<'_> {
     fn stmt(&mut self, s: &Stmt) {
         match s {
             Stmt::Expr(Expr::Call { callee, args, .. }) if self.call(callee, args, None) => return,
-            Stmt::Let { id, name, ty, mutable, init: Some(Expr::Call { callee, args, .. }) }
-                if self.call(callee, args, Some((*id, name, ty, *mutable))) =>
-            {
-                return
-            }
-            Stmt::Let { id, init: Some(Expr::Closure { .. }), .. } => {
+            Stmt::Let {
+                id,
+                name,
+                ty,
+                mutable,
+                init: Some(Expr::Call { callee, args, .. }),
+            } if self.call(callee, args, Some((*id, name, ty, *mutable))) => return,
+            Stmt::Let {
+                id,
+                init: Some(Expr::Closure { .. }),
+                ..
+            } => {
                 self.fn_lets.insert(*id, self.out.len());
             }
             // The no-op box statements of codegen; a TDZ seed is a write of
@@ -321,7 +347,9 @@ impl Flat<'_> {
         let lit = match callee {
             Expr::FuncRef(id) if self.names.get(id) == Some(&1) => {
                 let m = self.module;
-                let Some(f) = m.functions.iter().find(|f| f.id == *id) else { return false };
+                let Some(f) = m.functions.iter().find(|f| f.id == *id) else {
+                    return false;
+                };
                 if f.is_async || f.is_generator || !runs_inline(&f.params, &f.body, true) {
                     return false;
                 }
@@ -330,8 +358,15 @@ impl Flat<'_> {
                 return true;
             }
             Expr::LocalGet(id) => {
-                let Some(&k) = self.fn_lets.get(id) else { return false };
-                let Some(Stmt::Let { init: Some(lit), .. }) = &self.out[k] else { return false };
+                let Some(&k) = self.fn_lets.get(id) else {
+                    return false;
+                };
+                let Some(Stmt::Let {
+                    init: Some(lit), ..
+                }) = &self.out[k]
+                else {
+                    return false;
+                };
                 // Named only at this call (a self-call inside is a second
                 // use), or the CommonJS factory: the module record holds it
                 // too, the runtime's require cache, and a module body runs
@@ -348,9 +383,19 @@ impl Flat<'_> {
                     return false;
                 }
                 self.out[k] = match self.out[k].take() {
-                    Some(Stmt::Let { id, name, ty, mutable, .. }) if factory => {
-                        Some(Stmt::Let { id, name, ty, mutable, init: Some(Expr::Undefined) })
-                    }
+                    Some(Stmt::Let {
+                        id,
+                        name,
+                        ty,
+                        mutable,
+                        ..
+                    }) if factory => Some(Stmt::Let {
+                        id,
+                        name,
+                        ty,
+                        mutable,
+                        init: Some(Expr::Undefined),
+                    }),
                     _ => None,
                 };
                 lit
@@ -358,7 +403,9 @@ impl Flat<'_> {
             Expr::Closure { .. } if inline_literal(callee) => callee.clone(),
             _ => return false,
         };
-        let Expr::Closure { params, body, .. } = &lit else { return false };
+        let Expr::Closure { params, body, .. } = &lit else {
+            return false;
+        };
         self.body(params, args, body, dest);
         true
     }
@@ -367,7 +414,13 @@ impl Flat<'_> {
         self.changed = true;
         for (i, p) in params.iter().enumerate() {
             let init = args.get(i).cloned().unwrap_or(Expr::Undefined);
-            self.out.push(Some(Stmt::Let { id: p.id, name: p.name.clone(), ty: p.ty.clone(), mutable: true, init: Some(init) }));
+            self.out.push(Some(Stmt::Let {
+                id: p.id,
+                name: p.name.clone(),
+                ty: p.ty.clone(),
+                mutable: true,
+                init: Some(init),
+            }));
         }
         for a in args.iter().skip(params.len()) {
             self.out.push(Some(Stmt::Expr(a.clone())));
@@ -382,7 +435,13 @@ impl Flat<'_> {
         match dest {
             Some((id, name, ty, mutable)) => {
                 let init = Some(result.unwrap_or(Expr::Undefined));
-                self.stmt(&Stmt::Let { id, name: name.to_string(), ty: ty.clone(), mutable, init });
+                self.stmt(&Stmt::Let {
+                    id,
+                    name: name.to_string(),
+                    ty: ty.clone(),
+                    mutable,
+                    init,
+                });
             }
             None => {
                 if let Some(e) = result {
@@ -404,7 +463,10 @@ fn inline_literal(e: &Expr) -> bool {
 /// for an arrow literal, whose `captures_this` the caller checks), no
 /// `arguments`, plain parameters.
 fn runs_inline(params: &[perry_hir::Param], body: &[Stmt], own_this: bool) -> bool {
-    if params.iter().any(|p| p.is_rest || p.default.is_some() || p.arguments_object.is_some()) {
+    if params
+        .iter()
+        .any(|p| p.is_rest || p.default.is_some() || p.arguments_object.is_some())
+    {
         return false;
     }
     let stmts = match body.split_last() {
@@ -412,11 +474,21 @@ fn runs_inline(params: &[perry_hir::Param], body: &[Stmt], own_this: bool) -> bo
         _ => body,
     };
     let mut ok = true;
-    perry_hir::tdz_check::for_each_stmt_shallow(stmts, &mut |s| ok &= !matches!(s, Stmt::Return(_)));
+    perry_hir::tdz_check::for_each_stmt_shallow(stmts, &mut |s| {
+        ok &= !matches!(s, Stmt::Return(_))
+    });
     if ok && own_this {
         // `this` of the body itself, or of an arrow inside it.
         perry_hir::tdz_check::for_each_stmts_expr_shallow(body, &mut |e| {
-            ok &= !matches!(e, Expr::This | Expr::Closure { is_arrow: true, captures_this: true, .. })
+            ok &= !matches!(
+                e,
+                Expr::This
+                    | Expr::Closure {
+                        is_arrow: true,
+                        captures_this: true,
+                        ..
+                    }
+            )
         });
     }
     ok
@@ -431,7 +503,9 @@ fn local_lets(module: &Module, it: Item, out: &mut Vec<(u32, Option<(String, u32
     let mut on_stmt = |s: &Stmt| {
         if let Stmt::Let { id, name, init, .. } = s {
             let lit = match init {
-                Some(Expr::Closure { func_id, .. }) => Some((format!("{name}#{func_id}"), *func_id)),
+                Some(Expr::Closure { func_id, .. }) => {
+                    Some((format!("{name}#{func_id}"), *func_id))
+                }
                 _ => None,
             };
             out.push((*id, lit));
@@ -508,7 +582,9 @@ pub(crate) fn closed_bindings(module: &Module) -> FxHashMap<String, u32> {
             | Expr::ArrayCopyWithin { array_id: id, .. }
             | Expr::ArrayPop(id)
             | Expr::ArrayShift(id)
-            | Expr::SetAdd { set_id: id, .. } => uses.entry((false, *id)).or_default().written = true,
+            | Expr::SetAdd { set_id: id, .. } => {
+                uses.entry((false, *id)).or_default().written = true
+            }
             Expr::WithGet { .. } | Expr::WithSet { .. } => with = true,
             _ => {}
         };
@@ -525,7 +601,7 @@ pub(crate) fn closed_bindings(module: &Module) -> FxHashMap<String, u32> {
         }
         perry_hir::tdz_check::for_each_stmts_expr(&module.init, f);
     }
-    let mut out: FxHashMap<String, u32> = FxHashMap::default();
+    let out: FxHashMap<String, u32> = FxHashMap::default();
     if with {
         return out;
     }
@@ -534,7 +610,12 @@ pub(crate) fn closed_bindings(module: &Module) -> FxHashMap<String, u32> {
     // a `var`'s hoisted placeholder (no value, before it) is the binding
     // still holding undefined, no other value.
     let mut lets: FxHashMap<u32, Vec<(usize, bool)>> = FxHashMap::default();
-    for n in module.functions.iter().map(|f| f.name.as_str()).chain(module.classes.iter().map(|c| c.name.as_str())) {
+    for n in module
+        .functions
+        .iter()
+        .map(|f| f.name.as_str())
+        .chain(module.classes.iter().map(|c| c.name.as_str()))
+    {
         *names.entry(n).or_default() += 1;
     }
     for n in module.globals.iter().map(|g| g.name.as_str()) {
@@ -551,7 +632,10 @@ pub(crate) fn closed_bindings(module: &Module) -> FxHashMap<String, u32> {
         }
     }
     let exported = |name: &str| {
-        module.exports.iter().any(|e| matches!(e, Export::Named { local, .. } if local == name))
+        module
+            .exports
+            .iter()
+            .any(|e| matches!(e, Export::Named { local, .. } if local == name))
             || module.exported_objects.iter().any(|n| n == name)
     };
     // The candidates: unexported, uniquely named, never written.
@@ -569,9 +653,21 @@ pub(crate) fn closed_bindings(module: &Module) -> FxHashMap<String, u32> {
         }
     }
     for (k, s) in module.init.iter().enumerate() {
-        if let Stmt::Let { id, name, init: Some(Expr::Closure { func_id, .. }), .. } = s {
-            let once = lets[id].iter().all(|&(j, placeholder)| j == k || (placeholder && j < k));
-            if names[name.as_str()] == 1 && once && !exported(name) && unwritten(uses.get(&(false, *id))) {
+        if let Stmt::Let {
+            id,
+            name,
+            init: Some(Expr::Closure { func_id, .. }),
+            ..
+        } = s
+        {
+            let once = lets[id]
+                .iter()
+                .all(|&(j, placeholder)| j == k || (placeholder && j < k));
+            if names[name.as_str()] == 1
+                && once
+                && !exported(name)
+                && unwritten(uses.get(&(false, *id)))
+            {
                 cand.insert((false, *id), (name.clone(), *func_id));
             }
         }
@@ -612,7 +708,12 @@ pub(crate) fn closed_bindings(module: &Module) -> FxHashMap<String, u32> {
         let drop: Vec<(bool, u32)> = cand
             .keys()
             .filter(|k| {
-                uses.get(k).is_some_and(|u| u.refs != u.calls + u.checks + u.args_of.iter().filter(|c| cand.contains_key(c)).count() as u32)
+                uses.get(k).is_some_and(|u| {
+                    u.refs
+                        != u.calls
+                            + u.checks
+                            + u.args_of.iter().filter(|c| cand.contains_key(c)).count() as u32
+                })
             })
             .copied()
             .collect();
@@ -637,7 +738,11 @@ pub(crate) fn decl_units(module: &Module) -> Vec<Vec<Item>> {
     // not a declaration: every unit that births it gets its own copy
     // (`views`), as two modules with one shape do; their templates share
     // the class id, so a site's guard is stable only when every copy is.
-    items.extend((0..module.classes.len()).filter(|&k| !module.classes[k].is_literal_shape()).map(Item::Class));
+    items.extend(
+        (0..module.classes.len())
+            .filter(|&k| !module.classes[k].is_literal_shape())
+            .map(Item::Class),
+    );
     items.extend((0..module.globals.len()).map(Item::Global));
     items.extend((0..module.init.len()).map(Item::Init));
     let n = items.len();
@@ -708,7 +813,10 @@ pub(crate) fn decl_units(module: &Module) -> Vec<Vec<Item>> {
                         for_each_expr_in(e, f);
                     }
                 }
-                Item::Init(k) => perry_hir::tdz_check::for_each_stmts_expr(std::slice::from_ref(&module.init[k]), f),
+                Item::Init(k) => perry_hir::tdz_check::for_each_stmts_expr(
+                    std::slice::from_ref(&module.init[k]),
+                    f,
+                ),
             }
         }
         if let Item::Class(k) = *it {
@@ -782,7 +890,10 @@ pub(crate) fn decl_units(module: &Module) -> Vec<Vec<Item>> {
             }
         }
     }
-    let out: Vec<Vec<Item>> = sccs(&succ).into_iter().map(|c| c.into_iter().map(|i| items[i]).collect()).collect();
+    let out: Vec<Vec<Item>> = sccs(&succ)
+        .into_iter()
+        .map(|c| c.into_iter().map(|i| items[i]).collect())
+        .collect();
     out
 }
 
@@ -899,12 +1010,16 @@ pub(crate) fn views(path: &str, module: &Module) -> Vec<(UnitView, Vec<usize>)> 
     // so the views together cost their index lists, not units × module.
     let mut out: Vec<(UnitView, Vec<usize>)> = Vec::with_capacity(units.len());
     for (u, items) in units.iter().enumerate() {
-        let mut view = UnitView { key: unit_path(path, u), ..Default::default() };
+        let mut view = UnitView::default();
         for it in items {
             let own = match *it {
                 Item::Func(k) => Some((module.functions[k].name.as_str(), module.functions[k].id)),
                 Item::Init(k) => match &module.init[k] {
-                    Stmt::Let { name, init: Some(Expr::Closure { func_id, .. }), .. } => Some((name.as_str(), *func_id)),
+                    Stmt::Let {
+                        name,
+                        init: Some(Expr::Closure { func_id, .. }),
+                        ..
+                    } => Some((name.as_str(), *func_id)),
                     _ => None,
                 },
                 _ => None,
@@ -941,7 +1056,10 @@ pub(crate) fn views(path: &str, module: &Module) -> Vec<(UnitView, Vec<usize>)> 
                         view.globals.push(k);
                     }
                     Item::Init(k) => {
-                        perry_hir::tdz_check::for_each_stmts_expr(std::slice::from_ref(&module.init[k]), f);
+                        perry_hir::tdz_check::for_each_stmts_expr(
+                            std::slice::from_ref(&module.init[k]),
+                            f,
+                        );
                         view.init.push(k);
                     }
                 }
@@ -955,7 +1073,11 @@ pub(crate) fn views(path: &str, module: &Module) -> Vec<(UnitView, Vec<usize>)> 
                     if let Some(p) = &c.extends_name {
                         r.names.push(p.clone());
                     }
-                    let fs = c.constructor.iter().chain(&c.methods).chain(&c.static_methods);
+                    let fs = c
+                        .constructor
+                        .iter()
+                        .chain(&c.methods)
+                        .chain(&c.static_methods);
                     for f in fs.chain(c.getters.iter().chain(&c.setters).map(|(_, f)| f)) {
                         param_types(&f.params, &mut r);
                     }
@@ -1028,8 +1150,18 @@ pub(crate) fn views(path: &str, module: &Module) -> Vec<(UnitView, Vec<usize>)> 
         // from the module: a unit asks only for its own ids.)
         let own_fn = |id: &u32| owner_func.get(id).is_some_and(|(w, _)| *w == u);
         let own_name = |n: &str| owner_name.get(n) == Some(&u);
-        view.exported_objects = module.exported_objects.iter().filter(|n| own_name(n)).cloned().collect();
-        view.exported_functions = module.exported_functions.iter().filter(|(_, id)| own_fn(id)).cloned().collect();
+        view.exported_objects = module
+            .exported_objects
+            .iter()
+            .filter(|n| own_name(n))
+            .cloned()
+            .collect();
+        view.exported_functions = module
+            .exported_functions
+            .iter()
+            .filter(|(_, id)| own_fn(id))
+            .cloned()
+            .collect();
         let mut deps: Vec<usize> = deps.into_iter().collect();
         deps.sort_unstable();
         out.push((view, deps));
@@ -1057,7 +1189,10 @@ pub(crate) fn views(path: &str, module: &Module) -> Vec<(UnitView, Vec<usize>)> 
                 resolved_path: Some(p),
                 specifiers: names
                     .into_iter()
-                    .map(|n| ImportSpecifier::Named { imported: n.clone(), local: n })
+                    .map(|n| ImportSpecifier::Named {
+                        imported: n.clone(),
+                        local: n,
+                    })
                     .collect(),
                 is_native: false,
                 module_kind: Default::default(),
@@ -1082,10 +1217,17 @@ pub(crate) fn views(path: &str, module: &Module) -> Vec<(UnitView, Vec<usize>)> 
         let mut own: Vec<&String> = wanted[u].iter().collect();
         own.sort();
         for nm in own {
-            if !view.exports.iter().any(|e| matches!(e, Export::Named { exported, .. } if exported == nm)) {
+            if !view
+                .exports
+                .iter()
+                .any(|e| matches!(e, Export::Named { exported, .. } if exported == nm))
+            {
                 view.unit_exports.insert(nm.clone());
             }
-            view.exports.push(Export::Named { local: nm.clone(), exported: nm.clone() });
+            view.exports.push(Export::Named {
+                local: nm.clone(),
+                exported: nm.clone(),
+            });
         }
     }
     out

@@ -133,4 +133,3 @@ fn compare(op: CompareOp, l: &Const, r: &Const) -> Option<bool> {
         }
     })
 }
-

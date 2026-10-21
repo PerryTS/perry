@@ -15,7 +15,9 @@ fn many(n: usize, fields: impl Fn(usize) -> &'static str) -> ProgramFacts {
     src.push_str("function get(o: any) { return o.x; }\n");
     src.push_str("let v: any = new C0();\n");
     for i in 0..n {
-        src.push_str(&format!("if (Math.random() < 0.5) v = new C{i}();\nget(new C{i}());\n"));
+        src.push_str(&format!(
+            "if (Math.random() < 0.5) v = new C{i}();\nget(new C{i}());\n"
+        ));
     }
     src.push_str("console.log(v.x);\n");
     facts(&src)
@@ -30,7 +32,12 @@ fn x_sites(pf: &ProgramFacts) -> Vec<&crate::SiteFacts> {
 fn none_escape(pf: &ProgramFacts, n: usize) {
     for i in 0..n {
         let t = tmpl(pf, &format!("C{i}"));
-        assert!(t.escape.is_none(), "C{i} escapes: {:?}\n{}", t.escape, pf.dump_text());
+        assert!(
+            t.escape.is_none(),
+            "C{i} escapes: {:?}\n{}",
+            t.escape,
+            pf.dump_text()
+        );
     }
 }
 
@@ -39,7 +46,12 @@ fn a_set_past_64_of_one_layout_is_proven() {
     let n = 80;
     let pf = many(n, |_| "x = 1;");
     for s in x_sites(&pf) {
-        assert!(!s.top && s.receivers.len() == n, "{:?} top={}", s.receivers, s.top);
+        assert!(
+            !s.top && s.receivers.len() == n,
+            "{:?} top={}",
+            s.receivers,
+            s.top
+        );
         assert!(
             matches!(s.verdict, Verdict::T0Mono | Verdict::T0Set),
             "{:?}\n{}",
@@ -54,9 +66,20 @@ fn a_set_past_64_of_one_layout_is_proven() {
 #[test]
 fn a_set_past_64_of_two_slots_differs_and_nothing_escapes() {
     let n = 80;
-    let pf = many(n, |i| if i % 2 == 0 { "x = 1;" } else { "y = 2; x = 1;" });
+    let pf = many(n, |i| {
+        if i % 2 == 0 {
+            "x = 1;"
+        } else {
+            "y = 2; x = 1;"
+        }
+    });
     for s in x_sites(&pf) {
-        assert!(!s.top && s.receivers.len() == n, "{:?} top={}", s.receivers, s.top);
+        assert!(
+            !s.top && s.receivers.len() == n,
+            "{:?} top={}",
+            s.receivers,
+            s.top
+        );
         assert_eq!(
             s.verdict,
             Verdict::No("slots differ across the receiver set".into()),

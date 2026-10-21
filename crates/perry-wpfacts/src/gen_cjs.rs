@@ -25,7 +25,12 @@ impl<'a> Gen<'a> {
     /// call is worth that one target: its publication under the path (the
     /// record's live `exports`, or a raw publication) and the hoisted import
     /// binding of the same path. `None` for any other shape of call.
-    pub(crate) fn cjs_static_require(&mut self, mi: u32, callee: &Expr, spec: &str) -> Option<NodeId> {
+    pub(crate) fn cjs_static_require(
+        &mut self,
+        mi: u32,
+        callee: &Expr,
+        spec: &str,
+    ) -> Option<NodeId> {
         let module = self.modules[mi as usize].1;
         let wrapped = module.imports.iter().any(|i| {
             (i.source == "node:module" || i.source == "module")
@@ -44,7 +49,11 @@ impl<'a> Gen<'a> {
         // module factory in a generated wrapper.
         let body: &[Stmt] = match callee {
             Expr::FuncRef(func_id) => {
-                match module.functions.iter().find(|f| f.id == *func_id && f.name == "require") {
+                match module
+                    .functions
+                    .iter()
+                    .find(|f| f.id == *func_id && f.name == "require")
+                {
                     Some(f) => &f.body,
                     None => {
                         if self.m.explain {
@@ -67,7 +76,12 @@ impl<'a> Gen<'a> {
         };
         let arm = body.iter().find_map(|s| match s {
             Stmt::If {
-                condition: Expr::Compare { op: CompareOp::Eq, left, right },
+                condition:
+                    Expr::Compare {
+                        op: CompareOp::Eq,
+                        left,
+                        right,
+                    },
                 then_branch,
                 ..
             } if is_spec_test(&left, &right, spec) => Some(then_branch),
@@ -75,7 +89,14 @@ impl<'a> Gen<'a> {
         });
         let Some(arm) = arm else {
             if self.m.explain {
-                let heads: Vec<String> = body.iter().take(6).map(|st| { let d = format!("{st:?}"); d[..d.len().min(160)].to_string() }).collect();
+                let heads: Vec<String> = body
+                    .iter()
+                    .take(6)
+                    .map(|st| {
+                        let d = format!("{st:?}");
+                        d[..d.len().min(160)].to_string()
+                    })
+                    .collect();
                 eprintln!("perry: wpfacts explain: static require {spec:?}: no arm in require body; first statements {heads:?}");
             }
             return None;
@@ -109,7 +130,11 @@ impl<'a> Gen<'a> {
         let locals: Vec<String> = module
             .imports
             .iter()
-            .filter(|i| i.resolved_path.as_deref().is_some_and(|p| canonical_path(p) == canon))
+            .filter(|i| {
+                i.resolved_path
+                    .as_deref()
+                    .is_some_and(|p| canonical_path(p) == canon)
+            })
             .flat_map(|i| i.specifiers.iter().map(spec_local))
             .collect();
         for l in locals {
@@ -214,30 +239,76 @@ fn collect_require_lets<'a>(st: &'a Stmt, out: &mut Vec<(u32, &'a [Stmt])>) {
         }
         Stmt::Expr(e) | Stmt::Throw(e) => exprs.push(e),
         Stmt::Return(Some(e)) => exprs.push(e),
-        Stmt::If { condition, then_branch, else_branch } => {
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
             exprs.push(condition);
-            for s in then_branch { collect_require_lets(s, out); }
-            if let Some(b) = else_branch { for s in b { collect_require_lets(s, out); } }
+            for s in then_branch {
+                collect_require_lets(s, out);
+            }
+            if let Some(b) = else_branch {
+                for s in b {
+                    collect_require_lets(s, out);
+                }
+            }
         }
         Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
             exprs.push(condition);
-            for s in body { collect_require_lets(s, out); }
+            for s in body {
+                collect_require_lets(s, out);
+            }
         }
-        Stmt::For { init, condition, update, body } => {
-            if let Some(i) = init { collect_require_lets(i, out); }
-            if let Some(c) = condition { exprs.push(c); }
-            if let Some(u) = update { exprs.push(u); }
-            for s in body { collect_require_lets(s, out); }
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            if let Some(i) = init {
+                collect_require_lets(i, out);
+            }
+            if let Some(c) = condition {
+                exprs.push(c);
+            }
+            if let Some(u) = update {
+                exprs.push(u);
+            }
+            for s in body {
+                collect_require_lets(s, out);
+            }
         }
         Stmt::Labeled { body, .. } => collect_require_lets(body, out),
-        Stmt::Try { body, catch, finally } => {
-            for s in body { collect_require_lets(s, out); }
-            if let Some(c) = catch { for s in &c.body { collect_require_lets(s, out); } }
-            if let Some(f) = finally { for s in f { collect_require_lets(s, out); } }
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            for s in body {
+                collect_require_lets(s, out);
+            }
+            if let Some(c) = catch {
+                for s in &c.body {
+                    collect_require_lets(s, out);
+                }
+            }
+            if let Some(f) = finally {
+                for s in f {
+                    collect_require_lets(s, out);
+                }
+            }
         }
-        Stmt::Switch { discriminant, cases } => {
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
             exprs.push(discriminant);
-            for c in cases { for s in &c.body { collect_require_lets(s, out); } }
+            for c in cases {
+                for s in &c.body {
+                    collect_require_lets(s, out);
+                }
+            }
         }
         _ => {}
     }
@@ -249,9 +320,13 @@ fn collect_require_lets<'a>(st: &'a Stmt, out: &mut Vec<(u32, &'a [Stmt])>) {
 /// Closure bodies inside `e`, searched for `let require = <closure>`.
 fn collect_require_closures<'a>(e: &'a Expr, out: &mut Vec<(u32, &'a [Stmt])>) {
     if let Expr::Closure { body, .. } = e {
-        for s in body { collect_require_lets(s, out); }
+        for s in body {
+            collect_require_lets(s, out);
+        }
     }
     let mut kids: Vec<&'a Expr> = Vec::new();
     perry_hir::walker::walk_expr_children(e, &mut |c| kids.push(c));
-    for k in kids { collect_require_closures(k, out); }
+    for k in kids {
+        collect_require_closures(k, out);
+    }
 }

@@ -28,7 +28,13 @@ fn exports_are_entries_of_other_units() {
         "#;
     let whole = facts(src);
     assert!(proven(&whole, "x"), "{}", whole.dump_text());
-    let pf = units_of(&[("t", src), ("u", "import { P, get } from './t'; console.log(get(new P(2)));")]);
+    let pf = units_of(&[
+        ("t", src),
+        (
+            "u",
+            "import { P, get } from './t'; console.log(get(new P(2)));",
+        ),
+    ]);
     assert!(!proven(&pf, "x"), "{}", pf.dump_text());
     // A published class is a contract, not an escape (§11.2), and so is the
     // published function `get`: `u` passing a `P` to it is a use its
@@ -43,7 +49,11 @@ fn exports_are_entries_of_other_units() {
 
 /// The modules the units belong to (a unit path is `module#uK`, §12.3).
 fn modules_of_units(pf: &ProgramFacts) -> Vec<String> {
-    let mut m: Vec<String> = pf.units.iter().map(|(p, _)| crate::decl_units::module_of(p).to_string()).collect();
+    let mut m: Vec<String> = pf
+        .units
+        .iter()
+        .map(|(p, _)| crate::decl_units::module_of(p).to_string())
+        .collect();
     m.sort();
     m.dedup();
     m
@@ -51,7 +61,12 @@ fn modules_of_units(pf: &ProgramFacts) -> Vec<String> {
 
 /// The work of every unit of module `path` (its declaration units, §12.3).
 fn module_work(pf: &ProgramFacts, path: &str) -> u64 {
-    let w: Vec<u64> = pf.units.iter().filter(|(q, _)| crate::decl_units::module_of(q) == path).map(|(_, s)| s.work).collect();
+    let w: Vec<u64> = pf
+        .units
+        .iter()
+        .filter(|(q, _)| crate::decl_units::module_of(q) == path)
+        .map(|(_, s)| s.work)
+        .collect();
     assert!(!w.is_empty(), "no unit of {path}: {:?}", pf.units);
     w.iter().sum()
 }
@@ -95,7 +110,8 @@ fn units_with(mods: &[(&str, &str)], cfg: &FactsConfig) -> ProgramFacts {
             (path, hir)
         })
         .collect();
-    let list: Vec<(String, &perry_hir::Module)> = hirs.iter().map(|(p, h)| (p.clone(), h)).collect();
+    let list: Vec<(String, &perry_hir::Module)> =
+        hirs.iter().map(|(p, h)| (p.clone(), h)).collect();
     crate::compute_units(&list, cfg)
 }
 
@@ -110,17 +126,36 @@ fn an_export_no_unit_names_stays_inside() {
         export { Ball };
         export const newInstance = () => new Bounce();
         "#;
-    let hidden = units_of(&[("a", a), ("m", "import { newInstance } from './a'; console.log(newInstance().run());")]);
+    let hidden = units_of(&[
+        ("a", a),
+        (
+            "m",
+            "import { newInstance } from './a'; console.log(newInstance().run());",
+        ),
+    ]);
     // `Bounce` names `Ball` from another declaration unit (§12.3): Ball is a
     // contract to it, so `this.x` in `bounce` is proven under the entry
     // guard (E0, §11.4), not unconditionally; nothing generic.
-    assert!(verdicts(&hidden, "x").iter().all(|v| v == "T0Mono" || v == "E0"), "{}", hidden.dump_text());
-    let named = units_of(&[("a", a), ("m", "import { Ball } from './a'; console.log(new Ball(1));")]);
+    assert!(
+        verdicts(&hidden, "x")
+            .iter()
+            .all(|v| v == "T0Mono" || v == "E0"),
+        "{}",
+        hidden.dump_text()
+    );
+    let named = units_of(&[
+        ("a", a),
+        ("m", "import { Ball } from './a'; console.log(new Ball(1));"),
+    ]);
     assert!(!proven(&named, "x"), "{}", named.dump_text());
 }
 
 fn verdicts(pf: &ProgramFacts, key: &str) -> Vec<String> {
-    pf.sites.iter().filter(|s| s.key == key).map(|s| format!("{:?}", s.verdict)).collect()
+    pf.sites
+        .iter()
+        .filter(|s| s.key == key)
+        .map(|s| format!("{:?}", s.verdict))
+        .collect()
 }
 
 #[test]
@@ -136,7 +171,13 @@ fn a_published_class_is_a_contract_not_an_escape() {
             has(k: number) { return this.neg.has(k); }
         }
         "#;
-    let pf = units_of(&[("a", a), ("m", "import { D } from './a'; const d = new D([1]); console.log(d.has(1));")]);
+    let pf = units_of(&[
+        ("a", a),
+        (
+            "m",
+            "import { D } from './a'; const d = new D([1]); console.log(d.has(1));",
+        ),
+    ]);
     assert!(proven(&pf, "pos"), "{}", pf.dump_text());
     assert_eq!(verdicts(&pf, "neg"), ["E0"], "{}", pf.dump_text());
     assert!(tmpl(&pf, "D").prefix_stable, "{}", pf.dump_text());
@@ -157,9 +198,19 @@ fn an_importer_sees_a_class_through_its_contract() {
     // (design §11.2); nothing beyond the contract happens: one round.
     // `z.ts` sorts after its importer: the driver solves it first anyway
     // (dependency order), so the contract exists when `m` is solved.
-    let pf = units_of(&[("z", &DUAL.replace("./a", "./z")), ("m", "import { D } from './z'; const d = new D([1]); console.log(d.has(1));")]);
+    let pf = units_of(&[
+        ("z", &DUAL.replace("./a", "./z")),
+        (
+            "m",
+            "import { D } from './z'; const d = new D([1]); console.log(d.has(1));",
+        ),
+    ]);
     let mi = pf.module_paths.iter().position(|p| p == "m.ts").unwrap() as u32;
-    let site = pf.sites.iter().find(|s| s.module == mi && s.key == "has").expect("the call in m");
+    let site = pf
+        .sites
+        .iter()
+        .find(|s| s.module == mi && s.key == "has")
+        .expect("the call in m");
     assert_eq!(site.verdict, crate::Verdict::T0Mono, "{}", pf.dump_text());
     assert_eq!((pf.rounds, pf.broken.len()), (1, 0));
 }
@@ -173,7 +224,11 @@ fn a_store_beyond_the_contract_breaks_the_class() {
     assert_eq!(pf.rounds, 2);
     assert!(!proven(&pf, "pos"), "{}", pf.dump_text());
     assert!(!proven(&pf, "has"), "{}", pf.dump_text());
-    assert!(verdicts(&pf, "neg").iter().all(|v| v.starts_with("No")), "{}", pf.dump_text());
+    assert!(
+        verdicts(&pf, "neg").iter().all(|v| v.starts_with("No")),
+        "{}",
+        pf.dump_text()
+    );
 }
 
 #[test]
@@ -193,10 +248,24 @@ fn a_broken_contract_resolves_only_the_units_that_see_it() {
     // Every declaration unit of `a` and `m` sees D (§12.3: a module's work
     // is its units' work).
     let w = |p: &str| module_work(&pf, p);
-    assert_eq!(pf.round_work[1], w("a.ts") + w("m.ts"), "{:?} {:?}", pf.round_work, pf.units);
-    assert!(verdicts(&pf, "neg").iter().all(|v| v.starts_with("No")), "{}", pf.dump_text());
+    assert_eq!(
+        pf.round_work[1],
+        w("a.ts") + w("m.ts"),
+        "{:?} {:?}",
+        pf.round_work,
+        pf.units
+    );
+    assert!(
+        verdicts(&pf, "neg").iter().all(|v| v.starts_with("No")),
+        "{}",
+        pf.dump_text()
+    );
     let mi = pf.module_paths.iter().position(|p| p == "c.ts").unwrap() as u32;
-    let site = pf.sites.iter().find(|s| s.module == mi && s.key == "has").expect("the call in c");
+    let site = pf
+        .sites
+        .iter()
+        .find(|s| s.module == mi && s.key == "has")
+        .expect("the call in c");
     assert_eq!(site.verdict, crate::Verdict::T0Mono, "{}", pf.dump_text());
 }
 
@@ -214,10 +283,20 @@ fn a_broken_namespace_field_function_resolves_only_the_units_that_see_it() {
         ("b", &DUAL.replace("class D", "class E").replace("neg", "other")),
         ("c", "import { E } from './b'; const e = new E([1]); console.log(e.has(1));"),
     ]);
-    assert!(pf.broken.iter().any(|d| d == "fn:a.ts:get"), "{}", pf.dump_text());
+    assert!(
+        pf.broken.iter().any(|d| d == "fn:a.ts:get"),
+        "{}",
+        pf.dump_text()
+    );
     assert_eq!(pf.round_work.len(), 2, "{:?}", pf.round_work);
     let w = |p: &str| module_work(&pf, p);
-    assert_eq!(pf.round_work[1], w("a.ts") + w("m.ts"), "{:?} {:?}", pf.round_work, pf.units);
+    assert_eq!(
+        pf.round_work[1],
+        w("a.ts") + w("m.ts"),
+        "{:?} {:?}",
+        pf.round_work,
+        pf.units
+    );
 }
 
 #[test]
@@ -228,7 +307,9 @@ fn a_unit_over_the_bound_is_not_solved_again() {
     // One declaration (§12.3: separate top-level statements would be
     // separate small units): the body of `big`, called twice (a body run
     // once is module scope for the cut, N5 §12.5).
-    let big: String = (0..400).map(|i| format!("const o{i} = {{ v: new D([{i}]) }}; console.log(o{i}.v.has({i}));\n")).collect();
+    let big: String = (0..400)
+        .map(|i| format!("const o{i} = {{ v: new D([{i}]) }}; console.log(o{i}.v.has({i}));\n"))
+        .collect();
     let o = format!("import {{ D }} from './a';\nfunction big() {{\n{big}}}\nbig();\nbig();\n");
     let mods = [
         ("a", DUAL),
@@ -249,20 +330,50 @@ fn a_unit_over_the_bound_is_not_solved_again() {
             (path, hir)
         })
         .collect();
-    let list: Vec<(String, &perry_hir::Module)> = hirs.iter().map(|(p, h)| (p.clone(), h)).collect();
+    let list: Vec<(String, &perry_hir::Module)> =
+        hirs.iter().map(|(p, h)| (p.clone(), h)).collect();
     // The bound sits between the small units and `o` (measured unbounded).
     let free = crate::compute_units(&list, &FactsConfig::default());
     let wk = |p: &str| module_work(&free, p);
-    assert!(wk("o.ts") > 4 * wk("a.ts").max(wk("m.ts")), "{:?}", free.units);
+    assert!(
+        wk("o.ts") > 4 * wk("a.ts").max(wk("m.ts")),
+        "{:?}",
+        free.units
+    );
     let bound = 2 * wk("a.ts").max(wk("m.ts"));
-    let pf = crate::compute_units(&list, &FactsConfig { max_work: Some(bound), ..FactsConfig::default() });
-    let aborted = |p: &str| pf.units.iter().any(|(q, s)| crate::decl_units::module_of(q) == p && s.aborted);
-    assert!(aborted("o.ts") && !aborted("a.ts") && !aborted("m.ts"), "{:?}", pf.units);
+    let pf = crate::compute_units(
+        &list,
+        &FactsConfig {
+            max_work: Some(bound),
+            ..FactsConfig::default()
+        },
+    );
+    let aborted = |p: &str| {
+        pf.units
+            .iter()
+            .any(|(q, s)| crate::decl_units::module_of(q) == p && s.aborted)
+    };
+    assert!(
+        aborted("o.ts") && !aborted("a.ts") && !aborted("m.ts"),
+        "{:?}",
+        pf.units
+    );
     assert_eq!(pf.broken, ["a.ts:D"], "{}", pf.dump_text());
     // Round 2 is `a`, `m` and the units of `o` under the bound (a unit
     // depends on every unit of each module its module imports, §12.6).
-    let small_o: u64 = pf.units.iter().filter(|(q, s)| crate::decl_units::module_of(q) == "o.ts" && !s.aborted).map(|(_, s)| s.work).sum();
-    assert_eq!(pf.round_work[1], module_work(&pf, "a.ts") + module_work(&pf, "m.ts") + small_o, "{:?} {:?}", pf.round_work, pf.units);
+    let small_o: u64 = pf
+        .units
+        .iter()
+        .filter(|(q, s)| crate::decl_units::module_of(q) == "o.ts" && !s.aborted)
+        .map(|(_, s)| s.work)
+        .sum();
+    assert_eq!(
+        pf.round_work[1],
+        module_work(&pf, "a.ts") + module_work(&pf, "m.ts") + small_o,
+        "{:?} {:?}",
+        pf.round_work,
+        pf.units
+    );
 }
 
 #[test]
@@ -271,8 +382,16 @@ fn a_foreign_receiver_of_a_contract_method_escapes() {
     // it on that object unseen (`ContractThis`), so the object escapes.
     let m = "import { D } from './a'; const d = new D([1]); const h = d.has; const o = { neg: new Map() }; console.log(h.call(o, 1), o.neg.size);";
     let pf = units_of(&[("a", DUAL), ("m", m)]);
-    let site = pf.sites.iter().find(|s| s.module == 1 && s.key == "neg").expect("o.neg in m");
-    assert!(matches!(site.verdict, crate::Verdict::No(_)), "{}", pf.dump_text());
+    let site = pf
+        .sites
+        .iter()
+        .find(|s| s.module == 1 && s.key == "neg")
+        .expect("o.neg in m");
+    assert!(
+        matches!(site.verdict, crate::Verdict::No(_)),
+        "{}",
+        pf.dump_text()
+    );
 }
 
 #[test]
@@ -281,10 +400,19 @@ fn what_a_method_does_to_its_receiver_happens_to_the_instance() {
     // `extra` is added to a D after birth, so D's layout is not fixed; and
     // `self` hands the instance back to unknown code: D escapes (§11.2).
     let a = "export class D { pos: number; constructor() { this.pos = 1; } grow(v: number) { (this as any).extra = v; } }";
-    let pf = units_of(&[("a", a), ("m", "import { D } from './a'; const d = new D(); d.grow(2); console.log(d.pos);")]);
+    let pf = units_of(&[
+        ("a", a),
+        (
+            "m",
+            "import { D } from './a'; const d = new D(); d.grow(2); console.log(d.pos);",
+        ),
+    ]);
     assert!(!tmpl(&pf, "D").fixed_layout, "{}", pf.dump_text());
     let b = "export class D { pos: number; constructor() { this.pos = 1; } me() { return this; } }";
-    let pf = units_of(&[("a", b), ("m", "import { D } from './a'; console.log(new D().me());")]);
+    let pf = units_of(&[
+        ("a", b),
+        ("m", "import { D } from './a'; console.log(new D().me());"),
+    ]);
     assert!(!tmpl(&pf, "D").prefix_stable, "{}", pf.dump_text());
 }
 
@@ -302,7 +430,13 @@ fn a_function_contract_carries_its_result_and_borrowed_arguments() {
     // templates with keys n and warm as entry-guard candidates (§11.4).
     let m = "import { iters, header } from './b'; const it = iters(5, 2); header('x', it); const own = { n: 1, warm: 2 }; header('y', own); console.log(it.n, own.warm);";
     let pf = units_of(&[("b", BENCH), ("m", m)]);
-    let v = |module: u32, key: &str| pf.sites.iter().filter(|s| s.module == module && s.key == key).map(|s| format!("{:?}", s.verdict)).collect::<Vec<_>>();
+    let v = |module: u32, key: &str| {
+        pf.sites
+            .iter()
+            .filter(|s| s.module == module && s.key == key)
+            .map(|s| format!("{:?}", s.verdict))
+            .collect::<Vec<_>>()
+    };
     assert_eq!(v(1, "n"), ["T0Mono"], "{}", pf.dump_text());
     assert_eq!(v(1, "warm"), ["T0Mono"], "{}", pf.dump_text());
     assert_eq!(v(0, "n"), ["E0"], "{}", pf.dump_text());
@@ -340,9 +474,21 @@ fn a_class_contract_carries_its_statics() {
     // A static method is part of the class contract (§11.2): another unit's
     // `C.make()` calls it through the contract and gets a C.
     let t = "export class C { v = 1; static make() { return new C(); } }";
-    let pf = units_of(&[("t", t), ("m", "import { C } from './t'; const c = C.make(); console.log(c.v);")]);
+    let pf = units_of(&[
+        ("t", t),
+        (
+            "m",
+            "import { C } from './t'; const c = C.make(); console.log(c.v);",
+        ),
+    ]);
     assert!(pf.broken.is_empty(), "{}", pf.dump_text());
-    assert!(verdicts(&pf, "v").iter().all(|v| v == "T0Mono" || v == "E0"), "{}", pf.dump_text());
+    assert!(
+        verdicts(&pf, "v")
+            .iter()
+            .all(|v| v == "T0Mono" || v == "E0"),
+        "{}",
+        pf.dump_text()
+    );
     assert!(!verdicts(&pf, "v").is_empty(), "{}", pf.dump_text());
 }
 
@@ -385,9 +531,24 @@ fn a_tdz_seed_writes_its_local_in_the_local_unit() {
     // program does, so `k` is not proven to hold only numbers. A seed in a
     // unit of its own would write a stand-in of `a` and be lost.
     let src = "(function () { const g = () => { a = a; const o = { k: a }; return o.k; }; try { console.log(g()); } catch (e) {} let a = 1; console.log(g()); })();";
-    let kind = |pf: &ProgramFacts| pf.dump_text().lines().find(|l| l.starts_with("  F k ")).map(|l| l.split_whitespace().find(|w| w.starts_with("kind=")).unwrap_or("").to_string());
+    let kind = |pf: &ProgramFacts| {
+        pf.dump_text()
+            .lines()
+            .find(|l| l.starts_with("  F k "))
+            .map(|l| {
+                l.split_whitespace()
+                    .find(|w| w.starts_with("kind="))
+                    .unwrap_or("")
+                    .to_string()
+            })
+    };
     let whole = facts(src);
-    assert_eq!(kind(&whole).as_deref(), Some("kind=num|undef"), "{}", whole.dump_text());
+    assert_eq!(
+        kind(&whole).as_deref(),
+        Some("kind=num|undef"),
+        "{}",
+        whole.dump_text()
+    );
     let pf = units(src);
     assert_eq!(kind(&pf), kind(&whole), "{}", pf.dump_text());
 }
@@ -430,7 +591,12 @@ fn a_unit_view_carries_only_its_own_table_entries() {
     assert_eq!(hir.exported_objects, ["cfg"]);
     let vs = crate::decl_units::views("a.ts", &hir);
     assert!(vs.len() >= 3, "{}", vs.len());
-    assert_eq!(vs.iter().filter(|(v, _)| !v.exported_objects.is_empty()).count(), 1);
+    assert_eq!(
+        vs.iter()
+            .filter(|(v, _)| !v.exported_objects.is_empty())
+            .count(),
+        1
+    );
 }
 
 #[test]
@@ -452,9 +618,18 @@ fn a_unit_view_is_indices_into_the_one_module() {
         all.sort_unstable();
         all
     };
-    assert_eq!(sorted(&|v| v.funcs.clone()), (0..hir.functions.len()).collect::<Vec<_>>());
-    assert_eq!(sorted(&|v| v.globals.clone()), (0..hir.globals.len()).collect::<Vec<_>>());
-    assert_eq!(sorted(&|v| v.init.clone()), (0..hir.init.len()).collect::<Vec<_>>());
+    assert_eq!(
+        sorted(&|v| v.funcs.clone()),
+        (0..hir.functions.len()).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        sorted(&|v| v.globals.clone()),
+        (0..hir.globals.len()).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        sorted(&|v| v.init.clone()),
+        (0..hir.init.len()).collect::<Vec<_>>()
+    );
     let mut shapes_seen = 0;
     for (k, c) in hir.classes.iter().enumerate() {
         let n = vs.iter().filter(|(v, _)| v.classes.contains(&k)).count();
@@ -499,9 +674,21 @@ fn a_shared_class_id_is_stable_only_when_every_template_is() {
     let b = "const y = { n: 2 }; (globalThis as any).keep = y; console.log(y.n);";
     let pf = units_of(&[("a", a), ("b", b)]);
     let ids: Vec<Option<u32>> = pf.templates.iter().map(|t| t.class_id).collect();
-    assert!(ids.len() >= 2 && ids.iter().all(|c| c.is_some() && *c == ids[0]), "{}", pf.dump_text());
-    assert!(pf.templates.iter().any(|t| t.prefix_stable), "{}", pf.dump_text());
-    assert!(!pf.stable_classes().contains_key(&ids[0].unwrap()), "{}", pf.dump_text());
+    assert!(
+        ids.len() >= 2 && ids.iter().all(|c| c.is_some() && *c == ids[0]),
+        "{}",
+        pf.dump_text()
+    );
+    assert!(
+        pf.templates.iter().any(|t| t.prefix_stable),
+        "{}",
+        pf.dump_text()
+    );
+    assert!(
+        !pf.stable_classes().contains_key(&ids[0].unwrap()),
+        "{}",
+        pf.dump_text()
+    );
 }
 
 #[test]
@@ -554,7 +741,10 @@ fn a_namespace_import_sees_only_the_real_exports() {
         const cfg = { a: 1, b: 2 };
         export function useA() { return cfg.a; }
         "#;
-    let pf = units_of(&[("t", t), ("u", "import * as m from './t'; console.log(m.useA());")]);
+    let pf = units_of(&[
+        ("t", t),
+        ("u", "import * as m from './t'; console.log(m.useA());"),
+    ]);
     assert!(pf.units.len() >= 3, "{:?}", pf.units);
     assert!(proven(&pf, "a"), "{}", pf.dump_text());
     // Soundness: a real export stays on the namespace; a store through it
@@ -574,13 +764,17 @@ fn a_once_invoked_wrapper_splits() {
     // scope for the cut (N5, §12.5): the CommonJS factory and a bundle's
     // `((module2) => {…})(module)` inside it. Its declarations are units
     // of their own, so `a`'s private literal keeps its proof.
-    let wrapped = |inner: &str| format!(r#"
+    let wrapped = |inner: &str| {
+        format!(
+            r#"
         function __perry_cjs_factory() {{
             const module: any = {{ exports: {{}} }};
             {inner}
         }}
         __perry_cjs_factory();
-        "#);
+        "#
+        )
+    };
     let body = r#"((module2) => {
                 function a() { const o = { k: 1 }; return o.k; }
                 function b() { return 2; }
@@ -596,13 +790,17 @@ fn a_once_invoked_wrapper_splits() {
         let m = perry_parser::parse_typescript(&wrapped(src), "t.ts").expect("parses");
         let hir = perry_hir::lower_module(&m, "t", "t.ts").expect("lowers");
         let flat = crate::decl_units::run_once_flat(&hir).unwrap_or(hir);
-        flat.init.iter().any(|s| matches!(s, perry_hir::Stmt::Let { name, .. } if name == "a"))
+        flat.init
+            .iter()
+            .any(|s| matches!(s, perry_hir::Stmt::Let { name, .. } if name == "a"))
     };
     assert!(at_scope(body));
     // The pipeline's CommonJS shape: the factory is a local function named
     // only at its call, the wrapper's and the factory's final `return` the
     // value of `_cjs`.
-    let cjs = |inner: &str| format!(r#"
+    let cjs = |inner: &str| {
+        format!(
+            r#"
         const _cjs = (function () {{
             function __perry_cjs_factory() {{
                 const module: any = {{ exports: {{}} }};
@@ -613,7 +811,9 @@ fn a_once_invoked_wrapper_splits() {
             return __perry_cjs_factory();
         }})();
         console.log(_cjs);
-        "#);
+        "#
+        )
+    };
     let pf = units(&cjs(body));
     assert!(pf.units.len() >= 4, "{:?}", pf.units);
     assert!(proven(&pf, "k"), "{}", pf.dump_text());
@@ -652,7 +852,10 @@ fn a_store_through_a_declaration_joins_its_unit() {
     // are one unit with it, both ways.
     let n = |src: &str| units(src).units.len();
     assert_eq!(n("class C { v = 1; } C.create = () => new C();"), 1);
-    assert_eq!(n("let k = 0; function inc() { k++; } function dec() { k--; }"), 1);
+    assert_eq!(
+        n("let k = 0; function inc() { k++; } function dec() { k--; }"),
+        1
+    );
     // A read alone is one way: the reader is a unit of its own.
     assert_eq!(n("const k = 0; function get() { return k; }"), 2);
     // Also a closure reading a binding written elsewhere (a captured local
@@ -660,7 +863,9 @@ fn a_store_through_a_declaration_joins_its_unit() {
     // In a once-run wrapper (N5), as a CommonJS body: there `D` is a
     // captured local of the wrapper, not a module-scope name.
     let wrapped = |body: &str| format!("(function () {{ {body} }})();");
-    let reads = n(&wrapped("var D: any; D = D || {}; const f = () => D.a; const g = () => D.b; console.log(f(), g());"));
+    let reads = n(&wrapped(
+        "var D: any; D = D || {}; const f = () => D.a; const g = () => D.b; console.log(f(), g());",
+    ));
     let writes = n(&wrapped("var D: any; D = D || {}; const f = () => { D = 1; }; const g = () => D.b; console.log(f(), g());"));
     assert_eq!(writes + 1, reads, "reads {reads} writes {writes}");
 }
@@ -673,9 +878,12 @@ fn a_let_is_its_id_not_its_name() {
     // one binding, and a write through either statement joins both.
     let n = |src: &str| units(src).units.len();
     let wrapped = |body: &str| format!("(function () {{ {body} }})();");
-    let two = |a: &str, b: &str| wrapped(&format!(
-        "((m: number) => {{ const {a}: any = {{ a: m }}; console.log({a}.a); }})(1); \
-         ((m: number) => {{ const {b}: any = {{ b: m }}; console.log({b}.b); }})(2);"));
+    let two = |a: &str, b: &str| {
+        wrapped(&format!(
+            "((m: number) => {{ const {a}: any = {{ a: m }}; console.log({a}.a); }})(1); \
+         ((m: number) => {{ const {b}: any = {{ b: m }}; console.log({b}.b); }})(2);"
+        ))
+    };
     let same = n(&two("T", "T"));
     let apart = n(&two("T", "U"));
     assert_eq!(same, apart, "same name {same} distinct names {apart}");
@@ -760,7 +968,13 @@ fn a_unit_publishes_only_its_own_exports() {
     // module's item tables (§12.6 step 1): the other units of `a` must not
     // publish `cfg` (as ⊤, they cannot see it) over its owner's contract.
     let a = "export const cfg = { a: 1 }; export function g() { return 2; } export function h() { return 3; }";
-    let pf = units_of(&[("a", a), ("m", "import { cfg, g, h } from './a'; console.log(cfg.a + g() + h());")]);
+    let pf = units_of(&[
+        ("a", a),
+        (
+            "m",
+            "import { cfg, g, h } from './a'; console.log(cfg.a + g() + h());",
+        ),
+    ]);
     assert!(pf.units.len() >= 4, "{:?}", pf.units);
     assert!(proven(&pf, "a"), "{}", pf.dump_text());
 }
@@ -778,7 +992,11 @@ fn a_result_holding_another_units_layout_forwards_its_contract() {
         "#;
     let pf = units(src);
     assert!(pf.units.len() >= 3, "{}", pf.dump_text());
-    assert!(proven(&pf, "zz") && !verdicts(&pf, "zz").is_empty(), "{}", pf.dump_text());
+    assert!(
+        proven(&pf, "zz") && !verdicts(&pf, "zz").is_empty(),
+        "{}",
+        pf.dump_text()
+    );
     // Soundness: the caller storing into what it got breaks both layouts.
     let src = r#"
         const defaults = { zz: 1, yy: 2 };
@@ -804,7 +1022,11 @@ fn a_closed_function_receives_what_its_callers_pass() {
         "#;
     let pf = units(src);
     assert!(pf.units.len() >= 3, "{}", pf.dump_text());
-    assert!(proven(&pf, "prev") && proven(&pf, "base"), "{}", pf.dump_text());
+    assert!(
+        proven(&pf, "prev") && proven(&pf, "base"),
+        "{}",
+        pf.dump_text()
+    );
     assert!(!verdicts(&pf, "prev").is_empty(), "{}", pf.dump_text());
     assert!(pf.broken.is_empty(), "{:?}", pf.broken);
     // A closed caller passing its own parameter on (object-inspect's
@@ -818,7 +1040,11 @@ fn a_closed_function_receives_what_its_callers_pass() {
         "#;
     let pf = units(chain);
     assert!(pf.units.len() >= 4, "{}", pf.dump_text());
-    assert!(proven(&pf, "prev") && !verdicts(&pf, "prev").is_empty(), "{}", pf.dump_text());
+    assert!(
+        proven(&pf, "prev") && !verdicts(&pf, "prev").is_empty(),
+        "{}",
+        pf.dump_text()
+    );
     // A `var` bound to a function literal (side-channel-list's
     // `var listGetNode = function …`): its hoisted placeholder holds
     // undefined, no argument: still closed.
@@ -833,7 +1059,11 @@ fn a_closed_function_receives_what_its_callers_pass() {
         })();
         "#;
     let pf = units(var_fn);
-    assert!(proven(&pf, "prev") && !verdicts(&pf, "prev").is_empty(), "{}", pf.dump_text());
+    assert!(
+        proven(&pf, "prev") && !verdicts(&pf, "prev").is_empty(),
+        "{}",
+        pf.dump_text()
+    );
     // Interpreted code that reaches only globals and exports (qs: a
     // `Function(...)` site) cannot name `join`: it stays closed. A direct
     // eval naming module bindings could call it with anything: not closed.
@@ -896,9 +1126,17 @@ fn a_store_into_an_existing_field_is_a_store_effect() {
     let pf = units(src);
     assert!(pf.units.len() >= 3, "{}", pf.dump_text());
     assert!(pf.broken.is_empty(), "{:?}", pf.broken);
-    assert!(!verdicts(&pf, "next").is_empty() && proven(&pf, "next"), "{}", pf.dump_text());
+    assert!(
+        !verdicts(&pf, "next").is_empty() && proven(&pf, "next"),
+        "{}",
+        pf.dump_text()
+    );
     // The stored value escapes: other units read that field as unknown.
-    let node = pf.templates.iter().find(|t| t.birth_keys == ["key"]).expect("node literal");
+    let node = pf
+        .templates
+        .iter()
+        .find(|t| t.birth_keys == ["key"])
+        .expect("node literal");
     assert!(node.escape.is_some(), "{}", pf.dump_text());
     // Soundness: the owner performs the effect. `main` (the head's unit)
     // reads `h.next.key`; its literal put `{ key: 1 }` there, but `setNode`
@@ -910,7 +1148,11 @@ fn a_store_into_an_existing_field_is_a_store_effect() {
         "#;
     let pf = units(src);
     assert!(pf.broken.is_empty(), "{:?}", pf.broken);
-    assert!(!verdicts(&pf, "key").is_empty() && !proven(&pf, "key"), "{}", pf.dump_text());
+    assert!(
+        !verdicts(&pf, "key").is_empty() && !proven(&pf, "key"),
+        "{}",
+        pf.dump_text()
+    );
     // What an argument reaches is not its literal's class (qs: listSet's
     // `node.value = value`, node = listGetNode(objects)): an object
     // literal's `constructor` is Object's, so a store into a value reached
@@ -925,7 +1167,11 @@ fn a_store_into_an_existing_field_is_a_store_effect() {
         "#;
     let pf = units(src);
     assert!(pf.broken.is_empty(), "{:?}", pf.broken);
-    assert!(!verdicts(&pf, "next").is_empty() && proven(&pf, "next"), "{}", pf.dump_text());
+    assert!(
+        !verdicts(&pf, "next").is_empty() && proven(&pf, "next"),
+        "{}",
+        pf.dump_text()
+    );
     // A new key opens the layout: still a census report (§5).
     let src = r#"
         function mkHead() { return { next: undefined as any }; }
@@ -954,12 +1200,23 @@ fn a_function_value_passed_to_a_closed_callee_keeps_its_arguments() {
         "#;
     let pf = units(src);
     assert!(pf.units.len() >= 4, "{}", pf.dump_text());
-    assert!(proven(&pf, "flag") && proven(&pf, "host"), "{}", pf.dump_text());
+    assert!(
+        proven(&pf, "flag") && proven(&pf, "host"),
+        "{}",
+        pf.dump_text()
+    );
     assert!(!verdicts(&pf, "flag").is_empty(), "{}", pf.dump_text());
     // A test must be able to fail: with no published arguments the
     // parameters of `load` hold nothing and the reads are vacuously T0 on
     // no layout; the proof must name the literal the calls of `run` pass.
-    assert!(pf.sites.iter().filter(|s| s.key == "flag" || s.key == "host").all(|s| !s.receivers.is_empty()), "{}", pf.dump_text());
+    assert!(
+        pf.sites
+            .iter()
+            .filter(|s| s.key == "flag" || s.key == "host")
+            .all(|s| !s.receivers.is_empty()),
+        "{}",
+        pf.dump_text()
+    );
     assert!(pf.broken.is_empty(), "{:?}", pf.broken);
     // Soundness: the callee lets the function value escape (unknown code
     // may call it with anything): the census breaks it, its parameters ⊤.
@@ -1029,10 +1286,25 @@ fn an_own_function_value_passed_to_a_closed_callee_is_described() {
     let pf = units(src);
     assert!(pf.units.len() >= 5, "{}", pf.dump_text());
     assert!(pf.broken.is_empty(), "{:?}", pf.broken);
-    assert!(!verdicts(&pf, "flag").is_empty() && !verdicts(&pf, "host").is_empty(), "{}", pf.dump_text());
-    assert!(proven(&pf, "flag") && proven(&pf, "host"), "{}", pf.dump_text());
+    assert!(
+        !verdicts(&pf, "flag").is_empty() && !verdicts(&pf, "host").is_empty(),
+        "{}",
+        pf.dump_text()
+    );
+    assert!(
+        proven(&pf, "flag") && proven(&pf, "host"),
+        "{}",
+        pf.dump_text()
+    );
     // A test must be able to fail: the proofs name the literal passed.
-    assert!(pf.sites.iter().filter(|s| s.key == "flag" || s.key == "host").all(|s| !s.receivers.is_empty()), "{}", pf.dump_text());
+    assert!(
+        pf.sites
+            .iter()
+            .filter(|s| s.key == "flag" || s.key == "host")
+            .all(|s| !s.receivers.is_empty()),
+        "{}",
+        pf.dump_text()
+    );
     // Soundness: the callee lets the local escape (unknown code may call
     // it with anything): broken in the census, its parameters ⊤.
     let src = r#"
@@ -1042,7 +1314,11 @@ fn an_own_function_value_passed_to_a_closed_callee_is_described() {
         viaLocal(1); viaLocal(2);
         "#;
     let pf = units(src);
-    assert!(!verdicts(&pf, "host").is_empty() && !proven(&pf, "host"), "{}", pf.dump_text());
+    assert!(
+        !verdicts(&pf, "host").is_empty() && !proven(&pf, "host"),
+        "{}",
+        pf.dump_text()
+    );
     // Soundness: its own function stores it (a reference that is no call
     // and no argument of a closed call): not closed, unknown as before.
     let src = r#"
@@ -1052,7 +1328,11 @@ fn an_own_function_value_passed_to_a_closed_callee_is_described() {
         viaLocal(1); viaLocal(2);
         "#;
     let pf = units(src);
-    assert!(!verdicts(&pf, "host").is_empty() && !proven(&pf, "host"), "{}", pf.dump_text());
+    assert!(
+        !verdicts(&pf, "host").is_empty() && !proven(&pf, "host"),
+        "{}",
+        pf.dump_text()
+    );
     // Two closed locals of one name are two functions (tssrc: three
     // `loader`s in moduleNameResolver.ts): the one a callee lets escape is
     // broken, the other keeps its arguments (each passes its own literal:
@@ -1067,9 +1347,24 @@ fn an_own_function_value_passed_to_a_closed_callee_is_described() {
         a(1); a(2); b(1); b(2);
         "#;
     let pf = units(src);
-    assert!(!verdicts(&pf, "flag").is_empty() && !proven(&pf, "flag"), "{}", pf.dump_text());
-    assert!(!verdicts(&pf, "host").is_empty() && proven(&pf, "host"), "{}", pf.dump_text());
-    assert!(pf.sites.iter().filter(|s| s.key == "host").all(|s| !s.receivers.is_empty()), "{}", pf.dump_text());
+    assert!(
+        !verdicts(&pf, "flag").is_empty() && !proven(&pf, "flag"),
+        "{}",
+        pf.dump_text()
+    );
+    assert!(
+        !verdicts(&pf, "host").is_empty() && proven(&pf, "host"),
+        "{}",
+        pf.dump_text()
+    );
+    assert!(
+        pf.sites
+            .iter()
+            .filter(|s| s.key == "host")
+            .all(|s| !s.receivers.is_empty()),
+        "{}",
+        pf.dump_text()
+    );
     // Soundness: the callee calls it with another literal for `s`.
     let src = r#"
         function mkState() { return { flag: 'a', host: 'b' }; }
@@ -1078,7 +1373,11 @@ fn an_own_function_value_passed_to_a_closed_callee_is_described() {
         viaLocal(1); viaLocal(2);
         "#;
     let pf = units(src);
-    assert!(!verdicts(&pf, "host").is_empty() && !proven(&pf, "host"), "{}", pf.dump_text());
+    assert!(
+        !verdicts(&pf, "host").is_empty() && !proven(&pf, "host"),
+        "{}",
+        pf.dump_text()
+    );
 }
 
 #[test]
@@ -1093,10 +1392,19 @@ fn a_unit_is_ordered_after_the_units_owning_the_names_it_imports() {
         export class D { pos: Map<number, number>; constructor() { this.pos = new Map(); } has(k: number) { return this.pos.has(k); } }
         export class R { run() { return useD(); } }
         "#;
-    let b = "import { D } from './a'; export function useD() { const d = new D(); return d.has(1); }";
-    let pf = units_of(&[("a", a), ("b", b), ("m", "import { R } from './a'; console.log(new R().run());")]);
+    let b =
+        "import { D } from './a'; export function useD() { const d = new D(); return d.has(1); }";
+    let pf = units_of(&[
+        ("a", a),
+        ("b", b),
+        ("m", "import { R } from './a'; console.log(new R().run());"),
+    ]);
     let mi = pf.module_paths.iter().position(|p| p == "b.ts").unwrap() as u32;
-    let site = pf.sites.iter().find(|s| s.module == mi && s.key == "has").expect("the call in b");
+    let site = pf
+        .sites
+        .iter()
+        .find(|s| s.module == mi && s.key == "has")
+        .expect("the call in b");
     assert_eq!(site.verdict, crate::Verdict::T0Mono, "{}", pf.dump_text());
 }
 
@@ -1117,10 +1425,23 @@ fn a_closed_function_its_own_unit_lets_escape_has_top_parameters() {
         main(1); main(10);
         "#;
     let pf = units(src);
-    assert!(!verdicts(&pf, "flag").is_empty() && !proven(&pf, "flag"), "{}", pf.dump_text());
+    assert!(
+        !verdicts(&pf, "flag").is_empty() && !proven(&pf, "flag"),
+        "{}",
+        pf.dump_text()
+    );
     // The same without the store: proven, so the case above can fail.
     let pf = units(&src.replace("(globalThis as any).l = loader; ", ""));
-    assert!(proven(&pf, "flag") && pf.sites.iter().filter(|s| s.key == "flag").all(|s| !s.receivers.is_empty()), "{}", pf.dump_text());
+    assert!(
+        proven(&pf, "flag")
+            && pf
+                .sites
+                .iter()
+                .filter(|s| s.key == "flag")
+                .all(|s| !s.receivers.is_empty()),
+        "{}",
+        pf.dump_text()
+    );
 }
 
 #[test]
@@ -1139,10 +1460,23 @@ fn a_closed_function_without_a_summary_its_own_unit_lets_escape_has_top_paramete
         main(1); main(10);
         "#;
     let pf = units(src);
-    assert!(!verdicts(&pf, "flag").is_empty() && !proven(&pf, "flag"), "{}", pf.dump_text());
+    assert!(
+        !verdicts(&pf, "flag").is_empty() && !proven(&pf, "flag"),
+        "{}",
+        pf.dump_text()
+    );
     // The same without the store: proven, so the case above can fail.
     let pf = units(&src.replace("(globalThis as any).l = loader; ", ""));
-    assert!(proven(&pf, "flag") && pf.sites.iter().filter(|s| s.key == "flag").all(|s| !s.receivers.is_empty()), "{}", pf.dump_text());
+    assert!(
+        proven(&pf, "flag")
+            && pf
+                .sites
+                .iter()
+                .filter(|s| s.key == "flag")
+                .all(|s| !s.receivers.is_empty()),
+        "{}",
+        pf.dump_text()
+    );
 }
 
 #[test]
@@ -1165,11 +1499,27 @@ fn a_function_a_tdz_check_reads_stays_closed() {
         console.log(parse("a"));
         "#;
     let pf = units(src);
-    assert!(proven(&pf, "max") && pf.sites.iter().filter(|s| s.key == "max").all(|s| !s.receivers.is_empty()), "{}", pf.dump_text());
+    assert!(
+        proven(&pf, "max")
+            && pf
+                .sites
+                .iter()
+                .filter(|s| s.key == "max")
+                .all(|s| !s.receivers.is_empty()),
+        "{}",
+        pf.dump_text()
+    );
     // A real reference besides the calls lets it escape: not proven, so the
     // case above can fail.
-    let pf = units(&src.replace("console.log(parse(\"a\"));", "console.log(parse(\"a\")); (globalThis as any).f = parseSegment;"));
-    assert!(!verdicts(&pf, "max").is_empty() && !proven(&pf, "max"), "{}", pf.dump_text());
+    let pf = units(&src.replace(
+        "console.log(parse(\"a\"));",
+        "console.log(parse(\"a\")); (globalThis as any).f = parseSegment;",
+    ));
+    assert!(
+        !verdicts(&pf, "max").is_empty() && !proven(&pf, "max"),
+        "{}",
+        pf.dump_text()
+    );
 }
 
 #[test]
@@ -1188,14 +1538,30 @@ fn a_literal_passed_to_a_closed_function_carries_its_field_functions() {
         "#;
     let pf = units(src);
     assert!(pf.units.len() >= 2, "{}", pf.dump_text());
-    assert!(proven(&pf, "base") && pf.sites.iter().filter(|s| s.key == "base").all(|s| !s.receivers.is_empty()), "{}", pf.dump_text());
+    assert!(
+        proven(&pf, "base")
+            && pf
+                .sites
+                .iter()
+                .filter(|s| s.key == "base")
+                .all(|s| !s.receivers.is_empty()),
+        "{}",
+        pf.dump_text()
+    );
     assert!(pf.broken.is_empty(), "{:?}", pf.broken);
     // The callee adding a key to the literal breaks its layout: `base` is
     // not proven, so the case above can fail. (Principle: the census
     // decides; the old negative, `globalThis.f = h.toPath` in the caller,
     // no longer keeps a field function out of the contract, decision 29.)
-    let pf = units(&src.replace("const k = host.base;", "const k = host.base; host.extra = 1;"));
-    assert!(!verdicts(&pf, "base").is_empty() && !proven(&pf, "base"), "{}", pf.dump_text());
+    let pf = units(&src.replace(
+        "const k = host.base;",
+        "const k = host.base; host.extra = 1;",
+    ));
+    assert!(
+        !verdicts(&pf, "base").is_empty() && !proven(&pf, "base"),
+        "{}",
+        pf.dump_text()
+    );
     // Here `toPath` escaped in the caller before it became a contract
     // function (through the callee's previous contract: what its argument
     // reaches escapes). It still gets parameter markers then: the
@@ -1217,14 +1583,27 @@ fn parallel_levels_give_the_serial_facts() {
         ("m", "import { D } from './z'; import { k } from './b'; import { n } from './c'; console.log(new D([k, n]).has(5));"),
     ];
     let run = |jobs| {
-        let pf = units_with(&mods, &FactsConfig { jobs, ..FactsConfig::default() });
-        let facts = format!("{:?}\n{:?}\n{:?} {:?} {}", pf.templates, pf.sites, pf.broken, pf.round_work, pf.rounds);
+        let pf = units_with(
+            &mods,
+            &FactsConfig {
+                jobs,
+                ..FactsConfig::default()
+            },
+        );
+        let facts = format!(
+            "{:?}\n{:?}\n{:?} {:?} {}",
+            pf.templates, pf.sites, pf.broken, pf.round_work, pf.rounds
+        );
         (facts, pf)
     };
     let (serial, _) = run(1);
     let (parallel, pf) = run(4);
     let ci = pf.module_paths.iter().position(|p| p == "c.ts").unwrap() as u32;
-    let site = pf.sites.iter().find(|s| s.module == ci && s.key == "has").expect("the call in c");
+    let site = pf
+        .sites
+        .iter()
+        .find(|s| s.module == ci && s.key == "has")
+        .expect("the call in c");
     assert_eq!(site.verdict, Verdict::T0Mono, "{}", pf.dump_text());
     assert!(pf.broken.is_empty(), "{}", pf.dump_text());
     assert_eq!(serial, parallel);
@@ -1238,12 +1617,28 @@ fn the_object_key_follows_what_an_importer_observes() {
     // observe keeps it, so `m`'s object is reused.
     let user = "import { P } from './a'; const p = new P(); console.log(p.x);";
     let a = "export class P { x: number; constructor() { this.x = 1; } }\n";
-    let grown = "export class P { x: number; y: number; constructor() { this.x = 1; this.y = 2; } }\n";
+    let grown =
+        "export class P { x: number; y: number; constructor() { this.x = 1; this.y = 2; } }\n";
     let other = format!("{a}export function helper() {{ const o = {{ k: 1 }}; return o.k; }}\n");
     let base = units_of(&[("a", a), ("m", user)]);
     let grown = units_of(&[("a", grown), ("m", user)]);
     let other = units_of(&[("a", &other), ("m", user)]);
-    assert_ne!(base.digest_for("a.ts"), other.digest_for("a.ts"), "{}", other.dump_text());
-    assert_ne!(base.digest_for("m.ts"), grown.digest_for("m.ts"), "{}", grown.dump_text());
-    assert_eq!(base.digest_for("m.ts"), other.digest_for("m.ts"), "{}", other.dump_text());
+    assert_ne!(
+        base.digest_for("a.ts"),
+        other.digest_for("a.ts"),
+        "{}",
+        other.dump_text()
+    );
+    assert_ne!(
+        base.digest_for("m.ts"),
+        grown.digest_for("m.ts"),
+        "{}",
+        grown.dump_text()
+    );
+    assert_eq!(
+        base.digest_for("m.ts"),
+        other.digest_for("m.ts"),
+        "{}",
+        other.dump_text()
+    );
 }

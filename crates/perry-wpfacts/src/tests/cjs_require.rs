@@ -29,7 +29,9 @@ fn wrapped(body: &str) -> String {
 
 #[test]
 fn static_require_takes_one_module() {
-    let pf = facts(&wrapped("const left = require('./left'); console.log(left.x);"));
+    let pf = facts(&wrapped(
+        "const left = require('./left'); console.log(left.x);",
+    ));
     let sites: Vec<_> = pf.sites.iter().filter(|s| s.key == "x").collect();
     assert_eq!(sites.len(), 1, "{}", pf.dump_text());
     assert_eq!(sites[0].verdict, Verdict::T0Mono, "{}", pf.dump_text());
@@ -49,4 +51,3 @@ fn computed_require_keeps_the_registry() {
     assert_eq!(sites.len(), 1, "{}", pf.dump_text());
     assert_ne!(sites[0].verdict, Verdict::T0Mono, "{}", pf.dump_text());
 }
-

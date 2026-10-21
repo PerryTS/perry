@@ -131,10 +131,7 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
     for (k, n, ms) in &s.profile {
         out.push_str(&format!("# profile {k} {n} {ms:.1}\n"));
     }
-    out.push_str(&format!(
-        "# pts_entries {}\n",
-        s.pts_entries
-    ));
+    out.push_str(&format!("# pts_entries {}\n", s.pts_entries));
     for (l, n, mix) in &s.big_nodes {
         out.push_str(&format!("# bignode {l} {n} {mix}\n"));
     }

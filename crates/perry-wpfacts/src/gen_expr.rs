@@ -1078,7 +1078,9 @@ impl<'a> Gen<'a> {
                 }
                 cv
             }
-            Expr::ClassEnvGet { class_name, index, .. } => self.class_env(mi, class_name, *index as usize),
+            Expr::ClassEnvGet {
+                class_name, index, ..
+            } => self.class_env(mi, class_name, *index as usize),
             Expr::ClassEnvSet {
                 class_name,
                 index,

@@ -37,8 +37,7 @@ fn facts_of(g: &Gen, n: u32) -> BindingFacts {
     let mut out = BindingFacts {
         prims: node.prim,
         top: m.explain && node.pts.contains_tok(TOP),
-        top_cause: (m.explain && node.pts.contains_tok(TOP))
-            .then(|| m.top_origin(n)),
+        top_cause: (m.explain && node.pts.contains_tok(TOP)).then(|| m.top_origin(n)),
         ..Default::default()
     };
     for t in node.pts.to_sorted() {
@@ -65,9 +64,7 @@ pub(crate) fn collect(g: &Gen) -> Vec<ModuleBindings> {
         let mut v: Vec<(u32, BindingFacts)> = info
             .locals
             .iter()
-            .map(|(&id, &n)| {
-                (id, facts_of(g, n))
-            })
+            .map(|(&id, &n)| (id, facts_of(g, n)))
             .collect();
         v.sort_by_key(|(id, _)| *id);
         out[mi].locals = v;

@@ -19,24 +19,23 @@
 pub mod bindings;
 mod builtins;
 mod ctor_phase;
-mod cwl_census;
+mod decl_units;
 pub mod delta;
 pub mod derive;
 mod dump;
 mod gen;
 mod gen_call;
 mod gen_cjs;
-mod gen_expr;
 mod gen_const;
+mod gen_expr;
 mod gen_rest;
 pub mod model;
 pub mod pts;
 mod solve;
 mod summary;
-mod units;
-mod decl_units;
 #[cfg(test)]
 mod tests;
+mod units;
 
 pub use bindings::{BindingFacts, ModuleBindings};
 pub use derive::{FieldFacts, KindFact, SiteFacts, TemplateFacts, Verdict};
@@ -196,27 +195,30 @@ fn class_statics(g: &gen::Gen, tm: model::TmplId) -> (Vec<(String, Option<model:
     let mut open = false;
     let mut cur = Some(tm);
     while let Some(c) = cur {
-        let Some(&cobj) = g.m.tok_index.get(&model::TokKind::ClassObj(c)) else { break };
+        let Some(&cobj) = g.m.tok_index.get(&model::TokKind::ClassObj(c)) else {
+            break;
+        };
         if let Some(&an) = g.m.field_any.get(&cobj) {
             let node = &g.m.nodes[an as usize];
             open |= node.prim != 0 || !node.pts.is_empty();
         }
         open |= g.m.tmpls[c as usize].native_parent.is_some();
-        let mut own: Vec<(String, Option<model::FnIdx>)> = g
-            .m
-            .field_keys
-            .get(&cobj)
-            .into_iter()
-            .flatten()
-            .filter(|&&k| Some(k as usize) != pa)
-            .filter_map(|&k| {
-                let n = *g.m.fields.get(&(cobj, k))?;
-                let ts = g.m.nodes[n as usize].pts.to_sorted();
-                let f = ts.first().map(|&t| g.m.tok_fn(t)).filter(|&f| ts.len() == 1 && f != model::NO_FN && g.m.nodes[n as usize].prim == 0);
-                Some((g.m.atoms[k as usize].clone(), f))
-            })
-            .filter(|(k, _)| !out.iter().any(|(o, _)| o == k))
-            .collect();
+        let mut own: Vec<(String, Option<model::FnIdx>)> =
+            g.m.field_keys
+                .get(&cobj)
+                .into_iter()
+                .flatten()
+                .filter(|&&k| Some(k as usize) != pa)
+                .filter_map(|&k| {
+                    let n = *g.m.fields.get(&(cobj, k))?;
+                    let ts = g.m.nodes[n as usize].pts.to_sorted();
+                    let f = ts.first().map(|&t| g.m.tok_fn(t)).filter(|&f| {
+                        ts.len() == 1 && f != model::NO_FN && g.m.nodes[n as usize].prim == 0
+                    });
+                    Some((g.m.atoms[k as usize].clone(), f))
+                })
+                .filter(|(k, _)| !out.iter().any(|(o, _)| o == k))
+                .collect();
         own.sort();
         out.extend(own);
         cur = g.m.tmpls[c as usize].parent;
@@ -248,15 +250,24 @@ fn literal_field_fns(
     layouts_out: &mut Vec<units::ClassContract>,
     open_tm: &pts::FxHashSet<model::TmplId>,
 ) -> Vec<(String, Vec<units::FnContract>)> {
-    let mine: Vec<model::Tok> = toks.iter().copied().filter(|&t| g.m.tmpl_of(t) == Some(tm)).collect();
-    let mut keys: Vec<model::Atom> = mine.iter().flat_map(|t| g.m.field_keys.get(t).into_iter().flatten().copied()).collect();
+    let mine: Vec<model::Tok> = toks
+        .iter()
+        .copied()
+        .filter(|&t| g.m.tmpl_of(t) == Some(tm))
+        .collect();
+    let mut keys: Vec<model::Atom> = mine
+        .iter()
+        .flat_map(|t| g.m.field_keys.get(t).into_iter().flatten().copied())
+        .collect();
     keys.sort_unstable();
     keys.dedup();
     let mut out = Vec::new();
     'key: for a in keys {
         let mut fs: Vec<model::FnIdx> = Vec::new();
         for &t in &mine {
-            let Some(&n) = g.m.fields.get(&(t, a)) else { continue };
+            let Some(&n) = g.m.fields.get(&(t, a)) else {
+                continue;
+            };
             if !g.field_fns.contains_key(&(t, a)) {
                 continue 'key;
             }
@@ -279,7 +290,10 @@ fn literal_field_fns(
             continue;
         }
         fs.sort_unstable();
-        let fcs = fs.into_iter().map(|f| fn_contract_of(g, templates, f, layouts_out, open_tm)).collect();
+        let fcs = fs
+            .into_iter()
+            .map(|f| fn_contract_of(g, templates, f, layouts_out, open_tm))
+            .collect();
         out.push((g.m.atoms[a as usize].clone(), fcs));
     }
     out
@@ -296,7 +310,12 @@ fn literal_field_fns(
 fn fn_contract_name(g: &gen::Gen, f: model::FnIdx) -> (String, Option<String>) {
     let fi = &g.m.funcs[f as usize];
     let fid = fi.func_id;
-    let closed = g.view.and_then(|v| v.closed.iter().find(|&(_, &id)| id == fid).map(|(nm, _)| nm.clone()));
+    let closed = g.view.and_then(|v| {
+        v.closed
+            .iter()
+            .find(|&(_, &id)| id == fid)
+            .map(|(nm, _)| nm.clone())
+    });
     let name = match &closed {
         Some(k) if k.contains('#') => format!("{}#{fid}", fi.name),
         _ => fi.name.clone(),
@@ -339,13 +358,20 @@ fn fn_contract_of(
     let params: Vec<u8> = uses(false)
         .into_iter()
         .enumerate()
-        .map(|(i, u)| match g.closed_described.get(&f).and_then(|d| d.get(i)) {
-            Some(true) => u & !model::MARK_ESCAPE,
-            _ => u,
-        })
+        .map(
+            |(i, u)| match g.closed_described.get(&f).and_then(|d| d.get(i)) {
+                Some(true) => u & !model::MARK_ESCAPE,
+                _ => u,
+            },
+        )
         .collect();
     let reach = uses(true);
-    let rets: Vec<model::NodeId> = g.m.contract_rets.iter().filter(|(g2, _)| *g2 == f).map(|&(_, n)| n).collect();
+    let rets: Vec<model::NodeId> =
+        g.m.contract_rets
+            .iter()
+            .filter(|(g2, _)| *g2 == f)
+            .map(|&(_, n)| n)
+            .collect();
     let mut ret_params: Vec<u32> = Vec::new();
     let mut ret_reach: Vec<u32> = Vec::new();
     let mut ret_unknown = false;
@@ -353,12 +379,19 @@ fn fn_contract_of(
         let mut ds: Vec<String> = Vec::new();
         for n in rets {
             for t in g.m.nodes[n as usize].pts.to_sorted() {
-                if matches!(g.m.toks[t as usize], model::TokKind::Top | model::TokKind::BuiltinFn) {
+                if matches!(
+                    g.m.toks[t as usize],
+                    model::TokKind::Top | model::TokKind::BuiltinFn
+                ) {
                     ret_unknown = true;
                     continue;
                 }
                 if let Some(&(_, i)) = g.m.param_marker.get(&t) {
-                    let v = if g.m.reach_marker.contains(&t) { &mut ret_reach } else { &mut ret_params };
+                    let v = if g.m.reach_marker.contains(&t) {
+                        &mut ret_reach
+                    } else {
+                        &mut ret_params
+                    };
                     if !v.contains(&i) {
                         v.push(i);
                     }
@@ -379,9 +412,18 @@ fn fn_contract_of(
                     ds.push(display);
                     continue;
                 }
-                if let (Some(facts), model::TmplKind::Class { name, class_id, literal_shape, .. }) =
-                    (templates.iter().find(|x| x.id == tm), g.m.tmpls[tm as usize].kind.clone())
-                {
+                if let (
+                    Some(facts),
+                    model::TmplKind::Class {
+                        name,
+                        class_id,
+                        literal_shape,
+                        ..
+                    },
+                ) = (
+                    templates.iter().find(|x| x.id == tm),
+                    g.m.tmpls[tm as usize].kind.clone(),
+                ) {
                     if !layouts_out.iter().any(|c| c.display == display) {
                         layouts_out.push(units::ClassContract {
                             display: display.clone(),
@@ -437,7 +479,6 @@ fn fn_contract_of(
 fn arg_contract_of(
     g: &gen::Gen,
     templates: &[TemplateFacts],
-    nm: &str,
     toks: Vec<model::Tok>,
     contracts_out: &[((String, String), units::ClassContract)],
     layouts_out: &mut Vec<units::ClassContract>,
@@ -455,7 +496,8 @@ fn arg_contract_of(
             continue;
         }
         if ac.params.len() < fi.params.len() {
-            ac.params.resize(fi.params.len(), units::ValueContract::default());
+            ac.params
+                .resize(fi.params.len(), units::ValueContract::default());
         }
         for (i, &p) in fi.params.iter().enumerate() {
             let node = &g.m.nodes[p as usize];
@@ -470,14 +512,19 @@ fn arg_contract_of(
                 // undescribed parameter it escapes, its parameters ⊤.
                 if let model::TokKind::Func(f, _) = g.m.toks[t as usize] {
                     match g.stand_in_fc.get(&t) {
-                        Some(&fc) if !vc.fns.iter().any(|c| c.name == fc.name) => vc.fns.push(fc.clone()),
+                        Some(&fc) if !vc.fns.iter().any(|c| c.name == fc.name) => {
+                            vc.fns.push(fc.clone())
+                        }
                         Some(_) => {}
                         // This unit's closed function published through its
                         // closed contract (decision 23): its markers carry
                         // the body's uses; the callee publishes its calls.
                         // Markers and parameters are the function's, so one
                         // published token (another context's) covers it.
-                        None if g.m.closed_params.contains_key(&f) && g.m.contract_fns.contains(&f) && g.m.closed_pub.iter().any(|&u| g.m.tok_fn(u) == f) => {
+                        None if g.m.closed_params.contains_key(&f)
+                            && g.m.contract_fns.contains(&f)
+                            && g.m.closed_pub.iter().any(|&u| g.m.tok_fn(u) == f) =>
+                        {
                             let fc = fn_contract_of(g, templates, f, layouts_out, open_tm);
                             if !vc.fns.iter().any(|c| c.name == fc.name) {
                                 vc.fns.push(fc);
@@ -494,20 +541,38 @@ fn arg_contract_of(
                 let display = &g.m.tmpls[tm as usize].display;
                 // A closed caller passing its own parameter on: what its
                 // callers pass is beside the marker (decision 13).
-                if g.m.param_marker.get(&t).is_some_and(|(f, _)| g.m.closed_params.contains_key(f)) {
+                if g.m
+                    .param_marker
+                    .get(&t)
+                    .is_some_and(|(f, _)| g.m.closed_params.contains_key(f))
+                {
                     continue;
                 }
-                if g.m.param_marker.contains_key(&t) || g.unit_in.is_some_and(|u| u.broken(display)) {
+                if g.m.param_marker.contains_key(&t) || g.unit_in.is_some_and(|u| u.broken(display))
+                {
                     vc.unknown = true;
                     continue;
                 }
                 let cc = if let Some(cc) = g.stand_in_cc.get(&tm) {
                     Some(cc.clone())
-                } else if let Some((_, c)) = contracts_out.iter().find(|(_, c)| &c.display == display) {
+                } else if let Some((_, c)) =
+                    contracts_out.iter().find(|(_, c)| &c.display == display)
+                {
                     Some(c.clone())
                 } else {
-                    match (templates.iter().find(|x| x.id == tm), g.m.tmpls[tm as usize].kind.clone()) {
-                        (Some(facts), model::TmplKind::Class { name, class_id, literal_shape: true, .. }) => Some(units::ClassContract {
+                    match (
+                        templates.iter().find(|x| x.id == tm),
+                        g.m.tmpls[tm as usize].kind.clone(),
+                    ) {
+                        (
+                            Some(facts),
+                            model::TmplKind::Class {
+                                name,
+                                class_id,
+                                literal_shape: true,
+                                ..
+                            },
+                        ) => Some(units::ClassContract {
                             display: display.clone(),
                             name,
                             class_id,
@@ -528,7 +593,14 @@ fn arg_contract_of(
                     Some(mut cc) if !vc.layouts.iter().any(|c| c.display == cc.display) => {
                         // Its field functions, as a value contract's (`Gen::note_field_fns`).
                         if !g.stand_in_cc.contains_key(&tm) {
-                            cc.field_fns = literal_field_fns(g, templates, &node.pts.to_sorted(), tm, layouts_out, open_tm);
+                            cc.field_fns = literal_field_fns(
+                                g,
+                                templates,
+                                &node.pts.to_sorted(),
+                                tm,
+                                layouts_out,
+                                open_tm,
+                            );
                         }
                         vc.layouts.push(cc)
                     }
@@ -556,18 +628,12 @@ pub(crate) fn compute_in<'a>(
     g.export_sources = cfg.export_sources.clone();
     g.unit_in = published;
     g.view = view;
-    if cfg.profile { // TEMP CW9: module kinds for the cross-module event recorder (1 = benchmark, 2 = shared)
-        g.m.cw9_modkind = sorted.iter().map(|(p, _)| if ["harness.js", "run.js", "benchmark.js", "som.js", "webpack.config.js"].iter().any(|s| p.ends_with(s)) { 2u8 } else { 1u8 }).collect();
-    }
     let interp = cfg.dynamic_code.clone().unwrap_or_else(|| "-".into());
     let dynamic_reach = cfg.dynamic_code_reach.globals as u8;
     g.m.rel(|| format!("dynamicreach {dynamic_reach}"));
     g.m.rel(|| format!("interp {}", interp.replace(' ', "\\s")));
     if cfg.profile {
         g.m.profile = Some(Default::default());
-        g.m.cwl_trace = std::env::var("CWL_TRACE").ok().and_then(|v| v.parse().ok()); // TEMP CWL
-        g.m.cwl_tok = std::env::var("CWL_TOK").ok().and_then(|v| v.parse().ok()); // TEMP CWL
-        g.m.cwl_inst_probe = std::env::var_os("CWL_INST").is_some(); // TEMP CWL
     }
     // The bounds are in force from the first constraint: generation already
     // solves online (`Model::cons` and `Model::edge` apply each rule to what
@@ -581,7 +647,8 @@ pub(crate) fn compute_in<'a>(
     if cfg.dynamic_code.is_some() || cfg.dynamic_code_reach.globals {
         // Interpreted code reads and writes any global (E20); the
         // prototype-write guard does not cover it.
-        let gt = g.m.tok(model::TokKind::Builtin(model::BuiltinNs::GlobalThis));
+        let gt =
+            g.m.tok(model::TokKind::Builtin(model::BuiltinNs::GlobalThis));
         builtins::note_native_write(&mut g.m, gt, None, "interpreted code may run");
     }
     g.register_all();
@@ -639,23 +706,6 @@ pub(crate) fn compute_in<'a>(
             g.m.calls.len()
         );
     }
-    // TEMP CWL census.
-    let census_key = view.map_or(sorted[0].0.to_string(), |v| v.key.clone()); // TEMP CWL: a unit's path
-    if cfg.profile && sorted.len() == 1 && std::env::var("CWL_CENSUS").is_ok_and(|f| census_key.contains(f.as_str())) {
-        cwl_census::run(&g.m, sorted[0].0);
-    }
-    // TEMP CW s8 debug: every node with tokens.
-    if std::env::var_os("CW_DBG").is_some() {
-        let m = &g.m;
-        for (n, node) in m.nodes.iter().enumerate() {
-            if node.pts.is_empty() { continue; }
-            let f = m.node_fn[n];
-            let names: Vec<String> = node.pts.to_sorted().iter().map(|&t| format!("{}{}", m.tok_name(t), match m.toks[t as usize] { model::TokKind::Obj(_, c) | model::TokKind::Func(_, c) if c != model::NO_CTX => format!("@{c}"), _ => String::new() })).collect();
-            let succ: Vec<u32> = node.succ.iter().copied().collect();
-            eprintln!("DBG {}#{n} fn={} obs={} pts={:?} succ={:?} cons={:?}", m.labels[n], if f == model::NO_FN { "-".into() } else { m.funcs[f as usize].name.clone() }, node.obs, names, succ, node.cons.iter().map(|c| c.kind_name()).collect::<Vec<_>>());
-        }
-        eprintln!("DBG stats {}", m.sum.stats);
-    }
     if cfg.profile {
         let mut v: Vec<_> = g.m.label_work.iter().map(|(k, v)| (*k, *v)).collect();
         v.sort_by(|a, b| (b.1 .0 + b.1 .1).cmp(&(a.1 .0 + a.1 .1)));
@@ -688,119 +738,6 @@ pub(crate) fn compute_in<'a>(
                 m.tok_name(*h),
                 m.key_name(*k)
             );
-        }
-    }
-    // TEMP CW s9 diagnosis: biggest field nodes and one token's provenance.
-    if cfg.profile {
-        let m = &g.m;
-        let mut fnodes: Vec<(u32, String, String)> = Vec::new();
-        for (&(t, a), &n) in &m.fields { fnodes.push((n, m.tok_name(t) + &format!("#{t}"), m.key_name(model::Key::Named(a)))); }
-        for (&t, &n) in &m.field_any { fnodes.push((n, m.tok_name(t) + &format!("#{t}"), "<any>".into())); }
-        for (&t, &n) in &m.all_fields { fnodes.push((n, m.tok_name(t) + &format!("#{t}"), "<all>".into())); }
-        let owner_of: crate::pts::FxHashMap<u32, String> = fnodes.iter().map(|(n, t, k)| (*n, format!("[{t}.{k}]"))).collect();
-        let desc = |n: u32| -> String {
-            let node = &m.nodes[n as usize];
-            let own = owner_of.get(&n).cloned().unwrap_or_default();
-            let toks = node.pts.to_sorted();
-            let mut tm = crate::pts::FxHashSet::default();
-            let (mut site, mut plain, mut other) = (0, 0, 0);
-            for &t in toks.iter() { match m.toks[t as usize] { model::TokKind::Obj(x, c) => { tm.insert(x); if c == model::NO_CTX { plain += 1 } else { site += 1 } } _ => other += 1 } }
-            let f = m.node_fn[n as usize];
-            let (f, kk) = match m.cw9_inst_fn.get(&n) { Some(&(f, k)) => (f, format!("k{}/{}", k >> 28, k & 0xfffffff)), None => (f, String::new()) };
-            format!("{}{kk}#{n}{own} fn={} obs={} toks={} tmpls={} site={site} plain={plain} other={other} succ={} cons={} work={}", m.labels[n as usize], if f == model::NO_FN { "-".into() } else { m.funcs[f as usize].name.clone() }, node.obs, toks.len(), tm.len(), node.succ.len(), node.cons.len(), m.cw9_node_work.get(&n).copied().unwrap_or(0))
-        };
-        let mut by_work = fnodes.clone();
-        by_work.sort_by_key(|x| std::cmp::Reverse(m.cw9_node_work.get(&x.0).copied().unwrap_or(0)));
-        for (n, t, k) in by_work.iter().take(20) { eprintln!("CW9 fieldwork owner={t} key={k} {}", desc(*n)); }
-        fnodes.sort_by_key(|x| std::cmp::Reverse(m.nodes[x.0 as usize].pts.len()));
-        for (n, t, k) in fnodes.iter().take(20) { eprintln!("CW9 fieldpts owner={t} key={k} {}", desc(*n)); }
-        let mut all: Vec<(u64, u32)> = m.cw9_node_work.iter().map(|(&n, &w)| (w, n)).collect();
-        all.sort_unstable_by(|a, b| b.cmp(a));
-        for (_, n) in all.iter().take(15) { eprintln!("CW9 nodework {}", desc(*n)); }
-        if let Some(&(root, _, _)) = by_work.first() {
-            for (&(t, _a), &n) in &m.fields { if n == root {
-                if let model::TokKind::Obj(tm, c) = m.toks[t as usize] { eprintln!("CW9 owner tmpl {:?} ctx {c}", m.tmpls[tm as usize].kind); if let model::TmplKind::BObj { site, .. } | model::TmplKind::Arr { site, .. } = m.tmpls[tm as usize].kind { if (site as usize) < m.stores.len() { let st = &m.stores[site as usize]; eprintln!("CW9 owner site {site} desc={} func={}", st.desc, if st.func == u32::MAX { "-".into() } else { m.funcs[st.func as usize].name.clone() }); } if c != model::NO_CTX && (c as usize) < m.calls.len() { let cs = &m.calls[c as usize]; eprintln!("CW9 owner call args={:?}", cs.args.iter().map(|&a| desc(a)).collect::<Vec<_>>()); } } }
-                for (i, node) in m.nodes.iter().enumerate() { if node.succ.contains(&root) { eprintln!("CW9 rootpred {} cons={:?}", desc(i as u32), node.cons.iter().take(6).map(|c| c.kind_name()).collect::<Vec<_>>()); } }
-                let mut nh = 0;
-                for (i, node) in m.nodes.iter().enumerate() {
-                    if nh >= 8 || !node.pts.contains_tok(t) { continue; }
-                    for c in &node.cons { if let model::Cons::Store { key, src, site } = c { if *key == model::Key::Named(_a) {
-                        nh += 1;
-                        let mut kinds: std::collections::BTreeMap<&str, u32> = Default::default();
-                        for x in node.pts.to_sorted() { *kinds.entry(match m.toks[x as usize] { model::TokKind::Obj(..) => "obj", model::TokKind::Func(..) => "fn", model::TokKind::Proto(_) => "proto", model::TokKind::ClassObj(_) => "class", _ => "other" }).or_default() += 1; }
-                        let st = &m.stores[*site as usize];
-                        eprintln!("CW9 storeholder {} kinds={kinds:?} site={} in {} src={}", desc(i as u32), st.desc, if st.func == u32::MAX { "-".into() } else { m.funcs[st.func as usize].name.clone() }, desc(*src));
-                    } } }
-                }
-                let any = m.field_any[&t];
-                for (i, node) in m.nodes.iter().enumerate() { if node.succ.contains(&any) { eprintln!("CW9 anypred {} cons={:?}", desc(i as u32), node.cons.iter().take(6).map(|c| c.kind_name()).collect::<Vec<_>>()); } }
-            } }
-        }
-        {
-            let mut h: crate::pts::FxHashMap<(u32, u32), (u32, u64)> = Default::default();
-            for (&n, &(f, k)) in &m.cw9_inst_fn { let l = m.nodes[n as usize].pts.len(); if l > 500 { let e = h.entry((k >> 28, f)).or_default(); e.0 += 1; e.1 += m.cw9_node_work.get(&n).copied().unwrap_or(0); } }
-            let mut v: Vec<_> = h.into_iter().collect(); v.sort_by_key(|x| std::cmp::Reverse(x.1 .1));
-            for ((k, f), (c, w)) in v.iter().take(25) { eprintln!("CW9 biginst kind={k} fn={} nodes={c} work={w}", m.funcs[*f as usize].name); }
-        }
-        {
-            let mut v: Vec<_> = m.cw9_shared.iter().collect(); v.sort_by_key(|x| std::cmp::Reverse(*x.1));
-            for ((tag, f, why, tf), c) in v.iter().take(25) { eprintln!("CW9 shared tag={tag} fn={} why={} from={} n={c}", m.funcs[*f as usize].name, ["", "in-scc", "no-origin-tmpl", "no-origin-notmpl"][*why as usize], if *tf == u32::MAX { "-".into() } else { m.funcs[*tf as usize].name.clone() }); }
-        }
-        for &(p, a, b, t) in &m.cw9_events { eprintln!("CW9 event pop={p} tok={}#{t} from {} to {} cons_from={:?}", m.tok_name(t), desc(a), desc(b), m.nodes[a as usize].cons.iter().take(5).map(|c| c.kind_name()).collect::<Vec<_>>()); }
-        // Provenance of one site token (the median one) in the heaviest field node.
-        if let Some(&(root, _, _)) = by_work.first() {
-            let mut preds: Vec<Vec<u32>> = vec![Vec::new(); m.nodes.len()];
-            for (i, node) in m.nodes.iter().enumerate() { for &s in &node.succ { preds[s as usize].push(i as u32); } }
-            let toks = m.nodes[root as usize].pts.to_sorted();
-            let objs: Vec<u32> = toks.iter().copied().filter(|&t| matches!(m.toks[t as usize], model::TokKind::Obj(..))).collect();
-            let mut jobs: Vec<(u32, u32)> = [objs.first(), objs.get(objs.len() / 2)].into_iter().flatten().map(|&t| (root, t)).collect();
-            if let Ok(v) = std::env::var("CW9_TRACE") {
-                for j in v.split(',') { let mut it = j.split(':'); if let (Some(a), Some(b)) = (it.next(), it.next()) { if let (Ok(a), Ok(b)) = (a.parse(), b.parse()) { jobs.push((a, b)); } } }
-            }
-            // A node by label prefix: print the members of it by kind.
-            if let Ok(v) = std::env::var("CW9_NODE") {
-                for j in v.split(',') { if let Ok(n) = j.parse::<u32>() { let names: Vec<String> = m.nodes[n as usize].pts.to_sorted().iter().filter(|&&t| !matches!(m.toks[t as usize], model::TokKind::Obj(..))).take(40).map(|&t| format!("{}#{t}", m.tok_name(t))).collect(); eprintln!("CW9 node {} nonobj={names:?}", desc(n)); } }
-            }
-            if let Ok(v) = std::env::var("CW9_TMPL") {
-                for j in v.split(',') { if let Ok(tm) = j.parse::<usize>() { let k = &m.tmpls[tm].kind; let st = String::new();
-                    eprintln!("CW9 tmpl {tm} {} {k:?} {st} tmpl_fn={:?} obs_tok={}", m.tmpls[tm].display, m.tmpl_fn.get(&(tm as u32)).map(|&f| m.funcs[f as usize].name.clone()), m.tok_index.get(&model::TokKind::Obj(tm as u32, model::NO_CTX)).is_some_and(|t| m.obs_toks.contains(t))); } }
-            }
-            if let Ok(v) = std::env::var("CW9_HOLD") {
-                for j in v.split(',') { if let Ok(t) = j.parse::<u32>() { let mut c = 0; for (i, node) in m.nodes.iter().enumerate() { if node.pts.contains_tok(t) { c += 1; if c <= 12 || m.node_fn[i] != model::NO_FN { if c <= 40 { eprintln!("CW9 hold {t} {} rel={}", desc(i as u32), m.labels[i]); } } } } eprintln!("CW9 hold {t} total {c}"); } }
-            }
-            if let Ok(v) = std::env::var("CW9_SH") {
-                for j in v.split(',') { if let Ok(t) = j.parse::<u32>() { let mut c = 0;
-                    for (i, node) in m.nodes.iter().enumerate() { if node.obs || !node.pts.contains_tok(t) { continue; } for cs in &node.cons { if let model::Cons::Store { key, src, site } = cs { c += 1; if c > 25 { continue; } let st = &m.stores[*site as usize];
-                        eprintln!("CW9 sh {t} key={} holder={} site={} in {} src={}", m.key_name(*key), desc(i as u32), st.desc, if st.func == u32::MAX { "-".into() } else { m.funcs[st.func as usize].name.clone() }, desc(*src)); } } }
-                    eprintln!("CW9 sh {t} total {c}"); } }
-            }
-            if let Ok(v) = std::env::var("CW9_DST") {
-                for j in v.split(',') { let pat = format!(": {j} "); let pat2 = format!(": {j},"); let pat3 = format!(": {j} }}");
-                    for (i, node) in m.nodes.iter().enumerate() { for c in &node.cons { let d = format!("{c:?}"); if d.contains(&pat) || d.contains(&pat2) || d.contains(&pat3) { eprintln!("CW9 dst {j} from {} cons={d}", desc(i as u32)); } } } }
-            }
-            for (root, tok) in jobs {
-                eprintln!("CW9 trace tok {}#{tok} {:?}", m.tok_name(tok), m.toks[tok as usize]);
-                let mut prev: crate::pts::FxHashMap<u32, u32> = Default::default();
-                let mut q = std::collections::VecDeque::from([root]);
-                prev.insert(root, u32::MAX);
-                let mut last = root;
-                let mut found = false;
-                while let Some(x) = q.pop_front() {
-                    if !found { last = x; }
-                    if !found && !preds[x as usize].iter().any(|&p| m.nodes[p as usize].pts.contains_tok(tok)) { found = true; }
-                    for &p in &preds[x as usize] { if !prev.contains_key(&p) && m.nodes[p as usize].pts.contains_tok(tok) { prev.insert(p, x); q.push_back(p); } }
-                }
-                // `last` = a farthest origin; print the chain origin -> root.
-                let mut x = last; let mut hops = 0;
-                loop {
-                    let node = &m.nodes[x as usize];
-                    eprintln!("CW9   hop {} cons={:?}", desc(x), node.cons.iter().take(4).map(|c| c.kind_name()).collect::<Vec<_>>());
-                    hops += 1;
-                    let nx = prev[&x]; if nx == u32::MAX || hops > 60 { break; } x = nx;
-                }
-                let origins = prev.keys().filter(|&&p| !preds[p as usize].iter().any(|&q| m.nodes[q as usize].pts.contains_tok(tok))).count();
-                eprintln!("CW9   reached {} nodes, {} origins", prev.len(), origins);
-            }
         }
     }
     g.m.dump_meta();
@@ -864,7 +801,13 @@ pub(crate) fn compute_in<'a>(
         derive_ms,
         pops: g.m.pops,
         instances: g.m.sum.insts.len() as u64,
-        shared_instances: g.m.sum.inst_key.keys().filter(|k| k.0 == 1 && k.1 == summary::LAY_NONE).count() as u64,
+        shared_instances: g
+            .m
+            .sum
+            .inst_key
+            .keys()
+            .filter(|k| k.0 == 1 && k.1 == summary::LAY_NONE)
+            .count() as u64,
         composed: g.m.sum.composed.len() as u64,
         work: g.m.work,
         aborted: g.m.aborted,
@@ -920,15 +863,29 @@ pub(crate) fn compute_in<'a>(
     // Per-unit run: the classes this unit publishes as contracts, and what
     // it did beyond other units' contracts (design §11.2, §11.3).
     let reports = if cfg.unit { g.reports() } else { Vec::new() };
-    let stores_out = if cfg.unit { g.store_effects() } else { Vec::new() };
-    let open_tm = if cfg.unit && !g.m.aborted { open_templates(&g) } else { Default::default() };
+    let stores_out = if cfg.unit {
+        g.store_effects()
+    } else {
+        Vec::new()
+    };
+    let open_tm = if cfg.unit && !g.m.aborted {
+        open_templates(&g)
+    } else {
+        Default::default()
+    };
     let mut layouts_out: Vec<units::ClassContract> = Vec::new();
     let contracts_out: Vec<((String, String), units::ClassContract)> = if cfg.unit && !g.m.aborted {
         g.class_contracts
             .iter()
             .filter_map(|&((mi, a), _, tm)| {
                 let facts = templates.iter().find(|t| t.id == tm)?.clone();
-                let model::TmplKind::Class { name, class_id, literal_shape, .. } = g.m.tmpls[tm as usize].kind.clone() else {
+                let model::TmplKind::Class {
+                    name,
+                    class_id,
+                    literal_shape,
+                    ..
+                } = g.m.tmpls[tm as usize].kind.clone()
+                else {
                     return None;
                 };
                 let mut methods = Vec::new();
@@ -940,11 +897,18 @@ pub(crate) fn compute_in<'a>(
                     .iter()
                     .filter_map(|(k, f)| {
                         let f = (*f)?;
-                        g.m.contract_fns.contains(&f).then(|| (k.clone(), fn_contract_of(&g, &templates, f, &mut layouts_out, &open_tm)))
+                        g.m.contract_fns.contains(&f).then(|| {
+                            (
+                                k.clone(),
+                                fn_contract_of(&g, &templates, f, &mut layouts_out, &open_tm),
+                            )
+                        })
                     })
                     .collect();
-                let statics: Vec<(String, Option<String>)> =
-                    statics.into_iter().map(|(k, f)| (k, f.map(|f| g.m.funcs[f as usize].name.clone()))).collect();
+                let statics: Vec<(String, Option<String>)> = statics
+                    .into_iter()
+                    .map(|(k, f)| (k, f.map(|f| g.m.funcs[f as usize].name.clone())))
+                    .collect();
                 let ca = g.m.atoms.iter().position(|x| x == "constructor");
                 let mut cur = Some(tm);
                 while let Some(c) = cur {
@@ -957,8 +921,12 @@ pub(crate) fn compute_in<'a>(
                         .filter_map(|(&(_, k), &n)| {
                             let ts = g.m.nodes[n as usize].pts.to_sorted();
                             let f = g.m.tok_fn(*ts.first()?);
-                            (ts.len() == 1 && f != model::NO_FN)
-                                .then(|| (g.m.atoms[k as usize].clone(), g.m.funcs[f as usize].name.clone()))
+                            (ts.len() == 1 && f != model::NO_FN).then(|| {
+                                (
+                                    g.m.atoms[k as usize].clone(),
+                                    g.m.funcs[f as usize].name.clone(),
+                                )
+                            })
                         })
                         .filter(|(k, _)| !methods.iter().any(|(m, _): &(String, String)| m == k))
                         .collect();
@@ -967,21 +935,27 @@ pub(crate) fn compute_in<'a>(
                     native_parent = g.m.tmpls[c as usize].native_parent.clone();
                     cur = g.m.tmpls[c as usize].parent;
                 }
-                let key = (sorted[mi as usize].0.to_string(), g.m.atoms[a as usize].clone());
-                Some((key, units::ClassContract {
-                    display: g.m.tmpls[tm as usize].display.clone(),
-                    name,
-                    class_id,
-                    literal_shape,
-                    facts,
-                    methods,
-                    native_parent,
-                    field_fns: Vec::new(),
-                    open_keys: open_tm.contains(&tm),
-                    statics,
-                    statics_open,
-                    static_fns,
-                }))
+                let key = (
+                    sorted[mi as usize].0.to_string(),
+                    g.m.atoms[a as usize].clone(),
+                );
+                Some((
+                    key,
+                    units::ClassContract {
+                        display: g.m.tmpls[tm as usize].display.clone(),
+                        name,
+                        class_id,
+                        literal_shape,
+                        facts,
+                        methods,
+                        native_parent,
+                        field_fns: Vec::new(),
+                        open_keys: open_tm.contains(&tm),
+                        statics,
+                        statics_open,
+                        static_fns,
+                    },
+                ))
             })
             .collect()
     } else {
@@ -991,21 +965,26 @@ pub(crate) fn compute_in<'a>(
     let fn_contracts_out: Vec<((String, String), units::FnContract)> = if cfg.unit && !g.m.aborted {
         let mut out = Vec::new();
         for &((mi, a), f) in &g.fn_contracts {
-            let key = (sorted[mi as usize].0.to_string(), g.m.atoms[a as usize].clone());
-            out.push((key, fn_contract_of(&g, &templates, f, &mut layouts_out, &open_tm)));
+            let key = (
+                sorted[mi as usize].0.to_string(),
+                g.m.atoms[a as usize].clone(),
+            );
+            out.push((
+                key,
+                fn_contract_of(&g, &templates, f, &mut layouts_out, &open_tm),
+            ));
         }
         out
     } else {
         Vec::new()
     };
     let fns_defined: Vec<String> = if cfg.unit && !g.m.aborted {
-        let mut out: Vec<String> = g
-            .m
-            .contract_fns
-            .iter()
-            .filter(|&&f| g.m.funcs[f as usize].func_id != u32::MAX)
-            .map(|&f| format!("fn:{}", fn_contract_name(&g, f).0))
-            .collect();
+        let mut out: Vec<String> =
+            g.m.contract_fns
+                .iter()
+                .filter(|&&f| g.m.funcs[f as usize].func_id != u32::MAX)
+                .map(|&f| format!("fn:{}", fn_contract_name(&g, f).0))
+                .collect();
         out.sort();
         out
     } else {
@@ -1050,41 +1029,72 @@ pub(crate) fn compute_in<'a>(
                     }
                 };
                 let display = &g.m.tmpls[tm as usize].display;
-                let cc = g.stand_in_cc.get(&tm).cloned().or_else(|| {
-                    contracts_out.iter().find(|(_, c)| &c.display == display).map(|(_, c)| c.clone())
-                }).or_else(|| {
-                    let facts = templates.iter().find(|x| x.id == tm)?.clone();
-                    let model::TmplKind::Class { name, class_id, literal_shape, .. } = g.m.tmpls[tm as usize].kind.clone() else {
-                        return None;
-                    };
-                    Some(units::ClassContract {
-                        display: display.clone(),
-                        name,
-                        class_id,
-                        literal_shape,
-                        facts,
-                        methods: Vec::new(),
-                        native_parent: None,
-                        field_fns: Vec::new(),
-                        open_keys: open_tm.contains(&tm),
-                        statics: Vec::new(),
-                        statics_open: false,
-                        static_fns: Vec::new(),
+                let cc = g
+                    .stand_in_cc
+                    .get(&tm)
+                    .cloned()
+                    .or_else(|| {
+                        contracts_out
+                            .iter()
+                            .find(|(_, c)| &c.display == display)
+                            .map(|(_, c)| c.clone())
                     })
-                });
+                    .or_else(|| {
+                        let facts = templates.iter().find(|x| x.id == tm)?.clone();
+                        let model::TmplKind::Class {
+                            name,
+                            class_id,
+                            literal_shape,
+                            ..
+                        } = g.m.tmpls[tm as usize].kind.clone()
+                        else {
+                            return None;
+                        };
+                        Some(units::ClassContract {
+                            display: display.clone(),
+                            name,
+                            class_id,
+                            literal_shape,
+                            facts,
+                            methods: Vec::new(),
+                            native_parent: None,
+                            field_fns: Vec::new(),
+                            open_keys: open_tm.contains(&tm),
+                            statics: Vec::new(),
+                            statics_open: false,
+                            static_fns: Vec::new(),
+                        })
+                    });
                 let Some(mut cc) = cc else {
                     vc.unknown = true;
                     continue;
                 };
-                if !class && !g.stand_in_cc.contains_key(&tm) && !vc.layouts.iter().any(|c| c.display == cc.display) {
-                    cc.field_fns = literal_field_fns(&g, &templates, &node.pts.to_sorted(), tm, &mut layouts_out, &open_tm);
+                if !class
+                    && !g.stand_in_cc.contains_key(&tm)
+                    && !vc.layouts.iter().any(|c| c.display == cc.display)
+                {
+                    cc.field_fns = literal_field_fns(
+                        &g,
+                        &templates,
+                        &node.pts.to_sorted(),
+                        tm,
+                        &mut layouts_out,
+                        &open_tm,
+                    );
                 }
-                let v = if class { &mut vc.classes } else { &mut vc.layouts };
+                let v = if class {
+                    &mut vc.classes
+                } else {
+                    &mut vc.layouts
+                };
                 if !v.iter().any(|c| c.display == cc.display) {
                     v.push(cc);
                 }
             }
-            let key = (sorted[mi as usize].0.to_string(), g.m.atoms[a as usize].clone());
+            let key = (
+                sorted[mi as usize].0.to_string(),
+                g.m.atoms[a as usize].clone(),
+            );
             out.push((key, vc));
         }
         out
@@ -1096,8 +1106,22 @@ pub(crate) fn compute_in<'a>(
         Some(v) if cfg.unit && !g.m.aborted => {
             let mut out: Vec<(String, units::ArgContract)> = Vec::new();
             for nm in &v.closed_refs {
-                let toks = g.mods[0].imports.get(nm).map(|&n| g.m.nodes[n as usize].pts.to_sorted()).unwrap_or_default();
-                out.push((nm.clone(), arg_contract_of(&g, &templates, nm, toks, &contracts_out, &mut layouts_out, &open_tm)));
+                let toks = g.mods[0]
+                    .imports
+                    .get(nm)
+                    .map(|&n| g.m.nodes[n as usize].pts.to_sorted())
+                    .unwrap_or_default();
+                out.push((
+                    nm.clone(),
+                    arg_contract_of(
+                        &g,
+                        &templates,
+                        toks,
+                        &contracts_out,
+                        &mut layouts_out,
+                        &open_tm,
+                    ),
+                ));
             }
             // A closed function this unit got as an argument value
             // (decision 19): what its calls of it pass.
@@ -1110,7 +1134,14 @@ pub(crate) fn compute_in<'a>(
                 .collect();
             got.sort();
             for (nm, t) in got {
-                let ac = arg_contract_of(&g, &templates, &nm, vec![t], &contracts_out, &mut layouts_out, &open_tm);
+                let ac = arg_contract_of(
+                    &g,
+                    &templates,
+                    vec![t],
+                    &contracts_out,
+                    &mut layouts_out,
+                    &open_tm,
+                );
                 out.push((nm, ac));
             }
             out
@@ -1210,7 +1241,9 @@ impl ProgramFacts {
             .into_iter()
             .filter(|(_, ts)| {
                 ts.iter().all(|t| t.prefix_stable)
-                    && ts.iter().all(|t| format!("{:?}", t.fields) == format!("{:?}", ts[0].fields))
+                    && ts
+                        .iter()
+                        .all(|t| format!("{:?}", t.fields) == format!("{:?}", ts[0].fields))
             })
             .map(|(c, ts)| (c, ts[0]))
             .collect()

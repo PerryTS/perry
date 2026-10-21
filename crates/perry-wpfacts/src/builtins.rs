@@ -293,49 +293,63 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                 m.add_prim(dst, prim::ALL);
             }
         },
-        TokKind::Builtin(BuiltinNs::GlobalThis) => match name.as_deref() {
-            Some(n) if global_user_key(n) => {
-                let Key::Named(a) = key else { unreachable!() };
-                let f = global_field(m, t, a);
-                if native_written(m, t, a) {
-                    if m.explain {
-                        let op = m.tok_index.get(&TokKind::ObjectProto).copied();
-                        let hits: Vec<String> = m
-                            .native_writes
-                            .iter()
-                            .filter(|((w, k), _)| {
-                                (*w == TOP || *w == t || Some(*w) == op) && (k.is_none() || *k == Some(a))
-                            })
-                            .map(|((w, k), r)| format!("{}/{:?}: {}", m.tok_name(*w), k.map(|x| m.atoms[x as usize].clone()), m.reasons[*r as usize]))
-                            .collect();
-                        eprintln!("perry: wpfacts explain: globalThis.{n} written (in_top {}): {hits:?}", m.global_in_top);
+        TokKind::Builtin(BuiltinNs::GlobalThis) => {
+            match name.as_deref() {
+                Some(n) if global_user_key(n) => {
+                    let Key::Named(a) = key else { unreachable!() };
+                    let f = global_field(m, t, a);
+                    if native_written(m, t, a) {
+                        if m.explain {
+                            let op = m.tok_index.get(&TokKind::ObjectProto).copied();
+                            let hits: Vec<String> = m
+                                .native_writes
+                                .iter()
+                                .filter(|((w, k), _)| {
+                                    (*w == TOP || *w == t || Some(*w) == op)
+                                        && (k.is_none() || *k == Some(a))
+                                })
+                                .map(|((w, k), r)| {
+                                    format!(
+                                        "{}/{:?}: {}",
+                                        m.tok_name(*w),
+                                        k.map(|x| m.atoms[x as usize].clone()),
+                                        m.reasons[*r as usize]
+                                    )
+                                })
+                                .collect();
+                            eprintln!("perry: wpfacts explain: globalThis.{n} written (in_top {}): {hits:?}", m.global_in_top);
+                        }
+                        m.add_top(dst, |_| format!("globalThis.{n} written by unmodeled code"));
+                        m.add_prim(dst, prim::ALL);
+                    } else {
+                        m.native_missing.push((t, a, NativeMiss::Global(dst, f)));
                     }
-                    m.add_top(dst, |_| format!("globalThis.{n} written by unmodeled code"));
-                    m.add_prim(dst, prim::ALL);
-                } else {
-                    m.native_missing.push((t, a, NativeMiss::Global(dst, f)));
+                    m.edge(f, dst);
+                    m.add_prim(dst, prim::UNDEF);
                 }
-                m.edge(f, dst);
-                m.add_prim(dst, prim::UNDEF);
+                Some(n) if ns_by_name(n).is_some() => {
+                    let bt = m.tok(TokKind::Builtin(ns_by_name(n).unwrap()));
+                    m.add_tok(dst, bt);
+                }
+                _ => {
+                    // Any global, the Function constructor included (E14).
+                    let f = m.tok(TokKind::Builtin(BuiltinNs::Function));
+                    m.add_tok(dst, f);
+                    m.add_top(dst, |_| {
+                        format!("globalThis.{}", name.as_deref().unwrap_or("[computed]"))
+                    });
+                    m.add_prim(dst, prim::ALL);
+                }
             }
-            Some(n) if ns_by_name(n).is_some() => {
-                let bt = m.tok(TokKind::Builtin(ns_by_name(n).unwrap()));
-                m.add_tok(dst, bt);
-            }
-            _ => {
-                // Any global, the Function constructor included (E14).
-                let f = m.tok(TokKind::Builtin(BuiltinNs::Function));
-                m.add_tok(dst, f);
-                m.add_top(dst, |_| {
-                    format!("globalThis.{}", name.as_deref().unwrap_or("[computed]"))
-                });
-                m.add_prim(dst, prim::ALL);
-            }
-        },
+        }
         TokKind::Builtin(BuiltinNs::Require) => match name.as_deref() {
             Some("cache") | Some("extensions") => {
                 let (cache, ext) = require_parts(m);
-                let p = if name.as_deref() == Some("cache") { cache } else { ext };
+                let p = if name.as_deref() == Some("cache") {
+                    cache
+                } else {
+                    ext
+                };
                 m.add_tok(dst, p);
             }
             Some("main") => {
@@ -490,8 +504,14 @@ pub fn tok_store(m: &mut Model, t: Tok, _key: Key, src: NodeId) {
         | TokKind::NativeProto(_) => {
             // E20: stored where the runtime / unmodeled code reads it.
             if m.explain {
-                let kn = match _key { Key::Named(a) => m.atoms[a as usize].clone(), Key::Any => "[computed]".into() };
-                eprintln!("perry: wpfacts explain: E20 store on {} key {kn}", m.tok_name(t));
+                let kn = match _key {
+                    Key::Named(a) => m.atoms[a as usize].clone(),
+                    Key::Any => "[computed]".into(),
+                };
+                eprintln!(
+                    "perry: wpfacts explain: E20 store on {} key {kn}",
+                    m.tok_name(t)
+                );
             }
             let r = m.reason("E20 stored on a builtin/global object");
             m.sink_node(src, r);
@@ -902,10 +922,18 @@ pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
         BuiltinNs::Require => {
             // A compiled module named by a constant path: its exports (the
             // registry record's `exports`, as `require.cache[path]` holds).
-            let rec = m.call_lit.get(&call).and_then(|a| m.cjs_paths.get(a)).copied();
+            let rec = m
+                .call_lit
+                .get(&call)
+                .and_then(|a| m.cjs_paths.get(a))
+                .copied();
             if m.explain && rec.is_none() {
                 let lit = m.call_lit.get(&call).map(|a| m.atoms[*a as usize].clone());
-                let known: Vec<String> = m.cjs_paths.keys().map(|a| m.atoms[*a as usize].clone()).collect();
+                let known: Vec<String> = m
+                    .cjs_paths
+                    .keys()
+                    .map(|a| m.atoms[*a as usize].clone())
+                    .collect();
                 eprintln!("perry: wpfacts explain: require call lit {lit:?} not in {known:?}");
             }
             match rec {
@@ -917,7 +945,13 @@ pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
                     let unknown = m.cjs_unknown;
                     // The path node holds what `require` returns.
                     m.edge(rec, ret);
-                    m.cons(unknown, Cons::Load { key: Key::Named(ea), dst: ret });
+                    m.cons(
+                        unknown,
+                        Cons::Load {
+                            key: Key::Named(ea),
+                            dst: ret,
+                        },
+                    );
                     m.add_prim(ret, prim::UNDEF);
                 }
                 None => {
@@ -939,7 +973,14 @@ pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
                     let reg = m.cjs_union;
                     m.edge(reg, fa);
                     if let Some(a0) = m.calls[call as usize].args.first().copied() {
-                        m.cons(a0, Cons::TopIfAny { dst: ret, from: ret, reason: Some(r) });
+                        m.cons(
+                            a0,
+                            Cons::TopIfAny {
+                                dst: ret,
+                                from: ret,
+                                reason: Some(r),
+                            },
+                        );
                     }
                 }
             }
@@ -1202,9 +1243,7 @@ fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
         // Generator protocol (a generator object is its step closure): the
         // step closure only; any other function value has no such methods
         // (a computed key on one is a runtime property: unknown).
-        Some("next" | "return" | "throw") | None
-            if !matches!(m.toks[t as usize], TokKind::Func(f, _) if m.funcs[f as usize].gen_step) =>
-        {
+        Some("next" | "return" | "throw") | None if !matches!(m.toks[t as usize], TokKind::Func(f, _) if m.funcs[f as usize].gen_step) => {
             if name.is_none() || !matches!(m.toks[t as usize], TokKind::Func(..)) {
                 unknown_method(m, call, "computed method of a function value");
             }
@@ -1471,11 +1510,23 @@ fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
             for &a in added {
                 m.edge(a, ofa);
                 if name == Some("concat") {
-                    m.cons(a, Cons::Load { key: Key::Any, dst: ofa });
+                    m.cons(
+                        a,
+                        Cons::Load {
+                            key: Key::Any,
+                            dst: ofa,
+                        },
+                    );
                 }
             }
             if name == Some("flat") {
-                m.cons(elems, Cons::Load { key: Key::Any, dst: ofa });
+                m.cons(
+                    elems,
+                    Cons::Load {
+                        key: Key::Any,
+                        dst: ofa,
+                    },
+                );
             }
             ret_tok(m, call, out);
         }
@@ -1876,7 +1927,10 @@ pub fn note_native_write(m: &mut Model, t: Tok, key: Option<Key>, what: &str) {
         m.tok_name(t)
     };
     if m.explain {
-        eprintln!("perry: wpfacts explain: may be written: {what} on {on} key {:?}", k.map(|a| m.atoms[a as usize].clone()));
+        eprintln!(
+            "perry: wpfacts explain: may be written: {what} on {on} key {:?}",
+            k.map(|a| m.atoms[a as usize].clone())
+        );
     }
     let r = m.reason(&format!("native prototype may be written: {what} on {on}"));
     m.native_writes.insert((t, k), r);
@@ -1914,10 +1968,26 @@ fn replay_native_missing(m: &mut Model) {
                 NativeMiss::Global(dst, f) => {
                     let name = m.atoms[a as usize].clone();
                     if m.explain {
-                        let ws: Vec<String> = m.native_writes.iter().map(|((w, k), r)| format!("{}/{:?}: {}", m.tok_name(*w), k.map(|x| m.atoms[x as usize].clone()), m.reasons[*r as usize])).collect();
-                        eprintln!("perry: wpfacts explain: replay global {name} in_top {} writes {ws:?}", m.global_in_top);
+                        let ws: Vec<String> = m
+                            .native_writes
+                            .iter()
+                            .map(|((w, k), r)| {
+                                format!(
+                                    "{}/{:?}: {}",
+                                    m.tok_name(*w),
+                                    k.map(|x| m.atoms[x as usize].clone()),
+                                    m.reasons[*r as usize]
+                                )
+                            })
+                            .collect();
+                        eprintln!(
+                            "perry: wpfacts explain: replay global {name} in_top {} writes {ws:?}",
+                            m.global_in_top
+                        );
                     }
-                    m.add_top(dst, |_| format!("globalThis.{name} written by unmodeled code"));
+                    m.add_top(dst, |_| {
+                        format!("globalThis.{name} written by unmodeled code")
+                    });
                     m.add_prim(dst, prim::ALL);
                     // Unmodeled code may also read what the program stored.
                     let r = m.reason(&format!("globalThis.{name} reaches unmodeled code"));
@@ -1975,9 +2045,7 @@ fn anon_tmpl(m: &mut Model, what: &'static str) -> Tok {
 pub fn is_builtin_module(s: &str) -> bool {
     match s.strip_prefix("node:") {
         Some(rest) => perry_hir::is_node_builtin_module(rest),
-        None => {
-            !perry_hir::is_bare_prefix_only_builtin(s) && perry_hir::is_node_builtin_module(s)
-        }
+        None => !perry_hir::is_bare_prefix_only_builtin(s) && perry_hir::is_node_builtin_module(s),
     }
 }
 

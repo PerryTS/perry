@@ -1,18 +1,18 @@
 //! Unit tests: small programs lowered from source, facts checked directly.
 
-mod native_proto;
-mod summary;
-mod closed_world;
 mod birth_site;
-mod captured;
-mod receiver_this;
-mod cjs_require;
-mod hub_tokens;
-mod protocol_calls;
 mod callback_origin;
+mod captured;
+mod cjs_require;
+mod closed_world;
+mod hub_tokens;
+mod layout_key;
+mod native_proto;
+mod protocol_calls;
+mod receiver_this;
+mod summary;
 mod super_heritage;
 mod unit_mode;
-mod layout_key;
 
 use crate::{compute, FactsConfig, ProgramFacts, Verdict};
 

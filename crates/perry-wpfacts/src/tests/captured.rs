@@ -18,23 +18,46 @@ fn sites<'a>(pf: &'a ProgramFacts, key: &str) -> Vec<&'a crate::SiteFacts> {
 /// Every read of `key` sees exactly `n` receivers and no ⊤.
 fn exact(pf: &ProgramFacts, key: &str, n: usize) {
     for s in sites(pf, key) {
-        assert!(!s.top && s.receivers.len() == n, "{key}: {:?} top={}\n{}", s.receivers, s.top, pf.dump_text());
+        assert!(
+            !s.top && s.receivers.len() == n,
+            "{key}: {:?} top={}\n{}",
+            s.receivers,
+            s.top,
+            pf.dump_text()
+        );
     }
 }
 
 /// Every read of `key` sees `class` among its receivers (or ⊤).
 fn sees(pf: &ProgramFacts, key: &str, class: &str) {
     for s in sites(pf, key) {
-        let hit = s.receivers.iter().any(|r| r.ends_with(&format!(":{class}")));
-        assert!(s.top || hit, "{key}: {:?} lacks {class}\n{}", s.receivers, pf.dump_text());
+        let hit = s
+            .receivers
+            .iter()
+            .any(|r| r.ends_with(&format!(":{class}")));
+        assert!(
+            s.top || hit,
+            "{key}: {:?} lacks {class}\n{}",
+            s.receivers,
+            pf.dump_text()
+        );
     }
 }
 
 /// No read of `key` sees `class`.
 fn lacks(pf: &ProgramFacts, key: &str, class: &str) {
     for s in sites(pf, key) {
-        let hit = s.receivers.iter().any(|r| r.ends_with(&format!(":{class}")));
-        assert!(!s.top && !hit, "{key}: {:?} top={} has {class}\n{}", s.receivers, s.top, pf.dump_text());
+        let hit = s
+            .receivers
+            .iter()
+            .any(|r| r.ends_with(&format!(":{class}")));
+        assert!(
+            !s.top && !hit,
+            "{key}: {:?} top={} has {class}\n{}",
+            s.receivers,
+            s.top,
+            pf.dump_text()
+        );
     }
 }
 

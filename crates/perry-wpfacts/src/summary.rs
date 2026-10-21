@@ -23,8 +23,6 @@ pub const CALL: u32 = 1 << 31;
 /// born in a context-free instance, a birth of a call the solver made for
 /// no site): one token per template. Birth context ids count down from it.
 pub const BORN: CallId = NO_CTX - 1;
-/// Marks a literal template (not a call site) in a birth context key.
-const LIT: u32 = 1 << 31;
 /// The layout of no object receiver (a primitive, `undefined`, a function
 /// without a `this` term).
 pub const LAY_NONE: u32 = 0;
@@ -137,9 +135,6 @@ pub struct SumState {
     /// A call an instance made -> the instance's lexical context
     /// (`Inst::lay`): what the call births is per (site, context).
     pub call_lay: FxHashMap<CallId, u32>,
-    /// (birth site or literal template, lexical context) -> birth context
-    /// id: bounded by sites x contexts, never by instances.
-    pub birth_ids: FxHashMap<(u32, u32), CallId>,
     /// Plain calls (`Cons::Call` on the callee value) at program sites
     /// outside every summary: kind-0 keys.
     pub site_calls: FxHashSet<CallId>,
@@ -171,7 +166,11 @@ fn is_slot(x: NodeId) -> bool {
     x != NO_NODE && x & SLOT != 0
 }
 
-fn act_map(a: ChainAct, n: &mut impl FnMut(NodeId) -> NodeId, k: &mut impl FnMut(CallId) -> CallId) -> ChainAct {
+fn act_map(
+    a: ChainAct,
+    n: &mut impl FnMut(NodeId) -> NodeId,
+    k: &mut impl FnMut(CallId) -> CallId,
+) -> ChainAct {
     match a {
         ChainAct::Load(x) => ChainAct::Load(n(x)),
         ChainAct::Store(x) => ChainAct::Store(n(x)),
@@ -190,49 +189,126 @@ pub fn map_cons(
         Load { key, dst } => Load { key, dst: n(dst) },
         OwnValues { dst } => OwnValues { dst: n(dst) },
         CjsPublish { dst } => CjsPublish { dst: n(dst) },
-        Store { key, src, site } => Store { key, src: n(src), site },
+        Store { key, src, site } => Store {
+            key,
+            src: n(src),
+            site,
+        },
         Call { call } => Call { call: k(call) },
-        CallThis { call, this } => CallThis { call: k(call), this },
+        CallThis { call, this } => CallThis {
+            call: k(call),
+            this,
+        },
         New { call } => New { call: k(call) },
-        NewNamed { name, call } => NewNamed { name, call: k(call) },
+        NewNamed { name, call } => NewNamed {
+            name,
+            call: k(call),
+        },
         MCall { key, call } => MCall { key, call: k(call) },
-        Chain { origin, key, act } => Chain { origin, key, act: act_map(act, &mut n, &mut k) },
+        Chain { origin, key, act } => Chain {
+            origin,
+            key,
+            act: act_map(act, &mut n, &mut k),
+        },
         TopSink { reason } => TopSink { reason },
-        ContractThis { tmpl, reason, statics } => ContractThis { tmpl, reason, statics },
-        TopIfAny { dst, from, reason } => TopIfAny { dst: n(dst), from: n(from), reason },
+        ContractThis {
+            tmpl,
+            reason,
+            statics,
+        } => ContractThis {
+            tmpl,
+            reason,
+            statics,
+        },
+        TopIfAny { dst, from, reason } => TopIfAny {
+            dst: n(dst),
+            from: n(from),
+            reason,
+        },
         Hard { kind, reason } => Hard { kind, reason },
         AddsKeys => AddsKeys,
         Implicit { reason } => Implicit { reason },
         CreateProto { reason } => CreateProto { reason },
         ChainUnion { key, dst } => ChainUnion { key, dst: n(dst) },
         ProtoClosure { dst } => ProtoClosure { dst: n(dst) },
-        ProtoMethods { origin, key, call } => ProtoMethods { origin, key, call: k(call) },
-        AnyAccessors { origin, act } => AnyAccessors { origin, act: act_map(act, &mut n, &mut k) },
-        StoreTopProto { origin, src } => StoreTopProto { origin, src: n(src) },
-        Super { start, key, act } => Super { start, key, act: act_map(act, &mut n, &mut k) },
-        SuperCtor { class, call } => SuperCtor { class, call: k(call) },
-        SuperCtorParent { class, call, origin } => SuperCtorParent { class, call: k(call), origin },
+        ProtoMethods { origin, key, call } => ProtoMethods {
+            origin,
+            key,
+            call: k(call),
+        },
+        AnyAccessors { origin, act } => AnyAccessors {
+            origin,
+            act: act_map(act, &mut n, &mut k),
+        },
+        StoreTopProto { origin, src } => StoreTopProto {
+            origin,
+            src: n(src),
+        },
+        Super { start, key, act } => Super {
+            start,
+            key,
+            act: act_map(act, &mut n, &mut k),
+        },
+        SuperCtor { class, call } => SuperCtor {
+            class,
+            call: k(call),
+        },
+        SuperCtorParent {
+            class,
+            call,
+            origin,
+        } => SuperCtorParent {
+            class,
+            call: k(call),
+            origin,
+        },
         ThisFrom { recv } => ThisFrom { recv: n(recv) },
         BirthField { key, src } => BirthField { key, src: n(src) },
-        Accessor { holder, key, setter } => Accessor { holder: n(holder), key, setter },
+        Accessor {
+            holder,
+            key,
+            setter,
+        } => Accessor {
+            holder: n(holder),
+            key,
+            setter,
+        },
         AccessorInstall { key, f, setter } => AccessorInstall { key, f, setter },
         ProtoFrom { src } => ProtoFrom { src: n(src) },
         ProtoOf { dst } => ProtoOf { dst: n(dst) },
         IterNext { dst } => IterNext { dst: n(dst) },
         NewTargetHard { reason } => NewTargetHard { reason },
-        IdxLoad { idx, dst } => IdxLoad { idx: n(idx), dst: n(dst) },
+        IdxLoad { idx, dst } => IdxLoad {
+            idx: n(idx),
+            dst: n(dst),
+        },
         IdxKey { obj, dst } => IdxKey { obj, dst: n(dst) },
         Arith { dst, add } => Arith { dst: n(dst), add },
         ShareBuffer { ta } => ShareBuffer { ta },
         ThisTo { origin } => ThisTo { origin },
         CallArgs { call } => CallArgs { call: k(call) },
-        Spread { into, site } => Spread { into: n(into), site },
+        Spread { into, site } => Spread {
+            into: n(into),
+            site,
+        },
         SpreadFrom { src, site } => SpreadFrom { src, site },
         ThisInst { call, ft } => ThisInst { call: k(call), ft },
         BuiltinCallee => BuiltinCallee,
-        HolderStep { key, pass, stop } => HolderStep { key, pass: n(pass), stop: n(stop) },
-        VisitHolders { origin, key, act } => VisitHolders { origin, key, act: act_map(act, &mut n, &mut k) },
-        VisitStop { origin, key, act } => VisitStop { origin, key, act: act_map(act, &mut n, &mut k) },
+        HolderStep { key, pass, stop } => HolderStep {
+            key,
+            pass: n(pass),
+            stop: n(stop),
+        },
+        VisitHolders { origin, key, act } => VisitHolders {
+            origin,
+            key,
+            act: act_map(act, &mut n, &mut k),
+        },
+        VisitStop { origin, key, act } => VisitStop {
+            origin,
+            key,
+            act: act_map(act, &mut n, &mut k),
+        },
     }
 }
 
@@ -253,13 +329,17 @@ pub fn map_call(c: &CallSite, mut n: impl FnMut(NodeId) -> NodeId) -> CallSite {
 fn cons_fields(c: &Cons) -> (Vec<NodeId>, Vec<CallId>) {
     let mut ns = Vec::new();
     let mut ks = Vec::new();
-    map_cons(c, |x| {
-        ns.push(x);
-        x
-    }, |k| {
-        ks.push(k);
-        k
-    });
+    map_cons(
+        c,
+        |x| {
+            ns.push(x);
+            x
+        },
+        |k| {
+            ks.push(k);
+            k
+        },
+    );
     (ns, ks)
 }
 
@@ -353,11 +433,26 @@ impl Model {
             | Cons::SuperCtor { call, .. }
             | Cons::SuperCtorParent { call, .. }
             | Cons::CallArgs { call } => call,
-            Cons::Chain { act: ChainAct::Call(call), .. }
-            | Cons::AnyAccessors { act: ChainAct::Call(call), .. }
-            | Cons::Super { act: ChainAct::Call(call), .. }
-            | Cons::VisitHolders { act: ChainAct::Call(call), .. }
-            | Cons::VisitStop { act: ChainAct::Call(call), .. } => call,
+            Cons::Chain {
+                act: ChainAct::Call(call),
+                ..
+            }
+            | Cons::AnyAccessors {
+                act: ChainAct::Call(call),
+                ..
+            }
+            | Cons::Super {
+                act: ChainAct::Call(call),
+                ..
+            }
+            | Cons::VisitHolders {
+                act: ChainAct::Call(call),
+                ..
+            }
+            | Cons::VisitStop {
+                act: ChainAct::Call(call),
+                ..
+            } => call,
             _ => return false,
         };
         self.sum.templates.contains(&call)
@@ -370,7 +465,11 @@ impl Model {
         if (call as usize) < self.sum.n_prog {
             return Some(call);
         }
-        self.sum.tmpl_of.get(&call).or_else(|| self.sum.origin.get(&call)).copied()
+        self.sum
+            .tmpl_of
+            .get(&call)
+            .or_else(|| self.sum.origin.get(&call))
+            .copied()
     }
 
     /// A call the solver makes for `by` (a builtin calling a callback, a
@@ -403,12 +502,6 @@ impl Model {
             return BORN;
         };
         site
-    }
-
-    /// The birth context of (site or literal template, lexical context).
-    fn birth_id(&mut self, site: u32, lay: u32) -> CallId {
-        let n = self.sum.birth_ids.len() as CallId;
-        *self.sum.birth_ids.entry((site, lay)).or_insert(BORN - 1 - n)
     }
 
     /// `f` is part of the birth of object `t`: the constructor or field
@@ -472,12 +565,18 @@ impl Model {
         }
         let base: Vec<NodeId> = (0..s.nslots)
             .map(|i| match outer_at[i as usize] {
-                u32::MAX => { let n = self.node_named("inst", || format!("inst{inst}.{i}")); self.cw9_inst_fn.insert(n, (f, (key.0 as u32) << 28)); if self.cwl_trace.is_some() { self.cwl_slot.insert(n, s.orig[i as usize]); } n }
+                u32::MAX => self.node_named("inst", || format!("inst{inst}.{i}")),
                 _ if ctx == NO_CTX => s.orig[i as usize],
                 j => self.sum.ctx_nodes[ctx as usize][j as usize],
             })
             .collect();
-        let tr = |x: NodeId| if is_slot(x) { base[(x & !SLOT) as usize] } else { x };
+        let tr = |x: NodeId| {
+            if is_slot(x) {
+                base[(x & !SLOT) as usize]
+            } else {
+                x
+            }
+        };
         let this = tr(s.this);
         let lay = match key.0 {
             0 => LAY_SITE | key.1,
@@ -497,43 +596,16 @@ impl Model {
         });
         self.sum.inst_key.insert(key, inst);
         self.sum.pending.push((inst, base));
-        // TEMP CWL: what keeps making instances.
-        if self.profile.is_some() && inst % 5000 == 4999 {
-            let mut h: FxHashMap<(u8, u32), u32> = FxHashMap::default();
-            let mut tk: FxHashMap<String, u32> = FxHashMap::default();
-            for &(k, l, _) in self.sum.inst_key.keys() {
-                *h.entry((k, if k == 1 || k == 5 { l >> 28 } else { 9 })).or_default() += 1;
-                if (k == 1 && (l >> 28 == 4 || l >> 28 == 7)) || k == 5 {
-                    let t = if k == 5 { l } else { l & 0x0fff_ffff };
-                    let nm = if k == 1 && l >> 28 == 7 { format!("F:{}", self.funcs[t as usize].name) } else { self.tok_name(t) };
-                    *tk.entry(nm.split('@').next().unwrap_or("").chars().take(60).collect()).or_default() += 1;
-                }
-            }
-            let mut hv: Vec<_> = h.into_iter().collect();
-            hv.sort();
-            let mut tv: Vec<_> = tk.into_iter().collect();
-            tv.sort_by_key(|x| std::cmp::Reverse(x.1));
-            tv.truncate(8);
-            eprintln!("CWL grow inst={} toks={} ctx={} calls={} work={} kinds={hv:?} tokrecv={tv:?} last={:?} f={}", inst + 1, self.toks.len(), self.sum.ctx_nodes.len(), self.calls.len(), self.work, key, self.funcs[f as usize].name);
-            if let Some(tn) = self.cwl_trace {
-                self.cwl_trace_node(tn);
-            }
-            let mut wv: Vec<_> = self.cwl_thisinst.iter().collect();
-            wv.sort_by_key(|x| std::cmp::Reverse(*x.1));
-            for ((why, wf), n) in wv.iter().take(10) { eprintln!("CWL thisinst why={why} fn={} n={n}", self.funcs[*wf as usize].name); }
-            let mut rv: Vec<_> = self.cwl_recv.iter().collect();
-            rv.sort_by_key(|x| std::cmp::Reverse(x.1 .0));
-            for ((rf, shape, lbl, prot, bs, prog), (n, first, site)) in rv.iter().take(12) {
-                eprintln!("CWL recv fn={} this={shape} ret={lbl} protocol={prot} boundsynth={bs} progcall={prog} n={n} first={first} site={site}", self.funcs[*rf as usize].name);
-            }
-        }
         inst
     }
 
     /// A call an instance made from a template expanded into the summary:
     /// the instance already holds `f`'s effect.
     fn composed_away(&self, call: CallId, f: FnIdx) -> bool {
-        self.sum.tmpl_of.get(&call).is_some_and(|&t| self.sum.composed.contains(&(t, f)))
+        self.sum
+            .tmpl_of
+            .get(&call)
+            .is_some_and(|&t| self.sum.composed.contains(&(t, f)))
     }
 
     /// Bind `call` (or no call: `NO_NODE`) to summarized `ft` for receiver
@@ -549,65 +621,6 @@ impl Model {
             Some(t) if self.has_this_term(f) => self.layout_of(t),
             _ => LAY_NONE,
         };
-        // TEMP CWL: how a function or bound value becomes a receiver.
-        if lay >> 28 == 4 || lay >> 28 == 7 {
-            if let Some(t) = x {
-                if self.cwl_inst_probe {
-                    let (shape, lbl, site, prot, bs) = if call == NO_NODE {
-                        ("none".to_string(), "-", 0, false, false)
-                    } else {
-                        let cs = &self.calls[call as usize];
-                        (format!("{:?}", cs.this).chars().take(12).collect(), self.labels[cs.ret as usize], cs.site, self.protocol_calls.contains(&call), self.bound_synth.contains(&call))
-                    };
-                    let mut nm = self.tok_name(t);
-                    let prog = (call as usize) < self.sum.n_prog;
-                    if call != NO_NODE {
-                        if let ThisArg::Node(n) = self.calls[call as usize].this {
-                            let mut k = [0u32; 6];
-                            for x in self.nodes[n as usize].pts.to_sorted() { k[match self.toks[x as usize] { TokKind::Obj(..) => 0, TokKind::Func(..) => 1, TokKind::Bound(_) => 2, TokKind::ClassObj(_) | TokKind::Proto(_) => 3, TokKind::Top => 4, _ => 5 }] += 1; }
-                            let st = (site as usize) < self.stores.len();
-                            nm = format!("{nm} thisnode={n} label={} kinds(obj,fn,bound,cls,top,other)={k:?} site={} in {} tmpl={:?} callee_owner={:?}", self.labels[n as usize], if st { self.stores[site as usize].desc.clone() } else { "-".into() }, if st && self.stores[site as usize].func != u32::MAX { self.funcs[self.stores[site as usize].func as usize].name.clone() } else { "-".into() }, self.sum.tmpl_of.get(&call), self.sum.tmpl_of.get(&call).and_then(|t| self.calls.get(*t as usize)).map(|c| self.labels[c.ret as usize]));
-                        }
-                    }
-                    if let Some(&tc) = self.sum.tmpl_of.get(&call) {
-                        if self.cwl_seen.len() < 3 && self.cwl_seen.insert(tc) {
-                            let fname = |m: &Self, n: NodeId| { let f = m.node_fn[n as usize]; if f == NO_FN { "-".to_string() } else { m.funcs[f as usize].name.clone() } };
-                            let cs = self.calls[tc as usize].clone();
-                            let tn = match cs.this { ThisArg::Node(n) => format!("Node({n}) label={} fn={}", self.labels[n as usize], fname(self, n)), ref x => format!("{x:?}") };
-                            eprintln!("CWL tmplcall {tc} this={tn} args={:?} ret={} fn={}", cs.args, cs.ret, fname(self, cs.ret));
-                            let mut k = 0;
-                            for (n, node) in self.nodes.iter().enumerate() {
-                                for c in &node.cons {
-                                    let (_, ks) = cons_fields(c);
-                                    if ks.contains(&tc) {
-                                        k += 1;
-                                        if k <= 12 { eprintln!("CWL tmplcons {} on {}#{n} fn={} toks={}", c.kind_name(), self.labels[n], fname(self, n as NodeId), node.pts.len()); }
-                                    }
-                                }
-                            }
-                            eprintln!("CWL tmplcons total={k}");
-                        }
-                    }
-                    let shape = format!("{shape} why={}", self.cwl_why);
-                    let e = self.cwl_recv.entry((f, shape, lbl, prot, bs, prog)).or_insert((0, String::new(), 0));
-                    e.0 += 1;
-                    if e.1.is_empty() { e.1 = nm; e.2 = site; }
-                }
-            }
-        }
-        if let (Some(t), Some(_)) = (x, self.cwl_trace) {
-            if matches!(self.toks[t as usize], TokKind::Func(..)) && lay != LAY_NONE && self.cwl_firstfn.len() < 4 && self.cwl_firstfn.insert(f) {
-                let (tn, site, tc) = if call == NO_NODE { (NO_NODE, String::new(), None) } else {
-                    let cs = &self.calls[call as usize];
-                    let st = (cs.site as usize) < self.stores.len();
-                    (match cs.this { ThisArg::Node(n) => n, _ => NO_NODE },
-                     if st { format!("{} in {}", self.stores[cs.site as usize].desc, if self.stores[cs.site as usize].func != u32::MAX { self.funcs[self.stores[cs.site as usize].func as usize].name.clone() } else { "-".into() }) } else { "-".into() },
-                     self.sum.tmpl_of.get(&call).copied())
-                };
-                eprintln!("CWL firstfn method={} recv={} call={call} prog={} tmpl={tc:?} site={site} thisnode={tn} work={}", self.funcs[f as usize].name, self.tok_name(t), (call as usize) < self.sum.n_prog, self.work);
-                if tn != NO_NODE { self.cwl_trace_tok(tn, t); }
-            }
-        }
         let key = match x {
             _ if self.sum.site_calls.contains(&call) => (0, call, ft),
             Some(t) if self.constructs(f, t) => (5, t, ft),
@@ -661,7 +674,6 @@ impl Model {
             (None, ThisArg::Node(_)) if self.relays.contains_key(&call) => {}
             (None, ThisArg::Node(n)) => {
                 if self.sum.this_inst.insert((call, ft)) {
-                    *self.cwl_thisinst.entry((self.cwl_why, f)).or_default() += 1;
                     self.cons(n, Cons::ThisInst { call, ft });
                 }
             }
@@ -761,7 +773,13 @@ impl Model {
         let f = self.sum.insts[inst as usize].f;
         let s = self.sum.of[&f].clone();
         let lay = self.sum.insts[inst as usize].lay;
-        let tr = |x: NodeId| if is_slot(x) { base[(x & !SLOT) as usize] } else { x };
+        let tr = |x: NodeId| {
+            if is_slot(x) {
+                base[(x & !SLOT) as usize]
+            } else {
+                x
+            }
+        };
         let mut kmap = Vec::with_capacity(s.calls.len());
         for (t, cs) in s.calls.iter() {
             let id = self.calls.len() as CallId;
@@ -803,7 +821,13 @@ impl Model {
             }
         }
         for (h, c) in &s.cons {
-            let c2 = map_cons(c, tr, |k| if k != NO_NODE && k & CALL != 0 { kmap[(k & !CALL) as usize] } else { k });
+            let c2 = map_cons(c, tr, |k| {
+                if k != NO_NODE && k & CALL != 0 {
+                    kmap[(k & !CALL) as usize]
+                } else {
+                    k
+                }
+            });
             self.cons(tr(*h), c2);
         }
     }
@@ -818,7 +842,9 @@ impl Model {
             Some(&c) => c,
             None => {
                 let c = self.sum.ctx_nodes.len() as CallId;
-                let cn: Vec<NodeId> = (0..nodes.len()).map(|j| self.node_named("ctx", || format!("ctx{c}.{j}"))).collect();
+                let cn: Vec<NodeId> = (0..nodes.len())
+                    .map(|j| self.node_named("ctx", || format!("ctx{c}.{j}")))
+                    .collect();
                 self.sum.ctx_of.insert((g, lay), c);
                 self.sum.ctx_nodes.push(cn);
                 self.sum.ctx_lay.push(lay);
@@ -869,7 +895,13 @@ impl Model {
         for j in 0..self.calls[c].spread.len() {
             let s = self.calls[c].spread[j];
             let elems = self.node_l("spread-elems");
-            self.cons(s, Cons::Load { key: Key::Any, dst: elems });
+            self.cons(
+                s,
+                Cons::Load {
+                    key: Key::Any,
+                    dst: elems,
+                },
+            );
             for i in 0..terms.len() {
                 if terms[i] != NO_NODE {
                     self.edge(elems, terms[i]);
@@ -907,7 +939,11 @@ impl Model {
         let contract = self.contract_fns.contains(&f);
         // A closed function's callers are known: what they pass, through
         // its publication only (decision 19).
-        let closed = if self.closed_pub_reason == Some(reason) { self.closed_params.get(&f).cloned() } else { None };
+        let closed = if self.closed_pub_reason == Some(reason) {
+            self.closed_params.get(&f).cloned()
+        } else {
+            None
+        };
         for (i, &p) in fparams.iter().enumerate() {
             let mk = contract.then(|| self.param_marker_tok(f, i as u32));
             for d in [terms[i], p] {
@@ -1007,7 +1043,8 @@ impl Model {
             if is_slot(s.this) {
                 let sl = s.this & !SLOT;
                 let ft = self.funcs[f as usize].token;
-                let fed = s.seeds.iter().any(|x| x.0 == sl) || s.edges.iter().any(|e| e.1 == s.this && !is_slot(e.0));
+                let fed = s.seeds.iter().any(|x| x.0 == sl)
+                    || s.edges.iter().any(|e| e.1 == s.this && !is_slot(e.0));
                 if fed && self.instantiable(ft) {
                     self.instance((1, LAY_NONE, ft));
                 }
@@ -1035,7 +1072,9 @@ struct Index {
 }
 
 fn build_index(m: &Model) -> Index {
-    let owned = |x: NodeId| x != NO_NODE && (x as usize) < m.node_fn.len() && m.node_fn[x as usize] != NO_FN;
+    let owned = |x: NodeId| {
+        x != NO_NODE && (x as usize) < m.node_fn.len() && m.node_fn[x as usize] != NO_FN
+    };
     let mut ix = Index {
         preds: FxHashMap::default(),
         refs: FxHashMap::default(),
@@ -1099,7 +1138,11 @@ impl Lex {
                 children[p as usize].push(f as FnIdx);
             }
         }
-        Lex { parent, depth, children }
+        Lex {
+            parent,
+            depth,
+            children,
+        }
     }
 
     /// `a` lexically encloses `g` (strictly).
@@ -1254,7 +1297,9 @@ fn literal_births(m: &Model, cand: &[bool]) -> FxHashMap<FnIdx, Vec<Birth>> {
     let mut ts: Vec<Tok> = holders.keys().copied().collect();
     ts.sort_unstable();
     for t in ts {
-        let TokKind::Obj(tm, _) = m.toks[t as usize] else { continue };
+        let TokKind::Obj(tm, _) = m.toks[t as usize] else {
+            continue;
+        };
         let f = m.tmpl_fn[&tm];
         if !cand[f as usize] {
             continue;
@@ -1263,7 +1308,11 @@ fn literal_births(m: &Model, cand: &[bool]) -> FxHashMap<FnIdx, Vec<Birth>> {
         if hs.iter().any(|&h| m.node_fn[h as usize] != f) {
             continue;
         }
-        let mut own: Vec<NodeId> = own_of.iter().filter(|(_, &x)| x == t).map(|(&n, _)| n).collect();
+        let mut own: Vec<NodeId> = own_of
+            .iter()
+            .filter(|(_, &x)| x == t)
+            .map(|(&n, _)| n)
+            .collect();
         own.sort_unstable();
         let is_own = |n: NodeId| own_of.get(&n) == Some(&t);
         let mut ok = own.iter().all(|&n| m.nodes[n as usize].cons.is_empty());
@@ -1293,7 +1342,13 @@ fn literal_births(m: &Model, cand: &[bool]) -> FxHashMap<FnIdx, Vec<Birth>> {
             }
         }
         if ok {
-            out.entry(f).or_default().push(Birth { tok: t, tm, holders: hs.clone(), fields, own });
+            out.entry(f).or_default().push(Birth {
+                tok: t,
+                tm,
+                holders: hs.clone(),
+                fields,
+                own,
+            });
         }
     }
     out
@@ -1323,7 +1378,13 @@ enum Role {
     Other(FnIdx),
 }
 
-fn role(lex: &Lex, dof: &FxHashMap<NodeId, FnIdx>, outer: &FxHashSet<NodeId>, f: FnIdx, y: NodeId) -> Role {
+fn role(
+    lex: &Lex,
+    dof: &FxHashMap<NodeId, FnIdx>,
+    outer: &FxHashSet<NodeId>,
+    f: FnIdx,
+    y: NodeId,
+) -> Role {
     match dof.get(&y) {
         None => Role::Abs,
         Some(&a) if a == f => Role::Own,
@@ -1389,13 +1450,20 @@ fn plan(
     }
     let none: Vec<NodeId> = Vec::new();
     // 1. Slices, enclosing functions first (outer terms are their nodes).
-    let mut order: Vec<FnIdx> = (0..m.funcs.len() as FnIdx).filter(|&f| cand[f as usize]).collect();
+    let mut order: Vec<FnIdx> = (0..m.funcs.len() as FnIdx)
+        .filter(|&f| cand[f as usize])
+        .collect();
     order.sort_by_key(|&f| (lex.depth[f as usize], f));
     let mut slices: FxHashMap<FnIdx, Vec<NodeId>> = FxHashMap::default();
     let mut all_dof: FxHashMap<NodeId, FnIdx> = FxHashMap::default();
     for &f in &order {
-        let through: Vec<NodeId> =
-            capt.get(&f).unwrap_or(&none).iter().copied().filter(|x| all_dof.contains_key(x)).collect();
+        let through: Vec<NodeId> = capt
+            .get(&f)
+            .unwrap_or(&none)
+            .iter()
+            .copied()
+            .filter(|x| all_dof.contains_key(x))
+            .collect();
         // A body with no interface term is never instanced (module and
         // initializer bodies run once, unattributed): it keeps no slice.
         if slice(m, ix, f, &[], &through, pinned).is_empty() {
@@ -1416,9 +1484,10 @@ fn plan(
             // makes its own.
             let mut more = false;
             for &g in &lex.children[f as usize] {
-                let has_outer = capt
-                    .get(&g)
-                    .is_some_and(|v| v.iter().any(|x| dset.contains(x) || all_dof.contains_key(x)));
+                let has_outer = capt.get(&g).is_some_and(|v| {
+                    v.iter()
+                        .any(|x| dset.contains(x) || all_dof.contains_key(x))
+                });
                 if !has_outer {
                     continue;
                 }
@@ -1503,8 +1572,9 @@ fn plan(
                     Ok(true) => {
                         if !gen_kind(c) {
                             *bad = true;
-                            why.entry(f)
-                                .or_insert_with(|| format!("solver rule {} on {}", c.kind_name(), m.labels[h as usize]));
+                            why.entry(f).or_insert_with(|| {
+                                format!("solver rule {} on {}", c.kind_name(), m.labels[h as usize])
+                            });
                         }
                         if cons_seen.insert((h, i)) {
                             cons.push((h, i));
@@ -1518,14 +1588,23 @@ fn plan(
                     }
                     Err(a) => {
                         *bad = true;
-                        why.entry(f).or_insert_with(|| "touches another summarized slice".into());
+                        why.entry(f)
+                            .or_insert_with(|| "touches another summarized slice".into());
                         bad_now.insert(a);
                     }
                 }
             };
             for &x in d {
                 for i in 0..m.nodes[x as usize].cons.len() {
-                    consider(x, i as u32, true, &mut bad, &mut why, &mut bad_now, &mut cons);
+                    consider(
+                        x,
+                        i as u32,
+                        true,
+                        &mut bad,
+                        &mut why,
+                        &mut bad_now,
+                        &mut cons,
+                    );
                 }
                 if let Some(rs) = ix.refs.get(&x) {
                     for &(h, i) in rs {
@@ -1539,7 +1618,11 @@ fn plan(
                 let preds = ix.preds.get(&x).map(|v| v.as_slice()).unwrap_or(&[]);
                 for &y in node.succ.iter().chain(preds) {
                     if let Role::Other(a) = role(lex, &dof, &oset, f, y) {
-                        note("touches another summarized slice".into(), &mut bad, &mut why);
+                        note(
+                            "touches another summarized slice".into(),
+                            &mut bad,
+                            &mut why,
+                        );
                         bad_now.insert(a);
                     }
                 }
@@ -1572,7 +1655,11 @@ fn plan(
             for &k in &calls {
                 for y in call_nodes(&m.calls[k as usize]) {
                     if let Role::Other(a) = role(lex, &dof, &oset, f, y) {
-                        note("touches another summarized slice".into(), &mut bad, &mut why);
+                        note(
+                            "touches another summarized slice".into(),
+                            &mut bad,
+                            &mut why,
+                        );
                         bad_now.insert(a);
                     }
                 }
@@ -1592,7 +1679,14 @@ fn plan(
             }
         }
         if refused.len() == before {
-            return Plan { slices, dof, outer, refused, why, entries };
+            return Plan {
+                slices,
+                dof,
+                outer,
+                refused,
+                why,
+                entries,
+            };
         }
     }
 }
@@ -1600,8 +1694,11 @@ fn plan(
 fn build_summaries(m: &mut Model) {
     let ix = build_index(m);
     let lex = Lex::new(m);
-    let cand: Vec<bool> =
-        m.funcs.iter().map(|fi| !fi.no_summary && fi.rest.is_none() && !fi.has_arguments).collect();
+    let cand: Vec<bool> = m
+        .funcs
+        .iter()
+        .map(|fi| !fi.no_summary && fi.rest.is_none() && !fi.has_arguments)
+        .collect();
     // Closure values: the generation node holding a closure's token in its
     // parent's body.
     let mut cvs: FxHashMap<FnIdx, Vec<NodeId>> = FxHashMap::default();
@@ -1659,9 +1756,9 @@ fn build_summaries(m: &mut Model) {
                 continue;
             }
             let h = chain.first().copied();
-            let broken = chain.iter().any(|&p| {
-                pl.refused.contains(&p) || (Some(p) != h && !pl.slices.contains_key(&p))
-            });
+            let broken = chain
+                .iter()
+                .any(|&p| pl.refused.contains(&p) || (Some(p) != h && !pl.slices.contains_key(&p)));
             if broken {
                 add.push(*x);
             }
@@ -1671,7 +1768,14 @@ fn build_summaries(m: &mut Model) {
         }
         pinned.extend(add);
     };
-    let Plan { slices, dof, outer, refused, why, entries } = pl;
+    let Plan {
+        slices,
+        dof,
+        outer,
+        refused,
+        why,
+        entries,
+    } = pl;
     let mut fs: Vec<FnIdx> = slices.keys().copied().collect();
     fs.sort_unstable();
     // 3. Summaries.
@@ -1730,7 +1834,11 @@ fn build_summaries(m: &mut Model) {
                 .holders
                 .iter()
                 .copied()
-                .filter(|&h| !ix.preds.get(&h).is_some_and(|ps| ps.iter().any(|p| b.holders.contains(p))))
+                .filter(|&h| {
+                    !ix.preds
+                        .get(&h)
+                        .is_some_and(|ps| ps.iter().any(|p| b.holders.contains(p)))
+                })
                 .collect();
             for &h in &roots {
                 s.births.push((slot[&h], b.tm));
@@ -1758,14 +1866,20 @@ fn build_summaries(m: &mut Model) {
             }
             for &cv in cvs.get(&g).map(|v| v.as_slice()).unwrap_or(&[]) {
                 if let Some(&sl) = slot.get(&cv) {
-                    s.closures.push((sl, g, og.iter().map(|&x| enc(x)).collect()));
+                    s.closures
+                        .push((sl, g, og.iter().map(|&x| enc(x)).collect()));
                     strip.insert(m.funcs[g as usize].token);
                 }
             }
         }
         for &x in d {
             let node = &m.nodes[x as usize];
-            let toks: Vec<Tok> = node.pts.to_sorted().into_iter().filter(|t| !strip.contains(t)).collect();
+            let toks: Vec<Tok> = node
+                .pts
+                .to_sorted()
+                .into_iter()
+                .filter(|t| !strip.contains(t))
+                .collect();
             if !toks.is_empty() || node.prim != 0 {
                 s.seeds.push((slot[&x], toks, node.prim));
             }
@@ -1790,7 +1904,11 @@ fn build_summaries(m: &mut Model) {
         }
         s.params = m.funcs[f as usize].params.iter().map(|&p| enc(p)).collect();
         s.ret = enc(m.funcs[f as usize].ret);
-        s.this = if m.funcs[f as usize].lexical_this { NO_NODE } else { enc(m.funcs[f as usize].this) };
+        s.this = if m.funcs[f as usize].lexical_this {
+            NO_NODE
+        } else {
+            enc(m.funcs[f as usize].this)
+        };
         if !is_slot(s.this) {
             s.this = NO_NODE;
         }
@@ -1853,8 +1971,7 @@ fn build_summaries(m: &mut Model) {
             let mut it = keep.iter();
             node.succ.retain(|_| *it.next().unwrap());
             if node.succ_set.is_some() {
-                let set: crate::pts::FxHashSet<NodeId> =
-                    node.succ.iter().copied().collect();
+                let set: crate::pts::FxHashSet<NodeId> = node.succ.iter().copied().collect();
                 node.succ_set = Some(Rc::new(set));
             }
         }
@@ -1863,8 +1980,13 @@ fn build_summaries(m: &mut Model) {
         let mut v: Vec<_> = refused.iter().copied().collect();
         v.sort_unstable();
         for f in v {
-            let w = why.get(&f).map_or("touched by another summarized slice", |s| s.as_str());
-            eprintln!("perry: wpfacts explain: summary refused {}: {w}", m.funcs[f as usize].name);
+            let w = why
+                .get(&f)
+                .map_or("touched by another summarized slice", |s| s.as_str());
+            eprintln!(
+                "perry: wpfacts explain: summary refused {}: {w}",
+                m.funcs[f as usize].name
+            );
         }
     }
     m.sum.stats = format!(
@@ -1900,7 +2022,9 @@ fn static_callees(m: &Model, s: &Summary) -> Vec<(usize, Vec<FnIdx>)> {
             .filter_map(|t| match m.toks[t as usize] {
                 // A closure with outer terms is bound per context, never
                 // expanded into a caller.
-                TokKind::Func(g, _) if m.sum.of.get(&g).is_some_and(|s| s.outer.is_empty()) => Some(g),
+                TokKind::Func(g, _) if m.sum.of.get(&g).is_some_and(|s| s.outer.is_empty()) => {
+                    Some(g)
+                }
                 _ => None,
             })
             .collect();
@@ -1921,8 +2045,10 @@ fn static_callees(m: &Model, s: &Summary) -> Vec<(usize, Vec<FnIdx>)> {
 fn compose(m: &mut Model, obs_of: &dyn Fn(FnIdx, &Model) -> Vec<NodeId>) -> (usize, usize) {
     let mut fs: Vec<FnIdx> = m.sum.of.keys().copied().collect();
     fs.sort_unstable();
-    let direct: FxHashMap<FnIdx, Vec<(usize, Vec<FnIdx>)>> =
-        fs.iter().map(|&f| (f, static_callees(m, &m.sum.of[&f]))).collect();
+    let direct: FxHashMap<FnIdx, Vec<(usize, Vec<FnIdx>)>> = fs
+        .iter()
+        .map(|&f| (f, static_callees(m, &m.sum.of[&f])))
+        .collect();
     // Tarjan, iterative.
     let mut index: FxHashMap<FnIdx, u32> = FxHashMap::default();
     let mut low: FxHashMap<FnIdx, u32> = FxHashMap::default();
@@ -1935,7 +2061,10 @@ fn compose(m: &mut Model, obs_of: &dyn Fn(FnIdx, &Model) -> Vec<NodeId>) -> (usi
             continue;
         }
         let succ = |f: FnIdx| -> Vec<FnIdx> {
-            let mut v: Vec<FnIdx> = direct[&f].iter().flat_map(|(_, gs)| gs.iter().copied()).collect();
+            let mut v: Vec<FnIdx> = direct[&f]
+                .iter()
+                .flat_map(|(_, gs)| gs.iter().copied())
+                .collect();
             v.sort_unstable();
             v.dedup();
             v
@@ -2026,8 +2155,20 @@ fn compose(m: &mut Model, obs_of: &dyn Fn(FnIdx, &Model) -> Vec<NodeId>) -> (usi
 fn expand(s: &mut Summary, ci: usize, g: &Summary, gobs: &[NodeId]) {
     let off = s.nslots;
     let coff = s.calls.len() as u32;
-    let tr = |x: NodeId| if is_slot(x) { SLOT | (off + (x & !SLOT)) } else { x };
-    let kr = |k: CallId| if k != NO_NODE && k & CALL != 0 { CALL | (coff + (k & !CALL)) } else { k };
+    let tr = |x: NodeId| {
+        if is_slot(x) {
+            SLOT | (off + (x & !SLOT))
+        } else {
+            x
+        }
+    };
+    let kr = |k: CallId| {
+        if k != NO_NODE && k & CALL != 0 {
+            CALL | (coff + (k & !CALL))
+        } else {
+            k
+        }
+    };
     s.nslots += g.nslots;
     s.orig.extend_from_slice(&g.orig);
     for (i, t, p) in &g.seeds {
@@ -2043,7 +2184,8 @@ fn expand(s: &mut Summary, ci: usize, g: &Summary, gobs: &[NodeId]) {
         s.calls.push((*t, map_call(cs, tr)));
     }
     for (c, h, terms) in &g.closures {
-        s.closures.push((off + c, *h, terms.iter().map(|&x| tr(x)).collect()));
+        s.closures
+            .push((off + c, *h, terms.iter().map(|&x| tr(x)).collect()));
     }
     for &(b, tm) in &g.births {
         s.births.push((off + b, tm));
@@ -2081,17 +2223,26 @@ fn expand(s: &mut Summary, ci: usize, g: &Summary, gobs: &[NodeId]) {
     }
     for &sp in &call.spread {
         let elems = fresh(s);
-        s.cons.push((sp, Cons::Load { key: Key::Any, dst: elems }));
+        s.cons.push((
+            sp,
+            Cons::Load {
+                key: Key::Any,
+                dst: elems,
+            },
+        ));
         for ds in &dsts {
             for &d in ds {
                 s.edges.push((elems, d));
             }
         }
     }
-    let tdsts: Vec<NodeId> = [tr(g.this), gobs.get(g.params.len()).copied().unwrap_or(NO_NODE)]
-        .into_iter()
-        .filter(|&d| d != NO_NODE)
-        .collect();
+    let tdsts: Vec<NodeId> = [
+        tr(g.this),
+        gobs.get(g.params.len()).copied().unwrap_or(NO_NODE),
+    ]
+    .into_iter()
+    .filter(|&d| d != NO_NODE)
+    .collect();
     if !tdsts.is_empty() {
         let src = match call.this {
             ThisArg::Node(n) => n,
@@ -2121,7 +2272,13 @@ fn expand(s: &mut Summary, ci: usize, g: &Summary, gobs: &[NodeId]) {
 /// slots go (the observation layer runs them on a superset of tokens).
 pub fn compress(s: &mut Summary) {
     let n = s.nslots as usize;
-    let sl = |x: NodeId| if is_slot(x) { Some((x & !SLOT) as usize) } else { None };
+    let sl = |x: NodeId| {
+        if is_slot(x) {
+            Some((x & !SLOT) as usize)
+        } else {
+            None
+        }
+    };
     let mut pinned = vec![false; n];
     for &p in s.params.iter().chain([&s.ret, &s.this]) {
         if let Some(i) = sl(p) {
@@ -2169,10 +2326,10 @@ pub fn compress(s: &mut Summary) {
     let mut inn: Vec<FxHashSet<NodeId>> = vec![FxHashSet::default(); n];
     let mut abs_edges: FxHashSet<(NodeId, NodeId)> = FxHashSet::default();
     let add_edge = |a: NodeId,
-                        b: NodeId,
-                        out: &mut Vec<FxHashSet<NodeId>>,
-                        inn: &mut Vec<FxHashSet<NodeId>>,
-                        abs_edges: &mut FxHashSet<(NodeId, NodeId)>| {
+                    b: NodeId,
+                    out: &mut Vec<FxHashSet<NodeId>>,
+                    inn: &mut Vec<FxHashSet<NodeId>>,
+                    abs_edges: &mut FxHashSet<(NodeId, NodeId)>| {
         if a == b {
             return;
         }
@@ -2200,7 +2357,9 @@ pub fn compress(s: &mut Summary) {
         // (c) read rules into slots that reach nothing.
         for k in 0..cons.len() {
             let Some((_, c)) = &cons[k] else { continue };
-            let Some(i) = read_dst(c).and_then(sl) else { continue };
+            let Some(i) = read_dst(c).and_then(sl) else {
+                continue;
+            };
             if pinned[i] || !out[i].is_empty() || uses[i] != 1 {
                 continue;
             }
@@ -2274,7 +2433,11 @@ pub fn compress(s: &mut Summary) {
         for b in v {
             edges.push((rn(SLOT | i as u32), rn(b)));
         }
-        let mut v: Vec<NodeId> = inn[i].iter().copied().filter(|&a| sl(a).is_none()).collect();
+        let mut v: Vec<NodeId> = inn[i]
+            .iter()
+            .copied()
+            .filter(|&a| sl(a).is_none())
+            .collect();
         v.sort_unstable();
         for a in v {
             edges.push((a, rn(SLOT | i as u32)));
@@ -2284,7 +2447,11 @@ pub fn compress(s: &mut Summary) {
     ae.sort_unstable();
     edges.extend(ae);
     s.edges = edges;
-    s.cons = cons.into_iter().flatten().map(|(h, c)| (rn(h), map_cons(&c, rn, |k| k))).collect();
+    s.cons = cons
+        .into_iter()
+        .flatten()
+        .map(|(h, c)| (rn(h), map_cons(&c, rn, |k| k)))
+        .collect();
     for (_, cs) in s.calls.iter_mut() {
         *cs = map_call(cs, rn);
     }
@@ -2309,134 +2476,4 @@ pub fn compress(s: &mut Summary) {
     }
     s.nslots = orig.len() as u32;
     s.orig = orig;
-}
-
-// TEMP CWL: walk the first-arrival chain of a few tokens of one node back to
-// the constraint that put them there.
-impl Model {
-    pub fn cwl_trace_node(&self, tn: NodeId) {
-        let mut picked: Vec<Tok> = Vec::new();
-        let mut kinds = [0u32; 3];
-        let mut toks = Vec::new();
-        self.nodes[tn as usize].pts.sorted_into(&mut toks);
-        for &t in &toks {
-            let k = match &self.toks[t as usize] {
-                TokKind::Func(..) => 0,
-                TokKind::Obj(..) => 1,
-                TokKind::ClassObj(..) => 2,
-                _ => continue,
-            };
-            if kinds[k] < 2 {
-                kinds[k] += 1;
-                picked.push(t);
-            }
-        }
-        let nm = |s: &Self, n: NodeId| {
-            let mut f = s.node_fn[n as usize];
-            let mut extra = String::new();
-            if let Some(&(ff, k)) = s.cw9_inst_fn.get(&n) {
-                f = ff;
-                extra = format!(" k{}", k >> 28);
-            }
-            if let Some(&o) = s.cwl_slot.get(&n) {
-                extra += &format!(" orig={}#{o}", s.labels[o as usize]);
-            }
-            if let Some(((h, a), _)) = s.fields.iter().find(|(_, &x)| x == n) {
-                extra += &format!(" {}.{}", s.tok_name(*h), s.atoms[*a as usize]);
-            }
-            if let Some((h, _)) = s.field_any.iter().find(|(_, &x)| x == n) {
-                extra += &format!(" {}{}.*", s.tok_name(*h), s.cwl_tokdesc(*h));
-            }
-            if let Some((h, _)) = s.all_fields.iter().find(|(_, &x)| x == n) {
-                extra += &format!(" {}{}.**", s.tok_name(*h), s.cwl_tokdesc(*h));
-            }
-            let fname = if f == NO_FN { "-".to_string() } else { s.funcs[f as usize].name.rsplit(':').next().unwrap_or("").to_string() };
-            format!("{}#{n}[{fname}{extra}]({})", s.labels[n as usize], s.nodes[n as usize].pts.len())
-        };
-        {
-            let fs: Vec<String> = self.funcs.iter().filter(|f| f.this == tn).map(|f| f.name.clone()).collect();
-            let is: Vec<String> = self.sum.inst_key.iter().filter(|(_, &i)| self.sum.insts[i as usize].this == tn || self.sum.insts[i as usize].params.contains(&tn)).map(|(k, &i)| format!("inst{i} key=({},{:#x},{}) lay={:#x} this={} params={:?}", k.0, k.1, self.tok_name(k.2), self.sum.insts[i as usize].lay, self.sum.insts[i as usize].this, self.sum.insts[i as usize].params)).collect();
-            eprintln!("CWL traceowner node={tn} shared_this_of={fs:?} insts={is:?}");
-            let mut tm17: Vec<String> = Vec::new();
-            for (i, k) in self.toks.iter().enumerate() {
-                if let TokKind::Obj(tm, c) = k {
-                    if self.tmpls[*tm as usize].display.contains("c6dcb161") {
-                        let fun = if (*c as usize) < self.calls.len() { let r = self.calls[*c as usize].ret; let f = self.node_fn[r as usize]; if f == NO_FN { "-".to_string() } else { self.funcs[f as usize].name.rsplit(':').next().unwrap_or("").to_string() } } else { "-".into() };
-                        tm17.push(format!("tok{i} {} fn={fun}", self.cwl_tokdesc(i as Tok)));
-                    }
-                }
-            }
-            let ncalls_tm: Vec<String> = Vec::new();
-            eprintln!("CWL tm17 toks={tm17:?} {ncalls_tm:?}");
-        }
-        for t in picked {
-            self.cwl_trace_tok(tn, t);
-        }
-    }
-    pub fn cwl_tokdesc(&self, h: Tok) -> String {
-        let TokKind::Obj(tm, c) = self.toks[h as usize] else { return String::new() };
-        let site = |c: CallId| {
-            let cs = &self.calls[c as usize];
-            let st = (cs.site as usize) < self.stores.len();
-            if st { format!("{} in {}", self.stores[cs.site as usize].desc, if self.stores[cs.site as usize].func != u32::MAX { self.funcs[self.stores[cs.site as usize].func as usize].name.rsplit(':').next().unwrap_or("").to_string() } else { "-".into() }) } else { format!("call{c}") }
-        };
-        let d = if c == NO_CTX { "NO_CTX".to_string() } else if c == BORN { "BORN".into() } else if (c as usize) < self.sum.n_prog { format!("prog {}", site(c)) } else if let Some(((s, l), _)) = self.sum.birth_ids.iter().find(|(_, &v)| v == c) { if s & LIT != 0 { format!("lit tm{} lay={l:#x}", s & !LIT) } else { format!("site {} lay={l:#x}", site(*s)) } } else { format!("ctx{c}") };
-        let nsites = self.toks.iter().filter(|k| matches!(k, TokKind::Obj(x, _) if *x == tm)).count();
-        format!("{{tm{tm} {d} ntoks_of_tm={nsites}}}")
-    }
-    pub fn cwl_trace_tok(&self, tn: NodeId, t: Tok) {
-        let nm = |s: &Self, n: NodeId| {
-            let mut f = s.node_fn[n as usize];
-            let mut extra = String::new();
-            if let Some(&(ff, k)) = s.cw9_inst_fn.get(&n) {
-                f = ff;
-                extra = format!(" k{}", k >> 28);
-            }
-            if let Some(&o) = s.cwl_slot.get(&n) {
-                extra += &format!(" orig={}#{o}", s.labels[o as usize]);
-            }
-            if let Some(((h, a), _)) = s.fields.iter().find(|(_, &x)| x == n) {
-                extra += &format!(" {}.{}", s.tok_name(*h), s.atoms[*a as usize]);
-            }
-            if let Some((h, _)) = s.field_any.iter().find(|(_, &x)| x == n) {
-                extra += &format!(" {}{}.*", s.tok_name(*h), s.cwl_tokdesc(*h));
-            }
-            if let Some((h, _)) = s.all_fields.iter().find(|(_, &x)| x == n) {
-                extra += &format!(" {}{}.**", s.tok_name(*h), s.cwl_tokdesc(*h));
-            }
-            let fname = if f == NO_FN { "-".to_string() } else { s.funcs[f as usize].name.rsplit(':').next().unwrap_or("").to_string() };
-            format!("{}#{n}[{fname}{extra}]({})", s.labels[n as usize], s.nodes[n as usize].pts.len())
-        };
-        {
-            let mut out = vec![format!("tok={} lay={:#x}", self.tok_name(t), self.layout_of(t))];
-            let mut n = tn;
-            let mut seen = crate::pts::FxHashSet::default();
-            for _ in 0..40 {
-                if !seen.insert(n) { out.push("LOOP".into()); break; }
-                match self.cwl_prov.get(&(n, t)) {
-                    None => { out.push(format!("{} <no prov>", nm(self, n))); break; }
-                    Some(&(src, why)) => {
-                        out.push(format!("{} <-{why}-", nm(self, n)));
-                        if why == "thisto" {
-                            let vc: Vec<String> = self.via_calls.iter().filter(|((c, _), _)| *c == src).take(3).map(|((_, o), cs)| {
-                                let c0 = cs[0];
-                                let cs0 = &self.calls[c0 as usize];
-                                let tc = self.sum.tmpl_of.get(&c0).copied();
-                                let st = (cs0.site as usize) < self.stores.len();
-                                format!("origin={} ncalls={} call{c0} prog={} tmpl={tc:?} site={} in {} args={:?} ret={}", self.tok_name(*o), cs.len(), (c0 as usize) < self.sum.n_prog, if st { self.stores[cs0.site as usize].desc.clone() } else { "-".into() }, if st && self.stores[cs0.site as usize].func != u32::MAX { self.funcs[self.stores[cs0.site as usize].func as usize].name.clone() } else { "-".into() }, cs0.args.iter().map(|&a| nm(self, a)).collect::<Vec<_>>(), nm(self, cs0.ret))
-                            }).collect();
-                            out.push(format!("[viacalls {vc:?}]"));
-                        }
-                        if src == NO_NODE { out.push("SEED".into()); break; }
-                        if !self.cwl_prov.contains_key(&(src, t)) {
-                            out.push(format!("{} [cons on src: {:?}; tok not in src]", nm(self, src), self.nodes[src as usize].cons.iter().take(4).map(|c| c.kind_name()).collect::<Vec<_>>()));
-                            break;
-                        }
-                        n = src;
-                    }
-                }
-            }
-            eprintln!("CWL trace {}", out.join(" "));
-        }
-    }
 }
