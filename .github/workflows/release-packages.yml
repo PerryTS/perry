@@ -637,10 +637,17 @@ jobs:
   # ---------------------------------------------------------------------------
   # Build release binaries for all platforms
   # ---------------------------------------------------------------------------
+  build-wasi:
+    needs: [preflight, await-tests]
+    uses: ./.github/workflows/release-wasi.yml
+    with:
+      checkout-ref: ${{ needs.preflight.outputs.checkout-ref }}
+      checkout-sha: ${{ needs.preflight.outputs.checkout-sha }}
+
   build:
     # preflight is only in `needs` for its outputs (the update-manifest signing
     # steps bake the release tag into the signed URL); await-tests is the gate.
-    needs: [preflight, await-tests, prime-macos-x86_64-cache]
+    needs: [preflight, await-tests, prime-macos-x86_64-cache, build-wasi]
     # `prime-macos-x86_64-cache` is a cache warmer, never a gate, so its result
     # must not decide whether the release builds. `continue-on-error` keeps a
     # failure there from failing the RUN, but this is the repository's first
@@ -651,7 +658,8 @@ jobs:
     if: >-
       ${{ !cancelled()
       && needs.preflight.result == 'success'
-      && needs.await-tests.result == 'success' }}
+      && needs.await-tests.result == 'success'
+      && needs.build-wasi.result == 'success' }}
     strategy:
       # Don't let one platform's build failure cancel the others (mirrors
       # build-cross). A broken cross-host target should not strand the
@@ -662,6 +670,7 @@ jobs:
           - os: macos-14
             target: aarch64-apple-darwin
             artifact: perry-macos-aarch64
+            wasi: true
             old_glibc_image: ""
           # macos-15-intel, NOT macos-15: the bare label is the Arm64 image
           # (see actions/runner-images). Building x86_64-apple-darwin there
@@ -677,6 +686,7 @@ jobs:
           - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             artifact: perry-linux-x86_64
+            wasi: true
             old_glibc_image: debian:bullseye-slim@sha256:f313b4bd62667092a59b3a664d7d3ab8b5e65f41675f48e81455a15dc5abe792
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
@@ -702,6 +712,7 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact: perry-windows-x86_64
+            wasi: true
             old_glibc_image: ""
           - os: windows-11-arm
             target: aarch64-pc-windows-msvc
@@ -713,6 +724,7 @@ jobs:
       # Public, rotation-capable CLI update keyring baked into every release.
       # It is intentionally a repository variable (not fetched at runtime).
       PERRY_CLI_UPDATE_PUBLIC_KEYS: ${{ vars.PERRY_CLI_UPDATE_PUBLIC_KEYS }}
+      PERRY_RELEASE_WASI: ${{ matrix.wasi && needs.build-wasi.outputs.enabled == 'true' && '1' || '0' }}
       # Pin the macOS deployment target so bottle object files carry a
       # stable LC_VERSION_MIN / LC_BUILD_VERSION tag regardless of which
       # GitHub runner OS built them. Otherwise users linking against the
@@ -878,7 +890,7 @@ jobs:
         # crate, which downloaded a prebuilt V8 that 404'd on musl, was
         # removed.)
         if: matrix.old_glibc_image == '' && matrix.musl_image == ''
-        run: ${{ runner.os == 'Windows' && 'cargo' || 'mbx' }} build --profile prod --target ${{ matrix.target }} -p perry
+        run: ${{ runner.os == 'Windows' && 'cargo' || 'mbx' }} build --profile prod --target ${{ matrix.target }} -p perry ${{ matrix.wasi && needs.build-wasi.outputs.enabled == 'true' && '--features perry/target-wasi' || '' }}
 
       - name: Build runtime libraries
         if: matrix.old_glibc_image == '' && matrix.musl_image == ''
@@ -888,7 +900,7 @@ jobs:
           # The WebAssembly host archive, co-built with the archives it links
           # beside: perry links it for a WebAssembly program and never builds
           # it while compiling one.
-          ${{ runner.os == 'Windows' && 'cargo' || 'mbx' }} build --profile prod --target ${{ matrix.target }} -p perry -p perry-runtime-static -p perry-stdlib-static -p perry-wasm-host
+          ${{ runner.os == 'Windows' && 'cargo' || 'mbx' }} build --profile prod --target ${{ matrix.target }} -p perry -p perry-runtime-static -p perry-stdlib-static -p perry-wasm-host ${{ matrix.wasi && needs.build-wasi.outputs.enabled == 'true' && '--features perry/target-wasi' || '' }}
 
       - name: Build panic=abort runtime variant (Unix)
         # Out-of-tree installs can't rebuild the runtime, so ship the
@@ -930,7 +942,7 @@ jobs:
           while IFS= read -r name; do
             echo "::group::build $name"
             mbx build --profile prod --target ${{ matrix.target }} \
-              -p perry -p perry-runtime-static -p perry-stdlib-static -p perry-wasm-host -p "$name" \
+              -p perry -p perry-runtime-static -p perry-stdlib-static -p perry-wasm-host -p "$name" ${{ matrix.wasi && needs.build-wasi.outputs.enabled == 'true' && '--features perry/target-wasi' || '' }} \
               || echo "  (skipped $name — failed to build on this host)"
             echo "::endgroup::"
           done <<< "$governed_ext_packages"
@@ -985,6 +997,7 @@ jobs:
             --env LLVM_SYS_221_PREFIX=/usr/lib/llvm-22 \
             --env CARGO_TARGET_DIR=/work/target-glibc231 \
             --env PERRY_ABORT_TARGET_DIR=/work/target-glibc231-abort \
+            --env PERRY_RELEASE_WASI \
             --env PERRY_CLI_UPDATE_PUBLIC_KEYS \
             --volume "$HOME/.cargo:/tmp/cargo-home" \
             --volume "$HOME/.rustup:/tmp/rustup-home" \
@@ -1290,11 +1303,66 @@ jobs:
           # shellcheck disable=SC2086
           ./scripts/check_runtime_symbols.sh $libs
 
+      - name: Download the matching WASI runtime
+        if: env.PERRY_RELEASE_WASI == '1'
+        uses: ./.github/actions/perry/actions/download-artifact
+        with:
+          name: perry-cross-wasm32-wasip2
+          path: wasi-release
+      - name: Install the pinned Node oracle for WASI qualification
+        if: env.PERRY_RELEASE_WASI == '1'
+        uses: ./.github/actions/perry/actions/setup-node
+        with:
+          node-version-file: .node-version
+      - name: Install Unix WASI qualification tools
+        if: env.PERRY_RELEASE_WASI == '1' && runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          toolchain_env="$(./scripts/wasi_toolchain.sh "$RUNNER_TEMP/wasi")"
+          eval "$toolchain_env"
+          for key in WASI_SDK_PATH WASMTIME; do
+            printf '%s=%s\n' "$key" "${!key}" >> "$GITHUB_ENV"
+          done
+      - name: Install Windows WASI qualification tools
+        if: env.PERRY_RELEASE_WASI == '1' && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          . ./scripts/wasi_toolchain.ps1 "$env:RUNNER_TEMP/wasi"
+          foreach ($key in @('WASI_SDK_PATH', 'WASMTIME')) {
+            "$key=$([Environment]::GetEnvironmentVariable($key))" >> $env:GITHUB_ENV
+          }
+      - name: Qualify the release compiler with its packaged WASI runtime
+        if: env.PERRY_RELEASE_WASI == '1'
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ needs.preflight.outputs.checkout-sha }}
+        run: |
+          set -euo pipefail
+          compiler="target/${{ matrix.target }}/prod/perry"
+          if [[ "$RUNNER_OS" == Windows ]]; then compiler="$compiler.exe"; fi
+          python scripts/wasi_release_check.py --compiler "$compiler" \
+            --bundle wasi-release/perry-cross-wasm32-wasip2.tar.gz --revision "$EXPECTED_SHA" \
+            --output "$RUNNER_TEMP/perry-wasi-release-validation"
+          python scripts/wasi_release.py install --revision "$EXPECTED_SHA" \
+            --bundle wasi-release/perry-cross-wasm32-wasip2.tar.gz \
+            --output "target/${{ matrix.target }}/prod/wasm32-wasip2/release"
+      - name: Upload packaged WASI qualification evidence
+        if: always() && env.PERRY_RELEASE_WASI == '1'
+        uses: ./.github/actions/perry/actions/upload-artifact
+        with:
+          name: wasi-release-validation-${{ matrix.target }}
+          path: ${{ runner.temp }}/perry-wasi-release-validation
+          if-no-files-found: warn
+
       - name: Package release archive (Unix)
         if: runner.os != 'Windows'
         run: |
           mkdir -p staging
           cp target/${{ matrix.target }}/prod/perry staging/
+          if [[ "$PERRY_RELEASE_WASI" == 1 ]]; then
+            cp -R target/${{ matrix.target }}/prod/wasm32-wasip2 staging/
+          fi
           # Include static libraries for linking (runtime, stdlib, UI)
           for lib in libperry_runtime.a libperry_runtime_abort.a libperry_stdlib.a libperry_wasm_host.a libperry_ui_macos.a libperry_ui_gtk4.a; do
             if [ -f "target/${{ matrix.target }}/prod/$lib" ]; then
@@ -1445,6 +1513,9 @@ jobs:
 
           New-Item -ItemType Directory -Force -Path staging
           Copy-Item $binary staging/
+          if ($env:PERRY_RELEASE_WASI -eq "1") {
+            Copy-Item -Recurse "target/${{ matrix.target }}/prod/wasm32-wasip2" staging/
+          }
           Copy-Item $llvmRuntime staging/
           Copy-Item "xwin-install/bin/xwin.exe" staging/
           # Include static libraries for linking (runtime, stdlib, UI)
@@ -2279,7 +2350,7 @@ jobs:
   # upload semantics where a red cross leg didn't sink the release.
   # ---------------------------------------------------------------------------
   publish-assets:
-    needs: [preflight, build, build-cross, create-release, create-nightly]
+    needs: [preflight, build, build-cross, build-wasi, create-release, create-nightly]
     if: >
       !cancelled() &&
       needs.preflight.outputs.tag != '' &&
@@ -2318,6 +2389,13 @@ jobs:
         with:
           pattern: release-archive-*
           merge-multiple: true
+          path: assets/
+
+      - name: Download the required WASI runtime bundle
+        if: needs.build-wasi.outputs.enabled == 'true'
+        uses: ./.github/actions/perry/actions/download-artifact
+        with:
+          name: perry-cross-wasm32-wasip2
           path: assets/
 
       - name: Download cross bundles

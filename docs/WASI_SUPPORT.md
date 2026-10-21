@@ -37,6 +37,47 @@ nightly-2026-10-04 and LLVM 22. Fresh Windows x64 qualification is recorded belo
 [Wasmtime platform support](https://docs.wasmtime.dev/stability-platform-support.html)
 and [the agreed scope, #11375](https://github.com/PerryTS/perry/issues/11375).
 
+## Release artifacts
+
+The release pipeline builds a separate `perry-cross-wasm32-wasip2.tar.gz`
+runtime bundle from the same pinned source revision as its compilers. Its
+manifest records the Perry version, source commit, target triple, archive
+size and SHA256. It contains no native stdlib or UI archives.
+
+The qualified release host profiles are Linux x86_64 GNU, macOS ARM64 and
+Windows x64. Their compiler builds enable `perry/target-wasi`, including later
+extension-library builds that can relink the compiler. Their release archives
+place the WASI runtime under `wasm32-wasip2/release/` beside the executable,
+where the compiler discovers it automatically. Other release host profiles
+are not enabled by this packaging change. Ordinary Cargo builds still require
+the explicit `target-wasi` feature.
+
+Before packaging those host archives, the workflow copies the release compiler
+outside the source checkout, verifies that a missing runtime is rejected,
+installs the source-matched bundle, and runs all smoke, acceptance and
+pinned-Node comparison suites. This checks the archive installation and runtime
+discovery path in addition to source-tree compilation. Republishing a tag
+that predates this release profile does not retroactively claim WASI support.
+
+WASI SDK 34 remains a host prerequisite: install its archive for your host and
+set `WASI_SDK_PATH` to its extracted directory. Running the emitted component
+also requires the WASI interfaces and exception-handling support stated above.
+
+For a package-manager layout that does not preserve the bundled cross-target
+directory, extract the **matching release's** runtime bundle into a dedicated
+directory and set `PERRY_RUNTIME_DIR` to it when compiling WASI. Do not point
+this variable at the native runtime directory. For example:
+
+```sh
+mkdir -p "$HOME/.perry/wasi-runtime"
+tar -xzf perry-cross-wasm32-wasip2.tar.gz -C "$HOME/.perry/wasi-runtime"
+PERRY_RUNTIME_DIR="$HOME/.perry/wasi-runtime" perry compile app.ts --target wasi -o app.wasm
+```
+
+Older published releases may not contain these assets. The packaging workflow
+must pass before its artifacts are considered qualified; the source-build
+qualification results below do not themselves prove release packaging.
+
 ## Implemented contracts
 
 - Arguments, environment variables, standard output, and filesystem access

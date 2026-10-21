@@ -63,8 +63,12 @@ if ! command -v mbx >/dev/null 2>&1; then
   exit 1
 fi
 cargo_build=(mbx build)
+wasi_features=()
+if [[ "${PERRY_RELEASE_WASI:-0}" == 1 ]]; then
+  wasi_features=(--features perry/target-wasi)
+fi
 
-"${cargo_build[@]}" --profile prod --target "$target" -p perry
+"${cargo_build[@]}" --profile prod --target "$target" -p perry "${wasi_features[@]}"
 "${cargo_build[@]}" --profile prod --target "$target" -p perry-runtime -p perry-runtime-static
 "${cargo_build[@]}" --profile prod --target "$target" -p perry-stdlib -p perry-stdlib-static
 
@@ -82,7 +86,7 @@ governed_ext_packages=$(./scripts/release_ext_packages.sh)
 while IFS= read -r package; do
   echo "::group::build $package"
   "${cargo_build[@]}" --profile prod --target "$target" \
-    -p perry -p perry-runtime-static -p perry-stdlib-static -p perry-wasm-host -p "$package" \
+    -p perry -p perry-runtime-static -p perry-stdlib-static -p perry-wasm-host -p "$package" "${wasi_features[@]}" \
     || echo "  (skipped $package -- failed to build on the glibc 2.31 sysroot)"
   echo "::endgroup::"
 done <<< "$governed_ext_packages"

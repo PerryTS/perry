@@ -1,0 +1,86 @@
+name: Build the release WASI runtime
+
+on:
+  workflow_call:
+    inputs:
+      checkout-ref:
+        required: true
+        type: string
+      checkout-sha:
+        required: true
+        type: string
+    outputs:
+      enabled:
+        description: Whether the resolved release source supports WASI bundles
+        value: ${{ jobs.runtime.outputs.enabled }}
+
+permissions:
+  contents: read
+
+jobs:
+  runtime:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    outputs:
+      enabled: ${{ steps.profile.outputs.enabled }}
+    env:
+      CARGO_BUILD_JOBS: "2"
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - name: Checkout the exact release source
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ inputs.checkout-ref }}
+          EXPECTED_SHA: ${{ inputs.checkout-sha }}
+          CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth 1 origin "$CHECKOUT_REF"
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+      - name: Detect the resolved source's release profile
+        id: profile
+        shell: bash
+        run: |
+          # Republishing an older tag must not invent WASI support for it.
+          if test -f scripts/wasi_release.py; then
+            echo enabled=true >> "$GITHUB_OUTPUT"
+          else
+            echo enabled=false >> "$GITHUB_OUTPUT"
+          fi
+      - name: Install Rust with the WASI target
+        if: steps.profile.outputs.enabled == 'true'
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal --target wasm32-wasip2
+      - uses: ./.github/actions/perry/Swatinem/rust-cache
+        if: steps.profile.outputs.enabled == 'true'
+        with:
+          shared-key: release-wasi-runtime
+      - name: Install the pinned WASI SDK
+        if: steps.profile.outputs.enabled == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          toolchain_env="$(./scripts/wasi_toolchain.sh "$RUNNER_TEMP/wasi")"
+          eval "$toolchain_env"
+          for key in WASI_SDK_PATH CC_wasm32_wasip2 AR_wasm32_wasip2 CFLAGS_wasm32_wasip2 CC_SHELL_ESCAPED_FLAGS; do
+            printf '%s=%s\n' "$key" "${!key}" >> "$GITHUB_ENV"
+          done
+      - name: Build and package the source-matched WASI archive
+        if: steps.profile.outputs.enabled == 'true'
+        env:
+          EXPECTED_SHA: ${{ inputs.checkout-sha }}
+        run: |
+          python3 scripts/test_wasi_release.py
+          python3 scripts/wasi_build_runtime.py
+          python3 scripts/wasi_release.py package --revision "$EXPECTED_SHA" \
+            --runtime target/wasm32-wasip2/release/libperry_runtime.a --output wasi-release
+      - name: Upload the runtime bundle
+        if: steps.profile.outputs.enabled == 'true'
+        uses: ./.github/actions/perry/actions/upload-artifact
+        with:
+          name: perry-cross-wasm32-wasip2
+          path: wasi-release/*
+          if-no-files-found: error
