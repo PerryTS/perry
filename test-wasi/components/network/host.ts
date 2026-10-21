@@ -38,7 +38,8 @@ for (let i = 0; i < 3; i++) {
     check(result.tag === "ok" && result.value === "reply:" + text, "UDP round-trip payload");
   }
 }
-check(probe(allowed).resolve("localhost").tag === "err", "UDP grant must not enable DNS");
+const udpDns = probe(allowed).resolve("localhost");
+check(udpDns.tag === "err" && udpDns.value === "PermanentResolverFailure", "UDP grant must not enable DNS");
 allowed.dispose();
 const dns = instance({ dns: true });
 for (let i = 0; i < 3; i++) {
@@ -48,11 +49,13 @@ for (let i = 0; i < 3; i++) {
   check(literal.tag === "ok" && literal.value.length === 1 && literal.value[0] === "127.0.0.1", "IP resolution");
 }
 check(probe(dns).resolve("invalid name!").tag === "err", "invalid name must fail");
-check(probe(dns).exchange(port, true, "denied").tag === "err", "DNS must not enable UDP");
+const dnsUdp = probe(dns).exchange(port, true, "denied");
+check(dnsUdp.tag === "err" && dnsUdp.value === "AccessDenied", "DNS must not enable UDP");
 dns.dispose();
 const fresh = instance({});
 const deniedDns = probe(fresh).resolve("localhost");
 check(deniedDns.tag === "err" && deniedDns.value === "PermanentResolverFailure", "DNS permission leaked");
-check(probe(fresh).exchange(port, true, "denied").tag === "err", "UDP permission leaked");
+const freshUdp = probe(fresh).exchange(port, true, "denied");
+check(freshUdp.tag === "err" && freshUdp.value === "AccessDenied", "UDP permission leaked");
 fresh.dispose();
 console.log("PASS component networking: UDP connected/unconnected traffic, exact grants, DNS, isolation");

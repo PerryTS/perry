@@ -132,7 +132,7 @@ def main():
     core = output / "rust-target/wasm32-unknown-unknown/release/perry_component_network_fixture.wasm"
     component = network / "network.component.wasm"
     run("network-componentize", [args.componentize.resolve(), core, component])
-    run("network-bindings", [args.wit.resolve(), network / "world.wit", network / "generated", "plugin"])
+    run("network-bindings", [args.wit.resolve(), network, network / "generated", "plugin"])
     marker = "PASS component networking: UDP connected/unconnected traffic, exact grants, DNS, isolation"
     for moving in ([False, True] if args.moving_gc else [False]):
         env = normal_env.copy()
