@@ -87,7 +87,7 @@ impl Host {
         let component = Component::from_binary(&engine, bytes)
             .map_err(anyhow::Error::from)
             .context("compiling component")?;
-        contract::validate(&engine, &component, world)?;
+        contract::validate(&engine, &component, world, options.wasi.is_some())?;
         let mut linker = Linker::<StoreData>::new(&engine);
         if options.wasi.is_some() {
             wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
