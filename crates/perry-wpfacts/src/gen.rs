@@ -66,6 +66,15 @@ pub struct Gen<'a> {
     /// (module, local) → the class. `super` through such a home starts at
     /// that class's parent, exactly like `SuperPropertyGet`.
     pub class_homes: FxHashMap<(u32, u32), TmplId>,
+    /// Literal birth templates by expression (compiler data, `new_lit`).
+    pub(crate) lit_births: FxHashMap<usize, (TmplId, Tok)>,
+    /// The constant first argument of the call `call_expr` is lowering,
+    /// taken by `call_with` (`Model::call_lit`).
+    pub(crate) call_lit_arg: Option<Atom>,
+    /// `(module, local)` of a `let require = <closure>` binding, the
+    /// wrapper's synthetic require (`Gen::require_helper_body`).
+    pub(crate) require_helpers: FxHashMap<(u32, u32), &'a [Stmt]>,
+    pub(crate) require_helpers_indexed: std::collections::HashSet<u32>,
 }
 
 /// Per-function walking context.
@@ -87,6 +96,7 @@ pub(crate) struct Fx {
 impl<'a> Gen<'a> {
     pub fn new(modules: Vec<(&'a str, &'a Module)>, relations: bool, explain: bool) -> Self {
         let mut m = Model::default();
+        m.cur_fn = NO_FN;
         m.explain = explain;
         m.cur_src = NO_NODE;
         m.cur_why = u32::MAX;
@@ -127,11 +137,9 @@ impl<'a> Gen<'a> {
         m.add_prim(thrown, prim::ALL);
         m.thrown = thrown;
         let cjs_registry = m.node_l("CJSREG");
-        // This is a union relation, not a runtime value. Its cardinality
-        // must not itself expose every registered module to unknown code.
-        m.nodes[cjs_registry as usize].internal = true;
         let cjs_unknown_path = m.node_l("CJSUNKNOWNPATH");
-        m.nodes[cjs_unknown_path as usize].internal = true;
+        m.cjs_union = cjs_registry;
+        m.cjs_unknown = cjs_unknown_path;
         let _ = m.tok(TokKind::ObjectProto);
         let mut path_index = FxHashMap::default();
         for (i, (p, _)) in modules.iter().enumerate() {
@@ -160,6 +168,10 @@ impl<'a> Gen<'a> {
             iife_birth: FxHashMap::default(),
             fn_phase: FxHashMap::default(),
             class_homes: FxHashMap::default(),
+            lit_births: FxHashMap::default(),
+            call_lit_arg: None,
+            require_helpers: FxHashMap::default(),
+            require_helpers_indexed: std::collections::HashSet::new(),
         }
     }
 
@@ -306,16 +318,21 @@ impl<'a> Gen<'a> {
         name: &str,
         params: &[perry_hir::Param],
         lexical_this: bool,
-        _is_closure: bool,
+        is_closure: bool,
     ) -> FnIdx {
         if let Some(&f) = self.mods[mi as usize].funcs.get(&id) {
             return f;
         }
         let fx = self.m.funcs.len() as FnIdx;
-        let tok = self.m.tok(TokKind::Func(fx));
+        let tok = self.m.tok(TokKind::Func(fx, NO_CTX));
         let this = self.m.node_named("this", || format!("this({name})"));
         let ret = self.m.node_named("ret", || format!("ret({name})"));
         let args_all = self.m.node_named("args", || format!("args({name})"));
+        // Parameters and the result belong to the new function's body.
+        let outer_fn = std::mem::replace(&mut self.m.cur_fn, fx);
+        self.m.own(ret);
+        // `this` is the function's own interface term, like a parameter.
+        self.m.own(this);
         let mut ps = Vec::new();
         let mut rest = None;
         let mut mapped = None;
@@ -325,7 +342,7 @@ impl<'a> Gen<'a> {
                 // The rest local holds a fresh array whose elements are the
                 // extra arguments (and, for `arguments`, every argument).
                 let arr = self.new_arr_template(mi, "rest");
-                let at = self.m.tok(TokKind::Obj(arr));
+                let at = self.m.tok(TokKind::Obj(arr, NO_CTX));
                 self.m.add_tok(n, at);
                 let fa = self.m.field_any(at);
                 if p.arguments_object.is_some() {
@@ -343,6 +360,7 @@ impl<'a> Gen<'a> {
                 ps.push(n);
             }
         }
+        self.m.cur_fn = outer_fn;
         if let Some((fa, all)) = mapped {
             // Both directions: a write to `arguments[i]` reaches the
             // parameter, and an assignment to the parameter is read back
@@ -368,6 +386,9 @@ impl<'a> Gen<'a> {
             token: tok,
             ctor_of: None,
             lexical_this,
+            no_summary: false,
+            gen_step: false,
+            parent: if is_closure { outer_fn } else { NO_FN },
         });
         self.mods[mi as usize].funcs.insert(id, fx);
         fx
@@ -450,14 +471,16 @@ impl<'a> Gen<'a> {
             let f = self.register_fn(mi, g.id, &g.name, &g.params, false, false);
             let a = self.m.atom(name);
             self.m.accessor_atoms.insert(a);
-            self.m.accessors.entry((proto, a)).or_default().0.push(f);
+            let ft = self.m.funcs[f as usize].token;
+            self.m.accessors.entry((proto, a)).or_default().0.push(ft);
             push_unique(self.m.accessor_keys.entry(proto).or_default(), a);
         }
         for (name, s) in &c.setters {
             let f = self.register_fn(mi, s.id, &s.name, &s.params, false, false);
             let a = self.m.atom(name);
             self.m.accessor_atoms.insert(a);
-            self.m.accessors.entry((proto, a)).or_default().1.push(f);
+            let ft = self.m.funcs[f as usize].token;
+            self.m.accessors.entry((proto, a)).or_default().1.push(ft);
             push_unique(self.m.accessor_keys.entry(proto).or_default(), a);
         }
         for cm in &c.computed_members {
@@ -482,8 +505,9 @@ impl<'a> Gen<'a> {
                 let _ = pn;
                 // Instances reaching any key read: approximate by making
                 // the accessor's `this` the whole class (instances).
-                let inst = self.m.tok(TokKind::Obj(tm));
+                let inst = self.m.tok(TokKind::Obj(tm, NO_CTX));
                 self.m.add_tok(this, inst);
+                self.m.funcs[f as usize].no_summary = true;
                 let fa = self.m.field_any(proto);
                 let ret = self.m.funcs[f as usize].ret;
                 self.m.edge(ret, fa);
@@ -501,7 +525,7 @@ impl<'a> Gen<'a> {
 
     pub(crate) fn synthetic_fn(&mut self, mi: u32, name: &str) -> FnIdx {
         let fx = self.m.funcs.len() as FnIdx;
-        let tok = self.m.tok(TokKind::Func(fx));
+        let tok = self.m.tok(TokKind::Func(fx, NO_CTX));
         let this = self.m.node_named("this", || format!("this({name})"));
         let ret = self.m.node_named("ret", || format!("ret({name})"));
         let args_all = self.m.node_named("args", || format!("args({name})"));
@@ -518,6 +542,9 @@ impl<'a> Gen<'a> {
             token: tok,
             ctor_of: None,
             lexical_this: false,
+            no_summary: false,
+            gen_step: false,
+            parent: NO_FN,
         });
         fx
     }
@@ -551,7 +578,7 @@ impl<'a> Gen<'a> {
         {
             // Dynamic `extends <expr>` / unresolved parent: E11-like — the
             // parent constructor is unknown code.
-            let inst = self.m.tok(TokKind::Obj(tm));
+            let inst = self.m.tok(TokKind::Obj(tm, NO_CTX));
             let r = self
                 .m
                 .reason("E11 class with a dynamic/unresolved `extends`");
@@ -588,9 +615,16 @@ impl<'a> Gen<'a> {
 
     pub(crate) fn local(&mut self, mi: u32, id: u32) -> NodeId {
         if let Some(&n) = self.mods[mi as usize].locals.get(&id) {
+            if self.m.node_fn[n as usize] != self.m.cur_fn {
+                if self.m.cur_fn != NO_FN {
+                    let f = self.m.cur_fn;
+                    self.m.captures.insert((n, f));
+                }
+            }
             return n;
         }
         let n = self.m.node_named("local", || format!("local({mi},{id})"));
+        self.m.own(n);
         self.mods[mi as usize].locals.insert(id, n);
         n
     }
@@ -607,6 +641,7 @@ impl<'a> Gen<'a> {
     pub(crate) fn new_arr_template(&mut self, mi: u32, what: &str) -> TmplId {
         let site = self.next_site(mi);
         let tm = self.m.tmpls.len() as TmplId;
+        self.note_birth_fn(tm);
         self.m.tmpls.push(Template {
             kind: TmplKind::Arr { module: mi, site },
             display: format!("{}:[{what}#{site}]", self.mods[mi as usize].path_short()),
@@ -623,9 +658,18 @@ impl<'a> Gen<'a> {
         tm
     }
 
+    /// A generation-time birth template belongs to the body making it.
+    pub(crate) fn note_birth_fn(&mut self, tm: TmplId) {
+        if self.m.cur_fn != NO_FN {
+            let f = self.m.cur_fn;
+            self.m.tmpl_fn.insert(tm, f);
+        }
+    }
+
     pub(crate) fn new_bobj_template(&mut self, mi: u32, what: &'static str) -> TmplId {
         let site = self.next_site(mi);
         let tm = self.m.tmpls.len() as TmplId;
+        self.note_birth_fn(tm);
         self.m.tmpls.push(Template {
             kind: TmplKind::BObj {
                 module: mi,
@@ -785,6 +829,49 @@ impl<'a> Gen<'a> {
             let fl = self.m.field(ns, a);
             self.m.edge(fl, en);
         }
+    }
+
+    /// Per-unit mode: these modules are one unit of a larger program, and
+    /// every other unit is unknown compiled code. What the unit publishes
+    /// (exports, namespaces, CommonJS records, thrown values, the global
+    /// object) reaches that code; what it reads from it is ⊤ (imports of
+    /// other units already are; CommonJS paths of other units and the
+    /// registry are here); and that code stores through what it holds, the
+    /// intrinsic prototypes and globals included: one ⊤ store under any key
+    /// through ⊤, as a store in compiled code with a ⊤ receiver is.
+    pub fn unit_boundary(&mut self) {
+        let r = self.m.reason("published to another unit");
+        let mut exports: Vec<NodeId> = self.exports.values().copied().collect();
+        exports.sort_unstable();
+        for n in exports {
+            self.m.sink_node(n, r);
+        }
+        for mi in 0..self.mods.len() {
+            let t = self.mods[mi].ns_tok;
+            self.m.escape(t, r);
+        }
+        let mut paths: Vec<(String, NodeId)> =
+            self.cjs_paths.iter().map(|(k, &n)| (k.clone(), n)).collect();
+        paths.sort_unstable();
+        let foreign = |g: &Self, k: &str| !g.path_index.contains_key(k);
+        for (k, n) in paths {
+            if foreign(self, &k) {
+                self.m.add_top(n, |_| "CommonJS module of another unit".into());
+            }
+            self.m.sink_node(n, r);
+        }
+        for n in [self.cjs_registry, self.cjs_unknown_path].into_iter().chain(self.cjs_main) {
+            self.m.add_top(n, |_| "CommonJS registry shared with other units".into());
+            self.m.sink_node(n, r);
+        }
+        let thrown = self.thrown;
+        self.m.sink_node(thrown, r);
+        let gt = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+        self.m.escape(gt, r);
+        let holder = self.m.node_l("other-unit-receiver");
+        self.m.add_tok(holder, TOP);
+        let src = self.m.top_tok_node;
+        self.m.cons(holder, Cons::Store { key: Key::Any, src, site: 0 });
     }
 
     fn resolve_source(&self, module: &Module, source: &str) -> Option<u32> {
@@ -970,6 +1057,12 @@ impl<'a> Gen<'a> {
     }
 
     pub(crate) fn params(&mut self, fx: &Fx, params: &[perry_hir::Param]) {
+        let prev = std::mem::replace(&mut self.m.cur_fn, fx.f);
+        self.params_inner(fx, params);
+        self.m.cur_fn = prev;
+    }
+
+    fn params_inner(&mut self, fx: &Fx, params: &[perry_hir::Param]) {
         for p in params {
             let n = self.local(fx.module, p.id);
             if let Some(d) = &p.default {
@@ -994,7 +1087,7 @@ impl<'a> Gen<'a> {
             new_target: self.m.all_prim_node,
             fn_ctor: false,
         };
-        let inst = self.m.tok(TokKind::Obj(tm));
+        let inst = self.m.tok(TokKind::Obj(tm, NO_CTX));
         let ctor_definite: Vec<String> = self
             .ctor_phase
             .get(&tm)
@@ -1160,7 +1253,13 @@ impl<'a> Gen<'a> {
         }
     }
 
-    fn stmt(&mut self, fx: &Fx, s: &Stmt) {
+    pub(crate) fn stmt(&mut self, fx: &Fx, s: &Stmt) {
+        let prev = std::mem::replace(&mut self.m.cur_fn, fx.f);
+        self.stmt_inner(fx, s);
+        self.m.cur_fn = prev;
+    }
+
+    fn stmt_inner(&mut self, fx: &Fx, s: &Stmt) {
         match s {
             Stmt::Let { id, init, .. } => {
                 let n = self.local(fx.module, *id);

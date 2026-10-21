@@ -45,10 +45,26 @@ impl<'a> Gen<'a> {
                     self.iife_birth.insert(pn, tm);
                 }
                 let c = self.expr(fx, callee);
+                if let Expr::Closure { func_id, .. } = callee {
+                    // Its parameter is the literal's birth, not a call input.
+                    let f = self.fn_by_id(fx.module, *func_id);
+                    self.m.funcs[f as usize].no_summary = true;
+                }
                 return self.call_value(c, ThisArg::Undef, vec![lit], vec![]);
             }
         }
+        // A literal `require("...")` in a CommonJS-wrapped module: the one
+        // module the wrapper resolved it to (`Gen::cjs_static_require`).
+        if let (Expr::FuncRef(_) | Expr::LocalGet(_), [Expr::String(spec)]) = (callee, args) {
+            if let Some(n) = self.cjs_static_require(fx.module, callee, spec) {
+                return n;
+            }
+        }
         let a: Vec<NodeId> = args.iter().map(|x| self.expr(fx, x)).collect();
+        self.call_lit_arg = match args.first().map(|x| self.const_eval(fx.module, x)) {
+            Some(Some(crate::gen_const::Const::Str(s))) => Some(self.m.atom(&s)),
+            _ => None,
+        };
         if let Expr::ExternFuncRef { name, .. } = callee {
             if self.is_runtime_extern(fx.module, name) {
                 let lits: Vec<Option<String>> = args
@@ -72,6 +88,7 @@ impl<'a> Gen<'a> {
         spread: Vec<NodeId>,
         byte_offset: u32,
     ) -> NodeId {
+        let lit = self.call_lit_arg.take();
         match callee {
             Expr::PropertyGet {
                 object,
@@ -106,7 +123,12 @@ impl<'a> Gen<'a> {
             }
             _ => {
                 let c = self.expr(fx, callee);
-                self.call_value(c, ThisArg::Undef, args, spread)
+                let r = self.call_value(c, ThisArg::Undef, args, spread);
+                if let Some(a) = lit {
+                    let call = self.m.calls.len() as CallId - 1;
+                    self.m.call_lit.insert(call, a);
+                }
+                r
             }
         }
     }
@@ -157,6 +179,7 @@ impl<'a> Gen<'a> {
             // Captured `this` (arrow semantics, or a slot the runtime
             // patches): the enclosing `this` flows in.
             self.m.edge(fx.this, info.this);
+            self.m.captures.insert((fx.this, f));
         }
         let fn_ctor = !*is_arrow;
         let cfx = Fx {
@@ -222,7 +245,11 @@ impl<'a> Gen<'a> {
         spread: Vec<NodeId>,
     ) -> NodeId {
         let (call, ret) = self.new_call(ThisArg::Undef, args, spread);
-        crate::builtins::construct_named(&mut self.m, name, call);
+        let h = self.m.node_l("new-named");
+        let mark = self.m.tok(TokKind::Builtin(BuiltinNs::Other));
+        self.m.add_tok(h, mark);
+        let name = self.m.atom(name);
+        self.m.cons(h, Cons::NewNamed { name, call });
         ret
     }
 
@@ -240,15 +267,16 @@ impl<'a> Gen<'a> {
         self.m.top_val(&format!("unresolved class value {name}"))
     }
 
-    /// Captured values of a class body (class expression environments).
-    pub(crate) fn class_env(&mut self, mi: u32, name: &str) -> NodeId {
-        let key = format!("{mi}:{name}");
+    /// One captured value of a class body (a slot of the class's capture
+    /// environment): each slot is its own node, as each is its own binding.
+    pub(crate) fn class_env(&mut self, mi: u32, name: &str, index: usize) -> NodeId {
+        let key = format!("{mi}:{name}:{index}");
         if let Some(&n) = self.class_envs.get(&key) {
             return n;
         }
         let n = self
             .m
-            .node_named("classenv", || format!("classenv({name})"));
+            .node_named("classenv", || format!("classenv({name}.{index})"));
         self.class_envs.insert(key, n);
         n
     }
@@ -609,9 +637,38 @@ impl<'a> Gen<'a> {
                 }
                 self.prim_node(prim::UNDEF)
             }
-            "js_vm_module_call" | "js_module_create_require_devirt" => {
-                crate::builtins::set_dyn_eval(&mut self.m, "E14 vm / createRequire");
+            // The runtime calls the delegate's own `throw` / `return` with
+            // the value (`perry-runtime` `iterator_close.rs`); a delegate
+            // without `throw` is closed through `return` first.
+            "js_iterator_delegate_throw" | "js_iterator_delegate_return" => {
+                let (Some(it), Some(v)) = (arg(0), arg(1)) else {
+                    return self.extern_fail(name, &args, &spread);
+                };
+                let k = if name == "js_iterator_delegate_throw" { "throw" } else { "return" };
+                let a = self.m.atom(k);
+                let out = self.mcall(it, Key::Named(a), vec![v], vec![]);
+                if k == "throw" {
+                    let ra = self.m.atom("return");
+                    let _ = self.mcall(it, Key::Named(ra), vec![], vec![]);
+                }
+                self.m.add_prim(out, prim::UNDEF);
+                out
+            }
+            // A module-singleton `{}` (`perry-transform` `prototype_birth.rs`).
+            "js_object_literal_prototype_birth" => {
+                let (_, t) = self.new_lit_tmpl(fx.module, &[]);
+                self.tok_node(t)
+            }
+            "js_vm_module_call" => {
+                crate::builtins::set_dyn_eval(&mut self.m, "E14 node:vm");
                 self.extern_fail(name, &args, &spread)
+            }
+            // `module.createRequire` as a value call: the program's require.
+            // Its loader resolves compiled modules, builtins, addons and JSON;
+            // it never interprets code (`perry-runtime` `module_require.rs`).
+            "js_module_create_require_devirt" => {
+                let t = self.m.tok(TokKind::Builtin(BuiltinNs::Require));
+                self.tok_node(t)
             }
             _ => self.extern_fail(name, &args, &spread),
         }
