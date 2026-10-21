@@ -37,17 +37,25 @@ pub(super) fn can_skip_callback_phases() -> bool {
 mod tests {
     use super::*;
 
+    /// Runs `test` on a fresh thread inside a process of its own.
+    ///
+    /// `can_skip_callback_phases` reads process-wide work queues (foreign
+    /// completions, worker threads, timers, stdin, diagnostics): any other test
+    /// that happens to have one pending makes "quiescent" false, so only an
+    /// exclusively owned process can assert it. The thread inside isolates the
+    /// thread-local state.
     fn isolated(test: impl FnOnce() + Send + 'static) {
-        let result = std::thread::spawn(|| {
-            crate::gc::js_gc_init();
-            test();
-        })
-        .join();
-        // The thread isolates thread-local state only. `js_gc_init` also
-        // disables the process-wide class-field inline gate in test builds;
-        // restore it so later tests do not inherit this test's init.
-
-        result.unwrap();
+        crate::test_support::isolated_test(move || {
+            let result = std::thread::spawn(|| {
+                crate::gc::js_gc_init();
+                test();
+            })
+            .join();
+            // `js_gc_init` also disables the process-wide class-field inline
+            // gate in test builds; the process ends with this test, so nothing
+            // later inherits it.
+            result.unwrap();
+        });
     }
 
     #[test]

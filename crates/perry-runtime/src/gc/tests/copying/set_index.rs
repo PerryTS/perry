@@ -70,11 +70,11 @@ fn test_copying_minor_relocates_managed_set() {
     assert_ne!(text_after.to_bits() & POINTER_MASK, text as u64);
     assert_eq!(crate::set::js_set_has(set_after, text_after), 1);
 
-    let release_before = crate::set::test_set_side_deallocation_snapshot();
+    let release_before = crate::set::test_thread_set_side_deallocation_snapshot();
     unsafe {
         crate::set::finalize_set_side_allocation_for_gc(set_after);
     }
-    let release_after = crate::set::test_set_side_deallocation_snapshot();
+    let release_after = crate::set::test_thread_set_side_deallocation_snapshot();
     assert_eq!(
         (
             release_after.0 - release_before.0,
@@ -97,13 +97,13 @@ fn set_key_identity_is_weak_and_dead_index_is_reclaimed() {
     crate::set::js_set_add(set, f64::from_bits(ptr_bits(child as usize)));
     assert!(unsafe { crate::set::test_key_identity(child as usize) }.is_some());
     assert_ne!(unsafe { crate::set::test_index_snapshot(set).0 }, 0);
-    let release_before = crate::set::test_set_side_deallocation_snapshot();
+    let release_before = crate::set::test_thread_set_side_deallocation_snapshot();
     let trace = collect_minor_trace(GcTriggerKind::Direct);
     assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
     js_gc_collect();
     assert_eq!(crate::set::test_set_side_allocation(set as usize), None);
     assert_eq!(
-        crate::set::test_set_side_deallocation_snapshot().0,
+        crate::set::test_thread_set_side_deallocation_snapshot().0,
         release_before.0 + 1
     );
 }

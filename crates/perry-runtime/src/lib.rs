@@ -1017,6 +1017,12 @@ pub(crate) mod stdlib_pump {
 
         #[test]
         fn overlapping_outer_guards_share_a_tick_and_restore_one_contribution() {
+            // `ACTIVE_OUTER_PUMPS` counts the outer pumps of every thread in the
+            // process, so "exactly this test's two contributions" can only be
+            // asserted by a process that owns it.
+            let Some(_isolated) = crate::test_support::isolated_process_guard() else {
+                return;
+            };
             use std::sync::mpsc;
             use std::time::Duration;
 

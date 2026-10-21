@@ -3,6 +3,9 @@ use std::sync::mpsc;
 
 #[test]
 fn cross_thread_byte_cell_and_fake_family_word() {
+    let Some(_isolated) = crate::test_support::isolated_process_guard() else {
+        return;
+    };
     let (send, recv) = mpsc::channel();
     let (done_send, done_recv) = mpsc::channel();
     let thread = std::thread::spawn(move || {
@@ -49,6 +52,9 @@ fn cross_thread_byte_cell_and_fake_family_word() {
 
 #[test]
 fn retire_and_same_address_reuse_changes_incarnation() {
+    let Some(_isolated) = crate::test_support::isolated_process_guard() else {
+        return;
+    };
     unsafe {
         let data = super::super::map(Kind::OldBlock, ALIGN);
         let first = classify(data as usize).expect("LIVE SUBJECT: mapping published");
@@ -73,6 +79,9 @@ fn retire_and_same_address_reuse_changes_incarnation() {
 
 #[test]
 fn concurrent_classifier_declines_snapshot_crossing_retirement() {
+    let Some(_isolated) = crate::test_support::isolated_process_guard() else {
+        return;
+    };
     unsafe {
         let data = super::super::map(Kind::OldBlock, ALIGN);
         assert!(
@@ -104,6 +113,9 @@ fn concurrent_classifier_declines_snapshot_crossing_retirement() {
 
 #[test]
 fn arbitrary_words_unused_slots_and_extent_boundaries_are_safe() {
+    let Some(_isolated) = crate::test_support::isolated_process_guard() else {
+        return;
+    };
     unsafe {
         let data = super::super::map(Kind::LargeObject, 2 * ALIGN);
         assert!(!data.is_null());
@@ -128,6 +140,9 @@ fn arbitrary_words_unused_slots_and_extent_boundaries_are_safe() {
 
 #[test]
 fn active_metadata_retags_and_retires_without_a_range_map() {
+    let Some(_isolated) = crate::test_support::isolated_process_guard() else {
+        return;
+    };
     unsafe {
         let data = super::super::map(Kind::NurseryBlock, ALIGN);
         let mut starts = [1u64];
@@ -160,6 +175,9 @@ fn active_metadata_retags_and_retires_without_a_range_map() {
 
 #[test]
 fn reservation_sizing_obeys_finite_limits_and_slot_geometry() {
+    let Some(_isolated) = crate::test_support::isolated_process_guard() else {
+        return;
+    };
     assert_eq!(std::mem::size_of::<Descriptor>(), 128);
     assert_eq!(initial_payload_len(None), 1usize << 40);
     assert_eq!(initial_payload_len(Some(libc::RLIM_INFINITY)), 1usize << 40);
@@ -251,6 +269,9 @@ fn owner_classifiers_project_without_remote_snapshots() {
 
 #[test]
 fn registering_thread_owns_a_block_mapped_by_another_thread() {
+    let Some(_isolated) = crate::test_support::isolated_process_guard() else {
+        return;
+    };
     // The from-space quarantine ring hands a retired block to whichever
     // thread evicts it. Registration on the new thread must move ownership.
     let data =
@@ -286,6 +307,9 @@ fn registering_thread_owns_a_block_mapped_by_another_thread() {
 
 #[test]
 fn failed_commit_keeps_the_reservation_without_a_hole() {
+    let Some(_isolated) = crate::test_support::isolated_process_guard() else {
+        return;
+    };
     unsafe {
         // Find the slot the next map() will take, then force its commit to fail
         // the way pre-6.12 kernels do (old range unmapped first).

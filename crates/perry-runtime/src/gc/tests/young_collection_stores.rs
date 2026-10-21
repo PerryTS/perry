@@ -34,11 +34,11 @@ fn dead_young_map_and_set_stores_die_in_a_copying_minor() {
     );
 
     let maps_before = crate::map::test_map_side_deallocation_snapshot();
-    let sets_before = crate::set::test_set_side_deallocation_snapshot();
+    let sets_before = crate::set::test_thread_set_side_deallocation_snapshot();
     let trace = collect_minor_trace(GcTriggerKind::Direct);
     assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
     let maps_after = crate::map::test_map_side_deallocation_snapshot();
-    let sets_after = crate::set::test_set_side_deallocation_snapshot();
+    let sets_after = crate::set::test_thread_set_side_deallocation_snapshot();
 
     // Sabotage: allocate the stores old again, or drop the from-space store
     // walk from `finalize_dead_copied_minor_from_space_side_allocations`, and
