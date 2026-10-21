@@ -247,13 +247,19 @@ pub unsafe extern "C" fn js_zlib_unzip_sync(data_value: f64) -> f64 {
 ///
 /// # Safety
 ///
-/// `data_value` must be a valid NaN-boxed string, Buffer, or TypedArray value.
+/// Both arguments must be valid NaN-boxed JavaScript values.
 #[no_mangle]
 pub unsafe extern "C" fn js_zlib_crc32(data_value: f64, seed: f64) -> f64 {
-    let data_bits = data_value.to_bits() as i64;
-    stream::js_zlib_validate_buffer_arg(data_bits);
-    match stream::read_input_from_bits(data_bits) {
-        Some(data) => f64::from(crc32_bytes_with_seed(&data, seed as u32)),
+    extern "C" {
+        fn js_zlib_validate_crc32_args(data: f64, seed: f64) -> u32;
+    }
+    let roots = perry_ffi::TransientRootScope::enter();
+    let data = roots.root_nanbox(data_value);
+    let seed = roots.root_nanbox(seed);
+    // Validate before owning copied bytes: a JS throw skips Rust cleanup.
+    let seed = js_zlib_validate_crc32_args(data.get(), seed.get());
+    match stream::read_input_from_bits(data.get().to_bits() as i64) {
+        Some(data) => f64::from(crc32_bytes_with_seed(&data, seed)),
         None => 0.0,
     }
 }

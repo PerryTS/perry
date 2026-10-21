@@ -280,6 +280,27 @@ pub extern "C" fn js_zlib_validate_buffer_arg(data_bits: i64) {
     crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
 }
 
+/// Validate CRC32's data before its optional uint32 seed, without copying data.
+/// Unlike the other codecs, CRC32 accepts views but not an ArrayBuffer itself.
+#[no_mangle]
+pub extern "C" fn js_zlib_validate_crc32_args(data: f64, seed: f64) -> u32 {
+    // CRC32 accepts public view brands, not every BufferHeader storage cell.
+    if !crate::value::JSValue::from_bits(data.to_bits()).is_any_string()
+        && crate::object::view_brand::view_brand(data).is_none()
+    {
+        crate::validators::throw_invalid_arg_type(
+            "data",
+            "of type string or an instance of Buffer, TypedArray, or DataView",
+            data,
+        );
+    }
+    if crate::value::JSValue::from_bits(seed.to_bits()).is_undefined() {
+        0
+    } else {
+        crate::validators::validate_uint32(seed, "value")
+    }
+}
+
 /// Validate the required callback for async one-shot zlib helpers
 /// (`gzip(data, cb)`, `gunzip(data, cb)`, `brotliDecompress(data, cb)`, ...).
 /// Node throws synchronously before queuing codec work when the callback is
@@ -305,6 +326,10 @@ static KEEP_JS_ZLIB_VALIDATE_OPTIONS: extern "C" fn(f64, i32) = js_zlib_validate
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
 static KEEP_JS_ZLIB_VALIDATE_BUFFER_ARG: extern "C" fn(i64) = js_zlib_validate_buffer_arg;
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_ZLIB_VALIDATE_CRC32_ARGS: extern "C" fn(f64, f64) -> u32 =
+    js_zlib_validate_crc32_args;
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
 static KEEP_JS_ZLIB_VALIDATE_CALLBACK: extern "C" fn(f64) -> i64 = js_zlib_validate_callback;
