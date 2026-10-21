@@ -144,6 +144,8 @@ fn pump_until(handle: u64, done: impl Fn() -> bool) {
 
 #[test]
 fn lsp_bidirectional_frames_shutdown_and_close_order() {
+    // The fixtures claim the primary agent's route; see `event_pump::tests::SERIAL`.
+    let _serial = crate::event_pump::tests::serial();
     let scope = crate::gc::RuntimeHandleScope::new();
     let cp = scope.root_nanbox_f64(spawn_fixture("lsp", None));
     let handle = cp_get_field(cp.get_nanbox_f64(), b"__cpHandle") as u64;
@@ -172,6 +174,8 @@ fn lsp_bidirectional_frames_shutdown_and_close_order() {
 
 #[test]
 fn formatter_timeout_runs_while_stdin_is_backpressured() {
+    // The fixtures claim the primary agent's route; see `event_pump::tests::SERIAL`.
+    let _serial = crate::event_pump::tests::serial();
     let scope = crate::gc::RuntimeHandleScope::new();
     let cp = scope.root_nanbox_f64(spawn_fixture("stalled", Some(250.0)));
     let handle = cp_get_field(cp.get_nanbox_f64(), b"__cpHandle") as u64;
@@ -202,6 +206,8 @@ fn formatter_timeout_runs_while_stdin_is_backpressured() {
 
 #[test]
 fn abort_cancellation_orders_error_exit_close_and_removes_listener() {
+    // The fixtures claim the primary agent's route; see `event_pump::tests::SERIAL`.
+    let _serial = crate::event_pump::tests::serial();
     let scope = crate::gc::RuntimeHandleScope::new();
     let cp = scope.root_nanbox_f64(spawn_fixture("stalled", None));
     let handle = cp_get_field(cp.get_nanbox_f64(), b"__cpHandle") as u64;

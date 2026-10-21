@@ -114,15 +114,17 @@ fn ui_table_call_roots_first_string_pointer_across_second_conversion() {
 #[test]
 fn native_table_call_roots_first_string_pointer_across_second_conversion() {
     // U2: `lower_native_module_dispatch` took `js_value_to_str_ptr_for_ffi` of
-    // each `StrPtr` argument in order.
-    let sig = super::native_module_lookup("http", true, "appendHeader", Some("ServerResponse"))
-        .expect("http.ServerResponse.appendHeader resolves");
+    // each `StrPtr` argument in order. The fixture needs a signature with TWO
+    // `StrPtr` arguments (`ServerResponse.appendHeader` is `(StrPtr, F64)` now,
+    // so its value argument is not a second conversion): `ClientRequest.setHeader`.
+    let sig = super::native_module_lookup("http", true, "setHeader", Some("ClientRequest"))
+        .expect("http.ClientRequest.setHeader resolves");
     let ir = compile_stmt(
         native(
             "http",
-            Some("ServerResponse"),
+            Some("ClientRequest"),
             Some(object("recv")),
-            "appendHeader",
+            "setHeader",
             vec![object("name"), object("value")],
         ),
         CompileOptions::default(),

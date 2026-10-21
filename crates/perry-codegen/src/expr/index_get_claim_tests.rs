@@ -729,7 +729,7 @@ fn unknown_numeric_read_routes_typed_arrays_through_the_single_exit() {
 }
 
 /// An `Any`-typed dynamic key (`packed[sparse[x]]`, `a[b[i]]`) on a
-/// declared-array receiver is tested inline for "integer-valued double in
+/// declared-array receiver is normalized by the shared pure index helper to an "integer-valued double in
 /// [0, 2^32)"; a hit takes the same receiver-unknown numeric tiers a
 /// statically proven index takes (inline typed-array read → dense
 /// Array-subclass `arrlike.ic` → complete dispatcher), while every other key
@@ -784,7 +784,12 @@ fn any_typed_dynamic_key_takes_the_numeric_tiers_when_it_is_an_array_index() {
         ],
     );
     assert!(ir.contains("aidx.canonical") && ir.contains("aidx.runtime_key"));
-    assert!(ir.contains("fptosi double") && ir.contains("fcmp oeq"));
+    // The "integer-valued double in [0, 2^32)" test is the shared pure
+    // normalizer (`memory(none)`, a GC leaf) and a sign test of its result.
+    assert!(
+        ir.contains("call i32 @perry_array_index_normalize_i32(") && ir.contains("icmp sge i32 %"),
+        "the dynamic key must be normalized by the shared index helper:\n{ir}"
+    );
     assert!(ir.contains("aidx.dynamic.guard.deref") && ir.contains("aidx.dynamic.fast"));
     assert!(ir.contains("call double @perry_array_read_cold_"));
     assert!(

@@ -1057,7 +1057,8 @@ fn private_field_set_ir() -> String {
 }
 
 /// A complete five-field boxed constructor exceeds the compact birth budget,
-/// so its direct prologue stores retain the value/generation-tested barrier.
+/// so its family-born instance is not written by the emitted birth image and
+/// its direct prologue stores retain the value/generation-tested barrier.
 fn ctor_prologue_ir() -> String {
     super::class_field_barrier_tests::wide_prologue_ir()
 }

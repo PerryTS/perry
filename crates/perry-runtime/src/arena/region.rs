@@ -249,6 +249,15 @@ mod tests {
 
     #[test]
     fn aligned_os_backing_has_whole_unit_thp_and_releases_pages() {
+        // After `unmap`, the registry must no longer contain the range. The
+        // kernel hands a just-unmapped range to the very next `mmap` in the
+        // process, and every concurrently running GC test maps through this
+        // same registry, so in a shared process the range can be legitimately
+        // re-registered between the `unmap` and the check: only an
+        // exclusively owned process can assert it.
+        let Some(_isolated) = crate::test_support::isolated_process_guard() else {
+            return;
+        };
         unsafe {
             for kind in [Kind::NurseryBlock, Kind::OldBlock, Kind::LargeObject] {
                 let data = map(kind, 2 * ALIGN);

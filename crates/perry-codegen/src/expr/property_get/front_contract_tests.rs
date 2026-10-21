@@ -1,5 +1,7 @@
-//! The miss front includes target-specific directory lookup blocks. Follow
-//! their CFG and the call operand rather than assuming a single block or ELF.
+//! The generic read's shape probe (`perry_probe_get`) takes the agent's shape
+//! directory, whose lookup is target-specific (extra blocks on Apple aarch64,
+//! a TEB-derived chain on Windows). Follow the CFG and the call operand
+//! rather than assuming a single block or ELF.
 
 use super::{tower_block, tower_blocks, tower_cond_br};
 type Blocks = [(String, Vec<String>)];
@@ -26,29 +28,21 @@ fn verify_front_flow(blocks: &Blocks) -> Result<usize, String> {
         .enumerate()
         .filter(|(_, (_, body))| {
             body.iter()
-                .any(|line| line.contains("call double @js_object_get_field_ic_front("))
+                .any(|line| line.contains("call double @perry_probe_get("))
         })
         .collect();
     let [(index, (call_label, call_body))] = calls.as_slice() else {
-        return Err(format!("expected exactly one front call: {calls:?}"));
+        return Err(format!("expected exactly one probe call: {calls:?}"));
     };
-    let (entry, _) = tower_block(blocks, "pic.miss.front");
-    let (token, token_body) = tower_block(blocks, "pic.token");
-    // The front is reached from the token compare's false edge, directly or
-    // (#10498) through the class-accessor arm, whose every guard declines to
-    // it and each of which the token compare dominates.
-    let front_preds: Vec<&str> = if blocks.iter().any(|(l, _)| l.starts_with("pic.acc.")) {
-        verify_accessor_arm(blocks)?
-    } else {
-        if tower_cond_br(token_body).2 != entry {
-            return Err("the front entry must be dominated by the token compare".into());
-        }
-        vec![token]
-    };
-    if predecessors(blocks, entry) != front_preds {
-        return Err("the front entry must be dominated by the token compare".into());
+    let (entry, _) = tower_block(blocks, "pget.recv_ok");
+    // The probe's block is entered only from the receiver-pointer test.
+    let front_preds: Vec<&str> = predecessors(blocks, entry);
+    if front_preds.len() != 1 {
+        return Err(format!(
+            "the probe entry must have exactly one predecessor: {front_preds:?}"
+        ));
     }
-    // Every branch between the token miss and the front call resolves the
+    // Every branch between the receiver test and the probe call resolves the
     // directory; both lookup failures still call the front using the empty
     // directory. No path may escape to a collecting exit or bypass the call.
     if call_label != entry {
@@ -58,7 +52,7 @@ fn verify_front_flow(blocks: &Blocks) -> Result<usize, String> {
         let (join, _) = tower_block(blocks, "agent_ptr.join");
         if call_label != join {
             return Err(format!(
-                "the directory lookup must join at the front call: {call_label}"
+                "the directory lookup must join at the probe call: {call_label}"
             ));
         }
         for (label, expected_targets, expected_preds) in [
@@ -92,7 +86,7 @@ fn verify_front_flow(blocks: &Blocks) -> Result<usize, String> {
         }
         if predecessors(blocks, join) != [fast, slow] {
             return Err(
-                "the front call must have only the two directory lookup predecessors".into(),
+                "the probe call must have only the two directory lookup predecessors".into(),
             );
         }
     }
@@ -100,12 +94,12 @@ fn verify_front_flow(blocks: &Blocks) -> Result<usize, String> {
         .last()
         .is_some_and(|line| line.starts_with("br i1 %"))
     {
-        return Err("front decline must use a live conditional branch".into());
+        return Err("probe decline must use a live conditional branch".into());
     }
     let (cond, served, declined) = tower_cond_br(call_body);
     let call = call_body
         .iter()
-        .find(|line| line.contains("call double @js_object_get_field_ic_front("))
+        .find(|line| line.contains("call double @perry_probe_get("))
         .unwrap();
     let answer = call.split_once(" = ").unwrap().0;
     let bits = call_body
@@ -114,17 +108,17 @@ fn verify_front_flow(blocks: &Blocks) -> Result<usize, String> {
             let (reg, rhs) = line.split_once(" = ")?;
             (rhs == format!("bitcast double {answer} to i64")).then_some(reg)
         })
-        .ok_or("the decline must classify the front's own answer")?;
+        .ok_or("the decline must classify the probe's own answer")?;
     if !call_body.iter().any(|line| {
         line == &format!(
             "{cond} = icmp ne i64 {bits}, {}",
             crate::nanbox::TAG_HOLE_I64
         )
     }) || !served.starts_with("pget.recv_merge.")
-        || !declined.starts_with("pic.miss.call.")
+        || !declined.starts_with("pget.slow.")
     {
         return Err(format!(
-            "the front must branch on its answer's TAG_HOLE decline: {call_body:?}"
+            "the probe must branch on its answer's TAG_HOLE decline: {call_body:?}"
         ));
     }
     let (_, merge) = tower_block(blocks, "pget.recv_merge");
@@ -132,57 +126,18 @@ fn verify_front_flow(blocks: &Blocks) -> Result<usize, String> {
         line.contains(" = phi double ") && line.contains(&format!("[ {answer}, %{call_label} ]"))
     }) {
         return Err(
-            "the merge must take the served answer from the actual front call block".into(),
+            "the merge must take the served answer from the actual probe call block".into(),
         );
     }
-    if predecessors(blocks, &declined).iter().any(|p| {
-        *p != call_label && !p.starts_with("pget.recv_") && !p.starts_with("pic.acc.kind.")
-    }) {
+    if predecessors(blocks, &declined)
+        .iter()
+        .any(|p| *p != call_label && !p.starts_with("pget.recv_"))
+    {
         return Err(
-            "the slow call is reached only from the front decline or receiver failure".into(),
+            "the slow call is reached only from the probe decline or receiver failure".into(),
         );
     }
     Ok(*index)
-}
-
-/// The holder must exist and identify an accessor before collecting.
-pub(super) const ACCESSOR_ARM_GUARDS: [&str; 2] = ["pic.acc.empty", "pic.acc.kind"];
-
-pub(super) fn verify_accessor_arm(blocks: &Blocks) -> Result<Vec<&str>, String> {
-    let (token, token_body) = tower_block(blocks, "pic.token");
-    let (entry, body) = tower_block(blocks, "pic.acc.empty");
-    let (kind, kind_body) = tower_block(blocks, "pic.acc.kind");
-    let (front, _) = tower_block(blocks, "pic.miss.front");
-    let (slow, _) = tower_block(blocks, "pic.miss.call");
-    let arms: Vec<_> = blocks
-        .iter()
-        .filter(|(l, _)| l.starts_with("pic.acc."))
-        .collect();
-    if arms.len() != 2
-        || body.len() != 3
-        || !body[0].contains("load ptr")
-        || !body[1].contains("icmp ne ptr")
-        || !body[1].ends_with(", null")
-        || !body[2].starts_with("br i1 %")
-        || kind_body.len() != 5
-        || !kind_body[0].contains("getelementptr i8")
-        || !kind_body[1].contains("load i64")
-        || !kind_body[2].contains("and i64")
-        || !kind_body[2].ends_with(&format!(", {}", (1i64 << 61)))
-        || !kind_body[3].contains("icmp ne i64")
-        || !kind_body[3].ends_with(", 0")
-        || targets(body) != [kind, front]
-        || targets(kind_body) != [slow, front]
-        || predecessors(blocks, kind) != [entry]
-        || predecessors(blocks, entry) != [token]
-        || tower_cond_br(token_body).2 != entry
-    {
-        return Err(
-            "only a non-null accessor holder may bypass the leaf front for the shared slow exit"
-                .into(),
-        );
-    }
-    Ok(vec![entry, kind])
 }
 
 pub(super) fn front_call_block(blocks: &Blocks) -> (&str, &[String]) {
@@ -201,7 +156,7 @@ fn def<'a>(blocks: &'a Blocks, reg: &str) -> Result<&'a str, String> {
         .ok_or_else(|| format!("no definition of {reg} in the tower function"))
 }
 
-/// Prove the front's first operand is the directory read, including Apple's
+/// Prove the probe's first operand is the directory read, including Apple's
 /// guarded phi and Windows' TEB-derived block. Nearby unrelated TLS text is
 /// insufficient: every step must define the operand passed to the call.
 pub(super) fn verify_front_directory(blocks: &Blocks) -> Result<(), String> {
@@ -209,7 +164,7 @@ pub(super) fn verify_front_directory(blocks: &Blocks) -> Result<(), String> {
     let call = blocks[index]
         .1
         .iter()
-        .find(|line| line.contains("call double @js_object_get_field_ic_front("))
+        .find(|line| line.contains("call double @perry_probe_get("))
         .unwrap();
     let dir = call
         .split_once("(ptr ")
@@ -294,7 +249,7 @@ pub(super) fn verify_front_directory(blocks: &Blocks) -> Result<(), String> {
             return Err("Apple directory must use the published TSD key".into());
         }
         for (prefix, predicate) in [
-            ("pic.miss.front", format!("icmp ne i64 {key}, -1")),
+            ("pget.recv_ok", format!("icmp ne i64 {key}, -1")),
             ("agent_ptr.hot_tls.tsd", format!("icmp ne ptr {hot}, null")),
         ] {
             let (_, body) = tower_block(blocks, prefix);
@@ -385,7 +340,7 @@ fn front_contract_rejects_lookup_bypasses_wrong_slots_and_wrong_declines() {
         let call = wrong[index]
             .1
             .iter_mut()
-            .find(|l| l.contains("call double @js_object_get_field_ic_front("))
+            .find(|l| l.contains("call double @perry_probe_get("))
             .unwrap();
         let operand = call
             .split_once("(ptr ")
@@ -409,25 +364,10 @@ fn front_contract_rejects_lookup_bypasses_wrong_slots_and_wrong_declines() {
             "{target}: disconnected directory operand"
         );
         let mut wrong = blocks.clone();
-        let (entry, _) = tower_block(&blocks, "pic.miss.front");
+        let (entry, _) = tower_block(&blocks, "pget.recv_ok");
         let (_, _, slow) = tower_cond_br(&blocks[index].1);
         let body = &mut wrong.iter_mut().find(|(l, _)| l == entry).unwrap().1;
         *body.last_mut().unwrap() = format!("br label %{slow}");
         assert!(verify_front_flow(&wrong).is_err(), "{target}: front bypass");
-        // #10498: an accessor guard that stops declining, or the receiver
-        // compare jumped over, must be caught.
-        if blocks.iter().any(|(l, _)| l.starts_with("pic.acc.")) {
-            for guard in ACCESSOR_ARM_GUARDS {
-                let mut wrong = blocks.clone();
-                let (label, body) = tower_block(&blocks, guard);
-                let (_, on_true, _) = tower_cond_br(body);
-                let body = &mut wrong.iter_mut().find(|(l, _)| l == label).unwrap().1;
-                *body.last_mut().unwrap() = format!("br label %{on_true}");
-                assert!(
-                    verify_front_flow(&wrong).is_err(),
-                    "{target}: accessor guard {guard} skipped"
-                );
-            }
-        }
     }
 }

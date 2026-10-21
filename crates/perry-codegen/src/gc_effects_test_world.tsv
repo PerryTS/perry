@@ -69,3 +69,4 @@ perry_probe_get	Leaf	no
 perry_probe_get_keyed	Leaf	no
 perry_probe_get_length	Leaf	no
 perry_probe_get_value	Leaf	no
+perry_probe_set	Leaf	no

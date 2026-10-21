@@ -365,9 +365,15 @@ const GOV_ENABLED: u64 = 1 << 63;
 const GOV_HIT_SHIFT: u32 = 32;
 const GOV_COUNT_MASK: u64 = 0xFFFF_FFFF;
 
-static MEMO_GOV: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1 << 63);
-static MEMO_SKIP_WINDOWS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-static MEMO_BACKOFF: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+// `per_test_global!`: the governor tests reset it, drive exactly one window of
+// probes and assert on the verdict, so with process-wide counters any other
+// test's concatenations moved the window mid-test. Outside a test build these
+// are the plain statics.
+per_test_global! {
+    static MEMO_GOV: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1 << 63);
+    static MEMO_SKIP_WINDOWS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    static MEMO_BACKOFF: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+}
 
 /// Count this candidate and report whether the memo path is worth walking.
 /// Closes a window every `MEMO_WINDOW` candidates.

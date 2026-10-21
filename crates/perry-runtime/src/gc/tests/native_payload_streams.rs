@@ -84,6 +84,9 @@ fn anon_rss_bytes() -> usize {
 /// finished stream alive (no static holds a step job).
 #[test]
 fn z8_churn_releases_every_codec_at_completion_and_drops_every_payload() {
+    let Some(_isolated) = crate::test_support::isolated_process_guard() else {
+        return;
+    };
     // This churn can reach an automatic copying minor with either block size.
     // Isolate scanner/cache roots just like the other copying-GC witnesses.
     let _gc = super::support::CopyingNurseryTestGuard::new(0);
@@ -269,6 +272,9 @@ fn z9_moving_gc_inside_data_keeps_the_output_correct() {
 /// cell is finalized), and no step job (no JS) runs after the teardown.
 #[test]
 fn z10_worker_exit_with_a_step_queued_runs_no_step() {
+    let Some(_isolated) = crate::test_support::isolated_process_guard() else {
+        return;
+    };
     let _reset = FamilyReset::new();
     let cells_before = finalized();
     let (jobs, steps) = std::thread::spawn(|| {

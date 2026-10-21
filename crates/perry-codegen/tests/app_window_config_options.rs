@@ -229,9 +229,28 @@ fn named_frame_persistence_is_sso_safe_and_configured_before_run() {
             let ir = compile_ir("app_frame_persistence", vec![app_call(fields)]);
             let setter = "call void @perry_ui_app_set_frame_autosave_name";
             assert_eq!(ir.matches(setter).count(), 1, "IR:\n{ir}");
+            // A literal name is passed as the address of its immutable string
+            // image (never an inline short-string value, which has no
+            // address): the setter's pointer operand is the image's payload.
+            let hex: String = name.bytes().map(|b| format!("{b:02x}")).collect();
+            let setter_line = ir
+                .lines()
+                .find(|l| l.contains(setter))
+                .unwrap_or_else(|| panic!("IR:\n{ir}"));
+            let operand = setter_line
+                .rsplit("i64 ")
+                .next()
+                .unwrap()
+                .trim_end_matches(')')
+                .to_string();
+            let image = format!(
+                "{}.image = getelementptr i8, ptr @perry_image_literal_0_{hex}, i64 8",
+                operand
+            );
             assert!(
-                ir.contains("call i64 @js_get_string_pointer_unified"),
-                "IR:\n{ir}"
+                ir.contains(&image)
+                    && ir.contains(&format!("{operand} = ptrtoint ptr {operand}.image to i64")),
+                "the autosave name must be the literal's image pointer ({image}):\n{ir}"
             );
             let create = ir.find("call i64 @perry_ui_app_create").unwrap();
             let state = ir.find("call void @perry_ui_app_set_window_state").unwrap();

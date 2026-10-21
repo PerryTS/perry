@@ -54,9 +54,37 @@ fn inline_cache_reads_native_alias_state_without_caching_a_miss() {
             true,
         )
     });
+    // The premises of the loop below, each its own assertion so a failure names
+    // the broken link (alias recorded; dispatcher present; dispatcher claims
+    // the handle) rather than only "the read came back undefined".
+    object.with_const_ptr(|o: *const super::super::ObjectHeader| {
+        assert!(
+            unsafe { object_alias(o) }.is_some(),
+            "the alias must be recorded on the object"
+        );
+    });
+    assert!(
+        super::super::class_handles::handle_property_dispatch().is_some(),
+        "the extension must make a property dispatcher available"
+    );
+    NATIVE_VALUE.store(41.0_f64.to_bits(), Ordering::Relaxed);
+    let forwarded = object.with_const_ptr(|o: *const super::super::ObjectHeader| {
+        alias_forward_property_read(crate::value::js_nanbox_pointer(o as i64), "socket")
+    });
+    assert_eq!(
+        forwarded.map(f64::to_bits),
+        Some(41.0_f64.to_bits()),
+        "the alias must forward `socket` to the registered native dispatcher"
+    );
     for value in [41.0_f64, 42.0] {
         NATIVE_VALUE.store(value.to_bits(), Ordering::Relaxed);
-        assert_eq!(read(&object), value);
+        let got = read(&object);
+        assert_eq!(
+            got.to_bits(),
+            value.to_bits(),
+            "the alias must forward the read to the native state (got {:#x})",
+            got.to_bits()
+        );
         assert_eq!(read(&sibling).to_bits(), crate::value::TAG_UNDEFINED);
     }
     // An ordinary own property must still take precedence over native state.

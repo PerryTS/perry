@@ -46,8 +46,15 @@ fn literal_ir(name: &str, method: Option<&str>, opts: CompileOptions, deferred: 
     String::from_utf8(compile_module(&module, opts).expect("thread fixture compiles")).unwrap()
 }
 
+/// Pinned to a relocation-limited target. Where the linker can resolve a
+/// literal's handle to a link-time constant (ELF/COFF hosts) there is no
+/// per-agent pool to be thread-local, so a host-default target made these
+/// tests assert a different design on Linux than on a Mac.
+const POOL_TARGET: &str = "arm64-apple-macosx15.0.0";
+
 fn options(graph: &[&str], is_entry: bool) -> CompileOptions {
     CompileOptions {
+        target: Some(POOL_TARGET.into()),
         emit_ir_only: true,
         is_entry_module: is_entry,
         thread_literal_module_prefixes: graph.iter().map(|prefix| (*prefix).into()).collect(),

@@ -85,20 +85,31 @@ fn assert_shape_read(constructor: bool) {
         !ir.contains("call double @js_class_method_bind_by_id("),
         "a public declared method read must not resolve by class/name: {ir}"
     );
+    // The site probes the live receiver's shape with the leaf `perry_probe_get`
+    // (a sentinel result means "not served by the shape"), and only a miss
+    // reaches the ordinary Get, which can run a getter.
     assert!(
-        ir.contains("call double @js_object_get_field_ic_slow("),
+        ir.contains("call double @perry_probe_get(") && ir.contains("icmp ne i64"),
+        "the site must probe the live receiver's shape and test for a miss: {ir}"
+    );
+    assert!(
+        ir.contains("call double @js_object_get_field_slow("),
         "a shape miss must retain the ordinary Get, which can run a getter: {ir}"
     );
-    assert!(
-        ir.contains("_packed_get") && ir.contains("icmp eq i32"),
-        "the site must compare the live receiver ShapeId to its memo: {ir}"
-    );
-    let start = ir.find("\npic.hit.").expect("inline hit block is emitted");
+    let start = ir.find("\npget.recv_ok.").expect("probe block is emitted");
     let body = &ir[start + 1..];
-    let body = &body[..body.find("\n\n").expect("end of hit block")];
+    let body = &body[..body.find("\n\n").expect("end of probe block")];
+    assert_eq!(
+        body.matches("call ").count(),
+        1,
+        "the hit must be the shape probe alone, with no helper call: {body}"
+    );
+    let slow = ir.find("\npget.slow.").expect("miss block is emitted");
+    let slow = &ir[slow + 1..];
+    let slow = &slow[..slow.find("\n\n").expect("end of miss block")];
     assert!(
-        body.contains("load double") && !body.contains("call "),
-        "the hit must load the current function slot without a helper: {body}"
+        slow.contains("@js_object_get_field_slow("),
+        "the miss block must hold the ordinary Get: {slow}"
     );
 }
 

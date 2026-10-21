@@ -244,99 +244,38 @@ fn module_with_new(class: Class, args: Vec<Expr>) -> Module {
     }
 }
 
-/// The store site's guarded bookkeeping region and its join.
-const BOOKKEEPING: &str = "put.pic.gc_bookkeeping.";
-const BOOKKEEPING_DONE: &str = "put.pic.gc_bookkeeping.done";
-
 fn compile_ir(module: &Module) -> String {
     String::from_utf8(compile_module(module, empty_opts()).unwrap()).expect("IR should be UTF-8")
 }
 
-/// The body of the guarded block: every line after the
-/// `put.pic.gc_bookkeeping.<n>:` LABEL up to (and excluding) its
-/// terminator. `None` when no guard was emitted.
-///
-/// Matched on the label DEFINITION, never on the first textual occurrence of
-/// the name — that is the `br i1 …, label %put.pic.gc_bookkeeping.N,
-/// label %put.pic.gc_bookkeeping.done.M` a line above, and starting
-/// there yields an empty slice that passes nothing and fails everything.
-/// The guarded REGION: every block reachable from the `gc_bookkeeping` entry
-/// without passing through `gc_bookkeeping.done`, i.e. exactly the blocks the
-/// pointer-bearing guard dominates.
-///
-/// This used to be a text slice -- from the `gc_bookkeeping.N:` label to the
-/// first `br` -- which is the same thing only while the region is ONE block.
-/// A nested barrier block (`gc_bookkeeping` -> `barrier` ->
-/// `gc_bookkeeping.done`) makes that slice return only the prefix, so
-/// `@js_write_barrier_slot` "left the guarded block" without moving at all.
-///
-/// A wider text slice would not do either: LLVM emits `gc_bookkeeping.done.5`
-/// **between** `gc_bookkeeping.4` and `barrier.6`, so the region is not
-/// textually contiguous and "everything up to the done label" is still just
-/// the first block.
-///
-/// Following the CFG also makes the assertion strictly stronger than the one
-/// it replaces: a call hoisted onto the guard's NOT-taken edge, or past the
-/// join into `merge`, is absent from the region and fails -- whereas the old
-/// slice only ever proved a call was not in the first block.
-fn gc_bookkeeping_block(ir: &str) -> Option<String> {
-    // label -> (body lines, successor labels)
-    let mut blocks: Vec<(String, Vec<&str>, Vec<String>)> = Vec::new();
-    for line in ir.lines() {
-        let trimmed = line.trim_end();
-        if !line.starts_with(char::is_whitespace) && trimmed.ends_with(':') {
-            blocks.push((
-                trimmed.trim_end_matches(':').to_string(),
-                Vec::new(),
-                Vec::new(),
-            ));
-            continue;
-        }
-        let Some((_, body, succs)) = blocks.last_mut() else {
-            continue;
-        };
-        body.push(line);
-        if trimmed.trim_start().starts_with("br ") {
-            for token in trimmed.split("label %").skip(1) {
-                succs.push(
-                    token
-                        .split(|c: char| c == ',' || c.is_whitespace())
-                        .next()
-                        .unwrap_or("")
-                        .to_string(),
-                );
-            }
-        }
-    }
-
-    let entry = blocks.iter().position(|(label, _, _)| {
-        label.starts_with(BOOKKEEPING) && !label.starts_with(BOOKKEEPING_DONE)
-    })?;
-
-    let mut region = String::new();
-    let mut stack = vec![entry];
-    let mut seen = vec![false; blocks.len()];
-    while let Some(idx) = stack.pop() {
-        if seen[idx] {
-            continue;
-        }
-        seen[idx] = true;
-        let (_, body, succs) = &blocks[idx];
-        for line in body {
-            region.push_str(line);
-            region.push('\n');
-        }
-        for succ in succs {
-            // The join is the region's exit, not part of it.
-            if succ.starts_with(BOOKKEEPING_DONE) {
-                continue;
-            }
-            if let Some(next) = blocks.iter().position(|(label, _, _)| label == succ) {
-                stack.push(next);
-            }
-        }
-    }
-    Some(region)
+/// A class-field store is the static-key store site (#12483): one
+/// `perry_probe_set` over the receiver's layout (the runtime owns the
+/// pointer-bearing bookkeeping: write barrier and string addref), and only a
+/// declined probe reaches the full `[[Set]]` (`js_put_value_set`) on the
+/// `put.pic.set` block. The site holds no inline bookkeeping region and no
+/// slot store of its own.
+fn assert_store_site(ir: &str, strict: &str) {
+    assert!(
+        ir.contains("call i32 @perry_probe_set("),
+        "the field store is a probe call:\n{ir}"
+    );
+    let misses: Vec<&str> = ir
+        .split("\nput.pic.set.")
+        .skip(1)
+        .map(|b| &b[..b.find("\n\n").unwrap_or(b.len())])
+        .collect();
+    assert!(
+        misses
+            .iter()
+            .any(|miss| miss.contains("call double @js_put_value_set(")
+                && miss.contains(&format!(", i32 {strict})"))),
+        "a declined probe must reach the receiver-aware [[Set]] (Throw = {strict}) \
+         on a `put.pic.set` block:\n{ir}"
+    );
+    assert!(
+        !ir.contains("put.pic.gc_bookkeeping"),
+        "bookkeeping lives in the runtime's probe, not an inline guard:\n{ir}"
+    );
 }
 
 /// An `any`-typed field is the case the whole ticket is about: it takes the
@@ -355,33 +294,18 @@ fn opaque_param_store_guards_both_bookkeeping_calls() {
         vec![Expr::Number(1.0)],
     );
     let ir = compile_ir(&module);
-
-    // The guard exists, and it is the top-16-bit test — not something that
-    // happens to look like one. `32765`/`32767`/`32762` are POINTER/STRING/
-    // BIGINT `>> 48`; `4096` is the bare-address floor.
+    // The constructor's store of an opaque parameter is the static-key store
+    // site (strict: class code), so the value-dependent bookkeeping cannot be
+    // retired by any by-construction proof at the site; the probe decides.
+    assert_store_site(&ir, "1");
+    let ctor = ir
+        .split("\ndefine ")
+        .find(|f| f.contains("Boxed_constructor("))
+        .expect("the constructor is emitted");
     assert!(
-        ir.contains("lshr i64") && ir.contains(BOOKKEEPING),
-        "expected an inline pointer-bearing guard around the field-store bookkeeping:\n{ir}"
-    );
-    for comparand in ["32765", "32767", "32762", "4096"] {
-        assert!(
-            ir.contains(comparand),
-            "the inline guard is missing the {comparand} comparand:\n{ir}"
-        );
-    }
-
-    let guarded = gc_bookkeeping_block(&ir).expect("a gc_bookkeeping block");
-    for call in ["@js_write_barrier_slot", "@js_string_addref_if_heap_string"] {
-        assert!(
-            guarded.contains(call),
-            "{call} must live inside the guarded block, not beside it:\n{guarded}"
-        );
-    }
-    // …and the slot store must NOT, or a value would be dropped whenever the
-    // guard says "no pointer".
-    assert!(
-        !guarded.contains("store double"),
-        "the slot store must stay unconditional, outside the guard:\n{guarded}"
+        !ctor.contains("call void @js_write_barrier_slot")
+            && !ctor.contains("call void @js_string_addref_if_heap_string"),
+        "no inline bookkeeping beside the probe:\n{ctor}"
     );
 }
 
@@ -402,12 +326,9 @@ fn every_bookkeeping_call_is_still_emitted_not_removed() {
         vec![Expr::Number(1.0)],
     );
     let ir = compile_ir(&module);
-    for call in [
-        "call void @js_write_barrier_slot",
-        "call void @js_string_addref_if_heap_string",
-    ] {
-        assert!(ir.contains(call), "{call} must still be emitted:\n{ir}");
-    }
+    // Not elided: the store still reaches the probe and its full-semantics
+    // miss, so a pointer-bearing value is always barriered by one of them.
+    assert_store_site(&ir, "1");
     assert!(
         ir.contains("call void @js_gc_write_barriers_emitted(i32 1)"),
         "the module must still declare to the runtime that generated barriers exist"
@@ -474,14 +395,8 @@ fn guarded_store_leaves_every_block_terminated() {
         Expr::LocalGet(5),
     );
     let ir = compile_ir(&module);
-    let guarded = gc_bookkeeping_block(&ir)
-        .unwrap_or_else(|| panic!("expected a guarded bookkeeping block in:\n{ir}"));
-    for call in ["@js_write_barrier_slot", "@js_string_addref_if_heap_string"] {
-        assert!(
-            guarded.contains(call),
-            "{call} must live inside the guarded block:\n{guarded}"
-        );
-    }
+    // The local-receiver store is the same store site (sloppy here).
+    assert_store_site(&ir, "0");
 
     let mut open_block: Option<&str> = None;
     for line in ir.lines() {

@@ -173,6 +173,11 @@ fn reservation_sizing_obeys_finite_limits_and_slot_geometry() {
 
 #[test]
 fn owner_classifiers_project_without_remote_snapshots() {
+    // `SNAPSHOT_READS` counts every remote-snapshot read in the process, so
+    // "no snapshot was copied" can only be asserted by a process that owns it.
+    let Some(_isolated) = crate::test_support::isolated_process_guard() else {
+        return;
+    };
     unsafe {
         let data = super::super::map(Kind::LargeObject, 2 * ALIGN);
         assert!(!data.is_null(), "LIVE SUBJECT: two-slot extent");

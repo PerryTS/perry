@@ -57,6 +57,11 @@ fn call(target: f64, name: &[u8], args: &[f64]) -> f64 {
 
 #[test]
 fn aliases_share_native_spawn_and_paused_output_precedes_exit() {
+    // Skips (loudly) on a host that cannot open a pty: see `host_has_ptys`.
+    #[cfg(unix)]
+    if !super::native::host_has_ptys() {
+        return;
+    }
     extern "C" {
         fn js_nm_install_node_pty();
     }
