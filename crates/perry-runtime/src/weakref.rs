@@ -492,7 +492,10 @@ pub extern "C" fn js_finreg_new(callback: f64) -> *mut ObjectHeader {
     // `.entries` return `undefined` like Node.
     let packed = b"__perry_fr_callback\0__perry_fr_entries\0";
     let obj = scope.root_raw_mut_ptr(js_object_alloc_with_shape(
-        FINREG_SHAPE_ID, 2, packed.as_ptr(), packed.len() as u32,
+        FINREG_SHAPE_ID,
+        2,
+        packed.as_ptr(),
+        packed.len() as u32,
     ));
     js_object_set_field(
         obj.get_raw_mut_ptr(),

@@ -10,9 +10,9 @@ mod resource;
 mod value;
 
 #[cfg(test)]
-mod host_resource_tests;
-#[cfg(test)]
 mod cleanup_tests;
+#[cfg(test)]
+mod host_resource_tests;
 #[cfg(test)]
 mod tests;
 
