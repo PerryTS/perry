@@ -24,6 +24,9 @@ pub const ITER_ELEM: &str = "#iter";
 /// model. Its presence in a node means "any escaped object or anything else".
 pub const TOP: Tok = 0;
 
+/// The context of a template's own token (`TokKind::Obj`).
+pub const NO_CTX: CallId = u32::MAX;
+
 /// Primitive kind bits carried next to the object tokens of a node.
 pub mod prim {
     pub const NUM: u16 = 1 << 0;
@@ -78,16 +81,27 @@ pub enum BuiltinNs {
     Map,
     /// `Set` / `WeakSet`: `new` builds a collection of the values.
     Set,
+    /// The program's `require` from `module.createRequire` (one per
+    /// program: every CommonJS wrapper shares it). A call resolves its
+    /// constant specifier ([`Model::call_lit`]): a compiled module's path
+    /// gives that module's exports; anything else is the unknown loader.
+    Require,
     Other,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum TokKind {
     Top,
-    /// An instance of a birth template.
-    Obj(TmplId),
-    /// A function value (closure, function declaration, method body).
-    Func(FnIdx),
+    /// An instance of a birth template, born at a context: `NO_CTX` for the
+    /// template's own token (generation-time births, template-wide marks),
+    /// else the `new` call that made it (one token per birth site; a call
+    /// an instance made is that instance's own call).
+    Obj(TmplId, CallId),
+    /// A function value (closure, function declaration, method body), with
+    /// its closure context: `NO_CTX`, or the context a closure created
+    /// inside a summary instance carries (`Model::clo_ctx`: the instance's
+    /// nodes for the closure's outer terms).
+    Func(FnIdx, CallId),
     /// `f.bind(t, ...)` result: index into `Model::bound`.
     Bound(u32),
     /// The class constructor value of a class template.
@@ -100,9 +114,6 @@ pub enum TokKind {
     Builtin(BuiltinNs),
     /// An opaque runtime function value (a builtin method read as a value).
     BuiltinFn,
-    /// A runtime-created container that holds only primitives (split/match
-    /// results, `Object.keys` arrays …). Shared by every such container.
-    PrimBox,
     /// A module's namespace / `module.exports` object.
     ModNs(u32),
     /// The prototype of a native parent class (`extends EventEmitter`),
@@ -187,14 +198,23 @@ pub struct FuncInfo {
     /// Holds every argument (the `arguments` object's elements + extra args).
     pub args_all: NodeId,
     /// The body has an `arguments` object, the only reader of `args_all`:
-    /// calls feed `args_all` only then (a node nobody reads must not widen
-    /// and escape the arguments of a helper called with many objects).
+    /// calls feed `args_all` only then (nobody else reads it).
     pub has_arguments: bool,
     pub token: Tok,
     /// This function is the constructor of that class template.
     pub ctor_of: Option<TmplId>,
     /// Arrow function / `captures_this` closure: `this` is the enclosing one.
     pub lexical_this: bool,
+    /// Something outside the call protocol writes the parameters (an object
+    /// literal IIFE, a computed accessor): never summarized.
+    pub no_summary: bool,
+    /// The step closure of a transformed generator: the generator object
+    /// (`LinkGeneratorPrototype`); `next`/`return`/`throw` and the
+    /// iteration protocol on it run the closure.
+    pub gen_step: bool,
+    /// The function whose body creates this closure (`NO_FN` for
+    /// declarations, methods and builtins).
+    pub parent: FnIdx,
 }
 
 #[derive(Clone, Debug)]
@@ -219,6 +239,18 @@ pub struct CallSite {
 pub enum Key {
     Named(Atom),
     Any,
+}
+
+/// A lookup that passed a native prototype not defining its key.
+#[derive(Clone, Copy, Debug)]
+pub enum NativeMiss {
+    /// A value read into this node.
+    Load(NodeId),
+    /// A method call with this receiver.
+    Call(Tok, CallId),
+    /// A program-owned global (`builtins::global_user_key`) read into the
+    /// first node; the second is the global's field.
+    Global(NodeId, NodeId),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -273,6 +305,10 @@ pub enum Cons {
     Load { key: Key, dst: NodeId },
     /// Values of own properties only (enumerability over-approximated).
     OwnValues { dst: NodeId },
+    /// `registerPathModule`: dst ⊇ a CommonJS record's live `exports` (the
+    /// wrapper's record literal carries `__perry_cjs_record` at birth), or
+    /// the published value itself for a raw publication.
+    CjsPublish { dst: NodeId },
     /// write(t, key) ⊇ src for every t in the node.
     Store { key: Key, src: NodeId, site: SiteId },
     /// The node is a callee.
@@ -282,6 +318,10 @@ pub enum Cons {
     CallThis { call: CallId, this: Tok },
     /// The node is a `new` callee.
     New { call: CallId },
+    /// `new Name(...)` of a builtin constructor named in the source: runs
+    /// once per call (the holder holds one marker token), so an instance
+    /// that renames the call constructs its own object.
+    NewNamed { name: Atom, call: CallId },
     /// The node is a method-call receiver (`recv.key(...)`).
     MCall { key: Key, call: CallId },
     /// The node is `ProtoNode(cur)`: continue a lookup for `origin`.
@@ -292,6 +332,11 @@ pub enum Cons {
     },
     /// Every token escapes (goes to ⊤), with the reason.
     TopSink { reason: u32 },
+    /// Once anything (a token or a primitive) reaches the node, `dst` holds
+    /// ⊤ and everything `from` holds: the result of a call that exists only
+    /// when an argument reaches it.
+    /// (`reason` `None`: only `from`, no ⊤.)
+    TopIfAny { dst: NodeId, from: NodeId, reason: Option<u32> },
     /// Every object token reaches a HARD operation.
     Hard { kind: Hard, reason: u32 },
     /// Every token gains keys after birth (computed store …).
@@ -329,6 +374,10 @@ pub enum Cons {
     /// The node holds method closures installed on `recv` (literal methods):
     /// their `this` is `recv`.
     ThisFrom { recv: NodeId },
+    /// A literal's own content: every token here gets `src` in field `key`
+    /// (no store: a birth, as generation's direct field edges are). A
+    /// summary's form of a literal born in its body.
+    BirthField { key: Key, src: NodeId },
     /// The node holds getter/setter functions installed on the objects of
     /// `holder` under `key`.
     Accessor {
@@ -337,7 +386,8 @@ pub enum Cons {
         setter: bool,
     },
     /// Internal: install accessor `f` on every token of the node.
-    AccessorInstall { key: Atom, f: FnIdx, setter: bool },
+    /// `f`: the accessor's function token (its closure context included).
+    AccessorInstall { key: Atom, f: Tok, setter: bool },
     /// The node holds objects whose prototype set includes `src`'s values.
     ProtoFrom { src: NodeId },
     /// dst ⊇ prototypes of the node's objects (`Object.getPrototypeOf`).
@@ -367,6 +417,17 @@ pub enum Cons {
     /// nodes its receivers found): arguments and result bind once per
     /// (call, function) (the argument half of `CallThis`).
     CallArgs { call: CallId },
+    /// The node is the source of an object spread / `Object.assign` into
+    /// the values of `into`: each source object copies its own keys, key
+    /// by key, into each target (`Model::spread_into`), never through one
+    /// any-key bucket.
+    Spread { into: NodeId, site: SiteId },
+    /// The node holds the targets of a spread from source token `src`.
+    SpreadFrom { src: Tok, site: SiteId },
+    /// The node is a receiver of summarized function token `ft` at `call`
+    /// (or of no call: `NO_NODE`): each value binds the instance of its
+    /// layout (`Model::bind_layout`).
+    ThisInst { call: CallId, ft: Tok },
     /// The node is a method node some call sites bound through: a builtin
     /// namespace value in it runs per (call, receiver) (`callee_sites`).
     BuiltinCallee,
@@ -400,13 +461,16 @@ impl Cons {
         match self {
             Cons::Load { .. } => "load",
             Cons::OwnValues { .. } => "ownvalues",
+            Cons::CjsPublish { .. } => "cjspublish",
             Cons::Store { .. } => "store",
             Cons::Call { .. } => "call",
             Cons::CallThis { .. } => "callthis",
             Cons::New { .. } => "new",
+            Cons::NewNamed { .. } => "newnamed",
             Cons::MCall { .. } => "mcall",
             Cons::Chain { .. } => "chain",
             Cons::TopSink { .. } => "top",
+            Cons::TopIfAny { .. } => "topifany",
             Cons::Hard { .. } => "hard",
             Cons::AddsKeys => "addskeys",
             Cons::Implicit { .. } => "implicit",
@@ -420,6 +484,7 @@ impl Cons {
             Cons::SuperCtor { .. } => "superctor",
             Cons::SuperCtorParent { .. } => "superctorparent",
             Cons::ThisFrom { .. } => "thisfrom",
+            Cons::BirthField { .. } => "birthfield",
             Cons::Accessor { .. } => "accessor",
             Cons::AccessorInstall { .. } => "accinstall",
             Cons::ProtoFrom { .. } => "protofrom",
@@ -432,6 +497,9 @@ impl Cons {
             Cons::ShareBuffer { .. } => "sharebuffer",
             Cons::ThisTo { .. } => "thisto",
             Cons::CallArgs { .. } => "callargs",
+            Cons::Spread { .. } => "spread",
+            Cons::SpreadFrom { .. } => "spreadfrom",
+            Cons::ThisInst { .. } => "thisinst",
             Cons::BuiltinCallee => "builtincallee",
             Cons::HolderStep { .. } => "holderstep",
             Cons::VisitHolders { .. } => "visitholders",
@@ -449,22 +517,15 @@ pub struct Node {
     pub succ: Vec<NodeId>,
     pub cons: Vec<Cons>,
     pub in_wl: bool,
-    /// The set grew past the widening bound: it holds only ⊤ from now on,
-    /// and every token that reaches it escapes.
-    pub widened: bool,
-    /// A solver relay (callee relay, shared accessor walk), not a program
-    /// value: never widened (its members are bound or forwarded exactly as
-    /// the per-site rules it replaces would have).
-    pub internal: bool,
     /// Successor set, once the list is long (exact edge dedup for hubs: a
     /// function's return node can be offered the same edge millions of
     /// times).
     pub succ_set: Option<std::rc::Rc<crate::pts::FxHashSet<NodeId>>>,
-    /// Some successor was widened: every token reaching this node escapes
-    /// (what that successor did with it), and the edge to it carries only
-    /// primitive kinds from then on (`prim_succ`).
-    pub esc_out: bool,
-    pub prim_succ: Vec<NodeId>,
+    /// An observation node: a parameter-derived node of a summarized
+    /// function's shared body. It holds the union over every call for the
+    /// read sites; only read rules apply to it, it never feeds a node that
+    /// is not an observation node, and its effects are skipped.
+    pub obs: bool,
 }
 
 /// A store site: where, and whether it is a construction-phase writer for
@@ -494,6 +555,8 @@ pub struct FieldWriters {
 pub struct Model {
     pub toks: Vec<TokKind>,
     pub tok_index: FxHashMap<TokKind, Tok>,
+    /// Template -> its birth-site tokens (`Obj(tm, ctx)`, ctx != NO_CTX).
+    pub site_toks: FxHashMap<TmplId, Vec<Tok>>,
     pub tmpls: Vec<Template>,
     pub funcs: Vec<FuncInfo>,
     pub nodes: Vec<Node>,
@@ -506,10 +569,6 @@ pub struct Model {
     pub work: u64,
     pub max_work: u64,
     pub max_nodes: usize,
-    /// Widening bound on one points-to set (0 = none).
-    pub widen_k: usize,
-    pub widen_queue: Vec<Tok>,
-    pub widened_nodes: u64,
     pub atoms: Vec<String>,
     pub atom_index: FxHashMap<String, Atom>,
     pub calls: Vec<CallSite>,
@@ -522,7 +581,7 @@ pub struct Model {
     pub proto_node: FxHashMap<Tok, NodeId>,
     pub field_keys: FxHashMap<Tok, Vec<Atom>>,
     /// accessors[(proto-or-object tok, key)] = (getter fns, setter fns)
-    pub accessors: FxHashMap<(Tok, Atom), (Vec<FnIdx>, Vec<FnIdx>)>,
+    pub accessors: FxHashMap<(Tok, Atom), (Vec<Tok>, Vec<Tok>)>,
     pub accessor_keys: FxHashMap<Tok, Vec<Atom>>,
     pub writers: FxHashMap<(TmplId, Atom), FieldWriters>,
     pub any_writers: FxHashMap<TmplId, FieldWriters>,
@@ -552,6 +611,10 @@ pub struct Model {
     pub relays: FxHashMap<CallId, NodeId>,
     pub relay_done: crate::pts::FxHashSet<(CallId, NodeId)>,
     pub callee_sites: FxHashMap<NodeId, Vec<(CallId, Tok)>>,
+    /// The calls bound through each (method node, receiver): a summarized
+    /// target's instance for the call takes exactly the receivers whose
+    /// lookup found it.
+    pub via_calls: FxHashMap<(NodeId, Tok), Vec<CallId>>,
     pub builtin_callee: crate::pts::FxHashSet<NodeId>,
     /// Shared accessor walks: (receiver, start, key, load/store/call) → the
     /// node the walk's accessors feed (load/call) or read from (store).
@@ -577,6 +640,10 @@ pub struct Model {
     /// reached that holder (the receiver itself or a prototype in its
     /// closure), so installing an accessor replays only those.
     pub any_walk_holders: FxHashMap<Tok, Vec<(Tok, ChainAct)>>,
+    /// Source token of a spread -> its targets (and the spread site): a key
+    /// the source gains later is copied too (`Model::field`).
+    pub spread_to: FxHashMap<Tok, Vec<(Tok, SiteId)>>,
+    pub spread_done: crate::pts::FxHashSet<(Tok, Tok)>,
     /// Calls the runtime makes for a protocol (ToPrimitive, iteration …).
     pub protocol_calls: crate::pts::FxHashSet<CallId>,
     /// Shared prototype-chain value nodes: (token, key) → node.
@@ -597,6 +664,12 @@ pub struct Model {
     pub rel_phase: u8,
     pub stats_cons: u64,
     pub site_tmpls: FxHashMap<(CallId, &'static str), Tok>,
+    /// Generation-time birth templates (literals, arrays, builtin objects)
+    /// -> the function whose body makes them.
+    pub tmpl_fn: FxHashMap<TmplId, FnIdx>,
+    /// Template tokens of literals a summary births per instance: they live
+    /// on observation nodes only, so their own nodes observe too.
+    pub obs_toks: crate::pts::FxHashSet<Tok>,
     /// Typed-array owner templates born by `TypedArrayNew` with a known
     /// element kind (`perry_hir::TYPED_ARRAY_KIND_*`).
     pub ta_elem: FxHashMap<TmplId, u8>,
@@ -625,6 +698,40 @@ pub struct Model {
     /// them. `None` after the solve: compiled code never writes them
     /// ([`Model::note_fnproto_write`]).
     pub fnproto_write: Option<u32>,
+    /// Native parent prototypes (`EventEmitter.prototype`, `Error.prototype`
+    /// …) are runtime-owned, like `Object.prototype`: sealed static layouts
+    /// whose keys the analysis knows ([`crate::builtins::native_proto_keys`]),
+    /// so a lookup of a key one does not define continues up the chain
+    /// instead of running an opaque member. Why one may be written anyway,
+    /// per (target, key): the target is the prototype's own token,
+    /// `ObjectProto` (a global native's prototype collapses into it) or ⊤ (a
+    /// native module's values, interpreted code); key `None`: every key.
+    pub native_writes: FxHashMap<(Tok, Option<Atom>), u32>,
+    /// Lookups of a key their native prototype does not define: they run
+    /// today's opaque member once that key may be written there.
+    pub native_missing: Vec<(Tok, Atom, NativeMiss)>,
+    /// A builtin function value has been written (`store_into`): the reason.
+    /// Property reads of such values are ⊤ from then on; `bf_reads` are the
+    /// reads made before.
+    pub bf_written: Option<u32>,
+    pub bf_reads: Vec<NodeId>,
+    /// A call's constant first argument (a string), for callees whose
+    /// result depends on it (`BuiltinNs::Require`). Compiler data.
+    pub call_lit: FxHashMap<CallId, Atom>,
+    /// The CommonJS registry: every published record (`CJSREG`), the
+    /// records under an unknown path (`CJSUNKNOWNPATH`), and the records
+    /// published under each constant path (`Gen::cjs_path_node`).
+    pub cjs_union: NodeId,
+    pub cjs_unknown: NodeId,
+    pub cjs_paths: FxHashMap<Atom, NodeId>,
+    /// `require.cache` / `require.extensions` of [`BuiltinNs::Require`].
+    pub require_parts: Option<(Tok, Tok)>,
+    /// Fields of the global object under program-owned keys.
+    pub global_fields: Vec<(Atom, NodeId)>,
+    /// A ⊤ value may be the global object: it reached unmodeled code, or
+    /// dynamic code may hand it out (`Function('return this')()`). Until
+    /// then a store into ⊤ cannot write a global.
+    pub global_in_top: bool,
     /// Targets of a possible [[Prototype]] write (TOP included).
     pub super_relink: crate::pts::FxHashSet<Tok>,
     /// Source constructor of a type-specialized instance layout (compiler data).
@@ -649,6 +756,26 @@ pub struct Model {
     /// With the profile: propagation work by source-node label
     /// (delta × successors, delta × constraints).
     pub label_work: FxHashMap<&'static str, (u64, u64, u64)>,
+    /// TEMP CW s9: per-node propagation work (profile only).
+    pub cw9_node_work: FxHashMap<u32, u64>,
+    pub cw9_inst_fn: FxHashMap<u32, (u32, u32)>,
+    /// TEMP CWL: (fn, this shape, ret label, protocol, bound-synth, program call) -> (n, first receiver, site).
+    pub cwl_recv: FxHashMap<(FnIdx, String, &'static str, bool, bool, bool), (u32, String, u32)>,
+    pub cwl_seen: crate::pts::FxHashSet<CallId>,
+    pub cwl_why: &'static str,
+    /// TEMP CWL: first arrival of a token in a node: (source node, constraint kind).
+    pub cwl_prov: FxHashMap<(NodeId, Tok), (NodeId, &'static str)>,
+    pub cwl_trace: Option<NodeId>,
+    pub cwl_slot: FxHashMap<NodeId, NodeId>,
+    pub cwl_firstfn: crate::pts::FxHashSet<FnIdx>,
+    pub cwl_tok: Option<Tok>,
+    pub cwl_inst_probe: bool,
+    pub cwl_tokhit: NodeId,
+    pub cwl_tokfns: crate::pts::FxHashSet<FnIdx>,
+    pub cwl_thisinst: FxHashMap<(&'static str, FnIdx), u32>,
+    pub cw9_events: Vec<(u64, u32, u32, u32)>,
+    pub cw9_shared: FxHashMap<(u32, u32, u8, u32), u32>,
+    pub cw9_modkind: Vec<u8>,
     pub fn_inst: FxHashMap<FnIdx, TmplId>,
     /// Birth keys / definite keys of `new f()` instances, from the
     /// construction-phase analysis of `f`'s body.
@@ -660,6 +787,15 @@ pub struct Model {
     pub cur_src: NodeId,
     pub cur_why: u32,
     pub top_vals: FxHashMap<String, NodeId>,
+    /// The function whose body generation is walking (`NO_FN` outside).
+    pub cur_fn: FnIdx,
+    /// Owner of each node: the function whose body made it (`Gen::tmp`,
+    /// `Gen::tok_node`, `Gen::local`), `NO_FN` for every other node.
+    pub node_fn: Vec<FnIdx>,
+    /// (node, function): a function references a node another function
+    /// owns (a local, a parameter, or the enclosing `this` of an arrow).
+    pub captures: crate::pts::FxHashSet<(NodeId, FnIdx)>,
+    pub sum: crate::summary::SumState,
 }
 
 /// The accessors of one holder under one key (or every key, `Key::Any`),
@@ -680,6 +816,7 @@ pub struct AccGroup {
 }
 
 pub const NO_NODE: NodeId = u32::MAX;
+pub const NO_FN: FnIdx = u32::MAX;
 
 /// Marks a `super` walk's start in `Model::walk_nodes` keys (it begins with
 /// a stop check at the start prototype, unlike a receiver's own walk).
@@ -783,9 +920,23 @@ impl Model {
             return t;
         }
         let t = self.toks.len() as Tok;
+        if let TokKind::Obj(tm, ctx) = k {
+            if ctx != NO_CTX {
+                self.site_toks.entry(tm).or_default().push(t);
+            }
+        }
         self.toks.push(k.clone());
         self.tok_index.insert(k, t);
         t
+    }
+
+    /// The template token of `tm` and every birth-site token of it.
+    pub fn tmpl_toks(&self, tm: TmplId) -> Vec<Tok> {
+        let mut v: Vec<Tok> = self.tok_index.get(&TokKind::Obj(tm, NO_CTX)).copied().into_iter().collect();
+        if let Some(s) = self.site_toks.get(&tm) {
+            v.extend_from_slice(s);
+        }
+        v
     }
 
     pub fn node(&mut self, name: impl FnOnce() -> String) -> NodeId {
@@ -801,11 +952,17 @@ impl Model {
             self.aborted = true;
         }
         self.nodes.push(Node::default());
+        self.node_fn.push(NO_FN);
         self.labels.push(label);
         if self.relations.is_some() {
             self.node_names.push(name());
         }
         id
+    }
+
+    /// `n` belongs to the body generation is walking.
+    pub fn own(&mut self, n: NodeId) {
+        self.node_fn[n as usize] = self.cur_fn;
     }
 
     pub fn node_l(&mut self, label: &'static str) -> NodeId {
@@ -820,18 +977,25 @@ impl Model {
         }
     }
 
+    /// The function of a function token (`NO_FN` for any other token).
+    pub fn tok_fn(&self, t: Tok) -> FnIdx {
+        match self.toks[t as usize] {
+            TokKind::Func(f, _) => f,
+            _ => NO_FN,
+        }
+    }
+
     pub fn tok_name(&self, t: Tok) -> String {
         match &self.toks[t as usize] {
             TokKind::Top => "TOP".into(),
-            TokKind::Obj(tm) => format!("obj:{}", self.tmpls[*tm as usize].display),
-            TokKind::Func(f) => format!("fn:{}", self.funcs[*f as usize].name),
+            TokKind::Obj(tm, _) => format!("obj:{}", self.tmpls[*tm as usize].display),
+            TokKind::Func(f, _) => format!("fn:{}", self.funcs[*f as usize].name),
             TokKind::Bound(b) => format!("bound:{b}"),
             TokKind::ClassObj(tm) => format!("class:{}", self.tmpls[*tm as usize].display),
             TokKind::Proto(tm) => format!("proto:{}", self.tmpls[*tm as usize].display),
             TokKind::ObjectProto => "Object.prototype".into(),
             TokKind::Builtin(b) => format!("builtin:{b:?}"),
             TokKind::BuiltinFn => "builtin-fn".into(),
-            TokKind::PrimBox => "primbox".into(),
             TokKind::ModNs(m) => format!("ns:{m}"),
             TokKind::NativeProto(n) => format!("native:{n}"),
         }
@@ -879,15 +1043,16 @@ impl Model {
         for (i, k) in self.toks.iter().enumerate() {
             let d = match k {
                 TokKind::Top => "top -".to_string(),
-                TokKind::Obj(t) => format!("obj {t}"),
-                TokKind::Func(f) => format!("func {f}"),
+                TokKind::Obj(t, NO_CTX) => format!("obj {t}"),
+                TokKind::Obj(t, c) => format!("obj {t}@{c}"),
+                TokKind::Func(f, NO_CTX) => format!("func {f}"),
+                TokKind::Func(f, c) => format!("func {f}@{c}"),
                 TokKind::Bound(b) => format!("bound {b}"),
                 TokKind::ClassObj(t) => format!("classobj {t}"),
                 TokKind::Proto(t) => format!("proto {t}"),
                 TokKind::ObjectProto => "objectproto -".into(),
                 TokKind::Builtin(b) => format!("builtin {b:?}"),
                 TokKind::BuiltinFn => "builtinfn -".into(),
-                TokKind::PrimBox => "primbox -".into(),
                 TokKind::ModNs(m) => format!("modns {m}"),
                 TokKind::NativeProto(n) => format!("nativeproto {n}"),
             };
@@ -992,11 +1157,11 @@ impl Model {
         }
         let mut v: Vec<String> = Vec::new();
         for ((h, k), (g, s)) in &self.accessors {
-            for f in g {
-                v.push(format!("G accseed {h} {k} {f} 0"));
+            for &t in g {
+                v.push(format!("G accseed {h} {k} {} 0", self.tok_fn(t)));
             }
-            for f in s {
-                v.push(format!("G accseed {h} {k} {f} 1"));
+            for &t in s {
+                v.push(format!("G accseed {h} {k} {} 1", self.tok_fn(t)));
             }
         }
         v.sort();
@@ -1038,7 +1203,7 @@ impl Model {
 
     pub fn tmpl_of(&self, t: Tok) -> Option<TmplId> {
         match self.toks[t as usize] {
-            TokKind::Obj(tm) => Some(tm),
+            TokKind::Obj(tm, _) => Some(tm),
             _ => None,
         }
     }

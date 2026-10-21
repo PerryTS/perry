@@ -36,9 +36,8 @@ fn facts_of(g: &Gen, n: u32) -> BindingFacts {
     let node = &m.nodes[n as usize];
     let mut out = BindingFacts {
         prims: node.prim,
-        other: node.widened,
-        top: m.explain && (node.widened || node.pts.to_sorted().contains(&TOP)),
-        top_cause: (m.explain && (node.widened || node.pts.to_sorted().contains(&TOP)))
+        top: m.explain && node.pts.contains_tok(TOP),
+        top_cause: (m.explain && node.pts.contains_tok(TOP))
             .then(|| m.top_origin(n)),
         ..Default::default()
     };
@@ -48,7 +47,7 @@ fn facts_of(g: &Gen, n: u32) -> BindingFacts {
             continue;
         }
         match &m.toks[t as usize] {
-            TokKind::Obj(tm) => match m.tmpls[*tm as usize].kind {
+            TokKind::Obj(tm, _) => match m.tmpls[*tm as usize].kind {
                 TmplKind::Class { class_id, .. } => out.class_ids.push(class_id),
                 _ => out.other = true,
             },
@@ -66,7 +65,9 @@ pub(crate) fn collect(g: &Gen) -> Vec<ModuleBindings> {
         let mut v: Vec<(u32, BindingFacts)> = info
             .locals
             .iter()
-            .map(|(&id, &n)| (id, facts_of(g, n)))
+            .map(|(&id, &n)| {
+                (id, facts_of(g, n))
+            })
             .collect();
         v.sort_by_key(|(id, _)| *id);
         out[mi].locals = v;

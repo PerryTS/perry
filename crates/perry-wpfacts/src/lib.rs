@@ -19,6 +19,7 @@
 pub mod bindings;
 mod builtins;
 mod ctor_phase;
+mod cwl_census;
 pub mod delta;
 pub mod derive;
 mod dump;
@@ -26,10 +27,12 @@ mod gen;
 mod gen_call;
 mod gen_cjs;
 mod gen_expr;
+mod gen_const;
 mod gen_rest;
 pub mod model;
 pub mod pts;
 mod solve;
+mod summary;
 #[cfg(test)]
 mod tests;
 
@@ -59,8 +62,6 @@ pub struct FactsConfig {
     /// into constraints); past it, no facts. Unlike the wall budget it
     /// gives the same answer on every machine.
     pub max_work: Option<u64>,
-    /// Widening bound on one points-to set (escape + ⊤ beyond it).
-    pub widen_k: Option<usize>,
     /// The driver knows the program can run interpreted code (a deferred
     /// `new Function`/`eval` site or `node:vm`). Not a kill (decision 150):
     /// interpreted code is the ⊤ summary node; see
@@ -72,6 +73,9 @@ pub struct FactsConfig {
     /// The driver's resolution of every `export … from "src"` source: a
     /// re-export has no import of its source to resolve it by.
     pub export_sources: ExportSources,
+    /// The modules are one unit of a larger program: every other unit is
+    /// unknown compiled code (`Gen::unit_boundary`).
+    pub unit: bool,
 }
 
 /// Module path → `export … from` source → the module path it resolves to.
@@ -91,6 +95,11 @@ pub struct Stats {
     pub solve_ms: f64,
     pub derive_ms: f64,
     pub pops: u64,
+    /// Summary instances, the shared ones among them, and calls expanded
+    /// into their caller's summary.
+    pub instances: u64,
+    pub shared_instances: u64,
+    pub composed: u64,
     /// Solve work done (see `FactsConfig::max_work`).
     pub work: u64,
     /// The solve hit its budget: no facts were claimed.
@@ -99,7 +108,6 @@ pub struct Stats {
     /// (constraint kind, applications, ms), most expensive first.
     pub profile: Vec<(String, u64, f64)>,
     pub pts_entries: u64,
-    pub widened_nodes: u64,
     /// The largest points-to sets: (node label, size, token-kind mix).
     pub big_nodes: Vec<(String, usize, String)>,
 }
@@ -135,6 +143,8 @@ pub struct ProgramFacts {
     pub tok_names: Vec<String>,
     /// Receiver facts per binding, per module (slice 2: codegen elision).
     pub bindings: Vec<ModuleBindings>,
+    /// Per-unit mode: each unit's path and statistics.
+    pub units: Vec<(String, Stats)>,
     module_digests: Vec<u64>,
 }
 
@@ -146,12 +156,18 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
     sorted.sort_by(|a, b| a.0.cmp(b.0));
     let mut g = gen::Gen::new(sorted.clone(), cfg.relations, cfg.explain);
     g.export_sources = cfg.export_sources.clone();
+    if cfg.profile { // TEMP CW9: module kinds for the cross-module event recorder (1 = benchmark, 2 = shared)
+        g.m.cw9_modkind = sorted.iter().map(|(p, _)| if ["harness.js", "run.js", "benchmark.js", "som.js", "webpack.config.js"].iter().any(|s| p.ends_with(s)) { 2u8 } else { 1u8 }).collect();
+    }
     let interp = cfg.dynamic_code.clone().unwrap_or_else(|| "-".into());
     let dynamic_reach = cfg.dynamic_code_reach.globals as u8;
     g.m.rel(|| format!("dynamicreach {dynamic_reach}"));
     g.m.rel(|| format!("interp {}", interp.replace(' ', "\\s")));
     if cfg.profile {
         g.m.profile = Some(Default::default());
+        g.m.cwl_trace = std::env::var("CWL_TRACE").ok().and_then(|v| v.parse().ok()); // TEMP CWL
+        g.m.cwl_tok = std::env::var("CWL_TOK").ok().and_then(|v| v.parse().ok()); // TEMP CWL
+        g.m.cwl_inst_probe = std::env::var_os("CWL_INST").is_some(); // TEMP CWL
     }
     // The bounds are in force from the first constraint: generation already
     // solves online (`Model::cons` and `Model::edge` apply each rule to what
@@ -162,10 +178,18 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
     g.m.max_pts = cfg.max_pts.unwrap_or(0);
     g.m.max_work = cfg.max_work.unwrap_or(0);
     g.m.max_nodes = cfg.max_pts.map(|p| (p / 8) as usize).unwrap_or(0);
-    g.m.widen_k = cfg.widen_k.unwrap_or(0);
+    if cfg.dynamic_code.is_some() || cfg.dynamic_code_reach.globals {
+        // Interpreted code reads and writes any global (E20); the
+        // prototype-write guard does not cover it.
+        let gt = g.m.tok(model::TokKind::Builtin(model::BuiltinNs::GlobalThis));
+        builtins::note_native_write(&mut g.m, gt, None, "interpreted code may run");
+    }
     g.register_all();
     g.link_exports();
     g.walk_all();
+    if cfg.unit {
+        g.unit_boundary();
+    }
     let gen_ms = t0.elapsed().as_secs_f64() * 1000.0;
     if cfg.profile {
         eprintln!("perry: wpfacts after generation {}", g.m.size_line());
@@ -184,7 +208,47 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
         let thrown = g.m.thrown;
         g.m.sink_node(thrown, r);
     }
+    g.m.summarize_and_replay();
+    if cfg.profile || cfg.explain {
+        eprintln!("perry: wpfacts {}", g.m.sum.stats);
+    }
     g.m.solve();
+    if cfg.profile || cfg.explain {
+        let mut kinds = [0usize; 6];
+        let mut fnkeyed = 0;
+        for &(k, l, _) in g.m.sum.inst_key.keys() {
+            kinds[k as usize] += 1;
+            fnkeyed += (k == 1 && l == summary::LAY_NONE) as usize;
+        }
+        eprintln!(
+            "perry: wpfacts instances {} (site {} layout {} of them function-keyed {}, birth {}, entry {} group {}), program calls {}, calls {}",
+            g.m.sum.insts.len(),
+            kinds[0],
+            kinds[1],
+            fnkeyed,
+            kinds[5],
+            kinds[2],
+            kinds[3] + kinds[4],
+            g.m.sum.n_prog,
+            g.m.calls.len()
+        );
+    }
+    // TEMP CWL census.
+    if cfg.profile && sorted.len() == 1 && std::env::var("CWL_CENSUS").is_ok_and(|f| sorted[0].0.contains(f.as_str())) {
+        cwl_census::run(&g.m, sorted[0].0);
+    }
+    // TEMP CW s8 debug: every node with tokens.
+    if std::env::var_os("CW_DBG").is_some() {
+        let m = &g.m;
+        for (n, node) in m.nodes.iter().enumerate() {
+            if node.pts.is_empty() { continue; }
+            let f = m.node_fn[n];
+            let names: Vec<String> = node.pts.to_sorted().iter().map(|&t| format!("{}{}", m.tok_name(t), match m.toks[t as usize] { model::TokKind::Obj(_, c) | model::TokKind::Func(_, c) if c != model::NO_CTX => format!("@{c}"), _ => String::new() })).collect();
+            let succ: Vec<u32> = node.succ.iter().copied().collect();
+            eprintln!("DBG {}#{n} fn={} obs={} pts={:?} succ={:?} cons={:?}", m.labels[n], if f == model::NO_FN { "-".into() } else { m.funcs[f as usize].name.clone() }, node.obs, names, succ, node.cons.iter().map(|c| c.kind_name()).collect::<Vec<_>>());
+        }
+        eprintln!("DBG stats {}", m.sum.stats);
+    }
     if cfg.profile {
         let mut v: Vec<_> = g.m.label_work.iter().map(|(k, v)| (*k, *v)).collect();
         v.sort_by(|a, b| (b.1 .0 + b.1 .1).cmp(&(a.1 .0 + a.1 .1)));
@@ -217,6 +281,119 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
                 m.tok_name(*h),
                 m.key_name(*k)
             );
+        }
+    }
+    // TEMP CW s9 diagnosis: biggest field nodes and one token's provenance.
+    if cfg.profile {
+        let m = &g.m;
+        let mut fnodes: Vec<(u32, String, String)> = Vec::new();
+        for (&(t, a), &n) in &m.fields { fnodes.push((n, m.tok_name(t) + &format!("#{t}"), m.key_name(model::Key::Named(a)))); }
+        for (&t, &n) in &m.field_any { fnodes.push((n, m.tok_name(t) + &format!("#{t}"), "<any>".into())); }
+        for (&t, &n) in &m.all_fields { fnodes.push((n, m.tok_name(t) + &format!("#{t}"), "<all>".into())); }
+        let owner_of: crate::pts::FxHashMap<u32, String> = fnodes.iter().map(|(n, t, k)| (*n, format!("[{t}.{k}]"))).collect();
+        let desc = |n: u32| -> String {
+            let node = &m.nodes[n as usize];
+            let own = owner_of.get(&n).cloned().unwrap_or_default();
+            let toks = node.pts.to_sorted();
+            let mut tm = crate::pts::FxHashSet::default();
+            let (mut site, mut plain, mut other) = (0, 0, 0);
+            for &t in toks.iter() { match m.toks[t as usize] { model::TokKind::Obj(x, c) => { tm.insert(x); if c == model::NO_CTX { plain += 1 } else { site += 1 } } _ => other += 1 } }
+            let f = m.node_fn[n as usize];
+            let (f, kk) = match m.cw9_inst_fn.get(&n) { Some(&(f, k)) => (f, format!("k{}/{}", k >> 28, k & 0xfffffff)), None => (f, String::new()) };
+            format!("{}{kk}#{n}{own} fn={} obs={} toks={} tmpls={} site={site} plain={plain} other={other} succ={} cons={} work={}", m.labels[n as usize], if f == model::NO_FN { "-".into() } else { m.funcs[f as usize].name.clone() }, node.obs, toks.len(), tm.len(), node.succ.len(), node.cons.len(), m.cw9_node_work.get(&n).copied().unwrap_or(0))
+        };
+        let mut by_work = fnodes.clone();
+        by_work.sort_by_key(|x| std::cmp::Reverse(m.cw9_node_work.get(&x.0).copied().unwrap_or(0)));
+        for (n, t, k) in by_work.iter().take(20) { eprintln!("CW9 fieldwork owner={t} key={k} {}", desc(*n)); }
+        fnodes.sort_by_key(|x| std::cmp::Reverse(m.nodes[x.0 as usize].pts.len()));
+        for (n, t, k) in fnodes.iter().take(20) { eprintln!("CW9 fieldpts owner={t} key={k} {}", desc(*n)); }
+        let mut all: Vec<(u64, u32)> = m.cw9_node_work.iter().map(|(&n, &w)| (w, n)).collect();
+        all.sort_unstable_by(|a, b| b.cmp(a));
+        for (_, n) in all.iter().take(15) { eprintln!("CW9 nodework {}", desc(*n)); }
+        if let Some(&(root, _, _)) = by_work.first() {
+            for (&(t, _a), &n) in &m.fields { if n == root {
+                if let model::TokKind::Obj(tm, c) = m.toks[t as usize] { eprintln!("CW9 owner tmpl {:?} ctx {c}", m.tmpls[tm as usize].kind); if let model::TmplKind::BObj { site, .. } | model::TmplKind::Arr { site, .. } = m.tmpls[tm as usize].kind { if (site as usize) < m.stores.len() { let st = &m.stores[site as usize]; eprintln!("CW9 owner site {site} desc={} func={}", st.desc, if st.func == u32::MAX { "-".into() } else { m.funcs[st.func as usize].name.clone() }); } if c != model::NO_CTX && (c as usize) < m.calls.len() { let cs = &m.calls[c as usize]; eprintln!("CW9 owner call args={:?}", cs.args.iter().map(|&a| desc(a)).collect::<Vec<_>>()); } } }
+                for (i, node) in m.nodes.iter().enumerate() { if node.succ.contains(&root) { eprintln!("CW9 rootpred {} cons={:?}", desc(i as u32), node.cons.iter().take(6).map(|c| c.kind_name()).collect::<Vec<_>>()); } }
+                let mut nh = 0;
+                for (i, node) in m.nodes.iter().enumerate() {
+                    if nh >= 8 || !node.pts.contains_tok(t) { continue; }
+                    for c in &node.cons { if let model::Cons::Store { key, src, site } = c { if *key == model::Key::Named(_a) {
+                        nh += 1;
+                        let mut kinds: std::collections::BTreeMap<&str, u32> = Default::default();
+                        for x in node.pts.to_sorted() { *kinds.entry(match m.toks[x as usize] { model::TokKind::Obj(..) => "obj", model::TokKind::Func(..) => "fn", model::TokKind::Proto(_) => "proto", model::TokKind::ClassObj(_) => "class", _ => "other" }).or_default() += 1; }
+                        let st = &m.stores[*site as usize];
+                        eprintln!("CW9 storeholder {} kinds={kinds:?} site={} in {} src={}", desc(i as u32), st.desc, if st.func == u32::MAX { "-".into() } else { m.funcs[st.func as usize].name.clone() }, desc(*src));
+                    } } }
+                }
+                let any = m.field_any[&t];
+                for (i, node) in m.nodes.iter().enumerate() { if node.succ.contains(&any) { eprintln!("CW9 anypred {} cons={:?}", desc(i as u32), node.cons.iter().take(6).map(|c| c.kind_name()).collect::<Vec<_>>()); } }
+            } }
+        }
+        {
+            let mut h: crate::pts::FxHashMap<(u32, u32), (u32, u64)> = Default::default();
+            for (&n, &(f, k)) in &m.cw9_inst_fn { let l = m.nodes[n as usize].pts.len(); if l > 500 { let e = h.entry((k >> 28, f)).or_default(); e.0 += 1; e.1 += m.cw9_node_work.get(&n).copied().unwrap_or(0); } }
+            let mut v: Vec<_> = h.into_iter().collect(); v.sort_by_key(|x| std::cmp::Reverse(x.1 .1));
+            for ((k, f), (c, w)) in v.iter().take(25) { eprintln!("CW9 biginst kind={k} fn={} nodes={c} work={w}", m.funcs[*f as usize].name); }
+        }
+        {
+            let mut v: Vec<_> = m.cw9_shared.iter().collect(); v.sort_by_key(|x| std::cmp::Reverse(*x.1));
+            for ((tag, f, why, tf), c) in v.iter().take(25) { eprintln!("CW9 shared tag={tag} fn={} why={} from={} n={c}", m.funcs[*f as usize].name, ["", "in-scc", "no-origin-tmpl", "no-origin-notmpl"][*why as usize], if *tf == u32::MAX { "-".into() } else { m.funcs[*tf as usize].name.clone() }); }
+        }
+        for &(p, a, b, t) in &m.cw9_events { eprintln!("CW9 event pop={p} tok={}#{t} from {} to {} cons_from={:?}", m.tok_name(t), desc(a), desc(b), m.nodes[a as usize].cons.iter().take(5).map(|c| c.kind_name()).collect::<Vec<_>>()); }
+        // Provenance of one site token (the median one) in the heaviest field node.
+        if let Some(&(root, _, _)) = by_work.first() {
+            let mut preds: Vec<Vec<u32>> = vec![Vec::new(); m.nodes.len()];
+            for (i, node) in m.nodes.iter().enumerate() { for &s in &node.succ { preds[s as usize].push(i as u32); } }
+            let toks = m.nodes[root as usize].pts.to_sorted();
+            let objs: Vec<u32> = toks.iter().copied().filter(|&t| matches!(m.toks[t as usize], model::TokKind::Obj(..))).collect();
+            let mut jobs: Vec<(u32, u32)> = [objs.first(), objs.get(objs.len() / 2)].into_iter().flatten().map(|&t| (root, t)).collect();
+            if let Ok(v) = std::env::var("CW9_TRACE") {
+                for j in v.split(',') { let mut it = j.split(':'); if let (Some(a), Some(b)) = (it.next(), it.next()) { if let (Ok(a), Ok(b)) = (a.parse(), b.parse()) { jobs.push((a, b)); } } }
+            }
+            // A node by label prefix: print the members of it by kind.
+            if let Ok(v) = std::env::var("CW9_NODE") {
+                for j in v.split(',') { if let Ok(n) = j.parse::<u32>() { let names: Vec<String> = m.nodes[n as usize].pts.to_sorted().iter().filter(|&&t| !matches!(m.toks[t as usize], model::TokKind::Obj(..))).take(40).map(|&t| format!("{}#{t}", m.tok_name(t))).collect(); eprintln!("CW9 node {} nonobj={names:?}", desc(n)); } }
+            }
+            if let Ok(v) = std::env::var("CW9_TMPL") {
+                for j in v.split(',') { if let Ok(tm) = j.parse::<usize>() { let k = &m.tmpls[tm].kind; let st = String::new();
+                    eprintln!("CW9 tmpl {tm} {} {k:?} {st} tmpl_fn={:?} obs_tok={}", m.tmpls[tm].display, m.tmpl_fn.get(&(tm as u32)).map(|&f| m.funcs[f as usize].name.clone()), m.tok_index.get(&model::TokKind::Obj(tm as u32, model::NO_CTX)).is_some_and(|t| m.obs_toks.contains(t))); } }
+            }
+            if let Ok(v) = std::env::var("CW9_HOLD") {
+                for j in v.split(',') { if let Ok(t) = j.parse::<u32>() { let mut c = 0; for (i, node) in m.nodes.iter().enumerate() { if node.pts.contains_tok(t) { c += 1; if c <= 12 || m.node_fn[i] != model::NO_FN { if c <= 40 { eprintln!("CW9 hold {t} {} rel={}", desc(i as u32), m.labels[i]); } } } } eprintln!("CW9 hold {t} total {c}"); } }
+            }
+            if let Ok(v) = std::env::var("CW9_SH") {
+                for j in v.split(',') { if let Ok(t) = j.parse::<u32>() { let mut c = 0;
+                    for (i, node) in m.nodes.iter().enumerate() { if node.obs || !node.pts.contains_tok(t) { continue; } for cs in &node.cons { if let model::Cons::Store { key, src, site } = cs { c += 1; if c > 25 { continue; } let st = &m.stores[*site as usize];
+                        eprintln!("CW9 sh {t} key={} holder={} site={} in {} src={}", m.key_name(*key), desc(i as u32), st.desc, if st.func == u32::MAX { "-".into() } else { m.funcs[st.func as usize].name.clone() }, desc(*src)); } } }
+                    eprintln!("CW9 sh {t} total {c}"); } }
+            }
+            if let Ok(v) = std::env::var("CW9_DST") {
+                for j in v.split(',') { let pat = format!(": {j} "); let pat2 = format!(": {j},"); let pat3 = format!(": {j} }}");
+                    for (i, node) in m.nodes.iter().enumerate() { for c in &node.cons { let d = format!("{c:?}"); if d.contains(&pat) || d.contains(&pat2) || d.contains(&pat3) { eprintln!("CW9 dst {j} from {} cons={d}", desc(i as u32)); } } } }
+            }
+            for (root, tok) in jobs {
+                eprintln!("CW9 trace tok {}#{tok} {:?}", m.tok_name(tok), m.toks[tok as usize]);
+                let mut prev: crate::pts::FxHashMap<u32, u32> = Default::default();
+                let mut q = std::collections::VecDeque::from([root]);
+                prev.insert(root, u32::MAX);
+                let mut last = root;
+                let mut found = false;
+                while let Some(x) = q.pop_front() {
+                    if !found { last = x; }
+                    if !found && !preds[x as usize].iter().any(|&p| m.nodes[p as usize].pts.contains_tok(tok)) { found = true; }
+                    for &p in &preds[x as usize] { if !prev.contains_key(&p) && m.nodes[p as usize].pts.contains_tok(tok) { prev.insert(p, x); q.push_back(p); } }
+                }
+                // `last` = a farthest origin; print the chain origin -> root.
+                let mut x = last; let mut hops = 0;
+                loop {
+                    let node = &m.nodes[x as usize];
+                    eprintln!("CW9   hop {} cons={:?}", desc(x), node.cons.iter().take(4).map(|c| c.kind_name()).collect::<Vec<_>>());
+                    hops += 1;
+                    let nx = prev[&x]; if nx == u32::MAX || hops > 60 { break; } x = nx;
+                }
+                let origins = prev.keys().filter(|&&p| !preds[p as usize].iter().any(|&q| m.nodes[q as usize].pts.contains_tok(tok))).count();
+                eprintln!("CW9   reached {} nodes, {} origins", prev.len(), origins);
+            }
         }
     }
     g.m.dump_meta();
@@ -278,10 +455,12 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
         solve_ms,
         derive_ms,
         pops: g.m.pops,
+        instances: g.m.sum.insts.len() as u64,
+        shared_instances: g.m.sum.inst_key.keys().filter(|k| k.0 == 1 && k.1 == summary::LAY_NONE).count() as u64,
+        composed: g.m.sum.composed.len() as u64,
         work: g.m.work,
         aborted: g.m.aborted,
         pts_entries: g.m.pts_entries,
-        widened_nodes: g.m.widened_nodes,
         big_nodes: big_nodes(&g.m),
         top_calls: g.m.top_calls,
         profile: {
@@ -343,8 +522,63 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
         relations: g.m.relations.take(),
         tok_names,
         bindings,
+        units: Vec::new(),
         module_digests: Vec::new(),
     };
+    pf.module_digests = dump::module_digests(&pf);
+    pf
+}
+
+/// Per-unit facts (decision 151, phase P1): one solve per module, every
+/// other module unknown compiled code ([`FactsConfig::unit`]), the bounds
+/// per unit. A module's sites, bindings and templates come from its own
+/// unit; a unit over a bound claims nothing for its module (sound), the
+/// others keep theirs. Program-wide flags are the union over the units.
+pub fn compute_units(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts {
+    let mut sorted: Vec<(&str, &Module)> = modules.iter().map(|(p, m)| (p.as_str(), *m)).collect();
+    sorted.sort_by(|a, b| a.0.cmp(b.0));
+    let ucfg = FactsConfig { unit: true, ..cfg.clone() };
+    let mut pf = ProgramFacts {
+        module_paths: sorted.iter().map(|(p, _)| p.to_string()).collect(),
+        dynamic_code_reach: cfg.dynamic_code_reach.clone(),
+        sabotage: cfg.sabotage.clone(),
+        ..Default::default()
+    };
+    for (mi, (path, module)) in sorted.iter().enumerate() {
+        let u = compute(&[(path.to_string(), *module)], &ucfg);
+        for mut t in u.templates {
+            if t.module != Some(0) {
+                continue;
+            }
+            t.module = Some(mi as u32);
+            t.id = pf.templates.len() as model::TmplId;
+            pf.templates.push(t);
+        }
+        pf.sites.extend(u.sites.into_iter().map(|s| SiteFacts { module: mi as u32, ..s }));
+        pf.bindings.push(u.bindings.into_iter().next().unwrap_or_default());
+        pf.super_unrelinked.extend(u.super_unrelinked);
+        pf.interp_guard = pf.interp_guard.or(u.interp_guard);
+        pf.fnproto_bind_written = pf.fnproto_bind_written.or(u.fnproto_bind_written);
+        let (a, s) = (&mut pf.stats, &u.stats);
+        a.modules += s.modules;
+        a.templates += s.templates;
+        a.fact_units += s.fact_units;
+        a.nodes += s.nodes;
+        a.constraints += s.constraints;
+        a.tokens += s.tokens;
+        a.functions += s.functions;
+        a.gen_ms += s.gen_ms;
+        a.solve_ms += s.solve_ms;
+        a.derive_ms += s.derive_ms;
+        a.pops += s.pops;
+        a.instances += s.instances;
+        a.shared_instances += s.shared_instances;
+        a.composed += s.composed;
+        a.work += s.work;
+        a.top_calls += s.top_calls;
+        a.pts_entries += s.pts_entries;
+        pf.units.push((path.to_string(), u.stats));
+    }
     pf.module_digests = dump::module_digests(&pf);
     pf
 }
@@ -409,14 +643,14 @@ fn big_nodes(m: &model::Model) -> Vec<(String, usize, String)> {
             for t in m.nodes[i].pts.to_sorted() {
                 let k = match &m.toks[t as usize] {
                     model::TokKind::Top => "top",
-                    model::TokKind::Obj(tm) => match m.tmpls[*tm as usize].kind {
+                    model::TokKind::Obj(tm, _) => match m.tmpls[*tm as usize].kind {
                         model::TmplKind::Class { .. } => "class",
                         model::TmplKind::Lit { .. } => "lit",
                         model::TmplKind::FnInst { .. } => "fninst",
                         model::TmplKind::Arr { .. } => "arr",
                         _ => "bobj",
                     },
-                    model::TokKind::Func(_) => "func",
+                    model::TokKind::Func(_, _) => "func",
                     model::TokKind::Bound(_) => "bound",
                     model::TokKind::ClassObj(_) => "classobj",
                     model::TokKind::Proto(_) => "proto",
@@ -425,8 +659,18 @@ fn big_nodes(m: &model::Model) -> Vec<(String, usize, String)> {
                 *mix.entry(k).or_default() += 1;
             }
             let label = m.labels.get(i).copied().unwrap_or("?");
+            // A field node names its holder and key; any node its function.
+            let mut owner = m
+                .fields
+                .iter()
+                .find(|(_, &n)| n as usize == i)
+                .map(|(&(t, a), _)| format!("({}.{})", m.tok_name(t), m.atoms[a as usize]))
+                .unwrap_or_default();
+            if let Some(&f) = m.node_fn.get(i).filter(|&&f| f != model::NO_FN) {
+                owner.push_str(&format!("@{}", m.funcs[f as usize].name));
+            }
             (
-                format!("{label}#{i}"),
+                format!("{label}#{i}{owner}"),
                 len,
                 mix.iter()
                     .map(|(k, v)| format!("{k}:{v}"))

@@ -15,11 +15,14 @@ pub(crate) const UNMODELED_OPERAND: &str = "operand of unmodeled HIR construct";
 
 impl<'a> Gen<'a> {
     pub(crate) fn tmp(&mut self, what: &'static str) -> NodeId {
-        self.m.node_l(what)
+        let n = self.m.node_l(what);
+        self.m.own(n);
+        n
     }
 
     pub(crate) fn tok_node(&mut self, t: Tok) -> NodeId {
         let n = self.m.node_l("tok");
+        self.m.own(n);
         self.m.add_tok(n, t);
         n
     }
@@ -72,11 +75,11 @@ impl<'a> Gen<'a> {
     pub(crate) fn prim_box_op(&mut self, fx: &Fx, operands: &[&Expr], why: &str) -> NodeId {
         let out = self.prim_op(fx, operands, prim::ALL, why);
         let tm = self.new_bobj_template(fx.module, "primbox");
-        let t = self.m.tok(TokKind::Obj(tm));
+        let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
         let fa = self.m.field_any(t);
         self.m.add_prim(fa, prim::ALL);
-        let pt = self.m.tok(TokKind::PrimBox);
-        self.m.add_tok(fa, pt);
+        // Nested containers (os.cpus() elements ...) are the site's own.
+        self.m.add_tok(fa, t);
         self.m.add_tok(out, t);
         out
     }
@@ -237,9 +240,21 @@ impl<'a> Gen<'a> {
         ret
     }
 
-    fn new_lit(&mut self, mi: u32, keys: &[&str]) -> (TmplId, Tok) {
+    fn new_lit(&mut self, mi: u32, e: &Expr, keys: &[&str]) -> (TmplId, Tok) {
+        // One template per literal expression.
+        let at = e as *const Expr as usize;
+        if let Some(&tt) = self.lit_births.get(&at) {
+            return tt;
+        }
+        let tt = self.new_lit_tmpl(mi, keys);
+        self.lit_births.insert(at, tt);
+        tt
+    }
+
+    pub(crate) fn new_lit_tmpl(&mut self, mi: u32, keys: &[&str]) -> (TmplId, Tok) {
         let site = self.next_site(mi);
         let tm = self.m.tmpls.len() as TmplId;
+        self.note_birth_fn(tm);
         let mut atoms = Vec::new();
         for k in keys {
             let a = self.m.atom(k);
@@ -258,7 +273,7 @@ impl<'a> Gen<'a> {
             field_init: None,
             proto_members: vec![],
         });
-        let t = self.m.tok(TokKind::Obj(tm));
+        let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
         (tm, t)
     }
 
@@ -302,7 +317,7 @@ impl<'a> Gen<'a> {
     /// A fresh promise template whose settled value is `value`.
     pub(crate) fn promise_of(&mut self, mi: u32, value: NodeId) -> NodeId {
         let tm = self.new_bobj_template(mi, "Promise");
-        let t = self.m.tok(TokKind::Obj(tm));
+        let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
         let a = self.m.atom("#value");
         let f = self.m.field(t, a);
         let aw = self.awaited(value);
@@ -344,7 +359,15 @@ impl<'a> Gen<'a> {
         out
     }
 
+    /// Every node an expression makes belongs to the function walking it.
     pub(crate) fn expr(&mut self, fx: &Fx, e: &Expr) -> NodeId {
+        let prev = std::mem::replace(&mut self.m.cur_fn, fx.f);
+        let n = self.expr_inner(fx, e);
+        self.m.cur_fn = prev;
+        n
+    }
+
+    fn expr_inner(&mut self, fx: &Fx, e: &Expr) -> NodeId {
         let mi = fx.module;
         match e {
             Expr::Undefined => self.prim_node(prim::UNDEF),
@@ -742,7 +765,7 @@ impl<'a> Gen<'a> {
                     .map(|(k, _)| k.as_str())
                     .filter(|k| *k != "__proto__")
                     .collect();
-                let (tm, t) = self.new_lit(mi, &keys);
+                let (tm, t) = self.new_lit(mi, e, &keys);
                 let obj = self.tok_node(t);
                 for (k, v) in props {
                     let vn = self.expr(fx, v);
@@ -774,7 +797,7 @@ impl<'a> Gen<'a> {
                     .map(|(k, _)| k.as_str())
                     .filter(|k| seen.insert(*k))
                     .collect();
-                let (tm, t) = self.new_lit(mi, &keys);
+                let (tm, t) = self.new_lit(mi, e, &keys);
                 let obj = self.tok_node(t);
                 for (k, v) in stores {
                     let vn = self.prim_node(match v {
@@ -799,7 +822,7 @@ impl<'a> Gen<'a> {
             Expr::ObjectSpread { parts } => {
                 let named: Vec<&str> = parts.iter().filter_map(|(k, _)| k.as_deref()).collect();
                 let has_spread = parts.iter().any(|(k, _)| k.is_none());
-                let (tm, t) = self.new_lit(mi, if has_spread { &[] } else { &named });
+                let (tm, t) = self.new_lit(mi, e, if has_spread { &[] } else { &named });
                 let obj = self.tok_node(t);
                 for (k, v) in parts {
                     let vn = self.expr(fx, v);
@@ -817,9 +840,10 @@ impl<'a> Gen<'a> {
                             );
                         }
                         None => {
-                            // Own enumerable keys of the source (getters run).
-                            let vals = self.load(vn, Key::Any);
-                            self.store(fx, obj, Key::Any, vals, "lit...".into(), Some(tm), true);
+                            // Own enumerable keys of the source, key by key
+                            // (getters run): `Cons::Spread`.
+                            let site = self.store_site(mi, fx.f, "lit...".into(), Some(tm), true);
+                            self.m.cons(vn, Cons::Spread { into: obj, site });
                         }
                     }
                 }
@@ -830,22 +854,22 @@ impl<'a> Gen<'a> {
                 let t = self.expr(fx, target);
                 for s in sources {
                     let sv = self.expr(fx, s);
-                    let vals = self.load(sv, Key::Any);
-                    self.store(fx, t, Key::Any, vals, "Object.assign".into(), None, false);
+                    let site = self.store_site(mi, fx.f, "Object.assign".into(), None, false);
+                    self.m.cons(sv, Cons::Spread { into: t, site });
                 }
                 t
             }
             Expr::ObjectRest { object, .. } => {
                 let o = self.expr(fx, object);
-                let (tm, t) = self.new_lit(mi, &[]);
+                let (tm, t) = self.new_lit(mi, e, &[]);
                 let obj = self.tok_node(t);
-                let vals = self.load(o, Key::Any);
-                self.store(fx, obj, Key::Any, vals, "rest".into(), Some(tm), true);
+                let site = self.store_site(mi, fx.f, "rest".into(), Some(tm), true);
+                self.m.cons(o, Cons::Spread { into: obj, site });
                 obj
             }
             Expr::Array(elems, _) => {
                 let tm = self.new_arr_template(mi, "lit");
-                let t = self.m.tok(TokKind::Obj(tm));
+                let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
                 let fa = self.m.field_any(t);
                 for el in elems {
                     let v = self.expr(fx, el);
@@ -855,7 +879,7 @@ impl<'a> Gen<'a> {
             }
             Expr::ArraySpread(elems) => {
                 let tm = self.new_arr_template(mi, "spread");
-                let t = self.m.tok(TokKind::Obj(tm));
+                let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
                 let fa = self.m.field_any(t);
                 for el in elems {
                     match el {
@@ -1015,7 +1039,7 @@ impl<'a> Gen<'a> {
                 let p = self.expr(fx, parent_expr);
                 self.to_sink(p, "E11 dynamic class parent");
                 if let Some(tm) = self.resolve_class_name(mi, class_name) {
-                    let inst = self.m.tok(TokKind::Obj(tm));
+                    let inst = self.m.tok(TokKind::Obj(tm, NO_CTX));
                     let r = self.m.reason("E11 dynamic class parent");
                     self.m.mark_hard(inst, Hard::E11ReflectConstruct, r);
                     self.m.escape(inst, r);
@@ -1026,9 +1050,9 @@ impl<'a> Gen<'a> {
                 class_name,
                 captures,
             } => {
-                let env = self.class_env(mi, class_name);
-                for c in captures {
+                for (i, c) in captures.iter().enumerate() {
                     let v = self.expr(fx, c);
+                    let env = self.class_env(mi, class_name, i);
                     self.m.edge(v, env);
                 }
                 self.prim_node(prim::UNDEF)
@@ -1040,9 +1064,9 @@ impl<'a> Gen<'a> {
             } => {
                 let cv = self.expr(fx, class_value);
                 let name = env_class.clone().unwrap_or_default();
-                let env = self.class_env(mi, &name);
-                for c in captures {
+                for (i, c) in captures.iter().enumerate() {
                     let v = self.expr(fx, c);
+                    let env = self.class_env(mi, &name, i);
                     self.m.edge(v, env);
                     if env_class.is_none() {
                         self.to_sink(v, "class capture of an unnamed class expression");
@@ -1050,12 +1074,15 @@ impl<'a> Gen<'a> {
                 }
                 cv
             }
-            Expr::ClassEnvGet { class_name, .. } => self.class_env(mi, class_name),
+            Expr::ClassEnvGet { class_name, index, .. } => self.class_env(mi, class_name, *index as usize),
             Expr::ClassEnvSet {
-                class_name, value, ..
+                class_name,
+                index,
+                value,
+                ..
             } => {
                 let v = self.expr(fx, value);
-                let env = self.class_env(mi, class_name);
+                let env = self.class_env(mi, class_name, *index as usize);
                 self.m.edge(v, env);
                 v
             }
@@ -1071,10 +1098,11 @@ impl<'a> Gen<'a> {
             Expr::ClassEnvCurrent { .. } => self.m.top_val("ClassEnvCurrent"),
             Expr::ClassCaptureValue {
                 class_name,
+                index,
                 fallback,
                 ..
             } => {
-                let env = self.class_env(mi, class_name);
+                let env = self.class_env(mi, class_name, *index as usize);
                 let out = self.tmp("capture");
                 self.m.edge(env, out);
                 if let Some(f) = fallback {
@@ -1155,9 +1183,9 @@ impl<'a> Gen<'a> {
                     let vn = self.expr(fx, v);
                     self.store(fx, cv, Key::Any, vn, "static[k]".into(), None, false);
                 }
-                let env = self.class_env(mi, template);
-                for a in captured_args {
+                for (i, a) in captured_args.iter().enumerate() {
                     let v = self.expr(fx, a);
+                    let env = self.class_env(mi, template, i);
                     self.m.edge(v, env);
                 }
                 if let Some(s) = shared_first_evaluation {
@@ -1167,7 +1195,7 @@ impl<'a> Gen<'a> {
                     let pv = self.expr(fx, p);
                     self.to_sink(pv, "E11 class expression with an evaluated parent");
                     if let Some(tm) = self.resolve_class_name(mi, template) {
-                        let inst = self.m.tok(TokKind::Obj(tm));
+                        let inst = self.m.tok(TokKind::Obj(tm, NO_CTX));
                         let r = self
                             .m
                             .reason("E11 class expression with an evaluated parent");

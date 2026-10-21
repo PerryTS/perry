@@ -21,7 +21,10 @@
 //! - `PERRY_FACTS_PROFILE=1`: per-constraint-kind solve profile in the dump;
 //! - `PERRY_FACTS_EXPLAIN=1`: diagnostics — each ⊤ site verdict names
 //!   where ⊤ first entered (the precision report groups by it);
-//! - `PERRY_FACTS_ONLY=1`: stop after writing the dump (analysis-only runs).
+//! - `PERRY_FACTS_ONLY=1`: stop after writing the dump (analysis-only runs);
+//! - `PERRY_FACTS_UNITS=1`: per-unit facts (decision 151 P1, the measurement
+//!   of the cut): one solve per module, the other modules unknown code
+//!   (`perry_wpfacts::compute_units`), the bounds per unit.
 //!
 //! Interpreted code (`new Function`, `eval`, `vm`) is no program-wide kill
 //! (decision 150): the analysis models it as the ⊤ summary node, and when it
@@ -34,8 +37,7 @@ use std::sync::Arc;
 
 /// Solve-work bound (see `perry_wpfacts::FactsConfig::max_work`), sized so
 /// the whole pass costs a few seconds at most. With `this` bound per
-/// (receiver, key), shared accessor walks and groups, and edges into
-/// widened sets cut at the source, tsc needs 45M, fastify 59M, Effect 27M,
+/// (receiver, key), shared accessor walks and groups, tsc needed 45M, fastify 59M, Effect 27M,
 /// zod 3.9M, commander 1.8M; the Next.js server (~3G) still stops at the
 /// bound and gets no facts.
 const DEFAULT_MAX_WORK: u64 = 200_000_000;
@@ -104,14 +106,6 @@ pub(crate) fn run(
                 .unwrap_or(DEFAULT_MAX_WORK),
         ),
         profile: std::env::var("PERRY_FACTS_PROFILE").is_ok_and(|v| v == "1"),
-        // Widening: a points-to set past this many tokens becomes ⊤ and its
-        // members escape (sound; bounds memory on merged generic helpers).
-        widen_k: Some(
-            std::env::var("PERRY_FACTS_WIDEN")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(64),
-        ),
         // Points-to entries bound (memory); past it the program gets no facts.
         max_pts: Some(
             std::env::var("PERRY_FACTS_MAX_PTS")
@@ -127,12 +121,17 @@ pub(crate) fn run(
             "E14 the program can run interpreted code (deferred new Function/eval or node:vm)"
                 .into()
         }),
+        unit: false,
     };
     let list: Vec<(String, &perry_hir::Module)> = modules
         .iter()
         .map(|(p, m)| (p.display().to_string(), m))
         .collect();
-    let pf = perry_wpfacts::compute(&list, &cfg);
+    let pf = if std::env::var("PERRY_FACTS_UNITS").is_ok_and(|v| v == "1") {
+        perry_wpfacts::compute_units(&list, &cfg)
+    } else {
+        perry_wpfacts::compute(&list, &cfg)
+    };
     let elapsed = started.elapsed().as_secs_f64() * 1000.0;
     if let Some(path) = &dump {
         let mut text = pf.dump_text();
@@ -197,6 +196,16 @@ pub(crate) fn run(
             s.derive_ms,
             elapsed
         );
+        for (path, u) in &pf.units {
+            eprintln!(
+                "perry: wpfacts: unit {path}: {} nodes, {} pts entries, work {}, {:.0} ms{}",
+                u.nodes,
+                u.pts_entries,
+                u.work,
+                u.gen_ms + u.solve_ms + u.derive_ms,
+                if u.aborted { ", OVER the bound: no facts" } else { "" }
+            );
+        }
     }
     if std::env::var("PERRY_FACTS_ONLY").is_ok_and(|v| v == "1") {
         // Analysis-only run (precision reports, checkers): stop after the

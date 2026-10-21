@@ -30,14 +30,14 @@ impl<'a> Gen<'a> {
 
     pub(crate) fn bobj(&mut self, mi: u32, what: &'static str) -> (Tok, NodeId) {
         let tm = self.new_bobj_template(mi, what);
-        let t = self.m.tok(TokKind::Obj(tm));
+        let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
         let n = self.tok_node(t);
         (t, n)
     }
 
     pub(crate) fn new_arr_from(&mut self, mi: u32, what: &str, elems: &[NodeId]) -> NodeId {
         let tm = self.new_arr_template(mi, what);
-        let t = self.m.tok(TokKind::Obj(tm));
+        let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
         let fa = self.m.field_any(t);
         for &e in elems {
             self.m.edge(e, fa);
@@ -98,8 +98,12 @@ impl<'a> Gen<'a> {
             } => {
                 let o = object.as_ref().map(|o| self.expr(fx, o));
                 let a: Vec<NodeId> = args.iter().map(|x| self.expr(fx, x)).collect();
+                let m0 = module.strip_prefix("node:").unwrap_or(module);
                 if module == "__perry_runtime" {
                     self.runtime_glue(fx, method, o, a, args)
+                } else if m0 == "module" && method == "createRequire" && object.is_none() {
+                    let t = self.m.tok(TokKind::Builtin(BuiltinNs::Require));
+                    self.tok_node(t)
                 } else {
                     if module == "vm" || module == "node:vm" {
                         crate::builtins::set_dyn_eval(&mut self.m, "E14 node:vm");
@@ -667,7 +671,7 @@ impl<'a> Gen<'a> {
                     field_init: None,
                     proto_members: vec![],
                 });
-                let t = self.m.tok(TokKind::Obj(tm));
+                let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
                 let pn = self.m.proto_node(t);
                 self.m.edge(p, pn);
                 let n = self.tok_node(t);
@@ -780,7 +784,7 @@ impl<'a> Gen<'a> {
                 let ks = kids(e);
                 let (t, n) = self.bobj(mi, "TypedArray");
                 if let Expr::TypedArrayNew { kind, .. } = e {
-                    if let TokKind::Obj(tm) = self.m.toks[t as usize] {
+                    if let TokKind::Obj(tm, _) = self.m.toks[t as usize] {
                         self.m.ta_elem.insert(tm, *kind);
                     }
                 }
@@ -835,6 +839,12 @@ impl<'a> Gen<'a> {
                 ..
             } => {
                 let o = self.expr(fx, obj);
+                // The generator object is its step closure.
+                for t in self.m.nodes[o as usize].pts.to_sorted() {
+                    if let TokKind::Func(f, _) = self.m.toks[t as usize] {
+                        self.m.funcs[f as usize].gen_step = true;
+                    }
+                }
                 for id in i32_controls.iter().chain(i1_controls.iter()) {
                     let l = self.local(mi, *id);
                     self.m.add_prim(l, prim::NUM | prim::BOOL);
@@ -1718,7 +1728,7 @@ impl<'a> Gen<'a> {
         self.m.add_prim(fa, prim::ALL);
         self.m.add_tok(fa, t);
         let arr = self.new_arr_template(mi, "json");
-        let at = self.m.tok(TokKind::Obj(arr));
+        let at = self.m.tok(TokKind::Obj(arr, NO_CTX));
         let afa = self.m.field_any(at);
         self.m.add_prim(afa, prim::ALL);
         self.m.add_tok(afa, t);
@@ -1824,7 +1834,10 @@ impl<'a> Gen<'a> {
                         }
                         _ => self.cjs_unknown_path,
                     };
-                    self.m.edge(value, registry);
+                    // A CommonJS record publishes its live `exports`; a raw
+                    // publication is the value itself. The registry union
+                    // keeps the record for `require.cache`.
+                    self.m.cons(value, Cons::CjsPublish { dst: registry });
                     self.m.edge(value, self.cjs_registry);
                 }
                 self.prim_node(prim::UNDEF)
@@ -1883,7 +1896,12 @@ impl<'a> Gen<'a> {
                 self.prim_node(prim::UNDEF)
             }
             "requirePathModule" => {
-                let registry = match source_args.first() {
+                // A path an instance knows is as good as a literal.
+                let known = match source_args.first().map(|x| self.const_eval(fx.module, x)) {
+                    Some(Some(crate::gen_const::Const::Str(s))) => Some(Expr::String(s)),
+                    _ => None,
+                };
+                let registry = match known.as_ref().or(source_args.first()) {
                     Some(Expr::String(path)) if std::path::Path::new(path).is_absolute() => {
                         let named = self.cjs_path_node(path);
                         let r = self.tmp("cjs-path-read");

@@ -161,9 +161,7 @@ pub fn derive(g: &mut Gen) -> (Vec<TemplateFacts>, Vec<SiteFacts>) {
 fn chain_tokens(m: &Model, tm: TmplId) -> Vec<Tok> {
     let mut seen: FxHashSet<Tok> = FxHashSet::default();
     let mut stack = Vec::new();
-    if let Some(&t) = m.tok_index.get(&TokKind::Obj(tm)) {
-        stack.push(t);
-    }
+    stack.extend(m.tmpl_toks(tm));
     let mut out = Vec::new();
     while let Some(t) = stack.pop() {
         let Some(&pn) = m.proto_node.get(&t) else {
@@ -185,12 +183,17 @@ fn template_facts(
     global: &Option<String>,
     objproto_hard: &Option<String>,
 ) -> TemplateFacts {
-    let t = m.tok(TokKind::Obj(tm));
+    // The template's own token and every birth-site token: one layout.
+    m.tok(TokKind::Obj(tm, NO_CTX));
+    let ts = m.tmpl_toks(tm);
     let tpl = m.tmpls[tm as usize].clone();
-    let escape = m.escaped.get(&t).map(|r| m.reasons[*r as usize].clone());
-    let hard = m
-        .hard
-        .get(&t)
+    let escape = ts
+        .iter()
+        .find_map(|t| m.escaped.get(t))
+        .map(|r| m.reasons[*r as usize].clone());
+    let hard = ts
+        .iter()
+        .find_map(|t| m.hard.get(t))
         .map(|(k, r)| format!("{} {}", k.code(), m.reasons[*r as usize]));
     // The prototype chain must be stable: no HARD op or escape on any
     // prototype object, no accessor named after a birth key, no computed
@@ -198,8 +201,10 @@ fn template_facts(
     let chain = chain_tokens(m, tm);
     let mut chain_problem: Option<String> = None;
     let mut accessor_keys: Vec<Atom> = tpl.accessor_keys.clone();
-    if let Some(ks) = m.accessor_keys.get(&t) {
-        accessor_keys.extend(ks.iter().copied());
+    for t in &ts {
+        if let Some(ks) = m.accessor_keys.get(t) {
+            accessor_keys.extend(ks.iter().copied());
+        }
     }
     for &p in &chain {
         if p == TOP {
@@ -267,10 +272,12 @@ fn template_facts(
     let mut slot_ok = true;
     let mut keys: Vec<Atom> = tpl.birth_keys.clone();
     // Fields written later (non-birth) are reported too.
-    if let Some(fk) = m.field_keys.get(&t) {
-        for &a in fk {
-            if !keys.contains(&a) {
-                keys.push(a);
+    for t in &ts {
+        if let Some(fk) = m.field_keys.get(t) {
+            for &a in fk {
+                if !keys.contains(&a) {
+                    keys.push(a);
+                }
             }
         }
     }
@@ -291,13 +298,13 @@ fn template_facts(
             && w.post.is_empty()
             && any.post.is_empty()
             && !is_accessor;
-        let mut kind = field_kind(m, t, a, definite);
+        let mut kind = field_kind(m, &ts, a, definite);
         if escape.is_some() {
             kind.top = true;
         }
-        let ta_stable = readonly && definite && ta_only_sealed(m, t, a);
+        let ta_stable = readonly && definite && ta_only_sealed(m, &ts, a);
         let ta_kind = if ta_stable {
-            ta_one_kind(m, t, a)
+            ta_one_kind(m, &ts, a)
         } else {
             None
         };
@@ -364,63 +371,74 @@ fn template_facts(
 
 /// The field holds only typed-array objects, none exposed, transferred,
 /// resized or escaped.
-fn ta_only_sealed(m: &Model, t: Tok, a: Atom) -> bool {
-    let Some(&n) = m.fields.get(&(t, a)) else {
-        return false;
-    };
-    let node = &m.nodes[n as usize];
-    if node.prim & !prim::UNDEF != 0 {
-        return false;
-    }
-    let toks = node.pts.to_sorted();
-    !toks.is_empty()
-        && toks.iter().all(|&x| {
-            matches!(m.toks[x as usize], TokKind::Obj(tm)
-                if matches!(m.tmpls[tm as usize].kind, TmplKind::BObj { what: "TypedArray", .. }))
-                && !m.hard.contains_key(&x)
-                && !m.escaped.contains_key(&x)
+fn ta_only_sealed(m: &Model, ts: &[Tok], a: Atom) -> bool {
+    let ns: Vec<NodeId> = ts.iter().filter_map(|&t| m.fields.get(&(t, a)).copied()).collect();
+    !ns.is_empty()
+        && ns.iter().all(|&n| {
+            let node = &m.nodes[n as usize];
+            node.prim & !prim::UNDEF == 0 && {
+                let toks = node.pts.to_sorted();
+                !toks.is_empty() && toks.iter().all(|&x| ta_sealed_tok(m, x))
+            }
         })
 }
 
+fn ta_sealed_tok(m: &Model, x: Tok) -> bool {
+    matches!(m.toks[x as usize], TokKind::Obj(tm, _)
+        if matches!(m.tmpls[tm as usize].kind, TmplKind::BObj { what: "TypedArray", .. }))
+        && !m.hard.contains_key(&x)
+        && !m.escaped.contains_key(&x)
+}
+
 /// The single recorded element kind of the typed arrays in field `a` of `t`.
-fn ta_one_kind(m: &Model, t: Tok, a: Atom) -> Option<u8> {
-    let &n = m.fields.get(&(t, a))?;
+fn ta_one_kind(m: &Model, ts: &[Tok], a: Atom) -> Option<u8> {
     let mut kind = None;
-    for x in m.nodes[n as usize].pts.to_sorted() {
-        let TokKind::Obj(tm) = m.toks[x as usize] else {
-            return None;
+    for &t in ts {
+        let Some(&n) = m.fields.get(&(t, a)) else {
+            continue;
         };
-        let k = *m.ta_elem.get(&tm)?;
-        if kind.is_some_and(|c| c != k) {
-            return None;
+        for x in m.nodes[n as usize].pts.to_sorted() {
+            let TokKind::Obj(tm, _) = m.toks[x as usize] else {
+                return None;
+            };
+            let k = *m.ta_elem.get(&tm)?;
+            if kind.is_some_and(|c| c != k) {
+                return None;
+            }
+            kind = Some(k);
         }
-        kind = Some(k);
     }
     kind
 }
 
-fn field_kind(m: &Model, t: Tok, a: Atom, definite: bool) -> KindFact {
+fn field_kind(m: &Model, ts: &[Tok], a: Atom, definite: bool) -> KindFact {
     let mut k = KindFact {
         prims: if definite { 0 } else { prim::UNDEF },
         objs: Vec::new(),
         funcs: 0,
         builtin_objs: 0,
-        top: m.escaped.contains_key(&t),
+        top: ts.iter().any(|t| m.escaped.contains_key(t)),
     };
-    let Some(&n) = m.fields.get(&(t, a)) else {
-        return k;
-    };
-    let node = &m.nodes[n as usize];
-    k.prims |= node.prim;
     let mut objs = Vec::new();
-    for x in node.pts.to_sorted() {
-        match &m.toks[x as usize] {
-            TokKind::Top => k.top = true,
-            TokKind::Obj(tm) if m.tmpls[*tm as usize].kind.is_fact_unit() => {
-                objs.push(m.tmpls[*tm as usize].display.clone())
+    let mut seen: FxHashSet<Tok> = FxHashSet::default();
+    for &t in ts {
+        let Some(&n) = m.fields.get(&(t, a)) else {
+            continue;
+        };
+        let node = &m.nodes[n as usize];
+        k.prims |= node.prim;
+        for x in node.pts.to_sorted() {
+            if !seen.insert(x) {
+                continue;
             }
-            TokKind::Func(_) | TokKind::Bound(_) | TokKind::BuiltinFn => k.funcs += 1,
-            _ => k.builtin_objs += 1,
+            match &m.toks[x as usize] {
+                TokKind::Top => k.top = true,
+                TokKind::Obj(tm, _) if m.tmpls[*tm as usize].kind.is_fact_unit() => {
+                    objs.push(m.tmpls[*tm as usize].display.clone())
+                }
+                TokKind::Func(_, _) | TokKind::Bound(_) | TokKind::BuiltinFn => k.funcs += 1,
+                _ => k.builtin_objs += 1,
+            }
         }
     }
     objs.sort();
@@ -434,9 +452,34 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
     let by_id: crate::pts::FxHashMap<TmplId, &TemplateFacts> =
         tfs.iter().map(|t| (t.id, t)).collect();
     let mut out = Vec::new();
-    for s in &g.read_sites {
-        let node = &m.nodes[s.recv as usize];
-        let toks = node.pts.to_sorted();
+    // One fact per read site: records of the same site (a body walked
+    // twice) unite their receivers.
+    let mut first: FxHashMap<(u32, u32, u32, bool), usize> = FxHashMap::default();
+    let mut groups: Vec<(usize, Vec<u32>)> = Vec::new();
+    for (i, s) in g.read_sites.iter().enumerate() {
+        let k = (s.module, s.byte_offset, s.key, s.is_call);
+        match first.get(&k) {
+            Some(&gi) => groups[gi].1.push(s.recv),
+            None => {
+                first.insert(k, groups.len());
+                groups.push((i, vec![s.recv]));
+            }
+        }
+    }
+    for (i, recvs) in &groups {
+        let s = &g.read_sites[*i];
+        let mut toks: Vec<Tok> = recvs
+            .iter()
+            .flat_map(|&r| m.nodes[r as usize].pts.to_sorted())
+            .collect();
+        toks.sort_unstable();
+        toks.dedup();
+        let prim = recvs.iter().fold(0, |p, &r| p | m.nodes[r as usize].prim);
+        let top_recv = recvs
+            .iter()
+            .copied()
+            .find(|&r| m.nodes[r as usize].pts.to_sorted().contains(&TOP))
+            .unwrap_or(s.recv);
         let key = m.atoms[s.key as usize].clone();
         let mut receivers = Vec::new();
         let mut top = false;
@@ -453,14 +496,14 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
                         if m.explain {
                             Verdict::No(format!(
                                 "receiver from unmodeled code (TOP) <- {}",
-                                m.top_origin(s.recv)
+                                m.top_origin(top_recv)
                             ))
                         } else {
                             Verdict::No("receiver from unmodeled code (TOP)".into())
                         }
                     });
                 }
-                TokKind::Obj(tm) => {
+                TokKind::Obj(tm, _) => {
                     let Some(tf) = by_id.get(tm) else {
                         receivers.push(m.tok_name(t));
                         verdict.get_or_insert(Verdict::No("receiver is not a fact unit".into()));
@@ -520,10 +563,13 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
                 }
             }
         }
-        if toks.is_empty() && node.prim == 0 {
+        // Birth-site tokens of one template are one receiver layout.
+        let mut seen_r: FxHashSet<String> = FxHashSet::default();
+        receivers.retain(|r| seen_r.insert(r.clone()));
+        if toks.is_empty() && prim == 0 {
             verdict.get_or_insert(Verdict::No("dead site (no receiver flows)".into()));
         }
-        if toks.is_empty() && node.prim != 0 {
+        if toks.is_empty() && prim != 0 {
             verdict.get_or_insert(Verdict::No("primitive receiver".into()));
         }
         let verdict = match verdict {
@@ -591,10 +637,10 @@ fn resolve_method(m: &Model, t: Tok, key: Atom) -> Option<(FnIdx, String)> {
             }
         }
         if !found.is_empty() {
-            if found.len() == 1 {
-                if let TokKind::Func(f) = m.toks[found[0] as usize] {
-                    return Some((f, m.funcs[f as usize].name.clone()));
-                }
+            // One function, whatever closure contexts its tokens carry.
+            let f = m.tok_fn(found[0]);
+            if f != NO_FN && found.iter().all(|&x| m.tok_fn(x) == f) {
+                return Some((f, m.funcs[f as usize].name.clone()));
             }
             return None;
         }

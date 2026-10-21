@@ -1,6 +1,18 @@
 //! Unit tests: small programs lowered from source, facts checked directly.
 
+mod native_proto;
+mod summary;
+mod closed_world;
+mod birth_site;
+mod captured;
+mod receiver_this;
+mod cjs_require;
+mod hub_tokens;
+mod protocol_calls;
+mod callback_origin;
 mod super_heritage;
+mod unit_mode;
+mod layout_key;
 
 use crate::{compute, FactsConfig, ProgramFacts, Verdict};
 
@@ -8,7 +20,10 @@ fn facts(src: &str) -> ProgramFacts {
     facts_with(src, FactsConfig::default())
 }
 
-fn facts_with(src: &str, cfg: FactsConfig) -> ProgramFacts {
+fn facts_with(src: &str, mut cfg: FactsConfig) -> ProgramFacts {
+    // Every test solve is bounded: a broken rule ends OVER (no facts, the
+    // test fails) instead of running away.
+    cfg.max_work.get_or_insert(50_000_000);
     let module = perry_parser::parse_typescript(src, "t.ts").expect("parses");
     let hir = perry_hir::lower_module(&module, "t", "t.ts").expect("lowers");
     compute(&[("t.ts".to_string(), &hir)], &cfg)
@@ -189,7 +204,6 @@ fn sabotage_plants_the_fact() {
             budget_secs: None,
             profile: false,
             max_pts: None,
-            widen_k: None,
             ..Default::default()
         },
     );
@@ -226,7 +240,6 @@ fn write_dump_for_checker() {
             budget_secs: None,
             profile: false,
             max_pts: None,
-            widen_k: None,
             ..Default::default()
         },
     );
@@ -338,7 +351,7 @@ fn top_call_connects_only_top_values() {
 /// (`cons`/`edge` apply each rule to what the node already holds), so a
 /// bound passed while the constraints are generated must stop the pass
 /// there. The Next.js server spent 12+ minutes and 50 GB in generation,
-/// with no bound (not even widening) in force yet.
+/// with no bound in force yet.
 #[test]
 fn bounds_hold_during_generation() {
     let mut src = String::new();
@@ -513,61 +526,6 @@ fn copy_solver_model() -> crate::model::Model {
 }
 
 #[test]
-fn widening_transfer_filters_noops_and_preserves_later_effects() {
-    use crate::model::{prim, BuiltinNs, TokKind, TOP};
-    let mut m = copy_solver_model();
-    assert_eq!(m.tok(TokKind::Top), TOP);
-    m.widen_k = 64;
-    let top = m.node_l("TOP");
-    m.top_tok_node = top;
-    m.add(top, &[TOP], prim::ALL);
-    let src = m.node_l("source");
-    let mut values: Vec<_> = (0..56).map(|i| m.tok(TokKind::ModNs(i))).collect();
-    values.extend([
-        m.tok(TokKind::Builtin(BuiltinNs::Object)),
-        m.tok(TokKind::BuiltinFn),
-        m.tok(TokKind::ObjectProto),
-        m.tok(TokKind::NativeProto("EventEmitter".into())),
-    ]);
-    let filler: Vec<_> = (1000..1065).map(|i| m.tok(TokKind::ModNs(i))).collect();
-    let reason = m.reason("test values already reached unknown code");
-    // The first source value still has a real escape effect. All other
-    // values either already escaped or belong to the runtime.
-    for &t in values.iter().skip(1).chain(&filler) {
-        m.escape(t, reason);
-    }
-    let mut uses = Vec::new();
-    for _ in 0..1000 {
-        let dst = m.node_l("use");
-        m.edge(src, dst);
-        // A different input widens each use before the source arrives.
-        m.add(dst, &filler, 0);
-        assert!(m.nodes[dst as usize].widened);
-        uses.push(dst);
-    }
-    m.add(src, &values, prim::NUM);
-    m.max_work = 30_000;
-    m.solve();
-    assert!(!m.aborted, "redundant widened copies used {} work", m.work);
-    assert!(m.is_escaped(values[0]));
-    for &dst in &uses {
-        assert!(m.nodes[dst as usize].pts.contains_tok(TOP));
-        assert_ne!(m.nodes[dst as usize].prim & prim::NUM, 0);
-    }
-    // Projected edges still carry later primitive kinds, and a newly
-    // seen value still escapes from the source.
-    m.add_prim(src, prim::STR);
-    let later = m.tok(TokKind::ModNs(2000));
-    m.add_tok(src, later);
-    m.solve();
-    assert!(!m.aborted);
-    assert!(m.is_escaped(later));
-    for &dst in &uses {
-        assert_ne!(m.nodes[dst as usize].prim & prim::STR, 0);
-    }
-}
-
-#[test]
 fn dense_prototype_copies_preserve_all_values_within_work_bound() {
     use crate::model::{Key, TokKind, TOP};
     // Abstract alternatives can form a cycle even though each concrete
@@ -575,7 +533,6 @@ fn dense_prototype_copies_preserve_all_values_within_work_bound() {
     for count in [40, 60] {
         let mut m = copy_solver_model();
         assert_eq!(m.tok(TokKind::Top), TOP);
-        m.widen_k = 64;
         m.max_work = 500_000;
         let root = m.tok(TokKind::ObjectProto);
         let holders: Vec<_> = (0..24).map(|i| m.tok(TokKind::ModNs(i))).collect();
@@ -687,108 +644,6 @@ fn set_snapshots_keep_sorted_members_across_copy_on_write_and_storage_growth() {
 }
 
 #[test]
-fn widened_sources_project_token_copies_but_keep_later_primitive_flow() {
-    use crate::model::{prim, TokKind, TOP};
-    let mut m = copy_solver_model();
-    assert_eq!(m.tok(TokKind::Top), TOP);
-    m.widen_k = 8;
-    let src = m.node_l("source");
-    let existing = m.node_l("existing destination");
-    let own = m.tok(TokKind::ModNs(1000));
-    m.add_tok(existing, own);
-    m.edge(src, existing);
-    let values: Vec<_> = (0..9).map(|i| m.tok(TokKind::ModNs(i))).collect();
-    m.add(src, &values, prim::NUM);
-    assert!(m.nodes[src as usize].widened);
-    m.solve();
-    assert_eq!(m.nodes[src as usize].prim, prim::NUM);
-    let mut destinations = vec![existing];
-    for _ in 0..1000 {
-        let dst = m.node_l("new destination");
-        m.edge(src, dst);
-        destinations.push(dst);
-    }
-    m.max_work = 512;
-    m.solve();
-    assert!(
-        !m.aborted,
-        "redundant widened-source copies used {} work",
-        m.work
-    );
-    for t in values {
-        assert!(m.is_escaped(t));
-    }
-    assert!(m.nodes[existing as usize].pts.contains_tok(own));
-    assert!(!m.is_escaped(own));
-    let later = m.tok(TokKind::ModNs(2000));
-    m.add(src, &[later], prim::STR);
-    m.solve();
-    assert!(!m.aborted);
-    assert!(m.is_escaped(later));
-    for dst in destinations {
-        let node = &m.nodes[dst as usize];
-        assert!(node.pts.contains_tok(TOP));
-        assert!(!node.pts.contains_tok(later));
-        assert_ne!(node.prim & prim::NUM, 0);
-        assert_ne!(node.prim & prim::STR, 0);
-    }
-}
-
-#[test]
-fn closed_widened_values_deliver_new_edges_and_rules_without_requeueing_them() {
-    use crate::model::{prim, Cons, TokKind, TOP};
-    let mut m = copy_solver_model();
-    assert_eq!(m.tok(TokKind::Top), TOP);
-    m.widen_k = 8;
-    let src = m.node_l("closed source");
-    let values: Vec<_> = (0..9).map(|i| m.tok(TokKind::ModNs(i))).collect();
-    let old_copy = m.node_l("earlier copy");
-    m.edge(src, old_copy);
-    let old_rule = m.node_l("earlier rule");
-    m.cons(
-        src,
-        Cons::Arith {
-            dst: old_rule,
-            add: true,
-        },
-    );
-    m.add(src, &values, prim::ALL);
-    let mut copies = vec![old_copy];
-    let mut arithmetic = vec![old_rule];
-    for _ in 0..1000 {
-        let dst = m.node_l("literal destination");
-        m.edge(src, dst);
-        copies.push(dst);
-        let dst = m.node_l("arithmetic result");
-        m.cons(src, Cons::Arith { dst, add: true });
-        arithmetic.push(dst);
-    }
-    m.max_work = 512;
-    m.solve();
-    assert!(
-        !m.aborted,
-        "closed-value subscriptions used {} work",
-        m.work
-    );
-    let later = m.tok(TokKind::ModNs(2000));
-    m.add_tok(src, later);
-    m.solve();
-    assert!(m.is_escaped(later));
-    for dst in copies {
-        let n = &m.nodes[dst as usize];
-        assert!(n.pts.contains_tok(TOP));
-        assert!(!n.pts.contains_tok(later));
-        assert_eq!(n.prim, prim::ALL);
-    }
-    for dst in arithmetic {
-        assert_eq!(
-            m.nodes[dst as usize].prim,
-            prim::NUM | prim::BIGINT | prim::STR
-        );
-    }
-}
-
-#[test]
 fn singleton_inclusion_keeps_concrete_destination_values_and_later_updates() {
     use crate::model::{prim, TokKind, TOP};
     let mut m = copy_solver_model();
@@ -836,6 +691,8 @@ fn observed_bases_avoid_recopying_pending_prefixes_and_keep_independent_members(
         }
         let later = m.tok(TokKind::ModNs(40));
         m.add(src, &[later], prim::STR);
+        // The bound measures the solve's deliveries, not setup.
+        m.work = 0;
         m.max_work = 6000;
         m.solve();
         assert!(
@@ -864,19 +721,19 @@ fn observed_relay_bases_share_new_batches_without_enumerating_each_transfer() {
     let mut m = copy_solver_model();
     assert_eq!(m.tok(TokKind::Top), TOP);
     let src = m.node_l("source relay");
-    m.nodes[src as usize].internal = true;
     let first: Vec<_> = (0..40).map(|i| m.tok(TokKind::ModNs(i))).collect();
     m.add(src, &first, 0);
     let mut destinations = Vec::new();
     for _ in 0..1000 {
         let dst = m.node_l("destination relay");
-        m.nodes[dst as usize].internal = true;
         m.edge(src, dst);
         destinations.push(dst);
     }
     m.cons(destinations[0], Cons::ThisTo { origin: TOP });
     let next: Vec<_> = (40..80).map(|i| m.tok(TokKind::ModNs(i))).collect();
     m.add(src, &next, 0);
+    // The bound measures the solve's deliveries, not setup.
+    m.work = 0;
     m.max_work = 5000;
     m.solve();
     assert!(!m.aborted, "batch sharing used {} work", m.work);
@@ -934,6 +791,8 @@ fn small_observed_sets_preserve_superset_members_without_recopying_values() {
         destinations.push(dst);
         extras.push(extra);
     }
+    // The bound measures the solve's deliveries, not setup.
+    m.work = 0;
     m.max_work = 1500;
     m.solve();
     assert!(!m.aborted, "small supersets used {} work", m.work);
@@ -972,6 +831,8 @@ fn equal_snapshot_groups_keep_old_owners_covered_after_coalescing() {
     m.edge(src, second[0]);
     let added = m.tok(TokKind::ModNs(40));
     m.add_tok(src, added);
+    // The bound measures the solve's deliveries, not setup.
+    m.work = 0;
     m.max_work = 5000;
     m.solve();
     assert!(!m.aborted, "coalesced snapshots used {} work", m.work);
@@ -989,13 +850,11 @@ fn delivered_cardinality_proves_batch_adoption_with_independent_storage() {
     use crate::model::TokKind;
     let mut m = copy_solver_model();
     let src = m.node_l("source relay");
-    m.nodes[src as usize].internal = true;
     let first: Vec<_> = (0..40).map(|i| m.tok(TokKind::ModNs(i))).collect();
     m.add(src, &first, 0);
     let mut destinations = Vec::new();
     for _ in 0..1000 {
         let dst = m.node_l("destination relay");
-        m.nodes[dst as usize].internal = true;
         m.edge(src, dst);
         destinations.push(dst);
     }
@@ -1046,6 +905,8 @@ fn new_subscribers_receive_current_values_once_and_then_later_deliveries() {
                 destinations.push(dst);
             }
         }
+        // The bound measures the solve's deliveries, not setup.
+        m.work = 0;
         m.max_work = group as u64 * 9;
         m.solve();
         assert!(!m.aborted, "late subscribers used {} work", m.work);
@@ -1124,19 +985,13 @@ fn cjs_dynamic_lookup_keeps_all_publications() {
 }
 
 #[test]
-fn cjs_registry_summary_is_not_a_value_that_widens_every_module() {
+fn cjs_registry_summary_does_not_reach_every_module() {
     let mut source = String::new();
     for i in 0..20 {
         source.push_str(&format!("class C{i} {{ x = {i}; }} __perry_register_path_module(\"/cjsr-{i}.js\", new C{i}());\n"));
     }
     source.push_str("console.log(__perry_require_path_module(\"/cjsr-0.js\").x);");
-    let pf = facts_with(
-        &source,
-        FactsConfig {
-            widen_k: Some(8),
-            ..Default::default()
-        },
-    );
+    let pf = facts(&source);
     for i in 0..20 {
         assert!(
             tmpl(&pf, &format!("C{i}")).prefix_stable,

@@ -107,6 +107,12 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
         "# stats modules={} templates={} fact_units={} nodes={} constraints={} tokens={} functions={} gen_ms={:.1} solve_ms={:.1} derive_ms={:.1} pops={} work={} aborted={}\n",
         s.modules, s.templates, s.fact_units, s.nodes, s.constraints, s.tokens, s.functions, s.gen_ms, s.solve_ms, s.derive_ms, s.pops, s.work, s.aborted
     ));
+    for (path, u) in &pf.units {
+        out.push_str(&format!(
+            "# unit {path} nodes={} constraints={} tokens={} pts_entries={} instances={} gen_ms={:.1} solve_ms={:.1} derive_ms={:.1} pops={} work={} aborted={}\n",
+            u.nodes, u.constraints, u.tokens, u.pts_entries, u.instances, u.gen_ms, u.solve_ms, u.derive_ms, u.pops, u.work, u.aborted
+        ));
+    }
     out.push_str(&format!(
         "# interp_guard {}\n",
         pf.interp_guard.clone().unwrap_or_else(|| "none".into())
@@ -116,8 +122,8 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
         out.push_str(&format!("# profile {k} {n} {ms:.1}\n"));
     }
     out.push_str(&format!(
-        "# pts_entries {} widened_nodes {}\n",
-        s.pts_entries, s.widened_nodes
+        "# pts_entries {}\n",
+        s.pts_entries
     ));
     for (l, n, mix) in &s.big_nodes {
         out.push_str(&format!("# bignode {l} {n} {mix}\n"));
