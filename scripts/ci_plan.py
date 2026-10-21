@@ -80,6 +80,7 @@ JOBS: dict[str, tuple[str, ...]] = {
     "cargo_test": ("pr", "sweep", "full"),
     "cargo_test_perry": ("full",),
     "gap_suite": ("pr", "sweep", "full"),
+    "wasi_execution": ("pr", "sweep", "full"),
     # The GC call-effects sidecars of freshly built runtime archives, the
     # analyzer's rule checks and the pinned facts (scripts/gc_call_effects):
     # Linux reuses gap-suite-build's archives; macOS aarch64 and Windows
@@ -425,6 +426,8 @@ def _self_test() -> int:
     core = plan("pull_request", "refs/pull/1/merge", changed=["crates/perry-runtime/src/gc/mod.rs"])
     check("core PR: gap suite on", core["jobs"]["gap_suite"])
     check("core PR: gc-stress on", core["jobs"]["gc_stress"])
+    check("core PR: WASI execution on without extended label", core["jobs"]["wasi_execution"])
+    check("docs-only PR: WASI execution off", not docs["jobs"]["wasi_execution"])
     check("core PR: gc-stress is one PR-subset shard", core["gc_stress"] == {"mode": "pr", "total": 1, "shards": [1]})
     check("core PR: e2e-scoped on", core["jobs"]["e2e_scoped"])
     check("core PR: gc call-effects sidecar check on", core["jobs"]["gc_call_effects"])
@@ -438,9 +441,11 @@ def _self_test() -> int:
     deps = plan("pull_request", "refs/pull/1/merge", changed=["Cargo.lock"])
     check("deps PR: security-audit on", deps["jobs"]["security_audit"])
     check("deps PR: core (lockfile changes the build)", deps["jobs"]["cargo_test"])
+    check("deps PR: WASI execution on", deps["jobs"]["wasi_execution"])
 
     empty = plan("pull_request", "refs/pull/1/merge", changed=[])
     check("empty listing is treated as core", empty["jobs"]["gap_suite"] and empty["scope"]["unknown"])
+    check("unknown diff cannot skip WASI execution", empty["jobs"]["wasi_execution"])
 
     # The gate's own wiring and the shared actions are core even though the
     # rest of .github/ is not.

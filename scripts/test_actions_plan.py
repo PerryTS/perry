@@ -144,6 +144,46 @@ class CategoryRoutingTests(unittest.TestCase):
         }.items():
             self.assertEqual(jobs[module]["name"], display_name)
 
+    def test_required_wasi_job_executes_all_command_suites(self):
+        from pathlib import Path
+        import yaml
+        workflow = yaml.load(Path(".github/workflows/test.yml").read_text(), Loader=yaml.BaseLoader)
+        jobs = workflow["jobs"]
+        job = jobs["wasi-execution"]
+        self.assertIn("wasi-execution", jobs["gate"]["needs"])
+        self.assertEqual(job["needs"], "plan")
+        self.assertEqual(job["if"], "needs.plan.result == 'success' && fromJSON(needs.plan.outputs.plan).jobs.wasi_execution")
+        self.assertNotIn("continue-on-error", job)
+        for step in job["steps"]:
+            self.assertNotIn("continue-on-error", step)
+        commands = "\n".join(step.get("run", "") for step in job["steps"])
+        for suite in ["smoke", "acceptance", "gap"]:
+            self.assertIn("--suite " + suite, commands)
+        self.assertIn("wasi_build_runtime.py", commands)
+        self.assertIn("--features target-wasi", commands)
+        self.assertTrue(any(step.get("with", {}).get("node-version-file") == ".node-version" for step in job["steps"]))
+
+    def test_actual_pr_gate_rejects_skipped_or_missing_planned_wasi(self):
+        import os
+        from pathlib import Path
+        import subprocess
+        import yaml
+        workflow = yaml.load(Path(".github/workflows/test.yml").read_text(), Loader=yaml.BaseLoader)
+        command = workflow["jobs"]["gate"]["steps"][0]["run"]
+        for planned in [True, False]:
+            for outcome in ["success", "failure", "cancelled", "skipped", None]:
+                with self.subTest(planned=planned, outcome=outcome):
+                    needs = {
+                        "route": {"result": "success"},
+                        "plan": {"result": "success", "outputs": {"plan": json.dumps({"jobs": {"wasi_execution": planned}})}}
+                    }
+                    if outcome is not None:
+                        needs["wasi-execution"] = {"result": outcome}
+                    result = subprocess.run(["bash", "-c", command], capture_output=True, text=True,
+                        env=dict(os.environ, NEEDS=json.dumps(needs), TIER="pr"))
+                    passes = outcome == "success" or (not planned and outcome in ["skipped", None])
+                    self.assertEqual(result.returncode == 0, passes, result.stdout + result.stderr)
+
     def test_auxiliary_ci_dispatch_does_not_run_core(self):
         result = select("ci", "workflow_dispatch", {"inputs":{"tier":"full"}}, suite="coverage", catalog=CATALOG)
         self.assertEqual(result["run_core"], "false")

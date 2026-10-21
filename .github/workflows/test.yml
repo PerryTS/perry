@@ -5233,6 +5233,84 @@ jobs:
   # introduce a new advisory, and the weekly schedule in that workflow catches
   # advisory-database updates on their own. Sweep and full tiers always run it.
   # ---------------------------------------------------------------------------
+  # Linux command profile has a demonstrated green baseline (run39574495557).
+  wasi-execution:
+    name: wasi-execution
+    permissions:
+      contents: read
+    needs: plan
+    if: needs.plan.result == 'success' && fromJSON(needs.plan.outputs.plan).jobs.wasi_execution
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      CARGO_BUILD_JOBS: '2'
+      CARGO_INCREMENTAL: '0'
+    steps:
+    - name: Checkout repository (inline git)
+      shell: bash
+      env:
+        CHECKOUT_REF: ${{ github.sha }}
+        CHECKOUT_DEPTH: '1'
+        CHECKOUT_TOKEN: ${{ github.token }}
+        CHECKOUT_PERSIST_CREDENTIALS: 'false'
+      run: |
+        set -euo pipefail
+        git init
+        git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+        auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+        if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+          git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+          git checkout --force --detach "$CHECKOUT_REF"
+        else
+          git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+          git checkout --force --detach FETCH_HEAD
+        fi
+        if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+          git config http.https://github.com/.extraheader "$auth_header"
+        fi
+    - name: Install Rust toolchain with the WASI target
+      run: rustup toolchain install nightly-2026-10-04 --profile minimal --target wasm32-wasip2
+    - uses: ./.github/actions/setup-llvm22
+    - uses: ./.github/actions/perry/Swatinem/rust-cache
+      with:
+        shared-key: Linux-wasi-codegen
+        save-if: ${{ github.ref == 'refs/heads/main' }}
+    - name: Install pinned Node oracle for WASI compatibility tests
+      uses: ./.github/actions/perry/actions/setup-node
+      with:
+        node-version-file: .node-version
+    - name: Build perry with the WASI target
+      run: cargo build --locked --profile perry-dev -p perry --features target-wasi
+    - name: wasm32 IR matches the runtime ABI
+      run: ./scripts/wasi_ir_check.sh target/perry-dev/perry
+    - name: Install the WASI toolchain
+      shell: bash
+      run: |
+        toolchain_env="$(./scripts/wasi_toolchain.sh "$RUNNER_TEMP/wasi")"
+        eval "$toolchain_env"
+        for key in WASI_SDK_PATH WASMTIME CC_wasm32_wasip2 AR_wasm32_wasip2 CFLAGS_wasm32_wasip2 CC_SHELL_ESCAPED_FLAGS; do
+          printf '%s=%s\n' "$key" "${!key}" >> "$GITHUB_ENV"
+        done
+    - name: Build the runtime for wasm32-wasip2
+      run: python scripts/wasi_build_runtime.py
+    - name: WASI smoke and complete issue 11375 acceptance
+      shell: bash
+      run: |
+        compiler=target/perry-dev/perry
+        python scripts/wasi_run.py "$compiler" --suite smoke --output target/wasi-validation/smoke --keep-intermediates
+        python scripts/wasi_run.py "$compiler" --suite acceptance --output target/wasi-validation/acceptance --keep-intermediates
+    - name: All WASI gap probes match the pinned Node oracle
+      shell: bash
+      run: |
+        compiler=target/perry-dev/perry
+        python scripts/wasi_run.py "$compiler" --suite gap --output target/wasi-validation/gap --keep-intermediates
+    - name: Retain WASI execution evidence
+      uses: ./.github/actions/perry/actions/upload-artifact
+      with:
+        name: wasi-required-${{ github.sha }}
+        retention-days: '7'
+        path: target/wasi-validation/
+      if: always()
   gate:
     name: ${{ github.event_name == 'pull_request' && 'pr-gate' || (needs.plan.outputs.tier == 'full' && 'full-suite-gate' || 'main-gate') }}
     if: always() && (github.event_name == 'pull_request' || needs.route.outputs.run_core == 'true')
@@ -5264,6 +5342,7 @@ jobs:
       - doc-tests
       - binary-size
       - security-audit
+      - wasi-execution
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -5283,6 +5362,12 @@ jobs:
           fi
           if [ "$plan_result" != "success" ]; then
             echo "::error::the plan job did not succeed ($plan_result); nothing below it ran, so this is a red run, not a green one."
+            exit 1
+          fi
+          wasi_planned="$(echo "$NEEDS" | jq -r '.plan.outputs.plan | fromjson | .jobs.wasi_execution')"
+          wasi_result="$(echo "$NEEDS" | jq -r '.["wasi-execution"].result')"
+          if [ "$wasi_planned" = "true" ] && [ "$wasi_result" != "success" ]; then
+            echo "::error::planned WASI execution did not pass ($wasi_result)."
             exit 1
           fi
           bad="$(echo "$NEEDS" | jq -r 'to_entries[] | select(.value.result == "failure" or .value.result == "cancelled") | .key')"

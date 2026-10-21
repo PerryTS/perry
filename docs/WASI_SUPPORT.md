@@ -149,8 +149,14 @@ objects, JSON, regexp and async behavior.
 
 The WASI codegen CI job is configured to run the complete acceptance, smoke and ten-case gap
 suites on Windows, Linux and macOS. Linux and macOS pass; Windows has the
-linker failure described above. It retains the existing compatibility routing and
-`run-extended-tests` PR-label condition; it is not a required check on every PR.
+linker failure described above, repaired by [PR #12954](https://github.com/PerryTS/perry/pull/12954)
+with fresh Windows qualification pending. The full platform matrix retains its
+extended-suite routing. A separate Linux `wasi-execution` job runs the complete
+command smoke, acceptance and pinned-Node comparison suites for core PRs and
+in the sweep/full tiers. It builds the compiler and WASI runtime from the same
+revision and feeds the required `pr-gate`; a planned job that is skipped,
+missing, cancelled or failed makes that gate fail. Docs-only PRs skip execution.
+This promotion uses the demonstrated Linux baseline in run39574495557.
 The baseline repair landed in [PR #12931](https://github.com/PerryTS/perry/pull/12931);
 the initial measurements above came from local/validation hosts, with the
 subsequent per-platform CI results linked separately.

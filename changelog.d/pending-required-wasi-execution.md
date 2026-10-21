@@ -1,0 +1,3 @@
+Promote the qualified Linux WASI command profile into the required PR gate. Core PRs and the sweep/full tiers now rebuild the compiler and wasm32-wasip2 runtime from the same revision, check IR/runtime ABI agreement, and execute all smoke, acceptance and pinned-Node comparison cases. Docs-only PRs skip the build; the full platform/component matrix retains extended routing.
+
+The gate explicitly rejects a missing or skipped planned WASI execution job, in addition to failure and cancellation. Tests execute the actual gate script across success/failure/cancellation/skip/missing outcomes. Promotion follows the passing Linux run39574495557 rather than making an unproven suite required.
