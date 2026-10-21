@@ -46,7 +46,7 @@ pub(crate) fn emit(
     module.declare_function(
         "js_closure_entry_bundle",
         crate::types::VOID,
-        &[PTR, PTR, count_ty, I32, I32, PTR, PTR],
+        &[PTR, PTR, I64, I32, I32, PTR, PTR],
     );
     let function = module.define_function(
         &name,
@@ -121,12 +121,20 @@ pub(crate) fn emit(
         let first = function.alloca_entry(DOUBLE);
         let second = function.alloca_entry(DOUBLE);
         let block = function.block_mut(0).unwrap();
+        // Runtime declarations keep the codegen's native i64 count ABI.
+        // The WASI adapter narrows it to Rust's target usize; this entry's
+        // own pointer/count ABI already uses the target width.
+        let bundle_count = if count_ty == I32 {
+            block.zext(I32, "%entry_count", I64)
+        } else {
+            "%entry_count".to_string()
+        };
         block.call_void(
             "js_closure_entry_bundle",
             &[
                 (PTR, "%entry_callee"),
                 (PTR, "%entry_args"),
-                (count_ty, "%entry_count"),
+                (I64, &bundle_count),
                 (I32, &fixed.to_string()),
                 (I32, &facts.flags.to_string()),
                 (PTR, &first),
@@ -205,6 +213,20 @@ mod tests {
         assert!(ir.contains("ptr @method__eclo$call_entry"), "{ir}");
         assert!(
             ir.contains("define internal double @method__eclo$call_entry(ptr %entry_callee"),
+            "{ir}"
+        );
+    }
+    #[test]
+    fn a_wasm_entry_normalizes_its_count_for_the_runtime_adapter() {
+        let mut module = LlModule::new("wasm32-unknown-wasi");
+        let mut facts = FnInfoFacts::default();
+        facts.set_rest(0, crate::fn_info::RestKind::User);
+        emit(&mut module, "operation", 1, &facts);
+        let ir = module.to_ir();
+        assert!(ir.contains("i32 %entry_count)"), "{ir}");
+        assert!(ir.contains("zext i32 %entry_count to i64"), "{ir}");
+        assert!(
+            ir.contains("@js_closure_entry_bundle(ptr, ptr, i64, i32, i32, ptr, ptr)"),
             "{ir}"
         );
     }

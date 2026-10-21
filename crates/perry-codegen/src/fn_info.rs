@@ -102,6 +102,7 @@ pub(crate) struct FnInfoFacts {
     pub fixed_generator_state: bool,
     /// The one generic entry for this body's fixed-signature operation.
     pub call_entry: Option<String>,
+    pub call_entry_offset_words: u8,
 }
 
 /// The rest kind of a body with a rest / `arguments` array.
@@ -113,6 +114,31 @@ pub(crate) enum RestKind {
 }
 
 impl FnInfoFacts {
+    /// A direct, immutable layout operand rather than a tail-format walk.
+    pub(crate) fn set_call_entry(&mut self, entry: String, ilp32: bool) {
+        // The wasm32 C layout aligns the final i64 mask to eight bytes.
+        let mut offset = if ilp32 {
+            56
+        } else {
+            crate::runtime_abi::JS_FUNCTION_INFO_SIZE
+        };
+        if self.source.is_some() && self.versioned.is_some() {
+            offset += 8;
+        }
+        if self.name.is_some() {
+            offset += 8;
+        }
+        if self.constructor_layout.is_some() {
+            offset += if ilp32 { 16 } else { 24 };
+        }
+        assert!(
+            offset % 8 == 0 && offset / 8 < 16,
+            "call entry layout fits its nibble"
+        );
+        self.call_entry_offset_words = (offset / 8) as u8;
+        self.call_entry = Some(entry);
+    }
+
     /// A body whose array parameter bundles every argument from `fixed` on.
     pub(crate) fn set_rest(&mut self, fixed: usize, kind: RestKind) {
         let bit = match kind {
@@ -317,11 +343,7 @@ fn render_definition(
             }
     });
     let flags = facts.flags
-        | if facts.call_entry.is_some() {
-            crate::runtime_abi::FN_HAS_CALL_ENTRY
-        } else {
-            0
-        }
+        | (u32::from(facts.call_entry_offset_words) << crate::runtime_abi::FN_CALL_ENTRY_SHIFT)
         | FN_COMPILED_BODY
         | source_flags
         | if facts.constructor_layout.is_some() {
@@ -439,6 +461,38 @@ fn render_definition(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn call_entry_offset_describes_native_and_wasm_optional_tails() {
+        let mut facts = FnInfoFacts::default();
+        facts.set_call_entry("entry".into(), false);
+        assert_eq!(facts.call_entry_offset_words, 8);
+        facts.source = Some(RetainedSource {
+            global: "source".into(),
+            offset: 0,
+            byte_len: 1,
+            is_non_strict_ordinary: false,
+        });
+        facts.versioned = Some(CloneTarget {
+            symbol: "clone".into(),
+            captures: 0,
+            boxed_mask: 0,
+        });
+        facts.name = Some(RetainedName {
+            global: "name".into(),
+            byte_len: 1,
+            image: false,
+        });
+        facts.constructor_layout = Some(ConstructorLayout {
+            descriptor: "descriptor".into(),
+            operands: "operands".into(),
+            symbols: 0,
+        });
+        facts.set_call_entry("entry".into(), false);
+        assert_eq!(facts.call_entry_offset_words, 13);
+        facts.set_call_entry("entry".into(), true);
+        assert_eq!(facts.call_entry_offset_words, 11);
+    }
 
     fn defined(params: usize, linkage: &str) -> Option<DefinedBody> {
         Some(DefinedBody {

@@ -646,10 +646,10 @@ pub const FN_HAS_NAME: u32 = 1 << 21;
 pub const FN_NAME_IMAGE: u32 = 1 << 22;
 /// An immutable constructor-layout record follows source/name tails.
 pub const FN_HAS_CONSTRUCTOR_LAYOUT: u32 = 1 << 23;
-/// A compiler-emitted argument-vector entry follows the existing optional tails.
-/// `code` remains the fixed-signature operation; the entry pads missing values
-/// and constructs rest/arguments in the callee.
-pub const FN_HAS_CALL_ENTRY: u32 = 1 << 24;
+/// The top nibble holds the generic-entry word's offset in eight-byte units.
+/// Zero means absent. The record describes its own layout: admission and the
+/// entry load need no source/name/constructor-tail decoding.
+pub const FN_CALL_ENTRY_SHIFT: u32 = 28;
 
 /// Byte offsets of the fields codegen emits and emitted code reads.
 pub const JS_FUNCTION_INFO_CODE_OFFSET: usize = 0;
@@ -669,19 +669,15 @@ impl JsFunctionInfo {
     /// retain their established offsets; the entry is the final optional word.
     #[inline(always)]
     pub fn call_entry(&self) -> Option<*const u8> {
-        if self.flags & FN_HAS_CALL_ENTRY == 0 {
+        let words = self.flags >> FN_CALL_ENTRY_SHIFT;
+        if words == 0 {
             return None;
         }
-        let source =
-            usize::from(self.flags & FN_HAS_SOURCE != 0 && !self.versioned_code.is_null()) * 8;
-        let name = usize::from(self.flags & FN_HAS_NAME != 0) * 8;
-        let constructor = usize::from(self.flags & FN_HAS_CONSTRUCTOR_LAYOUT != 0)
-            * (2 * core::mem::size_of::<*const u8>() + 8);
-        // SAFETY: FN_HAS_CALL_ENTRY is emitted only with this immutable tail.
+        // SAFETY: codegen publishes this offset with the immutable entry word.
         Some(unsafe {
             (self as *const Self)
                 .cast::<u8>()
-                .add(core::mem::size_of::<Self>() + source + name + constructor)
+                .add(words as usize * 8)
                 .cast::<*const u8>()
                 .read()
         })
@@ -1037,7 +1033,9 @@ mod call_entry_layout_tests {
         let info = JsFunctionInfo::of(operation as JsBody0<()>);
         assert!(info.call_entry().is_none());
         let plain = EntryOnly {
-            info: info.with_flags(FN_HAS_CALL_ENTRY),
+            info: info.with_flags(
+                ((core::mem::offset_of!(EntryOnly, entry) / 8) as u32) << FN_CALL_ENTRY_SHIFT,
+            ),
             entry,
         };
         assert_eq!(plain.info.call_entry(), Some(entry as *const u8));
@@ -1046,7 +1044,11 @@ mod call_entry_layout_tests {
         let with_tails = EntryWithTails {
             info: info
                 .with_flags(
-                    FN_HAS_CALL_ENTRY | FN_HAS_SOURCE | FN_HAS_NAME | FN_HAS_CONSTRUCTOR_LAYOUT,
+                    (((core::mem::offset_of!(EntryWithTails, entry) / 8) as u32)
+                        << FN_CALL_ENTRY_SHIFT)
+                        | FN_HAS_SOURCE
+                        | FN_HAS_NAME
+                        | FN_HAS_CONSTRUCTOR_LAYOUT,
                 )
                 .with_versioned_loop(operation as *const u8, 0, 0),
             source: [0; 2],

@@ -266,9 +266,9 @@ closure_call_entry!(
 );
 
 /// The caller already validated the function object and holds its immutable
-/// body record. Dispatch from that record once, directly over the supplied
-/// values: the declared-signature ladder pads only the slots the body reads.
-/// No fixed-width scratch array or second closure validation is needed.
+/// body record. Compiled functions enter directly from that record, using
+/// caller-owned cells for the supplied values. Legacy/runtime functions keep
+/// their declared-signature dispatcher; no second validation is needed.
 ///
 /// # Safety
 /// `closure` is a live closure of `info`; `args` holds live JS values.
@@ -503,7 +503,10 @@ mod call_entry_tests {
         info: crate::closure::JsFunctionInfo::of(
             operation as crate::codegen_abi::JsBody2<ClosureHeader>,
         )
-        .with_flags(crate::codegen_abi::FN_HAS_CALL_ENTRY),
+        .with_flags(
+            ((std::mem::offset_of!(WithEntry, entry) / 8) as u32)
+                << crate::codegen_abi::FN_CALL_ENTRY_SHIFT,
+        ),
         entry,
     };
 

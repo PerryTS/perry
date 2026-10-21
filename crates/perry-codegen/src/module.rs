@@ -517,7 +517,8 @@ impl LlModule {
             let params = function.params.len() - 2;
             let facts = self.fn_infos.borrow().facts(&body);
             let entry = crate::call_entry::emit(self, &body, params, &facts);
-            self.note_fn_info(&body, |facts| facts.call_entry = Some(entry));
+            let ilp32 = crate::target_layout::target_is_ilp32(&self.target_triple);
+            self.note_fn_info(&body, |facts| facts.set_call_entry(entry, ilp32));
         }
         let lines = {
             let functions = &self.functions;
