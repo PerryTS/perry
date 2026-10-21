@@ -1360,6 +1360,7 @@ pub(super) fn emit_namespace_populator(
     key_globals: &[(String, usize)],
     module_prefix: &str,
     output_type: &str,
+    adopt_cjs_exports: bool,
 ) {
     debug_assert_eq!(entries.len(), key_globals.len());
     // Issue #842: side-effect-only dynamic-import targets land here
@@ -1378,6 +1379,7 @@ pub(super) fn emit_namespace_populator(
         module_prefix,
         output_type,
         ctx.target_triple,
+        adopt_cjs_exports,
     )
     .is_some();
 
@@ -1548,6 +1550,13 @@ pub(super) fn emit_namespace_populator(
         None
     };
     let blk = ctx.block();
+    // A CommonJS namespace that adopts run-time `module.exports` keys has no
+    // fixed key set, so it is never born on a layout (`namespace_layout`).
+    let create = if adopt_cjs_exports {
+        "js_create_cjs_namespace"
+    } else {
+        "js_create_namespace"
+    };
     let result = if let Some(tag) = tag {
         // The interned tag string: no call runs between this load and the
         // birth that reads it.
@@ -1566,7 +1575,7 @@ pub(super) fn emit_namespace_populator(
     } else {
         blk.call(
             DOUBLE,
-            "js_create_namespace",
+            create,
             &[
                 (I32, &n_str),
                 (PTR, &keys_buf),

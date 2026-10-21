@@ -547,6 +547,23 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // `import_function_prefixes` for namespaces with no
                 // overlapping conflicts (e.g. plain `import * as X`, which
                 // this branch also serves).
+                if let Some(exports) = crate::expr::property_get::cjs_interop_exports_receiver(
+                    ctx,
+                    class_name,
+                    method_name,
+                ) {
+                    let offset = ctx.strings.pending_call_offset();
+                    return crate::lower_call::lower_split_method_call(
+                        ctx,
+                        &exports,
+                        method_name,
+                        args,
+                        offset,
+                        &[],
+                        None,
+                        None,
+                    );
+                }
                 let source_prefix_opt = ctx
                     .namespace_member_prefixes
                     .get(&(class_name.to_string(), method_name.to_string()))

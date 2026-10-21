@@ -556,6 +556,14 @@ fn compute_object_cache_key_with_env(
             "0"
         },
     );
+    h.field(
+        "cjs_ns",
+        if opts.namespace_adopts_cjs_exports {
+            "1"
+        } else {
+            "0"
+        },
+    );
     {
         let mut v: Vec<&String> = opts.js_module_specifiers.iter().collect();
         v.sort();

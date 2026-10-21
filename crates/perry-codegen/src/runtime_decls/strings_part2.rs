@@ -1027,7 +1027,13 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function("js_create_namespace", DOUBLE, &[I32, PTR, PTR, PTR, PTR]);
     // A namespace born on its compiler-owned layout (`layout_desc::namespace_layout`).
     module.declare_function("js_create_namespace_layout", DOUBLE, &[PTR, PTR]);
+    module.declare_function(
+        "js_create_cjs_namespace",
+        DOUBLE,
+        &[I32, PTR, PTR, PTR, PTR],
+    );
     module.declare_function("js_finalize_namespace", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_namespace_adopt_cjs_exports", DOUBLE, &[DOUBLE]);
     module.declare_function("js_promise_then", I64, &[I64, I64, I64]);
     module.declare_function("js_promise_resolved_then", I64, &[DOUBLE, I64, I64]);
     module.declare_function("js_promise_finally", I64, &[I64, I64]);

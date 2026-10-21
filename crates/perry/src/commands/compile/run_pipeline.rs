@@ -3099,6 +3099,10 @@ pub fn run_with_parse_cache(
     // Per-module precomputed namespace_entries (keyed by path).
     let mut per_module_namespace_entries: HashMap<PathBuf, Vec<perry_codegen::NamespaceEntry>> =
         HashMap::new();
+    // CommonJS (and JSON) namespaces that also take the evaluated
+    // `module.exports` keys at run time: Bun's interop exposes them all, and
+    // the static lexer only sees the literal shapes.
+    let mut cjs_namespace_paths: HashSet<PathBuf> = HashSet::new();
     for target_path in &dyn_target_paths {
         let target_hir = match ctx.native_modules.get(target_path) {
             Some(m) => m,
@@ -3259,6 +3263,9 @@ pub fn run_with_parse_cache(
         // A JSON module is `module.exports` too: `require("./x.json")` is the
         // parsed value.
         if is_wrapped_cjs(target_hir) || target_path.extension().is_some_and(|ext| ext == "json") {
+            if ctx.bun_platform {
+                cjs_namespace_paths.insert(target_path.clone());
+            }
             // Node's CJS namespace has two aliases for the exact evaluated
             // `module.exports` object. Do not clone/project it: identity with
             // require(), the default import, and shared nested values matters.
@@ -4004,6 +4011,7 @@ pub fn run_with_parse_cache(
         // module. They resolve to `@__perry_ns_<target>` rather than to a
         // `perry_fn_<mod>__<name>` symbol, because no such symbol exists —
         // the member is a whole module, not a binding in one.
+        let mut cjs_interop_namespaces: HashSet<String> = HashSet::new();
         let mut namespace_member_nested: std::collections::HashSet<(String, String)> =
             std::collections::HashSet::new();
         let mut imported_classes: Vec<perry_codegen::ImportedClass> = Vec::new();
@@ -4528,6 +4536,9 @@ pub fn run_with_parse_cache(
                         }
                     }
                     if source_module.is_some_and(|module| is_wrapped_cjs(module)) {
+                        if ctx.bun_platform {
+                            cjs_interop_namespaces.insert(local.clone());
+                        }
                         let default_prefix =
                             compute_module_prefix(&resolved_path_str, &ctx.project_root);
                         let default_is_var = all_module_exports
@@ -5979,6 +5990,7 @@ pub fn run_with_parse_cache(
             disable_buffer_fast_path,
             namespace_imports,
             namespace_member_nested: namespace_member_nested.into_iter().collect(),
+            cjs_interop_namespaces: cjs_interop_namespaces.into_iter().collect(),
             imported_classes,
             constructor_param_counts: Default::default(),
             // Filled per module after the static-shape pre-pass.
@@ -6057,6 +6069,7 @@ pub fn run_with_parse_cache(
             // alone is insufficient because it's empty when the
             // target has no `export` statements.
             is_dynamic_import_target: dyn_target_paths.contains(path),
+            namespace_adopts_cjs_exports: cjs_namespace_paths.contains(path),
             // #5247: source-location tracking for the dynamic call-dispatch
             // throw path. Gated by `--debug-symbols` so the default build is
             // unchanged (no source read, no per-call emission). When on, read

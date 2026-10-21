@@ -845,6 +845,7 @@ pub(super) fn compile_module_entry(
             namespace_imports: &cross_module.namespace_imports,
             namespace_member_prefixes: &cross_module.namespace_member_prefixes,
             namespace_member_nested: &cross_module.namespace_member_nested,
+            cjs_interop_namespaces: &cross_module.cjs_interop_namespaces,
             namespace_member_origin_names: &cross_module.namespace_member_origin_names,
             imported_async_funcs: &cross_module.imported_async_funcs,
             local_async_funcs: &cross_module.local_async_funcs,
@@ -1136,6 +1137,7 @@ pub(super) fn compile_module_entry(
                     namespace_key_globals,
                     module_prefix,
                     output_type,
+                    cross_module.namespace_adopts_cjs_exports,
                 );
             }
         }

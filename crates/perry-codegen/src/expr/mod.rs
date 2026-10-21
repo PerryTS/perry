@@ -881,6 +881,8 @@ pub(crate) struct FnCtx<'a> {
     /// module's namespace object rather than a binding. See the doc on
     /// `CompileOptions::namespace_member_nested`.
     pub namespace_member_nested: &'a std::collections::HashSet<(String, String)>,
+    /// `CompileOptions::cjs_interop_namespaces`.
+    pub cjs_interop_namespaces: &'a std::collections::HashSet<String>,
     /// Issue #5924: per-namespace origin-name resolution. Keyed by
     /// `(namespace_local_name, member_name)` → `origin_name`. Consulted
     /// before `import_function_origin_names` when computing the symbol

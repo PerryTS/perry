@@ -948,6 +948,7 @@ js_container_start	ptr	ptr
 js_container_stop	ptr	ptr,i32s
 js_count_queuing_strategy_new	f64	f64
 js_create_callback	f64	i64,i64,i64
+js_create_cjs_namespace	f64	i32s,ptr,ptr,ptr,ptr
 js_create_family_contract_check	void	ptr,f64
 js_create_namespace	f64	i32s,ptr,ptr,ptr,ptr
 js_create_namespace_layout	f64	ptr,ptr
@@ -2089,6 +2090,7 @@ js_module_top_this	f64
 js_mul	i64	i64,i64
 js_multipart_parse	ptr	ptr,ptr
 js_multipart_parse_with_sizes	ptr	ptr,ptr
+js_namespace_adopt_cjs_exports	f64	f64
 js_nanbox_bigint	f64	i64
 js_nanbox_get_bigint	i64	f64
 js_nanbox_get_handle	i64	f64

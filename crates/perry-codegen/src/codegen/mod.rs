@@ -2914,6 +2914,7 @@ fn lower_module(
         class_hierarchy: class_hierarchy::ClassHierarchy::default(),
         namespace_imports: opts.namespace_imports.iter().cloned().collect(),
         namespace_member_nested: opts.namespace_member_nested.iter().cloned().collect(),
+        cjs_interop_namespaces: opts.cjs_interop_namespaces.iter().cloned().collect(),
         namespace_member_prefixes: opts.namespace_member_prefixes,
         namespace_member_origin_names: opts.namespace_member_origin_names,
         imported_async_funcs: opts.imported_async_funcs,
@@ -3226,6 +3227,7 @@ fn lower_module(
         deferred_module_prefixes: opts.deferred_module_prefixes.clone(),
         module_init_deps: opts.module_init_deps.clone(),
         is_dynamic_import_target: opts.is_dynamic_import_target,
+        namespace_adopts_cjs_exports: opts.namespace_adopts_cjs_exports,
     };
 
     let module_globals_emit::ModuleGlobals {

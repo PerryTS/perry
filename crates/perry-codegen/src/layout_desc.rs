@@ -740,6 +740,7 @@ pub(crate) fn emit_module_layouts(
     layouts: &ProgramLayouts,
     is_entry_module: bool,
     namespace: &[crate::NamespaceEntry],
+    adopts_cjs_exports: bool,
 ) -> usize {
     if !layouts_enabled(output_type, &llmod.target_triple) {
         return 0;
@@ -1074,7 +1075,13 @@ pub(crate) fn emit_module_layouts(
     // The module's namespace object (ECMA-262 10.4.6): one carried layout,
     // born complete (`js_create_namespace_layout`).
     let triple = llmod.target_triple.clone();
-    if let Some(ns_keys) = namespace_layout(namespace, module_prefix, output_type, &triple) {
+    if let Some(ns_keys) = namespace_layout(
+        namespace,
+        module_prefix,
+        output_type,
+        &triple,
+        adopts_cjs_exports,
+    ) {
         let mut keys: Vec<(String, u64, u8)> = ns_keys
             .iter()
             .map(|(k, attrs)| {
@@ -1166,12 +1173,16 @@ pub(crate) fn namespace_layout(
     module_prefix: &str,
     output_type: &str,
     target_triple: &str,
+    adopts_cjs_exports: bool,
 ) -> Option<Vec<(String, u8)>> {
     use crate::runtime_abi::{
         LAYOUT_KEY_ACCESSOR, LAYOUT_KEY_HAS_GET, LAYOUT_KEY_NON_CONFIGURABLE,
         LAYOUT_KEY_NON_WRITABLE,
     };
-    if !layouts_enabled(output_type, target_triple) {
+    // A CommonJS namespace under Bun interop takes its run-time
+    // `module.exports` keys after birth (`js_create_cjs_namespace`): its key
+    // set is not fixed, so it has no layout.
+    if adopts_cjs_exports || !layouts_enabled(output_type, target_triple) {
         return None;
     }
     let mut seen = std::collections::HashSet::with_capacity(entries.len());

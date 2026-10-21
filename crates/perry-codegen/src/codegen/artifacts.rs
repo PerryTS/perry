@@ -754,6 +754,7 @@ pub(super) fn emit_module_artifacts(
         &cross_module.program_layouts,
         is_entry_module,
         &cross_module.namespace_entries,
+        cross_module.namespace_adopts_cjs_exports,
     );
     // Object model step 3 (§3.6): publish the program's shadow names.
     if opts.is_entry_module {
