@@ -54,3 +54,14 @@ const restMethod=methodOwner.run.bind(methodOwner);
 emit("class-rest",restMethod(1,2,3));
 const staticMethod=CallEntryMethods.run.bind(null);
 emit("class-short",staticMethod(7));
+
+// Exceptions must unwind through the adapters, including stack arguments.
+const throwingRest = {run: function(a,...xs) { throw a + xs.length; }};
+try { throwingRest.run.apply(null,[7,8,9]); }
+catch(value) { emit("throw-rest-entry",value); }
+const throwingWideRest = {run: function(a,b,c,d,e,f,g,h,i,j,...xs) { throw j + xs.length; }};
+try { throwingWideRest.run.apply(null,[1,2,3,4,5,6,7,8,9,10,11]); }
+catch(value) { emit("throw-wide-rest-entry",value); }
+const throwingWideMissing = {run: function(a,b,c,d,e,f,g,h,i,j) { throw j === undefined ? 84 : 85; }};
+try { throwingWideMissing.run.apply(null,[1]); }
+catch(value) { emit("throw-wide-missing-entry",value); }
