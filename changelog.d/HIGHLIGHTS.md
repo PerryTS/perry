@@ -1,6 +1,6 @@
 ## Highlights
 
-This is the first release since v0.5.1520 (2026-09-11). The per-PR entries follow under "All changes". Numbers below come from the linked fragments or from the measured results in the project plan; PRs without a fragment are cited by number only.
+This is the first release since v0.5.1520 (2026-09-11). The per-PR entries follow under "All changes". Numbers below come from the linked fragments or from measured results; PRs without a fragment are cited by number only.
 
 ### Upgrade notes and breaking changes
 
@@ -26,7 +26,7 @@ This is the first release since v0.5.1520 (2026-09-11). The per-PR entries follo
 - Native code is always built with `-O3`. Perry no longer drops a large module to `-Os`/`-O0` or marks a function `optnone` (#8421).
 - Toolchain output (Cargo, clang, Swift, linker) is hidden unless it fails or you pass `--verbose` (#8421).
 - The default number of concurrent codegen-unit workers is half the logical CPUs, clamped to 2–8, on non-Windows (#8593). Large bundles use more memory at once.
-- `RegExp` runs only on Perex, with no `regex`/`fancy-regex`/`regress` fallback (#10142). The `v` flag is complete (#10372).
+- `RegExp` runs only on perry's own engine (Perex), with no `regex`/`fancy-regex`/`regress` fallback (#10142). The `v` flag is complete (#10372).
 
 **JavaScript behavior that changed to match Node.**
 - Error subclasses no longer have an own, enumerable `name`. It stays on the prototype until you assign it, which changes `JSON.stringify`, `Object.keys`, spread and `util.inspect` output (#9511).
@@ -58,17 +58,28 @@ Dynamic code (`eval`, `new Function`, dynamic `require`) is a single summary nod
 - Statepoints are the default root mechanism (above). The runtime call-effect tables moved out of the compiler into per-archive sidecars (#12660, #12674, #12735), and prod-profile archives prove 27 more call-effect rows (#12754).
 - Dropping runtime frame pointers in favor of an unwind-table `Error.stack` is measured at 2.5–3.8% faster on every row (#12706, #12714).
 - A moving-GC root-reload bug was fixed (#12712), and many rooting fixes are in the per-PR list. A static root-dominance checker gates the rooting changes.
-- Windows and macOS have their own effect tables and a `cargo check` gate for runtime changes (#12706 broke Windows once; the gate is the fix).
+- Windows and macOS have their own effect tables, and runtime changes are checked on those targets before they land.
 
 ### Compile speed and memory
 
-- cpar parallel codegen takes the Next.js compile from 19 to 5 minutes (#12711).
-- The cfront front-end prefetch (#12705) moved the tsc front end from 43.9 s to 35.9 s with byte-identical objects (#12728).
-- Whole-program facts are computed faster (#12686). The per-module object cache and the completed-build cache share one compile-environment identity (#12582), and cached units are checkpointed atomically (#9997).
-- Compile memory is released across phase boundaries (#12813), and class analysis is bounded by graph distance (#12814).
-- Compile wall time and peak RSS on 2026-10-17 (plan, qb6): tsc 286 s / 9.7 GB, effect 31 s / 3.8 GB, schema-record 30 s / 3.9 GB. `perry compile --report-size` writes a per-crate and per-symbol size report (#8576).
+- Parallel code generation takes the Next.js compile from 19 to 5 minutes (#12711).
+- A front-end prefetch (#12705) moved the tsc front end from 43.9 s to 35.9 s with byte-identical objects (#12728).
+- The whole-program analysis is computed faster (#12686). The per-module object cache and the completed-build cache share one compile-environment identity (#12582), and cached units are checkpointed atomically (#9997).
+- Compile memory is released across phase boundaries (#12813), class analysis is bounded by graph distance (#12814), and lowering inputs and function source text are released or shared instead of cloned (#12916).
+- Compiling opencode now fits in about 30 GB, down from 140 GB: one walk per IIFE body and one shared type-alias map.
+- Large links go through a response file on every host, so very big programs no longer hit command-line length limits.
+- Compile wall time and peak RSS measured on 2026-10-17: tsc 286 s / 9.7 GB, effect 31 s / 3.8 GB, schema-record 30 s / 3.9 GB. `perry compile --report-size` writes a per-crate and per-symbol size report (#8576).
 
 ### Node and ecosystem compatibility
+
+- opencode compiles and runs again, including its Effect tagged errors (#11014), class-expression instances, and the macOS link.
+- Subclasses of `EventEmitter`, streams, `Map`/`Set` and `Promise` run their overrides and methods correctly, through typed and untyped receivers and through `await` (#12815, #12888, #12891).
+- `zod` and `marked` can be used in the same program (#12882). `{ ...a, ...b }` where `b` came from `{ ...undefined }` no longer crashes, which `marked.parse` hit (#12843).
+- `commander` programs run 14.7% faster (#12894).
+- `instanceof` is correct for subclasses of classes returned from IIFEs or factory calls, including namespace-imported ones (#12906). `import G = Ns.Member` now declares `G` (#12849).
+- A macOS duplicate-symbol link error is fixed, as is a regex literal combined with `worker_threads` (#12887).
+- `perry compile` no longer hangs in `Collecting modules...` on pnpm workspaces with symlink cycles (#12895).
+- New parity fixes: `net.SocketAddress` and `BlockList` input validation, `domain`, `async_hooks` (`AsyncLocalStorage.disable`, `AsyncResource` receivers), `events.on` close handling, `SubtleCrypto` static calls, outgoing HTTP header values, and `worker_threads` error diagnostics. See the per-PR list.
 
 - Next.js 16 App Route serving is byte-identical to node (#12673, #12678, #12692) and is tracked by a pinned 16.3.x production fixture (#10007).
 - Namespaces, including `enum` + `namespace` merging, compile with direct calls (#12775, #12802).
@@ -78,16 +89,17 @@ Dynamic code (`eval`, `new Function`, dynamic `require`) is a single summary nod
 
 ### Platforms
 
-- Linux musl x86_64/aarch64 release packages build again (#9584, #9298). Android UI apps link `perry-stdlib` (#11290, #12768).
+- Security: the TLS root store and webpki are updated to reject the compromised eMudhra certificate chains (#12930).
+- The release pipeline builds and publishes on all 8 platforms, and every build and publish job checks that it is on the exact commit being released.
+
+- Linux musl x86_64/aarch64 release packages build again (#9584, #9298, #12811). Android UI apps link `perry-stdlib` (#11290, #12768).
 - macOS UI builds produce signed `.app` bundles (#10240). Windows gets `fork()` IPC over named pipes (#8318), libuv-shaped errnos and `node:net` `err.errno` (#10385, #10403), `file://` drive letters (#12545) and `fs.fchown` parity (#12525). visionOS heap guards were fixed (#12247).
 - `perry compile --target wasi` links a WASIp2 component behind the off-by-default `target-wasi` feature (#11413). Target detection covers OpenHarmony aliases (#12400).
 
 ### Known gaps
 
-- `import G = Ns.Member` (TypeScript import-alias of a namespace member) is not supported.
 - ES2025 `Set` methods (`union`, `intersection`, and the rest) are not supported.
 - Promise/timer ordering differs from node in one case that is not yet root-caused.
 - Typed arrays larger than 1 GiB are not supported, and allocation-exhaustion behavior differs from node.
-- On the competitive suite at 2026-10-18, 218 of 246 rows pass; the remaining rows mostly fail from the long-standing 2026-10-03 list.
-- Compiling opencode needs very large memory (an attempt with 16 module jobs reached about 84 GB); use fewer jobs.
-- Binary size: the zod build is about 1.1 MB (+11%) larger text after the `Symbol.hasInstance`/`super` fix (#12784); a follow-up is planned.
+- On the competitive suite at 2026-10-18, 218 of 246 rows pass.
+- Binary size: the zod build is about 1.1 MB (+11%) larger text after the `Symbol.hasInstance`/`super` fix (#12784).
