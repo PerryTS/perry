@@ -2423,7 +2423,6 @@ unsafe fn probe_add(
             | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES
             | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO)
         != 0
-        || (*obj).parent_class_id & crate::object::overflow::SHADOW_BIT != 0
         || (*obj).class_id == crate::object::NATIVE_MODULE_CLASS_ID
         // A family object keeps its layout word for life: a key its layout
         // does not name joins its overflow (`layout_desc::family_store`).
@@ -2442,6 +2441,13 @@ unsafe fn probe_add(
     {
         return false;
     }
+    // The shadow bit (`shadow.rs`) does not refuse the add. The caller
+    // proved the object has no overflow (the bit's other meaning), so its
+    // layout lists every own key; the add's publication carries the bit and
+    // sets it when the new key is a shadow name
+    // (`shadow::publish_key_add_word`). A class-id-0 object takes the bit at
+    // its first key that names any class member of the program: in a large
+    // program that is nearly every zod schema, after `check` or `parse`.
     // An own descriptor on another key does not touch this add: the probe
     // proved `key` absent from a complete own list, and an ordinary object's
     // attributes live in that list (`key_attrs`), so no own descriptor covers

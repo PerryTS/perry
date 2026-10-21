@@ -108,3 +108,33 @@ for (let i = 0; i < 80; i++) wide["k" + i] = i;
 let sum = 0;
 for (let i = 0; i < 80; i++) sum += wide["k" + i];
 console.log("wide", Object.keys(wide).length, sum, wide._h, desc(wide, "k79"));
+
+// 7. Adds that shadow a class method: the shadow bit is kept and set by the
+//    probe's key add, so a bound method call sees the own property.
+class Parser {
+  parse() { return "proto"; }
+  check() { return "proto-check"; }
+}
+const viaCreate: any[] = [];
+for (let i = 0; i < 12; i++) {
+  const o: any = Object.create(Parser.prototype);
+  o.check = () => "own-check";  // a member name: sets the bit
+  o.later = i;                  // added on a shadowed object
+  if (i % 2 === 0) o.parse = () => "own-parse";
+  viaCreate.push(o);
+}
+console.log("create", viaCreate[0].parse(), viaCreate[1].parse(), viaCreate[3].check(), viaCreate[5].later);
+const insts: any[] = [];
+for (let i = 0; i < 12; i++) {
+  const p: any = new Parser();
+  p.tag = i;
+  if (i % 3 === 0) p.parse = function () { return "inst-own-" + this.tag; };
+  p.after = "a" + i;
+  insts.push(p);
+}
+console.log("inst", insts[0].parse(), insts[1].parse(), insts[3].parse(), insts[4].after, JSON.stringify(Object.keys(insts[3])));
+const bag: any = {};
+bag.check = 1;
+bag.parse = 2;
+bag.more = 3;
+console.log("bag", JSON.stringify(bag));
