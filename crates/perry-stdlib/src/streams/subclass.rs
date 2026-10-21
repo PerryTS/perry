@@ -427,14 +427,16 @@ pub unsafe extern "C" fn js_writable_stream_subclass_init(
 #[no_mangle]
 pub unsafe extern "C" fn js_transform_stream_subclass_init(
     this_bits: f64,
+    start_bits: f64,
     transform_bits: f64,
     flush_bits: f64,
     hwm: f64,
 ) -> f64 {
-    // #1644: subclass `super({...})` doesn't thread a `start` hook through this
-    // path (the #562 subclass shim only forwards transform/flush); pass undefined.
+    // `super({ start, transform, flush })`: the transformer's `start(controller)`
+    // runs at construction like `new TransformStream({...})` (eventsource-parser's
+    // `EventSourceParserStream` builds its parser there).
     let handle = js_transform_stream_new(
-        f64::from_bits(TAG_UNDEFINED),
+        start_bits,
         transform_bits,
         flush_bits,
         hwm,

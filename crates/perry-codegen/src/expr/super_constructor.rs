@@ -49,6 +49,12 @@ pub(crate) fn requires_live(ctx: &FnCtx<'_>, class: &Class) -> bool {
         if !derived {
             return false;
         }
+        // A WHATWG stream base has no constructible parent VALUE: its state is
+        // installed on `this` by the dedicated `super(...)` init
+        // (`lower_stream_super_init`), and that edge is the construction.
+        if web_stream_parent(owner) {
+            return false;
+        }
         if !crate::proto_constants::heritage_is_unrelinked(ctx, lexical_class_id(ctx, owner)) {
             return true;
         }
@@ -70,6 +76,16 @@ pub(crate) fn requires_live(ctx: &FnCtx<'_>, class: &Class) -> bool {
         owner = parent;
     }
     true
+}
+
+/// `class X extends ReadableStream / WritableStream / TransformStream`.
+fn web_stream_parent(class: &Class) -> bool {
+    class.native_extends.as_ref().is_some_and(|(module, _)| {
+        matches!(
+            module.as_str(),
+            "readable_stream" | "writable_stream" | "transform_stream"
+        )
+    })
 }
 
 /// A default descendant must not inline an ancestor body already being lowered.

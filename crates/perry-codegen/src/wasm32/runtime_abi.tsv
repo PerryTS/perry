@@ -4085,7 +4085,7 @@ js_trace_events_flush_output	void
 js_transform_stream_new	f64	f64,f64,f64,f64,f64
 js_transform_stream_new_from_transformer_object	f64	f64,f64,f64
 js_transform_stream_readable	f64	f64
-js_transform_stream_subclass_init	f64	f64,f64,f64,f64
+js_transform_stream_subclass_init	f64	f64,f64,f64,f64,f64
 js_transform_stream_writable	f64	f64
 js_transition_ic_probe_report	void	
 js_trap_call	i32s	ptr,ptr

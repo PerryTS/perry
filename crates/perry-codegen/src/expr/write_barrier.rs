@@ -964,6 +964,7 @@ pub(crate) fn lower_stream_super_init(
                 ("writable", "write") => Some(WRITE),
                 ("writable", "close") => Some(CLOSE),
                 ("writable", "abort") => Some(ABORT),
+                ("transform", "start") => Some(START),
                 ("transform", "transform") => Some(TRANSFORM),
                 ("transform", "flush") => Some(FLUSH),
                 // Lowered for side effects (closure-capture collection,
@@ -1050,6 +1051,7 @@ pub(crate) fn lower_stream_super_init(
                 runtime_fn,
                 &[
                     (DOUBLE, &this_box),
+                    (DOUBLE, &start),
                     (DOUBLE, &transform),
                     (DOUBLE, &flush),
                     (DOUBLE, &hwm),

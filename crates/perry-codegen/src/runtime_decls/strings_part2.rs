@@ -1378,7 +1378,7 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function(
         "js_transform_stream_subclass_init",
         DOUBLE,
-        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
     );
     // `class X extends Request` / `extends Response`: `super(...)` shims that
     // allocate the underlying native fetch handle and stash it on `this`.
