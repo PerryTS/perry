@@ -34,3 +34,23 @@ if (-not (Test-Path -LiteralPath $msvcLinker)) {
 }
 "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=$msvcLinker" |
     Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+# Git Bash's Perl can lack modules required by vendored OpenSSL. Pin a
+# validated native Windows Perl explicitly, independent of the next shell.
+$perlCandidates = @('C:\Strawberry\perl\bin\perl.exe') +
+    @(Get-Command perl.exe -All -ErrorAction SilentlyContinue | ForEach-Object { $_.Source })
+$opensslPerl = $null
+foreach ($candidate in ($perlCandidates | Select-Object -Unique)) {
+    if (-not (Test-Path -LiteralPath $candidate)) { continue }
+    & $candidate -MIPC::Cmd -MPod::Usage -MLocale::Maketext::Simple -e 'exit($^O eq "MSWin32" ? 0 : 1)'
+    if ($LASTEXITCODE -eq 0) {
+        $opensslPerl = $candidate
+        break
+    }
+}
+if (-not $opensslPerl) {
+    throw 'No native Windows Perl with the required OpenSSL modules was found'
+}
+"OPENSSL_SRC_PERL=$opensslPerl" |
+    Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+Write-Host "OpenSSL Perl: $opensslPerl"
