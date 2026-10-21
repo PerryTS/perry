@@ -196,6 +196,19 @@
           "validation_only_events": [
             "push"
           ]
+        },
+        {
+          "id": "wasi-hosts",
+          "file": "wasi-hosts.yml",
+          "original_events": {
+            "workflow_dispatch": null
+          },
+          "inputs": {},
+          "parent_input_map": {},
+          "required_jobs": [
+            "qualify"
+          ],
+          "validation_only_events": []
         }
       ],
       "dispatch_inputs": {
@@ -224,7 +237,8 @@
             "security-audit",
             "zizmor",
             "native-result-ledger",
-            "npm-launcher"
+            "npm-launcher",
+            "wasi-hosts"
           ],
           "default": "core"
         }
