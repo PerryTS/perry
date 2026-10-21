@@ -1,4 +1,4 @@
-wit_bindgen::generate!({ path: "..", world: "plugin" });
+wit_bindgen::generate!({ path: "..", world: "plugin", generate_all });
 
 use exports::perry::network_probe::probe::Guest;
 use wasi::sockets::{instance_network, ip_name_lookup, network, udp, udp_create_socket};
