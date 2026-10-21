@@ -50,6 +50,10 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use perry_hir::types::{LocalId, Type};
 use perry_hir::{CompareOp, Expr, Function, LogicalOp, Module as HirModule, Param, Stmt, UnaryOp};
 
+#[path = "split_regions_cost.rs"]
+mod cost;
+use cost::Cost;
+
 /// Marks a region function's name: `{parent}#region_{n}`. `sanitize` turns
 /// the `#` into `_`, so the symbol is `..._{parent}_region_{n}`.
 pub(crate) const REGION_MARK: &str = "#region_";
@@ -223,13 +227,12 @@ pub(crate) fn region_number_params(f: &Function) -> HashSet<u32> {
 
 #[path = "split_regions_facts.rs"]
 mod facts;
-#[cfg(test)]
-use facts::visit_expr;
 use facts::{
     all_module_bodies, closure_captured_ids, declarations_to_assignments, declared_ids, let_counts,
     max_local_id, module_facts, ref_counts, ref_set, visit_stmt, visit_stmts, written_ids,
     ModuleFacts,
 };
+use facts::{module_field_exprs, visit_expr};
 
 // ---------------------------------------------------------------------------
 // Statement admission
@@ -394,6 +397,7 @@ struct BodyCtx<'a> {
 }
 
 struct Shared<'a> {
+    cost: Cost<'a>,
     next_func: u32,
     next_local: u32,
     region_seq: usize,
@@ -725,7 +729,7 @@ fn try_extract(
     // that is mostly interface (a straight line of values all used at the
     // end) gains nothing from moving and costs at every call.
     if kind == "run" {
-        let nodes = crate::collectors::count_body_nodes(range);
+        let nodes = sh.cost.body(range);
         let interface = live_in.len() + out_decl.len() + out_outer.len();
         if interface * ctx.facts.limits.interface_nodes > nodes {
             reject(
@@ -1165,9 +1169,11 @@ fn extract_or_halve(
     if w < ctx.facts.limits.chunk_min || a >= b {
         return list[a..b].to_vec();
     }
-    // One statement far above the target (a giant switch or literal) gains
-    // nothing from moving: the region would be the same giant, plus a call.
-    if b - a == 1 && w > 2 * ctx.facts.limits.target {
+    // Keep a syntactically giant switch/literal in place. A small statement
+    // with a large late expansion can still benefit from isolating its roots
+    // from the parent's live values, so this guard uses its AST node count.
+    if b - a == 1 && crate::collectors::count_body_nodes(&list[a..b]) > 2 * ctx.facts.limits.target
+    {
         return list[a..b].to_vec();
     }
     // Lets of list[..a] dominate the range too.
@@ -1255,7 +1261,7 @@ fn split_list(
     //    big arms/blocks (never loop bodies) are split in turn.
     let mut dom = dominating.clone();
     for i in 0..list.len() {
-        let weight = crate::collectors::count_body_nodes(std::slice::from_ref(&list[i]));
+        let weight = sh.cost.body(std::slice::from_ref(&list[i]));
         match &mut list[i] {
             Stmt::If {
                 condition,
@@ -1267,7 +1273,7 @@ fn split_list(
                 if let Some((id, ty)) = &guard {
                     arm_proofs.insert(*id, ty.clone());
                 }
-                let then_w = crate::collectors::count_body_nodes(then_branch);
+                let then_w = sh.cost.body(then_branch);
                 if then_w > target {
                     split_list(then_branch, ctx, sh, &dom, &arm_proofs);
                 }
@@ -1279,7 +1285,7 @@ fn split_list(
                     }
                 }
                 if let Some(e) = else_branch {
-                    if crate::collectors::count_body_nodes(e) > target {
+                    if sh.cost.body(e) > target {
                         split_list(e, ctx, sh, &dom, proofs);
                     }
                 }
@@ -1289,11 +1295,11 @@ fn split_list(
                 catch,
                 finally,
             } if weight > target => {
-                if crate::collectors::count_body_nodes(body) > target {
+                if sh.cost.body(body) > target {
                     split_list(body, ctx, sh, &dom, proofs);
                 }
                 if let Some(c) = catch {
-                    if crate::collectors::count_body_nodes(&c.body) > target {
+                    if sh.cost.body(&c.body) > target {
                         let mut d = dom.clone();
                         if let Some((id, _)) = &c.param {
                             d.insert(*id);
@@ -1302,14 +1308,14 @@ fn split_list(
                     }
                 }
                 if let Some(f) = finally {
-                    if crate::collectors::count_body_nodes(f) > target {
+                    if sh.cost.body(f) > target {
                         split_list(f, ctx, sh, &dom, proofs);
                     }
                 }
             }
             Stmt::Switch { cases, .. } if weight > target => {
                 for c in cases.iter_mut() {
-                    if crate::collectors::count_body_nodes(&c.body) > target {
+                    if sh.cost.body(&c.body) > target {
                         split_list(&mut c.body, ctx, sh, &dom, proofs);
                     }
                 }
@@ -1320,7 +1326,7 @@ fn split_list(
                 // that run once per execution are split, so recurse into an
                 // `If` body only.
                 if let Stmt::If { then_branch, .. } = body.as_mut() {
-                    if crate::collectors::count_body_nodes(then_branch) > target {
+                    if sh.cost.body(then_branch) > target {
                         split_list(then_branch, ctx, sh, &dom, proofs);
                     }
                 }
@@ -1341,9 +1347,7 @@ fn split_list(
                 _ => None,
             };
             if let Some(e) = slot {
-                if crate::collectors::count_body_nodes(&[Stmt::Expr(e.clone())])
-                    >= ctx.facts.limits.chunk_min
-                {
+                if sh.cost.body(&[Stmt::Expr(e.clone())]) >= ctx.facts.limits.chunk_min {
                     let range = vec![Stmt::Expr(std::mem::replace(e, Expr::Undefined))];
                     match try_extract(&range, ctx, sh, &dom, proofs, "value") {
                         Some(mut x) => {
@@ -1373,7 +1377,7 @@ fn split_list(
     // 2. Runs of statements of this list, cut into chunks of ~target nodes.
     let weights: Vec<usize> = list
         .iter()
-        .map(|s| crate::collectors::count_body_nodes(std::slice::from_ref(s)))
+        .map(|s| sh.cost.body(std::slice::from_ref(s)))
         .collect();
     let total: usize = weights.iter().sum();
     if total < ctx.facts.limits.chunk_min {
@@ -1553,7 +1557,8 @@ fn split_body(
         return;
     }
     let nodes = crate::collectors::count_body_nodes(body);
-    if nodes <= facts.limits.min_body {
+    let estimated = sh.cost.body(body);
+    if estimated <= facts.limits.min_body {
         return;
     }
     let dump = std::env::var("PERRY_SPLIT_DUMP")
@@ -1570,7 +1575,15 @@ fn split_body(
         sink_hoisted_functions(body, facts);
     }
     let declared = declared_ids(body, false);
-    let captured = closure_captured_ids(body);
+    let mut captured = closure_captured_ids(body);
+    // Constructor capture params are also read by member/field closures,
+    // which are stored outside this body. Preserve their shared cells using
+    // lowering's reserved capture names, just like captures found in-body.
+    captured.extend(params.iter().filter_map(|p| {
+        p.name
+            .starts_with(perry_hir::cap_fields::CAP_FIELD_PREFIX)
+            .then_some(p.id)
+    }));
     let boxed: HashSet<u32> = captured
         .iter()
         .filter(|id| facts.writes.contains(id))
@@ -1646,13 +1659,56 @@ fn split_body(
     }
     if report_enabled() {
         sh.report.push(format!(
-            "perry-split\tbody\t{}\tnodes={}\tregions={}\tafter={}",
+            "perry-split\tbody\t{}\tnodes={}\testimated_nodes={}\tregions={}\tafter={}",
             sanitize_tsv(parent),
             nodes,
+            estimated,
             sh.out.len() + sh.closure_names.len() - before,
             crate::collectors::count_body_nodes(body)
         ));
     }
+}
+
+fn split_closures_in_expr(
+    e: &mut Expr,
+    names: &HashMap<u32, String>,
+    facts: &ModuleFacts,
+    sh: &mut Shared<'_>,
+) {
+    if let Expr::Closure {
+        func_id,
+        params,
+        body,
+        captures,
+        is_async,
+        is_generator,
+        is_strict,
+        ..
+    } = e
+    {
+        split_closures_in(body, names, facts, sh);
+        let parent = names
+            .get(func_id)
+            .filter(|n| !n.is_empty())
+            .cloned()
+            .unwrap_or_else(|| format!("closure{func_id}"));
+        let caps = captures.clone();
+        split_body(
+            body,
+            params,
+            &caps,
+            &parent,
+            *is_strict,
+            *is_async,
+            *is_generator,
+            facts,
+            sh,
+        );
+        return;
+    }
+    perry_hir::walker::walk_expr_children_mut(e, &mut |c| {
+        split_closures_in_expr(c, names, facts, sh)
+    });
 }
 
 /// Closures nested in `stmts`, innermost first, then the body itself.
@@ -1662,45 +1718,6 @@ fn split_closures_in(
     facts: &ModuleFacts,
     sh: &mut Shared<'_>,
 ) {
-    fn in_expr(
-        e: &mut Expr,
-        names: &HashMap<u32, String>,
-        facts: &ModuleFacts,
-        sh: &mut Shared<'_>,
-    ) {
-        if let Expr::Closure {
-            func_id,
-            params,
-            body,
-            captures,
-            is_async,
-            is_generator,
-            is_strict,
-            ..
-        } = e
-        {
-            split_closures_in(body, names, facts, sh);
-            let parent = names
-                .get(func_id)
-                .filter(|n| !n.is_empty())
-                .cloned()
-                .unwrap_or_else(|| format!("closure{func_id}"));
-            let caps = captures.clone();
-            split_body(
-                body,
-                params,
-                &caps,
-                &parent,
-                *is_strict,
-                *is_async,
-                *is_generator,
-                facts,
-                sh,
-            );
-            return;
-        }
-        perry_hir::walker::walk_expr_children_mut(e, &mut |c| in_expr(c, names, facts, sh));
-    }
     fn in_stmt(
         s: &mut Stmt,
         names: &HashMap<u32, String>,
@@ -1711,20 +1728,20 @@ fn split_closures_in(
             Stmt::Let { init: Some(e), .. }
             | Stmt::Expr(e)
             | Stmt::Throw(e)
-            | Stmt::Return(Some(e)) => in_expr(e, names, facts, sh),
+            | Stmt::Return(Some(e)) => split_closures_in_expr(e, names, facts, sh),
             Stmt::If {
                 condition,
                 then_branch,
                 else_branch,
             } => {
-                in_expr(condition, names, facts, sh);
+                split_closures_in_expr(condition, names, facts, sh);
                 split_closures_in(then_branch, names, facts, sh);
                 if let Some(e) = else_branch {
                     split_closures_in(e, names, facts, sh);
                 }
             }
             Stmt::While { condition, body } | Stmt::DoWhile { condition, body } => {
-                in_expr(condition, names, facts, sh);
+                split_closures_in_expr(condition, names, facts, sh);
                 split_closures_in(body, names, facts, sh);
             }
             Stmt::For {
@@ -1737,10 +1754,10 @@ fn split_closures_in(
                     in_stmt(i, names, facts, sh);
                 }
                 if let Some(c) = condition {
-                    in_expr(c, names, facts, sh);
+                    split_closures_in_expr(c, names, facts, sh);
                 }
                 if let Some(u) = update {
-                    in_expr(u, names, facts, sh);
+                    split_closures_in_expr(u, names, facts, sh);
                 }
                 split_closures_in(body, names, facts, sh);
             }
@@ -1762,10 +1779,10 @@ fn split_closures_in(
                 discriminant,
                 cases,
             } => {
-                in_expr(discriminant, names, facts, sh);
+                split_closures_in_expr(discriminant, names, facts, sh);
                 for c in cases {
                     if let Some(t) = &mut c.test {
-                        in_expr(t, names, facts, sh);
+                        split_closures_in_expr(t, names, facts, sh);
                     }
                     split_closures_in(&mut c.body, names, facts, sh);
                 }
@@ -1778,17 +1795,58 @@ fn split_closures_in(
     }
 }
 
+fn split_function(
+    f: &mut Function,
+    parent: &str,
+    names: &HashMap<u32, String>,
+    facts: &ModuleFacts,
+    sh: &mut Shared<'_>,
+) {
+    split_closures_in(&mut f.body, names, facts, sh);
+    split_body(
+        &mut f.body,
+        &f.params,
+        &f.captures,
+        parent,
+        f.is_strict,
+        f.is_async || f.was_plain_async,
+        f.is_generator,
+        facts,
+        sh,
+    );
+}
+
 /// Split every oversized function and closure body of `hir`. Returns the
 /// number of regions made.
 pub fn split_large_bodies(hir: &mut HirModule) -> usize {
+    split_large_bodies_in_program(hir, &|_| 0)
+}
+
+/// Program-aware size from the existing dependency HIR, before async lowering.
+pub fn split_large_bodies_in_program(
+    hir: &mut HirModule,
+    namespace_members: &dyn Fn(&str) -> usize,
+) -> usize {
     if !enabled() {
         return 0;
     }
-    split_large_bodies_with(hir, Limits::from_env())
+    split_large_bodies_with_cost(hir, Limits::from_env(), namespace_members)
 }
 
 /// [`split_large_bodies`] under explicit limits.
 pub(crate) fn split_large_bodies_with(hir: &mut HirModule, limits: Limits) -> usize {
+    split_large_bodies_with_cost(hir, limits, &|_| 0)
+}
+
+pub(crate) fn split_large_bodies_with_cost(
+    hir: &mut HirModule,
+    limits: Limits,
+    namespace_members: &dyn Fn(&str) -> usize,
+) -> usize {
+    let cost = Cost {
+        imports: &hir.imports,
+        namespace_members,
+    };
     // Cheap exit: nothing anywhere is big enough.
     let min = limits.min_body;
     let any_big = {
@@ -1797,17 +1855,26 @@ pub(crate) fn split_large_bodies_with(hir: &mut HirModule, limits: Limits) -> us
             if big {
                 break;
             }
-            if crate::collectors::count_body_nodes(body) > min {
+            if cost.body(body) > min {
                 big = true;
                 break;
             }
             visit_stmts(body, true, &mut |_| {}, &mut |e| {
                 if !big {
                     if let Expr::Closure { body, .. } = e {
-                        big |= crate::collectors::count_body_nodes(body) > min;
+                        big |= cost.body(body) > min;
                     }
                 }
             });
+        }
+        if !big {
+            for e in module_field_exprs(hir) {
+                visit_expr(e, true, &mut |_| {}, &mut |e| {
+                    if let Expr::Closure { body, .. } = e {
+                        big |= cost.body(body) > min;
+                    }
+                });
+            }
         }
         big
     };
@@ -1822,6 +1889,7 @@ pub(crate) fn split_large_bodies_with(hir: &mut HirModule, limits: Limits) -> us
     let mut functions = std::mem::take(&mut hir.functions);
     let mut spans = std::mem::take(&mut hir.local_source_spans);
     let mut sh = Shared {
+        cost,
         next_func,
         next_local,
         region_seq: 0,
@@ -1831,22 +1899,28 @@ pub(crate) fn split_large_bodies_with(hir: &mut HirModule, limits: Limits) -> us
         closure_names: Vec::new(),
     };
     split_closures_in(&mut init, &names, &facts, &mut sh);
-    for f in functions.iter_mut() {
-        split_closures_in(&mut f.body, &names, &facts, &mut sh);
-        let params = f.params.clone();
-        let caps = f.captures.clone();
-        let name = f.name.clone();
-        split_body(
-            &mut f.body,
-            &params,
-            &caps,
-            &name,
-            f.is_strict,
-            f.is_async || f.was_plain_async,
-            f.is_generator,
-            &facts,
-            &mut sh,
-        );
+    for f in &mut functions {
+        let parent = f.name.clone();
+        split_function(f, &parent, &names, &facts, &mut sh);
+    }
+    for c in &mut hir.classes {
+        for f in c
+            .constructor
+            .iter_mut()
+            .chain(c.methods.iter_mut())
+            .chain(c.static_methods.iter_mut())
+            .chain(c.getters.iter_mut().map(|(_, f)| f))
+            .chain(c.setters.iter_mut().map(|(_, f)| f))
+            .chain(c.computed_members.iter_mut().map(|m| &mut m.function))
+        {
+            let parent = format!("{}::{}", c.name, f.name);
+            split_function(f, &parent, &names, &facts, &mut sh);
+        }
+        for field in c.fields.iter_mut().chain(&mut c.static_fields) {
+            for e in field.key_expr.iter_mut().chain(field.init.iter_mut()) {
+                split_closures_in_expr(e, &names, &facts, &mut sh);
+            }
+        }
     }
     let made = sh.out.len() + sh.closure_names.len();
     let report = std::mem::take(&mut sh.report);
