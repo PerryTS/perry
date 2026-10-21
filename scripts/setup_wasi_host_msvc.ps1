@@ -26,3 +26,11 @@ foreach ($name in @('INCLUDE', 'LIB')) {
     }
 }
 Get-Command cl.exe, link.exe | Select-Object Name, Source
+# Git Bash prepends its own /usr/bin, whose link.exe creates filesystem links.
+# Cargo must use the selected MSVC linker regardless of shell PATH ordering.
+$msvcLinker = Join-Path (Split-Path (Get-Command cl.exe).Source) 'link.exe'
+if (-not (Test-Path -LiteralPath $msvcLinker)) {
+    throw "Missing MSVC linker beside cl.exe: $msvcLinker"
+}
+"CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=$msvcLinker" |
+    Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
