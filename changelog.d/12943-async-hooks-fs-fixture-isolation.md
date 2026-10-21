@@ -1,0 +1,4 @@
+- Isolate twelve async_hooks filesystem fixtures with unique owned temporary roots using `mkdtempSync`, `tmpdir`, and `join`, with cleanup confined to those roots in `finally`.
+- Preserve the tested filesystem operations, payloads, callbacks, and AsyncLocalStorage assertions.
+- Existing validation: ten fixtures pass; the `fs.watch` ALS parity failure and `fs.watchFile` timeout remain.
+- Independent, safely path-mapped baseline probes reproduce both watcher failures, confirming they are not isolation regressions; async_hooks module completion remains pending.
