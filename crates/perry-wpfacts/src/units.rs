@@ -416,6 +416,7 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
         .collect();
     let mut input = published_surface(&viewed, cfg);
     let order = dependency_order(&solves);
+    let levels = dependency_levels(&solves, &order);
     let mut rounds = 0u32;
     let mut round_work: Vec<u64> = Vec::new();
     let mut per_unit: Vec<Option<ProgramFacts>> = (0..solves.len()).map(|_| None).collect();
@@ -428,33 +429,36 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
         input.layouts.clear();
         let mut reports: FxHashSet<String> = FxHashSet::default();
         let mut work = 0u64;
-        for &si in &order {
-            let s = &solves[si];
-            if dirty[si] {
-                let list = [(sorted[s.mi].0.to_string(), s.module)];
-                let u = crate::compute_in(&list, &ucfg, Some(&input), Some(&s.view));
+        for level in &levels {
+            let todo: Vec<usize> = level.iter().copied().filter(|&si| dirty[si]).collect();
+            for (si, u) in solve_level(&todo, &solves, sorted, &ucfg, &input) {
                 work += u.stats.work;
                 per_unit[si] = Some(u);
             }
-            let u = per_unit[si].as_ref().expect("every unit solved");
-            // Published under the module's path (other modules import it)
-            // and the unit's (the module's other units import it).
-            for ((p, n), c) in &u.contracts_out {
-                input.classes.insert((s.key.clone(), n.clone()), c.clone());
-                input.classes.insert((p.clone(), n.clone()), c.clone());
+            // The level's contracts, published in `order` sequence: the
+            // next level's one input.
+            for &si in level {
+                let s = &solves[si];
+                let u = per_unit[si].as_ref().expect("every unit solved");
+                // Published under the module's path (other modules import it)
+                // and the unit's (the module's other units import it).
+                for ((p, n), c) in &u.contracts_out {
+                    input.classes.insert((s.key.clone(), n.clone()), c.clone());
+                    input.classes.insert((p.clone(), n.clone()), c.clone());
+                }
+                for ((p, n), c) in &u.fn_contracts_out {
+                    input.fns.insert((s.key.clone(), n.clone()), c.clone());
+                    input.fns.insert((p.clone(), n.clone()), c.clone());
+                }
+                for ((p, n), c) in &u.values_out {
+                    input.values.insert((s.key.clone(), n.clone()), c.clone());
+                    input.values.insert((p.clone(), n.clone()), c.clone());
+                }
+                for c in &u.layouts_out {
+                    input.layouts.insert(c.display.clone(), c.clone());
+                }
+                reports.extend(u.reports.iter().cloned());
             }
-            for ((p, n), c) in &u.fn_contracts_out {
-                input.fns.insert((s.key.clone(), n.clone()), c.clone());
-                input.fns.insert((p.clone(), n.clone()), c.clone());
-            }
-            for ((p, n), c) in &u.values_out {
-                input.values.insert((s.key.clone(), n.clone()), c.clone());
-                input.values.insert((p.clone(), n.clone()), c.clone());
-            }
-            for c in &u.layouts_out {
-                input.layouts.insert(c.display.clone(), c.clone());
-            }
-            reports.extend(u.reports.iter().cloned());
         }
         round_work.push(work);
         // Decision 13: the argument contracts of closed functions, from
@@ -534,6 +538,9 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
             bindings: vec![Default::default(); sorted.len()],
             ..Default::default()
         };
+        if cfg.unit_io {
+            pf.unit_io = unit_io(sorted, &solves, &order, &per_unit, &input);
+        }
         for (si, u) in per_unit.into_iter().enumerate() {
             let u = u.expect("every unit solved");
             merge_unit(&mut pf, solves[si].mi, &solves[si].key, u);
@@ -557,6 +564,192 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
         };
         return pf;
     }
+}
+
+/// Decision 32: the units by dependency level, each level in `order`
+/// sequence. A unit is one level above the highest unit it is ordered
+/// after; a back edge of a cycle (to a unit `order` puts later) is ⊤ for
+/// it, as in the walk, and does not count. A unit reads other units only
+/// through its `after` names (decision 21), all at lower levels, so a
+/// level's units are independent of each other.
+fn dependency_levels(solves: &[Solve], order: &[usize]) -> Vec<Vec<usize>> {
+    let mut pos = vec![0usize; solves.len()];
+    for (p, &si) in order.iter().enumerate() {
+        pos[si] = p;
+    }
+    let mut level = vec![0usize; solves.len()];
+    let mut out: Vec<Vec<usize>> = Vec::new();
+    for &si in order {
+        let l = solves[si].after.iter().filter(|&&w| pos[w] < pos[si]).map(|&w| level[w] + 1).max().unwrap_or(0);
+        level[si] = l;
+        if out.len() <= l {
+            out.resize_with(l + 1, Vec::new);
+        }
+        out[l].push(si);
+    }
+    out
+}
+
+/// Decision 32: one level's dirty units, solved against the one frozen
+/// input on up to `jobs` threads. Results go back by unit, so the thread
+/// count changes the wall and nothing else.
+fn solve_level(
+    todo: &[usize],
+    solves: &[Solve],
+    sorted: &[(&str, &Module)],
+    ucfg: &FactsConfig,
+    input: &Published,
+) -> Vec<(usize, ProgramFacts)> {
+    let solve = |si: usize| {
+        let s = &solves[si];
+        let list = [(sorted[s.mi].0.to_string(), s.module)];
+        (si, crate::compute_in(&list, ucfg, Some(input), Some(&s.view)))
+    };
+    let jobs = ucfg.jobs.clamp(1, todo.len().max(1));
+    if jobs == 1 {
+        return todo.iter().map(|&si| solve(si)).collect();
+    }
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    std::thread::scope(|sc| {
+        let workers: Vec<_> = (0..jobs)
+            .map(|_| {
+                // The calling thread's recursion depth, not a spawned
+                // thread's default 2 MiB.
+                std::thread::Builder::new()
+                    .stack_size(256 << 20)
+                    .spawn_scoped(sc, || {
+                        let mut mine = Vec::new();
+                        while let Some(&si) = todo.get(next.fetch_add(1, std::sync::atomic::Ordering::Relaxed)) {
+                            mine.push(solve(si));
+                        }
+                        mine
+                    })
+                    .expect("spawn a unit solver")
+            })
+            .collect();
+        workers.into_iter().flat_map(|w| w.join().expect("a unit solve panicked")).collect()
+    })
+}
+
+/// `FactsConfig::unit_io` (design §13.3): per unit, a digest of every input
+/// it reads (the contracts of the units it is ordered after, its closed
+/// functions' argument contracts, the store effects on and the census
+/// breaks of what it owns or reads) and of its facts, plus one line per
+/// published output. Two dumps of an edited program name the units an edit
+/// reaches and the contract that carried it.
+fn unit_io(
+    sorted: &[(&str, &Module)],
+    solves: &[Solve],
+    order: &[usize],
+    per_unit: &[Option<ProgramFacts>],
+    input: &Published,
+) -> Vec<String> {
+    use crate::dump::{fnv, FNV_OFFSET};
+    let mut pos = vec![0usize; solves.len()];
+    for (p, &si) in order.iter().enumerate() {
+        pos[si] = p;
+    }
+    let hash = |s: &str| {
+        let mut h = FNV_OFFSET;
+        fnv(&mut h, s);
+        h
+    };
+    let mut outs: Vec<Vec<(String, u64)>> = Vec::with_capacity(solves.len());
+    let mut owned: Vec<Vec<String>> = Vec::with_capacity(solves.len());
+    for u in per_unit {
+        let u = u.as_ref().expect("every unit solved");
+        let mut o: Vec<(String, u64)> = Vec::new();
+        for ((_, n), c) in &u.contracts_out {
+            o.push((format!("class:{n}"), hash(&format!("{c:?}"))));
+        }
+        for ((_, n), c) in &u.fn_contracts_out {
+            o.push((format!("fn:{n}"), hash(&format!("{c:?}"))));
+        }
+        for ((_, n), c) in &u.values_out {
+            o.push((format!("value:{n}"), hash(&format!("{c:?}"))));
+        }
+        for c in &u.layouts_out {
+            o.push((format!("layout:{}", c.display), hash(&format!("{c:?}"))));
+        }
+        for (n, c) in &u.args_out {
+            o.push((format!("args:{n}"), hash(&format!("{c:?}"))));
+        }
+        for (d, k) in &u.stores_out {
+            o.push((format!("store:{d}.{k}"), 0));
+        }
+        for d in &u.reports {
+            o.push((format!("report:{d}"), 0));
+        }
+        o.sort();
+        o.dedup();
+        outs.push(o);
+        let mut w: Vec<String> = u.templates.iter().filter(|t| t.module == Some(0)).map(|t| t.display.clone()).collect();
+        w.extend(u.fns_defined.iter().cloned());
+        owned.push(w);
+    }
+    let mut lines = Vec::new();
+    for (si, s) in solves.iter().enumerate() {
+        let u = per_unit[si].as_ref().expect("every unit solved");
+        let path = sorted[s.mi].0;
+        let mut after: Vec<usize> = s.after.iter().copied().filter(|&w| pos[w] < pos[si]).collect();
+        after.sort();
+        after.dedup();
+        let mut h = FNV_OFFSET;
+        for &w in &after {
+            fnv(&mut h, &solves[w].key);
+            for (n, x) in &outs[w] {
+                fnv(&mut h, &format!("{n}={x:016x}"));
+            }
+        }
+        let mut closed: Vec<&String> = s.view.closed.keys().collect();
+        closed.sort();
+        let closed_names: Vec<&str> = closed.iter().map(|n| n.as_str()).collect();
+        for nm in closed {
+            fnv(&mut h, &format!("arg {nm} {:?}", input.args.get(&(path.to_string(), nm.clone()))));
+        }
+        let mut seen: Vec<&String> = owned[si].iter().chain(after.iter().flat_map(|&w| owned[w].iter())).collect();
+        seen.sort();
+        seen.dedup();
+        for d in seen {
+            fnv(&mut h, &format!("store {d} {:?} broken {}", input.stores.get(d), input.broken.contains(d)));
+        }
+        let mut f = FNV_OFFSET;
+        for t in u.templates.iter().filter(|t| t.module == Some(0)) {
+            for l in crate::dump::template_lines(t) {
+                fnv(&mut f, &l);
+            }
+        }
+        for st in &u.sites {
+            fnv(&mut f, &format!("{st:?}"));
+        }
+        let st = &u.stats;
+        // Its declarations by name (the first few): where an edit lands.
+        let mut decls: Vec<String> = s.view.classes.iter().map(|&k| format!("class:{}", s.module.classes[k].name)).collect();
+        decls.extend(s.view.funcs.iter().map(|&k| s.module.functions[k].name.clone()));
+        let more = decls.len().saturating_sub(6);
+        decls.truncate(6);
+        if more > 0 {
+            decls.push(format!("+{more}"));
+        }
+        let keys = |v: &[usize]| v.iter().map(|&w| solves[w].key.as_str()).collect::<Vec<_>>().join(",");
+        let mut deps = s.deps.clone();
+        deps.sort();
+        deps.dedup();
+        lines.push(format!(
+            "# uio {} work={} ms={:.1} in={h:016x} facts={f:016x} after={} deps={} closed={} decls={}",
+            s.key,
+            st.work,
+            st.gen_ms + st.solve_ms + st.derive_ms,
+            keys(&after),
+            keys(&deps),
+            closed_names.join(","),
+            decls.join(",")
+        ));
+        for (n, x) in &outs[si] {
+            lines.push(format!("# uout {} {n} {x:016x}", s.key));
+        }
+    }
+    lines
 }
 
 /// The units a newly broken contract changes (design §11.3): the unit
