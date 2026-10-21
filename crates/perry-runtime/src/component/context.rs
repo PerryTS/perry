@@ -10,6 +10,7 @@ static VTABLE: crate::native_payload::PayloadVTable = crate::native_payload::Pay
 pub(super) struct Context {
     pub host: *mut c_void,
     pub world: Value,
+    pub alive: bool,
 }
 
 impl Drop for Context {
@@ -29,6 +30,7 @@ pub(super) fn publish(world: Value, imports: f64) -> f64 {
     let context = Box::into_raw(Box::new(Context {
         host: std::ptr::null_mut(),
         world,
+        alive: true,
     }));
     let cell = unsafe {
         crate::native_handle::native_handle_new_rust_payload(
@@ -96,6 +98,16 @@ pub(super) fn imports(owner: f64) -> f64 {
     }
 }
 
+pub(super) fn set_imports(owner: f64, imports: f64) {
+    unsafe {
+        crate::object::owned_state_bag::store(
+            object_pointer(owner).unwrap() as usize,
+            crate::object::owned_state_bag::COMPONENT_IMPORTS,
+            imports,
+        );
+    }
+}
+
 /// Only a completed disposal severs imports. A rejected reentrant disposal
 /// leaves the store alive and it can still call these functions.
 pub(super) fn finish_disposal(owner: f64, status: i32) {
@@ -103,12 +115,18 @@ pub(super) fn finish_disposal(owner: f64, status: i32) {
         status,
         perry_abi::component_host::OK | perry_abi::component_host::RELEASED_ERROR
     ) {
-        unsafe {
-            crate::object::owned_state_bag::store(
-                object_pointer(owner).unwrap() as usize,
-                crate::object::owned_state_bag::COMPONENT_IMPORTS,
-                undefined(),
-            );
+        let scope = RuntimeHandleScope::new();
+        let owner = scope.root_nanbox_f64(owner);
+        let error = scope.root_nanbox_f64(undefined());
+        let cleanup = crate::exception::catch_js_throw(|| {
+            super::host_resource::payload::dispose_owner(owner.get_nanbox_f64())
+        });
+        if let Err(thrown) = cleanup {
+            error.set_nanbox_f64(thrown);
+        }
+        set_imports(owner.get_nanbox_f64(), undefined());
+        if cleanup.is_err() {
+            crate::exception::js_throw(error.get_nanbox_f64());
         }
     }
 }

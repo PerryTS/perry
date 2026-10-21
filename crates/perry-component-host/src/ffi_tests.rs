@@ -90,6 +90,7 @@ fn callback_buffers_errors_reentry_and_disposal_cross_the_c_boundary() {
             0,
             Some(callback),
             Some(free_reply),
+            None,
             &mut state as *mut State as usize as u64,
             &mut error,
         );
@@ -146,6 +147,7 @@ fn malformed_input_returns_an_owned_error_buffer() {
             0,
             None,
             None,
+            None,
             0,
             &mut error,
         );
@@ -188,6 +190,7 @@ fn destructor_failure_reports_whether_the_store_or_resource_was_released() {
                 0,
                 Some(failing_destructor),
                 Some(perry_component_host_buffer_drop),
+                None,
                 1,
                 &mut reply,
             );

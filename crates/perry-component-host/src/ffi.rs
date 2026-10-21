@@ -1,9 +1,10 @@
 //! Allocator-safe callback transport. JS exceptions must be caught by the
 //! runtime callback; every call returns through Wasmtime before JS can throw.
-use crate::{Host, Import, Imports, Interrupt, Options};
+use crate::{Host, Import, Imports, Interrupt, Options, ResourceHook};
 use anyhow::{bail, ensure, Context, Result};
 use perry_abi::component_host::{
-    Buffer, Callback, ComponentHostOps, FreeCallback, ABI_VERSION, ERROR, OK, RELEASED_ERROR,
+    Buffer, Callback, ComponentHostOps, FreeCallback, ResourceCallback, ABI_VERSION, ERROR, OK,
+    RELEASED_ERROR,
 };
 use perry_wit::World;
 use std::cell::{Cell, UnsafeCell};
@@ -104,6 +105,7 @@ pub unsafe extern "C" fn perry_component_host_new(
     options_len: usize,
     callback: Option<Callback>,
     free_callback: Option<FreeCallback>,
+    resource_callback: Option<ResourceCallback>,
     context: u64,
     error: *mut Buffer,
 ) -> *mut c_void {
@@ -159,7 +161,31 @@ pub unsafe extern "C" fn perry_component_host_new(
                     .insert(function.name.clone(), handler);
             }
         }
-        let host = Host::new(bytes(wasm, wasm_len)?, &world, &imports, &options)?;
+        let resource_current = current.clone();
+        let resource_hook: ResourceHook = Arc::new(move |event| {
+            let callback =
+                resource_callback.context("host resources require a resource callback")?;
+            let free = free_callback.context("host resources require a reply deallocator")?;
+            let context = resource_current.load(Ordering::Acquire);
+            ensure!(context != 0, "resource event outside a live embedding call");
+            let event = serde_json::to_vec(&event)?;
+            let mut reply = Reply(Buffer::default(), free);
+            let status = callback(context, event.as_ptr(), event.len(), &mut reply.0);
+            if status != OK {
+                bail!(
+                    "component resource event: {}",
+                    String::from_utf8_lossy(bytes(reply.0.data, reply.0.len)?)
+                );
+            }
+            Ok(())
+        });
+        let host = Host::new_with_resource_hook(
+            bytes(wasm, wasm_len)?,
+            &world,
+            &imports,
+            &options,
+            resource_hook,
+        )?;
         current.store(0, Ordering::Release);
         let interrupt = host.interrupt_handle();
         Ok(Bridge {

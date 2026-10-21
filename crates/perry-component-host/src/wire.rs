@@ -1,12 +1,14 @@
 //! Internal transport values. WIT remains the type authority: an untyped JSON
 //! number is never accepted for s64/u64, and every aggregate is checked against
 //! the component's actual canonical type before entering guest code.
+#[cfg(test)]
 use crate::resources::Resources;
 use anyhow::{bail, ensure, Context, Result};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
 use wasmtime::component::{ResourceAny, ResourceType, Type, Val};
 
+#[cfg(test)]
 pub(crate) fn lower(
     value: &Value,
     ty: &Type,
@@ -225,6 +227,7 @@ fn float_wire(value: f64) -> Value {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn lift(value: &Val, resources: &mut Resources) -> Result<Value> {
     lift_with(value, &mut |value| {
         Ok(json!({"$resource":resources.insert(value),"owned":value.owned()}))
