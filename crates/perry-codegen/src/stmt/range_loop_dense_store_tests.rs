@@ -91,10 +91,18 @@ fn alias(id: u32, name: &str, init: Expr) -> Stmt {
 }
 
 fn module_ir(body: Vec<Stmt>) -> String {
+    module_ir_with_x(body, Expr::Integer(1))
+}
+
+/// `x_arg` is the only call site's second argument. A literal int32 makes the
+/// guarded clone's entry contract prove `x` int32, so `a[i] + x` is a genuine
+/// double there; an argument that is not a number leaves `x` an unproven
+/// `any` in every body.
+fn module_ir_with_x(body: Vec<Stmt>, x_arg: Expr) -> String {
     let mut module = Module::new("dense_rmw");
     module.init.push(Stmt::Expr(Expr::Call {
         callee: Box::new(Expr::FuncRef(1)),
-        args: vec![Expr::Array(vec![Expr::Number(0.5)], None), Expr::Integer(1)],
+        args: vec![Expr::Array(vec![Expr::Number(0.5)], None), x_arg],
         type_args: Vec::new(),
         byte_offset: 0,
     }));
@@ -220,15 +228,42 @@ fn declines_a_store_whose_value_is_not_provably_a_double() {
 
 #[test]
 fn declines_a_store_that_may_concatenate() {
-    // a[i] = a[i] + x; s = s + a[i];  with `x: any`.
+    // a[i] = a[i] + x; s = s + a[i];  with `x: any`, called with a string so
+    // no clone proves `x` a number (the only call site decides which clones
+    // exist; see `a_store_of_a_proven_int32_parameter_takes_the_dense_tier`).
+    let body = vec![
+        set(A, I, bin(BinaryOp::Add, get(A, I), Expr::LocalGet(X))),
+        accumulate(),
+    ];
+    let ir = module_ir_with_x(body, Expr::String("x".to_string()));
+    assert!(
+        !calls(&ir, DENSE_GUARD),
+        "#10718: `a[i] + x` may concatenate; it is no dense store value\n{ir}"
+    );
+}
+
+#[test]
+fn a_store_of_a_proven_int32_parameter_takes_the_dense_tier() {
+    // The control of `declines_a_store_that_may_concatenate`: the same body,
+    // but the only call passes an int32 literal, so the guarded clone's entry
+    // contract proves `x` int32 and `a[i] + x` is a genuine double there. The
+    // clone takes the dense tier; the public `any` body below it must not.
     let body = vec![
         set(A, I, bin(BinaryOp::Add, get(A, I), Expr::LocalGet(X))),
         accumulate(),
     ];
     let ir = module_ir(body);
     assert!(
-        !calls(&ir, DENSE_GUARD),
-        "#10718: `a[i] + x` may concatenate; it is no dense store value\n{ir}"
+        calls(&ir, DENSE_GUARD),
+        "#10718: `a[i] + x` with `x` proven int32 is a genuine double\n{ir}"
+    );
+    let public = ir
+        .split("\ndefine ")
+        .find(|f| f.starts_with("double @perry_fn_dense_rmw__f("))
+        .expect("the public body of f is emitted");
+    assert!(
+        !calls(public, DENSE_GUARD),
+        "#10718: the public body leaves `x` an unproven `any`: no dense store\n{public}"
     );
 }
 

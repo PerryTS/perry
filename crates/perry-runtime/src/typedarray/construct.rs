@@ -447,8 +447,20 @@ pub extern "C" fn js_typed_array_new_from_array(
     // Array.prototype[Symbol.iterator] must not make `new Uint8Array(array)`
     // throw. Collect raw values before coercion, retaining the mutation/
     // snapshot rule described by `typed_array_from_snapshot`.
+    //
+    // A dense ordinary Array whose iteration is the intrinsic one
+    // (`dense_spread_source`: its `@@iterator` member is
+    // `%Array.prototype.values%`, `%ArrayIteratorPrototype%.next` is the
+    // builtin, and no index accessor or inherited index can answer a read)
+    // yields exactly its elements in order, and reading that member runs no
+    // user code. The iterator protocol then lists what the array-like read
+    // lists, without one `next` dispatch per element (`entities` builds its
+    // decode tables as `new Uint16Array(<50k-element array>)` at startup).
+    let intrinsic = rooted.with_const_ptr::<ArrayHeader, _>(|source| {
+        crate::array::dense_spread_source(crate::value::js_nanbox_pointer(source as i64)).is_some()
+    });
     let iterator_symbol = crate::symbol::well_known_symbol("iterator");
-    let method = if iterator_symbol.is_null() {
+    let method = if intrinsic || iterator_symbol.is_null() {
         f64::from_bits(crate::value::TAG_UNDEFINED)
     } else {
         let symbol =

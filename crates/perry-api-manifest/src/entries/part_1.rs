@@ -1177,6 +1177,10 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
         &[p_str("contract"), p_any("exports")], TypeSpec::Void),
     method_sig("perry/component", "callComponentImport", false, None,
         &[p_str("interfaceName"), p_str("functionName"), p_any("args")], TypeSpec::Any),
+    method_sig("perry/component", "createComponentResource", false, None,
+        &[p_num("resourceType"), p_any("payload"), p_any("destructor")], TypeSpec::Any),
+    method_sig("perry/component", "getComponentResourceValue", false, None,
+        &[p_num("resourceType"), p_any("resource")], TypeSpec::Any),
     method_sig(
         "lodash",
         "chunk",

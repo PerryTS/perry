@@ -134,7 +134,7 @@ pub(crate) fn emit_inline_direct_method_shape_guard(
 /// before user code). `None` when births use the birth pair, for static
 /// methods, or when a family key spells `property` (then the word does not
 /// rule out an own method).
-pub(super) fn family_method_word(
+pub(crate) fn family_method_word(
     ctx: &mut FnCtx<'_>,
     _class_name: &str,
     class_id: u32,
@@ -173,7 +173,7 @@ pub(super) fn family_method_word(
 /// The family's slots are boxed: the clone's raw-`F64` reads load the bits a
 /// boxed Number has too and keep their plain-finite check, and its raw stores
 /// write only plain finite doubles.
-pub(super) fn family_holds_birth_layout(ctx: &FnCtx<'_>, class_name: &str, class_id: u32) -> bool {
+pub(crate) fn family_holds_birth_layout(ctx: &FnCtx<'_>, class_name: &str, class_id: u32) -> bool {
     let Some(fam) = ctx.program_layouts.families.get(&class_id) else {
         return false;
     };

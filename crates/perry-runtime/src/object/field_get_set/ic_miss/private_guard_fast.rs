@@ -553,7 +553,24 @@ pub extern "C" fn js_private_field_site_get(
     );
     let key_ptr = crate::value::js_get_string_pointer_unified(key.get_nanbox_f64())
         as *const crate::StringHeader;
+    if let Some(holder) = unsafe { native_handle_private_holder(obj.get_nanbox_f64()) } {
+        return js_object_get_field_by_name_f64(holder, key_ptr);
+    }
     js_object_get_field_by_name_boxed(obj.get_nanbox_f64(), key_ptr)
+}
+
+/// The property bag holding a native handle receiver's private elements
+/// ([`private_element_holder`]). A handle is not a heap object, so a by-name
+/// access on the handle value never reaches its bag; the field's storage key
+/// is read and written on the bag itself, where its definition put it.
+///
+/// # Safety
+/// `obj` may be any NaN-boxed value.
+unsafe fn native_handle_private_holder(obj: f64) -> Option<*mut ObjectHeader> {
+    if !JSValue::from_bits(obj.to_bits()).is_handle() {
+        return None;
+    }
+    private_element_holder(obj)
 }
 
 /// Miss of a compiled `recv.#x = value` whose hit is the inline slot store
@@ -584,6 +601,12 @@ pub extern "C" fn js_private_field_site_set(
         1,
         site,
     );
+    if let Some(holder) = unsafe { native_handle_private_holder(obj.get_nanbox_f64()) } {
+        let key_ptr = crate::value::js_get_string_pointer_unified(key.get_nanbox_f64())
+            as *const crate::StringHeader;
+        js_object_set_field_by_name(holder, key_ptr, value.get_nanbox_f64());
+        return value.get_nanbox_f64();
+    }
     crate::proxy::js_put_value_set(
         obj.get_nanbox_f64(),
         key.get_nanbox_f64(),

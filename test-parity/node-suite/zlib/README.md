@@ -4,6 +4,17 @@ This suite compares small, fixed `node:zlib` contracts. Node 26.5.0 is the
 oracle. Each fixture prints semantic state or error shape; no fixture compares
 backend-specific compressed bytes.
 
+## Chunk-size contract
+
+`options/chunk-size-contract.ts` covers the pinned Node 26.12.1 numeric
+contract through named, namespace, and captured factories, sibling DEFLATE
+factories, and options-consuming sync calls. Undefined and NaN use the default;
+null is a type error, infinities require a finite-number range error, and finite
+sizes retain the 64-byte minimum (including accepted fractions). Throwing getters
+and small high-water-mark differential controls preserve the existing boundary.
+No large-allocation/OOM probes, decoder modes, dictionary application, or general
+getter-order coverage are added. Historical audit measurements below are unchanged.
+
 ## Locked sources
 
 - Node 26.5.0 commit [`bebd1b8d92bf4cc917844d6335ed1ecf9c2a75fb`][node-tree]:
@@ -79,7 +90,7 @@ suite.
 | `options/level-strategy-validation.ts`   | [`test-zlib-deflate-constructors.js`][node-constructors], [`test-zlib-failed-init.js`][node-failed-init]             | `level`, `memLevel`, and `strategy` enforce type/range rules and map NaN to defaults.                 |
 | `options/max-output-length.ts`           | [`test-zlib-maxOutputLength.js`][node-max-output], [`zlib_test.ts`][deno-test]                                       | Sync and callback Brotli enforce the output cap and return `ERR_BUFFER_TOO_LARGE`.                    |
 | `options/validation-order.ts`            | [`lib/zlib.js`][node-lib]                                                                                            | Observable option getters run in Node's exact order.                                                  |
-| `options/window-bits-zero.ts`            | [`test-zlib-zero-windowBits.js`][node-zero-window]                                                                   | Zero is valid for inflate/gunzip/unzip and invalid for compressors.                                   |
+| `options/window-bits-zero.ts`            | [`test-zlib-zero-windowBits.js`][node-zero-window]                                                                   | Zero is valid for inflate/gunzip/unzip; nonzero 1..7 and 16 reject, 8/15 and defaults remain valid, wrong types reject, and raw codecs/compressors reject zero.                                   |
 | `streams/bytes-written-trailing.ts`      | [`test-zlib-premature-end.js`][node-premature], [`bytesWritten.test.ts`][bun-bytes-written]                          | A decoder counts consumed compressed bytes, not fixed trailing input.                                 |
 | `streams/close-state.ts`                 | [`test-zlib-close-after-write.js`][node-close-write], [`lib/zlib.js`][node-lib]                                      | `close()` returns undefined, clears the handle, sets closed state, and stays idempotent.              |
 | `streams/codec-roundtrips.ts`            | [`test-zlib-create-raw.js`][node-create-raw], [`test-zlib-brotli-from-string.js`][node-brotli-string]                | Deflate, raw, gzip, unzip, and Brotli factories each complete a stream round-trip.                    |

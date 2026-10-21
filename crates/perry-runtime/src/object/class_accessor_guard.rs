@@ -6,14 +6,22 @@ use super::{class_value::class_decl_prototype_link, ObjectHeader};
 /// prototype ShapeId in the high word, from receiver class to accessor owner.
 /// Missing lazy holders are pristine; every mutation materializes them first.
 ///
+/// The receiver qualifies by one of its class's two birth layouts: the birth
+/// ShapeId `expected`, or the class's family layout `family` (the exact
+/// header word `class id | family layout id << 32` its family births carry,
+/// as a direct method site's family arm admits it; 0 when the class has no
+/// family arm here). An overflow or an own shadow sets the shadow bit, so
+/// neither compare admits it.
+///
 /// # Safety
 /// `receiver` is a JS value; `chain` names `len` compiler-emitted words. A
-/// matching birth ShapeId proves an ordinary receiver with no own shadow and
+/// matching birth word proves an ordinary receiver with no own shadow and
 /// its class-implied prototype. This helper never allocates or enters JS.
 #[no_mangle]
 pub unsafe extern "C" fn js_class_accessor_shape_guard(
     receiver: f64,
     expected: u32,
+    family: u64,
     chain: *const u64,
     len: usize,
 ) -> i32 {
@@ -22,10 +30,7 @@ pub unsafe extern "C" fn js_class_accessor_shape_guard(
         return 0;
     }
     let addr = (bits & crate::value::POINTER_MASK) as usize;
-    if !crate::value::addr_class::is_plausible_heap_addr(addr)
-        || len == 0
-        || !super::shapes::is_shape_id(expected)
-    {
+    if !crate::value::addr_class::is_plausible_heap_addr(addr) || len == 0 {
         return 0;
     }
     let obj = addr as *const ObjectHeader;
@@ -34,8 +39,14 @@ pub unsafe extern "C" fn js_class_accessor_shape_guard(
     };
     if header.obj_type != crate::gc::GC_TYPE_OBJECT
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
-        || (*obj).parent_class_id != expected
     {
+        return 0;
+    }
+    let word = (*obj).parent_class_id;
+    let birth = super::shapes::is_shape_id(expected) && word == expected;
+    let family_birth =
+        family >> 32 != 0 && u64::from((*obj).class_id) | (u64::from(word) << 32) == family;
+    if !birth && !family_birth {
         return 0;
     }
     for &word in std::slice::from_raw_parts(chain, len) {

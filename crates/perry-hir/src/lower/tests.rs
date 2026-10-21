@@ -298,6 +298,46 @@ function build(paramBox: unknown) {
     }
 }
 
+/// Every object-literal path takes a method as a dynamic-`this` value. A
+/// literal with a computed key, an accessor or a spread (Effect's prototype
+/// literals) used to bind its `this`-reading methods through
+/// `js_object_set_method_by_name` / `js_object_set_property_key_method`,
+/// which patched a reserved `this` capture with the literal, so a call
+/// through any other receiver rebound a cloned closure in the generic
+/// method tower and a detached call saw the literal.
+#[test]
+fn literal_methods_read_their_call_receiver_on_every_path() {
+    let source = r#"
+const sym = Symbol("s");
+const base = { kind: "b" };
+const computed = { [sym]() { return this; }, read() { return this.v; } };
+const accessor = { get g() { return 1; }, read() { return this.v; } };
+const spread = { ...base, read() { return this.v; } };
+"#;
+    let module = perry_parser::parse_typescript(source, "literal-this.ts").expect("source parses");
+    let hir =
+        super::lower_module(&module, "literal-this", "literal-this.ts").expect("source lowers");
+    let text = format!("{:#?}", hir.init);
+    for patch in [
+        "js_object_set_method_by_name",
+        "js_object_set_property_key_method",
+        "js_object_set_symbol_method",
+    ] {
+        assert!(
+            !text.contains(patch),
+            "a literal method must not be patched with its literal ({patch}): {text}"
+        );
+    }
+    assert!(
+        text.matches("captures_this: false").count() >= 4,
+        "the four `this`-reading methods must be dynamic-`this` closures: {text}"
+    );
+    assert!(
+        !text.contains("captures_this: true"),
+        "no literal method may capture `this`: {text}"
+    );
+}
+
 #[test]
 fn static_method_literals_skip_the_builder_iife_but_home_objects_fail_closed() {
     let source = r#"

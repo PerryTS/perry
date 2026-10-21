@@ -68,3 +68,17 @@ finish/close counts, and event order. Reusing one callback for two `end` calls
 must retain both registrations; this is not callback-identity deduplication.
 This fixture does not certify other string encodings or native shutdown
 cancellation/lifetime behavior.
+
+## Outbound string encodings
+
+`connection/string-write-encoding.ts` compares dynamic encoding arguments for
+`write` and `end`, while connected and connecting. It covers inline/heap
+strings, UTF-8 aliases, hex, base64/base64url, latin1/binary, ascii, UTF-16LE/UCS-2
+aliases, malformed input, falsy UTF-8 defaults, synchronous unknown-encoding
+errors, callback/finish/close counts, and decoded-byte cork accounting.
+Encoding validation precedes transport state and applies to binary chunks too;
+valid encodings leave Buffer/Uint8Array bytes unchanged. An owned TLS journey
+wraps an existing numeric-loopback socket using the checked-in TLS certificates
+and explicit `rejectUnauthorized: false` only for that fixture connection.
+This does not certify receive-side `setEncoding`, HTTP, direct TLSSocket
+construction, native shutdown cancellation, or complete NET/TLS compatibility.

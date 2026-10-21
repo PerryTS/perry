@@ -77,7 +77,7 @@ pub(crate) use func_ref::{
     guarded_call_return_proof, guarded_discriminant_branch_proofs, guarded_expr_proof,
     guarded_path_type,
 };
-mod direct_method_guard;
+pub(crate) mod direct_method_guard;
 mod jsx;
 pub(crate) mod lookup_first;
 #[cfg(test)]

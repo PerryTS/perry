@@ -209,7 +209,32 @@ pub unsafe extern "C-unwind" fn js_class_value_super_construct_site(
             crate::object::js_new_target_get(),
         );
     }
-    crate::object::global_this::js_fetch_or_value_super(parent, this, args_ptr, args_len)
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(this);
+    let result =
+        crate::object::global_this::js_fetch_or_value_super(parent, this, args_ptr, args_len);
+    link_native_super_result(result, receiver.get_nanbox_f64());
+    result
+}
+
+/// `super(...)` of a native parent (`class X extends http.Agent`) returns a
+/// native handle, which becomes the derived `this`. Construct gives the new
+/// object `newTarget.prototype` (OrdinaryCreateFromConstructor), the
+/// prototype the provisional receiver was born with; the handle had none, so
+/// `x instanceof X`, `x.method()` through an untyped value and the class's
+/// accessors all missed. Link it once, before any user code sees it.
+fn link_native_super_result(result: f64, receiver: f64) {
+    if !JSValue::from_bits(result.to_bits()).is_handle() || result.to_bits() == receiver.to_bits() {
+        return;
+    }
+    let handle = JSValue::from_bits(result.to_bits()).as_handle() as usize;
+    if crate::object::prototype_chain::object_static_prototype(handle).is_some() {
+        return;
+    }
+    let proto = crate::object::js_object_get_prototype_of(receiver);
+    if JSValue::from_bits(proto.to_bits()).is_pointer() {
+        crate::object::prototype_chain::object_set_static_prototype(handle, proto.to_bits());
+    }
 }
 
 #[used(compiler)]

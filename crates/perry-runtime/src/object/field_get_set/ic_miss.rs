@@ -681,14 +681,20 @@ include!("ic_miss/private_guard_fast.rs");
 
 /// The object that holds `value`'s private elements (#11791): `value`
 /// itself when it is a shaped object, or its own property bag when it is a
-/// function or an exotic cell (Map, Set, Date, Error, Promise, Temporal — the
-/// instances `class X extends Map { #k = ... }` constructs). A Proxy holds
-/// none of its target's private elements, and a primitive holds none at all.
+/// function, an exotic cell (Map, Set, Date, Error, Promise, Temporal — the
+/// instances `class X extends Map { #k = ... }` constructs) or a native
+/// handle (the instance `class X extends http.Agent { #m() {} }` constructs).
+/// A Proxy holds none of its target's private elements, and a primitive holds
+/// none at all.
 ///
 /// # Safety
 /// Reads only headers; `value` may be any NaN-boxed value.
 unsafe fn private_element_holder(value: f64) -> Option<*mut ObjectHeader> {
     let value = JSValue::from_bits(value.to_bits());
+    if value.is_handle() {
+        let bag = crate::object::handle_expando::handle_property_bag(value.as_handle() as i64);
+        return (!bag.is_null()).then_some(bag);
+    }
     if !value.is_pointer() {
         return None;
     }
@@ -708,16 +714,23 @@ unsafe fn private_element_holder(value: f64) -> Option<*mut ObjectHeader> {
 }
 
 /// [`private_element_holder`] for a definition (a private field, or the
-/// class brand of its private methods): a function or exotic cell gets its
-/// property bag allocated on the first private element, as on the first
-/// named property. May allocate; callers root `value` and read the holder
+/// class brand of its private methods): a function, exotic cell or native
+/// handle gets its property bag allocated on the first private element, as
+/// on the first named property. May allocate; callers root `value` and read the holder
 /// only after this returns.
 ///
 /// # Safety
 /// As [`private_element_holder`].
 unsafe fn private_element_holder_for_definition(value: f64) -> Option<*mut ObjectHeader> {
     let boxed = JSValue::from_bits(value.to_bits());
-    if boxed.is_pointer() {
+    if boxed.is_handle() {
+        let handle = boxed.as_handle() as i64;
+        // Only a live native owner record has a bag word; any other handle
+        // holds no private elements, and the definition throws below.
+        if crate::object::class_handles::native_property_bag_access(handle, 0, 0).is_some() {
+            crate::object::handle_expando::handle_property_bag_ensure(handle);
+        }
+    } else if boxed.is_pointer() {
         let addr = boxed.as_pointer::<ObjectHeader>() as usize;
         if crate::closure::is_closure_ptr(addr) {
             crate::closure::props::bag_ensure(addr);
@@ -993,7 +1006,9 @@ fn class_field_add_slow(receiver: f64, key: f64, value: f64) -> f64 {
 }
 
 /// Brand + kind/op guard for a private member access `obj.#name`. Returns
-/// `obj` unchanged when the access is legal; otherwise throws a `TypeError`.
+/// the object the access reads or writes when it is legal (`obj` itself, or
+/// for an instance FIELD of a native handle its property bag, which holds the
+/// field: [`private_field_access_object`]); otherwise throws a `TypeError`.
 ///
 /// The enclosing `PropertyGet` / `PropertySet` / method-call lowering operates
 /// on the returned receiver, so this helper only enforces the two access
@@ -1084,7 +1099,7 @@ fn private_guard_checked(
                 record_hints,
                 mark,
             );
-            return obj;
+            return private_field_access_object(obj, kind, is_static);
         }
     }
     // Interning also makes the name independent of the caller's buffer across
@@ -1169,7 +1184,23 @@ fn private_guard_checked(
         record_hints,
         mark,
     );
-    obj_root.get_nanbox_f64()
+    private_field_access_object(obj_root.get_nanbox_f64(), kind, is_static)
+}
+
+/// The object a legal private access reads or writes by its storage key. An
+/// instance field of a native handle (`class X extends http.Agent { #n }`)
+/// lives in the handle's property bag ([`private_element_holder`]), where its
+/// definition put it; a by-name access on the handle value itself never
+/// reaches that bag. Every other access, and every method or accessor (whose
+/// `this` is the receiver), keeps `obj`.
+fn private_field_access_object(obj: f64, kind: u32, is_static: bool) -> f64 {
+    if kind != 0 || is_static || !JSValue::from_bits(obj.to_bits()).is_handle() {
+        return obj;
+    }
+    match unsafe { private_element_holder(obj) } {
+        Some(bag) => crate::value::js_nanbox_pointer(bag as i64),
+        None => obj,
+    }
 }
 
 /// Throw node's TypeError for a private access whose receiver lacks the

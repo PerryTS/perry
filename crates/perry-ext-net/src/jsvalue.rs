@@ -42,6 +42,11 @@ extern "C" {
     /// pointer-tagged non-buffer object). Defined in
     /// `crates/perry-runtime/src/buffer.rs::js_buffer_is_buffer`.
     fn js_buffer_is_buffer(ptr: i64) -> i32;
+    fn js_buffer_from_value(value: i64, encoding: i32) -> *mut BufferHeader;
+    fn js_encoding_tag_from_value(value: f64) -> i32;
+    fn js_buffer_is_encoding(value: f64) -> i32;
+    fn js_is_truthy(value: f64) -> i32;
+    fn js_util_inspect(value: f64, options: f64) -> f64;
     /// #1781 — materialize ANY string representation (heap
     /// `STRING_TAG` *or* inline `SHORT_STRING_TAG` SSO) to a real
     /// `*const StringHeader`, returned as `i64`. SSO bytes are copied
@@ -152,6 +157,51 @@ pub(crate) unsafe fn jsvalue_to_socket_bytes(value: f64) -> Option<Vec<u8>> {
         );
     }
     None
+}
+
+/// Socket-only outbound conversion. Keep the legacy extractor unchanged for
+/// Bun, options and certificate consumers. Validate encoding even for binary
+/// chunks, but only strings pass through the canonical Buffer decoder.
+pub(crate) unsafe fn jsvalue_to_encoded_socket_bytes(value: f64, encoding: f64) -> Option<Vec<u8>> {
+    let scope = perry_ffi::TransientRootScope::enter();
+    let value = scope.root_nanbox(value);
+    let encoding = scope.root_nanbox(encoding);
+    let tag = if js_is_truthy(encoding.get()) == 0 {
+        0
+    } else {
+        if !JsValue::from_bits(encoding.get().to_bits()).is_any_string()
+            || js_buffer_is_encoding(encoding.get()) == 0
+        {
+            let name = if JsValue::from_bits(encoding.get().to_bits()).is_any_string() {
+                jsvalue_to_owned_string(encoding.get()).unwrap_or_default()
+            } else {
+                // Node's unknown-encoding error inspects non-string arguments,
+                // rather than coercing them through user-defined toString.
+                let text = scope.root_nanbox(js_util_inspect(
+                    encoding.get(),
+                    f64::from_bits(JsValue::UNDEFINED.bits()),
+                ));
+                jsvalue_to_owned_string(text.get()).unwrap_or_default()
+            };
+            perry_ffi::throw_with_code(
+                &format!("Unknown encoding: {name}"),
+                "ERR_UNKNOWN_ENCODING",
+                perry_ffi::ErrorKind::TypeError,
+            );
+        }
+        js_encoding_tag_from_value(encoding.get())
+    };
+    if !JsValue::from_bits(value.get().to_bits()).is_any_string() {
+        return jsvalue_to_socket_bytes(value.get());
+    }
+    let buffer = scope.root_addr(js_buffer_from_value(value.get().to_bits() as i64, tag) as i64);
+    // Conversion has finished: copy in a non-allocating GC borrow window,
+    // without carrying a buffer pointer into transport projection or JS.
+    Some(perry_ffi::bytes::no_gc(|guard| {
+        perry_ffi::read_buffer_bytes(buffer.get() as *const BufferHeader, guard)
+            .unwrap_or(&[])
+            .to_vec()
+    }))
 }
 
 /// True iff `val_f64` carries `POINTER_TAG` (0x7FFD) — a real pointer

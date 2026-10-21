@@ -4019,14 +4019,29 @@ pub fn run_with_parse_cache(
         // bar }`) is still handled because the same import has
         // value specifiers; the whole-decl flag is the one that
         // makes the entire import a no-op.
+        // Names this module binds by a named or default import. A bare call
+        // of one of them means that import, so a namespace import's member of
+        // the same name must not enter the flat maps below: effect's
+        // Schema.ts imports `{ format }` from Formatter.ts (2 params) and
+        // `* as Duration_` (whose `format` takes 1); the member's flat entry
+        // overwrote the arity and `format(source)` lost its `undefined`
+        // padding, so `options` read a stale register.
+        let mut bound_import_locals: std::collections::HashSet<&str> =
+            std::collections::HashSet::new();
         for import in &hir_module.imports {
             if import.type_only || import.runtime_erased {
                 continue;
             }
             for spec in &import.specifiers {
-                if let perry_hir::ImportSpecifier::Namespace { local } = spec {
-                    if !namespace_imports.contains(local) {
-                        namespace_imports.push(local.clone());
+                match spec {
+                    perry_hir::ImportSpecifier::Namespace { local } => {
+                        if !namespace_imports.contains(local) {
+                            namespace_imports.push(local.clone());
+                        }
+                    }
+                    perry_hir::ImportSpecifier::Named { local, .. }
+                    | perry_hir::ImportSpecifier::Default { local } => {
+                        bound_import_locals.insert(local.as_str());
                     }
                 }
             }
@@ -4284,7 +4299,8 @@ pub fn run_with_parse_cache(
                             // registered classes. The per-namespace entries are kept, so `ns.Array`
                             // still resolves.
                             let flat =
-                                !perry_hir::analysis::is_global_intrinsic_value_name(export_name);
+                                !perry_hir::analysis::is_global_intrinsic_value_name(export_name)
+                                    && !bound_import_locals.contains(export_name.as_str());
                             // Issue #5927: namespace members are a
                             // best-effort fallback in the flat
                             // `import_function_prefixes` map — the
@@ -4780,7 +4796,7 @@ pub fn run_with_parse_cache(
                                 // still resolves.
                                 let flat = !perry_hir::analysis::is_global_intrinsic_value_name(
                                     export_name,
-                                );
+                                ) && !bound_import_locals.contains(export_name.as_str());
                                 // Issue #5927: `or_insert` — see the
                                 // matching rationale on the
                                 // `namespace_like_local` branch above.

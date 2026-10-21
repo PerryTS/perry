@@ -151,6 +151,22 @@ pub(super) fn is_width_tracked_typed_array_receiver(ctx: &FnCtx<'_>, object: &Ex
     )
 }
 
+/// A statically `BigInt64Array` / `BigUint64Array` receiver. The width-tracked
+/// predicate above leaves these out (their elements are BigInts, not numbers),
+/// but they are still %TypedArray% objects, never plain `Array`s, so a
+/// computed store must reach the typed-array setter, not the array one.
+fn is_bigint_typed_array_receiver(ctx: &FnCtx<'_>, object: &Expr) -> bool {
+    let ty = match object {
+        Expr::LocalGet(id) => ctx.local_type_hint(id).cloned(),
+        _ => crate::type_analysis::static_type_of(ctx, object),
+    };
+    matches!(
+        ty,
+        Some(perry_hir::types::Type::Named(name))
+            if matches!(name.as_str(), "BigInt64Array" | "BigUint64Array")
+    )
+}
+
 pub(super) fn is_uint8array_receiver(ctx: &FnCtx<'_>, object: &Expr) -> bool {
     matches!(
         receiver_class_name(ctx, object).as_deref(),
@@ -998,6 +1014,25 @@ pub(crate) fn lower(
                         emit_write_barrier(ctx, &arr_bits, &val_bits);
                     }
                     Ok(val_double.clone())
+                });
+            }
+            if is_bigint_typed_array_receiver(ctx, object)
+                && typed_array_index_needs_runtime_key(ctx, object.as_ref(), index.as_ref())
+            {
+                // `big[k] = v` with a key not proven to be a canonical array
+                // index (`o.f / 8`, `i | 0` of a non-counter): the array
+                // runtime-key helper treats the receiver as an `Array` and
+                // replaces it with a fresh empty one. The guarded dynamic
+                // typed-array store owns every key kind and BigInt value.
+                return rooting::with_operands_rooted(ctx, &[object, index, value], |ctx, vals| {
+                    lower_inline_dyn_typed_array_set(
+                        ctx,
+                        &vals[0],
+                        &vals[1],
+                        &vals[2],
+                        assignment_strict,
+                        None,
+                    )
                 });
             }
             if is_array_expr(ctx, object)

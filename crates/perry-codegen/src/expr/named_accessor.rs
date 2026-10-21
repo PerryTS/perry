@@ -158,7 +158,7 @@ pub(super) fn emit(
         .find(|(_, k)| k.as_str() == keys)
         .map(|(name, _)| name.clone())
         .expect("accessor receiver class");
-    let (_, chain) =
+    let (generic_body, chain) =
         crate::codegen::static_prototype::accessor_chain(ctx, &class, property, value.is_some())
             .expect("accessor holder candidate");
     let slot = ctx.ic_site_counter;
@@ -183,10 +183,12 @@ pub(super) fn emit(
         // exactly as ordinary method and field sites do.
         ctx.block().br(&fast_label);
     } else {
+        let family = family_word(ctx, &class, property, function, &generic_body);
         emit_general_guard(
             ctx,
             receiver,
             &expected,
+            &family,
             &chain,
             &global,
             &fast_label,
@@ -244,12 +246,45 @@ pub(super) fn emit(
         .phi(DOUBLE, &[(&result, &fast_label), (&cold, &slow_label)]))
 }
 
+/// The exact header word (`class id | family layout id << 32`) the class's
+/// family births carry, which the shared guard admits beside the birth
+/// ShapeId; `"0"` when no family arm applies. Instances a constructor builds
+/// carry the family layout once the class has one, so a guard that knew only
+/// the birth ShapeId sent every such receiver to the generic read. The
+/// generic accessor body serves any receiver of the class; a proven-shape
+/// body only one whose family holds exactly its birth layout, as for direct
+/// method sites (`family_holds_birth_layout`). A family key that spells the
+/// property rules the arm out (`family_method_word`).
+fn family_word(
+    ctx: &mut FnCtx<'_>,
+    class: &str,
+    property: &str,
+    function: &str,
+    generic_body: &str,
+) -> String {
+    use crate::lower_call::direct_method_guard::{family_holds_birth_layout, family_method_word};
+    let Some(&class_id) = ctx.class_ids.get(class) else {
+        return "0".to_string();
+    };
+    if function != generic_body && !family_holds_birth_layout(ctx, class, class_id) {
+        return "0".to_string();
+    }
+    let Some(id) = family_method_word(ctx, class, class_id, property, function) else {
+        return "0".to_string();
+    };
+    let blk = ctx.block();
+    let high = blk.zext(I32, &id, I64);
+    let high = blk.shl(I64, &high, "32");
+    blk.or(I64, &high, &class_id.to_string())
+}
+
 /// One shared proof keeps arbitrary receivers out of per-site dispatch
 /// lattices. Only the call and its result branch remain at the site.
 fn emit_general_guard(
     ctx: &mut FnCtx<'_>,
     receiver: &str,
     expected: &str,
+    family: &str,
     chain: &[(u32, u32)],
     candidate: &str,
     fast: &str,
@@ -262,6 +297,7 @@ fn emit_general_guard(
         &[
             (DOUBLE, receiver),
             (I32, expected),
+            (I64, family),
             (PTR, &format!("@{candidate}")),
             (I64, &chain.len().to_string()),
         ],
