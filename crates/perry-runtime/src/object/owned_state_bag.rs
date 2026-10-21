@@ -5,6 +5,7 @@ use crate::array::ArrayHeader;
 
 pub(crate) const ASYNC_RESOURCE: u32 = 4;
 pub(crate) const WASM_INSTANCE: u32 = 5;
+pub(crate) const WASI_CONTEXT: u32 = 6;
 
 pub(crate) unsafe fn bag(owner: usize, create: bool, last_slot: u32) -> *mut ArrayHeader {
     let _publication = crate::gc::GcSuppressScope::new();

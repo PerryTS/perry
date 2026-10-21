@@ -4442,7 +4442,7 @@ js_wasi_constructor_call	f64	f64
 js_wasi_emit_warning	f64	
 js_wasi_finalize_bindings	f64	ptr,i64,f64,f64
 js_wasi_get_import_object	f64	ptr,i64
-js_wasi_import_stub	f64	ptr,i64,f64,f64,f64,f64
+js_wasi_import_call	f64	ptr,i64,f64
 js_wasi_initialize	f64	ptr,i64,f64
 js_wasi_new	f64	f64
 js_wasi_start	f64	ptr,i64,f64

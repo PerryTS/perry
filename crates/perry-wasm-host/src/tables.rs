@@ -245,11 +245,11 @@ pub extern "C" fn perry_wasm_host_instance_take_exit_code(
     let Some(inst) = (unsafe { inst.as_mut() }) else {
         return 0;
     };
-    let code = inst.inner.exit_code.swap(i32::MIN, Ordering::Relaxed);
-    if code == i32::MIN {
+    let code = inst.inner.exit_code.swap(i64::MIN, Ordering::Relaxed);
+    if code == i64::MIN {
         return 0;
     }
-    unsafe { *out_code = code };
+    unsafe { *out_code = code as i32 };
     1
 }
 

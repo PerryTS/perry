@@ -956,3 +956,5 @@ pub const NANBOX_OPERANDS: [u64; 26] = [
     0x7FFC_0000_0000_0002, // TAG_NULL
     0x7FFC_0000_0000_0000, // TAG_MARKER
 ];
+
+pub mod wasi;

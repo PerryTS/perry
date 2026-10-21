@@ -1,0 +1,11 @@
+import { WASI } from "node:wasi";
+import { readFileSync, mkdtempSync, rmSync, existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+const directory = mkdtempSync(join(tmpdir(), "perry-wasi-libc-"));
+const wasi = new WASI({ version: "preview1", args: ["guest", "argument"], env: { PERRY_TEST: "value" }, preopens: { "/sandbox": directory } });
+const module = new WebAssembly.Module(readFileSync("test-parity/node-suite/wasi/fixtures/libc-command.wasm"));
+const instance = new WebAssembly.Instance(module, wasi.getImportObject());
+console.log("libc exit:", wasi.start(instance));
+console.log("libc file removed:", !existsSync(join(directory, "created.txt")));
+rmSync(directory, { recursive: true, force: true });

@@ -1444,3 +1444,19 @@ fn a_literal_left_operand_short_circuits_without_lowering_the_right() {
     assert!(matches!(init("w"), Expr::Logical { .. }), "{:?}", init("w"));
     assert!(!format!("{:?}", hir.init).contains("Closure"));
 }
+
+#[test]
+fn named_wasi_constructor_uses_registered_native_export() {
+    for binding in ["WASI", "WASI as Guest"] {
+        let local = if binding == "WASI" { "WASI" } else { "Guest" };
+        let source = format!(
+            "import {{ {binding} }} from 'node:wasi'; new {local}({{version:'preview1'}});"
+        );
+        let module = perry_parser::parse_typescript(&source, "wasi-new.ts").unwrap();
+        let hir = super::lower_module(&module, "wasi-new", "wasi-new.ts").unwrap();
+        assert!(hir.init.iter().any(|stmt| matches!(stmt,
+            Stmt::Expr(Expr::NewDynamic { callee, .. }) if matches!(callee.as_ref(),
+                Expr::PropertyGet { object, property, .. } if property == "WASI" && matches!(object.as_ref(), Expr::NativeModuleRef(module) if module == "wasi")
+            ))), "WASI must construct the registered export, not an empty class placeholder: {:?}", hir.init);
+    }
+}

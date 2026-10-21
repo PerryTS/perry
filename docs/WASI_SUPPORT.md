@@ -184,3 +184,9 @@ timeouts, missing artifacts, oracle failures and output/exit mismatches fail
 the run. `--output` preserves `report.json`, compilation logs, stdout and
 stderr; without it the files are temporary. The historical `core` suite remains
 available for quick diagnostics; CI gates the complete `acceptance` suite.
+
+## Native Preview 1 hosting
+
+Running third-party Preview 1 core modules inside native Perry is a separate
+profile. See [WASI_P1_HOSTING.md](WASI_P1_HOSTING.md) for the `node:wasi` host,
+capability ownership, execution tests and limitations.

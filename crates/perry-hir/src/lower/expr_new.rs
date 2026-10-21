@@ -1698,12 +1698,14 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             // constructable JavaScript wrappers (`repl.start`, `events.init`)
             // from native non-constructors (`path.toNamespacedPath`). The
             // runtime's explicit export metadata makes that decision. Keep
-            // capitalized class exports on the specialized paths below.
+            // capitalized class exports on the specialized paths below, except
+            // WASI: its registered runtime constructor owns the native context.
             if let Some((module, Some(export))) = ctx.lookup_native_module(&class_name) {
-                if export
-                    .chars()
-                    .next()
-                    .is_some_and(|first| !first.is_uppercase())
+                if (module == "wasi" && export == "WASI")
+                    || export
+                        .chars()
+                        .next()
+                        .is_some_and(|first| !first.is_uppercase())
                 {
                     return Ok(Expr::NewDynamic {
                         callee: Box::new(Expr::PropertyGet {

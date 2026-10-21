@@ -193,6 +193,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "ambient-authority"
+version = "0.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e9d4ee0d472d1cd2e28c97dfa124b3d8d992e10eb0a035f33f5d12e3a177ba3b"
+
+[[package]]
+name = "android_system_properties"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ae221649c9976a6f6c56ae1facf410f3ddb33cc661c4b7b61020a912d4237fbc"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "anstream"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -369,7 +384,7 @@ dependencies = [
  "futures-lite",
  "parking",
  "polling",
- "rustix",
+ "rustix 1.1.4",
  "slab",
  "windows-sys 0.61.2",
 ]
@@ -400,7 +415,7 @@ dependencies = [
  "cfg-if",
  "event-listener",
  "futures-lite",
- "rustix",
+ "rustix 1.1.4",
 ]
 
 [[package]]
@@ -426,7 +441,7 @@ dependencies = [
  "cfg-if",
  "futures-core",
  "futures-io",
- "rustix",
+ "rustix 1.1.4",
  "signal-hook-registry",
  "slab",
  "windows-sys 0.61.2",
@@ -865,6 +880,72 @@ checksum = "5abbd6eeda6885048d357edc66748eea6e0268e3dd11f326fff5bd248d779c26"
 dependencies = [
  "core_maths",
  "displaydoc",
+]
+
+[[package]]
+name = "cap-fs-ext"
+version = "3.4.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "476f0d0003a760918ed4b1e039a59e11769030416f79c8222551d22785f7f70d"
+dependencies = [
+ "cap-primitives",
+ "cap-std",
+ "io-lifetimes",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "cap-primitives"
+version = "3.4.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e0bf07d379916947be6c4a07f43684153d710a2896c31f9e97781362895596c"
+dependencies = [
+ "ambient-authority",
+ "fs-set-times",
+ "io-extras",
+ "io-lifetimes",
+ "ipnet",
+ "maybe-owned",
+ "rustix 1.1.4",
+ "rustix-linux-procfs",
+ "windows-sys 0.59.0",
+ "winx",
+]
+
+[[package]]
+name = "cap-rand"
+version = "3.4.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6ec6a5b75f54547c579a6b117c6fdd5f04f4ab7598de747b9f440a53592b3a4a"
+dependencies = [
+ "ambient-authority",
+ "rand 0.8.7",
+]
+
+[[package]]
+name = "cap-std"
+version = "3.4.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a59e59fa26472d29680ece6a9f8ee8b0551a719a33df2f5240bde065ecbddfd7"
+dependencies = [
+ "cap-primitives",
+ "io-extras",
+ "io-lifetimes",
+ "rustix 1.1.4",
+]
+
+[[package]]
+name = "cap-time-ext"
+version = "3.4.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b54c289326c70f1c697ebf0a31842a480932e5942b5fac92fcc46e87286b48e2"
+dependencies = [
+ "ambient-authority",
+ "cap-primitives",
+ "iana-time-zone",
+ "once_cell",
+ "rustix 1.1.4",
+ "winx",
 ]
 
 [[package]]
@@ -1967,6 +2048,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "caf1079563223d5d59d83c85886a56e586cfd5c1a26292e971a0fa266531ac5a"
 
 [[package]]
+name = "fd-lock"
+version = "4.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ce92ff622d6dadf7349484f42c93271a0d49b7cc4d466a936405bacbe10aa78"
+dependencies = [
+ "cfg-if",
+ "rustix 1.1.4",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
 name = "fdeflate"
 version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2096,6 +2188,17 @@ checksum = "e5ff35a391aef949120a0340d690269b3d9f63460a6106e99bd07b961f345ea9"
 dependencies = [
  "swc_macros_common",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "fs-set-times"
+version = "0.20.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "94e7099f6313ecacbe1256e8ff9d617b75d1bcb16a6fddef94866d225a01a14a"
+dependencies = [
+ "io-lifetimes",
+ "rustix 1.1.4",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2978,6 +3081,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "iana-time-zone"
+version = "0.1.65"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e31bc9ad994ba00e440a8aa5c9ef0ec67d5cb5e5cb0cc7f8b744a35b389cc470"
+dependencies = [
+ "android_system_properties",
+ "core-foundation-sys",
+ "iana-time-zone-haiku",
+ "js-sys",
+ "log",
+ "wasm-bindgen",
+ "windows-core 0.62.2 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
+name = "iana-time-zone-haiku"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f31827a206f56af32e590ba56d5d2d085f558508192593743f16b2306495269f"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "icu_calendar"
 version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3414,6 +3541,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "io-extras"
+version = "0.18.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2285ddfe3054097ef4b2fe909ef8c3bcd1ea52a8f0d274416caebeef39f04a65"
+dependencies = [
+ "io-lifetimes",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "io-lifetimes"
+version = "2.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "06432fb54d3be7964ecd3649233cddf80db2832f47fec34c01f65b3d9d774983"
+
+[[package]]
 name = "ipnet"
 version = "2.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3671,6 +3814,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "leb128"
+version = "0.2.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c83bff1d572d6b9aeef67ddfc8448e4a3737909cb28e81f97c791b9018703e52"
+
+[[package]]
 name = "leb128fmt"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3810,6 +3959,12 @@ dependencies = [
 
 [[package]]
 name = "linux-raw-sys"
+version = "0.4.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d26c52dbd32dccf2d10cac7725f8eae5296885fb5703b261f7d0a0739ec807ab"
+
+[[package]]
+name = "linux-raw-sys"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
@@ -3940,6 +4095,12 @@ checksum = "d1525a2a28c7f4fa0fc98bb91ae755d1e2d1505079e05539e35bc876b5d65ae9"
 dependencies = [
  "regex-automata",
 ]
+
+[[package]]
+name = "maybe-owned"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4facc753ae494aeb6e3c22f839b158aebd4f9270f55cd3c79906c45476c47ab4"
 
 [[package]]
 name = "maybe-rayon"
@@ -4871,7 +5032,7 @@ checksum = "51a7ee1a53a0fbe25a8b9f5be8ba3fbee87aa6ecca0fda04c99d24d8b9b386da"
 
 [[package]]
 name = "perry"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "anyhow",
  "clap",
@@ -4931,11 +5092,11 @@ dependencies = [
 
 [[package]]
 name = "perry-abi"
-version = "0.5.1662"
+version = "0.5.1663"
 
 [[package]]
 name = "perry-api-manifest"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "perry-dispatch",
  "serde",
@@ -4943,7 +5104,7 @@ dependencies = [
 
 [[package]]
 name = "perry-audio-miniaudio"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "cc",
  "libc",
@@ -4952,14 +5113,14 @@ dependencies = [
 
 [[package]]
 name = "perry-base64"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "base64 0.23.1",
 ]
 
 [[package]]
 name = "perry-cli-support"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "anyhow",
  "console 0.16.6",
@@ -4973,7 +5134,7 @@ dependencies = [
 
 [[package]]
 name = "perry-codegen"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -4998,7 +5159,7 @@ dependencies = [
 
 [[package]]
 name = "perry-codegen-arkts"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "anyhow",
  "perry-hir",
@@ -5006,7 +5167,7 @@ dependencies = [
 
 [[package]]
 name = "perry-codegen-glance"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "anyhow",
  "perry-hir",
@@ -5014,7 +5175,7 @@ dependencies = [
 
 [[package]]
 name = "perry-codegen-js"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "anyhow",
  "perry-dispatch",
@@ -5023,7 +5184,7 @@ dependencies = [
 
 [[package]]
 name = "perry-codegen-swiftui"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "anyhow",
  "perry-hir",
@@ -5031,7 +5192,7 @@ dependencies = [
 
 [[package]]
 name = "perry-codegen-wasm"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "anyhow",
  "perry-base64",
@@ -5039,12 +5200,12 @@ dependencies = [
  "perry-dispatch",
  "perry-hir",
  "perry-parser",
- "wasm-encoder",
+ "wasm-encoder 0.258.0",
 ]
 
 [[package]]
 name = "perry-codegen-wear-tiles"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "anyhow",
  "perry-hir",
@@ -5052,7 +5213,7 @@ dependencies = [
 
 [[package]]
 name = "perry-container-compose"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "async-lock",
  "async-trait",
@@ -5076,14 +5237,14 @@ dependencies = [
 
 [[package]]
 name = "perry-container-e2e"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "anyhow",
 ]
 
 [[package]]
 name = "perry-db-turnloop"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "perry-ffi",
  "perry-tls-turnloop",
@@ -5091,7 +5252,7 @@ dependencies = [
 
 [[package]]
 name = "perry-diagnostics"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "serde",
  "serde_json",
@@ -5099,7 +5260,7 @@ dependencies = [
 
 [[package]]
 name = "perry-dispatch"
-version = "0.5.1662"
+version = "0.5.1663"
 
 [[package]]
 name = "perry-doc-fixture-my-bindings"
@@ -5110,7 +5271,7 @@ dependencies = [
 
 [[package]]
 name = "perry-doc-tests"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "anyhow",
  "clap",
@@ -5125,7 +5286,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-ads"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "block2",
  "objc2",
@@ -5135,7 +5296,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-argon2"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "argon2",
  "perry-ffi",
@@ -5144,7 +5305,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-bcrypt"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "bcrypt",
  "perry-ffi",
@@ -5152,7 +5313,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-better-sqlite3"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "perry-ffi",
  "rusqlite",
@@ -5160,7 +5321,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-cheerio"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "perry-ffi",
  "scraper",
@@ -5168,7 +5329,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-ethers"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "perry-ffi",
  "rand 0.10.3",
@@ -5176,7 +5337,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-http"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "bytes",
  "http",
@@ -5202,7 +5363,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-net"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "perry-ffi",
  "perry-runtime",
@@ -5216,7 +5377,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-nodemailer"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "perry-ffi",
  "perry-uuid",
@@ -5225,7 +5386,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-parcel-watcher"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "notify",
  "perry-ffi",
@@ -5237,7 +5398,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-pdf"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "perry-ffi",
  "printpdf",
@@ -5245,7 +5406,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-sharp"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "fast_image_resize",
  "image",
@@ -5256,7 +5417,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-typescript"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "anyhow",
  "perry-ffi",
@@ -5276,7 +5437,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-undici"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "perry-ffi",
  "perry-runtime",
@@ -5285,7 +5446,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-ws"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "perry-ext-net",
  "perry-ffi",
@@ -5300,7 +5461,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-zlib"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "adler2",
  "brotli 9.0.0",
@@ -5324,7 +5485,7 @@ dependencies = [
 
 [[package]]
 name = "perry-gc-effects"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "anyhow",
  "clap",
@@ -5341,11 +5502,11 @@ dependencies = [
 
 [[package]]
 name = "perry-hex"
-version = "0.5.1662"
+version = "0.5.1663"
 
 [[package]]
 name = "perry-hir"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "anyhow",
  "perry-api-manifest",
@@ -5366,7 +5527,7 @@ dependencies = [
 
 [[package]]
 name = "perry-http-client"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "perry-base64",
  "perry-tls-session",
@@ -5379,7 +5540,7 @@ dependencies = [
 
 [[package]]
 name = "perry-http-server"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "http",
  "httpdate",
@@ -5389,11 +5550,11 @@ dependencies = [
 
 [[package]]
 name = "perry-native-registration"
-version = "0.5.1662"
+version = "0.5.1663"
 
 [[package]]
 name = "perry-parser"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "anyhow",
  "perry-diagnostics",
@@ -5406,7 +5567,7 @@ dependencies = [
 
 [[package]]
 name = "perry-perex"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "perex",
  "regex",
@@ -5414,7 +5575,7 @@ dependencies = [
 
 [[package]]
 name = "perry-runtime"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "ahash",
  "cc",
@@ -5477,14 +5638,14 @@ dependencies = [
 
 [[package]]
 name = "perry-runtime-manifest"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "perry-dispatch",
 ]
 
 [[package]]
 name = "perry-runtime-static"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "perry-ext-net",
  "perry-runtime",
@@ -5492,7 +5653,7 @@ dependencies = [
 
 [[package]]
 name = "perry-stdlib"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "aes 0.8.4",
  "aes 0.9.1",
@@ -5568,21 +5729,21 @@ dependencies = [
 
 [[package]]
 name = "perry-stdlib-static"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "perry-stdlib",
 ]
 
 [[package]]
 name = "perry-tls-session"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "turnloop-tls",
 ]
 
 [[package]]
 name = "perry-tls-turnloop"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "perry-ffi",
  "perry-tls-session",
@@ -5591,14 +5752,14 @@ dependencies = [
 
 [[package]]
 name = "perry-transform"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "perry-hir",
 ]
 
 [[package]]
 name = "perry-ui"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "dirs",
  "perry-ffi",
@@ -5608,7 +5769,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ui-android"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "jni",
  "libc",
@@ -5623,7 +5784,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ui-geisterhand"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "rand 0.10.3",
  "serde",
@@ -5633,7 +5794,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ui-gtk4"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "async-channel",
  "async-executor",
@@ -5658,7 +5819,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ui-ios"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "block2",
  "libc",
@@ -5675,7 +5836,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ui-macos"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "block2",
  "libc",
@@ -5692,7 +5853,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ui-model"
-version = "0.5.1662"
+version = "0.5.1663"
 
 [[package]]
 name = "perry-ui-test"
@@ -5703,11 +5864,11 @@ dependencies = [
 
 [[package]]
 name = "perry-ui-testkit"
-version = "0.5.1662"
+version = "0.5.1663"
 
 [[package]]
 name = "perry-ui-tvos"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "block2",
  "libc",
@@ -5724,7 +5885,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ui-visionos"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "block2",
  "libc",
@@ -5741,7 +5902,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ui-watchos"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "block2",
  "libc",
@@ -5755,7 +5916,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ui-windows"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "libc",
  "perry-audio-miniaudio",
@@ -5774,7 +5935,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ui-windows-winui"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "libc",
  "perry-base64",
@@ -5787,7 +5948,7 @@ dependencies = [
 
 [[package]]
 name = "perry-update-manifest"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "anyhow",
  "ed25519-dalek",
@@ -5801,7 +5962,7 @@ dependencies = [
 
 [[package]]
 name = "perry-updater"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "anyhow",
  "ed25519-dalek",
@@ -5816,22 +5977,29 @@ dependencies = [
 
 [[package]]
 name = "perry-uuid"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "getrandom 0.4.3",
 ]
 
 [[package]]
 name = "perry-wasm-host"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
+ "cap-std",
  "perry-abi",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "wasi-common",
  "wasmi",
+ "wat",
+ "wiggle",
 ]
 
 [[package]]
 name = "perry-wpfacts"
-version = "0.5.1662"
+version = "0.5.1663"
 dependencies = [
  "perry-hir",
  "perry-parser",
@@ -6052,7 +6220,7 @@ dependencies = [
  "concurrent-queue",
  "hermit-abi",
  "pin-project-lite",
- "rustix",
+ "rustix 1.1.4",
  "windows-sys 0.61.2",
 ]
 
@@ -6325,6 +6493,7 @@ version = "0.8.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "22f6172bdec972074665ed81ed53b71da00bfc44b65a753cfde883ec4c702a1a"
 dependencies = [
+ "libc",
  "rand_chacha 0.3.1",
  "rand_core 0.6.4",
 ]
@@ -6657,6 +6826,19 @@ dependencies = [
 
 [[package]]
 name = "rustix"
+version = "0.38.44"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fdb5bc1ae2baa591800df16c9ca78619bf65c0488b41b96ccec5d11220d8c154"
+dependencies = [
+ "bitflags",
+ "errno",
+ "libc",
+ "linux-raw-sys 0.4.15",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "rustix"
 version = "1.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6fe4565b9518b83ef4f91bb47ce29620ca828bd32cb7e408f0062e9930ba190"
@@ -6664,8 +6846,18 @@ dependencies = [
  "bitflags",
  "errno",
  "libc",
- "linux-raw-sys",
+ "linux-raw-sys 0.12.1",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "rustix-linux-procfs"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2fc84bf7e9aa16c4f2c758f27412dc9841341e16aa682d9c7ac308fe3ee12056"
+dependencies = [
+ "once_cell",
+ "rustix 1.1.4",
 ]
 
 [[package]]
@@ -7828,6 +8020,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "system-interface"
+version = "0.27.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cc4592f674ce18521c2a81483873a49596655b179f71c5e05d10c1fe66c78745"
+dependencies = [
+ "bitflags",
+ "cap-fs-ext",
+ "cap-std",
+ "fd-lock",
+ "io-lifetimes",
+ "rustix 0.38.44",
+ "windows-sys 0.59.0",
+ "winx",
+]
+
+[[package]]
 name = "taffy"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7873,7 +8081,7 @@ dependencies = [
  "fastrand",
  "getrandom 0.4.3",
  "once_cell",
- "rustix",
+ "rustix 1.1.4",
  "windows-sys 0.61.2",
 ]
 
@@ -8551,6 +8759,30 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ccf3ec651a847eb01de73ccad15eb7d99f80485de043efb2f370cd654f4ea44b"
 
 [[package]]
+name = "wasi-common"
+version = "36.0.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "56dcf1901c02c29423c034560472efc0eb142576e3832caf63418cb7610bfab6"
+dependencies = [
+ "anyhow",
+ "bitflags",
+ "cap-fs-ext",
+ "cap-rand",
+ "cap-std",
+ "cap-time-ext",
+ "fs-set-times",
+ "io-extras",
+ "io-lifetimes",
+ "log",
+ "rustix 1.1.4",
+ "system-interface",
+ "thiserror 2.0.18",
+ "tracing",
+ "wiggle",
+ "windows-sys 0.60.2",
+]
+
+[[package]]
 name = "wasip2"
 version = "1.0.3+wasi-0.2.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8625,6 +8857,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "wasm-encoder"
+version = "0.262.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4495a6f85dd94c411c749303efcbc5defade0b0cbdbc0541495241ab917a9b5a"
+dependencies = [
+ "leb128fmt",
+ "wasmparser 0.262.0",
+]
+
+[[package]]
 name = "wasmi"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8679,6 +8921,48 @@ dependencies = [
  "bitflags",
  "indexmap",
  "semver",
+]
+
+[[package]]
+name = "wasmparser"
+version = "0.262.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "974d643b125b272607e2fff8012ea14a8328acd7621e4bafa7afb32500052b1b"
+dependencies = [
+ "bitflags",
+ "indexmap",
+ "semver",
+]
+
+[[package]]
+name = "wast"
+version = "35.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2ef140f1b49946586078353a453a1d28ba90adfc54dde75710bc1931de204d68"
+dependencies = [
+ "leb128",
+]
+
+[[package]]
+name = "wast"
+version = "262.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "30612a0c29249b5f185888a107e8a519d920226b7d07f9d351fd094e9f75eb23"
+dependencies = [
+ "bumpalo",
+ "leb128fmt",
+ "memchr",
+ "unicode-width 0.2.2",
+ "wasm-encoder 0.262.0",
+]
+
+[[package]]
+name = "wat"
+version = "1.262.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e228027f2b07bbaf946980ebbe2437fca73be6f54c40c2a8d4f42f277075f8d1"
+dependencies = [
+ "wast 262.0.0",
 ]
 
 [[package]]
@@ -8792,6 +9076,46 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bae2f2b2b816647a1cab1acc91f5bd20812d53cb344382635ec2181940c8034f"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "wiggle"
+version = "36.0.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f7dfd80af8f40b70e9dda694f911f7303cec22c140ca58c5f7dab7fb34be812f"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bitflags",
+ "thiserror 2.0.18",
+ "tracing",
+ "wiggle-macro",
+]
+
+[[package]]
+name = "wiggle-generate"
+version = "36.0.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "50d31b1cae37b6dee518e8374ccdee731bf67e3041d3b50f592093ab69c2fb16"
+dependencies = [
+ "anyhow",
+ "heck 0.5.0",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+ "witx",
+]
+
+[[package]]
+name = "wiggle-macro"
+version = "36.0.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "859d73197d6c88c07a081544c4e8c27850133b7358a5b6c8a77127e40f41957f"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+ "wiggle-generate",
 ]
 
 [[package]]
@@ -9270,12 +9594,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "winx"
+version = "0.36.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f3fd376f71958b862e7afb20cfe5a22830e1963462f3a17f49d82a6c1d1f42d"
+dependencies = [
+ "bitflags",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
 name = "wit-bindgen"
 version = "0.57.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 dependencies = [
  "bitflags",
+]
+
+[[package]]
+name = "witx"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e366f27a5cabcddb2706a78296a40b8fcc451e1a6aba2fc1d94b4a01bdaaef4b"
+dependencies = [
+ "anyhow",
+ "log",
+ "thiserror 1.0.69",
+ "wast 35.0.2",
 ]
 
 [[package]]
@@ -9327,7 +9673,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32e45ad4206f6d2479085147f02bc2ef834ac85886624a23575ae137c8aa8156"
 dependencies = [
  "libc",
- "rustix",
+ "rustix 1.1.4",
 ]
 
 [[package]]
@@ -9393,7 +9739,7 @@ dependencies = [
  "hex",
  "libc",
  "ordered-stream",
- "rustix",
+ "rustix 1.1.4",
  "serde",
  "serde_repr",
  "tracing",

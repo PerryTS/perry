@@ -3170,10 +3170,6 @@
     },
     {
       "file": "crates/perry-runtime/src/fs/mod.rs",
-      "name": "FD_REGISTRY"
-    },
-    {
-      "file": "crates/perry-runtime/src/fs/mod.rs",
       "name": "NEXT_DIR_ID"
     },
     {

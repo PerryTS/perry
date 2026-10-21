@@ -345,7 +345,7 @@ fn encode_wasm_args(
     }
 }
 
-pub(super) fn js_to_wasm_i64_bits(value: f64) -> Option<u64> {
+pub(crate) fn js_to_wasm_i64_bits(value: f64) -> Option<u64> {
     let bits = value.to_bits();
     let js = JSValue::from_bits(bits);
     let raw = (bits & POINTER_MASK) as *const crate::bigint::BigIntHeader;
@@ -427,8 +427,11 @@ pub(super) fn call_export_by_handle(inst: *mut c_void, handle: usize, args: &[f6
         )
     };
     if ok == 0 {
-        emit_error_to_stderr("WebAssembly.RuntimeError", err);
-        return nanbox_undefined();
+        crate::exception::js_throw(wasm_error_value_from_host(
+            b"RuntimeError",
+            err,
+            "WebAssembly call failed",
+        ));
     }
     if !err.is_null() {
         unsafe { perry_wasm_host_string_free(err) };
@@ -459,8 +462,11 @@ pub(super) fn call_external_function(external: *mut c_void, args: &[f64]) -> f64
         )
     };
     if ok == 0 {
-        emit_error_to_stderr("WebAssembly.RuntimeError", err);
-        return nanbox_undefined();
+        crate::exception::js_throw(wasm_error_value_from_host(
+            b"RuntimeError",
+            err,
+            "WebAssembly call failed",
+        ));
     }
     if !err.is_null() {
         unsafe { perry_wasm_host_string_free(err) };
@@ -502,8 +508,11 @@ pub(super) fn call_export_n(inst_jsval: f64, name_jsval: f64, args: &[f64]) -> f
         )
     };
     if ok == 0 {
-        emit_error_to_stderr("WebAssembly.RuntimeError", err);
-        return nanbox_undefined();
+        crate::exception::js_throw(wasm_error_value_from_host(
+            b"RuntimeError",
+            err,
+            "WebAssembly call failed",
+        ));
     }
     if !err.is_null() {
         unsafe { perry_wasm_host_string_free(err) };

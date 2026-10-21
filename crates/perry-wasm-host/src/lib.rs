@@ -14,7 +14,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::{
-    atomic::{AtomicI32, AtomicU64, Ordering},
+    atomic::{AtomicI64, AtomicU64, Ordering},
     Arc,
 };
 
@@ -24,7 +24,10 @@ use wasmi::{
 };
 
 mod host_runtime;
+mod wasi;
 use host_runtime::with_host_runtime;
+#[allow(unused_imports)] // consumed by the non-test entry-point table
+use wasi::*;
 
 /// Numeric WebAssembly value used by the public Rust call API. JavaScript
 /// import callbacks additionally marshal `externref`, while `funcref` values
@@ -119,7 +122,7 @@ struct InstanceInner {
     /// (#9611).
     memory: Option<wasmi::Memory>,
     import_context: Arc<AtomicU64>,
-    exit_code: Arc<AtomicI32>,
+    exit_code: Arc<AtomicI64>,
 }
 
 impl WasmInstanceHandle {
@@ -353,10 +356,8 @@ pub fn compile(bytes: &[u8]) -> Result<WasmModuleHandle, WasmHostError> {
     })
 }
 
-/// Instantiate with the module's imported numeric functions routed through an
-/// optional embedding callback. Missing callbacks keep the historical typed
-/// zero-result fallback. `proc_exit` records its status so the JS WASI wrapper
-/// can return it after `_start` completes.
+/// Instantiate a module without imports. Imported functions require an
+/// embedding callback; unresolved imports are link errors.
 pub fn instantiate(module: &WasmModuleHandle) -> Result<WasmInstanceHandle, WasmHostError> {
     instantiate_with_import_callbacks(module, None, None, 0)
 }
@@ -378,8 +379,8 @@ fn instantiate_with_import_callbacks(
 ) -> Result<WasmInstanceHandle, WasmHostError> {
     trace_module(&module.0, "instantiating");
     let import_context = Arc::new(AtomicU64::new(import_context_value));
-    // i32::MIN is not a valid WASI process status and acts as "not exited".
-    let exit_code = Arc::new(AtomicI32::new(i32::MIN));
+    // Keep the sentinel outside the full u32 WASI exitcode domain.
+    let exit_code = Arc::new(AtomicI64::new(i64::MIN));
     let mut linker = <Linker<()>>::new(&module.0.engine);
     for import in module.0.module.imports() {
         let module_name = import.module().to_owned();
@@ -397,6 +398,11 @@ fn instantiate_with_import_callbacks(
                 )
             })
             .unwrap_or(std::ptr::null_mut());
+        if resolved as usize == usize::MAX {
+            return Err(WasmHostError::Link(format!(
+                "missing or non-callable import {module_name}.{import_name}"
+            )));
+        }
         if !resolved.is_null() {
             let external = unsafe { &*(resolved as *const WasmExternHandle) }.item;
             linker
@@ -413,25 +419,20 @@ fn instantiate_with_import_callbacks(
                 extern_kind_label(import_kind),
             )));
         };
+        if import_callback.is_none() {
+            return Err(WasmHostError::Link(format!(
+                "missing function import {module_name}.{import_name}"
+            )));
+        }
         let callback_module = module_name.clone();
         let callback_name = import_name.clone();
         let callback_context = import_context.clone();
-        let callback_exit_code = exit_code.clone();
         linker
             .func_new(
                 &module_name,
                 &import_name,
                 ty.clone(),
                 move |mut caller, params, results| {
-                    if matches!(
-                        callback_module.as_str(),
-                        "wasi_snapshot_preview1" | "wasi_unstable"
-                    ) && callback_name == "proc_exit"
-                    {
-                        if let Some(Val::I32(code)) = params.first() {
-                            callback_exit_code.store(*code, Ordering::Relaxed);
-                        }
-                    }
                     if let Some(callback) = import_callback {
                         let mut arg_kinds = Vec::with_capacity(params.len());
                         let mut arg_bits = Vec::with_capacity(params.len());
@@ -463,7 +464,7 @@ fn instantiate_with_import_callbacks(
                             }
                         }
                         let mut result_kinds = Vec::with_capacity(results.len());
-                        let mut result_bits = vec![0u64; results.len()];
+                        let mut result_bits = vec![0u64; results.len().max(1)];
                         for result in results.iter() {
                             if let Some((kind, _)) = val_kind_bits(result) {
                                 result_kinds.push(kind);
@@ -493,11 +494,17 @@ fn instantiate_with_import_callbacks(
                                     arg_bits.len(),
                                     result_kinds.as_ptr(),
                                     result_bits.as_mut_ptr(),
-                                    result_bits.len(),
+                                    results.len(),
                                 )
                             };
                             drop(scope);
-                            if called != 0 {
+                            if called == perry_abi::wasi::IMPORT_EXIT {
+                                return Err(wasmi::Error::i32_exit(result_bits[0] as i32));
+                            }
+                            if called == perry_abi::wasi::IMPORT_TRAP {
+                                return Err(wasmi::Error::new("WASI import failed (invalid signature, state, or guest memory)"));
+                            }
+                            if called > 0 {
                                 for ((result, kind), bits) in results
                                     .iter_mut()
                                     .zip(result_kinds.iter())
@@ -517,10 +524,7 @@ fn instantiate_with_import_callbacks(
                             }
                         }
                     }
-                    for result in results {
-                        *result = Val::default(result.ty());
-                    }
-                    Ok(())
+                    Err(wasmi::Error::new("WebAssembly import callback failed or has an unsupported signature"))
                 },
             )
             .map_err(|e| WasmHostError::Link(e.to_string()))?;
@@ -651,7 +655,15 @@ fn call_resolved_export(
                 "host runtime is already in use".into(),
             ))
         },
-        |result| result.map_err(|e| WasmHostError::Runtime(e.to_string())),
+        |result| match result {
+            Err(e) if e.i32_exit_status().is_some() => {
+                inst.inner
+                    .exit_code
+                    .store(e.i32_exit_status().unwrap() as i64, Ordering::Relaxed);
+                Ok(())
+            }
+            result => result.map_err(|e| WasmHostError::Runtime(e.to_string())),
+        },
     );
     let table_result = finish_instance_call(inst);
     call_result?;
@@ -1850,21 +1862,9 @@ mod tests {
     }
 
     #[test]
-    fn wasi_proc_exit_import_records_status() {
-        let bytes =
-            include_bytes!("../../../test-parity/node-suite/wasi/fixtures/exit-7-command.wasm");
-        let module = compile(bytes).expect("compile");
-        let mut inst = instantiate(&module).expect("instantiate with proc_exit");
-        call_export(&mut inst, "_start", &[]).expect("call _start");
-        assert_eq!(inst.inner.exit_code.swap(i32::MIN, Ordering::Relaxed), 7);
-    }
-
-    #[test]
-    fn placeholder_import_results_preserve_the_declared_wasm_type() {
+    fn missing_function_import_is_a_link_error() {
         let module = compile(IMPORT_F64_RESULT_WASM).expect("compile");
-        let mut inst = instantiate(&module).expect("instantiate with f64 import");
-        let result = call_export(&mut inst, "call", &[]).expect("call import");
-        assert_eq!(result, vec![WasmVal::F64(0.0)]);
+        assert!(matches!(instantiate(&module), Err(WasmHostError::Link(_))));
     }
 
     unsafe extern "C" fn f64_import_callback(
@@ -1993,3 +1993,6 @@ mod tests {
 mod reentrancy_tests;
 #[cfg(test)]
 mod shared_import_tests;
+
+#[cfg(test)]
+mod wasi_exit_tests;

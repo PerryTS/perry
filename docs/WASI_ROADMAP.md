@@ -1,7 +1,8 @@
 # WASI hosting and reusable components
 
 Implementation roadmap, 2026-10-21. The P2 restoration is implemented in
-this branch; P1 hosting, typed components and P3 async remain future work.
+main, and P1 hosting is now implemented. Typed components and P3 async
+remain future work.
 The audited baseline is
 `20fde48d3fa03d0a77699b7374f55e38cb143b59`.
 See [WASI_SUPPORT.md](WASI_SUPPORT.md) for the implemented standalone profile.
@@ -78,10 +79,10 @@ Acceptance:
 ## 2. Make P1 hosting operational
 
 Keep `node:wasi` compatibility separate from the standalone output target.
-Use a maintained P1 implementation rather than filling in Perry's syscall
-stubs one by one. `wasmi_wasi` 1.1 is a candidate matching the existing
-wasmi 1.1 engine. Evaluate its host/platform support and dependency footprint
-before adoption; the audit has not integrated it.
+The implementation uses `wasi-common` directly across the optional archive
+boundary, keeping the existing wasmi 1.1 store unchanged. Each WASI import
+object owns a collecting native context. See [WASI_P1_HOSTING.md](WASI_P1_HOSTING.md)
+for supported behavior, qualification and explicit limits.
 
 The integration must preserve per-WASI-instance arguments, environment,
 preopens, descriptors and lifecycle. Perry currently shares a wasmi store

@@ -23,5 +23,16 @@ perry-abi.workspace = true
 # rejects them at instantiation with "unexpected SIMD opcode: 0xfd".
 wasmi = { version = "1.1", default-features = false, features = ["simd"] }
 
+# Keep the interpreter and syscall engine independent: no Wasmtime compiler.
+wasi-common = { version = "36.0.12", default-features = false, features = ["sync"] }
+wiggle = { version = "36.0.12", default-features = false }
+cap-std = "3.4.4"
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+
+[dev-dependencies]
+wat = "1"
+tempfile = "3"
+
 [features]
 default = []
