@@ -132,6 +132,13 @@ static CP_EVENT_QUEUE: Mutex<Vec<CpEvent>> = Mutex::new(Vec::new());
 /// thread needs: the GC-rooted ChildProcess value, the live `pid` for
 /// `kill()`, the writable `stdin`, and progress flags.
 struct LiveChild {
+    /// The agent (main thread or worker) that spawned the child. Its
+    /// ChildProcess and stream objects live on that agent's heap and its
+    /// listeners are that agent's closures, so only that agent's pump emits
+    /// this child's events, roots its values and counts it as a loop handle.
+    /// The registry and the event queue are process-global; every other
+    /// agent's pump leaves this entry and its queued events untouched.
+    owner: crate::agent::AgentId,
     /// NaN-boxed ChildProcess object — a GC root (see `cp_reactor_scan_roots_mut`).
     cp_bits: u64,
     process_ids: crate::async_hooks::AsyncResourceIds,
@@ -301,6 +308,47 @@ fn cp_queue_lock() -> std::sync::MutexGuard<'static, Vec<CpEvent>> {
 fn cp_push_event(ev: CpEvent) {
     cp_queue_lock().push(ev);
     crate::event_pump::js_notify_main_thread();
+}
+
+impl CpEvent {
+    fn handle(&self) -> u64 {
+        match self {
+            CpEvent::Data { handle, .. }
+            | CpEvent::Eof { handle, .. }
+            | CpEvent::Exited { handle, .. }
+            | CpEvent::Message { handle, .. }
+            | CpEvent::MessageAdvanced { handle, .. }
+            | CpEvent::IpcClosed { handle }
+            | CpEvent::Timeout { handle, .. }
+            | CpEvent::Abort { handle }
+            | CpEvent::StdinWritten { handle, .. } => *handle,
+        }
+    }
+}
+
+/// Take the queued events this agent's pump may deliver, in queue order: those
+/// of children it spawned, plus events for children no longer registered
+/// (which every pump drops). Events of a child another agent spawned stay in
+/// the queue, in order, for that agent's pump — they are never taken out, so
+/// the owner cannot miss them between a foreign take and a put-back.
+fn cp_take_own_events() -> Vec<CpEvent> {
+    let foreign: std::collections::HashSet<u64> = match cp_live_lock().as_ref() {
+        Some(map) => map
+            .iter()
+            .filter(|(_, lc)| !crate::agent::owns(lc.owner))
+            .map(|(h, _)| *h)
+            .collect(),
+        None => std::collections::HashSet::new(),
+    };
+    let mut queue = cp_queue_lock();
+    if foreign.is_empty() {
+        return std::mem::take(&mut *queue);
+    }
+    let (kept, own): (Vec<CpEvent>, Vec<CpEvent>) = std::mem::take(&mut *queue)
+        .into_iter()
+        .partition(|ev| foreign.contains(&ev.handle()));
+    *queue = kept;
+    own
 }
 
 #[inline]
@@ -564,6 +612,7 @@ fn cp_register_live_child_parts(
         map.insert(
             handle,
             LiveChild {
+                owner: crate::agent::current_agent(),
                 cp_bits: cp.to_bits(),
                 process_ids,
                 pipe_ids,
@@ -1131,7 +1180,7 @@ fn cp_reactor_pump_inner() {
         match guard.as_ref() {
             Some(map) => map
                 .iter()
-                .filter(|(_, lc)| !lc.spawned)
+                .filter(|(_, lc)| crate::agent::owns(lc.owner) && !lc.spawned)
                 .map(|(h, lc)| (*h, lc.cp_bits))
                 .collect(),
             None => Vec::new(),
@@ -1153,7 +1202,7 @@ fn cp_reactor_pump_inner() {
     }
 
     // --- Phase A: drain queued data/eof/exited events. ---
-    let events = std::mem::take(&mut *cp_queue_lock());
+    let events = cp_take_own_events();
     for ev in events {
         match ev {
             CpEvent::Data { handle, fd, bytes } => {
@@ -1334,7 +1383,7 @@ fn cp_reactor_pump_inner() {
         let mut out = Vec::new();
         if let Some(map) = guard.as_mut() {
             for (h, lc) in map.iter_mut() {
-                if lc.closed || !lc.spawned {
+                if !crate::agent::owns(lc.owner) || lc.closed || !lc.spawned {
                     continue;
                 }
                 if let Some((code, signal)) = lc.exited {
@@ -1512,6 +1561,7 @@ pub fn cp_register_idle_live_child_for_test(cp: f64) -> u64 {
     cp_live_lock().get_or_insert_with(HashMap::new).insert(
         handle,
         LiveChild {
+            owner: crate::agent::current_agent(),
             cp_bits: cp.to_bits(),
             process_ids: no_ids,
             pipe_ids: [no_ids; 3],

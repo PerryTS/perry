@@ -152,6 +152,7 @@ pub(in crate::child_process) fn cp_exec_async(
                 map.insert(
                     handle,
                     LiveChild {
+                        owner: crate::agent::current_agent(),
                         cp_bits: cp.to_bits(),
                         process_ids,
                         pipe_ids,

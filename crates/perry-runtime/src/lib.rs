@@ -692,10 +692,13 @@ pub(crate) mod stdlib_pump {
         }
     }
 
-    /// Run the per-agent auxiliary pumps on this thread: a worker's loop
-    /// calls this to deliver its own extension events (zlib streams, …).
+    /// Run the per-agent pumps on this thread: a worker's loop calls this to
+    /// deliver its own events. That is the runtime reactors (its child
+    /// processes, ptys and fs watchers — each delivers only what this agent
+    /// created) and the per-agent auxiliary pumps (zlib streams, …).
     #[no_mangle]
     pub extern "C" fn js_run_agent_pumps() -> i32 {
+        run_runtime_pumps();
         let fns: Vec<extern "C" fn() -> i32> = match AUX_AGENT_PUMPS.lock() {
             Ok(g) => g.clone(),
             Err(_) => return 0,
