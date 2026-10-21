@@ -12,3 +12,7 @@ GC finalizers still do not invoke application destructors.
 
 The native component-host ABI advances to version 2; rebuild its archive and
 the native runtime together. The guest component ABI remains unchanged.
+
+Linux qualification passes 61 targeted tests, 21 native acceptance phases and
+34 guest phases, including actual moving GC and native from-space protection.
+The execution receipt records the tested source and artifact/log hashes.

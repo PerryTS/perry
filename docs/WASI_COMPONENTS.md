@@ -268,9 +268,19 @@ Unit tests additionally executed a declared WASI clock import and actual TCP
 bind grants/denials. These results do not qualify UDP/DNS interoperability,
 blocking-I/O cancellation, command worlds or HTTP.
 
+Host-defined resources are now qualified on Linux. On source
+`286341d1caa88e9f1d26073e1423e17f1f479a7f`, all 25 engine, 13 WIT and 23
+runtime tests pass, together with 21 native and 34 guest acceptance phases.
+The native host-resource fixture covers ownership rollback, aliases, foreign
+types, callback lifetimes, retained owners, explicit disposal and throwing
+destructors. Its moving-GC run copied 1,107 objects, passed 81 evacuation
+checks and protected retired from-space. The [execution receipt](validation/component-host-resources-20261021.json)
+records the exact source and artifact/log hashes. GC-driven application
+destructors remain unimplemented.
+
 Still required before claiming the full milestone:
 
-- Complete host-resource qualification and deferred cleanup, and qualify the
+- Implement deferred cleanup, and qualify the
   remaining capability operations, command worlds, and HTTP independently.
 - Qualify supported host platforms and promote the demonstrated execution
   check into the required PR checks.
