@@ -26,3 +26,8 @@ The Windows execution run exposed a compiler panic in loop-interrupt poll IR
 construction: Inkwell requires a trailing NUL in copied memory buffers. Terminate
 the poll IR and execute the four existing loop-placement regressions on every
 qualification platform before running P1/P2 acceptance.
+
+Record the expanded profile passing on Linux x86_64 and macOS ARM64, with
+independently verified case outputs, complete phase sets, exact network payloads,
+unit results, moving-GC witnesses and retained artifact hashes. Windows native
+hosting and production component packaging remain separately unqualified.
