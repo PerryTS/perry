@@ -86,7 +86,7 @@ pub(super) fn emit(llmod: &mut LlModule, entry: &StringEntry) -> String {
     } else {
         "perry_strings"
     };
-    llmod.add_raw_global(format!(
+    llmod.add_coalesced_global(&name, format!(
         "@{name} = weak_odr constant {ty} {{ i8 {GC_TYPE_STRING}, i8 {gc_flags}, i16 {STRING_IMAGE_MARKER}, i32 {}, i32 {units}, i32 {}, i32 {}, i32 0, i32 {flags}, [{n} x i8] {}, i64 {} }}, section \"{section}\", align 8",
         (28 + n + 7) / 8 * 8 + 8, entry.byte_len, entry.byte_len, entry.escaped_ir, crate::nanbox::i64_literal(entry.dispatch_hash)
     ));
@@ -102,7 +102,7 @@ mod tests {
     fn split_units_preserve_cross_module_weak_image_identity() {
         for target in ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"] {
             let mut m = LlModule::new(target);
-            m.add_raw_global("@image = weak_odr constant i64 1".into());
+            m.add_coalesced_global("image", "@image = weak_odr constant i64 1".into());
             m.add_internal_global("holder", crate::types::I64, "ptrtoint (ptr @image to i64)");
             for name in ["first", "second"] {
                 let block = m
@@ -112,6 +112,13 @@ mod tests {
                 block.ret(crate::types::I64, &value);
             }
             let units = m.render_codegen_units(2);
+            assert_eq!(
+                units
+                    .iter()
+                    .filter(|u| u.contains("$image = comdat any"))
+                    .count(),
+                1
+            );
             assert_eq!(units.len(), 2);
             assert_eq!(
                 units
@@ -141,6 +148,16 @@ mod tests {
             let id = pool.intern("literal");
             let mut module = LlModule::new(target);
             emit(&mut module, pool.entry(id));
+            let ir = module.to_ir();
+            let symbol = name(pool.entry(id));
+            assert_eq!(
+                ir.contains(&format!("${symbol} = comdat any")),
+                !target.contains("apple")
+            );
+            assert_eq!(
+                ir.contains(&format!("comdat(${symbol})")),
+                !target.contains("apple")
+            );
             assert!(module.to_ir().contains(&format!("section \"{section}\"")));
         }
     }
@@ -156,13 +173,13 @@ mod tests {
         assert_eq!(emit(&mut am, a.entry(ai)), emit(&mut bm, b.entry(bi)));
         assert_eq!(am.to_ir(), bm.to_ir());
         let ir = am.to_ir();
-        assert!(ir.contains("i32 3, i32 5, i32 5, i32 0, i32 4"));
+        assert!(ir.contains("i32 3, i32 5, i32 5, i32 0, i32 28"));
         assert!(ir.contains("weak_odr constant"));
         assert!(!ir.contains("call "));
         let wi = a.intern_wtf8(b"\xed\xa0\x80");
         emit(&mut am, a.entry(wi));
         assert!(am.to_ir().contains("i8 21, i16 18765"));
-        assert!(am.to_ir().contains("i32 1, i32 3, i32 3, i32 0, i32 5"));
+        assert!(am.to_ir().contains("i32 1, i32 3, i32 3, i32 0, i32 29"));
     }
 
     #[test]
@@ -184,5 +201,56 @@ mod tests {
         other.replace_range(0..1, "?");
         let oi = a.intern(&other);
         assert_ne!(long, name(a.entry(oi)));
+    }
+    #[test]
+    fn split_comdat_images_ignore_linkage_words_in_literal_bytes() {
+        for target in ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"] {
+            let mut pool = StringPool::with_prefix("linkage_words".into());
+            let id = pool.intern("literal = external thread_local , comdat(");
+            let mut m = LlModule::new(target);
+            let image = emit(&mut m, pool.entry(id));
+            let image_name = name(pool.entry(id));
+            m.add_internal_global("holder", crate::types::PTR, &image);
+            for function in ["first", "second"] {
+                let block = m
+                    .define_function(function, crate::types::PTR, vec![])
+                    .create_block("entry");
+                let value = block.load(crate::types::PTR, "@holder");
+                block.ret(crate::types::PTR, &value);
+            }
+            let units = m.render_codegen_units(2);
+            assert_eq!(
+                units
+                    .iter()
+                    .filter(|ir| ir.contains(&format!("@{image_name} = weak_odr constant")))
+                    .count(),
+                1
+            );
+            assert_eq!(
+                units
+                    .iter()
+                    .filter(|ir| ir.contains(&format!("@{image_name} = external constant")))
+                    .count(),
+                1
+            );
+            assert_eq!(
+                units
+                    .iter()
+                    .filter(|ir| ir.contains(&format!("${image_name} = comdat any")))
+                    .count(),
+                1
+            );
+            #[cfg(feature = "llvm-inprocess")]
+            for (index, ir) in units.iter().enumerate() {
+                crate::inprocess::compile_ll_to_object_inprocess(
+                    ir,
+                    target,
+                    &["-O2".into()],
+                    &format!("literal-linkage-{index}"),
+                    false,
+                )
+                .expect("literal bytes must not change ownership or COMDAT declarations");
+            }
+        }
     }
 }

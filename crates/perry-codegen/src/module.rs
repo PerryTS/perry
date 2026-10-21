@@ -59,6 +59,8 @@ pub struct LlModule {
     functions: Vec<LlFunction>,
     defined_names: HashSet<String>,
     globals: Vec<String>,
+    /// Globals whose same-named definitions own one linker COMDAT.
+    comdat_globals: HashSet<String>,
     string_constants: Vec<String>,
     string_counter: u32,
     /// Module symbol prefix folded into every anonymous rodata constant this
@@ -140,7 +142,7 @@ impl LlModule {
             .iter()
             .chain(&self.globals)
             .map(String::as_str)
-            .filter(|line| !line.contains(" = external "))
+            .filter(|line| !is_external_global(line))
     }
 
     /// #10399: names of the globals this module DEFINES thread-local.
@@ -172,6 +174,7 @@ impl LlModule {
             functions: Vec::new(),
             defined_names: HashSet::new(),
             globals: Vec::new(),
+            comdat_globals: HashSet::new(),
             string_constants: Vec::new(),
             string_counter: 0,
             symbol_prefix: String::new(),
@@ -781,6 +784,38 @@ impl LlModule {
         self.globals.push(line);
     }
 
+    /// Fold the entire same-named weak data definition, including its section
+    /// bytes. Mach-O already coalesces weak symbols at subsection boundaries;
+    /// Wasm uses its separate image inventory. ELF and COFF need a COMDAT.
+    pub(crate) fn add_coalesced_global(&mut self, name: &str, mut line: String) {
+        if !self.target_triple.contains("apple") && !self.target_triple.contains("wasm") {
+            self.comdat_globals.insert(format!("@{name}"));
+            line.push_str(&format!(", comdat(${name})"));
+        }
+        self.add_raw_global(line);
+    }
+
+    fn push_global_definition(&self, ir: &mut String, line: &str) {
+        if let Some((name, rhs)) = line.split_once(" = ") {
+            if self.comdat_globals.contains(name) && !rhs.starts_with("external ") {
+                ir.push_str(&format!("${} = comdat any\n", &name[1..]));
+                // COFF section bounds do not retain unreferenced COMDATs.
+                // Atom iteration is a real use: retain one resolved symbol
+                // with a linker directive, without adding runtime data.
+                if self.target_triple.contains("windows") && rhs.starts_with("weak_odr global ") {
+                    ir.push_str(&format!(
+                        concat!(
+                            "module asm \".section .drectve,\\22yni\\22\\0A.ascii ",
+                            "\\22 /INCLUDE:{}\\22\\0A.text\"\n"
+                        ),
+                        &name[1..]
+                    ));
+                }
+            }
+        }
+        ir.push_str(line);
+    }
+
     /// Add a string constant with a caller-controlled name. Used by the
     /// `StringPool` so that emission order matches the pool's interned
     /// indices and the bytes globals can be referenced by name from
@@ -921,7 +956,7 @@ impl LlModule {
         }
         ir.push('\n');
         for g in &self.globals {
-            ir.push_str(g);
+            self.push_global_definition(&mut ir, g);
             ir.push('\n');
         }
         ir.push('\n');
@@ -970,7 +1005,7 @@ impl LlModule {
         ir.push('\n');
 
         for g in &self.globals {
-            ir.push_str(g);
+            self.push_global_definition(&mut ir, g);
             ir.push('\n');
         }
         ir.push('\n');
@@ -1266,7 +1301,7 @@ impl LlModule {
         // the declaration from the definition, exactly as the function arm
         // does, so the two always agree.
         for def in shared_strings.iter().chain(&shared_globals) {
-            if def.contains(" = external ") {
+            if is_external_global(def) {
                 continue;
             }
             let Some(sym) = global_symbol_name(def) else {
@@ -1488,14 +1523,17 @@ impl LlModule {
                         if !has_local_linkage(def) {
                             // External: another object may name it, so it must
                             // coalesce without ever being discarded.
-                            pre.push_str(&promote_external_global_for_units(def));
+                            self.push_global_definition(
+                                &mut pre,
+                                &promote_external_global_for_units(def),
+                            );
                         } else if defining_unit_count[gi] > 1 {
-                            pre.push_str(&promote_global_for_units(def));
+                            self.push_global_definition(&mut pre, &promote_global_for_units(def));
                         } else {
-                            pre.push_str(def);
+                            self.push_global_definition(&mut pre, def);
                         }
                     } else {
-                        pre.push_str(&make_unique_owner_global(def));
+                        self.push_global_definition(&mut pre, &make_unique_owner_global(def));
                     }
                     pre.push('\n');
                 } else if referenced {

@@ -69,6 +69,7 @@ pub(crate) struct RetainedSource {
 /// A name range in the module image, shared by every birth of this body.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RetainedName {
+    /// Global name or a direct constant pointer expression into an image.
     pub global: String,
     pub byte_len: usize,
     /// The bytes are an image string's text (`FN_NAME_IMAGE`): that string
@@ -379,10 +380,13 @@ fn render_definition(
         ]);
     }
     if let Some(name) = facts.name {
-        let delta = format!(
-            "sub (i64 ptrtoint (ptr @{} to i64), i64 ptrtoint (ptr @{info} to i64))",
+        let pointer = if name.global.starts_with("getelementptr ") {
             name.global
-        );
+        } else {
+            format!("@{}", name.global)
+        };
+        let delta =
+            format!("sub (i64 ptrtoint (ptr {pointer} to i64), i64 ptrtoint (ptr @{info} to i64))");
         let byte_len = u32::try_from(name.byte_len).expect("function name fits the info range");
         types.extend(["i32".to_string(), "i32".to_string()]);
         fields.extend([

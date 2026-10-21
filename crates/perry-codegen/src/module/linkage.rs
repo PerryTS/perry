@@ -28,6 +28,13 @@ pub(crate) fn strip_leading_linkage(s: &str) -> &str {
     s
 }
 
+/// Inspect the linkage prefix, never a string initializer that happens to
+/// spell ` = external `. Split units must declare that definition normally.
+pub(crate) fn is_external_global(line: &str) -> bool {
+    line.split_once(" = ")
+        .is_some_and(|(_, rhs)| rhs.trim_start().starts_with("external "))
+}
+
 /// Symbol name of a global/string definition line (`@name = ...`).
 pub(crate) fn global_symbol_name(line: &str) -> Option<&str> {
     let line = line.trim_start();
@@ -197,7 +204,7 @@ pub(crate) fn hidden_global_definition(line: &str) -> String {
 /// global that only one unit defines moves it out of zerofill `__DATA,__bss`
 /// and writes its zeros into the file.
 pub(crate) fn promote_global_for_units(line: &str) -> String {
-    if line.contains(" = external ") {
+    if is_external_global(line) {
         return line.to_string();
     }
     match line.split_once(" = ") {
@@ -220,7 +227,7 @@ pub(crate) fn promote_global_for_units(line: &str) -> String {
 /// shape-seed object), and a discardable sole copy is removed from its owner
 /// before that object is ever linked against it.
 pub(crate) fn promote_external_global_for_units(line: &str) -> String {
-    if line.contains(" = external ") {
+    if is_external_global(line) {
         return line.to_string();
     }
     match line.split_once(" = ") {
@@ -244,13 +251,13 @@ pub(crate) fn promote_external_global_for_units(line: &str) -> String {
 /// module: `.str.N` constants only satisfy that through
 /// [`LlModule::set_symbol_prefix`].
 pub(crate) fn make_unique_owner_global(line: &str) -> String {
-    if line.contains(" = external ") {
+    if is_external_global(line) {
         return line.to_string();
     }
     // An explicit weak data definition is intended to coalesce across
     // modules, not merely across this module's units. Keep that ownership
     // contract; weak_odr is non-discardable even when the owner's references
-    // optimize away. Image strings carry no function/associative targets.
+    // optimize away. Images and COMDAT atoms carry no associative targets.
     if line.split_once(" = ").is_some_and(|(_, rhs)| {
         let Some(rhs) = rhs.strip_prefix("weak_odr ") else {
             return false;
@@ -258,7 +265,7 @@ pub(crate) fn make_unique_owner_global(line: &str) -> String {
         let (_, rhs) = take_keyword(rhs, &["dso_local", "dso_preemptable"]);
         let (_, rhs) = take_keyword(rhs, &["default", "hidden", "protected"]);
         let (_, rhs) = take_keyword(rhs, &["unnamed_addr", "local_unnamed_addr"]);
-        rhs.starts_with("constant ")
+        rhs.starts_with("constant ") || (rhs.starts_with("global ") && line.contains(", comdat("))
     }) {
         return line.to_string();
     }
@@ -296,7 +303,7 @@ pub(crate) fn alias_target(line: &str) -> Option<&str> {
 }
 
 pub(crate) fn external_decl_for_global(line: &str) -> Option<String> {
-    if line.contains(" = external ") {
+    if is_external_global(line) {
         return Some(line.to_string());
     }
     let (name, rhs) = line.split_once(" = ")?;

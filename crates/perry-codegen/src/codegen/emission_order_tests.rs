@@ -868,3 +868,20 @@ fn header_mode_replaces_bodies_with_a_di_header() {
         "class toString header must keep the class name"
     );
 }
+
+#[test]
+fn comdat_function_names_reference_images_without_local_aliases() {
+    let mut opts = ir_opts();
+    opts.target = Some("x86_64-unknown-linux-gnu".to_string());
+    let llvm = String::from_utf8(compile_module(&closure_display_module(), opts).unwrap()).unwrap();
+    assert!(!llvm.contains(" = internal alias i8, getelementptr"));
+    let table = llvm
+        .lines()
+        .find(|line| line.starts_with("@__perry_function_name_descriptors_"))
+        .unwrap();
+    assert!(table.contains(
+        "ptrtoint (ptr getelementptr (i8, ptr getelementptr (i8, ptr @perry_image_literal_"
+    ));
+    let info = llvm.lines().find(|line| line.contains("$info =") && line.contains("ptrtoint (ptr getelementptr (i8, ptr getelementptr (i8, ptr @perry_image_literal_")).expect("function info name points directly at its COMDAT image");
+    assert!(info.contains("i64 20)"));
+}

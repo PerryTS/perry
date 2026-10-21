@@ -272,7 +272,7 @@ fn atom(
         "__DATA,__perry_atoms",
         ".perryatm$m",
     );
-    llmod.add_raw_global(format!(
+    llmod.add_coalesced_global(&name, format!(
         "@{name} = weak_odr global {ATOM_TY} {{ i64 {}, ptr {image}, i8 {}, [3 x i8] [i8 {}, i8 0, i8 0], i32 {} }}, section \"{sect}\", align 8",
         fnv1a(key.as_bytes()) as i64,
         crate::runtime_abi::ATOM_KIND_STRING,
@@ -355,7 +355,7 @@ fn symbol_atom(
         "__DATA,__perry_atoms",
         ".perryatm$m",
     );
-    llmod.add_raw_global(format!(
+    llmod.add_coalesced_global(&name, format!(
         "@{name} = weak_odr global {ATOM_TY} {{ i64 {}, ptr {image}, i8 {kind}, [3 x i8] zeroinitializer, i32 {index} }}, section \"{sect}\", align 8",
         hash as i64,
     ));
@@ -786,7 +786,7 @@ pub(crate) fn emit_module_layouts(
             );
             // weak_odr coalesces one well-known atom across modules.
             if !atoms.contains_key(name) {
-                llmod.add_raw_global(format!(
+                llmod.add_coalesced_global(name, format!(
                     "@{name} = weak_odr global {ATOM_TY} {{ i64 {}, ptr null, i8 {}, [3 x i8] zeroinitializer, i32 {} }}, section \"{atom_sect}\", align 8",
                     hash as i64, crate::runtime_abi::ATOM_KIND_WELL_KNOWN_SYMBOL,
                     crate::runtime_abi::WELL_KNOWN_SYMBOL_ITERATOR));
@@ -1256,3 +1256,6 @@ fn emit_descriptor(
         ));
     }
 }
+
+#[cfg(test)]
+mod comdat_tests;
