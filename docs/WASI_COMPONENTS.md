@@ -141,6 +141,12 @@ guest trap. Cleanup continues after a destructor throws and preserves the
 first JavaScript exception. Failed initialization releases payloads created
 by the builder or imported constructors.
 
+An owned argument received by an import callback may be retained or disposed.
+Disposal releases its payload immediately and retires the canonical handle
+as the callback returns, including when its destructor throws. This does not
+permit reentrant guest calls or disposal of an owner borrowed by the active
+call; those operations still pass through the store's reentry guard.
+
 The native host ABI is version 2. Rebuild the component-host archive and native
 runtime together. Explicit disposal remains required: GC finalizers release
 engine memory without invoking application destructors. Built-in WASI resource

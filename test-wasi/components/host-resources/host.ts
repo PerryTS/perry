@@ -15,6 +15,7 @@ function rejects(action: () => unknown, message: string): void {
 function setup(input = bytes) {
   let factories!: HostResources;
   let escaped: unknown;
+  let retained: unknown;
   const component = load(input, (resources) => {
     factories = resources;
     const token = resources["perry:host-resources/tokens@1.0.0"].token;
@@ -43,7 +44,8 @@ function setup(input = bytes) {
           collect();
           check((token.value(value) as { value: number }).value === 66, "owned callback argument");
           value.dispose(); value.dispose();
-        }
+        },
+        hold(value) { retained = value; collect(); }
       },
       "perry:host-resources/aliases@1.0.0": {
         "read-alias"(value) {
@@ -53,7 +55,7 @@ function setup(input = bytes) {
       }
     };
   });
-  return { component, factories, escaped: () => escaped };
+  return { component, factories, escaped: () => escaped, retained: () => retained };
 }
 
 const a = setup();
@@ -94,6 +96,12 @@ local.dispose(); local.dispose();
 check(dropped.filter(value => value === 7).length === 1, "local drop count");
 api["consume-imported"](api.make(66));
 check(dropped.filter(value => value === 66).length === 1, "owned callback disposal");
+api["return-to-host"](api.make(67));
+collect();
+const retained = a.retained() as Parameters<typeof api.consume>[0];
+check((token.value(retained) as { value: number }).value === 67, "owned callback value expired");
+retained.dispose();
+check(dropped.filter(value => value === 67).length === 1, "retained callback owner disposal");
 const throwing = api.make(13);
 let caught: unknown;
 try { throwing.dispose(); } catch (error) { caught = error; }

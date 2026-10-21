@@ -3,6 +3,7 @@ interface tokens {
   resource token { constructor(value: u32); read: func() -> u32; }
   resource other;
   consume: func(value: own<token>);
+  hold: func(value: own<token>);
 }
 interface aliases {
   use tokens.{token as alias};
@@ -17,6 +18,7 @@ interface runner {
   read-alias: func(value: borrow<token>) -> u32;
   consume: func(value: own<token>);
   consume-imported: func(value: own<token>);
+  return-to-host: func(value: own<token>);
   consume-pair: func(value: pair);
   checked: func(value: own<token>, amount: u8);
   mixed: func(owner: own<token>, borrowed: borrow<token>);
