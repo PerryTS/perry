@@ -311,6 +311,36 @@ pub fn try_lower_index_get_call(
             // field reached by dynamic key read `this === undefined`.
             let recv_box = group.reread(ctx, recv_idx)?;
             let key_box = group.reread(ctx, key_idx)?;
+            // The arguments cannot observe the read (checked above), so the
+            // keyed method site reads the method after them: an atom key whose
+            // probe answers a plain function calls it with `this = obj`
+            // directly; everything else is the dispatcher below.
+            if crate::expr::method_site::keyed_method_site_enabled(ctx, args.len()) {
+                let mut arg_vals = Vec::with_capacity(arg_idxs.len());
+                for &idx in &arg_idxs {
+                    arg_vals.push(group.reread(ctx, idx)?);
+                }
+                let value = crate::expr::method_site::emit_keyed_method_site(
+                    ctx,
+                    &recv_box,
+                    &key_box,
+                    &arg_vals,
+                    |ctx| {
+                        let (args_ptr, args_len) = super::emit_method_args_buffer(ctx, &arg_vals);
+                        ctx.block().call(
+                            DOUBLE,
+                            "js_native_call_method_value",
+                            &[
+                                (DOUBLE, &recv_box),
+                                (DOUBLE, &key_box),
+                                (crate::types::PTR, &args_ptr),
+                                (I64, &args_len),
+                            ],
+                        )
+                    },
+                );
+                return Ok(Some(value));
+            }
             let (args_ptr, args_len) = build_dispatch_args_buffer(ctx, group, &arg_idxs)?;
             Ok(Some(ctx.block().call(
                 DOUBLE,
