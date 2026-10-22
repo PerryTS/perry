@@ -55,6 +55,7 @@ struct NativeTcp {
     reading: bool,
     writing: bool,
     write_cancelled: bool,
+    inherited: Vec<SocketOption>,
 }
 impl NativeTcp {
     fn new(stream: AsyncIo<Platform>) -> Self {
@@ -63,6 +64,7 @@ impl NativeTcp {
             reading: false,
             writing: false,
             write_cancelled: false,
+            inherited: Vec::new(),
         }
     }
 }
@@ -206,6 +208,7 @@ impl TcpSocket {
         let State::Fresh { socket, .. } = std::mem::replace(&mut self.state, State::Closed) else {
             unreachable!()
         };
+        let inherited = self.inherited.clone();
         let task = self
             .submitter
             .register(move |io| async move {
@@ -214,7 +217,9 @@ impl TcpSocket {
                     .driver()
                     .attach(transport, turnloop::Token(0))
                     .map_err(native::Failure::from)?;
-                Ok::<_, native::Failure>(NativeTcp::new(io.io(handle)))
+                let mut native = NativeTcp::new(io.io(handle));
+                native.inherited = inherited;
+                Ok::<_, native::Failure>(native)
             })
             .map_err(SocketError::trap)?;
         self.state = State::Listening(
@@ -225,56 +230,59 @@ impl TcpSocket {
         Ok(())
     }
 
-    pub async fn accept(&self) -> SocketResult<Self> {
-        let State::Listening(listener) = &self.state else {
-            return Err(ErrorCode::InvalidState.into());
+    /// Own the listener reference while acceptance is pending. The future may
+    /// outlive this wrapper; address callbacks still execute on its caller.
+    pub fn accept(&self) -> impl std::future::Future<Output = SocketResult<Self>> + Send + 'static {
+        let listener = match &self.state {
+            State::Listening(listener) => Some(listener.clone()),
+            _ => None,
         };
-        loop {
-            let options = self.inherited.clone();
-            let task = listener
-                .derive(move |io, local| async move {
-                    let handle = local.borrow_mut().stream.handle();
-                    let stream = io.accept(handle).await.map_err(native::Failure::from)?;
-                    // The child owns its own handle; dropping the listener cannot
-                    // close an accepted stream or retain its resource permit.
-                    drop(local);
-                    for option in options {
-                        io.driver()
-                            .set_option(stream.handle(), option)
-                            .map_err(native::Failure::from)?;
-                    }
-                    Ok::<_, native::Failure>(NativeTcp::new(stream))
-                })
-                .map_err(SocketError::trap)?;
-            let socket = task
-                .await
-                .map_err(SocketError::trap)?
-                .map_err(native::Failure::socket)?;
-            let peer = native::peer(&socket)?;
-            if self
-                .policy
-                .check(peer, SocketAddrUse::TcpAccept)
-                .await
-                .is_err()
-            {
-                // A denied peer must not escape to the guest. Its independent
-                // native owner is closed before trying the next connection.
-                drop(socket);
-                continue;
+        let family = self.family;
+        let submitter = self.submitter.clone();
+        let policy = self.policy.clone();
+        async move {
+            let listener = listener.ok_or(ErrorCode::InvalidState)?;
+            loop {
+                let task = listener
+                    .derive(move |io, local| async move {
+                        let handle = local.borrow_mut().stream.handle();
+                        let stream = io.accept(handle).await.map_err(native::Failure::from)?;
+                        // Read current overrides after acceptance: settings changed
+                        // while this operation was pending must not be overwritten
+                        // by a stale snapshot captured when accept started.
+                        let options = local.borrow_mut().inherited.clone();
+                        drop(local);
+                        for option in options {
+                            io.driver()
+                                .set_option(stream.handle(), option)
+                                .map_err(native::Failure::from)?;
+                        }
+                        Ok::<_, native::Failure>(NativeTcp::new(stream))
+                    })
+                    .map_err(SocketError::trap)?;
+                let socket = task
+                    .await
+                    .map_err(SocketError::trap)?
+                    .map_err(native::Failure::socket)?;
+                let peer = native::peer(&socket)?;
+                if policy.check(peer, SocketAddrUse::TcpAccept).await.is_err() {
+                    drop(socket);
+                    continue;
+                }
+                let local = native::local(&socket)?;
+                return Ok(Self {
+                    state: State::Connected {
+                        socket,
+                        local,
+                        peer,
+                    },
+                    family,
+                    submitter,
+                    policy,
+                    backlog: 128,
+                    inherited: Vec::new(),
+                });
             }
-            let local = native::local(&socket)?;
-            return Ok(Self {
-                state: State::Connected {
-                    socket,
-                    local,
-                    peer,
-                },
-                family: self.family,
-                submitter: self.submitter.clone(),
-                policy: self.policy.clone(),
-                backlog: 128,
-                inherited: self.inherited.clone(),
-            });
         }
     }
 
@@ -338,6 +346,30 @@ impl TcpSocket {
             .map_err(native::Failure::socket)
     }
 
+    /// Stop receiving and discard the adapter's native pending/buffered input.
+    /// The stream adapter first cancels and awaits its owned read request so no
+    /// other future is polling that direction when its completion is discarded.
+    pub async fn shutdown_receive(&self) -> SocketResult<()> {
+        let State::Connected { socket, .. } = &self.state else {
+            return Err(ErrorCode::InvalidState.into());
+        };
+        let task = socket
+            .call(|_, local| async move {
+                let mut native = local.borrow_mut();
+                if native.reading {
+                    return Err(native::Failure::Socket(ErrorCode::ConcurrencyConflict));
+                }
+                native
+                    .stream
+                    .shutdown_receive()
+                    .map_err(native::Failure::from)
+            })
+            .map_err(SocketError::trap)?;
+        task.await
+            .map_err(SocketError::trap)?
+            .map_err(native::Failure::socket)
+    }
+
     fn get_option(&self, kind: SocketOptionKind) -> SocketResult<SocketOption> {
         match &self.state {
             State::Fresh { socket, .. } => {
@@ -359,15 +391,7 @@ impl TcpSocket {
         }
         // Each probe-schedule field is recorded separately: a partial update
         // must not erase earlier explicit values required for accept inheritance.
-        if let Some(existing) = self
-            .inherited
-            .iter_mut()
-            .find(|v| options::same_setting(**v, option))
-        {
-            *existing = option;
-        } else {
-            self.inherited.push(option);
-        }
+        remember_option(&mut self.inherited, option);
         Ok(())
     }
     pub fn set_listen_backlog_size(&mut self, size: u64) -> SocketResult<()> {
@@ -497,4 +521,19 @@ fn buffer_size(size: u64) -> SocketResult<u32> {
         return Err(ErrorCode::InvalidArgument.into());
     }
     Ok(size.min(i32::MAX as u64) as u32)
+}
+
+fn remember_option(options: &mut Vec<SocketOption>, option: SocketOption) {
+    // Backlog belongs to the listener; it is never an accepted socket option.
+    if matches!(option, SocketOption::ListenBacklog(_)) {
+        return;
+    }
+    if let Some(existing) = options
+        .iter_mut()
+        .find(|v| options::same_setting(**v, option))
+    {
+        *existing = option;
+    } else {
+        options.push(option);
+    }
 }

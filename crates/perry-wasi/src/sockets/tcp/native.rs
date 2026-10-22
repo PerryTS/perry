@@ -178,8 +178,10 @@ pub(super) fn get_option(
 pub(super) fn set_option(socket: &Resource<NativeTcp>, option: SocketOption) -> SocketResult<()> {
     let task = socket
         .call(move |io, local| async move {
-            io.driver()
-                .set_option(local.borrow_mut().stream.handle(), option)
+            let mut native = local.borrow_mut();
+            io.driver().set_option(native.stream.handle(), option)?;
+            remember_option(&mut native.inherited, option);
+            Ok::<_, turnloop::Error>(())
         })
         .map_err(SocketError::trap)?;
     futures_lite::future::block_on(task)

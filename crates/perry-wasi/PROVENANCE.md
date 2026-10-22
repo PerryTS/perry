@@ -88,7 +88,7 @@ in the component host.
 
 The native TCP state machine now supports explicit and implicit binding,
 bound-socket connection, listening, independent accepted connections, socket
-options, bounded owned reads/writes, and write-side half-close. IPv6 sockets
+options, bounded owned reads/writes, and independent receive/send shutdown. IPv6 sockets
 are IPv6-only. TCP and per-address capabilities default to denied; callbacks
 run on the calling agent, including accepted-peer checks. Pending accepts are
 cancellable, denied peers are closed, and driver failures trap separately from
@@ -97,19 +97,25 @@ caller cannot consume another operation's completion. Cancelling a partial
 write disables further writes on that socket; a cancelled read retains native
 pending/buffered data for the next read.
 
-Linux development and production panic-abort validation passes all 158 provider
-tests (including nine native TCP cases), plus 24/23 driver tests, doctests,
+Linux development and production panic-abort validation passes all 160 provider
+tests (including eleven native TCP cases), plus 24/23 driver tests, doctests,
 all-target Clippy and the stdio overlap probe. Validation uses the immutable
-Turnloop revision `9c6495239d276f4db6697d92582de21e87afeab9`, containing
+Turnloop revision `4340f396a2042722d3897f5c525295e1ef8032f7`, containing
 [bound TCP #120](https://github.com/PerryTS/turnloop/pull/120) and
-[independent controls #121](https://github.com/PerryTS/turnloop/pull/121).
+[independent controls #121](https://github.com/PerryTS/turnloop/pull/121), and
+[receive shutdown #122](https://github.com/PerryTS/turnloop/pull/122).
 The normal dependency graph for these provider crates is Tokio-free. This is
 an external validation override, not a committed dependency-policy exception.
 
-TCP WIT interfaces are still unregistered. Receive-side shutdown must cancel
-and discard Turnloop's pending read without closing the send direction; simply
-dropping the request does not do that while the socket owner remains live.
-The WASI stream adapters, start/finish state, network-resource association and
-sync/async linker registration remain to be implemented and tested before this
-native layer is usable by components. Native TCP macOS/Windows qualification
+Receive shutdown follows explicit read-request cancellation and acknowledgement,
+then shuts down the native receive direction and discards Turnloop's retained
+input. It is idempotent, returns EOF on later reads, and preserves outgoing
+bytes and FIN. Attempting it while another read request is active is a typed
+concurrency conflict. Pending accepts own their listener reference and may
+outlive the caller's wrapper; accepted connections inherit the current options
+at completion, including changes made while acceptance was pending.
+
+TCP WIT interfaces are still unregistered. The WASI stream adapters, start/finish
+state, network-resource association and sync/async linker registration remain
+to be implemented and tested before this native layer is usable by components. Native TCP macOS/Windows qualification
 also remains; the upstream Turnloop matrix alone does not qualify this layer.

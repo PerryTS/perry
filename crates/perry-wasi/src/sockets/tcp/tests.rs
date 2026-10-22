@@ -451,3 +451,91 @@ fn tcp_fractional_keepalive_and_partial_updates_survive_accept() {
         assert!(!child.keep_alive_enabled().unwrap());
     });
 }
+
+#[test]
+fn tcp_receive_shutdown_discards_pending_read_and_preserves_send() {
+    bounded(|| {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let worker = std::thread::spawn(move || {
+            let (mut peer, _) = listener.accept().unwrap();
+            peer_config(&peer);
+            let mut bytes = Vec::new();
+            peer.read_to_end(&mut bytes).unwrap();
+            assert_eq!(bytes, b"send after receive shutdown");
+        });
+        let ctx = context();
+        let mut socket = TcpSocket::new(&ctx.sockets, Family::Ipv4).unwrap();
+        block_on(socket.connect(address)).unwrap();
+        let read = socket.read(64).unwrap();
+        block_on(ctx.sockets.submitter.submit(|_| async {}).unwrap()).unwrap();
+        assert_eq!(
+            error(block_on(socket.shutdown_receive())),
+            ErrorCode::ConcurrencyConflict
+        );
+        read.cancel();
+        assert!(matches!(
+            block_on(read),
+            Err(perry_component_io::Error::Cancelled)
+        ));
+        for _ in 0..3 {
+            block_on(socket.shutdown_receive()).unwrap();
+            assert!(
+                ok(socket.read(64).unwrap()).is_empty(),
+                "shutdown must not resubmit a native read"
+            );
+        }
+        ok(socket
+            .write(b"send after receive shutdown".to_vec())
+            .unwrap());
+        block_on(socket.shutdown_send()).unwrap();
+        worker.join().unwrap();
+        let fresh = TcpSocket::new(&ctx.sockets, Family::Ipv4).unwrap();
+        assert_eq!(
+            error(block_on(fresh.shutdown_receive())),
+            ErrorCode::InvalidState
+        );
+    });
+}
+
+#[test]
+fn tcp_pending_accept_owns_listener_and_uses_current_options() {
+    bounded(|| {
+        let ctx = context();
+        let mut listener = TcpSocket::new(&ctx.sockets, Family::Ipv4).unwrap();
+        listener.set_keep_alive_idle_time(2_000_000_000).unwrap();
+        listener.set_hop_limit(30).unwrap();
+        block_on(listener.bind("127.0.0.1:0".parse().unwrap())).unwrap();
+        block_on(listener.listen()).unwrap();
+        let address = listener.local_address().unwrap();
+        let mut accepting = Box::pin(listener.accept());
+        use std::future::Future;
+        assert!(accepting
+            .as_mut()
+            .poll(&mut std::task::Context::from_waker(
+                futures_util::task::noop_waker_ref()
+            ))
+            .is_pending());
+        block_on(ctx.sockets.submitter.submit(|_| async {}).unwrap()).unwrap();
+        listener.set_keep_alive_idle_time(9_000_000_000).unwrap();
+        listener.set_hop_limit(44).unwrap();
+        listener.set_listen_backlog_size(11).unwrap();
+        drop(listener);
+        let mut peer = std::net::TcpStream::connect(address).unwrap();
+        peer_config(&peer);
+        let child = block_on(accepting).unwrap();
+        assert_eq!(child.keep_alive_idle_time().unwrap(), 9_000_000_000);
+        assert_eq!(child.hop_limit().unwrap(), 44);
+        block_on(ctx.sockets.submitter.submit(|_| async {}).unwrap()).unwrap();
+        assert_eq!(
+            ctx.driver.resources(),
+            1,
+            "accept must release its listener reference"
+        );
+        ok(child.write(b"independent".to_vec()).unwrap());
+        block_on(child.shutdown_send()).unwrap();
+        let mut bytes = Vec::new();
+        peer.read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes, b"independent");
+    });
+}
