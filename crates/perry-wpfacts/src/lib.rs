@@ -361,7 +361,7 @@ fn fn_contract_of(
         .into_iter()
         .enumerate()
         .map(
-            |(i, u)| match g.closed_described.get(&f).and_then(|d| d.get(i)) {
+            |(i, u)| match g.m.closed_described.get(&f).and_then(|d| d.get(i)) {
                 Some(true) => u & !model::MARK_ESCAPE,
                 _ => u,
             },
@@ -381,10 +381,12 @@ fn fn_contract_of(
         let mut ds: Vec<String> = Vec::new();
         for n in rets {
             for t in g.m.nodes[n as usize].pts.to_sorted() {
+                // An escaped marker reads as ⊤ (DECISIONS 42).
                 if matches!(
                     g.m.toks[t as usize],
                     model::TokKind::Top | model::TokKind::BuiltinFn
-                ) {
+                ) || g.m.marker_is_top(t)
+                {
                     ret_unknown = true;
                     continue;
                 }

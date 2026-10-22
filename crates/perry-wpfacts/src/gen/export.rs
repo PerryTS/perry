@@ -318,7 +318,7 @@ impl<'a> Gen<'a> {
                         .is_some_and(|vc| vc.unknown)
                 })
                 .collect();
-            self.closed_described.insert(fx, described);
+            self.m.closed_described.insert(fx, described);
             let mut nodes = Vec::with_capacity(n);
             for i in 0..n {
                 let node = match ac.and_then(|a| a.params.get(i)) {
@@ -386,6 +386,9 @@ impl<'a> Gen<'a> {
             let toks = self.m.nodes[ret as usize].pts.to_sorted();
             let ok = toks.iter().all(|&t| match self.m.toks[t as usize] {
                 _ if self.m.param_marker.get(&t).is_some_and(|&(g, _)| g == f) => true,
+                // An escaped marker reads as ⊤ (DECISIONS 42), of any
+                // contract function: another unit's value.
+                _ if self.m.marker_is_top(t) => true,
                 // An unknown value or a builtin function in the result is
                 // the caller's ⊤, nothing of this unit leaves through it.
                 TokKind::Top | TokKind::BuiltinFn => true,

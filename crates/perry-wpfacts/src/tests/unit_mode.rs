@@ -1676,3 +1676,77 @@ fn a_store_into_an_argument_keeps_no_field_of_the_marker() {
     let (d1, d2) = (e16 - e8, e32 - e16);
     assert!(d2 < 3 * d1, "entries {e8} {e16} {e32}: quadratic in the callers");
 }
+
+/// Pts entries of the largest unit when `n` exported functions pass their
+/// argument through a wrapper into a shared helper that stores into it
+/// (the contract's escape) and returns it; `last` keeps them in one unit.
+fn escaped_marker_entries(n: usize) -> u64 {
+    let mut src = String::from(
+        "let last = 0;\nfunction h(a: any) { a.k = 1; last = 0; return a; }\nfunction mid(a: any) { return h(a); }\n",
+    );
+    for i in 0..n {
+        src.push_str(&format!("export function f{i}(a: any) {{ last = {i}; return mid(a); }}\n"));
+    }
+    let names: Vec<String> = (0..n).map(|i| format!("f{i}")).collect();
+    let calls: Vec<String> = names.iter().map(|f| format!("console.log({f}(1));")).collect();
+    let user = format!("import {{ {} }} from './t'; {}", names.join(", "), calls.join(" "));
+    let pf = units_of(&[("t", src.as_str()), ("u", user.as_str())]);
+    pf.units.iter().map(|(_, s)| s.pts_entries).max().unwrap_or(0)
+}
+
+#[test]
+fn an_escaped_marker_is_the_top_beside_it() {
+    // DECISIONS 42: once a contract records an argument's escape, its
+    // consumer sinks the argument and reads nothing else of it, so the
+    // marker says no more than the ⊤ beside it. Delivered anyway, the
+    // shared `h` returns every caller's marker to every caller (`mid` is
+    // copied per caller, `h` is not): the unit grows with the square of
+    // the callers.
+    let (e8, e16, e32) = (
+        escaped_marker_entries(8),
+        escaped_marker_entries(16),
+        escaped_marker_entries(32),
+    );
+    let (d1, d2) = (e16 - e8, e32 - e16);
+    assert!(d2 < 3 * d1, "entries {e8} {e16} {e32}: quadratic in the callers");
+}
+
+/// A module whose exported `make` returns, besides its own literal, what
+/// `put`'s caller passed: `held` delivers `put`'s marker to `make`'s
+/// result before `poke`'s store records the escape (a node's successors
+/// are served before its rules). `seen` keeps them in one unit.
+const HELD: &str = r#"
+    let held: any = 0;
+    let seen = 0;
+    const lit = { n: 1 };
+    export function put(p: any) { seen = 1; held = p; }
+    export function poke() { seen = 2; held.k = 1; }
+    export function make(x: any) { seen = 3; if (x) { return held; } return lit; }
+    export function rd() { return lit.n; }
+    "#;
+
+#[test]
+fn an_escaped_marker_in_a_result_is_another_units_value() {
+    // DECISIONS 42, the reader: `put`'s marker reads as ⊤ in `make`'s
+    // result (another unit's value), so the result stays checked and
+    // `lit` is given out by its layout, not escaped with the result.
+    let m = "import { put, poke, make, rd } from './b'; put({ a: 1 }); poke(); const r = make(0); console.log(r.n, rd());";
+    let pf = units_of(&[("b", HELD), ("m", m)]);
+    let lit = pf
+        .templates
+        .iter()
+        .find(|t| t.birth_keys == ["n"])
+        .unwrap_or_else(|| panic!("lit in\n{}", pf.dump_text()));
+    assert!(lit.escape.is_none(), "{}", pf.dump_text());
+}
+
+#[test]
+fn an_escaped_marker_of_another_function_is_no_result_transfer() {
+    // DECISIONS 42, the contract: `put`'s marker in `make`'s result is
+    // ⊤, not `make`'s parameter 0 coming back. Read as `put`'s parameter
+    // index, the caller's `o` would come back as `r` and the store would
+    // reach `Box.v`.
+    let m = "import { put, poke, make } from './b'; class Box { v: any = 1; } put({ a: 1 }); poke(); function main() { const o = new Box(); const r = make(o); r.v = 'x'; console.log(o.v); } main(); main();";
+    let pf = units_of(&[("b", HELD), ("m", m)]);
+    assert!(field(tmpl(&pf, "Box"), "v").readonly, "{}", pf.dump_text());
+}

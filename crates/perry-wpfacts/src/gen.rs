@@ -78,9 +78,6 @@ pub struct Gen<'a> {
     /// The contracts behind the stand-ins: a stand-in template's class or
     /// layout contract, a stand-in function token's function contract.
     pub(crate) stand_in_cc: FxHashMap<TmplId, crate::units::ClassContract>,
-    /// Per closed function: which parameters every caller passes a
-    /// described value (no unknown one) (decision 17).
-    pub closed_described: FxHashMap<FnIdx, Vec<bool>>,
     /// Store effects of other units performed here (decision 17): the
     /// (instance, key) pairs done, the unknown value and the writer site.
     effects_done: crate::pts::FxHashSet<(Tok, Atom)>,
@@ -298,7 +295,6 @@ impl<'a> Gen<'a> {
             ret_top: Default::default(),
             stand_in_fns: FxHashMap::default(),
             stand_in_cc: FxHashMap::default(),
-            closed_described: FxHashMap::default(),
             effects_done: Default::default(),
             effect_src: None,
             stand_in_fc: FxHashMap::default(),

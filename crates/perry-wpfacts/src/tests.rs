@@ -1093,3 +1093,70 @@ fn own_descriptor_enumeration_observes_late_accessor_constraints() {
         pf.dump_text()
     );
 }
+
+#[test]
+fn a_node_that_left_out_a_top_marker_never_takes_a_shared_set() {
+    use crate::model::{TokKind, TOP};
+    // DECISIONS 42: `d` holds ⊤, so the marker `mk` (reads as ⊤) is left
+    // out of it; `d` no longer holds all of `s`. Equal sizes then prove
+    // nothing: sharing `s`'s set would drop ⊤ from `d` (`copy_to`), and
+    // so would adopting a later delivery (`try_copy_delivery`). `e` has no
+    // ⊤: the marker reaches it as before.
+    let mut m = copy_solver_model();
+    let mk = m.tok(TokKind::ModNs(900));
+    let a = m.tok(TokKind::ModNs(901));
+    let b = m.tok(TokKind::ModNs(902));
+    let (s, d, e) = (m.node_l("s"), m.node_l("d"), m.node_l("e"));
+    m.set_marker_top(mk);
+    m.add(s, &[mk, a], 0);
+    m.add_tok(d, TOP);
+    m.edge(s, d);
+    m.edge(s, e);
+    m.solve();
+    let has = |m: &crate::model::Model, n, t| m.nodes[n as usize].pts.contains_tok(t);
+    assert!(has(&m, d, TOP) && has(&m, d, a) && !has(&m, d, mk), "copy_to");
+    assert!(has(&m, e, mk) && has(&m, e, a), "no ⊤ beside: delivered");
+    m.add_tok(s, b);
+    m.solve();
+    assert!(has(&m, d, TOP) && has(&m, d, b), "try_copy_delivery");
+}
+
+#[test]
+fn a_store_into_a_marker_makes_no_field_of_it() {
+    use crate::model::{FuncInfo, Key, TokKind, MARK_ESCAPE, NO_CTX, NO_FN};
+    // DECISIONS 41, the rule itself (the unit-level growth test,
+    // unit_mode::a_store_into_an_argument_keeps_no_field_of_the_marker, is
+    // also held by DECISIONS 42): a marker stands for another unit's value,
+    // this unit has no storage for it. The store is its escape.
+    let mut m = copy_solver_model();
+    let (this, ret, args) = (m.node_l("this"), m.node_l("ret"), m.node_l("args"));
+    let token = m.tok(TokKind::Func(0, NO_CTX));
+    m.funcs.push(FuncInfo {
+        module: 0,
+        func_id: 0,
+        name: "f".into(),
+        params: Vec::new(),
+        rest: None,
+        this,
+        ret,
+        args_all: args,
+        has_arguments: false,
+        token,
+        ctor_of: None,
+        lexical_this: false,
+        no_summary: true,
+        gen_step: false,
+        parent: NO_FN,
+    });
+    let mk = m.param_marker_tok(0, 0);
+    let v = m.node_l("v");
+    let o = m.tok(TokKind::ModNs(7));
+    m.add_tok(v, o);
+    let x = m.atom("x");
+    let site = m.anon_post_site("test store");
+    m.store_into(mk, Key::Named(x), v, site);
+    m.solve();
+    assert!(m.marker_use.get(&mk).is_some_and(|u| u & MARK_ESCAPE != 0));
+    assert!(!m.fields.contains_key(&(mk, x)), "a field of the marker");
+}
+
