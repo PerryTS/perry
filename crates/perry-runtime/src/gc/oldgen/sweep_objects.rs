@@ -638,6 +638,8 @@ impl ArenaSweepObjectsState {
         if self.reclaim_dead_old_blocks && dead_old {
             self.note_invalidated(block_idx);
             self.defer_old_unregister(header, total_size);
+        } else if !dead_old {
+            invalidate_dead_young_arena_header(header);
         } else {
             (*header).gc_flags = flags & !(GC_FLAG_FORWARDED | GC_FLAG_MARKED);
         }
@@ -664,6 +666,8 @@ impl ArenaSweepObjectsState {
         if self.reclaim_dead_old_blocks && dead_old {
             self.note_invalidated(block_idx);
             self.defer_old_unregister(header, total_size);
+        } else if !dead_old {
+            invalidate_dead_young_arena_header(header);
         }
     }
 
@@ -699,6 +703,29 @@ impl ArenaSweepObjectsState {
             *slot = false;
         }
     }
+}
+
+/// Retire a dead header in a block below the old generation (eden, the
+/// survivor spaces, long-lived), the way `invalidate_dead_old_arena_header`
+/// retires an old one: `obj_type = 0` with `size` intact, so the block stays
+/// walkable and every walkable-gated walker, the census and address lookups
+/// skip it.
+///
+/// Such a block is reused only when a minor or the block cleanup resets it
+/// whole, so until then the dead object's bytes stay where they are. Left as a
+/// valid-looking header, the object was swept again by every following full:
+/// its payload was finalized a second time and its bytes were counted as
+/// freed again, so a full on a heap that had allocated almost nothing priced
+/// itself by the residue of every earlier one (measured on the compiled
+/// opencode TUI: ~10.5 MB "freed" per idle full with ~0.2 MB allocated
+/// between them, so the idle reducer scored every full productive and never
+/// backed off). The census also kept it as a member, so a stale word could
+/// resolve to a finalized object.
+#[inline]
+unsafe fn invalidate_dead_young_arena_header(header: *mut GcHeader) {
+    (*header).obj_type = 0;
+    (*header).gc_flags = 0;
+    (*header)._reserved = 0;
 }
 
 /// Test builds re-check every skip against the headers themselves: a block the

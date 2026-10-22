@@ -540,15 +540,34 @@ pub(crate) fn gc_build_v8_heap_snapshot_json_with_format(format: HeapSnapshotFor
 mod tests {
     #[test]
     fn snapshot_has_real_nodes_and_edges() {
-        // Allocate a recognizable object graph, then snapshot.
-        {
+        // Allocate a recognizable object graph, keep it reachable (the
+        // snapshot collects first and dumps the live set), then snapshot.
+        // A unit-test thread has not run `js_gc_init`, which registers the
+        // runtime-handle root scanner; register it so the scope below roots.
+        crate::gc::gc_register_mutable_root_scanner_with_source(
+            crate::gc::scan_runtime_handle_roots_mut,
+            crate::gc::MutableRootScannerSource::RuntimeHandles,
+        );
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let _graph = {
             let marker = b"__heap_snapshot_test_marker__";
             let key = crate::string::js_string_from_bytes(marker.as_ptr(), marker.len() as u32);
+            let key_root = scope.root_nanbox_f64(f64::from_bits(
+                crate::value::JSValue::string_ptr(key).bits(),
+            ));
             let obj = crate::object::js_object_alloc(0, 1);
+            let obj_root = scope.root_nanbox_f64(f64::from_bits(
+                crate::value::JSValue::pointer(obj as *const u8).bits(),
+            ));
             let arr = crate::array::js_array_alloc(2);
             let arr_value = f64::from_bits(crate::value::JSValue::pointer(arr as *const u8).bits());
+            let obj = (obj_root.get_nanbox_f64().to_bits() & crate::value::POINTER_MASK)
+                as *mut crate::object::ObjectHeader;
+            let key = (key_root.get_nanbox_f64().to_bits() & crate::value::POINTER_MASK)
+                as *const crate::string::StringHeader;
             crate::object::js_object_set_field_by_name(obj, key, arr_value);
-        }
+            (key_root, obj_root)
+        };
         let json = super::gc_build_v8_heap_snapshot_json();
         assert!(json.starts_with(r#"{"snapshot":{"meta":"#));
         assert!(json.contains(r#""node_count":"#));
