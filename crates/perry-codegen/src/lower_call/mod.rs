@@ -104,6 +104,7 @@ mod native_module_rooting_tests;
 mod native_table;
 mod new;
 pub(crate) mod new_alloc;
+mod new_builtin_arms;
 #[cfg(test)]
 mod new_builtin_shadow_tests;
 mod new_ctor_args;
