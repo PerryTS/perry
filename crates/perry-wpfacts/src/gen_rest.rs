@@ -532,16 +532,29 @@ impl<'a> Gen<'a> {
             | Expr::UrlSearchParamsDelete { .. }
             | Expr::UrlSearchParamsToString(..)
             | Expr::UrlSearchParamsSort(..)
-            | Expr::ObjectIs(..)
-            | Expr::ObjectHasOwn(..)
-            | Expr::ArrayIsArray(..)
             | Expr::ArrayIterationPatched
-            | Expr::ParseInt { .. }
+            | Expr::ImportMetaUrl(..)
+            | Expr::ProxyRevoke(..) => {
+                self.prim_kids(fx, e, prim::ALL, "primitive builtin operand")
+            }
+            // The global conversions and predicates: the operation fixes the
+            // kind of its result (ECMA-262; the HIR operation's contract).
+            Expr::ParseInt { .. }
             | Expr::ParseFloat(..)
             | Expr::NumberCoerce(..)
-            | Expr::BigIntCoerce(..)
-            | Expr::StringCoerce(..)
-            | Expr::TemplateStringCoerce(..)
+            | Expr::MathMinSpread(..)
+            | Expr::MathMaxSpread(..) => {
+                self.prim_kids(fx, e, prim::NUM, "primitive builtin operand")
+            }
+            Expr::BigIntCoerce(..) => {
+                self.prim_kids(fx, e, prim::BIGINT, "primitive builtin operand")
+            }
+            Expr::StringCoerce(..) | Expr::TemplateStringCoerce(..) | Expr::ArrayJoin { .. } => {
+                self.prim_kids(fx, e, prim::STR, "primitive builtin operand")
+            }
+            Expr::ObjectIs(..)
+            | Expr::ObjectHasOwn(..)
+            | Expr::ArrayIsArray(..)
             | Expr::BooleanCoerce(..)
             | Expr::IsNaN(..)
             | Expr::IsUndefinedOrBareNan(..)
@@ -550,13 +563,8 @@ impl<'a> Gen<'a> {
             | Expr::NumberIsFinite(..)
             | Expr::NumberIsInteger(..)
             | Expr::NumberIsSafeInteger(..)
-            | Expr::ImportMetaUrl(..)
-            | Expr::ProxyRevoke(..)
-            | Expr::ReflectHas { .. }
-            | Expr::ArrayJoin { .. }
-            | Expr::MathMinSpread(..)
-            | Expr::MathMaxSpread(..) => {
-                self.prim_kids(fx, e, prim::ALL, "primitive builtin operand")
+            | Expr::ReflectHas { .. } => {
+                self.prim_kids(fx, e, prim::BOOL, "primitive builtin operand")
             }
 
             // ------------------------------------------- builtin objects
