@@ -81,7 +81,18 @@ pub extern "C" fn js_object_create(proto_value: f64) -> f64 {
     // Symbol is pointer-tagged but not an object, so reject it explicitly.
     let proto_jv = crate::value::JSValue::from_bits(proto_value.to_bits());
     let proto_is_symbol = unsafe { crate::symbol::js_is_symbol(proto_value) != 0 };
+    // An ordinary object cell (the allocator's proof of the cell's type) is
+    // an Object; the general admission below serves every other operand.
     let proto_ok = proto_jv.is_null()
+        || (proto_jv.is_pointer()
+            && !proto_is_symbol
+            && unsafe {
+                crate::value::addr_class::try_read_tracked_gc_header_of_type(
+                    proto_jv.as_pointer::<u8>() as usize,
+                    crate::gc::GC_TYPE_OBJECT,
+                )
+            }
+            .is_some())
         || crate::proxy::js_proxy_is_proxy(proto_value) != 0
         || (!proto_is_symbol
             && (unsafe { value_is_object_like(proto_value) }

@@ -247,6 +247,7 @@ pub use html::{
 };
 pub(crate) use intern::discard_weak_interns;
 pub(crate) use intern::existing_property_atom;
+pub(crate) use intern::existing_property_atom_of_value;
 pub use intern::js_string_intern;
 pub use intern::js_string_pool_atom;
 #[cfg(test)]

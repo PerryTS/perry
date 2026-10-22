@@ -518,30 +518,10 @@ pub(crate) const IC_SLOT_OVERFLOW_BIT: u32 = 1 << 30;
 /// strict-aware `[[Set]]`. Nothing is remembered.
 #[no_mangle]
 pub extern "C" fn js_put_value_set_dynamic(target: f64, key: f64, value: f64, strict: i32) -> f64 {
-    // An own writable data slot the receiver's shape names is the answer of
-    // [[Set]] for any receiver (OrdinarySet finds the own property first):
-    // one shape lookup, before the add-path probes below. The key is
-    // resolved to its atom only for a receiver whose record has keys.
-    let mut key = key;
-    if (target.to_bits() & !POINTER_MASK) == POINTER_TAG {
-        let obj = (target.to_bits() & POINTER_MASK) as *mut crate::ObjectHeader;
-        if let Some(record) = unsafe { crate::object::shape_store::own_overwrite_record(obj) } {
-            let atom = if crate::JSValue::from_bits(key.to_bits()).is_short_string() {
-                unsafe { crate::object::store_key::interned_key_for_store(key) }
-            } else {
-                unsafe { crate::object::store_key::interned_heap_key(key) }
-            };
-            if let Some(atom) = atom {
-                // The atom names the same property; the steps below reuse it.
-                key = crate::value::js_nanbox_string(atom as i64);
-                if unsafe {
-                    crate::object::shape_store::try_record_own_overwrite(obj, record, atom, value)
-                } {
-                    return value;
-                }
-            }
-        }
-    }
+    let key = match own_overwrite_first(target, key, value) {
+        Ok(stored) => return stored,
+        Err(key) => key,
+    };
     // Case 2c: a family object's late key and a key outside its layout
     // (`layout_desc::family_store`); the layout word stays.
     if unsafe { crate::object::layout_desc::family_store_value(target, key, value) } {
@@ -565,6 +545,44 @@ pub extern "C" fn js_put_value_set_dynamic(target: f64, key: f64, value: f64, st
         }
     }
     js_put_value_set(target, key, value, target, strict)
+}
+
+/// The own-key front of [`js_put_value_set_dynamic`]. An own writable data
+/// property is the answer of [[Set]] for any receiver (OrdinarySet finds the
+/// own property first), so a receiver's own keys are asked before the
+/// add-path probes: the shape record of a keyed ordinary layout, or the
+/// overflow of an overflowed receiver (it lists every own key, §3.4). The
+/// key is resolved to its atom only for a receiver that has own keys.
+/// `Ok` is the stored value; `Err` carries the key the add path continues
+/// with (its atom once resolved: the same property, so the steps after this
+/// do not resolve it again).
+#[inline(always)]
+fn own_overwrite_first(target: f64, key: f64, value: f64) -> Result<f64, f64> {
+    use crate::object::shape_store::{self, OwnOverwrite};
+    if (target.to_bits() & !POINTER_MASK) != POINTER_TAG {
+        return Err(key);
+    }
+    let obj = (target.to_bits() & POINTER_MASK) as *mut crate::ObjectHeader;
+    match unsafe { shape_store::own_overwrite_holder(obj) } {
+        Some(OwnOverwrite::Record(record)) => {
+            let atom = if crate::JSValue::from_bits(key.to_bits()).is_short_string() {
+                unsafe { crate::object::store_key::interned_key_for_store(key) }
+            } else {
+                unsafe { crate::object::store_key::interned_heap_key(key) }
+            };
+            let Some(atom) = atom else {
+                return Err(key);
+            };
+            if unsafe { shape_store::try_record_own_overwrite(obj, record, atom, value) } {
+                return Ok(value);
+            }
+            Err(crate::value::js_nanbox_string(atom as i64))
+        }
+        Some(OwnOverwrite::Overflow) => unsafe {
+            shape_store::try_overflow_own_overwrite(obj, key, value)
+        },
+        None => Err(key),
+    }
 }
 
 #[cfg(test)]

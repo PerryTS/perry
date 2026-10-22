@@ -92,15 +92,23 @@ pub(crate) fn object_proto_may_intercept_key(key: f64) -> bool {
 /// Otherwise only its keys can tell ([`object_proto_may_intercept_name`]).
 #[inline]
 pub(crate) fn object_proto_may_intercept_any() -> bool {
+    !object_proto_key_holder().is_null()
+}
+
+/// The `%Object.prototype%` whose own keys answer a realm-default store
+/// ([`object_proto_may_intercept_any`]), read once; null when it can block
+/// no key.
+#[inline]
+fn object_proto_key_holder() -> *const ObjectHeader {
     let intrinsic =
         crate::agent_ptrs::intrinsic_proto(super::builtin_proto::BuiltinProto::Object as usize);
     let word = unsafe { (*intrinsic).parent_class_id };
     // A zero startup stand-in proves nothing about an already built but
     // unsealed intrinsic (including runtime fixtures).
     if word >= super::shapes::SHAPE_ID_BASE && word < super::layout_desc::UNSHADOWED_WORD_END {
-        return false;
+        return std::ptr::null();
     }
-    crate::array::object_prototype_addr_if_resolved() != 0
+    crate::array::object_prototype_addr_if_resolved() as *const ObjectHeader
 }
 
 /// The realm-default answer for an already decoded property name.
@@ -110,13 +118,8 @@ pub(crate) fn object_proto_may_intercept_name(bytes: &[u8]) -> bool {
     if bytes == b"__proto__" {
         return true;
     }
-    object_proto_may_intercept_any()
-        && unsafe {
-            super::key_attrs::object_key_blocks_plain_store(
-                crate::array::object_prototype_addr_if_resolved() as *const ObjectHeader,
-                bytes,
-            )
-        }
+    let proto = object_proto_key_holder();
+    !proto.is_null() && unsafe { super::key_attrs::object_key_blocks_plain_store(proto, bytes) }
 }
 
 /// Whether a fast plain-data write of `key` to a CLASS INSTANCE (`class_id != 0`)
