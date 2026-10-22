@@ -1,9 +1,32 @@
 # `node:readline` parity coverage
 
-This suite uses Node.js **v26.5.0** as the exact oracle. It has 95 small
-fixtures. Each fixture prints deterministic evidence for a focused contract.
-Fixtures that exercise I/O use in-memory streams. The suite needs no output
-normalization.
+The original audit below used Node.js **v26.5.0** and 95 small fixtures.
+Each fixture prints deterministic evidence for a focused contract. Fixtures
+that exercise I/O use in-memory streams. The suite needs no output normalization.
+Current canonical runs use the exact oracle pinned in the root `.node-version`.
+
+## Classic helper callback admission
+
+`helpers/callback-validation-side-effects.ts` adds public regression coverage
+for `clearLine`, `clearScreenDown`, and `moveCursor` using owned in-memory
+Writable streams. It records return values, write counts and bytes, callback
+counts after write completion, and public error class, code, and message.
+
+Node **v26.12.1** accepts an omitted or explicitly undefined callback and calls
+a valid callback once. Explicit string, null, zero, and false callbacks throw
+`TypeError` with `ERR_INVALID_ARG_TYPE` before any write, including zero cursor
+movement. The single pre-fix canonical run on source `76aa5f1` reproduced this
+admission failure; the nine omitted/undefined/callable control rows matched raw
+Node output. The existing six callback-validation and direction/output fixtures
+are unchanged; their earlier bounded run is not a rerun of the whole module.
+
+The runtime correction validates only the fixed optional callback position in
+these three helpers, retaining the existing write dispatch. `cursorTo` overloads,
+global stream validation, valid zero-movement behavior, and other readline APIs
+are outside this change. Changed-source functional verification requires a
+coherent rebuilt artifact; source formatting alone is not a parity result.
+The historical counts below remain measurements of the original audit, not a
+current module-completion claim.
 
 ## Fixed sources
 
