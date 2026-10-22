@@ -256,11 +256,12 @@ pub(crate) fn set_field_by_name_object_tail(
         // A shape-keyed store verdict proves that the full interception vet
         // (class setters, native probes, actual prototype chain) found no
         // interceptor for this key. Kind and per-key descriptor checks stay
-        // outside the verdict, as do immutable/null-prototype receiver flags.
+        // outside the verdict, as do immutable receiver flags. A born-null
+        // receiver is eligible when its shape proves it ordinary with no
+        // chain; the born-null bit alone is sticky across a relink.
         // Own descriptors are per-key: a descriptor on another key does not
         // disqualify this store, but an accessor on this key must reach the
         // short-circuit below.
-        const PLAN_BLOCKING_FLAGS: u16 = crate::gc::OBJ_FLAG_NULL_PROTO;
         let obj_class_id = (*obj).class_id;
         // #6595: class objects are excluded by their authoritative ShapeId
         // kind — their
@@ -270,7 +271,10 @@ pub(crate) fn set_field_by_name_object_tail(
         let plan_eligible = !key.is_null()
             && obj_class_id != NATIVE_MODULE_CLASS_ID
             && crate::object::object_is_regular(obj)
-            && (*gc_header)._reserved & PLAN_BLOCKING_FLAGS == 0
+            && super::shapes::store_kind::born_null_admits_lane(
+                obj,
+                (*gc_header)._reserved,
+            )
             // Per-key, not per-receiver: a descriptor on some OTHER key cannot
             // intercept this one, and a plan hit skips the own-accessor
             // short-circuit below, so the key must be provably uncovered.
@@ -568,7 +572,7 @@ pub(crate) fn set_field_by_name_object_tail(
             // freshly read `obj_flags`, not the pre-vet read.
             let record_plan_eligible = obj_class_id != NATIVE_MODULE_CLASS_ID
                 && crate::object::object_is_regular(obj)
-                && obj_flags & PLAN_BLOCKING_FLAGS == 0
+                && super::shapes::store_kind::born_null_admits_lane(obj, obj_flags)
                 // `desc_gate_ok` above already proved this key is uncovered on
                 // this receiver, which is the per-key half of the old flag.
                 && desc_gate_ok;
