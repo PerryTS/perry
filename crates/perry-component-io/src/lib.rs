@@ -7,15 +7,18 @@
 //! this boundary. Guest code and canonical lifting stay on the calling agent.
 //!
 //! The work limit includes queued and running tasks. Dropping a Request cancels
-//! its future and native I/O; dropping the Driver cancels every task and
-//! joins its owner. A resource's task lifetime is therefore explicit, with no
-//! process-global runtime or detached futures.
+//! its future; native I/O follows the lifetime of its owners. A separate resource
+//! budget retains persistent non-Send values between calls through Send handles.
+//! Dropping the Driver cancels every task, releases the native resources and
+//! joins its owner, even when resource handles remain on the calling thread.
+//! There is no process-global runtime or detached provider future.
 use futures_channel::oneshot;
 use futures_util::future::{AbortHandle, Abortable};
 use futures_util::FutureExt;
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex, Weak};
 use std::task::{Context, Poll};
@@ -42,15 +45,22 @@ impl std::fmt::Display for Error {
 }
 impl std::error::Error for Error {}
 
-type Factory = Box<dyn FnOnce(&LocalExecutor<Platform>) -> Option<JoinHandle<()>> + Send>;
+mod resource;
+pub use resource::{LocalResource, Resource, ResourceRequest};
+
+type Factory = Box<
+    dyn FnOnce(&LocalExecutor<Platform>, &Rc<resource::Resources>) -> Option<JoinHandle<()>> + Send,
+>;
 enum Command {
     Submit(Factory),
+    Release(u64),
     Stop,
 }
 struct Inner {
     send: mpsc::Sender<Command>,
     notify: Notifier,
     live: Arc<AtomicUsize>,
+    resources: Arc<AtomicUsize>,
     stopped: AtomicBool,
     limit: usize,
     worker: Mutex<Option<thread::JoinHandle<()>>>,
@@ -121,39 +131,54 @@ impl Driver {
                     return;
                 }
                 let mut tasks = Vec::with_capacity(limit);
+                let resources = Rc::new(resource::Resources::default());
                 'drive: loop {
                     tasks.retain(|task: &JoinHandle<()>| !task.is_finished());
                     if tasks.is_empty() && !executor.alive() {
                         match receive.recv() {
                             Ok(Command::Submit(make)) => {
-                                if let Some(task) = make(&executor) {
+                                if let Some(task) = make(&executor, &resources) {
                                     tasks.push(task);
                                 }
                             }
+                            Ok(Command::Release(id)) => resources.remove(id),
                             _ => break,
                         }
                     }
-                    // Bounded by the admission count, not by an unbounded producer.
+                    // Task and resource admission bound the queue. A full batch
+                    // may leave releases/submissions after a coalesced wake, so
+                    // never park until a drain has actually observed it empty.
+                    let mut queue_may_have_work = true;
                     for _ in 0..limit {
                         match receive.try_recv() {
                             Ok(Command::Submit(make)) => {
-                                if let Some(task) = make(&executor) {
+                                if let Some(task) = make(&executor, &resources) {
                                     tasks.push(task);
                                 }
                             }
+                            Ok(Command::Release(id)) => resources.remove(id),
                             Ok(Command::Stop) | Err(mpsc::TryRecvError::Disconnected) => {
                                 break 'drive
                             }
-                            Err(mpsc::TryRecvError::Empty) => break,
+                            Err(mpsc::TryRecvError::Empty) => {
+                                queue_may_have_work = false;
+                                break;
+                            }
                         }
                     }
-                    if executor.turn(Timeout::Forever).is_err() {
+                    let timeout = if queue_may_have_work {
+                        Timeout::Now
+                    } else {
+                        Timeout::Forever
+                    };
+                    if executor.turn(timeout).is_err() {
                         break;
                     }
                 }
                 // Join handles cancel tasks before the executor quiesces its native
                 // requests and frees their buffers. Queued factories are dropped too.
                 drop(tasks);
+                resources.clear();
                 drop(executor);
             })
             .map_err(|error| Error::Driver(error.to_string()))?;
@@ -168,6 +193,7 @@ impl Driver {
             send,
             notify,
             live: Arc::new(AtomicUsize::new(0)),
+            resources: Arc::new(AtomicUsize::new(0)),
             stopped: AtomicBool::new(false),
             limit,
             worker: Mutex::new(Some(worker)),
@@ -189,6 +215,12 @@ impl Driver {
 
     pub fn submitter(&self) -> Submitter {
         Submitter(Arc::downgrade(&self.0))
+    }
+
+    /// Native resources, including pending registrations and in-flight owners.
+    /// Limited independently of the queued/running task count.
+    pub fn resources(&self) -> usize {
+        self.0.resources.load(Ordering::Acquire)
     }
 
     pub fn outstanding(&self) -> usize {
@@ -237,6 +269,15 @@ impl Inner {
         Fut: Future<Output = T> + 'static,
         T: Send + 'static,
     {
+        self.submit_with_resources(move |io, _| make(io))
+    }
+
+    fn submit_with_resources<F, Fut, T>(&self, make: F) -> Result<Request<T>, Error>
+    where
+        F: FnOnce(ExecutorHandle<Platform>, Rc<resource::Resources>) -> Fut + Send + 'static,
+        Fut: Future<Output = T> + 'static,
+        T: Send + 'static,
+    {
         if self.stopped.load(Ordering::Acquire) {
             return Err(Error::Stopped);
         }
@@ -248,11 +289,12 @@ impl Inner {
         let permit = Permit(self.live.clone());
         let (send, receive) = oneshot::channel();
         let (abort, registration) = AbortHandle::new_pair();
-        let factory: Factory = Box::new(move |executor| {
+        let factory: Factory = Box::new(move |executor, resources| {
+            let resources = resources.clone();
             let handle = executor.handle();
             let future = async move {
                 // Invoke the factory inside the caught/abortable future too.
-                let future = async move { make(handle).await };
+                let future = async move { make(handle, resources).await };
                 let result = AssertUnwindSafe(Abortable::new(future, registration))
                     .catch_unwind()
                     .await;

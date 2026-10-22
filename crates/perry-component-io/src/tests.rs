@@ -75,7 +75,7 @@ fn cancelled_blocking_work_retains_native_inputs_until_syscall_finishes() {
 
 // Bound every cross-thread wait, including shutdown, so a broken wakeup fails
 // the test instead of leaving a CI worker hung indefinitely.
-fn bounded(test: impl FnOnce() + Send + 'static) {
+pub(super) fn bounded(test: impl FnOnce() + Send + 'static) {
     let (send, receive) = mpsc::channel();
     let worker = thread::spawn(move || {
         let result = std::panic::catch_unwind(AssertUnwindSafe(test));
