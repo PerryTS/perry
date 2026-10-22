@@ -562,6 +562,10 @@ pub(crate) unsafe fn layout_store_may_intercept(
         {
             declared_class_chain_blocks_store(class as u32, name)
         }
+        // A generator instance's record holds its link.
+        super::shapes::PROTO_ID_RECORD_HELD => {
+            holder_word_blocks_store(super::shapes::object_prototype_word(obj), name)
+        }
         _ => holder_word_blocks_store(record.prototype_word(), name),
     }
 }

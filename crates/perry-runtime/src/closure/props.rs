@@ -137,21 +137,43 @@ pub(crate) unsafe fn bag_born_with_attrs(
         // non-enumerable, non-configurable): its bag is born with the slot
         // and its original prototype object, so the slot is a fact of the
         // function's keyed shape, never a later key-add or attribute edit.
+        // Its original prototype also stays in the bag's private
+        // `[[GeneratorPrototype]]` slot, which no later write of `prototype`
+        // replaces: an instance born before the bag names the original
+        // through its owner (`generator_state::generator_record_prototype_word`).
         let generator = closure_has_generator_body(ptr as *const ClosureHeader);
-        let count = if generator { 3 } else { 2 };
-        let names = &INTRINSIC_OWN_KEYS[..count];
-        let mut own = [("length", 0.0), ("name", 0.0), ("prototype", 0.0)];
+        let count = if generator { 4 } else { 2 };
+        let original_key = crate::object::generator_original_prototype_key();
+        let names = [
+            INTRINSIC_OWN_KEYS[0],
+            INTRINSIC_OWN_KEYS[1],
+            INTRINSIC_OWN_KEYS[2],
+            original_key,
+        ];
+        let names = &names[..count];
+        let mut own = [
+            ("length", 0.0),
+            ("name", 0.0),
+            ("prototype", 0.0),
+            (original_key, 0.0),
+        ];
         let mut own_attrs = [
             intrinsic_attrs,
             intrinsic_attrs,
             crate::object::key_attrs::attr_bits_to_entry(GENERATOR_PROTOTYPE_ATTRS.bits),
+            crate::object::key_attrs::PRIVATE_FIELD_ENTRY,
         ];
+        let original = if generator {
+            crate::object::generator_original_prototype(ptr)
+        } else {
+            0.0
+        };
         for (index, &key) in names.iter().enumerate() {
             if let Some(i) = entries.iter().position(|(name, _)| *name == key) {
                 own[index] = entries[i];
                 own_attrs[index] = attrs.get(i).copied().unwrap_or(own_attrs[index]);
-            } else if index == 2 {
-                own[index].1 = crate::object::generator_original_prototype(ptr);
+            } else if index >= 2 {
+                own[index].1 = original;
             } else {
                 let closure = ptr as *const ClosureHeader;
                 let value = if index == 0 {

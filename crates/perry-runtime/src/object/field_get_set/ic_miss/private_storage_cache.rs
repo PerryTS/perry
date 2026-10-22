@@ -542,7 +542,7 @@ impl IntrinsicPrivateReadSite {
 
     /// The qualified spelling, `private_storage_spelling(0, 0, name)`.
     #[inline]
-    fn spelling(&self) -> &'static [u8] {
+    pub(crate) fn spelling(&self) -> &'static [u8] {
         let string = self.atom.string;
         unsafe {
             std::slice::from_raw_parts(
@@ -555,7 +555,6 @@ impl IntrinsicPrivateReadSite {
     /// The agent's atom for the qualified spelling (the static atom unless an
     /// equal spelling was interned first). Birth builders attach
     /// PRIVATE_FIELD_ENTRY to it.
-    #[cfg(feature = "regex-engine")]
     pub(crate) fn birth_key(&self) -> *const crate::StringHeader {
         crate::string::intern_ascii_literal(self.spelling())
     }

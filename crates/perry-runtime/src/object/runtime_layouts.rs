@@ -199,6 +199,19 @@ pub(crate) mod intrinsic_private_atoms {
         "#<perry:private-value:0:@0:[[RegExpPrototype]]>",
         "233c70657272793a707269766174652d76616c75653a303a40303a5b5b52656745787050726f746f747970655d5d3e"
     );
+    // A sync generator instance's resume record (`generator_state`).
+    runtime_atom!(
+        GENERATOR_STATE,
+        "#<perry:private-value:0:@0:[[GeneratorState]]>",
+        "233c70657272793a707269766174652d76616c75653a303a40303a5b5b47656e657261746f7253746174655d5d3e"
+    );
+    // A generator function's original prototype, in its bag
+    // (`closure::props`).
+    runtime_atom!(
+        GENERATOR_PROTOTYPE,
+        "#<perry:private-value:0:@0:[[GeneratorPrototype]]>",
+        "233c70657272793a707269766174652d76616c75653a303a40303a5b5b47656e657261746f7250726f746f747970655d5d3e"
+    );
     #[cfg(test)]
     runtime_atom!(
         COLD_STORE,

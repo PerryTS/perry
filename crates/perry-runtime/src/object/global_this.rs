@@ -170,6 +170,10 @@ pub(crate) use generator_state::{
     call_generator_symbol_method, fixed_generator_state, install_class_symbol_method,
     install_evaluation_generator_symbols, STEP_DONE, STEP_INNER_RESULT,
 };
+pub(crate) use generator_state::{
+    generator_observe_record_prototype, generator_original_prototype_key,
+    generator_record_prototype_word,
+};
 pub use generator_state::{js_generator_create, js_generator_result, js_generator_set_slot};
 pub use install_static::js_promise_static_function_value;
 pub(crate) use install_static::{

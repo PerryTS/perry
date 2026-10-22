@@ -27,6 +27,21 @@ function* g2() {
 const p2 = g2.prototype;
 out("2 before-birth " + (Object.getPrototypeOf(g2()) === p2));
 
+// 2b. a computed-key read, Reflect.get and `in` see the declared slot
+function* g2b() {
+  yield 2;
+}
+const a2b = g2b();
+const key2b = ["proto", "type"].join("");
+const viaKey = (g2b as any)[key2b];
+out("2b key " + (Object.getPrototypeOf(a2b) === viaKey));
+function* g2c() {
+  yield 2;
+}
+const a2c = g2c();
+const viaReflect = Reflect.get(g2c, "prototype");
+out("2b reflect " + (Object.getPrototypeOf(a2c) === viaReflect) + " " + ("prototype" in g2c));
+
 // 3. two instances born unobserved share one original
 function* g3() {
   yield 3;
@@ -223,6 +238,37 @@ out("15 proxy " + (Object.getPrototypeOf(p15) === g15.prototype));
 const k15 = Object.create(Object.getPrototypeOf(g15()));
 out("15 create " + (Object.getPrototypeOf(k15) === g15.prototype));
 out("15 iterator " + (g15()[Symbol.iterator]() !== undefined));
+
+// 17. prototypes that are not ordinary objects: a function (even the
+// generator function itself), a Proxy, an array, another function's original
+function* g17() {
+  yield 17;
+}
+const f17 = function () {};
+(f17 as any).marker = "fn";
+g17.prototype = f17 as any;
+const a17 = g17() as any;
+out("17 fn " + (Object.getPrototypeOf(a17) === f17) + " " + a17.marker + " " + typeof a17.next);
+const px17 = new Proxy({ marker: "px" }, {});
+g17.prototype = px17 as any;
+const b17 = g17() as any;
+out("17 proxy " + (Object.getPrototypeOf(b17) === px17) + " " + b17.marker);
+const arr17 = [7, 8];
+g17.prototype = arr17 as any;
+const c17 = g17() as any;
+out("17 array " + (Object.getPrototypeOf(c17) === arr17) + " " + c17.length + " " + c17[1]);
+function* g17s() {
+  yield 1;
+}
+(g17s as any).prototype = g17s;
+const d17 = g17s();
+out("17 self " + (Object.getPrototypeOf(d17) === g17s) + " " + typeof (d17 as any).next);
+function* g17o() {
+  yield 1;
+}
+g17o.prototype = g1.prototype;
+const e17 = g17o();
+out("17 other-original " + (Object.getPrototypeOf(e17) === g1.prototype) + " " + (e17 instanceof (g1 as any)));
 
 // 16. a thenable prototype is observed by await
 function* g16() {

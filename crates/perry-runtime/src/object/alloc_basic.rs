@@ -330,7 +330,6 @@ pub(crate) fn object_alloc_born(
 /// shape validated just before is still live at the stamp and the newborn is
 /// known young. Otherwise validate AFTER allocating: a scalar ShapeId memo
 /// does not retain the descriptor or its keys.
-#[cfg(feature = "regex-engine")]
 #[inline(always)]
 pub(crate) fn object_alloc_plain_born(
     field_count: u32,
@@ -355,7 +354,6 @@ pub(crate) fn object_alloc_plain_born(
 }
 
 /// [`object_alloc_plain_born`] through the collecting allocator.
-#[cfg(feature = "regex-engine")]
 #[cold]
 #[inline(never)]
 fn object_alloc_plain_born_slow(

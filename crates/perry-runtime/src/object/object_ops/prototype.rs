@@ -223,6 +223,11 @@ unsafe fn shape_link_prototype(obj: *const ObjectHeader, default_only: bool) -> 
     if pid == s::PROTO_ID_NULL {
         return Some(f64::from_bits(crate::value::TAG_NULL));
     }
+    if pid == s::PROTO_ID_RECORD_HELD {
+        // The caller materialized an unobserved original first
+        // (`generator_observe_record_prototype`).
+        return Some(f64::from_bits(s::object_prototype_word(obj)));
+    }
     if pid != s::PROTO_ID_DEFAULT {
         if pid >= s::PROTO_ID_CLASS {
             return None;
@@ -252,6 +257,9 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
             throw_object_type_error(b"Cannot convert undefined or null to object");
         }
         if jv.is_pointer() {
+            // A generator instance's record may name an original prototype
+            // nothing has materialized: the program observes it here.
+            crate::object::generator_observe_record_prototype(obj_value);
             let addr = jv.as_pointer::<ObjectHeader>();
             if crate::value::addr_class::is_plausible_heap_addr(addr as usize) {
                 // Rule 3: a live ordinary ShapeId proves this cell's layout.
