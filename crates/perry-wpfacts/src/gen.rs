@@ -75,6 +75,10 @@ pub struct Gen<'a> {
     /// Stand-ins of other units' functions (by name): value node, token.
     /// By (name, the stand-in template it is a field of, if any).
     pub stand_in_fns: FxHashMap<(String, Option<(TmplId, bool)>), (NodeId, Tok)>,
+    /// DECISIONS 45: what other units' functions let escape, or touch, of
+    /// what their arguments reach: one node each for the unit.
+    pub reach_escape: Option<NodeId>,
+    pub reach_touch: Option<NodeId>,
     /// The contracts behind the stand-ins: a stand-in template's class or
     /// layout contract, a stand-in function token's function contract.
     pub(crate) stand_in_cc: FxHashMap<TmplId, crate::units::ClassContract>,
@@ -294,6 +298,8 @@ impl<'a> Gen<'a> {
             ret_ok: Default::default(),
             ret_top: Default::default(),
             stand_in_fns: FxHashMap::default(),
+            reach_escape: None,
+            reach_touch: None,
             stand_in_cc: FxHashMap::default(),
             effects_done: Default::default(),
             effect_src: None,
@@ -619,12 +625,23 @@ impl<'a> Gen<'a> {
             if u & MARK_TOUCH != 0 {
                 self.m.cons(p, Cons::Implicit { reason: r });
             }
-            // What the argument reaches, used apart from the argument.
-            if ru != 0 {
-                let q = self
-                    .m
-                    .node_named("reach", || format!("reached{i}({})", c.name));
-                self.m.own(q);
+            // What the argument reaches, used apart from the argument
+            // (DECISIONS 45). An escape is transitive (`escape` sinks every
+            // field): the argument's fields go to the unit's escape node. A
+            // touch is not: the unit's touch node closes over the fields of
+            // what it holds. The union of the parameters' closures is the
+            // closure of their union, so one node per use holds the same
+            // facts as one per parameter. A read only runs nothing here.
+            if ru & MARK_ESCAPE != 0 {
+                let q = match self.reach_escape {
+                    Some(q) => q,
+                    None => {
+                        let q = self.m.node_named("reach", || "reached(escape)".into());
+                        self.m.sink_node(q, r);
+                        self.reach_escape = Some(q);
+                        q
+                    }
+                };
                 self.m.cons(
                     p,
                     Cons::Load {
@@ -632,18 +649,30 @@ impl<'a> Gen<'a> {
                         dst: q,
                     },
                 );
+            } else if ru & MARK_TOUCH != 0 {
+                let q = match self.reach_touch {
+                    Some(q) => q,
+                    None => {
+                        let q = self.m.node_named("reach", || "reached(touch)".into());
+                        self.m.cons(
+                            q,
+                            Cons::Load {
+                                key: crate::model::Key::Any,
+                                dst: q,
+                            },
+                        );
+                        self.m.cons(q, Cons::Implicit { reason: r });
+                        self.reach_touch = Some(q);
+                        q
+                    }
+                };
                 self.m.cons(
-                    q,
+                    p,
                     Cons::Load {
                         key: crate::model::Key::Any,
                         dst: q,
                     },
                 );
-                if ru & MARK_ESCAPE != 0 {
-                    self.m.sink_node(q, r);
-                } else if ru & MARK_TOUCH != 0 {
-                    self.m.cons(q, Cons::Implicit { reason: r });
-                }
             }
         }
         self.m.add_prim(ret, prim::ALL);

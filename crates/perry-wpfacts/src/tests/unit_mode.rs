@@ -1656,10 +1656,21 @@ fn marker_store_entries(n: usize) -> u64 {
     }
     // Another module calls every export: each is a contract (§11.1).
     let names: Vec<String> = (0..n).map(|i| format!("f{i}")).collect();
-    let calls: Vec<String> = names.iter().map(|f| format!("console.log({f}(1, 2));")).collect();
-    let user = format!("import {{ {} }} from './t'; {}", names.join(", "), calls.join(" "));
+    let calls: Vec<String> = names
+        .iter()
+        .map(|f| format!("console.log({f}(1, 2));"))
+        .collect();
+    let user = format!(
+        "import {{ {} }} from './t'; {}",
+        names.join(", "),
+        calls.join(" ")
+    );
     let pf = units_of(&[("t", src.as_str()), ("u", user.as_str())]);
-    pf.units.iter().map(|(_, s)| s.pts_entries).max().unwrap_or(0)
+    pf.units
+        .iter()
+        .map(|(_, s)| s.pts_entries)
+        .max()
+        .unwrap_or(0)
 }
 
 #[test]
@@ -1674,7 +1685,10 @@ fn a_store_into_an_argument_keeps_no_field_of_the_marker() {
         marker_store_entries(32),
     );
     let (d1, d2) = (e16 - e8, e32 - e16);
-    assert!(d2 < 3 * d1, "entries {e8} {e16} {e32}: quadratic in the callers");
+    assert!(
+        d2 < 3 * d1,
+        "entries {e8} {e16} {e32}: quadratic in the callers"
+    );
 }
 
 /// Pts entries of the largest unit when `n` exported functions pass their
@@ -1685,13 +1699,26 @@ fn escaped_marker_entries(n: usize) -> u64 {
         "let last = 0;\nfunction h(a: any) { a.k = 1; last = 0; return a; }\nfunction mid(a: any) { return h(a); }\n",
     );
     for i in 0..n {
-        src.push_str(&format!("export function f{i}(a: any) {{ last = {i}; return mid(a); }}\n"));
+        src.push_str(&format!(
+            "export function f{i}(a: any) {{ last = {i}; return mid(a); }}\n"
+        ));
     }
     let names: Vec<String> = (0..n).map(|i| format!("f{i}")).collect();
-    let calls: Vec<String> = names.iter().map(|f| format!("console.log({f}(1));")).collect();
-    let user = format!("import {{ {} }} from './t'; {}", names.join(", "), calls.join(" "));
+    let calls: Vec<String> = names
+        .iter()
+        .map(|f| format!("console.log({f}(1));"))
+        .collect();
+    let user = format!(
+        "import {{ {} }} from './t'; {}",
+        names.join(", "),
+        calls.join(" ")
+    );
     let pf = units_of(&[("t", src.as_str()), ("u", user.as_str())]);
-    pf.units.iter().map(|(_, s)| s.pts_entries).max().unwrap_or(0)
+    pf.units
+        .iter()
+        .map(|(_, s)| s.pts_entries)
+        .max()
+        .unwrap_or(0)
 }
 
 #[test]
@@ -1708,7 +1735,10 @@ fn an_escaped_marker_is_the_top_beside_it() {
         escaped_marker_entries(32),
     );
     let (d1, d2) = (e16 - e8, e32 - e16);
-    assert!(d2 < 3 * d1, "entries {e8} {e16} {e32}: quadratic in the callers");
+    assert!(
+        d2 < 3 * d1,
+        "entries {e8} {e16} {e32}: quadratic in the callers"
+    );
 }
 
 /// A module whose exported `make` returns, besides its own literal, what
@@ -1759,13 +1789,26 @@ fn shared_helper_entries(n: usize) -> u64 {
         "let last = 0;\nfunction h(a: any) { last = a.v; return a; }\nfunction mid(a: any) { return h(a); }\n",
     );
     for i in 0..n {
-        src.push_str(&format!("export function f{i}(a: any) {{ last = {i}; return mid(a); }}\n"));
+        src.push_str(&format!(
+            "export function f{i}(a: any) {{ last = {i}; return mid(a); }}\n"
+        ));
     }
     let names: Vec<String> = (0..n).map(|i| format!("f{i}")).collect();
-    let calls: Vec<String> = names.iter().map(|f| format!("console.log({f}({{ v: 1 }}));")).collect();
-    let user = format!("import {{ {} }} from './t'; {}", names.join(", "), calls.join(" "));
+    let calls: Vec<String> = names
+        .iter()
+        .map(|f| format!("console.log({f}({{ v: 1 }}));"))
+        .collect();
+    let user = format!(
+        "import {{ {} }} from './t'; {}",
+        names.join(", "),
+        calls.join(" ")
+    );
     let pf = units_of(&[("t", src.as_str()), ("u", user.as_str())]);
-    pf.units.iter().map(|(_, s)| s.pts_entries).max().unwrap_or(0)
+    pf.units
+        .iter()
+        .map(|(_, s)| s.pts_entries)
+        .max()
+        .unwrap_or(0)
 }
 
 #[test]
@@ -1781,7 +1824,10 @@ fn a_shared_body_holds_one_marker_per_parameter() {
         shared_helper_entries(32),
     );
     let (d1, d2) = (e16 - e8, e32 - e16);
-    assert!(d2 < 3 * d1, "entries {e8} {e16} {e32}: quadratic in the callers");
+    assert!(
+        d2 < 3 * d1,
+        "entries {e8} {e16} {e32}: quadratic in the callers"
+    );
 }
 
 #[test]
@@ -1804,4 +1850,71 @@ fn an_argument_a_shared_body_returns_comes_back_to_the_caller() {
     let m = "import { id, id2 } from './b'; class Box { v: any = 1; } const o = new Box(); const r = id(o); id2(0); r.v = 'x'; console.log(o.v);";
     let pf = units_of(&[("b", b), ("m", m)]);
     assert!(!field(tmpl(&pf, "Box"), "v").readonly, "{}", pf.dump_text());
+}
+
+/// Pts entries of the largest unit when `n` other-unit functions let what
+/// their argument reaches escape, each called with the head of one list of
+/// `n` objects.
+fn reach_closure_entries(n: usize) -> u64 {
+    let mut b = String::new();
+    for i in 0..n {
+        b.push_str(&format!(
+            "export function keep{i}(p: any) {{ (globalThis as any).k{i} = p.next; }}\n"
+        ));
+    }
+    let names: Vec<String> = (0..n).map(|i| format!("keep{i}")).collect();
+    let mut m = format!("import {{ {} }} from './b';\nfunction main() {{\n  const o0: any = {{ next: null, v: 0 }};\n", names.join(", "));
+    for i in 1..=n {
+        m.push_str(&format!(
+            "  const o{i}: any = {{ next: o{}, v: {i} }};\n",
+            i - 1
+        ));
+    }
+    for f in &names {
+        m.push_str(&format!("  {f}(o{n});\n"));
+    }
+    m.push_str(&format!("  console.log(o{n}.v);\n}}\nmain(); main();\n"));
+    let pf = units_of(&[("b", b.as_str()), ("m", m.as_str())]);
+    pf.units
+        .iter()
+        .map(|(_, s)| s.pts_entries)
+        .max()
+        .unwrap_or(0)
+}
+
+#[test]
+fn what_other_units_let_escape_of_reached_values_is_one_closure() {
+    // DECISIONS 45: an escape is transitive, so the unit's one escape node
+    // takes the arguments' fields. A closure per contract parameter holds
+    // the whole list once per callee: the unit grows with the square.
+    let (e8, e16, e32) = (
+        reach_closure_entries(8),
+        reach_closure_entries(16),
+        reach_closure_entries(32),
+    );
+    // Linear: doubling the callees again adds twice as much (a closure per
+    // parameter: 258 418 738 became 376 784 1984, d2 = 2.9 d1).
+    let (d1, d2) = (e16 - e8, e32 - e16);
+    assert!(
+        4 * d2 <= 9 * d1,
+        "entries {e8} {e16} {e32}: quadratic in the callees"
+    );
+}
+
+#[test]
+fn another_units_touch_of_a_deep_reached_value_runs_its_protocol() {
+    // DECISIONS 45: a touch is not transitive; the unit's touch node closes
+    // over the fields of what it holds. `show` converts `p.a.b`, two fields
+    // down: the literal `w`'s `valueOf` runs on `w` and writes `n`. (A class
+    // method would not do: its own unit writes the field whether or not
+    // anyone calls it.)
+    let b = "export function show(p: any) { return '' + p.a.b; }";
+    let m = "import { show } from './b'; function main() { const w = { n: 1, valueOf() { this.n = 'x'; return 0; } }; const o = { a: { b: w } }; show(o); console.log(w.n); } main(); main();";
+    let pf = units_of(&[("b", b), ("m", m)]);
+    let w = pf
+        .templates
+        .iter()
+        .find(|t| t.birth_keys == ["n", "valueOf"])
+        .expect("w literal");
+    assert!(!field(w, "n").readonly, "{}", pf.dump_text());
 }

@@ -1114,7 +1114,10 @@ fn a_node_that_left_out_a_top_marker_never_takes_a_shared_set() {
     m.edge(s, e);
     m.solve();
     let has = |m: &crate::model::Model, n, t| m.nodes[n as usize].pts.contains_tok(t);
-    assert!(has(&m, d, TOP) && has(&m, d, a) && !has(&m, d, mk), "copy_to");
+    assert!(
+        has(&m, d, TOP) && has(&m, d, a) && !has(&m, d, mk),
+        "copy_to"
+    );
     assert!(has(&m, e, mk) && has(&m, e, a), "no ⊤ beside: delivered");
     m.add_tok(s, b);
     m.solve();
@@ -1130,7 +1133,12 @@ fn a_parameter_node_holds_its_argument_marker() {
     // of it). A marker that arrives after the argument marker was used
     // takes the uses so far.
     let mut m = copy_solver_model();
-    let (this, ret, args, p) = (m.node_l("this"), m.node_l("ret"), m.node_l("args"), m.node_l("p"));
+    let (this, ret, args, p) = (
+        m.node_l("this"),
+        m.node_l("ret"),
+        m.node_l("args"),
+        m.node_l("p"),
+    );
     let token = m.tok(TokKind::Func(0, NO_CTX));
     m.funcs.push(FuncInfo {
         module: 0,
@@ -1160,14 +1168,25 @@ fn a_parameter_node_holds_its_argument_marker() {
     m.add_tok(s, m1);
     m.solve();
     let r = m.arg_marker_of[&p];
-    assert!(has(&m, p, r) && !has(&m, p, m1), "the argument marker in place of the marker");
+    assert!(
+        has(&m, p, r) && !has(&m, p, m1),
+        "the argument marker in place of the marker"
+    );
     assert_eq!(m.marker_members(r), vec![m1]);
     m.mark_use(r, MARK_READ);
-    assert_eq!(m.marker_use[&m1] & MARK_READ, MARK_READ, "a member takes the uses");
+    assert_eq!(
+        m.marker_use[&m1] & MARK_READ,
+        MARK_READ,
+        "a member takes the uses"
+    );
     m.add_tok(s, m2);
     m.solve();
     assert!(!has(&m, p, m2));
-    assert_eq!(m.marker_use[&m2] & MARK_READ, MARK_READ, "a late member takes the uses so far");
+    assert_eq!(
+        m.marker_use[&m2] & MARK_READ,
+        MARK_READ,
+        "a late member takes the uses so far"
+    );
 }
 
 #[test]
@@ -1208,4 +1227,3 @@ fn a_store_into_a_marker_makes_no_field_of_it() {
     assert!(m.marker_use.get(&mk).is_some_and(|u| u & MARK_ESCAPE != 0));
     assert!(!m.fields.contains_key(&(mk, x)), "a field of the marker");
 }
-
