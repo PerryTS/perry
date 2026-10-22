@@ -134,6 +134,10 @@ fn sync_yield_star_pulls_through_runtime_and_reyields_inner_result() {
         "the fixed-state record owns a step-kind control"
     );
     assert!(
+        body.contains("__gen_proto"),
+        "the fixed-state record owns the instance's prototype control"
+    );
+    assert!(
         !body.contains("property: \"call\""),
         "sync yield* must not read Function.prototype.call"
     );

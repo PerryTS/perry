@@ -519,6 +519,18 @@ pub unsafe extern "C" fn js_dynamic_object_get_property(
     // ObjectHeader layout (#8047): class_id u32 (4B), parent_class_id u32 (4B), meta (8B).
     // Without this check, the closure header would be interpreted as an object descriptor token.
     if crate::closure::is_closure_ptr(ptr as usize) {
+        // A generator function declares `prototype`: an unmaterialized slot
+        // is born with the function's bag (allocates).
+        if property_name == "prototype"
+            && crate::closure::props::closure_has_generator_body(
+                ptr as *const crate::closure::ClosureHeader,
+            )
+            && crate::closure::props::bag_of(ptr as usize).is_null()
+        {
+            if let Some(prototype) = crate::object::generator_function_prototype_of(ptr as usize) {
+                return prototype;
+            }
+        }
         return crate::closure::closure_get_dynamic_prop(ptr as usize, property_name);
     }
 

@@ -32,6 +32,21 @@ unsafe fn eligible_key(key: *const crate::StringHeader) -> bool {
     first != b'#' && !first.is_ascii_digit()
 }
 
+/// The key pointer when `key` is already an interned, store-eligible heap
+/// string (an atom: a flag check, no table probe); `None` otherwise.
+///
+/// # Safety
+/// `key` is a live key value.
+#[inline]
+pub(crate) unsafe fn interned_heap_key(key: f64) -> Option<*const crate::StringHeader> {
+    let bits = key.to_bits();
+    if bits & !crate::value::POINTER_MASK != crate::value::STRING_TAG {
+        return None;
+    }
+    let ptr = (bits & crate::value::POINTER_MASK) as *const crate::StringHeader;
+    eligible_key(ptr).then_some(ptr)
+}
+
 /// The interned key pointer for a store's key VALUE, without allocating: a
 /// heap string that is already interned, or an SSO immediate whose content
 /// is in the intern table. `None` for anything else — the caller takes the

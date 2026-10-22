@@ -81,7 +81,18 @@ pub extern "C" fn js_object_create(proto_value: f64) -> f64 {
     // Symbol is pointer-tagged but not an object, so reject it explicitly.
     let proto_jv = crate::value::JSValue::from_bits(proto_value.to_bits());
     let proto_is_symbol = unsafe { crate::symbol::js_is_symbol(proto_value) != 0 };
+    // An ordinary object cell (the allocator's proof of the cell's type) is
+    // an Object; the general admission below serves every other operand.
     let proto_ok = proto_jv.is_null()
+        || (proto_jv.is_pointer()
+            && !proto_is_symbol
+            && unsafe {
+                crate::value::addr_class::try_read_tracked_gc_header_of_type(
+                    proto_jv.as_pointer::<u8>() as usize,
+                    crate::gc::GC_TYPE_OBJECT,
+                )
+            }
+            .is_some())
         || crate::proxy::js_proxy_is_proxy(proto_value) != 0
         || (!proto_is_symbol
             && (unsafe { value_is_object_like(proto_value) }
@@ -96,7 +107,9 @@ pub extern "C" fn js_object_create(proto_value: f64) -> f64 {
     }
 
     if proto_jv.is_null() {
-        return crate::value::js_nanbox_pointer(js_object_alloc_null_proto(0, 0) as i64);
+        return crate::value::js_nanbox_pointer(
+            crate::object::alloc_basic::object_alloc_created_null_proto() as i64,
+        );
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let proto = scope.root_nanbox_f64(proto_value);
@@ -223,6 +236,11 @@ unsafe fn shape_link_prototype(obj: *const ObjectHeader, default_only: bool) -> 
     if pid == s::PROTO_ID_NULL {
         return Some(f64::from_bits(crate::value::TAG_NULL));
     }
+    if pid == s::PROTO_ID_RECORD_HELD {
+        // The caller materialized an unobserved original first
+        // (`generator_observe_record_prototype`).
+        return Some(f64::from_bits(s::object_prototype_word(obj)));
+    }
     if pid != s::PROTO_ID_DEFAULT {
         if pid >= s::PROTO_ID_CLASS {
             return None;
@@ -252,6 +270,9 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
             throw_object_type_error(b"Cannot convert undefined or null to object");
         }
         if jv.is_pointer() {
+            // A generator instance's record may name an original prototype
+            // nothing has materialized: the program observes it here.
+            crate::object::generator_observe_record_prototype(obj_value);
             let addr = jv.as_pointer::<ObjectHeader>();
             if crate::value::addr_class::is_plausible_heap_addr(addr as usize) {
                 // Rule 3: a live ordinary ShapeId proves this cell's layout.

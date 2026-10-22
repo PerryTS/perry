@@ -1191,6 +1191,17 @@ fn emit_native_method_dispatch(
     property: &str,
     arg_vals: &[String],
 ) -> Result<String> {
+    // A builtin method's key (`push` on a receiver the analysis calls an
+    // array but HIR did not fold): the ordinary method site, whose miss on a
+    // builtin receiver is the builtin's direct entry (`js_bm_<m><n>`: an
+    // O(1) header proof, then the body) and whose probe calls a user method.
+    if crate::expr::method_site::method_site_enabled(ctx, property, arg_vals.len())
+        && crate::builtin_proto::builtin_method(property, arg_vals.len()).is_some()
+    {
+        return Ok(crate::lower_call::emit_native_method_str_dispatch(
+            ctx, property, 0, recv_box, arg_vals,
+        ));
+    }
     let key_idx = ctx.strings.intern(property);
     let entry = ctx.strings.entry(key_idx);
     let bytes_global = format!("@{}", entry.bytes_global);

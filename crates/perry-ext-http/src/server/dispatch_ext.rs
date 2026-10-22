@@ -131,6 +131,8 @@ fn is_incoming_message_member(name: &str) -> bool {
     matches!(
         name,
         "on" | "addListener"
+            | "once"
+            | "prependOnceListener"
             | "setEncoding"
             | "setTimeout"
             | "pause"

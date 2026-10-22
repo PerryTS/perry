@@ -190,6 +190,10 @@ pub extern "C" fn js_object_set_prototype_of(obj_value: f64, proto: f64) -> f64 
         return obj_value;
     }
 
+    // A generator instance's unobserved original prototype exists before
+    // the SameValue tests below compare against it.
+    crate::object::generator_observe_record_prototype(obj_value);
+
     // #2820: `Object.setPrototypeOf(null | undefined, proto)` throws
     // `TypeError: Object.setPrototypeOf called on null or undefined`.
     {

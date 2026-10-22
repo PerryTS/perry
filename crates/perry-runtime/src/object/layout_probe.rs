@@ -1232,14 +1232,7 @@ unsafe fn exotic_chain<const ABSENT: bool>(
     key_bits: u64,
     hash: u64,
 ) -> f64 {
-    chain_from::<ABSENT>(
-        dir,
-        std::ptr::null(),
-        std::ptr::null(),
-        next,
-        key_bits,
-        hash,
-    )
+    chain_from::<ABSENT>(dir, std::ptr::null(), next, key_bits, hash)
 }
 
 /// A plain function's own intrinsic keys, which its layout lists before its
@@ -1525,6 +1518,25 @@ unsafe fn prototype_of(dir: *const u8, obj: *const ObjectHeader, r: *const Shape
     link_of(dir, obj, r)
 }
 
+/// Is `cur`'s [[Prototype]] the realm default `%Object.prototype%` by
+/// [`link_of`]'s rule (no recorded prototype, a realm-default identity, not a
+/// typed-array prototype, no exotic read receiver or weak-collection brand)?
+#[inline]
+unsafe fn realm_default_link(cur: *const ObjectHeader, rc: *const ShapeRecord) -> bool {
+    let header = crate::gc::header_from_trusted_user_ptr(cur.cast());
+    if (*header)._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0 {
+        return false;
+    }
+    let meta = (*cur).meta;
+    if !meta.is_null()
+        && ((*meta).flags & crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER != 0
+            || (*meta).prototype != 0)
+    {
+        return false;
+    }
+    (*rc).weak_collection_brand().is_none() && (*rc).proto_id == super::PROTO_ID_DEFAULT
+}
+
 /// The [[Prototype]] link of `cur` (record `rc`), an object whose own keys
 /// [`walks_from`] admits, so not a typed-array prototype: its recorded
 /// prototype, else its layout's identity (null, the realm default
@@ -1553,7 +1565,9 @@ unsafe fn link_of(dir: *const u8, cur: *const ObjectHeader, rc: *const ShapeReco
         if pid == super::PROTO_ID_NULL {
             return Next::End;
         }
-        bits = if (super::PROTO_ID_CLASS..super::PROTO_ID_MIXED).contains(&pid) {
+        bits = if pid == super::PROTO_ID_RECORD_HELD {
+            record_held_link(cur)
+        } else if (super::PROTO_ID_CLASS..super::PROTO_ID_MIXED).contains(&pid) {
             let word_dir = *(dir.add(FLAT_BASE_OFFSET + 24) as *const *const u8);
             if word_dir.is_null() {
                 return Next::Unknown;
@@ -1577,6 +1591,13 @@ unsafe fn link_of(dir: *const u8, cur: *const ObjectHeader, rc: *const ShapeReco
     Next::Object((bits & POINTER_MASK) as *const ObjectHeader)
 }
 
+/// A generator instance's link: its record holds it. Out of line, so the
+/// record read stays off every other receiver's hop.
+#[inline(never)]
+unsafe fn record_held_link(cur: *const ObjectHeader) -> u64 {
+    crate::object::generator_record_prototype_word(cur)
+}
+
 /// The first prototype of `obj` that holds `key_bits`, if every object
 /// before it proves the key absent, and that holder's data value; with
 /// `ABSENT`, `undefined` when the whole chain proves the key absent.
@@ -1597,15 +1618,15 @@ unsafe fn inherited_get<const ABSENT: bool>(
         return inherited_walk::<ABSENT>(dir, obj, r, key_bits, hash);
     }
     match link_of(dir, obj, r) {
-        Next::Object(next) => chain_from::<ABSENT>(dir, obj, r, next, key_bits, hash),
+        Next::Object(next) => chain_from::<ABSENT>(dir, obj, next, key_bits, hash),
         Next::End => chain_absent::<ABSENT>(),
         Next::Unknown => hole(),
     }
 }
 
-/// The chain from `next`, the [[Prototype]] of `cur` (record `rc`, an object
-/// whose own list and overflow proved `key_bits` absent; null for an exotic
-/// receiver), read in one frame-light loop with each hop's work the layout's
+/// The chain from `next`, the [[Prototype]] of `cur` (an object whose own
+/// list and overflow proved `key_bits` absent; null for an exotic receiver),
+/// read in one frame-light loop with each hop's work the layout's
 /// own facts and the object's own words:
 ///
 /// * the object's layout word, record and key index, the same probe the own
@@ -1617,22 +1638,24 @@ unsafe fn inherited_get<const ABSENT: bool>(
 ///   is absence like any other.
 ///
 /// Every other case (an overflow on a prototype, a TEXT key entry, a record
-/// not yet derived) continues in the complete walk ([`inherited_walk`]) from
-/// `cur`, which answers it with the same rules; with no `cur` it declines.
+/// not yet derived) continues in the complete walk ([`inherited_walk_at`])
+/// at that hop, which answers it with the same rules; with no `cur` it
+/// declines.
 #[inline(always)]
 unsafe fn chain_from<const ABSENT: bool>(
     dir: *const u8,
     mut cur: *const ObjectHeader,
-    mut rc: *const ShapeRecord,
     mut next: *const ObjectHeader,
     key_bits: u64,
     hash: u64,
 ) -> f64 {
-    let walk = |cur: *const ObjectHeader, rc: *const ShapeRecord| {
+    // The complete walk continues at the hop this chain could not answer:
+    // `next`, the link of `cur` the chain already derived.
+    let walk = |cur: *const ObjectHeader, next: *const ObjectHeader| {
         if cur.is_null() {
             hole()
         } else {
-            inherited_walk::<ABSENT>(dir, cur, rc as *mut _, key_bits, hash)
+            inherited_walk_at::<ABSENT>(dir, next, key_bits, hash)
         }
     };
     for _ in 0..MAX_HOPS {
@@ -1644,7 +1667,7 @@ unsafe fn chain_from<const ABSENT: bool>(
         // A record's probe word is derived on its first probe.
         let pw = probe_word(rn);
         if pw & (PROBE_READY | PROBE_DECLINE | PROBE_ATOMS) != PROBE_READY | PROBE_ATOMS {
-            return walk(cur, rc);
+            return walk(cur, next);
         }
         match list_position(rn, pw, key_bits, hash) {
             Ok((pos, load)) => {
@@ -1658,13 +1681,13 @@ unsafe fn chain_from<const ABSENT: bool>(
                 if load == NO_LOAD && attributed_at(rn, pos) {
                     return hole();
                 }
-                return walk(cur, rc);
+                return walk(cur, next);
             }
             Err(true) => {}
-            Err(false) => return walk(cur, rc),
+            Err(false) => return walk(cur, next),
         }
         if w & crate::object::overflow::SHADOW_BIT != 0 {
-            return walk(cur, rc);
+            return walk(cur, next);
         }
         // A sealed builtin prototype not yet on a static layout may install
         // methods outside its list, so its miss proves nothing.
@@ -1676,7 +1699,6 @@ unsafe fn chain_from<const ABSENT: bool>(
         match link_of(dir, next, rn) {
             Next::Object(p) => {
                 cur = next;
-                rc = rn;
                 next = p;
             }
             Next::End => return chain_absent::<ABSENT>(),
@@ -1793,6 +1815,20 @@ unsafe fn inherited_walk<const ABSENT: bool>(
     key_bits: u64,
     hash: u64,
 ) -> f64 {
+    match walk_step::<ABSENT>(dir, obj, r) {
+        Ok(next) => inherited_walk_at::<ABSENT>(dir, next, key_bits, hash),
+        Err(v) => v,
+    }
+}
+
+/// The next hop of the complete walk from `cur` (record `rc`), or the walk's
+/// answer when it ends at `cur`.
+#[inline(always)]
+unsafe fn walk_step<const ABSENT: bool>(
+    dir: *const u8,
+    cur: *const ObjectHeader,
+    rc: *const ShapeRecord,
+) -> Result<*const ObjectHeader, f64> {
     let absent = || {
         if ABSENT {
             f64::from_bits(crate::value::TAG_UNDEFINED)
@@ -1800,24 +1836,35 @@ unsafe fn inherited_walk<const ABSENT: bool>(
             hole()
         }
     };
-    let (mut cur, mut rc) = (obj, r as *const ShapeRecord);
-    for _ in 0..MAX_HOPS {
-        if !walks_from(cur, rc) {
-            // A runtime-born record (unmarked, its keys all in its list and
-            // overflow) whose chain ends here proves absence.
-            if (*rc).object_kind() == super::ShapeObjectKind::OrdinaryUnmarked
-                && ((*cur).meta.is_null() || (*(*cur).meta).flags & READ_BEYOND_LIST == 0)
-                && matches!(prototype_of(dir, cur, rc), Next::End)
-            {
-                return absent();
-            }
-            return hole();
+    if !walks_from(cur, rc) {
+        // A runtime-born record (unmarked, its keys all in its list and
+        // overflow) whose chain ends here proves absence.
+        if (*rc).object_kind() == super::ShapeObjectKind::OrdinaryUnmarked
+            && ((*cur).meta.is_null() || (*(*cur).meta).flags & READ_BEYOND_LIST == 0)
+            && matches!(prototype_of(dir, cur, rc), Next::End)
+        {
+            return Err(absent());
         }
-        let next = match prototype_of(dir, cur, rc) {
-            Next::Object(p) => p,
-            Next::End => return absent(),
-            Next::Unknown => return hole(),
-        };
+        return Err(hole());
+    }
+    match prototype_of(dir, cur, rc) {
+        Next::Object(p) => Ok(p),
+        Next::End => Err(absent()),
+        Next::Unknown => Err(hole()),
+    }
+}
+
+/// The complete walk from hop `next` on: the prototype a caller's walk has
+/// already reached, so its link is not derived again (the fast chain hands
+/// over the hop it could not answer).
+#[inline(never)]
+unsafe fn inherited_walk_at<const ABSENT: bool>(
+    dir: *const u8,
+    mut next: *const ObjectHeader,
+    key_bits: u64,
+    hash: u64,
+) -> f64 {
+    for _ in 0..MAX_HOPS {
         let w = (*next).parent_class_id;
         let rn = record_of(dir, w);
         if rn.is_null() {
@@ -1846,8 +1893,10 @@ unsafe fn inherited_walk<const ABSENT: bool>(
             kind if listed(next, kind) => {}
             _ => return hole(),
         }
-        cur = next;
-        rc = rn;
+        next = match walk_step::<ABSENT>(dir, next, rn) {
+            Ok(p) => p,
+            Err(v) => return v,
+        };
     }
     hole()
 }
@@ -2541,7 +2590,15 @@ unsafe fn chain_admits_add(
         let next = match prototype_of(dir, cur, rc) {
             Next::Object(p) => p,
             Next::End => return true,
-            Next::Unknown => return false,
+            // The realm-default link before `%Object.prototype%`'s address is
+            // memoized (the probe's cell): the generic store's authority for
+            // that link answers (`descriptor_state::layout_store_may_intercept`
+            // on a realm-default record), without its per-key read.
+            Next::Unknown => {
+                return hash != PROTO_KEY_HASH
+                    && realm_default_link(cur, rc)
+                    && !crate::object::descriptor_state::object_proto_may_intercept_any();
+            }
         };
         let w = (*next).parent_class_id;
         // An unwritten `%Object.prototype%` ends the chain, and its one

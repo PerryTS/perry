@@ -63,7 +63,6 @@ pub use alloc::{
     js_object_alloc_null_proto, js_object_alloc_null_proto_entries, js_object_alloc_plain,
     js_object_alloc_with_parent, js_object_coerce,
 };
-#[cfg(feature = "regex-engine")]
 pub(crate) use alloc_basic::object_alloc_plain_born;
 pub(crate) use alloc_basic::{
     object_alloc_born, object_alloc_branded, object_alloc_plain, object_alloc_unpublished,

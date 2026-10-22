@@ -192,6 +192,19 @@ fn emit_tag_guarded_generic(
                 (I64, &args.len().to_string()),
             ],
         )
+    } else if crate::builtin_proto::builtin_method_families(property) & !1 != 0 {
+        // A key another builtin family holds too (`indexOf`, `includes`,
+        // `at`, `concat`, ...): this arm's receiver is as often an array or
+        // a user object (`vec.at(i)` on a class) as anything else, so it
+        // takes the ordinary method site. Its probe calls a user method
+        // directly, and a builtin receiver takes that builtin's entry.
+        super::console_promise::emit_native_method_str_dispatch(
+            ctx,
+            property,
+            call_byte_offset,
+            generic_recv,
+            generic_args,
+        )
     } else {
         super::console_promise::emit_native_method_str_dispatch_plain(
             ctx,

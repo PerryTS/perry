@@ -165,6 +165,138 @@ pub(crate) unsafe fn call_generator_symbol_method(
     )
 }
 
+/// The instance's `[[GeneratorState]]`: its private slot holding the resume
+/// record. Every sync generator is born with it at slot 0
+/// ([`birth_shape`]); own-key transitions keep it there and carry the brand.
+static STATE_READ: crate::object::IntrinsicPrivateReadSite =
+    crate::object::IntrinsicPrivateReadSite::new(
+        &crate::object::runtime_layouts::intrinsic_private_atoms::GENERATOR_STATE,
+    );
+
+/// A generator function's original prototype, kept in its bag's private slot
+/// from the bag's birth (`closure::props`): `g.prototype` may be reassigned
+/// later, and an instance born while the original was unmaterialized names it
+/// through its owner.
+pub(crate) static ORIGINAL_PROTOTYPE_READ: crate::object::IntrinsicPrivateReadSite =
+    crate::object::IntrinsicPrivateReadSite::new(
+        &crate::object::runtime_layouts::intrinsic_private_atoms::GENERATOR_PROTOTYPE,
+    );
+
+crate::perry_thread_local! {
+    /// This agent's sync generator birth ShapeId ([`birth_shape`]): an
+    /// immutable id, held for the agent's life like RegExp's birth shape.
+    static BIRTH_SHAPE: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// The spelling of the bag's `[[GeneratorPrototype]]` private key, which a
+/// generator function's bag is born with (`closure::props`).
+pub(crate) fn generator_original_prototype_key() -> &'static str {
+    // SAFETY: the static atom's image is ASCII.
+    unsafe { std::str::from_utf8_unchecked(ORIGINAL_PROTOTYPE_READ.spelling()) }
+}
+
+/// One layout for every sync generator: no own keys, the `[[GeneratorState]]`
+/// private slot, the generator brand, extensible, and a [[Prototype]] its
+/// record holds (`PROTO_ID_RECORD_HELD`): the shape names no prototype, so
+/// a birth neither hashes a prototype identity nor mints a shape.
+fn birth_shape() -> u32 {
+    let shape = BIRTH_SHAPE.with(std::cell::Cell::get);
+    if shape != 0 {
+        return shape;
+    }
+    prepare_birth_shape()
+}
+
+#[cold]
+#[inline(never)]
+fn prepare_birth_shape() -> u32 {
+    use crate::object::canonical_keys::{CanonicalKeys, SharedLayout};
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let proof = SharedLayout::shape_cache_entry();
+    let keys = unsafe {
+        crate::object::canonical_keys::extend_key_with_entry(
+            &proof,
+            CanonicalKeys::EMPTY,
+            STATE_READ.birth_key(),
+            crate::object::key_attrs::PRIVATE_FIELD_ENTRY,
+        )
+    };
+    let list = keys.as_ptr();
+    let summary = unsafe { crate::object::key_attrs::keys_summary(list, 1) };
+    let shape = crate::object::shapes::publish_shape_result(
+        crate::object::shapes::shape_descriptor_intern_with_rep(
+            list,
+            1,
+            1,
+            0,
+            crate::object::shapes::ShapeObjectKind::Ordinary,
+            0,
+            crate::object::shapes::PROTO_ID_RECORD_HELD,
+            summary,
+            crate::object::field_rep::REP_ANY,
+            &[GENERATOR_STATE_BRAND],
+            None,
+            0, // newborn generator is extensible
+        ),
+    );
+    // Held for the agent's life with no receiver in between: an external
+    // carrier, so a trace that finds no live generator cannot retire it.
+    // SAFETY: the record of the id just published in this agent.
+    unsafe {
+        crate::object::shapes::note_external_shape_carrier(
+            crate::object::shapes::shape_descriptor_by_id(shape),
+        );
+    }
+    BIRTH_SHAPE.with(|memo| memo.set(shape));
+    shape
+}
+
+/// The fallback layout for a prototype the record cannot hold unambiguously
+/// (a function, or a non-heap object such as a Proxy): the shape names it, as
+/// every ordinary object's shape does. Rare; one intern per birth.
+fn shape_held_birth_shape(proto: f64) -> u32 {
+    use crate::object::canonical_keys::{CanonicalKeys, SharedLayout};
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let proto = scope.root_nanbox_f64(proto);
+    let proto_id = unsafe { prototype_identity(proto.get_nanbox_f64()) }
+        .unwrap_or_else(crate::object::shapes::fresh_unique_proto_id);
+    // Serial descriptors snapshot their link at mint time. Publish that link
+    // first so the born shape itself proves the inherited protocol chain.
+    if crate::object::shapes::identity_prototype_word(proto_id) != proto.get_nanbox_u64() {
+        crate::object::shapes::write_identity_word(proto_id, proto.get_nanbox_u64());
+    }
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let proof = SharedLayout::shape_cache_entry();
+    let keys = unsafe {
+        crate::object::canonical_keys::extend_key_with_entry(
+            &proof,
+            CanonicalKeys::EMPTY,
+            STATE_READ.birth_key(),
+            crate::object::key_attrs::PRIVATE_FIELD_ENTRY,
+        )
+    };
+    let list = keys.as_ptr();
+    let summary = unsafe { crate::object::key_attrs::keys_summary(list, 1) };
+    let shape = crate::object::shapes::publish_shape_result(
+        crate::object::shapes::shape_descriptor_intern_with_rep(
+            list,
+            1,
+            1,
+            0,
+            crate::object::shapes::ShapeObjectKind::Ordinary,
+            0,
+            proto_id,
+            summary,
+            crate::object::field_rep::REP_ANY,
+            &[GENERATOR_STATE_BRAND],
+            None,
+            0,
+        ),
+    );
+    crate::gc::runtime_shade_external_edge(proto.get_nanbox_u64());
+    shape
+}
+
 pub(crate) fn fixed_generator_state(value: f64) -> Option<*const crate::closure::ClosureHeader> {
     let value = JSValue::from_bits(value.to_bits());
     if !value.is_pointer() {
@@ -176,20 +308,148 @@ pub(crate) fn fixed_generator_state(value: f64) -> Option<*const crate::closure:
         if header.obj_type != crate::gc::GC_TYPE_OBJECT {
             return None;
         }
-        let obj = addr as *const ObjectHeader;
-        let meta = (*obj).meta;
-        if meta.is_null() {
-            return None;
-        }
-        let state = (*meta).native_state;
-        if !crate::native_payload::is_payload_state_word(state) {
-            return None;
-        }
-        if !crate::object::shapes::object_has_brand(obj, GENERATOR_STATE_BRAND) {
-            return None;
-        }
-        Some((state & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader)
+        fixed_generator_state_of_object(addr as *const ObjectHeader)
     }
+}
+
+/// [`fixed_generator_state`] of a proven live `ObjectHeader`. On the birth
+/// layout the record is slot 0; a transitioned instance keeps the brand and
+/// its private slot. Allocation-free.
+///
+/// # Safety
+/// `obj` is a live `GC_TYPE_OBJECT` cell.
+#[inline(always)]
+pub(crate) unsafe fn fixed_generator_state_of_object(
+    obj: *const ObjectHeader,
+) -> Option<*const crate::closure::ClosureHeader> {
+    let shape = BIRTH_SHAPE.with(std::cell::Cell::get);
+    let bits = if shape != 0 && crate::object::shapes::object_shape_stamp(obj) == shape {
+        *(obj as *const u8)
+            .add(std::mem::size_of::<ObjectHeader>())
+            .cast::<u64>()
+    } else {
+        transitioned_generator_state_bits(obj)?
+    };
+    let state = JSValue::from_bits(bits);
+    state
+        .is_pointer()
+        .then(|| state.as_pointer::<crate::closure::ClosureHeader>() as *const _)
+}
+
+/// The `[[GeneratorState]]` of an instance off its birth layout: own keys or
+/// integrity transitions keep the brand and the private slot.
+#[cold]
+#[inline(never)]
+unsafe fn transitioned_generator_state_bits(obj: *const ObjectHeader) -> Option<u64> {
+    if !crate::object::shapes::object_has_brand(obj, GENERATOR_STATE_BRAND) {
+        return None;
+    }
+    Some(
+        STATE_READ
+            .read(crate::value::js_nanbox_pointer(obj as i64))?
+            .to_bits(),
+    )
+}
+
+/// The record's sixth compiler-owned control: the instance's [[Prototype]]
+/// holder. The birth writes it; the body never reads it. It holds the
+/// prototype object, or the owner generator function while the function's
+/// original prototype is unmaterialized (a closure is never held as an
+/// explicit prototype: such a birth takes [`shape_held_birth_shape`]).
+const PROTO_SLOT: usize = 5;
+
+/// The [[Prototype]] bits of an instance whose shape's identity is
+/// `PROTO_ID_RECORD_HELD`, read from its record. Allocation-free, for every
+/// prototype walk: an original prototype not yet materialized is an empty
+/// object nothing could have reached, whose own [[Prototype]] is
+/// `%GeneratorPrototype%`, so a walk continues there. A reader that hands the
+/// prototype itself to the program materializes it first
+/// ([`generator_observe_record_prototype`]).
+///
+/// # Safety
+/// `obj` is a live `GC_TYPE_OBJECT` cell.
+#[inline(always)]
+pub(crate) unsafe fn generator_record_prototype_word(obj: *const ObjectHeader) -> u64 {
+    let Some(state) = fixed_generator_state_of_object(obj) else {
+        debug_assert!(false, "a record-held shape names a generator instance");
+        return crate::value::TAG_NULL;
+    };
+    let holder = *state.add(1).cast::<u64>().add(PROTO_SLOT);
+    owner_original_prototype_word(holder).unwrap_or(holder)
+}
+
+/// The prototype a control holding the owner function names: the owner's
+/// original, kept in its bag, or `%GeneratorPrototype%`'s while the original
+/// is unmaterialized. `None` for a control holding the prototype itself.
+#[inline(never)]
+unsafe fn owner_original_prototype_word(holder: u64) -> Option<u64> {
+    let owner = holder_owner(holder)?;
+    let bag = (*owner).props;
+    if !bag.is_null() {
+        if let Some(original) =
+            ORIGINAL_PROTOTYPE_READ.read(crate::value::js_nanbox_pointer(bag as i64))
+        {
+            return Some(original.to_bits());
+        }
+    }
+    let gen_proto =
+        crate::object::GENERATOR_PROTOTYPE_PTR.load(std::sync::atomic::Ordering::Acquire);
+    debug_assert_ne!(gen_proto, 0, "a birth built the generator intrinsics");
+    Some(crate::value::js_nanbox_pointer(gen_proto).to_bits())
+}
+
+/// The owner function a prototype control names, when it holds one.
+#[inline]
+unsafe fn holder_owner(holder: u64) -> Option<*const crate::closure::ClosureHeader> {
+    let value = JSValue::from_bits(holder);
+    if !value.is_pointer() {
+        return None;
+    }
+    let addr = value.as_pointer::<u8>() as usize;
+    let header = crate::value::addr_class::try_read_gc_header(addr)?;
+    (header.obj_type == crate::gc::GC_TYPE_CLOSURE).then_some(addr as *const _)
+}
+
+/// Before the program observes a record-held instance's [[Prototype]]
+/// itself (`Object.getPrototypeOf`, `Reflect.getPrototypeOf`, `__proto__`,
+/// a `setPrototypeOf` SameValue test), materialize its owner's original
+/// prototype, so the identity it reads is the one every later read and every
+/// sibling instance agrees on. Allocates; a no-op for every other value.
+pub(crate) fn generator_observe_record_prototype(value: f64) {
+    let bits = value.to_bits();
+    let jv = JSValue::from_bits(bits);
+    if !jv.is_pointer() {
+        return;
+    }
+    let addr = jv.as_pointer::<u8>() as usize;
+    let owner = unsafe {
+        let Some(header) = crate::value::addr_class::try_read_gc_header(addr) else {
+            return;
+        };
+        if header.obj_type != crate::gc::GC_TYPE_OBJECT
+            || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+        {
+            return;
+        }
+        let obj = addr as *const ObjectHeader;
+        if crate::object::shapes::shape_proto_id(crate::object::shapes::object_shape_stamp(obj))
+            != Some(crate::object::shapes::PROTO_ID_RECORD_HELD)
+        {
+            return;
+        }
+        let Some(state) = fixed_generator_state_of_object(obj) else {
+            return;
+        };
+        let Some(owner) = holder_owner(*state.add(1).cast::<u64>().add(PROTO_SLOT)) else {
+            return;
+        };
+        if !(*owner).props.is_null() {
+            return;
+        }
+        owner
+    };
+    // The bag's birth declares the slot and keeps the original.
+    let _ = generator_function_prototype_of(owner as usize);
 }
 
 /// The record's fifth compiler-owned control: how the body's last activation
@@ -362,67 +622,61 @@ pub extern "C" fn js_generator_create(
         owner as *mut crate::closure::ClosureHeader
     };
     let owner = scope.root_raw_const_ptr(owner);
-    let proto = owner.with_const_ptr::<crate::closure::ClosureHeader, _>(|owner| {
-        if owner.is_null() {
-            None
-        } else {
-            generator_function_prototype_of(owner as usize)
+    ensure_generator_intrinsics();
+    // GetPrototypeFromConstructor, read from the owner's declared slot
+    // without materializing it.
+    let holder = owner.with_const_ptr::<crate::closure::ClosureHeader, _>(|owner| unsafe {
+        birth_prototype_holder(owner)
+    });
+    let holder = match holder {
+        Holder::Record(bits) => Holder::Record(bits),
+        Holder::Shape(bits) => Holder::Shape(bits),
+        Holder::Materialize => {
+            // An own slot the shape does not name and the bag lacks: the
+            // function's ordinary read materializes it (allocates).
+            let proto = owner.with_const_ptr::<crate::closure::ClosureHeader, _>(|owner| {
+                generator_function_prototype_of(owner as usize)
+            });
+            match proto {
+                Some(value) => classify_prototype(value),
+                None => Holder::Record(generator_prototype_bits()),
+            }
         }
-    });
-    // GetPrototypeFromConstructor: a replaced primitive `.prototype` selects
-    // the realm's intrinsic prototype. Object values keep their exact identity.
-    let proto = proto
-        .filter(|value| unsafe { crate::object::value_is_object_like(*value) })
-        .unwrap_or_else(|| crate::value::js_nanbox_pointer(generator_prototype_ptr(false) as i64));
-    let proto = scope.root_nanbox_f64(proto);
-    let proto_id = unsafe { prototype_identity(proto.get_nanbox_f64()) }
-        .unwrap_or_else(crate::object::shapes::fresh_unique_proto_id);
-
-    // Serial descriptors snapshot their link at mint time. Publish that link
-    // first so the born shape itself proves the inherited protocol chain.
-    if crate::object::shapes::identity_prototype_word(proto_id) != proto.get_nanbox_u64() {
-        crate::object::shapes::write_identity_word(proto_id, proto.get_nanbox_u64());
-    }
-
-    let obj = scope.root_raw_mut_ptr(crate::object::alloc_basic::object_alloc_unpublished(0, 0));
-    let shape = crate::object::shapes::publish_shape_result(
-        crate::object::shapes::shape_descriptor_intern_with_rep(
-            std::ptr::null(),
-            0,
-            0,
-            0,
-            crate::object::shapes::ShapeObjectKind::Ordinary,
-            0,
-            proto_id,
-            0,
-            crate::object::field_rep::REP_ANY,
-            &[GENERATOR_STATE_BRAND],
-            None,
-            0, // newborn generator is extensible, independent of its prototype
-        ),
-    );
-    // The shape owns the prototype edge. The final descriptor and its brand
-    // are published together, before metadata allocation can collect.
+    };
+    let (holder_bits, record_held) = match holder {
+        Holder::Record(bits) => (scope.root_nanbox_u64(bits), true),
+        Holder::Shape(bits) => (scope.root_nanbox_u64(bits), false),
+        Holder::Materialize => unreachable!("resolved above"),
+    };
+    let (obj, rep, shape) = if record_held {
+        // The agent-lifetime birth layout: validated by the allocation itself.
+        let shape = birth_shape();
+        let (born, rep) = crate::object::object_alloc_plain_born(1, shape);
+        (scope.root_raw_mut_ptr(born), rep, shape)
+    } else {
+        // A fresh shape is not retained by its id: allocate first, then
+        // intern and publish it with no collection in between.
+        let born = crate::object::alloc_basic::object_alloc_unpublished(0, 1);
+        let obj = scope.root_raw_mut_ptr(born);
+        let shape = shape_held_birth_shape(f64::from_bits(holder_bits.get_nanbox_u64()));
+        (obj, None, shape)
+    };
     obj.with_mut_ptr::<ObjectHeader, _>(|obj| unsafe {
-        crate::object::shapes::store_kind::premark_plain_ordinary(obj);
-        crate::object::shapes::stamp_object_shape_id_with_carrier_note(obj, shape);
-    });
-    let (meta, _) = obj.across_mut::<ObjectHeader, _>(|| {
-        obj.with_mut_ptr::<ObjectHeader, _>(|obj| unsafe { crate::object::object_meta_ensure(obj) })
+        if rep.is_none() {
+            // The unhurried allocation: publish the final descriptor and its
+            // brand before the record edge is stored.
+            crate::object::shapes::store_kind::premark_plain_ordinary(obj);
+            crate::object::shapes::stamp_object_shape_id_with_carrier_note(obj, shape);
+        }
+        // The `[[GeneratorState]]` edge is the instance's own slot 0.
+        crate::object::store_object_field_slot_layout_deferred(obj, 0, resume.get_nanbox_u64());
     });
     unsafe {
         let state = resume.get_nanbox_u64();
-        // GC_STORE_AUDIT(BARRIERED): native_state is a tagged child edge.
-        (*meta).native_state = state;
-        crate::gc::runtime_write_barrier_slot(
-            meta as usize,
-            &(*meta).native_state as *const _ as usize,
-            state,
-        );
         let state = (state & crate::value::POINTER_MASK) as *mut crate::closure::ClosureHeader;
         debug_assert!(matches!((*(*state).info).params, 1 | 2));
         debug_assert!(
-            crate::closure::real_capture_count((*state).capture_count) as usize > STEP_SLOT
+            crate::closure::real_capture_count((*state).capture_count) as usize > PROTO_SLOT
         );
         debug_assert_eq!((*(*state).info).flags & crate::closure::FN_REST_MASK, 0);
         // A fixed generator frame contains JSValues throughout its lifetime.
@@ -434,9 +688,71 @@ pub extern "C" fn js_generator_create(
             // GC_STORE_AUDIT(POINTER_FREE): lexical receiver is never rebound.
             (*state).capture_count |= crate::closure::NO_THIS_REBIND_FLAG;
         }
+        // The prototype control: a barriered store into the record.
+        js_generator_set_slot(state, PROTO_SLOT as u32, holder_bits.get_nanbox_u64(), 0);
     }
-    crate::gc::runtime_shade_external_edge(proto.get_nanbox_u64());
     obj.with_mut_ptr::<ObjectHeader, _>(|obj| crate::value::js_nanbox_pointer(obj as i64))
+}
+
+/// Where a birth's [[Prototype]] lives.
+enum Holder {
+    /// In the record's prototype control (the birth layout): an ordinary
+    /// heap object, or the owner function while its original is
+    /// unmaterialized.
+    Record(u64),
+    /// In the shape ([`shape_held_birth_shape`]).
+    Shape(u64),
+    /// Not yet known without the function's ordinary read.
+    Materialize,
+}
+
+fn generator_prototype_bits() -> u64 {
+    crate::value::js_nanbox_pointer(generator_prototype_ptr(false) as i64).to_bits()
+}
+
+/// GetPrototypeFromConstructor for a `prototype` value: a primitive selects
+/// the realm's `%GeneratorPrototype%`; an ordinary heap object is held by the
+/// record; any other object (a function, which the control reserves for the
+/// owner, or a non-heap object) is named by the shape.
+fn classify_prototype(value: f64) -> Holder {
+    if !unsafe { crate::object::value_is_object_like(value) } {
+        return Holder::Record(generator_prototype_bits());
+    }
+    let jv = JSValue::from_bits(value.to_bits());
+    let ordinary = jv.is_pointer()
+        && unsafe {
+            crate::value::addr_class::try_read_gc_header(jv.as_pointer::<u8>() as usize)
+                .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_OBJECT)
+        };
+    if ordinary {
+        Holder::Record(value.to_bits())
+    } else {
+        Holder::Shape(value.to_bits())
+    }
+}
+
+/// The owner's `prototype` for a birth, without materializing it: no owner
+/// (a direct body) selects `%GeneratorPrototype%`; a function with no bag
+/// has its original unmaterialized, so the record holds the function.
+///
+/// # Safety
+/// `owner` is null or a live closure cell.
+unsafe fn birth_prototype_holder(owner: *const crate::closure::ClosureHeader) -> Holder {
+    if owner.is_null() {
+        return Holder::Record(generator_prototype_bits());
+    }
+    if crate::closure::props::bag_of(owner as usize).is_null()
+        && crate::closure::props::closure_has_generator_body(owner)
+    {
+        return Holder::Record(crate::value::js_nanbox_pointer(owner as i64).to_bits());
+    }
+    match crate::closure::shape::closure_own_prototype_by_shape(owner) {
+        Some(Some(value)) => classify_prototype(value),
+        _ => match crate::closure::closure_get_own_dynamic_prop(owner as usize, "prototype") {
+            Some(value) => classify_prototype(value),
+            None => Holder::Materialize,
+        },
+    }
 }
 
 /// Fixed-frame stores share one barrier path. The birth selected the generic

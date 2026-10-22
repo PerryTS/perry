@@ -517,6 +517,17 @@ unsafe fn uint8_includes(addr: usize, args: &[f64]) -> f64 {
     bool_value(false)
 }
 
+/// `%TypedArray%.prototype.toString` of a plain `Uint8Array` (brand
+/// `BufferBrand::Uint8Array`): `Array.prototype.join` with `","`. A Node
+/// `Buffer` overrides `toString` with the UTF-8 decode; a plain `Uint8Array`
+/// does not, so `String(u)`, `` `${u}` `` and `u.toString()` join the bytes.
+///
+/// # Safety
+/// `addr` is a live registered byte-indexed buffer.
+pub(crate) unsafe fn uint8_array_to_string(addr: usize) -> f64 {
+    uint8_join(addr, undefined())
+}
+
 unsafe fn uint8_join(addr: usize, separator_value: f64) -> f64 {
     let separator = if is_undefined_arg(separator_value) {
         ",".to_string()

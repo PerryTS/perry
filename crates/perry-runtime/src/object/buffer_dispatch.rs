@@ -583,6 +583,12 @@ pub unsafe fn dispatch_buffer_method(
         "toString" if crate::buffer::is_non_indexed_buffer_view(addr) => {
             crate::object::js_object_to_string(buf_f64)
         }
+        // A plain `Uint8Array` inherits `%TypedArray%.prototype.toString`
+        // (the element join, arguments ignored); only `Buffer.prototype`
+        // overrides it with the encoding-aware decode below.
+        "toString" if crate::buffer::buffer_brand(addr) == Some(crate::buffer::BufferBrand::Uint8Array) => {
+            super::typed_array_proto_thunks::uint8_array_to_string(addr)
+        }
         "toString" => {
             let enc = if !args.is_empty() {
                 crate::buffer::js_encoding_tag_from_value(args[0])

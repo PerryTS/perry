@@ -82,6 +82,8 @@ pub(super) fn try_module_static_methods(
                             | "stripANSI"
                             | "wrapAnsi"
                             | "which"
+                            | "sleep"
+                            | "sleepSync"
                             | "zstdDecompress"
                             | "zstdDecompressSync"
                             | "gc"

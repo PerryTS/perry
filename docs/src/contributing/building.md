@@ -116,6 +116,11 @@ cargo build --profile prod -p perry-runtime -p perry-stdlib
 # compiled programs without the auto-optimize rebuild):
 cargo build --profile prod -p perry-runtime-static -p perry-stdlib-static
 
+# `perry` refuses to link workspace archives that lack a GC-effects sidecar
+# ("the runtime GC effects sidecar cannot speak for the archives this program
+# links"). Write the sidecars after the last cargo call that touches them:
+scripts/gc_call_effects/sidecars.sh target/prod
+
 # Codegen only
 cargo build --profile prod -p perry-codegen
 ```

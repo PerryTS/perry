@@ -436,6 +436,11 @@ pub fn transform_generator_function_with_extra_captures(
     // A fixed-state record's fifth control: the kind of the step its resume
     // body returns (see `fixed_state::record_step_kinds`).
     let step_id = fixed_state.then(|| alloc_local(next_local_id));
+    // Its sixth control: the instance's [[Prototype]] holder, written only by
+    // the runtime at the birth (`js_generator_create`) and never read by the
+    // body: the prototype object, or the owner function while its original
+    // prototype is unmaterialized.
+    let proto_ctl_id = fixed_state.then(|| alloc_local(next_local_id));
     // #4438 B2-finally: pending abrupt-completion record for routing through a
     // YIELDING finally. `pending_type`: 0 = none, 1 = throw, 2 = return.
     // `pending_value`: the thrown error / returned value. Set when abrupt
@@ -847,6 +852,15 @@ pub fn transform_generator_function_with_extra_captures(
             init: Some(Expr::Number(0.0)),
         });
     }
+    if let Some(proto_ctl_id) = proto_ctl_id {
+        new_body.push(Stmt::Let {
+            id: proto_ctl_id,
+            name: "__gen_proto".to_string(),
+            ty: Type::Any,
+            mutable: true,
+            init: Some(Expr::Undefined),
+        });
+    }
 
     // #4438 B2-finally: let __pending_type = 0; let __pending_value = undefined
     if has_yielding_finally {
@@ -915,6 +929,7 @@ pub fn transform_generator_function_with_extra_captures(
     captures.extend(private_brand_id);
     let mut mutable_captures = vec![state_id, done_id, sent_id, executing_id];
     mutable_captures.extend(step_id);
+    mutable_captures.extend(proto_ctl_id);
     // #4438 B2-finally: the pending-completion record is read/written across the
     // next/throw/return closures, so capture it by reference like the other
     // state-machine internals (only when a yielding finally uses it).
@@ -954,10 +969,17 @@ pub fn transform_generator_function_with_extra_captures(
     }
     captures.sort();
     captures.dedup();
-    if let Some(step_id) = step_id {
-        // The shared resume boundary owns these five controls. User captures
+    if let (Some(step_id), Some(proto_ctl_id)) = (step_id, proto_ctl_id) {
+        // The shared resume boundary owns these six controls. User captures
         // follow them; codegen preserves explicit capture order.
-        let controls = [state_id, done_id, sent_id, executing_id, step_id];
+        let controls = [
+            state_id,
+            done_id,
+            sent_id,
+            executing_id,
+            step_id,
+            proto_ctl_id,
+        ];
         captures.retain(|id| !controls.contains(id));
         captures.splice(0..0, controls);
     }
