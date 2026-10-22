@@ -614,8 +614,14 @@ impl<'a> Gen<'a> {
         let Some(u) = self.unit_in else { return false };
         let mut want: Vec<(TmplId, &'a String)> = Vec::new();
         for (tm, t) in self.m.tmpls.iter().enumerate() {
-            if !matches!(t.kind, TmplKind::Class { .. })
-                || self.stand_in_cc.contains_key(&(tm as TmplId))
+            if !matches!(
+                t.kind,
+                TmplKind::Class { .. }
+                    | TmplKind::Lit {
+                        enum_image: true,
+                        ..
+                    }
+            ) || self.stand_in_cc.contains_key(&(tm as TmplId))
             {
                 continue;
             }
@@ -677,13 +683,17 @@ impl<'a> Gen<'a> {
         out
     }
 
-    /// A literal-shape object of this unit no census report broke.
+    /// A literal-shape object or an enum's object (§18.2) of this unit no
+    /// census report broke.
     fn literal_ok(&self, tm: TmplId) -> bool {
         let t = &self.m.tmpls[tm as usize];
         matches!(
             t.kind,
             TmplKind::Class {
                 literal_shape: true,
+                ..
+            } | TmplKind::Lit {
+                enum_image: true,
                 ..
             }
         ) && !self.unit_in.is_some_and(|u| u.broken(&t.display))

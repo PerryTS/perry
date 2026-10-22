@@ -261,7 +261,11 @@ impl<'a> Gen<'a> {
             crate::gen::push_unique(&mut atoms, a);
         }
         self.m.tmpls.push(Template {
-            kind: TmplKind::Lit { module: mi, site },
+            kind: TmplKind::Lit {
+                module: mi,
+                site,
+                enum_image: false,
+            },
             display: format!("{}:{{lit#{site}}}", self.mods[mi as usize].path_short()),
             birth_keys: atoms.clone(),
             definite: atoms,

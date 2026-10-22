@@ -131,8 +131,14 @@ pub enum TmplKind {
         class_id: u32,
         literal_shape: bool,
     },
-    /// An object literal site that stays an `Expr::Object` / `ObjectSpread`.
-    Lit { module: u32, site: SiteId },
+    /// An object literal site that stays an `Expr::Object` / `ObjectSpread`,
+    /// or a TS enum's object (`enum_image`: its keys are the members, named
+    /// by the enum, §18.2).
+    Lit {
+        module: u32,
+        site: SiteId,
+        enum_image: bool,
+    },
     /// Instances of `new f()` on a constructor-function body.
     FnInst { func: FnIdx },
     /// `Object.create(p)` result at a site (a separate template; E10 makes
@@ -1440,7 +1446,10 @@ impl Model {
         let TokKind::Obj(tm, _) = self.toks[t as usize] else {
             unreachable!("a marker is an object token")
         };
-        let display = format!("{}:reach.{}", self.tmpls[tm as usize].display, self.atoms[a as usize]);
+        let display = format!(
+            "{}:reach.{}",
+            self.tmpls[tm as usize].display, self.atoms[a as usize]
+        );
         let rm = self.marker_template(display);
         let r = self.tok(TokKind::Obj(rm, NO_CTX));
         let rany = self.field_any(r);

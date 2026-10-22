@@ -264,7 +264,9 @@ pub(crate) fn published_surface(
             if imp.type_only || imp.runtime_erased {
                 continue;
             }
-            if imp.is_dynamic {
+            // `import()` hands over the namespace object itself, also where
+            // the driver folds it into a static import of the same module.
+            if imp.is_dynamic || imp.is_dynamic_target {
                 p.whole.insert(t.clone());
                 p.ns_object.insert(t.clone());
             }
@@ -320,7 +322,11 @@ pub(crate) fn published_surface(
 /// the namespace). `export *` adds the source module's keys but `default`;
 /// a source outside the program makes the namespace open. Syntactic.
 pub(crate) fn namespace_keys(sorted: &[(&str, &Module)]) -> FxHashMap<String, (Vec<String>, bool)> {
-    let index: FxHashMap<&str, usize> = sorted.iter().enumerate().map(|(i, (p, _))| (*p, i)).collect();
+    let index: FxHashMap<&str, usize> = sorted
+        .iter()
+        .enumerate()
+        .map(|(i, (p, _))| (*p, i))
+        .collect();
     let mut own: Vec<(Vec<String>, Vec<Option<usize>>)> = Vec::with_capacity(sorted.len());
     for (_, m) in sorted {
         let mut keys: Vec<String> = Vec::new();
@@ -341,9 +347,24 @@ pub(crate) fn namespace_keys(sorted: &[(&str, &Module)]) -> FxHashMap<String, (V
             }
         }
         keys.extend(m.exported_functions.iter().map(|(n, _)| n.clone()));
-        keys.extend(m.functions.iter().filter(|f| f.is_exported).map(|f| f.name.clone()));
-        keys.extend(m.classes.iter().filter(|c| c.is_exported).map(|c| c.name.clone()));
-        keys.extend(m.enums.iter().filter(|e| e.is_exported).map(|e| e.name.clone()));
+        keys.extend(
+            m.functions
+                .iter()
+                .filter(|f| f.is_exported)
+                .map(|f| f.name.clone()),
+        );
+        keys.extend(
+            m.classes
+                .iter()
+                .filter(|c| c.is_exported)
+                .map(|c| c.name.clone()),
+        );
+        keys.extend(
+            m.enums
+                .iter()
+                .filter(|e| e.is_exported)
+                .map(|e| e.name.clone()),
+        );
         keys.extend(m.exported_objects.iter().cloned());
         own.push((keys, stars));
     }
