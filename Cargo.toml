@@ -46,6 +46,7 @@ members = [
     "crates/perry-wit",
     "crates/perry-component-host",
     "crates/perry-component-io",
+    "crates/perry-wasi",
     "crates/perry-container-compose",
     "crates/perry-container-e2e",
     "crates/perry-stdlib",

@@ -1,0 +1,30 @@
+[package]
+name = "perry-wasi"
+version.workspace = true
+edition.workspace = true
+license = "Apache-2.0 WITH LLVM-exception"
+description = "Turnloop WASI providers for Perry's optional component engine"
+
+[lints]
+workspace = true
+
+[dependencies]
+perry-component-io = { path = "../perry-component-io" }
+turnloop.workspace = true
+wasmtime = { version = "=48.0.5", default-features = false, features = ["anyhow", "std", "runtime", "component-model", "async"] }
+wasmtime-wasi-io = { version = "=48.0.5", default-features = false, features = ["std"] }
+async-trait = "0.1.89"
+bytes = "1"
+futures-util.workspace = true
+futures-lite = "2"
+rand = { version = "0.10.1", features = ["std_rng", "thread_rng"] }
+tracing = "0.1"
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1", features = ["time"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_System_Performance"] }
+
+[dev-dependencies]
+wasmtime = { version = "=48.0.5", default-features = false, features = ["cranelift", "wat"] }

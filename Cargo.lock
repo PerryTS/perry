@@ -6289,6 +6289,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "perry-wasi"
+version = "0.5.1663"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "futures-lite",
+ "futures-util",
+ "perry-component-io",
+ "rand 0.10.3",
+ "rustix 1.1.4",
+ "tracing",
+ "turnloop",
+ "wasmtime",
+ "wasmtime-wasi-io",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "perry-wasm-host"
 version = "0.5.1663"
 dependencies = [
@@ -9420,6 +9438,7 @@ dependencies = [
  "wasmtime-internal-jit-icache-coherence",
  "wasmtime-internal-unwinder",
  "wasmtime-internal-versioned-export-macros",
+ "wat",
  "windows-sys 0.61.2",
 ]
 
