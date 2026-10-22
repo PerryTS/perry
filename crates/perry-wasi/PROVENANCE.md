@@ -16,6 +16,7 @@ Copied/adapted sources:
 | `src/random.rs` | `wasmtime-wasi/src/random.rs` |
 | `src/random/host.rs` | `wasmtime-wasi/src/p2/host/random.rs` |
 | `src/clocks/system.rs` | Native clock helpers in `wasmtime-wasi/src/clocks.rs` |
+| `src/pipe.rs` | Memory and closed WASI stream implementations in `wasmtime-wasi/src/p2/pipe.rs` (without Tokio adapters) |
 
 Native readiness now returns a fallible result: timer/driver failures trap
 through WASI poll/block/ready instead of reporting successful readiness. The

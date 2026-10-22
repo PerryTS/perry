@@ -3,6 +3,7 @@
 pub mod clocks;
 pub mod io;
 pub mod p2;
+pub mod pipe;
 pub mod random;
 
 use perry_component_io::Driver;
@@ -39,5 +40,7 @@ pub trait WasiView: Send {
     fn ctx(&mut self) -> WasiCtxView<'_>;
 }
 
+#[cfg(test)]
+mod stream_tests;
 #[cfg(test)]
 mod tests;
