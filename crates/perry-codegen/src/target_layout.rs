@@ -177,10 +177,17 @@ pub fn object_meta_slot_offset_bytes(target_triple: &str) -> u64 {
 pub const OBJECT_META_SPILL_OFFSET_BYTES: u64 = 32;
 
 /// `size_of::<perry_runtime::array::ArrayHeader>()` — the `u32` length and
-/// capacity words — on every target: a spill buffer's elements start right
+/// capacity words, the named-layout pointer and the element-kind word — on
+/// every target: a spill buffer's elements start right
 /// after it (a spill buffer is private and never shifted, so it has no front
 /// reserve). Pinned by `spill_layout_matches_codegen` in the runtime.
 pub const ARRAY_HEADER_SIZE_BYTES: u64 = 24;
+
+/// `offset_of!(ArrayHeader, ek_prefix)`: the dense prefix P of the element-kind
+/// word (EK design §2), the u32 a guarded element read compares its index
+/// against and an inline length-lowering store clamps. Pinned by
+/// `spill_layout_matches_codegen` in the runtime.
+pub const ARRAY_EK_PREFIX_OFFSET_BYTES: u64 = 16;
 
 /// `std::mem::size_of::<perry_runtime::closure::ClosureHeader>()` for the
 /// target: `{capture_count: u32, shape_id: u32, info, props}` — 24 bytes
@@ -265,9 +272,46 @@ pub(crate) fn inline_alloc_gc_packed(target_triple: &str, field_count: u32) -> u
         | (inline_alloc_total_size_bytes(target_triple, field_count) << 32)
 }
 
+/// Slots an inline empty array birth reserves, the runtime's four-slot
+/// append reserve (`js_array_alloc(0)`).
+pub(crate) const INLINE_EMPTY_ARRAY_SLOTS: u64 = 4;
+
+/// Total bytes of an inline empty array birth: GcHeader + ArrayHeader +
+/// the append reserve.
+pub(crate) const INLINE_EMPTY_ARRAY_TOTAL_BYTES: u64 =
+    GC_HEADER_SIZE_BYTES + ARRAY_HEADER_SIZE_BYTES + INLINE_EMPTY_ARRAY_SLOTS * FIELD_SLOT_SIZE_BYTES;
+
+/// The packed `GcHeader` word an inline empty array birth stores: an arena
+/// array whose layout state is pointer-free (every slot is a hole). The
+/// runtime admits an arena-page address only when the header carries
+/// `GC_FLAG_ARENA` (`tracked_gc_header_admitting`), so the word is derived
+/// here from the named constants, never hand-typed.
+pub(crate) const fn inline_empty_array_gc_packed() -> u64 {
+    const GC_TYPE_ARRAY: u64 = 1;
+    const GC_FLAG_ARENA: u64 = 0x02;
+    const GC_LAYOUT_POINTER_FREE: u64 = 0x4000;
+    GC_TYPE_ARRAY
+        | (GC_FLAG_ARENA << 8)
+        | (GC_LAYOUT_POINTER_FREE << 16)
+        | (INLINE_EMPTY_ARRAY_TOTAL_BYTES << 32)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An inline empty array is an arena array with a pointer-free layout
+    /// whose size covers the header and the four-slot reserve. A word
+    /// without the arena flag is rejected by the runtime's admission, and
+    /// every runtime method then sees an empty array (EK B1a regression).
+    #[test]
+    fn inline_empty_array_word_is_an_arena_pointer_free_array() {
+        let word = inline_empty_array_gc_packed();
+        assert_eq!(word & 0xff, 1, "obj_type GC_TYPE_ARRAY");
+        assert_ne!((word >> 8) & 0x02, 0, "GC_FLAG_ARENA");
+        assert_eq!((word >> 16) & 0xffff, 0x4000, "pointer-free layout state");
+        assert_eq!(word >> 32, 8 + ARRAY_HEADER_SIZE_BYTES + 4 * 8);
+    }
 
     /// Paired with `inline_slot_floor_matches_codegen` in
     /// `perry-runtime/src/object/tests.rs` (#7916).

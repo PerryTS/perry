@@ -120,11 +120,17 @@ done:
 }
 
 pub(crate) fn empty_array(ctx: &mut FnCtx<'_>) -> String {
+    use crate::target_layout::{ARRAY_HEADER_SIZE_BYTES, GC_HEADER_SIZE_BYTES};
+    // The element-kind word is the ArrayHeader's last 8 bytes; slots follow.
+    const SLOT0: u64 = GC_HEADER_SIZE_BYTES + ARRAY_HEADER_SIZE_BYTES;
+    const EK_OFFSET: u64 = SLOT0 - 8;
     let state = crate::expr::load_inline_arena_state(ctx);
     let blk = ctx.block();
     let offset_field = blk.gep(I8, &state, &[(I64, "8")]);
     let offset = blk.load(I64, &offset_field);
-    let next = blk.add(I64, &offset, "64");
+    let total = crate::target_layout::INLINE_EMPTY_ARRAY_TOTAL_BYTES.to_string();
+    let born = crate::target_layout::inline_empty_array_gc_packed().to_string();
+    let next = blk.add(I64, &offset, &total);
     let limit_field = blk.gep(I8, &state, &[(I64, "16")]);
     let limit = blk.load(I64, &limit_field);
     let fits = blk.icmp_ule(I64, &next, &limit);
@@ -142,7 +148,7 @@ pub(crate) fn empty_array(ctx: &mut FnCtx<'_>) -> String {
     let data = blk.load(PTR, &state);
     let raw = blk.gep(I8, &data, &[(I64, &offset)]);
     // GC_STORE_AUDIT(INIT): base header of unpublished empty array.
-    blk.store(I64, "274877906945", &raw);
+    blk.store(I64, &born, &raw);
     publish(
         ctx,
         EMPTY,
@@ -152,7 +158,7 @@ pub(crate) fn empty_array(ctx: &mut FnCtx<'_>) -> String {
   %missing = icmp eq ptr %raw, null
   br i1 %missing, label %slow, label %init
 slow:
-  %allocated = call ptr @js_inline_arena_slow_alloc(ptr %state, i64 64, i64 8)
+  %allocated = call ptr @js_inline_arena_slow_alloc(ptr %state, i64 {total}, i64 8)
   br label %init
 init:
   %base = phi ptr [ %raw, %entry ], [ %allocated, %slow ]
@@ -161,22 +167,22 @@ init:
   %flags = load volatile i8, ptr %flag_address
   %wide_flags = zext i8 %flags to i64
   %color = shl i64 %wide_flags, 8
-  %born = or i64 274877906945, %color
+  %born = or i64 {born}, %color
   ; GC_STORE_AUDIT(INIT): header, length/capacity and all four hole slots.
   store i64 %born, ptr %base
   %array = getelementptr i8, ptr %base, i64 8
   store i64 17179869184, ptr %array
   %named = getelementptr i8, ptr %base, i64 16
   store ptr null, ptr %named
-  %ek = getelementptr i8, ptr %base, i64 24
+  %ek = getelementptr i8, ptr %base, i64 {ek}
   store i64 0, ptr %ek
-  %s0 = getelementptr i8, ptr %base, i64 32
+  %s0 = getelementptr i8, ptr %base, i64 {s0}
   store i64 {hole}, ptr %s0
-  %s1 = getelementptr i8, ptr %base, i64 40
+  %s1 = getelementptr i8, ptr %base, i64 {s1}
   store i64 {hole}, ptr %s1
-  %s2 = getelementptr i8, ptr %base, i64 48
+  %s2 = getelementptr i8, ptr %base, i64 {s2}
   store i64 {hole}, ptr %s2
-  %s3 = getelementptr i8, ptr %base, i64 56
+  %s3 = getelementptr i8, ptr %base, i64 {s3}
   store i64 {hole}, ptr %s3
   %active = icmp ne i8 %flags, 0
   br i1 %active, label %seed, label %done
@@ -189,7 +195,12 @@ done:
   %handle = ptrtoint ptr %array to i64
   ret i64 %handle
 "#,
-            hole = crate::nanbox::TAG_HOLE
+            hole = crate::nanbox::TAG_HOLE,
+            ek = EK_OFFSET,
+            s0 = SLOT0,
+            s1 = SLOT0 + 8,
+            s2 = SLOT0 + 16,
+            s3 = SLOT0 + 24,
         ),
     );
     let fast_handle = ctx
