@@ -34,8 +34,8 @@ use super::super::cjs_wrap::{
     extract_require_specifiers, is_commonjs, wrap_commonjs_with_addon_paths,
 };
 use super::super::{
-    is_declaration_file, is_in_compile_package, is_in_perry_native_package, is_js_file,
-    is_recognized_text_asset, CompilationContext,
+    is_declaration_file, is_in_compile_package, is_in_compile_package_dir,
+    is_in_perry_native_package, is_js_file, is_recognized_text_asset, CompilationContext,
 };
 use super::import_helpers::collect_js_module_imports;
 use super::import_meta_require::import_meta_require_may_apply;
@@ -92,16 +92,9 @@ pub(super) fn route(canonical: &Path, inputs: &RouteInputs) -> Route {
     let is_in_compiled_pkg = is_in_bunfs_root
         || inputs.aot_discovered_modules.contains(canonical)
         || (is_in_node_modules && is_in_compile_package(canonical, inputs.compile_packages))
-        || inputs.compile_package_dirs.iter().any(|dir| {
-            if canonical.starts_with(dir) {
-                // Exclude nested node_modules/ inside the compiled package
-                // (e.g., @solana/web3.js/node_modules/bs58/ is NOT part of @solana/web3.js)
-                let relative = canonical.strip_prefix(dir).unwrap_or(canonical);
-                !relative.to_string_lossy().contains("node_modules/")
-            } else {
-                false
-            }
-        })
+        // Excludes nested node_modules/ inside the compiled package (e.g.,
+        // @solana/web3.js/node_modules/bs58/ is NOT part of @solana/web3.js).
+        || is_in_compile_package_dir(canonical, inputs.compile_package_dirs)
         // A file whose canonical path resolves to inside a perry.nativeLibrary package
         // but is NOT under any node_modules/ component (i.e., reached via a file: dep
         // that places the package inside the project root, as in #209 "file:./vendor/bloom/")

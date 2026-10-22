@@ -13,8 +13,9 @@
 //! after that expression. Reads out of the heap return no tracked value, which
 //! is sound because every value stored into the heap already reached a sink.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+use perry_hir::fx::{FxHashMap, FxHashSet};
 use perry_hir::{ArrayElement, CallArg, Class, Expr, Function, Module, Stmt};
 
 /// Why a value may be stringified. Grouped by [`Reason::category`].
@@ -184,7 +185,7 @@ pub struct EntityInfo {
 #[derive(Debug)]
 pub struct Need {
     pub entities: Vec<EntityInfo>,
-    pub index: HashMap<Ent, usize>,
+    pub index: FxHashMap<Ent, usize>,
     pub mask: Vec<u64>,
     pub valued: Vec<bool>,
     pub witness: Vec<Option<(Reason, String)>>,
@@ -278,24 +279,29 @@ enum Resolved {
 
 struct Build<'a> {
     modules: &'a [(String, &'a Module)],
-    links: &'a BTreeMap<(String, String), String>,
-    paths: HashMap<&'a str, usize>,
-    keys: HashMap<Key, u32>,
+    /// Per module: import/re-export specifier -> the linked module's index.
+    links: Vec<FxHashMap<&'a str, usize>>,
+    paths: FxHashMap<&'a str, usize>,
+    keys: FxHashMap<Key, u32>,
     edges: Vec<Vec<u32>>,
     sinks: Vec<(Reason, String)>,
-    sink_ids: HashMap<(Reason, String), u32>,
+    /// Per reason (`Reason as usize`): detail -> sink id.
+    sink_ids: Vec<FxHashMap<String, u32>>,
     export_names: Vec<(usize, String)>,
-    export_ids: HashMap<(usize, String), u32>,
+    /// Per module: export name -> export id.
+    export_ids: Vec<FxHashMap<String, u32>>,
+    /// Per module: its export ids, in creation order.
+    module_exports: Vec<Vec<u32>>,
     entities: Vec<EntityInfo>,
-    ent_index: HashMap<Ent, usize>,
-    valued: HashSet<usize>,
-    sigs: HashMap<(usize, u32), Sig>,
-    static_sigs: HashMap<(usize, String, String), u32>,
-    fn_names: Vec<HashMap<&'a str, u32>>,
-    class_names: Vec<HashMap<&'a str, u32>>,
-    global_names: Vec<HashMap<&'a str, u32>>,
-    global_ids: Vec<HashSet<u32>>,
-    init_locals: Vec<HashMap<&'a str, u32>>,
+    ent_index: FxHashMap<Ent, usize>,
+    valued: FxHashSet<usize>,
+    sigs: FxHashMap<(usize, u32), Sig>,
+    static_sigs: FxHashMap<(usize, String, String), u32>,
+    fn_names: Vec<FxHashMap<&'a str, u32>>,
+    class_names: Vec<FxHashMap<&'a str, u32>>,
+    global_names: Vec<FxHashMap<&'a str, u32>>,
+    global_ids: Vec<FxHashSet<u32>>,
+    init_locals: Vec<FxHashMap<&'a str, u32>>,
     namespaces_materialized: BTreeSet<usize>,
     user_call_props: bool,
     has_instance_hook: bool,
@@ -303,7 +309,7 @@ struct Build<'a> {
     notes: BTreeMap<String, usize>,
     samples: Vec<String>,
     unresolved_export_modules: BTreeSet<usize>,
-    relabel: HashMap<Ent, &'static str>,
+    relabel: FxHashMap<Ent, &'static str>,
 }
 
 const CALL_PROPS: [&str; 3] = ["call", "apply", "bind"];
@@ -320,12 +326,12 @@ impl<'a> Build<'a> {
     }
 
     fn sink(&mut self, reason: Reason, detail: &str) -> u32 {
-        if let Some(&id) = self.sink_ids.get(&(reason, detail.to_string())) {
+        if let Some(&id) = self.sink_ids[reason as usize].get(detail) {
             return self.node(Key::Sink(id));
         }
         let id = self.sinks.len() as u32;
         self.sinks.push((reason, detail.to_string()));
-        self.sink_ids.insert((reason, detail.to_string()), id);
+        self.sink_ids[reason as usize].insert(detail.to_string(), id);
         self.node(Key::Sink(id))
     }
 
@@ -365,23 +371,23 @@ impl<'a> Build<'a> {
     }
 
     fn export_node(&mut self, mi: usize, name: &str) -> u32 {
-        let id = if let Some(&id) = self.export_ids.get(&(mi, name.to_string())) {
+        let id = if let Some(&id) = self.export_ids[mi].get(name) {
             id
         } else {
             let id = self.export_names.len() as u32;
             self.export_names.push((mi, name.to_string()));
-            self.export_ids.insert((mi, name.to_string()), id);
+            self.export_ids[mi].insert(name.to_string(), id);
+            self.module_exports[mi].push(id);
             id
         };
         self.node(Key::Export(mi, id))
     }
 
     fn target(&self, mi: usize, source: &str) -> Option<usize> {
-        self.links
-            .get(&(self.modules[mi].0.clone(), source.to_string()))
-            .and_then(|p| self.paths.get(p.as_str()))
+        self.links[mi]
+            .get(source)
+            .or_else(|| self.paths.get(source))
             .copied()
-            .or_else(|| self.paths.get(source).copied())
     }
 
     fn local(&mut self, mi: usize, id: u32) -> u32 {
@@ -1578,30 +1584,41 @@ impl Need {
         library: bool,
         dynamic: &perry_hir::dynamic_code::DynamicCodeReach,
     ) -> Self {
+        let paths: FxHashMap<&str, usize> = modules
+            .iter()
+            .enumerate()
+            .map(|(i, (p, _))| (p.as_str(), i))
+            .collect();
+        let mut module_links: Vec<FxHashMap<&str, usize>> =
+            vec![FxHashMap::default(); modules.len()];
+        for ((importer, source), target) in links {
+            if let (Some(&mi), Some(&ti)) =
+                (paths.get(importer.as_str()), paths.get(target.as_str()))
+            {
+                module_links[mi].insert(source.as_str(), ti);
+            }
+        }
         let mut b = Build {
             modules,
-            links,
-            paths: modules
-                .iter()
-                .enumerate()
-                .map(|(i, (p, _))| (p.as_str(), i))
-                .collect(),
-            keys: HashMap::new(),
+            links: module_links,
+            paths,
+            keys: FxHashMap::default(),
             edges: Vec::new(),
             sinks: Vec::new(),
-            sink_ids: HashMap::new(),
+            sink_ids: vec![FxHashMap::default(); REASONS.len()],
             export_names: Vec::new(),
-            export_ids: HashMap::new(),
+            export_ids: vec![FxHashMap::default(); modules.len()],
+            module_exports: vec![Vec::new(); modules.len()],
             entities: Vec::new(),
-            ent_index: HashMap::new(),
-            valued: HashSet::new(),
-            sigs: HashMap::new(),
-            static_sigs: HashMap::new(),
-            fn_names: vec![HashMap::new(); modules.len()],
-            class_names: vec![HashMap::new(); modules.len()],
-            global_names: vec![HashMap::new(); modules.len()],
-            global_ids: vec![HashSet::new(); modules.len()],
-            init_locals: vec![HashMap::new(); modules.len()],
+            ent_index: FxHashMap::default(),
+            valued: FxHashSet::default(),
+            sigs: FxHashMap::default(),
+            static_sigs: FxHashMap::default(),
+            fn_names: vec![FxHashMap::default(); modules.len()],
+            class_names: vec![FxHashMap::default(); modules.len()],
+            global_names: vec![FxHashMap::default(); modules.len()],
+            global_ids: vec![FxHashSet::default(); modules.len()],
+            init_locals: vec![FxHashMap::default(); modules.len()],
             namespaces_materialized: BTreeSet::new(),
             user_call_props: modules.iter().any(|(_, m)| defines_call_props(m)),
             has_instance_hook: modules.iter().any(|(_, m)| module_has_instance_hook(m)),
@@ -1609,7 +1626,7 @@ impl Need {
             notes: BTreeMap::new(),
             samples: Vec::new(),
             unresolved_export_modules: BTreeSet::new(),
-            relabel: HashMap::new(),
+            relabel: FxHashMap::default(),
         };
         // Pre-pass: names, signatures and entities of declarations.
         for (mi, (_, m)) in modules.iter().enumerate() {
@@ -1770,14 +1787,14 @@ impl Need {
                 for e in &m.exports {
                     if let perry_hir::Export::ExportAll { source } = e {
                         if let Some(t) = b.target(mi, source) {
-                            let names: Vec<String> = b
-                                .export_names
+                            let names: Vec<String> = b.module_exports[t]
                                 .iter()
-                                .filter(|(m2, n)| *m2 == t && n != "default")
-                                .map(|(_, n)| n.clone())
+                                .map(|&id| &b.export_names[id as usize].1)
+                                .filter(|n| *n != "default")
+                                .cloned()
                                 .collect();
                             for n in names {
-                                let explicit = b.export_ids.contains_key(&(mi, n.clone()));
+                                let explicit = b.export_ids[mi].contains_key(n.as_str());
                                 let from = b.export_node(t, &n);
                                 let x = b.export_node(mi, &n);
                                 if !explicit {

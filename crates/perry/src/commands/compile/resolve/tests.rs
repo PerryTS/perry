@@ -1594,6 +1594,33 @@ mod declaration_sidecar_tests {
                 .join("index.js"),
             &compile_packages
         ));
+
+        // A scoped name sits two levels under `node_modules`; a nested
+        // `node_modules` tree names its own packages.
+        let scoped = HashSet::from(["@noble/hashes".to_string()]);
+        let nested = root
+            .join("node_modules")
+            .join("@noble")
+            .join("curves")
+            .join("node_modules")
+            .join("@noble")
+            .join("hashes")
+            .join("src")
+            .join("sha256.js");
+        assert!(is_in_compile_package(&nested, &scoped));
+        assert!(!is_in_compile_package(
+            &root
+                .join("node_modules")
+                .join("@noble")
+                .join("curves")
+                .join("index.js"),
+            &scoped
+        ));
+        assert!(!is_in_compile_package(
+            &root.join("@noble").join("hashes").join("index.js"),
+            &scoped
+        ));
+        assert!(!is_in_compile_package(&path, &HashSet::new()));
     }
 
     #[test]

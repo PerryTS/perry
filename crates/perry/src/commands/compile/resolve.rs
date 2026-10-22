@@ -228,6 +228,27 @@ pub(super) fn is_in_perry_native_package(path: &Path) -> bool {
     false
 }
 
+/// Check if a file path is inside one of `compile_package_dirs` and not in a
+/// nested `node_modules` tree below it (a nested dependency is its own
+/// package). The directories that can contain the path are its ancestors, so
+/// each ancestor is looked up in the set.
+pub(super) fn is_in_compile_package_dir(
+    path: &Path,
+    compile_package_dirs: &BTreeSet<PathBuf>,
+) -> bool {
+    if compile_package_dirs.is_empty() {
+        return false;
+    }
+    path.ancestors().any(|dir| {
+        compile_package_dirs.contains(dir)
+            && !path
+                .strip_prefix(dir)
+                .unwrap_or(path)
+                .to_string_lossy()
+                .contains("node_modules/")
+    })
+}
+
 /// Extract the package directory from a resolved path for a given package name.
 /// E.g., for path "/project/node_modules/@noble/curves/node_modules/@noble/hashes/src/sha256.ts"
 /// and package_name "@noble/hashes", returns "/project/node_modules/@noble/curves/node_modules/@noble/hashes"
@@ -241,11 +262,33 @@ pub(super) fn extract_compile_package_dir(
         .map(Path::to_path_buf)
 }
 
-/// Check if a file path is inside a package listed in compile_packages
+/// Check if a file path is inside a package listed in compile_packages.
+///
+/// One walk over the path's ancestors: a package directory is named by its
+/// position under a `node_modules` directory (`node_modules/<name>` or
+/// `node_modules/<scope>/<name>`, what [`is_compile_package_dir`] matches), so
+/// each ancestor asks the set for the two names it can carry instead of
+/// testing every listed package against every ancestor.
 pub(super) fn is_in_compile_package(path: &Path, compile_packages: &HashSet<String>) -> bool {
-    compile_packages.iter().any(|pkg_name| {
-        path.ancestors()
-            .any(|candidate| is_compile_package_dir(candidate, pkg_name))
+    if compile_packages.is_empty() {
+        return false;
+    }
+    path.ancestors().any(|candidate| {
+        let Some(name) = candidate.file_name().and_then(|n| n.to_str()) else {
+            return false;
+        };
+        let Some(parent) = candidate.parent() else {
+            return false;
+        };
+        let parent_name = parent.file_name().and_then(|n| n.to_str());
+        if parent_name == Some("node_modules") && compile_packages.contains(name) {
+            return true;
+        }
+        let Some(scope) = parent_name else {
+            return false;
+        };
+        parent.parent().and_then(Path::file_name) == Some(std::ffi::OsStr::new("node_modules"))
+            && compile_packages.contains(&format!("{scope}/{name}"))
     })
 }
 
@@ -1625,14 +1668,7 @@ pub(super) fn resolve_import_with_bunfs(
             // dependent file never enters `ctx.native_modules`, and importing
             // modules see `imported_classes=[]` for symbols re-exported from it.
             let in_compile_pkg = is_in_compile_package(&canonical, compile_packages)
-                || compile_package_dirs.iter().any(|dir| {
-                    if canonical.starts_with(dir) {
-                        let relative = canonical.strip_prefix(dir).unwrap_or(canonical.as_path());
-                        !relative.to_string_lossy().contains("node_modules/")
-                    } else {
-                        false
-                    }
-                });
+                || is_in_compile_package_dir(&canonical, compile_package_dirs);
             // #1721 / #668: a *user* `.js` (outside node_modules) compiles
             // natively now — mirrors collect_modules' `should_use_js_runtime`.
             // Its import edge MUST be NativeCompiled so the importer wires
