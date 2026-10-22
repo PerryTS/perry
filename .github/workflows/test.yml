@@ -378,6 +378,14 @@ jobs:
         run: |
           rustup target add x86_64-pc-windows-msvc
           export PATH="$LLVM_SYS_221_PREFIX/bin:$PATH"
+          # cc-rs archives the Windows C objects with `llvm-lib` (cargo-xwin
+          # sets AR to it) and resolves it through PATH. Fail here, naming the
+          # directory, rather than inside psm/ring/zstd-sys's build scripts.
+          if ! command -v llvm-lib >/dev/null; then
+            echo "::error::llvm-lib is not on PATH (LLVM_SYS_221_PREFIX=${LLVM_SYS_221_PREFIX:-unset})"
+            ls "${LLVM_SYS_221_PREFIX:-/usr/lib/llvm-22}/bin" | head -40
+            exit 1
+          fi
           cargo xwin check -p perry-runtime -p perry-stdlib --target x86_64-pc-windows-msvc
 
       - name: Save cargo-xwin MSVC sysroot (main-line runs only)
