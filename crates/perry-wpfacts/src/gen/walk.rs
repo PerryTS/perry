@@ -356,6 +356,14 @@ impl<'a> Gen<'a> {
         };
         let cobj = self.m.tok(TokKind::ClassObj(tm));
         for f in &c.static_fields {
+            if c.is_nested && (f.init.is_some() || f.key_expr.is_some()) {
+                // A nested class's static initializers run where the class
+                // is evaluated (`StaticFieldSet`, `ClassStaticSymbolSet`,
+                // the statics of `ClassExprFresh`), never from the
+                // declaration (codegen `static_fields.rs`); this copy is
+                // not rewritten for shared-mutable captures (DECISIONS 50).
+                continue;
+            }
             let v = match &f.init {
                 Some(e) => self.expr(&sfx, e),
                 None => self.prim_node(prim::UNDEF),
@@ -465,8 +473,11 @@ impl<'a> Gen<'a> {
 
     fn stmt_inner(&mut self, fx: &Fx, s: &Stmt) {
         match s {
-            Stmt::Let { id, init, .. } => {
+            Stmt::Let { id, init, ty, .. } => {
                 let n = self.local(fx.module, *id);
+                if matches!(ty, perry_hir::types::Type::Array(_)) {
+                    self.cell_locals.insert((fx.module, *id));
+                }
                 if let (Some(perry_hir::Expr::ClassMethodHome { .. }), Some(tm)) = (init, fx.class)
                 {
                     self.class_homes.insert((fx.module, *id), tm);

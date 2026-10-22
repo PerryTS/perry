@@ -1163,8 +1163,16 @@ impl<'a> Gen<'a> {
             } => {
                 let cv = self.class_value(mi, template);
                 if let Some(id) = evaluation_owner {
+                    // The class's self binding gets the class before its
+                    // statics run. A binding the HIR made a cell (codegen's
+                    // `store_evaluation_owner`) gets it in element 0, not in
+                    // the binding: the binding holds the cell (DECISIONS 50).
                     let l = self.local(mi, *id);
-                    self.m.edge(cv, l);
+                    if self.cell_locals.contains(&(mi, *id)) {
+                        self.store(fx, l, Key::Any, cv, "owner[0]=".into(), None, false);
+                    } else {
+                        self.m.edge(cv, l);
+                    }
                 }
                 for (name, v) in named_statics {
                     let vn = self.expr(fx, v);
