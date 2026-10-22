@@ -53,6 +53,10 @@ impl Model {
             self.with_b(|m| builtins::tok_load(m, t, key, dst));
             return;
         }
+        if self.is_array_length(t, key) {
+            self.add_prim(dst, prim::NUM);
+            return;
+        }
         // An absent key reads `undefined`: only a definite birth key of a
         // fact unit is known to be present.
         let present = match (key, self.tmpl_of(t)) {
@@ -279,6 +283,18 @@ impl Model {
         }
     }
 
+    /// An Array's own `length` (design §17.8, DECISIONS 54): a data property
+    /// that always holds a Number and is never an element. A read is that
+    /// Number; a store converts its value with ToNumber and only moves the
+    /// end of the element range (a new slot reads `undefined`, which every
+    /// element read already has). Neither touches a field, so `length` never
+    /// joins the elements (`all_fields`) nor reads them (`field_any`).
+    pub fn is_array_length(&self, t: Tok, key: Key) -> bool {
+        matches!(key, Key::Named(a) if self.atoms[a as usize] == "length")
+            && matches!(self.toks[t as usize], TokKind::Obj(tm, _)
+                if matches!(self.tmpls[tm as usize].kind, TmplKind::Arr { .. }))
+    }
+
     pub fn is_constructor_key(&self, key: Key) -> bool {
         match key {
             Key::Any => true,
@@ -331,6 +347,9 @@ impl Model {
             return;
         }
         match act {
+            ChainAct::Load(dst) if self.is_array_length(start, key) => {
+                self.add_prim(dst, prim::NUM);
+            }
             ChainAct::Load(dst) => {
                 let f = match key {
                     Key::Named(a) => self.field(start, a),

@@ -773,6 +773,10 @@ impl Model {
                         }
                         continue;
                     }
+                    if self.is_array_length(q, key) {
+                        self.add_prim(dst, prim::NUM);
+                        continue;
+                    }
                     let f = match key {
                         Key::Named(a) => self.field(q, a),
                         Key::Any => self.all_fields(q),
@@ -1279,6 +1283,11 @@ impl Model {
                     self.foreign_written.insert(tm);
                 }
             }
+        }
+        if self.is_array_length(t, key) {
+            let r = self.reason("ToNumber of an array length store");
+            self.cons(src, Cons::Implicit { reason: r });
+            return;
         }
         match key {
             Key::Named(a) => {
