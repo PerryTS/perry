@@ -741,15 +741,18 @@ pub(super) unsafe fn dispatch_primitive(
                 return Some(result);
             }
         }
-        let ctor = crate::object::js_get_global_this_builtin_value(b"Date".as_ptr(), 4);
-        let ctor_ptr = crate::value::js_nanbox_get_pointer(ctor) as usize;
-        if ctor_ptr != 0 {
-            let proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
-            if let Some(proto_ptr) = object_ptr_from_value(proto) {
-                let key = crate::string::js_string_from_bytes(
-                    method_name_ptr as *const u8,
-                    method_name_len as u32,
-                );
+        // The cell's own [[Prototype]], not the realm's `Date.prototype`: an
+        // instance of `class D extends Date` links `D.prototype`, whose methods
+        // override the intrinsic ones (`get` walks on to `Date.prototype`).
+        let proto = crate::date::date_cell_prototype(object_handle.get_nanbox_f64());
+        let proto_handle = root_scope.root_nanbox_f64(proto);
+        if object_ptr_from_value(proto).is_some() {
+            let key = crate::string::js_string_from_bytes(
+                method_name_ptr as *const u8,
+                method_name_len as u32,
+            );
+            // Re-read: the key allocation can move the prototype.
+            if let Some(proto_ptr) = object_ptr_from_value(proto_handle.get_nanbox_f64()) {
                 let value = crate::object::js_object_get_field_by_name(proto_ptr, key);
                 if !value.is_undefined() {
                     let value_f64 = f64::from_bits(value.bits());
