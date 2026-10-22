@@ -190,6 +190,17 @@ pub(crate) fn object_alloc_null_proto(class_id: u32, field_count: u32) -> *mut O
     object_alloc_with_parent_impl::<false, true, false>(class_id, 0, field_count)
 }
 
+/// `Object.create(null)`: an ORDINARY object with no [[Prototype]], born
+/// marked plain-ordinary before its first stamp, so its birth shape is the
+/// `Ordinary` kind with `PROTO_ID_NULL`. That shape proves a store or add
+/// meets no inherited setter or non-writable property (there is no chain),
+/// the same proof an `Object.setPrototypeOf(o, null)` relink of a literal
+/// already carries. Runtime-born null-prototype records keep
+/// [`object_alloc_null_proto`]: their births do not establish ordinariness.
+pub(crate) fn object_alloc_created_null_proto() -> *mut ObjectHeader {
+    object_alloc_with_parent_impl::<true, true, false>(0, 0, 0)
+}
+
 /// A prototype the runtime builds itself (a declared class's `prototype`,
 /// born in its final shape): allocated old and never-move from birth
 /// (owner decision O3; `gc::never_move`), so the site memos that answer

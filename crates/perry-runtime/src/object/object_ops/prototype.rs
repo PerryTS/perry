@@ -107,7 +107,9 @@ pub extern "C" fn js_object_create(proto_value: f64) -> f64 {
     }
 
     if proto_jv.is_null() {
-        return crate::value::js_nanbox_pointer(js_object_alloc_null_proto(0, 0) as i64);
+        return crate::value::js_nanbox_pointer(
+            crate::object::alloc_basic::object_alloc_created_null_proto() as i64,
+        );
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let proto = scope.root_nanbox_f64(proto_value);
