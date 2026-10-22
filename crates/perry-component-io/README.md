@@ -28,6 +28,12 @@ allows a pending socket read and a write to share one native connection without
 reopening or duplicating it for each request. Only owned native values belong in
 this table; it must never hold a Wasmtime Store or Perry guest heap reference.
 
+`Resource::derive` creates another native resource on the same driver, such as
+an accepted connection from a listener. It reserves both task and resource
+capacity before invoking the factory. Rejection therefore cannot consume an
+incoming connection. The factory receives a local parent owner for the operation;
+the resulting resource has its own lifetime and can outlive the listener.
+
 The resource limit is independent of the task limit and includes pending
 registrations and values retained by in-flight operations. Dropping the last
 remote handle queues a release without requiring a task permit. Pending calls

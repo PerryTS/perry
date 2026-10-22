@@ -99,6 +99,29 @@ impl<T> Clone for Resource<T> {
     }
 }
 impl<T: 'static> Resource<T> {
+    /// Create another native resource from this one, such as a connection from
+    /// a listener. The new value remains on the same driver thread but has an
+    /// independent lifetime. Capacity is reserved before invoking the factory,
+    /// so admission failure cannot consume a connection from a listen backlog.
+    pub fn derive<F, Fut, U, E>(
+        &self,
+        make: F,
+    ) -> Result<ResourceRequest<Result<Resource<U>, E>>, Error>
+    where
+        F: FnOnce(ExecutorHandle<Platform>, LocalResource<T>) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<U, E>> + 'static,
+        U: 'static,
+        E: Send + 'static,
+    {
+        let remote = self.remote.clone();
+        let endpoint = remote.submitter.clone();
+        endpoint.register_with(move |io, resources| async move {
+            let parent = resources.get(remote.id)?;
+            drop(remote);
+            Ok(make(io, parent).await)
+        })
+    }
+
     /// Create an operation on the native resource's driver thread. Only owned
     /// native arguments/results cross threads; the future and resource stay local.
     pub fn call<F, Fut, R>(&self, make: F) -> Result<ResourceRequest<R>, Error>
@@ -133,6 +156,19 @@ impl Submitter {
         T: 'static,
         E: Send + 'static,
     {
+        self.register_with(move |io, _| async move { Ok(make(io).await) })
+    }
+
+    fn register_with<F, Fut, T, E>(
+        &self,
+        make: F,
+    ) -> Result<ResourceRequest<Result<Resource<T>, E>>, Error>
+    where
+        F: FnOnce(ExecutorHandle<Platform>, Rc<Resources>) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<Result<T, E>, Error>> + 'static,
+        T: 'static,
+        E: Send + 'static,
+    {
         let inner = self.0.upgrade().ok_or(Error::Stopped)?;
         if inner.stopped.load(Ordering::Acquire) {
             return Err(Error::Stopped);
@@ -147,7 +183,7 @@ impl Submitter {
         let submitter = self.clone();
         inner
             .submit_with_resources(move |io, resources| async move {
-                match make(io).await {
+                match make(io, resources.clone()).await? {
                     Ok(value) => {
                         let id = resources.insert(value, permit)?;
                         Ok(Ok(Resource {

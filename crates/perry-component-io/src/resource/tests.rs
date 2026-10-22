@@ -6,6 +6,7 @@ use futures_util::io::{AsyncRead, AsyncWrite};
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::time::Duration;
+mod derive;
 
 const WATCHDOG: Duration = Duration::from_secs(10);
 struct Native {
