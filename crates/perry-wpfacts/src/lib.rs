@@ -654,6 +654,7 @@ pub(crate) fn compute_in<'a>(
     g.register_all();
     g.link_exports();
     g.walk_all();
+    g.feed_parent_values();
     if cfg.unit {
         // The closed contracts first (decision 19): publishing a closed
         // function is no escape only once its contract is known.
@@ -686,6 +687,7 @@ pub(crate) fn compute_in<'a>(
     while cfg.unit && g.contract_check() {
         g.m.solve();
     }
+    g.settle_parent_layouts();
     if cfg.profile || cfg.explain {
         let mut kinds = [0usize; 6];
         let mut fnkeyed = 0;

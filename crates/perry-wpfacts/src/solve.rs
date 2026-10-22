@@ -558,7 +558,11 @@ impl Model {
                     let np = crate::builtins::native_proto(self, &name);
                     self.add_tok(n, np);
                 }
-                (None, None) => self.add_tok(n, objproto),
+                (None, None) => match self.tmpls[tm as usize].parent_value {
+                    // `S.prototype.__proto__` is the parent's `prototype`.
+                    Some((_, pp)) => self.edge(pp, n),
+                    None => self.add_tok(n, objproto),
+                },
             },
             TokKind::NativeProto(_) => self.add_tok(n, objproto),
             TokKind::Func(_, _) | TokKind::Bound(_) | TokKind::BuiltinFn => {
@@ -569,7 +573,11 @@ impl Model {
                     let pc = self.tok(TokKind::ClassObj(p));
                     self.add_tok(n, pc);
                 }
-                None => self.add_tok(n, objproto),
+                None => match self.tmpls[tm as usize].parent_value {
+                    // `S.__proto__` is the value of the `extends` expression.
+                    Some((pv, _)) => self.edge(pv, n),
+                    None => self.add_tok(n, objproto),
+                },
             },
             _ => {}
         }
@@ -854,7 +862,15 @@ impl Model {
                 }
                 for &parent in toks {
                     match self.toks[parent as usize] {
-                        TokKind::ClassObj(tm) => self.run_ctor_chain_this(call, tm, origin),
+                        TokKind::ClassObj(tm) => {
+                            // Record the link before the parent's stores
+                            // reach the instance (§17.2 item 2).
+                            let oc = &mut self.tmpls[owner_class as usize];
+                            if oc.parent.is_none() && !oc.parent_links.contains(&tm) {
+                                oc.parent_links.push(tm);
+                            }
+                            self.run_ctor_chain_this(call, tm, origin)
+                        }
                         TokKind::Func(_, _) => self.call_tok(call, parent, Some(origin)),
                         TokKind::Bound(_) => self.construct(call, parent),
                         TokKind::Top | TokKind::BuiltinFn | TokKind::Builtin(_) => {
@@ -1317,12 +1333,63 @@ impl Model {
         };
         // The store sits in the constructor of `owner`; instances of `tm`
         // run it during construction when `owner` is `tm` or an ancestor.
-        let mut cur = Some(tm);
-        while let Some(c) = cur {
+        self.has_ancestor(tm, owner)
+    }
+
+    /// After the solve (§17.2 item 3): a parent value that holds exactly one
+    /// class and nothing else is the class's parent (one chain for derive,
+    /// the contract export and `ancestors`); anything else — ⊤, two classes,
+    /// a non-class — leaves no single layout chain: hard E11.
+    pub fn settle_parent_values(&mut self) {
+        for tm in 0..self.tmpls.len() as TmplId {
+            let Some((pv, _)) = self.tmpls[tm as usize].parent_value else {
+                continue;
+            };
+            let toks = self.nodes[pv as usize].pts.to_sorted();
+            // `extends v` with v a primitive other than null throws a
+            // TypeError when the class is defined: no instance of it exists
+            // with that parent. `extends null` is a parent of its own.
+            let null = self.nodes[pv as usize].prim & prim::NULL != 0;
+            let one = match toks.as_slice() {
+                [t] if !null => match self.toks[*t as usize] {
+                    TokKind::ClassObj(p) if !self.has_ancestor(p, tm) => Some(p),
+                    _ => None,
+                },
+                _ => None,
+            };
+            match one {
+                Some(p) => self.tmpls[tm as usize].parent = Some(p),
+                None => {
+                    let inst = self.tok(TokKind::Obj(tm, NO_CTX));
+                    let what = format!(
+                        "E11 class whose `extends` value is not one class ({} tokens{}{})",
+                        toks.len(),
+                        if toks.contains(&TOP) { ", ⊤" } else { "" },
+                        if null { ", null" } else { "" }
+                    );
+                    let r = self.reason(&what);
+                    self.mark_hard(inst, Hard::E11ReflectConstruct, r);
+                }
+            }
+        }
+    }
+
+    /// Is `owner` `tm` or an ancestor of it: the static parent, then the
+    /// parents `super()` ran (`parent_links`, §17.2).
+    pub(crate) fn has_ancestor(&self, tm: TmplId, owner: TmplId) -> bool {
+        let mut work = vec![tm];
+        let mut seen: Vec<TmplId> = Vec::new();
+        while let Some(c) = work.pop() {
             if c == owner {
                 return true;
             }
-            cur = self.tmpls[c as usize].parent;
+            if seen.contains(&c) {
+                continue;
+            }
+            seen.push(c);
+            let t = &self.tmpls[c as usize];
+            work.extend(t.parent);
+            work.extend(t.parent_links.iter().copied());
         }
         false
     }

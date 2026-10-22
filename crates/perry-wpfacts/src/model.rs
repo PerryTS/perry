@@ -183,6 +183,14 @@ pub struct Template {
     /// Keys the class defines on its prototype at class creation (methods,
     /// accessors, `constructor`): a lookup that finds one stops there.
     pub proto_members: Vec<Atom>,
+    /// A parent that is not a class of the unit at gen time (§17.2): the
+    /// value of the `extends` expression and the load of its `prototype`.
+    /// The class object's and the prototype's proto nodes take their tokens
+    /// from them; after the solve one class token there becomes `parent`.
+    pub parent_value: Option<(NodeId, NodeId)>,
+    /// Classes whose constructor chain `super()` ran on this class's
+    /// instances during the solve (the parent value's class tokens).
+    pub parent_links: Vec<TmplId>,
 }
 
 #[derive(Clone, Debug)]
@@ -1493,6 +1501,8 @@ impl Model {
             has_computed_members: false,
             field_init: None,
             proto_members: Vec::new(),
+            parent_value: None,
+            parent_links: Vec::new(),
         });
         tm
     }
@@ -1520,6 +1530,8 @@ impl Model {
             has_computed_members: false,
             field_init: None,
             proto_members: Vec::new(),
+            parent_value: None,
+            parent_links: Vec::new(),
         });
         let t = self.tok(TokKind::Obj(tm, NO_CTX));
         // What the argument reaches has its own marker (fields of fields
