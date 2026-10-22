@@ -1,5 +1,7 @@
 //! Native clocks and Turnloop-backed WASI deadline resources.
+mod datetime;
 mod system;
+pub(crate) use datetime::{Datetime, DatetimeError};
 
 use crate::io::poll::{subscribe, DynPollable, Pollable};
 use crate::p2::bindings::clocks::{monotonic_clock, wall_clock};
@@ -111,5 +113,15 @@ impl Pollable for Deadline {
             Self::Never => std::future::pending().await,
             Self::Pending(_) => unreachable!("completed clock task remains pending"),
         }
+    }
+}
+
+impl TryFrom<Datetime> for wall_clock::Datetime {
+    type Error = DatetimeError;
+    fn try_from(value: Datetime) -> Result<Self, Self::Error> {
+        Ok(Self {
+            seconds: value.seconds.try_into()?,
+            nanoseconds: value.nanoseconds,
+        })
     }
 }

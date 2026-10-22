@@ -7,6 +7,72 @@ use std::time::Duration;
 
 const WATCHDOG: Duration = Duration::from_secs(10);
 
+#[test]
+fn blocking_work_keeps_timers_live_and_preserves_typed_results() {
+    bounded(|| {
+        let driver = Driver::new(2).unwrap();
+        let (started, receive) = mpsc::channel();
+        let (release, wait) = mpsc::channel();
+        let work = driver
+            .submitter()
+            .blocking(move || {
+                started.send(()).unwrap();
+                wait.recv_timeout(WATCHDOG).unwrap();
+                Err::<Vec<u8>, _>(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
+            })
+            .unwrap();
+        receive.recv_timeout(WATCHDOG).unwrap();
+        let timer = driver
+            .submit(|io| async move { io.sleep(Duration::from_millis(5)).await })
+            .unwrap();
+        assert!(matches!(
+            driver.submitter().blocking(|| ()),
+            Err(Error::Capacity)
+        ));
+        block_on(timer).unwrap().unwrap();
+        release.send(()).unwrap();
+        assert_eq!(
+            block_on(work).unwrap().unwrap_err().kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+        assert_eq!(driver.outstanding(), 0);
+    });
+}
+
+#[test]
+fn cancelled_blocking_work_retains_native_inputs_until_syscall_finishes() {
+    bounded(|| {
+        struct NativeOwner(mpsc::Sender<()>);
+        impl Drop for NativeOwner {
+            fn drop(&mut self) {
+                let _ = self.0.send(());
+            }
+        }
+        let driver = Driver::new(1).unwrap();
+        let endpoint = driver.submitter();
+        let (started, receive) = mpsc::channel();
+        let (release, wait) = mpsc::channel();
+        let (dropped, observe_drop) = mpsc::channel();
+        let native = NativeOwner(dropped);
+        let work = endpoint
+            .blocking(move || {
+                started.send(()).unwrap();
+                wait.recv_timeout(WATCHDOG).unwrap();
+                drop(native);
+            })
+            .unwrap();
+        receive.recv_timeout(WATCHDOG).unwrap();
+        work.cancel();
+        assert_eq!(block_on(work), Err(Error::Cancelled));
+        assert!(observe_drop.try_recv().is_err());
+        assert_eq!(driver.outstanding(), 0);
+        drop(driver);
+        assert!(matches!(endpoint.blocking(|| ()), Err(Error::Stopped)));
+        release.send(()).unwrap();
+        observe_drop.recv_timeout(WATCHDOG).unwrap();
+    });
+}
+
 // Bound every cross-thread wait, including shutdown, so a broken wakeup fails
 // the test instead of leaving a CI worker hung indefinitely.
 fn bounded(test: impl FnOnce() + Send + 'static) {

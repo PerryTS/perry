@@ -196,6 +196,31 @@ impl Driver {
     }
 }
 impl Submitter {
+    /// Run owned native work on Turnloop's bounded blocking pool. Cancellation
+    /// stops result delivery and cancels queued work; a syscall already running
+    /// may finish and retain its owned inputs until then. It cannot be undone.
+    /// Never pass guest heap pointers, callbacks, or a Wasmtime Store here.
+    pub fn blocking<F, T>(&self, work: F) -> Result<BlockingRequest<T>, Error>
+    where
+        F: FnOnce() -> T + Send + 'static,
+        T: Send + 'static,
+    {
+        self.submit(move |io| async move {
+            let payload = io
+                .blocking(move || Ok(turnloop::Payload::Boxed(Box::new(work()))))
+                .await
+                .map_err(|e| Error::Driver(e.to_string()))?;
+            match payload {
+                turnloop::Payload::Boxed(value) => value
+                    .downcast::<T>()
+                    .map(|value| *value)
+                    .map_err(|_| Error::Driver("blocking result type mismatch".into())),
+                _ => Err(Error::Driver("unexpected blocking result payload".into())),
+            }
+        })
+        .map(BlockingRequest)
+    }
+
     pub fn submit<F, Fut, T>(&self, make: F) -> Result<Request<T>, Error>
     where
         F: FnOnce(ExecutorHandle<Platform>) -> Fut + Send + 'static,
@@ -284,6 +309,23 @@ impl<T> Future for Request<T> {
 impl<T> Drop for Request<T> {
     fn drop(&mut self) {
         self.abort.abort();
+    }
+}
+
+/// A cancellable blocking-pool result. Dropping it never borrows guest memory
+/// and does not wait for a syscall already running on a native worker.
+pub struct BlockingRequest<T>(Request<Result<T, Error>>);
+impl<T> BlockingRequest<T> {
+    pub fn cancel(&self) {
+        self.0.cancel();
+    }
+}
+impl<T> Future for BlockingRequest<T> {
+    type Output = Result<T, Error>;
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        Pin::new(&mut self.0)
+            .poll(cx)
+            .map(|result| result.and_then(|v| v))
     }
 }
 

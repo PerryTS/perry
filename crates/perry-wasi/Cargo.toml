@@ -19,12 +19,16 @@ futures-util.workspace = true
 futures-lite = "2"
 rand = { version = "0.10.1", features = ["std_rng", "thread_rng"] }
 tracing = "0.1"
+bitflags = "2"
 
 [target.'cfg(unix)'.dependencies]
-rustix = { version = "1.1", features = ["time"] }
+rustix = { version = "1.1", features = ["time", "fs", "event", "net"] }
+rustix-linux-procfs = { version = "0.1.1" }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_System_Performance"] }
+windows-sys = { version = "0.61", features = ["Win32_System_Performance", "Wdk_Storage_FileSystem", "Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Ioctl"] }
+winx = { version = "0.36.0" }
 
 [dev-dependencies]
+tempfile = "3.27.0"
 wasmtime = { version = "=48.0.5", default-features = false, features = ["cranelift", "wat"] }
