@@ -42,6 +42,23 @@ const EMPTY_SHAPE_DIR: &str = "@PERRY_EMPTY_SHAPE_DIR";
 /// Is the One Path method site available for this call?
 /// `PERRY_METHOD_SITE=0` at compile time keeps the old dispatcher (A/B).
 pub(crate) fn method_site_enabled(ctx: &FnCtx<'_>, property: &str, argc: usize) -> bool {
+    site_target_enabled(ctx)
+        && !(property.is_empty()
+            || property.starts_with('#')
+            || property.starts_with("__perry_")
+            || property.starts_with("@@")
+            || property == "constructor"
+            || argc > 16)
+}
+
+/// Is the keyed method site ([`emit_keyed_method_site`]) available for a
+/// computed-key call `recv[key](argc args)`?
+pub(crate) fn keyed_method_site_enabled(ctx: &FnCtx<'_>, argc: usize) -> bool {
+    site_target_enabled(ctx) && argc <= 16
+}
+
+/// The method site's target and build conditions, independent of the key.
+fn site_target_enabled(ctx: &FnCtx<'_>) -> bool {
     static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     if *OFF.get_or_init(|| std::env::var("PERRY_METHOD_SITE").as_deref() == Ok("0")) {
         return false;
@@ -58,15 +75,70 @@ pub(crate) fn method_site_enabled(ctx: &FnCtx<'_>, property: &str, argc: usize) 
     }
     // A typed-feedback (profiling) build records every method call in the
     // dispatcher; a site hit would skip that recording.
-    if super::typed_feedback::typed_feedback_emission_enabled() {
-        return false;
+    !super::typed_feedback::typed_feedback_emission_enabled()
+}
+
+/// The computed-key method site: `recv[key](args)` whose arguments cannot
+/// observe the method read. The key's atom probes the receiver's own layout,
+/// then its prototypes' (`perry_probe_get_keyed`: data properties only, a
+/// GC leaf); a function value that takes `this` as its parameter is called
+/// with `recv` as `this`, exactly as the static-key site calls its probe's
+/// answer. Anything else (a decline, a key that is no atom, an accessor, a
+/// closure reading `this` from a capture) calls `slow` with the same
+/// operands. `recv_box`, `key_box` and `lowered_args` are evaluated and
+/// re-read from their roots.
+pub(crate) fn emit_keyed_method_site(
+    ctx: &mut FnCtx<'_>,
+    recv_box: &str,
+    key_box: &str,
+    lowered_args: &[String],
+    slow: impl FnOnce(&mut FnCtx<'_>) -> String,
+) -> String {
+    let slow_idx = ctx.new_block("ksite.slow");
+    let merge_idx = ctx.new_block("ksite.merge");
+    let slow_l = ctx.block_label(slow_idx);
+    let merge_l = ctx.block_label(merge_idx);
+    let dir = crate::expr::agent_ptr::emit_agent_ptr_or(
+        ctx,
+        crate::runtime_abi::AGENT_PTR_SHAPE_DIR,
+        EMPTY_SHAPE_DIR,
+    );
+    let answered_bits = {
+        let blk = ctx.block();
+        let recv_bits = blk.bitcast_double_to_i64(recv_box);
+        let key_bits = blk.bitcast_double_to_i64(key_box);
+        let answered = blk.call(
+            DOUBLE,
+            "perry_probe_get_keyed",
+            &[(PTR, &dir), (I64, &recv_bits), (I64, &key_bits)],
+        );
+        blk.bitcast_double_to_i64(&answered)
+    };
+    crate::expr::note_site("probe-keyed-method");
+    let mut results: Vec<(String, String)> = Vec::new();
+    emit_function_value_call(
+        ctx,
+        &answered_bits,
+        recv_box,
+        lowered_args,
+        &[],
+        &slow_l,
+        &merge_l,
+        &mut results,
+    );
+    ctx.current_block = slow_idx;
+    let slow_value = slow(ctx);
+    let slow_end = ctx.block().label.clone();
+    if !ctx.block().is_terminated() {
+        ctx.block().br(&merge_l);
     }
-    !(property.is_empty()
-        || property.starts_with('#')
-        || property.starts_with("__perry_")
-        || property.starts_with("@@")
-        || property == "constructor"
-        || argc > 16)
+    results.push((slow_value, slow_end));
+    ctx.current_block = merge_idx;
+    let incoming: Vec<(&str, &str)> = results
+        .iter()
+        .map(|(v, l)| (v.as_str(), l.as_str()))
+        .collect();
+    ctx.block().phi(DOUBLE, &incoming)
 }
 
 /// Can evaluating `args` observe WHEN the method is read (#11910)? Only an

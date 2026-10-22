@@ -88,7 +88,7 @@ pub extern "C" fn js_object_group_by(items_value: f64, callback: f64) -> f64 {
         }
 
         // Null-prototype result object (Node: getPrototypeOf === null).
-        let obj = js_object_alloc_null_proto(0, order.len() as u32);
+        let obj = super::js_object_alloc_null_proto_ordinary(order.len() as u32);
         if obj.is_null() {
             return f64::from_bits(crate::value::TAG_UNDEFINED);
         }

@@ -22,7 +22,7 @@ Prerequisites match what CI installs — see [`.github/workflows/test.yml`](.git
 
 | Component | Version | Needed for |
 |---|---|---|
-| Rust | stable (≥ 1.94) | Everything. The workspace pins no toolchain, so an older `stable` fails deep in the dependency graph with a `sqlx@0.9.0 requires rustc 1.94.0` MSRV error rather than a clear message — `rustup update stable` fixes it. |
+| Rust | nightly pinned in [`rust-toolchain.toml`](rust-toolchain.toml) | Everything. `rustup` installs or selects the pinned toolchain automatically when Cargo runs from the checkout; the runtime's exception transport needs nightly-only unwind-table flags, so `stable` does not build it. |
 | Rust nightly + `rust-src` | latest | tvOS / watchOS cross-compile only (`-Zbuild-std`) |
 | Node.js | see [`.node-version`](.node-version) | Parity tests (`run_parity_tests.sh`). Use that exact version — an older Node makes the harness classify tests `node_fail` and silently DROP them from the gate instead of failing. |
 | C linker | any | Linking compiled binaries (`xcode-select --install` / `build-essential` / MSVC) |
@@ -60,7 +60,9 @@ For a faster inner loop, use `cargo check -p perry` (correctness only),
 ThinLTO and parallel codegen). The
 `.a` static archives now come from dedicated wrapper crates — build them with
 `cargo build --profile prod -p perry-runtime-static -p perry-stdlib-static` when you
-need `libperry_{runtime,stdlib}.a`. See `docs/src/contributing/building.md` for
+need `libperry_{runtime,stdlib}.a`, then write their GC-effects sidecars with
+`scripts/gc_call_effects/sidecars.sh target/prod` — `perry` refuses to link
+workspace archives without them. See `docs/src/contributing/building.md` for
 the full dev/prod profile guide and the slim `--features dev-cli` CLI (#5422).
 
 The full README [Development](README.md#development) section has more `cargo run` recipes (HIR dumps, per-crate rebuilds).

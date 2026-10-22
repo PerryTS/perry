@@ -683,6 +683,14 @@ fn lower_fn_body_block_stmt_inner(
                 continue;
             }
             let name = fn_decl.ident.sym.to_string();
+            // A generator that is not forward-referenced takes the top-level
+            // `FuncRef` path; pre-defining its local would make its recursive
+            // self-call read the enclosing function's slot (#13029).
+            if fn_decl.function.is_generator
+                && !ctx.nested_generator_forward_referenced.contains(&name)
+            {
+                continue;
+            }
             // Reuse only a CURRENT-scope binding (a sibling `var`/`function`
             // hoisted into this same body). A same-named local from an OUTER
             // scope must be shadowed with a fresh local, else this declaration

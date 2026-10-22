@@ -114,14 +114,130 @@ pub(crate) unsafe fn try_own_store(
         };
         record
     };
+    match record_own_overwrite(obj, record, key, value) {
+        Some(answer) => answer,
+        None => super::try_existing_own_data_overwrite(obj, key, value),
+    }
+}
+
+/// Where a keyed store's receiver lists the own keys that may answer the
+/// store as an overwrite ([`own_overwrite_holder`]).
+#[derive(Clone, Copy)]
+pub(crate) enum OwnOverwrite {
+    /// An ordinary layout with at least one key and no overflow: its shape
+    /// record names every own key and slot.
+    Record(shapes::ShapeRecordRef),
+    /// An overflowed receiver: its overflow lists every own key (§3.4).
+    /// [`try_overflow_own_overwrite`] admits the receiver.
+    Overflow,
+}
+
+/// The holder of the own keys that may answer a keyed store as an
+/// overwrite. Object facts only, read before the key is resolved, so a
+/// store to a fresh keyless object pays nothing more.
+///
+/// # Safety
+/// `obj` is a live object word.
+#[inline(always)]
+pub(crate) unsafe fn own_overwrite_holder(obj: *mut ObjectHeader) -> Option<OwnOverwrite> {
+    if super::overflow::has_overflow(obj) {
+        return Some(OwnOverwrite::Overflow);
+    }
+    let record = ordinary_receiver_record(obj)?;
+    (record.logical_key_count() != 0).then_some(OwnOverwrite::Record(record))
+}
+
+/// A keyed store `obj[key] = value` on an [`OwnOverwrite::Overflow`]
+/// receiver. The key is named by its property atom when that costs no table
+/// work beyond an SSO key's one probe: a heap key that is itself a property
+/// atom, or an SSO key with an existing atom. A heap string that is not an
+/// atom (a computed copy) is left to the complete path, which interns it,
+/// so an add of such a key pays no extra hashing here. The receiver is the
+/// dynamic add's (`try_dynamic_store`): ordinary, extensible, without own
+/// descriptors. An overflow entry holding `key` as a plain writable data
+/// value is [[Set]]'s answer whatever the chain holds: the entry store,
+/// `Ok`. `Err` carries the key the caller continues with (the atom once
+/// resolved: the same property, so the steps after this do not resolve it
+/// again).
+///
+/// # Safety
+/// `obj` is a live, overflowed object word; nothing here allocates.
+#[inline(always)]
+pub(crate) unsafe fn try_overflow_own_overwrite(
+    obj: *mut ObjectHeader,
+    key: f64,
+    value: f64,
+) -> Result<f64, f64> {
+    let k = crate::JSValue::from_bits(key.to_bits());
+    let atom = if k.is_string() {
+        let p = k.as_string_ptr() as *const crate::StringHeader;
+        if !crate::string::is_property_atom(p) {
+            return Err(key);
+        }
+        p
+    } else if k.is_short_string() {
+        match crate::string::existing_property_atom_of_value(key.to_bits()) {
+            Some(atom) => atom,
+            None => return Err(key),
+        }
+    } else {
+        return Err(key);
+    };
+    let resolved = crate::value::js_nanbox_string(atom as i64);
+    // The dynamic add's admission: no private name and no canonical index.
+    if (*atom).byte_len == 0 || {
+        let first = *crate::string::string_data(atom);
+        first == b'#' || first.is_ascii_digit()
+    } {
+        return Err(resolved);
+    }
+    // The entry first: an add (no entry) declines before the receiver's
+    // admission is read.
+    let Some(entry) = super::overflow::own_plain_value_entry(obj, atom) else {
+        return Err(resolved);
+    };
+    if dynamic_store_receiver(obj).is_none() {
+        return Err(resolved);
+    }
+    super::overflow::store_own_value_entry(obj, entry, value);
+    Ok(value)
+}
+
+/// A keyed store `obj[key] = value` whose receiver's shape record (from
+/// [`own_overwrite_holder`]) proves `key` an own writable data slot: the slot
+/// store, before any add-path work (family layout, migration, tombstone
+/// re-add, overflow, transition). `false` leaves the store to the caller's
+/// complete path, unchanged.
+///
+/// # Safety
+/// `obj` is a live object word; `key` is an interned property key.
+pub(crate) unsafe fn try_record_own_overwrite(
+    obj: *mut ObjectHeader,
+    record: shapes::ShapeRecordRef,
+    key: *const crate::StringHeader,
+    value: f64,
+) -> bool {
+    record_own_overwrite(obj, record, key, value) == Some(true)
+}
+
+/// The shape record's own-slot answer for a store: `Some(true)` stored,
+/// `Some(false)` the record proves the store is not a plain own overwrite,
+/// `None` the record cannot tell (the caller asks the object).
+#[inline(always)]
+unsafe fn record_own_overwrite(
+    obj: *mut ObjectHeader,
+    record: shapes::ShapeRecordRef,
+    key: *const crate::StringHeader,
+    value: f64,
+) -> Option<bool> {
     if !record.object_kind().is_ordinary_layout() {
-        return false;
+        return Some(false);
     }
     if record.object_kind() == shapes::ShapeObjectKind::Ordinary {
         if let Some(slot) = record.own_store_slot(key) {
             let Some(slot) = slot else {
                 // Shape-proven absence cannot become an overwrite on another own-key lookup.
-                return false;
+                return Some(false);
             };
             // Attributes belong to the matched binding. An accessor,
             // readonly intrinsic or private slot elsewhere on this shape
@@ -134,18 +250,18 @@ pub(crate) unsafe fn try_own_store(
                     slot as u32,
                 ))
             {
-                return false;
+                return Some(false);
             }
             let slot = super::key_attrs::key_storage_slot(
                 record.keys() as usize as *const crate::ArrayHeader,
                 slot as u32,
             ) as usize;
             if store_proven_own_slot(obj, record, slot, value) {
-                return true;
+                return Some(true);
             }
         }
     }
-    super::try_existing_own_data_overwrite(obj, key, value)
+    None
 }
 
 /// Proven writable ordinary own slot: shared representation/barrier funnel for Set and Define.
@@ -303,6 +419,19 @@ pub(crate) unsafe fn try_dynamic_store(
     value: f64,
 ) -> Option<f64> {
     let record = dynamic_store_receiver(obj)?;
+    // The overflow takes dynamic keys of realm-default and null-prototype
+    // bags, as step 4 landed it. A receiver with a class or recorded
+    // prototype keeps its layout transitions until the unknown-receiver probe
+    // (step 5) serves reads of overflowed objects: an overflowed object
+    // primes no own-slot way, so routing those receivers here would send
+    // every later read of them to the generic lookup (Effect +92%).
+    // A record fact, so it is asked before the key is decoded.
+    if !matches!(
+        record.proto_id(),
+        shapes::PROTO_ID_DEFAULT | shapes::PROTO_ID_NULL
+    ) {
+        return None;
+    }
     let k = crate::JSValue::from_bits(key.to_bits());
     if !k.is_string() && !k.is_short_string() {
         return None;
@@ -321,18 +450,6 @@ pub(crate) unsafe fn try_dynamic_store(
         && super::keys_find_property_slot_by_bytes(keys, record.logical_key_count(), bytes)
             .is_some()
     {
-        return None;
-    }
-    // The overflow takes dynamic keys of realm-default and null-prototype
-    // bags, as step 4 landed it. A receiver with a class or recorded
-    // prototype keeps its layout transitions until the unknown-receiver probe
-    // (step 5) serves reads of overflowed objects: an overflowed object
-    // primes no own-slot way, so routing those receivers here would send
-    // every later read of them to the generic lookup (Effect +92%).
-    if !matches!(
-        record.proto_id(),
-        shapes::PROTO_ID_DEFAULT | shapes::PROTO_ID_NULL
-    ) {
         return None;
     }
     if inherited_store_blocked(record, obj, key, bytes) {

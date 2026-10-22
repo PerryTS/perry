@@ -681,6 +681,8 @@ js_bun_transpiler_transform	ptr	i64,ptr,ptr
 js_bun_transpiler_transform_sync	ptr	i64,ptr,ptr
 js_bun_unsupported	f64	f64
 js_bun_which	f64	f64,f64
+js_bun_sleep	f64	f64
+js_bun_sleep_sync	f64	f64
 js_bun_wrap_ansi	f64	f64,f64,f64
 js_bun_write	f64	f64,f64
 js_bun_zstd_decompress	f64	f64

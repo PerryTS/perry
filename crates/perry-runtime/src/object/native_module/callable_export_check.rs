@@ -71,6 +71,8 @@ pub(crate) fn is_native_module_callable_export_reference(module: &str, prop: &st
                 | "pathToFileURL"
                 | "plugin"
                 | "serve"
+                | "sleep"
+                | "sleepSync"
                 | "spawn"
                 | "stringWidth"
                 | "stripANSI"

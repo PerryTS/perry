@@ -22,8 +22,8 @@ use perry_runtime::native_payload::{
 use perry_runtime::{
     buffer::bytes::{from_slice, Brand},
     js_array_alloc, js_array_get, js_array_length, js_array_push, js_nanbox_pointer,
-    js_object_alloc_null_proto, js_object_set_field, js_string_from_bytes, ArrayHeader, JSValue,
-    ObjectHeader,
+    js_object_alloc_null_proto_ordinary, js_object_set_field, js_string_from_bytes, ArrayHeader,
+    JSValue, ObjectHeader,
 };
 use rusqlite::ffi;
 use std::cell::Cell;
@@ -426,7 +426,7 @@ pub(crate) unsafe fn row_value_checked(
             CStr::from_ptr(name_ptr).to_string_lossy().into_owned()
         });
     }
-    let obj = scope.root_raw_mut_ptr(js_object_alloc_null_proto(0, names.len() as u32));
+    let obj = scope.root_raw_mut_ptr(js_object_alloc_null_proto_ordinary(names.len() as u32));
     set_object_keys_from_names(obj.get_raw_mut_ptr::<ObjectHeader>(), &names);
     for (idx, value) in values.iter().enumerate() {
         js_object_set_field(

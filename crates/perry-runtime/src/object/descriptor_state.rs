@@ -84,6 +84,33 @@ pub(crate) fn object_proto_may_intercept_key(key: f64) -> bool {
     object_proto_may_intercept_name(bytes)
 }
 
+/// Can the realm's `%Object.prototype%` hold a store-blocking key other than
+/// the Annex-B `__proto__` accessor? Not while it is the sealed intrinsic on
+/// its immutable layout: its own shadow word is the census answer until a
+/// program write changes that object, the same fact builtin call sites read.
+/// Not before the program has materialized it either (no memoized address).
+/// Otherwise only its keys can tell ([`object_proto_may_intercept_name`]).
+#[inline]
+pub(crate) fn object_proto_may_intercept_any() -> bool {
+    !object_proto_key_holder().is_null()
+}
+
+/// The `%Object.prototype%` whose own keys answer a realm-default store
+/// ([`object_proto_may_intercept_any`]), read once; null when it can block
+/// no key.
+#[inline]
+fn object_proto_key_holder() -> *const ObjectHeader {
+    let intrinsic =
+        crate::agent_ptrs::intrinsic_proto(super::builtin_proto::BuiltinProto::Object as usize);
+    let word = unsafe { (*intrinsic).parent_class_id };
+    // A zero startup stand-in proves nothing about an already built but
+    // unsealed intrinsic (including runtime fixtures).
+    if word >= super::shapes::SHAPE_ID_BASE && word < super::layout_desc::UNSHADOWED_WORD_END {
+        return std::ptr::null();
+    }
+    crate::array::object_prototype_addr_if_resolved() as *const ObjectHeader
+}
+
 /// The realm-default answer for an already decoded property name.
 #[inline]
 pub(crate) fn object_proto_may_intercept_name(bytes: &[u8]) -> bool {
@@ -91,23 +118,8 @@ pub(crate) fn object_proto_may_intercept_name(bytes: &[u8]) -> bool {
     if bytes == b"__proto__" {
         return true;
     }
-    // The sealed intrinsic's immutable layout has no store-blocking key
-    // except the Annex-B accessor above. Its own shadow word is the census
-    // answer until a program write changes that object. This is the same
-    // fact builtin call sites read, with no separate chain verdict.
-    let intrinsic =
-        crate::agent_ptrs::intrinsic_proto(super::builtin_proto::BuiltinProto::Object as usize);
-    let word = unsafe { (*intrinsic).parent_class_id };
-    // A zero startup stand-in proves nothing about an already built but
-    // unsealed intrinsic (including runtime fixtures).
-    if word >= super::shapes::SHAPE_ID_BASE && word < super::layout_desc::UNSHADOWED_WORD_END {
-        return false;
-    }
-    let proto = crate::array::object_prototype_addr_if_resolved();
-    proto != 0
-        && unsafe {
-            super::key_attrs::object_key_blocks_plain_store(proto as *const ObjectHeader, bytes)
-        }
+    let proto = object_proto_key_holder();
+    !proto.is_null() && unsafe { super::key_attrs::object_key_blocks_plain_store(proto, bytes) }
 }
 
 /// Whether a fast plain-data write of `key` to a CLASS INSTANCE (`class_id != 0`)
@@ -561,6 +573,10 @@ pub(crate) unsafe fn layout_store_may_intercept(
             if (super::shapes::PROTO_ID_CLASS..super::shapes::PROTO_ID_MIXED).contains(&class) =>
         {
             declared_class_chain_blocks_store(class as u32, name)
+        }
+        // A generator instance's record holds its link.
+        super::shapes::PROTO_ID_RECORD_HELD => {
+            holder_word_blocks_store(super::shapes::object_prototype_word(obj), name)
         }
         _ => holder_word_blocks_store(record.prototype_word(), name),
     }

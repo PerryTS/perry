@@ -2,7 +2,7 @@ use super::*;
 use perry_runtime::{
     buffer::{is_any_array_buffer, is_data_view, is_registered_buffer},
     js_array_alloc, js_array_get, js_array_length, js_array_push, js_get_string_pointer_unified,
-    js_object_alloc_null_proto, js_object_get_field_by_name, js_object_set_field,
+    js_object_alloc_null_proto_ordinary, js_object_get_field_by_name, js_object_set_field,
     js_object_set_keys, js_string_from_bytes, ArrayHeader, BigIntHeader, JSValue, ObjectHeader,
     StringHeader,
 };
@@ -589,7 +589,7 @@ pub(crate) unsafe fn make_null_proto_object(
     names: &[String],
     values: &[JSValue],
 ) -> *mut ObjectHeader {
-    let obj = js_object_alloc_null_proto(0, names.len() as u32);
+    let obj = js_object_alloc_null_proto_ordinary(names.len() as u32);
     set_object_keys_from_names(obj, names);
     for (idx, value) in values.iter().enumerate() {
         js_object_set_field(obj, idx as u32, *value);

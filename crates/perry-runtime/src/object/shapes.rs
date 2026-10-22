@@ -1387,6 +1387,9 @@ pub(crate) fn proto_id_kind(proto_id: u64) -> u32 {
         SHAPE_ID_KIND_MIXED
     } else if proto_id == PROTO_ID_NULL {
         SHAPE_ID_KIND_NULL
+    } else if proto_id == PROTO_ID_RECORD_HELD {
+        // No word, but never a plain answer: the record holds the link.
+        SHAPE_ID_KIND_WORD
     } else if shapes_prototype::proto_id_carries_word(proto_id) {
         SHAPE_ID_KIND_WORD
     } else {
@@ -4636,6 +4639,15 @@ pub(crate) const PROTO_ID_UNIQUE: u64 = 3 << PROTO_ID_TAG_SHIFT;
 /// (a dictionary-kind shape shared by many receivers): `UNIQUE | 0`, which
 /// [`fresh_unique_proto_id`] never hands out (its counter starts at 1).
 pub(crate) const PROTO_ID_PER_OBJECT: u64 = PROTO_ID_UNIQUE;
+/// The prototype identity of a shape whose [[Prototype]] is held by the
+/// receiver's own record rather than named by the shape: a sync generator
+/// instance (`generator_state`), whose resume record's prototype control is
+/// the authority. It carries no identity word, but its ShapeIds are of the
+/// word kind, so every prototype read leaves the plain one-compare answer and
+/// reaches the record ([`linked_object_prototype_word`]). The top of the
+/// `UNIQUE` band below [`PROTO_ID_NULL`]; [`fresh_unique_proto_id`] never
+/// hands it out.
+pub(crate) const PROTO_ID_RECORD_HELD: u64 = PROTO_ID_NULL - 1;
 /// Serial bits a MIXED identity can carry beside a 32-bit class id.
 const PROTO_ID_MIXED_SERIAL_BITS: u32 = 30;
 
@@ -4648,7 +4660,8 @@ pub(crate) fn fresh_unique_proto_id() -> u64 {
     // modulo the band size minus one rather than masking with `...FE`: that
     // mask dropped bit 0, so serials 2k and 2k+1 collapsed onto one identity
     // and two distinct prototypes could share a shape.
-    PROTO_ID_UNIQUE | (n % ((1 << PROTO_ID_TAG_SHIFT) - 1))
+    // The band's two top numbers are PROTO_ID_RECORD_HELD and PROTO_ID_NULL.
+    PROTO_ID_UNIQUE | (n % ((1 << PROTO_ID_TAG_SHIFT) - 2))
 }
 
 /// The class whose vtable an instance of `class_id` inherits through, or 0 for
@@ -4934,6 +4947,9 @@ unsafe fn linked_object_prototype_word(obj: *const crate::object::ObjectHeader) 
     if (PROTO_ID_CLASS..PROTO_ID_MIXED).contains(&proto_id) {
         // CLASS is an implied link, rather than an instance override.
         return 0;
+    }
+    if proto_id == PROTO_ID_RECORD_HELD {
+        return crate::object::generator_record_prototype_word(obj);
     }
     if proto_id != PROTO_ID_NULL {
         return record.prototype_word();

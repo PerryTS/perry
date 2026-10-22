@@ -62,7 +62,10 @@ type Page = Box<PageData>;
 /// and null.
 #[inline]
 pub(crate) fn proto_id_carries_word(proto_id: u64) -> bool {
-    proto_id != PROTO_ID_DEFAULT && proto_id != PROTO_ID_NULL && proto_id != PROTO_ID_PER_OBJECT
+    proto_id != PROTO_ID_DEFAULT
+        && proto_id != PROTO_ID_NULL
+        && proto_id != PROTO_ID_PER_OBJECT
+        && proto_id != super::PROTO_ID_RECORD_HELD
 }
 
 /// The (band, index) of identity `proto_id`'s word: band 0 is indexed by

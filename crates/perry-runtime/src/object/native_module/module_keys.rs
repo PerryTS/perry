@@ -1315,6 +1315,8 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"plugin",
             b"semver",
             b"serve",
+            b"sleep",
+            b"sleepSync",
             b"spawn",
             b"stderr",
             b"stdin",

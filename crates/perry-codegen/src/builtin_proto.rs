@@ -678,3 +678,7 @@ pub(crate) fn emit_guarded_direct(
 #[cfg(test)]
 #[path = "builtin_proto_ir_tests.rs"]
 mod ir_tests;
+
+#[cfg(test)]
+#[path = "untyped_receiver_dispatch_tests.rs"]
+mod untyped_receiver_dispatch_tests;

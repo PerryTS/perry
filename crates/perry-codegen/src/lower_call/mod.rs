@@ -48,7 +48,8 @@ mod closure_analysis;
 mod closure_call_arity_tests;
 mod console_promise;
 pub(crate) use console_promise::{
-    emit_method_args_buffer, lower_split_method_call, try_lower_optional_method_call,
+    emit_method_args_buffer, emit_native_method_str_dispatch, lower_split_method_call,
+    try_lower_optional_method_call,
 };
 /// Rooting and evaluation-order coverage for the `console.*` arms slice 6
 /// repaired (#7649) — see the module header for why these assert on IR.
@@ -103,6 +104,7 @@ mod native_module_rooting_tests;
 mod native_table;
 mod new;
 pub(crate) mod new_alloc;
+mod new_builtin_arms;
 #[cfg(test)]
 mod new_builtin_shadow_tests;
 mod new_ctor_args;

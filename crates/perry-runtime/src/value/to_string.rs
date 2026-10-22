@@ -226,6 +226,20 @@ pub(crate) fn js_jsvalue_to_string_impl(
                     return (branded.to_bits() & 0x0000_FFFF_FFFF_FFFF)
                         as *mut crate::string::StringHeader;
                 }
+                // A plain `Uint8Array` stringifies through
+                // `%TypedArray%.prototype.toString` (the element join); only a
+                // Node `Buffer` overrides `toString` with the UTF-8 decode.
+                if crate::buffer::buffer_brand(ptr as usize)
+                    == Some(crate::buffer::BufferBrand::Uint8Array)
+                {
+                    let joined = unsafe {
+                        crate::object::typed_array_proto_thunks::uint8_array_to_string(
+                            ptr as usize,
+                        )
+                    };
+                    return (joined.to_bits() & 0x0000_FFFF_FFFF_FFFF)
+                        as *mut crate::string::StringHeader;
+                }
                 return crate::buffer::js_buffer_to_string(
                     ptr as *const crate::buffer::BufferHeader,
                     0,

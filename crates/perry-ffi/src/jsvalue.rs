@@ -438,7 +438,7 @@ extern "C" {
     pub fn js_object_set_field(obj: *mut ObjectHeader, field_index: u32, value: JsValue);
 
     fn js_object_alloc(class_id: u32, field_count: u32) -> *mut ObjectHeader;
-    fn js_object_alloc_null_proto(class_id: u32, field_count: u32) -> *mut ObjectHeader;
+    fn js_object_alloc_null_proto_ordinary(field_count: u32) -> *mut ObjectHeader;
     fn js_object_set_keys(obj: *mut ObjectHeader, keys_array: *mut ArrayHeader);
     fn js_object_record_get_by_bytes(
         obj: *const ObjectHeader,
@@ -549,7 +549,7 @@ pub fn alloc_object() -> JsValue {
 /// Use this for Node objects such as request headers where inherited keys must
 /// not be visible. Field order is preserved in the runtime keys array.
 pub fn alloc_null_proto_object(fields: &[(&str, JsValue)]) -> JsValue {
-    let obj = unsafe { js_object_alloc_null_proto(0, fields.len() as u32) };
+    let obj = unsafe { js_object_alloc_null_proto_ordinary(fields.len() as u32) };
     if obj.is_null() {
         return JsValue::UNDEFINED;
     }

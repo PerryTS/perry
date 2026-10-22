@@ -61,23 +61,35 @@ pub(crate) fn forwarded_stub_membership_recoveries() -> u64 {
 /// allocations can sit inside address ranges the page metadata attributes to
 /// an arena generation, and an exclusive branch then never consults the
 /// (exact) malloc registry, leaving live malloc roots unmarked.
+///
+/// The arena term is evaluated first. A union does not depend on the order of
+/// its terms, and every term only reads, so the answer is the same in either
+/// order. The cost is not: this runs once per traced edge of a budgeted cycle,
+/// arena objects are nearly every edge, and the malloc term is a hash probe of
+/// the registry. An arena-first order answers those edges from the page map
+/// and the header itself. A malloc object never satisfies the arena term,
+/// because its header lacks `GC_FLAG_ARENA`, so it still reaches the registry.
+/// The registry is still asked for an address whose page is `Unknown`, which
+/// is where a malloc allocation outside every arena range lives; only the two
+/// header reads are gated on a known page, as before.
 #[inline]
 pub(super) fn classifier_valid_object_start(addr: usize) -> bool {
     if addr < GC_HEADER_SIZE + 0x1000 {
         return false;
     }
     let header = unsafe { header_from_user_ptr(addr as *const u8) };
+    let arena_page = !matches!(
+        crate::arena::classify_heap_generation(addr),
+        crate::arena::HeapGeneration::Unknown
+    );
+    if arena_page && unsafe { super::barrier::plausible_arena_user_ptr_header(header).is_some() } {
+        return true;
+    }
     if super::gc_malloc_header_is_tracked(header) {
         return true;
     }
-    if matches!(
-        crate::arena::classify_heap_generation(addr),
-        crate::arena::HeapGeneration::Unknown
-    ) {
+    if !arena_page {
         return false;
-    }
-    if unsafe { super::barrier::plausible_arena_user_ptr_header(header).is_some() } {
-        return true;
     }
     // #9717: an array-growth forwarding stub is a real censused arena object a
     // live slot can still point directly at (references are never rewritten,
