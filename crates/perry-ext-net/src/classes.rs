@@ -171,7 +171,22 @@ fn rule_to_string(rule: &BlockRule) -> String {
 fn rules_array(rules: &[BlockRule]) -> *mut ArrayHeader {
     let scope = TransientRootScope::enter();
     let mut arr = scope.root_addr(unsafe { js_array_alloc(rules.len() as u32) } as i64);
-    for rule in rules.iter().rev() {
+    // Node's ListRules emits addresses, subnet metadata, then ranges.
+    // Preserve the existing order and duplicates within each category;
+    // this does not model native address-map traversal or alias deduplication.
+    let addresses = rules
+        .iter()
+        .rev()
+        .filter(|rule| matches!(rule, BlockRule::Address(_)));
+    let subnets = rules
+        .iter()
+        .rev()
+        .filter(|rule| matches!(rule, BlockRule::Subnet(_, _)));
+    let ranges = rules
+        .iter()
+        .rev()
+        .filter(|rule| matches!(rule, BlockRule::Range(_, _)));
+    for rule in addresses.chain(subnets).chain(ranges) {
         let s = alloc_string(&rule_to_string(rule));
         let next = unsafe {
             js_array_push(

@@ -508,7 +508,6 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
                 proto_obj,
                 &[
                     ("entries", 0),
-                    ("flatMap", 1),
                     ("keys", 0),
                     ("toLocaleString", 0),
                     ("toReversed", 0),
@@ -606,7 +605,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             );
             // Iteration / search methods: real generic-engine thunks (rest
             // shape — spec `.length` recorded separately below).
-            let arraylike_thunks: [(&str, *const crate::closure::JsFunctionInfo, u32); 14] = [
+            let arraylike_thunks: [(&str, *const crate::closure::JsFunctionInfo, u32); 15] = [
                 (
                     "forEach",
                     crate::fn_info!(native_args array_proto_forEach_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
@@ -620,6 +619,11 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
                 (
                     "filter",
                     crate::fn_info!(native_args array_proto_filter_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                    1,
+                ),
+                (
+                    "flatMap",
+                    crate::fn_info!(native_args array_proto_flatMap_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     1,
                 ),
                 (

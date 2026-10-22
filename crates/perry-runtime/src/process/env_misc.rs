@@ -163,6 +163,8 @@ static KEEP_PROCESS_RUN_EXIT_SEQUENCE: extern "C" fn() = js_process_run_exit_seq
 /// Terminate without running process-wide cleanup after thread-local GC state
 /// has been torn down.
 fn terminate_without_atexit(exit_code: i32) -> ! {
+    #[cfg(any(unix, windows))]
+    crate::source_read_count::report_before_immediate_exit();
     // Use _exit() instead of std::process::exit() to avoid SIGILL during cleanup.
     // std::process::exit() runs atexit handlers and C++ destructors which can trigger
     // illegal instructions when exception handler state (jmp_buf), GC roots, or

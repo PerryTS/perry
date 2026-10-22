@@ -634,6 +634,7 @@ fn try_arraylike_receiver_method(
             | "includes"
             | "slice"
             | "flat"
+            | "flatMap"
             | "at"
             | "join"
             // Generic mutators with dedicated runtime engines (#4597
@@ -670,23 +671,7 @@ fn try_arraylike_receiver_method(
         }));
     }
 
-    // `flatMap` has no generic runtime entry yet; keep the holey
-    // materialize-then-call behavior. `Expr::ArrayFromArrayLikeHoley` keeps
-    // absent indexed keys as holes (vs `Array.from({ length })` creating
-    // present undefined slots), so the flatMap callback doesn't visit holes.
-    // Everything else bails BEFORE lowering the receiver
-    // so unrelated shapes keep the existing member-call behavior.
-    if method != "flatMap" {
-        return Ok(None);
-    }
-    let Some(cb) = rest_args.first() else {
-        return Ok(None);
-    };
-    let array = Box::new(Expr::ArrayFromArrayLikeHoley(Box::new(lower_expr(
-        ctx, receiver,
-    )?)));
-    let callback = Box::new(lower_expr(ctx, &cb.expr)?);
-    Ok(Some(Expr::ArrayFlatMap { array, callback }))
+    Ok(None)
 }
 
 /// #3144: if `init` is a value-read of a builtin prototype method whose

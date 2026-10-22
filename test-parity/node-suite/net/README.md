@@ -58,6 +58,32 @@ remain pending; see `EVIDENCE.md` for the source-only port boundary.
 2026-10-21: T101 recorded three raw-Node-exact half-open targets on NET_F99.
 See the dated self-verification record in `EVIDENCE.md` for its source and limits.
 
+## BlockList rule-category emission
+
+`classes/block-list-json-validation.ts` retains its original validation cases
+and adds all six address/subnet/range insertion permutations, with at most one
+address per new history, plus repeated subnet/range metadata. Direct mutators
+and JSON imports expose both `.rules` and `toJSON()`, membership and independent
+snapshots. Node 26.12.1's native
+[`ListRules`](https://github.com/nodejs/node/blob/v26.12.1/src/node_sockaddr.cc#L756-L786)
+emits addresses, then subnet metadata, then ranges. The shared serializer now
+follows that category order while retaining existing per-category order and
+duplicates. Arbitrary native address-map traversal and repeated or mapped-family
+address deduplication remain unresolved; this is not general BlockList parity.
+
+```sh
+./run_parity_tests.sh --suite node-suite --module net --filter node-suite/net/classes/block-list-json-validation
+```
+
+Use the full fixture ID: the shorter `block-list-json` substring also selects
+this validation fixture.
+
+The category-only repair has coherent candidate-build and paired functional
+verification evidence: four self-verification calls exited 0, and independent
+baseline/candidate calls exited 1/1/1/0 and 0/0/0/0 respectively, with every
+candidate output raw-Node-exact. These results are bound to the measured
+candidate, not a full NET or latest-main certification.
+
 ## Successful end overloads
 
 `connection/end-callback-order.ts` retains the original successful shutdown

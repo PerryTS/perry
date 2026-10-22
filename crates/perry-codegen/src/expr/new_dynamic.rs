@@ -54,6 +54,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // runtime-construct fallback (or a built-in non-constructor) renders
             // a location. No-op for resolved user classes (no throw fires).
             crate::expr::calls::emit_call_location_at(ctx, *byte_offset);
+            // A chunked literal birth: the same birth, then its chunk calls.
+            if let Some(calls) = crate::expr::literal_chunks::chunk_calls(args) {
+                return crate::expr::literal_chunks::lower_chunked_birth(ctx, calls?, |ctx| {
+                    lower_new(ctx, class_name, args, *cap_args_appended)
+                });
+            }
             lower_new(ctx, class_name, args, *cap_args_appended)
         }
 

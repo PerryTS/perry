@@ -958,17 +958,22 @@ pub(crate) fn build_yield_star_throw_routes(
         let protocol_body = if route.is_async {
             vec![read_method, no_method, call_throw, obj_check, set_state]
         } else {
-            vec![
-                Stmt::Expr(Expr::LocalSet(
-                    route.result_id,
-                    Box::new(sync_delegate_call(
-                        route,
-                        "js_iterator_delegate_throw",
-                        throw_param_id,
-                    )),
+            let mut body = vec![Stmt::Expr(Expr::LocalSet(
+                route.result_id,
+                Box::new(sync_delegate_call(
+                    route,
+                    "js_iterator_delegate_throw",
+                    throw_param_id,
                 )),
-                set_state,
-            ]
+            ))];
+            // The drive loop now holds an inner result object.
+            body.extend(
+                route
+                    .kind_id
+                    .map(|kind| Stmt::Expr(Expr::LocalSet(kind, Box::new(Expr::Number(2.0))))),
+            );
+            body.push(set_state);
+            body
         };
         if !route.is_async && catches.is_empty() && finallys.is_empty() {
             branches.push((in_interval, protocol_body));
@@ -1008,6 +1013,7 @@ mod sync_delegation_result_tests {
             suspend_state_hi: 4,
             iter_id: 1,
             result_id: 2,
+            kind_id: Some(8),
             resume_state: 1,
         };
         let mut next_local_id = 10;
@@ -1089,6 +1095,7 @@ mod sync_delegation_result_tests {
             suspend_state_hi: 4,
             iter_id: 1,
             result_id: 2,
+            kind_id: Some(8),
             resume_state: 1,
         };
         for name in ["js_iterator_delegate_return", "js_iterator_delegate_throw"] {

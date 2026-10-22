@@ -36,6 +36,7 @@ where
         | Expr::PodLayoutAlignOf { .. }
         | Expr::PodLayoutOffsetOf { .. }
         | Expr::NewTarget
+        | Expr::LiteralChunkObject
         | Expr::ClassMethodHome { .. }
         | Expr::ClassRef(_)
         | Expr::This
@@ -905,6 +906,15 @@ where
             for a in args {
                 f(a);
             }
+        }
+        Expr::LiteralChunks(calls) => {
+            for c in calls {
+                f(c);
+            }
+        }
+        Expr::LiteralSlotInit { object, value, .. } => {
+            f(value);
+            f(object);
         }
         Expr::Call { callee, args, .. } => {
             f(callee);

@@ -4517,9 +4517,8 @@ pub fn run_with_parse_cache(
                                 imported_class.namespace = Some(local.clone());
                                 imported_classes.push(imported_class);
                             }
-                            if let Some(members) = exported_enums.get(&key) {
-                                imported_enums.push((export_name.clone(), members.clone()));
-                            }
+                            // Enums likewise: `local.Kind.Value` is a runtime
+                            // property read, so no `Kind` enum binding (#13030).
                         }
                     }
                     // Namespace aliases also participate in
@@ -5013,9 +5012,6 @@ pub fn run_with_parse_cache(
                                     );
                                     imported_class.namespace = Some(local_name.clone());
                                     imported_classes.push(imported_class);
-                                }
-                                if let Some(members) = exported_enums.get(&key) {
-                                    imported_enums.push((export_name.clone(), members.clone()));
                                 }
                             }
                             // A named namespace re-export can itself expose

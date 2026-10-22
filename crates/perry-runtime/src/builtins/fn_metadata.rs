@@ -407,11 +407,8 @@ pub(crate) unsafe fn function_name_image(
         return None;
     }
     let base = info.cast::<u8>();
-    let source_tail =
-        body.flags & crate::codegen_abi::FN_HAS_SOURCE != 0 && !body.versioned_code.is_null();
-    let tail = base.add(
-        std::mem::size_of::<crate::closure::JsFunctionInfo>() + if source_tail { 8 } else { 0 },
-    );
+    let source_tail = crate::codegen_abi::function_source_tail_size(body);
+    let tail = base.add(std::mem::size_of::<crate::closure::JsFunctionInfo>() + source_tail);
     let bytes: *const u8 = descriptor_pointer(base, tail.cast::<i32>().read_unaligned());
     Some(bytes.sub(std::mem::size_of::<crate::StringHeader>()).cast())
 }
@@ -433,11 +430,8 @@ pub(crate) unsafe fn function_name_for_closure(
     let info = closure.info.as_ref()?;
     if info.flags & crate::codegen_abi::FN_HAS_NAME != 0 {
         let base = closure.info.cast::<u8>();
-        let source_tail =
-            info.flags & crate::codegen_abi::FN_HAS_SOURCE != 0 && !info.versioned_code.is_null();
-        let tail = base.add(
-            std::mem::size_of::<crate::closure::JsFunctionInfo>() + if source_tail { 8 } else { 0 },
-        );
+        let source_tail = crate::codegen_abi::function_source_tail_size(info);
+        let tail = base.add(std::mem::size_of::<crate::closure::JsFunctionInfo>() + source_tail);
         let delta = tail.cast::<i32>().read_unaligned();
         let len = tail.add(4).cast::<u32>().read_unaligned() as usize;
         // Compiler names originate as UTF-8 strings in immutable image bytes.
@@ -683,10 +677,36 @@ fn retained_source_for_info(info: &crate::closure::JsFunctionInfo) -> Option<Str
     if info.flags & crate::codegen_abi::FN_HAS_SOURCE == 0 {
         return None;
     }
+    crate::source_read_count::note(crate::source_read_count::ReadKind::Info);
     // Most infos pack the range into the otherwise idle versioned-clone mask.
     // Only a body that also has a versioned clone uses the optional tail.
     unsafe {
         let base = info as *const crate::closure::JsFunctionInfo as *const u8;
+        if info.flags & crate::codegen_abi::FN_SOURCE_BLOCKS != 0 {
+            crate::source_read_count::note(crate::source_read_count::ReadKind::Framed);
+            let (record, byte_len) = if info.versioned_code.is_null() {
+                (
+                    std::ptr::addr_of!(info.versioned_boxed_mask).cast::<u8>(),
+                    info.versioned_captures as usize,
+                )
+            } else {
+                (
+                    base.add(std::mem::size_of_val(info)),
+                    (base.add(std::mem::size_of_val(info) + 8).cast::<u32>()).read_unaligned()
+                        as usize,
+                )
+            };
+            let displacement = record.cast::<i32>().read_unaligned() as isize;
+            let offset = record.add(4).cast::<u32>().read_unaligned() as usize;
+            if byte_len == 0 {
+                return None;
+            }
+            let bytes =
+                super::retained_source::decode_range(base.offset(displacement), offset, byte_len);
+            // Source ranges originated as &str; block boundaries never become
+            // str boundaries, and no lossy conversion touches their bytes.
+            return Some(String::from_utf8_unchecked(bytes));
+        }
         let (displacement, byte_len) = if info.versioned_code.is_null() {
             (
                 info.versioned_boxed_mask as i64 as isize,
@@ -791,7 +811,7 @@ mod descriptor_name_tests {
     #[repr(C)]
     struct Image {
         info: crate::closure::JsFunctionInfo,
-        tail: [i32; 4],
+        tail: [i32; 6],
         name: [u8; 5],
     }
     extern "C" fn body(_: *const crate::closure::ClosureHeader, _: crate::closure::JsThis) -> f64 {
@@ -799,20 +819,23 @@ mod descriptor_name_tests {
     }
     #[test]
     fn name_range_is_read_after_the_optional_source_range() {
-        for source_tail in [false, true] {
+        for source_tail in [0usize, 8, 16] {
             let mut image = Image {
                 info: crate::closure::JsFunctionInfo::of(
                     body as crate::codegen_abi::JsBody0<crate::closure::ClosureHeader>,
                 ),
-                tail: [0; 4],
+                tail: [0; 6],
                 name: *b"named",
             };
             image.info.flags |= crate::codegen_abi::FN_HAS_NAME;
-            if source_tail {
+            if source_tail != 0 {
                 image.info.flags |= crate::codegen_abi::FN_HAS_SOURCE;
+                if source_tail == 16 {
+                    image.info.flags |= crate::codegen_abi::FN_SOURCE_BLOCKS;
+                }
                 image.info.versioned_code = body as *const u8;
             }
-            let slot = if source_tail { 2 } else { 0 };
+            let slot = source_tail / 4;
             image.tail[slot] =
                 (image.name.as_ptr() as isize - &image.info as *const _ as isize) as i32;
             image.tail[slot + 1] = 5;
@@ -1132,5 +1155,61 @@ mod tests {
         };
         assert_eq!(find(key_image).as_deref(), Some("imageFrame"));
         assert_eq!(find(key_owned).as_deref(), Some("ownedFrame"));
+    }
+}
+
+#[cfg(test)]
+mod compressed_source_tests {
+    use super::*;
+    #[repr(C)]
+    struct Image {
+        info: crate::closure::JsFunctionInfo,
+        tail: [u32; 4],
+        frame: [u8; 128],
+    }
+    extern "C" fn body(_: *const crate::closure::ClosureHeader, _: crate::closure::JsThis) -> f64 {
+        0.0
+    }
+    #[test]
+    fn info_reads_the_same_nested_utf8_range_with_and_without_a_clone() {
+        let source = "function nested() { /*世界😀*/ return '\\ud800'; }";
+        let raw = format!("xx{source}tail");
+        for versioned in [false, true] {
+            let mut image = Image {
+                info: crate::closure::JsFunctionInfo::of(
+                    body as crate::codegen_abi::JsBody0<crate::closure::ClosureHeader>,
+                ),
+                tail: [0; 4],
+                frame: [0; 128],
+            };
+            image.info.flags |=
+                crate::codegen_abi::FN_HAS_SOURCE | crate::codegen_abi::FN_SOURCE_BLOCKS;
+            let len = raw.len() as u16;
+            image.frame[..4].copy_from_slice(&(u32::from(len) + 5).to_le_bytes());
+            image.frame[4..8].copy_from_slice(&u32::from(len).to_le_bytes());
+            image.frame[8] = 1;
+            image.frame[9..11].copy_from_slice(&len.to_le_bytes());
+            image.frame[11..13].copy_from_slice(&(!len).to_le_bytes());
+            image.frame[13..13 + raw.len()].copy_from_slice(raw.as_bytes());
+            let delta = (image.frame.as_ptr() as isize - &image.info as *const _ as isize) as i32;
+            if versioned {
+                image.info.versioned_code = body as *const u8;
+                image.tail = [delta as u32, 2, source.len() as u32, 0];
+            } else {
+                let mut words = [0; 8];
+                words[..4].copy_from_slice(&delta.to_ne_bytes());
+                words[4..].copy_from_slice(&2u32.to_ne_bytes());
+                image.info.versioned_boxed_mask = u64::from_ne_bytes(words);
+                image.info.versioned_captures = source.len() as u32;
+            }
+            assert_eq!(
+                retained_source_for_info(&image.info).as_deref(),
+                Some(source)
+            );
+            assert_eq!(
+                crate::codegen_abi::function_source_tail_size(&image.info),
+                if versioned { 16 } else { 0 }
+            );
+        }
     }
 }

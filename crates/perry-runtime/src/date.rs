@@ -158,6 +158,24 @@ pub fn is_date_value(value: f64) -> bool {
     is_date_cell_addr((bits & NANBOX_PTR_MASK) as usize)
 }
 
+/// The [[Prototype]] of a Date cell: the prototype recorded on the cell (an
+/// instance of `class D extends Date` links `D.prototype`; `setPrototypeOf`
+/// records its target, `null` included), else the realm's `Date.prototype`.
+/// Reads the cell's own record only, so property lookup can use it without
+/// re-entering the generic prototype resolution.
+pub fn date_cell_prototype(value: f64) -> f64 {
+    let addr = (value.to_bits() & NANBOX_PTR_MASK) as usize;
+    if let Some(bits) = crate::object::prototype_chain::object_static_prototype(addr) {
+        return f64::from_bits(bits);
+    }
+    let ctor = crate::object::js_get_global_this_builtin_value(b"Date".as_ptr(), 4);
+    let ctor_ptr = crate::value::js_nanbox_get_pointer(ctor) as usize;
+    if ctor_ptr == 0 {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype")
+}
+
 /// Read the timestamp out of a Date value. If `value` is a `DateCell`
 /// pointer, dereference it; otherwise (a raw numeric timestamp handed to a
 /// Date method directly — e.g. via `Date.UTC()` or a legacy path) pass it

@@ -480,6 +480,7 @@ mod tests {
     /// It must now convert to its UTF-8 bytes.
     #[test]
     fn socket_bytes_handles_sso_short_string() {
+        let _serial = crate::test_serial();
         let bytes = unsafe { jsvalue_to_socket_bytes(sso(b"hi")) };
         assert_eq!(
             bytes.as_deref(),
@@ -501,6 +502,7 @@ mod tests {
     /// must not regress the long-string path.
     #[test]
     fn socket_bytes_handles_heap_string() {
+        let _serial = crate::test_serial();
         let s = alloc_string("longer-than-sso");
         let v = JsValue::from_string_ptr(s.as_raw());
         let bytes = unsafe { jsvalue_to_socket_bytes(f64::from_bits(v.bits())) };
@@ -514,6 +516,7 @@ mod tests {
     /// POINTER_TAG used to feed closure-header NUL bytes to `TcpListener::bind`.
     #[test]
     fn address_string_boundary_accepts_strings_and_rejects_pointer_storage() {
+        let _serial = crate::test_serial();
         let host = alloc_string("127.0.0.1");
         let heap_string = f64::from_bits(JsValue::from_string_ptr(host.as_raw()).bits());
         let converted = unsafe { jsvalue_to_owned_string(heap_string) };
@@ -544,6 +547,7 @@ mod tests {
     /// reintroducing the bug while widening the string branch.
     #[test]
     fn socket_bytes_rejects_non_buffer_object() {
+        let _serial = crate::test_serial();
         perry_ffi::initialize_runtime_fixture();
         let obj_f64 = unsafe { build_error_object("boom") };
         assert!(JsValue::from_bits(obj_f64.to_bits()).is_pointer());

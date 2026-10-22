@@ -898,8 +898,55 @@ impl<'a> Gen<'a> {
             Expr::New {
                 class_name, args, ..
             } => {
+                // A chunked literal birth: its chunk calls receive the object
+                // being born, whose chunked slots they initialize.
+                let chunked = args.iter().any(|a| matches!(a, Expr::LiteralChunks(_)));
+                if chunked {
+                    let x = self.tmp("literal chunk object");
+                    self.chunk_objects.push(x);
+                }
                 let a = self.evaluate_all(fx, args);
-                self.new_named(fx, class_name, a, vec![])
+                let x = if chunked {
+                    self.chunk_objects.pop()
+                } else {
+                    None
+                };
+                let born = self.new_named(fx, class_name, a, vec![]);
+                if let Some(x) = x {
+                    self.m.edge(born, x);
+                }
+                born
+            }
+            // The chunked slots' values reach the object through the chunk
+            // functions' `LiteralSlotInit` stores, not through the argument.
+            Expr::LiteralChunks(calls) => {
+                for c in calls {
+                    self.expr(fx, c);
+                }
+                self.tmp("literal chunk slot")
+            }
+            Expr::LiteralChunkObject => match self.chunk_objects.last() {
+                Some(&x) => x,
+                None => self.m.top_val("literal chunk object outside its birth"),
+            },
+            // A define of a slot of an unpublished literal birth: a birth
+            // initializer, like the literal's own positional stores.
+            Expr::LiteralSlotInit {
+                object, key, value, ..
+            } => {
+                let o = self.expr(fx, object);
+                let v = self.expr(fx, value);
+                let a = self.m.atom(key);
+                self.store(
+                    fx,
+                    o,
+                    Key::Named(a),
+                    v,
+                    format!(".{key} (literal chunk)"),
+                    None,
+                    true,
+                );
+                self.prim_node(prim::UNDEF)
             }
             Expr::NewDynamic { callee, args, .. } => {
                 let c = self.expr(fx, callee);

@@ -74,10 +74,9 @@ unsafe fn constructor_layout(closure: *const ClosureHeader) -> Option<&'static C
     if info.flags & crate::codegen_abi::FN_HAS_CONSTRUCTOR_LAYOUT == 0 {
         return None;
     }
-    let source =
-        info.flags & crate::codegen_abi::FN_HAS_SOURCE != 0 && !info.versioned_code.is_null();
+    let source = crate::codegen_abi::function_source_tail_size(info);
     let name = info.flags & crate::codegen_abi::FN_HAS_NAME != 0;
-    let offset = std::mem::size_of_val(info) + 8 * (usize::from(source) + usize::from(name));
+    let offset = std::mem::size_of_val(info) + source + 8 * usize::from(name);
     let ptr = (*closure)
         .info
         .cast::<u8>()

@@ -223,6 +223,7 @@ pub(crate) fn function_source_for_closure(closure: usize) -> String {
     if let Some(class_id) = crate::object::class_value::class_closure_id(closure) {
         return crate::object::class_ref_to_string(class_id).into_owned();
     }
+    crate::source_read_count::note(crate::source_read_count::ReadKind::Function);
     compiled_function_source_for_closure(closure).unwrap_or_else(|| {
         let closure_ptr = closure as *const ClosureHeader;
         let raw_source_body = unsafe {

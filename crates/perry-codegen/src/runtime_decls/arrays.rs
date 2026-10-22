@@ -307,6 +307,7 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
         "js_arraylike_findIndex",
         "js_arraylike_findLast",
         "js_arraylike_findLastIndex",
+        "js_arraylike_flatMap",
     ] {
         module.declare_function(f, DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
     }
@@ -372,10 +373,11 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
         &[DOUBLE, DOUBLE, DOUBLE],
     );
     module.declare_function(
-        "js_iterator_delegate_next",
+        "js_iterator_delegate_step",
         DOUBLE,
         &[DOUBLE, DOUBLE, DOUBLE],
     );
+    module.declare_function("js_iterator_delegate_kind", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_iterator_delegate_return", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_iterator_delegate_throw", DOUBLE, &[DOUBLE, DOUBLE]);
     // #10524: `const [a, b] = <untyped>` — 0 when the source is an ordinary

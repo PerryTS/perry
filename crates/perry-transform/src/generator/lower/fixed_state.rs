@@ -114,6 +114,7 @@ pub(super) fn state_local_ids(
     }
     for route in delegations {
         force_persistent.extend([route.iter_id, route.result_id]);
+        force_persistent.extend(route.kind_id);
     }
     for state in states {
         let declarations: Vec<_> = collect_hoisted_vars(&state.body)
@@ -147,9 +148,154 @@ pub(super) fn state_local_ids(
     declared
 }
 
+/// The resume body's step ABI. Every return hands back the raw step value and
+/// first records its kind in the record's step control (`step_id`, capture 4):
+/// a `{value, done}` iter-result the transform built becomes `step = done;
+/// return value` (0 yield, 1 completion), and any other returned value is an
+/// inner result object re-yielded as-is (2). A return already preceded by its
+/// own step write (a `yield*` re-yield, which takes its pull's kind) is kept.
+/// The runtime boundary materializes an IteratorResult only for a public
+/// `next`/`return`/`throw` call; direct consumers read the pair.
+/// Nested closures are not entered: their returns are their own.
+pub(super) fn record_step_kinds(stmts: &mut Vec<Stmt>, step_id: LocalId) {
+    fn transform_iter_result(expr: &Expr) -> Option<(Expr, bool)> {
+        let Expr::Object(props) = expr else {
+            return None;
+        };
+        match props.as_slice() {
+            [(value_key, value), (done_key, Expr::Bool(done))]
+                if value_key == "value" && done_key == "done" =>
+            {
+                Some((value.clone(), *done))
+            }
+            _ => None,
+        }
+    }
+    fn set_step(step_id: LocalId, kind: f64) -> Stmt {
+        Stmt::Expr(Expr::LocalSet(step_id, Box::new(Expr::Number(kind))))
+    }
+    let mut out: Vec<Stmt> = Vec::with_capacity(stmts.len());
+    for mut stmt in stmts.drain(..) {
+        match &mut stmt {
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                record_step_kinds(then_branch, step_id);
+                if let Some(else_branch) = else_branch {
+                    record_step_kinds(else_branch, step_id);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+                record_step_kinds(body, step_id)
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                record_step_kinds(body, step_id);
+                if let Some(catch) = catch {
+                    record_step_kinds(&mut catch.body, step_id);
+                }
+                if let Some(finally) = finally {
+                    record_step_kinds(finally, step_id);
+                }
+            }
+            Stmt::Switch { cases, .. } => {
+                for case in cases.iter_mut() {
+                    record_step_kinds(&mut case.body, step_id);
+                }
+            }
+            Stmt::Labeled { body, .. } => {
+                let mut wrapped = vec![std::mem::replace(body.as_mut(), Stmt::Break)];
+                record_step_kinds(&mut wrapped, step_id);
+                **body = if wrapped.len() == 1 {
+                    wrapped.pop().unwrap()
+                } else {
+                    Stmt::If {
+                        condition: Expr::Bool(true),
+                        then_branch: wrapped,
+                        else_branch: None,
+                    }
+                };
+            }
+            _ => {}
+        }
+        let already_recorded = matches!(
+            out.last(),
+            Some(Stmt::Expr(Expr::LocalSet(id, _))) if *id == step_id
+        );
+        match stmt {
+            Stmt::Return(Some(expr)) if !already_recorded => match transform_iter_result(&expr) {
+                Some((value, done)) => {
+                    out.push(set_step(step_id, if done { 1.0 } else { 0.0 }));
+                    out.push(Stmt::Return(Some(value)));
+                }
+                None => {
+                    out.push(set_step(step_id, 2.0));
+                    out.push(Stmt::Return(Some(expr)));
+                }
+            },
+            Stmt::Return(None) if !already_recorded => {
+                out.push(set_step(step_id, 2.0));
+                out.push(Stmt::Return(None));
+            }
+            other => out.push(other),
+        }
+    }
+    *stmts = out;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn generator_resume_returns_record_their_step_kind() {
+        let step = 9;
+        let result = |value, done| {
+            Expr::Object(vec![
+                ("value".to_string(), value),
+                ("done".to_string(), Expr::Bool(done)),
+            ])
+        };
+        let mut body = vec![
+            Stmt::If {
+                condition: Expr::LocalGet(1),
+                then_branch: vec![Stmt::Return(Some(result(Expr::Number(1.0), false)))],
+                else_branch: Some(vec![Stmt::Return(Some(Expr::LocalGet(2)))]),
+            },
+            Stmt::Expr(Expr::LocalSet(step, Box::new(Expr::LocalGet(3)))),
+            Stmt::Return(Some(Expr::LocalGet(4))),
+            Stmt::Return(Some(result(Expr::Undefined, true))),
+        ];
+        record_step_kinds(&mut body, step);
+        let kind = |stmt: &Stmt| match stmt {
+            Stmt::Expr(Expr::LocalSet(id, kind)) if *id == step => match kind.as_ref() {
+                Expr::Number(n) => Some(*n),
+                _ => None,
+            },
+            _ => None,
+        };
+        let Stmt::If {
+            then_branch,
+            else_branch: Some(else_branch),
+            ..
+        } = &body[0]
+        else {
+            panic!("if kept")
+        };
+        assert_eq!(kind(&then_branch[0]), Some(0.0));
+        assert!(matches!(&then_branch[1], Stmt::Return(Some(Expr::Number(n))) if *n == 1.0));
+        assert_eq!(kind(&else_branch[0]), Some(2.0));
+        assert!(matches!(&body[1], Stmt::Expr(Expr::LocalSet(id, _)) if *id == step));
+        assert!(matches!(&body[2], Stmt::Return(Some(Expr::LocalGet(4)))));
+        assert_eq!(kind(&body[3]), Some(1.0));
+        assert!(matches!(&body[4], Stmt::Return(Some(Expr::Undefined))));
+        assert_eq!(body.len(), 5);
+    }
 
     #[test]
     fn generator_one_state_locals_do_not_displace_shared_or_cross_state_storage() {
@@ -167,7 +313,7 @@ mod tests {
                 exit: StateExit::Yield {
                     value: Expr::LocalGet(1),
                     next_state: 1,
-                    passthrough: false,
+                    passthrough: None,
                 },
             },
             State {
@@ -191,7 +337,7 @@ mod tests {
                 exit: StateExit::Yield {
                     value: Expr::Number(1.0),
                     next_state: 1,
-                    passthrough: false,
+                    passthrough: None,
                 },
             },
             State {

@@ -1881,6 +1881,9 @@ POLL_CAPABLE_RUNTIME = {
     "js_string_from_char_code_array",
     "js_string_index_get_boxed", "js_string_substr",
     "js_super_construct_apply",
+    # Class-chain form of the above: it runs the parent constructor through
+    # js_class_value_super_construct_site, i.e. user JS.
+    "js_class_super_construct_apply",
     "js_vm_synthetic_module_new",
     "js_writable_stream_new",
     # The third wave, reported by `--audit-poll-reach` and unfixed long enough

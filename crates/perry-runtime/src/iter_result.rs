@@ -62,34 +62,6 @@ unsafe fn init_iter_result(
     crate::js_nanbox_pointer(object as i64)
 }
 
-/// IteratorComplete / IteratorValue of a result object still on the shape it
-/// was born with by [`build_iter_result_ordered`] (value, done): that ShapeId
-/// proves both own data slots, so read them in place. An edited result or any
-/// other object answers `None` and takes the ordinary [[Get]] of each member.
-#[inline]
-pub(crate) unsafe fn born_iter_result_pair(result: f64) -> Option<(f64, bool)> {
-    let header = crate::value::addr_class::pointer_value_header(result.to_bits())?;
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT {
-        return None;
-    }
-    let obj = (result.to_bits() & crate::value::POINTER_MASK) as *const crate::object::ObjectHeader;
-    let id = crate::object::layout_desc::load_layout_id(std::ptr::addr_of!(
-        crate::object::runtime_layouts::ITERATOR_RESULT
-    ));
-    if crate::object::layout_desc::registered_layout_id(id).is_none()
-        || crate::object::shapes::object_shape_stamp(obj) != id
-    {
-        return None;
-    }
-    let fields = obj
-        .cast::<u8>()
-        .add(std::mem::size_of::<crate::object::ObjectHeader>())
-        .cast::<u64>();
-    let value = f64::from_bits(*fields);
-    let done = crate::value::js_is_truthy(f64::from_bits(*fields.add(1))) != 0;
-    Some((value, done))
-}
-
 #[inline]
 pub unsafe fn make_iter_result(value: JSValue, done: bool) -> f64 {
     build_iter_result_ordered(value, JSValue::bool(done), IterResultOrder::ValueDone)

@@ -1593,6 +1593,9 @@ impl<'a> Gen<'a> {
             | Expr::Object(..)
             | Expr::ObjectSpread { .. }
             | Expr::ObjectAssign { .. }
+            | Expr::LiteralChunks(..)
+            | Expr::LiteralChunkObject
+            | Expr::LiteralSlotInit { .. }
             | Expr::Array(..)
             | Expr::ArraySpread(..)
             | Expr::Conditional { .. }

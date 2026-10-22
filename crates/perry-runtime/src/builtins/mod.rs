@@ -109,6 +109,7 @@ mod console;
 // #9188: the function-name / function-source sidecar registries, split out
 // of `formatting` when the copying and borrowing entry points were separated.
 mod fn_metadata;
+mod retained_source;
 pub(crate) use fn_metadata::function_registries_census;
 mod formatting;
 mod globals;

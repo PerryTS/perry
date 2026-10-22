@@ -32,7 +32,12 @@ pub struct StoredEntry {
 #[derive(Debug, Clone, Default)]
 pub struct StoredModule {
     pub module_name: String,
+    /// Logical (decoded) bytes: the raw pool, then the compressed pool's
+    /// decoded bytes. Owner offsets index this space.
     pub blob_len: usize,
+    /// Bytes the module's pools occupy in `.perry_src` (compressed frames as
+    /// stored).
+    pub physical_len: usize,
     pub entries: Vec<StoredEntry>,
 }
 
@@ -70,10 +75,16 @@ pub fn source_hash(bytes: &[u8]) -> u64 {
 }
 
 /// Codegen: one module's blob and the ranges its owners occupy.
-pub(crate) fn record_module(module_prefix: &str, blob_len: usize, entries: Vec<StoredEntry>) {
+pub(crate) fn record_module(
+    module_prefix: &str,
+    blob_len: usize,
+    physical_len: usize,
+    entries: Vec<StoredEntry>,
+) {
     let mut stored = STORED.lock().unwrap_or_else(|e| e.into_inner());
     let m = stored.entry(module_prefix.to_string()).or_default();
     m.blob_len = blob_len;
+    m.physical_len = physical_len;
     m.entries = entries;
 }
 

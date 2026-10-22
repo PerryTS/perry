@@ -126,8 +126,12 @@ fn sync_yield_star_pulls_through_runtime_and_reyields_inner_result() {
     transform_generators(&mut module);
     let body = format!("{:?}", module.functions[0].body);
     assert!(
-        body.contains("js_iterator_delegate_next"),
-        "sync yield* must pull through the runtime protocol operation"
+        body.contains("js_iterator_delegate_step") && body.contains("js_iterator_delegate_kind"),
+        "sync yield* must pull through the runtime protocol operation and read its step kind"
+    );
+    assert!(
+        body.contains("__gen_step"),
+        "the fixed-state record owns a step-kind control"
     );
     assert!(
         !body.contains("property: \"call\""),
@@ -145,5 +149,6 @@ fn sync_yield_star_pulls_through_runtime_and_reyields_inner_result() {
         .push(async_generator_with_delegations(1, 1));
     transform_generators(&mut module);
     let body = format!("{:?}", module.functions[0].body);
-    assert!(!body.contains("js_iterator_delegate_next"));
+    assert!(!body.contains("js_iterator_delegate_step"));
+    assert!(!body.contains("js_iterator_delegate_kind"));
 }

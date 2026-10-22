@@ -67,6 +67,19 @@ fn optional_callback(args: *const crate::array::ArrayHeader, start: u32) -> f64 
     undefined()
 }
 
+// These helpers have one fixed callback position, unlike cursorTo's overloads.
+fn validated_callback(args: *const crate::array::ArrayHeader, index: u32) -> f64 {
+    let callback = arg(args, index);
+    if !JSValue::from_bits(callback.to_bits()).is_undefined() && !is_callable(callback) {
+        let message = format!(
+            "The \"callback\" argument must be of type function. Received {}",
+            crate::fs::validate::describe_received(callback)
+        );
+        crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    }
+    callback
+}
+
 fn write_escape(stream: f64, bytes: &[u8], callback: f64) -> f64 {
     let Some(raw) = raw_ptr_from_value(stream) else {
         return f64::from_bits(TAG_FALSE);
@@ -85,18 +98,16 @@ fn ansi_clear_line(dir: f64) -> &'static [u8] {
 
 #[no_mangle]
 pub extern "C" fn js_readline_clear_line_args(args: *const crate::array::ArrayHeader) -> f64 {
-    write_escape(
-        arg(args, 0),
-        ansi_clear_line(arg(args, 1)),
-        optional_callback(args, 2),
-    )
+    let callback = validated_callback(args, 2);
+    write_escape(arg(args, 0), ansi_clear_line(arg(args, 1)), callback)
 }
 
 #[no_mangle]
 pub extern "C" fn js_readline_clear_screen_down_args(
     args: *const crate::array::ArrayHeader,
 ) -> f64 {
-    write_escape(arg(args, 0), b"\x1b[0J", optional_callback(args, 1))
+    let callback = validated_callback(args, 1);
+    write_escape(arg(args, 0), b"\x1b[0J", callback)
 }
 
 #[no_mangle]
@@ -119,6 +130,7 @@ pub extern "C" fn js_readline_cursor_to_args(args: *const crate::array::ArrayHea
 
 #[no_mangle]
 pub extern "C" fn js_readline_move_cursor_args(args: *const crate::array::ArrayHeader) -> f64 {
+    let callback = validated_callback(args, 3);
     let dx = number_arg(arg(args, 1), 0.0) as i32;
     let dy = number_arg(arg(args, 2), 0.0) as i32;
     let mut seq = String::new();
@@ -132,7 +144,7 @@ pub extern "C" fn js_readline_move_cursor_args(args: *const crate::array::ArrayH
     } else if dy > 0 {
         seq.push_str(&format!("\x1b[{dy}B"));
     }
-    write_escape(arg(args, 0), seq.as_bytes(), optional_callback(args, 3))
+    write_escape(arg(args, 0), seq.as_bytes(), callback)
 }
 
 fn string_bytes(value: f64) -> Vec<u8> {

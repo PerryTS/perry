@@ -43,7 +43,8 @@ pub(crate) unsafe fn try_construct(
     receiver.set_nanbox_f64(result);
     // The entry takes the already bound derived this. It neither forwards a
     // fixed parameter band nor replays any superclass field initializer.
-    let initialize: unsafe extern "C-unwind" fn(f64) -> f64 = std::mem::transmute(initializer);
+    let initialize =
+        crate::closure::body_call::js_bare_body_fn_unwind!(initializer as *const u8; a0);
     initialize(receiver.get_nanbox_f64());
     Some(receiver.get_nanbox_f64())
 }

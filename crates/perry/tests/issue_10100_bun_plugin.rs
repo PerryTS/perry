@@ -3,6 +3,14 @@
 use std::process::Command;
 
 fn compile_and_run(source: &str) -> String {
+    let (stdout, stderr) = compile_and_run_with_stderr(source);
+    // Registration is not observable (no module loads at run time), so it
+    // must not print a stub warning that a terminal UI would paint over.
+    assert_eq!(stderr, "", "Bun.plugin registration wrote to stderr");
+    stdout
+}
+
+fn compile_and_run_with_stderr(source: &str) -> (String, String) {
     let dir = tempfile::tempdir().unwrap();
     let entry = dir.path().join("main.ts");
     let binary = dir
@@ -34,9 +42,12 @@ fn compile_and_run(source: &str) -> String {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    String::from_utf8(output.stdout)
-        .unwrap()
-        .replace("\r\n", "\n")
+    (
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .replace("\r\n", "\n"),
+        String::from_utf8_lossy(&output.stderr).replace("\r\n", "\n"),
+    )
 }
 
 #[test]

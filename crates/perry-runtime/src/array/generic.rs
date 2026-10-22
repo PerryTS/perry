@@ -696,6 +696,45 @@ pub extern "C" fn js_arraylike_filter(recv: f64, cb: f64, this_arg: f64) -> f64 
     result_h.with_mut_ptr::<ArrayHeader, _>(nanbox_arr)
 }
 
+/// Generic `Array.prototype.flatMap.call(receiver, mapper, thisArg)`
+/// (ECMA-262 §23.1.3.11): ToObject, LengthOfArrayLike, then for every present
+/// index the mapper's result is flattened one level into a fresh array. This is
+/// what a method call reaches when the receiver is not a plain array, e.g. a
+/// Proxy over one (Solid's store drafts); it used to be a noop thunk that
+/// returned a non-array.
+#[no_mangle]
+#[allow(non_snake_case)] // mirrors the JS API surface
+pub extern "C" fn js_arraylike_flatMap(recv: f64, cb: f64, this_arg: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let this_h = scope.root_nanbox_f64(this_arg);
+    let cb_h = scope.root_nanbox_f64(cb);
+    let recv_h = scope.root_nanbox_f64(to_object(recv));
+    // LengthOfArrayLike before IsCallable, as for the other callback methods.
+    let len = al_length(recv_h.get_nanbox_f64());
+    let cb_site = crate::closure::DirectCall3::resolve(callable(cb_h.get_nanbox_f64()));
+    let result_h = scope.root_raw_mut_ptr(js_array_alloc(0));
+    let mapped_h = scope.root_nanbox_f64(undef());
+    for k in 0..len {
+        if !al_has(recv_h.get_nanbox_f64(), k) {
+            continue;
+        }
+        let v = al_get(recv_h.get_nanbox_f64(), k);
+        mapped_h.set_nanbox_f64(cb_site.call(
+            callback_pointer(cb_h.get_nanbox_f64()),
+            crate::closure::JsThis::from_f64(this_h.get_nanbox_f64()),
+            v,
+            k as f64,
+            recv_h.get_nanbox_f64(),
+        ));
+        let mapped = mapped_h.get_nanbox_f64();
+        let grown = result_h.with_mut_ptr::<ArrayHeader, _>(|arr| unsafe {
+            super::flat_clone::flat_map_append(arr, mapped)
+        });
+        result_h.set_raw_mut_ptr(grown);
+    }
+    result_h.with_mut_ptr::<ArrayHeader, _>(nanbox_arr)
+}
+
 #[no_mangle]
 pub extern "C" fn js_arraylike_some(recv: f64, cb: f64, this_arg: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();

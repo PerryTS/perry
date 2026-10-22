@@ -465,11 +465,16 @@ impl LlModule {
     /// static info. Raw method/accessor ABIs deliberately decline: their
     /// reflected function objects run shared runtime thunks and still use the
     /// copying/borrowing registry path in `string_pool`.
+    pub(crate) fn can_attach_fn_source(&self, body: &str) -> bool {
+        self.function_named(body).is_some_and(is_js_body)
+    }
+
     pub(crate) fn attach_fn_source(
         &self,
         body: &str,
         global: &str,
         offset: usize,
+        decoded_offset: Option<usize>,
         byte_len: usize,
         is_non_strict_ordinary: bool,
     ) -> bool {
@@ -485,6 +490,7 @@ impl LlModule {
             .set_source(crate::fn_info::RetainedSource {
                 global: global.to_string(),
                 offset,
+                decoded_offset,
                 byte_len,
                 is_non_strict_ordinary,
             });
@@ -843,12 +849,21 @@ impl LlModule {
     /// literal pages. This is a byte blob, not a C string: every consumer
     /// carries an explicit byte length, so no terminator is emitted.
     pub fn add_retained_source_constant(&mut self, value: &str) -> (String, usize) {
+        self.add_retained_source_bytes(value.as_bytes(), "")
+    }
+
+    pub fn add_compressed_retained_source_constant(&mut self, value: &[u8]) -> (String, usize) {
+        self.add_retained_source_bytes(value, ".deflate")
+    }
+
+    fn add_retained_source_bytes(&mut self, value: &[u8], suffix: &str) -> (String, usize) {
         let name = if self.symbol_prefix.is_empty() {
             ".perry.retained_source".to_string()
         } else {
             format!("{}_.perry.retained_source", self.symbol_prefix)
         };
-        let bytes = value.as_bytes();
+        let name = format!("{name}{suffix}");
+        let bytes = value;
         let mut lit = String::with_capacity(bytes.len() + 8);
         lit.push_str("c\"");
         for &byte in bytes {

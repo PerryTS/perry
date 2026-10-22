@@ -116,13 +116,12 @@ fn lowered_arg_count(property: &str, args: &[Expr]) -> usize {
         // not a rooting fix.
         "reverse" => 0,
         // One: separator, depth, callback, comparator or index.
-        "join" | "flat" | "flatMap" | "sort" | "at" | "findLast" | "findLastIndex" => 1,
+        "join" | "flat" | "sort" | "at" | "findLast" | "findLastIndex" => 1,
         // Two: callback + thisArg, value + fromIndex, start + end, source +
         // offset, index + value.
-        "some" | "every" | "find" | "findIndex" | "map" | "filter" | "forEach" | "reduce"
-        | "reduceRight" | "includes" | "indexOf" | "lastIndexOf" | "slice" | "set" | "subarray" => {
-            2
-        }
+        "some" | "every" | "find" | "findIndex" | "map" | "filter" | "forEach" | "flatMap"
+        | "reduce" | "reduceRight" | "includes" | "indexOf" | "lastIndexOf" | "slice" | "set"
+        | "subarray" => 2,
         // `arr.with(i, v)` only claims its two arguments when the guarded arm
         // below actually fires; otherwise it falls through to the catch-all,
         // which is variadic.
@@ -341,6 +340,20 @@ pub(crate) fn lower_array_method(
                 }
                 Ok(emit_array_method_on_values(
                     ctx, property, recv_box, arg_vals,
+                ))
+            }
+            // An explicit `thisArg` binds the mapper's `this`; the dense helper
+            // takes none, so route through the generic engine, as `map` does.
+            "flatMap" if args.len() >= 2 => {
+                let blk = ctx.block();
+                Ok(blk.call(
+                    DOUBLE,
+                    "js_arraylike_flatMap",
+                    &[
+                        (DOUBLE, recv_box),
+                        (DOUBLE, &arg_vals[0]),
+                        (DOUBLE, &arg_vals[1]),
+                    ],
                 ))
             }
             "flat" | "flatMap" => Ok(emit_array_method_on_values(

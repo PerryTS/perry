@@ -145,8 +145,10 @@ impl Session {
         let mut unclassified = 0u64;
         let mut unjoined_modules = 0usize;
         let mut blob_total = 0u64;
+        let mut physical_total = 0u64;
         for (prefix, m) in &stored {
             blob_total += m.blob_len as u64;
+            physical_total += m.physical_len as u64;
             writeln!(
                 mods,
                 "{}\t{}\t{}\t{}",
@@ -248,6 +250,10 @@ impl Session {
             stored.len()
         ));
         summary.push_str(&format!(
+            "all\tpools_physical\t{physical_total}\t{}\n",
+            stored.len()
+        ));
+        summary.push_str(&format!(
             "all\tperry_src_section\t{}\t0\n",
             section.unwrap_or(0)
         ));
@@ -259,7 +265,7 @@ impl Session {
         std::fs::write(self.path.with_extension("summary.tsv"), &summary)?;
         let strict = &totals.get("strict").cloned().unwrap_or_else(|| vec![0; 4]);
         eprintln!(
-            "[source-need] stored {blob_total} B in {} blobs (.perry_src {}); strict a={} b={} c={}; unclassified entries {unclassified}; report {}",
+            "[source-need] stored {blob_total} B decoded, {physical_total} B physical, in {} modules (.perry_src {}); strict a={} b={} c={}; unclassified entries {unclassified}; report {}",
             stored.len(),
             section.map_or("absent".to_string(), |s| s.to_string()),
             strict[0],
@@ -267,8 +273,8 @@ impl Session {
             strict[2],
             self.path.display()
         );
-        // Self-checks: every stored byte is covered by an owner, and the blobs
-        // this census saw are the section the linker kept.
+        // Self-checks: every stored byte is covered by an owner, and the pools
+        // this census saw fit the section the linker kept.
         if strict[3] != 0 {
             bail!(
                 "source-need: {} stored bytes have no recorded owner",
@@ -276,8 +282,8 @@ impl Session {
             );
         }
         if let Some(s) = section {
-            if s < blob_total {
-                bail!("source-need: recorded blobs ({blob_total} B) exceed the linked .perry_src ({s} B)");
+            if s < physical_total {
+                bail!("source-need: recorded pools ({physical_total} B) exceed the linked .perry_src ({s} B)");
             }
         }
         Ok(())

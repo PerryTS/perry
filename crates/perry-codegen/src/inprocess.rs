@@ -204,7 +204,12 @@ pub fn compile_ll_to_object_inprocess(
     let context = Context::create();
     let module = parse_ir_text(&context, ll_text.as_ref(), module_name)?;
     drop(ll_text);
-    optimize_and_emit(
+    // A module compiled from text as one unit reports the same phase line as
+    // a split module's units (`PERRY_CODEGEN_UNIT_TIMINGS`), so one giant
+    // function's RS4GC/opt/emit time is visible too.
+    let unit_timings = std::env::var_os("PERRY_CODEGEN_UNIT_TIMINGS").is_some();
+    let mut stats = UnitCodegenStats::default();
+    let pieces = optimize_and_emit(
         &module,
         effective_target,
         opt,
@@ -213,8 +218,27 @@ pub fn compile_ll_to_object_inprocess(
         &mllvm,
         emit_asm,
         native_roots,
-        None,
-    )
+        unit_timings.then_some(&mut stats),
+    )?;
+    if unit_timings {
+        let widest = |w: &Option<(String, usize)>| {
+            w.as_ref()
+                .map(|(name, n)| format!("{name} {n}"))
+                .unwrap_or_else(|| "-".to_string())
+        };
+        eprintln!(
+            "[perry] codegen: {module_name}: unit 1/1: {} fns; pre-RS4GC {} instrs (widest {}); post-RS4GC {} instrs (widest {}); rs4gc {:.3}s, opt {:.3}s, emit {:.3}s",
+            stats.functions,
+            stats.pre_rewrite_instructions,
+            widest(&stats.pre_rewrite_widest),
+            stats.post_rewrite_instructions,
+            widest(&stats.post_rewrite_widest),
+            stats.rewrite_secs,
+            stats.optimize_secs,
+            stats.emit_secs,
+        );
+    }
+    Ok(pieces)
 }
 
 /// The CPU an empty `-mcpu` means for this triple.

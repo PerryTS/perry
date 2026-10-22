@@ -1652,8 +1652,7 @@ idxset.bounded_numeric_merge.5:
 
     def test_auto_optimize_enables_diagnostics_for_gc_trace_evidence(self):
         # The PERRY_GC_TRACE -> perry-runtime/diagnostics wiring lives in the
-        # cross-feature derivation, split out of optimized_libs.rs into
-        # optimized_libs/freshness.rs on main (#1435 file-size split).
+        # cross-feature derivation, optimized_libs/features.rs.
         freshness = (
             REPO_ROOT
             / "crates"
@@ -1662,7 +1661,7 @@ idxset.bounded_numeric_merge.5:
             / "commands"
             / "compile"
             / "optimized_libs"
-            / "freshness.rs"
+            / "features.rs"
         ).read_text(encoding="utf-8")
         self.assertIn('std::env::var("PERRY_GC_TRACE")', freshness)
         self.assertIn("perry-runtime/diagnostics", freshness)
@@ -1738,7 +1737,6 @@ idxset.bounded_numeric_merge.5:
             "js_class_method_bind_by_id",
             "js_method_direct_shape_guard",
             "js_typed_feedback_class_field_get_guard",
-            "js_typed_feedback_class_field_set_guard",
             "js_typed_feedback_method_direct_call_guard",
             "js_typed_feedback_closure_direct_call_guard",
             "js_typed_feedback_native_call_method_by_id",

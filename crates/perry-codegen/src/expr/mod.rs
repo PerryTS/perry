@@ -102,6 +102,7 @@ pub(crate) mod family_slot;
 pub(crate) mod folded_builtin_override;
 pub(crate) mod hot_tls;
 pub(crate) mod inline_birth;
+pub(crate) mod literal_chunks;
 mod literal_descriptor;
 /// A worker program's literal-descriptor IR, for the dialect reader's round trip.
 #[cfg(test)]
@@ -493,6 +494,10 @@ pub(crate) struct FnCtx<'a> {
     /// reading the field, because they consult it *after* lowering their
     /// operands, by which point the field has been taken again.
     pub discard_this_expr: bool,
+    /// A chunked literal birth's own arguments are being lowered
+    /// (`literal_chunks`): a chunked argument is the birth's `undefined`
+    /// fill, and anywhere else it is an invariant violation.
+    pub literal_chunk_fill: bool,
     /// A condition consumer is lowering a call and can consume an `i1`
     /// truthiness result directly. Guarded user-method dispatch uses this to
     /// keep the statically-resolved arm's constructively-Boolean result native

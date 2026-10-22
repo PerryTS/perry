@@ -108,6 +108,7 @@ pub mod feature_hooks;
 pub use perry_abi as codegen_abi;
 pub(crate) mod cold_sort;
 pub(crate) mod once_init;
+mod source_read_count;
 pub use build_stamp::{PERRY_RUNTIME_BUILD_ID, PERRY_RUNTIME_BUILD_STAMP};
 pub mod builtins;
 pub mod bun_compat;

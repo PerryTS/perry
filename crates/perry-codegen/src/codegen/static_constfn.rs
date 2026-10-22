@@ -1016,6 +1016,11 @@ pub(crate) fn birth_literal(
             let header = crate::target_layout::object_header_size_bytes(ctx.target_triple);
             let fields = ctx.block().gep(I8, &raw, &[(I64, &header.to_string())]);
             for (slot, value) in values.iter().enumerate() {
+                // A chunked literal slot (`Expr::LiteralChunks`) stays a hole
+                // of the unpublished birth; its chunk function stores it.
+                if matches!(props[slot].1, Expr::LiteralChunks(_)) {
+                    continue;
+                }
                 let bits = if slot < 32 && (shape.rep >> (slot * 2)) & 3 == 1 {
                     // Numeric literal births may lower to the int32 NaN-box.
                     // The compiler owns this conversion; no runtime admission.
