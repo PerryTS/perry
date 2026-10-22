@@ -693,12 +693,18 @@ fn a_shared_class_id_is_stable_only_when_every_template_is() {
 
 #[test]
 fn a_result_that_is_not_a_literal_layout_escapes() {
-    // `mk` returns an instance of a class with methods: not a literal
-    // layout, so the result escapes as before (§11.2) and `m` may run
-    // `set` on it with anything.
+    // `mk` returns an instance of `C`, a class of another declaration unit:
+    // `mk`'s unit holds C's stand-in and forwards it with C's contract
+    // (§17.10 4, DECISIONS 56; this expectation was "the result escapes"
+    // before C's contract was forwarded). The principle the test keeps:
+    // `m` may run `set` on it with anything, so C's own unit models that
+    // (its methods run on the receiver with ⊤ arguments): `x` takes any
+    // kind and is written after construction. Its layout does not change.
     let a = "class C { x: number; constructor() { this.x = 1; } set(v: any) { this.x = v; } } export function mk() { return new C(); }";
     let pf = units_of(&[("a", a), ("m", "import { mk } from './a'; mk().set('s');")]);
-    assert!(!tmpl(&pf, "C").prefix_stable, "{}", pf.dump_text());
+    let x = field(tmpl(&pf, "C"), "x");
+    assert!(!x.readonly && x.writers_post > 0, "{}", pf.dump_text());
+    assert!(x.kind.top && !x.kind.fixed(), "{}", pf.dump_text());
 }
 
 #[test]

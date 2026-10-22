@@ -400,6 +400,11 @@ impl<'a> Gen<'a> {
                 TokKind::Top | TokKind::BuiltinFn => true,
                 // An instance of a contract class: given out (`give_out`).
                 TokKind::Obj(tm, _) if self.contract_class(tm) => true,
+                // Another unit's instance (a stand-in): forwarded with that
+                // unit's contract (`fn_contract_of`), its proof (§17.10 4).
+                TokKind::Obj(tm, _) if self.stand_in_cc.contains_key(&tm) => !self
+                    .unit_in
+                    .is_some_and(|u| u.broken(&self.m.tmpls[tm as usize].display)),
                 TokKind::Obj(tm, _) => self.literal_ok(tm),
                 _ => false,
             });

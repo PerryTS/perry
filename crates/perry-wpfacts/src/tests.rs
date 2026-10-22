@@ -18,6 +18,7 @@ mod receiver_this;
 mod summary;
 mod super_heritage;
 mod unit_mode;
+mod unit_extends;
 
 use crate::{compute, FactsConfig, ProgramFacts, Verdict};
 
