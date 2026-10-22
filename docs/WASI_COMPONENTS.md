@@ -72,6 +72,61 @@ the source revisions and artifact/log hashes. This does not establish HTTP,
 P3 async, other native host platforms or I/O cancellation support.
 
 
+### Packaging
+
+The release recipe includes `perry-wit` and the optional native component-host
+archive for macOS ARM64, Linux x86_64 GNU and Windows x86_64. npm exposes the
+`perry-wit` command from the matching platform package. Homebrew and the shell
+installer retain the tool and host archive; Debian installs expose them through
+`perry-components`, which requires the exact matching compiler package version.
+Other prebuilt targets do not yet include this component payload.
+
+`scripts/component_release_check.py` checks the final release archive in a fresh
+directory outside the source checkout. It generates TypeScript and canonical C
+bindings, proves ordinary programs still work with the engine withheld, rejects
+a component host without that engine, and then executes typed Rust-component
+calls, guest and host resource ownership, callbacks, collection, disposal and
+TCP/UDP/DNS interoperability with the packaged engine restored. It also executes
+WASI commands, including commands nested inside active library callbacks. All
+20 normal library phases and five command phases must pass; partial or duplicate
+phase sets cannot qualify an archive.
+The receipt records archive, installed-file and executable identities.
+
+The expanded ABI 5 Linux GNU x86_64 production archive passes seven outer
+checks, all 20 library phases and five command phases at source
+`1f36aa7bdeaa70680acc98cb2f443f2194681bdf`. Verification checks the downloaded
+artifact digest, phase sets, seven outer log hashes, six UDP/three TCP payloads
+and 37 retained file hashes. The engine archive is 245,619,712 bytes; the full
+release archive is 513,997,542 bytes. See the
+[expanded Linux receipt](validation/component-packaging-expanded-linux-20261022.json).
+The same production archive also passes compressed npm staging, pack/unpack,
+automatic engine discovery, all 20 library phases and five command phases,
+with the exact six UDP and three TCP payloads verified again. The engine is
+40,220,829 bytes compressed; the Linux npm tarball is 208,705,273 bytes.
+The test removes explicit runtime-directory overrides before each npm compiler
+invocation and verifies the decompressed engine hash. See the
+[expanded npm receipt](validation/component-packaging-expanded-npm-20261022.json).
+macOS/Windows production qualification remains open.
+Windows exposed a native archive lookup omission, repaired separately with
+executable-relative discovery and architecture-isolation regressions.
+The repair stage at `e6616104a262ba243262b9cf6959520a9187a51c` passes all eight
+Windows lookup tests, packaged ordinary compilation/execution and component-host
+compilation. Its first typed host execution then fails with `undefined.length`,
+the same failure seen in native platform qualification. Linux passes all seven
+outer checks, 20 library phases and five command phases on this revision; both
+macOS builds are still running. See the
+[repair-stage receipt](validation/component-packaging-windows-lookup-20261023.json).
+This stage uses the earlier provider and does not qualify the Turnloop replacement.
+
+The earlier production profile
+passed six outer checks and 15 library phases on Linux and macOS. Its Linux
+engine measured 235,912,106 bytes raw and 39,653,474 bytes after npm compression;
+the complete Linux npm tarball was 208,099,510 bytes. Unpacking that package,
+generating bindings, automatically discovering the decompressed engine and
+executing all 51 typed fixture calls passed. These are actual production artifact
+measurements, but do not qualify the expanded command/host-resource profile or
+establish publication. See the [initial production receipt](validation/component-packaging-initial-production-20261022.json).
+
 ### Per-instance WASI providers
 
 ```ts

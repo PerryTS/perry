@@ -73,3 +73,48 @@ fn arm64_target_never_falls_back_to_bare_x64_artifact_dirs() {
         .iter()
         .any(|path| path == std::path::Path::new("target/debug/perry_stdlib.lib")));
 }
+
+#[test]
+fn native_windows_targets_find_portable_and_npm_archives() {
+    let exe = std::env::current_exe().expect("test executable");
+    let bin = exe.parent().expect("executable directory");
+    let lib = bin.parent().expect("install prefix").join("lib");
+    for name in [
+        "perry_runtime.lib",
+        "perry_stdlib.lib",
+        "perry_component_host.lib",
+    ] {
+        for target in [None, Some("windows")] {
+            let candidates = collect_library_candidates(name, target);
+            assert!(
+                candidates.contains(&bin.join(name)),
+                "portable ZIP: {target:?}"
+            );
+            assert!(
+                candidates.contains(&lib.join(name)),
+                "npm install: {target:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn foreign_windows_architecture_excludes_host_install_archives() {
+    let exe = std::env::current_exe().expect("test executable");
+    let bin = exe.parent().expect("executable directory");
+    let lib = bin.parent().expect("install prefix").join("lib");
+    let target = if cfg!(target_arch = "x86_64") {
+        "windows-aarch64"
+    } else {
+        "windows-x86_64"
+    };
+    for name in [
+        "perry_runtime.lib",
+        "perry_stdlib.lib",
+        "perry_component_host.lib",
+    ] {
+        let candidates = collect_library_candidates(name, Some(target));
+        assert!(!candidates.contains(&bin.join(name)));
+        assert!(!candidates.contains(&lib.join(name)));
+    }
+}

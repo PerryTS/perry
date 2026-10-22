@@ -17,6 +17,7 @@
 
 #[cfg(test)]
 mod dead_statepoint_tests;
+mod coff;
 mod function_layout;
 mod loop_interrupt;
 mod nanbox_operands;

@@ -239,7 +239,7 @@ render_template "$NPM_DIR/perry/package.json.tmpl" "$NPM_DIR/perry/package.json"
 if [ -f "$LICENSE_SRC" ]; then
   cp "$LICENSE_SRC" "$NPM_DIR/perry/LICENSE"
 fi
-chmod +x "$NPM_DIR/perry/bin/perry.js"
+chmod +x "$NPM_DIR/perry/bin/perry.js" "$NPM_DIR/perry/bin/perry-wit.js"
 
 # -----------------------------------------------------------------------------
 # Stage each platform package
@@ -295,6 +295,25 @@ for entry in "${PLATFORMS[@]}"; do
     done
     stage_sidecars "$src_dir" "$pkg_dir/lib" "${UNIX_CORE_LIBS[@]}"
   fi
+
+  # These are the qualified component-host release targets. A partial pair
+  # must fail staging rather than produce an install that cannot link plugins.
+  case "$pkg_suffix" in
+    darwin-arm64|linux-x64|win32-x64)
+      wit=perry-wit
+      engine=libperry_component_host.a
+      if [ "$kind" = win ]; then wit=perry-wit.exe; engine=perry_component_host.lib; fi
+      for file in "$wit" "$engine"; do
+        if [ ! -s "$src_dir/$file" ]; then
+          echo "  error: $artifact is missing required component artifact $file" >&2
+          exit 1
+        fi
+      done
+      cp "$src_dir/$wit" "$pkg_dir/bin/$wit"
+      chmod +x "$pkg_dir/bin/$wit"
+      cp "$src_dir/$engine" "$pkg_dir/lib/$engine"
+      ;;
+  esac
 
   # Compress the static archives so the published npm tarball stays under
   # npm's registry upload limit (the raw archives total ~750 MB per platform;

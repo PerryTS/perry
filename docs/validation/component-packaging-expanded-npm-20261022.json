@@ -1,0 +1,452 @@
+{
+  "scope": "Expanded production archive npm pack/unpack, transparent engine discovery, native library/resource/network and command integration; no publication or instrumented moving-GC claim",
+  "sourceRevision": "1f36aa7bdeaa70680acc98cb2f443f2194681bdf",
+  "sourceArchiveSha256": "a9fbfe5ed870474b3f6cfc62f3763c47df223e098ffd870e197001f001775193",
+  "sourceFilesVerified": 75,
+  "sourceSha256": {
+    ".cargo/config.toml": "f78759b1721b9116d5024ea3c52e7f8a57b0fa6dbfea95af53e9c5c2accbcbc0",
+    "Cargo.toml": "f2eaac6aebe85bb77239903bee27fc6a4b7d1a71731f9bdc50325bc96251d959",
+    "LICENSE": "c871483477d7105432645affac5be5edbd92b41a6faedb4c692e0681e46ada09",
+    "npm/perry-darwin-arm64/package.json.tmpl": "61fde6146639af2347df119feebb17f6ad3a0a8a6431efbeda7201bf632f3099",
+    "npm/perry-darwin-x64/package.json.tmpl": "fa431dfaf0b7f173eb478f8aa1ae8342149c7c9ec39540b6b793fc6caf6672b9",
+    "npm/perry-linux-arm64-musl/package.json.tmpl": "75baffc26be3783322a2feb279224a593bb1a1fe21fd1baf8657e24ecac4f3b7",
+    "npm/perry-linux-arm64/package.json.tmpl": "91fece516527d361f15179f39a51d807ad48425a18f37753a828b95d3ae0a613",
+    "npm/perry-linux-x64-musl/package.json.tmpl": "5b14000eca942e47607b1c889d87d0b112e30779f76ebe2f4c74dfe3dd05bb4b",
+    "npm/perry-linux-x64/package.json.tmpl": "e318575fff465c29b44dee61e3b8f88b5ec87e2aef47dc835c66dd50854e0226",
+    "npm/perry-win32-arm64/package.json.tmpl": "d44c4d9e87ca42eb4b02fe16af7a195ee2a2642dd97b794cf546e65755050b1a",
+    "npm/perry-win32-x64/package.json.tmpl": "f923ac6d00f9130f496d330eee688e99be7a974bd4d7ead4e8ac81fb2fbaf2cf",
+    "npm/perry/README.md": "94e7b54677ec36b793932c6da570b4d6ad28a0f4d84f337265b9de843e109e4d",
+    "npm/perry/bin/detect.cjs": "b4e8e3a6d7ad3ba3bcfbd1e1e0acec37eafd93a9b07b0019ce9db3e406c31c33",
+    "npm/perry/bin/perry-wit.js": "d82f1c59c474e56bcd871526594e1f0e8eab95b4684d66c46bd357a1b403fec1",
+    "npm/perry/bin/perry.js": "717e41c482dcaa4c01ab569c273de0e1ae32418fef6cd4aeb3008225f3ef1e58",
+    "npm/perry/package.json.tmpl": "904b6249c91dd1885dee310b94f6d5208406adc0bdf2b6c5c3bd5906419a509e",
+    "npm/perry/test/detect.test.cjs": "3fff69a7bf4cb97a3c8b37ec63d2867607d3144056d092c2882a9cf909167e94",
+    "npm/perry/test/wit-launcher.test.cjs": "30ae54fb7a7b30a32dcc5473ecd10d01c2d9f1f11a04a44fc2245ed5527ba2d2",
+    "rust-toolchain.toml": "02d08527a444fc4330aecf139695ef487fed9059cc1473f65e67e64a782cc348",
+    "scripts/component_command_acceptance.py": "ed8fe3cd13459c01535fc584643881324671b5d157391f83e485cd99ef363919",
+    "scripts/component_host_acceptance.py": "a97a02d5317d846dc014dae719df405797c615bea71b9b2bebc0411c7f297633",
+    "scripts/component_network_peer.py": "eb0895bc635070188d62252ccf7643731a3dcd0890160525580cdcf225872c92",
+    "scripts/component_release_check.py": "86f94bd0b551d007d6eaf0c5130cbec506dd0acca8b91d303c242583606e2b40",
+    "scripts/stage-npm.sh": "b4c39b77391fd4a2c498673763eac7a4fa42b26b0608c3d0e5a9bd1f119f59bb",
+    "test-wasi/components/capabilities/guest.ts": "53751043cf246a9844e71d3b65bf5b8caaeb39870e41e025d0002101eb236fc4",
+    "test-wasi/components/capabilities/host.ts": "0267a242048a783c27ad8743592eb96bf039afc05f670a21e2cd410e36b58a17",
+    "test-wasi/components/capabilities/world.wit": "35c2c4bd46f839d0efea1e5de811bceab7b014e88969ab0d2c05f54d1078f214",
+    "test-wasi/components/command/host.ts": "513d65ea88b898c3f39a3b7e99c47f972969c09af6e1ecb929f503ee1a3748f2",
+    "test-wasi/components/command/library-host.ts": "7d64ece923c61368b333dbc98302edce5473c5dd392511564882b533b9e9fc8e",
+    "test-wasi/components/command/rust/Cargo.lock": "99f1c909dfeae30528bfee130a797a6133d75f4457589a3ea442a8cc311be674",
+    "test-wasi/components/command/rust/Cargo.toml": "293b09de06872e2704c33c481a2c4b0b3ec4edda835dfc1a41a8e2b845fd32fe",
+    "test-wasi/components/command/rust/src/main.rs": "bb046cb8f158e019998c86e22d95e0bbf0b1227fc27047b4808c842b1e4d707a",
+    "test-wasi/components/guest-resources-dual/guest.ts": "a8f34f72ea7ea588a24acf535d8d599dcf45e580e4f36f63a865eb5b6ef4b728",
+    "test-wasi/components/guest-resources-dual/world.wit": "05cae719c3ae436544c4984560b6d15e3ac2142ac4e1e152f5e45a62f5ebd080",
+    "test-wasi/components/guest-resources/guest.ts": "0f2aef2790cc1b4c1e4ea20d88329c7471299c2b48bbd71e3ebff7b7068f4364",
+    "test-wasi/components/guest-resources/world.wit": "7fcedfcdb79d2d20265dc8796a7ae56700ed7166f5dc42f140fc3c6b591ca755",
+    "test-wasi/components/host-resources/host.ts": "5405d067a019c964f28e3350bb61f9cff5b6c0a1d996fb0fe629a6620b96581b",
+    "test-wasi/components/host-resources/rust/Cargo.lock": "9f33726f5c6b0c42e72a3aee4aa8418530196655d0914192b7dc1df92181ebca",
+    "test-wasi/components/host-resources/rust/Cargo.toml": "9c00a467b62615c3a74faf8a0cd40d251ce78c1832f5794b5884502fc5415191",
+    "test-wasi/components/host-resources/rust/src/lib.rs": "e611f8bfc4a6277944b7848f678886e24dd26a039a3faff4113e394b8d9bb298",
+    "test-wasi/components/host-resources/world.wit": "a802b96a761767360dc9e50d12561111d6383039fa0f11e495c14fe84215534b",
+    "test-wasi/components/network/README.md": "e86cbbb705a9e7dd2bd690a84957763854f470690c10e6b8bee7c708f6740c8b",
+    "test-wasi/components/network/deps/LICENSE": "a6c48161a09acc75a0e25503bab66a731eb5fba5392ed4bb4743e4ba5085327a",
+    "test-wasi/components/network/deps/clocks.wit": "6ed8aa65bb8cbe224a0b2cbac9fc1b3bd25bdb17eda5ae0d23c983ed31c447cc",
+    "test-wasi/components/network/deps/io.wit": "96e206d00076fa0480df32c5bcf255a3fa4862805ac2f6b8537a781cce54f433",
+    "test-wasi/components/network/deps/provenance.json": "37b37bbfa7ed91d70dcf584beb5c6fe643da4174d8e441be62af04f78004eba7",
+    "test-wasi/components/network/deps/sockets.wit": "ad38dbf3b0bbdf34c0f2b608edcbfee04d71b443a63faff1f5e0053c3f84b377",
+    "test-wasi/components/network/host.ts": "1be699ccbb8af07d2df107fc273a584b1738403b0786090dbfea17f6a19d3bb2",
+    "test-wasi/components/network/rust/Cargo.lock": "84bc73d70ee4bab0f6e4cf5dbeec3467a4ff96ab16f290cd0c9a4bbc7beec641",
+    "test-wasi/components/network/rust/Cargo.toml": "8f038b9187f7b0fcbe490b60b1a39f799264f4aaf56424baefa52348a3512248",
+    "test-wasi/components/network/rust/src/lib.rs": "301452877461f6a2950bcb16d9c189815e353298a8483c7cf63230d0e1399454",
+    "test-wasi/components/network/world.wit": "8fc6094295555f6151cb6caebb4848b324ce9b76229c9348d28d32bf1c5a9f1c",
+    "test-wasi/components/resources/host.ts": "e0357dbd3d041e4f6d84a7187ddd05abbce14dc4ad60070a6de5a311acc97a77",
+    "test-wasi/components/resources/rust/Cargo.lock": "371e6b7d15591576a3151afc43ecb21aec434f1dca877ff2deeeadf634d602a7",
+    "test-wasi/components/resources/rust/Cargo.toml": "c9480d5cb3675dd21ac32f0a12633ef27591927a2df3ec49990a4268f54674ef",
+    "test-wasi/components/resources/rust/src/lib.rs": "b42f9e3a528bdbd384d0872ad8ff0e5d89d779d2d3416e31c215fa5c134d9985",
+    "test-wasi/components/resources/world.wit": "26de8bdc1b2f3df7d9ccdaf0978e172bfb3109e2600c4596cfc2d7a0e06c4532",
+    "test-wasi/components/transform/guest.ts": "9427650a285a48d0d1fb7ad2a59215a33af17dd1b3b11dad23202141fd701dbd",
+    "test-wasi/components/transform/host.ts": "c54f026ee749fa4cb9af83100a96859b89c533ecef2974f2b4a95e6dc95f5bff",
+    "test-wasi/components/transform/perry-host.ts": "16d9540730d348750c467d81ef87f41b23b77d2bc88f68e4a13ba9409bad1415",
+    "test-wasi/components/transform/rust-host/Cargo.lock": "2917f5ef18e275d8a07edae18e1603e5bf2374f49aaa2bf1852dc9dec3cc6b84",
+    "test-wasi/components/transform/rust-host/Cargo.toml": "424946c4cecab361d9a77c738addcdecaccd6ae72563734449b44d9b48207c2e",
+    "test-wasi/components/transform/rust-host/src/bin/compose.rs": "1018656e4a49621d1204d8f6774bfb9d6992256ed2700473c5017a6dcbc3cf85",
+    "test-wasi/components/transform/rust-host/src/main.rs": "82be57d0928539cd315ca0b7009d198a62cebdb4ab758ed9a48a37846a5a90c2",
+    "test-wasi/components/transform/rust-host/src/resources.rs": "14590b6ef0c51880f30e82f9293c623fae67f57fd17352ac849b6db40089649d",
+    "test-wasi/components/transform/rust-host/src/values.rs": "f7d150c0ac86abf0b354e7884046268f914100f15a861b4cb90d907ecfeaab5c",
+    "test-wasi/components/transform/rust-logger/Cargo.lock": "41765f3e192940daf41fbbe29c23ef534de66615223309c1e0a9f25291226bdf",
+    "test-wasi/components/transform/rust-logger/Cargo.toml": "983f92a1aff993252d8fe9c21eb09d77195a33c99fd226477ff3f7d6b9945363",
+    "test-wasi/components/transform/rust-logger/src/lib.rs": "8437f7794d6ed808700ee80418773444b5a91a9f543781198f1540a4d9d8087b",
+    "test-wasi/components/transform/rust/Cargo.lock": "5ba8d854ac9033b049ed7255a52ba8286438ff446f49ac815cf293357bb92392",
+    "test-wasi/components/transform/rust/Cargo.toml": "00330193ae35daf1b206ab0b2f046db058d594301ecd4eb46c47240edf225c43",
+    "test-wasi/components/transform/rust/src/lib.rs": "a91fdbfdbcf8be4770e199ce36cedd37e8736d78495721fbd0cdd43276dab17d",
+    "test-wasi/components/transform/world.wit": "7b4e581b0dc6cd193dfe4a2efadcbf9cc982dd26886a06237cd252a6beb32a36",
+    "test-wasi/components/values/guest.ts": "a8e85fe660cfc4cd05b3c45560710f5b164325d7656a2779c813d20063d0b7e8",
+    "test-wasi/components/values/world.wit": "d998aecbd018b12548d20b5ae942eeaefb43b6cca7e0b7a73019e05dbc61365f"
+  },
+  "productionZipSha256": "074392c57d1d9f8dfea7757976c677b829bfafcec3a74f8dd9960d934679a318",
+  "logSha256": {
+    "command-acceptance.log": "88a4fe32e4692eed07d0084cf3bdddd03c62fa01961db417991ff17b043ce4a1",
+    "stage.log": "5bb9f8013b27d274ca179eb1af3f3da5ddab7bc885f2ee388c4bac4c37f5ffaa",
+    "native-acceptance.log": "269b5f79747ec10cf8832ec449db1f7ab76ef38355d96f035ce30310e050c4a7",
+    "pack-perry-linux-x64.log": "c8837dd830f399d663de1972891367b073486cd8ac935e6b390c3e51dc3f0509",
+    "pack-perry.log": "61b79125f74aaf995408d9ad01f0ee07544d53d261a216c3a319513992cc312f",
+    "acceptance/host-resources-run.log": "2f594608248273a64e7352c7ee8b1b654a2b3b9097f1b30bdbf686d91abc8fd5",
+    "acceptance/componentize.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "acceptance/host-resources-bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "acceptance/network-bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "acceptance/rust-guest.log": "32da106a3c8dda8eb0a3bfd6e4f5f24e86702197af2b99c5c01e25ff83965d36",
+    "acceptance/network-compile.log": "492f3d2375ff8d0ca548093a2bda7d5cb1b2259533c8ccd1232b05fe52fda259",
+    "acceptance/compile-host.log": "f1ce40173d0b76490d96bed04d4e6a60b5650b5b2995ea1cd08f4e477ab80d10",
+    "acceptance/network-componentize.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "acceptance/network-run.log": "c4336507eed44ca20a5cb78342264ee5447dede57d09ea7c5fdc1a59a3f14696",
+    "acceptance/resources-run.log": "b8a54ea58f0dc70699e0d16a2976c585a0fa10352f7f5678a6273df2922a1463",
+    "acceptance/resources-compile.log": "48dce170bd89524ce5f33f6fa88b1c464503c50cd9465ffe6d1da28cf77261fb",
+    "acceptance/host-resources-compile.log": "d4cfa0ac6094f0fe42630dc6ffbed074ca55b3d1ffc91430d5f450784e73e98e",
+    "acceptance/resources-componentize.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "acceptance/resources-bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "acceptance/host-resources-componentize.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "acceptance/host-resources-guest.log": "0e01d4de548bfc1cb802ee4451b5d141e4fe49663b719bcdef20268da13fc39b",
+    "acceptance/network-guest.log": "45c98385931f5ce355e92b67a425b35057369f61de776fd1229d078114dcf99d",
+    "acceptance/resources-guest.log": "a8f661c7fef420742de7eba684fa2cbac387e14e17aee85736133e2188266afa",
+    "acceptance/run-host.log": "cb43de132c0975d5f3f57bf550a7b7ef62cc6e54749e8c276f13abcd7a0ffcb9",
+    "acceptance/bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "commands/rust-command.log": "bb2952b4740aead38f021e70a599bed44bc9b8e91d7ae0c330ec782e83f1d472",
+    "commands/command-library-run.log": "f50c97dd197f3457477e055176c0557f2afeedf98d3d1874609f38717925b7f6",
+    "commands/command-run.log": "1b0adbc0510e90d11d55328f6c51057bae79fb0c3e0784d2be2d0de0f85c6ac2",
+    "commands/command-library-compile.log": "400126c62134bab188360fa9695649926c1e8daffea97f3e199e554e0aaad146",
+    "commands/command-compile.log": "31bf8445d8cd0df2515c3e5106adaf18bebe2b46958a3ee82b6600deb7bba5a0",
+    "qualification.json": "a8fbec70cd351fef703c42cfbbb93a3e7e37eb6cfbd0491fb5f41e62b2a48af9",
+    "results.json": "fbb65593fcb72a9bc5f7b14bd14b4ea6e13b57e0138b43acb68d19c858465788",
+    "acceptance/results.json": "ff0b701d2d3f89fbf3463021d5838907c90c67801f2a1e459ddd230232d9ea51",
+    "acceptance/network-peer.json": "244d5ad0de1cef314face16fb72f059780b7a8075e8efa41087e6ffb62380153",
+    "commands/results.json": "c36dad0f61d6b6794bec687c0b9bd51906f8eb97579cd28a19770fd526e12a92",
+    "npm-perry": "740e2fb5d24b6dc3bdb8e329446ce2c287975a6c3507d1352fea79f9af7dd961",
+    "npm-perry-wit": "9b470ffc6d4b0b3caccc29f373c81a6441438cbe164c4a229febd1cd75f4899b"
+  },
+  "passed": true,
+  "qualification": {
+    "scope": "Expanded production archive npm pack/unpack, transparent engine discovery, native library/resource/network and command integration; no publication or instrumented moving-GC claim",
+    "sourceRevision": "1f36aa7bdeaa70680acc98cb2f443f2194681bdf",
+    "passed": true,
+    "phases": [
+      {
+        "name": "stage",
+        "exitCode": 0,
+        "passed": true,
+        "logSha256": "5bb9f8013b27d274ca179eb1af3f3da5ddab7bc885f2ee388c4bac4c37f5ffaa"
+      },
+      {
+        "name": "pack-perry-linux-x64",
+        "exitCode": 0,
+        "passed": true,
+        "logSha256": "c8837dd830f399d663de1972891367b073486cd8ac935e6b390c3e51dc3f0509"
+      },
+      {
+        "name": "pack-perry",
+        "exitCode": 0,
+        "passed": true,
+        "logSha256": "61b79125f74aaf995408d9ad01f0ee07544d53d261a216c3a319513992cc312f"
+      },
+      {
+        "name": "native-acceptance",
+        "exitCode": 0,
+        "passed": true,
+        "logSha256": "269b5f79747ec10cf8832ec449db1f7ab76ef38355d96f035ce30310e050c4a7"
+      },
+      {
+        "name": "command-acceptance",
+        "exitCode": 0,
+        "passed": true,
+        "logSha256": "88a4fe32e4692eed07d0084cf3bdddd03c62fa01961db417991ff17b043ce4a1"
+      }
+    ],
+    "libraryPhases": [
+      {
+        "name": "rust-guest",
+        "exitCode": 0,
+        "seconds": 6.731,
+        "log": "/root/codex-components-p2-20261021/component-expanded-production-npm/acceptance/rust-guest.log"
+      },
+      {
+        "name": "componentize",
+        "exitCode": 0,
+        "seconds": 0.003,
+        "log": "/root/codex-components-p2-20261021/component-expanded-production-npm/acceptance/componentize.log"
+      },
+      {
+        "name": "bindings",
+        "exitCode": 0,
+        "seconds": 0.032,
+        "log": "/root/codex-components-p2-20261021/component-expanded-production-npm/acceptance/bindings.log"
+      },
+      {
+        "name": "compile-host",
+        "exitCode": 0,
+        "seconds": 3.617,
+        "log": "/root/codex-components-p2-20261021/component-expanded-production-npm/acceptance/compile-host.log"
+      },
+      {
+        "name": "run-host",
+        "exitCode": 0,
+        "seconds": 0.064,
+        "log": "/root/codex-components-p2-20261021/component-expanded-production-npm/acceptance/run-host.log"
+      },
+      {
+        "name": "resources-guest",
+        "exitCode": 0,
+        "seconds": 0.114,
+        "log": "/root/codex-components-p2-20261021/component-expanded-production-npm/acceptance/resources-guest.log"
+      },
+      {
+        "name": "resources-componentize",
+        "exitCode": 0,
+        "seconds": 0.003,
+        "log": "/root/codex-components-p2-20261021/component-expanded-production-npm/acceptance/resources-componentize.log"
+      },
+      {
+        "name": "resources-bindings",
+        "exitCode": 0,
+        "seconds": 0.032,
+        "log": "/root/codex-components-p2-20261021/component-expanded-production-npm/acceptance/resources-bindings.log"
+      },
+      {
+        "name": "resources-compile",
+        "exitCode": 0,
+        "seconds": 2.116,
+        "log": "/root/codex-components-p2-20261021/component-expanded-production-npm/acceptance/resources-compile.log"
+      },
+      {
+        "name": "resources-run",
+        "exitCode": 0,
+        "seconds": 0.114,
+        "log": "/root/codex-components-p2-20261021/component-expanded-production-npm/acceptance/resources-run.log"
+      },
+      {
+        "name": "network-guest",
+        "exitCode": 0,
+        "seconds": 0.264,
+        "log": "/root/codex-components-p2-20261021/component-expanded-production-npm/acceptance/network-guest.log"
+      },
+      {
+        "name": "network-componentize",
+        "exitCode": 0,
+        "seconds": 0.003,
+        "log": "/root/codex-components-p2-20261021/component-expanded-production-npm/acceptance/network-componentize.log"
+      },
+      {
+        "name": "network-bindings",
+        "exitCode": 0,
+        "seconds": 0.032,
+        "log": "/root/codex-components-p2-20261021/component-expanded-production-npm/acceptance/network-bindings.log"
+      },
+      {
+        "name": "network-compile",
+        "exitCode": 0,
+        "seconds": 2.416,
+        "log": "/root/codex-components-p2-20261021/component-expanded-production-npm/acceptance/network-compile.log"
+      },
+      {
+        "name": "network-run",
+        "exitCode": 0,
+        "seconds": 1.015,
+        "log": "/root/codex-components-p2-20261021/component-expanded-production-npm/acceptance/network-run.log"
+      },
+      {
+        "name": "host-resources-guest",
+        "exitCode": 0,
+        "seconds": 0.114,
+        "log": "/root/codex-components-p2-20261021/component-expanded-production-npm/acceptance/host-resources-guest.log"
+      },
+      {
+        "name": "host-resources-componentize",
+        "exitCode": 0,
+        "seconds": 0.003,
+        "log": "/root/codex-components-p2-20261021/component-expanded-production-npm/acceptance/host-resources-componentize.log"
+      },
+      {
+        "name": "host-resources-bindings",
+        "exitCode": 0,
+        "seconds": 0.032,
+        "log": "/root/codex-components-p2-20261021/component-expanded-production-npm/acceptance/host-resources-bindings.log"
+      },
+      {
+        "name": "host-resources-compile",
+        "exitCode": 0,
+        "seconds": 2.366,
+        "log": "/root/codex-components-p2-20261021/component-expanded-production-npm/acceptance/host-resources-compile.log"
+      },
+      {
+        "name": "host-resources-run",
+        "exitCode": 0,
+        "seconds": 0.164,
+        "log": "/root/codex-components-p2-20261021/component-expanded-production-npm/acceptance/host-resources-run.log"
+      }
+    ],
+    "commandPhases": [
+      {
+        "name": "rust-command",
+        "exitCode": 0,
+        "seconds": 0.164,
+        "log": "/root/codex-components-p2-20261021/component-expanded-production-npm/commands/rust-command.log"
+      },
+      {
+        "name": "command-compile",
+        "exitCode": 0,
+        "seconds": 2.066,
+        "log": "/root/codex-components-p2-20261021/component-expanded-production-npm/commands/command-compile.log"
+      },
+      {
+        "name": "command-run",
+        "exitCode": 0,
+        "seconds": 1.115,
+        "log": "/root/codex-components-p2-20261021/component-expanded-production-npm/commands/command-run.log"
+      },
+      {
+        "name": "command-library-compile",
+        "exitCode": 0,
+        "seconds": 2.066,
+        "log": "/root/codex-components-p2-20261021/component-expanded-production-npm/commands/command-library-compile.log"
+      },
+      {
+        "name": "command-library-run",
+        "exitCode": 0,
+        "seconds": 1.265,
+        "log": "/root/codex-components-p2-20261021/component-expanded-production-npm/commands/command-library-run.log"
+      }
+    ],
+    "networkPeer": {
+      "hostExit": 0,
+      "peerPort": 38434,
+      "tcpPeerPort": 51309,
+      "tcpReceived": [
+        {
+          "payloadHex": "7463703a300a",
+          "source": [
+            "127.0.0.1",
+            33663
+          ]
+        },
+        {
+          "payloadHex": "7463703a310a",
+          "source": [
+            "127.0.0.1",
+            34275
+          ]
+        },
+        {
+          "payloadHex": "7463703a320a",
+          "source": [
+            "127.0.0.1",
+            46585
+          ]
+        }
+      ],
+      "received": [
+        {
+          "payloadHex": "636f6e6e65637465643a30",
+          "source": [
+            "127.0.0.1",
+            44969
+          ]
+        },
+        {
+          "payloadHex": "756e636f6e6e65637465643a30",
+          "source": [
+            "127.0.0.1",
+            56174
+          ]
+        },
+        {
+          "payloadHex": "636f6e6e65637465643a31",
+          "source": [
+            "127.0.0.1",
+            60148
+          ]
+        },
+        {
+          "payloadHex": "756e636f6e6e65637465643a31",
+          "source": [
+            "127.0.0.1",
+            44638
+          ]
+        },
+        {
+          "payloadHex": "636f6e6e65637465643a32",
+          "source": [
+            "127.0.0.1",
+            57932
+          ]
+        },
+        {
+          "payloadHex": "756e636f6e6e65637465643a32",
+          "source": [
+            "127.0.0.1",
+            56195
+          ]
+        }
+      ],
+      "errors": [],
+      "passed": true
+    },
+    "archive": {
+      "name": "perry-linux-x86_64.tar.gz",
+      "sha256": "159dc1074b7f1f1bd8e11ccaffb7a4da2496a25e65e3c7129b5c31970c5f44e5",
+      "bytes": 513997542
+    },
+    "installedFilesVerified": {
+      "libperry_component_host.a": {
+        "bytes": 245619712,
+        "sha256": "25c9db2cef091593f6403fbca6ac94a6e84fa9ad765746fea987a376f3afd4bb"
+      },
+      "libperry_runtime.a": {
+        "bytes": 71958328,
+        "sha256": "7cc9bdcec8d11f310e2ef984fee2d463a7579f7c9344ca607b72da0d6714c445"
+      },
+      "libperry_runtime.a.gc-effects": {
+        "bytes": 321788,
+        "sha256": "144d2f0704eb760e85e0d1cb27b6a83275ce97ee623435a8c52875d7d1b404e3"
+      },
+      "libperry_stdlib.a": {
+        "bytes": 148014386,
+        "sha256": "ef066d61e72c98f9f0bd84ff5007068e8189606d8878fbff3d2adeecf51ae572"
+      },
+      "perry": {
+        "bytes": 101959152,
+        "sha256": "7e8121bb3ea652a7f53b32bc811d62bcd3613d66c8a5fb1ddabaaa727fa083d3"
+      },
+      "perry-wit": {
+        "bytes": 3175728,
+        "sha256": "041860e324c28b53c0abd7dc5ef4c280480440c5cba7be6cc25f7c601df79a50"
+      }
+    },
+    "engineSha256": "25c9db2cef091593f6403fbca6ac94a6e84fa9ad765746fea987a376f3afd4bb",
+    "engineRawBytes": 245619712,
+    "engineCompressedBytes": 40220829,
+    "decompressedEngine": "/root/codex-components-p2-20261021/component-expanded-production-npm/cache/265b89d-1dc09d84/libperry_component_host.a",
+    "npmTarballs": {
+      "perryts-perry-linux-x64-0.5.1663.tgz": {
+        "bytes": 208705273,
+        "sha256": "6a99d924d94279e42981377318ad60ba947dca4178612af3d8b020cefabd8f38"
+      },
+      "perryts-perry-0.5.1663.tgz": {
+        "bytes": 7549,
+        "sha256": "37a48dfaeae019b0869ede88f4aad36548ac4dab3626616e4b5021e567120fcd"
+      }
+    },
+    "componentizeTool": {
+      "path": "/root/codex-components-p2-20261021/integration-target/perry-dev/examples/componentize",
+      "sha256": "620ae6fad44fcd3070b3651f2d1180e1df4cb5f7a9eaea2e4314ca945e07c70c"
+    },
+    "wrapperSha256": {
+      "npm-perry": "740e2fb5d24b6dc3bdb8e329446ce2c287975a6c3507d1352fea79f9af7dd961",
+      "npm-perry-wit": "9b470ffc6d4b0b3caccc29f373c81a6441438cbe164c4a229febd1cd75f4899b"
+    }
+  },
+  "artifactRunUrl": "https://github.com/PerryTS/perry/actions/runs/39827473005",
+  "artifactId": 12457406749,
+  "evidenceArchiveSha256": "351ee4e55fc4c40b31bc406cbe303adeb8b9611094954ce6b478c1bec90d9aa6",
+  "limits": [
+    "Linux GNU x86_64 only",
+    "No publication or registry installation",
+    "No instrumented moving-GC claim",
+    "Componentizer is a separately hashed fixture tool, not part of the npm package",
+    "macOS and Windows expanded production qualification remains pending"
+  ]
+}

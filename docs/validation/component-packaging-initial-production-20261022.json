@@ -1,0 +1,268 @@
+{
+  "scope": "Production f33 archive npm pack/unpack and transparent compressed engine discovery. Initial component ABI profile; no registry publication and no ABI5 command/host-resource qualification.",
+  "sourceRevision": "f33f493ac65bfd63088e73b5323eeac8608c1907",
+  "productionRun": 39666363815,
+  "linuxArchiveArtifact": 12384287233,
+  "productionArchiveChecks": {
+    "linux": {
+      "sourceRevision": "f33f493ac65bfd63088e73b5323eeac8608c1907",
+      "run": 39666363815,
+      "artifactId": 12384037257,
+      "evidenceZipSha256": "154e08f1c5351d19c53f692375c0a2a4ef67d23575ffac09dd1a8d505836eb97",
+      "outerPhases": 6,
+      "nativePhases": 15,
+      "exactNetworkPayloadsVerified": true,
+      "passed": true,
+      "scope": "Initial-profile production archive execution; not ABI5 commands/host resources. Installed artifact sizes/hashes recorded by CI; full archive not yet downloaded/rehashed.",
+      "ciRecordedArchive": {
+        "name": "perry-linux-x86_64.tar.gz",
+        "sha256": "098f9590a8d69529c163cde1e9af8496306cde8cdb6c258675a46f2bd03d57dd",
+        "bytes": 512561072
+      },
+      "ciRecordedInstalledFiles": {
+        "libperry_component_host.a": {
+          "bytes": 235912106,
+          "sha256": "c990a02ee2c9587de79a573ce4f7519854c1d95c8329f8203c03a5ee0c3bfc8f"
+        },
+        "libperry_runtime.a": {
+          "bytes": 71821268,
+          "sha256": "374aa05e9dec3eacf565a582146f7a1fb3e076619c9064eef2016183ddb5936c"
+        },
+        "libperry_runtime.a.gc-effects": {
+          "bytes": 321526,
+          "sha256": "257232a6e8f03bd21b6bdbd56a519c90628eaf9d1983ee312bc7b45402b52387"
+        },
+        "libperry_stdlib.a": {
+          "bytes": 147885738,
+          "sha256": "56c3a8889a6b3024204d83e24ae2b97f4b78d1b228bfe169b242f81c63f9819a"
+        },
+        "perry": {
+          "bytes": 102023088,
+          "sha256": "3a4db2c01c0bc223f7106b137a1151508964bb87218ad01340233b154b6576f8"
+        },
+        "perry-wit": {
+          "bytes": 3170912,
+          "sha256": "95f23b764aff4c2752bbc5a5af86c32df25c3990cafdd7703a0735c62d2f34ae"
+        }
+      },
+      "retainedSha256": {
+        "acceptance/bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "acceptance/compile-host.log": "18c56a833b3290dc2bac3d59b30b97e115830eaa9ff74d04f1d68819a6d01816",
+        "acceptance/componentize.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "acceptance/network-bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "acceptance/network-compile.log": "6e366fc03c0ce5a03c37e9fcb3d37c540ffd61427d6929c32adc7a01156c462a",
+        "acceptance/network-componentize.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "acceptance/network-guest.log": "27b765e15e2f381d0eaac4d3fb54edb11811466f56ee9212eede89b2e4682c3a",
+        "acceptance/network-peer.json": "851f0f15cd0efd70a1229c461b670d208221019d521192dd5fccc0e3820d51c1",
+        "acceptance/network-run.log": "c4336507eed44ca20a5cb78342264ee5447dede57d09ea7c5fdc1a59a3f14696",
+        "acceptance/resources-bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "acceptance/resources-compile.log": "82129807a24d1ec85c824ec470e311acdf20f83dc1c49555a96f48d79ded1c53",
+        "acceptance/resources-componentize.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "acceptance/resources-guest.log": "42765b3ce9daa23c83a340ca3b66cb4664b64d0d5c5b10a4a93ca2d201d4028b",
+        "acceptance/resources-run.log": "b8a54ea58f0dc70699e0d16a2976c585a0fa10352f7f5678a6273df2922a1463",
+        "acceptance/results.json": "303e27428bd91fd7cef4fff864d267b1467d929b2b95af0f28e5e759b497bfbb",
+        "acceptance/run-host.log": "cb43de132c0975d5f3f57bf550a7b7ef62cc6e54749e8c276f13abcd7a0ffcb9",
+        "acceptance/rust-guest.log": "5f0ac05a5b56044b5571b1003c65df04c4f50b6b7fdc9d94159e8a658d5a4ff4",
+        "bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "guest-bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "missing-engine.log": "cb0dba4422eb7a54f509351146264072e329e031b77e9f25de8d06e8037a0f18",
+        "native-acceptance.log": "a24e87a4e1039da2982c8eb7fb648efb9890a2bfb05b1b00fe4a98ae52464c2c",
+        "ordinary-compile.log": "406008747a11d87a45e8311ec4f3a44c430609bde5d47b03b3fb68f74f976d12",
+        "ordinary-run.log": "4aba6e247eda1432b75c2bb8b6dd22d043a239a20ae90e855107521c19bf1df1",
+        "qualification.json": "19b91dc5c75539d83d2265d263e3c1db9c23f548b667eb04b772294915ef4d06",
+        "results.json": "05dcf4456c3ddd1580790f6e15b9eae863aa8777314eef8a08b43c08509f1767"
+      }
+    },
+    "macos": {
+      "sourceRevision": "f33f493ac65bfd63088e73b5323eeac8608c1907",
+      "run": 39666363815,
+      "artifactId": 12388090951,
+      "evidenceZipSha256": "7f083fde4eda09a20cb03359a94dcc3ee480fcf215408899877e7f0520beb80c",
+      "outerPhases": 6,
+      "nativePhases": 15,
+      "exactNetworkPayloadsVerified": true,
+      "passed": true,
+      "scope": "Initial-profile production archive execution; not ABI5 commands/host resources. Installed artifact sizes/hashes recorded by CI; full archive not downloaded/rehashed.",
+      "ciRecordedArchive": {
+        "name": "perry-macos-aarch64.tar.gz",
+        "sha256": "9027d0daa0c5df187eabc3fc5ed88a84dab8d88898d3715348e317b91643a90f",
+        "bytes": 583668105
+      },
+      "ciRecordedInstalledFiles": {
+        "libperry_component_host.a": {
+          "bytes": 217315656,
+          "sha256": "5bdb575445787134e780f312b1dd2197e25296a76eee590be423218a3bb70666"
+        },
+        "libperry_runtime.a": {
+          "bytes": 49558544,
+          "sha256": "9278e447f038b1720bde2fb62987df6d0e86f186bc0be2831b6de907c5842477"
+        },
+        "libperry_runtime.a.gc-effects": {
+          "bytes": 321251,
+          "sha256": "3b904de87cd7d188a9a4d2413138d904a0fac8641d31b4db6797c7717c1693d6"
+        },
+        "libperry_stdlib.a": {
+          "bytes": 97410712,
+          "sha256": "50fac7f6a284f3a51bd3f67688d0a63f916bb7e6babae5b535e1f51a049d4730"
+        },
+        "perry": {
+          "bytes": 77138064,
+          "sha256": "7796bc457803f27a4fcdb0b50f6574a1a2440b8b3e389dd90466f14d7241401b"
+        },
+        "perry-wit": {
+          "bytes": 2569568,
+          "sha256": "b35ef14d93c4f57b98d4a6916d05eb74b0864a900a5dd664ddd6db3a6115a244"
+        }
+      },
+      "retainedSha256": {
+        "acceptance/bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "acceptance/compile-host.log": "c7819d6a5139dbf6dd81dd72d9a7b4bff0e86442a729a42d9f9233b67a45a3ad",
+        "acceptance/componentize.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "acceptance/network-bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "acceptance/network-compile.log": "7995892a580f8986e202f9395e21c67d5b36014d91bae214855b5af172b3d1e7",
+        "acceptance/network-componentize.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "acceptance/network-guest.log": "875606d5441577a4da6c030f630f930bfb1cb4ec3df622098a18b49a0ed254a2",
+        "acceptance/network-peer.json": "a7f97a1b2b1e87dd09ed0142ab64584fca774620c1e21dbde0bc1a9f4c9c4a8c",
+        "acceptance/network-run.log": "c4336507eed44ca20a5cb78342264ee5447dede57d09ea7c5fdc1a59a3f14696",
+        "acceptance/resources-bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "acceptance/resources-compile.log": "9608654a0edd08dc2a1e177ae674bf4fe5a10c684c18b18134d49e61d5eb0a3e",
+        "acceptance/resources-componentize.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "acceptance/resources-guest.log": "385a1f07d4eb6161d74bac27ebe30ef8ff416028bb362b4d84b3335c3e5d6eff",
+        "acceptance/resources-run.log": "b8a54ea58f0dc70699e0d16a2976c585a0fa10352f7f5678a6273df2922a1463",
+        "acceptance/results.json": "ce3a4d8e37592609a82f016abaed11cfa267a42e3fb75f2f87276f53d576958b",
+        "acceptance/run-host.log": "cb43de132c0975d5f3f57bf550a7b7ef62cc6e54749e8c276f13abcd7a0ffcb9",
+        "acceptance/rust-guest.log": "bd4f6e03bde4ace9f07c7349b8ef5d6dda6c81cef5a2e6bcab117fe97032a706",
+        "bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "guest-bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "missing-engine.log": "36ab718fcf389d87e837c0562da02df008319c9600fc3708f154bf09d4204bda",
+        "native-acceptance.log": "290216a0e94de7be755956d45af3a7154017e4a851a8297be2ace1c6beffba4a",
+        "ordinary-compile.log": "bbac23a2a0882648278336ac0ddde47219cf89319c0e7df4b36ed23d60998463",
+        "ordinary-run.log": "4aba6e247eda1432b75c2bb8b6dd22d043a239a20ae90e855107521c19bf1df1",
+        "qualification.json": "ae951ee5b8632ca5748da722e88e941d148c9780ef1e339953f474122d9c924f",
+        "results.json": "e1f312cf2dbd1322a81869954e7e85fe04c189d323aeaa3da17fc864ac4b7401"
+      }
+    }
+  },
+  "linuxNpmTransport": {
+    "scope": "Production f33 archive npm pack/unpack and transparent compressed engine discovery. Initial component ABI profile; no registry publication and no ABI5 command/host-resource qualification.",
+    "artifactSourceRevision": "f33f493ac65bfd63088e73b5323eeac8608c1907",
+    "transportSourceRevision": "f33f493ac65bfd63088e73b5323eeac8608c1907",
+    "passed": true,
+    "phases": [
+      {
+        "name": "stage",
+        "exitCode": 0,
+        "passed": true,
+        "logSha256": "5bb9f8013b27d274ca179eb1af3f3da5ddab7bc885f2ee388c4bac4c37f5ffaa"
+      },
+      {
+        "name": "pack-perry-linux-x64",
+        "exitCode": 0,
+        "passed": true,
+        "logSha256": "3b759621edbd072a9a4b324fbba825cd0c4942e3b0fd203d3353aca4827d19cd"
+      },
+      {
+        "name": "pack-perry",
+        "exitCode": 0,
+        "passed": true,
+        "logSha256": "61b79125f74aaf995408d9ad01f0ee07544d53d261a216c3a319513992cc312f"
+      },
+      {
+        "name": "wit",
+        "exitCode": 0,
+        "passed": true,
+        "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "compile",
+        "exitCode": 0,
+        "passed": true,
+        "logSha256": "1155e37f74689b9f9885eb2c0128fe4d4b6bfcc5a67090d2b40facef59924f35"
+      },
+      {
+        "name": "execute",
+        "exitCode": 0,
+        "passed": true,
+        "logSha256": "cb43de132c0975d5f3f57bf550a7b7ef62cc6e54749e8c276f13abcd7a0ffcb9"
+      }
+    ],
+    "archive": {
+      "name": "perry-linux-x86_64.tar.gz",
+      "sha256": "098f9590a8d69529c163cde1e9af8496306cde8cdb6c258675a46f2bd03d57dd",
+      "bytes": 512561072
+    },
+    "installedFilesVerified": {
+      "libperry_component_host.a": {
+        "bytes": 235912106,
+        "sha256": "c990a02ee2c9587de79a573ce4f7519854c1d95c8329f8203c03a5ee0c3bfc8f"
+      },
+      "libperry_runtime.a": {
+        "bytes": 71821268,
+        "sha256": "374aa05e9dec3eacf565a582146f7a1fb3e076619c9064eef2016183ddb5936c"
+      },
+      "libperry_runtime.a.gc-effects": {
+        "bytes": 321526,
+        "sha256": "257232a6e8f03bd21b6bdbd56a519c90628eaf9d1983ee312bc7b45402b52387"
+      },
+      "libperry_stdlib.a": {
+        "bytes": 147885738,
+        "sha256": "56c3a8889a6b3024204d83e24ae2b97f4b78d1b228bfe169b242f81c63f9819a"
+      },
+      "perry": {
+        "bytes": 102023088,
+        "sha256": "3a4db2c01c0bc223f7106b137a1151508964bb87218ad01340233b154b6576f8"
+      },
+      "perry-wit": {
+        "bytes": 3170912,
+        "sha256": "95f23b764aff4c2752bbc5a5af86c32df25c3990cafdd7703a0735c62d2f34ae"
+      }
+    },
+    "engineSha256": "c990a02ee2c9587de79a573ce4f7519854c1d95c8329f8203c03a5ee0c3bfc8f",
+    "engineRawBytes": 235912106,
+    "engineCompressedBytes": 39653474,
+    "witBytes": 3170912,
+    "npmTarballs": {
+      "perryts-perry-linux-x64-0.5.1663.tgz": {
+        "bytes": 208099510,
+        "sha256": "b858d5e8ce39c9e14736a546f11ba04ec4cd1b775a9bdde42c974690ca96d1e8"
+      },
+      "perryts-perry-0.5.1663.tgz": {
+        "bytes": 7549,
+        "sha256": "37a48dfaeae019b0869ede88f4aad36548ac4dab3626616e4b5021e567120fcd"
+      }
+    },
+    "decompressedEngine": "/root/codex-components-p2-20261021/component-package-prod-transport-v2/cache/25d1062-1dc09d84/libperry_component_host.a",
+    "fixtureComponentSha256": "5175bce31b3a083c7c104ebb3579d44335482321c15cbd9391f6318c2b9e8d3e",
+    "inputSourceSha256": {
+      "Cargo.toml": "f2eaac6aebe85bb77239903bee27fc6a4b7d1a71731f9bdc50325bc96251d959",
+      "LICENSE": "c871483477d7105432645affac5be5edbd92b41a6faedb4c692e0681e46ada09",
+      "npm/perry/README.md": "94e7b54677ec36b793932c6da570b4d6ad28a0f4d84f337265b9de843e109e4d",
+      "npm/perry/bin/detect.cjs": "b4e8e3a6d7ad3ba3bcfbd1e1e0acec37eafd93a9b07b0019ce9db3e406c31c33",
+      "npm/perry/bin/perry-wit.js": "d82f1c59c474e56bcd871526594e1f0e8eab95b4684d66c46bd357a1b403fec1",
+      "npm/perry/bin/perry.js": "717e41c482dcaa4c01ab569c273de0e1ae32418fef6cd4aeb3008225f3ef1e58",
+      "npm/perry/package.json.tmpl": "904b6249c91dd1885dee310b94f6d5208406adc0bdf2b6c5c3bd5906419a509e",
+      "npm/perry/test/detect.test.cjs": "3fff69a7bf4cb97a3c8b37ec63d2867607d3144056d092c2882a9cf909167e94",
+      "npm/perry/test/wit-launcher.test.cjs": "30ae54fb7a7b30a32dcc5473ecd10d01c2d9f1f11a04a44fc2245ed5527ba2d2",
+      "npm/perry-darwin-arm64/package.json.tmpl": "61fde6146639af2347df119feebb17f6ad3a0a8a6431efbeda7201bf632f3099",
+      "npm/perry-darwin-x64/package.json.tmpl": "fa431dfaf0b7f173eb478f8aa1ae8342149c7c9ec39540b6b793fc6caf6672b9",
+      "npm/perry-linux-arm64/package.json.tmpl": "91fece516527d361f15179f39a51d807ad48425a18f37753a828b95d3ae0a613",
+      "npm/perry-linux-arm64-musl/package.json.tmpl": "75baffc26be3783322a2feb279224a593bb1a1fe21fd1baf8657e24ecac4f3b7",
+      "npm/perry-linux-x64/package.json.tmpl": "e318575fff465c29b44dee61e3b8f88b5ec87e2aef47dc835c66dd50854e0226",
+      "npm/perry-linux-x64-musl/package.json.tmpl": "5b14000eca942e47607b1c889d87d0b112e30779f76ebe2f4c74dfe3dd05bb4b",
+      "npm/perry-win32-arm64/package.json.tmpl": "d44c4d9e87ca42eb4b02fe16af7a195ee2a2642dd97b794cf546e65755050b1a",
+      "npm/perry-win32-x64/package.json.tmpl": "f923ac6d00f9130f496d330eee688e99be7a974bd4d7ead4e8ac81fb2fbaf2cf",
+      "scripts/stage-npm.sh": "b4c39b77391fd4a2c498673763eac7a4fa42b26b0608c3d0e5a9bd1f119f59bb",
+      "test-wasi/components/transform/host.ts": "c54f026ee749fa4cb9af83100a96859b89c533ecef2974f2b4a95e6dc95f5bff",
+      "test-wasi/components/transform/world.wit": "7b4e581b0dc6cd193dfe4a2efadcbf9cc982dd26886a06237cd252a6beb32a36"
+    }
+  },
+  "retainedLogSha256": {
+    "stage.log": "5bb9f8013b27d274ca179eb1af3f3da5ddab7bc885f2ee388c4bac4c37f5ffaa",
+    "wit.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "compile.log": "1155e37f74689b9f9885eb2c0128fe4d4b6bfcc5a67090d2b40facef59924f35",
+    "execute.log": "cb43de132c0975d5f3f57bf550a7b7ef62cc6e54749e8c276f13abcd7a0ffcb9",
+    "pack-perry-linux-x64.log": "3b759621edbd072a9a4b324fbba825cd0c4942e3b0fd203d3353aca4827d19cd",
+    "pack-perry.log": "61b79125f74aaf995408d9ad01f0ee07544d53d261a216c3a319513992cc312f"
+  },
+  "transportScriptSha256": "7138c4708f42f83c8b95dafbb908cbce82293a2cf82d2a70bf96076d8dc396e9"
+}

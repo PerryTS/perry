@@ -23,12 +23,14 @@ class Perry < Formula
   def install
     if OS.mac?
       bin.install "perry"
-      lib.install Dir["libperry_*.a"]
+      bin.install "perry-wit" if File.exist?("perry-wit")
+      lib.install Dir["libperry_*.a"] + Dir["libperry_*.a.gc-effects"]
     else
       system "cargo", "build", "--release"
-      system "cargo", "build", "--release", "-p", "perry-runtime", "-p", "perry-stdlib"
-      bin.install "target/release/perry"
-      lib.install Dir["target/release/libperry_*.a"]
+      system "cargo", "build", "--release", "-p", "perry", "-p", "perry-runtime-static", "-p", "perry-stdlib-static", "-p", "perry-wasm-host", "-p", "perry-component-host", "-p", "perry-wit"
+      system "cargo", "run", "--release", "-p", "perry-gc-effects", "--", "sidecars", "target/release"
+      bin.install "target/release/perry", "target/release/perry-wit"
+      lib.install Dir["target/release/libperry_*.a"] + Dir["target/release/libperry_*.a.gc-effects"]
     end
   end
 
