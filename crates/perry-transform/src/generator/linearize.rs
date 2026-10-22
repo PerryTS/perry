@@ -55,6 +55,10 @@ pub struct DelegationRoute {
     /// result here, then re-drives the state machine so the loop's condition
     /// state observes `__del_result.done` (spec `yield *` step 6.b.ii.5-7).
     pub result_id: LocalId,
+    /// Sync delegations: the step kind of the value in `result_id` (0 a raw
+    /// yielded value, 1 a raw completion value, 2 an inner result object; see
+    /// `js_iterator_delegate_kind`). Async delegations always hold objects.
+    pub kind_id: Option<LocalId>,
     /// The drive loop's condition-check state — where `gen.throw(e)` re-enters
     /// the dispatch loop after writing `result_id`, so a `done` inner result
     /// resumes the outer body after the `yield *` and a not-`done` result
@@ -98,15 +102,15 @@ impl DelegationRoute {
 /// `passthrough` Yield exit and the marker never reaches codegen.
 const YIELD_RESULT_MARKER: &str = "__perry_generator_yield_inner_result";
 
-fn passthrough_yield(result_id: LocalId) -> Expr {
+fn passthrough_yield(result_id: LocalId, kind_id: LocalId) -> Expr {
     Expr::Yield {
         value: Some(Box::new(Expr::Call {
             callee: Box::new(Expr::ExternFuncRef {
                 name: YIELD_RESULT_MARKER.to_string(),
-                param_types: vec![Type::Any],
+                param_types: vec![Type::Any, Type::Number],
                 return_type: Type::Any,
             }),
-            args: vec![Expr::LocalGet(result_id)],
+            args: vec![Expr::LocalGet(result_id), Expr::LocalGet(kind_id)],
             type_args: vec![],
             byte_offset: 0,
         })),
@@ -114,11 +118,14 @@ fn passthrough_yield(result_id: LocalId) -> Expr {
     }
 }
 
-fn passthrough_result(value: &Expr) -> Option<Expr> {
+/// The re-yielded pull value and the local holding its step kind.
+fn passthrough_result(value: &Expr) -> Option<(Expr, LocalId)> {
     match value {
-        Expr::Call { callee, args, .. } if args.len() == 1 => match callee.as_ref() {
-            Expr::ExternFuncRef { name, .. } if name == YIELD_RESULT_MARKER => {
-                Some(args[0].clone())
+        Expr::Call { callee, args, .. } if args.len() == 2 => match (callee.as_ref(), &args[1]) {
+            (Expr::ExternFuncRef { name, .. }, Expr::LocalGet(kind_id))
+                if name == YIELD_RESULT_MARKER =>
+            {
+                Some((args[0].clone(), *kind_id))
             }
             _ => None,
         },
@@ -240,7 +247,7 @@ fn delegate_next_call(del_next_id: LocalId, del_iter_id: LocalId, arg: Expr) -> 
     } else {
         Expr::Call {
             callee: Box::new(Expr::ExternFuncRef {
-                name: "js_iterator_delegate_next".to_string(),
+                name: "js_iterator_delegate_step".to_string(),
                 param_types: vec![Type::Any, Type::Any, Type::Any],
                 return_type: Type::Any,
             }),
@@ -273,6 +280,33 @@ fn delegate_next_call(del_next_id: LocalId, del_iter_id: LocalId, arg: Expr) -> 
     }
 }
 
+/// A sync pull's step kind: 0 a raw yielded value, 1 a raw completion value
+/// (a fixed-state delegate stepped through its intrinsic `next`, read from its
+/// record), or 2 an inner result object. It reads one record control.
+fn delegate_kind_set(kind_id: LocalId, del_next_id: LocalId, del_iter_id: LocalId) -> Stmt {
+    Stmt::Expr(Expr::LocalSet(
+        kind_id,
+        Box::new(Expr::Call {
+            callee: Box::new(Expr::ExternFuncRef {
+                name: "js_iterator_delegate_kind".to_string(),
+                param_types: vec![Type::Any, Type::Any],
+                return_type: Type::Number,
+            }),
+            args: vec![Expr::LocalGet(del_iter_id), Expr::LocalGet(del_next_id)],
+            type_args: vec![],
+            byte_offset: 0,
+        }),
+    ))
+}
+
+fn kind_is(kind_id: LocalId, kind: f64) -> Expr {
+    Expr::Compare {
+        op: CompareOp::Eq,
+        left: Box::new(Expr::LocalGet(kind_id)),
+        right: Box::new(Expr::Number(kind)),
+    }
+}
+
 /// Emit the common `yield *` delegation prelude + driving loop into `current`
 /// and linearize it. Shared by all three desugar positions (statement-level
 /// `yield* e`, `return yield* e`, `let x = yield* e`). Returns the local id
@@ -296,6 +330,9 @@ fn emit_yield_star_loop(
     let del_iter_id = alloc_local(next_local_id);
     let del_next_id = alloc_local(next_local_id);
     let del_result_id = alloc_local(next_local_id);
+    // Sync: the pulled value's step kind. A fixed-state delegate hands back
+    // its raw value, so no IteratorResult exists between the two generators.
+    let del_kind_id = (!linearize_async_generator()).then(|| alloc_local(next_local_id));
 
     // #1831: resolve the iterator (a generator *call* already is its iterator;
     // an arbitrary iterable resolves via `[Symbol.iterator]` /
@@ -323,23 +360,23 @@ fn emit_yield_star_loop(
             Expr::Undefined,
         ))),
     )));
+    current.extend(del_kind_id.map(|kind| delegate_kind_set(kind, del_next_id, del_iter_id)));
     // Async `yield *`: the awaited iter-result must be an Object or `next()`
     // throws a TypeError (test262 yield-star-next-non-object-ignores-then).
     current.extend(delegate_result_object_check(del_result_id));
 
     // #1832: in-loop pull forwards the outer resume value (`outer.next(v)` →
     // `sent_id`) into the delegated iterator's `next(v)`.
-    let reyield = if linearize_async_generator() {
-        Stmt::Expr(Expr::Yield {
+    let reyield = match del_kind_id {
+        None => Stmt::Expr(Expr::Yield {
             value: Some(Box::new(Expr::PropertyGet {
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(del_result_id)),
                 property: "value".to_string(),
             })),
             delegate: false,
-        })
-    } else {
-        Stmt::Expr(passthrough_yield(del_result_id))
+        }),
+        Some(kind) => Stmt::Expr(passthrough_yield(del_result_id, kind)),
     };
     let mut while_body = vec![
         // Spec step `received be AsyncGeneratorYield(? IteratorValue(innerResult))`.
@@ -360,16 +397,27 @@ fn emit_yield_star_loop(
             ))),
         )),
     ];
+    while_body.extend(del_kind_id.map(|kind| delegate_kind_set(kind, del_next_id, del_iter_id)));
     // Same Object-check on the in-loop pull (async generators only).
     while_body.extend(delegate_result_object_check(del_result_id));
+    let not_done = Expr::Unary {
+        op: UnaryOp::Not,
+        operand: Box::new(Expr::PropertyGet {
+            byte_offset: 0,
+            object: Box::new(Expr::LocalGet(del_result_id)),
+            property: "done".to_string(),
+        }),
+    };
     let while_stmt = Stmt::While {
-        condition: Expr::Unary {
-            op: UnaryOp::Not,
-            operand: Box::new(Expr::PropertyGet {
-                byte_offset: 0,
-                object: Box::new(Expr::LocalGet(del_result_id)),
-                property: "done".to_string(),
-            }),
+        // Sync: an inner result object answers IteratorComplete by [[Get]];
+        // a raw pull value is unfinished exactly when it was yielded.
+        condition: match del_kind_id {
+            None => not_done,
+            Some(kind) => Expr::Conditional {
+                condition: Box::new(kind_is(kind, 2.0)),
+                then_expr: Box::new(not_done),
+                else_expr: Box::new(kind_is(kind, 0.0)),
+            },
         },
         body: while_body,
     };
@@ -400,6 +448,7 @@ fn emit_yield_star_loop(
                 suspend_state_hi: deleg_hi,
                 iter_id: del_iter_id,
                 result_id: del_result_id,
+                kind_id: del_kind_id,
                 // `current` always holds the iterator-setup prelude pushed above,
                 // so the `while` linearizer emits a non-empty pre-loop state at
                 // `deleg_lo` and the condition state at `deleg_lo + 1`.
@@ -414,12 +463,21 @@ fn emit_yield_star_loop(
     // generator here regardless of position — including bare statement-level
     // `yield* e`, where the value is otherwise discarded.
     let del_value_id = alloc_local(next_local_id);
+    let inner_value = Expr::PropertyGet {
+        byte_offset: 0,
+        object: Box::new(Expr::LocalGet(del_result_id)),
+        property: "value".to_string(),
+    };
     current.push(Stmt::Expr(Expr::LocalSet(
         del_value_id,
-        Box::new(Expr::PropertyGet {
-            byte_offset: 0,
-            object: Box::new(Expr::LocalGet(del_result_id)),
-            property: "value".to_string(),
+        Box::new(match del_kind_id {
+            None => inner_value,
+            // A raw completion value is the delegate's return value itself.
+            Some(kind) => Expr::Conditional {
+                condition: Box::new(kind_is(kind, 2.0)),
+                then_expr: Box::new(inner_value),
+                else_expr: Box::new(Expr::LocalGet(del_result_id)),
+            },
         }),
     )));
 
@@ -434,13 +492,14 @@ pub struct State {
 
 pub enum StateExit {
     /// Yield a value and advance to next_state. With `passthrough`, `value`
-    /// is a sync `yield*` delegate's inner result object, which the step
-    /// returns as-is (spec GeneratorYield(innerResult): no re-wrap, no
-    /// `value` read).
+    /// is what a sync `yield*` pull returned and the local holds that pull's
+    /// step kind: a fixed-state delegate's raw yielded value (kind 0), or an
+    /// inner result object the step returns as-is (kind 2, spec
+    /// GeneratorYield(innerResult): no re-wrap, no `value` read).
     Yield {
         value: Expr,
         next_state: u32,
-        passthrough: bool,
+        passthrough: Option<LocalId>,
     },
     /// #6709: async-generator `await` suspend point. Distinct from `Yield`:
     /// the value is awaited on the microtask queue (via `AsyncStepChain`) and
@@ -596,8 +655,8 @@ pub fn linearize_body(
                     .map(|v| *v.clone())
                     .unwrap_or(Expr::Undefined);
                 let (yield_val, passthrough) = match passthrough_result(&yield_val) {
-                    Some(result) => (result, true),
-                    None => (yield_val, false),
+                    Some((result, kind_id)) => (result, Some(kind_id)),
+                    None => (yield_val, None),
                 };
                 let this_state = *state_num;
                 *state_num += 1;
@@ -772,7 +831,7 @@ pub fn linearize_body(
                     exit: StateExit::Yield {
                         value: yield_val,
                         next_state: *state_num,
-                        passthrough: false,
+                        passthrough: None,
                     },
                 });
                 // Continuation state: return { value: __sent, done: true }
@@ -1688,7 +1747,7 @@ pub fn linearize_body(
                     exit: StateExit::Yield {
                         value: yield_val,
                         next_state: *state_num,
-                        passthrough: false,
+                        passthrough: None,
                     },
                 });
                 // Assign __sent (the value from next(val)) to the target local

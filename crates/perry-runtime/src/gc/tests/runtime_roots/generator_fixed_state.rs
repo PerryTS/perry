@@ -13,7 +13,7 @@ extern "C" fn resume_body(
     _: f64,
     _: f64,
 ) -> f64 {
-    crate::closure::js_closure_get_capture_f64(c, 4)
+    crate::closure::js_closure_get_capture_f64(c, 5)
 }
 
 fn make_generator() -> f64 {
@@ -24,14 +24,14 @@ fn make_generator() -> f64 {
     ));
     let state = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
         crate::fn_info!(resume_body, 2),
-        5,
+        6,
     ));
     let child = crate::object::js_object_alloc(0, 1);
     crate::object::js_object_set_field(child, 0, crate::value::JSValue::number(42.0));
     state.with_mut_ptr(|state| {
         crate::closure::js_closure_set_capture_f64(
             state,
-            4,
+            5,
             crate::value::js_nanbox_pointer(child as i64),
         )
     });
@@ -71,7 +71,7 @@ fn generator_fixed_state_record_and_capture_follow_a_copying_minor() {
     // the born descriptor's public edge above is the GC subject here.
     let state_before = crate::object::fixed_generator_state(value).unwrap() as usize;
     let child_before =
-        crate::closure::js_closure_get_capture_f64(state_before as *const _, 4).to_bits();
+        crate::closure::js_closure_get_capture_f64(state_before as *const _, 5).to_bits();
     let trace = collect_minor_trace(GcTriggerKind::MallocCount);
     assert!(
         trace.copying_nursery.eligible,
@@ -83,7 +83,7 @@ fn generator_fixed_state_record_and_capture_follow_a_copying_minor() {
         state as usize, state_before,
         "subject: the private record moved"
     );
-    let child = crate::closure::js_closure_get_capture_f64(state, 4);
+    let child = crate::closure::js_closure_get_capture_f64(state, 5);
     assert_ne!(
         child.to_bits(),
         child_before,
@@ -113,7 +113,7 @@ fn generator_fixed_state_record_and_capture_follow_a_copying_minor() {
     unsafe {
         crate::object::js_generator_set_slot(
             state as *mut _,
-            4,
+            5,
             crate::value::js_nanbox_pointer(young as i64).to_bits(),
             0,
         );
@@ -122,7 +122,7 @@ fn generator_fixed_state_record_and_capture_follow_a_copying_minor() {
     assert!(trace.copying_nursery.eligible);
     let state =
         crate::object::fixed_generator_state(f64::from_bits(js_shadow_slot_get(0))).unwrap();
-    let child = crate::closure::js_closure_get_capture_f64(state, 4);
+    let child = crate::closure::js_closure_get_capture_f64(state, 5);
     assert_ne!(
         child.to_bits(),
         crate::value::js_nanbox_pointer(young as i64).to_bits(),

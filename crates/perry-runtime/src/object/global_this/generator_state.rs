@@ -192,15 +192,69 @@ pub(crate) fn fixed_generator_state(value: f64) -> Option<*const crate::closure:
     }
 }
 
-/// The generator birth owns an inaccessible, two-parameter compiled resume
-/// body (one argument for bodies with no abrupt routes). Once the receiver's brand proves that edge, no general callable,
-/// rest-argument or arity dispatch remains to resolve.
+/// The record's fifth compiler-owned control: how the body's last activation
+/// ended. The body writes it (a pointer-free number) right before it returns;
+/// the boundary reads it back. Controls 0..=3 are state, done, sent and
+/// executing.
+const STEP_SLOT: usize = 4;
+/// The returned value is a yielded value: `{ value, done: false }`.
+pub(crate) const STEP_YIELD: u32 = 0;
+/// The returned value is the completion value: `{ value, done: true }`.
+pub(crate) const STEP_DONE: u32 = 1;
+/// The returned value is a `yield*` delegate's inner result object, re-yielded
+/// as-is (spec GeneratorYield(innerResult)).
+pub(crate) const STEP_INNER_RESULT: u32 = 2;
+
+/// One resumed step of a fixed-state record, before any IteratorResult exists.
+/// A direct consumer (for-of, sync `yield*`) reads the pair; public `next()`,
+/// `return()` and `throw()` materialize it with [`FixedStep::into_result`].
+#[derive(Clone, Copy)]
+pub(crate) struct FixedStep {
+    pub value: f64,
+    pub kind: u32,
+}
+
+impl FixedStep {
+    /// CreateIterResultObject for a value step; an inner result is already
+    /// the object to return.
+    pub(crate) fn into_result(self) -> f64 {
+        match self.kind {
+            STEP_INNER_RESULT => self.value,
+            kind => unsafe {
+                crate::iter_result::make_iter_result(
+                    JSValue::from_bits(self.value.to_bits()),
+                    kind == STEP_DONE,
+                )
+            },
+        }
+    }
+}
+
+/// The kind of the record's last finished step, as its body recorded it.
+pub(crate) unsafe fn fixed_step_kind(state: *const crate::closure::ClosureHeader) -> u32 {
+    f64::from_bits(*state.add(1).cast::<u64>().add(STEP_SLOT)) as u32
+}
+
+/// Public protocol entry: the step as the IteratorResult object it denotes.
 #[inline(never)]
 pub(super) unsafe fn resume_fixed_state(
     state: *const crate::closure::ClosureHeader,
     op: f64,
     arg: f64,
 ) -> f64 {
+    resume_fixed_step(state, op, arg).into_result()
+}
+
+/// The generator birth owns an inaccessible, two-parameter compiled resume
+/// body (one argument for bodies with no abrupt routes). Once the receiver's brand proves that edge, no general callable,
+/// rest-argument or arity dispatch remains to resolve. The body returns the
+/// raw step value and records its kind in the record's step control.
+#[inline(never)]
+pub(crate) unsafe fn resume_fixed_step(
+    state: *const crate::closure::ClosureHeader,
+    op: f64,
+    arg: f64,
+) -> FixedStep {
     let scope = crate::gc::RuntimeHandleScope::new();
     let state = scope.root_raw_const_ptr(state);
     let get = |index| {
@@ -210,7 +264,7 @@ pub(super) unsafe fn resume_fixed_state(
     };
     let set = |index, bits| {
         state.with_const_ptr::<crate::closure::ClosureHeader, _>(|p| {
-            // GC_STORE_AUDIT(POINTER_FREE): shared done/executing controls only.
+            // GC_STORE_AUDIT(POINTER_FREE): shared done/executing/step controls only.
             p.add(1).cast::<u64>().cast_mut().add(index).write(bits);
         })
     };
@@ -228,12 +282,16 @@ pub(super) unsafe fn resume_fixed_state(
         if op == 2.0 {
             crate::exception::js_throw(arg);
         }
+        set(STEP_SLOT, (STEP_DONE as f64).to_bits());
         let value = if op == 1.0 {
             arg
         } else {
             f64::from_bits(crate::value::TAG_UNDEFINED)
         };
-        return js_generator_result(value, 1);
+        return FixedStep {
+            value,
+            kind: STEP_DONE,
+        };
     }
     set(3, crate::value::TAG_TRUE);
     if op == 0.0 {
@@ -248,7 +306,19 @@ pub(super) unsafe fn resume_fixed_state(
     let result = crate::exception::catch_generator_resume(&state, op, arg);
     set(3, crate::value::TAG_FALSE);
     match result {
-        Ok(value) => value,
+        Ok(value) => {
+            // The record can keep this value in a slot its body appends to
+            // in place. Handing it out aliases it, exactly as storing it into
+            // an IteratorResult member did: demote a uniquely owned string.
+            if value.to_bits() & crate::value::TAG_MASK == crate::value::STRING_TAG {
+                crate::string::js_string_addref(
+                    (value.to_bits() & crate::value::POINTER_MASK) as *mut crate::StringHeader,
+                );
+            }
+            let kind = f64::from_bits(get(STEP_SLOT)) as u32;
+            debug_assert!(matches!(kind, STEP_YIELD | STEP_DONE | STEP_INNER_RESULT));
+            FixedStep { value, kind }
+        }
         Err(value) => {
             set(1, crate::value::TAG_TRUE);
             crate::exception::js_throw(value)
@@ -351,6 +421,9 @@ pub extern "C" fn js_generator_create(
         );
         let state = (state & crate::value::POINTER_MASK) as *mut crate::closure::ClosureHeader;
         debug_assert!(matches!((*(*state).info).params, 1 | 2));
+        debug_assert!(
+            crate::closure::real_capture_count((*state).capture_count) as usize > STEP_SLOT
+        );
         debug_assert_eq!((*(*state).info).flags & crate::closure::FN_REST_MASK, 0);
         // A fixed generator frame contains JSValues throughout its lifetime.
         // Use the existing tag scanner even when its initial values happen to

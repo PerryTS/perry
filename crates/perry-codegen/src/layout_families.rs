@@ -1238,6 +1238,15 @@ fn colouring(modules: &[&HirModule]) -> ProgramLayouts {
                         layouts.push(keys);
                     }
                 }
+                // A sync generator's resume body returns raw step values; its
+                // protocol results are born by the runtime on the
+                // ITERATOR_RESULT layout `{value, done}`, a layout of this
+                // program like any literal's.
+                Expr::LinkGeneratorPrototype {
+                    fixed_state: true, ..
+                } => {
+                    layouts.push(vec!["value".to_string(), "done".to_string()]);
+                }
                 _ => {}
             });
         }
@@ -1681,6 +1690,35 @@ mod tests {
         assert_eq!(private.spelling(), spelling);
         assert!(FamilyKey::from("x") == "x");
         assert!(FamilyKey::Name(spelling.clone()) != private);
+    }
+
+    #[test]
+    fn a_fixed_state_generator_contributes_its_iterator_result_layout() {
+        // The resume body returns raw step values; the runtime births the
+        // protocol results on `{value, done}`. Reads of those keys through
+        // receivers nothing proves keep their colour slots.
+        let mut hir = HirModule::new("generator_results");
+        let get = |property: &str| {
+            Stmt::Expr(Expr::PropertyGet {
+                byte_offset: 0,
+                object: Box::new(Expr::LocalGet(1)),
+                property: property.to_string(),
+            })
+        };
+        hir.init = vec![
+            Stmt::Expr(Expr::LinkGeneratorPrototype {
+                obj: Box::new(Expr::Undefined),
+                is_async: false,
+                fixed_state: true,
+                i32_controls: Vec::new(),
+                i1_controls: Vec::new(),
+            }),
+            get("value"),
+            get("done"),
+        ];
+        let colours = colouring(&[&hir]);
+        assert_eq!(colours.colored("value").map(|(_, slot)| slot), Some(0));
+        assert_eq!(colours.colored("done").map(|(_, slot)| slot), Some(1));
     }
 
     #[test]

@@ -372,10 +372,11 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
         &[DOUBLE, DOUBLE, DOUBLE],
     );
     module.declare_function(
-        "js_iterator_delegate_next",
+        "js_iterator_delegate_step",
         DOUBLE,
         &[DOUBLE, DOUBLE, DOUBLE],
     );
+    module.declare_function("js_iterator_delegate_kind", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_iterator_delegate_return", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_iterator_delegate_throw", DOUBLE, &[DOUBLE, DOUBLE]);
     // #10524: `const [a, b] = <untyped>` — 0 when the source is an ordinary

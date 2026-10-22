@@ -45,23 +45,25 @@ pub unsafe extern "C-unwind" fn js_iterator_step(iter: f64, next: f64, out: *mut
         }
     }
     // A sync generator stepped through its captured intrinsic `next`: the
-    // call is its record's resume, and the result it bears is still on its
-    // born layout unless the body handed back a `yield*` inner result.
-    if let Some(result) =
-        crate::object::resume_intrinsic_sync_protocol(iter, next, f64::from_bits(TAG_UNDEFINED))
+    // call is its record's resume, and the step comes back as its raw value
+    // and kind, with no IteratorResult object. Only a `yield*` inner result
+    // re-yielded by the body is an object, read by ordinary [[Get]].
+    if let Some(step) =
+        crate::object::resume_intrinsic_sync_step(iter, next, f64::from_bits(TAG_UNDEFINED))
     {
-        if let Some((value, done)) = crate::iter_result::born_iter_result_pair(result) {
-            if !out.is_null() {
-                // GC_STORE_AUDIT(STACK): publish to the caller's native frame slot after reentry.
-                *out = if done {
-                    f64::from_bits(TAG_UNDEFINED)
-                } else {
-                    value
-                };
-            }
-            return i32::from(done);
+        if step.kind == crate::object::STEP_INNER_RESULT {
+            return step_from_result(step.value, out);
         }
-        return step_from_result(result, out);
+        let done = step.kind == crate::object::STEP_DONE;
+        if !out.is_null() {
+            // GC_STORE_AUDIT(STACK): publish to the caller's native frame slot after reentry.
+            *out = if done {
+                f64::from_bits(TAG_UNDEFINED)
+            } else {
+                step.value
+            };
+        }
+        return i32::from(done);
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let iter = scope.root_nanbox_f64(iter);

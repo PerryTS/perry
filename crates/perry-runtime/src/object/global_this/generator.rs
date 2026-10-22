@@ -489,21 +489,33 @@ fn intrinsic_sync_generator_op(method: f64) -> Option<f64> {
 /// Call(`method`, `iter`, « `arg` ») when `method` is an intrinsic sync
 /// generator protocol body and `iter` carries the sync generator brand: the
 /// call IS that record's resume, so enter it without the general callable
-/// dispatch or the thunk's receiver re-classification. `None` leaves the
-/// ordinary call to the caller. Decided per use by the receiver's shape and
-/// the method's info; nothing is remembered.
+/// dispatch or the thunk's receiver re-classification. The step comes back as
+/// its (value, kind) pair; no IteratorResult object exists unless the caller
+/// materializes one. `None` leaves the ordinary call to the caller. Decided
+/// per use by the receiver's shape and the method's info; nothing is
+/// remembered.
 ///
 /// # Safety
 /// Ordinary call semantics: may run user code and collect. The caller holds
 /// no unrooted managed pointer across it.
-pub(crate) unsafe fn resume_intrinsic_sync_protocol(
+pub(crate) unsafe fn resume_intrinsic_sync_step(
     iter: f64,
     method: f64,
     arg: f64,
-) -> Option<f64> {
+) -> Option<super::generator_state::FixedStep> {
     let op = intrinsic_sync_generator_op(method)?;
     let state = super::generator_state::fixed_generator_state(iter)?;
-    Some(super::generator_state::resume_fixed_state(state, op, arg))
+    Some(super::generator_state::resume_fixed_step(state, op, arg))
+}
+
+/// The kind of the step [`resume_intrinsic_sync_step`] just took through the
+/// same (`iter`, `method`) pair, read from the record's own step control.
+/// `None` when that pair is not the intrinsic protocol on a branded record:
+/// the step was an ordinary call and returned its result object.
+pub(crate) fn intrinsic_sync_step_kind(iter: f64, method: f64) -> Option<u32> {
+    intrinsic_sync_generator_op(method)?;
+    let state = super::generator_state::fixed_generator_state(iter)?;
+    Some(unsafe { super::generator_state::fixed_step_kind(state) })
 }
 
 extern "C" fn generator_proto_next_thunk(
