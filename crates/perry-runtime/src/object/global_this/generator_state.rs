@@ -111,6 +111,11 @@ pub(crate) unsafe fn install_class_symbol_method(
         true,
     );
     let method = scope.root_nanbox_f64(method);
+    // A static Symbol-keyed method is a class static symbol member: arm the
+    // latch that instanceof's Symbol.hasInstance lookup and the other
+    // static-symbol readers gate on, or `static [Symbol.hasInstance]` is never
+    // consulted.
+    crate::symbol::CLASS_STATIC_SYMBOLS_LATCH.arm();
     crate::symbol::define_symbol_data_property(
         owner.get_nanbox_f64(),
         key.get_nanbox_f64(),
