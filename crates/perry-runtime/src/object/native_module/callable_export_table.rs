@@ -99,6 +99,8 @@ pub(super) static CALLABLE_EXPORT_TABLE: &[(&str, &[&str])] = &[
             "pathToFileURL",
             "plugin",
             "serve",
+            "sleep",
+            "sleepSync",
             "spawn",
             "stringWidth",
             "stripANSI",

@@ -315,6 +315,8 @@ pub(crate) unsafe fn nm_dispatch_bun(ctx: &NmCtx, module_name: &str, method_name
         ("bun", "stripANSI") => crate::bun_compat::js_bun_strip_ansi(arg(0)),
         ("bun", "wrapAnsi") => crate::bun_compat::js_bun_wrap_ansi(arg(0), arg(1), arg(2)),
         ("bun", "which") => crate::bun_compat::js_bun_which(arg(0), arg(1)),
+        ("bun", "sleep") => crate::bun_compat::js_bun_sleep(arg(0)),
+        ("bun", "sleepSync") => crate::bun_compat::js_bun_sleep_sync(arg(0)),
         ("bun", "zstdDecompress") => crate::bun_compat::js_bun_zstd_decompress(arg(0)),
         ("bun", "zstdDecompressSync") => crate::bun_compat::js_bun_zstd_decompress_sync(arg(0)),
         ("bun", "gc") => crate::bun_compat::js_bun_gc(arg(0)),

@@ -312,6 +312,8 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         | "stripANSI"
                         | "wrapAnsi"
                         | "which"
+                        | "sleep"
+                        | "sleepSync"
                         | "zstdDecompress"
                         | "zstdDecompressSync"
                         | "gc"

@@ -359,3 +359,38 @@ console.log(scoped());
     );
     assert_eq!(stdout, "undefined\n999\n");
 }
+
+/// `Bun.sleep(ms | Date)` resolves `undefined` after the delay (a past Date or
+/// a negative delay resolves on a later turn); `Bun.sleepSync` blocks; both
+/// are callable values. Expected output from Bun v1.3.14. opencode's TUI
+/// awaits `Bun.sleep` and logged "Bun.sleep is not supported by Perry".
+#[test]
+fn bun_sleep_resolves_after_the_delay() {
+    let stdout = compile_and_run(
+        r#"
+const t0 = Date.now();
+const r = await Bun.sleep(30);
+console.log("sleep", r === undefined, Date.now() - t0 >= 25);
+const t1 = Date.now();
+await Bun.sleep(new Date(Date.now() + 30));
+console.log("date", Date.now() - t1 >= 25);
+await Bun.sleep(new Date(0));
+await Bun.sleep(-5);
+console.log("past and negative resolve");
+const t2 = Date.now();
+Bun.sleepSync(20);
+console.log("sync", Date.now() - t2 >= 15);
+const sleep = Bun.sleep;
+console.log("value", typeof sleep, (await sleep(1)) === undefined, Bun.sleep(1) instanceof Promise);
+const order: string[] = [];
+Bun.sleep(20).then(() => order.push("b"));
+Bun.sleep(5).then(() => order.push("a"));
+await Bun.sleep(40);
+console.log("order", order.join(""));
+"#,
+    );
+    assert_eq!(
+        stdout,
+        "sleep true true\ndate true\npast and negative resolve\nsync true\nvalue function true true\norder ab\n"
+    );
+}
