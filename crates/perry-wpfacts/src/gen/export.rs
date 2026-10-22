@@ -233,8 +233,11 @@ impl<'a> Gen<'a> {
                 }
             }
         }
+        // A static namespace import of another unit sees the exports'
+        // contracts (§18.2); the namespace object itself escapes only where
+        // it reaches other units as a value.
         for mi in 0..self.mods.len() {
-            if published.is_none_or(|p| p.whole(path_of(self, mi as u32))) {
+            if published.is_none_or(|p| p.ns_object(path_of(self, mi as u32))) {
                 let t = self.mods[mi].ns_tok;
                 self.m.escape(t, r);
             }
@@ -604,20 +607,15 @@ impl<'a> Gen<'a> {
     }
 
     /// What other units stored into existing fields of this unit's literal
-    /// layouts (decision 17): an unknown value, stored into that field of
-    /// every instance of the layout by an anonymous writer. True when this
-    /// added constraints.
+    /// layouts and class instances (decision 17): an unknown value, stored
+    /// into that field of every instance of the layout by an anonymous
+    /// writer. True when this added constraints.
     fn apply_store_effects(&mut self) -> bool {
         let Some(u) = self.unit_in else { return false };
         let mut want: Vec<(TmplId, &'a String)> = Vec::new();
         for (tm, t) in self.m.tmpls.iter().enumerate() {
-            if !matches!(
-                t.kind,
-                TmplKind::Class {
-                    literal_shape: true,
-                    ..
-                }
-            ) || self.stand_in_cc.contains_key(&(tm as TmplId))
+            if !matches!(t.kind, TmplKind::Class { .. })
+                || self.stand_in_cc.contains_key(&(tm as TmplId))
             {
                 continue;
             }

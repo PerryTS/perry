@@ -830,8 +830,9 @@ pub struct Model {
     pub foreign: FxHashMap<TmplId, crate::TemplateFacts>,
     /// Foreign templates this unit stored into (a census report).
     pub foreign_written: crate::pts::FxHashSet<TmplId>,
-    /// Existing data fields of other units' literal layouts this unit
-    /// stored into: store effects, not census reports (decision 17).
+    /// Existing data fields of other units' literal layouts and class
+    /// instances this unit stored into: store effects, not census reports
+    /// (decision 17).
     pub foreign_stores: crate::pts::FxHashSet<(TmplId, Atom)>,
     /// Published functions with a contract (design §11.2): their results
     /// are checked after the solve instead of escaping.
@@ -857,10 +858,20 @@ pub struct Model {
     pub param_marker: FxHashMap<Tok, (FnIdx, u32)>,
     pub marker_of: FxHashMap<(FnIdx, u32), Tok>,
     pub marker_use: FxHashMap<Tok, u8>,
-    /// The markers of what a parameter reaches (not the argument itself).
+    /// The markers of what a parameter or argument reaches (not the
+    /// argument itself).
     pub reach_marker: crate::pts::FxHashSet<Tok>,
     /// A parameter marker's reach marker.
     pub marker_reach: FxHashMap<Tok, Tok>,
+    /// A parameter marker's reach markers by the named key it was read
+    /// under (`p.k`, design §18.4): what the argument reaches through `k`.
+    /// The reach marker above stands for what a computed key reaches.
+    pub keyed_reach: FxHashMap<Tok, Vec<(Atom, Tok)>>,
+    /// An argument marker's keyed reach marker -> (the argument marker, key).
+    pub keyed_parent: FxHashMap<Tok, (Tok, Atom)>,
+    /// Uses under a named key that reached a marker through argument
+    /// markers (`keyed_use`), by marker.
+    pub keyed_uses: FxHashMap<Tok, Vec<(Atom, u8)>>,
     /// Markers that read as ⊤ (DECISIONS 42), a bit per token: the
     /// contract records the escape, so the consumer sinks the argument and
     /// reads nothing else of it; the marker says no more than the ⊤ beside
@@ -1374,6 +1385,10 @@ impl Model {
                     self.mark_use(x, b);
                     continue;
                 }
+                if let Some(&(p, a)) = self.keyed_parent.get(&x) {
+                    self.keyed_use(p, a, b);
+                    continue;
+                }
                 let u = self.marker_use.entry(x).or_default();
                 let new = b & !*u;
                 *u |= b;
@@ -1405,6 +1420,81 @@ impl Model {
             self.set_marker_top(t);
             if let Some(&r) = self.marker_reach.get(&t) {
                 self.set_marker_top(r);
+            }
+        }
+    }
+
+    /// Parameter marker `t`'s reach marker for named key `a` (design
+    /// §18.4): the value of `p.a`, and everything read from it. Its uses
+    /// are published per key, so the caller applies them to its argument's
+    /// `a` alone, not to everything the argument reaches (its prototype,
+    /// its class).
+    pub(crate) fn keyed_reach_of(&mut self, t: Tok, a: Atom) -> Tok {
+        if let Some(&(_, r)) = self
+            .keyed_reach
+            .get(&t)
+            .and_then(|v| v.iter().find(|(k, _)| *k == a))
+        {
+            return r;
+        }
+        let TokKind::Obj(tm, _) = self.toks[t as usize] else {
+            unreachable!("a marker is an object token")
+        };
+        let display = format!("{}:reach.{}", self.tmpls[tm as usize].display, self.atoms[a as usize]);
+        let rm = self.marker_template(display);
+        let r = self.tok(TokKind::Obj(rm, NO_CTX));
+        let rany = self.field_any(r);
+        self.add_tok(rany, r);
+        self.reach_marker.insert(r);
+        self.keyed_reach.entry(t).or_default().push((a, r));
+        match self.param_marker.get(&t).copied() {
+            Some(fi) => {
+                self.param_marker.insert(r, fi);
+            }
+            // An argument marker's keyed reach: its uses are its members'
+            // uses under the same key (DECISIONS 44), kept per (marker, key)
+            // in `keyed_uses`, not as a token per member (`keyed_use`).
+            None => {
+                let w = (r >> 6) as usize;
+                if self.arg_bits.len() <= w {
+                    self.arg_bits.resize(w + 1, 0);
+                }
+                self.arg_bits[w] |= 1 << (r & 63);
+                self.arg_members.insert(r, Vec::new());
+                self.keyed_parent.insert(r, (t, a));
+            }
+        }
+        r
+    }
+
+    /// A use `bits` of what marker `t` reaches through named key `a`
+    /// (design §18.4). A parameter marker records it for its contract; an
+    /// argument marker passes it to each marker it stands for; a reach
+    /// marker reaches itself under every key.
+    pub(crate) fn keyed_use(&mut self, t: Tok, a: Atom, bits: u8) {
+        let mut st = vec![(t, bits)];
+        while let Some((x, b)) = st.pop() {
+            if self.reach_marker.contains(&x) {
+                self.mark_use(x, b);
+                continue;
+            }
+            let v = self.keyed_uses.entry(x).or_default();
+            let new = match v.iter_mut().find(|(k, _)| *k == a) {
+                Some((_, u)) => {
+                    let new = b & !*u;
+                    *u |= b;
+                    new
+                }
+                None => {
+                    v.push((a, b));
+                    b
+                }
+            };
+            if new == 0 {
+                continue;
+            }
+            if self.is_arg_marker(x) {
+                st.extend(self.arg_members[&x].iter().map(|&m| (m, new)));
             }
         }
     }
@@ -1474,6 +1564,7 @@ impl Model {
             self.arg_members.insert(x, Vec::new());
         }
         self.marker_reach.insert(t, r);
+        self.reach_marker.insert(r);
         self.arg_marker_of.insert(n, t);
         let any = self.field_any(t);
         self.add_tok(any, r);
@@ -1497,6 +1588,11 @@ impl Model {
         let (mr, rr) = (reach(self, m), reach(self, r));
         if (mr, rr) != (m, r) {
             self.link_marker(mr, rr);
+        }
+        // And per key (§18.4): what `m` reaches through `k` takes the uses
+        // of what `r` reaches through `k` so far (later ones: `keyed_use`).
+        for (a, b) in self.keyed_uses.get(&r).cloned().unwrap_or_default() {
+            self.keyed_use(m, a, b);
         }
     }
 

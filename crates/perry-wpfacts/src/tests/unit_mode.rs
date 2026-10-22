@@ -753,13 +753,26 @@ fn a_namespace_import_sees_only_the_real_exports() {
     ]);
     assert!(pf.units.len() >= 3, "{:?}", pf.units);
     assert!(proven(&pf, "a"), "{}", pf.dump_text());
-    // Soundness: a real export stays on the namespace; a store through it
+    // Soundness: a real export stays on the namespace (§18.2: `m.cfg` is
+    // what `import { cfg }` binds, cfg's value contract). A store through it
+    // into the existing field `a` is a store effect (decision 17): the
+    // layout holds and `a` holds an unknown value. A store of a new key
     // breaks the layout.
     let t = r#"
         export const cfg = { a: 1, b: 2 };
         export function useA() { return cfg.a; }
         "#;
     let u = "import * as m from './t'; (m.cfg as any).a = 'x'; console.log(m.useA());";
+    let pf = units_of(&[("t", t), ("u", u)]);
+    assert!(pf.broken.is_empty(), "{:?}\n{}", pf.broken, pf.dump_text());
+    let cfg = pf
+        .templates
+        .iter()
+        .find(|t| t.birth_keys == ["a", "b"])
+        .unwrap_or_else(|| panic!("cfg in\n{}", pf.dump_text()));
+    let a = cfg.fields.iter().find(|f| f.key == "a").expect("field a");
+    assert!(!a.readonly && a.kind.top, "{}", pf.dump_text());
+    let u = "import * as m from './t'; (m.cfg as any).z = 'x'; console.log(m.useA());";
     let pf = units_of(&[("t", t), ("u", u)]);
     assert!(!proven(&pf, "a"), "{}", pf.dump_text());
 }
@@ -1998,4 +2011,123 @@ fn an_argument_contract_ascends_so_the_units_reach_a_fixpoint() {
     let pf = bounded(60, move || units_of(&[("ee", EE_FIRST), ("m", m)]))
         .expect("D16: the per-unit fixpoint did not end in 60 s");
     assert_eq!(pf.rounds, 4, "rounds {:?}", pf.round_work);
+
+#[test]
+fn a_store_into_a_class_field_is_a_store_effect() {
+    // CW2 C (binarytrees_arena per unit): `make` (its own unit) does
+    // `a.size++` and the top level `s.size = 0` on an `Arena` of the class
+    // unit. `size` is a definite data field of every Arena from its birth,
+    // so the store adds no key and opens nothing: a store effect (decision
+    // 17), as for a literal layout. The class is not broken, and `.left` /
+    // `.right` hold on its layout in every unit.
+    let src = r#"
+        class Arena {
+          left: Int32Array; right: Int32Array; size: number = 0;
+          constructor(n: number) { this.left = new Int32Array(n); this.right = new Int32Array(n); }
+        }
+        function make(a: Arena, d: number): number {
+          let l = -1; let r = -1;
+          if (d > 0) { l = make(a, d - 1); r = make(a, d - 1); }
+          const i = a.size++; a.left[i] = l; a.right[i] = r; return i;
+        }
+        function check(a: Arena, i: number): number {
+          const l = a.left[i]; if (l < 0) return 1; return 1 + check(a, l) + check(a, a.right[i]);
+        }
+        const s = new Arena(64);
+        const t = make(s, 3);
+        console.log(check(s, t));
+        s.size = 0;
+        console.log(check(s, make(s, 2)));
+        "#;
+    let pf = units(src);
+    assert!(pf.units.len() >= 3, "{}", pf.dump_text());
+    assert!(pf.broken.is_empty(), "{:?}\n{}", pf.broken, pf.dump_text());
+    for k in ["left", "right"] {
+        assert!(
+            !verdicts(&pf, k).is_empty() && proven(&pf, k),
+            "{k}\n{}",
+            pf.dump_text()
+        );
+    }
+    // The owner performs the effect: `size` has writers after birth.
+    assert!(!field(tmpl(&pf, "Arena"), "size").readonly, "{}", pf.dump_text());
+    assert!(field(tmpl(&pf, "Arena"), "left").readonly, "{}", pf.dump_text());
+    // Soundness: the owner reads what the other unit stored. `get` (a method
+    // of the class unit) reads `this.v.key`; the constructor put `{ key: 1 }`
+    // there, but `put` stored another layout: `.key` must not hold on it.
+    let src = r#"
+        class Box { v: any; constructor() { this.v = { key: 1 }; } get() { return this.v.key; } }
+        function put(b: Box, x: any) { b.v = { other: x, key: 's' }; }
+        function main(x: any) { const b = new Box(); put(b, x); console.log(b.get()); }
+        main(1); main(2);
+        "#;
+    let pf = units(src);
+    assert!(pf.broken.is_empty(), "{:?}", pf.broken);
+    assert!(
+        !verdicts(&pf, "key").is_empty() && !proven(&pf, "key"),
+        "{}",
+        pf.dump_text()
+    );
+    // Soundness: a store of a key the class does not hold from birth adds a
+    // key (the layout changes): a census report, the class is broken.
+    let src = r#"
+        class C { x: number = 1; }
+        function grow(c: C) { (c as any).y = 2; }
+        function main() { const c = new C(); grow(c); console.log(c.x); }
+        main(); main();
+        "#;
+    let pf = units(src);
+    assert!(
+        pf.broken.iter().any(|d| d.ends_with(":C")),
+        "{:?}\n{}",
+        pf.broken,
+        pf.dump_text()
+    );
+}
+
+#[test]
+fn an_escaped_arguments_keyed_reach_reads_as_unknown() {
+    // DECISIONS 42 with design §18.4: `f` lets its argument escape, so what
+    // it returns from `p.inner` may be anything unknown code stored there:
+    // the caller's `r.v` has ⊤ among its receivers.
+    // Two orders: the escape is seen before the read of `p.inner`, or (through
+    // `keep`, another unit's function) after it.
+    for b in [
+        "export function f(p: any) { const x = p.inner; (globalThis as any).g = p; return x; }",
+        "export function keep(q: any) { (globalThis as any).g = q; }\nexport function f(p: any) { const x = p.inner; keep(p); return x; }",
+    ] {
+        let m = "import { f } from './b'; function main() { const o = { inner: { v: 1 } }; const r = f(o); console.log(r.v); } main(); main();";
+        let pf = units_of(&[("b", b), ("m", m)]);
+        let s: Vec<_> = pf.sites.iter().filter(|s| s.key == "v").collect();
+        assert!(!s.is_empty() && s.iter().all(|s| s.top), "{}", pf.dump_text());
+    }
+}
+
+#[test]
+fn an_escaped_keyed_reach_in_a_result_is_another_units_value() {
+    // DECISIONS 42 with design §18.4: `put` keeps what its argument reaches
+    // under `inner` in `held`, and that value escapes: (1) with the argument
+    // itself, (2) under the key, through shared helpers (argument markers).
+    // `make`'s result is then another unit's value (⊤), not `make`'s own
+    // parameter 0's reach coming back.
+    for b in [
+        r#"
+        let held: any = 0;
+        export function put(p: any) { held = p.inner; (globalThis as any).g = p; }
+        export function make(x: any) { if (x) { return held; } return 0; }
+        "#,
+        r#"
+        let held: any = 0;
+        function h(s: any) { (globalThis as any).g = s.inner; }
+        function mid(q: any) { h(q); }
+        export function put(p: any) { held = p.inner; mid(p); }
+        export function put2(p: any) { mid(p); }
+        export function make(x: any) { if (x) { return held; } return 0; }
+        "#,
+    ] {
+        let m = "import { put, make } from './b'; put({ inner: { a: 1 } }); function main() { const o = { w: { q: 1 } }; const r = make(o); console.log(r.q); } main(); main();";
+        let pf = units_of(&[("b", b), ("m", m)]);
+        let s: Vec<_> = pf.sites.iter().filter(|s| s.key == "q").collect();
+        assert!(!s.is_empty() && s.iter().all(|s| s.top), "{}", pf.dump_text());
+    }
 }

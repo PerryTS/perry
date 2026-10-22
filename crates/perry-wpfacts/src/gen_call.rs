@@ -707,7 +707,7 @@ impl<'a> Gen<'a> {
 /// in a nested arrow. A non-arrow closure has its own `this`. The HIR's
 /// `captures_this` says the same for parsed arrows; synthetic arrows set
 /// it to false, so the body is the authority.
-fn stmt_reads_this(stmt: &Stmt) -> bool {
+pub(crate) fn stmt_reads_this(stmt: &Stmt) -> bool {
     perry_hir::walker::stmt_any_expr(stmt, &mut expr_reads_this)
 }
 

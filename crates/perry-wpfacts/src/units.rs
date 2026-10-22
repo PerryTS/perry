@@ -47,9 +47,13 @@ pub(crate) struct FnContract {
     /// Per parameter: what the callee does to the argument itself
     /// (`model::MARK_*`), and to what the argument reaches (its fields,
     /// transitively). Two sets: reading `p.n` and converting it is no
-    /// conversion of `p`.
+    /// conversion of `p`. `reach` is what the callee does to what it reads
+    /// under a computed key; `reach_keys` what it does to what it reads
+    /// under each named key `p.k` (design §18.4: `p.left[i] = v` writes
+    /// into `p.left`, not into `p`'s prototype).
     pub params: Vec<u8>,
     pub reach: Vec<u8>,
+    pub reach_keys: Vec<Vec<(String, u8)>>,
     pub variadic: bool,
     pub ret: Option<Vec<String>>,
     /// The parameters whose argument the result may be, and those whose
@@ -59,7 +63,8 @@ pub(crate) struct FnContract {
     pub ret_reach: Vec<u32>,
     /// The result may also be an unknown value (⊤ to the caller).
     pub ret_unknown: bool,
-    /// An arrow function: its receiver is not used.
+    /// Its receiver is not used: an arrow function, or a body that never
+    /// reads `this` (§18.2).
     pub lexical_this: bool,
     /// The binding name of a closed function (decision 19): a unit that
     /// calls it as a value publishes what it passes under this name.
@@ -143,6 +148,10 @@ impl ArgContract {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Published {
     whole: FxHashSet<String>,
+    /// Modules whose namespace object itself reaches other units as a value
+    /// no contract describes: a dynamic `import()` or an `export * as`
+    /// re-export. A static namespace import is described (§18.2).
+    ns_object: FxHashSet<String>,
     names: FxHashMap<String, FxHashSet<String>>,
     /// Interpreted code can import any module: everything is published.
     all: bool,
@@ -164,9 +173,12 @@ pub(crate) struct Published {
     /// The argument contracts of closed functions (decision 13), by
     /// (module path, name): the union over every unit's calls.
     pub(crate) args: FxHashMap<(String, String), ArgContract>,
-    /// Store effects (decision 17): per literal layout display, the
-    /// existing keys other units store into (union over every unit).
+    /// Store effects (decision 17): per literal layout or class display,
+    /// the existing keys other units store into (union over every unit).
     pub(crate) stores: FxHashMap<String, Vec<String>>,
+    /// The keys of each module's namespace object (design §18.2), and
+    /// whether it may hold any key (an `export *` from outside the program).
+    pub(crate) ns_keys: FxHashMap<String, (Vec<String>, bool)>,
 }
 
 impl Published {
@@ -204,6 +216,15 @@ impl Published {
 
     pub(crate) fn eval_scopes(&self) -> bool {
         self.eval_scopes
+    }
+
+    /// Module `path`'s namespace object reaches other units undescribed.
+    pub(crate) fn ns_object(&self, path: &str) -> bool {
+        self.all || self.ns_object.contains(path)
+    }
+
+    pub(crate) fn ns_keys(&self, path: &str) -> Option<&(Vec<String>, bool)> {
+        self.ns_keys.get(path)
     }
 
     pub(crate) fn broken(&self, display: &str) -> bool {
@@ -245,6 +266,7 @@ pub(crate) fn published_surface(
             }
             if imp.is_dynamic {
                 p.whole.insert(t.clone());
+                p.ns_object.insert(t.clone());
             }
             for s in &imp.specifiers {
                 match s {
@@ -275,9 +297,15 @@ pub(crate) fn published_surface(
                         p.names.entry(t).or_default().insert(imported.clone());
                     }
                 }
-                Export::ExportAll { source } | Export::NamespaceReExport { source, .. } => {
+                Export::ExportAll { source } => {
                     if let Some(t) = resolve(source) {
                         p.whole.insert(t);
+                    }
+                }
+                Export::NamespaceReExport { source, .. } => {
+                    if let Some(t) = resolve(source) {
+                        p.whole.insert(t.clone());
+                        p.ns_object.insert(t);
                     }
                 }
                 Export::Named { .. } => {}
@@ -285,6 +313,63 @@ pub(crate) fn published_surface(
         }
     }
     p
+}
+
+/// The keys of each module's namespace object (design §18.2): its export
+/// names, from the declarations (the same ones `Gen::link_exports` puts on
+/// the namespace). `export *` adds the source module's keys but `default`;
+/// a source outside the program makes the namespace open. Syntactic.
+pub(crate) fn namespace_keys(sorted: &[(&str, &Module)]) -> FxHashMap<String, (Vec<String>, bool)> {
+    let index: FxHashMap<&str, usize> = sorted.iter().enumerate().map(|(i, (p, _))| (*p, i)).collect();
+    let mut own: Vec<(Vec<String>, Vec<Option<usize>>)> = Vec::with_capacity(sorted.len());
+    for (_, m) in sorted {
+        let mut keys: Vec<String> = Vec::new();
+        let mut stars: Vec<Option<usize>> = Vec::new();
+        for e in &m.exports {
+            match e {
+                Export::Named { exported, .. } | Export::ReExport { exported, .. } => {
+                    keys.push(exported.clone())
+                }
+                Export::NamespaceReExport { name, .. } => keys.push(name.clone()),
+                Export::ExportAll { source } => stars.push(
+                    m.imports
+                        .iter()
+                        .find(|i| &i.source == source)
+                        .and_then(|i| i.resolved_path.as_deref())
+                        .and_then(|t| index.get(t).copied()),
+                ),
+            }
+        }
+        keys.extend(m.exported_functions.iter().map(|(n, _)| n.clone()));
+        keys.extend(m.functions.iter().filter(|f| f.is_exported).map(|f| f.name.clone()));
+        keys.extend(m.classes.iter().filter(|c| c.is_exported).map(|c| c.name.clone()));
+        keys.extend(m.enums.iter().filter(|e| e.is_exported).map(|e| e.name.clone()));
+        keys.extend(m.exported_objects.iter().cloned());
+        own.push((keys, stars));
+    }
+    let mut out = FxHashMap::default();
+    for (i, (path, _)) in sorted.iter().enumerate() {
+        let mut keys: FxHashSet<String> = own[i].0.iter().cloned().collect();
+        let mut open = false;
+        let mut seen = vec![i];
+        let mut st: Vec<Option<usize>> = own[i].1.clone();
+        while let Some(s) = st.pop() {
+            let Some(s) = s else {
+                open = true;
+                continue;
+            };
+            if seen.contains(&s) {
+                continue;
+            }
+            seen.push(s);
+            keys.extend(own[s].0.iter().filter(|k| k.as_str() != "default").cloned());
+            st.extend(own[s].1.iter().copied());
+        }
+        let mut keys: Vec<String> = keys.into_iter().collect();
+        keys.sort();
+        out.insert(path.to_string(), (keys, open));
+    }
+    out
 }
 
 /// One solve of the per-unit driver: a declaration unit of module `mi`
@@ -464,6 +549,7 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
         })
         .collect();
     let mut input = published_surface(&viewed, cfg);
+    input.ns_keys = namespace_keys(sorted);
     let order = dependency_order(&solves);
     let levels = dependency_levels(&solves, &order);
     let mut rounds = 0u32;

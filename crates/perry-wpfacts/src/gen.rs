@@ -76,6 +76,8 @@ pub struct Gen<'a> {
     /// Stand-ins of other units' functions (by name): value node, token.
     /// By (name, the stand-in template it is a field of, if any).
     pub stand_in_fns: FxHashMap<(String, Option<(TmplId, bool)>), (NodeId, Tok)>,
+    /// Stand-in namespaces of other units' modules (§18.2), by module path.
+    pub stand_in_nss: FxHashMap<String, NodeId>,
     /// DECISIONS 45: what other units' functions let escape, or touch, of
     /// what their arguments reach: one node each for the unit.
     pub reach_escape: Option<NodeId>,
@@ -307,6 +309,7 @@ impl<'a> Gen<'a> {
             ret_ok: Default::default(),
             ret_top: Default::default(),
             stand_in_fns: FxHashMap::default(),
+            stand_in_nss: FxHashMap::default(),
             reach_escape: None,
             reach_touch: None,
             stand_in_cc: FxHashMap::default(),
@@ -473,43 +476,21 @@ impl<'a> Gen<'a> {
                             self.m.add_tok(n, tok);
                             (local.clone(), n)
                         }
-                        // Another unit's class with a contract (§11.2).
-                        (ImportSpecifier::Named { imported, local }, None)
-                            if self.contract_for(imp, imported).is_some() =>
-                        {
-                            let c = self.contract_for(imp, imported).unwrap();
-                            (local.clone(), self.stand_in_class(mi, c))
+                        // Another unit's export: its contract (§11.2), or ⊤.
+                        (ImportSpecifier::Named { imported, local }, None) => {
+                            (local.clone(), self.imported_value(mi, imp, imported, local))
                         }
-                        (ImportSpecifier::Default { local }, None)
-                            if self.contract_for(imp, "default").is_some() =>
-                        {
-                            let c = self.contract_for(imp, "default").unwrap();
-                            (local.clone(), self.stand_in_class(mi, c))
+                        (ImportSpecifier::Default { local }, None) => {
+                            (local.clone(), self.imported_value(mi, imp, "default", local))
                         }
-                        (ImportSpecifier::Named { imported, local }, None)
-                            if self.fn_contract_for(imp, imported).is_some() =>
+                        // Another unit's module as a namespace (§18.2).
+                        (ImportSpecifier::Namespace { local }, None)
+                            if self.ns_keys_for(imp).is_some() =>
                         {
-                            let c = self.fn_contract_for(imp, imported).unwrap();
-                            (local.clone(), self.stand_in_fn(mi, c))
-                        }
-                        // Another unit's module-scope value with a value
-                        // contract (§12 value contracts).
-                        (ImportSpecifier::Named { imported, local }, None)
-                            if self.value_contract_for(imp, imported).is_some() =>
-                        {
-                            let c = self.value_contract_for(imp, imported).unwrap();
-                            (local.clone(), self.stand_in_value(mi, local, c))
-                        }
-                        (ImportSpecifier::Default { local }, None)
-                            if self.value_contract_for(imp, "default").is_some() =>
-                        {
-                            let c = self.value_contract_for(imp, "default").unwrap();
-                            (local.clone(), self.stand_in_value(mi, local, c))
+                            (local.clone(), self.stand_in_ns(mi, imp, local))
                         }
                         // Native / builtin / unresolved modules: ⊤ values.
-                        (ImportSpecifier::Named { local, .. }, None)
-                        | (ImportSpecifier::Default { local }, None)
-                        | (ImportSpecifier::Namespace { local }, None) => {
+                        (ImportSpecifier::Namespace { local }, None) => {
                             let why =
                                 format!("import from native/unresolved module {}", imp.source);
                             (local.clone(), self.m.top_val(&why))
@@ -519,6 +500,67 @@ impl<'a> Gen<'a> {
                 }
             }
         }
+    }
+
+    /// What `import { name as local }` binds from another unit: the stand-in
+    /// of its class, function or value contract, else ⊤ (a native, builtin
+    /// or unresolved module, or an export without a contract).
+    fn imported_value(
+        &mut self,
+        mi: u32,
+        imp: &'a perry_hir::Import,
+        name: &str,
+        local: &str,
+    ) -> NodeId {
+        if let Some(c) = self.contract_for(imp, name) {
+            return self.stand_in_class(mi, c);
+        }
+        if let Some(c) = self.fn_contract_for(imp, name) {
+            return self.stand_in_fn(mi, c);
+        }
+        if let Some(c) = self.value_contract_for(imp, name) {
+            return self.stand_in_value(mi, local, c);
+        }
+        let why = format!("import from native/unresolved module {}", imp.source);
+        self.m.top_val(&why)
+    }
+
+    fn ns_keys_for(&self, imp: &perry_hir::Import) -> Option<&'a (Vec<String>, bool)> {
+        self.unit_in?.ns_keys(imp.resolved_path.as_deref()?)
+    }
+
+    /// Another unit's module namespace object (design §18.2): one object per
+    /// imported module, its keys the module's export names, each holding
+    /// what a named import of it binds; open (⊤ under any key) when an
+    /// `export *` source is outside the program. A namespace's shape is its
+    /// module's declarations, so nothing about it is guarded.
+    fn stand_in_ns(&mut self, mi: u32, imp: &'a perry_hir::Import, local: &str) -> NodeId {
+        let path = imp.resolved_path.clone().expect("a namespace with keys has a path");
+        if let Some(&n) = self.stand_in_nss.get(&path) {
+            return n;
+        }
+        let (keys, open) = self.ns_keys_for(imp).expect("namespace keys");
+        // Past this unit's own modules' namespaces (`ModInfo::ns_tok`).
+        let id = (self.modules.len() + self.stand_in_nss.len()) as u32;
+        let tok = self.m.tok(TokKind::ModNs(id));
+        let n = self
+            .m
+            .node_named("ns-import", || format!("ns-import({local})"));
+        self.m.add_tok(n, tok);
+        self.stand_in_nss.insert(path, n);
+        for k in keys {
+            let v = self.imported_value(mi, imp, k, &format!("{local}.{k}"));
+            let a = self.m.atom(k);
+            let f = self.m.field(tok, a);
+            self.m.edge(v, f);
+        }
+        if *open {
+            let fa = self.m.field_any(tok);
+            let src = imp.source.clone();
+            self.m
+                .add_top(fa, |_| format!("namespace of {src}: export * from outside the program"));
+        }
+        n
     }
 
     fn fn_contract_for(
@@ -654,47 +696,43 @@ impl<'a> Gen<'a> {
             // what it holds. The union of the parameters' closures is the
             // closure of their union, so one node per use holds the same
             // facts as one per parameter. A read only runs nothing here.
-            if ru & MARK_ESCAPE != 0 {
-                let q = match self.reach_escape {
-                    Some(q) => q,
-                    None => {
-                        let q = self.m.node_named("reach", || "reached(escape)".into());
-                        self.m.sink_node(q, r);
-                        self.reach_escape = Some(q);
-                        q
-                    }
-                };
-                self.m.cons(
-                    p,
-                    Cons::Load {
-                        key: crate::model::Key::Any,
-                        dst: q,
-                    },
-                );
-            } else if ru & MARK_TOUCH != 0 {
-                let q = match self.reach_touch {
-                    Some(q) => q,
-                    None => {
-                        let q = self.m.node_named("reach", || "reached(touch)".into());
-                        self.m.cons(
-                            q,
-                            Cons::Load {
-                                key: crate::model::Key::Any,
-                                dst: q,
-                            },
-                        );
-                        self.m.cons(q, Cons::Implicit { reason: r });
-                        self.reach_touch = Some(q);
-                        q
-                    }
-                };
-                self.m.cons(
-                    p,
-                    Cons::Load {
-                        key: crate::model::Key::Any,
-                        dst: q,
-                    },
-                );
+            // Per key the callee read it under (§18.4): what `p.k` reaches
+            // is the argument's `k`; a computed key reaches all of it.
+            let mut buckets = vec![(crate::model::Key::Any, ru)];
+            for (k, u) in c.reach_keys.get(i).into_iter().flatten() {
+                buckets.push((crate::model::Key::Named(self.m.atom(k)), *u));
+            }
+            for (key, ru) in buckets {
+                if ru & MARK_ESCAPE != 0 {
+                    let q = match self.reach_escape {
+                        Some(q) => q,
+                        None => {
+                            let q = self.m.node_named("reach", || "reached(escape)".into());
+                            self.m.sink_node(q, r);
+                            self.reach_escape = Some(q);
+                            q
+                        }
+                    };
+                    self.m.cons(p, Cons::Load { key, dst: q });
+                } else if ru & MARK_TOUCH != 0 {
+                    let q = match self.reach_touch {
+                        Some(q) => q,
+                        None => {
+                            let q = self.m.node_named("reach", || "reached(touch)".into());
+                            self.m.cons(
+                                q,
+                                Cons::Load {
+                                    key: crate::model::Key::Any,
+                                    dst: q,
+                                },
+                            );
+                            self.m.cons(q, Cons::Implicit { reason: r });
+                            self.reach_touch = Some(q);
+                            q
+                        }
+                    };
+                    self.m.cons(p, Cons::Load { key, dst: q });
+                }
             }
         }
         self.m.add_prim(ret, prim::ALL);
