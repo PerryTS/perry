@@ -99,7 +99,14 @@ artifact digest, phase sets, seven outer log hashes, six UDP/three TCP payloads
 and 37 retained file hashes. The engine archive is 245,619,712 bytes; the full
 release archive is 513,997,542 bytes. See the
 [expanded Linux receipt](validation/component-packaging-expanded-linux-20261022.json).
-Expanded npm transport and macOS/Windows production qualification remain open.
+The same production archive also passes compressed npm staging, pack/unpack,
+automatic engine discovery, all 20 library phases and five command phases,
+with the exact six UDP and three TCP payloads verified again. The engine is
+40,220,829 bytes compressed; the Linux npm tarball is 208,705,273 bytes.
+The test removes explicit runtime-directory overrides before each npm compiler
+invocation and verifies the decompressed engine hash. See the
+[expanded npm receipt](validation/component-packaging-expanded-npm-20261022.json).
+macOS/Windows production qualification remains open.
 Windows exposed a native archive lookup omission, repaired separately with
 executable-relative discovery and architecture-isolation regressions.
 

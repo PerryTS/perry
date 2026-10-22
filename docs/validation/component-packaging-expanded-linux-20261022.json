@@ -306,9 +306,9 @@
   "run_url": "https://github.com/PerryTS/perry/actions/runs/39827473005",
   "limits": [
     "Linux GNU x86_64 production release archive only",
-    "No expanded npm pack/unpack qualification yet",
     "No instrumented moving-GC claim from these production artifacts",
     "Windows ordinary compilation failed; executable-relative lookup repaired separately at e6616104a262ba243262b9cf6959520a9187a51c",
     "macOS expanded qualification pending"
-  ]
+  ],
+  "npmFollowupReceipt": "component-packaging-expanded-npm-20261022.json"
 }
