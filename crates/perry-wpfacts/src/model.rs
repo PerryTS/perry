@@ -553,6 +553,9 @@ pub struct Node {
     /// read sites; only read rules apply to it, it never feeds a node that
     /// is not an observation node, and its effects are skipped.
     pub obs: bool,
+    /// A parameter node (an instance's, a function's): it holds its
+    /// argument marker in place of the markers that arrive (DECISIONS 44).
+    pub param: bool,
 }
 
 /// A store site: where, and whether it is a construction-phase writer for
@@ -838,6 +841,17 @@ pub struct Model {
     /// reads nothing else of it; the marker says no more than the ⊤ beside
     /// it.
     pub marker_top: Vec<u64>,
+    /// DECISIONS 44: a parameter node's argument marker. The markers its
+    /// arguments carry arrive as this one token, which stands for each of
+    /// them: they take its uses, and the readers after the solve read it as
+    /// them (`marker_members`). One body shared by many callers then holds
+    /// one marker per parameter, not every caller's.
+    pub arg_marker_of: FxHashMap<NodeId, Tok>,
+    /// An argument marker -> the markers it stands for.
+    pub arg_members: FxHashMap<Tok, Vec<Tok>>,
+    pub arg_linked: crate::pts::FxHashSet<(Tok, Tok)>,
+    /// Argument markers, a bit per token.
+    pub arg_bits: Vec<u64>,
     /// The `this` node of each instance method / accessor of a class: the
     /// binding its entry guard tests (design §11.4).
     pub this_class: FxHashMap<NodeId, TmplId>,
@@ -1327,6 +1341,23 @@ impl Model {
         if self.param_marker.is_empty() {
             return;
         }
+        // An argument marker's use is a use of each marker it stands for.
+        if self.is_arg_marker(t) {
+            let mut st = vec![(t, bits)];
+            while let Some((x, b)) = st.pop() {
+                if !self.is_arg_marker(x) {
+                    self.mark_use(x, b);
+                    continue;
+                }
+                let u = self.marker_use.entry(x).or_default();
+                let new = b & !*u;
+                *u |= b;
+                if new != 0 {
+                    st.extend(self.arg_members[&x].iter().map(|&m| (m, new)));
+                }
+            }
+            return;
+        }
         let Some(&(f, i)) = self.param_marker.get(&t) else {
             return;
         };
@@ -1365,6 +1396,105 @@ impl Model {
     #[inline]
     pub(crate) fn marker_is_top(&self, t: Tok) -> bool {
         marker_top_bit(&self.marker_top, t)
+    }
+
+    /// A parameter marker or an argument marker (DECISIONS 44).
+    #[inline]
+    pub(crate) fn is_marker(&self, t: Tok) -> bool {
+        self.param_marker.contains_key(&t) || self.is_arg_marker(t)
+    }
+
+    #[inline]
+    pub(crate) fn is_arg_marker(&self, t: Tok) -> bool {
+        marker_top_bit(&self.arg_bits, t)
+    }
+
+    /// The parameter markers token `t` stands for: itself, unless it is an
+    /// argument marker (DECISIONS 44).
+    pub(crate) fn marker_members(&self, t: Tok) -> Vec<Tok> {
+        if !self.is_arg_marker(t) {
+            return vec![t];
+        }
+        let mut out = Vec::new();
+        let mut seen = crate::pts::FxHashSet::default();
+        let mut st = vec![t];
+        while let Some(x) = st.pop() {
+            if !seen.insert(x) {
+                continue;
+            }
+            match self.arg_members.get(&x) {
+                Some(ms) => st.extend(ms.iter().copied()),
+                None => out.push(x),
+            }
+        }
+        out.sort_unstable();
+        out
+    }
+
+    /// Parameter node `n`'s argument marker, with its own reach marker.
+    pub(crate) fn arg_marker(&mut self, n: NodeId) -> Tok {
+        if let Some(&t) = self.arg_marker_of.get(&n) {
+            return t;
+        }
+        let tm = self.marker_template(format!("args{n}"));
+        let t = self.tok(TokKind::Obj(tm, NO_CTX));
+        let rm = self.marker_template(format!("args{n}:reach"));
+        let r = self.tok(TokKind::Obj(rm, NO_CTX));
+        for x in [t, r] {
+            let w = (x >> 6) as usize;
+            if self.arg_bits.len() <= w {
+                self.arg_bits.resize(w + 1, 0);
+            }
+            self.arg_bits[w] |= 1 << (x & 63);
+            self.arg_members.insert(x, Vec::new());
+        }
+        self.marker_reach.insert(t, r);
+        self.arg_marker_of.insert(n, t);
+        let any = self.field_any(t);
+        self.add_tok(any, r);
+        let rany = self.field_any(r);
+        self.add_tok(rany, r);
+        t
+    }
+
+    /// Argument marker `r` stands for marker `m` too: `m` takes every use
+    /// of `r`, and what `m` reaches takes every use of what `r` reaches.
+    pub(crate) fn link_marker(&mut self, m: Tok, r: Tok) {
+        if m == r || !self.arg_linked.insert((r, m)) {
+            return;
+        }
+        self.arg_members.get_mut(&r).unwrap().push(m);
+        let u = self.marker_use.get(&r).copied().unwrap_or(0);
+        if u != 0 {
+            self.mark_use(m, u);
+        }
+        let reach = |s: &Self, x: Tok| s.marker_reach.get(&x).copied().unwrap_or(x);
+        let (mr, rr) = (reach(self, m), reach(self, r));
+        if (mr, rr) != (m, r) {
+            self.link_marker(mr, rr);
+        }
+    }
+
+    fn marker_template(&mut self, display: String) -> TmplId {
+        let tm = self.tmpls.len() as TmplId;
+        self.tmpls.push(Template {
+            kind: TmplKind::BObj {
+                module: 0,
+                site: 0,
+                what: "parameter marker",
+            },
+            display,
+            birth_keys: Vec::new(),
+            definite: Vec::new(),
+            parent: None,
+            ctor: None,
+            native_parent: None,
+            accessor_keys: Vec::new(),
+            has_computed_members: false,
+            field_init: None,
+            proto_members: Vec::new(),
+        });
+        tm
     }
 
     /// The marker of parameter `i` of contract function `f`.

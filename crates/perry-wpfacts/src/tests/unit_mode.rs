@@ -1750,3 +1750,58 @@ fn an_escaped_marker_of_another_function_is_no_result_transfer() {
     let pf = units_of(&[("b", HELD), ("m", m)]);
     assert!(field(tmpl(&pf, "Box"), "v").readonly, "{}", pf.dump_text());
 }
+
+/// Pts entries of the largest unit when `n` exported functions pass their
+/// argument through a wrapper into a shared helper that only reads it and
+/// returns it (no escape: the markers do not read as ⊤).
+fn shared_helper_entries(n: usize) -> u64 {
+    let mut src = String::from(
+        "let last = 0;\nfunction h(a: any) { last = a.v; return a; }\nfunction mid(a: any) { return h(a); }\n",
+    );
+    for i in 0..n {
+        src.push_str(&format!("export function f{i}(a: any) {{ last = {i}; return mid(a); }}\n"));
+    }
+    let names: Vec<String> = (0..n).map(|i| format!("f{i}")).collect();
+    let calls: Vec<String> = names.iter().map(|f| format!("console.log({f}({{ v: 1 }}));")).collect();
+    let user = format!("import {{ {} }} from './t'; {}", names.join(", "), calls.join(" "));
+    let pf = units_of(&[("t", src.as_str()), ("u", user.as_str())]);
+    pf.units.iter().map(|(_, s)| s.pts_entries).max().unwrap_or(0)
+}
+
+#[test]
+fn a_shared_body_holds_one_marker_per_parameter() {
+    // DECISIONS 44: a parameter node holds its argument marker in place of
+    // the markers its callers pass. Without it the shared `h` returns every
+    // caller's marker to every caller (`mid` is copied per caller, `h` is
+    // not), and nothing escapes, so DECISIONS 42 does not apply: the unit
+    // grows with the square of the callers.
+    let (e8, e16, e32) = (
+        shared_helper_entries(8),
+        shared_helper_entries(16),
+        shared_helper_entries(32),
+    );
+    let (d1, d2) = (e16 - e8, e32 - e16);
+    assert!(d2 < 3 * d1, "entries {e8} {e16} {e32}: quadratic in the callers");
+}
+
+#[test]
+fn a_use_in_a_shared_body_is_a_use_of_each_callers_argument() {
+    // DECISIONS 44: the argument marker's uses are its members' uses. `keep`
+    // reaches `h` through `mid` (shared with `keep2`); `h` lets what its
+    // argument reaches escape, so the caller's `o.inner` is not its own.
+    let b = "function h(p: any) { (globalThis as any).k = p.inner; }\nfunction mid(p: any) { h(p); }\nexport function keep(p: any) { mid(p); }\nexport function keep2(p: any) { mid(p); }";
+    let m = "import { keep, keep2 } from './b'; function main() { const o = { inner: { v: 1 } }; keep(o); keep2({ inner: 0 }); (globalThis as any).k.v = 'x'; console.log(o.inner.v); } main(); main();";
+    let pf = units_of(&[("b", b), ("m", m)]);
+    assert!(!proven(&pf, "v"), "{}", pf.dump_text());
+}
+
+#[test]
+fn an_argument_a_shared_body_returns_comes_back_to_the_caller() {
+    // DECISIONS 44: a result holding an argument marker holds the markers
+    // it stands for. `id` returns its argument through the shared `h`, so
+    // the caller's store through the result is a store into its own `Box`.
+    let b = "function h(p: any) { return p; }\nfunction mid(p: any) { return h(p); }\nexport function id(p: any) { return mid(p); }\nexport function id2(p: any) { return mid(p); }";
+    let m = "import { id, id2 } from './b'; class Box { v: any = 1; } const o = new Box(); const r = id(o); id2(0); r.v = 'x'; console.log(o.v);";
+    let pf = units_of(&[("b", b), ("m", m)]);
+    assert!(!field(tmpl(&pf, "Box"), "v").readonly, "{}", pf.dump_text());
+}

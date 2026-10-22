@@ -383,7 +383,13 @@ impl<'a> Gen<'a> {
             if self.ret_top.contains(&f) {
                 continue;
             }
-            let toks = self.m.nodes[ret as usize].pts.to_sorted();
+            // An argument marker reads as the markers it stands for (DECISIONS 44).
+            let toks: Vec<Tok> = self.m.nodes[ret as usize]
+                .pts
+                .to_sorted()
+                .into_iter()
+                .flat_map(|t| self.m.marker_members(t))
+                .collect();
             let ok = toks.iter().all(|&t| match self.m.toks[t as usize] {
                 _ if self.m.param_marker.get(&t).is_some_and(|&(g, _)| g == f) => true,
                 // An escaped marker reads as ⊤ (DECISIONS 42), of any
@@ -514,7 +520,7 @@ impl<'a> Gen<'a> {
                 TokKind::Obj(tm, _) => {
                     !self.stand_in_cc.contains_key(&tm)
                         && !self.contract_class(tm)
-                        && !self.m.param_marker.contains_key(&t)
+                        && !self.m.is_marker(t)
                 }
                 _ => false,
             })
