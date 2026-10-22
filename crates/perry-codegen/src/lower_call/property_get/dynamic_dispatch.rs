@@ -27,7 +27,7 @@ use tower::{emit_tower_pshape_call, tower_pshape_route};
 // Reach the override-emit helpers (`pub(super)` of `lower_call`) by their
 // canonical crate-relative path.
 use crate::lower_call::method_override::{
-    emit_guarded_direct_method_call, emit_own_method_override_check, emit_pshape_argument_dispatch,
+    emit_guarded_direct_method_call, emit_pshape_argument_dispatch,
     SubclassDispatchArm,
 };
 
@@ -549,6 +549,20 @@ pub(crate) fn try_lower_instance_method_call(
             // rest — the #8162 bit that sizes a two-array tail — declared
             // count).
             let mut override_meta: Vec<(bool, bool, bool, usize)> = Vec::new();
+            // Class ids this module's table proves resolve `property` to the
+            // static fallback: `class_name` itself, then its non-overriding
+            // descendants. Only these may take the fallback body from the
+            // virtual tower below. A class the table does not know (a subclass
+            // declared in an importing module, or a class expression evaluated
+            // elsewhere) may inherit an override from an intermediate class,
+            // so its receiver resolves `property` through its prototype chain.
+            let mut fallback_ids: Vec<u32> = ctx
+                .class_ids
+                .get(&class_name)
+                .copied()
+                .filter(|&id| id != 0)
+                .into_iter()
+                .collect();
             // Fixed order, not `HashMap` order — the virtual-override tower has
             // the same #7622 defect as the interface tower above, and for the
             // same reason: `overrides` is walked by index to emit the
@@ -575,7 +589,14 @@ pub(crate) fn try_lower_instance_method_call(
                     cur = ctx.classes.get(&c).and_then(|c| c.extends_name.clone());
                 }
                 if let Some((sub_fn, sub_key)) = sub_method {
-                    if sub_fn != fallback_fn {
+                    if sub_fn == fallback_fn {
+                        if sub_id != 0
+                            && !fallback_ids.contains(&sub_id)
+                            && fallback_ids.len() < MAX_SUBCLASS_DISPATCH_ARMS
+                        {
+                            fallback_ids.push(sub_id);
+                        }
+                    } else {
                         let has_rest = matches!(ctx.method_has_rest.get(&sub_key), Some(&true));
                         let has_synthetic_arguments = matches!(
                             ctx.method_has_synthetic_arguments.get(&sub_key),
@@ -1577,34 +1598,11 @@ pub(crate) fn try_lower_instance_method_call(
             let arg_slices: Vec<(crate::types::LlvmType, &str)> =
                 fallback_args.iter().map(|s| (DOUBLE, s.as_str())).collect();
 
-            if overrides.is_empty() {
-                // Issue #620: before falling through to the static method,
-                // check whether the receiver has an own-property override
-                // for `property` (set via `this.method = X` inside the
-                // class). Hono's SmartRouter rebinds `this.match` on the
-                // first call so subsequent calls go through the bound
-                // fast-path closure instead of the original method.
-                // The override branch dispatches a dynamic value (arrow / bound
-                // / native method) via `js_native_call_value`, which does its
-                // own arity/rest handling from a FLAT positional buffer. Pass
-                // the un-rest-bundled user args (`fallback_user_args`) — not the
-                // ABI-adapted `fallback_args[1..]`, which would deliver the rest
-                // array as one positional argument and break a native override
-                // such as `super.emit(event, ...args)` forwarding to
-                // EventEmitter (#620 / rest-spread-to-native-override).
-                let checked = emit_own_method_override_check(
-                    ctx,
-                    &recv_box,
-                    property,
-                    &fallback_fn,
-                    &arg_slices,
-                    &recv_box,
-                    &fallback_user_args,
-                );
-                roots.release(ctx);
-                return Ok(Some(checked));
-            }
-
+            // With no override in this module's class table the tower below
+            // has no case arm; it still tests the receiver's class id, because
+            // a class the table does not know (declared in an importing module,
+            // or evaluated from a class expression elsewhere) may override
+            // `property` itself.
             // #5391 path 4 (virtual tower): the oversized-module outline emits
             // the universal method site instead of the per-overriding-subclass
             // class-id switch below. The site's memo answers each receiver
@@ -1644,6 +1642,50 @@ pub(crate) fn try_lower_instance_method_call(
             let tower_idx = ctx.new_block("vdispatch.tower");
             let tower_label = ctx.block_label(tower_idx);
             let default_label_guard = ctx.block_label(default_idx);
+            let merge_label = ctx.block_label(merge_idx);
+            let mut phi_inputs: Vec<(String, String)> = Vec::new();
+            // Issue #620: an own-property method (`this.method = X`, or
+            // `class X { method = fn; }`) wins over every prototype body, so
+            // it is probed first. Hono's SmartRouter rebinds `this.match` on
+            // the first call. The override is a dynamic value (arrow / bound /
+            // native method) and receives the FLAT user arguments
+            // (`fallback_user_args`), not the ABI-adapted bundle, so a native
+            // override such as `super.emit(event, ...args)` forwarding to
+            // EventEmitter sees ordinary call arguments.
+            {
+                let (dir, key_bits, hash) = crate::expr::method_site::emit_site_key(ctx, property);
+                let own_method = ctx.block().call(
+                    DOUBLE,
+                    "perry_probe_own_method",
+                    &[
+                        (crate::types::PTR, &dir),
+                        (DOUBLE, &recv_box),
+                        (I64, &key_bits),
+                        (I64, &hash),
+                    ],
+                );
+                let own_bits = ctx.block().bitcast_double_to_i64(&own_method);
+                let undef_bits = format!("{}", crate::nanbox::TAG_UNDEFINED as i64);
+                let is_undef = ctx.block().icmp_eq(I64, &own_bits, &undef_bits);
+                let own_idx = ctx.new_block("vdispatch.own");
+                let class_idx = ctx.new_block("vdispatch.class");
+                let own_label = ctx.block_label(own_idx);
+                let class_label = ctx.block_label(class_idx);
+                ctx.block().cond_br(&is_undef, &class_label, &own_label);
+                ctx.current_block = own_idx;
+                let v_own = crate::lower_call::method_override::emit_own_override_value_call(
+                    ctx,
+                    &own_method,
+                    &recv_box,
+                    &fallback_user_args,
+                );
+                let own_end = ctx.block().label.clone();
+                if !ctx.block().is_terminated() {
+                    ctx.block().br(&merge_label);
+                }
+                phi_inputs.push((v_own, own_end));
+                ctx.current_block = class_idx;
+            }
             {
                 let blk = ctx.block();
                 let recv_bits = blk.bitcast_double_to_i64(&recv_box);
@@ -1661,6 +1703,12 @@ pub(crate) fn try_lower_instance_method_call(
             // than the LLVM `switch` instruction (which the IR
             // builder doesn't expose generically) — same shape,
             // slightly more verbose.
+            // After the override arms: the ids proven to resolve to the
+            // fallback take it; every other class id resolves `property`
+            // through the receiver's own prototype chain (the universal
+            // method site, whose per-site memo answers a repeated shape).
+            let known_idx = ctx.new_block("vdispatch.known");
+            let known_label = ctx.block_label(known_idx);
             let mut current_label = ctx.block().label.clone();
             for (i, (case_cid, _)) in overrides.iter().enumerate() {
                 let next_label = if i + 1 < overrides.len() {
@@ -1668,7 +1716,7 @@ pub(crate) fn try_lower_instance_method_call(
                     // — actually use a fresh block for the test.
                     format!("vdispatch.test{}", i + 1)
                 } else {
-                    ctx.block_label(default_idx)
+                    known_label.clone()
                 };
                 let case_label = ctx.block_label(case_idxs[i]);
                 // Make sure ctx.current_block points at the
@@ -1688,13 +1736,37 @@ pub(crate) fn try_lower_instance_method_call(
                 }
             }
 
+            if overrides.is_empty() {
+                ctx.block().br(&known_label);
+            }
+            let generic_idx = ctx.new_block("vdispatch.generic");
+            let generic_label = ctx.block_label(generic_idx);
+            ctx.current_block = known_idx;
+            for (i, known_cid) in fallback_ids.iter().enumerate() {
+                let miss_label = if i + 1 < fallback_ids.len() {
+                    let next_idx = ctx.new_block(&format!("vdispatch.known{}", i + 1));
+                    Some((next_idx, ctx.block_label(next_idx)))
+                } else {
+                    None
+                };
+                let cmp = ctx.block().icmp_eq(I32, &cid, &known_cid.to_string());
+                let miss = miss_label
+                    .as_ref()
+                    .map_or(generic_label.as_str(), |(_, label)| label.as_str());
+                ctx.block().cond_br(&cmp, &default_label_guard, miss);
+                if let Some((next_idx, _)) = miss_label {
+                    ctx.current_block = next_idx;
+                }
+            }
+            if fallback_ids.is_empty() {
+                ctx.block().br(&generic_label);
+            }
+
             // Each case block: adapt the raw user arguments to THIS override's
             // declared ABI, call it, and branch to merge. In particular, a
             // synthesized `arguments` array belongs only to implementations
             // that declare that hidden slot; it cannot be inherited from the
             // fallback's signature or shared with a sibling override.
-            let merge_label = ctx.block_label(merge_idx);
-            let mut phi_inputs: Vec<(String, String)> = Vec::new();
             for (
                 ((_, fname), &(has_rest, has_synthetic_arguments, has_user_rest, declared_count)),
                 &case_idx,
@@ -1735,6 +1807,20 @@ pub(crate) fn try_lower_instance_method_call(
                 ctx.block().br(&merge_label);
             }
             phi_inputs.push((v_def, def_label));
+
+            ctx.current_block = generic_idx;
+            let v_generic = crate::lower_call::console_promise::emit_native_method_str_dispatch(
+                ctx,
+                property,
+                call_byte_offset,
+                &recv_box,
+                &fallback_user_args,
+            );
+            let generic_end = ctx.block().label.clone();
+            if !ctx.block().is_terminated() {
+                ctx.block().br(&merge_label);
+            }
+            phi_inputs.push((v_generic, generic_end));
 
             // Merge: phi over all incoming case results.
             ctx.current_block = merge_idx;
