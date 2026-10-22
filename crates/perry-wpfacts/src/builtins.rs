@@ -816,7 +816,12 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
                 m.edge(ret, fa);
             }
         }
-        (BuiltinNs::Math, _) | (BuiltinNs::Number, _) | (BuiltinNs::String, _) => {
+        // Every Math function returns a Number (ECMA-262 Math).
+        (BuiltinNs::Math, _) => {
+            implicit_args(m, call, "ToPrimitive");
+            ret_prim(m, call, prim::NUM);
+        }
+        (BuiltinNs::Number, _) | (BuiltinNs::String, _) => {
             implicit_args(m, call, "ToPrimitive");
             ret_prim(m, call, prim::ALL);
             if name == "raw" || name == "split" {
