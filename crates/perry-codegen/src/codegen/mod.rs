@@ -285,7 +285,7 @@ pub use helpers::{set_worker_entries, worker_entries};
 pub(crate) mod accessor_numeric;
 pub(crate) mod global_transfer;
 pub(crate) mod inherited_accessors;
-mod literal_constructor;
+pub(crate) mod literal_constructor;
 mod method;
 mod method_registry;
 mod method_trampolines;

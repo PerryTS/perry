@@ -1029,7 +1029,9 @@ pub(super) fn emit_string_pool(
                     .count() as u32
             })
             .unwrap_or(0);
-        ctor_triples.push((cid, ctor_symbol, ctor_params, ctor_sig_caps));
+        if !super::literal_constructor::has_no_constructor(class) {
+            ctor_triples.push((cid, ctor_symbol, ctor_params, ctor_sig_caps));
+        }
     }
     let fresh_cids: std::collections::HashSet<u32> = fresh_class_templates
         .iter()
