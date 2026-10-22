@@ -1337,3 +1337,5 @@ pub extern "C" fn perry_runtime_widget_init() {
 
 #[cfg(test)]
 mod hot_text;
+
+mod source_read_log;

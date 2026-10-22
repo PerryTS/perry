@@ -181,8 +181,14 @@ pub unsafe extern "C" fn js_register_class_source_static(
 pub fn class_source_for_id(class_id: u32) -> Option<Cow<'static, str>> {
     let map = class_source_registry().lock().ok()?;
     match map.get(&class_id)? {
-        RegisteredClassSource::Image(bytes) => std::str::from_utf8(bytes).ok().map(Cow::Borrowed),
-        RegisteredClassSource::Owned(text) => Some(Cow::Owned(text.to_string())),
+        RegisteredClassSource::Image(bytes) => {
+            crate::source_read_log::note("class", bytes);
+            std::str::from_utf8(bytes).ok().map(Cow::Borrowed)
+        }
+        RegisteredClassSource::Owned(text) => {
+            crate::source_read_log::note("class-owned", text.as_bytes());
+            Some(Cow::Owned(text.to_string()))
+        }
     }
 }
 

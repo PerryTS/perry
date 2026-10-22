@@ -64,6 +64,7 @@ mod reach_report;
 mod reachability;
 mod size_report;
 mod solid_config;
+mod source_need;
 mod tiny_program;
 mod typed_feedback_profile;
 mod update_config;

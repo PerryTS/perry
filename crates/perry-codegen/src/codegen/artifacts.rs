@@ -1026,6 +1026,9 @@ pub(super) fn emit_module_artifacts(
 
     // #4101 + #9468: collecting retained function source text lives in
     // `artifact_source_text::collect_user_fn_source` (split out for the file cap).
+    if super::source_need::active() {
+        super::source_need::record_module_name(module_prefix, &hir.name);
+    }
     let user_fn_source = super::artifact_source_text::collect_user_fn_source(
         hir,
         &func_names,

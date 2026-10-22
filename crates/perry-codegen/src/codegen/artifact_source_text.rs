@@ -20,7 +20,7 @@ pub(super) fn extend_class_method_source_text<'a>(
     closures: &super::function_source_header::ClosureHeaders<'_>,
     module_prefix: &str,
     llmod: &LlModule,
-    user_fn_source: &mut Vec<(String, Cow<'a, str>, bool)>,
+    user_fn_source: &mut Vec<(String, Cow<'a, str>, bool, FuncId)>,
 ) {
     // An HIR registry entry is not proof that this module emitted the body: a
     // cross-module or typed-only accessor can remain present without a local
@@ -28,9 +28,9 @@ pub(super) fn extend_class_method_source_text<'a>(
     // LLVM reject the module, so `has_function` is the final authority.
     let mut seen: HashSet<String> = user_fn_source
         .iter()
-        .map(|(symbol, _, _)| symbol.clone())
+        .map(|(symbol, _, _, _)| symbol.clone())
         .collect();
-    let mut entry_sources: Vec<(String, Cow<'a, str>, bool)> = Vec::new();
+    let mut entry_sources: Vec<(String, Cow<'a, str>, bool, FuncId)> = Vec::new();
     let mut push_defined = |func_id: FuncId, symbol: String| {
         let Some(source) = hir.closure_source_text.get(&func_id) else {
             return;
@@ -47,6 +47,7 @@ pub(super) fn extend_class_method_source_text<'a>(
                 &source.text,
             ),
             source.is_non_strict_ordinary,
+            func_id,
         ));
     };
 
@@ -120,6 +121,7 @@ pub(super) fn extend_class_method_source_text<'a>(
                             &source.text,
                         ),
                         source.is_non_strict_ordinary,
+                        method.id,
                     ));
                 }
             }
@@ -151,6 +153,7 @@ pub(super) fn extend_class_method_source_text<'a>(
                             &source.text,
                         ),
                         source.is_non_strict_ordinary,
+                        member.function.id,
                     ));
                 }
             }
@@ -175,7 +178,7 @@ pub(super) fn collect_user_fn_source<'a>(
     materialized_closure_ids: &HashSet<FuncId>,
     module_prefix: &str,
     llmod: &LlModule,
-) -> Vec<(String, Cow<'a, str>, bool)> {
+) -> Vec<(String, Cow<'a, str>, bool, FuncId)> {
     // #4101: collect retained function source text, keyed by the same
     // wrapper/closure symbol the name registration uses. Top-level functions
     // always have a `__perry_wrap_<name>` global (emitted unconditionally
@@ -185,7 +188,7 @@ pub(super) fn collect_user_fn_source<'a>(
     // #10574: resolve closure params/kind for functions that are not
     // `hir.functions` entries, so header mode keeps their names and parameters.
     let closure_headers = super::function_source_header::ClosureHeaders::new(closures);
-    let mut user_fn_source: Vec<(String, Cow<'a, str>, bool)> = Vec::new();
+    let mut user_fn_source: Vec<(String, Cow<'a, str>, bool, FuncId)> = Vec::new();
     for f in &hir.functions {
         if let Some(src) = hir.closure_source_text.get(&f.id) {
             if let Some(sym) = func_names.get(&f.id) {
@@ -198,6 +201,7 @@ pub(super) fn collect_user_fn_source<'a>(
                         &src.text,
                     ),
                     src.is_non_strict_ordinary,
+                    f.id,
                 ));
             }
         }
@@ -232,6 +236,7 @@ pub(super) fn collect_user_fn_source<'a>(
                 &src.text,
             ),
             src.is_non_strict_ordinary,
+            *func_id,
         ));
     }
 

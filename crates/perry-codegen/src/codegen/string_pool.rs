@@ -150,7 +150,12 @@ pub(super) fn emit_string_pool(
     // original source we retained. Each entry produces one
     // `js_register_function_source_static` call in `__perry_init_strings_<prefix>`
     // so `fn.toString()` can reconstruct the source.
-    user_fn_source: &[(String, std::borrow::Cow<'_, str>, bool)],
+    user_fn_source: &[(
+        String,
+        std::borrow::Cow<'_, str>,
+        bool,
+        perry_hir::types::FuncId,
+    )],
     // The templates the module evaluates per evaluation (`ClassExprFresh`):
     // their static methods' entries run in the function object's home.
     fresh_class_templates: &std::collections::HashSet<String>,
@@ -252,12 +257,12 @@ pub(super) fn emit_string_pool(
         llmod,
         user_fn_source
             .iter()
-            .filter(|(symbol, source, _)| !symbol.is_empty() && !source.is_empty())
-            .map(|(_, source, _)| source.as_ref())
+            .filter(|(symbol, source, _, _)| !symbol.is_empty() && !source.is_empty())
+            .map(|(_, source, _, _)| source.as_ref())
             .chain(class_sources.iter().map(|(_, source)| source.as_str())),
     );
     let mut user_fn_source_constants: Vec<(String, SourceRange, bool)> = Vec::new();
-    for (wrapper_sym, source_text, is_non_strict_ordinary) in user_fn_source {
+    for (wrapper_sym, source_text, is_non_strict_ordinary, _) in user_fn_source {
         if wrapper_sym.is_empty() || source_text.is_empty() {
             continue;
         }
@@ -315,6 +320,41 @@ pub(super) fn emit_string_pool(
         .into_iter()
         .map(|(cid, source)| (cid, source_pool.get(source)))
         .collect();
+    if super::source_need::active() {
+        // PERRY_SOURCE_NEED_REPORT: report the ranges chosen above; nothing
+        // emitted depends on this.
+        use super::source_need::{source_hash, StoredEntry, StoredKey};
+        let mut entries = Vec::new();
+        let mut blob_len = 0usize;
+        for (symbol, text, _, fid) in user_fn_source {
+            if symbol.is_empty() || text.is_empty() {
+                continue;
+            }
+            let r = source_pool.get(text);
+            blob_len = blob_len.max(r.offset + r.byte_len);
+            entries.push(StoredEntry {
+                key: StoredKey::Func(*fid),
+                symbol: symbol.clone(),
+                offset: r.offset,
+                len: r.byte_len,
+                hash: source_hash(text.as_bytes()),
+            });
+        }
+        for (cid, r) in &class_source_constants {
+            blob_len = blob_len.max(r.offset + r.byte_len);
+            let hash = class_source_text
+                .get(cid)
+                .map_or(0, |s| source_hash(s.as_str().as_bytes()));
+            entries.push(StoredEntry {
+                key: StoredKey::Class(*cid),
+                symbol: format!("class#{cid}"),
+                offset: r.offset,
+                len: r.byte_len,
+                hash,
+            });
+        }
+        super::source_need::record_module(module_prefix, blob_len, entries);
+    }
     drop(source_pool);
 
     // Emit per-class typed-shape raw-f64 and pointer-mask globals. Empty masks

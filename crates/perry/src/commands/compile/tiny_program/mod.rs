@@ -152,6 +152,7 @@ pub(super) fn try_compile(
     if let Some(report) = &reach_report {
         report.finish(&output)?;
     }
+    super::source_need::tiny(&output)?;
     super::post_link::strip_final_binary(
         ctx,
         &output,

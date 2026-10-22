@@ -30,6 +30,29 @@ pub(super) fn start(ctx: &CompilationContext, library: bool) -> Result<Option<Se
             }
         }
     }
+    let links = import_links(ctx);
+    let modules: Vec<_> = ctx
+        .native_modules
+        .iter()
+        .map(|(p, m)| (p.to_string_lossy().into_owned(), m))
+        .collect();
+    let entry = ctx
+        .entry_canonical
+        .as_deref()
+        .context("reach census requires entry path")?;
+    let census = Arc::new(Census::compute(
+        &modules,
+        &links,
+        &entry.to_string_lossy(),
+        library,
+        &ctx.patched_builtins.dynamic_code_reach,
+    ));
+    finish_start(path, census)
+}
+
+/// Every module's import/re-export specifier, resolved to the module path the
+/// compile linked (shared with the retained-source census).
+pub(super) fn import_links(ctx: &CompilationContext) -> BTreeMap<(String, String), String> {
     let mut links = BTreeMap::new();
     for (path, m) in &ctx.native_modules {
         let sources =
@@ -51,22 +74,10 @@ pub(super) fn start(ctx: &CompilationContext, library: bool) -> Result<Option<Se
             }
         }
     }
-    let modules: Vec<_> = ctx
-        .native_modules
-        .iter()
-        .map(|(p, m)| (p.to_string_lossy().into_owned(), m))
-        .collect();
-    let entry = ctx
-        .entry_canonical
-        .as_deref()
-        .context("reach census requires entry path")?;
-    let census = Arc::new(Census::compute(
-        &modules,
-        &links,
-        &entry.to_string_lossy(),
-        library,
-        &ctx.patched_builtins.dynamic_code_reach,
-    ));
+    links
+}
+
+fn finish_start(path: std::ffi::OsString, census: Arc<Census>) -> Result<Option<Session>> {
     let path = PathBuf::from(path);
     let mut hir = BufWriter::new(std::fs::File::create(path.with_extension("hir.tsv"))?);
     writeln!(

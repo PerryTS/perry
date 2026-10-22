@@ -662,14 +662,19 @@ pub fn function_source_for_ptr(func_ptr: usize) -> Option<String> {
         if let Some(text) =
             decode_registered(overrides.get(&func_ptr).map(|s| &*s.bytes)).filter(|s| !s.is_empty())
         {
+            crate::source_read_log::note("override", text.as_bytes());
             return Some(text);
         }
     }
-    function_source_registry()
+    let text = function_source_registry()
         .lock()
         .ok()
         .and_then(|map| decode_registered(map.get(&func_ptr).map(|source| source.bytes)))
-        .filter(|s| !s.is_empty())
+        .filter(|s| !s.is_empty());
+    if let Some(text) = &text {
+        crate::source_read_log::note("registry", text.as_bytes());
+    }
+    text
 }
 
 /// Read retained source from a compiled body's info record.
@@ -700,6 +705,7 @@ fn retained_source_for_info(info: &crate::closure::JsFunctionInfo) -> Option<Str
             return None;
         }
         let bytes = std::slice::from_raw_parts(base.offset(displacement), byte_len);
+        crate::source_read_log::note("info", bytes);
         // Compiler source enters this record as Rust `&str`, so it is valid
         // UTF-8 by construction. Avoid the registry's defensive lossy decode
         // on this compact, compiler-owned path.

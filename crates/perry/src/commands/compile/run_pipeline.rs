@@ -2902,6 +2902,7 @@ pub fn run_with_parse_cache(
             .as_deref()
             == Some("1");
     let cache_enabled = std::env::var_os("PERRY_REACH_REPORT").is_none()
+        && std::env::var_os(super::source_need::KNOB).is_none()
         && !args.no_cache
         && !cache_env_disabled
         && !verify_native_regions
@@ -6300,6 +6301,7 @@ pub fn run_with_parse_cache(
         &static_shape_ids,
     );
     let reach_report = super::reach_report::start(&ctx, args.output_type != "executable")?;
+    let source_need = super::source_need::start(&ctx, args.output_type != "executable")?;
     // fninfer (decision 140): per-function inferred signatures over the
     // final HIR. Measurement dump only (`PERRY_FNINFER_DUMP=<path>`).
     super::fn_infer::dump(&ctx.native_modules);
@@ -8393,6 +8395,9 @@ pub fn run_with_parse_cache(
     }
 
     if let Some(report) = &reach_report {
+        report.finish(&exe_path)?;
+    }
+    if let Some(report) = &source_need {
         report.finish(&exe_path)?;
     }
 
