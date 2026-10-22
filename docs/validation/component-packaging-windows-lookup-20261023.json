@@ -1,0 +1,113 @@
+{
+  "date": "2026-10-23",
+  "sourceRevision": "e6616104a262ba243262b9cf6959520a9187a51c",
+  "workflowRun": "https://github.com/PerryTS/perry/actions/runs/39850757289",
+  "publication": false,
+  "provider": "Earlier Wasmtime WASI provider; this stage does not qualify the Turnloop replacement",
+  "linux": {
+    "outer": {
+      "bindings": true,
+      "guest-bindings": true,
+      "ordinary-compile": true,
+      "ordinary-run": true,
+      "missing-engine": true,
+      "native-acceptance": true,
+      "command-acceptance": true
+    },
+    "nativePhases": 20,
+    "nativeFailures": [],
+    "evidenceSha256": {
+      "qualification.json": "c6c3b22e3cf357a120e6495fe903c92481f739c6ce7c2e31d8d545fbfe69c900",
+      "results.json": "fd975fdfe0844b0e3d57d454d1e99f3266e32f4f705f212878247e15a460b688",
+      "missing-engine.log": "f1d1a54f71781c5b242697cbf48ad9a9b2ed29b2436c82be4bd5bf42ad02d1f5",
+      "ordinary-compile.log": "be010040ab613293f8d996447f60268f1a8132d293d4121eee45da875042e6ac",
+      "ordinary-run.log": "4aba6e247eda1432b75c2bb8b6dd22d043a239a20ae90e855107521c19bf1df1",
+      "guest-bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "command-acceptance.log": "b5110608ece7ae69db8a5c67d33b6a1d03edaf75f7670799999fa633ed7eb960",
+      "bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "native-acceptance.log": "aabc008f0a125bc42786f2a6d613b262a7ecd391c8ba49bed2c8cd86c7adba3a",
+      "acceptance/resources-compile.log": "c43f1ca1504d5c74ae609b53e2bda0003b50daac25903977271dbe9a2c890cdb",
+      "acceptance/resources-componentize.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "acceptance/network-guest.log": "70a6637d08abbaea215d5aa8c086edc601855e8896dcbfd1e2533d97b1fd9ab4",
+      "acceptance/resources-run.log": "b8a54ea58f0dc70699e0d16a2976c585a0fa10352f7f5678a6273df2922a1463",
+      "acceptance/network-bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "acceptance/network-run.log": "c4336507eed44ca20a5cb78342264ee5447dede57d09ea7c5fdc1a59a3f14696",
+      "acceptance/host-resources-bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "acceptance/host-resources-compile.log": "bee52d004439949eea91c977e4b83452b505b178f38474024103f8c647694cbf",
+      "acceptance/rust-guest.log": "843b77ab35dee54366beddcdd222ed633be20106c033bce4d87006c38d162fd8",
+      "acceptance/resources-guest.log": "0d31721ced00450e85d0c2889cd35fa6da341bfc816af69172a1aece4da6fed4",
+      "acceptance/results.json": "022d8eeaaf7964bdd6d2f72241befe2ab4af3b1d1765e1f8a0dad156d8f1dc8a",
+      "acceptance/host-resources-componentize.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "acceptance/network-componentize.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "acceptance/resources-bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "acceptance/host-resources-guest.log": "88c91123aa845c876934501176dfbe6c5b06e3cb0f4a7c64e76180e72a7eb555",
+      "acceptance/run-host.log": "cb43de132c0975d5f3f57bf550a7b7ef62cc6e54749e8c276f13abcd7a0ffcb9",
+      "acceptance/network-compile.log": "502105262451274b75835b9f505bc40cfde3de9f437632969913e104da5a6439",
+      "acceptance/componentize.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "acceptance/network-peer.json": "a765b490f5af9f23997a0aabbc66956b0dce34a20d31e3562a0a5e567e3da215",
+      "acceptance/host-resources-run.log": "2f594608248273a64e7352c7ee8b1b654a2b3b9097f1b30bdbf686d91abc8fd5",
+      "acceptance/compile-host.log": "883f457d602cac5a0b9cfe7082add25f48bdb23125f0c46f2d15c8e4d106e608",
+      "acceptance/bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "commands/rust-command.log": "9b8f62227c2311dbf828768159c9f7c179e735872fe9f77512d1aaba48d08131",
+      "commands/command-run.log": "1b0adbc0510e90d11d55328f6c51057bae79fb0c3e0784d2be2d0de0f85c6ac2",
+      "commands/command-library-compile.log": "705610a88687cdf6f3d3e77ae13ab2868bc53a5b48a53564df4df43d09da4161",
+      "commands/results.json": "f247b31b63384d865e0e6c0065e22f5e4f8846a92a4f24436ea974e1cc9e7485",
+      "commands/command-compile.log": "775d9b33f25f76c1c97b10e4332812209211f3c2a5689b909d105b3c294eb1f9",
+      "commands/command-library-run.log": "f50c97dd197f3457477e055176c0557f2afeedf98d3d1874609f38717925b7f6"
+    },
+    "commandPhases": 5
+  },
+  "windows": {
+    "outer": {
+      "bindings": true,
+      "guest-bindings": true,
+      "ordinary-compile": true,
+      "ordinary-run": true,
+      "missing-engine": true,
+      "native-acceptance": false
+    },
+    "nativePhases": 5,
+    "nativeFailures": [
+      {
+        "name": "run-host",
+        "exitCode": 1,
+        "seconds": 0.078,
+        "log": "D:\\a\\_temp\\perry-component-release-validation\\acceptance\\run-host.log"
+      }
+    ],
+    "evidenceSha256": {
+      "results.json": "c4bd1c54bbb31a6999457330b04f5feba4058c3101d1d2ab78f330b4a90a0d64",
+      "missing-engine.log": "20e8e948c7d70ec2e7ab9ed028543cda99362b9630ea7ade1084e58e8676f86e",
+      "ordinary-compile.log": "5ef8412e849bfc2de651777731802a06995466482f53207f4468eaa06cd2ea8c",
+      "ordinary-run.log": "4aba6e247eda1432b75c2bb8b6dd22d043a239a20ae90e855107521c19bf1df1",
+      "guest-bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "native-acceptance.log": "4b58ea54e390ed9829c28cb60d69f4397398705dae720258dde4dd2e03a3ae38",
+      "acceptance/rust-guest.log": "c0bb08d5d402a5ea4870f98eae4b57ab326d7b6c52f0353030cc04896db91437",
+      "acceptance/results.json": "ad47d7c8d6fcefa3d52be020dae168176909c383343fca176af2a26214f15fa4",
+      "acceptance/run-host.log": "57a571cb540843cd343e765a3b1c921e1618ad8439e83a5daa535176b3cc50b0",
+      "acceptance/componentize.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "acceptance/compile-host.log": "83dba6e4028ee61f84e07b39bd7495fd1191f21dddb86196241f700053750415",
+      "acceptance/bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "artifacts": {
+    "linux": {
+      "id": 12466685045,
+      "archiveSha256": "e4f30c5cc912a5247c75d29f38b8c289317298fe923cb0ae86e574b6e37562b2"
+    },
+    "windows": {
+      "id": 12466610881,
+      "archiveSha256": "64ba477a82115da2151f0cdd0d2edc3d93c3113a897c3e77e22efc0734aa81ae"
+    }
+  },
+  "windowsLookupUnitTests": 8,
+  "windowsFirstExecutionFailure": "TypeError: Cannot read properties of undefined (reading 'length')",
+  "macOS": "Both builds still running at observation; no result claimed",
+  "remaining": [
+    "Windows typed component execution (#13004)",
+    "macOS production execution",
+    "Selected Turnloop provider and updated release dependency qualification",
+    "Production npm rerun for the final source"
+  ]
+}

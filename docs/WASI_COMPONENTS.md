@@ -109,6 +109,14 @@ invocation and verifies the decompressed engine hash. See the
 macOS/Windows production qualification remains open.
 Windows exposed a native archive lookup omission, repaired separately with
 executable-relative discovery and architecture-isolation regressions.
+The repair stage at `e6616104a262ba243262b9cf6959520a9187a51c` passes all eight
+Windows lookup tests, packaged ordinary compilation/execution and component-host
+compilation. Its first typed host execution then fails with `undefined.length`,
+the same failure seen in native platform qualification. Linux passes all seven
+outer checks, 20 library phases and five command phases on this revision; both
+macOS builds are still running. See the
+[repair-stage receipt](validation/component-packaging-windows-lookup-20261023.json).
+This stage uses the earlier provider and does not qualify the Turnloop replacement.
 
 The earlier production profile
 passed six outer checks and 15 library phases on Linux and macOS. Its Linux
