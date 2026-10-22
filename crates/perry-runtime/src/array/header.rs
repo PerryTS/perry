@@ -922,6 +922,18 @@ pub struct ArrayHeader {
     pub capacity: u32,
     /// Ordinary own-property layout, independent of the element backing.
     pub named: *mut crate::object::ObjectHeader,
+    /// ILP32 keeps `ek_prefix` at +16, the offset emitted code reads.
+    #[cfg(target_pointer_width = "32")]
+    pub _ek_pad: u32,
+    /// Element kind, dense prefix P: every slot below P holds a plain data
+    /// element (no hole, no element descriptor), and P <= min(length,
+    /// capacity). A lower bound: lowering it is always sound, raising it
+    /// needs a proof at the store (EK_ELEMENT_KIND_DESIGN 3.1). Zero is the
+    /// weakest claim, so a birth that writes zero is slow, never wrong.
+    pub ek_prefix: u32,
+    /// Element kind, value tag: bits 0..3 the tag, bits 3..32 the class id
+    /// of CLASS(c). Zero is ANY, the weakest claim (design 3.2).
+    pub ek_kind: u32,
 }
 
 #[inline]

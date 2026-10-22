@@ -24,6 +24,8 @@ unsafe fn raw_birth(kind: u8, shape: u32, child: *mut u8, premature_drain: bool)
             length: slots as u32,
             capacity: slots as u32,
             named: std::ptr::null_mut(),
+            ek_prefix: 0,
+            ek_kind: 0,
         });
     } else {
         let object = user as *mut crate::object::ObjectHeader;

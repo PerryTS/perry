@@ -215,6 +215,10 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
         (*new_ptr).capacity = new_capacity;
         // GC_STORE_AUDIT(BARRIERED): growth carries the traced ordinary named layout.
         (*new_ptr).named = (*arr).named;
+        // Growth keeps every slot below `length` at its logical index, so the
+        // element kind word carries over exactly.
+        (*new_ptr).ek_prefix = (*arr).ek_prefix;
+        (*new_ptr).ek_kind = (*arr).ek_kind;
         crate::gc::runtime_write_barrier_slot(
             new_ptr as usize,
             std::ptr::addr_of_mut!((*new_ptr).named) as usize,

@@ -88,6 +88,8 @@ pub extern "C" fn js_array_alloc(capacity: u32) -> *mut ArrayHeader {
         (*ptr).length = 0;
         (*ptr).capacity = actual_capacity;
         (*ptr).named = std::ptr::null_mut();
+        (*ptr).ek_prefix = 0;
+        (*ptr).ek_kind = 0;
         // HOLE-initialize the whole capacity so the unused [length, capacity)
         // slack never holds stale arena bits that the whole-heap from-space
         // scan misreads as live from-space pointers.
@@ -159,6 +161,8 @@ pub(crate) fn js_array_alloc_pointer_elements(capacity: u32) -> *mut ArrayHeader
         (*ptr).length = 0;
         (*ptr).capacity = actual_capacity;
         (*ptr).named = std::ptr::null_mut();
+        (*ptr).ek_prefix = 0;
+        (*ptr).ek_kind = 0;
         // The caller writes a slot before it publishes the length that
         // covers it, so every slot it does not reach stays a hole.
         fill_fresh_capacity_with_holes(ptr);
@@ -234,6 +238,8 @@ fn alloc_key_list(
         (*ptr).length = 0;
         (*ptr).capacity = capacity;
         (*ptr).named = std::ptr::null_mut();
+        (*ptr).ek_prefix = 0;
+        (*ptr).ek_kind = 0;
         let header = crate::gc::header_from_trusted_user_ptr(ptr.cast()).cast_mut();
         if canonical {
             (*header).gc_flags |= crate::gc::GC_FLAG_SHAPE_SHARED;
@@ -291,6 +297,8 @@ pub extern "C" fn js_array_alloc_with_length(capacity: u32) -> *mut ArrayHeader 
         (*ptr).length = capacity; // Set length = requested capacity
         (*ptr).capacity = actual_capacity;
         (*ptr).named = std::ptr::null_mut();
+        (*ptr).ek_prefix = 0;
+        (*ptr).ek_kind = 0;
         let elements_ptr = crate::array::array_elements_ptr(ptr as *const ArrayHeader) as *mut u64;
         // The whole capacity: `[length, capacity)` is hole-filled on every
         // array (`array_truncate_length`).
@@ -323,6 +331,8 @@ pub(crate) fn js_array_alloc_with_length_exact(capacity: u32) -> *mut ArrayHeade
         (*ptr).length = capacity;
         (*ptr).capacity = capacity;
         (*ptr).named = std::ptr::null_mut();
+        (*ptr).ek_prefix = 0;
+        (*ptr).ek_kind = 0;
         let elements_ptr = crate::array::array_elements_ptr(ptr as *const ArrayHeader) as *mut u64;
         for i in 0..capacity as usize {
             // GC_STORE_AUDIT(POINTER_FREE): TAG_HOLE is a non-pointer sentinel for fresh array slots.
@@ -405,6 +415,8 @@ pub extern "C" fn js_array_alloc_with_length_longlived(capacity: u32) -> *mut Ar
         (*ptr).length = capacity;
         (*ptr).capacity = capacity;
         (*ptr).named = std::ptr::null_mut();
+        (*ptr).ek_prefix = 0;
+        (*ptr).ek_kind = 0;
         clear_array_numeric_layout(ptr);
         crate::gc::layout_init_pointer_free(ptr as *mut u8);
     }
@@ -685,6 +697,8 @@ pub extern "C" fn js_array_alloc_literal(capacity: u32) -> *mut ArrayHeader {
         (*ptr).length = capacity;
         (*ptr).capacity = capacity;
         (*ptr).named = std::ptr::null_mut();
+        (*ptr).ek_prefix = 0;
+        (*ptr).ek_kind = 0;
         clear_array_numeric_layout(ptr);
         crate::gc::layout_init_pointer_free(ptr as *mut u8);
     }

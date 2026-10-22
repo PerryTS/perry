@@ -1712,7 +1712,7 @@ const _: () = assert!(std::mem::offset_of!(ObjectHeader, meta) == 16 - size_of::
 const _: () = assert!(
     std::mem::offset_of!(ObjectHeader, parent_class_id) == crate::codegen_abi::OBJECT_SHAPE_OFFSET
 );
-const _: () = assert!(std::mem::size_of::<crate::array::ArrayHeader>() == 16);
+const _: () = assert!(std::mem::size_of::<crate::array::ArrayHeader>() == 24);
 
 pub(crate) mod cell_meta;
 pub(crate) use cell_meta::{cell_expando_ensure, cell_expando_get, cell_meta_slot};

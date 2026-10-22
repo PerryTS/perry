@@ -36,7 +36,7 @@ pub const WEAKMAP_BIRTH_LAYOUT: u32 = SHAPE_ID_BASE + (4 << 20);
 pub const WEAKSET_BIRTH_LAYOUT: u32 = WEAKMAP_BIRTH_LAYOUT + 1;
 
 /// `array::ArrayHeader` size: element 0 follows it.
-pub const ARRAY_HEADER_SIZE: usize = 16;
+pub const ARRAY_HEADER_SIZE: usize = 24;
 
 /// `PerryLayoutKey.attrs` bit (the runtime's key entry byte, `ENTRY_OPTIONAL`):
 /// the key is a layout's optional or late member. Its slot may hold the hole

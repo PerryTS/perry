@@ -47,6 +47,8 @@ fn post_remark_birth_survives(kind: u8, include_live_flags: bool) -> std::thread
                 length: slots as u32,
                 capacity: slots as u32,
                 named: std::ptr::null_mut(),
+                ek_prefix: 0,
+                ek_kind: 0,
             });
         } else {
             (user as *mut crate::object::ObjectHeader).write(crate::object::ObjectHeader {

@@ -48,6 +48,8 @@ fn gc_init_establishes_inline_state_on_each_live_worker_heap() {
                         length: 0,
                         capacity: 3,
                         named: std::ptr::null_mut(),
+                        ek_prefix: 0,
+                        ek_kind: 0,
                     },
                 );
                 for i in 0..3 {

@@ -224,7 +224,7 @@ pub(crate) fn emit_array_from_lowered_values<'f>(
         // `GcHeader` in gc.rs. Duplicated here because codegen emits raw
         // byte offsets; the runtime declarations are authoritative.
         const GC_HEADER_SIZE: u64 = 8;
-        const ARRAY_HEADER_SIZE: u64 = 16;
+        const ARRAY_HEADER_SIZE: u64 = crate::target_layout::ARRAY_HEADER_SIZE_BYTES;
         const ELEMENT_SIZE: u64 = 8;
         const GC_TYPE_ARRAY: u64 = 1;
         const GC_FLAG_ARENA: u64 = 0x02;
@@ -357,8 +357,11 @@ pub(crate) fn emit_array_from_lowered_values<'f>(
         let named = blk.gep(I8, &raw, &[(I64, "16")]);
         // GC_STORE_AUDIT(INIT): fresh array has no named child.
         blk.store(PTR, "null", &named);
+        let ek = blk.gep(I8, &raw, &[(I64, "24")]);
+        // GC_STORE_AUDIT(INIT): element kind word (P = 0, ANY), the weakest claim.
+        blk.store(I64, "0", &ek);
         for i in n..capacity {
-            let slot = blk.gep_inbounds(I8, &raw, &[(I64, &(24 + i * 8).to_string())]);
+            let slot = blk.gep_inbounds(I8, &raw, &[(I64, &(32 + i * 8).to_string())]);
             // GC_STORE_AUDIT(INIT): fresh unused array capacity holds holes.
             blk.store(I64, &crate::nanbox::TAG_HOLE.to_string(), &slot);
         }
@@ -382,7 +385,7 @@ pub(crate) fn emit_array_from_lowered_values<'f>(
             {
                 let blk = ctx.block();
                 for (i, v) in vals.iter().enumerate() {
-                    let offset = (24 + i * 8).to_string();
+                    let offset = (32 + i * 8).to_string();
                     let elem_ptr = blk.gep_inbounds(I8, &raw, &[(I64, &offset)]);
                     // GC_STORE_AUDIT(POINTER_FREE): every element was just
                     // tested to be a plain double; the header already says
@@ -396,7 +399,7 @@ pub(crate) fn emit_array_from_lowered_values<'f>(
             {
                 let blk = ctx.block();
                 for (i, v) in vals.iter().enumerate() {
-                    let offset = (24 + i * 8).to_string();
+                    let offset = (32 + i * 8).to_string();
                     let elem_ptr = blk.gep_inbounds(I8, &raw, &[(I64, &offset)]);
                     let slot_index = i.to_string();
                     emit_jsvalue_slot_store_on_block(
@@ -454,7 +457,7 @@ pub(crate) fn emit_array_from_lowered_values<'f>(
         // Elements follow the sixteen-byte array header.
         let blk = ctx.block();
         for (i, v) in vals.iter().enumerate() {
-            let offset = (24 + i * 8).to_string();
+            let offset = (32 + i * 8).to_string();
             let elem_ptr = blk.gep_inbounds(I8, &raw, &[(I64, &offset)]);
             let slot_index = i.to_string();
             emit_jsvalue_slot_store_on_block(

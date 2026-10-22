@@ -76,6 +76,13 @@ pub struct ArrayHeader {
     pub capacity: u32,
     /// Ordinary object holding own named properties.
     pub named: *mut ObjectHeader,
+    /// ILP32 keeps `ek_prefix` at +16.
+    #[cfg(target_pointer_width = "32")]
+    pub _ek_pad: u32,
+    /// Element kind: dense prefix (runtime-owned; a mirror never writes it).
+    pub ek_prefix: u32,
+    /// Element kind: value tag and class (runtime-owned).
+    pub ek_kind: u32,
 }
 
 /// Header for a runtime-allocated JS object.

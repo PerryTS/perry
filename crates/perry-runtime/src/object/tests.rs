@@ -863,10 +863,14 @@ fn spill_layout_matches_codegen() {
     );
     assert_eq!(
         std::mem::size_of::<crate::array::ArrayHeader>(),
-        16,
-        "perry-codegen's ARRAY_HEADER_SIZE_BYTES is 16 (length, capacity, named); \
+        24,
+        "perry-codegen's ARRAY_HEADER_SIZE_BYTES is 24 (length, capacity, named, ek word); \
          update both sides together"
     );
+    // The element-kind word sits at +16 on every target: emitted read guards
+    // compare the index against `ek_prefix` at that literal offset.
+    assert_eq!(std::mem::offset_of!(crate::array::ArrayHeader, ek_prefix), 16);
+    assert_eq!(std::mem::offset_of!(crate::array::ArrayHeader, ek_kind), 20);
 }
 
 /// #7916: lowering the floor must not change what `{}` + by-name growth does,
