@@ -24,6 +24,7 @@ impl Model {
         self.add_tokens(n, Tokens::Slice(toks), prim);
     }
     fn add_tokens(&mut self, n: NodeId, toks: Tokens<'_>, prim: u16) {
+        let mut later: Vec<Tok> = Vec::new();
         let targets = if toks.is_empty() {
             Targets::Empty
         } else {
@@ -36,11 +37,33 @@ impl Model {
         let mut changed = false;
         let mut top_new = false;
         for &t in toks {
+            // A marker that reads as ⊤ (DECISIONS 42) is decided after the
+            // other tokens, once it is known whether ⊤ arrived with them.
+            if marker_top_bit(&self.marker_top, t) {
+                later.push(t);
+                continue;
+            }
             if node.pts.insert(t) {
                 node.delta.push_to(t, &targets);
                 changed = true;
                 self.pts_entries += 1;
                 top_new |= t == TOP;
+            }
+        }
+        // Beside ⊤ it is that ⊤: every rule does to ⊤ at least what it does
+        // to the marker, and the readers after the solve read it as ⊤. Left
+        // out, it never floods the unit. Without ⊤ it is delivered as before.
+        if !later.is_empty() {
+            if node.pts.contains_tok(TOP) {
+                node.dropped = true;
+            } else {
+                for t in later {
+                    if node.pts.insert(t) {
+                        node.delta.push_to(t, &targets);
+                        changed = true;
+                        self.pts_entries += 1;
+                    }
+                }
             }
         }
         if top_new && self.explain {

@@ -540,6 +540,10 @@ pub struct Node {
     pub succ: Vec<NodeId>,
     pub cons: Vec<Cons>,
     pub in_wl: bool,
+    /// A delivery left out a marker that reads as ⊤ here (DECISIONS 42):
+    /// this node no longer holds every value of its sources, so it never
+    /// takes a source's set by sharing (`copy_to`, `try_copy_delivery`).
+    pub dropped: bool,
     /// Successor set, once the list is long (exact edge dedup for hubs: a
     /// function's return node can be offered the same edge millions of
     /// times).
@@ -807,6 +811,9 @@ pub struct Model {
     /// Closed functions (decision 13): per parameter the node holding what
     /// the other units' calls pass (`Gen::closed_params`), instead of ⊤.
     pub closed_params: FxHashMap<FnIdx, Vec<NodeId>>,
+    /// Per closed function: which parameters every caller passes a
+    /// described value (no unknown one) (decision 17).
+    pub closed_described: FxHashMap<FnIdx, Vec<bool>>,
     /// Decision 19: the reason a closed function is published to the
     /// module's other units (`Gen::unit_boundary`). Published that way its
     /// token does not escape: its parameters hold the closed contract's
@@ -824,6 +831,13 @@ pub struct Model {
     pub marker_use: FxHashMap<Tok, u8>,
     /// The markers of what a parameter reaches (not the argument itself).
     pub reach_marker: crate::pts::FxHashSet<Tok>,
+    /// A parameter marker's reach marker.
+    pub marker_reach: FxHashMap<Tok, Tok>,
+    /// Markers that read as ⊤ (DECISIONS 42), a bit per token: the
+    /// contract records the escape, so the consumer sinks the argument and
+    /// reads nothing else of it; the marker says no more than the ⊤ beside
+    /// it.
+    pub marker_top: Vec<u64>,
     /// The `this` node of each instance method / accessor of a class: the
     /// binding its entry guard tests (design §11.4).
     pub this_class: FxHashMap<NodeId, TmplId>,
@@ -1297,6 +1311,12 @@ pub fn esc_key(s: &str) -> String {
 /// caller's methods may run), or used beyond that (stored into, opened,
 /// called, a method called on it, escaped: the argument escapes).
 pub const MARK_READ: u8 = 1;
+
+#[inline]
+pub(crate) fn marker_top_bit(bits: &[u64], t: Tok) -> bool {
+    bits.get((t >> 6) as usize)
+        .is_some_and(|w| w >> (t & 63) & 1 != 0)
+}
 pub const MARK_TOUCH: u8 = 2;
 pub const MARK_ESCAPE: u8 = 4;
 
@@ -1304,9 +1324,47 @@ impl Model {
     /// Record what the callee did to a parameter marker.
     #[inline]
     pub(crate) fn mark_use(&mut self, t: Tok, bits: u8) {
-        if !self.param_marker.is_empty() && self.param_marker.contains_key(&t) {
-            *self.marker_use.entry(t).or_default() |= bits;
+        if self.param_marker.is_empty() {
+            return;
         }
+        let Some(&(f, i)) = self.param_marker.get(&t) else {
+            return;
+        };
+        let u = self.marker_use.entry(t).or_default();
+        let new = bits & !*u;
+        *u |= bits;
+        // An escaped argument is sunk by the contract's consumer, which
+        // then reads none of its other uses, results or reached values
+        // (gen.rs `stand_in_fn_of`): the marker, and for the argument
+        // itself its reach marker, read as ⊤ from now on (DECISIONS 42).
+        // A closed function's described parameter keeps its uses: its
+        // contract drops the escape (decision 17), and its callers' values
+        // are beside the marker, not ⊤.
+        let described = self
+            .closed_described
+            .get(&f)
+            .and_then(|d| d.get(i as usize))
+            .is_some_and(|&d| d);
+        if new & MARK_ESCAPE != 0 && !described {
+            self.set_marker_top(t);
+            if let Some(&r) = self.marker_reach.get(&t) {
+                self.set_marker_top(r);
+            }
+        }
+    }
+
+    pub(crate) fn set_marker_top(&mut self, t: Tok) {
+        let w = (t >> 6) as usize;
+        if self.marker_top.len() <= w {
+            self.marker_top.resize(w + 1, 0);
+        }
+        self.marker_top[w] |= 1 << (t & 63);
+    }
+
+    /// A marker that reads as ⊤ (DECISIONS 42).
+    #[inline]
+    pub(crate) fn marker_is_top(&self, t: Tok) -> bool {
+        marker_top_bit(&self.marker_top, t)
     }
 
     /// The marker of parameter `i` of contract function `f`.
@@ -1349,6 +1407,7 @@ impl Model {
         self.param_marker.insert(t, (f, i));
         self.param_marker.insert(r, (f, i));
         self.reach_marker.insert(r);
+        self.marker_reach.insert(t, r);
         self.marker_of.insert((f, i), t);
         t
     }

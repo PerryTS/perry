@@ -75,7 +75,9 @@ impl Model {
 
     pub(super) fn copy_to(&mut self, src: NodeId, dst: NodeId, toks: Tokens<'_>, prim: u16) -> u64 {
         self.add_tokens(dst, toks, prim);
-        if self.nodes[src as usize].pts.len() > 1
+        // Equal sizes prove equal sets only while `dst` holds all of `src`.
+        if !self.nodes[dst as usize].dropped
+            && self.nodes[src as usize].pts.len() > 1
             && self.nodes[src as usize].pts.len() == self.nodes[dst as usize].pts.len()
         {
             let a = self.nodes[src as usize].pts.shared_owners();
@@ -110,7 +112,13 @@ impl Model {
         let source = &self.nodes[src as usize];
         let target = &self.nodes[dst as usize];
         let len = source.pts.len();
-        if count == 0 || len.checked_sub(count) != Some(target.pts.len()) {
+        if count == 0 || len.checked_sub(count) != Some(target.pts.len()) || target.dropped {
+            return false;
+        }
+        // A marker that reads as ⊤ is delivered by `add_tokens` (DECISIONS 42).
+        if !self.marker_top.is_empty()
+            && Tokens::Delivery(delta, dst).iter().any(|&t| self.marker_is_top(t))
+        {
             return false;
         }
         let batch = delta.batch_for(dst);
