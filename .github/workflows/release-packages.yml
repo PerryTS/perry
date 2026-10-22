@@ -1609,6 +1609,13 @@ jobs:
           if [[ "$RUNNER_OS" == Windows ]]; then
             componentize="$componentize.exe"
             archive="${{ matrix.artifact }}.zip"
+            cargo test --locked --profile prod -Z panic-abort-tests -p perry --bin perry \
+              windows_toolchain_tests -- --test-threads=1 \
+              2>&1 | tee "$RUNNER_TEMP/component-library-search.log"
+            grep -F 'native_windows_targets_find_portable_and_npm_archives ... ok' \
+              "$RUNNER_TEMP/component-library-search.log"
+            grep -F 'foreign_windows_architecture_excludes_host_install_archives ... ok' \
+              "$RUNNER_TEMP/component-library-search.log"
           fi
           python scripts/component_release_check.py --archive "$archive" \
             --componentize "$componentize" --target "${{ matrix.target }}" \
@@ -1620,6 +1627,7 @@ jobs:
         with:
           name: component-release-validation-${{ matrix.target }}
           path: |
+            ${{ runner.temp }}/component-library-search.log
             ${{ runner.temp }}/perry-component-release-validation/*.json
             ${{ runner.temp }}/perry-component-release-validation/*.log
             ${{ runner.temp }}/perry-component-release-validation/acceptance/*.json

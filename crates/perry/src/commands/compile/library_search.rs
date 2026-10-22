@@ -1166,6 +1166,13 @@ pub(super) fn collect_library_candidates(name: &str, target: Option<&str>) -> Ve
                 if is_native_linux_target(target) {
                     push_executable_relative_host_candidates(&mut candidates, &exe, name);
                 }
+                // Windows resolves even an implicit host target to a triple.
+                // Portable ZIPs keep archives beside perry.exe; npm uses the
+                // sibling lib directory. Probe both only for the native arch.
+                #[cfg(target_os = "windows")]
+                if is_native_windows_target(target) {
+                    push_executable_relative_host_candidates(&mut candidates, &exe, name);
+                }
 
                 // For Apple / HarmonyOS cross-compile targets, check the exe
                 // directory for libs with the platform-suffix naming convention:

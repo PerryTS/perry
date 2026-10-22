@@ -23,3 +23,9 @@ profile. Measure the actual Linux production engine at 235,912,106 bytes raw and
 39,653,474 bytes compressed in npm staging; pack/unpack, WIT generation, automatic
 engine discovery and all 51 typed fixture calls pass. Expanded ABI 5 production
 qualification remains separate and pending.
+
+Native Windows installs now discover runtime, stdlib and component archives beside
+`perry.exe` and in npm's sibling `lib` directory, including the implicit host
+target. Cross-architecture compilation keeps target-specific lookup. The release
+qualification runs both Windows lookup regressions before testing the isolated
+archive, and retains their log with the packaging evidence.
