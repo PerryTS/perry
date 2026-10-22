@@ -622,6 +622,10 @@ pub unsafe extern "C" fn js_node_http_im_on(
     let body_to_emit;
     let encoding_to_emit;
     let should_emit_end;
+    // `'end'` listeners registered before the body was delivered: they fire
+    // right after the `'data'` emit, as Node's flowing stream emits `'end'`
+    // only once the buffered chunks are consumed.
+    let mut deferred_end: Vec<i64> = Vec::new();
     {
         let im = match get_handle_mut::<IncomingMessage>(handle) {
             Some(im) => im,
@@ -669,6 +673,13 @@ pub unsafe extern "C" fn js_node_http_im_on(
                 body_to_emit = Some(im.body_bytes.clone());
                 encoding_to_emit = im.encoding.clone();
                 should_emit_end = false;
+                if !im.end_emitted {
+                    deferred_end = im.listeners.get("end").cloned().unwrap_or_default();
+                    if !deferred_end.is_empty() {
+                        im.end_emitted = true;
+                        im.complete = true;
+                    }
+                }
             }
             // Node fires `'end'` at every registered listener; the one-shot
             // `!im.end_emitted` guard fired only the FIRST `req.on('end', …)`
@@ -683,6 +694,15 @@ pub unsafe extern "C" fn js_node_http_im_on(
             // so each late listener observes `'end'` exactly once. `end_emitted`
             // still latches so the bulk `resume()`/reaper emit paths (which gate
             // on it) never double-fire an already-invoked listener.
+            // A body that is still waiting for its `'data'` listener holds
+            // `'end'` back (`req.once('end', …); req.on('data', …)`, the order
+            // effect's NodeStream.toArrayBuffer registers in): firing it here
+            // ran the end handler before any chunk and lost the body.
+            "end" if !im.paused && !im.data_emitted && !im.body_bytes.is_empty() => {
+                body_to_emit = None;
+                encoding_to_emit = None;
+                should_emit_end = false;
+            }
             "end" if !im.paused => {
                 im.end_emitted = true;
                 im.complete = true;
@@ -698,9 +718,17 @@ pub unsafe extern "C" fn js_node_http_im_on(
         }
     }
 
+    // The deferred `'end'` snapshot crosses the `'data'` emit, which runs JS
+    // and can move it: root it and re-read at use.
+    let scope = perry_ffi::TransientRootScope::enter();
+    let deferred_end = scope.root_addrs(&deferred_end);
     if let Some(bytes) = body_to_emit {
         let cbs = vec![callback];
         emit_data_to_listeners(&cbs, &bytes, encoding_to_emit.as_deref());
+    }
+    if !deferred_end.is_empty() {
+        let end_listeners: Vec<i64> = deferred_end.iter().map(|cb| cb.get()).collect();
+        emit_end_to_listeners(&end_listeners);
     }
     if should_emit_end {
         let cbs = vec![callback];
@@ -733,9 +761,79 @@ pub unsafe extern "C" fn js_node_http_im_once(
             perry_ffi::JsValue::from_object_ptr(handle as usize as *mut u8).bits(),
         );
     }
-    let wrapper =
-        crate::client_request_surface::create_client_once_wrapper(handle, &event, callback, false);
+    let wrapper = create_im_once_wrapper(handle, &event, callback);
     js_node_http_im_on(handle, event_name_ptr, wrapper)
+}
+
+/// A server request's `once` listener: a one-argument closure that removes
+/// itself from the request's listener list, then calls the user callback.
+/// The listener emitters call it with the event's own arguments (`'data'`
+/// passes the chunk, `'end'` none) through the fixed-arity entry.
+fn create_im_once_wrapper(handle: i64, event: &str, callback: i64) -> i64 {
+    if callback == 0 {
+        return 0;
+    }
+    let scope = perry_ffi::TransientRootScope::enter();
+    let callback = scope.root_addr(callback);
+    let event = scope.root_nanbox(f64::from_bits(
+        JsValue::from_string_ptr(alloc_string(event).as_raw()).bits(),
+    ));
+    let wrapper = perry_ffi::alloc_closure(&IM_ONCE_WRAPPER_INFO, 4);
+    let wrapper = scope.root_addr(wrapper as i64);
+    let wrapper_ptr = wrapper.get() as *mut RawClosureHeader;
+    unsafe {
+        perry_ffi::set_closure_capture_f64(wrapper_ptr, 0, handle as f64);
+        perry_ffi::set_closure_capture_f64(wrapper_ptr, 1, event.get());
+        perry_ffi::set_closure_capture_f64(
+            wrapper_ptr,
+            2,
+            f64::from_bits(JsValue::from_object_ptr(callback.get() as usize as *mut u8).bits()),
+        );
+        perry_ffi::set_closure_capture_f64(
+            wrapper_ptr,
+            3,
+            f64::from_bits(JsValue::from_object_ptr(wrapper.get() as usize as *mut u8).bits()),
+        );
+    }
+    wrapper.get()
+}
+
+static IM_ONCE_WRAPPER_INFO: perry_ffi::JsFunctionInfo =
+    perry_ffi::JsFunctionInfo::of(im_once_wrapper as perry_ffi::JsBody1);
+
+extern "C" fn im_once_wrapper(
+    closure: *const RawClosureHeader,
+    this: perry_ffi::JsThis,
+    arg0: f64,
+) -> f64 {
+    let undefined = f64::from_bits(crate::server::types::TAG_UNDEFINED);
+    unsafe {
+        let handle = perry_ffi::closure_capture_f64(closure, 0) as i64;
+        let event = JsValue::from_bits(perry_ffi::closure_capture_f64(closure, 1).to_bits())
+            .to_owned_string()
+            .unwrap_or_default();
+        let callback = (perry_ffi::closure_capture_f64(closure, 2).to_bits() & PTR_MASK) as i64;
+        let wrapper = (perry_ffi::closure_capture_f64(closure, 3).to_bits() & PTR_MASK) as i64;
+        let removed = get_handle_mut::<IncomingMessage>(handle)
+            .and_then(|im| {
+                let listeners = im.listeners.get_mut(&event)?;
+                let position = listeners.iter().rposition(|entry| *entry == wrapper)?;
+                listeners.remove(position);
+                Some(())
+            })
+            .is_some();
+        if !removed || callback == 0 {
+            return undefined;
+        }
+        let callback = JsClosure::from_raw(callback as *const RawClosureHeader);
+        if callback.is_null() {
+            return undefined;
+        }
+        match event.as_str() {
+            "end" | "close" => callback.call0(this),
+            _ => callback.call1(this, arg0),
+        }
+    }
 }
 
 /// `req.setEncoding(encoding)` — switch future `'data'` events from Buffer
