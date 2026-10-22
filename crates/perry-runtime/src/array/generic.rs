@@ -120,7 +120,7 @@ pub(super) fn to_object(recv: f64) -> f64 {
 /// `TypeError` otherwise, reusing the array-method renderer for parity with the
 /// specialised paths).
 #[inline]
-fn callable(cb: f64) -> *const ClosureHeader {
+pub(super) fn callable(cb: f64) -> *const ClosureHeader {
     crate::array::js_validate_array_map_callback(0, cb) as *const ClosureHeader
 }
 
@@ -128,7 +128,7 @@ fn callable(cb: f64) -> *const ClosureHeader {
 /// The method validated this fixed value once, after reading `length`; moving
 /// collection changes its address, never its callability or immutable body.
 #[inline]
-fn callback_pointer(cb: f64) -> *const ClosureHeader {
+pub(super) fn callback_pointer(cb: f64) -> *const ClosureHeader {
     JSValue::from_bits(cb.to_bits()).as_pointer::<ClosureHeader>()
 }
 
@@ -158,6 +158,14 @@ fn to_length(v: f64) -> i64 {
 /// read `ObjectHeader`'s words / inline slots as garbage (see
 /// `normalize_array_receiver`).
 #[inline]
+/// A receiver the array iterators read through `[[Get]]` (`al_length` /
+/// `al_get`) rather than an `ArrayHeader`: a Proxy, or an ordinary object
+/// that is not an Array (`Array.prototype.keys.call({ length: 2 })`).
+pub(super) fn is_generic_arraylike_receiver(recv: f64) -> bool {
+    as_real_array(recv).is_null()
+        && matches!(classify_pointer(recv), Some(PtrKind::Proxy) | Some(PtrKind::Object))
+}
+
 pub(super) fn as_real_array(recv: f64) -> *mut ArrayHeader {
     // One admission: a POINTER_TAG word names a GC-headed object (honest
     // pointers; Proxy and stream ids are HANDLE_TAG), so the header byte
@@ -1429,6 +1437,14 @@ pub fn dispatch_arraylike_read_method(
         "slice" => js_arraylike_slice(object, a(0), has(0), a(1), has(1)),
         "sort" => js_arraylike_sort(object, a(0)),
         "concat" => js_arraylike_concat(object, args_ptr, args_len as i32),
+        "flatMap" => js_arraylike_flatMap(object, a(0), a(1)),
+        "flat" => super::flat_clone::js_arraylike_flat(object, a(0)),
+        "toReversed" => super::generic_copy::js_arraylike_toReversed(object),
+        "toSorted" => super::generic_copy::js_arraylike_toSorted(object, a(0)),
+        "with" => super::generic_copy::js_arraylike_with(object, a(0), a(1)),
+        "keys" => super::iter_object::array_keys_iter(object),
+        "entries" => super::iter_object::array_entries_iter(object),
+        "values" => super::iter_object::array_values_iter(object),
         _ => return None,
     })
 }

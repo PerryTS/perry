@@ -46,6 +46,16 @@ const KIND_ARGUMENTS_VALUES: i32 = 4;
 /// live `LengthOfArrayLike` / `Get` operations so proxy traps and mutations are
 /// observed with the same timing as `%ArrayIteratorPrototype%.next`.
 const KIND_PROXY_VALUES: i32 = 5;
+/// Keys / entries iterators over a Proxy or a non-Array array-like object.
+/// Like `KIND_PROXY_VALUES`, the backing field holds the NaN-boxed receiver
+/// and `.next()` reads `LengthOfArrayLike` / `Get` live on every step.
+const KIND_PROXY_KEYS: i32 = 6;
+const KIND_PROXY_ENTRIES: i32 = 7;
+
+/// The iterator kinds whose backing is read through `[[Get]]`.
+fn reads_generic_backing(kind: i32) -> bool {
+    matches!(kind, KIND_PROXY_VALUES | KIND_PROXY_KEYS | KIND_PROXY_ENTRIES)
+}
 
 /// Clean a NaN-boxed array pointer to a raw `*mut ArrayHeader`, or null.
 fn unbox_array_ptr(value: f64) -> *mut ArrayHeader {
@@ -91,7 +101,7 @@ unsafe fn alloc_iterator(arr_ptr: *mut ArrayHeader, kind: i32) -> f64 {
 
 /// `arr.values()` iterator — yields each element value.
 pub fn array_values_iter(arr_f64: f64) -> f64 {
-    if crate::proxy::js_proxy_is_proxy(arr_f64) != 0 {
+    if super::generic::is_generic_arraylike_receiver(arr_f64) {
         return unsafe { alloc_iterator_backing(arr_f64, KIND_PROXY_VALUES) };
     }
     let arr_ptr = unbox_array_ptr(arr_f64);
@@ -103,6 +113,9 @@ pub fn array_values_iter(arr_f64: f64) -> f64 {
 
 /// `arr.keys()` iterator — yields each index `0..length`.
 pub fn array_keys_iter(arr_f64: f64) -> f64 {
+    if super::generic::is_generic_arraylike_receiver(arr_f64) {
+        return unsafe { alloc_iterator_backing(arr_f64, KIND_PROXY_KEYS) };
+    }
     let arr_ptr = unbox_array_ptr(arr_f64);
     if arr_ptr.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
@@ -112,6 +125,9 @@ pub fn array_keys_iter(arr_f64: f64) -> f64 {
 
 /// `arr.entries()` iterator — yields `[index, value]` pairs.
 pub fn array_entries_iter(arr_f64: f64) -> f64 {
+    if super::generic::is_generic_arraylike_receiver(arr_f64) {
+        return unsafe { alloc_iterator_backing(arr_f64, KIND_PROXY_ENTRIES) };
+    }
     let arr_ptr = unbox_array_ptr(arr_f64);
     if arr_ptr.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
@@ -675,7 +691,7 @@ unsafe fn dispatch_array_iterator_method_inner(
 
             let len = if kind == KIND_ARGUMENTS_VALUES {
                 crate::object::arguments_object_length(backing_ptr as *const ObjectHeader)
-            } else if kind == KIND_PROXY_VALUES {
+            } else if reads_generic_backing(kind) {
                 super::generic::al_length(backing_f64).clamp(0, u32::MAX as i64) as u32
             } else if backing_ptr == 0 {
                 0
@@ -707,7 +723,10 @@ unsafe fn dispatch_array_iterator_method_inner(
             let backing_ptr = js_nanbox_get_pointer(backing_f64) as usize;
             let elem = if kind == KIND_ARGUMENTS_VALUES {
                 crate::object::arguments_object_index_value(backing_ptr as *const ObjectHeader, idx)
-            } else if kind == KIND_PROXY_VALUES {
+            } else if kind == KIND_PROXY_KEYS {
+                // Keys never read the element.
+                f64::from_bits(TAG_UNDEFINED)
+            } else if reads_generic_backing(kind) {
                 super::generic::al_get(backing_f64, idx as i64)
             } else if backing_ptr == 0 {
                 f64::from_bits(TAG_UNDEFINED)
@@ -726,8 +745,8 @@ unsafe fn dispatch_array_iterator_method_inner(
                 KIND_VALUES | KIND_ARGUMENTS_VALUES | KIND_PROXY_VALUES => {
                     JSValue::from_bits(elem_h.get_nanbox_u64())
                 }
-                KIND_KEYS => JSValue::number(idx as f64),
-                KIND_ENTRIES => {
+                KIND_KEYS | KIND_PROXY_KEYS => JSValue::number(idx as f64),
+                KIND_ENTRIES | KIND_PROXY_ENTRIES => {
                     let pair = make_pair_array(idx, elem_h.get_nanbox_f64());
                     JSValue::from_bits(pair.to_bits())
                 }

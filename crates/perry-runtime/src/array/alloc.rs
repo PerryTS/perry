@@ -494,6 +494,9 @@ pub extern "C" fn js_array_from_arraylike_holey_value(boxed: f64) -> *mut ArrayH
     if jv.is_undefined() || jv.is_null() {
         crate::object::has_own_helpers::throw_to_object_nullish_type_error();
     }
+    if crate::proxy::js_proxy_is_proxy(boxed) != 0 {
+        return super::generic_copy::proxy_holey_snapshot(boxed);
+    }
     if !jv.is_pointer() {
         return crate::array::js_array_from_value(boxed);
     }

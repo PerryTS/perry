@@ -15,6 +15,10 @@ mod flat_clone;
 mod forwarding;
 mod from_concat;
 mod generic;
+mod generic_copy;
+pub use self::generic_copy::{
+    js_arraylike_toReversed, js_arraylike_toSorted, js_arraylike_with,
+};
 #[cfg(test)]
 mod generic_callback_tests;
 mod generic_mutators;

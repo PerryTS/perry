@@ -801,6 +801,61 @@ pub(crate) extern "C" fn array_prototype_flat_thunk(
     crate::array::js_arraylike_flat(this.as_f64(), depth)
 }
 
+/// Real thunks for `Array.prototype.{flatMap,toReversed,toSorted,with,keys,
+/// entries}` as values (`Array.prototype.flatMap.call(arrayLike, f)`,
+/// `Reflect.apply`). They were no-op thunks that re-dispatched the method by
+/// name on `this`, which finds nothing on a non-Array receiver: "flatMap is
+/// not a function" for a plain array-like and an empty object for a Proxy.
+/// Each runs the spec-generic body on its `this`, which reads a real Array
+/// through its dense lanes and anything else through `[[Get]]`.
+fn array_proto_generic_read(this: crate::closure::JsThis, method: &str, args: &[f64]) -> f64 {
+    // Nothing allocates before the generic body roots its receiver and
+    // arguments, so the thunk's own values are passed straight through.
+    crate::array::dispatch_arraylike_read_method(this.as_f64(), method, args.as_ptr(), args.len())
+        .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED))
+}
+
+pub(crate) extern "C" fn array_prototype_to_reversed_thunk(
+    _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+    _a: f64,
+) -> f64 {
+    array_proto_generic_read(this, "toReversed", &[])
+}
+
+pub(crate) extern "C" fn array_prototype_to_sorted_thunk(
+    _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+    comparator: f64,
+) -> f64 {
+    array_proto_generic_read(this, "toSorted", &[comparator])
+}
+
+pub(crate) extern "C" fn array_prototype_with_thunk(
+    _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+    index: f64,
+    value: f64,
+) -> f64 {
+    array_proto_generic_read(this, "with", &[index, value])
+}
+
+pub(crate) extern "C" fn array_prototype_keys_thunk(
+    _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+    _a: f64,
+) -> f64 {
+    array_proto_generic_read(this, "keys", &[])
+}
+
+pub(crate) extern "C" fn array_prototype_entries_thunk(
+    _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+    _a: f64,
+) -> f64 {
+    array_proto_generic_read(this, "entries", &[])
+}
+
 pub(crate) extern "C" fn array_prototype_pop_thunk(
     _c: *const crate::closure::ClosureHeader,
     this: crate::closure::JsThis,

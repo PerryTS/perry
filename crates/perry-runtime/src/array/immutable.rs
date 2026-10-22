@@ -5,7 +5,7 @@ use crate::closure::ClosureHeader;
 /// Throw a Node-compatible `RangeError("Invalid index : <idx>")` used by
 /// `Array.prototype.with` for out-of-range / non-finite indexes.
 #[cold]
-fn throw_invalid_index(index: f64) -> ! {
+pub(super) fn throw_invalid_index(index: f64) -> ! {
     let body = if index.is_nan() {
         "NaN".to_string()
     } else if index.is_infinite() {

@@ -506,15 +506,37 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             );
             install_noop_proto_methods(
                 proto_obj,
-                &[
-                    ("entries", 0),
-                    ("keys", 0),
-                    ("toLocaleString", 0),
-                    ("toReversed", 0),
-                    ("toSorted", 1),
-                    ("toSpliced", 2),
-                    ("with", 2),
-                ],
+                &[("toLocaleString", 0), ("toSpliced", 2)],
+            );
+            install_proto_method(
+                proto_obj,
+                "entries",
+                crate::fn_info!(array_prototype_entries_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                0,
+            );
+            install_proto_method(
+                proto_obj,
+                "keys",
+                crate::fn_info!(array_prototype_keys_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                0,
+            );
+            install_proto_method(
+                proto_obj,
+                "toReversed",
+                crate::fn_info!(array_prototype_to_reversed_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                0,
+            );
+            install_proto_method(
+                proto_obj,
+                "toSorted",
+                crate::fn_info!(array_prototype_to_sorted_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                1,
+            );
+            install_proto_method(
+                proto_obj,
+                "with",
+                crate::fn_info!(array_prototype_with_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                2,
             );
             install_proto_method(
                 proto_obj,
