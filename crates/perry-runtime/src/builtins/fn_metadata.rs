@@ -678,6 +678,7 @@ fn retained_source_for_info(info: &crate::closure::JsFunctionInfo) -> Option<Str
     unsafe {
         let base = info as *const crate::closure::JsFunctionInfo as *const u8;
         if info.flags & crate::codegen_abi::FN_SOURCE_BLOCKS != 0 {
+            crate::source_read_count::note(crate::source_read_count::ReadKind::Framed);
             let (record, byte_len) = if info.versioned_code.is_null() {
                 (
                     std::ptr::addr_of!(info.versioned_boxed_mask).cast::<u8>(),

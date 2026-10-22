@@ -4,7 +4,7 @@ use std::sync::{
     OnceLock,
 };
 
-static COUNTERS: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
+static COUNTERS: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
 static ENABLED: OnceLock<bool> = OnceLock::new();
 
 #[derive(Clone, Copy)]
@@ -13,6 +13,8 @@ pub(crate) enum ReadKind {
     Class,
     Info,
     ClassError,
+    /// An info read that decoded DEFLATE frames (the rest read raw bytes).
+    Framed,
 }
 
 #[inline]
@@ -42,7 +44,8 @@ pub(crate) fn report_before_immediate_exit() {
 }
 
 extern "C" fn report() {
-    eprintln!("PERRY_SOURCE_READ_COUNT function_to_string={} class_source={} retained_info={} class_error={}",
+    eprintln!("PERRY_SOURCE_READ_COUNT function_to_string={} class_source={} retained_info={} class_error={} framed={}",
         COUNTERS[0].load(Ordering::Relaxed), COUNTERS[1].load(Ordering::Relaxed),
-        COUNTERS[2].load(Ordering::Relaxed), COUNTERS[3].load(Ordering::Relaxed));
+        COUNTERS[2].load(Ordering::Relaxed), COUNTERS[3].load(Ordering::Relaxed),
+        COUNTERS[4].load(Ordering::Relaxed));
 }

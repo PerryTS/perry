@@ -25,6 +25,12 @@ ranges share frames. Frame boundaries may split Unicode sequences; byte slicing
 and assembly happen before the original range becomes a string. Nothing
 normalizes, replaces or truncates the original source bytes.
 
+A function whose own source is at most 512 bytes (`RETAINED_SOURCE_RAW_MAX_BYTES`)
+is not framed: its info names a raw copy in the ordinary retained-source blob,
+the legacy layout without `FN_SOURCE_BLOCKS`. This is a fixed size rule on the
+function itself, not a hot/cold split and not a parent-size rule; the bytes also
+stay inside any longer parent's frames. It needs no runtime table or cache.
+
 Classes, raw method/accessor bodies, runtime source overrides and unloadable
 images keep their existing raw registration and ownership contracts. In
 particular, module initialization does not eagerly decode retained source.
@@ -39,6 +45,7 @@ on stderr at natural exit or explicit `process.exit()`:
 - `class_source`: class source requests, including default coercion and error
   formatting;
 - `retained_info`: requests actually served by a source-bearing function info;
+- `framed`: the part of `retained_info` that decoded DEFLATE frames; the rest read raw bytes (functions whose own source is at most 512 bytes);
 - `class_error`: the subset of class requests used by readonly-static errors.
 
 Class closures use the class counter rather than counting twice. Counters

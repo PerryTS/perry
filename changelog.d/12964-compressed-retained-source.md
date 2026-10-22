@@ -5,3 +5,5 @@ Add exact nested, Unicode, class, arrow, async and generator reflection coverage
 The opt-in source-read census also reports before an explicit `process.exit()`, which intentionally skips ordinary cleanup handlers.
 
 Stop the final frame at the requested source range end, avoiding unused suffix decoding while preserving exact property-key coercion. Cover partial backreferences, frame-end ranges, implicit function property keys and Unicode class identifiers.
+
+A function whose own source is at most 512 bytes keeps a raw copy that its info names directly, so short functions used as property keys or tested by shape cost no decoding. Longer sources stay in the frames.
