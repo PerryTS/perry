@@ -46,6 +46,7 @@ fn observer(scope: &TransientRootScope, label: f64) -> f64 {
 }
 #[test]
 fn unopened_socket_refuses_native_bytes_and_queued_callbacks_error_once_before_close() {
+    let _serial = crate::test_serial();
     std::thread::spawn(|| {
         let agent = perry_runtime::agent::enter_worker_agent();
         SEEN.with(|seen| seen.borrow_mut().clear());
@@ -91,6 +92,7 @@ fn unopened_socket_refuses_native_bytes_and_queued_callbacks_error_once_before_c
 }
 #[test]
 fn destroyed_socket_write_preserves_node_code_and_message() {
+    let _serial = crate::test_serial();
     std::thread::spawn(|| {
         let agent = perry_runtime::agent::enter_worker_agent();
         SEEN.with(|seen| seen.borrow_mut().clear());
@@ -122,6 +124,7 @@ fn destroyed_socket_write_preserves_node_code_and_message() {
 }
 #[test]
 fn deferred_connect_and_native_submission_reach_each_registered_socket_route() {
+    let _serial = crate::test_serial();
     std::thread::spawn(|| {
         let agent = perry_runtime::agent::enter_worker_agent();
         assert!(io::enabled());
@@ -158,6 +161,7 @@ fn deferred_connect_and_native_submission_reach_each_registered_socket_route() {
 }
 #[test]
 fn adopted_upgraded_stream_writes_on_the_callers_loop_and_refuses_a_foreign_cell() {
+    let _serial = crate::test_serial();
     std::thread::spawn(|| {
         let agent = perry_runtime::agent::enter_worker_agent();
         assert!(io::enabled());
@@ -233,6 +237,7 @@ fn adopted_upgraded_stream_writes_on_the_callers_loop_and_refuses_a_foreign_cell
 }
 #[test]
 fn preconnect_backpressure_returns_false_then_one_drain_after_bytes_arrive() {
+    let _serial = crate::test_serial();
     std::thread::spawn(|| {
         let agent = perry_runtime::agent::enter_worker_agent();
         SEEN.with(|seen| seen.borrow_mut().clear());
@@ -274,6 +279,7 @@ unsafe extern "C" fn tls_data(_: *const RawClosureHeader, _: JsThis, chunk: f64)
 }
 #[test]
 fn tls_roundtrip_through_a_rooted_wrapper_and_its_native_parent() {
+    let _serial = crate::test_serial();
     std::thread::spawn(|| {
         let agent = perry_runtime::agent::enter_worker_agent();
         SEEN.with(|seen| seen.borrow_mut().clear());
@@ -381,6 +387,7 @@ fn tls_roundtrip_through_a_rooted_wrapper_and_its_native_parent() {
 #[cfg(target_os = "linux")]
 #[test]
 fn worker_retirement_releases_live_sockets_without_dispatching_their_js() {
+    let _serial = crate::test_serial();
     fn fds() -> usize {
         std::fs::read_dir("/proc/self/fd").unwrap().count()
     }

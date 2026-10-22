@@ -149,6 +149,7 @@ mod statics2_tests {
     }
     #[test]
     fn statics2_dispatch_uses_real_net_brands() {
+        let _serial = crate::test_serial();
         unsafe {
             let list = call("BlockList", f64::from_bits(TAG_UNDEFINED));
             assert_eq!(
@@ -175,6 +176,7 @@ mod statics2_tests {
 #[cfg(test)]
 #[test]
 fn statics2_parse_value_and_dispatch_preserve_argument_types() {
+    let _serial = crate::test_serial();
     for value in [f64::from_bits(TAG_UNDEFINED), 1.0] {
         assert!(perry_runtime::exception::catch_js_throw(|| unsafe {
             crate::js_net_socket_address_parse_value(value)
