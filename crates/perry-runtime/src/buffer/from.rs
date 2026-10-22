@@ -1258,6 +1258,16 @@ fn js_buffer_concat_impl(
     if arr_ptr.is_null() || (arr_ptr as u64) < 0x1000 {
         return buffer_alloc(0);
     }
+    // The list may be a forwarding stub: an array that outgrew its storage
+    // (`[chunk]` built at exact capacity, then `push`ed) leaves its old
+    // header behind pointing at the grown one. Reading the stub's element
+    // slots read past its one-slot storage, so `Buffer.concat` rejected
+    // `list[1]` as a number (effect's NodeStream pull does exactly this:
+    // `Arr.of(item)`, then `push`). Resolve to the live array first.
+    let arr_ptr = crate::array::clean_arr_ptr(arr_ptr);
+    if arr_ptr.is_null() || (arr_ptr as u64) < 0x1000 {
+        return buffer_alloc(0);
+    }
 
     let handles = crate::gc::RuntimeHandleScope::new();
     let array_root = handles.root_raw_const_ptr(arr_ptr);
