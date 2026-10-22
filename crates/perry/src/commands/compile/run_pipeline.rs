@@ -4740,7 +4740,39 @@ pub fn run_with_parse_cache(
                                 .then(|| (source.clone(), ns_scan_name.clone()))
                         })
                     };
-                    let Some((hop_src, hop_imported)) = named_hop.or_else(export_all_hop) else {
+                    // `import { X } from "m"; export { X }` re-exports X
+                    // exactly as `export { X } from "m"` does, but lowers to
+                    // an Import plus `Export::Named`, which neither arm above
+                    // matches — so the scan stopped one module short of a
+                    // `NamespaceReExport` origin and the local was never
+                    // classified as a namespace.
+                    let named_import_hop = || {
+                        let local = hir.exports.iter().find_map(|e| match e {
+                            perry_hir::Export::Named { local, exported }
+                                if *exported == ns_scan_name =>
+                            {
+                                Some(local.as_str())
+                            }
+                            _ => None,
+                        })?;
+                        hir.imports.iter().find_map(|import| {
+                            if import.type_only || import.runtime_erased {
+                                return None;
+                            }
+                            import.specifiers.iter().find_map(|spec| match spec {
+                                perry_hir::ImportSpecifier::Named {
+                                    imported,
+                                    local: import_local,
+                                } if import_local == local => {
+                                    Some((import.source.clone(), imported.clone()))
+                                }
+                                _ => None,
+                            })
+                        })
+                    };
+                    let Some((hop_src, hop_imported)) =
+                        named_hop.or_else(export_all_hop).or_else(named_import_hop)
+                    else {
                         break;
                     };
                     let Some((hop_path, _)) = resolve_import_with_context(
