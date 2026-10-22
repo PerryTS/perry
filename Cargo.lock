@@ -5508,6 +5508,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "perry-component-io"
+version = "0.5.1663"
+dependencies = [
+ "futures-channel",
+ "futures-lite",
+ "futures-util",
+ "turnloop",
+]
+
+[[package]]
 name = "perry-container-compose"
 version = "0.5.1663"
 dependencies = [
@@ -8813,6 +8823,7 @@ version = "0.1.0-alpha.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1c31584700d452b02385d31829045ac5a5369080617761cc2f368baf50f98782"
 dependencies = [
+ "futures-io",
  "js-sys",
  "libc",
  "loom",

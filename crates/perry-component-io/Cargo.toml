@@ -1,0 +1,18 @@
+[package]
+name = "perry-component-io"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Turnloop-owned native I/O tasks for Perry component providers"
+
+[lints]
+workspace = true
+
+[dependencies]
+turnloop = { workspace = true, features = ["executor"] }
+futures-util.workspace = true
+futures-channel = "0.3"
+
+[dev-dependencies]
+futures-lite = "2"
+futures-util = { workspace = true, features = ["io"] }
