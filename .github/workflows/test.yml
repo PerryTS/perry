@@ -6316,6 +6316,15 @@ jobs:
           cargo test --locked --profile perry-dev -p perry-codegen --lib inprocess::loop_interrupt::tests -- --test-threads=1 \
             2>&1 | tee target/wasi-host-qualification/loop-interrupt-units.log
           grep -F 'test result: ok. 4 passed; 0 failed;' target/wasi-host-qualification/loop-interrupt-units.log
+      - name: Verify Windows helper linkage and linked image sections
+        run: |
+          set -euo pipefail
+          cargo test --locked --profile perry-dev -p perry-codegen --lib inprocess::coff::tests -- --test-threads=1 \
+            2>&1 | tee target/wasi-host-qualification/coff-helper-units.log
+          grep -F 'test result: ok. 2 passed; 0 failed;' target/wasi-host-qualification/coff-helper-units.log
+          cargo test --locked --profile perry-dev -p perry-runtime --lib layout_section_tests -- --test-threads=1 \
+            2>&1 | tee target/wasi-host-qualification/layout-section-units.log
+          grep -F 'test result: ok. 2 passed; 0 failed;' target/wasi-host-qualification/layout-section-units.log
       - name: Execute both native host unit suites
         run: |
           set -euo pipefail

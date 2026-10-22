@@ -31,3 +31,10 @@ Record the expanded profile passing on Linux x86_64 and macOS ARM64, with
 independently verified case outputs, complete phase sets, exact network payloads,
 unit results, moving-GC witnesses and retained artifact hashes. Windows native
 hosting and production component packaging remain separately unqualified.
+
+Fix two further Windows failures exposed by the expanded run. Place writable
+layout boundary markers alongside the writable descriptors, and enumerate both
+read-only runtime atoms and writable generated atoms. Give shared ODR helper
+functions named COFF COMDATs so MSVC can coalesce their definitions across
+modules. Add regressions for emitted helper sections and actual linked-image
+registration ranges; execute them in each platform qualification job.
