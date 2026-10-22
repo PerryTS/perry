@@ -149,8 +149,11 @@ LEDGER = Path("scripts/native_result_ledger.tsv")
 # reused node providers now name their own bun providers. 252 -> 236 rows,
 # 228 -> 215 providers, as the script reports on the resolved tree.
 # B2b: 22 zlib rows now return plain NaN-boxed values through the binding.
-EXPECTED_ROWS = 214
-EXPECTED_PROVIDERS = 193
+# Resynced to the native table after the net/http/tui providers moved to ordinary
+# NaN-boxed objects (payload_abi, raw_owner): 214 -> 180 rows, 193 -> 168 providers,
+# as the script reports on the resolved tree.
+EXPECTED_ROWS = 180
+EXPECTED_PROVIDERS = 168
 KINDS = {
     "NR_GCPTR",
     "NR_NULLABLE_GCPTR",
