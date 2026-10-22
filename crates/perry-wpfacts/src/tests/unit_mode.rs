@@ -1642,3 +1642,37 @@ fn the_object_key_follows_what_an_importer_observes() {
         other.dump_text()
     );
 }
+
+/// The points-to entries of the largest unit: `n` exported functions that
+/// share a helper storing one argument into the other.
+fn marker_store_entries(n: usize) -> u64 {
+    let mut src = String::from(
+        "let last: any;\nfunction h(a: any, b: any) { a.x = b; last = b; }\nfunction mid(a: any, b: any) { h(a, b); return a.x; }\n",
+    );
+    for i in 0..n {
+        src.push_str(&format!(
+            "export function f{i}(a: any, b: any) {{ last = a; return mid(a, b); }}\n"
+        ));
+    }
+    // Another module calls every export: each is a contract (§11.1).
+    let names: Vec<String> = (0..n).map(|i| format!("f{i}")).collect();
+    let calls: Vec<String> = names.iter().map(|f| format!("console.log({f}(1, 2));")).collect();
+    let user = format!("import {{ {} }} from './t'; {}", names.join(", "), calls.join(" "));
+    let pf = units_of(&[("t", src.as_str()), ("u", user.as_str())]);
+    pf.units.iter().map(|(_, s)| s.pts_entries).max().unwrap_or(0)
+}
+
+#[test]
+fn a_store_into_an_argument_keeps_no_field_of_the_marker() {
+    // DECISIONS 41: a parameter marker is another unit's value; a store into
+    // it is its contract's escape and keeps no field. With a field, the
+    // shared helper `h` stores every caller's `b` marker into every
+    // caller's `a` marker: the unit grows with the square of the callers.
+    let (e8, e16, e32) = (
+        marker_store_entries(8),
+        marker_store_entries(16),
+        marker_store_entries(32),
+    );
+    let (d1, d2) = (e16 - e8, e32 - e16);
+    assert!(d2 < 3 * d1, "entries {e8} {e16} {e32}: quadratic in the callers");
+}

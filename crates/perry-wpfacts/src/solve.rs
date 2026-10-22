@@ -1161,6 +1161,16 @@ impl Model {
             }
         }
         self.mark_use(t, crate::model::MARK_ESCAPE);
+        // A parameter marker stands for another unit's value (design §11.2):
+        // it has no fields in this unit. The store is its contract's escape
+        // (above), and the stored value goes where the receiver's other
+        // values take it: ⊤ beside a contract parameter's marker (stored into
+        // unmodeled code: it escapes), a closed function's callers' values
+        // beside its marker (decision 13). A field of the marker would only
+        // hold every value stored into any marker it meets (DECISIONS 41).
+        if self.param_marker.contains_key(&t) {
+            return;
+        }
         // A store into another unit's instance, class object or prototype
         // is beyond its contract (census report).
         let tm = match self.toks[t as usize] {
