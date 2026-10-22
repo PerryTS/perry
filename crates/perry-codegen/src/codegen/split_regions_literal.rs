@@ -17,10 +17,12 @@
 //! Only what the existing HIR proves equivalent moves. A literal-shape class
 //! has no accessors, methods, computed members or spreads (those literals are
 //! other HIR forms); a duplicate key or a `__proto__` key keeps today's
-//! lowering, and so does a direct closure or function value (its slot may be
-//! a ConstFn lane or a `this` patch). A value that is frame-bound, leaves
-//! other than by completing, or needs more than an ordinary by-value live-in
-//! makes `try_extract` refuse its chunk, and then nothing of the literal moves.
+//! lowering. A function value moves like any other: a ConstFn lane is a fact
+//! of a head slot only (the birth representation word), and a closure that
+//! captures `this` (the static birth's `this` patch) is frame-bound. A value
+//! that is frame-bound, leaves other than by completing, or needs more than an
+//! ordinary by-value live-in makes `try_extract` refuse its chunk, and then
+//! nothing of the literal moves.
 
 use std::collections::{HashMap, HashSet};
 
@@ -82,12 +84,6 @@ fn refusal(keys: &[String], tail: &[Expr]) -> Option<&'static str> {
     }
     if keys.iter().any(|k| k == "__proto__") {
         return Some("proto-key");
-    }
-    if tail
-        .iter()
-        .any(|v| matches!(v, Expr::Closure { .. } | Expr::FuncRef(_)))
-    {
-        return Some("function-value");
     }
     if tail.iter().any(|v| matches!(v, Expr::LiteralChunks(_))) {
         return Some("already-chunked");
