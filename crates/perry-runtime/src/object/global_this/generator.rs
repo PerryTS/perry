@@ -475,11 +475,11 @@ fn intrinsic_sync_generator_op(method: f64) -> Option<f64> {
     }
     let info = crate::closure::closure_info(method.as_pointer::<crate::closure::ClosureHeader>())?;
     let code = info.code as usize;
-    if code == generator_proto_next_thunk as usize {
+    if code == generator_proto_next_thunk as *const () as usize {
         Some(0.0)
-    } else if code == generator_proto_return_thunk as usize {
+    } else if code == generator_proto_return_thunk as *const () as usize {
         Some(1.0)
-    } else if code == generator_proto_throw_thunk as usize {
+    } else if code == generator_proto_throw_thunk as *const () as usize {
         Some(2.0)
     } else {
         None
