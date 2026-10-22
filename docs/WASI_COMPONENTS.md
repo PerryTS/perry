@@ -430,6 +430,22 @@ Still required before claiming the full milestone:
 
 P3 async support remains a subsequent milestone.
 
+## Native host platform qualification
+
+Source `17318d3ad30db9d43fc09193e3efb1a3f1729381` passes the expanded native
+host profile on Linux x86_64 and macOS ARM64. Each platform executes all 28
+library phases, nine command phases, 40 component-engine unit tests and four
+loop-interrupt regression tests. The same run passes 57 P1 cases and the
+platform-specific P1 host unit suite.
+
+Independent verification checks every phase, exact normal/moving TCP and UDP
+payloads, and seven moving-GC workloads across P1/P2 against their retained
+logs. The [platform receipt](validation/wasi-native-host-platforms-20261021.json)
+records downloaded artifact digests, retained file hashes and CI-recorded build
+artifact identities. Windows native hosting remains pending. This qualification
+covers native hosting, not Perry-authored component output on macOS or final
+production packages. HTTP, blocking-I/O cancellation and P3 remain open.
+
 ## Continuous execution checks
 
 `scripts/component_check.sh` builds matching native tools, ordinary and
