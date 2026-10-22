@@ -1372,6 +1372,29 @@ impl Model {
                 }
             }
         }
+        // A parent linked by name: the evaluated `extends` value is that
+        // class (the same primitive rule as above), else the chain the
+        // solve modeled is not the chain of the instances.
+        for (tm, chk) in std::mem::take(&mut self.parent_checks) {
+            let Some(p) = self.tmpls[tm as usize].parent else {
+                continue;
+            };
+            let toks = self.nodes[chk as usize].pts.to_sorted();
+            let null = self.nodes[chk as usize].prim & prim::NULL != 0;
+            let linked = !null
+                && matches!(toks.as_slice(), [t] if matches!(self.toks[*t as usize], TokKind::ClassObj(q) if q == p));
+            if !linked {
+                let inst = self.tok(TokKind::Obj(tm, NO_CTX));
+                let what = format!(
+                    "E11 class whose evaluated `extends` is not its linked parent ({} tokens{}{})",
+                    toks.len(),
+                    if toks.contains(&TOP) { ", ⊤" } else { "" },
+                    if null { ", null" } else { "" }
+                );
+                let r = self.reason(&what);
+                self.mark_hard(inst, Hard::E11ReflectConstruct, r);
+            }
+        }
     }
 
     /// Is `owner` `tm` or an ancestor of it: the static parent, then the

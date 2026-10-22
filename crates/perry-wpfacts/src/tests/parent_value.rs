@@ -119,3 +119,53 @@ fn value_parent_super_chain_orders_birth_keys() {
         pf.dump_text()
     );
 }
+
+/// A class in a body that runs more than once (a CommonJS factory) evaluates its
+/// `extends` expression, although the parent is linked by name: that value
+/// is checked to be the parent after the solve, not given to unknown code,
+/// so neither class escapes (DECISIONS 48).
+#[test]
+fn linked_parent_in_a_factory_is_checked_not_sunk() {
+    let pf = facts(
+        r#"
+        function factory() {
+            class A { a: number; constructor() { this.a = 1; } m() { return this.a; } }
+            class B extends A { b: number; constructor() { super(); this.b = 2; } get() { return this.m() + this.b; } }
+            return { A, B };
+        }
+        // Two evaluations: the class is fresh per evaluation and pins the
+        // parent its binding holds (`ClassExprFresh::evaluated_parent`).
+        const { B } = factory(); factory();
+        const o = new B(); let t = 0; for (let i = 0; i < 3; i++) t += o.get();
+        console.log(t);
+    "#,
+    );
+    for name in ["A", "B"] {
+        let t = tmpl(&pf, name);
+        assert!(t.hard.is_none(), "{name}\n{}", pf.dump_text());
+    }
+    assert_eq!(site(&pf, "b").verdict, Verdict::T0Mono, "{}", pf.dump_text());
+    assert_eq!(site(&pf, "a").verdict, Verdict::T0Mono, "{}", pf.dump_text());
+}
+
+/// The name a class is linked through is a mutable binding: when another
+/// class reaches the evaluated `extends`, the linked chain is not the
+/// instances' chain, so the class is hard (DECISIONS 48).
+#[test]
+fn linked_parent_whose_binding_changed_is_hard() {
+    let pf = facts(
+        r#"
+        function factory(flag: number) {
+            class A { a: number; constructor() { this.a = 1; } }
+            class C { c: number; constructor() { this.c = 2; } }
+            if (flag) { (A as any) = C; }
+            class B extends A { b: number; constructor() { super(); this.b = 3; } }
+            return B;
+        }
+        const B = factory(Date.now() & 1); factory(0);
+        console.log(new B().b);
+    "#,
+    );
+    let h = tmpl(&pf, "B").hard.clone().unwrap_or_default();
+    assert!(h.starts_with("E11"), "{h}\n{}", pf.dump_text());
+}
