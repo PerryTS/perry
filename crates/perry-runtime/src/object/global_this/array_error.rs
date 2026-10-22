@@ -1025,6 +1025,10 @@ array_proto_arraylike_cb_thunk!(
 );
 array_proto_arraylike_cb_thunk!(array_proto_map_thunk, crate::array::js_arraylike_map);
 array_proto_arraylike_cb_thunk!(array_proto_filter_thunk, crate::array::js_arraylike_filter);
+array_proto_arraylike_cb_thunk!(
+    array_proto_flatMap_thunk,
+    crate::array::js_arraylike_flatMap
+);
 array_proto_arraylike_cb_thunk!(array_proto_some_thunk, crate::array::js_arraylike_some);
 array_proto_arraylike_cb_thunk!(array_proto_every_thunk, crate::array::js_arraylike_every);
 array_proto_arraylike_cb_thunk!(array_proto_find_thunk, crate::array::js_arraylike_find);

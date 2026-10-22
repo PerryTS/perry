@@ -152,9 +152,9 @@ pub use self::generic::array_proto_mutator;
 pub use self::generic::{
     dispatch_arraylike_read_method, js_arraylike_at, js_arraylike_every, js_arraylike_filter,
     js_arraylike_find, js_arraylike_findIndex, js_arraylike_findLast, js_arraylike_findLastIndex,
-    js_arraylike_forEach, js_arraylike_includes, js_arraylike_indexOf, js_arraylike_join,
-    js_arraylike_lastIndexOf, js_arraylike_map, js_arraylike_reduce, js_arraylike_reduceRight,
-    js_arraylike_slice, js_arraylike_some, try_array_proto_chain_method,
+    js_arraylike_flatMap, js_arraylike_forEach, js_arraylike_includes, js_arraylike_indexOf,
+    js_arraylike_join, js_arraylike_lastIndexOf, js_arraylike_map, js_arraylike_reduce,
+    js_arraylike_reduceRight, js_arraylike_slice, js_arraylike_some, try_array_proto_chain_method,
     try_object_arraylike_mutator,
 };
 pub(crate) use self::generic::{

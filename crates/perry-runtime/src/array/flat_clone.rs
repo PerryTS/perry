@@ -332,6 +332,22 @@ pub extern "C" fn js_arraylike_flat(receiver: f64, depth: f64) -> f64 {
     f64::from_bits(crate::value::JSValue::pointer(result as *const u8).bits())
 }
 
+/// One `FlattenIntoArray(target, mapped, depth = 1)` step of
+/// `Array.prototype.flatMap` (ECMA-262 §23.1.3.11): an `IsArray` value
+/// (proxies included, as for `flat`) contributes its present elements, any
+/// other value is appended itself. Returns the possibly re-grown `result`.
+///
+/// # Safety
+/// `result` is a live array the caller keeps rooted.
+pub(crate) unsafe fn flat_map_append(result: *mut ArrayHeader, mapped: f64) -> *mut ArrayHeader {
+    let sub_arr = flattenable_array_ptr(mapped);
+    if sub_arr.is_null() {
+        js_array_push_f64(result, mapped)
+    } else {
+        js_array_flat_into(result, sub_arr, 0)
+    }
+}
+
 /// Recursive worker for `js_array_flat_depth`. Returns the (possibly
 /// re-grown) `result` pointer so `js_array_push_f64`'s reallocation
 /// stays in sync across recursive calls.

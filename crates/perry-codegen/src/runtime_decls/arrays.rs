@@ -307,6 +307,7 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
         "js_arraylike_findIndex",
         "js_arraylike_findLast",
         "js_arraylike_findLastIndex",
+        "js_arraylike_flatMap",
     ] {
         module.declare_function(f, DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
     }
