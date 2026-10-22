@@ -443,6 +443,11 @@ pub enum Cons {
     /// The node is an arithmetic operand: dst ⊇ the kinds its values turn
     /// into (`+` when `add`: strings concatenate).
     Arith { dst: NodeId, add: bool },
+    /// The node is the only argument of `Array(x)` / `new Array(x)`: a Number
+    /// is the length (the array has holes, no element), any other value is
+    /// the one element (ECMA-262 Array). `dst` ⊇ its tokens and its
+    /// non-number primitives.
+    ArrayLenArg { dst: NodeId },
     /// The node holds the source of a typed array `ta`: a buffer or view
     /// there means `ta` shares (and so exposes) that buffer (B1).
     ShareBuffer { ta: Tok },
@@ -530,6 +535,7 @@ impl Cons {
             Cons::IterNext { .. } => "iternext",
             Cons::NewTargetHard { .. } => "newtargethard",
             Cons::Arith { .. } => "arith",
+            Cons::ArrayLenArg { .. } => "arraylenarg",
             Cons::IdxLoad { .. } => "idxload",
             Cons::IdxKey { .. } => "idxkey",
             Cons::ShareBuffer { .. } => "sharebuffer",

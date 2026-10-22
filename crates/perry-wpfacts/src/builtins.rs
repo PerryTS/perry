@@ -1016,8 +1016,15 @@ pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
         BuiltinNs::Array => {
             let arr = site_tmpl(m, call, "Array");
             let fa = m.field_any(arr);
-            let vals = all_arg_values(m, call);
-            m.edge(vals, fa);
+            let c = m.calls[call as usize].clone();
+            match (c.args.as_slice(), c.spread.is_empty()) {
+                // One argument: a Number is the length, not an element.
+                (&[a], true) => m.cons(a, Cons::ArrayLenArg { dst: fa }),
+                _ => {
+                    let vals = all_arg_values(m, call);
+                    m.edge(vals, fa);
+                }
+            }
             ret_tok(m, call, arr);
         }
         _ => unknown_method(m, call, &format!("call of builtin {ns:?}")),
