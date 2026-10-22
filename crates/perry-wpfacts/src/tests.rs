@@ -1125,6 +1125,37 @@ fn a_node_that_left_out_a_top_marker_never_takes_a_shared_set() {
 }
 
 #[test]
+fn a_delivery_never_adopts_a_marker_that_turned_top_beside_a_top() {
+    use crate::model::{TokKind, TOP};
+    // DECISIONS 42: `x` serves its successors before its rules, so `mk`
+    // reaches `s` beside ⊤ while it does not read as ⊤ yet; then `x`'s
+    // sink records the escape and `mk` reads as ⊤. `d` holds `s`'s old
+    // set, ⊤ included, so sizes allow adopting `s`'s set, which would put
+    // `mk` beside ⊤ in `d`. The delivery goes through `add_tokens`, which
+    // leaves it out.
+    let mut m = copy_solver_model();
+    let mk = m.tok(TokKind::ModNs(900));
+    let a = m.tok(TokKind::ModNs(901));
+    m.param_marker.insert(mk, (0, 0));
+    let (x, s, d) = (m.node_l("x"), m.node_l("s"), m.node_l("d"));
+    m.add(s, &[a], 0);
+    m.add_tok(s, TOP);
+    m.edge(s, d);
+    m.edge(x, s);
+    m.sink_node(x, 0);
+    m.solve();
+    m.add(x, &[mk], 0);
+    m.solve();
+    let has = |m: &crate::model::Model, n, t| m.nodes[n as usize].pts.contains_tok(t);
+    assert!(m.marker_is_top(mk), "the sink made the marker read as ⊤");
+    assert!(has(&m, s, mk), "it reached s before it read as ⊤");
+    assert!(
+        has(&m, d, TOP) && has(&m, d, a) && !has(&m, d, mk),
+        "left out beside ⊤"
+    );
+}
+
+#[test]
 fn a_parameter_node_holds_its_argument_marker() {
     use crate::model::{FuncInfo, TokKind, MARK_READ, NO_CTX, NO_FN};
     // DECISIONS 44, the rule itself: a function's parameter node `p` holds
