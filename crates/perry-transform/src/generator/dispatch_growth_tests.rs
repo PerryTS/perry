@@ -116,3 +116,34 @@ fn sync_abrupt_resumes_share_the_private_next_dispatcher() {
     assert_eq!(body.matches("Closure {").count(), 1);
     assert_eq!(body.matches("Switch { discriminant: LocalGet(").count(), 1);
 }
+
+#[test]
+fn sync_yield_star_pulls_through_runtime_and_reyields_inner_result() {
+    let mut module = Module::new("sync_delegation_pull");
+    let mut function = async_generator_with_delegations(1, 1);
+    function.is_async = false;
+    module.functions.push(function);
+    transform_generators(&mut module);
+    let body = format!("{:?}", module.functions[0].body);
+    assert!(
+        body.contains("js_iterator_delegate_next"),
+        "sync yield* must pull through the runtime protocol operation"
+    );
+    assert!(
+        !body.contains("property: \"call\""),
+        "sync yield* must not read Function.prototype.call"
+    );
+    assert!(
+        !body.contains("__perry_generator_yield_inner_result"),
+        "the passthrough marker must not survive linearization"
+    );
+
+    // Async delegation keeps awaiting each result and re-yields its value.
+    let mut module = Module::new("async_delegation_pull");
+    module
+        .functions
+        .push(async_generator_with_delegations(1, 1));
+    transform_generators(&mut module);
+    let body = format!("{:?}", module.functions[0].body);
+    assert!(!body.contains("js_iterator_delegate_next"));
+}

@@ -91,6 +91,41 @@ impl DelegationRoute {
     }
 }
 
+/// The drive loop of a SYNC `yield*` re-yields the inner result object itself
+/// (spec GeneratorYield(innerResult)). The loop body is linearized by the
+/// ordinary statement walker, so the re-yield is spelled as a plain `yield`
+/// of this marker call around the result local; the walker turns it into a
+/// `passthrough` Yield exit and the marker never reaches codegen.
+const YIELD_RESULT_MARKER: &str = "__perry_generator_yield_inner_result";
+
+fn passthrough_yield(result_id: LocalId) -> Expr {
+    Expr::Yield {
+        value: Some(Box::new(Expr::Call {
+            callee: Box::new(Expr::ExternFuncRef {
+                name: YIELD_RESULT_MARKER.to_string(),
+                param_types: vec![Type::Any],
+                return_type: Type::Any,
+            }),
+            args: vec![Expr::LocalGet(result_id)],
+            type_args: vec![],
+            byte_offset: 0,
+        })),
+        delegate: false,
+    }
+}
+
+fn passthrough_result(value: &Expr) -> Option<Expr> {
+    match value {
+        Expr::Call { callee, args, .. } if args.len() == 1 => match callee.as_ref() {
+            Expr::ExternFuncRef { name, .. } if name == YIELD_RESULT_MARKER => {
+                Some(args[0].clone())
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// Resolve a `yield*` operand into its iterator. An async generator delegates
 /// through the async-iterator protocol (`GetAsyncIterator`, which honours
 /// `[Symbol.asyncIterator]` and wraps a sync iterable via
@@ -186,14 +221,13 @@ fn delegate_next_call(del_next_id: LocalId, del_iter_id: LocalId, arg: Expr) -> 
     // pull with an explicit `undefined`, not argless — test262
     // yield-star-{sync,async}-next assert `next args.length === 1`).
     let call_args = vec![Expr::LocalGet(del_iter_id), arg.clone()];
-    let method_args = vec![arg];
-    Expr::Conditional {
-        condition: Box::new(Expr::Compare {
-            op: CompareOp::Eq,
-            left: Box::new(Expr::TypeOf(Box::new(Expr::LocalGet(del_next_id)))),
-            right: Box::new(Expr::String("function".to_string())),
-        }),
-        then_expr: Box::new(Expr::Call {
+    let method_args = vec![arg.clone()];
+    // A sync delegate's pull is one runtime operation: Call(captured next,
+    // iterator, « received ») plus the spec's result-is-Object check. It
+    // never reads `Function.prototype.call`, and a sync generator delegate
+    // stepped through its intrinsic `next` resumes its record directly.
+    let captured_call = if linearize_async_generator() {
+        Expr::Call {
             callee: Box::new(Expr::PropertyGet {
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(del_next_id)),
@@ -202,7 +236,30 @@ fn delegate_next_call(del_next_id: LocalId, del_iter_id: LocalId, arg: Expr) -> 
             args: call_args,
             type_args: vec![],
             byte_offset: 0,
+        }
+    } else {
+        Expr::Call {
+            callee: Box::new(Expr::ExternFuncRef {
+                name: "js_iterator_delegate_next".to_string(),
+                param_types: vec![Type::Any, Type::Any, Type::Any],
+                return_type: Type::Any,
+            }),
+            args: vec![
+                Expr::LocalGet(del_iter_id),
+                Expr::LocalGet(del_next_id),
+                arg,
+            ],
+            type_args: vec![],
+            byte_offset: 0,
+        }
+    };
+    Expr::Conditional {
+        condition: Box::new(Expr::Compare {
+            op: CompareOp::Eq,
+            left: Box::new(Expr::TypeOf(Box::new(Expr::LocalGet(del_next_id)))),
+            right: Box::new(Expr::String("function".to_string())),
         }),
+        then_expr: Box::new(captured_call),
         else_expr: Box::new(Expr::Call {
             callee: Box::new(Expr::PropertyGet {
                 byte_offset: 0,
@@ -272,14 +329,7 @@ fn emit_yield_star_loop(
 
     // #1832: in-loop pull forwards the outer resume value (`outer.next(v)` →
     // `sent_id`) into the delegated iterator's `next(v)`.
-    let mut while_body = vec![
-        // Spec step `received be AsyncGeneratorYield(? IteratorValue(innerResult))`.
-        // Unlike a plain `yield x` (which is `AsyncGeneratorYield(? Await(x))` and
-        // is handled by the #4777 await pass), the DELEGATED value is NOT awaited:
-        // current `AsyncGeneratorYield` does not await its operand, so a delegated
-        // promise value flows through un-unwrapped (test262
-        // yield-star-promise-not-unwrapped). Only the `next()` RESULT is awaited
-        // (via `delegate_await` on the pull below).
+    let reyield = if linearize_async_generator() {
         Stmt::Expr(Expr::Yield {
             value: Some(Box::new(Expr::PropertyGet {
                 byte_offset: 0,
@@ -287,7 +337,20 @@ fn emit_yield_star_loop(
                 property: "value".to_string(),
             })),
             delegate: false,
-        }),
+        })
+    } else {
+        Stmt::Expr(passthrough_yield(del_result_id))
+    };
+    let mut while_body = vec![
+        // Spec step `received be AsyncGeneratorYield(? IteratorValue(innerResult))`.
+        // Unlike a plain `yield x` (which is `AsyncGeneratorYield(? Await(x))` and
+        // is handled by the #4777 await pass), the DELEGATED value is NOT awaited:
+        // current `AsyncGeneratorYield` does not await its operand, so a delegated
+        // promise value flows through un-unwrapped (test262
+        // yield-star-promise-not-unwrapped). Only the `next()` RESULT is awaited
+        // (via `delegate_await` on the pull below). A sync generator
+        // instead re-yields the inner result object unchanged.
+        reyield,
         Stmt::Expr(Expr::LocalSet(
             del_result_id,
             Box::new(delegate_await(delegate_next_call(
@@ -370,8 +433,15 @@ pub struct State {
 }
 
 pub enum StateExit {
-    /// Yield a value and advance to next_state
-    Yield { value: Expr, next_state: u32 },
+    /// Yield a value and advance to next_state. With `passthrough`, `value`
+    /// is a sync `yield*` delegate's inner result object, which the step
+    /// returns as-is (spec GeneratorYield(innerResult): no re-wrap, no
+    /// `value` read).
+    Yield {
+        value: Expr,
+        next_state: u32,
+        passthrough: bool,
+    },
     /// #6709: async-generator `await` suspend point. Distinct from `Yield`:
     /// the value is awaited on the microtask queue (via `AsyncStepChain`) and
     /// the generator resumes WITHOUT returning `{value, done}` to the
@@ -525,6 +595,10 @@ pub fn linearize_body(
                     .as_ref()
                     .map(|v| *v.clone())
                     .unwrap_or(Expr::Undefined);
+                let (yield_val, passthrough) = match passthrough_result(&yield_val) {
+                    Some(result) => (result, true),
+                    None => (yield_val, false),
+                };
                 let this_state = *state_num;
                 *state_num += 1;
                 states.push(State {
@@ -533,6 +607,7 @@ pub fn linearize_body(
                     exit: StateExit::Yield {
                         value: yield_val,
                         next_state: *state_num,
+                        passthrough,
                     },
                 });
             }
@@ -697,6 +772,7 @@ pub fn linearize_body(
                     exit: StateExit::Yield {
                         value: yield_val,
                         next_state: *state_num,
+                        passthrough: false,
                     },
                 });
                 // Continuation state: return { value: __sent, done: true }
@@ -1612,6 +1688,7 @@ pub fn linearize_body(
                     exit: StateExit::Yield {
                         value: yield_val,
                         next_state: *state_num,
+                        passthrough: false,
                     },
                 });
                 // Assign __sent (the value from next(val)) to the target local

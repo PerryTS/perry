@@ -44,6 +44,25 @@ pub unsafe extern "C-unwind" fn js_iterator_step(iter: f64, next: f64, out: *mut
             }
         }
     }
+    // A sync generator stepped through its captured intrinsic `next`: the
+    // call is its record's resume, and the result it bears is still on its
+    // born layout unless the body handed back a `yield*` inner result.
+    if let Some(result) =
+        crate::object::resume_intrinsic_sync_protocol(iter, next, f64::from_bits(TAG_UNDEFINED))
+    {
+        if let Some((value, done)) = crate::iter_result::born_iter_result_pair(result) {
+            if !out.is_null() {
+                // GC_STORE_AUDIT(STACK): publish to the caller's native frame slot after reentry.
+                *out = if done {
+                    f64::from_bits(TAG_UNDEFINED)
+                } else {
+                    value
+                };
+            }
+            return i32::from(done);
+        }
+        return step_from_result(result, out);
+    }
     let scope = crate::gc::RuntimeHandleScope::new();
     let iter = scope.root_nanbox_f64(iter);
     let next = scope.root_nanbox_f64(next);
@@ -56,6 +75,13 @@ pub unsafe extern "C-unwind" fn js_iterator_step(iter: f64, next: f64, out: *mut
         std::ptr::null(),
         0,
     );
+    step_from_result(result, out)
+}
+
+/// IteratorComplete then (when not done) IteratorValue of a returned result:
+/// validated as an Object, members read by ordinary [[Get]].
+unsafe fn step_from_result(result: f64, out: *mut f64) -> i32 {
+    let scope = crate::gc::RuntimeHandleScope::new();
     let result = scope.root_nanbox_f64(crate::symbol::js_iterator_result_validate(result));
     let field = |name: &[u8]| {
         let key = crate::string::intern_ascii_literal(name);

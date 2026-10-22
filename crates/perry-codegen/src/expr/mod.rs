@@ -905,6 +905,11 @@ pub(crate) struct FnCtx<'a> {
     /// Used by direct `FuncRef` calls to re-link returned iterator objects to
     /// the same closure-cached prototype that `g.prototype` reads expose.
     pub local_generator_funcs: &'a std::collections::HashSet<u32>,
+    /// The subset of `local_generator_funcs` that are sync (fixed-state)
+    /// generator wrappers: their birth (`js_generator_create`) already links
+    /// the instance to its function's prototype, so a direct call needs no
+    /// call-site relink.
+    pub fixed_generator_funcs: &'a std::collections::HashSet<u32>,
     /// FuncIds of source-`async` closures CPS-rewritten into async-step
     /// state machines (the rewrite clears `Expr::Closure.is_async`) — see
     /// `CrossModuleCtx::async_step_closures` (#6185). Used by the

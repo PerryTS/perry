@@ -16,6 +16,20 @@ use super::opts::{NamespaceEntry, NamespaceEntryKind};
 // existing `helpers::init_static_fields_*` paths keep resolving.
 pub(super) use super::static_fields::{init_static_fields_early, init_static_fields_late};
 
+/// A sync generator wrapper: its body returns the fixed-state birth, which
+/// links the instance to the function's prototype itself.
+pub(crate) fn function_body_is_fixed_state_generator(body: &[perry_hir::Stmt]) -> bool {
+    body.iter().any(|stmt| {
+        matches!(
+            stmt,
+            perry_hir::Stmt::Return(Some(perry_hir::Expr::LinkGeneratorPrototype {
+                fixed_state: true,
+                ..
+            }))
+        )
+    })
+}
+
 pub(crate) fn function_body_returns_generator_object(body: &[perry_hir::Stmt]) -> bool {
     let has_gen_state = body
         .iter()

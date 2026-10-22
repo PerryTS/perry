@@ -465,6 +465,47 @@ fn generator_proto_method(
     }
 }
 
+/// The `%GeneratorPrototype%` protocol operation a function value IS, read
+/// from its immutable info: the intrinsic's body identity is the whole proof
+/// (0 = next, 1 = return, 2 = throw). Any other callable answers `None`.
+fn intrinsic_sync_generator_op(method: f64) -> Option<f64> {
+    let method = JSValue::from_bits(method.to_bits());
+    if !method.is_pointer() {
+        return None;
+    }
+    let info = crate::closure::closure_info(method.as_pointer::<crate::closure::ClosureHeader>())?;
+    let code = info.code as usize;
+    if code == generator_proto_next_thunk as usize {
+        Some(0.0)
+    } else if code == generator_proto_return_thunk as usize {
+        Some(1.0)
+    } else if code == generator_proto_throw_thunk as usize {
+        Some(2.0)
+    } else {
+        None
+    }
+}
+
+/// Call(`method`, `iter`, « `arg` ») when `method` is an intrinsic sync
+/// generator protocol body and `iter` carries the sync generator brand: the
+/// call IS that record's resume, so enter it without the general callable
+/// dispatch or the thunk's receiver re-classification. `None` leaves the
+/// ordinary call to the caller. Decided per use by the receiver's shape and
+/// the method's info; nothing is remembered.
+///
+/// # Safety
+/// Ordinary call semantics: may run user code and collect. The caller holds
+/// no unrooted managed pointer across it.
+pub(crate) unsafe fn resume_intrinsic_sync_protocol(
+    iter: f64,
+    method: f64,
+    arg: f64,
+) -> Option<f64> {
+    let op = intrinsic_sync_generator_op(method)?;
+    let state = super::generator_state::fixed_generator_state(iter)?;
+    Some(super::generator_state::resume_fixed_state(state, op, arg))
+}
+
 extern "C" fn generator_proto_next_thunk(
     _c: *const crate::closure::ClosureHeader,
     this: crate::closure::JsThis,

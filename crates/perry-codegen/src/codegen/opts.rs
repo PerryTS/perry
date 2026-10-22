@@ -982,6 +982,9 @@ pub(crate) struct CrossModuleCtx {
     /// from the lowered iterator-return body shape and used by call lowering
     /// to attach instances to the closure-owned `g.prototype`.
     pub local_generator_funcs: std::collections::HashSet<u32>,
+    /// Sync (fixed-state) members of `local_generator_funcs`; their birth
+    /// links the prototype, so call sites emit no relink.
+    pub fixed_generator_funcs: std::collections::HashSet<u32>,
     /// FuncIds of closures that were `async` in the source and got CPS-
     /// rewritten into async-step state machines. The rewrite clears
     /// `Expr::Closure.is_async`, so the flag alone can't identify them at

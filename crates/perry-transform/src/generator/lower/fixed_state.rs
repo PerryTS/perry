@@ -167,6 +167,7 @@ mod tests {
                 exit: StateExit::Yield {
                     value: Expr::LocalGet(1),
                     next_state: 1,
+                    passthrough: false,
                 },
             },
             State {
@@ -190,6 +191,7 @@ mod tests {
                 exit: StateExit::Yield {
                     value: Expr::Number(1.0),
                     next_state: 1,
+                    passthrough: false,
                 },
             },
             State {

@@ -375,8 +375,8 @@ use function::{
     compile_typed_i32_function, compile_typed_string_function,
 };
 use helpers::{
-    collect_return_class, emit_buffer_alias_metadata, function_body_returns_generator_object,
-    sanitize, scoped_method_name,
+    collect_return_class, emit_buffer_alias_metadata, function_body_is_fixed_state_generator,
+    function_body_returns_generator_object, sanitize, scoped_method_name,
 };
 
 // Collector and boxing-analysis walkers live in dedicated modules. The
@@ -1254,6 +1254,8 @@ fn lower_module(
     let mut local_async_funcs: std::collections::HashSet<u32> = std::collections::HashSet::new();
     let mut local_generator_funcs: std::collections::HashSet<u32> =
         std::collections::HashSet::new();
+    let mut fixed_generator_funcs: std::collections::HashSet<u32> =
+        std::collections::HashSet::new();
     let mut funcs_reading_dynamic_this: std::collections::HashSet<u32> =
         std::collections::HashSet::new();
     for f in &hir.functions {
@@ -1266,6 +1268,9 @@ fn lower_module(
         }
         if function_body_returns_generator_object(&f.body) {
             local_generator_funcs.insert(f.id);
+            if function_body_is_fixed_state_generator(&f.body) {
+                fixed_generator_funcs.insert(f.id);
+            }
         }
         if perry_hir::analysis::body_reads_dynamic_this(&f.body) {
             funcs_reading_dynamic_this.insert(f.id);
@@ -2925,6 +2930,7 @@ fn lower_module(
         object_literal_method_candidates: Arc::clone(&opts.object_literal_method_candidates),
         local_async_funcs,
         local_generator_funcs,
+        fixed_generator_funcs,
         async_step_closures: hir.async_step_closures.iter().copied().collect(),
         module_global_proven_types: std::collections::HashMap::new(),
         module_global_transfers: std::collections::HashMap::new(),
