@@ -19,17 +19,7 @@ impl<'a> Gen<'a> {
         // Parent leaks close the child's phase at `super()`.
         let tms: Vec<TmplId> = self.ctor_phase.keys().copied().collect();
         for tm in tms.iter().copied() {
-            let mut leaks = false;
-            let mut cur = self.m.tmpls[tm as usize].parent;
-            while let Some(p) = cur {
-                if self.ctor_phase.get(&p).is_some_and(|ph| ph.leaks) {
-                    leaks = true;
-                }
-                cur = self.m.tmpls[p as usize].parent;
-            }
-            if self.m.tmpls[tm as usize].native_parent.is_some() {
-                leaks = true;
-            }
+            let leaks = self.parent_chain_leaks(tm);
             if let Some(ph) = self.ctor_phase.get_mut(&tm) {
                 ph.parent_leaks = leaks;
             }
@@ -133,8 +123,94 @@ impl<'a> Gen<'a> {
                 push_unique(&mut definite, a);
             }
         }
+        // A parent that is a value (§17.2) is not known before the solve
+        // settles it: the keys its constructor adds first are unknown, so
+        // no key of this class has a known slot or is known present (a read
+        // may see `undefined` while the parent runs). Settled, the parent's
+        // keys are the prefix (`settle_parent_layouts`).
+        if self.parent_pending(tm) {
+            definite.clear();
+        } else if self.value_parent_on_chain(tm) && self.parent_chain_leaks(tm) {
+            let n = self.m.tmpls[tm as usize]
+                .parent
+                .map_or(0, |p| self.m.tmpls[p as usize].definite.len());
+            definite.truncate(n);
+        }
         self.m.tmpls[tm as usize].birth_keys = keys;
         self.m.tmpls[tm as usize].definite = definite;
+    }
+
+    /// Some class on `tm`'s chain has a parent value not settled to one
+    /// class (§17.2).
+    fn parent_pending(&self, tm: TmplId) -> bool {
+        let mut cur = Some(tm);
+        while let Some(c) = cur {
+            let t = &self.m.tmpls[c as usize];
+            if t.parent_value.is_some() && t.parent.is_none() {
+                return true;
+            }
+            cur = t.parent;
+        }
+        false
+    }
+
+    /// Some class on `tm`'s chain takes its parent from a value (§17.2).
+    fn value_parent_on_chain(&self, tm: TmplId) -> bool {
+        let mut cur = Some(tm);
+        while let Some(c) = cur {
+            if self.m.tmpls[c as usize].parent_value.is_some() {
+                return true;
+            }
+            cur = self.m.tmpls[c as usize].parent;
+        }
+        false
+    }
+
+    /// A constructor up `tm`'s chain may leak `this` before `tm`'s own
+    /// stores run: one that leaks, a native parent, a parent value not
+    /// settled, or another unit's class (its constructor is not seen).
+    fn parent_chain_leaks(&self, tm: TmplId) -> bool {
+        if self.m.tmpls[tm as usize].native_parent.is_some() || self.parent_pending(tm) {
+            return true;
+        }
+        let mut cur = self.m.tmpls[tm as usize].parent;
+        while let Some(p) = cur {
+            if self.ctor_phase.get(&p).is_some_and(|ph| ph.leaks)
+                || self.stand_in_cc.contains_key(&p)
+                || self.m.tmpls[p as usize].native_parent.is_some()
+            {
+                return true;
+            }
+            cur = self.m.tmpls[p as usize].parent;
+        }
+        false
+    }
+
+    /// After the solve (§17.2 item 3, DECISIONS 47): each class whose parent
+    /// value settled to one class takes that class's keys as its layout
+    /// prefix, and every class below it in turn; its own keys are definite
+    /// only when no constructor up the chain leaks `this`. The solve ran
+    /// with no definite keys for them (`compute_birth_keys`): it saw every
+    /// read as possibly `undefined`, which holds for any settled parent.
+    pub(crate) fn settle_parent_layouts(&mut self) {
+        self.m.settle_parent_values();
+        let modules = self.modules.clone();
+        let mut redo: Vec<(TmplId, usize)> = Vec::new();
+        for mi in 0..modules.len() {
+            for c in self.classes_of(mi) {
+                let tm = self.mods[mi].classes[&c.name];
+                if self.value_parent_on_chain(tm) {
+                    redo.push((tm, mi));
+                }
+            }
+        }
+        for &(tm, _) in &redo {
+            self.m.tmpls[tm as usize].birth_keys.clear();
+            self.m.tmpls[tm as usize].definite.clear();
+        }
+        for (tm, mi) in redo {
+            self.compute_birth_keys(tm, modules[mi].1);
+        }
     }
 
     pub(crate) fn walk_fn(

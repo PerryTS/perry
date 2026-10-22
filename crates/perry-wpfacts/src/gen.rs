@@ -87,6 +87,10 @@ pub struct Gen<'a> {
     effects_done: crate::pts::FxHashSet<(Tok, Atom)>,
     effect_src: Option<(NodeId, SiteId)>,
     pub(crate) stand_in_fc: FxHashMap<Tok, &'a crate::units::FnContract>,
+    /// Classes with a parent value (§17.2), fed after the bodies.
+    pub(crate) parent_values: Vec<(u32, TmplId, Option<String>)>,
+    /// Classes whose evaluated parent fed the parent value.
+    pub(crate) parent_fed: std::collections::BTreeSet<TmplId>,
     /// Published module-scope value bindings (export, export node), checked
     /// after the solve (`Gen::contract_check`, design §12 value contracts).
     pub value_contracts: Vec<((u32, Atom), NodeId)>,
@@ -304,6 +308,8 @@ impl<'a> Gen<'a> {
             effects_done: Default::default(),
             effect_src: None,
             stand_in_fc: FxHashMap::default(),
+            parent_values: Vec::new(),
+            parent_fed: Default::default(),
             value_contracts: Vec::new(),
             field_fns: FxHashMap::default(),
             param_guard: FxHashMap::default(),
@@ -813,6 +819,8 @@ impl<'a> Gen<'a> {
             has_computed_members: false,
             field_init: None,
             proto_members: Vec::new(),
+            parent_value: None,
+            parent_links: Vec::new(),
         });
         self.m.funcs[ctor as usize].ctor_of = Some(tm);
         self.m.foreign.insert(tm, c.facts.clone());
@@ -1180,6 +1188,8 @@ impl<'a> Gen<'a> {
             has_computed_members: !c.computed_members.is_empty(),
             field_init: None,
             proto_members,
+            parent_value: None,
+            parent_links: Vec::new(),
         });
         self.mods[mi as usize].classes.insert(c.name.clone(), tm);
         for a in &c.aliases {
@@ -1336,14 +1346,66 @@ impl<'a> Gen<'a> {
         } else if c.extends_expr.is_some()
             || (c.extends_name.is_some() && c.native_extends.is_none())
         {
-            // Dynamic `extends <expr>` / unresolved parent: E11-like — the
-            // parent constructor is unknown code.
-            let inst = self.m.tok(TokKind::Obj(tm, NO_CTX));
-            let r = self
+            // The parent is the value of the `extends` expression (§17.2,
+            // DECISIONS 46): the evaluated parent of the class expression
+            // or the binding `extends_name` names feeds it
+            // (`feed_parent_values`); the proto nodes read it.
+            let pv = self
                 .m
-                .reason("E11 class with a dynamic/unresolved `extends`");
-            self.m.escape(inst, r);
-            self.m.mark_hard(inst, Hard::E11ReflectConstruct, r);
+                .node_named("parentval", || format!("parentval({})", c.name));
+            let pa = self.m.atom("prototype");
+            let pp = self.load(pv, Key::Named(pa));
+            self.m.tmpls[tm as usize].parent_value = Some((pv, pp));
+            self.parent_values.push((mi, tm, c.extends_name.clone()));
+        }
+    }
+
+    /// Class `tm`'s parent is the evaluated value `v` (§17.2). A class with
+    /// no parent value (its `extends` resolved statically, or none) cannot
+    /// take one: its instances escape and `v` is sunk, as before.
+    pub(crate) fn feed_parent(&mut self, v: NodeId, tm: Option<TmplId>, why: &str) {
+        match tm.and_then(|tm| Some((tm, self.m.tmpls[tm as usize].parent_value?))) {
+            Some((tm, (pv, _))) => {
+                self.m.edge(v, pv);
+                self.parent_fed.insert(tm);
+            }
+            None => {
+                self.to_sink(v, why);
+                if let Some(tm) = tm {
+                    let inst = self.m.tok(TokKind::Obj(tm, NO_CTX));
+                    let r = self.m.reason(why);
+                    self.m.escape(inst, r);
+                    self.m.mark_hard(inst, Hard::E11ReflectConstruct, r);
+                }
+            }
+        }
+    }
+
+    /// After the bodies: a parent value no evaluated parent fed takes the
+    /// binding `extends_name` names; with none, the parent is unknown code
+    /// (⊤ runs the unknown constructor: E11 as before).
+    pub(crate) fn feed_parent_values(&mut self) {
+        for (mi, tm, name) in std::mem::take(&mut self.parent_values) {
+            if self.parent_fed.contains(&tm) {
+                continue;
+            }
+            let (pv, _) = self.m.tmpls[tm as usize].parent_value.unwrap();
+            let bound = name.as_deref().and_then(|n| {
+                let m = &self.mods[mi as usize];
+                m.imports.get(n).or_else(|| m.scope.get(n)).copied()
+            });
+            match bound {
+                Some(b) => self.m.edge(b, pv),
+                None => {
+                    let r = self
+                        .m
+                        .reason("E11 class with a dynamic/unresolved `extends`");
+                    self.m.add_top(pv, |_| "unresolved `extends`".into());
+                    let inst = self.m.tok(TokKind::Obj(tm, NO_CTX));
+                    self.m.escape(inst, r);
+                    self.m.mark_hard(inst, Hard::E11ReflectConstruct, r);
+                }
+            }
         }
     }
 
@@ -1420,6 +1482,8 @@ impl<'a> Gen<'a> {
             has_computed_members: false,
             field_init: None,
             proto_members: vec![],
+            parent_value: None,
+            parent_links: Vec::new(),
         });
         tm
     }
@@ -1452,6 +1516,8 @@ impl<'a> Gen<'a> {
             has_computed_members: false,
             field_init: None,
             proto_members: vec![],
+            parent_value: None,
+            parent_links: Vec::new(),
         });
         tm
     }

@@ -272,6 +272,8 @@ impl<'a> Gen<'a> {
             has_computed_members: false,
             field_init: None,
             proto_members: vec![],
+            parent_value: None,
+            parent_links: Vec::new(),
         });
         let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
         (tm, t)
@@ -1041,13 +1043,8 @@ impl<'a> Gen<'a> {
                 parent_expr,
             } => {
                 let p = self.expr(fx, parent_expr);
-                self.to_sink(p, "E11 dynamic class parent");
-                if let Some(tm) = self.resolve_class_name(mi, class_name) {
-                    let inst = self.m.tok(TokKind::Obj(tm, NO_CTX));
-                    let r = self.m.reason("E11 dynamic class parent");
-                    self.m.mark_hard(inst, Hard::E11ReflectConstruct, r);
-                    self.m.escape(inst, r);
-                }
+                let tm = self.resolve_class_name(mi, class_name);
+                self.feed_parent(p, tm, "E11 dynamic class parent");
                 self.prim_node(prim::UNDEF)
             }
             Expr::RegisterClassCaptures {
@@ -1198,15 +1195,9 @@ impl<'a> Gen<'a> {
                     let _ = self.expr(fx, s);
                 }
                 if let Some(p) = evaluated_parent {
-                    let pv = self.expr(fx, p);
-                    self.to_sink(pv, "E11 class expression with an evaluated parent");
-                    if let Some(tm) = self.resolve_class_name(mi, template) {
-                        let inst = self.m.tok(TokKind::Obj(tm, NO_CTX));
-                        let r = self
-                            .m
-                            .reason("E11 class expression with an evaluated parent");
-                        self.m.escape(inst, r);
-                    }
+                    let v = self.expr(fx, p);
+                    let tm = self.resolve_class_name(mi, template);
+                    self.feed_parent(v, tm, "E11 class expression with an evaluated parent");
                 }
                 for d in definition_steps {
                     let _ = self.expr(fx, d);

@@ -538,13 +538,19 @@ impl Model {
         if self.fn_inst.get(&f) == Some(&tm) {
             return true;
         }
-        let mut c = Some(tm);
-        while let Some(x) = c {
+        let mut work = vec![tm];
+        let mut seen: Vec<TmplId> = Vec::new();
+        while let Some(x) = work.pop() {
+            if seen.contains(&x) {
+                continue;
+            }
+            seen.push(x);
             let tx = &self.tmpls[x as usize];
             if tx.ctor == Some(f) || tx.field_init == Some(f) {
                 return true;
             }
-            c = tx.parent;
+            work.extend(tx.parent);
+            work.extend(tx.parent_links.iter().copied());
         }
         false
     }

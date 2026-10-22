@@ -670,6 +670,8 @@ impl<'a> Gen<'a> {
                     has_computed_members: true,
                     field_init: None,
                     proto_members: vec![],
+                    parent_value: None,
+                    parent_links: Vec::new(),
                 });
                 let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
                 let pn = self.m.proto_node(t);
@@ -1775,7 +1777,17 @@ impl<'a> Gen<'a> {
                 self.prim_node(prim::NUM | prim::BOOL)
             }
             "requireResolveNodeModules" => self.prim_node(prim::STR | prim::UNDEF),
-            "arrayRecordPayload" | "arrayRecordForValue" | "requireObjectCoercible" => {
+            // The value checked, nothing else: a second argument is the
+            // destructuring source offset (`--debug-symbols`) for the error
+            // location, never the result (`js_require_object_coercible`).
+            "requireObjectCoercible" => {
+                let out = self.tmp("glue-pass");
+                if let Some(a) = arg(0) {
+                    self.m.edge(a, out);
+                }
+                out
+            }
+            "arrayRecordPayload" | "arrayRecordForValue" => {
                 let out = self.tmp("glue-pass");
                 for a in &args {
                     self.m.edge(*a, out);

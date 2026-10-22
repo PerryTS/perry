@@ -166,6 +166,8 @@ fn site_tmpl(m: &mut Model, call: CallId, what: &'static str) -> Tok {
         has_computed_members: false,
         field_init: None,
         proto_members: vec![],
+        parent_value: None,
+        parent_links: Vec::new(),
     });
     let t = m.tok(TokKind::Obj(tm, NO_CTX));
     m.site_tmpls.insert(key, t);
@@ -1436,6 +1438,8 @@ fn anon_tmpl(m: &mut Model, what: &'static str) -> Tok {
         has_computed_members: false,
         field_init: None,
         proto_members: vec![],
+        parent_value: None,
+        parent_links: Vec::new(),
     });
     m.tok(TokKind::Obj(tm, NO_CTX))
 }

@@ -442,21 +442,27 @@ impl Model {
             self.this_into(call, ft, Some(inst));
         }
         let t = &self.tmpls[tm as usize];
+        let parent_value = t.parent_value.is_some();
         match (t.ctor, t.parent, t.native_parent.clone()) {
             (Some(ctor), _, _) => {
                 let ftok = self.funcs[ctor as usize].token;
                 self.call_tok(call, ftok, Some(inst));
                 self.ctor_ret_objects(call, ftok, c.ret);
             }
-            (None, Some(p), _) => {
+            (None, Some(_), _) => {
                 // Implicit `constructor(...a) { super(...a) }`.
-                let _ = p;
                 let receiver = self.node_l("implicit-super-this");
                 self.cons(receiver, Cons::SuperCtor { class: tm, call });
                 self.add_tok(receiver, inst);
             }
             (None, None, Some(_)) => {
                 self.with_b(|m| builtins::native_parent_ctor(m, tm, call, inst))
+            }
+            (None, None, None) if parent_value => {
+                // The same, the parent being the value of `extends` (§17.2).
+                let receiver = self.node_l("implicit-super-this");
+                self.cons(receiver, Cons::SuperCtor { class: tm, call });
+                self.add_tok(receiver, inst);
             }
             (None, None, None) => {}
         }
@@ -508,6 +514,8 @@ impl Model {
             has_computed_members: false,
             field_init: None,
             proto_members: vec![],
+            parent_value: None,
+            parent_links: Vec::new(),
         });
         self.fn_inst.insert(f, id);
         id
@@ -717,6 +725,8 @@ impl Model {
             has_computed_members: false,
             field_init: None,
             proto_members: Vec::new(),
+            parent_value: None,
+            parent_links: Vec::new(),
         });
         let recv = self.tok(TokKind::Obj(rt, NO_CTX));
         let any = self.field_any(recv);

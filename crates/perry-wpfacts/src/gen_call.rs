@@ -347,7 +347,11 @@ impl<'a> Gen<'a> {
                 self.m.tok(TokKind::ClassObj(p)),
             ],
             None => {
-                if self.m.tmpls[tm as usize].native_parent.is_some() {
+                // A parent value (§17.2): `super.x` starts at a prototype
+                // the solve computes; unknown here.
+                if self.m.tmpls[tm as usize].native_parent.is_some()
+                    || self.m.tmpls[tm as usize].parent_value.is_some()
+                {
                     vec![TOP]
                 } else {
                     vec![self.m.tok(TokKind::ObjectProto)]
