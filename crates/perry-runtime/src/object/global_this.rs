@@ -161,8 +161,8 @@ pub(crate) use generator::append_async_function_root_snapshot;
 pub(crate) use generator::function_kind_prototype_unwritten;
 pub(crate) use generator::{
     ensure_generator_intrinsics, generator_function_constructor_of, generator_function_proto_of,
-    generator_function_prototype_of, set_intrinsic_data_prop, set_intrinsic_to_string_tag,
-    wire_function_intrinsic_parents,
+    generator_function_prototype_of, generator_original_prototype, set_intrinsic_data_prop,
+    set_intrinsic_to_string_tag, wire_function_intrinsic_parents,
 };
 pub(crate) use generator::{intrinsic_sync_step_kind, resume_intrinsic_sync_step};
 pub use generator::{js_generator_attach_closure_prototype, js_generator_attach_prototype};

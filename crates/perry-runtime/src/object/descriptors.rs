@@ -716,6 +716,21 @@ pub(crate) unsafe fn own_property(obj_value: f64, key_value: f64) -> Option<OwnP
                     if crate::closure::closure_is_key_deleted(ptr, name) {
                         return None;
                     }
+                    // A generator function declares `prototype`: an
+                    // unmaterialized slot is born with its bag (allocates).
+                    let (name, ptr) = if name == "prototype"
+                        && crate::closure::props::closure_has_generator_body(
+                            ptr as *const crate::closure::ClosureHeader,
+                        )
+                        && crate::closure::props::bag_of(ptr).is_null()
+                    {
+                        let (_, moved) = ptr_handle.across_mut::<u8, _>(|| {
+                            crate::object::generator_function_prototype_of(ptr)
+                        });
+                        ("prototype", moved as usize)
+                    } else {
+                        (name, ptr)
+                    };
 
                     // (value, writable, enumerable, configurable). `name`/`length` are the
                     // built-in own data slots; anything else falls back to the

@@ -23,6 +23,31 @@ use super::ClosureHeader;
 use crate::object::ObjectHeader;
 use crate::value::JSValue;
 
+/// The intrinsic own data keys a function's bag is born with, in creation
+/// order: every function's `length` and `name`, then a generator function's
+/// `prototype`.
+const INTRINSIC_OWN_KEYS: [&str; 3] = ["length", "name", "prototype"];
+
+/// A generator function's `prototype`: writable, non-enumerable,
+/// non-configurable (ECMA-262 §15.5.5 / §15.6.5 InstantiateGeneratorFunction*).
+pub(crate) const GENERATOR_PROTOTYPE_ATTRS: crate::object::PropertyAttrs =
+    crate::object::PropertyAttrs::new(true, false, false);
+
+/// Does the closure at `ptr` have a (sync or async) generator body? Those
+/// declare an own `prototype` that their bag is born with.
+///
+/// # Safety
+/// `closure` is a proven, live closure cell.
+#[inline]
+pub(crate) unsafe fn closure_has_generator_body(closure: *const ClosureHeader) -> bool {
+    let info = (*closure).info;
+    !info.is_null()
+        && !super::shape::is_class_info(info)
+        && (*info).code != super::BOUND_FUNCTION_FUNC_PTR
+        && (*info).code != super::BOUND_METHOD_FUNC_PTR
+        && (*info).flags & (super::FN_GENERATOR | super::FN_ASYNC_GENERATOR) != 0
+}
+
 const STATE_PROTO: &str = "p";
 const DELETED_PREFIX: &str = "d:";
 const INTERNAL_PREFIX: &str = "i:";
@@ -108,12 +133,25 @@ pub(crate) unsafe fn bag_born_with_attrs(
         let intrinsic_attrs = crate::object::key_attrs::attr_bits_to_entry(
             crate::object::PropertyAttrs::new(false, false, true).bits,
         );
-        let mut own = [("length", 0.0), ("name", 0.0)];
-        let mut own_attrs = [intrinsic_attrs; 2];
-        for (index, key) in ["length", "name"].into_iter().enumerate() {
+        // A generator function also declares `prototype` (writable,
+        // non-enumerable, non-configurable): its bag is born with the slot
+        // and its original prototype object, so the slot is a fact of the
+        // function's keyed shape, never a later key-add or attribute edit.
+        let generator = closure_has_generator_body(ptr as *const ClosureHeader);
+        let count = if generator { 3 } else { 2 };
+        let names = &INTRINSIC_OWN_KEYS[..count];
+        let mut own = [("length", 0.0), ("name", 0.0), ("prototype", 0.0)];
+        let mut own_attrs = [
+            intrinsic_attrs,
+            intrinsic_attrs,
+            crate::object::key_attrs::attr_bits_to_entry(GENERATOR_PROTOTYPE_ATTRS.bits),
+        ];
+        for (index, &key) in names.iter().enumerate() {
             if let Some(i) = entries.iter().position(|(name, _)| *name == key) {
                 own[index] = entries[i];
-                own_attrs[index] = attrs.get(i).copied().unwrap_or(intrinsic_attrs);
+                own_attrs[index] = attrs.get(i).copied().unwrap_or(own_attrs[index]);
+            } else if index == 2 {
+                own[index].1 = crate::object::generator_original_prototype(ptr);
             } else {
                 let closure = ptr as *const ClosureHeader;
                 let value = if index == 0 {
@@ -138,28 +176,27 @@ pub(crate) unsafe fn bag_born_with_attrs(
         if !bag_of(ptr).is_null() {
             return false;
         }
-        if entries.len() >= 2
+        let own = &own[..count];
+        let own_attrs = &own_attrs[..count];
+        if entries.len() >= count
             && attrs.len() == entries.len()
-            && entries[..2]
+            && entries[..count]
                 .iter()
                 .zip(own)
-                .all(|(&(key, value), (intrinsic, expected))| {
+                .all(|(&(key, value), &(intrinsic, expected))| {
                     key == intrinsic && value.to_bits() == expected.to_bits()
                 })
         {
             crate::object::alloc::object_alloc_null_proto_with_key_attrs(entries, attrs)
-        } else if entries
-            .iter()
-            .all(|(key, _)| *key == "length" || *key == "name")
-        {
-            crate::object::alloc::object_alloc_null_proto_with_key_attrs(&own, &own_attrs)
+        } else if entries.iter().all(|(key, _)| names.contains(key)) {
+            crate::object::alloc::object_alloc_null_proto_with_key_attrs(own, own_attrs)
         } else {
-            let mut all = Vec::with_capacity(entries.len() + 2);
-            let mut all_attrs = Vec::with_capacity(entries.len() + 2);
-            all.extend(own);
-            all_attrs.extend(own_attrs);
+            let mut all = Vec::with_capacity(entries.len() + count);
+            let mut all_attrs = Vec::with_capacity(entries.len() + count);
+            all.extend_from_slice(own);
+            all_attrs.extend_from_slice(own_attrs);
             for (i, &(key, value)) in entries.iter().enumerate() {
-                if key == "length" || key == "name" {
+                if names.contains(&key) {
                     continue;
                 }
                 all.push((key, value));
