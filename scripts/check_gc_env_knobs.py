@@ -74,6 +74,7 @@ HISTORICAL_DOCS = {
     "docs/statepoint-gc-experiment.md",
     "docs/engine-plan-history.md",
     "docs/audits/statepoints-only-12023.md",
+    "docs/src/internals/weakmap-owned-index-validation.md",
 }
 
 # Script-owned output plumbing shares the PERRY_GC_ prefix but is intentionally
@@ -81,6 +82,8 @@ HISTORICAL_DOCS = {
 # is checked for staleness too.
 SCRIPT_OWNED = {
     "PERRY_GC_EVIDENCE_DIR": "scripts/run_memory_stability_tests.sh",
+    # Read by the ignored workspace-sidecar integration test, never by the runtime.
+    "PERRY_GC_EFFECTS_SIDECAR": "crates/perry-gc-effects/tests/workspace_sidecar.rs",
 }
 
 # Presence-only reads that are knowingly kept, name -> written reason.  It is
