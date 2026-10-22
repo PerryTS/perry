@@ -136,7 +136,13 @@ pub(crate) fn set_interceptor(target: f64, key: f64, value: f64, receiver: f64) 
                     let closure = cur_ptr as *const crate::closure::ClosureHeader;
                     let is_non_strict_ordinary_function = crate::closure::closure_info(closure)
                         .is_some_and(|info| {
-                            if info.flags & crate::codegen_abi::FN_HAS_SOURCE != 0 {
+                            // A permanent compiled body carries its kind in
+                            // the info whether or not its text was retained.
+                            const PERMANENT_COMPILED: u32 = crate::codegen_abi::FN_PERMANENT_IMAGE
+                                | crate::codegen_abi::FN_COMPILED_BODY;
+                            if info.flags & crate::codegen_abi::FN_HAS_SOURCE != 0
+                                || info.flags & PERMANENT_COMPILED == PERMANENT_COMPILED
+                            {
                                 info.flags & crate::codegen_abi::FN_NON_STRICT_ORDINARY != 0
                             } else {
                                 crate::builtins::function_is_non_strict_ordinary_for_ptr(

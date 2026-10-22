@@ -125,7 +125,11 @@ impl FnInfoFacts {
         };
         if let (Some(source), Some(_)) = (&self.source, &self.versioned) {
             // Framed source also carries its decoded offset and length.
-            offset += if source.decoded_offset.is_some() { 16 } else { 8 };
+            offset += if source.decoded_offset.is_some() {
+                16
+            } else {
+                8
+            };
         }
         if self.name.is_some() {
             offset += 8;
@@ -190,6 +194,12 @@ impl FnInfoFacts {
     /// `async function*`: async and async-generator both.
     pub(crate) fn set_async_generator(&mut self) {
         self.flags |= FN_ASYNC_GENERATOR | FN_ASYNC;
+    }
+
+    /// Function kind without retained text (see
+    /// LlModule::mark_fn_non_strict_ordinary).
+    pub(crate) fn set_non_strict_ordinary(&mut self) {
+        self.flags |= FN_NON_STRICT_ORDINARY;
     }
 
     pub(crate) fn set_source(&mut self, source: RetainedSource) {

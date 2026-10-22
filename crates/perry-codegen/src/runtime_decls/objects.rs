@@ -440,6 +440,12 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function("js_register_path_module", VOID, &[DOUBLE, DOUBLE]);
     // #6769: parent linking, emitted in the preamble ahead of the body.
     module.declare_function("js_link_path_module_parent", VOID, &[DOUBLE]);
+    module.declare_function("js_cjs_record_set_factory", VOID, &[DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_cjs_module_record",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+    );
     module.declare_function("js_run_module_init_catching", VOID, &[I64]);
     module.declare_function("js_run_module_init_guarded", VOID, &[I64, I64]);
     module.declare_function("js_require_path_module", DOUBLE, &[DOUBLE]);

@@ -326,6 +326,47 @@ pub(super) fn try_global_builtins(
                     args: vec![path, exports],
                 }));
             }
+            // A CommonJS module record, born with its final layout: exports,
+            // filename, dir, children, parent, paths, factory (private slot).
+            "__perry_cjs_module_record" => {
+                let mut record_args = Vec::with_capacity(7);
+                for _ in 0..7 {
+                    record_args.push(if !args.is_empty() {
+                        args.remove(0)
+                    } else {
+                        Expr::Undefined
+                    });
+                }
+                return Ok(Ok(Expr::NativeMethodCall {
+                    module: "__perry_runtime".to_string(),
+                    class_name: None,
+                    object: None,
+                    method: "newCjsModuleRecord".to_string(),
+                    args: record_args,
+                }));
+            }
+            // Hand a CommonJS record's factory to the runtime, which keeps it
+            // in the record's internal slot (never a property) for a reload
+            // after `delete require.cache[...]`.
+            "__perry_set_cjs_factory" => {
+                let record = if !args.is_empty() {
+                    args.remove(0)
+                } else {
+                    Expr::Undefined
+                };
+                let factory = if !args.is_empty() {
+                    args.remove(0)
+                } else {
+                    Expr::Undefined
+                };
+                return Ok(Ok(Expr::NativeMethodCall {
+                    module: "__perry_runtime".to_string(),
+                    class_name: None,
+                    object: None,
+                    method: "setCjsFactory".to_string(),
+                    args: vec![record, factory],
+                }));
+            }
             // #6769: link `module.parent` before the wrapper body runs.
             "__perry_link_path_module_parent" => {
                 let record = if !args.is_empty() {

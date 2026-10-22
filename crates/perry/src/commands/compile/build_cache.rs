@@ -645,6 +645,10 @@ fn eligibility(args: &CompileArgs, project_root: &Path) -> Result<(), String> {
     if std::env::var_os("PERRY_SOURCE_NEED_REPORT").is_some() {
         return Err("source-need-report".to_string());
     }
+    // Keeping all retained source changes the binary without changing inputs.
+    if std::env::var_os("PERRY_RETAIN_ALL_SOURCE").is_some() {
+        return Err("retain-all-source".to_string());
+    }
     // #6952: a cached build reuses the finished binary and never runs codegen,
     // so the report would be empty. Same reasoning as explain-lowering above.
     if args.opt_report.is_some() || std::env::var("PERRY_OPT_REPORT").is_ok() {

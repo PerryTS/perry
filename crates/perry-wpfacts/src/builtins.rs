@@ -352,7 +352,7 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                 // The CJS bootstrap main record starts empty. Its actual
                 // fields are supplied by generated wrapper stores, not by
                 // opaque builtin-method summaries.
-                _ if what == "CjsMain" => m.add_prim(dst, prim::UNDEF),
+                _ if matches!(what, "CjsMain" | "CjsRecord") => m.add_prim(dst, prim::UNDEF),
                 Some("buffer") if what == "TypedArray" => {
                     // B1: the backing buffer is observed (it can be
                     // transferred, detached or wrapped by another view).
@@ -1435,7 +1435,7 @@ fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>, call: Call
     let c = m.calls[call as usize].clone();
     let elems = m.field_any(t);
     match (what, name) {
-        ("CjsMain", _) => {}
+        ("CjsMain" | "CjsRecord", _) => {}
         ("Iterator", _) => iterator_method(m, t, name, call),
         // Iterables or plain results, not iterators: no `next`/`return`/
         // `throw` (a call throws).

@@ -93,7 +93,14 @@ pub extern "C" fn js_get_cjs_main_module() -> f64 {
 /// entry has no CommonJS "main" at all.
 #[no_mangle]
 pub extern "C" fn js_bootstrap_cjs_main_module_placeholder() {
-    let placeholder = object_value(js_object_alloc(0, 0));
+    // Born with the CommonJS record layout: the entry's preamble fills the
+    // public keys in place and its factory goes to the private slot.
+    // SAFETY: `CJS_MODULE_RECORD` is a registered runtime layout.
+    let placeholder = object_value(unsafe {
+        crate::object::runtime_layouts::perry_alloc_runtime_record(std::ptr::addr_of!(
+            crate::object::runtime_layouts::CJS_MODULE_RECORD
+        ))
+    });
     js_set_cjs_main_module(placeholder);
 }
 
@@ -615,6 +622,110 @@ fn cjs_record_field(value: f64, name: &str) -> Option<f64> {
     ))
 }
 
+/// A CommonJS record's ordinary-object header, for its internal slot.
+fn cjs_record_object(record: f64) -> Option<*mut crate::object::ObjectHeader> {
+    let jv = JSValue::from_bits(record.to_bits());
+    if !jv.is_pointer() {
+        return None;
+    }
+    let addr = crate::value::js_nanbox_get_pointer(record) as usize;
+    // SAFETY: a pointer-tagged value names a live GC cell or nothing.
+    let header = unsafe { crate::value::addr_class::try_read_gc_header(addr) }?;
+    (header.obj_type == crate::gc::GC_TYPE_OBJECT)
+        .then_some(addr as *mut crate::object::ObjectHeader)
+}
+
+/// The private slot key of [`CJS_MODULE_RECORD`](crate::object::runtime_layouts::CJS_MODULE_RECORD)
+/// that holds the module's factory.
+const CJS_FACTORY_KEY: &[u8] = b"#<perry:cjs-module-factory>";
+
+fn is_closure_value(value: f64) -> bool {
+    JSValue::from_bits(value.to_bits()).is_pointer()
+        && crate::closure::is_closure_ptr(crate::value::js_nanbox_get_pointer(value) as usize)
+}
+
+/// The factory slot of a CommonJS record: the private entry
+/// [`CJS_MODULE_RECORD`](crate::object::runtime_layouts::CJS_MODULE_RECORD)
+/// declares. A record whose keys were edited keeps the entry; any other
+/// object has none.
+fn cjs_record_factory_slot(obj: *mut crate::object::ObjectHeader) -> Option<u32> {
+    // SAFETY: `obj` is a live ordinary object; its keys are read, not kept.
+    unsafe {
+        let keys = crate::object::object_keys(obj);
+        if keys.is_null() {
+            return None;
+        }
+        crate::object::keys_find_private_slot_by_bytes(keys.arr(), keys.count(), CJS_FACTORY_KEY)
+    }
+}
+
+/// Codegen FFI: a CommonJS wrapper's module record, born with its final
+/// layout ([`CJS_MODULE_RECORD`](crate::object::runtime_layouts::CJS_MODULE_RECORD)):
+/// `exports`, `children` and `paths` are the wrapper's own literals, `id` and
+/// `filename` the module's path. `factory` goes to the private slot: not a
+/// property, so user code cannot read (or stringify) it, and its text (the
+/// whole module) is not retained for it.
+#[no_mangle]
+pub extern "C" fn js_cjs_module_record(
+    exports: f64,
+    filename: f64,
+    dir: f64,
+    children: f64,
+    parent: f64,
+    paths: f64,
+    factory: f64,
+) -> f64 {
+    use crate::object::runtime_layouts::cjs_module_slot as slot;
+    crate::object::runtime_layouts::runtime_record!(record, CJS_MODULE_RECORD);
+    let set = |s: u32, value: f64| record.set(s, JSValue::from_bits(value.to_bits()));
+    let undefined = f64::from_bits(TAG_UNDEFINED);
+    set(slot::EXPORTS, exports);
+    set(slot::RECORD, f64::from_bits(TAG_TRUE));
+    set(slot::ID, filename);
+    set(slot::PATH, dir);
+    set(slot::FILENAME, filename);
+    set(slot::LOADED, f64::from_bits(TAG_FALSE));
+    set(slot::CHILDREN, children);
+    set(slot::PARENT, parent);
+    set(slot::PATHS, paths);
+    set(slot::REQUIRE, undefined);
+    set(
+        slot::FACTORY,
+        if is_closure_value(factory) {
+            factory
+        } else {
+            undefined
+        },
+    );
+    object_value(record.finish())
+}
+
+/// Codegen FFI: store the entry module's factory in its record's private slot.
+/// The entry fills the main-module placeholder in place (its identity may
+/// already be `require.main` elsewhere), and the placeholder is born with the
+/// record layout, so the slot exists.
+#[no_mangle]
+pub extern "C" fn js_cjs_record_set_factory(record: f64, factory: f64) {
+    if !is_closure_value(factory) {
+        return;
+    }
+    let Some(obj) = cjs_record_object(record) else {
+        return;
+    };
+    if let Some(slot) = cjs_record_factory_slot(obj) {
+        crate::object::js_object_set_field(obj, slot, JSValue::from_bits(factory.to_bits()));
+    }
+}
+
+/// The factory kept in a CommonJS record's private slot.
+fn cjs_record_factory(record: f64) -> Option<f64> {
+    cjs_record_exports(record)?;
+    let obj = cjs_record_object(record)?;
+    let slot = cjs_record_factory_slot(obj)?;
+    let factory = f64::from_bits(crate::object::js_object_get_field(obj, slot).bits());
+    is_closure_value(factory).then_some(factory)
+}
+
 /// The value a completed path module published, WITHOUT triggering a deferred
 /// initializer. `js_require_path_module` is the initializing read; this is the
 /// "did it already run?" read that `require()` needs before it decides to run
@@ -751,55 +862,47 @@ fn require_path(cache: f64, path: &std::path::Path, parent_filename: &str) -> f6
         JSValue::from_bits(loaded.to_bits()).is_bool()
             && JSValue::from_bits(loaded.to_bits()).as_bool()
     }) {
-        if let Some(factory) = cjs_record_field(registered, "__perry_cjs_factory") {
-            let factory_value = JSValue::from_bits(factory.to_bits());
-            if factory_value.is_pointer()
-                && crate::closure::is_closure_ptr(
-                    crate::value::js_nanbox_get_pointer(factory) as usize
-                )
+        if let Some(factory) = cjs_record_factory(registered) {
+            let factory_handle = scope.root_nanbox_f64(factory);
+            let exports = crate::closure::js_closure_call0(
+                crate::value::js_nanbox_get_pointer(factory_handle.get_nanbox_f64())
+                    as *const ClosureHeader,
+                crate::closure::plain_call_receiver(),
+            );
+            if let Some((record, cached)) = cached_record(cache_handle.get_nanbox_f64(), &filename)
             {
-                let factory_handle = scope.root_nanbox_f64(factory);
-                let exports = crate::closure::js_closure_call0(
-                    crate::value::js_nanbox_get_pointer(factory_handle.get_nanbox_f64())
-                        as *const ClosureHeader,
-                    crate::closure::plain_call_receiver(),
-                );
-                if let Some((record, cached)) =
-                    cached_record(cache_handle.get_nanbox_f64(), &filename)
-                {
-                    link_parent(cache_handle.get_nanbox_f64(), record, parent_filename);
-                    run_custom_extension(path, record, &filename);
-                    return cached;
-                }
-                let exports_handle = scope.root_nanbox_f64(exports);
-                let (record, value) =
-                    if let Some(value) = cjs_record_exports(exports_handle.get_nanbox_f64()) {
-                        let key = js_string_from_bytes(filename.as_ptr(), filename.len() as u32);
-                        js_object_set_field_by_name(
-                            object_ptr(cache_handle.get_nanbox_f64()),
-                            key,
-                            exports_handle.get_nanbox_f64(),
-                        );
-                        (exports_handle.get_nanbox_f64(), value)
-                    } else {
-                        (
-                            cache_exports(
-                                cache_handle.get_nanbox_f64(),
-                                &filename,
-                                exports_handle.get_nanbox_f64(),
-                            ),
-                            exports_handle.get_nanbox_f64(),
-                        )
-                    };
-                let record_handle = scope.root_nanbox_f64(record);
-                link_parent(
-                    cache_handle.get_nanbox_f64(),
-                    record_handle.get_nanbox_f64(),
-                    parent_filename,
-                );
-                run_custom_extension(path, record_handle.get_nanbox_f64(), &filename);
-                return value;
+                link_parent(cache_handle.get_nanbox_f64(), record, parent_filename);
+                run_custom_extension(path, record, &filename);
+                return cached;
             }
+            let exports_handle = scope.root_nanbox_f64(exports);
+            let (record, value) =
+                if let Some(value) = cjs_record_exports(exports_handle.get_nanbox_f64()) {
+                    let key = js_string_from_bytes(filename.as_ptr(), filename.len() as u32);
+                    js_object_set_field_by_name(
+                        object_ptr(cache_handle.get_nanbox_f64()),
+                        key,
+                        exports_handle.get_nanbox_f64(),
+                    );
+                    (exports_handle.get_nanbox_f64(), value)
+                } else {
+                    (
+                        cache_exports(
+                            cache_handle.get_nanbox_f64(),
+                            &filename,
+                            exports_handle.get_nanbox_f64(),
+                        ),
+                        exports_handle.get_nanbox_f64(),
+                    )
+                };
+            let record_handle = scope.root_nanbox_f64(record);
+            link_parent(
+                cache_handle.get_nanbox_f64(),
+                record_handle.get_nanbox_f64(),
+                parent_filename,
+            );
+            run_custom_extension(path, record_handle.get_nanbox_f64(), &filename);
+            return value;
         }
         registered = registered_path_module_value(&filename).unwrap_or(registered);
     }

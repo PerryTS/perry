@@ -148,33 +148,33 @@ impl<'a> SourcePool<'a> {
             (llmod.add_retained_source_constant(&blob).0, Vec::new())
         };
         let ranges = unique
-                .into_iter()
-                .enumerate()
-                .map(|(idx, source)| {
-                    let (parent, offset) = plan[idx];
-                    let original = parent_offsets[&parent] + offset;
-                    let (offset, decoded_offset) = if compressed {
-                        let block = (original / perry_abi::RETAINED_SOURCE_BLOCK_BYTES)
-                            .min(frame_offsets.len() - 1);
-                        (
-                            frame_offsets[block],
-                            Some(original - block * perry_abi::RETAINED_SOURCE_BLOCK_BYTES),
-                        )
-                    } else {
-                        (original, None)
-                    };
+            .into_iter()
+            .enumerate()
+            .map(|(idx, source)| {
+                let (parent, offset) = plan[idx];
+                let original = parent_offsets[&parent] + offset;
+                let (offset, decoded_offset) = if compressed {
+                    let block = (original / perry_abi::RETAINED_SOURCE_BLOCK_BYTES)
+                        .min(frame_offsets.len() - 1);
                     (
-                        source,
-                        SourceRange {
-                            global: global.clone(),
-                            offset,
-                            byte_len: source.len(),
-                            decoded_offset,
-                            pool_offset: original,
-                        },
+                        frame_offsets[block],
+                        Some(original - block * perry_abi::RETAINED_SOURCE_BLOCK_BYTES),
                     )
-                })
-                .collect();
+                } else {
+                    (original, None)
+                };
+                (
+                    source,
+                    SourceRange {
+                        global: global.clone(),
+                        offset,
+                        byte_len: source.len(),
+                        decoded_offset,
+                        pool_offset: original,
+                    },
+                )
+            })
+            .collect();
         Self {
             ranges,
             decoded_len,
@@ -241,11 +241,19 @@ pub(super) fn prepare_ranges(
         .filter(|(symbol, source, _, _)| compressed_pool_member(llmod, symbol, source))
         .map(|(_, source, _, _)| source.as_ref())
         .collect();
+    // A function whose text the compiler dropped (an empty text: no execution
+    // can read it, see the driver's `source_need::drop_unread_source`) still
+    // owns its strictness bit. An info carries that bit on its own; a body
+    // registered through the copying table registers an empty range instead,
+    // which `toString` treats as absent.
+    let registers_empty = |llmod: &LlModule, symbol: &str, non_strict: bool| {
+        non_strict && !(strings_outlive_registry && llmod.can_attach_fn_source(symbol))
+    };
     let raw_sources: Vec<&str> = user_fn_source
         .iter()
-        .filter(|(symbol, source, _, _)| {
+        .filter(|(symbol, source, non_strict, _)| {
             !symbol.is_empty()
-                && !source.is_empty()
+                && (!source.is_empty() || registers_empty(llmod, symbol, *non_strict))
                 && !compressed_pool_member(llmod, symbol, source)
         })
         .map(|(_, source, _, _)| source.as_ref())
@@ -259,10 +267,18 @@ pub(super) fn prepare_ranges(
     );
     let mut user_fn_source_constants: Vec<(String, SourceRange, bool)> = Vec::new();
     for (wrapper_sym, source_text, is_non_strict_ordinary, _) in user_fn_source {
-        if wrapper_sym.is_empty() || source_text.is_empty() {
+        if wrapper_sym.is_empty() {
             continue;
         }
         let in_info = strings_outlive_registry && llmod.can_attach_fn_source(wrapper_sym);
+        if source_text.is_empty() {
+            if !*is_non_strict_ordinary {
+                continue;
+            }
+            if in_info && llmod.mark_fn_non_strict_ordinary(wrapper_sym) {
+                continue;
+            }
+        }
         let source = if compressed_pool_member(llmod, wrapper_sym, source_text) {
             compressed_pool.get(source_text)
         } else {
@@ -590,6 +606,58 @@ mod tests {
             !ir.contains(child),
             "compiled infos retain compressed bytes only"
         );
+    }
+
+    /// A function whose text the driver dropped (empty) keeps its kind: an
+    /// info gets the non-strict bit without a source range; the copying
+    /// registry gets an empty range carrying the bit. A strict one gets
+    /// nothing.
+    #[test]
+    fn a_dropped_text_keeps_the_non_strict_bit_and_retains_no_bytes() {
+        use std::borrow::Cow;
+        let js_body = || {
+            vec![
+                (crate::types::PTR, "%this_closure".to_string()),
+                (crate::types::I64, "%js_this".to_string()),
+            ]
+        };
+        let sources = vec![
+            ("body_sloppy".to_string(), Cow::Borrowed(""), true, 1u32),
+            ("body_strict".to_string(), Cow::Borrowed(""), false, 2u32),
+        ];
+        let no_classes = HashMap::new();
+        for outlive in [true, false] {
+            let mut module = LlModule::new("x86_64-unknown-linux-gnu");
+            module.define_function("body_sloppy", crate::types::DOUBLE, js_body());
+            module.define_function("body_strict", crate::types::DOUBLE, js_body());
+            let (constants, classes) = prepare_ranges(
+                &mut module,
+                "m_",
+                &sources,
+                &no_classes,
+                &HashMap::new(),
+                &HashMap::new(),
+                outlive,
+            );
+            assert!(classes.is_empty());
+            let flags = |body: &str| {
+                let mut out = (0, false);
+                module.note_fn_info(body, |f| out = (f.flags, f.source.is_some()));
+                out
+            };
+            let bit = perry_abi::FN_NON_STRICT_ORDINARY;
+            if outlive {
+                assert!(constants.is_empty());
+                assert_eq!(flags("body_sloppy"), (bit, false));
+            } else {
+                assert_eq!(constants.len(), 1);
+                assert_eq!(constants[0].0, "body_sloppy");
+                assert_eq!(constants[0].1.byte_len, 0);
+                assert!(constants[0].2);
+                assert_eq!(flags("body_sloppy").0 & bit, 0);
+            }
+            assert_eq!(flags("body_strict"), (0, false));
+        }
     }
 
     #[test]

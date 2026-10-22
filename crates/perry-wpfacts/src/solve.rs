@@ -658,7 +658,7 @@ impl Model {
                         | TokKind::BuiltinFn
                         | TokKind::NativeProto(_) => true,
                         TokKind::Obj(tm) => matches!(self.tmpls[*tm as usize].kind,
-                            TmplKind::BObj { what, .. } if what != "CjsMain"),
+                            TmplKind::BObj { what, .. } if !matches!(what, "CjsMain" | "CjsRecord")),
                         _ => false,
                     };
                     if opaque {

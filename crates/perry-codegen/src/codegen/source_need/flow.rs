@@ -549,8 +549,7 @@ impl<'a> Build<'a> {
             Stmt::Let { id, name, init, .. } => {
                 if let Some(e) = init {
                     // The CommonJS wrapper (cjs_wrap): the factory's text is
-                    // the whole module and `module.__perry_cjs_factory`
-                    // publishes it to user code; label it for the report.
+                    // the whole module; label it for the report.
                     if name == "__perry_cjs_factory" {
                         if let Expr::Closure { func_id, .. } = e {
                             self.relabel
@@ -1034,6 +1033,32 @@ impl<'a> Build<'a> {
                 vec![]
             }
             Expr::Call { callee, args, .. } => self.call(cx, callee, args),
+            // The CommonJS wrapper hands its factory to the runtime: as the
+            // last argument of the record it builds, or (the entry's record)
+            // through setCjsFactory. The runtime keeps it in the record's
+            // private slot (no property) and only ever calls it
+            // (`module_require.rs`), so the factory reaches no sink here. A
+            // valued function's return already flows to the untracked-caller
+            // sink. Every other argument stays a builtin sink.
+            Expr::NativeMethodCall {
+                module,
+                method,
+                object: None,
+                args,
+                ..
+            } if module == "__perry_runtime"
+                && (method == "setCjsFactory" || method == "newCjsModuleRecord") =>
+            {
+                let factory = if method == "setCjsFactory" { 1 } else { 6 };
+                let detail = format!("NativeMethodCall:{module}.{method}");
+                for (i, a) in args.iter().enumerate() {
+                    let v = self.expr(cx, a);
+                    if i != factory {
+                        self.sink_vals(&v, Reason::Builtin, &detail);
+                    }
+                }
+                vec![]
+            }
             Expr::CallSpread { callee, args, .. } => {
                 self.expr(cx, callee);
                 for a in args {

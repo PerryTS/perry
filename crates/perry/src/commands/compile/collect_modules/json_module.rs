@@ -26,11 +26,15 @@ pub(super) fn synthesize_json_module(raw: &str, canonical: &Path) -> Result<Stri
         )
     })?;
     let path = canonical.to_string_lossy();
+    let dir = canonical
+        .parent()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
 
     Ok(format!(
         "function __perry_json_factory() {{ return JSON.parse({serialized}); }}\n\
          const __perry_json_default = __perry_json_factory();\n\
-         const __perry_json_module = {{ __perry_cjs_record: true, __perry_cjs_factory: __perry_json_factory, exports: __perry_json_default, loaded: false }};\n\
+         const __perry_json_module = __perry_cjs_module_record(__perry_json_default, {path:?}, {dir:?}, [], undefined, [{dir:?} + '/node_modules'], __perry_json_factory);\n\
          __perry_register_path_module({path:?}, __perry_json_module);\n\
          export default __perry_json_default;\n"
     ))

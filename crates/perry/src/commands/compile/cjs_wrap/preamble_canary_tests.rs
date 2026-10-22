@@ -136,12 +136,8 @@ fn the_cjs_preamble_is_still_recognised_as_scaffolding_allocation() {
     // opaque count mismatch.
     for (needle, conjunct) in [
         (
-            "        exports: {},",
-            "R1/R2 (the record literal's leading `exports: {}` field)",
-        ),
-        (
-            "        require: undefined,",
-            "R1/R2 (the record literal's folded eleventh field)",
+            "const __cjs_module = __perry_cjs_module_record(\n        {},",
+            "R1/R2 (the record call and its leading `exports: {}` literal)",
         ),
         (
             "var module = __cjs_module;",
@@ -330,5 +326,58 @@ export const value = 1;
          Perry's wrap. The recogniser must key on the aliased local \
          (`{}`), not on the module specifier.",
         perry_codegen::cjs_wrap_create_require_local()
+    );
+}
+
+// ── The factory slot: no property publishes the factory ───────────────────
+
+/// The census class of the wrapped module's factory closure, strict rule.
+fn factory_class(body: &str) -> perry_codegen::codegen::source_need::flow::Class3 {
+    use perry_codegen::codegen::source_need::flow::Need;
+    let hir = wrap_and_lower(body);
+    let modules = vec![(
+        "/tmp/perry-canary/node_modules/dep/index.js".to_string(),
+        &hir,
+    )];
+    let need = Need::compute(
+        &modules,
+        &std::collections::BTreeMap::new(),
+        &modules[0].0,
+        false,
+        &Default::default(),
+    );
+    let factories: Vec<usize> = (0..need.entities.len())
+        .filter(|&e| need.entities[e].kind == "cjs-factory")
+        .collect();
+    assert_eq!(factories.len(), 1, "one factory closure per wrapped module");
+    need.class_of(factories[0], 0)
+}
+
+/// The factory's text is the whole module. It reaches the runtime through
+/// the record the runtime builds (`__perry_cjs_module_record`), which keeps
+/// it in the record's private slot,
+/// so no execution can stringify it and its source is not retained for it.
+#[test]
+fn the_cjs_factory_is_not_a_property_and_reaches_no_source_sink() {
+    let path = Path::new("/tmp/perry-canary/node_modules/dep/index.js");
+    let wrapped = wrap_commonjs_for_target(CJS_FIXTURE, path, None, false, None);
+    assert!(!wrapped.contains("__perry_cjs_factory:"));
+    assert!(!wrapped.contains(".__perry_cjs_factory ="));
+    assert!(wrapped.contains("        __perry_cjs_factory\n    );"));
+    assert_ne!(
+        factory_class(CJS_FIXTURE),
+        perry_codegen::codegen::source_need::flow::Class3::MayStringify,
+        "the wrapper publishes its factory where a string sink can reach it again"
+    );
+}
+
+/// Control: the same chain classifies the factory (c) when the module itself
+/// stringifies it, so the test above can fail.
+#[test]
+fn a_module_that_stringifies_its_own_factory_keeps_its_source() {
+    let body = format!("{CJS_FIXTURE}\nexports.text = String(__perry_cjs_factory);\n");
+    assert_eq!(
+        factory_class(&body),
+        perry_codegen::codegen::source_need::flow::Class3::MayStringify
     );
 }

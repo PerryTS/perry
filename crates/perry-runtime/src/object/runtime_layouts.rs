@@ -245,6 +245,63 @@ mod spawn_sync_result {
 pub(crate) use spawn_sync_result::spawn_sync_slot;
 pub use spawn_sync_result::SPAWN_SYNC_RESULT;
 
+/// A CommonJS module record (`module`), in Node's key order, plus perry's
+/// `__perry_cjs_record` marker. The last entry is a private slot, never a
+/// property: the module's factory, which a reload after
+/// `delete require.cache[...]` runs again (`module_require.rs`). No own-key
+/// reader lists it and no script can name it, so the compiler need not retain
+/// the factory's text (the whole module) for it.
+mod cjs_module_record {
+    use super::record_atoms::*;
+    use super::*;
+    runtime_atom!(CJS_ATOM_EXPORTS, "exports", "6578706f727473");
+    runtime_atom!(
+        CJS_ATOM_RECORD,
+        "__perry_cjs_record",
+        "5f5f70657272795f636a735f7265636f7264"
+    );
+    runtime_atom!(CJS_ATOM_ID, "id", "6964");
+    runtime_atom!(CJS_ATOM_LOADED, "loaded", "6c6f61646564");
+    runtime_atom!(CJS_ATOM_CHILDREN, "children", "6368696c6472656e");
+    runtime_atom!(CJS_ATOM_PARENT, "parent", "706172656e74");
+    runtime_atom!(CJS_ATOM_PATHS, "paths", "7061746873");
+    runtime_atom!(CJS_ATOM_REQUIRE, "require", "72657175697265");
+    runtime_atom!(
+        CJS_ATOM_FACTORY,
+        "#<perry:cjs-module-factory>",
+        "233c70657272793a636a732d6d6f64756c652d666163746f72793e"
+    );
+    runtime_layout!(CJS_MODULE_RECORD, 0x434A_534D, 0, crate::object::layout_desc::LAYOUT_PROTO_OBJECT, [
+        CJS_ATOM_EXPORTS,
+        CJS_ATOM_RECORD,
+        CJS_ATOM_ID,
+        RECORD_ATOM_9,
+        RECORD_ATOM_184,
+        CJS_ATOM_LOADED,
+        CJS_ATOM_CHILDREN,
+        CJS_ATOM_PARENT,
+        CJS_ATOM_PATHS,
+        CJS_ATOM_REQUIRE,
+        CJS_ATOM_FACTORY => crate::object::key_attrs::PRIVATE_FIELD_ENTRY,
+    ]);
+    /// The slots of [`CJS_MODULE_RECORD`].
+    pub(crate) mod cjs_module_slot {
+        pub(crate) const EXPORTS: u32 = 0;
+        pub(crate) const RECORD: u32 = 1;
+        pub(crate) const ID: u32 = 2;
+        pub(crate) const PATH: u32 = 3;
+        pub(crate) const FILENAME: u32 = 4;
+        pub(crate) const LOADED: u32 = 5;
+        pub(crate) const CHILDREN: u32 = 6;
+        pub(crate) const PARENT: u32 = 7;
+        pub(crate) const PATHS: u32 = 8;
+        pub(crate) const REQUIRE: u32 = 9;
+        pub(crate) const FACTORY: u32 = 10;
+    }
+}
+pub(crate) use cjs_module_record::cjs_module_slot;
+pub use cjs_module_record::CJS_MODULE_RECORD;
+
 /// Allocate a fixed record with every declared property present, including undefined values.
 ///
 /// # Safety

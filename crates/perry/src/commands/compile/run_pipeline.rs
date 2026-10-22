@@ -1689,6 +1689,15 @@ pub fn run_with_parse_cache(
         std::collections::HashMap<String, perry_hir::types::Type>,
     > = std::sync::Arc::new(all_type_aliases.into_iter().collect());
 
+    // The HIR is final here: from the next loop on, `exported_classes` borrows
+    // it until codegen. Retained function source no execution can read is
+    // dropped now, before the object-cache key hashes each module's HIR (its
+    // text is part of it).
+    let source_need_started = Instant::now();
+    let need = super::source_need::compute(&ctx, args.output_type != "executable");
+    let dropped_source = super::source_need::drop_unread_source(&mut ctx, &need);
+    let source_need_seconds = source_need_started.elapsed().as_secs_f64();
+
     // Build a map of all exported classes from all modules
     // Key: (resolved_path, class_name) -> Class reference
     let mut exported_classes: BTreeMap<(String, String), &perry_hir::Class> = BTreeMap::new();
@@ -6297,7 +6306,7 @@ pub fn run_with_parse_cache(
         &static_shape_ids,
     );
     let reach_report = super::reach_report::start(&ctx, args.output_type != "executable")?;
-    let source_need = super::source_need::start(&ctx, args.output_type != "executable")?;
+    let source_need = super::source_need::start(need, &dropped_source, source_need_seconds)?;
     // fninfer (decision 140): per-function inferred signatures over the
     // final HIR. Measurement dump only (`PERRY_FNINFER_DUMP=<path>`).
     super::fn_infer::dump(&ctx.native_modules);

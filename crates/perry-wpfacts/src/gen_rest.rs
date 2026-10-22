@@ -1829,6 +1829,50 @@ impl<'a> Gen<'a> {
                 }
                 self.prim_node(prim::UNDEF)
             }
+            "newCjsModuleRecord" => {
+                // `CJS_MODULE_RECORD`: a fresh record per call whose fields
+                // are the arguments (exports, filename, dir, children,
+                // parent, paths) plus the marker, `loaded` and `require`.
+                let (_, record) = self.bobj(fx.module, "CjsRecord");
+                let fields: [(&str, Option<usize>, u16); 10] = [
+                    ("exports", Some(0), prim::UNDEF),
+                    ("__perry_cjs_record", None, prim::BOOL),
+                    ("id", Some(1), prim::UNDEF),
+                    ("path", Some(2), prim::UNDEF),
+                    ("filename", Some(1), prim::UNDEF),
+                    ("loaded", None, prim::BOOL),
+                    ("children", Some(3), prim::UNDEF),
+                    ("parent", Some(4), prim::UNDEF),
+                    ("paths", Some(5), prim::UNDEF),
+                    ("require", None, prim::UNDEF),
+                ];
+                for (name, from, fallback) in fields {
+                    let value = match from.and_then(arg) {
+                        Some(v) => v,
+                        None => self.prim_node(fallback),
+                    };
+                    let key = self.m.atom(name);
+                    self.store(
+                        fx,
+                        record,
+                        Key::Named(key),
+                        value,
+                        "cjs record".into(),
+                        None,
+                        false,
+                    );
+                }
+                if let Some(factory) = arg(6) {
+                    self.cjs_factory_slot(fx, record, factory);
+                }
+                record
+            }
+            "setCjsFactory" => {
+                if let (Some(record), Some(factory)) = (arg(0), arg(1)) {
+                    self.cjs_factory_slot(fx, record, factory);
+                }
+                self.prim_node(prim::UNDEF)
+            }
             "linkPathModuleParent" => {
                 // The helper links an existing record through require.cache;
                 // it does not publish a new path-module value.
@@ -1882,6 +1926,24 @@ impl<'a> Gen<'a> {
                 self.m.top_val(&format!("result of runtime glue {method}"))
             }
         }
+    }
+
+    /// A CommonJS record's private factory slot. The slot belongs to the
+    /// record: whatever reaches the record's contents (an escape) reaches the
+    /// factory. The runtime calls it, with no receiver and no arguments, when
+    /// a loaded module is required again after its cache entry was deleted.
+    fn cjs_factory_slot(&mut self, fx: &Fx, record: NodeId, factory: NodeId) {
+        let key = self.m.atom("__perry_cjs_factory");
+        self.store(
+            fx,
+            record,
+            Key::Named(key),
+            factory,
+            "cjs factory slot".into(),
+            None,
+            false,
+        );
+        let _ = self.call_value(factory, ThisArg::Undef, vec![], vec![]);
     }
 
     fn iter_out_node(&mut self, fx: &Fx) -> NodeId {

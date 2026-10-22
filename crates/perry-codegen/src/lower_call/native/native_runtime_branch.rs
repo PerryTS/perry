@@ -312,6 +312,32 @@ return crate::lower_array_record_length::lower(ctx, &args[0]);
                 arg_group.release(ctx);
                 return Ok(result);
             }
+            // A CommonJS module record born with its final layout.
+            "newCjsModuleRecord" => {
+                let (arg_values, arg_group) =
+                    super::lower_call_args_rooted(ctx, &args[..args.len().min(7)])?;
+                let undefined = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                let values: Vec<String> = (0..7)
+                    .map(|i| arg_values.get(i).cloned().unwrap_or_else(|| undefined.clone()))
+                    .collect();
+                let typed: Vec<(_, &str)> = values.iter().map(|v| (DOUBLE, v.as_str())).collect();
+                let record = ctx.block().call(DOUBLE, "js_cjs_module_record", &typed);
+                arg_group.release(ctx);
+                return Ok(record);
+            }
+            // A CommonJS record's factory, kept off its properties.
+            "setCjsFactory" => {
+                let (arg_values, arg_group) = super::lower_call_args_rooted(ctx, &args[..args.len().min(2)])?;
+                let undefined = || double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                let record = arg_values.first().cloned().unwrap_or_else(undefined);
+                let factory = arg_values.get(1).cloned().unwrap_or_else(undefined);
+                ctx.block().call_void(
+                    "js_cjs_record_set_factory",
+                    &[(DOUBLE, &record), (DOUBLE, &factory)],
+                );
+                arg_group.release(ctx);
+                return Ok(undefined());
+            }
             // #6769: link `module.parent` before the wrapper body runs.
             "linkPathModuleParent" => {
                 let record = args.first().map_or_else(

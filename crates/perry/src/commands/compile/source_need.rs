@@ -1,9 +1,15 @@
-//! Driver for the compiler-only retained-source census
-//! (`PERRY_SOURCE_NEED_REPORT=<path>`). The classification runs over the final
-//! HIR before codegen; codegen reports the byte range each owner occupies in
-//! its module's retained-source blob; this joins both after the final link and
-//! checks the blob total against the linked `.perry_src` section. It changes
-//! no output bytes and bypasses object caches so every module reports.
+//! Retained function source: which stored `Function.prototype.toString` text
+//! can any execution read? The classification ([`Need`]) runs over the final
+//! HIR before codegen, on every compile. [`drop_unread_source`] then removes
+//! the text of every owner no execution can stringify (classes (a) never a
+//! value and (b) a value that reaches no string sink, under the strict rule),
+//! before the object-cache key hashes the HIR.
+//!
+//! `PERRY_SOURCE_NEED_REPORT=<path>` is the compiler-only census: codegen
+//! reports the byte range each remaining owner occupies in its module's
+//! retained-source pools (decoded bytes); this joins both after the final link
+//! and checks the pools against the linked `.perry_src` section. It bypasses
+//! object caches so every module reports.
 use std::collections::{BTreeMap, HashMap};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -18,6 +24,9 @@ use perry_codegen::codegen::source_need::{self, StoredKey};
 use super::CompilationContext;
 
 pub(super) const KNOB: &str = "PERRY_SOURCE_NEED_REPORT";
+/// Diagnostic: keep every text [`drop_unread_source`] would remove (the
+/// census soundness check runs the program with all source present).
+pub(super) const RETAIN_KNOB: &str = "PERRY_RETAIN_ALL_SOURCE";
 
 pub(super) struct Session {
     path: PathBuf,
@@ -46,11 +55,9 @@ fn configs() -> [(&'static str, u64); 4] {
     ]
 }
 
-pub(super) fn start(ctx: &CompilationContext, library: bool) -> Result<Option<Session>> {
-    let Some(path) = std::env::var_os(KNOB) else {
-        return Ok(None);
-    };
-    let path = PathBuf::from(path);
+/// Classify every retained-source owner of the program. `library`: the
+/// output's exports are reachable by unknown code.
+pub(super) fn compute(ctx: &CompilationContext, library: bool) -> Need {
     let links = super::reach_report::import_links(ctx);
     let modules: Vec<_> = ctx
         .native_modules
@@ -62,20 +69,72 @@ pub(super) fn start(ctx: &CompilationContext, library: bool) -> Result<Option<Se
         .as_deref()
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let t = std::time::Instant::now();
-    let need = Need::compute(
+    Need::compute(
         &modules,
         &links,
         &entry,
         library,
         &ctx.patched_builtins.dynamic_code_reach,
-    );
+    )
+}
+
+/// What [`drop_unread_source`] removed.
+#[derive(Default)]
+pub(super) struct Dropped {
+    pub owners: usize,
+    pub bytes: usize,
+}
+
+/// Remove the retained text of every owner whose strict class is (a) or (b):
+/// no execution can read it. A function keeps its strictness bit (an empty
+/// text, see `retained_source_pool`); a class has none. Owners the census did
+/// not see keep their text.
+pub(super) fn drop_unread_source(ctx: &mut CompilationContext, need: &Need) -> Dropped {
+    let mut dropped = Dropped::default();
+    if std::env::var_os(RETAIN_KNOB).is_some() {
+        return dropped;
+    }
+    let unread = |ent: Ent| {
+        need.entity(ent)
+            .is_some_and(|e| need.class_of(e, 0) != Class3::MayStringify)
+    };
+    // `Need` indexes modules in `native_modules` order (a BTreeMap).
+    for (mi, m) in ctx.native_modules.values_mut().enumerate() {
+        for (fid, source) in m.closure_source_text.iter_mut() {
+            if source.text.as_str().is_empty() || !unread(Ent::Func(mi, *fid)) {
+                continue;
+            }
+            if let Some(empty) = source.text.slice(0..0) {
+                dropped.owners += 1;
+                dropped.bytes += source.text.as_str().len();
+                source.text = empty;
+            }
+        }
+        m.class_source_text.retain(|cid, text| {
+            if !unread(Ent::Class(mi, *cid)) {
+                return true;
+            }
+            dropped.owners += 1;
+            dropped.bytes += text.as_str().len();
+            false
+        });
+    }
+    dropped
+}
+
+pub(super) fn start(need: Need, dropped: &Dropped, seconds: f64) -> Result<Option<Session>> {
+    let Some(path) = std::env::var_os(KNOB) else {
+        return Ok(None);
+    };
+    let path = PathBuf::from(path);
     eprintln!(
-        "[source-need] {} owners over {} nodes / {} edges in {:.1}s",
+        "[source-need] {} owners over {} nodes / {} edges in {:.1}s; dropped {} owners, {} B of text",
         need.entities.len(),
         need.nodes,
         need.edges,
-        t.elapsed().as_secs_f64()
+        seconds,
+        dropped.owners,
+        dropped.bytes
     );
     for (what, n) in &need.notes {
         eprintln!("[source-need] note {what}: {n}");

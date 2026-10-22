@@ -469,6 +469,19 @@ impl LlModule {
         self.function_named(body).is_some_and(is_js_body)
     }
 
+    /// A body whose retained text was dropped (no execution reads it) keeps
+    /// its function kind: the info records non-strict ordinary on its own.
+    pub(crate) fn mark_fn_non_strict_ordinary(&self, body: &str) -> bool {
+        if !self.can_attach_fn_source(body) {
+            return false;
+        }
+        self.fn_infos
+            .borrow_mut()
+            .facts_mut(body)
+            .set_non_strict_ordinary();
+        true
+    }
+
     pub(crate) fn attach_fn_source(
         &self,
         body: &str,
