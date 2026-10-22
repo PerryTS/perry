@@ -48,3 +48,43 @@ fn array_sized_by_a_parsed_count_holds_only_elements() {
     assert_eq!(s.receivers, vec!["t.ts:V".to_string()], "{}", pf.dump_text());
     assert!(!s.top, "{}", pf.dump_text());
 }
+
+/// Every Math function returns a Number, through the HIR operation and
+/// through the `Math` namespace value (DECISIONS 53).
+#[test]
+fn math_results_are_numbers() {
+    let pf = facts(
+        r#"
+        const M: any = Math;
+        class A {
+          a: number; b: number;
+          constructor(s: string) { this.a = Math.max(s.length, 4); this.b = M.max(s.length, 4); }
+        }
+        const x = new A(process.argv.length > 9 ? "7" : "5");
+        console.log(x.a, x.b);
+    "#,
+    );
+    let t = tmpl(&pf, "A");
+    for k in ["a", "b"] {
+        assert_eq!(field(t, k).kind.desc(), "num", "{k}\n{}", pf.dump_text());
+    }
+}
+
+/// som.js Vector: `new Array(Math.max(idx + 1, 4))` holds only what is
+/// stored, never a string from the length.
+#[test]
+fn array_sized_by_math_max_holds_only_elements() {
+    let pf = facts(
+        r#"
+        class V { value: number; constructor() { this.value = 0; } }
+        function grow(idx: number) {
+          const s = new Array(Math.max(idx + 1, 4));
+          s[idx] = new V();
+          return s[idx].value;
+        }
+        console.log(grow(parseInt(process.argv[2] || "3", 10)));
+    "#,
+    );
+    let s = site(&pf, "value");
+    assert_eq!(s.receivers, vec!["t.ts:V".to_string()], "{}", pf.dump_text());
+}
