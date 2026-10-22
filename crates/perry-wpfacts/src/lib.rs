@@ -168,7 +168,8 @@ pub struct ProgramFacts {
     pub(crate) values_out: Vec<((String, String), units::ValueContract)>,
     /// What its calls pass to other units' closed functions (decision 13).
     pub(crate) args_out: Vec<(String, units::ArgContract)>,
-    /// Its store effects into other units' literal layouts (decision 17).
+    /// Its store effects into other units' literal layouts and class
+    /// instances (decision 17).
     pub(crate) stores_out: Vec<(String, String)>,
     pub(crate) reports: Vec<String>,
     module_digests: Vec<u64>,
@@ -360,7 +361,38 @@ fn fn_contract_of(
             },
         )
         .collect();
-    let reach = uses(true);
+    // What each parameter reaches, by the key it was read under (§18.4).
+    let marker_use = |t: model::Tok| g.m.marker_use.get(&t).copied().unwrap_or(0);
+    let reach: Vec<u8> = (0..fi.params.len() as u32)
+        .map(|i| {
+            let mk = g.m.marker_of[&(f, i)];
+            g.m.marker_reach.get(&mk).map_or(0, |&r| marker_use(r))
+        })
+        .collect();
+    let reach_keys: Vec<Vec<(String, u8)>> = (0..fi.params.len() as u32)
+        .map(|i| {
+            let mk = g.m.marker_of[&(f, i)];
+            let mut v: Vec<(model::Atom, u8)> = g
+                .m
+                .keyed_uses
+                .get(&mk)
+                .cloned()
+                .unwrap_or_default();
+            for &(a, r) in g.m.keyed_reach.get(&mk).into_iter().flatten() {
+                match v.iter_mut().find(|(k, _)| *k == a) {
+                    Some((_, u)) => *u |= marker_use(r),
+                    None => v.push((a, marker_use(r))),
+                }
+            }
+            let mut v: Vec<(String, u8)> = v
+                .into_iter()
+                .filter(|&(_, u)| u != 0)
+                .map(|(a, u)| (g.m.atoms[a as usize].clone(), u))
+                .collect();
+            v.sort();
+            v
+        })
+        .collect();
     let rets: Vec<model::NodeId> =
         g.m.contract_rets
             .iter()
@@ -452,6 +484,7 @@ fn fn_contract_of(
         closed,
         params,
         reach,
+        reach_keys,
         variadic: fi.rest.is_some() || fi.has_arguments,
         ret,
         ret_params: {
@@ -463,7 +496,25 @@ fn fn_contract_of(
             ret_reach
         },
         ret_unknown,
-        lexical_this: fi.lexical_this,
+        lexical_this: fi.lexical_this || !reads_this(g, f),
+    }
+}
+
+/// Function `f`'s body may read its receiver: `this` or `super` in it (or
+/// in a nested arrow), or a direct eval may (design §18.2: `ns.f()` passes
+/// the namespace as the receiver of a function that never reads it). A
+/// body not found among the module's functions may.
+fn reads_this(g: &gen::Gen, f: model::FnIdx) -> bool {
+    let fi = &g.m.funcs[f as usize];
+    if g.unit_in.is_some_and(|u| u.eval_scopes()) {
+        return true;
+    }
+    let Some((_, module)) = g.modules.get(fi.module as usize) else {
+        return true;
+    };
+    match module.functions.iter().find(|h| h.id == fi.func_id) {
+        Some(h) => h.body.iter().any(gen_call::stmt_reads_this),
+        None => true,
     }
 }
 

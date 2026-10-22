@@ -20,6 +20,7 @@ mod summary;
 mod super_heritage;
 mod unit_mode;
 mod unit_extends;
+mod unit_namespace;
 
 use crate::{compute, FactsConfig, ProgramFacts, Verdict};
 
@@ -1265,4 +1266,31 @@ fn a_store_into_a_marker_makes_no_field_of_it() {
     m.solve();
     assert!(m.marker_use.get(&mk).is_some_and(|u| u & MARK_ESCAPE != 0));
     assert!(!m.fields.contains_key(&(mk, x)), "a field of the marker");
+}
+
+#[test]
+fn a_keyed_use_reaches_every_marker_an_argument_marker_stands_for() {
+    use crate::model::MARK_ESCAPE;
+    // Design §18.4: argument marker `r2` stands for `r1` and `r3`. A use of
+    // what `r2` reaches under `inner` is a use of what each of them reaches
+    // under `inner`: `r1` is linked after the use (the callee read
+    // `p.inner` before the second caller's marker arrived), `r3` before.
+    let mut m = copy_solver_model();
+    let (n1, n2, n3) = (m.node_l("p1"), m.node_l("p2"), m.node_l("p3"));
+    let r1 = m.arg_marker(n1);
+    let r2 = m.arg_marker(n2);
+    let r3 = m.arg_marker(n3);
+    let a = m.atom("inner");
+    m.link_marker(r3, r2);
+    m.keyed_use(r2, a, MARK_ESCAPE);
+    m.link_marker(r1, r2);
+    for r in [r1, r3] {
+        assert!(
+            m.keyed_uses
+                .get(&r)
+                .is_some_and(|v| v.contains(&(a, MARK_ESCAPE))),
+            "{:?}",
+            m.keyed_uses
+        );
+    }
 }

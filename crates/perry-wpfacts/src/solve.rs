@@ -432,8 +432,16 @@ impl Model {
         self.fields.insert((t, a), n);
         self.field_keys.entry(t).or_default().push(a);
         self.rel(|| format!("fieldnode {n} {t} {a}"));
-        let any = self.field_any(t);
-        self.edge(any, n);
+        // A marker has no fields (`store_into`): its any-key field holds
+        // only its reach marker. Under a named key it holds that key's
+        // reach marker instead (design §18.4).
+        if self.is_marker(t) && !self.reach_marker.contains(&t) {
+            let r = self.keyed_reach_of(t, a);
+            self.add_tok(n, r);
+        } else {
+            let any = self.field_any(t);
+            self.edge(any, n);
+        }
         let all = self.all_fields(t);
         self.edge(n, all);
         // A key gained after a spread of `t`: the targets get it too.
@@ -1276,14 +1284,20 @@ impl Model {
         // A store into an existing data field of another unit's literal
         // layout opens nothing (§5): a store effect its defining unit
         // performs with an unknown value (decision 17). The value escapes:
-        // every other unit reads that field as unknown.
+        // every other unit reads that field as unknown. A class instance's
+        // field is existing when every instance holds it from its birth
+        // (definite): the store adds no key (CW2 C, binarytrees_arena).
         let effect = match (tm.and_then(|tm| self.foreign.get(&tm)), key) {
             (Some(facts), Key::Named(a)) if matches!(self.toks[t as usize], TokKind::Obj(..)) => {
-                facts.kind == "litclass"
-                    && facts
-                        .fields
-                        .iter()
-                        .any(|f| f.data_field && f.key == self.atoms[a as usize])
+                facts.fields.iter().any(|f| {
+                    f.data_field
+                        && f.key == self.atoms[a as usize]
+                        && match facts.kind {
+                            "litclass" => true,
+                            "class" => f.definite,
+                            _ => false,
+                        }
+                })
             }
             _ => false,
         };
