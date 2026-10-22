@@ -70,7 +70,8 @@ owned input. Native lookup errors currently map to `name-unresolvable`, matching
 the upstream Rust resolver limitation; distinguishing temporary/permanent native
 resolver failures requires a richer Turnloop result. Driver loss and admission
 failure trap. Literal and resolved IPv4-mapped IPv6 addresses are canonicalized
-as required by `resolve-next-address`. TCP/UDP interfaces remain unregistered.
+as required by `resolve-next-address`. TCP interfaces are registered below; UDP
+remains unregistered.
 
 Native Unix stdio integration requires the shared-ownership repair in
 [Turnloop #119](https://github.com/PerryTS/turnloop/pull/119). Published alpha.9
@@ -97,8 +98,8 @@ caller cannot consume another operation's completion. Cancelling a partial
 write disables further writes on that socket; a cancelled read retains native
 pending/buffered data for the next read.
 
-Linux development and production panic-abort validation passes all 160 provider
-tests (including eleven native TCP cases), plus 24/23 driver tests, doctests,
+Linux development and production panic-abort validation passes all 169 provider
+tests (including eleven native TCP and nine TCP WIT cases), plus 26/25 driver tests, doctests,
 all-target Clippy and the stdio overlap probe. Validation uses the immutable
 Turnloop revision `4340f396a2042722d3897f5c525295e1ef8032f7`, containing
 [bound TCP #120](https://github.com/PerryTS/turnloop/pull/120) and
@@ -115,7 +116,32 @@ concurrency conflict. Pending accepts own their listener reference and may
 outlive the caller's wrapper; accepted connections inherit the current options
 at completion, including changes made while acceptance was pending.
 
-TCP WIT interfaces are still unregistered. The WASI stream adapters, start/finish
-state, network-resource association and sync/async linker registration remain
-to be implemented and tested before this native layer is usable by components. Native TCP macOS/Windows qualification
-also remains; the upstream Turnloop matrix alone does not qualify this layer.
+TCP and TCP-create-socket interfaces are registered in both synchronous and
+asynchronous linkers. The adapter implements start/finish states, same-context
+network capability identity, readiness and typed errors. Socket pollables and
+input/output streams are child resources; accepted sockets have independent
+lifetimes. Stream reads/writes own bounded 64 KiB buffers, enforce output
+permits, and keep driver failures as repeatable traps. Receive shutdown cancels
+and acknowledges a pending read; send shutdown drains a pending write before
+FIN. Native shutdown progresses without further guest output polling.
+
+Each native resource has two cleanup task slots, separate from the ordinary
+work budget, so a saturated task budget cannot prevent either half from closing.
+Cleanup retains the native resource until completion or acknowledged cancellation;
+cloned handles share the two-slot limit. The executor reserves three times the
+ordinary task limit: ordinary tasks plus two cleanup tasks per live resource.
+Driver teardown cancels and joins all three classes of work.
+
+The TCP WIT tests include IPv4/IPv6, real 0.2.0 components against both linkers,
+capability identity and denial, failed connection closure, stream/pollable child
+ownership, accepted-socket options, EOF and half-close behavior, repeatable driver
+traps, and cleanup at a one-task limit. A bounded-window peer verifies all 64 KiB
+arrive before FIN after explicit shutdown or output drop, without output polling.
+Before the cleanup repair, regression tests reproduced a receive-shutdown
+capacity trap and a stream-drop FIN timeout; both now pass. The provider's normal
+dependency graph remains Tokio-free.
+
+Native TCP macOS/Windows qualification remains; the upstream Turnloop matrix
+alone does not qualify this layer. UDP, HTTP, provider selection in the component
+host and native WASI 0.3 integration also remain incomplete. No shipping dependency
+policy exception or unsupported-platform qualification is implied by these tests.

@@ -8,6 +8,8 @@ world providers {
   include wasi:random/imports@0.2.12;
   include wasi:filesystem/imports@0.2.12;
   import wasi:sockets/network@0.2.12;
+  import wasi:sockets/tcp@0.2.12;
+  import wasi:sockets/tcp-create-socket@0.2.12;
   import wasi:sockets/instance-network@0.2.12;
   import wasi:sockets/ip-name-lookup@0.2.12;
   import wasi:cli/environment@0.2.12;

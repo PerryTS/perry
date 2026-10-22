@@ -18,5 +18,5 @@ impl From<std::io::Error> for SocketError {
 /// WASI 0.2 network capability handle. Permissions live in the owning context,
 /// as in upstream Wasmtime; every use still validates this table resource.
 pub struct Network {
-    pub(crate) _priv: (),
+    pub(crate) identity: std::sync::Arc<()>,
 }

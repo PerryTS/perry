@@ -70,6 +70,7 @@ impl<T> LocalResource<T> {
 struct Remote {
     id: u64,
     submitter: Submitter,
+    cleanup: Arc<AtomicUsize>,
 }
 impl Drop for Remote {
     fn drop(&mut self) {
@@ -140,6 +141,39 @@ impl<T: 'static> Resource<T> {
             })
             .map(ResourceRequest)
     }
+
+    /// Run native teardown even when ordinary task admission is full. Only use
+    /// this for cleanup, such as closing the receive/send halves of a socket.
+    /// At most two cleanup tasks may be queued/running per resource (including
+    /// all cloned handles). Each retains the native resource and its budget
+    /// until completion or acknowledged cancellation, bounding executor use.
+    pub fn call_cleanup<F, Fut, R>(&self, make: F) -> Result<ResourceRequest<R>, Error>
+    where
+        F: FnOnce(ExecutorHandle<Platform>, LocalResource<T>) -> Fut + Send + 'static,
+        Fut: Future<Output = R> + 'static,
+        R: Send + 'static,
+    {
+        let remote = self.remote.clone();
+        let inner = remote.submitter.0.upgrade().ok_or(Error::Stopped)?;
+        remote
+            .cleanup
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |live| {
+                (live < 2).then_some(live + 1)
+            })
+            .map_err(|_| Error::Capacity)?;
+        let permit = Permit(remote.cleanup.clone());
+        inner
+            .submit_admitted(permit, move |io, resources| async move {
+                let value = resources.get(remote.id)?;
+                drop(remote);
+                let result = make(io, value.clone()).await;
+                // Even a cleanup closure that ignores its argument cannot release
+                // the resource budget early and over-admit more cleanup tasks.
+                drop(value);
+                Ok(result)
+            })
+            .map(ResourceRequest)
+    }
 }
 
 impl Submitter {
@@ -187,7 +221,11 @@ impl Submitter {
                     Ok(value) => {
                         let id = resources.insert(value, permit)?;
                         Ok(Ok(Resource {
-                            remote: Arc::new(Remote { id, submitter }),
+                            remote: Arc::new(Remote {
+                                id,
+                                submitter,
+                                cleanup: Arc::new(AtomicUsize::new(0)),
+                            }),
                             marker: PhantomData,
                         }))
                     }

@@ -9,6 +9,8 @@
 //! The work limit includes queued and running tasks. Dropping a Request cancels
 //! its future; native I/O follows the lifetime of its owners. A separate resource
 //! budget retains persistent non-Send values between calls through Send handles.
+//! Each live resource also reserves two bounded cleanup tasks so teardown can
+//! progress when ordinary tasks are saturated. Cleanup retains its resource.
 //! Dropping the Driver cancels every task, releases the native resources and
 //! joins its owner, even when resource handles remain on the calling thread.
 //! There is no process-global runtime or detached provider future.
@@ -107,6 +109,7 @@ impl Driver {
         if limit == 0 {
             return Err(Error::Capacity);
         }
+        let executor_limit = limit.checked_mul(3).ok_or(Error::Capacity)?;
         let (send, receive) = mpsc::channel();
         let (ready_send, ready_receive) = mpsc::sync_channel(1);
         let worker = thread::Builder::new()
@@ -115,7 +118,7 @@ impl Driver {
                 let executor = LocalExecutor::<Platform>::with_config(
                     Config::default(),
                     ExecutorConfig {
-                        tasks: limit,
+                        tasks: executor_limit,
                         ..ExecutorConfig::default()
                     },
                 );
@@ -130,7 +133,7 @@ impl Driver {
                 if ready_send.send(Ok(notify)).is_err() {
                     return;
                 }
-                let mut tasks = Vec::with_capacity(limit);
+                let mut tasks = Vec::with_capacity(executor_limit);
                 let resources = Rc::new(resource::Resources::default());
                 'drive: loop {
                     tasks.retain(|task: &JoinHandle<()>| !task.is_finished());
@@ -286,7 +289,18 @@ impl Inner {
                 (live < self.limit).then_some(live + 1)
             })
             .map_err(|_| Error::Capacity)?;
-        let permit = Permit(self.live.clone());
+        self.submit_admitted(Permit(self.live.clone()), make)
+    }
+
+    fn submit_admitted<F, Fut, T>(&self, permit: Permit, make: F) -> Result<Request<T>, Error>
+    where
+        F: FnOnce(ExecutorHandle<Platform>, Rc<resource::Resources>) -> Fut + Send + 'static,
+        Fut: Future<Output = T> + 'static,
+        T: Send + 'static,
+    {
+        if self.stopped.load(Ordering::Acquire) {
+            return Err(Error::Stopped);
+        }
         let (send, receive) = oneshot::channel();
         let (abort, registration) = AbortHandle::new_pair();
         let factory: Factory = Box::new(move |executor, resources| {

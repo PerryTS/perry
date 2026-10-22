@@ -2,6 +2,7 @@ pub mod filesystem;
 pub mod ip_name_lookup;
 pub mod network;
 pub mod stdio;
+pub mod tcp;
 pub use filesystem::{FsError, FsResult};
 pub use network::{SocketError, SocketResult};
 mod host {
@@ -10,6 +11,7 @@ mod host {
     pub mod filesystem;
     pub mod instance_network;
     pub mod network;
+    pub mod tcp;
 }
 use crate::{
     clocks::{WasiClocks, WasiClocksCtxView},
@@ -24,6 +26,8 @@ pub mod bindings {
         world: "providers",
         require_store_data_send: true,
         imports: {
+            "wasi:sockets/tcp.[method]tcp-socket.start-bind": async | trappable,
+            "wasi:sockets/tcp.[method]tcp-socket.start-listen": async | trappable,
             "wasi:filesystem/types.[method]descriptor.advise": async | trappable,
             "wasi:filesystem/types.[method]descriptor.create-directory-at": async | trappable,
             "wasi:filesystem/types.[method]descriptor.get-flags": async | trappable,
@@ -55,6 +59,7 @@ pub mod bindings {
             "wasi:sockets/network.error-code" => crate::p2::SocketError },
         with: {
             "wasi:io": crate::io::bindings::wasi::io,
+            "wasi:sockets/tcp.tcp-socket": crate::p2::tcp::TcpSocket,
             "wasi:sockets/network.network": crate::p2::network::Network,
             "wasi:sockets/ip-name-lookup.resolve-address-stream": crate::p2::ip_name_lookup::ResolveAddressStream,
             "wasi:cli/terminal-input.terminal-input": crate::p2::stdio::TerminalInput,
@@ -72,7 +77,11 @@ pub mod bindings {
             "wasi:sockets/network.error-code" => crate::p2::SocketError },
             with: {
                 "wasi:io": crate::io::sync::wasi::io,
-                "wasi:sockets": crate::p2::bindings::sockets,
+                "wasi:sockets/network": crate::p2::bindings::sockets::network,
+                "wasi:sockets/instance-network": crate::p2::bindings::sockets::instance_network,
+                "wasi:sockets/ip-name-lookup": crate::p2::bindings::sockets::ip_name_lookup,
+                "wasi:sockets/tcp-create-socket": crate::p2::bindings::sockets::tcp_create_socket,
+                "wasi:sockets/tcp.tcp-socket": crate::p2::tcp::TcpSocket,
                 "wasi:clocks": crate::p2::bindings::clocks,
                 "wasi:random": crate::p2::bindings::random,
                 "wasi:cli": crate::p2::bindings::cli,
@@ -113,6 +122,16 @@ fn common<T: WasiView + 'static>(linker: &mut Linker<T>) -> wasmtime::Result<()>
         },
     )?;
     bindings::sockets::ip_name_lookup::add_to_linker::<T, crate::sockets::WasiSockets>(
+        linker,
+        |t| {
+            let view = t.ctx();
+            crate::sockets::WasiSocketsCtxView {
+                ctx: &mut view.ctx.sockets,
+                table: view.table,
+            }
+        },
+    )?;
+    bindings::sockets::tcp_create_socket::add_to_linker::<T, crate::sockets::WasiSockets>(
         linker,
         |t| {
             let view = t.ctx();
@@ -240,6 +259,13 @@ pub fn add_to_linker_sync<T: WasiView + 'static>(linker: &mut Linker<T>) -> wasm
             }
         },
     )?;
+    bindings::sync::sockets::tcp::add_to_linker::<T, crate::sockets::WasiSockets>(linker, |t| {
+        let view = t.ctx();
+        crate::sockets::WasiSocketsCtxView {
+            ctx: &mut view.ctx.sockets,
+            table: view.table,
+        }
+    })?;
     common(linker)
 }
 
@@ -257,5 +283,12 @@ pub fn add_to_linker_async<T: WasiView + 'static>(linker: &mut Linker<T>) -> was
             }
         },
     )?;
+    bindings::sockets::tcp::add_to_linker::<T, crate::sockets::WasiSockets>(linker, |t| {
+        let view = t.ctx();
+        crate::sockets::WasiSocketsCtxView {
+            ctx: &mut view.ctx.sockets,
+            table: view.table,
+        }
+    })?;
     common(linker)
 }

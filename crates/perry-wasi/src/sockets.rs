@@ -46,12 +46,14 @@ pub struct WasiSocketsCtx {
     pub(crate) submitter: Submitter,
     pub(crate) allow_ip_name_lookup: bool,
     tcp: TcpPolicy,
+    pub(crate) network_identity: Arc<()>,
 }
 impl WasiSocketsCtx {
     pub fn new(submitter: Submitter) -> Self {
         Self {
             submitter,
             allow_ip_name_lookup: false,
+            network_identity: Arc::new(()),
             tcp: TcpPolicy {
                 allowed: false,
                 check: Arc::new(|_, _| Box::pin(async { false })),

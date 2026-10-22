@@ -153,6 +153,19 @@ impl TcpSocket {
         Ok(())
     }
 
+    pub(crate) fn check_connect(&self, address: SocketAddr) -> SocketResult<()> {
+        if !matches!(self.state, State::Fresh { .. }) {
+            return Err(ErrorCode::InvalidState.into());
+        }
+        self.family.validate(address, true)
+    }
+    pub(crate) fn connection(&self) -> SocketResult<TcpConnection> {
+        match &self.state {
+            State::Connected { socket, .. } => Ok(TcpConnection(socket.clone())),
+            _ => Err(ErrorCode::InvalidState.into()),
+        }
+    }
+
     pub async fn connect(&mut self, address: SocketAddr) -> SocketResult<()> {
         if !matches!(self.state, State::Fresh { .. }) {
             return Err(ErrorCode::InvalidState.into());
@@ -535,5 +548,57 @@ fn remember_option(options: &mut Vec<SocketOption>, option: SocketOption) {
         *existing = option;
     } else {
         options.push(option);
+    }
+}
+
+/// Stream endpoints retain the transport independently of the socket wrapper.
+#[derive(Clone)]
+pub(crate) struct TcpConnection(Resource<NativeTcp>);
+impl TcpConnection {
+    pub(crate) fn read(
+        &self,
+        size: usize,
+    ) -> Result<ResourceRequest<Result<Vec<u8>, Failure>>, perry_component_io::Error> {
+        native::read(&self.0, size)
+    }
+    pub(crate) fn write(
+        &self,
+        bytes: Vec<u8>,
+    ) -> Result<ResourceRequest<Result<(), Failure>>, perry_component_io::Error> {
+        native::write(&self.0, bytes)
+    }
+    pub(crate) fn close_receive(
+        &self,
+        pending: Option<ResourceRequest<Result<Vec<u8>, Failure>>>,
+    ) -> Result<ResourceRequest<Result<(), Failure>>, perry_component_io::Error> {
+        if let Some(pending) = &pending {
+            pending.cancel();
+        }
+        self.0.call_cleanup(move |_, local| async move {
+            // Native requests contain only owned native bytes. Waiting here
+            // keeps cancellation and its acknowledgement on the same driver,
+            // without moving any guest state or callback to that thread.
+            if let Some(pending) = pending {
+                match pending.await {
+                    Ok(_) | Err(perry_component_io::Error::Cancelled) => (),
+                    Err(error) => return Err(Failure::Driver(error)),
+                }
+            }
+            let mut native = local.borrow_mut();
+            native.stream.shutdown_receive().map_err(Failure::from)
+        })
+    }
+    pub(crate) fn close_send(
+        &self,
+        pending: Option<ResourceRequest<Result<(), Failure>>>,
+    ) -> Result<ResourceRequest<Result<(), Failure>>, perry_component_io::Error> {
+        self.0.call_cleanup(move |_, local| async move {
+            if let Some(pending) = pending {
+                pending.await.map_err(Failure::Driver)??;
+            }
+            std::future::poll_fn(|cx| local.borrow_mut().stream.poll_shutdown(cx))
+                .await
+                .map_err(Failure::from)
+        })
     }
 }

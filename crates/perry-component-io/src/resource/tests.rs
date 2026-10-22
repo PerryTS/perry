@@ -370,3 +370,67 @@ fn persistent_tcp_allows_concurrent_read_and_write_and_closes_on_last_drop() {
         assert_eq!(driver.resources(), 0);
     });
 }
+
+#[test]
+fn cleanup_is_bounded_independent_and_retains_native_resource() {
+    bounded(|| {
+        let driver = Driver::new(1).unwrap();
+        let (value, dropped) = native(&driver);
+        let clone = value.clone();
+        let occupied = driver.submit(|_| pending::<()>()).unwrap();
+        let (started, receive) = mpsc::channel();
+        let first = value
+            .call_cleanup(move |_, _| async move {
+                started.send(()).unwrap();
+                pending::<()>().await;
+            })
+            .unwrap();
+        receive.recv_timeout(WATCHDOG).unwrap();
+        let second = clone.call_cleanup(|_, _| pending::<()>()).unwrap();
+        assert!(matches!(
+            value.call_cleanup(|_, _| async {}),
+            Err(Error::Capacity)
+        ));
+        assert!(matches!(value.call(|_, _| async {}), Err(Error::Capacity)));
+        assert_eq!(driver.outstanding(), 1);
+        first.cancel();
+        assert_eq!(block_on(first), Err(Error::Cancelled));
+        assert_eq!(
+            block_on(value.call_cleanup(|_, _| async { 42 }).unwrap()),
+            Ok(42)
+        );
+        drop(value);
+        drop(clone);
+        assert_eq!(driver.resources(), 1);
+        assert!(dropped.try_recv().is_err());
+        second.cancel();
+        assert_eq!(block_on(second), Err(Error::Cancelled));
+        dropped.recv_timeout(WATCHDOG).unwrap();
+        occupied.cancel();
+        assert_eq!(block_on(occupied), Err(Error::Cancelled));
+        assert_eq!(driver.resources(), 0);
+        assert_eq!(driver.outstanding(), 0);
+    });
+}
+
+#[test]
+fn driver_shutdown_cancels_saturated_cleanup_and_joins_native_owner() {
+    bounded(|| {
+        let driver = Driver::new(1).unwrap();
+        let (value, dropped) = native(&driver);
+        let occupied = driver.submit(|_| pending::<()>()).unwrap();
+        let cleanup = value.call_cleanup(|_, _| pending::<()>()).unwrap();
+        let second = value.call_cleanup(|_, _| pending::<()>()).unwrap();
+        drop(driver);
+        dropped.recv_timeout(WATCHDOG).unwrap();
+        assert_eq!(block_on(occupied), Err(Error::Stopped));
+        assert_eq!(block_on(cleanup), Err(Error::Stopped));
+        assert_eq!(block_on(second), Err(Error::Stopped));
+        assert!(matches!(
+            value.call_cleanup(|_, _| async {}),
+            Err(Error::Stopped)
+        ));
+        drop(value);
+        assert!(matches!(Driver::new(usize::MAX), Err(Error::Capacity)));
+    });
+}

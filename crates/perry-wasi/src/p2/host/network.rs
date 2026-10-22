@@ -19,6 +19,9 @@ impl network::Host for WasiSocketsCtxView<'_> {
 
     fn network_error_code(&mut self, err: Resource<Error>) -> wasmtime::Result<Option<ErrorCode>> {
         let err = self.table.get(&err)?;
+        if let Some(code) = err.downcast_ref::<ErrorCode>() {
+            return Ok(Some(*code));
+        }
 
         if let Some(err) = err.downcast_ref::<std::io::Error>() {
             return Ok(Some(ErrorCode::from(err)));

@@ -6,7 +6,9 @@ use wasmtime::component::Resource;
 
 impl instance_network::Host for WasiSocketsCtxView<'_> {
     fn instance_network(&mut self) -> Result<Resource<Network>, wasmtime::Error> {
-        let network = Network { _priv: () };
+        let network = Network {
+            identity: self.ctx.network_identity.clone(),
+        };
         let network = self.table.push(network)?;
         Ok(network)
     }
