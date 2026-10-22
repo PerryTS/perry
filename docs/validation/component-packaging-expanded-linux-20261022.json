@@ -1,0 +1,314 @@
+{
+  "run": 39827473005,
+  "artifact": 12457012949,
+  "artifact_sha256": "ee3115787d39d21c641ffe1afd12208a36882ced6cab7399e511408245c63a6f",
+  "source": "1f36aa7bdeaa70680acc98cb2f443f2194681bdf",
+  "native_phases": 20,
+  "command_phases": 5,
+  "outer_phases": 7,
+  "udp": 6,
+  "tcp": 3,
+  "retained_sha256": {
+    "qualification.json": "c63306b49d9cebde43d828b552088f16ade87612148489bc9800527c636a9ee5",
+    "results.json": "f2e13975d1a4e298a165f3105102653c75fcf9fb31fa71ed9b2db020e5eb63b2",
+    "missing-engine.log": "9ed62be06e5e76408bf865d9753275d1de8913f4fa37bc4b5b8ca47267261dcd",
+    "ordinary-compile.log": "c5eea768c35b76b311295dcff464bf2eaf2fa051009fa4052c787d3c7b2f949a",
+    "ordinary-run.log": "4aba6e247eda1432b75c2bb8b6dd22d043a239a20ae90e855107521c19bf1df1",
+    "guest-bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "command-acceptance.log": "b5110608ece7ae69db8a5c67d33b6a1d03edaf75f7670799999fa633ed7eb960",
+    "bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "native-acceptance.log": "aabc008f0a125bc42786f2a6d613b262a7ecd391c8ba49bed2c8cd86c7adba3a",
+    "acceptance/resources-compile.log": "6efb233ac2245c7d0a350256a1f164c1236235892109092b9da83aeeb120c934",
+    "acceptance/resources-componentize.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "acceptance/network-guest.log": "a06b5e0fac145808c1e5633752a9df919560fc73f8f3ed5efd3936aaeb26876f",
+    "acceptance/resources-run.log": "b8a54ea58f0dc70699e0d16a2976c585a0fa10352f7f5678a6273df2922a1463",
+    "acceptance/network-bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "acceptance/network-run.log": "c4336507eed44ca20a5cb78342264ee5447dede57d09ea7c5fdc1a59a3f14696",
+    "acceptance/host-resources-bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "acceptance/host-resources-compile.log": "19048f529d9fc670a7c41453e4eb0a7a90e04ca921a52d3aed78fa3eee21f3c4",
+    "acceptance/rust-guest.log": "ace533d6ffb05555708faded30e54714c616136407332c50b96e79895852edf5",
+    "acceptance/resources-guest.log": "0d31721ced00450e85d0c2889cd35fa6da341bfc816af69172a1aece4da6fed4",
+    "acceptance/results.json": "588151eaee680f2b7311dd1403ae5a1ae9f9fdee2c6228b8492be7b02e5b7e0e",
+    "acceptance/host-resources-componentize.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "acceptance/network-componentize.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "acceptance/resources-bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "acceptance/host-resources-guest.log": "88c91123aa845c876934501176dfbe6c5b06e3cb0f4a7c64e76180e72a7eb555",
+    "acceptance/run-host.log": "cb43de132c0975d5f3f57bf550a7b7ef62cc6e54749e8c276f13abcd7a0ffcb9",
+    "acceptance/network-compile.log": "9c4273a056204595b9d9420b35a3ad8c58d06a76b8a3c468317d8ca7c40a55c5",
+    "acceptance/componentize.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "acceptance/network-peer.json": "2d3f1ed9a5a3b8e998660478c0394e54dd70ded9fe50cae3042d2bbd5fd0faa1",
+    "acceptance/host-resources-run.log": "2f594608248273a64e7352c7ee8b1b654a2b3b9097f1b30bdbf686d91abc8fd5",
+    "acceptance/compile-host.log": "f458717cc7c6c65a4aa61c1f6838de8356f2e570c0fb6948b5b370fcb7c8ea9e",
+    "acceptance/bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "commands/rust-command.log": "9b8f62227c2311dbf828768159c9f7c179e735872fe9f77512d1aaba48d08131",
+    "commands/command-run.log": "1b0adbc0510e90d11d55328f6c51057bae79fb0c3e0784d2be2d0de0f85c6ac2",
+    "commands/command-library-compile.log": "d02a0e97916f52a0495a1af3e7ff81f8aae25a1836d1097f99a3d7c453c98fc9",
+    "commands/results.json": "0916333ee7e5af03ae0b5711a3ec263c19105877b6a8cd0cb29eddfcf3778dd5",
+    "commands/command-compile.log": "ddd243fa151a6fc235c87457fadc0a80ed1b27f40e6ec8d06187a2bc741d88fc",
+    "commands/command-library-run.log": "f50c97dd197f3457477e055176c0557f2afeedf98d3d1874609f38717925b7f6"
+  },
+  "qualification": {
+    "sourceRevision": "1f36aa7bdeaa70680acc98cb2f443f2194681bdf",
+    "target": "x86_64-unknown-linux-gnu",
+    "passed": true,
+    "archive": {
+      "name": "perry-linux-x86_64.tar.gz",
+      "sha256": "159dc1074b7f1f1bd8e11ccaffb7a4da2496a25e65e3c7129b5c31970c5f44e5",
+      "bytes": 513997542
+    },
+    "installedFiles": {
+      "libperry_component_host.a": {
+        "bytes": 245619712,
+        "sha256": "25c9db2cef091593f6403fbca6ac94a6e84fa9ad765746fea987a376f3afd4bb"
+      },
+      "libperry_runtime.a": {
+        "bytes": 71958328,
+        "sha256": "7cc9bdcec8d11f310e2ef984fee2d463a7579f7c9344ca607b72da0d6714c445"
+      },
+      "libperry_runtime.a.gc-effects": {
+        "bytes": 321788,
+        "sha256": "144d2f0704eb760e85e0d1cb27b6a83275ce97ee623435a8c52875d7d1b404e3"
+      },
+      "libperry_stdlib.a": {
+        "bytes": 148014386,
+        "sha256": "ef066d61e72c98f9f0bd84ff5007068e8189606d8878fbff3d2adeecf51ae572"
+      },
+      "perry": {
+        "bytes": 101959152,
+        "sha256": "7e8121bb3ea652a7f53b32bc811d62bcd3613d66c8a5fb1ddabaaa727fa083d3"
+      },
+      "perry-wit": {
+        "bytes": 3175728,
+        "sha256": "041860e324c28b53c0abd7dc5ef4c280480440c5cba7be6cc25f7c601df79a50"
+      }
+    },
+    "phases": [
+      {
+        "name": "bindings",
+        "exitCode": 0,
+        "expectedExit": 0,
+        "passed": true,
+        "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "guest-bindings",
+        "exitCode": 0,
+        "expectedExit": 0,
+        "passed": true,
+        "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "ordinary-compile",
+        "exitCode": 0,
+        "expectedExit": 0,
+        "passed": true,
+        "logSha256": "c5eea768c35b76b311295dcff464bf2eaf2fa051009fa4052c787d3c7b2f949a"
+      },
+      {
+        "name": "ordinary-run",
+        "exitCode": 0,
+        "expectedExit": 0,
+        "passed": true,
+        "logSha256": "4aba6e247eda1432b75c2bb8b6dd22d043a239a20ae90e855107521c19bf1df1"
+      },
+      {
+        "name": "missing-engine",
+        "exitCode": 1,
+        "expectedExit": 1,
+        "passed": true,
+        "logSha256": "9ed62be06e5e76408bf865d9753275d1de8913f4fa37bc4b5b8ca47267261dcd"
+      },
+      {
+        "name": "native-acceptance",
+        "exitCode": 0,
+        "expectedExit": 0,
+        "passed": true,
+        "logSha256": "aabc008f0a125bc42786f2a6d613b262a7ecd391c8ba49bed2c8cd86c7adba3a"
+      },
+      {
+        "name": "command-acceptance",
+        "exitCode": 0,
+        "expectedExit": 0,
+        "passed": true,
+        "logSha256": "b5110608ece7ae69db8a5c67d33b6a1d03edaf75f7670799999fa633ed7eb960"
+      }
+    ],
+    "nativeAcceptance": [
+      {
+        "name": "rust-guest",
+        "exitCode": 0,
+        "seconds": 16.382,
+        "log": "/home/runner/work/_temp/perry-component-release-validation/acceptance/rust-guest.log"
+      },
+      {
+        "name": "componentize",
+        "exitCode": 0,
+        "seconds": 0.004,
+        "log": "/home/runner/work/_temp/perry-component-release-validation/acceptance/componentize.log"
+      },
+      {
+        "name": "bindings",
+        "exitCode": 0,
+        "seconds": 0.002,
+        "log": "/home/runner/work/_temp/perry-component-release-validation/acceptance/bindings.log"
+      },
+      {
+        "name": "compile-host",
+        "exitCode": 0,
+        "seconds": 3.472,
+        "log": "/home/runner/work/_temp/perry-component-release-validation/acceptance/compile-host.log"
+      },
+      {
+        "name": "run-host",
+        "exitCode": 0,
+        "seconds": 0.165,
+        "log": "/home/runner/work/_temp/perry-component-release-validation/acceptance/run-host.log"
+      },
+      {
+        "name": "resources-guest",
+        "exitCode": 0,
+        "seconds": 0.164,
+        "log": "/home/runner/work/_temp/perry-component-release-validation/acceptance/resources-guest.log"
+      },
+      {
+        "name": "resources-componentize",
+        "exitCode": 0,
+        "seconds": 0.006,
+        "log": "/home/runner/work/_temp/perry-component-release-validation/acceptance/resources-componentize.log"
+      },
+      {
+        "name": "resources-bindings",
+        "exitCode": 0,
+        "seconds": 0.004,
+        "log": "/home/runner/work/_temp/perry-component-release-validation/acceptance/resources-bindings.log"
+      },
+      {
+        "name": "resources-compile",
+        "exitCode": 0,
+        "seconds": 3.473,
+        "log": "/home/runner/work/_temp/perry-component-release-validation/acceptance/resources-compile.log"
+      },
+      {
+        "name": "resources-run",
+        "exitCode": 0,
+        "seconds": 0.215,
+        "log": "/home/runner/work/_temp/perry-component-release-validation/acceptance/resources-run.log"
+      },
+      {
+        "name": "network-guest",
+        "exitCode": 0,
+        "seconds": 0.465,
+        "log": "/home/runner/work/_temp/perry-component-release-validation/acceptance/network-guest.log"
+      },
+      {
+        "name": "network-componentize",
+        "exitCode": 0,
+        "seconds": 0.008,
+        "log": "/home/runner/work/_temp/perry-component-release-validation/acceptance/network-componentize.log"
+      },
+      {
+        "name": "network-bindings",
+        "exitCode": 0,
+        "seconds": 0.008,
+        "log": "/home/runner/work/_temp/perry-component-release-validation/acceptance/network-bindings.log"
+      },
+      {
+        "name": "network-compile",
+        "exitCode": 0,
+        "seconds": 4.176,
+        "log": "/home/runner/work/_temp/perry-component-release-validation/acceptance/network-compile.log"
+      },
+      {
+        "name": "network-run",
+        "exitCode": 0,
+        "seconds": 1.969,
+        "log": "/home/runner/work/_temp/perry-component-release-validation/acceptance/network-run.log"
+      },
+      {
+        "name": "host-resources-guest",
+        "exitCode": 0,
+        "seconds": 0.164,
+        "log": "/home/runner/work/_temp/perry-component-release-validation/acceptance/host-resources-guest.log"
+      },
+      {
+        "name": "host-resources-componentize",
+        "exitCode": 0,
+        "seconds": 0.004,
+        "log": "/home/runner/work/_temp/perry-component-release-validation/acceptance/host-resources-componentize.log"
+      },
+      {
+        "name": "host-resources-bindings",
+        "exitCode": 0,
+        "seconds": 0.004,
+        "log": "/home/runner/work/_temp/perry-component-release-validation/acceptance/host-resources-bindings.log"
+      },
+      {
+        "name": "host-resources-compile",
+        "exitCode": 0,
+        "seconds": 3.924,
+        "log": "/home/runner/work/_temp/perry-component-release-validation/acceptance/host-resources-compile.log"
+      },
+      {
+        "name": "host-resources-run",
+        "exitCode": 0,
+        "seconds": 0.265,
+        "log": "/home/runner/work/_temp/perry-component-release-validation/acceptance/host-resources-run.log"
+      }
+    ],
+    "commandAcceptance": [
+      {
+        "name": "rust-command",
+        "exitCode": 0,
+        "seconds": 0.265,
+        "log": "/home/runner/work/_temp/perry-component-release-validation/commands/rust-command.log"
+      },
+      {
+        "name": "command-compile",
+        "exitCode": 0,
+        "seconds": 3.323,
+        "log": "/home/runner/work/_temp/perry-component-release-validation/commands/command-compile.log"
+      },
+      {
+        "name": "command-run",
+        "exitCode": 0,
+        "seconds": 2.12,
+        "log": "/home/runner/work/_temp/perry-component-release-validation/commands/command-run.log"
+      },
+      {
+        "name": "command-library-compile",
+        "exitCode": 0,
+        "seconds": 3.274,
+        "log": "/home/runner/work/_temp/perry-component-release-validation/commands/command-library-compile.log"
+      },
+      {
+        "name": "command-library-run",
+        "exitCode": 0,
+        "seconds": 2.371,
+        "log": "/home/runner/work/_temp/perry-component-release-validation/commands/command-library-run.log"
+      }
+    ],
+    "acceptanceArtifactSha256": {
+      "/home/runner/work/perry/perry/target-component-release-tools/prod/examples/componentize": "c8c55e357fd9c72a6025de2f63f0860c247ab831af45c97f63aca15651e50952",
+      "/home/runner/work/_temp/perry-component-release-validation/acceptance/transform/transform.component.wasm": "5175bce31b3a083c7c104ebb3579d44335482321c15cbd9391f6318c2b9e8d3e",
+      "/home/runner/work/_temp/perry-component-release-validation/acceptance/transform/host": "aee9eac1a7dd8c257f60c52504c3c806b02f9f2204d28c64586f5251eb1fcc3e",
+      "/home/runner/work/_temp/perry-component-release-validation/acceptance/resources/resources.component.wasm": "33707851b13cb53f91fa6038603f485e4c7d5e3d93e91f203a6239617e83f926",
+      "/home/runner/work/_temp/perry-component-release-validation/acceptance/resources/host": "06bce3d0742b6d3e543b5689a9577d6689b4be303189f49a58357377d05a8383",
+      "/home/runner/work/_temp/perry-component-release-validation/acceptance/network/network.component.wasm": "4b64463028336bf7b53106c878ed3af3af2927162ecd3a90c7486b09207bb583",
+      "/home/runner/work/_temp/perry-component-release-validation/acceptance/network/host": "49f9ffc5789f764746c2fb0952c13978495b1c606d30803c133599b3c2559a64",
+      "/home/runner/work/_temp/perry-component-release-validation/acceptance/host-resources/host-resources.component.wasm": "c9daa55570ea0bc714aebbe35ad497e60cc3e801bfc4db29bda3328397736e9a",
+      "/home/runner/work/_temp/perry-component-release-validation/acceptance/host-resources/host": "90206e137e5a914509b6071ed02b27dc37919affc0ac004ded969e34da007e6e",
+      "/home/runner/work/_temp/perry-component-release-validation/commands/command": "137e1dc1f9bc734d816987a804f890e8a6ec59f2a4e55e0b2c8d9aad6c5f61c3",
+      "/home/runner/work/_temp/perry-component-release-validation/commands/command-library": "f98ceb8a2464ed9ab68e3a1d06603629ab6a62c3b8db276eb5e35e2f9b71bfca",
+      "/home/runner/work/_temp/perry-component-release-validation/commands/rust-target/wasm32-wasip2/release/perry-component-command-fixture.wasm": "78d46920804d2bb137e4a6d5b525e8e3d157407f0f5d87decc7a619856fcffb6"
+    },
+    "scope": "Final release archive: isolated linking, WIT generators, typed calls, guest/host resources, callbacks, GC, disposal, TCP/UDP/DNS, commands and nested command/library execution; no instrumented-GC claim"
+  },
+  "run_url": "https://github.com/PerryTS/perry/actions/runs/39827473005",
+  "limits": [
+    "Linux GNU x86_64 production release archive only",
+    "No expanded npm pack/unpack qualification yet",
+    "No instrumented moving-GC claim from these production artifacts",
+    "Windows ordinary compilation failed; executable-relative lookup repaired separately at e6616104a262ba243262b9cf6959520a9187a51c",
+    "macOS expanded qualification pending"
+  ]
+}

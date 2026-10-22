@@ -91,7 +91,18 @@ WASI commands, including commands nested inside active library callbacks. All
 20 normal library phases and five command phases must pass; partial or duplicate
 phase sets cannot qualify an archive.
 The receipt records archive, installed-file and executable identities. Expanded
-ABI 5 production qualification remains pending. The earlier production profile
+The expanded ABI 5 Linux GNU x86_64 production archive passes seven outer
+checks, all 20 library phases and five command phases at source
+`1f36aa7bdeaa70680acc98cb2f443f2194681bdf`. Verification checks the downloaded
+artifact digest, phase sets, seven outer log hashes, six UDP/three TCP payloads
+and 37 retained file hashes. The engine archive is 245,619,712 bytes; the full
+release archive is 513,997,542 bytes. See the
+[expanded Linux receipt](validation/component-packaging-expanded-linux-20261022.json).
+Expanded npm transport and macOS/Windows production qualification remain open.
+Windows exposed a native archive lookup omission, repaired separately with
+executable-relative discovery and architecture-isolation regressions.
+
+The earlier production profile
 passed six outer checks and 15 library phases on Linux and macOS. Its Linux
 engine measured 235,912,106 bytes raw and 39,653,474 bytes after npm compression;
 the complete Linux npm tarball was 208,099,510 bytes. Unpacking that package,
