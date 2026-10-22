@@ -119,12 +119,16 @@ impl Model {
         // a marker into a parameter node too (DECISIONS 44).
         if self.nodes[dst as usize].param
             && !self.param_marker.is_empty()
-            && Tokens::Delivery(delta, dst).iter().any(|&t| self.is_marker(t))
+            && Tokens::Delivery(delta, dst)
+                .iter()
+                .any(|&t| self.is_marker(t))
         {
             return false;
         }
         if !self.marker_top.is_empty()
-            && Tokens::Delivery(delta, dst).iter().any(|&t| self.marker_is_top(t))
+            && Tokens::Delivery(delta, dst)
+                .iter()
+                .any(|&t| self.marker_is_top(t))
         {
             return false;
         }
