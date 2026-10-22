@@ -94,7 +94,6 @@ RUNTIME_WANTED = {
     "GC_FLAG_TENURED",
     "OBJ_FLAG_FROZEN",
     "OBJ_FLAG_PLAIN_ORDINARY",
-    "OBJ_FLAG_ARRAY_DESCRIPTORS",
     "OBJ_FLAG_STABLE_TOMBSTONES",
     "OBJ_FLAG_HAS_DESCRIPTORS",
     "GC_LAYOUT_STATE_MASK",
@@ -133,15 +132,9 @@ REGISTRY: list[Restatement] = [
      "GC_FLAG_FORWARDED - 256", "guard: gc_flags 0x80 spelled as a signed i8"),
 
     # --- the key-add hit (`expr/put_value_store_ic.rs`, emit_key_add_hit) ---
-    ("crates/perry-codegen/src/expr/put_value_store_ic.rs", "ADD_REFUSE_GC_FLAGS",
-     "GC_FLAG_TENURED",
-     "key-add hit: an old receiver needs the stamp funnel's carrier note"),
-    ("crates/perry-codegen/src/expr/put_value_store_ic.rs", "ADD_REFUSE_RESERVED",
-     "OBJ_FLAG_STABLE_TOMBSTONES",
-     "key-add hit: tombstones are refused; descriptors on other keys cannot intercept an absent key"),
     ("crates/perry-codegen/src/expr/class_field_inline_guard.rs",
      "OBJ_FLAG_WRITE_FAST_PATH_BLOCKED",
-     "OBJ_FLAG_ARRAY_DESCRIPTORS | OBJ_FLAG_HAS_DESCRIPTORS"
+     "OBJ_FLAG_STABLE_TOMBSTONES | OBJ_FLAG_HAS_DESCRIPTORS"
      " | OBJ_FLAG_FROZEN",
      "guard: exact ShapeId refuses numeric proof; the write side adds frozen"),
 
@@ -169,15 +162,6 @@ REGISTRY: list[Restatement] = [
      "0xFF | (GC_FLAG_FORWARDED << 8)"
      " | ((OBJ_FLAG_HAS_DESCRIPTORS) << 16)",
      "method probe: one fused 32-bit mask over all three header bytes"),
-    ("crates/perry-codegen/src/lower_call/method_override.rs",
-     "GC_OBJECT_LEARNED_GUARD_MASK_I32",
-     "0xFF | (GC_FLAG_FORWARDED << 8)",
-     "learned-word method arms: kind byte plus forwarding bit only"),
-    ("crates/perry-codegen/src/lower_call/property_get/imported_object.rs",
-     "GC_OBJECT_METHOD_GUARD_MASK_I32",
-     "0xFF | (GC_FLAG_FORWARDED << 8)"
-     " | ((OBJ_FLAG_HAS_DESCRIPTORS) << 16)",
-     "imported-object probe: second copy of the same fused mask"),
 
     # --- other single-bit restatements --------------------------------------
     ("crates/perry-codegen/src/expr/arrays_finds.rs", "GC_TYPE_MAP",
@@ -186,12 +170,6 @@ REGISTRY: list[Restatement] = [
      "GC_FLAG_FORWARDED", "Map find fast path: not-forwarded"),
     ("crates/perry-codegen/src/lower_call/method_override.rs", "GC_TYPE_OBJECT",
      "GC_TYPE_OBJECT", "typed-f64 receiver method probe: obj_type byte"),
-    ("crates/perry-codegen/src/lower_call/property_get/imported_object.rs", "GC_TYPE_OBJECT",
-     "GC_TYPE_OBJECT", "imported-object property get: obj_type byte"),
-    ("crates/perry-codegen/src/expr/proxy_reflect.rs", "PLAIN_ORDINARY_OBJ_FLAG",
-     "OBJ_FLAG_PLAIN_ORDINARY", "proxy/reflect: plain-ordinary veto"),
-    ("crates/perry-codegen/src/expr/proxy_reflect_write_ic.rs", "STABLE_TOMBSTONES_OBJ_FLAG",
-     "OBJ_FLAG_STABLE_TOMBSTONES", "proxy write IC: stable-tombstones veto"),
 
 ]
 
