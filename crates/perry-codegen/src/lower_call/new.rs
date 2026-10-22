@@ -10,7 +10,6 @@ use perry_hir::types::Type as HirType;
 use perry_hir::Expr;
 
 use super::field_init::{apply_field_initializers_recursive, FieldInitMode};
-use super::lower_builtin_new;
 use super::new_ctor_args::{
     bind_inline_constructor_params, call_local_constructor_symbol, lower_constructor_arg,
     marshal_imported_ctor_args, restore_inline_constructor_scope, CaptureFill,
