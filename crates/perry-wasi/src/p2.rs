@@ -80,6 +80,7 @@ pub mod bindings {
     });
     pub use wasi::*;
     pub mod sync {
+        pub use crate::p2::command::CommandEntryPre as CommandPre;
         wasmtime::component::bindgen!({
             path: "wit", world: "providers", require_store_data_send: true,
             imports: { default: trappable },
@@ -329,4 +330,9 @@ pub fn add_to_linker_async<T: WasiView + 'static>(linker: &mut Linker<T>) -> was
         }
     })?;
     common(linker)
+}
+
+/// Typed command entry-point validation, independent of imported capabilities.
+pub mod command {
+    wasmtime::component::bindgen!({ path: "wit", world: "command-entry" });
 }

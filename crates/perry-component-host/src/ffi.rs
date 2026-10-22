@@ -78,6 +78,12 @@ fn respond(out: *mut Buffer, result: Result<Vec<u8>>) -> i32 {
     }
 }
 
+/// Release an engine-allocated reply buffer.
+///
+/// # Safety
+/// A non-null buffer must be an unmodified allocation returned by this engine,
+/// still owned by the caller and not previously freed. No references to its
+/// bytes may be used after this call.
 #[no_mangle]
 pub unsafe extern "C" fn perry_component_host_buffer_drop(buffer: Buffer) {
     if !buffer.data.is_null() {
@@ -89,6 +95,10 @@ pub unsafe extern "C" fn perry_component_host_buffer_drop(buffer: Buffer) {
 }
 
 /// A command owns its store for this call only; no callback bridge is exposed.
+/// # Safety
+/// Nonempty input spans must be valid initialized bytes for this call. `out`
+/// must be null or aligned, exclusively writable `Buffer` storage. Release any
+/// returned buffer exactly once with `perry_component_host_buffer_drop`.
 #[no_mangle]
 pub unsafe extern "C" fn perry_component_host_run_command(
     wasm: *const u8,
@@ -118,6 +128,15 @@ impl Drop for Reply {
     }
 }
 
+/// Construct an owned component bridge.
+///
+/// # Safety
+/// Nonempty input spans must be readable and initialized for this call. `error`
+/// must be null or aligned, exclusively writable `Buffer` storage. Callbacks
+/// and their context must remain valid for every embedding call until disposal;
+/// they must honor the ABI, return valid buffers for `free_callback`, and never
+/// unwind across the C boundary. Use the returned handle on its owning thread
+/// (except interrupt) and release it exactly once with the matching drop entry.
 #[no_mangle]
 pub unsafe extern "C" fn perry_component_host_new(
     wasm: *const u8,
@@ -236,6 +255,14 @@ unsafe fn bridge<'a>(handle: *mut c_void) -> Result<&'a Bridge> {
     Ok(&*handle.cast::<Bridge>())
 }
 
+/// Invoke a component export through its owning bridge.
+///
+/// # Safety
+/// `handle` must be null or a live handle returned by this engine, used on its
+/// owning thread without concurrent mutation or destruction. Nonempty spans
+/// must be valid initialized bytes for this call; `out` must be null or aligned,
+/// exclusively writable `Buffer` storage. Callback context must be live. Free
+/// a returned buffer exactly once through this engine's buffer-drop entry.
 #[no_mangle]
 pub unsafe extern "C" fn perry_component_host_call(
     handle: *mut c_void,
@@ -264,6 +291,13 @@ pub unsafe extern "C" fn perry_component_host_call(
     )
 }
 
+/// Dispose guest resources while retaining the bridge allocation.
+///
+/// # Safety
+/// `handle` must be null or a live engine handle used on its owning thread,
+/// without concurrent mutation or destruction. Callback context must remain
+/// valid through disposal. `out` must be null or aligned, exclusively writable
+/// `Buffer` storage; release returned buffers through this engine.
 #[no_mangle]
 pub unsafe extern "C" fn perry_component_host_dispose(
     handle: *mut c_void,
@@ -293,6 +327,13 @@ pub unsafe extern "C" fn perry_component_host_dispose(
     }
 }
 
+/// Drop one guest resource and report whether its ownership was released.
+///
+/// # Safety
+/// `handle` must be null or a live engine handle used on its owning thread,
+/// without concurrent mutation or destruction. The token span must be readable
+/// for `len` bytes, and callback context must be live. `out` must be null or
+/// aligned, exclusively writable `Buffer` storage; free replies through this engine.
 #[no_mangle]
 pub unsafe extern "C" fn perry_component_host_resource_drop(
     handle: *mut c_void,
@@ -319,6 +360,12 @@ pub unsafe extern "C" fn perry_component_host_resource_drop(
     }
 }
 
+/// Interrupt guest execution without entering its store.
+///
+/// # Safety
+/// `handle` must be null or a live handle returned by this engine and remain
+/// allocated until this call returns. This entry may run concurrently with
+/// execution; it must not race bridge destruction.
 #[no_mangle]
 pub unsafe extern "C" fn perry_component_host_interrupt(handle: *mut c_void) {
     if let Ok(bridge) = bridge(handle) {
@@ -326,6 +373,13 @@ pub unsafe extern "C" fn perry_component_host_interrupt(handle: *mut c_void) {
     }
 }
 
+/// Collect a guest resource, deferring nested calls while the store is busy.
+///
+/// # Safety
+/// `handle` must be null or a live engine handle used on its owning thread,
+/// without concurrent mutation or destruction. The request span must be readable
+/// for `len` bytes and callback context must be live. `out` must be null or
+/// aligned, exclusively writable `Buffer` storage; free replies through this engine.
 #[no_mangle]
 pub unsafe extern "C" fn perry_component_host_resource_collect(
     handle: *mut c_void,
@@ -357,6 +411,12 @@ pub unsafe extern "C" fn perry_component_host_resource_collect(
     }
 }
 
+/// Release the bridge without invoking guest code or embedding callbacks.
+///
+/// # Safety
+/// `handle` must be null or the unique, live handle returned by this engine.
+/// Call on its owning thread only after all calls and interrupts have returned.
+/// No pointer to the bridge may be used after this call.
 #[no_mangle]
 pub unsafe extern "C" fn perry_component_host_drop(handle: *mut c_void) {
     if !handle.is_null() {

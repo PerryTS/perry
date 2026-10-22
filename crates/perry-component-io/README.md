@@ -1,9 +1,10 @@
 # Component provider I/O
 
-This crate is the native I/O boundary for the Turnloop provider migration.
-It is not yet connected to `perry-component-host`, and does not itself implement
-WASI interfaces. The existing host still depends on `wasmtime-wasi`; the
-workspace's no-Tokio gate remains failing until those providers are replaced.
+This crate is the native I/O boundary used by `perry-component-host` through
+`perry-wasi`. It does not itself implement WASI interfaces. The workspace
+no-Tokio gate passes with the selected provider. The required Turnloop repairs
+are currently qualified with an external validation patch; see
+[`perry-wasi` provenance](../perry-wasi/PROVENANCE.md) for release prerequisites.
 
 `Driver` owns a Turnloop executor on one native thread. A component context owns
 the driver. Its resources hold weak `Submitter` endpoints, which cannot keep the
@@ -67,8 +68,9 @@ cargo test --locked --profile prod -Z panic-abort-tests -p perry-component-io --
 cargo clippy --locked -p perry-component-io --all-targets -- -D warnings
 ```
 
-The next integration must retain the existing provider contracts: isolated
+The provider integration retains these contracts: isolated
 arguments/environment/preopens, traversal and symlink confinement, descriptor
 and stream lifetimes, explicit stdio, exact IP/port grants, TCP bind-before-connect,
-UDP peer restrictions, DNS opt-in and typed WASI errors. Passing this crate's
-tests is not evidence that those contracts, HTTP, or WASI 0.3 have been ported.
+UDP peer restrictions, DNS opt-in and typed WASI errors. Provider tests cover
+those contracts separately. HTTP, WASI 0.3 and complete platform qualification
+remain outstanding.

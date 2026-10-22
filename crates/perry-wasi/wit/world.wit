@@ -25,3 +25,9 @@ world providers {
   import wasi:cli/terminal-stdout@0.2.12;
   import wasi:cli/terminal-stderr@0.2.12;
 }
+
+// Export contract used by the one-shot command host; imported capabilities are
+// registered independently by the provider linker.
+world command-entry {
+  export wasi:cli/run@0.2.12;
+}

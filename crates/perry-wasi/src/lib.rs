@@ -1,5 +1,5 @@
-//! Turnloop WASI providers. Migration is in progress: this crate currently
-//! implements I/O, clocks, entropy and capability filesystems; it is not yet the host default.
+//! Turnloop WASI providers selected by the component host: I/O, clocks, entropy,
+//! CLI, capability filesystems, DNS, TCP and UDP. HTTP and native WASI 0.3 remain incomplete.
 pub mod cli;
 pub mod clocks;
 mod error;

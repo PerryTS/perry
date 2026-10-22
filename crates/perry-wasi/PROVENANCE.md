@@ -3,7 +3,9 @@
 This crate adapts WASI contracts and native helpers from Bytecode Alliance
 Wasmtime **48.0.5**, distributed under **Apache-2.0 WITH LLVM-exception**. The
 full license is in `LICENSE`. The source packages are `wasmtime-wasi` and
-`wasmtime-wasi-io`, both pinned to 48.0.5 in Perry's dependency lockfile.
+`wasmtime-wasi-io`, using their 48.0.5 sources. The selected host no longer
+depends on `wasmtime-wasi`; it retains the Tokio-free `wasmtime-wasi-io`
+resource contracts.
 
 Copied/adapted sources:
 
@@ -33,11 +35,11 @@ Synchronous bindings wait on native futures with `futures-lite`; I/O and timer
 work is owned and driven by Turnloop, with no ambient Tokio runtime.
 
 The current port includes WASI 0.2.12 I/O, clocks, random, CLI, capability
-filesystem, DNS, TCP and UDP interfaces. It is not yet selected by
+filesystem, DNS, TCP and UDP interfaces. It is selected by
 `perry-component-host`. HTTP and native WASI 0.3 remain to be ported;
-platform qualification is still required. No missing interface
-is implemented as a success stub. The workspace Tokio gate remains unchanged
-and will not pass until the old provider dependency is removed.
+platform and compiled-guest qualification are still required. No missing
+interface is implemented as a success stub. The unchanged workspace Tokio
+gate passes: no manifest edges, lockfile packages or Rust source references.
 
 Filesystem operations use explicit weak submission endpoints and Turnloop's
 bounded blocking pool. Only owned Rust/native handles and buffers cross the
@@ -85,8 +87,8 @@ adoptions. A validation-only override to Turnloop commit
 142 provider tests in both development and production panic-abort profiles,
 and 12/11 driver tests respectively. This is not a shipping dependency update:
 Perry's committed registry dependency and source policy are unchanged. Adopt the
-released repair and rerun platform qualification before selecting this provider
-in the component host.
+released repair and rerun platform qualification before shipping this provider
+selection.
 
 
 The native TCP state machine now supports explicit and implicit binding,
@@ -144,8 +146,8 @@ capacity trap and a stream-drop FIN timeout; both now pass. The provider's norma
 dependency graph remains Tokio-free.
 
 Native provider macOS/Windows qualification remains; the upstream Turnloop
-matrix alone does not qualify this layer. HTTP, provider selection in the
-component host and native WASI 0.3 integration also remain incomplete. No shipping dependency
+matrix alone does not qualify this layer. HTTP and native WASI 0.3 integration
+also remain incomplete. No shipping dependency
 policy exception or unsupported-platform qualification is implied by these tests.
 
 
@@ -184,4 +186,12 @@ This uses an external validation-only patch to immutable Turnloop revision
 previous repairs. Its own complete CI matrix is green, including Windows and
 WASI 0.3, but that does not replace Perry provider platform validation. The
 committed registry pin/source policy is unchanged; the provider dependency graph
-is Tokio-free while the workspace gate still requires removing the old provider.
+and the complete workspace Tokio gate are now clean.
+
+The component host now uses these providers for optional WASI imports and
+command execution. It preserves explicit capability configuration and validates
+command exports before initializers run. Linux qualification of this selection
+passes all 40 host tests, 181 provider tests and 26/25 driver tests in development
+and production panic-abort, plus doctests, all-target Clippy and stdio overlap.
+This is unit and canonical-component coverage; compiled Perry guest/runtime
+acceptance and platform/package qualification must still be rerun.

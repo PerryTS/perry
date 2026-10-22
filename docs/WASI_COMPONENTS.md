@@ -41,7 +41,7 @@ const status = runComponentCommand(bytes, {
 });
 ```
 
-This entry point enables the pinned Wasmtime-WASI 48.0.5 P2 providers
+This entry point enables Perry's Turnloop-backed P2 providers
 (`wasi:cli@0.2.12`, including `exit-with-code`; the original `exit(result)`
 operation is covered at 0.2.0). Omitted grants
 have the same closed filesystem, network, environment and stdio defaults as
@@ -92,7 +92,7 @@ Each stream can explicitly inherit its host counterpart with `inheritStdin`,
 options; there is no ambient environment inheritance option.
 
 Each preopen defaults to read-only. `readOnly: false` explicitly permits
-writes. Paths are resolved inside Wasmtime's directory capabilities, including
+writes. Paths use the capability primitives adapted from Wasmtime 48.0.5, including
 symlink and parent traversal checks. Permissions apply to the host directory
 at component creation; a nonexistent host directory fails the load.
 
@@ -109,8 +109,14 @@ With providers enabled, the `wasi:` import namespace is provider-owned;
 application callbacks cannot override it. Generated `ApplicationImports`
 omits those interfaces while preserving required custom functions. Unsupported
 interfaces still fail instantiation; enabling WASI does not enable `wasi:http`.
-The provider dependency is pinned to Wasmtime-WASI 48.0.5. This implements P2
-interfaces, not the P3 native async component ABI.
+Perry's `perry-wasi` providers adapt the WASI 0.2.12 contracts from Wasmtime
+48.0.5 and use Turnloop for native I/O. The selected host dependency graph and
+workspace gate are Tokio-free. The required Turnloop repairs are validated with
+an external patch and must be released before this selection ships; see
+[provider provenance](../crates/perry-wasi/PROVENANCE.md). The Linux provider and
+host unit suites pass; the historical compiled-guest receipts below predate this
+provider replacement. Fresh end-to-end and platform qualification remain.
+Native WASI 0.3 async interfaces and HTTP are not implemented by this provider.
 
 Flag declarations are limited to 1–32 labels, matching the
 [Component Model binary format](https://github.com/WebAssembly/component-model/blob/main/design/mvp/Binary.md#type-definitions).
