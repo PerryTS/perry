@@ -156,8 +156,9 @@ unsafe fn standalone_end(handle: i64, chunk: f64, callback: i64) {
         if committed {
             // The committed head already fixes status and date. Node end()
             // only consults the current strictContentLength option here.
-            let strict = super::response_payload::field(response_root.get(), b"strictContentLength")
-                .is_some_and(super::response_payload::truthy);
+            let strict =
+                super::response_payload::field(response_root.get(), b"strictContentLength")
+                    .is_some_and(super::response_payload::truthy);
             if let Some(sr) = super::response::response_state_mut(response_root.get()) {
                 sr.strict_content_length = strict;
             }

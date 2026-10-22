@@ -881,8 +881,8 @@ pub(crate) fn try_lower_instance_method_call(
             // prototypes keep their existing tower and argument lowering.
             let family_method_proof =
                 crate::codegen::static_prototype::chain(ctx, &class_name, property).is_some();
-            let observes_lookup = family_method_proof
-                && crate::expr::method_site::args_may_observe_lookup(ctx, args);
+            let observes_lookup =
+                family_method_proof && crate::expr::method_site::args_may_observe_lookup(ctx, args);
             // An observable argument needs a selection before it runs even
             // for a single/typed arm. The later layout guard still licenses
             // that arm's representation clone independently.

@@ -214,9 +214,7 @@ pub(crate) fn collect_literal_finals(
             } => match object.as_ref() {
                 Expr::LocalGet(owner) => builders
                     .get(owner)
-                    .and_then(|(props, _, _, _)| {
-                        props.iter().find(|(key, _)| key == property)
-                    })
+                    .and_then(|(props, _, _, _)| props.iter().find(|(key, _)| key == property))
                     .and_then(|(_, value)| match value {
                         Expr::Object(props) => Some(props.clone()),
                         Expr::New {
@@ -256,8 +254,7 @@ pub(crate) fn collect_literal_finals(
             }
         }
         if let Some(props) = props {
-            let capacity =
-                (props.len() as u32).max(crate::target_layout::INLINE_SLOT_FLOOR as u32);
+            let capacity = (props.len() as u32).max(crate::target_layout::INLINE_SLOT_FLOOR as u32);
             let birth_keys = props.len() as u32;
             builders.insert(id, (props, capacity, birth_keys, false));
         }

@@ -6427,8 +6427,7 @@ pub fn run_with_parse_cache(
                     hir_module,
                     &mut opts,
                 );
-                opts.program_facts =
-                    super::program_facts::view_for(&program_facts, path);
+                opts.program_facts = super::program_facts::view_for(&program_facts, path);
                 opts.program_facts.dynamic_code_reach =
                     ctx.patched_builtins.dynamic_code_reach.clone();
                 std::sync::Arc::make_mut(&mut opts.program_facts.elision).dynamic_code_reach =

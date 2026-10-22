@@ -276,6 +276,7 @@ pub mod turnloop_pool;
 // thread that could not get a loop of its own uses INSTEAD of keeping a tokio
 // driver alive — the single decline reason behind most of the remaining tokio
 // edges in the binding crates.
+pub mod component;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod turnloop_post;
 pub mod url;
@@ -283,7 +284,6 @@ pub mod v8;
 pub mod validators;
 pub mod value;
 pub mod wasi;
-pub mod component;
 mod wasm_instance_state;
 pub mod web_storage;
 /// WebAssembly host shims (issue #76). The wasmi-backed engine lives in the

@@ -266,11 +266,7 @@ pub(crate) fn declare_net_http(module: &mut LlModule) {
         &[I64, DOUBLE],
     );
     module.declare_function("js_node_http_res_req_handle", I64, &[I64]);
-    module.declare_function(
-        "js_node_http_res_write_head",
-        I64,
-        &[I64, DOUBLE, I64, I64],
-    );
+    module.declare_function("js_node_http_res_write_head", I64, &[I64, DOUBLE, I64, I64]);
     module.declare_function("js_node_http_res_write", I32, &[I64, DOUBLE]);
     // #4909: callback-aware write/end. chunk + raw (encoding?, callback?) tail;
     // write returns a NaN-boxed bool (DOUBLE) for backpressure.

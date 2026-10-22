@@ -12,7 +12,10 @@ use std::time::{Duration, Instant};
 fn nested_iifes_walk_each_body_once() {
     let mut body = "{ const o = { x: 1, y: 2 }; return o.x + a39; }".to_string();
     for i in (0..39).rev() {
-        body = format!("{{ return ((a{n}: number) => {body})({n}) + a{i}; }}", n = i + 1);
+        body = format!(
+            "{{ return ((a{n}: number) => {body})({n}) + a{i}; }}",
+            n = i + 1
+        );
     }
     let source = format!("export const r = ((a0: number) => {body})(0);\nconsole.log(r);\n");
     let mut cache = SourceCache::new();

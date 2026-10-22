@@ -825,7 +825,10 @@ fn lower_new_impl_inner<'a>(
             for (store_index, store) in plan.iter().enumerate() {
                 if let Some(key) = &store.family_key {
                     crate::expr::class_family_read::emit_slot_verify(
-                        ctx, &obj_handle, key, store.slot,
+                        ctx,
+                        &obj_handle,
+                        key,
+                        store.slot,
                     );
                 }
                 let (field_addr, child_bits) = {

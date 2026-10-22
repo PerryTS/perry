@@ -604,8 +604,10 @@ fn own_data_slot(
             let Some(entry) = crate::object::overflow::find_bytes(table, name) else {
                 return Some(None);
             };
-            let attrs =
-                crate::object::overflow::entry_attrs(table as *const crate::array::ArrayHeader, entry);
+            let attrs = crate::object::overflow::entry_attrs(
+                table as *const crate::array::ArrayHeader,
+                entry,
+            );
             if !crate::object::key_attrs::entry_is_plain_writable_data(attrs) {
                 return None;
             }

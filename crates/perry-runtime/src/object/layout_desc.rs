@@ -691,11 +691,15 @@ unsafe fn reserve_namespace_layout(desc: *const PerryLayoutDesc) -> u32 {
     }
     debug_assert_eq!((*desc).proto, LAYOUT_PROTO_NULL);
     let proposed = super::shapes::allocate_declared_layout_id(super::shapes::PROTO_ID_NULL);
-    match word.compare_exchange(LAYOUT_ID_CARRIED, proposed, Ordering::AcqRel, Ordering::Acquire) {
+    match word.compare_exchange(
+        LAYOUT_ID_CARRIED,
+        proposed,
+        Ordering::AcqRel,
+        Ordering::Acquire,
+    ) {
         Ok(_) => proposed,
-        Err(other) => {
-            registered_layout_id(other).expect("a carried layout word holds the sentinel or a ShapeId")
-        }
+        Err(other) => registered_layout_id(other)
+            .expect("a carried layout word holds the sentinel or a ShapeId"),
     }
 }
 

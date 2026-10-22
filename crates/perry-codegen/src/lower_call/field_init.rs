@@ -872,12 +872,9 @@ pub(crate) fn apply_field_initializers_recursive(
                 None => Expr::Undefined,
             };
             match &field.key_expr {
-                Some(_) => init_pairs.push((
-                    field.name.clone(),
-                    init,
-                    false,
-                    Some(field.name.clone()),
-                )),
+                Some(_) => {
+                    init_pairs.push((field.name.clone(), init, false, Some(field.name.clone())))
+                }
                 None => init_pairs.push((field.name.clone(), init, field.is_private, None)),
             }
         }

@@ -1668,7 +1668,11 @@ mod define_header_tests {
         f.linkage = "linkonce_odr".to_string();
         let header = f.define_header(true);
         assert!(header.starts_with("define weak_odr "), "{header}");
-        assert_eq!(f.define_header(false).replacen("linkonce_odr ", "weak_odr ", 1), header);
+        assert_eq!(
+            f.define_header(false)
+                .replacen("linkonce_odr ", "weak_odr ", 1),
+            header
+        );
     }
 
     /// `force_external` drops only the linkage keyword. The codegen-unit path

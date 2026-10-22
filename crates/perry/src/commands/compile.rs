@@ -15,8 +15,6 @@ mod apple_codesign;
 mod apple_info_plist;
 mod asset_manifest;
 mod asset_modules;
-mod module_aliases;
-mod module_prefixes;
 mod audit_manifest;
 mod bootstrap;
 mod build_cache;
@@ -25,6 +23,8 @@ mod bundle_ios;
 mod bundle_macos;
 mod compile_env;
 mod defines;
+mod module_aliases;
+mod module_prefixes;
 pub(crate) mod sync_program;
 // `pub(crate)` so `commands::deps` can reuse `cjs_wrap::detect`'s
 // comment/string masker for its source scans (D005) instead of duplicating a
@@ -60,8 +60,8 @@ mod parse_cache;
 mod post_link;
 mod precompile_capture;
 mod program_facts;
-mod reachability;
 mod reach_report;
+mod reachability;
 mod size_report;
 mod solid_config;
 mod tiny_program;
