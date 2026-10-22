@@ -23,10 +23,26 @@ are unchanged; their earlier bounded run is not a rerun of the whole module.
 The runtime correction validates only the fixed optional callback position in
 these three helpers, retaining the existing write dispatch. `cursorTo` overloads,
 global stream validation, valid zero-movement behavior, and other readline APIs
-are outside this change. Changed-source functional verification requires a
-coherent rebuilt artifact; source formatting alone is not a parity result.
-The historical counts below remain measurements of the original audit, not a
-current module-completion claim.
+are outside this change.
+
+Bounded functional verification used coherent artifacts with a separate
+recorded-source qualification: seven changed-source canonical singleton runs
+matched unnormalized Node output exactly. Independent verification then ran
+eight fresh baseline/fixed pairs (16 canonical singleton calls). The three
+original callback-validation targets and the new 25-row side-effect witness
+went RED to GREEN; the three direction/output controls remained four-way
+byte-identical across baseline/fixed Node and Perry output. The witness covers
+16 rejection-before-write rows and nine unchanged omitted/undefined/callable
+rows, preserving ANSI bytes, return values, and deferred callback counts.
+
+The eighth pair, `helpers/cursor-to-overloads.ts`, remains an unchanged baseline
+parity failure: baseline and fixed each report one failure, with identical
+respective Node and Perry output. It is not GREEN or waived. This proof covers
+only the selected source cohort, not the full module or latest main; it does
+not establish restoration of the original build's physical Git index. Local
+Rust checks/tests were not run; hosted CI is pending. The historical counts
+below remain measurements of the original audit, not a current
+module-completion claim.
 
 ## Fixed sources
 
