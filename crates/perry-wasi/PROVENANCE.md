@@ -60,3 +60,16 @@ failure traps. Process standard handles are borrowed through native duplicates.
 
 The copied sockets WIT file currently resolves CLI world references only. Socket
 implementations are still absent, and the provider world does not import them.
+
+Native Unix stdio integration requires the shared-ownership repair in
+[Turnloop #119](https://github.com/PerryTS/turnloop/pull/119). Published alpha.9
+restores flags per duplicate: closing one overlapping handle can make another
+live handle blocking, then leave the original host handle nonblocking after the
+last close. The repair also preserves terminal settings across overlapping
+adoptions. A validation-only override to Turnloop commit
+`5727b5c8a6d69fb486d8700d9ec3f019c4d2a63f` passes Perry's native overlap probe,
+142 provider tests in both development and production panic-abort profiles,
+and 12/11 driver tests respectively. This is not a shipping dependency update:
+Perry's committed registry dependency and source policy are unchanged. Adopt the
+released repair and rerun platform qualification before selecting this provider
+in the component host.
