@@ -1587,31 +1587,25 @@ fn get_field_by_name_past_data_probe(
                                 return JSValue::from_bits(v.to_bits());
                             }
                         }
-                        if key_bytes == b"constructor" {
-                            let v = js_get_global_this_builtin_value(b"Date".as_ptr(), 4);
-                            return JSValue::from_bits(v.to_bits());
-                        }
-                        // A Date method read as a *value* (`const f = d.getTime`,
-                        // `typeof d.toISOString`, `d.toJSON === Date.prototype.toJSON`)
-                        // resolves to the same thunk installed on `Date.prototype`.
-                        // The `d.method()` call form is handled by codegen's fast
-                        // path and never reaches here, so this only affects value
-                        // reads. Unknown keys still return undefined.
-                        let date_ctor = js_get_global_this_builtin_value(b"Date".as_ptr(), 4);
-                        let cv = JSValue::from_bits(date_ctor.to_bits());
-                        if cv.is_pointer() {
-                            let ctor_ptr =
-                                cv.as_pointer::<crate::closure::ClosureHeader>() as usize;
-                            let proto =
-                                crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
-                            let pv = JSValue::from_bits(proto.to_bits());
-                            if pv.is_pointer() {
-                                let proto_ptr = pv.as_pointer::<ObjectHeader>();
-                                if !proto_ptr.is_null() {
-                                    let m = js_object_get_field_by_name(proto_ptr, key);
-                                    if !m.is_undefined() {
-                                        return JSValue::from_bits(m.bits());
-                                    }
+                        // Everything else (`constructor`, a Date method read as
+                        // a *value*: `const f = d.getTime`, `typeof d.toISOString`,
+                        // `d.toJSON === Date.prototype.toJSON`) is a [[Get]] on the
+                        // cell's own [[Prototype]]: `Date.prototype` for a plain
+                        // Date, `D.prototype` (then `Date.prototype`) for an
+                        // instance of `class D extends Date`. The `d.method()`
+                        // call form is handled by codegen's fast path and never
+                        // reaches here. Unknown keys still return undefined.
+                        let receiver = f64::from_bits(
+                            crate::value::JSValue::pointer(addr as *const u8).bits(),
+                        );
+                        let proto = crate::date::date_cell_prototype(receiver);
+                        let pv = JSValue::from_bits(proto.to_bits());
+                        if pv.is_pointer() {
+                            let proto_ptr = pv.as_pointer::<ObjectHeader>();
+                            if !proto_ptr.is_null() {
+                                let m = js_object_get_field_by_name(proto_ptr, key);
+                                if !m.is_undefined() {
+                                    return JSValue::from_bits(m.bits());
                                 }
                             }
                         }
