@@ -15,6 +15,26 @@ and small high-water-mark differential controls preserve the existing boundary.
 No large-allocation/OOM probes, decoder modes, dictionary application, or general
 getter-order coverage are added. Historical audit measurements below are unchanged.
 
+## Callback settlement contract
+
+The callback-shape and options-overload fixtures also pin the Node 26.12.1
+public engine receiver: genuine Gzip/Gunzip and Transform identity, consumed
+`bytesWritten`, and inherited `on`/`emit`/`removeListener` behavior. Success
+receives `(null, Buffer)`; failure receives exactly one Error argument. Invalid
+gzip magic is a data error once two bytes arrive; a lone byte, a short method
+prefix, and a valid header without a complete payload remain truncated-input
+errors. Existing observations precede these additional checks.
+
+The callback implementation uses one real engine and one ZLIB provider across
+WRITE and a separately queued empty FINAL. It snapshots only the previously
+resolved effective level, preserving original validation and copy/getter order
+without newly applying ignored options. Codec release and owned input/output
+retirement precede user callbacks, including reentrant or throwing callbacks.
+Abandoned WRITE after-hook and construction/getter throws retain the existing
+GC-owned fallback, not an unconditional prompt-release guarantee. Runtime
+ownership and copy/getter-order witnesses accompany these public fixtures;
+they do not assert the stronger exceptional prompt-release claim.
+
 ## Locked sources
 
 - Node 26.5.0 commit [`bebd1b8d92bf4cc917844d6335ed1ecf9c2a75fb`][node-tree]:

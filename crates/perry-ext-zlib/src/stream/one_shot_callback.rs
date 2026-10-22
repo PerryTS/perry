@@ -19,11 +19,12 @@ extern "C" {
     ) -> f64;
 }
 
-// Only Rust-owned codec state and copied bytes cross the two completions.
+// Only Rust-owned input/output cross the two completions. The working codec
+// belongs exclusively to the real public engine in owner.engine.
 // The private ordinary owner is a traced closure capture, not a JS address in
 // native state. No constructor/prototype is installed for this attached cell.
 struct Completion {
-    codec: driver::Payload,
+    input: Vec<u8>,
     output: Vec<u8>,
 }
 static COMPLETION_VTABLE: ns::PayloadVTable = ns::payload_vtable::<Completion>(None);
@@ -163,24 +164,33 @@ extern "C" fn job(c: *const RawClosureHeader, _: JsThis) -> f64 {
 
 unsafe extern "C" fn run(context: *mut c_void) -> f64 {
     let call = &*(context as *const Call);
-    let input = if call.final_phase {
-        Vec::new()
-    } else {
-        read_input_from_bits(call.data.get().to_bits() as i64).unwrap()
-    };
+    let roots = TransientRootScope::enter();
     if !call.final_phase {
-        let codec = match call.codec {
-            0 => Codec::Gzip,
-            1 => Codec::Gunzip,
-            2 => Codec::Deflate,
-            3 => Codec::Inflate,
-            4 => Codec::DeflateRaw,
-            5 => Codec::InflateRaw,
-            6 => Codec::Unzip,
-            7 => Codec::BrotliCompress,
-            8 => Codec::BrotliDecompress,
-            9 => Codec::ZstdCompress,
-            10 => Codec::ZstdDecompress,
+        let input = read_input_from_bits(call.data.get().to_bits() as i64).unwrap();
+        let bytes = std::mem::size_of::<Completion>() + input.capacity();
+        // Transfer the copy BEFORE the deferred getter or inherited factory
+        // code can throw. Abandonment retains the existing native-GC fallback.
+        assert!(np::attach(
+            call.owner.get(),
+            &COMPLETION,
+            Completion {
+                input,
+                output: Vec::new()
+            },
+            bytes,
+        ));
+        let (codec, family) = match call.codec {
+            0 => (Codec::Gzip, &GZIP),
+            1 => (Codec::Gunzip, &GUNZIP),
+            2 => (Codec::Deflate, &DEFLATE),
+            3 => (Codec::Inflate, &INFLATE),
+            4 => (Codec::DeflateRaw, &DEFLATE_RAW),
+            5 => (Codec::InflateRaw, &INFLATE_RAW),
+            6 => (Codec::Unzip, &UNZIP),
+            7 => (Codec::BrotliCompress, &BROTLI_COMPRESS),
+            8 => (Codec::BrotliDecompress, &BROTLI_DECOMPRESS),
+            9 => (Codec::ZstdCompress, &ZSTD_COMPRESS),
+            10 => (Codec::ZstdDecompress, &ZSTD_DECOMPRESS),
             _ => unreachable!("private one-shot codec capture"),
         };
         let level = if matches!(codec, Codec::Gzip | Codec::Deflate | Codec::DeflateRaw) {
@@ -188,87 +198,123 @@ unsafe extern "C" fn run(context: *mut c_void) -> f64 {
         } else {
             Compression::default()
         };
-        let codec = driver::Payload::new(codec, level, 16384).unwrap();
-        let bytes = codec.external_bytes() + std::mem::size_of::<Vec<u8>>();
-        assert!(np::attach(
-            call.owner.get(),
-            &COMPLETION,
-            Completion {
-                codec,
-                output: Vec::new()
-            },
-            bytes
+        // The original callback path resolved only level. Do not re-read its
+        // getters or start applying previously ignored options in the factory.
+        let snapshot = roots.root_nanbox(f64::from_bits(
+            perry_ffi::alloc_null_proto_object(&[]).bits(),
         ));
+        np::own(snapshot.get(), "level", level.level() as f64);
+        let engine = roots.root_nanbox(create_stream(codec, family, snapshot.get(), None));
+        // Both jobs capture the ordinary owner; this field is traced/re-written.
+        // No JS address is hidden in Completion, and no second driver exists.
+        np::own(call.owner.get(), "engine", engine.get());
     }
+    let engine = roots.root_nanbox(field(call.owner.get(), "engine"));
     let mut consumed = 0;
     let error = loop {
-        // This borrow ends before any JS allocation, callback or GC. The
-        // input is an owned copy and each scratch result is copied at once.
-        let state = np::get_mut::<Completion>(call.owner.get(), &COMPLETION).unwrap();
-        let mut out = ns::StepOut {
-            consumed: 0,
-            out: std::ptr::null(),
-            out_len: 0,
-            status: ns::StepStatus::NEED_INPUT,
-            code: 0,
-            external_bytes: 0,
-        };
-        state.codec.step(
-            &ns::StepIn {
-                op: if call.final_phase {
-                    ns::StreamOp::FINAL
-                } else {
-                    ns::StreamOp::WRITE
+        let (status, error, codec_bytes, completion_bytes) = {
+            // No native borrow survives accounting, property writes or JS.
+            let state = np::get_mut::<Completion>(call.owner.get(), &COMPLETION).unwrap();
+            let codec = payload(engine.get()).unwrap();
+            let input = if call.final_phase {
+                &[][..]
+            } else {
+                state.input.as_slice()
+            };
+            let mut out = ns::StepOut {
+                consumed: 0,
+                out: std::ptr::null(),
+                out_len: 0,
+                status: ns::StepStatus::NEED_INPUT,
+                code: 0,
+                external_bytes: 0,
+            };
+            codec.step(
+                &ns::StepIn {
+                    op: if call.final_phase {
+                        ns::StreamOp::FINAL
+                    } else {
+                        ns::StreamOp::WRITE
+                    },
+                    flush_kind: 0,
+                    input: input.as_ptr().add(consumed),
+                    len: input.len() - consumed,
                 },
-                flush_kind: 0,
-                input: input.as_ptr().add(consumed),
-                len: input.len() - consumed,
-            },
-            &mut out,
-        );
-        consumed += out.consumed.min(input.len() - consumed);
-        if out.out_len > 0 {
-            state
-                .output
-                .extend_from_slice(std::slice::from_raw_parts(out.out, out.out_len));
-        }
-        let bytes =
-            state.codec.external_bytes() + std::mem::size_of::<Vec<u8>>() + state.output.capacity();
-        let error = if out.status == ns::StepStatus::ERROR {
-            Some((state.codec.error_details(out.code).0, out.code == 5))
-        } else {
-            None
+                &mut out,
+            );
+            consumed += out.consumed.min(input.len() - consumed);
+            if out.out_len > 0 {
+                state
+                    .output
+                    .extend_from_slice(std::slice::from_raw_parts(out.out, out.out_len));
+            }
+            let error = if out.status == ns::StepStatus::ERROR {
+                Some((codec.error_details(out.code).0, out.code == 5))
+            } else {
+                None
+            };
+            (
+                out.status,
+                error,
+                codec.external_bytes(),
+                std::mem::size_of::<Completion>()
+                    + state.input.capacity()
+                    + state.output.capacity(),
+            )
         };
-        np::set_external_bytes(call.owner.get(), &COMPLETION_VTABLE, bytes);
-        if error.is_some() || out.status != ns::StepStatus::MORE {
+        np::set_external_bytes(engine.get(), &CODEC_VTABLE, codec_bytes);
+        np::set_external_bytes(call.owner.get(), &COMPLETION_VTABLE, completion_bytes);
+        if error.is_some() || status != ns::StepStatus::MORE {
             break error;
         }
     };
+    // WRITE input is no longer needed. Drop its allocation rather than merely
+    // clearing length, and restate private accounting before publishing progress.
+    let completion_bytes = {
+        let state = np::get_mut::<Completion>(call.owner.get(), &COMPLETION).unwrap();
+        drop(std::mem::take(&mut state.input));
+        std::mem::size_of::<Completion>() + state.output.capacity()
+    };
+    np::set_external_bytes(call.owner.get(), &COMPLETION_VTABLE, completion_bytes);
+    progress(engine.get());
     if error.is_none() && !call.final_phase {
         return 1.0;
     }
-    let output = {
-        let state = np::get_mut::<Completion>(call.owner.get(), &COMPLETION).unwrap();
-        std::mem::take(&mut state.output)
-    };
-    // Release exactly once before invoking user code, including a callback
-    // that throws. The provider helper owns after hooks and deferred destroy.
-    np::close(call.owner.get(), &COMPLETION);
-    let roots = TransientRootScope::enter();
+    // The same public engine did the work. Its codec is closed once before
+    // allocating the result or invoking possibly reentrant/throwing user code.
+    release(engine.get());
     let err = roots.root_nanbox(if let Some((message, truncated)) = error {
-        js_zlib_stream_error(message.as_ptr(), message.len(), i32::from(truncated))
+        let err = js_zlib_stream_error(message.as_ptr(), message.len(), i32::from(truncated));
+        drop(message);
+        err
     } else {
         f64::from_bits(JsValue::NULL.bits())
     });
     let value = roots.root_nanbox(if err.get().to_bits() == JsValue::NULL.bits() {
-        value_bytes(&output)
+        let (ptr, len) = {
+            let state = np::get_mut::<Completion>(call.owner.get(), &COMPLETION).unwrap();
+            (state.output.as_ptr(), state.output.len())
+        };
+        // Rust storage stays attached to the rooted owner during allocation.
+        // No native reference crosses it; the factory copies these stable bytes.
+        value_bytes(std::slice::from_raw_parts(ptr, len))
     } else {
         f64::from_bits(UNDEFINED)
     });
-    perry_ffi::call_value(
-        call.callback.get(),
-        JsThis::UNDEFINED,
-        &[err.get(), value.get()],
-    );
+    // Close drops output capacity too, even when user code throws past Rust Drop.
+    np::close(call.owner.get(), &COMPLETION);
+    if err.get().to_bits() == JsValue::NULL.bits() {
+        perry_ffi::call_value(
+            call.callback.get(),
+            JsThis::from_f64(engine.get()),
+            &[err.get(), value.get()],
+        );
+    } else {
+        perry_ffi::call_value(
+            call.callback.get(),
+            JsThis::from_f64(engine.get()),
+            &[err.get()],
+        );
+    }
     0.0
 }
