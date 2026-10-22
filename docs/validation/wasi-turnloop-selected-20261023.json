@@ -1,0 +1,606 @@
+{
+  "date": "2026-10-23",
+  "scope": "Linux x86_64 selected Turnloop WASI 0.2.12 provider, native and guest component interoperability; not HTTP, native WASI 0.3, other platforms or production packaging",
+  "sourceRevision": "04840300ec22e6c9f9f4e8aa537dd1b3d3450fd5",
+  "sourceFilesVerifiedExceptValidationLock": 38445,
+  "sourceManifestSha256": "0a695f32931189ca22449966ee900e1c2d39d2a046afb0bf7afba11b20011240",
+  "turnloop": {
+    "validationOnly": true,
+    "revision": "b63a4ee3d3ad73d2df61b35202ed140f05513053",
+    "pullRequest": "https://github.com/PerryTS/turnloop/pull/123",
+    "patchConfigSha256": "7ab45eba66e2868d9f8d472985619ad48ab5580f88dfc7e33e7714d424488b76",
+    "sourceManifestSha256": "081cc89f435c8249d918b88d3e33e1502b8e6394a1cf0a49fb38210b16a25041",
+    "validationLockSha256": "94c592c16137e96888daeb9709b77ec39e437234b99e0fe0902fd5d75c5ac60d",
+    "registryDependencyUnchanged": "0.1.0-alpha.9",
+    "releaseRequired": true
+  },
+  "unitTests": {
+    "dev": {
+      "provider": 181,
+      "driver": 26,
+      "host": 40
+    },
+    "prod-panic-abort": {
+      "provider": 181,
+      "driver": 25,
+      "host": 40
+    }
+  },
+  "clippy": "pass",
+  "doctests": {
+    "passed": 2,
+    "inheritedIllustrativeIgnored": 1
+  },
+  "tokioGate": {
+    "manifestEdges": 0,
+    "lockfilePackages": 0,
+    "sourceLines": 0,
+    "normalHostGraphTokioFree": true
+  },
+  "build": {
+    "profile": "perry-dev",
+    "compilerFeatures": [
+      "target-wasi"
+    ],
+    "matchingNativeStaticArchives": true,
+    "nativeInstrumentedArchives": true,
+    "wasiRuntimeGcInstruments": true,
+    "rustflagsPreserved": [
+      "-C force-unwind-tables=yes",
+      "-Z use-sync-unwind=yes"
+    ]
+  },
+  "acceptance": {
+    "native": [
+      {
+        "name": "rust-guest",
+        "exitCode": 0
+      },
+      {
+        "name": "componentize",
+        "exitCode": 0
+      },
+      {
+        "name": "bindings",
+        "exitCode": 0
+      },
+      {
+        "name": "compile-host",
+        "exitCode": 0
+      },
+      {
+        "name": "run-host",
+        "exitCode": 0
+      },
+      {
+        "name": "compile-host-moving",
+        "exitCode": 0
+      },
+      {
+        "name": "run-host-moving",
+        "exitCode": 0
+      },
+      {
+        "name": "resources-guest",
+        "exitCode": 0
+      },
+      {
+        "name": "resources-componentize",
+        "exitCode": 0
+      },
+      {
+        "name": "resources-bindings",
+        "exitCode": 0
+      },
+      {
+        "name": "resources-compile",
+        "exitCode": 0
+      },
+      {
+        "name": "resources-run",
+        "exitCode": 0
+      },
+      {
+        "name": "resources-compile-moving",
+        "exitCode": 0
+      },
+      {
+        "name": "resources-run-moving",
+        "exitCode": 0
+      },
+      {
+        "name": "network-guest",
+        "exitCode": 0
+      },
+      {
+        "name": "network-componentize",
+        "exitCode": 0
+      },
+      {
+        "name": "network-bindings",
+        "exitCode": 0
+      },
+      {
+        "name": "network-compile",
+        "exitCode": 0
+      },
+      {
+        "name": "network-run",
+        "exitCode": 0
+      },
+      {
+        "name": "network-compile-moving",
+        "exitCode": 0
+      },
+      {
+        "name": "network-run-moving",
+        "exitCode": 0
+      },
+      {
+        "name": "host-resources-guest",
+        "exitCode": 0
+      },
+      {
+        "name": "host-resources-componentize",
+        "exitCode": 0
+      },
+      {
+        "name": "host-resources-bindings",
+        "exitCode": 0
+      },
+      {
+        "name": "host-resources-compile",
+        "exitCode": 0
+      },
+      {
+        "name": "host-resources-run",
+        "exitCode": 0
+      },
+      {
+        "name": "host-resources-compile-moving",
+        "exitCode": 0
+      },
+      {
+        "name": "host-resources-run-moving",
+        "exitCode": 0
+      }
+    ],
+    "guest": [
+      {
+        "name": "guest-bindings",
+        "exitCode": 0
+      },
+      {
+        "name": "compile-guest",
+        "exitCode": 0
+      },
+      {
+        "name": "link-guest-component",
+        "exitCode": 0
+      },
+      {
+        "name": "build-rust-host",
+        "exitCode": 0
+      },
+      {
+        "name": "run-rust-host",
+        "exitCode": 0
+      },
+      {
+        "name": "build-rust-logger",
+        "exitCode": 0
+      },
+      {
+        "name": "componentize-logger",
+        "exitCode": 0
+      },
+      {
+        "name": "compose",
+        "exitCode": 0
+      },
+      {
+        "name": "run-composed",
+        "exitCode": 0
+      },
+      {
+        "name": "values-guest-bindings",
+        "exitCode": 0
+      },
+      {
+        "name": "values-compile-guest",
+        "exitCode": 0
+      },
+      {
+        "name": "values-link-guest-component",
+        "exitCode": 0
+      },
+      {
+        "name": "run-values",
+        "exitCode": 0
+      },
+      {
+        "name": "resources-guest-bindings",
+        "exitCode": 0
+      },
+      {
+        "name": "resources-compile-guest",
+        "exitCode": 0
+      },
+      {
+        "name": "resources-link-guest-component",
+        "exitCode": 0
+      },
+      {
+        "name": "run-resources",
+        "exitCode": 0
+      },
+      {
+        "name": "run-resources-moving",
+        "exitCode": 0
+      },
+      {
+        "name": "dual-resources-guest-bindings",
+        "exitCode": 0
+      },
+      {
+        "name": "dual-resources-compile-guest",
+        "exitCode": 0
+      },
+      {
+        "name": "dual-resources-link-guest-component",
+        "exitCode": 0
+      },
+      {
+        "name": "run-dual-resources",
+        "exitCode": 0
+      },
+      {
+        "name": "perry-host-bindings",
+        "exitCode": 0
+      },
+      {
+        "name": "perry-host-compile",
+        "exitCode": 0
+      },
+      {
+        "name": "perry-host-run",
+        "exitCode": 0
+      },
+      {
+        "name": "perry-host-moving-bindings",
+        "exitCode": 0
+      },
+      {
+        "name": "perry-host-moving-compile",
+        "exitCode": 0
+      },
+      {
+        "name": "perry-host-moving-run",
+        "exitCode": 0
+      },
+      {
+        "name": "capabilities-guest-bindings",
+        "exitCode": 0
+      },
+      {
+        "name": "capabilities-compile-guest",
+        "exitCode": 0
+      },
+      {
+        "name": "capabilities-link-guest-component",
+        "exitCode": 0
+      },
+      {
+        "name": "host-bindings",
+        "exitCode": 0
+      },
+      {
+        "name": "host-compile",
+        "exitCode": 0
+      },
+      {
+        "name": "host-run",
+        "exitCode": 0
+      }
+    ],
+    "command": [
+      {
+        "name": "rust-command",
+        "exitCode": 0
+      },
+      {
+        "name": "command-compile",
+        "exitCode": 0
+      },
+      {
+        "name": "command-run",
+        "exitCode": 0
+      },
+      {
+        "name": "command-library-compile",
+        "exitCode": 0
+      },
+      {
+        "name": "command-library-run",
+        "exitCode": 0
+      },
+      {
+        "name": "command-moving-compile",
+        "exitCode": 0
+      },
+      {
+        "name": "command-moving-run",
+        "exitCode": 0
+      },
+      {
+        "name": "command-moving-library-compile",
+        "exitCode": 0
+      },
+      {
+        "name": "command-moving-library-run",
+        "exitCode": 0
+      }
+    ]
+  },
+  "movingGc": {
+    "native/run-host-moving": {
+      "copiedObjects": 3231,
+      "evacuationChecks": 101,
+      "quarantine": true,
+      "wasmGuest": false
+    },
+    "native/resources-run-moving": {
+      "copiedObjects": 353,
+      "evacuationChecks": 13,
+      "quarantine": true,
+      "wasmGuest": false
+    },
+    "native/network-run-moving": {
+      "copiedObjects": 183,
+      "evacuationChecks": 6,
+      "quarantine": true,
+      "wasmGuest": false
+    },
+    "native/host-resources-run-moving": {
+      "copiedObjects": 1893,
+      "evacuationChecks": 97,
+      "quarantine": true,
+      "wasmGuest": false
+    },
+    "guest/run-resources-moving": {
+      "copiedObjects": 5225,
+      "evacuationChecks": 217,
+      "quarantine": false,
+      "wasmGuest": true
+    },
+    "guest/perry-host-moving-run": {
+      "copiedObjects": 3231,
+      "evacuationChecks": 101,
+      "quarantine": true,
+      "wasmGuest": false
+    },
+    "command/command-moving-run": {
+      "copiedObjects": 6,
+      "evacuationChecks": 6,
+      "quarantine": true,
+      "wasmGuest": false
+    },
+    "command/command-moving-library-run": {
+      "copiedObjects": 53,
+      "evacuationChecks": 15,
+      "quarantine": true,
+      "wasmGuest": false
+    }
+  },
+  "networkPeers": {
+    "ordinary": {
+      "udp": 6,
+      "tcp": 3
+    },
+    "moving": {
+      "udp": 6,
+      "tcp": 3
+    }
+  },
+  "artifactSha256": {
+    "perry-dev/perry": "33d046ae03726649732c4b71a8c0fbc7f227afbaa118220630b4eb7a8196e4c9",
+    "perry-dev/perry-wit": "c1d795e0648c6ffd168ca06419446e49d4d8b0b2a843428b0bf578cad1074682",
+    "perry-dev/perry-gc-effects": "c5891a06446ee7e36fd47ffe57cdf88efa4395f1df6871ab735907dfe08f9c66",
+    "perry-dev/libperry_runtime.a": "e5268359899d4944426208b4ee70ac0229a326694d148e64efb533b97634582b",
+    "perry-dev/libperry_stdlib.a": "5a77e48b6609b7c2ed9144979f87406c86389a551f93974b1ef7951de1d9aff2",
+    "perry-dev/libperry_component_host.a": "05458eb577eac51e9546dd0edab3d0b2559c5f7673d5e5aac8212a296a531615",
+    "perry-dev/libperry_runtime_instr.a": "4053b6e0f0539c767fae342b90842c4a14b3a1cf065f6125e5f0097db8951744",
+    "perry-dev/libperry_stdlib_instr.a": "48f42e097cada98be593263d420e2cc43a3eb1b70c1419c016a8f3386077b4a9",
+    "perry-dev/examples/componentize": "c22e69f4e60c36d6d16d67a6e46e3142d656d9e8ea100e135ffd89d7aa343c75",
+    "wasm32-wasip2/release/libperry_runtime.a": "16695adee0e090afcd52630f96d54b1611d835a9551ca22b8d1344b1138cc671",
+    "perry-dev/libperry_runtime.a.gc-effects": "83bb260c196e4c38e3d959768a935cab44f79b86f27febb120f876aa78fafd87",
+    "perry-dev/libperry_runtime_instr.a.gc-effects": "d037dbd723e61bc4ff16af0624eb822892b79f33cef704239cf97d3f4268a13b"
+  },
+  "fixtureExecutableSha256": {
+    "native/host-resources/host-moving": "9d34a13ec73deaa3fb83e907b87cabb61f6fdfbb318b442a853e40352d528ea2",
+    "native/host-resources/host": "a6b8b13134acb57bfb34a157260d75459dc3a6ed4ccade0caf8913059082217a",
+    "native/network/host-moving": "0ae9a10c374383dfc75e0169357cbfce2b5cc50c045f0f325b6b0f8058f00560",
+    "native/network/host": "14dc1f4c5da87678d0af9e17350d9ba98812c6ebb7c011eaa848ba782dc3adcf",
+    "native/resources/host-moving": "1c16643e2bf573d0a76d3bfbd8aa80e8879897f0ce8f7749599094feb66afac0",
+    "native/resources/host": "6d9e0e4b43a33de715e016eff0619e203eaeac1c8b5e51bdcfcb043abb40616b",
+    "native/transform/host-moving": "08c5bf1064b0f89e24727447a3a2d1bd425875dc9a7c523a1c64340cf1f2f2fd",
+    "native/transform/host": "aea8508bb9d31845239fcaf3afd21deef40968d95606fa0cdc2eb1bc6cb5203d",
+    "guest/capabilities/host": "3f751048efc83f27376c00c6c9bedb85419558a413ec32d8b67576d638144620",
+    "guest/transform/perry-host-moving": "ca1814ddf9cbc98c86ad6cf839f94b8663fe7fef3d95e94f9bc250e90f26408b",
+    "guest/transform/perry-host": "68f19718a85c72790f025d6204c477397baa1df722c8d1a59b0ed8e9fdde22b3",
+    "command/command-library": "dd3a35afba8ac84b088336daa9efcf9b2768f4b6a65010f05b1216463e8699ff",
+    "command/command-moving": "3507b6e447731603827ea23d7d1d5ac0dfe0f9223ab1c024b46bea8181b93740",
+    "command/command-moving-library": "1bab5bb3aaa195f628f01bbd2b267d28b9c684e3ce19de4681afc45888404ddb",
+    "command/command": "b8eb481bc5fdd29ad11b46f10b37f6574ecb28211420eb69042555cc16430f9b",
+    "guest/rust-host-target/release/perry-component-rust-host": "59e7e4af83324c5db5c48474b2061f6b3e6a7c1eb15712b90ce32176e6a1f98e",
+    "guest/rust-host-target/release/compose": "b5518833825024fb5c5d52ab64720f3ebb802ade1bbe11430c0ec7663fd56e04"
+  },
+  "evidenceSha256": {
+    "artifact-identity.json": "1e5edc2d7ef92ec185b438600c97aea3700c7c64b79a6f396eee0e61b9af6857",
+    "build.log": "c8a6942f0bfaa9cee68961339551270df98d4fd1568f5c77ffc8ed84032a2f74",
+    "capability-process-observation.log": "fbf38144ed1a1c352a249c873559e2cabbdc657a3e0ed3fd99a988477ee4c26c",
+    "command/command-compile.log": "521177bad618919d1b3c6e1a6e18b7b31cd8aea3525210eabf449127f5eea210",
+    "command/command-library-compile.log": "bc866a772d80733437c49dc69a688392c22a07a94db49ba8d77e057395ff7036",
+    "command/command-library-run.log": "f50c97dd197f3457477e055176c0557f2afeedf98d3d1874609f38717925b7f6",
+    "command/command-moving-compile.log": "2b752c754bb6e0ca7f6a1077081dc4a7918711016c5902578c113152d174794e",
+    "command/command-moving-library-compile.log": "f390c6b78982c584f36da4264ce09f80bf22a57a24c05f19522e2b13bdbd110b",
+    "command/command-moving-library-run.log": "0b2e2b12827d74e081c8e1ee3717cb6f2f29678e2cdc3aaf13d265fa132bfbf6",
+    "command/command-moving-run.log": "8b32d570613eba5d2d9ceba5f169b843de8d76802737ad1e02078094b57ab149",
+    "command/command-run.log": "1b0adbc0510e90d11d55328f6c51057bae79fb0c3e0784d2be2d0de0f85c6ac2",
+    "command/fixture/generated/bindings.ts": "88cdbb75f10a6fdcd6bd327ac0c8fe138a24af66abf86f022f7c4e4a87377831",
+    "command/fixture/generated/guest.ts": "affa5040f84352ff4e244fe4a73bac9fab375d9f77cfe89b6d7846559e4fc718",
+    "command/fixture/generated/world.json": "d34995ed89f9958ed1ea88eeea0cf497da16f735c8fe118ed0994cf1d90acf97",
+    "command/fixture/host.ts": "513d65ea88b898c3f39a3b7e99c47f972969c09af6e1ecb929f503ee1a3748f2",
+    "command/fixture/library-host.ts": "7d64ece923c61368b333dbc98302edce5473c5dd392511564882b533b9e9fc8e",
+    "command/results.json": "fa3ed68a6f3890ebd149efff1b17bf8936f104641c65ae4c9991b5e0d6831f1f",
+    "command/rust-command.log": "143f205ee8ea01a0bf91babd029080d51e72670156d68f4a6cbedef0ababcd34",
+    "command-acceptance.log": "dbc4605fe67e08ff2db61e758c9c569bc69e51e9d0263938f0e132099f375061",
+    "guest/build-rust-host.log": "c7a46e12eb283e945ccadb3f8263531361f54bb032c13b732195fd8fcbd531a2",
+    "guest/build-rust-logger.log": "ee645b697853829f011e4e3eaf6f8cf0c435333b5ea4879af5c0e6f9856510f0",
+    "guest/capabilities/generated/bindings.ts": "0af670fb90bd636266a7c52e10afedef0bf2125e40868ed5ac7c620f3859fe11",
+    "guest/capabilities/generated/guest.ts": "5813340f40f932a0502054cea9b2912cb08138208d62f984c200b1a32f9e60c8",
+    "guest/capabilities/generated/world.json": "2064a0b723b2fdb2cdeae093a170d8c4a0ad2424e53d14999dde70227147dbf7",
+    "guest/capabilities/guest.ts": "53751043cf246a9844e71d3b65bf5b8caaeb39870e41e025d0002101eb236fc4",
+    "guest/capabilities/host.ts": "0267a242048a783c27ad8743592eb96bf039afc05f670a21e2cd410e36b58a17",
+    "guest/capabilities/libtransform.linkdeps.json": "df4166239fe9e59b42e37621e43ca63023d0f4d072bd2dfbf273348640150860",
+    "guest/capabilities/transform.component.wasm": "1f5c6e3335d460caabbf30bdff7198804b4672ec1bb53cda0235b74cf7afb995",
+    "guest/capabilities/world.wit": "35c2c4bd46f839d0efea1e5de811bceab7b014e88969ab0d2c05f54d1078f214",
+    "guest/capabilities-compile-guest.log": "951e3c391657fb35c5766a444317ef142f94a40719d23b4ee513db48056be182",
+    "guest/capabilities-guest-bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "guest/capabilities-link-guest-component.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "guest/compile-guest.log": "5794fd7e441238297188c3222f6cbe3610d2778b29c8b84368c15d98e481e427",
+    "guest/componentize-logger.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "guest/compose.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "guest/dual-resources/generated/bindings.ts": "78be1bc118c7da7ae7ceae3f646d34dfecfc2b8dfccb3e68bb556c2deb25b88e",
+    "guest/dual-resources/generated/guest.ts": "02f5cfbfb25108a4b50ec053ba592d86c36fa3dcce4fb2a1ce4260dad4cedc6b",
+    "guest/dual-resources/generated/world.json": "abed5f2a4ef576232aea9b7924ebc31a4d31572c38c4a4294e95d24c4ce7f2cf",
+    "guest/dual-resources/guest.ts": "a8f34f72ea7ea588a24acf535d8d599dcf45e580e4f36f63a865eb5b6ef4b728",
+    "guest/dual-resources/libtransform.linkdeps.json": "64c9a6f6d248b1596e2c6ccd7c2edd538ace9d5b98917830748fb53d41df8f9d",
+    "guest/dual-resources/transform.component.wasm": "db520dc625cac617f4c4ce79b1f8346758b62b087df4746e25b110107e81b6dc",
+    "guest/dual-resources/world.wit": "05cae719c3ae436544c4984560b6d15e3ac2142ac4e1e152f5e45a62f5ebd080",
+    "guest/dual-resources-compile-guest.log": "31a6a9259986e6e41bd9bb66a22b54937ae8506a501efb925594581ec31fb340",
+    "guest/dual-resources-guest-bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "guest/dual-resources-link-guest-component.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "guest/guest-bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "guest/host-bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "guest/host-compile.log": "49d8252f5b93ee369bf5ad3ec813d2a4451dc61e4f7515f15220d0fc1ca385ab",
+    "guest/host-run.log": "6b223f922dc3480d477e6bba9e0707c6a3839bdeb9efc9ed2d8a4664b7f0d65c",
+    "guest/link-guest-component.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "guest/perry-host-bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "guest/perry-host-compile.log": "90804df2ec73e17ea3798b8d9e2926cf33f011414a31fc322a0c6cdb0adaadd9",
+    "guest/perry-host-moving-bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "guest/perry-host-moving-compile.log": "afcf4bdaa0cd7f2ffe721930198a4e9d631f41f9551762549d454f7da1344007",
+    "guest/perry-host-moving-run.log": "81b6a0e21f66c3fbe7b0779f770a2a1a85a5f67dc91a99f5ca4a6c96dbe2c15e",
+    "guest/perry-host-run.log": "eac8b5317bffe655171f386dbba8176c32a21980e932e67ea075e0e0898db9ac",
+    "guest/resources/generated/bindings.ts": "be72c8649f8826dc97352edc1e4a951af791b9e624b575080050445a40203688",
+    "guest/resources/generated/guest.ts": "7c33bbaec264b19e2ae9776ab28514a47bed0cc30967e5464d2c125c98654185",
+    "guest/resources/generated/world.json": "62622c671f653bef24ac6e40f6351b0689a0454799a39feebabf365154f1f05b",
+    "guest/resources/guest.ts": "0f2aef2790cc1b4c1e4ea20d88329c7471299c2b48bbd71e3ebff7b7068f4364",
+    "guest/resources/libtransform.linkdeps.json": "34437efcc8ae3b3fa7bd3ca0c65d2077acfb06c3e81c448c6a91c85b95632bcc",
+    "guest/resources/transform.component.wasm": "624a7e0b5421ba9d6a514e04617be6a17f147fe8897b5a2e5f731b908721141e",
+    "guest/resources/world.wit": "7fcedfcdb79d2d20265dc8796a7ae56700ed7166f5dc42f140fc3c6b591ca755",
+    "guest/resources-compile-guest.log": "b2c468b9938639edf66006ea6b716629b19004a14ea82f42de577038656c20b1",
+    "guest/resources-guest-bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "guest/resources-link-guest-component.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "guest/results.json": "3811f894f4ccd2bec82f945bd03cbe7ee6b241cc02dc9d5510a8e9b41df7e729",
+    "guest/run-composed.log": "eb89604c2e28f218f0672a33957405fd77689f94eb5b15ac58f113fdc314c6ff",
+    "guest/run-dual-resources.log": "46b33307df0552e25206a2991e3c05e87ecfbbdc643fe6c5b006a7a0c92167b8",
+    "guest/run-resources-moving.log": "1036d87a06b808ef9bf28bb0d7e5b5f1129dcaf82c07f48e0041a6c3e691e493",
+    "guest/run-resources.log": "5f74917d94342ed095f42d6afeaf12063e8c8b33519c177ce99b1c6b94e8c43e",
+    "guest/run-rust-host.log": "dd2055ba6b43e0a70b5335e1312ad442ae2fb729659c802071af2bc4276ccd6c",
+    "guest/run-values.log": "0171bfbbdbb71c451965971a2ea11af271ad98f94f991ea278a64257e36622dd",
+    "guest/transform/composed.component.wasm": "c55106a7db4fc4946db9a4a4e441249faca41a681c55c560a5d6ab21f79bf178",
+    "guest/transform/generated/bindings.ts": "88cdbb75f10a6fdcd6bd327ac0c8fe138a24af66abf86f022f7c4e4a87377831",
+    "guest/transform/generated/guest.ts": "affa5040f84352ff4e244fe4a73bac9fab375d9f77cfe89b6d7846559e4fc718",
+    "guest/transform/generated/world.json": "d34995ed89f9958ed1ea88eeea0cf497da16f735c8fe118ed0994cf1d90acf97",
+    "guest/transform/guest.ts": "9427650a285a48d0d1fb7ad2a59215a33af17dd1b3b11dad23202141fd701dbd",
+    "guest/transform/libtransform.linkdeps.json": "ad81417a0533657c2197219b1ccd848f5c0b5bedaf8f6d847afcf98af6bad515",
+    "guest/transform/logger.component.wasm": "158d96f012116fcd60e8b7ac16b88ac828eb59da502efa4899fdb7fda526b8b5",
+    "guest/transform/perry-host-moving.ts": "16d9540730d348750c467d81ef87f41b23b77d2bc88f68e4a13ba9409bad1415",
+    "guest/transform/perry-host.ts": "16d9540730d348750c467d81ef87f41b23b77d2bc88f68e4a13ba9409bad1415",
+    "guest/transform/transform.component.wasm": "abc92f70fb78693a7f066b7f27e9ebc0df43d309ef753bbbe461b39372bef98c",
+    "guest/transform/world.wit": "7b4e581b0dc6cd193dfe4a2efadcbf9cc982dd26886a06237cd252a6beb32a36",
+    "guest/values/generated/bindings.ts": "005f10ee4be0438bee72235f52f7b456a0dc7730fcaf6d38e94c91c1e28b55f2",
+    "guest/values/generated/guest.ts": "a44dc4e85ca03c924b098c440f0b429bf924cf1fc9b8cc0e52189ea7d540c5d9",
+    "guest/values/generated/world.json": "085f69dc89c9703200a3fa93de8fe7c9ad23e41f25dd2412884523e605664822",
+    "guest/values/guest.ts": "a8e85fe660cfc4cd05b3c45560710f5b164325d7656a2779c813d20063d0b7e8",
+    "guest/values/libtransform.linkdeps.json": "90f04ea3a256c97dbdfa497ddb5c34390ff79ec2389447cbd8df44c51384e6b0",
+    "guest/values/transform.component.wasm": "85e1a4584516b14ab4726479d70d6cec1ce5cbf4b1098a106ac1896012164091",
+    "guest/values/world.wit": "d998aecbd018b12548d20b5ae942eeaefb43b6cca7e0b7a73019e05dbc61365f",
+    "guest/values-compile-guest.log": "d6ec939c3da2dc19f85ab4c9b52847fa435b13bf17783363f7a959ac62faf1bb",
+    "guest/values-guest-bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "guest/values-link-guest-component.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "guest-acceptance.log": "f9168d1f71ce205c6a0799307704a2a53c419dca066742aeeef75914662b1583",
+    "native/bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "native/compile-host-moving.log": "1616ec2713313fd9bc080783989f6f88e30d245b4ee09921b0d4a209067e315c",
+    "native/compile-host.log": "2d205c8d1556a9f37fb69d4450073d44847b4214955edc7f480371151d4f39a4",
+    "native/componentize.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "native/host-resources/generated/bindings.ts": "3f5d4c753cc3c2ffa4adf77c522ac64dd6639b50024a8ec411dafa347e56f1b7",
+    "native/host-resources/generated/guest.ts": "0e1625a2905dad8f6bfc42d1b199624241b1253f631890e5ad7039b189b04103",
+    "native/host-resources/generated/world.json": "8a47bb13a12e025a2522c519e1fe770521c37a1ae262afb6cc928da636744a76",
+    "native/host-resources/host-resources.component.wasm": "c9daa55570ea0bc714aebbe35ad497e60cc3e801bfc4db29bda3328397736e9a",
+    "native/host-resources/host.ts": "5405d067a019c964f28e3350bb61f9cff5b6c0a1d996fb0fe629a6620b96581b",
+    "native/host-resources/world.wit": "a802b96a761767360dc9e50d12561111d6383039fa0f11e495c14fe84215534b",
+    "native/host-resources-bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "native/host-resources-compile-moving.log": "bfc5750af66698780ee0e86b68d55071495ae164ee31ee3cd0fdf4267fa0c3e0",
+    "native/host-resources-compile.log": "35c9a2ac7d77ed3a6034597308f2e99b877231acab35f0261e4a419f4fb0edba",
+    "native/host-resources-componentize.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "native/host-resources-guest.log": "e2ef18e4fb1eec6ec459e457009a302c490c48721156ffd8dca06d1d8cf61ae1",
+    "native/host-resources-run-moving.log": "b043b8b8a310cfcbc0a420e0da698954a50bc6b8f5466395bebf3ad3ebcca2d4",
+    "native/host-resources-run.log": "2f594608248273a64e7352c7ee8b1b654a2b3b9097f1b30bdbf686d91abc8fd5",
+    "native/network/deps/clocks.wit": "6ed8aa65bb8cbe224a0b2cbac9fc1b3bd25bdb17eda5ae0d23c983ed31c447cc",
+    "native/network/deps/io.wit": "96e206d00076fa0480df32c5bcf255a3fa4862805ac2f6b8537a781cce54f433",
+    "native/network/deps/provenance.json": "37b37bbfa7ed91d70dcf584beb5c6fe643da4174d8e441be62af04f78004eba7",
+    "native/network/deps/sockets.wit": "ad38dbf3b0bbdf34c0f2b608edcbfee04d71b443a63faff1f5e0053c3f84b377",
+    "native/network/generated/bindings.ts": "61f0937b3c4c6e336d57f449c8dee4ff4bc91f65e73980dffa7f39329523d0a8",
+    "native/network/generated/guest.ts": "790a1be367dc2b64603d1faafc69c0afdad5a63128a9a1a3e52f92d1142e9950",
+    "native/network/generated/world.json": "e5c229e95c8cdc11e3af88c249a62553731de095e8946adf1f95bd88c4681b72",
+    "native/network/host.ts": "1be699ccbb8af07d2df107fc273a584b1738403b0786090dbfea17f6a19d3bb2",
+    "native/network/network.component.wasm": "4b64463028336bf7b53106c878ed3af3af2927162ecd3a90c7486b09207bb583",
+    "native/network/world.wit": "8fc6094295555f6151cb6caebb4848b324ce9b76229c9348d28d32bf1c5a9f1c",
+    "native/network-bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "native/network-compile-moving.log": "9d1fa627ee20dd1c09d12c5e7b2621dc7fc0e07323fd1b77000c5769da728283",
+    "native/network-compile.log": "6d0390d2c238187d04ad03d5e3a1196445cb5141759f1360ac5090efb481ee51",
+    "native/network-componentize.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "native/network-guest.log": "4a01f6ba40ffde59d882847587b74946f9a29be8bca2b513894a76c0959f3f4b",
+    "native/network-peer-moving.json": "442aa12622ec45232b100a80d3daff22fd3eef340f4bd96eb869312b4e49d224",
+    "native/network-peer.json": "ca91f870e4559b85e503ec1117de925f362d53c9899f4ce23eb90c49504522e4",
+    "native/network-run-moving.log": "7029ca7d95e94d44002fc592fad2ff8b276968d372700f013589c1aa1235e25c",
+    "native/network-run.log": "c4336507eed44ca20a5cb78342264ee5447dede57d09ea7c5fdc1a59a3f14696",
+    "native/resources/generated/bindings.ts": "101ee4bd19cb1123a29af8004c2df78a06329de110053569d44af94c5a3f9359",
+    "native/resources/generated/guest.ts": "a53d70e450812521319ac39e995450347205d892c9068dd65922a6a47827fe86",
+    "native/resources/generated/world.json": "3543b99ff1fac89e03514b1679423a5e55f74852a12efde680142d1fecda14ba",
+    "native/resources/host.ts": "e0357dbd3d041e4f6d84a7187ddd05abbce14dc4ad60070a6de5a311acc97a77",
+    "native/resources/resources.component.wasm": "75ed1fa1897959476bc6fe1a73b852d99ed0d0716728cadd18e4e02fa26c52a5",
+    "native/resources/world.wit": "26de8bdc1b2f3df7d9ccdaf0978e172bfb3109e2600c4596cfc2d7a0e06c4532",
+    "native/resources-bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "native/resources-compile-moving.log": "1ba9799701d33918c79fc958816db456c4d3d94db4bf89894775ec06db65cf7a",
+    "native/resources-compile.log": "81b7b1aae7d05babea071518c568b4a71e9b6ec48d23a8637eef3c638da52cb9",
+    "native/resources-componentize.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "native/resources-guest.log": "f44b038830a69de71a976639d826372682adb5c3728404087e57883c98a77329",
+    "native/resources-run-moving.log": "721852f4e4296e6c090b0bd7813f8155130496a546f8b50926f031f06eaf1805",
+    "native/resources-run.log": "b8a54ea58f0dc70699e0d16a2976c585a0fa10352f7f5678a6273df2922a1463",
+    "native/results.json": "e6c3362a7ba3f3b0a98e0fc134838c68986436b0f6a1687b831b43a5a1da2229",
+    "native/run-host-moving.log": "b8bbe404d81344efec11bf8a911abfd92e01313ae66fdcdbdb1f36f15cffe776",
+    "native/run-host.log": "cb43de132c0975d5f3f57bf550a7b7ef62cc6e54749e8c276f13abcd7a0ffcb9",
+    "native/rust-guest.log": "779c06301143781046e89a0a97187c3c6f6475cc5ada488ecd939b9ecc33a59e",
+    "native/transform/generated/bindings.ts": "88cdbb75f10a6fdcd6bd327ac0c8fe138a24af66abf86f022f7c4e4a87377831",
+    "native/transform/generated/guest.ts": "affa5040f84352ff4e244fe4a73bac9fab375d9f77cfe89b6d7846559e4fc718",
+    "native/transform/generated/world.json": "d34995ed89f9958ed1ea88eeea0cf497da16f735c8fe118ed0994cf1d90acf97",
+    "native/transform/host.ts": "c54f026ee749fa4cb9af83100a96859b89c533ecef2974f2b4a95e6dc95f5bff",
+    "native/transform/transform.component.wasm": "5175bce31b3a083c7c104ebb3579d44335482321c15cbd9391f6318c2b9e8d3e",
+    "native/transform/world.wit": "7b4e581b0dc6cd193dfe4a2efadcbf9cc982dd26886a06237cd252a6beb32a36",
+    "native-acceptance.log": "f526e0de01d90c056adef827679d89235ed3e0625a70fdc46d7035f628056acd",
+    "phases.json": "28c432a5cfea83bdae633d71f66cb06eb941dcba91d0b78ea3f160591bb409c5",
+    "wasi-runtime.log": "e5c28bb74189aae2d427c64795f9248b4265424034215d8916719aaf7f73dfbe"
+  },
+  "verificationReceiptSha256": "7bb3a4651e920976509913b9e3f20a100cfb812da775bcf7311c6e843be403f3",
+  "evidenceArchiveSha256": "5992b8e4b675c23a85849698ab70ab0e6e15d5334ac92a913265834616abfd10",
+  "limits": [
+    "Turnloop repairs require a registry release before shipping this selection",
+    "Independent Rust reference host uses upstream Wasmtime WASI; Perry selected host uses Turnloop",
+    "Windows and macOS provider qualification remains",
+    "HTTP and native WASI 0.3 remain unimplemented",
+    "Production archive and npm qualification must be repeated with the selected provider"
+  ]
+}

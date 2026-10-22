@@ -133,7 +133,11 @@ providers. See [the component record](WASI_COMPONENTS.md) for the separately
 qualified host-defined resources, native/guest deferred cleanup, command
 worlds and TCP/UDP/DNS interoperability. Their combined integration is
 qualified on Linux; HTTP, blocking-I/O cancellation, broader platform qualification
-and engine shipping costs remain open. This milestone is not complete.
+and engine shipping costs remain open. The Tokio-free Turnloop provider
+replacement is now selected and qualified on Linux in both component directions;
+its [receipt](validation/wasi-turnloop-selected-20261023.json) records the
+validation-only upstream repairs that still require a registry release.
+This milestone is not complete.
 
 Introduce an optional component-capable host boundary, for example a separate
 `perry-component-host` crate backed by Wasmtime. Keep it off the default native

@@ -113,9 +113,15 @@ Perry's `perry-wasi` providers adapt the WASI 0.2.12 contracts from Wasmtime
 48.0.5 and use Turnloop for native I/O. The selected host dependency graph and
 workspace gate are Tokio-free. The required Turnloop repairs are validated with
 an external patch and must be released before this selection ships; see
-[provider provenance](../crates/perry-wasi/PROVENANCE.md). The Linux provider and
-host unit suites pass; the historical compiled-guest receipts below predate this
-provider replacement. Fresh end-to-end and platform qualification remain.
+[provider provenance](../crates/perry-wasi/PROVENANCE.md). The selected provider
+passes 40 host tests, 181 provider tests and 26/25 driver tests in development
+and production panic-abort on Linux. Fresh matching compiler/runtime builds pass
+all 28 native, nine command/library and 34 guest/composition acceptance phases,
+including eight live moving-GC cases. Both ordinary and moving network runs
+verify six UDP and three TCP payloads. See the
+[selection receipt](validation/wasi-turnloop-selected-20261023.json).
+Other platform and production-package qualification remain. Historical receipts
+below predate this provider replacement.
 Native WASI 0.3 async interfaces and HTTP are not implemented by this provider.
 
 Flag declarations are limited to 1–32 labels, matching the

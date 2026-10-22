@@ -37,7 +37,7 @@ work is owned and driven by Turnloop, with no ambient Tokio runtime.
 The current port includes WASI 0.2.12 I/O, clocks, random, CLI, capability
 filesystem, DNS, TCP and UDP interfaces. It is selected by
 `perry-component-host`. HTTP and native WASI 0.3 remain to be ported;
-platform and compiled-guest qualification are still required. No missing
+other platform and production-package qualification are still required. No missing
 interface is implemented as a success stub. The unchanged workspace Tokio
 gate passes: no manifest edges, lockfile packages or Rust source references.
 
@@ -193,5 +193,16 @@ command execution. It preserves explicit capability configuration and validates
 command exports before initializers run. Linux qualification of this selection
 passes all 40 host tests, 181 provider tests and 26/25 driver tests in development
 and production panic-abort, plus doctests, all-target Clippy and stdio overlap.
-This is unit and canonical-component coverage; compiled Perry guest/runtime
-acceptance and platform/package qualification must still be rerun.
+Fresh matching Linux compiler/runtime builds also pass 28 native component,
+nine command/library and 34 guest/composition phases. This includes independent
+Rust hosting, direct Rust/Perry composition, Perry hosting Perry, explicit
+capabilities and resource cleanup. Eight moving-GC cases require actual copied
+objects and successful evacuation verification; the seven native cases also
+observe protected retired memory. The WASM guest cannot use native memory
+protection and is recorded separately. Ordinary and moving network peers each
+verify six UDP and three TCP payloads.
+
+The [selection receipt](../../docs/validation/wasi-turnloop-selected-20261023.json)
+records exact source, patch, compiler, archives, executables and log hashes.
+Windows/macOS provider and production-package qualification remain, as do
+HTTP, native WASI 0.3 and released Turnloop adoption.
