@@ -408,7 +408,16 @@ fn plan(
             .collect();
         // A body with no interface term is never instanced (module and
         // initializer bodies run once, unattributed): it keeps no slice.
-        if slice(m, ix, f, &[], &through, pinned).is_empty() {
+        // A body whose nested closure captures an enclosing slice's node
+        // has one: each instance makes that closure from its own context,
+        // even when none of its own nodes derives from the capture
+        // (`() => () => x`; before design §14.2 rule 1, the arrow's
+        // captured `this` gave it a slice by accident).
+        let carries = lex.children[f as usize].iter().any(|g| {
+            capt.get(g)
+                .is_some_and(|v| v.iter().any(|x| all_dof.contains_key(x)))
+        });
+        if !carries && slice(m, ix, f, &[], &through, pinned).is_empty() {
             continue;
         }
         // A literal this body births is a value of the slice.
@@ -806,10 +815,23 @@ pub(super) fn build_summaries(m: &mut Model) {
             if og.is_empty() || refused.contains(&g) || !slices.contains_key(&g) {
                 continue;
             }
+            // What the closure captures, by where its terms live here
+            // (design §14.2): a slot of this frame, only outer terms, or
+            // neither (shared or module nodes).
+            let terms: Vec<NodeId> = og.iter().map(|&x| enc(x)).collect();
+            let own = terms
+                .iter()
+                .any(|&x| is_slot(x) && (x & !SLOT) < d.len() as u32);
+            let cap = if own {
+                CAP_OWN
+            } else if terms.iter().any(|&x| is_slot(x)) {
+                CAP_OUTER
+            } else {
+                CAP_NONE
+            };
             for &cv in cvs.get(&g).map(|v| v.as_slice()).unwrap_or(&[]) {
                 if let Some(&sl) = slot.get(&cv) {
-                    s.closures
-                        .push((sl, g, og.iter().map(|&x| enc(x)).collect()));
+                    s.closures.push((sl, g, terms.clone(), cap));
                     strip.insert(m.funcs[g as usize].token);
                 }
             }

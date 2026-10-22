@@ -175,7 +175,11 @@ impl<'a> Gen<'a> {
             .unwrap_or_else(|| format!("closure{func_id}"));
         let f = self.register_fn(mi, *func_id, &name, params, *is_arrow, true);
         let info = self.m.funcs[f as usize].clone();
-        if *captures_this || *is_arrow {
+        // An arrow captures the enclosing `this` only when its body (or an
+        // arrow nested in it) reads `this` or `super` (design §14.2 rule
+        // 1): a `this` nothing reads carries nothing, and capturing it
+        // would key the closure's context by its creator's frame.
+        if *captures_this || (*is_arrow && body.iter().any(stmt_reads_this)) {
             // Captured `this` (arrow semantics, or a slot the runtime
             // patches): the enclosing `this` flows in.
             self.m.edge(fx.this, info.this);
@@ -692,5 +696,45 @@ impl<'a> Gen<'a> {
     fn iife_param_template(&self, _fx: &Fx, args: &[NodeId]) -> Option<TmplId> {
         let first = *args.first()?;
         self.iife_birth.get(&first).copied()
+    }
+}
+
+/// `stmt` reads the `this` an arrow inherits: `this` or `super`, in it or
+/// in a nested arrow. A non-arrow closure has its own `this`. The HIR's
+/// `captures_this` says the same for parsed arrows; synthetic arrows set
+/// it to false, so the body is the authority.
+fn stmt_reads_this(stmt: &Stmt) -> bool {
+    perry_hir::walker::stmt_any_expr(stmt, &mut expr_reads_this)
+}
+
+fn expr_reads_this(e: &Expr) -> bool {
+    match e {
+        Expr::This
+        | Expr::SuperCall(_)
+        | Expr::SuperCallSpread(_)
+        | Expr::SuperMethodCall { .. }
+        | Expr::SuperMethodCallSpread { .. }
+        | Expr::SuperPropertyGet { .. }
+        | Expr::SuperPropertySet { .. }
+        | Expr::ObjectSuperPropertyGet { .. }
+        | Expr::ObjectSuperPropertySet { .. }
+        | Expr::ObjectSuperMethodCall { .. } => true,
+        Expr::Closure {
+            is_arrow: false, ..
+        } => false,
+        Expr::Closure {
+            captures_this: true,
+            ..
+        } => true,
+        Expr::Closure { body, .. } => body.iter().any(stmt_reads_this),
+        _ => {
+            let mut found = false;
+            perry_hir::walker::walk_expr_children(e, &mut |c| {
+                if !found && expr_reads_this(c) {
+                    found = true;
+                }
+            });
+            found
+        }
     }
 }
