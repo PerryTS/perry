@@ -5538,12 +5538,18 @@ jobs:
         run: cargo install cargo-audit --locked
       - name: Run cargo audit
         run: |
+          # 0378 and 0379 are fixed in wasmtime 48.0.7, which the workspace's
+          # 7-day minimum publish age keeps out of Cargo.lock until 2026-10-27;
+          # 0379 only affects aarch64 Cranelift output. Drop both ignores with
+          # the 48.0.7 bump.
           cargo audit \
             --ignore RUSTSEC-2023-0071 \
             --ignore RUSTSEC-2026-0118 \
             --ignore RUSTSEC-2026-0119 \
             --ignore RUSTSEC-2026-0187 \
-            --ignore RUSTSEC-2026-0235
+            --ignore RUSTSEC-2026-0235 \
+            --ignore RUSTSEC-2026-0378 \
+            --ignore RUSTSEC-2026-0379
       - name: Install cargo-deny
         run: which cargo-deny || cargo install cargo-deny --locked
       - name: Run cargo deny
@@ -5759,12 +5765,18 @@ jobs:
         run: cargo install cargo-audit --locked
       - name: Run cargo audit
         run: |
+          # 0378 and 0379 are fixed in wasmtime 48.0.7, which the workspace's
+          # 7-day minimum publish age keeps out of Cargo.lock until 2026-10-27;
+          # 0379 only affects aarch64 Cranelift output. Drop both ignores with
+          # the 48.0.7 bump.
           cargo audit \
             --ignore RUSTSEC-2023-0071 \
             --ignore RUSTSEC-2026-0118 \
             --ignore RUSTSEC-2026-0119 \
             --ignore RUSTSEC-2026-0187 \
-            --ignore RUSTSEC-2026-0235
+            --ignore RUSTSEC-2026-0235 \
+            --ignore RUSTSEC-2026-0378 \
+            --ignore RUSTSEC-2026-0379
       - name: Install cargo-deny
         run: which cargo-deny || cargo install cargo-deny --locked
       - name: Run cargo deny

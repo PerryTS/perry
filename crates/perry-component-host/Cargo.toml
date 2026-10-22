@@ -20,7 +20,7 @@ perry-wit = { path = "../perry-wit" }
 perry-abi.workspace = true
 wasmtime = { version = "48.0.0", default-features = false, features = ["anyhow", "std", "runtime", "cranelift", "component-model", "gc-drc"] }
 
-wasmtime-wasi = { version = "=48.0.5", default-features = false, features = ["p2"] }
+wasmtime-wasi = { version = "=48.0.6", default-features = false, features = ["p2"] }
 
 [dev-dependencies]
 wat = "1.254"
