@@ -69,7 +69,14 @@ pub struct FactsConfig {
     pub dynamic_code_reach: perry_hir::dynamic_code::DynamicCodeReach,
     /// Diagnostics: name where ⊤ came from in each ⊤ site verdict.
     pub explain: bool,
+    /// The driver's resolution of every `export … from "src"` source: a
+    /// re-export has no import of its source to resolve it by.
+    pub export_sources: ExportSources,
 }
+
+/// Module path → `export … from` source → the module path it resolves to.
+pub type ExportSources =
+    std::collections::HashMap<String, std::collections::HashMap<String, String>>;
 
 #[derive(Clone, Debug, Default)]
 pub struct Stats {
@@ -138,6 +145,7 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
     let mut sorted: Vec<(&str, &Module)> = modules.iter().map(|(p, m)| (p.as_str(), *m)).collect();
     sorted.sort_by(|a, b| a.0.cmp(b.0));
     let mut g = gen::Gen::new(sorted.clone(), cfg.relations, cfg.explain);
+    g.export_sources = cfg.export_sources.clone();
     let interp = cfg.dynamic_code.clone().unwrap_or_else(|| "-".into());
     let dynamic_reach = cfg.dynamic_code_reach.globals as u8;
     g.m.rel(|| format!("dynamicreach {dynamic_reach}"));

@@ -45,8 +45,37 @@ pub(crate) fn contracts_requested() -> bool {
         .is_ok_and(|v| matches!(v.trim(), "1" | "true" | "on" | "yes"))
 }
 
+/// Every module's `export … from "src"` sources resolved the way module
+/// collection and init order resolve them, for the targets that are program
+/// modules. The HIR keeps a re-export's source as written; without this the
+/// analysis cannot link `export * as X from "./x"` to `./x`'s namespace.
+pub(crate) fn export_sources(ctx: &super::CompilationContext) -> perry_wpfacts::ExportSources {
+    let mut out = perry_wpfacts::ExportSources::new();
+    for (path, module) in &ctx.native_modules {
+        for export in &module.exports {
+            let source = match export {
+                perry_hir::Export::ExportAll { source }
+                | perry_hir::Export::ReExport { source, .. }
+                | perry_hir::Export::NamespaceReExport { source, .. } => source,
+                perry_hir::Export::Named { .. } => continue,
+            };
+            let Some((target, _)) = super::resolve::resolve_import_with_context(source, path, ctx)
+            else {
+                continue;
+            };
+            if ctx.native_modules.contains_key(&target) {
+                out.entry(path.display().to_string())
+                    .or_default()
+                    .insert(source.clone(), target.display().to_string());
+            }
+        }
+    }
+    out
+}
+
 pub(crate) fn run(
     modules: &BTreeMap<PathBuf, perry_hir::Module>,
+    export_sources: perry_wpfacts::ExportSources,
     dynamic_code: bool,
     dynamic_code_reach: &perry_hir::dynamic_code::DynamicCodeReach,
     wrapped: &std::collections::HashMap<PathBuf, super::types::CjsWrapDebugSource>,
@@ -90,6 +119,7 @@ pub(crate) fn run(
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(400_000_000),
         ),
+        export_sources,
         explain: std::env::var("PERRY_FACTS_EXPLAIN").is_ok_and(|v| v == "1")
             || perry_codegen::fallback_diag::enabled(),
         dynamic_code_reach: dynamic_code_reach.clone(),

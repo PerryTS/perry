@@ -58,6 +58,10 @@ pub struct Gen<'a> {
     pub prim_const: [NodeId; 7],
     pub walked: crate::pts::FxHashSet<FnIdx>,
     pub class_envs: FxHashMap<String, NodeId>,
+    /// The driver's resolution of each module's `export … from "src"`
+    /// sources (module path → source → module path). A re-export declares
+    /// no import of its source, so the module's imports cannot resolve it.
+    pub export_sources: crate::ExportSources,
     /// Object-literal IIFE parameter node → the literal template it births.
     pub iife_birth: FxHashMap<NodeId, TmplId>,
     /// Construction-phase analysis of plain functions used as constructors.
@@ -161,6 +165,7 @@ impl<'a> Gen<'a> {
             prim_const,
             walked: Default::default(),
             class_envs: FxHashMap::default(),
+            export_sources: Default::default(),
             iife_birth: FxHashMap::default(),
             fn_phase: FxHashMap::default(),
             class_homes: FxHashMap::default(),
@@ -694,7 +699,7 @@ impl<'a> Gen<'a> {
                     } => {
                         let a = self.m.atom(exported);
                         let en = self.export_node(mi, a);
-                        match self.resolve_source(module, source) {
+                        match self.resolve_source(mi, module, source) {
                             Some(t) => {
                                 let b = self.m.atom(imported);
                                 let src = self.export_node(t, b);
@@ -707,7 +712,7 @@ impl<'a> Gen<'a> {
                         let f = self.m.field(ns, a);
                         self.m.edge(en, f);
                     }
-                    Export::ExportAll { source } => match self.resolve_source(module, source) {
+                    Export::ExportAll { source } => match self.resolve_source(mi, module, source) {
                         Some(t) => {
                             // Every export of `t` is visible through `mi`.
                             let tns = self.mods[t as usize].ns_tok;
@@ -725,7 +730,7 @@ impl<'a> Gen<'a> {
                     Export::NamespaceReExport { source, name } => {
                         let a = self.m.atom(name);
                         let en = self.export_node(mi, a);
-                        match self.resolve_source(module, source) {
+                        match self.resolve_source(mi, module, source) {
                             Some(t) => {
                                 let tns = self.mods[t as usize].ns_tok;
                                 self.m.add_tok(en, tns);
@@ -792,7 +797,16 @@ impl<'a> Gen<'a> {
         }
     }
 
-    fn resolve_source(&self, module: &Module, source: &str) -> Option<u32> {
+    /// The module an `export … from source` of module `mi` reads: the
+    /// driver's resolution of the source, else an import of the same source.
+    /// Unresolved, the export is ⊤ (a native or unknown module); a program
+    /// module must never land there, or its namespace members are called
+    /// through a ⊤ that never escaped them.
+    fn resolve_source(&self, mi: u32, module: &Module, source: &str) -> Option<u32> {
+        let path = self.modules[mi as usize].0;
+        if let Some(p) = self.export_sources.get(path).and_then(|m| m.get(source)) {
+            return self.path_index.get(p).copied();
+        }
         let imp = module.imports.iter().find(|i| i.source == source)?;
         let p = imp.resolved_path.as_ref()?;
         self.path_index.get(p).copied()

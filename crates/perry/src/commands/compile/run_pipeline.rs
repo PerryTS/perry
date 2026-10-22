@@ -6308,6 +6308,7 @@ pub fn run_with_parse_cache(
     program_step("whole-program facts", None);
     let program_facts = super::program_facts::run(
         &ctx.native_modules,
+        super::program_facts::export_sources(&ctx),
         // The dyn-eval interpreter is installed (E14 possible): the same
         // condition that selects `perry-runtime/dyn-eval` for the installer.
         perry_hir::has_deferred_dynamic_code_sites()
