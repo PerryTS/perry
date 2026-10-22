@@ -214,12 +214,55 @@ fn an_index_descriptor_lowers_the_prefix_and_clamps_every_rise() {
         js_array_set_f64(arr, 3, 0.0);
         js_array_set_f64(arr, 4, 0.0);
         assert_eq!(prefix(arr), 3, "frontier stores under the descriptor clamp");
-        let arr = js_array_fill(arr, 0.0);
+        // Spec `Set` per index (EK design §9, ECMA-262 Array.prototype.fill):
+        // fill reaches the read-only key 5 and throws, as node does; the
+        // slots it set before that stay under the descriptor clamp.
+        let thrown = crate::exception::catch_js_throw(|| js_array_fill(arr, 0.0));
+        assert!(thrown.is_err(), "fill throws at the read-only key");
         assert_eq!(prefix(arr), 3, "fill under the descriptor clamp");
         let items = [7.0, 8.0, 9.0];
         let mut out = std::ptr::null_mut();
         js_array_splice(arr, 0, 0, items.as_ptr(), 3, &mut out);
         assert_eq!(prefix(out), 3, "splice under the descriptor clamp");
         // (`unshift` here would throw: its Set of the read-only key 5 fails.)
+    }
+}
+
+/// The birth row (§3.1) of the outlined literal builder: P is the leading
+/// run of non-hole values, so a hole value keeps the prefix below it.
+#[test]
+fn from_values_birth_sets_the_leading_run() {
+    unsafe {
+        let dense = [1.5f64, 2.5, 3.5];
+        let arr = alloc::js_array_from_values(dense.as_ptr(), 3);
+        assert_eq!(prefix(arr), 3, "a dense literal is born with P = n");
+        let gap = [1.5f64, f64::from_bits(HOLE), 3.5];
+        let arr = alloc::js_array_from_values(gap.as_ptr(), 3);
+        assert_eq!(prefix(arr), 1, "P stops at the first hole value");
+    }
+}
+
+/// `fill` over an element descriptor is a spec `Set` per index (EK design
+/// §9): a read-only element is not overwritten and the strict Set throws,
+/// and the prefix stays below the descriptor.
+#[test]
+fn fill_over_a_read_only_element_throws_instead_of_writing() {
+    unsafe {
+        let arr = pushed(&[1.0, 2.0, 3.0]);
+        define_read_only(arr, 1, 20.0);
+        let thrown = crate::exception::catch_js_throw(|| js_array_fill(arr, 7.0));
+        assert!(thrown.is_err(), "Set on a read-only element throws");
+        let live = clean_arr_ptr_mut(arr);
+        assert_eq!(
+            js_array_get_f64(live, 0),
+            7.0,
+            "the index before it was set"
+        );
+        assert_eq!(
+            js_array_get_f64(live, 1),
+            20.0,
+            "the read-only element keeps its value"
+        );
+        assert!(prefix(arr) <= 1, "the prefix stays below the descriptor");
     }
 }

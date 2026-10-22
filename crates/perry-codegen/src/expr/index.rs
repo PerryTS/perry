@@ -519,6 +519,14 @@ pub(crate) fn lower_index_set_fast(
             "idxset.inbounds",
         );
     }
+    {
+        // Both guard tiers decline descriptor-bearing arrays, and the slot is
+        // below length (an own value, or a hole fill proved below length):
+        // the frontier row of EK §3.1.
+        let blk = ctx.block();
+        let stored_bits = blk.bitcast_double_to_i64(&stored_value);
+        blk.array_note_ek_frontier(&arr_handle, &idx_i32, &stored_bits);
+    }
     ctx.block().br(&merge_label);
     if require_numeric_layout {
         let stored = LoweredValue {
@@ -656,6 +664,9 @@ pub(crate) fn lower_index_set_fast(
             let new_len = blk.add(I32, &idx_i32, "1");
             let len_ptr = blk.inttoptr(I64, &arr_handle);
             blk.store(I32, &new_len, &len_ptr);
+            // The new length covers `idx`: the frontier row of EK §3.1.
+            let ext_bits = blk.bitcast_double_to_i64(&ext_value);
+            blk.array_note_ek_frontier(&arr_handle, &idx_i32, &ext_bits);
             // Flag transition: holes were created iff idx > length. Then the
             // DENSE bit (0x80) must drop and the HOLES bit (0x1000) records
             // the still-valid raw-f64-or-holes invariant (branchless header
@@ -685,6 +696,9 @@ pub(crate) fn lower_index_set_fast(
         let new_len = blk.add(I32, &idx_i32, "1");
         let len_ptr = blk.inttoptr(I64, &arr_handle);
         blk.store(I32, &new_len, &len_ptr);
+        // The new length covers `idx`: the frontier row of EK §3.1.
+        let ext_bits = blk.bitcast_double_to_i64(&ext_value);
+        blk.array_note_ek_frontier(&arr_handle, &idx_i32, &ext_bits);
         blk.br(&merge_label);
     } else {
         let blk = ctx.block();
@@ -708,6 +722,9 @@ pub(crate) fn lower_index_set_fast(
         let new_len = blk.add(I32, &idx_i32, "1");
         let len_ptr = blk.inttoptr(I64, &arr_handle); // length is at offset 0
         blk.store(I32, &new_len, &len_ptr);
+        // The new length covers `idx`: the frontier row of EK §3.1.
+        let ext_bits = blk.bitcast_double_to_i64(&ext_value);
+        blk.array_note_ek_frontier(&arr_handle, &idx_i32, &ext_bits);
         blk.br(&merge_label);
     }
 

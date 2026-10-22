@@ -726,8 +726,13 @@ pub extern "C" fn js_array_from_values(values: *const f64, n: u32) -> *mut Array
     }
     let parent = arr as u64;
     let elems = unsafe { crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut f64 };
+    // The birth row of EK §3.1: P = the leading run of non-hole values.
+    let mut run = n;
     for i in 0..n as usize {
         let v = unsafe { *values.add(i) };
+        if run == n && v.to_bits() == crate::value::TAG_HOLE {
+            run = i as u32;
+        }
         let slot = unsafe { elems.add(i) };
         // A uniquely-owned string element now aliases this slot — demote it to
         // shared so a later `s += x` allocates fresh instead of mutating the
@@ -742,6 +747,7 @@ pub extern "C" fn js_array_from_values(values: *const f64, n: u32) -> *mut Array
         crate::gc::js_gc_note_slot_layout(parent, i as u32, vbits);
         crate::gc::js_write_barrier_slot(parent, slot as u64, vbits);
     }
+    unsafe { super::ek_set_prefix(arr, (*arr).ek_prefix, run) };
     arr
 }
 

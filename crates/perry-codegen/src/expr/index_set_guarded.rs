@@ -475,6 +475,11 @@ pub(super) fn emit_guarded_inbounds_array_store_keyed(
             )
         }
     };
+    // The guard word excluded element descriptors and the slot is below
+    // length (an own value, or a hole fill proved below length): the
+    // frontier row of EK §3.1.
+    ctx.block()
+        .array_note_ek_frontier(&arr_handle, idx_i32, &value_bits);
     if layout_note.is_some() && write_barrier_needed {
         // The string demote the deferred store leaves to its caller, with the
         // helper's own `STRING_TAG` test hoisted inline. A value with

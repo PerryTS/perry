@@ -237,6 +237,9 @@ pub(super) fn try_lower(
                 let arr = blk.inttoptr(I64, &handle);
                 // GC_STORE_AUDIT(POINTER_FREE): publish the initialized slot.
                 blk.store(I32, &next, &arr);
+                // Admitted only without a named layout: no element
+                // descriptor at the frontier (EK §3.1).
+                blk.array_note_ek_frontier(&handle, &length, &value_bits);
                 blk.br(&done);
             }
             ctx.current_block = slow_idx;

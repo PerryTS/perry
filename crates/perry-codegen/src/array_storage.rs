@@ -49,6 +49,36 @@ impl LlBlock {
         self.store(I32, &lowered, &prefix_ptr);
     }
 
+    /// The dense prefix P (EK design §3), an i32 at payload
+    /// `ARRAY_EK_PREFIX_OFFSET_BYTES`. The caller has proved a live,
+    /// non-forwarded GC_TYPE_ARRAY.
+    pub(crate) fn array_ek_prefix(&mut self, array: &str) -> String {
+        let offset = crate::target_layout::ARRAY_EK_PREFIX_OFFSET_BYTES.to_string();
+        let prefix_addr = self.add(I64, array, &offset);
+        let prefix_ptr = self.inttoptr(I64, &prefix_addr);
+        self.load(I32, &prefix_ptr)
+    }
+
+    /// The frontier row of EK §3.1 for an inline element store that wrote
+    /// `value_bits` (i64) at `index` (i32): a non-hole store at `index == P`
+    /// raises P by one, as the runtime's `ek_note_slot` does. The caller has
+    /// proved a live, non-forwarded GC_TYPE_ARRAY without element
+    /// descriptors (its store guard) and `index < length` once the store has
+    /// published its length. A store anywhere else leaves P.
+    pub(crate) fn array_note_ek_frontier(&mut self, array: &str, index: &str, value_bits: &str) {
+        let offset = crate::target_layout::ARRAY_EK_PREFIX_OFFSET_BYTES.to_string();
+        let prefix_addr = self.add(I64, array, &offset);
+        let prefix_ptr = self.inttoptr(I64, &prefix_addr);
+        let prefix = self.load(I32, &prefix_ptr);
+        let at_frontier = self.icmp_eq(I32, index, &prefix);
+        let not_hole = self.icmp_ne(I64, value_bits, crate::nanbox::TAG_HOLE_I64);
+        let raise = self.and(crate::types::I1, &at_frontier, &not_hole);
+        let raised = self.zext(crate::types::I1, &raise, I32);
+        let next = self.add(I32, &prefix, &raised);
+        // GC_STORE_AUDIT(POINTER_FREE): the element-kind word is an integer, never an edge.
+        self.store(I32, &next, &prefix_ptr);
+    }
+
     /// Address one checked GET slot in the same canonical backing. The caller
     /// proves a live Array and `index < capacity`. In eight-byte slot units,
     /// `size/8 - capacity + index` lies in `[2, size/8)`, so this u32 arithmetic

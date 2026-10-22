@@ -564,6 +564,22 @@ unsafe fn ek_after_fill(arr: *mut ArrayHeader, value: f64, start: u32, end: u32)
     crate::array::ek_debug_verify(arr);
 }
 
+/// `fill` over an array that holds element descriptors: each index is the
+/// spec's `Set(O, k, value, true)`, so an accessor's setter runs and a
+/// read-only element throws, where a raw slot write would bypass both (EK
+/// design §9). The strict store funnel keeps P (§3.1).
+unsafe fn fill_through_set(
+    mut arr: *mut ArrayHeader,
+    value: f64,
+    start: usize,
+    end: usize,
+) -> *mut ArrayHeader {
+    for index in start..end {
+        arr = super::indexing::js_array_set_f64_extend_strict(arr, index as u32, value);
+    }
+    arr
+}
+
 /// `Array.prototype.fill(value)` — fills every element (0..length) with
 /// `value`. Returns the same array pointer.
 #[no_mangle]

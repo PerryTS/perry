@@ -409,9 +409,12 @@ pub(crate) fn emit_array_from_lowered_values<'f>(
         let named = blk.gep(I8, &raw, &[(I64, "16")]);
         // GC_STORE_AUDIT(INIT): fresh array has no named child.
         blk.store(PTR, "null", &named);
-        let ek = blk.gep(I8, &raw, &[(I64, "24")]);
-        // GC_STORE_AUDIT(INIT): element kind word (P = 0, ANY), the weakest claim.
-        blk.store(I64, "0", &ek);
+        let ek_offset = GC_HEADER_SIZE + crate::target_layout::ARRAY_EK_PREFIX_OFFSET_BYTES;
+        let ek = blk.gep(I8, &raw, &[(I64, &ek_offset.to_string())]);
+        // GC_STORE_AUDIT(INIT): element kind word: P = n (EK §3.1 birth row:
+        // an `Expr::Array` literal has no elision, `ArraySpread` owns those,
+        // and every slot below n is filled before the array escapes), ANY.
+        blk.store(I64, &n.to_string(), &ek);
         for i in n..capacity {
             let slot = blk.gep_inbounds(I8, &raw, &[(I64, &(32 + i * 8).to_string())]);
             // GC_STORE_AUDIT(INIT): fresh unused array capacity holds holes.
@@ -559,6 +562,16 @@ pub(crate) fn emit_array_from_lowered_values<'f>(
             &elem_addr,
             layout_notes_needed[i],
         );
+    }
+
+    {
+        // The birth row of EK §3.1: every slot below n now holds an element
+        // (no elision reaches `Expr::Array`), so P = n.
+        let blk = ctx.block();
+        let prefix_offset = crate::target_layout::ARRAY_EK_PREFIX_OFFSET_BYTES.to_string();
+        let prefix_ptr = blk.gep(I8, &arr_ptr, &[(I64, &prefix_offset)]);
+        // GC_STORE_AUDIT(POINTER_FREE): the element-kind word is an integer, never an edge.
+        blk.store(I32, &cap_str, &prefix_ptr);
     }
 
     if all_numeric_elements {

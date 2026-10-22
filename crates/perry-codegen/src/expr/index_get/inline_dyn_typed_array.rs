@@ -298,6 +298,22 @@ pub(in crate::expr) fn lower_inline_dyn_typed_array_get_with_byte_view_param(
     // statically-Array tier.  Every exotic/OOB case retains the unchanged
     // boxed dispatcher.
     ctx.current_block = object_array_guard_idx;
+    // The dense-prefix hit first (EK design §4): `index < P` proves a
+    // non-hole own data element without a descriptor, below length and
+    // capacity, so it needs neither the descriptor, prototype and bounds
+    // guard below nor the hole select. A miss takes that guard unchanged.
+    let prefix_hit_idx = ctx.new_block("arrlike.ic.prefix_hit");
+    let array_rest_idx = ctx.new_block("arrlike.ic.array_rest");
+    {
+        let prefix_hit_label = ctx.block_label(prefix_hit_idx);
+        let array_rest_label = ctx.block_label(array_rest_idx);
+        let blk = ctx.block();
+        let prefix = blk.array_ek_prefix(&object_raw);
+        let prefix = blk.zext(I32, &prefix, I64);
+        let in_prefix = blk.icmp_ult(I64, &object_idx_i64, &prefix);
+        blk.cond_br(&in_prefix, &prefix_hit_label, &array_rest_label);
+    }
+    ctx.current_block = array_rest_idx;
     let array_reserved_addr = ctx.block().sub(I64, &object_raw, "6");
     let array_reserved_ptr = ctx.block().inttoptr(I64, &array_reserved_addr);
     let array_reserved = ctx.block().load(I16, &array_reserved_ptr);
@@ -361,6 +377,24 @@ pub(in crate::expr) fn lower_inline_dyn_typed_array_get_with_byte_view_param(
         array_value
     };
     let array_end_label = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = prefix_hit_idx;
+    crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_READ_PREFIX);
+    let prefix_value = {
+        let blk = ctx.block();
+        let base = blk.array_elements_addr(&object_raw);
+        let base_ptr = blk.inttoptr(I64, &base);
+        let element_ptr = blk.gep_inbounds(I64, &base_ptr, &[(I64, &object_idx_i64)]);
+        blk.load(DOUBLE, &element_ptr)
+    };
+    let prefix_value = if coerce_slow_to_number {
+        ctx.block()
+            .call(DOUBLE, "js_number_coerce", &[(DOUBLE, &prefix_value)])
+    } else {
+        prefix_value
+    };
+    let prefix_end_label = ctx.block().label.clone();
     ctx.block().br(&merge_label);
 
     // ---- typed-array arm: ONE guarded read, four element widths ----
@@ -742,6 +776,7 @@ pub(in crate::expr) fn lower_inline_dyn_typed_array_get_with_byte_view_param(
             (ta_w2_value.as_str(), ta_w2_end.as_str()),
             (ta_w1_value.as_str(), ta_w1_end.as_str()),
             (array_value.as_str(), array_end_label.as_str()),
+            (prefix_value.as_str(), prefix_end_label.as_str()),
             (elem_value.as_str(), elem_end_label.as_str()),
             (u8_value.as_str(), u8_end_label.as_str()),
             (view_value.as_str(), view_end_label.as_str()),
