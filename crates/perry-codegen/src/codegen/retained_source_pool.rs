@@ -148,33 +148,33 @@ impl<'a> SourcePool<'a> {
             (llmod.add_retained_source_constant(&blob).0, Vec::new())
         };
         let ranges = unique
-                .into_iter()
-                .enumerate()
-                .map(|(idx, source)| {
-                    let (parent, offset) = plan[idx];
-                    let original = parent_offsets[&parent] + offset;
-                    let (offset, decoded_offset) = if compressed {
-                        let block = (original / perry_abi::RETAINED_SOURCE_BLOCK_BYTES)
-                            .min(frame_offsets.len() - 1);
-                        (
-                            frame_offsets[block],
-                            Some(original - block * perry_abi::RETAINED_SOURCE_BLOCK_BYTES),
-                        )
-                    } else {
-                        (original, None)
-                    };
+            .into_iter()
+            .enumerate()
+            .map(|(idx, source)| {
+                let (parent, offset) = plan[idx];
+                let original = parent_offsets[&parent] + offset;
+                let (offset, decoded_offset) = if compressed {
+                    let block = (original / perry_abi::RETAINED_SOURCE_BLOCK_BYTES)
+                        .min(frame_offsets.len() - 1);
                     (
-                        source,
-                        SourceRange {
-                            global: global.clone(),
-                            offset,
-                            byte_len: source.len(),
-                            decoded_offset,
-                            pool_offset: original,
-                        },
+                        frame_offsets[block],
+                        Some(original - block * perry_abi::RETAINED_SOURCE_BLOCK_BYTES),
                     )
-                })
-                .collect();
+                } else {
+                    (original, None)
+                };
+                (
+                    source,
+                    SourceRange {
+                        global: global.clone(),
+                        offset,
+                        byte_len: source.len(),
+                        decoded_offset,
+                        pool_offset: original,
+                    },
+                )
+            })
+            .collect();
         Self {
             ranges,
             decoded_len,
