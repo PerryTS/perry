@@ -467,26 +467,6 @@ impl LlInst {
     }
 }
 
-impl LlInst {
-    /// The callee symbol of a direct call (without `@`), for the typed-body
-    /// admission count (`codegen/typed_body.rs`). Pre-rendered `Raw` calls are
-    /// read from their text.
-    pub(crate) fn direct_callee(&self) -> Option<&str> {
-        match self {
-            LlInst::Call { callee, .. } => Some(callee.as_str()),
-            LlInst::Raw(line) => {
-                let at = line.find("call ")?;
-                let rest = &line[at..];
-                let sym = rest.find('@')?;
-                let name = &rest[sym + 1..];
-                let end = name.find('(')?;
-                Some(&name[..end])
-            }
-            _ => None,
-        }
-    }
-}
-
 fn push_args(out: &mut String, args: &[(LlvmType, String)]) {
     use std::fmt::Write;
     for (i, (t, v)) in args.iter().enumerate() {

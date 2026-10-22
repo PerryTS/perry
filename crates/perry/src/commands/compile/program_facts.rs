@@ -176,26 +176,10 @@ pub(crate) fn run(
     Some(Arc::new(pf))
 }
 
-/// Whether any class is prefix-stable with its facts usable for elision
-/// (step 5b: the only classes a typed body's receiver proof can use).
-/// Object-literal classes (`litclass`, `__AnonShape_*`) count: a literal is
-/// born with its class id in the header like any `new C()`.
-pub(crate) fn has_stable_classes(pf: &Option<Arc<perry_wpfacts::ProgramFacts>>) -> bool {
-    pf.as_ref().is_some_and(|pf| {
-        elide_enabled()
-            && !pf.stats.aborted
-            && pf
-                .templates
-                .iter()
-                .any(|t| t.prefix_stable && t.class_id.is_some())
-    })
-}
-
 /// The view module `path`'s codegen receives.
 pub(crate) fn view_for(
     pf: &Option<Arc<perry_wpfacts::ProgramFacts>>,
     path: &Path,
-    receiver_params: Option<&BTreeMap<u32, Vec<String>>>,
 ) -> perry_codegen::ProgramFactsView {
     let Some(pf) = pf else {
         return Default::default();
@@ -206,12 +190,7 @@ pub(crate) fn view_for(
     } else {
         Vec::new()
     };
-    let mut elision = elision_for(pf, &key);
-    if !elision.classes.is_empty() {
-        if let Some(r) = receiver_params {
-            elision.receiver_params = r.clone();
-        }
-    }
+    let elision = elision_for(pf, &key);
     let digest = if elision.is_empty()
         && !elision.fnproto_bind_unwritten
         && elision.super_unrelinked.is_empty()

@@ -13,10 +13,7 @@
 //! which throws), no ShapeId compare, no miss call.
 //!
 //! The receiver facts come from the whole-program solve (`locals`,
-//! `this_of`) or from a typed body's entry check (`codegen/typed_body.rs`:
-//! a parameter whose class id the dispatcher tested against fninfer's class
-//! set; the parameter is never reassigned, and the field facts hold for the
-//! object's whole life, so a call in between changes nothing).
+//! `this_of`).
 //! The GC write barrier stays for stores that can carry a pointer (F2 decides
 //! which can); the raw-f64 lane discipline stays for stores into an F64 lane.
 //!

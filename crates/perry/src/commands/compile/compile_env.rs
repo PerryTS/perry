@@ -188,7 +188,6 @@ pub(super) const COMPILE_ENV_VARS: &[&str] = &[
     "PERRY_TREE_SHAKE",
     "PERRY_TVOS_SYSROOT",
     "PERRY_TYPED_ARRAY_RMW",
-    "PERRY_TYPED_BODIES",
     "PERRY_TYPED_FEEDBACK",
     "PERRY_TYPED_FEEDBACK_TRACE",
     "PERRY_TYPED_LOCALS",
@@ -664,10 +663,6 @@ const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
     (
         "PERRY_TREE_SHAKE_DIAG",
         "Prints lowering diagnostics; no emitted instructions depend on the report.",
-    ),
-    (
-        "PERRY_TYPED_BODIES_LOG",
-        "Writes the typed-body clone log; no emitted instructions depend on the log.",
     ),
     (
         "PERRY_TYPED_ELEMENT_SABOTAGE",

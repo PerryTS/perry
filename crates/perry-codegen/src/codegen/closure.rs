@@ -489,9 +489,6 @@ pub(super) fn compile_closure(
     cross_module: &CrossModuleCtx,
     trusted_box_captures: bool,
     versioned_loop_callback: bool,
-    // fninfer slice 0: compile the `$tbody` clone whose parameter types are
-    // proofs (`codegen/typed_body.rs`).
-    typed_body: Option<&super::typed_body::TypedBodyPlan>,
 ) -> Result<()> {
     // Destructure the closure expression. We trust that the caller
     // passes only `Expr::Closure` here (from `collect_closures_*`).
@@ -543,7 +540,6 @@ pub(super) fn compile_closure(
     // A closure region (`split_regions`): its parameter types are what its
     // only caller proved at the call, and it has this one body.
     let region_closure = cross_module.region_closures.contains(&func_id)
-        && typed_body.is_none()
         && !trusted_box_captures
         && !versioned_loop_callback;
     let region_proofs: HashMap<u32, perry_hir::types::Type> = if region_closure {
@@ -594,9 +590,7 @@ pub(super) fn compile_closure(
     } else {
         public_llvm_name.clone()
     };
-    let llvm_name = if typed_body.is_some() {
-        super::typed_body::typed_body_name(&public_llvm_name)
-    } else if versioned_loop_callback {
+    let llvm_name = if versioned_loop_callback {
         format!("{ordinary_body_name}$trusted_boxes$versioned_loop")
     } else if trusted_box_captures {
         format!("{ordinary_body_name}$trusted_boxes")
@@ -622,7 +616,7 @@ pub(super) fn compile_closure(
     // indirect-call admission is computed correctly but never reaches
     // `new_site_is_in_loop` while the closure body is emitted.
     lf.alloc_hot = cross_module.alloc_hot_functions.contains(&func_id);
-    if typed_public_trampoline.is_some() || trusted_box_captures || typed_body.is_some() {
+    if typed_public_trampoline.is_some() || trusted_box_captures {
         lf.linkage = "internal".to_string();
     }
 
@@ -727,21 +721,7 @@ pub(super) fn compile_closure(
     let locals: HashMap<u32, String> = {
         let blk = lf.block_mut(0).unwrap();
         let mut map = HashMap::new();
-        // Closed World 5d: a parameter the typed body's entry check proved
-        // Number holds a plain double for the whole body
-        // (`typed_locals::number_proof_params`), so its slot is not bound as
-        // a root, exactly like a Number-by-construction body local. The
-        // body-local drop (`drop_number_local_root_slots`, which also removes
-        // this id from the map) runs only after these binds. A bound slot
-        // would make every read of the parameter a root reload whose word
-        // then flows into unrooted Number storage (a typed local copied from
-        // it) and across later safepoints. The map entry itself stays until
-        // that drop so `capture_root_base` below keeps the original count.
-        let mut number_params: HashSet<u32> = typed_body
-            .map(|plan| {
-                crate::collectors::typed_locals::number_proof_params(&plan.proofs).collect()
-            })
-            .unwrap_or_default();
+        let mut number_params: HashSet<u32> = HashSet::new();
         number_params.extend(
             region_entry_proofs
                 .iter()
@@ -995,9 +975,7 @@ pub(super) fn compile_closure(
     let mut code_unit_locals = std::collections::HashSet::new();
     let typed_locals = crate::collectors::typed_locals::apply(
         body,
-        &typed_body
-            .map(|p| p.proofs.clone())
-            .unwrap_or_else(|| region_entry_proofs.clone()),
+        &region_entry_proofs,
         &outer_proofs,
         &closure_boxed_vars,
         module_globals,
@@ -1181,10 +1159,7 @@ pub(super) fn compile_closure(
         native_facts: &native_facts,
         locals,
         local_types,
-        // A typed body's entry check (the public dispatcher) proved these.
-        proven_local_types: typed_body
-            .map(|p| p.proofs.clone())
-            .unwrap_or_else(|| region_proofs.clone()),
+        proven_local_types: region_proofs.clone(),
         typed_locals,
         code_unit_locals,
         confined_arrays: &cross_module.definite_init.confined,
@@ -1208,11 +1183,7 @@ pub(super) fn compile_closure(
         pending_labels: Vec::new(),
         classes,
         class_hierarchy: &cross_module.class_hierarchy,
-        // A typed body's entry check proved its class parameters' class sets:
-        // they answer like whole-program receiver facts.
-        wpfacts: typed_body
-            .map(|p| p.receiver_facts(&cross_module.wpfacts))
-            .unwrap_or_else(|| cross_module.wpfacts.clone()),
+        wpfacts: cross_module.wpfacts.clone(),
         program_layouts: cross_module.program_layouts.clone(),
         wpfacts_sites: 0,
         wpfacts_tested: Vec::new(),
@@ -1616,7 +1587,6 @@ pub(super) fn compile_closure(
     let helpers = std::mem::take(&mut ctx.pending_helpers);
     let buffer_alias_used = ctx.buffer_data_slots.len() as u32;
     let native_rep_records = std::mem::take(&mut ctx.native_rep_records);
-    ctx.func.wpfacts_sites = ctx.wpfacts_sites;
     drop(ctx);
     llmod.ic_counter = ic_end;
     llmod.buffer_alias_counter += buffer_alias_used;

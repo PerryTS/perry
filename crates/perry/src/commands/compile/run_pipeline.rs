@@ -6252,12 +6252,6 @@ pub fn run_with_parse_cache(
         &ctx.patched_builtins.dynamic_code_reach,
         &ctx.cjs_wrap_debug_sources,
     );
-    // Step 5b: closure class parameters as typed-body receiver proofs, once
-    // the facts say some class's layout is stable.
-    let receiver_params = super::fn_infer::receiver_params(
-        &ctx.native_modules,
-        super::program_facts::has_stable_classes(&program_facts),
-    );
     program_step("whole-program facts", Some(facts_started));
     #[allow(clippy::type_complexity)]
     let static_shape_ids_by_module: HashMap<
@@ -6362,7 +6356,7 @@ pub fn run_with_parse_cache(
                     &mut opts,
                 );
                 opts.program_facts =
-                    super::program_facts::view_for(&program_facts, path, receiver_params.get(path));
+                    super::program_facts::view_for(&program_facts, path);
                 opts.program_facts.dynamic_code_reach =
                     ctx.patched_builtins.dynamic_code_reach.clone();
                 std::sync::Arc::make_mut(&mut opts.program_facts.elision).dynamic_code_reach =
@@ -6381,7 +6375,6 @@ pub fn run_with_parse_cache(
         class_canonical_path,
         exported_object_literals,
         program_facts,
-        receiver_params,
         program_layouts,
         constructor_contracts,
         static_shape_ids,

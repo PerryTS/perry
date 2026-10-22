@@ -332,7 +332,6 @@ mod testing_feature_gate_tests;
 mod trusted_box_callback_tests;
 mod typed_abi;
 mod typed_abi_opt_report;
-pub(crate) mod typed_body;
 mod typed_entry;
 pub(crate) use typed_entry::{emit_plain_number_bits_test, emit_plain_number_test};
 #[cfg(test)]

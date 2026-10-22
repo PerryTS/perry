@@ -88,10 +88,6 @@ pub struct LlFunction {
     /// since #7354 — windows-msvc used to name `__C_specific_handler` here,
     /// which forced funclet EH and locked Windows out of statepoints.
     pub personality: Option<&'static str>,
-    /// Field sites the wpfacts lowering compiled without a guard
-    /// (`expr/wpfacts_access.rs`); a typed body is installed only when it
-    /// has more of them than its generic body (`codegen/typed_body.rs`).
-    pub wpfacts_sites: u32,
     blocks: Vec<LlBlock>,
     block_counter: u32,
     reg_counter: Rc<RegCounter>,
@@ -305,7 +301,6 @@ impl LlFunction {
             hot_loop_callee: false,
             alloc_hot: false,
             personality: None,
-            wpfacts_sites: 0,
             blocks: Vec::new(),
             block_counter: 0,
             reg_counter: Rc::new(RegCounter::new()),
