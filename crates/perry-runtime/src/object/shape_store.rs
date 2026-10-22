@@ -114,14 +114,63 @@ pub(crate) unsafe fn try_own_store(
         };
         record
     };
+    match record_own_overwrite(obj, record, key, value) {
+        Some(answer) => answer,
+        None => super::try_existing_own_data_overwrite(obj, key, value),
+    }
+}
+
+/// The shape record of a receiver whose own keys may answer a keyed store
+/// as a slot overwrite: an ordinary layout with at least one key and no
+/// overflow. Shape facts only, read before the key is resolved, so a store
+/// to a fresh or overflowed object pays nothing more.
+///
+/// # Safety
+/// `obj` is a live object word.
+#[inline]
+pub(crate) unsafe fn own_overwrite_record(obj: *mut ObjectHeader) -> Option<shapes::ShapeRecordRef> {
+    if super::overflow::has_overflow(obj) {
+        return None;
+    }
+    let record = ordinary_receiver_record(obj)?;
+    (record.logical_key_count() != 0).then_some(record)
+}
+
+/// A keyed store `obj[key] = value` whose receiver's shape record (from
+/// [`own_overwrite_record`]) proves `key` an own writable data slot: the slot
+/// store, before any add-path work (family layout, migration, tombstone
+/// re-add, overflow, transition). `false` leaves the store to the caller's
+/// complete path, unchanged.
+///
+/// # Safety
+/// `obj` is a live object word; `key` is an interned property key.
+pub(crate) unsafe fn try_record_own_overwrite(
+    obj: *mut ObjectHeader,
+    record: shapes::ShapeRecordRef,
+    key: *const crate::StringHeader,
+    value: f64,
+) -> bool {
+    record_own_overwrite(obj, record, key, value) == Some(true)
+}
+
+/// The shape record's own-slot answer for a store: `Some(true)` stored,
+/// `Some(false)` the record proves the store is not a plain own overwrite,
+/// `None` the record cannot tell (the caller asks the object).
+#[inline(always)]
+unsafe fn record_own_overwrite(
+    obj: *mut ObjectHeader,
+    record: shapes::ShapeRecordRef,
+    key: *const crate::StringHeader,
+    value: f64,
+) -> Option<bool> {
     if !record.object_kind().is_ordinary_layout() {
-        return false;
+        return Some(false);
     }
     if record.object_kind() == shapes::ShapeObjectKind::Ordinary {
         if let Some(slot) = record.own_store_slot(key) {
             let Some(slot) = slot else {
                 // Shape-proven absence cannot become an overwrite on another own-key lookup.
-                return false;
+                return Some(false);
             };
             // Attributes belong to the matched binding. An accessor,
             // readonly intrinsic or private slot elsewhere on this shape
@@ -134,18 +183,18 @@ pub(crate) unsafe fn try_own_store(
                     slot as u32,
                 ))
             {
-                return false;
+                return Some(false);
             }
             let slot = super::key_attrs::key_storage_slot(
                 record.keys() as usize as *const crate::ArrayHeader,
                 slot as u32,
             ) as usize;
             if store_proven_own_slot(obj, record, slot, value) {
-                return true;
+                return Some(true);
             }
         }
     }
-    super::try_existing_own_data_overwrite(obj, key, value)
+    None
 }
 
 /// Proven writable ordinary own slot: shared representation/barrier funnel for Set and Define.

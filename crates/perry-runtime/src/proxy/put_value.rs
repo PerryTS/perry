@@ -518,6 +518,30 @@ pub(crate) const IC_SLOT_OVERFLOW_BIT: u32 = 1 << 30;
 /// strict-aware `[[Set]]`. Nothing is remembered.
 #[no_mangle]
 pub extern "C" fn js_put_value_set_dynamic(target: f64, key: f64, value: f64, strict: i32) -> f64 {
+    // An own writable data slot the receiver's shape names is the answer of
+    // [[Set]] for any receiver (OrdinarySet finds the own property first):
+    // one shape lookup, before the add-path probes below. The key is
+    // resolved to its atom only for a receiver whose record has keys.
+    let mut key = key;
+    if (target.to_bits() & !POINTER_MASK) == POINTER_TAG {
+        let obj = (target.to_bits() & POINTER_MASK) as *mut crate::ObjectHeader;
+        if let Some(record) = unsafe { crate::object::shape_store::own_overwrite_record(obj) } {
+            let atom = if crate::JSValue::from_bits(key.to_bits()).is_short_string() {
+                unsafe { crate::object::store_key::interned_key_for_store(key) }
+            } else {
+                unsafe { crate::object::store_key::interned_heap_key(key) }
+            };
+            if let Some(atom) = atom {
+                // The atom names the same property; the steps below reuse it.
+                key = crate::value::js_nanbox_string(atom as i64);
+                if unsafe {
+                    crate::object::shape_store::try_record_own_overwrite(obj, record, atom, value)
+                } {
+                    return value;
+                }
+            }
+        }
+    }
     // Case 2c: a family object's late key and a key outside its layout
     // (`layout_desc::family_store`); the layout word stays.
     if unsafe { crate::object::layout_desc::family_store_value(target, key, value) } {

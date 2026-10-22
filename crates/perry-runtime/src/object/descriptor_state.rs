@@ -84,17 +84,14 @@ pub(crate) fn object_proto_may_intercept_key(key: f64) -> bool {
     object_proto_may_intercept_name(bytes)
 }
 
-/// The realm-default answer for an already decoded property name.
+/// Can the realm's `%Object.prototype%` hold a store-blocking key other than
+/// the Annex-B `__proto__` accessor? Not while it is the sealed intrinsic on
+/// its immutable layout: its own shadow word is the census answer until a
+/// program write changes that object, the same fact builtin call sites read.
+/// Not before the program has materialized it either (no memoized address).
+/// Otherwise only its keys can tell ([`object_proto_may_intercept_name`]).
 #[inline]
-pub(crate) fn object_proto_may_intercept_name(bytes: &[u8]) -> bool {
-    // The intrinsic Annex-B setter is implemented by the ordinary Set walk.
-    if bytes == b"__proto__" {
-        return true;
-    }
-    // The sealed intrinsic's immutable layout has no store-blocking key
-    // except the Annex-B accessor above. Its own shadow word is the census
-    // answer until a program write changes that object. This is the same
-    // fact builtin call sites read, with no separate chain verdict.
+pub(crate) fn object_proto_may_intercept_any() -> bool {
     let intrinsic =
         crate::agent_ptrs::intrinsic_proto(super::builtin_proto::BuiltinProto::Object as usize);
     let word = unsafe { (*intrinsic).parent_class_id };
@@ -103,10 +100,22 @@ pub(crate) fn object_proto_may_intercept_name(bytes: &[u8]) -> bool {
     if word >= super::shapes::SHAPE_ID_BASE && word < super::layout_desc::UNSHADOWED_WORD_END {
         return false;
     }
-    let proto = crate::array::object_prototype_addr_if_resolved();
-    proto != 0
+    crate::array::object_prototype_addr_if_resolved() != 0
+}
+
+/// The realm-default answer for an already decoded property name.
+#[inline]
+pub(crate) fn object_proto_may_intercept_name(bytes: &[u8]) -> bool {
+    // The intrinsic Annex-B setter is implemented by the ordinary Set walk.
+    if bytes == b"__proto__" {
+        return true;
+    }
+    object_proto_may_intercept_any()
         && unsafe {
-            super::key_attrs::object_key_blocks_plain_store(proto as *const ObjectHeader, bytes)
+            super::key_attrs::object_key_blocks_plain_store(
+                crate::array::object_prototype_addr_if_resolved() as *const ObjectHeader,
+                bytes,
+            )
         }
 }
 

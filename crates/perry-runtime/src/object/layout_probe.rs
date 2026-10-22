@@ -1525,6 +1525,25 @@ unsafe fn prototype_of(dir: *const u8, obj: *const ObjectHeader, r: *const Shape
     link_of(dir, obj, r)
 }
 
+/// Is `cur`'s [[Prototype]] the realm default `%Object.prototype%` by
+/// [`link_of`]'s rule (no recorded prototype, a realm-default identity, not a
+/// typed-array prototype, no exotic read receiver or weak-collection brand)?
+#[inline]
+unsafe fn realm_default_link(cur: *const ObjectHeader, rc: *const ShapeRecord) -> bool {
+    let header = crate::gc::header_from_trusted_user_ptr(cur.cast());
+    if (*header)._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0 {
+        return false;
+    }
+    let meta = (*cur).meta;
+    if !meta.is_null()
+        && ((*meta).flags & crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER != 0
+            || (*meta).prototype != 0)
+    {
+        return false;
+    }
+    (*rc).weak_collection_brand().is_none() && (*rc).proto_id == super::PROTO_ID_DEFAULT
+}
+
 /// The [[Prototype]] link of `cur` (record `rc`), an object whose own keys
 /// [`walks_from`] admits, so not a typed-array prototype: its recorded
 /// prototype, else its layout's identity (null, the realm default
@@ -2541,7 +2560,15 @@ unsafe fn chain_admits_add(
         let next = match prototype_of(dir, cur, rc) {
             Next::Object(p) => p,
             Next::End => return true,
-            Next::Unknown => return false,
+            // The realm-default link before `%Object.prototype%`'s address is
+            // memoized (the probe's cell): the generic store's authority for
+            // that link answers (`descriptor_state::layout_store_may_intercept`
+            // on a realm-default record), without its per-key read.
+            Next::Unknown => {
+                return hash != PROTO_KEY_HASH
+                    && realm_default_link(cur, rc)
+                    && !crate::object::descriptor_state::object_proto_may_intercept_any();
+            }
         };
         let w = (*next).parent_class_id;
         // An unwritten `%Object.prototype%` ends the chain, and its one
