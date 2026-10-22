@@ -90,7 +90,8 @@ TCP/UDP/DNS interoperability with the packaged engine restored. It also executes
 WASI commands, including commands nested inside active library callbacks. All
 20 normal library phases and five command phases must pass; partial or duplicate
 phase sets cannot qualify an archive.
-The receipt records archive, installed-file and executable identities. Expanded
+The receipt records archive, installed-file and executable identities.
+
 The expanded ABI 5 Linux GNU x86_64 production archive passes seven outer
 checks, all 20 library phases and five command phases at source
 `1f36aa7bdeaa70680acc98cb2f443f2194681bdf`. Verification checks the downloaded
