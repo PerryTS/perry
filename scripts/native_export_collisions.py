@@ -145,9 +145,19 @@ def literal_exports(ts):
                 export = True
             if "export_name" in attr:
                 j = attr.index("export_name")
-                if attr[j + 1:j + 2] != ["="] or not attr[j + 2].startswith('"'):
+                if attr[j + 1:j + 2] != ["="]:
                     raise ValueError("nonliteral export_name requires scanner support")
-                export = json.loads(attr[j + 2])
+                value = attr[j + 2:]
+                if value[0].startswith('"'):
+                    export = json.loads(value[0])
+                elif value[:3] == ["concat", "!", "("] and value[3].startswith('"'):
+                    # A computed name with a literal prefix is recorded as the
+                    # prefix family: two crates sharing one prefix still collide.
+                    export = json.loads(value[3]) + "*"
+                elif value[0] == "$" and len(value) == 2:
+                    export = "$" + value[1]
+                else:
+                    raise ValueError("nonliteral export_name requires scanner support")
             i = end + 1
             continue
         if export is not None and ts[i] in ("fn", "static", "const"):
@@ -163,6 +173,116 @@ def literal_exports(ts):
     return exports
 
 
+def repeated_head_layout(definition):
+    """Head of a repeating `$( $a:ident / $b:ident = ... );*` exporting arm.
+
+    Returns the leading sequence of ("p", ident-param) and ("l", literal) the
+    arm's repetition starts with, or None when the exporting arm is not a
+    repetition. Binding stops at the first non-ident fragment, so only the
+    leading names -- the exported ones -- are ever bound.
+    """
+    i = 0
+    while i < len(definition):
+        if definition[i] not in ("(", "[", "{"):
+            i += 1
+            continue
+        m_end = closing(definition, i)
+        # `=>` tokenizes as two single-character tokens.
+        if definition[m_end + 1:m_end + 3] != ["=", ">"] or definition[m_end + 3] not in ("(", "[", "{"):
+            i = m_end + 1
+            continue
+        b_end = closing(definition, m_end + 3)
+        if "no_mangle" in definition[m_end + 4:b_end]:
+            matcher = definition[i + 1:m_end]
+            if matcher[:2] != ["$", "("]:
+                return None
+            layout, j = [], 2
+            while j < len(matcher):
+                if matcher[j] == "$" and j + 3 < len(matcher) and matcher[j + 2] == ":":
+                    if matcher[j + 3] != "ident":
+                        break
+                    layout.append(("p", matcher[j + 1]))
+                    j += 4
+                elif matcher[j] in ("/", ",", "=", "|"):
+                    layout.append(("l", matcher[j]))
+                    j += 1
+                else:
+                    break
+            return layout or None
+        i = b_end + 1
+    return None
+
+
+def bind_repeated(layout, args):
+    """Bind each `;`-terminated entry of a repeating invocation to its names."""
+    entries, j = [], 0
+    while j < len(args):
+        entry, k = {}, j
+        for kind, value in layout:
+            if k >= len(args):
+                raise ValueError("truncated repeated export invocation")
+            if kind == "p":
+                if not re.fullmatch(r"[A-Za-z_]\w*", args[k]):
+                    raise ValueError("unsupported repeated export invocation")
+                entry[value] = args[k]
+            elif args[k] != value:
+                raise ValueError("unsupported repeated export invocation")
+            k += 1
+        entries.append(entry)
+        while k < len(args) and args[k] != ";":
+            k = closing(args, k) + 1 if args[k] in ("(", "[", "{") else k + 1
+        j = k + 1
+    return entries
+
+
+def positional_literal_params(definition):
+    """Index of each `$p:literal` in the exporting arm's comma-separated matcher."""
+    i = 0
+    while i < len(definition):
+        if definition[i] not in ("(", "[", "{"):
+            i += 1
+            continue
+        m_end = closing(definition, i)
+        if definition[m_end + 1:m_end + 3] != ["=", ">"] or definition[m_end + 3] not in ("(", "[", "{"):
+            i = m_end + 1
+            continue
+        b_end = closing(definition, m_end + 3)
+        if "no_mangle" in definition[m_end + 4:b_end] or "export_name" in definition[m_end + 4:b_end]:
+            matcher, out, index, j = definition[i + 1:m_end], {}, 0, 0
+            while j < len(matcher):
+                if matcher[j] == "$" and j + 3 < len(matcher) and matcher[j + 2] == ":":
+                    if matcher[j + 3] == "literal":
+                        out[matcher[j + 1]] = index
+                    index += 1
+                    j += 4
+                    if j < len(matcher) and matcher[j] == ",":
+                        j += 1
+                else:
+                    return {}
+            return out
+        i = b_end + 1
+    return {}
+
+
+def split_top_level(args, sep=","):
+    parts, cur, k = [], [], 0
+    while k < len(args):
+        if args[k] in ("(", "[", "{"):
+            end = closing(args, k)
+            cur.extend(args[k:end + 1])
+            k = end + 1
+        elif args[k] == sep:
+            parts.append(cur)
+            cur = []
+            k += 1
+        else:
+            cur.append(args[k])
+            k += 1
+    if cur:
+        parts.append(cur)
+    return parts
+
+
 def source_exports(sources):
     """A crate's literal and name-argument macro exports, with source paths.
 
@@ -170,6 +290,7 @@ def source_exports(sources):
     fail rather than silently losing the generated symbol from the inventory.
     """
     all_defs, all_macros, bodies, parsed, excluded = {}, {}, {}, {}, set()
+    layouts, positional = {}, {}
     for path, source in sources.items():
         parsed[path], test_modules = production_tokens(tokens(source))
         parent = Path(path).parent if Path(path).stem in ("lib", "mod") else Path(path).with_suffix("")
@@ -187,12 +308,22 @@ def source_exports(sources):
             if not generated:
                 continue
             params = set(re.findall(r"\$ (\w+) : ident", " ".join(definition)))
+            literal_params = positional_literal_params(definition)
+            if literal_params and all(g[1:] in literal_params for g in generated if g.startswith("$")) and any(g.startswith("$") for g in generated):
+                positional[name] = {g: literal_params[g[1:]] for g in generated if g.startswith("$")}
+                signature = tuple(sorted(set(generated)))
+                all_defs[name] = signature
+                continue
             if any(g.startswith("$") and g[1:] not in params for g in generated):
                 raise ValueError(f"{path}: unsupported exporting macro {name}")
-            # The first ident matcher is the exported name in current macros.
-            first = next((m for m in re.finditer(r"\$ (\w+) : (\w+)", " ".join(definition)) if m.group(2) != "meta"), None)
-            if any(g.startswith("$") and (first is None or g[1:] != first.group(1) or first.group(2) != "ident") for g in generated):
-                raise ValueError(f"{path}: {name} exports a non-first ident parameter")
+            layout = repeated_head_layout(definition)
+            if layout is not None and all(g[1:] in {v for k, v in layout if k == "p"} for g in generated if g.startswith("$")):
+                layouts[name] = layout
+            else:
+                # The first ident matcher is the exported name in current macros.
+                first = next((m for m in re.finditer(r"\$ (\w+) : (\w+)", " ".join(definition)) if m.group(2) != "meta"), None)
+                if any(g.startswith("$") and (first is None or g[1:] != first.group(1) or first.group(2) != "ident") for g in generated):
+                    raise ValueError(f"{path}: {name} exports a non-first ident parameter")
             signature = tuple(sorted(set(generated)))
             if name in all_defs and all_defs[name] != signature:
                 raise ValueError(f"{path}: conflicting export macro {name}")
@@ -216,6 +347,24 @@ def source_exports(sources):
                 # Skip attributes (including doc attributes) preceding the name.
                 while args[:2] == ["#", "["]:
                     args = args[closing(args, 1) + 1:]
+                if ts[i] in positional:
+                    parts = split_top_level(args)
+                    for generated in all_defs[ts[i]]:
+                        if generated.startswith("$"):
+                            arg = parts[positional[ts[i]][generated]]
+                            if len(arg) != 1 or not arg[0].startswith('"'):
+                                raise ValueError(f"{path}: unsupported invocation of {ts[i]}")
+                            out[json.loads(arg[0])].add(path)
+                        else:
+                            out[generated].add(path)
+                    i = end + 1
+                    continue
+                if ts[i] in layouts:
+                    for entry in bind_repeated(layouts[ts[i]], args):
+                        for generated in all_defs[ts[i]]:
+                            out[entry[generated[1:]] if generated.startswith("$") else generated].add(path)
+                    i = end + 1
+                    continue
                 if not args or not re.fullmatch(r"[A-Za-z_]\w*", args[0]):
                     raise ValueError(f"{path}: unsupported invocation of {ts[i]}")
                 for generated in all_defs[ts[i]]:
@@ -274,6 +423,14 @@ def self_test():
     assert check({}, {"s": ["a", "b"]})  # removed collision needs baseline pruning
     assert no_raise({"s": ["a", "b", "c"]}, {"s": ["a", "b"]})
     assert not no_raise({}, {"s": ["a", "b"]})
+    pair = 'macro_rules! pair { ($( $m:ident / $b:ident = $n:literal; )*) => {$( #[no_mangle] pub extern "C" fn $m() {} #[no_mangle] pub extern "C" fn $b() {} )*}; } pair! { js_a / js_b = "x"; js_c / js_d = "y"; }'
+    pairs = source_exports({"crates/a/src/lib.rs": pair})
+    assert sorted(pairs) == ["js_a", "js_b", "js_c", "js_d"], pairs
+    assert source_exports({"crates/a/src/lib.rs": plain.replace("js_collision", "js_b"), "crates/b/src/lib.rs": pair})["js_b"] == {"crates/a/src/lib.rs", "crates/b/src/lib.rs"}
+    prefixed = 'macro_rules! atom { ($n:ident, $s:literal) => { #[export_name = concat!("perry_atom_", $s)] static $n: u8 = 0; }; } atom!(A, "x");'
+    assert list(source_exports({"crates/a/src/lib.rs": prefixed})) == ["perry_atom_*"]
+    named = 'macro_rules! img { ($n:ident, $e:literal) => { #[export_name = $e] static $n: u8 = 0; }; } img!(A, "perry_image_literal_0_61"); img!(B, "perry_image_literal_0_62");'
+    assert sorted(source_exports({"crates/a/src/lib.rs": named})) == ["perry_image_literal_0_61", "perry_image_literal_0_62"]
     try:
         source_exports({"x": 'macro_rules! entry { ($first:ident, $second:ident) => { #[no_mangle] pub extern "C" fn $second() {} }; } entry!(a, b);'})
     except ValueError:
