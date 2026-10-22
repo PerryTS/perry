@@ -1082,7 +1082,7 @@ fn set_size_body(set: *const SetHeader) -> u32 {
 }
 
 crate::entry_contracts::kind_entry! {
-    Set, fn js_set_size__Set(set: *const SetHeader) -> u32 {
+    js_set_size__Set, Set, fn(set: *const SetHeader) -> u32 {
         set_size_body(set)
     }
 }
@@ -1245,7 +1245,7 @@ fn set_has_resolved(set: *const SetHeader, value: f64) -> i32 {
 }
 
 crate::entry_contracts::kind_entry! {
-    Set, fn js_set_has__Set(set: *const SetHeader, value: f64) -> i32 {
+    js_set_has__Set, Set, fn(set: *const SetHeader, value: f64) -> i32 {
         set_has_resolved(set, value)
     }
 }

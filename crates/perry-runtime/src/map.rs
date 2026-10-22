@@ -1250,7 +1250,7 @@ fn map_size_body(map: *const MapHeader) -> u32 {
 }
 
 crate::entry_contracts::kind_entry! {
-    Map, fn js_map_size__Map(map: *const MapHeader) -> u32 {
+    js_map_size__Map, Map, fn(map: *const MapHeader) -> u32 {
         map_size_body(map)
     }
 }
@@ -2047,7 +2047,7 @@ fn map_get_resolved(map: *const MapHeader, key: f64) -> f64 {
 }
 
 crate::entry_contracts::kind_entry! {
-    Map, fn js_map_get__Map(map: *const MapHeader, key: f64) -> f64 {
+    js_map_get__Map, Map, fn(map: *const MapHeader, key: f64) -> f64 {
         map_get_resolved(map, key)
     }
 }

@@ -103,7 +103,7 @@ fn closure_info_body(closure: *const ClosureHeader) -> *const crate::closure::Js
 }
 
 crate::entry_contracts::kind_entry! {
-    Closure, fn js_closure_info__Closure(closure: *const ClosureHeader) -> *const crate::closure::JsFunctionInfo {
+    js_closure_info__Closure, Closure, fn(closure: *const ClosureHeader) -> *const crate::closure::JsFunctionInfo {
         closure_info_body(closure)
     }
 }
