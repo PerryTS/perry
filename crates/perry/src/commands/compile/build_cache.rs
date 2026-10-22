@@ -637,6 +637,10 @@ fn eligibility(args: &CompileArgs, project_root: &Path) -> Result<(), String> {
     if args.explain_lowering {
         return Err("explain-lowering".to_string());
     }
+    // A reach census must run even when an identical finished build exists.
+    if std::env::var_os("PERRY_REACH_REPORT").is_some() {
+        return Err("reach-report".to_string());
+    }
     // #6952: a cached build reuses the finished binary and never runs codegen,
     // so the report would be empty. Same reasoning as explain-lowering above.
     if args.opt_report.is_some() || std::env::var("PERRY_OPT_REPORT").is_ok() {

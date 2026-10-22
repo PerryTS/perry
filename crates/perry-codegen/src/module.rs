@@ -555,6 +555,14 @@ impl LlModule {
     /// and the in-process constructor (`for_each_final_line`) are separate
     /// consumers, so a pass living inside one of them would silently not apply
     /// to the other.
+    pub(crate) fn diagnostic_functions(&self) -> impl Iterator<Item = &LlFunction> {
+        self.functions.iter()
+    }
+
+    pub(crate) fn diagnostic_globals(&self) -> impl Iterator<Item = &str> {
+        self.globals.iter().map(String::as_str)
+    }
+
     pub(crate) fn functions_mut(&mut self) -> impl Iterator<Item = &mut LlFunction> {
         self.functions.iter_mut()
     }

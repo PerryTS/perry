@@ -33,7 +33,12 @@ pub(super) fn try_compile(
             return Ok(None);
         }
     };
+    let reach_report = super::reach_report::start(ctx, false)?;
     let ir = emit::llvm_ir(&proof);
+    if let Some(report) = &reach_report {
+        report.census.capture_tiny_ir(&ir)?;
+        report.check()?;
+    }
     let triple = args
         .target
         .as_deref()
@@ -143,6 +148,9 @@ pub(super) fn try_compile(
                 include_str!("output.c"),
             )?;
         }
+    }
+    if let Some(report) = &reach_report {
+        report.finish(&output)?;
     }
     super::post_link::strip_final_binary(
         ctx,
@@ -322,6 +330,8 @@ mod tests {
     fn ordinary_native_build_needs_no_enabling_switch() {
         let (mut args, ctx) = defaults();
         assert!(build_eligibility(&args, &ctx, |_| false).is_ok());
+        // Reporting must preserve this backend's emitted code.
+        assert!(build_eligibility(&args, &ctx, |name| name == "PERRY_REACH_REPORT").is_ok());
         args.keep_intermediates = true;
         args.report_size = true;
         assert!(build_eligibility(&args, &ctx, |name| name == "PERRY_KEEP_SYMBOLS").is_ok());

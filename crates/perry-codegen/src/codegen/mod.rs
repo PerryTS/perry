@@ -29,6 +29,8 @@
 //! Anything else (objects, arrays, classes, closures, async, imports, …)
 //! errors with an actionable "Phase X not yet supported" message.
 
+pub mod reach_report;
+
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -552,6 +554,8 @@ fn lower_module(
     opts: CompileOptions,
     births: Option<&mut Vec<ModuleBirth>>,
 ) -> Result<Option<LoweredModule>> {
+    let reach_census = reach_report::active();
+    let _reach_scope = reach_census.as_ref().map(|_| reach_report::enter_module());
     let collect_births = births.is_some();
     // No family facts of a previous module on this thread reach this one's
     // early analyses; this module's are installed once its births are known.
@@ -4325,6 +4329,11 @@ fn lower_module(
     llmod
         .native_rep_records
         .extend(typed_clone_rejection_records);
+
+    if let Some(census) = &reach_census {
+        census.bind_namespace_getters(&hir.name, &module_prefix, &opts.namespace_entries);
+        census.capture(&hir.name, &llmod)?;
+    }
 
     progress.phase(1, "lowering complete; releasing HIR and analyses");
     // Return only emission inputs: every lowering analysis, borrowed callable,

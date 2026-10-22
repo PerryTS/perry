@@ -2896,7 +2896,8 @@ pub fn run_with_parse_cache(
             .ok()
             .as_deref()
             == Some("1");
-    let cache_enabled = !args.no_cache
+    let cache_enabled = std::env::var_os("PERRY_REACH_REPORT").is_none()
+        && !args.no_cache
         && !cache_env_disabled
         && !verify_native_regions
         && typed_feedback.is_none()
@@ -6232,6 +6233,7 @@ pub fn run_with_parse_cache(
         module_births.iter().flat_map(|(_, b)| b),
         &static_shape_ids,
     );
+    let reach_report = super::reach_report::start(&ctx, args.output_type != "executable")?;
     // fninfer (decision 140): per-function inferred signatures over the
     // final HIR. Measurement dump only (`PERRY_FNINFER_DUMP=<path>`).
     super::fn_infer::dump(&ctx.native_modules);
@@ -8167,6 +8169,10 @@ pub fn run_with_parse_cache(
 
     // Build & run the per-platform link command. Tier 2.1 final extraction
     // (v0.5.342) — see crates/perry/src/commands/compile/link.rs.
+    if let Some(report) = &reach_report {
+        report.check()?;
+    }
+
     let link_cache_status = build_and_run_link(
         &args.input,
         &ctx,
@@ -8322,6 +8328,10 @@ pub fn run_with_parse_cache(
                 }
             }
         }
+    }
+
+    if let Some(report) = &reach_report {
+        report.finish(&exe_path)?;
     }
 
     // Finish editing the executable before copying/sealing an app bundle.

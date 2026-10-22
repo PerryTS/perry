@@ -60,6 +60,7 @@ mod post_link;
 mod precompile_capture;
 mod program_facts;
 mod reachability;
+mod reach_report;
 mod size_report;
 mod solid_config;
 mod tiny_program;
