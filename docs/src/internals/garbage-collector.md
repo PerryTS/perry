@@ -24,8 +24,9 @@ trees; code generation's root lowering lives in
 
 ## Collection paths
 
-New GC-managed allocations normally enter 1 MiB nursery blocks
-<!-- gc-fact: BLOCK_SIZE = 1024 * 1024 in crates/perry-runtime/src/arena/block.rs -->.
+New GC-managed allocations normally enter nursery blocks of one aligned
+region (2 MiB on Linux, 1 MiB elsewhere)
+<!-- gc-fact: ALIGN = 2 * 1024 * 1024 in crates/perry-runtime/src/arena/region.rs -->.
 A collection can take one of three paths:
 
 1. **Copying minor.** At a precise safepoint, live young objects are copied,
