@@ -80,6 +80,20 @@ unsafe fn rooted_property_key_set(raw: u64, idx: f64, value: f64) {
     );
 }
 
+/// The layouts' answer for an integral Number key on a plain Array or
+/// ordinary object (`runtime_read_site::probe_integer_key`), or the
+/// receiver's current address for the complete read.
+fn integer_key_probe(raw: u64, idx: f64) -> Result<f64, u64> {
+    let Some(n) = super::field_get_set::runtime_read_site::integer_key(idx) else {
+        return Err(raw);
+    };
+    // SAFETY: the callers classified `raw` as a live, valid heap object.
+    unsafe {
+        super::field_get_set::runtime_read_site::probe_integer_key(raw as *mut ObjectHeader, n)
+            .map_err(|obj| obj as u64)
+    }
+}
+
 fn numeric_key_u32_index(value: f64) -> Option<u32> {
     let bits = value.to_bits();
     if (bits & crate::value::TAG_MASK) == crate::value::INT32_TAG {
@@ -307,9 +321,14 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
     if gc_type == crate::gc::GC_TYPE_ARRAY || gc_type == crate::gc::GC_TYPE_LAZY_ARRAY {
         if let Some(index) = numeric_key_u32_index(idx) {
             return crate::array::js_array_get_f64(raw as *mut crate::array::ArrayHeader, index);
-        } else {
-            return unsafe { rooted_property_key_get(raw, idx) };
         }
+        // A non-index Number key (`a[a.length - 1]` on an empty array reads
+        // `"-1"`) is an ordinary named key: the layouts answer it by its atom.
+        let raw = match integer_key_probe(raw, idx) {
+            Ok(value) => return value,
+            Err(raw) => raw,
+        };
+        return unsafe { rooted_property_key_get(raw, idx) };
     }
     if gc_type == crate::gc::GC_TYPE_OBJECT {
         if let Some(index) = numeric_key_u32_index(idx) {
@@ -318,6 +337,10 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
                 return value;
             }
         }
+        let raw = match integer_key_probe(raw, idx) {
+            Ok(value) => return value,
+            Err(raw) => raw,
+        };
         return unsafe { rooted_property_key_get(raw, idx) };
     }
     if gc_type == crate::gc::GC_TYPE_CLOSURE {

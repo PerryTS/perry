@@ -135,6 +135,104 @@ pub(crate) unsafe fn get(obj: *mut ObjectHeader, key: &[u8]) -> f64 {
     super::js_object_get_field_slow(obj as i64, atom)
 }
 
+/// The integer a Number property key names, when its canonical text is a
+/// plain decimal integer: an INT32-tagged key, or an integral double of
+/// magnitude at most 2^53 (`-0` names `"0"`). Every other Number keeps the
+/// complete `ToPropertyKey` path.
+#[inline]
+pub(crate) fn integer_key(key: f64) -> Option<i64> {
+    let bits = key.to_bits();
+    if bits & crate::value::TAG_MASK == crate::value::INT32_TAG {
+        return Some(i64::from(crate::value::JSValue::from_bits(bits).as_int32()));
+    }
+    (key.is_finite() && key.fract() == 0.0 && key.abs() <= 9_007_199_254_740_992.0)
+        .then_some(key as i64)
+}
+
+/// `ToString(n)` of an integer of magnitude at most 2^53, written into `buf`.
+fn integer_key_text(n: i64, buf: &mut [u8; 24]) -> &[u8] {
+    let mut i = buf.len();
+    let mut m = n.unsigned_abs();
+    loop {
+        i -= 1;
+        buf[i] = b'0' + (m % 10) as u8;
+        m /= 10;
+        if m == 0 {
+            break;
+        }
+    }
+    if n < 0 {
+        i -= 1;
+        buf[i] = b'-';
+    }
+    &buf[i..]
+}
+
+/// `Get(obj, n)` for a computed Number key `n` (see [`integer_key`]) by the
+/// receiver's layouts: `arr[arr.length - 1]` on an empty array (`"-1"`),
+/// `record[id]` on an ordinary object. The key's text is formed on the stack
+/// and read by its atom exactly as an emitted `obj["-1"]` / `obj["7"]` site
+/// reads it: an array-index text may be an element key, which no layout
+/// lists, so it takes only an answer the probe finds
+/// (`perry_probe_get_binding`), never absence; any other text takes the
+/// probe's whole answer, absence included. A non-index text with no atom yet
+/// mints it (the receiver rooted across the allocation), as [`get`] does; an
+/// index text with no atom is in no list, so the complete read answers.
+///
+/// `Ok(value)`, or `Err(receiver)`, the receiver's current address, when only
+/// the complete read can answer.
+///
+/// # Safety
+/// `obj` is a live heap object above the handle band (an ordinary object or
+/// an Array); the probe classifies it from its own header.
+pub(crate) unsafe fn probe_integer_key(
+    obj: *mut ObjectHeader,
+    n: i64,
+) -> Result<f64, *mut ObjectHeader> {
+    let mut buf = [0u8; 24];
+    let text = integer_key_text(n, &mut buf);
+    let index = (0..i64::from(u32::MAX)).contains(&n);
+    // An index key of an object with an elements store (an Array subclass
+    // instance, an object that took index stores) lives in that store, which
+    // the probe does not read: the complete read answers. Only an ordinary
+    // object is handed an index key (an Array's index is an element read).
+    if index {
+        let meta = (*obj).meta;
+        let class_id = (*obj).class_id;
+        if (!meta.is_null() && (*meta).elements != 0)
+            || (class_id != 0 && crate::array::is_array_subclass_class_id(class_id))
+        {
+            return Err(obj);
+        }
+    }
+    let hash = crate::object::key_bytes_hash(text.as_ptr(), text.len());
+    let (atom, obj) = match crate::string::atom_lookup(text, hash) {
+        Some(atom) if crate::string::is_property_atom(atom) => (atom, obj),
+        _ if index => return Err(obj),
+        _ => {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let handle = scope.root_raw_mut_ptr(obj);
+            let atom = crate::string::js_string_pool_atom(text.as_ptr(), text.len() as u32, hash, 0)
+                as *const crate::StringHeader;
+            (atom, handle.get_raw_mut_ptr::<ObjectHeader>())
+        }
+    };
+    let key_bits = crate::value::STRING_TAG | atom as u64;
+    let key_hash = crate::string::property_atom_hash(atom);
+    let dir = crate::object::shapes::ordinary_dir_addr();
+    let biased = (obj as usize).wrapping_sub(perry_abi::RECEIVER_HANDLE_FLOOR) as i64;
+    let v = if index {
+        crate::object::layout_probe::perry_probe_get_binding(dir, biased, key_bits, key_hash)
+    } else {
+        crate::object::layout_probe::perry_probe_get(dir, biased, key_bits, key_hash)
+    };
+    if v.to_bits() != crate::value::TAG_HOLE {
+        Ok(v)
+    } else {
+        Err(obj)
+    }
+}
+
 /// The ordinary-object receiver a read reads from: `value` is a pointer
 /// above the handle band whose validated GC header says `GC_TYPE_OBJECT`.
 /// Every other value (primitives, proxies and handles, arrays, closures,

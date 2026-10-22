@@ -526,6 +526,20 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
             }
         }
         if obj_type == crate::gc::GC_TYPE_OBJECT || obj_type == crate::gc::GC_TYPE_CLOSURE {
+            // An ordinary object's integral key (`record[id]`) is read by its
+            // atom from the layouts first: no key string is allocated.
+            let mut raw_ptr = raw_ptr;
+            if obj_type == crate::gc::GC_TYPE_OBJECT && index == (idx_i32 as f64) {
+                match unsafe {
+                    crate::object::field_get_set::runtime_read_site::probe_integer_key(
+                        raw_ptr as *mut crate::object::ObjectHeader,
+                        i64::from(idx_i32),
+                    )
+                } {
+                    Ok(value) => return value,
+                    Err(obj) => raw_ptr = obj as usize,
+                }
+            }
             let s = if index == (idx_i32 as f64) {
                 idx_i32.to_string()
             } else {
