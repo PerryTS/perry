@@ -6,7 +6,12 @@
 //! compiler could not match at the call site (`new ns.Worker(url)` on a
 //! `getBuiltinModule("node:worker_threads")` namespace, a URL passed through
 //! helpers, a path built at run time) is started by looking its path up in this
-//! table. A path with no entry throws `ERR_WORKER_NOT_COMPILED` right away.
+//! table. A path with no entry (or an eval Worker, whose code is only known at
+//! run time) starts a worker whose script fails to load: like Node's
+//! `MODULE_NOT_FOUND` and a Web Worker's failed script fetch, the failure is
+//! the worker's asynchronous `'error'` event (`ERR_WORKER_NOT_COMPILED`), not
+//! a throw from the constructor. A malformed filename still throws
+//! synchronously, as in Node.
 //!
 //! The table only holds code addresses and is filled before user code runs, so
 //! every thread (including a worker that starts nested workers) can read it.
@@ -58,29 +63,41 @@ pub extern "C" fn js_worker_threads_worker_new_by_spec(filename: f64, options: f
     if !is_undefined(options) {
         let eval = get_object_field_from_value(options, "eval");
         if perry_runtime::value::js_is_truthy(eval) != 0 {
-            throw_with_code(
-                "worker_threads: an eval Worker needs source code that is known when the \
-                 program is compiled; this one is built at run time"
-                    .to_string(),
-                "ERR_WORKER_EVAL_NOT_COMPILED",
-                0,
+            return super::js_worker_threads_worker_new(
+                worker_eval_not_compiled as usize as i64,
+                options,
             );
         }
     }
     let path = worker_path(filename);
-    let init = lookup(&path).unwrap_or_else(|| {
-        throw_with_code(
-            format!(
-                "worker_threads: no worker entry for {} was compiled into this binary. \
-                 Name the worker file with new URL(\"<literal>\", import.meta.url) or a \
-                 string literal so it is compiled in",
-                path.display()
-            ),
-            "ERR_WORKER_NOT_COMPILED",
-            0,
-        )
-    });
+    let init = lookup(&path).unwrap_or(worker_entry_not_compiled as usize);
     super::js_worker_threads_worker_new(init as i64, options)
+}
+
+/// The entry of a Worker whose script was not compiled into this binary: it
+/// fails as the worker's first act, so the parent sees the worker's `'error'`
+/// event and an exit, exactly where Node reports a script it cannot load.
+extern "C" fn worker_entry_not_compiled() {
+    throw_with_code(
+        "worker_threads: this Worker's script was not compiled into the binary. Name the \
+         worker file with new URL(\"<literal>\", import.meta.url) or a string literal so it \
+         is compiled in"
+            .to_string(),
+        "ERR_WORKER_NOT_COMPILED",
+        0,
+    )
+}
+
+/// The entry of an eval Worker: its source is built at run time, and a
+/// compiled binary cannot run code it did not compile.
+extern "C" fn worker_eval_not_compiled() {
+    throw_with_code(
+        "worker_threads: an eval Worker needs source code that is known when the program \
+         is compiled; this one is built at run time"
+            .to_string(),
+        "ERR_WORKER_EVAL_NOT_COMPILED",
+        0,
+    )
 }
 
 /// The absolute path a Worker filename names, following Node's rules: a file
@@ -91,7 +108,10 @@ fn worker_path(filename: f64) -> PathBuf {
     if value.is_string() {
         let text = string_value_to_string(filename).unwrap_or_default();
         let path = Path::new(&text);
-        if path.is_absolute() {
+        // `$perryfs/...` is the binary's own virtual file system (a
+        // `{ type: "file" }` import of a script yields such a path, as Bun's
+        // yields `/$bunfs/...`): an absolute name.
+        if path.is_absolute() || text.starts_with("$perryfs/") {
             return normalize(path);
         }
         if text.starts_with("./") || text.starts_with("../") {

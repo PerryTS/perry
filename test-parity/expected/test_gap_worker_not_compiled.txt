@@ -1,6 +1,8 @@
-lexical, built at run time -> Error ERR_WORKER_NOT_COMPILED true
-namespace, built at run time -> Error ERR_WORKER_NOT_COMPILED true
-namespace, absolute string -> Error ERR_WORKER_NOT_COMPILED true
-bare relative string -> TypeError ERR_WORKER_PATH true
-not a path -> TypeError ERR_INVALID_ARG_TYPE true
+constructors returned
+bare relative string -> threw TypeError ERR_WORKER_PATH true
+eval source -> constructed, error Error undefined, exit 1
+lexical, built at run time -> constructed, error Error undefined, exit 1
+namespace, absolute string -> constructed, error Error undefined, exit 1
+namespace, built at run time -> constructed, error Error undefined, exit 1
+not a path -> threw TypeError ERR_INVALID_ARG_TYPE true
 still running
