@@ -271,6 +271,8 @@ mod literal_method_this_tests;
 mod ordinary_method_artifacts;
 pub mod split_regions;
 #[cfg(test)]
+mod split_regions_literal_tests;
+#[cfg(test)]
 mod split_regions_tests;
 #[cfg(test)]
 mod string_accumulator_tests;

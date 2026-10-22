@@ -823,6 +823,9 @@ fn lower_new_impl_inner<'a>(
             };
             let parent_bits = ctx.block().bitcast_double_to_i64(&obj_box);
             for (store_index, store) in plan.iter().enumerate() {
+                if crate::expr::literal_chunks::is_fill(args.get(store.arg_index)) {
+                    continue;
+                }
                 if let Some(key) = &store.family_key {
                     crate::expr::class_family_read::emit_slot_verify(
                         ctx,

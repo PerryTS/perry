@@ -92,6 +92,9 @@ impl SH for Expr {
             Expr::PrivateLexicalBrandPush(value) => { tag(h, 12404); value.hash(h); }
             Expr::PrivateLexicalBrandPop => { tag(h, 12405); }
             Expr::NewTarget => { tag(h, 12301); }
+            Expr::LiteralChunks(calls) => { tag(h, 12515); calls.hash(h); }
+            Expr::LiteralChunkObject => { tag(h, 12516); }
+            Expr::LiteralSlotInit { object, key, slot, value } => { tag(h, 12517); object.as_ref().hash(h); key.hash(h); slot.hash(h); value.as_ref().hash(h); }
             Expr::ClassMethodHome { class_name, is_static } => { tag(h, 12513); class_name.hash(h); is_static.hash(h); }
             Expr::ClassRef(s) => { tag(h, 44); s.hash(h); }
             Expr::EnumMember { enum_name, member_name, } => { tag(h, 45); enum_name.hash(h); member_name.hash(h); }

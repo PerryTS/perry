@@ -258,6 +258,34 @@ pub enum Expr {
     // Object literal
     Object(Vec<(String, Expr)>),
 
+    // ─── Chunked literal births (`codegen::split_regions` literal chunks) ──
+    /// A literal-shape birth (`New` of a `__AnonShape_*` class) whose slots
+    /// from this argument on are initialized by compiler-made chunk functions
+    /// instead of being evaluated in the parent. Appears only as an argument
+    /// of such a `New`: the first chunked argument holds the chunk calls in
+    /// source order, every later chunked argument holds an empty list (its
+    /// slot is written by one of those calls). Each call is an ordinary direct
+    /// call whose arguments name the unpublished object as
+    /// [`Expr::LiteralChunkObject`]. Codegen births the object with the
+    /// class's complete key vector first (the chunked slots are holes), keeps
+    /// it rooted, runs the calls in order, and yields the object only after
+    /// the last call returns; a throw abandons the unpublished object.
+    LiteralChunks(Vec<Expr>),
+    /// The unpublished object of the enclosing [`Expr::LiteralChunks`]; only
+    /// as an argument of one of its calls.
+    LiteralChunkObject,
+    /// Initialize slot `slot` (key `key`) of an unpublished literal birth with
+    /// `value`: a define of the own data property the birth holds as a hole,
+    /// never an ordinary [[Set]]. Only in a chunk function's body, where
+    /// `object` reads the parameter its one caller passes the birth through.
+    /// Evaluates `value`, then stores it; yields `undefined`.
+    LiteralSlotInit {
+        object: Box<Expr>,
+        key: String,
+        slot: u32,
+        value: Box<Expr>,
+    },
+
     // Object literal with spread: { ...src, key: val, ...src2, key2: val2 }
     // Each part is (None, expr) for a spread source, or (Some(key), expr) for a static prop.
     // Parts are ordered to reflect JavaScript evaluation order (later props override earlier spreads).

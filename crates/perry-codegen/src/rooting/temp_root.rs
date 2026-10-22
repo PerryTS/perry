@@ -404,6 +404,9 @@ pub(in crate::rooting) fn expr_may_trigger_gc(ctx: &FnCtx<'_>, expr: &Expr) -> b
                 || expr_may_trigger_gc(ctx, else_expr)
         }
         Expr::Sequence(exprs) => exprs.iter().any(|e| expr_may_trigger_gc(ctx, e)),
+        // A chunked argument of a literal birth lowers to the birth's
+        // `undefined` fill; its chunk calls run after the birth.
+        Expr::LiteralChunks(_) => false,
         _ => true,
     }
 }
@@ -425,6 +428,8 @@ pub(in crate::rooting) fn expr_may_trigger_gc(ctx: &FnCtx<'_>, expr: &Expr) -> b
 pub(crate) fn expr_is_inert_primitive(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
     match expr {
         Expr::Undefined | Expr::Null | Expr::Bool(_) | Expr::Number(_) | Expr::Integer(_) => true,
+        // The birth's `undefined` fill (`expr::literal_chunks::lower_fill`).
+        Expr::LiteralChunks(_) => true,
         // A heap value, but ToPrimitive on a string is the identity: no user
         // code, no allocation. (`+` is restricted below, since concatenation
         // does allocate.)

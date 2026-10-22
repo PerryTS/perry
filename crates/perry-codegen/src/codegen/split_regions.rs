@@ -54,6 +54,9 @@ use perry_hir::{CompareOp, Expr, Function, LogicalOp, Module as HirModule, Param
 mod cost;
 use cost::Cost;
 
+#[path = "split_regions_literal.rs"]
+mod literal;
+
 /// Marks a region function's name: `{parent}#region_{n}`. `sanitize` turns
 /// the `#` into `_`, so the symbol is `..._{parent}_region_{n}`.
 pub(crate) const REGION_MARK: &str = "#region_";
@@ -406,6 +409,8 @@ struct Shared<'a> {
     report: Vec<String>,
     /// Display names of closure regions.
     closure_names: Vec<(u32, String)>,
+    /// The module's wide literal-shape classes (`literal::literal_classes`).
+    literals: HashMap<String, literal::LiteralClass>,
 }
 
 impl Shared<'_> {
@@ -1261,6 +1266,9 @@ fn split_list(
     //    big arms/blocks (never loop bodies) are split in turn.
     let mut dom = dominating.clone();
     for i in 0..list.len() {
+        // A giant literal birth's values move into chunk functions first; the
+        // statement then stays as small as any other.
+        literal::chunk_giant_literal(&mut list[i], ctx, sh, &dom, proofs, None);
         let weight = sh.cost.body(std::slice::from_ref(&list[i]));
         match &mut list[i] {
             Stmt::If {
@@ -1886,6 +1894,7 @@ pub(crate) fn split_large_bodies_with_cost(
     let next_func = super::entry_outline::max_func_id(hir);
     let next_local = max_local_id(hir);
     let names = hir.closure_display_names.clone();
+    let literals = literal::literal_classes(hir);
     let mut init = std::mem::take(&mut hir.init);
     let mut functions = std::mem::take(&mut hir.functions);
     let mut spans = std::mem::take(&mut hir.local_source_spans);
@@ -1898,7 +1907,9 @@ pub(crate) fn split_large_bodies_with_cost(
         spans: &mut spans,
         report: Vec::new(),
         closure_names: Vec::new(),
+        literals,
     };
+    literal::chunk_init_literals(&mut init, "init", hir.init_is_strict, &facts, &mut sh);
     split_closures_in(&mut init, &names, &facts, &mut sh);
     for f in &mut functions {
         let parent = f.name.clone();
