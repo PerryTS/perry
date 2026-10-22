@@ -6301,6 +6301,7 @@ dependencies = [
  "rand 0.10.3",
  "rustix 1.1.4",
  "rustix-linux-procfs",
+ "socket2",
  "tempfile",
  "tracing",
  "turnloop",

@@ -19,6 +19,7 @@ Copied/adapted sources:
 | `src/filesystem.rs`, `src/filesystem/` | `wasmtime-wasi/src/filesystem.rs` and its capability primitives, platform helpers and tests |
 | `src/p2/filesystem.rs`, `src/p2/host/filesystem*` | `wasmtime-wasi` files with the same paths |
 | `src/p2/{network,ip_name_lookup}.rs`, `src/p2/host/{network,instance_network}.rs` | Corresponding `wasmtime-wasi` files and `src/sockets/ip_name_lookup.rs`; address conversions from `src/sockets/mod.rs` |
+| `src/sockets/tcp.rs`, `src/sockets/tcp/` | WASI TCP validation, defaults and option semantics from `wasmtime-wasi/src/sockets/{mod,tcp}.rs`; native ownership and I/O are implemented with Turnloop |
 | `src/p2/stdio.rs`, `src/p2/host/{env,exit}.rs` | `wasmtime-wasi` files with the same paths |
 | `src/error.rs`, `src/clocks/datetime.rs` | `wasmtime-wasi/src/error.rs` and timestamp conversions from `src/clocks.rs` |
 | `src/pipe.rs` | Memory and closed WASI stream implementations in `wasmtime-wasi/src/p2/pipe.rs` (without Tokio adapters) |
@@ -83,3 +84,32 @@ and 12/11 driver tests respectively. This is not a shipping dependency update:
 Perry's committed registry dependency and source policy are unchanged. Adopt the
 released repair and rerun platform qualification before selecting this provider
 in the component host.
+
+
+The native TCP state machine now supports explicit and implicit binding,
+bound-socket connection, listening, independent accepted connections, socket
+options, bounded owned reads/writes, and write-side half-close. IPv6 sockets
+are IPv6-only. TCP and per-address capabilities default to denied; callbacks
+run on the calling agent, including accepted-peer checks. Pending accepts are
+cancellable, denied peers are closed, and driver failures trap separately from
+native socket errors. The adapter rejects concurrent reads or writes so a
+caller cannot consume another operation's completion. Cancelling a partial
+write disables further writes on that socket; a cancelled read retains native
+pending/buffered data for the next read.
+
+Linux development and production panic-abort validation passes all 158 provider
+tests (including nine native TCP cases), plus 24/23 driver tests, doctests,
+all-target Clippy and the stdio overlap probe. Validation uses the immutable
+Turnloop revision `9c6495239d276f4db6697d92582de21e87afeab9`, containing
+[bound TCP #120](https://github.com/PerryTS/turnloop/pull/120) and
+[independent controls #121](https://github.com/PerryTS/turnloop/pull/121).
+The normal dependency graph for these provider crates is Tokio-free. This is
+an external validation override, not a committed dependency-policy exception.
+
+TCP WIT interfaces are still unregistered. Receive-side shutdown must cancel
+and discard Turnloop's pending read without closing the send direction; simply
+dropping the request does not do that while the socket owner remains live.
+The WASI stream adapters, start/finish state, network-resource association and
+sync/async linker registration remain to be implemented and tested before this
+native layer is usable by components. Native TCP macOS/Windows qualification
+also remains; the upstream Turnloop matrix alone does not qualify this layer.

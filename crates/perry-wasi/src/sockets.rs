@@ -1,6 +1,41 @@
 //! Networking capabilities and owned native operations for WASI providers.
 use perry_component_io::Submitter;
+use std::{future::Future, net::SocketAddr, pin::Pin, sync::Arc};
 use wasmtime::component::{HasData, ResourceTable};
+
+pub mod tcp;
+
+/// The operation for which an address capability is requested.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SocketAddrUse {
+    TcpBind,
+    TcpListen,
+    TcpConnect,
+    TcpAccept,
+}
+
+type AddressCheck = Arc<
+    dyn Fn(SocketAddr, SocketAddrUse) -> Pin<Box<dyn Future<Output = bool> + Send>> + Send + Sync,
+>;
+
+#[derive(Clone)]
+struct TcpPolicy {
+    allowed: bool,
+    check: AddressCheck,
+}
+impl TcpPolicy {
+    async fn check(
+        &self,
+        address: SocketAddr,
+        usage: SocketAddrUse,
+    ) -> crate::p2::SocketResult<()> {
+        if self.allowed && (self.check)(address, usage).await {
+            Ok(())
+        } else {
+            Err(crate::p2::bindings::sockets::network::ErrorCode::AccessDenied.into())
+        }
+    }
+}
 
 pub struct WasiSockets;
 impl HasData for WasiSockets {
@@ -10,12 +45,17 @@ impl HasData for WasiSockets {
 pub struct WasiSocketsCtx {
     pub(crate) submitter: Submitter,
     pub(crate) allow_ip_name_lookup: bool,
+    tcp: TcpPolicy,
 }
 impl WasiSocketsCtx {
     pub fn new(submitter: Submitter) -> Self {
         Self {
             submitter,
             allow_ip_name_lookup: false,
+            tcp: TcpPolicy {
+                allowed: false,
+                check: Arc::new(|_, _| Box::pin(async { false })),
+            },
         }
     }
 
@@ -23,6 +63,25 @@ impl WasiSocketsCtx {
     /// granting it does not grant TCP/UDP connection or bind permissions.
     pub fn allow_ip_name_lookup(&mut self, allow: bool) -> &mut Self {
         self.allow_ip_name_lookup = allow;
+        self
+    }
+
+    /// Grant TCP operations. Individual addresses still require an explicit check.
+    pub fn allow_tcp(&mut self, allow: bool) -> &mut Self {
+        self.tcp.allowed = allow;
+        self
+    }
+
+    /// Runs on the calling agent, including after native accept; the callback
+    /// and its future are never submitted to the native I/O thread.
+    pub fn socket_addr_check<F>(&mut self, check: F) -> &mut Self
+    where
+        F: Fn(SocketAddr, SocketAddrUse) -> Pin<Box<dyn Future<Output = bool> + Send>>
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.tcp.check = Arc::new(check);
         self
     }
 }

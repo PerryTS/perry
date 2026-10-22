@@ -1,0 +1,500 @@
+//! Native TCP state machine used by the WASI socket adapters.
+//!
+//! Address checks run on the caller. Only owned sockets, addresses, options and
+//! byte buffers cross to the context's Turnloop thread.
+use super::{SocketAddrUse, TcpPolicy, WasiSocketsCtx};
+use crate::p2::{bindings::sockets::network::ErrorCode, SocketError, SocketResult};
+use perry_component_io::{Resource, ResourceRequest, Submitter};
+use socket2::{Domain, Protocol, Socket, Type};
+use std::{net::SocketAddr, time::Duration};
+use turnloop::{backend::Platform, AsyncIo, SocketOption, SocketOptionKind};
+
+mod native;
+pub use native::Failure;
+mod options;
+#[cfg(test)]
+mod tests;
+
+/// Address family is fixed at creation; IPv6 sockets always use IPV6_V6ONLY.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Family {
+    Ipv4,
+    Ipv6,
+}
+impl Family {
+    fn matches(self, address: SocketAddr) -> bool {
+        matches!(
+            (self, address),
+            (Self::Ipv4, SocketAddr::V4(_)) | (Self::Ipv6, SocketAddr::V6(_))
+        )
+    }
+    fn validate(self, address: SocketAddr, remote: bool) -> SocketResult<()> {
+        let ip = address.ip();
+        if !self.matches(address)
+            || ip.is_multicast()
+            || matches!(ip, std::net::IpAddr::V6(ip) if ip.to_ipv4_mapped().is_some())
+            || (remote
+                && (address.port() == 0
+                    || ip.is_unspecified()
+                    || matches!(ip, std::net::IpAddr::V4(ip) if ip.is_broadcast())))
+        {
+            return Err(ErrorCode::InvalidArgument.into());
+        }
+        Ok(())
+    }
+    fn unspecified(self) -> SocketAddr {
+        match self {
+            Self::Ipv4 => SocketAddr::from(([0, 0, 0, 0], 0)),
+            Self::Ipv6 => SocketAddr::from(([0u16; 8], 0)),
+        }
+    }
+}
+
+struct NativeTcp {
+    stream: AsyncIo<Platform>,
+    reading: bool,
+    writing: bool,
+    write_cancelled: bool,
+}
+impl NativeTcp {
+    fn new(stream: AsyncIo<Platform>) -> Self {
+        Self {
+            stream,
+            reading: false,
+            writing: false,
+            write_cancelled: false,
+        }
+    }
+}
+enum State {
+    Fresh {
+        socket: Socket,
+        bound: bool,
+    },
+    Listening(Resource<NativeTcp>),
+    Connected {
+        socket: Resource<NativeTcp>,
+        local: SocketAddr,
+        peer: SocketAddr,
+    },
+    Closed,
+}
+
+/// A socket owns one native transport throughout binding, connecting and I/O.
+/// Dropping a pending operation or this owner releases that transport through
+/// Turnloop. Accepted connections have independent native resource lifetimes.
+pub struct TcpSocket {
+    state: State,
+    family: Family,
+    submitter: Submitter,
+    policy: TcpPolicy,
+    backlog: u32,
+    // Only explicitly changed settings need repair on platforms where accept
+    // doesn't inherit them. At most one entry per supported option is retained.
+    inherited: Vec<SocketOption>,
+}
+impl TcpSocket {
+    pub fn new(ctx: &WasiSocketsCtx, family: Family) -> SocketResult<Self> {
+        if !ctx.tcp.allowed {
+            return Err(ErrorCode::AccessDenied.into());
+        }
+        let socket = Socket::new(
+            match family {
+                Family::Ipv4 => Domain::IPV4,
+                Family::Ipv6 => Domain::IPV6,
+            },
+            Type::STREAM,
+            Some(Protocol::TCP),
+        )?;
+        socket.set_nonblocking(true)?;
+        if family == Family::Ipv6 {
+            socket.set_only_v6(true)?;
+        }
+        Ok(Self {
+            state: State::Fresh {
+                socket,
+                bound: false,
+            },
+            family,
+            submitter: ctx.submitter.clone(),
+            policy: ctx.tcp.clone(),
+            backlog: 128,
+            inherited: Vec::new(),
+        })
+    }
+
+    pub fn family(&self) -> Family {
+        self.family
+    }
+    pub fn is_bound(&self) -> bool {
+        matches!(self.state, State::Fresh { bound: true, .. })
+    }
+    pub fn is_listening(&self) -> bool {
+        matches!(self.state, State::Listening(_))
+    }
+
+    pub async fn bind(&mut self, address: SocketAddr) -> SocketResult<()> {
+        if !matches!(self.state, State::Fresh { bound: false, .. }) {
+            return Err(ErrorCode::InvalidState.into());
+        }
+        self.family.validate(address, false)?;
+        self.policy.check(address, SocketAddrUse::TcpBind).await?;
+        let State::Fresh { socket, bound } = &mut self.state else {
+            unreachable!()
+        };
+        // POSIX permits reusing TIME_WAIT endpoints. On Windows SO_REUSEADDR
+        // permits stealing live bindings, so it must remain disabled there.
+        #[cfg(unix)]
+        socket.set_reuse_address(true)?;
+        socket.bind(&address.into())?;
+        *bound = true;
+        Ok(())
+    }
+
+    pub async fn connect(&mut self, address: SocketAddr) -> SocketResult<()> {
+        if !matches!(self.state, State::Fresh { .. }) {
+            return Err(ErrorCode::InvalidState.into());
+        }
+        self.family.validate(address, true)?;
+        self.policy
+            .check(address, SocketAddrUse::TcpConnect)
+            .await?;
+        // connect_bound preserves both an explicit local port and options
+        // configured before the handshake. Implicit binding is also checked.
+        if !self.is_bound() {
+            self.bind(self.family.unspecified()).await?;
+        }
+        let State::Fresh { socket, .. } = std::mem::replace(&mut self.state, State::Closed) else {
+            unreachable!()
+        };
+        let task = self
+            .submitter
+            .register(move |io| async move {
+                let transport = native::detach(socket, false)?;
+                let stream = io
+                    .connect_bound(transport, address, turnloop::TcpOpts::default())
+                    .await
+                    .map_err(native::Failure::from)?;
+                Ok::<_, native::Failure>(NativeTcp::new(stream))
+            })
+            .map_err(SocketError::trap)?;
+        let socket = task
+            .await
+            .map_err(SocketError::trap)?
+            .map_err(native::Failure::socket)?;
+        let local = native::local(&socket)?;
+        self.state = State::Connected {
+            socket,
+            local,
+            peer: address,
+        };
+        Ok(())
+    }
+
+    /// WASI 0.2 listeners must have been explicitly bound.
+    pub async fn listen(&mut self) -> SocketResult<()> {
+        if !self.is_bound() {
+            return Err(ErrorCode::InvalidState.into());
+        }
+        self.policy
+            .check(self.local_address()?, SocketAddrUse::TcpListen)
+            .await?;
+        let State::Fresh { socket, .. } = &self.state else {
+            unreachable!()
+        };
+        socket.listen(self.backlog as i32)?;
+        let State::Fresh { socket, .. } = std::mem::replace(&mut self.state, State::Closed) else {
+            unreachable!()
+        };
+        let task = self
+            .submitter
+            .register(move |io| async move {
+                let transport = native::detach(socket, true)?;
+                let handle = io
+                    .driver()
+                    .attach(transport, turnloop::Token(0))
+                    .map_err(native::Failure::from)?;
+                Ok::<_, native::Failure>(NativeTcp::new(io.io(handle)))
+            })
+            .map_err(SocketError::trap)?;
+        self.state = State::Listening(
+            task.await
+                .map_err(SocketError::trap)?
+                .map_err(native::Failure::socket)?,
+        );
+        Ok(())
+    }
+
+    pub async fn accept(&self) -> SocketResult<Self> {
+        let State::Listening(listener) = &self.state else {
+            return Err(ErrorCode::InvalidState.into());
+        };
+        loop {
+            let options = self.inherited.clone();
+            let task = listener
+                .derive(move |io, local| async move {
+                    let handle = local.borrow_mut().stream.handle();
+                    let stream = io.accept(handle).await.map_err(native::Failure::from)?;
+                    // The child owns its own handle; dropping the listener cannot
+                    // close an accepted stream or retain its resource permit.
+                    drop(local);
+                    for option in options {
+                        io.driver()
+                            .set_option(stream.handle(), option)
+                            .map_err(native::Failure::from)?;
+                    }
+                    Ok::<_, native::Failure>(NativeTcp::new(stream))
+                })
+                .map_err(SocketError::trap)?;
+            let socket = task
+                .await
+                .map_err(SocketError::trap)?
+                .map_err(native::Failure::socket)?;
+            let peer = native::peer(&socket)?;
+            if self
+                .policy
+                .check(peer, SocketAddrUse::TcpAccept)
+                .await
+                .is_err()
+            {
+                // A denied peer must not escape to the guest. Its independent
+                // native owner is closed before trying the next connection.
+                drop(socket);
+                continue;
+            }
+            let local = native::local(&socket)?;
+            return Ok(Self {
+                state: State::Connected {
+                    socket,
+                    local,
+                    peer,
+                },
+                family: self.family,
+                submitter: self.submitter.clone(),
+                policy: self.policy.clone(),
+                backlog: 128,
+                inherited: self.inherited.clone(),
+            });
+        }
+    }
+
+    pub fn local_address(&self) -> SocketResult<SocketAddr> {
+        match &self.state {
+            State::Fresh {
+                socket,
+                bound: true,
+            } => socket
+                .local_addr()?
+                .as_socket()
+                .ok_or_else(|| ErrorCode::InvalidState.into()),
+            State::Listening(socket) => native::local(socket),
+            State::Connected { local, .. } => Ok(*local),
+            _ => Err(ErrorCode::InvalidState.into()),
+        }
+    }
+    pub fn remote_address(&self) -> SocketResult<SocketAddr> {
+        match self.state {
+            State::Connected { peer, .. } => Ok(peer),
+            _ => Err(ErrorCode::InvalidState.into()),
+        }
+    }
+
+    /// Begin a bounded owned read. The WASI adapter serializes reads and keeps
+    /// the request through readiness; cancellation of a request alone does not
+    /// discard Turnloop's pending read slot on a still-live socket.
+    pub fn read(&self, size: usize) -> SocketResult<ResourceRequest<Result<Vec<u8>, Failure>>> {
+        let State::Connected { socket, .. } = &self.state else {
+            return Err(ErrorCode::InvalidState.into());
+        };
+        native::read(socket, size).map_err(SocketError::trap)
+    }
+    /// Begin one owned write, including flush to the native transport.
+    pub fn write(&self, bytes: Vec<u8>) -> SocketResult<ResourceRequest<Result<(), Failure>>> {
+        let State::Connected { socket, .. } = &self.state else {
+            return Err(ErrorCode::InvalidState.into());
+        };
+        if bytes.len() > crate::MAX_READ_SIZE_ALLOC {
+            return Err(ErrorCode::InvalidArgument.into());
+        }
+        native::write(socket, bytes).map_err(SocketError::trap)
+    }
+    /// Deliver FIN after previously accepted writes while preserving reads.
+    pub async fn shutdown_send(&self) -> SocketResult<()> {
+        let State::Connected { socket, .. } = &self.state else {
+            return Err(ErrorCode::InvalidState.into());
+        };
+        let task = socket
+            .call(|_, local| async move {
+                if local.borrow_mut().writing {
+                    return Err(native::Failure::Socket(ErrorCode::ConcurrencyConflict));
+                }
+                std::future::poll_fn(|cx| local.borrow_mut().stream.poll_shutdown(cx))
+                    .await
+                    .map_err(native::Failure::from)
+            })
+            .map_err(SocketError::trap)?;
+        task.await
+            .map_err(SocketError::trap)?
+            .map_err(native::Failure::socket)
+    }
+
+    fn get_option(&self, kind: SocketOptionKind) -> SocketResult<SocketOption> {
+        match &self.state {
+            State::Fresh { socket, .. } => {
+                options::get(socket, self.family, kind).map_err(Into::into)
+            }
+            State::Listening(socket) | State::Connected { socket, .. } => {
+                native::get_option(socket, kind)
+            }
+            State::Closed => Err(ErrorCode::InvalidState.into()),
+        }
+    }
+    fn set_option(&mut self, option: SocketOption) -> SocketResult<()> {
+        match &self.state {
+            State::Fresh { socket, .. } => options::set(socket, self.family, option)?,
+            State::Listening(socket) | State::Connected { socket, .. } => {
+                native::set_option(socket, option)?
+            }
+            State::Closed => return Err(ErrorCode::InvalidState.into()),
+        }
+        // Each probe-schedule field is recorded separately: a partial update
+        // must not erase earlier explicit values required for accept inheritance.
+        if let Some(existing) = self
+            .inherited
+            .iter_mut()
+            .find(|v| options::same_setting(**v, option))
+        {
+            *existing = option;
+        } else {
+            self.inherited.push(option);
+        }
+        Ok(())
+    }
+    pub fn set_listen_backlog_size(&mut self, size: u64) -> SocketResult<()> {
+        if size == 0 {
+            return Err(ErrorCode::InvalidArgument.into());
+        }
+        let size = size.min(i32::MAX as u64) as u32;
+        match &self.state {
+            State::Fresh { .. } => (),
+            State::Listening(socket) => {
+                native::set_option(socket, SocketOption::ListenBacklog(size))?
+            }
+            _ => return Err(ErrorCode::InvalidState.into()),
+        }
+        self.backlog = size;
+        Ok(())
+    }
+    pub fn keep_alive_enabled(&self) -> SocketResult<bool> {
+        match self.get_option(SocketOptionKind::KeepAliveEnabled)? {
+            SocketOption::KeepAliveEnabled(v) => Ok(v),
+            _ => unreachable!(),
+        }
+    }
+    pub fn set_keep_alive_enabled(&mut self, value: bool) -> SocketResult<()> {
+        self.set_option(SocketOption::KeepAliveEnabled(value))
+    }
+    fn keep_alive(&self) -> SocketResult<turnloop::KeepAlive> {
+        match self.get_option(SocketOptionKind::KeepAliveSettings)? {
+            SocketOption::KeepAliveSettings(v) => Ok(v),
+            _ => unreachable!(),
+        }
+    }
+    pub fn keep_alive_idle_time(&self) -> SocketResult<u64> {
+        Ok(self
+            .keep_alive()?
+            .idle
+            .ok_or(ErrorCode::NotSupported)?
+            .as_nanos()
+            .min(u64::MAX as u128) as u64)
+    }
+    pub fn keep_alive_interval(&self) -> SocketResult<u64> {
+        Ok(self
+            .keep_alive()?
+            .interval
+            .ok_or(ErrorCode::NotSupported)?
+            .as_nanos()
+            .min(u64::MAX as u128) as u64)
+    }
+    pub fn keep_alive_count(&self) -> SocketResult<u32> {
+        self.keep_alive()?
+            .count
+            .ok_or_else(|| ErrorCode::NotSupported.into())
+    }
+    pub fn set_keep_alive_idle_time(&mut self, value: u64) -> SocketResult<()> {
+        self.set_option(SocketOption::KeepAliveSettings(turnloop::KeepAlive {
+            idle: Some(probe_time(value)?),
+            ..Default::default()
+        }))
+    }
+    pub fn set_keep_alive_interval(&mut self, value: u64) -> SocketResult<()> {
+        self.set_option(SocketOption::KeepAliveSettings(turnloop::KeepAlive {
+            interval: Some(probe_time(value)?),
+            ..Default::default()
+        }))
+    }
+    pub fn set_keep_alive_count(&mut self, value: u32) -> SocketResult<()> {
+        if value == 0 {
+            return Err(ErrorCode::InvalidArgument.into());
+        }
+        self.set_option(SocketOption::KeepAliveSettings(turnloop::KeepAlive {
+            count: Some(value.min(127)),
+            ..Default::default()
+        }))
+    }
+    pub fn hop_limit(&self) -> SocketResult<u8> {
+        match self.get_option(SocketOptionKind::Ttl)? {
+            SocketOption::Ttl(v) => u8::try_from(v).map_err(|_| ErrorCode::Unknown.into()),
+            _ => unreachable!(),
+        }
+    }
+    pub fn set_hop_limit(&mut self, value: u8) -> SocketResult<()> {
+        if value == 0 {
+            return Err(ErrorCode::InvalidArgument.into());
+        }
+        self.set_option(SocketOption::Ttl(value.into()))
+    }
+    pub fn receive_buffer_size(&self) -> SocketResult<u64> {
+        match self.get_option(SocketOptionKind::RecvBufferSize)? {
+            SocketOption::RecvBufferSize(v) => Ok(reported_buffer_size(v)),
+            _ => unreachable!(),
+        }
+    }
+    pub fn set_receive_buffer_size(&mut self, value: u64) -> SocketResult<()> {
+        self.set_option(SocketOption::RecvBufferSize(buffer_size(value)?))
+    }
+    pub fn send_buffer_size(&self) -> SocketResult<u64> {
+        match self.get_option(SocketOptionKind::SendBufferSize)? {
+            SocketOption::SendBufferSize(v) => Ok(reported_buffer_size(v)),
+            _ => unreachable!(),
+        }
+    }
+    pub fn set_send_buffer_size(&mut self, value: u64) -> SocketResult<()> {
+        self.set_option(SocketOption::SendBufferSize(buffer_size(value)?))
+    }
+}
+fn probe_time(nanos: u64) -> SocketResult<Duration> {
+    if nanos == 0 {
+        return Err(ErrorCode::InvalidArgument.into());
+    }
+    // Native options have one-second precision. Normalize before both the
+    // fresh-socket setter and Turnloop so accept cannot change a rounded value.
+    Ok(Duration::from_secs(
+        nanos.div_ceil(1_000_000_000).clamp(1, i16::MAX as u64),
+    ))
+}
+fn reported_buffer_size(size: u32) -> u64 {
+    // Linux includes bookkeeping overhead in SO_RCVBUF/SO_SNDBUF. Match the
+    // WASI provider convention of reporting application buffer bytes.
+    if cfg!(target_os = "linux") {
+        u64::from(size / 2)
+    } else {
+        u64::from(size)
+    }
+}
+fn buffer_size(size: u64) -> SocketResult<u32> {
+    if size == 0 {
+        return Err(ErrorCode::InvalidArgument.into());
+    }
+    Ok(size.min(i32::MAX as u64) as u32)
+}
