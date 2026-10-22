@@ -242,6 +242,13 @@ unsafe fn install(obj: *mut ObjectHeader, t: *mut Table) {
 /// Establish order authority once, copying keys and recording slot references.
 /// No fixed slot or immutable key list is changed.
 pub(crate) unsafe fn ensure(obj: *mut ObjectHeader) -> *mut Table {
+    ensure_adding(obj, None)
+}
+
+/// [`ensure`] inside the publication of the key at `adding`: that key's value
+/// is stored only after the publication returns, so its slot may still hold
+/// the hole. It is a live key, not a tombstone.
+pub(crate) unsafe fn ensure_adding(obj: *mut ObjectHeader, adding: Option<u32>) -> *mut Table {
     let existing = table(obj);
     if !existing.is_null() {
         return existing;
@@ -266,7 +273,7 @@ pub(crate) unsafe fn ensure(obj: *mut ObjectHeader) -> *mut Table {
         let fixed = keys.storage_slot(i);
         // A key whose slot holds the hole (an optional key not written, a
         // tombstone) is a tombstoned entry: no atom, no barrier, no index.
-        if slot_holds_hole(obj, fixed, shape.live_inline_slot_count) {
+        if adding != Some(i) && slot_holds_hole(obj, fixed, shape.live_inline_slot_count) {
             let attrs = super::key_attrs::keys_entry(shape.keys as usize as *const ArrayHeader, i);
             let t = rooted.get_raw_mut_ptr::<Table>();
             *key_at(t, i) = TAG_HOLE;
