@@ -244,6 +244,19 @@ impl<'a> Gen<'a> {
                 "async/generator function result (untransformed)".into()
             });
         }
+        if self.m.funcs[fxi as usize].forwards_super {
+            // `run_ctor_chain` constructs the parent with the `new` call;
+            // the rest of the body (capture rebinds and stashes) runs here.
+            let rest = f.params[0].id;
+            let body: Vec<Stmt> = f
+                .body
+                .iter()
+                .filter(|s| !crate::gen::is_forward_of(s, rest))
+                .cloned()
+                .collect();
+            self.stmts(&fx, &body);
+            return;
+        }
         self.stmts(&fx, &f.body);
     }
 

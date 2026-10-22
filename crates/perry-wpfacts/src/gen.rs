@@ -578,6 +578,7 @@ impl<'a> Gen<'a> {
             lexical_this: false,
             no_summary: true,
             gen_step: false,
+            forwards_super: false,
             parent: NO_FN,
         });
         self.m.sink_node(args_all, r);
@@ -954,6 +955,7 @@ impl<'a> Gen<'a> {
             lexical_this: false,
             no_summary: true,
             gen_step: false,
+            forwards_super: false,
             parent: NO_FN,
         });
         self.m.sink_node(args_all, reason);
@@ -1107,6 +1109,12 @@ impl<'a> Gen<'a> {
                     }
                 }
                 rest = Some(n);
+            } else if rest.is_some() && params.iter().all(|q| q.arguments_object.is_none()) {
+                // A parameter after a rest parameter is a capture slot the
+                // HIR appends to a class constructor (`...a, cap`): the rest
+                // takes every user argument, the `new` site in the model
+                // passes nothing for the slot (DECISIONS 49).
+                self.m.add_prim(n, prim::UNDEF);
             } else {
                 if matches!(
                     p.ty,
@@ -1145,6 +1153,7 @@ impl<'a> Gen<'a> {
             lexical_this,
             no_summary: false,
             gen_step: false,
+            forwards_super: false,
             parent: if is_closure { outer_fn } else { NO_FN },
         });
         self.mods[mi as usize].funcs.insert(id, fx);
@@ -1202,6 +1211,7 @@ impl<'a> Gen<'a> {
         if let Some(ctor) = &c.constructor {
             let f = self.register_fn(mi, ctor.id, &ctor.name, &ctor.params, false, false);
             self.m.funcs[f as usize].ctor_of = Some(tm);
+            self.m.funcs[f as usize].forwards_super = forwards_super(ctor);
             self.m.tmpls[tm as usize].ctor = Some(f);
         }
         let proto = self.m.tok(TokKind::Proto(tm));
@@ -1314,6 +1324,7 @@ impl<'a> Gen<'a> {
             lexical_this: false,
             no_summary: false,
             gen_step: false,
+            forwards_super: false,
             parent: NO_FN,
         });
         fx
@@ -1560,4 +1571,36 @@ pub(crate) fn push_unique(v: &mut Vec<Atom>, a: Atom) {
     if !v.contains(&a) {
         v.push(a);
     }
+}
+
+/// `constructor(...a) { super(...a) }` (with the capture slots and their
+/// rebind / stash statements the HIR adds around it): the first parameter
+/// is a rest parameter, used once, as the whole argument list of a
+/// top-level `super(...a)` (DECISIONS 49).
+pub(crate) fn forwards_super(f: &Function) -> bool {
+    let Some(p) = f.params.first() else {
+        return false;
+    };
+    if !p.is_rest
+        || p.default.is_some()
+        || f.params.iter().any(|q| q.arguments_object.is_some())
+        || f.is_async
+        || f.is_generator
+    {
+        return false;
+    }
+    let forwards = f.body.iter().filter(|s| is_forward_of(s, p.id)).count() == 1;
+    let mut refs = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for s in &f.body {
+        perry_hir::analysis::collect_local_refs_stmt(s, &mut refs, &mut seen);
+    }
+    forwards && refs.iter().filter(|&&r| r == p.id).count() == 1
+}
+
+/// `super(...a)` as a statement, `a` being local `rest`.
+pub(crate) fn is_forward_of(s: &Stmt, rest: perry_hir::types::LocalId) -> bool {
+    use perry_hir::{CallArg, Expr};
+    matches!(s, Stmt::Expr(Expr::SuperCallSpread(args))
+        if matches!(args.as_slice(), [CallArg::Spread(Expr::LocalGet(id))] if *id == rest))
 }

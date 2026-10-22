@@ -87,3 +87,50 @@ fn super_heritage_specialized_layout_uses_source_constructor() {
     assert!(!tmpl(&pf, &name).prefix_stable, "{}", pf.dump_text());
     assert!(!pf.super_unrelinked.contains(&9001), "{}", pf.dump_text());
 }
+
+/// A derived class without a constructor gets `constructor(...a) {
+/// super(...a) }`; a class that captures locals gets it with capture slots
+/// after the rest parameter. The parent's parameters take the `new` call's
+/// arguments position by position, not every argument each (DECISIONS 49).
+#[test]
+fn default_derived_ctor_forwards_by_position() {
+    let pf = facts(
+        r#"
+        function make() {
+            const k = { z: 1 };
+            class P { x: number; constructor() { this.x = 1; } }
+            class Q { y: number; constructor() { this.y = 2; } }
+            class Base { a: any; b: any; constructor(a: any, b: any) { this.a = a; this.b = b; } }
+            class D extends Base { kz() { return k.z; } }
+            return new D(new P(), new Q());
+        }
+        const d = make();
+        let t = 0; for (let i = 0; i < 3; i++) t += d.a.x + d.b.y + d.kz();
+        console.log(t);
+    "#,
+    );
+    for k in ["x", "y"] {
+        assert_eq!(site(&pf, k).verdict, Verdict::T0Mono, "{k}\n{}", pf.dump_text());
+    }
+}
+
+/// The capture slots after the rest parameter take no user argument: the
+/// rest takes them all, so a captured value keeps its own shape.
+#[test]
+fn capture_slot_after_rest_takes_no_user_argument() {
+    let pf = facts(
+        r#"
+        function make() {
+            const k = { z: 1 };
+            class P { x: number; constructor() { this.x = 1; } }
+            class Base { a: any; constructor(a: any) { this.a = a; } }
+            class D extends Base { kz() { return k.z; } }
+            return new D(new P());
+        }
+        const d = make();
+        let t = 0; for (let i = 0; i < 3; i++) t += d.kz();
+        console.log(t);
+    "#,
+    );
+    assert_eq!(site(&pf, "z").verdict, Verdict::T0Mono, "{}", pf.dump_text());
+}

@@ -203,6 +203,7 @@ pub fn resolver(m: &mut Model, dst: NodeId) -> Tok {
         lexical_this: true,
         no_summary: false,
         gen_step: false,
+        forwards_super: false,
         parent: NO_FN,
     });
     m.add_prim(ret, prim::UNDEF);
