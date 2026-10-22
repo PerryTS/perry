@@ -1,6 +1,7 @@
 //! Unit tests: small programs lowered from source, facts checked directly.
 
 mod array_ctor;
+mod array_length;
 mod birth_site;
 mod callback_origin;
 mod captured;
