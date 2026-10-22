@@ -530,6 +530,23 @@ pub fn const_index(expr: &perry_hir::Expr) -> Option<u32> {
     }
 }
 
+/// `arr[k](...)` is a method call: the callee is a property reference whose
+/// base, the array itself, becomes the callee's `this`. The array value is
+/// observed, so it cannot be scalar-replaced even at a constant index.
+fn escape_method_call_receiver(
+    callee: &perry_hir::Expr,
+    candidates: &std::collections::HashMap<u32, u32>,
+    escaped: &mut HashSet<u32>,
+) {
+    if let perry_hir::Expr::IndexGet { object, .. } = callee {
+        if let perry_hir::Expr::LocalGet(id) = object.as_ref() {
+            if candidates.contains_key(id) {
+                escaped.insert(*id);
+            }
+        }
+    }
+}
+
 pub fn check_array_escapes_in_expr(
     e: &perry_hir::Expr,
     candidates: &std::collections::HashMap<u32, u32>,
@@ -720,12 +737,14 @@ pub fn check_array_escapes_in_expr(
             check_array_escapes_in_expr(else_expr, candidates, escaped);
         }
         Expr::Call { callee, args, .. } => {
+            escape_method_call_receiver(callee, candidates, escaped);
             check_array_escapes_in_expr(callee, candidates, escaped);
             for a in args {
                 check_array_escapes_in_expr(a, candidates, escaped);
             }
         }
         Expr::CallSpread { callee, args, .. } => {
+            escape_method_call_receiver(callee, candidates, escaped);
             check_array_escapes_in_expr(callee, candidates, escaped);
             for a in args {
                 match a {

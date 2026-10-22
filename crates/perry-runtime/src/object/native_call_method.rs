@@ -621,6 +621,15 @@ pub unsafe extern "C-unwind" fn js_native_call_method_value(
     native_call_method_value_inner(object, key, args_ptr, args_len)
 }
 
+/// Is `object` an ordinary Array (GC header kind), not a Proxy or array-like?
+fn receiver_is_plain_array(object: f64) -> bool {
+    let v = JSValue::from_bits(object.to_bits());
+    v.is_pointer()
+        // SAFETY: `try_read_gc_header` validates the address before reading.
+        && unsafe { crate::value::addr_class::try_read_gc_header(v.as_pointer::<u8>() as usize) }
+            .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_ARRAY)
+}
+
 /// The body of [`js_native_call_method_value`].
 ///
 /// # Safety
@@ -782,7 +791,14 @@ unsafe fn native_call_method_value_inner(
             let field =
                 crate::object::js_object_get_index_polymorphic(object.to_bits() as i64, index);
             let fv = JSValue::from_bits(field.to_bits());
-            if !fv.is_undefined() && !fv.is_null() {
+            // An undefined answer may still name a numerically-named vtable
+            // method below; an array has none, so its element read is the
+            // whole [[Get]] and calling it throws the TypeError (#6328).
+            if fv.is_undefined() || fv.is_null() {
+                if receiver_is_plain_array(object) {
+                    crate::closure::throw_not_callable();
+                }
+            } else {
                 return crate::closure::native_call_value_this(
                     field,
                     crate::closure::JsThis::from_f64(object),
