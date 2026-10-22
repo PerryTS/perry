@@ -158,6 +158,58 @@ mod empty_birth_tests {
             "birth color must stay live: {ir}"
         );
     }
+
+    /// A literal past the inline limit is born by `js_array_alloc_literal`
+    /// and filled here: element `i` sits `ARRAY_HEADER_SIZE_BYTES + 8 * i`
+    /// past the array head. The offset is derived from the layout constant;
+    /// a hand-typed header size put element 0 on the element-kind word.
+    #[test]
+    fn outlined_literal_fills_slots_after_the_whole_array_header() {
+        let n = super::INLINE_ARRAY_MAX_ELEMENTS + 1;
+        let elements = (0..n).map(|i| Expr::String(format!("s{i}"))).collect();
+        let mut hir = Module::new("outlined_birth");
+        hir.functions.push(Function {
+            id: 0,
+            name: "outlined".into(),
+            type_params: Vec::new(),
+            params: Vec::new(),
+            return_type: Type::Any,
+            body: vec![Stmt::Return(Some(Expr::Array(elements, None)))],
+            is_async: false,
+            is_generator: false,
+            is_strict: true,
+            is_exported: false,
+            captures: Vec::new(),
+            decorators: Vec::new(),
+            was_plain_async: false,
+            was_unrolled: false,
+        });
+        let ir = String::from_utf8(
+            crate::compile_module(
+                &hir,
+                crate::CompileOptions {
+                    emit_ir_only: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            ir.contains("call i64 @js_array_alloc_literal("),
+            "outlined birth: {ir}"
+        );
+        let header = crate::target_layout::ARRAY_HEADER_SIZE_BYTES;
+        let last = header + 8 * (n as u64 - 1);
+        let slot_at = |offset: u64| {
+            ir.lines().any(|line| {
+                line.contains("getelementptr inbounds i8")
+                    && line.trim_end().ends_with(&format!(", i64 {offset}"))
+            })
+        };
+        assert!(slot_at(header), "slot 0 at +{header}: {ir}");
+        assert!(slot_at(last), "slot {} at +{last}: {ir}", n - 1);
+    }
 }
 
 /// Element count up to which an array is built inline (bump allocation plus N
@@ -488,7 +540,7 @@ pub(crate) fn emit_array_from_lowered_values<'f>(
 
     let arr_ptr = ctx.block().inttoptr(I64, &arr);
     for (i, v) in vals.iter().enumerate() {
-        let offset = (16 + i * 8).to_string();
+        let offset = (crate::target_layout::ARRAY_HEADER_SIZE_BYTES as usize + i * 8).to_string();
         let elem_ptr = ctx.block().gep_inbounds(I8, &arr_ptr, &[(I64, &offset)]);
         let elem_addr = if layout_notes_needed[i] {
             ctx.block().ptrtoint(&elem_ptr, I64)

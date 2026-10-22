@@ -242,7 +242,12 @@ pub extern "C" fn js_array_splice(
             // The rule assumes [s, s+k) holds the k items; a call without an
             // item buffer writes none, and only [0, s) is then known.
             let proved = if items_count == 0 || !item_handles.is_empty() {
-                crate::array::ek_prefix_after_splice(ek_prefix, start_idx, actual_delete, items_count)
+                crate::array::ek_prefix_after_splice(
+                    ek_prefix,
+                    start_idx,
+                    actual_delete,
+                    items_count,
+                )
             } else {
                 ek_prefix.min(start_idx)
             };

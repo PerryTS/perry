@@ -870,7 +870,10 @@ fn spill_layout_matches_codegen() {
     // The element-kind word sits at +16 on every target: emitted read guards
     // compare the index against `ek_prefix` at codegen's
     // `target_layout::ARRAY_EK_PREFIX_OFFSET_BYTES`.
-    assert_eq!(std::mem::offset_of!(crate::array::ArrayHeader, ek_prefix), 16);
+    assert_eq!(
+        std::mem::offset_of!(crate::array::ArrayHeader, ek_prefix),
+        16
+    );
     assert_eq!(std::mem::offset_of!(crate::array::ArrayHeader, ek_kind), 20);
 }
 

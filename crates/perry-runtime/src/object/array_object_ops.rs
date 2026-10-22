@@ -297,34 +297,7 @@ pub(crate) unsafe fn array_set_length_from_descriptor(
     !rejected
 }
 
-/// `[[DefineOwnProperty]]` on an array. An index define may give the slot
-/// an accessor or non-default attributes, which no slot read below the dense
-/// prefix may skip (EK §3.1): the prefix drops to the index before and after
-/// the define (the define itself can store the value at the frontier).
 pub(crate) unsafe fn define_array_property(
-    obj: *mut ObjectHeader,
-    obj_value: f64,
-    key_str: *const crate::StringHeader,
-    key_name: Option<&str>,
-    descriptor: &crate::object::object_ops::DescView<'_>,
-) -> Option<bool> {
-    let index = key_name.and_then(super::canonical_array_index);
-    let Some(index) = index.filter(|_| is_array_object(obj)) else {
-        return define_array_property_inner(obj, obj_value, key_str, key_name, descriptor);
-    };
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let obj_handle = scope.root_raw_mut_ptr(obj);
-    crate::array::ek_lower_prefix(array_header_mut(obj), index);
-    let result = define_array_property_inner(obj, obj_value, key_str, key_name, descriptor);
-    let live = array_header_mut(obj_handle.get_raw_mut_ptr::<ObjectHeader>());
-    if !live.is_null() {
-        crate::array::ek_lower_prefix(live, index);
-        crate::array::ek_debug_verify(live);
-    }
-    result
-}
-
-unsafe fn define_array_property_inner(
     obj: *mut ObjectHeader,
     obj_value: f64,
     key_str: *const crate::StringHeader,

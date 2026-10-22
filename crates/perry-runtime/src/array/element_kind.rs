@@ -82,6 +82,43 @@ pub(crate) unsafe fn ek_note_published(arr: *mut ArrayHeader, index: usize) {
     }
 }
 
+/// An element descriptor install on an array (EK §3.1, the descriptor
+/// row): every index key the edits give a data attribute or an accessor
+/// leaves the prefix. Every descriptor install entry calls this with the
+/// receiver (`descriptor_state::note_element_install`), so every define path
+/// (`defineProperty`, `__defineGetter__`, attribute installs) lowers P
+/// before a read can skip the descriptor. Removals and whole-list edits leave P alone: a cleared
+/// descriptor makes no slot less plain, and integrity edits leave elements
+/// readable as data.
+///
+/// # Safety
+/// `owner` is the address the descriptor install was made for.
+pub(crate) unsafe fn ek_note_descriptor_edits(
+    owner: usize,
+    edits: &[crate::object::descriptor_state::AttrsEdit<'_>],
+) {
+    use crate::object::descriptor_state::AttrsEdit;
+    let Some(header) = crate::value::addr_class::try_read_tracked_gc_header(owner) else {
+        return;
+    };
+    if (*header.as_ptr()).obj_type != crate::gc::GC_TYPE_ARRAY {
+        return;
+    }
+    let arr = super::clean_arr_ptr(owner as *const ArrayHeader) as *mut ArrayHeader;
+    if arr.is_null() {
+        return;
+    }
+    for edit in edits {
+        let key = match *edit {
+            AttrsEdit::Data(key, _) | AttrsEdit::Accessor(key, _, _) => key,
+            _ => continue,
+        };
+        if let Some(index) = crate::object::field_get_set::canonical_array_index_bytes(key) {
+            ek_lower_prefix(arr, index);
+        }
+    }
+}
+
 /// `splice(s, d, ...k)` (§3.1): `[0, s)` is untouched, `[s, s+k)` holds the
 /// items, and the moved tail's leading non-hole run is old `[s+d, P)`.
 #[inline]
@@ -95,7 +132,12 @@ pub(crate) fn ek_prefix_after_splice(prefix: u32, start: u32, deleted: u32, inse
 
 /// `copyWithin(t, s, ...)` moving `count` slots from `s` to `t` (§3.1).
 #[inline]
-pub(crate) fn ek_prefix_after_copy_within(prefix: u32, target: u32, source: u32, count: u32) -> u32 {
+pub(crate) fn ek_prefix_after_copy_within(
+    prefix: u32,
+    target: u32,
+    source: u32,
+    count: u32,
+) -> u32 {
     if target > prefix {
         return prefix;
     }
@@ -132,7 +174,10 @@ pub(crate) unsafe fn ek_debug_verify_read(arr: *const ArrayHeader, index: usize)
     #[cfg(debug_assertions)]
     if index < (*arr).ek_prefix as usize {
         let prefix = (*arr).ek_prefix;
-        assert!(prefix <= (*arr).length.min((*arr).capacity), "EK: prefix {prefix} past the live range");
+        assert!(
+            prefix <= (*arr).length.min((*arr).capacity),
+            "EK: prefix {prefix} past the live range"
+        );
         assert!(
             *super::array_elements_ptr(arr).add(index) != crate::value::TAG_HOLE,
             "EK: read of slot {index} below prefix {prefix} finds a hole"

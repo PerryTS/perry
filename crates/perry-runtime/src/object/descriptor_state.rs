@@ -260,10 +260,20 @@ pub(crate) fn note_accessor_descriptor_target_bytes(
     note_descriptor_target_edits(obj, &[AttrsEdit::Accessor(key, acc.get != 0, acc.set != 0)]);
 }
 
+/// EK §3.1, the descriptor row: an install on an array index takes that
+/// slot out of the array's dense prefix. Every install entry calls this with
+/// the receiver itself, before it maps an array to its named bag (after
+/// which the array is no longer in hand).
+fn note_element_install(owner: usize, edits: &[AttrsEdit<'_>]) {
+    // SAFETY: `owner` is the install's receiver; only its header is read.
+    unsafe { crate::array::ek_note_descriptor_edits(owner, edits) };
+}
+
 /// Apply descriptor facts to the ordinary holder shape. Arrays, functions,
 /// native handles and exotic cells normalize to their existing property bag.
 /// A changed entry publishes a new holder ShapeId and invalidates its memos.
 pub(crate) fn note_descriptor_target_edits(obj: usize, edits: &[AttrsEdit<'_>]) {
+    note_element_install(obj, edits);
     let function = HolderEdit::new(obj);
     if let Some(edit) = &function {
         edit.materialize_data_keys(edits);
@@ -857,6 +867,7 @@ pub(crate) unsafe fn plain_data_write_may_intercept(addr: usize, class_id: u32, 
 /// Store a property descriptor for (obj, key).
 pub(crate) fn set_property_attrs(obj: usize, key: String, attrs: PropertyAttrs) {
     super::builtin_proto::note_write_addr(obj, "descriptor");
+    note_element_install(obj, &[AttrsEdit::Data(key.as_bytes(), attrs.bits)]);
     let byte_edit = HolderEdit::new(obj);
     let obj = byte_edit.as_ref().map_or(obj, |edit| edit.bag as usize);
     crate::typedarray_named::note_named_mutation(obj, key.as_bytes());
@@ -1111,6 +1122,14 @@ pub(crate) fn set_accessor_descriptor(obj: usize, key: String, acc: AccessorDesc
     super::builtin_proto::note_write_addr(obj, "descriptor");
     crate::typedarray_named::note_named_mutation(obj, key.as_bytes());
     crate::closure::shape::note_function_own_state_changed(obj);
+    note_element_install(
+        obj,
+        &[AttrsEdit::Accessor(
+            key.as_bytes(),
+            acc.get != 0,
+            acc.set != 0,
+        )],
+    );
     let function = HolderEdit::new(obj);
     let obj = function.as_ref().map_or(obj, |edit| edit.bag as usize);
     super::prop_plan::prop_plan_epoch_bump_for_owner(obj);
@@ -1194,6 +1213,14 @@ pub(crate) fn install_fresh_accessor_property(
     attrs: PropertyAttrs,
 ) {
     crate::closure::shape::note_function_own_state_changed(obj);
+    note_element_install(
+        obj,
+        &[AttrsEdit::Accessor(
+            key.as_bytes(),
+            acc.get != 0,
+            acc.set != 0,
+        )],
+    );
     let function = HolderEdit::new(obj);
     let obj = function.as_ref().map_or(obj, |edit| edit.bag as usize);
     super::prop_plan::prop_plan_epoch_bump_for_owner(obj);
@@ -1267,6 +1294,7 @@ pub(crate) fn set_builtin_accessor_pair_bytes(
     attrs: PropertyAttrs,
 ) {
     crate::closure::shape::note_function_own_state_changed(obj);
+    note_element_install(obj, &[AttrsEdit::Data(key, attrs.bits)]);
     let function = HolderEdit::new(obj);
     let obj = function.as_ref().map_or(obj, |edit| edit.bag as usize);
     let acc = descriptor_from(pair);

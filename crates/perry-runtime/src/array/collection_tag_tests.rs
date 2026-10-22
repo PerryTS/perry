@@ -188,6 +188,7 @@ fn a_stale_registry_entry_over_recycled_bytes_does_not_read_as_a_map() {
     );
 
     // Recycle the bytes into a two-element dense array, registry untouched.
+    let saved_ek_word: u64;
     unsafe {
         set_gc_obj_type(addr, crate::gc::GC_TYPE_ARRAY);
         let recycled = addr as *mut ArrayHeader;
@@ -195,7 +196,9 @@ fn a_stale_registry_entry_over_recycled_bytes_does_not_read_as_a_map() {
         (*recycled).capacity = 2;
         // A hand-built array writes its whole header: the element-kind word
         // too, at the weakest claim (EK9), or the DEBUG word check reads the
-        // recycled Map bytes as a prefix.
+        // recycled Map bytes as a prefix. Those bytes are a Map field, so
+        // they are saved here and restored with the Map shape below.
+        saved_ek_word = std::ptr::read(std::ptr::addr_of!((*recycled).ek_prefix) as *const u64);
         (*recycled).ek_prefix = 0;
         (*recycled).ek_kind = 0;
         let elements = crate::array::array_elements_ptr(addr as *const ArrayHeader) as *mut f64;
@@ -225,6 +228,10 @@ fn a_stale_registry_entry_over_recycled_bytes_does_not_read_as_a_map() {
     // Restore the Map shape so teardown's side-allocation release stays sound.
     unsafe {
         set_gc_obj_type(addr, crate::gc::GC_TYPE_MAP);
+        std::ptr::write(
+            std::ptr::addr_of_mut!((*(addr as *mut ArrayHeader)).ek_prefix) as *mut u64,
+            saved_ek_word,
+        );
         (*map).size = 3;
         (*map).capacity = 4;
     }

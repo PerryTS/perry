@@ -36,9 +36,17 @@ fn pushed(values: &[f64]) -> *mut ArrayHeader {
 fn frontier_store_raises_and_a_hole_lowers() {
     unsafe {
         let arr = holey(7, &[0, 1, 2, 6]);
-        assert_eq!(prefix(arr), 3, "stores at the frontier raise P; a store past it does not");
+        assert_eq!(
+            prefix(arr),
+            3,
+            "stores at the frontier raise P; a store past it does not"
+        );
         assert_eq!(js_array_delete(arr, 1), 1);
-        assert_eq!(prefix(arr), 1, "delete inside the prefix lowers P to the index");
+        assert_eq!(
+            prefix(arr),
+            1,
+            "delete inside the prefix lowers P to the index"
+        );
         assert_eq!(*array_elements_ptr(arr).add(1), HOLE);
     }
 }
@@ -164,7 +172,11 @@ fn fill_extends_a_prefix_it_starts_in() {
         let arr = js_array_fill_range(arr, 0.0, 1.0, 4.0);
         assert_eq!(prefix(arr), 4, "fill(v, 1, 4) from inside the prefix");
         let arr = js_array_fill_range(arr, 0.0, 5.0, 6.0);
-        assert_eq!(prefix(arr), 4, "a range past the prefix proves nothing below it");
+        assert_eq!(
+            prefix(arr),
+            4,
+            "a range past the prefix proves nothing below it"
+        );
     }
 }
 

@@ -278,8 +278,9 @@ pub(crate) const INLINE_EMPTY_ARRAY_SLOTS: u64 = 4;
 
 /// Total bytes of an inline empty array birth: GcHeader + ArrayHeader +
 /// the append reserve.
-pub(crate) const INLINE_EMPTY_ARRAY_TOTAL_BYTES: u64 =
-    GC_HEADER_SIZE_BYTES + ARRAY_HEADER_SIZE_BYTES + INLINE_EMPTY_ARRAY_SLOTS * FIELD_SLOT_SIZE_BYTES;
+pub(crate) const INLINE_EMPTY_ARRAY_TOTAL_BYTES: u64 = GC_HEADER_SIZE_BYTES
+    + ARRAY_HEADER_SIZE_BYTES
+    + INLINE_EMPTY_ARRAY_SLOTS * FIELD_SLOT_SIZE_BYTES;
 
 /// The packed `GcHeader` word an inline empty array birth stores: an arena
 /// array whose layout state is pointer-free (every slot is a hole). The
