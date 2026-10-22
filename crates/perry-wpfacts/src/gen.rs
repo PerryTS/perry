@@ -126,6 +126,10 @@ pub struct Gen<'a> {
     /// (module, local) → the class. `super` through such a home starts at
     /// that class's parent, exactly like `SuperPropertyGet`.
     pub class_homes: FxHashMap<(u32, u32), TmplId>,
+    /// Array-typed `let` bindings: the HIR's shared-mutable capture
+    /// rewriting turns such a binding into a one-element cell, read and
+    /// written as `x[0]` (an evaluation owner is written the same way).
+    pub cell_locals: crate::pts::FxHashSet<(u32, u32)>,
     /// Literal birth templates by expression (compiler data, `new_lit`).
     pub(crate) lit_births: FxHashMap<usize, (TmplId, Tok)>,
     /// The constant first argument of the call `call_expr` is lowering,
@@ -319,6 +323,7 @@ impl<'a> Gen<'a> {
             iife_birth: FxHashMap::default(),
             fn_phase: FxHashMap::default(),
             class_homes: FxHashMap::default(),
+            cell_locals: Default::default(),
             lit_births: FxHashMap::default(),
             call_lit_arg: None,
             require_helpers: FxHashMap::default(),

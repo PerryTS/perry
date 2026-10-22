@@ -144,8 +144,18 @@ fn linked_parent_in_a_factory_is_checked_not_sunk() {
         let t = tmpl(&pf, name);
         assert!(t.hard.is_none(), "{name}\n{}", pf.dump_text());
     }
-    assert_eq!(site(&pf, "b").verdict, Verdict::T0Mono, "{}", pf.dump_text());
-    assert_eq!(site(&pf, "a").verdict, Verdict::T0Mono, "{}", pf.dump_text());
+    assert_eq!(
+        site(&pf, "b").verdict,
+        Verdict::T0Mono,
+        "{}",
+        pf.dump_text()
+    );
+    assert_eq!(
+        site(&pf, "a").verdict,
+        Verdict::T0Mono,
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// The name a class is linked through is a mutable binding: when another

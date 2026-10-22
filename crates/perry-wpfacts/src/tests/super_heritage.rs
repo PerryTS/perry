@@ -110,7 +110,12 @@ fn default_derived_ctor_forwards_by_position() {
     "#,
     );
     for k in ["x", "y"] {
-        assert_eq!(site(&pf, k).verdict, Verdict::T0Mono, "{k}\n{}", pf.dump_text());
+        assert_eq!(
+            site(&pf, k).verdict,
+            Verdict::T0Mono,
+            "{k}\n{}",
+            pf.dump_text()
+        );
     }
 }
 
@@ -132,5 +137,58 @@ fn capture_slot_after_rest_takes_no_user_argument() {
         console.log(t);
     "#,
     );
-    assert_eq!(site(&pf, "z").verdict, Verdict::T0Mono, "{}", pf.dump_text());
+    assert_eq!(
+        site(&pf, "z").verdict,
+        Verdict::T0Mono,
+        "{}",
+        pf.dump_text()
+    );
+}
+
+/// A class declared in a function whose members name it: the HIR makes its
+/// self binding a one-element cell (`owner = [undefined]`, read as
+/// `owner[0]`) and runs its static initializers where it is evaluated. The
+/// class goes into the cell's element, and the declaration's unrewritten
+/// copy of the initializers is not run (DECISIONS 50).
+const NESTED_SELF: &str = r#"
+    function make() {
+        class S {
+            v: number;
+            constructor(v: number) { this.v = v; }
+            static mk() { return new S(2); }
+            static one = S.mk();
+            get() { return S.one.v; }
+        }
+        return S;
+    }
+    const A = make(); make();
+    let t = 0; for (let i = 0; i < 3; i++) t += A.one.v + A.one.get();
+    console.log(t);
+"#;
+
+#[test]
+fn nested_class_static_initializer_runs_at_its_evaluation() {
+    let pf = facts(NESTED_SELF);
+    assert_eq!(tmpl(&pf, "S").escape, None, "{}", pf.dump_text());
+    let v: Vec<_> = pf.sites.iter().filter(|s| s.key == "v").collect();
+    assert!(
+        !v.is_empty() && v.iter().all(|s| s.verdict == Verdict::T0Mono),
+        "{}",
+        pf.dump_text()
+    );
+}
+
+#[test]
+fn class_self_cell_holds_the_class_in_its_element() {
+    let pf = facts(NESTED_SELF);
+    let mk: Vec<_> = pf.sites.iter().filter(|s| s.key == "mk").collect();
+    assert!(!mk.is_empty(), "{}", pf.dump_text());
+    for s in mk {
+        assert_eq!(
+            s.receivers,
+            vec!["class:t.ts:S".to_string()],
+            "{}",
+            pf.dump_text()
+        );
+    }
 }
