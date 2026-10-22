@@ -210,10 +210,12 @@ pub extern "C" fn js_object_set_field_by_name(
                     | crate::gc::OBJ_FLAG_SEALED
                     | crate::gc::OBJ_FLAG_NO_EXTEND
                     | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
-                    | crate::gc::OBJ_FLAG_NULL_PROTO
                     | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO;
+                // A born-null receiver takes the lane when its shape proves
+                // it ordinary with no chain (the plan is keyed on that shape).
                 if (*gc_hdr).obj_type == crate::gc::GC_TYPE_OBJECT
                     && (*gc_hdr)._reserved & LANE_BLOCKING == 0
+                    && super::shapes::store_kind::born_null_admits_lane(o, (*gc_hdr)._reserved)
                 {
                     let class_id = (*o).class_id;
                     // Class objects must reach the static-write mirror.

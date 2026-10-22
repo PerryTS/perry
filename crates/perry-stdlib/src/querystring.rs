@@ -32,9 +32,9 @@ use perry_runtime::array::{js_array_alloc, js_array_length, js_array_push_f64};
 use perry_runtime::buffer::BufferHeader;
 use perry_runtime::closure::{is_closure_ptr, js_closure_call1, ClosureHeader};
 use perry_runtime::{
-    js_object_alloc_null_proto, js_object_get_field_by_name, js_object_get_own_field_or_undef,
-    js_object_keys, js_object_set_field_by_name, js_string_from_bytes, ArrayHeader, JSValue,
-    ObjectHeader, StringHeader,
+    js_object_alloc_null_proto_ordinary, js_object_get_field_by_name,
+    js_object_get_own_field_or_undef, js_object_keys, js_object_set_field_by_name,
+    js_string_from_bytes, ArrayHeader, JSValue, ObjectHeader, StringHeader,
 };
 
 // Suppress unused — `Handle` is re-exported for symmetry with other modules.
@@ -300,9 +300,10 @@ pub unsafe extern "C" fn js_querystring_parse(
     // #1175: Node's `querystring.parse` returns an `Object.create(null)`
     // result so `__proto__` / `constructor` etc. are stored as own data
     // properties rather than punching through the prototype chain. Mirror
-    // that here — `js_object_alloc_null_proto` stamps a flag the
-    // `Object.getPrototypeOf` path consults so `proto: null` matches Node.
-    let obj = js_object_alloc_null_proto(0, 0);
+    // that here: the ordinary null-prototype birth publishes the null edge
+    // in the result's shape, so `proto: null` matches Node and every key is
+    // an own data property.
+    let obj = js_object_alloc_null_proto_ordinary(0);
     if input.is_empty() {
         return obj;
     }

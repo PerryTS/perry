@@ -138,7 +138,20 @@ fn stable_single_own_for_in_keys(value: f64) -> Option<*mut ArrayHeader> {
     };
     if receiver_gc.obj_type != crate::gc::GC_TYPE_OBJECT
         || receiver_gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
-        || receiver_gc._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0
+    {
+        return stable_miss("receiver_kind");
+    }
+    // A born-null receiver qualifies when its shape proves it ordinary with
+    // no chain: its own key is then the whole enumeration. The bit alone is
+    // sticky across a relink, so a relinked one misses.
+    let null_chain = receiver_gc._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0;
+    if null_chain
+        && !unsafe {
+            super::super::shapes::store_kind::born_null_shape_proven(
+                receiver_addr as *const ObjectHeader,
+                receiver_gc._reserved,
+            )
+        }
     {
         return stable_miss("receiver_kind");
     }
@@ -200,7 +213,7 @@ fn stable_single_own_for_in_keys(value: f64) -> Option<*mut ArrayHeader> {
     {
         return stable_miss("internal_key");
     }
-    if !canonical_prototype_has_no_enumerable_chain_keys(receiver_addr) {
+    if !null_chain && !canonical_prototype_has_no_enumerable_chain_keys(receiver_addr) {
         return stable_miss("object_prototype");
     }
 

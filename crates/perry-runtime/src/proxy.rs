@@ -1714,13 +1714,28 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                             // builds O(n²)). #10287: a RECORDED prototype (a
                             // function-constructed receiver, `Object.create`,
                             // `setPrototypeOf`) is walked per key rather than rejected.
-                            match crate::object::prototype_chain::object_static_prototype(cur_addr())
+                            // A born-null receiver whose shape proves it ordinary
+                            // with no chain has nothing to intercept the key.
+                            use crate::object::shapes::store_kind;
+                            let obj = cur_addr() as *const crate::ObjectHeader;
+                            if header._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0
+                                && store_kind::born_null_shape_proven(obj, header._reserved)
                             {
-                                None => !crate::object::object_proto_may_intercept_key(cur_key()),
-                                Some(_) => !crate::object::plain_custom_prototype_may_intercept(
+                                true
+                            } else {
+                                match crate::object::prototype_chain::object_static_prototype(
                                     cur_addr(),
-                                    cur_key(),
-                                ),
+                                ) {
+                                    None => {
+                                        !crate::object::object_proto_may_intercept_key(cur_key())
+                                    }
+                                    Some(_) => {
+                                        !crate::object::plain_custom_prototype_may_intercept(
+                                            cur_addr(),
+                                            cur_key(),
+                                        )
+                                    }
+                                }
                             }
                         } else {
                             // `DisposableStack#disposed` is a getter-only
@@ -1783,9 +1798,7 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                             // statics like bundled zod's `ZodX.create` vanished
                             // from ClassRef static dispatch. Class objects
                             // neither record nor honor store plans.
-                            let plan_eligible = header._reserved & crate::gc::OBJ_FLAG_NULL_PROTO
-                                == 0
-                                && class_id != crate::object::NATIVE_MODULE_CLASS_ID
+                            let plan_eligible = class_id != crate::object::NATIVE_MODULE_CLASS_ID
                                 // #8113: this asks for ORDINARY specifically —
                                 // it must stay FALSE for a class object or
                                 // #6595 reopens. `object_is_regular` is exactly
@@ -1796,6 +1809,12 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                                 // "is an ObjectHeader" test.
                                 && crate::object::object_is_regular(
                                     addr as *const crate::ObjectHeader,
+                                )
+                                // A born-null receiver's plan is keyed on a
+                                // shape that proves it ordinary with no chain.
+                                && crate::object::shapes::store_kind::born_null_admits_lane(
+                                    addr as *const crate::ObjectHeader,
+                                    header._reserved,
                                 )
                                 && interned != 0;
                             let verdict = if plan_eligible
