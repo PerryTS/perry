@@ -220,6 +220,13 @@ pub struct FuncInfo {
     /// (`LinkGeneratorPrototype`); `next`/`return`/`throw` and the
     /// iteration protocol on it run the closure.
     pub gen_step: bool,
+    /// A class constructor of the shape `constructor(...a) { super(...a) }`
+    /// (the spec default a derived class gets): the `new` call's own
+    /// arguments construct the parent, position by position, not through
+    /// one rest array whose elements reach every parameter of the parent
+    /// (DECISIONS 49). Its body is not walked: `run_ctor_chain` runs the
+    /// parent with the `new` call itself.
+    pub forwards_super: bool,
     /// The function whose body creates this closure (`NO_FN` for
     /// declarations, methods and builtins).
     pub parent: FnIdx,

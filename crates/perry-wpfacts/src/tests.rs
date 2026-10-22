@@ -1187,6 +1187,7 @@ fn a_parameter_node_holds_its_argument_marker() {
         lexical_this: false,
         no_summary: true,
         gen_step: false,
+        forwards_super: false,
         parent: NO_FN,
     });
     let (m1, m2) = (m.param_marker_tok(0, 0), m.param_marker_tok(0, 1));
@@ -1246,6 +1247,7 @@ fn a_store_into_a_marker_makes_no_field_of_it() {
         lexical_this: false,
         no_summary: true,
         gen_step: false,
+        forwards_super: false,
         parent: NO_FN,
     });
     let mk = m.param_marker_tok(0, 0);

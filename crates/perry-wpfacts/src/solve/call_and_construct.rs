@@ -448,6 +448,13 @@ impl Model {
                 let ftok = self.funcs[ctor as usize].token;
                 self.call_tok(call, ftok, Some(inst));
                 self.ctor_ret_objects(call, ftok, c.ret);
+                if self.funcs[ctor as usize].forwards_super {
+                    // `constructor(...a) { super(...a) }`: the parent runs
+                    // with this `new` call's arguments (DECISIONS 49).
+                    let receiver = self.node_l("forwarded-super-this");
+                    self.cons(receiver, Cons::SuperCtor { class: tm, call });
+                    self.add_tok(receiver, inst);
+                }
             }
             (None, Some(_), _) => {
                 // Implicit `constructor(...a) { super(...a) }`.
