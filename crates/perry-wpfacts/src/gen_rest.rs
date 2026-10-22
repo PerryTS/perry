@@ -537,9 +537,7 @@ impl<'a> Gen<'a> {
             | Expr::MathAsinh(..)
             | Expr::MathAcosh(..)
             | Expr::MathAtanh(..)
-            | Expr::MathExp(..) => {
-                self.prim_kids(fx, e, prim::NUM, "primitive builtin operand")
-            }
+            | Expr::MathExp(..) => self.prim_kids(fx, e, prim::NUM, "primitive builtin operand"),
             // The global conversions and predicates: the operation fixes the
             // kind of its result (ECMA-262; the HIR operation's contract).
             Expr::ParseInt { .. }

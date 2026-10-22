@@ -372,12 +372,8 @@ fn fn_contract_of(
     let reach_keys: Vec<Vec<(String, u8)>> = (0..fi.params.len() as u32)
         .map(|i| {
             let mk = g.m.marker_of[&(f, i)];
-            let mut v: Vec<(model::Atom, u8)> = g
-                .m
-                .keyed_uses
-                .get(&mk)
-                .cloned()
-                .unwrap_or_default();
+            let mut v: Vec<(model::Atom, u8)> =
+                g.m.keyed_uses.get(&mk).cloned().unwrap_or_default();
             for &(a, r) in g.m.keyed_reach.get(&mk).into_iter().flatten() {
                 match v.iter_mut().find(|(k, _)| *k == a) {
                     Some((_, u)) => *u |= marker_use(r),
@@ -1095,15 +1091,21 @@ pub(crate) fn compute_in<'a>(
                     })
                     .or_else(|| {
                         let facts = templates.iter().find(|x| x.id == tm)?.clone();
-                        let model::TmplKind::Class {
-                            name,
-                            class_id,
-                            literal_shape,
-                            ..
-                        } = g.m.tmpls[tm as usize].kind.clone()
-                        else {
-                            return None;
-                        };
+                        let (name, class_id, literal_shape) =
+                            match g.m.tmpls[tm as usize].kind.clone() {
+                                model::TmplKind::Class {
+                                    name,
+                                    class_id,
+                                    literal_shape,
+                                    ..
+                                } => (name, class_id, literal_shape),
+                                // An enum's object (§18.2): a literal layout with
+                                // no class (nothing guards it, so no class id).
+                                model::TmplKind::Lit {
+                                    enum_image: true, ..
+                                } => (display.clone(), 0, true),
+                                _ => return None,
+                            };
                         Some(units::ClassContract {
                             display: display.clone(),
                             name,

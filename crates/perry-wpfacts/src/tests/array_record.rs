@@ -53,7 +53,12 @@ fn boolean_index_reads_the_named_member() {
     );
     let t = tmpl(&pf, "H");
     let d = field(t, "m").kind.desc();
-    assert_ne!(d, "undef", "k[bool] lost K.prototype.true\n{}", pf.dump_text());
+    assert_ne!(
+        d,
+        "undef",
+        "k[bool] lost K.prototype.true\n{}",
+        pf.dump_text()
+    );
 }
 
 /// A union of primitive kinds is that union, not every kind: an enum

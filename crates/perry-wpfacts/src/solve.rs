@@ -1293,7 +1293,7 @@ impl Model {
                     f.data_field
                         && f.key == self.atoms[a as usize]
                         && match facts.kind {
-                            "litclass" => true,
+                            "litclass" | "lit" => true,
                             "class" => f.definite,
                             _ => false,
                         }

@@ -468,9 +468,10 @@ impl<'a> Gen<'a> {
                         (ImportSpecifier::Named { imported, local }, None) => {
                             (local.clone(), self.imported_value(mi, imp, imported, local))
                         }
-                        (ImportSpecifier::Default { local }, None) => {
-                            (local.clone(), self.imported_value(mi, imp, "default", local))
-                        }
+                        (ImportSpecifier::Default { local }, None) => (
+                            local.clone(),
+                            self.imported_value(mi, imp, "default", local),
+                        ),
                         // Another unit's module as a namespace (§18.2).
                         (ImportSpecifier::Namespace { local }, None)
                             if self.ns_keys_for(imp).is_some() =>
@@ -523,7 +524,10 @@ impl<'a> Gen<'a> {
     /// `export *` source is outside the program. A namespace's shape is its
     /// module's declarations, so nothing about it is guarded.
     fn stand_in_ns(&mut self, mi: u32, imp: &'a perry_hir::Import, local: &str) -> NodeId {
-        let path = imp.resolved_path.clone().expect("a namespace with keys has a path");
+        let path = imp
+            .resolved_path
+            .clone()
+            .expect("a namespace with keys has a path");
         if let Some(&n) = self.stand_in_nss.get(&path) {
             return n;
         }
@@ -545,8 +549,9 @@ impl<'a> Gen<'a> {
         if *open {
             let fa = self.m.field_any(tok);
             let src = imp.source.clone();
-            self.m
-                .add_top(fa, |_| format!("namespace of {src}: export * from outside the program"));
+            self.m.add_top(fa, |_| {
+                format!("namespace of {src}: export * from outside the program")
+            });
         }
         n
     }

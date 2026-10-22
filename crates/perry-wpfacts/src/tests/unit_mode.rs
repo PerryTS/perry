@@ -1976,8 +1976,16 @@ fn a_store_into_a_class_field_is_a_store_effect() {
         );
     }
     // The owner performs the effect: `size` has writers after birth.
-    assert!(!field(tmpl(&pf, "Arena"), "size").readonly, "{}", pf.dump_text());
-    assert!(field(tmpl(&pf, "Arena"), "left").readonly, "{}", pf.dump_text());
+    assert!(
+        !field(tmpl(&pf, "Arena"), "size").readonly,
+        "{}",
+        pf.dump_text()
+    );
+    assert!(
+        field(tmpl(&pf, "Arena"), "left").readonly,
+        "{}",
+        pf.dump_text()
+    );
     // Soundness: the owner reads what the other unit stored. `get` (a method
     // of the class unit) reads `this.v.key`; the constructor put `{ key: 1 }`
     // there, but `put` stored another layout: `.key` must not hold on it.
@@ -2054,6 +2062,10 @@ fn an_escaped_keyed_reach_in_a_result_is_another_units_value() {
         let m = "import { put, make } from './b'; put({ inner: { a: 1 } }); function main() { const o = { w: { q: 1 } }; const r = make(o); console.log(r.q); } main(); main();";
         let pf = units_of(&[("b", b), ("m", m)]);
         let s: Vec<_> = pf.sites.iter().filter(|s| s.key == "q").collect();
-        assert!(!s.is_empty() && s.iter().all(|s| s.top), "{}", pf.dump_text());
+        assert!(
+            !s.is_empty() && s.iter().all(|s| s.top),
+            "{}",
+            pf.dump_text()
+        );
     }
 }
