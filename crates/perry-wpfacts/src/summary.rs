@@ -601,6 +601,12 @@ impl Model {
             }
         };
         let this = tr(s.this);
+        // Its parameters hold argument markers (DECISIONS 44).
+        for &p in &s.params {
+            if is_slot(p) {
+                self.nodes[tr(p) as usize].param = true;
+            }
+        }
         let lay = match key.0 {
             0 => LAY_SITE | key.1,
             5 => LAY_BIRTH | key.1,

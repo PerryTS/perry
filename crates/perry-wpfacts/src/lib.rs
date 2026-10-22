@@ -380,7 +380,9 @@ fn fn_contract_of(
     let ret = (!g.ret_top.contains(&f) && !rets.is_empty()).then(|| {
         let mut ds: Vec<String> = Vec::new();
         for n in rets {
-            for t in g.m.nodes[n as usize].pts.to_sorted() {
+            // An argument marker reads as the markers it stands for (DECISIONS 44).
+            let toks = g.m.nodes[n as usize].pts.to_sorted();
+            for t in toks.into_iter().flat_map(|t| g.m.marker_members(t)) {
                 // An escaped marker reads as ⊤ (DECISIONS 42).
                 if matches!(
                     g.m.toks[t as usize],
@@ -508,7 +510,9 @@ fn arg_contract_of(
             let vc = &mut ac.params[i];
             // A call passing fewer arguments passes undefined.
             vc.prim |= node.prim | model::prim::UNDEF;
-            for t in node.pts.to_sorted() {
+            // An argument marker reads as the markers it stands for (DECISIONS 44).
+            let toks = node.pts.to_sorted();
+            for t in toks.into_iter().flat_map(|t| g.m.marker_members(t)) {
                 // Another unit's function value (decision 19): by its
                 // contract; the callee's calls of it publish what they pass
                 // under its name. This unit's own function is unknown there

@@ -25,6 +25,25 @@ impl Model {
     }
     fn add_tokens(&mut self, n: NodeId, toks: Tokens<'_>, prim: u16) {
         let mut later: Vec<Tok> = Vec::new();
+        // A parameter node holds its argument marker in place of the
+        // markers that arrive (DECISIONS 44); it no longer holds every value
+        // of its sources.
+        let own = match self.nodes[n as usize].param
+            && !self.param_marker.is_empty()
+            && toks.iter().any(|&t| self.is_marker(t))
+        {
+            true => {
+                let r = self.arg_marker(n);
+                for &t in toks {
+                    if self.is_marker(t) {
+                        self.link_marker(t, r);
+                    }
+                }
+                self.nodes[n as usize].dropped = true;
+                Some(r)
+            }
+            false => None,
+        };
         let targets = if toks.is_empty() {
             Targets::Empty
         } else {
@@ -37,6 +56,14 @@ impl Model {
         let mut changed = false;
         let mut top_new = false;
         for &t in toks {
+            let t = match own {
+                Some(r)
+                    if self.param_marker.contains_key(&t) || marker_top_bit(&self.arg_bits, t) =>
+                {
+                    r
+                }
+                _ => t,
+            };
             // A marker that reads as ⊤ (DECISIONS 42) is decided after the
             // other tokens, once it is known whether ⊤ arrived with them.
             if marker_top_bit(&self.marker_top, t) {
@@ -269,6 +296,14 @@ impl Model {
 
     pub fn solve(&mut self) {
         self.rel_phase = b'S';
+        for f in 0..self.funcs.len() {
+            for i in 0..self.funcs[f].params.len() {
+                let p = self.funcs[f].params[i];
+                if p != NO_NODE {
+                    self.nodes[p as usize].param = true;
+                }
+            }
+        }
         loop {
             self.fill_instances();
             let Some(n) = self.wl.pop_front() else {
@@ -1191,7 +1226,7 @@ impl Model {
         // unmodeled code: it escapes), a closed function's callers' values
         // beside its marker (decision 13). A field of the marker would only
         // hold every value stored into any marker it meets (DECISIONS 41).
-        if self.param_marker.contains_key(&t) {
+        if self.is_marker(t) {
             return;
         }
         // A store into another unit's instance, class object or prototype

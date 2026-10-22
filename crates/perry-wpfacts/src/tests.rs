@@ -1122,6 +1122,55 @@ fn a_node_that_left_out_a_top_marker_never_takes_a_shared_set() {
 }
 
 #[test]
+fn a_parameter_node_holds_its_argument_marker() {
+    use crate::model::{FuncInfo, TokKind, MARK_READ, NO_CTX, NO_FN};
+    // DECISIONS 44, the rule itself: a function's parameter node `p` holds
+    // its argument marker in place of the markers that arrive, through a
+    // delivery too (`try_copy_delivery` would adopt `s`'s set: `p` held all
+    // of it). A marker that arrives after the argument marker was used
+    // takes the uses so far.
+    let mut m = copy_solver_model();
+    let (this, ret, args, p) = (m.node_l("this"), m.node_l("ret"), m.node_l("args"), m.node_l("p"));
+    let token = m.tok(TokKind::Func(0, NO_CTX));
+    m.funcs.push(FuncInfo {
+        module: 0,
+        func_id: 0,
+        name: "f".into(),
+        params: vec![p],
+        rest: None,
+        this,
+        ret,
+        args_all: args,
+        has_arguments: false,
+        token,
+        ctor_of: None,
+        lexical_this: false,
+        no_summary: true,
+        gen_step: false,
+        parent: NO_FN,
+    });
+    let (m1, m2) = (m.param_marker_tok(0, 0), m.param_marker_tok(0, 1));
+    let a = m.tok(TokKind::ModNs(7));
+    let s = m.node_l("s");
+    m.add_tok(s, a);
+    m.edge(s, p);
+    m.solve();
+    let has = |m: &crate::model::Model, n, t| m.nodes[n as usize].pts.contains_tok(t);
+    assert!(has(&m, p, a), "a real token passes");
+    m.add_tok(s, m1);
+    m.solve();
+    let r = m.arg_marker_of[&p];
+    assert!(has(&m, p, r) && !has(&m, p, m1), "the argument marker in place of the marker");
+    assert_eq!(m.marker_members(r), vec![m1]);
+    m.mark_use(r, MARK_READ);
+    assert_eq!(m.marker_use[&m1] & MARK_READ, MARK_READ, "a member takes the uses");
+    m.add_tok(s, m2);
+    m.solve();
+    assert!(!has(&m, p, m2));
+    assert_eq!(m.marker_use[&m2] & MARK_READ, MARK_READ, "a late member takes the uses so far");
+}
+
+#[test]
 fn a_store_into_a_marker_makes_no_field_of_it() {
     use crate::model::{FuncInfo, Key, TokKind, MARK_ESCAPE, NO_CTX, NO_FN};
     // DECISIONS 41, the rule itself (the unit-level growth test,
