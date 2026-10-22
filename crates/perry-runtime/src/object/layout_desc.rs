@@ -455,14 +455,16 @@ pub(crate) fn shadow_name_descriptor() -> &'static StaticAtom {
     &SHADOW_NAME_DESCRIPTOR
 }
 
+// COFF sorts subsections only within the same section characteristics.
+// Layouts are writable, so their boundary markers must be writable too.
 #[cfg(target_os = "windows")]
 #[used(linker)]
 #[link_section = ".perrylay$a"]
-static LAYOUT_START: [u64; 1] = [0];
+static mut LAYOUT_START: [u64; 1] = [0];
 #[cfg(target_os = "windows")]
 #[used(linker)]
 #[link_section = ".perrylay$z"]
-static LAYOUT_END: [u64; 1] = [0];
+static mut LAYOUT_END: [u64; 1] = [0];
 #[cfg(target_os = "windows")]
 #[used(linker)]
 #[link_section = ".perryatm$a"]
@@ -471,6 +473,17 @@ static ATOM_START: [u64; 1] = [0];
 #[used(linker)]
 #[link_section = ".perryatm$z"]
 static ATOM_END: [u64; 1] = [0];
+// Runtime atoms are immutable, while generated atoms include writable symbol
+// bindings. COFF keeps those in separate sections even with the same name.
+#[cfg(target_os = "windows")]
+#[used(linker)]
+#[link_section = ".perryatm$a"]
+static mut ATOM_MUT_START: [u64; 1] = [0];
+#[cfg(target_os = "windows")]
+#[used(linker)]
+#[link_section = ".perryatm$z"]
+static mut ATOM_MUT_END: [u64; 1] = [0];
+
 
 /// (start, end) of the layout section.
 fn layout_bounds() -> (usize, usize) {
@@ -2901,7 +2914,14 @@ fn image_atoms() -> impl Iterator<Item = *mut StaticAtom> {
             .into_iter()
             .map(|item| item.0.cast_mut())
     }
-    #[cfg(not(target_family = "wasm"))]
+    #[cfg(target_os = "windows")]
+    {
+        records::<StaticAtom>(atom_bounds()).chain(records::<StaticAtom>((
+            std::ptr::addr_of!(ATOM_MUT_START) as usize + 8,
+            std::ptr::addr_of!(ATOM_MUT_END) as usize,
+        )))
+    }
+    #[cfg(not(any(target_family = "wasm", target_os = "windows")))]
     {
         records::<StaticAtom>(atom_bounds())
     }
@@ -2918,3 +2938,7 @@ fn image_layouts() -> impl Iterator<Item = *mut PerryLayoutDesc> {
         records::<PerryLayoutDesc>(layout_bounds())
     }
 }
+
+#[cfg(test)]
+#[path = "layout_section_tests.rs"]
+mod layout_section_tests;

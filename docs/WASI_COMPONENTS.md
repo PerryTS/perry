@@ -90,9 +90,15 @@ TCP/UDP/DNS interoperability with the packaged engine restored. It also executes
 WASI commands, including commands nested inside active library callbacks. All
 20 normal library phases and five command phases must pass; partial or duplicate
 phase sets cannot qualify an archive.
-The receipt records archive, installed-file and executable identities. This
-packaging change still requires release-profile execution qualification; it
-does not establish that a release has been published.
+The receipt records archive, installed-file and executable identities. Expanded
+ABI 5 production qualification remains pending. The earlier production profile
+passed six outer checks and 15 library phases on Linux and macOS. Its Linux
+engine measured 235,912,106 bytes raw and 39,653,474 bytes after npm compression;
+the complete Linux npm tarball was 208,099,510 bytes. Unpacking that package,
+generating bindings, automatically discovering the decompressed engine and
+executing all 51 typed fixture calls passed. These are actual production artifact
+measurements, but do not qualify the expanded command/host-resource profile or
+establish publication. See the [initial production receipt](validation/component-packaging-initial-production-20261022.json).
 
 ### Per-instance WASI providers
 

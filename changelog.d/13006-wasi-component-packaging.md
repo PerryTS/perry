@@ -16,3 +16,10 @@ library phases and five command phases, including host resources and commands
 nested in active library callbacks. Retain command evidence and compare exact
 TCP/UDP payloads. Include the loop-interrupt IR NUL correction exposed by Windows
 host qualification so packaged compilers can reach execution validation.
+
+Include the Windows linked-image boundary and COFF helper corrections from
+#13004. Initial production Linux/macOS archives passed the earlier 15-phase
+profile. Measure the actual Linux production engine at 235,912,106 bytes raw and
+39,653,474 bytes compressed in npm staging; pack/unpack, WIT generation, automatic
+engine discovery and all 51 typed fixture calls pass. Expanded ABI 5 production
+qualification remains separate and pending.
