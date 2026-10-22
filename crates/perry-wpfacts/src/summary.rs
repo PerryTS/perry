@@ -307,6 +307,7 @@ pub fn map_cons(
         },
         IdxKey { obj, dst } => IdxKey { obj, dst: n(dst) },
         Arith { dst, add } => Arith { dst: n(dst), add },
+        ArrayLenArg { dst } => ArrayLenArg { dst: n(dst) },
         ShareBuffer { ta } => ShareBuffer { ta },
         ThisTo { origin } => ThisTo { origin },
         CallArgs { call } => CallArgs { call: k(call) },
@@ -400,6 +401,7 @@ fn gen_kind(c: &Cons) -> bool {
             | IdxLoad { .. }
             | IdxKey { .. }
             | Arith { .. }
+            | ArrayLenArg { .. }
             | IterNext { .. }
             | ProtoOf { .. }
             | ThisFrom { .. }
@@ -423,6 +425,7 @@ fn read_dst(c: &Cons) -> Option<NodeId> {
         | IdxLoad { dst, .. }
         | IdxKey { dst, .. }
         | Arith { dst, .. }
+        | ArrayLenArg { dst }
         | IterNext { dst }
         | ProtoOf { dst } => Some(dst),
         _ => None,

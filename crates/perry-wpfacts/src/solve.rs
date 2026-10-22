@@ -1065,6 +1065,9 @@ impl Model {
                     self.add_prim(dst, out);
                 }
             }
+            Cons::ArrayLenArg { dst } => {
+                self.add_tokens(dst, toks, prim & !prim::NUM);
+            }
             Cons::ShareBuffer { ta } => {
                 for &t in toks {
                     let shared = t == TOP
@@ -1538,6 +1541,7 @@ impl Model {
             Cons::NewTargetHard { reason } => format!("newtargethard {n} {reason}"),
             Cons::ShareBuffer { ta } => format!("sharebuffer {n} {ta}"),
             Cons::Arith { dst, add } => format!("arith {n} {dst} {}", *add as u8),
+            Cons::ArrayLenArg { dst } => format!("arraylenarg {n} {dst}"),
             Cons::IdxLoad { idx, dst } => format!("idxload {n} {idx} {dst}"),
             Cons::IdxKey { obj, dst } => format!("idxkey {n} {obj} {dst}"),
             Cons::ThisTo { origin } => format!("thisto {n} {origin}"),
