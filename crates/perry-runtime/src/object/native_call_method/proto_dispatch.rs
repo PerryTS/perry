@@ -88,31 +88,7 @@ pub(crate) unsafe fn call_on_native_backing(
             args,
         ));
     }
-    if let Some((handle_val, composite)) =
-        super::super::native_this_alias::alias_handle_for_object(object)
-    {
-        // Server aliases dispatch through the PRIMARY handle dispatcher
-        // only: the composite's extension dispatchers (ext-net) may own
-        // an id-colliding socket that would claim shared names like
-        // `address`/`on` first. A `ServerResponse` alias (#10454) needs
-        // the composite, whose http extension owns that handle.
-        let dispatch = if composite {
-            super::super::class_handles::handle_method_dispatch()
-        } else {
-            super::super::class_handles::handle_method_dispatch_primary()
-        };
-        if let Some(dispatch) = dispatch {
-            let handle = (handle_val.to_bits() & crate::value::POINTER_MASK) as i64;
-            return Some(dispatch(
-                handle,
-                method_name.as_ptr(),
-                method_name.len(),
-                args.as_ptr(),
-                args.len(),
-            ));
-        }
-    }
-    None
+    super::super::native_this_alias::alias_forward_method_call(object, method_name, args)
 }
 
 /// #11700: whether `value` is a no-op-backed built-in prototype method that

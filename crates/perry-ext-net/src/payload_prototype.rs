@@ -42,9 +42,66 @@ extern "C" {
     fn js_node_stream_method_prepend_once_listener(owner: i64, event: f64, callback: f64) -> f64;
 }
 
+/// A `net.Server.prototype` member reached by an object that aliases a native
+/// server (`http.Server.call(this, …)` with the prototype chained to
+/// `http.Server.prototype`). That object is no Server payload instance; the
+/// server it stands for is named by the alias on its own native-state word,
+/// so the member runs on that server by name (`js_native_alias_call_method`).
+/// `None` for every receiver without an alias: the member's body decides.
+fn aliased_server_call(this: JsThis, name: &str, args: &[f64]) -> Option<f64> {
+    extern "C" {
+        fn js_native_alias_call_method(
+            receiver: f64,
+            name_ptr: *const u8,
+            name_len: usize,
+            args_ptr: *const f64,
+            args_len: usize,
+            out: *mut f64,
+        ) -> i32;
+    }
+    let mut out = 0.0;
+    // SAFETY: the name and argument slice are live for the call; `out` is a local.
+    (unsafe {
+        js_native_alias_call_method(
+            this.as_f64(),
+            name.as_ptr(),
+            name.len(),
+            args.as_ptr(),
+            args.len(),
+            &mut out,
+        )
+    } != 0)
+        .then_some(out)
+}
+
+/// [`aliased_server_call`] for a getter: the aliased server's property.
+fn aliased_server_get(this: JsThis, name: &str) -> Option<f64> {
+    extern "C" {
+        fn js_native_alias_get_property(
+            receiver: f64,
+            name_ptr: *const u8,
+            name_len: usize,
+            out: *mut f64,
+        ) -> i32;
+    }
+    let mut out = 0.0;
+    // SAFETY: the name is live for the call; `out` is a local.
+    (unsafe { js_native_alias_get_property(this.as_f64(), name.as_ptr(), name.len(), &mut out) }
+        != 0)
+        .then_some(out)
+}
+
 macro_rules! method0 {
     ($name:ident, $body:expr) => {
         unsafe extern "C" fn $name(_: *const RawClosureHeader, this: JsThis) -> f64 {
+            $body(this.as_f64())
+        }
+    };
+    ($name:ident as $js:literal, $body:expr) => {
+        unsafe extern "C" fn $name(_: *const RawClosureHeader, this: JsThis) -> f64 {
+            if let Some(value) = aliased_server_call(this, $js, &[]) {
+                return value;
+            }
             $body(this.as_f64())
         }
     };
@@ -52,6 +109,14 @@ macro_rules! method0 {
 macro_rules! method1 {
     ($name:ident, $body:expr) => {
         unsafe extern "C" fn $name(_: *const RawClosureHeader, this: JsThis, a: f64) -> f64 {
+            $body(this.as_f64(), a)
+        }
+    };
+    ($name:ident as $js:literal, $body:expr) => {
+        unsafe extern "C" fn $name(_: *const RawClosureHeader, this: JsThis, a: f64) -> f64 {
+            if let Some(value) = aliased_server_call(this, $js, &[a]) {
+                return value;
+            }
             $body(this.as_f64(), a)
         }
     };
@@ -65,6 +130,20 @@ macro_rules! method3 {
             b: f64,
             c: f64,
         ) -> f64 {
+            $body(this.as_f64(), a, b, c)
+        }
+    };
+    ($name:ident as $js:literal, $body:expr) => {
+        unsafe extern "C" fn $name(
+            _: *const RawClosureHeader,
+            this: JsThis,
+            a: f64,
+            b: f64,
+            c: f64,
+        ) -> f64 {
+            if let Some(value) = aliased_server_call(this, $js, &[a, b, c]) {
+                return value;
+            }
             $body(this.as_f64(), a, b, c)
         }
     };
@@ -94,14 +173,14 @@ method0!(address, socket::address);
 method1!(encoding, socket::set_encoding);
 method1!(tos, socket::set_tos);
 method0!(get_tos, |owner| socket::get(owner, "typeOfService"));
-method3!(listen, super::payload_server::listen);
-method1!(close_server, super::payload_server::close);
-method0!(server_address, super::payload_server::address);
-method1!(connections, super::payload_server::get_connections);
-method0!(server_reference, |owner| super::payload_server::set_ref(
+method3!(listen as "listen", super::payload_server::listen);
+method1!(close_server as "close", super::payload_server::close);
+method0!(server_address as "address", super::payload_server::address);
+method1!(connections as "getConnections", super::payload_server::get_connections);
+method0!(server_reference as "ref", |owner| super::payload_server::set_ref(
     owner, true
 ));
-method0!(server_unreference, |owner| super::payload_server::set_ref(
+method0!(server_unreference as "unref", |owner| super::payload_server::set_ref(
     owner, false
 ));
 method3!(keep_alive, |owner, _, _, _| {
@@ -176,10 +255,10 @@ socket_getters!(
     flowing => "readableFlowing"
 );
 method0!(is_paused, |owner| socket::get(owner, "isPaused"));
-method0!(listening, |owner| super::payload_server::get(
-    owner,
-    "listening"
-));
+unsafe extern "C" fn listening(_: *const RawClosureHeader, this: JsThis) -> f64 {
+    aliased_server_get(this, "listening")
+        .unwrap_or_else(|| super::payload_server::get(this.as_f64(), "listening"))
+}
 
 method0!(tls_encrypted, |owner| p::record_get(
     socket::state(owner),

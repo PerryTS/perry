@@ -1443,6 +1443,14 @@ unsafe fn walks_from(obj: *const ObjectHeader, r: *const ShapeRecord) -> bool {
     }
 }
 
+/// Meta flags under which an object's reads answer beyond its list and
+/// overflow: an exotic read receiver, or a native-this alias whose misses
+/// forward to the native object (`native_this_alias`). An admitted receiver
+/// moves to the `OrdinaryNativeAlias` kind when aliased; an unmarked one keeps
+/// its kind, so for it the flag on its own meta is the fact.
+const READ_BEYOND_LIST: u64 = crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER
+    | crate::object::OBJECT_META_FLAG_NATIVE_ALIAS;
+
 /// Are the own keys of `obj`, an object of the unmarked or callable ordinary
 /// `kind`, exactly its list and overflow? An unmarked object qualifies (a
 /// runtime-born record, a user prototype, a sealed intrinsic of any family:
@@ -1455,7 +1463,7 @@ unsafe fn listed(obj: *const ObjectHeader, kind: super::ShapeObjectKind) -> bool
     let meta = (*obj).meta;
     let flags = if meta.is_null() { 0 } else { (*meta).flags };
     if flags & crate::object::meta_flags::OBJECT_META_FLAG_SEALED_INTRINSIC != 0 {
-        return flags & crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER == 0
+        return flags & READ_BEYOND_LIST == 0
             && match kind {
                 super::ShapeObjectKind::OrdinaryUnmarked => true,
                 super::ShapeObjectKind::CallableOrdinary => {
@@ -1464,9 +1472,7 @@ unsafe fn listed(obj: *const ObjectHeader, kind: super::ShapeObjectKind) -> bool
                 _ => false,
             };
     }
-    if kind != super::ShapeObjectKind::OrdinaryUnmarked
-        || flags & crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER != 0
-    {
+    if kind != super::ShapeObjectKind::OrdinaryUnmarked || flags & READ_BEYOND_LIST != 0 {
         return false;
     }
     let header = crate::gc::header_from_trusted_user_ptr(obj.cast());
@@ -1800,9 +1806,7 @@ unsafe fn inherited_walk<const ABSENT: bool>(
             // A runtime-born record (unmarked, its keys all in its list and
             // overflow) whose chain ends here proves absence.
             if (*rc).object_kind() == super::ShapeObjectKind::OrdinaryUnmarked
-                && ((*cur).meta.is_null()
-                    || (*(*cur).meta).flags & crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER
-                        == 0)
+                && ((*cur).meta.is_null() || (*(*cur).meta).flags & READ_BEYOND_LIST == 0)
                 && matches!(prototype_of(dir, cur, rc), Next::End)
             {
                 return absent();
