@@ -10,6 +10,7 @@ pub mod io;
 pub mod p2;
 pub mod pipe;
 pub mod random;
+pub mod sockets;
 
 use perry_component_io::Driver;
 use wasmtime::component::ResourceTable;
@@ -19,6 +20,7 @@ pub struct WasiCtx {
     pub cli: cli::WasiCliCtx,
     pub random: random::WasiRandomCtx,
     pub filesystem: filesystem::WasiFilesystemCtx,
+    pub sockets: sockets::WasiSocketsCtx,
     // Native I/O is stopped when its component context is disposed, regardless
     // of whether a resource's weak submitter still exists in the table.
     driver: Driver,
@@ -31,6 +33,7 @@ impl WasiCtx {
             cli: cli::WasiCliCtx::new(driver.submitter()),
             random: random::WasiRandomCtx::default(),
             filesystem: filesystem::WasiFilesystemCtx::default(),
+            sockets: sockets::WasiSocketsCtx::new(driver.submitter()),
             driver,
         })
     }

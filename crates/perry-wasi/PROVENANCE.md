@@ -18,6 +18,7 @@ Copied/adapted sources:
 | `src/clocks/system.rs` | Native clock helpers in `wasmtime-wasi/src/clocks.rs` |
 | `src/filesystem.rs`, `src/filesystem/` | `wasmtime-wasi/src/filesystem.rs` and its capability primitives, platform helpers and tests |
 | `src/p2/filesystem.rs`, `src/p2/host/filesystem*` | `wasmtime-wasi` files with the same paths |
+| `src/p2/{network,ip_name_lookup}.rs`, `src/p2/host/{network,instance_network}.rs` | Corresponding `wasmtime-wasi` files and `src/sockets/ip_name_lookup.rs`; address conversions from `src/sockets/mod.rs` |
 | `src/p2/stdio.rs`, `src/p2/host/{env,exit}.rs` | `wasmtime-wasi` files with the same paths |
 | `src/error.rs`, `src/clocks/datetime.rs` | `wasmtime-wasi/src/error.rs` and timestamp conversions from `src/clocks.rs` |
 | `src/pipe.rs` | Memory and closed WASI stream implementations in `wasmtime-wasi/src/p2/pipe.rs` (without Tokio adapters) |
@@ -29,8 +30,8 @@ index. Resource parent/child ownership and stream error conversion are retained.
 Synchronous bindings wait on native futures with `futures-lite`; I/O and timer
 work is owned and driven by Turnloop, with no ambient Tokio runtime.
 
-The current port includes WASI 0.2.12 I/O, clocks, random, CLI and capability filesystem interfaces. It is
-not yet selected by `perry-component-host`. Sockets,
+The current port includes WASI 0.2.12 I/O, clocks, random, CLI, capability filesystem and DNS interfaces. It is
+not yet selected by `perry-component-host`. TCP/UDP sockets,
 HTTP and native WASI 0.3 remain to be ported and qualified. No missing interface
 is implemented as a success stub. The workspace Tokio gate remains unchanged
 and will not pass until the old provider dependency is removed.
@@ -58,8 +59,17 @@ requires readiness before another write, and explicitly flushes native writes.
 Native I/O errors retain their OS code, then close the affected stream; driver
 failure traps. Process standard handles are borrowed through native duplicates.
 
-The copied sockets WIT file currently resolves CLI world references only. Socket
-implementations are still absent, and the provider world does not import them.
+The provider world imports the network capability, instance-network and
+ip-name-lookup interfaces. DNS permission defaults to denied, including literal
+addresses. Domain names are validated and converted to IDNA before an owned
+Turnloop resolver request. Only owned names and addresses cross the driver
+boundary. Pollables retain their resolver resource; dropping a pending stream
+cancels delivery and queued work. Running native resolution may finish with its
+owned input. Native lookup errors currently map to `name-unresolvable`, matching
+the upstream Rust resolver limitation; distinguishing temporary/permanent native
+resolver failures requires a richer Turnloop result. Driver loss and admission
+failure trap. Literal and resolved IPv4-mapped IPv6 addresses are canonicalized
+as required by `resolve-next-address`. TCP/UDP interfaces remain unregistered.
 
 Native Unix stdio integration requires the shared-ownership repair in
 [Turnloop #119](https://github.com/PerryTS/turnloop/pull/119). Published alpha.9

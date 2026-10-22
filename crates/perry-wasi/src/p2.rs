@@ -1,10 +1,15 @@
 pub mod filesystem;
+pub mod ip_name_lookup;
+pub mod network;
 pub mod stdio;
 pub use filesystem::{FsError, FsResult};
+pub use network::{SocketError, SocketResult};
 mod host {
     pub mod env;
     pub mod exit;
     pub mod filesystem;
+    pub mod instance_network;
+    pub mod network;
 }
 use crate::{
     clocks::{WasiClocks, WasiClocksCtxView},
@@ -46,9 +51,12 @@ pub mod bindings {
             "wasi:filesystem/types.[method]directory-entry-stream.read-directory-entry": async | trappable,
             default: trappable
         },
-        trappable_error_type: { "wasi:filesystem/types.error-code" => crate::p2::FsError },
+        trappable_error_type: { "wasi:filesystem/types.error-code" => crate::p2::FsError,
+            "wasi:sockets/network.error-code" => crate::p2::SocketError },
         with: {
             "wasi:io": crate::io::bindings::wasi::io,
+            "wasi:sockets/network.network": crate::p2::network::Network,
+            "wasi:sockets/ip-name-lookup.resolve-address-stream": crate::p2::ip_name_lookup::ResolveAddressStream,
             "wasi:cli/terminal-input.terminal-input": crate::p2::stdio::TerminalInput,
             "wasi:cli/terminal-output.terminal-output": crate::p2::stdio::TerminalOutput,
             "wasi:filesystem/types.descriptor": crate::filesystem::Descriptor,
@@ -60,9 +68,11 @@ pub mod bindings {
         wasmtime::component::bindgen!({
             path: "wit", world: "providers", require_store_data_send: true,
             imports: { default: trappable },
-            trappable_error_type: { "wasi:filesystem/types.error-code" => crate::p2::FsError },
+            trappable_error_type: { "wasi:filesystem/types.error-code" => crate::p2::FsError,
+            "wasi:sockets/network.error-code" => crate::p2::SocketError },
             with: {
                 "wasi:io": crate::io::sync::wasi::io,
+                "wasi:sockets": crate::p2::bindings::sockets,
                 "wasi:clocks": crate::p2::bindings::clocks,
                 "wasi:random": crate::p2::bindings::random,
                 "wasi:cli": crate::p2::bindings::cli,
@@ -81,6 +91,37 @@ impl HasData for WasiIo {
 }
 
 fn common<T: WasiView + 'static>(linker: &mut Linker<T>) -> wasmtime::Result<()> {
+    bindings::sockets::network::add_to_linker::<T, crate::sockets::WasiSockets>(
+        linker,
+        &Default::default(),
+        |t| {
+            let view = t.ctx();
+            crate::sockets::WasiSocketsCtxView {
+                ctx: &mut view.ctx.sockets,
+                table: view.table,
+            }
+        },
+    )?;
+    bindings::sockets::instance_network::add_to_linker::<T, crate::sockets::WasiSockets>(
+        linker,
+        |t| {
+            let view = t.ctx();
+            crate::sockets::WasiSocketsCtxView {
+                ctx: &mut view.ctx.sockets,
+                table: view.table,
+            }
+        },
+    )?;
+    bindings::sockets::ip_name_lookup::add_to_linker::<T, crate::sockets::WasiSockets>(
+        linker,
+        |t| {
+            let view = t.ctx();
+            crate::sockets::WasiSocketsCtxView {
+                ctx: &mut view.ctx.sockets,
+                table: view.table,
+            }
+        },
+    )?;
     bindings::clocks::wall_clock::add_to_linker::<T, WasiClocks>(linker, |t| {
         let view = t.ctx();
         WasiClocksCtxView {

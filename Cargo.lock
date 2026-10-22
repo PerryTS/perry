@@ -6304,6 +6304,7 @@ dependencies = [
  "tempfile",
  "tracing",
  "turnloop",
+ "url",
  "wasmtime",
  "wasmtime-wasi-io",
  "windows-sys 0.61.2",
