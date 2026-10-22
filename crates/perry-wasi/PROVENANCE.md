@@ -20,6 +20,7 @@ Copied/adapted sources:
 | `src/p2/filesystem.rs`, `src/p2/host/filesystem*` | `wasmtime-wasi` files with the same paths |
 | `src/p2/{network,ip_name_lookup}.rs`, `src/p2/host/{network,instance_network}.rs` | Corresponding `wasmtime-wasi` files and `src/sockets/ip_name_lookup.rs`; address conversions from `src/sockets/mod.rs` |
 | `src/sockets/tcp.rs`, `src/sockets/tcp/` | WASI TCP validation, defaults and option semantics from `wasmtime-wasi/src/sockets/{mod,tcp}.rs`; native ownership and I/O are implemented with Turnloop |
+| `src/p2/host/{tcp,udp}.rs` | Synchronous forwarding adapted from corresponding `wasmtime-wasi` files; state and I/O use Turnloop |
 | `src/p2/stdio.rs`, `src/p2/host/{env,exit}.rs` | `wasmtime-wasi` files with the same paths |
 | `src/error.rs`, `src/clocks/datetime.rs` | `wasmtime-wasi/src/error.rs` and timestamp conversions from `src/clocks.rs` |
 | `src/pipe.rs` | Memory and closed WASI stream implementations in `wasmtime-wasi/src/p2/pipe.rs` (without Tokio adapters) |
@@ -31,9 +32,10 @@ index. Resource parent/child ownership and stream error conversion are retained.
 Synchronous bindings wait on native futures with `futures-lite`; I/O and timer
 work is owned and driven by Turnloop, with no ambient Tokio runtime.
 
-The current port includes WASI 0.2.12 I/O, clocks, random, CLI, capability filesystem and DNS interfaces. It is
-not yet selected by `perry-component-host`. TCP/UDP sockets,
-HTTP and native WASI 0.3 remain to be ported and qualified. No missing interface
+The current port includes WASI 0.2.12 I/O, clocks, random, CLI, capability
+filesystem, DNS, TCP and UDP interfaces. It is not yet selected by
+`perry-component-host`. HTTP and native WASI 0.3 remain to be ported;
+platform qualification is still required. No missing interface
 is implemented as a success stub. The workspace Tokio gate remains unchanged
 and will not pass until the old provider dependency is removed.
 
@@ -70,8 +72,8 @@ owned input. Native lookup errors currently map to `name-unresolvable`, matching
 the upstream Rust resolver limitation; distinguishing temporary/permanent native
 resolver failures requires a richer Turnloop result. Driver loss and admission
 failure trap. Literal and resolved IPv4-mapped IPv6 addresses are canonicalized
-as required by `resolve-next-address`. TCP interfaces are registered below; UDP
-remains unregistered.
+as required by `resolve-next-address`. TCP and UDP interfaces are registered
+as described below.
 
 Native Unix stdio integration requires the shared-ownership repair in
 [Turnloop #119](https://github.com/PerryTS/turnloop/pull/119). Published alpha.9
@@ -141,7 +143,45 @@ Before the cleanup repair, regression tests reproduced a receive-shutdown
 capacity trap and a stream-drop FIN timeout; both now pass. The provider's normal
 dependency graph remains Tokio-free.
 
-Native TCP macOS/Windows qualification remains; the upstream Turnloop matrix
-alone does not qualify this layer. UDP, HTTP, provider selection in the component
-host and native WASI 0.3 integration also remain incomplete. No shipping dependency
+Native provider macOS/Windows qualification remains; the upstream Turnloop
+matrix alone does not qualify this layer. HTTP, provider selection in the
+component host and native WASI 0.3 integration also remain incomplete. No shipping dependency
 policy exception or unsupported-platform qualification is implied by these tests.
+
+
+UDP owners preserve the bound socket and options through stream reassociation.
+Address checks run on the caller; only native socket ownership, addresses and
+owned datagram bytes cross the driver boundary. Binding is exclusive and IPv6
+sockets are IPv6-only. Connected streams use exact-peer receive filtering and
+explicit send destinations; association does not call native UDP connect or
+change a wildcard local address. Old streams must be dropped before association
+changes, and their pending receive/send cleanup is retained by the socket until
+completion. Filtering is bounded per native poll so rejected peers cannot
+monopolize the driver. Stream receive returns at most one full datagram per call;
+check-send permits one datagram, and an absent/exceeded permit traps. Empty lists
+and real zero-length datagrams are distinct. Native errors remain typed;
+submission/readiness failures remain repeatable traps.
+
+The executor stages 64 KiB per operation to preserve ordinary full-size UDP
+packets. Operation slots are bounded by four times the configured task limit,
+with a minimum of sixteen, including spare capacity for cancellation and cleanup.
+This replaces the fixed 1,024 slots of 16 KiB; both arithmetic bounds are checked.
+The independent task/resource/cleanup admission limits remain enforced.
+
+The final Linux qualification passes 181 provider tests in both development and
+production panic-abort, plus 26/25 driver tests, two doctests (one inherited
+illustrative doctest remains ignored), all-target Clippy and the stdio overlap
+probe. It includes five native UDP and seven UDP WIT tests, alongside the TCP
+coverage above. These exercise real IPv4/IPv6 packets up to 65,507 bytes, zero
+payloads, sender addresses, exact-peer filtering, unconnected destinations,
+reassociation, cancellation, exclusive bind, capabilities, retained options,
+permits, table ownership and saturated cleanup. A real 0.2.0 component sends an
+empty datagram and validates the reply and sender through both linkers.
+
+This uses an external validation-only patch to immutable Turnloop revision
+`b63a4ee3d3ad73d2df61b35202ed140f05513053`, adding
+[datagram adapter #123](https://github.com/PerryTS/turnloop/pull/123) atop the
+previous repairs. Its own complete CI matrix is green, including Windows and
+WASI 0.3, but that does not replace Perry provider platform validation. The
+committed registry pin/source policy is unchanged; the provider dependency graph
+is Tokio-free while the workspace gate still requires removing the old provider.

@@ -3,6 +3,7 @@ pub mod ip_name_lookup;
 pub mod network;
 pub mod stdio;
 pub mod tcp;
+pub mod udp;
 pub use filesystem::{FsError, FsResult};
 pub use network::{SocketError, SocketResult};
 mod host {
@@ -12,6 +13,7 @@ mod host {
     pub mod instance_network;
     pub mod network;
     pub mod tcp;
+    pub mod udp;
 }
 use crate::{
     clocks::{WasiClocks, WasiClocksCtxView},
@@ -26,6 +28,11 @@ pub mod bindings {
         world: "providers",
         require_store_data_send: true,
         imports: {
+            "wasi:sockets/udp.[method]udp-socket.start-bind": async | trappable,
+            "wasi:sockets/udp.[method]udp-socket.stream": async | trappable,
+            "wasi:sockets/udp.[method]outgoing-datagram-stream.send": async | trappable,
+            "wasi:sockets/udp.[drop]incoming-datagram-stream": async | trappable,
+            "wasi:sockets/udp.[drop]outgoing-datagram-stream": async | trappable,
             "wasi:sockets/tcp.[method]tcp-socket.start-bind": async | trappable,
             "wasi:sockets/tcp.[method]tcp-socket.start-listen": async | trappable,
             "wasi:filesystem/types.[method]descriptor.advise": async | trappable,
@@ -59,6 +66,9 @@ pub mod bindings {
             "wasi:sockets/network.error-code" => crate::p2::SocketError },
         with: {
             "wasi:io": crate::io::bindings::wasi::io,
+            "wasi:sockets/udp.udp-socket": crate::p2::udp::UdpSocket,
+            "wasi:sockets/udp.incoming-datagram-stream": crate::p2::udp::IncomingDatagramStream,
+            "wasi:sockets/udp.outgoing-datagram-stream": crate::p2::udp::OutgoingDatagramStream,
             "wasi:sockets/tcp.tcp-socket": crate::p2::tcp::TcpSocket,
             "wasi:sockets/network.network": crate::p2::network::Network,
             "wasi:sockets/ip-name-lookup.resolve-address-stream": crate::p2::ip_name_lookup::ResolveAddressStream,
@@ -80,8 +90,12 @@ pub mod bindings {
                 "wasi:sockets/network": crate::p2::bindings::sockets::network,
                 "wasi:sockets/instance-network": crate::p2::bindings::sockets::instance_network,
                 "wasi:sockets/ip-name-lookup": crate::p2::bindings::sockets::ip_name_lookup,
+                "wasi:sockets/udp-create-socket": crate::p2::bindings::sockets::udp_create_socket,
                 "wasi:sockets/tcp-create-socket": crate::p2::bindings::sockets::tcp_create_socket,
-                "wasi:sockets/tcp.tcp-socket": crate::p2::tcp::TcpSocket,
+                "wasi:sockets/udp.udp-socket": crate::p2::udp::UdpSocket,
+            "wasi:sockets/udp.incoming-datagram-stream": crate::p2::udp::IncomingDatagramStream,
+            "wasi:sockets/udp.outgoing-datagram-stream": crate::p2::udp::OutgoingDatagramStream,
+            "wasi:sockets/tcp.tcp-socket": crate::p2::tcp::TcpSocket,
                 "wasi:clocks": crate::p2::bindings::clocks,
                 "wasi:random": crate::p2::bindings::random,
                 "wasi:cli": crate::p2::bindings::cli,
@@ -132,6 +146,16 @@ fn common<T: WasiView + 'static>(linker: &mut Linker<T>) -> wasmtime::Result<()>
         },
     )?;
     bindings::sockets::tcp_create_socket::add_to_linker::<T, crate::sockets::WasiSockets>(
+        linker,
+        |t| {
+            let view = t.ctx();
+            crate::sockets::WasiSocketsCtxView {
+                ctx: &mut view.ctx.sockets,
+                table: view.table,
+            }
+        },
+    )?;
+    bindings::sockets::udp_create_socket::add_to_linker::<T, crate::sockets::WasiSockets>(
         linker,
         |t| {
             let view = t.ctx();
@@ -259,6 +283,13 @@ pub fn add_to_linker_sync<T: WasiView + 'static>(linker: &mut Linker<T>) -> wasm
             }
         },
     )?;
+    bindings::sync::sockets::udp::add_to_linker::<T, crate::sockets::WasiSockets>(linker, |t| {
+        let view = t.ctx();
+        crate::sockets::WasiSocketsCtxView {
+            ctx: &mut view.ctx.sockets,
+            table: view.table,
+        }
+    })?;
     bindings::sync::sockets::tcp::add_to_linker::<T, crate::sockets::WasiSockets>(linker, |t| {
         let view = t.ctx();
         crate::sockets::WasiSocketsCtxView {
@@ -283,6 +314,13 @@ pub fn add_to_linker_async<T: WasiView + 'static>(linker: &mut Linker<T>) -> was
             }
         },
     )?;
+    bindings::sockets::udp::add_to_linker::<T, crate::sockets::WasiSockets>(linker, |t| {
+        let view = t.ctx();
+        crate::sockets::WasiSocketsCtxView {
+            ctx: &mut view.ctx.sockets,
+            table: view.table,
+        }
+    })?;
     bindings::sockets::tcp::add_to_linker::<T, crate::sockets::WasiSockets>(linker, |t| {
         let view = t.ctx();
         crate::sockets::WasiSocketsCtxView {

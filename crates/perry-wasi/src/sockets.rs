@@ -4,6 +4,7 @@ use std::{future::Future, net::SocketAddr, pin::Pin, sync::Arc};
 use wasmtime::component::{HasData, ResourceTable};
 
 pub mod tcp;
+pub mod udp;
 
 /// The operation for which an address capability is requested.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -12,6 +13,9 @@ pub enum SocketAddrUse {
     TcpListen,
     TcpConnect,
     TcpAccept,
+    UdpBind,
+    UdpConnect,
+    UdpOutgoingDatagram,
 }
 
 type AddressCheck = Arc<
@@ -19,11 +23,11 @@ type AddressCheck = Arc<
 >;
 
 #[derive(Clone)]
-struct TcpPolicy {
+struct SocketPolicy {
     allowed: bool,
     check: AddressCheck,
 }
-impl TcpPolicy {
+impl SocketPolicy {
     async fn check(
         &self,
         address: SocketAddr,
@@ -45,7 +49,8 @@ impl HasData for WasiSockets {
 pub struct WasiSocketsCtx {
     pub(crate) submitter: Submitter,
     pub(crate) allow_ip_name_lookup: bool,
-    tcp: TcpPolicy,
+    tcp: SocketPolicy,
+    udp: SocketPolicy,
     pub(crate) network_identity: Arc<()>,
 }
 impl WasiSocketsCtx {
@@ -54,7 +59,11 @@ impl WasiSocketsCtx {
             submitter,
             allow_ip_name_lookup: false,
             network_identity: Arc::new(()),
-            tcp: TcpPolicy {
+            udp: SocketPolicy {
+                allowed: false,
+                check: Arc::new(|_, _| Box::pin(async { false })),
+            },
+            tcp: SocketPolicy {
                 allowed: false,
                 check: Arc::new(|_, _| Box::pin(async { false })),
             },
@@ -74,6 +83,12 @@ impl WasiSocketsCtx {
         self
     }
 
+    /// Grant UDP operations. Binding and each destination still require a check.
+    pub fn allow_udp(&mut self, allow: bool) -> &mut Self {
+        self.udp.allowed = allow;
+        self
+    }
+
     /// Runs on the calling agent, including after native accept; the callback
     /// and its future are never submitted to the native I/O thread.
     pub fn socket_addr_check<F>(&mut self, check: F) -> &mut Self
@@ -83,7 +98,9 @@ impl WasiSocketsCtx {
             + Sync
             + 'static,
     {
-        self.tcp.check = Arc::new(check);
+        let check: AddressCheck = Arc::new(check);
+        self.tcp.check = check.clone();
+        self.udp.check = check;
         self
     }
 }

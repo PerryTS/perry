@@ -3,7 +3,7 @@
 use super::*;
 use std::io;
 
-pub(super) fn get(
+pub(in crate::sockets) fn get(
     socket: &Socket,
     family: Family,
     kind: SocketOptionKind,
@@ -37,7 +37,11 @@ pub(super) fn get(
         _ => return Err(io::ErrorKind::Unsupported.into()),
     })
 }
-pub(super) fn set(socket: &Socket, family: Family, option: SocketOption) -> io::Result<()> {
+pub(in crate::sockets) fn set(
+    socket: &Socket,
+    family: Family,
+    option: SocketOption,
+) -> io::Result<()> {
     match option {
         SocketOption::KeepAliveEnabled(value) => socket.set_keepalive(value),
         SocketOption::KeepAliveSettings(value) => {

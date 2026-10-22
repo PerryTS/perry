@@ -2,7 +2,7 @@
 //!
 //! Address checks run on the caller. Only owned sockets, addresses, options and
 //! byte buffers cross to the context's Turnloop thread.
-use super::{SocketAddrUse, TcpPolicy, WasiSocketsCtx};
+use super::{SocketAddrUse, SocketPolicy, WasiSocketsCtx};
 use crate::p2::{bindings::sockets::network::ErrorCode, SocketError, SocketResult};
 use perry_component_io::{Resource, ResourceRequest, Submitter};
 use socket2::{Domain, Protocol, Socket, Type};
@@ -11,7 +11,7 @@ use turnloop::{backend::Platform, AsyncIo, SocketOption, SocketOptionKind};
 
 mod native;
 pub use native::Failure;
-mod options;
+pub(super) mod options;
 #[cfg(test)]
 mod tests;
 
@@ -28,7 +28,7 @@ impl Family {
             (Self::Ipv4, SocketAddr::V4(_)) | (Self::Ipv6, SocketAddr::V6(_))
         )
     }
-    fn validate(self, address: SocketAddr, remote: bool) -> SocketResult<()> {
+    pub(super) fn validate(self, address: SocketAddr, remote: bool) -> SocketResult<()> {
         let ip = address.ip();
         if !self.matches(address)
             || ip.is_multicast()
@@ -89,7 +89,7 @@ pub struct TcpSocket {
     state: State,
     family: Family,
     submitter: Submitter,
-    policy: TcpPolicy,
+    policy: SocketPolicy,
     backlog: u32,
     // Only explicitly changed settings need repair on platforms where accept
     // doesn't inherit them. At most one entry per supported option is retained.
@@ -520,7 +520,7 @@ fn probe_time(nanos: u64) -> SocketResult<Duration> {
         nanos.div_ceil(1_000_000_000).clamp(1, i16::MAX as u64),
     ))
 }
-fn reported_buffer_size(size: u32) -> u64 {
+pub(super) fn reported_buffer_size(size: u32) -> u64 {
     // Linux includes bookkeeping overhead in SO_RCVBUF/SO_SNDBUF. Match the
     // WASI provider convention of reporting application buffer bytes.
     if cfg!(target_os = "linux") {
@@ -529,7 +529,7 @@ fn reported_buffer_size(size: u32) -> u64 {
         u64::from(size)
     }
 }
-fn buffer_size(size: u64) -> SocketResult<u32> {
+pub(super) fn buffer_size(size: u64) -> SocketResult<u32> {
     if size == 0 {
         return Err(ErrorCode::InvalidArgument.into());
     }

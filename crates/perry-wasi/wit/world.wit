@@ -10,6 +10,8 @@ world providers {
   import wasi:sockets/network@0.2.12;
   import wasi:sockets/tcp@0.2.12;
   import wasi:sockets/tcp-create-socket@0.2.12;
+  import wasi:sockets/udp@0.2.12;
+  import wasi:sockets/udp-create-socket@0.2.12;
   import wasi:sockets/instance-network@0.2.12;
   import wasi:sockets/ip-name-lookup@0.2.12;
   import wasi:cli/environment@0.2.12;

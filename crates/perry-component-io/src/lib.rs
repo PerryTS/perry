@@ -110,6 +110,10 @@ impl Driver {
             return Err(Error::Capacity);
         }
         let executor_limit = limit.checked_mul(3).ok_or(Error::Capacity)?;
+        // Persistent transports can retain cancelled read/write slots until
+        // native acknowledgement. Bound staging by this context's capacity,
+        // with spare slots for those acknowledgements and teardown operations.
+        let operation_limit = limit.checked_mul(4).ok_or(Error::Capacity)?.max(16);
         let (send, receive) = mpsc::channel();
         let (ready_send, ready_receive) = mpsc::sync_channel(1);
         let worker = thread::Builder::new()
@@ -119,7 +123,8 @@ impl Driver {
                     Config::default(),
                     ExecutorConfig {
                         tasks: executor_limit,
-                        ..ExecutorConfig::default()
+                        operations: operation_limit,
+                        buffer_size: 64 * 1024,
                     },
                 );
                 let mut executor = match executor {
