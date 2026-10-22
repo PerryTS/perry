@@ -352,7 +352,7 @@ mod tests {
             Some(ShapeObjectKind::FunctionBoundApply)
         );
         let array = crate::array::js_array_alloc(2);
-        unsafe {
+        {
             crate::array::js_array_push_f64(array, 2.0);
             crate::array::js_array_push_f64(array, 3.0);
         }

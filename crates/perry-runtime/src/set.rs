@@ -346,6 +346,7 @@ unsafe fn elements_ptr_mut(set: *mut SetHeader) -> *mut f64 {
     (*set).elements
 }
 
+#[cfg(test)]
 pub(crate) unsafe fn gc_element_slot_range(
     set: *mut SetHeader,
 ) -> Option<crate::gc::HeapSlotRange> {
@@ -687,6 +688,7 @@ impl SetRemovedSlots {
     }
 }
 
+#[cfg(test)]
 unsafe fn release_set_compaction(set: *mut SetHeader) {
     if let Some(store) = (*set).store.as_mut() {
         drop(store.compaction.take());
@@ -1080,7 +1082,7 @@ fn set_size_body(set: *const SetHeader) -> u32 {
 }
 
 crate::entry_contracts::kind_entry! {
-    Set, fn js_set_size__Set(set: *const SetHeader) -> u32 {
+    js_set_size__Set, Set, fn(set: *const SetHeader) -> u32 {
         set_size_body(set)
     }
 }
@@ -1243,7 +1245,7 @@ fn set_has_resolved(set: *const SetHeader, value: f64) -> i32 {
 }
 
 crate::entry_contracts::kind_entry! {
-    Set, fn js_set_has__Set(set: *const SetHeader, value: f64) -> i32 {
+    js_set_has__Set, Set, fn(set: *const SetHeader, value: f64) -> i32 {
         set_has_resolved(set, value)
     }
 }

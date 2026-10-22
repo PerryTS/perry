@@ -260,6 +260,7 @@ pub(crate) struct Snapshot {
     pub(crate) payload_cells: bool,
 }
 impl Snapshot {
+    #[allow(dead_code)] // Phase 1 lifetime-token API
     pub(crate) fn generation(self) -> HeapGeneration {
         generation_for_space(self.space)
     }
@@ -273,6 +274,8 @@ impl Snapshot {
                 && now.owner == self.owner
         })
     }
+
+    #[allow(dead_code)] // Phase 1 lifetime-token API
 
     pub(crate) fn is_current_thread(self) -> bool {
         self.thread == crate::tls_hot::thread_identity()

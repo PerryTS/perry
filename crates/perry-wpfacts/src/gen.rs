@@ -66,6 +66,10 @@ pub struct Gen<'a> {
     /// (module, local) → the class. `super` through such a home starts at
     /// that class's parent, exactly like `SuperPropertyGet`.
     pub class_homes: FxHashMap<(u32, u32), TmplId>,
+    /// The unpublished object of each enclosing chunked literal birth
+    /// (`Expr::LiteralChunks`), innermost last: what its chunk calls'
+    /// `Expr::LiteralChunkObject` arguments pass.
+    pub(crate) chunk_objects: Vec<NodeId>,
 }
 
 /// Per-function walking context.
@@ -160,6 +164,7 @@ impl<'a> Gen<'a> {
             iife_birth: FxHashMap::default(),
             fn_phase: FxHashMap::default(),
             class_homes: FxHashMap::default(),
+            chunk_objects: Vec::new(),
         }
     }
 

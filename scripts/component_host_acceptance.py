@@ -147,6 +147,31 @@ def main():
         run("network-run" + suffix, [sys.executable, root / "scripts/component_network_peer.py",
             "--report", output / ("network-peer" + suffix + ".json"), "--timeout", "90", "--",
             executable, component], expected=marker, timeout=100, moving=moving)
+    env = normal_env.copy()
+    host_resources = output / "host-resources"
+    shutil.copytree(fixture.parent / "host-resources", host_resources, dirs_exist_ok=True,
+                    ignore=shutil.ignore_patterns("target"))
+    run("host-resources-guest", ["cargo", "build", "--locked", "--release", "--target", "wasm32-unknown-unknown",
+        "--manifest-path", host_resources / "rust/Cargo.toml"])
+    core = output / "rust-target/wasm32-unknown-unknown/release/perry_component_host_resource_fixture.wasm"
+    component = host_resources / "host-resources.component.wasm"
+    run("host-resources-componentize", [args.componentize.resolve(), core, component])
+    run("host-resources-bindings", [args.wit.resolve(), host_resources / "world.wit", host_resources / "generated", "plugin"])
+    marker = "PASS host resources: aliases, ownership, moving payloads, borrows, rollback, cleanup, original exceptions"
+    executable = host_resources / ("host.exe" if sys.platform == "win32" else "host")
+    run("host-resources-compile", [args.perry.resolve(), "compile", host_resources / "host.ts",
+        "--no-auto-optimize", "--no-cache", "-o", executable])
+    run("host-resources-run", [executable, component], expected=marker, timeout=60)
+    if args.moving_gc:
+        for knob in ["PERRY_GC_FORCE_EVACUATE", "PERRY_GC_VERIFY_EVACUATION",
+                     "PERRY_GC_PROTECT_FROMSPACE", "PERRY_GC_DIAG", "PERRY_GC_INSTRUMENTS"]:
+            env[knob] = "1"
+        instrumented = executable.with_name("host-moving" + executable.suffix)
+        run("host-resources-compile-moving", [args.perry.resolve(), "compile", host_resources / "host.ts",
+            "--no-auto-optimize", "--no-cache", "-o", instrumented])
+        run("host-resources-run-moving", [instrumented, component], expected=marker,
+            timeout=60, moving=True)
+
     return 0
 
 

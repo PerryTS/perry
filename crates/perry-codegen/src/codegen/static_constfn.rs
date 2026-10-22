@@ -214,9 +214,7 @@ pub(crate) fn collect_literal_finals(
             } => match object.as_ref() {
                 Expr::LocalGet(owner) => builders
                     .get(owner)
-                    .and_then(|(props, _, _, _)| {
-                        props.iter().find(|(key, _)| key == property)
-                    })
+                    .and_then(|(props, _, _, _)| props.iter().find(|(key, _)| key == property))
                     .and_then(|(_, value)| match value {
                         Expr::Object(props) => Some(props.clone()),
                         Expr::New {
@@ -256,8 +254,7 @@ pub(crate) fn collect_literal_finals(
             }
         }
         if let Some(props) = props {
-            let capacity =
-                (props.len() as u32).max(crate::target_layout::INLINE_SLOT_FLOOR as u32);
+            let capacity = (props.len() as u32).max(crate::target_layout::INLINE_SLOT_FLOOR as u32);
             let birth_keys = props.len() as u32;
             builders.insert(id, (props, capacity, birth_keys, false));
         }
@@ -1019,6 +1016,11 @@ pub(crate) fn birth_literal(
             let header = crate::target_layout::object_header_size_bytes(ctx.target_triple);
             let fields = ctx.block().gep(I8, &raw, &[(I64, &header.to_string())]);
             for (slot, value) in values.iter().enumerate() {
+                // A chunked literal slot (`Expr::LiteralChunks`) stays a hole
+                // of the unpublished birth; its chunk function stores it.
+                if matches!(props[slot].1, Expr::LiteralChunks(_)) {
+                    continue;
+                }
                 let bits = if slot < 32 && (shape.rep >> (slot * 2)) & 3 == 1 {
                     // Numeric literal births may lower to the int32 NaN-box.
                     // The compiler owns this conversion; no runtime admission.

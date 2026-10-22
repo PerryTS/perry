@@ -184,6 +184,37 @@ impl Typescript<'_> {
         out.push_str("  }");
         out
     }
+
+    fn host_resources(&self, out: &mut String) {
+        out.push_str("export interface HostResources {\n");
+        for interface in &self.world.imports {
+            if interface.resources.is_empty() {
+                continue;
+            }
+            writeln!(out, "  {}: {{", quoted(&interface.name)).unwrap();
+            for (name, key) in &interface.resources {
+                let tag = quoted(&format!("{}/{key}", self.world.name));
+                writeln!(out, "    {}: {{ create(payload: unknown, destructor?: (payload: unknown) => void): OwnedResource<{tag}>; value(resource: BorrowedResource<{tag}>): unknown; }};", quoted(name)).unwrap();
+            }
+            out.push_str("  };\n");
+        }
+        out.push_str(
+            "}\n\nfunction hostResources(handle: ComponentHandle): HostResources {\n  return {\n",
+        );
+        for interface in &self.world.imports {
+            if interface.resources.is_empty() {
+                continue;
+            }
+            writeln!(out, "    {}: {{", quoted(&interface.name)).unwrap();
+            for (name, key) in &interface.resources {
+                let tag = quoted(&format!("{}/{key}", self.world.name));
+                let key = quoted(key);
+                writeln!(out, "      {}: {{\n        create: (payload: unknown, destructor?: (payload: unknown) => void): OwnedResource<{tag}> => createComponentHostResource(handle, {key}, payload, destructor),\n        value: (resource: BorrowedResource<{tag}>): unknown => getComponentHostResourceValue(handle, {key}, resource),\n      }},", quoted(name)).unwrap();
+            }
+            out.push_str("    },\n");
+        }
+        out.push_str("  };\n}\n\n");
+    }
 }
 
 fn union(items: impl Iterator<Item = String>) -> String {
@@ -225,9 +256,9 @@ fn generate(world: &World, guest: bool) -> String {
         );
     } else {
         out.push_str(
-            "import { loadComponent, callComponent, disposeComponent } from \"perry/component\";\n",
+            "import { loadComponent, callComponent, disposeComponent, createComponentHostResource, getComponentHostResourceValue } from \"perry/component\";\n",
         );
-        out.push_str("import type { ComponentOptions, OwnedResource, BorrowedResource } from \"perry/component\";\n\n");
+        out.push_str("import type { ComponentOptions, ComponentHandle, OwnedResource, BorrowedResource } from \"perry/component\";\n\n");
     }
     writeln!(out, "export const world = {};", quoted(&world.name)).unwrap();
     writeln!(
@@ -283,8 +314,10 @@ fn generate(world: &World, guest: bool) -> String {
                 .cloned()
                 .collect::<Vec<_>>(),
         );
+        generator.host_resources(&mut out);
         out.push_str("export interface Component { exports: Exports; dispose(): void; }\n");
-        out.push_str("export function load(bytes: Uint8Array, imports: Imports | ApplicationImports, options?: ComponentOptions): Component {\n  const handle = loadComponent(bytes, contract, imports, options);\n  return {\n    dispose: () => disposeComponent(handle),\n    exports: ");
+        out.push_str("export type ImportBuilder = (resources: HostResources) => Imports | ApplicationImports;\n");
+        out.push_str("export function load(bytes: Uint8Array, imports: Imports | ApplicationImports | ImportBuilder, options?: ComponentOptions): Component {\n  const supplied = typeof imports === \"function\" ? (handle: ComponentHandle) => imports(hostResources(handle)) : imports;\n  const handle = loadComponent(bytes, contract, supplied, options);\n  return {\n    dispose: () => disposeComponent(handle),\n    exports: ");
         out.push_str(&generator.wrappers(&world.exports, "callComponent(handle, "));
         out.push_str("\n  };\n}\n\n");
     }

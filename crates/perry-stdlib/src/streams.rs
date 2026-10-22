@@ -30,6 +30,9 @@ use std::sync::Mutex;
 // Calls that allocate or mutate runtime-owned values must cross the stable C ABI. A shared stdlib still contains fallback Rust runtime glue for generic
 // monomorphizations; direct Rust calls would allocate into that image's arena
 // instead of the process-wide runtime provider.
+// `Promise` crosses this boundary by pointer only: both sides are this workspace's
+// Rust and never read its fields through the declaration.
+#[allow(improper_ctypes)]
 extern "C" {
     #[link_name = "js_array_alloc"]
     fn provider_js_array_alloc(capacity: u32) -> *mut ArrayHeader;

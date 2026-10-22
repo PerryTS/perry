@@ -435,13 +435,7 @@ pub unsafe extern "C" fn js_transform_stream_subclass_init(
     // `super({ start, transform, flush })`: the transformer's `start(controller)`
     // runs at construction like `new TransformStream({...})` (eventsource-parser's
     // `EventSourceParserStream` builds its parser there).
-    let handle = js_transform_stream_new(
-        start_bits,
-        transform_bits,
-        flush_bits,
-        hwm,
-        hwm,
-    );
+    let handle = js_transform_stream_new(start_bits, transform_bits, flush_bits, hwm, hwm);
     attach_handle_to_this(this_bits, stream_id(handle));
     f64::from_bits(TAG_UNDEFINED)
 }

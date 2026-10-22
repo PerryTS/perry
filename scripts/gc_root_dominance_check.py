@@ -342,6 +342,9 @@ class Func:
         self.insns = defaultdict(list)  # label -> [Insn]
         self.succs = defaultdict(set)
         self.preds = defaultdict(set)
+        # Globals this function's module defines `constant`; see
+        # `CONSTANT_GLOBAL_DEF_RE`. Filled by `parse_file`.
+        self.constant_globals = frozenset()
 
 
 class MalformedIR(Exception):
@@ -354,11 +357,18 @@ class MalformedIR(Exception):
 
 def parse_file(path):
     funcs = []
+    constant_globals = set()
     cur = None
     curblk = None
     with open(path, "r", errors="replace") as fh:
         for lineno, raw in enumerate(fh, 1):
             line = raw.rstrip("\n")
+            if cur is None:
+                cg = CONSTANT_GLOBAL_DEF_RE.match(line)
+                if cg:
+                    constant_globals.add(cg.group(1) if cg.group(1) is not None
+                                         else cg.group(2))
+                    continue
             m = DEFINE_RE.match(line)
             if m:
                 cur = Func(m.group(1) if m.group(1) is not None else m.group(2))
@@ -424,7 +434,9 @@ def parse_file(path):
                     f"@{cur.name}: {line.strip()!r} (implicit entry block)."
                 )
             cur.insns[curblk].append(Insn(line, curblk, len(cur.insns[curblk])))
+    constant_globals = frozenset(constant_globals)
     for f in funcs:
+        f.constant_globals = constant_globals
         build_cfg(f)
     return funcs
 
@@ -1869,6 +1881,9 @@ POLL_CAPABLE_RUNTIME = {
     "js_string_from_char_code_array",
     "js_string_index_get_boxed", "js_string_substr",
     "js_super_construct_apply",
+    # Class-chain form of the above: it runs the parent constructor through
+    # js_class_value_super_construct_site, i.e. user JS.
+    "js_class_super_construct_apply",
     "js_vm_synthetic_module_new",
     "js_writable_stream_new",
     # The third wave, reported by `--audit-poll-reach` and unfixed long enough
@@ -3002,6 +3017,40 @@ def use_proves_numeric(text):
     return NUMERIC_PROOF_USE_RE.search(text) is not None
 
 
+# A module-level definition whose kind keyword is `constant`, not `global`:
+#   @m_.str.7.handle = internal unnamed_addr externally_initialized constant double ...
+# Linkage, visibility, `unnamed_addr`, `thread_local(..)`, `addrspace(N)` and
+# `externally_initialized` may precede the keyword; only words are allowed
+# there, so a `global` definition whose initializer mentions `constant` (a
+# constant expression) cannot match.
+CONSTANT_GLOBAL_DEF_RE = re.compile(
+    r'^@(?:"([^"]*)"|([-\w.$]+))\s*=\s*'
+    r'(?:[a-z_]+(?:\([^)]*\))?\s+)*constant\s'
+)
+_LOAD_GLOBAL_RE = re.compile(
+    r"=\s*load\s+(?:atomic\s+)?(?:volatile\s+)?[^,]+,\s*ptr\s+@([-\w.$]+)")
+
+
+def loads_constant_global(text, constant_globals):
+    """Is this a load whose pointer operand IS a global defined `constant`?
+
+    Such a location is never written after program start (a store to it is
+    undefined behaviour, and the program is mapped read-only), so the
+    collector does not rewrite it and a register loaded from it equals every
+    later load of it. Whatever object it names, the register cannot go stale
+    relative to the global: if that object could move, the global itself would
+    be stale. This is what makes executable string images
+    (`codegen/string_pool.rs`, `image.rs`: `.str.N.handle = ... constant double
+    <image pointer | STRING_TAG>`) a non-source. A `global` handle (dylib /
+    staticlib, Mach-O runtime-boxed images, agent TLS strings) keeps the
+    #7240 classification.
+    """
+    if not constant_globals:
+        return False
+    m = _LOAD_GLOBAL_RE.search(text)
+    return bool(m) and m.group(1) in constant_globals
+
+
 def rewritten_load_kind(text):
     """Which collector-rewritten global does this load read, if any?
 
@@ -3059,7 +3108,7 @@ RECEIVER_SINKS = re.compile(
 )
 
 
-def heap_source_kind(ins, slot_of_alloca):
+def heap_source_kind(ins, slot_of_alloca, constant_globals=frozenset()):
     """Classify `ins` as a producer of a possibly-GC-pointer register."""
     if ins.result is None:
         return None
@@ -3077,6 +3126,8 @@ def heap_source_kind(ins, slot_of_alloca):
         # before. This widening is then strictly ADDITIVE — no previously
         # reported source changes kind, only sources that were invisible start
         # appearing — which is the property the gate's baselined counts need.
+        if loads_constant_global(ins.text, constant_globals):
+            return None
         if GLOBAL_ROOT_RE.search(ins.text):
             return "global"
         # #7240's third follow-up: a load of a string-literal handle global is
@@ -3140,7 +3191,7 @@ def check_func_stale(module, f, poll_reaching=frozenset(), moving_only=False):
 
     for b in f.blocks:
         for src in f.insns[b]:
-            kind = heap_source_kind(src, slot_of_alloca)
+            kind = heap_source_kind(src, slot_of_alloca, f.constant_globals)
             if kind is None:
                 continue
             # Forward closure over bit-level/identity ops: the untagged
@@ -4506,6 +4557,39 @@ entry.0:
 """
 
 
+# Executable string images: the handle global is `constant`, so the register
+# equals the global for the life of the program and cannot be stale. Same
+# body as `_SELFTEST_STR_HANDLE`, plus the definition codegen emits.
+_STR_IMAGE_DEF = (
+    "@perry_image_literal_0_6869 = weak_odr constant {{ i8, i8, i16, i32, "
+    "i32, i32, i32, i32, i32, [3 x i8], i64 }} zeroinitializer, align 8\n"
+    "@perry_mod_.str.3.handle = internal unnamed_addr {kw} double bitcast "
+    "(i64 add (i64 ptrtoint (ptr getelementptr inbounds nuw (i8, ptr "
+    "@perry_image_literal_0_6869, i64 8) to i64), i64 9223090561878065152) "
+    "to double)\n\n")
+_SELFTEST_STR_HANDLE_IMAGE = (
+    _STR_IMAGE_DEF.format(kw="externally_initialized constant")
+    + _SELFTEST_STR_HANDLE)
+# Negative control: identical, but the handle is a `global` (the dylib /
+# runtime-boxed form). It must still report.
+_SELFTEST_STR_HANDLE_MUTABLE = (
+    _STR_IMAGE_DEF.format(kw="externally_initialized global")
+    + _SELFTEST_STR_HANDLE)
+
+# Statepoint form of the same pair: the handle loaded above a safepoint with
+# an empty bundle and passed below it (`__SAFEPOINT__` is filled by `_sp()` in
+# the self-test, which is defined further down).
+_SELFTEST_SP_STR_HANDLE_BODY = """\
+define double @perry_fn_selftest__sp_strhandle(double %a) gc "statepoint-example" {
+entry.0:
+  %lit = load i64, ptr @perry_mod_.str.3.handle, align 8
+__SAFEPOINT__
+  %r = call double @perry_probe_get(ptr null, i64 0, i64 %lit, i64 0)
+  ret double %r
+}
+"""
+
+
 # The property-GET window, both directions.
 #
 # This is the shape at which `--stale-registers` and
@@ -4720,8 +4804,9 @@ AS1_DEF_RE = re.compile(
     # unrecognised bundle operands the first time this ran, every one of them
     # a `%.N = phi ptr addrspace(1) [ ... ]`. Exactly the dead-alternative
     # failure `--audit-alloc-re` exists for, in a different regex.
-    r"|(?:phi|select|freeze)\s+ptr\s+addrspace\(1\)"
-    r'|(?:call|invoke)\s+[^%@"]*\bptr\s+addrspace\(1\)\s+[@%(]'
+    r"|(?:phi|freeze)\s+ptr\s+addrspace\(1\)"
+    r'|select\s+i1\s+(?:%[\w.$]+|%"[^"]+"|true|false|poison|undef|zeroinitializer|0|1)\s*,\s*ptr\s+addrspace\(1\)'
+    r'|(?:(?:(?:tail|musttail|notail)\s+)?call|invoke)\s+[^%@"]*\bptr\s+addrspace\(1\)\s+[@%(]'
     r"|(?:load|getelementptr)\s+[^%@]*\bptr\s+addrspace\(1\)[,\s]"
     r")")
 
@@ -4747,7 +4832,7 @@ def native_effective_callee(ins, token_callee):
     return ins.callee
 
 
-def native_heap_source_kind(ins, token_callee):
+def native_heap_source_kind(ins, token_callee, constant_globals=frozenset()):
     """Classify `ins` as producing a register that may name a GC object.
 
     `token_callee` maps a statepoint token register to the callee it wraps, so
@@ -4774,6 +4859,8 @@ def native_heap_source_kind(ins, token_callee):
     if UNMASK_RE.search(ins.text):
         return "unmasked"
     if "= load " in ins.text:
+        if loads_constant_global(ins.text, constant_globals):
+            return None
         if GLOBAL_ROOT_RE.search(ins.text):
             return "global"
         kind = rewritten_load_kind(ins.text)
@@ -4970,17 +5057,23 @@ def _back_closure(def_of, reg, limit=64):
 def _untracked_bundle_members(f, tracked):
     """`"gc-live"` operands `AS1_DEF_RE` failed to recognise.
 
-    Non-vacuity for the tracked/untracked predicate. Every bundle operand is
-    spelled `ptr addrspace(1) %r`, so one whose definition this cannot classify
-    means the predicate is narrower than the IR — and a narrow predicate does
+    Non-vacuity for the tracked/untracked predicate. Managed operands are
+    spelled `ptr addrspace(1) %r`; direct alloca addresses are immovable stack
+    homes. Any other unclassified operand means the predicate is narrower
+    than the IR — and a narrow predicate does
     not fail quietly here, it turns correct relocated code into reported
     hazards. Reported as an error rather than absorbed.
     """
+    # A stack-home array may also be listed in gc-live. Its AS0 address
+    # cannot move; do not pretend that it is an AS1 managed pointer.
+    stack_homes = {ins.result for b in f.blocks for ins in f.insns[b]
+                   if ins.result and re.match(r"^\s*%[\w.$]+\s*=\s*alloca\b", ins.text)}
     missing = set()
     for b in f.blocks:
         for ins in f.insns[b]:
             if ins.is_statepoint:
-                missing.update(r for r in ins.live if r not in tracked)
+                missing.update(r for r in ins.live
+                               if r not in tracked and r not in stack_homes)
     return missing
 
 
@@ -5016,7 +5109,8 @@ def check_func_statepoints(module, f, want_moving_only=False,
 
     for b in f.blocks:
         for src in f.insns[b]:
-            kind = native_heap_source_kind(src, token_callee)
+            kind = native_heap_source_kind(src, token_callee,
+                                           f.constant_globals)
             if kind is None:
                 continue
             exemption = native_immovable_exemption(
@@ -6031,6 +6125,21 @@ def statepoint_self_test():
         ("  %r = call coldcc ptr addrspace(1) "
          "@llvm.experimental.gc.relocate.p1(token %t, i32 0, i32 0)", True,
          "the relocated value itself"),
+        ("  %s = select i1 %c, ptr addrspace(1) null, ptr addrspace(1) %p", True,
+         "a pointer select spells the condition type before its result type"),
+        ("  %r = tail call coldcc ptr addrspace(1) @relocate()", True,
+         "a tail marker does not change the returned pointer type"),
+        ("  %r = musttail call ptr addrspace(1) @relocate()", True,
+         "a musttail marker keeps the managed result type"),
+        ("  %r = notail call ptr addrspace(1) @relocate()", True,
+         "a notail marker keeps the managed result type"),
+        ("  %r = select i1 %c, i64 0, i64 1", False,
+         "an integer select must stay outside the managed domain"),
+        ("  %raw = select i1 icmp eq (ptr addrspace(1) null, "
+         "ptr addrspace(1) @g), i64 0, i64 1", False,
+         "a managed pointer in the condition does not make an integer result managed"),
+        ("  %raw = tail call ptr @malloc(i64 64)", False,
+         "an AS0 return must not enter the AS1 domain"),
         ("  %raw = ptrtoint ptr addrspace(1) %s to i64", False,
          "the cast OUT of it -- an i64, which LLVM does not relocate. "
          "Classifying it tracked would silence the entire mode"),
@@ -6042,6 +6151,21 @@ def statepoint_self_test():
             print(f"self-test FAIL: AS1_DEF_RE should{'' if want else ' not'} "
                   f"match {text.strip()!r} -- {why}", file=sys.stderr)
             ok = False
+
+    # A gc-live stack-home address is immovable, but another unknown value
+    # must still fail closed; accepting the home must not absorb the unknown.
+    from types import SimpleNamespace
+    home = SimpleNamespace(result="home", text="%home = alloca [2 x ptr addrspace(1)]",
+                           is_statepoint=False)
+    raw = SimpleNamespace(result="raw", text="%raw = call ptr @malloc(i64 64)",
+                          is_statepoint=False)
+    point = SimpleNamespace(result="sp", text="", is_statepoint=True,
+                            live=("home", "raw", "unknown"))
+    homes_fn = SimpleNamespace(blocks=("entry",), insns={"entry": (home, raw, point)})
+    if _untracked_bundle_members(homes_fn, set()) != {"raw", "unknown"}:
+        print("self-test FAIL: stack homes must be immovable without absorbing "
+              "an unclassified gc-live operand", file=sys.stderr)
+        ok = False
 
     # --- LLVM's trailing annotations are not uses ------------------------
     annotated = ("  %s.relocated = call coldcc ptr addrspace(1) "
@@ -7095,6 +7219,44 @@ entry.0:
                   "reports every literal load and cannot tell fixed from "
                   "broken.", file=sys.stderr)
             ok = False
+
+        # --- constant (image) string handles are not sources ---------------
+        #
+        # Positive: a `constant` handle global is never rewritten, so neither
+        # mode may report it. Negative: the same handle as a `global` still
+        # reports in both modes; without it this check could pass by dropping
+        # every strhandle.
+        sp_strh_body = _SELFTEST_SP_STR_HANDLE_BODY.replace(
+            "__SAFEPOINT__", _sp())
+        for label, text, sp_text, want in (
+                ("constant", _SELFTEST_STR_HANDLE_IMAGE,
+                 _STR_IMAGE_DEF.format(kw="externally_initialized constant")
+                 + sp_strh_body, 0),
+                ("global", _SELFTEST_STR_HANDLE_MUTABLE,
+                 _STR_IMAGE_DEF.format(kw="externally_initialized global")
+                 + sp_strh_body, 1)):
+            p = os.path.join(td, f"strhandle_{label}.ll")
+            sp_p = os.path.join(td, f"sp_strhandle_{label}.ll")
+            with open(p, "w") as fh:
+                fh.write(text)
+            with open(sp_p, "w") as fh:
+                fh.write(sp_text)
+            got = _stale_kinds_probe(p).get("strhandle", 0)
+            if got != want:
+                print(f"self-test FAIL: --stale-registers on a {label} "
+                      f"string-handle global must report {want} strhandle "
+                      f"source(s), got {got}.", file=sys.stderr)
+                ok = False
+            sp_hits = [h for h in _scan_statepoints([sp_p], moving_only=True)
+                       if h.kind == "strhandle"]
+            if len(sp_hits) != want or (want and
+                                        sp_hits[0].kind_class != "unrooted"):
+                print(f"self-test FAIL: statepoint mode on a {label} "
+                      f"string-handle global must report {want} unrooted "
+                      f"strhandle hazard(s), got "
+                      f"{[(h.kind_class, h.kind) for h in sp_hits]}.",
+                      file=sys.stderr)
+                ok = False
 
         # --- the property-GET window, both directions -----------------------
         #

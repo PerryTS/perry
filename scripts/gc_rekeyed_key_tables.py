@@ -120,7 +120,7 @@ EXCLUDED_FILES = ("crates/perry-runtime/src/gc/roots.rs",)
 # Promise, FileHandle, VM state and wasm funcrefs. Keep the parser backstop at the 14
 # remaining matched scanner functions.
 MIN_SITES = 11  # #12531 deletes the function-class-id rekey site and table.
-MIN_REGISTRY_PRUNES = 8  # #12531 removes the function-class-id death prune.
+MIN_REGISTRY_PRUNES = 7  # #12531 removes the function-class-id death prune; one more table has since left DEAD_KEY_PRUNES.
 # Declared, tracked `open_gap` verdicts allowed. ZERO, and it stays zero: the
 # audit that came with this gate found six rekeyed tables with no death story
 # (#8190-#8195) and all six were fixed rather than exempted, so there is no

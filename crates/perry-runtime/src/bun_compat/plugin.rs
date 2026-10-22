@@ -70,11 +70,14 @@ fn register(plugin: f64) -> f64 {
         crate::exception::js_throw(js_nanbox_pointer(error as i64));
     }
     let setup = scope.root_nanbox_f64(setup);
-    crate::stub_diag::perry_runtime_stub(
-        "Bun.plugin",
-        "setup runs synchronously; runtime loader hooks are ignored in native builds",
-        Some("#10100"),
-    );
+    // No first-call warning here. Registering hooks is not observable: a
+    // native build loads no JavaScript module at run time, so no hook could
+    // ever run, and the one place that could differ from Bun (a run-time
+    // import a hook would have served) rejects with an error that names the
+    // AOT boundary and the inert hooks itself. A warning here only reached
+    // stderr of programs that never hit that boundary, and a full-screen
+    // terminal UI (opencode, which registers its plugin runtime at startup)
+    // painted it over its first frame.
     if crate::stub_diag::strict_stubs_enabled() {
         let message =
             key_ptr(b"Bun.plugin runtime transforms are not available in the native build");

@@ -16,7 +16,7 @@
 
 use anyhow::Result;
 
-use crate::types::{DOUBLE, I1, I32, I64};
+use crate::types::{DOUBLE, I32};
 
 use super::{lower_guarded_array_index_get, FnCtx};
 

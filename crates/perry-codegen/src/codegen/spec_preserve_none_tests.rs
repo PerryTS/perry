@@ -489,12 +489,18 @@ fn a_guarded_number_parameter_owns_no_root_in_the_clone() {
         mutable: true,
         init: Some(Expr::Number(33.5)),
     });
-    module.init.push(Stmt::Expr(call(1, vec![Expr::LocalGet(30)])));
+    module
+        .init
+        .push(Stmt::Expr(call(1, vec![Expr::LocalGet(30)])));
     let ir = compile_ir(&module);
 
     let body = |marker: &str| -> String {
         ir.split("\ndefine ")
-            .find(|f| f.lines().next().is_some_and(|l| l.contains(&format!("{marker}("))))
+            .find(|f| {
+                f.lines()
+                    .next()
+                    .is_some_and(|l| l.contains(&format!("{marker}(")))
+            })
             .map(|f| f.split("\n}").next().unwrap_or(f).to_string())
             .unwrap_or_else(|| panic!("subject not live: no define of {marker} in the IR:\n{ir}"))
     };
@@ -502,7 +508,11 @@ fn a_guarded_number_parameter_owns_no_root_in_the_clone() {
         f.matches("alloca ptr addrspace(1)").count() + f.matches("@js_shadow_slot_bind(").count()
     };
     let clone = body("@perry_fn_spec_preserve_none_ts__f$spec_b");
-    assert_eq!(roots(&clone), 0, "the proven Number parameter is not a root:\n{clone}");
+    assert_eq!(
+        roots(&clone),
+        0,
+        "the proven Number parameter is not a root:\n{clone}"
+    );
     assert!(
         !clone.contains("asm \"\", \"=r,0\""),
         "no read of n goes through the root reload:\n{clone}"

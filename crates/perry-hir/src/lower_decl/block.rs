@@ -17,8 +17,8 @@ mod switch_case_tdz;
 mod var_names;
 
 use closure_ident_scan::{cic_expr, cic_stmt};
-pub(crate) use forward_class_bindings::take_forward_class_binding;
 use forward_class_bindings::class_decl_binds_evaluated_class;
+pub(crate) use forward_class_bindings::take_forward_class_binding;
 pub(crate) use switch_case_tdz::register_switch_case_tdz_lets;
 pub(crate) use var_names::{
     collect_annexb_block_fn_decl_names, collect_lexical_decl_names,

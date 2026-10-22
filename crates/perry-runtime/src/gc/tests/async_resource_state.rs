@@ -20,7 +20,7 @@ fn check(erase: bool) {
     let storage = crate::async_context::AsyncLocalStoragePayload::default();
     let token = storage.token();
     let store = crate::object::js_object_alloc(0, 1);
-    unsafe {
+    {
         crate::object::js_object_set_field_f64(store, 0, 73.0);
     }
     crate::async_context::enter_with(token, crate::value::js_nanbox_pointer(store as i64));

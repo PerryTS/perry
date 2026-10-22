@@ -114,6 +114,26 @@ ALLOWLIST: list[tuple[str, str, str]] = [
         "constrain the copying minor and need not arm the latch.",
     ),
     (
+        "crates/perry-runtime/src/object/runtime_layouts.rs",
+        "obj_type: crate::gc::GC_TYPE_STRING,",
+        "`image` is the const-fn builder of the runtime's immutable string "
+        "images: every use is a `static`, so the header has an address in the "
+        "binary image, never in Eden, and cannot constrain the copying minor.",
+    ),
+    (
+        "crates/perry-runtime/src/object/spread_tests.rs",
+        "obj_type: crate::gc::GC_TYPE_STRING,",
+        "a `static` string image planted for the spread tests; the initializer "
+        "calls `image_string_gc_size`, which keeps the scanner's literal-"
+        "aggregate rule from recognising it. Same image-address argument.",
+    ),
+    (
+        "crates/perry-runtime/src/value/addr_class/image.rs",
+        "gc._reserved != crate::string::STRING_IMAGE_MARKER",
+        "the image recogniser COMPARES a header's whole flag word against the "
+        "immutable-image shape; it originates no pin.",
+    ),
+    (
         "crates/perry-runtime/src/gc/tests/copying/latch.rs",
         "(*sabotage_plant_7645).gc_flags |= GC_FLAG_PINNED",
         "the latch sabotage test deliberately plants a young pin WITHOUT "

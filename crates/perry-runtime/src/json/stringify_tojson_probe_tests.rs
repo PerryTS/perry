@@ -321,7 +321,7 @@ fn a_static_store_never_resurrects_a_deleted_prototype_key() {
     // its uncached walk and the property itself must stay absent.
     let proto = crate::object::class_decl_prototype_value(class_id);
     let key = crate::string::js_string_from_bytes(b"toJSON".as_ptr(), 6);
-    unsafe {
+    {
         crate::object::js_object_delete_field(
             (proto.to_bits() & crate::value::POINTER_MASK) as *mut crate::object::ObjectHeader,
             key,
@@ -339,15 +339,12 @@ fn a_static_store_never_resurrects_a_deleted_prototype_key() {
         f64::from_bits(probe_test_method_bits()),
     );
     assert!(
-        unsafe {
-            crate::object::js_object_get_field_by_name(
-                (crate::object::class_decl_prototype_value(class_id).to_bits()
-                    & crate::value::POINTER_MASK)
-                    as *const crate::object::ObjectHeader,
-                key,
-            )
-            .is_undefined()
-        },
+        crate::object::js_object_get_field_by_name(
+            (crate::object::class_decl_prototype_value(class_id).to_bits()
+                & crate::value::POINTER_MASK) as *const crate::object::ObjectHeader,
+            key,
+        )
+        .is_undefined(),
         "a static store must not re-expose a deleted prototype method"
     );
 }

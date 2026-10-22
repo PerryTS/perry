@@ -268,11 +268,32 @@ macro_rules! js_bare_body_fn {
     };
 }
 
+/// [`js_bare_body_fn!`] through an unwind-capable pointer type in builds that
+/// unwind Rust panics (test builds), for a caller that must let a JS exception
+/// travel through it there. Production (`panic = "abort"`) is identical to
+/// [`js_bare_body_fn!`].
+///
+/// # Safety
+/// As [`js_bare_body_fn!`].
+macro_rules! js_bare_body_fn_unwind {
+    (@f64 $x:tt) => { f64 };
+    ($code:expr; $($x:tt),* $(,)?) => {{
+        #[cfg(panic = "abort")]
+        let f = $crate::closure::body_call::js_bare_body_fn!($code; $($x),*);
+        #[cfg(not(panic = "abort"))]
+        let f = ::std::mem::transmute::<
+            *const u8,
+            unsafe extern "C-unwind" fn($($crate::closure::body_call::js_bare_body_fn_unwind!(@f64 $x)),*) -> f64,
+        >($code);
+        f
+    }};
+}
+
 #[cfg(not(panic = "abort"))]
 pub(crate) use js_body_fn_unwind;
 pub(crate) use {
-    js_bare_body_fn, js_body_call, js_body_call_unwind, js_body_fn, js_body_fn_ty,
-    js_method_body_call, js_method_body_fn,
+    js_bare_body_fn, js_bare_body_fn_unwind, js_body_call, js_body_call_unwind, js_body_fn,
+    js_body_fn_ty, js_method_body_call, js_method_body_fn,
 };
 
 /// Call function value `func` with receiver `this` and `args`: the Rust-side
@@ -289,4 +310,86 @@ pub unsafe fn call_value(func: f64, this: JsThis, args: &[f64]) -> f64 {
         args.as_ptr()
     };
     crate::closure::native_call_value_this(func, this, ptr, args.len())
+}
+
+/// Enter the function's generic callee-owned argument adapter. Cells, unlike
+/// a borrowed f64 slice, explicitly permit the collector to update the caller's
+/// actual argument storage. No argument-value copy is required in the callee.
+#[inline(always)]
+pub(crate) unsafe fn call_entry_cells(
+    callee: *const crate::closure::ClosureHeader,
+    entry: *const u8,
+    this: JsThis,
+    args: &[std::cell::UnsafeCell<f64>],
+) -> f64 {
+    call_entry_raw(callee, entry, this, args.as_ptr(), args.len())
+}
+
+/// A compiled plain entry loads its input values before calling its operation.
+/// Before that call it does no materialization and never rewrites the vector,
+/// so a borrowed slice needs no mutable staging. The immutable record must
+/// prove the entry has no rest/arguments bundle before taking this path.
+#[inline(always)]
+pub(crate) unsafe fn call_entry_plain_slice(
+    callee: *const crate::closure::ClosureHeader,
+    entry: *const u8,
+    this: JsThis,
+    args: &[f64],
+) -> f64 {
+    call_entry_raw(callee, entry, this, args.as_ptr().cast(), args.len())
+}
+
+#[inline(always)]
+unsafe fn call_entry_raw(
+    callee: *const crate::closure::ClosureHeader,
+    entry: *const u8,
+    this: JsThis,
+    args: *const std::cell::UnsafeCell<f64>,
+    count: usize,
+) -> f64 {
+    #[cfg(panic = "abort")]
+    let body = std::mem::transmute::<
+        *const u8,
+        crate::codegen_abi::JsCallEntry<crate::closure::ClosureHeader>,
+    >(entry);
+    #[cfg(not(panic = "abort"))]
+    let body = std::mem::transmute::<
+        *const u8,
+        unsafe extern "C-unwind" fn(
+            *const crate::closure::ClosureHeader,
+            JsThis,
+            *const std::cell::UnsafeCell<f64>,
+            usize,
+        ) -> f64,
+    >(entry);
+    body(callee, this, args, count)
+}
+
+/// Stage a borrowed runtime argument slice in caller-owned mutable cells.
+/// The ordinary closure-call register width fits on the stack; wider calls
+/// use storage sized to the same argument count. Both enter the same ABI.
+#[inline]
+pub(crate) unsafe fn call_entry_slice(
+    callee: *const crate::closure::ClosureHeader,
+    entry: *const u8,
+    this: JsThis,
+    args: &[f64],
+) -> f64 {
+    use std::cell::UnsafeCell;
+    use std::mem::MaybeUninit;
+    const WIDTH: usize = crate::codegen_abi::JS_CLOSURE_CALL_MAX_ARGS;
+    if args.len() <= WIDTH {
+        let mut cells: [MaybeUninit<UnsafeCell<f64>>; WIDTH] =
+            [const { MaybeUninit::uninit() }; WIDTH];
+        for (cell, value) in cells.iter_mut().zip(args) {
+            cell.write(UnsafeCell::new(*value));
+        }
+        // Only the initialized prefix is borrowed, and UnsafeCell permits
+        // the collector to rewrite it for this activation.
+        let cells = std::slice::from_raw_parts(cells.as_ptr().cast(), args.len());
+        call_entry_cells(callee, entry, this, cells)
+    } else {
+        let cells: Vec<_> = args.iter().copied().map(UnsafeCell::new).collect();
+        call_entry_cells(callee, entry, this, &cells)
+    }
 }

@@ -702,43 +702,41 @@ pub(crate) unsafe fn attach_v8_constructor(
 /// `new v8.GCProfiler()` → fresh profiler object.
 #[no_mangle]
 pub extern "C" fn js_v8_gc_profiler_new() -> f64 {
-    unsafe {
-        let scope = crate::gc::RuntimeHandleScope::new();
-        let module = "v8.GCProfiler";
-        crate::object::install_native_module_vtable();
-        let constructor = crate::object::bound_native_callable_export_value("v8", "GCProfiler");
-        let constructor = scope.root_nanbox_f64(constructor);
-        let prototype =
-            crate::object::js_function_prototype_value_for_read(constructor.get_nanbox_f64());
-        let prototype = scope.root_nanbox_f64(prototype);
-        let module_name = js_string_from_bytes(module.as_ptr(), module.len() as u32);
-        let module_name = scope.root_string_ptr(module_name);
-        let obj = crate::object::js_object_alloc(crate::object::NATIVE_MODULE_CLASS_ID, 2);
-        let obj = scope.root_raw_mut_ptr(obj);
-        crate::object::js_object_set_field(
-            obj.get_raw_mut_ptr(),
-            0,
-            JSValue::string_ptr(module_name.get_raw_mut_ptr()),
-        );
-        crate::object::js_object_set_field(obj.get_raw_mut_ptr(), 1, JSValue::bool(false));
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let module = "v8.GCProfiler";
+    crate::object::install_native_module_vtable();
+    let constructor = crate::object::bound_native_callable_export_value("v8", "GCProfiler");
+    let constructor = scope.root_nanbox_f64(constructor);
+    let prototype =
+        crate::object::js_function_prototype_value_for_read(constructor.get_nanbox_f64());
+    let prototype = scope.root_nanbox_f64(prototype);
+    let module_name = js_string_from_bytes(module.as_ptr(), module.len() as u32);
+    let module_name = scope.root_string_ptr(module_name);
+    let obj = crate::object::js_object_alloc(crate::object::NATIVE_MODULE_CLASS_ID, 2);
+    let obj = scope.root_raw_mut_ptr(obj);
+    crate::object::js_object_set_field(
+        obj.get_raw_mut_ptr(),
+        0,
+        JSValue::string_ptr(module_name.get_raw_mut_ptr()),
+    );
+    crate::object::js_object_set_field(obj.get_raw_mut_ptr(), 1, JSValue::bool(false));
 
-        let keys = crate::array::js_array_alloc(1);
-        let keys = scope.root_raw_mut_ptr(keys);
-        let key = b"__module__";
-        let key_ptr = js_string_from_bytes(key.as_ptr(), key.len() as u32);
-        let key_ptr = scope.root_string_ptr(key_ptr);
-        let pushed = crate::array::js_array_push(
-            keys.get_raw_mut_ptr(),
-            JSValue::string_ptr(key_ptr.get_raw_mut_ptr()),
-        );
-        keys.set_raw_mut_ptr(pushed);
-        crate::object::js_object_set_keys(obj.get_raw_mut_ptr(), keys.get_raw_mut_ptr());
-        crate::object::prototype_chain::object_set_static_prototype(
-            obj.get_raw_mut_ptr::<ObjectHeader>() as usize,
-            prototype.get_nanbox_f64().to_bits(),
-        );
-        crate::value::js_nanbox_pointer(obj.get_raw_mut_ptr::<ObjectHeader>() as i64)
-    }
+    let keys = crate::array::js_array_alloc(1);
+    let keys = scope.root_raw_mut_ptr(keys);
+    let key = b"__module__";
+    let key_ptr = js_string_from_bytes(key.as_ptr(), key.len() as u32);
+    let key_ptr = scope.root_string_ptr(key_ptr);
+    let pushed = crate::array::js_array_push(
+        keys.get_raw_mut_ptr(),
+        JSValue::string_ptr(key_ptr.get_raw_mut_ptr()),
+    );
+    keys.set_raw_mut_ptr(pushed);
+    crate::object::js_object_set_keys(obj.get_raw_mut_ptr(), keys.get_raw_mut_ptr());
+    crate::object::prototype_chain::object_set_static_prototype(
+        obj.get_raw_mut_ptr::<ObjectHeader>() as usize,
+        prototype.get_nanbox_f64().to_bits(),
+    );
+    crate::value::js_nanbox_pointer(obj.get_raw_mut_ptr::<ObjectHeader>() as i64)
 }
 
 fn gc_profiler_object(recv: f64) -> Option<*mut ObjectHeader> {

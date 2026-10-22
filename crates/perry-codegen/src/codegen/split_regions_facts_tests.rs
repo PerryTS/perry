@@ -48,3 +48,18 @@ fn field_initializer_writes_are_module_facts() {
         );
     }
 }
+
+#[test]
+fn generated_locals_follow_field_only_closure_parameters() {
+    let mut m = lower("class C { value = (unused: any) => 1; }");
+    m.local_source_spans.clear();
+    let field = &mut m.classes.iter_mut().find(|c| c.name == "C").unwrap().fields[0];
+    let Expr::Closure { params, .. } = field.init.as_mut().unwrap() else {
+        panic!("field closure");
+    };
+    params[0].id = 1_000_000;
+    assert!(
+        max_local_id(&m) >= 1_000_000,
+        "field-only parameter must precede generated locals"
+    );
+}

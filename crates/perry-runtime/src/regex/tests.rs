@@ -29,7 +29,7 @@ mod test_symbol_to_string {
         _this: crate::closure::JsThis,
         _hint: f64,
     ) -> f64 {
-        unsafe { crate::closure::js_closure_get_capture_f64(closure, 0) }
+        crate::closure::js_closure_get_capture_f64(closure, 0)
     }
 
     extern "C" fn mark_coercion_and_return_x(

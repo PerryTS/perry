@@ -81,7 +81,6 @@ pub(crate) use test_helpers::{
 
 use crate::string::StringHeader;
 use std::collections::HashMap;
-use std::sync::atomic::Ordering;
 use std::sync::Mutex;
 
 // NaN-boxing tags (must match value.rs)

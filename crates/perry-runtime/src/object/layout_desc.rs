@@ -361,6 +361,7 @@ pub const LAYOUT_ID_CARRIED: u32 = u32::MAX;
 // The descriptor word has exactly three states: 0 (static data), the carried
 // sentinel (not registered yet) and a registered ShapeId. The sentinel must
 // never read as a ShapeId, or registration would install it as one.
+#[allow(clippy::absurd_extreme_comparisons)] // the sentinel is u32::MAX today; the check guards a future change
 const _: () = assert!(LAYOUT_ID_CARRIED >= super::shapes::SHAPE_ID_END);
 const _: () = assert!(super::shapes::SHAPE_ID_BASE != 0);
 
@@ -690,11 +691,15 @@ unsafe fn reserve_namespace_layout(desc: *const PerryLayoutDesc) -> u32 {
     }
     debug_assert_eq!((*desc).proto, LAYOUT_PROTO_NULL);
     let proposed = super::shapes::allocate_declared_layout_id(super::shapes::PROTO_ID_NULL);
-    match word.compare_exchange(LAYOUT_ID_CARRIED, proposed, Ordering::AcqRel, Ordering::Acquire) {
+    match word.compare_exchange(
+        LAYOUT_ID_CARRIED,
+        proposed,
+        Ordering::AcqRel,
+        Ordering::Acquire,
+    ) {
         Ok(_) => proposed,
-        Err(other) => {
-            registered_layout_id(other).expect("a carried layout word holds the sentinel or a ShapeId")
-        }
+        Err(other) => registered_layout_id(other)
+            .expect("a carried layout word holds the sentinel or a ShapeId"),
     }
 }
 
@@ -2233,7 +2238,6 @@ fn family_diag_report() {
 
 /// Why the next `overflow::ensure` on a family object installs its table.
 pub(crate) mod install_cause {
-    pub const UNKNOWN: u8 = 0;
     pub const LATE_OUT_OF_ORDER: u8 = 1;
     pub const LATE_PROTO_OR_SPILL: u8 = 2;
     pub const OTHER_KEY: u8 = 3;

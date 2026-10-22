@@ -82,7 +82,11 @@ fn build_dispatch_while_body(
         let num = state.num;
         let mut case_body = state.body.clone();
         match &state.exit {
-            StateExit::Yield { value, next_state } => {
+            StateExit::Yield {
+                value,
+                next_state,
+                passthrough,
+            } => {
                 if body_contains_return(&case_body) {
                     prepend_done_before_returns(&mut case_body, done_id);
                     rewrite_returns_as_done(&mut case_body);
@@ -91,7 +95,11 @@ fn build_dispatch_while_body(
                     state_id,
                     Box::new(Expr::Number(*next_state as f64)),
                 )));
-                case_body.push(Stmt::Return(Some(make_iter_result(value.clone(), false))));
+                if *passthrough {
+                    case_body.push(Stmt::Return(Some(value.clone())));
+                } else {
+                    case_body.push(Stmt::Return(Some(make_iter_result(value.clone(), false))));
+                }
             }
             StateExit::Await { value, next_state } => {
                 // A user `return X` can sit in a yield/await-free control-flow

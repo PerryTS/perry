@@ -152,9 +152,9 @@ pub use self::generic::array_proto_mutator;
 pub use self::generic::{
     dispatch_arraylike_read_method, js_arraylike_at, js_arraylike_every, js_arraylike_filter,
     js_arraylike_find, js_arraylike_findIndex, js_arraylike_findLast, js_arraylike_findLastIndex,
-    js_arraylike_forEach, js_arraylike_includes, js_arraylike_indexOf, js_arraylike_join,
-    js_arraylike_lastIndexOf, js_arraylike_map, js_arraylike_reduce, js_arraylike_reduceRight,
-    js_arraylike_slice, js_arraylike_some, try_array_proto_chain_method,
+    js_arraylike_flatMap, js_arraylike_forEach, js_arraylike_includes, js_arraylike_indexOf,
+    js_arraylike_join, js_arraylike_lastIndexOf, js_arraylike_map, js_arraylike_reduce,
+    js_arraylike_reduceRight, js_arraylike_slice, js_arraylike_some, try_array_proto_chain_method,
     try_object_arraylike_mutator,
 };
 pub(crate) use self::generic::{
@@ -233,8 +233,8 @@ pub(crate) use self::iterator::iter_bt_dump;
 pub(crate) use self::iterator::{array_from_spread_value, is_builtin_iterator_class_id};
 pub use self::iterator::{
     js_array_spread_append, js_for_of_to_array, js_get_async_iterator,
-    js_iterator_close_if_not_done, js_iterator_close_on_throw, js_iterator_delegate_return,
-    js_iterator_delegate_throw, js_iterator_to_array,
+    js_iterator_close_if_not_done, js_iterator_close_on_throw, js_iterator_delegate_next,
+    js_iterator_delegate_return, js_iterator_delegate_throw, js_iterator_to_array,
 };
 pub use self::join::{js_array_join, js_array_join_value};
 
@@ -257,8 +257,6 @@ pub(crate) use self::push_pop::throw_non_extensible_array_push;
 pub(crate) use self::sort::object_prototype_has_index_prop;
 pub(crate) use self::sort::object_prototype_index_get as sort_object_prototype_index_get;
 pub(crate) use self::sort::object_prototype_index_get_with_receiver as sort_object_prototype_index_get_with_receiver;
-#[cfg(test)]
-pub(crate) use self::subclass::js_packed_arraylike_loop_guard;
 pub use self::subclass::{
     array_subclass_dense_snapshot, array_subclass_has_iterator_override, is_array_subclass_instance,
 };

@@ -22,9 +22,16 @@ pub fn find_new_candidates(
         match s {
             Stmt::Let {
                 id,
-                init: Some(Expr::New { class_name, .. }),
+                init: Some(Expr::New {
+                    class_name, args, ..
+                }),
                 ..
-            } if !boxed_vars.contains(id) && !module_globals.contains_key(id) => {
+            } if !boxed_vars.contains(id)
+                && !module_globals.contains_key(id)
+                // A chunked literal birth's chunk functions store into the
+                // object itself: it is never scalar-replaced.
+                && !args.iter().any(|a| matches!(a, Expr::LiteralChunks(_))) =>
+            {
                 candidates.insert(*id, class_name.clone());
             }
             // #11759 (c′): `new C()` guarded on a class declaration's first

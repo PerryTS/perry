@@ -405,6 +405,115 @@ pub(crate) fn alias_forward_property_read(receiver: f64, key: &str) -> Option<f6
     }
 }
 
+/// Method-call forwarding companion to `alias_forward_property_read`: run
+/// method `method_name` of the native object `receiver` aliases, read from
+/// the receiver's own native-state word. A result that is the forwarding
+/// value itself comes back as `receiver`: node's chainable server methods
+/// (`listen`, `close`, `ref`) return `this`, and `this` is the alias. `None`
+/// when the receiver carries no alias.
+pub(crate) fn alias_forward_method_call(
+    receiver: f64,
+    method_name: &str,
+    args: &[f64],
+) -> Option<f64> {
+    let (handle_val, composite) = alias_handle_for_object(receiver)?;
+    // Server aliases dispatch through the PRIMARY handle dispatcher only: the
+    // composite's extension dispatchers (ext-net) may own an id-colliding
+    // socket that would claim shared names like `address`/`on` first. A
+    // `ServerResponse` alias (#10454) needs the composite, whose http
+    // extension owns that handle.
+    let dispatch = if composite {
+        super::class_handles::handle_method_dispatch()
+    } else {
+        super::class_handles::handle_method_dispatch_primary()
+    }?;
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(receiver);
+    let target = handle_val.to_bits() & crate::value::POINTER_MASK;
+    let result = unsafe {
+        dispatch(
+            target as i64,
+            method_name.as_ptr(),
+            method_name.len(),
+            args.as_ptr(),
+            args.len(),
+        )
+    };
+    Some(
+        if JSValue::from_bits(result.to_bits()).is_reference()
+            && result.to_bits() & crate::value::POINTER_MASK == target
+        {
+            receiver.get_nanbox_f64()
+        } else {
+            result
+        },
+    )
+}
+
+/// A native family's prototype member (`net.Server.prototype.address`)
+/// reached by an object that aliases a native object
+/// (`http.Server.call(this)`): the member's own family check refuses that
+/// receiver, so it runs on the aliased native object by name instead. The
+/// alias is read from the receiver's native-state word. Returns 1 and writes
+/// `*out` when the receiver carries an alias, 0 otherwise (the member then
+/// runs its own body). Trailing `undefined` arguments are dropped, as a call
+/// that passed fewer arguments would.
+///
+/// # Safety
+/// `name_ptr`/`name_len` name UTF-8 bytes; `args_ptr`/`args_len` a valid
+/// argument slice (or null/0); `out` is writable.
+#[no_mangle]
+pub unsafe extern "C" fn js_native_alias_call_method(
+    receiver: f64,
+    name_ptr: *const u8,
+    name_len: usize,
+    args_ptr: *const f64,
+    args_len: usize,
+    out: *mut f64,
+) -> i32 {
+    let mut args: &[f64] = if args_ptr.is_null() || args_len == 0 {
+        &[]
+    } else {
+        std::slice::from_raw_parts(args_ptr, args_len)
+    };
+    while let Some((last, rest)) = args.split_last() {
+        if last.to_bits() != crate::value::TAG_UNDEFINED {
+            break;
+        }
+        args = rest;
+    }
+    let name = std::str::from_utf8_unchecked(std::slice::from_raw_parts(name_ptr, name_len));
+    match alias_forward_method_call(receiver, name, args) {
+        Some(value) => {
+            *out = value;
+            1
+        }
+        None => 0,
+    }
+}
+
+/// [`js_native_alias_call_method`] for a family's prototype getter
+/// (`net.Server.prototype.listening`): the aliased native object's property.
+/// An alias whose native object has no such property reads `undefined`.
+///
+/// # Safety
+/// As [`js_native_alias_call_method`].
+#[no_mangle]
+pub unsafe extern "C" fn js_native_alias_get_property(
+    receiver: f64,
+    name_ptr: *const u8,
+    name_len: usize,
+    out: *mut f64,
+) -> i32 {
+    if alias_handle_for_object(receiver).is_none() {
+        return 0;
+    }
+    let name = std::str::from_utf8_unchecked(std::slice::from_raw_parts(name_ptr, name_len));
+    *out = alias_forward_property_read(receiver, name)
+        .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+    1
+}
+
 /// Shared implementation for the `js_http(s)_server_construct_with_this` /
 /// `js_http_server_response_construct_with_this` externs: dispatch
 /// `(module, method)` through the registered native http dispatcher with the

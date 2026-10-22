@@ -1,5 +1,4 @@
 //! Owned symbol/class fixture helpers; no registry or scanner.
-use super::*;
 #[cfg(test)]
 pub(crate) fn test_seed_symbol_property_root(owner: usize, sym_key: usize, value_bits: u64) {
     super::store_object_symbol_property_root(owner, sym_key, value_bits);

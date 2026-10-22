@@ -13,10 +13,7 @@
 //! which throws), no ShapeId compare, no miss call.
 //!
 //! The receiver facts come from the whole-program solve (`locals`,
-//! `this_of`) or from a typed body's entry check (`codegen/typed_body.rs`:
-//! a parameter whose class id the dispatcher tested against fninfer's class
-//! set; the parameter is never reassigned, and the field facts hold for the
-//! object's whole life, so a call in between changes nothing).
+//! `this_of`).
 //! The GC write barrier stays for stores that can carry a pointer (F2 decides
 //! which can); the raw-f64 lane discipline stays for stores into an F64 lane.
 //!
@@ -45,7 +42,7 @@ use perry_hir::Expr;
 
 use crate::nanbox::POINTER_MASK_I64;
 use crate::native_value::{BoundsState, BufferAccessMode, LoweredValue, NativeRep, SemanticKind};
-use crate::types::{DOUBLE, I32, I64, I8, PTR};
+use crate::types::{DOUBLE, I32, I64, I8};
 
 use super::{lower_expr, FnCtx};
 
@@ -82,8 +79,6 @@ pub(crate) struct FieldProof {
     pub nullable: bool,
     /// F2: the union of the field's kinds over the class set.
     pub kind_mask: u16,
-    /// F1 over the whole set.
-    pub readonly: bool,
     /// F6 over the whole set.
     pub ta_stable: bool,
     /// F6 element kind, the same for the whole set.
@@ -263,7 +258,6 @@ pub(crate) fn prove(
     }
     let mut slot: Option<u32> = None;
     let mut kind_mask = 0u16;
-    let mut readonly = true;
     let mut ta_stable = true;
     let mut ta_kind: Option<Option<u8>> = None;
     let mut all_f64 = true;
@@ -310,7 +304,6 @@ pub(crate) fn prove(
         slot.get_or_insert(idx);
         slots.push(idx);
         kind_mask |= f.kind_mask;
-        readonly &= f.readonly;
         ta_stable &= f.ta_stable;
         ta_kind = match ta_kind {
             None => Some(f.ta_kind),
@@ -330,7 +323,6 @@ pub(crate) fn prove(
         slots,
         nullable: recv.nullable,
         kind_mask,
-        readonly,
         // A guarded read's value may come from its generic arm.
         ta_stable: ta_stable && !guarded,
         ta_kind: if guarded { None } else { ta_kind.flatten() },

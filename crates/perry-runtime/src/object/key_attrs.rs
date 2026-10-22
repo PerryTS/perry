@@ -604,6 +604,7 @@ pub(crate) unsafe fn keys_need_attrs(keys: *const ArrayHeader, count: u32) -> bo
 ///
 /// # Safety
 /// `keys` is any address.
+#[cfg(test)]
 #[inline]
 pub(crate) unsafe fn keys_have_slots_checked(keys: *const ArrayHeader, count: u32) -> bool {
     if count == 0 {

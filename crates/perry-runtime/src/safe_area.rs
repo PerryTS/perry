@@ -12,9 +12,6 @@
 //! main thread (same as the UI runtime), so the allocation lands in the right
 //! arena.
 
-use crate::object::{js_object_alloc_with_shape, js_object_set_field};
-use crate::value::JSValue;
-
 /// Allocate a `{ top, right, bottom, left }` object and return it NaN-boxed
 /// (POINTER_TAG). The system-table row for `getSafeAreaInsets` uses
 /// `ReturnKind::F64`, so this NaN-boxed pointer is passed straight through to

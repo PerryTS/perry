@@ -139,11 +139,11 @@ pub(crate) fn require_check_build_if_requested() {
     }
 }
 
-/// One declaration names the kind and a post-proof body shared with the
-/// generic operation. Compiler selection is added during receiver migration;
+/// One declaration names the exported symbol (first, as the export inventory
+/// expects), the kind and a post-proof body shared with the generic operation. Compiler selection is added during receiver migration;
 /// release assertions compile out.
 macro_rules! kind_entry {
-    ($kind:ident, fn $name:ident($receiver:ident: $ty:ty $(, $arg:ident: $arg_ty:ty)*) -> $ret:ty $body:block) => {
+    ($name:ident, $kind:ident, fn($receiver:ident: $ty:ty $(, $arg:ident: $arg_ty:ty)*) -> $ret:ty $body:block) => {
         #[allow(non_snake_case)]
         #[no_mangle]
         pub extern "C" fn $name($receiver: $ty $(, $arg: $arg_ty)*) -> $ret {

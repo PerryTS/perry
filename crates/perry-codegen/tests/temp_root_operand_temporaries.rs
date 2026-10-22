@@ -53,8 +53,7 @@
 
 use perry_codegen::testing::temp_slots::{
     assert_no_temp_rooting, assert_rooted_across, assert_temp_rooting_count,
-    derives_from_slot_load, first_call_result, slot_holding, slot_traffic, temp_root_slots,
-    SlotEvent,
+    derives_from_slot_load, slot_holding, slot_traffic, temp_root_slots, SlotEvent,
 };
 use perry_codegen::testing::NativeRootsPin;
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};

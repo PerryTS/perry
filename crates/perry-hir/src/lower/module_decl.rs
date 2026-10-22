@@ -1381,9 +1381,13 @@ pub(crate) fn lower_module_decl(
                     let en = lower_enum_decl(ctx, enum_decl, true)?;
                     let enum_name = en.name.clone();
                     if !enum_decl.declare {
-                        if let Some((_, bind)) =
-                            crate::lower_decl::enum_value_binding(ctx, &enum_name, true, &en.members, enum_decl)?
-                        {
+                        if let Some((_, bind)) = crate::lower_decl::enum_value_binding(
+                            ctx,
+                            &enum_name,
+                            true,
+                            &en.members,
+                            enum_decl,
+                        )? {
                             module.init.push(bind);
                         }
                     }

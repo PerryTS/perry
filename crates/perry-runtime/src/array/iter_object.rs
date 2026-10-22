@@ -496,11 +496,6 @@ unsafe fn route_iter_obj_receiver(arr: *const ArrayHeader, kind: u8) -> IterRece
             return IterReceiver::Ptr(masked);
         }
     }
-    let method: &[u8] = match kind {
-        1 => b"keys",
-        2 => b"entries",
-        _ => b"values",
-    };
     // Any other primitive receiver (number, string, int32, bigint) does not
     // own these methods — spec TypeError, as Node throws. The old masked
     // path either dereferenced the primitive's bits as an ArrayHeader (UB)

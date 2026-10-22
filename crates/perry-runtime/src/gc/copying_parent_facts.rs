@@ -268,16 +268,6 @@ impl CopyingNurseryCollector {
         self.ptrs.decode_bits(bits).map(|(addr, _, _)| addr)
     }
 
-    pub(super) unsafe fn visit_slot_with_parent(
-        &mut self,
-        slot: *mut u64,
-        parent_header: *mut GcHeader,
-        external: bool,
-    ) {
-        let weak_holder = weak_holder_fact(parent_header);
-        self.visit_slot_with_weak_fact(slot, parent_header, weak_holder, external);
-    }
-
     /// The dirty scan has already admitted an old or malloc parent and
     /// filtered weak targets. Reuse those facts instead of reclassifying the
     /// same parent and its weak-holder class for every slot.

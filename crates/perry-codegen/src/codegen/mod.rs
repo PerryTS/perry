@@ -29,6 +29,8 @@
 //! Anything else (objects, arrays, classes, closures, async, imports, …)
 //! errors with an actionable "Phase X not yet supported" message.
 
+pub mod reach_report;
+
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -269,6 +271,8 @@ mod literal_method_this_tests;
 mod ordinary_method_artifacts;
 pub mod split_regions;
 #[cfg(test)]
+mod split_regions_literal_tests;
+#[cfg(test)]
 mod split_regions_tests;
 #[cfg(test)]
 mod string_accumulator_tests;
@@ -332,7 +336,6 @@ mod testing_feature_gate_tests;
 mod trusted_box_callback_tests;
 mod typed_abi;
 mod typed_abi_opt_report;
-pub(crate) mod typed_body;
 mod typed_entry;
 pub(crate) use typed_entry::{emit_plain_number_bits_test, emit_plain_number_test};
 #[cfg(test)]
@@ -374,8 +377,8 @@ use function::{
     compile_typed_i32_function, compile_typed_string_function,
 };
 use helpers::{
-    collect_return_class, emit_buffer_alias_metadata, function_body_returns_generator_object,
-    sanitize, scoped_method_name,
+    collect_return_class, emit_buffer_alias_metadata, function_body_is_fixed_state_generator,
+    function_body_returns_generator_object, sanitize, scoped_method_name,
 };
 
 // Collector and boxing-analysis walkers live in dedicated modules. The
@@ -552,6 +555,8 @@ fn lower_module(
     opts: CompileOptions,
     births: Option<&mut Vec<ModuleBirth>>,
 ) -> Result<Option<LoweredModule>> {
+    let reach_census = reach_report::active();
+    let _reach_scope = reach_census.as_ref().map(|_| reach_report::enter_module());
     let collect_births = births.is_some();
     // No family facts of a previous module on this thread reach this one's
     // early analyses; this module's are installed once its births are known.
@@ -1251,6 +1256,8 @@ fn lower_module(
     let mut local_async_funcs: std::collections::HashSet<u32> = std::collections::HashSet::new();
     let mut local_generator_funcs: std::collections::HashSet<u32> =
         std::collections::HashSet::new();
+    let mut fixed_generator_funcs: std::collections::HashSet<u32> =
+        std::collections::HashSet::new();
     let mut funcs_reading_dynamic_this: std::collections::HashSet<u32> =
         std::collections::HashSet::new();
     for f in &hir.functions {
@@ -1263,6 +1270,9 @@ fn lower_module(
         }
         if function_body_returns_generator_object(&f.body) {
             local_generator_funcs.insert(f.id);
+            if function_body_is_fixed_state_generator(&f.body) {
+                fixed_generator_funcs.insert(f.id);
+            }
         }
         if perry_hir::analysis::body_reads_dynamic_this(&f.body) {
             funcs_reading_dynamic_this.insert(f.id);
@@ -2918,10 +2928,10 @@ fn lower_module(
         namespace_member_origin_names: opts.namespace_member_origin_names,
         imported_async_funcs: opts.imported_async_funcs,
         short_spread_method_candidates: Arc::clone(&opts.short_spread_method_candidates),
-        program_class_accessor_names: opts.program_class_accessor_names.clone(),
         object_literal_method_candidates: Arc::clone(&opts.object_literal_method_candidates),
         local_async_funcs,
         local_generator_funcs,
+        fixed_generator_funcs,
         async_step_closures: hir.async_step_closures.iter().copied().collect(),
         module_global_proven_types: std::collections::HashMap::new(),
         module_global_transfers: std::collections::HashMap::new(),
@@ -4325,6 +4335,11 @@ fn lower_module(
     llmod
         .native_rep_records
         .extend(typed_clone_rejection_records);
+
+    if let Some(census) = &reach_census {
+        census.bind_namespace_getters(&hir.name, &module_prefix, &opts.namespace_entries);
+        census.capture(&hir.name, &llmod)?;
+    }
 
     progress.phase(1, "lowering complete; releasing HIR and analyses");
     // Return only emission inputs: every lowering analysis, borrowed callable,

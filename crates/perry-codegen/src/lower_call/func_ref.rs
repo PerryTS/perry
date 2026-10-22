@@ -1456,7 +1456,7 @@ pub fn try_lower_func_ref_call(
     // reading dropped slots.
     //
     arg_group.release(ctx);
-    if ctx.local_generator_funcs.contains(fid) {
+    if ctx.local_generator_funcs.contains(fid) && !ctx.fixed_generator_funcs.contains(fid) {
         let wrap_info = ctx.block().fn_info_ref(&format!("__perry_wrap_{}", fname));
         let closure_handle =
             ctx.block()

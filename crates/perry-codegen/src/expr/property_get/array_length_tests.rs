@@ -6,9 +6,7 @@
 //! program still computes the right length, through the slow entry, one call
 //! per read.
 
-use super::{emit_read, ir_opts};
-use crate::compile_module;
-use perry_hir::{Expr, Module, ModuleInitKind, Stmt};
+use super::emit_read;
 
 /// `(label, body lines)` for every block of the first function that contains
 /// `marker`, bodies trimmed and blank lines dropped. The chunk before the first
@@ -391,56 +389,4 @@ fn only_length_grows_the_array_arm() {
             "`.{key}` must not grow the array-length arm:\n{ir}"
         );
     }
-}
-
-/// A module past the full-outline threshold, whose init reads `o.<property>`
-/// on an `Any` local. The padding functions are what makes
-/// `decide_full_outline_ic` choose the outlined helper; nothing references
-/// them.
-fn full_outline_module_reading(property: &str) -> Module {
-    let mut m = Module::new("read_outlined.ts");
-    m.functions = (0..4000u32)
-        .map(|i| perry_hir::Function {
-            id: 10_000 + i,
-            name: format!("pad{i}"),
-            type_params: Vec::new(),
-            params: Vec::new(),
-            return_type: perry_hir::types::Type::Void,
-            body: Vec::new(),
-            is_async: false,
-            is_generator: false,
-            is_strict: true,
-            is_exported: false,
-            captures: Vec::new(),
-            decorators: Vec::new(),
-            was_plain_async: false,
-            was_unrolled: false,
-        })
-        .collect();
-    m.init = vec![
-        Stmt::Let {
-            id: 1,
-            name: "o".to_string(),
-            ty: perry_hir::types::Type::Any,
-            mutable: false,
-            init: Some(Expr::Undefined),
-        },
-        Stmt::Expr(Expr::PropertyGet {
-            object: Box::new(Expr::LocalGet(1)),
-            property: property.to_string(),
-            byte_offset: 0,
-        }),
-    ];
-    m.init_kind = ModuleInitKind::Eager;
-    m
-}
-
-fn emit_outlined_read(property: &str) -> String {
-    let module = full_outline_module_reading(property);
-    assert!(
-        crate::codegen::decide_full_outline_ic(crate::codegen::module_callable_count(&module)),
-        "test premise: the fixture must cross the full-outline threshold"
-    );
-    String::from_utf8(compile_module(&module, ir_opts(false, None)).unwrap())
-        .expect("LLVM IR should be UTF-8")
 }

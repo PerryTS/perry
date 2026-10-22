@@ -52,7 +52,9 @@ fn http_is_valid_token(s: &str) -> bool {
 fn response_headers_sent(handle: i64) -> bool {
     // An open typed payload is authoritative; only a released payload needs
     // the object's retained _header field.
-    if let Some(sr) = response_state(handle) { return sr.headers_sent || sr.header_committed; }
+    if let Some(sr) = response_state(handle) {
+        return sr.headers_sent || sr.header_committed;
+    }
     let scope = perry_ffi::TransientRootScope::enter();
     let owner = scope.root_addr(handle);
     heap::closed_field(owner.get(), b"_header").is_some_and(heap::truthy)
@@ -479,7 +481,9 @@ pub unsafe extern "C" fn js_node_http_res_remove_header(
     if name == "date" {
         // Node's removeHeader('Date') also suppresses the synthesized date.
         heap::set_field(response_root.get(), b"sendDate", f64::from_bits(TAG_FALSE));
-        if let Some(sr) = response_state_mut(response_root.get()) { sr.send_date = false; }
+        if let Some(sr) = response_state_mut(response_root.get()) {
+            sr.send_date = false;
+        }
     }
     header_values::remove(response_root.get(), &name);
     if let Some(sr) = response_state_mut(response_root.get()) {
@@ -811,7 +815,9 @@ pub unsafe extern "C" fn js_node_http_res_write_head(
         finish_heap_head(response_root.get(), status, status_message_arg);
     } else if response_state(response_root.get()).is_some_and(|s| s.committed_headers.is_none()) {
         let headers = header_values::snapshot(response_root.get());
-        if let Some(sr) = response_state_mut(response_root.get()) { sr.committed_headers = Some(headers); }
+        if let Some(sr) = response_state_mut(response_root.get()) {
+            sr.committed_headers = Some(headers);
+        }
     }
     response_root.get()
 }

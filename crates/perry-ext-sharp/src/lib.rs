@@ -13,10 +13,9 @@
 
 use image::{DynamicImage, GenericImageView, ImageFormat};
 use perry_ffi::{
-    alloc_buffer, alloc_string, build_object_shape, get_handle, js_array_get, js_array_length,
-    js_object_alloc_with_shape, js_object_set_field, pool, read_buffer_bytes, read_bytes,
-    read_string, register_handle, ArrayHeader, BufferHeader, Handle, JsPromise, JsString, JsValue,
-    Promise, StringHeader, TransientRootScope,
+    alloc_buffer, alloc_string, get_handle, js_array_get, js_array_length, pool, read_buffer_bytes,
+    read_bytes, read_string, register_handle, ArrayHeader, BufferHeader, Handle, JsPromise,
+    JsString, JsValue, Promise, StringHeader, TransientRootScope,
 };
 use std::io::Cursor;
 
@@ -814,7 +813,7 @@ pub unsafe extern "C" fn js_sharp_to_file(
                                 JsValue::from_number(size as f64),
                             );
                         }
-                        JsValue::from_object_ptr((obj.get() as *mut perry_ffi::ObjectHeader))
+                        JsValue::from_object_ptr(obj.get() as *mut perry_ffi::ObjectHeader)
                     });
                 }
                 Err(e) => promise.reject_string(&format!("Failed to save image: {}", e)),
@@ -916,7 +915,7 @@ pub extern "C" fn js_sharp_metadata(handle: Handle) -> *mut Promise {
                         JsValue::from_bool(has_alpha),
                     );
                 }
-                JsValue::from_object_ptr((obj.get() as *mut perry_ffi::ObjectHeader))
+                JsValue::from_object_ptr(obj.get() as *mut perry_ffi::ObjectHeader)
             });
         } else {
             promise.reject_string("Invalid sharp handle");
@@ -950,6 +949,7 @@ fn _ensure_alloc_string_linkage() -> *mut StringHeader {
 mod tests {
     use super::*;
     use image::{ImageBuffer, Rgba};
+    use perry_ffi::{build_object_shape, js_object_alloc_with_shape, js_object_set_field};
 
     unsafe fn object(fields: &[(&str, JsValue)]) -> JsValue {
         let scope = TransientRootScope::enter();

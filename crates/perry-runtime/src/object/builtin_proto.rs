@@ -653,14 +653,6 @@ fn receiver_fact(recv: f64) -> Option<ReceiverFact> {
     ))
 }
 
-/// The family whose prototype a by-name builtin dispatch on `recv` reads.
-pub(crate) fn receiver_family(recv: f64) -> Option<BuiltinProto> {
-    match receiver_fact(recv) {
-        Some(ReceiverFact::Builtin(family, _)) => Some(family),
-        _ => None,
-    }
-}
-
 /// The intrinsic's shadow bit and the receiver's own prototype link are
 /// the complete builtin proof; both use the same receiver classification.
 #[inline]

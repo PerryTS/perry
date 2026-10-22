@@ -18,12 +18,6 @@ pub(super) fn jsvalue_as_f64(v: f64) -> Option<f64> {
     }
 }
 
-/// Read a numeric constructor option (e.g. `highWaterMark`) off the opts
-/// object, returning `None` when absent or non-numeric.
-pub(super) fn opt_number(opts: f64, key: crate::runtime_state_key::NamedStateKey) -> Option<f64> {
-    jsvalue_as_f64(get_hidden_value(opts, key)?)
-}
-
 /// Read a boolean constructor option, returning `true` only when the option
 /// is present and truthy.
 pub(super) fn opt_bool(opts: f64, key: crate::runtime_state_key::NamedStateKey) -> bool {

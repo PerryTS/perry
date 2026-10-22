@@ -1,0 +1,1 @@
+Share the collecting refusal of ordinary named property reads between receiver failures and declined noncollecting probes. Keep shape and layout proofs inline, materialize fallback keys at the shared entry, and preserve length and global-binding reads. Add emitted-IR and Node-parity regressions for the fallback receiver cases.

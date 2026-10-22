@@ -507,6 +507,25 @@ impl LlModule {
     /// may allocate; an `external` declaration for every allocated body
     /// another module defines. Runs once, after every function exists.
     pub(crate) fn emit_fn_infos(&mut self, permanent_image: bool) {
+        let exported: Vec<String> = self
+            .functions
+            .iter()
+            .filter(|f| {
+                f.linkage.is_empty() && f.name.starts_with("__perry_wrap_") && is_js_body(f)
+            })
+            .map(|f| f.name.clone())
+            .collect();
+        let entries = self.fn_infos.borrow().entry_bodies(&exported);
+        for body in entries {
+            let Some(function) = self.function_named(&body).filter(|f| has_js_call_abi(f)) else {
+                continue;
+            };
+            let params = function.params.len() - 2;
+            let facts = self.fn_infos.borrow().facts(&body);
+            let entry = crate::call_entry::emit(self, &body, params, &facts);
+            let ilp32 = crate::target_layout::target_is_ilp32(&self.target_triple);
+            self.note_fn_info(&body, |facts| facts.set_call_entry(entry, ilp32));
+        }
         let lines = {
             let functions = &self.functions;
             let by_name: std::collections::HashMap<&str, &LlFunction> =
@@ -561,6 +580,14 @@ impl LlModule {
     /// and the in-process constructor (`for_each_final_line`) are separate
     /// consumers, so a pass living inside one of them would silently not apply
     /// to the other.
+    pub(crate) fn diagnostic_functions(&self) -> impl Iterator<Item = &LlFunction> {
+        self.functions.iter()
+    }
+
+    pub(crate) fn diagnostic_globals(&self) -> impl Iterator<Item = &str> {
+        self.globals.iter().map(String::as_str)
+    }
+
     pub(crate) fn functions_mut(&mut self) -> impl Iterator<Item = &mut LlFunction> {
         self.functions.iter_mut()
     }
@@ -628,25 +655,6 @@ impl LlModule {
             .retain(|f| !candidates.contains(&f.name) || live.contains(&f.name));
         self.defined_names
             .retain(|name| !candidates.contains(name) || live.contains(name));
-    }
-
-    /// Drop the function defined at `idx` when it is `name` (an unreferenced
-    /// typed-body clone that was not installed). Helpers it published stay:
-    /// they are shared by name.
-    pub(crate) fn remove_defined_function(&mut self, idx: usize, name: &str) {
-        if self.functions.get(idx).is_some_and(|f| f.name == name) {
-            self.functions.remove(idx);
-            self.defined_names.remove(name);
-        }
-    }
-
-    /// Rename the function defined at `idx` (typed-body dispatch: the generic
-    /// body moves off the public symbol, which the dispatcher then defines).
-    pub(crate) fn rename_defined_function(&mut self, idx: usize, new_name: &str) {
-        if let Some(f) = self.functions.get_mut(idx) {
-            f.name = new_name.to_string();
-            self.defined_names.insert(new_name.to_string());
-        }
     }
 
     /// Number of functions defined so far. Used to recover the index of a
@@ -1734,3 +1742,17 @@ fn is_js_body(f: &LlFunction) -> bool {
 
 #[cfg(test)]
 mod text_stream_tests;
+
+/// Function-info ownership proves this is a callable operation. Check its
+/// ABI types rather than parameter spelling: class method function objects
+/// use `callee`/`this`, ordinary closures use `this_closure`/`js_this`.
+fn has_js_call_abi(function: &LlFunction) -> bool {
+    function.return_type == crate::types::DOUBLE
+        && function.params.len() >= 2
+        && function.params[..2]
+            .iter()
+            .all(|(ty, _)| *ty == crate::types::I64)
+        && function.params[2..]
+            .iter()
+            .all(|(ty, _)| *ty == crate::types::DOUBLE)
+}

@@ -110,16 +110,17 @@ pub(crate) fn url_search_params_backing_of(object: f64) -> Option<*mut ObjectHea
         Some(header) if header.obj_type == crate::gc::GC_TYPE_OBJECT => {}
         _ => return None,
     }
-    // Root `obj` across the (heap-allocating) key string so a GC evacuation
-    // mid-allocation can't leave it dangling before the field read.
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let obj_handle = scope.root_raw_mut_ptr(obj);
-    let key = js_string_from_bytes(
+    // `js_url_search_params_subclass_init` stores the backing as an OWN data
+    // property of the instance, so read only the receiver's own keys by their
+    // static bytes: no key string, no handle scope, no prototype-chain [[Get]].
+    // (The by-name chain walk cost every GetIterator over an ordinary iterable
+    // a key allocation plus a full inherited lookup that found nothing.)
+    let backing = crate::object::js_object_get_own_field_or_undef(
+        object,
         URL_SEARCH_PARAMS_BACKING_KEY.as_ptr(),
-        URL_SEARCH_PARAMS_BACKING_KEY.len() as u32,
+        URL_SEARCH_PARAMS_BACKING_KEY.len(),
     );
-    let obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
-    let backing = crate::object::js_object_get_field_by_name(obj, key);
+    let backing = crate::value::JSValue::from_bits(backing.to_bits());
     if backing.is_pointer() {
         let ptr = backing.as_pointer::<ObjectHeader>() as *mut ObjectHeader;
         if !ptr.is_null() {

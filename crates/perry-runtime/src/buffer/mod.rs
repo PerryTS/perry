@@ -57,6 +57,8 @@ mod view_tests;
 pub(crate) use view::resolve_data_ptr as resolve_span_data_ptr;
 
 // ---- Re-exports: types & constants ----
+#[cfg(test)]
+pub(crate) use header::buffer_alloc_foreign;
 pub(crate) use header::buffer_payload_size;
 pub use header::{BufferHeader, BUFFER_TYPE_ID, NODE_BUFFER_CLASS_ID, SMALL_BUF_THRESHOLD};
 
@@ -65,8 +67,6 @@ pub(crate) use header::is_small_buf_slab_addr;
 // #9342: primed by `typedarray::js_u8_buffer_read_f64` (codegen slow arm).
 pub(crate) use access::{admitted_u8_read, admitted_u8_write, is_admitted_u8_cell};
 // #10694: the brand is the cell's GC type byte; see `header`'s module note.
-#[cfg(test)]
-pub(crate) use header::buffer_alloc_foreign;
 pub use header::{
     asymmetric_key_meta, buffer_alloc, buffer_backing_array_buffer, buffer_byte_offset,
     buffer_data, buffer_data_mut, crypto_key_meta, ensure_buffer_ab_alias,

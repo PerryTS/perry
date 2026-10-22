@@ -139,57 +139,6 @@ pub(crate) fn install_methods_on_existing_object(
     }
 }
 
-/// Install the EventEmitter prototype methods (`on`/`once`/`emit`/
-/// `removeListener`/`removeAllListeners`/…) on a *prototype* object as named
-/// own properties, each a closure that reads its receiver from the call-site
-/// `this` (IMPLICIT_THIS) rather than a captured instance.
-///
-/// readable-stream's `Readable.prototype.on` is `function (ev, fn) { var res =
-/// Stream.prototype.on.call(this, ev, fn); … }` — the legacy `Stream.prototype`
-/// must therefore expose `.on` (and siblings) as VALUES so the `.call(this)`
-/// borrow dispatches the EventEmitter `on` against the real stream instance.
-/// Before this, `Stream.prototype.on` was `undefined` and the `.call` threw
-/// "Function.prototype.call was called on a value that is not a function".
-///
-/// The closures capture `TAG_UNDEFINED` in slot 0; `this_value` treats that as
-/// "no fixed receiver — read IMPLICIT_THIS", which `Function.prototype.call`/
-/// `.apply` sets to the borrowed `this`.
-pub(crate) fn install_event_emitter_prototype_methods(proto: *mut ObjectHeader) {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let proto = scope.root_raw_mut_ptr(proto);
-    let methods = super::emitter_methods();
-    let mut on_method: Option<crate::gc::RuntimeHandle<'_>> = None;
-    for (index, (name, func)) in methods.into_iter().enumerate() {
-        if name == "addListener" {
-            if let Some(val) = &on_method {
-                proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
-                    crate::object::js_object_set_field(
-                        proto,
-                        index as u32 + 1,
-                        JSValue::from_bits(val.get_nanbox_u64()),
-                    )
-                });
-                continue;
-            }
-        }
-        let closure = js_closure_alloc(func, 1);
-        crate::closure::js_closure_set_capture_ptr(closure, 0, crate::value::TAG_UNDEFINED as i64);
-        let val = scope.root_nanbox_f64(f64::from_bits(
-            JSValue::pointer(closure as *const u8).bits(),
-        ));
-        if name == "on" {
-            on_method = Some(val);
-        }
-        proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
-            crate::object::js_object_set_field(
-                proto,
-                index as u32 + 1,
-                JSValue::from_bits(val.get_nanbox_u64()),
-            )
-        });
-    }
-}
-
 /// node's `EventEmitter.prototype`: the instance-state defaults
 /// (`_events`/`_eventsCount`/`_maxListeners`) then the methods, in the order
 /// `lib/events.js` assigns them, with node's two aliases (`addListener` IS

@@ -117,6 +117,16 @@ fn array_record_rest_appends_with_internal_data_property_operation() {
     crate::testing::verify_ir(&ll, "array_record_rest").unwrap();
 }
 
+/// The bodies that step the private cursor (`fadd double`). The module's
+/// public entry (`spec_public`) also converts an *incoming* int32-tagged
+/// argument with `sitofp i32`; that is the caller's value, not a slot of the
+/// cursor, so the signed-narrowing check looks only at the stepping bodies.
+fn cursor_bodies(ll: &str) -> Vec<&str> {
+    ll.split("\ndefine ")
+        .filter(|f| f.contains("fadd double"))
+        .collect()
+}
+
 #[test]
 fn array_record_cursor_increment_keeps_full_unsigned_range() {
     let ll = ir_body(vec![
@@ -141,8 +151,12 @@ fn array_record_cursor_increment_keeps_full_unsigned_range() {
         ll.lines().any(|line| line.contains("fadd double")),
         "the private cursor must retain values across the signed 2^31 boundary"
     );
+    let bodies = cursor_bodies(&ll);
+    assert!(!bodies.is_empty(), "no body steps the cursor:\n{ll}");
     assert!(
-        !ll.lines().any(|line| line.contains("sitofp i32")),
+        !bodies
+            .iter()
+            .any(|f| f.lines().any(|line| line.contains("sitofp i32"))),
         "no signed shadow slot may narrow the cursor"
     );
 }
@@ -265,8 +279,12 @@ fn array_record_local_flow_preserves_numeric_cursor_and_boolean_entry() {
         );
     }
     assert!(ll.lines().any(|line| line.contains("fadd double")));
+    let bodies = cursor_bodies(&ll);
+    assert!(!bodies.is_empty(), "no body steps the cursor:\n{ll}");
     assert!(
-        !ll.lines().any(|line| line.contains("sitofp i32")),
+        !bodies
+            .iter()
+            .any(|f| f.lines().any(|line| line.contains("sitofp i32"))),
         "the cursor must retain the full u32 range"
     );
 }

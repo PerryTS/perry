@@ -581,6 +581,7 @@ mod node_text_tests {
 
     #[test]
     fn node_codes_get_node_text() {
+        let _serial = crate::test_serial();
         assert_eq!(
             node_failure_message("UNABLE_TO_VERIFY_LEAF_SIGNATURE", "x"),
             "unable to verify the first certificate"

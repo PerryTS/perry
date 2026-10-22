@@ -105,7 +105,7 @@ fn read_stub_insert(token: u64, key_bits: u64, slot: u64) {
     // Admission belongs to publication. Alias registration changes the shape,
     // so a hit on an admitted shape needs no second shape-kind lookup.
     if crate::object::shapes::shape_object_kind_by_id(token as u32)
-        == Some(crate::object::shapes::ShapeObjectKind::OrdinaryNativeAlias)
+        .is_some_and(crate::object::shapes::ShapeObjectKind::is_native_alias)
     {
         return;
     }
@@ -326,19 +326,6 @@ unsafe fn read_slot_by_tag(obj: *const ObjectHeader, addr: usize, slot: u32) -> 
         return None;
     }
     Some(f64::from_bits(val.bits()))
-}
-
-/// Test-only raw table access for guards that live outside this module (the
-/// packed-get dictionary test). Production inserts stay private and go
-/// through [`read_stub_prime`]'s shared receiver guard (#10768).
-#[cfg(test)]
-pub(crate) fn read_stub_insert_raw_for_test(token: u64, key_bits: u64, slot: u32) {
-    read_stub_insert(token, key_bits, u64::from(slot))
-}
-
-#[cfg(test)]
-pub(crate) fn read_stub_probe_raw_for_test(token: u64, key_bits: u64) -> Option<u32> {
-    read_stub_probe(token, key_bits).map(|word| word as u32)
 }
 
 #[cfg(test)]

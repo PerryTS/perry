@@ -307,6 +307,7 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
         "js_arraylike_findIndex",
         "js_arraylike_findLast",
         "js_arraylike_findLastIndex",
+        "js_arraylike_flatMap",
     ] {
         module.declare_function(f, DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
     }
@@ -368,6 +369,11 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     module.declare_function("js_iterator_close_if_not_done", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function(
         "js_iterator_close_on_throw",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function(
+        "js_iterator_delegate_next",
         DOUBLE,
         &[DOUBLE, DOUBLE, DOUBLE],
     );

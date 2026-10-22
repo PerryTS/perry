@@ -424,9 +424,10 @@ def expand_signature_macros(text: str) -> list[tuple[int, str]]:
         if end < 0:
             raise ValueError("unterminated kind_entry! invocation")
         args = text[inv.end():end - 1]
-        match = re.match(r"\s*\w+\s*,\s*fn\s+(\w+\s*\(.*)", args, re.S)
+        # `kind_entry! { <exported name>, <Kind>, fn(<receiver>: ..) -> ret { body } }`
+        match = re.match(r"\s*(\w+)\s*,\s*\w+\s*,\s*fn\s*(\(.*)", args, re.S)
         if match:
-            out.append((inv.start(), '#[no_mangle] pub extern "C" fn ' + match.group(1)))
+            out.append((inv.start(), '#[no_mangle] pub extern "C" fn ' + match.group(1) + match.group(2)))
 
     for md in MACRO_DEF_RE.finditer(text):
         if md.group(1) != "closure_call_entry":

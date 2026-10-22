@@ -970,8 +970,6 @@ pub(crate) struct CrossModuleCtx {
         std::sync::Arc<std::collections::HashMap<String, Vec<ShortSpreadMethodCandidate>>>,
     pub object_literal_method_candidates:
         std::sync::Arc<std::collections::HashMap<String, Vec<ObjectLiteralMethodCandidate>>>,
-    /// See `CompileOptions::program_class_accessor_names`.
-    pub program_class_accessor_names: Option<std::sync::Arc<ClassAccessorNames>>,
     /// FuncIds of locally-defined async functions in this module. Populated
     /// from `hir.functions.is_async`. Used by `is_promise_expr` to refine
     /// `let p = asyncFn();` to `Promise(_)` so subsequent `p.then(cb)`
@@ -982,6 +980,9 @@ pub(crate) struct CrossModuleCtx {
     /// from the lowered iterator-return body shape and used by call lowering
     /// to attach instances to the closure-owned `g.prototype`.
     pub local_generator_funcs: std::collections::HashSet<u32>,
+    /// Sync (fixed-state) members of `local_generator_funcs`; their birth
+    /// links the prototype, so call sites emit no relink.
+    pub fixed_generator_funcs: std::collections::HashSet<u32>,
     /// FuncIds of closures that were `async` in the source and got CPS-
     /// rewritten into async-step state machines. The rewrite clears
     /// `Expr::Closure.is_async`, so the flag alone can't identify them at

@@ -541,8 +541,8 @@ pub struct JsFunctionInfo {
     /// `code`, once, when the info is born: codegen renders it for each body
     /// it emits, and every info the runtime or an addon builds is
     /// zero. A call passing at least the decoded count jumps to
-    /// `code` with its registers untouched (`js_closure_call{N}`); any other
-    /// call takes the dispatcher. Private, so an info can only be built
+    /// `code` with its registers untouched (`js_closure_call{N}`). Other compiled
+    /// calls enter `call_entry`; legacy/native records take the dispatcher. Private, so an info can only be built
     /// through [`JsFunctionInfo::of`] (typed) or the `unsafe`
     /// [`JsFunctionInfo::from_code`], and made plain only by
     /// [`JsFunctionInfo::plain`].
@@ -596,6 +596,11 @@ pub const FN_REST_MASK: u32 =
 /// The body must not keep the pointer, store it anywhere, or let it escape the
 /// call.
 pub type JsNativeArgsBody<C> = unsafe extern "C" fn(*const C, JsThis, *const f64, usize) -> f64;
+/// The generic entry of a compiled function. Argument cells belong to the
+/// caller and may be rewritten by moving GC; the callee roots these cells in
+/// place before allocating and never retains their addresses after returning.
+pub type JsCallEntry<C> =
+    unsafe extern "C" fn(*const C, JsThis, *const core::cell::UnsafeCell<f64>, usize) -> f64;
 /// `length` is valid.
 pub const FN_HAS_LENGTH: u32 = 1 << 3;
 /// An arrow function: lexical `this`, not constructable.
@@ -667,6 +672,11 @@ pub fn function_source_tail_size(info: &JsFunctionInfo) -> usize {
     }
 }
 
+/// The top nibble holds the generic-entry word's offset in eight-byte units.
+/// Zero means absent. The record describes its own layout: admission and the
+/// entry load need no source/name/constructor-tail decoding.
+pub const FN_CALL_ENTRY_SHIFT: u32 = 28;
+
 /// Byte offsets of the fields codegen emits and emitted code reads.
 pub const JS_FUNCTION_INFO_CODE_OFFSET: usize = 0;
 pub const JS_FUNCTION_INFO_PARAMS_OFFSET: usize = 8;
@@ -680,6 +690,25 @@ pub const JS_FUNCTION_INFO_PLAIN_PARAMS_OFFSET: usize =
 pub const NOT_PLAIN: u16 = u16::MAX;
 
 impl JsFunctionInfo {
+    /// The callee's argument-vector entry, directly in this immutable record.
+    /// Runtime-native records omit it. Source, name and constructor operands
+    /// retain their established offsets; the entry is the final optional word.
+    #[inline(always)]
+    pub fn call_entry(&self) -> Option<*const u8> {
+        let words = self.flags >> FN_CALL_ENTRY_SHIFT;
+        if words == 0 {
+            return None;
+        }
+        // SAFETY: codegen publishes this offset with the immutable entry word.
+        Some(unsafe {
+            (self as *const Self)
+                .cast::<u8>()
+                .add(words as usize * 8)
+                .cast::<*const u8>()
+                .read()
+        })
+    }
+
     /// The info of the body at `code` declaring `params` JS parameters, with
     /// no other facts.
     ///
@@ -994,3 +1023,69 @@ pub const NANBOX_OPERANDS: [u64; 26] = [
 ];
 
 pub mod wasi;
+
+#[cfg(test)]
+mod call_entry_layout_tests {
+    use super::*;
+
+    extern "C" fn operation(_: *const (), _: JsThis) -> f64 {
+        0.0
+    }
+    extern "C" fn entry(
+        _: *const (),
+        _: JsThis,
+        _: *const core::cell::UnsafeCell<f64>,
+        _: usize,
+    ) -> f64 {
+        0.0
+    }
+
+    #[repr(C)]
+    struct EntryOnly {
+        info: JsFunctionInfo,
+        entry: JsCallEntry<()>,
+    }
+    #[repr(C)]
+    struct EntryWithTails {
+        info: JsFunctionInfo,
+        source: [u32; 2],
+        name: [u32; 2],
+        constructor: (*const u8, *const u8, u32, u32),
+        entry: JsCallEntry<()>,
+    }
+
+    #[test]
+    fn the_entry_word_follows_existing_optional_metadata() {
+        let info = JsFunctionInfo::of(operation as JsBody0<()>);
+        assert!(info.call_entry().is_none());
+        let plain = EntryOnly {
+            info: info.with_flags(
+                ((core::mem::offset_of!(EntryOnly, entry) / 8) as u32) << FN_CALL_ENTRY_SHIFT,
+            ),
+            entry,
+        };
+        assert_eq!(plain.info.call_entry(), Some(entry as *const u8));
+        // Keep a live clone so source uses the optional range, rather than
+        // its packed representation in the otherwise idle clone fields.
+        let with_tails = EntryWithTails {
+            info: info
+                .with_flags(
+                    (((core::mem::offset_of!(EntryWithTails, entry) / 8) as u32)
+                        << FN_CALL_ENTRY_SHIFT)
+                        | FN_HAS_SOURCE
+                        | FN_HAS_NAME
+                        | FN_HAS_CONSTRUCTOR_LAYOUT,
+                )
+                .with_versioned_loop(operation as *const u8, 0, 0),
+            source: [0; 2],
+            name: [0; 2],
+            constructor: (core::ptr::null(), core::ptr::null(), 0, 0),
+            entry,
+        };
+        assert_eq!(with_tails.info.call_entry(), Some(entry as *const u8));
+        assert_eq!(
+            core::mem::size_of::<JsFunctionInfo>(),
+            JS_FUNCTION_INFO_SIZE
+        );
+    }
+}

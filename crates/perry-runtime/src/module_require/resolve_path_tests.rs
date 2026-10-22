@@ -161,7 +161,7 @@ fn registered_keys_are_verbatim_and_runtime_spellings_meet_them() {
         js_register_path_init(
             through_link.as_ptr(),
             through_link.len() as i64,
-            verbatim_key_test_init as usize as i64,
+            verbatim_key_test_init as *const () as usize as i64,
         );
     }
     let resolved = base

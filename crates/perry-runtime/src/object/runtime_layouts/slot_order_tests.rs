@@ -647,7 +647,7 @@ fn a_probe_store_of_a_pointer_into_an_old_object_keeps_its_write_barrier() {
     let scope = crate::gc::RuntimeHandleScope::new();
     let object =
         scope.root_raw_mut_ptr(unsafe { crate::object::layout_desc::perry_alloc_layout(desc) });
-    object.with_mut_ptr(|obj| unsafe { js_object_set_field(obj, 0, crate::JSValue::number(1.0)) });
+    object.with_mut_ptr(|obj| js_object_set_field(obj, 0, crate::JSValue::number(1.0)));
     let _ = crate::gc::gc_collect_minor();
     let _ = crate::gc::gc_collect_minor();
     unsafe {

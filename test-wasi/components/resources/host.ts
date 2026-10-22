@@ -56,4 +56,34 @@ for (const value of [13, 99]) {
 }
 if (dropped.length !== 4 || dropped[3] !== 99) throw new Error("failed destructor retried");
 collect();
-console.log("PASS Rust resources: ownership, borrow, transfer, exactly-once disposal, destructor traps");
+const deferred = makeComponent();
+const deferredApi = deferred.exports["perry:resources/counters@1.0.0"];
+function abandon() { deferredApi["[constructor]counter"](501); }
+function retainOnlyBorrow() { return deferredApi["[constructor]counter"](502).borrow(); }
+function explicitlyRelease() { deferredApi["[constructor]counter"](503).dispose(); }
+function transferThenForget() { deferredApi.consume(deferredApi["[constructor]counter"](504)); }
+abandon();
+let liveBorrow: ReturnType<typeof retainOnlyBorrow> | undefined = retainOnlyBorrow();
+explicitlyRelease();
+transferThenForget();
+collect();
+// Finalizers run as jobs, after this stack and its temporary roots are gone.
+setImmediate(() => {
+  collect();
+  setImmediate(() => {
+    for (const id of [501, 503, 504]) {
+      if (dropped.filter(value => value === id).length !== 1) throw new Error("deferred or explicit resource dropped incorrectly");
+    }
+    if (dropped.includes(502) || deferredApi["[method]counter.read"](liveBorrow!) !== 502) throw new Error("borrow did not keep its owner alive");
+    liveBorrow = undefined;
+    collect();
+    setImmediate(() => {
+      if (dropped.filter(value => value === 502).length !== 1) throw new Error("unreachable borrowed owner was not collected");
+      deferred.dispose();
+      for (const id of [501, 502, 503, 504]) {
+        if (dropped.filter(value => value === id).length !== 1) throw new Error("deferred resource destructor was repeated");
+      }
+      console.log("PASS Rust resources: ownership, borrow, transfer, exactly-once disposal, destructor traps");
+    });
+  });
+});

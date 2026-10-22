@@ -411,11 +411,9 @@ pub(crate) fn stream_prototype_value(name: &str) -> f64 {
 /// `Object.create(stream.<name>.prototype)`: a direct instance, which owns
 /// only the state its init defines.
 pub(super) fn alloc_stream_instance(
-    opts: f64,
     kind: super::constructors::birth::Kind,
 ) -> (f64, Option<super::constructors::birth_memo::Input>) {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let opts = scope.root_nanbox_f64(opts);
     let (name, native_key) = kind.constructor();
     let ctor = scope.root_nanbox_f64(
         crate::object::native_module::minted_native_callable_export(native_key)

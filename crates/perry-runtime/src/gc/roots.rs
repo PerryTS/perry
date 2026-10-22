@@ -76,7 +76,10 @@ pub(crate) use shadow_stack::bound_slot_meta;
 #[cfg(any(test, not(perry_native_stack_maps)))]
 pub(crate) use shadow_stack::SHADOW;
 #[cfg(any(test, not(perry_native_stack_maps)))]
-pub(crate) use shadow_stack::{frame_root_restore, frame_root_savepoint, FrameRootSavepoint};
+pub(crate) use shadow_stack::{frame_root_restore, frame_root_savepoint};
+// Only the WASI exception handlers name the savepoint type.
+#[cfg(target_os = "wasi")]
+pub(crate) use shadow_stack::FrameRootSavepoint;
 #[cfg(any(test, not(perry_native_stack_maps)))]
 pub use shadow_stack::{
     js_shadow_frame_enter, js_shadow_frame_pop, js_shadow_frame_push, js_shadow_frame_restore_to,

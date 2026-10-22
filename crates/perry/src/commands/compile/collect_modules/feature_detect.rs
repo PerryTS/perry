@@ -127,6 +127,9 @@ fn debug_hir_uses_url_engine(hir_debug: &str) -> bool {
         // namespace at run time; its members are then reached dynamically.
         || hir_debug.contains("String(\"node:url\")")
         || hir_debug.contains("String(\"url\")")
+        // A TypeScript `require("node:url")` keeps no specifier in the HIR, so
+        // the factory name is the only surviving signal (#11560).
+        || hir_debug.contains("pathToFileURL")
 }
 
 fn imports_fs_promises_glob(hir_module: &perry_hir::Module) -> bool {
@@ -593,6 +596,7 @@ pub(super) fn detect_optional_feature_usage(
             || hir_debug.contains("module: \"url\"")
             || hir_debug.contains("String(\"node:url\")")
             || hir_debug.contains("String(\"url\")")
+            || hir_debug.contains("pathToFileURL")
         {
             ctx.uses_global_url = true;
         }

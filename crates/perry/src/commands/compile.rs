@@ -23,6 +23,8 @@ mod bundle_ios;
 mod bundle_macos;
 mod compile_env;
 mod defines;
+mod module_aliases;
+mod module_prefixes;
 pub(crate) mod sync_program;
 // `pub(crate)` so `commands::deps` can reuse `cjs_wrap::detect`'s
 // comment/string masker for its source scans (D005) instead of duplicating a
@@ -58,6 +60,7 @@ mod parse_cache;
 mod post_link;
 mod precompile_capture;
 mod program_facts;
+mod reach_report;
 mod reachability;
 mod size_report;
 mod solid_config;

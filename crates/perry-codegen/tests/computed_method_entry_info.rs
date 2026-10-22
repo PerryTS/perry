@@ -33,10 +33,17 @@ console.log(d[key]());
         .into_iter()
         .collect();
     let ir = String::from_utf8(compile_module(&module, options).unwrap()).unwrap();
-    assert!(ir.contains("js_register_class_computed_method"), "the member is computed");
+    assert!(
+        ir.contains("js_register_class_computed_method"),
+        "the member is computed"
+    );
     for line in ir.lines() {
-        let Some(decl) = line.strip_prefix("@") else { continue };
-        let Some((name, rhs)) = decl.split_once(" = ") else { continue };
+        let Some(decl) = line.strip_prefix("@") else {
+            continue;
+        };
+        let Some((name, rhs)) = decl.split_once(" = ") else {
+            continue;
+        };
         assert!(
             !(name.ends_with("__eclo$info") && rhs.starts_with("external ")),
             "@{name} is named but this module defines no such entry"

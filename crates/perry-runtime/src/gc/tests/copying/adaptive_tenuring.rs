@@ -219,13 +219,14 @@ fn allocation_census_seeds_the_first_cap_before_any_minor() {
 }
 
 #[test]
-fn quiet_cycles_restore_power_on_threshold_debounced() {
+fn quiet_full_eden_windows_restore_maximum_threshold_debounced() {
     let _guard = CopyingNurseryTestGuard::new(SLOTS);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
 
     fill_slots_with_heavy_influx();
     let _ = gc_collect_minor();
     // #9851: the occupancy floor, not 1. What this test protects — a DEBOUNCED
-    // restore, at most one step per cycle, ending at the power-on threshold —
+    // restore, at most one step per cycle, ending at the maximum threshold —
     // is asserted structurally below and is unchanged.
     assert_eq!(
         crate::gc::tenuring::tenuring_survivals(),
@@ -239,14 +240,28 @@ fn quiet_cycles_restore_power_on_threshold_debounced() {
     // single quiet cycle (e.g. a malloc-count trigger before Eden fills)
     // must not flush the aging pipeline into a copy burst.
     let mut seen = vec![crate::gc::tenuring::tenuring_survivals()];
+    let dead_payload = vec![b'x'; 4096];
     for _ in 0..8 {
+        // A quiet lifetime observation requires fresh allocation to fill Eden;
+        // repeated empty gc() calls must not advance the learned-mode clock.
+        // The payloads are unrooted, so the real collection sees quiet influx.
+        let cap = crate::gc::tenuring::scavenge_nursery_cap_effective_bytes();
+        while crate::arena::copying_from_space_in_use_bytes()
+            .saturating_sub(crate::arena::copying_active_survivor_in_use_bytes())
+            < cap
+        {
+            let _ = crate::string::js_string_from_bytes(
+                dead_payload.as_ptr(),
+                dead_payload.len() as u32,
+            );
+        }
         let _ = gc_collect_minor();
         seen.push(crate::gc::tenuring::tenuring_survivals());
     }
     assert_eq!(
         *seen.last().unwrap(),
         GC_COPY_PROMOTION_SURVIVALS,
-        "sustained quiet influx must restore the power-on threshold, saw {seen:?}"
+        "sustained quiet influx must restore the maximum threshold, saw {seen:?}"
     );
     for pair in seen.windows(2) {
         assert!(

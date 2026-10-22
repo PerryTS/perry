@@ -159,7 +159,7 @@ enum MethodKeyKind {
 
 /// Lower an object-literal method (`m() {}`, `[Symbol.x]() {}`) into its
 /// value expression (a `FuncRef` for capture-free non-`this` methods, else a
-/// `Closure`) plus its key and whether the body uses `this`.
+/// dynamic-`this` `Closure`) plus its key.
 ///
 /// Returns `Ok(None)` for key shapes the legacy loop skipped (a `Num`/other
 /// non-computed PropName, or a computed key that failed to lower). Extracted
@@ -168,7 +168,7 @@ enum MethodKeyKind {
 fn lower_method_prop(
     ctx: &mut LoweringContext,
     method: &ast::MethodProp,
-) -> Result<Option<(MethodKeyKind, Expr, bool)>> {
+) -> Result<Option<(MethodKeyKind, Expr)>> {
     let method_key = match &method.key {
         ast::PropName::Ident(ident) => MethodKeyKind::Static(ident.sym.to_string()),
         ast::PropName::Str(s) => MethodKeyKind::Static(s.value.as_str().unwrap_or("").to_string()),
@@ -429,9 +429,16 @@ fn lower_method_prop(
     captures.dedup();
     captures = ctx.filter_module_level_captures(captures);
 
-    // Check if the method body uses `this` — even with no outer-scope
-    // captures we must emit a Closure so the object-literal creation code
-    // can patch capture slot 0 with the object pointer.
+    // A method whose body uses `this` is emitted as a Closure even with no
+    // outer-scope captures: a closure value is what reads its call receiver
+    // (`%js_this`). An object-literal method is a REGULAR function, so its
+    // `this` is the receiver of each call (`Object.create(proto).m()` binds
+    // the instance, `m.call(other)` binds `other`), never the object the
+    // literal built. Every literal path therefore takes the closure as a
+    // dynamic-`this` value (`captures_this: false`), exactly like accessors
+    // (`lower_accessor_prop`) and the function-expression spelling: no
+    // reserved `this` capture, no post-construction patch, and a method call
+    // through any receiver stays on the probe's ordinary call path.
     let uses_this = closure_uses_this(&body);
 
     let value_expr: Expr = if captures.is_empty() && !uses_this {
@@ -461,7 +468,7 @@ fn lower_method_prop(
         });
         Expr::FuncRef(func_id)
     } else {
-        // Has captures: emit as Closure
+        // Has captures or reads `this`: emit as a dynamic-`this` Closure
         let mut all_assigned = Vec::new();
         for stmt in &body {
             collect_assigned_locals_stmt(stmt, &mut all_assigned);
@@ -472,12 +479,6 @@ fn lower_method_prop(
             .filter(|id| assigned_set.contains(id) || ctx.var_hoisted_ids.contains(id))
             .copied()
             .collect();
-        let captures_this = uses_this;
-        let enclosing_class = if captures_this {
-            ctx.current_class.clone()
-        } else {
-            None
-        };
         Expr::Closure {
             func_id,
             params,
@@ -485,16 +486,16 @@ fn lower_method_prop(
             body,
             captures,
             mutable_captures,
-            captures_this,
+            captures_this: false,
             captures_new_target: false,
-            enclosing_class,
+            enclosing_class: None,
             is_arrow: false,
             is_async: method.function.is_async,
             is_generator: method.function.is_generator,
             is_strict: method_strict,
         }
     };
-    Ok(Some((method_key, value_expr, uses_this)))
+    Ok(Some((method_key, value_expr)))
 }
 
 /// Lower an object-literal accessor (`get k() {}` / `set k(v) {}`) into its
@@ -910,14 +911,10 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                 }
                 ast::Prop::Method(method) => {
                     // `is_closed_shape` admitted only static-key, non-async,
-                    // non-generator, super-free methods. Lower the body with
-                    // the shared method lowering, then take the closure as a
-                    // dynamic-`this` value — identical to the function-
-                    // expression spelling — so no post-construction `this`
-                    // patch is needed and `t.m()` / `f.call(other)` both bind
-                    // the call receiver, as the spec says.
-                    let Some((mkey, value_expr, _uses_this)) = lower_method_prop(ctx, method)?
-                    else {
+                    // non-generator, super-free methods. The shared method
+                    // lowering yields a dynamic-`this` value, so `t.m()` and
+                    // `f.call(other)` both bind the call receiver.
+                    let Some((mkey, value)) = lower_method_prop(ctx, method)? else {
                         bail = true;
                         break;
                     };
@@ -929,38 +926,6 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                         bail = true;
                         break;
                     }
-                    let value = match value_expr {
-                        Expr::Closure {
-                            func_id,
-                            params,
-                            return_type,
-                            body,
-                            captures,
-                            mutable_captures,
-                            captures_this: _,
-                            captures_new_target,
-                            enclosing_class: _,
-                            is_arrow,
-                            is_async,
-                            is_generator,
-                            is_strict,
-                        } => Expr::Closure {
-                            func_id,
-                            params,
-                            return_type,
-                            body,
-                            captures,
-                            mutable_captures,
-                            captures_this: false,
-                            captures_new_target,
-                            enclosing_class: None,
-                            is_arrow,
-                            is_async,
-                            is_generator,
-                            is_strict,
-                        },
-                        other => other,
-                    };
                     fields.push((key, Type::Any, value));
                 }
                 _ => unreachable!(),
@@ -1062,10 +1027,6 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                 value: Expr,
                 infer_name: bool,
             },
-            /// Static-string method whose body uses `this`.
-            MethodByName { key: String, closure: Expr },
-            /// Computed-key method whose body uses `this`.
-            SymbolMethod { key: Expr, closure: Expr },
             /// `get k(){}` / `set k(v){}` accessor (#2442). `getter`/`setter`
             /// is either the lowered closure or `Expr::Undefined`; the runtime
             /// merges a separate get/set for the same key.
@@ -1170,39 +1131,24 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                         ctx.object_super_home_stack.push(param_id);
                         let lowered_method = lower_method_prop(ctx, method);
                         ctx.object_super_home_stack.pop();
-                        let Some((mkey, value_expr, uses_this)) = lowered_method? else {
+                        let Some((mkey, value_expr)) = lowered_method? else {
                             continue;
                         };
-                        match mkey {
-                            MethodKeyKind::Static(k) => {
-                                if uses_this {
-                                    ops.push(SpreadOp::MethodByName {
-                                        key: k,
-                                        closure: value_expr,
-                                    });
-                                } else {
-                                    ops.push(SpreadOp::Set {
-                                        key: Expr::String(k),
-                                        value: value_expr,
-                                        infer_name: false,
-                                    });
-                                }
-                            }
-                            MethodKeyKind::Computed(ke) => {
-                                if uses_this {
-                                    ops.push(SpreadOp::SymbolMethod {
-                                        key: ke,
-                                        closure: value_expr,
-                                    });
-                                } else {
-                                    ops.push(SpreadOp::Set {
-                                        key: ke,
-                                        value: value_expr,
-                                        infer_name: true,
-                                    });
-                                }
-                            }
-                        }
+                        // A method is a data property of the literal
+                        // (`CreateDataPropertyOrThrow`); its value reads its
+                        // call receiver, so nothing is patched afterwards.
+                        ops.push(match mkey {
+                            MethodKeyKind::Static(k) => SpreadOp::Set {
+                                key: Expr::String(k),
+                                value: value_expr,
+                                infer_name: false,
+                            },
+                            MethodKeyKind::Computed(ke) => SpreadOp::Set {
+                                key: ke,
+                                value: value_expr,
+                                infer_name: true,
+                            },
+                        });
                     }
                     // Object-literal getters/setters (#2442): lower to a
                     // `js_object_define_accessor` op at this source position.
@@ -1255,8 +1201,8 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
         // Methods containing `super` capture `param_id` as their home object.
         // Those fail closed and retain the IIFE, as do computed keys, spreads,
         // accessors, prototype setters, and any other source-ordered op. A
-        // method that only observes dynamic `this` is safe here: the ordinary
-        // object-literal lowering already patches its reserved receiver slot.
+        // method that observes `this` is an ordinary value here: it reads its
+        // call receiver.
         let value_is_home_independent = |value: &Expr| {
             let mut refs = Vec::new();
             let mut visited_closures = std::collections::HashSet::new();
@@ -1275,7 +1221,6 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                     value,
                     infer_name: false,
                 } => value_is_home_independent(value),
-                SpreadOp::MethodByName { closure, .. } => value_is_home_independent(closure),
                 _ => false,
             });
         if can_emit_static_object {
@@ -1287,7 +1232,6 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                         value,
                         infer_name: false,
                     } => (key, value),
-                    SpreadOp::MethodByName { key, closure } => (key, closure),
                     _ => unreachable!("static object admission checked every op"),
                 })
                 .collect();
@@ -1298,8 +1242,8 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
         // Static data definitions and spreads already have a source-ordered
         // HIR builder. No hidden home object is needed, so allocating and
         // calling an IIFE merely to build the fresh literal is redundant.
-        // Check every op: computed definitions, accessors, prototype setters
-        // and receiver-bound methods retain the complete builder above.
+        // Check every op: computed definitions, accessors and prototype
+        // setters retain the complete builder above.
         let can_emit_spread_object = has_spread
             && ops.iter().all(|op| match op {
                 SpreadOp::Set {
@@ -1349,8 +1293,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                         key: Expr::String(name),
                         infer_name: false,
                         ..
-                    }
-                    | SpreadOp::MethodByName { key: name, .. } => name,
+                    } => name,
                     _ => {
                         eligible = false;
                         break;
@@ -1466,18 +1409,6 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                         )));
                     }
                 }
-                SpreadOp::MethodByName { key, closure } => {
-                    body.push(Stmt::Expr(extern_call(
-                        "js_object_set_method_by_name",
-                        vec![Expr::LocalGet(param_id), Expr::String(key), closure],
-                    )));
-                }
-                SpreadOp::SymbolMethod { key, closure } => {
-                    body.push(Stmt::Expr(extern_call(
-                        "js_object_set_property_key_method",
-                        vec![Expr::LocalGet(param_id), key, closure],
-                    )));
-                }
                 SpreadOp::DefineAccessor {
                     key,
                     getter,
@@ -1547,15 +1478,8 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
     // (typically symbol-typed locals like `{ [symProp]: 42 }`). Deferred
     // and emitted as statements inside an IIFE wrapper after the
     // static-key Object literal is built.
-    //
-    // For `Prop::Method` with a computed key whose body uses `this`
-    // (e.g. `{ [Symbol.toPrimitive](hint) { return this.value; } }`),
-    // we emit a dedicated `js_object_set_symbol_method` runtime call
-    // that BOTH stores the closure in the symbol side-table AND
-    // patches the closure's reserved `this` slot with the object.
     enum PostInit {
         SetValue { key: Expr, value: Expr },
-        SetMethodWithThis { key: Expr, closure: Expr },
     }
     let mut computed_post_init: Vec<PostInit> = Vec::new();
     for prop in &obj.props {
@@ -1613,14 +1537,10 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                     props.push((name, value));
                 }
                 ast::Prop::Method(method) => {
-                    // Inline method: `{ help(): string { ... } }`. Computed
-                    // keys (e.g. `[Symbol.toPrimitive](hint) {}`) get routed
-                    // through the IIFE wrapper's SetMethodWithThis post-init,
-                    // which emits a `js_object_set_symbol_method` call that
-                    // also patches the closure's reserved `this` slot. Shared
-                    // with the spread path via `lower_method_prop`.
-                    let Some((method_key, value_expr, uses_this)) = lower_method_prop(ctx, method)?
-                    else {
+                    // Inline method: `{ help(): string { ... } }`, a
+                    // dynamic-`this` value shared with the spread path via
+                    // `lower_method_prop`. A computed key is set post-init.
+                    let Some((method_key, value_expr)) = lower_method_prop(ctx, method)? else {
                         continue;
                     };
                     match method_key {
@@ -1628,17 +1548,10 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                             props.push((key_str, value_expr));
                         }
                         MethodKeyKind::Computed(key_expr) => {
-                            if uses_this {
-                                computed_post_init.push(PostInit::SetMethodWithThis {
-                                    key: key_expr,
-                                    closure: value_expr,
-                                });
-                            } else {
-                                computed_post_init.push(PostInit::SetValue {
-                                    key: key_expr,
-                                    value: value_expr,
-                                });
-                            }
+                            computed_post_init.push(PostInit::SetValue {
+                                key: key_expr,
+                                value: value_expr,
+                            });
                         }
                     }
                 }
@@ -1737,21 +1650,6 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                     "js_object_literal_infer_computed_function_name",
                     vec![Expr::LocalGet(prop_key_id), Expr::LocalGet(value_id)],
                 )));
-            }
-            PostInit::SetMethodWithThis { key, closure } => {
-                // Emit a direct call to the runtime helper that
-                // stores the closure in the symbol side-table AND
-                // patches its reserved `this` slot with __o.
-                body.push(Stmt::Expr(Expr::Call {
-                    callee: Box::new(Expr::ExternFuncRef {
-                        name: "js_object_set_symbol_method".to_string(),
-                        param_types: Vec::new(),
-                        return_type: Type::Any,
-                    }),
-                    args: vec![Expr::LocalGet(param_id), key, closure],
-                    type_args: Vec::new(),
-                    byte_offset: 0,
-                }));
             }
         }
     }

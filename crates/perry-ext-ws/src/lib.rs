@@ -81,6 +81,7 @@ use std::sync::Mutex;
 
 use crate::codec::{Incoming, Message, WsError};
 
+#[cfg(test)]
 const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 const TAG_MASK: u64 = 0xFFFF_0000_0000_0000;
 const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;

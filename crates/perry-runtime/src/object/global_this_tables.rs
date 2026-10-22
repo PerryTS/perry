@@ -47,6 +47,7 @@ macro_rules! builtin_constructors {
         /// Zero belongs to every ordinary, wrapper and bound function.
         #[repr(u8)]
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        #[allow(dead_code)] // `None` is the zero encoding
         pub(crate) enum BuiltinConstructorIdentity { None = 0, $($name,)* }
         impl BuiltinConstructorIdentity {
             #[inline(always)]

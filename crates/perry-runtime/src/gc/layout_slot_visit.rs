@@ -312,7 +312,6 @@ unsafe fn visit_gc_rewrite_slot_descriptors_with<const INLINE_LAYOUT: bool>(
     if header.is_null() || (*header).gc_flags & GC_FLAG_FORWARDED != 0 {
         return;
     }
-    let obj_type = (*header).obj_type;
     let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
     match gc_type_rewrite_descriptor_kind((*header).obj_type) {
         GcRewriteDescriptorKind::Array => {

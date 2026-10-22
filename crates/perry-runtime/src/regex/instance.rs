@@ -42,6 +42,9 @@ pub(super) fn new(data: impl FnOnce() -> *const RegExpData) -> *mut RegExpHeader
                 slots.write(matcher);
                 // GC_STORE_AUDIT(INIT): lastIndex starts at Number zero on every evaluation.
                 slots.add(1).write(0.0f64.to_bits());
+                // The floor is exactly the two header words today, so the range is empty;
+                // it fills the slack if the floor grows.
+                #[allow(clippy::reversed_empty_ranges)]
                 for i in 2..crate::object::INLINE_SLOT_FLOOR {
                     // GC_STORE_AUDIT(INIT): pointer-free physical slack for ordinary key adds.
                     slots.add(i).write(crate::value::TAG_UNDEFINED);

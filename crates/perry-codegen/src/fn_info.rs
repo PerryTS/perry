@@ -101,6 +101,9 @@ pub(crate) struct FnInfoFacts {
     pub constructor_layout: Option<ConstructorLayout>,
     /// Compiler-private synchronous continuation: mutable captures are its state slots.
     pub fixed_generator_state: bool,
+    /// The one generic entry for this body's fixed-signature operation.
+    pub call_entry: Option<String>,
+    pub call_entry_offset_words: u8,
 }
 
 /// The rest kind of a body with a rest / `arguments` array.
@@ -112,6 +115,32 @@ pub(crate) enum RestKind {
 }
 
 impl FnInfoFacts {
+    /// A direct, immutable layout operand rather than a tail-format walk.
+    pub(crate) fn set_call_entry(&mut self, entry: String, ilp32: bool) {
+        // The wasm32 C layout aligns the final i64 mask to eight bytes.
+        let mut offset = if ilp32 {
+            56
+        } else {
+            crate::runtime_abi::JS_FUNCTION_INFO_SIZE
+        };
+        if let (Some(source), Some(_)) = (&self.source, &self.versioned) {
+            // Framed source also carries its decoded offset and length.
+            offset += if source.decoded_offset.is_some() { 16 } else { 8 };
+        }
+        if self.name.is_some() {
+            offset += 8;
+        }
+        if self.constructor_layout.is_some() {
+            offset += if ilp32 { 16 } else { 24 };
+        }
+        assert!(
+            offset % 8 == 0 && offset / 8 < 16,
+            "call entry layout fits its nibble"
+        );
+        self.call_entry_offset_words = (offset / 8) as u8;
+        self.call_entry = Some(entry);
+    }
+
     /// A body whose array parameter bundles every argument from `fixed` on.
     pub(crate) fn set_rest(&mut self, fixed: usize, kind: RestKind) {
         let bit = match kind {
@@ -213,6 +242,18 @@ impl FnInfoState {
         self.facts.entry(body.to_string()).or_default()
     }
 
+    /// Bodies whose immutable info will be defined by this module.
+    pub(crate) fn entry_bodies(&self, exported: &[String]) -> Vec<String> {
+        let mut bodies = self.requested.clone();
+        bodies.extend(self.facts.keys().cloned());
+        bodies.extend(exported.iter().cloned());
+        bodies.into_iter().collect()
+    }
+
+    pub(crate) fn facts(&self, body: &str) -> FnInfoFacts {
+        self.facts.get(body).cloned().unwrap_or_default()
+    }
+
     /// The `@...$info` global lines: a definition for every body this module
     /// defines that is requested or has recorded facts or is `exported`
     /// (an external value wrapper another module may allocate), and an
@@ -256,7 +297,7 @@ impl FnInfoState {
 /// when a call reaches it directly, else zero (legacy records stay on the
 /// dispatcher). A compiled
 /// body is plain unless it bundles a rest or `arguments` array: that body
-/// takes its arguments through the dispatcher's bundling arm. Every other
+/// takes its arguments through its callee-owned generic entry. Every other
 /// compiled body (async and generator bodies included: the body itself
 /// builds the promise or the generator) takes the call's registers as they
 /// are, the extra ones ignored.
@@ -309,6 +350,7 @@ fn render_definition(
             }
     });
     let flags = facts.flags
+        | (u32::from(facts.call_entry_offset_words) << crate::runtime_abi::FN_CALL_ENTRY_SHIFT)
         | FN_COMPILED_BODY
         | source_flags
         | if facts.constructor_layout.is_some() {
@@ -431,6 +473,10 @@ fn render_definition(
             layout.descriptor, layout.operands, layout.symbols
         ));
     }
+    if let Some(entry) = facts.call_entry {
+        types.push("ptr".to_string());
+        fields.push(format!("ptr @{entry}"));
+    }
     if types.len() == 1 {
         format!("@{info} = {linkage}constant {info_type} {value}")
     } else {
@@ -445,6 +491,45 @@ fn render_definition(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn call_entry_offset_describes_native_and_wasm_optional_tails() {
+        let mut facts = FnInfoFacts::default();
+        facts.set_call_entry("entry".into(), false);
+        assert_eq!(facts.call_entry_offset_words, 8);
+        facts.source = Some(RetainedSource {
+            global: "source".into(),
+            offset: 0,
+            decoded_offset: None,
+            byte_len: 1,
+            is_non_strict_ordinary: false,
+        });
+        facts.versioned = Some(CloneTarget {
+            symbol: "clone".into(),
+            captures: 0,
+            boxed_mask: 0,
+        });
+        facts.name = Some(RetainedName {
+            global: "name".into(),
+            byte_len: 1,
+            image: false,
+        });
+        facts.constructor_layout = Some(ConstructorLayout {
+            descriptor: "descriptor".into(),
+            operands: "operands".into(),
+            symbols: 0,
+        });
+        facts.set_call_entry("entry".into(), false);
+        assert_eq!(facts.call_entry_offset_words, 13);
+        facts.set_call_entry("entry".into(), true);
+        assert_eq!(facts.call_entry_offset_words, 11);
+        // Framed source widens the tail by one more 8-byte unit.
+        facts.source.as_mut().unwrap().decoded_offset = Some(7);
+        facts.set_call_entry("entry".into(), false);
+        assert_eq!(facts.call_entry_offset_words, 14);
+        facts.set_call_entry("entry".into(), true);
+        assert_eq!(facts.call_entry_offset_words, 12);
+    }
 
     fn defined(params: usize, linkage: &str) -> Option<DefinedBody> {
         Some(DefinedBody {

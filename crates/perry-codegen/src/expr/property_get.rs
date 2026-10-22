@@ -31,12 +31,11 @@ use crate::nanbox::{double_literal, POINTER_MASK_I64};
 use crate::native_value::{
     BoundsState, BufferAccessMode, LoweredValue, MaterializationReason, NativeRep, SemanticKind,
 };
-use crate::rooting;
 use crate::type_analysis::{
     is_array_expr, is_map_expr, is_set_expr, is_string_expr, is_url_search_params_expr,
     is_url_search_params_subclass_expr, receiver_class_name, receiver_is_error_type,
 };
-use crate::types::{DOUBLE, I1, I16, I32, I64, I8, PTR};
+use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 
 use super::property_get_names::{
     is_headers_method_name, is_http_agent_method_name, is_http_client_request_method_name,
@@ -96,9 +95,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
     }
     if let Expr::PropertyGet {
-        object,
-        property,
-        byte_offset,
+        object, property, ..
     } = expr
     {
         if let Some(value) =

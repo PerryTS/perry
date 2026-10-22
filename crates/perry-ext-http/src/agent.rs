@@ -56,7 +56,6 @@ pub(crate) use tls_compat::{
 use tls_compat::{emit_default_https_agent, sync_default_https_agent};
 
 const PTR_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
-const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 
 extern "C" {

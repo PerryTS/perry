@@ -118,7 +118,7 @@ pub const NATIVE_MODULES: &[&str] = &[
     // Served entirely by perry-runtime; a no-op-style Perry-native
     // surface like `perry/thread` (doesn't resolve under Node/Bun).
     "perry/gc",
-    "perry/component", // typed WIT components; optional native host archive
+    "perry/component",         // typed WIT components; optional native host archive
     "perry/updater",           // auto-update client (@perry/updater signer side)
     "perry/container",         // container runtime surface
     "perry/container-compose", // docker-compose-style orchestration

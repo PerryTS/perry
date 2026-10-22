@@ -244,15 +244,24 @@ pub unsafe fn build_rest_array_rooted(
     values: &[crate::gc::RuntimeHandle<'_>],
     arguments_object: bool,
 ) -> f64 {
-    let arr = crate::array::js_array_alloc(values.len() as u32);
-    let mut cur = arr;
-    for handle in values.iter() {
-        cur = crate::array::js_array_push_f64(cur, handle.get_nanbox_f64());
+    // One allocation of the final length, then each value read from its
+    // handle AFTER it (the allocation may collect and move them), and one
+    // layout rebuild: a push per argument re-checked growth, element
+    // descriptors and the slot barrier on every element.
+    let count = values.len() as u32;
+    let arr = crate::array::js_array_alloc(count);
+    (*arr).length = count;
+    let elements =
+        crate::array::array_elements_ptr(arr as *const crate::array::ArrayHeader) as *mut f64;
+    for (index, handle) in values.iter().enumerate() {
+        // GC_STORE_AUDIT(BARRIERED): bulk initialization of the newborn array is followed by its layout/barrier rebuild.
+        std::ptr::write(elements.add(index), handle.get_nanbox_f64());
     }
+    crate::array::rebuild_array_layout(arr);
     if arguments_object {
-        crate::array::mark_array_as_arguments_object(cur as *const crate::array::ArrayHeader);
+        crate::array::mark_array_as_arguments_object(arr as *const crate::array::ArrayHeader);
     }
-    f64::from_bits(crate::value::JSValue::pointer(cur as *mut u8).bits())
+    f64::from_bits(crate::value::JSValue::pointer(arr as *mut u8).bits())
 }
 
 /// Dispatch a closure with `args` to its body using a rest-bundled call.

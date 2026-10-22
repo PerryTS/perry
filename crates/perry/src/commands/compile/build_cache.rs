@@ -614,6 +614,10 @@ fn eligibility(args: &CompileArgs, project_root: &Path) -> Result<(), String> {
     if !args.asset_module.is_empty() {
         return Err("asset-module".to_string());
     }
+    // Aliases change resolution without appearing in any source file.
+    if !args.module_alias.is_empty() {
+        return Err("module-alias".to_string());
+    }
     if args.enable_wasm_runtime {
         return Err("wasm-runtime".to_string());
     }
@@ -632,6 +636,10 @@ fn eligibility(args: &CompileArgs, project_root: &Path) -> Result<(), String> {
     }
     if args.explain_lowering {
         return Err("explain-lowering".to_string());
+    }
+    // A reach census must run even when an identical finished build exists.
+    if std::env::var_os("PERRY_REACH_REPORT").is_some() {
+        return Err("reach-report".to_string());
     }
     // #6952: a cached build reuses the finished binary and never runs codegen,
     // so the report would be empty. Same reasoning as explain-lowering above.

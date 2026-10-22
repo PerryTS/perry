@@ -101,8 +101,7 @@ pub(crate) fn init_readable_in_place(
 pub extern "C" fn js_node_stream_readable_new(opts: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let opts = scope.root_nanbox_f64(opts);
-    let (readable, proof) =
-        proto_methods::alloc_stream_instance(opts.get_nanbox_f64(), super::birth::Kind::Readable);
+    let (readable, proof) = proto_methods::alloc_stream_instance(super::birth::Kind::Readable);
     let readable = scope.root_nanbox_f64(readable);
     init_readable_in_place(
         readable.get_nanbox_f64(),
@@ -450,8 +449,7 @@ pub(crate) fn init_writable_in_place(
 pub extern "C" fn js_node_stream_writable_new(opts: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let opts = scope.root_nanbox_f64(opts);
-    let (writable, proof) =
-        proto_methods::alloc_stream_instance(opts.get_nanbox_f64(), super::birth::Kind::Writable);
+    let (writable, proof) = proto_methods::alloc_stream_instance(super::birth::Kind::Writable);
     let writable = scope.root_nanbox_f64(writable);
     init_writable_in_place(
         writable.get_nanbox_f64(),
@@ -601,14 +599,11 @@ enum DuplexKind {
 fn new_duplex_kind(opts: f64, kind: DuplexKind) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let opts = scope.root_nanbox_f64(opts);
-    let (stream, proof) = proto_methods::alloc_stream_instance(
-        opts.get_nanbox_f64(),
-        match kind {
-            DuplexKind::Duplex => super::birth::Kind::Duplex,
-            DuplexKind::Transform => super::birth::Kind::Transform,
-            DuplexKind::PassThrough => super::birth::Kind::PassThrough,
-        },
-    );
+    let (stream, proof) = proto_methods::alloc_stream_instance(match kind {
+        DuplexKind::Duplex => super::birth::Kind::Duplex,
+        DuplexKind::Transform => super::birth::Kind::Transform,
+        DuplexKind::PassThrough => super::birth::Kind::PassThrough,
+    });
     let stream = scope.root_nanbox_f64(stream);
     match kind {
         DuplexKind::Duplex => init_duplex_in_place(

@@ -68,9 +68,8 @@ pub(crate) fn has_stream_listeners(stream: f64, event: &[u8]) -> bool {
 pub(crate) use event_emitter::validate_max_listeners;
 // node EventEmitter instance state (EventEmitter.init) and the prototype defaults.
 pub(crate) use event_emitter::{
-    constructor_field_set, init_event_emitter_capture, init_event_emitter_state,
-    init_event_emitter_state_with_presence, install_event_emitter_prototype_state,
-    new_events_object,
+    init_event_emitter_capture, init_event_emitter_state, init_event_emitter_state_with_presence,
+    install_event_emitter_prototype_state, new_events_object,
 };
 pub use event_emitter::{
     js_node_stream_method_event_names, js_node_stream_method_get_max_listeners,
@@ -118,7 +117,6 @@ const WRITABLE_DECODE_STRINGS_KEY: Slot = Slot::WritableDecodeStrings;
 const WRITABLE_DEFAULT_ENCODING_KEY: Slot = Slot::WritableDefaultEncoding;
 const WRITABLE_PENDING_FINISH_CALLBACK_KEY: Slot = Slot::WritablePendingFinishCallback;
 const WRITABLE_WRITEV_KEY: Slot = Slot::WritableWritev;
-const STREAM_CONSTRUCT_KEY: Slot = Slot::Construct;
 const STREAM_DESTROY_KEY: Slot = Slot::Destroy;
 const WRITABLE_FINAL_KEY: Slot = Slot::WritableFinal;
 const WRITABLE_FINAL_INVOKED_KEY: Slot = Slot::WritableFinalInvoked;
@@ -1005,20 +1003,6 @@ extern "C" fn ns_pipe2(
     }
     let stream = this_value(closure, this);
     pipe_stream_to_destination(stream, dest, pipe_options_end(options))
-}
-extern "C" fn ns_writable_write_done(
-    closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
-    err: f64,
-) -> f64 {
-    if closure.is_null() {
-        return f64::from_bits(TAG_UNDEFINED);
-    }
-    let stream = js_closure_get_capture_f64(closure, 0);
-    let len = js_closure_get_capture_f64(closure, 1);
-    let callback = js_closure_get_capture_f64(closure, 2);
-    complete_writable_write(stream, len, callback, err);
-    f64::from_bits(TAG_UNDEFINED)
 }
 
 extern "C" fn ns_unpipe1(

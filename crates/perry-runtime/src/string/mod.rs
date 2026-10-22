@@ -249,13 +249,13 @@ pub(crate) use intern::discard_weak_interns;
 pub(crate) use intern::existing_property_atom;
 pub use intern::js_string_intern;
 pub use intern::js_string_pool_atom;
+#[cfg(test)]
+pub(crate) use intern::test_evict_interned;
 pub(crate) use intern::IMAGE_ATOM_FLAGS;
 pub(crate) use intern::INTERN_MAX_BYTE_LEN;
 pub(crate) use intern::{
     atom_colour, atom_for_key, atom_lookup, seed_static_atom, set_atom_colour,
 };
-#[cfg(test)]
-pub(crate) use intern::{is_atom_for_test, test_evict_interned};
 #[cfg(test)]
 pub(crate) use intern::{test_clear_intern_table, test_init_string_bytes, test_intern_slot_ptr};
 pub use io::{js_string_error, js_string_print, js_string_warn};
@@ -1392,5 +1392,5 @@ pub(crate) use iter_object::dispatch_string_iterator_step;
 
 pub(crate) use intern::{
     is_program_atom, is_property_atom, property_atom, property_atom_from_value, property_atom_hash,
-    property_atom_is_program_named, prune_property_atoms, scan_property_atoms,
+    prune_property_atoms, scan_property_atoms,
 };

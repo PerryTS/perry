@@ -5,6 +5,9 @@
 
 use super::*;
 
+#[path = "split_size.rs"]
+mod split_size;
+
 pub(crate) fn collect_module_finish(
     prepared: PreparedModule,
     ctx: &mut CompilationContext,
@@ -266,7 +269,10 @@ pub(crate) fn collect_module_finish(
         // the async/generator transforms (their bodies are skipped; regions
         // are plain synchronous code). See perry-codegen
         // `codegen::split_regions`.
-        let regions = perry_codegen::codegen::split_regions::split_large_bodies(&mut hir_module);
+        let regions = perry_codegen::codegen::split_regions::split_large_bodies_in_program(
+            &mut hir_module,
+            &|source| split_size::namespace_members(ctx, &canonical, source),
+        );
         if regions > 0 {
             log::debug!(
                 "perry: split '{}' into {} region functions",

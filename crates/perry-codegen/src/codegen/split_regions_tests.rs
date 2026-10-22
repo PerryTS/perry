@@ -249,3 +249,158 @@ fn small_bodies_are_left_alone() {
     );
     assert_eq!(made, 0);
 }
+
+#[test]
+fn class_functions_are_offered_to_the_splitter() {
+    let work = "let x = 1; x = x * 3 + 1; x = x * 5 + 2; x = x * 7 + 3; x = x * 11 + 4;";
+    let members = [
+        format!("constructor() {{ {work} console.log(x); }}"),
+        format!("method() {{ {work} return x; }}"),
+        format!("static method() {{ {work} return x; }}"),
+        format!("get value() {{ {work} return x; }}"),
+        format!("set value(v: number) {{ {work} console.log(x, v); }}"),
+        format!("['computed']() {{ {work} return x; }}"),
+        format!("get ['computed']() {{ {work} return x; }}"),
+        format!("set ['computed'](v: number) {{ {work} console.log(x, v); }}"),
+    ];
+    for member in members {
+        let mut m = lower_src(&format!("class C {{ {member} }}"));
+        let made = split_large_bodies_with(&mut m, tiny(false));
+        assert!(made > 0, "class function skipped: {member}");
+        assert!(regions(&m).iter().all(|f| f.name.starts_with("C::")));
+    }
+}
+
+#[test]
+fn field_initializer_closures_are_seen_by_the_cheap_exit_and_split() {
+    let work = "let x = 1; x = x * 3 + 1; x = x * 5 + 2; x = x * 7 + 3; x = x * 11 + 4; return x;";
+    for prefix in ["", "static "] {
+        let mut m = lower_src(&format!(
+            "class C {{ {prefix}value = () => {{ {work} }}; }}"
+        ));
+        assert!(
+            m.functions.is_empty(),
+            "fixture must have no ordinary functions"
+        );
+        assert!(m
+            .init
+            .iter()
+            .all(|s| !matches!(s, Stmt::Expr(Expr::Closure { .. }))));
+        let made = split_large_bodies_with(&mut m, tiny(false));
+        assert!(made > 0, "{prefix}field closure skipped");
+    }
+}
+
+#[test]
+fn class_frame_operations_stay_in_the_parent() {
+    let mut m = lower_src(
+        r#"
+        class C {
+            value = 1;
+            method() {
+                this.value += 1;
+                let x = 1;
+                x = x * 3 + 1; x = x * 5 + 2;
+                x = x * 7 + 3; x = x * 11 + 4;
+                this.value += x;
+                return this.value;
+            }
+        }
+    "#,
+    );
+    assert!(split_large_bodies_with(&mut m, tiny(false)) > 0);
+    for f in regions(&m) {
+        assert!(
+            !format!("{:?}", f.body).contains("This"),
+            "frame use moved: {:?}",
+            f.body
+        );
+    }
+    let method = &m.classes.iter().find(|c| c.name == "C").unwrap().methods[0];
+    assert!(format!("{:?}", method.body).contains("This"));
+}
+
+#[test]
+fn mutable_class_capture_parameters_stay_in_the_parent() {
+    let mut m = lower_src(
+        r#"class C {
+        constructor(value: number) {
+            value = value + 1;
+            value = value * 2;
+            value = value + 3;
+            value = value * 5;
+            let x = 1; x = x * 3 + 1; x = x * 5 + 2;
+            x = x * 7 + 3; x = x * 11 + 4;
+            console.log(value, x);
+        }
+    }"#,
+    );
+    let ctor = m.classes[0].constructor.as_mut().unwrap();
+    let id = ctor.params[0].id;
+    // Lowering uses this reserved name for values shared with member/field
+    // closures. Those closures live outside ctor.body.
+    ctor.params[0].name = perry_hir::cap_fields::cap_field_name(1, id);
+    assert!(split_large_bodies_with(&mut m, tiny(false)) > 0);
+    for f in regions(&m) {
+        assert!(
+            f.params
+                .iter()
+                .all(|p| !p.name.starts_with(perry_hir::cap_fields::CAP_FIELD_PREFIX)),
+            "class capture passed by value: {}",
+            f.name
+        );
+    }
+}
+
+#[test]
+fn namespace_values_have_their_expanded_size_but_qualified_reads_do_not() {
+    let limits = Limits {
+        min_body: 4000,
+        target: 1500,
+        chunk_min: 200,
+        interface_nodes: 40,
+        ..tiny(false)
+    };
+    for (value, expected) in [
+        ("factory({ typescript: ns })", true),
+        ("ns.member(factory)", false),
+    ] {
+        let mut m = lower_src(&format!(
+            r#"
+            import * as ns from './many';
+            class C {{ method(factory: any) {{
+                const result = {value}; return result;
+            }} }}
+        "#
+        ));
+        m.imports[0].resolved_path = Some("/virtual/many.ts".into());
+        let made = super::split_regions::split_large_bodies_with_cost(&mut m, limits, &|source| {
+            assert_eq!(source, "/virtual/many.ts");
+            2000
+        });
+        assert_eq!(made > 0, expected, "namespace use: {value}");
+    }
+}
+
+#[test]
+fn namespace_expansion_in_a_closure_does_not_inflate_its_parent() {
+    let mut m = lower_src(
+        r#"
+        import * as ns from './many';
+        class C { method(factory: any) {
+            return () => { const result = factory(ns); return result; };
+        } }
+    "#,
+    );
+    let limits = Limits {
+        min_body: 4000,
+        target: 1500,
+        chunk_min: 200,
+        interface_nodes: 40,
+        ..tiny(false)
+    };
+    assert!(super::split_regions::split_large_bodies_with_cost(&mut m, limits, &|_| 2000,) > 0);
+    assert!(regions(&m)
+        .iter()
+        .all(|f| !f.name.starts_with("C::method#region_")));
+}

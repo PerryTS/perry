@@ -33,7 +33,12 @@ pub(super) fn try_compile(
             return Ok(None);
         }
     };
+    let reach_report = super::reach_report::start(ctx, false)?;
     let ir = emit::llvm_ir(&proof);
+    if let Some(report) = &reach_report {
+        report.census.capture_tiny_ir(&ir)?;
+        report.check()?;
+    }
     let triple = args
         .target
         .as_deref()
@@ -144,6 +149,9 @@ pub(super) fn try_compile(
             )?;
         }
     }
+    if let Some(report) = &reach_report {
+        report.finish(&output)?;
+    }
     super::post_link::strip_final_binary(
         ctx,
         &output,
@@ -244,6 +252,7 @@ fn build_eligibility(
         || args.app_bundle_id.is_some()
         || !args.embed.is_empty()
         || !args.asset_module.is_empty()
+        || !args.module_alias.is_empty()
         || args.bunfs_root.is_some()
         || args.features.is_some()
         || args.minimal_stdlib
@@ -321,6 +330,8 @@ mod tests {
     fn ordinary_native_build_needs_no_enabling_switch() {
         let (mut args, ctx) = defaults();
         assert!(build_eligibility(&args, &ctx, |_| false).is_ok());
+        // Reporting must preserve this backend's emitted code.
+        assert!(build_eligibility(&args, &ctx, |name| name == "PERRY_REACH_REPORT").is_ok());
         args.keep_intermediates = true;
         args.report_size = true;
         assert!(build_eligibility(&args, &ctx, |name| name == "PERRY_KEEP_SYMBOLS").is_ok());
@@ -347,6 +358,7 @@ mod tests {
             |a: &mut CompileArgs| a.app_bundle_id = Some("app".into()),
             |a: &mut CompileArgs| a.embed.push("asset".into()),
             |a: &mut CompileArgs| a.asset_module.push("asset".into()),
+            |a: &mut CompileArgs| a.module_alias.push("alias=file.ts".into()),
             |a: &mut CompileArgs| a.features = Some("full".into()),
             |a: &mut CompileArgs| a.minimal_stdlib = true,
             |a: &mut CompileArgs| a.enable_geisterhand = true,

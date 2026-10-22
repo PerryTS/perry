@@ -379,6 +379,12 @@ pub(crate) fn handle_method_dispatch_primary() -> Option<HandleMethodDispatchFn>
     }
 }
 
+/// Install `f` as the primary property dispatcher; the previous one back.
+#[cfg(test)]
+pub(crate) fn swap_handle_property_dispatch_for_test(f: *mut ()) -> *mut () {
+    HANDLE_PROPERTY_DISPATCH_PTR.swap(f, Ordering::AcqRel)
+}
+
 /// Primary-only sibling of `handle_property_dispatch` — see
 /// `handle_method_dispatch_primary`.
 #[inline]

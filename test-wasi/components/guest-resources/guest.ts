@@ -3,9 +3,45 @@ import { imports, register, resources } from "./generated/guest";
 const counter = resources["perry:guest-resources/counters@1.0.0"].counter;
 const foreign = imports["perry:guest-resources/foreign@1.0.0"];
 let escaped: Parameters<typeof counter.value>[0] | undefined;
+let cleanupForeign: Parameters<typeof foreign["[method]token.read"]>[0] | undefined;
+let cleanupLocal: Parameters<typeof counter.value>[0] | undefined;
+let checkpointJobs = 0;
+let checkpointImmediate: ReturnType<typeof setImmediate> | undefined;
 function check(ok: boolean, message: string): void { if (!ok) throw new Error(message); }
+function cleanupCounter(value: number) {
+  return counter.create({ value }, payload => {
+    collect();
+    imports["perry:guest-resources/observe@1.0.0"].dropped((payload as {value:number}).value);
+  });
+}
+function abandonImported() { foreign["[constructor]token"](601); }
+function abandonLocal() { cleanupCounter(602); }
 register({
   "perry:guest-resources/counters@1.0.0": {
+    "start-cleanup"() {
+      queueMicrotask(() => { checkpointJobs += 1; });
+      checkpointImmediate = setImmediate(() => { checkpointJobs += 10; });
+      abandonImported();
+      abandonLocal();
+      cleanupForeign = foreign["[constructor]token"](603).borrow();
+      foreign.consume(foreign["[constructor]token"](604));
+      const explicit = foreign["[constructor]token"](605);
+      explicit.dispose(); explicit.dispose();
+      cleanupLocal = cleanupCounter(606).borrow();
+      collect();
+      // Finalizers collect again at the export checkpoint. This new return
+      // owner must stay rooted until the adapter transfers it to the host.
+      return cleanupCounter(607);
+    },
+    "check-cleanup-borrows"() {
+      check(checkpointJobs === 1, "export checkpoint must drain jobs without running immediates");
+      clearImmediate(checkpointImmediate!);
+      collect();
+      return foreign["[method]token.read"](cleanupForeign!) === 603
+        && (counter.value(cleanupLocal!) as {value:number}).value === 606;
+    },
+    "release-cleanup-borrows"() { cleanupForeign = undefined; cleanupLocal = undefined; collect(); },
+    "sweep-cleanup"() { collect(); },
     "read-imported"(value) { collect(); return foreign["[method]token.read"](value); },
     "[constructor]counter"(value) {
       return counter.create({ value }, (payload) => {

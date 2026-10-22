@@ -169,6 +169,16 @@ fn lower_expr_inner(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::New { .. } | Expr::NewDynamic { .. } | Expr::NewDynamicSpread { .. } => {
             super::new_dynamic::lower(ctx, expr)
         }
+        Expr::LiteralChunks(_) => super::literal_chunks::lower_fill(ctx),
+        Expr::LiteralChunkObject => {
+            anyhow::bail!("literal chunks: the chunk object outside a chunk call")
+        }
+        Expr::LiteralSlotInit {
+            object,
+            slot,
+            value,
+            ..
+        } => super::literal_chunks::lower_slot_init(ctx, object, *slot, value),
         Expr::This | Expr::NewTarget | Expr::SuperCall(..) | Expr::SuperCallSpread(..) => {
             super::this_super_call::lower(ctx, expr)
         }

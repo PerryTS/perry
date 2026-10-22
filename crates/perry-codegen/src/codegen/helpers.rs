@@ -16,6 +16,20 @@ use super::opts::{NamespaceEntry, NamespaceEntryKind};
 // existing `helpers::init_static_fields_*` paths keep resolving.
 pub(super) use super::static_fields::{init_static_fields_early, init_static_fields_late};
 
+/// A sync generator wrapper: its body returns the fixed-state birth, which
+/// links the instance to the function's prototype itself.
+pub(crate) fn function_body_is_fixed_state_generator(body: &[perry_hir::Stmt]) -> bool {
+    body.iter().any(|stmt| {
+        matches!(
+            stmt,
+            perry_hir::Stmt::Return(Some(perry_hir::Expr::LinkGeneratorPrototype {
+                fixed_state: true,
+                ..
+            }))
+        )
+    })
+}
+
 pub(crate) fn function_body_returns_generator_object(body: &[perry_hir::Stmt]) -> bool {
     let has_gen_state = body
         .iter()
@@ -1236,6 +1250,7 @@ pub(super) fn emit_namespace_populator(
     output_type: &str,
     adopt_cjs_exports: bool,
 ) {
+    let reach_before = super::reach_report::namespace_begin(ctx.func);
     debug_assert_eq!(entries.len(), key_globals.len());
     // Issue #842: side-effect-only dynamic-import targets land here
     // with `entries.is_empty()`. The runtime `js_create_namespace`
@@ -1455,6 +1470,9 @@ pub(super) fn emit_namespace_populator(
     crate::expr::emit_root_nanbox_store_on_block(blk, &result, &format!("@{}", ns_name));
     let addr_i64 = blk.ptrtoint(&format!("@{}", ns_name), I64);
     blk.call_void("js_gc_register_global_root", &[(I64, &addr_i64)]);
+    if let Some(before) = reach_before {
+        super::reach_report::namespace_end(ctx.func, module_prefix, before);
+    }
 }
 
 #[cfg(test)]

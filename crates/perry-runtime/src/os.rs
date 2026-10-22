@@ -685,7 +685,6 @@ pub extern "C" fn js_process_version() -> *mut StringHeader {
 /// consumers that only ever check `typeof`.
 #[no_mangle]
 pub extern "C" fn js_process_versions() -> f64 {
-    use crate::object::{js_object_alloc_with_shape, js_object_set_field};
     use crate::value::{js_nanbox_string, JSValue};
 
     // Fill the declared record slots. Order MUST match the
@@ -952,7 +951,6 @@ pub extern "C" fn js_os_eol() -> *mut StringHeader {
 #[no_mangle]
 pub extern "C" fn js_os_cpus() -> *mut ArrayHeader {
     use crate::array::{js_array_alloc, js_array_push};
-    use crate::object::{js_object_alloc_with_shape, js_object_set_field};
     use crate::value::{js_nanbox_string, JSValue};
 
     #[derive(Clone, Copy, Default)]
@@ -1307,7 +1305,6 @@ fn options_request_buffer(opts_bits: i64) -> bool {
 static KEEP_OS_USER_INFO_OPTIONS: extern "C" fn(i64) -> *mut ObjectHeader = js_os_user_info_options;
 
 fn js_os_user_info_impl(buffer_encoding: bool) -> *mut ObjectHeader {
-    use crate::object::{js_object_alloc_with_shape, js_object_set_field};
     use crate::value::JSValue;
 
     crate::object::runtime_layouts::runtime_record!(obj, RECORD_F414_0);

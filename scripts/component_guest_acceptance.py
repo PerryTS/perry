@@ -135,7 +135,7 @@ def main():
     shutil.copytree(fixture.parent / "guest-resources", resources, dirs_exist_ok=True)
     resource_component = build_guest(resources, "resources-")
     run("run-resources", [host, resource_component, "--resources"], timeout=120,
-        expected="PASS Perry guest resources: imported ownership, rollback, nested transfers, exported payload GC, expired borrows, 51 destructions, trap")
+        expected="PASS Perry guest resources: imported ownership, rollback, nested transfers, exported payload GC, expired borrows, 51 explicit destructions, deferred cleanup, trap")
     if args.guest_moving_gc:
         run("run-resources-moving", [host, resource_component, "--resources-moving"], timeout=120,
             expected="PASS Perry guest resources:", guest_moving=True)

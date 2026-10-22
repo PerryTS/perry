@@ -170,11 +170,6 @@ std::thread_local! {
     };
 }
 
-#[cfg(test)]
-pub(crate) fn test_array_subclass_prefix_store_hits() -> u64 {
-    ARRAY_SUBCLASS_PREFIX_STORE_HITS.with(std::cell::Cell::get)
-}
-
 // #7946: all three counters are `per_test_global!`, so a test build gives each
 // libtest thread its own instance and a product build gets the plain `static`
 // back, byte for byte.

@@ -88,7 +88,7 @@ runs:
         # picks up the distro's LLVM 18. Install the pair here, once, so every
         # workflow gets a version-matched toolchain from one place.
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-          llvm-22-dev libpolly-22-dev libzstd-dev clang-22
+          llvm-22-dev llvm-22-tools libpolly-22-dev libzstd-dev clang-22
         llvm-config-22 --version | grep -q '^22\.' \
           || { echo "::error::apt LLVM is not 22.x"; exit 1; }
         PREFIX="$(llvm-config-22 --prefix)"

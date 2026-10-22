@@ -263,25 +263,6 @@ pub(super) unsafe fn dispatch_explicit_this_call(
     call_closure_body(closure, info, func_ptr, this, args_ptr, args_len)
 }
 
-/// Call `closure` — a compiled ordinary function body (`FN_COMPILED_BODY`),
-/// which none of the exotic callees [`js_native_call_value`] tests first
-/// (class refs, proxies, bound native exports, no-op-backed built-ins,
-/// class objects) can carry — with receiver `this` (#10507).
-///
-/// # Safety
-/// `closure` is a live closure whose info carries `FN_COMPILED_BODY`;
-/// `args_ptr` holds `args_len` values.
-pub(crate) unsafe fn call_compiled_closure_this(
-    closure: *const ClosureHeader,
-    this: crate::closure::JsThis,
-    args_ptr: *const f64,
-    args_len: usize,
-) -> f64 {
-    let info = crate::closure::closure_info(closure);
-    let func_ptr = info.map_or(std::ptr::null(), |info| info.code);
-    call_closure_body(closure, info, func_ptr, this, args_ptr, args_len)
-}
-
 /// [`call_compiled_closure_this`] for a caller that already holds the
 /// closure's body `info` (a shape's ConstFn lane names it): no info read or
 /// validation of the closure cell.

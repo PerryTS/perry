@@ -586,12 +586,12 @@ def self_test() -> int:
         helpers = clear_helpers(reset_body(real_support))
         if len(helpers) < 10:
             failures.append("only %d clear helpers parsed from the real %s" % (len(helpers), SUPPORT.name))
-        if "test_clear_closure_side_tables" not in helpers:
+        if "test_clear_process_event_listeners" not in helpers:
             failures.append("the real clear list is missing a helper it certainly calls: %r" % (helpers,))
         sources = rust_sources()
-        kind, _ = declaration_kind(sources, "WASM_FUNCREF_EXTERNALS")
+        kind, _ = declaration_kind(sources, "PROP_PLAN_EPOCH")
         if kind != "per_test":
-            failures.append("WASM_FUNCREF_EXTERNALS classified as %r on the real tree" % (kind,))
+            failures.append("PROP_PLAN_EPOCH classified as %r on the real tree" % (kind,))
         kind, _ = declaration_kind(sources, "ARGUMENTS_KEYS")
         if kind != "thread_local":
             failures.append("ARGUMENTS_KEYS classified as %r on the real tree" % (kind,))

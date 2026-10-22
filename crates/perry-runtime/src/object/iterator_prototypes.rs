@@ -1058,6 +1058,7 @@ pub(crate) unsafe fn iterator_next_property_owner(
     iterator_family_owner(obj).map(|(owner, _)| owner)
 }
 
+#[cfg(test)]
 pub(crate) unsafe fn iterator_step_is_builtin(obj: *const ObjectHeader) -> bool {
     iterator_step_builtin_info(obj).is_some()
 }

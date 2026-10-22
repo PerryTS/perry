@@ -5,6 +5,7 @@ use crate::value::JSValue;
 
 #[path = "node_stream_event_emitter_shape.rs"]
 mod shape;
+#[cfg(test)]
 pub(super) use shape::shape_method;
 use shape::*;
 
@@ -604,8 +605,10 @@ fn own_data_slot(
             let Some(entry) = crate::object::overflow::find_bytes(table, name) else {
                 return Some(None);
             };
-            let attrs =
-                crate::object::overflow::entry_attrs(table as *const crate::array::ArrayHeader, entry);
+            let attrs = crate::object::overflow::entry_attrs(
+                table as *const crate::array::ArrayHeader,
+                entry,
+            );
             if !crate::object::key_attrs::entry_is_plain_writable_data(attrs) {
                 return None;
             }
@@ -756,21 +759,6 @@ fn adjust_events_count(target: f64, delta: f64) -> f64 {
 fn events_of(target: f64) -> Option<f64> {
     let events = state_get(target, crate::runtime_state_key!(EVENTS_KEY));
     is_object_value(events).then_some(events)
-}
-
-/// A native constructor's field store on `target` (object header `obj`),
-/// node's `this.<key> = value`: an
-/// overwrite of an own writable data slot, a plain add into its layout slot,
-/// else the ordinary `[[Set]]` (an inherited setter runs; a refused set
-/// throws, as in node's strict internals). Every native init stores its
-/// fields through this one operation.
-pub(crate) fn constructor_field_set(
-    target: f64,
-    obj: *mut crate::object::ObjectHeader,
-    key: crate::runtime_state_key::NamedStateKey,
-    value: f64,
-) {
-    state_set_object(target, obj, key, value);
 }
 
 /// May reading `_events` on `target` (with no own `_events`) run an

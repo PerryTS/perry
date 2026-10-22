@@ -6,6 +6,8 @@ use super::frame::Frame;
 use crate::object::owned_state_bag::{self as bag, COMPONENT_GUEST_RESOURCE};
 use std::ffi::c_void;
 
+#[path = "resource_cleanup.rs"]
+mod cleanup;
 #[path = "resource_payload.rs"]
 pub(super) mod payload;
 
@@ -120,6 +122,9 @@ fn wrap(ty: u32, handle: u32, rep: u32, owned: bool, lifetime: f64, parent: f64)
             );
         }
     }
+    if owned {
+        cleanup::register(wrapper.get_nanbox_f64(), fields.get_nanbox_f64());
+    }
     wrapper.get_nanbox_f64()
 }
 
@@ -149,21 +154,37 @@ extern "C" fn dispose(
 ) -> f64 {
     let scope = RuntimeHandleScope::new();
     let resource = scope.root_nanbox_f64(crate::closure::js_closure_get_capture_f64(closure, 0));
+    let fields = data(resource.get_nanbox_f64());
+    if get(fields, STATE) == DISPOSED {
+        return undefined();
+    }
+    let fields = live(resource.get_nanbox_f64());
+    if get(fields, STATE) != OWNED {
+        fail("A borrowed guest resource cannot be disposed");
+    }
+    cleanup::unregister(resource.get_nanbox_f64());
+    release(data(resource.get_nanbox_f64()))
+}
+
+/// The private state survives its wrapper as FinalizationRegistry holdings.
+/// Transfer changes this same state, so a late job cannot drop a recycled
+/// canonical handle that now belongs to another wrapper.
+fn release(fields: f64) -> f64 {
+    let scope = RuntimeHandleScope::new();
+    let fields = scope.root_nanbox_f64(fields);
     let mut frame = Frame::new();
     let result = crate::exception::catch_js_throw(|| {
-        let fields = data(resource.get_nanbox_f64());
-        if get(fields, STATE) == DISPOSED {
+        if get(fields.get_nanbox_f64(), STATE) != OWNED {
             return undefined();
         }
-        let fields = live(resource.get_nanbox_f64());
-        if get(fields, STATE) != OWNED {
-            fail("A borrowed guest resource cannot be disposed");
+        if get(fields.get_nanbox_f64(), OWNER).to_bits() != super::maybe_registry().to_bits() {
+            return undefined();
         }
-        let ty = get(fields, TYPE) as u32;
-        let handle = get(fields, HANDLE) as u32;
+        let ty = get(fields.get_nanbox_f64(), TYPE) as u32;
+        let handle = get(fields.get_nanbox_f64(), HANDLE) as u32;
         // Canonical resource.drop consumes the handle even if its destructor
         // fails. Invalidate before entering it so a destructor cannot reenter.
-        set(fields, STATE, DISPOSED);
+        set(fields.get_nanbox_f64(), STATE, DISPOSED);
         unsafe {
             (super::ops().resource)((&mut frame as *mut Frame).cast(), ty, 1, handle);
         }

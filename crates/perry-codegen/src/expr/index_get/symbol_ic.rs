@@ -1,5 +1,4 @@
 //! Symbol reads share the computed-key holder record and its roots.
-use crate::expr::receiver_range::{emit_fused_receiver_test, emit_handle};
 use crate::expr::FnCtx;
 use crate::types::{DOUBLE, I1, I64, PTR};
 

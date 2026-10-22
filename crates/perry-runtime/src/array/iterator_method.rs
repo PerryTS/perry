@@ -38,6 +38,7 @@ unsafe fn iterator_slot_value(owner: *const ObjectHeader, slot: u32) -> u64 {
         .add(slot as usize)
 }
 
+#[cfg(test)]
 pub(super) unsafe fn iterator_method_at(owner: *const ObjectHeader, slot: u32) -> IteratorMethod {
     iterator_method_from_slot(owner, slot, iterator_slot_value(owner, slot))
 }
@@ -65,17 +66,6 @@ unsafe fn iterator_method_from_slot(
         return IteratorMethod::Intrinsic;
     }
     IteratorMethod::Data(value)
-}
-
-/// Does `%Array.prototype%`'s (`proto`'s) iteration member hold the
-/// intrinsic? One fixed slot of its layout
-/// (`runtime_layouts::ARRAY_PROTOTYPE_ITERATOR_SLOT`): the layout's key there is
-/// still `Symbol.iterator` (a delete may have reordered the keys) and the slot
-/// holds the builtin `values` function as a data value (an accessor pair or
-/// any other value is not it). Reads only.
-#[inline]
-pub(super) unsafe fn prototype_iterator_is_intrinsic(proto: usize) -> bool {
-    matches!(prototype_iterator_method(proto), IteratorMethod::Intrinsic)
 }
 
 /// Every array named holder declares iterator slot 0. A hole means absent;

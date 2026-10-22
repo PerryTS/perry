@@ -49,6 +49,7 @@ fn kind_codes_round_trip() {
         ShapeObjectKind::FunctionBoundApply,
         ShapeObjectKind::FunctionBound,
         ShapeObjectKind::OrdinaryNativeAlias,
+        ShapeObjectKind::OrdinaryUnmarkedNativeAlias,
         ShapeObjectKind::CallableOrdinary,
     ] {
         assert_eq!(kind as u8, kind.code() as u8, "kind cache decoding ordinal");
@@ -927,7 +928,7 @@ fn created_birth_relationship_preserves_identity_and_rollback_edge() {
 #[test]
 fn mutable_key_lists_cannot_publish_symbol_absence() {
     let _gc = crate::gc::GcSuppressScope::new();
-    unsafe {
+    {
         let keys = crate::array::js_array_alloc(1);
         let text = crate::string::js_string_from_bytes(b"key".as_ptr(), 3);
         let keys = crate::array::js_array_push(keys, crate::JSValue::string_ptr(text));
@@ -970,6 +971,7 @@ fn plain_birth_validation_checks_presence_kind_and_width() {
         ShapeObjectKind::FunctionBoundApply,
         ShapeObjectKind::FunctionBound,
         ShapeObjectKind::OrdinaryNativeAlias,
+        ShapeObjectKind::OrdinaryUnmarkedNativeAlias,
     ] {
         let mut record = ShapeRecord::new(0, 0, 2, 0, kind, 0);
         assert_eq!(

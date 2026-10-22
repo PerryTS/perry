@@ -173,6 +173,15 @@ impl Header {
                         self.fixed[self.pos] = byte;
                         self.pos += 1;
                         self.crc.update(&[byte]);
+                        // zlib checks magic as soon as both bytes arrive. A
+                        // lone bad byte is still truncated, as is a short
+                        // method prefix; leave the later method/flags check.
+                        if self.pos == 2 && self.fixed[..2] != [31, 139] {
+                            return Err(io::Error::new(
+                                ErrorKind::InvalidData,
+                                "incorrect header check",
+                            ));
+                        }
                     }
                     if self.fixed[..3] != [31, 139, 8] || self.fixed[3] & 0xe0 != 0 {
                         return Err(io::Error::new(

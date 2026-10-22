@@ -1120,7 +1120,7 @@ fn iterate(m: &mut Model, call: CallId, v: NodeId) -> NodeId {
     let out = m.node_l("b-iterated");
     let ik = m.iter_key();
     m.cons(v, Cons::Load { key: ik, dst: out });
-    let mut sub = |m: &mut Model, this: NodeId, key: Key| -> NodeId {
+    let sub = |m: &mut Model, this: NodeId, key: Key| -> NodeId {
         let ret = m.node_l("b-iter-ret");
         let c2 = m.calls.len() as CallId;
         m.calls.push(CallSite {

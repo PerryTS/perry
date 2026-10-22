@@ -70,7 +70,7 @@ fn stationary_backing_rewrites_young_keys_through_remembered_slots() {
     }
     let keys = CanonicalKeys::from_rooted(keys_array, 1);
     let root = scope.root_raw_mut_ptr(keys.as_ptr());
-    let mut before = unsafe { crate::array::js_array_get(keys.as_ptr(), 0).as_string_ptr() };
+    let mut before = crate::array::js_array_get(keys.as_ptr(), 0).as_string_ptr();
     for _ in 0..4 {
         assert!(crate::arena::pointer_in_nursery(before as usize));
         let trace = collect_minor_trace(GcTriggerKind::Direct);
@@ -105,7 +105,7 @@ fn published_key_moves_to_old_on_its_first_minor_without_pinning_liveness() {
     let scope = RuntimeHandleScope::new();
     let keys = unsafe { list(b"first_copy_tenured_key") };
     let root = scope.root_raw_mut_ptr(keys.as_ptr());
-    let before = unsafe { crate::array::js_array_get(keys.as_ptr(), 0).as_string_ptr() };
+    let before = crate::array::js_array_get(keys.as_ptr(), 0).as_string_ptr();
     assert!(crate::arena::pointer_in_nursery(before as usize));
     let trace = collect_minor_trace(GcTriggerKind::Direct);
     assert!(trace.copying_nursery.promoted_objects > 0);

@@ -24,6 +24,7 @@
 //! | `OrdinaryNumericProof` | admitted | set |
 //! | `NativeNamespace` | not admitted | clear |
 //! | `OrdinaryNativeAlias` | admitted | clear |
+//! | `OrdinaryUnmarkedNativeAlias` | refused | clear |
 //!
 //! Ordinary and OrdinaryNativeAlias shapes admit stores. The native alias
 //! affects read fallback; its writable own slots follow the same store rules.
@@ -98,9 +99,15 @@ pub(crate) unsafe fn receiver_ordinary_kind(obj: *const ObjectHeader) -> ShapeOb
         ShapeObjectKind::NativeNamespace
     } else if !(*obj).meta.is_null()
         && (*(*obj).meta).flags & crate::object::OBJECT_META_FLAG_NATIVE_ALIAS != 0
-        && receiver_admits_plain_store(obj)
     {
-        ShapeObjectKind::OrdinaryNativeAlias
+        // Read forwarding is independent of plain-store admission. Runtime
+        // births need a distinct kind too: an unmarked shape can otherwise
+        // prove absence and skip the native fallback entirely.
+        if receiver_admits_plain_store(obj) {
+            ShapeObjectKind::OrdinaryNativeAlias
+        } else {
+            ShapeObjectKind::OrdinaryUnmarkedNativeAlias
+        }
     } else if receiver_admits_plain_store(obj) {
         ShapeObjectKind::Ordinary
     } else {

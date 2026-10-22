@@ -139,7 +139,7 @@ fn check_owned_proxy(erase: bool) {
     register_runtime_handle_root_scanner_for_tests();
     let target = crate::object::js_object_alloc(0, 1);
     let handler = crate::object::js_object_alloc(0, 0);
-    unsafe {
+    {
         crate::object::js_object_set_field_f64(target, 0, 73.0);
     }
     let proxy = crate::proxy::js_proxy_new(

@@ -205,7 +205,6 @@ unsafe fn copy_slots(
 #[optimize(size)]
 /// The storage slot of source key `position`. `source_keys` is null when the
 /// destination's slots are the source's (a shared list, or no own slots).
-#[inline]
 unsafe fn source_slot(source_keys: *const ArrayHeader, position: usize) -> usize {
     if source_keys.is_null() {
         position

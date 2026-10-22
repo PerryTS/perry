@@ -169,5 +169,3 @@ pub use dynamic_object::{
     js_get_property, js_value_length_f64, js_value_length_property_f64,
     js_value_length_property_key_f64,
 };
-
-pub(crate) use dynamic_arith::dyn_to_int32 as number_to_int32;

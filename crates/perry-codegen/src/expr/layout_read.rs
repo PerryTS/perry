@@ -662,9 +662,11 @@ fn run_arm(
             let band_l = ctx.block_label(band);
             let ask_l = ctx.block_label(ask);
             let asked_l = ctx.block_label(asked_join);
-            let recv = crate::expr::receiver_range::emit_fused_receiver_test(ctx.block(), this_bits);
+            let recv =
+                crate::expr::receiver_range::emit_fused_receiver_test(ctx.block(), this_bits);
             let from_entry = ctx.block().label.clone();
-            ctx.block().cond_br(&recv.is_object_pointer, &band_l, &asked_l);
+            ctx.block()
+                .cond_br(&recv.is_object_pointer, &band_l, &asked_l);
             ctx.current_block = band;
             let blk = ctx.block();
             let word_ptr = crate::expr::receiver_range::emit_field_ptr(blk, &recv.biased, 4);

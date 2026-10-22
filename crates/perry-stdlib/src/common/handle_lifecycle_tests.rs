@@ -199,7 +199,7 @@ fn native_property_bag_follows_a_reachable_reclaimable_payload() {
         let roots = RuntimeHandleScope::new();
         let owner = roots.root_nanbox_u64(boxed(id));
         let value = perry_runtime::object::js_object_alloc(0, 1);
-        unsafe {
+        {
             perry_runtime::object::js_object_set_field_f64(value, 0, 73.0);
         }
         let boxed_value = perry_runtime::value::js_nanbox_pointer(value as i64);
@@ -207,7 +207,7 @@ fn native_property_bag_follows_a_reachable_reclaimable_payload() {
         collect();
         let stored =
             perry_runtime::object::handle_expando::handle_expando_get(id, "payload").unwrap();
-        unsafe {
+        {
             assert_eq!(
                 perry_runtime::object::js_object_get_field_f64(
                     perry_runtime::value::js_nanbox_get_pointer(stored)

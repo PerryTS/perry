@@ -851,7 +851,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let result = match method.as_str() {
                         // Callback iterators: (recv, callback, thisArg).
                         "forEach" | "map" | "filter" | "some" | "every" | "find" | "findIndex"
-                        | "findLast" | "findLastIndex" => {
+                        | "findLast" | "findLastIndex" | "flatMap" => {
                             let cb = nth(0).unwrap_or_else(undef);
                             let this_arg = nth(1).unwrap_or_else(undef);
                             let fname = match method.as_str() {
@@ -863,6 +863,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 "find" => "js_arraylike_find",
                                 "findIndex" => "js_arraylike_findIndex",
                                 "findLast" => "js_arraylike_findLast",
+                                "flatMap" => "js_arraylike_flatMap",
                                 _ => "js_arraylike_findLastIndex",
                             };
                             blk.call(

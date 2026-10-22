@@ -63,6 +63,35 @@ fn iterator_close_on_throw(iter: f64, done: f64, error: f64) -> f64 {
     error.get_nanbox_f64()
 }
 
+/// `yield*`'s pull: Call(captured `[[NextMethod]]`, iterator, « received »),
+/// then the spec's "innerResult is not an Object" TypeError. The inner result
+/// object is returned as-is (the outer generator re-yields it unchanged).
+fn iterator_delegate_next(iter: f64, next: f64, value: f64) -> f64 {
+    // A sync generator delegate stepped through the intrinsic `next` is its
+    // record's resume; its results are always objects.
+    if let Some(result) =
+        unsafe { crate::object::resume_intrinsic_sync_protocol(iter, next, value) }
+    {
+        return result;
+    }
+    if !crate::proxy::is_callable_function(next) {
+        crate::closure::throw_not_callable();
+    }
+    let args = [value];
+    let result = unsafe {
+        crate::closure::native_call_value_this(
+            next,
+            crate::closure::JsThis::from_f64(iter),
+            args.as_ptr(),
+            1,
+        )
+    };
+    if !is_object_like_value(result) {
+        throw_iterator_result_not_object();
+    }
+    result
+}
+
 #[cold]
 fn iterator_delegate_return(iter: f64, value: f64) -> f64 {
     // Undefined is an absence sentinel; a present method returning undefined
@@ -119,6 +148,18 @@ pub extern "C" fn js_iterator_close_on_throw(iter: f64, done: f64, error: f64) -
 #[no_mangle]
 pub extern "C-unwind" fn js_iterator_close_on_throw(iter: f64, done: f64, error: f64) -> f64 {
     iterator_close_on_throw(iter, done, error)
+}
+
+#[cfg(panic = "abort")]
+#[no_mangle]
+pub extern "C" fn js_iterator_delegate_next(iter: f64, next: f64, value: f64) -> f64 {
+    iterator_delegate_next(iter, next, value)
+}
+
+#[cfg(not(panic = "abort"))]
+#[no_mangle]
+pub extern "C-unwind" fn js_iterator_delegate_next(iter: f64, next: f64, value: f64) -> f64 {
+    iterator_delegate_next(iter, next, value)
 }
 
 #[cfg(panic = "abort")]

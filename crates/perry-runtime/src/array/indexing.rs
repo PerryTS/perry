@@ -267,7 +267,7 @@ fn array_length_fast_lane(arr: *const ArrayHeader) -> Option<u32> {
 }
 
 crate::entry_contracts::kind_entry! {
-    Arr, fn js_array_length__Arr(arr: *const ArrayHeader) -> u32 {
+    js_array_length__Arr, Arr, fn(arr: *const ArrayHeader) -> u32 {
         unsafe { (*arr).length }
     }
 }

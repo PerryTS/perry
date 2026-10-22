@@ -177,16 +177,6 @@ pub(super) fn emit_module_artifacts(
     }
     progress.checkpoint("reassigned-local analysis");
 
-    // Step 5d: fninfer's parameter types for this module's closures,
-    // candidates their typed bodies entry-check.
-    let (inferred_param_types, directly_invoked) = if super::typed_body::typed_bodies_enabled() {
-        (
-            super::typed_body::inferred_param_types(hir),
-            super::typed_body::closures_without_typed_body(hir),
-        )
-    } else {
-        Default::default()
-    };
     let closure_started = Instant::now();
     let closure_progress_step = (closures.len() / 20).max(1);
     for (closure_index, (func_id, closure_expr)) in closures.iter().enumerate() {
@@ -230,29 +220,6 @@ pub(super) fn emit_module_artifacts(
             )
             .with_context(|| format!("lowering typed-string closure clone func_id={}", func_id))?;
         }
-        let typed_body_plan = if super::typed_body::typed_bodies_enabled()
-            && !cross_module.typed_f64_closures.contains(func_id)
-            && !cross_module.typed_i1_closures.contains(func_id)
-            && !cross_module.typed_i32_closures.contains(func_id)
-            && !cross_module.typed_string_closures.contains(func_id)
-            && !trusted_box_closures.contains_key(func_id)
-            && !versioned_loop_callbacks.contains(func_id)
-            && !directly_invoked.contains(func_id)
-        {
-            super::typed_body::plan_for_closure_expr(
-                closure_expr,
-                func_synthetic_arguments.contains(func_id),
-                module_boxed_vars,
-                &module_reassigned_locals,
-                class_ids,
-                &cross_module.wpfacts,
-                &inferred_param_types,
-                module_globals,
-            )
-        } else {
-            None
-        };
-        let generic_index = llmod.function_count();
         compile_closure(
             llmod,
             *func_id,
@@ -277,47 +244,8 @@ pub(super) fn emit_module_artifacts(
             cross_module,
             false,
             false,
-            None,
         )
         .with_context(|| format!("lowering closure func_id={}", func_id))?;
-        // fninfer slice 0: a typed body behind an entry check.
-        if let Some(plan) = typed_body_plan.as_ref() {
-            let tbody_index = llmod.function_count();
-            compile_closure(
-                llmod,
-                *func_id,
-                closure_expr,
-                func_names,
-                strings,
-                class_table,
-                method_names,
-                module_globals,
-                opts.import_function_prefixes,
-                enum_table,
-                static_field_globals,
-                class_ids,
-                func_signatures,
-                func_synthetic_arguments,
-                module_prefix,
-                module_boxed_vars,
-                module_receiver_types,
-                &module_reassigned_locals,
-                &immutable_closure_bindings,
-                closure_rest_params,
-                cross_module,
-                false,
-                false,
-                Some(plan),
-            )
-            .with_context(|| format!("lowering typed closure body func_id={}", func_id))?;
-            super::typed_body::install_closure_dispatch(
-                llmod,
-                generic_index,
-                tbody_index,
-                closure_expr,
-                plan,
-            );
-        }
         if trusted_box_closures.contains_key(func_id) {
             compile_closure(
                 llmod,
@@ -343,7 +271,6 @@ pub(super) fn emit_module_artifacts(
                 cross_module,
                 true,
                 false,
-                None,
             )
             .with_context(|| format!("lowering trusted-box closure func_id={}", func_id))?;
         }
@@ -372,7 +299,6 @@ pub(super) fn emit_module_artifacts(
                 cross_module,
                 true,
                 true,
-                None,
             )
             .with_context(|| format!("lowering versioned-loop closure func_id={}", func_id))?;
         }

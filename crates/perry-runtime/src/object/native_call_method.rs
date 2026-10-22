@@ -203,6 +203,7 @@ unsafe fn class_receiver_fast_guard(object: f64, method_bytes: &[u8]) -> Option<
 
     Some(ClassReceiver {
         addr: obj_addr,
+        #[cfg(test)]
         class_id,
         recorded_prototype,
     })
@@ -212,6 +213,7 @@ unsafe fn class_receiver_fast_guard(object: f64, method_bytes: &[u8]) -> Option<
 #[derive(Clone, Copy)]
 struct ClassReceiver {
     addr: usize,
+    #[cfg(test)]
     class_id: u32,
     /// Null when the receiver inherits from the prototype its class implies;
     /// otherwise the recorded prototype its ShapeId names (a MIXED identity).

@@ -985,11 +985,18 @@ pub(crate) fn write(owner: f64, chunk: f64, encoding: f64, callback: f64) -> f64
     } else {
         callback.get()
     });
-    // Conversion may materialize an SSO string. Prove the receiver only after
-    // that allocation, then retain the same native window until JS can run.
+    // Validation/decoding may allocate or inspect an invalid encoding. Prove
+    // the receiver only afterward, then retain the native window until JS runs.
     // SAFETY: The argument is a live JS value on this agent; conversions finish before any payload
     // projection, and allocating paths retain their rooted operands.
-    let bytes = unsafe { crate::jsvalue_to_socket_bytes(chunk.get()) }.unwrap_or_default();
+    let encoding_value = if is_callback(encoding.get()) {
+        p::undefined()
+    } else {
+        encoding.get()
+    };
+    let bytes =
+        unsafe { crate::jsvalue::jsvalue_to_encoded_socket_bytes(chunk.get(), encoding_value) }
+            .unwrap_or_default();
     // SAFETY: The receiver is rooted and projection validates its agent, family and open lifecycle;
     // the pointer is consumed before allocation/JS or freshly projected afterward.
     let window = match unsafe { super::native_transport::transport_window(owner.get()) } {
@@ -1223,14 +1230,16 @@ pub(crate) fn end(owner: f64, chunk: f64, encoding: f64, callback: f64) -> f64 {
     let chunk = scope.root_nanbox(chunk);
     let encoding = scope.root_nanbox(encoding);
     let callback = scope.root_nanbox(callback);
-    let (chunk_value, callback_value) = if is_callback(chunk.get()) {
-        (p::undefined(), chunk.get())
+    // Normalize end's overload before write can interpret an encoding as its own callback.
+    let (chunk_value, encoding_value, callback_value) = if is_callback(chunk.get()) {
+        (p::undefined(), p::undefined(), chunk.get())
     } else if is_callback(encoding.get()) {
-        (chunk.get(), encoding.get())
+        (chunk.get(), p::undefined(), encoding.get())
     } else {
-        (chunk.get(), callback.get())
+        (chunk.get(), encoding.get(), callback.get())
     };
     let chunk = scope.root_nanbox(chunk_value);
+    let encoding = scope.root_nanbox(encoding_value);
     let callback = scope.root_nanbox(callback_value);
     let socket = link(owner.get());
     let _account = p::AccountSocket(socket);

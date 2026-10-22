@@ -142,9 +142,21 @@ fn capability_from_init(
     // shape), as well as for stable function-valued properties. The exact live
     // closure guard makes both cases safe. Other values erase the capability.
     let mut final_methods: HashMap<String, Option<ImportedObjectLiteralMethod>> = HashMap::new();
+    // HIR binds a defined value to a local first (`let v = <value>;
+    // js_object_literal_define(__o, "k", v)`), so the definition names the
+    // value through that local.
+    let mut bound: HashMap<u32, &Expr> = HashMap::new();
     let mut saw_return = false;
     for stmt in body {
         match stmt {
+            Stmt::Let {
+                id,
+                mutable: false,
+                init: Some(value),
+                ..
+            } => {
+                bound.insert(*id, value);
+            }
             Stmt::Expr(Expr::IndexSet {
                 object,
                 index,
@@ -162,15 +174,17 @@ fn capability_from_init(
                 let Expr::ExternFuncRef { name, .. } = callee.as_ref() else {
                     return None;
                 };
-                if name != "js_object_set_method_by_name" {
+                if name != "js_object_literal_define" {
                     return None;
                 }
-                let [receiver, Expr::String(key), value] = args.as_slice() else {
+                let [receiver, Expr::String(key), Expr::LocalGet(value_id)] = args.as_slice()
+                else {
                     return None;
                 };
                 if !local_get_is(receiver, param.id) {
                     return None;
                 }
+                let value = bound.get(value_id)?;
                 final_methods.insert(
                     key.clone(),
                     eligible_method(hir, func_names, class, key, value),

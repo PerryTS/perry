@@ -341,38 +341,10 @@ pub(super) fn stream_destroyed(stream: f64) -> bool {
     has_truthy_hidden(stream, Slot::Destroyed)
 }
 
-pub(super) fn set_stream_auto_destroy(stream: &RuntimeHandle<'_>, opts: &RuntimeHandle<'_>) {
-    let enabled = get_hidden_value(
-        opts.get_nanbox_f64(),
-        crate::runtime_state_key!(b"autoDestroy"),
-    )
-    .map(|v| v.to_bits() != TAG_FALSE)
-    .unwrap_or(true);
-    set_hidden_value(
-        stream.get_nanbox_f64(),
-        hidden_stream_auto_destroy_key(),
-        f64::from_bits(if enabled { TAG_TRUE } else { TAG_FALSE }),
-    );
-}
-
 pub(super) fn stream_auto_destroy_enabled(stream: f64) -> bool {
     get_hidden_value(stream, hidden_stream_auto_destroy_key())
         .map(|v| v.to_bits() != TAG_FALSE)
         .unwrap_or(true)
-}
-
-pub(super) fn set_stream_emit_close(stream: &RuntimeHandle<'_>, opts: &RuntimeHandle<'_>) {
-    let enabled = get_hidden_value(
-        opts.get_nanbox_f64(),
-        crate::runtime_state_key!(b"emitClose"),
-    )
-    .map(|v| v.to_bits() != TAG_FALSE)
-    .unwrap_or(true);
-    set_hidden_value(
-        stream.get_nanbox_f64(),
-        hidden_stream_emit_close_key(),
-        f64::from_bits(if enabled { TAG_TRUE } else { TAG_FALSE }),
-    );
 }
 
 pub(super) fn stream_emit_close_enabled(stream: f64) -> bool {

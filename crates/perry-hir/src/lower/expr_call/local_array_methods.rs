@@ -701,8 +701,9 @@ pub(super) fn try_local_array_methods(
                                     }
                                 }
                             }
+                            // A `thisArg` stays a method call: codegen binds it.
                             "flatMap"
-                                if !args.is_empty() => {
+                                if args.len() == 1 => {
                                     let cb = args.into_iter().next().unwrap();
                                     let cb = ctx.maybe_wrap_builtin_callback(cb, &call.args[0]);
                                     return Ok(Ok(Expr::ArrayFlatMap {
