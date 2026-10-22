@@ -5,6 +5,7 @@ mod callback_origin;
 mod captured;
 mod cjs_require;
 mod closed_world;
+mod closure_context;
 mod hub_tokens;
 mod layout_key;
 mod native_proto;

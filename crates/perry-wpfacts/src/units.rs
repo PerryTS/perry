@@ -955,6 +955,7 @@ fn merge_unit(pf: &mut ProgramFacts, mi: usize, path: &str, u: ProgramFacts) {
     a.instances += s.instances;
     a.shared_instances += s.shared_instances;
     a.composed += s.composed;
+    a.contexts += s.contexts;
     a.work += s.work;
     a.top_calls += s.top_calls;
     a.pts_entries += s.pts_entries;

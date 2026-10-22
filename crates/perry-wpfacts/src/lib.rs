@@ -108,6 +108,8 @@ pub struct Stats {
     pub instances: u64,
     pub shared_instances: u64,
     pub composed: u64,
+    /// Closure contexts made (design §14.2).
+    pub contexts: u64,
     /// Solve work done (see `FactsConfig::max_work`).
     pub work: u64,
     /// The solve hit its budget: no facts were claimed.
@@ -808,7 +810,8 @@ pub(crate) fn compute_in<'a>(
             .keys()
             .filter(|k| k.0 == 1 && k.1 == summary::LAY_NONE)
             .count() as u64,
-        composed: g.m.sum.composed.len() as u64,
+        composed: g.m.sum.ncomposed as u64,
+        contexts: g.m.sum.ctx_nodes.len() as u64,
         work: g.m.work,
         aborted: g.m.aborted,
         pts_entries: g.m.pts_entries,

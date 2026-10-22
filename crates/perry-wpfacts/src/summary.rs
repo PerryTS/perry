@@ -33,6 +33,16 @@ pub const LAY_NONE: u32 = 0;
 const LAY_SITE: u32 = 5 << 28;
 /// The lexical context of a kind-5 instance: the object it constructs.
 const LAY_BIRTH: u32 = 6 << 28;
+/// A closure context key for a closure whose captured cells are its
+/// creator's context's (`CAP_OUTER`): the creator's context id with this
+/// bit. Lexical contexts never set it (kinds stop at 7 << 28).
+const CTX_KEY: u32 = 1 << 31;
+/// What a closure a summary creates captures (design §14.2), a static
+/// property of (summary, closure): a slot of the creator's own frame,
+/// only the creator's outer terms, or neither (shared or module nodes).
+pub const CAP_OWN: u8 = 0;
+pub const CAP_OUTER: u8 = 1;
+pub const CAP_NONE: u8 = 2;
 
 #[derive(Clone, Copy, Debug)]
 pub enum Deferred {
@@ -77,13 +87,18 @@ pub struct Summary {
     /// them from its closure context, never fresh.
     pub outer: Vec<u32>,
     /// Closures this body creates with outer terms: (slot of the closure
-    /// value, closure, its outer terms as terms of this summary). Each
-    /// instance seeds the slot with the closure token of its own context.
-    pub closures: Vec<(u32, FnIdx, Vec<NodeId>)>,
+    /// value, closure, its outer terms as terms of this summary, what they
+    /// capture: `CAP_*`). Each instance seeds the slot with the closure
+    /// token of the context its captured cells are.
+    pub closures: Vec<(u32, FnIdx, Vec<NodeId>, u8)>,
     /// Literals this body births: (slot of the birth node, template). Each
     /// instance seeds its own site token there; the template token stays
     /// on the observation nodes.
     pub births: Vec<(u32, TmplId)>,
+    /// Calls expanded into this summary: (index in `calls`, callee). Only
+    /// this summary's direct calls; the calls copied in with a callee's
+    /// body bind instances (design §14.3).
+    pub expanded: Vec<(u32, FnIdx)>,
 }
 
 #[derive(Clone, Debug)]
@@ -125,9 +140,11 @@ pub struct SumState {
     /// A call the solver made (`solver_call`): the program site behind the
     /// call it was made for, where what it allocates is born.
     pub origin: FxHashMap<CallId, CallId>,
-    /// (template call, callee): expanded into every summary that holds the
-    /// template; its instances never bind it again.
+    /// (call an instance made, callee): the call's summary expanded the
+    /// callee, so the instance already holds its effect and never binds it.
     pub composed: FxHashSet<(CallId, FnIdx)>,
+    /// Calls `compose` expanded.
+    pub ncomposed: usize,
     /// Summarized function -> its SCC in the static call graph.
     pub scc: FxHashMap<FnIdx, u32>,
     /// (call, instance) pairs whose arguments and result are wired.
@@ -158,10 +175,13 @@ pub struct SumState {
     pub ctx_nodes: Vec<Vec<NodeId>>,
     /// Closure context id -> the lexical context it was made under.
     pub ctx_lay: Vec<u32>,
-    /// (closure, lexical context of the instance that made it) -> context
-    /// id. A context is fixed by the program (closures x (sites +
-    /// layouts)), never by an instance, so closure tokens never multiply
-    /// through instances.
+    /// (closure, key) -> context id. The key is what the captured cells
+    /// differ by (design §14.2): the creating instance's lexical context
+    /// for a closure capturing its own frame, its closure context
+    /// (`CTX_KEY | ctx`) for one capturing only outer terms, `CTX_KEY |
+    /// NO_CTX` for one capturing neither. A context is fixed by the
+    /// program (closures x (sites + layouts + contexts)), never by an
+    /// instance, so closure tokens never multiply through instances.
     pub ctx_of: FxHashMap<(FnIdx, u32), CallId>,
 }
 
@@ -602,13 +622,10 @@ impl Model {
         inst
     }
 
-    /// A call an instance made from a template expanded into the summary:
+    /// A call an instance made at a call its summary expanded `f` into:
     /// the instance already holds `f`'s effect.
     fn composed_away(&self, call: CallId, f: FnIdx) -> bool {
-        self.sum
-            .tmpl_of
-            .get(&call)
-            .is_some_and(|&t| self.sum.composed.contains(&(t, f)))
+        self.sum.composed.contains(&(call, f))
     }
 
     /// Bind `call` (or no call: `NO_NODE`) to summarized `ft` for receiver
@@ -796,14 +813,28 @@ impl Model {
             }
             kmap.push(id);
         }
+        for &(i, g) in &s.expanded {
+            self.sum.composed.insert((kmap[i as usize], g));
+        }
         for &(slot, ref toks, prim) in &s.seeds {
             self.add(base[slot as usize], toks, prim);
         }
         // Closures born here carry this instance's nodes for their outer
-        // terms, in the context of its lexical layout.
-        for (slot, g, terms) in &s.closures {
+        // terms, in the context those cells differ by (design §14.2): its
+        // lexical context when they include its own frame, its closure
+        // context when they are its outer terms only, else one context.
+        let ctx = match self.toks[self.sum.insts[inst as usize].tok as usize] {
+            TokKind::Func(_, c) => c,
+            _ => NO_CTX,
+        };
+        for (slot, g, terms, cap) in &s.closures {
             let nodes: Vec<NodeId> = terms.iter().map(|&x| tr(x)).collect();
-            let t = self.closure_tok(*g, lay, &nodes);
+            let (key, clay) = match *cap {
+                CAP_OWN => (lay, lay),
+                CAP_OUTER if ctx != NO_CTX => (CTX_KEY | ctx, self.sum.ctx_lay[ctx as usize]),
+                _ => (CTX_KEY | NO_CTX, LAY_NONE),
+            };
+            let t = self.closure_tok(*g, key, clay, &nodes);
             self.add_tok(base[*slot as usize], t);
         }
         // Literals born here: one token per (literal, lexical context).
@@ -835,20 +866,21 @@ impl Model {
         }
     }
 
-    /// The token of closure `g` made by an instance of lexical context
-    /// `lay` (`Inst::lay`), whose nodes for `g`'s outer terms are `nodes`.
-    /// The context's own nodes are those terms for every instance of that
-    /// context, both ways: what the closure writes into a captured local
-    /// reaches the instance that made it.
-    pub(crate) fn closure_tok(&mut self, g: FnIdx, lay: u32, nodes: &[NodeId]) -> Tok {
-        let ctx = match self.sum.ctx_of.get(&(g, lay)) {
+    /// The token of closure `g` made by an instance whose captured cells
+    /// are keyed `key` (`SumState::ctx_of`), under lexical context `lay`,
+    /// whose nodes for `g`'s outer terms are `nodes`. The context's own
+    /// nodes are those terms for every instance of that key, both ways:
+    /// what the closure writes into a captured local reaches the instance
+    /// that made it.
+    pub(crate) fn closure_tok(&mut self, g: FnIdx, key: u32, lay: u32, nodes: &[NodeId]) -> Tok {
+        let ctx = match self.sum.ctx_of.get(&(g, key)) {
             Some(&c) => c,
             None => {
                 let c = self.sum.ctx_nodes.len() as CallId;
                 let cn: Vec<NodeId> = (0..nodes.len())
                     .map(|j| self.node_named("ctx", || format!("ctx{c}.{j}")))
                     .collect();
-                self.sum.ctx_of.insert((g, lay), c);
+                self.sum.ctx_of.insert((g, key), c);
                 self.sum.ctx_nodes.push(cn);
                 self.sum.ctx_lay.push(lay);
                 c
@@ -1096,8 +1128,10 @@ fn static_callees(m: &Model, s: &Summary) -> Vec<(usize, Vec<FnIdx>)> {
 }
 
 /// Expand every call to a summarized function outside the caller's SCC
-/// into the caller's summary (design CW2 3.2). SCCs come out of Tarjan's
-/// walk callees first, so a callee's summary is final when it is copied.
+/// into the caller's summary (design CW2 3.2), one level (design §14.3):
+/// the callee's own body, before its composition. The static calls inside
+/// it are copied as calls its caller's instances bind: below a site's own
+/// callee, the shape is the context, not the call string.
 /// Returns (expanded calls, SCCs).
 fn compose(m: &mut Model, obs_of: &dyn Fn(FnIdx, &Model) -> Vec<NodeId>) -> (usize, usize) {
     let mut fs: Vec<FnIdx> = m.sum.of.keys().copied().collect();
@@ -1176,6 +1210,7 @@ fn compose(m: &mut Model, obs_of: &dyn Fn(FnIdx, &Model) -> Vec<NodeId>) -> (usi
             m.sum.scc.insert(f, i as u32);
         }
     }
+    let own_of: FxHashMap<FnIdx, Rc<Summary>> = m.sum.of.clone();
     let mut n = 0usize;
     for c in &order {
         for &f in c {
@@ -1186,11 +1221,8 @@ fn compose(m: &mut Model, obs_of: &dyn Fn(FnIdx, &Model) -> Vec<NodeId>) -> (usi
                     if m.sum.scc[&g] == m.sum.scc[&f] {
                         continue;
                     }
-                    let t = s.calls[*ci].0;
-                    if !m.sum.composed.insert((t, g)) {
-                        continue;
-                    }
-                    let sg = m.sum.of[&g].clone();
+                    s.expanded.push((*ci as u32, g));
+                    let sg = own_of[&g].clone();
                     expand(&mut s, *ci, &sg, &obs_of(g, m));
                     any = true;
                     n += 1;
@@ -1202,6 +1234,7 @@ fn compose(m: &mut Model, obs_of: &dyn Fn(FnIdx, &Model) -> Vec<NodeId>) -> (usi
             }
         }
     }
+    m.sum.ncomposed = n;
     (n, order.len())
 }
 
@@ -1240,9 +1273,12 @@ fn expand(s: &mut Summary, ci: usize, g: &Summary, gobs: &[NodeId]) {
     for (t, cs) in &g.calls {
         s.calls.push((*t, map_call(cs, tr)));
     }
-    for (c, h, terms) in &g.closures {
+    for (c, h, terms, cap) in &g.closures {
         s.closures
-            .push((off + c, *h, terms.iter().map(|&x| tr(x)).collect()));
+            .push((off + c, *h, terms.iter().map(|&x| tr(x)).collect(), *cap));
+    }
+    for &(i, h) in &g.expanded {
+        s.expanded.push((coff + i, h));
     }
     for &(b, tm) in &g.births {
         s.births.push((off + b, tm));
@@ -1350,7 +1386,7 @@ pub fn compress(s: &mut Summary) {
     for &(b, _) in &s.births {
         pinned[b as usize] = true;
     }
-    for (c, _, terms) in &s.closures {
+    for (c, _, terms, _) in &s.closures {
         pinned[*c as usize] = true;
         for &x in terms {
             if let Some(i) = sl(x) {
@@ -1525,7 +1561,7 @@ pub fn compress(s: &mut Summary) {
     for (b, _) in s.births.iter_mut() {
         *b = map[*b as usize];
     }
-    for (c, _, terms) in s.closures.iter_mut() {
+    for (c, _, terms, _) in s.closures.iter_mut() {
         *c = map[*c as usize];
         for x in terms.iter_mut() {
             *x = rn(*x);
