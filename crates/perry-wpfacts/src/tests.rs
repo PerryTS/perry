@@ -2,6 +2,7 @@
 
 mod array_ctor;
 mod array_length;
+mod array_record;
 mod birth_site;
 mod callback_origin;
 mod captured;

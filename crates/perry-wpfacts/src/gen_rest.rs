@@ -1784,8 +1784,20 @@ impl<'a> Gen<'a> {
             "arrayRecordNeedsIterator" | "arrayRecordForBound" | "hasPathModule" => {
                 self.prim_node(prim::BOOL)
             }
-            "arrayRecordIndex" | "arrayRecordLength" | "arrayRecordForUpdate" => {
-                self.prim_node(prim::NUM | prim::BOOL)
+            // What codegen lowers them to: the cursor itself, the payload's
+            // length, and `mode ? 0 : update`.
+            "arrayRecordIndex" => match arg(0) {
+                Some(a) => a,
+                None => self.prim_node(prim::NUM),
+            },
+            "arrayRecordLength" => self.prim_node(prim::NUM),
+            "arrayRecordForUpdate" => {
+                let out = self.tmp("glue-update");
+                self.m.add_prim(out, prim::NUM);
+                if let Some(a) = arg(1) {
+                    self.m.edge(a, out);
+                }
+                out
             }
             "requireResolveNodeModules" => self.prim_node(prim::STR | prim::UNDEF),
             // The value checked, nothing else: a second argument is the

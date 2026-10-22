@@ -93,6 +93,23 @@ impl Model {
         self.accessor_walk(origin, t, key, ChainAct::Load(dst));
     }
 
+    /// A key no builtin prototype defines (ToPropertyKey of `true`, `false`,
+    /// `null`, `undefined`; ECMA-262 has no such member): the receiver's own
+    /// field and its program prototype chain, else `undefined`. The builtin
+    /// member approximation (`tok_load`) has nothing under it.
+    pub fn load_program_key(&mut self, t: Tok, a: Atom, dst: NodeId) {
+        if t == TOP || matches!(self.toks[t as usize], TokKind::BuiltinFn) {
+            return self.load_from(t, t, Key::Named(a), dst);
+        }
+        self.mark_use(t, crate::model::MARK_READ);
+        self.add_prim(dst, prim::UNDEF);
+        let f = self.field(t, a);
+        self.edge(f, dst);
+        let cv = self.cv(t, Key::Named(a));
+        self.edge(cv, dst);
+        self.accessor_walk(t, t, Key::Named(a), ChainAct::Load(dst));
+    }
+
     /// Accessors run with the receiver as `this`. Named keys an accessor
     /// may be defined under walk the chain per receiver; computed keys
     /// visit, through the prototype closure, only holders with accessors.

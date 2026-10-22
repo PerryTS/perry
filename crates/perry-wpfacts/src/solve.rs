@@ -1049,6 +1049,21 @@ impl Model {
                 if named && self.idx_done.insert((n, obj, dst, 1)) {
                     self.load_from(obj, obj, Key::Any, dst);
                 }
+                // ToPropertyKey of `true`, `null`, `undefined` is a named key.
+                if !named {
+                    for (bit, keys) in [
+                        (prim::BOOL, &["true", "false"][..]),
+                        (prim::NULL, &["null"][..]),
+                        (prim::UNDEF, &["undefined"][..]),
+                    ] {
+                        if prim & bit != 0 && self.idx_done.insert((n, obj, dst, 2 + bit as u8)) {
+                            for k in keys {
+                                let a = self.atom(k);
+                                self.load_program_key(obj, a, dst);
+                            }
+                        }
+                    }
+                }
             }
             Cons::Arith { dst, add } => {
                 let mut out = 0u16;
