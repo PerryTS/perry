@@ -383,9 +383,29 @@ jobs:
           # directory, rather than inside psm/ring/zstd-sys's build scripts.
           if ! command -v llvm-lib >/dev/null; then
             echo "::error::llvm-lib is not on PATH (LLVM_SYS_221_PREFIX=${LLVM_SYS_221_PREFIX:-unset})"
-            ls "${LLVM_SYS_221_PREFIX:-/usr/lib/llvm-22}/bin" | head -40
+            ls -1 "${LLVM_SYS_221_PREFIX:-/usr/lib/llvm-22}/bin"
             exit 1
           fi
+          # perry-stdlib's `crypto` feature pulls openssl-sys, whose vendored
+          # build cannot configure OpenSSL for windows-msvc on a Linux host.
+          # `check` only needs headers and import libraries to exist, so point
+          # the build at the host headers and an empty COFF archive; nothing
+          # links it.
+          stub="$RUNNER_TEMP/openssl-stub"
+          mkdir -p "$stub/include/openssl" "$stub/lib"
+          cp /usr/include/openssl/*.h "$stub/include/openssl/"
+          if [ -d /usr/include/x86_64-linux-gnu/openssl ]; then
+            cp /usr/include/x86_64-linux-gnu/openssl/*.h "$stub/include/openssl/"
+          fi
+          echo 'int perry_openssl_stub;' > "$stub/stub.c"
+          clang --target=x86_64-pc-windows-msvc -c "$stub/stub.c" -o "$stub/stub.obj"
+          llvm-lib "/out:$stub/lib/libssl.lib" "$stub/stub.obj"
+          cp "$stub/lib/libssl.lib" "$stub/lib/libcrypto.lib"
+          export OPENSSL_NO_VENDOR=1
+          export X86_64_PC_WINDOWS_MSVC_OPENSSL_DIR="$stub"
+          export X86_64_PC_WINDOWS_MSVC_OPENSSL_LIB_DIR="$stub/lib"
+          export X86_64_PC_WINDOWS_MSVC_OPENSSL_INCLUDE_DIR="$stub/include"
+          export X86_64_PC_WINDOWS_MSVC_OPENSSL_LIBS=libssl:libcrypto
           cargo xwin check -p perry-runtime -p perry-stdlib --target x86_64-pc-windows-msvc
 
       - name: Save cargo-xwin MSVC sysroot (main-line runs only)
