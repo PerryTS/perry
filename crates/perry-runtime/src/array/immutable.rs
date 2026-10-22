@@ -430,6 +430,15 @@ pub extern "C" fn js_array_copy_within(
             elements.add(t as usize),
             count as usize,
         );
+        // EK §3.1 `copyWithin`: the moved slots carry their holes; the exact
+        // rule follows the source's leading non-hole run.
+        let prefix = (*arr).ek_prefix;
+        crate::array::ek_set_prefix(
+            arr,
+            prefix,
+            crate::array::ek_prefix_after_copy_within(prefix, t as u32, s as u32, count as u32),
+        );
+        crate::array::ek_debug_verify(arr);
         rebuild_array_layout(arr);
         arr
     }

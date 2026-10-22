@@ -743,6 +743,7 @@ unsafe fn elements_push_in_capacity(elements: *mut ArrayHeader, value: f64) -> O
     crate::string::js_string_addref_if_heap_string(value);
     crate::array::store_array_slot_resolved(elements, length as usize, value, flags);
     (*elements).length = length + 1;
+    crate::array::ek_note_published(elements, length as usize);
     Some(f64::from(length + 1))
 }
 

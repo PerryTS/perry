@@ -194,6 +194,10 @@ pub extern "C" fn js_array_splice(
             let elements_ptr =
                 crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut f64;
 
+            // EK §3.1 `splice`: the prefix before the move; the exact rule is
+            // installed once the new length is published below.
+            let ek_prefix = (*arr).ek_prefix;
+
             // Shift elements after the splice point
             let tail_start = start_idx + actual_delete;
             let tail_len = len as u32 - tail_start;
@@ -223,6 +227,9 @@ pub extern "C" fn js_array_splice(
                 }
             }
 
+            // [0, s) is untouched whatever happens next: a throw below leaves
+            // the moved contents under the old length.
+            crate::array::ek_lower_prefix(arr, start_idx);
             // ECMA-262 §23.1.3.31 step 24: Set(O, "length", …, true) — throws on a
             // non-writable `length` (test262 splice/S15.4.4.12_A6.1_T2/T3).
             super::push_pop::guard_writable_length(arr);
@@ -232,6 +239,15 @@ pub extern "C" fn js_array_splice(
             } else {
                 (*arr).length = new_len;
             }
+            // The rule assumes [s, s+k) holds the k items; a call without an
+            // item buffer writes none, and only [0, s) is then known.
+            let proved = if items_count == 0 || !item_handles.is_empty() {
+                crate::array::ek_prefix_after_splice(ek_prefix, start_idx, actual_delete, items_count)
+            } else {
+                ek_prefix.min(start_idx)
+            };
+            crate::array::ek_set_prefix(arr, ek_prefix, proved);
+            crate::array::ek_debug_verify(arr);
             let moved_count = if items_count != actual_delete {
                 tail_len as usize
             } else {

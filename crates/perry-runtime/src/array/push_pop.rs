@@ -787,6 +787,7 @@ pub unsafe extern "C" fn js_array_fill_values(
         // note and write barrier as part of the slot write.
         store_array_slot_resolved(arr, i as usize, value, flags);
         (*arr).length = i + 1;
+        crate::array::ek_note_published(arr, i as usize);
     }
     arr
 }
@@ -832,6 +833,7 @@ unsafe fn js_array_push_f64_resolved(arr: *mut ArrayHeader, value: f64) -> *mut 
     // note and write barrier as part of the slot write.
     store_array_slot_resolved(arr, length as usize, value, flags);
     (*arr).length = length + 1;
+    crate::array::ek_note_published(arr, length as usize);
     arr
 }
 
@@ -1061,6 +1063,7 @@ fn push_array_spec_path(arr: *mut ArrayHeader, value: f64) -> *mut ArrayHeader {
         }
         guard_writable_length(current);
         (*current).length = length + 1;
+        crate::array::ek_note_published(current, length as usize);
         rebuild_array_layout(current);
         current
     }
@@ -1416,6 +1419,8 @@ fn try_truncate_plain_array_to_zero(arr: *mut ArrayHeader) -> bool {
             ptr::write(elements.add(i as usize), crate::value::TAG_HOLE);
         }
         (*arr).length = 0;
+        // EK §3.3: the reset at length 0.
+        crate::array::ek_lower_prefix(arr, 0);
         rebuild_array_layout(arr);
     }
     true
@@ -1542,6 +1547,8 @@ pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
                     ptr::write(elements.add(i as usize), crate::value::TAG_HOLE);
                 }
                 (*arr).length = n;
+                // EK §3.1 `length = n`: the prefix stops at the new length.
+                crate::array::ek_lower_prefix(arr, n);
                 rebuild_array_layout(arr);
                 return;
             }
@@ -1577,6 +1584,9 @@ pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
                 }
             }
             (*arr).length = n;
+            // EK §3.1: every removed slot went through the delete funnel,
+            // which lowered the prefix; the length bound states it.
+            crate::array::ek_lower_prefix(arr, n);
             refresh_array_numeric_layout(arr);
         } else if n > cur {
             let scope = crate::gc::RuntimeHandleScope::new();
@@ -1822,6 +1832,10 @@ pub extern "C" fn js_array_unshift_f64(arr: *mut ArrayHeader, value: f64) -> *mu
         // Write new element at beginning
         ptr::write(elements_ptr, value);
         (*arr).length = length + 1;
+        // EK §3.1 `unshift`: old [0, P) lands at [1, P + 1) and slot 0 holds
+        // the value, so the prefix grows by one (descriptor clamp inside).
+        let prefix = (*arr).ek_prefix;
+        crate::array::ek_set_prefix(arr, prefix, prefix + 1);
         finish_array_dense_move_layout(
             arr,
             elements_ptr.cast(),
@@ -1920,6 +1934,10 @@ pub extern "C" fn js_array_unshift_variadic(
             ptr::write(elements_ptr.add(i), v);
         }
         (*arr).length = length + n as u32;
+        // EK §3.1 `unshift`: old [0, P) lands at [n, P + n) and [0, n) holds
+        // the items, so the prefix grows by n (descriptor clamp inside).
+        let prefix = (*arr).ek_prefix;
+        crate::array::ek_set_prefix(arr, prefix, prefix + n as u32);
         finish_array_dense_move_layout(
             arr,
             elements_ptr.cast(),

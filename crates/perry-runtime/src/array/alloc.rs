@@ -65,7 +65,7 @@ pub(crate) fn array_capacity_or_throw(capacity: u32) -> u32 {
 /// a request raises `RangeError: Invalid array length` before any memory is
 /// reserved (`header::array_byte_size`), as node does for an array it cannot
 /// hold. The capacity (logical slots plus any named-property reserve) is at
-/// most 536 870 909 elements, a 4 GiB block.
+/// most 536 870 907 elements, a 4 GiB block.
 pub(crate) const ARRAY_MAX_CAPACITY: u32 =
     ((u32::MAX as usize - crate::gc::GC_HEADER_SIZE - std::mem::size_of::<ArrayHeader>())
         / std::mem::size_of::<f64>()) as u32;

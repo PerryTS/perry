@@ -48,6 +48,7 @@ pub unsafe extern "C" fn js_array_append_set(
                 store_array_slot_resolved(arr, length as usize, value, flags);
             }
             (*arr).length = length + 1;
+            crate::array::ek_note_published(arr, length as usize);
             arr
         } else {
             let scope = crate::gc::RuntimeHandleScope::new();
@@ -127,5 +128,6 @@ pub(super) unsafe fn grow(arr: *mut ArrayHeader, length: u32, value: f64) -> *mu
     // and write barrier as part of the slot write.
     store_array_slot_resolved(arr, length as usize, value, flags);
     (*arr).length = length + 1;
+    crate::array::ek_note_published(arr, length as usize);
     arr
 }

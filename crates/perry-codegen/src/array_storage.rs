@@ -34,6 +34,21 @@ impl LlBlock {
         self.sub(I64, &end, &bytes)
     }
 
+    /// Lower the array's dense prefix P (EK design §3.1) to at most `bound`
+    /// (an i32): every inline store that lowers `length` keeps
+    /// `P <= length`, as the runtime's `array_truncate_length` does. The
+    /// caller has proved a live, non-forwarded GC_TYPE_ARRAY.
+    pub(crate) fn array_lower_ek_prefix(&mut self, array: &str, bound: &str) {
+        let offset = crate::target_layout::ARRAY_EK_PREFIX_OFFSET_BYTES.to_string();
+        let prefix_addr = self.add(I64, array, &offset);
+        let prefix_ptr = self.inttoptr(I64, &prefix_addr);
+        let prefix = self.load(I32, &prefix_ptr);
+        let above = self.icmp_ult(I32, bound, &prefix);
+        let lowered = self.select(crate::types::I1, &above, I32, bound, &prefix);
+        // GC_STORE_AUDIT(POINTER_FREE): the element-kind word is an integer, never an edge.
+        self.store(I32, &lowered, &prefix_ptr);
+    }
+
     /// Address one checked GET slot in the same canonical backing. The caller
     /// proves a live Array and `index < capacity`. In eight-byte slot units,
     /// `size/8 - capacity + index` lies in `[2, size/8)`, so this u32 arithmetic

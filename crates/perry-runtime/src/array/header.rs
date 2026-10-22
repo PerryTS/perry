@@ -1154,6 +1154,7 @@ pub(crate) unsafe fn array_has_raw_f64_layout_or_holes(arr: *const ArrayHeader) 
 pub(crate) unsafe fn note_array_hole_fill_slot(arr: *mut ArrayHeader, index: usize) {
     // GC_STORE_AUDIT(BARRIERED): TAG_HOLE sentinel store, layout-noted and barriered below.
     std::ptr::write(array_elements_ptr(arr).add(index), crate::value::TAG_HOLE);
+    super::ek_note_slot(arr, index, crate::value::TAG_HOLE);
     crate::gc::layout_note_slot(arr as usize, index, crate::value::TAG_HOLE);
     let slot = array_elements_ptr(arr).add(index) as usize;
     crate::gc::runtime_write_barrier_slot(arr as usize, slot, crate::value::TAG_HOLE);
@@ -1710,6 +1711,7 @@ pub(crate) unsafe fn array_numeric_raw_f64_push_inbounds_resolved(
     let flags = array_object_flags_resolved(arr);
     crate::array::note_element_store_resolved_flags(arr, length as usize, number.to_bits(), flags);
     (*arr).length = length + 1;
+    crate::array::ek_note_published(arr, length as usize);
     true
 }
 

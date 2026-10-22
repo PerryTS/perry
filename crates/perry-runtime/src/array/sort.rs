@@ -509,6 +509,11 @@ unsafe fn publish_sorted_values(
             // GC_STORE_AUDIT(POINTER_FREE): a deleted slot has no child edge.
             *dest.add(i) = f64::from_bits(crate::value::TAG_HOLE);
         }
+        // EK §3.1 `sort`: the values and undefineds now fill the front and
+        // the holes the rest of the original range.
+        let prefix = (*arr).ek_prefix;
+        crate::array::ek_set_prefix(arr, prefix, (count + undefined_count) as u32);
+        crate::array::ek_debug_verify(arr);
         rebuild_array_layout(arr);
         return arr;
     }

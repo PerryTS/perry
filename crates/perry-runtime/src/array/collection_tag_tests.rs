@@ -193,6 +193,11 @@ fn a_stale_registry_entry_over_recycled_bytes_does_not_read_as_a_map() {
         let recycled = addr as *mut ArrayHeader;
         (*recycled).length = 2;
         (*recycled).capacity = 2;
+        // A hand-built array writes its whole header: the element-kind word
+        // too, at the weakest claim (EK9), or the DEBUG word check reads the
+        // recycled Map bytes as a prefix.
+        (*recycled).ek_prefix = 0;
+        (*recycled).ek_kind = 0;
         let elements = crate::array::array_elements_ptr(addr as *const ArrayHeader) as *mut f64;
         // GC_STORE_AUDIT(POINTER_FREE): raw f64 numerics into a buffer this
         // test allocated and re-stamped itself; no heap pointer is stored.

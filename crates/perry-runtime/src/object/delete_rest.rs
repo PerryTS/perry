@@ -631,6 +631,8 @@ pub extern "C" fn js_object_delete_field(
                 std::ptr::copy(elements.add(i + 1), elements.add(i), new_count - i);
             }
             (*keys).length = new_count as u32;
+            // EK §3.1 (a removal moves the tail down): only [0, i) is untouched.
+            crate::array::ek_lower_prefix(keys, i as u32);
             // The attributes shift with their keys (a dictionary receiver's
             // private list is the one owned list that carries them).
             crate::object::key_attrs::owned_note_remove(keys, i as u32);
@@ -1035,6 +1037,7 @@ unsafe fn try_delete_stable_sso(obj: *mut ObjectHeader, key: JSValue) -> Option<
                 overflow_set(obj as usize, slot as usize, crate::value::TAG_HOLE);
             }
             (*keys).length = 0;
+            crate::array::ek_lower_prefix(keys, 0);
             super::rebuild_array_layout_from_slots(keys);
             if super::shapes::rekey_stable_tombstone_shape_after_squeeze(
                 obj,

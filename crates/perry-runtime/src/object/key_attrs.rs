@@ -1725,6 +1725,8 @@ pub(crate) unsafe fn owned_note_remove(keys: *mut ArrayHeader, pos: u32) {
         len - pos as usize - 1,
     );
     (*attrs).length = len as u32 - 1;
+    // EK §3.1 (a removal moves the tail down): only [0, pos) is untouched.
+    crate::array::ek_lower_prefix(attrs, pos as u32);
     recompute_cumulative(keys, attrs, pos);
 }
 

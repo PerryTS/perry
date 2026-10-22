@@ -730,6 +730,8 @@ pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
 /// only after the last direct use of that pointer.
 #[inline]
 pub(super) unsafe fn array_get_resolved(arr: *const ArrayHeader, index: u32) -> f64 {
+    // EK §5: a read below the prefix relies on its slot being plain data.
+    crate::array::ek_debug_verify_read(arr, index as usize);
     // #6748 grind: per-array flag, not the process-global gate (see
     // `array_has_own_index`) — this probe allocated two Strings on EVERY
     // checked element read once any descriptor existed process-wide, which
@@ -1729,6 +1731,7 @@ unsafe fn js_array_set_f64_extend_resolved(
         // note and write barrier as part of the slot write.
         let value_bits = store_array_slot_resolved(arr, index as usize, value, store_flags);
         (*arr).length = new_length;
+        crate::array::ek_note_published(arr, index as usize);
         if had_raw_layout
             && index > length
             && crate::array::header::value_bits_are_numeric(value_bits)

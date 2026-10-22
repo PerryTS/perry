@@ -216,6 +216,8 @@ pub(crate) fn lower_array_pop_inline(ctx: &mut FnCtx<'_>, recv_box: &str) -> Str
         // store writes no edge.
         blk.store(I64, crate::nanbox::TAG_HOLE_I64, &elem_ptr);
         blk.store(I32, &new_length, &len_ptr);
+        // EK §3.1 `pop`: the dense prefix never covers the vacated slot.
+        blk.array_lower_ek_prefix(&payload, &new_length);
         blk.br(&merge_label);
     }
     let take_end = take_label.clone();
@@ -433,6 +435,16 @@ mod tests {
         assert!(
             take.contains(&format!("store i64 {}", crate::nanbox::TAG_HOLE_I64)),
             "{what}: the vacated slot must be written with the hole sentinel:\n{take}"
+        );
+        // EK §3.1 `pop`: the dense prefix (the i32 at payload +16) is clamped
+        // to the new length, or a guarded read below it would load the hole.
+        let prefix_offset = format!(", {}\n", crate::target_layout::ARRAY_EK_PREFIX_OFFSET_BYTES);
+        assert!(
+            take.contains(&prefix_offset)
+                && take.contains("icmp ult i32")
+                && take.contains("select i1")
+                && take.matches("store i32").count() == 2,
+            "{what}: the inline pop must lower the dense prefix to the new length:\n{take}"
         );
         assert!(
             hdr.contains("@PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED")

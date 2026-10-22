@@ -331,6 +331,12 @@ pub extern "C" fn js_array_reverse(arr: *mut ArrayHeader) -> *mut ArrayHeader {
             i += 1;
             j -= 1;
         }
+        // EK §3.1 `reverse`: a fully dense array stays dense; otherwise the
+        // suffix holes move to the front.
+        if (*arr).ek_prefix as usize != len {
+            crate::array::ek_lower_prefix(arr, 0);
+        }
+        crate::array::ek_debug_verify(arr);
         rebuild_array_layout(arr);
         arr
     }
@@ -548,6 +554,16 @@ unsafe fn fill_through_set(
     arr
 }
 
+/// EK §3.1 `fill(v, s, e)`: the slots `[s, e)` now hold `value`, so a range
+/// that starts inside the prefix extends it to `e` (descriptor clamp inside).
+unsafe fn ek_after_fill(arr: *mut ArrayHeader, value: f64, start: u32, end: u32) {
+    let prefix = (*arr).ek_prefix;
+    if value.to_bits() != crate::value::TAG_HOLE && start <= prefix && prefix < end {
+        crate::array::ek_set_prefix(arr, prefix, end);
+    }
+    crate::array::ek_debug_verify(arr);
+}
+
 /// `Array.prototype.fill(value)` — fills every element (0..length) with
 /// `value`. Returns the same array pointer.
 #[no_mangle]
@@ -584,6 +600,7 @@ pub extern "C" fn js_array_fill(arr: *mut ArrayHeader, value: f64) -> *mut Array
             // GC_STORE_AUDIT(BARRIERED): fill slot writes are followed by layout/barrier rebuild.
             *elements.add(i) = value;
         }
+        ek_after_fill(arr, value, 0, len as u32);
         rebuild_array_layout(arr);
         arr
     }
@@ -671,6 +688,7 @@ pub extern "C" fn js_array_fill_range(
             // GC_STORE_AUDIT(BARRIERED): fill range writes are followed by layout/barrier rebuild.
             *elements.add(i as usize) = value;
         }
+        ek_after_fill(arr, value, s as u32, e as u32);
         rebuild_array_layout(arr);
         arr
     }

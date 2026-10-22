@@ -9,6 +9,13 @@ mod concat_reverse;
 /// #10593: a retargeted array's prototype is a per-array fact.
 #[cfg(test)]
 mod custom_proto_scope_tests;
+mod element_kind;
+#[cfg(test)]
+mod element_kind_tests;
+pub(crate) use element_kind::{
+    ek_debug_verify, ek_debug_verify_read, ek_lower_prefix, ek_note_published, ek_note_slot, ek_prefix_after_copy_within,
+    ek_prefix_after_splice, ek_set_prefix,
+};
 mod element_shape;
 mod fill_extend;
 mod flat_clone;

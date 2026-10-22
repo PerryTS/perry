@@ -104,6 +104,7 @@ pub(crate) unsafe fn note_array_slot(arr: *mut ArrayHeader, index: usize, value_
     let value_bits = canonicalize_array_numeric_store_bits(arr, value_bits);
     // GC_STORE_AUDIT(BARRIERED): shared helper notes layout and emits the array slot barrier below.
     std::ptr::write(array_elements_ptr(arr).add(index), value_bits);
+    super::ek_note_slot(arr, index, value_bits);
     note_array_numeric_index_write(arr, index, value_bits);
     crate::gc::layout_note_slot(arr as usize, index, value_bits);
     let slot = array_elements_ptr(arr).add(index) as usize;
@@ -134,6 +135,7 @@ pub(crate) unsafe fn note_array_slot_resolved_flags(
     let old_bits = std::ptr::read(slot_ptr);
     // GC_STORE_AUDIT(BARRIERED): resolved-flags helper notes layout and emits the array slot barrier below.
     std::ptr::write(slot_ptr, value_bits);
+    super::ek_note_slot(arr, index, value_bits);
     value_bits = note_array_numeric_index_write(arr, index, value_bits);
     crate::gc::layout_note_slot_aware(arr as usize, index, value_bits, old_bits);
     let slot = slot_ptr as usize;
@@ -167,6 +169,7 @@ pub(crate) unsafe fn store_array_slot_resolved(
     // GC_STORE_AUDIT(BARRIERED): the layout note and resolved slot barrier
     // below cover this resolved-head slot write.
     std::ptr::write(array_elements_ptr(arr).add(index), value_bits);
+    super::ek_note_slot(arr, index, value_bits);
     note_array_numeric_index_write(arr, index, value_bits);
     if !array_scalar_store_note_is_noop(arr, value_bits) {
         crate::gc::layout_note_slot(arr as usize, index, value_bits);
@@ -222,6 +225,7 @@ pub(crate) unsafe fn fill_resolved_array_slot(
     // and born-old barrier below cover this slot exactly as the layout-only
     // helper does.
     std::ptr::write(array_elements_ptr(arr).add(index), value_bits);
+    super::ek_note_slot(arr, index, value_bits);
     if number.is_none() {
         // A non-number retires the dense raw-f64 claim, exactly as
         // `note_array_numeric_index_write` does.
@@ -252,6 +256,7 @@ pub(crate) unsafe fn note_array_slot_layout_only(
     let value_bits = canonicalize_array_numeric_store_bits(arr, value_bits);
     // GC_STORE_AUDIT(INIT): layout-only helper is restricted to fresh/suppressed caller sites.
     std::ptr::write(array_elements_ptr(arr).add(index), value_bits);
+    super::ek_note_slot(arr, index, value_bits);
     note_array_numeric_index_write(arr, index, value_bits);
     if !array_scalar_store_note_is_noop(arr, value_bits) {
         crate::gc::layout_note_slot(arr as usize, index, value_bits);

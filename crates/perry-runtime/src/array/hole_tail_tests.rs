@@ -101,10 +101,13 @@ fn shift_leaves_holes() {
 /// the ceiling and this request reaches `gc_header_size_word`'s panic instead.
 #[test]
 fn capacity_past_the_size_ceiling_is_a_range_error() {
+    // GcHeader + ArrayHeader (the element-kind word made the header 24 bytes).
+    const OVERHEAD: u64 =
+        (crate::gc::GC_HEADER_SIZE + std::mem::size_of::<super::ArrayHeader>()) as u64;
     const {
         assert!(
-            super::alloc::ARRAY_MAX_CAPACITY as u64 * 8 + 24 <= u32::MAX as u64
-                && (super::alloc::ARRAY_MAX_CAPACITY as u64 + 1) * 8 + 24 > u32::MAX as u64
+            super::alloc::ARRAY_MAX_CAPACITY as u64 * 8 + OVERHEAD <= u32::MAX as u64
+                && (super::alloc::ARRAY_MAX_CAPACITY as u64 + 1) * 8 + OVERHEAD > u32::MAX as u64
         )
     };
     let outcome = crate::exception::catch_js_throw(|| {
