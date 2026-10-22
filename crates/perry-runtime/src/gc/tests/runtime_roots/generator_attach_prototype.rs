@@ -226,8 +226,9 @@ fn attach_prototype_survives_an_alloc_point_copying_minor_inside_the_call() {
     assert_wiring_followed_the_move(returned, before, "js_generator_attach_prototype");
 }
 
-/// The closure-identity path, whose extra allocation is
-/// `generator_function_prototype_of` minting this function's `g.prototype`.
+/// The closure-identity path. The function's declared `prototype` is born
+/// with its bag in a no-move window, so it is materialized before the trigger
+/// is armed; the collecting allocation is then the instance's relink to it.
 ///
 /// SABOTAGE CHECK: restore the entry-bound `obj_ptr` in
 /// `js_generator_attach_closure_prototype` and this goes red.
@@ -253,6 +254,14 @@ fn attach_closure_prototype_survives_an_alloc_point_copying_minor_inside_the_cal
         0,
     );
     assert!(!closure.is_null(), "closure allocation failed");
+    let closure_root = RuntimeHandleScope::new();
+    let closure = closure_root.root_raw_mut_ptr(closure);
+    assert!(
+        crate::object::generator_function_prototype_of(closure.get_raw_mut_ptr::<u8>() as usize)
+            .is_some(),
+        "the declared prototype slot materializes"
+    );
+    let closure = closure.get_raw_mut_ptr::<crate::closure::ClosureHeader>();
 
     let (obj_value, before) = rooted_instance();
     arm_collection_on_next_block(&trigger_guard);

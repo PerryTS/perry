@@ -1547,8 +1547,7 @@ unsafe fn link_of(dir: *const u8, cur: *const ObjectHeader, rc: *const ShapeReco
             return Next::End;
         }
         bits = if pid == super::PROTO_ID_RECORD_HELD {
-            // A generator instance: its record holds the link.
-            crate::object::generator_record_prototype_word(cur)
+            record_held_link(cur)
         } else if (super::PROTO_ID_CLASS..super::PROTO_ID_MIXED).contains(&pid) {
             let word_dir = *(dir.add(FLAT_BASE_OFFSET + 24) as *const *const u8);
             if word_dir.is_null() {
@@ -1571,6 +1570,13 @@ unsafe fn link_of(dir: *const u8, cur: *const ObjectHeader, rc: *const ShapeReco
         return Next::Unknown;
     }
     Next::Object((bits & POINTER_MASK) as *const ObjectHeader)
+}
+
+/// A generator instance's link: its record holds it. Out of line, so the
+/// record read stays off every other receiver's hop.
+#[inline(never)]
+unsafe fn record_held_link(cur: *const ObjectHeader) -> u64 {
+    crate::object::generator_record_prototype_word(cur)
 }
 
 /// The first prototype of `obj` that holds `key_bits`, if every object
