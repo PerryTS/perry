@@ -672,6 +672,10 @@ pub struct Model {
     /// Reused token buffers (no allocation per rule application).
     pub bufs: Vec<Vec<Tok>>,
     pub sunk_nodes: crate::pts::FxHashSet<NodeId>,
+    /// Classes linked to a parent at gen time whose `extends` expression is
+    /// still evaluated (a class in a CommonJS factory, §17.4): the node the
+    /// evaluated value reaches. After the solve it must be that parent.
+    pub parent_checks: Vec<(TmplId, NodeId)>,
     pub any_walk_done: crate::pts::FxHashSet<(NodeId, Tok, ChainAct)>,
     pub any_walks: Vec<(NodeId, Tok, Tok, ChainAct)>,
     /// Computed-key walks by holder: every (receiver, act) whose walk

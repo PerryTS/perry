@@ -1369,6 +1369,16 @@ impl<'a> Gen<'a> {
                 self.m.edge(v, pv);
                 self.parent_fed.insert(tm);
             }
+            // The class is linked to its parent by name; the evaluated
+            // `extends` value is that parent unless the binding changed.
+            // The value is checked after the solve (`settle_parent_values`),
+            // not given to unknown code (§17.4, DECISIONS 48).
+            None if tm.is_some_and(|tm| self.m.tmpls[tm as usize].parent.is_some()) => {
+                let tm = tm.unwrap();
+                let chk = self.m.node_l("parent-check");
+                self.m.edge(v, chk);
+                self.m.parent_checks.push((tm, chk));
+            }
             None => {
                 self.to_sink(v, why);
                 if let Some(tm) = tm {
