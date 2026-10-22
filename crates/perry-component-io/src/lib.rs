@@ -291,9 +291,22 @@ pub struct Request<T> {
     receive: oneshot::Receiver<Result<T, Error>>,
     abort: AbortHandle,
 }
+/// A cancellation signal for a request whose result future is shared elsewhere.
+/// Signalling does not acknowledge teardown; await the request for that.
+#[derive(Clone)]
+pub struct Cancellation(AbortHandle);
+impl Cancellation {
+    pub fn cancel(&self) {
+        self.0.abort();
+    }
+}
 impl<T> Request<T> {
     pub fn cancel(&self) {
         self.abort.abort();
+    }
+
+    pub fn cancellation(&self) -> Cancellation {
+        Cancellation(self.abort.clone())
     }
 }
 impl<T> Future for Request<T> {

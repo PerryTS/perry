@@ -15,7 +15,7 @@ wasmtime = { version = "=48.0.5", default-features = false, features = ["anyhow"
 wasmtime-wasi-io = { version = "=48.0.5", default-features = false, features = ["std"] }
 async-trait = "0.1.89"
 bytes = "1"
-futures-util.workspace = true
+futures-util = { workspace = true, features = ["io"] }
 futures-lite = "2"
 rand = { version = "0.10.1", features = ["std_rng", "thread_rng"] }
 tracing = "0.1"

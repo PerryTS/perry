@@ -1,5 +1,6 @@
 //! Turnloop WASI providers. Migration is in progress: this crate currently
 //! implements I/O, clocks, entropy and capability filesystems; it is not yet the host default.
+pub mod cli;
 pub mod clocks;
 mod error;
 pub mod filesystem;
@@ -15,6 +16,7 @@ use wasmtime::component::ResourceTable;
 
 pub struct WasiCtx {
     pub clocks: clocks::WasiClocksCtx,
+    pub cli: cli::WasiCliCtx,
     pub random: random::WasiRandomCtx,
     pub filesystem: filesystem::WasiFilesystemCtx,
     // Native I/O is stopped when its component context is disposed, regardless
@@ -26,6 +28,7 @@ impl WasiCtx {
         let driver = Driver::new(task_limit)?;
         Ok(Self {
             clocks: clocks::WasiClocksCtx::new(driver.submitter()),
+            cli: cli::WasiCliCtx::new(driver.submitter()),
             random: random::WasiRandomCtx::default(),
             filesystem: filesystem::WasiFilesystemCtx::default(),
             driver,

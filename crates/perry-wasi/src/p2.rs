@@ -1,6 +1,9 @@
 pub mod filesystem;
+pub mod stdio;
 pub use filesystem::{FsError, FsResult};
 mod host {
+    pub mod env;
+    pub mod exit;
     pub mod filesystem;
 }
 use crate::{
@@ -46,6 +49,8 @@ pub mod bindings {
         trappable_error_type: { "wasi:filesystem/types.error-code" => crate::p2::FsError },
         with: {
             "wasi:io": crate::io::bindings::wasi::io,
+            "wasi:cli/terminal-input.terminal-input": crate::p2::stdio::TerminalInput,
+            "wasi:cli/terminal-output.terminal-output": crate::p2::stdio::TerminalOutput,
             "wasi:filesystem/types.descriptor": crate::filesystem::Descriptor,
             "wasi:filesystem/types.directory-entry-stream": crate::p2::filesystem::ReaddirIterator,
         },
@@ -60,6 +65,7 @@ pub mod bindings {
                 "wasi:io": crate::io::sync::wasi::io,
                 "wasi:clocks": crate::p2::bindings::clocks,
                 "wasi:random": crate::p2::bindings::random,
+                "wasi:cli": crate::p2::bindings::cli,
                 "wasi:filesystem/preopens": crate::p2::bindings::filesystem::preopens,
                 "wasi:filesystem/types.descriptor": crate::filesystem::Descriptor,
                 "wasi:filesystem/types.directory-entry-stream": crate::p2::filesystem::ReaddirIterator,
@@ -106,6 +112,76 @@ fn common<T: WasiView + 'static>(linker: &mut Linker<T>) -> wasmtime::Result<()>
             }
         },
     )?;
+    bindings::cli::environment::add_to_linker::<T, crate::cli::WasiCli>(linker, |t| {
+        let view = t.ctx();
+        crate::cli::WasiCliCtxView {
+            ctx: &mut view.ctx.cli,
+            table: view.table,
+        }
+    })?;
+    bindings::cli::exit::add_to_linker::<T, crate::cli::WasiCli>(linker, |t| {
+        let view = t.ctx();
+        crate::cli::WasiCliCtxView {
+            ctx: &mut view.ctx.cli,
+            table: view.table,
+        }
+    })?;
+    bindings::cli::stdin::add_to_linker::<T, crate::cli::WasiCli>(linker, |t| {
+        let view = t.ctx();
+        crate::cli::WasiCliCtxView {
+            ctx: &mut view.ctx.cli,
+            table: view.table,
+        }
+    })?;
+    bindings::cli::stdout::add_to_linker::<T, crate::cli::WasiCli>(linker, |t| {
+        let view = t.ctx();
+        crate::cli::WasiCliCtxView {
+            ctx: &mut view.ctx.cli,
+            table: view.table,
+        }
+    })?;
+    bindings::cli::stderr::add_to_linker::<T, crate::cli::WasiCli>(linker, |t| {
+        let view = t.ctx();
+        crate::cli::WasiCliCtxView {
+            ctx: &mut view.ctx.cli,
+            table: view.table,
+        }
+    })?;
+    bindings::cli::terminal_input::add_to_linker::<T, crate::cli::WasiCli>(linker, |t| {
+        let view = t.ctx();
+        crate::cli::WasiCliCtxView {
+            ctx: &mut view.ctx.cli,
+            table: view.table,
+        }
+    })?;
+    bindings::cli::terminal_output::add_to_linker::<T, crate::cli::WasiCli>(linker, |t| {
+        let view = t.ctx();
+        crate::cli::WasiCliCtxView {
+            ctx: &mut view.ctx.cli,
+            table: view.table,
+        }
+    })?;
+    bindings::cli::terminal_stdin::add_to_linker::<T, crate::cli::WasiCli>(linker, |t| {
+        let view = t.ctx();
+        crate::cli::WasiCliCtxView {
+            ctx: &mut view.ctx.cli,
+            table: view.table,
+        }
+    })?;
+    bindings::cli::terminal_stdout::add_to_linker::<T, crate::cli::WasiCli>(linker, |t| {
+        let view = t.ctx();
+        crate::cli::WasiCliCtxView {
+            ctx: &mut view.ctx.cli,
+            table: view.table,
+        }
+    })?;
+    bindings::cli::terminal_stderr::add_to_linker::<T, crate::cli::WasiCli>(linker, |t| {
+        let view = t.ctx();
+        crate::cli::WasiCliCtxView {
+            ctx: &mut view.ctx.cli,
+            table: view.table,
+        }
+    })?;
     Ok(())
 }
 
