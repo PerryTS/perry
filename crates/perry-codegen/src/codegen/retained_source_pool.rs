@@ -205,11 +205,18 @@ pub(super) fn prepare_ranges(
     // #4101/#9413: mint source globals BEFORE `init_fn` borrows `llmod`.
     // Sharing changes only the backing bytes, never registration order, source
     // lengths, strictness flags, or the copying/static ownership contract.
+    // A function whose own source is short is read raw: a fixed size rule, not
+    // a hot/cold split. Its bytes are a second, raw copy of what the parent
+    // frame also holds. Everything longer stays in bounded DEFLATE frames.
+    let compressed_pool_member = |llmod: &LlModule, symbol: &str, source: &str| {
+        !source.is_empty()
+            && source.len() > perry_abi::RETAINED_SOURCE_RAW_MAX_BYTES
+            && strings_outlive_registry
+            && llmod.can_attach_fn_source(symbol)
+    };
     let compressed_sources: Vec<&str> = user_fn_source
         .iter()
-        .filter(|(symbol, source, _)| {
-            !source.is_empty() && strings_outlive_registry && llmod.can_attach_fn_source(symbol)
-        })
+        .filter(|(symbol, source, _)| compressed_pool_member(llmod, symbol, source))
         .map(|(_, source, _)| source.as_ref())
         .collect();
     let raw_sources: Vec<&str> = user_fn_source
@@ -217,7 +224,7 @@ pub(super) fn prepare_ranges(
         .filter(|(symbol, source, _)| {
             !symbol.is_empty()
                 && !source.is_empty()
-                && !(strings_outlive_registry && llmod.can_attach_fn_source(symbol))
+                && !compressed_pool_member(llmod, symbol, source)
         })
         .map(|(_, source, _)| source.as_ref())
         .collect();
@@ -234,7 +241,7 @@ pub(super) fn prepare_ranges(
             continue;
         }
         let in_info = strings_outlive_registry && llmod.can_attach_fn_source(wrapper_sym);
-        let source = if in_info {
+        let source = if compressed_pool_member(llmod, wrapper_sym, source_text) {
             compressed_pool.get(source_text)
         } else {
             source_pool.get(source_text)

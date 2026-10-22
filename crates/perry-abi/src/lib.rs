@@ -651,6 +651,9 @@ pub const FN_HAS_CONSTRUCTOR_LAYOUT: u32 = 1 << 23;
 pub const FN_SOURCE_BLOCKS: u32 = 1 << 24;
 /// Independent retained-source frames bound uncached small-range decoding.
 pub const RETAINED_SOURCE_BLOCK_BYTES: usize = 4096;
+/// A function whose own source is at most this long keeps a raw copy that its
+/// info names directly; longer sources are read from the frames.
+pub const RETAINED_SOURCE_RAW_MAX_BYTES: usize = 512;
 
 /// Size of the optional source tail; the common source uses idle base fields.
 #[inline(always)]
