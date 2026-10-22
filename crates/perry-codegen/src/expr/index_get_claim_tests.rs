@@ -252,6 +252,11 @@ const DYNAMIC_INDEX_SITE_BLOCKS: &[&str] = &[
     "arrlike.ic.fwd_header",
     "arrlike.ic.miss",
     "arrlike.ic.merge",
+    // EK design §4: the dense-prefix hit (`index < P`) precedes the ordinary-Array
+    // guard; a miss takes that guard unchanged in `array_rest`. Two blocks per site is
+    // the measured code-size price of the hit (.text in reports/2026-10-22-EK-result.md).
+    "arrlike.ic.prefix_hit",
+    "arrlike.ic.array_rest",
     // Pointer-layout views have a separate load; owning bytes remain at +8.
     "arrlike.u8.view_load",
 ];
