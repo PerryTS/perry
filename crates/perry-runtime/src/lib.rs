@@ -461,7 +461,6 @@ mod ext_pump {
 // Stdlib pump registration — allows perry-ui-macos pump timer to call
 // js_stdlib_process_pending without a hard link dependency on perry-stdlib.
 pub(crate) mod stdlib_pump {
-    use std::cell::Cell;
     use std::ptr::null_mut;
     use std::sync::atomic::{AtomicPtr, AtomicU32, AtomicUsize, Ordering};
     use std::sync::Mutex;

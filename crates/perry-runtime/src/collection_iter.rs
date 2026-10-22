@@ -180,7 +180,7 @@ pub(crate) fn constructor_adder(method_name: &str, receiver: f64) -> f64 {
     let key = crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
     let obj = crate::value::js_nanbox_get_pointer(receiver.get_nanbox_f64())
         as *const crate::object::ObjectHeader;
-    unsafe { f64::from_bits(crate::object::js_object_get_field_by_name(obj, key).bits()) }
+    f64::from_bits(crate::object::js_object_get_field_by_name(obj, key).bits())
 }
 
 pub(crate) fn builtin_prototype_method(builtin_name: &str, method_name: &str) -> f64 {

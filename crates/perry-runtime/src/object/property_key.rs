@@ -576,7 +576,7 @@ mod property_key_tests {
         let receiver =
             crate::value::JSValue::from_bits(this.as_f64().to_bits()).as_pointer::<ObjectHeader>();
         let tag = crate::string::canonical_key(b"tag");
-        unsafe { f64::from_bits(js_object_get_field_by_name(receiver, tag).bits()) }
+        f64::from_bits(js_object_get_field_by_name(receiver, tag).bits())
     }
 
     extern "C" fn proxy_get_returns_receiver(

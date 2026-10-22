@@ -103,6 +103,7 @@ pub(super) fn own_slot_in(
 }
 
 /// `target`'s `[[Prototype]]` as its shape names it, when that is an object.
+#[cfg(test)]
 pub(super) fn shape_prototype(obj: *const crate::object::ObjectHeader) -> Option<f64> {
     // SAFETY: a live ordinary object the caller validated.
     let word = unsafe { crate::object::shapes::object_prototype_word(obj) };
@@ -130,6 +131,7 @@ pub(super) fn own_key(target: f64, key_bits: u64, bytes: &[u8]) -> OwnKey {
 /// `recv[name]` when the shapes answer it as an own data property of the
 /// `[[Prototype]]` `recv`'s shape names while `recv`'s own list lacks it
 /// (every emitter's). `None` otherwise.
+#[cfg(test)]
 pub(in crate::node_stream) fn shape_method(recv: f64, key: i64, name: &[u8]) -> Option<f64> {
     let _ = key;
     let (obj, _) = ordinary_object(recv)?;

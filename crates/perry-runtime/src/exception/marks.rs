@@ -240,16 +240,19 @@ impl<T> CatchStack<T> {
     }
 
     #[inline]
+    #[allow(dead_code)] // mark-stack accessors kept as one complete API
     pub(crate) fn last_mut(&mut self) -> Option<&mut T> {
         self.entries.last_mut().map(|(_, value)| value)
     }
 
     #[inline]
+    #[allow(dead_code)] // mark-stack accessors kept as one complete API
     pub(crate) fn get(&self, index: usize) -> Option<&T> {
         self.entries.get(index).map(|(_, value)| value)
     }
 
     #[inline]
+    #[allow(dead_code)] // mark-stack accessors kept as one complete API
     pub(crate) fn get_mut(&mut self, index: usize) -> Option<&mut T> {
         self.entries.get_mut(index).map(|(_, value)| value)
     }
@@ -279,6 +282,7 @@ impl<T> CatchStack<T> {
 
     /// Pop every entry a frame below `sp` pushed (newest first), handing each
     /// to `f`. Returns how many were popped.
+    #[allow(dead_code)] // mark-stack accessors kept as one complete API
     pub(crate) fn unwind_to_with(&mut self, sp: usize, mut f: impl FnMut(T)) -> usize {
         let keep = self.unwound_len(sp);
         let popped = self.entries.len() - keep;

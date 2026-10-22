@@ -579,11 +579,6 @@ pub(crate) fn is_bound_function_closure_value(value: f64) -> bool {
     bound_function_target_ptr(value).is_some()
 }
 
-/// `value`'s `[[BoundTargetFunction]]` when it is a bound function (one layer).
-pub(crate) fn bound_function_target_value(value: f64) -> Option<f64> {
-    bound_function_target_ptr(value).map(|ptr| crate::closure::js_closure_get_capture_f64(ptr, 0))
-}
-
 /// Walk through any number of `Function.prototype.bind` wrapper layers to the
 /// ultimate non-bound target. Returns `value` unchanged when it isn't a bound
 /// closure (including when it isn't a closure at all) — cheap no-op on the

@@ -970,8 +970,6 @@ pub(crate) struct CrossModuleCtx {
         std::sync::Arc<std::collections::HashMap<String, Vec<ShortSpreadMethodCandidate>>>,
     pub object_literal_method_candidates:
         std::sync::Arc<std::collections::HashMap<String, Vec<ObjectLiteralMethodCandidate>>>,
-    /// See `CompileOptions::program_class_accessor_names`.
-    pub program_class_accessor_names: Option<std::sync::Arc<ClassAccessorNames>>,
     /// FuncIds of locally-defined async functions in this module. Populated
     /// from `hir.functions.is_async`. Used by `is_promise_expr` to refine
     /// `let p = asyncFn();` to `Promise(_)` so subsequent `p.then(cb)`

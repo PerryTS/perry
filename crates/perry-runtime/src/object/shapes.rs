@@ -62,10 +62,12 @@ pub(crate) use shapes_last_key_rollback::{
 mod shapes_linked_birth;
 #[path = "shapes_prototype.rs"]
 mod shapes_prototype;
+#[cfg(test)]
+pub(crate) use shapes_linked_birth::shape_is_evaluation_layout_of;
 pub(crate) use shapes_linked_birth::{
     complete_layout_generation, declaration_parent_identity, evaluation_layout_family,
     mutation_generation, note_evaluation_layout, pristine_declaration_holder,
-    shape_is_evaluation_layout_of, stamp_linked_final_shape, stamp_linked_final_shape_requested,
+    stamp_linked_final_shape, stamp_linked_final_shape_requested,
 };
 #[path = "layout_probe.rs"]
 pub(crate) mod layout_probe;
@@ -82,7 +84,7 @@ pub(crate) use shapes_evaluation_brand::{
 #[path = "shapes_worker_seed.rs"]
 mod shapes_worker_seed;
 #[cfg(test)]
-pub(crate) use shapes_prototype::{clear_class_identity_words, scan_shape_prototype_words_mut};
+pub(crate) use shapes_prototype::clear_class_identity_words;
 pub(crate) use shapes_prototype::{
     identity_prototype_word, identity_word_slot, identity_word_slot_in, note_full_trace_begin,
     proto_id_carries_word, prune_dead_shape_prototypes, shape_prototype_word, write_identity_word,
@@ -209,17 +211,6 @@ pub(crate) struct ShapeDescriptor {
 /// Shape identity is the FACTS, never the storage address. A descriptor value
 /// lifted out of the table compares equal to the record it came from.
 impl ShapeDescriptor {
-    /// Own data keys a receiver kind can synthesize outside its inline bag.
-    /// An absent bag slot cannot prove any of these keys absent. Function
-    /// bodies differ in whether they own `prototype`, so this is a conservative
-    /// set; methods on that key keep the ordinary property read.
-    pub(crate) fn implicit_own_keys(&self) -> &'static [&'static [u8]] {
-        match self.object_kind {
-            kind if kind.is_function_layout() => &[b"name", b"length", b"prototype"],
-            _ => &[],
-        }
-    }
-
     #[inline]
     pub(crate) fn constfn_infos(&self) -> &[shapes_store::ConstFnSlotInfo] {
         if self.extras == 0 {
@@ -315,6 +306,7 @@ impl ShapeRecordRef {
 
     /// Test a brand in this already-proved live record, without another probe.
     #[inline]
+    #[allow(dead_code)] // complete ShapeRecordRef accessor set
     pub(crate) fn has_brand(self, brand: u64) -> bool {
         unsafe { (*self.0.as_ptr()).brands().binary_search(&brand).is_ok() }
     }
@@ -524,6 +516,7 @@ impl ShapeRecordRef {
 
     /// Stable representation-word address. A persistent borrower must own
     /// this ShapeId as a cache carrier so full-trace pruning retains its slab.
+    #[allow(dead_code)] // complete ShapeRecordRef accessor set
     pub(crate) fn rep_address(self) -> usize {
         self.rep_word() as *const std::sync::atomic::AtomicU64 as usize
     }
@@ -687,35 +680,6 @@ pub(crate) fn test_position_bound_of(obj: *const crate::object::ObjectHeader) ->
     shape_record_by_id(id).map(|r| unsafe { (*r.0.as_ptr()).position_bound() })
 }
 
-/// Walk every present record of this agent's slab: `(records, positional,
-/// ordinary records with an accessor key, disagreements)`, where a
-/// disagreement is a record whose stored POSBOUND differs from
-/// [`ShapeRecord::position_bound_by_facts`].
-#[cfg(test)]
-pub(crate) fn test_positional_census() -> (usize, usize, usize, Vec<u32>) {
-    let table = &crate::state::state().shapes;
-    let (mut n, mut positional, mut accessor, mut bad) = (0usize, 0usize, 0usize, Vec::new());
-    table.slab().for_each(|id, p| {
-        let r = unsafe { &*p };
-        if !r.present() {
-            return;
-        }
-        n += 1;
-        if r.stored_position_bound() > 0 {
-            positional += 1;
-        }
-        if r.object_kind().is_ordinary_layout()
-            && r.summary() & crate::object::key_attrs::SUMMARY_ACCESSOR != 0
-        {
-            accessor += 1;
-        }
-        if r.stored_position_bound() != r.position_bound_by_facts() {
-            bad.push(id);
-        }
-    });
-    (n, positional, accessor, bad)
-}
-
 /// `(stored POSBOUND, its definition)` for shape `id`.
 #[cfg(test)]
 pub(crate) fn test_positional_of_id(id: u32) -> Option<(u32, u32)> {
@@ -731,12 +695,6 @@ pub(crate) fn test_positional_of_id(id: u32) -> Option<(u32, u32)> {
 #[inline]
 pub(crate) fn ordinary_dir_addr() -> *const u8 {
     ShapeSlab::ordinary_dir_addr()
-}
-
-/// The position bound of shape `id` (S3c), or `None` when it names no record.
-#[cfg(test)]
-pub(crate) fn test_position_bound_of_id(id: u32) -> Option<u32> {
-    shape_record_by_id(id).map(|r| unsafe { (*r.0.as_ptr()).position_bound() })
 }
 
 /// [`positional_key_words`] for the computed-key read
@@ -2539,23 +2497,9 @@ pub(crate) fn plain_birth_rep_by_id(shape_id: u32, field_count: u32) -> Option<u
     // SAFETY: the directory is this agent's live published ordinary band.
     let record =
         unsafe { ShapeSlab::ordinary_record_in(ShapeSlab::ordinary_dir_addr(), shape_id) }?;
-    record.admits_plain_birth(field_count).then(|| {
-        // SAFETY: a present record, read before any collection point.
-        unsafe { ShapeRecordRef(std::ptr::NonNull::from(record)).rep() }
-    })
-}
-
-/// The attribute summary (`key_attrs::SUMMARY_*`) of an ordinary-band layout
-/// with a shared key list, read from this agent's ordinary directory with no
-/// band select: `None` for any other id (a dictionary or exotic layout, or a
-/// layout whose keys live with its object), which the caller answers from the
-/// object's keys.
-#[inline(always)]
-pub(crate) fn ordinary_layout_summary(shape_id: u32) -> Option<u8> {
-    // SAFETY: the directory is this agent's live published ordinary band.
-    let record =
-        unsafe { ShapeSlab::ordinary_record_in(ShapeSlab::ordinary_dir_addr(), shape_id) }?;
-    (record.present() && record.keys != 0).then(|| record.summary())
+    record
+        .admits_plain_birth(field_count)
+        .then(|| ShapeRecordRef(std::ptr::NonNull::from(record)).rep())
 }
 
 /// The record of an ordinary-band layout, read from this agent's ordinary

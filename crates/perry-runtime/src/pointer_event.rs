@@ -9,7 +9,6 @@
 //! event handler, then passes the returned NaN-boxed f64 to
 //! `js_closure_call1`.
 
-use crate::object::{js_object_alloc_with_shape, js_object_set_field};
 use crate::string::js_string_from_bytes_longlived;
 use crate::value::{JSValue, POINTER_MASK, STRING_TAG};
 

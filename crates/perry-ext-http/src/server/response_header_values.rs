@@ -538,8 +538,7 @@ pub(crate) fn apply_write_head(handle: i64, headers: f64) -> Option<Vec<(String,
             None => array_get(headers.get(), 2 * i),
         });
         let key = scope.root_addr(unsafe { js_jsvalue_to_string(key.get()) } as i64);
-        let name =
-            unsafe { read_string_header(key.get() as *mut StringHeader) }.unwrap_or_default();
+        let name = read_string_header(key.get() as *mut StringHeader).unwrap_or_default();
         let v = match &pairs {
             Some(_) => unsafe {
                 f64::from_bits(

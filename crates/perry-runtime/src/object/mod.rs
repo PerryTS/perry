@@ -295,8 +295,8 @@ pub(crate) mod regex_read_sites;
 mod spill;
 pub(crate) use spill::{
     learned_inline_field_count, learned_inline_fields_hot_addr, overflow_get, overflow_set,
-    reserve_object_spill, spill_get_present, spill_reserve_claimed,
-    spill_store_would_be_in_capacity, SPILL_MAX_FIELD_INDEX,
+    reserve_object_spill, spill_reserve_claimed, spill_store_would_be_in_capacity,
+    SPILL_MAX_FIELD_INDEX,
 };
 #[cfg(test)]
 pub(crate) use spill::{
@@ -393,8 +393,6 @@ pub use class_meta_registry::{
     js_register_class_has_instance, js_register_class_to_string_tag,
 };
 #[cfg(test)]
-pub(crate) use descriptor_state::set_builtin_accessor_pair;
-#[cfg(test)]
 pub(crate) use descriptor_state::test_may_have_descriptor_entry;
 pub(crate) use descriptor_state::{
     accessor_descriptor_keys_for_obj, class_instance_set_may_intercept, clear_accessor_descriptor,
@@ -407,6 +405,8 @@ pub(crate) use descriptor_state::{
     set_builtin_property_attrs, set_property_attrs, AccessorDescriptor, PropertyAttrs,
 };
 #[cfg(test)]
+pub(crate) use field_get_set::private_lexical_brand_depth;
+#[cfg(test)]
 pub(crate) use field_get_set::private_member_access_hints_depth;
 pub(crate) use field_get_set::FieldLookupCaches;
 pub(crate) use field_get_set::{
@@ -416,14 +416,15 @@ pub(crate) use field_get_set::{
     private_member_access_hints_check_marks, private_member_access_hints_unwind_to,
     scan_private_lexical_brand_roots_mut,
 };
-pub(crate) use field_get_set::{private_lexical_brand_depth, private_lexical_brand_truncate};
+#[cfg(test)]
+pub(crate) use this_binding::static_private_owner_push_at;
 pub(crate) use this_binding::{
     derived_super_binding_check_marks, derived_super_binding_len, derived_super_binding_truncate,
     derived_super_binding_unwind_to, new_target_restore_after_throw,
     scan_dispatch_binding_roots_mut, static_private_owner_check_marks,
     static_private_owner_current, static_private_owner_pop, static_private_owner_push,
-    static_private_owner_push_at, static_private_owner_unwind_to, static_this_arm,
-    static_this_arm_if_unarmed, static_this_disarm, SuperNewTargetScope,
+    static_private_owner_unwind_to, static_this_arm, static_this_arm_if_unarmed,
+    static_this_disarm, SuperNewTargetScope,
 };
 #[cfg(test)]
 pub(crate) use this_binding::{derived_super_scope_push_at, static_private_owner_depth};

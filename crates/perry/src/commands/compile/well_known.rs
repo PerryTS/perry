@@ -8,7 +8,6 @@
 //! precedence this fits into.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 /// How faithful a bundled binding is to the npm package's public API.

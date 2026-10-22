@@ -18,7 +18,7 @@ fn check(erase: bool) {
     crate::weakref::test_support::clear_weak_holders();
     let native = crate::object::handle_expando::test_support::TestNativeOwner::new();
     let value = crate::object::js_object_alloc(0, 1);
-    unsafe {
+    {
         crate::object::js_object_set_field_f64(value, 0, 73.0);
     }
     let boxed = f64::from_bits(ptr_bits(value as usize));
@@ -45,7 +45,7 @@ fn check(erase: bool) {
     let stored =
         crate::object::handle_expando::handle_expando_get(native.handle(), "payload").unwrap();
     assert_eq!(stored.to_bits(), retained.to_bits());
-    unsafe {
+    {
         assert_eq!(
             crate::object::js_object_get_field_f64(
                 crate::value::js_nanbox_get_pointer(stored) as *mut crate::object::ObjectHeader,

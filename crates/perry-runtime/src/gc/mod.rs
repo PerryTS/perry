@@ -142,8 +142,6 @@ use barrier_arming::*;
 pub(crate) mod never_move;
 mod pin;
 #[cfg(test)]
-pub(crate) use copying_parent_facts::copy_decode_sabotage;
-#[cfg(test)]
 pub(crate) use pin::scan_pinned_object_roots_mut;
 #[cfg(test)]
 pub(crate) use pin::test_reset_young_pin_latch;
@@ -676,10 +674,6 @@ pub(super) mod knob_overrides {
     impl ForcedEvacuationTestGuard {
         pub(crate) fn on() -> Self {
             Self(FORCE_EVACUATE_TEST_OVERRIDE.with(|c| c.replace(Some(true))))
-        }
-
-        pub(crate) fn off() -> Self {
-            Self(FORCE_EVACUATE_TEST_OVERRIDE.with(|c| c.replace(Some(false))))
         }
     }
 

@@ -155,13 +155,16 @@ fn push_code_unit_wtf8(output: &mut Vec<u8>, unit: u16) {
 pub(crate) struct ObjectShapeHint {
     /// Pre-interned key pointers in declared field order. Pointers
     /// are held alive by PARSE_KEY_CACHE + scan_parse_roots.
+    #[allow(dead_code)] // shape-cache entry fields kept together
     pub(crate) expected_keys: Vec<*const StringHeader>,
     /// Pre-built keys array that each parsed record's shape descriptor
     /// references. Built via `js_build_class_keys_array`, so the
     /// shape cache + scan_shape_cache_roots keeps it alive.
+    #[allow(dead_code)] // shape-cache entry fields kept together
     pub(crate) keys_array: *mut crate::array::ArrayHeader,
     /// Number of fields in the declared shape — used as the object's
     /// pre-allocated field count.
+    #[allow(dead_code)] // shape-cache entry fields kept together
     pub(crate) field_count: u32,
 }
 

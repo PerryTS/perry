@@ -25,9 +25,8 @@
 //! info object resolved back to user code on success.
 
 use perry_ffi::{
-    alloc_string, build_object_shape, get_handle, js_object_alloc_with_shape, js_object_get_field,
-    js_object_set_field, register_handle, Handle, JsPromise, JsValue, ObjectHeader, Promise,
-    StringHeader,
+    alloc_string, get_handle, js_object_get_field, register_handle, Handle, JsPromise, JsValue,
+    ObjectHeader, Promise, StringHeader,
 };
 
 mod dispatch_ext;
@@ -186,7 +185,7 @@ fn build_info_object(message_id: &str, response: &str) -> JsValue {
             JsValue::from_string_ptr(resp_str.as_raw()),
         )
     };
-    JsValue::from_object_ptr((obj.get() as *mut perry_ffi::ObjectHeader))
+    JsValue::from_object_ptr(obj.get() as *mut perry_ffi::ObjectHeader)
 }
 
 /// `transporter.sendMail(mailOptions) -> Promise<info>`.

@@ -917,9 +917,6 @@ fn guarded_length_reads_admit_byte_views_and_use_a_pooled_cold_key() {
     );
 }
 
-#[path = "global_read_tests.rs"]
-mod global_read;
-
 #[path = "computed_admission_tests.rs"]
 mod computed_admission;
 

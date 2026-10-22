@@ -72,9 +72,7 @@ pub(crate) use dispatch::{
     bound_method_source_func_ptr, coerce_call_this, reify_function_method_value,
     reset_throw_not_callable_counter,
 };
-pub(crate) use dispatch::{
-    call_compiled_body_this, call_compiled_closure_this, native_call_value_this,
-};
+pub(crate) use dispatch::{call_compiled_body_this, native_call_value_this};
 pub(crate) use dispatch::{
     call_with_explicit_this, forward_with_explicit_this, receiver_may_box, ReceiverBinding,
 };

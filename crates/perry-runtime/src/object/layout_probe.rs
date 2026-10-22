@@ -572,7 +572,7 @@ unsafe fn derive_word(rec: &ShapeRecord) -> u64 {
         *block_out.add(i) = *h;
     }
     let out = (*table).words.as_mut_ptr();
-    for (i, (word, _, _)) in canon.iter().enumerate() {
+    for (i, _) in canon.iter().enumerate() {
         // An alias entry's word is its program atom; a TEXT entry's is its
         // text's hash, so a bucket compares the text only for a key of the
         // same hash.

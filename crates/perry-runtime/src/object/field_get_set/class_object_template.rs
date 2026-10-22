@@ -218,14 +218,6 @@ impl TemplateCell {
             .then_some((shape, (facts >> 48) as usize, facts & (1 << 40) != 0))
     }
 
-    /// Whether this thread's recorded class-object template pinned a parent:
-    /// `false` only when it recorded one without, i.e. the template has no
-    /// heritage; `true` when unknown.
-    #[inline]
-    pub(crate) unsafe fn has_heritage(self) -> bool {
-        !self.owned() || self.get(W_CLASS_SHAPE) == 0 || self.get(W_CLASS_FACTS) & (1 << 40) != 0
-    }
-
     /// The recorded prototype template: field count, final shape, fill count
     /// and [[Prototype]] identity, when this thread owns one.
     #[inline]

@@ -663,6 +663,7 @@ pub(crate) fn alloc_inline(brand: u8, capacity: u32, length: u32) -> *mut Buffer
 /// A borrowed span must outlive the returned JS value.
 /// Fresh allocations start with no foreign-data bit, so recycled addresses
 /// cannot inherit a previous owner's native pointer.
+#[cfg(test)]
 pub(crate) fn buffer_alloc_foreign(data: *mut u8, length: u32) -> *mut BufferHeader {
     super::super::store::store_alloc(
         crate::gc::GC_TYPE_BUFFER,

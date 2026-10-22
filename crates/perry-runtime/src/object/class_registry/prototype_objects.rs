@@ -156,6 +156,7 @@ per_test_global! {
 /// Object.create prototype identity), so
 /// saturating is the conservative answer: `0` means "no synthetic id", which
 /// every caller already handles as "stays parentless".
+#[cfg(test)]
 pub(crate) fn alloc_synthetic_class_id() -> u32 {
     use std::sync::atomic::Ordering;
     loop {

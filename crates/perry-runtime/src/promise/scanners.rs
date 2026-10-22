@@ -774,6 +774,7 @@ pub extern "C" fn js_promise_with_resolvers() -> *mut crate::object::ObjectHeade
     obj.finish()
 }
 
+#[cfg(test)]
 unsafe fn store_with_resolvers_result_fields(
     obj: *mut crate::object::ObjectHeader,
     promise_box: f64,

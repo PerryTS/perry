@@ -10,9 +10,6 @@ use perry_runtime::{
     js_promise_resolve, js_string_from_bytes, ClosureHeader, JSValue, ObjectHeader, Promise,
 };
 
-const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
-const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
-
 #[derive(Clone, Copy)]
 struct PipeLockIds {
     reader_id: usize,

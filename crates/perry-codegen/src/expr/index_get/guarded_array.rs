@@ -23,7 +23,7 @@ use crate::native_value::{
     BoundsProof, BoundsState, BufferAccessMode, LoweredValue, MaterializationReason, NativeRep,
     SemanticKind,
 };
-use crate::types::{DOUBLE, I1, I16, I32, I64, I8};
+use crate::types::{DOUBLE, I1, I32, I64, I8};
 
 use super::{
     array_kind_fact, emit_typed_feedback_register_site, raw_f64_layout_fact,

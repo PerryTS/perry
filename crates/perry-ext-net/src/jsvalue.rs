@@ -10,8 +10,8 @@
 //! (`tls`, `classes`, `ip`, `lifecycle`, `option_setters`) are unchanged.
 
 use perry_ffi::{
-    alloc_string, build_object_shape, js_object_alloc_with_shape, js_object_set_field,
-    nanbox_string_bits, read_string, BufferHeader, JsString, JsValue, ObjectHeader, StringHeader,
+    alloc_string, js_object_set_field, nanbox_string_bits, read_string, BufferHeader, JsString,
+    JsValue, ObjectHeader, StringHeader,
 };
 
 pub(crate) unsafe fn string_from_header_i64(ptr: i64) -> Option<String> {

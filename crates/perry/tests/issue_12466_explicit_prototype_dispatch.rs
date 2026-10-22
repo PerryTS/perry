@@ -149,16 +149,6 @@ fn read_ir(dir: &Path) -> String {
     ir
 }
 
-/// The text of the first block whose label starts with `label` (up to the
-/// blank line that ends it).
-fn block<'a>(ir: &'a str, label: &str) -> &'a str {
-    let at = ir
-        .find(&format!("\n{label}"))
-        .unwrap_or_else(|| panic!("no block {label}"));
-    let text = &ir[at + 1..];
-    text.split("\n\n").next().unwrap()
-}
-
 #[test]
 fn instance_explicit_prototype_method_and_shape_miss_ir() {
     let dir = tempfile::tempdir().unwrap();

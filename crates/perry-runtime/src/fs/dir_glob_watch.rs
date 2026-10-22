@@ -48,10 +48,6 @@ pub(crate) fn undefined_value() -> f64 {
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
-pub(crate) fn bool_value(value: bool) -> f64 {
-    f64::from_bits(crate::value::JSValue::bool(value).bits())
-}
-
 pub(crate) fn boxed_ptr(ptr: *const u8) -> f64 {
     f64::from_bits(crate::value::JSValue::pointer(ptr).bits())
 }

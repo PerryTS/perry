@@ -726,7 +726,6 @@ pub unsafe extern "C" fn js_dynamic_div(a: f64, b: f64) -> f64 {
 /// `js_dynamic_mod` already did before this helper existed), then exact i53,
 /// then `fmod`.
 #[no_mangle]
-#[inline]
 pub extern "C" fn js_number_mod(a: f64, b: f64) -> f64 {
     const EXACT_INT_LIMIT: f64 = 9_007_199_254_740_992.0; // 2^53
                                                           // u32 tier. Rejects negative zero, so every signed, fractional or

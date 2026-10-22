@@ -29,7 +29,7 @@ fn builtin_data_reads_use_the_global_shape_after_weak_intern_death() {
 
     let global = scope.root_nanbox_f64(js_get_global_this());
     let key = scope.root_string_ptr(crate::string::canonical_key(b"String"));
-    key.with_const_ptr(|key| unsafe {
+    key.with_const_ptr(|key| {
         js_object_set_field_by_name(
             crate::value::js_nanbox_get_pointer(global.get_nanbox_f64()) as *mut ObjectHeader,
             key,
@@ -39,7 +39,7 @@ fn builtin_data_reads_use_the_global_shape_after_weak_intern_death() {
     crate::string::discard_weak_interns();
     assert_eq!(builtin("String"), 7.0);
     assert!(crate::string::intern_lookup_bytes(b"String").is_none());
-    key.with_const_ptr(|key| unsafe {
+    key.with_const_ptr(|key| {
         js_object_set_field_by_name(
             crate::value::js_nanbox_get_pointer(global.get_nanbox_f64()) as *mut ObjectHeader,
             key,

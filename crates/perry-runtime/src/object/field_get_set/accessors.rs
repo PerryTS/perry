@@ -267,7 +267,6 @@ unsafe fn own_property_slot(
     // self time, and the caller graph attributed it here. The shared helper
     // preserves #1781's SSO-key acceptance (its byte resolver is SSO-aware).
     if let Some(islot) = find_slot(keys, key_count as u32) {
-        let i = islot as usize;
         if crate::object::key_attrs::key_is_accessor_at(keys, islot) {
             // The holder's shape resolved the key to this slot, so its lane
             // holds the accessor pair (#12015): read it there, no name search.

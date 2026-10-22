@@ -8,12 +8,11 @@
 use notify::event::{ModifyKind, RenameMode};
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use perry_ffi::{
-    alloc_string, build_object_shape, drop_handle, error_value_with_code,
-    gc_register_mutable_root_scanner_named, get_handle, iter_handles_of_mut, js_array_alloc,
-    js_array_get, js_array_length, js_array_push, js_object_alloc_with_shape, js_object_set_field,
-    notify_main_thread, object_field_by_name, read_string, register_aux_event_pump,
-    register_handle, ErrorKind, GcRootVisitor, Handle, JsClosure, JsPromise, JsString, JsValue,
-    Promise, RawClosureHeader, StringHeader, TransientRootScope,
+    alloc_string, drop_handle, error_value_with_code, gc_register_mutable_root_scanner_named,
+    get_handle, iter_handles_of_mut, js_array_alloc, js_array_get, js_array_length, js_array_push,
+    js_object_set_field, notify_main_thread, object_field_by_name, read_string,
+    register_aux_event_pump, register_handle, ErrorKind, GcRootVisitor, Handle, JsClosure,
+    JsPromise, JsString, JsValue, Promise, RawClosureHeader, StringHeader, TransientRootScope,
 };
 use perry_perex::{Budget, Limits, Regex};
 use serde::{Deserialize, Serialize};

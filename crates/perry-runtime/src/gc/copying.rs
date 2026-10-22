@@ -148,13 +148,6 @@ impl CopyingNurseryPreflight {
             );
         });
     }
-
-    pub(super) unsafe fn scan_slot(&mut self, slot: *const u64) {
-        if slot.is_null() {
-            return;
-        }
-        self.check_bits_with_reason(*slot, CopiedMinorFallbackReason::PinnedYoungTransitive);
-    }
 }
 
 pub(super) struct CopyingNurseryCollector {

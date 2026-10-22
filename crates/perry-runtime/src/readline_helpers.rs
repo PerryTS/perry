@@ -5,7 +5,6 @@ use crate::closure::{
     get_valid_func_ptr, js_closure_alloc, js_closure_get_capture_f64, js_closure_set_capture_f64,
     ClosureHeader,
 };
-use crate::object::{js_object_alloc_with_shape, js_object_set_field};
 use crate::string::{js_string_from_bytes, StringHeader};
 use crate::value::{js_jsvalue_to_string, JSValue, TAG_FALSE, TAG_UNDEFINED};
 

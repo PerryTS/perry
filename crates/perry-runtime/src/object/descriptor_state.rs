@@ -1167,18 +1167,6 @@ pub(crate) mod accessor_replacement_sabotage {
     pub(crate) fn active() -> bool {
         ON.with(Cell::get)
     }
-    pub(crate) struct Guard;
-    impl Guard {
-        pub(crate) fn new() -> Self {
-            ON.with(|c| c.set(true));
-            Guard
-        }
-    }
-    impl Drop for Guard {
-        fn drop(&mut self) {
-            ON.with(|c| c.set(false));
-        }
-    }
 }
 
 /// Install a new accessor and its attributes in one holder-shape edit.

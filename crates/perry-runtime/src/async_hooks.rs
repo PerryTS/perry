@@ -12,8 +12,7 @@ use std::sync::{LazyLock, Mutex};
 use crate::array::{js_array_length, ArrayHeader};
 use crate::closure::{
     js_closure_alloc, js_closure_call1, js_closure_call4, js_closure_get_capture_f64,
-    js_closure_get_capture_ptr, js_closure_set_capture_f64, js_closure_set_capture_ptr,
-    ClosureHeader,
+    js_closure_set_capture_f64, ClosureHeader,
 };
 use crate::object::ObjectHeader;
 use crate::string::{js_string_from_bytes, StringHeader};

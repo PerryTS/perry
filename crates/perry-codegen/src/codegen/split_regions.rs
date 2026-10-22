@@ -1834,6 +1834,7 @@ pub fn split_large_bodies_in_program(
 }
 
 /// [`split_large_bodies`] under explicit limits.
+#[cfg(test)]
 pub(crate) fn split_large_bodies_with(hir: &mut HirModule, limits: Limits) -> usize {
     split_large_bodies_with_cost(hir, limits, &|_| 0)
 }

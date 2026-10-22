@@ -96,8 +96,7 @@ pub(crate) use array_error::{
 };
 pub(crate) use bigint_promise::{
     array_from_thunk, array_is_array_thunk, array_of_thunk, bigint_as_int_n_thunk,
-    bigint_as_n_dispatch, bigint_as_uint_n_thunk, json_is_raw_json_thunk, json_parse_thunk,
-    json_raw_json_thunk, json_stringify_thunk, map_group_by_thunk, number_is_finite_thunk,
+    bigint_as_n_dispatch, bigint_as_uint_n_thunk, map_group_by_thunk, number_is_finite_thunk,
     number_is_integer_thunk, number_is_nan_thunk, number_is_safe_integer_thunk,
     number_parse_float_thunk, number_parse_int_thunk, object_assign_thunk, object_create_thunk,
     object_define_properties_thunk, object_define_property_thunk, object_entries_thunk,
@@ -107,14 +106,9 @@ pub(crate) use bigint_promise::{
     object_hasown_thunk, object_is_extensible_thunk, object_is_frozen_thunk,
     object_is_sealed_thunk, object_is_thunk, object_keys_thunk, object_prevent_extensions_thunk,
     object_seal_thunk, object_set_prototype_of_thunk, object_values_thunk,
-    promise_static_function_spec, reflect_apply_thunk, reflect_construct_thunk,
-    reflect_define_property_thunk, reflect_delete_property_thunk,
-    reflect_get_own_property_descriptor_thunk, reflect_get_prototype_of_thunk, reflect_get_thunk,
-    reflect_has_thunk, reflect_is_extensible_thunk, reflect_own_keys_thunk,
-    reflect_prevent_extensions_thunk, reflect_set_prototype_of_thunk, reflect_set_thunk,
-    regexp_escape_thunk, string_from_char_code_static, string_from_code_point_static,
-    string_raw_static, symbol_for_thunk, symbol_key_for_thunk, typed_array_from_thunk,
-    typed_array_of_thunk,
+    promise_static_function_spec, regexp_escape_thunk, string_from_char_code_static,
+    string_from_code_point_static, string_raw_static, symbol_for_thunk, symbol_key_for_thunk,
+    typed_array_from_thunk, typed_array_of_thunk,
 };
 pub use bigint_promise::{js_bigint_as_int_n_call, js_bigint_as_uint_n_call};
 pub use builtin_thunks::js_function_ctor_from_strings;
@@ -152,11 +146,11 @@ pub(crate) use fetch_globals::collect_before_global_this_alloc_for_test;
 #[cfg(feature = "temporal")]
 pub(crate) use fetch_globals::temporal_subclass_super;
 pub(crate) use fetch_globals::{
-    attach_fetch_handle_for_construction, global_this_blob_thunk, global_this_builtin_noop_thunk,
-    global_this_date_thunk, global_this_eval_thunk, global_this_file_thunk,
-    global_this_headers_thunk, global_this_is_materialized, global_this_request_thunk,
-    global_this_response_error_thunk, global_this_response_json_thunk,
-    global_this_response_redirect_thunk, global_this_response_thunk, is_thread_realm_global,
+    global_this_blob_thunk, global_this_builtin_noop_thunk, global_this_date_thunk,
+    global_this_eval_thunk, global_this_file_thunk, global_this_headers_thunk,
+    global_this_is_materialized, global_this_request_thunk, global_this_response_error_thunk,
+    global_this_response_json_thunk, global_this_response_redirect_thunk,
+    global_this_response_thunk, is_thread_realm_global,
 };
 pub use fetch_globals::{
     js_fetch_or_value_super, js_get_global_this, js_global_or_console_property_by_name,

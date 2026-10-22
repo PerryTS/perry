@@ -142,50 +142,11 @@ pub(crate) mod sabotage {
         SKIP_RETIRE_PIN.with(Cell::get)
     }
 
-    /// Retirement leaves a memo-named displaced prototype unpinned.
-    pub(crate) struct RetireGuard;
-
-    impl RetireGuard {
-        pub(crate) fn new() -> Self {
-            SKIP_RETIRE_PIN.with(|c| c.set(true));
-            RetireGuard
-        }
-    }
-
-    impl Drop for RetireGuard {
-        fn drop(&mut self) {
-            SKIP_RETIRE_PIN.with(|c| c.set(false));
-        }
-    }
-
-    pub(crate) fn admits_young() -> bool {
-        ADMIT_YOUNG.with(Cell::get)
-    }
     pub(crate) fn evacuation_ignores_never_move() -> bool {
         EVACUATE_NEVER_MOVE.with(Cell::get)
     }
     pub(crate) fn aging_ignores_never_move() -> bool {
         AGE_NEVER_MOVE.with(Cell::get)
-    }
-
-    /// Holds the chosen sabotage until dropped.
-    pub(crate) struct Guard;
-
-    impl Guard {
-        pub(crate) fn new(admit_young: bool, evacuate: bool, age: bool) -> Self {
-            ADMIT_YOUNG.with(|c| c.set(admit_young));
-            EVACUATE_NEVER_MOVE.with(|c| c.set(evacuate));
-            AGE_NEVER_MOVE.with(|c| c.set(age));
-            Guard
-        }
-    }
-
-    impl Drop for Guard {
-        fn drop(&mut self) {
-            ADMIT_YOUNG.with(|c| c.set(false));
-            EVACUATE_NEVER_MOVE.with(|c| c.set(false));
-            AGE_NEVER_MOVE.with(|c| c.set(false));
-        }
     }
 }
 
@@ -198,10 +159,6 @@ pub(crate) mod test_admit {
 
     thread_local! {
         static ON: Cell<bool> = const { Cell::new(false) };
-    }
-
-    pub(crate) fn on() -> bool {
-        ON.with(Cell::get)
     }
 
     /// Admit every referent until dropped.

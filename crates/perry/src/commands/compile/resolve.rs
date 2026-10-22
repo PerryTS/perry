@@ -428,20 +428,6 @@ fn collect_packages_in_node_modules(
     }
 }
 
-/// Find node_modules directory starting from a given path
-pub(super) fn find_node_modules(start: &Path) -> Option<PathBuf> {
-    let mut current = start.to_path_buf();
-    loop {
-        let node_modules = current.join("node_modules");
-        if node_modules.is_dir() {
-            return Some(node_modules);
-        }
-        if !current.pop() {
-            return None;
-        }
-    }
-}
-
 /// Every `node_modules` directory on the ancestor chain of `start`, nearest
 /// first. Node's resolution algorithm consults each one until the package is
 /// found — not only the nearest. pnpm layouts hit the difference constantly:

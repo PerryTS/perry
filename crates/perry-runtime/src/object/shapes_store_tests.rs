@@ -928,7 +928,7 @@ fn created_birth_relationship_preserves_identity_and_rollback_edge() {
 #[test]
 fn mutable_key_lists_cannot_publish_symbol_absence() {
     let _gc = crate::gc::GcSuppressScope::new();
-    unsafe {
+    {
         let keys = crate::array::js_array_alloc(1);
         let text = crate::string::js_string_from_bytes(b"key".as_ptr(), 3);
         let keys = crate::array::js_array_push(keys, crate::JSValue::string_ptr(text));

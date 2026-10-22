@@ -10,39 +10,39 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// Monotonic invalidation epoch for cached store plans. Bumped by descriptor
-/// installs/clears, prototype recording, and every GC collection (intern-table
-/// scan + dead-owner prune). Entries recorded under an older epoch never
-/// match.
-///
-/// `per_test_global!`: the plan caches below are per-thread, and any test that
-/// bumps the epoch (every `delete`, every prototype relink, every collection)
-/// would otherwise invalidate the caches of every OTHER concurrently running
-/// test, so a test that records a plan and checks it moments later saw a miss.
-/// In a test build each test thread has its own epoch beside its own caches;
-/// outside a test build this is the plain `static`.
+// Monotonic invalidation epoch for cached store plans. Bumped by descriptor
+// installs/clears, prototype recording, and every GC collection (intern-table
+// scan + dead-owner prune). Entries recorded under an older epoch never
+// match.
+//
+// `per_test_global!`: the plan caches below are per-thread, and any test that
+// bumps the epoch (every `delete`, every prototype relink, every collection)
+// would otherwise invalidate the caches of every OTHER concurrently running
+// test, so a test that records a plan and checks it moments later saw a miss.
+// In a test build each test thread has its own epoch beside its own caches;
+// outside a test build this is the plain `static`.
 per_test_global! {
     static PROP_PLAN_EPOCH: AtomicU64 = AtomicU64::new(1);
 }
 
-/// The SEMANTIC half of [`PROP_PLAN_EPOCH`]: bumped by exactly the events that
-/// change what a property lookup would ANSWER — descriptor installs and clears,
-/// `delete`, per-instance prototype recording, class-prototype-object
-/// registration, parent-static linking. Deliberately NOT bumped by garbage
-/// collection.
-///
-/// The store/read-plan caches need the GC bump because they memoize a
-/// (keys_array address, interned key pointer) → slot mapping, and a collection
-/// can relocate either identity. A cache that instead re-derives its addresses
-/// from live objects on every lookup — and only COMPARES them against what it
-/// recorded — does not: a relocation shows up as an address mismatch, which is
-/// a miss, and GC never adds or removes a property. Keying such a cache on the
-/// full epoch is not merely wasteful, it is a performance CLIFF: the
-/// incremental collector's root scan bumps the epoch at loop-poll cadence, so
-/// the entry is invalid on essentially every lookup and the "cache" degrades
-/// into an unconditional recompute. Measured on `gc-handoff/apps/asyncpipe.ts`:
-/// +35 % instructions versus baseline, against −24.6 % with the recompute
-/// eliminated (#7910).
+// The SEMANTIC half of [`PROP_PLAN_EPOCH`]: bumped by exactly the events that
+// change what a property lookup would ANSWER — descriptor installs and clears,
+// `delete`, per-instance prototype recording, class-prototype-object
+// registration, parent-static linking. Deliberately NOT bumped by garbage
+// collection.
+//
+// The store/read-plan caches need the GC bump because they memoize a
+// (keys_array address, interned key pointer) → slot mapping, and a collection
+// can relocate either identity. A cache that instead re-derives its addresses
+// from live objects on every lookup — and only COMPARES them against what it
+// recorded — does not: a relocation shows up as an address mismatch, which is
+// a miss, and GC never adds or removes a property. Keying such a cache on the
+// full epoch is not merely wasteful, it is a performance CLIFF: the
+// incremental collector's root scan bumps the epoch at loop-poll cadence, so
+// the entry is invalid on essentially every lookup and the "cache" degrades
+// into an unconditional recompute. Measured on `gc-handoff/apps/asyncpipe.ts`:
+// +35 % instructions versus baseline, against −24.6 % with the recompute
+// eliminated (#7910).
 per_test_global! {
     static PROP_PLAN_SEMANTIC_EPOCH: AtomicU64 = AtomicU64::new(1);
 }

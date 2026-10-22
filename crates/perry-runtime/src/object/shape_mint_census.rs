@@ -29,18 +29,18 @@ use std::sync::{Mutex, OnceLock};
 
 use crate::hot_diag::{sink_from_env, write_sink, Sink};
 
-/// 0 = not yet resolved, 1 = off, 2 = on. Three states rather than two
-/// booleans: a thread that loses the resolve race under the two-boolean form
-/// answered "off" and dropped its events, which is the same class of error as
-/// a census reading a partial counter.
-///
-/// `STATE`, `MEMO_HITS`, `MINTS`, `CENSUS` and the `TC_*` counters are
-/// `per_test_global!`: the gate tests arm the census and then assert on its
-/// totals, so with process-wide storage every other test's concurrent shape
-/// mint landed in the armed census (and moved the counters) and the gate read
-/// the whole parallel suite instead of its own workload. Each test thread
-/// gets its own state in a test build; outside one these are the plain
-/// statics.
+// 0 = not yet resolved, 1 = off, 2 = on. Three states rather than two
+// booleans: a thread that loses the resolve race under the two-boolean form
+// answered "off" and dropped its events, which is the same class of error as
+// a census reading a partial counter.
+//
+// `STATE`, `MEMO_HITS`, `MINTS`, `CENSUS` and the `TC_*` counters are
+// `per_test_global!`: the gate tests arm the census and then assert on its
+// totals, so with process-wide storage every other test's concurrent shape
+// mint landed in the armed census (and moved the counters) and the gate read
+// the whole parallel suite instead of its own workload. Each test thread
+// gets its own state in a test build; outside one these are the plain
+// statics.
 per_test_global! {
     static STATE: AtomicU8 = AtomicU8::new(0);
 }

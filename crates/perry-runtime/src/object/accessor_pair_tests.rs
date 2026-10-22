@@ -17,23 +17,6 @@ unsafe fn closure_bits() -> u64 {
     crate::value::js_nanbox_pointer(c as i64).to_bits()
 }
 
-/// A non-arrow closure whose body reads `this` from its reserved last capture
-/// (an object-literal method).
-unsafe fn this_capturing_closure_bits() -> u64 {
-    extern "C" fn reads_capture(
-        _c: *const crate::closure::ClosureHeader,
-        _this: crate::closure::JsThis,
-    ) -> f64 {
-        f64::from_bits(crate::value::TAG_UNDEFINED)
-    }
-    let c = crate::closure::js_closure_alloc(
-        crate::fn_info!(reads_capture, 0),
-        1 | crate::closure::CAPTURES_THIS_FLAG,
-    );
-    assert!(crate::closure::closure_reads_this_from_capture(c));
-    crate::value::js_nanbox_pointer(c as i64).to_bits()
-}
-
 #[test]
 fn a_pair_round_trips_both_forms() {
     let _lock = crate::gc::global_side_table_test_lock();

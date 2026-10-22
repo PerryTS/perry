@@ -372,11 +372,6 @@ pub(crate) fn parse_root_get(idx: usize) -> JSValue {
 }
 
 #[inline]
-pub(crate) fn parse_root_object_ptr(idx: usize) -> *mut crate::ObjectHeader {
-    (parse_root_get(idx).bits() & POINTER_MASK) as *mut crate::ObjectHeader
-}
-
-#[inline]
 pub(crate) fn parse_root_array_ptr(idx: usize) -> *mut crate::ArrayHeader {
     (parse_root_get(idx).bits() & POINTER_MASK) as *mut crate::ArrayHeader
 }

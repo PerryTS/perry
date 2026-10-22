@@ -27,12 +27,6 @@ use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 #[cfg(test)]
 pub(crate) const PACKED_SPILL_FLIP: i64 = 0xC000_0000;
 
-/// Way-state word: `> 0` means at least one way is populated and the compares
-/// are worth running; `0` (fresh) and a negative megamorphic countdown
-/// both skip them. Mirrors the runtime's `PIC_WAY_STATE` (read there only,
-/// by the miss entry; kept here for the pairing tests).
-#[cfg(test)]
-pub(crate) const PIC_WAY_STATE: usize = 3;
 // Word 2 is unused: it held the Array-subclass named-prefix token, site state
 // not derived from one shape, retired by S6. A site holds `(ShapeId, slot)`
 // pairs only.
@@ -488,7 +482,7 @@ fn lower_property_site(
             "layout-word/colour-mask/presence check",
         )
     });
-    let value = lower_property_site_tail(ctx, object, property, global_reference, obj_box)?;
+    let value = lower_property_site_tail(ctx, property, global_reference, obj_box)?;
     let value = match arm {
         Some(arm) => crate::expr::layout_read::finish(ctx, arm, &value),
         None => value,
@@ -502,7 +496,6 @@ fn lower_property_site(
 /// [`lower_property_site`] after the receiver is evaluated: the ordinary site.
 fn lower_property_site_tail(
     ctx: &mut FnCtx<'_>,
-    object: &Expr,
     property: &str,
     global_reference: Option<bool>,
     obj_box: String,

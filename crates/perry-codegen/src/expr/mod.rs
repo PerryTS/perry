@@ -119,8 +119,6 @@ mod channel;
 #[cfg(test)]
 mod class_method_arguments_object_tests;
 pub(crate) mod collection_receiver;
-#[cfg(test)]
-mod conforming_layout_note_tests;
 mod helpers;
 mod i32_fast_path;
 mod index;

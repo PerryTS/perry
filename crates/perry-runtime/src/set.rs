@@ -346,6 +346,7 @@ unsafe fn elements_ptr_mut(set: *mut SetHeader) -> *mut f64 {
     (*set).elements
 }
 
+#[cfg(test)]
 pub(crate) unsafe fn gc_element_slot_range(
     set: *mut SetHeader,
 ) -> Option<crate::gc::HeapSlotRange> {
@@ -687,6 +688,7 @@ impl SetRemovedSlots {
     }
 }
 
+#[cfg(test)]
 unsafe fn release_set_compaction(set: *mut SetHeader) {
     if let Some(store) = (*set).store.as_mut() {
         drop(store.compaction.take());

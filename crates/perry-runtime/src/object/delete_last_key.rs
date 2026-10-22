@@ -108,23 +108,6 @@ pub(crate) unsafe fn try_delete_last_added_dynamic(
     try_delete_last_added_key(obj, key.bits(), bytes)
 }
 
-/// `delete obj.key` with a heap string key: [`try_delete_last_added_key`].
-///
-/// # Safety
-/// As [`try_delete_last_added_key`]; `key` is a live string or null.
-pub(crate) unsafe fn try_delete_last_added_field(
-    obj: *mut ObjectHeader,
-    key: *const crate::StringHeader,
-) -> Option<i32> {
-    if key.is_null() {
-        return None;
-    }
-    let bytes =
-        std::slice::from_raw_parts(crate::string::string_data(key), (*key).byte_len as usize);
-    let bits = crate::value::JSValue::string_ptr(key as *mut crate::StringHeader).bits();
-    try_delete_last_added_key(obj, bits, bytes)
-}
-
 /// Delete the key at `slot`, the last of `obj`'s list: move `obj` to the
 /// shape of its list without it (the rollback edge) and clear the vacated
 /// slot. `false`, having changed nothing, when the rollback is not admitted.

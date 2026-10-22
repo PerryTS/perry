@@ -47,6 +47,7 @@ pub(crate) enum ChainMethod {
         /// The object whose shape lists the name.
         holder: *const ObjectHeader,
         /// The holder's inline slot that holds `value`, when it is one.
+        #[allow(dead_code)] // the holder lane is part of the Data answer
         slot: Option<u32>,
     },
     /// `holder` (on the chain, every object before it lacks the name) needs

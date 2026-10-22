@@ -235,7 +235,7 @@ fn a_defined_index_is_an_element_fact_not_a_named_key() {
     for v in [1.0, 2.0, 3.0] {
         arr = crate::array::js_array_push_f64(arr, v);
     }
-    unsafe {
+    {
         let descriptor = crate::object::js_object_alloc(0, 0);
         for (name, value) in [
             ("value", 2.0),
@@ -261,28 +261,27 @@ fn a_defined_index_is_an_element_fact_not_a_named_key() {
         "fixture must start proven: the index carries a non-configurable record"
     );
 
-    let keys = own_key_strings(unsafe { js_object_keys(arr as *const ObjectHeader) });
+    let keys = own_key_strings(js_object_keys(arr as *const ObjectHeader));
     assert_eq!(keys, ["0", "1", "2"], "Object.keys");
 
-    let values = unsafe { js_object_values(arr as *const ObjectHeader) };
+    let values = js_object_values(arr as *const ObjectHeader);
     assert_eq!(
         crate::array::js_array_length(values),
         3,
         "Object.values count"
     );
 
-    let entries = unsafe { js_object_entries(arr as *const ObjectHeader) };
+    let entries = js_object_entries(arr as *const ObjectHeader);
     assert_eq!(
         crate::array::js_array_length(entries),
         3,
         "Object.entries count"
     );
 
-    let names = unsafe {
+    let names =
         crate::value::js_nanbox_get_pointer(crate::object::js_object_get_own_property_names(
             crate::value::js_nanbox_pointer(arr as i64),
-        ))
-    } as *mut ArrayHeader;
+        )) as *mut ArrayHeader;
     assert_eq!(
         own_key_strings(names),
         ["0", "1", "2", "length"],

@@ -2238,7 +2238,6 @@ fn family_diag_report() {
 
 /// Why the next `overflow::ensure` on a family object installs its table.
 pub(crate) mod install_cause {
-    pub const UNKNOWN: u8 = 0;
     pub const LATE_OUT_OF_ORDER: u8 = 1;
     pub const LATE_PROTO_OR_SPILL: u8 = 2;
     pub const OTHER_KEY: u8 = 3;

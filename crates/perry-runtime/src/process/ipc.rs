@@ -91,11 +91,6 @@ fn object_value(obj: *mut crate::object::ObjectHeader) -> f64 {
     f64::from_bits(JSValue::object_ptr(obj as *mut u8).bits())
 }
 
-fn set_field(obj: *mut crate::object::ObjectHeader, name: &str, value: f64) {
-    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    crate::object::js_object_set_field_by_name(obj, key, value);
-}
-
 /// A process IPC function value; `info` records the body's declared arity and
 /// `.length`.
 fn ipc_function(name: &str, info: *const crate::closure::JsFunctionInfo, length: u32) -> f64 {

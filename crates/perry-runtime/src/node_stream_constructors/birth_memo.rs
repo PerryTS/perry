@@ -20,11 +20,15 @@ impl Input {
         self.presence & (1 << 8) != 0
     }
 }
-fn matches_input(a: Input, mut b: Input) -> bool {
+fn matches_input(a: Input, b: Input) -> bool {
     #[cfg(test)]
-    if crate::node_stream::native_hooks::stream_sabotage("birth_presence") {
-        b.presence = a.presence;
-    }
+    let b = {
+        let mut b = b;
+        if crate::node_stream::native_hooks::stream_sabotage("birth_presence") {
+            b.presence = a.presence;
+        }
+        b
+    };
     a == b
 }
 #[derive(Clone, Copy)]
@@ -32,6 +36,7 @@ struct Birth {
     input: Input,
     shape: u32,
     count: u32,
+    #[allow(dead_code)] // part of the memo identity
     inline: u32,
 }
 thread_local! {

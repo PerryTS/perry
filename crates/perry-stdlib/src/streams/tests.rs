@@ -731,7 +731,7 @@ fn draining_an_errored_stream_leaves_no_unhandled_rejection() {
         s.pending_error_after_chunks = Some(JSValue::string_ptr(reason).bits());
     }
     let before = perry_runtime::promise::rejection::unhandled_rejection_count();
-    let bytes = unsafe { drain_readable_into_bytes(id) };
+    let bytes = drain_readable_into_bytes(id);
     assert_eq!(
         bytes, b"partial",
         "the chunk yielded before the error is still delivered"

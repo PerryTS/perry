@@ -763,7 +763,7 @@ pub(crate) fn emit_module_layouts(
     let mut n = 0usize;
     // Step 1: the carried family states first (generated code references
     // them by name), then every literal family as static data.
-    let mut carried: Vec<FamilyLayout> = MODULE_FAMILIES.with(|m| m.borrow().layouts.clone());
+    let carried: Vec<FamilyLayout> = MODULE_FAMILIES.with(|m| m.borrow().layouts.clone());
 
     for (ordinal, fam) in carried.iter().enumerate() {
         let mut atom_names = Vec::with_capacity(fam.keys.len());

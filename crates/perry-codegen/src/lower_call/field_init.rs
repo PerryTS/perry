@@ -11,7 +11,7 @@ use perry_hir::{Expr, Stmt};
 
 use crate::expr::{lower_expr, FnCtx};
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
-use crate::types::{DOUBLE, I1, I32, I64, PTR};
+use crate::types::{DOUBLE, I32, I64, PTR};
 
 /// Monomorphization changes the instance layout, not the lexical private-name
 /// environment. Its guards and private storage keys still name the original

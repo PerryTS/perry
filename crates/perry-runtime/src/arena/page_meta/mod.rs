@@ -79,6 +79,7 @@ struct PageGenerationRange {
 
 impl PageGenerationRange {
     #[inline]
+    #[allow(dead_code)] // retired page-class cache; its hot-TLS slot goes with it
     fn contains(self, addr: usize) -> bool {
         addr >= self.base && addr < self.end
     }
@@ -92,6 +93,7 @@ enum PageGenerationSlot {
 
 impl PageGenerationSlot {
     #[inline]
+    #[allow(dead_code)] // retired page-class cache; its hot-TLS slot goes with it
     fn find(&self, addr: usize) -> Option<PageGenerationRange> {
         match self {
             PageGenerationSlot::Single(range) => range.contains(addr).then_some(*range),
@@ -119,6 +121,7 @@ impl PageGenerationSlot {
 }
 
 #[derive(Clone, Copy)]
+#[allow(dead_code)] // retired page-class cache; its hot-TLS slot goes with it
 struct PageGenerationCache {
     key: usize,
     range: PageGenerationRange,
@@ -166,6 +169,7 @@ mod compact;
 use compact::{page_count, PageObjects};
 mod storage;
 use storage::{PageMap, PageMetaMap};
+#[allow(dead_code)] // retired page-class cache; its hot-TLS slot goes with it
 mod page_class;
 mod sweep_tally;
 pub(crate) use page_class::*;
@@ -314,6 +318,7 @@ fn hot_page_generation_cache() -> *mut PageGenerationCacheSet {
 
 /// [`PAGE_GENERATIONS`] without a TLS resolution — see `crate::tls_hot`.
 #[inline(always)]
+#[allow(dead_code)] // retired page-class cache; its hot-TLS slot goes with it
 fn hot_page_generations() -> &'static RefCell<PageGenerationMap> {
     // SAFETY: as above, paired with `page_generations_hot_addr`.
     unsafe { &*(crate::tls_hot::hot().page_generations as *const RefCell<PageGenerationMap>) }

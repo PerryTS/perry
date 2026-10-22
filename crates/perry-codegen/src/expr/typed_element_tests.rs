@@ -353,10 +353,3 @@ fn element_compare_decides_the_ordered_case_inline() {
         "the generic relational sequence is still emitted:\n{check}"
     );
 }
-
-/// The blocks of a body whose label starts with `prefix`.
-fn blocks(body: &str, prefix: &str) -> usize {
-    body.lines()
-        .filter(|l| l.starts_with(prefix) && l.ends_with(':'))
-        .count()
-}

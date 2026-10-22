@@ -560,21 +560,6 @@ impl IntrinsicPrivateReadSite {
         crate::string::intern_ascii_literal(self.spelling())
     }
 
-    /// The slot of this intrinsic's qualified private key in `keys`, if the
-    /// key list carries it.
-    ///
-    /// # Safety
-    /// `keys` is a live canonical key list with `count` logical keys.
-    #[cfg(feature = "regex-engine")]
-    pub(crate) unsafe fn slot_in(
-        &self,
-        keys: *const crate::array::ArrayHeader,
-        count: u32,
-    ) -> Option<u32> {
-        crate::object::keys_find_private_slot_by_bytes(keys, count, self.spelling())
-            .map(|position| crate::object::key_attrs::key_storage_slot(keys, position))
-    }
-
     #[inline]
     pub(crate) fn read(&self, receiver: f64) -> Option<f64> {
         let bits = receiver.to_bits();

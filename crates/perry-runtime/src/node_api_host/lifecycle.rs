@@ -16,7 +16,6 @@ pub(crate) struct AsyncContextRecord {
 
 pub(crate) struct CallbackScopeRecord {
     pub env_serial: u64,
-    pub context: usize,
     pub closed: bool,
 }
 
@@ -189,7 +188,6 @@ pub unsafe extern "C" fn napi_open_callback_scope(
     let scope = with_env_mut(env, |env| {
         let mut record = Box::new(CallbackScopeRecord {
             env_serial: env.serial,
-            context: context as usize,
             closed: false,
         });
         let pointer = (&mut *record) as *mut CallbackScopeRecord as NapiCallbackScope;

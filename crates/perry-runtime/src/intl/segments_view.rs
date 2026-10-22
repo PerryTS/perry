@@ -103,19 +103,6 @@ fn bump(c: &AtomicU64) {
     }
 }
 
-/// The counters' consumer today is the test suite, which is why there is no
-/// `report_*` function: a printer with no caller is dead code, and the tally
-/// the campaign reads is the COMPILER-side `PERRY_SEGVIEW_DIAG` one. Wire a
-/// runtime-side printer when a rig run needs these numbers, not before.
-#[cfg(test)]
-fn counters() -> [u64; 3] {
-    [
-        OPENS.load(Ordering::Relaxed),
-        DECLINE_NOT_STRING.load(Ordering::Relaxed),
-        NEXTS.load(Ordering::Relaxed),
-    ]
-}
-
 // --- cursor plumbing --------------------------------------------------------
 
 #[inline(always)]

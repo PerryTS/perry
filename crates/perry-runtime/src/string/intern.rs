@@ -308,14 +308,6 @@ pub(crate) fn test_evict_interned(bytes: &[u8]) {
     });
 }
 
-/// Test view: is `p` the atom of its text?
-#[cfg(test)]
-pub(crate) unsafe fn is_atom_for_test(p: *const StringHeader) -> bool {
-    let bytes = std::slice::from_raw_parts(string_data(p), (*p).byte_len as usize);
-    let hash = crate::object::key_bytes_hash(bytes.as_ptr(), bytes.len());
-    atom_lookup(bytes, hash) == Some(p)
-}
-
 /// Discard weak addresses before any object can move or its storage be reused.
 /// Called at collection scope entry and before a tracked string realloc.
 /// Unrelated reallocations cannot invalidate a StringHeader address. No entry
@@ -864,10 +856,6 @@ pub unsafe extern "C" fn js_string_register_property_atom(key: *const StringHead
         }
         table.insert(hash, key);
     });
-}
-
-pub(crate) unsafe fn property_atom_is_program_named(key: *const StringHeader) -> bool {
-    (*key).flags & PROGRAM_ATOM != 0
 }
 
 /// This weak registry never emits roots in the mark or copy phase. Live atom

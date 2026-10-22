@@ -166,10 +166,10 @@ pub use prototype_methods::{
 
 // ── construct.rs / vm_brand.rs ──────────────────────────────────────────────
 pub(crate) use construct::{
-    bound_function_target_value, extends_target_must_throw, is_callable_function_value,
-    js_value_is_constructor, nm_ctor_child_process, nm_ctor_cluster, nm_ctor_events, nm_ctor_fs,
-    nm_ctor_readline, nm_ctor_repl, nm_ctor_stream, nm_ctor_tls, nm_ctor_tty, nm_ctor_vm,
-    nm_ctor_wasi, promise_parent_in_chain,
+    extends_target_must_throw, is_callable_function_value, js_value_is_constructor,
+    nm_ctor_child_process, nm_ctor_cluster, nm_ctor_events, nm_ctor_fs, nm_ctor_readline,
+    nm_ctor_repl, nm_ctor_stream, nm_ctor_tls, nm_ctor_tty, nm_ctor_vm, nm_ctor_wasi,
+    promise_parent_in_chain,
 };
 pub use construct::{
     js_class_value_super_construct_site, js_ctor_return_override, js_new_function_construct,
@@ -326,6 +326,3 @@ pub(crate) fn class_registry_census() -> Vec<crate::gc::census::SideTableRow> {
 pub(crate) use state::{
     reserved_native_parent_constructor_value, reserved_native_parent_prototype_bits,
 };
-
-#[cfg(test)]
-pub(crate) use class_meta::refresh_anon_declaration_role;

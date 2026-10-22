@@ -265,7 +265,7 @@ fn stringify_shape_cache_keys_array_is_marked_and_rewritten() {
 
     // This scanner's relocation contract uses a mutable owned key list.
     // Canonical lists are old and stationary under I3.
-    let keys_arr = unsafe {
+    let keys_arr = {
         let key = crate::string::js_string_from_bytes(b"id".as_ptr(), 2);
         let keys = crate::array::js_array_alloc(1);
         crate::array::js_array_push(keys, crate::JSValue::string_ptr(key));

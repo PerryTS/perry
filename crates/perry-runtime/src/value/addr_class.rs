@@ -446,11 +446,11 @@ pub(crate) unsafe fn try_read_tracked_arena_header_of_type(
     (h.obj_type == kind && h.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0).then_some(header)
 }
 
-/// Test-only count of tracked-resolver probes, so a fast path can pin that
-/// it answered without one.
-///
-/// Per thread: it is read as a before/after delta, so a process-wide counter
-/// would also count every concurrently running test's probes.
+// Test-only count of tracked-resolver probes, so a fast path can pin that
+// it answered without one.
+//
+// Per thread: it is read as a before/after delta, so a process-wide counter
+// would also count every concurrently running test's probes.
 #[cfg(test)]
 thread_local! {
     static TRACKED_HEADER_PROBES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };

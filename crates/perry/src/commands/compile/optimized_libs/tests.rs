@@ -1,6 +1,5 @@
 use super::wrapper_libs::resolve_prebuilt_ext_libs;
 use super::*;
-use std::path::Path;
 
 use crate::commands::stdlib_features::compute_required_features;
 use crate::OutputFormat;

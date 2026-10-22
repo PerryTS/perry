@@ -28,7 +28,7 @@ pub extern "C" fn js_delete_result(deleted: i32, strict: i32) -> f64 {
 /// Returns 1 if the field was deleted (or didn't exist), 0 otherwise
 #[no_mangle]
 pub extern "C" fn js_object_delete_field(
-    mut obj: *mut ObjectHeader,
+    obj: *mut ObjectHeader,
     key: *const crate::StringHeader,
 ) -> i32 {
     #[cfg(perry_contract_checks)]

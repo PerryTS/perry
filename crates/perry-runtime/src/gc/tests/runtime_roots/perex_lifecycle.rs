@@ -1,7 +1,6 @@
 //! GC program lifetime after bounded cache eviction releases its strong roots.
 use super::*;
 use crate::regex::RegExpHeader;
-use crate::string::StringHeader;
 
 fn text<'s>(scope: &'s RuntimeHandleScope, value: &str) -> RuntimeHandle<'s> {
     scope.root_string_ptr(crate::string::js_string_from_bytes(

@@ -76,8 +76,8 @@ fn test_registered_class_side_table_scanner_rewrites_values_and_function_keys() 
         set_forwarding_address(header_from_user_ptr(key_user) as *mut GcHeader, key_old);
     }
 
-    let key_bits = ptr_bits(key_user as usize);
-    let key_old_bits = ptr_bits(key_old as usize);
+    let _key_bits = ptr_bits(key_user as usize);
+    let _key_old_bits = ptr_bits(key_old as usize);
 
     crate::object::test_seed_class_prototype_object_root(0x5202, value_user as usize);
     crate::object::test_seed_class_parent_closure_root(0x5202, key_user as usize);

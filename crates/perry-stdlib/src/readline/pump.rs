@@ -16,7 +16,7 @@ use super::*;
 /// rooted across the two string allocations: either one can trigger a
 /// moving minor GC that would otherwise leave `obj` pointing at from-space.
 fn build_keypress_object(name: &str, ctrl: bool, shift: bool, meta: bool, seq: &str) -> f64 {
-    use perry_runtime::object::{js_object_alloc_with_shape, js_object_set_field};
+    use perry_runtime::object::js_object_set_field;
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
     let obj = unsafe {
         perry_runtime::object::runtime_layouts::perry_alloc_runtime_record(std::ptr::addr_of!(

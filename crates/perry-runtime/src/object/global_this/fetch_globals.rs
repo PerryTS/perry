@@ -458,47 +458,6 @@ pub(crate) unsafe fn temporal_subclass_super(
     true
 }
 
-/// Attach a native fetch handle to a freshly dynamically-constructed
-/// Request/Response subclass instance, building it from the `new` arguments.
-/// `kind` is 1 (Request) or 2 (Response). Used by the runtime
-/// dynamic-construction path (`js_new_function_construct`) for class-expression
-/// / ClassRef subclasses whose `super()` couldn't statically route the parent.
-pub(crate) unsafe fn attach_fetch_handle_for_construction(
-    inst: *mut ObjectHeader,
-    kind: u8,
-    args_ptr: *const f64,
-    args_len: usize,
-) {
-    let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
-    let arg0 = if args_len >= 1 && !args_ptr.is_null() {
-        *args_ptr
-    } else {
-        undef
-    };
-    let arg1 = if args_len >= 2 && !args_ptr.is_null() {
-        *args_ptr.add(1)
-    } else {
-        undef
-    };
-    let handle = if kind == 1 {
-        global_this_request_thunk(
-            std::ptr::null(),
-            crate::closure::JsThis::UNDEFINED,
-            arg0,
-            arg1,
-        )
-    } else {
-        global_this_response_thunk(
-            std::ptr::null(),
-            crate::closure::JsThis::UNDEFINED,
-            arg0,
-            arg1,
-        )
-    };
-    let this_box = crate::value::js_nanbox_pointer(inst as i64);
-    attach_fetch_handle_to_this(this_box, handle);
-}
-
 /// `super(input, init)` for `class X extends Request`. Allocates the underlying
 /// native Request handle and stashes it on `this`; inherited body methods /
 /// property getters are forwarded to the handle at access time. Returns
