@@ -705,6 +705,12 @@ pub fn pty_live_registered_for_test(handle: u64) -> bool {
 }
 
 #[cfg(test)]
+/// Serializes every test that spawns through the reactor: its live count and
+/// event queue are process-wide, so a parallel test's pump would otherwise
+/// consume this test's exit event or see its live ptys.
+#[cfg(test)]
+pub(crate) static TEST_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 pub(crate) fn pty_live_count_for_test() -> u64 {
     PTY_LIVE_COUNT.load(Ordering::Relaxed)
 }

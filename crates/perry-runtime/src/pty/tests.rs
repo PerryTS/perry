@@ -62,6 +62,9 @@ fn aliases_share_native_spawn_and_paused_output_precedes_exit() {
     if !super::native::host_has_ptys() {
         return;
     }
+    let _serial = super::reactor::TEST_SERIAL
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
     extern "C" {
         fn js_nm_install_node_pty();
     }
