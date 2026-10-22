@@ -361,6 +361,7 @@ pub const LAYOUT_ID_CARRIED: u32 = u32::MAX;
 // The descriptor word has exactly three states: 0 (static data), the carried
 // sentinel (not registered yet) and a registered ShapeId. The sentinel must
 // never read as a ShapeId, or registration would install it as one.
+#[allow(clippy::absurd_extreme_comparisons)] // the sentinel is u32::MAX today; the check guards a future change
 const _: () = assert!(LAYOUT_ID_CARRIED >= super::shapes::SHAPE_ID_END);
 const _: () = assert!(super::shapes::SHAPE_ID_BASE != 0);
 
