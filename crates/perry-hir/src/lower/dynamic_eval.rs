@@ -60,7 +60,13 @@ pub(crate) fn enter_function(
     stmts: &[ast::Stmt],
     strict: bool,
 ) -> Option<Stmt> {
-    let enclosing = ctx.dynamic_eval_scopes.last().map(|s| s.0);
+    // Functions without a dynamic scope use a sentinel stack entry. Their
+    // children still inherit the nearest real enclosing scope, if any.
+    let enclosing = ctx
+        .dynamic_eval_scopes
+        .iter()
+        .rev()
+        .find_map(|(id, _)| (*id != LocalId::MAX).then_some(*id));
     if strict || ctx.lookup_local("eval").is_some() || !has_direct_eval(stmts, enclosing.is_some())
     {
         ctx.dynamic_eval_scopes.push((LocalId::MAX, usize::MAX));
