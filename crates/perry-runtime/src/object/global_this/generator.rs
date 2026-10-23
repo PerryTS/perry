@@ -369,9 +369,13 @@ pub(crate) fn set_intrinsic_data_prop(
     value: f64,
     attrs: super::super::PropertyAttrs,
 ) {
-    // Reuse the iterator prototype builder's weak literal interning. Do not
-    // mint an atom before the executable's literal images are registered.
-    let key = crate::string::intern_ascii_literal(name.as_bytes());
+    // These linker-shared images are also the executable's literal keys,
+    // including when native bootstrap precedes its literal registration.
+    let key = match name {
+        "constructor" => super::super::runtime_layouts::BP_ATOM_CONSTRUCTOR.string,
+        "prototype" => super::super::runtime_layouts::BP_ATOM_PROTOTYPE.string,
+        _ => crate::string::intern_ascii_literal(name.as_bytes()),
+    };
     super::super::define_builtin_data_property(obj, key, value, name.to_string(), attrs);
 }
 
@@ -936,12 +940,23 @@ fn build_generator_tower(
             crate::fn_info!(generator_proto_throw_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         )
     };
-    for (name, info) in [
-        ("next", next_info),
-        ("return", return_info),
-        ("throw", throw_info),
+    for (name, info, key) in [
+        (
+            "next",
+            next_info,
+            super::super::runtime_layouts::BP_ATOM_NEXT.string,
+        ),
+        (
+            "return",
+            return_info,
+            super::super::runtime_layouts::BP_ATOM_RETURN.string,
+        ),
+        (
+            "throw",
+            throw_info,
+            super::super::runtime_layouts::BP_ATOM_THROW.string,
+        ),
     ] {
-        let key = crate::string::intern_ascii_literal(name.as_bytes());
         install_proto_method_with_key(gen_proto, name, info, 1, key);
     }
     // Spec: `%AsyncGenerator.prototype%` inherits `[Symbol.asyncIterator]` from

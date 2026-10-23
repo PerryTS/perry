@@ -31,6 +31,9 @@ pub(crate) const LAYOUT_KIND_CALLABLE: u8 = 11;
 
 mod builtin_prototype_atoms {
     use super::*;
+    runtime_atom!(BP_ATOM_NEXT, "next", "6e657874");
+    runtime_atom!(BP_ATOM_RETURN, "return", "72657475726e");
+    runtime_atom!(BP_ATOM_THROW, "throw", "7468726f77");
     runtime_atom!(reuse BP_ATOM_CONSTRUCTOR, "constructor", "636f6e7374727563746f72");
     runtime_atom!(BP_ATOM_DEFINE_GETTER, "__defineGetter__", "5f5f646566696e654765747465725f5f");
     runtime_atom!(BP_ATOM_DEFINE_SETTER, "__defineSetter__", "5f5f646566696e655365747465725f5f");
@@ -92,6 +95,7 @@ mod builtin_prototype_atoms {
     runtime_atom!(BP_ATOM_CONCAT, "concat", "636f6e636174");
 }
 pub(crate) use builtin_prototype_atoms::*;
+pub(crate) use native_constructor_atoms::NC_ATOM_PROTOTYPE as BP_ATOM_PROTOTYPE;
 
 /// `Symbol.hasInstance` as a layout key (a well-known symbol atom).
 #[used(linker)]

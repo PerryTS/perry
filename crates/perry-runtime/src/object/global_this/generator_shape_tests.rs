@@ -1,20 +1,24 @@
-//! Intrinsic construction shares the iterator builder's literal funnel and
-//! leaves executable atom registration authoritative, even after bootstrap.
+//! Linker-shared intrinsic keys keep one identity through late executable
+//! literal registration, and the holder shapes keep protocol slots inline.
 use super::*;
 
 #[test]
-fn generator_intrinsic_keys_use_inline_shapes_and_late_program_atoms() {
+fn generator_intrinsic_keys_share_images_and_inline_shapes() {
     std::thread::Builder::new()
         .stack_size(16 << 20)
         .spawn(|| unsafe {
             crate::gc::ensure_gc_initialized();
             let _no_move = crate::gc::GcSuppressScope::new();
-            let return_hash = crate::object::key_bytes_hash(b"return".as_ptr(), 6);
-            assert!(crate::string::atom_lookup(b"return", return_hash).is_none());
+            crate::object::layout_desc::seed_static_atoms();
+            let return_atom = crate::object::runtime_layouts::BP_ATOM_RETURN.string;
             ensure_generator_intrinsics();
             // Native providers can populate globalThis before program literals.
-            // A premature heap atom would compete with the later image atom.
-            assert!(crate::string::atom_lookup(b"return", return_hash).is_none());
+            // The runtime and executable must still share the same image.
+            let return_hash = crate::object::key_bytes_hash(b"return".as_ptr(), 6);
+            assert_eq!(
+                crate::string::atom_lookup(b"return", return_hash),
+                Some(return_atom)
+            );
             for slot in [
                 &crate::object::GENERATOR_INTRINSIC_PROTO_PTR,
                 &crate::object::GENERATOR_PROTOTYPE_PTR,
@@ -29,12 +33,9 @@ fn generator_intrinsic_keys_use_inline_shapes_and_late_program_atoms() {
                 for i in 0..keys.count() {
                     let key = keys.get(i);
                     if key.is_string() {
-                        let string = key.as_string_ptr();
-                        let header = crate::gc::header_from_trusted_user_ptr(string.cast());
                         assert!(
-                            crate::string::is_property_atom(string)
-                                || (*header).gc_flags & crate::gc::GC_FLAG_INTERNED != 0,
-                            "fixed names use the existing literal interner"
+                            crate::string::is_property_atom(key.as_string_ptr()),
+                            "fixed intrinsic keys are shared image atoms"
                         );
                     }
                     let storage = crate::object::key_attrs::key_storage_slot(keys.arr(), i);
@@ -45,6 +46,9 @@ fn generator_intrinsic_keys_use_inline_shapes_and_late_program_atoms() {
                 let hash = crate::object::key_bytes_hash(name.as_ptr(), name.len());
                 let atom =
                     crate::string::js_string_pool_atom(name.as_ptr(), name.len() as u32, hash, 0);
+                if name == b"return" {
+                    assert_eq!(atom as *const crate::StringHeader, return_atom);
+                }
                 for slot in [
                     &crate::object::GENERATOR_PROTOTYPE_PTR,
                     &crate::object::ASYNC_GENERATOR_PROTOTYPE_PTR,
