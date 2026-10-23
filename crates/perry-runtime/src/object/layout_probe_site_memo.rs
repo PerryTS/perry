@@ -296,7 +296,7 @@ unsafe fn leaf_answer(
 }
 
 /// The own list proved the key absent.
-#[inline(always)]
+#[inline(never)]
 pub(super) unsafe fn miss_absent<const ABSENT_OK: bool, const LAZY_HASH: bool>(
     dir: *const u8,
     obj: *const ObjectHeader,
@@ -328,7 +328,7 @@ unsafe fn miss_absent_matched<const ABSENT_OK: bool, const LAZY_HASH: bool>(
 }
 
 /// The receiver's record is not derived, or is checked (accessor/private).
-#[inline(always)]
+#[inline(never)]
 pub(super) unsafe fn miss_underived<const ABSENT_OK: bool, const LAZY_HASH: bool>(
     dir: *const u8,
     obj: *const ObjectHeader,
@@ -362,7 +362,7 @@ unsafe fn miss_underived_matched<const ABSENT_OK: bool, const LAZY_HASH: bool>(
 }
 
 /// The own slot at position `pos` read a hole.
-#[inline(always)]
+#[inline(never)]
 pub(super) unsafe fn miss_hole<const ABSENT_OK: bool, const LAZY_HASH: bool>(
     dir: *const u8,
     obj: *const ObjectHeader,

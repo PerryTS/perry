@@ -39,14 +39,7 @@ pub(super) unsafe fn get<const ABSENT: bool, const SITE: bool, const LAZY_HASH: 
         *list.add(i as usize)
     };
     if word != key_bits {
-        return continued::<ABSENT, SITE, LAZY_HASH>(
-            dir,
-            obj,
-            (b + 1) as u32,
-            key_bits,
-            hash,
-            memo,
-        );
+        return continued::<ABSENT, SITE, LAZY_HASH>(dir, obj, key_bits, hash, memo);
     }
     // This existing shape fact proves a public accessor. The leaf must
     // decline it; the collecting entrance reloads the live getter pair.
@@ -61,18 +54,18 @@ pub(super) unsafe fn get<const ABSENT: bool, const SITE: bool, const LAZY_HASH: 
 unsafe fn continued<const ABSENT: bool, const SITE: bool, const LAZY_HASH: bool>(
     dir: *const u8,
     obj: *const ObjectHeader,
-    start: u32,
     key_bits: u64,
     hash: u64,
     memo: *const site_memo::ReadSiteMemo,
 ) -> f64 {
-    // No collection or user code occurs between the first bucket and here.
+    // Reconstruct the cursor only after a collision. No collection or user
+    // code occurs between the first bucket and here.
     let r = record_of(dir, (*obj).parent_class_id);
     let table = ((*r).probe & !PROBE_FLAGS) as *const KeyIndex;
     let list = crate::array::array_elements_ptr((*r).keys as usize as *const _) as *const u64;
     let mask = (*table).mask as usize;
     let slots = KeyIndex::buckets(table);
-    let mut b = start as usize & mask;
+    let mut b = (site_key_hash::<LAZY_HASH>(key_bits, hash) as usize).wrapping_add(1) & mask;
     let (pos, load) = loop {
         let pos = *slots.add(b);
         if pos == u32::MAX {
