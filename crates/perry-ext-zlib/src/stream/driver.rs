@@ -800,6 +800,18 @@ impl Payload {
             buffers,
         })
     }
+    /// Size scratch after Gzip's base option validation without replacing its
+    /// already-owned engine. Called before the first stream operation only.
+    pub(super) fn resize_constructor_scratch(&mut self, chunk_size: usize) -> io::Result<()> {
+        assert_eq!(self.output_offset, 0);
+        assert_eq!(self.bytes_written, 0);
+        if chunk_size < self.scratch.len() {
+            self.scratch.shrink(chunk_size);
+        } else if chunk_size > self.scratch.len() && !self.scratch.grow(chunk_size) {
+            return Err(allocation::out_of_memory());
+        }
+        Ok(())
+    }
     pub(super) fn external_bytes(&self) -> usize {
         std::mem::size_of::<Self>()
             + BufferOwner::HEAP_BYTES

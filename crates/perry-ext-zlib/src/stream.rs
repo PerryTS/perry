@@ -14,6 +14,9 @@ extern "C" {
     fn js_zlib_stream_error(message: *const u8, len: usize, truncated: i32) -> f64;
     fn js_zlib_is_callback(value: f64) -> i32;
     fn js_zlib_stream_option(opts: f64, which: i32) -> usize;
+    fn js_zlib_gzip_codec_options(opts: f64) -> f64;
+    fn js_zlib_gzip_base_options(opts: f64) -> f64;
+    fn js_zlib_gzip_transform_options(opts: f64, phase: i32) -> f64;
     fn js_typed_array_new_empty(kind: i32, length: i32) -> *mut c_void;
     fn js_get_string_pointer_unified(value: f64) -> i64;
     pub(crate) fn js_zlib_resolve_level(opts: f64) -> i32;
@@ -561,19 +564,34 @@ unsafe fn create_stream(
     let roots = TransientRootScope::enter();
     let opts = roots.root_nanbox(opts);
     let existing = existing.map(|o| roots.root_nanbox(o));
-    // Zero selects the wrapped decoder default, not a lower nonzero bound.
-    let min_window_bits = match codec {
-        Codec::Gzip => 9,
-        Codec::Inflate | Codec::Gunzip | Codec::Unzip => 0,
-        _ => 8,
+    // Only Gzip uses the pinned constructor phases. Shared sync/callback and
+    // other codec consumers retain their existing validation/read schedule.
+    let gzip_options = if matches!(codec, Codec::Gzip) {
+        Some(roots.root_nanbox(js_zlib_gzip_codec_options(opts.get())))
+    } else {
+        // Zero selects the wrapped decoder default, not a lower nonzero bound.
+        let min_window_bits = match codec {
+            Codec::Inflate | Codec::Gunzip | Codec::Unzip => 0,
+            _ => 8,
+        };
+        js_zlib_validate_options(opts.get(), min_window_bits);
+        None
     };
-    js_zlib_validate_options(opts.get(), min_window_bits);
-    let level = if matches!(codec, Codec::Gzip | Codec::Deflate | Codec::DeflateRaw) {
+    let level = if let Some(captured) = &gzip_options {
+        let level = field(captured.get(), "level");
+        Compression::new(if level < 0.0 { 6 } else { level as u32 })
+    } else if matches!(codec, Codec::Deflate | Codec::DeflateRaw) {
         compression_from_opts(opts.get())
     } else {
         Compression::default()
     };
-    let chunk_size = js_zlib_stream_option(opts.get(), 0);
+    // Own the Gzip engine before any base/Transform getter can throw. The
+    // scratch sizing seam below never replaces or reconstructs that engine.
+    let chunk_size = if gzip_options.is_some() {
+        16384
+    } else {
+        js_zlib_stream_option(opts.get(), 0)
+    };
     let _base = roots.root_nanbox(np::prototype(&BASE, "zlib"));
     let proto = roots.root_nanbox(np::prototype(family, "zlib"));
     let codec_payload = driver::Payload::new(codec, level, chunk_size).unwrap();
@@ -599,11 +617,37 @@ unsafe fn create_stream(
             f64::from_bits(JsValue::from_object_ptr(js_typed_array_new_empty(5, 2)).bits())
         );
     }
+    let gzip_base = gzip_options
+        .as_ref()
+        .map(|_| roots.root_nanbox(js_zlib_gzip_base_options(opts.get())));
+    let chunk_size = if let Some(base) = &gzip_base {
+        let chunk_size = field(base.get(), "chunkSize") as usize;
+        let native_bytes = {
+            let payload = payload(owner.get()).expect("owned Gzip codec");
+            payload.resize_constructor_scratch(chunk_size).unwrap();
+            payload.external_bytes()
+        };
+        np::set_external_bytes(owner.get(), &CODEC_VTABLE, native_bytes);
+        chunk_size
+    } else {
+        chunk_size
+    };
+    let transform_source = gzip_options
+        .as_ref()
+        .map(|_| roots.root_nanbox(js_zlib_gzip_transform_options(opts.get(), 0)));
+    let transform_options = transform_source
+        .as_ref()
+        .map(|source| roots.root_nanbox(js_zlib_gzip_transform_options(source.get(), 1)));
     own_new!(
         "_events",
         f64::from_bits(perry_ffi::alloc_null_proto_object(&[]).bits())
     );
-    assert!(ns::init_transform_in_place(owner.get(), opts.get()));
+    assert!(ns::init_transform_in_place(
+        owner.get(),
+        transform_options
+            .as_ref()
+            .map_or_else(|| opts.get(), |copy| copy.get())
+    ));
     np::own(owner.get(), "_maxListeners", f64::from_bits(UNDEFINED));
     np::own(owner.get(), "_eventsCount", 0.0);
     let prefinish = roots.root_nanbox(f64::from_bits(
@@ -650,15 +694,43 @@ unsafe fn create_stream(
         np::own(owner.get(), key, value);
     }
     np::own(owner.get(), "_flushBoundIdx", family_kind as f64);
-    np::own(owner.get(), "_info", f64::from_bits(UNDEFINED));
-    np::own(owner.get(), "_maxOutputLength", 9007199254740991.0);
-    np::own(
-        owner.get(),
-        "_rejectGarbageAfterEnd",
-        f64::from_bits(JsValue::FALSE.bits()),
-    );
+    if let Some(base) = &gzip_base {
+        for (key, option) in [
+            ("_defaultFlushFlag", "flush"),
+            ("_finishFlushFlag", "finishFlush"),
+            ("_maxOutputLength", "maxOutputLength"),
+        ] {
+            let value = field(base.get(), option);
+            np::own(owner.get(), key, value);
+        }
+        let source = transform_source.as_ref().unwrap();
+        own_new!("_info", field(source.get(), "info"));
+        let reject = field(source.get(), "rejectGarbageAfterEnd");
+        np::own(
+            owner.get(),
+            "_rejectGarbageAfterEnd",
+            f64::from_bits(if reject.to_bits() == JsValue::TRUE.bits() {
+                JsValue::TRUE.bits()
+            } else {
+                JsValue::FALSE.bits()
+            }),
+        );
+    } else {
+        np::own(owner.get(), "_info", f64::from_bits(UNDEFINED));
+        np::own(owner.get(), "_maxOutputLength", 9007199254740991.0);
+        np::own(
+            owner.get(),
+            "_rejectGarbageAfterEnd",
+            f64::from_bits(JsValue::FALSE.bits()),
+        );
+    }
     if family_kind == 0 {
-        let level = field(opts.get(), "level");
+        let level = field(
+            gzip_options
+                .as_ref()
+                .map_or_else(|| opts.get(), |captured| captured.get()),
+            "level",
+        );
         np::own(
             owner.get(),
             "_level",
@@ -668,7 +740,12 @@ unsafe fn create_stream(
                 level
             },
         );
-        let strategy = field(opts.get(), "strategy");
+        let strategy = field(
+            gzip_options
+                .as_ref()
+                .map_or_else(|| opts.get(), |captured| captured.get()),
+            "strategy",
+        );
         np::own(
             owner.get(),
             "_strategy",

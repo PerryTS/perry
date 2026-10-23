@@ -288,6 +288,205 @@ pub extern "C" fn js_zlib_validate_options(opts: f64, min_window_bits: i32) {
     }
 }
 
+// Gzip's constructor phases are separate from the shared one-shot validators.
+// Each read recovers the current options pointer: getters may reenter and GC.
+fn gzip_read_option(opts: f64, name: &[u8]) -> f64 {
+    let value = crate::value::JSValue::from_bits(opts.to_bits());
+    if !value.is_pointer()
+        || !crate::value::addr_class::is_above_handle_band(
+            crate::value::addr_class::object_ref_addr(opts),
+        )
+    {
+        return f64::from_bits(crate::value::JSValue::undefined().bits());
+    }
+    read_option_field(value.as_pointer::<crate::object::ObjectHeader>(), name)
+}
+
+fn gzip_range(value: f64, name: &str, min: i64, max: i64, default: f64) -> f64 {
+    let Some(n) = option_number(value, name) else {
+        return default;
+    };
+    if n.is_nan() {
+        return default;
+    }
+    if n < min as f64 || n > max as f64 {
+        let received = crate::fs::validate::format_received_number(n);
+        crate::fs::validate::throw_range_error_with_code(&format!(
+            "The value of \"{name}\" is out of range. It must be >= {min} and <= {max}. Received {received}"
+        ));
+    }
+    n
+}
+
+// The bulk birth owns its callback-free allocation window. All heap-valued
+// entries must be rooted by the caller until the returned record is rooted.
+fn gzip_option_record(entries: &[(&str, f64)]) -> f64 {
+    let keys: Vec<_> = entries.iter().map(|(key, _)| key.as_ptr()).collect();
+    let lengths: Vec<_> = entries.iter().map(|(key, _)| key.len()).collect();
+    let values: Vec<_> = entries.iter().map(|(_, value)| *value).collect();
+    unsafe {
+        crate::value::js_nanbox_pointer(crate::object::js_object_alloc_null_proto_entries(
+            keys.as_ptr(),
+            lengths.as_ptr(),
+            values.as_ptr(),
+            entries.len() as u32,
+        ) as i64)
+    }
+}
+
+/// Capture FIRST validated codec values before native codec initialization.
+/// The returned traced record also retains the selected dictionary; accepting
+/// it still does not apply a preset dictionary to the compression backend.
+#[no_mangle]
+pub extern "C" fn js_zlib_gzip_codec_options(opts: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let opts = scope.root_nanbox_f64(opts);
+    let read = |key| gzip_read_option(opts.get_nanbox_f64(), key);
+    let first = crate::value::JSValue::from_bits(read(b"windowBits").to_bits());
+    // Even for Gzip, JS evaluates the second operand of the first OR when
+    // the first value is not nullish, before testing the decompressor modes.
+    if !first.is_null() && !first.is_undefined() {
+        read(b"windowBits");
+    }
+    let window = gzip_range(read(b"windowBits"), "options.windowBits", 9, 15, 15.0);
+    let level = gzip_range(read(b"level"), "options.level", -1, 9, -1.0);
+    let mem_level = gzip_range(read(b"memLevel"), "options.memLevel", 1, 9, 8.0);
+    let strategy = gzip_range(read(b"strategy"), "options.strategy", 0, 4, 0.0);
+    let dictionary = scope.root_nanbox_f64(read(b"dictionary"));
+    let value = dictionary.get_nanbox_f64();
+    if !crate::value::JSValue::from_bits(value.to_bits()).is_undefined() {
+        if crate::object::view_brand::view_brand(value).is_none()
+            && crate::buffer::buffer_brand(crate::value::addr_class::object_ref_addr(value))
+                != Some(crate::buffer::BufferBrand::ArrayBuffer)
+        {
+            crate::validators::throw_invalid_arg_type(
+                "options.dictionary",
+                "an instance of Buffer, TypedArray, DataView, or ArrayBuffer",
+                dictionary.get_nanbox_f64(),
+            );
+        }
+        crate::stub_diag::perry_stub_warn(
+            "zlib options.dictionary",
+            "the preset dictionary option is accepted but not applied",
+            Some("#4917"),
+        );
+    }
+    gzip_option_record(&[
+        ("windowBits", window),
+        ("level", level),
+        ("memLevel", mem_level),
+        ("strategy", strategy),
+        ("dictionary", dictionary.get_nanbox_f64()),
+    ])
+}
+
+/// Enter ZlibBase only AFTER the same codec has a traced engine owner.
+#[no_mangle]
+pub extern "C" fn js_zlib_gzip_base_options(opts: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let opts = scope.root_nanbox_f64(opts);
+    let read = |key| gzip_read_option(opts.get_nanbox_f64(), key);
+    // handle.init reads this argument before ZlibBase validates its type.
+    read(b"rejectGarbageAfterEnd");
+    let chunk = validate_option_chunk_size(read(b"chunkSize"));
+    let flush = gzip_range(read(b"flush"), "options.flush", 0, 5, 0.0);
+    let finish = gzip_range(read(b"finishFlush"), "options.finishFlush", 0, 5, 4.0);
+    let max = gzip_range(
+        read(b"maxOutputLength"),
+        "options.maxOutputLength",
+        1,
+        9007199254740991,
+        9007199254740991.0,
+    );
+    if !crate::value::JSValue::from_bits(read(b"rejectGarbageAfterEnd").to_bits()).is_undefined() {
+        crate::validators::validate_boolean(
+            read(b"rejectGarbageAfterEnd"),
+            "options.rejectGarbageAfterEnd",
+        );
+    }
+    gzip_option_record(&[
+        ("chunkSize", chunk),
+        ("flush", flush),
+        ("finishFlush", finish),
+        ("maxOutputLength", max),
+    ])
+}
+
+/// The actual ZlibBase option normalization, followed by the actual Transform
+/// spread. No fixed getter schedule or cached simulation of CopyDataProperties.
+/// Phase zero returns the (possibly normalized) source for post-Transform reads;
+/// phase one returns the real `{ autoDestroy: true, ...opts }` argument.
+#[no_mangle]
+pub extern "C" fn js_zlib_gzip_transform_options(opts: f64, phase: i32) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let opts = scope.root_nanbox_f64(opts);
+    if phase == 0 {
+        let read = |key| gzip_read_option(opts.get_nanbox_f64(), key);
+        if crate::value::js_is_truthy(read(b"encoding")) == 0
+            && crate::value::js_is_truthy(read(b"objectMode")) == 0
+            && crate::value::js_is_truthy(read(b"writableObjectMode")) == 0
+            && read(b"decodeStrings").to_bits() != crate::value::JSValue::bool(false).bits()
+        {
+            return opts.get_nanbox_f64();
+        }
+        let copy = scope.root_nanbox_f64(gzip_option_record(&[]));
+        unsafe {
+            crate::object::js_object_literal_spread(copy.get_nanbox_f64(), opts.get_nanbox_f64());
+        }
+        // Null-prototype target: these data writes cannot invoke inherited JS.
+        for (key, value) in [
+            (
+                "encoding",
+                f64::from_bits(crate::value::JSValue::null().bits()),
+            ),
+            (
+                "objectMode",
+                f64::from_bits(crate::value::JSValue::bool(false).bits()),
+            ),
+            (
+                "writableObjectMode",
+                f64::from_bits(crate::value::JSValue::bool(false).bits()),
+            ),
+            (
+                "decodeStrings",
+                f64::from_bits(crate::value::JSValue::bool(true).bits()),
+            ),
+        ] {
+            let key = scope.root_string_ptr(crate::string::js_string_from_bytes(
+                key.as_ptr(),
+                key.len() as u32,
+            ));
+            key.with_const_ptr(|key: *const crate::StringHeader| unsafe {
+                crate::object::js_object_set_property_key(
+                    copy.get_nanbox_f64(),
+                    crate::value::js_nanbox_string(key as i64),
+                    value,
+                )
+            });
+        }
+        return copy.get_nanbox_f64();
+    }
+    let copy = scope.root_nanbox_f64(gzip_option_record(&[(
+        "autoDestroy",
+        f64::from_bits(crate::value::JSValue::bool(true).bits()),
+    )]));
+    unsafe {
+        crate::object::js_object_literal_spread(copy.get_nanbox_f64(), opts.get_nanbox_f64());
+    }
+    copy.get_nanbox_f64()
+}
+
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_ZLIB_GZIP_CODEC_OPTIONS: extern "C" fn(f64) -> f64 = js_zlib_gzip_codec_options;
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_ZLIB_GZIP_BASE_OPTIONS: extern "C" fn(f64) -> f64 = js_zlib_gzip_base_options;
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_ZLIB_GZIP_TRANSFORM_OPTIONS: extern "C" fn(f64, i32) -> f64 =
+    js_zlib_gzip_transform_options;
+
 /// Validate the `buffer` argument to a one-shot zlib codec (`gzipSync`,
 /// `deflateSync`, `gunzipSync`, `inflateSync`, …) the way Node does (#3662):
 /// the value must be a string or an instance of Buffer/TypedArray/DataView/

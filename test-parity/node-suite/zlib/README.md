@@ -35,6 +35,29 @@ GC-owned fallback, not an unconditional prompt-release guarantee. Runtime
 ownership and copy/getter-order witnesses accompany these public fixtures;
 they do not assert the stronger exceptional prompt-release claim.
 
+## Gzip constructor option phases
+
+`options/constructor-option-values.ts` uses the pinned Node 26.12.1
+[`Zlib` and `ZlibBase` constructors](https://github.com/nodejs/node/blob/v26.12.1/lib/zlib.js).
+Eight finite public `createGzip()` cases observe conditional `windowBits` reads,
+dictionary-before-chunk validation, first-validated compression levels across
+later enumerable option copying, and thrown-sentinel identity. Accepted streams
+report genuine Gzip identity, gzip header XFL, `bytesWritten`, end and close;
+they do not compare backend-specific DEFLATE bytes.
+
+The Gzip-only constructor path retains rooted codec options, owns the same codec
+before base/Transform getters, and passes a real enumerable option copy to the
+existing Transform initializer. Other codecs and shared sync/callback validators
+keep their previous schedule. Dictionary acceptance still does not apply it to
+the backend. Exceptional construction retains the existing GC-owned fallback;
+this change does not promise unconditional prompt release after getter throws.
+
+`options/constructor-getter-phases.ts` remains the original full-hex diagnostic,
+byte-for-byte unchanged. Its known compression-backend residual is separate from
+this semantic fixture; preserving it does not mark it green. The existing
+`options/validation-order.ts` is also unchanged. Historical audit measurements
+and exclusions below describe their original fixture roster, not these additions.
+
 ## Locked sources
 
 - Node 26.5.0 commit [`bebd1b8d92bf4cc917844d6335ed1ecf9c2a75fb`][node-tree]:
