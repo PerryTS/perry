@@ -125,6 +125,10 @@ REGISTRY: list[Restatement] = [
      "GC_TYPE_OBJECT", "byte 0 of the baked header word"),
     ("crates/perry-codegen/src/target_layout.rs", "GC_FLAG_ARENA",
      "GC_FLAG_ARENA", "byte 1 of the baked header word"),
+    ("crates/perry-codegen/src/target_layout.rs", "GC_TYPE_ARRAY",
+     "GC_TYPE_ARRAY", "inline empty array birth word: byte 0"),
+    ("crates/perry-codegen/src/target_layout.rs", "GC_LAYOUT_POINTER_FREE",
+     "GC_LAYOUT_POINTER_FREE", "inline empty array birth word: _reserved half"),
     # `new_alloc.rs` re-derives the same word at the allocation site and
     # cross-checks it against the per-class table; both copies are pinned.
     # --- the class-field inline guard ---------------------------------------
