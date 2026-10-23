@@ -533,6 +533,21 @@ fn reverse_throw_type_error(message: &[u8]) -> ! {
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
+/// `fill` over an array that holds element descriptors: each index is the
+/// spec's `Set(O, k, value, true)`, so an accessor's setter runs and a
+/// read-only element throws, where a raw slot write would bypass both.
+unsafe fn fill_through_set(
+    mut arr: *mut ArrayHeader,
+    value: f64,
+    start: usize,
+    end: usize,
+) -> *mut ArrayHeader {
+    for index in start..end {
+        arr = super::indexing::js_array_set_f64_extend_strict(arr, index as u32, value);
+    }
+    arr
+}
+
 /// `Array.prototype.fill(value)` — fills every element (0..length) with
 /// `value`. Returns the same array pointer.
 #[no_mangle]
@@ -560,6 +575,9 @@ pub extern "C" fn js_array_fill(arr: *mut ArrayHeader, value: f64) -> *mut Array
         let len = (*arr).length as usize;
         if len == 0 {
             return arr;
+        }
+        if crate::array::array_has_element_descriptors_resolved(arr) {
+            return fill_through_set(arr, value, 0, len);
         }
         let elements = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut f64;
         for i in 0..len {
@@ -644,6 +662,9 @@ pub extern "C" fn js_array_fill_range(
         let e = clamp(end, true);
         if s >= e {
             return arr;
+        }
+        if crate::array::array_has_element_descriptors_resolved(arr) {
+            return fill_through_set(arr, value, s as usize, e as usize);
         }
         let elements = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut f64;
         for i in s..e {

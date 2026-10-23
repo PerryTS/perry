@@ -1,0 +1,1 @@
+`Array.prototype.fill` now sets through element descriptors: over an array that holds an accessor or a read-only element, each index is a strict `Set`, so the setter runs and a read-only element throws a `TypeError` instead of being overwritten by a raw slot write (matches node).

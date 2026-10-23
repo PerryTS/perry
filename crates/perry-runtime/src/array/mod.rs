@@ -369,3 +369,5 @@ pub use iterator_step::{
 pub(crate) use iterator_method::array_shape_iterator;
 #[cfg(test)]
 pub(crate) use iterator_step::js_array_record_iterator_at;
+#[cfg(test)]
+mod fill_descriptor_tests;
