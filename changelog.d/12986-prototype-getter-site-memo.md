@@ -9,3 +9,5 @@ Unproved own-slot loads use a shared tail entrance. Ordinary inline loads and me
 Indexed reads tail-continue hash collisions separately from the first bucket, and existing accessor entries decline directly to the collecting entrance. Memo mismatches continue statelessly before saving registers for a matched proof.
 
 At an indexed collision, a matching memo can prove the complete read before further key traversal; an unanswered proof resumes the same index. Collision continuations reuse its existing table and key-array pointers. Array element addresses use the same allocation extent and remaining capacity directly in bytes, preserving queue offsets and named-property reserves without new metadata.
+
+Indexed hits retain no collision cursor across their atom comparison; only unanswered collisions reconstruct it. Array addressing cancels the header offset in word units before scaling, avoiding the expanded byte-address arithmetic in shared callers.

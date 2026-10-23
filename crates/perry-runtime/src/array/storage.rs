@@ -39,15 +39,13 @@ pub(crate) unsafe fn array_front_offset(arr: *const ArrayHeader) -> usize {
 /// interior pointers, the result must not be retained across a safepoint.
 #[inline]
 pub unsafe fn array_elements_ptr(arr: *const ArrayHeader) -> *mut u64 {
-    // Both headers occupy whole element words. Rounding the allocation
-    // down to a word preserves physical_capacity's division, including any
-    // tail padding, without converting bytes to slots and back again.
+    // Both headers occupy whole element words. Cancel the ArrayHeader
+    // offset before scaling, retaining the allocation's word-floor padding
+    // and the live front offset in one word-indexed address.
     const { assert!(crate::gc::GC_HEADER_SIZE % 8 == 0 && std::mem::size_of::<ArrayHeader>() % 8 == 0) };
     let header = (arr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    let end = ((*header).size as usize & !7) - crate::gc::GC_HEADER_SIZE;
-    (arr as *const u8)
-        .add(end)
-        .sub((*arr).capacity as usize * 8) as *mut u64
+    let end = (*header).size as usize / 8 - crate::gc::GC_HEADER_SIZE / 8;
+    (arr as *mut u64).add(end - (*arr).capacity as usize)
 }
 
 /// Lower an array's `length` to `new_length`, writing `TAG_HOLE` into every

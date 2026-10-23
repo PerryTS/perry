@@ -46,10 +46,10 @@ pub(super) unsafe fn get<const ABSENT: bool, const SITE: bool, const LAZY_HASH: 
         // this same index; the first bucket is not treated as own absence.
         if SITE {
             return site_memo::collision::<ABSENT, LAZY_HASH>(
-                dir, obj, key_bits, hash, memo, table, keys,
+                dir, obj, key_bits, hash, memo,
             );
         }
-        return continued::<ABSENT, SITE, LAZY_HASH>(dir, obj, key_bits, hash, memo, table, keys);
+        return continued::<ABSENT, SITE, LAZY_HASH>(dir, obj, key_bits, hash, memo);
     }
     // This existing shape fact proves a public accessor. The leaf must
     // decline it; the collecting entrance reloads the live getter pair.
@@ -67,12 +67,13 @@ pub(super) unsafe fn continued<const ABSENT: bool, const SITE: bool, const LAZY_
     key_bits: u64,
     hash: u64,
     memo: *const site_memo::ReadSiteMemo,
-    table: *const KeyIndex,
-    keys: u64,
 ) -> f64 {
-    // Continue with the same existing table and key array. No collection
-    // or user code occurs between the first bucket and here.
-    let list = crate::array::array_elements_ptr(keys as usize as *const _) as *const u64;
+    // Reconstruct only on an unanswered collision. Keeping this context
+    // out of the front avoids saving registers on every indexed own hit.
+    // No collection or user code occurs between the first bucket and here.
+    let r = record_of(dir, (*obj).parent_class_id);
+    let table = ((*r).probe & !PROBE_FLAGS) as *const KeyIndex;
+    let list = crate::array::array_elements_ptr((*r).keys as usize as *const _) as *const u64;
     let mask = (*table).mask as usize;
     let slots = KeyIndex::buckets(table);
     let mut b = (site_key_hash::<LAZY_HASH>(key_bits, hash) as usize).wrapping_add(1) & mask;
