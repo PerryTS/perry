@@ -2,9 +2,10 @@
 use super::{is_raw_use_strict_directive, string_directive_stmt_lit};
 use swc_ecma_ast as ast;
 
-// Match the compiler-owned import also used by Module::is_commonjs_wrap.
-// Generated import/export declarations must not make a CommonJS body strict.
-fn is_commonjs_wrap(module: &ast::Module) -> bool {
+// Sloppy CommonJS uses this compiler-owned alias to opt out of ESM strictness.
+// Strict CommonJS uses the equal-length __perry_cjs_strict_require alias and
+// retains module strictness, without adding a directive that shifts spans.
+fn is_sloppy_commonjs_wrap(module: &ast::Module) -> bool {
     module.body.iter().any(|item| {
         let ast::ModuleItem::ModuleDecl(ast::ModuleDecl::Import(import)) = item else {
             return false;
@@ -23,7 +24,7 @@ fn is_commonjs_wrap(module: &ast::Module) -> bool {
 pub(crate) fn module_has_strict_mode(ast_module: &ast::Module, source_file_path: &str) -> bool {
     // Node treats ESM format/package context and any source-text module as
     // strict even without a directive prologue (#6542).
-    if !is_commonjs_wrap(ast_module)
+    if !is_sloppy_commonjs_wrap(ast_module)
         && (perry_parser::file_is_es_module_by_format(source_file_path)
             || ast_module
                 .body
@@ -44,4 +45,29 @@ pub(crate) fn module_has_strict_mode(ast_module: &ast::Module, source_file_path:
         }
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn both_wrapper_aliases_keep_commonjs_identity_and_source_strictness() {
+        for (alias, strict) in [
+            ("__perry_cjs_create_require", false),
+            ("__perry_cjs_strict_require", true),
+        ] {
+            let source = format!("import {{ createRequire as {alias} }} from 'node:module'; function receiver() {{ return this; }}");
+            let parsed = perry_parser::parse_typescript(&source, "wrapped.cjs").unwrap();
+            let hir = super::super::lower_module(&parsed, "wrapped", "wrapped.cjs").unwrap();
+            assert!(hir.is_commonjs_wrap());
+            assert_eq!(hir.init_is_strict, strict);
+            assert_eq!(
+                hir.functions
+                    .iter()
+                    .find(|f| f.name == "receiver")
+                    .unwrap()
+                    .is_strict,
+                strict
+            );
+        }
+    }
 }

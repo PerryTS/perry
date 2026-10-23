@@ -231,9 +231,13 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
     messages: &mut Vec<String>,
     computed_require_warnings: Option<&mut Vec<String>>,
 ) -> (String, Option<usize>) {
-    // Keep the original directive prologue ahead of generated imports and
-    // bookkeeping, including for the flat class-export emission.
-    let strict_prologue = super::strictness::strict_prologue(source, source_path);
+    // Equal-length compiler-owned aliases preserve source offsets and class
+    // identities while carrying the original strictness through both wraps.
+    let create_require = if super::strictness::has_strict_directive(source, source_path) {
+        "__perry_cjs_strict_require"
+    } else {
+        "__perry_cjs_create_require"
+    };
     let mut source_cow = Cow::Borrowed(source);
 
     // Issue #5498: a genuine CommonJS file may carry a leading shebang
@@ -597,7 +601,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
         .collect::<Vec<_>>()
         .join("\n");
     let imports = format!(
-        "import {{ createRequire as __perry_cjs_create_require, isBuiltin as __perry_cjs_is_builtin }} from 'node:module';\n{imports}"
+        "import {{ createRequire as {create_require}, isBuiltin as __perry_cjs_is_builtin }} from 'node:module';\n{imports}"
     );
 
     // An UNRESOLVABLE adopted specifier (`require('@opentelemetry/api')`
@@ -707,7 +711,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
                 // modules). createRequire calls js_create_native_module_namespace
                 // under the hood — the same path Node.js uses for require("process").
                 format!(
-                    "{link_child}return (globalThis.__perry_cjs_shared_require || (globalThis.__perry_cjs_shared_require = __perry_cjs_create_require({:?})))(specifier);",
+                    "{link_child}return (globalThis.__perry_cjs_shared_require || (globalThis.__perry_cjs_shared_require = {create_require}({:?})))(specifier);",
                     source_path.to_string_lossy()
                 )
             } else if needs_runtime_record {
@@ -1329,7 +1333,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
     // cost OpenCode's ~2,200 CJS modules a quarter of a billion instructions
     // before any user code ran.
     const __perry_cjs_base_require = (globalThis.__perry_cjs_shared_require
-        || (globalThis.__perry_cjs_shared_require = __perry_cjs_create_require({module_filename_literal})));
+        || (globalThis.__perry_cjs_shared_require = {create_require}({module_filename_literal})));
     __perry_cjs_base_require.cache[{module_filename_literal}] = __cjs_module;
     function __perry_cjs_require_error(kind, code, message) {{
         const err = kind === 'type' ? new TypeError(message) : new Error(message);
@@ -1359,7 +1363,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
         const cached = __perry_cjs_base_require.cache[path];
         if (cached !== undefined) return cached.exports;
         if (!__perry_has_path_module(path)) return value;
-        if (__perry_cjs_reload_require === undefined) __perry_cjs_reload_require = __perry_cjs_create_require({module_filename_literal});
+        if (__perry_cjs_reload_require === undefined) __perry_cjs_reload_require = {create_require}({module_filename_literal});
         return __perry_cjs_reload_require(path);
     }}
     function require(specifier) {{
@@ -1376,7 +1380,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
         // Native addons resolve through the same authenticated manifest and
         // cache as createRequire and process.dlopen, including computed paths.
         if (specifier.slice(-5) === '.node') {{
-            if (__perry_cjs_reload_require === undefined) __perry_cjs_reload_require = __perry_cjs_create_require({module_filename_literal});
+            if (__perry_cjs_reload_require === undefined) __perry_cjs_reload_require = {create_require}({module_filename_literal});
             return __perry_cjs_reload_require(specifier);
         }}
         // Runtime `require(path)` of a module Perry AOT-compiled but that is
@@ -1434,7 +1438,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
         }}
         // A computed bare platform package can name a manifest-listed addon
         // through package.json main, without a .node suffix in the request.
-        if (__perry_cjs_reload_require === undefined) __perry_cjs_reload_require = __perry_cjs_create_require({module_filename_literal});
+        if (__perry_cjs_reload_require === undefined) __perry_cjs_reload_require = {create_require}({module_filename_literal});
         return __perry_cjs_reload_require(specifier);
     }}
     // No `defineProperty(require, 'name', ...)`: a `function require(...)`
@@ -1496,7 +1500,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
                 format!("export {{ {flat_class} }};")
             };
         format!(
-            r#"{strict_prologue}{imports}
+            r#"{imports}
 {import_aliases}
 {hoisted_class_block}
 {cjs_preamble}
@@ -1515,7 +1519,7 @@ export default {flat_class};
         )
     } else {
         format!(
-            r#"{strict_prologue}{imports}
+            r#"{imports}
 {import_aliases}
 {hoisted_class_block}
 const _cjs = (function() {{
@@ -1541,13 +1545,11 @@ return __perry_cjs_factory();
     // #5247: locate the original body within the wrapped output so callers can
     // translate a wrapped-coordinate byte offset back to original coordinates.
     // `body_for_iife` is interpolated verbatim into `wrapped`, so the first
-    // occurrence after the copied strict directive is its start. Empty body → no mapping.
+    // occurrence is its start. Empty body → no mapping.
     let body_offset = if body_for_iife.is_empty() {
         None
     } else {
-        wrapped[strict_prologue.len()..]
-            .find(body_for_iife.as_str())
-            .map(|offset| offset + strict_prologue.len())
+        wrapped.find(body_for_iife.as_str())
     };
     (wrapped, body_offset)
 }
