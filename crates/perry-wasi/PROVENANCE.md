@@ -20,6 +20,7 @@ Copied/adapted sources:
 | `src/clocks/system.rs` | Native clock helpers in `wasmtime-wasi/src/clocks.rs` |
 | `src/filesystem.rs`, `src/filesystem/` | `wasmtime-wasi/src/filesystem.rs` and its capability primitives, platform helpers and tests |
 | `src/p3/filesystem.rs`, `src/p3/filesystem/host.rs` | Conversions and descriptor forwarding adapted from `wasmtime-wasi/src/p3/filesystem/{mod,host}.rs`; stream/directory ownership uses Turnloop, and signed-time conversion is corrected |
+| `src/p3/sockets/conv.rs`, `src/p3/sockets/{tcp,udp,dns}.rs` | Address conversions and interface forwarding adapted from `wasmtime-wasi/src/p3/sockets/{tcp,udp}.rs` and `src/sockets/{mod,ip_name_lookup}.rs`; socket ownership, cancellation, streams and native requests use Turnloop |
 | `src/p2/filesystem.rs`, `src/p2/host/filesystem*` | `wasmtime-wasi` files with the same paths |
 | `src/p2/{network,ip_name_lookup}.rs`, `src/p2/host/{network,instance_network}.rs` | Corresponding `wasmtime-wasi` files and `src/sockets/ip_name_lookup.rs`; address conversions from `src/sockets/mod.rs` |
 | `src/sockets/tcp.rs`, `src/sockets/tcp/` | WASI TCP validation, defaults and option semantics from `wasmtime-wasi/src/sockets/{mod,tcp}.rs`; native ownership and I/O are implemented with Turnloop |
@@ -39,7 +40,7 @@ work is owned and driven by Turnloop, with no ambient Tokio runtime.
 The current port includes WASI 0.2.12 I/O, clocks, random, CLI, capability
 filesystem, DNS, TCP, UDP and HTTP interfaces. It is selected by
 `perry-component-host`. Optional WASI 0.3 providers are described below;
-production engine integration, sockets and HTTP remain open;
+production engine integration and P3 HTTP remain open;
 other platform and production-package qualification are still required. No missing
 interface is implemented as a success stub. The unchanged workspace Tokio
 gate passes: no manifest edges, lockfile packages or Rust source references.
@@ -461,7 +462,7 @@ cancellation must drop the Store. Provider-future cancellation alone does not
 establish guest-task cancellation.
 
 This is a Rust embedding foundation. The production Perry component engine
-does not enable this feature yet; P3 sockets, HTTP, generated
+does not enable this feature yet; P3 HTTP, generated
 TypeScript adapters, Promise/future/stream lifetimes and cross-language async
 composition remain to be implemented and qualified.
 
@@ -477,7 +478,7 @@ initial directory, exit, terminal resources and stdin/stdout/stderr. The added
 CLI WIT and its filesystem/socket dependencies are unchanged pinned inputs in
 [the WIT manifest](wit-p3/provenance.json). Filesystem and socket declarations
 resolve the upstream CLI worlds. Filesystem providers are now registered as
-described below; socket providers remain open. The terminal resource types are distinct from P2 resources.
+described below, along with socket providers. The terminal resource types are distinct from P2 resources.
 
 CLI stream adapters reuse the same context's explicit native P2 stream views.
 Readiness futures own native views, never Store borrows or guest memory. Reads
@@ -548,3 +549,41 @@ The [filesystem receipt](../../docs/validation/wasi-p3-filesystem-20261023.json)
 records 252 provider tests in both Linux development and production panic-abort
 builds, all-target Clippy, doctests and the Tokio-free dependency graph. Source
 and binary hashes, checksum freshness and all nine added test names were verified.
+
+## P3 TCP, UDP and name resolution
+
+The optional `p3` feature registers `wasi:sockets@0.3.0` TCP, UDP and DNS using
+the unchanged pinned WIT. Network access remains denied by default. TCP/UDP
+grants, DNS grants and address-policy callbacks apply independently; callbacks
+run on the calling thread. Native I/O uses the context's Turnloop driver.
+No Store borrow, canonical memory or guest callback crosses an async I/O wait.
+
+TCP supports explicit and implicit binding, asynchronous connect, a demand-driven
+accept stream and one send/receive stream pair with typed completion futures.
+Streams retain their native connection after the socket resource is dropped.
+Writes use bounded owned chunks, and send completion waits for the native FIN
+after accepted writes. Dropping the receive stream shuts down that direction.
+Socket options remain usable while connecting through a duplicate control
+handle to the same OS socket. Successful connection replaces this view; failed
+or cancelled connection drops both owners. The bound port is then released,
+even if the guest resource remains alive. Other connection attempts and state
+transitions remain invalid while a connect is pending.
+
+UDP independently serializes sends and receives, retains cleanup acknowledgements
+after cancellation, preserves empty datagrams, and applies reassociation to
+an already pending receive. Destination policy runs before implicit binding.
+DNS resolves owned names and handles literals only with an explicit grant.
+Native resolver failures currently map to `name-unresolvable`, matching the
+pinned upstream Rust resolver limitation. Driver failures trap. Broken-pipe
+I/O retains its P3 `connection-broken` code without changing the P2 mapping.
+
+Three canonical Wasm fixtures exercise TCP byte streams and result futures,
+async connect suspension/callbacks, and UDP async send/receive with reuse.
+Additional tests cover multi-megabyte binary TCP, half-close, accepted socket
+lifetime, option inheritance and updates during connect, IPv4/IPv6 UDP,
+maximum IPv4 datagrams, cancellation, concurrent calls, reassociation and
+denials. Every socket test checks that native resources and outstanding I/O
+return to zero. The [socket receipt](../../docs/validation/wasi-p3-sockets-20261023.json)
+records the final qualification. These are Linux Rust embedding results;
+Perry's production P3 engine, TypeScript async/GC bridge, other platforms and
+final distribution packages remain separate qualification work.

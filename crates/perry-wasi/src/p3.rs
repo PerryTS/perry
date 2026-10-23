@@ -13,10 +13,18 @@ pub mod bindings {
             "wasi:filesystem/types.[method]descriptor.write-via-stream": store | trappable,
             "wasi:filesystem/types.[method]descriptor.append-via-stream": store | trappable,
             "wasi:filesystem/types.[method]descriptor.read-directory": store | trappable,
+            "wasi:sockets/types.[method]tcp-socket.bind": async | trappable,
+            "wasi:sockets/types.[method]tcp-socket.listen": async | store | trappable,
+            "wasi:sockets/types.[method]tcp-socket.send": store | trappable,
+            "wasi:sockets/types.[method]tcp-socket.receive": store | trappable,
+            "wasi:sockets/types.[method]udp-socket.bind": async | trappable,
+            "wasi:sockets/types.[method]udp-socket.connect": async | trappable,
             default: trappable,
         },
-        trappable_error_type: { "wasi:filesystem/types.error-code" => crate::p3::filesystem::FilesystemError },
+        trappable_error_type: { "wasi:filesystem/types.error-code" => crate::p3::filesystem::FilesystemError, "wasi:sockets/types.error-code" => crate::p3::sockets::SocketError },
         with: {
+            "wasi:sockets/types.tcp-socket": crate::p3::sockets::tcp::TcpSocket,
+            "wasi:sockets/types.udp-socket": crate::p3::sockets::udp::UdpSocket,
             "wasi:filesystem/types.descriptor": crate::filesystem::Descriptor,
             "wasi:cli/terminal-input.terminal-input": crate::p3::cli::TerminalInput,
             "wasi:cli/terminal-output.terminal-output": crate::p3::cli::TerminalOutput,
@@ -30,6 +38,7 @@ mod canonical_tests;
 mod cli;
 mod filesystem;
 mod random;
+mod sockets;
 mod streams;
 #[cfg(test)]
 mod tests;
@@ -109,6 +118,23 @@ pub fn add_to_linker<T: WasiView + 'static>(linker: &mut Linker<T>) -> wasmtime:
             let view = state.ctx();
             crate::filesystem::WasiFilesystemCtxView {
                 ctx: &mut view.ctx.filesystem,
+                table: view.table,
+            }
+        },
+    )?;
+    bindings::sockets::types::add_to_linker::<T, crate::sockets::WasiSockets>(linker, |state| {
+        let view = state.ctx();
+        crate::sockets::WasiSocketsCtxView {
+            ctx: &mut view.ctx.sockets,
+            table: view.table,
+        }
+    })?;
+    bindings::sockets::ip_name_lookup::add_to_linker::<T, crate::sockets::WasiSockets>(
+        linker,
+        |state| {
+            let view = state.ctx();
+            crate::sockets::WasiSocketsCtxView {
+                ctx: &mut view.ctx.sockets,
                 table: view.table,
             }
         },

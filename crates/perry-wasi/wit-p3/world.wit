@@ -5,6 +5,7 @@ world providers {
   include wasi:clocks/imports@0.3.0;
   include wasi:random/imports@0.3.0;
   include wasi:filesystem/imports@0.3.0;
+  include wasi:sockets/imports@0.3.0;
   import wasi:cli/environment@0.3.0;
   import wasi:cli/exit@0.3.0;
   import wasi:cli/types@0.3.0;

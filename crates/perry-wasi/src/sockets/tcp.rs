@@ -28,7 +28,7 @@ impl Family {
             (Self::Ipv4, SocketAddr::V4(_)) | (Self::Ipv6, SocketAddr::V6(_))
         )
     }
-    pub(super) fn validate(self, address: SocketAddr, remote: bool) -> SocketResult<()> {
+    pub(crate) fn validate(self, address: SocketAddr, remote: bool) -> SocketResult<()> {
         let ip = address.ip();
         if !self.matches(address)
             || ip.is_multicast()
@@ -42,7 +42,7 @@ impl Family {
         }
         Ok(())
     }
-    fn unspecified(self) -> SocketAddr {
+    pub(crate) fn unspecified(self) -> SocketAddr {
         match self {
             Self::Ipv4 => SocketAddr::from(([0, 0, 0, 0], 0)),
             Self::Ipv6 => SocketAddr::from(([0u16; 8], 0)),
@@ -73,6 +73,10 @@ enum State {
         socket: Socket,
         bound: bool,
     },
+    // A duplicate handle to the same OS socket exposes synchronous controls
+    // while the original handle is owned by an in-flight P3 connect operation.
+    #[cfg(feature = "p3")]
+    Connecting(Socket),
     Listening(Resource<NativeTcp>),
     Connected {
         socket: Resource<NativeTcp>,
@@ -158,6 +162,20 @@ impl TcpSocket {
             return Err(ErrorCode::InvalidState.into());
         }
         self.family.validate(address, true)
+    }
+    #[cfg(feature = "p3")]
+    pub(crate) fn connecting_view(&self) -> SocketResult<Self> {
+        let State::Fresh { socket, .. } = &self.state else {
+            return Err(ErrorCode::InvalidState.into());
+        };
+        Ok(Self {
+            state: State::Connecting(socket.try_clone()?),
+            family: self.family,
+            submitter: self.submitter.clone(),
+            policy: self.policy.clone(),
+            backlog: self.backlog,
+            inherited: Vec::new(),
+        })
     }
     pub(crate) fn connection(&self) -> SocketResult<TcpConnection> {
         match &self.state {
@@ -301,6 +319,12 @@ impl TcpSocket {
 
     pub fn local_address(&self) -> SocketResult<SocketAddr> {
         match &self.state {
+            #[cfg(feature = "p3")]
+            State::Connecting(socket) => socket
+                .local_addr()?
+                .as_socket()
+                .filter(|address| address.port() != 0)
+                .ok_or_else(|| ErrorCode::InvalidState.into()),
             State::Fresh {
                 socket,
                 bound: true,
@@ -385,6 +409,10 @@ impl TcpSocket {
 
     fn get_option(&self, kind: SocketOptionKind) -> SocketResult<SocketOption> {
         match &self.state {
+            #[cfg(feature = "p3")]
+            State::Connecting(socket) => {
+                options::get(socket, self.family, kind).map_err(Into::into)
+            }
             State::Fresh { socket, .. } => {
                 options::get(socket, self.family, kind).map_err(Into::into)
             }
@@ -396,6 +424,8 @@ impl TcpSocket {
     }
     fn set_option(&mut self, option: SocketOption) -> SocketResult<()> {
         match &self.state {
+            #[cfg(feature = "p3")]
+            State::Connecting(socket) => options::set(socket, self.family, option)?,
             State::Fresh { socket, .. } => options::set(socket, self.family, option)?,
             State::Listening(socket) | State::Connected { socket, .. } => {
                 native::set_option(socket, option)?

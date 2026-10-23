@@ -60,7 +60,7 @@ impl Cleanup {
                 Poll::Ready(result) => {
                     drop(self.tasks.swap_remove(index));
                     match result {
-                        Ok(Ok(())) | Ok(Err(Failure::Socket(_))) => (),
+                        Ok(Ok(())) | Ok(Err(Failure::Socket(_) | Failure::BrokenPipe(_))) => (),
                         Ok(Err(Failure::Driver(error))) | Err(error) => self.error = Some(error),
                     }
                 }

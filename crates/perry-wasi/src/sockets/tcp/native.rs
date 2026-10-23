@@ -53,12 +53,14 @@ impl Drop for Direction {
 #[derive(Clone, Debug)]
 pub enum Failure {
     Socket(ErrorCode),
+    // Preserve the existing P2 code while allowing P3 to report connection-broken.
+    BrokenPipe(ErrorCode),
     Driver(perry_component_io::Error),
 }
 impl Failure {
     pub fn socket(self) -> SocketError {
         match self {
-            Self::Socket(code) => code.into(),
+            Self::Socket(code) | Self::BrokenPipe(code) => code.into(),
             Self::Driver(error) => SocketError::trap(error),
         }
     }
@@ -71,7 +73,11 @@ impl From<std::io::Error> for Failure {
         {
             return Self::from(*error);
         }
-        Self::Socket(ErrorCode::from(error))
+        if error.kind() == std::io::ErrorKind::BrokenPipe {
+            Self::BrokenPipe(ErrorCode::from(error))
+        } else {
+            Self::Socket(ErrorCode::from(error))
+        }
     }
 }
 impl From<turnloop::Error> for Failure {
@@ -87,6 +93,9 @@ impl From<turnloop::Error> for Failure {
         if let Some(code) = error.os {
             return std::io::Error::from_raw_os_error(code).into();
         }
+        if error.kind == K::BrokenPipe {
+            return Self::BrokenPipe(ErrorCode::ConnectionReset);
+        }
         Self::Socket(match error.kind {
             K::PermissionDenied => ErrorCode::AccessDenied,
             K::Unsupported => ErrorCode::NotSupported,
@@ -94,7 +103,7 @@ impl From<turnloop::Error> for Failure {
             K::WouldBlock => ErrorCode::WouldBlock,
             K::TimedOut => ErrorCode::Timeout,
             K::ConnectionRefused => ErrorCode::ConnectionRefused,
-            K::ConnectionReset | K::BrokenPipe => ErrorCode::ConnectionReset,
+            K::ConnectionReset => ErrorCode::ConnectionReset,
             _ => ErrorCode::Unknown,
         })
     }

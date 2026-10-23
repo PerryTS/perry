@@ -24,7 +24,9 @@ type ReadTask = ResourceRequest<Result<Vec<u8>, Failure>>;
 type UnitTask = ResourceRequest<Result<(), Failure>>;
 fn stream_error(error: &Failure) -> StreamError {
     match error {
-        Failure::Socket(code) => StreamError::LastOperationFailed((*code).into()),
+        Failure::Socket(code) | Failure::BrokenPipe(code) => {
+            StreamError::LastOperationFailed((*code).into())
+        }
         Failure::Driver(error) => StreamError::Trap(error.clone().into()),
     }
 }
@@ -96,7 +98,7 @@ impl Input {
             ReadState::Closing(_) | ReadState::Closed => Err(StreamError::Closed),
             ReadState::Error(error) => {
                 let result = stream_error(error);
-                if matches!(error, Failure::Socket(_)) {
+                if matches!(error, Failure::Socket(_) | Failure::BrokenPipe(_)) {
                     self.state = ReadState::Closed;
                 }
                 Err(result)
@@ -189,7 +191,7 @@ impl Output {
             WriteState::Closed => Err(StreamError::Closed),
             WriteState::Error(error) => {
                 let result = stream_error(error);
-                if matches!(error, Failure::Socket(_)) {
+                if matches!(error, Failure::Socket(_) | Failure::BrokenPipe(_)) {
                     self.state = WriteState::Closed;
                 }
                 Err(result)

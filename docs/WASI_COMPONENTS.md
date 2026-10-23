@@ -143,9 +143,11 @@ Perry-generated TypeScript HTTP guests under moving GC have the separate
 qualification below. Other native platforms and final shipping packages remain open.
 The experimental `informational-outbound-responses` interface is disabled.
 Native Perry WASI 0.3 integration remains unimplemented. The provider crate
-has optional `p3` clocks/random, CLI and filesystem providers at 0.3.0; they are not yet
+has optional `p3` clocks/random, CLI, filesystem and socket providers at 0.3.0; they are not yet
 enabled by the Perry component engine. See [provider provenance](../crates/perry-wasi/PROVENANCE.md)
-and the [Linux filesystem qualification](validation/wasi-p3-filesystem-20261023.json).
+and the [Linux filesystem qualification](validation/wasi-p3-filesystem-20261023.json)
+and [socket qualification](validation/wasi-p3-sockets-20261023.json). P3 HTTP and
+the production async engine and TypeScript bindings remain unfinished.
 
 The Rust embedding API now provides an HTTP/1.1 origin server through
 `perry_wasi::http::server::Server` and canonical handler invocation through

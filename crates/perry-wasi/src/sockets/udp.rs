@@ -142,6 +142,69 @@ impl UdpSocket {
             remote,
         })
     }
+    /// P3 association permits implicit binding. Permission checks happen before
+    /// binding, and packet filtering remains in the version-specific adapter.
+    #[cfg(feature = "p3")]
+    pub(crate) async fn connect(&mut self, remote: SocketAddr) -> SocketResult<()> {
+        self.family.validate(remote, true)?;
+        self.policy.check(remote, SocketAddrUse::UdpConnect).await?;
+        if !self.is_bound() {
+            self.bind(self.family.unspecified()).await?;
+        }
+        self.bound()?;
+        self.remote = Some(remote);
+        Ok(())
+    }
+    #[cfg(feature = "p3")]
+    pub(crate) fn disconnect(&mut self) -> SocketResult<()> {
+        self.bound()?;
+        if self.remote.take().is_none() {
+            return Err(ErrorCode::InvalidState.into());
+        }
+        Ok(())
+    }
+    #[cfg(feature = "p3")]
+    pub(crate) fn unfiltered_connection(&self) -> SocketResult<UdpConnection> {
+        Ok(UdpConnection {
+            socket: self.bound()?.clone(),
+            family: self.family,
+            policy: self.policy.clone(),
+            remote: None,
+        })
+    }
+    /// Validate and authorize a destination before an implicit bind or send.
+    #[cfg(feature = "p3")]
+    pub(crate) async fn prepare_send(
+        &mut self,
+        data: Vec<u8>,
+        destination: Option<SocketAddr>,
+    ) -> SocketResult<(UdpConnection, SendTask)> {
+        let destination = match (self.remote, destination) {
+            (None, None) => return Err(ErrorCode::InvalidArgument.into()),
+            (Some(expected), Some(actual)) if expected != actual => {
+                return Err(ErrorCode::InvalidArgument.into())
+            }
+            (Some(remote), _) | (None, Some(remote)) => remote,
+        };
+        self.family.validate(destination, true)?;
+        let maximum = if self.family == Family::Ipv4 {
+            65_507
+        } else {
+            65_527
+        };
+        if data.len() > maximum {
+            return Err(ErrorCode::DatagramTooLarge.into());
+        }
+        self.policy
+            .check(destination, SocketAddrUse::UdpOutgoingDatagram)
+            .await?;
+        if !self.is_bound() {
+            self.bind(self.family.unspecified()).await?;
+        }
+        let connection = self.unfiltered_connection()?;
+        let task = native::send(self.bound()?, data, destination).map_err(SocketError::trap)?;
+        Ok((connection, task))
+    }
     fn get_option(&self, kind: SocketOptionKind) -> SocketResult<SocketOption> {
         match &self.state {
             State::Fresh(socket) => Ok(tcp::options::get(socket, self.family, kind)?),
