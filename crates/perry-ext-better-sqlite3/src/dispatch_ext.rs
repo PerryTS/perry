@@ -13,8 +13,8 @@
 use std::sync::Once;
 
 use perry_ffi::{
-    alloc_string, get_handle, js_array_alloc, js_array_push, Handle, JsValue, StringHeader,
-    TransientRootScope,
+    alloc_string, get_handle, js_array_alloc, js_array_push, ArrayHeader, Handle, JsValue,
+    StringHeader, TransientRootScope, TransientRootedNanbox,
 };
 
 use crate::{SqliteDbHandle, SqliteStmtHandle};
@@ -33,6 +33,16 @@ pub(crate) fn ensure_registered() {
         // SAFETY: a plain registration with a `'static` function pointer.
         unsafe { js_register_handle_method_dispatch_extension(sqlite_method_dispatch_ext) };
     });
+}
+
+/// The parameter array for a statement call. Each push returns the array to
+/// use next and nothing else is held, so no earlier pointer outlives a push.
+unsafe fn rooted_params_array(rooted: &[TransientRootedNanbox]) -> *mut ArrayHeader {
+    rooted
+        .iter()
+        .fold(js_array_alloc(rooted.len() as u32), |arr, v| {
+            js_array_push(arr, JsValue::from_bits(v.get().to_bits()))
+        })
 }
 
 fn bits(v: JsValue) -> f64 {
@@ -103,10 +113,7 @@ unsafe fn call(handle: Handle, name: &str, args: &[f64]) -> Option<f64> {
                         scope.root_nanbox(v)
                     })
                     .collect();
-                let mut params = js_array_alloc(rooted.len() as u32);
-                for v in &rooted {
-                    params = js_array_push(params, JsValue::from_bits(v.get().to_bits()));
-                }
+                let params = rooted_params_array(&rooted);
                 match name {
                     "run" => {
                         let r = crate::js_sqlite_stmt_run(handle, params);

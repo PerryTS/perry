@@ -279,8 +279,14 @@ def split_functions(lines: list[str]):
         i = j + 1
 
 
+# `no_gc(` is the OPPOSITE of a collection point: `perry_ffi::bytes::no_gc`
+# runs its closure with collection forbidden. The bare `gc(` entry must match a
+# call to `gc` itself, not the tail of `no_gc(`.
+BARE_GC_CALL = re.compile(r"(?<![A-Za-z0-9_])gc\(")
+
+
 def calls_any(line: str, names) -> bool:
-    return any(n in line for n in names)
+    return any(BARE_GC_CALL.search(line) if n == "gc(" else n in line for n in names)
 
 
 def scan_function(name: str, lines: list[str], start: int, end: int):
@@ -386,6 +392,12 @@ unsafe fn planted_later_rhs(value: f64) -> usize {
     let _other = js_object_alloc(0);
     let copied = (*raw).shape_id;
     copied
+}
+
+unsafe fn clean_no_gc_scope(input: f64) -> usize {
+    let ptr = js_get_string_pointer_unified(input);
+    perry_ffi::bytes::no_gc(|scope| read_len(ptr, scope));
+    ptr
 }
 
 unsafe fn clean_single_alloc() -> *mut ArrayHeader {
@@ -641,6 +653,7 @@ def self_test() -> int:
         print(f"SELF-TEST FAIL: did not flag planted shape(s): {sorted(missing)}", file=sys.stderr)
         ok = False
     forbidden = {
+        "clean_no_gc_scope",
         "clean_single_alloc",
         "clean_use_on_first_collection",
         "clean_ffi_transient_root",

@@ -717,17 +717,19 @@ fn stream_chunk_uses_uint8array_placement_at_birth() {
 #[test]
 fn draining_an_errored_stream_leaves_no_unhandled_rejection() {
     let _serial = serial_guard();
-    let chunk = js_string_from_bytes(b"partial".as_ptr(), 7);
-    let reason = js_string_from_bytes(b"boom".as_ptr(), 4);
     let id = alloc_readable(0, 0, 0, 1.0);
+    // Each string is handed to the stream before the next allocation, so no
+    // raw pointer is held across a collection point.
     {
         let mut g = READABLE_STREAMS.lock().unwrap();
         let s = g.get_mut(&id).unwrap();
+        let chunk = js_string_from_bytes(b"partial".as_ptr(), 7);
         s.push_chunk(JSValue::string_ptr(chunk).bits(), 1.0);
         s.started = true;
         s.state = ReadableState::Readable;
         // A read delivering the last chunk flips the stream to Errored, so the
         // NEXT read is the one that rejects.
+        let reason = js_string_from_bytes(b"boom".as_ptr(), 4);
         s.pending_error_after_chunks = Some(JSValue::string_ptr(reason).bits());
     }
     let before = perry_runtime::promise::rejection::unhandled_rejection_count();
