@@ -369,7 +369,10 @@ pub(crate) fn set_intrinsic_data_prop(
     value: f64,
     attrs: super::super::PropertyAttrs,
 ) {
-    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    // Intrinsic names are runtime literals. Keep the canonical atom in the
+    // holder's key list so inherited probes can use its shape directly.
+    let key = crate::string::canonical_key(name.as_bytes());
+    let key = unsafe { crate::string::property_atom(key) };
     super::super::define_builtin_data_property(obj, key, value, name.to_string(), attrs);
 }
 
@@ -877,8 +880,10 @@ fn build_generator_tower(
     );
     // Realm intrinsics, built once: born old and never-move (O3), so the
     // method sites that answer from them are admitted before any minor.
-    let proto = crate::object::object_alloc_prototype_old(0, 0); // %Generator% / %AsyncGenerator%
-    let gen_proto = crate::object::object_alloc_prototype_old(0, 0); // %Generator.prototype%
+    // Use the ordinary builtin prototype birth: all protocol properties
+    // remain inline, including return/throw and the iterator symbol.
+    let proto = super::proto_room::alloc_builtin_prototype(); // %Generator% / %AsyncGenerator%
+    let gen_proto = super::proto_room::alloc_builtin_prototype(); // %Generator.prototype%
     if ctor.is_null() || proto.is_null() || gen_proto.is_null() {
         return;
     }
@@ -932,9 +937,16 @@ fn build_generator_tower(
             crate::fn_info!(generator_proto_throw_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         )
     };
-    install_proto_method(gen_proto, "next", next_info, 1);
-    install_proto_method(gen_proto, "return", return_info, 1);
-    install_proto_method(gen_proto, "throw", throw_info, 1);
+    for (name, info) in [
+        ("next", next_info),
+        ("return", return_info),
+        ("throw", throw_info),
+    ] {
+        let key = crate::string::canonical_key(name.as_bytes());
+        // The tower's no-move window keeps the key and holder live here.
+        let key = unsafe { crate::string::property_atom(key) };
+        install_proto_method_with_key(gen_proto, name, info, 1, key);
+    }
     // Spec: `%AsyncGenerator.prototype%` inherits `[Symbol.asyncIterator]` from
     // `%AsyncIteratorPrototype%` and `%Generator.prototype%` inherits
     // `[Symbol.iterator]` from `%IteratorPrototype%` — both returning `this`.
@@ -981,6 +993,12 @@ fn build_generator_tower(
         install_proto_symbol_self_method(gen_proto, symbol_name, display_name, thunk);
     }
     set_intrinsic_to_string_tag(gen_proto, inst_tag);
+    // SAFETY: both holders are fresh and unexposed, under the tower's
+    // no-move scope. Their completed shapes retain exactly the used slots.
+    unsafe {
+        super::proto_room::fit_builtin_prototype(proto);
+        super::proto_room::fit_builtin_prototype(gen_proto);
+    }
 
     // SAFETY: `proto` is the live, just-built %(Async)GeneratorFunction.prototype%.
     unsafe {
@@ -1021,3 +1039,7 @@ pub(crate) fn ensure_generator_intrinsics() {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "generator_shape_tests.rs"]
+mod generator_shape_tests;
