@@ -11,6 +11,10 @@ workspace = true
 [dependencies]
 perry-component-io = { path = "../perry-component-io" }
 turnloop.workspace = true
+turnloop-http.workspace = true
+# This adapter receives the component driver's existing ExecutorHandle.
+turnloop-tls = { workspace = true, features = ["turnloop"] }
+futures-channel = "0.3"
 url.workspace = true
 http.workspace = true
 wasmtime = { version = "=48.0.5", default-features = false, features = ["anyhow", "std", "runtime", "component-model", "async"] }

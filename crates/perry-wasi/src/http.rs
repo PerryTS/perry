@@ -1,6 +1,7 @@
 //! HTTP resource and streaming primitives. Native transport and WIT registration
 //! are being integrated; this module does not yet enable `wasi:http` imports.
 pub mod body;
+pub mod transport;
 mod error;
 mod fields;
 pub use error::Error;

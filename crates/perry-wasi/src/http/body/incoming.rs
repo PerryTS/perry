@@ -2,6 +2,8 @@ use super::*;
 use wasmtime_wasi_io::streams::InputStream;
 
 pub struct IncomingBody {
+    // Kept only by guest-facing owners, never by the native sender: no task cycle.
+    transport: Option<perry_component_io::Request<()>>,
     shared: Option<Arc<Shared>>,
     stream: Option<Box<dyn InputStream>>,
 }
@@ -10,11 +12,15 @@ pub struct IncomingBodySender {
     finished: bool,
 }
 pub struct FutureTrailers {
+    _transport: Option<perry_component_io::Request<()>>,
     shared: Arc<Shared>,
     taken: bool,
 }
 
 impl IncomingBody {
+    pub(crate) fn retain_transport(&mut self, task: perry_component_io::Request<()>) {
+        self.transport = Some(task);
+    }
     pub fn new(context: StreamContext, expected: Option<u64>) -> (Self, IncomingBodySender) {
         let shared = Shared::new(context, expected);
         let stream = Box::new(BodyReadStream {
@@ -23,6 +29,7 @@ impl IncomingBody {
         });
         (
             Self {
+                transport: None,
                 shared: Some(shared.clone()),
                 stream: Some(stream),
             },
@@ -50,6 +57,7 @@ impl IncomingBody {
         drop(state);
         shared.wake();
         Ok(FutureTrailers {
+            _transport: self.transport.take(),
             shared: self.shared.take().unwrap(),
             taken: false,
         })

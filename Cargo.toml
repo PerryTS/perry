@@ -473,6 +473,9 @@ perex = "0.1.14"
 # opting out is a committed, reviewable change and never a silent one, so the
 # override lives here in the diff and the lock pins the exact artifact.
 turnloop = "0.1.0-alpha.9"
+# The optional component engine uses LocalExecutor independently of the Node
+# Loop below. Its TLS adapter receives that same executor handle; it creates no
+# second driver. The following sans-I/O restriction applies to Node Loop paths.
 # turnloop P5 (DESIGN §5b, §12 "P5"): the sans-I/O protocol crates that
 # replace hyper's HTTP/1.1 parser and framer on Perry's server path, and
 # `tokio_rustls` on every TLS path the loop owns. Default features only — the

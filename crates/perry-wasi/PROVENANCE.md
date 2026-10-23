@@ -236,3 +236,57 @@ cancellation acknowledgement and context teardown. Linux validation passes all
 201 provider, 40 host and 26/25 driver tests in development/production panic-abort,
 plus doctests, all-target Clippy, stdio overlap and the unchanged Tokio gate.
 This body-layer coverage does not establish native HTTP interoperability or TLS.
+
+## Native HTTP transport qualification
+
+`http::transport` implements owned HTTP/1.1 client exchanges on the existing
+component driver. It uses Turnloop's HTTP codec and TLS adapter. The TLS adapter
+receives the driver's existing `ExecutorHandle`; `turnloop-io` reexports those
+same executor types and does not construct another executor in this path. The
+Node Loop's sans-I/O restriction does not prohibit this component-driver use.
+
+Requests start at submission, before the guest polls its response. Upload and
+response headers progress concurrently; an early final response stops further
+guest upload while its response body remains readable. A single driver task owns
+the connection, parser, TLS state and bounded body channels. Dropping the pending
+response or incoming body cancels that task. Finishing the body transfers its
+lifetime to the trailer future, so unread data can drain to actual trailers.
+Context shutdown cancels the native task and wakes the remaining guest streams.
+
+HTTP permissions are explicit owned data, default-denied. DNS permission never
+grants a destination: every resolved address is checked against exact IP and
+optional port grants before connection. No policy callback, guest value or Store
+crosses the thread boundary. TLS verifies trust and authority, supports explicit
+additional CA data, and advertises only HTTP/1.1. It reads no ambient CA file or
+environment override. Each exchange owns one connection; there is no connection
+pool, automatic redirect, automatic decompression, HTTP/2 or upgrade transport.
+
+Connect/DNS/TLS, response-header and between-byte deadlines are bounded by the
+same driver. Between-byte deadlines restart on each network read and exclude
+waiting for guest body consumption. Invalid methods, schemes, authority ports
+and overflowing deadlines fail with typed errors. Header/framing storage and
+body transfers are bounded; request and response trailers use the HTTP codec.
+
+Linux validation at immutable snapshot `turnloop-provider-v54-src` passes 213
+provider tests, 40 host tests and 26/25 driver tests in development/production
+panic-abort profiles, plus doctests, all-target Clippy and stdio overlap. Twelve
+new transport tests exercise multi-megabyte streaming without polling the
+response first, early rejection of an unfinished upload, exact capability
+denials after DNS, trusted/untrusted/wrong-authority TLS, first/between-byte
+expiry and fragmented framing, short versus close-delimited bodies, HEAD,
+trailer draining, cancellation/capacity recovery and driver teardown.
+The receipt is `turnloop-http-transport-verification.json` in the integration
+report's `turnloop-http-transport` evidence directory.
+
+This remains transport-level qualification: canonical HTTP WIT registration,
+network-option wiring in the component host, the incoming/server handler path,
+and macOS/Windows provider qualification are still required. Validation uses an
+external override for both `turnloop` and `turnloop-io` from immutable revision
+`b63a4ee3d3ad73d2df61b35202ed140f05513053`. The latter's source matches published
+alpha.9, but that newly enabled package has not cleared the repository's seven-day
+publish-age window at validation time (published 2026-10-16 21:39:33 UTC). The
+shipping registry lock still needs resolution after that window and adoption of
+the released Turnloop repairs; no publish-age exception or shipping path override
+has been introduced. The actual validation dependency graph and workspace Tokio
+inventory remain Tokio-free. This is not a claim that the unchanged registry lock
+can build these new dependency edges with `--locked`.
