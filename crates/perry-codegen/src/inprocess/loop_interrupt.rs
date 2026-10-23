@@ -195,6 +195,28 @@ entry:
         &ir[start..end]
     }
 
+    // Non-Windows uses inkwell 0.10, which accepts either input form. Windows
+    // uses 0.9 and rejects the old form before LLVM sees it. Prove that adding
+    // the required terminator leaves the parsed poll module byte-identical;
+    // the same linking and safepoint pipeline consumes that module afterward.
+    #[cfg(not(windows))]
+    #[test]
+    fn terminated_poll_input_preserves_the_llvm_ir() {
+        let context = Context::create();
+        let parse = |bytes: &[u8]| {
+            let buffer = MemoryBuffer::create_from_memory_range_copy(bytes, "perry_loop_poll");
+            context
+                .create_module_from_ir(buffer)
+                .unwrap()
+                .print_to_string()
+                .to_string()
+        };
+        assert_eq!(
+            parse(POLL_IR.to_bytes()),
+            parse(POLL_IR.to_bytes_with_nul())
+        );
+    }
+
     #[test]
     fn every_back_edge_polls_and_nothing_else_does() {
         let ir = polled(SPIN);
