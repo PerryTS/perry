@@ -1002,7 +1002,7 @@ pub(super) fn emit_guarded_direct_method_call(
     // so its instances carry the family layout id, never the birth pair
     // above. Their arm enters the fast arm when the family holds the birth
     // pair's instance (`family_holds_birth_layout`), else it calls the
-    // ordinary public body (what dispatch by name resolves to).
+    // ordinary body, preserving any argument-only direct-call ABI.
     let family_arm = if (inline_single_arm && certificate.is_none()) || probe_before_runtime_guard {
         family_method_word(
             ctx,
@@ -1068,7 +1068,11 @@ pub(super) fn emit_guarded_direct_method_call(
     if let Some((family_idx, _)) = family_label {
         let resume = ctx.current_block;
         ctx.current_block = family_idx;
-        let value = ctx.block().call(DOUBLE, direct_fn, direct_arg_slices);
+        // This arm proves method identity but not the birth-field layout.
+        // An arguments-length clone needs no field-layout proof, and its
+        // scalar count cannot be passed to the public arguments-object ABI.
+        let target = direct_call_fn.unwrap_or(direct_fn);
+        let value = ctx.block().call(DOUBLE, target, direct_arg_slices);
         let truthy = truthy_result_kind.map(|_| total_value_truthy(ctx, &value));
         let end = ctx.block().label.clone();
         ctx.block().br(&merge_label);

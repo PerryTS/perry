@@ -387,6 +387,86 @@ fn a_length_only_class_method_direct_call_passes_the_scalar_count() {
     );
 }
 
+/// An exact-family proof elides guards, but must retain the scalar clone ABI.
+#[test]
+fn a_length_only_exact_family_call_keeps_the_scalar_arguments_abi() {
+    let module = module_with_tail(synthetic_arguments_param());
+    let ir = crate::proto_constants::with_test_census(Default::default(), || emit(&module));
+    // Entry thunks legitimately forward arguments objects to the public body;
+    // inspect the source call site, where the trailing value is a scalar.
+    let ir = ir
+        .split("\ndefine ")
+        .find(|body| body.starts_with("i32 @main()"))
+        .expect("the entry function containing t.m(1, 2, 3)");
+    assert!(
+        ir.contains("call double @perry_method_class_method_arguments_ts__T__m$arguments_length("),
+        "the exact-family call must select the scalar clone:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call double @perry_method_class_method_arguments_ts__T__m("),
+        "the public method expects an arguments object, not the scalar count:\n{ir}"
+    );
+    assert!(
+        !ir.contains("method_direct.")
+            && !ir.contains(MARK)
+            && !ir.contains("call i64 @js_array_alloc("),
+        "the exact-family proof must retain its guard-free, allocation-free call:\n{ir}"
+    );
+}
+
+/// A family's extra late key requires a separate, layout-independent call.
+#[test]
+fn a_length_only_family_call_keeps_the_scalar_arguments_abi() {
+    let mut module = module_with_tail(synthetic_arguments_param());
+    // A key introduced by a method belongs to the family, but is not part
+    // of the constructor's initialized field layout. The family guard must
+    // therefore use its separate call block rather than a layout clone.
+    module.classes[0].methods[0].body.insert(
+        0,
+        Stmt::Expr(Expr::PropertySet {
+            object: Box::new(Expr::This),
+            property: "late".into(),
+            value: Box::new(Expr::Number(1.0)),
+        }),
+    );
+    let mut opts = ir_opts();
+    opts.program_layouts = std::sync::Arc::new(crate::layout_families::compute(
+        [(module.name.as_str(), &module)],
+        true,
+        &Default::default(),
+    ));
+    let family = opts.program_layouts.families.get(&401).unwrap();
+    assert!(family.keys.iter().any(|(key, _)| key == "late"));
+    assert_eq!(family.init_count, 0);
+    let ir = String::from_utf8(compile_module(&module, opts).unwrap()).unwrap();
+    let mut blocks = 0;
+    let mut lines = ir.lines();
+    while let Some(line) = lines.next() {
+        if line.starts_with("method_direct.family_call.") && line.ends_with(':') {
+            let body = lines
+                .by_ref()
+                .take_while(|line| !line.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                body.contains(
+                    "call double @perry_method_class_method_arguments_ts__T__m$arguments_length("
+                ),
+                "the family call must pass its scalar count to the scalar clone:\n{body}\n{ir}"
+            );
+            assert!(
+                !body.contains("call double @perry_method_class_method_arguments_ts__T__m("),
+                "the public body expects a real arguments object:\n{body}"
+            );
+            blocks += 1;
+        }
+    }
+    assert!(
+        blocks > 0,
+        "fixture must exercise a family call block:\n{ir}"
+    );
+}
+
 /// The safety half: a real `...rest` with no `arguments` read keeps the old
 /// shape. It bundles only the args PAST the declared params, and is not marked.
 ///

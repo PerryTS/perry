@@ -1066,12 +1066,15 @@ pub(crate) fn try_lower_instance_method_call(
             );
             let arg_slices: Vec<(crate::types::LlvmType, &str)> =
                 direct_args.iter().map(|s| (DOUBLE, s.as_str())).collect();
+            let arguments_length_direct_fn = fallback_arguments_length_only
+                .then(|| crate::codegen::arguments::arguments_length_method_name(&fallback_fn));
 
             // Object model step 3 (§3.6): the receiver's family set is proven
             // to be exactly `{class_name}` and the method a prototype
             // constant, so the call binds the body with no load for dispatch
-            // and no guard. The body is the public method, which accepts any
-            // receiver layout. A `Ptr<Shape>` receiver keeps its own route,
+            // and no guard. Both the public method and its arguments-length
+            // clone accept any receiver layout; select the matching ABI.
+            // A `Ptr<Shape>` receiver keeps its own route,
             // which also proves the layout and calls the layout-specialised
             // body.
             // With a dynamic write or relink in the program the binding needs
@@ -1093,7 +1096,10 @@ pub(crate) fn try_lower_instance_method_call(
                         &fallback_fn,
                     );
                 }
-                let value = ctx.block().call(DOUBLE, &fallback_fn, &arg_slices);
+                let target = arguments_length_direct_fn
+                    .as_deref()
+                    .unwrap_or(&fallback_fn);
+                let value = ctx.block().call(DOUBLE, target, &arg_slices);
                 roots.release(ctx);
                 return Ok(Some(value));
             }
@@ -1325,10 +1331,8 @@ pub(crate) fn try_lower_instance_method_call(
                     .unwrap_or(false);
                 if ptr_shape_receiver && !fallback_fn.starts_with("perry_static_") {
                     ctx.note_ptr_shape_consumed(object, "ptr_shape_method");
-                    if fallback_arguments_length_only {
-                        let target =
-                            crate::codegen::arguments::arguments_length_method_name(&fallback_fn);
-                        let value = ctx.block().call(DOUBLE, &target, &arg_slices);
+                    if let Some(target) = arguments_length_direct_fn.as_deref() {
+                        let value = ctx.block().call(DOUBLE, target, &arg_slices);
                         roots.release(ctx);
                         return Ok(Some(value));
                     }
@@ -1509,8 +1513,6 @@ pub(crate) fn try_lower_instance_method_call(
                     roots.release(ctx);
                     return Ok(Some(direct));
                 }
-                let arguments_length_direct_fn = fallback_arguments_length_only
-                    .then(|| crate::codegen::arguments::arguments_length_method_name(&fallback_fn));
                 let selected_value = selection
                     .as_ref()
                     .and_then(|(_, _, lookup)| lookup.as_ref())
