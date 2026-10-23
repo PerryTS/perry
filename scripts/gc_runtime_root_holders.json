@@ -2932,6 +2932,12 @@
       "name": "MATCH_GETTER",
       "verdict": "not_a_gc_pointer",
       "why": "Test-only pair of an immediate Symbol.match answer and an invocation count. The fixture writes only TAG_TRUE, TAG_FALSE or TAG_UNDEFINED; match_getter increments the count after forcing GC. Search objects and RegExps are held separately in RuntimeHandles; no movable address is stored in this cell."
+    },
+    {
+      "file": "crates/perry-runtime/src/buffer/bytes.rs",
+      "name": "TEST_INLINE_DECOMMITS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Test-only per-thread numeric count of calls to decommit_payload_pages. Pin-lifetime witnesses compare the count to detect premature OS advice even when macOS retains page contents. It stores no owner, payload address or JS value and is absent from production builds."
     }
   ],
   "_FRONTIER_README": "Identity-pinned debt ratchet over new perry-ui* candidates and otherwise-unclassified core raw/Perry TLS declarations (see the census docstring, “The identity-pinned frontier”). A new uncovered holder fails until it is scanned, receives a researched holders verdict, or is deliberately pinned as debt. Moving a researched false positive to holders graduates it from this list. A fixed or classified holder makes its old frontier pin stale, so the receipt must be deleted.",

@@ -88,6 +88,14 @@ pub(crate) fn b4_sabotage(fault: &str) -> bool {
     std::env::var("PERRY_B4_SABOTAGE").ok().as_deref() == Some(fault)
 }
 
+// OS decommit advice may retain readable bytes (MADV_FREE_REUSABLE on macOS).
+// Observe the release attempt itself in pin-lifetime tests, without relying on
+// whether the kernel has reclaimed the pages yet. Absent from production.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static TEST_INLINE_DECOMMITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 pub(crate) struct Span {
     pub ptr: *mut u8,
     pub len: usize,

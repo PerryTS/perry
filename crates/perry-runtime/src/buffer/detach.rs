@@ -77,6 +77,8 @@ pub fn detach_array_buffer(addr: usize) {
 /// value is ignored.
 #[cfg(unix)]
 pub(super) fn decommit_payload_pages(data: *mut u8, capacity: usize) {
+    #[cfg(test)]
+    super::bytes::TEST_INLINE_DECOMMITS.with(|n| n.set(n.get() + 1));
     let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
     if page <= 0 {
         return;
@@ -109,7 +111,10 @@ pub(super) fn decommit_payload_pages(data: *mut u8, capacity: usize) {
 }
 
 #[cfg(not(unix))]
-pub(super) fn decommit_payload_pages(_data: *mut u8, _capacity: usize) {}
+pub(super) fn decommit_payload_pages(_data: *mut u8, _capacity: usize) {
+    #[cfg(test)]
+    super::bytes::TEST_INLINE_DECOMMITS.with(|n| n.set(n.get() + 1));
+}
 
 /// Release `[data, data + len)` AND report whether every byte of it is now
 /// guaranteed to read as zero (#10873: what lets a resizable buffer regrow into

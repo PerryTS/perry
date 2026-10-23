@@ -446,7 +446,14 @@ fn pinned_inline_detach_retains_pages_until_the_last_unpin() {
     unsafe {
         std::ptr::write_bytes(first.as_mut_ptr(), 37, first.len());
     }
+    let decommits = || bytes::TEST_INLINE_DECOMMITS.with(std::cell::Cell::get);
+    let before = decommits();
     buffer::detach_array_buffer(owner as usize);
+    assert_eq!(
+        decommits(),
+        before,
+        "detach must not advise away pinned pages"
+    );
     assert!(buffer::is_detached_buffer(owner as usize));
     let check = |pin: &bytes::Pinned| unsafe {
         assert!(
@@ -458,9 +465,15 @@ fn pinned_inline_detach_retains_pages_until_the_last_unpin() {
     };
     check(&first);
     drop(first);
+    assert_eq!(decommits(), before, "one pin still owns the inline pages");
     check(&second);
     let data = second.as_ptr();
     drop(second);
+    assert_eq!(
+        decommits(),
+        before + 1,
+        "the last pin must release the pages"
+    );
     #[cfg(target_os = "linux")]
     unsafe {
         let page = libc::sysconf(libc::_SC_PAGESIZE) as usize;
