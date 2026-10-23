@@ -2,6 +2,14 @@
   "schema": 1,
   "entries": [
     {
+      "path": "crates/perry-codegen/src/codegen/arguments.rs",
+      "function": "lower_arguments_length",
+      "access": "local_type_hint",
+      "count": 1,
+      "classification": "runtime-validated",
+      "reason": "The hint only recognizes the compiler-private synthetic arguments-length marker type; that binding exists solely in direct-call-only clones whose caller materialized the boxed actual-argument count, and the public method retains ordinary Arguments semantics."
+    },
+    {
       "path": "crates/perry-codegen/src/codegen/closure.rs",
       "function": "compile_closure",
       "access": "raw:local_types",
@@ -27,7 +35,7 @@
     },
     {
       "path": "crates/perry-codegen/src/codegen/mod.rs",
-      "function": "compile_module_impl",
+      "function": "lower_module",
       "access": "raw:module_local_types",
       "count": 1,
       "classification": "metadata-only",
@@ -74,20 +82,20 @@
       "reason": "Declared array kinds only seed packed-loop candidates; the loop entry guard validates the actual array kind and window."
     },
     {
-      "path": "crates/perry-codegen/src/collectors/typed_locals.rs",
-      "function": "seed_local_types",
-      "access": "raw:local_types",
-      "count": 1,
-      "classification": "representation-proven",
-      "reason": "The seed fills only Any/Unknown slots of the entry oracle with a String/Array fact of the body's one outer seed set (typed_locals::outer_proofs: 5d capture proofs met with collectors::definite_init facts), each holding at every read in the body; a declared or inferred type is never overwritten."
-    },
-    {
       "path": "crates/perry-codegen/src/collectors/pointer_locals.rs",
       "function": "collect_facts",
       "access": "raw:local_types",
       "count": 1,
       "classification": "representation-proven",
       "reason": "The membership check prunes the complete-write fixpoint to frame-owned locals; it cannot remove a required root and unknown values remain conservatively pointer-capable."
+    },
+    {
+      "path": "crates/perry-codegen/src/collectors/typed_locals.rs",
+      "function": "seed_local_types",
+      "access": "raw:local_types",
+      "count": 1,
+      "classification": "representation-proven",
+      "reason": "The seed fills only Any/Unknown slots of the entry oracle with a String/Array fact of the body's one outer seed set (typed_locals::outer_proofs: 5d capture proofs met with collectors::definite_init facts), each holding at every read in the body; a declared or inferred type is never overwritten."
     },
     {
       "path": "crates/perry-codegen/src/expr/array_methods.rs",
@@ -147,6 +155,14 @@
     },
     {
       "path": "crates/perry-codegen/src/expr/index_set.rs",
+      "function": "is_bigint_typed_array_receiver",
+      "access": "local_type_hint",
+      "count": 1,
+      "classification": "runtime-validated",
+      "reason": "The erased BigInt typed-array hint only nominates lower_inline_dyn_typed_array_set for an unproven key. That emitter guards the live receiver kind and index and uses js_dyn_index_set_strict on a miss; the hint licenses no unchecked store."
+    },
+    {
+      "path": "crates/perry-codegen/src/expr/index_set.rs",
       "function": "is_width_tracked_typed_array_receiver",
       "access": "local_type_hint",
       "count": 1,
@@ -200,14 +216,6 @@
       "count": 1,
       "classification": "representation-proven",
       "reason": "The proof API supplies only runtime-derived initializer evidence and rejects the binding after any write in the region."
-    },
-    {
-      "path": "crates/perry-codegen/src/expr/property_get.rs",
-      "function": "lower",
-      "access": "local_type_hint",
-      "count": 1,
-      "classification": "runtime-validated",
-      "reason": "The hint only recognizes the compiler-private synthetic arguments-length marker type; that binding exists solely in direct-call-only clones whose caller materialized the boxed actual-argument count, and the public method retains ordinary Arguments semantics."
     },
     {
       "path": "crates/perry-codegen/src/expr/property_get.rs",
@@ -357,9 +365,9 @@
       "path": "crates/perry-codegen/src/lower_call/property_get/dispatch_receiver_class.rs",
       "function": "guarded_declared_receiver_class_candidate",
       "access": "local_type_hint",
-      "count": 1,
+      "count": 2,
       "classification": "runtime-validated",
-      "reason": "The annotation selects only a direct-method candidate; the emitted guard validates the live class id, keys token, own override, and resolved method pointer, with every miss using dynamic dispatch."
+      "reason": "The annotation selects only a direct-method candidate; the emitted guard validates the live class id, keys token, own override, and resolved method pointer, with every miss using dynamic dispatch. Both named-local and array-element hints nominate this same live-value guard; indexed receivers additionally require inert arguments and method-shape admission."
     },
     {
       "path": "crates/perry-codegen/src/lower_call/scalar_method.rs",
@@ -552,6 +560,14 @@
       "count": 3,
       "classification": "representation-proven",
       "reason": "The proof API supplies only runtime-derived initializer evidence and rejects the binding after any write in the region."
+    },
+    {
+      "path": "crates/perry-codegen/src/type_analysis/pod.rs",
+      "function": "expression_has_numeric_length",
+      "access": "stable_local_type_proof",
+      "count": 1,
+      "classification": "representation-proven",
+      "reason": "The stable initializer proof establishes a String or StringLiteral runtime value and is invalidated by writes; annotations alone cannot enter this proof branch."
     },
     {
       "path": "crates/perry-codegen/src/type_analysis/predicates.rs",
