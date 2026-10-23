@@ -30,3 +30,9 @@ for (const k of Object.keys(o)) mm.set(k, o[k]);
 console.log(mm.get("first"), mm.get(["sec", "ond"].join("")), mm.get("k13"), mm.has("k20"), mm.size);
 const ss = new Set(Object.keys(o).concat(Array.from({ length: 12 }, (_, i) => `v${i}`)));
 console.log(ss.has("third"), ss.has("v11"), ss.has("v12"), ss.size);
+// trimmed literals (nothing to trim, and something to trim) as keys
+const tm = new Map<string, number>();
+for (let i = 0; i < 12; i++) tm.set(("cmd.number." + i).trim(), i);
+const lit = ["app.exit", " app.help ", "theme.switch\n", "model.list"];
+lit.forEach((k, i) => tm.set(k.trim(), 100 + i));
+console.log(tm.get("app.exit"), tm.get("app.help"), tm.get("theme.switch"), tm.get(" app.help "), tm.size, "app.exit".trim() === "app.exit", " x ".trim().length);
