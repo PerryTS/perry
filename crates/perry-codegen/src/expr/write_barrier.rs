@@ -333,6 +333,58 @@ pub(crate) fn emit_write_barrier_slot_value_and_generation_tested(
     ctx.current_block = done_idx;
 }
 
+/// The barriers of a fresh birth's `count` field stores, all made before
+/// this with no collection point between them: one parent gate
+/// ([`emit_parent_may_need_remembering_check`]) for the whole birth and, only
+/// when it fires, one runtime replay (`js_write_barrier_birth_slots`) over the
+/// slots, skipping the raw numeric lanes named by bit `i` of `raw`.
+///
+/// Per-slot [`emit_write_barrier_slot_value_and_generation_tested`] asks the
+/// same parent question once per slot; the parent is the same object and
+/// nothing between the stores can change its generation or start a cycle (no
+/// call, no safepoint), so asking once decides for every slot. The runtime
+/// replay does each slot's shading and remembering exactly as the per-slot
+/// entry would have, after the last store instead of after each.
+///
+/// `parent_handle` must be a validated, non-forwarded GC user pointer and
+/// `fields` the address of its slot 0.
+pub(crate) fn emit_write_barrier_birth_slots_generation_tested(
+    ctx: &mut FnCtx<'_>,
+    parent_handle: &str,
+    fields: &str,
+    count: usize,
+    raw: u32,
+    stem: &str,
+) {
+    if !crate::codegen::write_barriers_enabled() || count == 0 {
+        return;
+    }
+    let barrier_idx = ctx.new_block(&format!("{}.barrier", stem));
+    let done_idx = ctx.new_block(&format!("{}.barrier.done", stem));
+    let barrier_label = ctx.block_label(barrier_idx);
+    let done_label = ctx.block_label(done_idx);
+    {
+        let blk = ctx.block();
+        let needed = emit_parent_may_need_remembering_check(blk, parent_handle);
+        blk.cond_br(&needed, &barrier_label, &done_label);
+    }
+    ctx.current_block = barrier_idx;
+    {
+        let blk = ctx.block();
+        blk.call_void(
+            "js_write_barrier_birth_slots",
+            &[
+                (I64, parent_handle),
+                (I64, fields),
+                (I32, &count.to_string()),
+                (I32, &raw.to_string()),
+            ],
+        );
+        blk.br(&done_label);
+    }
+    ctx.current_block = done_idx;
+}
+
 /// Store an expression result into a compiler-managed registered root.
 /// FinalRootRemark rescans the slot regardless of the expression's type or
 /// representation; see `emit_gated_root_nanbox_store` for that proof.

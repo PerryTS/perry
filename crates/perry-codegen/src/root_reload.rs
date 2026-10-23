@@ -212,6 +212,7 @@ const NON_COLLECTING: &[&str] = &[
     "perry_probe_get_keyed",
     "js_write_barrier_slot",
     "js_write_barrier_slot_validated_parent",
+    "js_write_barrier_birth_slots",
     "js_gc_register_global_root",
     // pure value predicates / bit twiddling.
     //

@@ -217,6 +217,7 @@ js_arraylike_findIndex	f64	f64,f64,f64
 js_arraylike_findLast	f64	f64,f64,f64
 js_arraylike_findLastIndex	f64	f64,f64,f64
 js_arraylike_flat	f64	f64,f64
+js_arraylike_flatMap	f64	f64,f64,f64
 js_arraylike_forEach	f64	f64,f64,f64
 js_arraylike_includes	f64	f64,f64,f64,i32s
 js_arraylike_indexOf	f64	f64,f64,f64,i32s
@@ -645,6 +646,8 @@ js_bun_plugin	f64	f64
 js_bun_serve	i64	f64
 js_bun_server_request_ip	f64	i64,f64
 js_bun_server_stop	f64	i64,f64
+js_bun_sleep	f64	f64
+js_bun_sleep_sync	f64	f64
 js_bun_spawn	f64	f64,f64
 js_bun_sql_new	f64	f64,f64
 js_bun_sqlite_database_call	i64	f64,f64
@@ -681,8 +684,6 @@ js_bun_transpiler_transform	ptr	i64,ptr,ptr
 js_bun_transpiler_transform_sync	ptr	i64,ptr,ptr
 js_bun_unsupported	f64	f64
 js_bun_which	f64	f64,f64
-js_bun_sleep	f64	f64
-js_bun_sleep_sync	f64	f64
 js_bun_wrap_ansi	f64	f64,f64,f64
 js_bun_write	f64	f64,f64
 js_bun_zstd_decompress	f64	f64
@@ -732,6 +733,8 @@ js_child_process_validate_command	f64	f64,ptr,i32u
 js_child_process_validate_fork_module	f64	f64
 js_child_process_validate_options	f64	f64,i32s,i32s
 js_child_process_validate_spawn_args	f64	f64,i32s,i32s
+js_cjs_module_record	f64	f64,f64,f64,f64,f64,f64,f64
+js_cjs_record_set_factory	void	f64,f64
 js_class_accessor_shape_guard	i32s	f64,i32u,i64,ptr,usize
 js_class_capture_value	f64	i32u,i32u
 js_class_capture_value_for_receiver	f64	f64,i32u,i32u
@@ -2697,6 +2700,7 @@ js_object_alloc_fast	ptr	i32u,i32u
 js_object_alloc_fast_with_parent	ptr	i32u,i32u,i32u
 js_object_alloc_null_proto	ptr	i32u,i32u
 js_object_alloc_null_proto_entries	ptr	ptr,ptr,ptr,i32u
+js_object_alloc_null_proto_ordinary	ptr	i32u
 js_object_alloc_plain	ptr	i32u
 js_object_alloc_with_parent	ptr	i32u,i32u,i32u
 js_object_alloc_with_shape	ptr	i32u,i32u,ptr,i32u
@@ -4584,6 +4588,7 @@ js_writable_stream_new_with_sink_type	f64	f64,f64,f64,f64,f64,f64
 js_writable_stream_subclass_init	f64	f64,f64,f64,f64,f64
 js_writable_stream_throw_invalid_sink	f64	
 js_write_barrier	void	i64,i64
+js_write_barrier_birth_slots	void	i64,i64,i32u,i32u
 js_write_barrier_root_heap_word	void	i64
 js_write_barrier_root_nanbox	void	i64
 js_write_barrier_slot	void	i64,i64,i64

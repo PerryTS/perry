@@ -42,6 +42,7 @@ pub(super) fn cannot_run_js(gc: &crate::gc_call_effects::GcEffects, callee: &str
                 | "js_gc_note_slot_layout"
                 | "js_gc_note_slot_layout_aware"
                 | "js_write_barrier_slot_validated_parent"
+                | "js_write_barrier_birth_slots"
                 | "js_write_barrier_slot"
                 | "js_write_barrier_root_nanbox"
                 | "js_write_barrier_root_heap_word"

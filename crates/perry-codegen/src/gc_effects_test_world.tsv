@@ -59,6 +59,7 @@ js_typed_feedback_maybe_dump_trace	Leaf	no
 js_typed_i32_arg_guard	Leaf	no
 js_typed_i32_arg_to_raw	Leaf	no
 js_write_barrier	Leaf	no
+js_write_barrier_birth_slots	Leaf	no
 js_write_barrier_slot	Leaf	no
 js_write_barrier_slot_validated_parent	Leaf	no
 perry_alloc_layout	AllocOnly	no

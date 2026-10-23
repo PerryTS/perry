@@ -109,6 +109,17 @@ fn final_literal_seed_and_birth_share_symbols_and_patch_after_publication() {
         !body.contains("call void @js_object_set_field"),
         "complete literal birth must remove per-field checked stores"
     );
+    assert_eq!(
+        body[stamp..]
+            .matches("call void @js_write_barrier_birth_slots(")
+            .count(),
+        1,
+        "the birth's slot stores share one barrier"
+    );
+    assert!(
+        !body.contains("literal_birth.barrier.maybe"),
+        "no slot of the birth has a barrier of its own"
+    );
     assert!(
         body.rfind("call void @js_closure_set_capture_bits")
             .unwrap()

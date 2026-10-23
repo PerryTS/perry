@@ -333,6 +333,49 @@ pub extern "C" fn js_write_barrier_slot_validated_parent(
     write_barrier_decoded_parent(parent_user as usize, slot_addr as usize, child_addr, false);
 }
 
+/// The write barriers of one literal birth: the `count` slots from `slots`
+/// (the fields of the fresh object `parent_user`) were just stored, each
+/// without its own barrier. Replays every store's barrier as
+/// [`js_write_barrier_slot_validated_parent`] would have, in one call.
+///
+/// Bit `i` of `raw` (slots below 32) names a raw numeric lane: its bits are a
+/// double, not a value, and owe no barrier. Every other slot holds a value
+/// (or the hole of a slot its chunk stores later, which carries no pointer).
+///
+/// Same contract as the per-slot entry: `parent_user` is the raw user pointer
+/// of a live, non-forwarded GC object whose header the emitted gate
+/// (`emit_parent_may_need_remembering_check`) just read, and no collection
+/// point lies between the stores and this call: shading and remembering after
+/// the last store is what each per-slot barrier did after its own store.
+#[no_mangle]
+pub extern "C" fn js_write_barrier_birth_slots(
+    parent_user: u64,
+    slots: u64,
+    count: u32,
+    raw: u32,
+) {
+    if parent_user == 0 || slots == 0 {
+        return;
+    }
+    let slots = slots as *mut u64;
+    let count = count as usize;
+    let mut start = 0;
+    while start < count {
+        if start < 32 && raw & (1 << start) != 0 {
+            start += 1;
+            continue;
+        }
+        let mut end = start + 1;
+        while end < count && !(end < 32 && raw & (1 << end) != 0) {
+            end += 1;
+        }
+        // SAFETY: `slots` addresses `count` fields of the live parent.
+        let run = unsafe { slots.add(start) };
+        super::barrier::replay_old_parent_slot_range(parent_user as usize, run, end - start);
+        start = end;
+    }
+}
+
 pub(super) fn write_barrier_slot_inner(
     parent: u64,
     slot_addr: usize,

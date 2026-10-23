@@ -240,6 +240,9 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
         VOID,
         &[I64, I64, I64],
     );
+    // perry-runtime: `gc::barrier_store::js_write_barrier_birth_slots` — the
+    // barriers of one literal birth's slot stores, behind one parent gate.
+    module.declare_function("js_write_barrier_birth_slots", VOID, &[I64, I64, I32, I32]);
     module.declare_function("js_write_barrier_root_nanbox", VOID, &[I64]);
     module.declare_function("js_write_barrier_root_heap_word", VOID, &[I64]);
     module.declare_function("js_gc_note_slot_layout", VOID, &[I64, I32, I64]);

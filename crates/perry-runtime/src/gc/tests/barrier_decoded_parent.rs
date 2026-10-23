@@ -405,3 +405,40 @@ fn runtime_barrier_entry_points_reject_implausible_parents_without_dereferencing
 
     reset_remembered_set();
 }
+
+/// `js_write_barrier_birth_slots` replays each stored slot's barrier: a young
+/// child in a value slot of an old parent is remembered, at any index (a wide
+/// birth's tail past slot 32 included), and a raw numeric lane is skipped
+/// even when its double's bits look like a heap address.
+#[test]
+fn birth_slots_barrier_remembers_value_slots_and_skips_raw_lanes() {
+    let _guard = GcTestIsolationGuard::new();
+    reset_remembered_set();
+    let young = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    let child_bits = ptr_bits(young);
+
+    // Slot 0 is a raw lane holding the child's bits: no barrier.
+    let (old_obj, fields) = unsafe { alloc_old_test_object(1) };
+    unsafe { *fields = child_bits };
+    js_write_barrier_birth_slots(old_obj as u64, fields as u64, 1, 1);
+    assert_eq!(remembered_dirty_page_count(), 0, "a raw lane owes no barrier");
+
+    // The same slot as a value: remembered.
+    js_write_barrier_birth_slots(old_obj as u64, fields as u64, 1, 0);
+    let page = crate::arena::generation_page_for_addr(fields as usize);
+    assert!(old_page_dirty_for(page), "a value slot's young child is remembered");
+    reset_remembered_set();
+
+    // A wide birth: the young child sits past slot 32, every head slot raw.
+    let (old_obj, fields) = unsafe { alloc_old_test_object(40) };
+    unsafe {
+        for i in 0..40 {
+            *fields.add(i) = 0;
+        }
+        *fields.add(37) = child_bits;
+    }
+    js_write_barrier_birth_slots(old_obj as u64, fields as u64, 40, u32::MAX);
+    let page = crate::arena::generation_page_for_addr(fields as usize + 37 * 8);
+    assert!(old_page_dirty_for(page), "a tail slot's young child is remembered");
+    reset_remembered_set();
+}
