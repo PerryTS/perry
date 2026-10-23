@@ -193,7 +193,7 @@ pub(crate) unsafe fn ek_debug_verify_read(arr: *const ArrayHeader, index: usize)
     let _ = (arr, index);
 }
 
-#[cfg(debug_assertions)]
+#[cfg(any(test, debug_assertions))]
 #[inline(never)]
 pub(crate) unsafe fn ek_verify(arr: *const ArrayHeader) {
     let prefix = (*arr).ek_prefix;
