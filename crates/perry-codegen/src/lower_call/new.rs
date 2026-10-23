@@ -786,6 +786,7 @@ fn lower_new_impl_inner<'a>(
             ctx,
             class,
             &obj_box,
+            args,
             &lowered_args,
             caps_absent_from_args,
         ) {

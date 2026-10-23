@@ -1,58 +1,63 @@
-//! Wide synthetic constructors keep their existing boxed ABI, but marshal
-//! arguments once for a shared runtime assignment loop. This also bounds the
-//! constructors emitted for shapes whose literal sites use descriptors.
+//! A wide literal-shape class (at least [`WIDE`] fields) has no constructor
+//! function. Its synthetic constructor would only marshal its arguments into
+//! a buffer for the runtime's literal assignment loop
+//! (`js_literal_shape_initialize`), so each birth calls that loop itself
+//! ([`initialize`]) with the values it holds: all of them, or for a chunked
+//! birth (`split_regions_literal`) only the head, whose chunks then store the
+//! rest. A literal-shape class has no class value either (`({}).constructor`
+//! is `Object`), so nothing can construct it by class id: no constructor is
+//! emitted or registered for it.
 
-use crate::module::LlModule;
+use crate::expr::FnCtx;
 use crate::types::{DOUBLE, I32, I64, PTR};
 
-pub(super) fn try_compile(
-    module: &mut LlModule,
+/// The width from which a literal-shape class has no constructor function.
+const WIDE: usize = 32;
+
+/// Whether `class` is a literal shape that has no constructor function.
+pub(crate) fn has_no_constructor(class: &perry_hir::Class) -> bool {
+    class.fields.len() >= WIDE && class.is_literal_shape()
+}
+
+/// The constructor method of a class without a constructor function: emit
+/// nothing for it.
+pub(super) fn try_compile(class: &perry_hir::Class, method: &perry_hir::Function) -> bool {
+    has_no_constructor(class) && method.name == format!("{}_constructor", class.name)
+}
+
+/// Initialize the birth `receiver` of `class` with `values`, its first
+/// `values.len()` keys in order, as its constructor would have; the
+/// constructor's result (`undefined`). `None` when `class` has a constructor
+/// function.
+pub(crate) fn initialize(
+    ctx: &mut FnCtx<'_>,
     class: &perry_hir::Class,
-    method: &perry_hir::Function,
-    name: &str,
-    keys_global: Option<&String>,
-) -> bool {
-    if class.fields.len() < 32
-        || !class.is_literal_shape()
-        || method.name != format!("{}_constructor", class.name)
-        || method.params.len() != class.fields.len()
-    {
-        return false;
+    receiver: &str,
+    values: &[String],
+) -> Option<String> {
+    if !has_no_constructor(class) {
+        return None;
     }
-    let Some(keys) = keys_global else {
-        return false;
-    };
-    let mut params = vec![(DOUBLE, "%this_arg".to_string())];
-    params.extend(
-        method
-            .params
-            .iter()
-            .map(|p| (DOUBLE, format!("%arg{}", p.id))),
-    );
-    let function = module.define_function(name, DOUBLE, params);
-    function.no_inline = true;
-    function.create_block("entry");
-    let values = function.alloca_entry_array(DOUBLE, method.params.len());
-    let block = function.block_mut(0).unwrap();
-    for (i, param) in method.params.iter().enumerate() {
-        let slot = block.gep(DOUBLE, &values, &[(I64, &i.to_string())]);
-        block.store(DOUBLE, &format!("%arg{}", param.id), &slot);
+    let keys = ctx.class_keys_globals.get(&class.name)?.clone();
+    let buffer = ctx.func.alloca_entry_array(DOUBLE, values.len().max(1));
+    let blk = ctx.block();
+    for (i, value) in values.iter().enumerate() {
+        let slot = blk.gep(DOUBLE, &buffer, &[(I64, &i.to_string())]);
+        blk.store(DOUBLE, value, &slot);
     }
-    // No allocating operation precedes this call. The runtime roots the
-    // receiver and complete buffer before it can run a setter; no managed
-    // operand is used here after the call, so this frame needs no GC slots.
-    block.call_void(
+    // No allocating operation lies between the stores and this call, and the
+    // runtime roots the receiver and the buffer's values before it can run a
+    // setter: the buffer needs no GC slots.
+    blk.call_void(
         "js_literal_shape_initialize",
         &[
-            (DOUBLE, "%this_arg"),
+            (DOUBLE, receiver),
             (PTR, &format!("@{keys}")),
-            (PTR, &values),
-            (I32, &method.params.len().to_string()),
+            (PTR, &buffer),
+            (I32, &values.len().to_string()),
         ],
     );
-    block.ret(
-        DOUBLE,
-        &crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
-    );
-    true
+    Some(crate::nanbox::double_literal(f64::from_bits(
+        crate::nanbox::TAG_UNDEFINED,
+    )))
 }

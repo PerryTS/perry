@@ -290,11 +290,63 @@ fn a_colon_proto_key_is_not_chunked() {
 }
 
 #[test]
-fn a_function_value_is_not_chunked() {
+fn function_values_move_into_their_chunks() {
+    let src = format!(
+        "{MK}function top() {{ return 3; }}\nconst D = {};\nconsole.log(D);\n",
+        literal(100, "k", |i| match i {
+            60 => "(v: number) => v + 1".to_string(),
+            61 => "function (this: any) { return this; }".to_string(),
+            62 => "top".to_string(),
+            _ => format!("mk({i})"),
+        })
+    );
+    let mut m = lower_src(&src);
+    split_large_bodies_with(&mut m, tiny());
+    let Expr::LiteralChunks(calls) = &chunked_args(&m)[32] else {
+        panic!("slot 32 holds the chunk calls");
+    };
+    let inits = slot_inits(&m, calls);
+    assert_eq!(inits.len(), 68);
+    assert!(matches!(
+        inits[60 - 32].2,
+        Expr::Closure { is_arrow: true, .. }
+    ));
+    assert!(matches!(
+        inits[61 - 32].2,
+        Expr::Closure {
+            is_arrow: false,
+            ..
+        }
+    ));
+    assert!(!matches!(inits[62 - 32].2, Expr::Call { .. }));
+}
+
+#[test]
+fn function_values_in_the_head_stay_in_the_birth() {
+    let src = format!(
+        "{MK}const D = {};\nconsole.log(D);\n",
+        literal(100, "k", |i| if i < 2 {
+            format!("(v: number) => v + {i}")
+        } else {
+            format!("mk({i})")
+        })
+    );
+    let mut m = lower_src(&src);
+    split_large_bodies_with(&mut m, tiny());
+    let args = chunked_args(&m);
+    assert!(matches!(args[0], Expr::Closure { .. }) && matches!(args[1], Expr::Closure { .. }));
+    let Expr::LiteralChunks(calls) = &args[32] else {
+        panic!("slot 32 holds the chunk calls");
+    };
+    assert_eq!(slot_inits(&m, calls).len(), 68);
+}
+
+#[test]
+fn a_closure_capturing_this_is_not_chunked() {
     assert_not_chunked(&format!(
-        "{MK}export const D = {};\n",
+        "{MK}function f(this: any) {{ return {}; }}\n",
         literal(100, "k", |i| if i == 60 {
-            "() => 1".to_string()
+            "() => this".to_string()
         } else {
             format!("mk({i})")
         })
@@ -354,18 +406,17 @@ fn a_small_literal_is_not_chunked() {
 
 #[test]
 fn a_refused_literal_leaves_no_trace() {
-    // Too small, a function value, and a refused chunk (`this`): the
+    // Too small, a duplicate key, and a refused chunk (`this`): the
     // module after splitting is the module before it, ids included.
     for src in [
         format!("{MK}export const D = {};\n", calls(40)),
-        format!(
-            "{MK}export const D = {};\n",
-            literal(100, "k", |i| if i == 60 {
-                "() => 1".to_string()
-            } else {
-                format!("mk({i})")
-            })
-        ),
+        {
+            let body = calls(100);
+            format!(
+                "{MK}export const D = {{ {}, k40: mk(1000) }};\n",
+                &body[2..body.len() - 2]
+            )
+        },
         format!(
             "{MK}function f(this: any) {{ return {}; }}\n",
             literal(100, "k", |i| if i == 70 {

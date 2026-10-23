@@ -153,19 +153,15 @@ fn small_literals_and_effectful_constructors_keep_normal_evaluation() {
 }
 
 #[test]
-fn wide_shape_constructor_uses_the_shared_assignment_loop() {
-    // Below the descriptor node threshold: exercise the actual constructor
-    // call, not only an otherwise-unused constructor emitted beside a blob.
+fn a_wide_shape_has_no_constructor_function() {
+    // Below the descriptor node threshold: the births are ordinary `new`s of
+    // a wide literal shape. Their constant number lanes are written by the
+    // birth itself; nothing emits, calls or registers a constructor.
     let ir = ir(&fixture(1, 128));
     assert!(!ir.contains("call double @js_value_from_literal_descriptor("));
-    assert_eq!(
-        ir.matches("call void @js_literal_shape_initialize(")
-            .count(),
-        1
-    );
     assert!(
-        ir.contains("noinline"),
-        "LLVM must not duplicate the marshalling body"
+        !ir.contains("__AnonShape_descriptor_test_constructor"),
+        "a wide literal shape has no constructor function"
     );
 }
 

@@ -86,6 +86,14 @@ pub(crate) fn lower_chunked_birth<'f>(
     )
 }
 
+/// How many of a birth's arguments it holds: all of them, or for a chunked
+/// birth those before its chunked slots.
+pub(crate) fn held_len(args: &[Expr]) -> usize {
+    args.iter()
+        .position(|a| matches!(a, Expr::LiteralChunks(_)))
+        .unwrap_or(args.len())
+}
+
 /// A constructor-prologue store of a chunked slot is skipped: the slot keeps
 /// the allocation's fill until its chunk function stores the value.
 pub(crate) fn is_fill(arg: Option<&Expr>) -> bool {

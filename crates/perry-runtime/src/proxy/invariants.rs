@@ -26,43 +26,71 @@ fn truthy(v: f64) -> bool {
     crate::value::js_is_truthy(v) != 0
 }
 
-fn desc_field(desc_ptr: *const crate::ObjectHeader, name: &[u8]) -> f64 {
-    if desc_ptr.is_null() {
+/// A field of a public (materialized) descriptor, read through its handle:
+/// the key string's allocation can move the descriptor.
+fn desc_field(desc: &crate::gc::RuntimeHandle<'_>, name: &[u8]) -> f64 {
+    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let ptr =
+        extract_pointer(desc.get_nanbox_f64().to_bits()) as usize as *const crate::ObjectHeader;
+    if ptr.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    crate::object::js_object_get_field_by_name_f64(desc_ptr, key)
+    crate::object::js_object_get_field_by_name_f64(ptr, key)
 }
 
-fn desc_has(desc: f64, name: &[u8]) -> bool {
-    let ptr = extract_pointer(desc.to_bits()) as *mut crate::ObjectHeader;
+fn desc_has(desc: &crate::gc::RuntimeHandle<'_>, name: &[u8]) -> bool {
+    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let ptr = extract_pointer(desc.get_nanbox_f64().to_bits()) as usize as *mut crate::ObjectHeader;
     if ptr.is_null() {
         return false;
     }
-    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
     unsafe { crate::object::own_key_present(ptr, key) }
 }
 
 /// Read `target.[[GetOwnProperty]](property_key)` as a `TargetProp`. Returns
 /// `None` when the target has no such own property (descriptor is `undefined`).
+///
+/// An ordinary target's property comes from the descriptor authority's facts
+/// (its value or accessor pair and its attributes): no descriptor object is
+/// built and no field is looked up by name. An exotic family's public
+/// descriptor is read field by field, as FromPropertyDescriptor built it.
 fn target_own_prop(target: f64, property_key: f64) -> Option<TargetProp> {
-    let desc = crate::object::js_object_get_own_property_descriptor(target, property_key);
-    if desc.to_bits() == TAG_UNDEFINED {
-        return None;
+    use crate::object::descriptors::OwnProperty;
+    let undefined = f64::from_bits(TAG_UNDEFINED);
+    match unsafe { crate::object::descriptors::own_property(target, property_key)? } {
+        OwnProperty::Data(value, attrs) => Some(TargetProp {
+            configurable: attrs.configurable(),
+            is_accessor: false,
+            writable: attrs.writable(),
+            value,
+            getter_undefined: true,
+            setter_undefined: true,
+        }),
+        OwnProperty::Accessor(get, set, attrs) => Some(TargetProp {
+            configurable: attrs.configurable(),
+            is_accessor: true,
+            writable: false,
+            value: undefined,
+            getter_undefined: get.to_bits() == TAG_UNDEFINED,
+            setter_undefined: set.to_bits() == TAG_UNDEFINED,
+        }),
+        OwnProperty::Public(desc) => {
+            if extract_pointer(desc.to_bits()) == 0 {
+                return None;
+            }
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let desc = scope.root_nanbox_f64(desc);
+            let is_accessor = desc_has(&desc, b"get") || desc_has(&desc, b"set");
+            Some(TargetProp {
+                configurable: truthy(desc_field(&desc, b"configurable")),
+                is_accessor,
+                writable: truthy(desc_field(&desc, b"writable")),
+                value: desc_field(&desc, b"value"),
+                getter_undefined: desc_field(&desc, b"get").to_bits() == TAG_UNDEFINED,
+                setter_undefined: desc_field(&desc, b"set").to_bits() == TAG_UNDEFINED,
+            })
+        }
     }
-    let ptr = extract_pointer(desc.to_bits()) as *const crate::ObjectHeader;
-    if ptr.is_null() {
-        return None;
-    }
-    let is_accessor = desc_has(desc, b"get") || desc_has(desc, b"set");
-    Some(TargetProp {
-        configurable: truthy(desc_field(ptr, b"configurable")),
-        is_accessor,
-        writable: truthy(desc_field(ptr, b"writable")),
-        value: desc_field(ptr, b"value"),
-        getter_undefined: desc_field(ptr, b"get").to_bits() == TAG_UNDEFINED,
-        setter_undefined: desc_field(ptr, b"set").to_bits() == TAG_UNDEFINED,
-    })
 }
 
 fn same_value(a: f64, b: f64) -> bool {

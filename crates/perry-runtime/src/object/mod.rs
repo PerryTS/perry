@@ -1806,7 +1806,9 @@ unsafe fn set_object_keys_with_live_rep(
         && shapes::object_shape_descriptor(obj).is_some_and(|d| d.hole_count == 0)
     {
         layout_desc::note_install_cause(layout_desc::install_cause::UNIQUE_RUN);
-        overflow::ensure(obj);
+        // The key just appended is being added: its value is stored after
+        // this publication, so its slot may still hold the hole.
+        overflow::ensure_adding(obj, Some(keys.count() - 1));
         canonical_keys::note_latched_away(keys);
     }
 }
