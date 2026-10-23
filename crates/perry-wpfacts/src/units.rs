@@ -180,8 +180,9 @@ pub(crate) struct Published {
     /// (module path, name): the union over every unit's calls.
     pub(crate) args: FxHashMap<(String, String), ArgContract>,
     /// Store effects (decision 17): per literal layout or class display,
-    /// the existing keys other units store into (union over every unit).
-    pub(crate) stores: FxHashMap<String, Vec<String>>,
+    /// the existing keys other units store into and the primitive kinds
+    /// they store, `None` for any value (union over every unit, DECISIONS 73).
+    pub(crate) stores: FxHashMap<String, Vec<(String, Option<u16>)>>,
     /// The keys of each module's namespace object (design §18.2), and
     /// whether it may hold any key (an `export *` from outside the program).
     pub(crate) ns_keys: FxHashMap<String, (Vec<String>, bool)>,
@@ -216,7 +217,7 @@ impl Published {
     /// otherwise reaches only exports and globals) may call a module's
     /// functions by name. The reach does not say which module's, so none
     /// is closed.
-    pub(crate) fn stored_keys(&self, display: &str) -> &[String] {
+    pub(crate) fn stored_keys(&self, display: &str) -> &[(String, Option<u16>)] {
         self.stores.get(display).map_or(&[], |v| v.as_slice())
     }
 
@@ -662,12 +663,13 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
         // Decision 17: the store effects, from every unit's latest solve.
         // The owners of a layout whose effect keys changed perform them,
         // solved again with their dependents.
-        let mut stores: FxHashMap<String, Vec<String>> = FxHashMap::default();
+        let mut stores: FxHashMap<String, Vec<(String, Option<u16>)>> = FxHashMap::default();
         for u in per_unit.iter().flatten() {
-            for (d, k) in &u.stores_out {
+            for (d, k, kinds) in &u.stores_out {
                 let v = stores.entry(d.clone()).or_default();
-                if !v.contains(k) {
-                    v.push(k.clone());
+                match v.iter_mut().find(|(k2, _)| k2 == k) {
+                    Some((_, e)) => *e = e.zip(*kinds).map(|(x, y)| x | y),
+                    None => v.push((k.clone(), *kinds)),
                 }
             }
         }
@@ -868,8 +870,8 @@ fn unit_io(
         for ((p, n), c) in &u.ctor_args_out {
             o.push((format!("args:{p}:{n}"), hash(&format!("{c:?}"))));
         }
-        for (d, k) in &u.stores_out {
-            o.push((format!("store:{d}.{k}"), 0));
+        for (d, k, kinds) in &u.stores_out {
+            o.push((format!("store:{d}.{k}"), hash(&format!("{kinds:?}"))));
         }
         for d in &u.reports {
             o.push((format!("report:{d}"), 0));

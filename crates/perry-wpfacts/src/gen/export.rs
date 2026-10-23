@@ -626,12 +626,13 @@ impl<'a> Gen<'a> {
     }
 
     /// What other units stored into existing fields of this unit's literal
-    /// layouts and class instances (decision 17): an unknown value, stored
-    /// into that field of every instance of the layout by an anonymous
-    /// writer. True when this added constraints.
+    /// layouts and class instances (decision 17): a value of the kinds they
+    /// stored (DECISIONS 73), or an unknown one, stored into that field of
+    /// every instance of the layout by an anonymous writer. True when this
+    /// added constraints.
     fn apply_store_effects(&mut self) -> bool {
         let Some(u) = self.unit_in else { return false };
-        let mut want: Vec<(TmplId, &'a String)> = Vec::new();
+        let mut want: Vec<(TmplId, &'a String, Option<u16>)> = Vec::new();
         for (tm, t) in self.m.tmpls.iter().enumerate() {
             if !matches!(
                 t.kind,
@@ -644,28 +645,23 @@ impl<'a> Gen<'a> {
             {
                 continue;
             }
-            for k in u.stored_keys(&t.display) {
-                want.push((tm as TmplId, k));
+            for (k, kinds) in u.stored_keys(&t.display) {
+                want.push((tm as TmplId, k, *kinds));
             }
         }
         if want.is_empty() {
             return false;
         }
-        let want: Vec<(TmplId, Atom)> = want
+        let want: Vec<(TmplId, Atom, Option<u16>)> = want
             .into_iter()
-            .map(|(tm, k)| (tm, self.m.atom(k)))
+            .map(|(tm, k, kinds)| (tm, self.m.atom(k), kinds))
             .collect();
-        let (src, site) = match self.effect_src {
+        let site = match self.effect_site {
             Some(x) => x,
             None => {
-                let n = self
-                    .m
-                    .node_named("stored", || "stored by another unit".into());
-                self.m.add_top(n, |_| "stored by another unit".into());
-                self.m.add_prim(n, prim::ALL);
                 let site = self.m.anon_post_site("store by another unit");
-                self.effect_src = Some((n, site));
-                (n, site)
+                self.effect_site = Some(site);
+                site
             }
         };
         let mut changed = false;
@@ -673,8 +669,9 @@ impl<'a> Gen<'a> {
             let TokKind::Obj(tm, _) = self.m.toks[t as usize] else {
                 continue;
             };
-            for &(_, a) in want.iter().filter(|w| w.0 == tm) {
+            for &(_, a, kinds) in want.iter().filter(|w| w.0 == tm) {
                 if self.effects_done.insert((t, a)) {
+                    let src = self.effect_src(kinds);
                     self.m.store_into(t, crate::model::Key::Named(a), src, site);
                     changed = true;
                 }
@@ -683,17 +680,45 @@ impl<'a> Gen<'a> {
         changed
     }
 
-    /// The store effects this unit publishes (decision 17), by template
-    /// display and key.
-    pub(crate) fn store_effects(&self) -> Vec<(String, String)> {
-        let mut out: Vec<(String, String)> = self
+    /// The value a store effect stores: of its primitive kinds, or unknown
+    /// (`None`), one node per kinds.
+    fn effect_src(&mut self, kinds: Option<u16>) -> NodeId {
+        if let Some(&n) = self.effect_srcs.get(&kinds) {
+            return n;
+        }
+        let n = self
             .m
-            .foreign_stores
-            .iter()
-            .map(|&(tm, a)| {
+            .node_named("stored", || "stored by another unit".into());
+        match kinds {
+            Some(p) => self.m.add_prim(n, p),
+            None => {
+                self.m.add_top(n, |_| "stored by another unit".into());
+                self.m.add_prim(n, prim::ALL);
+            }
+        }
+        self.effect_srcs.insert(kinds, n);
+        n
+    }
+
+    /// The store effects this unit publishes (decision 17), by template
+    /// display and key, with the primitive kinds of what it stores
+    /// (DECISIONS 73): `None` when a stored value may be an object or ⊤,
+    /// or the solve stopped at the bound.
+    pub(crate) fn store_effects(&self) -> Vec<(String, String, Option<u16>)> {
+        let mut by: FxHashMap<(TmplId, Atom), Option<u16>> = FxHashMap::default();
+        for &(tm, a, n) in &self.m.foreign_stores {
+            let node = &self.m.nodes[n as usize];
+            let kinds = (!self.m.aborted && node.pts.is_empty()).then_some(node.prim);
+            let e = by.entry((tm, a)).or_insert(Some(0));
+            *e = e.zip(kinds).map(|(x, y)| x | y);
+        }
+        let mut out: Vec<(String, String, Option<u16>)> = by
+            .into_iter()
+            .map(|((tm, a), k)| {
                 (
                     self.m.tmpls[tm as usize].display.clone(),
                     self.m.atoms[a as usize].clone(),
+                    k,
                 )
             })
             .collect();

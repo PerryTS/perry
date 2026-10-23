@@ -1269,6 +1269,56 @@ fn a_store_into_a_marker_makes_no_field_of_it() {
 }
 
 #[test]
+fn an_argument_marker_leaves_beside_when_a_valued_member_links() {
+    use crate::model::{Cons, FuncInfo, TokKind, NO_CTX, NO_FN};
+    // DECISIONS 75: an argument marker stands for its members alone. With
+    // none (or only described closed parameter markers) it adds no kinds to
+    // arithmetic; once a member that stands for real values links in (`f`
+    // is not a described closed function here), the arithmetic result it
+    // skipped takes the object kinds (ToPrimitive), monotone.
+    let mut m = copy_solver_model();
+    let (this, ret, args) = (m.node_l("this"), m.node_l("ret"), m.node_l("args"));
+    let token = m.tok(TokKind::Func(0, NO_CTX));
+    m.funcs.push(FuncInfo {
+        module: 0,
+        func_id: 0,
+        name: "f".into(),
+        params: Vec::new(),
+        rest: None,
+        this,
+        ret,
+        args_all: args,
+        has_arguments: false,
+        token,
+        ctor_of: None,
+        lexical_this: false,
+        no_summary: true,
+        gen_step: false,
+        forwards_super: false,
+        parent: NO_FN,
+    });
+    let mk = m.param_marker_tok(0, 0);
+    // `r2` is a member of `r1` (an instance parameter passed on); `mk`
+    // links into `r2` later, so `r1` leaves with it.
+    let (n1, n2) = (m.node_l("p1"), m.node_l("p2"));
+    let (src, dst) = (m.node_l("src"), m.node_l("dst"));
+    let r1 = m.arg_marker(n1);
+    let r2 = m.arg_marker(n2);
+    m.link_marker(r2, r1);
+    m.cons(src, Cons::Arith { dst, add: false });
+    m.add_tok(src, r1);
+    m.solve();
+    assert_eq!(m.nodes[dst as usize].prim, 0, "beside: no kinds of its own");
+    m.link_marker(mk, r2);
+    m.solve();
+    let k = m.nodes[dst as usize].prim;
+    assert!(
+        k & crate::model::prim::NUM != 0 && k & crate::model::prim::BIGINT != 0,
+        "a valued member: the skipped result takes the object kinds ({k:#x})"
+    );
+}
+
+#[test]
 fn a_keyed_use_reaches_every_marker_an_argument_marker_stands_for() {
     use crate::model::MARK_ESCAPE;
     // Design §18.4: argument marker `r2` stands for `r1` and `r3`. A use of
