@@ -3,3 +3,5 @@ Repeated property reads can reuse a per-site shape/slot answer for own and inher
 Site storage uses shared atomic integer words rather than TLS. Process-global, never-reused ShapeIds let each word validate its own slot proof while readers follow agent-local live links; competing writers can cause misses without introducing a validity flag. The four computed-key ways bind their content keys once, so concurrent publication cannot mix different keys' proofs. This removes eager per-thread clearing of unused memo arrays and TLS address construction at read sites.
 
 Named leaves retain stateless data handling with four arguments: the memo replaces the hash argument, and hash-using paths read the atom's existing creation hash. A short own-data hit loads neither hash nor memo. Computed reads share receiver and own-property handling with the existing slow path; proven Symbol keys allocate no short-string memo.
+
+Unproved own-slot loads use a shared tail entrance. Ordinary inline loads and memo probe refusals no longer save registers for that uncommon load call.

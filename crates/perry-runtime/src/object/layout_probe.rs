@@ -38,6 +38,8 @@
 //! `TAG_HOLE`, and the site takes its complete slow operation.
 #[path = "layout_probe_site_memo.rs"]
 pub(crate) mod site_memo;
+#[path = "layout_probe_unloaded.rs"]
+mod unloaded;
 
 use super::shapes_store::{ShapeRecord, FLAT_BASE_OFFSET};
 use crate::object::layout_desc::note_run;
@@ -1066,6 +1068,12 @@ unsafe fn probe_get_at<const ABSENT: bool, const SITE: bool, const LAZY_HASH: bo
             b = (b + 1) & mask;
         }
     };
+    // Only the uncommon unproved load calls value_at. Keep that call and
+    // its continuation together behind a tail entrance, so direct own
+    // loads and other probe exits do not save registers for a later call.
+    if load == NO_LOAD {
+        return unloaded::get::<ABSENT, SITE, LAZY_HASH>(dir, obj, key_bits, hash, pos, memo);
+    }
     let v = hit_value(obj, r, pos, load);
     // A hole slot: the key is absent (the key view), and the answer
     // continues as for an absent key.
