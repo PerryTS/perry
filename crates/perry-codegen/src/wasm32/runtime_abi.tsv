@@ -4681,8 +4681,11 @@ js_zlib_gunzip	void	f64,f64,f64
 js_zlib_gunzip_init	f64	f64,f64
 js_zlib_gunzip_sync	f64	i64
 js_zlib_gzip	void	f64,f64,f64
+js_zlib_gzip_base_options	f64	f64
+js_zlib_gzip_codec_options	f64	f64
 js_zlib_gzip_init	f64	f64,f64
 js_zlib_gzip_sync	f64	i64,f64
+js_zlib_gzip_transform_options	f64	f64,i32s
 js_zlib_inflate	void	f64,f64,f64
 js_zlib_inflate_init	f64	f64,f64
 js_zlib_inflate_raw	void	f64,f64,f64
