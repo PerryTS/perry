@@ -5,7 +5,7 @@ extern "C" {
     fn js_shape_run_static_seed();
 }
 
-fn marked_error(value: f64) -> SerializedValue {
+fn marked_error(value: f64) -> worker_error::WorkerErrorMessage {
     UNCLONEABLE_OBJECTS.with(|set| set.borrow_mut().insert(value.to_bits()));
     assert!(clone::try_clone_message(value, js_undefined()).is_err());
     let result = worker_error_message(value);
@@ -14,14 +14,14 @@ fn marked_error(value: f64) -> SerializedValue {
 }
 
 fn diagnostics(
-    value: SerializedValue,
+    value: worker_error::WorkerErrorMessage,
 ) -> (
     Vec<u8>,
     Option<Vec<u8>>,
     Option<Vec<u8>>,
     Option<Box<SerializedValue>>,
 ) {
-    match value {
+    match value.value {
         SerializedValue::Error {
             name,
             message,
@@ -138,4 +138,81 @@ fn worker_error_fallback_discards_only_an_uncloneable_cause() {
     assert_eq!(message.as_deref(), Some(b"original".as_slice()));
     assert!(stack.is_some());
     assert!(cause.is_none());
+}
+
+#[test]
+fn worker_error_code_survives_clone_and_diagnostic_fallback() {
+    unsafe {
+        js_shape_run_static_seed();
+    }
+    for fallback in [false, true] {
+        let scope = RuntimeHandleScope::new();
+        let error = perry_runtime::error::js_error_new_kind_from_value(
+            perry_runtime::error::ERROR_KIND_TYPE_ERROR,
+            string_value("details"),
+        );
+        let error = scope.root_nanbox_f64(perry_runtime::value::js_nanbox_pointer(error as i64));
+        set_object_field_from_value_for_test(
+            error.get_nanbox_f64(),
+            "code",
+            string_value("ERR_WORKER_PATH"),
+        );
+        let message = if fallback {
+            marked_error(error.get_nanbox_f64())
+        } else {
+            worker_error_message(error.get_nanbox_f64())
+        };
+        let restored = scope.root_nanbox_f64(message.deserialize());
+        for (key, expected) in [
+            ("name", "TypeError"),
+            ("message", "details"),
+            ("code", "ERR_WORKER_PATH"),
+        ] {
+            assert_eq!(
+                string_value_to_string(get_object_field_from_value(restored.get_nanbox_f64(), key))
+                    .as_deref(),
+                Some(expected)
+            );
+        }
+        let ordinary = clone::try_clone_message(error.get_nanbox_f64(), js_undefined()).unwrap();
+        let ordinary = f64::from_bits(unsafe { deserialize_nanbox_on_current_thread(&ordinary) });
+        assert!(is_undefined(get_object_field_from_value(ordinary, "code")));
+    }
+}
+
+#[test]
+fn native_worker_diagnostic_code_survives_error_delivery() {
+    unsafe {
+        js_shape_run_static_seed();
+    }
+    for fallback in [false, true] {
+        let scope = RuntimeHandleScope::new();
+        let error = unsafe {
+            perry_runtime::error::js_error_value_with_code(
+                b"not compiled".as_ptr(),
+                12,
+                b"ERR_WORKER_NOT_COMPILED".as_ptr(),
+                b"ERR_WORKER_NOT_COMPILED".len(),
+                0,
+            )
+        };
+        let error = scope.root_nanbox_f64(error);
+        let message = if fallback {
+            marked_error(error.get_nanbox_f64())
+        } else {
+            worker_error_message(error.get_nanbox_f64())
+        };
+        let restored = scope.root_nanbox_f64(message.deserialize());
+        for (key, expected) in [
+            ("name", "Error"),
+            ("message", "not compiled"),
+            ("code", "ERR_WORKER_NOT_COMPILED"),
+        ] {
+            assert_eq!(
+                string_value_to_string(get_object_field_from_value(restored.get_nanbox_f64(), key))
+                    .as_deref(),
+                Some(expected)
+            );
+        }
+    }
 }

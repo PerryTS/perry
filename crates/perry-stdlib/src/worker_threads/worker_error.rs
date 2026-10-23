@@ -3,7 +3,7 @@
 use super::*;
 use perry_runtime::gc::RuntimeHandleScope;
 
-pub(super) fn worker_error_message(thrown: f64) -> SerializedValue {
+fn cloned_error(thrown: f64) -> SerializedValue {
     let scope = RuntimeHandleScope::new();
     let thrown = scope.root_nanbox_f64(thrown);
     if let Ok(message) = clone::try_clone_message(thrown.get_nanbox_f64(), js_undefined()) {
@@ -28,7 +28,7 @@ pub(super) fn worker_error_message(thrown: f64) -> SerializedValue {
         .then_some(name)
     });
     let Some(name) = family else {
-        return plain_error_message(b"the worker threw a value that could not be cloned");
+        return plain_error_message(b"the worker threw a value that could not be cloned").value;
     };
     let get = |key: &str| unsafe {
         perry_runtime::value::js_dynamic_object_get_property(
@@ -68,11 +68,70 @@ fn diagnostic_string(value: f64) -> Option<Vec<u8>> {
     }
 }
 
-pub(super) fn plain_error_message(message: &[u8]) -> SerializedValue {
-    SerializedValue::Error {
-        name: b"Error".to_vec(),
-        message: Some(message.to_vec()),
-        stack: None,
-        cause: None,
+pub(super) fn plain_error_message(message: &[u8]) -> WorkerErrorMessage {
+    WorkerErrorMessage {
+        code: None,
+        value: SerializedValue::Error {
+            name: b"Error".to_vec(),
+            message: Some(message.to_vec()),
+            stack: None,
+            cause: None,
+        },
+    }
+}
+
+/// Worker exceptions preserve their code; ordinary postMessage structured
+/// cloning deliberately does not copy custom Error properties.
+pub(super) struct WorkerErrorMessage {
+    pub(super) value: SerializedValue,
+    code: Option<SerializedValue>,
+}
+
+pub(super) fn worker_error_message(thrown: f64) -> WorkerErrorMessage {
+    let scope = RuntimeHandleScope::new();
+    let thrown = scope.root_nanbox_f64(thrown);
+    let value = cloned_error(thrown.get_nanbox_f64());
+    let is_error = perry_runtime::object::js_instanceof(
+        thrown.get_nanbox_f64(),
+        perry_runtime::error::CLASS_ID_ERROR,
+    )
+    .to_bits()
+        == JSValue::bool(true).bits();
+    let code = if is_error {
+        // Use the ordinary named getter: it includes native Node diagnostics,
+        // whereas the dynamic Error getter covers only its standard slots.
+        let key = js_string_from_bytes(b"code".as_ptr(), 4);
+        let code = perry_runtime::object::js_object_get_field_by_name_f64(
+            perry_runtime::value::js_nanbox_get_pointer(thrown.get_nanbox_f64()) as *mut _,
+            key,
+        );
+        if is_undefined(code) {
+            None
+        } else {
+            clone::try_clone_message(code, js_undefined()).ok()
+        }
+    } else {
+        None
+    };
+    WorkerErrorMessage { value, code }
+}
+
+impl WorkerErrorMessage {
+    pub(super) fn deserialize(&self) -> f64 {
+        let scope = RuntimeHandleScope::new();
+        let error = scope.root_nanbox_f64(f64::from_bits(unsafe {
+            deserialize_nanbox_on_current_thread(&self.value)
+        }));
+        if let Some(code) = &self.code {
+            let code = f64::from_bits(unsafe { deserialize_nanbox_on_current_thread(code) });
+            let code = scope.root_nanbox_f64(code);
+            let key = js_string_from_bytes(b"code".as_ptr(), 4);
+            perry_runtime::object::js_object_set_field_by_name(
+                perry_runtime::value::js_nanbox_get_pointer(error.get_nanbox_f64()) as *mut _,
+                key,
+                code.get_nanbox_f64(),
+            );
+        }
+        error.get_nanbox_f64()
     }
 }

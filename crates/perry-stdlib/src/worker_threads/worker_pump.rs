@@ -98,7 +98,7 @@ pub extern "C" fn js_worker_threads_process_pending() -> i32 {
                 processed += 1;
             }
             WorkerEvent::Error(worker_id, error) => {
-                let error = f64::from_bits(unsafe { deserialize_nanbox_on_current_thread(&error) });
+                let error = error.deserialize();
                 // Like an EventEmitter 'error' with no listener: the worker's
                 // error becomes an uncaught exception of the parent.
                 if !dispatch_worker_event(worker_id, "error", Some(error)) {

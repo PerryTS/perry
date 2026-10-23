@@ -372,7 +372,7 @@ enum WorkerEvent {
     Online(u64),
     Message(u64, SerializedValue),
     /// The worker ended on an uncaught exception: a clone of the thrown value.
-    Error(u64, SerializedValue),
+    Error(u64, worker_error::WorkerErrorMessage),
     Exit(u64, i32),
 }
 
