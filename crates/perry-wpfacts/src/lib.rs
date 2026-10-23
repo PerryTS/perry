@@ -295,6 +295,68 @@ fn literal_field_fns(
     out
 }
 
+/// The nested contracts of literal template `tm`'s fields (design §18.7,
+/// `Gen::nested_fields`): per described key the layouts it holds, each
+/// published in `layouts_out` with its own nested contracts.
+fn nested_layouts(
+    g: &gen::Gen,
+    templates: &[TemplateFacts],
+    tm: model::TmplId,
+    layouts_out: &mut Vec<units::ClassContract>,
+    open_tm: &pts::FxHashSet<model::TmplId>,
+) -> Vec<(String, Vec<String>, bool)> {
+    let mut out = Vec::new();
+    let mut keys: Vec<(model::Atom, Vec<model::TmplId>)> = g
+        .field_layouts
+        .iter()
+        .filter(|&(&(t, _), _)| t == tm)
+        .map(|(&(_, a), v)| (a, v.clone()))
+        .collect();
+    keys.sort_unstable();
+    for (a, itms) in keys {
+        let mut ds = Vec::new();
+        for itm in itms {
+            let display = g.m.tmpls[itm as usize].display.clone();
+            if !layouts_out.iter().any(|c| c.display == display) {
+                let facts = templates.iter().find(|x| x.id == itm).cloned();
+                // `Gen::nested_ok` admits only literal layouts of this unit.
+                let (name, class_id) = match g.m.tmpls[itm as usize].kind.clone() {
+                    model::TmplKind::Class { name, class_id, .. } => (name, class_id),
+                    _ => (display.clone(), 0),
+                };
+                let facts = facts.expect("a nested layout has template facts");
+                layouts_out.push(units::ClassContract {
+                    display: display.clone(),
+                    name,
+                    class_id,
+                    literal_shape: true,
+                    facts,
+                    methods: Vec::new(),
+                    native_parent: None,
+                    field_fns: Vec::new(),
+                    field_layouts: Vec::new(),
+                    open_keys: open_tm.contains(&itm),
+                    statics: Vec::new(),
+                    statics_open: false,
+                    static_fns: Vec::new(),
+                });
+                let nl = nested_layouts(g, templates, itm, layouts_out, open_tm);
+                if let Some(c) = layouts_out.iter_mut().find(|c| c.display == display) {
+                    c.field_layouts = nl;
+                }
+            }
+            ds.push(display);
+        }
+        out.push((
+            g.m.atoms[a as usize].clone(),
+            ds,
+            g.field_prims.contains(&(tm, a)),
+        ));
+    }
+    out.sort();
+    out
+}
+
 /// The function contract of contract function `f` after the solve (design
 /// §11.2): per parameter what the callee does with its argument (the
 /// markers' uses), the layouts it returns (added to `layouts_out`), the
@@ -398,6 +460,7 @@ fn fn_contract_of(
     let mut ret_params: Vec<u32> = Vec::new();
     let mut ret_reach: Vec<u32> = Vec::new();
     let mut ret_unknown = false;
+    let ret_prim = rets.iter().fold(0, |p, &n| p | g.m.nodes[n as usize].prim);
     let ret = (!g.ret_top.contains(&f) && !rets.is_empty()).then(|| {
         let mut ds: Vec<String> = Vec::new();
         for n in rets {
@@ -461,11 +524,16 @@ fn fn_contract_of(
                             methods: Vec::new(),
                             native_parent: None,
                             field_fns: Vec::new(),
+                            field_layouts: Vec::new(),
                             open_keys: open_tm.contains(&tm),
                             statics: Vec::new(),
                             statics_open: false,
                             static_fns: Vec::new(),
                         });
+                        let nl = nested_layouts(g, templates, tm, layouts_out, open_tm);
+                        if let Some(c) = layouts_out.iter_mut().find(|c| c.display == display) {
+                            c.field_layouts = nl;
+                        }
                     }
                 }
                 ds.push(display);
@@ -492,6 +560,7 @@ fn fn_contract_of(
             ret_reach
         },
         ret_unknown,
+        ret_prim,
         lexical_this: fi.lexical_this || !reads_this(g, f),
     }
 }
@@ -629,6 +698,7 @@ fn arg_contract_of(
                             methods: Vec::new(),
                             native_parent: None,
                             field_fns: Vec::new(),
+                            field_layouts: Vec::new(),
                             open_keys: open_tm.contains(&tm),
                             statics: Vec::new(),
                             statics_open: false,
@@ -1000,6 +1070,7 @@ pub(crate) fn compute_in<'a>(
                         methods,
                         native_parent,
                         field_fns: Vec::new(),
+                        field_layouts: Vec::new(),
                         open_keys: open_tm.contains(&tm),
                         statics,
                         statics_open,
@@ -1115,6 +1186,7 @@ pub(crate) fn compute_in<'a>(
                             methods: Vec::new(),
                             native_parent: None,
                             field_fns: Vec::new(),
+                            field_layouts: Vec::new(),
                             open_keys: open_tm.contains(&tm),
                             statics: Vec::new(),
                             statics_open: false,
@@ -1137,6 +1209,8 @@ pub(crate) fn compute_in<'a>(
                         &mut layouts_out,
                         &open_tm,
                     );
+                    cc.field_layouts =
+                        nested_layouts(&g, &templates, tm, &mut layouts_out, &open_tm);
                 }
                 let v = if class {
                     &mut vc.classes

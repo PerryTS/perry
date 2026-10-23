@@ -481,6 +481,7 @@ impl<'a> Gen<'a> {
             }
             self.value_contracts.push((e, n));
         }
+        changed |= self.nested_fields(r);
         // A literal of this unit passed to another unit's closed function
         // (decision 13) is described by the argument contract as a value
         // contract describes a published literal: its field functions are
@@ -725,12 +726,22 @@ impl<'a> Gen<'a> {
     /// A published literal object's fields go to another unit: their
     /// contents leave once (accessors run with unknown receivers). True when
     /// this added constraints.
+    ///
+    /// A literal of this unit (`nested_ok`) leaves key by key instead
+    /// (design §18.7, `nested_fields`): what it holds under a computed key
+    /// leaves here, each named field once `contract_check` decided it.
     fn fields_leave(&mut self, t: Tok, r: u32) -> bool {
         if !self.ret_ok.insert(t) {
             return false;
         }
-        let all = self.m.all_fields(t);
-        self.m.cons(all, Cons::TopSink { reason: r });
+        match self.m.toks[t as usize] {
+            TokKind::Obj(tm, _) if self.nested_ok(tm) => {
+                self.leaving.push(t);
+                let any = self.m.field_any(t);
+                self.m.sink_node(any, r);
+            }
+            _ => self.sink_all_fields(t, r),
+        }
         let rl = self.m.node_l("contract-ret-load");
         self.m.sink_node(rl, r);
         self.m.accessor_walk(
@@ -740,6 +751,123 @@ impl<'a> Gen<'a> {
             crate::model::ChainAct::Load(rl),
         );
         true
+    }
+
+    fn sink_all_fields(&mut self, t: Tok, r: u32) {
+        if self.all_sunk.insert(t) {
+            let all = self.m.all_fields(t);
+            self.m.cons(all, Cons::TopSink { reason: r });
+        }
+    }
+
+    /// A literal layout of this unit a published value's field may hold
+    /// as a nested contract (design §18.7): no census broke it, it is no
+    /// stand-in or contract class. (A closed callee of another unit that
+    /// gets it as an argument sees no nested fields; what it does to them
+    /// comes back through its parameter's reach uses, decision 13.)
+    fn nested_ok(&self, tm: TmplId) -> bool {
+        self.literal_ok(tm) && !self.stand_in_cc.contains_key(&tm) && !self.contract_class(tm)
+    }
+
+    /// Design §18.7: the named fields of the published literals that leave
+    /// key by key, decided per template and key over every instance that
+    /// leaves. A field holding only instances of literal layouts this unit
+    /// may publish (`nested_ok`, none escaped) is described by those
+    /// layouts, which leave the same way; any other content and the field
+    /// is sunk for good. A field holding only primitives so far stays
+    /// undecided (nothing leaves through it; a reader sees ⊤). Re-run to
+    /// the fixpoint by `contract_check`: a described field whose contents
+    /// grow is checked again. True when this added constraints.
+    fn nested_fields(&mut self, r: u32) -> bool {
+        let mut changed = false;
+        loop {
+            let n0 = self.leaving.len();
+            let mut by: FxHashMap<TmplId, Vec<Tok>> = FxHashMap::default();
+            for &t in &self.leaving {
+                if let Some(tm) = self.m.tmpl_of(t) {
+                    by.entry(tm).or_default().push(t);
+                }
+            }
+            let mut tms: Vec<TmplId> = by.keys().copied().collect();
+            tms.sort_unstable();
+            for tm in tms {
+                let ts = by.remove(&tm).unwrap_or_default();
+                if !self.nested_ok(tm) {
+                    // Broken by the census: every field leaves as before.
+                    self.field_layouts.retain(|&(t2, _), _| t2 != tm);
+                    for &t in &ts {
+                        if !self.all_sunk.contains(&t) {
+                            self.sink_all_fields(t, r);
+                            changed = true;
+                        }
+                    }
+                    continue;
+                }
+                let mut keys: Vec<Atom> = ts
+                    .iter()
+                    .flat_map(|t| self.m.field_keys.get(t).into_iter().flatten().copied())
+                    .collect();
+                keys.sort_unstable();
+                keys.dedup();
+                for a in keys {
+                    let mut ok = !self.sunk_fields.contains(&(tm, a));
+                    let mut inner: Vec<(TmplId, Tok)> = Vec::new();
+                    let mut prim = false;
+                    if ok {
+                        'toks: for &t in &ts {
+                            let Some(&n) = self.m.fields.get(&(t, a)) else {
+                                continue;
+                            };
+                            prim |= self.m.nodes[n as usize].prim != 0;
+                            for x in self.m.nodes[n as usize].pts.to_sorted() {
+                                match self.m.toks[x as usize] {
+                                    TokKind::Obj(itm, _)
+                                        if self.nested_ok(itm) && !self.m.is_escaped(x) =>
+                                    {
+                                        inner.push((itm, x))
+                                    }
+                                    _ => {
+                                        ok = false;
+                                        break 'toks;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if ok && inner.is_empty() {
+                        continue;
+                    }
+                    if ok {
+                        let mut itms: Vec<TmplId> = inner.iter().map(|&(i, _)| i).collect();
+                        itms.sort_unstable();
+                        itms.dedup();
+                        self.field_layouts.insert((tm, a), itms);
+                        if prim {
+                            self.field_prims.insert((tm, a));
+                        }
+                        for (_, x) in inner {
+                            changed |= self.fields_leave(x, r);
+                        }
+                        continue;
+                    }
+                    self.sunk_fields.insert((tm, a));
+                    self.field_layouts.remove(&(tm, a));
+                    self.field_prims.remove(&(tm, a));
+                    for &t in &ts {
+                        if let Some(&n) = self.m.fields.get(&(t, a)) {
+                            if self.sunk_field_toks.insert((t, a)) {
+                                self.m.sink_node(n, r);
+                                changed = true;
+                            }
+                        }
+                    }
+                }
+            }
+            if self.leaving.len() == n0 {
+                break;
+            }
+        }
+        changed
     }
 
     fn resolve_source(&self, module: &Module, source: &str) -> Option<u32> {
