@@ -8,6 +8,7 @@ use crate::pts::FxHashMap;
 use perry_hir::{Class, Export, Function, Global, Import, ImportSpecifier, Module, Stmt};
 
 mod export;
+mod glue;
 mod walk;
 pub(crate) use walk::variant_name;
 

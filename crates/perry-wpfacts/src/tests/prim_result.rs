@@ -24,7 +24,13 @@ fn conversion_results_have_one_kind() {
     "#,
     );
     let t = tmpl(&pf, "A");
-    for (k, want) in [("a", "num"), ("b", "str"), ("c", "bool"), ("d", "bigint"), ("e", "num")] {
+    for (k, want) in [
+        ("a", "num"),
+        ("b", "str"),
+        ("c", "bool"),
+        ("d", "bigint"),
+        ("e", "num"),
+    ] {
         assert_eq!(field(t, k).kind.desc(), want, "{k}\n{}", pf.dump_text());
     }
 }
@@ -45,7 +51,12 @@ fn array_sized_by_a_parsed_count_holds_only_elements() {
     "#,
     );
     let s = site(&pf, "value");
-    assert_eq!(s.receivers, vec!["t.ts:V".to_string()], "{}", pf.dump_text());
+    assert_eq!(
+        s.receivers,
+        vec!["t.ts:V".to_string()],
+        "{}",
+        pf.dump_text()
+    );
     assert!(!s.top, "{}", pf.dump_text());
 }
 
@@ -86,5 +97,10 @@ fn array_sized_by_math_max_holds_only_elements() {
     "#,
     );
     let s = site(&pf, "value");
-    assert_eq!(s.receivers, vec!["t.ts:V".to_string()], "{}", pf.dump_text());
+    assert_eq!(
+        s.receivers,
+        vec!["t.ts:V".to_string()],
+        "{}",
+        pf.dump_text()
+    );
 }

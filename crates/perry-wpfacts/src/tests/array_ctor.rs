@@ -42,7 +42,12 @@ fn array_length_is_not_an_element() {
     assert_eq!(tmpl(&pf, "K").escape, None, "{}", pf.dump_text());
     assert_eq!(tmpl(&pf, "E").escape, None, "{}", pf.dump_text());
     let m = site(&pf, "match");
-    assert_eq!(m.receivers, vec!["t.ts:E".to_string()], "{}", pf.dump_text());
+    assert_eq!(
+        m.receivers,
+        vec!["t.ts:E".to_string()],
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// One argument that is not a Number is the array's only element.
@@ -55,5 +60,10 @@ fn array_of_one_object_holds_it() {
         console.log(a[0].x);
     "#,
     );
-    assert_eq!(site(&pf, "x").verdict, Verdict::T0Mono, "{}", pf.dump_text());
+    assert_eq!(
+        site(&pf, "x").verdict,
+        Verdict::T0Mono,
+        "{}",
+        pf.dump_text()
+    );
 }

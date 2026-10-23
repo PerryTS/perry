@@ -52,7 +52,11 @@ fn a_result_holding_another_units_instance_forwards_its_contract() {
     // contract: the census breaks R and `this.k` is no longer proven.
     let m = "import { newInstance } from './a'; function f() { const s: any = newInstance(); s.k = 'x'; return s.get(); } console.log(f());";
     let pf = units_of(&[("a", MAKE), ("m", m)]);
-    assert!(pf.broken.iter().any(|d| d.ends_with(":R")), "{:?}", pf.broken);
+    assert!(
+        pf.broken.iter().any(|d| d.ends_with(":R")),
+        "{:?}",
+        pf.broken
+    );
     assert!(
         verdicts(&pf, "k").iter().all(|v| v.starts_with("No")),
         "{}",

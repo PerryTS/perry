@@ -37,7 +37,12 @@ fn length_store_is_not_an_element() {
     "#,
     );
     assert_eq!(tmpl(&pf, "B").escape, None, "{}", pf.dump_text());
-    assert_eq!(site(&pf, "m").verdict, Verdict::T0Mono, "{}", pf.dump_text());
+    assert_eq!(
+        site(&pf, "m").verdict,
+        Verdict::T0Mono,
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// A read of `length` is that Number only: it does not read the elements.

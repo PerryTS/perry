@@ -18,8 +18,8 @@ mod protocol_calls;
 mod receiver_this;
 mod summary;
 mod super_heritage;
-mod unit_mode;
 mod unit_extends;
+mod unit_mode;
 
 use crate::{compute, FactsConfig, ProgramFacts, Verdict};
 
