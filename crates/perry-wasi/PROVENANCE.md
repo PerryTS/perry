@@ -499,3 +499,10 @@ The [CLI receipt](../../docs/validation/wasi-p3-cli-20261023.json) records
 243 provider tests in both Linux development and production panic-abort builds,
 all-target Clippy, doctests and a Tokio-free normal dependency graph. Cargo
 checksum freshness and an explicit expected test count guard source selection.
+
+
+The [production HTTP runtime receipt](../../docs/validation/wasi-http-production-20261023.json)
+qualifies the frozen HTTP source with matching production compiler/runtime/stdlib
+and engine builds. Its authored HTTP component passes all eight plain/TLS and
+independent host/guest moving-GC cases. This is separate from the P3 provider
+receipts and does not qualify final distribution packages or other platforms.

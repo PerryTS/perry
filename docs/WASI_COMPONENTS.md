@@ -194,9 +194,9 @@ operations; native callbacks carry an agent identifier, never a Perry heap
 address. Handler and retirement-cleanup callbacks use separate exception contexts
 so a cleanup exception cannot replace a primary failure. The
 [HTTP ABI receipt](validation/wasi-http-ffi-20261023.json) qualifies this boundary
-on Linux in development and production panic-abort. Fresh matching ABI 6
-compiler/runtime/package acceptance remains required; earlier combined
-acceptance receipts used ABI 5.
+on Linux in development and production panic-abort. Matching ABI 6
+compiler/runtime qualification is recorded below; final packages remain open.
+Earlier combined acceptance receipts used ABI 5.
 
 The native `perry/component` API provides `createComponentHttpServer(options)`,
 `handleComponentHttpRequest(server, component, interfaceName): Promise<void>`,
@@ -258,7 +258,13 @@ per-element setter exhausted fuel before HTTP. The 35 component runtime unit
 tests include storage independence and survival through moving collection.
 The final compiler reproduces the tested guest archive byte for byte; native
 ordinary/instrumented artifacts use the same package and feature union.
-Production runtime archives, other platforms and final packages remain open.
+The [production HTTP receipt](validation/wasi-http-production-20261023.json)
+repeats all eight transport/GC cases with matching `prod` compiler, runtime,
+stdlib and engine artifacts, including instrumented archives. All 12 phases
+pass, and the production compiler reproduces the tested WASI guest archive
+byte for byte. This qualifies the frozen HTTP source snapshot; the later P3
+provider additions have separate receipts. Other platforms and final matching
+distribution packages remain open.
 
 Flag declarations are limited to 1–32 labels, matching the
 [Component Model binary format](https://github.com/WebAssembly/component-model/blob/main/design/mvp/Binary.md#type-definitions).
