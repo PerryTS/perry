@@ -64,13 +64,13 @@ pub extern "C" fn js_worker_threads_worker_new_by_spec(filename: f64, options: f
         let eval = get_object_field_from_value(options, "eval");
         if perry_runtime::value::js_is_truthy(eval) != 0 {
             return super::js_worker_threads_worker_new(
-                worker_eval_not_compiled as usize as i64,
+                worker_eval_not_compiled as *const () as usize as i64,
                 options,
             );
         }
     }
     let path = worker_path(filename);
-    let init = lookup(&path).unwrap_or(worker_entry_not_compiled as usize);
+    let init = lookup(&path).unwrap_or(worker_entry_not_compiled as *const () as usize);
     super::js_worker_threads_worker_new(init as i64, options)
 }
 

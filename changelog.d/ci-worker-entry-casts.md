@@ -1,0 +1,1 @@
+Cast uncompiled Worker entry functions through an explicit function pointer before converting their addresses to integer ABI handles. This clears the pinned Rust toolchain's function-casts-as-integer errors in the warnings job without changing the function addresses, worker behavior, allocations, or runtime cost.
