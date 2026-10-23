@@ -145,28 +145,22 @@ impl StrKey {
         }
     }
 
-    /// FNV-1a over the key's bytes — the same hash `string_content_hash`
-    /// computes from the NaN-boxed value, without decoding it a second time.
+    /// The key's content hash, the same `string_content_hash` computes from
+    /// the NaN-boxed value, without decoding it a second time: a heap key
+    /// that is a property atom reads the hash it was born with
+    /// (`string_key_hash`).
     #[inline(always)]
     pub(super) fn content_hash(self) -> u64 {
-        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-        let mut step = |b: u8| {
-            h ^= b as u64;
-            h = h.wrapping_mul(0x0000_0100_0000_01b3);
-        };
         match self {
             StrKey::Short { len, data } => {
-                for i in 0..len.min(SHORT_STRING_MAX_LEN as u32) as usize {
-                    step((data >> (i * 8)) as u8);
-                }
+                let bytes = data.to_le_bytes();
+                let len = len.min(SHORT_STRING_MAX_LEN as u32);
+                // SAFETY: `len` is at most the inline capacity, inside `bytes`.
+                unsafe { super::string_key_hash(bytes.as_ptr(), len, false) }
             }
-            StrKey::Heap { ptr, len } => {
-                for i in 0..len as usize {
-                    step(unsafe { *ptr.add(i) });
-                }
-            }
+            // SAFETY: `decode` validated a heap string; `ptr` is its payload.
+            StrKey::Heap { ptr, len } => unsafe { super::string_key_hash(ptr, len, true) },
         }
-        h
     }
 }
 

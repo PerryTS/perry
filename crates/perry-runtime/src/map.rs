@@ -706,19 +706,30 @@ fn is_safe_numeric_key(bits: u64) -> bool {
 fn string_content_hash(value_bits: u64) -> Option<u64> {
     let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     let (ptr, len) = string_view_from_bits(value_bits, &mut scratch)?;
-    // FNV-1a 64-bit constants per http://www.isthe.com/chongo/tech/comp/fnv/
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    if len == 0 {
-        return Some(h);
-    }
-    unsafe {
-        let bytes = std::slice::from_raw_parts(ptr, len as usize);
-        for &b in bytes {
-            h ^= b as u64;
-            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    // SAFETY: a view that is not `scratch` is a validated heap string's payload.
+    Some(unsafe { string_key_hash(ptr, len, ptr != scratch.as_ptr()) })
+}
+
+/// The content hash of a string key: FNV-1a over its bytes, the function
+/// `key_bytes_hash` computes and every property atom stores after its payload
+/// at birth. A property-atom key (a literal, a property name, a minted key)
+/// answers with that stored hash, its own fact, instead of hashing its text
+/// again on every `set` / `get` / `has`; any other string hashes its bytes.
+///
+/// # Safety
+/// `data[..len]` is readable; when `heap` is true it is the payload of a live
+/// heap `StringHeader` (`string_data(header)`).
+#[inline(always)]
+pub(crate) unsafe fn string_key_hash(data: *const u8, len: u32, heap: bool) -> u64 {
+    if heap {
+        let header = data.sub(std::mem::size_of::<StringHeader>()) as *const StringHeader;
+        if crate::string::is_property_atom(header) {
+            let hash = crate::string::property_atom_hash(header);
+            debug_assert_eq!(hash, crate::object::key_bytes_hash(data, len as usize));
+            return hash;
         }
     }
-    Some(h)
+    crate::object::key_bytes_hash(data, len as usize)
 }
 
 #[inline]

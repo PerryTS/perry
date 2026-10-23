@@ -101,10 +101,11 @@ fn hash_value(value: f64, insert: bool) -> Option<u32> {
     if is_string_like(bits) {
         let mut scratch = [0; crate::value::SHORT_STRING_MAX_LEN];
         if let Some((data, len)) = string_view_from_bits(bits, &mut scratch) {
-            unsafe {
-                std::slice::from_raw_parts(data, len as usize).hash(&mut hasher);
-            }
-            return Some(hasher.finish() as u32);
+            // The Map's string-key hash: a property atom answers with the
+            // hash it was born with instead of rehashing its bytes.
+            // SAFETY: a view that is not `scratch` is a heap string's payload.
+            let hash = unsafe { crate::map::string_key_hash(data, len, data != scratch.as_ptr()) };
+            return Some((hash ^ (hash >> 32)) as u32);
         }
     }
     let tag = bits >> 48;
