@@ -8,3 +8,5 @@ JavaScript pointers. Native codec allocations remain in the payload ledger and
 dictionary capacity is included in external-memory accounting. Dictionary-bearing
 encoders use the already-linked zlib-ng backend; ordinary compression keeps its
 existing backend and output.
+
+The consumed Wasm ABI table mirrors dictionary-aware inflate and captured dictionary options.

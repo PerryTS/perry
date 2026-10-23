@@ -4667,6 +4667,7 @@ js_zlib_create_zstd_compress	f64	f64
 js_zlib_create_zstd_decompress	f64	f64
 js_zlib_deflate	void	f64,f64,f64
 js_zlib_deflate_init	f64	f64,f64
+js_zlib_deflate_options	f64	f64,i32s
 js_zlib_deflate_raw	void	f64,f64,f64
 js_zlib_deflate_raw_init	f64	f64,f64
 js_zlib_deflate_raw_sync	f64	f64,f64
@@ -4682,7 +4683,7 @@ js_zlib_inflate_init	f64	f64,f64
 js_zlib_inflate_raw	void	f64,f64,f64
 js_zlib_inflate_raw_init	f64	f64,f64
 js_zlib_inflate_raw_sync	f64	f64
-js_zlib_inflate_sync	f64	i64
+js_zlib_inflate_sync	f64	i64,f64
 js_zlib_is_callback	i32s	f64
 js_zlib_resolve_level	i32s	f64
 js_zlib_stream_error	f64	ptr,usize,i32s
