@@ -53,11 +53,16 @@ pub unsafe extern "C" fn js_symbol_for(key_f64: f64) -> f64 {
     // TypeError, matching `ToString(symbol)` (and `Symbol()`'s coercion).
     let key_ptr = if tag == STRING_TAG {
         (bits & POINTER_MASK) as *const StringHeader
-    } else if crate::value::addr_class::is_plausible_heap_addr(bits as usize) {
-        // Raw StringHeader pointer from a legacy callsite. Use the canonical
-        // heap-address predicate rather than a duplicated literal range so a
-        // small-magnitude (e.g. denormal) double key isn't misclassified as a
-        // pointer — it falls through to ToString below and coerces correctly.
+    } else if crate::value::addr_class::is_plausible_heap_addr(bits as usize)
+        && crate::value::addr_class::try_read_tracked_gc_header_of_type(
+            bits as usize,
+            crate::gc::GC_TYPE_STRING,
+        )
+        .is_some()
+    {
+        // A raw legacy string pointer needs allocation/type evidence before
+        // dereference. A small double can have heap-plausible address bits;
+        // magnitude alone cannot distinguish it from a raw StringHeader.
         bits as *const StringHeader
     } else {
         if js_is_symbol(key_f64) != 0 {
@@ -307,5 +312,46 @@ pub unsafe extern "C" fn js_symbol_equals(a: f64, b: f64) -> i32 {
         1
     } else {
         0
+    }
+}
+
+#[cfg(test)]
+mod registry_key_tests {
+    use super::*;
+
+    #[test]
+    fn heap_plausible_number_keys_are_coerced_without_dereferencing_their_bits() {
+        unsafe {
+            for number in [1e-310, f64::from_bits(0x4000_0000)] {
+                assert!(crate::value::addr_class::is_plausible_heap_addr(
+                    number.to_bits() as usize
+                ));
+                assert!(
+                    crate::value::addr_class::try_read_tracked_gc_header(number.to_bits() as usize)
+                        .is_none(),
+                    "fixture must be an unowned address"
+                );
+                let text = crate::builtins::js_string_coerce(number);
+                let expected = js_symbol_for(crate::value::js_nanbox_string(text as i64));
+                let actual = js_symbol_for(number);
+                assert_eq!(actual.to_bits(), expected.to_bits());
+                assert_ne!(js_is_symbol(actual), 0);
+            }
+        }
+    }
+
+    #[test]
+    fn raw_and_boxed_heap_string_keys_still_share_the_registry_entry() {
+        unsafe {
+            let text = b"legacy raw symbol registry key";
+            let header = js_string_from_bytes(text.as_ptr(), text.len() as u32);
+            let roots = crate::gc::RuntimeHandleScope::new();
+            let rooted = roots.root_string_ptr(header);
+            let expected = js_symbol_for(crate::value::js_nanbox_string(header as i64));
+            let actual = rooted
+                .with_const_ptr::<StringHeader, _>(|ptr| js_symbol_for(f64::from_bits(ptr as u64)));
+            assert_eq!(actual.to_bits(), expected.to_bits());
+            assert_ne!(js_is_symbol(actual), 0);
+        }
     }
 }

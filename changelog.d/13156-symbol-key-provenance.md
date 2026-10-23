@@ -1,0 +1,1 @@
+Validate legacy raw Symbol.for string keys against the tracked string allocation/type before dereferencing them. Subnormal numeric keys whose bits resemble heap addresses now take ToString, with regression coverage retaining raw/boxed string identity.
