@@ -135,9 +135,10 @@ worlds and TCP/UDP/DNS interoperability. Their combined integration is
 qualified on Linux. HTTP client and incoming-handler resources and transports
 now have separate Linux engine/canonical-component qualification, including real
 HTTP payloads, TLS verification and streamed server exchanges through the Rust
-embedding API. The TypeScript server API and HTTP moving-GC qualification,
-blocking-I/O cancellation, broader platform qualification and engine shipping
-costs remain open. The Tokio-free Turnloop provider
+embedding API. The TypeScript server API and Perry-authored incoming/outgoing
+HTTP components now pass Linux development qualification with independent
+host/guest moving GC. Production runtime archives, blocking-I/O cancellation,
+broader platform qualification and engine shipping costs remain open. The Tokio-free Turnloop provider
 replacement is now selected and qualified on Linux in both component directions;
 its [receipt](validation/wasi-turnloop-selected-20261023.json) records the
 validation-only upstream repairs that still require a registry release.
@@ -186,6 +187,12 @@ not infer typed application exports from an arbitrary P1 binary. Such
 exports still need a specified WIT contract and matching bindings.
 
 ## 4. Add P3 native async
+
+The optional provider feature now implements 0.3.0 clocks/random through
+Turnloop. A canonical async component test interleaves suspended clock calls
+and verifies Store retirement during a pending call. This foundation is not
+yet enabled by the Perry component engine. Remaining work includes the other
+WASI providers and the complete TypeScript host/guest async bridge below.
 
 Pin an explicit WASI 0.3 interface version and supported Component Model
 feature set. Integrate native async lifting/lowering with Perry's promise

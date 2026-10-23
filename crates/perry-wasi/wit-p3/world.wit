@@ -1,0 +1,7 @@
+package perry:wasi-preview3;
+
+// Register each interface only when its native implementation is available.
+world providers {
+  include wasi:clocks/imports@0.3.0;
+  include wasi:random/imports@0.3.0;
+}

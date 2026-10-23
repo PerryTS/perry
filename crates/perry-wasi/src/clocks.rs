@@ -1,5 +1,7 @@
 //! Native clocks and Turnloop-backed WASI deadline resources.
 mod datetime;
+#[cfg(feature = "p3")]
+mod p3;
 mod system;
 pub(crate) use datetime::{Datetime, DatetimeError};
 

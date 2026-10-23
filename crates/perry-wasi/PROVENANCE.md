@@ -434,3 +434,35 @@ matching code and evidence. TypeScript Promise/pump integration and moving-GC
 acceptance are still pending, along with fresh matching ABI 6 compiler/runtime
 builds. This engine-level result does not supersede the outstanding platform,
 WASI 0.3, released-dependency or final-package requirements.
+
+
+## Optional WASI 0.3 clock and random providers
+
+The `p3` feature enables Wasmtime's component async ABI and registers only
+`wasi:clocks` and `wasi:random` at 0.3.0. Their WIT files are copied unchanged
+from `wasmtime-wasi` 48.0.5 `src/p3/wit/deps`;
+[the WIT manifest](wit-p3/provenance.json) records their hashes and license.
+No upstream async runtime/provider crate is linked.
+
+Clock waits submit owned native timers to the context's existing Turnloop
+driver. Store access ends before awaiting the request. Dropping a provider
+future cancels its request; driver shutdown returns an error. System-clock
+instants use signed floor seconds with nonnegative nanoseconds, including
+fractional times before the epoch. Random byte reads honor the P3 short-read
+contract and cap each allocation at 64 KiB and the configured context limit.
+
+The canonical clock fixture uses async lowering, async lifting, task returns
+and waitable callbacks. Tests interleave two instances in one Store, exercise
+immediate completion and reuse, and retire a Store during a suspended call.
+Wasmtime 48.0.5 retains guest tasks when their host call future is dropped: hard
+cancellation must drop the Store. Provider-future cancellation alone does not
+establish guest-task cancellation.
+
+This is a Rust embedding foundation. The production Perry component engine
+does not enable this feature yet; P3 CLI, filesystem, sockets, HTTP, generated
+TypeScript adapters, Promise/future/stream lifetimes and cross-language async
+composition remain to be implemented and qualified.
+
+The [foundation receipt](../../docs/validation/wasi-p3-foundation-20261023.json)
+records 237 provider tests in both Linux development and production panic-abort
+builds, all-target Clippy, doctests and the Tokio-free dependency graph.

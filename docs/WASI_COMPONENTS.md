@@ -142,7 +142,9 @@ That receipt covers the client; incoming-handler qualification is recorded below
 Perry-generated TypeScript HTTP guests under moving GC have the separate
 qualification below. Other native platforms and final shipping packages remain open.
 The experimental `informational-outbound-responses` interface is disabled.
-Native WASI 0.3 async interfaces remain unimplemented.
+Native Perry WASI 0.3 integration remains unimplemented. The provider crate
+has an optional `p3` foundation for clocks/random at 0.3.0; it is not yet
+enabled by the Perry component engine. See [provider provenance](../crates/perry-wasi/PROVENANCE.md).
 
 The Rust embedding API now provides an HTTP/1.1 origin server through
 `perry_wasi::http::server::Server` and canonical handler invocation through

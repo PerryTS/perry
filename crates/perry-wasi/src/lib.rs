@@ -1,6 +1,6 @@
 //! Turnloop WASI providers selected by the component host: I/O, clocks, entropy,
-//! CLI, capability filesystems, DNS, TCP, UDP and HTTP clients. Native HTTP server
-//! handling and WASI 0.3 remain incomplete.
+//! CLI, capability filesystems, DNS, TCP, UDP and HTTP clients/servers.
+//! The optional `p3` feature currently supplies WASI 0.3 clocks and random only.
 pub mod cli;
 pub mod clocks;
 mod error;
@@ -10,6 +10,8 @@ const MAX_READ_SIZE_ALLOC: usize = 64 * 1024;
 pub mod http;
 pub mod io;
 pub mod p2;
+#[cfg(feature = "p3")]
+pub mod p3;
 pub mod pipe;
 pub mod random;
 pub mod sockets;

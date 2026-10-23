@@ -8,6 +8,9 @@ description = "Turnloop WASI providers for Perry's optional component engine"
 [lints]
 workspace = true
 
+[features]
+p3 = ["wasmtime/component-model-async"]
+
 [dependencies]
 perry-component-io = { path = "../perry-component-io" }
 turnloop.workspace = true
