@@ -62,7 +62,7 @@ test('debug is an output directory, not a Cargo profile', t => {
 
 // Exercise the checked-in workflow branch with Cargo stubbed: this proves the
 // setup protocol, not that a release archive was built or linked successfully.
-function ciSetup(suites, cargoExit = 0) {
+function ciSetup(suites, cargoExit = 0, sidecarsExit = 0) {
   const workflow = fs.readFileSync(path.join(root, '.github/workflows/test.yml'), 'utf8');
   const scoped = workflow.match(/^ {6}- name: Run scoped integration suites\n[\s\S]*?^ {10}status=0$/m);
   assert(scoped, 'scoped integration setup must be present');
@@ -71,12 +71,29 @@ function ciSetup(suites, cargoExit = 0) {
   const setup = scoped[0].slice(start);
   const script = `set -eu
 cargo() { printf 'cargo:%s\\n' "$*"; return ${cargoExit}; }
+scripts/gc_call_effects/sidecars.sh() { printf 'sidecars:%s\\n' "$*"; return ${sidecarsExit}; }
+scripts/build_instr_runtime.sh() { printf 'instrumented:%s\\n' "$*"; }
 ${setup}
 printf 'prepared:%s\\nruntime:%s\\n' "\${PERRY_TEST_RUNTIME_PREBUILT-unset}" "\${PERRY_RUNTIME_DIR-unset}"
 `;
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('PERRY_')));
   return spawnSync('bash', ['-c', script], { cwd: root, env: { ...env, SUITES: suites },
     encoding: 'utf8', timeout: 10_000 });
+}
+
+function assertCoherentBuild(calls) {
+  assert.deepEqual(calls, ['cargo:build-perry --release']);
+  const config = fs.readFileSync(path.join(root, '.cargo/config.toml'), 'utf8');
+  const alias = config.match(/^build-perry = \[([\s\S]*?)^\]/m);
+  assert(alias, 'the coherent build alias must exist');
+  const args = [...alias[1].matchAll(/"([^"\n]*)"/g)].map(match => match[1]);
+  assert.equal(args[0], 'build');
+  for (const name of ['perry', 'perry-runtime-static', 'perry-stdlib-static',
+    'perry-ext-http', 'perry-ext-net', 'perry-ext-typescript', 'perry-ext-ws', 'perry-ext-zlib']) {
+    assert(args.some((arg, i) => arg === '-p' && args[i + 1] === name), name);
+  }
+  assert(!args.some(arg => arg === '--features' || arg.startsWith('--features=')),
+    'shared prebuilt providers must retain the default feature graph');
 }
 
 test('scoped CI prepares coherent providers for each standalone native consumer', () => {
@@ -86,15 +103,8 @@ test('scoped CI prepares coherent providers for each standalone native consumer'
     assert.match(result.stdout, /prepared:1\n/, suite);
     assert(result.stdout.includes(`runtime:${root}target/release\n`), result.stdout);
     const calls = result.stdout.split('\n').filter(line => line.startsWith('cargo:'));
-    assert.equal(calls.length, 1, suite);
-    assert.match(calls[0], /^cargo:build --release /);
-    for (const name of ['perry', 'perry-runtime', 'perry-stdlib', 'perry-runtime-static',
-      'perry-stdlib-static', 'perry-ext-http', 'perry-ext-net',
-      'perry-ext-typescript', 'perry-ext-ws', 'perry-ext-zlib']) {
-      assert((calls[0] + " ").includes(`-p ${name} `), name);
-    }
-    assert.doesNotMatch(calls[0], /--features(?:=| )/,
-      'shared prebuilt stdlib must retain the standalone require helper default feature graph');
+    assertCoherentBuild(calls);
+    assert.match(result.stdout, /^sidecars:target\/release$/m);
   }
 });
 
@@ -125,7 +135,7 @@ test('scoped CI propagates provider-build failure before declaring prepared', ()
   assert.doesNotMatch(result.stdout, /^prepared:/m);
 });
 
-function shardSetup(targets, cargoExit = 0) {
+function shardSetup(targets, cargoExit = 0, sidecarsExit = 0) {
   const workflow = fs.readFileSync(path.join(root, '.github/workflows/test.yml'), 'utf8');
   const shard = workflow.split('  cargo-test-perry:\n')[1]?.split('  # Scoped e2e:')[0];
   assert(shard, 'full-tier integration shard must be present');
@@ -135,6 +145,8 @@ function shardSetup(targets, cargoExit = 0) {
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('PERRY_')));
   const script = `set -euo pipefail
 cargo() { printf 'cargo:%s\\n' "$*"; return ${cargoExit}; }
+scripts/gc_call_effects/sidecars.sh() { printf 'sidecars:%s\\n' "$*"; return ${sidecarsExit}; }
+scripts/build_instr_runtime.sh() { printf 'instrumented:%s\\n' "$*"; }
 test_targets=(${targets.join(' ')})
 ${setup[0]}
 printf 'prepared:%s\\nruntime:%s\\n' "\${PERRY_TEST_RUNTIME_PREBUILT-unset}" "\${PERRY_RUNTIME_DIR-unset}"
@@ -150,14 +162,8 @@ test('full-tier shards prepare every bounded require consumer before executing f
     assert.match(result.stdout, /prepared:1\n/, suite);
     assert(result.stdout.includes(`runtime:${root}target/release\n`), result.stdout);
     const calls = result.stdout.split('\n').filter(line => line.startsWith('cargo:'));
-    assert.equal(calls.length, 1);
-    for (const name of ['perry', 'perry-runtime', 'perry-stdlib', 'perry-runtime-static',
-      'perry-stdlib-static', 'perry-ext-http', 'perry-ext-net',
-      'perry-ext-typescript', 'perry-ext-ws', 'perry-ext-zlib']) {
-      assert((calls[0] + " ").includes(`-p ${name} `), name);
-    }
-    assert.doesNotMatch(calls[0], /--features(?:=| )/,
-      'shared prebuilt stdlib must retain the standalone require helper default feature graph');
+    assertCoherentBuild(calls);
+    assert.match(result.stdout, /^sidecars:target\/release$/m);
   }
 });
 
@@ -173,5 +179,19 @@ test('full-tier shards never mark unrelated or partially named targets prepared'
 test('full-tier shards stop on provider-build failure before declaring prepared', () => {
   const result = shardSetup(['bun_embedded_compression'], 73);
   assert.equal(result.status, 73, result.stderr);
+  assert.doesNotMatch(result.stdout, /^prepared:/m);
+});
+
+test('scoped setup propagates sidecar preparation failures', () => {
+  const result = ciSetup('perry minsize_inline_policy 1500', 0, 79);
+  assert.equal(result.status, 79, result.stderr);
+  assert.match(result.stdout, /^sidecars:target\/release$/m);
+  assert.doesNotMatch(result.stdout, /^prepared:/m);
+});
+
+test('full-tier setup propagates sidecar preparation failures', () => {
+  const result = shardSetup(['bun_embedded_compression'], 0, 79);
+  assert.equal(result.status, 79, result.stderr);
+  assert.match(result.stdout, /^sidecars:target\/release$/m);
   assert.doesNotMatch(result.stdout, /^prepared:/m);
 });

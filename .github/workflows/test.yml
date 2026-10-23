@@ -2062,10 +2062,12 @@ jobs:
         run: rm -rf target/perry-auto-* target/debug/libperry_ext_*.a 2>/dev/null || true
 
       - name: Install the pinned integration-test Node oracle
-        if: steps.scope.outputs.suites != ''
         uses: ./.github/actions/perry/actions/setup-node # v7
         with:
           node-version-file: .node-version
+
+      - name: Verify integration runtime setup protocol
+        run: node --test scripts/test-require-runtime.test.mjs
 
       - name: Run scoped integration suites
         if: steps.scope.outputs.suites != ''
@@ -2079,7 +2081,6 @@ jobs:
           SUITES: ${{ steps.scope.outputs.suites }}
           EXCLUSIONS: ${{ steps.scope.outputs.exclusions }}
         run: |
-          node --test scripts/test-require-runtime.test.mjs
           # `cargo test` never builds the `staticlib` crate-type, so
           # libperry_{runtime,stdlib}.a don't exist unless built explicitly —
           # and the suites that compile with PERRY_NO_AUTO_OPTIMIZE=1 link them
