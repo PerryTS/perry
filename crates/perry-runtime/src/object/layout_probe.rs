@@ -36,6 +36,8 @@
 //! absent. Everything else (an accessor, an exotic or per-object receiver, a
 //! chain that ends without the key, a builtin prototype that misses) is
 //! `TAG_HOLE`, and the site takes its complete slow operation.
+#[path = "layout_probe_indexed.rs"]
+mod indexed;
 #[path = "layout_probe_site_memo.rs"]
 pub(crate) mod site_memo;
 #[path = "layout_probe_unloaded.rs"]
@@ -990,107 +992,34 @@ unsafe fn probe_get_at<const ABSENT: bool, const SITE: bool, const LAZY_HASH: bo
             )
         };
     }
-    let table = (probe & !PROBE_FLAGS) as *const KeyIndex;
-    let (pos, load) = if table.is_null() {
-        // An unindexed list has no accessor or private entry.
-        let words = crate::array::array_elements_ptr((*r).keys as usize as *const _) as *const u64;
-        let mut i = 0u32;
-        loop {
-            if *words.add(i as usize) == key_bits {
-                break (
-                    i,
-                    if i < (*r).position_bound_raw() {
-                        i
-                    } else {
-                        NO_LOAD
-                    },
-                );
-            }
-            i += 1;
-            if i == count {
-                return if SITE {
-                    site_memo::miss_absent::<ABSENT, LAZY_HASH>(dir, obj, key_bits, hash, memo)
-                } else {
-                    absent_from::<ABSENT>(
-                        dir,
-                        obj,
-                        key_bits,
-                        site_key_hash::<LAZY_HASH>(key_bits, hash),
-                    )
-                };
-            }
+    if probe & !PROBE_FLAGS != 0 {
+        return indexed::get::<ABSENT, SITE, LAZY_HASH>(dir, obj, r, key_bits, hash, memo);
+    }
+    // An unindexed list has no accessor or private entry.
+    let words = crate::array::array_elements_ptr((*r).keys as usize as *const _) as *const u64;
+    let count = (*r).logical_key_count;
+    let bound = (*r).position_bound_raw();
+    let mut pos = 0u32;
+    loop {
+        if *words.add(pos as usize) == key_bits {
+            break;
         }
-    } else {
-        let list = crate::array::array_elements_ptr((*r).keys as usize as *const _) as *const u64;
-        let mask = (*table).mask as usize;
-        let slots = KeyIndex::buckets(table);
-        let mut b = site_key_hash::<LAZY_HASH>(key_bits, hash) as usize & mask;
-        loop {
-            let pos = *slots.add(b);
-            if pos == u32::MAX {
-                return if SITE {
-                    site_memo::miss_absent::<ABSENT, LAZY_HASH>(dir, obj, key_bits, hash, memo)
-                } else {
-                    absent_from::<ABSENT>(
-                        dir,
-                        obj,
-                        key_bits,
-                        site_key_hash::<LAZY_HASH>(key_bits, hash),
-                    )
-                };
-            }
-            let i = pos & POS_BITS;
-            if pos & TEXT_ENTRY != 0 {
-                // Only a key of the text's hash can be its text.
-                if KeyIndex::word(table, i) != site_key_hash::<LAZY_HASH>(key_bits, hash) {
-                    b = (b + 1) & mask;
-                    continue;
-                }
-                // A text compare is a call: the cold path makes it, so the
-                // hit path keeps no frame.
-                return probe_get_underived::<ABSENT>(
+        pos += 1;
+        if pos == count {
+            return if SITE {
+                site_memo::miss_absent::<ABSENT, LAZY_HASH>(dir, obj, key_bits, hash, memo)
+            } else {
+                absent_from::<ABSENT>(
                     dir,
                     obj,
-                    word,
-                    r,
                     key_bits,
                     site_key_hash::<LAZY_HASH>(key_bits, hash),
-                );
-            }
-            let w = if pos & ALIAS_ENTRY != 0 {
-                KeyIndex::word(table, i)
-            } else {
-                *list.add(i as usize)
+                )
             };
-            if w == key_bits {
-                break (i, entry_load(table, pos, i));
-            }
-            b = (b + 1) & mask;
         }
-    };
-    // Only the uncommon unproved load calls value_at. Keep that call and
-    // its continuation together behind a tail entrance, so direct own
-    // loads and other probe exits do not save registers for a later call.
-    if load == NO_LOAD {
-        return unloaded::get::<ABSENT, SITE, LAZY_HASH>(dir, obj, key_bits, hash, pos, memo);
     }
-    let v = hit_value(obj, r, pos, load);
-    // A hole slot: the key is absent (the key view), and the answer
-    // continues as for an absent key.
-    if v.to_bits() != TAG_HOLE {
-        return v;
-    }
-    if SITE {
-        return site_memo::miss_hole::<ABSENT, LAZY_HASH>(dir, obj, pos, key_bits, hash, memo);
-    }
-    own_hole::<ABSENT>(
-        dir,
-        obj,
-        r,
-        pos,
-        key_bits,
-        site_key_hash::<LAZY_HASH>(key_bits, hash),
-    )
+    let load = if pos < bound { pos } else { NO_LOAD };
+    unloaded::finish::<ABSENT, SITE, LAZY_HASH>(dir, obj, key_bits, hash, pos, load, memo)
 }
 
 /// Is position `pos` of record `r` a plain data key (no accessor, no private

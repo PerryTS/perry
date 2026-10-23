@@ -29,3 +29,68 @@ pub(super) unsafe fn get<const ABSENT: bool, const SITE: bool, const LAZY_HASH: 
         site_key_hash::<LAZY_HASH>(key_bits, hash),
     )
 }
+
+/// Finish a proved inline load without retaining a ShapeRecord through the
+/// lookup loop. The unproved and hole cases derive their record at the exit.
+#[inline(always)]
+pub(super) unsafe fn finish<const ABSENT: bool, const SITE: bool, const LAZY_HASH: bool>(
+    dir: *const u8,
+    obj: *const ObjectHeader,
+    key_bits: u64,
+    hash: u64,
+    pos: u32,
+    load: u32,
+    memo: *const site_memo::ReadSiteMemo,
+) -> f64 {
+    if load == NO_LOAD {
+        return get::<ABSENT, SITE, LAZY_HASH>(dir, obj, key_bits, hash, pos, memo);
+    }
+    let v = *((obj as *const u8).add(std::mem::size_of::<ObjectHeader>() + load as usize * 8)
+        as *const f64);
+    if v.to_bits() != TAG_HOLE {
+        return v;
+    }
+    hole_at::<ABSENT, SITE, LAZY_HASH>(dir, obj, key_bits, hash, pos, memo)
+}
+
+#[inline(never)]
+unsafe fn hole_at<const ABSENT: bool, const SITE: bool, const LAZY_HASH: bool>(
+    dir: *const u8,
+    obj: *const ObjectHeader,
+    key_bits: u64,
+    hash: u64,
+    pos: u32,
+    memo: *const site_memo::ReadSiteMemo,
+) -> f64 {
+    if SITE {
+        return site_memo::miss_hole::<ABSENT, LAZY_HASH>(dir, obj, pos, key_bits, hash, memo);
+    }
+    let r = record_of(dir, (*obj).parent_class_id);
+    own_hole::<ABSENT>(
+        dir,
+        obj,
+        r,
+        pos,
+        key_bits,
+        site_key_hash::<LAZY_HASH>(key_bits, hash),
+    )
+}
+
+/// Keep the indexed loop's text exit from retaining the record and word.
+#[inline(never)]
+pub(super) unsafe fn underived<const ABSENT: bool, const LAZY_HASH: bool>(
+    dir: *const u8,
+    obj: *const ObjectHeader,
+    key_bits: u64,
+    hash: u64,
+) -> f64 {
+    let word = (*obj).parent_class_id;
+    probe_get_underived::<ABSENT>(
+        dir,
+        obj,
+        word,
+        record_of(dir, word),
+        key_bits,
+        site_key_hash::<LAZY_HASH>(key_bits, hash),
+    )
+}
