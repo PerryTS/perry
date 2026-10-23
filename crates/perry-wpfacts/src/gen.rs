@@ -9,6 +9,7 @@ use perry_hir::{Class, Export, Function, Global, Import, ImportSpecifier, Module
 
 mod export;
 mod walk;
+pub(crate) use walk::variant_name;
 
 /// A read site the precision report can match against the dynamic census:
 /// `recv.key` with a source byte offset.

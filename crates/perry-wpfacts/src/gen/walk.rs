@@ -1,6 +1,7 @@
 //! Constraint generation, part 1c: walking modules, classes and statements.
 
 use super::*;
+use perry_hir::Expr;
 
 impl<'a> Gen<'a> {
     // ----------------------------------------------------------- walking
@@ -482,4 +483,29 @@ impl<'a> Gen<'a> {
             }
         }
     }
+}
+
+/// The variant name of an expression, without formatting its children: a
+/// `fmt::Write` that stops at the first non-identifier character.
+pub(crate) fn variant_name(e: &Expr) -> String {
+    struct Head(String, bool);
+    impl std::fmt::Write for Head {
+        fn write_str(&mut self, s: &str) -> std::fmt::Result {
+            if self.1 {
+                return Err(std::fmt::Error);
+            }
+            for c in s.chars() {
+                if c.is_alphanumeric() || c == '_' {
+                    self.0.push(c);
+                } else {
+                    self.1 = true;
+                    return Err(std::fmt::Error);
+                }
+            }
+            Ok(())
+        }
+    }
+    let mut h = Head(String::new(), false);
+    let _ = std::fmt::write(&mut h, format_args!("{e:?}"));
+    h.0
 }
