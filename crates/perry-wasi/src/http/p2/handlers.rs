@@ -377,6 +377,7 @@ impl types::HostResponseOutparam for WasiHttpCtxView<'_> {
         };
 
         let resp = self.table.delete(id)?;
+        resp.status.set();
         let _ = resp.send.send(val);
         Ok(())
     }

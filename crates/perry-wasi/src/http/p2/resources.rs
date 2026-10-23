@@ -43,15 +43,36 @@ pub struct HostIncomingResponse {
     pub headers: FieldMap,
     pub body: Option<IncomingBody>,
 }
+/// Observes whether the guest called response-outparam.set, including set(err).
+/// It does not promise that the peer has received the response.
+#[derive(Clone, Default)]
+pub struct ResponseStatus(std::sync::Arc<std::sync::atomic::AtomicBool>);
+impl ResponseStatus {
+    pub fn is_set(&self) -> bool {
+        self.0.load(std::sync::atomic::Ordering::Acquire)
+    }
+    pub(crate) fn set(&self) {
+        self.0.store(true, std::sync::atomic::Ordering::Release);
+    }
+}
 pub struct HostResponseOutparam {
+    pub(crate) status: ResponseStatus,
     pub(crate) send: oneshot::Sender<Result<HostOutgoingResponse, Error>>,
+}
+impl HostResponseOutparam {
+    pub fn observer(&self) -> ResponseStatus {
+        self.status.clone()
+    }
 }
 impl WasiHttpCtxView<'_> {
     pub fn new_response_outparam(
         &mut self,
         send: oneshot::Sender<Result<HostOutgoingResponse, Error>>,
     ) -> wasmtime::Result<Resource<HostResponseOutparam>> {
-        Ok(self.table.push(HostResponseOutparam { send })?)
+        Ok(self.table.push(HostResponseOutparam {
+            send,
+            status: ResponseStatus::default(),
+        })?)
     }
 }
 // A Send future carries only the native response channel + task cancellation

@@ -132,16 +132,57 @@ future is polled; early final responses can reject unfinished uploads. Header
 views retain their resource parents, request options are consumed at dispatch,
 and body streams must be dropped before their body is finished. Body resources
 can outlive their request/response handles. Finishing an incoming body drains to
-actual trailers; dropping it cancels its transport. DNS permission does not grant
+actual trailers; dropping a client response body cancels its transport. DNS permission does not grant
 any resolved IP. There is no automatic redirect, decompression or HTTP/2 support.
 
 The [HTTP client receipt](validation/wasi-http-client-20261023.json) records Linux
 provider/host tests, a real WASM HTTP round trip through both provider linkers,
 and the production Host facade's opt-in, TCP, DNS and exact-address denials.
-This does not yet qualify Perry-generated TypeScript HTTP guests under moving GC,
-HTTP incoming/server handling, other native platforms or final shipping packages.
+That receipt covers the client; incoming-handler qualification is recorded below.
+Perry-generated TypeScript HTTP guests under moving GC, other native platforms
+and final shipping packages remain unqualified.
 The experimental `informational-outbound-responses` interface is disabled.
 Native WASI 0.3 async interfaces remain unimplemented.
+
+The Rust embedding API now provides an HTTP/1.1 origin server through
+`perry_wasi::http::server::Server` and canonical handler invocation through
+`perry_component_host::Host::handle_http`. The host explicitly supplies a bind
+address, connection limit, deadlines and optional TLS credentials. This is
+host authority: a component can handle an incoming request with no outbound
+TCP, DNS or IP grants. It cannot acquire a listener through these WIT resources.
+There is no ambient certificate or environment lookup.
+
+One owned Turnloop task per exchange drives both bounded request and response
+channels. The guest runs on the caller's Store; no Store or guest callback
+enters the native driver. Dropping an incoming server request body switches to
+discarding input and does not cancel its response. The separate completion owner
+must remain alive through handling; dropping it cancels the exchange. Dropping
+the server cancels its accepts and exchanges and joins its driver. A bounded
+half-close/drain protects an early response from unread-upload resets.
+
+The embedding receives an owned request and response sender, calls
+`handle_http` with its selected incoming-handler interface, and awaits the
+transport completion even if the handler failed, so the transport can flush
+its error response. A trap, fuel exhaustion or return without setting the
+response retires that component instance. Explicit `response-outparam.set(err)`
+is a valid handler return, produces HTTP 500, and remains an error in transport
+completion. Missing exports and wrong canonical signatures fail before native
+resources are inserted. A completion means transport processing finished;
+it does not prove that the peer consumed the bytes.
+
+The [HTTP server receipt](validation/wasi-http-server-20261023.json) records
+Linux development and production panic-abort qualification: large streamed
+requests/responses and trailers at admission limit one, early rejection,
+HEAD and 100-continue, TLS and handshake failures, invalid framing, timeouts,
+cancellation and shutdown. A real WASM incoming-handler reads and writes body
+streams through the production Rust Host facade, handles repeated requests
+with no outbound grants, and exercises explicit errors, traps, missing responses
+and fuel exhaustion. Canonical preflight rejects the wrong signature.
+This is Rust embedding and canonical-WASM qualification. The public TypeScript
+server API, Perry-generated HTTP fixtures and their moving-GC qualification are
+still required. The server currently accepts HTTP/1.1 origin-form requests
+(and OPTIONS `*`), one request per connection; it does not implement HTTP/1.0,
+connection reuse, HTTP/2, CONNECT tunnels or upgrades.
 
 Flag declarations are limited to 1–32 labels, matching the
 [Component Model binary format](https://github.com/WebAssembly/component-model/blob/main/design/mvp/Binary.md#type-definitions).
@@ -453,8 +494,8 @@ substitute for those regressions.
 
 Still required before claiming the full milestone:
 
-- Qualify the remaining capability operations, incoming HTTP/server handling,
-  Perry-generated HTTP guests under moving GC, and blocking-I/O cancellation.
+- Connect the TypeScript server API and qualify Perry-generated HTTP guests
+  under moving GC, remaining capability operations and blocking-I/O cancellation.
 - Qualify supported host platforms. [PR #12985](https://github.com/PerryTS/perry/pull/12985)
   added the component acceptance suite to required execution checks; integration
   with that workflow exercises these extended resource fixtures.

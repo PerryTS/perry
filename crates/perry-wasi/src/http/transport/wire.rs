@@ -1,8 +1,8 @@
+use super::reader::{fields, ReadMessage};
 use super::*;
-use crate::http::body::{BodyFrame, IncomingBodySender, StreamContext, CHUNK_SIZE};
-use bytes::Bytes;
+use crate::http::body::{BodyFrame, StreamContext, CHUNK_SIZE};
 use futures_util::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use turnloop_http::http1::{BodyLength, Decoder, Encoder, Event, Head, Header, Limits, Mode};
+use turnloop_http::http1::{BodyLength, Encoder, Head, Header};
 
 const HEAD_LIMIT: usize = 32 * 1024;
 
@@ -30,7 +30,7 @@ pub(super) async fn exchange<S: AsyncRead + AsyncWrite + Unpin>(
         let _ = send.send(Err(error));
         return;
     }
-    let mut reader = ReadMessage::new(&mut reader, &spec.method);
+    let mut reader = ReadMessage::response(&mut reader, &spec.method);
     let first = match after(io, options.first_byte_timeout) {
         Ok(at) => at,
         Err(error) => {
@@ -70,7 +70,7 @@ pub(super) async fn exchange<S: AsyncRead + AsyncWrite + Unpin>(
         head.get("content-length")
             .and_then(|n| std::str::from_utf8(n).ok()?.parse().ok())
     };
-    let headers = match fields(head.headers) {
+    let headers = match fields(head.headers, StreamContext::Response) {
         Ok(fields) => fields,
         Err(e) => {
             let _ = send.send(Err(e));
@@ -88,7 +88,10 @@ pub(super) async fn exchange<S: AsyncRead + AsyncWrite + Unpin>(
     {
         return;
     }
-    match reader.body(io, &options, &mut output).await {
+    match reader
+        .body(io, options.between_bytes_timeout, &mut output, false)
+        .await
+    {
         Ok(trailers) => {
             let _ = output.finish(trailers);
         }
@@ -193,129 +196,4 @@ async fn upload<W: AsyncWrite + Unpin>(
         .finish(&trailers, &mut bytes)
         .map_err(|_| Error::HttpProtocolError)?;
     write(io, writer, &bytes, options).await
-}
-
-fn fields(headers: Vec<Header>) -> Result<FieldMap, Error> {
-    let mut map = http::HeaderMap::new();
-    for h in headers {
-        let name = http::HeaderName::from_bytes(h.name.as_bytes())
-            .map_err(|_| Error::HttpProtocolError)?;
-        let value =
-            http::HeaderValue::from_bytes(&h.value).map_err(|_| Error::HttpProtocolError)?;
-        map.try_append(name, value)
-            .map_err(|_| Error::HttpResponseHeaderSectionSize(None))?;
-    }
-    Ok(FieldMap::new_immutable(map))
-}
-
-enum OwnedEvent {
-    Head(Head),
-    Information,
-    Data(Bytes),
-    Trailers(Vec<Header>),
-    End,
-}
-struct ReadMessage<R> {
-    reader: R,
-    decoder: Decoder,
-    buffer: Vec<u8>,
-    eof: bool,
-}
-impl<R: AsyncRead + Unpin> ReadMessage<R> {
-    fn new(reader: R, method: &str) -> Self {
-        let mut decoder = Decoder::new(Mode::Response, Limits::default());
-        decoder.response_to(method);
-        Self {
-            reader,
-            decoder,
-            buffer: Vec::with_capacity(CHUNK_SIZE),
-            eof: false,
-        }
-    }
-    async fn next(
-        &mut self,
-        io: &ExecutorHandle<Platform>,
-        at: Option<Instant>,
-        between: Duration,
-    ) -> Result<OwnedEvent, Error> {
-        loop {
-            let step = self
-                .decoder
-                .receive(&self.buffer)
-                .map_err(|_| Error::HttpProtocolError)?;
-            let consumed = step.consumed;
-            let event = match step.event {
-                Some(Event::Head(h)) => Some(OwnedEvent::Head(h)),
-                Some(Event::Informational(_)) => Some(OwnedEvent::Information),
-                Some(Event::Body(bytes)) => Some(OwnedEvent::Data(Bytes::copy_from_slice(bytes))),
-                Some(Event::Trailers(t)) => Some(OwnedEvent::Trailers(t)),
-                Some(Event::End) => Some(OwnedEvent::End),
-                Some(Event::Upgrade) => return Err(Error::HttpUpgradeFailed),
-                None => None,
-            };
-            self.buffer.drain(..consumed);
-            if let Some(event) = event {
-                return Ok(event);
-            }
-            if consumed != 0 {
-                continue;
-            }
-            if self.eof {
-                return Err(Error::HttpResponseIncomplete);
-            }
-            if self.buffer.len() >= CHUNK_SIZE {
-                return Err(Error::HttpProtocolError);
-            }
-            let mut bytes = [0; 16384];
-            let limit = bytes.len().min(CHUNK_SIZE - self.buffer.len());
-            let at = match at {
-                Some(at) => at,
-                None => after(io, between)?,
-            };
-            let n = deadline(io, at, Error::ConnectionReadTimeout, async {
-                self.reader
-                    .read(&mut bytes[..limit])
-                    .await
-                    .map_err(|_| Error::ConnectionTerminated)
-            })
-            .await?;
-            if n == 0 {
-                self.eof = true;
-                self.decoder
-                    .eof()
-                    .map_err(|_| Error::HttpResponseIncomplete)?;
-            } else {
-                self.buffer.extend_from_slice(&bytes[..n]);
-            }
-        }
-    }
-    async fn head(&mut self, io: &ExecutorHandle<Platform>, at: Instant) -> Result<Head, Error> {
-        // Bound informational responses as well as the total wait for a head.
-        for _ in 0..128 {
-            match self.next(io, Some(at), Duration::ZERO).await? {
-                OwnedEvent::Head(head) => return Ok(head),
-                OwnedEvent::Information => {}
-                _ => return Err(Error::HttpProtocolError),
-            }
-        }
-        Err(Error::HttpResponseHeaderSectionSize(None))
-    }
-    async fn body(
-        &mut self,
-        io: &ExecutorHandle<Platform>,
-        options: &Options,
-        output: &mut IncomingBodySender,
-    ) -> Result<Option<FieldMap>, Error> {
-        let mut trailers = None;
-        loop {
-            // The between-byte clock measures the next network read, excluding
-            // time spent waiting for a guest to consume a full bounded queue.
-            match self.next(io, None, options.between_bytes_timeout).await? {
-                OwnedEvent::Data(bytes) => output.push(bytes).await?,
-                OwnedEvent::Trailers(fields_) => trailers = Some(fields(fields_)?),
-                OwnedEvent::End => return Ok(trailers),
-                _ => return Err(Error::HttpProtocolError),
-            }
-        }
-    }
 }

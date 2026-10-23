@@ -1,6 +1,7 @@
 //! Owned HTTP/1 exchanges on the component context's existing Turnloop driver.
 //! A request starts immediately, so guest upload backpressure cannot depend on
 //! polling its response. Only owned bytes and immutable grants enter the driver.
+pub(crate) mod reader;
 #[cfg(test)]
 mod tests;
 mod wire;
@@ -178,13 +179,13 @@ pub fn send(
     Ok(PendingResponse { receive, task })
 }
 
-fn after(io: &ExecutorHandle<Platform>, duration: Duration) -> Result<Instant, Error> {
+pub(crate) fn after(io: &ExecutorHandle<Platform>, duration: Duration) -> Result<Instant, Error> {
     io.now()
         .checked_add(duration)
         .ok_or(Error::ConfigurationError)
 }
 
-async fn deadline<T>(
+pub(crate) async fn deadline<T>(
     io: &ExecutorHandle<Platform>,
     at: Instant,
     error: Error,

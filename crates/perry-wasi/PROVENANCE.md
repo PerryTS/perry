@@ -337,3 +337,64 @@ and canonical WASM boundary. Perry-generated TypeScript HTTP/GC fixtures,
 incoming-handler execution/server transport, other platforms and final packages
 remain required. The dependency release/registry-lock limitations documented in
 the native transport section still apply.
+
+
+## Incoming HTTP handler and server qualification
+
+`http::server` adds an embedding-owned HTTP/1.1 origin listener. Its explicit
+bind address and TLS configuration are host capabilities, independent of a
+guest's outbound grants. The listener owns a `perry-component-io::Driver`; one
+bounded task accepts and runs each exchange with concurrent request and response
+pumps. TLS, sockets and codecs stay on that driver. The native channels carry
+owned metadata/bytes; canonical lowering, the Wasmtime Store and guest execution
+stay on the calling thread. No Tokio runtime or ambient server is introduced.
+
+`perry-component-host::Host::handle_http` checks the selected canonical resource
+signature before inserting native request/outparam handles, applies fuel/epoch
+limits, and observes whether the guest called outparam.set. A successful error
+response is distinct from not setting the outparam. Traps, fuel exhaustion and
+unset responses retire the instance and release its resources. A valid error
+response leaves the instance reusable. Ordinary successful calls do not drain
+custom host resources retained by the guest.
+
+The shared bounded decoder now handles both request and response messages.
+Dropping a server input consumer discards remaining request bytes without
+cancelling response output. An embedding-held completion owner controls exchange
+cancellation independently of those resources. All failed accepts await native
+teardown before returning, including flushing a protocol rejection. Server drop
+cancels all operations and joins the driver. Final output is flushed before a
+bounded Turnloop lingering half-close/drain, avoiding immediate close with unread
+upload bytes. The response body wait is bounded too: an unfinished guest body
+cannot keep a connection/task alive indefinitely. Errors after headers leave
+framing incomplete rather than writing a false successful final chunk.
+
+The origin server requires exactly one valid Host, rejects ambiguous framing
+and forward-proxy/CONNECT targets, sends 100-continue when requested, and omits
+HEAD/204/304 bodies on the wire. Host-owned framing adds connection: close.
+No HTTP/1.0, connection reuse, HTTP/2 or upgrades are implemented. Explicit
+TLS credentials permit HTTP/1.1 ALPN only. Timeouts and checked deadline overflow
+cover handshake, request head, response head, native reads/writes and idle
+response-body frames; no ambient file/environment certificate lookup occurs.
+
+Snapshot v65 qualifies 231 provider, 44 host and 26/25 driver tests in
+Linux development/production panic-abort. The HTTP subset includes 20 primitive,
+12 client transport, seven canonical resource, 11 server transport and four
+production Host facade tests. Server tests cover 3 MiB each direction with
+trailers at task capacity one, early 413 before upload completion, dropped input,
+missing/error responses, invalid Host/target/framing, request and guest-response
+stalls, truncated input, unfinished output, explicit cancellation, server shutdown,
+HEAD, 100-continue, TLS success, invalid TLS, handshake timeout and configuration
+errors. The actual incoming WASM fixture verifies body I/O, repeated calls,
+set(err), unset responses, traps and fuel exhaustion with no outbound grants.
+Each valid canonical call leaves an empty provider table. Wrong signatures fail
+before publication and leave the host reusable. Doctests, all-target Clippy,
+stdio overlap and the Tokio-free normal host graph pass as well.
+
+The [server receipt](../../docs/validation/wasi-http-server-20261023.json)
+records exact tested inputs and evidence. Validation still uses the immutable
+Turnloop repairs plus matching turnloop-io from the external patch described
+above. The direct turnloop-io dependency supplies the same driver's half-close
+adapter; it does not create another executor. Registry lock resolution and
+released repairs remain shipping requirements. This does not qualify the public
+TypeScript server API, Perry-generated HTTP/GC fixtures, native WASI 0.3,
+macOS/Windows providers or final production/npm packages.

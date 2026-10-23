@@ -72,6 +72,9 @@ impl Drop for IncomingBody {
 }
 
 impl IncomingBodySender {
+    pub(crate) fn consumer_closed(&self) -> bool {
+        !self.shared.state.lock().unwrap().consumer_alive
+    }
     /// A cancelled pending send has accepted no bytes. The protocol driver must
     /// retain native buffers separately until any native I/O cancellation completes.
     pub async fn push(&mut self, bytes: Bytes) -> Result<(), Error> {

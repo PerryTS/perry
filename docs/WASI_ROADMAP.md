@@ -132,9 +132,10 @@ moving GC, plus opt-in WASI
 providers. See [the component record](WASI_COMPONENTS.md) for the separately
 qualified host-defined resources, native/guest deferred cleanup, command
 worlds and TCP/UDP/DNS interoperability. Their combined integration is
-qualified on Linux. HTTP client resources and transport now have separate Linux
-engine/canonical-component qualification, including real HTTP payloads and TLS
-verification. HTTP server/incoming handling, TypeScript HTTP GC qualification,
+qualified on Linux. HTTP client and incoming-handler resources and transports
+now have separate Linux engine/canonical-component qualification, including real
+HTTP payloads, TLS verification and streamed server exchanges through the Rust
+embedding API. The TypeScript server API and HTTP moving-GC qualification,
 blocking-I/O cancellation, broader platform qualification and engine shipping
 costs remain open. The Tokio-free Turnloop provider
 replacement is now selected and qualified on Linux in both component directions;

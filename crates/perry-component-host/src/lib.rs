@@ -2,6 +2,7 @@
 //! handles and limits. No Perry heap pointer crosses this crate boundary.
 mod cleanup;
 mod command;
+pub mod http;
 pub use command::run_command;
 
 mod contract;
