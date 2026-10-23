@@ -269,6 +269,11 @@ crate::perry_thread_local! {
         const { super::TriggerInput::new(NURSERY_CAP_SCALE_MIN) };
     static CAP_GROW_STREAK: Cell<u8> = const { Cell::new(0) };
     static CAP_SHRINK_STREAK: Cell<u8> = const { Cell::new(0) };
+    /// The influx readings of the ladder's current phase: their sum and their
+    /// count. A phase starts at a move, or at a reading on the far side of
+    /// the band from the phase's mean; see [`retune_nursery_cap_scale`].
+    static CAP_PHASE_INFLUX_BYTES: Cell<u64> = const { Cell::new(0) };
+    static CAP_PHASE_MINORS: Cell<u64> = const { Cell::new(0) };
     /// #7929: mean size of the objects the last copying minor moved. Seeded at
     /// the calibration reference so a process with no completed copying minor
     /// paces exactly as it did before the object denomination existed — until
@@ -878,25 +883,58 @@ pub(super) fn retune_after_scavenge(
 
 /// Retune the nursery cap scale from one copying minor's survivor influx.
 ///
-/// Grow when survivor influx exceeds 4% of the current effective cap for two
-/// consecutive cycles — objects are surviving because they aren't getting
-/// time to die, so a bigger Eden both cuts the collection count and lets them
-/// die young. Shrink when influx falls below 1% for two consecutive cycles.
+/// Grow when survivor influx exceeds 4% of the current effective cap —
+/// objects are surviving because they aren't getting time to die, so a bigger
+/// Eden both cuts the collection count and lets them die young. Shrink when
+/// influx falls below 1%.
+///
+/// # What a move needs: the level and its persistence
+///
+/// A move needs two things, and each answers a different question:
+///
+/// * **The level**: the MEAN influx of the current phase is beyond the band
+///   edge. One minor's reading is a sample of a signal, not its level: a
+///   program that builds a structure and drops it has a sawtooth influx, and
+///   the reading is wherever on the tooth the minor happens to land. Measured
+///   on AWFY Storage (EK, 2026-10-23): at 8 MB its readings climb from 120 KB
+///   to 400 KB within each tree and drop to 40 KB when the tree dies, a mean of
+///   ~260 KB against a 336 KB edge. Two consecutive readings near the tooth
+///   tip clear the edge, so the per-reading rule grew to 16 MB, read the trough
+///   there, shrank back, and did that five times per run (arena peak 26 MB
+///   instead of 18 MB, +25% RSS). Where the tooth tip lands is decided by the
+///   collection phase, so an 8-byte change in one object's size moved the
+///   program across the cliff (main climbs the same way at a 12-15 MB base).
+///   The phase mean is the level the rule is about, and it does not move with
+///   the phase.
+/// * **The persistence**: the last [`RAISE_DEBOUNCE_CYCLES`] readings are each
+///   beyond the edge too. One heavy cycle — a program's startup cohort, say —
+///   moves nothing: a mean of two readings, one of them a startup tree, is
+///   the cohort's size and not a rate (measured on AWFY CD: the mean alone
+///   leaves the floor at the second minor on a program whose phase mean sits
+///   inside the band).
+///
+/// A phase starts at every move, and at a reading on the far side of the band
+/// from the phase's mean (above 4% while the mean is below 1%, or the
+/// reverse): that reading refutes the level the phase measured, so a program
+/// that goes from quiet to heavy is followed after the same two readings it
+/// always was, instead of averaging its new rate against its old one.
 ///
 /// A move takes, at once, every ×2 step that the one-step rule would take in a
-/// row on the same reading (#11549): growth continues while the influx is
-/// still above 4% of the next level's cap, shrinking while it is still below
-/// 1% of it. So the scale lands exactly where one-step moves would have
-/// settled — the steady-state sizes are unchanged — without paying two minors
-/// per step to get there. With the floor two steps below the old base,
-/// one-step climbing cost a survivor-heavy program up to eight extra minors,
-/// each copying a cohort that a big enough Eden would have let die (measured
-/// on the 12_large_live_set ratchet probe: 9 minors and +3% instructions
-/// against main's 5). It cannot oscillate: a growth ends above 2% of the new
-/// cap (the level below was above 4%), a shrink below 2% (the level above was
-/// below 1%), and both are inside the 1%..4% dead band. The debounce is
-/// unchanged: one heavy cycle — a program's startup cohort, say — moves
-/// nothing.
+/// row on the same readings (#11549): growth continues while the next level's
+/// cap still passes both tests — the mean and the current reading above 4% of
+/// it — and shrinking while both are still below 1% of it. Pricing the mean
+/// alone would carry the startup cohort into the landing: on AWFY Json and CD
+/// a 600 KB first minor kept the mean above 4% of 16 MB, so the ladder jumped
+/// from the floor to 16 MB where the current reading justified 8 MB, and then
+/// stayed there (+16% RSS). So the scale lands exactly where one-step moves would have settled —
+/// the steady-state sizes are unchanged — without paying two minors per step
+/// to get there. With the floor two steps below the old base, one-step
+/// climbing cost a survivor-heavy program up to eight extra minors, each
+/// copying a cohort that a big enough Eden would have let die (measured on the
+/// 12_large_live_set ratchet probe: 9 minors and +3% instructions against
+/// main's 5). A steady influx cannot oscillate: a growth ends above 2% of the
+/// new cap (the level below was above 4%), a shrink below 2% (the level above
+/// was below 1%), and both are inside the 1%..4% dead band.
 fn retune_nursery_cap_scale(eden_live_bytes: usize) {
     let scale = NURSERY_CAP_SCALE.with(TriggerInput::get);
     let old_reclaimable = old_gen_reclaimable_pressure_bytes();
@@ -904,17 +942,19 @@ fn retune_nursery_cap_scale(eden_live_bytes: usize) {
         scavenge_nursery_cap_from(influx_driven_nursery_cap_bytes_at(scale), old_reclaimable)
     };
     let cap = cap_at(scale);
+    let phase_mean = note_cap_phase_reading(eden_live_bytes, cap);
     if eden_live_bytes > cap / 25 {
         CAP_SHRINK_STREAK.with(|s| s.set(0));
         if scale < NURSERY_CAP_SCALE_MAX {
             let streak = CAP_GROW_STREAK.with(|s| s.get()).saturating_add(1);
-            if streak >= RAISE_DEBOUNCE_CYCLES {
+            if streak >= RAISE_DEBOUNCE_CYCLES && phase_mean > cap / 25 {
                 CAP_GROW_STREAK.with(|s| s.set(0));
                 let mut next = scale * 2;
-                while next < NURSERY_CAP_SCALE_MAX && eden_live_bytes > cap_at(next) / 25 {
+                while next < NURSERY_CAP_SCALE_MAX && phase_mean.min(eden_live_bytes) > cap_at(next) / 25 {
                     next *= 2;
                 }
                 NURSERY_CAP_SCALE.with(|s| s.set(next));
+                start_cap_phase();
                 diag_cap_scale(scale, next, eden_live_bytes);
             } else {
                 CAP_GROW_STREAK.with(|s| s.set(streak));
@@ -924,13 +964,14 @@ fn retune_nursery_cap_scale(eden_live_bytes: usize) {
         CAP_GROW_STREAK.with(|s| s.set(0));
         if scale > NURSERY_CAP_SCALE_MIN {
             let streak = CAP_SHRINK_STREAK.with(|s| s.get()).saturating_add(1);
-            if streak >= RAISE_DEBOUNCE_CYCLES {
+            if streak >= RAISE_DEBOUNCE_CYCLES && phase_mean < cap / 100 {
                 CAP_SHRINK_STREAK.with(|s| s.set(0));
                 let mut next = scale / 2;
-                while next > NURSERY_CAP_SCALE_MIN && eden_live_bytes < cap_at(next) / 100 {
+                while next > NURSERY_CAP_SCALE_MIN && phase_mean.max(eden_live_bytes) < cap_at(next) / 100 {
                     next /= 2;
                 }
                 NURSERY_CAP_SCALE.with(|s| s.set(next));
+                start_cap_phase();
                 diag_cap_scale(scale, next, eden_live_bytes);
             } else {
                 CAP_SHRINK_STREAK.with(|s| s.set(streak));
@@ -940,6 +981,43 @@ fn retune_nursery_cap_scale(eden_live_bytes: usize) {
         CAP_GROW_STREAK.with(|s| s.set(0));
         CAP_SHRINK_STREAK.with(|s| s.set(0));
     }
+}
+
+/// Which side of the cap's 1%..4% band an influx lies on: 1 above, -1 below,
+/// 0 inside.
+fn cap_band_side(influx_bytes: usize, cap: usize) -> i8 {
+    if influx_bytes > cap / 25 {
+        1
+    } else if influx_bytes < cap / 100 {
+        -1
+    } else {
+        0
+    }
+}
+
+/// Add one reading to the ladder's current phase and return the phase's mean
+/// influx. A reading on the far side of the band from the mean so far starts
+/// a new phase with itself (see [`retune_nursery_cap_scale`]).
+fn note_cap_phase_reading(eden_live_bytes: usize, cap: usize) -> usize {
+    let minors = CAP_PHASE_MINORS.with(Cell::get);
+    let sum = CAP_PHASE_INFLUX_BYTES.with(Cell::get);
+    let reading = eden_live_bytes as u64;
+    let (sum, minors) = if minors != 0
+        && cap_band_side(eden_live_bytes, cap) * cap_band_side((sum / minors) as usize, cap) < 0
+    {
+        (reading, 1)
+    } else {
+        (sum.saturating_add(reading), minors + 1)
+    };
+    CAP_PHASE_INFLUX_BYTES.with(|c| c.set(sum));
+    CAP_PHASE_MINORS.with(|c| c.set(minors));
+    (sum / minors) as usize
+}
+
+/// A ladder move ends the phase: the next reading is the first at the new cap.
+fn start_cap_phase() {
+    CAP_PHASE_INFLUX_BYTES.with(|c| c.set(0));
+    CAP_PHASE_MINORS.with(|c| c.set(0));
 }
 
 /// Minimum Eden survival rate, in tenths, for a mark-sweep to seed the
@@ -1075,6 +1153,7 @@ pub(super) fn reset_for_test() {
     NURSERY_CAP_SCALE.with(|s| s.set(NURSERY_CAP_SCALE_MIN));
     CAP_GROW_STREAK.with(|s| s.set(0));
     CAP_SHRINK_STREAK.with(|s| s.set(0));
+    start_cap_phase();
     MEAN_SURVIVING_OBJECT_BYTES.with(|s| s.set(NURSERY_CAP_REFERENCE_OBJECT_BYTES));
     OBJECT_CENSUS_SEEDED.with(|s| s.set(false));
 }
@@ -1662,6 +1741,98 @@ mod tests {
             retune_after_scavenge(0, 0, 0);
         }
         assert_eq!(scavenge_nursery_cap_effective_bytes(), floor);
+        reset_for_test();
+    }
+
+    /// EK (2026-10-23): a sawtooth influx is judged by its phase mean, not by
+    /// where on the tooth the minors land. The readings follow AWFY Storage's
+    /// at 8 MB: each tooth climbs past 4% for two minors and drops below 1% for
+    /// two, and its mean is inside the band, so the ladder must hold in both
+    /// directions.
+    #[test]
+    fn a_sawtooth_influx_is_judged_by_its_phase_mean() {
+        reset_for_test();
+        let floor = nursery_cap_floor_bytes();
+        let two = floor * 2;
+        // Leave the floor on a steady 6% so the test starts at 8 MB.
+        retune_after_scavenge(floor * 6 / 100, 0, 0);
+        retune_after_scavenge(floor * 6 / 100, 0, 0);
+        assert_eq!(scavenge_nursery_cap_effective_bytes(), two);
+        let tooth = [
+            two * 2 / 100, two * 25 / 1000, two * 3 / 100, two * 35 / 1000,
+            two * 39 / 1000, two * 44 / 1000, two * 48 / 1000, two / 200,
+            two / 150, two * 15 / 1000,
+        ];
+        // The tip and the trough really are two readings beyond each edge: the
+        // per-reading rule alone would grow at one and shrink at the other.
+        assert!(tooth[5] > two / 25 && tooth[6] > two / 25 && tooth[4] < two / 25);
+        assert!(tooth[7] < two / 100 && tooth[8] < two / 100 && tooth[9] > two / 100);
+        for _ in 0..6 {
+            for &reading in &tooth {
+                retune_after_scavenge(reading, 0, 0);
+                assert_eq!(scavenge_nursery_cap_effective_bytes(), two);
+            }
+        }
+        reset_for_test();
+    }
+
+    /// EK (2026-10-23): a reading on the far side of the band from the phase
+    /// mean starts a new phase, so a long quiet phase does not delay the
+    /// response to a heavy one: two heavy readings still move the ladder.
+    #[test]
+    fn a_heavy_phase_after_a_long_quiet_one_moves_after_two_readings() {
+        reset_for_test();
+        let floor = nursery_cap_floor_bytes();
+        for _ in 0..64 {
+            retune_after_scavenge(floor / 1000, 0, 0);
+        }
+        assert_eq!(scavenge_nursery_cap_effective_bytes(), floor);
+        retune_after_scavenge(floor * 6 / 100, 0, 0);
+        assert_eq!(scavenge_nursery_cap_effective_bytes(), floor);
+        retune_after_scavenge(floor * 6 / 100, 0, 0);
+        assert_eq!(scavenge_nursery_cap_effective_bytes(), floor * 2);
+        // And back: at 8 MB, a quiet phase after the heavy one shrinks after
+        // two quiet readings.
+        for _ in 0..2 {
+            retune_after_scavenge(floor * 3 / 100, 0, 0);
+        }
+        assert_eq!(scavenge_nursery_cap_effective_bytes(), floor * 2);
+        retune_after_scavenge(0, 0, 0);
+        assert_eq!(scavenge_nursery_cap_effective_bytes(), floor * 2);
+        retune_after_scavenge(0, 0, 0);
+        assert_eq!(scavenge_nursery_cap_effective_bytes(), floor);
+        reset_for_test();
+    }
+
+    /// EK (2026-10-23): one heavy cycle — a startup cohort — moves nothing
+    /// even while it holds the phase mean past the edge: the readings after
+    /// it alternate around 4% and are never above it twice in a row.
+    #[test]
+    fn a_startup_cohort_alone_does_not_leave_the_floor() {
+        reset_for_test();
+        let floor = nursery_cap_floor_bytes();
+        retune_after_scavenge(floor / 4, 0, 0);
+        for _ in 0..8 {
+            retune_after_scavenge(floor * 3 / 100, 0, 0);
+            retune_after_scavenge(floor * 5 / 100, 0, 0);
+            assert_eq!(scavenge_nursery_cap_effective_bytes(), floor);
+        }
+        reset_for_test();
+    }
+
+    /// EK (2026-10-23): a move lands where the current reading and the mean
+    /// both put it. A startup cohort keeps the mean high; the landing may not
+    /// follow it past what the reading justifies (AWFY Json/CD went from the
+    /// floor straight to 16 MB that way).
+    #[test]
+    fn a_startup_cohort_does_not_carry_the_landing() {
+        reset_for_test();
+        let floor = nursery_cap_floor_bytes();
+        // 40% then 6% of the floor: the mean (23%) is above 4% of 16 MB, the
+        // reading (6%) only above 4% of the floor.
+        retune_after_scavenge(floor * 40 / 100, 0, 0);
+        retune_after_scavenge(floor * 6 / 100, 0, 0);
+        assert_eq!(scavenge_nursery_cap_effective_bytes(), floor * 2);
         reset_for_test();
     }
 
