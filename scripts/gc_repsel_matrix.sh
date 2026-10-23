@@ -770,7 +770,19 @@ while [ "$ai" -lt "$NARMS" ]; do
             PASS)  n_pass=$((n_pass+1)) ;;
             UNVER) n_unver=$((n_unver+1)) ;;
             XFAIL) n_xfail=$((n_xfail+1)); echo "  ${YELLOW}XFAIL${NC} $b" ;;
-            FAIL)  n_fail=$((n_fail+1)); echo "  ${RED}FAIL${NC} $b ($ev)" ;;
+            FAIL)
+                n_fail=$((n_fail+1))
+                echo "  ${RED}FAIL${NC} $b ($ev)"
+                # cleanup removes WORK on every exit. Preserve the native
+                # abort/assertion in CI logs before discarding its stderr.
+                if [ -s "$WORK/out/$b.$id.err" ]; then
+                    echo "  stderr tail ($b / $id):"
+                    tail -n 40 "$WORK/out/$b.$id.err"
+                elif [ -s "$WORK/bin/$slug/$b.log" ]; then
+                    echo "  compile log tail ($b / $id):"
+                    tail -n 40 "$WORK/bin/$slug/$b.log"
+                fi
+                ;;
         esac
         progress "cell-result test=$b env=$slug arm=$id result=$result $ev"
         ti=$((ti+1))
