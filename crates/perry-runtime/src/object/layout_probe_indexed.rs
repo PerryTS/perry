@@ -31,14 +31,15 @@ pub(super) unsafe fn get<const ABSENT: bool, const SITE: bool, const LAZY_HASH: 
     if pos & TEXT_ENTRY != 0 {
         return unloaded::underived::<ABSENT, LAZY_HASH>(dir, obj, key_bits, hash);
     }
-    let i = pos & POS_BITS;
-    let word = if pos & ALIAS_ENTRY != 0 {
-        KeyIndex::word(table, i)
+    // Select the key storage before retaining its slot index. This keeps
+    // the list header arithmetic from extending the index's live range.
+    let words = if pos & ALIAS_ENTRY != 0 {
+        (*table).words.as_ptr()
     } else {
-        let list = crate::array::array_elements_ptr((*r).keys as usize as *const _) as *const u64;
-        *list.add(i as usize)
+        crate::array::array_elements_ptr((*r).keys as usize as *const _) as *const u64
     };
-    if word != key_bits {
+    let i = pos & POS_BITS;
+    if *words.add(i as usize) != key_bits {
         return continued::<ABSENT, SITE, LAZY_HASH>(dir, obj, key_bits, hash, memo);
     }
     // This existing shape fact proves a public accessor. The leaf must
