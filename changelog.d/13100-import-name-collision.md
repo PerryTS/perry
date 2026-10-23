@@ -1,0 +1,1 @@
+An explicitly imported class no longer loses its identity to a same-named class that is only reachable transitively through another import, which made the instance carry the wrong class id — an empty method table, so every method call threw "is not a function" — depending on the order of the import statements.
