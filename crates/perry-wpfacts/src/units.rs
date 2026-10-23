@@ -38,6 +38,12 @@ pub(crate) struct ClassContract {
     /// defining unit checked their results (an instance of a contract
     /// class is given out, `Model::give_out`).
     pub static_fns: Vec<(String, FnContract)>,
+    /// A closed class (design §18.13, `decl_units::closed_bindings`): its
+    /// defining module's path and binding name, and its constructor's
+    /// parameter count. Every unit constructing it (by name or through an
+    /// instance's `constructor`) publishes what it passes under that key
+    /// (`ProgramFacts::ctor_args_out`).
+    pub closed: Option<(String, String, u32)>,
 }
 
 /// A published function as its callers see it (design §11.2): per
@@ -636,6 +642,10 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
                     .or_default()
                     .join(ac);
             }
+            // A closed class's constructions, from any module (§18.13).
+            for (k, ac) in &u.ctor_args_out {
+                args.entry(k.clone()).or_default().join(ac);
+            }
         }
         let mut seeds: Vec<usize> = Vec::new();
         for (si, s) in solves.iter().enumerate() {
@@ -854,6 +864,9 @@ fn unit_io(
         }
         for (n, c) in &u.args_out {
             o.push((format!("args:{n}"), hash(&format!("{c:?}"))));
+        }
+        for ((p, n), c) in &u.ctor_args_out {
+            o.push((format!("args:{p}:{n}"), hash(&format!("{c:?}"))));
         }
         for (d, k) in &u.stores_out {
             o.push((format!("store:{d}.{k}"), 0));

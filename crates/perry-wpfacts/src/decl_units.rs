@@ -560,14 +560,31 @@ pub(crate) fn closed_bindings(module: &Module) -> FxHashMap<String, u32> {
         checks: u32,
     }
     let mut uses: FxHashMap<(bool, u32), Use> = FxHashMap::default();
+    // Per class name: the expressions naming it, and the `new`s of it.
+    let mut class_uses: FxHashMap<String, (u32, u32)> = FxHashMap::default();
     let mut with = false;
     {
+        let mut named = |e: &Expr| {
+            let mut r = Refs::default();
+            class_name_refs(e, &mut r);
+            if let Expr::ClassRef(n) = e {
+                r.names.push(n.clone());
+            }
+            for n in r.names.into_iter().chain(r.join_names) {
+                class_uses.entry(n).or_default().0 += 1;
+            }
+            if let Expr::New { class_name, .. } = e {
+                class_uses.entry(class_name.clone()).or_default().1 += 1;
+            }
+        };
         let key = |e: &Expr| match e {
             Expr::LocalGet(id) => Some((false, *id)),
             Expr::FuncRef(id) => Some((true, *id)),
             _ => None,
         };
-        let f = &mut |e: &Expr| match e {
+        let f = &mut |e: &Expr| {
+            named(e);
+            match e {
             Expr::Call { callee, args, .. } => {
                 if let Some(id) = perry_hir::tdz_check::checked_binding(e) {
                     uses.entry((false, id)).or_default().checks += 1;
@@ -596,6 +613,7 @@ pub(crate) fn closed_bindings(module: &Module) -> FxHashMap<String, u32> {
             }
             Expr::WithGet { .. } | Expr::WithSet { .. } => with = true,
             _ => {}
+            }
         };
         for func in &module.functions {
             for_each_function_expr(func, f);
@@ -610,9 +628,8 @@ pub(crate) fn closed_bindings(module: &Module) -> FxHashMap<String, u32> {
         }
         perry_hir::tdz_check::for_each_stmts_expr(&module.init, f);
     }
-    let out: FxHashMap<String, u32> = FxHashMap::default();
     if with {
-        return out;
+        return FxHashMap::default();
     }
     let mut names: FxHashMap<&str, u32> = FxHashMap::default();
     // Per local: its module-scope `let`s besides the function literal one;
@@ -733,7 +750,44 @@ pub(crate) fn closed_bindings(module: &Module) -> FxHashMap<String, u32> {
             cand.remove(&k);
         }
     }
-    cand.into_values().collect()
+    let mut out: FxHashMap<String, u32> = cand.into_values().collect();
+    // Closed classes (design §18.13): a class with a constructor, no export
+    // of the module, whose name no other module-scope binding has, with no
+    // static member, which no class extends, and whose every naming
+    // expression is a direct `new` of it (no value use: a spread `new` takes
+    // the class as a value). Every construction is a `new` in the module or
+    // through the `constructor` of an instance, both modeled where they
+    // run: its constructor's parameters hold what the constructing units
+    // pass (`units::ClassContract::closed`), keyed by the class name with
+    // the constructor's HIR id.
+    for c in &module.classes {
+        let Some(ctor) = &c.constructor else {
+            continue;
+        };
+        if c.is_literal_shape()
+            || names.get(c.name.as_str()) != Some(&1)
+            || exported(&c.name)
+            || !c.aliases.is_empty()
+            || !c.static_fields.is_empty()
+            || !c.static_methods.is_empty()
+            || !c.static_accessor_names.is_empty()
+            || ctor.params.iter().any(|p| p.is_rest)
+            || module
+                .classes
+                .iter()
+                .any(|d| d.extends_name.as_deref() == Some(c.name.as_str()))
+            || out.contains_key(&c.name)
+        {
+            continue;
+        }
+        if class_uses
+            .get(&c.name)
+            .is_some_and(|&(refs, news)| refs == news)
+        {
+            out.insert(c.name.clone(), ctor.id);
+        }
+    }
+    out
 }
 
 /// The declaration units of `module`, in dependency order (a unit before
@@ -1031,6 +1085,11 @@ pub(crate) fn views(path: &str, module: &Module) -> Vec<(UnitView, Vec<usize>)> 
                     } => Some((name.as_str(), *func_id)),
                     _ => None,
                 },
+                // A closed class: by its constructor (design §18.13).
+                Item::Class(k) => {
+                    let c = &module.classes[k];
+                    c.constructor.as_ref().map(|f| (c.name.as_str(), f.id))
+                }
                 _ => None,
             };
             if let Some((nm, id)) = own.filter(|(nm, id)| closed.get(*nm) == Some(id)) {

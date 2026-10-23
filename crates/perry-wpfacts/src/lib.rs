@@ -168,6 +168,9 @@ pub struct ProgramFacts {
     pub(crate) values_out: Vec<((String, String), units::ValueContract)>,
     /// What its calls pass to other units' closed functions (decision 13).
     pub(crate) args_out: Vec<(String, units::ArgContract)>,
+    /// What it passes to closed classes' constructors (design §18.13), by
+    /// the class's module path and name (`ClassContract::closed`).
+    pub(crate) ctor_args_out: Vec<((String, String), units::ArgContract)>,
     /// Its store effects into other units' literal layouts and class
     /// instances (decision 17).
     pub(crate) stores_out: Vec<(String, String)>,
@@ -345,6 +348,7 @@ fn nested_layouts(
                     statics: Vec::new(),
                     statics_open: false,
                     static_fns: Vec::new(),
+                    closed: None,
                 });
                 let nl = nested_layouts(g, templates, itm, layouts_out, open_tm);
                 if let Some(c) = layouts_out.iter_mut().find(|c| c.display == display) {
@@ -535,6 +539,7 @@ fn fn_contract_of(
                             statics: Vec::new(),
                             statics_open: false,
                             static_fns: Vec::new(),
+                            closed: None,
                         });
                         let nl = nested_layouts(g, templates, tm, layouts_out, open_tm);
                         if let Some(c) = layouts_out.iter_mut().find(|c| c.display == display) {
@@ -600,6 +605,27 @@ fn reads_this(g: &gen::Gen, f: model::FnIdx) -> bool {
 /// included: its callers pass anything, unless the caller is closed too). `top` when the import holds
 /// anything but stand-in functions (⊤, a broken contract): its calls may
 /// pass anything to the function.
+/// A published class's closed key (design §18.13): its module path, name
+/// and constructor parameter count, when the class is closed in its unit
+/// (`UnitView::closed` holds its constructor) and the constructor reads no
+/// `arguments` and has no rest parameter (a construction's extra arguments
+/// reach nothing).
+fn closed_of(
+    g: &gen::Gen,
+    path: &str,
+    mi: u32,
+    tm: model::TmplId,
+) -> Option<(String, String, u32)> {
+    let f = g.m.tmpls[tm as usize].ctor?;
+    let fi = &g.m.funcs[f as usize];
+    let model::TmplKind::Class { name, .. } = &g.m.tmpls[tm as usize].kind else {
+        return None;
+    };
+    let closed = g.view?.closed.get(name) == Some(&fi.func_id);
+    (mi == 0 && closed && !fi.has_arguments && fi.rest.is_none())
+        .then(|| (path.to_string(), name.clone(), fi.params.len() as u32))
+}
+
 fn arg_contract_of(
     g: &gen::Gen,
     templates: &[TemplateFacts],
@@ -609,13 +635,19 @@ fn arg_contract_of(
     open_tm: &pts::FxHashSet<model::TmplId>,
 ) -> units::ArgContract {
     let mut ac = units::ArgContract::default();
-    if toks.is_empty() || !toks.iter().all(|t| g.stand_in_fc.contains_key(t)) {
+    if toks.is_empty()
+        || !toks
+            .iter()
+            .all(|t| g.stand_in_fc.contains_key(t) || g.closed_ctors.iter().any(|c| c.2 == *t))
+    {
         ac.top = true;
         return ac;
     }
     for t in toks {
         let fi = &g.m.funcs[g.m.tok_fn(t) as usize];
-        if fi.has_arguments {
+        // A closed class's stand-in constructor reads its arguments only to
+        // let them escape as before (`Gen::stand_in_class`).
+        if fi.has_arguments && !g.closed_ctors.iter().any(|c| c.2 == t) {
             ac.top = true;
             continue;
         }
@@ -712,6 +744,7 @@ fn arg_contract_of(
                             statics: Vec::new(),
                             statics_open: false,
                             static_fns: Vec::new(),
+                            closed: None,
                         }),
                         _ => None,
                     }
@@ -1084,6 +1117,7 @@ pub(crate) fn compute_in<'a>(
                         statics,
                         statics_open,
                         static_fns,
+                        closed: closed_of(&g, sorted[0].0, mi, tm),
                     },
                 ))
             })
@@ -1200,6 +1234,7 @@ pub(crate) fn compute_in<'a>(
                             statics: Vec::new(),
                             statics_open: false,
                             static_fns: Vec::new(),
+                            closed: None,
                         })
                     });
                 let Some(mut cc) = cc else {
@@ -1250,6 +1285,15 @@ pub(crate) fn compute_in<'a>(
                     .get(nm)
                     .map(|&n| g.m.nodes[n as usize].pts.to_sorted())
                     .unwrap_or_default();
+                // A closed class through its contract: `ctor_args_out`.
+                if !toks.is_empty()
+                    && toks.iter().all(|&t| {
+                        matches!(g.m.toks[t as usize], model::TokKind::ClassObj(tm)
+                            if g.closed_ctors.iter().any(|c| c.1 == tm))
+                    })
+                {
+                    continue;
+                }
                 out.push((
                     nm.clone(),
                     arg_contract_of(
@@ -1287,6 +1331,28 @@ pub(crate) fn compute_in<'a>(
         }
         _ => Vec::new(),
     };
+    // What its constructions of closed classes pass (design §18.13): the
+    // stand-in constructor's parameters. A stand-in class object that
+    // escaped here is this unit's report (`Gen::reports`): the class is
+    // broken, its constructor's parameters ⊤.
+    let ctor_args_out: Vec<((String, String), units::ArgContract)> = match g.view {
+        Some(_) if cfg.unit && !g.m.aborted => g
+            .closed_ctors
+            .iter()
+            .map(|(key, _, ft)| {
+                let ac = arg_contract_of(
+                    &g,
+                    &templates,
+                    vec![*ft],
+                    &contracts_out,
+                    &mut layouts_out,
+                    &open_tm,
+                );
+                (key.clone(), ac)
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
     // A contract class a contract result or value names is published
     // whole (methods, statics): its readers call them on what they get.
     for l in layouts_out.iter_mut() {
@@ -1318,6 +1384,7 @@ pub(crate) fn compute_in<'a>(
         layouts_out,
         values_out,
         args_out,
+        ctor_args_out,
         reports,
         stores_out,
         module_digests: Vec::new(),
