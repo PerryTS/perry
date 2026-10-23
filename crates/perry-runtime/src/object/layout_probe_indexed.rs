@@ -1,5 +1,5 @@
-//! Indexed own-key lookup and its continuations share one tail entrance.
-//! The list-only front does not keep the table loop's registers live.
+//! The existing indexed lookup starts with one bucket and tail-continues
+//! collisions. A hit need not retain the collision loop's mask and index.
 use super::*;
 
 #[inline(never)]
@@ -12,10 +12,67 @@ pub(super) unsafe fn get<const ABSENT: bool, const SITE: bool, const LAZY_HASH: 
     memo: *const site_memo::ReadSiteMemo,
 ) -> f64 {
     let table = ((*r).probe & !PROBE_FLAGS) as *const KeyIndex;
+    let b = site_key_hash::<LAZY_HASH>(key_bits, hash) as usize & (*table).mask as usize;
+    let pos = *KeyIndex::buckets(table).add(b);
+    if pos == u32::MAX {
+        return if SITE {
+            site_memo::miss_absent::<ABSENT, LAZY_HASH>(dir, obj, key_bits, hash, memo)
+        } else {
+            absent_from::<ABSENT>(
+                dir,
+                obj,
+                key_bits,
+                site_key_hash::<LAZY_HASH>(key_bits, hash),
+            )
+        };
+    }
+    // The complete text path performs the hash/content comparison and
+    // continues collisions. No text hash need stay live on an atom hit.
+    if pos & TEXT_ENTRY != 0 {
+        return unloaded::underived::<ABSENT, LAZY_HASH>(dir, obj, key_bits, hash);
+    }
+    let i = pos & POS_BITS;
+    let word = if pos & ALIAS_ENTRY != 0 {
+        KeyIndex::word(table, i)
+    } else {
+        let list = crate::array::array_elements_ptr((*r).keys as usize as *const _) as *const u64;
+        *list.add(i as usize)
+    };
+    if word != key_bits {
+        return continued::<ABSENT, SITE, LAZY_HASH>(
+            dir,
+            obj,
+            (b + 1) as u32,
+            key_bits,
+            hash,
+            memo,
+        );
+    }
+    // This existing shape fact proves a public accessor. The leaf must
+    // decline it; the collecting entrance reloads the live getter pair.
+    let load = entry_load(table, pos, i);
+    if load == NO_LOAD && pos & ACCESSOR_ENTRY != 0 {
+        return hole();
+    }
+    unloaded::finish::<ABSENT, SITE, LAZY_HASH>(dir, obj, key_bits, hash, i, load, memo)
+}
+
+#[inline(never)]
+unsafe fn continued<const ABSENT: bool, const SITE: bool, const LAZY_HASH: bool>(
+    dir: *const u8,
+    obj: *const ObjectHeader,
+    start: u32,
+    key_bits: u64,
+    hash: u64,
+    memo: *const site_memo::ReadSiteMemo,
+) -> f64 {
+    // No collection or user code occurs between the first bucket and here.
+    let r = record_of(dir, (*obj).parent_class_id);
+    let table = ((*r).probe & !PROBE_FLAGS) as *const KeyIndex;
     let list = crate::array::array_elements_ptr((*r).keys as usize as *const _) as *const u64;
     let mask = (*table).mask as usize;
     let slots = KeyIndex::buckets(table);
-    let mut b = site_key_hash::<LAZY_HASH>(key_bits, hash) as usize & mask;
+    let mut b = start as usize & mask;
     let (pos, load) = loop {
         let pos = *slots.add(b);
         if pos == u32::MAX {
@@ -44,7 +101,11 @@ pub(super) unsafe fn get<const ABSENT: bool, const SITE: bool, const LAZY_HASH: 
             *list.add(i as usize)
         };
         if w == key_bits {
-            break (i, entry_load(table, pos, i));
+            let load = entry_load(table, pos, i);
+            if load == NO_LOAD && pos & ACCESSOR_ENTRY != 0 {
+                return hole();
+            }
+            break (i, load);
         }
         b = (b + 1) & mask;
     };

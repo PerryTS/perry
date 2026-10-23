@@ -5,3 +5,5 @@ Site storage uses shared atomic integer words rather than TLS. Process-global, n
 Named leaves retain stateless data handling with four arguments: the memo replaces the hash argument, and hash-using paths read the atom's existing creation hash. A short own-data hit loads neither hash nor memo. Computed reads share receiver and own-property handling with the existing slow path; proven Symbol keys allocate no short-string memo.
 
 Unproved own-slot loads use a shared tail entrance. Ordinary inline loads and memo probe refusals no longer save registers for that uncommon load call.
+
+Indexed reads tail-continue hash collisions separately from the first bucket, and existing accessor entries decline directly to the collecting entrance. Memo mismatches continue statelessly before saving registers for a matched proof.

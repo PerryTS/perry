@@ -527,3 +527,46 @@ fn four_argument_leaf_uses_the_atoms_hash_for_indexed_keys() {
         );
     }
 }
+
+#[test]
+fn indexed_collisions_preserve_each_distinct_slots_value() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _no_move = crate::gc::GcSuppressScope::new();
+    unsafe {
+        let obj = crate::object::js_object_alloc(0, 32);
+        let mut keys = Vec::new();
+        for n in 0..100000 {
+            let name = format!("collision{n}");
+            let hash = crate::object::key_bytes_hash(name.as_ptr(), name.len());
+            if hash & 127 == 0 {
+                let key = atom(name.as_bytes());
+                crate::object::js_object_set_field_by_name(obj, key, keys.len() as f64);
+                keys.push(key);
+                if keys.len() == 16 {
+                    break;
+                }
+            }
+        }
+        assert_eq!(keys.len(), 16);
+        let dir = crate::object::shapes::ordinary_dir_addr();
+        let r = record_of(dir, (*obj).parent_class_id);
+        let table = (probe_word(r) & !PROBE_FLAGS) as *const KeyIndex;
+        assert!(!table.is_null());
+        assert!((*table).mask <= 127, "all fixture keys must collide");
+        let biased = (obj as usize - perry_abi::RECEIVER_HANDLE_FLOOR) as i64;
+        let memo = ReadSiteMemo::EMPTY;
+        for (slot, key) in keys.into_iter().enumerate() {
+            let bits = STRING_TAG | key as u64;
+            assert_eq!(perry_probe_get_memo(dir, biased, bits, &memo), slot as f64);
+            assert_eq!(
+                perry_probe_get(dir, biased, bits, crate::string::property_atom_hash(key)),
+                slot as f64
+            );
+        }
+        assert_eq!(
+            memo.snapshot(),
+            [0; PAIRS],
+            "own hits do not write the memo"
+        );
+    }
+}

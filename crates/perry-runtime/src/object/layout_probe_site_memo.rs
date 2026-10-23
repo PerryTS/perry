@@ -288,9 +288,6 @@ unsafe fn leaf_answer(
     key_bits: u64,
     memo: *const ReadSiteMemo,
 ) -> Option<f64> {
-    if ((*memo).pairs[0].load(Relaxed) >> 32) as u32 != (*obj).parent_class_id {
-        return None;
-    }
     Some(match lookup(dir, obj, &*memo)? {
         Answer::Data(bits) => verify::answer(obj as usize, key_bits, f64::from_bits(bits)),
         // The collecting entrance reloads and calls the live getter.
@@ -299,8 +296,24 @@ unsafe fn leaf_answer(
 }
 
 /// The own list proved the key absent.
-#[inline(never)]
+#[inline(always)]
 pub(super) unsafe fn miss_absent<const ABSENT_OK: bool, const LAZY_HASH: bool>(
+    dir: *const u8,
+    obj: *const ObjectHeader,
+    key_bits: u64,
+    hash: u64,
+    memo: *const ReadSiteMemo,
+) -> f64 {
+    let pair = (*memo).pairs[0].load(Relaxed);
+    if (pair >> 32) as u32 == (*obj).parent_class_id {
+        return miss_absent_matched::<ABSENT_OK, LAZY_HASH>(dir, obj, key_bits, hash, memo);
+    }
+    let hash = site_key_hash::<LAZY_HASH>(key_bits, hash);
+    absent_from::<ABSENT_OK>(dir, obj, key_bits, hash)
+}
+
+#[inline(never)]
+unsafe fn miss_absent_matched<const ABSENT_OK: bool, const LAZY_HASH: bool>(
     dir: *const u8,
     obj: *const ObjectHeader,
     key_bits: u64,
@@ -315,8 +328,25 @@ pub(super) unsafe fn miss_absent<const ABSENT_OK: bool, const LAZY_HASH: bool>(
 }
 
 /// The receiver's record is not derived, or is checked (accessor/private).
-#[inline(never)]
+#[inline(always)]
 pub(super) unsafe fn miss_underived<const ABSENT_OK: bool, const LAZY_HASH: bool>(
+    dir: *const u8,
+    obj: *const ObjectHeader,
+    key_bits: u64,
+    hash: u64,
+    memo: *const ReadSiteMemo,
+) -> f64 {
+    let pair = (*memo).pairs[0].load(Relaxed);
+    if (pair >> 32) as u32 == (*obj).parent_class_id {
+        return miss_underived_matched::<ABSENT_OK, LAZY_HASH>(dir, obj, key_bits, hash, memo);
+    }
+    let hash = site_key_hash::<LAZY_HASH>(key_bits, hash);
+    let word = (*obj).parent_class_id;
+    probe_get_underived::<ABSENT_OK>(dir, obj, word, record_of(dir, word), key_bits, hash)
+}
+
+#[inline(never)]
+unsafe fn miss_underived_matched<const ABSENT_OK: bool, const LAZY_HASH: bool>(
     dir: *const u8,
     obj: *const ObjectHeader,
     key_bits: u64,
@@ -332,8 +362,32 @@ pub(super) unsafe fn miss_underived<const ABSENT_OK: bool, const LAZY_HASH: bool
 }
 
 /// The own slot at position `pos` read a hole.
-#[inline(never)]
+#[inline(always)]
 pub(super) unsafe fn miss_hole<const ABSENT_OK: bool, const LAZY_HASH: bool>(
+    dir: *const u8,
+    obj: *const ObjectHeader,
+    pos: u32,
+    key_bits: u64,
+    hash: u64,
+    memo: *const ReadSiteMemo,
+) -> f64 {
+    let pair = (*memo).pairs[0].load(Relaxed);
+    if (pair >> 32) as u32 == (*obj).parent_class_id {
+        return miss_hole_matched::<ABSENT_OK, LAZY_HASH>(dir, obj, pos, key_bits, hash, memo);
+    }
+    let hash = site_key_hash::<LAZY_HASH>(key_bits, hash);
+    own_hole::<ABSENT_OK>(
+        dir,
+        obj,
+        record_of(dir, (*obj).parent_class_id),
+        pos,
+        key_bits,
+        hash,
+    )
+}
+
+#[inline(never)]
+unsafe fn miss_hole_matched<const ABSENT_OK: bool, const LAZY_HASH: bool>(
     dir: *const u8,
     obj: *const ObjectHeader,
     pos: u32,
