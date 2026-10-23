@@ -128,6 +128,10 @@ pub fn namespace_member_func_key(namespace: &str, member: &str) -> String {
 pub struct ClassAccessorNames {
     getters: std::collections::HashSet<String>,
     setters: std::collections::HashSet<String>,
+    /// Getter names an object literal or a literal-keyed
+    /// `Object.defineProperty` declares. They never widen [`Self::may_get`];
+    /// they only give a read of that name its shape/slot memo.
+    literal_getters: std::collections::HashSet<String>,
 }
 
 mod computed_names;
@@ -157,6 +161,14 @@ impl ClassAccessorNames {
         self.getters.contains(name)
     }
 
+    /// May any getter of the program be declared under `name` (a class, an
+    /// object literal or a literal-keyed `Object.defineProperty`)? Only such
+    /// a fixed-name read owns a shape/slot memo; every other read keeps the
+    /// stateless probe and complete read.
+    pub fn may_read_through_getter(&self, name: &str) -> bool {
+        self.getters.contains(name) || self.literal_getters.contains(name)
+    }
+
     /// May a compiled class declare a setter named `name`?
     pub fn may_set(&self, name: &str) -> bool {
         self.setters.contains(name)
@@ -166,9 +178,16 @@ impl ClassAccessorNames {
     pub fn cache_key(&self) -> String {
         let mut getters: Vec<&str> = self.getters.iter().map(String::as_str).collect();
         let mut setters: Vec<&str> = self.setters.iter().map(String::as_str).collect();
+        let mut literal: Vec<&str> = self.literal_getters.iter().map(String::as_str).collect();
         getters.sort_unstable();
         setters.sort_unstable();
-        format!("get:{}|set:{}", getters.join(","), setters.join(","))
+        literal.sort_unstable();
+        format!(
+            "get:{}|set:{}|lit:{}",
+            getters.join(","),
+            setters.join(","),
+            literal.join(",")
+        )
     }
 }
 
@@ -970,6 +989,8 @@ pub(crate) struct CrossModuleCtx {
         std::sync::Arc<std::collections::HashMap<String, Vec<ShortSpreadMethodCandidate>>>,
     pub object_literal_method_candidates:
         std::sync::Arc<std::collections::HashMap<String, Vec<ObjectLiteralMethodCandidate>>>,
+    /// The whole program class accessor names, carried from the compile options.
+    pub program_class_accessor_names: Option<std::sync::Arc<ClassAccessorNames>>,
     /// FuncIds of locally-defined async functions in this module. Populated
     /// from `hir.functions.is_async`. Used by `is_promise_expr` to refine
     /// `let p = asyncFn();` to `Promise(_)` so subsequent `p.then(cb)`

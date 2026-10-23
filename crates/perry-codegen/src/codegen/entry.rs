@@ -734,6 +734,7 @@ pub(super) fn compile_module_entry(
         let mut ctx = FnCtx {
             program_has_worker: cross_module.program_has_worker,
             program_has_thread_agents: cross_module.program_has_thread_agents,
+            program_class_accessor_names: cross_module.program_class_accessor_names.clone(),
             func: main,
             module_slug: crate::expr::native_region_slug(strings.module_prefix()),
             source_function: "module_init".to_string(),

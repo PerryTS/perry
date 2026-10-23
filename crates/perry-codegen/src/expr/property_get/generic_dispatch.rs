@@ -1,6 +1,10 @@
 //! Ordinary property-get dispatch: static family slots, coloured layout
 //! slots, then the receiver layout's probe and complete property semantics.
-//! These read paths allocate no learned per-site state.
+//! A fixed-name read of a name some getter of the program is declared under
+//! owns bounded shape/slot answers: its leaf checks them only after an own
+//! miss, and its collecting exit derives them. Every other read keeps the
+//! stateless probe. Static family and colour slots retain their direct
+//! layout checks.
 
 use super::*;
 
@@ -626,19 +630,38 @@ fn lower_property_site_tail(
         let key_box = ctx.block().load(DOUBLE, &key_handle_global);
         let key_bits = ctx.block().bitcast_double_to_i64(&key_box);
         let hash = (crate::layout_desc::atom_hash(property) as i64).to_string();
+        let memo = (!crate::target_layout::target_is_ilp32(ctx.target_triple)
+            && !property.starts_with('#')
+            && property != "__proto__"
+            && crate::expr::ic_fast_split::read_may_reach_getter(ctx, property))
+        .then(|| crate::expr::ic_fast_split::emit_read_site_memo(ctx, 5));
+        let mut fast_args = vec![
+            (PTR, dir.as_str()),
+            (I64, obj_bits.as_str()),
+            (I64, key_bits.as_str()),
+            (I64, hash.as_str()),
+        ];
+        let mut slow_args = entry_args.to_vec();
+        if let Some(memo) = memo.as_ref() {
+            fast_args.push((PTR, memo.as_str()));
+            slow_args.push((PTR, memo.as_str()));
+        }
         crate::expr::note_site("probe-outlined");
         return Ok(crate::expr::ic_fast_split::emit_hole_declining_split(
             ctx,
             "pget.outline",
-            "perry_probe_get_value",
-            &[
-                (PTR, &dir),
-                (I64, &obj_bits),
-                (I64, &key_bits),
-                (I64, &hash),
-            ],
-            "js_object_get_field_value",
-            &entry_args,
+            if memo.is_some() {
+                "perry_probe_get_value_site"
+            } else {
+                "perry_probe_get_value"
+            },
+            &fast_args,
+            if memo.is_some() {
+                "js_object_get_field_value_site"
+            } else {
+                "js_object_get_field_value"
+            },
+            &slow_args,
         ));
     }
 
@@ -646,7 +669,8 @@ fn lower_property_site_tail(
     //
     // receiver test -> [`.size` on a native Map/Set] -> [`.length` on a plain
     // Array or a heap string] -> the unknown-receiver probe -> on a decline,
-    // the complete read entry. Nothing at the site is learned or remembered.
+    // the complete read entry. The per-site shape/slot proof is shared by
+    // both halves; fixed layout arms above remain direct.
     //
     // `.length` admits both pointer-ish tags (POINTER and STRING) because it
     // has a heap-string arm; every other key takes the fused POINTER range
@@ -843,6 +867,23 @@ fn lower_property_site_tail(
     // only answers the probe finds, never absence.
     let index_name = !property.is_empty() && property.bytes().all(|b| b.is_ascii_digit());
     let private_name = property.starts_with('#');
+    let memo = (!crate::target_layout::target_is_ilp32(ctx.target_triple)
+        && !global_binding
+        && !index_name
+        && !private_name
+        && !inline_string_length
+        && property != "__proto__"
+        && crate::expr::ic_fast_split::read_may_reach_getter(ctx, property))
+    .then(|| crate::expr::ic_fast_split::emit_read_site_memo(ctx, 5));
+    let mut probe_args = vec![
+        (PTR, dir.as_str()),
+        (I64, probe_recv.as_str()),
+        (I64, key_bits.as_str()),
+        (I64, hash.as_str()),
+    ];
+    if let Some(memo) = memo.as_ref() {
+        probe_args.push((PTR, memo.as_str()));
+    }
     crate::expr::note_site("probe");
     let answered = ctx.block().call(
         DOUBLE,
@@ -851,15 +892,12 @@ fn lower_property_site_tail(
             "perry_probe_get_binding"
         } else if inline_string_length {
             "perry_probe_get_length"
+        } else if memo.is_some() {
+            "perry_probe_get_site"
         } else {
             "perry_probe_get"
         },
-        &[
-            (PTR, &dir),
-            (I64, &probe_recv),
-            (I64, &key_bits),
-            (I64, &hash),
-        ],
+        &probe_args,
     );
     let answered_bits = ctx.block().bitcast_double_to_i64(&answered);
     let served = ctx
@@ -877,25 +915,40 @@ fn lower_property_site_tail(
     let val_miss = if shared_refusal {
         // Preserve the original boxed receiver: the shared entry classifies
         // primitives and native handles as well as declined object pointers.
+        // A site that owns a memo takes the same entry's memo-aware form.
+        let mut args = vec![
+            (I64, obj_bits.as_str()),
+            (I64, miss_key_handle.as_str()),
+            (I64, feedback_site_id.as_str()),
+        ];
+        if let Some(memo) = memo.as_ref() {
+            args.push((PTR, memo.as_str()));
+        }
         ctx.block().call(
             DOUBLE,
-            "js_object_get_field_value",
-            &[
-                (I64, &obj_bits),
-                (I64, &miss_key_handle),
-                (I64, &feedback_site_id),
-            ],
+            if memo.is_some() {
+                "js_object_get_field_value_site"
+            } else {
+                "js_object_get_field_value"
+            },
+            &args,
         )
     } else {
         let miss_handle = recv_handle(ctx, fused_recv.as_ref(), &entry_handle);
+        let mut args = vec![(I64, miss_handle.as_str()), (I64, miss_key_handle.as_str())];
+        if let Some(memo) = memo.as_ref() {
+            args.push((PTR, memo.as_str()));
+        }
         ctx.block().call(
             DOUBLE,
             if global_binding {
                 "js_global_get_field_slow"
+            } else if memo.is_some() {
+                "js_object_get_field_site_slow"
             } else {
                 "js_object_get_field_slow"
             },
-            &[(I64, &miss_handle), (I64, &miss_key_handle)],
+            &args,
         )
     };
     let miss_end_label = ctx.block().label.clone();

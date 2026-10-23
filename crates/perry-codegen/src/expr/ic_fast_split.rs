@@ -144,3 +144,116 @@ pub(crate) fn emit_checked_callee_unbox(ctx: &mut FnCtx<'_>, callee: &str) -> St
         ],
     )
 }
+
+/// Does a fixed-name read of `property` own a shape/slot memo? Only a name
+/// some getter of the program is declared under can reach the collecting
+/// exit the memo serves; any other read keeps the stateless probe and owns
+/// no storage. A compile without the program's accessor names gives every
+/// read its memo.
+pub(crate) fn read_may_reach_getter(ctx: &FnCtx<'_>, property: &str) -> bool {
+    ctx.program_class_accessor_names
+        .as_ref()
+        .map_or(true, |names| names.may_read_through_getter(property))
+}
+
+/// Agent-local storage for a site's shape/slot answers. No heap pointer or
+/// validity state is stored, so these zero-filled integer words need no root.
+pub(crate) fn emit_read_site_memo(ctx: &mut FnCtx<'_>, words: usize) -> String {
+    let site = ctx.ic_site_counter;
+    ctx.ic_site_counter += 1;
+    let name = format!(
+        "@{}_read_shape_slots",
+        crate::expr::inline_cache_global_name(ctx, site)
+    );
+    let tls = if ctx.program_has_worker || ctx.program_has_thread_agents {
+        "thread_local "
+    } else {
+        ""
+    };
+    ctx.typed_parse_rodata.push(format!(
+        "{name} = private {tls}global [{words} x i64] zeroinitializer, align 8"
+    ));
+    name
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn only_a_declared_getter_name_owns_read_site_storage() {
+        use perry_hir::{Expr, Module, Stmt};
+        for (getter, memo) in [("width", true), ("height", false)] {
+            let mut module = Module::new("read_site_names.ts");
+            module.init.push(Stmt::Expr(Expr::PropertyGet {
+                object: Box::new(Expr::GlobalGet(100)),
+                property: "width".into(),
+                byte_offset: 0,
+            }));
+            let names = crate::codegen::ClassAccessorNames::from_names(
+                [getter.to_string()],
+                std::iter::empty::<String>(),
+            );
+            let ir = String::from_utf8(
+                crate::compile_module(
+                    &module,
+                    crate::CompileOptions {
+                        emit_ir_only: true,
+                        program_class_accessor_names: Some(std::sync::Arc::new(names)),
+                        ..Default::default()
+                    },
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(ir.contains("_read_shape_slots = private"), memo, "{ir}");
+            assert_eq!(
+                ir.contains("call double @perry_probe_get_site("),
+                memo,
+                "{ir}"
+            );
+            // Declarations name every entrance; only the calls differ.
+            let calls = |callee: &str| {
+                ir.lines()
+                    .any(|l| !l.starts_with("declare") && l.contains(&format!("@{callee}(")))
+            };
+            assert_eq!(calls("js_object_get_field_value_site"), memo, "{ir}");
+            assert_eq!(calls("perry_probe_get"), !memo, "{ir}");
+            assert_eq!(calls("js_object_get_field_value"), !memo, "{ir}");
+        }
+    }
+
+    #[test]
+    fn read_site_storage_respects_agent_multiplicity() {
+        use perry_hir::{Expr, Module, Stmt};
+        for (worker, thread_agent) in [(false, false), (true, false), (false, true), (true, true)] {
+            let mut module = Module::new("read_site_agents.ts");
+            module.init.push(Stmt::Expr(Expr::PropertyGet {
+                object: Box::new(Expr::GlobalGet(100)),
+                property: "width".into(),
+                byte_offset: 0,
+            }));
+            let ir = String::from_utf8(
+                crate::compile_module(
+                    &module,
+                    crate::CompileOptions {
+                        emit_ir_only: true,
+                        program_has_worker: worker,
+                        program_has_thread_agents: thread_agent,
+                        ..Default::default()
+                    },
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            assert!(ir.contains("call double @perry_probe_get_site("), "{ir}");
+            let declaration = ir
+                .lines()
+                .find(|line| line.contains("_read_shape_slots = private"))
+                .expect("a generic read must own its shape/slot storage");
+            assert_eq!(
+                declaration.contains("thread_local"),
+                worker || thread_agent,
+                "{declaration}"
+            );
+        }
+    }
+}

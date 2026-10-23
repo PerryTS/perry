@@ -11,6 +11,7 @@ struct Facts {
     returns: HashMap<u32, Vec<Expr>>,
     properties: Vec<(String, Expr)>,
     accessors: Vec<(Expr, bool, bool)>,
+    literal_getters: Vec<String>,
     class_fields: HashMap<String, Vec<String>>,
     visited_functions: HashSet<u32>,
 }
@@ -120,6 +121,15 @@ impl Facts {
                         .extend(fields.iter().cloned().zip(args.iter().cloned()));
                 }
             }
+            Expr::ObjectDefineProperty(_, key, descriptor) => {
+                if let (Expr::String(key), Expr::Object(fields)) =
+                    (key.as_ref(), descriptor.as_ref())
+                {
+                    if fields.iter().any(|(field, _)| field == "get") {
+                        self.literal_getters.push(key.clone());
+                    }
+                }
+            }
             Expr::Call { callee, args, .. } => {
                 if let Expr::ExternFuncRef { name, .. } = callee.as_ref() {
                     if name == "js_object_define_accessor" && args.len() == 4 {
@@ -127,7 +137,11 @@ impl Facts {
                         // path. Extend admission for computed expressions;
                         // widening unrelated named object reads adds miss
                         // guards without helping the computed-key workload.
-                        if !matches!(args[1], Expr::String(_)) {
+                        if let Expr::String(key) = &args[1] {
+                            if !matches!(args[2], Expr::Undefined) {
+                                self.literal_getters.push(key.clone());
+                            }
+                        } else {
                             self.accessors.push((
                                 args[1].clone(),
                                 !matches!(args[2], Expr::Undefined),
@@ -248,6 +262,9 @@ pub(super) fn collect<'m>(modules: impl IntoIterator<Item = &'m Module>) -> Clas
         properties = next;
     }
     for f in &facts {
+        names
+            .literal_getters
+            .extend(f.literal_getters.iter().cloned());
         for (key, get, set) in &f.accessors {
             let candidates = f.names(key, &properties, 0);
             if *get {

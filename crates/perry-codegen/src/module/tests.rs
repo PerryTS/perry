@@ -1109,3 +1109,29 @@ fn unicode_symbol_names_survive_ir_reference_parsing() {
     assert!(refs.contains(&reference));
     assert!(refs.contains(&format!("{reference}$generic")));
 }
+
+#[test]
+fn read_site_collecting_declarations_preserve_the_original_contract() {
+    use crate::types::PTR;
+    let mut m = module_under(
+        "js_object_get_field_site_slow\tReenters\tyes\n\
+         js_object_get_field_value_site\tReenters\tyes\n",
+    );
+    m.declare_function("js_object_get_field_site_slow", DOUBLE, &[I64, I64, PTR]);
+    m.declare_function(
+        "js_object_get_field_value_site",
+        DOUBLE,
+        &[I64, I64, I64, PTR],
+    );
+    let f = m.define_function("main", I32, vec![]);
+    f.create_block("entry").ret(I32, "0");
+    let ir = m.to_ir();
+    assert!(
+        ir.contains("declare double @js_object_get_field_site_slow(i64, i64, ptr) cold\n"),
+        "{ir}"
+    );
+    assert!(
+        ir.contains("declare double @js_object_get_field_value_site(i64, i64, i64, ptr) cold\n"),
+        "{ir}"
+    );
+}

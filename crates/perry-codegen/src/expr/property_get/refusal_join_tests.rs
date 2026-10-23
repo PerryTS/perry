@@ -21,6 +21,10 @@ fn emit(properties: &[&str], colored: bool, target: &str) -> String {
     }
     let mut opts = ir_opts(false, None);
     opts.target = Some(target.into());
+    // No getter of the program is declared under these names: the reads
+    // keep the stateless probe and own no shape/slot memo.
+    opts.program_class_accessor_names =
+        Some(std::sync::Arc::new(crate::ClassAccessorNames::default()));
     if colored {
         let mut layouts = crate::ProgramLayouts::default();
         layouts.colored.insert(properties[0].into(), (0, 0));

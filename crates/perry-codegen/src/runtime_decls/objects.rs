@@ -407,6 +407,23 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // A GC leaf; `TAG_HOLE` = declined.
     module.declare_function("perry_probe_family_method", I64, &[PTR, I64, I64, I64, I32]);
     module.declare_function("perry_probe_get", DOUBLE, &[PTR, I64, I64, I64]);
+    module.declare_function("perry_probe_get_site", DOUBLE, &[PTR, I64, I64, I64, PTR]);
+    module.declare_function("js_object_get_field_site_slow", DOUBLE, &[I64, I64, PTR]);
+    module.declare_function(
+        "perry_probe_get_value_site",
+        DOUBLE,
+        &[PTR, I64, I64, I64, PTR],
+    );
+    module.declare_function(
+        "js_object_get_field_value_site",
+        DOUBLE,
+        &[I64, I64, I64, PTR],
+    );
+    module.declare_function(
+        "js_object_get_keyed_site_slow",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, I64, I32, PTR],
+    );
     // The store probe (`expr/put_value_store_ic.rs`): 1 when it stored.
     module.declare_function("perry_probe_set", I32, &[PTR, I64, I64, I64, DOUBLE]);
     module.declare_function(

@@ -2742,9 +2742,12 @@ js_object_get_field_by_name_f64	f64	ptr,ptr
 js_object_get_field_by_property_id_f64	f64	ptr,i64
 js_object_get_field_f64	f64	ptr,i32u
 js_object_get_field_nonptr	f64	i64,ptr,i64
+js_object_get_field_site_slow	f64	i64,ptr,ptr
 js_object_get_field_slow	f64	i64,ptr
 js_object_get_field_value	f64	i64,ptr,i64
+js_object_get_field_value_site	f64	i64,ptr,i64,ptr
 js_object_get_index_polymorphic	f64	i64,f64
+js_object_get_keyed_site_slow	f64	f64,f64,i64,i32u,ptr
 js_object_get_keyed_slow	f64	f64,f64,i64,i32u
 js_object_get_own_field_or_undef	f64	f64,ptr,usize
 js_object_get_own_property_descriptor	f64	f64,f64
@@ -5051,7 +5054,9 @@ perry_probe_get	f64	ptr,i64,i64,i64
 perry_probe_get_binding	f64	ptr,i64,i64,i64
 perry_probe_get_keyed	f64	ptr,i64,i64
 perry_probe_get_length	f64	ptr,i64,i64,i64
+perry_probe_get_site	f64	ptr,i64,i64,i64,ptr
 perry_probe_get_value	f64	ptr,i64,i64,i64
+perry_probe_get_value_site	f64	ptr,i64,i64,i64,ptr
 perry_probe_own_method	f64	ptr,f64,i64,i64
 perry_probe_set	i32s	ptr,i64,i64,i64,f64
 perry_register_static_plugin	void	ptr,f64

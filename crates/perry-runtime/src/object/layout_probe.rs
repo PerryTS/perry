@@ -36,6 +36,9 @@
 //! absent. Everything else (an accessor, an exotic or per-object receiver, a
 //! chain that ends without the key, a builtin prototype that misses) is
 //! `TAG_HOLE`, and the site takes its complete slow operation.
+#[path = "layout_probe_site_memo.rs"]
+pub(crate) mod site_memo;
+
 use super::shapes_store::{ShapeRecord, FLAT_BASE_OFFSET};
 use crate::object::layout_desc::note_run;
 use crate::object::ObjectHeader;
@@ -919,6 +922,20 @@ unsafe fn probe_get<const ABSENT: bool>(
     key_bits: u64,
     hash: u64,
 ) -> f64 {
+    probe_get_at::<ABSENT, false>(dir, obj_biased, key_bits, hash, std::ptr::null())
+}
+
+/// The own-data front. With `SITE` (a compile-time choice) every own miss
+/// first asks the site's shape/slot memo (`site_memo`), then continues
+/// exactly as the stateless probe; an own hit never reads the memo.
+#[inline(always)]
+unsafe fn probe_get_at<const ABSENT: bool, const SITE: bool>(
+    dir: *const u8,
+    obj_biased: i64,
+    key_bits: u64,
+    hash: u64,
+    memo: *const site_memo::ReadSiteMemo,
+) -> f64 {
     // The hit path keeps to caller-saved registers: every other outcome is a
     // tail call, so the leaf saves nothing on a hit.
     let obj =
@@ -930,11 +947,18 @@ unsafe fn probe_get<const ABSENT: bool>(
     }
     let probe = (*r).probe;
     if probe & (PROBE_READY | PROBE_DECLINE | PROBE_CHECKED) != PROBE_READY {
+        if SITE {
+            return site_memo::miss_underived::<ABSENT>(dir, obj, key_bits, hash, memo);
+        }
         return probe_get_underived::<ABSENT>(dir, obj, word, r, key_bits, hash);
     }
     let count = (*r).logical_key_count;
     if count == 0 {
-        return absent_from::<ABSENT>(dir, obj, key_bits, hash);
+        return if SITE {
+            site_memo::miss_absent::<ABSENT>(dir, obj, key_bits, hash, memo)
+        } else {
+            absent_from::<ABSENT>(dir, obj, key_bits, hash)
+        };
     }
     let table = (probe & !PROBE_FLAGS) as *const KeyIndex;
     let (pos, load) = if table.is_null() {
@@ -954,7 +978,11 @@ unsafe fn probe_get<const ABSENT: bool>(
             }
             i += 1;
             if i == count {
-                return absent_from::<ABSENT>(dir, obj, key_bits, hash);
+                return if SITE {
+                    site_memo::miss_absent::<ABSENT>(dir, obj, key_bits, hash, memo)
+                } else {
+                    absent_from::<ABSENT>(dir, obj, key_bits, hash)
+                };
             }
         }
     } else {
@@ -965,7 +993,11 @@ unsafe fn probe_get<const ABSENT: bool>(
         loop {
             let pos = *slots.add(b);
             if pos == u32::MAX {
-                return absent_from::<ABSENT>(dir, obj, key_bits, hash);
+                return if SITE {
+                    site_memo::miss_absent::<ABSENT>(dir, obj, key_bits, hash, memo)
+                } else {
+                    absent_from::<ABSENT>(dir, obj, key_bits, hash)
+                };
             }
             let i = pos & POS_BITS;
             if pos & TEXT_ENTRY != 0 {
@@ -994,6 +1026,9 @@ unsafe fn probe_get<const ABSENT: bool>(
     // continues as for an absent key.
     if v.to_bits() != TAG_HOLE {
         return v;
+    }
+    if SITE {
+        return site_memo::miss_hole::<ABSENT>(dir, obj, pos, key_bits, hash, memo);
     }
     own_hole::<ABSENT>(dir, obj, r, pos, key_bits, hash)
 }

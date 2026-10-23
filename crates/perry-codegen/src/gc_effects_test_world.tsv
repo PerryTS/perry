@@ -67,7 +67,9 @@ perry_array_iteration_init	Leaf	no
 perry_class_value_dir_cell	Leaf	no
 perry_intrinsic_proto	Leaf	no
 perry_probe_get	Leaf	no
+perry_probe_get_site	Leaf	no
 perry_probe_get_keyed	Leaf	no
 perry_probe_get_length	Leaf	no
 perry_probe_get_value	Leaf	no
+perry_probe_get_value_site	Leaf	no
 perry_probe_set	Leaf	no

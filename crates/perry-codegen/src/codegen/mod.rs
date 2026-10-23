@@ -2930,6 +2930,7 @@ fn lower_module(
         imported_async_funcs: opts.imported_async_funcs,
         short_spread_method_candidates: Arc::clone(&opts.short_spread_method_candidates),
         object_literal_method_candidates: Arc::clone(&opts.object_literal_method_candidates),
+        program_class_accessor_names: opts.program_class_accessor_names.clone(),
         local_async_funcs,
         local_generator_funcs,
         fixed_generator_funcs,

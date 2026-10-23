@@ -1,4 +1,4 @@
-//! The generic read's shape probe (`perry_probe_get`) takes the agent's shape
+//! The generic read's shape probe (`perry_probe_get_site`) takes the agent's shape
 //! directory, whose lookup is target-specific (extra blocks on Apple aarch64,
 //! a TEB-derived chain on Windows). Follow the CFG and the call operand
 //! rather than assuming a single block or ELF.
@@ -28,7 +28,7 @@ fn verify_front_flow(blocks: &Blocks) -> Result<usize, String> {
         .enumerate()
         .filter(|(_, (_, body))| {
             body.iter()
-                .any(|line| line.contains("call double @perry_probe_get("))
+                .any(|line| line.contains("call double @perry_probe_get_site("))
         })
         .collect();
     let [(index, (call_label, call_body))] = calls.as_slice() else {
@@ -99,7 +99,7 @@ fn verify_front_flow(blocks: &Blocks) -> Result<usize, String> {
     let (cond, served, declined) = tower_cond_br(call_body);
     let call = call_body
         .iter()
-        .find(|line| line.contains("call double @perry_probe_get("))
+        .find(|line| line.contains("call double @perry_probe_get_site("))
         .unwrap();
     let answer = call.split_once(" = ").unwrap().0;
     let bits = call_body
@@ -140,6 +140,37 @@ fn verify_front_flow(blocks: &Blocks) -> Result<usize, String> {
     Ok(*index)
 }
 
+/// Both halves of a fixed read must use this site's integer-only storage.
+pub(super) fn verify_front_site_memo(blocks: &Blocks) -> Result<String, String> {
+    let index = verify_front_flow(blocks)?;
+    let call = blocks[index]
+        .1
+        .iter()
+        .find(|line| line.contains("call double @perry_probe_get_site("))
+        .unwrap();
+    let memo = call
+        .rsplit_once(", ptr ")
+        .and_then(|(_, tail)| tail.split_once(')'))
+        .map(|(memo, _)| memo)
+        .ok_or("the probe must receive its site storage")?;
+    if !memo.starts_with("@perry_ic_") || !memo.ends_with("_read_shape_slots") {
+        return Err(format!(
+            "the memo must be this site's shape/slot storage: {memo}"
+        ));
+    }
+    let slow: Vec<_> = blocks
+        .iter()
+        .flat_map(|(_, body)| body)
+        .filter(|line| line.contains("@js_object_get_field_value_site("))
+        .collect();
+    if slow.len() != 1 || !slow[0].contains(&format!(", ptr {memo})")) {
+        return Err(format!(
+            "the leaf and collecting exit must share one memo: {slow:?}"
+        ));
+    }
+    Ok(memo.to_string())
+}
+
 pub(super) fn front_call_block(blocks: &Blocks) -> (&str, &[String]) {
     let index = verify_front_flow(blocks).unwrap_or_else(|e| panic!("{e}: {blocks:?}"));
     (&blocks[index].0, &blocks[index].1)
@@ -164,7 +195,7 @@ pub(super) fn verify_front_directory(blocks: &Blocks) -> Result<(), String> {
     let call = blocks[index]
         .1
         .iter()
-        .find(|line| line.contains("call double @perry_probe_get("))
+        .find(|line| line.contains("call double @perry_probe_get_site("))
         .unwrap();
     let dir = call
         .split_once("(ptr ")
@@ -315,6 +346,20 @@ fn front_contract_rejects_lookup_bypasses_wrong_slots_and_wrong_declines() {
         let blocks = tower_blocks(&ir);
         let index = verify_front_flow(&blocks).unwrap();
         verify_front_directory(&blocks).unwrap();
+        let memo = verify_front_site_memo(&blocks).unwrap();
+        let mut wrong_memo = blocks.clone();
+        for (_, body) in &mut wrong_memo {
+            for line in body {
+                if line.contains("@js_object_get_field_value_site(") {
+                    *line = line.replace(&format!(", ptr {memo})"), ", ptr null)");
+                }
+            }
+        }
+        assert_ne!(wrong_memo, blocks, "{target}: memo sabotage must alter IR");
+        assert!(
+            verify_front_site_memo(&wrong_memo).is_err(),
+            "{target}: disconnected slow memo"
+        );
         let mut wrong = blocks.clone();
         let cond = tower_cond_br(&wrong[index].1).0;
         let term = wrong[index].1.last_mut().unwrap();
@@ -340,7 +385,7 @@ fn front_contract_rejects_lookup_bypasses_wrong_slots_and_wrong_declines() {
         let call = wrong[index]
             .1
             .iter_mut()
-            .find(|l| l.contains("call double @perry_probe_get("))
+            .find(|l| l.contains("call double @perry_probe_get_site("))
             .unwrap();
         let operand = call
             .split_once("(ptr ")

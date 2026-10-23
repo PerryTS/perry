@@ -6,9 +6,11 @@
 //! emitted `o.key` site whose receiver no compile-time fact names: the
 //! unknown-receiver probe (`layout_probe::perry_probe_get`) with the agent's
 //! directory, and, when the probe declines, the cacheless complete read
-//! (`js_object_get_field_slow`). Nothing is remembered between reads: every
-//! word the probe reads is the receiver's own data or immutable layout data,
-//! so there is nothing to prime, validate or root.
+//! (`js_object_get_field_slow`). Fixed-name Rust sites use `get_with_memo`:
+//! the same leaf and collecting entrance as an emitted fixed-name read that
+//! owns a shape/slot memo (`perry_probe_get_site`, which asks the memo only
+//! after an own miss, then `js_object_get_field_site_slow`). The memo retains
+//! no heap addresses or getter values.
 //!
 //! # The key
 //!
@@ -110,6 +112,20 @@ pub(crate) unsafe fn probe(obj: *const ObjectHeader, key: Key<'_>) -> Option<Ans
 /// # Safety
 /// As [`probe`]; `key` is the read's fixed key text.
 pub(crate) unsafe fn get(obj: *mut ObjectHeader, key: &[u8]) -> f64 {
+    get_with_memo(obj, key, std::ptr::null_mut())
+}
+
+/// [`get`] for a fixed-key Rust site that owns a shape/slot memo, read as an
+/// emitted site that owns one: an own hit never reads the memo; an own miss
+/// asks it; only the collecting entrance derives it.
+///
+/// # Safety
+/// As [`get`]; `memo` is null or this site's agent-local storage.
+pub(crate) unsafe fn get_with_memo(
+    obj: *mut ObjectHeader,
+    key: &[u8],
+    memo: *mut crate::object::layout_probe::site_memo::ReadSiteMemo,
+) -> f64 {
     let hash = crate::object::key_bytes_hash(key.as_ptr(), key.len());
     let (atom, obj) = match crate::string::atom_lookup(key, hash) {
         Some(atom) if crate::string::is_property_atom(atom) => (atom, obj),
@@ -124,15 +140,27 @@ pub(crate) unsafe fn get(obj: *mut ObjectHeader, key: &[u8]) -> f64 {
             })
         }
     };
-    let v = probe_word(
-        obj,
-        crate::value::STRING_TAG | atom as u64,
-        crate::string::property_atom_hash(atom),
-    );
+    let key_bits = crate::value::STRING_TAG | atom as u64;
+    let hash = crate::string::property_atom_hash(atom);
+    let v = if memo.is_null() {
+        probe_word(obj, key_bits, hash)
+    } else {
+        crate::object::layout_probe::site_memo::perry_probe_get_site(
+            crate::object::shapes::ordinary_dir_addr(),
+            (obj as usize).wrapping_sub(perry_abi::RECEIVER_HANDLE_FLOOR) as i64,
+            key_bits,
+            hash,
+            memo,
+        )
+    };
     if v.to_bits() != crate::value::TAG_HOLE {
         return v;
     }
-    super::js_object_get_field_slow(obj as i64, atom)
+    if memo.is_null() {
+        super::js_object_get_field_slow(obj as i64, atom)
+    } else {
+        super::js_object_get_field_site_slow(obj as i64, atom, memo)
+    }
 }
 
 /// The integer a Number property key names, when its canonical text is a

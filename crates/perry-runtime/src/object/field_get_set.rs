@@ -229,7 +229,8 @@ mod for_in_stable;
 mod get_field_by_name;
 mod get_slow;
 pub use get_slow::{
-    js_object_get_field_nonptr, js_object_get_field_slow, js_object_get_field_value,
+    js_object_get_field_nonptr, js_object_get_field_site_slow, js_object_get_field_slow,
+    js_object_get_field_value, js_object_get_field_value_site, js_object_get_keyed_site_slow,
     js_object_get_keyed_slow,
 };
 #[cfg(test)]

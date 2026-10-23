@@ -503,6 +503,7 @@ extern "C" fn http_getter_thunk(
             crate::runtime_state_key::NamedStateKey {
                 bytes: key,
                 hash: crate::runtime_state_key::const_key_hash(key),
+                memo: None,
             }
             .read_value(receiver)
         };
@@ -604,6 +605,7 @@ pub unsafe extern "C" fn js_node_http_incoming_message_init(this: f64, socket: f
         crate::runtime_state_key::NamedStateKey {
             bytes,
             hash: crate::runtime_state_key::const_key_hash(bytes),
+            memo: None,
         }
         .read_value(value)
     };
@@ -816,6 +818,7 @@ unsafe fn message_init(this: f64, req: Option<f64>) {
             crate::runtime_state_key::NamedStateKey {
                 bytes: key,
                 hash: crate::runtime_state_key::const_key_hash(key),
+                memo: None,
             }
             .read_value(target)
         } else {
@@ -1003,6 +1006,7 @@ mod incoming_init_tests {
             crate::runtime_state_key::NamedStateKey {
                 bytes,
                 hash: crate::runtime_state_key::const_key_hash(bytes),
+                memo: None,
             }
             .read_value(object)
         };

@@ -398,6 +398,11 @@ pub(crate) struct FnCtx<'a> {
     pub wpfacts_off: bool,
     pub program_has_worker: bool,
     pub program_has_thread_agents: bool,
+    /// The program's accessor names (`ClassAccessorNames`): a fixed-name read
+    /// owns a shape/slot memo only for a name some getter of the program is
+    /// declared under. `None` (a compile that did not collect them) gives
+    /// every fixed-name read its memo.
+    pub program_class_accessor_names: Option<std::sync::Arc<crate::codegen::ClassAccessorNames>>,
     /// Function being built (blocks, params, registers).
     pub func: &'a mut LlFunction,
     /// Stable slug for native-region ids derived from this module.

@@ -1,0 +1,471 @@
+//! Per-site answers derived exclusively from the shapes on a bounded chain.
+//! The entries contain no heap addresses: each use follows the live shape
+//! links and reads the current holder slot, including its current getter pair.
+//!
+//! Only a collecting entrance writes a memo: a read the stateless probe
+//! declined (a getter on the chain, a computed key a prototype holds) proves
+//! the memo's shapes, and otherwise derives it from the live chain before the
+//! complete read. A fixed-name site's leaf (`perry_probe_get_site`) is the
+//! stateless own-data front; only after an own miss does it compare the
+//! memo's first ShapeId with the receiver's and, on a match, answer from the
+//! memo (a getter still declines to the collecting entrance). An own hit
+//! never reads the memo, and no leaf ever writes it. Computed-key leaves stay
+//! stateless (`perry_probe_get_keyed`).
+use super::*;
+
+const PAIRS: usize = 5;
+const NEXT: u32 = u32::MAX;
+const ABSENT: u32 = u32::MAX - 1;
+/// The receiver's shape has no memo answer at this site (its chain is not
+/// one the shapes prove): the collecting entrance takes the complete read
+/// without deriving again. A negative answer, checked by the same ShapeId.
+const DECLINE: u32 = u32::MAX - 2;
+const ACCESSOR: u32 = 1 << 31;
+const SPILL: u32 = 1 << 30;
+const SLOT_MASK: u32 = SPILL - 1;
+
+/// Exactly five (ShapeId, slot) pairs. Zero shape means an empty answer.
+/// Kept in the site's own TLS storage, never indexed through a registry.
+#[derive(Clone, Copy)]
+#[repr(C)]
+pub struct ReadSiteMemo {
+    pairs: [u64; PAIRS],
+}
+impl ReadSiteMemo {
+    pub(crate) const EMPTY: Self = Self { pairs: [0; PAIRS] };
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum Answer {
+    Data(u64),
+    // The live pair word, decoded only by the collecting entrance.
+    // Keeping a full Accessor here made even data hits return 56 bytes
+    // through a hidden sret argument and a stack frame.
+    Getter(u64),
+}
+
+#[inline(always)]
+unsafe fn ordinary_word(obj: *const ObjectHeader) -> Option<u32> {
+    let h = crate::gc::header_from_trusted_user_ptr(obj.cast());
+    if (*h).obj_type != crate::gc::GC_TYPE_OBJECT
+        || (*h).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+        || (*h)._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0
+    {
+        return None;
+    }
+    let meta = (*obj).meta;
+    if !meta.is_null()
+        && (*meta).flags
+            & (crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER
+                | crate::object::OBJECT_META_FLAG_NATIVE_ALIAS)
+            != 0
+    {
+        return None;
+    }
+    let word = (*obj).parent_class_id;
+    // An overflow's SHADOW_BIT deliberately prevents a site comparison.
+    crate::object::shapes::is_site_matchable_shape_id(word).then_some(word)
+}
+
+#[inline(always)]
+unsafe fn slot_answer(obj: *const ObjectHeader, slot: u32) -> Option<Answer> {
+    if slot == ABSENT {
+        return Some(Answer::Data(crate::value::TAG_UNDEFINED));
+    }
+    let index = slot & SLOT_MASK;
+    let bits = if slot & SPILL != 0 {
+        crate::object::spill::spill_get_present(obj as usize, index as usize)?
+    } else {
+        *((obj as *const u8).add(std::mem::size_of::<ObjectHeader>() + index as usize * 8)
+            as *const u64)
+    };
+    if bits == TAG_HOLE {
+        return None;
+    }
+    if slot & ACCESSOR != 0 {
+        Some(Answer::Getter(bits))
+    } else {
+        Some(Answer::Data(bits))
+    }
+}
+
+/// The complete O(1) proof on every use. No key lookup, allocation or user
+/// code. Each continuation's shape proves absence and supplies its live link.
+#[inline]
+pub(crate) unsafe fn lookup(
+    dir: *const u8,
+    mut obj: *const ObjectHeader,
+    memo: &ReadSiteMemo,
+) -> Option<Answer> {
+    for &pair in &memo.pairs {
+        let shape = (pair >> 32) as u32;
+        if shape == 0 || (*obj).parent_class_id != shape || ordinary_word(obj)? != shape {
+            return None;
+        }
+        let slot = pair as u32;
+        if slot == DECLINE {
+            return None;
+        }
+        if slot != NEXT && slot != ABSENT {
+            if let Some(answer) = slot_answer(obj, slot) {
+                return Some(answer);
+            }
+            // A data hole is absence on this object, not absence proved by
+            // the shape. Continue only through the live link and verified
+            // tail. An accessor hole retains the complete getter's rules.
+            if slot & ACCESSOR != 0 {
+                return None;
+            }
+        }
+        let r = record_of(dir, shape);
+        if r.is_null() {
+            return None;
+        }
+        if slot == ABSENT {
+            return matches!(link_of(dir, obj, r), Next::End)
+                .then_some(Answer::Data(crate::value::TAG_UNDEFINED));
+        }
+        obj = match link_of(dir, obj, r) {
+            Next::Object(next) => next,
+            Next::End => return Some(Answer::Data(crate::value::TAG_UNDEFINED)),
+            Next::Unknown => return None,
+        };
+    }
+    None
+}
+
+/// Has this memo found that a receiver of `obj`'s shape has no memo answer?
+#[inline(always)]
+unsafe fn declined(obj: *const ObjectHeader, memo: &ReadSiteMemo) -> bool {
+    memo.pairs[0] == (u64::from((*obj).parent_class_id) << 32) | u64::from(DECLINE)
+}
+
+/// Remember that a receiver of `obj`'s shape has no memo answer, unless the
+/// memo already holds a positive answer for another shape.
+#[inline]
+unsafe fn decline(obj: *const ObjectHeader, memo: &mut ReadSiteMemo) {
+    let word = (*obj).parent_class_id;
+    let held = memo.pairs[0];
+    if crate::object::shapes::is_site_matchable_shape_id(word)
+        && (held == 0 || held as u32 == DECLINE)
+    {
+        *memo = ReadSiteMemo::EMPTY;
+        memo.pairs[0] = (u64::from(word) << 32) | u64::from(DECLINE);
+    }
+}
+
+/// A collecting entrance's answer for a fixed key: the memo's proof, else a
+/// derivation from the live chain, unless this receiver shape already
+/// declined. A derivation that declines is remembered as [`DECLINE`].
+#[inline(always)]
+pub(crate) unsafe fn collect(
+    dir: *const u8,
+    obj: *const ObjectHeader,
+    key_bits: u64,
+    hash: u64,
+    memo: &mut ReadSiteMemo,
+) -> Option<Answer> {
+    if let Some(answer) = lookup(dir, obj, memo) {
+        return Some(answer);
+    }
+    if declined(obj, memo) {
+        return None;
+    }
+    let answer = prime(dir, obj, key_bits, hash, memo);
+    if answer.is_none() {
+        decline(obj, memo);
+    }
+    answer
+}
+
+/// Derive the memo without running user code. Data holes retain a guarded
+/// prototype tail; overflow,
+/// dictionaries, exotics and chains longer than the fixed bound decline.
+#[inline(never)]
+pub(crate) unsafe fn prime(
+    dir: *const u8,
+    mut obj: *const ObjectHeader,
+    key_bits: u64,
+    hash: u64,
+    memo: &mut ReadSiteMemo,
+) -> Option<Answer> {
+    let mut learned = ReadSiteMemo::EMPTY;
+    for i in 0..PAIRS {
+        let shape = ordinary_word(obj)?;
+        let r = record_of(dir, shape);
+        if r.is_null()
+            || !(*r).present()
+            || !positional_layout(&*r)
+            || !matches!(
+                (*r).object_kind(),
+                super::super::ShapeObjectKind::Ordinary
+                    | super::super::ShapeObjectKind::OrdinaryUnmarked
+            )
+            || !walks_from(obj, r)
+        {
+            return None;
+        }
+        let prefix = u64::from(shape) << 32;
+        match own_entry(r, key_bits, hash) {
+            Ok((pos, _)) => {
+                let keys = (*r).keys as usize as *const crate::array::ArrayHeader;
+                let attrs = crate::object::key_attrs::keys_entry(keys, pos);
+                if attrs & crate::object::key_attrs::ENTRY_PRIVATE != 0 {
+                    return None;
+                }
+                let slot = crate::object::key_attrs::key_storage_slot(keys, pos);
+                if slot >= SLOT_MASK - 1 {
+                    return None;
+                }
+                let slot =
+                    slot | if slot < (*r).live_inline_slot_count {
+                        0
+                    } else {
+                        SPILL
+                    } | if attrs & crate::object::key_attrs::ENTRY_ACCESSOR_MASK != 0 {
+                        ACCESSOR
+                    } else {
+                        0
+                    };
+                learned.pairs[i] = prefix | u64::from(slot);
+                if let Some(answer) = slot_answer(obj, slot) {
+                    *memo = learned;
+                    return Some(answer);
+                }
+                if slot & ACCESSOR != 0 {
+                    return None;
+                }
+                // Keep the data slot itself in the entry: every use must
+                // re-read its live presence before trusting the tail.
+            }
+            Err(false) => return None,
+            Err(true) => {}
+        }
+        match link_of(dir, obj, r) {
+            Next::End => {
+                if learned.pairs[i] == 0 {
+                    learned.pairs[i] = prefix | u64::from(ABSENT);
+                }
+                *memo = learned;
+                return Some(Answer::Data(crate::value::TAG_UNDEFINED));
+            }
+            Next::Object(next) => {
+                if learned.pairs[i] == 0 {
+                    learned.pairs[i] = prefix | u64::from(NEXT);
+                }
+                obj = next;
+            }
+            Next::Unknown => return None,
+        }
+    }
+    None
+}
+
+/// The leaf's question after an own miss: does the memo, whose first
+/// ShapeId is the receiver's, answer? `None` continues the stateless probe.
+#[inline(always)]
+unsafe fn leaf_answer(
+    dir: *const u8,
+    obj: *const ObjectHeader,
+    key_bits: u64,
+    memo: *const ReadSiteMemo,
+) -> Option<f64> {
+    if ((*memo).pairs[0] >> 32) as u32 != (*obj).parent_class_id {
+        return None;
+    }
+    Some(match lookup(dir, obj, &*memo)? {
+        Answer::Data(bits) => verify::answer(obj as usize, key_bits, f64::from_bits(bits)),
+        // The collecting entrance reloads and calls the live getter.
+        Answer::Getter(_) => hole(),
+    })
+}
+
+/// The own list proved the key absent.
+#[inline(never)]
+pub(super) unsafe fn miss_absent<const ABSENT_OK: bool>(
+    dir: *const u8,
+    obj: *const ObjectHeader,
+    key_bits: u64,
+    hash: u64,
+    memo: *const ReadSiteMemo,
+) -> f64 {
+    if let Some(v) = leaf_answer(dir, obj, key_bits, memo) {
+        return v;
+    }
+    absent_from::<ABSENT_OK>(dir, obj, key_bits, hash)
+}
+
+/// The receiver's record is not derived, or is checked (accessor/private).
+#[inline(never)]
+pub(super) unsafe fn miss_underived<const ABSENT_OK: bool>(
+    dir: *const u8,
+    obj: *const ObjectHeader,
+    key_bits: u64,
+    hash: u64,
+    memo: *const ReadSiteMemo,
+) -> f64 {
+    if let Some(v) = leaf_answer(dir, obj, key_bits, memo) {
+        return v;
+    }
+    let word = (*obj).parent_class_id;
+    probe_get_underived::<ABSENT_OK>(dir, obj, word, record_of(dir, word), key_bits, hash)
+}
+
+/// The own slot at position `pos` read a hole.
+#[inline(never)]
+pub(super) unsafe fn miss_hole<const ABSENT_OK: bool>(
+    dir: *const u8,
+    obj: *const ObjectHeader,
+    pos: u32,
+    key_bits: u64,
+    hash: u64,
+    memo: *const ReadSiteMemo,
+) -> f64 {
+    if let Some(v) = leaf_answer(dir, obj, key_bits, memo) {
+        return v;
+    }
+    own_hole::<ABSENT_OK>(
+        dir,
+        obj,
+        record_of(dir, (*obj).parent_class_id),
+        pos,
+        key_bits,
+        hash,
+    )
+}
+
+/// The fixed-name leaf of a site that owns a memo: [`perry_probe_get`] with
+/// the memo asked after an own miss. A GC leaf; it never writes the memo.
+/// # Safety
+/// As [`perry_probe_get`]; `memo` is this site's agent-local storage.
+#[no_mangle]
+pub unsafe extern "C" fn perry_probe_get_site(
+    dir: *const u8,
+    obj_biased: i64,
+    key_bits: u64,
+    hash: u64,
+    memo: *const ReadSiteMemo,
+) -> f64 {
+    probe_get_at::<true, true>(dir, obj_biased, key_bits, hash, memo)
+}
+
+/// [`perry_probe_get_value`] for an outlined or generator site that owns a
+/// memo.
+/// # Safety
+/// As [`perry_probe_get_value`]; `memo` is this site's agent-local storage.
+#[no_mangle]
+pub unsafe extern "C" fn perry_probe_get_value_site(
+    dir: *const u8,
+    obj_bits: u64,
+    key_bits: u64,
+    hash: u64,
+    memo: *const ReadSiteMemo,
+) -> f64 {
+    if obj_bits & TAG_MASK != POINTER_TAG {
+        return hole();
+    }
+    let payload = (obj_bits & POINTER_MASK) as usize;
+    if payload < perry_abi::RECEIVER_HANDLE_FLOOR {
+        return hole();
+    }
+    perry_probe_get_site(
+        dir,
+        (payload - perry_abi::RECEIVER_HANDLE_FLOOR) as i64,
+        key_bits,
+        hash,
+        memo,
+    )
+}
+
+#[derive(Clone, Copy)]
+#[repr(C)]
+struct KeyedWay {
+    key: u64,
+    memo: ReadSiteMemo,
+}
+
+/// Four shape answers for a small rotating set of short string keys.
+/// The key is CONTENT bits, never a GC address or a cached program value.
+#[repr(C)]
+pub struct KeyedSiteMemo {
+    ways: [KeyedWay; 4],
+}
+
+#[inline]
+unsafe fn short_key(bits: u64) -> Option<u64> {
+    if bits & TAG_MASK == crate::value::SHORT_STRING_TAG {
+        return Some(bits);
+    }
+    if bits & TAG_MASK == STRING_TAG {
+        return crate::string::short_ascii_sso_bits(
+            (bits & POINTER_MASK) as *const crate::StringHeader,
+        );
+    }
+    None
+}
+
+pub(crate) unsafe fn keyed_answer(
+    dir: *const u8,
+    obj_bits: u64,
+    key_bits: u64,
+    memo: &mut KeyedSiteMemo,
+) -> Option<Answer> {
+    if obj_bits & TAG_MASK != POINTER_TAG {
+        return None;
+    }
+    let addr = (obj_bits & POINTER_MASK) as usize;
+    if addr < perry_abi::RECEIVER_HANDLE_FLOOR {
+        return None;
+    }
+    let key = short_key(key_bits)?;
+    let obj = addr as *const ObjectHeader;
+    for way in &memo.ways {
+        if way.key == key {
+            if let Some(answer) = lookup(dir, obj, &way.memo) {
+                return Some(answer);
+            }
+            if declined(obj, &way.memo) {
+                return None;
+            }
+        }
+    }
+    let mut learned = ReadSiteMemo::EMPTY;
+    let answer = match computed_key(key_bits) {
+        Some((canonical, hash)) => prime(dir, obj, canonical, hash, &mut learned),
+        None => None,
+    };
+    let Some(answer) = answer else {
+        // This key on this receiver shape has no memo answer: remember the
+        // decline so its next read takes the complete read at once.
+        decline(obj, &mut learned);
+        if learned.pairs[0] != 0 {
+            remember(memo, KeyedWay { key, memo: learned });
+        }
+        return None;
+    };
+    // A computed key is retained only when it is the content of a real
+    // holder key at the recorded slot. Absence has no such key to derive
+    // from the shape. Return this fresh proof without remembering its key.
+    if learned
+        .pairs
+        .iter()
+        .any(|&pair| pair != 0 && pair as u32 == ABSENT)
+    {
+        return Some(answer);
+    }
+    remember(memo, KeyedWay { key, memo: learned });
+    Some(answer)
+}
+
+/// The newest way first; the oldest leaves.
+#[inline]
+fn remember(memo: &mut KeyedSiteMemo, way: KeyedWay) {
+    for i in (1..memo.ways.len()).rev() {
+        memo.ways[i] = memo.ways[i - 1];
+    }
+    memo.ways[0] = way;
+}
+
+#[cfg(test)]
+#[path = "layout_probe_site_memo_tests.rs"]
+mod tests;

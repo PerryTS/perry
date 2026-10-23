@@ -171,7 +171,7 @@ fn imported_variable_read_preserves_class_tags_and_calls_the_live_getter_once() 
     // would lose the 0x7FFE tag and the class would dispatch as an object.
     assert!(
         ir.lines().any(|line| {
-            line.contains("call double @js_object_get_field_value(")
+            line.contains("call double @js_object_get_field_value_site(")
                 && bits.iter().any(|b| line.contains(&format!("(i64 {b},")))
         }),
         "class dispatch must receive the getter's unmasked value bits:\n{ir}"
@@ -223,11 +223,11 @@ fn no_call_location_without_debug_symbols() {
     );
 }
 
-/// The generic property read holds no per-site state: the hit is ONE leaf
-/// call of the receiver layout's probe (`perry_probe_get`) over the agent's
-/// shape directory, the key and the receiver's handle. There is no inline
-/// ShapeId compare against a site cache, no way token, no epoch and no
-/// `@perry_ic_*` site global; the receiver's own shape is the authority.
+/// The generic property read's hit is ONE leaf call of the receiver layout's
+/// probe (`perry_probe_get_site`) over the agent's shape directory, the key,
+/// the receiver's handle and the site's five integer shape/slot pairs. There
+/// is no inline ShapeId compare, no way token and no epoch; the receiver's
+/// own shape is the authority.
 #[test]
 fn generic_property_get_hit_path_is_shape_id_only() {
     let ir = emit(false, None);
@@ -235,7 +235,7 @@ fn generic_property_get_hit_path_is_shape_id_only() {
     let (_, ok) = tower_block(&blocks, "pget.recv_ok");
     let probes: Vec<&String> = ok
         .iter()
-        .filter(|l| l.contains("call double @perry_probe_get("))
+        .filter(|l| l.contains("call double @perry_probe_get_site("))
         .collect();
     assert_eq!(probes.len(), 1, "the hit is one probe call: {ok:?}");
     assert!(
@@ -245,8 +245,11 @@ fn generic_property_get_hit_path_is_shape_id_only() {
          ShapeId: {ok:?}"
     );
     assert!(
-        !ir.contains("@perry_ic_"),
-        "a generic read must not own a site cache global:\n{ir}"
+        ir.contains(&format!(
+            "{} = private global [5 x i64] zeroinitializer, align 8",
+            front_contract::verify_front_site_memo(&blocks).unwrap()
+        )),
+        "the read must own exactly five zero-initialized shape/slot pairs:\n{ir}"
     );
     assert!(
         !ir.contains("4611686018427387904"),
@@ -452,13 +455,13 @@ fn generic_property_get_tries_ways_before_calling_the_miss_handler() {
     assert!(
         probe_block
             .iter()
-            .any(|l| l.contains("call double @perry_probe_get(")),
+            .any(|l| l.contains("call double @perry_probe_get_site(")),
         "{probe_block:?}"
     );
     assert!(
         !probe_block
             .iter()
-            .any(|l| l.contains("@js_object_get_field_value(")),
+            .any(|l| l.contains("@js_object_get_field_value_site(")),
         "the slow call must not sit inside the probe block: {probe_block:?}"
     );
     let (_, served, declined) = tower_cond_br(probe_block);
@@ -495,7 +498,7 @@ fn generic_refusal_keeps_boxed_receiver_and_reloads_key_on_the_join() {
     assert_eq!(slow.iter().filter(|l| l.contains(" call ")).count(), 1);
     let call = slow
         .iter()
-        .find(|l| l.contains("@js_object_get_field_value("))
+        .find(|l| l.contains("@js_object_get_field_value_site("))
         .unwrap();
     let bits = call
         .split_once("(i64 ")
@@ -524,8 +527,8 @@ fn generic_refusal_keeps_boxed_receiver_and_reloads_key_on_the_join() {
         "the removed keys-pointer epoch global must not appear"
     );
     assert!(
-        !all.iter().any(|l| l.contains("@perry_ic_")),
-        "the read holds no site state"
+        front_contract::verify_front_site_memo(&blocks).is_ok(),
+        "the refusal must pass the leaf's own shape/slot storage"
     );
 }
 
@@ -541,7 +544,7 @@ fn a_spill_entry_is_served_by_the_leaf_front_before_the_slow_call() {
     let (probe_label, probe_block) = front_call_block(&blocks);
     let call = probe_block
         .iter()
-        .find(|l| l.contains("@perry_probe_get("))
+        .find(|l| l.contains("@perry_probe_get_site("))
         .unwrap_or_else(|| panic!("the probe call: {probe_block:?}"));
     let answer = call.split_once(" = ").map(|(r, _)| r).unwrap();
     let (_, merge) = tower_block(&blocks, "pget.recv_merge");
@@ -798,13 +801,13 @@ fn the_generic_tower_is_one_leaf_call_one_exit_and_a_bounded_number_of_blocks() 
     sorted.sort();
     assert_eq!(
         sorted,
-        vec!["js_object_get_field_value", "perry_probe_get"],
+        vec!["js_object_get_field_value_site", "perry_probe_get_site"],
         "the read must expand the probe and exactly one collecting exit:\n{func}"
     );
     // The probe is nounwind and GC-leaf: a plain call, never an invoke.
     let probes: Vec<&str> = func
         .lines()
-        .filter(|l| l.contains("@perry_probe_get("))
+        .filter(|l| l.contains("@perry_probe_get_site("))
         .collect();
     assert_eq!(probes.len(), 1, "one probe call per read:\n{func}");
     assert!(
@@ -865,7 +868,7 @@ fn the_generic_shared_read_receives_boxed_receiver_key_and_feedback() {
         .iter()
         .flat_map(|(l, body)| {
             body.iter()
-                .filter(|t| t.contains("@js_object_get_field_value("))
+                .filter(|t| t.contains("@js_object_get_field_value_site("))
                 .map(move |t| (l.as_str(), t))
         })
         .collect();

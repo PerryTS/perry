@@ -402,6 +402,8 @@ const COLD_HELPERS: &[&str] = &[
     // `cold` is only a profitability hint: both calls remain fully
     // memory-clobbering and the cache miss remains GC-capable/throwing.
     "js_object_get_field_slow",
+    "js_object_get_field_site_slow",
+    "js_object_get_field_value_site",
     "js_object_get_field_nonptr",
     "js_object_get_field_value",
     "js_global_get_field_slow",
