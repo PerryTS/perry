@@ -295,6 +295,45 @@ unsafe fn leaf_answer(
     })
 }
 
+/// An indexed atom comparison collided. The existing shape/slot proof
+/// may already answer the whole read; otherwise resume the index exactly
+/// after its first bucket. This does not infer absence from a collision.
+#[inline(never)]
+pub(super) unsafe fn collision<const ABSENT_OK: bool, const LAZY_HASH: bool>(
+    dir: *const u8,
+    obj: *const ObjectHeader,
+    key_bits: u64,
+    hash: u64,
+    memo: *const ReadSiteMemo,
+    table: *const KeyIndex,
+    keys: u64,
+) -> f64 {
+    let pair = (*memo).pairs[0].load(Relaxed);
+    if (pair >> 32) as u32 == (*obj).parent_class_id && pair as u32 != DECLINE {
+        return collision_matched::<ABSENT_OK, LAZY_HASH>(dir, obj, key_bits, hash, memo);
+    }
+    indexed::continued::<ABSENT_OK, true, LAZY_HASH>(dir, obj, key_bits, hash, memo, table, keys)
+}
+
+#[inline(never)]
+unsafe fn collision_matched<const ABSENT_OK: bool, const LAZY_HASH: bool>(
+    dir: *const u8,
+    obj: *const ObjectHeader,
+    key_bits: u64,
+    hash: u64,
+    memo: *const ReadSiteMemo,
+) -> f64 {
+    if let Some(v) = leaf_answer(dir, obj, key_bits, memo) {
+        return v;
+    }
+    // A matched but unanswered proof may have a live hole or an unproved
+    // link. Only that case reconstructs the table after the proof attempt.
+    let r = record_of(dir, (*obj).parent_class_id);
+    let table = ((*r).probe & !PROBE_FLAGS) as *const KeyIndex;
+    let keys = (*r).keys;
+    indexed::continued::<ABSENT_OK, true, LAZY_HASH>(dir, obj, key_bits, hash, memo, table, keys)
+}
+
 /// The own list proved the key absent.
 #[inline(never)]
 pub(super) unsafe fn miss_absent<const ABSENT_OK: bool, const LAZY_HASH: bool>(

@@ -555,7 +555,7 @@ fn indexed_collisions_preserve_each_distinct_slots_value() {
         assert!((*table).mask <= 127, "all fixture keys must collide");
         let biased = (obj as usize - perry_abi::RECEIVER_HANDLE_FLOOR) as i64;
         let memo = ReadSiteMemo::EMPTY;
-        for (slot, key) in keys.into_iter().enumerate() {
+        for (slot, key) in keys.iter().copied().enumerate() {
             let bits = STRING_TAG | key as u64;
             assert_eq!(perry_probe_get_memo(dir, biased, bits, &memo), slot as f64);
             assert_eq!(
@@ -568,5 +568,22 @@ fn indexed_collisions_preserve_each_distinct_slots_value() {
             [0; PAIRS],
             "own hits do not write the memo"
         );
+        // The later buckets must also remain correct when a memo can
+        // answer before collision traversal, including a live slot write.
+        for (slot, key) in keys.iter().copied().enumerate() {
+            let bits = STRING_TAG | key as u64;
+            let hash = crate::string::property_atom_hash(key);
+            let warm = ReadSiteMemo::EMPTY;
+            assert_eq!(
+                data(prime(dir, obj, bits, hash, &warm)),
+                (slot as f64).to_bits()
+            );
+            assert_eq!(perry_probe_get_memo(dir, biased, bits, &warm), slot as f64);
+            let shape = (*obj).parent_class_id;
+            let value = (1000 + slot) as f64;
+            crate::object::js_object_set_field_by_name(obj, key, value);
+            assert_eq!((*obj).parent_class_id, shape);
+            assert_eq!(perry_probe_get_memo(dir, biased, bits, &warm), value);
+        }
     }
 }

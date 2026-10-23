@@ -7,3 +7,5 @@ Named leaves retain stateless data handling with four arguments: the memo replac
 Unproved own-slot loads use a shared tail entrance. Ordinary inline loads and memo probe refusals no longer save registers for that uncommon load call.
 
 Indexed reads tail-continue hash collisions separately from the first bucket, and existing accessor entries decline directly to the collecting entrance. Memo mismatches continue statelessly before saving registers for a matched proof.
+
+At an indexed collision, a matching memo can prove the complete read before further key traversal; an unanswered proof resumes the same index. Collision continuations reuse its existing table and key-array pointers. Array element addresses use the same allocation extent and remaining capacity directly in bytes, preserving queue offsets and named-property reserves without new metadata.

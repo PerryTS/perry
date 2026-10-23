@@ -33,14 +33,23 @@ pub(super) unsafe fn get<const ABSENT: bool, const SITE: bool, const LAZY_HASH: 
     }
     // Select the key storage before retaining its slot index. This keeps
     // the list header arithmetic from extending the index's live range.
+    let keys = (*r).keys;
     let words = if pos & ALIAS_ENTRY != 0 {
         (*table).words.as_ptr()
     } else {
-        crate::array::array_elements_ptr((*r).keys as usize as *const _) as *const u64
+        crate::array::array_elements_ptr(keys as usize as *const _) as *const u64
     };
     let i = pos & POS_BITS;
     if *words.add(i as usize) != key_bits {
-        return continued::<ABSENT, SITE, LAZY_HASH>(dir, obj, key_bits, hash, memo);
+        // A matching memo proves the entire live chain, including any
+        // own key in a later bucket. An unanswered proof still continues
+        // this same index; the first bucket is not treated as own absence.
+        if SITE {
+            return site_memo::collision::<ABSENT, LAZY_HASH>(
+                dir, obj, key_bits, hash, memo, table, keys,
+            );
+        }
+        return continued::<ABSENT, SITE, LAZY_HASH>(dir, obj, key_bits, hash, memo, table, keys);
     }
     // This existing shape fact proves a public accessor. The leaf must
     // decline it; the collecting entrance reloads the live getter pair.
@@ -52,18 +61,18 @@ pub(super) unsafe fn get<const ABSENT: bool, const SITE: bool, const LAZY_HASH: 
 }
 
 #[inline(never)]
-unsafe fn continued<const ABSENT: bool, const SITE: bool, const LAZY_HASH: bool>(
+pub(super) unsafe fn continued<const ABSENT: bool, const SITE: bool, const LAZY_HASH: bool>(
     dir: *const u8,
     obj: *const ObjectHeader,
     key_bits: u64,
     hash: u64,
     memo: *const site_memo::ReadSiteMemo,
+    table: *const KeyIndex,
+    keys: u64,
 ) -> f64 {
-    // Reconstruct the cursor only after a collision. No collection or user
-    // code occurs between the first bucket and here.
-    let r = record_of(dir, (*obj).parent_class_id);
-    let table = ((*r).probe & !PROBE_FLAGS) as *const KeyIndex;
-    let list = crate::array::array_elements_ptr((*r).keys as usize as *const _) as *const u64;
+    // Continue with the same existing table and key array. No collection
+    // or user code occurs between the first bucket and here.
+    let list = crate::array::array_elements_ptr(keys as usize as *const _) as *const u64;
     let mask = (*table).mask as usize;
     let slots = KeyIndex::buckets(table);
     let mut b = (site_key_hash::<LAZY_HASH>(key_bits, hash) as usize).wrapping_add(1) & mask;
