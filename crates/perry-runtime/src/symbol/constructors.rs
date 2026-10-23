@@ -346,11 +346,10 @@ mod registry_key_tests {
             let text = b"legacy raw symbol registry key";
             let header = js_string_from_bytes(text.as_ptr(), text.len() as u32);
             let roots = crate::gc::RuntimeHandleScope::new();
-            let rooted = roots.root_raw_mut_ptr(header);
+            let rooted = roots.root_string_ptr(header);
             let expected = js_symbol_for(crate::value::js_nanbox_string(header as i64));
-            let actual = js_symbol_for(f64::from_bits(
-                rooted.get_raw_mut_ptr::<StringHeader>() as u64
-            ));
+            let actual = rooted
+                .with_const_ptr::<StringHeader, _>(|ptr| js_symbol_for(f64::from_bits(ptr as u64)));
             assert_eq!(actual.to_bits(), expected.to_bits());
             assert_ne!(js_is_symbol(actual), 0);
         }
