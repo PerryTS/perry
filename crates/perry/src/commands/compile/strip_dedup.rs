@@ -131,7 +131,59 @@ fn pid_is_live(pid: u32) -> bool {
     std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
 }
 
-#[cfg(not(unix))]
+/// Process liveness on Windows: a pid is live iff it appears in the current
+/// process table (a Toolhelp32 snapshot). The kernel removes terminated
+/// processes from the table immediately, so absence means the strip
+/// directory can be reclaimed. A failed snapshot errs toward "live" so a
+/// transient error never deletes a directory in use.
+#[cfg(windows)]
+fn pid_is_live(pid: u32) -> bool {
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct ProcessEntry32W {
+        dw_size: u32,
+        cnt_usage: u32,
+        th32_process_id: u32,
+        th32_default_heap_id: usize,
+        th32_module_id: usize,
+        cnt_threads: u32,
+        th32_process_id_parent: u32,
+        dw_flags: u32,
+        sz_exe_file: [u16; 260],
+    }
+    const TH32CS_SNAPPROCESS: u32 = 0x00000002;
+    const INVALID_HANDLE: isize = -1;
+
+    extern "system" {
+        fn CreateToolhelp32Snapshot(dwFlags: u32, dwProcessId: u32) -> isize;
+        fn Process32FirstW(hSnapshot: isize, lppe: *mut ProcessEntry32W) -> i32;
+        fn Process32NextW(hSnapshot: isize, lppe: *mut ProcessEntry32W) -> i32;
+        fn CloseHandle(hObject: isize) -> i32;
+    }
+
+    let mut entry: ProcessEntry32W = unsafe { std::mem::zeroed() };
+    entry.dw_size = std::mem::size_of::<ProcessEntry32W>() as u32;
+    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
+    if snapshot == INVALID_HANDLE {
+        return true;
+    }
+    let mut found = false;
+    if unsafe { Process32FirstW(snapshot, &mut entry) } != 0 {
+        loop {
+            if entry.th32_process_id == pid {
+                found = true;
+                break;
+            }
+            if unsafe { Process32NextW(snapshot, &mut entry) } == 0 {
+                break;
+            }
+        }
+    }
+    let _ = unsafe { CloseHandle(snapshot) };
+    found
+}
+
+#[cfg(not(any(unix, windows)))]
 fn pid_is_live(_pid: u32) -> bool {
     // No cheap portable probe; err toward "live" and leave the directory.
     true
