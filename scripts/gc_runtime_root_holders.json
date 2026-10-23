@@ -186,18 +186,6 @@
       "why": "Cache miss counter (telemetry). Holds no address."
     },
     {
-      "file": "crates/perry-runtime/src/weakref.rs",
-      "name": "WEAKMAP_BIRTH_SITE",
-      "verdict": "not_a_gc_pointer",
-      "why": "BrandedBirthSite contains only Cell<u32>: a weak scalar ShapeId, never a GC address or carrier. resolve checks record presence and all branded birth facts on every use; retired ids are rejected and re-resolved through the existing interner."
-    },
-    {
-      "file": "crates/perry-runtime/src/weakref.rs",
-      "name": "WEAKSET_BIRTH_SITE",
-      "verdict": "not_a_gc_pointer",
-      "why": "BrandedBirthSite contains only Cell<u32>: a weak scalar ShapeId, never a GC address or carrier. resolve checks record presence and all branded birth facts on every use; retired ids are rejected and re-resolved through the existing interner."
-    },
-    {
       "file": "crates/perry-runtime/src/closure/shape.rs",
       "name": "FUNCTION_PROTOTYPE_SLOT",
       "verdict": "covered_elsewhere",
@@ -233,12 +221,6 @@
       "name": "CLAIM",
       "verdict": "not_a_gc_pointer",
       "why": "turnloop P9: this thread's claim on its agent's route slot in `ROUTES`. `ClaimGuard` holds exactly one field, an `Arc<AtomicBool>` — the flag a wake producer reads to decide whether a parked loop needs a syscall. No JS value, no NaN-boxed word and no arena pointer ever reaches it: the guard is written only by `claim_route` (which builds the `Arc`) and read only by `claimed_flag`/`release_route`, and its `Drop` removes the matching `ROUTES` entry by `Arc::ptr_eq`. The loop itself lives in the sibling `AGENT_LOOP`, whose completions are copied out of turnloop's pooled buffers before any JS sees them (P1's rule: no heap pointer reaches the driver)."
-    },
-    {
-      "file": "crates/perry-runtime/src/exception.rs",
-      "name": "WORKER_BASE_DEPTH",
-      "verdict": "not_a_gc_pointer",
-      "why": "Worker base-trap try-stack depth in Cell<Option<usize>>, not the jump-buffer address or exception value. run_worker_body stores current_try_depth() - 1 and restores the outer depth; hand_to_worker_base reads it to index ExceptionState.savepoints/jump_buffers. The actual exception is stored separately through runtime_store_root_nanbox_f64_raw_slot. None means this thread has no worker base trap."
     },
     {
       "file": "crates/perry-runtime/src/fs/deferred.rs",
@@ -280,7 +262,7 @@
       "file": "crates/perry-runtime/src/gc/census.rs",
       "name": "PASS1_MARKED",
       "verdict": "non_moving_snapshot",
-      "why": "Re-audited 2026-10-11 for objtables at f98073e and scanner removals. Raw header-address snapshot exists only in a synchronous full run_to_completion: step_mark_propagation records it after marking, then block persistence and weak/ephemeron fixed-point processing only mark/clear edges. Full finalization skips the relocating minor prelude. step_sweep consumes PASS1_MARKED before taking the census and before reclamation. Budgeted cycles and minors skip creation/consumption. No JS callback, object relocation, or mutator window occurs between the two boundaries; native Rust allocations do not collect. The deleted builtin, boxed, exotic and symbol scanner registrations precede this window and cannot change its custody. Proxy scanner deletion affects initialization only. Proxy ephemeron keys now use ordinary heap marks; bounded fixed-point rounds only shade or clear slots and invoke no JS or relocation, so the synchronous snapshot window is unchanged. Native property scanner deletion affects initialization only; its replacement scanners shade or rewrite existing native record bag slots before the pass-1 snapshot. The synchronous mark-to-sweep window and no-callback premise remain unchanged. Re-audited 2026-10-12 allocstate: gc_init primes the existing per-thread inline arena cursor before generated code enters. It runs outside the synchronous mark-complete to sweep-entry window; that window, its callbacks and its nonmoving contract are unchanged. Re-audited 2026-10-12 (sitememo I1) after `gc/mod.rs` gained `pub(crate) mod never_move;` and a test-only scanner registration helper: neither adds a collection phase, a relocation or a JS callback between mark completion and sweep entry; never-move only declines old-page evacuation candidates, which this window does not run. The window is unchanged.",
+      "why": "Re-audited 2026-10-23 against the pinned-source diffs and current collection phases. Raw header-address snapshot exists only in a synchronous full run_to_completion: step_mark_propagation records it after tracing, then block persistence and weak/ephemeron processing only mark or clear existing edges. Full finalization skips the relocating minor prelude. step_sweep consumes the snapshot before census reporting and before reclamation; budgeted cycles and minors skip its creation and consumption. No JS callback, object relocation, or mutator window occurs between the boundaries. The added full-sweep honest-pointer verifier only reads heap slots and allocator metadata; it neither calls JS nor relocates. Scanner registration and optional feature installation occur in gc_init before this window. Trigger-watermark admission, promotion-policy estimates and test-only throw sabotage do not change the synchronous mark-to-sweep sequence; the production throw check aborts rather than calling JS or unwinding. Native Rust allocations do not collect. Removing the retired PIC census row changes reporting only.",
       "window": {
         "start": {
           "file": "crates/perry-runtime/src/gc/census.rs",
@@ -295,14 +277,15 @@
           "function": "run_to_completion"
         },
         "sources": {
-          "crates/perry-runtime/src/gc/census.rs": "8caa5025a79c4c528d4e200829a4b88af69c4272ed1bb3928b6b92dc5bf59ec7",
-          "crates/perry-runtime/src/gc/cycle.rs": "03df5021123623450e34529ce926b724aae9b30dc089f98feb025a7a274c11ec",
-          "crates/perry-runtime/src/gc/mod.rs": "ee76c6f87f5c83ed18442a8c962a74617fffa0981aa4ff480cfadd478330c681",
-          "crates/perry-runtime/src/gc/policy.rs": "6b28334b441eb66151d795633d5ccb7e86d17db00e1b3c72a71c513b851523bb",
+          "crates/perry-runtime/src/gc/census.rs": "0cd91052df3a3dd884840e1365aae5e68ca07b20193d2e53049cf08388746fb4",
+          "crates/perry-runtime/src/gc/cycle.rs": "84ef67459e5013ca89ab79a77776837e27323502fd574535e944f43815843209",
+          "crates/perry-runtime/src/gc/mod.rs": "dd133cc4b4ff53115ebc809c818b99cc5dc96949c910a056f47f2e3c0d2c123a",
+          "crates/perry-runtime/src/gc/policy.rs": "547096daeecb46c9f0fc0c53dadce261ad6549c878c081793224cbd8e0a38872",
           "crates/perry-runtime/src/gc/progress.rs": "acb439ba3c6a100f08ea4aa0ba4b96c30afb8cb5d84264436948524144b9342b",
-          "crates/perry-runtime/src/gc/allocation_pacing.rs": "19f42dd6a732d56d024e5caa73fbf485f54db69bf855909c327b84e1b79429c9",
+          "crates/perry-runtime/src/gc/allocation_pacing.rs": "8457f4987805b2755f6d235e4c22ebbfd549ef011f5edea5ddad15c48daab5ef",
           "crates/perry-runtime/src/gc/ephemeron.rs": "b6a62662078caf02e5fa716e6bd8089f20e67efca8c9bb55ea234567e81adc06",
-          "crates/perry-runtime/src/gc/cycle/weak_ephemerons.rs": "4c2183d3f5bff96acd2df6fbc1b0ad4d47eec23317ef378781e220b4700cf1f4"
+          "crates/perry-runtime/src/gc/cycle/weak_ephemerons.rs": "4c2183d3f5bff96acd2df6fbc1b0ad4d47eec23317ef378781e220b4700cf1f4",
+          "crates/perry-runtime/src/gc/verify_honest.rs": "7ce42efcd504e2a00a0ace2cd2df4eb113093c2e6d9710e2c39f6fb2f4d2f488"
         }
       }
     },
@@ -485,12 +468,6 @@
       "name": "MINOR_SEQ",
       "verdict": "not_a_gc_pointer",
       "why": "#9794: monotonic per-minor sequence number used to label survival-origin records. A `Cell<u64>`."
-    },
-    {
-      "file": "crates/perry-runtime/src/gc/tenuring.rs",
-      "name": "SURVIVOR_ROUND_MEASURED",
-      "verdict": "not_a_gc_pointer",
-      "why": "Declared at crates/perry-runtime/src/gc/tenuring.rs:212; this Cell<bool> records whether any survivor round has been rated on this thread, gating the occupancy rule off its floor. A boolean, never a heap pointer."
     },
     {
       "file": "crates/perry-runtime/src/gc/trace.rs",
@@ -694,18 +671,6 @@
       "reason": "Holds Set/Map header ADDRESSES as identity keys for in-flight forEach walks (#9082); the values are only ever compared (`contains`, `pop` equality) and truncated, never dereferenced, so no collector edge originates here. Correctness across evacuation is maintained by set_header_moved_for_gc / map_header_moved_for_gc, which rewrite every matching entry when a header moves — see the SET_FOREACH_STACK/MAP_FOREACH_STACK rewrite loops there."
     },
     {
-      "file": "crates/perry-runtime/src/module_require.rs",
-      "name": "CANONICAL_MODULE_DIRS",
-      "verdict": "not_a_gc_pointer",
-      "why": "Memo of canonicalized module DIRECTORIES (module_require.rs:861). Key is an owned Rust `String`, value an owned `std::path::PathBuf`; both are plain filesystem text with no JSValue, NaN-boxed word, or arena pointer, so it holds no GC root."
-    },
-    {
-      "file": "crates/perry-runtime/src/module_require.rs",
-      "name": "CANONICAL_MODULE_PATHS",
-      "verdict": "not_a_gc_pointer",
-      "why": "Memo of canonicalized module path STRINGS (module_require.rs:857). Key and value are both owned Rust `String`; the map never stores a JSValue, a NaN-boxed word, or a raw pointer into the arena, so there is nothing for a scanner to mark or rewrite. Populated during module resolution from `Path`/`OsStr` text only."
-    },
-    {
       "file": "crates/perry-runtime/src/node_api_host/loader.rs",
       "name": "LEGACY_CAPTURE",
       "verdict": "not_a_gc_pointer",
@@ -719,63 +684,15 @@
     },
     {
       "file": "crates/perry-runtime/src/node_stream_constructors/birth.rs",
-      "name": "R_SHELL",
-      "verdict": "not_a_gc_pointer",
-      "why": "Cell<u32> stores only a monotonic ShapeId returned by object_shape_stamp. Every birth consults the current shape directory and validates prototype identity and layout facts after allocation. There are no heap addresses or NaN-boxed values in this memo."
-    },
-    {
-      "file": "crates/perry-runtime/src/node_stream_constructors/birth.rs",
-      "name": "W_SHELL",
-      "verdict": "not_a_gc_pointer",
-      "why": "Cell<u32> stores only a monotonic ShapeId returned by object_shape_stamp. Every birth consults the current shape directory and validates prototype identity and layout facts after allocation. There are no heap addresses or NaN-boxed values in this memo."
-    },
-    {
-      "file": "crates/perry-runtime/src/node_stream_constructors/birth.rs",
-      "name": "D_SHELL",
-      "verdict": "not_a_gc_pointer",
-      "why": "Cell<u32> stores only a monotonic ShapeId returned by object_shape_stamp. Every birth consults the current shape directory and validates prototype identity and layout facts after allocation. There are no heap addresses or NaN-boxed values in this memo."
-    },
-    {
-      "file": "crates/perry-runtime/src/node_stream_constructors/birth.rs",
-      "name": "T_SHELL",
-      "verdict": "not_a_gc_pointer",
-      "why": "Cell<u32> stores only a monotonic ShapeId returned by object_shape_stamp. Every birth consults the current shape directory and validates prototype identity and layout facts after allocation. There are no heap addresses or NaN-boxed values in this memo."
-    },
-    {
-      "file": "crates/perry-runtime/src/node_stream_constructors/birth.rs",
-      "name": "P_SHELL",
-      "verdict": "not_a_gc_pointer",
-      "why": "Cell<u32> stores only a monotonic ShapeId returned by object_shape_stamp. Every birth consults the current shape directory and validates prototype identity and layout facts after allocation. There are no heap addresses or NaN-boxed values in this memo."
-    },
-    {
-      "file": "crates/perry-runtime/src/node_stream_constructors/birth.rs",
       "name": "SITE",
       "verdict": "not_a_gc_pointer",
       "why": "BirthWriteSite contains Cell<Option<BirthWrite>>. BirthWrite contains only u32 predecessor/successor ShapeIds, a u32 slot index, eight u32 prototype ShapeIds and a usize chain length. No field stores a heap pointer or JS value; the exact receiver and complete prototype ShapeIds are validated on every replay."
-    },
-    {
-      "file": "crates/perry-runtime/src/node_stream_state_view.rs",
-      "name": "READABLE_BIRTH",
-      "verdict": "not_a_gc_pointer",
-      "why": "Cell<u32> stores only a ShapeId returned by object_shape_stamp for a state birth. The allocator consults the live descriptor directory and revalidates prototype identity, kind, key count, inline width, holes and descriptor facts after allocation. The memo carries no heap address or JS value."
-    },
-    {
-      "file": "crates/perry-runtime/src/node_stream_state_view.rs",
-      "name": "WRITABLE_BIRTH",
-      "verdict": "not_a_gc_pointer",
-      "why": "Cell<u32> stores only a ShapeId returned by object_shape_stamp for a state birth. The allocator consults the live descriptor directory and revalidates prototype identity, kind, key count, inline width, holes and descriptor facts after allocation. The memo carries no heap address or JS value."
     },
     {
       "file": "crates/perry-runtime/src/node_stream_constructors/birth_memo.rs",
       "name": "E_EXISTING",
       "verdict": "not_a_gc_pointer",
       "why": "Constructor transition memo stores only input/output ShapeIds, prototype-chain ShapeIds, hook-presence bits, slot count and inline count. No heap address or JS value; every replay validates the current input and live shape authority."
-    },
-    {
-      "file": "crates/perry-runtime/src/node_stream_constructors/event_emitter_new.rs",
-      "name": "PLAIN_PROTOTYPE",
-      "verdict": "not_a_gc_pointer",
-      "why": "#10508: `new EventEmitter()`'s site memo holds a prototype ShapeId (u32) and two inline-slot indexes (u32). It names no object: every use re-reads the prototype from the bound EventEmitter export and compares that object's current ShapeId with the memo's before trusting the slot."
     },
     {
       "file": "crates/perry-runtime/src/node_stream_state_view.rs",
@@ -883,19 +800,6 @@
       "name": "TEST_TRANSITION_FAST_HITS",
       "verdict": "not_a_gc_pointer",
       "why": "#[cfg(test)] hit counter for the learned shape-transition fast path: a thread_local Cell<u64> incremented on each hit and reset by test_reset_transition_fast_hits. Holds a count, never a JSValue or heap pointer, and does not exist in a release build."
-    },
-    {
-      "file": "crates/perry-runtime/src/object/global_this/fetch_globals.rs",
-      "name": "TEST_COLLECT_BEFORE_GLOBAL_THIS_ALLOC",
-      "verdict": "test_only",
-      "why": "#[cfg(test)] Cell<bool> one-shot flag that asks js_get_global_this to collect once before it allocates the realm, so the unresolved-global rooting regression can observe the relocation; stores only true/false and is absent from shipped binaries."
-    },
-    {
-      "file": "crates/perry-runtime/src/object/global_this/fetch_globals.rs",
-      "name": "THREAD_GLOBAL_THIS",
-      "verdict": "covered_elsewhere",
-      "scanner": "gc::roots GLOBAL_ROOTS — the cell's address is registered with js_gc_register_global_root (fetch_globals.rs, js_get_global_this) and marked+rewritten as a mutable global root",
-      "why": "A raw-pointer cache slot registered as a global root at first population; the registration is a call, not a scanner body, so the walk cannot see it."
     },
     {
       "file": "crates/perry-runtime/src/object/global_this/fetch_globals.rs",
@@ -1036,12 +940,6 @@
       "name": "CALLED",
       "verdict": "test_only",
       "why": "Three cfg(test) callback counters increment integer invocation counts only. They never store managed values or heap addresses."
-    },
-    {
-      "file": "crates/perry-runtime/src/proxy/put_value.rs",
-      "name": "WRITE_STUB",
-      "verdict": "not_a_gc_pointer",
-      "why": "Megamorphic dynamic-write stub cache: 4096 ways of (shape_token, key_bits, slot) plain u64s. The token is a shape id and the slot an index; key_bits are content-derived by construction, because stub_key_bits admits only SSO immediates (and short ASCII heap strings folded to the SSO bits of their content) and rejects every key that would otherwise be stored under a pointer. No way holds a heap address, so nothing here keeps an object alive, and a stale entry is rejected by dyn_ic_try_store's per-hit shape-token/flags/slot-bound revalidation."
     },
     {
       "file": "crates/perry-runtime/src/pty/mod.rs",
@@ -2699,12 +2597,6 @@
       "why": "Cell<bool> set while the runtime runs its own builtin definitions (as_builtin_definition, #10697), so installs onto non-Map/Set/Date owners do not arm PERRY_OWN_NAMED_PROP_INSTALLED. A flag, never an address."
     },
     {
-      "file": "crates/perry-runtime/src/string/compare.rs",
-      "name": "KEY_BYTE_READS",
-      "verdict": "test_only",
-      "why": "#10502: cfg(test) thread-local count of stored-key byte reads/comparisons. The Cell holds only an incremented u64 counter, never a heap pointer or NaN-boxed value; it is absent from production builds."
-    },
-    {
       "file": "crates/perry-runtime/src/closure/shape.rs",
       "name": "PROTOTYPE_SLOT_CACHE",
       "verdict": "not_a_gc_pointer",
@@ -2752,54 +2644,6 @@
       "name": "BACKING_BYTES",
       "verdict": "not_a_gc_pointer",
       "why": "Per-thread count of bytes allocated by the creator of process-global SharedArrayBuffer storage. A numeric byte count, never a heap address; receiving aliases does not increment it."
-    },
-    {
-      "file": "crates/perry-runtime/src/node_stream_constructors/event_emitter_new.rs",
-      "name": "BAG_PROTOTYPE_SLOT",
-      "verdict": "not_a_gc_pointer",
-      "why": "#11992: Fixed prototype-read site memo. Each way holds only the constructor property bag header identity word (class id and ShapeId) and a u32 inline slot. Every use reads the current bag and compares its word; no bag pointer or JS value is retained."
-    },
-    {
-      "file": "crates/perry-runtime/src/node_stream_constructors/event_emitter_new.rs",
-      "name": "FINAL_SHAPE",
-      "verdict": "not_a_gc_pointer",
-      "why": "#11992: One newborn allocation-site memo containing a u32 ShapeId. Every use resolves the live shape record and validates prototype identity, kind, key count and inline layout; IDs are never reused and no heap address is stored."
-    },
-    {
-      "file": "crates/perry-runtime/src/node_stream_event_emitter_shape.rs",
-      "name": "EMIT_METHOD",
-      "verdict": "not_a_gc_pointer",
-      "why": "#11992: Fixed method-resolver site memo. Its two ways admit only static image dispatch descriptors or inline short-string words as method ids (heap/raw string addresses are refused), plus receiver and prototype holder identity words (class id and ShapeId), and u32 slots. Hits re-resolve the current prototype through the receiver shape and validate both identity words before loading; no object address or JS value is retained."
-    },
-    {
-      "file": "crates/perry-runtime/src/node_stream_event_emitter_shape.rs",
-      "name": "EVENTS_COUNT_SLOT",
-      "verdict": "not_a_gc_pointer",
-      "why": "#11992: Fixed property-access site memo. Two ways contain only receiver header identity words (class id and ShapeId) and u32 slot indices. Every use compares the current live receiver word and reads its current value; no receiver pointer or JS value is retained."
-    },
-    {
-      "file": "crates/perry-runtime/src/node_stream_event_emitter_shape.rs",
-      "name": "EVENTS_SLOT",
-      "verdict": "not_a_gc_pointer",
-      "why": "#11992: Fixed property-access site memo. Two ways contain only receiver header identity words (class id and ShapeId) and u32 slot indices. Every use compares the current live receiver word and reads its current value; no receiver pointer or JS value is retained."
-    },
-    {
-      "file": "crates/perry-runtime/src/node_stream_event_emitter_shape.rs",
-      "name": "MAX_LISTENERS_SLOT",
-      "verdict": "not_a_gc_pointer",
-      "why": "#11992: Fixed property-access site memo. Two ways contain only receiver header identity words (class id and ShapeId) and u32 slot indices. Every use compares the current live receiver word and reads its current value; no receiver pointer or JS value is retained."
-    },
-    {
-      "file": "crates/perry-runtime/src/node_stream_event_emitter_shape.rs",
-      "name": "NO_NEW_LISTENER",
-      "verdict": "not_a_gc_pointer",
-      "why": "#11992: Fixed property-absence site memo. Four ways contain only receiver header identity words (class id and ShapeId). Every use compares the current live receiver word; no receiver pointer or JS value is retained."
-    },
-    {
-      "file": "crates/perry-runtime/src/node_stream_event_emitter_shape.rs",
-      "name": "NO_REMOVE_LISTENER",
-      "verdict": "not_a_gc_pointer",
-      "why": "#11992: Fixed property-absence site memo. Four ways contain only receiver header identity words (class id and ShapeId). Every use compares the current live receiver word; no receiver pointer or JS value is retained."
     },
     {
       "file": "crates/perry-runtime/src/object/alloc_basic.rs",
@@ -2916,21 +2760,15 @@
       "why": "Per-thread Cell<bool> set by a store move hook when a copy lands in the inactive survivor half during the running copying minor; folded into YOUNG_STORES_PRESENT at that minor's finalization. Holds only true/false, no address or NaN-boxed value."
     },
     {
-      "file": "crates/perry-runtime/src/closure/alloc.rs",
-      "name": "CLOSURE_ALLOC_COUNT",
-      "verdict": "not_a_gc_pointer",
-      "why": "Allocation telemetry counter. promise::bump increments it numerically; it never stores a heap address. Header-image stores make the address heuristic notice it."
-    },
-    {
       "file": "crates/perry-runtime/src/string/intern.rs",
       "name": "INTERN_TABLE",
       "verdict": "weak_heap_change_cache",
-      "why": "O4: existing direct-mapped runtime string reuse is weak. Every collection HeapChange clears all entries at entry before any free or move. gc_realloc validates the malloc cell and clears before realloc only for GC_TYPE_STRING: entries point exclusively to StringHeaders, never unrelated object/array storage. Untracked/arena fallbacks leave the original allocation unchanged; nested collections independently clear. Both production insertion paths use publish_intern_entry, which refuses publication throughout every open HeapChange, including realloc; there is therefore nothing newly published to clear at scope close. Existing readers use with_intern_table without per-lookup checks. Tests exercise real unrelated realloc retention, tracked string realloc invalidation, nested publication exclusion through both writers, young-string death and live relocation. Reviewed heap-change producers, malloc validation and allocator ordering, and thread-exit release. Neither this table nor ATOMS is scanned. Deleted ATOM_YOUNG/INTERN_YOUNG holders disappear. Executable image keys bypass this 1024-slot weak cache. Pins enforce renewed review of the publication/invalidation funnels.",
+      "why": "Re-audited 2026-10-23 against the pinned-source diffs. The existing direct-mapped string-reuse cache is weak: every collection HeapChange clears all entries at entry before any free or move. gc_realloc validates the malloc cell and clears before realloc only for GC_TYPE_STRING; unrelated reallocations leave cached string addresses unchanged. Both production insertion funnels still use publish_intern_entry, which refuses publication throughout every open HeapChange, including nested scopes and realloc. Ordinary readers need no per-lookup scope check. New property-atom creation, image seeding, mixed-hash probing and weak metadata rewrite/prune operate on the separate ATOMS table; atom hits published into INTERN_TABLE still use the same guarded publication funnel. The cache itself is not scanned and holds no strong root. Const-initialized malloc bookkeeping only defers native Vec capacity reservation; it does not change string realloc validation or HeapChange ordering. Concat changes isolate numeric test counters and add no publication path. Existing tests cover unrelated/string realloc, nested publication exclusion through both writers, young-string death and live relocation.",
       "sources": {
-        "crates/perry-runtime/src/string/intern.rs": "da1f55be10e6b16e94a10f3f934a7530bda2c82cbe16100552e50332b0fb2b76",
+        "crates/perry-runtime/src/string/intern.rs": "c1c01e95364e9f1e3fb64f1ef9f00de6a34489238bff7acccafc8281d3f6c29f",
         "crates/perry-runtime/src/gc/heap_generation.rs": "8344c9995c62342714b40a947dd20338a56fcd1cb8f031356e865b9121d6ee2f",
-        "crates/perry-runtime/src/string/concat.rs": "70524a9b45b57031689df1690486f75cb159f946fa3060e0d774783f4c83da19",
-        "crates/perry-runtime/src/gc/malloc.rs": "79e7f8aab9e5ff63d1e68ddc07290c9f85b3c81384683c2d59a90aa5e168c2cb"
+        "crates/perry-runtime/src/string/concat.rs": "aff51a40e1cf03321ddec88547a7baf0666391598b7289fa8d662f0c19596ed0",
+        "crates/perry-runtime/src/gc/malloc.rs": "5473dff1ad0d1b5e596268b2193e341f823d11a659e66b6fe6537a5e021c9076"
       }
     },
     {
@@ -2944,6 +2782,156 @@
       "name": "CANONICAL_KEYS",
       "verdict": "weak_pinned_old",
       "why": "I3 weak shape authority: every backing is allocated old and movement-pinned by alloc_canonical_key_list. The registered full-trace death prune retires nodes before sweep can reuse addresses. No root or relocation scanner is required; gc_keylist_invariant.py checks those production funnels."
+    },
+    {
+      "file": "crates/perry-runtime/src/closure/alloc.rs",
+      "name": "CLOSURE_ALLOCS_ON_THREAD",
+      "verdict": "not_a_gc_pointer",
+      "why": "Test-only closure allocation count; note_closure_alloc increments this u64 once per birth, and tests compare numeric deltas. No object address is stored."
+    },
+    {
+      "file": "crates/perry-runtime/src/dyn_eval_hooks.rs",
+      "name": "INTERP_ACTIVE",
+      "verdict": "not_a_gc_pointer",
+      "why": "Interpreter entry depth. interp_active_enter increments and interp_active_leave decrements this u32; note_proto_write tests it against zero. It never stores a JS value or address."
+    },
+    {
+      "file": "crates/perry-runtime/src/exception.rs",
+      "name": "IN_WORKER_BASE",
+      "verdict": "not_a_gc_pointer",
+      "why": "Boolean recording whether run_worker_body has installed its native base trap. Enter/exit save and restore a bool; exception payloads live in the separate traced exception state."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/never_move.rs",
+      "name": "ADMIT_YOUNG",
+      "verdict": "not_a_gc_pointer",
+      "why": "Test-only Boolean sabotage switch permitting a young publication in isolated never-move logic tests; it stores no holder or heap address."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/never_move.rs",
+      "name": "EVACUATE_NEVER_MOVE",
+      "verdict": "not_a_gc_pointer",
+      "why": "Test-only Boolean sabotage switch for ignoring never-move eligibility during evacuation; it carries no object address."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/never_move.rs",
+      "name": "AGE_NEVER_MOVE",
+      "verdict": "not_a_gc_pointer",
+      "why": "Test-only Boolean sabotage switch for breaking never-move aging behavior; it carries no object address."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/never_move.rs",
+      "name": "SKIP_RETIRE_PIN",
+      "verdict": "not_a_gc_pointer",
+      "why": "Test-only Boolean sabotage switch making retirement omit its pin; it stores only the switch, not the retired holder."
+    },
+    {
+      "file": "crates/perry-runtime/src/loop_interrupt.rs",
+      "name": "CURRENT",
+      "verdict": "not_a_gc_pointer",
+      "why": "TerminationHandle is an Arc<AtomicU8> containing only native RUNNING/REQUESTED/RETIRED state. The Rust-owned atomic is shared with the requesting thread; there is no JS closure, JS value or GC allocation in the handle."
+    },
+    {
+      "file": "crates/perry-runtime/src/loop_interrupt.rs",
+      "name": "TERMINATED",
+      "verdict": "not_a_gc_pointer",
+      "why": "Boolean reporting termination of this agent after a loop interrupt. It stores no exception payload, callback or GC address."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/builtin_proto.rs",
+      "name": "ACTIVE",
+      "verdict": "not_a_gc_pointer",
+      "why": "Boolean recursion guard local to call_unknown_collection_method. Reset restores it on scope exit; receiver and callable values are not stored here."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/global_this/generator_state.rs",
+      "name": "BIRTH_SHAPE",
+      "verdict": "not_a_gc_pointer",
+      "why": "Sync-generator birth ShapeId, stored as an immutable u32 id. It names layout metadata, never a generator object or other GC allocation."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/layout_desc.rs",
+      "name": "INSTALL_CAUSE",
+      "verdict": "not_a_gc_pointer",
+      "why": "Numeric diagnostic cause code consumed by note_install for INSTALLS_BY_CAUSE counters. The u8 is never an object address or JS value."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/shapes.rs",
+      "name": "THREAD_SHAPE_MINTS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Test-only u32 count of ShapeIds minted on the current thread. note_thread_mint increments it and tests compare deltas; it stores no key list or heap address."
+    },
+    {
+      "file": "crates/perry-runtime/src/regex/perex_replace_direct.rs",
+      "name": "UNMATCHED_EXITS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Test-only count of replacements taking the leading-unit unmatched exit. Incremented numerically, never assigned a subject or result address."
+    },
+    {
+      "file": "crates/perry-runtime/src/regex/perex_runtime.rs",
+      "name": "DFA_ANSWERS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Test-only count of searches answered by the lazy automaton. It stores a numeric count, not automaton state, captures or a subject pointer."
+    },
+    {
+      "file": "crates/perry-runtime/src/regex/perex_runtime.rs",
+      "name": "LITERAL_PREFIX_ANSWERS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Test-only count of searches answered by the literal-prefix path. It stores no subject pointer or match data."
+    },
+    {
+      "file": "crates/perry-runtime/src/set.rs",
+      "name": "TEST_THREAD_SET_SIDE_DEALLOCATIONS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Test-only pair of numeric deallocation count and freed-byte total, incremented when native Set backing is released. Neither component stores a Set or backing address."
+    },
+    {
+      "file": "crates/perry-runtime/src/test_support.rs",
+      "name": "PRISTINE_ARENA_FIXTURE",
+      "verdict": "not_a_gc_pointer",
+      "why": "Boolean test bootstrap opt-out for fixtures requiring a pristine arena. It stores no runtime state, scanner or GC object."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/verify_honest.rs",
+      "name": "NOT_A_CELL",
+      "verdict": "not_a_gc_pointer",
+      "why": "Immutable zero-filled static test data. Its native .rodata address is deliberately presented as a headerless negative control; the four u64 values contain no GC addresses."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/builtin_namespace.rs",
+      "name": "SNAPSHOT",
+      "verdict": "not_a_gc_pointer",
+      "why": "Contract-only records of namespace indices, owned Vec<u8> member spellings and optional static JsFunctionInfo code-record identities. function_identity extracts the static info record, never the movable ClosureHeader; no receiver, closure or GC string address is retained."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/native_module/constructor_shapes.rs",
+      "name": "READS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Test-only AtomicUsize incremented by the undefined getter to assert it executes once. No returned value or object address is stored."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/property_key.rs",
+      "name": "SUPER_GET_KEY_CONVERSIONS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Test-only numeric count of super property-key conversions. The atomic stores the number of conversion calls, not the converted key or receiver."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/runtime_layouts/node_prototypes.rs",
+      "name": "RUNTIME_SYMBOLS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Process-lifetime native symbol cells only: runtime_symbol_of_atom publishes Symbol.for registry symbols or persistent_symbol results. Both funnels use leak_symbol, a Box-owned PersistentSymbol outside the GC arena, with native Arc text and a null GC description edge. is_runtime_symbol is an existing immortal owner used by symbol admission. Fresh movable Symbol() values are never published here."
+    },
+    {
+      "file": "crates/perry-runtime/src/proxy/apply_construct.rs",
+      "name": "APPLY_CALLS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Test-only atomic invocation count for the apply-trap callability negative control. apply_trap increments it and returns a number; it stores no target, trap closure or receiver."
+    },
+    {
+      "file": "crates/perry-runtime/src/string/compare.rs",
+      "name": "MATCH_GETTER",
+      "verdict": "not_a_gc_pointer",
+      "why": "Test-only pair of an immediate Symbol.match answer and an invocation count. The fixture writes only TAG_TRUE, TAG_FALSE or TAG_UNDEFINED; match_getter increments the count after forcing GC. Search objects and RegExps are held separately in RuntimeHandles; no movable address is stored in this cell."
     }
   ],
   "_FRONTIER_README": "Identity-pinned debt ratchet over new perry-ui* candidates and otherwise-unclassified core raw/Perry TLS declarations (see the census docstring, “The identity-pinned frontier”). A new uncovered holder fails until it is scanned, receives a researched holders verdict, or is deliberately pinned as debt. Moving a researched false positive to holders graduates it from this list. A fixed or classified holder makes its old frontier pin stale, so the receipt must be deleted.",
@@ -3113,10 +3101,6 @@
       "name": "EXC_OBJECT"
     },
     {
-      "file": "crates/perry-runtime/src/eh_walker.rs",
-      "name": "PREDICTION"
-    },
-    {
       "file": "crates/perry-runtime/src/error.rs",
       "name": "CURRENT_CALL_LOCATION"
     },
@@ -3191,10 +3175,6 @@
     {
       "file": "crates/perry-runtime/src/gc/barrier/mod.rs",
       "name": "EVER_DIRTY_OLD_PAGES"
-    },
-    {
-      "file": "crates/perry-runtime/src/gc/barrier/mod.rs",
-      "name": "EXTERNAL_DIRTY_SLOT_PAGES"
     },
     {
       "file": "crates/perry-runtime/src/gc/barrier/mod.rs",
@@ -3494,10 +3474,6 @@
     },
     {
       "file": "crates/perry-runtime/src/gc/tenuring.rs",
-      "name": "CAP_GROW_STREAK"
-    },
-    {
-      "file": "crates/perry-runtime/src/gc/tenuring.rs",
       "name": "CAP_SHRINK_STREAK"
     },
     {
@@ -3511,14 +3487,6 @@
     {
       "file": "crates/perry-runtime/src/gc/tenuring.rs",
       "name": "OBJECT_CENSUS_SEEDED"
-    },
-    {
-      "file": "crates/perry-runtime/src/gc/tenuring.rs",
-      "name": "PREV_COPIED_BYTES"
-    },
-    {
-      "file": "crates/perry-runtime/src/gc/tenuring.rs",
-      "name": "PROMOTE_LOCK"
     },
     {
       "file": "crates/perry-runtime/src/gc/tenuring.rs",
@@ -3882,11 +3850,6 @@
     {
       "file": "crates/perry-runtime/src/object/spill.rs",
       "name": "SPILL_SAFEPOINT_HOOK"
-    },
-    {
-      "file": "crates/perry-runtime/src/object/this_binding.rs",
-      "name": "DERIVED_SUPER_BINDING_STACK",
-      "why": "RefCell<Vec<usize>> of `slot as usize`, where slot is the derived constructor's own i1 ALLOCA (perry-codegen expr/this_super_call.rs::push_shared_super_called_slot). That is a NATIVE STACK address, not a heap address: native frames do not move under GC, so this is not the address-keyed side-table shape the census exists to catch. The only accesses are slot.read() / slot.write(1) on that one-byte has-super()-run flag. Lifetime is bounded by the js_derived_super_scope_push/pop pair around the constructor body plus the savepoint/restore pairs in exception.rs:224/349 and class_registry/dispatch.rs:540/550, so no entry outlives its frame."
     },
     {
       "file": "crates/perry-runtime/src/object/typed_array_proto_thunks.rs",
