@@ -398,3 +398,39 @@ adapter; it does not create another executor. Registry lock resolution and
 released repairs remain shipping requirements. This does not qualify the public
 TypeScript server API, Perry-generated HTTP/GC fixtures, native WASI 0.3,
 macOS/Windows providers or final production/npm packages.
+
+
+## Nonblocking optional-engine HTTP ABI
+
+Component-host ABI 6 exposes owned HTTP listener and operation handles through
+its existing versioned table. Explicit JSON options supply an IP bind address,
+connection capacity, deadlines and optional certificate/key PEM. Native accept
+and completion polling returns pending/ready/terminal status and registers a
+process-lifetime wake callback carrying only an agent identifier. No Store,
+JavaScript callback or managed address reaches the driver. Handler invocation
+is a separate caller-thread operation. Request/response bytes still use the
+bounded native channels, not JSON body serialization.
+
+The operation is guarded against reentry before its state is borrowed, and the
+component bridge is guarded before request ownership transfers. Closing the
+listener invalidates even a request already ready for invocation. Dropping an
+operation cancels its native future; late native wakes cannot reach freed
+operation memory because their context contains only the agent identifier.
+A retired component is reported separately from ordinary rejection. Primary
+and retirement-cleanup callback contexts are separate, so an exception from a
+cleanup destructor cannot overwrite the original call failure. Both contexts
+must remain rooted and live for the entire caller-thread invocation.
+
+Snapshot v70 passes 231 provider, 50 host and 26/25 driver tests in Linux
+development/production panic-abort. Six new C ABI tests cover pending accept and
+native wake delivery, real canonical request/response bytes, wrong-phase calls,
+repeated-ready/terminal states, trap/unset/fuel retirement versus explicit error
+responses, guarded reentry, wrong exports without retirement, closing pending
+and ready operations, option/credential rejection, and separate cleanup context
+with a failing retained-resource destructor. Doctests, all-target Clippy, stdio
+overlap and the normal host graph remain passing and Tokio-free. The
+[ABI receipt](../../docs/validation/wasi-http-ffi-20261023.json) records the
+matching code and evidence. TypeScript Promise/pump integration and moving-GC
+acceptance are still pending, along with fresh matching ABI 6 compiler/runtime
+builds. This engine-level result does not supersede the outstanding platform,
+WASI 0.3, released-dependency or final-package requirements.

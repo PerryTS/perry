@@ -1,5 +1,8 @@
 //! Allocator-safe callback transport. JS exceptions must be caught by the
 //! runtime callback; every call returns through Wasmtime before JS can throw.
+mod http;
+use http::*;
+
 use crate::{Host, Import, Imports, Interrupt, Options, ResourceHook};
 use anyhow::{bail, ensure, Context, Result};
 use perry_abi::component_host::{

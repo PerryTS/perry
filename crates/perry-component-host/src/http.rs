@@ -25,8 +25,20 @@ impl Host {
     pub fn handle_http(
         &mut self,
         interface: &str,
+        request: HostIncomingRequest,
+        response: oneshot::Sender<Result<HostOutgoingResponse, Error>>,
+    ) -> Result<()> {
+        self.handle_http_with_retirement(interface, request, response, || {})
+    }
+
+    /// The C bridge separates primary-call exceptions from cleanup exceptions.
+    /// Switch callback context only after invocation has failed, before retiring.
+    pub(crate) fn handle_http_with_retirement(
+        &mut self,
+        interface: &str,
         mut request: HostIncomingRequest,
         response: oneshot::Sender<Result<HostOutgoingResponse, Error>>,
+        before_retire: impl FnOnce(),
     ) -> Result<()> {
         let live = self.live.as_mut().context("component is disposed")?;
         ensure!(
@@ -85,6 +97,7 @@ impl Host {
         if result.is_err() {
             // Also release custom host resources through their normal destructor
             // path; preserve the original handler failure if cleanup also fails.
+            before_retire();
             let _ = self.dispose();
         }
         result

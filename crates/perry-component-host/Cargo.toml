@@ -15,6 +15,8 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 futures-channel = "0.3"
+futures-lite = "2"
+turnloop-tls.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 perry-wit = { path = "../perry-wit" }
@@ -24,5 +26,4 @@ wasmtime = { version = "48.0.0", default-features = false, features = ["anyhow",
 perry-wasi = { path = "../perry-wasi" }
 
 [dev-dependencies]
-futures-lite = "2"
 wat = "1.254"

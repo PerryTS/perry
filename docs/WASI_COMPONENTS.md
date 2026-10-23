@@ -58,7 +58,7 @@ budgets throw `ERR_COMPONENT`. Export validation happens before component
 initializers execute. Initialization and execution share one fuel budget;
 fuel does not interrupt time spent in synchronous host I/O.
 
-The combined component-host boundary uses ABI 5; compiler, runtime and
+The combined component-host boundary uses ABI 6; compiler, runtime and
 optional host archive must be built together. The separate command feature
 was qualified using ABI 3; the combined Linux qualification is recorded below.
 This API is native-only. Unit fixtures and
@@ -183,6 +183,18 @@ server API, Perry-generated HTTP fixtures and their moving-GC qualification are
 still required. The server currently accepts HTTP/1.1 origin-form requests
 (and OPTIONS `*`), one request per connection; it does not implement HTTP/1.0,
 connection reuse, HTTP/2, CONNECT tunnels or upgrades.
+
+ABI 6 adds a nonblocking HTTP bridge for the optional engine: owned server and
+operation handles, native wake registration, caller-thread handler invocation,
+and separate transport completion. Waiting for an accept or completion never
+executes guest code. Closing a server invalidates pending and already-ready
+operations; native callbacks carry an agent identifier, never a Perry heap
+address. Handler and retirement-cleanup callbacks use separate exception contexts
+so a cleanup exception cannot replace a primary failure. The
+[HTTP ABI receipt](validation/wasi-http-ffi-20261023.json) qualifies this boundary
+on Linux in development and production panic-abort. TypeScript Promise/pump
+integration and fresh matching ABI 6 compiler/runtime/package acceptance remain
+required; earlier combined acceptance receipts used ABI 5.
 
 Flag declarations are limited to 1–32 labels, matching the
 [Component Model binary format](https://github.com/WebAssembly/component-model/blob/main/design/mvp/Binary.md#type-definitions).
