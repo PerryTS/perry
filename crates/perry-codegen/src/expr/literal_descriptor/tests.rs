@@ -165,6 +165,16 @@ fn a_wide_shape_has_no_constructor_function() {
     );
 }
 
+#[test]
+fn a_narrow_shape_has_no_constructor_function() {
+    // Two fields: the shape has no constructor function either, at any width.
+    let ir = ir(&fixture(1, 2));
+    assert!(
+        !ir.contains("__AnonShape_descriptor_test_constructor"),
+        "a literal shape has no constructor function: none is emitted, declared or registered"
+    );
+}
+
 fn literal_new() -> Expr {
     Expr::New {
         class_name: "__AnonShape_descriptor_test".into(),

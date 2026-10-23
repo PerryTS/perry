@@ -1,22 +1,23 @@
-//! A wide literal-shape class (at least [`WIDE`] fields) has no constructor
-//! function. Its synthetic constructor would only marshal its arguments into
-//! a buffer for the runtime's literal assignment loop
-//! (`js_literal_shape_initialize`), so each birth calls that loop itself
-//! ([`initialize`]) with the values it holds: all of them, or for a chunked
-//! birth (`split_regions_literal`) only the head, whose chunks then store the
-//! rest. A literal-shape class has no class value either (`({}).constructor`
-//! is `Object`), so nothing can construct it by class id: no constructor is
-//! emitted or registered for it.
+//! A literal-shape class has no constructor function. Its synthetic
+//! constructor would only assign its arguments to its keys, in order. A birth
+//! the compiler completes (`static_constfn::birth_literal`, the layout birth)
+//! never calls it; any other birth calls the runtime's literal assignment loop
+//! (`js_literal_shape_initialize`) itself ([`initialize`]) with the values it
+//! holds: all of them, or for a chunked birth (`split_regions_literal`) only
+//! the head, whose chunks then store the rest. A literal-shape class has no
+//! class value either (`({}).constructor` is `Object`), so nothing can
+//! construct it by class id: no constructor is emitted or registered for it.
+//!
+//! Measured on tssrc (LIT3, 2026-10-23): 1,830 constructor functions
+//! (409k IR instructions) for 3,121 call sites, nearly all in arms LLVM folds
+//! away; the loop that replaces them runs 1 to 9 times per witness program.
 
 use crate::expr::FnCtx;
 use crate::types::{DOUBLE, I32, I64, PTR};
 
-/// The width from which a literal-shape class has no constructor function.
-const WIDE: usize = 32;
-
-/// Whether `class` is a literal shape that has no constructor function.
+/// Whether `class` is a literal shape, which has no constructor function.
 pub(crate) fn has_no_constructor(class: &perry_hir::Class) -> bool {
-    class.fields.len() >= WIDE && class.is_literal_shape()
+    class.is_literal_shape()
 }
 
 /// The constructor method of a class without a constructor function: emit
@@ -38,6 +39,11 @@ pub(crate) fn initialize(
     if !has_no_constructor(class) {
         return None;
     }
+    let undefined = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+    if values.is_empty() {
+        // Nothing to assign: the birth is already complete.
+        return Some(undefined);
+    }
     let keys = ctx.class_keys_globals.get(&class.name)?.clone();
     let buffer = ctx.func.alloca_entry_array(DOUBLE, values.len().max(1));
     let blk = ctx.block();
@@ -57,7 +63,5 @@ pub(crate) fn initialize(
             (I32, &values.len().to_string()),
         ],
     );
-    Some(crate::nanbox::double_literal(f64::from_bits(
-        crate::nanbox::TAG_UNDEFINED,
-    )))
+    Some(undefined)
 }
