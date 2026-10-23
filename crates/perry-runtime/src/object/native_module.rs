@@ -60,7 +60,10 @@ pub(crate) use constants::{get_native_module_constant, native_module_constant_is
 pub(crate) use constructor_exports::{
     bound_native_callable_is_constructor_value, is_native_module_constructor_export,
 };
-pub(crate) use module_keys::{native_module_enumerable_keys, native_module_has_enumerable_key};
+pub(crate) use module_keys::{
+    native_module_enumerable_keys, native_module_has_enumerable_key,
+    zlib_readonly_property_enumerability,
+};
 use name_tables::should_cache_native_module_namespace;
 pub(crate) use name_tables::{assert_instance_base_module, canonical_native_callable_property};
 #[cfg(test)]

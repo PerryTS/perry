@@ -1627,6 +1627,22 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
     }
 }
 
+/// Enumerability of ZLIB's read-only own data properties. Non-enumerable
+/// legacy aliases are still own properties: descriptor lookup and assignment
+/// must use this policy before the enumerable-export and override paths.
+/// Node exposes all constants except the BROTLI_* family as legacy aliases.
+/// Keep values and insertion order in the existing constants table.
+pub(crate) fn zlib_readonly_property_enumerability(module_name: &str, key: &str) -> Option<bool> {
+    match module_name {
+        "zlib" if matches!(key, "codes" | "constants") => Some(true),
+        "zlib" if !key.starts_with("BROTLI_") && ZLIB_CONSTANTS_KEYS.contains(&key.as_bytes()) => {
+            Some(false)
+        }
+        "zlib.constants" if ZLIB_CONSTANTS_KEYS.contains(&key.as_bytes()) => Some(true),
+        _ => None,
+    }
+}
+
 pub(crate) fn native_module_has_enumerable_key(module_name: &str, key: &str) -> bool {
     if matches!(
         module_name,

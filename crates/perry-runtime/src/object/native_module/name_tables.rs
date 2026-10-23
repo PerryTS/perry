@@ -101,6 +101,8 @@ pub(super) fn should_cache_native_module_namespace(module_name: &str) -> bool {
             | "timers/promises"
             | "vm"
             | "vm.constants"
+            // Descriptor values and ordinary reads share the same constants object.
+            | "zlib.constants"
             | "crypto.webcrypto"
             | "crypto.subtle"
     )

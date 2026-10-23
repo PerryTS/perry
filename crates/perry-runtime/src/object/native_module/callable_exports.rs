@@ -962,18 +962,25 @@ pub(crate) fn zlib_codes_object() -> f64 {
             return f64::from_bits(bits);
         }
 
-        let obj = js_object_alloc(0, 0);
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let obj = scope.root_nanbox_f64(native_object_value(js_object_alloc(0, 0)));
+        let current_object =
+            || crate::value::js_nanbox_get_pointer(obj.get_nanbox_f64()) as *mut ObjectHeader;
         for (name, value) in ZLIB_RETURN_CODES.iter().take(3) {
-            native_set_field(obj, &value.to_string(), native_string_value(name));
+            let name_value = native_string_value(name);
+            native_set_field(current_object(), &value.to_string(), name_value);
         }
         for (name, value) in ZLIB_RETURN_CODES {
-            native_set_field(obj, name, *value as f64);
+            native_set_field(current_object(), name, *value as f64);
         }
         for (name, value) in ZLIB_RETURN_CODES.iter().skip(3) {
-            native_set_field(obj, &value.to_string(), native_string_value(name));
+            let name_value = native_string_value(name);
+            native_set_field(current_object(), &value.to_string(), name_value);
         }
 
-        let value = native_object_value(obj);
+        // Freeze actual properties, not only the namespace's descriptor view.
+        super::super::js_object_freeze(obj.get_nanbox_f64());
+        let value = obj.get_nanbox_f64();
         slot.set(value.to_bits());
         crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
         value

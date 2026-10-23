@@ -1866,6 +1866,17 @@ pub(crate) unsafe fn nm_get_own_descriptor(
 ) -> Option<f64> {
     let module_name = read_native_module_name(obj)?;
     let key_name = key_name?;
+    if let Some(enumerable) =
+        super::native_module::zlib_readonly_property_enumerability(&module_name, key_name)
+    {
+        let value = js_object_get_field_by_name(obj, key_str);
+        return Some(build_data_descriptor(
+            f64::from_bits(value.bits()),
+            false,
+            enumerable,
+            false,
+        ));
+    }
     if !native_module_has_enumerable_key(&module_name, key_name) {
         return None;
     }

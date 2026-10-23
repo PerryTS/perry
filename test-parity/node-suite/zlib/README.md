@@ -228,3 +228,13 @@ was deterministic, portable, non-redundant, and safe for this granular suite.
 [bun-zlib-tests]: https://github.com/oven-sh/bun/tree/43d60f69c95a9f31591165816ced29b83e94673e/test/js/node/zlib
 [bun-zlib-main]: https://github.com/oven-sh/bun/blob/43d60f69c95a9f31591165816ced29b83e94673e/test/js/node/zlib/zlib.test.js
 [bun-bytes-written]: https://github.com/oven-sh/bun/blob/43d60f69c95a9f31591165816ced29b83e94673e/test/js/node/zlib/bytesWritten.test.ts
+
+## Descriptor and write policy
+
+`constants/descriptor-write-policy.ts` checks the pinned oracle's complete
+legacy-alias descriptor surface, read-only constants and module exports, the
+frozen bidirectional `codes` object, and rejection without value changes.
+Legacy aliases remain non-enumerable; ordinary function exports remain mutable
+and can be restored after an override. Descriptor values share the same
+`constants` object as ordinary reads. This supplements `constants/immutability`
+and `imports/legacy-constant-aliases` without changing those fixtures.
