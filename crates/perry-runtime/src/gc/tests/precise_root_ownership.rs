@@ -105,17 +105,24 @@ fn foreign_precise_visitors_do_not_mark_or_pin_parent_callbacks() {
         assert_ne!(worker_agent, parent_agent);
         let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
         let valid = build_valid_pointer_set();
-        // The parent's arena region descriptor proves another live heap owns
-        // this callback: dropped silently, its header never read or written.
-        assert_eq!(
-            crate::arena::classify_region_ownership(arena_callback),
-            crate::arena::RegionOwnership::OtherHeap
-        );
+        // Linux has a process-wide region descriptor that proves another
+        // live heap owns the callback. Other platforms have only this
+        // thread's page map, so a foreign arena cell must fail closed through
+        // the same loud rejection as an unowned malloc cell.
+        let ownership = crate::arena::classify_region_ownership(arena_callback);
+        let silently_dropped: &[usize] = if cfg!(target_os = "linux") {
+            assert_eq!(ownership, crate::arena::RegionOwnership::OtherHeap);
+            &[arena_callback]
+        } else {
+            assert_eq!(ownership, crate::arena::RegionOwnership::Outside);
+            reject_through_every_entry(arena_callback, "arena header outside this heap's regions");
+            &[]
+        };
         // No O(1) descriptor names a malloc allocation's agent. Verification
         // proves it is not this heap's and fails loudly, before any write.
         reject_through_every_entry(malloc_callback, "not this heap's allocation");
         let mut outcomes = Vec::new();
-        for callback in [arena_callback] {
+        for &callback in silently_dropped {
             assert!(!valid.contains(&callback));
             let direct_marked = mark_precise_root(PreciseRoot::GcPointer(callback), &valid);
             let mut visitor = RuntimeRootVisitor::for_mark(&valid);
@@ -135,7 +142,7 @@ fn foreign_precise_visitors_do_not_mark_or_pin_parent_callbacks() {
     .join()
     .unwrap();
 
-    assert_eq!(outcomes.len(), 1);
+    assert_eq!(outcomes.len(), usize::from(cfg!(target_os = "linux")));
     for (callback, outcome) in [arena_callback].into_iter().zip(outcomes) {
         assert_eq!(outcome, (false, ptr_bits(callback), callback, None, false));
     }
