@@ -2203,6 +2203,92 @@ fn a_store_into_a_class_field_is_a_store_effect() {
 }
 
 #[test]
+fn a_closed_class_constructor_holds_what_its_news_pass() {
+    // Design §18.13 (binarytrees_arena per unit): `Arena` is no export, and
+    // every naming of it is a `new`, in units other than its own. Its
+    // constructor's `n` holds the numbers those `new`s pass, not ⊤ (which
+    // might be a SharedArrayBuffer): `left`/`right` are typed arrays over
+    // their own buffers, `ta_stable` as in the whole-program solve.
+    let src = r#"
+        class Arena {
+          left: Int32Array; right: Int32Array; size: number = 0;
+          constructor(n: number) { this.left = new Int32Array(n); this.right = new Int32Array(n); }
+        }
+        function make(a: Arena, d: number): number {
+          let l = -1; let r = -1;
+          if (d > 0) { l = make(a, d - 1); r = make(a, d - 1); }
+          const i = a.size++; a.left[i] = l; a.right[i] = r; return i;
+        }
+        function check(a: Arena, i: number): number {
+          const l = a.left[i]; if (l < 0) return 1; return 1 + check(a, l) + check(a, a.right[i]);
+        }
+        function fresh(k: number): Arena { return new Arena(1 << k); }
+        const s = fresh(6);
+        console.log(check(s, make(s, 3)));
+        "#;
+    let pf = units(src);
+    assert!(pf.broken.is_empty(), "{:?}\n{}", pf.broken, pf.dump_text());
+    for k in ["left", "right"] {
+        assert!(
+            field(tmpl(&pf, "Arena"), k).ta_stable,
+            "{k}\n{}",
+            pf.dump_text()
+        );
+    }
+    // Soundness: another unit constructs it through an instance's
+    // `constructor` with a shared buffer. The stand-in class object is the
+    // instance's `constructor` there, so the construction reaches the
+    // stand-in constructor's parameters and the owner sees the buffer.
+    let src = r#"
+        class Arena {
+          left: Int32Array;
+          constructor(n: any) { this.left = new Int32Array(n); }
+        }
+        function fresh(k: number): Arena { return new Arena(k); }
+        function twin(a: Arena): number { const C: any = a.constructor; const t = new C(new SharedArrayBuffer(64)); return t.left[0]; }
+        function main() { const s = fresh(8); console.log(s.left[0] + twin(s)); }
+        main();
+        "#;
+    let pf = units(src);
+    // Not vacuous: the class holds its contract (nothing reports it).
+    assert!(pf.broken.is_empty(), "{:?}\n{}", pf.broken, pf.dump_text());
+    assert!(
+        !field(tmpl(&pf, "Arena"), "left").ta_stable,
+        "{}",
+        pf.dump_text()
+    );
+    // Across modules: `b` gives instances out (no export of the class); `m`
+    // constructs one through `constructor` with a shared buffer. Today `m`'s
+    // census already reports the class there (its stand-in escapes), so the
+    // constructor's parameters are ⊤ twice over; `ctor_args_out` would carry
+    // the buffer if it did not.
+    let b = r#"
+        class Arena {
+          left: Int32Array;
+          constructor(n: any) { this.left = new Int32Array(n); }
+        }
+        export function fresh(k: number): Arena { return new Arena(k); }
+        export function first(a: Arena): number { return a.left[0]; }
+        "#;
+    let m = r#"
+        import { fresh, first } from './b';
+        function main() {
+          const s = fresh(8);
+          const C: any = s.constructor;
+          const t = new C(new SharedArrayBuffer(64));
+          console.log(first(s) + first(t));
+        }
+        main();
+        "#;
+    let pf = units_of(&[("b", b), ("m", m)]);
+    assert!(
+        !field(tmpl(&pf, "Arena"), "left").ta_stable,
+        "{}",
+        pf.dump_text()
+    );
+}
+
+#[test]
 fn an_escaped_arguments_keyed_reach_reads_as_unknown() {
     // DECISIONS 42 with design §18.4: `f` lets its argument escape, so what
     // it returns from `p.inner` may be anything unknown code stored there:

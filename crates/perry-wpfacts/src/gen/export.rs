@@ -311,7 +311,18 @@ impl<'a> Gen<'a> {
                 true => format!("fn:{}#{fid}", self.m.funcs[fx as usize].name),
                 false => format!("fn:{}", self.m.funcs[fx as usize].name),
             };
-            if ac.is_some_and(|a| a.top) || unit_in.broken(&name) {
+            // A closed class (design §18.13) is broken by its display; its
+            // constructor reads no `arguments` (`lib::closed_of`).
+            let broken = match self.m.funcs[fx as usize].ctor_of {
+                Some(tm) => {
+                    let fi = &self.m.funcs[fx as usize];
+                    fi.has_arguments
+                        || fi.rest.is_some()
+                        || unit_in.broken(&self.m.tmpls[tm as usize].display)
+                }
+                None => unit_in.broken(&name),
+            };
+            if ac.is_some_and(|a| a.top) || broken {
                 continue;
             }
             let n = self.m.funcs[fx as usize].params.len();

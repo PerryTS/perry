@@ -97,6 +97,9 @@ pub struct Gen<'a> {
     /// The contracts behind the stand-ins: a stand-in template's class or
     /// layout contract, a stand-in function token's function contract.
     pub(crate) stand_in_cc: FxHashMap<TmplId, crate::units::ClassContract>,
+    /// The stand-ins of closed classes (design §18.13): their key
+    /// (`ClassContract::closed`), template and constructor token.
+    pub(crate) closed_ctors: Vec<((String, String), TmplId, Tok)>,
     /// Store effects of other units performed here (decision 17): the
     /// (instance, key) pairs done, the unknown value and the writer site.
     effects_done: crate::pts::FxHashSet<(Tok, Atom)>,
@@ -331,6 +334,7 @@ impl<'a> Gen<'a> {
             reach_escape: None,
             reach_touch: None,
             stand_in_cc: FxHashMap::default(),
+            closed_ctors: Vec::new(),
             effects_done: Default::default(),
             effect_src: None,
             stand_in_fc: FxHashMap::default(),
@@ -900,6 +904,26 @@ impl<'a> Gen<'a> {
             .reason("another unit's class used beyond its contract");
         let tm = self.m.tmpls.len() as TmplId;
         let ctor = self.stub_fn(mi, &format!("{}.constructor", c.name), tm, false, false, r);
+        // A closed class (design §18.13): its constructor's parameters
+        // collect what this unit's constructions pass, published under the
+        // class's key; the arguments still reach the sunk `arguments` node.
+        if let Some((path, name, n)) = &c.closed {
+            let outer_fn = std::mem::replace(&mut self.m.cur_fn, ctor);
+            let params: Vec<NodeId> = (0..*n)
+                .map(|i| {
+                    let p = self
+                        .m
+                        .node_named("param", || format!("param{i}({}.constructor)", c.name));
+                    self.m.own(p);
+                    p
+                })
+                .collect();
+            self.m.cur_fn = outer_fn;
+            self.m.funcs[ctor as usize].params = params;
+            let t = self.m.funcs[ctor as usize].token;
+            self.closed_ctors
+                .push(((path.clone(), name.clone()), tm, t));
+        }
         self.m.tmpls.push(Template {
             kind: TmplKind::Class {
                 module: mi,
