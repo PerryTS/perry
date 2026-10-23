@@ -17,7 +17,23 @@ extern "C" {
     fn js_perry_payload_buffer_hook_free(opaque: *mut c_void, pointer: *mut c_void);
 }
 
-pub(super) struct Context(Placed<z::z_stream>);
+pub(super) struct Context(Placed<z::z_stream>, Option<Vec<u8>>);
+
+#[derive(Debug)]
+pub(super) struct DictionaryError(pub bool);
+impl std::fmt::Display for DictionaryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(if self.0 {
+            "Bad dictionary"
+        } else {
+            "Missing dictionary"
+        })
+    }
+}
+impl std::error::Error for DictionaryError {}
+pub(crate) fn needs_dictionary(error: &io::Error) -> bool {
+    error.get_ref().is_some_and(|e| e.is::<DictionaryError>())
+}
 
 pub(super) struct Progress {
     pub consumed: usize,
@@ -25,20 +41,30 @@ pub(super) struct Progress {
     pub ended: bool,
 }
 
-unsafe extern "C" fn allocate(opaque: *mut c_void, items: u32, size: u32) -> *mut c_void {
+pub(super) unsafe extern "C" fn allocate(
+    opaque: *mut c_void,
+    items: u32,
+    size: u32,
+) -> *mut c_void {
     let Some(bytes) = (items as usize).checked_mul(size as usize) else {
         return std::ptr::null_mut();
     };
     js_perry_payload_buffer_hook_alloc(opaque, bytes)
 }
 
-unsafe extern "C" fn release(opaque: *mut c_void, pointer: *mut c_void) {
+pub(super) unsafe extern "C" fn release(opaque: *mut c_void, pointer: *mut c_void) {
     js_perry_payload_buffer_hook_free(opaque, pointer);
 }
 
 impl Context {
     pub(super) fn new(owner: &BufferOwner, zlib_header: bool) -> io::Result<Self> {
         Self::with_allocator(owner, allocate, zlib_header)
+    }
+
+    pub(super) fn with_dictionary(owner: &BufferOwner, dictionary: Vec<u8>) -> io::Result<Self> {
+        let mut context = Self::new(owner, true)?;
+        context.1 = Some(dictionary);
+        Ok(context)
     }
 
     fn with_allocator(
@@ -64,13 +90,20 @@ impl Context {
             adler: 0,
             reserved: 0,
         };
-        let mut context = Self(Placed::try_new(owner, state).ok_or_else(out_of_memory)?);
+        let mut context = Self(
+            Placed::try_new(owner, state).ok_or_else(out_of_memory)?,
+            None,
+        );
         let status =
             unsafe { z::zng_inflateInit2(&mut *context.0, if zlib_header { 15 } else { -15 }) };
         if status != z::Z_OK {
             return Err(context.error(status));
         }
         Ok(context)
+    }
+
+    pub(super) fn dictionary_bytes(&self) -> usize {
+        self.1.as_ref().map_or(0, Vec::capacity)
     }
 
     pub(super) fn step(&mut self, input: &[u8], output: &mut [u8]) -> io::Result<Progress> {
@@ -83,7 +116,25 @@ impl Context {
         stream.avail_out = output_len;
         // The input/output borrows last through this call; allocator hooks
         // allocate native bytes, and no JS allocation or callback runs here.
-        let status = unsafe { z::inflate(stream, z::Z_NO_FLUSH) };
+        let mut status = unsafe { z::inflate(stream, z::Z_NO_FLUSH) };
+        let mut dictionary_error = None;
+        if status == z::Z_NEED_DICT {
+            if let Some(dictionary) = &self.1 {
+                let len = u32::try_from(dictionary.len())
+                    .map_err(|_| io::Error::new(ErrorKind::InvalidInput, "dictionary too large"));
+                let applied = match len {
+                    Ok(len) => unsafe { z::inflateSetDictionary(stream, dictionary.as_ptr(), len) },
+                    Err(_) => z::Z_DATA_ERROR,
+                };
+                if applied == z::Z_OK {
+                    status = unsafe { z::inflate(stream, z::Z_NO_FLUSH) };
+                } else {
+                    dictionary_error = Some(DictionaryError(true));
+                }
+            } else {
+                dictionary_error = Some(DictionaryError(false));
+            }
+        }
         let consumed = (input_len - stream.avail_in) as usize;
         let written = (output_len - stream.avail_out) as usize;
         // Neither the context nor C stream retains a borrowed buffer pointer.
@@ -91,6 +142,9 @@ impl Context {
         stream.next_out = std::ptr::null_mut();
         stream.avail_in = 0;
         stream.avail_out = 0;
+        if let Some(error) = dictionary_error {
+            return Err(io::Error::new(ErrorKind::InvalidData, error));
+        }
         match status {
             z::Z_OK | z::Z_STREAM_END | z::Z_BUF_ERROR => Ok(Progress {
                 consumed,

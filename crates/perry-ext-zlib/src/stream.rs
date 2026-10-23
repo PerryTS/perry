@@ -22,13 +22,17 @@ extern "C" {
     pub(crate) fn js_zlib_resolve_level(opts: f64) -> i32;
     pub(crate) fn js_zlib_validate_params(level: f64, strategy: f64) -> i32;
     pub(crate) fn js_zlib_validate_options(opts: f64, min_window_bits: i32);
+    fn js_zlib_deflate_options(opts: f64, min_window_bits: i32) -> f64;
     pub(crate) fn js_zlib_validate_buffer_arg(data_bits: i64);
     pub(crate) fn js_zlib_validate_callback(callback: f64) -> i64;
 }
 mod allocation;
+mod deflate_context;
 mod driver;
 mod inflate_context;
-pub(crate) use driver::decode_bytes;
+pub(crate) use deflate_context::encode_bytes as deflate_dictionary_bytes;
+pub(crate) use driver::{decode_bytes, decode_dictionary_bytes};
+pub(crate) use inflate_context::needs_dictionary;
 mod one_shot_callback;
 mod zlib_encoder;
 pub(crate) use one_shot_callback::queue_one_shot_callback;
@@ -64,6 +68,25 @@ pub(crate) unsafe fn read_input_from_bits(bits: i64) -> Option<Vec<u8>> {
     } else {
         perry_ffi::read_bytes(perry_ffi::JsString::from_raw(ptr as *mut _)).map(|s| s.to_vec())
     }
+}
+/// The runtime validates public brands; the byte ABI preserves view bounds.
+/// Copy before another getter, allocation, callback or detach can run.
+pub(crate) unsafe fn dictionary_options(opts: f64, min_window_bits: i32) -> Option<Vec<u8>> {
+    let roots = TransientRootScope::enter();
+    let dict = roots.root_nanbox(js_zlib_deflate_options(opts, min_window_bits));
+    if dict.get().to_bits() == UNDEFINED {
+        return None;
+    }
+    let copy = bytes::no_gc(|scope| {
+        bytes::borrow(JsValue::from_bits(dict.get().to_bits()), scope).map(|bytes| bytes.to_vec())
+    });
+    Some(copy.unwrap_or_else(|| {
+        perry_ffi::throw_with_code(
+            "Cannot read dictionary bytes",
+            "ERR_INVALID_ARG_TYPE",
+            ErrorKind::TypeError,
+        )
+    }))
 }
 pub(crate) unsafe fn compression_from_opts(opts: f64) -> Compression {
     Compression::new(js_zlib_resolve_level(opts) as u32)
@@ -566,6 +589,7 @@ unsafe fn create_stream(
     let existing = existing.map(|o| roots.root_nanbox(o));
     // Only Gzip uses the pinned constructor phases. Shared sync/callback and
     // other codec consumers retain their existing validation/read schedule.
+    let mut dictionary = None;
     let gzip_options = if matches!(codec, Codec::Gzip) {
         Some(roots.root_nanbox(js_zlib_gzip_codec_options(opts.get())))
     } else {
@@ -574,7 +598,11 @@ unsafe fn create_stream(
             Codec::Inflate | Codec::Gunzip | Codec::Unzip => 0,
             _ => 8,
         };
-        js_zlib_validate_options(opts.get(), min_window_bits);
+        if matches!(codec, Codec::Deflate | Codec::Inflate) {
+            dictionary = dictionary_options(opts.get(), min_window_bits);
+        } else {
+            js_zlib_validate_options(opts.get(), min_window_bits);
+        }
         None
     };
     let level = if let Some(captured) = &gzip_options {
@@ -594,7 +622,13 @@ unsafe fn create_stream(
     };
     let _base = roots.root_nanbox(np::prototype(&BASE, "zlib"));
     let proto = roots.root_nanbox(np::prototype(family, "zlib"));
-    let codec_payload = driver::Payload::new(codec, level, chunk_size).unwrap();
+    let codec_payload = match dictionary {
+        Some(dictionary) => {
+            driver::Payload::with_dictionary(codec, level, chunk_size, Some(dictionary))
+        }
+        None => driver::Payload::new(codec, level, chunk_size),
+    }
+    .unwrap();
     let native_bytes = codec_payload.external_bytes();
     let owner = if let Some(owner) = existing {
         assert!(np::attach(owner.get(), family, codec_payload, native_bytes));

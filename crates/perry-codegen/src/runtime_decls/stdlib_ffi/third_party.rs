@@ -184,7 +184,7 @@ pub(crate) fn declare_third_party(module: &mut LlModule) {
     module.declare_function("js_zlib_gunzip", VOID, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_zlib_gzip_sync", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_zlib_gzip", VOID, &[DOUBLE, DOUBLE, DOUBLE]);
-    module.declare_function("js_zlib_inflate_sync", DOUBLE, &[I64]);
+    module.declare_function("js_zlib_inflate_sync", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_zlib_inflate", VOID, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_zlib_deflate_raw_sync", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_zlib_deflate_raw", VOID, &[DOUBLE, DOUBLE, DOUBLE]);

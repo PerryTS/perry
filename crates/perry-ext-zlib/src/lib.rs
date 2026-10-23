@@ -51,6 +51,9 @@ fn gunzip_bytes(data: &[u8]) -> std::io::Result<Vec<u8>> {
 }
 
 fn throw_deflate_decode_error(err: IoError) -> ! {
+    if stream::needs_dictionary(&err) {
+        perry_ffi::throw_with_code(&err.to_string(), "Z_NEED_DICT", ErrorKind::Error);
+    }
     if err.kind() == IoErrorKind::UnexpectedEof {
         perry_ffi::throw_with_code("unexpected end of file", "Z_BUF_ERROR", ErrorKind::Error);
     }
@@ -163,24 +166,38 @@ pub unsafe extern "C" fn js_zlib_gunzip_sync(data_bits: i64) -> f64 {
 /// `RangeError` before any compression runs (#2935).
 #[no_mangle]
 pub unsafe extern "C" fn js_zlib_deflate_sync(data_bits: i64, opts: f64) -> f64 {
-    stream::js_zlib_validate_options(opts, 8); // deflate accepts windowBits >= 8 (#3662)
-    stream::js_zlib_validate_buffer_arg(data_bits);
-    let level = stream::compression_from_opts(opts);
-    match stream::read_input_from_bits(data_bits).map(|d| deflate_bytes_with(&d, level)) {
+    let roots = perry_ffi::TransientRootScope::enter();
+    let data = roots.root_nanbox(f64::from_bits(data_bits as u64));
+    let opts = roots.root_nanbox(opts);
+    let dictionary = stream::dictionary_options(opts.get(), 8);
+    stream::js_zlib_validate_buffer_arg(data.get().to_bits() as i64);
+    let level = stream::compression_from_opts(opts.get());
+    match stream::read_input_from_bits(data.get().to_bits() as i64).map(|d| {
+        if let Some(dictionary) = dictionary {
+            stream::deflate_dictionary_bytes(&d, level, &dictionary)
+        } else {
+            deflate_bytes_with(&d, level)
+        }
+    }) {
         Some(Ok(out)) => stream::value_bytes(&out),
         _ => f64::from_bits(perry_ffi::JsValue::UNDEFINED.bits()),
     }
 }
 
-/// `zlib.inflateSync(data)`.
+/// `zlib.inflateSync(data, options?)`.
 ///
 /// # Safety
 ///
 /// `data_bits` is the raw NaN-box bit pattern of the data argument (#2935).
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_inflate_sync(data_bits: i64) -> f64 {
-    stream::js_zlib_validate_buffer_arg(data_bits); // #3662
-    match stream::read_input_from_bits(data_bits).map(|d| inflate_bytes(&d)) {
+pub unsafe extern "C" fn js_zlib_inflate_sync(data_bits: i64, opts: f64) -> f64 {
+    let roots = perry_ffi::TransientRootScope::enter();
+    let data = roots.root_nanbox(f64::from_bits(data_bits as u64));
+    let dictionary = stream::dictionary_options(opts, 0);
+    stream::js_zlib_validate_buffer_arg(data.get().to_bits() as i64);
+    match stream::read_input_from_bits(data.get().to_bits() as i64)
+        .map(|d| stream::decode_dictionary_bytes(&d, dictionary))
+    {
         Some(Ok(out)) => stream::value_bytes(&out),
         Some(Err(err)) => throw_deflate_decode_error(err),
         _ => f64::from_bits(perry_ffi::JsValue::UNDEFINED.bits()),
@@ -378,7 +395,7 @@ pub unsafe extern "C" fn js_ext_zlib_native_dispatch(
         "gzipSync" => js_zlib_gzip_sync(arg(0).to_bits() as i64, arg(1)),
         "gunzipSync" => js_zlib_gunzip_sync(arg(0).to_bits() as i64),
         "deflateSync" => js_zlib_deflate_sync(arg(0).to_bits() as i64, arg(1)),
-        "inflateSync" => js_zlib_inflate_sync(arg(0).to_bits() as i64),
+        "inflateSync" => js_zlib_inflate_sync(arg(0).to_bits() as i64, arg(1)),
         "deflateRawSync" => js_zlib_deflate_raw_sync(arg(0), arg(1)),
         "inflateRawSync" => js_zlib_inflate_raw_sync(arg(0)),
         "unzipSync" => js_zlib_unzip_sync(arg(0)),

@@ -48,8 +48,8 @@ they do not compare backend-specific DEFLATE bytes.
 The Gzip-only constructor path retains rooted codec options, owns the same codec
 before base/Transform getters, and passes a real enumerable option copy to the
 existing Transform initializer. Other codecs and shared sync/callback validators
-keep their previous schedule. Dictionary acceptance still does not apply it to
-the backend. Exceptional construction retains the existing GC-owned fallback;
+keep their previous schedule. Gzip dictionary acceptance still does not apply it
+to the backend. Exceptional construction retains the existing GC-owned fallback;
 this change does not promise unconditional prompt release after getter throws.
 
 `options/constructor-getter-phases.ts` remains the original full-hex diagnostic,
@@ -57,6 +57,23 @@ byte-for-byte unchanged. Its known compression-backend residual is separate from
 this semantic fixture; preserving it does not mark it green. The existing
 `options/validation-order.ts` is also unchanged. Historical audit measurements
 and exclusions below describe their original fixture roster, not these additions.
+
+## DEFLATE preset dictionaries
+
+`dictionary/deflate-roundtrip.ts`, `dictionary/source-types.ts`, and
+`dictionary/stream-application.ts` exercise real zlib-wrapped preset dictionary
+application, not just constructor validation. `deflateSync` and `createDeflate`
+use the already-linked zlib-ng backend only when a dictionary is supplied;
+ordinary compression retains its existing backend and output. `inflateSync`
+and `createInflate` supply the owned dictionary when the decoder requests it.
+Buffer, TypedArray, DataView and ArrayBuffer sources retain their byte range.
+Stream reset retains the selected dictionary, without retaining borrowed JS
+pointers. Native codec working allocations remain in the payload buffer ledger.
+
+`dictionary/deflate-wrong-dictionary.ts` pins the Node 26.12.1 errors for missing
+and wrong dictionaries (`Z_NEED_DICT`, with distinct messages), a sliced DataView,
+and reset followed by split input. Brotli and Zstd dictionary application remain
+separate unsupported codec work; this change makes no claim about either.
 
 ## Locked sources
 

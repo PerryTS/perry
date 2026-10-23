@@ -225,15 +225,25 @@ fn validate_option_chunk_size(value: f64) -> f64 {
 /// warning path; validation does not apply a preset dictionary to the codec.
 #[no_mangle]
 pub extern "C" fn js_zlib_validate_options(opts: f64, min_window_bits: i32) {
+    validate_codec_options(opts, min_window_bits, true);
+}
+
+/// Validate once and retain the dictionary selected by that property read.
+#[no_mangle]
+pub extern "C" fn js_zlib_deflate_options(opts: f64, min_window_bits: i32) -> f64 {
+    validate_codec_options(opts, min_window_bits, false)
+}
+
+fn validate_codec_options(opts: f64, min_window_bits: i32, warn_dictionary: bool) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let opts = scope.root_nanbox_f64(opts);
     let jv = crate::value::JSValue::from_bits(opts.get_nanbox_f64().to_bits());
     if !jv.is_pointer() {
-        return;
+        return f64::from_bits(crate::value::JSValue::undefined().bits());
     }
     let ptr = jv.as_pointer::<crate::object::ObjectHeader>();
     if ptr.is_null() || (ptr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
-        return;
+        return f64::from_bits(crate::value::JSValue::undefined().bits());
     }
     // Each property read may allocate or invoke a getter. Recover the current
     // address from the root rather than carrying a pointer across those reads.
@@ -261,10 +271,8 @@ pub extern "C" fn js_zlib_validate_options(opts: f64, min_window_bits: i32) {
     validate_option_chunk_size(read_option_field(options_ptr(), b"chunkSize"));
     validate_option_range(options_ptr(), b"flush", "options.flush", 0, 5, false);
 
-    // #4917: `level` is honored and the ranged options above are validated,
-    // but a preset `dictionary` is not threaded through flate2. Silently
-    // dropping it would mis-compress against peers that expect it to apply,
-    // so warn once instead.
+    // DEFLATE consumers retain this exact validated read for their backend.
+    // Other consumers keep their existing accepted-but-unapplied warning.
     let dict = scope.root_nanbox_f64(read_option_field(options_ptr(), b"dictionary"));
     let value = dict.get_nanbox_f64();
     if !crate::value::JSValue::from_bits(value.to_bits()).is_undefined() {
@@ -280,12 +288,15 @@ pub extern "C" fn js_zlib_validate_options(opts: f64, min_window_bits: i32) {
                 dict.get_nanbox_f64(),
             );
         }
-        crate::stub_diag::perry_stub_warn(
-            "zlib options.dictionary",
-            "the preset dictionary option is accepted but not applied",
-            Some("#4917"),
-        );
+        if warn_dictionary {
+            crate::stub_diag::perry_stub_warn(
+                "zlib options.dictionary",
+                "the preset dictionary option is accepted but not applied",
+                Some("#4917"),
+            );
+        }
     }
+    dict.get_nanbox_f64()
 }
 
 // Gzip's constructor phases are separate from the shared one-shot validators.
@@ -568,6 +579,9 @@ static KEEP_JS_ZLIB_VALIDATE_PARAMS: extern "C" fn(f64, f64) -> i32 = js_zlib_va
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
 static KEEP_JS_ZLIB_VALIDATE_OPTIONS: extern "C" fn(f64, i32) = js_zlib_validate_options;
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_ZLIB_DEFLATE_OPTIONS: extern "C" fn(f64, i32) -> f64 = js_zlib_deflate_options;
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
 static KEEP_JS_ZLIB_VALIDATE_BUFFER_ARG: extern "C" fn(i64) = js_zlib_validate_buffer_arg;

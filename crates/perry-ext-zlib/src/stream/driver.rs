@@ -548,6 +548,7 @@ impl Decoder {
         prefix
             + match self {
                 Self::Zstd(z) => z.engine.sizeof(),
+                Self::Zlib(inflate) => inflate.engine.dictionary_bytes(),
                 _ => 0,
             }
     }
@@ -583,9 +584,25 @@ impl Decoder {
 /// One-shot and streaming inflate share the same decoder and state ownership.
 /// read_to_end writes directly into the result Vec, without an output copy.
 pub(crate) fn decode_bytes(data: &[u8], codec: Codec) -> io::Result<Vec<u8>> {
+    decode_with_dictionary(data, codec, None)
+}
+pub(crate) fn decode_dictionary_bytes(
+    data: &[u8],
+    dictionary: Option<Vec<u8>>,
+) -> io::Result<Vec<u8>> {
+    decode_with_dictionary(data, Codec::Inflate, dictionary)
+}
+fn decode_with_dictionary(
+    data: &[u8],
+    codec: Codec,
+    dictionary: Option<Vec<u8>>,
+) -> io::Result<Vec<u8>> {
     let buffers = BufferOwner::new();
     let mut decoder = Decoder::new(codec, &buffers)?
         .ok_or_else(|| io::Error::new(ErrorKind::InvalidInput, "encoder used as decoder"))?;
+    if let (Decoder::Zlib(inflate), Some(dictionary)) = (&mut decoder, dictionary) {
+        inflate.engine = super::inflate_context::Context::with_dictionary(&buffers, dictionary)?;
+    }
     decoder.input().borrow(data, true);
     struct Reader<'a> {
         decoder: &'a mut Decoder,
@@ -618,6 +635,7 @@ fn zstd_error(code: usize) -> io::Error {
 
 enum Encoder {
     Flate(super::zlib_encoder::Encoder),
+    Dictionary(super::deflate_context::Context),
     Brotli(Placed<brotli::enc::encode::BrotliEncoderStateStruct<allocation::BufferAlloc>>),
     Zstd(zstd::zstd_safe::CCtx<'static>),
 }
@@ -656,7 +674,7 @@ impl Encoder {
         match self {
             Self::Flate(f) => f.native_bytes(),
             // State and allocations live in the payload's buffers.
-            Self::Brotli(_) => 0,
+            Self::Brotli(_) | Self::Dictionary(_) => 0,
             Self::Zstd(ctx) => ctx.sizeof(),
         }
     }
@@ -670,6 +688,7 @@ impl Encoder {
         let final_op = op.op == StreamOp::FINAL;
         match self {
             Self::Flate(f) => f.step(op, bytes, output),
+            Self::Dictionary(context) => context.step(op, bytes, output),
             Self::Brotli(state) => {
                 use brotli::enc::encode::BrotliEncoderOperation;
                 let operation = if final_op {
@@ -765,9 +784,18 @@ pub(super) struct Payload {
     bytes_written: usize,
     error: Option<String>,
     buffers: BufferOwner,
+    dictionary: Option<Vec<u8>>,
 }
 impl Payload {
     pub(super) fn new(codec: Codec, level: Compression, chunk_size: usize) -> io::Result<Self> {
+        Self::with_dictionary(codec, level, chunk_size, None)
+    }
+    pub(super) fn with_dictionary(
+        codec: Codec,
+        level: Compression,
+        chunk_size: usize,
+        dictionary: Option<Vec<u8>>,
+    ) -> io::Result<Self> {
         #[cfg(test)]
         let chunk_size = if sabotage("unbounded_output") {
             chunk_size * 16384
@@ -775,8 +803,18 @@ impl Payload {
             chunk_size
         };
         let buffers = BufferOwner::new();
-        let decoder = Decoder::new(codec, &buffers)?;
-        let encoder = if decoder.is_none() {
+        let mut decoder = Decoder::new(codec, &buffers)?;
+        if let (Some(Decoder::Zlib(inflate)), Some(dictionary)) = (&mut decoder, &dictionary) {
+            inflate.engine =
+                super::inflate_context::Context::with_dictionary(&buffers, dictionary.clone())?;
+        }
+        let encoder = if matches!(codec, Codec::Deflate) && dictionary.is_some() {
+            Some(Encoder::Dictionary(super::deflate_context::Context::new(
+                &buffers,
+                level.level(),
+                dictionary.as_deref().unwrap(),
+            )?))
+        } else if decoder.is_none() {
             Some(Encoder::new(codec, level, &buffers)?)
         } else {
             None
@@ -798,6 +836,7 @@ impl Payload {
             bytes_written: 0,
             error: None,
             buffers,
+            dictionary,
         })
     }
     /// Size scratch after Gzip's base option validation without replacing its
@@ -819,6 +858,7 @@ impl Payload {
             + self.decoder.as_ref().map_or(0, Decoder::native_bytes)
             + self.encoder.as_ref().map_or(0, Encoder::native_bytes)
             + self.error.as_ref().map_or(0, String::capacity)
+            + self.dictionary.as_ref().map_or(0, Vec::capacity)
     }
     pub(super) fn step(
         &mut self,
@@ -870,7 +910,9 @@ impl Payload {
                 self.bytes_written += consumed;
             }
             Err(e) => {
-                out.code = if e.kind() == ErrorKind::UnexpectedEof {
+                out.code = if super::inflate_context::needs_dictionary(&e) {
+                    2
+                } else if e.kind() == ErrorKind::UnexpectedEof {
                     5
                 } else {
                     3
@@ -916,23 +958,32 @@ impl Payload {
         }
         (
             message,
-            if code == 5 {
+            if code == 2 {
+                "Z_NEED_DICT"
+            } else if code == 5 {
                 "Z_BUF_ERROR"
             } else {
                 "Z_DATA_ERROR"
             }
             .into(),
-            -(code as i32),
+            if code == 2 { 2 } else { -(code as i32) },
         )
     }
     pub(super) fn params(&mut self, level: Compression, strategy: i32) {
         self.level = level;
-        if let Some(Encoder::Flate(f)) = &mut self.encoder {
-            f.params(level, strategy);
+        match &mut self.encoder {
+            Some(Encoder::Flate(f)) => f.params(level, strategy),
+            Some(Encoder::Dictionary(context)) => context.params(level.level(), strategy),
+            _ => {}
         }
     }
     pub(super) fn reset(&mut self) -> io::Result<()> {
-        *self = Self::new(self.codec, self.level, self.scratch.len())?;
+        *self = Self::with_dictionary(
+            self.codec,
+            self.level,
+            self.scratch.len(),
+            self.dictionary.clone(),
+        )?;
         Ok(())
     }
 }
