@@ -183,3 +183,70 @@ srv.listen(0, (): void => {
         );
     }
 }
+
+/// `@fastify/multipart` does `request.once('data', onFirstData)` and then
+/// `request.pipe(busboy)`. The body reaches a `'data'` listener synchronously
+/// when it registers, which used to mark it consumed, so the pipe delivered
+/// nothing and never ended its destination: every multipart/form-data upload
+/// to Storage hung. Node hands the chunk to the listener and the destination
+/// alike.
+#[test]
+fn server_request_pipe_after_data_listener_still_delivers_body() {
+    let source = r#"
+import http from "http";
+import { PassThrough } from "stream";
+
+function collect(proxy: any, done: (s: string) => void): void {
+  const chunks: any[] = [];
+  proxy.on("data", (c: any): void => { chunks.push(c); });
+  proxy.on("end", (): void => { done(Buffer.concat(chunks).toString()); });
+}
+const routes: Record<string, (req: any, done: (s: string) => void) => void> = {
+  "/once": (req, done) => {
+    let seen = 0;
+    req.once("data", (c: any): void => { seen += c.length; });
+    const proxy = req.pipe(new PassThrough());
+    collect(proxy, (s) => done("listener:" + seen + " piped:" + s));
+  },
+  "/on": (req, done) => {
+    let seen = 0;
+    req.on("data", (c: any): void => { seen += c.length; });
+    const proxy = req.pipe(new PassThrough());
+    collect(proxy, (s) => done("listener:" + seen + " piped:" + s));
+  },
+};
+const srv = http.createServer((req: any, res: any): void => {
+  routes[req.url](req, (s: string): void => { res.end(s); });
+});
+srv.listen(0, (): void => {
+  const port = (srv.address() as any).port;
+  const paths = Object.keys(routes);
+  let left = paths.length;
+  for (const path of paths) {
+    const req = http.request({ host: "127.0.0.1", port, method: "POST", path }, (res: any): void => {
+      const chunks: any[] = [];
+      res.on("data", (c: any): void => { chunks.push(c); });
+      res.on("end", (): void => {
+        console.log(path + " " + Buffer.concat(chunks).toString());
+        if (--left === 0) srv.close();
+      });
+    });
+    req.end("hello server body");
+  }
+});
+"#;
+
+    for (mode, no_auto_optimize) in [("auto-optimize", false), ("no-auto-optimize", true)] {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let out = compile_and_run(dir.path(), source, no_auto_optimize);
+        for line in [
+            "/once listener:17 piped:hello server body",
+            "/on listener:17 piped:hello server body",
+        ] {
+            assert!(
+                out.lines().any(|l| l == line),
+                "{mode}: expected the line {line:?}: {out}"
+            );
+        }
+    }
+}
