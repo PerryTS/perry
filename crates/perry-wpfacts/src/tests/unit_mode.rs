@@ -1958,6 +1958,18 @@ fn a_use_in_a_shared_body_is_a_use_of_each_callers_argument() {
 }
 
 #[test]
+fn a_computed_key_use_in_a_shared_body_is_a_use_of_each_callers_argument() {
+    // DECISIONS 44 under design §18.4: a named key reaches through its keyed
+    // reach marker; a computed key through the marker's reach marker, which
+    // an argument marker forwards to each marker it stands for. `h` lets
+    // `p[k]` escape, so the caller's `o.inner` is not its own.
+    let b = "function h(p: any, k: string) { (globalThis as any).k = p[k]; }\nfunction mid(p: any, k: string) { h(p, k); }\nexport function keep(p: any, k: string) { mid(p, k); }\nexport function keep2(p: any, k: string) { mid(p, k); }";
+    let m = "import { keep, keep2 } from './b'; function main() { const o = { inner: { v: 1 } }; keep(o, 'inner'); keep2({ inner: 0 }, 'inner'); (globalThis as any).k.v = 'x'; console.log(o.inner.v); } main(); main();";
+    let pf = units_of(&[("b", b), ("m", m)]);
+    assert!(!proven(&pf, "v"), "{}", pf.dump_text());
+}
+
+#[test]
 fn an_argument_a_shared_body_returns_comes_back_to_the_caller() {
     // DECISIONS 44: a result holding an argument marker holds the markers
     // it stands for. `id` returns its argument through the shared `h`, so
