@@ -13,7 +13,9 @@ use std::process::Command;
 fn request_body_reaches_every_listener_order() {
     let dir = tempfile::tempdir().unwrap();
     let entry = dir.path().join("main.ts");
-    let binary = dir.path().join(if cfg!(windows) { "main.exe" } else { "main" });
+    let binary = dir
+        .path()
+        .join(if cfg!(windows) { "main.exe" } else { "main" });
     std::fs::write(&entry, SOURCE).unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_perry"))
         .current_dir(dir.path())
@@ -23,8 +25,15 @@ fn request_body_reaches_every_listener_order() {
         .arg(&binary)
         .output()
         .unwrap();
-    assert!(output.status.success(), "compile failed: {}", String::from_utf8_lossy(&output.stderr));
-    let output = Command::new(&binary).current_dir(dir.path()).output().unwrap();
+    assert!(
+        output.status.success(),
+        "compile failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let output = Command::new(&binary)
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
     assert!(
         output.status.success(),
         "run failed: {:?}\n{}\n{}",
@@ -32,7 +41,10 @@ fn request_body_reaches_every_listener_order() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n"), EXPECTED);
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n"),
+        EXPECTED
+    );
 }
 
 const EXPECTED: &str = "/data-then-end function body:14\n/end-then-data function body:14\n/once-end-then-data function body:19\n/data-then-once-end function body:19\n/once-data function body:10\n/two-ends function body:9 x2\n/later function body:6\n/empty-end function empty\n";

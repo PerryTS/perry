@@ -26,8 +26,7 @@ fn sleep_delay_ms(value: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_bun_sleep(value: f64) -> f64 {
     let delay = sleep_delay_ms(value);
-    let promise =
-        crate::timer::js_set_timeout_value_ref(delay, f64::from_bits(TAG_UNDEFINED), 1);
+    let promise = crate::timer::js_set_timeout_value_ref(delay, f64::from_bits(TAG_UNDEFINED), 1);
     crate::value::js_nanbox_pointer(promise as i64)
 }
 

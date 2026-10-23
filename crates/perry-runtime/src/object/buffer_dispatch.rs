@@ -586,7 +586,10 @@ pub unsafe fn dispatch_buffer_method(
         // A plain `Uint8Array` inherits `%TypedArray%.prototype.toString`
         // (the element join, arguments ignored); only `Buffer.prototype`
         // overrides it with the encoding-aware decode below.
-        "toString" if crate::buffer::buffer_brand(addr) == Some(crate::buffer::BufferBrand::Uint8Array) => {
+        "toString"
+            if crate::buffer::buffer_brand(addr)
+                == Some(crate::buffer::BufferBrand::Uint8Array) =>
+        {
             super::typed_array_proto_thunks::uint8_array_to_string(addr)
         }
         "toString" => {

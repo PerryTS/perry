@@ -233,9 +233,7 @@ pub(crate) fn js_jsvalue_to_string_impl(
                     == Some(crate::buffer::BufferBrand::Uint8Array)
                 {
                     let joined = unsafe {
-                        crate::object::typed_array_proto_thunks::uint8_array_to_string(
-                            ptr as usize,
-                        )
+                        crate::object::typed_array_proto_thunks::uint8_array_to_string(ptr as usize)
                     };
                     return (joined.to_bits() & 0x0000_FFFF_FFFF_FFFF)
                         as *mut crate::string::StringHeader;

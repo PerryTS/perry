@@ -339,6 +339,7 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
       - uses: ./.github/actions/setup-llvm22
+        if: ${{ !cancelled() }}
 
       - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
         with:

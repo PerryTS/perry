@@ -27,8 +27,7 @@ use tower::{emit_tower_pshape_call, tower_pshape_route};
 // Reach the override-emit helpers (`pub(super)` of `lower_call`) by their
 // canonical crate-relative path.
 use crate::lower_call::method_override::{
-    emit_guarded_direct_method_call, emit_pshape_argument_dispatch,
-    SubclassDispatchArm,
+    emit_guarded_direct_method_call, emit_pshape_argument_dispatch, SubclassDispatchArm,
 };
 
 /// Cap on the number of extra `(class id, keys token)` arms a shape-guarded
