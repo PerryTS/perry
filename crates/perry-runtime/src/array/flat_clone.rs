@@ -505,7 +505,20 @@ pub extern "C" fn js_array_clone(src: *const ArrayHeader) -> *mut ArrayHeader {
             unsafe {
                 let hdr = (raw_addr as *const u8).sub(crate::gc::GC_HEADER_SIZE)
                     as *const crate::gc::GcHeader;
-                (*hdr).obj_type == crate::gc::GC_TYPE_STRING
+                match (*hdr).obj_type {
+                    // Proxies are GC cells, not small native handles. Keep the
+                    // observable GetMethod / indexed reads in Array.from's
+                    // protocol path before the ordinary object copy below.
+                    crate::gc::GC_TYPE_PROXY => {
+                        let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+                        let proxy = crate::value::js_nanbox_pointer(raw_addr as i64);
+                        let array = super::from_concat::array_from_full(
+                            undefined, proxy, undefined, undefined,
+                        );
+                        return crate::value::js_nanbox_get_pointer(array) as *mut ArrayHeader;
+                    }
+                    kind => kind == crate::gc::GC_TYPE_STRING,
+                }
             }
         } else {
             false
@@ -521,14 +534,6 @@ pub extern "C" fn js_array_clone(src: *const ArrayHeader) -> *mut ArrayHeader {
     // helper after codegen strips the tag, so ask the generic iterator resolver
     // before treating the id as a non-array and returning [].
     if crate::value::addr_class::is_small_handle(raw_addr) {
-        // #10270: a Proxy id has no GC/ArrayHeader. Only the existing handle
-        // arm probes the registry; plain arrays keep their classification and
-        // copy path. Array.from permits array-like proxies as well as iterables.
-        if let Some(proxy) = array_ptr_as_proxy(raw_addr as *const ArrayHeader) {
-            let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
-            let array = super::from_concat::array_from_full(undefined, proxy, undefined, undefined);
-            return crate::value::js_nanbox_get_pointer(array) as *mut ArrayHeader;
-        }
         if let Some(dispatch) = crate::object::handle_property_dispatch() {
             let method = b"@@iterator";
             let iter_fn = unsafe { dispatch(raw_addr as i64, method.as_ptr(), method.len()) };
