@@ -22,9 +22,12 @@
 //! - `PERRY_FACTS_EXPLAIN=1`: diagnostics — each ⊤ site verdict names
 //!   where ⊤ first entered (the precision report groups by it);
 //! - `PERRY_FACTS_ONLY=1`: stop after writing the dump (analysis-only runs);
-//! - `PERRY_FACTS_UNITS=1`: per-unit facts (decision 151 P1, the measurement
-//!   of the cut): one solve per module, the other modules unknown code
-//!   (`perry_wpfacts::compute_units`), the bounds per unit.
+//! - `PERRY_FACTS_UNITS=0`: whole-program facts, the reference mode (one
+//!   solve over every module). The default is per-unit facts (decision 151):
+//!   one solve per module, the other modules unknown code
+//!   (`perry_wpfacts::compute_units`), the bounds per unit. Per-unit is the
+//!   default because whole-program exact points-to does not scale (fastify
+//!   does not converge); owner decision 2026-10-23.
 //!
 //! Interpreted code (`new Function`, `eval`, `vm`) is no program-wide kill
 //! (decision 150): the analysis models it as the ⊤ summary node, and when it
@@ -131,7 +134,7 @@ pub(crate) fn run(
         .iter()
         .map(|(p, m)| (p.display().to_string(), m))
         .collect();
-    let pf = if std::env::var("PERRY_FACTS_UNITS").is_ok_and(|v| v == "1") {
+    let pf = if per_unit_facts(std::env::var("PERRY_FACTS_UNITS").ok().as_deref()) {
         perry_wpfacts::compute_units(&list, &cfg)
     } else {
         perry_wpfacts::compute(&list, &cfg)
@@ -196,7 +199,11 @@ pub(crate) fn run(
             s.solve_ms,
             s.pops,
             s.work,
-            if s.aborted { ", OVER the work/time bound: no facts" } else { "" },
+            if s.aborted {
+                ", OVER the work/time bound: no facts"
+            } else {
+                ""
+            },
             s.derive_ms,
             elapsed
         );
@@ -363,4 +370,34 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
         );
     }
     out
+}
+
+/// Per-unit is the default facts mode: whole-program exact points-to does not
+/// scale (fastify exceeds the work bound and does not converge unbounded);
+/// owner decision 2026-10-23. `PERRY_FACTS_UNITS=0` opts into the
+/// whole-program reference mode.
+fn per_unit_facts(env: Option<&str>) -> bool {
+    env != Some("0")
+}
+
+#[cfg(test)]
+mod facts_mode_tests {
+    use super::per_unit_facts;
+
+    #[test]
+    fn per_unit_is_the_default_mode() {
+        // per-unit is the default: whole-program exact points-to does not
+        // scale; owner 2026-10-23.
+        assert!(
+            per_unit_facts(None),
+            "the default facts mode must be per-unit"
+        );
+        assert!(per_unit_facts(Some("1")));
+        assert!(per_unit_facts(Some("")));
+    }
+
+    #[test]
+    fn whole_program_is_an_explicit_opt_in() {
+        assert!(!per_unit_facts(Some("0")));
+    }
 }
