@@ -455,7 +455,16 @@ impl Flat<'_> {
 /// A function literal whose body may run as statements of the module scope.
 fn inline_literal(e: &Expr) -> bool {
     matches!(e, Expr::Closure { params, body, is_async: false, is_generator: false, captures_this: false, captures_new_target: false, is_arrow, .. }
-        if runs_inline(params, body, !is_arrow))
+        if runs_inline(params, body, !is_arrow) && !obj_literal_iife(params))
+}
+
+/// The lowering of an object literal in source order (`((__perry_obj_iife)
+/// => { …; return __perry_obj_iife })({})`): an expression, whose defines
+/// are the literal's birth (`Gen::call_expr`), not a body that runs once.
+/// Flat, its parts would be module-scope items of their own, the literal
+/// born empty in one unit and its keys stored by others (design §18.9).
+pub(crate) fn obj_literal_iife(params: &[perry_hir::Param]) -> bool {
+    params.len() == 1 && params[0].name == "__perry_obj_iife"
 }
 
 /// A body that can run as statements of the module scope: no `return` but

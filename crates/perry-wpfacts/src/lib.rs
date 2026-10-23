@@ -266,7 +266,7 @@ fn literal_field_fns(
     keys.dedup();
     let mut out = Vec::new();
     'key: for a in keys {
-        let mut fs: Vec<model::FnIdx> = Vec::new();
+        let mut fs: Vec<(model::FnIdx, model::Tok)> = Vec::new();
         for &t in &mine {
             let Some(&n) = g.m.fields.get(&(t, a)) else {
                 continue;
@@ -280,9 +280,11 @@ fn literal_field_fns(
             }
             for ft in node.pts.to_sorted() {
                 match g.m.toks[ft as usize] {
-                    model::TokKind::Func(f, _) if g.m.contract_fns.contains(&f) => {
-                        if !fs.contains(&f) {
-                            fs.push(f);
+                    model::TokKind::Func(f, _)
+                        if g.m.contract_fns.contains(&f) || g.open_fn(ft) =>
+                    {
+                        if !fs.iter().any(|x| x.0 == f) {
+                            fs.push((f, ft));
                         }
                     }
                     _ => continue 'key,
@@ -293,9 +295,13 @@ fn literal_field_fns(
             continue;
         }
         fs.sort_unstable();
+        // Another unit's open function forwards its own contract (§18.9).
         let fcs = fs
             .into_iter()
-            .map(|f| fn_contract_of(g, templates, f, layouts_out, open_tm))
+            .map(|(f, ft)| match g.stand_in_fc.get(&ft) {
+                Some(&c) if g.m.funcs[f as usize].func_id == u32::MAX => c.clone(),
+                _ => fn_contract_of(g, templates, f, layouts_out, open_tm),
+            })
             .collect();
         out.push((g.m.atoms[a as usize].clone(), fcs));
     }
