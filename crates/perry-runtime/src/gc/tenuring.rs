@@ -274,6 +274,10 @@ crate::perry_thread_local! {
     /// the band from the phase's mean; see [`retune_nursery_cap_scale`].
     static CAP_PHASE_INFLUX_BYTES: Cell<u64> = const { Cell::new(0) };
     static CAP_PHASE_MINORS: Cell<u64> = const { Cell::new(0) };
+    /// The phase's drift runs: its previous reading and, per band side, the
+    /// run of readings since the first one beyond that side's edge. See
+    /// [`CapPhaseDrift`].
+    static CAP_PHASE_DRIFT: Cell<CapPhaseDrift> = const { Cell::new(CapPhaseDrift::START) };
     /// #7929: mean size of the objects the last copying minor moved. Seeded at
     /// the calibration reference so a process with no completed copying minor
     /// paces exactly as it did before the object denomination existed — until
@@ -774,7 +778,7 @@ pub(super) fn retune_after_scavenge(
     first_round_live_bytes: usize,
     full_eden_window: bool,
 ) {
-    retune_nursery_cap_scale(eden_live_bytes);
+    retune_nursery_cap_scale(eden_live_bytes, first_round_live_bytes);
     let desired = desired_survivor_bytes();
     let substantial = desired / 4;
     let prev_cohort_copied = PREV_COPIED_BYTES.with(|c| c.replace(eden_copied_bytes));
@@ -935,19 +939,58 @@ pub(super) fn retune_after_scavenge(
 /// main's 5). A steady influx cannot oscillate: a growth ends above 2% of the
 /// new cap (the level below was above 4%), a shrink below 2% (the level above
 /// was below 1%), and both are inside the 1%..4% dead band.
-fn retune_nursery_cap_scale(eden_live_bytes: usize) {
+///
+/// # What a reading at the next level is
+///
+/// Pricing `next` with the current reading is not an assumption that the
+/// influx is independent of Eden size; it is the lower bound of a measured
+/// identity. A 2E Eden at allocation instant A holds what an E Eden holds,
+/// I_E(A), plus what the E minor at A−E copied that is still alive at A —
+/// that cohort's first-round survivors R(A):
+///
+/// `I_2E(A) = I_E(A) + R(A) >= I_E(A)`.
+///
+/// Where cohorts die in their first round (R = 0) the reading is the same at
+/// every level; elsewhere a move lands low and the next debounced reading
+/// moves again, so it costs minors and never overshoots. Measured on pinned
+/// rungs (GCL, 2026-10-23): AWFY Storage reads 182 / 184 / 187 KB per minor at
+/// 4 / 8 / 16 MB with R = 0 on every minor; Havlak and the large-live-set
+/// probe, whose cohorts survive, rise with E.
+///
+/// # A drift is not a level
+///
+/// The phase mean is the level only when the phase holds the signal's cycle.
+/// When R = 0 no byte a minor copied lives through the next window, so a run
+/// of rising readings cannot be a structure accumulating — that would carry
+/// bytes into the next round. It is the minor landing later in a cycle shorter
+/// than the window. Measured on AWFY Storage at 8 MB: each minor lands 38 KB
+/// later in the tree under construction, the readings ramp 251 → 405 KB over
+/// five minors with R = 0 on each, and wrap to 74 KB; the mean of the rising
+/// half is 4.0% of the cap against a cycle level of 2.25%, and EK's phase mean
+/// grew to 16 MB on it (+24% RSS). So from a phase's first reading beyond an
+/// edge, if the readings only moved further out — counted in bytes, which
+/// R = 0 makes independent of the window — and every one of them had its
+/// previous cohort followed and dead, the phase is a drift and that side does
+/// not move (see [`CapPhaseDrift`]). One turn, or one cohort that survived or
+/// was not followed, makes it a level again. The process's first reading has
+/// no followed cohort, so no startup move can be held.
+fn retune_nursery_cap_scale(eden_live_bytes: usize, first_round_live_bytes: usize) {
     let scale = NURSERY_CAP_SCALE.with(TriggerInput::get);
     let old_reclaimable = old_gen_reclaimable_pressure_bytes();
     let cap_at = |scale: u8| {
         scavenge_nursery_cap_from(influx_driven_nursery_cap_bytes_at(scale), old_reclaimable)
     };
     let cap = cap_at(scale);
-    let phase_mean = note_cap_phase_reading(eden_live_bytes, cap);
+    // Called before `retune_after_scavenge` replaces it, so this is still the
+    // cohort `first_round_live_bytes` follows.
+    let cohort_died = PREV_COPIED_BYTES.with(Cell::get) > 0 && first_round_live_bytes == 0;
+    let (phase_mean, drift) = note_cap_phase_reading(eden_live_bytes, cap, cohort_died);
     if eden_live_bytes > cap / 25 {
         CAP_SHRINK_STREAK.with(|s| s.set(0));
         if scale < NURSERY_CAP_SCALE_MAX {
             let streak = CAP_GROW_STREAK.with(|s| s.get()).saturating_add(1);
-            if streak >= RAISE_DEBOUNCE_CYCLES && phase_mean > cap / 25 {
+            let level = phase_mean > cap / 25;
+            if streak >= RAISE_DEBOUNCE_CYCLES && level && drift.grow != DriftRun::Drifting {
                 CAP_GROW_STREAK.with(|s| s.set(0));
                 let mut next = scale * 2;
                 while next < NURSERY_CAP_SCALE_MAX && phase_mean.min(eden_live_bytes) > cap_at(next) / 25 {
@@ -957,6 +1000,9 @@ fn retune_nursery_cap_scale(eden_live_bytes: usize) {
                 start_cap_phase();
                 diag_cap_scale(scale, next, eden_live_bytes);
             } else {
+                if streak >= RAISE_DEBOUNCE_CYCLES && level {
+                    diag_cap_drift_hold(scale, "grow", eden_live_bytes);
+                }
                 CAP_GROW_STREAK.with(|s| s.set(streak));
             }
         }
@@ -964,7 +1010,8 @@ fn retune_nursery_cap_scale(eden_live_bytes: usize) {
         CAP_GROW_STREAK.with(|s| s.set(0));
         if scale > NURSERY_CAP_SCALE_MIN {
             let streak = CAP_SHRINK_STREAK.with(|s| s.get()).saturating_add(1);
-            if streak >= RAISE_DEBOUNCE_CYCLES && phase_mean < cap / 100 {
+            let level = phase_mean < cap / 100;
+            if streak >= RAISE_DEBOUNCE_CYCLES && level && drift.shrink != DriftRun::Drifting {
                 CAP_SHRINK_STREAK.with(|s| s.set(0));
                 let mut next = scale / 2;
                 while next > NURSERY_CAP_SCALE_MIN && phase_mean.max(eden_live_bytes) < cap_at(next) / 100 {
@@ -974,6 +1021,9 @@ fn retune_nursery_cap_scale(eden_live_bytes: usize) {
                 start_cap_phase();
                 diag_cap_scale(scale, next, eden_live_bytes);
             } else {
+                if streak >= RAISE_DEBOUNCE_CYCLES && level {
+                    diag_cap_drift_hold(scale, "shrink", eden_live_bytes);
+                }
                 CAP_SHRINK_STREAK.with(|s| s.set(streak));
             }
         }
@@ -995,29 +1045,98 @@ fn cap_band_side(influx_bytes: usize, cap: usize) -> i8 {
     }
 }
 
+/// One band side's run of the current phase: the readings since the phase's
+/// first reading beyond that side's edge (see [`retune_nursery_cap_scale`],
+/// "A drift is not a level").
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum DriftRun {
+    /// No reading of the phase has been beyond this side's edge yet.
+    NotCrossed,
+    /// Every reading since the crossing moved further out (grow side: rose,
+    /// shrink side: fell) and had its previous cohort followed and dead.
+    Drifting,
+    /// The run turned, or one of its cohorts survived or was not followed.
+    /// Holds until the phase ends.
+    Level,
+}
+
+impl DriftRun {
+    /// Advance by one reading. `beyond` is the reading past this side's edge,
+    /// `onward` that it moved further out than the phase's previous reading.
+    fn note(self, beyond: bool, onward: bool, cohort_died: bool) -> Self {
+        match self {
+            DriftRun::NotCrossed if !beyond => DriftRun::NotCrossed,
+            DriftRun::NotCrossed if cohort_died => DriftRun::Drifting,
+            DriftRun::Drifting if onward && cohort_died => DriftRun::Drifting,
+            _ => DriftRun::Level,
+        }
+    }
+}
+
+/// The ladder phase's drift state: its previous reading in bytes and one
+/// [`DriftRun`] per band side. Policy state of the same kind as the streaks;
+/// reset with the phase.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct CapPhaseDrift {
+    prev_influx_bytes: usize,
+    grow: DriftRun,
+    shrink: DriftRun,
+}
+
+impl CapPhaseDrift {
+    const START: Self = CapPhaseDrift {
+        prev_influx_bytes: 0,
+        grow: DriftRun::NotCrossed,
+        shrink: DriftRun::NotCrossed,
+    };
+}
+
 /// Add one reading to the ladder's current phase and return the phase's mean
-/// influx. A reading on the far side of the band from the mean so far starts
-/// a new phase with itself (see [`retune_nursery_cap_scale`]).
-fn note_cap_phase_reading(eden_live_bytes: usize, cap: usize) -> usize {
+/// influx and its drift runs. A reading on the far side of the band from the
+/// mean so far starts a new phase with itself (see
+/// [`retune_nursery_cap_scale`]).
+fn note_cap_phase_reading(
+    eden_live_bytes: usize,
+    cap: usize,
+    cohort_died: bool,
+) -> (usize, CapPhaseDrift) {
     let minors = CAP_PHASE_MINORS.with(Cell::get);
     let sum = CAP_PHASE_INFLUX_BYTES.with(Cell::get);
     let reading = eden_live_bytes as u64;
-    let (sum, minors) = if minors != 0
-        && cap_band_side(eden_live_bytes, cap) * cap_band_side((sum / minors) as usize, cap) < 0
-    {
+    let side = cap_band_side(eden_live_bytes, cap);
+    let restart = minors != 0 && side * cap_band_side((sum / minors) as usize, cap) < 0;
+    let (sum, minors) = if restart {
         (reading, 1)
     } else {
         (sum.saturating_add(reading), minors + 1)
     };
     CAP_PHASE_INFLUX_BYTES.with(|c| c.set(sum));
     CAP_PHASE_MINORS.with(|c| c.set(minors));
-    (sum / minors) as usize
+    // The far-side reading is the new phase's first, so its runs start fresh
+    // from it, as they do at a move (`start_cap_phase`).
+    let drift = if restart {
+        CapPhaseDrift::START
+    } else {
+        CAP_PHASE_DRIFT.with(Cell::get)
+    };
+    let prev = drift.prev_influx_bytes;
+    let drift = CapPhaseDrift {
+        prev_influx_bytes: eden_live_bytes,
+        // Bytes, not a rate: with R = 0 the reading does not depend on the
+        // window, and the cap it is judged against can move between readings
+        // (the object census re-denominates it every minor).
+        grow: drift.grow.note(side > 0, eden_live_bytes > prev, cohort_died),
+        shrink: drift.shrink.note(side < 0, eden_live_bytes < prev, cohort_died),
+    };
+    CAP_PHASE_DRIFT.with(|c| c.set(drift));
+    ((sum / minors) as usize, drift)
 }
 
 /// A ladder move ends the phase: the next reading is the first at the new cap.
 fn start_cap_phase() {
     CAP_PHASE_INFLUX_BYTES.with(|c| c.set(0));
     CAP_PHASE_MINORS.with(|c| c.set(0));
+    CAP_PHASE_DRIFT.with(|c| c.set(CapPhaseDrift::START));
 }
 
 /// Minimum Eden survival rate, in tenths, for a mark-sweep to seed the
@@ -1121,6 +1240,16 @@ fn diag_cap_scale(from: u8, to: u8, eden_live_bytes: usize) {
             "[gc-tenuring] nursery cap scale {from}/{unit} -> {to}/{unit} of base \
              (band {} B, eden_live_bytes={eden_live_bytes})",
             influx_driven_nursery_cap_bytes_at(to),
+            unit = NURSERY_CAP_SCALE_UNIT
+        );
+    }
+}
+
+fn diag_cap_drift_hold(scale: u8, side: &str, eden_live_bytes: usize) {
+    if crate::gc::gc_diag_enabled() {
+        eprintln!(
+            "[gc-tenuring] nursery cap scale {scale}/{unit} holds: the {side} side is a drift \
+             (eden_live_bytes={eden_live_bytes})",
             unit = NURSERY_CAP_SCALE_UNIT
         );
     }
@@ -1833,6 +1962,186 @@ mod tests {
         retune_after_scavenge(floor * 40 / 100, 0, 0);
         retune_after_scavenge(floor * 6 / 100, 0, 0);
         assert_eq!(scavenge_nursery_cap_effective_bytes(), floor * 2);
+        reset_for_test();
+    }
+
+    // GCL (2026-10-23): the drift rule. These drive the ladder with byte
+    // readings stated as percentages of the current level's band edge (the
+    // design states them at a 2/4 grow edge G = 400 000 B). "Dead" readings
+    // follow a copied cohort none of which survived its first round.
+    const COHORT: usize = 64 * 1024;
+
+    fn cap_scale() -> u8 {
+        NURSERY_CAP_SCALE.with(TriggerInput::get)
+    }
+
+    fn pct(edge: usize, percent: usize) -> usize {
+        edge * percent / 100
+    }
+
+    fn dead(reading: usize) {
+        retune_after_scavenge(reading, COHORT, 0);
+    }
+
+    /// Climb from the floor to `scale` on unfollowed readings (3% of the
+    /// target level's cap, above 4% of every level below it), the last of
+    /// which copies a cohort when `seed` is set, so the first reading of the
+    /// test is followed.
+    fn start_at(scale: u8, seed: bool) {
+        reset_for_test();
+        let reading = nursery_cap_floor_bytes() * scale as usize * 3 / 100;
+        retune_after_scavenge(reading, 0, 0);
+        retune_after_scavenge(reading, if seed { COHORT } else { 0 }, 0);
+        assert_eq!(cap_scale(), scale);
+    }
+
+    /// The current level's grow edge (4% of its cap) and shrink edge (1%).
+    fn grow_edge() -> usize {
+        scavenge_nursery_cap_effective_bytes() / 25
+    }
+
+    fn shrink_edge() -> usize {
+        scavenge_nursery_cap_effective_bytes() / 100
+    }
+
+    /// Storage's beat: a run of dead readings that rises through the grow
+    /// edge and wraps. Its rising half holds a phase mean beyond the edge for
+    /// two readings in a row (plain EK21 grows at reading 3), but the cycle's
+    /// level is inside the band.
+    #[test]
+    fn a_drifting_beat_with_dead_cohorts_is_not_a_level() {
+        start_at(2, true);
+        let g = grow_edge();
+        for _ in 0..2 {
+            for percent in [90, 105, 120, 30] {
+                dead(pct(g, percent));
+                assert_eq!(cap_scale(), 2);
+            }
+        }
+        reset_for_test();
+    }
+
+    /// The same rise with 10% of each cohort surviving is a structure
+    /// accumulating, so it is a level and grows as under EK21.
+    #[test]
+    fn a_rising_run_whose_cohorts_survive_still_grows() {
+        start_at(2, true);
+        let g = grow_edge();
+        retune_after_scavenge(pct(g, 90), COHORT, COHORT / 10);
+        retune_after_scavenge(pct(g, 105), COHORT, COHORT / 10);
+        assert_eq!(cap_scale(), 2);
+        retune_after_scavenge(pct(g, 120), COHORT, COHORT / 10);
+        assert!(cap_scale() > 2);
+        reset_for_test();
+    }
+
+    /// A flat heavy phase turns at its second reading (equal is not a rise),
+    /// so the dead cohorts do not delay the grow.
+    #[test]
+    fn a_flat_heavy_phase_of_dead_cohorts_grows_after_two_readings() {
+        start_at(2, true);
+        let g = grow_edge();
+        dead(pct(g, 105));
+        assert_eq!(cap_scale(), 2);
+        dead(pct(g, 105));
+        assert!(cap_scale() > 2);
+        reset_for_test();
+    }
+
+    /// The mirror of the beat: a run of dead readings falling through the
+    /// shrink edge holds the level; plain EK21 shrinks at reading 3.
+    #[test]
+    fn a_falling_run_of_dead_cohorts_does_not_shrink() {
+        start_at(4, true);
+        let s = shrink_edge();
+        for _ in 0..2 {
+            for percent in [110, 95, 80, 300] {
+                dead(pct(s, percent));
+                assert_eq!(cap_scale(), 4);
+            }
+        }
+        reset_for_test();
+    }
+
+    /// A reading whose previous cohort was not copied measured no lifetime:
+    /// it is not a death, so the rise is a level and grows.
+    #[test]
+    fn an_unfollowed_cohort_is_not_a_death() {
+        start_at(2, false);
+        let g = grow_edge();
+        retune_after_scavenge(pct(g, 90), 0, 0);
+        retune_after_scavenge(pct(g, 105), 0, 0);
+        assert_eq!(cap_scale(), 2);
+        retune_after_scavenge(pct(g, 120), 0, 0);
+        assert!(cap_scale() > 2);
+        reset_for_test();
+    }
+
+    /// A move starts a new phase: the run that turned at 2/4 does not make
+    /// the rising drift at 4/4 a level.
+    #[test]
+    fn the_drift_run_starts_fresh_at_a_move() {
+        start_at(2, true);
+        let g = grow_edge();
+        dead(pct(g, 105));
+        dead(pct(g, 105));
+        assert_eq!(cap_scale(), 4);
+        let g = grow_edge();
+        for percent in [90, 105, 120] {
+            dead(pct(g, percent));
+            assert_eq!(cap_scale(), 4);
+        }
+        reset_for_test();
+    }
+
+    /// The far-side restart starts a new phase too: a falling drift after a
+    /// heavy reading neither shrinks nor carries that reading's turn into the
+    /// rising drift that restarts the phase again.
+    #[test]
+    fn the_drift_run_starts_fresh_at_the_far_side_restart() {
+        start_at(2, true);
+        let g = grow_edge();
+        assert!(pct(g, 20) < shrink_edge());
+        for percent in [110, 20, 16, 12, 8, 4, 2, 105, 120] {
+            dead(pct(g, percent));
+            assert_eq!(cap_scale(), 2);
+        }
+        reset_for_test();
+    }
+
+    /// sa_Json's shape: a rise inside the band before the run crosses the
+    /// shrink edge is not a turn of that run.
+    #[test]
+    fn a_turn_before_the_crossing_does_not_excuse_a_drift() {
+        start_at(4, true);
+        let s = shrink_edge();
+        for percent in [120, 130, 60, 50] {
+            dead(pct(s, percent));
+            assert_eq!(cap_scale(), 4);
+        }
+        reset_for_test();
+    }
+
+    /// The runs compare bytes. The cap a reading is judged against moves
+    /// between readings with the object census; a run whose bytes rise while
+    /// its share of a growing cap falls is still a drift.
+    #[test]
+    fn a_cap_that_grows_does_not_turn_a_rising_drift() {
+        start_at(2, true);
+        note_surviving_object_census(60 * 1000, 1000);
+        let (cap1, g1) = (scavenge_nursery_cap_effective_bytes(), grow_edge());
+        let first = pct(g1, 105);
+        dead(first);
+        assert_eq!(cap_scale(), 2);
+        note_surviving_object_census(63 * 1000, 1000);
+        let (cap2, g2) = (scavenge_nursery_cap_effective_bytes(), grow_edge());
+        let second = pct(g1, 107);
+        // The shape: beyond the new edge, a mean beyond it (plain EK21 grows),
+        // more bytes, a smaller share of the cap.
+        assert!(second > g2 && (first + second) / 2 > g2);
+        assert!(second > first && (second as u64) * (cap1 as u64) < (first as u64) * (cap2 as u64));
+        dead(second);
+        assert_eq!(cap_scale(), 2);
         reset_for_test();
     }
 
