@@ -455,11 +455,11 @@ pub fn transform_generator_function_with_extra_captures(
     // v, is_error)`; `__agstep` drives the state machine and suspends inner
     // `await`s on the microtask queue. It is boxed + captured like the other
     // state-machine internals so `.next`/`.throw` resolve it per-call.
-    let agstep_id = if is_async_generator {
-        Some(alloc_local(next_local_id))
-    } else {
-        None
-    };
+    // An async generator's single private step body takes its operation as
+    // its second parameter: false = next, true = throw (also the values an
+    // `await` re-entry passes), 2 = return. The step closure is the record's
+    // body; the runtime birth (`js_async_generator_create`) owns it.
+    let async_op_id = is_async_generator.then(|| alloc_local(next_local_id));
 
     // Collect all states from the generator body
     let mut states: Vec<State> = Vec::new();
@@ -799,12 +799,6 @@ pub fn transform_generator_function_with_extra_captures(
         prealloc_ids.push(pending_type_id);
         prealloc_ids.push(pending_value_id);
     }
-    // #6709: box the shared async-generator step closure so `.next`/`.throw`
-    // read a distinct instance per generator activation (closure-cache key by
-    // box pointer, matching the #1029 idempotency fix for the other internals).
-    if let Some(id) = agstep_id {
-        prealloc_ids.push(id);
-    }
     for (var_id, _, _) in &hoisted {
         prealloc_ids.push(*var_id);
     }
@@ -938,13 +932,6 @@ pub fn transform_generator_function_with_extra_captures(
         captures.push(pending_value_id);
         mutable_captures.push(pending_type_id);
         mutable_captures.push(pending_value_id);
-    }
-    // #6709: the outer `.next`/`.throw` closures reference `__agstep` (and the
-    // step captures the same boxes as the resume closures); capture it by
-    // reference like the other boxed state-machine internals.
-    if let Some(id) = agstep_id {
-        captures.push(id);
-        mutable_captures.push(id);
     }
     for param in &func.params {
         captures.push(param.id);
@@ -1118,7 +1105,7 @@ pub fn transform_generator_function_with_extra_captures(
         // #6709: for async generators, the shared `__agstep` closure to bind
         // into a boxed local (emitted into `new_body` just before the iterator
         // object is returned). `None` for sync generators.
-        let mut agstep_init: Option<(LocalId, Expr)> = None;
+        let mut agstep_init: Option<Expr> = None;
         // Build .return(value) closure — immediately marks done and returns {value, done: true}
         let return_param_id = alloc_local(next_local_id);
         let return_func_id_val = {
@@ -1213,24 +1200,21 @@ pub fn transform_generator_function_with_extra_captures(
             ));
             if is_async_generator {
                 // #8715: a matched route has set `state = finally_entry_state`
-                // and recorded the pending return in the shared boxed locals.
-                // Hand off to the shared `__agstep` driver (a fresh, non-error
-                // resume) rather than run a local async_step=false loop, so a
-                // finally `await` suspends on the microtask queue (`AsyncStepChain`
-                // re-entering `__agstep`) instead of block-waiting — the fix for
-                // this issue. `__agstep` dispatches from `finally_entry_state`,
-                // runs the finally (its `yield`s settle this `.return()`'s
-                // promise, its `await`s suspend), and its completion-check state
-                // re-raises the pending return as `{value, done: true}`. This
-                // mirrors how `.next()`/`.throw()` already drive a yielding
-                // finally. `wrap_generator_resume_body` clears `executing` before
-                // this return, so `__agstep`'s re-entrancy guard passes.
-                let agstep_local_id = agstep_id.expect("agstep_id is set for async generators");
-                return_resume_body.push(Stmt::Return(Some(Expr::AsyncGenResume {
-                    step_closure: Box::new(Expr::LocalGet(agstep_local_id)),
-                    value: Box::new(Expr::Undefined),
-                    is_error: false,
-                })));
+                // and recorded the pending return. The return arm is part of
+                // the one step body: continue into its next arm (a fresh,
+                // non-error resume with `undefined`), so the finally's `await`s
+                // suspend on the microtask queue (`AsyncStepChain`) and its
+                // completion-check state re-raises the pending return as
+                // `{value, done: true}`.
+                let op_id = async_op_id.expect("async generators own an op parameter");
+                return_resume_body.push(Stmt::Expr(Expr::LocalSet(
+                    return_param_id,
+                    Box::new(Expr::Undefined),
+                )));
+                return_resume_body.push(Stmt::Expr(Expr::LocalSet(
+                    op_id,
+                    Box::new(Expr::Bool(false)),
+                )));
             } else {
                 // Sync generators re-drive the finally inline in this closure —
                 // no microtask suspend is needed (they have no `await`), and the
@@ -1258,6 +1242,7 @@ pub fn transform_generator_function_with_extra_captures(
         // #4445: wrap with the executing guard + a catch that clears `executing`
         // and marks `done` on any escaping throw (also wraps returns in a Promise
         // for async generators).
+        let async_return_arm = is_async_generator.then(|| return_resume_body.clone());
         let return_catch_id = alloc_local(next_local_id);
         let return_body = if fixed_state {
             return_resume_body.drain(..2); // done/executing are shared boundary controls
@@ -1364,7 +1349,7 @@ pub fn transform_generator_function_with_extra_captures(
                 2,
                 Stmt::Expr(Expr::LocalSet(executing_id, Box::new(Expr::Bool(true)))),
             );
-            let is_error_param_id = alloc_local(next_local_id);
+            let is_error_param_id = async_op_id.expect("async generators own an op parameter");
             let agstep_func_id = {
                 let id = *next_func_id;
                 *next_func_id += 1;
@@ -1377,11 +1362,29 @@ pub fn transform_generator_function_with_extra_captures(
             // routing the rejection to the enclosing catch exactly like an
             // explicit `.throw()`; a settled `await` re-enters with
             // __is_error = false, delivering the value through `__sent`.
-            let step_inner = vec![Stmt::If {
-                condition: Expr::LocalGet(is_error_param_id),
-                then_branch: throw_resume_body,
-                else_branch: Some(next_resume_body),
-            }];
+            // `if (op == 2) { <return arm> }` first: its completions return,
+            // and a route into a yielding finally falls through as next.
+            let mut return_arm = async_return_arm.expect("async return arm");
+            perry_hir::analysis::remap_local_ids_in_stmts(
+                &mut return_arm,
+                &std::collections::HashMap::from([(return_param_id, next_param_id)]),
+            );
+            let step_inner = vec![
+                Stmt::If {
+                    condition: Expr::Compare {
+                        op: CompareOp::Eq,
+                        left: Box::new(Expr::LocalGet(is_error_param_id)),
+                        right: Box::new(Expr::Number(2.0)),
+                    },
+                    then_branch: return_arm,
+                    else_branch: None,
+                },
+                Stmt::If {
+                    condition: Expr::LocalGet(is_error_param_id),
+                    then_branch: throw_resume_body,
+                    else_branch: Some(next_resume_body),
+                },
+            ];
             let mut step_body =
                 wrap_async_gen_step_body(step_inner, executing_id, done_id, agstep_catch_id);
             // Turn every `{value, done}` return into an `AsyncStepDone` that
@@ -1389,7 +1392,6 @@ pub fn transform_generator_function_with_extra_captures(
             // returns are left as-is.
             wrap_iter_result_returns_in_async_step_done(&mut step_body);
 
-            let agstep_local_id = agstep_id.expect("agstep_id set for async generators");
             let agstep_closure = Expr::Closure {
                 func_id: agstep_func_id,
                 params: vec![
@@ -1404,8 +1406,8 @@ pub fn transform_generator_function_with_extra_captures(
                     },
                     perry_hir::Param {
                         id: is_error_param_id,
-                        name: "__is_error".to_string(),
-                        ty: Type::Boolean,
+                        name: "__gen_op".to_string(),
+                        ty: Type::Any,
                         is_rest: false,
                         default: None,
                         decorators: Vec::new(),
@@ -1424,71 +1426,10 @@ pub fn transform_generator_function_with_extra_captures(
                 is_async: false,
                 is_generator: false,
             };
-            // `let __agstep = <agstep_closure>` is emitted into the outer body
-            // just before the iterator object is returned (see `agstep_init`).
-            agstep_init = Some((agstep_local_id, agstep_closure));
-
-            // Outer `.next(v)` closure: `return js_async_generator_resume(
-            //   __agstep, v, false)`.
-            let outer_next_param_id = alloc_local(next_local_id);
-            let outer_next_closure = Expr::Closure {
-                func_id: next_func_id_val,
-                params: vec![perry_hir::Param {
-                    id: outer_next_param_id,
-                    name: "__val".to_string(),
-                    ty: Type::Any,
-                    is_rest: false,
-                    default: None,
-                    decorators: Vec::new(),
-                    arguments_object: None,
-                }],
-                return_type: Type::Any,
-                body: vec![Stmt::Return(Some(Expr::AsyncGenResume {
-                    step_closure: Box::new(Expr::LocalGet(agstep_local_id)),
-                    value: Box::new(Expr::LocalGet(outer_next_param_id)),
-                    is_error: false,
-                }))],
-                captures: captures.clone(),
-                mutable_captures: mutable_captures.clone(),
-                captures_this,
-                captures_new_target: false,
-                enclosing_class: enclosing_class.clone(),
-                is_arrow: false,
-                is_strict: func.is_strict,
-                is_async: false,
-                is_generator: false,
-            };
-            // Outer `.throw(e)` closure: `return js_async_generator_resume(
-            //   __agstep, e, true)`.
-            let outer_throw_param_id = alloc_local(next_local_id);
-            let outer_throw_closure = Expr::Closure {
-                func_id: throw_func_id_val,
-                params: vec![perry_hir::Param {
-                    id: outer_throw_param_id,
-                    name: "__throw_val".to_string(),
-                    ty: Type::Any,
-                    is_rest: false,
-                    default: None,
-                    decorators: Vec::new(),
-                    arguments_object: None,
-                }],
-                return_type: Type::Any,
-                body: vec![Stmt::Return(Some(Expr::AsyncGenResume {
-                    step_closure: Box::new(Expr::LocalGet(agstep_local_id)),
-                    value: Box::new(Expr::LocalGet(outer_throw_param_id)),
-                    is_error: true,
-                }))],
-                captures: captures.clone(),
-                mutable_captures: mutable_captures.clone(),
-                captures_this,
-                captures_new_target: false,
-                enclosing_class: enclosing_class.clone(),
-                is_arrow: false,
-                is_strict: func.is_strict,
-                is_async: false,
-                is_generator: false,
-            };
-            (outer_next_closure, outer_throw_closure)
+            // The step closure is the record body the birth owns; there are no
+            // own next/return/throw closures.
+            agstep_init = Some(agstep_closure);
+            (Expr::Undefined, Expr::Undefined)
         } else {
             let throw_catch_id = alloc_local(next_local_id);
             let throw_body = if fixed_state {
@@ -1570,7 +1511,9 @@ pub fn transform_generator_function_with_extra_captures(
             };
             (next_closure, throw_closure)
         };
-        let iter_obj = if let Some(op_id) = resume_op_id {
+        let iter_obj = if let Some(step) = agstep_init.take() {
+            step
+        } else if let Some(op_id) = resume_op_id {
             let Expr::Closure {
                 body: mut next_body,
                 ..
@@ -1711,18 +1654,6 @@ pub fn transform_generator_function_with_extra_captures(
                 Vec::new()
             },
         };
-        // #6709: bind the shared async-generator step closure into its boxed
-        // local before returning the iterator object, so the `.next`/`.throw`
-        // closures (which captured the box) read a fresh `__agstep` per call.
-        if let Some((agstep_local_id, agstep_closure)) = agstep_init {
-            new_body.push(Stmt::Let {
-                id: agstep_local_id,
-                name: "__agstep".to_string(),
-                ty: Type::Any,
-                mutable: true,
-                init: Some(agstep_closure),
-            });
-        }
         new_body.push(Stmt::Return(Some(linked)));
     }
 

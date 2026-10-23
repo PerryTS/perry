@@ -101,6 +101,9 @@ pub fn inline_finally_into_returns(module: &mut Module) {
     let mut next_local_id = compute_max_local_id(module).saturating_add(1);
     let mut label_depths: HashMap<String, usize> = HashMap::new();
     for func in &mut module.functions {
+        if func.is_async && func.is_generator {
+            crate::async_generator_return::await_returned_operands(&mut func.body);
+        }
         process_stmts(
             &mut func.body,
             &[],
@@ -112,6 +115,9 @@ pub fn inline_finally_into_returns(module: &mut Module) {
     }
     for class in &mut module.classes {
         for method in &mut class.methods {
+            if method.is_async && method.is_generator {
+                crate::async_generator_return::await_returned_operands(&mut method.body);
+            }
             process_stmts(
                 &mut method.body,
                 &[],
@@ -122,6 +128,9 @@ pub fn inline_finally_into_returns(module: &mut Module) {
             );
         }
         for static_method in &mut class.static_methods {
+            if static_method.is_async && static_method.is_generator {
+                crate::async_generator_return::await_returned_operands(&mut static_method.body);
+            }
             process_stmts(
                 &mut static_method.body,
                 &[],
@@ -167,6 +176,9 @@ pub fn inline_finally_into_returns(module: &mut Module) {
         // method's finally un-inlined, so its generator state machine could skip
         // the finally on a return path.
         for member in class.computed_members.iter_mut() {
+            if member.function.is_async && member.function.is_generator {
+                crate::async_generator_return::await_returned_operands(&mut member.function.body);
+            }
             process_stmts(
                 &mut member.function.body,
                 &[],
@@ -777,7 +789,16 @@ fn walk_stmt_exprs<F: FnMut(&mut Expr)>(stmt: &mut Stmt, f: &mut F) {
 /// found. Each closure's body starts with an empty enclosing-finally
 /// stack — the closure is a fresh function frame.
 fn process_expr_closure_bodies(expr: &mut Expr, next_local_id: &mut LocalId) {
-    if let Expr::Closure { body, .. } = expr {
+    if let Expr::Closure {
+        body,
+        is_async,
+        is_generator,
+        ..
+    } = expr
+    {
+        if *is_async && *is_generator {
+            crate::async_generator_return::await_returned_operands(body);
+        }
         let mut label_depths: HashMap<String, usize> = HashMap::new();
         process_stmts(body, &[], 0, 0, &mut label_depths, next_local_id);
     }

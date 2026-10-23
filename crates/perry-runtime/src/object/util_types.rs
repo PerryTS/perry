@@ -316,7 +316,9 @@ pub extern "C" fn js_util_types_is_generator_function(value: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_util_types_is_generator_object(value: f64) -> f64 {
-    if super::fixed_generator_state(value).is_some() {
+    if super::fixed_generator_state(value).is_some()
+        || super::is_async_generator_instance_value(value)
+    {
         return nanbox_bool(true);
     }
     let v = JSValue::from_bits(value.to_bits());

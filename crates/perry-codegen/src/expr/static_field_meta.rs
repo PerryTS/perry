@@ -680,8 +680,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             fixed_state,
             ..
         } => {
-            if *fixed_state {
-                if let Expr::Closure { func_id, .. } = obj.as_ref() {
+            let async_record =
+                *is_async && !*fixed_state && matches!(obj.as_ref(), Expr::Closure { .. });
+            if *fixed_state || async_record {
+                if let (false, Expr::Closure { func_id, .. }) = (async_record, obj.as_ref()) {
                     let name =
                         crate::fn_info::closure_body_symbol(ctx.strings.module_prefix(), *func_id);
                     ctx.block().note_fn_info(&name, |facts| {
@@ -713,8 +715,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         } else {
                             format!("__perry_wrap_{}", name)
                         };
-                        ctx.block()
-                            .note_fn_info(&name, |facts| facts.set_generator());
+                        ctx.block().note_fn_info(&name, |facts| {
+                            if async_record {
+                                facts.set_async_generator()
+                            } else {
+                                facts.set_generator()
+                            }
+                        });
                         let info = ctx.block().fn_info_ref(&name);
                         ctx.block()
                             .call(I64, "js_closure_alloc_singleton", &[(PTR, &info)])
@@ -724,7 +731,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let resume = group.reread(ctx, resume)?;
                     Ok(ctx.block().call(
                         DOUBLE,
-                        "js_generator_create",
+                        if async_record {
+                            "js_async_generator_create"
+                        } else {
+                            "js_generator_create"
+                        },
                         &[(DOUBLE, &resume), (I64, &owner)],
                     ))
                 });

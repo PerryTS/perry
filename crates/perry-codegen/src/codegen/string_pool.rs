@@ -959,7 +959,7 @@ pub(super) fn emit_string_pool(
                     &f.body,
                     fresh_class_templates.contains(class_name),
                 ),
-                is_generator: super::helpers::body_has_fixed_generator_state(&f.body),
+                generator: super::helpers::body_generator_record_kind(&f.body),
             });
         }
         // #1787: the standalone constructor `<prefix>__<class>_constructor`
@@ -1123,11 +1123,7 @@ pub(super) fn emit_string_pool(
             has_user_rest: has_rest,
             has_synth_args,
             home: home && method_entries::source_needs_home(&local_classes, cid, definition_order),
-            is_generator: method_entries::source_is_generator(
-                &local_classes,
-                cid,
-                definition_order,
-            ),
+            generator: method_entries::source_generator_kind(&local_classes, cid, definition_order),
             generator_owner: method_entries::source_needs_owner(
                 &local_classes,
                 cid,
@@ -1235,7 +1231,7 @@ pub(super) fn emit_string_pool(
                 has_user_rest,
                 has_synth_args,
                 home: fresh_cids.contains(&cid),
-                is_generator: method_entries::source_is_generator(
+                generator: method_entries::source_generator_kind(
                     &local_classes,
                     cid,
                     definition_order,

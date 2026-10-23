@@ -168,7 +168,7 @@ pub(crate) unsafe fn call_generator_symbol_method(
 /// The instance's `[[GeneratorState]]`: its private slot holding the resume
 /// record. Every sync generator is born with it at slot 0
 /// ([`birth_shape`]); own-key transitions keep it there and carry the brand.
-static STATE_READ: crate::object::IntrinsicPrivateReadSite =
+pub(super) static STATE_READ: crate::object::IntrinsicPrivateReadSite =
     crate::object::IntrinsicPrivateReadSite::new(
         &crate::object::runtime_layouts::intrinsic_private_atoms::GENERATOR_STATE,
     );
@@ -210,6 +210,17 @@ fn birth_shape() -> u32 {
 #[cold]
 #[inline(never)]
 fn prepare_birth_shape() -> u32 {
+    let shape = record_birth_shape(GENERATOR_STATE_BRAND);
+    BIRTH_SHAPE.with(|memo| memo.set(shape));
+    shape
+}
+
+/// The record-held birth layout of a generator kind (`brand`): the
+/// `[[GeneratorState]]` private slot, the brand, extensible, prototype held
+/// by the record. Published once per agent per kind and kept for its life.
+#[cold]
+#[inline(never)]
+pub(super) fn record_birth_shape(brand: u64) -> u32 {
     use crate::object::canonical_keys::{CanonicalKeys, SharedLayout};
     let _no_move = crate::gc::GcSuppressScope::new();
     let proof = SharedLayout::shape_cache_entry();
@@ -234,7 +245,7 @@ fn prepare_birth_shape() -> u32 {
             crate::object::shapes::PROTO_ID_RECORD_HELD,
             summary,
             crate::object::field_rep::REP_ANY,
-            &[GENERATOR_STATE_BRAND],
+            &[brand],
             None,
             0, // newborn generator is extensible
         ),
@@ -247,7 +258,6 @@ fn prepare_birth_shape() -> u32 {
             crate::object::shapes::shape_descriptor_by_id(shape),
         );
     }
-    BIRTH_SHAPE.with(|memo| memo.set(shape));
     shape
 }
 
@@ -255,6 +265,11 @@ fn prepare_birth_shape() -> u32 {
 /// (a function, or a non-heap object such as a Proxy): the shape names it, as
 /// every ordinary object's shape does. Rare; one intern per birth.
 fn shape_held_birth_shape(proto: f64) -> u32 {
+    shape_held_birth_shape_for(proto, GENERATOR_STATE_BRAND)
+}
+
+/// [`shape_held_birth_shape`] for a generator kind's `brand`.
+pub(super) fn shape_held_birth_shape_for(proto: f64, brand: u64) -> u32 {
     use crate::object::canonical_keys::{CanonicalKeys, SharedLayout};
     let scope = crate::gc::RuntimeHandleScope::new();
     let proto = scope.root_nanbox_f64(proto);
@@ -288,7 +303,7 @@ fn shape_held_birth_shape(proto: f64) -> u32 {
             proto_id,
             summary,
             crate::object::field_rep::REP_ANY,
-            &[GENERATOR_STATE_BRAND],
+            &[brand],
             None,
             0,
         ),
@@ -356,7 +371,7 @@ unsafe fn transitioned_generator_state_bits(obj: *const ObjectHeader) -> Option<
 /// prototype object, or the owner generator function while the function's
 /// original prototype is unmaterialized (a closure is never held as an
 /// explicit prototype: such a birth takes [`shape_held_birth_shape`]).
-const PROTO_SLOT: usize = 5;
+pub(super) const PROTO_SLOT: usize = 5;
 
 /// The [[Prototype]] bits of an instance whose shape's identity is
 /// `PROTO_ID_RECORD_HELD`, read from its record. Allocation-free, for every
@@ -370,19 +385,111 @@ const PROTO_SLOT: usize = 5;
 /// `obj` is a live `GC_TYPE_OBJECT` cell.
 #[inline(always)]
 pub(crate) unsafe fn generator_record_prototype_word(obj: *const ObjectHeader) -> u64 {
-    let Some(state) = fixed_generator_state_of_object(obj) else {
+    // A sync birth layout answers from its own kind alone; every other
+    // record-held instance (async, or transitioned) resolves its kind first.
+    let sync_shape = BIRTH_SHAPE.with(std::cell::Cell::get);
+    if sync_shape != 0 && crate::object::shapes::object_shape_stamp(obj) == sync_shape {
+        return record_prototype_word::<false>(birth_record_bits(obj));
+    }
+    other_record_prototype_word(obj)
+}
+
+/// [`generator_record_prototype_word`] for an async or transitioned instance.
+#[inline(never)]
+unsafe fn other_record_prototype_word(obj: *const ObjectHeader) -> u64 {
+    let Some((state, is_async)) = record_of_record_held(obj) else {
         debug_assert!(false, "a record-held shape names a generator instance");
         return crate::value::TAG_NULL;
     };
+    let record = crate::value::js_nanbox_pointer(state as i64).to_bits();
+    if is_async {
+        record_prototype_word::<true>(record)
+    } else {
+        record_prototype_word::<false>(record)
+    }
+}
+
+/// The [[Prototype]] bits a `record` (its NaN-boxed bits) of kind `ASYNC`
+/// holds in its prototype control.
+#[inline(always)]
+unsafe fn record_prototype_word<const ASYNC: bool>(record: u64) -> u64 {
+    let record = JSValue::from_bits(record);
+    if !record.is_pointer() {
+        debug_assert!(false, "a record-held shape names a generator instance");
+        return crate::value::TAG_NULL;
+    }
+    let state = record.as_pointer::<crate::closure::ClosureHeader>();
     let holder = *state.add(1).cast::<u64>().add(PROTO_SLOT);
-    owner_original_prototype_word(holder).unwrap_or(holder)
+    owner_original_prototype_word::<ASYNC>(holder).unwrap_or(holder)
+}
+
+/// The record of a sync or async generator instance, with its kind. Either
+/// kind's birth layout answers from its shape stamp alone; only a
+/// transitioned instance consults the brands.
+///
+/// # Safety
+/// `obj` is a live `GC_TYPE_OBJECT` cell.
+#[inline(always)]
+unsafe fn record_of_record_held(
+    obj: *const ObjectHeader,
+) -> Option<(*const crate::closure::ClosureHeader, bool)> {
+    let stamp = crate::object::shapes::object_shape_stamp(obj);
+    let sync_shape = BIRTH_SHAPE.with(std::cell::Cell::get);
+    let (bits, is_async) = if sync_shape != 0 && stamp == sync_shape {
+        (birth_record_bits(obj), false)
+    } else {
+        async_or_transitioned_record_bits(obj, stamp)?
+    };
+    let record = JSValue::from_bits(bits);
+    record.is_pointer().then(|| {
+        (
+            record.as_pointer::<crate::closure::ClosureHeader>() as *const _,
+            is_async,
+        )
+    })
+}
+
+/// Slot 0 of a birth layout: the `[[GeneratorState]]` private slot.
+///
+/// # Safety
+/// `obj` is a live object on a sync or async generator birth layout.
+#[inline(always)]
+unsafe fn birth_record_bits(obj: *const ObjectHeader) -> u64 {
+    *(obj as *const u8)
+        .add(std::mem::size_of::<ObjectHeader>())
+        .cast::<u64>()
+}
+
+/// [`record_of_record_held`] off the sync birth layout: the async birth
+/// layout's stamp, else the brands. Out of line, so a sync instance's
+/// prototype walk reads only its own kind's layout.
+#[inline(never)]
+unsafe fn async_or_transitioned_record_bits(
+    obj: *const ObjectHeader,
+    stamp: u32,
+) -> Option<(u64, bool)> {
+    let async_shape = super::async_generator_state::published_birth_shape();
+    if async_shape != 0 && stamp == async_shape {
+        return Some((birth_record_bits(obj), true));
+    }
+    transitioned_record_held_bits(obj)
+}
+
+/// [`record_of_record_held`] off both birth layouts: the brand names the kind.
+#[cold]
+#[inline(never)]
+unsafe fn transitioned_record_held_bits(obj: *const ObjectHeader) -> Option<(u64, bool)> {
+    if let Some(bits) = transitioned_generator_state_bits(obj) {
+        return Some((bits, false));
+    }
+    super::async_generator_state::transitioned_record_bits(obj).map(|bits| (bits, true))
 }
 
 /// The prototype a control holding the owner function names: the owner's
 /// original, kept in its bag, or `%GeneratorPrototype%`'s while the original
 /// is unmaterialized. `None` for a control holding the prototype itself.
 #[inline(never)]
-unsafe fn owner_original_prototype_word(holder: u64) -> Option<u64> {
+unsafe fn owner_original_prototype_word<const ASYNC: bool>(holder: u64) -> Option<u64> {
     let owner = holder_owner(holder)?;
     let bag = (*owner).props;
     if !bag.is_null() {
@@ -392,8 +499,11 @@ unsafe fn owner_original_prototype_word(holder: u64) -> Option<u64> {
             return Some(original.to_bits());
         }
     }
-    let gen_proto =
-        crate::object::GENERATOR_PROTOTYPE_PTR.load(std::sync::atomic::Ordering::Acquire);
+    let gen_proto = if ASYNC {
+        crate::object::ASYNC_GENERATOR_PROTOTYPE_PTR.load(std::sync::atomic::Ordering::Acquire)
+    } else {
+        crate::object::GENERATOR_PROTOTYPE_PTR.load(std::sync::atomic::Ordering::Acquire)
+    };
     debug_assert_ne!(gen_proto, 0, "a birth built the generator intrinsics");
     Some(crate::value::js_nanbox_pointer(gen_proto).to_bits())
 }
@@ -437,7 +547,7 @@ pub(crate) fn generator_observe_record_prototype(value: f64) {
         {
             return;
         }
-        let Some(state) = fixed_generator_state_of_object(obj) else {
+        let Some((state, _)) = record_of_record_held(obj) else {
             return;
         };
         let Some(owner) = holder_owner(*state.add(1).cast::<u64>().add(PROTO_SLOT)) else {
@@ -626,7 +736,7 @@ pub extern "C" fn js_generator_create(
     // GetPrototypeFromConstructor, read from the owner's declared slot
     // without materializing it.
     let holder = owner.with_const_ptr::<crate::closure::ClosureHeader, _>(|owner| unsafe {
-        birth_prototype_holder(owner)
+        birth_prototype_holder(owner, false)
     });
     let holder = match holder {
         Holder::Record(bits) => Holder::Record(bits),
@@ -638,8 +748,8 @@ pub extern "C" fn js_generator_create(
                 generator_function_prototype_of(owner as usize)
             });
             match proto {
-                Some(value) => classify_prototype(value),
-                None => Holder::Record(generator_prototype_bits()),
+                Some(value) => classify_prototype(value, false),
+                None => Holder::Record(generator_prototype_bits(false)),
             }
         }
     };
@@ -695,7 +805,7 @@ pub extern "C" fn js_generator_create(
 }
 
 /// Where a birth's [[Prototype]] lives.
-enum Holder {
+pub(super) enum Holder {
     /// In the record's prototype control (the birth layout): an ordinary
     /// heap object, or the owner function while its original is
     /// unmaterialized.
@@ -706,17 +816,17 @@ enum Holder {
     Materialize,
 }
 
-fn generator_prototype_bits() -> u64 {
-    crate::value::js_nanbox_pointer(generator_prototype_ptr(false) as i64).to_bits()
+pub(super) fn generator_prototype_bits(is_async: bool) -> u64 {
+    crate::value::js_nanbox_pointer(generator_prototype_ptr(is_async) as i64).to_bits()
 }
 
 /// GetPrototypeFromConstructor for a `prototype` value: a primitive selects
 /// the realm's `%GeneratorPrototype%`; an ordinary heap object is held by the
 /// record; any other object (a function, which the control reserves for the
 /// owner, or a non-heap object) is named by the shape.
-fn classify_prototype(value: f64) -> Holder {
+pub(super) fn classify_prototype(value: f64, is_async: bool) -> Holder {
     if !unsafe { crate::object::value_is_object_like(value) } {
-        return Holder::Record(generator_prototype_bits());
+        return Holder::Record(generator_prototype_bits(is_async));
     }
     let jv = JSValue::from_bits(value.to_bits());
     let ordinary = jv.is_pointer()
@@ -737,9 +847,13 @@ fn classify_prototype(value: f64) -> Holder {
 ///
 /// # Safety
 /// `owner` is null or a live closure cell.
-unsafe fn birth_prototype_holder(owner: *const crate::closure::ClosureHeader) -> Holder {
+#[inline(always)]
+pub(super) unsafe fn birth_prototype_holder(
+    owner: *const crate::closure::ClosureHeader,
+    is_async: bool,
+) -> Holder {
     if owner.is_null() {
-        return Holder::Record(generator_prototype_bits());
+        return Holder::Record(generator_prototype_bits(is_async));
     }
     if crate::closure::props::bag_of(owner as usize).is_null()
         && crate::closure::props::closure_has_generator_body(owner)
@@ -747,9 +861,9 @@ unsafe fn birth_prototype_holder(owner: *const crate::closure::ClosureHeader) ->
         return Holder::Record(crate::value::js_nanbox_pointer(owner as i64).to_bits());
     }
     match crate::closure::shape::closure_own_prototype_by_shape(owner) {
-        Some(Some(value)) => classify_prototype(value),
+        Some(Some(value)) => classify_prototype(value, is_async),
         _ => match crate::closure::closure_get_own_dynamic_prop(owner as usize, "prototype") {
-            Some(value) => classify_prototype(value),
+            Some(value) => classify_prototype(value, is_async),
             None => Holder::Materialize,
         },
     }

@@ -18,7 +18,8 @@ pub(super) struct StaticMethodEntry {
     /// object for this method is at home in that evaluation's class object.
     pub(super) home: bool,
     pub(super) generator_owner: bool,
-    pub(super) is_generator: bool,
+    /// The kind of generator record the body births, if any.
+    pub(super) generator: Option<crate::codegen::helpers::GeneratorRecordKind>,
 }
 
 /// Define `<body>__clo(callee, this, args...)`, the code of a ClassBody static
@@ -115,9 +116,7 @@ pub(super) fn emit_static_method_entry(
         }
         f.set_length(e.spec_length);
         f.set_strict();
-        if e.is_generator {
-            f.set_generator();
-        }
+        set_generator_kind(f, e.generator);
     });
     let info_ref = chunker.current_block().fn_info_ref(&entry_name);
     (format!("@{}", entry_name), info_ref)
@@ -223,9 +222,7 @@ pub(super) fn emit_class_method_entry(
         }
         f.set_length(e.spec_length);
         f.set_strict();
-        if e.is_generator {
-            f.set_generator();
-        }
+        set_generator_kind(f, e.generator);
         f.set_non_constructor();
     });
     let info_ref = chunker.current_block().fn_info_ref(&entry_name);
@@ -307,19 +304,35 @@ pub(super) fn source_needs_owner(
         })
 }
 
-pub(super) fn source_is_generator(classes: &[(u32, &perry_hir::Class)], cid: u32, id: u32) -> bool {
+/// A generator method's function object is a generator function of the kind
+/// its body births: `%AsyncGeneratorFunction.prototype%` for an async record.
+fn set_generator_kind(
+    f: &mut crate::fn_info::FnInfoFacts,
+    kind: Option<crate::codegen::helpers::GeneratorRecordKind>,
+) {
+    match kind {
+        Some(crate::codegen::helpers::GeneratorRecordKind::Sync) => f.set_generator(),
+        Some(crate::codegen::helpers::GeneratorRecordKind::Async) => f.set_async_generator(),
+        None => {}
+    }
+}
+
+pub(super) fn source_generator_kind(
+    classes: &[(u32, &perry_hir::Class)],
+    cid: u32,
+    id: u32,
+) -> Option<crate::codegen::helpers::GeneratorRecordKind> {
     classes
         .iter()
         .find(|(c, _)| *c == cid)
-        .is_some_and(|(_, class)| {
+        .and_then(|(_, class)| {
             class
                 .methods
                 .iter()
                 .chain(class.static_methods.iter())
                 .chain(class.computed_members.iter().map(|m| &m.function))
-                .any(|f| {
-                    f.id == id && crate::codegen::helpers::body_has_fixed_generator_state(&f.body)
-                })
+                .find(|f| f.id == id)
+                .and_then(|f| crate::codegen::helpers::body_generator_record_kind(&f.body))
         })
 }
 
@@ -343,7 +356,7 @@ mod tests {
                 has_synth_args: false,
                 home,
                 generator_owner: false,
-                is_generator: false,
+                generator: None,
             },
         );
         chunker.finish();
@@ -439,7 +452,7 @@ pub(super) fn emit_computed_generator_entries(
                     has_synth_args: f.params.iter().any(|p| p.arguments_object.is_some()),
                     home: fresh.contains(&cid),
                     generator_owner: true,
-                    is_generator: crate::codegen::helpers::body_has_fixed_generator_state(&f.body),
+                    generator: crate::codegen::helpers::body_generator_record_kind(&f.body),
                 },
             );
         }

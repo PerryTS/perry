@@ -33,6 +33,7 @@ pub(crate) fn install_dyn_eval() {
 }
 mod generator;
 mod generator_state;
+mod async_generator_state;
 mod install_static;
 mod math_temporal;
 
@@ -175,6 +176,8 @@ pub(crate) use generator_state::{
     generator_record_prototype_word,
 };
 pub use generator_state::{js_generator_create, js_generator_result, js_generator_set_slot};
+pub use async_generator_state::js_async_generator_create;
+pub(crate) use async_generator_state::{async_generator_record, is_async_generator_instance_value};
 pub use install_static::js_promise_static_function_value;
 pub(crate) use install_static::{
     builtin_species_getter_thunk, install_atomics_namespace_members,

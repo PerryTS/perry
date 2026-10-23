@@ -7,6 +7,7 @@
 //! - i18n string localization
 
 mod aggregate_scalar;
+mod async_generator_return;
 pub mod async_to_generator;
 mod class_field_push;
 pub mod closure;

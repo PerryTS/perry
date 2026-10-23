@@ -16,18 +16,53 @@ use super::opts::{NamespaceEntry, NamespaceEntryKind};
 // existing `helpers::init_static_fields_*` paths keep resolving.
 pub(super) use super::static_fields::{init_static_fields_early, init_static_fields_late};
 
-/// A sync generator wrapper: its body returns the fixed-state birth, which
-/// links the instance to the function's prototype itself.
-pub(crate) fn function_body_is_fixed_state_generator(body: &[perry_hir::Stmt]) -> bool {
-    body.iter().any(|stmt| {
-        matches!(
-            stmt,
-            perry_hir::Stmt::Return(Some(perry_hir::Expr::LinkGeneratorPrototype {
-                fixed_state: true,
-                ..
-            }))
-        )
+/// A generator birth that owns its resume record: a sync generator's
+/// fixed-state record, or an async generator's step body
+/// (`js_async_generator_create`). Both link the instance to the function's
+/// prototype themselves and retain the owner function.
+pub(crate) fn is_record_generator_birth(expr: &perry_hir::Expr) -> bool {
+    record_generator_birth_kind(expr).is_some()
+}
+
+/// Which generator function kind a record birth belongs to.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GeneratorRecordKind {
+    Sync,
+    Async,
+}
+
+/// The kind of a record birth: the birth itself says whether the body is an
+/// async generator (`js_async_generator_create`) or a sync one.
+pub(crate) fn record_generator_birth_kind(expr: &perry_hir::Expr) -> Option<GeneratorRecordKind> {
+    match expr {
+        perry_hir::Expr::LinkGeneratorPrototype {
+            fixed_state: true, ..
+        } => Some(GeneratorRecordKind::Sync),
+        perry_hir::Expr::LinkGeneratorPrototype {
+            is_async: true,
+            obj,
+            ..
+        } if matches!(obj.as_ref(), perry_hir::Expr::Closure { .. }) => {
+            Some(GeneratorRecordKind::Async)
+        }
+        _ => None,
+    }
+}
+
+/// The record-birth kind of a generator wrapper body, if it returns one.
+pub(crate) fn body_generator_record_kind(body: &[perry_hir::Stmt]) -> Option<GeneratorRecordKind> {
+    body.iter().find_map(|stmt| match stmt {
+        perry_hir::Stmt::Return(Some(e)) => record_generator_birth_kind(e),
+        _ => None,
     })
+}
+
+/// A generator wrapper whose body returns a record birth, which links the
+/// instance to the function's prototype itself.
+pub(crate) fn function_body_is_fixed_state_generator(body: &[perry_hir::Stmt]) -> bool {
+    body.iter().any(
+        |stmt| matches!(stmt, perry_hir::Stmt::Return(Some(e)) if is_record_generator_birth(e)),
+    )
 }
 
 pub(crate) fn function_body_returns_generator_object(body: &[perry_hir::Stmt]) -> bool {
@@ -38,10 +73,7 @@ pub(crate) fn function_body_returns_generator_object(body: &[perry_hir::Stmt]) -
         return false;
     }
     body.iter().any(|stmt| match stmt {
-        perry_hir::Stmt::Return(Some(perry_hir::Expr::LinkGeneratorPrototype {
-            fixed_state: true,
-            ..
-        })) => true,
+        perry_hir::Stmt::Return(Some(e)) if is_record_generator_birth(e) => true,
         // The generator transform may wrap the returned iterator in the
         // instance-prototype linker; unwrap it so the iterator shape remains
         // the stable signal that this is a lowered generator wrapper.
@@ -1762,15 +1794,7 @@ pub(crate) fn generator_method_owner_name(body: &str) -> String {
     format!("{body}$generator_owner")
 }
 pub(crate) fn body_has_fixed_generator_state(body: &[perry_hir::Stmt]) -> bool {
-    body.iter().any(|stmt| {
-        matches!(
-            stmt,
-            perry_hir::Stmt::Return(Some(perry_hir::Expr::LinkGeneratorPrototype {
-                fixed_state: true,
-                ..
-            }))
-        )
-    })
+    function_body_is_fixed_state_generator(body)
 }
 
 /// Whether the body needs the selected method's lexical function object.
