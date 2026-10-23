@@ -299,11 +299,11 @@ fn read_site_memos_preserve_leaf_and_collecting_root_contracts() {
             // leaf stays stateless. Both collecting exits take the memo.
             let fixed = if outlined {
                 (
-                    "perry_probe_get_value_site",
+                    "perry_probe_get_value_memo",
                     "js_object_get_field_value_site",
                 )
             } else {
-                ("perry_probe_get_site", "js_object_get_field_value_site")
+                ("perry_probe_get_memo", "js_object_get_field_value_site")
             };
             for (fast, slow) in [
                 fixed,

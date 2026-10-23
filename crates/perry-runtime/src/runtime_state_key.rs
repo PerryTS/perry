@@ -1,6 +1,6 @@
 //! Rust call sites read and write fixed public names with ordinary Get/Set
 //! semantics through the same shape/slot memo as an emitted read. Fixed-key
-//! macro expansions own agent-local integer storage; no heap address or
+//! macro expansions own shared atomic integer storage; no heap address or
 //! getter value is retained.
 use crate::object::ObjectHeader;
 
@@ -31,13 +31,9 @@ macro_rules! runtime_state_key {
         const KEY: &[u8] = $key;
         const HASH: u64 = $crate::runtime_state_key::const_key_hash(KEY);
         fn site_memo() -> *mut $crate::object::layout_probe::site_memo::ReadSiteMemo {
-            #[thread_local]
-            static MEMO: std::cell::UnsafeCell<
-                $crate::object::layout_probe::site_memo::ReadSiteMemo,
-            > = std::cell::UnsafeCell::new(
-                $crate::object::layout_probe::site_memo::ReadSiteMemo::EMPTY,
-            );
-            MEMO.get()
+            static MEMO: $crate::object::layout_probe::site_memo::ReadSiteMemo =
+                $crate::object::layout_probe::site_memo::ReadSiteMemo::EMPTY;
+            &MEMO as *const _ as *mut _
         }
         $crate::runtime_state_key::NamedStateKey {
             bytes: KEY,

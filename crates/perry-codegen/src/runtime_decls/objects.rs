@@ -407,6 +407,8 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // A GC leaf; `TAG_HOLE` = declined.
     module.declare_function("perry_probe_family_method", I64, &[PTR, I64, I64, I64, I32]);
     module.declare_function("perry_probe_get", DOUBLE, &[PTR, I64, I64, I64]);
+    module.declare_function("perry_probe_get_memo", DOUBLE, &[PTR, I64, I64, PTR]);
+    module.declare_function("perry_probe_get_value_memo", DOUBLE, &[PTR, I64, I64, PTR]);
     module.declare_function("perry_probe_get_site", DOUBLE, &[PTR, I64, I64, I64, PTR]);
     module.declare_function("js_object_get_field_site_slow", DOUBLE, &[I64, I64, PTR]);
     module.declare_function(

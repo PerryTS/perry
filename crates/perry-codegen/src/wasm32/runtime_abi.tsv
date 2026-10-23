@@ -233,7 +233,10 @@ js_arraylike_slice	f64	f64,f64,i32s,f64,i32s
 js_arraylike_some	f64	f64,f64,f64
 js_arraylike_sort	f64	f64,f64
 js_arraylike_splice	f64	f64,ptr,i32s
+js_arraylike_toReversed	f64	f64
+js_arraylike_toSorted	f64	f64,f64
 js_arraylike_unshift	f64	f64,ptr,i32s
+js_arraylike_with	f64	f64,f64,f64
 js_assert_assert_ctor	f64	f64
 js_assert_assertion_error_ctor	f64	f64
 js_assert_deep_equal	f64	f64,f64,f64
@@ -5054,8 +5057,10 @@ perry_probe_get	f64	ptr,i64,i64,i64
 perry_probe_get_binding	f64	ptr,i64,i64,i64
 perry_probe_get_keyed	f64	ptr,i64,i64
 perry_probe_get_length	f64	ptr,i64,i64,i64
+perry_probe_get_memo	f64	ptr,i64,i64,ptr
 perry_probe_get_site	f64	ptr,i64,i64,i64,ptr
 perry_probe_get_value	f64	ptr,i64,i64,i64
+perry_probe_get_value_memo	f64	ptr,i64,i64,ptr
 perry_probe_get_value_site	f64	ptr,i64,i64,i64,ptr
 perry_probe_own_method	f64	ptr,f64,i64,i64
 perry_probe_set	i32s	ptr,i64,i64,i64,f64

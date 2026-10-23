@@ -156,7 +156,7 @@ pub(crate) fn read_may_reach_getter(ctx: &FnCtx<'_>, property: &str) -> bool {
         .map_or(true, |names| names.may_read_through_getter(property))
 }
 
-/// Agent-local storage for a site's shape/slot answers. No heap pointer or
+/// Shared atomic storage for a site's shape/slot answers. No heap pointer or
 /// validity state is stored, so these zero-filled integer words need no root.
 pub(crate) fn emit_read_site_memo(ctx: &mut FnCtx<'_>, words: usize) -> String {
     let site = ctx.ic_site_counter;
@@ -165,19 +165,45 @@ pub(crate) fn emit_read_site_memo(ctx: &mut FnCtx<'_>, words: usize) -> String {
         "@{}_read_shape_slots",
         crate::expr::inline_cache_global_name(ctx, site)
     );
-    let tls = if ctx.program_has_worker || ctx.program_has_thread_agents {
-        "thread_local "
-    } else {
-        ""
-    };
     ctx.typed_parse_rodata.push(format!(
-        "{name} = private {tls}global [{words} x i64] zeroinitializer, align 8"
+        "{name} = private global [{words} x i64] zeroinitializer, align 8"
     ));
     name
 }
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn read_site_symbol_key_owns_no_short_string_memo() {
+        use perry_hir::{Expr, Module, Stmt};
+        let mut module = Module::new("read_site_symbol.ts");
+        module.init.push(Stmt::Expr(Expr::IndexGet {
+            object: Box::new(Expr::GlobalGet(100)),
+            index: Box::new(Expr::SymbolFor(Box::new(Expr::String("key".into())))),
+        }));
+        let ir = String::from_utf8(
+            crate::compile_module(
+                &module,
+                crate::CompileOptions {
+                    emit_ir_only: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(!ir.contains("_read_shape_slots = private"), "{ir}");
+        assert!(ir.contains("call double @perry_probe_get_keyed("), "{ir}");
+        assert!(
+            ir.contains("call double @js_object_get_keyed_slow("),
+            "{ir}"
+        );
+        assert!(
+            !ir.contains("call double @js_object_get_keyed_site_slow("),
+            "{ir}"
+        );
+    }
     #[test]
     fn only_a_declared_getter_name_owns_read_site_storage() {
         use perry_hir::{Expr, Module, Stmt};
@@ -206,7 +232,7 @@ mod tests {
             .unwrap();
             assert_eq!(ir.contains("_read_shape_slots = private"), memo, "{ir}");
             assert_eq!(
-                ir.contains("call double @perry_probe_get_site("),
+                ir.contains("call double @perry_probe_get_memo("),
                 memo,
                 "{ir}"
             );
@@ -222,7 +248,7 @@ mod tests {
     }
 
     #[test]
-    fn read_site_storage_respects_agent_multiplicity() {
+    fn read_site_storage_never_needs_tls_initialization() {
         use perry_hir::{Expr, Module, Stmt};
         for (worker, thread_agent) in [(false, false), (true, false), (false, true), (true, true)] {
             let mut module = Module::new("read_site_agents.ts");
@@ -244,16 +270,12 @@ mod tests {
                 .unwrap(),
             )
             .unwrap();
-            assert!(ir.contains("call double @perry_probe_get_site("), "{ir}");
+            assert!(ir.contains("call double @perry_probe_get_memo("), "{ir}");
             let declaration = ir
                 .lines()
                 .find(|line| line.contains("_read_shape_slots = private"))
                 .expect("a generic read must own its shape/slot storage");
-            assert_eq!(
-                declaration.contains("thread_local"),
-                worker || thread_agent,
-                "{declaration}"
-            );
+            assert!(!declaration.contains("thread_local"), "{declaration}");
         }
     }
 }

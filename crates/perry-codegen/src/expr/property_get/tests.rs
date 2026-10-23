@@ -224,7 +224,7 @@ fn no_call_location_without_debug_symbols() {
 }
 
 /// The generic property read's hit is ONE leaf call of the receiver layout's
-/// probe (`perry_probe_get_site`) over the agent's shape directory, the key,
+/// probe (`perry_probe_get_memo`) over the agent's shape directory, the key,
 /// the receiver's handle and the site's five integer shape/slot pairs. There
 /// is no inline ShapeId compare, no way token and no epoch; the receiver's
 /// own shape is the authority.
@@ -235,7 +235,7 @@ fn generic_property_get_hit_path_is_shape_id_only() {
     let (_, ok) = tower_block(&blocks, "pget.recv_ok");
     let probes: Vec<&String> = ok
         .iter()
-        .filter(|l| l.contains("call double @perry_probe_get_site("))
+        .filter(|l| l.contains("call double @perry_probe_get_memo("))
         .collect();
     assert_eq!(probes.len(), 1, "the hit is one probe call: {ok:?}");
     assert!(
@@ -455,7 +455,7 @@ fn generic_property_get_tries_ways_before_calling_the_miss_handler() {
     assert!(
         probe_block
             .iter()
-            .any(|l| l.contains("call double @perry_probe_get_site(")),
+            .any(|l| l.contains("call double @perry_probe_get_memo(")),
         "{probe_block:?}"
     );
     assert!(
@@ -544,7 +544,7 @@ fn a_spill_entry_is_served_by_the_leaf_front_before_the_slow_call() {
     let (probe_label, probe_block) = front_call_block(&blocks);
     let call = probe_block
         .iter()
-        .find(|l| l.contains("@perry_probe_get_site("))
+        .find(|l| l.contains("@perry_probe_get_memo("))
         .unwrap_or_else(|| panic!("the probe call: {probe_block:?}"));
     let answer = call.split_once(" = ").map(|(r, _)| r).unwrap();
     let (_, merge) = tower_block(&blocks, "pget.recv_merge");
@@ -801,13 +801,13 @@ fn the_generic_tower_is_one_leaf_call_one_exit_and_a_bounded_number_of_blocks() 
     sorted.sort();
     assert_eq!(
         sorted,
-        vec!["js_object_get_field_value_site", "perry_probe_get_site"],
+        vec!["js_object_get_field_value_site", "perry_probe_get_memo"],
         "the read must expand the probe and exactly one collecting exit:\n{func}"
     );
     // The probe is nounwind and GC-leaf: a plain call, never an invoke.
     let probes: Vec<&str> = func
         .lines()
-        .filter(|l| l.contains("@perry_probe_get_site("))
+        .filter(|l| l.contains("@perry_probe_get_memo("))
         .collect();
     assert_eq!(probes.len(), 1, "one probe call per read:\n{func}");
     assert!(

@@ -635,15 +635,15 @@ fn lower_property_site_tail(
             && property != "__proto__"
             && crate::expr::ic_fast_split::read_may_reach_getter(ctx, property))
         .then(|| crate::expr::ic_fast_split::emit_read_site_memo(ctx, 5));
-        let mut fast_args = vec![
+        let fast_args = vec![
             (PTR, dir.as_str()),
             (I64, obj_bits.as_str()),
             (I64, key_bits.as_str()),
-            (I64, hash.as_str()),
+            memo.as_ref()
+                .map_or((I64, hash.as_str()), |memo| (PTR, memo.as_str())),
         ];
         let mut slow_args = entry_args.to_vec();
         if let Some(memo) = memo.as_ref() {
-            fast_args.push((PTR, memo.as_str()));
             slow_args.push((PTR, memo.as_str()));
         }
         crate::expr::note_site("probe-outlined");
@@ -651,7 +651,7 @@ fn lower_property_site_tail(
             ctx,
             "pget.outline",
             if memo.is_some() {
-                "perry_probe_get_value_site"
+                "perry_probe_get_value_memo"
             } else {
                 "perry_probe_get_value"
             },
@@ -875,15 +875,13 @@ fn lower_property_site_tail(
         && property != "__proto__"
         && crate::expr::ic_fast_split::read_may_reach_getter(ctx, property))
     .then(|| crate::expr::ic_fast_split::emit_read_site_memo(ctx, 5));
-    let mut probe_args = vec![
+    let probe_args = vec![
         (PTR, dir.as_str()),
         (I64, probe_recv.as_str()),
         (I64, key_bits.as_str()),
-        (I64, hash.as_str()),
+        memo.as_ref()
+            .map_or((I64, hash.as_str()), |memo| (PTR, memo.as_str())),
     ];
-    if let Some(memo) = memo.as_ref() {
-        probe_args.push((PTR, memo.as_str()));
-    }
     crate::expr::note_site("probe");
     let answered = ctx.block().call(
         DOUBLE,
@@ -893,7 +891,7 @@ fn lower_property_site_tail(
         } else if inline_string_length {
             "perry_probe_get_length"
         } else if memo.is_some() {
-            "perry_probe_get_site"
+            "perry_probe_get_memo"
         } else {
             "perry_probe_get"
         },

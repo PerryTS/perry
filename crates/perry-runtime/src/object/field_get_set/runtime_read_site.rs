@@ -8,7 +8,7 @@
 //! directory, and, when the probe declines, the cacheless complete read
 //! (`js_object_get_field_slow`). Fixed-name Rust sites use `get_with_memo`:
 //! the same leaf and collecting entrance as an emitted fixed-name read that
-//! owns a shape/slot memo (`perry_probe_get_site`, which asks the memo only
+//! owns a shape/slot memo (`perry_probe_get_memo`, which asks the memo only
 //! after an own miss, then `js_object_get_field_site_slow`). The memo retains
 //! no heap addresses or getter values.
 //!
@@ -120,7 +120,7 @@ pub(crate) unsafe fn get(obj: *mut ObjectHeader, key: &[u8]) -> f64 {
 /// asks it; only the collecting entrance derives it.
 ///
 /// # Safety
-/// As [`get`]; `memo` is null or this site's agent-local storage.
+/// As [`get`]; `memo` is null or this site's shared atomic storage.
 pub(crate) unsafe fn get_with_memo(
     obj: *mut ObjectHeader,
     key: &[u8],
@@ -145,11 +145,10 @@ pub(crate) unsafe fn get_with_memo(
     let v = if memo.is_null() {
         probe_word(obj, key_bits, hash)
     } else {
-        crate::object::layout_probe::site_memo::perry_probe_get_site(
+        crate::object::layout_probe::site_memo::perry_probe_get_memo(
             crate::object::shapes::ordinary_dir_addr(),
             (obj as usize).wrapping_sub(perry_abi::RECEIVER_HANDLE_FLOOR) as i64,
             key_bits,
-            hash,
             memo,
         )
     };

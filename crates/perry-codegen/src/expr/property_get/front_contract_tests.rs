@@ -1,4 +1,4 @@
-//! The generic read's shape probe (`perry_probe_get_site`) takes the agent's shape
+//! The generic read's shape probe (`perry_probe_get_memo`) takes the agent's shape
 //! directory, whose lookup is target-specific (extra blocks on Apple aarch64,
 //! a TEB-derived chain on Windows). Follow the CFG and the call operand
 //! rather than assuming a single block or ELF.
@@ -28,7 +28,7 @@ fn verify_front_flow(blocks: &Blocks) -> Result<usize, String> {
         .enumerate()
         .filter(|(_, (_, body))| {
             body.iter()
-                .any(|line| line.contains("call double @perry_probe_get_site("))
+                .any(|line| line.contains("call double @perry_probe_get_memo("))
         })
         .collect();
     let [(index, (call_label, call_body))] = calls.as_slice() else {
@@ -99,7 +99,7 @@ fn verify_front_flow(blocks: &Blocks) -> Result<usize, String> {
     let (cond, served, declined) = tower_cond_br(call_body);
     let call = call_body
         .iter()
-        .find(|line| line.contains("call double @perry_probe_get_site("))
+        .find(|line| line.contains("call double @perry_probe_get_memo("))
         .unwrap();
     let answer = call.split_once(" = ").unwrap().0;
     let bits = call_body
@@ -140,33 +140,37 @@ fn verify_front_flow(blocks: &Blocks) -> Result<usize, String> {
     Ok(*index)
 }
 
-/// Both halves of a fixed read must use this site's integer-only storage.
+/// The four-argument leaf and collecting exit share the site's integer storage.
 pub(super) fn verify_front_site_memo(blocks: &Blocks) -> Result<String, String> {
     let index = verify_front_flow(blocks)?;
     let call = blocks[index]
         .1
         .iter()
-        .find(|line| line.contains("call double @perry_probe_get_site("))
+        .find(|line| line.contains("call double @perry_probe_get_memo("))
         .unwrap();
-    let memo = call
-        .rsplit_once(", ptr ")
-        .and_then(|(_, tail)| tail.split_once(')'))
-        .map(|(memo, _)| memo)
-        .ok_or("the probe must receive its site storage")?;
-    if !memo.starts_with("@perry_ic_") || !memo.ends_with("_read_shape_slots") {
-        return Err(format!(
-            "the memo must be this site's shape/slot storage: {memo}"
-        ));
+    if !call.contains("_read_shape_slots") || call.matches(", ptr ").count() != 1 {
+        return Err("the four-argument front must receive one memo and no hash".into());
     }
     let slow: Vec<_> = blocks
         .iter()
         .flat_map(|(_, body)| body)
         .filter(|line| line.contains("@js_object_get_field_value_site("))
         .collect();
-    if slow.len() != 1 || !slow[0].contains(&format!(", ptr {memo})")) {
+    if slow.len() != 1 {
+        return Err(format!("one collecting memo exit required: {slow:?}"));
+    }
+    let memo = slow[0]
+        .rsplit_once(", ptr ")
+        .and_then(|(_, tail)| tail.split_once(')'))
+        .map(|(memo, _)| memo)
+        .ok_or("the collecting exit must receive its site storage")?;
+    if !memo.starts_with("@perry_ic_") || !memo.ends_with("_read_shape_slots") {
         return Err(format!(
-            "the leaf and collecting exit must share one memo: {slow:?}"
+            "the memo must be this site's shape/slot storage: {memo}"
         ));
+    }
+    if !call.contains(&format!(", ptr {memo})")) {
+        return Err("the front and collecting exit must share their memo".into());
     }
     Ok(memo.to_string())
 }
@@ -195,7 +199,7 @@ pub(super) fn verify_front_directory(blocks: &Blocks) -> Result<(), String> {
     let call = blocks[index]
         .1
         .iter()
-        .find(|line| line.contains("call double @perry_probe_get_site("))
+        .find(|line| line.contains("call double @perry_probe_get_memo("))
         .unwrap();
     let dir = call
         .split_once("(ptr ")
@@ -385,7 +389,7 @@ fn front_contract_rejects_lookup_bypasses_wrong_slots_and_wrong_declines() {
         let call = wrong[index]
             .1
             .iter_mut()
-            .find(|l| l.contains("call double @perry_probe_get_site("))
+            .find(|l| l.contains("call double @perry_probe_get_memo("))
             .unwrap();
         let operand = call
             .split_once("(ptr ")

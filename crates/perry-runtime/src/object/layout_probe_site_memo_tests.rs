@@ -202,22 +202,32 @@ fn rust_runtime_sites_share_the_memo_and_preserve_getter_this() {
 }
 
 #[test]
-fn leaf_answers_never_touch_the_site_memo() {
+fn data_leaf_answers_never_write_the_site_memo() {
     let _lock = crate::gc::global_side_table_test_lock();
     let _no_move = crate::gc::GcSuppressScope::new();
     unsafe {
         let own = plain(b"value", 1.0);
         let recv = inherited(plain(b"value", 2.0));
         let key = crate::runtime_state_key!(b"value");
-        assert_eq!(key.read_object(own), 1.0);
-        assert_eq!(key.read_object(recv), 2.0);
-        let memo = key.memo.unwrap()();
-        assert_eq!(
-            (*memo).pairs,
-            [0; PAIRS],
-            "own and inherited data are stateless probe answers"
+        // Derive the own layout independently, then prove its ready fast
+        // hit does not enter the memo's collecting exit.
+        let atom = atom(b"value");
+        let _ = perry_probe_get(
+            crate::object::shapes::ordinary_dir_addr(),
+            (own as usize - perry_abi::RECEIVER_HANDLE_FLOOR) as i64,
+            STRING_TAG | atom as u64,
+            crate::string::property_atom_hash(atom),
         );
-        // The control: a declined read (an inherited getter) does derive.
+        assert_eq!(key.read_object(own), 1.0);
+        let memo = key.memo.unwrap()();
+        assert_eq!((*memo).snapshot(), [0; PAIRS], "own hit is stateless");
+        assert_eq!(key.read_object(recv), 2.0);
+        assert_eq!(
+            (*memo).snapshot(),
+            [0; PAIRS],
+            "inherited data stays in the leaf"
+        );
+        // The collecting exit also reloads and invokes inherited getters.
         unsafe extern "C-unwind" fn seven(_: f64) -> f64 {
             7.0
         }
@@ -234,7 +244,7 @@ fn leaf_answers_never_touch_the_site_memo() {
         let getter_recv = inherited(proto);
         assert_eq!(key.read_object(getter_recv), 7.0);
         assert_ne!(
-            (*memo).pairs[0],
+            (*memo).pairs[0].load(Relaxed),
             0,
             "the collecting entrance derives the memo"
         );
@@ -340,9 +350,180 @@ fn a_decline_is_a_shape_checked_answer_that_never_displaces_a_proof() {
             data(collect(dir, a, word, hash, &mut memo)),
             1.0f64.to_bits()
         );
-        let proof = memo;
+        let proof = memo.snapshot();
         decline(b, &mut memo);
-        assert_eq!(memo.pairs, proof.pairs, "a decline never displaces a proof");
+        assert_eq!(memo.snapshot(), proof, "a decline never displaces a proof");
         assert_eq!(data(lookup(dir, a, &memo)), 1.0f64.to_bits());
+    }
+}
+
+#[test]
+fn shared_site_words_remain_proofs_under_concurrent_agent_writes() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let memo = std::sync::Arc::new(ReadSiteMemo::EMPTY);
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let threads: Vec<_> = (1..=2)
+        .map(|n| {
+            let memo = memo.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                let _no_move = crate::gc::GcSuppressScope::new();
+                unsafe {
+                    let recv = inherited(plain(b"value", n as f64));
+                    let key = atom(b"value");
+                    let bits = STRING_TAG | key as u64;
+                    let hash = crate::string::property_atom_hash(key);
+                    let dir = crate::object::shapes::ordinary_dir_addr();
+                    barrier.wait();
+                    for _ in 0..20000 {
+                        assert_eq!(
+                            data(collect(dir, recv, bits, hash, &memo)),
+                            (n as f64).to_bits()
+                        );
+                        if let Some(answer) = lookup(dir, recv, &memo) {
+                            assert_eq!(data(Some(answer)), (n as f64).to_bits());
+                        }
+                    }
+                }
+            })
+        })
+        .collect();
+    for thread in threads {
+        thread.join().unwrap();
+    }
+}
+
+#[test]
+fn keyed_ways_never_rebind_a_published_proofs_key() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _no_move = crate::gc::GcSuppressScope::new();
+    unsafe {
+        let memo: KeyedSiteMemo = std::mem::zeroed();
+        let obj = crate::object::js_object_alloc(0, 8);
+        for (i, key) in [b"a", b"b", b"c", b"d", b"e"].iter().enumerate() {
+            crate::object::js_object_set_field_by_name(obj, atom(*key), i as f64);
+        }
+        let dir = crate::object::shapes::ordinary_dir_addr();
+        let bits = crate::value::js_nanbox_pointer(obj as i64).to_bits();
+        for (i, key) in [b"a", b"b", b"c", b"d"].iter().enumerate() {
+            assert_eq!(
+                data(keyed_answer(
+                    dir,
+                    bits,
+                    STRING_TAG | atom(*key) as u64,
+                    &memo
+                )),
+                (i as f64).to_bits()
+            );
+        }
+        assert!(keyed_answer(dir, bits, STRING_TAG | atom(b"e") as u64, &memo).is_none());
+        for (i, key) in [b"a", b"b", b"c", b"d"].iter().enumerate() {
+            assert_eq!(
+                data(keyed_answer(
+                    dir,
+                    bits,
+                    STRING_TAG | atom(*key) as u64,
+                    &memo
+                )),
+                (i as f64).to_bits()
+            );
+        }
+    }
+}
+
+#[test]
+fn shared_keyed_ways_do_not_mix_different_keys_proofs() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let memo = std::sync::Arc::new(unsafe { std::mem::zeroed::<KeyedSiteMemo>() });
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let threads: Vec<_> = (0..2)
+        .map(|agent| {
+            let memo = memo.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                let _no_move = crate::gc::GcSuppressScope::new();
+                barrier.wait();
+                unsafe {
+                    let obj = crate::object::js_object_alloc(0, 4);
+                    let a = atom(b"a");
+                    let b = atom(b"b");
+                    // Opposite insertion order makes an accidental key/proof
+                    // combination name the wrong value even within one shape.
+                    let keys = if agent == 0 { [a, b] } else { [b, a] };
+                    for (slot, key) in keys.into_iter().enumerate() {
+                        crate::object::js_object_set_field_by_name(
+                            obj,
+                            key,
+                            (100 * agent + slot) as f64,
+                        );
+                    }
+                    let dir = crate::object::shapes::ordinary_dir_addr();
+                    let bits = crate::value::js_nanbox_pointer(obj as i64).to_bits();
+                    for i in 0..20000 {
+                        let slot = i & 1;
+                        assert_eq!(
+                            data(keyed_answer(
+                                dir,
+                                bits,
+                                STRING_TAG | keys[slot] as u64,
+                                &memo
+                            )),
+                            ((100 * agent + slot) as f64).to_bits(),
+                        );
+                    }
+                }
+            })
+        })
+        .collect();
+    for thread in threads {
+        thread.join().unwrap();
+    }
+}
+
+#[test]
+fn four_argument_leaf_retains_stateless_data_and_live_shadowing() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _no_move = crate::gc::GcSuppressScope::new();
+    unsafe {
+        let recv = inherited(plain(b"value", 7.0));
+        let bits = STRING_TAG | atom(b"value") as u64;
+        let dir = crate::object::shapes::ordinary_dir_addr();
+        let boxed = crate::value::js_nanbox_pointer(recv as i64).to_bits();
+        let memo = ReadSiteMemo::EMPTY;
+        assert_eq!(perry_probe_get_value_memo(dir, boxed, bits, &memo), 7.0);
+        assert_eq!(memo.snapshot(), [0; PAIRS]);
+        crate::object::js_object_set_field_by_name(recv, atom(b"value"), 9.0);
+        assert_eq!(perry_probe_get_value_memo(dir, boxed, bits, &memo), 9.0);
+        assert_eq!(memo.snapshot(), [0; PAIRS]);
+    }
+}
+
+#[test]
+fn four_argument_leaf_uses_the_atoms_hash_for_indexed_keys() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _no_move = crate::gc::GcSuppressScope::new();
+    unsafe {
+        let obj = crate::object::js_object_alloc(0, 32);
+        for i in 0..16 {
+            let name = format!("field{i}");
+            crate::object::js_object_set_field_by_name(obj, atom(name.as_bytes()), i as f64);
+        }
+        let dir = crate::object::shapes::ordinary_dir_addr();
+        let biased = (obj as usize - perry_abi::RECEIVER_HANDLE_FLOOR) as i64;
+        let memo = ReadSiteMemo::EMPTY;
+        for i in 0..17 {
+            let name = format!("field{i}");
+            let key = atom(name.as_bytes());
+            let bits = STRING_TAG | key as u64;
+            let expected =
+                perry_probe_get(dir, biased, bits, crate::string::property_atom_hash(key));
+            let actual = perry_probe_get_memo(dir, biased, bits, &memo);
+            assert_eq!(actual.to_bits(), expected.to_bits(), "{name}");
+        }
+        assert_ne!(
+            (*record_of(dir, (*obj).parent_class_id)).probe & !PROBE_FLAGS,
+            0,
+            "the fixture must exercise the indexed hash path"
+        );
     }
 }

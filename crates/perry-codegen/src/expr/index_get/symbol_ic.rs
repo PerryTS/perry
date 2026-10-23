@@ -16,7 +16,7 @@ pub(crate) fn lower_symbol_property_get_ic(
     // Object model step 5 (§3.7 case 3): the receiver's own layout answers
     // the symbol key (`perry_probe_get_keyed`); a decline takes the complete
     // keyed read.
-    emit_keyed_probe(ctx, obj_box, sym_box, |ctx, memo| {
+    emit_keyed_probe_impl(ctx, obj_box, sym_box, false, |ctx, memo| {
         keyed_site_slow(ctx, obj_box, sym_box, "0", false, memo)
     })
 }
@@ -66,6 +66,16 @@ pub(crate) fn emit_keyed_probe(
     key: &str,
     slow: impl FnOnce(&mut FnCtx<'_>, &str) -> String,
 ) -> String {
+    emit_keyed_probe_impl(ctx, obj, key, true, slow)
+}
+
+fn emit_keyed_probe_impl(
+    ctx: &mut FnCtx<'_>,
+    obj: &str,
+    key: &str,
+    can_memoize: bool,
+    slow: impl FnOnce(&mut FnCtx<'_>, &str) -> String,
+) -> String {
     if crate::target_layout::target_is_ilp32(ctx.target_triple) {
         return slow(ctx, "null");
     }
@@ -77,7 +87,12 @@ pub(crate) fn emit_keyed_probe(
     let obj_bits = ctx.block().bitcast_double_to_i64(obj);
     let key_bits = ctx.block().bitcast_double_to_i64(key);
     // The leaf stays stateless; only its decline consults the site memo.
-    let memo = crate::expr::ic_fast_split::emit_read_site_memo(ctx, 24);
+    // Symbol keys cannot use the short-string memo.
+    let memo = if can_memoize {
+        crate::expr::ic_fast_split::emit_read_site_memo(ctx, 24)
+    } else {
+        "null".into()
+    };
     let probed = ctx.block().call(
         DOUBLE,
         "perry_probe_get_keyed",
