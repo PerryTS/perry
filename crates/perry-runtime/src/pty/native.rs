@@ -125,7 +125,29 @@ pub(crate) fn spawn_in_pty(req: &PtySpawnRequest) -> io::Result<PtyChild> {
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
 
-    let (master, slave) = open_pty_pair(req.cols, req.rows)?;
+    // A later FFI panic can abort libtest before captured native-test failures
+    // are flushed. Test builds report each parent-side failure directly to
+    // stderr; production expands each step to its original operation.
+    macro_rules! spawn_step {
+        ($stage:literal, $operation:expr) => {{
+            #[cfg(test)]
+            let result = $operation.inspect_err(|error| {
+                use std::io::Write;
+                let _ = writeln!(
+                    io::stderr().lock(),
+                    "[pty-spawn-failed] stage={} file={:?} kind={:?} errno={:?}: {error}",
+                    $stage,
+                    req.file,
+                    error.kind(),
+                    error.raw_os_error(),
+                );
+            });
+            #[cfg(not(test))]
+            let result = $operation;
+            result
+        }};
+    }
+    let (master, slave) = spawn_step!("openpty", open_pty_pair(req.cols, req.rows))?;
     let master = unsafe { std::fs::File::from_raw_fd(master) };
     let slave = unsafe { std::fs::File::from_raw_fd(slave) };
     let mut command = Command::new(&req.file);
@@ -136,8 +158,8 @@ pub(crate) fn spawn_in_pty(req: &PtySpawnRequest) -> io::Result<PtyChild> {
     if let Some(cwd) = &req.cwd {
         command.current_dir(cwd);
     }
-    command.stdin(Stdio::from(slave.try_clone()?));
-    command.stdout(Stdio::from(slave.try_clone()?));
+    command.stdin(Stdio::from(spawn_step!("stdin clone", slave.try_clone())?));
+    command.stdout(Stdio::from(spawn_step!("stdout clone", slave.try_clone())?));
     command.stderr(Stdio::from(slave));
     unsafe {
         command.pre_exec(|| {
@@ -147,7 +169,7 @@ pub(crate) fn spawn_in_pty(req: &PtySpawnRequest) -> io::Result<PtyChild> {
             Ok(())
         });
     }
-    let child = command.spawn()?;
+    let child = spawn_step!("spawn/exec", command.spawn())?;
     let pid = child.id() as i32;
     // Child::drop does not reap: the reactor's waiter owns waitpid.
     drop(child);
