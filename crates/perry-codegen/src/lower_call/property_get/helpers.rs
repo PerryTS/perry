@@ -97,12 +97,36 @@ pub(crate) fn class_chain_has_field_named(
     false
 }
 
+/// The class that the namespace member `namespace.member` is, if it is one.
+///
+/// The answer is the namespace-scoped identity
+/// (`namespace_member_class_key`), which the class registration records for
+/// exactly the members that resolve to a class in the namespace's module. A
+/// bare `class_ids[member]` hit says nothing about the namespace: it is
+/// whichever class some other import of this module declares under the same
+/// name. opencode's `Skill.Info.make(...)` (`Info` a schema value) matched
+/// the imported config `class Info` that way and was lowered as a static call
+/// on that class, whose miss path hands back the receiver.
+///
+/// Returns the bare member name, under which the class tables key the class,
+/// when that name registers the very same class. A member class known only
+/// under the scoped key keeps the generic method call.
+pub(crate) fn namespace_member_class(
+    class_ids: &std::collections::HashMap<String, u32>,
+    namespace: &str,
+    member: &str,
+) -> Option<String> {
+    let class_id = class_ids.get(&crate::namespace_member_class_key(namespace, member))?;
+    (class_ids.get(member) == Some(class_id)).then(|| member.to_string())
+}
+
 /// Resolve the static-method receiver class through one of several shapes:
 ///   - `Expr::ClassRef(name)` — direct class literal.
 ///   - `Expr::ExternFuncRef { name }` whose name is a known class — a
 ///     cross-module class accessed via direct named import (#1787 / #321).
-///   - `Expr::PropertyGet { object: ExternFuncRef, property }` whose property
-///     is a known class — a namespace import (`AST.Union.make(...)`).
+///   - `Expr::PropertyGet { object: ExternFuncRef(ns), property }` where
+///     `ns.property` IS a class — a namespace import (`AST.Union.make(...)`),
+///     decided by [`namespace_member_class`].
 ///   - `Expr::ClassExprFresh { template }` — a class-expression value (#1787).
 ///   - `Expr::LocalGet(id)` whose let-init was a ClassRef (the post-#912
 ///     `const Cls = make(); Cls.foo(...)` shape).
@@ -124,11 +148,12 @@ pub(crate) fn resolve_static_dispatch_cls(
         Expr::ExternFuncRef { name, .. } if class_ids.contains_key(name) => Some(name.clone()),
         Expr::PropertyGet {
             object, property, ..
-        } if matches!(object.as_ref(), Expr::ExternFuncRef { .. })
-            && class_ids.contains_key(property) =>
-        {
-            Some(property.clone())
-        }
+        } => match object.as_ref() {
+            Expr::ExternFuncRef {
+                name: namespace, ..
+            } => namespace_member_class(class_ids, namespace, property),
+            _ => None,
+        },
         Expr::ClassExprFresh { template, .. } => Some(template.clone()),
         Expr::LocalGet(id) => local_id_to_name
             .get(id)

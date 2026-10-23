@@ -1192,7 +1192,11 @@ pub(crate) fn typeof_compile_time_answer(ctx: &FnCtx<'_>, operand: &Expr) -> Opt
             } else if is_classic_stream_instance_method(ctx, object, property) {
                 Some("function")
             } else if let Expr::ExternFuncRef { name, .. } = object.as_ref() {
-                if ctx.namespace_imports.contains(name) && ctx.class_ids.contains_key(property) {
+                if ctx.namespace_imports.contains(name)
+                    && ctx
+                        .class_ids
+                        .contains_key(&crate::namespace_member_class_key(name, property))
+                {
                     Some("function")
                 } else {
                     None
