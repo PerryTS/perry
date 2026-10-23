@@ -1,6 +1,6 @@
 //! Turnloop WASI providers selected by the component host: I/O, clocks, entropy,
 //! CLI, capability filesystems, DNS, TCP, UDP and HTTP clients/servers.
-//! The optional `p3` feature currently supplies WASI 0.3 clocks and random only.
+//! The optional `p3` feature currently supplies WASI 0.3 clocks, random and CLI.
 pub mod cli;
 pub mod clocks;
 mod error;

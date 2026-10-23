@@ -11,7 +11,7 @@ use wasmtime::{Config, Engine, Store};
 
 pub(super) struct State {
     pub(super) ctx: Option<WasiCtx>,
-    table: ResourceTable,
+    pub(super) table: ResourceTable,
 }
 impl WasiView for State {
     fn ctx(&mut self) -> WasiCtxView<'_> {

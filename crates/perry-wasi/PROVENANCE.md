@@ -466,3 +466,36 @@ composition remain to be implemented and qualified.
 The [foundation receipt](../../docs/validation/wasi-p3-foundation-20261023.json)
 records 237 provider tests in both Linux development and production panic-abort
 builds, all-target Clippy, doctests and the Tokio-free dependency graph.
+
+
+## P3 CLI streams and completion futures
+
+The optional `p3` feature also registers `wasi:cli@0.3.0`: arguments, environment,
+initial directory, exit, terminal resources and stdin/stdout/stderr. The added
+CLI WIT and its filesystem/socket dependencies are unchanged pinned inputs in
+[the WIT manifest](wit-p3/provenance.json). Filesystem and socket declarations
+are needed to resolve the upstream CLI worlds; their P3 providers are not yet
+registered. The terminal resource types are distinct from P2 resources.
+
+CLI stream adapters reuse the same context's explicit native P2 stream views.
+Readiness futures own native views, never Store borrows or guest memory. Reads
+and writes use bounded 64 KiB chunks; writes reserve capacity before taking
+bytes from the canonical source. Once bytes are accepted, stream completion
+waits for native flushing even when cancellation is requested, since accepted
+bytes cannot be put back. Dropping the Store remains the hard-cancellation
+boundary. Recoverable errors complete the separate result future; native
+driver failures trap. Closed stdin and dropping its readable end complete
+successfully. Closed output reports a broken-pipe result.
+
+The canonical fixture passes stdin's stream through Wasm into stdout and
+returns both result futures. Tests cover exact-capacity and large binary
+transfers, closed defaults, dropped input, output errors, delayed flushing and
+late errors, plus a real inherited-stdio subprocess and preservation of the
+original process handle after context disposal. This qualifies stream/future
+transport in the Rust embedding; Perry's TypeScript async bindings and GC
+bridge remain separate unfinished work.
+
+The [CLI receipt](../../docs/validation/wasi-p3-cli-20261023.json) records
+243 provider tests in both Linux development and production panic-abort builds,
+all-target Clippy, doctests and a Tokio-free normal dependency graph. Cargo
+checksum freshness and an explicit expected test count guard source selection.
