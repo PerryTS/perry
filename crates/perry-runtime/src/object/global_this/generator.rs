@@ -369,10 +369,9 @@ pub(crate) fn set_intrinsic_data_prop(
     value: f64,
     attrs: super::super::PropertyAttrs,
 ) {
-    // Intrinsic names are runtime literals. Keep the canonical atom in the
-    // holder's key list so inherited probes can use its shape directly.
-    let key = crate::string::canonical_key(name.as_bytes());
-    let key = unsafe { crate::string::property_atom(key) };
+    // Reuse the iterator prototype builder's weak literal interning. Do not
+    // mint an atom before the executable's literal images are registered.
+    let key = crate::string::intern_ascii_literal(name.as_bytes());
     super::super::define_builtin_data_property(obj, key, value, name.to_string(), attrs);
 }
 
@@ -942,9 +941,7 @@ fn build_generator_tower(
         ("return", return_info),
         ("throw", throw_info),
     ] {
-        let key = crate::string::canonical_key(name.as_bytes());
-        // The tower's no-move window keeps the key and holder live here.
-        let key = unsafe { crate::string::property_atom(key) };
+        let key = crate::string::intern_ascii_literal(name.as_bytes());
         install_proto_method_with_key(gen_proto, name, info, 1, key);
     }
     // Spec: `%AsyncGenerator.prototype%` inherits `[Symbol.asyncIterator]` from
