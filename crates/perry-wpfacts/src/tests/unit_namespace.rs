@@ -214,9 +214,19 @@ fn an_enum_object_is_a_contract_named_by_its_enum() {
         .unwrap_or_else(|| panic!("enum C in\n{}", pf.dump_text()));
     let x = c.fields.iter().find(|f| f.key == "X").expect("member X");
     assert!(!x.readonly && x.kind.top, "{}", pf.dump_text());
-    // A new key is beyond the contract: C breaks.
+    // A new key is the owner's shape transition (rewritten for design §16,
+    // principle: a literal layout's new key is performed by its defining
+    // unit): C gains `Z`. A computed key is beyond the contract: C breaks.
     let m =
         "import { C } from './a'; (C as any).Z = 1; function g() { return C.Y; } console.log(g());";
+    let pf = units_of(&[("a", ENUM), ("m", m)]);
+    assert!(pf.broken.is_empty(), "{:?}\n{}", pf.broken, pf.dump_text());
+    assert!(
+        super::unit_mode::gains_key(&pf, "Z"),
+        "{}",
+        pf.dump_text()
+    );
+    let m = "import { C } from './a'; (C as any)[String(C.Y)] = 1; function g() { return C.Y; } console.log(g());";
     let pf = units_of(&[("a", ENUM), ("m", m)]);
     assert!(
         pf.broken.iter().any(|d| d == "a.ts:enum C"),
@@ -302,7 +312,9 @@ fn a_literal_nested_in_a_contract_result_is_a_nested_contract() {
     let pf = units_of(&[("a", a), ("u", u)]);
     assert_eq!(verdicts(&pf, "facts"), ["T0Mono"], "{}", pf.dump_text());
     // Soundness: another unit's store into the nested literal is a store
-    // effect (decision 17), its new key breaks the inner layout (census).
+    // effect (decision 17); its new key is the owner's shape transition
+    // (rewritten for design §16, principle: a literal layout's new key is
+    // performed by its defining unit), a computed key breaks it (census).
     let u = "import { get } from './a'; const t = get(2).targetRange; (t as any).facts = 'z'; function k() { return t.range; } console.log(k());";
     let pf = units_of(&[("a", a), ("u", u)]);
     let inner = pf
@@ -313,6 +325,14 @@ fn a_literal_nested_in_a_contract_result_is_a_nested_contract() {
     let f = inner.fields.iter().find(|f| f.key == "facts").unwrap();
     assert!(!f.readonly && f.kind.top, "{}", pf.dump_text());
     let u = "import { get } from './a'; const t = get(2).targetRange; (t as any).extra = 1; function k() { return t.range; } console.log(k());";
+    let pf = units_of(&[("a", a), ("u", u)]);
+    assert!(pf.broken.is_empty(), "{:?}\n{}", pf.broken, pf.dump_text());
+    assert!(
+        super::unit_mode::gains_key(&pf, "extra"),
+        "{}",
+        pf.dump_text()
+    );
+    let u = "import { get } from './a'; const t = get(2).targetRange; (t as any)[String(t.facts)] = 1; function k() { return t.range; } console.log(k());";
     let pf = units_of(&[("a", a), ("u", u)]);
     assert!(
         pf.broken.iter().any(|d| d == &inner.display),

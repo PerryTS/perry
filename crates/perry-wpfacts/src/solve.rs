@@ -1287,17 +1287,23 @@ impl Model {
         // every other unit reads that field as unknown. A class instance's
         // field is existing when every instance holds it from its birth
         // (definite): the store adds no key (CW2 C, binarytrees_arena).
+        // A literal layout's new data key is a shape transition its defining
+        // unit performs the same way (design §16, DECISIONS 66): the layout
+        // gains the key. `__proto__` and an accessor key store no data.
         let effect = match (tm.and_then(|tm| self.foreign.get(&tm)), key) {
             (Some(facts), Key::Named(a)) if matches!(self.toks[t as usize], TokKind::Obj(..)) => {
-                facts.fields.iter().any(|f| {
-                    f.data_field
-                        && f.key == self.atoms[a as usize]
-                        && match facts.kind {
-                            "litclass" | "lit" => true,
-                            "class" => f.definite,
-                            _ => false,
-                        }
-                })
+                let k = &self.atoms[a as usize];
+                match facts.kind {
+                    "litclass" | "lit" => {
+                        k != "__proto__"
+                            && !facts.fields.iter().any(|f| !f.data_field && &f.key == k)
+                    }
+                    "class" => facts
+                        .fields
+                        .iter()
+                        .any(|f| f.data_field && &f.key == k && f.definite),
+                    _ => false,
+                }
             }
             _ => false,
         };

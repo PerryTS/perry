@@ -3,6 +3,17 @@
 
 use super::*;
 
+/// Design §16: the owner performed another unit's new key on one of its
+/// literal layouts: the layout adds a key whose field holds an unknown value.
+pub(super) fn gains_key(pf: &ProgramFacts, key: &str) -> bool {
+    pf.templates.iter().any(|t| {
+        t.adds_keys > 0
+            && t.fields
+                .iter()
+                .any(|f| f.key == key && !f.readonly && f.kind.top)
+    })
+}
+
 fn proven(pf: &ProgramFacts, key: &str) -> bool {
     pf.sites
         .iter()
@@ -722,9 +733,11 @@ fn a_module_value_read_from_another_unit_keeps_its_layout() {
     assert!(pf.units.len() >= 3, "{}", pf.dump_text());
     assert!(proven(&pf, "a") && proven(&pf, "b"), "{}", pf.dump_text());
     assert!(pf.broken.is_empty(), "{:?}", pf.broken);
-    // Soundness: a reader that stores through an alias of the binding (not
-    // a join, §12.1) uses it beyond the contract: the census breaks the
-    // layout and no site on it stays proven.
+    // A reader that stores a new key through an alias of the binding (not
+    // a join, §12.1): rewritten for design §16 (principle: a literal
+    // layout's new key is a shape transition its defining unit performs,
+    // not a census break). The owner's layout gains `c` (unknown value);
+    // the birth key `a` keeps its slot.
     let src = r#"
         const cfg = { a: 1, b: 2 };
         function useA() { return cfg.a; }
@@ -733,8 +746,9 @@ fn a_module_value_read_from_another_unit_keeps_its_layout() {
         console.log(useA());
         "#;
     let pf = units(src);
-    assert!(!proven(&pf, "a"), "{}", pf.dump_text());
-    assert_eq!(pf.broken.len(), 1, "{:?}", pf.broken);
+    assert!(!verdicts(&pf, "a").is_empty() && proven(&pf, "a"), "{}", pf.dump_text());
+    assert!(pf.broken.is_empty(), "{:?}", pf.broken);
+    assert!(gains_key(&pf, "c"), "{}", pf.dump_text());
 }
 
 #[test]
@@ -756,8 +770,9 @@ fn a_namespace_import_sees_only_the_real_exports() {
     // Soundness: a real export stays on the namespace (§18.2: `m.cfg` is
     // what `import { cfg }` binds, cfg's value contract). A store through it
     // into the existing field `a` is a store effect (decision 17): the
-    // layout holds and `a` holds an unknown value. A store of a new key
-    // breaks the layout.
+    // layout holds and `a` holds an unknown value. A store of a new key is
+    // the owner's shape transition (rewritten for design §16, principle: a
+    // literal layout's new key is performed by its defining unit).
     let t = r#"
         export const cfg = { a: 1, b: 2 };
         export function useA() { return cfg.a; }
@@ -774,7 +789,8 @@ fn a_namespace_import_sees_only_the_real_exports() {
     assert!(!a.readonly && a.kind.top, "{}", pf.dump_text());
     let u = "import * as m from './t'; (m.cfg as any).z = 'x'; console.log(m.useA());";
     let pf = units_of(&[("t", t), ("u", u)]);
-    assert!(!proven(&pf, "a"), "{}", pf.dump_text());
+    assert!(pf.broken.is_empty(), "{:?}\n{}", pf.broken, pf.dump_text());
+    assert!(gains_key(&pf, "z"), "{}", pf.dump_text());
 }
 
 #[test]
@@ -1016,7 +1032,9 @@ fn a_result_holding_another_units_layout_forwards_its_contract() {
         "{}",
         pf.dump_text()
     );
-    // Soundness: the caller storing into what it got breaks both layouts.
+    // The caller storing a new key into what it got: rewritten for design
+    // §16 (principle: a literal layout's new key is a shape transition its
+    // defining unit performs). Both layouts gain `q`; `zz` keeps its slot.
     let src = r#"
         const defaults = { zz: 1, yy: 2 };
         function norm(o: any) { if (!o) { return defaults; } return { zz: o.k, yy: 0 }; }
@@ -1024,7 +1042,15 @@ fn a_result_holding_another_units_layout_forwards_its_contract() {
         main(undefined); main({ k: 3 });
         "#;
     let pf = units(src);
-    assert!(!proven(&pf, "zz"), "{}", pf.dump_text());
+    assert!(pf.broken.is_empty(), "{:?}\n{}", pf.broken, pf.dump_text());
+    assert!(
+        pf.templates
+            .iter()
+            .filter(|t| t.fields.iter().any(|f| f.key == "zz"))
+            .all(|t| t.adds_keys > 0 && t.fields.iter().any(|f| f.key == "q" && f.kind.top)),
+        "{}",
+        pf.dump_text()
+    );
 }
 
 #[test]
@@ -1095,8 +1121,10 @@ fn a_closed_function_receives_what_its_callers_pass() {
     cfg.dynamic_code_reach.record_direct("t.ts", "eval".into());
     let pf = crate::compute_units(&[("t.ts".to_string(), &hir)], &cfg);
     assert!(!proven(&pf, "prev"), "{}", pf.dump_text());
-    // Soundness: the callee storing into what it got is beyond the
-    // argument's contract: the census breaks the caller's layout.
+    // The callee storing a new key into what it got: rewritten for design
+    // §16 (principle: a literal layout's new key is a shape transition its
+    // defining unit performs). The caller's layout gains `q`, `prev` holds;
+    // a computed-key store is beyond the contract: the census breaks it.
     let src = r#"
         function mkIndent() { return { prev: 'a', base: 'b' }; }
         function join(xs: any, indent: any) { indent.q = 1; return xs + indent.prev; }
@@ -1104,6 +1132,9 @@ fn a_closed_function_receives_what_its_callers_pass() {
         main(1); main(2);
         "#;
     let pf = units(src);
+    assert!(pf.broken.is_empty(), "{:?}\n{}", pf.broken, pf.dump_text());
+    assert!(gains_key(&pf, "q"), "{}", pf.dump_text());
+    let pf = units(&src.replace("indent.q = 1;", "indent[xs] = 1;"));
     assert!(!proven(&pf, "prev"), "{}", pf.dump_text());
     // Soundness: a function also used as a value is not closed: here it
     // escapes in its own unit (unknown code may call it with anything),
@@ -1191,11 +1222,71 @@ fn a_store_into_an_existing_field_is_a_store_effect() {
         "{}",
         pf.dump_text()
     );
-    // A new key opens the layout: still a census report (§5).
+    // A new key: rewritten for design §16 (principle: a literal layout's new
+    // key is a shape transition its defining unit performs, not a census
+    // report). The head gains `extra`; a computed key still opens it (§5).
     let src = r#"
         function mkHead() { return { next: undefined as any }; }
         function setNode(list: any, k: any) { list.extra = k; }
         function main(x: any) { const h = mkHead(); setNode(h, x); console.log(h.next); }
+        main(1); main(2);
+        "#;
+    let pf = units(src);
+    assert!(pf.broken.is_empty(), "{:?}\n{}", pf.broken, pf.dump_text());
+    assert!(gains_key(&pf, "extra"), "{}", pf.dump_text());
+    let pf = units(&src.replace("list.extra = k;", "list[k] = k;"));
+    assert!(!pf.broken.is_empty(), "{}", pf.dump_text());
+}
+
+#[test]
+fn a_key_another_unit_adds_to_a_literal_is_a_shape_transition() {
+    // Design §16, DECISIONS 66 (tssrc destructuring.ts:487
+    // `flattenContext.hasTransformedPriorElement = true` in a closed callee
+    // two calls below the literal's unit): a named store of a new data key
+    // into another unit's literal layout is a store effect its defining
+    // unit performs. The owner's layout gains the key (an anonymous store
+    // of an unknown value after birth), so the birth keys hold their slots
+    // in every unit and the census breaks nothing.
+    let src = r#"
+        interface Ctx { level: number; visitor: any; seen?: boolean }
+        function inner(c: Ctx, x: any) { if (x) { c.seen = true; } return c.level + c.visitor; }
+        function outer(c: Ctx, x: any) { return inner(c, x) + c.level; }
+        function main(x: any) { const c: Ctx = { level: x, visitor: 2 }; console.log(outer(c, x) + c.visitor); }
+        main(1); main(2);
+        "#;
+    let pf = units(src);
+    assert!(pf.units.len() >= 3, "{}", pf.dump_text());
+    assert!(pf.broken.is_empty(), "{:?}\n{}", pf.broken, pf.dump_text());
+    for k in ["level", "visitor"] {
+        assert!(
+            verdicts(&pf, k).len() >= 2 && proven(&pf, k),
+            "{k}: {:?}\n{}",
+            verdicts(&pf, k),
+            pf.dump_text()
+        );
+    }
+    // Soundness: the owner holds the transition. Its layout adds a key and
+    // the added field holds an unknown value (the stored one escaped).
+    let c = pf
+        .templates
+        .iter()
+        .find(|t| t.birth_keys == ["level", "visitor"])
+        .unwrap_or_else(|| panic!("ctx literal in\n{}", pf.dump_text()));
+    assert!(c.adds_keys > 0, "{}", pf.dump_text());
+    let seen = c.fields.iter().find(|f| f.key == "seen").expect("field seen");
+    assert!(!seen.readonly && seen.kind.top, "{}", pf.dump_text());
+    // A computed-key store still opens the layout: a census report (§5).
+    let src = r#"
+        function grow(c: any, k: any) { c[k] = 1; }
+        function main(x: any) { const c = { level: x }; grow(c, x); console.log(c.level); }
+        main(1); main(2);
+        "#;
+    let pf = units(src);
+    assert!(!pf.broken.is_empty(), "{}", pf.dump_text());
+    // `__proto__` is no data key: it changes the prototype (census report).
+    let src = r#"
+        function grow(c: any, p: any) { c.__proto__ = p; }
+        function main(x: any) { const c = { level: x }; grow(c, x); console.log(c.level); }
         main(1); main(2);
         "#;
     let pf = units(src);
@@ -1568,13 +1659,14 @@ fn a_literal_passed_to_a_closed_function_carries_its_field_functions() {
         pf.dump_text()
     );
     assert!(pf.broken.is_empty(), "{:?}", pf.broken);
-    // The callee adding a key to the literal breaks its layout: `base` is
-    // not proven, so the case above can fail. (Principle: the census
+    // The callee storing a computed key into the literal breaks its layout
+    // (rewritten for design §16: a named new key is now the owner's shape
+    // transition): `base` is not proven, so the case above can fail. (Principle: the census
     // decides; the old negative, `globalThis.f = h.toPath` in the caller,
     // no longer keeps a field function out of the contract, decision 29.)
     let pf = units(&src.replace(
         "const k = host.base;",
-        "const k = host.base; host.extra = 1;",
+        "const k = host.base; host[k] = 1;",
     ));
     assert!(
         !verdicts(&pf, "base").is_empty() && !proven(&pf, "base"),
