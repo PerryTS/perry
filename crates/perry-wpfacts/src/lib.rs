@@ -562,7 +562,10 @@ fn fn_contract_of(
         params,
         reach,
         reach_keys,
-        variadic: fi.rest.is_some() || fi.has_arguments,
+        // A rest parameter takes only the arguments past the others
+        // (design §18.11); `arguments` aliases every argument.
+        variadic: fi.has_arguments,
+        rest: fi.rest.is_some() && !fi.has_arguments,
         ret,
         ret_params: {
             ret_params.sort();

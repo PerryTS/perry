@@ -471,3 +471,38 @@ fn an_exported_method_literal_is_born_by_its_defines() {
     let f = t.fields.iter().find(|f| f.key == "A").unwrap();
     assert!(!f.readonly, "{}", pf.dump_text());
 }
+
+#[test]
+fn a_rest_parameter_takes_only_the_extra_arguments() {
+    // tssrc moduleNameResolver.ts `traceIfEnabled(state, diagnostic,
+    // ...args)` (design §18.11): the callee's fixed parameters keep their
+    // own uses, and only the arguments past them land in its rest array,
+    // which escapes. A literal passed as a fixed argument stays described.
+    const A: &str = "export function trace(s: any, d: string, ...args: any[]) { if (s.on) console.log(d, args.length); }";
+    let fixed = units_of(&[
+        ("a", A),
+        (
+            "m",
+            "import { trace } from './a'; function mk() { return { on: true, n: 1 }; } function g() { const s = mk(); trace(s, 'x', 'y'); return s.n; } console.log(g());",
+        ),
+    ]);
+    assert_eq!(verdicts(&fixed, "n"), ["T0Mono"], "{}", fixed.dump_text());
+    // Soundness: the same literal as an extra argument is in the rest array.
+    let extra = units_of(&[
+        ("a", A),
+        (
+            "m",
+            "import { trace } from './a'; function mk() { return { on: true, n: 1 }; } function g() { const s = mk(); trace(0, 'x', s); return s.n; } console.log(g());",
+        ),
+    ]);
+    assert_ne!(verdicts(&extra, "n"), ["T0Mono"], "{}", extra.dump_text());
+    // A body that reads `arguments` sees every argument.
+    let args = units_of(&[
+        ("a", "export function trace(s: any) { if (s.on) console.log(arguments.length); }"),
+        (
+            "m",
+            "import { trace } from './a'; function mk() { return { on: true, n: 1 }; } function g() { const s = mk(); trace(s); return s.n; } console.log(g());",
+        ),
+    ]);
+    assert_ne!(verdicts(&args, "n"), ["T0Mono"], "{}", args.dump_text());
+}

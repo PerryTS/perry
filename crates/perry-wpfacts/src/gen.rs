@@ -642,13 +642,24 @@ impl<'a> Gen<'a> {
         for &p in &params {
             self.m.own(p);
         }
+        // The rest array of the callee's body (§18.11): the arguments past
+        // its parameters land in it. The contract does not describe what
+        // the body does with it, so it escapes, and its elements with it.
+        let rest = c.rest.then(|| {
+            let n = self.m.node_named("rest", || format!("rest({})", c.name));
+            self.m.own(n);
+            let arr = self.new_arr_template(mi, "rest");
+            let at = self.m.tok(TokKind::Obj(arr, NO_CTX));
+            self.m.add_tok(n, at);
+            n
+        });
         self.m.cur_fn = outer_fn;
         self.m.funcs.push(FuncInfo {
             module: mi,
             func_id: u32::MAX,
             name: c.name.clone(),
             params: params.clone(),
-            rest: None,
+            rest,
             this,
             ret,
             args_all,
@@ -662,6 +673,9 @@ impl<'a> Gen<'a> {
             parent: NO_FN,
         });
         self.m.sink_node(args_all, r);
+        if let Some(n) = rest {
+            self.m.sink_node(n, r);
+        }
         match holder {
             _ if c.lexical_this => {}
             Some((tm, statics)) => self.m.cons(

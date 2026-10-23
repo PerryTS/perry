@@ -43,8 +43,9 @@ pub(crate) struct ClassContract {
 /// A published function as its callers see it (design §11.2): per
 /// parameter what the callee does with everything reachable from the
 /// argument (`model::MARK_*`: read, touched by a protocol, or used beyond:
-/// then it escapes), whether extra arguments reach it (`variadic`: all
-/// arguments escape), and the layouts it returns (`None`: ⊤).
+/// then it escapes), whether its body reads `arguments` (`variadic`: all
+/// arguments escape) or has a rest parameter (`rest`: the arguments past
+/// the parameters escape), and the layouts it returns (`None`: ⊤).
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct FnContract {
     pub name: String,
@@ -59,6 +60,7 @@ pub(crate) struct FnContract {
     pub reach: Vec<u8>,
     pub reach_keys: Vec<Vec<(String, u8)>>,
     pub variadic: bool,
+    pub rest: bool,
     pub ret: Option<Vec<String>>,
     /// The parameters whose argument the result may be, and those whose
     /// reachable values (fields, transitively) it may hold: result
