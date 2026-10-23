@@ -69,6 +69,8 @@ pub const SQLITE_TAG_STORE: u32 = 0xFFFF_241A;
 pub const SQLITE_SESSION: u32 = 0xFFFF_241B;
 pub const SQLITE_LIMITS: u32 = 0xFFFF_241C;
 pub use perry_abi::native_class_ids::*;
+pub(crate) const COMPONENT_HTTP_SERVER: u32 = 0xFFFF_2432;
+pub(crate) const COMPONENT_HTTP_OPERATION: u32 = 0xFFFF_2433;
 
 /// #10926: `AsyncResource` is native-backed too, but keeps its LEGACY
 /// `0xFFFF_0079`, which `instanceof` and `class_registry::parent_static`
@@ -82,7 +84,7 @@ pub const ASYNC_LOCAL_STORAGE_LEGACY: u32 = 0xFFFF_0078;
 /// family between them carries a `native_state` word the far side of a
 /// `postMessage` could not reconstruct.
 const NATIVE_BACKED_FIRST: u32 = ABORT_CONTROLLER;
-const NATIVE_BACKED_LAST: u32 = HTTP_CLIENT_PARSER;
+const NATIVE_BACKED_LAST: u32 = COMPONENT_HTTP_OPERATION;
 
 /// Class ids whose instances are ordinary objects carrying native state that
 /// cannot cross a thread boundary (#340/#341).
@@ -164,6 +166,8 @@ const ALL: &[u32] = &[
     WS_CODEC,
     HTTP2_CODEC,
     HTTP_CLIENT_PARSER,
+    COMPONENT_HTTP_SERVER,
+    COMPONENT_HTTP_OPERATION,
 ];
 
 /// Strictly ascending ⟹ no two families share an id, and the block stays
@@ -252,6 +256,8 @@ mod tests {
             WS_CODEC,
             HTTP2_CODEC,
             HTTP_CLIENT_PARSER,
+            COMPONENT_HTTP_SERVER,
+            COMPONENT_HTTP_OPERATION,
             ASYNC_LOCAL_STORAGE_LEGACY,
             ASYNC_RESOURCE_LEGACY,
         ] {

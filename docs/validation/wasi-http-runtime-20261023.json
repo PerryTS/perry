@@ -1,0 +1,321 @@
+{
+  "scope": "Linux development native TypeScript HTTP hosting of a canonical WASM incoming-handler via ABI 6; Turnloop providers only. Ordinary and instrumented runtime/stdlib built with identical compiler/engine package and feature union. This does not qualify Perry-authored HTTP guests, production runtime archives, WASI 0.3, other native platforms or final distribution packages.",
+  "baseRevision": "0294cba72bb4f5b3fc4a38a4cc8575573723998c",
+  "snapshot": "perry-http-runtime-v78-src",
+  "sourceManifestSha256": "16d78db82979c98a0d148283e34d2ac83978f899ccaa3d077d84c1ed84b315db",
+  "sourceFilesVerifiedExceptValidationLock": 38486,
+  "sourceSha256": {
+    "Cargo.toml": "1cc7f5b244a66d940dcab64b6e7f40ac3693ba0f26b4e0fb1cb1ccce5a4f256e",
+    "changelog.d/PENDING-wasi-turnloop-http-runtime.md": "6e0c5468b8c9e2dd54ffefc36e03d1ab8037e2721ef53f58ac9c85bff4324afa",
+    "crates/perry-abi/src/component_host.rs": "cf279115fea64e72b457774ac76405a91ebae0305642c73b143e3f1c1a282bb0",
+    "crates/perry-api-manifest/src/entries/part_1.rs": "add583ef5cdff9e7e8cef9be41213df14e28f18fea766470a687de8269de4a23",
+    "crates/perry-codegen/src/lower_call/native_table/thread_lodash.rs": "64adb67069a0ed505e76e15787e1feb3f33c2ad68cd9729d4878866ad486f054",
+    "crates/perry-codegen/src/runtime_decls/stdlib_ffi/language_core.rs": "59d1c0083d573c150d74223d724aaa35d9d4011f29c2c065819155c12140d66d",
+    "crates/perry-codegen/src/wasm32/runtime_abi.tsv": "986ddf1f30d6b8e6abb19dfdbe0c632560d182774cabd2084cc27ff5190d9ae9",
+    "crates/perry-component-host/Cargo.toml": "97829823856e6c90059fdb2e41102e24450e2e6e8344e97a3f9e78a8134d8cd9",
+    "crates/perry-component-host/examples/component_wat.rs": "69e68f6e861c201abfff025c5e84ffe4fda0fd577d3504aaaba9cd1720006bec",
+    "crates/perry-component-host/src/ffi.rs": "90b3bb0914f6ebe53edcc63e22f2a104ffb1abdd4dae4551cc3b8c3b22e903f4",
+    "crates/perry-component-host/src/ffi/http.rs": "109b5ccdb48849e39039cacceb826a02b26aa74b26c89b4de2466b00f66d3560",
+    "crates/perry-component-host/src/ffi/http/options.rs": "bcef64f5a330dadcf8e667fd764620aa48c42a73233658fad0a4c620eeeb9c38",
+    "crates/perry-component-host/src/ffi/http/tests.rs": "6a0d7812cebb3fe4a50dd413576ba1a0e7c30c377a8ea85ff89393f73f2805bc",
+    "crates/perry-component-host/src/http.rs": "b4ae8c2d99bed30eb28d13ebc23cda4b708086239aca749e61966321c054cab6",
+    "crates/perry-component-host/src/http/tests.rs": "ab81ee1de418bb13898183a3305d575b4a5b286a3b77818fcc43ac87c72e7f4c",
+    "crates/perry-component-host/src/lib.rs": "6c248d02e6f6d666cd31b9d452030d9aeca4982265e892cc15329deaaf92dc7b",
+    "crates/perry-component-host/src/wasi.rs": "f2c00f57294842bbb660c18189ea786523d734314543d36ae1716669a485fd6a",
+    "crates/perry-component-host/src/wasi_http_tests.rs": "657b44ccaf49d88abb4134c2d1ec68eebb24441686a07cf1e6d30c5cf87e50fe",
+    "crates/perry-runtime/src/async_hooks.rs": "229c5363ed3be6d30e38f4eeebef3722216a77427c0f069a208b562d3c59ece3",
+    "crates/perry-runtime/src/async_hooks/scopes.rs": "2c936d9815f17e569db3ae61daeb46b2e14677c1d7032adc3c47e82dd2a215f7",
+    "crates/perry-runtime/src/component/host.rs": "54f64c99266d83bd87a04b29b78316c65a5dde5101bd68ed1eef2181b32dc000",
+    "crates/perry-runtime/src/component/http.rs": "135cae1f531b4e0d7d195a6292df885190418e233456bd65a192b4c177b0d363",
+    "crates/perry-runtime/src/component/http/pump.rs": "b63e76fec8789bbc9b9377a7a423020a50fdaba6c34baf3a79151f24cc44af80",
+    "crates/perry-runtime/src/component/http/pump/tests.rs": "8c2954ca5cb9eb60d3d2b17469021ec48174cd39bed788b9512944cdd3783e36",
+    "crates/perry-runtime/src/component/mod.rs": "24fccb66b5e32f699b5fecef4395d98250ab28568889c3758859ddeb54e82887",
+    "crates/perry-runtime/src/native_class_ids.rs": "4e778488a5faadcc53c3922a05a75f726d06eecfffae09eafb2641e2d2e1df91",
+    "crates/perry-runtime/src/native_payload.rs": "b8ac5fc45681d4d110182f05a09edd6293955256d56365c14d85ef7eda122ff5",
+    "crates/perry-wasi/Cargo.toml": "0114696dbe573daa5c6218b017b0eb7a61384c3b3810c441397693573015c5ba",
+    "crates/perry-wasi/PROVENANCE.md": "52f35ff05b9d0fae837e5db234a15f57ed5b57c592719596af231b5988a1649f",
+    "crates/perry-wasi/src/http.rs": "1638cf943b04df2b42520d4d8d742a398353061e5c49c01aee5c39b4d90e3c00",
+    "crates/perry-wasi/src/http/body.rs": "124168dcbb5b49a2aecc61384f274a264f49076032db56f8324a32dfbd82e0f5",
+    "crates/perry-wasi/src/http/body/incoming.rs": "8f1cca136cee66bee0a26d456a79cc7e6a678450d0a1784a9372c2da7e410743",
+    "crates/perry-wasi/src/http/body/tests.rs": "971d143b6e1a91917f989f885037d235baaf8acad4a0f3fc1774f0752feea1df",
+    "crates/perry-wasi/src/http/error.rs": "a4ea20de90521a8fe57d055ecbd452f245b798fc962d494fea1cab0e65ede851",
+    "crates/perry-wasi/src/http/fields.rs": "9d3a90ab6c74d3a4caf8d7a0266e5e586fd3b38d035d9d8b577a0e17bf37f28e",
+    "crates/perry-wasi/src/http/p2.rs": "edd9e66ffbc7b510a343a2e3f3926365118ce274ccf236de7427f1f53a55d757",
+    "crates/perry-wasi/src/http/p2/error.rs": "97941d9867eab45e8bbbfa8c071cd40a1f695dcbf528bb0260397370b2abaa3a",
+    "crates/perry-wasi/src/http/p2/handlers.rs": "4b55d3273e171bfb61f696ac2f22e02292db6e944b20445676cd34f403da7fdc",
+    "crates/perry-wasi/src/http/p2/http.component.wat": "bd090ab00769d97b36e65180babf417418c14bd8ed49778f192c98e2016c61bd",
+    "crates/perry-wasi/src/http/p2/incoming.component.wat": "88febee1ee26dcdf6eb6e38286fbdc8cb45e2c06ea48afc92a15aacba78c93e2",
+    "crates/perry-wasi/src/http/p2/options.rs": "3ab9d5aa517cdbf4d92c8824f9b270d09b31e041236aa8e496a81e22c4cd3094",
+    "crates/perry-wasi/src/http/p2/outgoing.rs": "22a0317a84b4a4e1073dd4e8b730b338f1188521889d5f63ed9eae68895390a3",
+    "crates/perry-wasi/src/http/p2/resources.rs": "06091e87785889f06b443449e65c9a72e9cbee4453533b986abc05b1241079e6",
+    "crates/perry-wasi/src/http/p2/tests.rs": "0774c73576d1388b8543edb584ff6c5b59821de62047cdec935a4adee1a3bdd3",
+    "crates/perry-wasi/src/http/server.rs": "9f82b8edaf8f19caa54791b1d28e371a92fd9e0be96d461aee3c333c648dab28",
+    "crates/perry-wasi/src/http/server/tests.rs": "b2619e5ebd57a4ccc130eab8ac9295f40e5a7d6d1668f3bc64631082e68c8b72",
+    "crates/perry-wasi/src/http/server/wire.rs": "85ff8a36d051d2bcf4e8cc0b8e292f701ec4bf5e1dd22379197fcbfc1ef2b5b1",
+    "crates/perry-wasi/src/http/transport.rs": "a71ccb43339a2a281ae7c4e379fa060507921fef45b732c790f12c8fded02b26",
+    "crates/perry-wasi/src/http/transport/reader.rs": "d14b700dbe346ef547e7d4806e4bb9ce70d6d6a4aae6471bd776059701bbf4ee",
+    "crates/perry-wasi/src/http/transport/tests.rs": "737d285d1dc973e88ad581a9b1f400863b8369044cb22481b597090141616ea6",
+    "crates/perry-wasi/src/http/transport/wire.rs": "250769cf9c43782ac5d9c60f5d93fd7ba97979549bca13a95b1dc53bf098fa4c",
+    "crates/perry-wasi/src/lib.rs": "f28389737b7f1bacfe7b9fef13b9a93bad44a8c718cc6983eb9882460631ffb6",
+    "crates/perry-wasi/src/p2.rs": "2c53e248773bec3999b5a072d46b20eb356234004c09a2ea0facc698c21388d9",
+    "crates/perry-wasi/wit/deps/http.wit": "4bbd58f509700a6637385611f183c5bd5984d81feef85e29dfdc05ebd283045a",
+    "crates/perry-wasi/wit/world.wit": "270e000813107c8a6bc9a10574a42c79d359357d6074038bfa84c869133dd939",
+    "crates/perry-wit/src/tests.rs": "84df85682af2ff4b5ffffa09a048f764226479fa05afc4f8d18e1d3481017e53",
+    "crates/perry-wit/src/typescript.rs": "b5de87894362dd8a488474f632e469c4095d35caa5a968cd7c48a8b5e4e40689",
+    "docs/WASI_COMPONENTS.md": "eace31b4b7aeea16274556a8fce335586655fba7273d00325edfa0405c264ecf",
+    "docs/WASI_ROADMAP.md": "71089dbfd6a5366485599022908dfe0ecb8928ebcaf607fe669312b09cf014d2",
+    "docs/validation/wasi-http-client-20261023.json": "0bf877e432162b02d8c10c22b22379ed3552d3cdce80ea8b295c8ab7014ae225",
+    "docs/validation/wasi-http-ffi-20261023.json": "2af031fe0b536ce1764b297c0d621ca4799d89311f85f8e20d771e51c5fb3b6d",
+    "docs/validation/wasi-http-server-20261023.json": "63000baffba06c2587cc5457d70f3fa0ef7c8c7b41c879ef5229251ac5b31e9c",
+    "docs/validation/wasi-turnloop-selected-20261023.json": "0f3f40600ac62455d58576d9de639dbea7a7ac5fdf27112fa04d0f32ccac860c",
+    "scripts/component_http_acceptance.py": "706bdb248378c0f3df8b4637e8e630c5d51ce6784316e295dcbe3ec5f054d058",
+    "scripts/gc_runtime_root_holders.json": "acf830b60273095adf9e1749ed33170b137909de7d78895672ae38fb04f5f49b",
+    "test-wasi/components/http/host.ts": "bfeb056aeb10a7273f3978e3241ca5af61dd7e5281ea74b3456472cc252ff9ee",
+    "test-wasi/components/http/world.wit": "0a628f9dbc041e18a17804fb966b5eabb6ede8fca003e1afff2ae85e3097e006",
+    "types/perry/component/index.d.ts": "f6192d861a5d8a451de0bbaf40a3321627343653a6f970f07958a573a4bafda2"
+  },
+  "validationLockSha256": "a68fa81f62b4fc97fd52f5d562eb8f460442499d000c353c287cfb5c81bd2b39",
+  "turnloopPatchRevision": "b63a4ee3d3ad73d2df61b35202ed140f05513053",
+  "turnloopFilesVerified": 1529,
+  "turnloopSourceManifestSha256": "081cc89f435c8249d918b88d3e33e1502b8e6394a1cf0a49fb38210b16a25041",
+  "patchConfigSha256": "10d1092e1877e07df5ef79766bdce706f06a18fe5aeac1aa86c7afbea6ed2828",
+  "units": {
+    "componentRuntime": 34,
+    "asyncHooks": 11,
+    "wit": 14,
+    "nativeClassIds": 1,
+    "newHttpRuntimeCases": 5
+  },
+  "nativeHttpAcceptancePhases": 8,
+  "requestsInFinalAcceptance": 24,
+  "cases": {
+    "plain": {
+      "responses": [
+        {
+          "case": "success",
+          "status": 202,
+          "body": "pong"
+        },
+        {
+          "case": "explicit-error",
+          "status": 500,
+          "body": ""
+        },
+        {
+          "case": "reused",
+          "status": 202,
+          "body": "pong"
+        },
+        {
+          "case": "retire-1",
+          "status": 500,
+          "body": ""
+        },
+        {
+          "case": "retire-2",
+          "status": 500,
+          "body": ""
+        },
+        {
+          "case": "retire-4",
+          "status": 500,
+          "body": ""
+        }
+      ],
+      "copiedObjects": 0
+    },
+    "tls": {
+      "responses": [
+        {
+          "case": "success",
+          "status": 202,
+          "body": "pong"
+        },
+        {
+          "case": "explicit-error",
+          "status": 500,
+          "body": ""
+        },
+        {
+          "case": "reused",
+          "status": 202,
+          "body": "pong"
+        },
+        {
+          "case": "retire-1",
+          "status": 500,
+          "body": ""
+        },
+        {
+          "case": "retire-2",
+          "status": 500,
+          "body": ""
+        },
+        {
+          "case": "retire-4",
+          "status": 500,
+          "body": ""
+        }
+      ],
+      "copiedObjects": 0
+    },
+    "plain-moving": {
+      "responses": [
+        {
+          "case": "success",
+          "status": 202,
+          "body": "pong"
+        },
+        {
+          "case": "explicit-error",
+          "status": 500,
+          "body": ""
+        },
+        {
+          "case": "reused",
+          "status": 202,
+          "body": "pong"
+        },
+        {
+          "case": "retire-1",
+          "status": 500,
+          "body": ""
+        },
+        {
+          "case": "retire-2",
+          "status": 500,
+          "body": ""
+        },
+        {
+          "case": "retire-4",
+          "status": 500,
+          "body": ""
+        }
+      ],
+      "copiedObjects": 823
+    },
+    "tls-moving": {
+      "responses": [
+        {
+          "case": "success",
+          "status": 202,
+          "body": "pong"
+        },
+        {
+          "case": "explicit-error",
+          "status": 500,
+          "body": ""
+        },
+        {
+          "case": "reused",
+          "status": 202,
+          "body": "pong"
+        },
+        {
+          "case": "retire-1",
+          "status": 500,
+          "body": ""
+        },
+        {
+          "case": "retire-2",
+          "status": 500,
+          "body": ""
+        },
+        {
+          "case": "retire-4",
+          "status": 500,
+          "body": ""
+        }
+      ],
+      "copiedObjects": 823
+    }
+  },
+  "artifactSha256": {
+    "/root/codex-components-p2-20261021/integration-target/perry-dev/perry": "ba36606b9dbdc27a88dc962d3c76012008980819b0a757f75e564366294b563c",
+    "/root/codex-components-p2-20261021/integration-target/perry-dev/perry-wit": "05473ea710365ec437a015ebffd3285bac048c08709116d41c23c233846e3426",
+    "/root/codex-components-p2-20261021/integration-target/perry-dev/perry-gc-effects": "08d541de9f3f8ddab059cdd79d89079bb738817215243eef5440cd3417e90680",
+    "/root/codex-components-p2-20261021/integration-target/perry-dev/libperry_runtime.a": "df6a50528edd9427266d1be555ae969cf33a2f46a70917f84ea9388456d5de33",
+    "/root/codex-components-p2-20261021/integration-target/perry-dev/libperry_stdlib.a": "b8901605c816e27b1056ec985a5e209e16211cfb4163ff6790762e2f9ed3d8c0",
+    "/root/codex-components-p2-20261021/integration-target/perry-dev/libperry_component_host.a": "483e7c384fbfede9ac7f8b3c12be6910bb9899f749f11484f8ab134102f0f597",
+    "/root/codex-components-p2-20261021/integration-target/perry-dev/libperry_runtime_instr.a": "363515ff4005e49ca7ba50e5edf486c084c463a42c15f7389d96936667e27810",
+    "/root/codex-components-p2-20261021/integration-target/perry-dev/libperry_stdlib_instr.a": "b22d7502357e7eedbe6fca1ec4a38e27fa10839642de597b17c80bc06cd845dc",
+    "/root/codex-components-p2-20261021/integration-target/perry-dev/examples/component_wat": "92d017493a84325590a2b8cd2cbb50177f5c0b4e5dd0f496a800a60cce182673",
+    "/root/codex-components-p2-20261021/integration-target/perry-dev/libperry_runtime.a.gc-effects": "7c86d32d7f09db742737ffda0cb3da60bc4bf1804d080ec8fba8d8fb5cb83094",
+    "/root/codex-components-p2-20261021/integration-target/perry-dev/libperry_runtime_instr.a.gc-effects": "5f3ab9e6f189b2ca8ab48260ff22b9e275e2377030514d1186ef3d5c8ac671ed"
+  },
+  "ordinaryBackupSha256": "6043bc9b702f7edc9291f1e0b2999f7e29abe2fd2200bc785d73b6090018e2d0",
+  "evidenceSha256": {
+    "perry-http-runtime-v78/runtime-tests.log": "ebce8a0eb719c67c5130283cf0dcb40c533269b226b9dc4acfddcb4d086a95d1",
+    "perry-http-runtime-v78/lock-http-patch.log": "51fa301880db1b94b6e9fb625d8f35cbb45e30952c8933f6f1b30a246d594d45",
+    "perry-http-runtime-v78/async-hooks-tests.log": "4b1082c13937e8907ebbf04a12eb28e98ad5d8ace5f936547f65ad2d537b476f",
+    "perry-http-runtime-v78/check.log": "351c31edb071c33bcc99db8d5cf46d44f4c29a08bcefabe36ec980fea07e3b27",
+    "perry-http-runtime-v78/wit-tests.log": "150539003905f6d27d82409d03f2fa84945f21759931170d668a8165e0086ce2",
+    "perry-http-runtime-v78/phases.json": "f88c0a330d97fc8342068a839d1eeab3cf4c4f37827df5c1126d2625e5c6bcef",
+    "perry-http-runtime-v78/native-class-tests.log": "334fc01a89b051aa1f1634c4e49e200fdebf626fae59458aae7fe9edfe2051c4",
+    "perry-http-runtime-v78/moving/instrumented-build.log": "79143efea8a400ae207362792340e2e1345c5a60e181eefaa40702c1c1c93e0b",
+    "perry-http-runtime-v78/moving/sidecars.log": "443a4f26c3074ebd12159f3cb34197683beef9d8ef4abc1be594676df0a7729d",
+    "perry-http-runtime-v78/moving/ordinary-backup.json": "a27e0665c24ccc0ca03bab039e07be81c5c6c34b98a0b7170ee885017932a994",
+    "perry-http-runtime-v78/moving/instrumented-artifacts.json": "1b4d6e6118948518c139ebda6f9c0882124913d0e5faa6963445718d2d0592f1",
+    "perry-http-runtime-v78/moving/http-acceptance.log": "d31103bf455918b44391e49bdfbe290c716a830109fc24798f73987b9d70e500",
+    "perry-http-runtime-v78/moving/phases.json": "a6722c6456b71ba87221fee3a9e0c0f778af9d180f3fdab5bf83d288039e7dc8",
+    "perry-http-runtime-v78/moving/artifact-identity.json": "7de95d21a4c04fbb7963c3f8b81826af823f2623be4f9659a6ed57ec03b9f2c2",
+    "perry-http-runtime-v78/native/build.log": "32f609b345c19d51b3f62bf0aeb3e77b9251f0b81bd3f38df1f2911ac57b22c9",
+    "perry-http-runtime-v78/native/sidecars.log": "50501c32118e3d893e02109163c7ff565110da68e6ad46515c6da5d21d23d75c",
+    "perry-http-runtime-v78/native/wat-encoder.log": "527cff8f69d6de1e2ae5bf777853026a2ebc44a534a6bccd152228bad2a9a4e8",
+    "perry-http-runtime-v78/native/http-acceptance.log": "177448068b1ea3441a258c3a7e559b2a9af3d150d406b16093cd47c16f3e1747",
+    "perry-http-runtime-v78/native/phases.json": "7445d452f2ec70fbfdbac80e7e78c1c6762583701fcebddcfefb8218f1deb7fb",
+    "perry-http-runtime-v78/native/artifact-identity.json": "9e95023dee84a699aa84e17c5a6aba85bb673a579b953913c3d33951872004d2",
+    "perry-http-runtime-v78/moving/http/results.json": "50b875e7a6c8a366267b15f3010be06dfbf63e10c42fccf9a3cbe8c665f3e5c9",
+    "perry-http-runtime-v78/moving/http/compile-ordinary.log": "19be1373da307dd71a013c89d0444d3fca5f7b49d7cc2145eb083a932c6c5995",
+    "perry-http-runtime-v78/moving/http/component.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-http-runtime-v78/moving/http/plain-moving.log": "44bdb9ca56b7d8cb965540696104dcbe34648f01440cee11f830b51fd55d9eff",
+    "perry-http-runtime-v78/moving/http/plain-stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-http-runtime-v78/moving/http/compile-moving.log": "28a7c0f72177bf875bb2977886daeffe6b23e9c3daeac0d29412ba25dee0f90f",
+    "perry-http-runtime-v78/moving/http/host.ts": "bfeb056aeb10a7273f3978e3241ca5af61dd7e5281ea74b3456472cc252ff9ee",
+    "perry-http-runtime-v78/moving/http/tls-moving-stderr.log": "219ebb7e714cae8d13e87b8ed04fe97c94297d2a0bc1bd9d9a3c9ecdb2ed8370",
+    "perry-http-runtime-v78/moving/http/world.wit": "0a628f9dbc041e18a17804fb966b5eabb6ede8fca003e1afff2ae85e3097e006",
+    "perry-http-runtime-v78/moving/http/tls-moving.log": "2d01493420a98ec50ddb4173ac0050778a420d2a94d838de0daf660d3c1af701",
+    "perry-http-runtime-v78/moving/http/incoming.component.wasm": "cab4b88142b3fca6a50baa120f6a518bd7ca8fc2ebb16939a7ddf3941662f56b",
+    "perry-http-runtime-v78/moving/http/tls-stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-http-runtime-v78/moving/http/plain.log": "111debf8f919713995a8b74070ce653c7202ea1de4ea93f2c22decaf5fb8c473",
+    "perry-http-runtime-v78/moving/http/bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-http-runtime-v78/moving/http/tls.log": "590ede8e5f6dd4e74ea503401e4a3c7f54997fba0412b72aa873ccedaa638dbd",
+    "perry-http-runtime-v78/moving/http/plain-moving-stderr.log": "a4756ebb9b4865e074fb3cd1a26b70dcd57b9b02a4361fd66dd3aa90b68ed36d",
+    "perry-http-runtime-v78/moving/http/generated/world.json": "dd7259bad86c648b0127ab195735aa230448e862a6509ad23cda1a71d7508d34",
+    "perry-http-runtime-v78/moving/http/generated/bindings.ts": "c1af3ddd4c6f665430019ba5082b35c235594c24f80ba603cbd0b8705d90da2e",
+    "perry-http-runtime-v78/moving/http/generated/guest.ts": "797898b7de87d8d7344b0035130cf7e86b1f7c1a0daef89213d473d482a53909",
+    "perry-http-runtime-v78/native/http/results.json": "84a7e37da758fa9da8e98a75c41f5862e5f52ba1d124b7d1afb855275ee649e3",
+    "perry-http-runtime-v78/native/http/compile-ordinary.log": "25fd58d4f08a96034bd69e43e4b65d71c39e6696e9729fcf52e73d55ce0d7ccc",
+    "perry-http-runtime-v78/native/http/component.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-http-runtime-v78/native/http/plain-stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-http-runtime-v78/native/http/host.ts": "bfeb056aeb10a7273f3978e3241ca5af61dd7e5281ea74b3456472cc252ff9ee",
+    "perry-http-runtime-v78/native/http/world.wit": "0a628f9dbc041e18a17804fb966b5eabb6ede8fca003e1afff2ae85e3097e006",
+    "perry-http-runtime-v78/native/http/incoming.component.wasm": "cab4b88142b3fca6a50baa120f6a518bd7ca8fc2ebb16939a7ddf3941662f56b",
+    "perry-http-runtime-v78/native/http/tls-stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-http-runtime-v78/native/http/plain.log": "258849092fc4fa70005f47a367e69018f53861e77a7213d02c54c17f0661b0ea",
+    "perry-http-runtime-v78/native/http/bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-http-runtime-v78/native/http/tls.log": "709265ca453ce5bdb99cc757aeba1864124a551bb76216e1a30d39e1917babe9",
+    "perry-http-runtime-v78/native/http/generated/world.json": "dd7259bad86c648b0127ab195735aa230448e862a6509ad23cda1a71d7508d34",
+    "perry-http-runtime-v78/native/http/generated/bindings.ts": "c1af3ddd4c6f665430019ba5082b35c235594c24f80ba603cbd0b8705d90da2e",
+    "perry-http-runtime-v78/native/http/generated/guest.ts": "797898b7de87d8d7344b0035130cf7e86b1f7c1a0daef89213d473d482a53909",
+    "perry-http-runtime-v78-manifest.json": "16d78db82979c98a0d148283e34d2ac83978f899ccaa3d077d84c1ed84b315db",
+    "perry-http-runtime-check-v4.py": "066daaf47578055ec1d7cb805bd4939d56625e4ac05852ba1d26c1493cf95dd0",
+    "perry-http-runtime-native.py": "3272c8022209e42c7868fbcf6d6b44c591ecad1f74a7695dd30b8286e614949f",
+    "perry-http-runtime-moving.py": "57362ec9042c73bdb1c0ea91ed5a7061d221ea6c0170f57e1d85cdce893368da",
+    "perry-http-runtime-verify.py": "6a454665a6dee2b68f806f45ca1400250b91a1f5a20995dc8446a20e75f9f9ef",
+    "turnloop-http-consumer-patch.toml": "10d1092e1877e07df5ef79766bdce706f06a18fe5aeac1aa86c7afbea6ed2828",
+    "turnloop-datagram-v1-manifest.json": "081cc89f435c8249d918b88d3e33e1502b8e6394a1cf0a49fb38210b16a25041"
+  },
+  "remaining": [
+    "Perry-authored incoming/outgoing HTTP guests and moving GC",
+    "Production runtime/stdlib HTTP qualification",
+    "Native WASI 0.3 futures/streams/promises/GC",
+    "Native platform fixes and required provider CI",
+    "Released Turnloop dependency adoption and shipping registry lock",
+    "Final matching compiler/runtime/engine and production/npm packaging"
+  ],
+  "postValidationChanges": {
+    "docs/WASI_COMPONENTS.md": "Documentation/receipt updates only",
+    "types/perry/component/index.d.ts": "Comment clarifies synchronous P2 handler execution; declarations unchanged"
+  }
+}

@@ -29,6 +29,39 @@ export interface OwnedResource<T extends string> extends BorrowedResource<T> {
 export function loadComponent(bytes: Uint8Array, contract: string, imports: unknown, options?: ComponentOptions): ComponentHandle;
 export function callComponent(handle: ComponentHandle, interfaceName: string, functionName: string, args: unknown[]): unknown;
 export function disposeComponent(handle: ComponentHandle): void;
+
+declare const httpServerBrand: unique symbol;
+export interface ComponentHttpServer {
+  readonly [httpServerBrand]: true;
+  /** Bound numeric address, including the selected port when binding port 0. */
+  readonly address: string;
+}
+export interface ComponentHttpServerOptions {
+  /** Explicit numeric socket address, e.g. "127.0.0.1:0" or "[::1]:8080". */
+  address: string;
+  /** Positive connection limit. Default: 64. */
+  maxConnections?: number;
+  handshakeTimeoutMs?: number;
+  requestHeadTimeoutMs?: number;
+  responseHeadTimeoutMs?: number;
+  betweenBytesTimeoutMs?: number;
+  lingerTimeoutMs?: number;
+  /** Explicit PEM credentials; no ambient certificate or key files are read. */
+  tls?: { certificatePem: string; privateKeyPem: string };
+}
+/** Native-only HTTP/1.1 listener. Each accepted connection serves one request.
+ * Creating a listener does not grant a component outbound network access. */
+export function createComponentHttpServer(options: ComponentHttpServerOptions): ComponentHttpServer;
+/** Accept one request and invoke the named wasi:http/incoming-handler export.
+ * Prefer generated Component.handleHttp(server), which supplies its WIT version.
+ * Resolves after the response transport completes; traps, cancellation and
+ * transport errors reject. Bodies stream through bounded native buffers.
+ * Pending work keeps the event loop alive. The P2 guest handler executes
+ * synchronously on the owning JS thread; fuel does not bound host I/O waits. */
+export function handleComponentHttpRequest(server: ComponentHttpServer, handle: ComponentHandle, interfaceName: string): Promise<void>;
+/** Idempotently stop the listener and cancel pending accepts and exchanges. */
+export function closeComponentHttpServer(server: ComponentHttpServer): void;
+
 /** Execute a WASI P2 command once in an isolated native store, then release it.
  * Returns 0/1 for wasi:cli/run's ok/err and preserves explicit WASI exit codes.
  * Guest exit never terminates Perry. Invalid components, traps and exhausted

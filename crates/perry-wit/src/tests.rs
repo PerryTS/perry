@@ -402,3 +402,18 @@ fn resource_aliases_preserve_nominal_identity_and_compile() {
         String::from_utf8_lossy(&files["perry_adapter.c"])
     );
 }
+
+#[test]
+fn incoming_http_host_binding_uses_the_selected_interface_version() {
+    let world = parse(
+        "package wasi:http@0.2.12; interface incoming-handler { handle: func(); } world proxy { export incoming-handler; }",
+        None,
+    ).unwrap();
+    let host = typescript(&world);
+    assert!(host.contains("handleHttp(server: ComponentHttpServer): Promise<void>"));
+    assert!(host.contains(
+        "handleComponentHttpRequest(server, handle, \"wasi:http/incoming-handler@0.2.12\")"
+    ));
+    assert!(!typescript_guest(&world).contains("handleComponentHttpRequest"));
+    assert!(!typescript(&parse(TRANSFORM, None).unwrap()).contains("handleHttp"));
+}

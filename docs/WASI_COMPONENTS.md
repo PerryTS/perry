@@ -178,9 +178,9 @@ cancellation and shutdown. A real WASM incoming-handler reads and writes body
 streams through the production Rust Host facade, handles repeated requests
 with no outbound grants, and exercises explicit errors, traps, missing responses
 and fuel exhaustion. Canonical preflight rejects the wrong signature.
-This is Rust embedding and canonical-WASM qualification. The public TypeScript
-server API, Perry-generated HTTP fixtures and their moving-GC qualification are
-still required. The server currently accepts HTTP/1.1 origin-form requests
+This is Rust embedding and canonical-WASM qualification. The TypeScript host
+API is described below; Perry-generated HTTP fixtures and their moving-GC
+qualification remain required. The server currently accepts HTTP/1.1 origin-form requests
 (and OPTIONS `*`), one request per connection; it does not implement HTTP/1.0,
 connection reuse, HTTP/2, CONNECT tunnels or upgrades.
 
@@ -192,9 +192,51 @@ operations; native callbacks carry an agent identifier, never a Perry heap
 address. Handler and retirement-cleanup callbacks use separate exception contexts
 so a cleanup exception cannot replace a primary failure. The
 [HTTP ABI receipt](validation/wasi-http-ffi-20261023.json) qualifies this boundary
-on Linux in development and production panic-abort. TypeScript Promise/pump
-integration and fresh matching ABI 6 compiler/runtime/package acceptance remain
-required; earlier combined acceptance receipts used ABI 5.
+on Linux in development and production panic-abort. Fresh matching ABI 6
+compiler/runtime/package acceptance remains required; earlier combined
+acceptance receipts used ABI 5.
+
+The native `perry/component` API provides `createComponentHttpServer(options)`,
+`handleComponentHttpRequest(server, component, interfaceName): Promise<void>`,
+and `closeComponentHttpServer(server)`. Generated host bindings for a P2
+incoming-handler world expose `component.handleHttp(server)`, supplying the
+exact exported interface version. For example, after loading such a component:
+
+```ts
+import { createComponentHttpServer, closeComponentHttpServer } from "perry/component";
+const server = createComponentHttpServer({ address: "127.0.0.1:8080" });
+try {
+  await component.handleHttp(server); // accept and serve one request
+} finally {
+  closeComponentHttpServer(server);
+}
+```
+
+`server.address` is read-only and includes the selected port when binding port
+zero. Options accept a connection limit, transport timeouts in milliseconds,
+and explicit TLS certificate/key PEM strings. Each call accepts one request;
+the Promise resolves after response transport completion. Closing the server
+cancels outstanding accepts and exchanges. Disposing a component cancels its
+uninvoked accepts. A handler trap retires the component; an explicit error
+response rejects the Promise while leaving the component reusable.
+
+Pending operations retain their Promise, component, server and captured async
+context through traced ordinary objects. Native wakers only notify the owning
+agent; the agent pump invokes guest/JS callbacks. The pump prevents recursive
+Store entry and preserves the first handler exception through retirement and
+transport cleanup. Accept and response completion are asynchronous; the P2
+handler invocation itself is synchronous on the owning JS thread. Transport
+timeouts bound body waits; instruction fuel does not bound time in host I/O.
+`scripts/component_http_acceptance.py` exercises this API
+with a canonical WASM fixture over plain TCP and TLS, including moving GC;
+its execution is a separate qualification from the native engine receipts.
+The [HTTP runtime receipt](validation/wasi-http-runtime-20261023.json) records
+60 unit tests and 24 requests in the final ordinary/instrumented acceptance.
+Both instrumented transport runs copied 823 objects and reported quarantine
+and evacuation verification witnesses. Ordinary and instrumented archives use
+the same compiler/engine package and feature union. This qualifies Linux
+development native hosting of the canonical fixture; Perry-authored HTTP guests,
+production runtime archives, other platforms and final packages remain open.
 
 Flag declarations are limited to 1–32 labels, matching the
 [Component Model binary format](https://github.com/WebAssembly/component-model/blob/main/design/mvp/Binary.md#type-definitions).

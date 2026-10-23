@@ -7,6 +7,7 @@ mod command;
 mod context;
 mod guest;
 mod host;
+mod http;
 mod host_resource;
 mod resource;
 mod value;

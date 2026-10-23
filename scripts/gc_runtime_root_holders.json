@@ -2944,6 +2944,18 @@
       "name": "CANONICAL_KEYS",
       "verdict": "weak_pinned_old",
       "why": "I3 weak shape authority: every backing is allocated old and movement-pinned by alloc_canonical_key_list. The registered full-trace death prune retires nodes before sweep can reuse addresses. No root or relocation scanner is required; gc_keylist_invariant.py checks those production funnels."
+    },
+    {
+      "file": "crates/perry-runtime/src/component/http/pump.rs",
+      "name": "PENDING",
+      "verdict": "not_a_gc_pointer",
+      "why": "Queue of stable native-payload OwnerLink tokens, each held by link_ref until completion. Native cells are pinned; their ordinary descriptor traces and rewrites the owner back-edge, including Promise, component, server and error JS state. No JS heap addresses are stored in this queue. Normal completion unrefs; agent retirement clears plain tokens before the arena finalizes pinned cells, and TLS destruction never dereferences tokens."
+    },
+    {
+      "file": "crates/perry-runtime/src/component/http/pump.rs",
+      "name": "PUMPING",
+      "verdict": "not_a_gc_pointer",
+      "why": "Boolean reentrancy guard only. Prevents callbacks from recursively entering an active component Store through the auxiliary event pump."
     }
   ],
   "_FRONTIER_README": "Identity-pinned debt ratchet over new perry-ui* candidates and otherwise-unclassified core raw/Perry TLS declarations (see the census docstring, “The identity-pinned frontier”). A new uncovered holder fails until it is scanned, receives a researched holders verdict, or is deliberately pinned as debt. Moving a researched false positive to holders graduates it from this list. A fixed or classified holder makes its old frontier pin stale, so the receipt must be deleted.",

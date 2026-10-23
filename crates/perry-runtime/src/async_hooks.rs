@@ -41,6 +41,7 @@ pub use provider_ffi::{
 };
 pub(crate) use provider_ffi::{owned_provider_scope, owned_provider_scope_rooted};
 mod scopes;
+pub(crate) use scopes::try_run_promise_scope;
 pub use scopes::{
     enter_resource_scope, leave_resource_scope, run_provider_completion, run_resource_scope,
     run_resource_scope_catching, try_enter_resource_scope, try_leave_resource_scope,
