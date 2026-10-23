@@ -75,6 +75,16 @@ and wrong dictionaries (`Z_NEED_DICT`, with distinct messages), a sliced DataVie
 and reset followed by split input. Brotli and Zstd dictionary application remain
 separate unsupported codec work; this change makes no claim about either.
 
+## Brotli one-shot output limits
+
+`options/max-output-length.ts` covers namespace, named and captured one-shot
+Brotli decompression. Both synchronous and callback routes enforce
+`maxOutputLength` before appending beyond the cap, accept an exact-size result,
+and preserve the ordinary uncapped behavior and compressed input bytes.
+Over-limit results use a managed `RangeError` with `ERR_BUFFER_TOO_LARGE`;
+callbacks receive no output while retaining their genuine codec receiver.
+This policy does not change DEFLATE dictionaries or general stream options.
+
 ## Locked sources
 
 - Node 26.5.0 commit [`bebd1b8d92bf4cc917844d6335ed1ecf9c2a75fb`][node-tree]:

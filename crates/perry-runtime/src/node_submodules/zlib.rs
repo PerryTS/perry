@@ -329,6 +329,24 @@ fn gzip_range(value: f64, name: &str, min: i64, max: i64, default: f64) -> f64 {
     n
 }
 
+/// Resolve only Brotli one-shot output policy; do not reorder shared validators.
+#[no_mangle]
+pub extern "C" fn js_zlib_brotli_max_output_length(opts: f64) -> usize {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let opts = scope.root_nanbox_f64(opts);
+    gzip_range(
+        gzip_read_option(opts.get_nanbox_f64(), b"maxOutputLength"),
+        "options.maxOutputLength",
+        1,
+        9007199254740991,
+        9007199254740991.0,
+    ) as usize
+}
+
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_ZLIB_BROTLI_MAX_OUTPUT_LENGTH: extern "C" fn(f64) -> usize =
+    js_zlib_brotli_max_output_length;
 // The bulk birth owns its callback-free allocation window. All heap-valued
 // entries must be rooted by the caller until the returned record is rooted.
 fn gzip_option_record(entries: &[(&str, f64)]) -> f64 {

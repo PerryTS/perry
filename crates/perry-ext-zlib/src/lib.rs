@@ -400,7 +400,7 @@ pub unsafe extern "C" fn js_ext_zlib_native_dispatch(
         "inflateRawSync" => js_zlib_inflate_raw_sync(arg(0)),
         "unzipSync" => js_zlib_unzip_sync(arg(0)),
         "brotliCompressSync" => js_zlib_brotli_compress_sync(arg(0).to_bits() as i64),
-        "brotliDecompressSync" => js_zlib_brotli_decompress_sync(arg(0).to_bits() as i64),
+        "brotliDecompressSync" => js_zlib_brotli_decompress_sync(arg(0).to_bits() as i64, arg(1)),
         "zstdCompressSync" => js_zlib_zstd_compress_sync(arg(0), arg(1)),
         "zstdDecompressSync" => js_zlib_zstd_decompress_sync(arg(0), arg(1)),
         "crc32" => js_zlib_crc32(arg(0), if args_len >= 2 { arg(1) } else { 0.0 }),
