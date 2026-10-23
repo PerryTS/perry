@@ -47,6 +47,72 @@ fn emit_box_read(ctx: &mut FnCtx<'_>, id: u32, ptr: &str, trusted: bool) -> Stri
     }
 }
 
+/// Read a boxed local in the function that owns its slot.
+///
+/// The slot holds what this function stored there: the box it allocated for
+/// the binding, or the entry sentinel (`0` / `TAG_UNDEFINED`, #4926) before
+/// the box exists. The checked accessor `js_box_get_bits` rejects anything
+/// that is not an unforwarded `GC_TYPE_BOX` cell of one payload word and
+/// throws for a TDZ read; every one of those answers is decided here from the
+/// cell itself, inline: the range test rejects the sentinels, one header-word
+/// compare checks kind, forwarded bit and size, and the value is one load.
+/// The accessor runs only when a test fails (the sentinel, a TDZ read), so
+/// its answers are unchanged; a hot read (`node` in solid's `runTop`, a
+/// parameter that a closure captures and the body reassigns) no longer pays
+/// the call and its allocator range probe.
+fn emit_local_box_read(ctx: &mut FnCtx<'_>, id: u32, box_ptr: &str) -> String {
+    use crate::expr::receiver_range::{emit_field_ptr, HANDLE_FLOOR};
+    use crate::runtime_abi::{GC_FLAG_FORWARDED, GC_HEADER_SIZE, GC_TYPE_BOX};
+    // GcHeader word: obj_type (byte 0), gc_flags (byte 1), _reserved (2..4),
+    // size (4..8). Compare kind, the forwarded bit and the size; ignore the
+    // mark/arena flags and the reserved bits.
+    let header_mask =
+        (0xFFFF_FFFF_0000_0000u64 | (u64::from(GC_FLAG_FORWARDED) << 8) | 0xFF) as i64;
+    let header_box = (((GC_HEADER_SIZE as u64 + 8) << 32) | u64::from(GC_TYPE_BOX)) as i64;
+    let cell_idx = ctx.new_block("local_box.cell");
+    let value_idx = ctx.new_block("local_box.value");
+    let slow_idx = ctx.new_block("local_box.checked");
+    let merge_idx = ctx.new_block("local_box.read");
+    let cell_label = ctx.block_label(cell_idx);
+    let value_label = ctx.block_label(value_idx);
+    let slow_label = ctx.block_label(slow_idx);
+    let merge_label = ctx.block_label(merge_idx);
+    let biased = {
+        let blk = ctx.block();
+        let biased = blk.sub(I64, box_ptr, &HANDLE_FLOOR.to_string());
+        let span = ((1u64 << 48) - HANDLE_FLOOR).to_string();
+        let in_heap = blk.icmp_ult(I64, &biased, &span);
+        blk.cond_br(&in_heap, &cell_label, &slow_label);
+        biased
+    };
+    ctx.current_block = cell_idx;
+    {
+        let blk = ctx.block();
+        let header_ptr = emit_field_ptr(blk, &biased, -(GC_HEADER_SIZE as i64));
+        let header = blk.load(I64, &header_ptr);
+        let kind = blk.and(I64, &header, &header_mask.to_string());
+        let is_box = blk.icmp_eq(I64, &kind, &header_box.to_string());
+        blk.cond_br(&is_box, &value_label, &slow_label);
+    }
+    ctx.current_block = value_idx;
+    let bits = {
+        let blk = ctx.block();
+        let value_ptr = emit_field_ptr(blk, &biased, 0);
+        let bits = blk.load(I64, &value_ptr);
+        let is_tdz = blk.icmp_eq(I64, &bits, crate::nanbox::TAG_TDZ_I64);
+        blk.cond_br(&is_tdz, &slow_label, &merge_label);
+        bits
+    };
+    let value_end = ctx.block().label.clone();
+    ctx.current_block = slow_idx;
+    let slow_bits = emit_box_read(ctx, id, box_ptr, false);
+    let slow_end = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+    ctx.current_block = merge_idx;
+    ctx.block()
+        .phi(I64, &[(&bits, &value_end), (&slow_bits, &slow_end)])
+}
+
 /// Load the current value from a compiler-proven raw box capture.
 ///
 /// The exact-arrow resolver has already validated `capture.ptr`, so the hot
@@ -463,7 +529,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 if let Some(slot) = ctx.locals.get(id).cloned() {
                     let blk = ctx.block();
                     let box_ptr = blk.load(I64, &slot);
-                    let bits = emit_box_read(ctx, *id, &box_ptr, false);
+                    let bits = emit_local_box_read(ctx, *id, &box_ptr);
                     let value = ctx.block().bitcast_i64_to_double(&bits);
                     demote_extracted_string_binding(ctx, *id, &value);
                     return Ok(value);

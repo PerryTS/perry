@@ -279,6 +279,10 @@ pub const GC_OBJECT_CALLABLE: u16 = 0x0020;
 pub const GC_TYPE_PROXY: u8 = 37;
 pub const GC_TYPE_SYMBOL: u8 = 32;
 pub const GC_TYPE_STRING: u8 = 3;
+/// `gc::GC_TYPE_BOX`: a JSValue cell (one 8-byte payload word) holding a
+/// boxed binding. A declaring function's inline box read accepts exactly this
+/// kind, unforwarded, of exactly that size.
+pub const GC_TYPE_BOX: u8 = 22;
 
 /// Classify the first four GC-header bytes, loaded as a native-endian u32.
 /// No shape or target read is needed after the creation-time publication.

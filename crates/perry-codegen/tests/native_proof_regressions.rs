@@ -7986,6 +7986,45 @@ fn boxed_param_capture_module(name: &str) -> Module {
     )
 }
 
+/// A boxed local read in its declaring function is decided inline from the
+/// cell: a range test (the slot's entry sentinels fail it), one header-word
+/// compare (box kind, unforwarded, one payload word) and the value load. The
+/// checked accessor stays only on the cold arm, which a failed test or a TDZ
+/// sentinel reaches. Sabotage: lowering the read straight to
+/// `js_box_get_bits` again drops every `local_box.*` block.
+#[test]
+fn boxed_local_read_loads_the_cell_inline_and_keeps_the_accessor_cold() {
+    // The declaring function reads `cell` after the closure that writes it.
+    let mut module = boxed_local_capture_module("boxed_local_inline_read_ir.ts");
+    *module.functions[0].body.last_mut().unwrap() = Stmt::Return(Some(local(10)));
+    let ir = String::from_utf8(compile_module(&module, empty_opts()).unwrap()).unwrap();
+    let block = |label: &str| -> String {
+        let start = ir
+            .find(&format!("\n{label}"))
+            .unwrap_or_else(|| panic!("missing block {label}:\n{ir}"));
+        let body = &ir[start + 1..];
+        let end = body.find("\n\n").unwrap_or(body.len());
+        body[..end].to_string()
+    };
+    let cell = block("local_box.cell");
+    let box_word =
+        ((perry_abi::GC_HEADER_SIZE as u64 + 8) << 32) | u64::from(perry_abi::GC_TYPE_BOX);
+    let mask =
+        (0xFFFF_FFFF_0000_0000u64 | (u64::from(perry_abi::GC_FLAG_FORWARDED) << 8) | 0xFF) as i64;
+    assert!(cell.contains("load i64, ptr"), "{cell}");
+    assert!(cell.contains(&mask.to_string()), "{cell}");
+    assert!(cell.contains(&box_word.to_string()), "{cell}");
+    let value = block("local_box.value");
+    assert!(value.contains("load i64, ptr"), "{value}");
+    assert!(
+        value.contains(perry_codegen::nanbox::TAG_TDZ_I64),
+        "{value}"
+    );
+    assert!(!value.contains("@js_box_get_bits"), "{value}");
+    let checked = block("local_box.checked");
+    assert!(checked.contains("@js_box_get_bits"), "{checked}");
+}
+
 #[test]
 fn boxed_local_slot_uses_i64_js_value_bits_until_helper_edges() {
     // Asserts the SHADOW-STACK spelling of the box-pointer slot: a plain

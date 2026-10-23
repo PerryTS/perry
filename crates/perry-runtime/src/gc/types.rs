@@ -117,6 +117,7 @@ pub const GC_TYPE_REGEXP: u8 = 20;
 /// the allocation is a movable leaf reached through its RegExp owner.
 pub const GC_TYPE_REGEX_PROGRAM: u8 = 21;
 pub const GC_TYPE_BOX: u8 = 22;
+const _: () = assert!(GC_TYPE_BOX == perry_abi::GC_TYPE_BOX);
 pub const GC_TYPE_I32_BOX: u8 = 23;
 pub const GC_TYPE_BOOL_BOX: u8 = 24;
 /// A scope context object: N NaN-boxed binding slots shared by the closures of
