@@ -210,6 +210,25 @@ impl DescView<'_> {
 pub(crate) const COLLECTED_DESCRIPTOR_WORDS: usize = 8;
 
 impl<'scope> DescView<'scope> {
+    /// CreateDataProperty's complete data descriptor, rooted without a JS
+    /// descriptor object. The caller has already converted the property key.
+    pub(crate) fn create_data(scope: &'scope crate::gc::RuntimeHandleScope, value: f64) -> Self {
+        let mut view = Self {
+            present: [false; 6],
+            handles: [None; 6],
+        };
+        for (field, bits) in [
+            (DESC_VALUE, value.to_bits()),
+            (DESC_WRITABLE, crate::value::TAG_TRUE),
+            (DESC_ENUMERABLE, crate::value::TAG_TRUE),
+            (DESC_CONFIGURABLE, crate::value::TAG_TRUE),
+        ] {
+            view.present[field] = true;
+            view.handles[field] = Some(scope.root_nanbox_u64(bits));
+        }
+        view
+    }
+
     /// The record as `COLLECTED_DESCRIPTOR_WORDS` NaN-box words, `key` first.
     /// The caller pushes them as handles with no allocation in between, so
     /// raw words never outlive a collection point. The presence bits travel
