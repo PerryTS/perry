@@ -1651,7 +1651,7 @@ fn join_routes_objects_and_nested_arrays_through_tostring() {
         let sep = crate::string::js_string_from_bytes(b";".as_ptr(), 1);
         let out = js_array_join(arr, sep);
         let len = (*out).byte_len as usize;
-        let data = (out as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+        let data = crate::string::string_data(out);
         let s = std::str::from_utf8(std::slice::from_raw_parts(data, len)).unwrap();
         assert_eq!(s, "1,2;[object Object]");
     }
@@ -1674,7 +1674,7 @@ fn join_accepts_heap_string_tagged_elements() {
         let sep = crate::string::js_string_from_bytes(b"|".as_ptr(), 1);
         let out = js_array_join(arr, sep);
         let len = (*out).byte_len as usize;
-        let data = (out as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+        let data = crate::string::string_data(out);
         let s = std::str::from_utf8(std::slice::from_raw_parts(data, len)).unwrap();
         assert_eq!(s, "alpha|beta");
     }
