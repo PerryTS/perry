@@ -1,0 +1,1 @@
+Preserve CommonJS receiver semantics through the compiler-generated module wrapper: sloppy functions coerce nullish receivers to `globalThis`, while function and module strict directives keep their receivers unchanged.

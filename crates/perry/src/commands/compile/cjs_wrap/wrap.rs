@@ -231,6 +231,9 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
     messages: &mut Vec<String>,
     computed_require_warnings: Option<&mut Vec<String>>,
 ) -> (String, Option<usize>) {
+    // Keep the original directive prologue ahead of generated imports and
+    // bookkeeping, including for the flat class-export emission.
+    let strict_prologue = super::strictness::strict_prologue(source, source_path);
     let mut source_cow = Cow::Borrowed(source);
 
     // Issue #5498: a genuine CommonJS file may carry a leading shebang
@@ -1493,7 +1496,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
                 format!("export {{ {flat_class} }};")
             };
         format!(
-            r#"{imports}
+            r#"{strict_prologue}{imports}
 {import_aliases}
 {hoisted_class_block}
 {cjs_preamble}
@@ -1512,7 +1515,7 @@ export default {flat_class};
         )
     } else {
         format!(
-            r#"{imports}
+            r#"{strict_prologue}{imports}
 {import_aliases}
 {hoisted_class_block}
 const _cjs = (function() {{
@@ -1538,11 +1541,13 @@ return __perry_cjs_factory();
     // #5247: locate the original body within the wrapped output so callers can
     // translate a wrapped-coordinate byte offset back to original coordinates.
     // `body_for_iife` is interpolated verbatim into `wrapped`, so the first
-    // occurrence is its start. Empty body → no mapping.
+    // occurrence after the copied strict directive is its start. Empty body → no mapping.
     let body_offset = if body_for_iife.is_empty() {
         None
     } else {
-        wrapped.find(body_for_iife.as_str())
+        wrapped[strict_prologue.len()..]
+            .find(body_for_iife.as_str())
+            .map(|offset| offset + strict_prologue.len())
     };
     (wrapped, body_offset)
 }
