@@ -45,9 +45,7 @@ pub(super) unsafe fn get<const ABSENT: bool, const SITE: bool, const LAZY_HASH: 
         // own key in a later bucket. An unanswered proof still continues
         // this same index; the first bucket is not treated as own absence.
         if SITE {
-            return site_memo::collision::<ABSENT, LAZY_HASH>(
-                dir, obj, key_bits, hash, memo,
-            );
+            return site_memo::collision::<ABSENT, LAZY_HASH>(dir, obj, key_bits, hash, memo);
         }
         return continued::<ABSENT, SITE, LAZY_HASH>(dir, obj, key_bits, hash, memo);
     }

@@ -3760,6 +3760,14 @@
    ],
    "verdict": "no_heap_address",
    "why": "Startup code function pointer for the native-owner bag adapter. It stores only an extern C function address, never a payload, property bag or GC address."
+  },
+  {
+   "file": "crates/perry-runtime/src/runtime_state_key.rs",
+   "names": [
+    "MEMO"
+   ],
+   "verdict": "no_heap_address",
+   "why": "The named-state-key macro stores a ReadSiteMemo: exactly five AtomicU64 words containing process-global, never-reused ShapeIds paired with scalar slot indices or NEXT/ABSENT/DECLINE markers. It stores no receiver, holder, getter, key pointer or arena address. Every read follows and validates the current live shape links before loading a slot; retiring an agent cannot leave a dangling address in these words."
   }
  ]
 }

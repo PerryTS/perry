@@ -5,3 +5,5 @@ The proofs contain shared atomic integer words in ordinary BSS. Process-global, 
 Named leaves pass four arguments and load the atom's existing hash only when needed. A short own-data hit reads neither hash nor memo. Computed reads share receiver handling with the complete slow path; proven Symbol keys have no short-string memo. Indexed collisions and unproved slot loads use shared tail continuations. A collision can use a validated memo before further traversal; unanswered collisions reconstruct their cursor without extending the ordinary hit's register lifetime.
 
 Array element addressing cancels the header offset in word units before scaling. It preserves allocation padding, front offsets and named-property reserves while reducing repeated address arithmetic in property reads and shared callers.
+
+Named memo hash reads use the shared string accessor with an explicit debug assertion of the canonical-atom contract. The thread-exit inventory records the memo as address-free shape/slot storage.

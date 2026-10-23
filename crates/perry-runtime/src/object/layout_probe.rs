@@ -934,7 +934,12 @@ unsafe fn probe_get<const ABSENT: bool>(
 #[inline(always)]
 unsafe fn site_key_hash<const LAZY_HASH: bool>(key_bits: u64, hash: u64) -> u64 {
     if LAZY_HASH {
-        crate::string::property_atom_hash((key_bits & POINTER_MASK) as *const crate::StringHeader)
+        // Named memo fronts accept canonical property atoms, never an SSO
+        // immediate. Keep that unsafe entry contract explicit before using
+        // the heap-string accessor; materialization would violate this leaf.
+        let key = crate::JSValue::from_bits(key_bits);
+        debug_assert!(!key.is_short_string(), "memo keys must be property atoms");
+        crate::string::property_atom_hash(key.as_string_ptr())
     } else {
         hash
     }
