@@ -1,0 +1,1 @@
+Re-audit the synchronous full-GC census source pin after the idle-reducer growth query added by #13115. The helper only reads pressure/baseline counters and does not alter the mark-to-sweep lifetime window. Classify the new test-only idle-compaction gate flag as a Boolean. Preserve all census boundaries, source checks and frontier limits; audit metadata only.

@@ -262,7 +262,7 @@
       "file": "crates/perry-runtime/src/gc/census.rs",
       "name": "PASS1_MARKED",
       "verdict": "non_moving_snapshot",
-      "why": "Re-audited 2026-10-23 against the pinned-source diffs and current collection phases. Raw header-address snapshot exists only in a synchronous full run_to_completion: step_mark_propagation records it after tracing, then block persistence and weak/ephemeron processing only mark or clear existing edges. Full finalization skips the relocating minor prelude. step_sweep consumes the snapshot before census reporting and before reclamation; budgeted cycles and minors skip its creation and consumption. No JS callback, object relocation, or mutator window occurs between the boundaries. The added full-sweep honest-pointer verifier only reads heap slots and allocator metadata; it neither calls JS nor relocates. Scanner registration and optional feature installation occur in gc_init before this window. Trigger-watermark admission, promotion-policy estimates and test-only throw sabotage do not change the synchronous mark-to-sweep sequence; the production throw check aborts rather than calling JS or unwinding. Native Rust allocations do not collect. Removing the retired PIC census row changes reporting only.",
+      "why": "Re-audited 2026-10-23 against the pinned-source diffs and current collection phases. Raw header-address snapshot exists only in a synchronous full run_to_completion: step_mark_propagation records it after tracing, then block persistence and weak/ephemeron processing only mark or clear existing edges. Full finalization skips the relocating minor prelude. step_sweep consumes the snapshot before census reporting and before reclamation; budgeted cycles and minors skip its creation and consumption. No JS callback, object relocation, or mutator window occurs between the boundaries. The added full-sweep honest-pointer verifier only reads heap slots and allocator metadata; it neither calls JS nor relocates. Scanner registration and optional feature installation occur in gc_init before this window. Trigger-watermark admission, promotion-policy estimates and test-only throw sabotage do not change the synchronous mark-to-sweep sequence; the production throw check aborts rather than calling JS or unwinding. Native Rust allocations do not collect. Removing the retired PIC census row changes reporting only. Re-audited b7f3d56fed: policy.rs adds old_gen_growth_since_last_full_bytes, a read-only query of existing pressure and post-full baseline counters for idle-reducer admission. It does not call JS, collect or relocate, and neither snapshot boundary nor the synchronous mark-to-sweep sequence changes.",
       "window": {
         "start": {
           "file": "crates/perry-runtime/src/gc/census.rs",
@@ -280,7 +280,7 @@
           "crates/perry-runtime/src/gc/census.rs": "0cd91052df3a3dd884840e1365aae5e68ca07b20193d2e53049cf08388746fb4",
           "crates/perry-runtime/src/gc/cycle.rs": "84ef67459e5013ca89ab79a77776837e27323502fd574535e944f43815843209",
           "crates/perry-runtime/src/gc/mod.rs": "dd133cc4b4ff53115ebc809c818b99cc5dc96949c910a056f47f2e3c0d2c123a",
-          "crates/perry-runtime/src/gc/policy.rs": "547096daeecb46c9f0fc0c53dadce261ad6549c878c081793224cbd8e0a38872",
+          "crates/perry-runtime/src/gc/policy.rs": "1591994044f5ef5e03a5a7922629074da48dfb845262bfbaa293e188cb6b709a",
           "crates/perry-runtime/src/gc/progress.rs": "acb439ba3c6a100f08ea4aa0ba4b96c30afb8cb5d84264436948524144b9342b",
           "crates/perry-runtime/src/gc/allocation_pacing.rs": "8457f4987805b2755f6d235e4c22ebbfd549ef011f5edea5ddad15c48daab5ef",
           "crates/perry-runtime/src/gc/ephemeron.rs": "b6a62662078caf02e5fa716e6bd8089f20e67efca8c9bb55ea234567e81adc06",
@@ -2938,6 +2938,12 @@
       "name": "TEST_INLINE_DECOMMITS",
       "verdict": "not_a_gc_pointer",
       "why": "Test-only per-thread numeric count of calls to decommit_payload_pages. Pin-lifetime witnesses compare the count to detect premature OS advice even when macOS retains page contents. It stores no owner, payload address or JS value and is absent from production builds."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/idle_compact.rs",
+      "name": "TEST_PASS_CHEAP_GATES",
+      "verdict": "not_a_gc_pointer",
+      "why": "Test-only Boolean allowing idle-compaction prediction fixtures to pass the cheap admission gates. It stores no heap state, block address, selected object or callback; compaction state and page selection remain separate."
     }
   ],
   "_FRONTIER_README": "Identity-pinned debt ratchet over new perry-ui* candidates and otherwise-unclassified core raw/Perry TLS declarations (see the census docstring, “The identity-pinned frontier”). A new uncovered holder fails until it is scanned, receives a researched holders verdict, or is deliberately pinned as debt. Moving a researched false positive to holders graduates it from this list. A fixed or classified holder makes its old frontier pin stale, so the receipt must be deleted.",
