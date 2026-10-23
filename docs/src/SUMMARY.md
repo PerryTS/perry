@@ -191,6 +191,7 @@
 # Internals
 
 - [Memory Model](internals/memory-model.md)
+- [Retained function source](internals/retained-function-source.md)
 - [RegExp program ownership and caching](internals/regexp-program-cache.md)
 - [WeakMap lookup and owned identity storage](internals/weakmap-owned-index-design.md)
   - [Implementation validation](internals/weakmap-owned-index-validation.md)

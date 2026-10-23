@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2016 entries across 111 modules
+// Coverage: 2018 entries across 111 modules
 
 type PerryI8 = number & { readonly __perryI8?: never };
 type PerryI16 = number & { readonly __perryI16?: never };
@@ -353,6 +353,10 @@ declare module "bun" {
   export function plugin(plugin: any): any;
   /** stdlib */
   export function serve(options: any): any;
+  /** stdlib */
+  export function sleep(...args: any[]): any;
+  /** stdlib */
+  export function sleepSync(...args: any[]): any;
   /** stdlib */
   export function spawn(...args: any[]): any;
   /** stdlib */

@@ -1,0 +1,1 @@
+Repair documentation checks on main by listing the retained function source chapter in mdBook navigation and regenerating the API reference and TypeScript declarations for Bun sleep and sleepSync. No compiler or runtime behavior changes.
