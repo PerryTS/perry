@@ -1,0 +1,1 @@
+Update the compiler-output liveness checker's exact step-name inventory for the prebuilt runtime build and verification probes introduced in #13106. Keep all ten subjects, ordering checks, prerequisite guards and failure semantics. Fixes the lint failure caused by the stale names.
