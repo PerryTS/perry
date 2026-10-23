@@ -746,7 +746,11 @@ fn a_module_value_read_from_another_unit_keeps_its_layout() {
         console.log(useA());
         "#;
     let pf = units(src);
-    assert!(!verdicts(&pf, "a").is_empty() && proven(&pf, "a"), "{}", pf.dump_text());
+    assert!(
+        !verdicts(&pf, "a").is_empty() && proven(&pf, "a"),
+        "{}",
+        pf.dump_text()
+    );
     assert!(pf.broken.is_empty(), "{:?}", pf.broken);
     assert!(gains_key(&pf, "c"), "{}", pf.dump_text());
 }
@@ -1273,7 +1277,11 @@ fn a_key_another_unit_adds_to_a_literal_is_a_shape_transition() {
         .find(|t| t.birth_keys == ["level", "visitor"])
         .unwrap_or_else(|| panic!("ctx literal in\n{}", pf.dump_text()));
     assert!(c.adds_keys > 0, "{}", pf.dump_text());
-    let seen = c.fields.iter().find(|f| f.key == "seen").expect("field seen");
+    let seen = c
+        .fields
+        .iter()
+        .find(|f| f.key == "seen")
+        .expect("field seen");
     assert!(!seen.readonly && seen.kind.top, "{}", pf.dump_text());
     // A computed-key store still opens the layout: a census report (§5).
     let src = r#"
@@ -1664,10 +1672,7 @@ fn a_literal_passed_to_a_closed_function_carries_its_field_functions() {
     // transition): `base` is not proven, so the case above can fail. (Principle: the census
     // decides; the old negative, `globalThis.f = h.toPath` in the caller,
     // no longer keeps a field function out of the contract, decision 29.)
-    let pf = units(&src.replace(
-        "const k = host.base;",
-        "const k = host.base; host[k] = 1;",
-    ));
+    let pf = units(&src.replace("const k = host.base;", "const k = host.base; host[k] = 1;"));
     assert!(
         !verdicts(&pf, "base").is_empty() && !proven(&pf, "base"),
         "{}",

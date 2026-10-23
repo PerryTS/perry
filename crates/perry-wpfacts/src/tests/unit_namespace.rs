@@ -221,11 +221,7 @@ fn an_enum_object_is_a_contract_named_by_its_enum() {
         "import { C } from './a'; (C as any).Z = 1; function g() { return C.Y; } console.log(g());";
     let pf = units_of(&[("a", ENUM), ("m", m)]);
     assert!(pf.broken.is_empty(), "{:?}\n{}", pf.broken, pf.dump_text());
-    assert!(
-        super::unit_mode::gains_key(&pf, "Z"),
-        "{}",
-        pf.dump_text()
-    );
+    assert!(super::unit_mode::gains_key(&pf, "Z"), "{}", pf.dump_text());
     let m = "import { C } from './a'; (C as any)[String(C.Y)] = 1; function g() { return C.Y; } console.log(g());";
     let pf = units_of(&[("a", ENUM), ("m", m)]);
     assert!(
@@ -429,4 +425,49 @@ fn a_contract_result_keeps_its_primitive_kinds_and_a_closed_callee_argument_leav
         .unwrap_or_else(|| panic!("{}", pf.dump_text()));
     let f = deep.fields.iter().find(|f| f.key == "facts").unwrap();
     assert!(!f.readonly && f.kind.top, "{}", pf.dump_text());
+}
+
+#[test]
+fn an_exported_method_literal_is_born_by_its_defines() {
+    // Design §18.9 (DECISIONS 67): an exported literal with a method is
+    // lowered in source order, `(o => { define(o, "A", …); …; return o })
+    // (new Shape(undefined, …))`, its method a module function of its own
+    // unit. The defines are the literal's birth (one unit), the shape's
+    // `undefined` placeholders are no field values, so `D` holds only the
+    // method and leaves as a contract function: a unit calling `S.D(…)`
+    // keeps `S` (no escape, no census break), and `.A` holds.
+    let m = "export const S = { A: 'x', B: 'y', D(s: string) { return 'z' + s; } };\nexport function useA(x: boolean) { return x ? S.A : S.B; }";
+    let callm = format!("{m}\nexport function k() {{ return S.D('q') + S.A; }}");
+    for (a, u) in [
+        (
+            m.to_string(),
+            "import { useA } from './a'; console.log(useA(true));",
+        ),
+        (callm, "import { k } from './a'; console.log(k());"),
+        (
+            m.to_string(),
+            "import { S } from './a'; function g() { return S.A + S.D(S.B); } console.log(g());",
+        ),
+    ] {
+        let pf = units_of(&[("a", &a), ("u", u)]);
+        let v = verdicts(&pf, "A");
+        assert!(
+            !v.is_empty() && v.iter().all(|v| v.starts_with("T0")),
+            "{v:?}\n{}",
+            pf.dump_text()
+        );
+        assert!(pf.broken.is_empty(), "{:?}\n{}", pf.broken, pf.dump_text());
+    }
+    // Soundness: a unit that writes another value into `A` is a store
+    // effect on the layout (decision 17), never a proof of the string.
+    let u =
+        "import { S } from './a'; (S as any).A = 1; function g() { return S.A; } console.log(g());";
+    let pf = units_of(&[("a", m), ("u", u)]);
+    let t = pf
+        .templates
+        .iter()
+        .find(|t| t.fields.iter().any(|f| f.key == "D"))
+        .unwrap_or_else(|| panic!("{}", pf.dump_text()));
+    let f = t.fields.iter().find(|f| f.key == "A").unwrap();
+    assert!(!f.readonly, "{}", pf.dump_text());
 }

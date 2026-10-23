@@ -1094,12 +1094,25 @@ impl<'a> Gen<'a> {
             .map(|(d, _)| d.clone())
             .collect();
         for ((name, _), &(_, t)) in &self.stand_in_fns {
-            if self.m.aborted || self.m.is_escaped(t) || self.m.hard.contains_key(&t) {
+            let escaped = self.m.is_escaped(t) && !self.open_fn(t);
+            if self.m.aborted || escaped || self.m.hard.contains_key(&t) {
                 out.push(format!("fn:{name}"));
             }
         }
         out.sort();
         out
+    }
+
+    /// A stand-in of another unit's function that unknown code may hold
+    /// (design §18.9, DECISIONS 67): an open contract function (no
+    /// argument contract, decision 19) whose receiver is unused. Its
+    /// defining unit already runs it for any caller with ⊤ arguments and
+    /// checks its result; an escape here sinks the result (its layouts
+    /// still get their census reports), so it is no report of its own.
+    pub(crate) fn open_fn(&self, t: Tok) -> bool {
+        self.stand_in_fc
+            .get(&t)
+            .is_some_and(|c| c.closed.is_none() && c.lexical_this)
     }
 
     /// Resolve the typed parameters' entry-guard candidates (every class and

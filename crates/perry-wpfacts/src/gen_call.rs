@@ -31,10 +31,30 @@ impl<'a> Gen<'a> {
         byte_offset: u32,
     ) -> NodeId {
         // The object-literal IIFE: `(o => { js_object_literal_define(o, …);
-        // …; return o })({})`. Its defines are the literal's birth.
-        if let (Expr::Closure { params, .. }, [Expr::Object(props)]) = (callee, args) {
-            if props.is_empty() && params.len() == 1 && params[0].name == "__perry_obj_iife" {
-                let lit = self.expr(fx, &args[0]);
+        // …; return o })(seed)`. Its defines are the literal's birth.
+        if let (Expr::Closure { params, .. }, [seed]) = (callee, args) {
+            if crate::decl_units::obj_literal_iife(params) && literal_seed(seed) {
+                // An exported method literal's seed is its shape class,
+                // its constructor storing `undefined` into every field the
+                // defines then store, in order, before the object is
+                // returned: no code sees a placeholder (the value
+                // expressions cannot name the literal). The birth is the
+                // layout's object, born as a literal is, without running
+                // that constructor (design §18.9).
+                let shape = match seed {
+                    Expr::New { class_name, .. } => self.mods[fx.module as usize]
+                        .classes
+                        .get(class_name)
+                        .copied(),
+                    _ => None,
+                };
+                let lit = match shape {
+                    Some(tm) => {
+                        let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
+                        self.tok_node(t)
+                    }
+                    None => self.expr(fx, seed),
+                };
                 let tm = self.m.nodes[lit as usize]
                     .pts
                     .to_sorted()
@@ -700,6 +720,17 @@ impl<'a> Gen<'a> {
     fn iife_param_template(&self, _fx: &Fx, args: &[NodeId]) -> Option<TmplId> {
         let first = *args.first()?;
         self.iife_birth.get(&first).copied()
+    }
+}
+
+/// The first value of an object-literal IIFE's parameter: `{}`, or the
+/// shape-class seed of an exported method literal (`new Shape(undefined,
+/// …)`, `perry-hir` `expr_object.rs` `static_shape_seed`).
+fn literal_seed(seed: &Expr) -> bool {
+    match seed {
+        Expr::Object(props) => props.is_empty(),
+        Expr::New { args, .. } => args.iter().all(|a| matches!(a, Expr::Undefined)),
+        _ => false,
     }
 }
 

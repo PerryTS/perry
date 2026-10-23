@@ -567,7 +567,9 @@ impl<'a> Gen<'a> {
             let fs: Option<Vec<(FnIdx, Tok)>> = toks
                 .iter()
                 .map(|&ft| match self.m.toks[ft as usize] {
-                    TokKind::Func(f, _) if self.m.funcs[f as usize].func_id != u32::MAX => {
+                    TokKind::Func(f, _)
+                        if self.m.funcs[f as usize].func_id != u32::MAX || self.open_fn(ft) =>
+                    {
                         Some((f, ft))
                     }
                     _ => None,
@@ -575,6 +577,11 @@ impl<'a> Gen<'a> {
                 .collect();
             if let Some(fs) = fs {
                 for &(f, ft) in &fs {
+                    // Another unit's open function: the field forwards its
+                    // contract (design §18.9).
+                    if self.m.funcs[f as usize].func_id == u32::MAX {
+                        continue;
+                    }
                     // Other units call it with what they have: it escapes
                     // as a contract function (⊤ parameters that carry
                     // markers, its result checked). One that escaped
