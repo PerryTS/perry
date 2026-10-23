@@ -154,6 +154,42 @@ fn adapter_slots_are_rewritten_by_a_real_moving_collection() {
 }
 
 #[test]
+fn canonical_byte_lists_are_owned_and_survive_moving_collection() {
+    let _nursery = crate::gc::CopyingNurseryTestGuard::new(0);
+    let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _evacuate = crate::gc::knob_overrides::ForcedEvacuationTestGuard::on();
+    crate::gc::register_runtime_handle_root_scanner_for_tests();
+    for len in [0, 31, 4097, 3 * 1024 * 1024 + 137] {
+        let expected: Vec<u8> = (0..len).map(|i| (i * 31 + 7) as u8).collect();
+        let mut input = expected.clone();
+        unsafe {
+            let frame = perry_component_frame_new();
+            let source = if len == 0 {
+                std::ptr::null()
+            } else {
+                input.as_ptr()
+            };
+            let value = perry_component_frame_bytes(frame, source, len);
+            input.fill(0); // Canonical caller storage must not back the JS view.
+            let holder = perry_component_frame_array(frame, 1);
+            perry_component_frame_array_set(frame, holder, 0, value);
+            let before = super::frame(frame).get(holder).to_bits();
+            crate::gc::gc_collect_minor();
+            // Byte storage may be pinned or large. Its enclosing JS array
+            // proves the collection actually moved the rooted object graph.
+            assert_ne!(super::frame(frame).get(holder).to_bits(), before);
+            let value = perry_component_frame_array_get(frame, holder, 0);
+            assert_eq!(perry_component_frame_bytes_len(frame, value), len);
+            let mut output = vec![0; len];
+            perry_component_frame_bytes_copy(frame, value, output.as_mut_ptr(), len);
+            assert_eq!(output, expected);
+            assert_eq!(perry_component_frame_failed(frame), 0);
+            perry_component_frame_drop(frame);
+        }
+    }
+}
+
+#[test]
 fn failed_frame_keeps_the_original_heap_exception_rooted() {
     let _nursery = crate::gc::CopyingNurseryTestGuard::new(0);
     let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();

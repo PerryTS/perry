@@ -36,8 +36,8 @@ Synchronous bindings wait on native futures with `futures-lite`; I/O and timer
 work is owned and driven by Turnloop, with no ambient Tokio runtime.
 
 The current port includes WASI 0.2.12 I/O, clocks, random, CLI, capability
-filesystem, DNS, TCP and UDP interfaces. It is selected by
-`perry-component-host`. HTTP and native WASI 0.3 remain to be ported;
+filesystem, DNS, TCP, UDP and HTTP interfaces. It is selected by
+`perry-component-host`. Native WASI 0.3 remains to be ported;
 other platform and production-package qualification are still required. No missing
 interface is implemented as a success stub. The unchanged workspace Tokio
 gate passes: no manifest edges, lockfile packages or Rust source references.

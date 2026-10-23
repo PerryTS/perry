@@ -196,11 +196,16 @@ pub unsafe extern "C" fn perry_component_frame_bytes(
         let len = u32::try_from(len).unwrap_or_else(|_| fail("Component byte list is too long"));
         let array = crate::typedarray::typed_array_alloc(crate::typedarray::KIND_UINT8, len);
         let slot = frame.add(crate::value::js_nanbox_pointer(array as i64));
-        for (i, byte) in span(bytes, len as usize).iter().enumerate() {
-            let array = JSValue::from_bits(frame.get(slot).to_bits())
-                .as_pointer::<crate::typedarray::TypedArrayHeader>()
-                as *mut _;
-            crate::typedarray::js_typed_array_set(array, i as i32, *byte as f64);
+        // The new array has no aliases. Copy its canonical byte list in one
+        // allocation-free borrow; per-element JS setters spend guest fuel on
+        // receiver validation for every byte of an otherwise contiguous list.
+        let copied = crate::buffer::bytes::no_gc(|scope| {
+            let destination = crate::buffer::bytes::bytes_mut(frame.get(slot), scope).ok()?;
+            destination.copy_from_slice(span(bytes, len as usize));
+            Some(())
+        });
+        if copied.is_none() {
+            fail("Invalid component byte-list allocation");
         }
         slot
     })

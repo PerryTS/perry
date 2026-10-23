@@ -1,0 +1,14 @@
+{
+  "source": "Perry pinned perry-wasi/wit/deps (see crates/perry-wasi/PROVENANCE.md)",
+  "interfaceVersion": "0.2.12",
+  "modified": false,
+  "sha256": {
+    "cli.wit": "fb6ac5d23fcaf3d231142a3c2f9bb1e9bc1fe5af6f1f329f6b1a5555ce0d3873",
+    "clocks.wit": "6ed8aa65bb8cbe224a0b2cbac9fc1b3bd25bdb17eda5ae0d23c983ed31c447cc",
+    "filesystem.wit": "e675f261017bf9b4fa7df5b9701023fe0249ede71021ac1bf978748e62edcda8",
+    "http.wit": "4bbd58f509700a6637385611f183c5bd5984d81feef85e29dfdc05ebd283045a",
+    "io.wit": "96e206d00076fa0480df32c5bcf255a3fa4862805ac2f6b8537a781cce54f433",
+    "random.wit": "48578c40213d5cab6650980905fa146a0be8c39c4433ee5e7e00637b87dbe08f",
+    "sockets.wit": "ad38dbf3b0bbdf34c0f2b608edcbfee04d71b443a63faff1f5e0053c3f84b377"
+  }
+}

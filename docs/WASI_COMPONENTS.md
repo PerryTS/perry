@@ -27,8 +27,8 @@ or stdio capabilities. Application imports must be supplied explicitly.
 Opt-in WASI Preview 2 providers are available through `ComponentOptions.wasi`.
 Application-defined resource imports use the factories described below.
 `wasi:http` client imports are implemented; their Linux engine and canonical
-component qualification is described below. Incoming/server handling and native
-WASI 0.3 remain in progress.
+component qualification is described below. Incoming HTTP handling and authored
+HTTP components are qualified on Linux below; native WASI 0.3 remains in progress.
 
 ### Native WASI commands
 
@@ -139,8 +139,8 @@ The [HTTP client receipt](validation/wasi-http-client-20261023.json) records Lin
 provider/host tests, a real WASM HTTP round trip through both provider linkers,
 and the production Host facade's opt-in, TCP, DNS and exact-address denials.
 That receipt covers the client; incoming-handler qualification is recorded below.
-Perry-generated TypeScript HTTP guests under moving GC, other native platforms
-and final shipping packages remain unqualified.
+Perry-generated TypeScript HTTP guests under moving GC have the separate
+qualification below. Other native platforms and final shipping packages remain open.
 The experimental `informational-outbound-responses` interface is disabled.
 Native WASI 0.3 async interfaces remain unimplemented.
 
@@ -179,8 +179,8 @@ streams through the production Rust Host facade, handles repeated requests
 with no outbound grants, and exercises explicit errors, traps, missing responses
 and fuel exhaustion. Canonical preflight rejects the wrong signature.
 This is Rust embedding and canonical-WASM qualification. The TypeScript host
-API is described below; Perry-generated HTTP fixtures and their moving-GC
-qualification remain required. The server currently accepts HTTP/1.1 origin-form requests
+API and Perry-generated HTTP fixtures with moving-GC qualification are described
+below. The server currently accepts HTTP/1.1 origin-form requests
 (and OPTIONS `*`), one request per connection; it does not implement HTTP/1.0,
 connection reuse, HTTP/2, CONNECT tunnels or upgrades.
 
@@ -235,8 +235,28 @@ The [HTTP runtime receipt](validation/wasi-http-runtime-20261023.json) records
 Both instrumented transport runs copied 823 objects and reported quarantine
 and evacuation verification witnesses. Ordinary and instrumented archives use
 the same compiler/engine package and feature union. This qualifies Linux
-development native hosting of the canonical fixture; Perry-authored HTTP guests,
-production runtime archives, other platforms and final packages remain open.
+development native hosting of the canonical fixture.
+
+The [authored HTTP guest receipt](validation/wasi-http-guest-20261023.json)
+qualifies a Perry-compiled component importing outgoing-handler and exporting
+incoming-handler at WASI 0.2.12. Eight cases cross plain HTTP/verified incoming
+TLS with ordinary, guest-moving, host-moving and combined moving GC. They pass
+56 incoming requests, 32 outgoing echoes and 88 typed capability denials, with
+exact binary round trips through 3 MiB + 137 byte bodies. They also cover async
+context, explicit-error reuse, trap/missing-response/fuel retirement and pending
+server/component cancellation. Both heaps show actual copies and evacuation
+verification; native runs additionally protect retired from-space. No WASM
+quarantine claim is made. Authored outgoing requests use plain HTTP in this
+matrix; TLS transport has separate native qualification.
+
+Canonical byte-list lifting now copies into a freshly rooted Uint8Array in one
+bulk operation. A regression probe passes a 3 MiB argument under the original
+one-billion-instruction budget and reaches the typed HTTP denial; the previous
+per-element setter exhausted fuel before HTTP. The 35 component runtime unit
+tests include storage independence and survival through moving collection.
+The final compiler reproduces the tested guest archive byte for byte; native
+ordinary/instrumented artifacts use the same package and feature union.
+Production runtime archives, other platforms and final packages remain open.
 
 Flag declarations are limited to 1–32 labels, matching the
 [Component Model binary format](https://github.com/WebAssembly/component-model/blob/main/design/mvp/Binary.md#type-definitions).
