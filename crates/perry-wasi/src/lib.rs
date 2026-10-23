@@ -6,6 +6,7 @@ mod error;
 pub mod filesystem;
 pub use error::{I32Exit, TrappableError};
 const MAX_READ_SIZE_ALLOC: usize = 64 * 1024;
+pub mod http;
 pub mod io;
 pub mod p2;
 pub mod pipe;

@@ -24,6 +24,7 @@ Copied/adapted sources:
 | `src/sockets/tcp.rs`, `src/sockets/tcp/` | WASI TCP validation, defaults and option semantics from `wasmtime-wasi/src/sockets/{mod,tcp}.rs`; native ownership and I/O are implemented with Turnloop |
 | `src/p2/host/{tcp,udp}.rs` | Synchronous forwarding adapted from corresponding `wasmtime-wasi` files; state and I/O use Turnloop |
 | `src/p2/stdio.rs`, `src/p2/host/{env,exit}.rs` | `wasmtime-wasi` files with the same paths |
+| `src/http/fields.rs`, `src/http/error.rs` | `wasmtime-wasi-http/src/{field_map,error}.rs`; no upstream HTTP transport dependency |
 | `src/error.rs`, `src/clocks/datetime.rs` | `wasmtime-wasi/src/error.rs` and timestamp conversions from `src/clocks.rs` |
 | `src/pipe.rs` | Memory and closed WASI stream implementations in `wasmtime-wasi/src/p2/pipe.rs` (without Tokio adapters) |
 
@@ -206,3 +207,32 @@ The [selection receipt](../../docs/validation/wasi-turnloop-selected-20261023.js
 records exact source, patch, compiler, archives, executables and log hashes.
 Windows/macOS provider and production-package qualification remain, as do
 HTTP, native WASI 0.3 and released Turnloop adoption.
+
+
+HTTP integration now has bounded body-streaming primitives and header resources,
+using the `wasi:http@0.2.12` contracts from Wasmtime 48.0.5 revision
+`563544c6296610b1b3fbbe2e4643f9999899ec66`. These do not yet register HTTP imports:
+HTTP/TLS transport, capability wiring and the canonical resource adapters remain
+required before claiming `wasi:http` support.
+
+Header snapshots use copy-on-write ownership. Mutations validate names, values,
+forbidden transport headers and configured memory limits; failed bulk updates or
+header-capacity reservations leave both values and accounting unchanged.
+Content-Length accepts decimal digits within u64, without a sign or whitespace.
+
+Body channels retain one owned chunk of at most 64 KiB. The outgoing body's
+completion owner is separate from its output stream: dropping the stream does
+not finish the body, and dropping an unfinished body reports a protocol error.
+Output permits enforce backpressure; excess Content-Length bytes are rejected
+before delivery. Incoming streams permit partial reads, retain typed failures,
+and distinguish EOF from failure. Finishing an incoming body discards unread
+bytes while the producer drains to trailers, retaining length checks; trailer
+results can be retrieved only once. Parent completion requires child-stream
+release. Queue capacity indicates transfer to the HTTP consumer, not peer receipt.
+
+Twenty focused tests cover these semantics, including actual Turnloop driver
+production/consumption of owned bytes, timer progress beside backpressure,
+cancellation acknowledgement and context teardown. Linux validation passes all
+201 provider, 40 host and 26/25 driver tests in development/production panic-abort,
+plus doctests, all-target Clippy, stdio overlap and the unchanged Tokio gate.
+This body-layer coverage does not establish native HTTP interoperability or TLS.
