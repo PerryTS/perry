@@ -335,11 +335,16 @@ impl<'a> Gen<'a> {
             self.m.closed_described.insert(fx, described);
             let mut nodes = Vec::with_capacity(n);
             for i in 0..n {
+                // A described position holds undefined when a call passes
+                // fewer arguments: its contract's kinds carry it (DECISIONS 77).
                 let node = match ac.and_then(|a| a.params.get(i)) {
                     Some(vc) => self.stand_in_value(0, &format!("{nm}:arg{i}"), vc),
-                    None => self.m.node_named("arg", || format!("arg{i}({nm})")),
+                    None => {
+                        let node = self.m.node_named("arg", || format!("arg{i}({nm})"));
+                        self.m.add_prim(node, prim::UNDEF);
+                        node
+                    }
                 };
-                self.m.add_prim(node, prim::UNDEF);
                 nodes.push(node);
             }
             self.m.closed_params.insert(fx, nodes);
