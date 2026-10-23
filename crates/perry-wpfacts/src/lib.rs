@@ -546,6 +546,16 @@ fn fn_contract_of(
                         if let Some(c) = layouts_out.iter_mut().find(|c| c.display == display) {
                             c.field_layouts = nl;
                         }
+                        // Its field functions, as a value contract's (DECISIONS 78,
+                        // `Gen::note_field_fns`). The layout is out first, so a field
+                        // function returning this literal again does not recurse.
+                        if literal_shape {
+                            let nt = g.m.nodes[n as usize].pts.to_sorted();
+                            let ff = literal_field_fns(g, templates, &nt, tm, layouts_out, open_tm);
+                            if let Some(c) = layouts_out.iter_mut().find(|c| c.display == display) {
+                                c.field_fns = ff;
+                            }
+                        }
                     }
                 }
                 ds.push(display);
