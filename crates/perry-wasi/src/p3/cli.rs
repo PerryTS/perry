@@ -1,5 +1,5 @@
 //! P3 CLI capabilities reuse the context's explicit P2 native stream views.
-mod streams;
+use super::streams;
 #[cfg(test)]
 mod tests;
 use super::bindings::cli::{
@@ -117,5 +117,18 @@ impl<T> stderr::HostWithStore<T> for WasiCli {
         FutureReader::new(&mut store, async move {
             wasmtime::error::Ok(receive.await.unwrap_or(Ok(())))
         })
+    }
+}
+
+impl streams::StreamFailure for ErrorCode {
+    fn from_io(error: &std::io::Error) -> Self {
+        match error.kind() {
+            std::io::ErrorKind::BrokenPipe => Self::Pipe,
+            std::io::ErrorKind::InvalidData => Self::IllegalByteSequence,
+            _ => Self::Io,
+        }
+    }
+    fn closed() -> Self {
+        Self::Pipe
     }
 }

@@ -593,6 +593,10 @@ impl From<crate::filesystem::DescriptorType> for types::DescriptorType {
     fn from(ty: crate::filesystem::DescriptorType) -> Self {
         match ty {
             crate::filesystem::DescriptorType::Unknown => Self::Unknown,
+            #[cfg(unix)]
+            crate::filesystem::DescriptorType::Fifo | crate::filesystem::DescriptorType::Socket => {
+                Self::Unknown
+            }
             crate::filesystem::DescriptorType::BlockDevice => Self::BlockDevice,
             crate::filesystem::DescriptorType::CharacterDevice => Self::CharacterDevice,
             crate::filesystem::DescriptorType::Directory => Self::Directory,

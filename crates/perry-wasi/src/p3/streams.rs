@@ -1,6 +1,6 @@
 //! Owned P2 stream views adapt native Turnloop I/O to the P3 stream ABI.
 //! Readiness futures retain native views only, never a Store or guest memory.
-use super::ErrorCode;
+
 use bytes::Bytes;
 use futures_channel::oneshot;
 use futures_util::future::BoxFuture;
@@ -14,15 +14,19 @@ use wasmtime::component::{
 use wasmtime::{AsContextMut, StoreContextMut};
 use wasmtime_wasi_io::streams::{InputStream, OutputStream, StreamError};
 
-type Outcome = oneshot::Sender<Result<(), ErrorCode>>;
+pub(super) trait StreamFailure: Send + Unpin + 'static {
+    fn from_io(error: &std::io::Error) -> Self;
+    fn closed() -> Self;
+}
+type Outcome<E> = oneshot::Sender<Result<(), E>>;
 
-pub(super) struct Input {
+pub(super) struct Input<E> {
     stream: Option<Box<dyn InputStream>>,
     ready: Option<BoxFuture<'static, Box<dyn InputStream>>>,
-    outcome: Option<Outcome>,
+    outcome: Option<Outcome<E>>,
 }
-impl Input {
-    pub fn new(stream: Box<dyn InputStream>, outcome: Outcome) -> Self {
+impl<E> Input<E> {
+    pub fn new(stream: Box<dyn InputStream>, outcome: Outcome<E>) -> Self {
         Self {
             stream: Some(stream),
             ready: None,
@@ -44,7 +48,7 @@ impl Input {
     }
 }
 
-impl<D> StreamProducer<D> for Input {
+impl<D, E: StreamFailure> StreamProducer<D> for Input<E> {
     type Item = u8;
     type Buffer = VecBuffer<u8>;
     fn poll_produce<'a>(
@@ -98,14 +102,14 @@ impl<D> StreamProducer<D> for Input {
     }
 }
 
-pub(super) struct Output {
+pub(super) struct Output<E> {
     stream: Option<Box<dyn OutputStream>>,
     ready: Option<BoxFuture<'static, Box<dyn OutputStream>>>,
-    outcome: Option<Outcome>,
+    outcome: Option<Outcome<E>>,
     flushing: bool,
 }
-impl Output {
-    pub fn new(stream: Box<dyn OutputStream>, outcome: Outcome) -> Self {
+impl<E: StreamFailure> Output<E> {
+    pub fn new(stream: Box<dyn OutputStream>, outcome: Outcome<E>) -> Self {
         Self {
             stream: Some(stream),
             ready: None,
@@ -139,7 +143,7 @@ impl Output {
         }
     }
 }
-impl<D> StreamConsumer<D> for Output {
+impl<D, E: StreamFailure> StreamConsumer<D> for Output<E> {
     type Item = u8;
     fn poll_consume(
         mut self: Pin<&mut Self>,
@@ -190,20 +194,16 @@ impl<D> StreamConsumer<D> for Output {
     }
 }
 
-fn dropped(
-    outcome: &mut Option<Outcome>,
+fn dropped<E: StreamFailure>(
+    outcome: &mut Option<Outcome<E>>,
     error: StreamError,
 ) -> Poll<wasmtime::Result<StreamResult>> {
     let code = match error {
         StreamError::Trap(error) => return Poll::Ready(Err(error)),
-        StreamError::Closed => ErrorCode::Pipe,
-        StreamError::LastOperationFailed(error) => match error
-            .downcast_ref::<std::io::Error>()
-            .map(std::io::Error::kind)
-        {
-            Some(std::io::ErrorKind::BrokenPipe) => ErrorCode::Pipe,
-            Some(std::io::ErrorKind::InvalidData) => ErrorCode::IllegalByteSequence,
-            _ => ErrorCode::Io,
+        StreamError::Closed => E::closed(),
+        StreamError::LastOperationFailed(error) => match error.downcast_ref::<std::io::Error>() {
+            Some(error) => E::from_io(error),
+            None => E::from_io(&std::io::Error::other(error.to_string())),
         },
     };
     if let Some(outcome) = outcome.take() {

@@ -19,6 +19,7 @@ Copied/adapted sources:
 | `src/random/host.rs` | `wasmtime-wasi/src/p2/host/random.rs` |
 | `src/clocks/system.rs` | Native clock helpers in `wasmtime-wasi/src/clocks.rs` |
 | `src/filesystem.rs`, `src/filesystem/` | `wasmtime-wasi/src/filesystem.rs` and its capability primitives, platform helpers and tests |
+| `src/p3/filesystem.rs`, `src/p3/filesystem/host.rs` | Conversions and descriptor forwarding adapted from `wasmtime-wasi/src/p3/filesystem/{mod,host}.rs`; stream/directory ownership uses Turnloop, and signed-time conversion is corrected |
 | `src/p2/filesystem.rs`, `src/p2/host/filesystem*` | `wasmtime-wasi` files with the same paths |
 | `src/p2/{network,ip_name_lookup}.rs`, `src/p2/host/{network,instance_network}.rs` | Corresponding `wasmtime-wasi` files and `src/sockets/ip_name_lookup.rs`; address conversions from `src/sockets/mod.rs` |
 | `src/sockets/tcp.rs`, `src/sockets/tcp/` | WASI TCP validation, defaults and option semantics from `wasmtime-wasi/src/sockets/{mod,tcp}.rs`; native ownership and I/O are implemented with Turnloop |
@@ -37,7 +38,8 @@ work is owned and driven by Turnloop, with no ambient Tokio runtime.
 
 The current port includes WASI 0.2.12 I/O, clocks, random, CLI, capability
 filesystem, DNS, TCP, UDP and HTTP interfaces. It is selected by
-`perry-component-host`. Native WASI 0.3 remains to be ported;
+`perry-component-host`. Optional WASI 0.3 providers are described below;
+production engine integration, sockets and HTTP remain open;
 other platform and production-package qualification are still required. No missing
 interface is implemented as a success stub. The unchanged workspace Tokio
 gate passes: no manifest edges, lockfile packages or Rust source references.
@@ -438,8 +440,8 @@ WASI 0.3, released-dependency or final-package requirements.
 
 ## Optional WASI 0.3 clock and random providers
 
-The `p3` feature enables Wasmtime's component async ABI and registers only
-`wasi:clocks` and `wasi:random` at 0.3.0. Their WIT files are copied unchanged
+The `p3` foundation enables Wasmtime's component async ABI and registers
+`wasi:clocks` and `wasi:random` at 0.3.0; CLI and filesystem additions are below. Their WIT files are copied unchanged
 from `wasmtime-wasi` 48.0.5 `src/p3/wit/deps`;
 [the WIT manifest](wit-p3/provenance.json) records their hashes and license.
 No upstream async runtime/provider crate is linked.
@@ -459,7 +461,7 @@ cancellation must drop the Store. Provider-future cancellation alone does not
 establish guest-task cancellation.
 
 This is a Rust embedding foundation. The production Perry component engine
-does not enable this feature yet; P3 CLI, filesystem, sockets, HTTP, generated
+does not enable this feature yet; P3 sockets, HTTP, generated
 TypeScript adapters, Promise/future/stream lifetimes and cross-language async
 composition remain to be implemented and qualified.
 
@@ -474,8 +476,8 @@ The optional `p3` feature also registers `wasi:cli@0.3.0`: arguments, environmen
 initial directory, exit, terminal resources and stdin/stdout/stderr. The added
 CLI WIT and its filesystem/socket dependencies are unchanged pinned inputs in
 [the WIT manifest](wit-p3/provenance.json). Filesystem and socket declarations
-are needed to resolve the upstream CLI worlds; their P3 providers are not yet
-registered. The terminal resource types are distinct from P2 resources.
+resolve the upstream CLI worlds. Filesystem providers are now registered as
+described below; socket providers remain open. The terminal resource types are distinct from P2 resources.
 
 CLI stream adapters reuse the same context's explicit native P2 stream views.
 Readiness futures own native views, never Store borrows or guest memory. Reads
@@ -506,3 +508,43 @@ qualifies the frozen HTTP source with matching production compiler/runtime/stdli
 and engine builds. Its authored HTTP component passes all eight plain/TLS and
 independent host/guest moving-GC cases. This is separate from the P3 provider
 receipts and does not qualify final distribution packages or other platforms.
+
+
+## P3 filesystem streams and async descriptors
+
+The optional `p3` feature registers `wasi:filesystem@0.3.0` preopens and all
+filesystem descriptor operations. Its bindings use the pinned WIT already in
+[the WIT manifest](wit-p3/provenance.json). Async metadata and path operations
+clone native capability handles before awaiting Turnloop work; Store borrows
+and guest memory never enter the blocking pool. The existing path and access
+checks apply, including read-only grants and rejection of absolute paths,
+parent escapes and escaping symlinks. Resource-table failures and stopped
+native drivers trap; filesystem errors retain their typed P3 result.
+
+CLI and filesystem byte streams share owned native adapters, with separate
+error mappings. Reads and writes are bounded to 64 KiB and output completion
+waits for native writes to finish. Directory streams request at most 64 native
+entries per batch, including metadata lookup, rather than collecting an entire
+directory. Dropping a stream cancels queued work/delivery; an already running
+native syscall can finish with its owned inputs. A closed readable stream
+completes its separate result future successfully. This implements the pinned
+stream-plus-result-future ABI; it does not claim an additional error-context
+payload on the stream itself.
+
+Signed timestamps use floor seconds and nonnegative nanoseconds in both
+directions, including fractional pre-epoch values. Unix FIFOs and sockets
+retain their P3 descriptor types; P2's existing unknown mapping is unchanged.
+
+Acceptance coverage includes multi-megabyte binary transfers, offsets, append,
+empty files, chunk boundaries, EOF, resource deletion while streams retain
+native handles, directory batching and invalid UTF-8 names, typed denials,
+metadata/path operations, signed file timestamps and stopped-driver errors.
+Two canonical Wasm fixtures transfer filesystem streams/result futures and
+perform async descriptor calls, releasing guest borrows before returning.
+These are Rust embedding tests. Production Perry P3 integration, TypeScript
+async/GC bindings, other platforms and final packages remain unqualified.
+
+The [filesystem receipt](../../docs/validation/wasi-p3-filesystem-20261023.json)
+records 252 provider tests in both Linux development and production panic-abort
+builds, all-target Clippy, doctests and the Tokio-free dependency graph. Source
+and binary hashes, checksum freshness and all nine added test names were verified.

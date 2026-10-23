@@ -94,6 +94,10 @@ pub trait FileTypeExt {
     fn is_block_device(&self) -> bool;
     /// Returns `true` if this file type is a character device.
     fn is_char_device(&self) -> bool;
+    /// Returns `true` if this file type is a named pipe.
+    fn is_fifo(&self) -> bool;
+    /// Returns `true` if this file type is a socket.
+    fn is_socket(&self) -> bool;
 }
 
 #[cfg(any(unix, target_os = "vxworks"))]
@@ -107,6 +111,12 @@ impl FileTypeExt for FileType {
     fn is_char_device(&self) -> bool {
         self.0 == Inner::Ext(ImplFileTypeExt::char_device())
     }
+    fn is_fifo(&self) -> bool {
+        self.0 == Inner::Ext(ImplFileTypeExt::fifo())
+    }
+    fn is_socket(&self) -> bool {
+        self.0 == Inner::Ext(ImplFileTypeExt::socket())
+    }
 }
 
 /// Extension trait to allow `is_block_device` etc. to be exposed by
@@ -119,6 +129,8 @@ impl FileTypeExt for FileType {
 pub trait _WindowsFileTypeExt {
     fn is_block_device(&self) -> bool;
     fn is_char_device(&self) -> bool;
+    /// Returns `true` if this file type is a named pipe.
     fn is_fifo(&self) -> bool;
+    /// Returns `true` if this file type is a socket.
     fn is_socket(&self) -> bool;
 }

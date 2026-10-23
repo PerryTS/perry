@@ -152,6 +152,10 @@ pub(crate) fn descriptor_type(ft: FileType) -> DescriptorType {
         DescriptorType::BlockDevice
     } else if ft.is_char_device() {
         DescriptorType::CharacterDevice
+    } else if ft.is_fifo() {
+        DescriptorType::Fifo
+    } else if ft.is_socket() {
+        DescriptorType::Socket
     } else {
         DescriptorType::Unknown
     }

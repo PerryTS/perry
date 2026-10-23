@@ -275,6 +275,10 @@ pub(crate) enum DescriptorType {
     SymbolicLink,
     /// The descriptor refers to a regular file inode.
     RegularFile,
+    #[cfg(unix)]
+    Fifo,
+    #[cfg(unix)]
+    Socket,
 }
 
 impl From<crate::filesystem::primitives::FileType> for DescriptorType {

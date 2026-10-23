@@ -1,5 +1,5 @@
 //! Native WASI 0.3 providers. Clock waits use the component's Turnloop driver.
-//! CLI streams reuse native Turnloop views; filesystem, sockets and HTTP remain.
+//! CLI and filesystem streams reuse native Turnloop views; sockets and HTTP remain.
 pub mod bindings {
     wasmtime::component::bindgen!({
         path: "wit-p3",
@@ -9,9 +9,15 @@ pub mod bindings {
             "wasi:cli/stdin": store | trappable,
             "wasi:cli/stdout": store | trappable,
             "wasi:cli/stderr": store | trappable,
+            "wasi:filesystem/types.[method]descriptor.read-via-stream": store | trappable,
+            "wasi:filesystem/types.[method]descriptor.write-via-stream": store | trappable,
+            "wasi:filesystem/types.[method]descriptor.append-via-stream": store | trappable,
+            "wasi:filesystem/types.[method]descriptor.read-directory": store | trappable,
             default: trappable,
         },
+        trappable_error_type: { "wasi:filesystem/types.error-code" => crate::p3::filesystem::FilesystemError },
         with: {
+            "wasi:filesystem/types.descriptor": crate::filesystem::Descriptor,
             "wasi:cli/terminal-input.terminal-input": crate::p3::cli::TerminalInput,
             "wasi:cli/terminal-output.terminal-output": crate::p3::cli::TerminalOutput,
         },
@@ -22,7 +28,9 @@ pub mod bindings {
 #[cfg(test)]
 mod canonical_tests;
 mod cli;
+mod filesystem;
 mod random;
+mod streams;
 #[cfg(test)]
 mod tests;
 
@@ -85,5 +93,25 @@ pub fn add_to_linker<T: WasiView + 'static>(linker: &mut Linker<T>) -> wasmtime:
         terminal_stdout,
         terminal_stderr
     );
+    bindings::filesystem::types::add_to_linker::<T, crate::filesystem::WasiFilesystem>(
+        linker,
+        |state| {
+            let view = state.ctx();
+            crate::filesystem::WasiFilesystemCtxView {
+                ctx: &mut view.ctx.filesystem,
+                table: view.table,
+            }
+        },
+    )?;
+    bindings::filesystem::preopens::add_to_linker::<T, crate::filesystem::WasiFilesystem>(
+        linker,
+        |state| {
+            let view = state.ctx();
+            crate::filesystem::WasiFilesystemCtxView {
+                ctx: &mut view.ctx.filesystem,
+                table: view.table,
+            }
+        },
+    )?;
     Ok(())
 }
