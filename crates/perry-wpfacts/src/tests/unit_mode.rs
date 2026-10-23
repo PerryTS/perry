@@ -2472,3 +2472,24 @@ fn a_closed_parameter_binding_holds_its_contract_classes_only() {
         pf.dump_text()
     );
 }
+
+#[test]
+fn a_returned_literal_carries_its_field_functions() {
+    // DECISIONS 78 (tssrc completions.ts:1376 `uniqueNames.has`, :1503
+    // `printer.printAndFormatNode`): a contract function returns a literal of
+    // its unit whose fields hold its functions. The result is the same layout
+    // contract as a published literal (`note_field_fns`): the caller calls
+    // `has` through its contract, so the literal does not escape as the
+    // receiver of an unknown call and its layout is not broken.
+    let src = r#"
+        function mk(m: Set<string>) {
+          return { has: (k: string) => m.has(k), add: (k: string) => { m.add(k); } };
+        }
+        function use(x: string) { const r = mk(new Set()); r.add(x); return r.has(x); }
+        console.log(use("a"), use("b"));
+        "#;
+    let pf = units(src);
+    assert!(pf.units.len() >= 2, "{}", pf.dump_text());
+    assert!(pf.broken.is_empty(), "{:?}\n{}", pf.broken, pf.dump_text());
+    assert!(proven(&pf, "has") && proven(&pf, "add"), "{}", pf.dump_text());
+}

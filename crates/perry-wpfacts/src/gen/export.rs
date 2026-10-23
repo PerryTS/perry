@@ -442,6 +442,12 @@ impl<'a> Gen<'a> {
                 if let TokKind::Obj(tm, _) = self.m.toks[t as usize] {
                     if self.contract_class(tm) {
                         changed |= self.m.give_out(tm, t);
+                    } else if !self.stand_in_cc.contains_key(&tm) && !self.ret_ok.contains(&t) {
+                        // A literal result is the same layout contract as a
+                        // published literal: its field functions are contract
+                        // functions the caller calls through their contract
+                        // (DECISIONS 78, as the value path below).
+                        changed |= self.note_field_fns(t);
                     }
                 }
                 changed |= self.fields_leave(t, r);
