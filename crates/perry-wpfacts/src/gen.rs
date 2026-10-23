@@ -1006,6 +1006,7 @@ impl<'a> Gen<'a> {
             toks.push(t);
         }
         let mut nested: Vec<(NodeId, &'a (String, Vec<String>, bool))> = Vec::new();
+        let mut fn_fields: Vec<(NodeId, &'a Vec<crate::units::FnContract>)> = Vec::new();
         for fld in &c.facts.fields {
             let a = self.m.atom(&fld.key);
             let n = self.m.field(inst, a);
@@ -1015,12 +1016,10 @@ impl<'a> Gen<'a> {
                 nested.push((n, fl));
                 continue;
             }
-            // A field holding only contract functions: their stand-ins.
+            // A field holding only contract functions: their stand-ins,
+            // made below.
             if let Some((_, fcs)) = c.field_fns.iter().find(|(k, _)| k == &fld.key) {
-                for fc in fcs {
-                    let v = self.stand_in_fn_of(mi, fc, Some((tm, false)));
-                    self.m.edge(v, n);
-                }
+                fn_fields.push((n, fcs));
                 continue;
             }
             // A data field that holds only primitives (DECISIONS 74): their
@@ -1054,6 +1053,15 @@ impl<'a> Gen<'a> {
             .node_named("classval", || format!("classval({})", c.name));
         self.m.add_tok(n, cobj);
         self.stand_ins.insert(c.display.clone(), (n, tm, toks));
+        // After the layout's stand-in exists: a field function whose result
+        // is this layout again (a literal returning itself) finds it
+        // (DECISIONS 78).
+        for (fnode, fcs) in fn_fields {
+            for fc in fcs {
+                let v = self.stand_in_fn_of(mi, fc, Some((tm, false)));
+                self.m.edge(v, fnode);
+            }
+        }
         for (fnode, (_, ds, prims)) in nested {
             for d in ds {
                 // A broken layout is ⊤ to every reader (§11.3).

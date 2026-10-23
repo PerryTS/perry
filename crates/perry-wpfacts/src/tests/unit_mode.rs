@@ -2492,4 +2492,18 @@ fn a_returned_literal_carries_its_field_functions() {
     assert!(pf.units.len() >= 2, "{}", pf.dump_text());
     assert!(pf.broken.is_empty(), "{:?}\n{}", pf.broken, pf.dump_text());
     assert!(proven(&pf, "has") && proven(&pf, "add"), "{}", pf.dump_text());
+    // A field function returning its own literal (a builder): the result
+    // layout's field functions name the same layout again, and the reader
+    // makes its stand-in once (tssrc overflowed the stack without that).
+    let src = r#"
+        function mk(m: Set<string>) {
+          const o = { add: (k: string) => { m.add(k); return o; }, has: (k: string) => m.has(k) };
+          return o;
+        }
+        function use(x: string) { return mk(new Set()).add(x).add("y").has(x); }
+        console.log(use("a"), use("b"));
+        "#;
+    let pf = units(src);
+    assert!(pf.units.len() >= 2, "{}", pf.dump_text());
+    assert!(proven(&pf, "has"), "{}", pf.dump_text());
 }
