@@ -1,4 +1,4 @@
-//! Only defining modules may publish user-visible class names.
+//! Only defining modules may publish class names and parent edges.
 
 use crate::{compile_module, CompileOptions, ImportedClass};
 use perry_hir::{Class, Module};
@@ -144,4 +144,56 @@ fn local_classes_register_their_recorded_display_name_once() {
         ir.contains(r#"c"Visible\00""#),
         "the recorded JS display name must be emitted"
     );
+}
+
+fn parent_registrations(ir: &str) -> Vec<&str> {
+    ir.lines()
+        .filter(|line| line.contains("call void @js_register_class_parent("))
+        .collect()
+}
+
+#[test]
+fn imported_classes_do_not_publish_parent_edges() {
+    for namespace in [None, Some("NS".to_string())] {
+        let module = Module::new("parent_consumer.ts");
+        let mut imported = imported_class();
+        imported.parent_name = Some("Error".to_string());
+        imported.local_alias = Some("Renamed".to_string());
+        imported.namespace = namespace;
+        let ir = ir(&module, vec![imported]);
+        assert!(ir.contains("call void @js_register_class_id(i32 42)"));
+        assert!(
+            parent_registrations(&ir).is_empty(),
+            "the defining module publishes the imported class's parent edge: {:?}",
+            parent_registrations(&ir)
+        );
+    }
+}
+
+#[test]
+fn local_class_aliases_publish_one_parent_edge() {
+    let mut module = Module::new("parent_source.ts");
+    let mut class = local_class(42, "InternalUniqueName");
+    class.aliases.push("SelfBinding".to_string());
+    class.extends_name = Some("Error".to_string());
+    module.classes.push(class);
+    let ir = ir(&module, Vec::new());
+    let registrations = parent_registrations(&ir);
+    assert_eq!(registrations.len(), 1, "{registrations:?}");
+    assert!(registrations[0].contains("i32 42, i32 4294901761"));
+}
+
+#[test]
+fn local_subclass_resolves_its_imported_parent_alias() {
+    let mut module = Module::new("local_child.ts");
+    let mut imported = imported_class();
+    imported.local_alias = Some("Renamed".to_string());
+    imported.parent_name = Some("Error".to_string());
+    let mut child = local_class(43, "Child");
+    child.extends_name = Some("Renamed".to_string());
+    module.classes.push(child);
+    let ir = ir(&module, vec![imported]);
+    let registrations = parent_registrations(&ir);
+    assert_eq!(registrations.len(), 1, "{registrations:?}");
+    assert!(registrations[0].contains("i32 43, i32 42"));
 }
