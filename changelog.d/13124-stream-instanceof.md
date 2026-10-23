@@ -1,0 +1,1 @@
+Link Web Stream subclass prototypes to their native bases and use the live prototype chain for instanceof, so class X extends TransformStream instances satisfy both instanceof X and instanceof TransformStream.
