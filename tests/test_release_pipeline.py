@@ -24,6 +24,43 @@ def shell(script, *args, cwd=ROOT, env=None):
 
 
 class ReleasePipeline(unittest.TestCase):
+    def test_manifest_version_is_separate_from_download_tag(self):
+        source = step('preflight', 'Resolve run mode')
+        cases = [
+            ('release', '', 'v1.2.3', 'release', 'v1.2.3', '1.2.3'),
+            ('workflow_dispatch', '', '', 'stage', '', ''),
+            ('workflow_dispatch', 'true', '', 'nightly',
+             'nightly-v1.2.3-20261023-r433a1-gaaaaaaaa', '1.2.3-20261023-r433a1-gaaaaaaaa'),
+            ('schedule', 'true', '', 'nightly',
+             'nightly-v1.2.3-20261023-r433a1-gaaaaaaaa', '1.2.3-20261023-r433a1-gaaaaaaaa'),
+        ]
+        for sha in [SHA, '01234567' + 'a' * 32]:
+            for event, nightly, release_tag, mode, tag, version in cases:
+                with self.subTest(event=event, nightly=nightly, sha=sha), tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    (root / 'Cargo.toml').write_text('[workspace.package]\nversion = "1.2.3"\n')
+                    output = root / 'output'
+                    result = shell('date() { echo 20261023; }\n' + source, cwd=root, env={
+                        'EVENT': event, 'NIGHTLY': nightly, 'RELEASE_TAG': release_tag,
+                        'CUT_RELEASE': '', 'EXISTING_TAG': '', 'CANDIDATE_SHA': sha,
+                        'SHA': sha, 'REF': 'refs/heads/main', 'REF_NAME': 'main',
+                        'RUN_NUMBER': '433', 'RUN_ATTEMPT': '1', 'GITHUB_OUTPUT': str(output),
+                    })
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    values = dict(line.split('=', 1) for line in output.read_text().splitlines())
+                    self.assertEqual((values['mode'], values['tag'], values['version']),
+                                     (mode, tag.replace('aaaaaaaa', sha[:8]), version.replace('aaaaaaaa', sha[:8])))
+                    self.assertEqual(values['checkout-sha'], sha)
+
+        # Both shells consume the resolved semver, while the artifact URL keeps
+        # the tag. In particular, neither reconstructs a version from that URL.
+        for name, argument in [('Unix', '"$RELEASE_VERSION"'),
+                               ('Windows', '$env:RELEASE_VERSION')]:
+            signing = next(s for s in JOBS['build']['steps']
+                           if s.get('name') == f'Sign authenticated CLI update manifest ({name})')
+            self.assertEqual(signing['env']['RELEASE_VERSION'], '${{ needs.preflight.outputs.version }}')
+            self.assertIn('--release-version ' + argument, signing['run'])
+
     def test_ancestor_comparison_is_complete_and_safe(self):
         source = step('await-tests', 'Wait for Tests')
         function = source[source.index('  plumbing_only() {'):source.index('  if gate_green "$SHA";')]

@@ -163,7 +163,7 @@ jobs:
               echo "::error::could not resolve a stable workspace version for the nightly build."
               exit 1
             fi
-            TAG="nightly-v${VERSION}-$(date -u +%Y%m%d)-r${RUN_NUMBER}a${RUN_ATTEMPT}-${SHA:0:8}"
+            TAG="nightly-v${VERSION}-$(date -u +%Y%m%d)-r${RUN_NUMBER}a${RUN_ATTEMPT}-g${SHA:0:8}"
           elif [ "$CUT_RELEASE" = "true" ] && [ -n "$EXISTING_TAG" ]; then
             echo "::error::cut_release and existing_tag are mutually exclusive — cut_release derives the tag from Cargo.toml."
             exit 1
@@ -235,6 +235,10 @@ jobs:
             exit 1
           fi
           VERSION="${TAG#v}"
+          if [ "$MODE" = nightly ]; then
+            # The URL keeps the nightly tag; the signed version must be semver.
+            VERSION="${TAG#nightly-v}"
+          fi
           {
             echo "mode=$MODE"
             echo "tag=$TAG"
@@ -1608,6 +1612,7 @@ jobs:
           PERRY_CLI_UPDATE_SIGNING_KEY: ${{ secrets.PERRY_CLI_UPDATE_SIGNING_KEY }}
           PERRY_CLI_UPDATE_KEY_ID: ${{ vars.PERRY_CLI_UPDATE_KEY_ID }}
           RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
         shell: bash
         run: |
           set -euo pipefail
@@ -1620,7 +1625,7 @@ jobs:
           URL="https://github.com/${{ github.repository }}/releases/download/${TAG}/${ARCHIVE}"
           "target/${{ matrix.target }}/prod/perry" updater sign-cli-manifest \
             --artifact "$ARCHIVE" --platform "$ARCHIVE" --url "$URL" \
-            --release-version "${TAG#v}" --key-id "$PERRY_CLI_UPDATE_KEY_ID" \
+            --release-version "$RELEASE_VERSION" --key-id "$PERRY_CLI_UPDATE_KEY_ID" \
             --secret-key-b64 "$PERRY_CLI_UPDATE_SIGNING_KEY" > "$ARCHIVE.update.json"
 
       - name: Sign authenticated CLI update manifest (Windows)
@@ -1629,6 +1634,7 @@ jobs:
           PERRY_CLI_UPDATE_SIGNING_KEY: ${{ secrets.PERRY_CLI_UPDATE_SIGNING_KEY }}
           PERRY_CLI_UPDATE_KEY_ID: ${{ vars.PERRY_CLI_UPDATE_KEY_ID }}
           RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -1641,7 +1647,7 @@ jobs:
           $url = "https://github.com/${{ github.repository }}/releases/download/$tag/$archive"
           & "target/${{ matrix.target }}/prod/perry.exe" updater sign-cli-manifest `
             --artifact $archive --platform $archive --url $url `
-            --release-version $tag.TrimStart('v') --key-id $env:PERRY_CLI_UPDATE_KEY_ID `
+            --release-version $env:RELEASE_VERSION --key-id $env:PERRY_CLI_UPDATE_KEY_ID `
             --secret-key-b64 $env:PERRY_CLI_UPDATE_SIGNING_KEY | Out-File -Encoding utf8 "$archive.update.json"
 
       # Release-asset uploads moved to the publish-assets job: in cut-release
