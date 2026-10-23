@@ -1442,8 +1442,8 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                     // The guard excluded a named layout, so no element
                     // descriptor can sit at the frontier (EK §3.1).
                     let pushed_bits = blk.bitcast_double_to_i64(&v);
-                    blk.array_note_ek_frontier(&payload, &length, &pushed_bits);
-                    blk.br(&merge_label);
+                    ctx.note_ek_frontier(&payload, &length, &pushed_bits);
+                    ctx.block().br(&merge_label);
                 }
 
                 // Realloc: capacity exhausted. Runtime allocates a

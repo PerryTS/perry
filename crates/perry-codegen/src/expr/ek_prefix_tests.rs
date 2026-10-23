@@ -127,8 +127,25 @@ fn regs(line: &str) -> Vec<&str> {
         .collect()
 }
 
-/// Stores of exactly `P + zext(index == P && bits != TAG_HOLE)` into P (the
-/// frontier row): a raise without the `index == P` test or without the hole
+/// The label of the block holding `line`.
+fn block_of<'a>(ll: &'a str, line: &str) -> Option<&'a str> {
+    let mut label = None;
+    for l in ll.lines() {
+        let first = l.split_whitespace().next().unwrap_or("");
+        if !l.starts_with(char::is_whitespace) && first.ends_with(':') {
+            label = Some(first.trim_end_matches(':'));
+        }
+        if l.trim() == line {
+            return label;
+        }
+    }
+    None
+}
+
+/// Stores of exactly `P + zext(bits != TAG_HOLE)` into P in a block entered
+/// only on the taken edge of `br i1 (index == P)` (the frontier row, with the
+/// raise branched so a store below the frontier skips the read-modify-write
+/// of the word): a raise without the `index == P` branch or without the hole
 /// test does not count.
 fn frontier_raises(ll: &str) -> usize {
     let ptrs = prefix_pointers(ll);
@@ -158,20 +175,20 @@ fn frontier_raises(ll: &str) -> usize {
         let Some(zext) = def(ll, z).filter(|d| d.contains("zext i1 ")) else {
             continue;
         };
-        let Some(and) = regs(zext)
-            .first()
-            .and_then(|r| def(ll, r))
-            .filter(|d| d.contains("and i1 "))
-        else {
+        let not_hole = regs(zext).first().and_then(|r| def(ll, r)).is_some_and(|d| {
+            d.contains("icmp ne i64 ") && d.contains(crate::nanbox::TAG_HOLE_I64)
+        });
+        let Some(raise_block) = block_of(ll, &store) else {
             continue;
         };
-        let conds: Vec<&str> = regs(and).iter().filter_map(|r| def(ll, r)).collect();
-        let at_frontier = conds
-            .iter()
-            .any(|d| d.contains("icmp eq i32 ") && regs(d).contains(load));
-        let not_hole = conds
-            .iter()
-            .any(|d| d.contains("icmp ne i64 ") && d.contains(crate::nanbox::TAG_HOLE_I64));
+        let taken = format!(", label %{raise_block}, label %");
+        let at_frontier = ll.lines().map(str::trim).any(|l| {
+            l.starts_with("br i1 ")
+                && l.contains(&taken)
+                && regs(l).first().and_then(|c| def(ll, c)).is_some_and(|d| {
+                    d.contains("icmp eq i32 ") && regs(d).contains(load)
+                })
+        });
         if at_frontier && not_hole {
             n += 1;
         }
@@ -319,7 +336,7 @@ fn store_ir(stmt: Stmt) -> String {
 }
 
 /// EK §3.1 frontier row on every inline writer: a store at `index == P`
-/// raises P (`P + zext(index == P && value != hole)`).
+/// raises P (`P + zext(value != hole)` behind a branch on `index == P`).
 #[test]
 fn inline_writers_raise_the_frontier() {
     let push = store_ir(Stmt::Expr(Expr::ArrayPush {

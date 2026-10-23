@@ -523,9 +523,8 @@ pub(crate) fn lower_index_set_fast(
         // Both guard tiers decline descriptor-bearing arrays, and the slot is
         // below length (an own value, or a hole fill proved below length):
         // the frontier row of EK §3.1.
-        let blk = ctx.block();
-        let stored_bits = blk.bitcast_double_to_i64(&stored_value);
-        blk.array_note_ek_frontier(&arr_handle, &idx_i32, &stored_bits);
+        let stored_bits = ctx.block().bitcast_double_to_i64(&stored_value);
+        ctx.note_ek_frontier(&arr_handle, &idx_i32, &stored_bits);
     }
     ctx.block().br(&merge_label);
     if require_numeric_layout {
@@ -664,9 +663,6 @@ pub(crate) fn lower_index_set_fast(
             let new_len = blk.add(I32, &idx_i32, "1");
             let len_ptr = blk.inttoptr(I64, &arr_handle);
             blk.store(I32, &new_len, &len_ptr);
-            // The new length covers `idx`: the frontier row of EK §3.1.
-            let ext_bits = blk.bitcast_double_to_i64(&ext_value);
-            blk.array_note_ek_frontier(&arr_handle, &idx_i32, &ext_bits);
             // Flag transition: holes were created iff idx > length. Then the
             // DENSE bit (0x80) must drop and the HOLES bit (0x1000) records
             // the still-valid raw-f64-or-holes invariant (branchless header
@@ -682,7 +678,10 @@ pub(crate) fn lower_index_set_fast(
             let with_holes = blk.or(I16, &without_dense, "4096"); // 0x1000
             let new_reserved = blk.select(I1, &created, I16, &with_holes, &reserved);
             blk.store(I16, &new_reserved, &reserved_ptr);
-            blk.br(&merge_label);
+            // The new length covers `idx`: the frontier row of EK §3.1.
+            let ext_bits = blk.bitcast_double_to_i64(&ext_value);
+            ctx.note_ek_frontier(&arr_handle, &idx_i32, &ext_bits);
+            ctx.block().br(&merge_label);
         }
     } else if require_numeric_layout {
         // Feedback-build numeric shape: dense append only (idx == length was
@@ -698,8 +697,8 @@ pub(crate) fn lower_index_set_fast(
         blk.store(I32, &new_len, &len_ptr);
         // The new length covers `idx`: the frontier row of EK §3.1.
         let ext_bits = blk.bitcast_double_to_i64(&ext_value);
-        blk.array_note_ek_frontier(&arr_handle, &idx_i32, &ext_bits);
-        blk.br(&merge_label);
+        ctx.note_ek_frontier(&arr_handle, &idx_i32, &ext_bits);
+        ctx.block().br(&merge_label);
     } else {
         let blk = ctx.block();
         let (element_addr, element_ptr) = element_slot(blk, &arr_handle, &idx_i32);
@@ -724,8 +723,8 @@ pub(crate) fn lower_index_set_fast(
         blk.store(I32, &new_len, &len_ptr);
         // The new length covers `idx`: the frontier row of EK §3.1.
         let ext_bits = blk.bitcast_double_to_i64(&ext_value);
-        blk.array_note_ek_frontier(&arr_handle, &idx_i32, &ext_bits);
-        blk.br(&merge_label);
+        ctx.note_ek_frontier(&arr_handle, &idx_i32, &ext_bits);
+        ctx.block().br(&merge_label);
     }
 
     // SLOW: realloc needed. Call the runtime, write new ptr to local.

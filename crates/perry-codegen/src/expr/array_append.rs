@@ -239,8 +239,8 @@ pub(super) fn try_lower(
                 blk.store(I32, &next, &arr);
                 // Admitted only without a named layout: no element
                 // descriptor at the frontier (EK §3.1).
-                blk.array_note_ek_frontier(&handle, &length, &value_bits);
-                blk.br(&done);
+                ctx.note_ek_frontier(&handle, &length, &value_bits);
+                ctx.block().br(&done);
             }
             ctx.current_block = slow_idx;
             // Keep root allocas in the recognized load/store protocol. Their
