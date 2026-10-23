@@ -66,6 +66,7 @@ pub mod bindings {
             "wasi:sockets/network.error-code" => crate::p2::SocketError },
         with: {
             "wasi:io": crate::io::bindings::wasi::io,
+            "wasi:http": crate::http::p2::bindings::http,
             "wasi:sockets/udp.udp-socket": crate::p2::udp::UdpSocket,
             "wasi:sockets/udp.incoming-datagram-stream": crate::p2::udp::IncomingDatagramStream,
             "wasi:sockets/udp.outgoing-datagram-stream": crate::p2::udp::OutgoingDatagramStream,
@@ -88,6 +89,7 @@ pub mod bindings {
             "wasi:sockets/network.error-code" => crate::p2::SocketError },
             with: {
                 "wasi:io": crate::io::sync::wasi::io,
+                "wasi:http": crate::http::p2::bindings::http,
                 "wasi:sockets/network": crate::p2::bindings::sockets::network,
                 "wasi:sockets/instance-network": crate::p2::bindings::sockets::instance_network,
                 "wasi:sockets/ip-name-lookup": crate::p2::bindings::sockets::ip_name_lookup,
@@ -115,6 +117,28 @@ impl HasData for WasiIo {
 }
 
 fn common<T: WasiView + 'static>(linker: &mut Linker<T>) -> wasmtime::Result<()> {
+    crate::http::p2::bindings::http::types::add_to_linker::<T, crate::http::p2::WasiHttp>(
+        linker,
+        &Default::default(),
+        |t| {
+            let view = t.ctx();
+            crate::http::p2::WasiHttpCtxView {
+                ctx: &mut view.ctx.http,
+                table: view.table,
+            }
+        },
+    )?;
+    crate::http::p2::bindings::http::outgoing_handler::add_to_linker::<T, crate::http::p2::WasiHttp>(
+        linker,
+        |t| {
+            let view = t.ctx();
+            crate::http::p2::WasiHttpCtxView {
+                ctx: &mut view.ctx.http,
+                table: view.table,
+            }
+        },
+    )?;
+
     bindings::sockets::network::add_to_linker::<T, crate::sockets::WasiSockets>(
         linker,
         &Default::default(),

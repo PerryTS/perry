@@ -132,8 +132,11 @@ moving GC, plus opt-in WASI
 providers. See [the component record](WASI_COMPONENTS.md) for the separately
 qualified host-defined resources, native/guest deferred cleanup, command
 worlds and TCP/UDP/DNS interoperability. Their combined integration is
-qualified on Linux; HTTP, blocking-I/O cancellation, broader platform qualification
-and engine shipping costs remain open. The Tokio-free Turnloop provider
+qualified on Linux. HTTP client resources and transport now have separate Linux
+engine/canonical-component qualification, including real HTTP payloads and TLS
+verification. HTTP server/incoming handling, TypeScript HTTP GC qualification,
+blocking-I/O cancellation, broader platform qualification and engine shipping
+costs remain open. The Tokio-free Turnloop provider
 replacement is now selected and qualified on Linux in both component directions;
 its [receipt](validation/wasi-turnloop-selected-20261023.json) records the
 validation-only upstream repairs that still require a registry release.

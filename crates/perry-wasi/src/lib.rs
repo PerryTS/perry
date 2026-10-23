@@ -1,5 +1,6 @@
 //! Turnloop WASI providers selected by the component host: I/O, clocks, entropy,
-//! CLI, capability filesystems, DNS, TCP and UDP. HTTP and native WASI 0.3 remain incomplete.
+//! CLI, capability filesystems, DNS, TCP, UDP and HTTP clients. Native HTTP server
+//! handling and WASI 0.3 remain incomplete.
 pub mod cli;
 pub mod clocks;
 mod error;
@@ -22,6 +23,7 @@ pub struct WasiCtx {
     pub random: random::WasiRandomCtx,
     pub filesystem: filesystem::WasiFilesystemCtx,
     pub sockets: sockets::WasiSocketsCtx,
+    pub http: http::p2::WasiHttpCtx,
     // Native I/O is stopped when its component context is disposed, regardless
     // of whether a resource's weak submitter still exists in the table.
     driver: Driver,
@@ -35,6 +37,7 @@ impl WasiCtx {
             random: random::WasiRandomCtx::default(),
             filesystem: filesystem::WasiFilesystemCtx::default(),
             sockets: sockets::WasiSocketsCtx::new(driver.submitter()),
+            http: http::p2::WasiHttpCtx::new(driver.submitter()),
             driver,
         })
     }

@@ -26,7 +26,9 @@ and interrupt handle. There are no implicit filesystem, network, environment,
 or stdio capabilities. Application imports must be supplied explicitly.
 Opt-in WASI Preview 2 providers are available through `ComponentOptions.wasi`.
 Application-defined resource imports use the factories described below.
-`wasi:http` is not yet qualified.
+`wasi:http` client imports are implemented; their Linux engine and canonical
+component qualification is described below. Incoming/server handling and native
+WASI 0.3 remain in progress.
 
 ### Native WASI commands
 
@@ -108,7 +110,9 @@ not time spent in blocking host I/O. Host I/O cancellation remains future work.
 With providers enabled, the `wasi:` import namespace is provider-owned;
 application callbacks cannot override it. Generated `ApplicationImports`
 omits those interfaces while preserving required custom functions. Unsupported
-interfaces still fail instantiation; enabling WASI does not enable `wasi:http`.
+interfaces still fail instantiation. Enabling WASI registers `wasi:http/types`
+and `wasi:http/outgoing-handler`; HTTP requests require TCP plus the exact
+destination grants above, and DNS permission when the authority is a hostname.
 Perry's `perry-wasi` providers adapt the WASI 0.2.12 contracts from Wasmtime
 48.0.5 and use Turnloop for native I/O. The selected host dependency graph and
 workspace gate are Tokio-free. The required Turnloop repairs are validated with
@@ -122,7 +126,22 @@ verify six UDP and three TCP payloads. See the
 [selection receipt](validation/wasi-turnloop-selected-20261023.json).
 Other platform and production-package qualification remain. Historical receipts
 below predate this provider replacement.
-Native WASI 0.3 async interfaces and HTTP are not implemented by this provider.
+The HTTP client uses bounded owned body channels, verified TLS and Turnloop's
+HTTP/1.1 codec on the same context driver. Uploads progress before the response
+future is polled; early final responses can reject unfinished uploads. Header
+views retain their resource parents, request options are consumed at dispatch,
+and body streams must be dropped before their body is finished. Body resources
+can outlive their request/response handles. Finishing an incoming body drains to
+actual trailers; dropping it cancels its transport. DNS permission does not grant
+any resolved IP. There is no automatic redirect, decompression or HTTP/2 support.
+
+The [HTTP client receipt](validation/wasi-http-client-20261023.json) records Linux
+provider/host tests, a real WASM HTTP round trip through both provider linkers,
+and the production Host facade's opt-in, TCP, DNS and exact-address denials.
+This does not yet qualify Perry-generated TypeScript HTTP guests under moving GC,
+HTTP incoming/server handling, other native platforms or final shipping packages.
+The experimental `informational-outbound-responses` interface is disabled.
+Native WASI 0.3 async interfaces remain unimplemented.
 
 Flag declarations are limited to 1–32 labels, matching the
 [Component Model binary format](https://github.com/WebAssembly/component-model/blob/main/design/mvp/Binary.md#type-definitions).
@@ -354,8 +373,9 @@ or symlink escapes; an explicit write grant produced the expected host file.
 Unit tests additionally executed a declared WASI clock import and actual TCP
 bind grants/denials. That initial provider qualification did not include
 UDP/DNS interoperability; the subsequent networking qualification is recorded
-below. Blocking-I/O cancellation and HTTP remain unqualified. Command
-execution is qualified separately above.
+below. That receipt excludes blocking-I/O cancellation and HTTP; the later
+HTTP client qualification is recorded above. Command execution is qualified
+separately above.
 
 The subsequent networking profile passed on source
 `adf7e5229147e74865dc8de76ff01ca6c988ccfb`: 23 engine and 20 runtime component
@@ -433,8 +453,8 @@ substitute for those regressions.
 
 Still required before claiming the full milestone:
 
-- Qualify the remaining capability operations,
-  HTTP and blocking-I/O cancellation independently.
+- Qualify the remaining capability operations, incoming HTTP/server handling,
+  Perry-generated HTTP guests under moving GC, and blocking-I/O cancellation.
 - Qualify supported host platforms. [PR #12985](https://github.com/PerryTS/perry/pull/12985)
   added the component acceptance suite to required execution checks; integration
   with that workflow exercises these extended resource fixtures.
@@ -456,7 +476,8 @@ logs. The [platform receipt](validation/wasi-native-host-platforms-20261021.json
 records downloaded artifact digests, retained file hashes and CI-recorded build
 artifact identities. Windows native hosting remains pending. This qualification
 covers native hosting, not Perry-authored component output on macOS or final
-production packages. HTTP, blocking-I/O cancellation and P3 remain open.
+production packages. HTTP on these host platforms, blocking-I/O cancellation
+and P3 remain open.
 
 ## Continuous execution checks
 

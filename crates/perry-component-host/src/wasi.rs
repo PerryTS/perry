@@ -1,5 +1,8 @@
 //! Per-instance WASI Preview 2 capabilities. Nothing inherits ambient authority.
 #[cfg(test)]
+#[path = "wasi_http_tests.rs"]
+mod http_execution_tests;
+#[cfg(test)]
 #[path = "wasi_network_tests.rs"]
 mod network_execution_tests;
 
@@ -110,6 +113,16 @@ impl WasiOptions {
             .allow_tcp(self.network.tcp)
             .allow_udp(self.network.udp)
             .allow_ip_name_lookup(self.network.dns);
+        ctx.http.policy = perry_wasi::http::transport::DestinationPolicy {
+            tcp: self.network.tcp,
+            dns: self.network.dns,
+            addresses: self
+                .network
+                .addresses
+                .iter()
+                .map(|entry| (entry.address, entry.port))
+                .collect(),
+        };
         let addresses = self.network.addresses.clone();
         ctx.sockets.socket_addr_check(move |address, _use| {
             let allowed = addresses.iter().any(|entry| entry.allows(address));

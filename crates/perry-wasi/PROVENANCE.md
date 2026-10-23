@@ -290,3 +290,50 @@ the released Turnloop repairs; no publish-age exception or shipping path overrid
 has been introduced. The actual validation dependency graph and workspace Tokio
 inventory remain Tokio-free. This is not a claim that the unchanged registry lock
 can build these new dependency edges with `--locked`.
+
+## Canonical HTTP client interfaces
+
+The base provider world now imports `wasi:http/types` and `outgoing-handler`.
+Both linkers register the same HTTP resources with their existing I/O resource
+identities. The `http-provider` world also generates incoming-handler export
+bindings for subsequent server integration. `http/p2/{handlers,error,options}.rs`
+adapt Wasmtime 48.0.5 `wasi-http/src/p2/{types_impl,error}.rs` and
+`request_options.rs`; `wit/deps/http.wit` comes from that crate's WIT dependencies.
+No upstream HTTP execution, ambient runtime or worker implementation is copied.
+
+All stable HTTP resource methods are implemented. Headers are immutable child
+resources of their parent request/response; clones are independent mutable
+snapshots. Body streams are children of bodies, while bodies may outlive the
+request or response that produced them. Request options are consumed by the
+outgoing handler, including typed failure paths. Futures preserve pending,
+ready, and consumed states; readiness uses the same WASI poll implementation.
+Stream errors retain native HTTP error payloads through `http-error-code`.
+The upstream reverse conversion of response-header-size to request-header-size
+is corrected and covered by a regression case. Response outparams deliver owned
+native response bodies through a bounded one-shot channel; dropping an unset
+outparam closes that channel as a failure, rather than producing a response.
+The experimental informational-outbound-responses feature is disabled by the
+linker's default options; its unavailable method cannot report fake success.
+
+The production component Host copies its existing TCP, DNS and exact-address
+network grants into the HTTP context as owned data. There is no additional
+ambient permission and no guest callback on the native driver thread.
+
+Immutable Linux snapshot `turnloop-provider-v59-src` passes 220 provider tests,
+41 host tests and 26/25 driver tests in development/production panic-abort,
+plus doctests, all-target Clippy, stdio overlap and the unchanged Tokio gate.
+Seven additional WIT tests cover ownership, options consumption, typed errors,
+request/response streaming, trailer completion, response outparams, and a real
+WASM component through both linkers. The production Host facade additionally
+executes that component with denied TCP, DNS, IP and port capabilities, confirms
+that no denied request connects, and permits a hostname resolving to the exact
+granted endpoint. The component and peer check actual HTTP payloads; every call
+leaves an empty resource table. This includes semver linking of 0.2.0 guest
+imports to the 0.2.12 provider contracts.
+
+See `docs/validation/wasi-http-client-20261023.json` and the integration report's
+`turnloop-http-wit` evidence directory. This qualifies the client at the engine
+and canonical WASM boundary. Perry-generated TypeScript HTTP/GC fixtures,
+incoming-handler execution/server transport, other platforms and final packages
+remain required. The dependency release/registry-lock limitations documented in
+the native transport section still apply.

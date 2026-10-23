@@ -1,9 +1,10 @@
-//! HTTP resource and streaming primitives. Native transport and WIT registration
-//! are being integrated; this module does not yet enable `wasi:http` imports.
+//! WASI HTTP resources, canonical interfaces and owned HTTP/1.1 client transport.
+//! Incoming-handler invocation and server transport are still being integrated.
 pub mod body;
-pub mod transport;
 mod error;
 mod fields;
+pub mod p2;
+pub mod transport;
 pub use error::Error;
 pub use fields::{FieldMap, FieldMapError};
 
