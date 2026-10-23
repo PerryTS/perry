@@ -354,3 +354,26 @@ fn source_prepared_after_the_rewrite_is_reused_only_for_the_same_rewrite_output(
         .expect("same rewrite output");
     assert_eq!(taken.source, prepared.source);
 }
+
+#[test]
+fn explicit_commonjs_entry_gets_bindings_without_source_tokens() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = CompilationContext::new(dir.path().to_path_buf());
+    let class = PrepClass {
+        wrap_eligible: true,
+        is_json: false,
+        is_text: false,
+        is_entry: true,
+    };
+    for (filename, wrapped) in [("entry.cjs", true), ("entry.mjs", false)] {
+        let path = dir.path().join(filename);
+        let prepared = super::source_prep::prepare_from_raw(
+            "console.log(typeof module, typeof require, typeof exports);".to_string(),
+            &path,
+            class,
+            &super::source_prep::PrepInputs::of(&ctx, None),
+        )
+        .unwrap();
+        assert_eq!(prepared.was_cjs_wrapped, wrapped, "{filename}");
+    }
+}

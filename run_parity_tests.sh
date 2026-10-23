@@ -1299,8 +1299,10 @@ case "$TEST_SUITE" in
         # strict-mode ESM for Node and for Perry alike. `-name '*.ts'` does NOT
         # match `foo.cts` (the suffix is `.cts`), so such a fixture was invisible
         # to the suite — a dark test, green because it never ran.
+        # Standalone test_*.cjs entries also keep their CommonJS format;
+        # other .cjs files here are support modules, not standalone tests.
         done < <(find "$TEST_DIR" -maxdepth 1 -type f \
-            \( -name '*.ts' -o -name '*.cts' -o -name '*.mts' \) | sort)
+            \( -name '*.ts' -o -name '*.cts' -o -name '*.mts' -o -name 'test_*.cjs' \) | sort)
         ;;
     parity|smoke)
         while IFS= read -r test_file; do
