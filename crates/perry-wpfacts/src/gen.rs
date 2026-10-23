@@ -103,7 +103,8 @@ pub struct Gen<'a> {
     /// Store effects of other units performed here (decision 17): the
     /// (instance, key) pairs done, the unknown value and the writer site.
     effects_done: crate::pts::FxHashSet<(Tok, Atom)>,
-    effect_src: Option<(NodeId, SiteId)>,
+    effect_site: Option<SiteId>,
+    effect_srcs: FxHashMap<Option<u16>, NodeId>,
     pub(crate) stand_in_fc: FxHashMap<Tok, &'a crate::units::FnContract>,
     /// Classes with a parent value (§17.2), fed after the bodies.
     pub(crate) parent_values: Vec<(u32, TmplId, Option<String>)>,
@@ -336,7 +337,8 @@ impl<'a> Gen<'a> {
             stand_in_cc: FxHashMap::default(),
             closed_ctors: Vec::new(),
             effects_done: Default::default(),
-            effect_src: None,
+            effect_site: None,
+            effect_srcs: Default::default(),
             stand_in_fc: FxHashMap::default(),
             parent_values: Vec::new(),
             parent_fed: Default::default(),
@@ -1019,6 +1021,22 @@ impl<'a> Gen<'a> {
                     let v = self.stand_in_fn_of(mi, fc, Some((tm, false)));
                     self.m.edge(v, n);
                 }
+                continue;
+            }
+            // A data field that holds only primitives (DECISIONS 74): their
+            // kinds, as the defining unit's solve found them with every
+            // unit's store effects (DECISIONS 73) performed; a read before
+            // the field exists is undefined.
+            let k = &fld.kind;
+            if fld.data_field
+                && !k.top
+                && k.objs.is_empty()
+                && k.funcs == 0
+                && k.builtin_objs == 0
+                && k.prims != 0
+            {
+                let undef = if fld.definite { 0 } else { prim::UNDEF };
+                self.m.add_prim(n, k.prims | undef);
                 continue;
             }
             self.m

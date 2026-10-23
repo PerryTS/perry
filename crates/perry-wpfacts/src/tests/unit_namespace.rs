@@ -213,7 +213,9 @@ fn an_enum_object_is_a_contract_named_by_its_enum() {
         .find(|t| t.display == "a.ts:enum C")
         .unwrap_or_else(|| panic!("enum C in\n{}", pf.dump_text()));
     let x = c.fields.iter().find(|f| f.key == "X").expect("member X");
-    assert!(!x.readonly && x.kind.top, "{}", pf.dump_text());
+    // Rewritten for DECISIONS 73 (principle: a store effect carries the kinds
+    // it stores): the field holds the stored primitive, not ⊤.
+    assert!(!x.readonly && x.kind.prims & crate::model::prim::STR != 0, "{}", pf.dump_text());
     // A new key is the owner's shape transition (rewritten for design §16,
     // principle: a literal layout's new key is performed by its defining
     // unit): C gains `Z`. A computed key is beyond the contract: C breaks.
@@ -319,7 +321,9 @@ fn a_literal_nested_in_a_contract_result_is_a_nested_contract() {
         .find(|t| t.fields.iter().any(|f| f.key == "facts"))
         .unwrap_or_else(|| panic!("{}", pf.dump_text()));
     let f = inner.fields.iter().find(|f| f.key == "facts").unwrap();
-    assert!(!f.readonly && f.kind.top, "{}", pf.dump_text());
+    // Rewritten for DECISIONS 73 (principle: a store effect carries the kinds
+    // it stores): the field holds the stored primitive, not ⊤.
+    assert!(!f.readonly && f.kind.prims & crate::model::prim::STR != 0, "{}", pf.dump_text());
     let u = "import { get } from './a'; const t = get(2).targetRange; (t as any).extra = 1; function k() { return t.range; } console.log(k());";
     let pf = units_of(&[("a", a), ("u", u)]);
     assert!(pf.broken.is_empty(), "{:?}\n{}", pf.broken, pf.dump_text());

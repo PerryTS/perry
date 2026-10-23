@@ -1075,9 +1075,19 @@ impl Model {
             }
             Cons::Arith { dst, add } => {
                 let mut out = 0u16;
-                if !toks.is_empty() {
-                    // Objects go through ToPrimitive (user valueOf/toString).
-                    out |= prim::NUM | prim::BIGINT | if add { prim::STR } else { 0 };
+                // Objects go through ToPrimitive (user valueOf/toString).
+                let objs = prim::NUM | prim::BIGINT | if add { prim::STR } else { 0 };
+                // A described parameter's marker is no value (DECISIONS 74);
+                // an argument marker is none while it stands for such
+                // markers alone, and adds the kinds if it leaves (75).
+                if toks.iter().any(|&t| !self.beside_values(t)) {
+                    out |= objs;
+                } else {
+                    for &t in toks {
+                        if self.beside_markers.contains(&t) {
+                            self.beside_arith.entry(t).or_default().push((dst, objs));
+                        }
+                    }
                 }
                 if prim & prim::BIGINT != 0 {
                     out |= prim::BIGINT;
@@ -1310,7 +1320,7 @@ impl Model {
         if let Some(tm) = tm.filter(|tm| self.foreign.contains_key(tm)) {
             match key {
                 Key::Named(a) if effect => {
-                    self.foreign_stores.insert((tm, a));
+                    self.foreign_stores.insert((tm, a, src));
                     let r = self.reason("stored into another unit's object");
                     self.sink_node(src, r);
                 }

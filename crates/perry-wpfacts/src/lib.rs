@@ -179,8 +179,9 @@ pub struct ProgramFacts {
     /// the class's module path and name (`ClassContract::closed`).
     pub(crate) ctor_args_out: Vec<((String, String), units::ArgContract)>,
     /// Its store effects into other units' literal layouts and class
-    /// instances (decision 17).
-    pub(crate) stores_out: Vec<(String, String)>,
+    /// instances (decision 17): display, key and the stored kinds
+    /// (`Gen::store_effects`).
+    pub(crate) stores_out: Vec<(String, String, Option<u16>)>,
     pub(crate) reports: Vec<String>,
     module_digests: Vec<u64>,
 }

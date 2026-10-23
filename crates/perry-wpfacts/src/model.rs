@@ -838,8 +838,9 @@ pub struct Model {
     pub foreign_written: crate::pts::FxHashSet<TmplId>,
     /// Existing data fields of other units' literal layouts and class
     /// instances this unit stored into: store effects, not census reports
-    /// (decision 17).
-    pub foreign_stores: crate::pts::FxHashSet<(TmplId, Atom)>,
+    /// (decision 17), with the node of each stored value (its kinds are
+    /// published, DECISIONS 73).
+    pub foreign_stores: crate::pts::FxHashSet<(TmplId, Atom, NodeId)>,
     /// Published functions with a contract (design §11.2): their results
     /// are checked after the solve instead of escaping.
     pub contract_fns: crate::pts::FxHashSet<FnIdx>,
@@ -849,6 +850,16 @@ pub struct Model {
     /// Per closed function: which parameters every caller passes a
     /// described value (no unknown one) (decision 17).
     pub closed_described: FxHashMap<FnIdx, Vec<bool>>,
+    /// Argument markers (and their reach markers) that stand only for
+    /// markers beside their values (`beside_values`, DECISIONS 74, 75).
+    /// A marker leaves it when a member that is not beside links in.
+    pub beside_markers: crate::pts::FxHashSet<Tok>,
+    /// Per beside argument marker: the argument markers it is a member of
+    /// that are beside too (they leave with it, DECISIONS 75).
+    pub beside_up: FxHashMap<Tok, Vec<Tok>>,
+    /// Per beside argument marker: the arithmetic results that took no
+    /// object kinds for it (DECISIONS 75); they take them if it leaves.
+    pub beside_arith: FxHashMap<Tok, Vec<(NodeId, u16)>>,
     /// Decision 19: the reason a closed function is published to the
     /// module's other units (`Gen::unit_boundary`). Published that way its
     /// token does not escape: its parameters hold the closed contract's
@@ -1471,6 +1482,9 @@ impl Model {
                 self.arg_bits[w] |= 1 << (r & 63);
                 self.arg_members.insert(r, Vec::new());
                 self.keyed_parent.insert(r, (t, a));
+                if self.beside_markers.contains(&t) {
+                    self.beside_markers.insert(r);
+                }
             }
         }
         r
@@ -1520,6 +1534,23 @@ impl Model {
     #[inline]
     pub(crate) fn marker_is_top(&self, t: Tok) -> bool {
         marker_top_bit(&self.marker_top, t)
+    }
+
+    /// A marker that stands for no value of its own (DECISIONS 74): one of
+    /// a closed function's described parameter (decision 17), what it
+    /// reaches, or an argument marker all of whose members are such
+    /// markers (DECISIONS 75), and what that reaches. The callers' values
+    /// are the contract's, beside it in every node it reaches (they arrive
+    /// together), so it adds no kinds.
+    pub(crate) fn beside_values(&self, t: Tok) -> bool {
+        match self.param_marker.get(&t) {
+            Some(&(f, i)) => self
+                .closed_described
+                .get(&f)
+                .and_then(|d| d.get(i as usize))
+                .is_some_and(|&d| d),
+            None => self.beside_markers.contains(&t),
+        }
     }
 
     /// A parameter marker or an argument marker (DECISIONS 44).
@@ -1575,6 +1606,12 @@ impl Model {
         self.marker_reach.insert(t, r);
         self.reach_marker.insert(r);
         self.arg_marker_of.insert(n, t);
+        // It stands for its members alone (DECISIONS 75): beside while it
+        // has none, and while each one that links in is beside
+        // (`link_marker`). The caller links the arriving markers before
+        // the marker reaches any node.
+        self.beside_markers.insert(t);
+        self.beside_markers.insert(r);
         let any = self.field_any(t);
         self.add_tok(any, r);
         let rany = self.field_any(r);
@@ -1589,6 +1626,15 @@ impl Model {
             return;
         }
         self.arg_members.get_mut(&r).unwrap().push(m);
+        if self.beside_markers.contains(&r) {
+            match self.beside_values(m) {
+                true if !self.param_marker.contains_key(&m) => {
+                    self.beside_up.entry(m).or_default().push(r)
+                }
+                true => {}
+                false => self.leave_beside(r),
+            }
+        }
         let u = self.marker_use.get(&r).copied().unwrap_or(0);
         if u != 0 {
             self.mark_use(m, u);
@@ -1602,6 +1648,27 @@ impl Model {
         // of what `r` reaches through `k` so far (later ones: `keyed_use`).
         for (a, b) in self.keyed_uses.get(&r).cloned().unwrap_or_default() {
             self.keyed_use(m, a, b);
+        }
+    }
+
+    /// Argument marker `t` stands for a value of its own now (DECISIONS
+    /// 75): so do what it reaches and the argument markers it is a member
+    /// of, and each arithmetic result that skipped it takes the object
+    /// kinds it would have taken. Beside only ever turns off: monotone.
+    pub(crate) fn leave_beside(&mut self, t: Tok) {
+        let mut st = vec![t];
+        while let Some(x) = st.pop() {
+            if !self.beside_markers.remove(&x) {
+                continue;
+            }
+            for (dst, out) in self.beside_arith.remove(&x).unwrap_or_default() {
+                self.add_prim(dst, out);
+            }
+            st.extend(self.beside_up.remove(&x).unwrap_or_default());
+            st.extend(self.marker_reach.get(&x).copied());
+            if let Some(ks) = self.keyed_reach.get(&x) {
+                st.extend(ks.iter().map(|&(_, r)| r));
+            }
         }
     }
 

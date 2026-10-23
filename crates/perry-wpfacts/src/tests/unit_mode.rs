@@ -10,7 +10,9 @@ pub(super) fn gains_key(pf: &ProgramFacts, key: &str) -> bool {
         t.adds_keys > 0
             && t.fields
                 .iter()
-                .any(|f| f.key == key && !f.readonly && f.kind.top)
+                // Rewritten for DECISIONS 73 (principle: a store effect carries the kinds
+                // it stores): the field holds the stored primitive, not ⊤.
+                .any(|f| f.key == key && !f.readonly && f.writers_post > 0)
     })
 }
 
@@ -790,7 +792,9 @@ fn a_namespace_import_sees_only_the_real_exports() {
         .find(|t| t.birth_keys == ["a", "b"])
         .unwrap_or_else(|| panic!("cfg in\n{}", pf.dump_text()));
     let a = cfg.fields.iter().find(|f| f.key == "a").expect("field a");
-    assert!(!a.readonly && a.kind.top, "{}", pf.dump_text());
+    // Rewritten for DECISIONS 73 (principle: a store effect carries the kinds
+    // it stores): the field holds the stored primitive, not ⊤.
+    assert!(!a.readonly && a.kind.prims & crate::model::prim::STR != 0, "{}", pf.dump_text());
     let u = "import * as m from './t'; (m.cfg as any).z = 'x'; console.log(m.useA());";
     let pf = units_of(&[("t", t), ("u", u)]);
     assert!(pf.broken.is_empty(), "{:?}\n{}", pf.broken, pf.dump_text());
@@ -1051,7 +1055,9 @@ fn a_result_holding_another_units_layout_forwards_its_contract() {
         pf.templates
             .iter()
             .filter(|t| t.fields.iter().any(|f| f.key == "zz"))
-            .all(|t| t.adds_keys > 0 && t.fields.iter().any(|f| f.key == "q" && f.kind.top)),
+            // Rewritten for DECISIONS 73 (principle: a store effect carries the kinds
+            // it stores): `q` holds the stored number, not ⊤.
+            .all(|t| t.adds_keys > 0 && t.fields.iter().any(|f| f.key == "q" && f.kind.prims & crate::model::prim::NUM != 0)),
         "{}",
         pf.dump_text()
     );
@@ -1282,7 +1288,9 @@ fn a_key_another_unit_adds_to_a_literal_is_a_shape_transition() {
         .iter()
         .find(|f| f.key == "seen")
         .expect("field seen");
-    assert!(!seen.readonly && seen.kind.top, "{}", pf.dump_text());
+    // Rewritten for DECISIONS 73 (principle: a store effect carries the kinds
+    // it stores): the field holds the stored primitive, not ⊤.
+    assert!(!seen.readonly && seen.kind.prims & crate::model::prim::BOOL != 0, "{}", pf.dump_text());
     // A computed-key store still opens the layout: a census report (§5).
     let src = r#"
         function grow(c: any, k: any) { c[k] = 1; }
@@ -2286,6 +2294,76 @@ fn a_closed_class_constructor_holds_what_its_news_pass() {
         "{}",
         pf.dump_text()
     );
+}
+
+#[test]
+fn a_store_effect_carries_the_kinds_it_stores() {
+    // DECISIONS 73/74 (binarytrees_arena per unit): `make` does `a.size++`
+    // on another unit's Arena. The store effect carries the stored kinds and
+    // the reader reads the field's published kinds, so `size` stays a number
+    // in its owner, as in the whole-program solve (not ⊤).
+    let src = r#"
+        class Arena {
+          left: Int32Array; right: Int32Array; size: number = 0;
+          constructor(n: number) { this.left = new Int32Array(n); this.right = new Int32Array(n); }
+        }
+        function make(a: Arena, d: number): number {
+          let l = -1; let r = -1;
+          if (d > 0) { l = make(a, d - 1); r = make(a, d - 1); }
+          const i = a.size++; a.left[i] = l; a.right[i] = r; return i;
+        }
+        function check(a: Arena, i: number): number {
+          const l = a.left[i]; if (l < 0) return 1; return 1 + check(a, l) + check(a, a.right[i]);
+        }
+        function fresh(k: number): Arena { return new Arena(1 << k); }
+        const s = fresh(6);
+        console.log(check(s, make(s, 3)));
+        "#;
+    let pf = units(src);
+    assert!(pf.broken.is_empty(), "{:?}\n{}", pf.broken, pf.dump_text());
+    let k = &field(tmpl(&pf, "Arena"), "size").kind;
+    assert!(
+        !k.top && k.objs.is_empty() && k.prims == crate::model::prim::NUM,
+        "{k:?}\n{}",
+        pf.dump_text()
+    );
+    // Soundness: another unit stores a string into it; the owner's field
+    // holds strings too, and a reader adding to it may make strings.
+    let src = r#"
+        class Arena {
+          size: number = 0;
+          constructor() {}
+        }
+        function bump(a: Arena): void { (a as any).size = "x"; }
+        function grow(a: Arena): number { const i = a.size++; return i; }
+        function fresh(): Arena { return new Arena(); }
+        const s = fresh();
+        bump(s);
+        console.log(grow(s));
+        "#;
+    let pf = units(src);
+    assert!(pf.broken.is_empty(), "{:?}\n{}", pf.broken, pf.dump_text());
+    let k = &field(tmpl(&pf, "Arena"), "size").kind;
+    assert!(
+        !k.top && k.prims & crate::model::prim::STR != 0,
+        "{k:?}\n{}",
+        pf.dump_text()
+    );
+    // An object stored by another unit widens the field as before.
+    let src = r#"
+        class Arena {
+          size: number = 0;
+          constructor() {}
+        }
+        function bump(a: Arena): void { (a as any).size = {}; }
+        function fresh(): Arena { return new Arena(); }
+        const s = fresh();
+        bump(s);
+        console.log(s.size);
+        "#;
+    let pf = units(src);
+    let k = &field(tmpl(&pf, "Arena"), "size").kind;
+    assert!(k.top || !k.objs.is_empty(), "{k:?}\n{}", pf.dump_text());
 }
 
 #[test]
