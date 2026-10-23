@@ -191,9 +191,9 @@ impl FnInfoFacts {
         self.flags |= FN_GENERATOR;
     }
 
-    /// `async function*`: async and async-generator both.
+    /// `async function*`: the common generator bit plus its async subtype.
     pub(crate) fn set_async_generator(&mut self) {
-        self.flags |= FN_ASYNC_GENERATOR | FN_ASYNC;
+        self.flags |= FN_GENERATOR | FN_ASYNC_GENERATOR | FN_ASYNC;
     }
 
     /// Function kind without retained text (see
@@ -653,6 +653,16 @@ mod tests {
                 FN_REST_USER | FN_HAS_LENGTH | FN_ARROW | FN_COMPILED_BODY
             )]
         );
+    }
+
+    #[test]
+    fn async_generator_info_retains_common_generator_kind() {
+        let mut state = FnInfoState::default();
+        state.request("async_gen");
+        let facts = state.facts_mut("async_gen");
+        facts.set_async_generator();
+        let expected = FN_ASYNC | FN_GENERATOR | FN_ASYNC_GENERATOR;
+        assert_eq!(facts.flags & expected, expected);
     }
 
     /// Encoded `plain_params` is the body's `params + 1` unless it bundles a
