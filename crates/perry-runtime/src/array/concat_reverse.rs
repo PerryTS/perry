@@ -538,22 +538,6 @@ fn reverse_throw_type_error(message: &[u8]) -> ! {
     let err = crate::error::js_typeerror_new(msg);
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
-
-/// `fill` over an array that holds element descriptors: each index is the
-/// spec's `Set(O, k, value, true)`, so an accessor's setter runs and a
-/// read-only element throws, where a raw slot write would bypass both.
-unsafe fn fill_through_set(
-    mut arr: *mut ArrayHeader,
-    value: f64,
-    start: usize,
-    end: usize,
-) -> *mut ArrayHeader {
-    for index in start..end {
-        arr = super::indexing::js_array_set_f64_extend_strict(arr, index as u32, value);
-    }
-    arr
-}
-
 /// EK §3.1 `fill(v, s, e)`: the slots `[s, e)` now hold `value`, so a range
 /// that starts inside the prefix extends it to `e` (descriptor clamp inside).
 unsafe fn ek_after_fill(arr: *mut ArrayHeader, value: f64, start: u32, end: u32) {
