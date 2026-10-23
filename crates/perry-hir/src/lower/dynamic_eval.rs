@@ -96,7 +96,11 @@ pub(crate) fn exit_function(ctx: &mut LoweringContext) {
 
 /// An object literal with a getter (and, for mutable bindings, a setter) per
 /// name, so the interpreter reads and writes the native binding itself.
-fn bindings_object(ctx: &mut LoweringContext, names: &[(String, bool)]) -> Result<Expr> {
+fn bindings_object(
+    ctx: &mut LoweringContext,
+    names: &[(String, bool)],
+    explicit_scope: bool,
+) -> Result<Expr> {
     let mut members = String::new();
     for (name, settable) in names {
         members.push_str(&format!("get [{name:?}]() {{ return {name}; }},"));
@@ -111,7 +115,84 @@ fn bindings_object(ctx: &mut LoweringContext, names: &[(String, bool)]) -> Resul
     let ast::ModuleItem::Stmt(ast::Stmt::Expr(e)) = &parsed.body[0] else {
         unreachable!()
     };
-    lower_expr(ctx, &e.expr)
+    // The interpreter resolves the explicitly supplied eval scope (including
+    // its prototype chain) before these outer native bindings. Repeating that
+    // lookup inside each accessor adds captures and safepoints unnecessarily.
+    // Keep ordinary `with` frames, and keep all frames when a strict eval has
+    // no explicit scope object to perform that lookup.
+    let saved_frames = ctx.with_env_stack.clone();
+    if explicit_scope {
+        ctx.with_env_stack.retain(|frame| {
+            !ctx.dynamic_eval_scopes
+                .iter()
+                .any(|(id, _)| *id == frame.local_id)
+        });
+    }
+    let result = lower_expr(ctx, &e.expr);
+    ctx.with_env_stack = saved_frames;
+    Ok(inline_bindings_builder(result?))
+}
+
+/// The synthetic accessors need closures, but constructing their container
+/// does not. Keep the container rooted in the caller instead of emitting a
+/// one-shot builder function and its GC metadata for every direct eval.
+fn inline_bindings_builder(expr: Expr) -> Expr {
+    let Expr::Call { callee, args, .. } = &expr else {
+        return expr;
+    };
+    let Expr::Closure {
+        params,
+        body,
+        captures_this: false,
+        ..
+    } = callee.as_ref()
+    else {
+        return expr;
+    };
+    if params.len() != 1 || args.len() != 1 {
+        return expr;
+    }
+    let id = params[0].id;
+    let Some((Stmt::Return(Some(Expr::LocalGet(result))), definitions)) = body.split_last() else {
+        return expr;
+    };
+    // Only the compiler-generated static accessor definitions qualify. If
+    // object-literal lowering changes shape, retain its normal semantics.
+    if *result != id
+        || !definitions.iter().all(|stmt| {
+            matches!(stmt,
+                Stmt::Expr(Expr::Call { callee, args, .. })
+                    if matches!(callee.as_ref(), Expr::ExternFuncRef { name, .. }
+                        if name == "js_object_define_accessor")
+                    && args.len() == 4
+                    && matches!(&args[0], Expr::LocalGet(target) if *target == id)
+                    && matches!(&args[1], Expr::String(_))
+            )
+        })
+    {
+        return expr;
+    }
+    let Expr::Call {
+        callee, mut args, ..
+    } = expr
+    else {
+        unreachable!()
+    };
+    let Expr::Closure { body, .. } = *callee else {
+        unreachable!()
+    };
+    let sequence = body
+        .into_iter()
+        .map(|stmt| match stmt {
+            Stmt::Expr(expr) | Stmt::Return(Some(expr)) => expr,
+            _ => unreachable!(),
+        })
+        .collect();
+    Expr::ScopedTemp {
+        id,
+        value: Box::new(args.remove(0)),
+        body: Box::new(Expr::Sequence(sequence)),
+    }
 }
 
 pub(crate) fn lower(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<Expr> {
@@ -156,14 +237,14 @@ pub(crate) fn lower(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
     }
     let (own_bindings, outer_bindings, scope_object) = match scope {
         Some((id, _)) => (
-            bindings_object(ctx, &own)?,
-            bindings_object(ctx, &outer)?,
+            bindings_object(ctx, &own, true)?,
+            bindings_object(ctx, &outer, true)?,
             Expr::LocalGet(id),
         ),
         None => {
             own.extend(outer);
             (
-                bindings_object(ctx, &own)?,
+                bindings_object(ctx, &own, false)?,
                 Expr::Undefined,
                 Expr::Undefined,
             )
@@ -254,4 +335,19 @@ pub(crate) fn lower(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
         value: Box::new(value),
         body: Box::new(Expr::Sequence(args)),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn eval_binding_objects_do_not_emit_builder_functions() {
+        let source = "function run(source) { let value = 3; eval(source); return value; }";
+        let parsed = perry_parser::parse_typescript(source, "eval-builders.cjs").unwrap();
+        let hir =
+            super::super::lower_module(&parsed, "eval-builders", "eval-builders.cjs").unwrap();
+        let dump = format!("{hir:?}");
+        assert!(dump.contains("js_eval_in_scope"));
+        assert!(dump.contains("js_object_define_accessor"));
+        assert!(!dump.contains("name: \"__perry_obj_iife\""), "{dump}");
+    }
 }
