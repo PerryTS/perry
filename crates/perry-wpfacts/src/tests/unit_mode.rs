@@ -2507,3 +2507,26 @@ fn a_returned_literal_carries_its_field_functions() {
     assert!(pf.units.len() >= 2, "{}", pf.dump_text());
     assert!(proven(&pf, "has"), "{}", pf.dump_text());
 }
+
+#[test]
+fn a_forwarded_result_layout_leaves_no_fields() {
+    // DECISIONS 79 (tssrc tsbuildPublic.ts: `createSolutionBuilder` returns
+    // `createSolutionBuilderWorker(..)`, a literal whose closure returns the
+    // `info` literal of a third unit). The forwarding unit's result is the
+    // worker's layout, a stand-in forwarded with its owner's contract: its
+    // fields do not leave there, so `info`'s layout is not broken and the
+    // reader's `i.project` is proven.
+    let src = r#"
+        function next(n: number) { return { project: "p" + n, status: n }; }
+        function worker(n: number) {
+          return { getNext: (k: number) => next(n + k), close: () => n };
+        }
+        function create(n: number) { return worker(n); }
+        function use(n: number) { const i = create(n).getNext(1); return i.project + i.status; }
+        console.log(use(1), use(2));
+        "#;
+    let pf = units(src);
+    assert!(pf.units.len() >= 4, "{}", pf.dump_text());
+    assert!(pf.broken.is_empty(), "{:?}\n{}", pf.broken, pf.dump_text());
+    assert!(proven(&pf, "project") && proven(&pf, "status"), "{}", pf.dump_text());
+}
