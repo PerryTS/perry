@@ -41,7 +41,7 @@
 //!
 //! At the park site, after [`super::idle_reclaim`]'s full has completed — the
 //! sweep is what makes a page's `dead_bytes` accounting current, and selection
-//! reads exactly that. Gates, all O(1):
+//! reads exactly that. Gates, in order (1-3 are O(1)):
 //!
 //! 1. **Residue.** The old-gen free list holds at least
 //!    [`IDLE_COMPACT_MIN_RESIDUE_BYTES`] and at least
@@ -51,6 +51,20 @@
 //!    the last compaction, so selection never runs on stale page metadata and
 //!    an unproductive compaction is not retried against an unchanged heap.
 //! 3. **Rate.** At least [`IDLE_COMPACT_MIN_INTERVAL_MS`] since the last one.
+//! 4. **Prediction.** The block selection the pass would make, run on the same
+//!    page metadata, must promise at least [`IDLE_COMPACT_PRODUCTIVE_MIN_BYTES`]
+//!    of whole blocks. The pass's cost is not proportional to what it moves —
+//!    the forwarding repair rewrites every live old-to-old edge (~50 ms on the
+//!    opencode v2.1.2 server's ~100 MB old gen) — so a pass that could not be
+//!    productive even by its own promise is not run. Not O(1): it walks the old
+//!    page metadata once, and only after gates 1-3 pass. A declined
+//!    prediction consumes the freshness credit, because the page metadata it
+//!    read changes only at the next full's sweep.
+//!
+//! **A missed prediction** (the pass released less than half of what it
+//! promised, #9772) says the selection's promise is not trustworthy on this
+//! heap. The backoff goes straight to its cap instead of doubling: measured on
+//! the opencode server, passes promised 4 MB / 2 MB and released 1.1 / 1.8 MB.
 //!
 //! **Productivity** is old-gen occupancy — `old_gen_in_use_bytes`, the sum of
 //! the live blocks' bump offsets. For a SWEEP that meter is wrong and
@@ -119,6 +133,10 @@ crate::perry_thread_local! {
     /// in the test process.
     #[cfg(test)]
     static TEST_FORCE_OWED: Cell<Option<bool>> = const { Cell::new(None) };
+    /// Passes gates 1-3 (residue, freshness, rate) so the prediction gate can
+    /// be exercised against the real page metadata.
+    #[cfg(test)]
+    static TEST_PASS_CHEAP_GATES: Cell<bool> = const { Cell::new(false) };
 }
 
 static ATTEMPTS: AtomicU64 = AtomicU64::new(0);
@@ -255,7 +273,53 @@ fn should_compact(now: u64) -> bool {
             now,
         }
     });
-    compaction_owed(inputs)
+    #[cfg(test)]
+    let cheap_gates_pass = TEST_PASS_CHEAP_GATES.with(Cell::get) || compaction_owed(inputs);
+    #[cfg(not(test))]
+    let cheap_gates_pass = compaction_owed(inputs);
+    if !cheap_gates_pass {
+        return false;
+    }
+    let predicted = super::oldgen_defrag::idle_compact_predicted_release_bytes();
+    if prediction_worth_a_pause(predicted) {
+        return true;
+    }
+    // Nothing the next park could see differently until a full re-sweeps the
+    // pages, so wait for one instead of re-walking the metadata every park.
+    STATE.with(|s| s.borrow_mut().fulls_since_compact = 0);
+    PREDICTION_DECLINED.fetch_add(1, Ordering::Relaxed);
+    if gc_diag_enabled() {
+        eprintln!(
+            "[gc-idle-compact] declined predicted={predicted} bar={IDLE_COMPACT_PRODUCTIVE_MIN_BYTES} reusable={}",
+            inputs.residue
+        );
+    }
+    false
+}
+
+/// Gate 4: would the pass be productive by its own selection's promise?
+pub(super) fn prediction_worth_a_pause(predicted_release: usize) -> bool {
+    predicted_release >= IDLE_COMPACT_PRODUCTIVE_MIN_BYTES
+}
+
+/// The backoff after a pass: reset on a productive one, capped on a missed
+/// prediction, doubled otherwise.
+pub(super) fn next_backoff_shift(shift: u32, productive: bool, kept_promise: bool) -> u32 {
+    if productive {
+        0
+    } else if !kept_promise {
+        IDLE_COMPACT_MAX_BACKOFF_SHIFT
+    } else {
+        (shift + 1).min(IDLE_COMPACT_MAX_BACKOFF_SHIFT)
+    }
+}
+
+/// Owed compactions declined because their predicted release was below the bar.
+static PREDICTION_DECLINED: AtomicU64 = AtomicU64::new(0);
+
+/// See [`PREDICTION_DECLINED`].
+pub fn idle_compact_prediction_declined() -> u64 {
+    PREDICTION_DECLINED.load(Ordering::Relaxed)
 }
 
 /// Run one compacting collection if one is owed. Returns whether it ran, so
@@ -325,11 +389,7 @@ pub(super) fn maybe_compact(now: u64) -> bool {
         st.attempts += 1;
         st.last_compact_ms = now;
         st.fulls_since_compact = 0;
-        st.backoff_shift = if productive {
-            0
-        } else {
-            (st.backoff_shift + 1).min(IDLE_COMPACT_MAX_BACKOFF_SHIFT)
-        };
+        st.backoff_shift = next_backoff_shift(st.backoff_shift, productive, kept_promise);
         if gc_diag_enabled() {
             eprintln!(
                 "[gc-idle-compact] done old_in_use={before_occupancy}->{after_occupancy} released={released} \
@@ -361,7 +421,7 @@ pub fn idle_compact_broken_promises() -> u64 {
 pub(super) fn emit_diag() {
     eprintln!(
         "[gc-idle-compact] enabled={} attempts={} productive={} broken_promises={} released_bytes={} \
-         pause_us_total={} pause_us_max={} wake_declined={} backoff_shift={}",
+         pause_us_total={} pause_us_max={} wake_declined={} prediction_declined={} backoff_shift={}",
         idle_compact_enabled(),
         idle_compact_attempts(),
         idle_compact_productive(),
@@ -370,6 +430,7 @@ pub(super) fn emit_diag() {
         idle_compact_pause_us_total(),
         idle_compact_pause_us_max(),
         idle_compact_wake_declined(),
+        idle_compact_prediction_declined(),
         idle_compact_backoff_shift(),
     );
 }
@@ -395,6 +456,15 @@ pub(super) mod test_support {
 
     pub(crate) fn thread_attempts() -> u64 {
         STATE.with(|s| s.borrow().attempts)
+    }
+
+    /// See `TEST_PASS_CHEAP_GATES`.
+    pub(crate) fn set_test_pass_cheap_gates(pass: bool) {
+        TEST_PASS_CHEAP_GATES.with(|c| c.set(pass));
+    }
+
+    pub(crate) fn thread_fulls_since_compact() -> u64 {
+        STATE.with(|s| s.borrow().fulls_since_compact)
     }
 
     /// Whether the gates say a compaction is owed at `now` — the decision
@@ -443,6 +513,7 @@ pub(super) mod test_support {
         fn drop(&mut self) {
             set_test_enabled(None);
             set_test_force_owed(None);
+            set_test_pass_cheap_gates(false);
             reset_state();
         }
     }

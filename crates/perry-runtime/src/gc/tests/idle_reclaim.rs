@@ -289,23 +289,144 @@ fn a_parked_heap_is_re_armed_by_elapsed_idle_alone() {
 }
 
 #[test]
-fn an_unproductive_elapsed_streak_doubles_the_wait_and_then_disarms() {
-    // The anti-spin argument, and it needs no new rule: the elapsed arm is
-    // priced by the SAME `backoff_shift` as the activity arm, so a heap with
-    // nothing to give is asked at 15 s, 30 s, 60 s, 120 s, 240 s — and then not
-    // again, because the arm is disarmed at the maximum shift. Without the
-    // disarm an idle process would pay a whole-heap mark every 8 minutes
-    // forever.
+fn a_retaining_heap_gets_one_full_and_then_stops() {
+    // GCI2: a heap that keeps its data. The first full finds nothing, and on
+    // an idle heap nothing dies after it, so every later full would re-trace
+    // the same live set for the same nothing. Measured on the opencode v2.1.2
+    // server: reducer fulls at 24/84/204/445 s freed 0.5-2.8 MB each for ~1.6G
+    // instructions. The unproductive full ENDS the sequence: no elapsed-idle
+    // follow-up at any wait, until the mutator does something.
     //
-    // Two sabotages, one per guard. Drop `<< st.backoff_shift` from the wait
-    // and the "must not re-arm before the doubled wait" assertions fail. Drop
-    // the `backoff_shift < IDLE_RECLAIM_MAX_BACKOFF_SHIFT` term and the final
-    // assertion fails: the reducer keeps waking a heap that has already proved
-    // five times over that it has nothing to give.
+    // Sabotage: drop the `followup_justified` term from the elapsed arm in
+    // `start_reason` and this fails at the first doubled wait (the old 15/30/
+    // 60/120/240 s streak comes back).
     let _guard = CopyingNurseryTestGuard::new(1);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _reducer = IdleReclaimTestGuard::new(0);
-    // No litter: every full is unproductive, so every attempt doubles the wait.
+    // No litter: the full is unproductive.
+
+    external_collection_observed_at(0);
+    set_test_now_ms(Some(IDLE_RECLAIM_QUIET_MS));
+    assert!(resumes(idle_reclaim_park_hook(1000)));
+    drive_until_idle(IDLE_RECLAIM_QUIET_MS, 1000);
+    assert_eq!(thread_attempts(), 1, "LIVE SUBJECT: the one full ran");
+    assert_eq!(idle_reclaim_backoff_shift(), 1, "and it was unproductive");
+    assert!(
+        super::super::policy::old_gen_growth_since_last_full_bytes()
+            < IDLE_RECLAIM_PRODUCTIVE_MIN_BYTES,
+        "premise: nothing grew old-gen since the full"
+    );
+
+    let elapsed_before = idle_reclaim_elapsed_starts();
+    let mut now = IDLE_RECLAIM_QUIET_MS;
+    for shift in 1..=IDLE_RECLAIM_MAX_BACKOFF_SHIFT {
+        now += IDLE_RECLAIM_REARM_MS << shift;
+        set_test_now_ms(Some(now));
+        assert!(
+            parks(idle_reclaim_park_hook(1000)),
+            "an unproductive full ends the sequence: no follow-up at the {shift}-shift wait"
+        );
+    }
+    let far = now + (IDLE_RECLAIM_REARM_MS << IDLE_RECLAIM_MAX_BACKOFF_SHIFT) * 16;
+    set_test_now_ms(Some(far));
+    assert!(parks(idle_reclaim_park_hook(1000)));
+    assert_eq!(thread_attempts(), 1, "one full, then silence");
+    assert_eq!(idle_reclaim_elapsed_starts(), elapsed_before);
+
+    // The mutator allocating again (collections it completed) re-arms it.
+    external_collection_observed_at(far);
+    external_collection_observed_at(far + 1);
+    set_test_now_ms(Some(far + 1 + IDLE_RECLAIM_QUIET_MS));
+    assert!(
+        resumes(idle_reclaim_park_hook(1000)),
+        "mutator activity re-arms the reducer through the activity arm"
+    );
+    assert_eq!(thread_attempts(), 2);
+    drive_until_idle(far + 1 + IDLE_RECLAIM_QUIET_MS, 1000);
+}
+
+#[test]
+fn a_heap_with_real_garbage_is_asked_while_it_pays() {
+    // The other direction: while each full frees past the bar, the next one is
+    // justified and runs at the plain re-arm wait, with no mutator collection
+    // anywhere. The first full that does not pay ends the sequence.
+    //
+    // Sabotage: make `followup_justified` return false and this fails at the
+    // first follow-up; make it return true and it fails at the final park.
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _reducer = IdleReclaimTestGuard::new(0);
+
+    litter_old_gen_with_dead_promises();
+    external_collection_observed_at(0);
+    set_test_now_ms(Some(IDLE_RECLAIM_QUIET_MS));
+    assert!(resumes(idle_reclaim_park_hook(1000)));
+    drive_until_idle(IDLE_RECLAIM_QUIET_MS, 1000);
+    assert_eq!(thread_attempts(), 1);
+    assert_eq!(
+        idle_reclaim_backoff_shift(),
+        0,
+        "the litter made it productive"
+    );
+
+    let elapsed_before = idle_reclaim_elapsed_starts();
+    let mut now = IDLE_RECLAIM_QUIET_MS;
+    const PAYING_FOLLOWUPS: u64 = 3;
+    for round in 1..=PAYING_FOLLOWUPS {
+        // Garbage the previous full could not have seen.
+        litter_old_gen_with_dead_promises();
+        now += IDLE_RECLAIM_REARM_MS;
+        set_test_now_ms(Some(now));
+        assert!(
+            resumes(idle_reclaim_park_hook(1000)),
+            "round {round}: the previous full paid, so the follow-up is justified"
+        );
+        drive_until_idle(now, 1000);
+        assert_eq!(thread_attempts(), 1 + round);
+        assert_eq!(
+            idle_reclaim_backoff_shift(),
+            0,
+            "round {round}: the follow-up found the new garbage"
+        );
+    }
+
+    // No new garbage: the next follow-up is still justified by the last
+    // yield, runs, and finds nothing.
+    now += IDLE_RECLAIM_REARM_MS;
+    set_test_now_ms(Some(now));
+    assert!(resumes(idle_reclaim_park_hook(1000)));
+    drive_until_idle(now, 1000);
+    assert_eq!(thread_attempts(), 2 + PAYING_FOLLOWUPS);
+    assert_eq!(
+        idle_reclaim_backoff_shift(),
+        1,
+        "the last full found nothing"
+    );
+    assert_eq!(
+        idle_reclaim_elapsed_starts(),
+        elapsed_before + PAYING_FOLLOWUPS + 1,
+        "LIVE SUBJECT: every follow-up came from the elapsed arm"
+    );
+
+    // ...and that ends it.
+    let far = now + (IDLE_RECLAIM_REARM_MS << IDLE_RECLAIM_MAX_BACKOFF_SHIFT) * 16;
+    set_test_now_ms(Some(far));
+    assert!(parks(idle_reclaim_park_hook(1000)));
+    assert_eq!(thread_attempts(), 2 + PAYING_FOLLOWUPS);
+}
+
+#[test]
+fn old_gen_growth_after_an_unproductive_full_justifies_a_follow_up() {
+    // The second justification: after a full that found nothing, old-gen the
+    // mutator allocated since (without completing a collection) is what a
+    // full could now find dead. Growth past the productive bar re-arms the
+    // elapsed arm, at the doubled wait.
+    //
+    // Sabotage: drop the `growth >= productive_bar(..)` term from
+    // `followup_justified` and the follow-up never starts.
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _reducer = IdleReclaimTestGuard::new(0);
 
     external_collection_observed_at(0);
     set_test_now_ms(Some(IDLE_RECLAIM_QUIET_MS));
@@ -314,56 +435,34 @@ fn an_unproductive_elapsed_streak_doubles_the_wait_and_then_disarms() {
     assert_eq!(thread_attempts(), 1);
     assert_eq!(idle_reclaim_backoff_shift(), 1);
 
-    let elapsed_before = idle_reclaim_elapsed_starts();
-    let mut now = IDLE_RECLAIM_QUIET_MS;
-    let mut attempts = 1;
-    for shift in 1..IDLE_RECLAIM_MAX_BACKOFF_SHIFT {
-        let wait = IDLE_RECLAIM_REARM_MS << shift;
-        set_test_now_ms(Some(now + wait - 1));
-        assert!(
-            parks(idle_reclaim_park_hook(1000)),
-            "shift {shift}: must not re-arm before the doubled wait"
-        );
-        assert_eq!(thread_attempts(), attempts);
-
-        now += wait;
-        set_test_now_ms(Some(now));
-        assert!(
-            resumes(idle_reclaim_park_hook(1000)),
-            "shift {shift}: the doubled wait has elapsed"
-        );
-        attempts += 1;
-        assert_eq!(thread_attempts(), attempts);
-        drive_until_idle(now, 1000);
-        assert_eq!(
-            idle_reclaim_backoff_shift(),
-            shift + 1,
-            "still unproductive: the shift must keep growing"
-        );
-    }
-    assert_eq!(idle_reclaim_backoff_shift(), IDLE_RECLAIM_MAX_BACKOFF_SHIFT);
-    assert_eq!(
-        idle_reclaim_elapsed_starts(),
-        elapsed_before + u64::from(IDLE_RECLAIM_MAX_BACKOFF_SHIFT - 1),
-        "every follow-up in the streak must have come from the elapsed arm"
+    litter_old_gen_with_dead_promises();
+    assert!(
+        super::super::policy::old_gen_growth_since_last_full_bytes()
+            >= IDLE_RECLAIM_PRODUCTIVE_MIN_BYTES,
+        "LIVE SUBJECT: the litter must read as old-gen growth since the full"
     );
-
-    // Disarmed. However long the heap stays idle, it is not asked again.
-    let far = now + (IDLE_RECLAIM_REARM_MS << IDLE_RECLAIM_MAX_BACKOFF_SHIFT) * 16;
-    set_test_now_ms(Some(far));
+    let wait = IDLE_RECLAIM_REARM_MS << 1;
+    set_test_now_ms(Some(IDLE_RECLAIM_QUIET_MS + wait - 1));
     assert!(
         parks(idle_reclaim_park_hook(1000)),
-        "at the maximum shift the elapsed arm is disarmed: the hook must park, \
-         not open another whole-heap mark on a heap that has nothing to give"
+        "growth justifies the follow-up, not an earlier one"
     );
+    let at = IDLE_RECLAIM_QUIET_MS + wait;
+    set_test_now_ms(Some(at));
+    let elapsed_before = idle_reclaim_elapsed_starts();
+    assert!(
+        resumes(idle_reclaim_park_hook(1000)),
+        "growth re-arms the elapsed arm"
+    );
+    assert_eq!(thread_attempts(), 2);
+    assert_eq!(idle_reclaim_elapsed_starts(), elapsed_before + 1);
+    drive_until_idle(at, 1000);
     assert_eq!(
-        thread_attempts(),
-        attempts,
-        "at the maximum shift the elapsed arm must stop entirely: a heap with \
-         nothing to give gets no new collection"
+        idle_reclaim_backoff_shift(),
+        0,
+        "and the growth was garbage"
     );
 }
-
 #[test]
 fn idle_reclaim_rate_floor_holds_between_two_owed_fulls() {
     let _guard = CopyingNurseryTestGuard::new(1);

@@ -346,3 +346,72 @@ fn the_hole_purge_drops_only_the_excluded_pages() {
     );
     super::super::old_free::old_free_reset_for_test();
 }
+
+/// GCI2 gate 4: a pass whose own selection promises less than the
+/// productivity bar is not worth its whole-heap forwarding repair.
+#[test]
+fn a_prediction_below_the_bar_is_not_worth_a_pause() {
+    use super::super::idle_compact::{prediction_worth_a_pause, IDLE_COMPACT_PRODUCTIVE_MIN_BYTES};
+    assert!(prediction_worth_a_pause(IDLE_COMPACT_PRODUCTIVE_MIN_BYTES));
+    assert!(!prediction_worth_a_pause(
+        IDLE_COMPACT_PRODUCTIVE_MIN_BYTES - 1
+    ));
+    assert!(
+        !prediction_worth_a_pause(0),
+        "nothing selectable, nothing to run"
+    );
+}
+
+/// GCI2: a missed prediction caps the backoff instead of doubling it; a kept
+/// but unproductive one doubles; a productive one resets.
+#[test]
+fn a_missed_prediction_caps_the_backoff() {
+    use super::super::idle_compact::{next_backoff_shift, IDLE_COMPACT_MAX_BACKOFF_SHIFT};
+    assert_eq!(
+        next_backoff_shift(0, false, false),
+        IDLE_COMPACT_MAX_BACKOFF_SHIFT
+    );
+    assert_eq!(
+        next_backoff_shift(2, false, false),
+        IDLE_COMPACT_MAX_BACKOFF_SHIFT
+    );
+    assert_eq!(next_backoff_shift(0, false, true), 1);
+    assert_eq!(
+        next_backoff_shift(IDLE_COMPACT_MAX_BACKOFF_SHIFT, false, true),
+        IDLE_COMPACT_MAX_BACKOFF_SHIFT
+    );
+    assert_eq!(next_backoff_shift(3, true, true), 0);
+    assert_eq!(
+        next_backoff_shift(3, true, false),
+        0,
+        "productive wins over a missed promise"
+    );
+}
+
+/// GCI2: on a heap with nothing selectable, an owed compaction is declined by
+/// its prediction, counts the decline, and consumes the freshness credit so
+/// the next park does not re-walk unchanged page metadata.
+#[test]
+fn a_declined_prediction_waits_for_the_next_full() {
+    let _isolation = copying_nursery_isolation_lock();
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _guard = IdleCompactTestGuard::new();
+    // Residue/freshness/rate pass by construction; the prediction is the live
+    // part: the test process's old gen has no whole block worth 4 MiB to empty.
+    set_test_pass_cheap_gates(true);
+    super::super::idle_compact::note_reclaim_full_completed();
+    assert_eq!(thread_fulls_since_compact(), 1);
+    let declined_before = super::super::idle_compact::idle_compact_prediction_declined();
+    assert!(!gates_say_compact(IDLE_COMPACT_MIN_INTERVAL_MS));
+    assert_eq!(
+        super::super::idle_compact::idle_compact_prediction_declined(),
+        declined_before + 1,
+        "LIVE SUBJECT: the prediction gate is what declined"
+    );
+    set_test_pass_cheap_gates(false);
+    assert_eq!(
+        thread_fulls_since_compact(),
+        0,
+        "the freshness credit was consumed"
+    );
+}

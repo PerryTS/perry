@@ -149,6 +149,17 @@ pub(super) fn last_idle_predicted_release_bytes() -> usize {
     LAST_IDLE_PREDICTED_RELEASE.with(|c| c.get())
 }
 
+/// Block bytes an idle compaction started now would promise: the selection
+/// the pass itself makes (`select_old_page_defrag_pages` under the idle arm),
+/// on the same page metadata, without running it. `gc/idle_compact.rs` reads
+/// it as its last gate. Nothing is published: the pass publishes its own
+/// promise when it selects.
+pub(super) fn idle_compact_predicted_release_bytes() -> usize {
+    let snapshot = crate::arena::old_page_meta_snapshot();
+    let _arm = IdleCompactDefragArm::new();
+    select_old_page_defrag_pages_from_snapshot(&snapshot, false).selected_releasable_block_bytes
+}
+
 fn idle_compact_armed() -> bool {
     IDLE_COMPACT_ARMED.with(|c| c.get())
 }

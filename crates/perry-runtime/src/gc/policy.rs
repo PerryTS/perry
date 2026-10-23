@@ -2472,6 +2472,17 @@ pub(super) fn finish_full_old_reclaim_baseline() {
     super::note_full_collection_reclaimed_old_gen();
 }
 
+/// Old-gen bytes the mutator placed since the last full collection finished,
+/// in the units of the post-full baseline [`finish_full_old_reclaim_baseline`]
+/// records: block growth and swept-hole reuse both count, promotion a minor
+/// proved live is credited to the baseline and does not. The idle reducer
+/// reads it as the evidence that a follow-up full could find something new.
+pub(super) fn old_gen_growth_since_last_full_bytes() -> usize {
+    old_gen_reclaimable_pressure_bytes()
+        .saturating_add(external_side_old_reclaim_pressure_bytes())
+        .saturating_sub(GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(TriggerInput::get))
+}
+
 /// Percent of the pre-full live set a full must reclaim to count as productive.
 /// Below this the next arena-growth escalation is pushed out (see
 /// `GC_MAJOR_PACING_BACKOFF_SHIFT`).

@@ -57,7 +57,8 @@
 //!    First, a bounded [`super::arena_right_size`] episode: arena blocks need
 //!    two full observations before their mappings can be returned, and an idle
 //!    heap cannot create the second through mutator activity. Second, elapsed
-//!    idle — see [`IDLE_RECLAIM_REARM_MS`] — because a *declined* follow-up
+//!    idle after a full that PAID — see [`IDLE_RECLAIM_REARM_MS`] and
+//!    [`followup_justified`] — because a *declined* follow-up
 //!    would otherwise be terminal (#9831): measured on the claude-code TUI, the
 //!    compactor's residue gate declines at 23.7 %, so no compaction runs, so no
 //!    collection is registered, so `since_attempt` stays 0 and the reducer
@@ -140,13 +141,19 @@ pub const IDLE_RECLAIM_MAX_BACKOFF_SHIFT: u32 = 5;
 /// `backoff_shift == 0`; the wait is `IDLE_RECLAIM_REARM_MS << backoff_shift`,
 /// so it is the SAME backoff that prices the activity arm.
 ///
-/// This is the whole of the anti-spin argument and it needs no new rule: an
-/// unproductive full doubles the wait, so a heap with nothing to give is asked
-/// at 15 s, 30 s, 60 s, 120 s, 240 s and then — because the arm is disarmed at
-/// [`IDLE_RECLAIM_MAX_BACKOFF_SHIFT`] — **not again until real mutator activity
-/// resets the shift**. Five bounded attempts over ~8 minutes, then silence. A
-/// PRODUCTIVE full resets the shift to zero, so a heap that is still giving
-/// memory back keeps being asked every 15 s, which is the case this exists for.
+/// Elapsed time alone never justifies a follow-up; [`followup_justified`]
+/// does. A PRODUCTIVE full resets the shift to zero and justifies the next
+/// one, so a heap that is still giving memory back keeps being asked every
+/// 15 s, which is the case this exists for. A full that freed less than the
+/// bar ENDS the sequence: on an idle heap nothing has died since, so the next
+/// full would trace the same live set and find the same nothing. Measured on
+/// the opencode v2.1.2 TUI (10 MB old, 35 MB arena): after a first full that
+/// freed 11.5 MB, follow-ups at +15 s and +30 s freed 0.48 MB and 0.38 MB for
+/// ~0.55G instructions each; on its server (~100 MB old) the reducer's fulls
+/// at 24/84/204/445 s freed 0.5-2.8 MB for ~1.6G each. The sequence resumes
+/// when the mutator does something a full could be paid by: completes
+/// collections (the activity arm), or grows old-gen past the bar since the
+/// last full (this arm, still at the doubled wait).
 ///
 /// Larger than [`IDLE_RECLAIM_MIN_INTERVAL_MS`] on purpose, so the rate floor
 /// is never the binding constraint on this arm and the two gates cannot be
@@ -381,12 +388,35 @@ fn old_gen_occupancy() -> usize {
     crate::arena::old_gen_in_use_bytes().saturating_add(policy::external_side_live_bytes())
 }
 
+/// What a reducer full must free to count as productive, given the old-gen
+/// occupancy it started with.
+fn productive_bar(occupancy: usize) -> usize {
+    IDLE_RECLAIM_PRODUCTIVE_MIN_BYTES.max(occupancy / 100 * IDLE_RECLAIM_PRODUCTIVE_PCT)
+}
+
+/// Whether anything justifies a follow-up full on elapsed idle alone.
+///
+/// The previous full's yield is the evidence the heap is still giving memory
+/// back: a productive full (`backoff_shift == 0`, which only a productive
+/// completion resets) justifies the next one. After an unproductive one the
+/// only thing that can make another full pay without a mutator collection is
+/// old-gen the mutator allocated since: bytes the full could find dead.
+/// `growth` is that quantity in the units of the post-full baseline the
+/// collector already keeps (`policy::old_gen_growth_since_last_full_bytes`),
+/// and it must clear the same bar a full must free to be productive, priced
+/// against the occupancy now.
+fn followup_justified(backoff_shift: u32, growth: usize, occupancy: usize) -> bool {
+    backoff_shift == 0 || growth >= productive_bar(occupancy)
+}
+
 /// Observe the external-collection counter and decide whether a reducer full
 /// is owed right now. Pure bookkeeping — no collector state is touched.
 fn start_reason(now: u64) -> Option<StartReason> {
     // Read the counters BEFORE taking the state borrow: `external_collections`
     // borrows the same cell.
     let external = external_collections();
+    let growth = policy::old_gen_growth_since_last_full_bytes();
+    let occupancy = old_gen_occupancy();
     STATE.with(|s| {
         let mut st = s.borrow_mut();
         if !st.observed || external != st.last_seen_external {
@@ -419,14 +449,16 @@ fn start_reason(now: u64) -> Option<StartReason> {
         // nothing else can move it, and the decline is permanent. Elapsed idle
         // is the same requirement in the one unit a quiet heap still produces.
         //
-        // Disarmed at the maximum shift rather than merely slowed: five
-        // unproductive attempts are enough to establish there is nothing to
-        // give, and after them this arm must stop entirely or an idle process
-        // pays a whole-heap mark forever. Real activity resets the shift (via a
-        // productive full) and re-enables it.
+        // Elapsed idle is only the WHEN. The WHETHER is the previous full's
+        // yield, or old-gen growth since it (`followup_justified`): a full that
+        // freed little ends the sequence until the mutator allocates again,
+        // instead of re-tracing an unchanged live set on a timer. Disarmed at
+        // the maximum shift as before, so even growth-justified fulls that
+        // keep finding the growth live stop after a bounded streak.
         if st.attempts > 0
             && st.backoff_shift < IDLE_RECLAIM_MAX_BACKOFF_SHIFT
             && now.saturating_sub(st.last_attempt_ms) >= (IDLE_RECLAIM_REARM_MS << st.backoff_shift)
+            && followup_justified(st.backoff_shift, growth, occupancy)
         {
             return Some(StartReason::IdleElapsed);
         }
@@ -486,7 +518,7 @@ pub(super) fn note_cycle_completed(freed_bytes: u64) {
         let before = st.old_in_use_at_start;
         let reclaimed = before.saturating_sub(after);
         OLD_RECLAIMED_BYTES.fetch_add(reclaimed as u64, Ordering::Relaxed);
-        let bar = IDLE_RECLAIM_PRODUCTIVE_MIN_BYTES.max(before / 100 * IDLE_RECLAIM_PRODUCTIVE_PCT);
+        let bar = productive_bar(before);
         // Price the full by what its sweep freed. `old_gen_occupancy` sums the
         // live blocks' bump offsets, which a non-moving sweep cannot lower —
         // it returns objects to the old-gen free list and the block keeps its
