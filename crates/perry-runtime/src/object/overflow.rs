@@ -230,7 +230,10 @@ pub(crate) unsafe fn find(t: *const Table, key: u64) -> Option<u32> {
 unsafe fn install(obj: *mut ObjectHeader, t: *mut Table) {
     let meta = (*obj).meta;
     (*meta).overflow = t as usize as u64;
-    crate::gc::runtime_write_barrier_slot(
+    // The slot owner is the live metadata record, whose generation can
+    // differ from the receiver's after a collection. Its header decides
+    // remembering; an active incremental mark still takes the full barrier.
+    crate::gc::runtime_write_barrier_resolved_slot(
         meta as usize,
         &(*meta).overflow as *const _ as usize,
         t as usize as u64,

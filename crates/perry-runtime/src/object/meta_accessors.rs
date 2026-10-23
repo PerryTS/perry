@@ -46,8 +46,10 @@ pub(crate) unsafe fn object_meta_ensure_for_cell(user_ptr: usize) -> Option<*mut
     (*meta).instance_birth = 0;
     // GC_STORE_AUDIT(BARRIERED): header-slot store followed by an object-slot
     // barrier, exactly as `object_meta_ensure` does for an `ObjectHeader`.
+    // The reloaded cell is live; consume its current generation proof.
+    // Young arena holders need only the active incremental-mark barrier.
     *slot = meta;
-    crate::gc::runtime_write_barrier_slot(user_ptr, slot as usize, meta as u64);
+    crate::gc::runtime_write_barrier_resolved_slot(user_ptr, slot as usize, meta as u64);
     Some(meta)
 }
 
@@ -97,8 +99,10 @@ pub(crate) unsafe fn object_meta_ensure(obj: *mut ObjectHeader) -> *mut ObjectMe
     (*meta).instance_birth = 0;
     // GC_STORE_AUDIT(BARRIERED): meta-record edge is a header-slot store
     // followed by an object-slot barrier, mirroring `set_object_keys_array`.
+    // Reloaded after the allocation: promotion, if any, is reflected in the
+    // live header. No safepoint intervenes before the resolved-slot barrier.
     (*obj).meta = meta;
-    crate::gc::runtime_write_barrier_slot(
+    crate::gc::runtime_write_barrier_resolved_slot(
         obj as usize,
         &(*obj).meta as *const _ as usize,
         meta as u64,
