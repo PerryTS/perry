@@ -666,8 +666,11 @@ fn arg_contract_of(
         for (i, &p) in fi.params.iter().enumerate() {
             let node = &g.m.nodes[p as usize];
             let vc = &mut ac.params[i];
-            // A call passing fewer arguments passes undefined.
-            vc.prim |= node.prim | model::prim::UNDEF;
+            // A call passing fewer arguments passes undefined: every call of
+            // the stand-in (direct, spread, bound, a builtin's callback)
+            // binds through `bind_args`, which puts UNDEF in its missing
+            // parameters, so the node's kinds already say so (DECISIONS 77).
+            vc.prim |= node.prim;
             // An argument marker reads as the markers it stands for (DECISIONS 44).
             let toks = node.pts.to_sorted();
             for t in toks.into_iter().flat_map(|t| g.m.marker_members(t)) {

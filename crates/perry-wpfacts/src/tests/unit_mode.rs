@@ -2416,3 +2416,59 @@ fn an_escaped_keyed_reach_in_a_result_is_another_units_value() {
         );
     }
 }
+
+#[test]
+fn a_closed_parameter_binding_holds_its_contract_classes_only() {
+    // DECISIONS 76 (binarytrees_arena per unit): `make`'s and `check`'s `a`
+    // hold the contract's `Arena` plus the parameter markers beside it
+    // (DECISIONS 74, 75). A marker beside its values adds no value of its
+    // own, so the binding is not `other`: codegen gets an unchecked receiver
+    // proof and reads `a.left` / `a.right` / `a.size` at their slots.
+    let src = r#"
+        class Arena {
+          left: Int32Array; right: Int32Array; size: number = 0;
+          constructor(n: number) { this.left = new Int32Array(n); this.right = new Int32Array(n); }
+        }
+        function make(a: Arena, d: number): number {
+          let l = -1; let r = -1;
+          if (d > 0) { l = make(a, d - 1); r = make(a, d - 1); }
+          const i = a.size++; a.left[i] = l; a.right[i] = r; return i;
+        }
+        function check(a: Arena, i: number): number {
+          const l = a.left[i]; if (l < 0) return 1; return 1 + check(a, l) + check(a, a.right[i]);
+        }
+        const s = new Arena(64);
+        console.log(check(s, make(s, 3)));
+        "#;
+    let pf = units(src);
+    assert!(pf.broken.is_empty(), "{:?}\n{}", pf.broken, pf.dump_text());
+    let held: Vec<_> = pf.bindings[0]
+        .locals
+        .iter()
+        .filter(|(_, b)| !b.class_ids.is_empty())
+        .collect();
+    // Not vacuous: `s` and both parameters hold the class.
+    assert!(held.len() >= 3, "{held:?}");
+    for (id, b) in held {
+        assert!(!b.other, "local {id}: {b:?}\n{}", pf.dump_text());
+        // DECISIONS 77: every call passes `a`, so it is never undefined
+        // (no nullish receiver test, `a.size++` updates the slot).
+        assert!(b.prims & crate::model::prim::UNDEF == 0, "local {id}: {b:?}\n{}", pf.dump_text());
+    }
+    // Negative: another unit's call passes fewer arguments; the missing
+    // parameter holds undefined (the solver's rule at the stand-in).
+    let src = r#"
+        class Arena { size: number = 0; }
+        function f(a: Arena, d: number): number { return a.size + d; }
+        const s = new Arena();
+        console.log(f(s));
+        "#;
+    let pf = units(src);
+    assert!(pf.broken.is_empty(), "{:?}\n{}", pf.broken, pf.dump_text());
+    assert!(
+        pf.bindings[0].locals.iter().any(|(_, b)| b.class_ids.is_empty() && b.prims & crate::model::prim::UNDEF != 0),
+        "{:?}\n{}",
+        pf.bindings[0].locals,
+        pf.dump_text()
+    );
+}
