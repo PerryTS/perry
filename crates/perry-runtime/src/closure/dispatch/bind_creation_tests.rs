@@ -96,6 +96,9 @@ fn observable_length_uses_the_snapshot_layout() {
 #[test]
 fn compact_birth_traces_target_and_receiver_across_full_collection() {
     let _lock = crate::gc::global_side_table_test_lock();
+    // The compact zero-argument bind performs no collecting entry that would
+    // lazily initialize GC. Production installs scanners before closure birth.
+    crate::gc::gc_init();
     let _trigger = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let target = js_closure_alloc(&COMPILED, 0);
     let receiver = crate::object::js_object_alloc(0, 0);
