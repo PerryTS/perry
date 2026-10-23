@@ -72,6 +72,18 @@ pub struct Gen<'a> {
     pub fn_contracts: Vec<((u32, Atom), FnIdx)>,
     /// Contract results accepted so far (their fields were sunk once).
     pub ret_ok: crate::pts::FxHashSet<Tok>,
+    /// Published literals of this unit whose fields leave key by key
+    /// (design §18.7): a field holding only literal layouts of this unit is
+    /// described by them (`field_layouts`, per template and key; whether it
+    /// may hold primitives too: `field_prims`); any other field is sunk
+    /// (`sunk_fields`, its nodes `sunk_field_toks`). `all_sunk`: the
+    /// published objects whose fields all leave.
+    pub leaving: Vec<Tok>,
+    pub field_layouts: FxHashMap<(TmplId, Atom), Vec<TmplId>>,
+    pub field_prims: crate::pts::FxHashSet<(TmplId, Atom)>,
+    pub sunk_fields: crate::pts::FxHashSet<(TmplId, Atom)>,
+    pub sunk_field_toks: crate::pts::FxHashSet<(Tok, Atom)>,
+    pub all_sunk: crate::pts::FxHashSet<Tok>,
     pub ret_top: crate::pts::FxHashSet<FnIdx>,
     /// Stand-ins of other units' functions (by name): value node, token.
     /// By (name, the stand-in template it is a field of, if any).
@@ -307,6 +319,12 @@ impl<'a> Gen<'a> {
             export_fn: FxHashMap::default(),
             fn_contracts: Vec::new(),
             ret_ok: Default::default(),
+            leaving: Vec::new(),
+            field_layouts: FxHashMap::default(),
+            field_prims: Default::default(),
+            sunk_fields: Default::default(),
+            sunk_field_toks: Default::default(),
+            all_sunk: Default::default(),
             ret_top: Default::default(),
             stand_in_fns: FxHashMap::default(),
             stand_in_nss: FxHashMap::default(),
@@ -740,7 +758,14 @@ impl<'a> Gen<'a> {
                 }
             }
         }
-        self.m.add_prim(ret, prim::ALL);
+        // Its primitive kinds are the defining unit's (§18.7), any when ⊤.
+        self.m.add_prim(
+            ret,
+            match c.ret {
+                Some(_) => c.ret_prim,
+                None => prim::ALL,
+            },
+        );
         if c.ret_unknown {
             self.m
                 .add_top(ret, |_| "result of another unit's function".into());
@@ -940,9 +965,16 @@ impl<'a> Gen<'a> {
             self.m.add_tok(n, t);
             toks.push(t);
         }
+        let mut nested: Vec<(NodeId, &'a (String, Vec<String>, bool))> = Vec::new();
         for fld in &c.facts.fields {
             let a = self.m.atom(&fld.key);
             let n = self.m.field(inst, a);
+            // A field holding only the defining unit's literal layouts:
+            // instances of their stand-ins (§18.7), made below.
+            if let Some(fl) = c.field_layouts.iter().find(|(k, _, _)| k == &fld.key) {
+                nested.push((n, fl));
+                continue;
+            }
             // A field holding only contract functions: their stand-ins.
             if let Some((_, fcs)) = c.field_fns.iter().find(|(k, _)| k == &fld.key) {
                 for fc in fcs {
@@ -966,6 +998,29 @@ impl<'a> Gen<'a> {
             .node_named("classval", || format!("classval({})", c.name));
         self.m.add_tok(n, cobj);
         self.stand_ins.insert(c.display.clone(), (n, tm, toks));
+        for (fnode, (_, ds, prims)) in nested {
+            for d in ds {
+                // A broken layout is ⊤ to every reader (§11.3).
+                match self
+                    .unit_in
+                    .filter(|u| !u.broken(d))
+                    .and_then(|u| u.layout(d))
+                {
+                    Some(ic) => {
+                        self.stand_in_class(mi, ic);
+                        let itm = self.stand_ins[&ic.display].1;
+                        let it = self.m.tok(TokKind::Obj(itm, NO_CTX));
+                        self.m.add_tok(fnode, it);
+                    }
+                    None => self
+                        .m
+                        .add_top(fnode, |_| "field of another unit's class".into()),
+                }
+            }
+            if *prims {
+                self.m.add_prim(fnode, prim::ALL);
+            }
+        }
         for (field, fc) in static_fns {
             let v = self.stand_in_fn_of(mi, fc, Some((tm, true)));
             self.m.edge(v, field);

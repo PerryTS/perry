@@ -229,3 +229,184 @@ fn an_enum_object_is_a_contract_named_by_its_enum() {
         pf.dump_text()
     );
 }
+
+fn units_cfg(mods: &[(&str, &str)], cfg: &FactsConfig) -> ProgramFacts {
+    let hirs: Vec<(String, perry_hir::Module)> = mods
+        .iter()
+        .map(|(name, src)| {
+            let path = format!("{name}.ts");
+            let module = perry_parser::parse_typescript(src, &path).expect("parses");
+            let mut hir = perry_hir::lower_module(&module, name, &path).expect("lowers");
+            for imp in &mut hir.imports {
+                if let Some(n) = imp.source.strip_prefix("./") {
+                    imp.resolved_path = Some(format!("{n}.ts"));
+                }
+            }
+            (path, hir)
+        })
+        .collect();
+    let list: Vec<(String, &perry_hir::Module)> =
+        hirs.iter().map(|(p, h)| (p.clone(), h)).collect();
+    crate::compute_units(&list, cfg)
+}
+
+const REEXP_A: &str =
+    "export enum CommandTypes { A = \"a\", B = \"b\" }\nexport function f() { return 1; }";
+const REEXP_M: &str = "import * as protocol from './a';\nexport const CommandNames: any = (protocol as any).CommandTypes;\nexport function g() { return 1; }\nconsole.log(g());";
+const REEXP_U: &str = "import * as protocol from './a';\nimport { g } from './m';\nfunction h() { return protocol.CommandTypes.A; }\nconsole.log(h(), g());";
+
+#[test]
+fn interpreted_code_reaches_no_module_namespace() {
+    // DECISIONS 65: interpreted code (decision 150) holds what escaped, the
+    // globals and what is thrown, as in the whole-program solve; a module's
+    // namespace object is not among them. `m` re-publishing the enum
+    // through its own namespace does not break it for `u`.
+    let mut cfg = FactsConfig::default();
+    cfg.dynamic_code_reach.record_global("Function(...)".into());
+    let pf = units_cfg(&[("a", REEXP_A), ("m", REEXP_M), ("u", REEXP_U)], &cfg);
+    assert!(pf.broken.is_empty(), "{:?}", pf.broken);
+    assert_eq!(verdicts(&pf, "A"), ["T0Mono"], "{}", pf.dump_text());
+    // A direct eval can name a module's bindings: then the namespace object
+    // reaches interpreted code, and what it holds is used beyond its contract.
+    let mut cfg = FactsConfig::default();
+    cfg.dynamic_code_reach.record_global("eval(...)".into());
+    cfg.dynamic_code_reach.lexical_modules.insert("m.ts".into());
+    let pf = units_cfg(&[("a", REEXP_A), ("m", REEXP_M), ("u", REEXP_U)], &cfg);
+    assert!(
+        pf.broken.iter().any(|d| d == "a.ts:enum CommandTypes"),
+        "{:?}",
+        pf.broken
+    );
+}
+
+const NESTED_HEAD: &str = "export interface TargetRange { readonly range: number[] | number; readonly facts: number; thisNode?: number }\nfunction ces(range: TargetRange) { return range.facts; }\n";
+
+#[test]
+fn a_literal_nested_in_a_contract_result_is_a_nested_contract() {
+    // Design §18.7 (DECISIONS 64): `get` is published (another unit may call
+    // it), so its result literal leaves; the inner literals it holds under
+    // `targetRange` leave with their own layout contracts instead of
+    // escaping, and `ces` proves `range.facts` on them.
+    for get in [
+        "export function get(n: number) { if (n > 1) return { targetRange: { range: [n], facts: n, thisNode: undefined } }; return { targetRange: { range: n, facts: 0, thisNode: 1 } }; }",
+        "export function get(n: number) { return { targetRange: { range: n, facts: 0, thisNode: 1 } }; }",
+    ] {
+        let src = format!("{NESTED_HEAD}{get}\nexport function actions(n: number) {{ const r = get(n); return ces(r.targetRange); }}\nconsole.log(actions(2));");
+        let pf = units_of(&[("a", &src)]);
+        let v = verdicts(&pf, "facts");
+        assert!(!v.is_empty() && v.iter().all(|v| v.starts_with("T0")), "{v:?}\n{}", pf.dump_text());
+    }
+    // Another unit reads the nested literal through the contract.
+    let a = "export function get(n: number) { return { targetRange: { range: n, facts: 0 } }; }";
+    let u = "import { get } from './a'; function k() { return get(2).targetRange.facts; } console.log(k());";
+    let pf = units_of(&[("a", a), ("u", u)]);
+    assert_eq!(verdicts(&pf, "facts"), ["T0Mono"], "{}", pf.dump_text());
+    // Soundness: another unit's store into the nested literal is a store
+    // effect (decision 17), its new key breaks the inner layout (census).
+    let u = "import { get } from './a'; const t = get(2).targetRange; (t as any).facts = 'z'; function k() { return t.range; } console.log(k());";
+    let pf = units_of(&[("a", a), ("u", u)]);
+    let inner = pf
+        .templates
+        .iter()
+        .find(|t| t.fields.iter().any(|f| f.key == "facts"))
+        .unwrap_or_else(|| panic!("{}", pf.dump_text()));
+    let f = inner.fields.iter().find(|f| f.key == "facts").unwrap();
+    assert!(!f.readonly && f.kind.top, "{}", pf.dump_text());
+    let u = "import { get } from './a'; const t = get(2).targetRange; (t as any).extra = 1; function k() { return t.range; } console.log(k());";
+    let pf = units_of(&[("a", a), ("u", u)]);
+    assert!(
+        pf.broken.iter().any(|d| d == &inner.display),
+        "{} {:?}",
+        inner.display,
+        pf.broken
+    );
+    // A nested field holding anything but literal layouts leaves as before.
+    let a = "export function get(n: number, o: any) { return { targetRange: n > 1 ? { range: n, facts: 0 } : o }; }";
+    let u = "import { get } from './a'; function k() { return get(2, {}).targetRange.facts; } console.log(k());";
+    let pf = units_of(&[("a", a), ("u", u)]);
+    assert!(
+        verdicts(&pf, "facts").iter().all(|v| v.starts_with("No")),
+        "{}",
+        pf.dump_text()
+    );
+}
+
+#[test]
+fn a_nested_contract_field_keeps_its_primitive_kinds_and_argument_literals_leave() {
+    // Design §18.7: a nested field that may also hold a primitive tells the
+    // reader so (its binding keeps the number kind beside the layout).
+    let a = "export function get(n: number) { return { t: n > 1 ? { facts: n } : 5 }; }";
+    let u = "import { get } from './a'; function k() { const t = get(2).t; return t.facts; } console.log(k());";
+    let pf = units_of(&[("a", a), ("u", u)]);
+    let inner = pf
+        .templates
+        .iter()
+        .find(|t| t.fields.iter().any(|f| f.key == "facts"))
+        .unwrap_or_else(|| panic!("{}", pf.dump_text()));
+    let held: Vec<u16> = pf.bindings[1]
+        .locals
+        .iter()
+        .filter(|(_, b)| inner.class_id.is_some_and(|c| b.class_ids.contains(&c)))
+        .map(|(_, b)| b.prims)
+        .collect();
+    assert!(
+        !held.is_empty() && held.iter().all(|&p| p & crate::model::prim::NUM != 0),
+        "{held:?} {:?}",
+        pf.bindings
+    );
+    // A literal another unit's closed function also gets as an argument is
+    // described there with no nested fields: its fields leave as before, so
+    // that callee's store under a nested literal is no unknown write.
+    let a = "import { use } from './b';\nexport function get(n: number) { const inner = { deep: { facts: n } }; use(inner); return { t: inner }; }";
+    let b = "export function use(x: any) { x.deep.facts = 'z'; }";
+    let u =
+        "import { get } from './a'; function k() { return get(2).t.deep.facts; } console.log(k());";
+    let pf = units_of(&[("a", a), ("b", b), ("u", u)]);
+    let deep = pf
+        .templates
+        .iter()
+        .find(|t| t.fields.iter().any(|f| f.key == "facts"))
+        .unwrap_or_else(|| panic!("{}", pf.dump_text()));
+    let f = deep.fields.iter().find(|f| f.key == "facts").unwrap();
+    assert!(!f.readonly && f.kind.top, "{}", pf.dump_text());
+}
+
+#[test]
+fn a_contract_result_keeps_its_primitive_kinds_and_a_closed_callee_argument_leaves() {
+    // Design §18.8: the stand-in of a contract function returns the
+    // primitive kinds its defining unit proved (`FnContract.ret_prim`).
+    let a = "export function get(n: number) { return n > 1 ? { facts: n } : 5; }";
+    let u = "import { get } from './a'; function k() { const r = get(2); return r.facts; } console.log(k());";
+    let pf = units_of(&[("a", a), ("u", u)]);
+    let lit = pf
+        .templates
+        .iter()
+        .find(|t| t.fields.iter().any(|f| f.key == "facts"))
+        .unwrap_or_else(|| panic!("{}", pf.dump_text()));
+    let held: Vec<u16> = pf.bindings[1]
+        .locals
+        .iter()
+        .filter(|(_, b)| lit.class_id.is_some_and(|c| b.class_ids.contains(&c)))
+        .map(|(_, b)| b.prims)
+        .collect();
+    assert!(
+        !held.is_empty() && held.iter().all(|&p| p & crate::model::prim::NUM != 0),
+        "{held:?} {:?}",
+        pf.bindings
+    );
+    // A literal a closed function of another unit (decision 13) also gets
+    // as an argument is described there with no nested fields: that
+    // callee's store under its nested literal comes back through its
+    // parameter's reach uses, no write the owner misses.
+    let a = "function use(x: any) { x.deep.facts = 'z'; }\nexport function get(n: number) { const inner = { deep: { facts: n } }; use(inner); return { t: inner }; }";
+    let u =
+        "import { get } from './a'; function k() { return get(2).t.deep.facts; } console.log(k());";
+    let pf = units_of(&[("a", a), ("u", u)]);
+    let deep = pf
+        .templates
+        .iter()
+        .find(|t| t.fields.iter().any(|f| f.key == "facts"))
+        .unwrap_or_else(|| panic!("{}", pf.dump_text()));
+    let f = deep.fields.iter().find(|f| f.key == "facts").unwrap();
+    assert!(!f.readonly && f.kind.top, "{}", pf.dump_text());
+}

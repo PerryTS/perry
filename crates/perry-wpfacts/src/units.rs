@@ -21,6 +21,10 @@ pub(crate) struct ClassContract {
     /// a function contract (a literal's methods: `errorUtil.errToObj`);
     /// every other field holds unknown values for the reader.
     pub field_fns: Vec<(String, Vec<FnContract>)>,
+    /// Fields that hold only instances of these layouts of the defining
+    /// unit (key, their displays, whether primitives too): nested
+    /// contracts (design §18.7, `Gen::nested_fields`).
+    pub field_layouts: Vec<(String, Vec<String>, bool)>,
     /// The defining unit stores under computed keys: a reader may find any
     /// key (unknown values). Otherwise the keys are the facts' fields.
     pub open_keys: bool,
@@ -63,6 +67,9 @@ pub(crate) struct FnContract {
     pub ret_reach: Vec<u32>,
     /// The result may also be an unknown value (⊤ to the caller).
     pub ret_unknown: bool,
+    /// The primitive kinds the result may be (`model::prim`), when `ret`
+    /// names its layouts; with no layouts (⊤) any.
+    pub ret_prim: u16,
     /// Its receiver is not used: an arrow function, or a body that never
     /// reads `this` (§18.2).
     pub lexical_this: bool,
@@ -219,8 +226,11 @@ impl Published {
     }
 
     /// Module `path`'s namespace object reaches other units undescribed.
+    /// Interpreted code (decision 150) holds what escaped, the globals and
+    /// what is thrown, as in the whole-program solve: no namespace object
+    /// unless a direct eval can name a module's bindings (DECISIONS 65).
     pub(crate) fn ns_object(&self, path: &str) -> bool {
-        self.all || self.ns_object.contains(path)
+        self.eval_scopes || self.ns_object.contains(path)
     }
 
     pub(crate) fn ns_keys(&self, path: &str) -> Option<&(Vec<String>, bool)> {
