@@ -170,6 +170,8 @@ impl OutgoingBody {
             BodyReceiver {
                 shared,
                 ended: false,
+                #[cfg(feature = "p3")]
+                frames: None,
             },
         )
     }
@@ -206,9 +208,26 @@ pub enum BodyFrame {
 pub struct BodyReceiver {
     shared: Arc<Shared>,
     ended: bool,
+    #[cfg(feature = "p3")]
+    frames: Option<futures_util::stream::BoxStream<'static, Result<BodyFrame, Error>>>,
 }
 impl BodyReceiver {
+    #[cfg(feature = "p3")]
+    pub(crate) fn from_frames(
+        frames: futures_util::stream::BoxStream<'static, Result<BodyFrame, Error>>,
+    ) -> Self {
+        Self {
+            shared: Shared::new(StreamContext::Request, None),
+            ended: false,
+            frames: Some(frames),
+        }
+    }
     pub async fn next(&mut self) -> Result<Option<BodyFrame>, Error> {
+        #[cfg(feature = "p3")]
+        if let Some(frames) = &mut self.frames {
+            use futures_util::StreamExt;
+            return frames.next().await.transpose();
+        }
         futures_lite::future::poll_fn(|cx| {
             if self.ended {
                 return Poll::Ready(Ok(None));
@@ -229,6 +248,10 @@ impl BodyReceiver {
         .await
     }
     pub fn fail(&mut self, error: Error) {
+        #[cfg(feature = "p3")]
+        {
+            self.frames = None;
+        }
         self.shared.abort(error);
         self.shared.disconnect();
         self.ended = true;

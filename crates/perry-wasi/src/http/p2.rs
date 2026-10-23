@@ -22,7 +22,7 @@ pub struct WasiHttpCtx {
     pub policy: transport::DestinationPolicy,
     pub options: transport::Options,
     pub field_size_limit: usize,
-    submitter: Submitter,
+    pub(crate) submitter: Submitter,
 }
 impl WasiHttpCtx {
     pub fn new(submitter: Submitter) -> Self {
@@ -38,7 +38,7 @@ pub struct WasiHttpCtxView<'a> {
     pub ctx: &'a mut WasiHttpCtx,
     pub table: &'a mut ResourceTable,
 }
-fn get_content_length(fields: &FieldMap) -> Result<Option<u64>, super::Error> {
+pub(crate) fn get_content_length(fields: &FieldMap) -> Result<Option<u64>, super::Error> {
     let mut length = None;
     for value in fields.get_all("content-length") {
         let bytes = value.as_bytes();

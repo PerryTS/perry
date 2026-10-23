@@ -74,16 +74,34 @@ pub struct Response {
 /// a response nor its trailer future can outlive the context's native driver.
 pub struct PendingResponse {
     receive: oneshot::Receiver<Result<Response, Error>>,
-    task: Request<()>,
+    task: Option<std::sync::Arc<Request<()>>>,
+    #[cfg(feature = "p3")]
+    processing:
+        futures_util::future::Shared<futures_util::future::BoxFuture<'static, Result<(), Error>>>,
 }
 impl PendingResponse {
-    pub async fn receive(self) -> Result<Response, Error> {
-        let mut response = self
-            .receive
+    #[cfg(feature = "p3")]
+    pub(crate) fn processing(&self) -> futures_util::future::BoxFuture<'static, Result<(), Error>> {
+        let task = self.task.as_ref().unwrap().clone();
+        let result = self.processing.clone();
+        Box::pin(async move {
+            let _task = task;
+            result.await
+        })
+    }
+    pub async fn receive(mut self) -> Result<Response, Error> {
+        let mut response = (&mut self.receive)
             .await
             .map_err(|_| Error::ConnectionTerminated)??;
-        response.body.retain_transport(self.task);
+        response.body.retain_transport(self.task.take().unwrap());
         Ok(response)
+    }
+}
+impl Drop for PendingResponse {
+    fn drop(&mut self) {
+        if let Some(task) = &self.task {
+            task.cancel();
+        }
     }
 }
 
@@ -159,24 +177,41 @@ pub fn send(
         return Err(Error::HttpRequestDenied);
     }
     let (send, receive) = oneshot::channel();
+    #[cfg(feature = "p3")]
+    let (completed, completion) = oneshot::channel();
     let task = submitter
         .submit(move |io| async move {
             let result = connect(&io, &endpoint, &policy, &options).await;
-            match result {
+            let result = match result {
                 Ok(stream) => {
                     wire::exchange(&io, stream, endpoint, spec, &mut body, options, send).await
                 }
                 Err(error) => {
                     body.fail(error.clone());
-                    let _ = send.send(Err(error));
+                    let _ = send.send(Err(error.clone()));
+                    Err(error)
                 }
-            }
+            };
+            #[cfg(feature = "p3")]
+            let _ = completed.send(result);
+            #[cfg(not(feature = "p3"))]
+            let _ = result;
         })
         .map_err(|e| match e {
             perry_component_io::Error::Capacity => Error::ConnectionLimitReached,
             _ => Error::ConnectionTerminated,
         })?;
-    Ok(PendingResponse { receive, task })
+    Ok(PendingResponse {
+        receive,
+        task: Some(std::sync::Arc::new(task)),
+        #[cfg(feature = "p3")]
+        processing: {
+            use futures_util::FutureExt;
+            async move { completion.await.unwrap_or(Err(Error::ConnectionTerminated)) }
+                .boxed()
+                .shared()
+        },
+    })
 }
 
 pub(crate) fn after(io: &ExecutorHandle<Platform>, duration: Duration) -> Result<Instant, Error> {

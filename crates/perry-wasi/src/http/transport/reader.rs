@@ -8,18 +8,23 @@ use turnloop::{backend::Platform, ExecutorHandle, Instant};
 use turnloop_http::http1::{Decoder, Event, Head, Header, Limits, Mode};
 
 pub(crate) fn fields(headers: Vec<Header>, context: StreamContext) -> Result<FieldMap, Error> {
-    let mut map = http::HeaderMap::new();
-    for h in headers {
-        let name = http::HeaderName::from_bytes(h.name.as_bytes())
-            .map_err(|_| Error::HttpProtocolError)?;
-        let value =
-            http::HeaderValue::from_bytes(&h.value).map_err(|_| Error::HttpProtocolError)?;
-        map.try_append(name, value).map_err(|_| match context {
-            StreamContext::Request => Error::HttpRequestHeaderSectionSize(None),
-            StreamContext::Response => Error::HttpResponseHeaderSectionSize(None),
-        })?;
-    }
-    Ok(FieldMap::new_immutable(map))
+    let entries = headers
+        .into_iter()
+        .map(|h| {
+            let value =
+                http::HeaderValue::from_bytes(&h.value).map_err(|_| Error::HttpProtocolError)?;
+            Ok((h.name, value))
+        })
+        .collect::<Result<Vec<_>, Error>>()?;
+    FieldMap::from_received(entries).map_err(|error| match error {
+        crate::http::FieldMapError::TooManyFields | crate::http::FieldMapError::TotalSizeTooBig => {
+            match context {
+                StreamContext::Request => Error::HttpRequestHeaderSectionSize(None),
+                StreamContext::Response => Error::HttpResponseHeaderSectionSize(None),
+            }
+        }
+        _ => Error::HttpProtocolError,
+    })
 }
 
 enum OwnedEvent {

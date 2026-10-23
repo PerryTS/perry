@@ -28,6 +28,7 @@ use wasmtime::Result;
 #[derive(Debug, Clone)]
 pub struct FieldMap {
     map: Arc<HeaderMap>,
+    ordered: Arc<Vec<(String, HeaderValue)>>,
     limit: Limit,
     size: usize,
 }
@@ -42,6 +43,7 @@ impl Default for FieldMap {
     fn default() -> Self {
         Self {
             map: Arc::new(HeaderMap::new()),
+            ordered: Arc::new(Vec::new()),
             size: 0,
             limit: Limit::Immutable,
         }
@@ -68,12 +70,44 @@ impl FieldMap {
             map.remove(&name);
         }
 
-        let size = Self::content_size(&map);
+        let ordered = map
+            .iter()
+            .map(|(n, v)| (n.as_str().to_owned(), v.clone()))
+            .collect::<Vec<_>>();
+        let size = Self::content_size(&map) + ordered_size(&ordered);
         Self {
             map: Arc::new(map),
+            ordered: Arc::new(ordered),
             size,
             limit: Limit::Immutable,
         }
+    }
+
+    /// Construct received fields without losing their spelling or wire order.
+    pub(crate) fn from_received(
+        entries: Vec<(String, HeaderValue)>,
+    ) -> Result<Self, FieldMapError> {
+        let mut map = HeaderMap::new();
+        let mut ordered = Vec::new();
+        for (name, value) in entries {
+            let key: HeaderName = name.parse()?;
+            if forbidden_header(&key) {
+                continue;
+            }
+            map.try_append(key, value.clone())?;
+            ordered.push((name, value));
+        }
+        Ok(Self {
+            size: Self::content_size(&map) + ordered_size(&ordered),
+            map: Arc::new(map),
+            ordered: Arc::new(ordered),
+            limit: Limit::Immutable,
+        })
+    }
+
+    /// Original spelling and insertion order, shared by copy-all and transport.
+    pub fn ordered_iter(&self) -> impl Iterator<Item = (&str, &HeaderValue)> {
+        self.ordered.iter().map(|(n, v)| (n.as_str(), v))
     }
 
     /// Creates a new, empty, mutable `FieldMap`.
@@ -83,6 +117,7 @@ impl FieldMap {
     pub fn new_mutable(limit: usize) -> Self {
         Self {
             map: Arc::new(HeaderMap::new()),
+            ordered: Arc::new(Vec::new()),
             size: 0,
             limit: Limit::Mutable(limit),
         }
@@ -107,7 +142,8 @@ impl FieldMap {
     ///
     /// If `values` is empty then this removes the header `key`.
     pub fn set(&mut self, key: String, values: Vec<Vec<u8>>) -> Result<(), FieldMapError> {
-        let key = key.parse()?;
+        let original = key;
+        let key: HeaderName = original.parse()?;
         if forbidden_header(&key) {
             return Err(FieldMapError::Forbidden);
         }
@@ -135,7 +171,15 @@ impl FieldMap {
         } else {
             header_name_size(&key)
         };
-        let next = self.size - previous - previous_key
+        let removed_ordered = self
+            .ordered
+            .iter()
+            .filter(|(n, _)| n.eq_ignore_ascii_case(&original))
+            .map(|(n, _)| ordered_entry_size(n))
+            .sum::<usize>();
+        let added_ordered = values.len() * ordered_entry_size(&original);
+        let next = self.size - previous - previous_key - removed_ordered
+            + added_ordered
             + next_key
             + values.iter().map(header_value_size).sum::<usize>();
         check_size(limit, next)?;
@@ -144,9 +188,12 @@ impl FieldMap {
         let mut candidate = (*self.map).clone();
         candidate.remove(&key);
         candidate.try_reserve(values.len())?;
-        for value in values {
-            candidate.try_append(key.clone(), value)?;
+        for value in &values {
+            candidate.try_append(key.clone(), value.clone())?;
         }
+        let ordered = Arc::make_mut(&mut self.ordered);
+        ordered.retain(|(n, _)| !n.eq_ignore_ascii_case(&original));
+        ordered.extend(values.into_iter().map(|v| (original.clone(), v)));
         self.map = Arc::new(candidate);
         self.size = next;
         Ok(())
@@ -156,7 +203,8 @@ impl FieldMap {
     ///
     /// Returns an empty list if the key is not already present within the map.
     pub fn remove_all(&mut self, key: String) -> Result<Vec<HeaderValue>, FieldMapError> {
-        let key = key.parse()?;
+        let original = key;
+        let key: HeaderName = original.parse()?;
         if forbidden_header(&key) {
             return Err(FieldMapError::Forbidden);
         }
@@ -171,6 +219,14 @@ impl FieldMap {
                     removed += header_value_size(v);
                 }
                 *size -= removed;
+                let ordered = Arc::make_mut(&mut self.ordered);
+                let removed = ordered
+                    .iter()
+                    .filter(|(n, _)| n.eq_ignore_ascii_case(&original))
+                    .map(|(n, _)| ordered_entry_size(n))
+                    .sum::<usize>();
+                ordered.retain(|(n, _)| !n.eq_ignore_ascii_case(&original));
+                self.size -= removed;
                 Ok(values)
             }
         }
@@ -188,19 +244,27 @@ impl FieldMap {
     /// If `key` is already present within the map then `value` is appended to
     /// the list of values it already has.
     pub fn append(&mut self, key: String, value: Vec<u8>) -> Result<bool, FieldMapError> {
-        let key = key.parse()?;
+        let original = key;
+        let key: HeaderName = original.parse()?;
         if forbidden_header(&key) {
             return Err(FieldMapError::Forbidden);
         }
         let value = parse_header_value(&key, value)?;
-        self.append_raw(key, value)
+        let result = self.append_raw(key, value.clone(), ordered_entry_size(&original))?;
+        Arc::make_mut(&mut self.ordered).push((original, value));
+        Ok(result)
     }
 
     /// Add a value associated with a key to the map.
     ///
     /// If `key` is already present within the map then `value` is appended to
     /// the list of values it already has.
-    fn append_raw(&mut self, key: HeaderName, value: HeaderValue) -> Result<bool, FieldMapError> {
+    fn append_raw(
+        &mut self,
+        key: HeaderName,
+        value: HeaderValue,
+        ordered_cost: usize,
+    ) -> Result<bool, FieldMapError> {
         let (map, limit, size) = self.mutable()?;
         let key_size = header_name_size(&key);
         let val_size = header_value_size(&value);
@@ -209,6 +273,7 @@ impl FieldMap {
         } else {
             *size + val_size
         };
+        let new_size = new_size + ordered_cost;
         check_size(limit, new_size)?;
         let already_present = map.try_append(key, value)?;
         *size = new_size;
@@ -225,6 +290,14 @@ impl FieldMap {
     pub fn set_immutable(&mut self) {
         self.limit = Limit::Immutable;
     }
+}
+
+// Include the ordered representation in the limit, including repeated names.
+fn ordered_entry_size(name: &str) -> usize {
+    name.len() + size_of::<(String, HeaderValue)>()
+}
+fn ordered_size(entries: &[(String, HeaderValue)]) -> usize {
+    entries.iter().map(|(n, _)| ordered_entry_size(n)).sum()
 }
 
 /// Returns the size, in accounting cost, to consider for `name`.
@@ -346,6 +419,56 @@ fn parse_header_value(
 mod tests {
     use super::{parse_header_value, FieldMap, FieldMapError};
     use http::header::{CONTENT_LENGTH, CONTENT_TYPE};
+
+    #[test]
+    fn original_names_order_and_failed_mutations_survive_snapshots() {
+        let mut map = FieldMap::new_mutable(2048);
+        for (n, v) in [("X-A", "first"), ("X-B", "middle"), ("x-a", "last")] {
+            map.append(n.into(), v.as_bytes().to_vec()).unwrap();
+        }
+        let snapshot = map.clone();
+        let entries = |m: &FieldMap| {
+            m.ordered_iter()
+                .map(|(n, v)| (n.to_owned(), v.to_str().unwrap().to_owned()))
+                .collect::<Vec<_>>()
+        };
+        let original = vec![
+            ("X-A".into(), "first".into()),
+            ("X-B".into(), "middle".into()),
+            ("x-a".into(), "last".into()),
+        ];
+        assert_eq!(entries(&map), original);
+        assert_eq!(
+            map.set("x-A".into(), vec![vec![b'x'; 2048]]),
+            Err(FieldMapError::TotalSizeTooBig)
+        );
+        assert_eq!(entries(&map), original);
+        map.set("x-A".into(), vec![b"new".to_vec(), b"second".to_vec()])
+            .unwrap();
+        assert_eq!(
+            entries(&map),
+            vec![
+                ("X-B".into(), "middle".into()),
+                ("x-A".into(), "new".into()),
+                ("x-A".into(), "second".into())
+            ]
+        );
+        assert_eq!(entries(&snapshot), original);
+        map.remove_all("X-a".into()).unwrap();
+        assert_eq!(entries(&map), vec![("X-B".into(), "middle".into())]);
+        map.remove_all("x-b".into()).unwrap();
+        assert_eq!(map.size, 0);
+        let received = FieldMap::from_received(
+            snapshot
+                .ordered_iter()
+                .map(|(n, v)| (n.to_owned(), v.clone()))
+                .chain(std::iter::once(("Host".into(), "hidden".parse().unwrap())))
+                .collect(),
+        )
+        .unwrap();
+        assert_eq!(entries(&received), original);
+        assert!(!received.contains_key("host"));
+    }
 
     #[test]
     fn test_immutable() {

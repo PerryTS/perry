@@ -1,5 +1,5 @@
 //! Native WASI 0.3 providers. Clock waits use the component's Turnloop driver.
-//! CLI and filesystem streams reuse native Turnloop views; sockets and HTTP remain.
+//! Filesystem, CLI and socket streams retain owned native Turnloop views.
 pub mod bindings {
     wasmtime::component::bindgen!({
         path: "wit-p3",
@@ -37,6 +37,7 @@ pub mod bindings {
 mod canonical_tests;
 mod cli;
 mod filesystem;
+pub mod http;
 mod random;
 mod sockets;
 mod streams;
@@ -139,5 +140,5 @@ pub fn add_to_linker<T: WasiView + 'static>(linker: &mut Linker<T>) -> wasmtime:
             }
         },
     )?;
-    Ok(())
+    http::add_to_linker(linker)
 }

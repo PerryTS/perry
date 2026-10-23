@@ -21,6 +21,7 @@ Copied/adapted sources:
 | `src/filesystem.rs`, `src/filesystem/` | `wasmtime-wasi/src/filesystem.rs` and its capability primitives, platform helpers and tests |
 | `src/p3/filesystem.rs`, `src/p3/filesystem/host.rs` | Conversions and descriptor forwarding adapted from `wasmtime-wasi/src/p3/filesystem/{mod,host}.rs`; stream/directory ownership uses Turnloop, and signed-time conversion is corrected |
 | `src/p3/sockets/conv.rs`, `src/p3/sockets/{tcp,udp,dns}.rs` | Address conversions and interface forwarding adapted from `wasmtime-wasi/src/p3/sockets/{tcp,udp}.rs` and `src/sockets/{mod,ip_name_lookup}.rs`; socket ownership, cancellation, streams and native requests use Turnloop |
+| `src/p3/http/{types,options,conv}.rs` | Interface forwarding, request options and conversions adapted from `wasmtime-wasi-http/src/p3/{types,options,mod}.rs`; body ownership, streaming, cancellation and transport use Turnloop |
 | `src/p2/filesystem.rs`, `src/p2/host/filesystem*` | `wasmtime-wasi` files with the same paths |
 | `src/p2/{network,ip_name_lookup}.rs`, `src/p2/host/{network,instance_network}.rs` | Corresponding `wasmtime-wasi` files and `src/sockets/ip_name_lookup.rs`; address conversions from `src/sockets/mod.rs` |
 | `src/sockets/tcp.rs`, `src/sockets/tcp/` | WASI TCP validation, defaults and option semantics from `wasmtime-wasi/src/sockets/{mod,tcp}.rs`; native ownership and I/O are implemented with Turnloop |
@@ -40,7 +41,7 @@ work is owned and driven by Turnloop, with no ambient Tokio runtime.
 The current port includes WASI 0.2.12 I/O, clocks, random, CLI, capability
 filesystem, DNS, TCP, UDP and HTTP interfaces. It is selected by
 `perry-component-host`. Optional WASI 0.3 providers are described below;
-production engine integration and P3 HTTP remain open;
+production engine integration remains open;
 other platform and production-package qualification are still required. No missing
 interface is implemented as a success stub. The unchanged workspace Tokio
 gate passes: no manifest edges, lockfile packages or Rust source references.
@@ -587,3 +588,50 @@ return to zero. The [socket receipt](../../docs/validation/wasi-p3-sockets-20261
 records the final qualification. These are Linux Rust embedding results;
 Perry's production P3 engine, TypeScript async/GC bridge, other platforms and
 final distribution packages remain separate qualification work.
+
+
+## P3 HTTP streams, futures and async handlers
+
+The optional `p3` feature registers `wasi:http@0.3.0` types and async client
+imports. It also exports generated async handler bindings for Rust embedders.
+The unmodified WIT comes from `wasmtime-wasi-http 48.0.5`; its archive and WIT
+hashes are recorded in `wit-p3/provenance.json`. Metadata forwarding is adapted
+from that crate. No upstream HTTP execution, Tokio channel or transport code is
+used.
+
+Requests and responses own canonical contents streams, trailers futures and
+transmission-result futures. Canonical callbacks touch the resource table only
+on the Store thread. Native I/O receives owned bounded byte queues, with at most
+one 64 KiB queued chunk per bridge. Stream backpressure and content-length errors
+remain observable. Successful trailers wait until the returned body stream
+closes; trailer errors interrupt transmission even while contents are pending.
+Component-to-component forwarding uses the same bounded framing path.
+
+Transmission futures retain the actual exchange outcome, including upload and
+response completion; receiving response headers alone is not completion.
+Dropping a pending native client operation or its incoming response cancels the
+native exchange, even while another transmission observer retains its owner.
+Guest task hard cancellation still requires dropping the Wasmtime Store; dropping
+a host call future alone does not cancel every task inside that Store.
+
+Header resources retain original spelling and ordering for copy-all and HTTP/1
+serialization, with case-insensitive lookup and forbidden-header checks. The
+ordered representation is charged against the field memory limit. Header and
+request-option snapshots remain immutable while explicit clones are mutable.
+Turnloop's HTTP/1 decoder requires the accompanying casing fix; its constructor
+for HTTP/2 callers retains existing lowercase behavior.
+
+The HTTP receipt in `docs/validation/wasi-p3-http-20261023.json` records exact
+Linux development and production panic-abort qualification, all-target Clippy,
+doctests and the Tokio-free dependency graph. Tests exercise real canonical
+async client suspension and handler exports, 3 MiB + 137 byte bodies, forwarded
+streams/futures, HTTP/TLS header and trailer round trips, explicit network/trust
+configuration, denials, size errors, cancellation and empty Store/native I/O
+state after disposal. The codec has separate field-casing and mixed-case Host
+and forbidden-trailer regressions.
+
+These are Rust embedding and handwritten canonical Wasm fixtures. Perry's
+production P3 engine, generated TypeScript async/future/stream bindings and
+Promise/GC bridge remain unfinished. Windows/macOS provider behavior, required
+provider CI, released Turnloop dependencies and final packages remain open.
+HTTP/1.1 transport restrictions described above still apply.

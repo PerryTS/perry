@@ -14,29 +14,29 @@ pub(super) async fn exchange<S: AsyncRead + AsyncWrite + Unpin>(
     body: &mut BodyReceiver,
     options: Options,
     send: oneshot::Sender<Result<Response, Error>>,
-) {
+) -> Result<(), Error> {
     let (mut reader, mut writer) = stream.split();
     let prepared = prepare(&endpoint, &spec);
     let (mut encoder, bytes) = match prepared {
         Ok(v) => v,
         Err(error) => {
             body.fail(error.clone());
-            let _ = send.send(Err(error));
-            return;
+            let _ = send.send(Err(error.clone()));
+            return Err(error);
         }
     };
     if let Err(error) = write(io, &mut writer, &bytes, &options).await {
         body.fail(error.clone());
-        let _ = send.send(Err(error));
-        return;
+        let _ = send.send(Err(error.clone()));
+        return Err(error);
     }
     let mut reader = ReadMessage::response(&mut reader, &spec.method);
     let first = match after(io, options.first_byte_timeout) {
         Ok(at) => at,
         Err(error) => {
             body.fail(error.clone());
-            let _ = send.send(Err(error));
-            return;
+            let _ = send.send(Err(error.clone()));
+            return Err(error);
         }
     };
     // Both directions are polled by this single owned task. The stream halves
@@ -54,8 +54,8 @@ pub(super) async fn exchange<S: AsyncRead + AsyncWrite + Unpin>(
         Ok(head) => head,
         Err(error) => {
             body.fail(error.clone());
-            let _ = send.send(Err(error));
-            return;
+            let _ = send.send(Err(error.clone()));
+            return Err(error);
         }
     };
     // A final response can reject a body before the guest finishes writing it.
@@ -73,8 +73,8 @@ pub(super) async fn exchange<S: AsyncRead + AsyncWrite + Unpin>(
     let headers = match fields(head.headers, StreamContext::Response) {
         Ok(fields) => fields,
         Err(e) => {
-            let _ = send.send(Err(e));
-            return;
+            let _ = send.send(Err(e.clone()));
+            return Err(e);
         }
     };
     let (body, mut output) = IncomingBody::new(StreamContext::Response, expected);
@@ -86,16 +86,24 @@ pub(super) async fn exchange<S: AsyncRead + AsyncWrite + Unpin>(
         }))
         .is_err()
     {
-        return;
+        return Err(Error::ConnectionTerminated);
     }
     match reader
         .body(io, options.between_bytes_timeout, &mut output, false)
         .await
     {
         Ok(trailers) => {
-            let _ = output.finish(trailers);
+            output.finish(trailers)?;
+            if uploaded {
+                Ok(())
+            } else {
+                Err(Error::ConnectionTerminated)
+            }
         }
-        Err(error) => output.fail(error),
+        Err(error) => {
+            output.fail(error.clone());
+            Err(error)
+        }
     }
 }
 
@@ -105,8 +113,8 @@ fn prepare(endpoint: &Endpoint, spec: &RequestSpec) -> Result<(Encoder, Vec<u8>)
     }
     let mut headers: Vec<_> = spec
         .headers
-        .iter()
-        .map(|(name, value)| Header::new(name.as_str(), value.as_bytes()))
+        .ordered_iter()
+        .map(|(name, value)| Header::new_preserving_case(name, value.as_bytes()))
         .collect();
     headers.push(Header::new("host", &endpoint.authority));
     // One exchange owns one connection. Reuse would need a capability-scoped
@@ -185,8 +193,8 @@ async fn upload<W: AsyncWrite + Unpin>(
                     return Err(Error::HttpRequestTrailerSectionSize(None));
                 }
                 trailers = fields
-                    .iter()
-                    .map(|(n, v)| Header::new(n.as_str(), v.as_bytes()))
+                    .ordered_iter()
+                    .map(|(n, v)| Header::new_preserving_case(n, v.as_bytes()))
                     .collect();
             }
         }

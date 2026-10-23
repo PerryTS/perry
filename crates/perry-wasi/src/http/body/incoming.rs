@@ -3,7 +3,7 @@ use wasmtime_wasi_io::streams::InputStream;
 
 pub struct IncomingBody {
     // Kept only by guest-facing owners, never by the native sender: no task cycle.
-    transport: Option<perry_component_io::Request<()>>,
+    transport: Option<Arc<perry_component_io::Request<()>>>,
     shared: Option<Arc<Shared>>,
     stream: Option<Box<dyn InputStream>>,
 }
@@ -12,13 +12,18 @@ pub struct IncomingBodySender {
     finished: bool,
 }
 pub struct FutureTrailers {
-    _transport: Option<perry_component_io::Request<()>>,
+    _transport: Option<Arc<perry_component_io::Request<()>>>,
     shared: Arc<Shared>,
     taken: bool,
 }
 
 impl IncomingBody {
-    pub(crate) fn retain_transport(&mut self, task: perry_component_io::Request<()>) {
+    #[cfg(feature = "p3")]
+    pub(crate) fn abort_handle(&self) -> impl FnOnce(Error) + Send + 'static {
+        let shared = self.shared.as_ref().unwrap().clone();
+        move |error| shared.abort(error)
+    }
+    pub(crate) fn retain_transport(&mut self, task: Arc<perry_component_io::Request<()>>) {
         self.transport = Some(task);
     }
     pub fn new(context: StreamContext, expected: Option<u64>) -> (Self, IncomingBodySender) {
@@ -65,6 +70,9 @@ impl IncomingBody {
 }
 impl Drop for IncomingBody {
     fn drop(&mut self) {
+        if let Some(task) = &self.transport {
+            task.cancel();
+        }
         if let Some(shared) = &self.shared {
             shared.disconnect();
         }
@@ -166,6 +174,9 @@ impl FutureTrailers {
 }
 impl Drop for FutureTrailers {
     fn drop(&mut self) {
+        if let Some(task) = &self._transport {
+            task.cancel();
+        }
         self.shared.disconnect();
     }
 }

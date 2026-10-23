@@ -277,8 +277,8 @@ async fn response<W: AsyncWrite + Unpin>(
                             return Err(Error::HttpResponseTrailerSectionSize(None));
                         }
                         trailers = fields
-                            .iter()
-                            .map(|(n, v)| Header::new(n.as_str(), v.as_bytes()))
+                            .ordered_iter()
+                            .map(|(n, v)| Header::new_preserving_case(n, v.as_bytes()))
                             .collect();
                     }
                     Some(BodyFrame::Trailers(_)) => {}
@@ -333,8 +333,8 @@ fn prepare(response: HostOutgoingResponse, method: &http::Method) -> Result<Prep
     };
     let mut headers: Vec<_> = response
         .headers
-        .iter()
-        .map(|(n, v)| Header::new(n.as_str(), v.as_bytes()))
+        .ordered_iter()
+        .map(|(n, v)| Header::new_preserving_case(n, v.as_bytes()))
         .collect();
     headers.push(Header::new("connection", "close"));
     let head = Head {
