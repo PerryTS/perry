@@ -184,6 +184,10 @@
       "category": "runtime-core",
       "decision": "keep"
     },
+    "perry-component-io": {
+      "category": "runtime-core",
+      "decision": "keep"
+    },
     "perry-container-compose": {
       "category": "tool",
       "decision": "keep"
