@@ -663,8 +663,9 @@ fn arg_contract_of(
     }
     for t in toks {
         let fi = &g.m.funcs[g.m.tok_fn(t) as usize];
-        // A closed class's stand-in constructor reads its arguments only to
-        // let them escape as before (`Gen::stand_in_class`).
+        // A closed class's stand-in constructor: its body reads no
+        // `arguments` (`closed_of`); its parameters hand over what they
+        // hold (`Gen::stand_in_class`).
         if fi.has_arguments && !g.closed_ctors.iter().any(|c| c.2 == t) {
             ac.top = true;
             continue;

@@ -794,7 +794,11 @@ fn a_namespace_import_sees_only_the_real_exports() {
     let a = cfg.fields.iter().find(|f| f.key == "a").expect("field a");
     // Rewritten for DECISIONS 73 (principle: a store effect carries the kinds
     // it stores): the field holds the stored primitive, not ⊤.
-    assert!(!a.readonly && a.kind.prims & crate::model::prim::STR != 0, "{}", pf.dump_text());
+    assert!(
+        !a.readonly && a.kind.prims & crate::model::prim::STR != 0,
+        "{}",
+        pf.dump_text()
+    );
     let u = "import * as m from './t'; (m.cfg as any).z = 'x'; console.log(m.useA());";
     let pf = units_of(&[("t", t), ("u", u)]);
     assert!(pf.broken.is_empty(), "{:?}\n{}", pf.broken, pf.dump_text());
@@ -1057,7 +1061,10 @@ fn a_result_holding_another_units_layout_forwards_its_contract() {
             .filter(|t| t.fields.iter().any(|f| f.key == "zz"))
             // Rewritten for DECISIONS 73 (principle: a store effect carries the kinds
             // it stores): `q` holds the stored number, not ⊤.
-            .all(|t| t.adds_keys > 0 && t.fields.iter().any(|f| f.key == "q" && f.kind.prims & crate::model::prim::NUM != 0)),
+            .all(|t| t.adds_keys > 0
+                && t.fields
+                    .iter()
+                    .any(|f| f.key == "q" && f.kind.prims & crate::model::prim::NUM != 0)),
         "{}",
         pf.dump_text()
     );
@@ -1290,7 +1297,11 @@ fn a_key_another_unit_adds_to_a_literal_is_a_shape_transition() {
         .expect("field seen");
     // Rewritten for DECISIONS 73 (principle: a store effect carries the kinds
     // it stores): the field holds the stored primitive, not ⊤.
-    assert!(!seen.readonly && seen.kind.prims & crate::model::prim::BOOL != 0, "{}", pf.dump_text());
+    assert!(
+        !seen.readonly && seen.kind.prims & crate::model::prim::BOOL != 0,
+        "{}",
+        pf.dump_text()
+    );
     // A computed-key store still opens the layout: a census report (§5).
     let src = r#"
         function grow(c: any, k: any) { c[k] = 1; }
@@ -2453,7 +2464,11 @@ fn a_closed_parameter_binding_holds_its_contract_classes_only() {
         assert!(!b.other, "local {id}: {b:?}\n{}", pf.dump_text());
         // DECISIONS 77: every call passes `a`, so it is never undefined
         // (no nullish receiver test, `a.size++` updates the slot).
-        assert!(b.prims & crate::model::prim::UNDEF == 0, "local {id}: {b:?}\n{}", pf.dump_text());
+        assert!(
+            b.prims & crate::model::prim::UNDEF == 0,
+            "local {id}: {b:?}\n{}",
+            pf.dump_text()
+        );
     }
     // Negative: another unit's call passes fewer arguments; the missing
     // parameter holds undefined (the solver's rule at the stand-in).
@@ -2466,7 +2481,10 @@ fn a_closed_parameter_binding_holds_its_contract_classes_only() {
     let pf = units(src);
     assert!(pf.broken.is_empty(), "{:?}\n{}", pf.broken, pf.dump_text());
     assert!(
-        pf.bindings[0].locals.iter().any(|(_, b)| b.class_ids.is_empty() && b.prims & crate::model::prim::UNDEF != 0),
+        pf.bindings[0]
+            .locals
+            .iter()
+            .any(|(_, b)| b.class_ids.is_empty() && b.prims & crate::model::prim::UNDEF != 0),
         "{:?}\n{}",
         pf.bindings[0].locals,
         pf.dump_text()
@@ -2491,7 +2509,11 @@ fn a_returned_literal_carries_its_field_functions() {
     let pf = units(src);
     assert!(pf.units.len() >= 2, "{}", pf.dump_text());
     assert!(pf.broken.is_empty(), "{:?}\n{}", pf.broken, pf.dump_text());
-    assert!(proven(&pf, "has") && proven(&pf, "add"), "{}", pf.dump_text());
+    assert!(
+        proven(&pf, "has") && proven(&pf, "add"),
+        "{}",
+        pf.dump_text()
+    );
     // A field function returning its own literal (a builder): the result
     // layout's field functions name the same layout again, and the reader
     // makes its stand-in once (tssrc overflowed the stack without that).
@@ -2528,5 +2550,9 @@ fn a_forwarded_result_layout_leaves_no_fields() {
     let pf = units(src);
     assert!(pf.units.len() >= 4, "{}", pf.dump_text());
     assert!(pf.broken.is_empty(), "{:?}\n{}", pf.broken, pf.dump_text());
-    assert!(proven(&pf, "project") && proven(&pf, "status"), "{}", pf.dump_text());
+    assert!(
+        proven(&pf, "project") && proven(&pf, "status"),
+        "{}",
+        pf.dump_text()
+    );
 }

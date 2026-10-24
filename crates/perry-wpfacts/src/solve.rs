@@ -712,6 +712,15 @@ impl Model {
                     self.escape(t, reason);
                 }
             }
+            Cons::HandOver { reason } => {
+                for &t in toks {
+                    let stand_in = matches!(self.toks[t as usize], TokKind::Obj(tm, _)
+                        if self.foreign.contains_key(&tm));
+                    if !stand_in {
+                        self.escape(t, reason);
+                    }
+                }
+            }
             Cons::ContractThis {
                 tmpl,
                 reason,
@@ -1535,6 +1544,7 @@ impl Model {
                 format!("chain {n} {origin} {} {act:?}", self.key_name(*key))
             }
             Cons::TopSink { reason } => format!("top {n} {reason}"),
+            Cons::HandOver { reason } => format!("handover {n} {reason}"),
             Cons::ContractThis {
                 tmpl,
                 reason,

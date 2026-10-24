@@ -361,6 +361,13 @@ pub enum Cons {
     },
     /// Every token escapes (goes to ⊤), with the reason.
     TopSink { reason: u32 },
+    /// A parameter of a closed class's stand-in constructor (design §18.13,
+    /// DECISIONS 109): an instance of another unit's contract (a stand-in)
+    /// goes to the defining unit's constructor through the argument
+    /// contract, which describes it there as the same stand-in, so that
+    /// unit's census covers what the constructor does with it; any other
+    /// token escapes, with the reason.
+    HandOver { reason: u32 },
     /// The `this` of a contract stand-in of another unit's class `tmpl`
     /// (design §11.2): its instances are inside the contract; any other
     /// receiver escapes (that unit runs the method on it unseen).
@@ -518,6 +525,7 @@ impl Cons {
             Cons::MCall { .. } => "mcall",
             Cons::Chain { .. } => "chain",
             Cons::TopSink { .. } => "top",
+            Cons::HandOver { .. } => "handover",
             Cons::ContractThis { .. } => "contractthis",
             Cons::TopIfAny { .. } => "topifany",
             Cons::Hard { .. } => "hard",

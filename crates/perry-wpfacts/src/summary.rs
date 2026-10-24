@@ -234,6 +234,7 @@ pub fn map_cons(
             act: act_map(act, &mut n, &mut k),
         },
         TopSink { reason } => TopSink { reason },
+        HandOver { reason } => HandOver { reason },
         ContractThis {
             tmpl,
             reason,
@@ -393,6 +394,7 @@ fn gen_kind(c: &Cons) -> bool {
             | SuperCtor { .. }
             | MCall { .. }
             | TopSink { .. }
+            | HandOver { .. }
             | ContractThis { .. }
             | TopIfAny { .. }
             | Hard { .. }

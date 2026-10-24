@@ -905,10 +905,23 @@ impl<'a> Gen<'a> {
             .m
             .reason("another unit's class used beyond its contract");
         let tm = self.m.tmpls.len() as TmplId;
-        let ctor = self.stub_fn(mi, &format!("{}.constructor", c.name), tm, false, false, r);
         // A closed class (design §18.13): its constructor's parameters
         // collect what this unit's constructions pass, published under the
-        // class's key; the arguments still reach the sunk `arguments` node.
+        // class's key. Its body reads no `arguments` and has no rest
+        // parameter (`lib::closed_of`), so an argument past them reaches
+        // nothing; what a parameter holds goes to the defining unit's
+        // constructor through the argument contract: another unit's
+        // stand-in stays inside its contract there, anything else escapes
+        // (`Cons::HandOver`, DECISIONS 109).
+        let ctor = self.stub_fn_of(
+            mi,
+            &format!("{}.constructor", c.name),
+            tm,
+            false,
+            false,
+            r,
+            c.closed.is_none(),
+        );
         if let Some((path, name, n)) = &c.closed {
             let outer_fn = std::mem::replace(&mut self.m.cur_fn, ctor);
             let params: Vec<NodeId> = (0..*n)
@@ -917,6 +930,7 @@ impl<'a> Gen<'a> {
                         .m
                         .node_named("param", || format!("param{i}({}.constructor)", c.name));
                     self.m.own(p);
+                    self.m.cons(p, Cons::HandOver { reason: r });
                     p
                 })
                 .collect();
@@ -1007,6 +1021,7 @@ impl<'a> Gen<'a> {
         }
         let mut nested: Vec<(NodeId, &'a (String, Vec<String>, bool))> = Vec::new();
         let mut fn_fields: Vec<(NodeId, &'a Vec<crate::units::FnContract>)> = Vec::new();
+        let mut class_fields: Vec<(NodeId, &'a crate::derive::KindFact, bool)> = Vec::new();
         for fld in &c.facts.fields {
             let a = self.m.atom(&fld.key);
             let n = self.m.field(inst, a);
@@ -1038,6 +1053,14 @@ impl<'a> Gen<'a> {
                 self.m.add_prim(n, k.prims | undef);
                 continue;
             }
+            // A data field that holds only instances of classes (and
+            // primitives), as the defining unit's solve found them
+            // (DECISIONS 110): made below.
+            if fld.data_field && !k.top && !k.objs.is_empty() && k.funcs == 0 && k.builtin_objs == 0
+            {
+                class_fields.push((n, k, fld.definite));
+                continue;
+            }
             self.m
                 .add_top(n, |_| "field of another unit's class".into());
             self.m.add_prim(n, prim::ALL);
@@ -1061,6 +1084,26 @@ impl<'a> Gen<'a> {
                 let v = self.stand_in_fn_of(mi, fc, Some((tm, false)));
                 self.m.edge(v, fnode);
             }
+        }
+        // DECISIONS 110 (73 for objects): a field whose published kind names
+        // only this class (a tree's or a list's links) reads as this
+        // stand-in's instance. The kind is the defining unit's at the
+        // fixpoint, every unit's stores performed (a store of an object is
+        // `None`: ⊤ there), so the field holds exactly such instances; using
+        // one beyond the contract is this unit's census report. It needs no
+        // other contract than this one. Another class it names reads ⊤ as
+        // before: its contract would be a read by display, which the driver
+        // does not track across rounds (CW2 DECISIONS 103).
+        for (fnode, k, definite) in class_fields {
+            if c.literal_shape || k.objs.iter().any(|d| *d != c.display) {
+                self.m
+                    .add_top(fnode, |_| "field of another unit's class".into());
+                self.m.add_prim(fnode, prim::ALL);
+                continue;
+            }
+            self.m.add_tok(fnode, inst);
+            let undef = if definite { 0 } else { prim::UNDEF };
+            self.m.add_prim(fnode, k.prims | undef);
         }
         for (fnode, (_, ds, prims)) in nested {
             for d in ds {
@@ -1108,6 +1151,22 @@ impl<'a> Gen<'a> {
         statics: bool,
         reason: u32,
     ) -> FnIdx {
+        self.stub_fn_of(mi, name, class, ret_top, statics, reason, true)
+    }
+
+    /// `stub_fn`; `sink_args` false for a closed class's constructor, whose
+    /// parameters hand their values over instead (`stand_in_class`).
+    #[allow(clippy::too_many_arguments)]
+    fn stub_fn_of(
+        &mut self,
+        mi: u32,
+        name: &str,
+        class: TmplId,
+        ret_top: bool,
+        statics: bool,
+        reason: u32,
+        sink_args: bool,
+    ) -> FnIdx {
         let fx = self.m.funcs.len() as FnIdx;
         let tok = self.m.tok(TokKind::Func(fx, NO_CTX));
         let outer_fn = std::mem::replace(&mut self.m.cur_fn, fx);
@@ -1135,7 +1194,9 @@ impl<'a> Gen<'a> {
             forwards_super: false,
             parent: NO_FN,
         });
-        self.m.sink_node(args_all, reason);
+        if sink_args {
+            self.m.sink_node(args_all, reason);
+        }
         if ret_top {
             self.m
                 .add_top(ret, |_| "result of another unit's method".into());

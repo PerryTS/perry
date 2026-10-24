@@ -60,7 +60,11 @@ fn a_result_holding_another_units_instance_forwards_its_contract() {
     let k = field(tmpl(&pf, "R"), "k");
     // Rewritten for DECISIONS 73 (principle: a store effect carries the kinds
     // it stores): the field holds the stored primitive, not ⊤.
-    assert!(!k.readonly && k.kind.prims & crate::model::prim::STR != 0, "{}", pf.dump_text());
+    assert!(
+        !k.readonly && k.kind.prims & crate::model::prim::STR != 0,
+        "{}",
+        pf.dump_text()
+    );
     // A store of a key R does not hold from birth is beyond the contract:
     // the census breaks R and `this.k` is no longer proven.
     let m = "import { newInstance } from './a'; function f() { const s: any = newInstance(); s.j = 'x'; return s.get(); } console.log(f());";

@@ -585,34 +585,34 @@ pub(crate) fn closed_bindings(module: &Module) -> FxHashMap<String, u32> {
         let f = &mut |e: &Expr| {
             named(e);
             match e {
-            Expr::Call { callee, args, .. } => {
-                if let Some(id) = perry_hir::tdz_check::checked_binding(e) {
-                    uses.entry((false, id)).or_default().checks += 1;
-                }
-                if let Some(k) = key(callee) {
-                    uses.entry(k).or_default().calls += 1;
-                    for a in args.iter().filter_map(key) {
-                        uses.entry(a).or_default().args_of.push(k);
+                Expr::Call { callee, args, .. } => {
+                    if let Some(id) = perry_hir::tdz_check::checked_binding(e) {
+                        uses.entry((false, id)).or_default().checks += 1;
+                    }
+                    if let Some(k) = key(callee) {
+                        uses.entry(k).or_default().calls += 1;
+                        for a in args.iter().filter_map(key) {
+                            uses.entry(a).or_default().args_of.push(k);
+                        }
                     }
                 }
-            }
-            Expr::LocalGet(id) => uses.entry((false, *id)).or_default().refs += 1,
-            Expr::FuncRef(id) => uses.entry((true, *id)).or_default().refs += 1,
-            Expr::LocalSet(id, _)
-            | Expr::Update { id, .. }
-            | Expr::ScopedTemp { id, .. }
-            | Expr::ArrayPush { array_id: id, .. }
-            | Expr::ArrayPushSpread { array_id: id, .. }
-            | Expr::ArrayUnshift { array_id: id, .. }
-            | Expr::ArraySplice { array_id: id, .. }
-            | Expr::ArrayCopyWithin { array_id: id, .. }
-            | Expr::ArrayPop(id)
-            | Expr::ArrayShift(id)
-            | Expr::SetAdd { set_id: id, .. } => {
-                uses.entry((false, *id)).or_default().written = true
-            }
-            Expr::WithGet { .. } | Expr::WithSet { .. } => with = true,
-            _ => {}
+                Expr::LocalGet(id) => uses.entry((false, *id)).or_default().refs += 1,
+                Expr::FuncRef(id) => uses.entry((true, *id)).or_default().refs += 1,
+                Expr::LocalSet(id, _)
+                | Expr::Update { id, .. }
+                | Expr::ScopedTemp { id, .. }
+                | Expr::ArrayPush { array_id: id, .. }
+                | Expr::ArrayPushSpread { array_id: id, .. }
+                | Expr::ArrayUnshift { array_id: id, .. }
+                | Expr::ArraySplice { array_id: id, .. }
+                | Expr::ArrayCopyWithin { array_id: id, .. }
+                | Expr::ArrayPop(id)
+                | Expr::ArrayShift(id)
+                | Expr::SetAdd { set_id: id, .. } => {
+                    uses.entry((false, *id)).or_default().written = true
+                }
+                Expr::WithGet { .. } | Expr::WithSet { .. } => with = true,
+                _ => {}
             }
         };
         for func in &module.functions {
