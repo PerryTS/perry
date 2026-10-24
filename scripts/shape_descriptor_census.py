@@ -337,10 +337,10 @@ DISPATCH_CHECKS = (
     ("crates/perry-runtime/src/object/layout_probe.rs", "probe_get_at",
      r"if\s+r\.is_null\(\)\s*\{\s*return\s+array_named_get::<ABSENT>\(\s*dir,\s*obj,\s*key_bits,\s*site_key_hash::<LAZY_HASH>\(key_bits,\s*hash\),\s*\);",
      "nonordinary read routes to the checked array path"),
-    ("crates/perry-runtime/src/object/layout_probe.rs", "perry_probe_set",
+    ("crates/perry-runtime/src/object/layout_probe_chain_store.rs", "perry_probe_set",
      r"let\s+r\s*=\s*record_of\(dir,\s*\(\*obj\)\.parent_class_id\);\s*if\s+r\.is_null\(\)\s*\|\|\s*\(\*r\)\.object_kind\(\)\s*!=\s*super::ShapeObjectKind::Ordinary\s*\{\s*return\s+0;",
      "store probe rejects a missing or nonordinary receiver record"),
-    ("crates/perry-runtime/src/object/layout_probe.rs", "perry_probe_set",
+    ("crates/perry-runtime/src/object/layout_probe_chain_store.rs", "perry_probe_set",
      r"key_storage_slot\(keys,\s*pos\)",
      "store slot comes from the receiver's descriptor entry"),
     ("crates/perry-runtime/src/object/shape_store.rs", "dynamic_store_receiver",
@@ -371,11 +371,14 @@ DISPATCH_CHECKS = (
 
 
 def assert_layout_dispatch_authority(sources: dict[str, str]) -> None:
+    probe = sources["crates/perry-runtime/src/object/layout_probe.rs"]
+    include = re.search(r'^\s*include!\("layout_probe_chain_store\.rs"\);', probe, re.MULTILINE)
+    if include is None or "include!" not in blank_rust_comments_and_literals(probe)[include.start():include.end()]:
+        raise CensusError("store probe source is not included by the live layout-probe module")
     for path, name, pattern, label in DISPATCH_CHECKS:
         if path not in sources:
             raise CensusError("shape dispatch authority source missing: " + path)
         require_code(function_body(sources[path], name), pattern, label)
-    probe = sources["crates/perry-runtime/src/object/layout_probe.rs"]
     body = blank_rust_comments_and_literals(function_body(probe, "probe_get"))
     if not re.fullmatch(
         r"\s*probe_get_at::<ABSENT,\s*false,\s*false>\(dir,\s*obj_biased,\s*key_bits,\s*hash,\s*std::ptr::null\(\)\)\s*", body
@@ -413,6 +416,10 @@ def run_layout_dispatch_sabotage(sources, expect_rejected) -> None:
         broken[path] = broken[path].replace(body, changed, 1)
         expect_rejected(label, lambda: assert_layout_dispatch_authority(broken))
     path = "crates/perry-runtime/src/object/layout_probe.rs"
+    for replacement in ("", '// include!("layout_probe_chain_store.rs");', '/*\ninclude!("layout_probe_chain_store.rs");\n*/'):
+        broken = dict(sources)
+        broken[path] = broken[path].replace('include!("layout_probe_chain_store.rs");', replacement, 1)
+        expect_rejected("disconnected store probe source", lambda: assert_layout_dispatch_authority(broken))
     for name in ("perry_probe_get", "perry_probe_get_binding", "probe_get"):
         broken = dict(sources)
         body = function_body(broken[path], name)

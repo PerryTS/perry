@@ -72,6 +72,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterable
 
+from shape_descriptor_census import blank_rust_comments_and_literals
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -238,6 +240,14 @@ def _rust_module_is_declared(
             r'(?:pub(?:\([^)]*\))?\s+)?mod\s+\w+\s*;',
             tree.read(source), re.M,
         )
+        # A literal include keeps tests in the owner's module and scope.
+        # Its owner must itself be reachable; an isolated include cycle is dark.
+        source_text = tree.read(source)
+        source_code = blank_rust_comments_and_literals(source_text)
+        targets += [match.group(1) for match in re.finditer(
+            r'^\s*include!\s*\(\s*"([^"\n]+)"\s*\)\s*;',
+            source_text, re.M,
+        ) if "include!" in source_code[match.start():match.end()]]
         if any((Path(source).parent / target).as_posix() == rel for target in targets):
             if _rust_module_is_declared(tree, source, seen):
                 return True
@@ -683,6 +693,24 @@ def _self_test(root: Path) -> int:
         b: '#[path = "selftest_alias_a.rs"]\nmod child;',
     })
     check("unregistered sibling cycle stays dark",
+          not _rust_module_is_declared(cycle, a))
+
+    included = "crates/perry-wpfacts/src/tests/unit_mode_fixpoint.rs"
+    owner = "crates/perry-wpfacts/src/tests/unit_mode.rs"
+    declaration = 'include!("unit_mode_fixpoint.rs");'
+    check("sibling included tests are live",
+          _rust_module_is_declared(Tree(root), included))
+    for replacement in ("", "// " + declaration, "/*\n" + declaration + "\n*/",
+                        'r#"\n' + declaration + '\n"#;', declaration.replace("fixpoint", "missing")):
+        check("missing or inactive include leaves tests dark",
+              not _rust_module_is_declared(Tree(root, overrides={
+                  owner: Tree(root).read(owner).replace(declaration, replacement)
+              }), included))
+    cycle = Tree(root, added=[a, b], overrides={
+        a: 'include!("selftest_alias_b.rs");',
+        b: 'include!("selftest_alias_a.rs");',
+    })
+    check("unregistered include cycle stays dark",
           not _rust_module_is_declared(cycle, a))
 
     # 8. the path matcher does not let `*` cross a directory separator — the bug
