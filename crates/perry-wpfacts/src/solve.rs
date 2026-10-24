@@ -1302,8 +1302,10 @@ impl Model {
         };
         // A store into an existing data field of another unit's literal
         // layout opens nothing (§5): a store effect its defining unit
-        // performs with an unknown value (decision 17). The value escapes:
-        // every other unit reads that field as unknown. A class instance's
+        // performs (decision 17) with what the stored value's contract
+        // describes, published as a published binding's value is
+        // (`Gen::contract_check`: a value no contract describes escapes, and
+        // the field holds an unknown value). A class instance's
         // field is existing when every instance holds it from its birth
         // (definite): the store adds no key (CW2 C, binarytrees_arena).
         // A literal layout's new data key is a shape transition its defining
@@ -1330,8 +1332,6 @@ impl Model {
             match key {
                 Key::Named(a) if effect => {
                     self.foreign_stores.insert((tm, a, src));
-                    let r = self.reason("stored into another unit's object");
-                    self.sink_node(src, r);
                 }
                 _ => {
                     self.foreign_written.insert(tm);
