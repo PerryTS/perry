@@ -7,6 +7,30 @@
   ],
   "registries": [
     {
+      "file": "crates/perry-runtime/src/contracts.rs",
+      "name": "CLAIMS",
+      "verdict": "bounded_by_program",
+      "why": "OnceLock populated exactly once by iterating finite immutable facts_sections and parsing class claims; no writes after initialization (contracts.rs71-95). Keys are program class IDs, values owned claim data."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/dynamic_key_read/census.rs",
+      "name": "COUNTS",
+      "verdict": "bounded_by_program",
+      "why": "Closed production path: sole record call dynamic_key_read.rs218 <- get_slow.rs244 complete keyed read <- codegen index_get.rs1620/1735, or symbol_ic.rs13/20/46. Those codegen callers pass either literal0 or emit_typed_feedback_register_site; typed_feedback.rs322-329 derives compile-time ic_site_counter/siteID and returns integer.to_string. No JS-runtime-generated site IDs enter this internal ABI through supported generated calls. Key cardinality <= compiled read sites plus0; values only4numeric counts."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/layout_desc.rs",
+      "name": "OUT_OF_ORDER_PAIRS",
+      "verdict": "bounded_by_program",
+      "why": "Sole insert note_out_of_order_pair obtains family_desc_of(obj), then constructs(classID,owned key spelling atpos,owned spelling oflaterkey) using descriptor.keys only. Finite descriptors and finite key-pairs bound mapcardinality, no receiver addresses retained."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/layout_desc.rs",
+      "name": "OTHER_KEYS",
+      "verdict": "process_lifetime",
+      "why": "Diagnostic-only map: family_add calls note_other_key only inside family_diag_on(), which is false unless PERRY_FAMILY_DIAG is set. No production insertion with the knob off. The sole reader family_diag_other_report is diagnostic and prints only at PERRY_FAMILY_DIAG=3. Arbitrary key spellings are intentionally unbounded while diagnostics are enabled, not claimed to be program-bounded."
+    },
+    {
       "file": "crates/perry-ext-http/src/client_turnloop/tls.rs",
       "name": "CONFIGS",
       "fn": "configs",
@@ -109,18 +133,6 @@
       "name": "PRIMITIVE_DISPATCH",
       "verdict": "diagnostic_only",
       "why": "Primitive-method fallback histogram, written only when gc_diag_enabled() (PERRY_GC_DIAG) and printed at exit"
-    },
-    {
-      "file": "crates/perry-runtime/src/module_require.rs",
-      "name": "CANONICAL_MODULE_DIRS",
-      "verdict": "bounded_by_program",
-      "why": "Memo of canonicalized directories holding module paths; bounded by the directories the program resolves"
-    },
-    {
-      "file": "crates/perry-runtime/src/module_require.rs",
-      "name": "CANONICAL_MODULE_PATHS",
-      "verdict": "bounded_by_program",
-      "why": "Realpath memo keyed by module path from registration/require resolution; bounded by the program's module files"
     },
     {
       "file": "crates/perry-runtime/src/module_require/path_registry.rs",
@@ -436,12 +448,6 @@
       "name": "UNTRANSFERABLE_OBJECTS",
       "verdict": "open_leak",
       "why": "NaN-box bits of each object passed to markAsUntransferable: one per marked object, never unmarked"
-    },
-    {
-      "file": "crates/perry-runtime/src/node_stream_readwrite.rs",
-      "name": "HIDDEN_KEYS",
-      "verdict": "bounded_by_program",
-      "why": "Keyed by (address, length) of the &'static [u8] hidden-field name literals passed to hidden_key; at most one entry per literal in the compiled runtime, so growth stops once each has been used once per thread. The cached key strings are rooted (marked and rewritten) by the node_stream_hidden_keys mutable root scanner."
     },
     {
       "file": "crates/perry-stdlib/src/worker_threads/entry_table.rs",

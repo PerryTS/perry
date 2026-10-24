@@ -36,6 +36,24 @@
   ],
   "holders": [
     {
+      "file": "crates/perry-runtime/src/gc/tenuring.rs",
+      "name": "CAP_PHASE_INFLUX_BYTES",
+      "verdict": "not_a_gc_pointer",
+      "why": "Cell<u64> stores only capped cumulative Eden byte counts from note_cap_phase_reading and zero at start_cap_phase; no address or NaN-boxed value is stored."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/tenuring.rs",
+      "name": "CAP_PHASE_MINORS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Cell<u64> stores only minor-collection counts from note_cap_phase_reading and zero at start_cap_phase; no address or NaN-boxed value is stored."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/global_this/async_generator_state.rs",
+      "name": "BIRTH_SHAPE",
+      "verdict": "not_a_gc_pointer",
+      "why": "Agent-local immutable ShapeId returned by record_birth_shape(ASYNC_GENERATOR_STATE_BRAND), which publishes the branded shape and records its external identity carrier. birth_shape writes it once. Both semantic readers (async_generator_record_of_object and generator_state::async_or_transitioned_record_bits through published_birth_shape) compare the live receiver shape to this exact identity before reading the private slot; mismatches perform the brand/property checks. No reader treats the holder alone as a semantic verdict or skips checking the receiver. It carries the shape identity, never a GC address."
+    },
+    {
       "file": "crates/perry-runtime/src/arena/page_meta/mod.rs",
       "name": "PAGE_GENERATIONS",
       "verdict": "not_a_gc_pointer",

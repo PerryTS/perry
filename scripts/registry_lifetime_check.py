@@ -226,6 +226,11 @@ def strip_cfg_test(text: str) -> str:
                 break
             if not opened and line.rstrip().endswith(";"):
                 break
+            # A unit enum variant is a complete cfg-gated item too. Do not
+            # consume its enum's closing brace and the next TLS macro while
+            # searching for a semicolon (ContextGuardAction::TestNoop).
+            if not opened and re.fullmatch(r"\s*(?:r#)?[A-Za-z_]\w*\s*,\s*", line):
+                break
         for blank in range(start, index):
             out[blank] = ""
     return "\n".join(out)

@@ -1,0 +1,1 @@
+Classify native TLS and test-only holders correctly in the lifetime inventories. Document individual scalar, native-allocation and immutable-metadata custody proofs, including the generator birth ShapeId. Bind mapped-region lifetime custody to reviewed source hashes and reject changed release code or new boundary callers. No inventory floor is lowered.
