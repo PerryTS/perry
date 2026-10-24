@@ -833,7 +833,7 @@ impl Model {
                         // as it links in.
                         _ if self.is_arg_marker(t) => {
                             let own = (dst == u32::MAX && to == at).then_some(at);
-                            self.store_out_arg_reach(t, (f, dst, reach, via, key), reason, own);
+                            self.store_out_arg_reach(t, (f, dst, reach, via, key), reason, own, None);
                         }
                         // DECISIONS 149: only the arguments are the
                         // reader's own values in what its receiver reaches;
@@ -1603,7 +1603,18 @@ impl Model {
         // reach under `k` goes into each member's keyed reach under `k`
         // alone, not into all its members reach (DECISIONS 121).
         if let (Key::Named(a), true) = (key, self.is_arg_marker(t)) {
+            if self.aborted {
+                return;
+            }
             if self.arg_store_done.insert((t, a, src)) {
+                // Each store an argument marker hands to a member is solve
+                // work (113-CWL3: marker walks are solve work), so the unit's
+                // bound sees the fan-out (XUC-1).
+                self.work += 1;
+                if self.max_work != 0 && self.work > self.max_work {
+                    self.aborted = true;
+                    return;
+                }
                 self.arg_stores.entry(t).or_default().push((a, src, site));
                 match self.keyed_parent.get(&t).copied() {
                     Some((p, k)) => {
@@ -2252,6 +2263,10 @@ impl Model {
     /// to each marker that linked in since (`link_marker`).
     fn replay_marker_links(&mut self) {
         while let Some((m, r)) = self.marker_links.pop() {
+            if self.aborted {
+                self.marker_links.clear();
+                return;
+            }
             for (a, src, site) in self.arg_stores.get(&r).cloned().unwrap_or_default() {
                 self.store_into(m, Key::Named(a), src, site);
             }
@@ -2267,8 +2282,10 @@ impl Model {
                 }
             }
             // DECISIONS 136: a flow whose stored value `r`'s members stand for.
+            // Only `m` is new below `r`: the walk from `r`'s base has seen
+            // the rest, and what it found is recorded (XUC-3).
             for (t, flow, reason, own) in self.arg_src_flows.get(&r).cloned().unwrap_or_default() {
-                self.store_out_arg_reach(t, flow, reason, own);
+                self.store_out_arg_reach(t, flow, reason, own, Some(m));
             }
             for (f, j, reason) in self.arg_src_watch.get(&r).cloned().unwrap_or_default() {
                 if self.marker_of.get(&(f, j)) != Some(&m) {
@@ -2331,6 +2348,10 @@ impl Model {
     /// `f`'s own parameter, or its reach, is a source of the flow (the
     /// reader stores its own value), any other member's escapes. The
     /// members that link in later are replayed (`replay_marker_links`).
+    ///
+    /// `from`: a member that linked in under a marker this flow already
+    /// walked (`replay_marker_links`); the walk covers what is new, `from`
+    /// and below (XUC-3). Each marker visited is solve work (113-CWL3).
     /// DECISIONS 151: a member is a source as a value stored directly is:
     /// in a store into the receiver's reach marker it met (`own`), a value
     /// of this unit takes the path of that store (`Cons::StoreOut`,
@@ -2341,6 +2362,7 @@ impl Model {
         flow: StoreFlowKey,
         reason: u32,
         own: Option<Tok>,
+        from: Option<Tok>,
     ) {
         let (f, ..) = flow;
         // `None`: the members themselves; `Some(k)`: their reach under key
@@ -2352,12 +2374,17 @@ impl Model {
                 None => (t, None),
             },
         };
-        let mut st = vec![base];
+        let mut st = vec![from.unwrap_or(base)];
         let mut seen = crate::pts::FxHashSet::default();
         let mut srcs = Vec::new();
         while let Some(x) = st.pop() {
             if !seen.insert(x) {
                 continue;
+            }
+            self.work += 1;
+            if self.max_work != 0 && self.work > self.max_work {
+                self.aborted = true;
+                return;
             }
             match self.arg_members.get(&x).cloned() {
                 Some(ms) => {
