@@ -36,6 +36,12 @@
   ],
   "holders": [
     {
+      "file": "crates/perry-ext-ws/src/lib.rs",
+      "name": "WS_PENDING_EVENTS",
+      "verdict": "not_a_gc_pointer",
+      "why": "The queue owns only agent/socket/server handle IDs, status codes, Rust String and Vec<u8> payloads. PendingWsEvent and WsPayload contain no JSValue or GC pointer; close callbacks remain in the separately scanned listener maps and JS values are created only after an event is removed for its owning agent."
+    },
+    {
       "file": "crates/perry-runtime/src/gc/tenuring.rs",
       "name": "CAP_PHASE_INFLUX_BYTES",
       "verdict": "not_a_gc_pointer",
