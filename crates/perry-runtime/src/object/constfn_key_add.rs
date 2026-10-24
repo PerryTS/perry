@@ -3,6 +3,7 @@
 //! No new registry or closure root is introduced; a miss keeps the ordered mint.
 
 use super::{field_rep, field_rep_store, shapes, ObjectHeader};
+use crate::codegen_abi::LayoutWord;
 
 /// The caller has completed the ordinary Set interception/attribute vet.
 /// Reuse only an exact current cached body edge whose Any publication shape
@@ -12,8 +13,8 @@ use super::{field_rep, field_rep_store, shapes, ObjectHeader};
 /// under the predecessor itself when its lane for the slot is Any already.
 unsafe fn try_cached_constfn_key_add(
     obj: *mut ObjectHeader,
-    predecessor: u32,
-    hit: (super::ObjectKeys, u32, u32),
+    predecessor: LayoutWord,
+    hit: (super::ObjectKeys, u32, LayoutWord),
     bits: u64,
 ) -> bool {
     let (keys, slot, target) = hit;
@@ -108,13 +109,13 @@ unsafe fn try_cached_constfn_key_add(
 /// Ordinary cache hits retain their existing publication. A completed ConstFn
 /// hit has already stored this receiver's value under Any and stamped SPECIAL.
 pub(super) enum CachedKeyAdd {
-    Transition(super::ObjectKeys, u32, u32, u64),
+    Transition(super::ObjectKeys, u32, LayoutWord, u64),
     StoredConstFn,
 }
 
 impl CachedKeyAdd {
     #[inline(always)]
-    pub(super) fn transition_slot_bits(self) -> Option<(super::ObjectKeys, u32, u32, u64)> {
+    pub(super) fn transition_slot_bits(self) -> Option<(super::ObjectKeys, u32, LayoutWord, u64)> {
         match self {
             Self::Transition(keys, slot, target, bits) => Some((keys, slot, target, bits)),
             Self::StoredConstFn => None,
@@ -122,7 +123,7 @@ impl CachedKeyAdd {
     }
 
     #[inline(always)]
-    pub(super) fn transition(self) -> Option<(super::ObjectKeys, u32, u32)> {
+    pub(super) fn transition(self) -> Option<(super::ObjectKeys, u32, LayoutWord)> {
         self.transition_slot_bits()
             .map(|(keys, slot, target, _)| (keys, slot, target))
     }
@@ -133,8 +134,8 @@ impl CachedKeyAdd {
 #[inline(always)]
 pub(super) unsafe fn admit_or_store(
     obj: *mut ObjectHeader,
-    predecessor: u32,
-    hit: (super::ObjectKeys, u32, u32),
+    predecessor: LayoutWord,
+    hit: (super::ObjectKeys, u32, LayoutWord),
     bits: u64,
 ) -> Option<CachedKeyAdd> {
     if let Some(slot_bits) = field_rep_store::cached_key_add_slot_bits(hit.2, hit.1, bits) {

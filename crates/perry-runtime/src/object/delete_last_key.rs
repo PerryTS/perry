@@ -12,6 +12,7 @@
 //! `None` for the full path.
 
 use super::ObjectHeader;
+use crate::codegen_abi::LayoutWord;
 
 /// Delete own key `key_bits` (a heap or SSO string, text `key_bytes`) from
 /// `obj` when it is the last key of an admitted receiver (module docs).
@@ -66,7 +67,7 @@ unsafe fn admitted_receiver(obj: *mut ObjectHeader) -> Option<super::shapes::Sha
     if !super::shapes::is_site_matchable_layout_word(id) {
         return None;
     }
-    let record = super::shapes::shape_record_for_word(id)?;
+    let record = super::shapes::shape_record_for_word(LayoutWord(id))?;
     if crate::process::is_process_env_ptr(addr)
         || super::is_arguments_object(obj)
         || crate::url::is_url_object_shape(obj)
@@ -117,7 +118,7 @@ pub(crate) unsafe fn try_delete_last_added_dynamic(
 /// caller has established that the key may be deleted.
 pub(crate) unsafe fn rollback(obj: *mut ObjectHeader, slot: u32) -> bool {
     let inline = super::object_inline_capacity(obj) as usize;
-    if super::shapes::publish_object_shape_last_key_rollback(obj, slot + 1) == 0 {
+    if super::shapes::publish_object_shape_last_key_rollback(obj, slot + 1) == LayoutWord(0) {
         return false;
     }
     let slot = slot as usize;

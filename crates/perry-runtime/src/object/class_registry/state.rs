@@ -1,4 +1,5 @@
 use super::*;
+use crate::codegen_abi::LayoutWord;
 use crate::object::class_image::{
     string_member_order, ImageTable, StaticAccessorTable, StaticMethodTable, StringMemberOrderTable,
 };
@@ -955,7 +956,7 @@ pub(crate) fn retire_displaced_decl_prototype(old: *mut ObjectHeader) {
     // SAFETY: `old` was a linked (rooted) prototype object until the store
     // above, and nothing between that read and here can collect.
     unsafe {
-        if crate::object::shapes::object_shape_stamp(old) != 0 {
+        if crate::object::shapes::object_shape_stamp(old) != LayoutWord(0) {
             crate::object::shapes::transition_object_shape_semantics(old);
         }
     }

@@ -17,6 +17,7 @@
 //! the prototype lacks, a FunctionDictionary receiver) is `None`: the caller
 //! runs its full path unchanged. No name decides anything; the slot does.
 use crate::closure::ClosureHeader;
+use crate::codegen_abi::LayoutWord;
 use crate::value::JSValue;
 
 /// Try the shape-proven path for `object.<name>(args)`.
@@ -46,8 +47,9 @@ pub(crate) unsafe fn try_function_shape_method_call(
     // The band test first: every non-function receiver (a Map's capacity, an
     // object's ordinary ShapeId) leaves here on one compare, before the
     // agent's base id is even loaded.
-    let word = *((addr as *const u8).add(crate::closure::CLOSURE_SHAPE_OFFSET) as *const u32);
-    if !crate::object::shapes::is_exotic_layout_word(word) {
+    let word =
+        LayoutWord(*((addr as *const u8).add(crate::closure::CLOSURE_SHAPE_OFFSET) as *const u32));
+    if !crate::object::shapes::is_exotic_layout_word(word.0) {
         return None;
     }
     if !crate::closure::is_closure_ptr(addr) {
@@ -343,7 +345,8 @@ mod tests {
             let saved = (*obj).parent_class_id;
             (*obj).parent_class_id = crate::closure::shape::function_base_shape(
                 crate::closure::shape::FunctionProtoKind::Function,
-            );
+            )
+            .0;
             let v = crate::value::js_nanbox_pointer(obj as i64);
             assert!(try_function_shape_method_call(v, b"bind", std::ptr::null(), 0).is_none());
             (*obj).parent_class_id = saved;

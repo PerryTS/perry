@@ -4,6 +4,7 @@ use super::{
     layout_desc::{self, PerryLayoutDesc},
     ObjectHeader,
 };
+use crate::codegen_abi::LayoutWord;
 use crate::{closure::ClosureHeader, gc::RuntimeHandle};
 
 #[repr(C)]
@@ -176,7 +177,7 @@ unsafe fn allocate_layout(
     let meta = (*p).meta;
     let held = (*meta).function_layout_birth;
     let holds = tag.is_some_and(|tag| held >> 32 == u64::from(tag))
-        && super::shapes::shape_record_for_word(held as u32).is_some_and(|record| {
+        && super::shapes::shape_record_for_word(LayoutWord(held as u32)).is_some_and(|record| {
             record.proto_id() == proto_id
                 && record.prototype_word() == prototype_bits
                 && binds_current_symbols(record, d, bound)
@@ -186,7 +187,13 @@ unsafe fn allocate_layout(
     } else {
         super::shapes::write_identity_word(proto_id, prototype_bits);
         let id = layout_desc::register_function_layout(tail.layout, 0, bound, proto_id);
-        if id == 0 || !binds_current_symbols(super::shapes::shape_record_for_word(id)?, d, bound) {
+        if id == 0
+            || !binds_current_symbols(
+                super::shapes::shape_record_for_word(LayoutWord(id))?,
+                d,
+                bound,
+            )
+        {
             return None;
         }
         if let Some(tag) = tag {
@@ -198,7 +205,7 @@ unsafe fn allocate_layout(
     };
     // Suppression stays up through the birth: the record is carried by no one
     // until the object is stamped with its word.
-    let object = layout_desc::alloc_function_layout(tail.layout, id);
+    let object = layout_desc::alloc_function_layout(tail.layout, LayoutWord(id));
     drop(_no_gc);
     // As for an ordinary Object.create birth, a black newborn shades the
     // existing external prototype edge without allocating receiver metadata.

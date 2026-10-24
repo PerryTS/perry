@@ -1,6 +1,7 @@
 //! The existing indexed lookup starts with one bucket and tail-continues
 //! collisions. A hit need not retain the collision loop's mask and index.
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 #[inline(never)]
 pub(super) unsafe fn get<const ABSENT: bool, const SITE: bool, const LAZY_HASH: bool>(
@@ -69,7 +70,7 @@ pub(super) unsafe fn continued<const ABSENT: bool, const SITE: bool, const LAZY_
     // Reconstruct only on an unanswered collision. Keeping this context
     // out of the front avoids saving registers on every indexed own hit.
     // No collection or user code occurs between the first bucket and here.
-    let r = record_of(dir, (*obj).parent_class_id);
+    let r = record_of(dir, LayoutWord((*obj).parent_class_id));
     let table = ((*r).probe & !PROBE_FLAGS) as *const KeyIndex;
     let list = crate::array::array_elements_ptr((*r).keys as usize as *const _) as *const u64;
     let mask = (*table).mask as usize;

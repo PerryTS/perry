@@ -28,6 +28,7 @@ use super::support::{
     collect_minor_trace, complete_budgeted_gc_cycle, init_test_closure, ptr_bits,
     CopyingNurseryTestGuard, GcTriggerThresholdTestGuard,
 };
+use crate::codegen_abi::LayoutWord;
 use crate::object::shapes;
 
 /// Facts the assertions compare, read exclusively through the descriptor.
@@ -251,7 +252,7 @@ fn the_reverse_indices_follow_a_moved_keys_array() {
     );
     let obj = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::ObjectHeader;
     let id = unsafe { shapes::object_shape_stamp(obj) };
-    assert!(shapes::is_layout_word(id), "the receiver stays stamped");
+    assert!(shapes::is_layout_word(id.0), "the receiver stays stamped");
     // A family is every descriptor on one keys ARRAY, and one canonical
     // backing serves a whole growth chain: the receiver's `[k0, k1]` shares
     // it with the `[k0]` it grew from. All of them follow the move.
@@ -271,7 +272,7 @@ fn the_reverse_indices_follow_a_moved_keys_array() {
         assert_eq!(
             shapes::test_descriptor_for_retained_word(*member).map(|d| d.keys),
             Some(after.keys),
-            "#9706: family member {member} still names another array"
+            "#9706: family member {member:?} still names another array"
         );
     }
     assert!(
@@ -549,7 +550,7 @@ fn build_unrooted_keyless_semantic_shape(slot: u32) -> u32 {
         "test premise: this must be a per-object semantic generation"
     );
     js_shadow_slot_set(slot, crate::value::TAG_UNDEFINED);
-    shape_id
+    shape_id.0
 }
 
 /// #9726: keyless semantic generations used to be immortal because dead-key
@@ -566,7 +567,7 @@ fn synchronous_full_trace_retires_only_uncarried_semantic_shapes() {
     let dead_shape = build_unrooted_keyless_semantic_shape(0);
     collect_synchronous_full_trace();
     assert!(
-        shapes::shape_is_retired(dead_shape),
+        shapes::shape_is_retired(LayoutWord(dead_shape)),
         "#9726: a keyless per-object generation with no live carrier survived a complete full trace"
     );
 
@@ -623,13 +624,13 @@ fn budgeted_full_trace_does_not_retire_from_a_partial_carrier_census() {
     let completed = complete_budgeted_gc_cycle();
     assert_eq!(completed.status, JS_GC_STEP_STATUS_COMPLETED);
     assert!(
-        shapes::test_descriptor_for_retained_word(shape_id).is_some(),
+        shapes::test_descriptor_for_retained_word(LayoutWord(shape_id)).is_some(),
         "#9726: a budgeted trace must not retire from its partial carrier notes"
     );
 
     collect_synchronous_full_trace();
     assert!(
-        shapes::shape_is_retired(shape_id),
+        shapes::shape_is_retired(LayoutWord(shape_id)),
         "the next complete full trace must retire the same uncarried descriptor"
     );
     shapes::test_clear_shape_table();
@@ -647,13 +648,16 @@ fn build_transition_cache_target_then_drop(slot: u32) -> (u32, u32) {
     );
     let key = crate::string::js_string_from_bytes(b"cache6".as_ptr(), 6);
     let obj = (js_shadow_slot_get(slot) & POINTER_MASK) as *mut crate::ObjectHeader;
-    assert_eq!(unsafe { shapes::object_shape_stamp(obj) }, predecessor);
+    assert_eq!(
+        unsafe { shapes::object_shape_stamp(obj) },
+        LayoutWord(predecessor)
+    );
     crate::object::js_object_set_field_by_name(obj, key, 9726.0);
     let obj = (js_shadow_slot_get(slot) & POINTER_MASK) as *mut crate::ObjectHeader;
     let target = unsafe { shapes::object_shape_stamp(obj) };
-    assert_ne!(target, predecessor);
+    assert_ne!(target, LayoutWord(predecessor));
     js_shadow_slot_set(slot, crate::value::TAG_UNDEFINED);
-    (predecessor, target)
+    (predecessor, target.0)
 }
 
 /// The transition table is a real ShapeId publisher: generated write sites
@@ -670,10 +674,10 @@ fn transition_cache_target_survives_and_can_restamp_after_full_trace() {
     let (predecessor, target) = build_transition_cache_target_then_drop(0);
     collect_synchronous_full_trace();
     assert!(
-        shapes::test_descriptor_for_retained_word(predecessor).is_some(),
+        shapes::test_descriptor_for_retained_word(LayoutWord(predecessor)).is_some(),
         "a process-lifetime generated-code id must remain installed"
     );
-    let cached = shapes::test_descriptor_for_retained_word(target)
+    let cached = shapes::test_descriptor_for_retained_word(LayoutWord(target))
         .expect("a live transition-cache entry must retain its target descriptor");
     assert!(
         cached.cache_carrier,
@@ -694,7 +698,7 @@ fn transition_cache_target_survives_and_can_restamp_after_full_trace() {
     let consumer = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::ObjectHeader;
     assert_eq!(
         unsafe { shapes::object_shape_stamp(consumer) },
-        target,
+        LayoutWord(target),
         "the post-GC transition hit must stamp the retained target id"
     );
     assert_eq!(

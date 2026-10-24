@@ -27,6 +27,7 @@ use crate::array::{
     clean_arr_ptr, js_array_alloc, js_array_pop_f64, js_array_push_f64,
     js_array_push_u31_with_length, ArrayHeader,
 };
+use crate::codegen_abi::LayoutWord;
 use crate::object::{js_object_alloc, ObjectHeader};
 
 /// The reserved parent class id `class X extends Array` records.
@@ -315,7 +316,7 @@ fn dense_array_subclass_tail_transitions_reuse_exact_shapes_and_slots() {
         unsafe { (*(*obj).meta).array_subclass_dense_bounds as u32 },
         3
     );
-    assert!(crate::object::array_tail_transition::lookup_reverse(shapes[3]).is_some());
+    assert!(crate::object::array_tail_transition::lookup_reverse(LayoutWord(shapes[3])).is_some());
     assert_ne!(
         unsafe { (*(*obj).meta).array_tail_object_hot },
         0,
@@ -375,7 +376,10 @@ fn numeric_proof_retires_before_exact_tail_transition_lookup() {
         js_array_push_f64(obj as *mut ArrayHeader, value);
         ordinary_shapes.push(unsafe { (*obj).shape_word() });
     }
-    assert!(crate::object::array_tail_transition::lookup_reverse(ordinary_shapes[3]).is_some());
+    assert!(
+        crate::object::array_tail_transition::lookup_reverse(LayoutWord(ordinary_shapes[3]))
+            .is_some()
+    );
 
     let mut facts = [0u64; 7];
     assert_eq!(
@@ -384,11 +388,13 @@ fn numeric_proof_retires_before_exact_tail_transition_lookup() {
     );
     let proven_shape = unsafe { (*obj).shape_word() };
     assert!(
-        crate::object::shapes::shape_object_kind_for_word(proven_shape)
+        crate::object::shapes::shape_object_kind_for_word(LayoutWord(proven_shape))
             == Some(crate::object::shapes::ShapeObjectKind::OrdinaryNumericProof)
     );
     assert_ne!(proven_shape, ordinary_shapes[3]);
-    assert!(crate::object::array_tail_transition::lookup_reverse(proven_shape).is_none());
+    assert!(
+        crate::object::array_tail_transition::lookup_reverse(LayoutWord(proven_shape)).is_none()
+    );
     assert_eq!(array_subclass_fast_pop(receiver), Some(33.0));
     assert_eq!(unsafe { (*obj).shape_word() }, ordinary_shapes[2]);
 
@@ -398,7 +404,7 @@ fn numeric_proof_retires_before_exact_tail_transition_lookup() {
     );
     let proven_shape = unsafe { (*obj).shape_word() };
     assert!(
-        crate::object::shapes::shape_object_kind_for_word(proven_shape)
+        crate::object::shapes::shape_object_kind_for_word(LayoutWord(proven_shape))
             == Some(crate::object::shapes::ShapeObjectKind::OrdinaryNumericProof)
     );
     assert_ne!(proven_shape, ordinary_shapes[2]);
@@ -554,7 +560,7 @@ fn transition_cache_carrier_bits_follow_live_occupancy_across_full_trace_recompu
     let after = unsafe { (*obj).shape_word() };
     assert_ne!(before, after);
     let carrier = |id: u32| {
-        crate::object::shapes::shape_descriptor_for_word(id)
+        crate::object::shapes::shape_descriptor_for_word(LayoutWord(id))
             .expect("shape exists")
             .cache_carrier
     };
@@ -762,7 +768,9 @@ fn dense_array_subclass_tail_transition_edges_survive_moving_gc() {
             (receiver_h.get_nanbox_f64().to_bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ObjectHeader;
         (*live).shape_word()
     };
-    assert!(crate::object::array_tail_transition::lookup_reverse(pre_gc_shape).is_some());
+    assert!(
+        crate::object::array_tail_transition::lookup_reverse(LayoutWord(pre_gc_shape)).is_some()
+    );
     let before = crate::gc::copying_minor_cycles();
     let _ = crate::gc::gc_collect_minor();
     assert!(crate::gc::copying_minor_cycles() > before);
@@ -777,7 +785,7 @@ fn dense_array_subclass_tail_transition_edges_survive_moving_gc() {
         "the receiver-local scalar layout must survive owner/meta evacuation"
     );
     assert!(
-        crate::object::array_tail_transition::lookup_reverse(pre_gc_shape).is_some(),
+        crate::object::array_tail_transition::lookup_reverse(LayoutWord(pre_gc_shape)).is_some(),
         "moving GC must repair both rooted key-array edges in the reverse cache"
     );
     assert_eq!(array_subclass_fast_pop(live_receiver), Some(33.0));

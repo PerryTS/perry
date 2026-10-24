@@ -44,6 +44,7 @@ pub(crate) mod site_memo;
 mod unloaded;
 
 use super::shapes_store::{ShapeRecord, FLAT_BASE_OFFSET};
+use crate::codegen_abi::LayoutWord;
 use crate::object::layout_desc::note_run;
 use crate::object::ObjectHeader;
 use crate::value::TAG_HOLE;
@@ -670,7 +671,7 @@ unsafe fn text_proves_absence(rec: &ShapeRecord) -> bool {
     }
     let dir = super::ordinary_dir_addr();
     match object_prototype(dir) {
-        Some(p) => std::ptr::eq(record_of(dir, (*p).parent_class_id), rec),
+        Some(p) => std::ptr::eq(record_of(dir, LayoutWord((*p).parent_class_id)), rec),
         None => false,
     }
 }
@@ -719,10 +720,10 @@ unsafe fn bucket_matches(
 /// The record ShapeId `word` names in the ordinary records at `dir`
 /// (`BandDir`), or null.
 #[inline(always)]
-unsafe fn record_of(dir: *const u8, word: u32) -> *mut ShapeRecord {
+unsafe fn record_of(dir: *const u8, word: LayoutWord) -> *mut ShapeRecord {
     let base = *(dir.add(FLAT_BASE_OFFSET) as *const *mut ShapeRecord);
     let ids = *(dir.add(FLAT_BASE_OFFSET + 8) as *const usize);
-    let rel = (word & crate::codegen_abi::LAYOUT_PROBE_INDEX_MASK)
+    let rel = (word.0 & crate::codegen_abi::LAYOUT_PROBE_INDEX_MASK)
         .wrapping_sub(crate::codegen_abi::LAYOUT_TAG) as usize;
     if rel >= ids {
         return std::ptr::null_mut();
@@ -906,7 +907,7 @@ pub unsafe extern "C" fn perry_probe_get_length(
     let obj =
         (obj_biased as usize).wrapping_add(perry_abi::RECEIVER_HANDLE_FLOOR) as *const ObjectHeader;
     // Only an ordinary layout's receiver is an `ObjectHeader` to look into.
-    if record_of(dir, (*obj).parent_class_id).is_null() {
+    if record_of(dir, LayoutWord((*obj).parent_class_id)).is_null() {
         return hole();
     }
     let meta = (*obj).meta;
@@ -961,7 +962,7 @@ unsafe fn probe_get_at<const ABSENT: bool, const SITE: bool, const LAZY_HASH: bo
     let obj =
         (obj_biased as usize).wrapping_add(perry_abi::RECEIVER_HANDLE_FLOOR) as *const ObjectHeader;
     let word = (*obj).parent_class_id;
-    let r = record_of(dir, word);
+    let r = record_of(dir, LayoutWord(word));
     if r.is_null() {
         return array_named_get::<ABSENT>(
             dir,
@@ -978,7 +979,7 @@ unsafe fn probe_get_at<const ABSENT: bool, const SITE: bool, const LAZY_HASH: bo
         return probe_get_underived::<ABSENT>(
             dir,
             obj,
-            word,
+            LayoutWord(word),
             r,
             key_bits,
             site_key_hash::<LAZY_HASH>(key_bits, hash),
@@ -1194,7 +1195,7 @@ unsafe fn exotic_get<const ABSENT: bool>(
     };
     if !named.is_null() {
         let word = (*named).parent_class_id;
-        let r = record_of(dir, word);
+        let r = record_of(dir, LayoutWord(word));
         if r.is_null() {
             return hole();
         }
@@ -1229,7 +1230,7 @@ unsafe fn exotic_get<const ABSENT: bool>(
         // holder's shadow bit.
         if p != named {
             let w = (*p).parent_class_id;
-            let rn = record_of(dir, w);
+            let rn = record_of(dir, LayoutWord(w));
             if rn.is_null() || w & crate::object::overflow::SHADOW_BIT != 0 {
                 return hole();
             }
@@ -1363,7 +1364,7 @@ unsafe fn intrinsic_prototype(dir: *const u8, serial: u64) -> Option<*const Obje
 unsafe fn probe_get_underived<const ABSENT: bool>(
     dir: *const u8,
     obj: *const ObjectHeader,
-    word: u32,
+    word: LayoutWord,
     r: *mut ShapeRecord,
     key_bits: u64,
     hash: u64,
@@ -1389,7 +1390,7 @@ unsafe fn probe_get_underived<const ABSENT: bool>(
 unsafe fn probe_get_absent<const ABSENT: bool>(
     dir: *const u8,
     obj: *const ObjectHeader,
-    word: u32,
+    word: LayoutWord,
     r: *mut ShapeRecord,
     probe: u64,
     key_bits: u64,
@@ -1397,7 +1398,7 @@ unsafe fn probe_get_absent<const ABSENT: bool>(
 ) -> f64 {
     // Every outcome is a tail call or a constant, so the caller's hit path
     // keeps its frameless form.
-    if word & crate::object::overflow::SHADOW_BIT != 0 {
+    if word.0 & crate::object::overflow::SHADOW_BIT != 0 {
         return overflow_then_inherited::<ABSENT>(dir, obj, r, probe, key_bits, hash);
     }
     if probe & PROBE_ATOMS == 0 {
@@ -1689,7 +1690,7 @@ unsafe fn chain_from<const ABSENT: bool>(
     };
     for _ in 0..MAX_HOPS {
         let w = (*next).parent_class_id;
-        let rn = record_of(dir, w);
+        let rn = record_of(dir, LayoutWord(w));
         if rn.is_null() {
             return hole();
         }
@@ -1822,7 +1823,7 @@ unsafe fn absent_from<const ABSENT: bool>(
     hash: u64,
 ) -> f64 {
     let word = (*obj).parent_class_id;
-    let r = record_of(dir, word);
+    let r = record_of(dir, LayoutWord(word));
     let probe = (*r).probe;
     if word & crate::object::overflow::SHADOW_BIT != 0 {
         return overflow_then_inherited::<ABSENT>(dir, obj, r, probe, key_bits, hash);
@@ -1895,7 +1896,7 @@ unsafe fn inherited_walk_at<const ABSENT: bool>(
 ) -> f64 {
     for _ in 0..MAX_HOPS {
         let w = (*next).parent_class_id;
-        let rn = record_of(dir, w);
+        let rn = record_of(dir, LayoutWord(w));
         if rn.is_null() {
             return hole();
         }
@@ -1976,7 +1977,7 @@ pub(crate) unsafe fn probe_accessor_word(
         return None;
     }
     let mut cur = obj;
-    let mut rc = record_of(dir, (*cur).parent_class_id) as *const ShapeRecord;
+    let mut rc = record_of(dir, LayoutWord((*cur).parent_class_id)) as *const ShapeRecord;
     if rc.is_null() || !(*rc).present() {
         return None;
     }
@@ -2005,7 +2006,7 @@ pub(crate) unsafe fn probe_accessor_word(
             Next::Object(p) => p,
             _ => return None,
         };
-        let rn = record_of(dir, (*next).parent_class_id) as *const ShapeRecord;
+        let rn = record_of(dir, LayoutWord((*next).parent_class_id)) as *const ShapeRecord;
         if rn.is_null() || !(*rn).present() {
             return None;
         }
@@ -2087,7 +2088,7 @@ pub(crate) unsafe fn own_private_value(
     hash: u64,
 ) -> Option<f64> {
     let dir = super::ordinary_dir_addr();
-    let r = record_of(dir, (*obj).parent_class_id);
+    let r = record_of(dir, LayoutWord((*obj).parent_class_id));
     if r.is_null() || !(*r).present() || !positional_layout(&*r) {
         return None;
     }
@@ -2138,7 +2139,7 @@ pub unsafe extern "C" fn perry_probe_own_method(
             && (*h).gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
             && (*obj).parent_class_id & crate::object::overflow::SHADOW_BIT == 0
         {
-            let r = record_of(dir, (*obj).parent_class_id);
+            let r = record_of(dir, LayoutWord((*obj).parent_class_id));
             if !r.is_null() && (*r).present() {
                 match own_position(r, key_bits, hash) {
                     Ok(pos) => {
@@ -2216,7 +2217,7 @@ pub(crate) unsafe fn probe_has(obj_bits: u64, key_bits: u64, own_only: bool) -> 
     let mut cur = payload as *const ObjectHeader;
     for _ in 0..MAX_HOPS {
         let w = (*cur).parent_class_id;
-        let r = record_of(dir, w);
+        let r = record_of(dir, LayoutWord(w));
         if r.is_null() {
             return -1;
         }
@@ -2339,7 +2340,7 @@ pub unsafe extern "C" fn perry_probe_set(
         return 0;
     }
     let obj = payload as *mut ObjectHeader;
-    let r = record_of(dir, (*obj).parent_class_id);
+    let r = record_of(dir, LayoutWord((*obj).parent_class_id));
     if r.is_null() || (*r).object_kind() != super::ShapeObjectKind::Ordinary {
         return 0;
     }
@@ -2572,7 +2573,7 @@ pub(crate) unsafe fn layouts_admit_add(
 ) -> Option<bool> {
     let (key_bits, hash) = computed_key(STRING_TAG | key as u64)?;
     let dir = super::ordinary_dir_addr();
-    let r = record_of(dir, (*obj).parent_class_id);
+    let r = record_of(dir, LayoutWord((*obj).parent_class_id));
     if r.is_null() || !(*r).object_kind().is_ordinary_layout() {
         return None;
     }
@@ -2638,7 +2639,7 @@ unsafe fn chain_admits_add(
         {
             return true;
         }
-        let rn = record_of(dir, w);
+        let rn = record_of(dir, LayoutWord(w));
         if rn.is_null() {
             return false;
         }
@@ -2807,7 +2808,7 @@ pub unsafe extern "C" fn perry_probe_get_value(
                     return 0;
                 }
             }
-            let r = record_of(dir, word);
+            let r = record_of(dir, LayoutWord(word));
             if r.is_null() {
                 note_run(7);
                 return 0;
@@ -2865,7 +2866,7 @@ pub unsafe extern "C" fn perry_probe_get_value(
                 {
                     return true;
                 }
-                let rn = record_of(dir, w);
+                let rn = record_of(dir, LayoutWord(w));
                 if rn.is_null() {
                     return false;
                 }
@@ -3115,7 +3116,7 @@ pub(crate) unsafe fn diag_explain(obj_handle: i64, key: *const crate::StringHead
             Some(_) => {
                 let o = obj as *const ObjectHeader;
                 let word = (*o).parent_class_id;
-                let r = record_of(super::ordinary_dir_addr(), word);
+                let r = record_of(super::ordinary_dir_addr(), LayoutWord(word));
                 if r.is_null() {
                     format!("noflat{:x}", word >> 24)
                 } else if !(*r).present() {
@@ -3163,7 +3164,7 @@ pub(crate) unsafe fn diag_explain(obj_handle: i64, key: *const crate::StringHead
 unsafe fn diag_walk(obj: *const ObjectHeader, key_bits: u64, hash: u64) -> String {
     let dir = super::ordinary_dir_addr();
     let mut cur = obj;
-    let mut rc = record_of(dir, (*obj).parent_class_id) as *const ShapeRecord;
+    let mut rc = record_of(dir, LayoutWord((*obj).parent_class_id)) as *const ShapeRecord;
     if rc.is_null() {
         return "norecord".into();
     }
@@ -3196,7 +3197,7 @@ unsafe fn diag_walk(obj: *const ObjectHeader, key_bits: u64, hash: u64) -> Strin
                 )
             }
         };
-        let rn = record_of(dir, (*next).parent_class_id);
+        let rn = record_of(dir, LayoutWord((*next).parent_class_id));
         if rn.is_null() {
             return format!("hop{hop}:proto-norecord");
         }
@@ -3250,7 +3251,10 @@ pub(crate) fn test_dir() -> *const u8 {
 /// Key position `pos` of `obj`'s record's list (tests).
 #[cfg(test)]
 pub(crate) unsafe fn test_list_word(obj: *const ObjectHeader, pos: usize) -> u64 {
-    let r = record_of(super::ordinary_dir_addr(), (*obj).parent_class_id);
+    let r = record_of(
+        super::ordinary_dir_addr(),
+        LayoutWord((*obj).parent_class_id),
+    );
     assert!(!r.is_null(), "the object has an ordinary record");
     *(crate::array::array_elements_ptr((*r).keys as usize as *const _) as *const u64).add(pos)
 }
@@ -3405,7 +3409,7 @@ pub(crate) mod verify {
         }
         let obj = (obj_bits & POINTER_MASK) as *const ObjectHeader;
         let word = (*obj).parent_class_id;
-        let r = record_of(super::super::ordinary_dir_addr(), word);
+        let r = record_of(super::super::ordinary_dir_addr(), LayoutWord(word));
         let found = if r.is_null() {
             None
         } else {
@@ -3464,7 +3468,7 @@ pub(crate) mod verify {
         let mut cur = obj;
         for _ in 0..MAX_HOPS {
             let word = (*cur).parent_class_id;
-            let r = record_of(dir, word);
+            let r = record_of(dir, LayoutWord(word));
             let gc = crate::value::addr_class::try_read_gc_header(cur as usize);
             let meta = (*cur).meta;
             let mproto = if meta.is_null() { 0 } else { (*meta).prototype };

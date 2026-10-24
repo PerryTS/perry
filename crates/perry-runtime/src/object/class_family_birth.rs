@@ -4,6 +4,8 @@
 use super::layout_desc::{family_desc_of, is_family_object};
 use super::layout_desc::{family_of_class, perry_alloc_layout, PerryLayoutDesc};
 use super::ObjectHeader;
+#[cfg(test)]
+use crate::codegen_abi::LayoutWord;
 
 /// Allocate on the compiler's proposed family only while the class declaration
 /// and its runtime parent agree. A miss uses ordinary class allocation.
@@ -195,8 +197,8 @@ mod evaluation_layout_tests {
                 );
                 assert_eq!(shapes::object_prototype_word(obj), bits);
                 assert!(shapes::shape_is_evaluation_layout_of(
-                    word,
-                    (*desc).layout_id
+                    LayoutWord(word),
+                    LayoutWord((*desc).layout_id)
                 ));
                 assert!(is_family_object(obj));
                 assert_eq!(
@@ -215,7 +217,10 @@ mod evaluation_layout_tests {
                 wide as usize,
                 a_bits,
             );
-            assert!(!shape_is_evaluation_layout_of_word(wide, (*desc).layout_id));
+            assert!(!shape_is_evaluation_layout_of_word(
+                wide,
+                LayoutWord((*desc).layout_id)
+            ));
             assert!(!is_family_object(wide));
         }
     }
@@ -302,7 +307,10 @@ mod evaluation_layout_tests {
         }
     }
 
-    unsafe fn shape_is_evaluation_layout_of_word(obj: *const ObjectHeader, family: u32) -> bool {
-        shapes::shape_is_evaluation_layout_of((*obj).parent_class_id, family)
+    unsafe fn shape_is_evaluation_layout_of_word(
+        obj: *const ObjectHeader,
+        family: LayoutWord,
+    ) -> bool {
+        shapes::shape_is_evaluation_layout_of(LayoutWord((*obj).parent_class_id), family)
     }
 }

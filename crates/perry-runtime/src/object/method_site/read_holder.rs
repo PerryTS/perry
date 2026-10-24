@@ -24,6 +24,7 @@ use crate::object::shapes::{
 use crate::object::ObjectHeader;
 
 mod inspect;
+use crate::codegen_abi::LayoutWord;
 pub(crate) use inspect::shape_answer;
 pub(crate) mod keyed;
 
@@ -111,7 +112,7 @@ const NO_HOPS: [Hop; WALK_HOPS] = [(0, 0); WALK_HOPS];
 /// The answer the shapes give, found by a walk that allocates nothing.
 struct Walk {
     holder: usize,
-    holder_shape: u32,
+    holder_shape: LayoutWord,
     /// `None` = absent.
     slot: Option<u32>,
     hops: [Hop; WALK_HOPS],
@@ -188,7 +189,7 @@ fn hop_identity_pins_link(pid: u64) -> bool {
 
 /// [`admitted_proto_id`], with `obj`'s recorded word.
 pub(crate) unsafe fn admitted_link(obj: *const ObjectHeader) -> Option<(u64, u64)> {
-    let record = crate::object::shapes::shape_record_of_receiver(object_shape_stamp(obj))?;
+    let record = crate::object::shapes::shape_record_of_receiver((object_shape_stamp(obj)).0)?;
     let pid = record.proto_id();
     if !hop_identity_pins_link(pid) {
         // Only a declaration's immutable parent proof admits bare CLASS.
@@ -225,7 +226,7 @@ pub(crate) unsafe fn admitted_proto_id(obj: *const ObjectHeader) -> Option<u64> 
 /// names its live identity word. Hits compare that word with the recorded
 /// direct holder, then check each hop and holder ShapeId.
 pub(crate) unsafe fn class_link(recv: *const ObjectHeader) -> Option<*const ObjectHeader> {
-    let record = crate::object::shapes::shape_record_of_receiver(object_shape_stamp(recv))?;
+    let record = crate::object::shapes::shape_record_of_receiver((object_shape_stamp(recv)).0)?;
     let pid = record.proto_id();
     // Most ordinary receivers have serial/default links. Their shape rules
     // out a class entry before any registry-backed identity derivation.
@@ -388,7 +389,7 @@ pub(crate) unsafe fn dynamic_own_or_absent(
     let w = walk(recv, name, false)?;
     let object_prototype = crate::array::object_prototype_addr_if_resolved();
     (w.slot.is_none() && w.depth == 1 && object_prototype != 0 && w.holder == object_prototype)
-        .then_some(DynamicKeyVerdict::Absent(w.holder_shape))
+        .then_some(DynamicKeyVerdict::Absent(w.holder_shape.0))
 }
 
 /// [`dynamic_own_or_absent`]'s ABSENT verdict alone: `Some(terminal)` when

@@ -31,6 +31,7 @@
 use super::ObjectHeader;
 mod define_field;
 pub(crate) mod methods;
+use crate::codegen_abi::{LayoutWord, ShapeId};
 use crate::string::StringHeader;
 pub(crate) use define_field::family_define_field;
 
@@ -152,12 +153,12 @@ impl ObjectHeader {
 /// Only ordinary-band objects carry the bit: overflows and dynamic writes
 /// reach `GC_TYPE_OBJECT` receivers with ordinary layouts only.
 #[inline(always)]
-pub const fn carry_shadow(previous: u32, id: u32) -> u32 {
+pub const fn carry_shadow(previous: u32, id: LayoutWord) -> LayoutWord {
     if word_is_shadowed(previous)
-        && id >= super::shapes::SHAPE_ID_BASE
-        && id < crate::codegen_abi::LAYOUT_ORDINARY_END
+        && id.0 >= super::shapes::SHAPE_ID_BASE
+        && id.0 < crate::codegen_abi::LAYOUT_ORDINARY_END
     {
-        id | LAYOUT_SHADOW_BIT
+        id.shadowed()
     } else {
         id
     }
@@ -692,7 +693,7 @@ pub(crate) fn register_static_layouts() {
 unsafe fn reserve_namespace_layout(desc: *const PerryLayoutDesc) -> u32 {
     super::static_shapes::resolve_layout_fields(
         std::ptr::addr_of!((*desc).shape_id).cast_mut(),
-        (*desc).layout_id,
+        LayoutWord((*desc).layout_id),
         super::shapes::PROTO_ID_NULL,
     )
     .identity
@@ -798,7 +799,9 @@ unsafe fn register_bound(
     };
     let local = binding_symbol_keys(&*desc);
     if let Some(id) = existing {
-        if (local != 0 && bound.is_empty()) || super::shapes::shape_descriptor_by_id(id).is_some() {
+        if (local != 0 && bound.is_empty())
+            || super::shapes::shape_descriptor_by_id(ShapeId(id)).is_some()
+        {
             return (*desc).layout_id;
         }
     }
@@ -885,7 +888,7 @@ unsafe fn register_bound(
         {
             requested
         } else {
-            super::shapes::allocate_declared_layout_id(proto_id)
+            super::shapes::allocate_declared_layout_id(proto_id).0
         };
         return match word.compare_exchange(0, proposed, Ordering::AcqRel, Ordering::Acquire) {
             Ok(_) => (*desc).layout_id,
@@ -975,19 +978,19 @@ unsafe fn register_bound(
         // on it (and the prototype they name) keep it live, and it retires
         // with the last of them. The caller holds GC suppression from here to
         // the birth's stamp (function_family_birth::allocate_layout).
-        return word;
+        return word.0;
     }
     let proposed = if let Some(id) = existing {
         id
     } else if function {
-        super::shapes::allocate_declared_layout_id(proto_id)
+        super::shapes::allocate_declared_layout_id(proto_id).0
     } else if proto_id == super::shapes::PROTO_ID_DEFAULT
         || class_family
         || d.variant == crate::codegen_abi::LAYOUT_VARIANT_FUNCTION_CONSTRUCTOR
     {
         requested
     } else {
-        super::shapes::allocate_declared_layout_id(proto_id)
+        super::shapes::allocate_declared_layout_id(proto_id).0
     };
     // End the descriptor borrow before the startup-only id publication.
     let id = if let Some(id) = existing {
@@ -1004,10 +1007,10 @@ unsafe fn register_bound(
             }
         }
     };
-    if super::shapes::shape_descriptor_by_id(id).is_none() {
+    if super::shapes::shape_descriptor_by_id(ShapeId(id)).is_none() {
         super::shapes::install_declared_layout(
-            id,
-            (*desc).layout_id,
+            ShapeId(id),
+            LayoutWord((*desc).layout_id),
             if (*desc).class_id != 0 {
                 descriptor_index(desc).map_or(0, |i| i + 1)
             } else {
@@ -1025,7 +1028,7 @@ unsafe fn register_bound(
         );
     }
     super::shapes::note_external_shape_carrier(super::shapes::shape_descriptor_for_word(
-        (*desc).layout_id,
+        LayoutWord((*desc).layout_id),
     ));
     (*desc).layout_id
 }
@@ -1049,7 +1052,7 @@ pub unsafe extern "C" fn perry_alloc_layout(desc: *const PerryLayoutDesc) -> *mu
         );
         std::process::abort();
     };
-    alloc_layout_object(d, id)
+    alloc_layout_object(d, LayoutWord(id))
 }
 
 /// Allocate an instance of class family layout `desc` born on `copy`, a class
@@ -1062,14 +1065,14 @@ pub unsafe extern "C" fn perry_alloc_layout(desc: *const PerryLayoutDesc) -> *mu
 /// `desc` is a registered class family descriptor of this program.
 pub(crate) unsafe fn alloc_family_layout_copy(
     desc: *const PerryLayoutDesc,
-    copy: u32,
+    copy: LayoutWord,
 ) -> *mut ObjectHeader {
     alloc_layout_object(&*desc, copy)
 }
 
 /// Allocate an object of the registered layout `id` of `d` (see
 /// [`perry_alloc_layout`]). Can collect.
-unsafe fn alloc_layout_object(d: &PerryLayoutDesc, id: u32) -> *mut ObjectHeader {
+unsafe fn alloc_layout_object(d: &PerryLayoutDesc, id: LayoutWord) -> *mut ObjectHeader {
     alloc_layout_object_sized(d, id, d.slot_count as usize)
 }
 
@@ -1078,7 +1081,7 @@ unsafe fn alloc_layout_object(d: &PerryLayoutDesc, id: u32) -> *mut ObjectHeader
 /// `desc` is the registered layout admitted by function_family_birth.
 pub(crate) unsafe fn alloc_function_layout(
     desc: *const PerryLayoutDesc,
-    id: u32,
+    id: LayoutWord,
 ) -> *mut ObjectHeader {
     let d = &*desc;
     let obj =
@@ -1092,7 +1095,7 @@ pub(crate) unsafe fn alloc_function_layout(
 #[inline(always)]
 unsafe fn alloc_layout_object_sized(
     d: &PerryLayoutDesc,
-    id: u32,
+    id: LayoutWord,
     physical_slots: usize,
 ) -> *mut ObjectHeader {
     // A birth writes only holes; constructor stores check the live chain.
@@ -1105,7 +1108,7 @@ unsafe fn alloc_layout_object_sized(
         obj,
         ObjectHeader {
             class_id: d.class_id,
-            parent_class_id: word,
+            parent_class_id: word.0,
             meta: std::ptr::null_mut(),
             #[cfg(target_pointer_width = "32")]
             _slot_alignment_padding: 0,
@@ -1186,7 +1189,7 @@ pub(crate) unsafe fn alloc_derived_layout_object(
     d: &PerryLayoutDesc,
     proto_id: u64,
     proto: &crate::gc::RuntimeHandle<'_>,
-    recorded: u32,
+    recorded: LayoutWord,
 ) -> Option<*mut ObjectHeader> {
     let id = registered_layout_id(d.layout_id)?;
     let size = std::mem::size_of::<ObjectHeader>() + d.slot_count as usize * 8;
@@ -1194,14 +1197,14 @@ pub(crate) unsafe fn alloc_derived_layout_object(
         crate::arena::arena_alloc_gc(size, 8, crate::gc::GC_TYPE_OBJECT).cast::<ObjectHeader>();
     // No collection from here until the newborn carries its shape.
     let _no_gc = crate::gc::GcSuppressScope::new();
-    let base = super::shapes::shape_descriptor_for_word(id)?;
+    let base = super::shapes::shape_descriptor_for_word(LayoutWord(id))?;
     let proto_bits = proto.get_nanbox_u64();
     if super::shapes::identity_prototype_word(proto_id) != proto_bits {
         super::shapes::write_identity_word(proto_id, proto_bits);
     }
     let shape = match super::shapes::shape_keys_and_proto_for_word(recorded) {
         Some((keys, count, recorded_proto))
-            if recorded != 0
+            if recorded != LayoutWord(0)
                 && keys == base.keys
                 && count == base.logical_key_count
                 && recorded_proto == proto_id =>
@@ -1228,7 +1231,7 @@ pub(crate) unsafe fn alloc_derived_layout_object(
         obj,
         ObjectHeader {
             class_id: 0,
-            parent_class_id: shape,
+            parent_class_id: shape.0,
             meta: std::ptr::null_mut(),
             #[cfg(target_pointer_width = "32")]
             _slot_alignment_padding: 0,
@@ -1282,7 +1285,7 @@ pub(crate) unsafe fn alloc_layout_prototype(
     };
     mark_layout_object_facts(obj, d);
     // A birth: the bit is carried, never admitted.
-    super::shapes::stamp_birth_shape_id_with_carrier_note(obj, id);
+    super::shapes::stamp_birth_shape_id_with_carrier_note(obj, LayoutWord(id));
     let fields = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;
     for i in 0..d.slot_count as usize {
         // GC_STORE_AUDIT(INIT): the hole marker is a scalar.
@@ -1424,7 +1427,7 @@ pub(crate) unsafe fn prototype_image(
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let built = scope.root_nanbox_f64(built);
-    let image = scope.root_raw_mut_ptr(alloc_layout_object(d, id));
+    let image = scope.root_raw_mut_ptr(alloc_layout_object(d, LayoutWord(id)));
     // Born a marked prototype (the layout is a marked one's): its meta
     // record carries the mark and the family's serial, so the binding's mark
     // finds it done and makes no transition.
@@ -1507,7 +1510,9 @@ unsafe fn image_matches(d: &PerryLayoutDesc, built: f64, bound: &[u64]) -> bool 
     {
         return false;
     }
-    if !super::overflow::table(obj).is_null() || super::shapes::object_shape_stamp(obj) == 0 {
+    if !super::overflow::table(obj).is_null()
+        || super::shapes::object_shape_stamp(obj) == LayoutWord(0)
+    {
         return false;
     }
     let (keys, _) = super::object_keys_and_live_slot_count(obj);
@@ -1599,7 +1604,7 @@ unsafe fn family_birth(d: &PerryLayoutDesc, proto: f64) -> Option<*mut ObjectHea
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let proto = scope.root_nanbox_f64(proto);
-    let obj = alloc_layout_object(d, id);
+    let obj = alloc_layout_object(d, LayoutWord(id));
     // The prototype edge lives outside the heap. A black newborn must still
     // shade it during an incremental mark (`object_alloc_created`).
     crate::gc::runtime_shade_external_edge(proto.get_nanbox_u64());
@@ -1722,7 +1727,7 @@ pub(crate) fn layout_index_of_word(word: u32) -> Option<u32> {
     if !super::shapes::is_layout_word(layout_id_of_word(word)) {
         return None;
     }
-    let record = super::shapes::shape_record_for_word(word)?;
+    let record = super::shapes::shape_record_for_word(LayoutWord(word))?;
     record.family_desc_index_plus_one().checked_sub(1)
 }
 
@@ -1887,7 +1892,7 @@ pub(crate) unsafe fn adopt_family_layout(obj: *mut ObjectHeader) -> *mut ObjectH
         // GC_STORE_AUDIT(POINTER_FREE): All three stores write the immediate TAG_HOLE to physical object slots. They introduce no pointer/child edge; allocation or rooted object custody surrounds the fill and shape publication follows.
         *fields.add(i) = crate::value::TAG_HOLE;
     }
-    super::shapes::stamp_object_shape_id_with_carrier_note(obj, d.layout_id);
+    super::shapes::stamp_object_shape_id_with_carrier_note(obj, LayoutWord(d.layout_id));
     // A birth linked to another prototype (a class evaluation's, a
     // newTarget's) keeps that link as its shape's identity: the funnel moves
     // the object to that evaluation's copy of the layout (or off the family,
@@ -2067,15 +2072,15 @@ pub(crate) fn word_in_layout_index(word: u32) -> bool {
 /// copy of one, and `id` has that family's facts at a class evaluation's
 /// identity, `id`'s record names the family
 /// (`shapes::note_evaluation_layout`), so its objects stay family objects.
-pub(crate) fn note_family_relink(previous: u32, id: u32) {
-    let previous = layout_id_of_word(previous);
-    let Some(record) = super::shapes::shape_record_for_word(previous) else {
+pub(crate) fn note_family_relink(previous: LayoutWord, id: LayoutWord) {
+    let previous = layout_id_of_word(previous.0);
+    let Some(record) = super::shapes::shape_record_for_word(LayoutWord(previous)) else {
         return;
     };
     let index = record.family_desc_index_plus_one();
     if index != 0 {
         let family_word = unsafe { (*desc_at(index - 1)).layout_id };
-        super::shapes::note_evaluation_layout(id, family_word);
+        super::shapes::note_evaluation_layout(id, LayoutWord(family_word));
     }
 }
 

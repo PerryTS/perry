@@ -127,7 +127,7 @@ unsafe fn ordinary_receiver(addr: usize) -> Option<*const ObjectHeader> {
         return None;
     }
     let stamp = super::shapes::object_shape_stamp(obj);
-    if !super::shapes::is_layout_word(stamp) {
+    if !super::shapes::is_layout_word(stamp.0) {
         return None;
     }
     let meta = (*obj).meta;

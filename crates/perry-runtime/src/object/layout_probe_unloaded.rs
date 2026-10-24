@@ -2,6 +2,7 @@
 //! Re-derive the record here to keep the tail entrance within six integer
 //! arguments. The probe is a GC leaf, so its receiver and shape stay live.
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 #[inline(never)]
 pub(super) unsafe fn get<const ABSENT: bool, const SITE: bool, const LAZY_HASH: bool>(
@@ -12,7 +13,7 @@ pub(super) unsafe fn get<const ABSENT: bool, const SITE: bool, const LAZY_HASH: 
     pos: u32,
     memo: *const site_memo::ReadSiteMemo,
 ) -> f64 {
-    let r = record_of(dir, (*obj).parent_class_id);
+    let r = record_of(dir, LayoutWord((*obj).parent_class_id));
     let v = value_at(obj, r, pos);
     if v.to_bits() != TAG_HOLE {
         return v;
@@ -65,7 +66,7 @@ unsafe fn hole_at<const ABSENT: bool, const SITE: bool, const LAZY_HASH: bool>(
     if SITE {
         return site_memo::miss_hole::<ABSENT, LAZY_HASH>(dir, obj, pos, key_bits, hash, memo);
     }
-    let r = record_of(dir, (*obj).parent_class_id);
+    let r = record_of(dir, LayoutWord((*obj).parent_class_id));
     own_hole::<ABSENT>(
         dir,
         obj,
@@ -88,8 +89,8 @@ pub(super) unsafe fn underived<const ABSENT: bool, const LAZY_HASH: bool>(
     probe_get_underived::<ABSENT>(
         dir,
         obj,
-        word,
-        record_of(dir, word),
+        LayoutWord(word),
+        record_of(dir, LayoutWord(word)),
         key_bits,
         site_key_hash::<LAZY_HASH>(key_bits, hash),
     )

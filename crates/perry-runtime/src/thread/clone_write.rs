@@ -586,7 +586,7 @@ impl Writer<'_> {
         if holder.is_null() {
             0
         } else {
-            crate::object::shapes::object_shape_stamp(holder)
+            crate::object::shapes::object_shape_stamp(holder).0
         }
     }
 
@@ -1008,7 +1008,7 @@ impl Writer<'_> {
         let eligible = descriptor.is_some_and(|d| {
             (d.object_kind.is_ordinary_layout()
                 || d.object_kind == crate::object::shapes::ShapeObjectKind::Class)
-                && crate::object::shapes::is_site_matchable_layout_word(id)
+                && crate::object::shapes::is_site_matchable_layout_word(id.0)
                 && d.hole_count == 0
                 && d.brands().is_empty()
                 && d.record_ref()

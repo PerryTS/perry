@@ -24,7 +24,7 @@ pub unsafe extern "C" fn js_object_get_own_property_symbols(obj_f64: f64) -> i64
             let object = addr as *const crate::object::ObjectHeader;
             if !crate::object::overflow::shadowed(object)
                 && crate::object::shapes::shape_record_of_receiver(
-                    crate::object::shapes::object_shape_stamp(object),
+                    (crate::object::shapes::object_shape_stamp(object)).0,
                 )
                 .is_some_and(|record| record.proves_no_symbols())
             {

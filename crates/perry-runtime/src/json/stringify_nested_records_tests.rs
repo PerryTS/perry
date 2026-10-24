@@ -350,7 +350,7 @@ fn json_nested_records_shape_table_probes_collisions_and_reuses_full_capacity() 
                 let bits = crate::array::js_array_get(arr, i).bits();
                 let object = (bits & POINTER_MASK) as *const crate::ObjectHeader;
                 let shape = crate::object::shapes::object_shape_stamp(object);
-                let bucket = (shape.wrapping_mul(0x9e37_79b9) >> 25) as usize;
+                let bucket = (shape.0.wrapping_mul(0x9e37_79b9) >> 25) as usize;
                 if let Some(previous) = homes[bucket] {
                     pair = Some([previous, (bits, i as usize)]);
                     break;

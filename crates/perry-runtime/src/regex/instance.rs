@@ -1,6 +1,7 @@
 //! Ordinary RegExp births. The memo holds only a validated ShapeId; the
 //! shape carries the private matcher, lastIndex attributes and prototype.
 use super::{RegExpData, RegExpHeader};
+use crate::codegen_abi::LayoutWord;
 use crate::gc::RuntimeHandleScope;
 use crate::value::js_nanbox_pointer;
 use std::cell::Cell;
@@ -56,19 +57,19 @@ pub(super) fn new(data: impl FnOnce() -> *const RegExpData) -> *mut RegExpHeader
             return receiver;
         }
     }
-    new_slow(shape, data)
+    new_slow(LayoutWord(shape), data)
 }
 
 #[cold]
 #[inline(never)]
-fn new_slow(shape: u32, data: impl FnOnce() -> *const RegExpData) -> *mut RegExpHeader {
+fn new_slow(shape: LayoutWord, data: impl FnOnce() -> *const RegExpData) -> *mut RegExpHeader {
     let (mut receiver, born_on_memo) = crate::object::object_alloc_plain_born(2, shape);
     let rep = born_on_memo.unwrap_or_else(|| {
         if unsafe { crate::object::shapes::object_shape_stamp(receiver) } != shape {
             receiver = prepare_shape(receiver);
         }
         crate::object::shapes::shape_rep_of_receiver(unsafe {
-            crate::object::shapes::object_shape_stamp(receiver)
+            (crate::object::shapes::object_shape_stamp(receiver)).0
         })
     });
     let data = js_nanbox_pointer(data() as i64).to_bits();
@@ -155,7 +156,7 @@ fn prepare_shape(receiver: *mut RegExpHeader) -> *mut RegExpHeader {
             0,
             "the fixed RegExp birth must have only Any lanes"
         );
-        BIRTH_SHAPE.with(|memo| memo.set(shape));
+        BIRTH_SHAPE.with(|memo| memo.set(shape.0));
     });
     receiver.with_mut_ptr::<RegExpHeader, _>(|r| r)
 }

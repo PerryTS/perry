@@ -3,6 +3,7 @@
 #![cfg(test)]
 
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 /// Every payload byte and the length must affect packed-key placement. The
 /// old low-bit mask ignored later bytes and forced literal/literals to
@@ -21,8 +22,8 @@ fn content_transition_slots_use_every_payload_byte_and_length() {
         let (aid, alen) = transition_key_id(a);
         let (bid, blen) = transition_key_id(b);
         assert_ne!(
-            transition_cache_slot(0x8000_0042, aid, alen),
-            transition_cache_slot(0x8000_0042, bid, blen),
+            transition_cache_slot(LayoutWord(0x8000_0042), aid, alen),
+            transition_cache_slot(LayoutWord(0x8000_0042), bid, blen),
             "content differences must not be discarded before slot selection",
         );
     }
@@ -100,8 +101,8 @@ fn transition_cache_hits_a_content_entry_through_a_fresh_key() {
         (*t)[slot] = TransitionEntry {
             key_ptr: 0,
             next_keys: 0,
-            prev_shape_id: 0,
-            target_shape_id: 0,
+            prev_shape_id: LayoutWord(0),
+            target_shape_id: LayoutWord(0),
             slot_idx: 0,
             target_len: 0,
         };

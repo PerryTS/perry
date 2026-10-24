@@ -12,6 +12,7 @@ use super::shapes::{
     stamp_object_shape_id_with_carrier_note,
 };
 use super::ObjectHeader;
+use crate::codegen_abi::LayoutWord;
 
 extern "C" fn constfn_body_a(
     _closure: *const crate::closure::ClosureHeader,
@@ -40,16 +41,16 @@ unsafe fn abc() -> (*mut ObjectHeader, u32) {
     // The key-adds earned `F64` lanes (P2b); restamp to the all-`Any`
     // sibling (a valid claim for any object), so each test states its lanes.
     let stamped = object_shape_stamp(obj);
-    assert_ne!(stamped, 0, "the fixture object is shaped");
+    assert_ne!(stamped, LayoutWord(0), "the fixture object is shaped");
     let id = with_rep(stamped, REP_ANY);
-    stamp_object_shape_id_with_carrier_note(obj, id);
+    stamp_object_shape_id_with_carrier_note(obj, LayoutWord(id));
     (obj, id)
 }
 
 /// The shape with `id`'s facts and field representation `rep`.
-fn with_rep(id: u32, rep: u64) -> u32 {
+fn with_rep(id: LayoutWord, rep: u64) -> u32 {
     let d = shape_descriptor_for_word(id).expect("live shape");
-    publish_shape_result(shape_descriptor_ensure_with_rep(
+    (publish_shape_result(shape_descriptor_ensure_with_rep(
         d.keys as usize as *const crate::array::ArrayHeader,
         d.logical_key_count,
         d.live_inline_slot_count,
@@ -60,10 +61,11 @@ fn with_rep(id: u32, rep: u64) -> u32 {
         crate::object::shapes::ReceiverFacts::of_descriptor(&d, d.summary),
         rep,
         None,
-    ))
+    )))
+    .0
 }
 
-fn rep_of(id: u32) -> u64 {
+fn rep_of(id: LayoutWord) -> u64 {
     shape_descriptor_for_word(id).expect("live shape").rep
 }
 
@@ -100,7 +102,7 @@ fn constfn_same_body_keeps_shape_and_different_body_deprecates_on_store() {
         assert!(!super::field_rep_store::shape_slot_is_f64(constfn, 0));
         assert_eq!(d.constfn_infos()[0].info, (*first).info as usize as u64);
         let any = with_rep(constfn, REP_ANY);
-        assert_ne!(any, constfn);
+        assert_ne!(LayoutWord(any), constfn);
         // A cached edge cannot publish SPECIAL until its store is ordered
         // before the shape stamp; it deliberately takes the slow path.
         assert!(!super::field_rep_store::cached_key_add_admits(
@@ -136,11 +138,15 @@ fn constfn_same_body_keeps_shape_and_different_body_deprecates_on_store() {
         assert_eq!(slot_bits(obj, 0), bits(second), "load current closure");
 
         crate::object::store_object_field_slot(obj, 0, bits(other));
-        assert_eq!(object_shape_stamp(obj), any, "different body goes to Any");
+        assert_eq!(
+            object_shape_stamp(obj),
+            LayoutWord(any),
+            "different body goes to Any"
+        );
         assert_eq!(slot_bits(obj, 0), bits(other));
         assert_eq!(object_shape_stamp(sibling), constfn);
         assert!(migrate_deprecated_receiver(sibling));
-        assert_eq!(object_shape_stamp(sibling), any);
+        assert_eq!(object_shape_stamp(sibling), LayoutWord(any));
         assert_eq!(slot_bits(sibling, 0), bits(second));
     }
 }
@@ -190,9 +196,9 @@ fn a_number_keeps_an_f64_lane_and_is_stored_as_its_canonical_double() {
     let _lock = crate::gc::global_side_table_test_lock();
     unsafe {
         let (obj, any) = abc();
-        let typed = with_rep(any, with_slot_rep(0, 1, REP_F64));
+        let typed = with_rep(LayoutWord(any), with_slot_rep(0, 1, REP_F64));
         assert_ne!(typed, any);
-        stamp_object_shape_id_with_carrier_note(obj, typed);
+        stamp_object_shape_id_with_carrier_note(obj, LayoutWord(typed));
 
         crate::object::store_object_field_slot(obj, 1, crate::value::INT32_TAG | 7);
         assert_eq!(
@@ -200,7 +206,11 @@ fn a_number_keeps_an_f64_lane_and_is_stored_as_its_canonical_double() {
             7.0f64.to_bits(),
             "an INT32 box is stored as its double"
         );
-        assert_eq!(object_shape_stamp(obj), typed, "a Number never transitions");
+        assert_eq!(
+            object_shape_stamp(obj),
+            LayoutWord(typed),
+            "a Number never transitions"
+        );
 
         crate::object::store_object_field_slot(obj, 1, 0xFFF8_0000_0000_0001);
         assert_eq!(
@@ -214,7 +224,7 @@ fn a_number_keeps_an_f64_lane_and_is_stored_as_its_canonical_double() {
             f64::NEG_INFINITY.to_bits(),
             "Infinity is a Number"
         );
-        assert_eq!(object_shape_stamp(obj), typed);
+        assert_eq!(object_shape_stamp(obj), LayoutWord(typed));
 
         // An `Any` lane of the same shape is today's store, bit for bit.
         crate::object::store_object_field_slot(obj, 0, crate::value::INT32_TAG | 7);
@@ -237,24 +247,24 @@ fn a_non_number_generalizes_the_lane_for_the_whole_lineage() {
         let (sibling, sibling_any) = abc();
         assert_eq!(sibling_any, any, "one lineage");
         let f64_at_1 = with_slot_rep(0, 1, REP_F64);
-        let typed = with_rep(any, f64_at_1);
-        stamp_object_shape_id_with_carrier_note(obj, typed);
-        stamp_object_shape_id_with_carrier_note(sibling, typed);
+        let typed = with_rep(LayoutWord(any), f64_at_1);
+        stamp_object_shape_id_with_carrier_note(obj, LayoutWord(typed));
+        stamp_object_shape_id_with_carrier_note(sibling, LayoutWord(typed));
 
         crate::object::store_object_field_slot(obj, 1, crate::value::TAG_UNDEFINED);
         assert_eq!(
             object_shape_stamp(obj),
-            any,
+            LayoutWord(any),
             "moved to the normalized shape"
         );
         assert_eq!(slot_bits(obj, 1), crate::value::TAG_UNDEFINED);
         assert_eq!(
-            slot_rep(rep_of(typed), 1),
+            slot_rep(rep_of(LayoutWord(typed)), 1),
             REP_F64_DEPRECATED,
             "the carried shape learned the lane"
         );
         assert_eq!(
-            with_rep(any, f64_at_1),
+            with_rep(LayoutWord(any), f64_at_1),
             typed,
             "deprecation is not identity"
         );
@@ -262,9 +272,9 @@ fn a_non_number_generalizes_the_lane_for_the_whole_lineage() {
         // The sibling still holds a Number at the lane: its shape is valid,
         // and a Number store keeps it; the next miss migrates it.
         crate::object::store_object_field_slot(sibling, 1, 5.0f64.to_bits());
-        assert_eq!(object_shape_stamp(sibling), typed);
+        assert_eq!(object_shape_stamp(sibling), LayoutWord(typed));
         assert!(migrate_deprecated_receiver(sibling));
-        assert_eq!(object_shape_stamp(sibling), any);
+        assert_eq!(object_shape_stamp(sibling), LayoutWord(any));
         assert_eq!(
             slot_bits(sibling, 1),
             5.0f64.to_bits(),
@@ -283,9 +293,9 @@ fn normalization_keeps_live_lanes_and_reaches_a_fixed_point() {
         let (obj, any) = abc();
         let (other, _) = abc();
         let both = with_slot_rep(with_slot_rep(0, 0, REP_F64), 2, REP_F64);
-        let s = with_rep(any, both);
-        stamp_object_shape_id_with_carrier_note(obj, s);
-        stamp_object_shape_id_with_carrier_note(other, s);
+        let s = with_rep(LayoutWord(any), both);
+        stamp_object_shape_id_with_carrier_note(obj, LayoutWord(s));
+        stamp_object_shape_id_with_carrier_note(other, LayoutWord(s));
 
         crate::object::store_object_field_slot(obj, 0, crate::value::TAG_NULL);
         let t = object_shape_stamp(obj);
@@ -294,16 +304,16 @@ fn normalization_keeps_live_lanes_and_reaches_a_fixed_point() {
         // T's lane 2 generalizes too; S (lane 0 deprecated) now normalizes
         // through T to the all-`Any` shape.
         crate::object::store_object_field_slot(obj, 2, crate::value::TAG_NULL);
-        assert_eq!(object_shape_stamp(obj), any);
-        assert_eq!(normalized_shape(s), any);
+        assert_eq!(object_shape_stamp(obj), LayoutWord(any));
+        assert_eq!(normalized_shape(LayoutWord(s)), LayoutWord(any));
         assert_eq!(
-            slot_rep(rep_of(s), 2),
+            slot_rep(rep_of(LayoutWord(s)), 2),
             REP_F64,
             "S itself never saw lane 2 fail"
         );
         assert!(migrate_deprecated_receiver(other));
-        assert_eq!(object_shape_stamp(other), any);
-        assert_eq!(rep_of(any), REP_ANY);
+        assert_eq!(object_shape_stamp(other), LayoutWord(any));
+        assert_eq!(rep_of(LayoutWord(any)), REP_ANY);
         assert!(object_shape_descriptor(other).is_some());
     }
 }
@@ -314,7 +324,7 @@ fn normalization_keeps_live_lanes_and_reaches_a_fixed_point() {
 /// uses, so the transition cache holds only this test's edges.
 unsafe fn add(obj: *mut ObjectHeader, name: &str, value: f64) -> u32 {
     crate::object::js_object_set_field_by_name(obj, key(name), value);
-    object_shape_stamp(obj)
+    object_shape_stamp(obj).0
 }
 
 #[test]
@@ -329,7 +339,7 @@ fn a_number_key_add_publishes_an_f64_lane_and_a_non_number_an_any_lane() {
             let obj = crate::object::js_object_alloc(0, 4);
             add(obj, "p2b_n_a", 1.5);
             let id = add(obj, "p2b_n_b", text);
-            let rep = rep_of(id);
+            let rep = rep_of(LayoutWord(id));
             assert_eq!(slot_rep(rep, 0), REP_F64, "a Number key-add earns F64");
             assert_eq!(slot_rep(rep, 1), REP_ANY, "a string key-add stays Any");
             ids.push(id);
@@ -347,7 +357,7 @@ fn a_cached_f64_edge_refuses_a_non_number() {
     unsafe {
         let first = crate::object::js_object_alloc(0, 4);
         let f64_id = add(first, "p2b_r_a", 7.0);
-        assert_eq!(slot_rep(rep_of(f64_id), 0), REP_F64);
+        assert_eq!(slot_rep(rep_of(LayoutWord(f64_id)), 0), REP_F64);
         let s = crate::string::js_string_from_bytes(b"x".as_ptr(), 1);
         let second = crate::object::js_object_alloc(0, 4);
         let id = add(
@@ -356,7 +366,7 @@ fn a_cached_f64_edge_refuses_a_non_number() {
             f64::from_bits(crate::JSValue::string_ptr(s).bits()),
         );
         assert_ne!(id, f64_id, "a string must not take the F64 edge");
-        assert_eq!(slot_rep(rep_of(id), 0), REP_ANY);
+        assert_eq!(slot_rep(rep_of(LayoutWord(id)), 0), REP_ANY);
     }
 }
 
@@ -369,7 +379,7 @@ fn an_int32_key_add_is_stored_as_its_double_on_both_paths() {
             let obj = crate::object::js_object_alloc(0, 4);
             add(obj, "p2b_i_a", 1.0);
             let id = add(obj, "p2b_i_b", boxed);
-            assert_eq!(slot_rep(rep_of(id), 1), REP_F64);
+            assert_eq!(slot_rep(rep_of(LayoutWord(id)), 1), REP_F64);
             assert_eq!(
                 slot_bits(obj, 1),
                 5.0f64.to_bits(),
@@ -385,7 +395,7 @@ fn a_restamp_and_a_bound_change_keep_the_lanes() {
     unsafe {
         let obj = crate::object::js_object_alloc(0, 4);
         let id = add(obj, "p2b_k_a", 3.0);
-        assert_eq!(slot_rep(rep_of(id), 0), REP_F64);
+        assert_eq!(slot_rep(rep_of(LayoutWord(id)), 0), REP_F64);
         let d = object_shape_descriptor(obj).expect("shaped");
         let again = super::shapes::stamp_object_shape(
             obj,
@@ -393,7 +403,11 @@ fn a_restamp_and_a_bound_change_keep_the_lanes() {
             d.logical_key_count,
             d.live_inline_slot_count,
         );
-        assert_eq!(again, id, "a same-edge restamp is the same shape");
+        assert_eq!(
+            again,
+            LayoutWord(id),
+            "a same-edge restamp is the same shape"
+        );
         let grown =
             super::shapes::publish_object_live_slot_count(obj, d.live_inline_slot_count + 1);
         assert_eq!(
@@ -420,7 +434,7 @@ fn a_key_add_after_generalization_converges_on_the_normalized_shape() {
             f64::from_bits(crate::JSValue::string_ptr(s).bits()),
         );
         assert_ne!(general, f64_id, "the store generalized");
-        assert_eq!(slot_rep(rep_of(general), 1), REP_ANY);
+        assert_eq!(slot_rep(rep_of(LayoutWord(general)), 1), REP_ANY);
         // A new object adding the same key with a Number: the cached edge's
         // target learned a deprecated lane, so it must not serve.
         let next = crate::object::js_object_alloc(0, 4);
@@ -447,20 +461,20 @@ fn a_non_number_key_add_deprecates_its_f64_sibling() {
         let first = crate::object::js_object_alloc(0, 4);
         add(first, "p2d_c_0", 0.5);
         let f64_id = add(first, "p2d_c_a", 1.0);
-        assert_eq!(slot_rep(rep_of(f64_id), 1), REP_F64);
+        assert_eq!(slot_rep(rep_of(LayoutWord(f64_id)), 1), REP_F64);
         let second = crate::object::js_object_alloc(0, 4);
         add(second, "p2d_c_0", 0.5);
         let any_id = add(second, "p2d_c_a", boxed("s"));
         assert_ne!(any_id, f64_id, "the string took the Any sibling");
-        assert_eq!(slot_rep(rep_of(any_id), 1), REP_ANY);
+        assert_eq!(slot_rep(rep_of(LayoutWord(any_id)), 1), REP_ANY);
         assert!(
-            super::field_rep::has_deprecated(rep_of(f64_id)),
+            super::field_rep::has_deprecated(rep_of(LayoutWord(f64_id))),
             "the string key-add deprecated the F64 sibling's lane"
         );
         assert!(migrate_deprecated_receiver(first));
         assert_eq!(
             object_shape_stamp(first),
-            any_id,
+            LayoutWord(any_id),
             "one shape for the lineage"
         );
         let third = crate::object::js_object_alloc(0, 4);
@@ -484,8 +498,8 @@ fn boxed(name: &str) -> f64 {
 fn the_invariant_check_fires_on_a_non_number_under_an_f64_lane() {
     unsafe {
         let (obj, id) = abc();
-        let f64_a = with_rep(id, with_slot_rep(REP_ANY, 0, REP_F64));
-        stamp_object_shape_id_with_carrier_note(obj, f64_a);
+        let f64_a = with_rep(LayoutWord(id), with_slot_rep(REP_ANY, 0, REP_F64));
+        stamp_object_shape_id_with_carrier_note(obj, LayoutWord(f64_a));
         let fields = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;
         super::field_rep_store::assert_field_rep_lanes(
             obj,
@@ -561,7 +575,11 @@ fn a_class_instance_key_add_earns_the_lane_too() {
         assert!(!crate::object::class_registry::declarations::class_is_anonymous((*inst).class_id));
         crate::object::js_object_set_field_by_name(inst, key("n"), 1.5);
         let inst_rep = super::field_rep_store::shape_rep(object_shape_stamp(inst));
-        assert_ne!(object_shape_stamp(inst), 0, "the instance is shaped");
+        assert_ne!(
+            object_shape_stamp(inst),
+            LayoutWord(0),
+            "the instance is shaped"
+        );
         assert_eq!(slot_rep(inst_rep, 0), REP_F64);
     }
 }

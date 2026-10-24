@@ -39,6 +39,7 @@
 use std::cell::Cell;
 
 use super::{PROTO_ID_CLASS, PROTO_ID_DEFAULT, PROTO_ID_MIXED, PROTO_ID_NULL, PROTO_ID_PER_OBJECT};
+use crate::codegen_abi::LayoutWord;
 
 /// The tag bits of a prototype identity (`shapes::PROTO_ID_*`).
 const PROTO_ID_TAG_MASK: u64 = 3 << 62;
@@ -306,7 +307,7 @@ pub(crate) fn identity_prototype_word(proto_id: u64) -> u64 {
 /// The prototype word of shape `id`: the receiver's [[Prototype]] bits when
 /// the shape's identity names an object, else 0.
 #[inline]
-pub(crate) fn shape_prototype_word(id: u32) -> u64 {
+pub(crate) fn shape_prototype_word(id: LayoutWord) -> u64 {
     // SAFETY: `agent_record` never returns null; an absent id reads the
     // shared empty record, whose identity is the default.
     unsafe { (*super::shapes_store::ShapeSlab::agent_record_for_word(id)).prototype_word() }

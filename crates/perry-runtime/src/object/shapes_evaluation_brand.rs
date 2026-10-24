@@ -5,6 +5,7 @@
 //! bit 63. The holder is the class object itself. Its serial word is traced by every carrier,
 //! even after Object.setPrototypeOf changes the receiver's prototype.
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 pub(crate) const EVALUATION_HOLDER_BRAND: u64 = 1 << 62;
 
@@ -78,7 +79,7 @@ pub(crate) unsafe fn object_evaluation_brand(obj: *const crate::object::ObjectHe
 /// recorded it: the evaluation's prototype and brand. Returns the prototype
 /// and holder words, which the birth shades as the ordinary link and brand
 /// stamp do. One directory read.
-pub(crate) fn evaluation_copy_birth_edges(copy: u32, family: u32) -> Option<(u64, u64)> {
+pub(crate) fn evaluation_copy_birth_edges(copy: LayoutWord, family: u32) -> Option<(u64, u64)> {
     let record = ShapeSlab::agent_record_for_word_present(copy)?;
     // SAFETY: a present record of this agent, read immediately.
     let record = unsafe { &*record };

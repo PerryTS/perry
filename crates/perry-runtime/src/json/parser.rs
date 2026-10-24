@@ -5,6 +5,7 @@
 //! hint" specialization used by `js_json_parse_typed_array`.
 
 use super::*;
+use crate::codegen_abi::LayoutWord;
 use crate::{
     array::{note_array_slot_layout_only, ArrayHeader},
     js_array_alloc, js_array_push, JSValue, StringHeader,
@@ -284,7 +285,7 @@ pub(crate) struct DirectParser<'a> {
     hot_shape_len: usize,
     hot_shape_keys: [*const StringHeader; 8],
     hot_shape_array: *mut ArrayHeader,
-    hot_shape_id: u32,
+    hot_shape_id: LayoutWord,
     /// The newest small parse shape, copied once at the parse boundary. A
     /// top-level record can consume it while reading keys in order, avoiding
     /// one TLS + RefCell key-cache probe per field. GC is already suppressed
@@ -319,7 +320,7 @@ impl<'a> DirectParser<'a> {
             hot_shape_len: 0,
             hot_shape_keys: [std::ptr::null(); 8],
             hot_shape_array: std::ptr::null_mut(),
-            hot_shape_id: 0,
+            hot_shape_id: LayoutWord(0),
             warm_record_shape_pending: false,
             saw_wide_object: false,
             source: std::ptr::null(),
@@ -372,7 +373,7 @@ impl<'a> DirectParser<'a> {
             hot_shape_len: 0,
             hot_shape_keys: [std::ptr::null(); 8],
             hot_shape_array: std::ptr::null_mut(),
-            hot_shape_id: 0,
+            hot_shape_id: LayoutWord(0),
             warm_record_shape_pending: false,
             saw_wide_object: false,
             source: std::ptr::null(),
@@ -386,7 +387,7 @@ impl<'a> DirectParser<'a> {
     unsafe fn parse_shape_keys_array_hot(
         &mut self,
         keys: &[*const StringHeader],
-    ) -> (*mut ArrayHeader, u32) {
+    ) -> (*mut ArrayHeader, LayoutWord) {
         if keys.len() <= self.hot_shape_keys.len()
             && keys.len() == self.hot_shape_len
             && !self.hot_shape_array.is_null()

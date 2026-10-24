@@ -5,6 +5,7 @@
 //! gate; `use super::*` keeps the parent's private layout helpers reachable.
 
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 /// Admit a complete counted-loop range over either an ordinary Array or an
 /// object-backed Array subclass. The seven output words are scalar facts, not
@@ -502,7 +503,7 @@ pub extern "C" fn js_packed_arraylike_loop_revalidate_live(
             && !unsafe {
                 subclass_numeric_prefix_is_proven(
                     object,
-                    (*object).shape_word(),
+                    LayoutWord((*object).shape_word()),
                     admitted_bound,
                     require_numeric >= 2,
                 )
@@ -643,7 +644,7 @@ fn revalidate_admitted_subclass_live(
             && !unsafe {
                 subclass_numeric_prefix_is_proven(
                     object,
-                    (*object).shape_word(),
+                    LayoutWord((*object).shape_word()),
                     admitted_bound,
                     require_numeric >= 2,
                 )

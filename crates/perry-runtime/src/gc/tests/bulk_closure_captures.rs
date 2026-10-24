@@ -1,6 +1,7 @@
 //! Bulk capture births must refresh raw boxes and tagged pointers when the
 //! allocation itself moves them, and retain their shared identities afterwards.
 use super::support::*;
+use crate::codegen_abi::LayoutWord;
 use crate::gc::*;
 
 extern "C" fn captured_body(
@@ -24,14 +25,14 @@ fn small_birth_preserves_body_shape_flags_and_fresh_identity() {
     let expected_shape = crate::closure::shape::birth_shape_for_body(&BODY);
     let first = crate::closure::js_closure_alloc_small(
         &BODY,
-        (u64::from(expected_shape) << 32) | u64::from(count),
+        (u64::from(expected_shape.0) << 32) | u64::from(count),
         captures[0],
         captures[1],
         0,
     );
     let second = crate::closure::js_closure_alloc_small(
         &BODY,
-        (u64::from(expected_shape) << 32) | u64::from(count),
+        (u64::from(expected_shape.0) << 32) | u64::from(count),
         captures[0],
         captures[1],
         0,
@@ -104,7 +105,7 @@ fn old_arena_bulk_capture_install_remembers_young_box() {
     ) as *mut crate::closure::ClosureHeader;
     unsafe {
         (*closure).capture_count = 1;
-        (*closure).shape_id = 0;
+        (*closure).shape_id = LayoutWord(0);
         (*closure).info = std::ptr::null();
         // GC_STORE_AUDIT(INIT): fresh test closure, null props edge.
         (*closure).props = std::ptr::null_mut();

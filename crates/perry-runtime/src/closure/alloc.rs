@@ -1,6 +1,7 @@
 //! ClosureHeader, allocation, singleton caches, and capture get/set FFI.
 
 use super::*;
+use crate::codegen_abi::LayoutWord;
 use std::cell::RefCell;
 
 crate::perry_thread_local! {
@@ -372,7 +373,7 @@ pub struct ClosureHeader {
     pub capture_count: u32,
     /// The function object's ShapeId (`closure::shape`): a
     /// `ShapeObjectKind::Function` / `FunctionDictionary` id in the exotic band.
-    pub shape_id: u32,
+    pub shape_id: LayoutWord,
     /// The body's static [`JsFunctionInfo`](crate::closure::JsFunctionInfo):
     /// its code address and every fact a caller needs about the body.
     pub info: *const crate::closure::JsFunctionInfo,
@@ -664,7 +665,13 @@ pub extern "C" fn js_closure_alloc_small(
     );
     let Some(raw) = closure_alloc_storage_no_collect(count) else {
         let words = [capture0, capture1, capture2];
-        return closure_alloc_init_collecting(info, capture_count, words.as_ptr(), true, shape_id);
+        return closure_alloc_init_collecting(
+            info,
+            capture_count,
+            words.as_ptr(),
+            true,
+            LayoutWord(shape_id),
+        );
     };
     note_closure_alloc();
     let closure = raw as *mut ClosureHeader;
@@ -721,7 +728,7 @@ pub extern "C" fn js_closure_alloc_init_boxed(
     let shape_id = super::shape::birth_shape_for_body(info);
     js_closure_alloc_fixed(
         info,
-        (u64::from(shape_id) << 32) | u64::from(capture_count),
+        (u64::from(shape_id.0) << 32) | u64::from(capture_count),
         captures_ptr,
     )
 }
@@ -738,7 +745,7 @@ pub extern "C" fn js_closure_alloc_fixed(
     let actual_count = ordinary_capture_count(capture_count);
     let shape_id = (header >> 32) as u32;
     if actual_count == 0 || captures_ptr.is_null() {
-        return closure_alloc_empty(info, capture_count, shape_id);
+        return closure_alloc_empty(info, capture_count, LayoutWord(shape_id));
     }
     match closure_alloc_storage_no_collect(actual_count) {
         Some(raw) => {
@@ -787,7 +794,13 @@ pub extern "C" fn js_closure_alloc_fixed(
             }
             closure
         }
-        None => closure_alloc_init_collecting(info, capture_count, captures_ptr, true, shape_id),
+        None => closure_alloc_init_collecting(
+            info,
+            capture_count,
+            captures_ptr,
+            true,
+            LayoutWord(shape_id),
+        ),
     }
 }
 
@@ -798,7 +811,7 @@ fn closure_alloc_init_collecting(
     capture_count: u32,
     captures_ptr: *const u64,
     boxed: bool,
-    shape_id: u32,
+    shape_id: LayoutWord,
 ) -> *mut ClosureHeader {
     let count = ordinary_capture_count(capture_count);
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -937,6 +950,8 @@ pub extern "C" fn js_closure_alloc_empty(
     info: *const crate::closure::JsFunctionInfo,
     shape_id: u32,
 ) -> *mut ClosureHeader {
+    let shape_id = LayoutWord(shape_id);
+
     closure_alloc_empty(info, 0, shape_id)
 }
 
@@ -944,7 +959,7 @@ pub extern "C" fn js_closure_alloc_empty(
 fn closure_alloc_empty(
     info: *const crate::closure::JsFunctionInfo,
     capture_count: u32,
-    shape_id: u32,
+    shape_id: LayoutWord,
 ) -> *mut ClosureHeader {
     note_closure_alloc();
     let actual_count = ordinary_capture_count(capture_count);

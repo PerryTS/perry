@@ -1,13 +1,14 @@
 //! Startup adoption of declared layouts into the existing shape table.
 use super::*;
+use crate::codegen_abi::{LayoutWord, ShapeId};
 
-pub(crate) fn allocate_declared_layout_id(proto_id: u64) -> u32 {
+pub(crate) fn allocate_declared_layout_id(proto_id: u64) -> ShapeId {
     alloc_shape_id(proto_id).unwrap_or_else(|_| shape_id_exhausted_abort())
 }
 
 pub(crate) unsafe fn install_declared_layout(
-    id: u32,
-    word: u32,
+    id: ShapeId,
+    word: LayoutWord,
     family_desc_index_plus_one: u32,
     keys: *mut ArrayHeader,
     key_count: u32,
@@ -45,10 +46,7 @@ pub(crate) unsafe fn install_declared_layout(
     );
     let _ = table;
     super::publish_static_record(
-        crate::codegen_abi::PublishedShape {
-            identity: crate::codegen_abi::ShapeId(id),
-            word: crate::codegen_abi::LayoutWord(word),
-        },
+        crate::codegen_abi::PublishedShape { identity: id, word },
         record,
         facts,
     )
@@ -84,7 +82,7 @@ mod tests {
             unsafe {
                 install_declared_layout(
                     id,
-                    word,
+                    crate::codegen_abi::LayoutWord(word),
                     0,
                     std::ptr::null_mut(),
                     0,
@@ -103,12 +101,22 @@ mod tests {
         let in_facts: usize = inner
             .by_facts
             .values()
-            .map(|ids| ids.as_slice().iter().filter(|&&w| w == word).count())
+            .map(|ids| {
+                ids.as_slice()
+                    .iter()
+                    .filter(|&&w| w == crate::codegen_abi::LayoutWord(word))
+                    .count()
+            })
             .sum();
         let in_families: usize = inner
             .families
             .values()
-            .map(|ids| ids.as_slice().iter().filter(|&&w| w == word).count())
+            .map(|ids| {
+                ids.as_slice()
+                    .iter()
+                    .filter(|&&w| w == crate::codegen_abi::LayoutWord(word))
+                    .count()
+            })
             .sum();
         assert_eq!((in_facts, in_families), (1, 1));
     }

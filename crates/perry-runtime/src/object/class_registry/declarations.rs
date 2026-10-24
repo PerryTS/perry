@@ -24,6 +24,7 @@
 //! prototype) to have somewhere to keep the name.
 
 use super::*;
+use crate::codegen_abi::{LayoutWord, ShapeId};
 
 /// [`ClassMemberDecl::kind`]: a method.
 pub const CLASS_MEMBER_METHOD: u8 = 0;
@@ -83,10 +84,10 @@ const CLASS_DECL_ROLE_MASK: u32 = CLASS_DECL_ANONYMOUS | CLASS_DECL_DECLARED;
 pub struct ClassDeclaration {
     pub members: *const ClassMemberDecl,
     pub member_count: u32,
-    pub birth_shape: u32,
+    pub birth_shape: ShapeId,
     pub flags: u32,
     /// Immutable static-prefix word for birth_shape, or zero together with that identity.
-    pub birth_layout_word: u32,
+    pub birth_layout_word: LayoutWord,
     /// The compiler-owned instance layout, independent of class evaluation.
     pub instance_layout: *const crate::object::layout_desc::PerryLayoutDesc,
     /// The family's creation split (`layout_desc::PerryFamilyVariants`), or
@@ -109,9 +110,9 @@ impl ClassDeclaration {
         Self {
             members: members.as_ptr(),
             member_count: members.len() as u32,
-            birth_shape: 0,
+            birth_shape: ShapeId(0),
             flags: Self::flags_of(members) | CLASS_DECL_DECLARED,
-            birth_layout_word: 0,
+            birth_layout_word: LayoutWord(0),
             instance_layout: std::ptr::null(),
             instance_variants: std::ptr::null(),
             default_derived_initializer: std::ptr::null(),
@@ -369,7 +370,10 @@ pub unsafe extern "C" fn js_register_class_declaration(
     if class_id == 0 || decl.is_null() {
         return;
     }
-    debug_assert_eq!((*decl).birth_shape != 0, (*decl).birth_layout_word != 0);
+    debug_assert_eq!(
+        (*decl).birth_shape != ShapeId(0),
+        (*decl).birth_layout_word != LayoutWord(0)
+    );
     if let Err(error) = register_class_declaration(class_id, &*decl) {
         reject_role_conflict(error);
     }
@@ -831,15 +835,15 @@ pub(crate) fn class_method_decl_by_entry(
 
 /// The compiler's candidate prototype shape of class `class_id` (0: none).
 #[cfg(test)]
-pub(crate) fn class_birth_shape(class_id: u32) -> u32 {
-    class_declaration(class_id).map_or(0, |d| d.birth_shape)
+pub(crate) fn class_birth_shape(class_id: u32) -> ShapeId {
+    class_declaration(class_id).map_or(ShapeId(0), |d| d.birth_shape)
 }
 
 /// The immutable layout word of class `class_id`'s declared prototype birth
 /// (0: none). Receivers carry words, never identities: a holder or record
 /// lookup for the birth layout goes through this, not [`class_birth_shape`].
-pub(crate) fn class_birth_word(class_id: u32) -> u32 {
-    class_declaration(class_id).map_or(0, |d| d.birth_layout_word)
+pub(crate) fn class_birth_word(class_id: u32) -> LayoutWord {
+    class_declaration(class_id).map_or(LayoutWord(0), |d| d.birth_layout_word)
 }
 
 /// Does class `class_id` declare a computed instance member?
@@ -1119,7 +1123,7 @@ fn test_declare_member_with(
         birth_shape,
         flags: ClassDeclaration::flags_of(members)
             | class_declaration(class_id).map_or(0, |d| d.flags & CLASS_DECL_ROLE_MASK),
-        birth_layout_word: 0,
+        birth_layout_word: LayoutWord(0),
         instance_layout: std::ptr::null(),
         instance_variants: std::ptr::null(),
         default_derived_initializer: std::ptr::null(),
@@ -1157,7 +1161,8 @@ pub(crate) fn test_declare_computed_member(
         birth_shape: class_birth_shape(class_id),
         flags: ClassDeclaration::flags_of(members)
             | class_declaration(class_id).map_or(0, |d| d.flags & CLASS_DECL_ROLE_MASK),
-        birth_layout_word: class_declaration(class_id).map_or(0, |d| d.birth_layout_word),
+        birth_layout_word: class_declaration(class_id)
+            .map_or(LayoutWord(0), |d| d.birth_layout_word),
         instance_layout: std::ptr::null(),
         instance_variants: std::ptr::null(),
         default_derived_initializer: std::ptr::null(),
@@ -1195,10 +1200,10 @@ pub(crate) fn test_declare_birth_layout(class_id: u32, identity: u32, word: u32)
     let decl: &'static ClassDeclaration = Box::leak(Box::new(ClassDeclaration {
         members: members.as_ptr(),
         member_count: members.len() as u32,
-        birth_shape: identity,
+        birth_shape: ShapeId(identity),
         flags: ClassDeclaration::flags_of(members)
             | class_declaration(class_id).map_or(0, |d| d.flags & CLASS_DECL_ROLE_MASK),
-        birth_layout_word: word,
+        birth_layout_word: LayoutWord(word),
         instance_layout: std::ptr::null(),
         instance_variants: std::ptr::null(),
         default_derived_initializer: std::ptr::null(),
@@ -1303,9 +1308,9 @@ pub(crate) fn class_birth_layout_request(
     class_id: u32,
 ) -> Option<crate::codegen_abi::PublishedShape> {
     let d = class_declaration(class_id)?;
-    (d.birth_shape != 0).then_some(crate::codegen_abi::PublishedShape {
-        identity: crate::codegen_abi::ShapeId(d.birth_shape),
-        word: crate::codegen_abi::LayoutWord(d.birth_layout_word),
+    (d.birth_shape != ShapeId(0)).then_some(crate::codegen_abi::PublishedShape {
+        identity: d.birth_shape,
+        word: d.birth_layout_word,
     })
 }
 const _: () = assert!(

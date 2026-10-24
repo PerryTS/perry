@@ -20,7 +20,7 @@ fn reservation_and_identity_absence_never_commit_records() {
     assert_eq!(published, PublishedShape { identity: id, word });
     assert_eq!(slab.region.committed_bytes(), slab.region.page);
     assert_eq!(slab.handle_by_identity(id), Some(word));
-    assert_eq!(unsafe { (*slab.record_for_handle(word)).shape_id }, id.0);
+    assert_eq!(unsafe { (*slab.record_for_handle(word)).shape_id }, id);
     slab.remove(id).unwrap();
     assert!(slab.record_ptr(id).is_none());
     assert_eq!(slab.region.committed_bytes(), 0);
@@ -45,7 +45,7 @@ fn page_boundary_keeps_partial_page_and_dynamic_rows_never_reuse() {
     assert!(slab.region.committed_bytes() != 0);
     assert_eq!(
         unsafe { (*slab.record_for_handle(second.word)).shape_id },
-        second.identity.0
+        second.identity
     );
     let third = slab
         .publish_dynamic(ShapeId(SHAPE_ID_BASE + 7), record())

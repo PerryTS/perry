@@ -3,6 +3,7 @@
 //! each hop through them from the layout. A program's write to one of them
 //! must be read back (or declined), never answered from the pristine layout.
 use super::*;
+use crate::codegen_abi::LayoutWord;
 use crate::value::{TAG_HOLE, TAG_UNDEFINED};
 
 fn on_a_fresh_thread(body: impl FnOnce() + Send + 'static) {
@@ -91,7 +92,7 @@ fn builtin_prototypes_are_born_on_their_static_layouts() {
                 std::ptr::addr_of!(crate::object::runtime_layouts::ARRAY_PROTOTYPE_NAMED),
             ),
         ] {
-            let r = record_of(test_dir(), (*obj).parent_class_id);
+            let r = record_of(test_dir(), LayoutWord((*obj).parent_class_id));
             assert!(!r.is_null());
             // The runtime's own population is no program write: no shadow.
             assert_eq!(
@@ -99,7 +100,7 @@ fn builtin_prototypes_are_born_on_their_static_layouts() {
                 0
             );
             let d = &*desc;
-            let declared = record_of(test_dir(), d.layout_id);
+            let declared = record_of(test_dir(), LayoutWord(d.layout_id));
             assert!(!declared.is_null(), "the layout is registered");
             // The layout's own key list, every key an atom, every slot filled.
             assert_eq!((*r).keys, (*declared).keys, "the declared key list");
@@ -368,9 +369,9 @@ fn sealed_runtime_prototypes_take_the_store_funnel() {
                 !crate::object::layout_desc::word_is_shadowed(word),
                 "{name}: pristine"
             );
-            let kind = crate::object::shapes::shape_object_kind_for_word(
+            let kind = crate::object::shapes::shape_object_kind_for_word(LayoutWord(
                 crate::object::layout_desc::layout_id_of_word(word),
-            );
+            ));
             eprintln!("{name}.prototype kind {kind:?}");
             assert_ne!(
                 kind,

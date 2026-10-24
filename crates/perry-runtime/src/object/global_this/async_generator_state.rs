@@ -22,6 +22,7 @@ use super::*;
 use crate::closure::{
     js_closure_alloc, js_closure_get_capture_ptr, js_closure_set_capture_ptr, ClosureHeader,
 };
+use crate::codegen_abi::LayoutWord;
 use crate::promise::{
     js_promise_attach_settle_listener, js_promise_new, js_promise_reject, js_promise_resolve,
     js_value_is_promise, Promise, PromiseState,
@@ -64,13 +65,13 @@ crate::perry_thread_local! {
     static BIRTH_SHAPE: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
-fn birth_shape() -> u32 {
+fn birth_shape() -> LayoutWord {
     let shape = BIRTH_SHAPE.with(std::cell::Cell::get);
     if shape != 0 {
-        return shape;
+        return LayoutWord(shape);
     }
     let shape = record_birth_shape(ASYNC_GENERATOR_STATE_BRAND);
-    BIRTH_SHAPE.with(|memo| memo.set(shape));
+    BIRTH_SHAPE.with(|memo| memo.set(shape.0));
     shape
 }
 
@@ -136,8 +137,8 @@ fn root_rec<'s>(scope: &'s crate::gc::RuntimeHandleScope, rec: *const ClosureHea
 
 /// The async birth layout once an async generator birth published it, else 0.
 #[inline(always)]
-pub(super) fn published_birth_shape() -> u32 {
-    BIRTH_SHAPE.with(std::cell::Cell::get)
+pub(super) fn published_birth_shape() -> LayoutWord {
+    LayoutWord(BIRTH_SHAPE.with(std::cell::Cell::get))
 }
 
 /// The record of a proven live `ObjectHeader` carrying the async brand. On
@@ -154,7 +155,7 @@ pub(crate) unsafe fn async_generator_record_of_object(
     if shape == 0 {
         return None;
     }
-    let bits = if crate::object::shapes::object_shape_stamp(obj) == shape {
+    let bits = if crate::object::shapes::object_shape_stamp(obj) == LayoutWord(shape) {
         *(obj as *const u8)
             .add(std::mem::size_of::<ObjectHeader>())
             .cast::<u64>()

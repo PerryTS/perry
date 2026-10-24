@@ -28,6 +28,7 @@
 
 use super::super::*;
 use super::support::*;
+use crate::codegen_abi::LayoutWord;
 use crate::value::TAG_UNDEFINED;
 
 pub(super) fn full_gc() {
@@ -736,7 +737,7 @@ fn test_live_transition_cache_entry_survives_full_gc() {
     js_shadow_slot_set(1, ptr_bits(live_key));
 
     let occupancy_before = crate::object::test_transition_cache_occupancy();
-    crate::object::test_seed_transition_cache_entry(prev_shape_id, live_key, next_keys);
+    crate::object::test_seed_transition_cache_entry(LayoutWord(prev_shape_id), live_key, next_keys);
 
     full_gc();
 

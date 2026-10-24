@@ -18,6 +18,7 @@
 use super::super::*;
 use super::dead_owner_side_tables::alloc_nursery_test_array;
 use super::support::*;
+use crate::codegen_abi::LayoutWord;
 
 fn young_closure() -> usize {
     let ptr = crate::arena::arena_alloc_gc(
@@ -337,7 +338,7 @@ fn young_transition_key_under_an_old_target_arms_the_log_through_the_writer() {
     assert!(crate::arena::pointer_in_nursery(key as usize));
 
     let before = young_log::last_walk("object.transition_cache");
-    crate::object::test_transition_cache_insert(0, key, old_target, 0, 0);
+    crate::object::test_transition_cache_insert(LayoutWord(0), key, old_target, 0, LayoutWord(0));
 
     // The log must now name the slot the writer published into. Reading it
     // through a minor is the same observation the scanner makes.

@@ -95,7 +95,7 @@ impl BirthShape {
     }
 
     /// A literal content without a typed layout: the runtime seed mints it
-    /// from its key names and its birth rep (`js_shape_seed_plain`), the
+    /// from its key names and its birth rep (`js_layout_seed_plain`), the
     /// same facts the literal's own mint names, so the seed and a lazy mint
     /// are one ShapeId. Class contents are seeded by their class
     /// registration, typed ones by their typed install.
