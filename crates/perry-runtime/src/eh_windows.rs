@@ -324,10 +324,14 @@ unsafe extern "system" {
     fn GetCurrentThreadStackLimits(low_limit: *mut usize, high_limit: *mut usize);
 }
 
-/// Throws carried by the single-phase transport / handed to `RaiseException`.
-pub(crate) static FAST_TRANSPORTS: std::sync::atomic::AtomicU64 =
+per_test_global! {
+    /// Throws carried by the single-phase transport / handed to `RaiseException`.
+    pub(crate) static FAST_TRANSPORTS: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
-pub(crate) static FALLBACKS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+}
+per_test_global! {
+    pub(crate) static FALLBACKS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+}
 
 /// `PERRY_EH_WALKER=off|0|system`: every throw takes `RaiseException`.
 fn fast_transport_enabled() -> bool {

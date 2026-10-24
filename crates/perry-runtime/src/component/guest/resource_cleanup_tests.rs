@@ -3,7 +3,9 @@ use perry_abi::component_guest::ComponentGuestOps;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 // Each small handle has its own byte-sized count; this never holds an address.
-static COLLECTED: AtomicU64 = AtomicU64::new(0);
+per_test_global! {
+    static COLLECTED: AtomicU64 = AtomicU64::new(0);
+}
 
 unsafe extern "C" fn record_drop(_: *mut c_void, _: u32, operation: u32, handle: u32) -> u32 {
     assert_eq!(operation, 1);

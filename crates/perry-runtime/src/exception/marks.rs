@@ -156,7 +156,9 @@ pub fn caller_frame_mark() -> usize {
 /// pad's stack pointer survived the unwind, on any stack (design §5 test 9).
 /// Read once.
 pub(crate) fn eh_check_enabled() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    per_test_global! {
+        static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    }
     *crate::once_init::get_or_init(&ON, || {
         matches!(
             std::env::var("PERRY_EH_CHECK").ok().as_deref(),

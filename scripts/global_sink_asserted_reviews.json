@@ -1,0 +1,54 @@
+{
+  "crates/perry-runtime/src/buffer/backing.rs::LIVE_BACKINGS": {
+    "claim": "Native backing ownership crosses worker threads; every exact-count reader re-execs in an isolated process, including the detach/pin witness.",
+    "source_sha256": {
+      "crates/perry-runtime/src/buffer/backing.rs": "e0c2a5050160dba2c89a8f08b06cae9e6e0b690a8680adccca4d0916c2fbc3de",
+      "crates/perry-runtime/src/buffer/adopted_backing_tests.rs": "48df7dd79b7301517a5d04d6e06ab5718514e54960bf8c4e110e39e2365a26c1",
+      "crates/perry-runtime/src/buffer/store_tests.rs": "0a6ed4adbb40ff906cb54a0bfd571663a110db81239392cb4e8dd324d9e052a0",
+      "crates/perry-runtime/src/gc/tests/buffer_bytes.rs": "e7bf2457497c86a32b371be0678eb952988ea0b411b1a8ac34836a745223e051",
+      "crates/perry-runtime/src/test_support.rs": "fad16754c572eef842c567ec3c08d1a5ab1860dd8cc3bdfae595161cda8d742a"
+    }
+  },
+  "crates/perry-runtime/src/loop_interrupt.rs::PERRY_LOOP_INTERRUPT_ARMED": {
+    "claim": "Exported compiled-poll ABI counts cross-worker requests; its exact before/after witness runs in an isolated child process.",
+    "source_sha256": {
+      "crates/perry-runtime/src/loop_interrupt.rs": "15c91f29ecf1504a3cb110da6e360162207e87459bd5761c524a872b729bcaa3",
+      "crates/perry-runtime/src/test_support.rs": "fad16754c572eef842c567ec3c08d1a5ab1860dd8cc3bdfae595161cda8d742a"
+    }
+  },
+  "crates/perry-runtime/src/object/class_family_birth.rs::LAYOUT": {
+    "claim": "Both image descriptors use LAYOUT_ID_CARRIED and immutable keys/index/prototype fields; registration carries per-agent shape identity without modifying these static descriptors.",
+    "source_sha256": {
+      "crates/perry-runtime/src/object/class_family_birth.rs": "5476e6bc6f415cf10ea22af0dc0ae5979d4d0b2a4cfb69475d220738735a9dcf",
+      "crates/perry-runtime/src/object/layout_desc.rs": "8b67bfc4c817b46c0107f4832fe8e08fd5d71551798123b6d0f8d7ead217109a"
+    }
+  },
+  "crates/perry-runtime/src/object/function_family_birth_tests.rs::LAYOUT": {
+    "claim": "Image descriptor address is embedded in function birth metadata; LAYOUT_ID_CARRIED remains unchanged while per-agent bindings and semantic checks vary.",
+    "source_sha256": {
+      "crates/perry-runtime/src/object/function_family_birth_tests.rs": "3010644c11a939622c8bff625e04d3dc383a4f764aa68fca887f2ab2ed23ab8a",
+      "crates/perry-runtime/src/object/layout_desc.rs": "8b67bfc4c817b46c0107f4832fe8e08fd5d71551798123b6d0f8d7ead217109a"
+    }
+  },
+  "crates/perry-runtime/src/object/own_override.rs::PERRY_OWN_NAMED_PROP_INSTALLED": {
+    "claim": "Exported monotonic ABI latch is intentionally process-wide; the fixture forcing it runs in an isolated child process.",
+    "source_sha256": {
+      "crates/perry-runtime/src/object/own_override.rs": "b645f3cc013ba853b214497aed9ef28c3c72d2f3e57343946d40e9f0cb1b31e1",
+      "crates/perry-runtime/src/test_support.rs": "fad16754c572eef842c567ec3c08d1a5ab1860dd8cc3bdfae595161cda8d742a"
+    }
+  },
+  "crates/perry-runtime/src/object/runtime_layouts.rs::READABLE_STATE": {
+    "claim": "Image descriptor uses LAYOUT_ID_CARRIED with static prototype/keys/index; tests inspect immutable fields and registration does not rewrite its carried ID.",
+    "source_sha256": {
+      "crates/perry-runtime/src/object/runtime_layouts.rs": "55220940aed1360bede2b4cfc2ef62dbdd07d3fb9554e2aed23f9e982ff54321",
+      "crates/perry-runtime/src/object/layout_desc.rs": "8b67bfc4c817b46c0107f4832fe8e08fd5d71551798123b6d0f8d7ead217109a",
+      "crates/perry-runtime/src/object/layout_desc_tests.rs": "b119ba3ebaea0423b66ff1590d88528a5da4a359d8020088d3c8cc500455a170"
+    }
+  },
+  "crates/perry-runtime/src/tls_os_pool/tests.rs::DROPS": {
+    "claim": "Function-local counter and nested destructor belong exclusively to one test; it joins each of 32 workers before asserting 32 drops. TLS would erase the cross-thread lifetime witness.",
+    "source_sha256": {
+      "crates/perry-runtime/src/tls_os_pool/tests.rs": "62326d71ae8da425342d9cf6011ceb42f199ac2b2c07e392d38169ab5e7febbe"
+    }
+  }
+}

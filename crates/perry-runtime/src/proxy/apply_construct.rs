@@ -380,7 +380,9 @@ mod callability_tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    static APPLY_CALLS: AtomicUsize = AtomicUsize::new(0);
+    per_test_global! {
+        static APPLY_CALLS: AtomicUsize = AtomicUsize::new(0);
+    }
 
     extern "C" fn apply_trap(
         _: *const crate::closure::ClosureHeader,

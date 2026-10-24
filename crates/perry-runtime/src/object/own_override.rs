@@ -655,6 +655,9 @@ mod interned_key_abi_tests {
 
     #[test]
     fn own_override_predicate_uses_the_passed_interned_key() {
+        let Some(_isolated) = crate::test_support::isolated_process_guard() else {
+            return;
+        };
         let _lock = crate::gc::global_side_table_test_lock();
         let _gc = crate::gc::GcSuppressScope::new();
         unsafe {

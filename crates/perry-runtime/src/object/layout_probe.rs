@@ -3071,7 +3071,9 @@ pub unsafe extern "C" fn perry_probe_get_keyed(
 /// line per slow read; diagnostics only, never on a probe path).
 pub(crate) fn diag_enabled() -> bool {
     use std::sync::OnceLock;
-    static ON: OnceLock<bool> = OnceLock::new();
+    per_test_global! {
+        static ON: OnceLock<bool> = OnceLock::new();
+    }
     *ON.get_or_init(|| std::env::var("PERRY_PROBE_DIAG").as_deref() == Ok("1"))
 }
 
@@ -3263,9 +3265,13 @@ pub(crate) mod verify {
     use std::cell::Cell;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
 
-    static ON: AtomicBool = AtomicBool::new(false);
+    per_test_global! {
+        static ON: AtomicBool = AtomicBool::new(false);
+    }
     static CHECKED: AtomicU64 = AtomicU64::new(0);
-    static BAD: AtomicU64 = AtomicU64::new(0);
+    per_test_global! {
+        static BAD: AtomicU64 = AtomicU64::new(0);
+    }
     /// (receiver address, the site's key bits, the probe's answer).
     #[thread_local]
     static HELD: Cell<(usize, u64, u64)> = Cell::new((0, 0, 0));

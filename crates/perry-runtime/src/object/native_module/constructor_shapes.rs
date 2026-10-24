@@ -466,7 +466,9 @@ mod tests {
     #[test]
     fn constructor_statics2_undefined_getter_is_invoked_once_by_the_slow_entry() {
         const CHILD: u32 = 0x7611_0024;
-        static READS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        per_test_global! {
+            static READS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        }
         extern "C" fn getter() -> f64 {
             READS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             f64::from_bits(crate::value::TAG_UNDEFINED)

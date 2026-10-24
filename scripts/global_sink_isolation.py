@@ -49,6 +49,8 @@ USAGE
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import re
 import sys
 from pathlib import Path
@@ -754,9 +756,78 @@ def _load_asserted_baseline() -> set[str] | None:
     }
 
 
+def reviewed_asserted(entries, sources, hits):
+    """Bind individually reviewed exceptions to their exact source evidence.
+
+    These hashes preserve a human review, not a semantic safety proof. An
+    obsolete entry or any edit to its evidence requires another review.
+    """
+    accepted, problems = set(), []
+    for identity, entry in entries.items():
+        if identity not in hits:
+            problems.append(f"obsolete asserted-global review: {identity}")
+            continue
+        pins = entry.get("source_sha256", {})
+        declaration = identity.rsplit("::", 1)[0]
+        if not entry.get("claim") or declaration not in pins:
+            problems.append(f"incomplete asserted-global review: {identity}")
+            continue
+        valid = True
+        for path, expected in pins.items():
+            content = sources.get(path)
+            if (not re.fullmatch(r"[0-9a-f]{64}", str(expected))
+                    or content is None
+                    or hashlib.sha256(content.encode()).hexdigest() != expected):
+                problems.append(f"changed asserted-global review source: {identity}: {path}")
+                valid = False
+        if valid:
+            accepted.add(identity)
+    return accepted, problems
+
+
+def asserted_review_self_test() -> int:
+    identity = "fixture.rs::HITS"
+    source = "static HITS: AtomicU32 = AtomicU32::new(0);"
+    review = {identity: {"claim": "fixture proof", "source_sha256": {
+        "fixture.rs": hashlib.sha256(source.encode()).hexdigest()}}}
+    accepted, problems = reviewed_asserted(review, {"fixture.rs": source}, {identity, "new.rs::HITS"})
+    assert accepted == {identity} and not problems  # another finding stays unreviewed
+    for evidence in ({}, {"fixture.rs": source + " changed"}):
+        accepted, problems = reviewed_asserted(review, evidence, {identity})
+        assert not accepted and problems
+    accepted, problems = reviewed_asserted(review, {"fixture.rs": source}, set())
+    assert not accepted and problems  # obsolete review
+    for malformed in ({"claim": "fixture proof", "source_sha256": {}},
+                      {"claim": "fixture proof", "source_sha256": {"fixture.rs": "bad"}},
+                      {"source_sha256": review[identity]["source_sha256"]}):
+        accepted, problems = reviewed_asserted({identity: malformed}, {"fixture.rs": source}, {identity})
+        assert not accepted and problems
+    print("asserted-global reviews: exact finding only; changed/missing source, malformed pin, missing claim and obsolete entry fail")
+    return 0
+
+
 def check_asserted(update: bool = False) -> int:
     sources = rust_sources()
     head = asserted_globals(sources)
+    review_path = REPO_ROOT / "scripts" / "global_sink_asserted_reviews.json"
+    try:
+        reviews = json.loads(review_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        print(f"cannot read asserted-global reviews: {exc}", file=sys.stderr)
+        return 1
+    relative_sources = {str(path.relative_to(REPO_ROOT)): source for path, source in sources.items()}
+    # Include the isolation implementation and registration rules in evidence.
+    for entry in reviews.values():
+        for path in entry.get("source_sha256", {}):
+            if path not in relative_sources and (REPO_ROOT / path).is_file():
+                relative_sources[path] = (REPO_ROOT / path).read_text(encoding="utf-8")
+    reviewed, problems = reviewed_asserted(reviews, relative_sources, head)
+    if problems:
+        for problem in problems:
+            print(problem, file=sys.stderr)
+        return 1
+    print(f"individually reviewed asserted globals: {len(reviewed)}")
+    head -= reviewed
     base = _load_asserted_baseline()
 
     if update:
@@ -842,7 +913,7 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.self_test:
-        return self_test() or asserted_self_test()
+        return self_test() or asserted_self_test() or asserted_review_self_test()
     if args.update_asserted:
         return check_asserted(update=True)
     if args.asserted_no_raise_vs:

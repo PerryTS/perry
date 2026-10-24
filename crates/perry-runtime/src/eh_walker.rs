@@ -1409,15 +1409,19 @@ fn predict_landing() -> Option<(u64, u64)> {
     None
 }
 
-/// Throws carried by the owned walker, and throws that fell back to the
-/// system unwinder. Reported by [`report_stats`]: a fallback rate that
-/// creeps toward 100% would otherwise be invisible — the program stays
-/// correct and merely loses the speedup, which is exactly the kind of
-/// silent regression that makes an optimization look permanent while it
-/// has actually stopped happening.
-pub(crate) static FAST_TRANSPORTS: std::sync::atomic::AtomicU64 =
+per_test_global! {
+    /// Throws carried by the owned walker, and throws that fell back to the
+    /// system unwinder. Reported by [`report_stats`]: a fallback rate that
+    /// creeps toward 100% would otherwise be invisible — the program stays
+    /// correct and merely loses the speedup, which is exactly the kind of
+    /// silent regression that makes an optimization look permanent while it
+    /// has actually stopped happening.
+    pub(crate) static FAST_TRANSPORTS: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
-pub(crate) static FALLBACKS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+}
+per_test_global! {
+    pub(crate) static FALLBACKS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+}
 
 /// `PERRY_EH_WALKER=off` reverts to the system unwinder for every throw
 /// (bisection escape hatch). Any other value — including unset — uses the

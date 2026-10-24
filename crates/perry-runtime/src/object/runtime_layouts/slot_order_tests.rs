@@ -359,7 +359,7 @@ fn static_layout_slot_order_rejects_slots_that_are_not_a_permutation() {
             _pad: [0; 3],
         },
     ];
-    static mut DESC: PerryLayoutDesc = PerryLayoutDesc {
+    let mut desc = PerryLayoutDesc {
         family: 0x7f000005,
         variant: 0,
         kind: 0,
@@ -377,9 +377,9 @@ fn static_layout_slot_order_rejects_slots_that_are_not_a_permutation() {
         methods: std::ptr::null(),
     };
     unsafe {
-        DESC.keys = std::ptr::addr_of!(KEYS).cast();
+        desc.keys = std::ptr::addr_of!(KEYS).cast();
         assert_eq!(
-            crate::object::layout_desc::register_one(std::ptr::addr_of!(DESC), 1),
+            crate::object::layout_desc::register_one(std::ptr::addr_of!(desc), 1),
             0
         );
     }

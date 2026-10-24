@@ -80,7 +80,9 @@ per_test_global! {
 }
 static DECLINE_NOT_UTF8: AtomicU64 = AtomicU64::new(0);
 static DECLINE_EMPTY: AtomicU64 = AtomicU64::new(0);
-static NEXTS: AtomicU64 = AtomicU64::new(0);
+per_test_global! {
+    static NEXTS: AtomicU64 = AtomicU64::new(0);
+}
 static CODE_POINT_ATS: AtomicU64 = AtomicU64::new(0);
 static MATERIALISE_SEGMENT: AtomicU64 = AtomicU64::new(0);
 static REGEXP_TEST_ACCEPTED: AtomicU64 = AtomicU64::new(0);

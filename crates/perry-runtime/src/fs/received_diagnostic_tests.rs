@@ -373,8 +373,10 @@ fn with_received_typed_array_constructor(test: impl FnOnce(f64, f64)) {
     with_received_intrinsic_constructor("Int16Array", test);
 }
 
-static RECEIVED_CHAIN_LINK_CALLS: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
+per_test_global! {
+    static RECEIVED_CHAIN_LINK_CALLS: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+}
 
 fn with_received_intrinsic_constructor(name: &str, test: impl FnOnce(f64, f64)) {
     let _lock = crate::gc::global_side_table_test_lock();
@@ -430,8 +432,10 @@ fn with_received_intrinsic_constructor(name: &str, test: impl FnOnce(f64, f64)) 
     check(value.get_nanbox_f64(), &format!("an instance of {name}"));
 }
 
-static RECEIVED_CONSTRUCTOR_CALLS: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
+per_test_global! {
+    static RECEIVED_CONSTRUCTOR_CALLS: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+}
 
 extern "C" fn received_patched_constructor(
     _closure: *const ClosureHeader,
@@ -966,8 +970,10 @@ fn received_third_constructor_nullish_getv() {
     );
 }
 
-static RECEIVED_PRIMITIVE_THIS: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+per_test_global! {
+    static RECEIVED_PRIMITIVE_THIS: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+}
 extern "C" fn received_primitive_name(
     _closure: *const ClosureHeader,
     this: crate::closure::JsThis,

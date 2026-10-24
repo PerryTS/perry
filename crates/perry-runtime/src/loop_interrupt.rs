@@ -154,6 +154,9 @@ mod tests {
 
     #[test]
     fn every_interleaving_releases_its_arm() {
+        let Some(_isolated) = crate::test_support::isolated_process_guard() else {
+            return;
+        };
         let base = PERRY_LOOP_INTERRUPT_ARMED.load(Ordering::SeqCst);
         // request then retire
         let h = TerminationHandle::new();

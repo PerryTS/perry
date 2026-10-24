@@ -44,7 +44,9 @@ fn mode() -> DiagMode {
 }
 
 fn seen() -> &'static Mutex<HashSet<&'static str>> {
-    static SEEN: OnceLock<Mutex<HashSet<&'static str>>> = OnceLock::new();
+    per_test_global! {
+        static SEEN: OnceLock<Mutex<HashSet<&'static str>>> = OnceLock::new();
+    }
     crate::once_init::get_or_init(&SEEN, || Mutex::new(HashSet::new()))
 }
 

@@ -2121,7 +2121,9 @@ static FAMILY_DIAG: FamilyDiag = FamilyDiag {
 
 /// `PERRY_FAMILY_DIAG=1`: print the family store counters at exit.
 pub(crate) fn family_diag_init() {
-    static ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    per_test_global! {
+        static ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    }
     extern "C" fn report() {
         family_diag_report();
     }
@@ -2138,7 +2140,9 @@ pub(crate) fn family_diag_init() {
 /// first later key present) and print the most frequent at exit (measurement
 /// only: which key orders the census gets wrong).
 pub(crate) fn family_diag_pairs_on() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    per_test_global! {
+        static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    }
     *ON.get_or_init(|| std::env::var("PERRY_FAMILY_DIAG").as_deref() == Ok("2"))
 }
 
@@ -2265,7 +2269,9 @@ static INSTALLS_BY_CAUSE: [std::sync::atomic::AtomicU64; 8] =
     [const { std::sync::atomic::AtomicU64::new(0) }; 8];
 
 pub(crate) fn family_diag_on() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    per_test_global! {
+        static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    }
     *ON.get_or_init(|| std::env::var_os("PERRY_FAMILY_DIAG").is_some())
 }
 

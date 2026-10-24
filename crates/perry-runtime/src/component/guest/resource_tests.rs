@@ -160,7 +160,9 @@ fn staged_resource_owners_and_borrows_survive_actual_moving_gc() {
     assert_eq!(get(data(frame.get(slot)), STATE), TRANSFERRED);
 }
 
-static DROPS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+per_test_global! {
+    static DROPS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+}
 extern "C-unwind" fn payload_drop(
     _: *const crate::closure::ClosureHeader,
     _: crate::closure::JsThis,

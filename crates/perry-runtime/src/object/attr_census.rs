@@ -20,7 +20,9 @@ use std::sync::{Mutex, OnceLock};
 
 use crate::hot_diag::{sink_from_env, write_sink, Sink};
 
-static STATE: AtomicU8 = AtomicU8::new(0);
+per_test_global! {
+    static STATE: AtomicU8 = AtomicU8::new(0);
+}
 static SINK: OnceLock<Option<Sink>> = OnceLock::new();
 
 type Key = (&'static str, &'static str, u32);

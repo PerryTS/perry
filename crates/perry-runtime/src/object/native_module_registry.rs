@@ -140,16 +140,18 @@ fn nm_module_index(name: &str) -> Option<NmBucket> {
     }
 }
 
-/// Test-only: suppress the `cfg(test)` lazy `js_nm_install_all()` fallback in
-/// the lookup fns below. The fallback exists so ordinary unit tests can
-/// dispatch without the codegen-emitted install — but it makes any test that
-/// asserts "path X armed bucket Y itself" vacuously green (the lookup self-
-/// heals). A test proving an arming obligation flips this on (RAII-guarded)
-/// so the registry state it observes is exactly what the code under test
-/// produced. See `tests::buffer_constructor_mint_arms_the_buffer_dispatch_bucket`.
-#[cfg(test)]
-pub(crate) static NM_TEST_DISABLE_LAZY_INSTALL: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+per_test_global! {
+    /// Test-only: suppress the `cfg(test)` lazy `js_nm_install_all()` fallback in
+    /// the lookup fns below. The fallback exists so ordinary unit tests can
+    /// dispatch without the codegen-emitted install — but it makes any test that
+    /// asserts "path X armed bucket Y itself" vacuously green (the lookup self-
+    /// heals). A test proving an arming obligation flips this on (RAII-guarded)
+    /// so the registry state it observes is exactly what the code under test
+    /// produced. See `tests::buffer_constructor_mint_arms_the_buffer_dispatch_bucket`.
+    #[cfg(test)]
+    pub(crate) static NM_TEST_DISABLE_LAZY_INSTALL: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+}
 
 #[cfg(test)]
 fn nm_lazy_install_enabled() -> bool {
@@ -845,8 +847,10 @@ pub(crate) fn nm_stream_subclass_init(method: &str, this: f64, opts: f64) -> boo
 /// relocated value (attach helpers may allocate/evacuate).
 pub(crate) type NmAttachFn = unsafe fn(&str, f64, usize) -> f64;
 
-static NM_ATTACH_REGISTRY: [AtomicPtr<()>; NM_BUCKET_COUNT] =
-    [const { AtomicPtr::new(std::ptr::null_mut()) }; NM_BUCKET_COUNT];
+per_test_global! {
+    static NM_ATTACH_REGISTRY: [AtomicPtr<()>; NM_BUCKET_COUNT] =
+        [const { AtomicPtr::new(std::ptr::null_mut()) }; NM_BUCKET_COUNT];
+}
 
 pub(crate) fn nm_attach_lookup(module: &str) -> Option<NmAttachFn> {
     let b = nm_module_index(module)

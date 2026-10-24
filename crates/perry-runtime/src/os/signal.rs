@@ -10,8 +10,10 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{LazyLock, Mutex};
 
-static SIGNAL_ASYNC_IDS: LazyLock<Mutex<HashMap<String, u64>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+per_test_global! {
+    static SIGNAL_ASYNC_IDS: LazyLock<Mutex<HashMap<String, u64>>> =
+        LazyLock::new(|| Mutex::new(HashMap::new()));
+}
 
 /// Ignore `SIGPIPE` for the life of the process (#9402).
 ///
