@@ -1999,6 +1999,37 @@ fn an_argument_a_shared_body_returns_comes_back_to_the_caller() {
     assert!(!field(tmpl(&pf, "Box"), "v").readonly, "{}", pf.dump_text());
 }
 
+#[test]
+fn an_aborted_unit_checks_no_contracts() {
+    // 113-CWL3: past the bound a unit claims nothing (sound), so checking
+    // its contracts only spends time: a walk over every argument marker's
+    // members per result token. checker.ts#u18 spent 93 s there after its
+    // 25 s solve hit the bound.
+    let (b, m) = (
+        "export function get(p: any) { const q = { v: p.k }; return q; }",
+        "import { get } from './b'; console.log(get({ k: 1 }).v);",
+    );
+    let of = |pf: &ProgramFacts| {
+        pf.units
+            .iter()
+            .find(|(p, _)| p.starts_with("b.ts"))
+            .map(|(_, s)| (s.aborted, s.checks))
+            .expect("the unit of get")
+    };
+    let free = of(&units_of(&[("b", b), ("m", m)]));
+    assert!(
+        !free.0 && free.1 >= 1,
+        "unbounded, the unit checks its contracts: {free:?}"
+    );
+    let cfg = FactsConfig {
+        max_work: Some(10),
+        ..Default::default()
+    };
+    let bounded = of(&units_with(&[("b", b), ("m", m)], &cfg));
+    assert!(bounded.0, "the bound held: {bounded:?}");
+    assert_eq!(bounded.1, 0, "an aborted unit checked its contracts");
+}
+
 /// Pts entries of the largest unit when `n` other-unit functions let what
 /// their argument reaches escape, each called with the head of one list of
 /// `n` objects.

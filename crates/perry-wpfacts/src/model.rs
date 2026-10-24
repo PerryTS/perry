@@ -1406,6 +1406,8 @@ impl Model {
         if self.is_arg_marker(t) {
             let mut st = vec![(t, bits)];
             while let Some((x, b)) = st.pop() {
+                // Each marker the walk visits is solve work (113-CWL3).
+                self.work += 1;
                 if !self.is_arg_marker(x) {
                     self.mark_use(x, b);
                     continue;
@@ -1505,6 +1507,8 @@ impl Model {
     pub(crate) fn keyed_use(&mut self, t: Tok, a: Atom, bits: u8) {
         let mut st = vec![(t, bits)];
         while let Some((x, b)) = st.pop() {
+            // Each marker the walk visits is solve work (113-CWL3).
+            self.work += 1;
             if self.reach_marker.contains(&x) {
                 self.mark_use(x, b);
                 continue;

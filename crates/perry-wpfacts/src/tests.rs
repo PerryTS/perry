@@ -1320,6 +1320,41 @@ fn an_argument_marker_leaves_beside_when_a_valued_member_links() {
 }
 
 #[test]
+fn a_use_through_an_argument_marker_is_solve_work() {
+    use crate::model::MARK_ESCAPE;
+    // 113-CWL3: a use of an argument marker (DECISIONS 44), under a key
+    // too (design §18.4), walks every marker it stands for. The walk is
+    // solve work, so the work bound sees it: uncounted, checker.ts#u18
+    // took 4.4x main's solve time for the same counted work.
+    let mut m = copy_solver_model();
+    // A parameter marker exists (else no use is recorded at all).
+    m.param_marker.insert(u32::MAX - 1, (0, 0));
+    let n0 = m.node_l("p0");
+    let r = m.arg_marker(n0);
+    let n = 64u64;
+    for _ in 0..n {
+        let ni = m.node_l("p");
+        let ri = m.arg_marker(ni);
+        m.link_marker(ri, r);
+    }
+    let a = m.atom("k");
+    let w = m.work;
+    m.keyed_use(r, a, MARK_ESCAPE);
+    assert!(
+        m.work - w >= n,
+        "a keyed use walked {n} members for {} work",
+        m.work - w
+    );
+    let w = m.work;
+    m.mark_use(r, MARK_ESCAPE);
+    assert!(
+        m.work - w >= n,
+        "a use walked {n} members for {} work",
+        m.work - w
+    );
+}
+
+#[test]
 fn a_keyed_use_reaches_every_marker_an_argument_marker_stands_for() {
     use crate::model::MARK_ESCAPE;
     // Design §18.4: argument marker `r2` stands for `r1` and `r3`. A use of

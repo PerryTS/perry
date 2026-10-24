@@ -114,6 +114,8 @@ pub struct Stats {
     pub work: u64,
     /// The solve hit its budget: no facts were claimed.
     pub aborted: bool,
+    /// Contract checks run after the solve (§11.2): none past the bound.
+    pub checks: u64,
     pub top_calls: u64,
     /// (constraint kind, applications, ms), most expensive first.
     pub profile: Vec<(String, u64, f64)>,
@@ -866,7 +868,13 @@ pub(crate) fn compute_in<'a>(
         eprintln!("perry: wpfacts {}", g.m.sum.stats);
     }
     g.m.solve();
-    while cfg.unit && g.contract_check() {
+    // Past the bound the unit claims nothing (sound): its contracts are
+    // neither checked nor published (113-CWL3).
+    let mut checks = 0u64;
+    while cfg.unit && !g.m.aborted && {
+        checks += 1;
+        g.contract_check()
+    } {
         g.m.solve();
     }
     g.settle_parent_layouts();
@@ -996,6 +1004,7 @@ pub(crate) fn compute_in<'a>(
         contexts: g.m.sum.ctx_nodes.len() as u64,
         work: g.m.work,
         aborted: g.m.aborted,
+        checks,
         pts_entries: g.m.pts_entries,
         big_nodes: big_nodes(&g.m),
         top_calls: g.m.top_calls,
