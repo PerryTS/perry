@@ -92,19 +92,19 @@ pub const fn layout_id_of_word(word: u32) -> u32 {
     }
 }
 
-/// Shadowed words: an ordinary-band ShapeId (`is_site_matchable_shape_id`)
+/// Shadowed words: an ordinary-band ShapeId (`is_site_matchable_layout_word`)
 /// with bit 30 set, `[0xC000_0000, 0xF000_0000)`. Only those ids carry the
 /// bit, so the band is exact: the word never holds a class id from it
 /// (class ids are small counters, `0x7FFF_FFxx` or `0xFFFF_xxxx`; synthetic
 /// class ids live only in `ObjectHeader.class_id`).
 pub const SHADOWED_WORD_BASE: u32 = super::shapes::SHAPE_ID_BASE | LAYOUT_SHADOW_BIT;
-pub const SHADOWED_WORD_END: u32 = super::shapes::SITE_SHAPE_ID_END | LAYOUT_SHADOW_BIT;
-const _: () = assert!(SHADOWED_WORD_BASE == 0xC000_0000 && SHADOWED_WORD_END == 0xF000_0000);
+pub const SHADOWED_WORD_END: u32 = crate::codegen_abi::LAYOUT_SHADOWED_END;
+const _: () = assert!(SHADOWED_WORD_BASE == 0xC000_0000 && SHADOWED_WORD_END == 0xD000_0000);
 /// The emitted site test (`perry-codegen` `proto_constants`): a layout word
 /// below this is an unshadowed ordinary layout or a word no write stamped.
 /// Shadowed and exotic words all lie at or above it.
-pub const UNSHADOWED_WORD_END: u32 = super::shapes::SITE_SHAPE_ID_END;
-const _: () = assert!(UNSHADOWED_WORD_END == crate::codegen_abi::UNSHADOWED_WORD_END);
+pub const UNSHADOWED_WORD_END: u32 = crate::codegen_abi::LAYOUT_ORDINARY_END;
+const _: () = assert!(UNSHADOWED_WORD_END == crate::codegen_abi::LAYOUT_ORDINARY_END);
 
 /// Is `word` a shadowed ordinary layout word?
 #[inline(always)]
@@ -117,7 +117,7 @@ impl ObjectHeader {
     /// word itself when unshadowed; the layout id below bit 30 when the bit
     /// was set by a step-3 write alone (every own-key change of such an object
     /// still changes its layout id); and the raw shadowed word, which no
-    /// `is_shape_id` accepts, when an overflow is installed (no layout
+    /// `is_layout_word` accepts, when an overflow is installed (no layout
     /// describes its own keys, so a shape reader declines, as it did before
     /// step 3). `shapes::object_shape_stamp` agrees with it on every shadowed
     /// word; readers that handle the overflow themselves use
@@ -293,14 +293,16 @@ pub struct PerryLayoutDesc {
     pub parent_class_id: u32,
     /// Immutable layout-owned method index, or null.
     pub methods: *const methods::PerryFamilyMethods,
+    pub shape_id: u32,
+    pub _layout_pad: u32,
 }
 
 const _: () = assert!(
     std::mem::size_of::<PerryLayoutDesc>()
         == if cfg!(target_pointer_width = "32") {
-            56
+            64
         } else {
-            72
+            80
         }
 );
 const _: () = assert!(
@@ -369,15 +371,14 @@ const _: () = assert!(super::shapes::SHAPE_ID_BASE != 0);
 /// (this agent or an earlier one); `None` for 0 and for the carried sentinel.
 #[inline]
 pub(crate) fn registered_layout_id(word: u32) -> Option<u32> {
-    super::shapes::is_shape_id(word).then_some(word)
+    super::shapes::is_layout_word(word).then_some(word)
 }
 
 /// Read the existing registration word atomically: an ordinary function's
 /// first construction may publish its id from another agent.
 #[inline]
 pub(crate) unsafe fn load_layout_id(desc: *const PerryLayoutDesc) -> u32 {
-    use std::sync::atomic::{AtomicU32, Ordering};
-    AtomicU32::from_ptr(std::ptr::addr_of!((*desc).layout_id).cast_mut()).load(Ordering::Acquire)
+    (*desc).layout_id
 }
 
 /// A section sentinel's family: not a layout.
@@ -402,6 +403,8 @@ section_sentinel!(
     LAYOUT_SECTION_SENTINEL,
     PerryLayoutDesc,
     PerryLayoutDesc {
+        shape_id: 0,
+        _layout_pad: 0,
         family: SENTINEL_FAMILY,
         variant: 0,
         kind: 0,
@@ -672,9 +675,7 @@ pub(crate) fn register_static_layouts() {
             } else {
                 register_one(desc, id)
             };
-            // Every agent writes the same id (same seeds, same order).
-            (*(std::ptr::addr_of_mut!((*desc).layout_id) as *const std::sync::atomic::AtomicU32))
-                .store(got, std::sync::atomic::Ordering::Relaxed);
+            let _ = got;
         }
     }
 }
@@ -684,23 +685,13 @@ pub(crate) fn register_static_layouts() {
 /// [`register_namespace_layout`] installs them at the namespace's birth. Most
 /// compiled namespaces are never built.
 unsafe fn reserve_namespace_layout(desc: *const PerryLayoutDesc) -> u32 {
-    use std::sync::atomic::{AtomicU32, Ordering};
-    let word = AtomicU32::from_ptr(std::ptr::addr_of!((*desc).layout_id).cast_mut());
-    if let Some(id) = registered_layout_id(word.load(Ordering::Acquire)) {
-        return id;
-    }
-    debug_assert_eq!((*desc).proto, LAYOUT_PROTO_NULL);
-    let proposed = super::shapes::allocate_declared_layout_id(super::shapes::PROTO_ID_NULL);
-    match word.compare_exchange(
-        LAYOUT_ID_CARRIED,
-        proposed,
-        Ordering::AcqRel,
-        Ordering::Acquire,
-    ) {
-        Ok(_) => proposed,
-        Err(other) => registered_layout_id(other)
-            .expect("a carried layout word holds the sentinel or a ShapeId"),
-    }
+    super::static_shapes::resolve_layout_fields(
+        std::ptr::addr_of!((*desc).shape_id).cast_mut(),
+        (*desc).layout_id,
+        super::shapes::PROTO_ID_NULL,
+    )
+    .identity
+    .0
 }
 
 /// The installed layout of module namespace descriptor `desc`, installing
@@ -790,16 +781,14 @@ unsafe fn register_bound(
     function_proto: Option<u64>,
 ) -> u32 {
     use std::sync::atomic::{AtomicU32, Ordering};
-    let word = AtomicU32::from_ptr(std::ptr::addr_of!((*desc).layout_id).cast_mut());
-    let existing = registered_layout_id(word.load(Ordering::Acquire));
+    let word = AtomicU32::from_ptr(std::ptr::addr_of!((*desc).shape_id).cast_mut());
     let function = (*desc).variant == crate::codegen_abi::LAYOUT_VARIANT_FUNCTION_CONSTRUCTOR;
-    if function && function_proto.is_none() {
-        return existing.unwrap_or(0);
-    }
+    if function && function_proto.is_none() { return 0; }
+    let existing = if function { None } else { Some(word.load(Ordering::Acquire)).filter(|&id| id != 0) };
     let local = binding_symbol_keys(&*desc);
     if let Some(id) = existing {
         if (local != 0 && bound.is_empty()) || super::shapes::shape_descriptor_by_id(id).is_some() {
-            return id;
+            return (*desc).layout_id;
         }
     }
     if local != 0 && !bound.is_empty() && bound.len() != local {
@@ -809,7 +798,7 @@ unsafe fn register_bound(
     let Some(kind) = declared_kind(d.kind) else {
         return 0;
     };
-    if !function && requested >= super::shapes::STATIC_SHAPE_ID_END {
+    if existing.is_none() && !function && requested >= super::shapes::STATIC_SHAPE_ID_END {
         return 0;
     }
     let all_keys: &[PerryLayoutKey] = if d.key_count == 0 {
@@ -886,15 +875,9 @@ unsafe fn register_bound(
         } else {
             super::shapes::allocate_declared_layout_id(proto_id)
         };
-        return match word.compare_exchange(
-            LAYOUT_ID_CARRIED,
-            proposed,
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        ) {
-            Ok(_) => proposed,
-            Err(other) => registered_layout_id(other)
-                .expect("a carried layout word holds the sentinel or a ShapeId"),
+        return match word.compare_exchange(0, proposed, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => (*desc).layout_id,
+            Err(_) => (*desc).layout_id,
         };
     }
     let key_count = keys.len() as u32;
@@ -960,31 +943,17 @@ unsafe fn register_bound(
     } else {
         0
     };
-    let found = super::shapes::shape_descriptor_find_with_rep(
-        list,
-        key_count,
-        slot_count,
-        0,
-        kind,
-        0,
-        proto_id,
-        summary,
-        rep,
-        &[],
-        integrity,
-    )
-    .filter(|&id| {
-        super::shapes::is_static_shape_id(id)
-            && !class_family
-            && !image
-            && d.variant != crate::codegen_abi::LAYOUT_VARIANT_FUNCTION_CONSTRUCTOR
-    });
+    if function {
+        let word = super::shapes::publish_shape_result(super::shapes::shape_descriptor_intern_with_rep(
+            list, key_count, slot_count, generation, kind, 0, proto_id, summary, rep,
+            &[], None, integrity));
+        super::shapes::note_external_shape_carrier(super::shapes::shape_descriptor_for_word(word));
+        return word;
+    }
     let proposed = if let Some(id) = existing {
         id
     } else if function {
         super::shapes::allocate_declared_layout_id(proto_id)
-    } else if let Some(id) = found {
-        id
     } else if proto_id == super::shapes::PROTO_ID_DEFAULT
         || class_family
         || d.variant == crate::codegen_abi::LAYOUT_VARIANT_FUNCTION_CONSTRUCTOR
@@ -997,12 +966,7 @@ unsafe fn register_bound(
     let id = if let Some(id) = existing {
         id
     } else {
-        match word.compare_exchange(
-            LAYOUT_ID_CARRIED,
-            proposed,
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        ) {
+        match word.compare_exchange(0, proposed, Ordering::AcqRel, Ordering::Acquire) {
             Ok(_) => proposed,
             Err(other) => registered_layout_id(other)
                 .expect("a carried layout word holds the sentinel or a ShapeId"),
@@ -1010,11 +974,24 @@ unsafe fn register_bound(
     };
     if super::shapes::shape_descriptor_by_id(id).is_none() {
         super::shapes::install_declared_layout(
-            id, list, key_count, slot_count, kind, proto_id, summary, rep, integrity, generation,
+            id,
+            (*desc).layout_id,
+            if (*desc).class_id != 0 { descriptor_index(desc).map_or(0, |i| i + 1) } else { 0 },
+            list,
+            key_count,
+            slot_count,
+            kind,
+            proto_id,
+            summary,
+            rep,
+            integrity,
+            generation,
         );
     }
-    super::shapes::note_external_shape_carrier(super::shapes::shape_descriptor_by_id(id));
-    id
+    super::shapes::note_external_shape_carrier(super::shapes::shape_descriptor_for_word(
+        (*desc).layout_id,
+    ));
+    (*desc).layout_id
 }
 
 /// Allocate an object of a registered layout: the header, `slot_count`
@@ -1063,10 +1040,8 @@ unsafe fn alloc_layout_object(d: &PerryLayoutDesc, id: u32) -> *mut ObjectHeader
 /// Function births alone retain the ordinary inline floor. Keep their
 /// sizing and diagnostic work out of the shared class/literal allocator.
 /// `desc` is the registered layout admitted by function_family_birth.
-pub(crate) unsafe fn alloc_function_layout(desc: *const PerryLayoutDesc) -> *mut ObjectHeader {
+pub(crate) unsafe fn alloc_function_layout(desc: *const PerryLayoutDesc, id: u32) -> *mut ObjectHeader {
     let d = &*desc;
-    let id =
-        registered_layout_id(load_layout_id(desc)).expect("registered function constructor layout");
     let obj =
         alloc_layout_object_sized(d, id, (d.slot_count as usize).max(super::INLINE_SLOT_FLOOR));
     FAMILY_DIAG
@@ -1109,7 +1084,7 @@ unsafe fn alloc_layout_object_sized(
     // creates carrier duty, not a structural mutation: it must not enter
     // the mutation publisher (which can inspect lazily materialized keys).
     if !crate::arena::pointer_in_nursery(obj as usize) {
-        super::shapes::note_old_generation_carrier(super::shapes::shape_record_by_id(id));
+        super::shapes::note_old_generation_carrier(super::shapes::shape_record_for_word(id));
     }
     super::shapes::store_kind::check_store_facts(obj);
     if d.class_id != 0 {
@@ -1179,7 +1154,7 @@ pub(crate) unsafe fn alloc_derived_layout_object(
         crate::arena::arena_alloc_gc(size, 8, crate::gc::GC_TYPE_OBJECT).cast::<ObjectHeader>();
     // No collection from here until the newborn carries its shape.
     let _no_gc = crate::gc::GcSuppressScope::new();
-    let base = super::shapes::shape_descriptor_by_id(id)?;
+    let base = super::shapes::shape_descriptor_for_word(id)?;
     let proto_bits = proto.get_nanbox_u64();
     if super::shapes::identity_prototype_word(proto_id) != proto_bits {
         super::shapes::write_identity_word(proto_id, proto_bits);
@@ -1228,7 +1203,7 @@ pub(crate) unsafe fn alloc_derived_layout_object(
     }
     mark_layout_object_facts(obj, d);
     if !crate::arena::pointer_in_nursery(obj as usize) {
-        super::shapes::note_old_generation_carrier(super::shapes::shape_record_by_id(shape));
+        super::shapes::note_old_generation_carrier(super::shapes::shape_record_for_word(shape));
     }
     // The prototype edge lives outside the heap, as for every created birth.
     crate::gc::runtime_shade_external_edge(proto_bits);
@@ -1403,7 +1378,7 @@ pub(crate) unsafe fn prototype_image(
     {
         return None;
     }
-    if !bound.is_empty() && register_one_bound(d, id, bound) != id {
+    if !bound.is_empty() && register_one_bound(d, (*d).shape_id, bound) != id {
         return None;
     }
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -1703,10 +1678,11 @@ fn layout_id_of_index(index: u32) -> Option<u32> {
 /// `None` for every word outside the section's ids.
 #[inline]
 pub(crate) fn layout_index_of_word(word: u32) -> Option<u32> {
-    let index = layout_id_of_word(word).wrapping_sub(LAYOUT_BASE);
-    let (start, end) = layout_bounds();
-    let count = (end.saturating_sub(start) / std::mem::size_of::<PerryLayoutDesc>()) as u32;
-    (index < count && index < LAYOUT_INDEX_LIMIT).then_some(index)
+    if !super::shapes::is_layout_word(layout_id_of_word(word)) {
+        return None;
+    }
+    let record = super::shapes::shape_record_for_word(word)?;
+    record.family_desc_index_plus_one().checked_sub(1)
 }
 
 /// Descriptor `index` of the section.
@@ -1998,12 +1974,9 @@ pub(crate) unsafe fn family_desc_of(obj: *const ObjectHeader) -> Option<&'static
         return None;
     }
     let word = (*obj).parent_class_id;
-    let Some(index) = layout_index_of_word(word) else {
-        return evaluation_family_desc_of(word);
-    };
+    let index = layout_index_of_word(word)?;
     let d = &*desc_at(index);
-    (d.class_id != 0 && registered_layout_id(d.layout_id) == Some(layout_id_of_word(word)))
-        .then_some(d)
+    (d.class_id != 0).then_some(d)
 }
 
 /// Is `obj` a class family object: on its family layout, or on a class
@@ -2036,7 +2009,7 @@ unsafe fn evaluation_family_desc_of(word: u32) -> Option<&'static PerryLayoutDes
     // answers from its header word.
     let id = layout_id_of_word(word);
     if super::shapes::shape_word_kind(id) != super::shapes::SHAPE_ID_KIND_MIXED
-        || !super::shapes::is_shape_id(id)
+        || !super::shapes::is_layout_word(id)
     {
         return None;
     }
@@ -2050,11 +2023,11 @@ unsafe fn evaluation_family_desc_of_record(id: u32) -> Option<&'static PerryLayo
     evaluation_layout_desc(super::shapes::evaluation_layout_family(id))
 }
 
-/// The family descriptor a shape record's `evaluation_layout_of` fact names
+/// The family descriptor a shape record's `family_desc_index_plus_one` fact names
 /// (`shapes::evaluation_layout_family`), or `None` for 0.
 ///
 /// # Safety
-/// `family` is a record's `evaluation_layout_of` fact.
+/// `family` is a record's `family_desc_index_plus_one` fact.
 #[inline]
 pub(crate) unsafe fn evaluation_layout_desc(family: u32) -> Option<&'static PerryLayoutDesc> {
     match family {
@@ -2062,8 +2035,7 @@ pub(crate) unsafe fn evaluation_layout_desc(family: u32) -> Option<&'static Perr
         // The record names a registered class family layout: only
         // [`note_family_relink`] writes it, from one.
         family => {
-            debug_assert!(is_family_layout_word(family));
-            Some(&*desc_at(family - LAYOUT_BASE))
+            Some(&*desc_at(family - 1))
         }
     }
 }
@@ -2073,7 +2045,9 @@ pub(crate) unsafe fn evaluation_layout_desc(family: u32) -> Option<&'static Perr
 /// [`family_own_key`] answers without a shape record?
 #[inline(always)]
 pub(crate) fn word_in_layout_index(word: u32) -> bool {
-    word.wrapping_sub(LAYOUT_BASE) < LAYOUT_INDEX_LIMIT
+    let image = super::class_image::layout_image();
+    let base = crate::codegen_abi::LAYOUT_TAG | image.family_first;
+    word.wrapping_sub(base) < image.family_count
 }
 
 /// A prototype transition moved an object from layout word `previous` to
@@ -2083,15 +2057,11 @@ pub(crate) fn word_in_layout_index(word: u32) -> bool {
 /// (`shapes::note_evaluation_layout`), so its objects stay family objects.
 pub(crate) fn note_family_relink(previous: u32, id: u32) {
     let previous = layout_id_of_word(previous);
-    let family = if is_family_layout_word(previous) {
-        previous
-    } else if super::shapes::shape_word_may_be_linked(previous) {
-        super::shapes::evaluation_layout_family(previous)
-    } else {
-        0
-    };
-    if family != 0 {
-        super::shapes::note_evaluation_layout(id, family);
+    let Some(record) = super::shapes::shape_record_for_word(previous) else { return; };
+    let index = record.family_desc_index_plus_one();
+    if index != 0 {
+        let family_word = unsafe { (*desc_at(index - 1)).layout_id };
+        super::shapes::note_evaluation_layout(id, family_word);
     }
 }
 
@@ -2928,3 +2898,18 @@ fn image_layouts() -> impl Iterator<Item = *mut PerryLayoutDesc> {
         records::<PerryLayoutDesc>(layout_bounds())
     }
 }
+
+fn descriptor_index(desc: *const PerryLayoutDesc) -> Option<u32> {
+    let (start, end) = layout_bounds();
+    let at = desc as usize;
+    (at >= start && at < end)
+        .then(|| ((at - start) / std::mem::size_of::<PerryLayoutDesc>()) as u32)
+}
+const _: () = assert!(
+    std::mem::offset_of!(PerryLayoutDesc, shape_id)
+        == if cfg!(target_pointer_width = "64") {
+            crate::codegen_abi::LAYOUT_DESC_ID_OFFSET_LP64
+        } else {
+            crate::codegen_abi::LAYOUT_DESC_ID_OFFSET_ILP32
+        }
+);

@@ -476,12 +476,12 @@ pub(crate) unsafe fn try_update_stable_tombstone_shape(
         return None;
     }
     let id = super::object_shape_stamp(obj);
-    if !super::is_shape_id(id) {
+    if !super::is_layout_word(id) {
         return None;
     }
 
     let table = &crate::state::state().shapes;
-    let record = table.slab().record_ptr(id)?;
+    let record = table.slab().handle_record_ptr(id)?;
     // SAFETY: live slab record, single-threaded agent; read then written
     // through the same pointer with nothing else holding a reference.
     let current = unsafe { *record };
@@ -538,7 +538,7 @@ pub(crate) unsafe fn try_update_stable_tombstone_shape(
 }
 
 /// Update an already-detached stable-tombstone descriptor through the boxed
-/// record address returned by `shape_descriptor_by_id`.
+/// record address returned by `shape_descriptor_for_word`.
 ///
 /// The first stable mutation must use `try_update_stable_tombstone_shape` to
 /// detach exact-facts interning. Between those events the record address is
@@ -561,14 +561,14 @@ pub(crate) unsafe fn try_update_stable_tombstone_shape_cached(
         return None;
     }
     let id = super::object_shape_stamp(obj);
-    if !super::is_shape_id(id) {
+    if !super::is_layout_word(id) {
         return None;
     }
 
     // The caller's copy must still name the live record of THIS id: a
     // retired id resolves to nothing, and a record reused under another id
     // (never — ids are not recycled) would resolve to a different address.
-    let live = crate::state::state().shapes.slab().record_ptr(id)?;
+    let live = crate::state::state().shapes.slab().handle_record_ptr(id)?;
     if live as usize != current.record {
         return None;
     }
@@ -614,7 +614,7 @@ pub(crate) unsafe fn rekey_stable_tombstone_shape_after_squeeze(
         return None;
     }
     let old_id = super::object_shape_stamp(obj);
-    if !super::is_shape_id(old_id) {
+    if !super::is_layout_word(old_id) {
         return None;
     }
     let new_id = super::alloc_shape_id(current.proto_id).ok()?;
@@ -625,13 +625,13 @@ pub(crate) unsafe fn rekey_stable_tombstone_shape_after_squeeze(
 
     let table = &crate::state::state().shapes;
     let mut inner = table.inner.borrow_mut();
-    let live_ptr = table.slab().record_ptr(old_id)?;
+    let live_ptr = table.slab().handle_record_ptr(old_id)?;
     if live_ptr as usize != current.record {
         return None;
     }
     // SAFETY: live slab record, read immediately.
     let live = unsafe { *live_ptr };
-    if live.special_constfn_mask() != 0 {
+    if live.special_constfn_mask() != 0 || live.cache_carrier() {
         return None;
     }
     if live.keys != current.keys
@@ -646,12 +646,19 @@ pub(crate) unsafe fn rekey_stable_tombstone_shape_after_squeeze(
     // (a rewrite the metadata scan has not yet repaired) simply gains the new
     // id under the current one and sheds the old id on that scan.
     // SAFETY: no slab reference is held across these two calls.
-    let mut record = unsafe { table.slab_mut().remove(old_id)? };
+    let mut record = unsafe { table.slab_mut().remove_handle(old_id)? };
     record.logical_key_count = logical_key_count;
     record.live_inline_slot_count = live_inline_slot_count;
     record.semantic_generation = generation;
     record.hole_count = hole_count;
-    unsafe { table.slab_mut().insert(new_id, record) };
+    let new_id = unsafe {
+        table
+            .slab_mut()
+            .publish_dynamic(crate::codegen_abi::ShapeId(new_id), record)
+    }
+    .ok()?
+    .word
+    .0;
     let replaced = inner
         .families
         .get_mut(&record.keys)
@@ -746,7 +753,7 @@ pub(crate) unsafe fn publish_object_shape_holes(
     // gated on that), so this object is the only carrier of the old stamp and
     // the id becomes unreachable the moment the header word above is written:
     // stale IC tokens already miss on the stamp compare, and
-    // `shape_descriptor_by_id` of a removed id is `None`. Without this, a
+    // `shape_descriptor_for_word` of a removed id is `None`. Without this, a
     // delete-churn loop minted one descriptor per delete against ONE stable
     // address forever — the reverse-index Vec under that address grew by one
     // per delete and every later publish walked it, which measured as a 26x
@@ -818,7 +825,7 @@ pub(super) fn delete_transition_generation(
 /// publishing receiver is the only carrier of every other id under that
 /// address and the ids become unreachable the moment its header word names
 /// `keep`. A stale IC token already misses on the stamp compare and
-/// `shape_descriptor_by_id` of a retired id is `None`.
+/// `shape_descriptor_for_word` of a retired id is `None`.
 ///
 /// Without the sweep a delete-churn loop piles one descriptor per delete onto
 /// ONE stable address; the reverse-index list under it grows by one per
@@ -1011,11 +1018,11 @@ fn rekey_predecessor_for_delete(
     semantic_generation: u64,
     hole_count: u32,
 ) -> u32 {
-    if !super::is_shape_id(predecessor) {
+    if !super::is_layout_word(predecessor) {
         return 0;
     }
     let table = &crate::state::state().shapes;
-    let Some(live_ptr) = table.slab().record_ptr(predecessor) else {
+    let Some(live_ptr) = table.slab().handle_record_ptr(predecessor) else {
         return 0;
     };
     // SAFETY: live slab record, single-threaded agent, read immediately.
@@ -1037,7 +1044,7 @@ fn rekey_predecessor_for_delete(
         inner.facts_remove(live.facts_key_with_keys(keys), predecessor);
     }
     // SAFETY: no slab reference is held across these calls.
-    let Some(mut record) = (unsafe { table.slab_mut().remove(predecessor) }) else {
+    let Some(mut record) = (unsafe { table.slab_mut().remove_handle(predecessor) }) else {
         return 0;
     };
     record.logical_key_count = logical_key_count;
@@ -1046,7 +1053,14 @@ fn rekey_predecessor_for_delete(
     record.hole_count = hole_count;
     record.set(RECORD_FLAG_FACTS_INDEXED, false);
     // SAFETY: as above.
-    unsafe { table.slab_mut().insert(id, record) };
+    let id = unsafe {
+        table
+            .slab_mut()
+            .publish_dynamic(crate::codegen_abi::ShapeId(id), record)
+    }
+    .expect("shape publication")
+    .word
+    .0;
     let replaced = inner
         .families
         .get_mut(&keys)
@@ -1108,7 +1122,14 @@ fn mint_detached_delete_successor(
     // Publish by-id first, then the family index — an ObjectHeader is stamped
     // only after this returns, so a visible id always has a complete record.
     // SAFETY: no slab reference is held across the insert.
-    unsafe { table.slab_mut().insert(id, record) };
+    let id = unsafe {
+        table
+            .slab_mut()
+            .publish_dynamic(crate::codegen_abi::ShapeId(id), record)
+    }
+    .expect("shape publication")
+    .word
+    .0;
     table.inner.borrow_mut().family_append_fresh(keys, id);
     id
 }
@@ -1168,6 +1189,22 @@ pub(super) fn install_external_shape_id_with_constfn(
     infos: &[super::shapes_store::ConstFnSlotInfo],
     to_any: u32,
 ) -> bool {
+    install_external_layout_with_constfn(id, None, keys, logical_key_count,
+        live_inline_slot_count, proto_id, object_kind, rep, infos, to_any)
+}
+#[allow(clippy::too_many_arguments)]
+pub(super) fn install_external_layout_with_constfn(
+    id: u32,
+    static_word: Option<crate::codegen_abi::LayoutWord>,
+    keys: *const super::ArrayHeader,
+    logical_key_count: u32,
+    live_inline_slot_count: u32,
+    proto_id: u64,
+    object_kind: super::ShapeObjectKind,
+    rep: u64,
+    infos: &[super::shapes_store::ConstFnSlotInfo],
+    to_any: u32,
+) -> bool {
     let Some(mask) = super::shapes_store::constfn_mask(infos) else {
         return false;
     };
@@ -1191,7 +1228,8 @@ pub(super) fn install_external_shape_id_with_constfn(
     let table = &crate::state::state().shapes;
     let mut inner = table.inner.borrow_mut();
     if let Some(existing) = table.slab().record_ptr(id) {
-        let matches = unsafe { &*existing }.facts_match_proto_with_special(
+        let matches = static_word.is_none_or(|w| w.0 == unsafe { (*existing).layout_word })
+            && unsafe { &*existing }.facts_match_proto_with_special(
             keys as usize as u64,
             logical_key_count,
             live_inline_slot_count,
@@ -1239,7 +1277,13 @@ pub(super) fn install_external_shape_id_with_constfn(
     // of its accelerator bucket, which is the order exact-facts interning
     // walks.
     // SAFETY: no slab reference is held; `slab().get` above returned a copy.
-    unsafe { table.slab_mut().insert(id, record) };
+    let published = unsafe {
+        match static_word {
+            Some(word) => table.slab_mut().publish_static(crate::codegen_abi::ShapeId(id), word, record),
+            None => table.slab_mut().publish_dynamic(crate::codegen_abi::ShapeId(id), record),
+        }
+    }.expect("worker shape publication");
+    let id = published.word.0;
     inner.facts_push_front(record.facts_key_with_keys(keys), id);
     inner.family_push_front(keys, id);
     true
@@ -1262,7 +1306,7 @@ pub(super) fn install_external_shape_id_with_constfn(
 #[cfg(test)]
 #[inline]
 pub(crate) fn shape_descriptor_keys_slot(shape_id: u32) -> Option<*mut u64> {
-    if !super::is_shape_id(shape_id) {
+    if !super::is_layout_word(shape_id) {
         return None;
     }
     crate::state::state()

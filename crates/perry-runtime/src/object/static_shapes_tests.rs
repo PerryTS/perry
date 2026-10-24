@@ -2,7 +2,7 @@
 //! static id only on a by-facts miss, and a refusal (the id outside its band,
 //! or already naming other facts) aborts: ids are assigned by content.
 use super::*;
-use crate::object::shapes::{is_shape_id, SHAPE_ID_BASE, STATIC_SHAPE_ID_END};
+use crate::object::shapes::{is_layout_word, SHAPE_ID_BASE, STATIC_SHAPE_ID_END};
 
 fn seed(requested: u32, names: &[&str]) -> u32 {
     seed_with_rep(requested, names, 0)
@@ -30,7 +30,7 @@ fn alloc_constfn_plain_fixture(names: &[&[u8]]) -> *mut crate::object::ObjectHea
     let keys = unsafe { canonical_keys_for_names(names) };
     let obj = crate::object::alloc_plain::alloc_plain_record_with_keys(names.len() as u32, keys);
     let id = unsafe { shapes::object_shape_stamp(obj) };
-    let birth = shapes::shape_descriptor_by_id(id).expect("plain fixture birth descriptor");
+    let birth = shapes::shape_descriptor_for_word(id).expect("plain fixture birth descriptor");
     assert_eq!(birth.object_kind, shapes::ShapeObjectKind::Ordinary);
     assert_eq!(birth.proto_id, 0);
     assert_eq!(birth.logical_key_count, names.len() as u32);
@@ -180,7 +180,7 @@ fn metadata_12015_seeded_constfn_refuses_a_different_shape_key_prefix() {
         let current = shapes::object_shape_descriptor(p).unwrap();
         assert_ne!(
             current.keys,
-            shapes::shape_descriptor_by_id(requested).unwrap().keys,
+            shapes::shape_descriptor_for_word(requested).unwrap().keys,
             "premise: distinct key identity, with every other fact admitted"
         );
         shapes::object_shape_stamp(p)
@@ -251,7 +251,7 @@ fn constfn_static_seed_and_module_init_mint_have_identical_facts() {
         seeded,
         "literal seed and module init must find one shape"
     );
-    let d = shapes::shape_descriptor_by_id(seeded).expect("seeded ConstFn shape");
+    let d = shapes::shape_descriptor_for_word(seeded).expect("seeded ConstFn shape");
     assert_eq!(d.constfn_infos()[0].info, info_a as usize as u64);
     assert_eq!(d.special_constfn_mask, 1);
     assert!(is_carrier(seeded));
@@ -320,7 +320,7 @@ fn a_seed_mints_the_requested_id_and_every_later_mint_of_those_facts_resolves_to
         requested
     );
     assert!(
-        shapes::shape_descriptor_by_id(SHAPE_ID_BASE + 0x1235).is_none(),
+        shapes::shape_descriptor_for_word(SHAPE_ID_BASE + 0x1235).is_none(),
         "a by-facts hit must not mint the second requested id"
     );
 }
@@ -344,7 +344,7 @@ fn a_rep_literal_seed_is_the_shape_its_lazy_mints_reach_and_keeps_its_f64_lanes(
     let requested = SHAPE_ID_BASE + 0x5678;
     let id = seed_with_rep(requested, &["lt5s_a", "lt5s_b"], rep);
     assert_eq!(id, requested, "the seed must mint the requested static id");
-    let record = shapes::shape_descriptor_by_id(id).expect("seeded record");
+    let record = shapes::shape_descriptor_for_word(id).expect("seeded record");
     assert_eq!(record.rep, rep, "the seeded shape must carry the birth rep");
     assert_eq!(record.proto_id, shapes::PROTO_ID_DEFAULT);
 
@@ -360,7 +360,7 @@ fn a_rep_literal_seed_is_the_shape_its_lazy_mints_reach_and_keeps_its_f64_lanes(
         0,
     ) as u64;
     assert_eq!(
-        shapes::js_object_shape_id_for_class_keys(keys, 2, REP_SEED_ANON_CLASS_ID, rep),
+        shapes::js_object_layout_for_class_keys(keys, 2, REP_SEED_ANON_CLASS_ID, rep),
         requested,
         "the literal's lazy mint must resolve to the seeded id"
     );
@@ -377,7 +377,7 @@ fn a_rep_literal_seed_is_the_shape_its_lazy_mints_reach_and_keeps_its_f64_lanes(
         requested
     );
     // The all-`Any` sibling is other facts: never the static id.
-    let any = shapes::js_object_shape_id_for_class_keys(keys, 2, REP_SEED_ANON_CLASS_ID, 0);
+    let any = shapes::js_object_layout_for_class_keys(keys, 2, REP_SEED_ANON_CLASS_ID, 0);
     assert_ne!(
         any, requested,
         "the rep is identity: Any lanes are another shape"
@@ -410,7 +410,7 @@ fn a_rep_literal_seed_is_the_shape_its_lazy_mints_reach_and_keeps_its_f64_lanes(
             7.0f64.to_bits(),
             "the lane holds the canonical double"
         );
-        let record = shapes::shape_descriptor_by_id(requested).expect("seeded record");
+        let record = shapes::shape_descriptor_for_word(requested).expect("seeded record");
         assert_eq!(
             slot_rep(record.rep, 1),
             REP_F64,
@@ -495,7 +495,7 @@ fn a_requested_id_outside_the_static_band_aborts() {
 fn the_counter_never_mints_into_the_static_band() {
     let keys = unsafe { canonical_keys_for_names(&[b"lt4c_only"]) };
     let id = shapes::shape_id_for_keys_ensure(keys.arr(), 1);
-    assert!(is_shape_id(id) && id >= STATIC_SHAPE_ID_END, "{id:#x}");
+    assert!(is_layout_word(id) && id >= STATIC_SHAPE_ID_END, "{id:#x}");
 }
 
 #[test]
@@ -506,7 +506,7 @@ fn a_class_seed_takes_the_class_prototype_identity() {
         crate::object::js_build_class_keys_array(SEEDED_CLASS_ID, 2, packed.as_ptr(), 14, 0) as u64;
     let requested = SHAPE_ID_BASE + 0x3456;
     let id = js_object_shape_id_for_class_keys_static(keys, 2, 2, SEEDED_CLASS_ID, requested, 0);
-    let record = shapes::shape_descriptor_by_id(id).expect("seeded record");
+    let record = shapes::shape_descriptor_for_word(id).expect("seeded record");
     assert_eq!(record.proto_id, shapes::class_proto_id(SEEDED_CLASS_ID));
     // Registration is idempotent: a second registration (another module
     // importing the class) resolves to the same id.
@@ -604,7 +604,7 @@ fn a_class_registered_before_the_pools_answers_the_megamorphic_confirm() {
         packed.len() as u32,
         0,
     ) as u64;
-    let id = shapes::js_object_shape_id_for_class_keys(keys, 2, LATE_POOL_CLASS_ID, 0);
+    let id = shapes::js_object_layout_for_class_keys(keys, 2, LATE_POOL_CLASS_ID, 0);
     // Module B's pool runs afterwards and mints its key literals.
     let (x, b) = (pool_atom("ltca_x"), pool_atom("ltca_only_in_b"));
     assert!(
@@ -666,7 +666,7 @@ fn constfn_finalizer_waits_for_stores_and_preserves_fresh_closures() {
             })
         };
         assert_ne!(plain, requested, "allocation must not carry SPECIAL");
-        assert_eq!(shapes::shape_descriptor_by_id(plain).unwrap().rep, 0);
+        assert_eq!(shapes::shape_descriptor_for_word(plain).unwrap().rep, 0);
         assert_eq!(finalize(raw as usize as u64), raw as usize as u64);
         assert_eq!(
             unsafe {
@@ -878,8 +878,8 @@ fn declared_class_final_mint_keeps_birth_ordinary_and_uses_each_current_closure(
         )
     });
     assert_ne!(ordinary, final_id);
-    assert_eq!(shapes::shape_descriptor_by_id(ordinary).unwrap().rep, 0);
-    assert_eq!(shapes::shape_descriptor_by_id(final_id).unwrap().rep, 3);
+    assert_eq!(shapes::shape_descriptor_for_word(ordinary).unwrap().rep, 0);
+    assert_eq!(shapes::shape_descriptor_for_word(final_id).unwrap().rep, 3);
     let mut closure_roots = Vec::new();
     for capture in [31.0f64, 47.0] {
         let obj = keys.with_mut_ptr::<crate::array::ArrayHeader, _>(|keys_ptr| {
@@ -910,7 +910,7 @@ fn declared_class_final_mint_keeps_birth_ordinary_and_uses_each_current_closure(
                 crate::object::store_object_field_slot(object, 1, capture.to_bits());
             });
         }
-        let premise = shapes::shape_descriptor_by_id(ordinary).unwrap();
+        let premise = shapes::shape_descriptor_for_word(ordinary).unwrap();
         assert_eq!(premise.object_kind, shapes::ShapeObjectKind::Ordinary);
         assert_eq!(premise.proto_id, shapes::class_proto_id(cid));
         let wrong_proto = object.with_mut_ptr::<crate::object::ObjectHeader, _>(|object_ptr| {
@@ -1076,9 +1076,9 @@ fn constfn_finalizer_refuses_equal_names_in_a_different_keys_array() {
         crate::object::ObjectKeys::new(arr, 1)
     };
     let alias = crate::object::alloc_plain::alloc_plain_record_with_keys(1, keys);
-    let birth = shapes::shape_descriptor_by_id(unsafe { shapes::object_shape_stamp(alias) })
+    let birth = shapes::shape_descriptor_for_word(unsafe { shapes::object_shape_stamp(alias) })
         .expect("alias birth descriptor");
-    let record = shapes::shape_descriptor_by_id(requested).expect("seeded record");
+    let record = shapes::shape_descriptor_for_word(requested).expect("seeded record");
     assert_ne!(
         birth.keys, record.keys,
         "the fixture must use a different keys array"
@@ -1109,7 +1109,7 @@ fn nscall_structural_seed_keeps_the_inline_bound_of_a_spill_builder() {
         5,
     );
     assert_eq!(id, requested);
-    let descriptor = shapes::shape_descriptor_by_id(id).unwrap();
+    let descriptor = shapes::shape_descriptor_for_word(id).unwrap();
     assert_eq!(descriptor.logical_key_count, 40);
     assert_eq!(descriptor.live_inline_slot_count, 2);
     let scope = crate::gc::RuntimeHandleScope::new();
