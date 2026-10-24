@@ -1,0 +1,1 @@
+- Check fractional-index compiler output against the shared read helper while retaining exact output and runtime budgets.
