@@ -224,7 +224,29 @@ impl<'a> Gen<'a> {
                 // `CJS_MODULE_RECORD`: a fresh record per call whose fields
                 // are the arguments (exports, filename, dir, children,
                 // parent, paths) plus the marker, `loaded` and `require`.
-                let (_, record) = self.bobj(fx.module, "CjsRecord");
+                // The runtime allocates it with its final layout, so it is a
+                // literal layout of this unit born with the record's keys in
+                // slot order, the factory's private slot last: what the
+                // wrapper's record literal was (the marker is a birth key,
+                // `Cons::CjsPublish`; a reader in another unit gets it as a
+                // layout contract with its `exports` literal nested).
+                let (_, rt) = self.new_lit_tmpl(
+                    fx.module,
+                    &[
+                        "exports",
+                        "__perry_cjs_record",
+                        "id",
+                        "path",
+                        "filename",
+                        "loaded",
+                        "children",
+                        "parent",
+                        "paths",
+                        "require",
+                        CJS_FACTORY_KEY,
+                    ],
+                );
+                let record = self.tok_node(rt);
                 let fields: [(&str, Option<usize>, u16); 10] = [
                     ("exports", Some(0), prim::UNDEF),
                     ("__perry_cjs_record", None, prim::BOOL),
@@ -328,8 +350,10 @@ impl<'a> Gen<'a> {
     /// record: whatever reaches the record's contents (an escape) reaches the
     /// factory. The runtime calls it, with no receiver and no arguments, when
     /// a loaded module is required again after its cache entry was deleted.
+    /// The record's factory, under the runtime's private slot key, which
+    /// no script can name.
     pub(crate) fn cjs_factory_slot(&mut self, fx: &Fx, record: NodeId, factory: NodeId) {
-        let key = self.m.atom("__perry_cjs_factory");
+        let key = self.m.atom(CJS_FACTORY_KEY);
         self.store(
             fx,
             record,
@@ -351,3 +375,7 @@ impl<'a> Gen<'a> {
         n
     }
 }
+
+/// The private key of `CJS_MODULE_RECORD`'s factory slot
+/// (`perry_runtime::module_require::CJS_FACTORY_KEY`).
+const CJS_FACTORY_KEY: &str = "#<perry:cjs-module-factory>";

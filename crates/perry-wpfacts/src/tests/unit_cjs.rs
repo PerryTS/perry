@@ -194,7 +194,12 @@ fn a_class_bound_through_its_self_cell_is_a_contract() {
 /// do not leave (128). Either one missing breaks every richards class per
 /// unit (10 of 122 proven). Per unit proves every whole-program site but
 /// `mouse.link` in `RBObject::append`: its parameter is a contract marker
-/// per unit (DECISIONS 122, design, not built).
+/// per unit (DECISIONS 122, design, not built). The fixture is the wrap of
+/// 10-24 (DECISIONS 135): the module record comes from the runtime's
+/// `__perry_cjs_module_record`, a literal layout born with its keys, so its
+/// `exports` reaches the factory's other units as a nested contract (a
+/// builtin object there left `exports` unknown: 0 sites per unit). The
+/// site offset is the same `mouse.link` in the regenerated wrap.
 #[test]
 fn richards_per_unit_proves_what_the_whole_program_proves() {
     let (w, u) = both(&T3);
@@ -214,7 +219,7 @@ fn richards_per_unit_proves_what_the_whole_program_proves() {
             .collect()
     };
     assert!(
-        lost.iter().all(|s| s.as_str() == "/t3/richards.js@14169.link") && classes(&u) == classes(&w),
+        lost.iter().all(|s| s.as_str() == "/t3/richards.js@13743.link") && classes(&u) == classes(&w),
         "per unit {} of whole-program {} proven; lost {:?}\nescaped per unit {:?}\nwhole-program {:?}\nbroken {:?}",
         pu.len(),
         pw.len(),

@@ -33,31 +33,26 @@ function __perry_cjs_factory() {
     // #6769: the Node `Module` record surface. Set before user code so a
     // recursive load of this module observes the same shape Node exposes.
     //
-    // ONE object literal, so the record is allocated with its final shape.
-    // As eleven sequential assignments it walked eleven shape transitions and
-    // eleven cold property stores — about 10k instructions each at module-init
-    // time — in every CommonJS module in the graph. Folding only some of the
-    // fields does not help: the trailing assignments keep transitioning the
-    // record and the win disappears (measured at -0.08%), so the whole surface
-    // folds or none of it does.
+    // ONE runtime call, so the record is born with its final layout
+    // (`CJS_MODULE_RECORD`): Node's keys, the `__perry_cjs_record` marker, and
+    // a private slot for the factory that no script can name. As sequential
+    // assignments it walked a shape transition and a cold property store per
+    // key, about 10k instructions each at module-init time, in every CommonJS
+    // module in the graph. `exports`, `children` and `paths` stay the
+    // wrapper's own literals.
     //
-    // `cjs_scaffolding.rs`'s `record_binding` matches this field list
-    // positionally. Adding or reordering a field drops the record back to being
-    // reported as a denied user candidate in the `Ptr<Shape>` report;
-    // `preamble_canary_tests` is what catches that.
-    const __cjs_module = {
-        exports: {},
-        __perry_cjs_record: true,
-        __perry_cjs_factory: __perry_cjs_factory,
-        id: "/root/CW2/f/sa/benchmark.js",
-        path: "/root/CW2/f/sa",
-        filename: "/root/CW2/f/sa/benchmark.js",
-        loaded: false,
-        children: [],
-        parent: globalThis.__perry_cjs_pending_parent,
-        paths: ["/root/CW2/f/sa" + '/node_modules'],
-        require: undefined,
-    };
+    // `cjs_scaffolding.rs`'s `record_binding` matches this call. Changing it
+    // drops the record back to being reported as a denied user candidate in
+    // the `Ptr<Shape>` report; `preamble_canary_tests` is what catches that.
+    const __cjs_module = __perry_cjs_module_record(
+        {},
+        "/t3/benchmark.js",
+        "/t3",
+        [],
+        globalThis.__perry_cjs_pending_parent,
+        ["/t3" + '/node_modules'],
+        __perry_cjs_factory
+    );
     globalThis.__perry_cjs_pending_parent = undefined;
     // Node populates `module.parent` before the body evaluates, so link it
     // here rather than at the tail's registry publication.
@@ -67,7 +62,7 @@ function __perry_cjs_factory() {
     // Holding the initial empty object loses that replacement at re-entry;
     // the runtime's existing record unwrap reads the current exports instead.
     // This needs no getter enumeration, copying, or extra publication calls.
-    __perry_register_path_module_partial("/root/CW2/f/sa/benchmark.js", __cjs_module);
+    __perry_register_path_module_partial("/t3/benchmark.js", __cjs_module);
     var module = __cjs_module;
     var exports = __cjs_module.exports;
     // One `createRequire` instance for the whole program, not one per module.
@@ -77,8 +72,8 @@ function __perry_cjs_factory() {
     // cost OpenCode's ~2,200 CJS modules a quarter of a billion instructions
     // before any user code ran.
     const __perry_cjs_base_require = (globalThis.__perry_cjs_shared_require
-        || (globalThis.__perry_cjs_shared_require = __perry_cjs_create_require("/root/CW2/f/sa/benchmark.js")));
-    __perry_cjs_base_require.cache["/root/CW2/f/sa/benchmark.js"] = __cjs_module;
+        || (globalThis.__perry_cjs_shared_require = __perry_cjs_create_require("/t3/benchmark.js")));
+    __perry_cjs_base_require.cache["/t3/benchmark.js"] = __cjs_module;
     function __perry_cjs_require_error(kind, code, message) {
         const err = kind === 'type' ? new TypeError(message) : new Error(message);
         err.code = code;
@@ -107,7 +102,7 @@ function __perry_cjs_factory() {
         const cached = __perry_cjs_base_require.cache[path];
         if (cached !== undefined) return cached.exports;
         if (!__perry_has_path_module(path)) return value;
-        if (__perry_cjs_reload_require === undefined) __perry_cjs_reload_require = __perry_cjs_create_require("/root/CW2/f/sa/benchmark.js");
+        if (__perry_cjs_reload_require === undefined) __perry_cjs_reload_require = __perry_cjs_create_require("/t3/benchmark.js");
         return __perry_cjs_reload_require(path);
     }
     function require(specifier) {
@@ -124,7 +119,7 @@ function __perry_cjs_factory() {
         // Native addons resolve through the same authenticated manifest and
         // cache as createRequire and process.dlopen, including computed paths.
         if (specifier.slice(-5) === '.node') {
-            if (__perry_cjs_reload_require === undefined) __perry_cjs_reload_require = __perry_cjs_create_require("/root/CW2/f/sa/benchmark.js");
+            if (__perry_cjs_reload_require === undefined) __perry_cjs_reload_require = __perry_cjs_create_require("/t3/benchmark.js");
             return __perry_cjs_reload_require(specifier);
         }
         // Runtime `require(path)` of a module Perry AOT-compiled but that is
@@ -153,9 +148,9 @@ function __perry_cjs_factory() {
             var __perry_path_spec = specifier;
             if (specifier.charCodeAt(0) === 46) {
                 if (specifier.charCodeAt(1) === 47) {
-                    __perry_path_spec = "/root/CW2/f/sa" + '/' + specifier.slice(2);
+                    __perry_path_spec = "/t3" + '/' + specifier.slice(2);
                 } else if (specifier.charCodeAt(1) === 46 && specifier.charCodeAt(2) === 47) {
-                    __perry_path_spec = "/root/CW2/f/sa" + '/' + specifier;
+                    __perry_path_spec = "/t3" + '/' + specifier;
                 } else if (specifier === '.' || specifier === '..') {
                     // The bare directory specifiers carry no trailing
                     // separator, so the two prefix tests above miss them —
@@ -164,7 +159,7 @@ function __perry_cjs_factory() {
                     // package `main`, which `js_require_path_module` also
                     // does via its directory-candidate fallback. Without the
                     // join the key stays a bare `.` and can never hit.
-                    __perry_path_spec = "/root/CW2/f/sa" + '/' + specifier;
+                    __perry_path_spec = "/t3" + '/' + specifier;
                 }
             }
             const __perry_path_mod = __perry_require_path_module(__perry_path_spec);
@@ -182,7 +177,7 @@ function __perry_cjs_factory() {
         }
         // A computed bare platform package can name a manifest-listed addon
         // through package.json main, without a .node suffix in the request.
-        if (__perry_cjs_reload_require === undefined) __perry_cjs_reload_require = __perry_cjs_create_require("/root/CW2/f/sa/benchmark.js");
+        if (__perry_cjs_reload_require === undefined) __perry_cjs_reload_require = __perry_cjs_create_require("/t3/benchmark.js");
         return __perry_cjs_reload_require(specifier);
     }
     // No `defineProperty(require, 'name', ...)`: a `function require(...)`
@@ -196,7 +191,7 @@ function __perry_cjs_factory() {
         if (typeof specifier !== 'string') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_TYPE', 'The "request" argument must be of type string.');
 
         if (__perry_cjs_require_is_builtin(specifier)) return specifier;
-        var __perry_nm_resolved = __perry_require_resolve_node_modules("/root/CW2/f/sa", specifier);
+        var __perry_nm_resolved = __perry_require_resolve_node_modules("/t3", specifier);
         if (__perry_nm_resolved !== undefined) return __perry_nm_resolved;
         throw __perry_cjs_require_error('error', 'MODULE_NOT_FOUND', 'Cannot find module ' + specifier);
     };
@@ -259,7 +254,7 @@ function __perry_cjs_factory() {
 exports.Benchmark = Benchmark;
 
 
-    __cjs_module.loaded = true; __perry_register_path_module("/root/CW2/f/sa/benchmark.js", __cjs_module);
+    __cjs_module.loaded = true; __perry_register_path_module("/t3/benchmark.js", __cjs_module);
     return __cjs_module.exports;
 }
 return __perry_cjs_factory();
