@@ -243,6 +243,31 @@ fn a_call_through_a_parameter_hands_its_argument_to_the_callers_unit() {
     assert_eq!(verdicts(&pf, "key"), verdicts(&whole, "key"), "{}", pf.dump_text());
 }
 
+/// DECISIONS 142: a published method's receiver reaches (`this.key`,
+/// `this.val`) passed to another unit's constructor are described by the
+/// receivers the running units published beside them, not as bare markers.
+#[test]
+fn a_receiver_reach_passed_to_another_units_constructor_keeps_its_kinds() {
+    let src = TREE_EACH
+        .replace(
+            "forEach(fn: (e: Entry) => void): void { fn(new Entry(this.key, this.val)); }",
+            "make(): Entry { return new Entry(this.key, this.val); }",
+        )
+        .replace(
+            "t.forEach((e: Entry) => { s += e.key + e.value.v; });",
+            "const e = t.make(); s += e.key + e.value.v;",
+        );
+    assert!(src.contains("make()") && src.contains("t.make()"));
+    let pf = units(&src);
+    let whole = facts(&src);
+    assert!(pf.broken.is_empty(), "{:?}\n{}", pf.broken, pf.dump_text());
+    for k in ["key", "value"] {
+        let (u, w) = (field(tmpl(&pf, "Entry"), k), field(tmpl(&whole, "Entry"), k));
+        assert!(!w.kind.top && !u.kind.top, "{k}\n{}", pf.dump_text());
+    }
+    assert_eq!(verdicts(&pf, "v"), verdicts(&whole, "v"), "{}", pf.dump_text());
+}
+
 /// DECISIONS 140, soundness: what the caller's function does to the
 /// argument is that unit's census on the stand-in, reported to the owner
 /// (§11.3): a store of another kind reaches Entry's facts.
@@ -259,5 +284,8 @@ fn a_store_into_an_argument_handed_through_a_parameter_reaches_its_owner() {
         pf.dump_text()
     );
     let (u, w) = (field(tmpl(&pf, "Entry"), "value"), field(tmpl(&whole, "Entry"), "value"));
-    assert!(broken || u.kind.top || u.kind.prims & w.kind.prims == w.kind.prims, "{}", pf.dump_text());
+    // A test must be able to fail (DECISIONS 142 lit it): Entry's fields
+    // are described per unit now, so a ⊤ field would hide a missing store.
+    assert!(broken || !u.kind.top, "{}", pf.dump_text());
+    assert!(broken || u.kind.prims & w.kind.prims == w.kind.prims, "{}", pf.dump_text());
 }

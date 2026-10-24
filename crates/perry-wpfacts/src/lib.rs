@@ -1336,6 +1336,12 @@ fn arg_contract_of(
                 {
                     continue;
                 }
+                // DECISIONS 142: a marker with values beside it (a published
+                // method's receiver and what it reaches, DECISIONS 107) is
+                // described by them, as a value contract's is (DECISIONS 137).
+                if g.m.beside_values(t) {
+                    continue;
+                }
                 if g.m.param_marker.contains_key(&t) || g.unit_in.is_some_and(|u| u.broken(display))
                 {
                     vc.unknown = true;
