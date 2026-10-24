@@ -305,8 +305,10 @@ fn a_broken_namespace_field_function_resolves_only_the_units_that_see_it() {
         ("b", &DUAL.replace("class D", "class E").replace("neg", "other")),
         ("c", "import { E } from './b'; const e = new E([1]); console.log(e.has(1));"),
     ]);
+    // Rewritten for DECISIONS 108 (principle: a function's name is its
+    // identity): a nested function declaration carries its function id.
     assert!(
-        pf.broken.iter().any(|d| d == "fn:a.ts:get"),
+        pf.broken.iter().any(|d| d.starts_with("fn:a.ts:get#")),
         "{}",
         pf.dump_text()
     );
@@ -385,7 +387,9 @@ fn a_unit_over_the_bound_is_not_solved_again() {
     );
     // An aborted unit reports every contract it consumed (§11.3); `o` calls
     // `D.has`, a published method with its own contract (DECISIONS 57).
-    assert_eq!(pf.broken, ["a.ts:D", "fn:a.ts:has"], "{}", pf.dump_text());
+    // Rewritten for DECISIONS 108 (principle: a function's name is its
+    // identity): a method is named by its class.
+    assert_eq!(pf.broken, ["a.ts:D", "fn:a.ts:D::has"], "{}", pf.dump_text());
     // Round 2 is `a`, `m` and the units of `o` under the bound (a unit
     // depends on every unit of each module its module imports, §12.6).
     let small_o: u64 = pf

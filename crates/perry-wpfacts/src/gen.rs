@@ -1860,8 +1860,13 @@ impl<'a> Gen<'a> {
             let cf = self.m.field(proto, ca);
             self.m.add_tok(cf, cobj);
         }
+        // DECISIONS 108: a function's name is its identity: contracts are
+        // published and read under it (`units::run`). A class member is
+        // named by its class, as the constructor is (`R::constructor`):
+        // `Set::contains` and `IdentitySet::contains` are two functions.
         for meth in &c.methods {
-            let f = self.register_fn(mi, meth.id, &meth.name, &meth.params, false, false);
+            let name = format!("{}::{}", c.name, meth.name);
+            let f = self.register_fn(mi, meth.id, &name, &meth.params, false, false);
             let a = self.m.atom(&meth.name);
             let n = self.m.field(proto, a);
             let t = self.m.funcs[f as usize].token;
@@ -1870,14 +1875,16 @@ impl<'a> Gen<'a> {
             self.m.this_class.insert(this, tm);
         }
         for meth in &c.static_methods {
-            let f = self.register_fn(mi, meth.id, &meth.name, &meth.params, false, false);
+            let name = format!("{}::static {}", c.name, meth.name);
+            let f = self.register_fn(mi, meth.id, &name, &meth.params, false, false);
             let a = self.m.atom(&meth.name);
             let n = self.m.field(cobj, a);
             let t = self.m.funcs[f as usize].token;
             self.m.add_tok(n, t);
         }
         for (name, g) in &c.getters {
-            let f = self.register_fn(mi, g.id, &g.name, &g.params, false, false);
+            let fname = format!("{}::get {name}", c.name);
+            let f = self.register_fn(mi, g.id, &fname, &g.params, false, false);
             let this = self.m.funcs[f as usize].this;
             self.m.this_class.insert(this, tm);
             let a = self.m.atom(name);
@@ -1887,7 +1894,8 @@ impl<'a> Gen<'a> {
             push_unique(self.m.accessor_keys.entry(proto).or_default(), a);
         }
         for (name, s) in &c.setters {
-            let f = self.register_fn(mi, s.id, &s.name, &s.params, false, false);
+            let fname = format!("{}::set {name}", c.name);
+            let f = self.register_fn(mi, s.id, &fname, &s.params, false, false);
             let this = self.m.funcs[f as usize].this;
             self.m.this_class.insert(this, tm);
             let a = self.m.atom(name);
@@ -1900,7 +1908,7 @@ impl<'a> Gen<'a> {
             let f = self.register_fn(
                 mi,
                 cm.function.id,
-                &cm.function.name,
+                &format!("{}::{}#{}", c.name, cm.function.name, cm.function.id),
                 &cm.function.params,
                 false,
                 false,

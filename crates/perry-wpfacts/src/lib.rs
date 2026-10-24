@@ -451,7 +451,9 @@ fn fn_contract_name(g: &gen::Gen, f: model::FnIdx) -> (String, Option<String>) {
             .map(|(nm, _)| nm.clone())
     });
     let name = match &closed {
-        Some(k) if k.contains('#') => format!("{}#{fid}", fi.name),
+        Some(k) if k.contains('#') && !fi.name.ends_with(&format!("#{fid}")) => {
+            format!("{}#{fid}", fi.name)
+        }
         _ => fi.name.clone(),
     };
     (name, closed)

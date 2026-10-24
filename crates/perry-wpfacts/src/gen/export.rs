@@ -397,7 +397,9 @@ impl<'a> Gen<'a> {
             // A broken closed function (decision 19: a unit let it escape)
             // is called by unknown code: ⊤ parameters.
             // A closed local's contract name carries its function id (`fn_contract_of`).
-            let name = match nm.contains('#') {
+            let name = match nm.contains('#')
+                && !self.m.funcs[fx as usize].name.ends_with(&format!("#{fid}"))
+            {
                 true => format!("fn:{}#{fid}", self.m.funcs[fx as usize].name),
                 false => format!("fn:{}", self.m.funcs[fx as usize].name),
             };
