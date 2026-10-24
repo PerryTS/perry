@@ -1344,6 +1344,9 @@ impl ShapeSlab {
             image.static_rows <= DYNAMIC_BASE_ROWS,
             "layout image has more static rows than the process dynamic base"
         );
+        slab.region
+            .commit_static(image.static_rows as usize)
+            .unwrap_or_else(|error| panic!("cannot commit the static shape rows: {error:?}"));
         slab.static_rows = image.static_rows;
         slab.next_row = image.static_rows;
         slab.row_bound = image.static_rows;
@@ -2369,6 +2372,20 @@ impl IdList {
                 v.maybe_build_index();
             }
         }
+    }
+
+    /// [`Self::push_front`] for an id the caller knows is in no list: a
+    /// freshly published word (rows are never reissued, see
+    /// [`Self::append_unchecked`]). An empty list is the common case.
+    pub(super) fn push_front_fresh(&mut self, id: u32) {
+        if let IdList::Inline { len, ids } = self {
+            if *len == 0 {
+                ids[0] = id;
+                *len = 1;
+                return;
+            }
+        }
+        self.push_front(id);
     }
 
     /// Drop `id` if present, PRESERVING the order of what remains; returns

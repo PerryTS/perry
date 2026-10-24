@@ -17,6 +17,10 @@ pub(super) struct Region {
     /// 512 pages) of lazily boxed leaves, so a lookup is two loads and the
     /// size follows the agent's own pages, not the process's chunk history.
     live: Vec<Option<Box<Leaf>>>,
+    /// Pages `0..static_pages` hold the static prefix and are committed once,
+    /// for the Region's life ([`Self::commit_static`]): a static record is an
+    /// external carrier and never retires, so its page is never given back.
+    static_pages: usize,
 }
 
 /// Pages per leaf of the live-count map.
@@ -151,6 +155,7 @@ impl Region {
                     page: os_page(),
                     shift: os_page().trailing_zeros(),
                     live: Vec::new(),
+                    static_pages: 0,
                 };
             }
             assert!(capacity > MIN_CAPACITY, "cannot reserve shape Region");
@@ -172,21 +177,34 @@ impl Region {
     fn page_of(&self, row: usize) -> usize {
         (row * RECORD) >> self.shift
     }
-    fn pages(&self, row: usize) -> core::ops::RangeInclusive<usize> {
-        let p = self.page_of(row);
-        p..=p
+    /// Commit the pages of the static prefix `0..rows` with one protection
+    /// change, instead of one per page at first publication.
+    pub(super) fn commit_static(&mut self, rows: usize) -> Result<(), PublishError> {
+        if rows == 0 {
+            return Ok(());
+        }
+        if rows > self.capacity {
+            return Err(PublishError::Capacity);
+        }
+        let pages = self.page_of(rows - 1) + 1;
+        if !unsafe { commit(self.base.cast::<u8>(), pages * self.page) } {
+            return Err(PublishError::Commit);
+        }
+        self.static_pages = pages;
+        Ok(())
     }
     /// Commit all intersecting pages BEFORE reading or initializing this row.
     pub(super) fn prepare(&mut self, row: usize) -> Result<*mut ShapeRecord, PublishError> {
         if row >= self.capacity {
             return Err(PublishError::Capacity);
         }
-        for p in self.pages(row) {
-            if self.count(p) == 0
-                && !unsafe { commit(self.base.cast::<u8>().add(p * self.page), self.page) }
-            {
-                return Err(PublishError::Commit);
-            }
+        // A row never straddles pages: one page per row.
+        let p = self.page_of(row);
+        if p >= self.static_pages
+            && self.count(p) == 0
+            && !unsafe { commit(self.base.cast::<u8>().add(p * self.page), self.page) }
+        {
+            return Err(PublishError::Commit);
         }
         Ok(unsafe { self.base.add(row) })
     }
@@ -200,47 +218,56 @@ impl Region {
     /// Count a published row. True when the top vector moved or grew, i.e.
     /// when a published [`Self::commit_view`] is stale.
     pub(super) fn published(&mut self, row: usize) -> bool {
-        let mut moved = false;
-        for p in self.pages(row) {
-            let key = p / LEAF_PAGES;
-            if self.live.len() <= key {
-                self.live.resize_with(key + 1, || None);
-                moved = true;
-            }
-            let leaf = self.live[key].get_or_insert_with(|| {
-                Box::new(Leaf {
-                    used: 0,
-                    counts: [0; LEAF_PAGES],
-                })
-            });
+        let p = self.page_of(row);
+        let key = p / LEAF_PAGES;
+        // The common case: the leaf exists (one bounds test, one load).
+        if let Some(Some(leaf)) = self.live.get_mut(key) {
             let n = &mut leaf.counts[p % LEAF_PAGES];
             leaf.used += u32::from(*n == 0);
             *n += 1;
+            return false;
         }
+        self.published_new_leaf(key, p % LEAF_PAGES)
+    }
+    /// [`Self::published`] when the row's leaf is not boxed yet.
+    #[cold]
+    #[inline(never)]
+    fn published_new_leaf(&mut self, key: usize, index: usize) -> bool {
+        let mut moved = false;
+        if self.live.len() <= key {
+            self.live.resize_with(key + 1, || None);
+            moved = true;
+        }
+        let mut leaf = Box::new(Leaf {
+            used: 1,
+            counts: [0; LEAF_PAGES],
+        });
+        leaf.counts[index] = 1;
+        self.live[key] = Some(leaf);
         moved
     }
     /// Caller removed identity membership and zeroed the row after proving no carrier.
     pub(super) fn retired(&mut self, row: usize) {
-        for p in self.pages(row) {
-            let key = p / LEAF_PAGES;
-            let leaf = self
-                .live
-                .get_mut(key)
-                .and_then(|l| l.as_deref_mut())
-                .expect("retired row on a live page");
-            let n = &mut leaf.counts[p % LEAF_PAGES];
-            assert!(*n != 0);
-            *n -= 1;
-            if *n == 0 {
-                leaf.used -= 1;
-                if leaf.used == 0 {
-                    self.live[key] = None;
-                }
-                assert!(
-                    unsafe { discard(self.base.cast::<u8>().add(p * self.page), self.page) },
-                    "shape Region page decommit failed"
-                );
+        let p = self.page_of(row);
+        debug_assert!(p >= self.static_pages, "a static record never retires");
+        let key = p / LEAF_PAGES;
+        let leaf = self
+            .live
+            .get_mut(key)
+            .and_then(|l| l.as_deref_mut())
+            .expect("retired row on a live page");
+        let n = &mut leaf.counts[p % LEAF_PAGES];
+        assert!(*n != 0);
+        *n -= 1;
+        if *n == 0 {
+            leaf.used -= 1;
+            if leaf.used == 0 {
+                self.live[key] = None;
             }
+            assert!(
+                unsafe { discard(self.base.cast::<u8>().add(p * self.page), self.page) },
+                "shape Region page decommit failed"
+            );
         }
     }
     /// True when every OS page of  is committed in THIS Region.

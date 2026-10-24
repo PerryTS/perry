@@ -1114,6 +1114,12 @@ impl ShapeTableInner {
         self.by_facts.entry(facts).or_default().push_front(id);
     }
 
+    /// [`ShapeTableInner::facts_push_front`] for a freshly published word.
+    #[inline(always)]
+    fn facts_push_front_fresh(&mut self, facts: u64, id: u32) {
+        self.by_facts.entry(facts).or_default().push_front_fresh(id);
+    }
+
     /// Drop `id` from the accelerator bucket `facts`, removing it if emptied.
     #[inline]
     fn facts_remove(&mut self, facts: u64, id: u32) -> bool {
@@ -6655,7 +6661,7 @@ pub(crate) fn publish_static_record(
     .unwrap_or_else(|error| panic!("static layout publication mismatch: {request:?}: {error:?}"));
     if table.slab().len() != before {
         let mut inner = table.inner.borrow_mut();
-        inner.facts_push_front(facts, published.word.0);
+        inner.facts_push_front_fresh(facts, published.word.0);
         // Families are set-valued and the word is new here: append (a push to
         // the front of a spilled list is O(n) and re-indexes the whole list).
         inner.family_append_fresh(keys, published.word.0);
