@@ -797,7 +797,7 @@ fn entry_module_top_level_shadow_frame_starts_after_init_prelude() {
     let main_ir = function_slice(&ir, "main");
 
     let gc_init = main_ir
-        .find("call void @js_gc_init_with_layouts()")
+        .find("call void @js_gc_init_with_layouts(ptr @perry_layout_image)")
         .expect("entry main should initialize GC before user code");
     let strings_init = main_ir
         .find("__perry_init_strings_")

@@ -70,10 +70,9 @@ fn nested_evaluation_needs_the_structural_run_once_program_proof() {
 fn run_once_program_proof_is_revoked_by_loader_escape_or_repeated_structure() {
     // The dynamic-code census is process-wide. Isolate this whole-program
     // positive/negative proof from unrelated tests which record eval sites.
-    if std::env::var_os("PERRY_DPA_C_PROTO_TEST_CHILD").is_none() {
+    if !std::env::args().any(|arg| arg == "--exact") {
         let status = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", "codegen::static_prototype::tests::run_once_program_proof_is_revoked_by_loader_escape_or_repeated_structure", "--nocapture"])
-            .env("PERRY_DPA_C_PROTO_TEST_CHILD", "1")
             .status().unwrap();
         assert!(status.success());
         return;
