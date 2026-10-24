@@ -13,24 +13,28 @@ impl Model {
             // the arguments as the contract describes them (checked as the
             // result is, `contract_check`): nothing escapes here. The
             // result is that unknown function's. An argument marker is a
-            // call of each parameter it stands for (DECISIONS 44).
+            // call of each parameter it stands for (DECISIONS 44); a member
+            // with values beside it (a published method's receiver and what
+            // it reaches, DECISIONS 107) is described by them and adds no
+            // callee of its own (DECISIONS 143): the values are called.
             let cs = &self.calls[call as usize];
             let plain = this_tok.is_none() && matches!(cs.this, ThisArg::Undef) && cs.spread.is_empty();
             let own: Option<Vec<(FnIdx, u32)>> = plain.then(|| {
                 self.marker_members(t)
                     .into_iter()
                     .map(|m| match self.param_marker.get(&m) {
+                        _ if self.beside_values(m) => Some(None),
                         Some(&(f, i))
                             if i != u32::MAX
                                 && self.marker_of.get(&(f, i)) == Some(&m)
                                 && !self.marker_is_top(m) =>
                         {
-                            Some((f, i))
+                            Some(Some((f, i)))
                         }
                         _ => None,
                     })
                     .collect::<Option<Vec<_>>>()
-            }).flatten().filter(|v| !v.is_empty());
+            }).flatten().map(|v| v.into_iter().flatten().collect::<Vec<_>>()).filter(|v| !v.is_empty());
             if let Some(own) = own {
                 if self.bind_done.insert((call, t, u32::MAX - 3)) {
                     self.mark_use(t, crate::model::MARK_READ);

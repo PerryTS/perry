@@ -268,6 +268,40 @@ fn a_receiver_reach_passed_to_another_units_constructor_keeps_its_kinds() {
     assert_eq!(verdicts(&pf, "v"), verdicts(&whole, "v"), "{}", pf.dump_text());
 }
 
+/// DECISIONS 143: SOM's `Vector.sort`/`sortRange` recursion passes a
+/// receiver field (`this.first`) where the callback goes, so the callee
+/// marker of `cmp(..)` stands for the parameter and a receiver reach. The
+/// reach has the published receivers beside it: it adds no callee, the call
+/// stays a call through the parameter (DECISIONS 140), and the element
+/// handed to it keeps its class.
+const SORT_RANGE: &str = r#"
+    class Val { v: number; constructor(v: number) { this.v = v; } }
+    class Box {
+      first: number; val: Val;
+      constructor() { this.first = 0; this.val = new Val(1); }
+      sortRange(i: any, cmp: any): void {
+        if (cmp) { cmp(this.val); }
+        if (i > 3) { this.sort(i); }
+      }
+      sort(cmp: any): void { this.sortRange(this.first, cmp); }
+    }
+    const b = new Box();
+    let s = 0;
+    b.sort((x: Val) => { s += x.v; });
+    console.log(s);
+    "#;
+
+#[test]
+fn a_call_through_a_parameter_that_may_hold_a_receiver_field_keeps_its_argument() {
+    let pf = units(SORT_RANGE);
+    let whole = facts(SORT_RANGE);
+    // No call of an unknown function value: `cmp(this.val)` stays a call
+    // through the parameter (a receiver reach member escaped it before).
+    assert_eq!(pf.stats.top_calls, 0, "{}", pf.dump_text());
+    assert!(!pf.broken.iter().any(|b| b.contains("Val")), "{:?}\n{}", pf.broken, pf.dump_text());
+    assert_eq!(verdicts(&pf, "v"), verdicts(&whole, "v"), "{}", pf.dump_text());
+}
+
 /// DECISIONS 140, soundness: what the caller's function does to the
 /// argument is that unit's census on the stand-in, reported to the owner
 /// (§11.3): a store of another kind reaches Entry's facts.
