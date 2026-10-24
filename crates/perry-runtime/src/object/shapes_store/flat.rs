@@ -20,8 +20,13 @@ use super::ShapeRecord;
 
 /// Ordinary-band ids: `[SHAPE_ID_BASE, SITE_SHAPE_ID_END)`.
 pub(super) const ORDINARY_IDS: usize = (super::SITE_SHAPE_ID_END - super::SHAPE_ID_BASE) as usize;
-/// The smallest reservation accepted when address space is limited.
-const MIN_IDS: usize = 1 << 22;
+/// Agent creation seeds the native birth layouts in the first dynamic plain
+/// granule. The reservation must include that entire directory page, not just
+/// the preceding static/kind granules.
+const PAGE_IDS: usize = super::CHUNK_LEN * super::PAGE_LEN;
+const FIRST_NATIVE_END: usize =
+    (crate::codegen_abi::WEAKSET_BIRTH_LAYOUT - super::SHAPE_ID_BASE) as usize + 1;
+const MIN_IDS: usize = FIRST_NATIVE_END.div_ceil(PAGE_IDS) * PAGE_IDS;
 
 pub(super) struct Region {
     base: *mut ShapeRecord,
@@ -99,26 +104,35 @@ fn os_page() -> usize {
     4096
 }
 
+fn reserve_with(mut try_reserve: impl FnMut(usize) -> *mut u8) -> (*mut ShapeRecord, usize) {
+    let mut ids = ORDINARY_IDS;
+    loop {
+        let base = try_reserve(ids * RECORD);
+        if !base.is_null() {
+            return (base.cast(), ids);
+        }
+        assert!(
+            ids > MIN_IDS,
+            "Perry internal error: cannot reserve address space for the shape records"
+        );
+        // ORDINARY_IDS is three powers of two, so repeated halving skips
+        // past the minimum. Try the exact usable floor before giving up.
+        ids = (ids / 2).max(MIN_IDS);
+    }
+}
+
 impl Region {
-    /// Reserve the whole ordinary band (or, under an address-space limit,
-    /// the largest power-of-two share of it down to [`MIN_IDS`]).
+    /// Reserve the whole ordinary band or successively smaller shares, ending
+    /// at the smallest reservation that contains the native birth page.
     pub(super) fn new() -> Region {
-        let mut ids = ORDINARY_IDS;
-        loop {
+        let (base, reserved_ids) = reserve_with(|bytes| {
             // SAFETY: a fresh anonymous reservation.
-            let base = unsafe { reserve(ids * RECORD) };
-            if !base.is_null() {
-                return Region {
-                    base: base.cast(),
-                    reserved_ids: ids,
-                    committed_ids: 0,
-                };
-            }
-            assert!(
-                ids > MIN_IDS,
-                "Perry internal error: cannot reserve address space for the shape records"
-            );
-            ids /= 2;
+            unsafe { reserve(bytes) }
+        });
+        Region {
+            base,
+            reserved_ids,
+            committed_ids: 0,
         }
     }
 
@@ -180,5 +194,48 @@ impl Drop for Region {
         // SAFETY: the reservation made in `new`; nothing reads it after the
         // slab (its only owner) is dropped.
         unsafe { unreserve(self.base.cast(), self.reserved_ids * RECORD) };
+    }
+}
+
+#[cfg(test)]
+mod reservation_floor_tests {
+    use super::*;
+
+    #[test]
+    fn limited_address_space_still_contains_the_native_birth_page() {
+        let native_index = (crate::codegen_abi::WEAKSET_BIRTH_LAYOUT
+            - crate::object::shapes::SHAPE_ID_BASE) as usize;
+        let native_page_end = (native_index / PAGE_IDS + 1) * PAGE_IDS;
+        let available = native_page_end * RECORD;
+        let mut attempts = Vec::new();
+        let (_, ids) = reserve_with(|bytes| {
+            attempts.push(bytes);
+            if bytes <= available {
+                // No Region is constructed and this token is never dereferenced.
+                std::ptr::NonNull::<ShapeRecord>::dangling().as_ptr().cast()
+            } else {
+                std::ptr::null_mut()
+            }
+        });
+        assert_eq!(ids, native_page_end);
+        assert_eq!(attempts.last(), Some(&available));
+        assert!(attempts[..attempts.len() - 1]
+            .iter()
+            .all(|bytes| *bytes > available));
+    }
+
+    #[test]
+    #[should_panic(expected = "cannot reserve address space for the shape records")]
+    fn an_unusable_smaller_reservation_is_never_accepted() {
+        let native_index = (crate::codegen_abi::WEAKSET_BIRTH_LAYOUT
+            - crate::object::shapes::SHAPE_ID_BASE) as usize;
+        let needed = (native_index / PAGE_IDS + 1) * PAGE_IDS * RECORD;
+        reserve_with(|bytes| {
+            if bytes < needed {
+                std::ptr::NonNull::<ShapeRecord>::dangling().as_ptr().cast()
+            } else {
+                std::ptr::null_mut()
+            }
+        });
     }
 }

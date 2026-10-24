@@ -1,0 +1,1 @@
+- Keep limited-address-space ShapeId reservations large enough for every native birth layout.
