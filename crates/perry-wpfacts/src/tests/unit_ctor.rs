@@ -678,3 +678,51 @@ fn a_constructor_argument_read_from_a_parameter_is_not_the_parameter() {
     assert!(!k.objs.iter().any(|o| o.ends_with(":Key")), "{k:?}\n{}", pf.dump_text());
     assert!(k.top || k.objs.iter().any(|o| o.ends_with(":Inner")), "{k:?}\n{}", pf.dump_text());
 }
+
+/// DECISIONS 155: what the receiver reaches handed to a closed class's
+/// constructor: CD's RedBlackTree.treeInsert `new InsertResult(false, null,
+/// x.value)` with `x` read down `this.root` / `x.left`.
+const RECV_REACH: &str = r#"
+    class Val { n: number; constructor(n: number) { this.n = n; } }
+    class Node { value: any; left: any; constructor(v: any) { this.value = v; this.left = null; } }
+    class Res { v: any; constructor(v: any) { this.v = v; } }
+    class Tree {
+      root: any;
+      constructor() { this.root = null; }
+      insert(v: any): any {
+        let x = this.root;
+        while (x !== null && x.left !== null) { x = x.left; }
+        if (x !== null && x.value.n === 2) { return new Res(x.value); }
+        const z = new Node(v);
+        if (x === null) { this.root = z; } else { x.left = z; }
+        return new Res(null);
+      }
+    }
+    function main() {
+      const t = new Tree(); t.insert(new Val(1)); t.insert(new Val(2));
+      const r = t.insert(new Val(2)); console.log(r.v.n + t.root.left.value.n);
+    }
+    main();
+    "#;
+
+#[test]
+fn a_constructor_argument_the_receiver_reaches_stays_the_callers() {
+    // DECISIONS 155: `new Res(x.value)` hands what the receiver reaches
+    // (its keyed reach marker under `root`) to Res's constructor. The
+    // receivers the caller's unit runs `insert` on are published beside the
+    // marker (DECISIONS 107): they reach the constructor themselves, path
+    // by path, so the marker does not escape (it stood for no value of its
+    // own), Node and Val stay whole and `r.v.n` keeps Val.
+    // Per-unit facts are whole-program facts (owner 2026-10-23).
+    let pf = units(RECV_REACH);
+    let wf = facts(RECV_REACH);
+    assert!(pf.broken.is_empty(), "{:?}\n{}", pf.broken, pf.dump_text());
+    for k in ["v", "n", "value", "left"] {
+        let w = verdicts(&wf, k);
+        assert!(!w.is_empty() && w.iter().all(|v| v.starts_with("T0")), "{k} {w:?}");
+        assert_eq!(verdicts(&pf, k), w, "{k}\n{}", pf.dump_text());
+    }
+    // Soundness: Res's unit sees the caller's Val in `v`, as the program.
+    let (u, w) = (field(tmpl(&pf, "Res"), "v"), field(tmpl(&wf, "Res"), "v"));
+    assert_eq!(u.kind, w.kind, "{}", pf.dump_text());
+}

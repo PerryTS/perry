@@ -2281,9 +2281,13 @@ impl Model {
     /// is not the parameter (its keyed reach marker shares the parameter's
     /// entry, §18.4). An argument marker stands
     /// for its members, also those that link in later
-    /// (`replay_marker_links`); any other marker (a receiver's, a reach,
-    /// also an argument marker's reach) escapes, as a value no contract
-    /// describes does.
+    /// (`replay_marker_links`). DECISIONS 155: a reach with values beside
+    /// it (a published method's receivers, DECISIONS 107; a closed
+    /// function's described parameter, 74) stands for no value of its own:
+    /// the values beside it reach the constructor themselves, path by path,
+    /// and its argument contract reads it as them (142). Any other marker
+    /// (the receiver itself, a bare reach, an argument marker's reach)
+    /// escapes, as a value no contract describes does.
     fn hand_over_marker(&mut self, t: Tok, reason: u32) {
         if self.is_arg_marker(t) && !self.reach_marker.contains(&t) {
             let w = self.handover_watch.entry(t).or_default();
@@ -2299,7 +2303,8 @@ impl Model {
         let own = self.param_marker.get(&t).is_some_and(|&(f, j)| {
             j != u32::MAX && self.marker_of.get(&(f, j)) == Some(&t)
         });
-        if !own {
+        let beside = self.reach_marker.contains(&t) && self.beside_values(t);
+        if !own && !beside {
             self.escape(t, reason);
         }
     }
