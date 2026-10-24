@@ -544,3 +544,72 @@ fn an_argument_stored_into_what_the_receiver_reaches_stays_the_callers() {
         assert!(!u.is_empty() && u.iter().all(|v| v.starts_with("T0")), "{u:?}");
     }
 }
+
+/// DECISIONS 151: an in-unit call handed what the receiver reaches, whose
+/// result is stored back into that reach.
+const REACH_BACK: &str = r#"
+    class Node { left: any; right: any; constructor() { this.left = null; this.right = null; } }
+    function pick(n: any): any { return n; }
+    class Tree {
+      root: any;
+      constructor() { this.root = new Node(); this.root.right = new Node(); }
+      rot() { const z = this.root; const x = pick(z.right); z.left = x; }
+    }
+    function main() { const t = new Tree(); t.rot(); console.log(t.root.left.right); }
+    main();
+    "#;
+const REACH_BACK_M: &str = r#"
+    class Node { left: any; right: any; constructor() { this.left = null; this.right = null; } }
+    class Tree {
+      root: any;
+      constructor() { this.root = new Node(); this.root.right = new Node(); }
+      pick(n: any): any { return n; }
+      fix(x: any, p: any) { if (p) { p.left = x; } }
+      rot() { const z = this.root; const x = this.pick(z.right); z.left = x; this.fix(z.right, z); }
+    }
+    function main() { const t = new Tree(); t.rot(); console.log(t.root.left.right); }
+    main();
+    "#;
+
+/// DECISIONS 153: a returned list whose link holds another unit's
+/// instance beside the list's own literal.
+const LOOP_LIST: &str = r#"
+    class Ext { v: number; constructor() { this.v = 1; } }
+    function mk(n: number): any { let h: any = new Ext(); for (let i = 0; i < n; i++) { h = { next: h }; } return h; }
+    function main() { const h = mk(3); console.log(h.next.next.v); }
+    main();
+    "#;
+
+#[test]
+fn a_receiver_reach_handed_to_an_in_unit_call_and_stored_back_stays_the_callers() {
+    // DECISIONS 151: `x = pick(z.right); z.left = x` stores what an
+    // in-unit call hands back, the receiver's own reach, into that reach:
+    // the receiver flow the reader replays on its own objects, as a value
+    // stored directly is (DECISIONS 149), not an escape that breaks Node.
+    // Per-unit facts are whole-program facts (owner 2026-10-23).
+    for src in [REACH_BACK, REACH_BACK_M] {
+        let pf = units(src);
+        let wf = facts(src);
+        assert!(pf.broken.is_empty(), "{}", pf.dump_text());
+        for k in ["left", "right"] {
+            let w = verdicts(&wf, k);
+            assert!(!w.is_empty() && w.iter().all(|v| v.starts_with("T0")), "{w:?}");
+            assert_eq!(verdicts(&pf, k), w, "{}", pf.dump_text());
+        }
+    }
+}
+
+#[test]
+fn a_layout_whose_link_holds_it_beside_another_units_instance_is_described_once() {
+    // DECISIONS 153: `{ next: h }` holds itself and Ext's instance; its
+    // value contract describes the layout once (published first) and names
+    // it by display inside its own fields, instead of recursing for ever.
+    let pf = units(LOOP_LIST);
+    let wf = facts(LOOP_LIST);
+    assert!(pf.broken.is_empty(), "{}", pf.dump_text());
+    for k in ["next", "v"] {
+        let w = verdicts(&wf, k);
+        assert!(!w.is_empty(), "{k}");
+        assert_eq!(verdicts(&pf, k), w, "{k} {}", pf.dump_text());
+    }
+}

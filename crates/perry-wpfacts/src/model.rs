@@ -1029,8 +1029,10 @@ pub struct Model {
     pub arg_src_watch: FxHashMap<Tok, Vec<(FnIdx, u32, u32)>>,
     /// DECISIONS 136: a store flow whose stored value is (what) an argument
     /// marker (reaches): (stored marker, flow, reason) per argument marker
-    /// whose members it stands for, replayed as members link in.
-    pub arg_src_flows: FxHashMap<Tok, Vec<(Tok, StoreFlowKey, u32)>>,
+    /// whose members it stands for, replayed as members link in; the
+    /// receiver reach marker stored into when the store met it
+    /// (DECISIONS 151).
+    pub arg_src_flows: FxHashMap<Tok, Vec<(Tok, StoreFlowKey, u32, Option<Tok>)>>,
     /// An argument marker's reach marker -> the argument marker.
     pub arg_reach_base: FxHashMap<Tok, Tok>,
     pub arg_marker_node: FxHashMap<Tok, NodeId>,

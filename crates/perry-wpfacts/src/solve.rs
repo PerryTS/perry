@@ -820,7 +820,8 @@ impl Model {
                         // (DECISIONS 44); each one is a source of the flow,
                         // as it links in.
                         _ if self.is_arg_marker(t) => {
-                            self.store_out_arg_reach(t, (f, dst, reach, via, key), reason);
+                            let own = (dst == u32::MAX && to == at).then_some(at);
+                            self.store_out_arg_reach(t, (f, dst, reach, via, key), reason, own);
                         }
                         // DECISIONS 149: only the arguments are the
                         // reader's own values in what its receiver reaches;
@@ -2254,8 +2255,8 @@ impl Model {
                 }
             }
             // DECISIONS 136: a flow whose stored value `r`'s members stand for.
-            for (t, flow, reason) in self.arg_src_flows.get(&r).cloned().unwrap_or_default() {
-                self.store_out_arg_reach(t, flow, reason);
+            for (t, flow, reason, own) in self.arg_src_flows.get(&r).cloned().unwrap_or_default() {
+                self.store_out_arg_reach(t, flow, reason, own);
             }
             for (f, j, reason) in self.arg_src_watch.get(&r).cloned().unwrap_or_default() {
                 if self.marker_of.get(&(f, j)) != Some(&m) {
@@ -2280,7 +2281,17 @@ impl Model {
     /// `f`'s own parameter, or its reach, is a source of the flow (the
     /// reader stores its own value), any other member's escapes. The
     /// members that link in later are replayed (`replay_marker_links`).
-    fn store_out_arg_reach(&mut self, t: Tok, flow: StoreFlowKey, reason: u32) {
+    /// DECISIONS 151: a member is a source as a value stored directly is:
+    /// in a store into the receiver's reach marker it met (`own`), a value
+    /// of this unit takes the path of that store (`Cons::StoreOut`,
+    /// DECISIONS 149), not an escape.
+    fn store_out_arg_reach(
+        &mut self,
+        t: Tok,
+        flow: StoreFlowKey,
+        reason: u32,
+        own: Option<Tok>,
+    ) {
         let (f, ..) = flow;
         // `None`: the members themselves; `Some(k)`: their reach under key
         // `k`, or any key.
@@ -2301,8 +2312,8 @@ impl Model {
             match self.arg_members.get(&x).cloned() {
                 Some(ms) => {
                     let w = self.arg_src_flows.entry(x).or_default();
-                    if !w.contains(&(t, flow, reason)) {
-                        w.push((t, flow, reason));
+                    if !w.contains(&(t, flow, reason, own)) {
+                        w.push((t, flow, reason, own));
                     }
                     st.extend(ms);
                 }
@@ -2326,10 +2337,13 @@ impl Model {
                     from_reach.push((j, self.param_reach_key(f, j, s)));
                 }
                 Some((g, j)) if g == f && j != u32::MAX => from.push(j),
-                _ => {
-                    top = true;
-                    self.escape(s, reason);
-                }
+                _ => match own {
+                    Some(at) => self.mark_use(at, crate::model::MARK_ESCAPE),
+                    None => {
+                        top = true;
+                        self.escape(s, reason);
+                    }
+                },
             }
         }
         let fl = self.store_flows.entry(flow).or_default();

@@ -1321,10 +1321,29 @@ fn value_contract_of_toks(
             && !g.stand_in_cc.contains_key(&tm)
             && !vc.layouts.iter().any(|c| c.display == cc.display)
         {
-            cc.field_fns = literal_field_fns(&g, templates, &toks, tm, layouts_out, open_tm);
-            cc.field_layouts = nested_layouts(g, templates, tm, layouts_out, open_tm);
-            cc.field_values = field_value_contracts(g, templates, tm, layouts_out, open_tm);
-            cc.field_tas = field_ta_contracts(g, tm);
+            // DECISIONS 153: a layout whose fields hold it again (a list's
+            // or a tree's link beside forwarded stand-ins) is described once.
+            // While its fields are described it stands in `layouts_out`, so
+            // the description meeting it again takes that copy instead of
+            // recursing; the reader builds the outer one first (its fields
+            // hold the inner one) and finds it again by display
+            // (`Gen::stand_in_class`). It leaves `layouts_out` afterwards: a
+            // value contract's layout is not published. A published layout
+            // is the reader's in any case (`Gen::other_layout`, DECISIONS 106).
+            match layouts_out.iter().find(|c| c.display == cc.display) {
+                Some(p) => cc = p.clone(),
+                None => {
+                    layouts_out.push(cc.clone());
+                    cc.field_fns =
+                        literal_field_fns(&g, templates, &toks, tm, layouts_out, open_tm);
+                    cc.field_layouts = nested_layouts(g, templates, tm, layouts_out, open_tm);
+                    cc.field_values = field_value_contracts(g, templates, tm, layouts_out, open_tm);
+                    cc.field_tas = field_ta_contracts(g, tm);
+                    if let Some(i) = layouts_out.iter().position(|c| c.display == cc.display) {
+                        layouts_out.remove(i);
+                    }
+                }
+            }
         }
         let v = if class {
             &mut vc.classes
