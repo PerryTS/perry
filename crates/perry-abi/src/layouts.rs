@@ -29,6 +29,16 @@ pub struct LayoutWord(pub u32);
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct LayoutRow(pub u32);
+impl core::fmt::LowerHex for ShapeId {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        core::fmt::LowerHex::fmt(&self.0, f)
+    }
+}
+impl core::fmt::LowerHex for LayoutWord {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        core::fmt::LowerHex::fmt(&self.0, f)
+    }
+}
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PublishedShape {
@@ -48,6 +58,10 @@ impl LayoutWord {
     }
     pub const fn row(self) -> LayoutRow {
         LayoutRow(self.0 & LAYOUT_ROW_MASK)
+    }
+    /// This word with the shadow bit set.
+    pub const fn shadowed(self) -> Self {
+        Self(self.0 | LAYOUT_SHADOW_BIT)
     }
     pub const fn unshadowed(self) -> Self {
         Self(self.0 & !LAYOUT_SHADOW_BIT)
