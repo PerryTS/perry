@@ -2642,6 +2642,61 @@ idxset.bounded_numeric_merge.5:
         )
         self.assertEqual(report["status"], "pass", report["errors"])
 
+    def test_scalar_buffer_fallbacks_keep_alias_rejection_gate_live(self):
+        records = self.h1_alias_negative_records([
+            native_record(
+                function="lengthMismatch", rep="i32",
+                region_id="h1_buffer_alias_negative_ts.lengthmismatch.length_mismatch",
+                bounds_state="unknown", access_mode="dynamic_fallback",
+                expr_kind="BufferIndexSet", consumer="BufferIndexSet.slow_path",
+            )
+        ])
+        for record in records:
+            if record["native_rep_name"] != "buffer_view":
+                continue
+            record.update(
+                native_rep_name="i32", native_rep={"kind": "i32"},
+                bounds_state="unknown", alias_state=None,
+                access_mode="dynamic_fallback", native_value_state="dynamic_fallback",
+                expr_kind="Uint8ArrayGet", consumer="Uint8ArrayGet.slow_path_i32",
+                materialization_reason="unknown_alias", fallback_reason="unknown_alias",
+                rejected_facts=[
+                    native_fact("bounds", "missing", "unknown", "unknown_alias"),
+                    native_fact("alias_noalias", "missing", "unknown_or_may_alias", "unknown_alias"),
+                    native_fact("materialization_hazard", "invalidated", "unknown_alias", "unknown_alias"),
+                ],
+            )
+
+        def verify(rows):
+            return HARNESS.verify_artifacts(
+                workload="h1_buffer_alias_negative",
+                ir_before=GOOD_IR, ir_after=GOOD_IR, assembly=GOOD_ASM,
+                benchmark=None,
+                vectorization={"vectorized_count": 0, "missed_count": 0, "analysis_count": 0},
+                native_reps=[{"records": rows}],
+            )
+
+        report = verify(records)
+        self.assertEqual(report["status"], "pass", report["errors"])
+        for mutation in ("missing_alias_fact", "unrelated_integer", "emitted_noalias"):
+            with self.subTest(mutation=mutation):
+                rows = json.loads(json.dumps(records))
+                for row in rows:
+                    if mutation == "missing_alias_fact":
+                        row["rejected_facts"] = [
+                            fact for fact in row.get("rejected_facts", [])
+                            if fact["kind"] != "alias_noalias"
+                        ]
+                    elif mutation == "unrelated_integer":
+                        row["expr_kind"] = "Binary"
+                    else:
+                        row["emitted_noalias"] = True
+                report = verify(rows)
+                self.assertTrue(any(
+                    error.startswith("native_reps_negative_denies_unsafe_noalias:")
+                    for error in report["errors"]
+                ), report["errors"])
+
     def test_array_buffer_view_noalias_fails_gate(self):
         length_region = "h1_buffer_alias_negative_ts.lengthmismatch.length_mismatch"
         array_buffer_view_region = (

@@ -1,0 +1,1 @@
+Keep compiler-output negative controls live for scalar buffer fallback records with explicit rejected alias proof, and preserve a real unknown-call fixture boundary. Add mutations for missing proof, unrelated integer rows and unsafe noalias emission. Name the two current arena-view initialization helpers only in the dynamic native-ABI control workload.

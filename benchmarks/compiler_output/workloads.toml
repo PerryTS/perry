@@ -2107,6 +2107,9 @@ allowed_hot_loop_runtime_calls = [
   "js_array_length",
   "js_array_push_f64",
   "js_buffer_get",
+  # Control arena views initialize their length and native data pointer.
+  "js_buffer_length",
+  "js_native_buffer_data_ptr",
   "js_buffer_index_get_value",
   "js_buffer_set",
   "js_handle_object_get_property",

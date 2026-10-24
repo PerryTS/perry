@@ -27,9 +27,13 @@ function passToUnknown(value: any): number {
   return value ? 1 : 0;
 }
 
+// Keep the callee opaque in HIR: a direct call to passToUnknown is inlined
+// to a truthiness check and stops witnessing an unknown-call boundary.
+(globalThis as any).__nativeRepOpaqueCall = passToUnknown;
+
 function unknownCallEscape(): number {
   const owned = Buffer.alloc(SIZE);
-  const escaped = passToUnknown(owned);
+  const escaped = (globalThis as any).__nativeRepOpaqueCall(owned);
   let total = escaped | 0;
   unknown_call_escape:
   for (let i = 0; i < owned.length; i++) {

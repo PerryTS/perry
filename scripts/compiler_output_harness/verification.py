@@ -938,10 +938,25 @@ def native_rep_contract_results(
             ]
 
         def denied_alias(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            # Scalar buffer fallbacks produce i32, not a retained buffer_view.
+            # Count only an actual buffer access with an explicit rejected
+            # alias proof; unrelated integer arithmetic cannot satisfy this.
             return [
                 r
                 for r in rows
-                if r.get("native_rep_name") in {"buffer_view", "u8"}
+                if (
+                    r.get("native_rep_name") in {"buffer_view", "u8"}
+                    or (
+                        r.get("native_rep_name") == "i32"
+                        and _is_dynamic_fallback(r)
+                        and str(r.get("expr_kind", "")).startswith(
+                            ("BufferIndex", "Uint8Array")
+                        )
+                        and _record_has_fact(
+                            r, "rejected_facts", kind="alias_noalias", state="missing"
+                        )
+                    )
+                )
                 and _state_name(r.get("alias_state")) in {"unknown", "may_alias", ""}
                 and not r.get("emitted_noalias")
             ]
@@ -981,13 +996,7 @@ def native_rep_contract_results(
                 )
             ]
 
-        denied_noalias = [
-            r
-            for r in records
-            if r.get("native_rep_name") in {"buffer_view", "u8"}
-            and _state_name(r.get("alias_state")) in {"unknown", "may_alias", ""}
-            and not r.get("emitted_noalias")
-        ]
+        denied_noalias = denied_alias(records)
         denied_inbounds = [
             r
             for r in records
