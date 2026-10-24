@@ -1050,6 +1050,7 @@ mod tests {
 
     #[test]
     fn create_input_builds_rgb_canvas() {
+        perry_ffi::initialize_runtime_fixture();
         unsafe {
             let background = object(&[
                 ("r", JsValue::from_int32(1)),
@@ -1073,6 +1074,7 @@ mod tests {
 
     #[test]
     fn create_input_preserves_rgba_alpha() {
+        perry_ffi::initialize_runtime_fixture();
         unsafe {
             let background = object(&[
                 ("r", JsValue::from_int32(10)),
@@ -1096,6 +1098,7 @@ mod tests {
 
     #[test]
     fn create_input_rejects_invalid_descriptors() {
+        perry_ffi::initialize_runtime_fixture();
         unsafe {
             let background = object(&[
                 ("r", JsValue::from_int32(1)),
@@ -1130,6 +1133,7 @@ mod tests {
 
     #[test]
     fn invalid_handle_async_failure_is_an_error_object() {
+        perry_ffi::initialize_runtime_fixture();
         let promise = js_sharp_metadata(perry_ffi::INVALID_HANDLE);
         assert_eq!(perry_runtime::promise::js_promise_state(promise.cast()), 2);
 
