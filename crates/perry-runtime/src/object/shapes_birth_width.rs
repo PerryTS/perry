@@ -139,6 +139,10 @@ impl KeylessBirth {
 /// if absent (its first birth, or its first after a prune), counts this birth
 /// against the tracking window, and keeps the record through the next full
 /// collection.
+///
+/// `prototype_shape` is the header word of the live, rooted prototype object
+/// (both callers read it from the rooted prototype): the prototype carries
+/// that row, so its record is read without the held-word check.
 pub(crate) fn keyless_birth_width(proto_id: u64, prototype_shape: u32) -> KeylessBirth {
     if !is_prototype_serial(proto_id) {
         return KeylessBirth::untracked();
@@ -147,7 +151,7 @@ pub(crate) fn keyless_birth_width(proto_id: u64, prototype_shape: u32) -> Keyles
     // a weak scalar relationship, not a carrier: pruning still retires the
     // birth record. Resolution validates the complete immutable facts;
     // reuse checks presence and the actual prototype serial.
-    let prior = shapes_store::ShapeSlab::agent_record_for_word_present(prototype_shape)
+    let prior = shapes_store::ShapeSlab::agent_record_for_receiver_present(prototype_shape)
         .map_or(0, |record| unsafe { (*record).created_birth_shape() });
     let resolved = linked_birth_record(prior, proto_id);
     let Some((id, record)) = resolved.or_else(|| resolve_birth_record(proto_id)) else {
@@ -175,7 +179,7 @@ pub(crate) fn keyless_birth_width(proto_id: u64, prototype_shape: u32) -> Keyles
         // only a ShapeId; its extension allocation is Rust-owned metadata,
         // with no nursery allocation or collection point.
         if let Some(prototype) =
-            shapes_store::ShapeSlab::agent_record_for_word_present(prototype_shape)
+            shapes_store::ShapeSlab::agent_record_for_receiver_present(prototype_shape)
         {
             unsafe { (*prototype).note_created_birth_shape(id) };
         }

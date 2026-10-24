@@ -1465,6 +1465,7 @@ impl ShapeSlab {
         }
     }
 
+    #[inline(always)]
     fn write_record(
         &mut self,
         ptr: *mut ShapeRecord,
@@ -1549,6 +1550,7 @@ impl ShapeSlab {
         .ok_or(PublishError::Capacity)
     }
 
+    #[inline(always)]
     fn publish(
         &mut self,
         identity: ShapeId,
@@ -1593,8 +1595,11 @@ impl ShapeSlab {
             return Err(PublishError::RowConflict);
         }
         self.write_record(ptr, identity.0, word, record);
-        self.region.published(row);
-        self.publish_commit();
+        // Leaves are boxed in place: the commit view moves only with the top
+        // vector.
+        if self.region.published(row) {
+            self.publish_commit();
+        }
         let (band, index) = locate(identity.0);
         let (page, chunk, slot) = Self::split(index);
         let dir = self.dir_mut(band as u8);

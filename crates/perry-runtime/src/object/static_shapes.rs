@@ -53,7 +53,7 @@ pub extern "C" fn js_object_shape_id_for_class_keys_static(
         Some(requested).filter(|&id| id != 0),
     ));
     // SAFETY: `id` was resolved from this agent's live slab record above.
-    unsafe { shapes::note_external_shape_carrier(shapes::shape_descriptor_for_word(id)) };
+    unsafe { shapes::note_external_carrier_of_word(id) };
     let id = shapes::shape_record_for_word(id).map_or(0, |r| r.identity().0);
     note_static_request("class", requested, id);
     id
@@ -102,7 +102,7 @@ pub extern "C" fn js_shape_seed_plain(
         Some(requested),
     ));
     // SAFETY: as above.
-    unsafe { shapes::note_external_shape_carrier(shapes::shape_descriptor_for_word(id)) };
+    unsafe { shapes::note_external_carrier_of_word(id) };
     let id = shapes::shape_record_for_word(id).map_or(0, |r| r.identity().0);
     note_static_request("seed", requested, id);
     id
@@ -149,7 +149,7 @@ pub extern "C" fn js_shape_seed_plain_constfn(
         Some(requested),
     ));
     // SAFETY: `id` was resolved from this agent's live slab record above.
-    unsafe { shapes::note_external_shape_carrier(shapes::shape_descriptor_for_word(id)) };
+    unsafe { shapes::note_external_carrier_of_word(id) };
     let id = shapes::shape_record_for_word(id).map_or(0, |r| r.identity().0);
     note_static_request("seed-constfn", requested, id);
     id
@@ -254,7 +254,7 @@ pub extern "C" fn js_object_final_shape_id_for_class_keys_static_private(
         ))
     });
     // SAFETY: `id` was resolved from this agent's live slab record above.
-    unsafe { shapes::note_external_shape_carrier(shapes::shape_descriptor_for_word(id)) };
+    unsafe { shapes::note_external_carrier_of_word(id) };
     let id = shapes::shape_record_for_word(id).map_or(0, |r| r.identity().0);
     note_static_request("class-private", requested, id);
     id
@@ -286,7 +286,7 @@ pub extern "C" fn js_object_final_shape_id_for_class_keys_static_constfn(
         Some(requested).filter(|&id| id != 0),
     ));
     // SAFETY: `id` was resolved from this agent's live slab record above.
-    unsafe { shapes::note_external_shape_carrier(shapes::shape_descriptor_for_word(id)) };
+    unsafe { shapes::note_external_carrier_of_word(id) };
     let id = shapes::shape_record_for_word(id).map_or(0, |r| r.identity().0);
     note_static_request("class-constfn", requested, id);
     id
@@ -838,6 +838,9 @@ fn publish_layout_facts(
     infos: &[shapes::ConstFnSlotInfo],
     request: *mut crate::codegen_abi::PerryStaticLayoutRequestV1,
 ) -> u32 {
+    if let Some(word) = unsafe { shapes::published_static_request(request, count) } {
+        return word;
+    }
     let summary = unsafe { super::key_attrs::keys_summary_checked(keys, count) };
     let request = unsafe { resolve_layout_request(request, proto) };
     shapes::publish_shape_result(shapes::intern_static_layout(
@@ -896,6 +899,9 @@ pub extern "C" fn js_layout_seed_plain(
     if count == 0 || packed.is_null() || packed_len == 0 {
         return 0;
     }
+    if let Some(word) = unsafe { shapes::published_static_request(request, count) } {
+        return word;
+    }
     let names = crate::object::packed_key_names(unsafe {
         std::slice::from_raw_parts(packed, packed_len as usize)
     });
@@ -926,6 +932,9 @@ pub extern "C" fn js_layout_seed_plain_constfn(
 ) -> u32 {
     if count == 0 || packed.is_null() || packed_len == 0 {
         invalid_constfn_static_seed();
+    }
+    if let Some(word) = unsafe { shapes::published_static_request(request, count) } {
+        return word;
     }
     let names = crate::object::packed_key_names(unsafe {
         std::slice::from_raw_parts(packed, packed_len as usize)
@@ -1067,7 +1076,7 @@ pub extern "C" fn js_object_final_layout_for_class_keys_static_private(
         ))
     });
     // SAFETY: `id` was resolved from this agent's live slab record above.
-    unsafe { shapes::note_external_shape_carrier(shapes::shape_descriptor_for_word(id)) };
+    unsafe { shapes::note_external_carrier_of_word(id) };
     id
 }
 

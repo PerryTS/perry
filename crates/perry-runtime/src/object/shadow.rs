@@ -42,7 +42,7 @@ use crate::object::shapes::shape_record_of_receiver;
 use super::layout_desc::{
     carry_shadow, layout_id_of_word, word_is_shadowed, StaticAtom, LAYOUT_SHADOW_BIT,
 };
-use super::shapes::{is_layout_word, is_site_matchable_layout_word, shape_record_for_word};
+use super::shapes::{is_layout_word, is_site_matchable_layout_word};
 use super::ObjectHeader;
 
 /// A view of compiler-owned data, never runtime-learned state.
@@ -233,7 +233,9 @@ unsafe fn change_touches_shadow_name(
     any_member: bool,
     receiver_class: u32,
 ) -> bool {
-    let (Some(a), Some(b)) = (shape_record_for_word(prev), shape_record_for_word(id)) else {
+    // Both words are carried: `prev` is the receiver's header word and `id`
+    // the live layout the stamp funnel is storing into that header.
+    let (Some(a), Some(b)) = (shape_record_of_receiver(prev), shape_record_of_receiver(id)) else {
         return false;
     };
     let (ka, na) = (a.keys(), a.logical_key_count() as usize);
@@ -303,7 +305,7 @@ pub(crate) unsafe fn publish_word(obj: *const ObjectHeader, previous: u32, id: u
     let meta = (*obj).meta;
     let prototype = !meta.is_null() && (*meta).flags & super::OBJECT_META_FLAG_IS_PROTOTYPE != 0;
     if !prototype
-        && shape_record_for_word(id).is_some_and(|r| {
+        && shape_record_of_receiver(id).is_some_and(|r| {
             matches!(
                 r.proto_id(),
                 super::shapes::PROTO_ID_DEFAULT | super::shapes::PROTO_ID_NULL
@@ -370,7 +372,7 @@ unsafe fn key_add_slow(
     }
     // A default/null-prototype data bag has no inherited binding to protect.
     if !prototype
-        && shape_record_for_word(id).is_some_and(|r| {
+        && shape_record_of_receiver(id).is_some_and(|r| {
             matches!(
                 r.proto_id(),
                 super::shapes::PROTO_ID_DEFAULT | super::shapes::PROTO_ID_NULL

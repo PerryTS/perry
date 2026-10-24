@@ -1981,7 +1981,13 @@ pub(crate) unsafe fn family_desc_of(obj: *const ObjectHeader) -> Option<&'static
         return None;
     }
     let word = (*obj).parent_class_id;
-    let index = layout_index_of_word(word)?;
+    // `obj` is live and carries `word`: the receiver read needs no check.
+    if !super::shapes::is_layout_word(layout_id_of_word(word)) {
+        return None;
+    }
+    let index = super::shapes::shape_record_of_receiver(word)?
+        .family_desc_index_plus_one()
+        .checked_sub(1)?;
     let d = &*desc_at(index);
     (d.class_id != 0).then_some(d)
 }

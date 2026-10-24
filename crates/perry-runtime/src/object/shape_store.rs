@@ -496,7 +496,8 @@ unsafe fn dynamic_store_receiver(obj: *mut ObjectHeader) -> Option<shapes::Shape
     {
         return None;
     }
-    let record = shapes::shape_record_for_word(id)?;
+    // A live object's own header word: the receiver carries its row.
+    let record = shapes::shape_record_of_receiver(id)?;
     if !record.object_kind().is_ordinary_layout()
         || (*obj).class_id == super::NATIVE_MODULE_CLASS_ID
     {

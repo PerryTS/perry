@@ -185,11 +185,15 @@ impl Region {
             _ => 0,
         }
     }
-    pub(super) fn published(&mut self, row: usize) {
+    /// Count a published row. True when the top vector moved or grew, i.e.
+    /// when a published [`Self::commit_view`] is stale.
+    pub(super) fn published(&mut self, row: usize) -> bool {
+        let mut moved = false;
         for p in self.pages(row) {
             let key = p / LEAF_PAGES;
             if self.live.len() <= key {
                 self.live.resize_with(key + 1, || None);
+                moved = true;
             }
             let leaf = self.live[key].get_or_insert_with(|| {
                 Box::new(Leaf {
@@ -201,6 +205,7 @@ impl Region {
             leaf.used += u32::from(*n == 0);
             *n += 1;
         }
+        moved
     }
     /// Caller removed identity membership and zeroed the row after proving no carrier.
     pub(super) fn retired(&mut self, row: usize) {

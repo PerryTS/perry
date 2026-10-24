@@ -363,14 +363,15 @@ pub(crate) fn refresh_closure_shape(ptr: usize) {
                     } else {
                         let proto_id =
                             shapes::shape_proto_id(base).unwrap_or(INTRINSIC_SERIAL_FUNCTION);
+                        let base_kind = shapes::shape_object_kind_for_word(base).unwrap();
                         // The keyed id is canonical in exactly these inputs:
                         // when the closure already carries the id they name
                         // (a value store, an attribute edit that changed
                         // nothing), there is nothing to mint.
                         let current = (*closure).shape_id;
                         if current != base
-                            && shapes::shape_descriptor_for_word(current).is_some_and(|f| {
-                                f.object_kind == shapes::shape_object_kind_for_word(base).unwrap()
+                            && shapes::shape_descriptor_of_receiver(current).is_some_and(|f| {
+                                f.object_kind == base_kind
                                     && f.keys == d.keys
                                     && f.logical_key_count == d.logical_key_count
                                     && f.live_inline_slot_count == d.live_inline_slot_count
@@ -387,7 +388,7 @@ pub(crate) fn refresh_closure_shape(ptr: usize) {
                                 d.logical_key_count,
                                 d.live_inline_slot_count,
                                 0,
-                                shapes::shape_object_kind_for_word(base).unwrap(),
+                                base_kind,
                                 proto_id,
                                 // The bag's brands are the closure's (#11791).
                                 shapes::ReceiverFacts::of_descriptor(
@@ -396,7 +397,7 @@ pub(crate) fn refresh_closure_shape(ptr: usize) {
                                 ),
                             ),
                         );
-                        shapes::note_external_shape_carrier(shapes::shape_descriptor_for_word(id));
+                        shapes::note_external_carrier_of_word(id);
                         id
                     }
                 }

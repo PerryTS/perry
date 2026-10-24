@@ -2738,6 +2738,14 @@ pub(crate) unsafe fn note_full_trace_carrier(record: Option<ShapeRecordRef>) {
 }
 
 #[inline]
+pub(crate) unsafe fn note_external_carrier_of_word(id: u32) {
+    // The flag lives on the record: no descriptor is lifted to set it.
+    if let Some(record) = ShapeSlab::agent_record_for_word_present(id) {
+        (*record).set(RECORD_FLAG_EXTERNAL_CARRIER, true);
+    }
+}
+
+/// [`note_external_carrier_of_word`] for a descriptor already in hand.
 pub(crate) unsafe fn note_external_shape_carrier(descriptor: Option<ShapeDescriptor>) {
     let Some(descriptor) = descriptor else {
         return;
@@ -2873,7 +2881,8 @@ unsafe fn stamp_object_shape_id_with_carrier_note_impl(
     // Until something is marked as a prototype this is one relaxed `bool` load.
     crate::object::proto_validity::note_object_shape_stamped(obj as usize, previous, id);
     if !crate::arena::pointer_in_nursery(obj as usize) {
-        let record = shape_record_for_word(id);
+        // The header store above made `obj` the carrier of `id`.
+        let record = shape_record_of_receiver(id);
         note_old_generation_carrier(record);
         // This stamp is the structural-mutation publication funnel. Re-arm
         // even when the descriptor was already an old carrier: an owned
@@ -2934,7 +2943,7 @@ pub(crate) fn rotate_old_carrier_epoch_after_full_trace() {
 pub extern "C" fn js_object_layout_for_keys(keys: u64, key_count: u32) -> u32 {
     let id = layout_for_keys_ensure(keys as usize as *const ArrayHeader, key_count);
     // SAFETY: `id` was resolved from this agent's live slab record above.
-    unsafe { note_external_shape_carrier(shape_descriptor_for_word(id)) };
+    unsafe { note_external_carrier_of_word(id) };
     id
 }
 
@@ -2959,7 +2968,7 @@ pub extern "C" fn js_object_layout_for_class_keys(
         None,
     ));
     // SAFETY: `id` was resolved from this agent's live slab record above.
-    unsafe { note_external_shape_carrier(shape_descriptor_for_word(id)) };
+    unsafe { note_external_carrier_of_word(id) };
     id
 }
 
@@ -2985,7 +2994,7 @@ pub extern "C" fn js_object_layout_for_class_keys_live(
         None,
     ));
     // SAFETY: `id` was resolved from this agent's live slab record above.
-    unsafe { note_external_shape_carrier(shape_descriptor_for_word(id)) };
+    unsafe { note_external_carrier_of_word(id) };
     id
 }
 
@@ -4116,7 +4125,7 @@ pub(crate) unsafe fn publish_object_shape_from_rep(
     // shared array must have cloned before push; otherwise siblings already
     // observe mutated bytes and no descriptor can make that state sound.
     let old_id = object_shape_stamp(obj);
-    let old_shape = shape_descriptor_for_word(old_id);
+    let old_shape = shape_descriptor_of_receiver(old_id);
     let mut retire_owned_history = false;
     if let Some(old) = old_shape {
         // #9064: an owned ordinary receiver that already entered stable-
@@ -6671,6 +6680,45 @@ pub(crate) fn intern_static_layout(
     )
 }
 
+
+/// The word of a static layout request THIS agent has already published.
+///
+/// A request's identity cell and its compiler-authored word never change once
+/// the identity is reserved, so a present row of this agent that carries the
+/// request's identity IS that request's publication: its facts were compared
+/// when it was published. A repeated request (every birth site that names the
+/// layout asks again) answers with one checked read of its own word instead
+/// of rebuilding and re-comparing a record. `None`: not reserved yet, or not
+/// published by this agent (a fresh worker publishes its own row).
+///
+/// # Safety
+/// `request` is null or a live static layout request.
+#[inline]
+pub(crate) unsafe fn published_static_request(
+    request: *const crate::codegen_abi::PerryStaticLayoutRequestV1,
+    key_count: u32,
+) -> Option<u32> {
+    if request.is_null() {
+        return None;
+    }
+    let identity = std::sync::atomic::AtomicU32::from_ptr(
+        std::ptr::addr_of!((*request).shape_id).cast_mut(),
+    )
+    .load(std::sync::atomic::Ordering::Acquire);
+    if identity == 0 {
+        return None;
+    }
+    let word = (*request).layout_word;
+    let record = ShapeSlab::agent_record_for_word_present(word)?;
+    if (*record).shape_id != identity {
+        return None;
+    }
+    debug_assert_eq!(
+        (*record).logical_key_count, key_count,
+        "static layout request {word:#x} republished with other facts"
+    );
+    Some(word)
+}
 
 fn identity_of_published_word(word: u32) -> u32 {
     shape_record_for_word(word).map_or(0, |r| unsafe { (*r.0.as_ptr()).shape_id })
