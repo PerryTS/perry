@@ -1,0 +1,1 @@
+Fix Windows runtime layout registration by placing the section boundary markers in the same writable COFF image as the descriptors. Previously the read-only markers delimited a separate section, leaving the timeout layout unregistered and aborting the first timer allocation. Add a Windows test that checks both the timeout descriptor and sentinel are inside the enumerated image.
