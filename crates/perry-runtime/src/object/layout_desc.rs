@@ -2815,7 +2815,7 @@ pub(crate) unsafe fn family_store_value(target: f64, key: f64, value: f64) -> bo
         return false;
     }
     let obj = (bits & crate::value::POINTER_MASK) as *mut ObjectHeader;
-    if family_desc_of(obj).is_none() && !super::key_view::object_may_have_holes(obj) {
+    if !family_store_admits(obj) {
         return false;
     }
     let key_value = crate::JSValue::from_bits(key.to_bits());
@@ -2838,6 +2838,36 @@ pub(crate) unsafe fn family_store_value(target: f64, key: f64, value: f64) -> bo
         &owned
     };
     family_store(obj, key.to_bits(), bytes, value.to_bits())
+}
+
+/// `family_desc_of(obj).is_some() || object_may_have_holes(obj)`, answered
+/// from ONE read of the receiver's record: the record names its family
+/// descriptor and carries the key list summary. Every dynamic-key store asks
+/// this first, so the second record read of the two-call form was paid by
+/// every ordinary store.
+///
+/// # Safety
+/// `obj` is a live object or null.
+#[inline(always)]
+unsafe fn family_store_admits(obj: *const ObjectHeader) -> bool {
+    if obj.is_null() || !crate::value::addr_class::is_plausible_heap_addr(obj as usize) {
+        return false;
+    }
+    let word = (*obj).parent_class_id;
+    if !super::shapes::is_layout_word(layout_id_of_word(word)) {
+        return false;
+    }
+    // `obj` is live and carries `word`: the receiver read needs no check.
+    let Some(record) = super::shapes::shape_record_of_receiver(word) else {
+        return false;
+    };
+    if let Some(index) = record.family_desc_index_plus_one().checked_sub(1) {
+        if (*desc_at(index)).class_id != 0 {
+            return true;
+        }
+    }
+    super::key_view::summary_may_have_holes(record.summary())
+        && !super::overflow::has_overflow(obj)
 }
 
 /// [`family_store`] for a key passed as a string header.

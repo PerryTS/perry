@@ -2559,7 +2559,7 @@ pub(crate) fn shape_record_for_word(shape_id: u32) -> Option<ShapeRecordRef> {
 }
 
 /// [`shape_record_for_word`] for a live receiver's own header word (unchecked).
-#[inline]
+#[inline(always)]
 pub(crate) fn shape_record_of_receiver(shape_id: u32) -> Option<ShapeRecordRef> {
     let record = ShapeSlab::agent_record_for_receiver_present(shape_id)?;
     std::ptr::NonNull::new(record).map(ShapeRecordRef)
@@ -2674,7 +2674,7 @@ pub(crate) fn shape_object_kind_for_word(shape_id: u32) -> Option<ShapeObjectKin
 }
 
 /// [`shape_object_kind_for_word`] for a live receiver's own header word.
-#[inline]
+#[inline(always)]
 pub(crate) fn shape_object_kind_of_receiver(shape_id: u32) -> Option<ShapeObjectKind> {
     shape_record_of_receiver(shape_id).map(ShapeRecordRef::object_kind)
 }
@@ -3544,7 +3544,7 @@ pub(crate) unsafe fn shape_word_is_writable(obj: *const crate::object::ObjectHea
 }
 
 /// The receiver's ShapeId, or 0 when it is not a shaped object.
-#[inline]
+#[inline(always)]
 pub(crate) unsafe fn object_shape_stamp(obj: *const crate::object::ObjectHeader) -> u32 {
     // A shadowed word (`layout_desc` documents bit 30) stamps as its FULL
     // word when an overflow is installed (object model step 4: its own
@@ -5386,7 +5386,7 @@ pub(crate) unsafe fn object_shape_descriptor(
 }
 
 /// [`object_shape_descriptor`]'s record, borrowed in place (#10362).
-#[inline]
+#[inline(always)]
 pub(crate) unsafe fn object_shape_record(
     obj: *const crate::object::ObjectHeader,
 ) -> Option<ShapeRecordRef> {

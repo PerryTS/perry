@@ -1822,6 +1822,7 @@ impl ShapeSlab {
     }
 
     /// The live receiver's word names its sole record directly on every platform.
+    #[inline(always)]
     pub(super) unsafe fn agent_record_for_handle(word: LayoutWord) -> *mut ShapeRecord {
         AGENT_SHAPE_DIR[0]
             .flat_base
@@ -1883,6 +1884,7 @@ impl ShapeSlab {
     /// A live receiver's own header word, or zero for an unshaped receiver.
     /// The receiver is the carrier, so the unchecked read is sound; never use
     /// this for a word read from a memo, a record or a parameter.
+    #[inline(always)]
     pub(super) fn agent_record_for_receiver(word: u32) -> *mut ShapeRecord {
         if word & crate::codegen_abi::LAYOUT_TAG == 0 || LayoutWord(word).band() >= 3 {
             return std::ptr::addr_of!(EMPTY_RECORD.0).cast_mut();
@@ -1894,6 +1896,7 @@ impl ShapeSlab {
         }
         unsafe { Self::agent_record_for_handle(LayoutWord(word)) }
     }
+    #[inline(always)]
     pub(super) fn agent_record_for_receiver_present(word: u32) -> Option<*mut ShapeRecord> {
         let p = Self::agent_record_for_receiver(word);
         unsafe { (*p).present() }.then_some(p)
