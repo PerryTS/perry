@@ -493,7 +493,7 @@ fn additive_property_callback_gets_a_cold_deopting_private_body() {
     );
     assert!(
         // The property read's decline reaches the cacheless slow read.
-        special.contains("js_object_get_field_slow")
+        special.contains("js_object_get_field_value")
             && special.contains("guarded_add.dynamic")
             && special.contains("versioned_callback.deopt.mark"),
         "both observable cold arms must poison the loop before fallback:\n{special}"
@@ -502,7 +502,8 @@ fn additive_property_callback_gets_a_cold_deopting_private_body() {
     assert!(
         info.contains(
             "ptr @perry_closure_versioned_loop_callback_ts__100$trusted_boxes$versioned_loop, i32 1, i16"
-        ) && info.ends_with("i64 1 }"),
+        ) && info.contains("i64 1 }")
+            && info.ends_with("ptr @perry_closure_versioned_loop_callback_ts__100$call_entry }"),
         "{info}"
     );
 }

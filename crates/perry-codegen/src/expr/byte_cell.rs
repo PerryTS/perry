@@ -725,11 +725,19 @@ mod tests {
                 !ir.contains("call ptr @js_native_buffer_data_ptr"),
                 "{mode}: legacy preheader"
             );
-            let marker = ir
+            // SSA names are function-local; wrapper registers may reuse them.
+            let body = ir
+                .split("define double @perry_fn_buffer_param_owner_ts__read(")
+                .nth(1)
+                .expect("buffer read body emitted")
+                .split("\n}")
+                .next()
+                .unwrap();
+            let marker = body
                 .lines()
                 .find(|line| line.contains("; bytes.hoist.roots "))
                 .unwrap();
-            let roots = crate::testing::root_slots::bound_slots(&ir);
+            let roots = crate::testing::root_slots::bound_slots(body);
             for field in ["receiver=", "owner="] {
                 let slot = format!(
                     "%{}",
@@ -743,7 +751,7 @@ mod tests {
                 );
                 assert!(
                     roots.contains_key(&slot)
-                        || ir.contains(&format!("{slot} = alloca ptr addrspace(1)")),
+                        || body.contains(&format!("{slot} = alloca ptr addrspace(1)")),
                     "{mode}: {field}{slot} must be a statepoint root"
                 );
             }

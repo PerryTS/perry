@@ -570,23 +570,39 @@ mod tests {
         assert_eq!(crc32_bytes_with_seed(b"", 0), 0);
     }
 
+    // A one-shot has a write completion and a separately queued final flush.
+    // Drain the real event-loop phases; one check phase cannot settle both.
+    fn pump_dispatch_callbacks() {
+        for _ in 0..1024 {
+            let micro = perry_runtime::promise::js_promise_run_microtasks();
+            let immediate = perry_runtime::timer::js_event_loop_check_phase();
+            if micro == 0 && immediate == 0 {
+                return;
+            }
+        }
+        panic!("zlib dispatch did not become idle");
+    }
+
     #[test]
     fn external_native_dispatch_routes_async_gzip_callback() {
         let _agent = crate::stream::OwnAgent::enter();
         DISPATCH_CALLBACK_FIRED.with(|fired| fired.set(false));
         DISPATCH_CALLBACK_OK.with(|ok| ok.set(false));
 
-        let callback = alloc_closure(
-            perry_ffi::js_function_info!(record_dispatch_callback, 2; with_declared(2)),
-            0,
-        );
-        assert!(!callback.is_null());
+        let scope = perry_ffi::TransientRootScope::enter();
+        let callback = scope.root_nanbox(f64::from_bits(
+            JsValue::from_object_ptr(alloc_closure(
+                perry_ffi::js_function_info!(record_dispatch_callback, 2; with_declared(2)),
+                0,
+            ))
+            .bits(),
+        ));
 
         let input = alloc_buffer(b"captured zlib export");
         assert!(!input.is_null());
         let args = [
             f64::from_bits(JsValue::from_object_ptr(input).bits()),
-            f64::from_bits(JsValue::from_object_ptr(callback).bits()),
+            callback.get(),
         ];
         let method = b"gzip";
         let result = unsafe {
@@ -594,7 +610,7 @@ mod tests {
         };
 
         assert_eq!(result.to_bits(), JsValue::UNDEFINED.bits());
-        perry_runtime::timer::js_event_loop_check_phase();
+        pump_dispatch_callbacks();
         assert!(DISPATCH_CALLBACK_FIRED.with(Cell::get));
         assert!(DISPATCH_CALLBACK_OK.with(Cell::get));
     }
@@ -640,7 +656,7 @@ mod tests {
         let args = [data.get(), f64::from_bits(options.bits()), callback.get()];
         unsafe {
             js_ext_zlib_native_dispatch(b"gzip".as_ptr(), 4, args.as_ptr(), args.len());
-            perry_runtime::timer::js_event_loop_check_phase();
+            pump_dispatch_callbacks();
         }
         assert!(DISPATCH_CALLBACK_FIRED.with(Cell::get));
     }
@@ -662,6 +678,9 @@ mod tests {
     /// phase. Both threads below act for the primary agent from their own
     /// arenas, as any thread that is not a worker does.
     fn queue_plain_thread_one_shot(run: bool) {
+        // This plain thread retains PRIMARY_AGENT, but still needs the static
+        // shape seed that emitted main and enter_worker_agent normally run.
+        perry_ffi::initialize_runtime_fixture();
         let scope = perry_ffi::TransientRootScope::enter();
         let callback = scope.root_nanbox(f64::from_bits(
             JsValue::from_object_ptr(alloc_closure(
@@ -678,7 +697,7 @@ mod tests {
             js_ext_zlib_native_dispatch(b"gzip".as_ptr(), 4, args.as_ptr(), args.len());
         }
         if run {
-            perry_runtime::timer::js_event_loop_check_phase();
+            pump_dispatch_callbacks();
         }
     }
 

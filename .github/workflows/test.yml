@@ -327,6 +327,7 @@ jobs:
       - name: Release pipeline failure-path regressions
         run: |
           python3 tests/test_release_pipeline.py
+          python3 -m unittest discover -s tests -p 'test_runtime_test_batches.py'
           node --test scripts/publish/platform-visibility.test.mjs
 
       # #11560: the parity harness gave auto-optimize compiles of plain fixtures
@@ -1555,6 +1556,9 @@ jobs:
         # - perry-ui-windows-winui: re-exports perry-ui-windows, so it inherits
         #   the same win32 / webview2-com dependency that won't build on Linux.
         env:
+          # Preserve diagnostics if an FFI panic or signal aborts before libtest
+          # can print its captured failure section. Assertions remain unchanged.
+          RUST_TEST_NOCAPTURE: "1"
           # Rust's Ubuntu target can drive `cc` with `-fuse-ld=lld`; on the
           # shared runner this has repeatedly terminated large test links with
           # SIGBUS. Use the system linker for the cargo-test gate.
@@ -1614,7 +1618,7 @@ jobs:
             # changed suites run in e2e-scoped on PRs, and the complete set
             # runs in cargo-test-perry on the full tier.
             if printf '%s\n' "$scope" | grep -qx 'perry-runtime'; then
-              RUST_TEST_THREADS=1 cargo test -p perry-runtime
+              RUST_TEST_THREADS=1 python3 scripts/runtime_test_batches.py
             fi
             # `cargo test` only builds lib/bin/test targets — NOT the `staticlib`
             # crate-type — so libperry_runtime.a / libperry_stdlib.a are never
@@ -1696,7 +1700,7 @@ jobs:
             # perry-runtime first, single-threaded (process-global state); it is
             # a lib-only crate, so filter to --lib.
             if printf '%s\n' "$scope" | grep -qx 'perry-runtime'; then
-              RUST_TEST_THREADS=1 cargo test --lib -p perry-runtime
+              RUST_TEST_THREADS=1 python3 scripts/runtime_test_batches.py --lib
             fi
             rest="$(printf '%s\n' "$scope" | grep -vx 'perry-runtime' \
               | python3 scripts/ci_test_scope.py --with-tests || true)"
@@ -2292,7 +2296,7 @@ jobs:
       # dev-profile build of a ~340k-line crate.
       - name: perry-runtime unit tests (single-threaded, #7356)
         shell: bash
-        run: RUST_TEST_THREADS=1 cargo test --profile dev --lib -p perry-runtime
+        run: RUST_TEST_THREADS=1 python3 scripts/runtime_test_batches.py --profile dev --lib
 
       - name: Windows runtime regressions against pinned Node
         run: python scripts/run_windows_runtime_regressions.py

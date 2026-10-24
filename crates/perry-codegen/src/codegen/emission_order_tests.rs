@@ -726,8 +726,18 @@ fn retained_source_ranges_preserve_registrations_and_ownership() {
                     "source length must reuse the idle versioned-captures field: {info}"
                 );
                 assert!(
-                    info.contains(&format!("constant {{ {info_type}, i32, i32 }}")),
-                    "ordinary source must reuse the base fields; only the name range follows: {info}"
+                    info.contains(&format!("constant {{ {info_type}, i32, i32, ptr }}")),
+                    "ordinary source must reuse the base fields; the name range and call entry follow: {info}"
+                );
+                let body = info
+                    .split(" = ")
+                    .next()
+                    .unwrap()
+                    .strip_suffix("$info")
+                    .unwrap();
+                assert!(
+                    info.ends_with(&format!("ptr {body}$call_entry }}")),
+                    "the source/name tails must preserve the function's call entry: {info}"
                 );
                 assert!(
                     info.contains(&format!("{global_suffix} to i64")),

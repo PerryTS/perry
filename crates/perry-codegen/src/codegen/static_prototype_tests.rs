@@ -68,6 +68,32 @@ fn nested_evaluation_needs_the_structural_run_once_program_proof() {
 }
 #[test]
 fn run_once_program_proof_is_revoked_by_loader_escape_or_repeated_structure() {
+    // Deferred dynamic-code capability state belongs to a whole compilation
+    // and is shared with parallel lowering. Run this whole-program proof in
+    // a fresh process so unrelated compilation fixtures cannot change it.
+    let child_args = [
+        "--exact",
+        "codegen::static_prototype::tests::run_once_program_proof_is_revoked_by_loader_escape_or_repeated_structure",
+        "--nocapture",
+    ];
+    let is_child = std::env::args()
+        .skip(1)
+        .eq(child_args.iter().map(|arg| arg.to_string()));
+    if !is_child {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(child_args)
+            .output()
+            .unwrap();
+        assert!(String::from_utf8_lossy(&output.stdout).contains("running 1 test"));
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    assert!(!perry_hir::has_deferred_dynamic_code_sites());
     let mut base = module(
         "/base",
         "export class Base { constructor() { this.base = 1; } }",
