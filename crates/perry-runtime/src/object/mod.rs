@@ -1462,7 +1462,11 @@ fn transition_cache_insert(
         entry.slot_idx = slot_idx | (len_marker << 24);
         entry.target_len = target_len;
     });
-    shape_carriers::note_shape_id(prev_shape_id);
+    // Only the target is owned: the predecessor is the lookup key, weak by
+    // design. An entry whose predecessor retires is dropped by
+    // `transition_entry_is_dead`; a retired row is never reissued, so no live
+    // receiver can match it meanwhile. `recompute_after_full_trace` notes the
+    // same set.
     shape_carriers::note_shape_id(target_shape_id);
     if target_len != 0 {
         shapes::note_last_key_parent(target_shape_id, prev_shape_id);

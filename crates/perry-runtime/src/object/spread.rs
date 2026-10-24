@@ -96,8 +96,8 @@ fn learn(
             target_len: keys.count(),
         };
     });
-    shape_carriers::note_shape_id(prefix);
-    shape_carriers::note_shape_id(source);
+    // The prefix and source are the lookup key (weak, death-pruned); only the
+    // target is owned, as for every transition entry.
     shape_carriers::note_shape_id(shape);
 }
 

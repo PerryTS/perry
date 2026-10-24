@@ -77,9 +77,9 @@ pub(crate) fn recompute_after_full_trace() {
     with_transition_cache(|table| unsafe {
         for entry in (*table).iter() {
             if entry.next_keys != 0 {
-                note_shape_id(entry.prev_shape_id);
+                // The same set as `transition_cache_insert` / `spread::learn`:
+                // the target only; predecessor and spread source are weak keys.
                 note_shape_id(entry.target_shape_id);
-                if let Some(source) = spread::source_shape(entry) { note_shape_id(source); }
             }
         }
     });
