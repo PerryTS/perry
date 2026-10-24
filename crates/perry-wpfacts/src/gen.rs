@@ -1442,7 +1442,18 @@ impl<'a> Gen<'a> {
             .map(|(d, _)| d.clone())
             .collect();
         for ((name, _), &(_, t)) in &self.stand_in_fns {
-            let escaped = (self.m.aborted || self.m.is_escaped(t)) && !self.open_fn(t);
+            // An aborted unit is unknown code holding everything it names
+            // (ALI cause 4). It reports what no contract grants unknown code:
+            // the layouts and classes it holds (it may store into them,
+            // above) and a function it may call on a receiver of its own.
+            // A call with ⊤ arguments of a function whose receiver is
+            // unused is granted: an open function runs for any caller
+            // (`open_fn`), a closed one's argument contract is ⊤ for an
+            // aborted caller (the driver's `closed_refs`).
+            let escaped = match self.m.aborted {
+                true => !self.receiver_unused(t),
+                false => self.m.is_escaped(t) && !self.open_fn(t),
+            };
             if escaped || self.m.hard.contains_key(&t) {
                 out.push(format!("fn:{name}"));
             }
@@ -1461,6 +1472,12 @@ impl<'a> Gen<'a> {
         self.stand_in_fc
             .get(&t)
             .is_some_and(|c| c.closed.is_none() && c.lexical_this)
+    }
+
+    /// A stand-in of another unit's function whose contract uses no
+    /// receiver.
+    fn receiver_unused(&self, t: Tok) -> bool {
+        self.stand_in_fc.get(&t).is_some_and(|c| c.lexical_this)
     }
 
     /// Resolve the typed parameters' entry-guard candidates (every class and

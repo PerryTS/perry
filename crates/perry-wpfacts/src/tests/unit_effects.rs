@@ -332,3 +332,91 @@ fn what_a_stored_object_holds_leaves_with_it() {
     let p = field_prims(&u, &["z"], "z");
     assert!(p.is_none_or(|p| p & STR != 0), "{p:?}\n{}", u.dump_text());
 }
+
+/// `m` over the bound (a body called twice, so not module scope, N5) calling
+/// `a`'s exported functions.
+fn aborted_caller() -> String {
+    let mut s = String::from(
+        "import { get, own, Box } from './a';\nfunction big(n: any) {\n  const xs: any[] = [];\n",
+    );
+    for i in 0..400 {
+        s.push_str(&format!("  xs.push({{ k{i}: n, v: [n, {i}] }});\n"));
+    }
+    s.push_str("  xs.push(get(xs[0]));\n  xs.push(own.call(xs[1]));\n  xs.push(new Box(1).take());\n  return xs;\n}\nbig(1);\nbig(2);\n");
+    s
+}
+
+const GRANTED: &str = "export function get(o: any) { return o.k; }\nexport function own(this: any) { return this.k; }\nexport class Box { v: any; constructor(v: any) { this.v = v; } take() { return this.v; } }\n";
+
+fn hirs(mods: &[(&str, &str)]) -> Vec<(String, perry_hir::Module)> {
+    mods.iter()
+        .map(|(name, src)| {
+            let path = format!("{name}.ts");
+            let module = perry_parser::parse_typescript(src, &path).expect("parses");
+            let mut hir = perry_hir::lower_module(&module, name, &path).expect("lowers");
+            for imp in &mut hir.imports {
+                if let Some(n) = imp.source.strip_prefix("./") {
+                    imp.resolved_path = Some(format!("{n}.ts"));
+                }
+            }
+            (path, hir)
+        })
+        .collect()
+}
+
+#[test]
+fn an_aborted_unit_reports_what_no_contract_grants() {
+    // Q1 (XUC, 116-CWL3's rule): an aborted unit calling `get` with ⊤
+    // arguments does what `get`'s contract grants any caller; it may store
+    // into the `Box` instances it holds, and call `own` on a receiver of its
+    // own, which no contract grants: `Box` and `own` are broken, `get` is
+    // not.
+    let m = aborted_caller();
+    let h = hirs(&[("a", GRANTED), ("m", m.as_str())]);
+    let list: Vec<(String, &perry_hir::Module)> = h.iter().map(|(p, m)| (p.clone(), m)).collect();
+    let free = crate::compute_units(&list, &FactsConfig::default());
+    let nodes: Vec<u64> = free
+        .dump_text()
+        .lines()
+        .filter(|l| l.starts_with("# unit "))
+        .map(|l| {
+            l.split("nodes=")
+                .nth(1)
+                .unwrap()
+                .split_whitespace()
+                .next()
+                .unwrap()
+                .parse()
+                .unwrap()
+        })
+        .collect();
+    let big = *nodes.iter().max().unwrap();
+    let cfg = FactsConfig {
+        max_pts: Some(8 * (big / 2)),
+        ..FactsConfig::default()
+    };
+    let u = crate::compute_units(&list, &cfg);
+    let dump = u.dump_text();
+    // The guard held: exactly the caller's unit aborted.
+    let aborted: Vec<&str> = dump
+        .lines()
+        .filter(|l| l.starts_with("# unit ") && l.contains("aborted=true"))
+        .collect();
+    assert_eq!(aborted.len(), 1, "{dump}");
+    assert!(aborted[0].starts_with("# unit m.ts#"), "{dump}");
+    assert!(u.broken.iter().any(|d| d == "a.ts:Box"), "{:?}", u.broken);
+    assert!(
+        !u.broken.iter().any(|d| d == "fn:a.ts:get"),
+        "{:?}",
+        u.broken
+    );
+    assert!(
+        u.broken.iter().any(|d| d == "fn:a.ts:own"),
+        "{:?}",
+        u.broken
+    );
+    // Soundness: `get` reads `o.k` of anything; whole-program agrees.
+    let w = crate::compute(&list, &FactsConfig::default());
+    let s = sites_stronger(&u, &w);
+    assert!(s.is_empty(), "{s:?}\n{dump}");
+}
