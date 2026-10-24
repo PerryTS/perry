@@ -1,0 +1,1 @@
+Keep `Array.prototype.toSorted` inputs rooted while allocating its clone and return the sort helper's live result after a moving collection. A forced-evacuation comparator regression test checks the returned address, sorted copy and unchanged source.
