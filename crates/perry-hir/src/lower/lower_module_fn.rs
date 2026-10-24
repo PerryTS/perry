@@ -327,31 +327,6 @@ fn enable_react_automatic_jsx(module: &mut Module, ctx: &mut LoweringContext) {
     });
 }
 
-fn module_has_strict_mode(ast_module: &ast::Module, source_file_path: &str) -> bool {
-    // Node treats ESM format/package context and any source-text module as
-    // strict even without a directive prologue (#6542).
-    if perry_parser::file_is_es_module_by_format(source_file_path)
-        || ast_module
-            .body
-            .iter()
-            .any(|item| matches!(item, ast::ModuleItem::ModuleDecl(_)))
-    {
-        return true;
-    }
-    for item in &ast_module.body {
-        let ast::ModuleItem::Stmt(stmt) = item else {
-            break;
-        };
-        let Some(directive) = string_directive_stmt_lit(stmt) else {
-            break;
-        };
-        if is_raw_use_strict_directive(directive) {
-            return true;
-        }
-    }
-    false
-}
-
 fn collect_assigned_function_binding_candidates(ast_module: &ast::Module) -> HashSet<String> {
     fn collect_from_stmt(stmt: &ast::Stmt, out: &mut HashSet<String>) {
         match stmt {

@@ -127,8 +127,9 @@ fn native_string_validators_use_canonical_classifier() {
         .expect("source invariant requires Python 3");
     assert!(
         output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stdout)
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
     );
 }
 

@@ -121,12 +121,14 @@ pub(crate) use array_fold::{
 };
 
 mod lower_module_fn;
+mod module_strict;
 mod module_tdz;
 pub use lower_module_fn::{
     lower_module, lower_module_full, lower_module_full_with_platform_globals,
     lower_module_with_class_id, lower_module_with_class_id_and_types,
     lower_module_with_class_id_types_and_seed, lower_module_with_class_id_types_seed_and_entry,
 };
+pub(crate) use module_strict::module_has_strict_mode;
 
 mod lower_expr;
 pub(crate) use lower_expr::{

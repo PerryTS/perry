@@ -369,7 +369,13 @@ pub(crate) fn set_intrinsic_data_prop(
     value: f64,
     attrs: super::super::PropertyAttrs,
 ) {
-    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    // These linker-shared images are also the executable's literal keys,
+    // including when native bootstrap precedes its literal registration.
+    let key = match name {
+        "constructor" => super::super::runtime_layouts::BP_ATOM_CONSTRUCTOR.string,
+        "prototype" => super::super::runtime_layouts::BP_ATOM_PROTOTYPE.string,
+        _ => crate::string::intern_ascii_literal(name.as_bytes()),
+    };
     super::super::define_builtin_data_property(obj, key, value, name.to_string(), attrs);
 }
 
@@ -877,8 +883,12 @@ fn build_generator_tower(
     );
     // Realm intrinsics, built once: born old and never-move (O3), so the
     // method sites that answer from them are admitted before any minor.
-    let proto = crate::object::object_alloc_prototype_old(0, 0); // %Generator% / %AsyncGenerator%
-    let gen_proto = crate::object::object_alloc_prototype_old(0, 0); // %Generator.prototype%
+    // Use the ordinary intrinsic installer with only the room these fixed
+    // holders need. Old allocations cannot return spare capacity at fit time;
+    // the installed keys and final shape still own the live inline bound.
+    let proto = super::proto_room::alloc_builtin_prototype_with_room(3);
+    let gen_proto =
+        super::proto_room::alloc_builtin_prototype_with_room(if is_async { 5 } else { 6 });
     if ctor.is_null() || proto.is_null() || gen_proto.is_null() {
         return;
     }
@@ -932,9 +942,25 @@ fn build_generator_tower(
             crate::fn_info!(generator_proto_throw_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         )
     };
-    install_proto_method(gen_proto, "next", next_info, 1);
-    install_proto_method(gen_proto, "return", return_info, 1);
-    install_proto_method(gen_proto, "throw", throw_info, 1);
+    for (name, info, key) in [
+        (
+            "next",
+            next_info,
+            super::super::runtime_layouts::BP_ATOM_NEXT.string,
+        ),
+        (
+            "return",
+            return_info,
+            super::super::runtime_layouts::BP_ATOM_RETURN.string,
+        ),
+        (
+            "throw",
+            throw_info,
+            super::super::runtime_layouts::BP_ATOM_THROW.string,
+        ),
+    ] {
+        install_proto_method_with_key(gen_proto, name, info, 1, key);
+    }
     // Spec: `%AsyncGenerator.prototype%` inherits `[Symbol.asyncIterator]` from
     // `%AsyncIteratorPrototype%` and `%Generator.prototype%` inherits
     // `[Symbol.iterator]` from `%IteratorPrototype%` — both returning `this`.
@@ -982,6 +1008,12 @@ fn build_generator_tower(
     }
     set_intrinsic_to_string_tag(gen_proto, inst_tag);
 
+    // SAFETY: both holders are live and unexposed in this no-move window.
+    unsafe {
+        super::proto_room::fit_builtin_prototype(proto);
+        super::proto_room::fit_builtin_prototype(gen_proto);
+    }
+
     // SAFETY: `proto` is the live, just-built %(Async)GeneratorFunction.prototype%.
     unsafe {
         crate::object::proto_validity::assign_intrinsic_prototype_serial(
@@ -1021,3 +1053,7 @@ pub(crate) fn ensure_generator_intrinsics() {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "generator_shape_tests.rs"]
+mod generator_shape_tests;

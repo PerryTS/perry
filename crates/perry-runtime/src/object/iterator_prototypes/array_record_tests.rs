@@ -372,7 +372,7 @@ fn array_record_fallback_gets_inherited_iterator_after_prototype_delete() {
 }
 
 #[test]
-fn array_record_next_key_survives_intern_collision() {
+fn array_record_image_next_key_survives_intern_collision() {
     unsafe {
         let _stable = crate::gc::GcSuppressScope::new();
         let (array, _, _) = fixture();
@@ -395,10 +395,14 @@ fn array_record_next_key_survives_intern_collision() {
             crate::string::intern_ascii_literal(b"next") as *mut crate::StringHeader
         )
         .bits();
-        assert_ne!(
-            old_key, new_key,
-            "exercise atom eviction, not the same pointer"
-        );
+        // The generator protocol also uses "next", so it is now a shared
+        // image atom. A colliding weak literal must not replace its identity.
+        let image_key = JSValue::string_ptr(
+            super::super::runtime_layouts::BP_ATOM_NEXT.string as *mut crate::StringHeader,
+        )
+        .bits();
+        assert_eq!(old_key, image_key);
+        assert_eq!(new_key, image_key);
         assert_eq!(crate::array::js_array_record_needs_iterator(array), 0);
     }
 }

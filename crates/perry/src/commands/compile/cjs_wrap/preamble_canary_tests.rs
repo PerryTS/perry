@@ -284,28 +284,28 @@ fn computed_relative_requires_are_joined_against_the_module_dir() {
 /// error, which is exactly how #9412 survived in the first place.
 #[test]
 fn the_wrap_still_binds_the_local_the_cjs_entry_recogniser_keys_on() {
-    let local = perry_codegen::cjs_wrap_create_require_local();
     let path = Path::new("/tmp/perry-canary/node_modules/dep/index.js");
-    let wrapped = wrap_commonjs_for_target(CJS_FIXTURE, path, None, false, None);
-
-    // Anti-vacuity: the template must still emit the binding at all.
-    assert!(
-        wrapped.contains(local),
-        "the CJS wrap no longer binds `{local}`.\n\
-         `is_cjs_wrapped_module` in perry-codegen/src/collectors/cjs_scaffolding.rs \
-         keys on that local to tell a CommonJS entry from a hand-written ES module; \
-         without it every CommonJS entry runs `process.nextTick` after the promise \
-         queue again (#9412). Rename it in both places, or replace the recogniser."
-    );
-
-    let hir = wrap_and_lower(CJS_FIXTURE);
-    assert!(
-        perry_codegen::module_is_cjs_wrapped(&hir),
-        "a wrapped CommonJS module is no longer recognised as one. The wrap's \
-         synthetic `node:module` import survived the source, but not lowering — \
-         compare `is_cjs_wrapped_module`'s specifier match against what \
-         `perry_hir::lower_module` produces for the wrap's import prefix."
-    );
+    let sloppy = CJS_FIXTURE.strip_prefix("\"use strict\";\n").unwrap();
+    for (source, local, strict) in [
+        (CJS_FIXTURE, "__perry_cjs_strict_require", true),
+        (
+            sloppy,
+            perry_codegen::cjs_wrap_create_require_local(),
+            false,
+        ),
+    ] {
+        let wrapped = wrap_commonjs_for_target(source, path, None, false, None);
+        assert!(
+            wrapped.contains(&format!("createRequire as {local}")),
+            "the generated CommonJS binding must match its strictness mode: {local}"
+        );
+        let hir = wrap_and_lower(source);
+        assert!(
+            perry_codegen::module_is_cjs_wrapped(&hir),
+            "both CommonJS modes must keep CommonJS nextTick ordering"
+        );
+        assert_eq!(hir.init_is_strict, strict);
+    }
 }
 
 /// Negative control: a genuine ES module must NOT be mistaken for a wrapped

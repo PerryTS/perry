@@ -32,12 +32,7 @@ impl<'a> Gen<'a> {
         spec: &str,
     ) -> Option<NodeId> {
         let module = self.modules[mi as usize].1;
-        let wrapped = module.imports.iter().any(|i| {
-            (i.source == "node:module" || i.source == "module")
-                && i.specifiers.iter().any(
-                    |s| matches!(s, ImportSpecifier::Named { local, .. } if local == "__perry_cjs_create_require"),
-                )
-        });
+        let wrapped = module.is_commonjs_wrap();
         if !wrapped {
             if self.m.explain {
                 eprintln!("perry: wpfacts explain: static require {spec:?}: module not CJS-wrapped (imports {:?})", module.imports.iter().map(|i| i.source.clone()).collect::<Vec<_>>());

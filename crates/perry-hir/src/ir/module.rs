@@ -294,7 +294,7 @@ impl Module {
 
     /// True for a CommonJS file the driver rewrote into an ES module (the
     /// CJS-to-ESM wrap): it imports the compiler-owned
-    /// `createRequire as __perry_cjs_create_require` preamble. Its body runs
+    /// `createRequire` preamble (with the sloppy or strict alias). Its body runs
     /// inside `const _cjs = (function(){…})()`, and what it exports are
     /// properties of `module.exports`, not bindings of its own.
     pub fn is_commonjs_wrap(&self) -> bool {
@@ -306,7 +306,8 @@ impl Module {
                 == "module"
                 && import.specifiers.iter().any(|specifier| {
                     matches!(specifier, crate::ir::ImportSpecifier::Named { imported, local }
-                        if imported == "createRequire" && local == "__perry_cjs_create_require")
+                        if imported == "createRequire" && matches!(local.as_str(),
+                            "__perry_cjs_create_require" | "__perry_cjs_strict_require"))
                 })
         })
     }
