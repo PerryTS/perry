@@ -6,9 +6,12 @@
 //! external static callers retain their own hook/proxy/primitive preparation.
 use super::*;
 
-/// Heap-backed builtins whose reserved ids otherwise dispatch by native brand.
+/// Builtins whose heap objects and subclasses need a prototype walk before brand dispatch.
 pub(super) fn heap_builtin_name(class_id: u32) -> Option<&'static str> {
     Some(match class_id {
+        0xFFFF0060 => "ReadableStream",
+        0xFFFF0061 => "WritableStream",
+        0xFFFF0062 => "TransformStream",
         crate::native_class_ids::EVENT_TARGET => "EventTarget",
         crate::native_class_ids::EVENT => "Event",
         crate::native_class_ids::CUSTOM_EVENT => "CustomEvent",

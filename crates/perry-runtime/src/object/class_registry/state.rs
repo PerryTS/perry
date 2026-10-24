@@ -1451,6 +1451,9 @@ fn class_parent_prototype_bits(value: f64) -> Option<u64> {
 /// fallback the same way.
 pub(crate) fn reserved_native_parent_prototype_bits(parent_id: u32) -> Option<u64> {
     let web = match parent_id {
+        0xFFFF0060 => Some("ReadableStream"),
+        0xFFFF0061 => Some("WritableStream"),
+        0xFFFF0062 => Some("TransformStream"),
         crate::native_class_ids::EVENT_TARGET => Some("EventTarget"),
         crate::native_class_ids::EVENT => Some("Event"),
         crate::native_class_ids::CUSTOM_EVENT => Some("CustomEvent"),
