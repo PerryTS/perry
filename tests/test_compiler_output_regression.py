@@ -474,55 +474,81 @@ def numeric_array_native_records():
 
 
 def numeric_arrays_inline_ir():
-    # Repsel 4a.1/4a.2 shapes: canonical pushes take the inline store + length
-    # bump (no guarded helper), the dense numeric read arm loads the raw slot,
-    # and a runtime-checked RHS is canonicalized before its direct store.
+    # Compact current lowering witness: inline stores maintain the dense-prefix
+    # frontier, reads admit loaded bits, and numeric writes canonicalize NaN.
     return """
-define i32 @main() {
+define double @numericArraysChecksum(ptr %header, ptr %slot, i32 %index, double %rhs) {
 entry:
   br label %apush.inbounds.0
 
 apush.inbounds.0:
-  %lp = inttoptr i64 1 to ptr
-  %len = load i32, ptr %lp
-  %paddr = add i64 1, 8
-  %pp = inttoptr i64 %paddr to ptr
-  store double 2.0, ptr %pp, align 8
-  %newlen = add i32 %len, 1
-  store i32 %newlen, ptr %lp, align 4
-  br label %apush.merge.0
+  %len = load i32, ptr %header
+  store double 8.0, ptr %slot
+  %next = add i32 %len, 1
+  store i32 %next, ptr %header
+  %frontier = icmp eq i32 %len, 0
+  br i1 %frontier, label %ek.frontier.raise.1, label %ek.frontier.join.2
 
-apush.merge.0:
-  %g = call i32 @js_typed_feedback_numeric_array_index_get_guard(i64 1, double 0.0, double 0.0, i32 0, i32 1)
-  %gc = icmp ne i32 %g, 0
-  br i1 %gc, label %bidx.num.fast.1, label %bidx.num.fallback.2
+ek.frontier.raise.1:
+  br label %ek.frontier.join.2
 
-bidx.num.fast.1:
-  %addr = add i64 1, 8
-  %p = inttoptr i64 %addr to ptr
-  %v = load double, ptr %p, align 8
-  br label %bidx.num.merge.3
+ek.frontier.join.2:
+  br label %bidx.num.guard.deref.3
 
-bidx.num.fallback.2:
-  br label %bidx.num.merge.3
+bidx.num.guard.deref.3:
+  %kind = load i32, ptr %header
+  %array = icmp eq i32 %kind, 1
+  br i1 %array, label %bidx.num.guard.prefix.4, label %bidx.num.cold.exact_args.7
 
-bidx.num.merge.3:
-  %sg = call i32 @js_typed_feedback_numeric_array_index_set_guard(i64 1, double 0.0, i32 0, double 3.0, i32 1)
-  %sc = icmp ne i32 %sg, 0
-  br i1 %sc, label %idxset.bounded_numeric_fast.4, label %idxset.bounded_numeric_merge.5
+bidx.num.guard.prefix.4:
+  br label %bidx.num.guard.backing.5
 
-idxset.bounded_numeric_fast.4:
-  %sval = fadd double 3.0, 0.0
-  %saddr = add i64 1, 8
-  %sp = inttoptr i64 %saddr to ptr
-  %sraw = call double @js_array_numeric_value_to_raw_f64(double %sval)
-  store double %sraw, ptr %sp, align 8
-  br label %idxset.bounded_numeric_merge.5
+bidx.num.guard.backing.5:
+  %capacity = load i32, ptr %header
+  %inside = icmp ult i32 %index, %capacity
+  br i1 %inside, label %bidx.num.fast.6, label %bidx.num.cold.exact_args.7
 
-idxset.bounded_numeric_merge.5:
-  ret i32 0
+bidx.num.fast.6:
+  %bits = load i64, ptr %slot
+  %value = bitcast i64 %bits to double
+  %magnitude = and i64 %bits, 9223372036854775807
+  %numeric = icmp ule i64 %magnitude, 9221401712017801215
+  br i1 %numeric, label %bidx.num.merge.8, label %bidx.num.cold.exact_args.7
+
+bidx.num.cold.exact_args.7:
+  br label %bidx.num.merge.8
+
+bidx.num.merge.8:
+  br label %idxset.guard.deref.9
+
+idxset.guard.deref.9:
+  %write_kind = load i32, ptr %header
+  %write_array = icmp eq i32 %write_kind, 1
+  %rhs_bits = bitcast double %rhs to i64
+  %rhs_mag = and i64 %rhs_bits, 9223372036854775807
+  %rhs_numeric = icmp ult i64 %rhs_mag, 9221401712017801216
+  %write_ok = and i1 %write_array, %rhs_numeric
+  br i1 %write_ok, label %idxset.guarded.10, label %idxset.guard.cold.11
+
+idxset.guarded.10:
+  br label %idxset.inbounds.kind.canon.12
+
+idxset.guard.cold.11:
+  ret double 0.0
+
+idxset.inbounds.kind.canon.12:
+  %nan = fcmp uno double %rhs, %rhs
+  %canonical = bitcast i64 9221120237041090560 to double
+  %stored = select i1 %nan, double %canonical, double %rhs
+  br label %idxset.inbounds.kind.done.13
+
+idxset.inbounds.kind.done.13:
+  %result = phi double [ %stored, %idxset.inbounds.kind.canon.12 ]
+  store double %result, ptr %slot
+  ret double %result
 }
 """
+
 
 
 def h1_equivalence_native_records():
@@ -2147,12 +2173,7 @@ idxset.bounded_numeric_merge.5:
         )
 
     def test_generic_native_rep_checks_require_configured_records(self):
-        # The numeric indexed read is inlined: a guarded fast block computes the
-        # element pointer (inttoptr), performs a direct `load double`, and
-        # canonicalizes NaN payloads (repsel 4a.2) instead of calling
-        # js_array_numeric_get_f64_unboxed. The indexed write stores the
-        # canonical value inline after its guard, and canonical pushes take the
-        # inline store + length bump (repsel 4a.1).
+        # Native-rep records and the current inline lowering must agree.
         ir = numeric_arrays_inline_ir()
         records = numeric_array_native_records()
         report = HARNESS.verify_artifacts(
@@ -2165,6 +2186,30 @@ idxset.bounded_numeric_merge.5:
             native_reps=[{"records": records}],
         )
         self.assertEqual(report["status"], "pass", report["errors"])
+
+    def test_numeric_array_gate_rejects_missing_operations(self):
+        ir = numeric_arrays_inline_ir()
+        mutants = [
+            ("store double 8.0", "store double 9.0", "numeric_array_push_inlines_store"),
+            ("store i32 %next", "; removed store i32 %next", "numeric_array_push_inlines_store"),
+            ("icmp ult i32 %index", "icmp ugt i32 %index", "numeric_array_uses_unboxed_get"),
+            ("icmp ule i64 %magnitude", "icmp uge i64 %magnitude", "numeric_array_uses_unboxed_get"),
+            ("9221120237041090560", "0", "numeric_array_uses_unboxed_set"),
+            ("store double %result", "store double 0.0", "numeric_array_uses_unboxed_set"),
+        ]
+        for old, new, expected in mutants:
+            with self.subTest(operation=old):
+                self.assertEqual(ir.count(old), 1)
+                report = HARNESS.verify_artifacts(
+                    workload="numeric_arrays",
+                    ir_before=ir.replace(old, new),
+                    ir_after=ir,
+                    assembly=GOOD_ASM,
+                    benchmark={"runs": [{"exit_code": 0, "stdout_first": "25\n"}]},
+                    vectorization={"vectorized_count": 0},
+                    native_reps=[{"records": numeric_array_native_records()}],
+                )
+                self.assertEqual({error.split(":", 1)[0] for error in report["errors"]}, {expected})
 
     def test_stdout_checks_require_benchmark_data(self):
         ir = numeric_arrays_inline_ir()
