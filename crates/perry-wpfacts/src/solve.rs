@@ -450,6 +450,22 @@ impl Model {
                 self.store_into(d, Key::Named(a), n, site);
             }
         }
+        // DECISIONS 94: a named field of an array whose elements are a cell.
+        if let Some(&seed) = self.cell_arrs.get(&t) {
+            self.edge(seed, n);
+        }
+        // DECISIONS 92: a field of a program object no cell describes.
+        if self.program_cells {
+            if let Some(&(name, _)) = self.program_objs.iter().find(|(_, o)| *o == t) {
+                if !self.program_late.contains(&name) {
+                    self.program_late.push(name);
+                }
+                self.add_top(n, |_| "program object field named after the unit boundary".into());
+                self.add_prim(n, prim::ALL);
+                let r = self.reason("stored into a program object field named after the unit boundary");
+                self.sink_node(n, r);
+            }
+        }
         n
     }
 
@@ -551,8 +567,17 @@ impl Model {
                     let fp = self.field(ftok, a);
                     self.edge(fp, n);
                 }
-                // Object.create / literal prototypes are added by gen.
-                _ => self.add_tok(n, objproto),
+                // Object.create / literal prototypes are added by gen. A
+                // receiver token or marker has its classes' (DECISIONS 59).
+                _ => match self.virt_protos.get(&t).cloned() {
+                    Some(ps) => {
+                        for p in ps {
+                            let pt = self.tok(TokKind::Proto(p));
+                            self.add_tok(n, pt);
+                        }
+                    }
+                    None => self.add_tok(n, objproto),
+                },
             },
             TokKind::Proto(tm) => match (
                 self.tmpls[tm as usize].parent,
@@ -716,11 +741,45 @@ impl Model {
                 tmpl,
                 reason,
                 statics,
+                this,
             } => {
                 for &t in toks {
                     let own_class = statics && self.toks[t as usize] == TokKind::ClassObj(tmpl);
-                    if self.tmpl_of(t) != Some(tmpl) && !own_class {
+                    if self.tmpl_of(t) == Some(tmpl) || own_class {
+                        // DECISIONS 107: what this unit runs the method on.
+                        if !statics && this != u32::MAX {
+                            self.this_admitted.push((this, t));
+                        }
+                        continue;
+                    }
+                    let admitted = self.admit_this(t, tmpl, this, reason);
+                    if admitted {
+                        self.this_admitted.push((this, t));
+                    }
+                    if !admitted {
                         self.escape(t, reason);
+                        // A receiver the method's contract does not admit:
+                        // its unit runs it on a value it never saw, so the
+                        // contract is reported (census, DECISIONS 85).
+                        if let Some(&ft) = self.this_contract_fns.get(this as usize) {
+                            self.escape(ft, reason);
+                        }
+                    }
+                }
+            }
+            Cons::OverrideThis { tmpl, key, reason } => {
+                for &t in toks {
+                    if self.recv_class.get(&t) == Some(&tmpl) {
+                        continue;
+                    }
+                    match self.param_marker.get(&t) {
+                        Some(&(f, u32::MAX)) if !self.reach_marker.contains(&t) => {
+                            let ks = self.this_calls.entry(f).or_default();
+                            if !ks.contains(&key) {
+                                ks.push(key);
+                            }
+                        }
+                        _ => { self.escape(t, reason) }
                     }
                 }
             }
@@ -1218,6 +1277,15 @@ impl Model {
     }
 
     pub(crate) fn store_into(&mut self, t: Tok, key: Key, src: NodeId, site: SiteId) {
+        {
+            self.virt_revoke(
+                t,
+                match key {
+                    Key::Named(a) => Some(a),
+                    Key::Any => None,
+                },
+            );
+        }
         // A program-owned global: an ordinary field of the global object.
         if let (TokKind::Builtin(BuiltinNs::GlobalThis), Key::Named(a)) =
             (&self.toks[t as usize], key)
@@ -1274,6 +1342,50 @@ impl Model {
                 self.store_into(i, key, src, site);
             }
         }
+        // A store into a published method's receiver marker is a key of its
+        // receiver contract, not an escape (DECISIONS 57): the reader puts an
+        // unknown value under the key of the instance it admits. The value
+        // goes where the receiver's other values take it (the receiver
+        // token's log, ⊤ beside it).
+        if let Some(&(f, u32::MAX)) = self.param_marker.get(&t) {
+            if !self.reach_marker.contains(&t) {
+                match key {
+                    Key::Named(a) => {
+                        let ks = self.this_stores.entry(f).or_default();
+                        if !ks.contains(&a) {
+                            ks.push(a);
+                        }
+                    }
+                    Key::Any => {
+                        self.this_open.insert(f);
+                    }
+                }
+                return;
+            }
+        }
+        // The same for a contract function's parameter (DECISIONS 84): the
+        // reader stores an unknown value under the key of its argument. The
+        // stored value goes into another unit's object: it escapes. A
+        // closed function's callers' values are beside its marker: the
+        // store reaches them there (decision 13).
+        if let Some(&(f, i)) = self.param_marker.get(&t) {
+            if !self.reach_marker.contains(&t) && !self.closed_params.contains_key(&f) {
+                match key {
+                    Key::Named(a) => {
+                        let ks = self.param_stores.entry((f, i)).or_default();
+                        if !ks.contains(&a) {
+                            ks.push(a);
+                        }
+                    }
+                    Key::Any => {
+                        self.param_open.insert((f, i));
+                    }
+                }
+                let r = self.reason("stored into another unit's value");
+                self.sink_node(src, r);
+                return;
+            }
+        }
         self.mark_use(t, crate::model::MARK_ESCAPE);
         // A parameter marker stands for another unit's value (design §11.2):
         // it has no fields in this unit. The store is its contract's escape
@@ -1319,10 +1431,10 @@ impl Model {
         };
         if let Some(tm) = tm.filter(|tm| self.foreign.contains_key(tm)) {
             match key {
+                // The stored value is published with the effect, checked
+                // as a published value (`Gen::contract_check`, §17.16 (c)).
                 Key::Named(a) if effect => {
                     self.foreign_stores.insert((tm, a, src));
-                    let r = self.reason("stored into another unit's object");
-                    self.sink_node(src, r);
                 }
                 _ => {
                     self.foreign_written.insert(tm);
@@ -1333,6 +1445,18 @@ impl Model {
             let r = self.reason("ToNumber of an array length store");
             self.cons(src, Cons::Implicit { reason: r });
             return;
+        }
+        // DECISIONS 94: a named key stored into an array other units hold.
+        if matches!(key, Key::Named(_)) && self.global_cells {
+            if self.cell_arrs.contains_key(&t) {
+                self.arr_named.insert(t);
+                let r = self.reason("stored into a named field of an array shared with other units");
+                self.sink_node(src, r);
+            } else if matches!(self.toks[t as usize], TokKind::Obj(tm, _)
+                if matches!(self.tmpls[tm as usize].kind, TmplKind::Arr { .. }))
+            {
+                self.arr_named_srcs.entry(t).or_default().push(src);
+            }
         }
         match key {
             Key::Named(a) => {
@@ -1454,6 +1578,225 @@ impl Model {
         }
     }
 
+    /// `t`, a receiver token or a receiver marker, stands for instances of
+    /// `classes` (DECISIONS 59): its prototypes are theirs, and a named load
+    /// on it finds the chain's value; the own field (unknown for these
+    /// tokens) only once the key may be an own key of such an instance
+    /// (`virt_load`).
+    pub(crate) fn register_virt(&mut self, t: Tok, classes: &[TmplId]) {
+        let ps = self.virt_protos.entry(t).or_default();
+        let fresh: Vec<TmplId> = classes
+            .iter()
+            .copied()
+            .filter(|c| !ps.contains(c))
+            .collect();
+        ps.extend(fresh.iter().copied());
+        for &c in &fresh {
+            self.virt_by_class.entry(c).or_default().push(t);
+        }
+        if let Some(&pn) = self.proto_node.get(&t) {
+            for p in fresh {
+                let pt = self.tok(TokKind::Proto(p));
+                self.add_tok(pn, pt);
+            }
+        }
+    }
+
+    /// The load node of key `a` on receiver token / marker `t` (`None`: `t`
+    /// is neither). It holds the chain's values, and the own field once `a`
+    /// may be an own key of an instance `t` stands for: the class code
+    /// stores `a` (or a computed key) into one, uses a hard operation on one
+    /// or lets one escape; a subclass of another unit defines `a` (census,
+    /// `override_keys`); an accessor on the chain may answer it.
+    pub(crate) fn virt_load(&mut self, t: Tok, a: Atom) -> Option<NodeId> {
+        let classes = self.virt_protos.get(&t)?.clone();
+        if let Some(&n) = self.virt_nodes.get(&(t, a)) {
+            return Some(n);
+        }
+        let n = self.node_l("virt-load");
+        self.virt_nodes.insert((t, a), n);
+        self.virt_tok_keys.entry(t).or_default().push(a);
+        let cv = self.cv(t, Key::Named(a));
+        self.edge(cv, n);
+        let own = self.virt_own(&classes, a);
+        if own {
+            let f = self.field(t, a);
+            self.edge(f, n);
+        }
+        Some(n)
+    }
+
+    /// Key `a` may be an own key of the instances a receiver of `classes`
+    /// stands for in this unit's view: the class code stores it, uses a
+    /// hard operation on one or lets one escape, or an accessor on the
+    /// chain may answer it.
+    fn virt_own(&self, classes: &[TmplId], a: Atom) -> bool {
+        classes.iter().any(|&p| {
+            self.virt_open.contains(&p)
+                || self.virt_revoked.contains(&(p, a))
+                || self.chain_accessor_key(p, a)
+        })
+    }
+
+    /// The classes of receiver token / marker `t` that another unit's
+    /// subclass overrides `a` of (census, `override_keys`).
+    pub(crate) fn virt_overriders(&mut self, t: Tok, a: Atom) -> Vec<TmplId> {
+        let star = self.atom(crate::STAR_KEY);
+        let Some(classes) = self.virt_protos.get(&t) else {
+            return Vec::new();
+        };
+        classes
+            .iter()
+            .copied()
+            .filter(|p| {
+                self.override_keys
+                    .get(p)
+                    .is_some_and(|v| v.contains(&a) || v.contains(&star))
+            })
+            .collect()
+    }
+
+    /// The callee of `t.a(...)` beyond the chain, on receiver token /
+    /// marker `t` (DECISIONS 97): when `a` is own only because another
+    /// unit's subclass defines it, the call runs that subclass's method on
+    /// a subclass instance, i.e. the override token of each such class
+    /// (`override_node`); else nothing (`virt_load` holds the own field).
+    pub(crate) fn virt_call(&mut self, t: Tok, a: Atom) -> Vec<NodeId> {
+        let classes = self.virt_protos.get(&t).cloned().unwrap_or_default();
+        if self.virt_own(&classes, a) {
+            return Vec::new();
+        }
+        let ps = self.virt_overriders(t, a);
+        ps.into_iter().map(|p| self.override_node(p, a)).collect()
+    }
+
+    /// The node holding the override token of key `a` of published class
+    /// `tm` (DECISIONS 97): the function another unit's subclass defines
+    /// under `a`, as a call through a receiver of `tm` sees it. That unit
+    /// runs it unseen: the arguments escape, the result is unknown, and its
+    /// receiver is checked (`Cons::OverrideThis`).
+    fn override_node(&mut self, tm: TmplId, a: Atom) -> NodeId {
+        if let Some(&n) = self.override_fns.get(&(tm, a)) {
+            return n;
+        }
+        let fx = self.funcs.len() as FnIdx;
+        let tok = self.tok(TokKind::Func(fx, NO_CTX));
+        let this = self.node_l("this(override)");
+        let ret = self.node_l("ret(override)");
+        let args_all = self.node_l("args(override)");
+        let name = format!(
+            "<override {} of {}>",
+            self.atoms[a as usize], self.tmpls[tm as usize].display
+        );
+        self.funcs.push(FuncInfo {
+            module: 0,
+            func_id: u32::MAX,
+            name,
+            params: Vec::new(),
+            rest: None,
+            this,
+            ret,
+            args_all,
+            has_arguments: true,
+            token: tok,
+            ctor_of: None,
+            lexical_this: false,
+            no_summary: true,
+            gen_step: false,
+            forwards_super: false,
+            parent: NO_FN,
+        });
+        let r = self.reason("passed to an unknown function");
+        self.sink_node(args_all, r);
+        self.add_top(ret, |_| "result of an unknown function".to_string());
+        self.add_prim(ret, prim::ALL);
+        let rt = self.reason("receiver of a call of an unknown function value");
+        self.cons(
+            this,
+            Cons::OverrideThis {
+                tmpl: tm,
+                key: a,
+                reason: rt,
+            },
+        );
+        let n = self.node_l("override-callee");
+        self.add_tok(n, tok);
+        self.override_fns.insert((tm, a), n);
+        n
+    }
+
+    fn chain_accessor_key(&self, tm: TmplId, a: Atom) -> bool {
+        let mut cur = Some(tm);
+        while let Some(c) = cur {
+            let t = &self.tmpls[c as usize];
+            if t.accessor_keys.contains(&a) || t.has_computed_members {
+                return true;
+            }
+            cur = t.parent;
+        }
+        false
+    }
+
+    /// `t` gains own key `a` (`None`: any key): for each published class
+    /// whose instances `t` is or stands for, the key is open on its
+    /// receiver token and markers from now on (`virt_load`).
+    pub(crate) fn virt_revoke(&mut self, t: Tok, key: Option<Atom>) {
+        if self.virt_by_class.is_empty() {
+            return;
+        }
+        let classes: Vec<TmplId> = match self.virt_protos.get(&t) {
+            Some(ps) => ps.clone(),
+            None => {
+                let Some(tm) = self.tmpl_of(t) else { return };
+                let mut out = Vec::new();
+                let mut work = vec![tm];
+                let mut seen: Vec<TmplId> = Vec::new();
+                while let Some(c) = work.pop() {
+                    if seen.contains(&c) {
+                        continue;
+                    }
+                    seen.push(c);
+                    if self.virt_by_class.contains_key(&c) {
+                        out.push(c);
+                    }
+                    let tp = &self.tmpls[c as usize];
+                    work.extend(tp.parent);
+                    work.extend(tp.parent_links.iter().copied());
+                }
+                out
+            }
+        };
+        for p in classes {
+            if self.virt_open.contains(&p) {
+                continue;
+            }
+            let opened: Option<Atom> = match key {
+                Some(a) => {
+                    if !self.virt_revoked.insert((p, a)) {
+                        continue;
+                    }
+                    Some(a)
+                }
+                None => {
+                    self.virt_open.insert(p);
+                    None
+                }
+            };
+            for vt in self.virt_by_class.get(&p).cloned().unwrap_or_default() {
+                let keys: Vec<Atom> = match opened {
+                    Some(a) => vec![a],
+                    None => self.virt_tok_keys.get(&vt).cloned().unwrap_or_default(),
+                };
+                for a in keys {
+                    if let Some(&n) = self.virt_nodes.get(&(vt, a)) {
+                        let f = self.field(vt, a);
+                        self.edge(f, n);
+                    }
+                }
+            }
+        }
+    }
+
     /// Is `owner` `tm` or an ancestor of it: the static parent, then the
     /// parents `super()` ran (`parent_links`, §17.2).
     pub(crate) fn has_ancestor(&self, tm: TmplId, owner: TmplId) -> bool {
@@ -1468,6 +1811,131 @@ impl Model {
             }
             seen.push(c);
             let t = &self.tmpls[c as usize];
+            work.extend(t.parent);
+            work.extend(t.parent_links.iter().copied());
+        }
+        false
+    }
+
+    /// `t` reaches `this` of another unit's method of class `tmpl` whose
+    /// receiver contract is `this` (DECISIONS 57): admitted when `t` is an
+    /// instance of a subclass of `tmpl` and the method neither uses its
+    /// receiver beyond reading it nor reads a key a subclass accessor may
+    /// answer; then the method's published effects happen to `t` (the
+    /// stored keys hold unknown values, what it reaches is escaped or
+    /// touched as published). False: `t` escapes.
+    pub(crate) fn admit_this(&mut self, t: Tok, tmpl: TmplId, this: u32, reason: u32) -> bool {
+        use crate::model::{MARK_ESCAPE, MARK_READ, MARK_TOUCH};
+        let Some(c) = self.this_contracts.get(this as usize).cloned() else {
+            return false;
+        };
+        if c.uses & (MARK_ESCAPE | MARK_TOUCH) != 0 {
+            return false;
+        }
+        // A published receiver token stands for its class's instances; a
+        // receiver marker for its classes' (DECISIONS 59): the method runs
+        // on them, so its published effects on its receiver are the
+        // marker's own (they compose, as arguments do).
+        let marker = matches!(self.param_marker.get(&t), Some(&(_, u32::MAX)))
+            && !self.reach_marker.contains(&t);
+        let classes: Vec<TmplId> = match self.toks[t as usize] {
+            _ if marker => self.virt_protos.get(&t).cloned().unwrap_or_default(),
+            _ if self.recv_class.contains_key(&t) => vec![self.recv_class[&t]],
+            TokKind::Obj(tm, _) if tm != tmpl => vec![tm],
+            _ => Vec::new(),
+        };
+        if classes.is_empty()
+            || classes
+                .iter()
+                .any(|&tm| !self.has_ancestor(tm, tmpl) || (!marker && tm == tmpl))
+        {
+            return false;
+        }
+        // A read may run a subclass getter unseen by the method's unit.
+        if c.uses & MARK_READ != 0 && classes.iter().any(|&tm| self.chain_has_accessors(tm, tmpl)) {
+            return false;
+        }
+        if marker {
+            let (f, _) = self.param_marker[&t];
+            self.mark_use(t, c.uses);
+            if let Some(&r) = self.marker_reach.get(&t) {
+                self.mark_use(r, c.reach);
+            }
+            match &c.stores {
+                Some(ks) => {
+                    for k in ks {
+                        let a = self.atom(k);
+                        self.virt_revoke(t, Some(a));
+                        let ks = self.this_stores.entry(f).or_default();
+                        if !ks.contains(&a) {
+                            ks.push(a);
+                        }
+                    }
+                }
+                None => {
+                    self.virt_revoke(t, None);
+                    self.this_open.insert(f);
+                }
+            }
+            return true;
+        }
+        let why = |_: &Self| "field of another unit's class".to_string();
+        let top = self.node_l("admitted-this-store");
+        self.add_top(top, why);
+        self.add_prim(top, prim::ALL);
+        let site = self.anon_post_site("store by another unit's method");
+        match &c.stores {
+            Some(ks) => {
+                for k in ks {
+                    let a = self.atom(k);
+                    self.store_into(t, Key::Named(a), top, site);
+                }
+            }
+            None => self.store_into(t, Key::Any, top, site),
+        }
+        // What the receiver reaches (its fields, transitively), as for an
+        // argument (gen.rs `stand_in_fn_of`).
+        if c.reach & (MARK_ESCAPE | MARK_TOUCH) != 0 {
+            let h = self.node_l("admitted-this");
+            let q = self.node_l("admitted-this-reach");
+            self.cons(
+                h,
+                Cons::Load {
+                    key: Key::Any,
+                    dst: q,
+                },
+            );
+            self.cons(
+                q,
+                Cons::Load {
+                    key: Key::Any,
+                    dst: q,
+                },
+            );
+            if c.reach & MARK_ESCAPE != 0 {
+                self.sink_node(q, reason);
+            } else {
+                self.cons(q, Cons::Implicit { reason });
+            }
+            self.add_tok(h, t);
+        }
+        true
+    }
+
+    /// A template from `tm` up to (not including) ancestor `owner` defines
+    /// an accessor or computed members.
+    fn chain_has_accessors(&self, tm: TmplId, owner: TmplId) -> bool {
+        let mut work = vec![tm];
+        let mut seen: Vec<TmplId> = Vec::new();
+        while let Some(c) = work.pop() {
+            if c == owner || seen.contains(&c) {
+                continue;
+            }
+            seen.push(c);
+            let t = &self.tmpls[c as usize];
+            if !t.accessor_keys.is_empty() || t.has_computed_members {
+                return true;
+            }
             work.extend(t.parent);
             work.extend(t.parent_links.iter().copied());
         }
@@ -1539,7 +2007,15 @@ impl Model {
                 tmpl,
                 reason,
                 statics,
-            } => format!("contractthis {n} {tmpl} {reason} {}", *statics as u8),
+                this,
+            } => format!(
+                "contractthis {n} {tmpl} {reason} {} {}",
+                *statics as u8, *this as i64
+            ),
+            Cons::OverrideThis { tmpl, key, reason } => format!(
+                "overridethis {n} {tmpl} {} {reason}",
+                self.key_name(Key::Named(*key))
+            ),
             Cons::TopIfAny { dst, from, reason } => format!(
                 "topifany {n} {dst} {from} {}",
                 reason.map_or(-1, |r| r as i64)

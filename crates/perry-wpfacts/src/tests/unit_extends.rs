@@ -45,7 +45,10 @@ fn a_result_holding_another_units_instance_forwards_its_contract() {
     ] {
         let pf = units_of(&[("a", MAKE), ("m", m)]);
         assert!(pf.broken.is_empty(), "{:?}\n{}", pf.broken, pf.dump_text());
-        assert_eq!(verdicts(&pf, "k"), ["E0"], "{}", pf.dump_text());
+        // DECISIONS 107: the unit running `get` publishes its receivers
+        // (R's instances), so `this.k` is proven exactly, as the whole
+        // program proves it, not only under the entry guard.
+        assert_eq!(verdicts(&pf, "k"), ["T0Mono"], "{}", pf.dump_text());
         assert_eq!(verdicts(&pf, "get"), ["T0Mono"], "{}", pf.dump_text());
     }
     // Soundness: the caller stores into what it got. `k` is a definite data

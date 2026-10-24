@@ -530,9 +530,18 @@ impl Model {
 
     /// `recv.key(args)` on token `t`.
     pub(super) fn method_on(&mut self, t: Tok, key: Key, call: CallId) {
+        // A method of a published receiver's class (DECISIONS 59).
+        let virt = match key {
+            Key::Named(a) if t != TOP => self.virt_load(t, a),
+            _ => None,
+        };
         // A builtin protocol call (ToPrimitive, iteration ...) is a touch.
+        // A call of a receiver marker's class method is a read: the callee
+        // runs on the marker, so what it does to it is its own use.
         let bits = if self.protocol_calls.contains(&call) {
             crate::model::MARK_TOUCH
+        } else if virt.is_some() {
+            crate::model::MARK_READ
         } else {
             crate::model::MARK_ESCAPE
         };
@@ -542,12 +551,24 @@ impl Model {
             return;
         }
         // Own function-valued fields, then the prototype chain.
-        let own = match key {
-            Key::Named(a) => self.field(t, a),
-            Key::Any => self.all_fields(t),
+        let own = match (key, virt) {
+            (Key::Named(_), Some(v)) => v,
+            (Key::Named(a), None) => self.field(t, a),
+            (Key::Any, _) => self.all_fields(t),
         };
         self.bind_via(own, call, t);
-        self.with_b(|m| builtins::own_method(m, t, key, call));
+        // A key only another unit's subclass defines runs that subclass's
+        // method (DECISIONS 97).
+        if let (Key::Named(a), Some(_)) = (key, virt) {
+            for n in self.virt_call(t, a) {
+                self.bind_via(n, call, t);
+            }
+        }
+        // A receiver token / marker is no builtin object: its methods are
+        // its classes' (`virt_protos`).
+        if !self.virt_protos.contains_key(&t) {
+            self.with_b(|m| builtins::own_method(m, t, key, call));
+        }
         // Methods on the chain (shared), builtin prototype methods, and
         // getters returning functions (per receiver, accessor keys only).
         let cv = self.cv(t, key);
@@ -711,7 +732,13 @@ impl Model {
     /// own contents there would run every method over every value other
     /// units can put in it (commander's Command: 217 receiver layouts per
     /// method).
-    pub(crate) fn publish_class(&mut self, tm: TmplId, reason: u32) {
+    ///
+    /// When a class of another unit extends it (`extended`), its
+    /// constructor is a function contract as well, run on any receiver (a
+    /// subclass instance's `super()`): `this` is ⊤ there, so its sites are
+    /// proven behind the entry guard only (DECISIONS 57). A class with no
+    /// constructor code publishes an empty constructor contract.
+    pub(crate) fn publish_class(&mut self, tm: TmplId, reason: u32, extended: bool, no_code: bool) {
         let cobj = self.tok(TokKind::ClassObj(tm));
         let inst = self.tok(TokKind::Obj(tm, NO_CTX));
         let rt = self.tmpls.len() as TmplId;
@@ -744,8 +771,13 @@ impl Model {
             )
         });
         self.add_prim(any, prim::ALL);
+        // The instance other units construct has the class's prototype.
+        self.proto_node(inst);
         self.contract_recv.insert(recv, vec![inst]);
         self.contract_recv_of.insert(tm, recv);
+        self.recv_class.insert(recv, tm);
+        // `this.m()` through the receiver finds the class's `m` (DECISIONS 59).
+        self.register_virt(recv, &[tm]);
         // Static members and the class object's own fields.
         let pa = self.atom("prototype");
         let mut statics: Vec<NodeId> = self
@@ -762,7 +794,11 @@ impl Model {
         for &n in &statics {
             for t in self.nodes[n as usize].pts.to_sorted() {
                 if let TokKind::Func(f, _) = self.toks[t as usize] {
-                    if !self.is_escaped(t) && self.funcs[f as usize].func_id != u32::MAX {
+                    let broken = self
+                        .broken_fns
+                        .contains(&format!("fn:{}", self.funcs[f as usize].name));
+                    if !self.is_escaped(t) && self.funcs[f as usize].func_id != u32::MAX && !broken
+                    {
                         self.contract_fns.insert(f);
                     }
                     if !self.funcs[f as usize].lexical_this {
@@ -781,6 +817,11 @@ impl Model {
         let mut cur = Some(tm);
         let mut members: Vec<NodeId> = Vec::new();
         while let Some(c) = cur {
+            // Another unit's class (a stand-in parent): its methods are that
+            // unit's, called through its contract (DECISIONS 57).
+            if self.foreign.contains_key(&c) {
+                break;
+            }
             let proto = self.tok(TokKind::Proto(c));
             members.extend(
                 self.fields
@@ -792,12 +833,52 @@ impl Model {
             cur = self.tmpls[c as usize].parent;
         }
         members.sort_unstable();
+        // Each method (and the constructor) is also a function contract
+        // (DECISIONS 57): other units pass its arguments by their marks,
+        // and its receiver marker publishes what it does to `this`, so a
+        // subclass instance of another unit can run it.
         for &n in &members {
             for t in self.nodes[n as usize].pts.to_sorted() {
                 if let TokKind::Func(f, _) = self.toks[t as usize] {
-                    self.published_this.insert(f, recv);
+                    let rs = self.published_this.entry(f).or_default();
+                    if !rs.contains(&recv) {
+                        rs.push(recv);
+                    }
+                    let broken = self
+                        .broken_fns
+                        .contains(&format!("fn:{}", self.funcs[f as usize].name));
+                    if !self.is_escaped(t) && self.funcs[f as usize].func_id != u32::MAX && !broken
+                    {
+                        self.contract_fns.insert(f);
+                    }
                 }
             }
+        }
+        let t = &self.tmpls[tm as usize];
+        match t.ctor {
+            Some(ctor) if extended => {
+                let ft = self.funcs[ctor as usize].token;
+                let broken = self
+                    .broken_fns
+                    .contains(&format!("fn:{}", self.funcs[ctor as usize].name));
+                if !self.is_escaped(ft) && self.funcs[ctor as usize].func_id != u32::MAX && !broken
+                {
+                    self.published_this.entry(ctor).or_default().push(recv);
+                    self.contract_fns.insert(ctor);
+                    self.escape_fn_params(ft, reason);
+                    self.escape_this(ft, reason);
+                    self.ctor_published.insert(tm);
+                }
+            }
+            // No constructor code: what construction does to the receiver
+            // is the class's own shape (its field initializers), whoever
+            // extends it; an extension through a value (a CommonJS
+            // `require`) names no import the census could match
+            // (DECISIONS 99).
+            None if no_code => {
+                self.ctor_published.insert(tm);
+            }
+            _ => {}
         }
         for n in members {
             self.sink_node(n, reason);
@@ -829,12 +910,8 @@ impl Model {
             site: 0,
         });
         self.construct(call, cobj);
-        // ... and read every field of what they construct.
-        let all = self.all_fields(inst);
-        self.cons(all, Cons::TopSink { reason });
-        let r = self.node_l("contract-load");
-        self.sink_node(r, reason);
-        self.accessor_walk(inst, inst, Key::Any, ChainAct::Load(r));
+        // ... and read its fields: they leave key by key, described by the
+        // class contract (`Gen::fields_leave`, DECISIONS 88).
     }
 
     /// This unit gives `t`, an instance of its published class `tm`, to
@@ -865,6 +942,7 @@ impl Model {
 
     pub(super) fn escape_inner(&mut self, t: Tok, reason: u32) {
         self.mark_use(t, crate::model::MARK_ESCAPE);
+        self.virt_revoke(t, None);
         if let Some(is) = self.contract_recv.get(&t).cloned() {
             self.recv_log
                 .entry(t)
@@ -983,6 +1061,7 @@ impl Model {
     }
 
     pub fn mark_hard(&mut self, t: Tok, kind: Hard, reason: u32) {
+        self.virt_revoke(t, None);
         if kind == Hard::E6SetPrototypeOf {
             self.super_relink.insert(t);
         }

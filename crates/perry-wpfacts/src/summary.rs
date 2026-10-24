@@ -238,11 +238,14 @@ pub fn map_cons(
             tmpl,
             reason,
             statics,
+            this,
         } => ContractThis {
             tmpl,
             reason,
             statics,
+            this,
         },
+        OverrideThis { tmpl, key, reason } => OverrideThis { tmpl, key, reason },
         TopIfAny { dst, from, reason } => TopIfAny {
             dst: n(dst),
             from: n(from),
@@ -394,6 +397,7 @@ fn gen_kind(c: &Cons) -> bool {
             | MCall { .. }
             | TopSink { .. }
             | ContractThis { .. }
+            | OverrideThis { .. }
             | TopIfAny { .. }
             | Hard { .. }
             | AddsKeys
@@ -775,12 +779,42 @@ impl Model {
             let inst = self.instance((2, 0, ft));
             dsts.push(self.sum.insts[inst as usize].this);
         }
-        let inst = self.published_this.get(&f).copied();
+        let insts = self.published_this.get(&f).cloned().unwrap_or_default();
+        // A published method's receiver is one more contract parameter
+        // (DECISIONS 57): its marker records what the body does to it, and
+        // stands for instances of the classes it is published with
+        // (DECISIONS 59).
+        let mk = (!insts.is_empty() && self.contract_fns.contains(&f)).then(|| {
+            let mk = self.param_marker_tok(f, u32::MAX);
+            let classes: Vec<TmplId> = insts
+                .iter()
+                .filter_map(|r| self.recv_class.get(r).copied())
+                .collect();
+            self.register_virt(mk, &classes);
+            mk
+        });
+        // Published through its contract, the receiver is the class's
+        // instances (the receiver token) or what the marker stands for: a
+        // reader's `ContractThis` admits nothing else, and reports a use
+        // beyond that (DECISIONS 85). Any other escape lets unknown code
+        // call it with any receiver.
+        let contract_only = mk.is_some() && self.pub_reason == Some(reason);
         for d in dsts {
-            self.add_top(d, why);
-            self.add_prim(d, prim::ALL);
-            if let Some(i) = inst {
-                self.add_tok(d, i);
+            if !contract_only {
+                self.add_top(d, why);
+                self.add_prim(d, prim::ALL);
+            }
+            // DECISIONS 107: the receivers the running units published.
+            match self.this_args.get(&f) {
+                Some(&n) if contract_only => self.edge(n, d),
+                _ => {
+                    for &i in &insts {
+                        self.add_tok(d, i);
+                    }
+                }
+            }
+            if let Some(mk) = mk {
+                self.add_tok(d, mk);
             }
         }
     }

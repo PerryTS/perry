@@ -70,10 +70,24 @@ impl Model {
             self.add_prim(dst, prim::UNDEF);
         }
         match key {
-            Key::Named(a) => {
-                let f = self.field(t, a);
-                self.edge(f, dst);
-            }
+            // A method key on a published receiver finds the class chain's
+            // value, not the receiver's unknown own field (DECISIONS 59).
+            Key::Named(a) => match self.virt_load(t, a) {
+                Some(v) => {
+                    self.edge(v, dst);
+                    // A key another unit's subclass defines: a read finds an
+                    // unknown own value (only a call through the receiver
+                    // is that subclass's method, `virt_call`, DECISIONS 97).
+                    if !self.virt_overriders(t, a).is_empty() {
+                        let f = self.field(t, a);
+                        self.edge(f, dst);
+                    }
+                }
+                None => {
+                    let f = self.field(t, a);
+                    self.edge(f, dst);
+                }
+            },
             Key::Any => {
                 let all = self.all_fields(t);
                 self.edge(all, dst);

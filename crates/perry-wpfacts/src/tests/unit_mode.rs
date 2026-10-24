@@ -192,7 +192,10 @@ fn a_published_class_is_a_contract_not_an_escape() {
         ),
     ]);
     assert!(proven(&pf, "pos"), "{}", pf.dump_text());
-    assert_eq!(verdicts(&pf, "neg"), ["E0"], "{}", pf.dump_text());
+    // DECISIONS 107: `m` publishes what it runs `has` on (D's instances):
+    // the receivers are the shapes the running units saw, so `this.neg` is
+    // proven exactly, as in the whole program.
+    assert_eq!(verdicts(&pf, "neg"), ["T0Mono"], "{}", pf.dump_text());
     assert!(tmpl(&pf, "D").prefix_stable, "{}", pf.dump_text());
 }
 
@@ -225,7 +228,10 @@ fn an_importer_sees_a_class_through_its_contract() {
         .find(|s| s.module == mi && s.key == "has")
         .expect("the call in m");
     assert_eq!(site.verdict, crate::Verdict::T0Mono, "{}", pf.dump_text());
-    assert_eq!((pf.rounds, pf.broken.len()), (1, 0));
+    // DECISIONS 107: `m` publishes the receivers it runs `has` on, and `z`
+    // is solved again with them (the reader-to-owner channel, a round as
+    // decision 13's arguments); nothing breaks.
+    assert_eq!((pf.rounds, pf.broken.len()), (2, 0));
 }
 
 #[test]
@@ -261,9 +267,12 @@ fn a_broken_contract_resolves_only_the_units_that_see_it() {
     // Every declaration unit of `a` and `m` sees D (§12.3: a module's work
     // is its units' work).
     let w = |p: &str| module_work(&pf, p);
+    // `b` and `c` are solved again for their own reason, not D's: `c`
+    // publishes the receivers it runs `E.has` on (DECISIONS 107), `b` takes
+    // them (its contract gets exact), and `c` reads that contract.
     assert_eq!(
         pf.round_work[1],
-        w("a.ts") + w("m.ts"),
+        w("a.ts") + w("m.ts") + w("b.ts") + w("c.ts"),
         "{:?} {:?}",
         pf.round_work,
         pf.units
@@ -303,9 +312,12 @@ fn a_broken_namespace_field_function_resolves_only_the_units_that_see_it() {
     );
     assert_eq!(pf.round_work.len(), 2, "{:?}", pf.round_work);
     let w = |p: &str| module_work(&pf, p);
+    // `b` and `c` are solved again for their own reason, not D's: `c`
+    // publishes the receivers it runs `E.has` on (DECISIONS 107), `b` takes
+    // them (its contract gets exact), and `c` reads that contract.
     assert_eq!(
         pf.round_work[1],
-        w("a.ts") + w("m.ts"),
+        w("a.ts") + w("m.ts") + w("b.ts") + w("c.ts"),
         "{:?} {:?}",
         pf.round_work,
         pf.units
@@ -371,7 +383,9 @@ fn a_unit_over_the_bound_is_not_solved_again() {
         "{:?}",
         pf.units
     );
-    assert_eq!(pf.broken, ["a.ts:D"], "{}", pf.dump_text());
+    // An aborted unit reports every contract it consumed (§11.3); `o` calls
+    // `D.has`, a published method with its own contract (DECISIONS 57).
+    assert_eq!(pf.broken, ["a.ts:D", "fn:a.ts:has"], "{}", pf.dump_text());
     // Round 2 is `a`, `m` and the units of `o` under the bound (a unit
     // depends on every unit of each module its module imports, §12.6).
     let small_o: u64 = pf
@@ -794,7 +808,11 @@ fn a_namespace_import_sees_only_the_real_exports() {
     let a = cfg.fields.iter().find(|f| f.key == "a").expect("field a");
     // Rewritten for DECISIONS 73 (principle: a store effect carries the kinds
     // it stores): the field holds the stored primitive, not ⊤.
-    assert!(!a.readonly && a.kind.prims & crate::model::prim::STR != 0, "{}", pf.dump_text());
+    assert!(
+        !a.readonly && a.kind.prims & crate::model::prim::STR != 0,
+        "{}",
+        pf.dump_text()
+    );
     let u = "import * as m from './t'; (m.cfg as any).z = 'x'; console.log(m.useA());";
     let pf = units_of(&[("t", t), ("u", u)]);
     assert!(pf.broken.is_empty(), "{:?}\n{}", pf.broken, pf.dump_text());
@@ -1057,7 +1075,10 @@ fn a_result_holding_another_units_layout_forwards_its_contract() {
             .filter(|t| t.fields.iter().any(|f| f.key == "zz"))
             // Rewritten for DECISIONS 73 (principle: a store effect carries the kinds
             // it stores): `q` holds the stored number, not ⊤.
-            .all(|t| t.adds_keys > 0 && t.fields.iter().any(|f| f.key == "q" && f.kind.prims & crate::model::prim::NUM != 0)),
+            .all(|t| t.adds_keys > 0
+                && t.fields
+                    .iter()
+                    .any(|f| f.key == "q" && f.kind.prims & crate::model::prim::NUM != 0)),
         "{}",
         pf.dump_text()
     );
@@ -1185,19 +1206,23 @@ fn a_store_into_an_existing_field_is_a_store_effect() {
         "#;
     let pf = units(src);
     assert!(pf.units.len() >= 3, "{}", pf.dump_text());
-    assert!(pf.broken.is_empty(), "{:?}", pf.broken);
+    assert!(pf.broken.is_empty(), "{:?}\n{}", pf.broken, pf.dump_text());
     assert!(
         !verdicts(&pf, "next").is_empty() && proven(&pf, "next"),
         "{}",
         pf.dump_text()
     );
-    // The stored value escapes: other units read that field as unknown.
+    // The stored value does not escape (DECISIONS 88, design §17.16 (c),
+    // (c')): the effect carries its value contract, and the head leaves its
+    // unit with that contract under `next`; every reader's use is checked
+    // against it (census). A contract describes what a field holds as it
+    // describes what a binding holds.
     let node = pf
         .templates
         .iter()
         .find(|t| t.birth_keys == ["key"])
         .expect("node literal");
-    assert!(node.escape.is_some(), "{}", pf.dump_text());
+    assert!(node.escape.is_none(), "{}", pf.dump_text());
     // Soundness: the owner performs the effect. `main` (the head's unit)
     // reads `h.next.key`; its literal put `{ key: 1 }` there, but `setNode`
     // stored another object: `.key` must not hold on the inner layout.
@@ -1290,7 +1315,11 @@ fn a_key_another_unit_adds_to_a_literal_is_a_shape_transition() {
         .expect("field seen");
     // Rewritten for DECISIONS 73 (principle: a store effect carries the kinds
     // it stores): the field holds the stored primitive, not ⊤.
-    assert!(!seen.readonly && seen.kind.prims & crate::model::prim::BOOL != 0, "{}", pf.dump_text());
+    assert!(
+        !seen.readonly && seen.kind.prims & crate::model::prim::BOOL != 0,
+        "{}",
+        pf.dump_text()
+    );
     // A computed-key store still opens the layout: a census report (§5).
     let src = r#"
         function grow(c: any, k: any) { c[k] = 1; }
@@ -2379,7 +2408,11 @@ fn a_closed_parameter_binding_holds_its_contract_classes_only() {
         assert!(!b.other, "local {id}: {b:?}\n{}", pf.dump_text());
         // DECISIONS 77: every call passes `a`, so it is never undefined
         // (no nullish receiver test, `a.size++` updates the slot).
-        assert!(b.prims & crate::model::prim::UNDEF == 0, "local {id}: {b:?}\n{}", pf.dump_text());
+        assert!(
+            b.prims & crate::model::prim::UNDEF == 0,
+            "local {id}: {b:?}\n{}",
+            pf.dump_text()
+        );
     }
     // Negative: another unit's call passes fewer arguments; the missing
     // parameter holds undefined (the solver's rule at the stand-in).
@@ -2392,7 +2425,10 @@ fn a_closed_parameter_binding_holds_its_contract_classes_only() {
     let pf = units(src);
     assert!(pf.broken.is_empty(), "{:?}\n{}", pf.broken, pf.dump_text());
     assert!(
-        pf.bindings[0].locals.iter().any(|(_, b)| b.class_ids.is_empty() && b.prims & crate::model::prim::UNDEF != 0),
+        pf.bindings[0]
+            .locals
+            .iter()
+            .any(|(_, b)| b.class_ids.is_empty() && b.prims & crate::model::prim::UNDEF != 0),
         "{:?}\n{}",
         pf.bindings[0].locals,
         pf.dump_text()
@@ -2417,7 +2453,11 @@ fn a_returned_literal_carries_its_field_functions() {
     let pf = units(src);
     assert!(pf.units.len() >= 2, "{}", pf.dump_text());
     assert!(pf.broken.is_empty(), "{:?}\n{}", pf.broken, pf.dump_text());
-    assert!(proven(&pf, "has") && proven(&pf, "add"), "{}", pf.dump_text());
+    assert!(
+        proven(&pf, "has") && proven(&pf, "add"),
+        "{}",
+        pf.dump_text()
+    );
     // A field function returning its own literal (a builder): the result
     // layout's field functions name the same layout again, and the reader
     // makes its stand-in once (tssrc overflowed the stack without that).
@@ -2454,5 +2494,9 @@ fn a_forwarded_result_layout_leaves_no_fields() {
     let pf = units(src);
     assert!(pf.units.len() >= 4, "{}", pf.dump_text());
     assert!(pf.broken.is_empty(), "{:?}\n{}", pf.broken, pf.dump_text());
-    assert!(proven(&pf, "project") && proven(&pf, "status"), "{}", pf.dump_text());
+    assert!(
+        proven(&pf, "project") && proven(&pf, "status"),
+        "{}",
+        pf.dump_text()
+    );
 }
