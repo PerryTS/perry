@@ -430,6 +430,10 @@ const MIGRATED_MODULES: &[(&str, &str)] = &[
         include_str!("../lower_call/console_promise.rs"),
     ),
     (
+        "crates/perry-codegen/src/lower_call/console_closure_calls.rs",
+        include_str!("../lower_call/console_closure_calls.rs"),
+    ),
+    (
         "crates/perry-codegen/src/expr/child_proc.rs",
         include_str!("../expr/child_proc.rs"),
     ),
