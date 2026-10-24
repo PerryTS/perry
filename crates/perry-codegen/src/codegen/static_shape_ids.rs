@@ -398,14 +398,16 @@ impl ClassIdsByKeysName {
 
 /// One class keys global's birth, as the string pool mints it.
 pub(crate) struct ClassBirth {
-    /// The class id the mint names (0 = none; such a birth has no content).
+    /// The class id the mint names (0 = none: the birth is on the plain
+    /// prototype, like a literal's).
     pub class_id: u32,
     /// Live inline bound when the class is born wide, else 0.
     pub wide_live: u32,
     /// Its content, when it is nameable.
     pub shape: Option<BirthShape>,
-    /// An anonymous object-literal class (`__AnonShape_*`): its birth names
-    /// the plain prototype ([`BirthProto::Literal`]), never a class one.
+    /// An anonymous object-literal class (`__AnonShape_*`) or a keys global of
+    /// no class: its birth names the plain prototype ([`BirthProto::Literal`]),
+    /// never a class one.
     pub literal: bool,
 }
 
@@ -435,8 +437,13 @@ pub(crate) fn class_birth(
     // mints at startup before any seed or module init: it can never adopt a
     // static id (its mint would only ever by-facts hit the counter id), so it
     // is not given one.
-    let literal = encoded_class.starts_with("__AnonShape_");
-    let shape = (class_id != 0).then(|| BirthShape {
+    // A keys global whose class resolves to no class id (an imported
+    // object-literal receiver stub, `__ImportedObject_*`) is minted with class
+    // id 0, i.e. on the plain prototype: like a literal's, that content is
+    // compile-time known, so it carries a static ordinal too and never a
+    // runtime-minted word in agent-shared module state.
+    let literal = encoded_class.starts_with("__AnonShape_") || class_id == 0;
+    let shape = Some(BirthShape {
         keys: packed.as_bytes().to_vec(),
         key_count: *field_count,
         live: if wide_live > 0 {
@@ -1080,3 +1087,4 @@ pub(crate) fn has_prototype_method(name: &str) -> bool {
         })
     })
 }
+
