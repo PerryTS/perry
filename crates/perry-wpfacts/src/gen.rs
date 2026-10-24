@@ -596,6 +596,12 @@ impl<'a> Gen<'a> {
             forwards_super: false,
             parent: NO_FN,
         });
+        // Registered before its result is built: a result layout whose
+        // field holds this function reaches it again (`stand_in_class`).
+        let n = self.m.node_named("fnval", || format!("fnval({})", c.name));
+        self.m.add_tok(n, tok);
+        self.stand_in_fns.insert((c.name.clone(), holder), (n, tok));
+        self.stand_in_fc.insert(tok, c);
         self.m.sink_node(args_all, r);
         match holder {
             _ if c.lexical_this => {}
@@ -727,10 +733,6 @@ impl<'a> Gen<'a> {
                 .m
                 .add_top(ret, |_| "result of another unit's function".into()),
         }
-        let n = self.m.node_named("fnval", || format!("fnval({})", c.name));
-        self.m.add_tok(n, tok);
-        self.stand_in_fns.insert((c.name.clone(), holder), (n, tok));
-        self.stand_in_fc.insert(tok, c);
         n
     }
 
@@ -856,6 +858,14 @@ impl<'a> Gen<'a> {
             self.m.add_tok(cf, cobj);
         }
         let mut toks = vec![inst, cobj, proto, self.m.funcs[ctor as usize].token];
+        // Registered before its members are built: a member function whose
+        // result is this layout reaches it again (`stand_in_fn_of`).
+        let n = self
+            .m
+            .node_named("classval", || format!("classval({})", c.name));
+        self.m.add_tok(n, cobj);
+        self.stand_ins
+            .insert(c.display.clone(), (n, tm, Vec::new()));
         // Its static members: a static method with a function contract is
         // its stand-in (made below, its result may be this class), another
         // one a stub running on the class object, any other static an
@@ -918,11 +928,9 @@ impl<'a> Gen<'a> {
                 .add_top(n, |_| "field of another unit's class".into());
             self.m.add_prim(n, prim::ALL);
         }
-        let n = self
-            .m
-            .node_named("classval", || format!("classval({})", c.name));
-        self.m.add_tok(n, cobj);
-        self.stand_ins.insert(c.display.clone(), (n, tm, toks));
+        if let Some(e) = self.stand_ins.get_mut(&c.display) {
+            e.2.extend(toks);
+        }
         for (field, fc) in static_fns {
             let v = self.stand_in_fn_of(mi, fc, Some((tm, true)));
             self.m.edge(v, field);

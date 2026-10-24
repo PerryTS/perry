@@ -269,7 +269,14 @@ pub(super) fn prepare_from_raw(
     // import and flows through the normal resolution + init-order + codegen
     // path. A file that already has top-level `import`/`export` is not
     // CommonJS (`is_commonjs` returns false) and is left untouched.
-    let was_cjs_wrapped = class.wrap_eligible && is_commonjs(&raw_source);
+    // The explicit CommonJS entry format supplies its wrapper bindings even
+    // when the body only reads them and has no heuristic CJS source tokens.
+    let is_cjs_entry = class.is_entry
+        && canonical
+            .extension()
+            .and_then(|extension| extension.to_str())
+            == Some("cjs");
+    let was_cjs_wrapped = class.wrap_eligible && (is_cjs_entry || is_commonjs(&raw_source));
     let class_family_syntax = Some(super::super::cjs_wrap::family_syntax::analyze(&raw_source));
     let mut messages = Vec::new();
     let mut computed_require_warnings = Vec::new();

@@ -669,12 +669,12 @@ fn for_each_stmt(stmts: &[Stmt], f: &mut dyn FnMut(&Stmt)) {
     }
 }
 
-/// The local name `cjs_wrap` binds its synthetic `createRequire` import to.
+/// The sloppy local name `cjs_wrap` binds its synthetic `createRequire` import to.
 ///
 /// Mirrors the `imports` prefix in
 /// `perry/src/commands/compile/cjs_wrap/wrap.rs` — a wrapped module always
-/// opens with
-/// `import { createRequire as __perry_cjs_create_require } from 'node:module';`
+/// uses `__perry_cjs_create_require` for sloppy source and the equal-length
+/// `__perry_cjs_strict_require` for strict source
 /// and nothing else in the pipeline ever mints that local. The `perry` crate's
 /// template canary
 /// (`commands/compile/cjs_wrap/preamble_canary_tests.rs`) asserts the wrap
@@ -692,19 +692,11 @@ pub const CJS_WRAP_CREATE_REQUIRE_LOCAL: &str = "__perry_cjs_create_require";
 /// queue drains) when Node runs it with *CommonJS* ordering (ticks first).
 ///
 /// Recognised from the HIR, not from an expectation about the wrap template:
-/// if the template stops emitting this binding the predicate degrades to
+/// if the template stops emitting either binding the predicate degrades to
 /// "not wrapped" — today's behaviour — rather than to a wrong answer for
 /// hand-written ESM.
 pub fn is_cjs_wrapped_module(module: &Module) -> bool {
-    module.imports.iter().any(|import| {
-        import.specifiers.iter().any(|specifier| {
-            matches!(
-                specifier,
-                perry_hir::ImportSpecifier::Named { local, .. }
-                    if local == CJS_WRAP_CREATE_REQUIRE_LOCAL
-            )
-        })
-    })
+    module.is_commonjs_wrap()
 }
 
 #[cfg(test)]

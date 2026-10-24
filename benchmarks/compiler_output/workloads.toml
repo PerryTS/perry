@@ -706,39 +706,50 @@ write_barriers_traced = 16
 boxed_number_allocations_static = 0
 buffer_slow_path_accesses_static = 0
 
-# Repsel 4a.1 (#6904): a canonical-numeric push lowers to the inline store +
-# length bump; the guarded raw-f64 helper tier (js_typed_feedback_numeric_
-# array_push_guard + js_array_numeric_push_f64_unboxed) is gone from this
-# shape. js_array_push_f64 legitimately remains in the forwarded/realloc arms.
+# Dense-prefix publication (713c15178 / 783a9e826) adds a frontier branch
+# after inline stores. 119da3bb1 reads element bits with an inline numeric
+# admission; 989c55192e canonicalizes numeric stores inline. Pin those actual
+# operations in the checksum function, not obsolete helper declarations or
+# a direct branch to the old merge label. Budgets and native-rep checks stay.
+
 [[workloads.numeric_arrays.ir_checks]]
 name = "numeric_array_push_inlines_store"
-regex = '''apush\.inbounds\.\d+:[\s\S]*?store double [^\n]+\n[\s\S]*?store i32 %\w+, ptr %\w+[^\n]*\n[\s\S]*?br label %apush\.merge'''
+section = "llvm_before"
+function_contains = "numericArraysChecksum"
+regex = '''apush\.inbounds\.\d+:(?:(?!\n\n)[\s\S])*?\n[ \t]*store double 8\.0, ptr %[\w.]+(?:(?!\n\n)[\s\S])*?(?P<next>%[\w.]+) = add i32 %[\w.]+, 1(?:(?!\n\n)[\s\S])*?\n[ \t]*store i32 (?P=next), ptr %[\w.]+(?:(?!\n\n)[\s\S])*?br i1 %[\w.]+, label %ek\.frontier\.raise\.\d+, label %ek\.frontier\.join\.\d+'''
 regex_none = [
-  "call i64 @js_array_numeric_push_f64_unboxed",
-  "call i32 @js_typed_feedback_numeric_array_push_guard",
+  '''call i64 @js_array_numeric_push_f64_unboxed''',
+  '''call i32 @js_typed_feedback_numeric_array_push_guard''',
 ]
-detail = "canonical numeric Array.push takes the inline store + length bump (repsel 4a.1; guarded helper tier elided)"
+detail = "literal numeric push stores the value and incremented length inline before maintaining the dense-prefix frontier"
 
-# Repsel 4a.1/4a.2: the numeric read has an inline guard tier. This fixture's
-# declared-only `number[]` add is runtime-tag checked (#7773), so its element
-# read uses the dense raw-f64 proof and exposes the canonical slot verbatim;
-# hole-tolerant number-context reads retain their NaN canonicalization select.
 [[workloads.numeric_arrays.ir_checks]]
 name = "numeric_array_uses_unboxed_get"
-contains = "js_typed_feedback_numeric_array_index_get_guard"
-regex = '''bidx\.num\.fast\.\d+:[\s\S]*?inttoptr i64 %\w+ to ptr\s*\n\s*%\w+ = load double, ptr %\w+[^\n]*\n\s*br label %bidx\.num\.merge'''
-regex_none = ["call double @js_array_numeric_get_f64_unboxed"]
-detail = "numeric indexed read takes the inline dense raw-f64 fast arm (direct load; helper call elided)"
+section = "llvm_before"
+function_contains = "numericArraysChecksum"
+regex_all = [
+  '''bidx\.num\.guard\.deref\.\d+:(?:(?!\n\n)[\s\S])*?load i32, ptr %[\w.]+(?:(?!\n\n)[\s\S])*?icmp eq i32 %[\w.]+, 1(?:(?!\n\n)[\s\S])*?br i1 %[\w.]+, label %bidx\.num\.guard\.prefix\.\d+, label %bidx\.num\.cold\.exact_args\.\d+''',
+  '''bidx\.num\.guard\.backing\.\d+:(?:(?!\n\n)[\s\S])*?icmp ult i32 %[\w.]+, %[\w.]+(?:(?!\n\n)[\s\S])*?br i1 %[\w.]+, label %bidx\.num\.fast\.\d+, label %bidx\.num\.cold\.exact_args\.\d+''',
+  '''bidx\.num\.fast\.\d+:(?:(?!\n\n)[\s\S])*?(?P<bits>%[\w.]+) = load i64, ptr %[\w.]+\n\s*(?P<value>%[\w.]+) = bitcast i64 (?P=bits) to double\n\s*(?P<magnitude>%[\w.]+) = and i64 (?P=bits), 9223372036854775807\n\s*(?P<numeric>%[\w.]+) = icmp ule i64 (?P=magnitude), 9221401712017801215\n\s*br i1 (?P=numeric), label %bidx\.num\.merge\.\d+, label %bidx\.num\.cold\.exact_args\.\d+''',
+]
+regex_none = [
+  '''call double @js_array_numeric_get_f64_unboxed''',
+]
+detail = "array-header and backing guards reach an inline element load; the loaded bits are admitted as numeric before the merge"
 
-# The RHS is a phi over the runtime-checked numeric and dynamic `+` arms. It is
-# not canonical by construction, so the raw-f64 store must canonicalize it;
-# the array set helper itself remains elided.
 [[workloads.numeric_arrays.ir_checks]]
 name = "numeric_array_uses_unboxed_set"
-contains = "js_typed_feedback_numeric_array_index_set_guard"
-regex = '''idxset\.(?:bounded_numeric_fast|inbounds)\.\d+:[\s\S]*?inttoptr i64 %\w+ to ptr\s*\n\s*%\w+ = (?:tail )?call double @js_array_numeric_value_to_raw_f64\(double %\w+\)[^\n]*\n\s*store double %\w+, ptr %\w+[^\n]*\n\s*br label %idxset\.(?:bounded_numeric_merge|merge)'''
-regex_none = ["call i32 @js_array_numeric_set_f64_unboxed"]
-detail = "numeric indexed write takes the inline raw-f64 fast arm and canonicalizes its runtime-checked RHS before the direct store"
+section = "llvm_before"
+function_contains = "numericArraysChecksum"
+regex_all = [
+  '''idxset\.guard\.deref\.\d+:(?:(?!\n\n)[\s\S])*?load i32, ptr %[\w.]+(?:(?!\n\n)[\s\S])*?icmp eq i32 %[\w.]+, 1(?:(?!\n\n)[\s\S])*?icmp ult i64 %[\w.]+, 9221401712017801216(?:(?!\n\n)[\s\S])*?br i1 %[\w.]+, label %idxset\.guarded\.\d+, label %idxset\.guard\.cold\.\d+''',
+  '''idxset\.inbounds\.kind\.canon\.\d+:\n\s*(?P<nan>%[\w.]+) = fcmp uno double (?P<rhs>%[\w.]+), (?P=rhs)\n\s*(?P<canonical>%[\w.]+) = bitcast i64 9221120237041090560 to double\n\s*(?P<value>%[\w.]+) = select i1 (?P=nan), double (?P=canonical), double (?P=rhs)\n\s*br label %idxset\.inbounds\.kind\.done\.\d+''',
+  '''idxset\.inbounds\.kind\.done\.\d+:\n\s*(?P<stored>%[\w.]+) = phi double [^\n]*%idxset\.inbounds\.kind\.canon\.\d+[^\n]*(?:(?!\n\n)[\s\S])*?\n[ \t]*store double (?P=stored), ptr %[\w.]+''',
+]
+regex_none = [
+  '''call i32 @js_array_numeric_set_f64_unboxed''',
+]
+detail = "the inline array guard admits numeric RHS bits and the stored phi includes the inline canonical-NaN arm"
 
 [[workloads.numeric_arrays.stdout_checks]]
 name = "numeric_arrays_checksum"

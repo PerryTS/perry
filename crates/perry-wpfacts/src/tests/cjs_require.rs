@@ -51,3 +51,18 @@ fn computed_require_keeps_the_registry() {
     assert_eq!(sites.len(), 1, "{}", pf.dump_text());
     assert_ne!(sites[0].verdict, Verdict::T0Mono, "{}", pf.dump_text());
 }
+
+#[test]
+fn strict_static_require_takes_one_module() {
+    let source = wrapped("const left = require('./left'); console.log(left.x);")
+        .replace("__perry_cjs_create_require", "__perry_cjs_strict_require");
+    let pf = facts(&source);
+    let sites: Vec<_> = pf.sites.iter().filter(|s| s.key == "x").collect();
+    assert_eq!(sites.len(), 1, "{}", pf.dump_text());
+    assert_eq!(sites[0].verdict, Verdict::T0Mono, "{}", pf.dump_text());
+    assert!(
+        sites[0].receivers.iter().all(|r| r.ends_with(":Left")),
+        "{}",
+        pf.dump_text()
+    );
+}

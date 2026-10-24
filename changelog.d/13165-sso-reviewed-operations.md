@@ -1,0 +1,1 @@
+Bind 24 reviewed SSO inventory findings to the exact function bodies and fallback sources that justify heap-only bookkeeping or a safe decline. Changed, missing, duplicate and unmatched reviews fail closed; new findings remain visible. Lower only decreased baselines and preserve the runtime heap-only limit while actual short-string fixes land separately.

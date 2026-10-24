@@ -70,7 +70,7 @@ impl KindFact {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct FieldFacts {
     pub key: String,
     pub slot: Option<u32>,
@@ -89,7 +89,7 @@ pub struct FieldFacts {
     pub ta_kind: Option<u8>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct TemplateFacts {
     pub id: TmplId,
     pub display: String,
@@ -134,6 +134,96 @@ pub struct SiteFacts {
     /// names these keys; its verdict is decided after the census
     /// (`units::typed_param_verdicts`).
     pub(crate) guard_keys: Option<Vec<String>>,
+}
+
+/// `Some` (a reason a claim fails) absorbs `None`; of two reasons the
+/// smaller is kept, so the join is commutative and only descends among
+/// the finitely many reasons.
+fn join_reason(a: &mut Option<String>, b: &Option<String>) {
+    match (a.as_mut(), b) {
+        (_, None) => {}
+        (None, Some(y)) => *a = Some(y.clone()),
+        (Some(x), Some(y)) => {
+            if y < x {
+                *x = y.clone();
+            }
+        }
+    }
+}
+
+/// The common prefix of two lists.
+fn common_prefix<T: PartialEq>(a: &mut Vec<T>, b: &[T]) {
+    let n = a.iter().zip(b).take_while(|(x, y)| x == y).count();
+    a.truncate(n);
+}
+
+impl KindFact {
+    /// The join: what a field may hold, in either.
+    pub(crate) fn join(&mut self, o: &KindFact) {
+        self.prims |= o.prims;
+        for x in &o.objs {
+            if !self.objs.contains(x) {
+                self.objs.push(x.clone());
+            }
+        }
+        self.objs.sort();
+        self.funcs = self.funcs.max(o.funcs);
+        self.builtin_objs = self.builtin_objs.max(o.builtin_objs);
+        self.top |= o.top;
+    }
+}
+
+impl FieldFacts {
+    /// The join of two descriptions of one field (by `key`): a claim holds
+    /// only if both make it; a slot or element kind they disagree on is
+    /// none; the writers and the kind grow.
+    pub(crate) fn join(&mut self, o: &FieldFacts) {
+        if self.slot != o.slot {
+            self.slot = None;
+        }
+        self.definite &= o.definite;
+        self.data_field &= o.data_field;
+        self.readonly &= o.readonly;
+        self.writers_ctor = self.writers_ctor.max(o.writers_ctor);
+        self.writers_post = self.writers_post.max(o.writers_post);
+        self.kind.join(&o.kind);
+        self.ta_stable &= o.ta_stable;
+        if self.ta_kind != o.ta_kind {
+            self.ta_kind = None;
+        }
+    }
+}
+
+impl TemplateFacts {
+    /// The join of two descriptions of one template (by `display`; its id,
+    /// kind, module and class id are its identity): a claim holds only if
+    /// both make it. Escape, HARD and chain problems absorb; stability and
+    /// a fixed layout need both; birth keys and ancestors keep their common
+    /// prefix; a field only one has is not definite in the join.
+    pub(crate) fn join(&mut self, o: &TemplateFacts) {
+        join_reason(&mut self.escape, &o.escape);
+        join_reason(&mut self.hard, &o.hard);
+        join_reason(&mut self.chain, &o.chain);
+        self.prefix_stable &= o.prefix_stable;
+        self.fixed_layout &= o.fixed_layout;
+        self.adds_keys = self.adds_keys.max(o.adds_keys);
+        common_prefix(&mut self.birth_keys, &o.birth_keys);
+        common_prefix(&mut self.ancestors, &o.ancestors);
+        self.sabotaged |= o.sabotaged;
+        for f in self.fields.iter_mut() {
+            match o.fields.iter().find(|g| g.key == f.key) {
+                Some(g) => f.join(g),
+                None => f.definite = false,
+            }
+        }
+        for g in &o.fields {
+            if !self.fields.iter().any(|f| f.key == g.key) {
+                let mut g = g.clone();
+                g.definite = false;
+                self.fields.push(g);
+            }
+        }
+    }
 }
 
 pub fn derive(g: &mut Gen) -> (Vec<TemplateFacts>, Vec<SiteFacts>) {
