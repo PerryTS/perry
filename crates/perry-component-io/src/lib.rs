@@ -148,6 +148,29 @@ unsafe fn detached(raw: usize, _: bool) -> turnloop::Result<turnloop::Detached> 
     // SAFETY: adopt transfers ownership of this native socket.
     turnloop::Detached::from_socket(unsafe { OwnedSocket::from_raw_socket(raw as _) })
 }
+/// Query the actual native endpoint without mutating or taking its ownership.
+unsafe fn socket_is_unbound(raw: usize) -> turnloop::Result<bool> {
+    #[cfg(unix)]
+    let stream = {
+        use std::os::fd::FromRawFd;
+        // SAFETY: adopt owns this live TCP descriptor; ManuallyDrop is a
+        // temporary query view and never closes the owning Detached's socket.
+        std::mem::ManuallyDrop::new(unsafe { std::net::TcpStream::from_raw_fd(raw as i32) })
+    };
+    #[cfg(windows)]
+    let stream = {
+        use std::os::windows::io::FromRawSocket;
+        // SAFETY: same borrowed query view of the live, owned Winsock socket.
+        std::mem::ManuallyDrop::new(unsafe { std::net::TcpStream::from_raw_socket(raw as _) })
+    };
+    match stream.local_addr() {
+        Ok(local) => Ok(local.port() == 0),
+        // WSAEINVAL: getsockname has no endpoint before the first bind.
+        #[cfg(windows)]
+        Err(error) if error.raw_os_error() == Some(10022) => Ok(true),
+        Err(error) => Err(error.into()),
+    }
+}
 unsafe extern "C" fn adopt<E: Embedding>(
     raw: usize,
     listener: bool,
@@ -166,7 +189,14 @@ unsafe extern "C" fn adopt<E: Embedding>(
                 *res = native_resource(h);
             } else {
                 let address = address(*destination)?;
-                let (h, id) = E::with_driver(|d| d.tcp_connect_bound(detached, address, TOKEN))?;
+                let unbound = socket_is_unbound(raw)?;
+                let (h, id) = E::with_driver(|d| {
+                    if unbound {
+                        d.tcp_connect_unbound(detached, address, TOKEN)
+                    } else {
+                        d.tcp_connect_bound(detached, address, TOKEN)
+                    }
+                })?;
                 *res = native_resource(h);
                 *op = native_operation(id, Vec::new(), None);
             }

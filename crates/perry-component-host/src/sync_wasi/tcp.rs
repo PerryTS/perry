@@ -212,13 +212,10 @@ impl tcp::HostTcpSocket for State {
             s.phase = Phase::Connecting(Err(code(e)));
             return Ok(());
         }
-        if matches!(s.phase, Phase::Initial(_)) {
-            s.owner.owned()?.bind(&implicit.into())?;
-        }
         let SocketOwner::Owned(owned) = std::mem::replace(&mut s.owner, SocketOwner::Closed) else {
             return Err(ErrorCode::InvalidState.into());
         };
-        // SAFETY: connect adoption consumes the owned, bound socket.
+        // SAFETY: connect adoption consumes the owned socket and preserves its binding.
         match unsafe {
             self.io
                 .adopt(into_raw(owned), false, Some(native_address(address)))
@@ -622,6 +619,72 @@ mod tests {
         I::drop(&mut s, input).unwrap();
         H::drop(&mut s, socket_poll).unwrap();
         T::drop(&mut s, socket).unwrap();
+    }
+    #[test]
+    fn tcp_unbound_connect_uses_both_grants_and_preserves_options() {
+        for (local, wildcard, family) in [
+            ("127.0.0.1:0", "0.0.0.0:0", IpAddressFamily::Ipv4),
+            ("[::1]:0", "[::]:0", IpAddressFamily::Ipv6),
+        ] {
+            let listener = TcpListener::bind(local).unwrap();
+            let remote = listener.local_addr().unwrap();
+            let wildcard: SocketAddr = wildcard.parse().unwrap();
+            let mut s = State::new(&crate::WasiOptions {
+                network: crate::Network {
+                    tcp: true,
+                    addresses: vec![
+                        crate::Address {
+                            address: wildcard.ip(),
+                            port: Some(0),
+                        },
+                        crate::Address {
+                            address: remote.ip(),
+                            port: Some(remote.port()),
+                        },
+                    ],
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .unwrap();
+            let network = N::instance_network(&mut s).unwrap();
+            let socket = C::create_tcp_socket(&mut s, family).unwrap();
+            T::set_keep_alive_enabled(&mut s, borrow(&socket), true).unwrap();
+            T::set_keep_alive_idle_time(&mut s, borrow(&socket), 7_000_000_000).unwrap();
+            let poll = T::subscribe(&mut s, borrow(&socket)).unwrap();
+            T::start_connect(&mut s, borrow(&socket), network, encode(remote)).unwrap();
+            #[cfg(unix)]
+            assert_eq!(
+                decode(T::local_address(&mut s, borrow(&socket)).unwrap()).port(),
+                0
+            );
+            wait(&mut s, &poll);
+            let (input, output) = T::finish_connect(&mut s, borrow(&socket)).unwrap();
+            assert!(T::keep_alive_enabled(&mut s, borrow(&socket)).unwrap());
+            assert_eq!(
+                T::keep_alive_idle_time(&mut s, borrow(&socket)).unwrap(),
+                7_000_000_000
+            );
+            let (mut peer, endpoint) = listener.accept().unwrap();
+            peer.set_nonblocking(false).unwrap();
+            peer.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            peer.set_write_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            assert_eq!(
+                decode(T::local_address(&mut s, borrow(&socket)).unwrap()),
+                endpoint
+            );
+            peer.write_all(b"x").unwrap();
+            assert_eq!(I::blocking_read(&mut s, borrow(&input), 1).unwrap(), b"x");
+            O::blocking_write_and_flush(&mut s, borrow(&output), b"y".to_vec()).unwrap();
+            let mut byte = [0; 1];
+            peer.read_exact(&mut byte).unwrap();
+            assert_eq!(&byte, b"y");
+            O::drop(&mut s, output).unwrap();
+            I::drop(&mut s, input).unwrap();
+            H::drop(&mut s, poll).unwrap();
+            T::drop(&mut s, socket).unwrap();
+        }
     }
     #[test]
     fn tcp_listening_pollable_tracks_successive_accepts() {
