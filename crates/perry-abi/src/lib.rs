@@ -7,6 +7,8 @@
 //! with the struct it indexes. No dependencies.
 
 pub mod accessor_guards;
+pub mod layouts;
+pub use layouts::*;
 
 /// `object::shapes::SHAPE_ID_BASE`: the first ShapeId.
 pub const SHAPE_ID_BASE: u32 = 0x8000_0000;
@@ -186,7 +188,7 @@ pub const RECEIVER_HANDLE_FLOOR: usize = 0x20_0000;
 /// `flat_base` and the committed id bound at `SHAPE_DIR_FLAT_BASE` and
 /// `SHAPE_DIR_FLAT_BASE + 8` of the agent's shape directory
 /// (`AGENT_PTR_SHAPE_DIR`).
-pub const SHAPE_RECORD_SIZE: usize = 120;
+pub const SHAPE_RECORD_SIZE: usize = 128;
 /// Offset of a record's two-word coloured-key mask (read: the key is inline
 /// data at its colour slot).
 pub const SHAPE_RECORD_COLOUR_MASK: usize = 88;
