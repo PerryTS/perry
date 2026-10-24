@@ -459,11 +459,14 @@ pub(crate) fn shadow_name_descriptor() -> &'static StaticAtom {
 #[cfg(target_os = "windows")]
 #[used(linker)]
 #[link_section = ".perrylay$a"]
-static LAYOUT_START: [u64; 1] = [0];
+// COFF groups sections by their writable characteristic before sorting the
+// $ suffix. Match the mutable descriptors in .perrylay$m, or these bounds
+// delimit a separate read-only section and registration misses every layout.
+static mut LAYOUT_START: [u64; 1] = [0];
 #[cfg(target_os = "windows")]
 #[used(linker)]
 #[link_section = ".perrylay$z"]
-static LAYOUT_END: [u64; 1] = [0];
+static mut LAYOUT_END: [u64; 1] = [0];
 #[cfg(target_os = "windows")]
 #[used(linker)]
 #[link_section = ".perryatm$a"]
@@ -2926,5 +2929,23 @@ fn image_layouts() -> impl Iterator<Item = *mut PerryLayoutDesc> {
     #[cfg(not(target_family = "wasm"))]
     {
         records::<PerryLayoutDesc>(layout_bounds())
+    }
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod windows_layout_bounds_tests {
+    use super::*;
+
+    #[test]
+    fn image_bounds_include_runtime_layouts() {
+        let (start, end) = layout_bounds();
+        let timeout = std::ptr::addr_of!(crate::object::runtime_layouts::TIMEOUT);
+        let sentinel = std::ptr::addr_of!(LAYOUT_SECTION_SENTINEL);
+        assert!(start < end, "COFF layout image must not be empty");
+        for record in [timeout, sentinel] {
+            let address = record as usize;
+            assert!(address >= start && address + std::mem::size_of::<PerryLayoutDesc>() <= end);
+            assert!(image_layouts().any(|entry| std::ptr::eq(entry, record)));
+        }
     }
 }
