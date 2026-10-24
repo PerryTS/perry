@@ -271,23 +271,12 @@ fn validate_codec_options(opts: f64, min_window_bits: i32, warn_dictionary: bool
     validate_option_chunk_size(read_option_field(options_ptr(), b"chunkSize"));
     validate_option_range(options_ptr(), b"flush", "options.flush", 0, 5, false);
 
-    // DEFLATE consumers retain this exact validated read for their backend.
+    // Dictionary-aware consumers retain this exact validated read for their backend.
     // Other consumers keep their existing accepted-but-unapplied warning.
     let dict = scope.root_nanbox_f64(read_option_field(options_ptr(), b"dictionary"));
     let value = dict.get_nanbox_f64();
     if !crate::value::JSValue::from_bits(value.to_bits()).is_undefined() {
-        // Public byte brands, not every cell backed by BufferHeader storage.
-        // Dictionaries accept ArrayBuffer too; CRC32 intentionally does not.
-        if crate::object::view_brand::view_brand(value).is_none()
-            && crate::buffer::buffer_brand(crate::value::addr_class::object_ref_addr(value))
-                != Some(crate::buffer::BufferBrand::ArrayBuffer)
-        {
-            crate::validators::throw_invalid_arg_type(
-                "options.dictionary",
-                "an instance of Buffer, TypedArray, DataView, or ArrayBuffer",
-                dict.get_nanbox_f64(),
-            );
-        }
+        validate_dictionary_value(dict.get_nanbox_f64());
         if warn_dictionary {
             crate::stub_diag::perry_stub_warn(
                 "zlib options.dictionary",
@@ -297,6 +286,35 @@ fn validate_codec_options(opts: f64, min_window_bits: i32, warn_dictionary: bool
         }
     }
     dict.get_nanbox_f64()
+}
+
+/// Zstd one-shot calls previously ignored other codec options. Read only the
+/// dictionary here; do not impose DEFLATE ranges or extra property reads.
+#[no_mangle]
+pub extern "C" fn js_zlib_zstd_dictionary(opts: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let opts = scope.root_nanbox_f64(opts);
+    let dictionary = scope.root_nanbox_f64(gzip_read_option(opts.get_nanbox_f64(), b"dictionary"));
+    validate_dictionary_value(dictionary.get_nanbox_f64());
+    dictionary.get_nanbox_f64()
+}
+
+fn validate_dictionary_value(value: f64) {
+    if crate::value::JSValue::from_bits(value.to_bits()).is_undefined() {
+        return;
+    }
+    // Public byte brands, not every cell backed by BufferHeader storage.
+    // Dictionaries accept ArrayBuffer too; CRC32 intentionally does not.
+    if crate::object::view_brand::view_brand(value).is_none()
+        && crate::buffer::buffer_brand(crate::value::addr_class::object_ref_addr(value))
+            != Some(crate::buffer::BufferBrand::ArrayBuffer)
+    {
+        crate::validators::throw_invalid_arg_type(
+            "options.dictionary",
+            "an instance of Buffer, TypedArray, DataView, or ArrayBuffer",
+            value,
+        );
+    }
 }
 
 // Gzip's constructor phases are separate from the shared one-shot validators.
