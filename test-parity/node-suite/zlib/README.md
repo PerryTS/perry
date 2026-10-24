@@ -265,3 +265,19 @@ Legacy aliases remain non-enumerable; ordinary function exports remain mutable
 and can be restored after an override. Descriptor values share the same
 `constants` object as ordinary reads. This supplements `constants/immutability`
 and `imports/legacy-constant-aliases` without changing those fixtures.
+
+## Synchronous decoder completion
+
+`inflateSync`, `gunzipSync`, and `inflateRawSync` retain completion options on
+both direct imports and captured exports. `rejectGarbageAfterEnd` accepts only
+booleans or `undefined`; explicit `true` rejects bytes after the first stream
+with `TypeError [ERR_TRAILING_JUNK_AFTER_STREAM_END]`, including another gzip
+member. Defaults still accept concatenated gzip members and gzip zero padding.
+An explicit permissive `finishFlush` returns the available prefix only for
+exhausted-input EOF, never corruption or missing/wrong dictionary errors.
+
+The validation fixtures cover direct/captured calls, defaults and error controls.
+Truncated decoding uses identical fixed Node 26.12.1 wire inputs, not halves of
+independently compressed streams with different Huffman representations; fixed
+miniz prefixes also cover exhausted input producing an empty Buffer. This tests
+decoder completion without requiring identical compressor output.

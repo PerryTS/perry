@@ -283,6 +283,7 @@ enum GzipStage {
 }
 struct Gzip {
     stage: GzipStage,
+    stop_after_member: bool,
     crc: flate2::Crc,
     buffers: BufferOwner,
 }
@@ -290,6 +291,7 @@ impl Gzip {
     fn new(input: Input, buffers: &BufferOwner) -> Self {
         Self {
             stage: GzipStage::Header(Header::default(), input),
+            stop_after_member: false,
             crc: flate2::Crc::new(),
             buffers: buffers.clone(),
         }
@@ -349,7 +351,11 @@ impl Gzip {
                     }
                     let input = std::mem::take(input);
                     self.crc.reset();
-                    self.stage = GzipStage::Next(input);
+                    self.stage = if self.stop_after_member {
+                        GzipStage::Done(input)
+                    } else {
+                        GzipStage::Next(input)
+                    };
                 }
                 GzipStage::Next(input) => {
                     let bytes = input.fill_buf()?;
@@ -584,24 +590,36 @@ impl Decoder {
 /// One-shot and streaming inflate share the same decoder and state ownership.
 /// read_to_end writes directly into the result Vec, without an output copy.
 pub(crate) fn decode_bytes(data: &[u8], codec: Codec) -> io::Result<Vec<u8>> {
-    decode_with_dictionary(data, codec, None)
+    decode_options_bytes(data, codec, None, DecodePolicy::default())
 }
-pub(crate) fn decode_dictionary_bytes(
-    data: &[u8],
-    dictionary: Option<Vec<u8>>,
-) -> io::Result<Vec<u8>> {
-    decode_with_dictionary(data, Codec::Inflate, dictionary)
+#[derive(Debug)]
+struct TrailingGarbage;
+impl std::fmt::Display for TrailingGarbage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Trailing junk found after the end of the compressed stream")
+    }
 }
-fn decode_with_dictionary(
+impl std::error::Error for TrailingGarbage {}
+pub(crate) fn is_trailing_garbage(error: &io::Error) -> bool {
+    error
+        .get_ref()
+        .is_some_and(|error| error.is::<TrailingGarbage>())
+}
+
+pub(crate) fn decode_options_bytes(
     data: &[u8],
     codec: Codec,
     dictionary: Option<Vec<u8>>,
+    policy: DecodePolicy,
 ) -> io::Result<Vec<u8>> {
     let buffers = BufferOwner::new();
     let mut decoder = Decoder::new(codec, &buffers)?
         .ok_or_else(|| io::Error::new(ErrorKind::InvalidInput, "encoder used as decoder"))?;
     if let (Decoder::Zlib(inflate), Some(dictionary)) = (&mut decoder, dictionary) {
         inflate.engine = super::inflate_context::Context::with_dictionary(&buffers, dictionary)?;
+    }
+    if let Decoder::Gzip(gzip) = &mut decoder {
+        gzip.stop_after_member = policy.reject_garbage;
     }
     decoder.input().borrow(data, true);
     struct Reader<'a> {
@@ -622,8 +640,24 @@ fn decode_with_dictionary(
         buffers: &buffers,
     }
     .read_to_end(&mut result);
+    // Input consumption reflects real engine progress, including header/trailer
+    // bytes. Capture it before clearing the step-local borrowed input pointer.
+    let consumed = decoder.input().consumed;
     decoder.input().clear_borrow();
-    decoded.map(|_| result)
+    match decoded {
+        Ok(_) if policy.reject_garbage && consumed < data.len() => {
+            Err(io::Error::new(ErrorKind::InvalidData, TrailingGarbage))
+        }
+        Ok(_) => Ok(result),
+        Err(error)
+            if policy.allow_incomplete
+                && error.kind() == ErrorKind::UnexpectedEof
+                && consumed == data.len() =>
+        {
+            Ok(result)
+        }
+        Err(error) => Err(error),
+    }
 }
 
 fn zstd_error(code: usize) -> io::Error {
