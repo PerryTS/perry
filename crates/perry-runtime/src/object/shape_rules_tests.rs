@@ -421,7 +421,7 @@ fn rule2_a_synthetic_parent_class_id_is_not_a_shape_token() {
          writes to +4 would be read back as a live ShapeId"
     );
     assert!(
-        shapes::shape_record_for_word(parent).is_none(),
+        shapes::shape_is_retired(parent),
         "and it must resolve to no shape record"
     );
 }

@@ -26,7 +26,7 @@ unsafe fn ordinary_shape(value: f64) -> Option<(*const ObjectHeader, u32)> {
     let object = addr as *const ObjectHeader;
     let id = (*object).shape_word();
     if id.wrapping_sub(shapes::SHAPE_ID_BASE)
-        >= shapes::EXOTIC_SHAPE_ID_BASE - shapes::SHAPE_ID_BASE
+        >= 2 << crate::codegen_abi::LAYOUT_BAND_SHIFT
     {
         return None;
     }

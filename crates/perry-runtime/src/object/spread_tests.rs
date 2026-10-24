@@ -206,7 +206,7 @@ fn spread_namespace_is_not_rewritten_as_a_heap_key_and_prunes_retired_source() {
         );
         shapes::test_drop_shape_descriptors(object_keys(receiver(source)).arr() as usize);
         assert!(shapes::shape_record_for_word(entry.target_shape_id).is_some());
-        assert!(shapes::shape_record_for_word(id).is_none());
+        assert!(shapes::shape_is_retired(id));
         prune_dead_transition_cache_entries(&|_| false);
         assert_eq!(with_transition_cache(|t| (*t)[slot].next_keys), 0);
     }

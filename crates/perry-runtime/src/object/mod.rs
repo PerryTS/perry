@@ -758,7 +758,7 @@ const SHAPE_INLINE_CACHE_SIZE: usize = 256;
 #[derive(Clone, Copy)]
 pub(crate) struct ShapeCacheEntry {
     shape_id: u32,
-    /// #6804: the RUNTIME ShapeId (`shapes::shape_id_for_keys_ensure`) of
+    /// #6804: the RUNTIME ShapeId (`shapes::layout_for_keys_ensure`) of
     /// `keys_array`, computed once at insert so the literal-allocation path
     /// can stamp newborn plain objects without a per-allocation table
     /// probe. Distinct from `shape_id`, which is the CODEGEN packed-keys

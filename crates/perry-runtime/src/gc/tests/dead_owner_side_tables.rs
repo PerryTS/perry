@@ -663,7 +663,7 @@ fn test_dead_transition_cache_key_pruned_on_full_gc() {
     js_shadow_slot_set(0, ptr_bits(next_keys));
     crate::arena::arena_reset_all_blocks_to_zero();
     let dead_key = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_STRING) as usize;
-    let prev_shape_id = crate::object::shapes::shape_id_for_keys_ensure(std::ptr::null(), 0);
+    let prev_shape_id = crate::object::shapes::layout_for_keys_ensure(std::ptr::null(), 0);
 
     let occupancy_before = crate::object::test_transition_cache_occupancy();
     crate::object::test_seed_transition_cache_entry(prev_shape_id, dead_key, next_keys);
@@ -685,15 +685,16 @@ fn test_dead_transition_cache_key_pruned_on_full_gc() {
 }
 
 #[test]
-fn test_dead_transition_cache_predecessor_shape_pruned_on_full_gc() {
+fn test_transition_cache_owns_its_predecessor_until_eviction() {
     let _guard = CopyingNurseryTestGuard::new(1);
     gc_register_mutable_root_scanner(crate::object::scan_transition_cache_roots_mut);
+    gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
 
     let next_keys = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_ARRAY) as usize;
     js_shadow_slot_set(0, ptr_bits(next_keys));
     crate::arena::arena_reset_all_blocks_to_zero();
     let dead_predecessor_keys = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_ARRAY) as usize;
-    let prev_shape_id = crate::object::shapes::shape_id_for_keys_ensure(
+    let prev_shape_id = crate::object::shapes::layout_for_keys_ensure(
         dead_predecessor_keys as *const crate::ArrayHeader,
         0,
     );
@@ -710,9 +711,13 @@ fn test_dead_transition_cache_predecessor_shape_pruned_on_full_gc() {
 
     assert_eq!(
         crate::object::test_transition_cache_occupancy(),
-        occupancy_before,
-        "a transition whose predecessor descriptor died must release its rooted target"
+        occupancy_before + 1,
+        "a transition must retain the predecessor handle it can read"
     );
+    crate::object::prune_dead_transition_cache_entries(&|addr| addr == next_keys);
+    full_gc();
+    assert!(crate::object::shapes::shape_is_retired(prev_shape_id));
+    assert_eq!(crate::object::test_transition_cache_occupancy(), occupancy_before);
     js_shadow_slot_set(0, 0);
 }
 
@@ -950,7 +955,7 @@ fn transition_cache_entry_does_not_pin_its_target() {
         let live_shape = crate::object::shapes::test_shape_id_for_keys(keys as usize)
             .expect("a freshly allocated object must have a registered shape");
         assert!(
-            crate::object::shapes::shape_descriptor_for_word(live_shape).is_some(),
+            crate::object::shapes::test_descriptor_for_retained_word(live_shape).is_some(),
             "test premise: prev_shape_id must be LIVE, or the prune's existing \
              dead-shape clause decides the outcome and this test is vacuous"
         );

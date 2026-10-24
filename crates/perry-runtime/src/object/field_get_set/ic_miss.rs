@@ -1279,7 +1279,7 @@ mod private_evaluation_brand_tests {
             ));
 
             let instance = crate::object::js_object_alloc(CID, 2);
-            let shape_before = crate::object::shapes::object_shape_id(instance);
+            let shape_before = crate::object::shapes::object_layout_stamp(instance);
             let keys_before_view = crate::object::object_keys(instance);
             let keys_before = keys_before_view.arr();
             let slots_before = crate::object::object_live_slot_count(instance);
@@ -1287,7 +1287,7 @@ mod private_evaluation_brand_tests {
             stamp_private_evaluation_brand(instance, class_value);
 
             assert_eq!(
-                crate::object::shapes::object_shape_id(instance),
+                crate::object::shapes::object_layout_stamp(instance),
                 shape_before
             );
             assert_eq!(crate::object::object_keys(instance).arr(), keys_before);

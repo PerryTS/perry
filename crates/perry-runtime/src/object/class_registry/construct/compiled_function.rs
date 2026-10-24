@@ -250,6 +250,7 @@ pub(super) unsafe fn construct_ordinary_compiled_function(
                         .as_pointer::<ObjectHeader>();
                     // GC_STORE_AUDIT(POINTER_FREE): the existing weak class-id-zero / ShapeId pair.
                     (*(*ptr).meta).instance_birth = u64::from(shape) << 32;
+        crate::object::shapes::note_old_generation_carrier(crate::object::shapes::shape_record_for_word(shape));
                 }
                 let instance = crate::value::js_nanbox_pointer(obj as i64);
                 return Some(run_constructor_body(
@@ -287,6 +288,7 @@ pub(super) unsafe fn construct_ordinary_compiled_function(
             .as_pointer::<ObjectHeader>();
         // GC_STORE_AUDIT(POINTER_FREE): the existing weak class-id-zero / ShapeId pair.
         (*(*ptr).meta).instance_birth = u64::from(shape) << 32;
+        crate::object::shapes::note_old_generation_carrier(crate::object::shapes::shape_record_for_word(shape));
     }
     let instance = crate::value::js_nanbox_pointer(obj as i64);
     Some(run_constructor_body(

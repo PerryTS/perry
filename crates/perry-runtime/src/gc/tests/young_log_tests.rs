@@ -221,7 +221,7 @@ fn young_keys_array_family_is_rekeyed_through_the_log() {
     js_shadow_slot_set(0, ptr_bits(keys as usize));
     let id = crate::object::shapes::shape_descriptor_ensure(keys, 0, 0).expect("shape id");
     assert_eq!(
-        crate::object::shapes::shape_descriptor_for_word(id).map(|d| d.keys),
+        crate::object::shapes::test_descriptor_for_retained_word(id).map(|d| d.keys),
         Some(keys as u64)
     );
 
@@ -233,7 +233,7 @@ fn young_keys_array_family_is_rekeyed_through_the_log() {
         "the rooted keys array must have moved"
     );
     assert_eq!(
-        crate::object::shapes::shape_descriptor_for_word(id).map(|d| d.keys),
+        crate::object::shapes::test_descriptor_for_retained_word(id).map(|d| d.keys),
         Some(keys_after as u64),
         "the family's descriptor must be re-keyed to the evacuated keys array"
     );
@@ -261,7 +261,7 @@ fn old_shape_families_are_skipped_by_a_minor() {
     let _ = gc_collect_minor();
 
     assert_eq!(
-        crate::object::shapes::shape_descriptor_for_word(id).map(|d| d.keys),
+        crate::object::shapes::test_descriptor_for_retained_word(id).map(|d| d.keys),
         Some(keys as u64)
     );
     let row = walk("shapes.families+indices");
@@ -646,7 +646,7 @@ fn promoted_shape_entry_leaves_young_log_and_remains_in_major_walk() {
         "major/full walk must still see the descriptor"
     );
     assert_eq!(
-        crate::object::shapes::shape_descriptor_for_word(id).map(|d| d.keys),
+        crate::object::shapes::test_descriptor_for_retained_word(id).map(|d| d.keys),
         Some(promoted as u64)
     );
 }

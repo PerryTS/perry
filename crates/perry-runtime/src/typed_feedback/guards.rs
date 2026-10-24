@@ -110,7 +110,7 @@ fn method_direct_call_contract(
         }
         if (*obj).class_id == crate::object::NATIVE_MODULE_CLASS_ID
             || (*obj).class_id != expected_class_id
-            || crate::object::shapes::object_shape_id(obj) != expected_shape_id
+            || crate::object::shapes::object_layout_stamp(obj) != expected_shape_id
             || shape_id != expected_shape_id
         {
             return (shape_id, class_id, gc_type, name_hash, false);
@@ -185,7 +185,7 @@ fn class_field_get_contract(
 
         let obj = object_addr as *mut ObjectHeader;
         let class_id = (*obj).class_id;
-        let shape_id = crate::object::shapes::object_shape_id(obj);
+        let shape_id = crate::object::shapes::object_layout_stamp(obj);
         let Some(descriptor) = crate::object::shapes::shape_descriptor_for_word(shape_id) else {
             return (shape_id, class_id, gc_type, false);
         };

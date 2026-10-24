@@ -238,7 +238,7 @@ mod birth_tests {
                     // Descriptor records are born from declared runtime
                     // layouts (no shape-cache key list any more): the record
                     // carries its layout's ShapeId, stable across births.
-                    let birth_id = crate::object::shapes::object_shape_id(object);
+                    let birth_id = crate::object::shapes::object_layout_stamp(object);
                     assert_ne!(birth_id, 0, "the record must carry a real birth shape");
                     assert!(
                         crate::object::shapes::shape_descriptor_for_word(birth_id).is_some(),

@@ -482,7 +482,7 @@ pub(crate) unsafe fn parse_shape_keys_array_with_id(
     debug_assert!(crate::gc::gc_is_suppressed());
     if keys.len() > PARSE_SHAPE_CACHE_KEY_BUDGET {
         let arr = allocate_parse_shape_keys_array(keys);
-        let shape_id = crate::object::shapes::shape_id_for_keys_ensure(arr, keys.len() as u32);
+        let shape_id = crate::object::shapes::layout_for_keys_ensure(arr, keys.len() as u32);
         return (arr, shape_id);
     }
     PARSE_SHAPE_CACHE.with(|cache| {
@@ -504,7 +504,7 @@ pub(crate) unsafe fn parse_shape_keys_array_with_id(
         let arr = allocate_parse_shape_keys_array(keys);
         // All callers are inside the parse suppression window, so the
         // newly allocated array cannot move before the cache roots it.
-        let shape_id = crate::object::shapes::shape_id_for_keys_ensure(arr, keys.len() as u32);
+        let shape_id = crate::object::shapes::layout_for_keys_ensure(arr, keys.len() as u32);
         let mut cache = cache.borrow_mut();
         if cache.len() < PARSE_SHAPE_CACHE_CAP
             && cache.iter().map(|entry| entry.keys.len()).sum::<usize>() + keys.len()

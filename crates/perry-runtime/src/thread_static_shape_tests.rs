@@ -10,14 +10,14 @@ use crate::object::shapes::{
 };
 
 const NAMES: [&str; 2] = ["lt4w_left", "lt4w_right"];
-const REQUESTED: u32 = SHAPE_ID_BASE + 0x4567;
+const REQUESTED: u32 = crate::object::static_shapes::fixtures::fixture_word(0x4567);
 
 fn seed_here() -> u32 {
     let packed: Vec<u8> = NAMES
         .iter()
         .flat_map(|n| n.bytes().chain(std::iter::once(0)))
         .collect();
-    crate::object::static_shapes::js_shape_seed_plain(
+    crate::object::static_shapes::fixtures::fixture_shape_seed_plain(
         REQUESTED,
         packed.as_ptr(),
         packed.len() as u32,
@@ -76,7 +76,7 @@ fn receive(wire: SerializedValue, seed_first: bool) -> (u32, bool, bool) {
         let obj =
             crate::value::JSValue::from_bits(bits).as_pointer::<crate::object::ObjectHeader>();
         let stamp = unsafe { object_shape_stamp(obj) };
-        let static_present = shape_descriptor_for_word(REQUESTED).is_some();
+        let static_present = crate::object::shapes::shape_descriptor_by_id(REQUESTED + 0x10000).is_some();
         // Same facts = the stamp names this agent's canonical node for NAMES.
         let canonical = unsafe {
             crate::object::static_shapes::canonical_keys_for_names(&[
@@ -114,7 +114,7 @@ fn an_unseeded_worker_mints_a_replayed_object_by_facts_and_never_aliases_the_sta
         "the replayed object is not stamped with the canonical key list"
     );
     assert!(
-        is_layout_word(stamp) && !is_static_shape_id(stamp),
+        is_layout_word(stamp) && !crate::object::shapes::is_static_layout_word(stamp),
         "an unseeded agent must mint a counter id by facts, got {stamp:#x}"
     );
     assert!(
@@ -136,8 +136,8 @@ fn seed_constfn_here() -> (u32, u64) {
         crate::fn_info!(worker_constfn_body, 0; with_flags(crate::codegen_abi::FN_PERMANENT_IMAGE));
     let entries = [crate::object::static_shapes::ConstFnStaticEntry { slot: 0, info }];
     let packed = b"lt5w_method\0";
-    let id = crate::object::static_shapes::js_shape_seed_plain_constfn(
-        SHAPE_ID_BASE + 0x7862,
+    let id = crate::object::static_shapes::fixtures::fixture_shape_seed_plain_constfn(
+        crate::object::static_shapes::fixtures::fixture_word(0x7862),
         packed.as_ptr(),
         packed.len() as u32,
         1,
@@ -157,7 +157,7 @@ fn constfn_static_seed_uses_same_image_body_in_each_agent() {
     let worker = std::thread::spawn(seed_constfn_here)
         .join()
         .expect("worker ConstFn seed");
-    assert_eq!(main.0, SHAPE_ID_BASE + 0x7862);
+    assert_eq!(main.0, crate::object::static_shapes::fixtures::fixture_word(0x7862));
     assert_eq!(
         worker, main,
         "static id and body info must agree across agents"

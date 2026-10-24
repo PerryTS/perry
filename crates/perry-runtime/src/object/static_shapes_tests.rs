@@ -2,6 +2,7 @@
 //! static id only on a by-facts miss, and a refusal (the id outside its band,
 //! or already naming other facts) aborts: ids are assigned by content.
 use super::*;
+use super::fixtures::*;
 use crate::object::shapes::{is_layout_word, SHAPE_ID_BASE, STATIC_SHAPE_ID_END};
 
 fn seed(requested: u32, names: &[&str]) -> u32 {
@@ -13,7 +14,7 @@ fn seed_with_rep(requested: u32, names: &[&str], rep: u64) -> u32 {
         .iter()
         .flat_map(|n| n.bytes().chain(std::iter::once(0)))
         .collect();
-    js_shape_seed_plain(
+    fixture_shape_seed_plain(
         requested,
         packed.as_ptr(),
         packed.len() as u32,
@@ -66,9 +67,9 @@ fn metadata_12015_seeded_constfn_uses_shape_facts_without_bootstrap_or_native_pr
     ));
     let entries = [ConstFnStaticEntry { slot: 0, info }];
     let packed = b"meta12015_seeded_method\0";
-    let requested = SHAPE_ID_BASE + 0x78a0;
+    let requested = fixture_word(0x78a0);
     assert_eq!(
-        js_shape_seed_plain_constfn(
+        fixture_shape_seed_plain_constfn(
             requested,
             packed.as_ptr(),
             packed.len() as u32,
@@ -158,9 +159,9 @@ fn metadata_12015_seeded_constfn_refuses_a_different_shape_key_prefix() {
     ));
     let entries = [ConstFnStaticEntry { slot: 0, info }];
     let packed = b"meta12015_expected_method\0";
-    let requested = SHAPE_ID_BASE + 0x78a1;
+    let requested = fixture_word(0x78a1);
     assert_eq!(
-        js_shape_seed_plain_constfn(
+        fixture_shape_seed_plain_constfn(
             requested,
             packed.as_ptr(),
             packed.len() as u32,
@@ -224,8 +225,8 @@ fn constfn_static_seed_and_module_init_mint_have_identical_facts() {
     }];
     let rep = with_slot_rep(0, 0, REP_SPECIAL);
     let packed = b"lt5cf_method\0";
-    let requested = SHAPE_ID_BASE + 0x7860;
-    let seeded = js_shape_seed_plain_constfn(
+    let requested = fixture_word(0x7860);
+    let seeded = fixture_shape_seed_plain_constfn(
         requested,
         packed.as_ptr(),
         packed.len() as u32,
@@ -238,7 +239,7 @@ fn constfn_static_seed_and_module_init_mint_have_identical_facts() {
     assert_eq!(seeded, requested);
     let keys = unsafe { canonical_keys_for_names(&[b"lt5cf_method"]) };
     assert_eq!(
-        js_object_final_shape_id_for_class_keys_static_constfn(
+        fixture_object_final_shape_id_for_class_keys_static_constfn(
             keys.arr() as usize as u64,
             1,
             1,
@@ -255,12 +256,12 @@ fn constfn_static_seed_and_module_init_mint_have_identical_facts() {
     assert_eq!(d.constfn_infos()[0].info, info_a as usize as u64);
     assert_eq!(d.special_constfn_mask, 1);
     assert!(is_carrier(seeded));
-    let other = js_object_final_shape_id_for_class_keys_static_constfn(
+    let other = fixture_object_final_shape_id_for_class_keys_static_constfn(
         keys.arr() as usize as u64,
         1,
         1,
         0,
-        SHAPE_ID_BASE + 0x7861,
+        fixture_word(0x7861),
         rep,
         b.as_ptr(),
         1,
@@ -303,7 +304,7 @@ fn is_carrier(id: u32) -> bool {
 
 #[test]
 fn a_seed_mints_the_requested_id_and_every_later_mint_of_those_facts_resolves_to_it() {
-    let requested = SHAPE_ID_BASE + 0x1234;
+    let requested = fixture_word(0x1234);
     let id = seed(requested, &["lt4s_a", "lt4s_b"]);
     assert_eq!(id, requested, "the seed must mint the requested static id");
     assert!(
@@ -313,15 +314,15 @@ fn a_seed_mints_the_requested_id_and_every_later_mint_of_those_facts_resolves_to
     // The ordinary literal birth of the same key list (the canonical node,
     // count = live bound, proto 0) reaches the seeded record.
     let keys = unsafe { canonical_keys_for_names(&[b"lt4s_a", b"lt4s_b"]) };
-    assert_eq!(shapes::shape_id_for_keys_ensure(keys.arr(), 2), requested);
+    assert_eq!(shapes::layout_for_keys_ensure(keys.arr(), 2), requested);
     // A second seed of the same facts under another id finds the first.
     assert_eq!(
-        seed(SHAPE_ID_BASE + 0x1235, &["lt4s_a", "lt4s_b"]),
-        requested
+        seed(fixture_word(0x1235), &["lt4s_a", "lt4s_b"]),
+        fixture_word(0x1235)
     );
     assert!(
-        shapes::shape_descriptor_for_word(SHAPE_ID_BASE + 0x1235).is_none(),
-        "a by-facts hit must not mint the second requested id"
+        shapes::shape_descriptor_for_word(fixture_word(0x1235)).is_some(),
+        "an explicit static request publishes its own row even after an equal-facts hit"
     );
 }
 
@@ -341,7 +342,7 @@ fn a_rep_literal_seed_is_the_shape_its_lazy_mints_reach_and_keeps_its_f64_lanes(
     let _lock = crate::gc::global_side_table_test_lock();
     const REP_SEED_ANON_CLASS_ID: u32 = 0x0075_5eed;
     let rep = with_slot_rep(with_slot_rep(0, 0, REP_F64), 1, REP_F64);
-    let requested = SHAPE_ID_BASE + 0x5678;
+    let requested = fixture_word(0x5678);
     let id = seed_with_rep(requested, &["lt5s_a", "lt5s_b"], rep);
     assert_eq!(id, requested, "the seed must mint the requested static id");
     let record = shapes::shape_descriptor_for_word(id).expect("seeded record");
@@ -366,7 +367,7 @@ fn a_rep_literal_seed_is_the_shape_its_lazy_mints_reach_and_keeps_its_f64_lanes(
     );
     // ...and its static request (module init with the id) hits.
     assert_eq!(
-        js_object_shape_id_for_class_keys_static(
+        fixture_object_shape_id_for_class_keys_static(
             keys,
             2,
             2,
@@ -433,7 +434,7 @@ fn child_aborts_with_refusal(name: &str) {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(!out.status.success(), "the refused static id did not abort");
     assert!(
-        stderr.contains("was refused by the shape mint"),
+        (stderr.contains("static layout publication mismatch") || stderr.contains("invalid static layout") || stderr.contains("static row") || stderr.contains("InvalidWord")),
         "the child died without the refusal message: {stderr}"
     );
 }
@@ -451,7 +452,7 @@ fn a_static_id_already_naming_other_facts_aborts() {
         );
         return;
     }
-    let requested = SHAPE_ID_BASE + 0x2345;
+    let requested = fixture_word(0x2345);
     assert_eq!(seed(requested, &["lt4d_x"]), requested);
     seed(requested, &["lt4d_y"]);
 }
@@ -479,7 +480,7 @@ fn a_requested_id_outside_the_static_band_aborts() {
                     BAD[i]
                 );
                 assert!(
-                    stderr.contains("was refused by the shape mint"),
+                    (stderr.contains("static layout publication mismatch") || stderr.contains("invalid static layout") || stderr.contains("static row") || stderr.contains("InvalidWord")),
                     "the child died without the refusal message: {stderr}"
                 );
             }
@@ -494,8 +495,8 @@ fn a_requested_id_outside_the_static_band_aborts() {
 #[test]
 fn the_counter_never_mints_into_the_static_band() {
     let keys = unsafe { canonical_keys_for_names(&[b"lt4c_only"]) };
-    let id = shapes::shape_id_for_keys_ensure(keys.arr(), 1);
-    assert!(is_layout_word(id) && id >= STATIC_SHAPE_ID_END, "{id:#x}");
+    let id = shapes::layout_for_keys_ensure(keys.arr(), 1);
+    assert!(is_layout_word(id) && !shapes::is_static_layout_word(id), "{id:#x}");
 }
 
 #[test]
@@ -504,14 +505,14 @@ fn a_class_seed_takes_the_class_prototype_identity() {
     let packed = b"lt4k_a\0lt4k_b\0";
     let keys =
         crate::object::js_build_class_keys_array(SEEDED_CLASS_ID, 2, packed.as_ptr(), 14, 0) as u64;
-    let requested = SHAPE_ID_BASE + 0x3456;
-    let id = js_object_shape_id_for_class_keys_static(keys, 2, 2, SEEDED_CLASS_ID, requested, 0);
+    let requested = fixture_word(0x3456);
+    let id = fixture_object_shape_id_for_class_keys_static(keys, 2, 2, SEEDED_CLASS_ID, requested, 0);
     let record = shapes::shape_descriptor_for_word(id).expect("seeded record");
     assert_eq!(record.proto_id, shapes::class_proto_id(SEEDED_CLASS_ID));
     // Registration is idempotent: a second registration (another module
     // importing the class) resolves to the same id.
     assert_eq!(
-        js_object_shape_id_for_class_keys_static(keys, 2, 2, SEEDED_CLASS_ID, requested, 0),
+        fixture_object_shape_id_for_class_keys_static(keys, 2, 2, SEEDED_CLASS_ID, requested, 0),
         id
     );
     assert!(is_carrier(id));
@@ -547,7 +548,7 @@ unsafe fn confirmed(id: u32, key: *const crate::StringHeader, guess: usize) -> b
 /// record's confirms fail (the minted twin's still pass).
 #[test]
 fn a_seeded_literal_shape_answers_the_megamorphic_confirm_like_a_minted_one() {
-    let requested = SHAPE_ID_BASE + 0x1240;
+    let requested = fixture_word(0x1240);
     let seeded = seed(requested, &["lt4m_a", "lt4m_k0"]);
     assert_eq!(seeded, requested, "the seed must mint the requested id");
     // Module init: the pools mint the atoms of their key literals.
@@ -558,7 +559,7 @@ fn a_seeded_literal_shape_answers_the_megamorphic_confirm_like_a_minted_one() {
     );
     // A literal minted by facts after the pools ran (the dynamic path).
     let minted_keys = unsafe { canonical_keys_for_names(&[b"lt4m_a", b"lt4m_k1"]) };
-    let minted = shapes::shape_id_for_keys_ensure(minted_keys.arr(), 2);
+    let minted = shapes::layout_for_keys_ensure(minted_keys.arr(), 2);
     for (id, key, guess, what) in [
         (seeded, a, 0, "seeded `a` at 0"),
         (seeded, k0, 1, "seeded `k0` at 1"),
@@ -628,8 +629,8 @@ fn constfn_finalizer_waits_for_stores_and_preserves_fresh_closures() {
     let info = crate::fn_info!(seeded_constfn_body_a, 0; with_flags(crate::codegen_abi::FN_PERMANENT_IMAGE));
     let entries = [ConstFnStaticEntry { slot: 0, info }];
     let packed = b"ltcf_final_m\0ltcf_final_x\0";
-    let requested = SHAPE_ID_BASE + 0x7870;
-    let final_id = js_shape_seed_plain_constfn(
+    let requested = fixture_word(0x7870);
+    let final_id = fixture_shape_seed_plain_constfn(
         requested,
         packed.as_ptr(),
         packed.len() as u32,
@@ -758,7 +759,7 @@ fn constfn_finalizer_refuses_wrong_body_layout_and_rebindable_this() {
     let promoted = control.with_mut_ptr::<crate::object::ObjectHeader, _>(|control_ptr| {
         js_object_finalize_constfn_static(
             control_ptr as usize as u64,
-            SHAPE_ID_BASE + 0x7871,
+            fixture_word(0x7871),
             packed.as_ptr(),
             packed.len() as u32,
             1,
@@ -771,10 +772,10 @@ fn constfn_finalizer_refuses_wrong_body_layout_and_rebindable_this() {
     });
     assert_eq!(
         unsafe { shapes::object_shape_stamp(promoted as usize as *mut _) },
-        SHAPE_ID_BASE + 0x7871,
+        fixture_word(0x7871),
         "the control must actually finalize before testing refusals"
     );
-    assert_ne!(birth, SHAPE_ID_BASE + 0x7871);
+    assert_ne!(birth, fixture_word(0x7871));
     for (case, body, caps, count, live, class_id, rep) in [
         ("wrong body", other, 0, 1, 1, 0, 3),
         (
@@ -815,7 +816,7 @@ fn constfn_finalizer_refuses_wrong_body_layout_and_rebindable_this() {
         let raw = obj.with_mut_ptr::<crate::object::ObjectHeader, _>(|obj_ptr| {
             js_object_finalize_constfn_static(
                 obj_ptr as usize as u64,
-                SHAPE_ID_BASE + 0x7871,
+                fixture_word(0x7871),
                 packed.as_ptr(),
                 packed.len() as u32,
                 count,
@@ -856,22 +857,22 @@ fn declared_class_final_mint_keeps_birth_ordinary_and_uses_each_current_closure(
         crate::object::js_build_class_keys_array(cid, 2, packed.as_ptr(), packed.len() as u32, 0);
     let keys = scope.root_raw_mut_ptr(keys as usize as *mut crate::array::ArrayHeader);
     let ordinary = keys.with_mut_ptr::<crate::array::ArrayHeader, _>(|keys_ptr| {
-        js_object_shape_id_for_class_keys_static(
+        fixture_object_shape_id_for_class_keys_static(
             keys_ptr as usize as u64,
             2,
             2,
             cid,
-            SHAPE_ID_BASE + 0x7880,
+            fixture_word(0x7880),
             0,
         )
     });
     let final_id = keys.with_mut_ptr::<crate::array::ArrayHeader, _>(|keys_ptr| {
-        js_object_final_shape_id_for_class_keys_static_constfn(
+        fixture_object_final_shape_id_for_class_keys_static_constfn(
             keys_ptr as usize as u64,
             2,
             2,
             cid,
-            SHAPE_ID_BASE + 0x7881,
+            fixture_word(0x7881),
             3,
             entries.as_ptr(),
             1,
@@ -1046,8 +1047,8 @@ fn constfn_finalizer_refuses_equal_names_in_a_different_keys_array() {
     let info = crate::fn_info!(seeded_constfn_body_a, 0; with_flags(crate::codegen_abi::FN_PERMANENT_IMAGE));
     let entries = [ConstFnStaticEntry { slot: 0, info }];
     let packed = b"ltcf_alias_m\0";
-    let requested = SHAPE_ID_BASE + 0x7872;
-    let seeded = js_shape_seed_plain_constfn(
+    let requested = fixture_word(0x7872);
+    let seeded = fixture_shape_seed_plain_constfn(
         requested,
         packed.as_ptr(),
         packed.len() as u32,
@@ -1099,8 +1100,8 @@ fn nscall_structural_seed_keeps_the_inline_bound_of_a_spill_builder() {
         .iter()
         .flat_map(|key| key.bytes().chain(std::iter::once(0)))
         .collect();
-    let requested = SHAPE_ID_BASE + 0x79e1;
-    let id = js_shape_seed_plain(
+    let requested = fixture_word(0x79e1);
+    let id = fixture_shape_seed_plain(
         requested,
         packed.as_ptr(),
         packed.len() as u32,

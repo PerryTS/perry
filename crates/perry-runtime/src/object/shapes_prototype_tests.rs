@@ -95,7 +95,7 @@ fn new_f_and_object_create_of_its_prototype_share_a_shape() {
     let created = crate::object::js_object_create(f64::from_bits(bits(proto)));
     let created = crate::value::JSValue::from_bits(created.to_bits()).as_pointer::<ObjectHeader>()
         as *mut ObjectHeader;
-    let width = crate::object::shapes::shape_live_inline_slot_count_by_id(unsafe {
+    let width = crate::object::shapes::shape_live_inline_slot_count_for_word(unsafe {
         super::super::object_shape_stamp(created)
     })
     .unwrap();

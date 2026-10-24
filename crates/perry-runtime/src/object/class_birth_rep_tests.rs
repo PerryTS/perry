@@ -327,17 +327,17 @@ fn a_region_prime_value_tests_a_requested_number_read_on_a_non_identity_lane() {
 /// the same keys with the other rep are another content under another id.
 #[test]
 fn a_class_birth_with_an_f64_lane_adopts_its_static_id() {
-    use super::static_shapes::js_object_shape_id_for_class_keys_static;
+    use super::static_shapes::fixtures::fixture_object_shape_id_for_class_keys_static;
     let k = keys(b"sa\0sb\0", 2);
-    let f64_id = crate::object::shapes::SHAPE_ID_BASE + 0x3a61;
-    let any_id = crate::object::shapes::SHAPE_ID_BASE + 0x3a62;
-    let typed = js_object_shape_id_for_class_keys_static(k, 2, 2, CID, f64_id, REP_F64);
+    let f64_id = crate::object::static_shapes::fixtures::fixture_word(0x3a61);
+    let any_id = crate::object::static_shapes::fixtures::fixture_word(0x3a62);
+    let typed = crate::object::static_shapes::fixtures::fixture_object_shape_id_for_class_keys_static(k, 2, 2, CID, f64_id, REP_F64);
     assert_eq!(typed, f64_id, "the F64 birth adopts its static id");
     assert_eq!(rep_of(typed), REP_F64);
-    let untyped = js_object_shape_id_for_class_keys_static(k, 2, 2, CID, any_id, REP_ANY);
+    let untyped = crate::object::static_shapes::fixtures::fixture_object_shape_id_for_class_keys_static(k, 2, 2, CID, any_id, REP_ANY);
     assert_eq!(untyped, any_id, "the all-Any content is another id");
     assert_eq!(
-        js_object_shape_id_for_class_keys_static(k, 2, 2, CID, f64_id, REP_F64),
+        crate::object::static_shapes::fixtures::fixture_object_shape_id_for_class_keys_static(k, 2, 2, CID, f64_id, REP_F64),
         typed,
         "a second registration resolves to the same id"
     );
@@ -348,12 +348,12 @@ fn a_class_birth_with_an_f64_lane_adopts_its_static_id() {
 /// the later definer's F64 birth keeps its distinct id and +0.0 birth fill.
 #[test]
 fn importer_first_birth_keeps_definer_rep_and_stub_slots_distinct() {
-    use super::static_shapes::js_object_shape_id_for_class_keys_static;
+    use super::static_shapes::fixtures::fixture_object_shape_id_for_class_keys_static;
     let k = keys(b"ifa\0ifb\0", 2);
-    let any_id = crate::object::shapes::SHAPE_ID_BASE + 0x3a71;
-    let f64_id = crate::object::shapes::SHAPE_ID_BASE + 0x3a72;
+    let any_id = crate::object::static_shapes::fixtures::fixture_word(0x3a71);
+    let f64_id = crate::object::static_shapes::fixtures::fixture_word(0x3a72);
 
-    let importer = js_object_shape_id_for_class_keys_static(k, 2, 2, CID, any_id, REP_ANY);
+    let importer = crate::object::static_shapes::fixtures::fixture_object_shape_id_for_class_keys_static(k, 2, 2, CID, any_id, REP_ANY);
     assert_eq!(importer, any_id);
     let imported_birth = unsafe { birth(k, 2, importer) };
     assert_eq!(unsafe { object_shape_stamp(imported_birth) }, any_id);
@@ -362,7 +362,7 @@ fn importer_first_birth_keeps_definer_rep_and_stub_slots_distinct() {
         crate::value::TAG_UNDEFINED
     );
 
-    let definer = js_object_shape_id_for_class_keys_static(k, 2, 2, CID, f64_id, REP_F64);
+    let definer = crate::object::static_shapes::fixtures::fixture_object_shape_id_for_class_keys_static(k, 2, 2, CID, f64_id, REP_F64);
     assert_eq!(definer, f64_id);
     assert_ne!(definer, importer);
     let defined_birth = unsafe { birth(k, 2, definer) };
@@ -485,7 +485,7 @@ fn a_region_constfn_shape_keeps_numeric_admission_and_refuses_special_stores() {
     let entries = [ConstFnStaticEntry { slot: 0, info }];
     let k = keys(b"p7cf_method\0p7cf_x\0", 2);
     let rep = REP_SPECIAL | (REP_F64 << 2);
-    let completed = js_object_final_shape_id_for_class_keys_static_constfn(
+    let completed = crate::object::static_shapes::fixtures::fixture_object_final_shape_id_for_class_keys_static_constfn(
         k,
         2,
         2,

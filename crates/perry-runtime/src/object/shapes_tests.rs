@@ -21,10 +21,10 @@ mod c3c_tests {
             let second = scope.root_raw_mut_ptr(crate::object::js_object_alloc(CID, 0));
 
             let ordinary =
-                first.with_const_ptr::<crate::ObjectHeader, _>(|obj| object_shape_id(obj));
+                first.with_const_ptr::<crate::ObjectHeader, _>(|obj| object_layout_stamp(obj));
             assert_eq!(
                 ordinary,
-                second.with_const_ptr::<crate::ObjectHeader, _>(|obj| object_shape_id(obj)),
+                second.with_const_ptr::<crate::ObjectHeader, _>(|obj| object_layout_stamp(obj)),
                 "test premise: equal class evaluations start with one shape"
             );
 
@@ -36,9 +36,9 @@ mod c3c_tests {
             });
 
             let first_class =
-                first.with_const_ptr::<crate::ObjectHeader, _>(|obj| object_shape_id(obj));
+                first.with_const_ptr::<crate::ObjectHeader, _>(|obj| object_layout_stamp(obj));
             let second_class =
-                second.with_const_ptr::<crate::ObjectHeader, _>(|obj| object_shape_id(obj));
+                second.with_const_ptr::<crate::ObjectHeader, _>(|obj| object_layout_stamp(obj));
             assert_ne!(
                 ordinary, first_class,
                 "becoming a class must invalidate guards"
@@ -58,11 +58,11 @@ mod c3c_tests {
         let _lock = crate::gc::global_side_table_test_lock();
         let a: usize = 0xC3C0_0000_0000_1000;
         let b: usize = 0xC3C0_0000_0000_2000;
-        let ida = shape_id_for_keys_ensure(a as *const ArrayHeader, 4);
-        let idb = shape_id_for_keys_ensure(b as *const ArrayHeader, 4);
+        let ida = layout_for_keys_ensure(a as *const ArrayHeader, 4);
+        let idb = layout_for_keys_ensure(b as *const ArrayHeader, 4);
         assert!(is_layout_word(ida) && is_layout_word(idb));
         assert_ne!(ida, idb);
-        assert_eq!(shape_id_for_keys_ensure(a as *const ArrayHeader, 4), ida);
+        assert_eq!(layout_for_keys_ensure(a as *const ArrayHeader, 4), ida);
         // Real class-id space must never classify as a shape id.
         assert!(!is_layout_word(0));
         assert!(!is_layout_word(1));
@@ -419,7 +419,7 @@ mod descriptor_tests_8067 {
                 crate::object::js_object_alloc_with_parent(0x8067_0101, 0, 0),
                 crate::object::js_object_alloc_fast_with_parent(0x8067_0102, 0, 0),
             ] {
-                let id = object_shape_id(obj);
+                let id = object_layout_stamp(obj);
                 assert!(is_layout_word(id), "newborn keyless object has no ShapeId");
                 let facts = object_shape_descriptor(obj).expect("keyless descriptor");
                 assert_eq!(facts.keys, 0);
@@ -435,14 +435,14 @@ mod descriptor_tests_8067 {
         unsafe {
             let obj = crate::object::js_object_alloc(0, 1);
             crate::object::js_object_set_field_by_name(obj, key("semantic8067"), 1.0);
-            let structural = object_shape_id(obj);
+            let structural = object_layout_stamp(obj);
 
             crate::object::descriptor_state::set_property_attrs(
                 obj as usize,
                 "semantic8067".to_string(),
                 crate::object::descriptor_state::PropertyAttrs::new(false, true, true),
             );
-            let described = object_shape_id(obj);
+            let described = object_layout_stamp(obj);
             assert_ne!(described, structural);
             let described_facts = object_shape_descriptor(obj).unwrap();
             // Charter step 3: the attribute is a fact the shape REPORTS — its
@@ -456,7 +456,7 @@ mod descriptor_tests_8067 {
                 obj as usize,
                 crate::value::TAG_NULL,
             );
-            let reparented = object_shape_id(obj);
+            let reparented = object_layout_stamp(obj);
             assert_ne!(reparented, described);
             assert_eq!(
                 object_shape_descriptor(obj).unwrap().keys,
@@ -472,11 +472,11 @@ mod descriptor_tests_8067 {
         unsafe {
             let obj = crate::object::js_object_alloc(0, 1);
             let addr = obj as usize;
-            let initial = object_shape_id(obj);
+            let initial = object_layout_stamp(obj);
 
             crate::object::descriptor_state::clear_property_attrs(addr, "missing8067");
             crate::object::descriptor_state::clear_accessor_descriptor(addr, "missing8067");
-            assert_eq!(object_shape_id(obj), initial);
+            assert_eq!(object_layout_stamp(obj), initial);
 
             crate::object::descriptor_state::set_property_attrs(
                 addr,
@@ -484,9 +484,9 @@ mod descriptor_tests_8067 {
                 crate::object::descriptor_state::PropertyAttrs::new(false, true, true),
             );
             crate::object::descriptor_state::clear_property_attrs(addr, "attrs8067");
-            let after_real_attr_clear = object_shape_id(obj);
+            let after_real_attr_clear = object_layout_stamp(obj);
             crate::object::descriptor_state::clear_property_attrs(addr, "attrs8067");
-            assert_eq!(object_shape_id(obj), after_real_attr_clear);
+            assert_eq!(object_layout_stamp(obj), after_real_attr_clear);
 
             crate::object::descriptor_state::set_accessor_descriptor(
                 addr,
@@ -494,9 +494,9 @@ mod descriptor_tests_8067 {
                 crate::object::descriptor_state::AccessorDescriptor::default(),
             );
             crate::object::descriptor_state::clear_accessor_descriptor(addr, "accessor8067");
-            let after_real_accessor_clear = object_shape_id(obj);
+            let after_real_accessor_clear = object_layout_stamp(obj);
             crate::object::descriptor_state::clear_accessor_descriptor(addr, "accessor8067");
-            assert_eq!(object_shape_id(obj), after_real_accessor_clear);
+            assert_eq!(object_layout_stamp(obj), after_real_accessor_clear);
         }
     }
 
@@ -1183,6 +1183,7 @@ fn shape_lookup_cache_is_invalidated_when_a_record_is_removed() {
             shape_descriptor_for_word(id).is_some(),
             "the descriptor must resolve before removal"
         );
+        let identity = unsafe { (*ShapeSlab::agent_record_for_word(id)).shape_id };
         let record = shape_descriptor_for_word(id).unwrap().record;
         assert_ne!(record, 0);
 
@@ -1193,15 +1194,15 @@ fn shape_lookup_cache_is_invalidated_when_a_record_is_removed() {
         }
 
         assert!(
-            shape_descriptor_for_word(id).is_none(),
+            shape_is_retired(id),
             "a removed id must not resolve"
         );
         assert_eq!(
-            shape_live_inline_slot_count_by_id(id),
+            shape_record_by_id(identity).map(|r| r.live_inline_slot_count()),
             None,
             "the field reader must not read a retired record"
         );
-        assert_eq!(shape_descriptor_keys_slot(id), None);
+        assert!(shape_descriptor_by_id(identity).is_none());
     }
 }
 
@@ -1251,7 +1252,7 @@ fn the_ordinary_slot_query_declines_a_class_kind_shape() {
         let name = crate::string::js_string_from_bytes(b"id".as_ptr(), 2);
         crate::array::js_array_set(keys, 0, crate::JSValue::string_ptr(name));
         let key_bits = crate::JSValue::string_ptr(name).bits();
-        let ordinary = shape_id_for_keys_ensure(keys, 1);
+        let ordinary = layout_for_keys_ensure(keys, 1);
         assert_eq!(
             js_shape_ordinary_inline_slot_for_key(ordinary, key_bits),
             0,

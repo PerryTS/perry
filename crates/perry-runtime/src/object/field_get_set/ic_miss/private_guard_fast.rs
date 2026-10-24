@@ -988,7 +988,7 @@ mod private_guard_fast_tests {
                 shape_of(plain.get_nanbox_f64())
             );
             assert_eq!(
-                crate::object::shapes::shape_brands_by_id(shape_of(branded.get_nanbox_f64())),
+                crate::object::shapes::shape_brands_for_word(shape_of(branded.get_nanbox_f64())),
                 Some(&[u64::from(CID)][..])
             );
             let key = crate::string::intern_ascii_literal(b"later");
@@ -1055,7 +1055,7 @@ mod private_guard_fast_tests {
             fields.push("#out");
             let obj = instance_with(CID, &fields, false);
             let (_, shape_id) = private_plain_receiver_shape(obj).unwrap();
-            let live = crate::object::shapes::shape_live_inline_slot_count_by_id(shape_id).unwrap();
+            let live = crate::object::shapes::shape_live_inline_slot_count_for_word(shape_id).unwrap();
             assert!(
                 live < fields.len() as u32,
                 "fixture must spill its last field"

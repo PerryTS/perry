@@ -1835,3 +1835,7 @@ pub fn initialize_runtime_fixture() {
     gc_init();
     crate::object::static_shapes::js_shape_run_static_seed();
 }
+
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_GC_INIT_WITH_LAYOUTS: unsafe extern "C" fn(*const crate::codegen_abi::PerryLayoutImageV1) = js_gc_init_with_layouts;

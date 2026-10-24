@@ -346,7 +346,7 @@ fn static_prototype_requires_the_candidate_parent_and_its_canonical_holder() {
     let canonical = scope.root_nanbox_f64(class_decl_prototype_value(CHECKED_PARENT));
     // No guard needed a seed: the family still supplies the exact candidate.
     let requested = crate::object::shapes::SHAPE_ID_BASE + 1991;
-    assert!(crate::object::shapes::shape_record_for_word(requested).is_none());
+    assert!(crate::object::shapes::shape_is_retired(requested));
     let matches =
         |bits| super::decl_prototype_birth::static_parent_matches(CHECKED_CHILD, requested, bits);
     assert!(
@@ -451,9 +451,10 @@ fn a_refused_static_request_keeps_the_general_born_final_shape() {
     let cid = 0x6e91;
     register(cid, b"RefusedStaticRequest");
     let requested = crate::object::shapes::SHAPE_ID_BASE + 1996;
-    assert!(crate::object::shapes::shape_record_for_word(requested).is_none());
+    assert!(crate::object::shapes::shape_is_retired(requested));
     let declaration = Box::leak(Box::new(super::declarations::ClassDeclaration {
         birth_shape: requested,
+        birth_layout_word: crate::object::static_shapes::fixtures::fixture_word(requested),
         ..super::declarations::ClassDeclaration::native(&[])
     }));
     unsafe {

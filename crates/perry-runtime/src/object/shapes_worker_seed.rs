@@ -61,7 +61,7 @@ pub(crate) fn worker_shape_seed() -> WorkerShapeSeed {
                     r.keys as usize as *const crate::array::ArrayHeader,
                 )
             };
-            if slots.is_null() || len < r.logical_key_count as usize {
+            if r.logical_key_count != 0 && (slots.is_null() || len < r.logical_key_count as usize) {
                 return;
             }
             for slot in 0..r.logical_key_count as usize {
@@ -225,8 +225,8 @@ mod tests {
                             crate::object::shapes::object_shape_stamp(object_ptr)
                         })
                     },
-                    id,
-                    "the first outlined birth must retain the seeded id"
+                    word,
+                    "the first outlined birth must retain the seeded local word"
                 );
                 object.with_mut_ptr(|object_ptr| {
                     key.with_const_ptr(|key_ptr| {

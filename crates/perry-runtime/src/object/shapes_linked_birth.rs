@@ -193,7 +193,7 @@ pub(crate) fn shape_is_evaluation_layout_of(id: u32, family: u32) -> bool {
 /// family layout's record lives as long as the program), so it holds for
 /// the record's life. One directory read.
 #[inline]
-pub(crate) fn evaluation_layout_family(id: u32) -> u32 {
+pub(crate) fn evaluation_family_desc_index_plus_one(id: u32) -> u32 {
     match ShapeSlab::agent_record_for_word_present(id) {
         // SAFETY: a present record of this agent, read immediately.
         Some(record) => unsafe { (*record).family_desc_index_plus_one },
@@ -203,7 +203,7 @@ pub(crate) fn evaluation_layout_family(id: u32) -> u32 {
 
 /// After a prototype transition from family layout `family` (or from an
 /// evaluation copy of it) reached `id`: when `id` is an evaluation copy of
-/// that layout, its record names the family ([`evaluation_layout_family`]).
+/// that layout, its record names the family ([`evaluation_family_desc_index_plus_one`]).
 pub(crate) fn note_evaluation_layout(id: u32, family: u32) {
     if !shape_is_evaluation_layout_of(id, family) {
         return;

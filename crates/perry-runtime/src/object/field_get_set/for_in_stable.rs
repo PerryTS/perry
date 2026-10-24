@@ -49,7 +49,7 @@ unsafe fn prototype_signature(prototype_addr: usize) -> Option<PrototypeSignatur
         return None;
     }
     let prototype = prototype_addr as *const ObjectHeader;
-    let shape_id = super::super::shapes::object_shape_id(prototype);
+    let shape_id = super::super::shapes::object_layout_stamp(prototype);
     if shape_id == 0 {
         return None;
     }

@@ -436,6 +436,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Threading",
     # The shape-record reservation (`object/shapes_store/flat.rs`).
     "Win32_System_Memory",
+    "Win32_System_SystemInformation",
 ] }
 
 # #855: libc::mach_host_self is deprecated; the mach2 crate is the

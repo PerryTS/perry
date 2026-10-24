@@ -246,7 +246,7 @@ mod evaluation_layout_tests {
             assert!((*obj).meta.is_null(), "the brand is a shape fact");
             assert_eq!(shapes::object_evaluation_brand(obj), class_bits);
             assert_eq!(shapes::object_prototype_word(obj), proto_bits);
-            assert_eq!(shapes::evaluation_layout_family(copy), (*desc).layout_id);
+            assert_eq!(crate::object::layout_desc::evaluation_layout_desc(shapes::evaluation_family_desc_index_plus_one(copy)).map(|d| d.layout_id), Some((*desc).layout_id));
             assert!(is_family_object(obj));
             assert_eq!(
                 shapes::evaluation_copy_birth_edges(copy, (*desc).layout_id),

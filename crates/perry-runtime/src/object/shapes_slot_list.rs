@@ -1312,7 +1312,7 @@ pub(crate) fn shape_descriptor_keys_slot(shape_id: u32) -> Option<*mut u64> {
     crate::state::state()
         .shapes
         .slab()
-        .record_ptr(shape_id)
+        .handle_record_ptr(shape_id)
         .map(|record| record as *mut u64)
 }
 

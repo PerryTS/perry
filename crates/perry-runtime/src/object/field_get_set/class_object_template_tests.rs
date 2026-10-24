@@ -105,7 +105,7 @@ fn later_evaluations_are_born_in_the_template_shapes() {
     );
     unsafe {
         let shape = |h: &crate::gc::RuntimeHandle<'_>| {
-            h.with_mut_ptr::<ObjectHeader, _>(|o| crate::object::shapes::object_shape_id(o))
+            h.with_mut_ptr::<ObjectHeader, _>(|o| crate::object::shapes::object_layout_stamp(o))
         };
         let addr =
             |h: &crate::gc::RuntimeHandle<'_>| h.with_mut_ptr::<ObjectHeader, _>(|o| o as usize);

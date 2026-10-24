@@ -707,7 +707,7 @@ unsafe fn record_class_object_template(
     let Some(d) = crate::object::shapes::object_shape_descriptor(obj) else {
         return;
     };
-    let final_shape = crate::object::shapes::object_shape_id(obj);
+    let final_shape = crate::object::shapes::object_layout_stamp(obj);
     let count = d.logical_key_count as usize;
     if final_shape == 0
         || d.hole_count != 0
@@ -810,7 +810,7 @@ pub(crate) unsafe fn class_object_add_internal(
     value: f64,
     cell: Option<TemplateCell>,
 ) {
-    let from = crate::object::shapes::object_shape_id(obj);
+    let from = crate::object::shapes::object_layout_stamp(obj);
     let key_word = key as u64 + 1;
     // The recorded transition from `from` by `key`, and the first free pair
     // when there is none, of a cell this thread owns.
@@ -862,7 +862,7 @@ pub(crate) unsafe fn class_object_add_internal(
         let Some(d) = crate::object::shapes::object_shape_descriptor(obj) else {
             return;
         };
-        let to = crate::object::shapes::object_shape_id(obj);
+        let to = crate::object::shapes::object_layout_stamp(obj);
         let Some(slot) = d.logical_key_count.checked_sub(1) else {
             return;
         };
@@ -1058,7 +1058,7 @@ pub(crate) unsafe fn record_prototype_template(
     let Some(d) = crate::object::shapes::object_shape_descriptor(proto) else {
         return;
     };
-    let final_shape = crate::object::shapes::object_shape_id(proto);
+    let final_shape = crate::object::shapes::object_layout_stamp(proto);
     let count = d.logical_key_count as usize;
     let meta = (*proto).meta;
     let owner = crate::value::js_nanbox_pointer(class as i64).to_bits();

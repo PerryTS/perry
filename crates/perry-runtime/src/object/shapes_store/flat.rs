@@ -39,7 +39,7 @@ unsafe fn discard(at: *mut u8, bytes: usize) -> bool {
 }
 #[cfg(unix)]
 unsafe fn unreserve(at: *mut u8, bytes: usize) {
-    libc::munmap(at.cast(), bytes);
+    assert!(libc::munmap(at.cast(), bytes) == 0, "shape Region release failed");
 }
 
 #[cfg(windows)]

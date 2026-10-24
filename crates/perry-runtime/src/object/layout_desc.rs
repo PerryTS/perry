@@ -155,7 +155,7 @@ impl ObjectHeader {
 pub const fn carry_shadow(previous: u32, id: u32) -> u32 {
     if word_is_shadowed(previous)
         && id >= super::shapes::SHAPE_ID_BASE
-        && id < super::shapes::SITE_SHAPE_ID_END
+        && id < crate::codegen_abi::LAYOUT_ORDINARY_END
     {
         id | LAYOUT_SHADOW_BIT
     } else {
@@ -374,8 +374,7 @@ pub(crate) fn registered_layout_id(word: u32) -> Option<u32> {
     super::shapes::is_layout_word(word).then_some(word)
 }
 
-/// Read the existing registration word atomically: an ordinary function's
-/// first construction may publish its id from another agent.
+/// Read the immutable template word; the independent shape_id cell is atomic.
 #[inline]
 pub(crate) unsafe fn load_layout_id(desc: *const PerryLayoutDesc) -> u32 {
     (*desc).layout_id
@@ -968,8 +967,10 @@ unsafe fn register_bound(
     } else {
         match word.compare_exchange(0, proposed, Ordering::AcqRel, Ordering::Acquire) {
             Ok(_) => proposed,
-            Err(other) => registered_layout_id(other)
-                .expect("a carried layout word holds the sentinel or a ShapeId"),
+            Err(other) => {
+                assert!(super::shapes::is_shape_id(other), "descriptor identity cell holds a ShapeId");
+                other
+            },
         }
     };
     if super::shapes::shape_descriptor_by_id(id).is_none() {
@@ -1017,7 +1018,7 @@ pub unsafe extern "C" fn perry_alloc_layout(desc: *const PerryLayoutDesc) -> *mu
 }
 
 /// Allocate an instance of class family layout `desc` born on `copy`, a class
-/// evaluation's copy of that layout (`shapes::evaluation_layout_family(copy)`
+/// evaluation's copy of that layout (`shapes::evaluation_family_desc_index_plus_one(copy)`
 /// names `desc`'s layout): the family's slots, all holes, under the ShapeId
 /// that names the evaluation's prototype and brand. The caller read `copy`
 /// from the evaluation's class object and checked it. Can collect.
@@ -1159,7 +1160,7 @@ pub(crate) unsafe fn alloc_derived_layout_object(
     if super::shapes::identity_prototype_word(proto_id) != proto_bits {
         super::shapes::write_identity_word(proto_id, proto_bits);
     }
-    let shape = match super::shapes::shape_keys_and_proto_by_id(recorded) {
+    let shape = match super::shapes::shape_keys_and_proto_for_word(recorded) {
         Some((keys, count, recorded_proto))
             if recorded != 0
                 && keys == base.keys
@@ -2020,11 +2021,11 @@ unsafe fn evaluation_family_desc_of(word: u32) -> Option<&'static PerryLayoutDes
 /// family answer stays inline in every geometry reader.
 #[inline(never)]
 unsafe fn evaluation_family_desc_of_record(id: u32) -> Option<&'static PerryLayoutDesc> {
-    evaluation_layout_desc(super::shapes::evaluation_layout_family(id))
+    evaluation_layout_desc(super::shapes::evaluation_family_desc_index_plus_one(id))
 }
 
 /// The family descriptor a shape record's `family_desc_index_plus_one` fact names
-/// (`shapes::evaluation_layout_family`), or `None` for 0.
+/// (`shapes::evaluation_family_desc_index_plus_one`), or `None` for 0.
 ///
 /// # Safety
 /// `family` is a record's `family_desc_index_plus_one` fact.

@@ -421,7 +421,7 @@ pub(crate) unsafe fn leaf_key_add(
     };
     // The target layout names the new slot live: the stamp alone publishes
     // it (no bound to re-publish, which could mint).
-    if super::shapes::shape_live_inline_slot_count_by_id(target_shape_id)
+    if super::shapes::shape_live_inline_slot_count_for_word(target_shape_id)
         .is_none_or(|live| live <= slot_idx)
     {
         return false;

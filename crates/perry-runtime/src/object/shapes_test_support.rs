@@ -122,6 +122,16 @@ pub(crate) fn test_drop_shape_descriptors(keys_id: usize) {
         .get(&(keys_id as u64))
         .map(|ids| ids.as_slice().to_vec())
         .unwrap_or_default();
+    // Forced test retirement first releases cache owners, as production GC
+    // does before deciding that a handle is uncarried.
+    crate::object::with_transition_cache(|table| unsafe {
+        for entry in (*table).iter_mut() {
+            if stale.contains(&entry.prev_shape_id) || stale.contains(&entry.target_shape_id)
+                || crate::object::spread::source_shape(entry).is_some_and(|w| stale.contains(&w)) {
+                *entry = std::mem::zeroed();
+            }
+        }
+    });
     for id in stale {
         remove_descriptor_and_reverse_indices(&mut inner, id);
     }
@@ -268,7 +278,7 @@ pub(crate) fn test_shape_record_is_carrier(id: u32) -> bool {
     crate::state::state()
         .shapes
         .slab()
-        .get(id)
+        .get_handle(id)
         .is_some_and(|record| record.cache_carrier())
 }
 

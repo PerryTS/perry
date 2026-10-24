@@ -54,6 +54,7 @@ pub extern "C" fn js_object_shape_id_for_class_keys_static(
     ));
     // SAFETY: `id` was resolved from this agent's live slab record above.
     unsafe { shapes::note_external_shape_carrier(shapes::shape_descriptor_for_word(id)) };
+    let id = shapes::shape_record_for_word(id).map_or(0, |r| r.identity().0);
     note_static_request("class", requested, id);
     id
 }
@@ -102,6 +103,7 @@ pub extern "C" fn js_shape_seed_plain(
     ));
     // SAFETY: as above.
     unsafe { shapes::note_external_shape_carrier(shapes::shape_descriptor_for_word(id)) };
+    let id = shapes::shape_record_for_word(id).map_or(0, |r| r.identity().0);
     note_static_request("seed", requested, id);
     id
 }
@@ -148,6 +150,7 @@ pub extern "C" fn js_shape_seed_plain_constfn(
     ));
     // SAFETY: `id` was resolved from this agent's live slab record above.
     unsafe { shapes::note_external_shape_carrier(shapes::shape_descriptor_for_word(id)) };
+    let id = shapes::shape_record_for_word(id).map_or(0, |r| r.identity().0);
     note_static_request("seed-constfn", requested, id);
     id
 }
@@ -252,6 +255,7 @@ pub extern "C" fn js_object_final_shape_id_for_class_keys_static_private(
     });
     // SAFETY: `id` was resolved from this agent's live slab record above.
     unsafe { shapes::note_external_shape_carrier(shapes::shape_descriptor_for_word(id)) };
+    let id = shapes::shape_record_for_word(id).map_or(0, |r| r.identity().0);
     note_static_request("class-private", requested, id);
     id
 }
@@ -283,6 +287,7 @@ pub extern "C" fn js_object_final_shape_id_for_class_keys_static_constfn(
     ));
     // SAFETY: `id` was resolved from this agent's live slab record above.
     unsafe { shapes::note_external_shape_carrier(shapes::shape_descriptor_for_word(id)) };
+    let id = shapes::shape_record_for_word(id).map_or(0, |r| r.identity().0);
     note_static_request("class-constfn", requested, id);
     id
 }
@@ -1128,3 +1133,11 @@ static KEEP_JS_OBJECT_FINAL_LAYOUT_FOR_CLASS_KEYS_STATIC_CONSTFN: extern "C" fn(
     *const ConstFnStaticEntry,
     u32,
 ) -> u32 = js_object_final_layout_for_class_keys_static_constfn;
+
+#[cfg(test)]
+#[path = "dense_layout_tests.rs"]
+mod dense_layout_tests;
+
+#[cfg(test)]
+#[path = "static_layout_fixtures.rs"]
+pub(crate) mod fixtures;

@@ -41,7 +41,7 @@ unsafe fn finish_inline_json_object(
         // array without preserving a manually installed/test shape id. The
         // ordinary canonical cache stays on the single-probe path; recover a
         // matching descriptor only for the stale-id case.
-        let id = shapes::shape_id_for_keys_ensure(keys, count as u32);
+        let id = shapes::layout_for_keys_ensure(keys, count as u32);
         set_object_keys_with_live(object, keys_view, count as u32);
         shapes::birth_stamp_object_shape(object, id, count as u32, super::field_rep::REP_ANY);
     }
@@ -220,7 +220,7 @@ pub(crate) unsafe fn object_from_json_fields_preinstalled(
         // Keep shape publication in the existing mint-and-stamp funnel.
         let keys_view = super::ObjectKeys::new(keys, count as u32);
         if !shapes::try_birth_stamp_preinstalled_shape(obj, shape_id, keys_view, count as u32) {
-            let id = shapes::shape_id_for_keys_ensure(keys, count as u32);
+            let id = shapes::layout_for_keys_ensure(keys, count as u32);
             set_object_keys_with_live(obj, keys_view, count as u32);
             let rep = super::field_rep::REP_ANY;
             shapes::birth_stamp_object_shape(obj, id, count as u32, rep);

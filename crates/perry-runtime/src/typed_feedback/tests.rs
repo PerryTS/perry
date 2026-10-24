@@ -122,7 +122,7 @@ fn stamp_f64_lane(obj: *mut crate::object::ObjectHeader, slot: u32) -> u32 {
 }
 
 fn shape_id(obj: *const crate::object::ObjectHeader) -> u32 {
-    unsafe { crate::object::shapes::object_shape_id(obj) }
+    unsafe { crate::object::shapes::object_layout_stamp(obj) }
 }
 
 unsafe fn register_test_method(class_id: u32, name: &'static [u8]) {

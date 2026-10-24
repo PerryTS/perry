@@ -775,7 +775,7 @@ fn object_shape(addr: usize) -> (u32, u32, u16) {
         // Nothing is expected to reach here unstamped: every allocator in
         // `object/alloc.rs` birth-publishes, and the inline-`new` path stamps a
         // module-init ShapeId.
-        let shape = crate::object::shapes::object_shape_id(ptr);
+        let shape = crate::object::shapes::object_layout_stamp(ptr);
         (shape, class_id, gc_type)
     }
 }

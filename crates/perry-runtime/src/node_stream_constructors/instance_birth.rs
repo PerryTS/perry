@@ -231,13 +231,13 @@ unsafe fn derived_instance_layout(word: u32) -> Option<*const PerryLayoutDesc> {
     {
         return None;
     }
-    let (keys, count, _) = crate::object::shapes::shape_keys_and_proto_by_id(word)?;
+    let (keys, count, _) = crate::object::shapes::shape_keys_and_proto_for_word(word)?;
     if keys == 0 {
         return None;
     }
     instance_layouts().into_iter().find(|&desc| {
         (*desc).key_count == count
-            && crate::object::shapes::shape_keys_and_proto_by_id((*desc).layout_id)
+            && crate::object::shapes::shape_keys_and_proto_for_word((*desc).layout_id)
                 .is_some_and(|(layout_keys, _, _)| layout_keys == keys)
     })
 }

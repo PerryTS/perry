@@ -745,6 +745,10 @@ mod view_mode_tests {
     /// norooting`) this is the test that fails.
     #[test]
     fn open_survives_a_collection_between_its_two_allocations() {
+        // The window collects before any realm bootstrap: install the runtime's
+        // root scanners first, as `main` does, so the shape table's keys edges
+        // (which keep every static layout's key list alive) are visited.
+        crate::gc::ensure_gc_initialized();
         for round in 0..40 {
             let input = format!("a\u{301}b{round}\u{1f600}c");
             let s = js_string(&input);
