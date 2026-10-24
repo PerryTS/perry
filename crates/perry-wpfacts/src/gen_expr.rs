@@ -266,7 +266,14 @@ impl<'a> Gen<'a> {
                 site,
                 enum_image: false,
             },
-            display: format!("{}:{{lit#{site}}}", self.mods[mi as usize].path_short()),
+            // Per unit the site ordinal counts this unit's literals only, so
+            // the unit names the literal (DECISIONS 94: a published plain
+            // literal is a layout contract, its display the key).
+            display: format!(
+                "{}{}:{{lit#{site}}}",
+                self.mods[mi as usize].path_short(),
+                self.unit_suffix()
+            ),
             birth_keys: atoms.clone(),
             definite: atoms,
             parent: None,
@@ -1048,7 +1055,9 @@ impl<'a> Gen<'a> {
             } => {
                 let p = self.expr(fx, parent_expr);
                 let tm = self.resolve_class_name(mi, class_name);
-                self.feed_parent(p, tm, "E11 dynamic class parent");
+                if !self.parent_to_cell(mi, class_name, tm, p) {
+                    self.feed_parent(p, tm, "E11 dynamic class parent");
+                }
                 self.prim_node(prim::UNDEF)
             }
             Expr::RegisterClassCaptures {
@@ -1209,7 +1218,9 @@ impl<'a> Gen<'a> {
                 if let Some(p) = evaluated_parent {
                     let v = self.expr(fx, p);
                     let tm = self.resolve_class_name(mi, template);
-                    self.feed_parent(v, tm, "E11 class expression with an evaluated parent");
+                    if !self.parent_to_cell(mi, template, tm, v) {
+                        self.feed_parent(v, tm, "E11 class expression with an evaluated parent");
+                    }
                 }
                 for d in definition_steps {
                     let _ = self.expr(fx, d);

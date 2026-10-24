@@ -233,9 +233,22 @@ pub struct FuncInfo {
     /// (DECISIONS 49). Its body is not walked: `run_ctor_chain` runs the
     /// parent with the `new` call itself.
     pub forwards_super: bool,
+    /// A class constructor's hidden trailing parameters, one per value the
+    /// class captures (`__perry_cap_*`, perry-hir `synthesize_class_captures`):
+    /// the class environment slot each one is filled from. A construction
+    /// from another module passes the class's own snapshot there, whatever
+    /// arguments it was given (`construct_registered_class_resolved` fills
+    /// only the user slots from them), so another unit never chooses these
+    /// values (DECISIONS 117).
+    pub captures: Vec<NodeId>,
     /// The function whose body creates this closure (`NO_FN` for
     /// declarations, methods and builtins).
     pub parent: FnIdx,
+    /// Another unit's function seen through a contract that lets any unit
+    /// use it (a stand-in's method, a function contract's stand-in; not a
+    /// closed one, whose users its owner knows): published onward, it
+    /// leaves with that contract (DECISIONS 120, `Model::escape`).
+    pub forwarded: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -261,6 +274,15 @@ pub enum RecvEffect {
     Store(Key, NodeId, SiteId),
     Hard(Hard, u32),
     Escape(u32),
+}
+
+/// What another unit's method does to its receiver (DECISIONS 57): its use
+/// and reach marks (`MARK_*`) and the keys it stores (`None`: any key).
+#[derive(Clone, Debug)]
+pub struct ThisContract {
+    pub uses: u8,
+    pub reach: u8,
+    pub stores: Option<Vec<String>>,
 }
 
 /// A property key: a named atom, or any key (computed).
@@ -330,6 +352,19 @@ impl Hard {
 /// Complex constraints, attached to the node whose new tokens trigger them.
 #[derive(Clone, Copy, Debug)]
 pub enum Cons {
+    /// The node is the value a contract function `f` stores under `key`
+    /// into its parameter `dst`'s argument (`reach`: into what it reaches)
+    /// (DECISIONS 118): a marker of one of `f`'s parameters is that
+    /// argument, which the reader stores; any other value escapes.
+    StoreOut {
+        f: FnIdx,
+        dst: u32,
+        reach: bool,
+        /// A keyed reach (design §18.4): what the argument holds under it.
+        via: Option<Atom>,
+        key: Atom,
+        reason: u32,
+    },
     /// dst ⊇ read(t, key) for every t in the node.
     Load { key: Key, dst: NodeId },
     /// Values of own properties only (enumerability over-approximated).
@@ -373,10 +408,24 @@ pub enum Cons {
     /// receiver escapes (that unit runs the method on it unseen).
     /// `this` of another unit's method: only that class's instances (and,
     /// for a static method, its class object); any other receiver escapes.
+    /// `this` (`Model::this_contracts`, `u32::MAX`: none) is the method's
+    /// receiver contract (DECISIONS 57): a token of a subclass of `tmpl` is
+    /// admitted with the published effects on it.
     ContractThis {
         tmpl: TmplId,
         reason: u32,
         statics: bool,
+        this: u32,
+    },
+    /// `this` of the override token of (`tmpl`, `key`) (DECISIONS 97): a
+    /// method's receiver marker records the call (`Model::this_calls`);
+    /// `tmpl`'s receiver token passes (it stands for the class's own
+    /// instances, which no subclass key reaches); any other receiver
+    /// escapes with `reason`, as for an unknown callee.
+    OverrideThis {
+        tmpl: TmplId,
+        key: Atom,
+        reason: u32,
     },
     /// Once anything (a token or a primitive) reaches the node, `dst` holds
     /// ⊤ and everything `from` holds: the result of a call that exists only
@@ -526,7 +575,9 @@ impl Cons {
             Cons::Chain { .. } => "chain",
             Cons::TopSink { .. } => "top",
             Cons::HandOver { .. } => "handover",
+            Cons::StoreOut { .. } => "storeout",
             Cons::ContractThis { .. } => "contractthis",
+            Cons::OverrideThis { .. } => "overridethis",
             Cons::TopIfAny { .. } => "topifany",
             Cons::Hard { .. } => "hard",
             Cons::AddsKeys => "addskeys",
@@ -564,6 +615,14 @@ impl Cons {
             Cons::VisitStop { .. } => "visitstop",
         }
     }
+}
+
+/// DECISIONS 118: one stored key of a contract function's parameter.
+#[derive(Clone, Debug, Default)]
+pub struct StoreFlow {
+    pub from: Vec<u32>,
+    pub top: bool,
+    pub prim: u16,
 }
 
 #[derive(Default, Clone, Debug)]
@@ -746,6 +805,11 @@ pub struct Model {
     pub thrown: NodeId,
     /// E14: interpreted code can run (and patch `Object.prototype`).
     pub dyn_eval: Option<String>,
+    /// No interpreted code can run in the program (no dynamic code, no
+    /// dynamic code reach, no direct eval scope): what this unit publishes
+    /// reaches compiled units only, which use another unit's stand-in
+    /// through its contract (DECISIONS 120, `Model::escape`).
+    pub interp_free: bool,
     pub bound_index: FxHashMap<(CallId, Tok), u32>,
     /// Calls the solver makes through a bound value's target (`call_bound`,
     /// `construct`): a bound target reached by one of them goes through
@@ -801,6 +865,32 @@ pub struct Model {
     /// dynamic code may hand it out (`Function('return this')()`). Until
     /// then a store into ⊤ cannot write a global.
     pub global_in_top: bool,
+    /// Per unit (design §17.16 (b)): the global object's program-owned
+    /// fields are cells (`global:<key>`), made at the unit boundary. A field
+    /// first named later holds ⊤ and sets `global_late`: the unit then
+    /// publishes `global:*` unknown, as for a global unmodeled code writes.
+    pub global_cells: bool,
+    pub global_late: bool,
+    /// The program objects (DECISIONS 92): an object the runtime has once
+    /// per program (`cjsmain`, `require.cache`, `require.extensions`), by
+    /// name. Per unit their named fields are `<name>:<key>` cells, made at
+    /// the unit boundary (`program_cells`); a field first named later holds
+    /// ⊤ and puts the name in `program_late`: the unit publishes
+    /// `<name>:*` unknown.
+    pub program_objs: Vec<(&'static str, Tok)>,
+    pub program_cells: bool,
+    pub program_late: Vec<&'static str>,
+    /// DECISIONS 94: arrays published through an element cell
+    /// (`arr:<name>`, `Gen::arr_leaves`) and other units' arrays this unit
+    /// holds, each with the seed of cell `arr:<name>#named`: a named field
+    /// of one holds what that seed holds (⊤ once another unit stored a
+    /// named key) and what is stored there escapes (no contract describes
+    /// it). `arr_named`: the ones this unit stored a named key into.
+    pub cell_arrs: FxHashMap<Tok, NodeId>,
+    pub arr_named: crate::pts::FxHashSet<Tok>,
+    /// What was stored under a named key into an array, per array (in unit
+    /// mode; sunk if the array turns out to be shared, `Gen::arr_leaves`).
+    pub arr_named_srcs: FxHashMap<Tok, Vec<NodeId>>,
     /// Targets of a possible [[Prototype]] write (TOP included).
     pub super_relink: crate::pts::FxHashSet<Tok>,
     /// Source constructor of a type-specialized instance layout (compiler data).
@@ -827,8 +917,32 @@ pub struct Model {
     pub label_work: FxHashMap<&'static str, (u64, u64, u64)>,
     pub fn_inst: FxHashMap<FnIdx, TmplId>,
     /// Per-unit contracts (design §11.2): the methods of a published class
-    /// run on its receiver token (`Model::publish_class`).
-    pub published_this: FxHashMap<FnIdx, Tok>,
+    /// run on its receiver token (`Model::publish_class`), one per published
+    /// class whose chain inside the unit holds the method.
+    pub published_this: FxHashMap<FnIdx, Vec<Tok>>,
+    /// A published class's receiver token -> its class.
+    pub recv_class: FxHashMap<Tok, TmplId>,
+    /// Receiver tokens and receiver markers (DECISIONS 59): their prototype
+    /// chain (the published classes they stand for), and the method keys a
+    /// named load resolves through it instead of the own field.
+    pub virt_protos: FxHashMap<Tok, Vec<TmplId>>,
+    pub virt_by_class: FxHashMap<TmplId, Vec<Tok>>,
+    /// Named-load nodes on those tokens, and their keys per token.
+    pub virt_nodes: FxHashMap<(Tok, Atom), NodeId>,
+    pub virt_tok_keys: FxHashMap<Tok, Vec<Atom>>,
+    /// Keys an instance of a published class may hold as own keys (stored
+    /// by the class code), and classes whose instances may hold any key (a
+    /// computed store, a hard operation, an escape).
+    pub virt_revoked: crate::pts::FxHashSet<(TmplId, Atom)>,
+    pub virt_open: crate::pts::FxHashSet<TmplId>,
+    /// Census: keys a subclass of another unit defines, per published
+    /// class (`override <k> of <display>`; `*`: any key).
+    pub override_keys: FxHashMap<TmplId, Vec<Atom>>,
+    /// The callee node of a call of an override-only key on a receiver of
+    /// a published class (`Model::override_node`, DECISIONS 97): it holds
+    /// one function token per (class, key), the method another unit's
+    /// subclass defines under the key.
+    pub override_fns: FxHashMap<(TmplId, Atom), NodeId>,
     /// A published class's receiver token -> the instances other units
     /// hold: the one they construct, then each one this unit gives them
     /// through a contract (`Model::give_out`). What a method does to its
@@ -839,6 +953,57 @@ pub struct Model {
     pub recv_log: FxHashMap<Tok, Vec<RecvEffect>>,
     /// A published class -> its receiver token.
     pub contract_recv_of: FxHashMap<TmplId, Tok>,
+    /// DECISIONS 125: the call by which other units construct a published
+    /// class (`Model::publish_class`): its instance is the class's own
+    /// token `Obj(tm, NO_CTX)`, the one its receiver token and the
+    /// published receivers (DECISIONS 107) stand for (`Model::site_tok`).
+    pub contract_new: crate::pts::FxHashSet<CallId>,
+    /// DECISIONS 116: published classes no other unit names (given out
+    /// through a contract result or value): their methods run on the
+    /// instances given out only.
+    pub sealed: crate::pts::FxHashSet<TmplId>,
+    /// The `this` nodes of the methods that run on the instances given out
+    /// (`Model::escape_this`: a sealed class's methods, DECISIONS 116, and
+    /// the methods run on published receivers, DECISIONS 125), which every
+    /// later `give_out` reaches.
+    pub given_this: FxHashMap<FnIdx, Vec<NodeId>>,
+    /// The receiver contracts of other units' methods this unit calls
+    /// (`Cons::ContractThis`'s `this`, DECISIONS 57).
+    pub this_contracts: Vec<ThisContract>,
+    /// The keys a published method stores into its receiver marker
+    /// (DECISIONS 57); in `this_open` when a key is computed.
+    pub this_stores: FxHashMap<FnIdx, Vec<Atom>>,
+    /// The override-only keys a published method calls on its receiver
+    /// (DECISIONS 97): only another unit's subclass defines them, so the
+    /// readers run the call (`FnContract::this_calls`).
+    pub this_calls: FxHashMap<FnIdx, Vec<Atom>>,
+    pub this_open: crate::pts::FxHashSet<FnIdx>,
+    /// The same for a contract function's parameter (DECISIONS 84): the
+    /// keys it stores into the argument, by (function, parameter index).
+    pub param_stores: FxHashMap<(FnIdx, u32), Vec<Atom>>,
+    pub param_open: crate::pts::FxHashSet<(FnIdx, u32)>,
+    /// What a contract function stores under a named key into its argument
+    /// or into what that reaches (DECISIONS 118), by (function, parameter,
+    /// into its reach, key): the parameters whose arguments are stored, and
+    /// whether another value (⊤ to the reader) or primitives are.
+    pub store_flows: FxHashMap<(FnIdx, u32, bool, Option<Atom>, Atom), StoreFlow>,
+    pub store_out_done: crate::pts::FxHashSet<(NodeId, FnIdx, u32, bool, Option<Atom>, Atom)>,
+    /// DECISIONS 118, argument markers: the named-key stores into one (each
+    /// replayed on every marker that links in later), the `StoreOut`s it is
+    /// the source of (function, parameter, reason: a member other than that
+    /// parameter's marker escapes), the parameter node it is the marker of,
+    /// and the links not replayed yet (the solver loop replays them).
+    pub arg_stores: FxHashMap<Tok, Vec<(Atom, NodeId, SiteId)>>,
+    pub arg_store_done: crate::pts::FxHashSet<(Tok, Atom, NodeId)>,
+    pub arg_src_watch: FxHashMap<Tok, Vec<(FnIdx, u32, u32)>>,
+    pub arg_marker_node: FxHashMap<Tok, NodeId>,
+    /// The function and parameter index of each parameter node: the
+    /// function's own and each summary instance's (a method run through an
+    /// instance holds its argument marker on the instance's node).
+    pub param_at: FxHashMap<NodeId, (FnIdx, u32)>,
+    pub marker_links: Vec<(Tok, Tok)>,
+    /// Published classes whose constructor is a contract (DECISIONS 57).
+    pub ctor_published: crate::pts::FxHashSet<TmplId>,
     /// Another unit's templates this unit sees through a contract, with the
     /// facts their defining unit published (design §11.2).
     pub foreign: FxHashMap<TmplId, crate::TemplateFacts>,
@@ -874,6 +1039,21 @@ pub struct Model {
     /// stand-ins (`escape_fn_params`). Any other escape is a real one
     /// (unknown code may call it): ⊤ parameters.
     pub closed_pub_reason: Option<u32>,
+    /// The reason of a publication to another unit (`unit_boundary`): a
+    /// published method's receiver is its contract's then (DECISIONS 85).
+    pub pub_reason: Option<u32>,
+    /// The function contracts the census broke (`fn:<name>`): published as
+    /// escapes, not contracts.
+    pub broken_fns: crate::pts::FxHashSet<String>,
+    /// The stand-in function of each `this_contracts` entry: a receiver
+    /// its contract does not admit is a use beyond it (DECISIONS 85).
+    pub this_contract_fns: Vec<Tok>,
+    /// DECISIONS 107: (`this_contracts` index, receiver) for every receiver
+    /// this unit runs another unit's method on.
+    pub this_admitted: Vec<(u32, Tok)>,
+    /// DECISIONS 107: a published method's receivers as the units running
+    /// it published them (`Gen::published_receivers`).
+    pub this_args: FxHashMap<FnIdx, NodeId>,
     pub closed_pub: crate::pts::FxHashSet<Tok>,
     pub contract_rets: Vec<(FnIdx, NodeId)>,
     /// A contract function's parameter markers: one object token per
@@ -1312,6 +1492,15 @@ impl Model {
         self.relations.as_mut().unwrap().extend(v);
     }
 
+    /// What parameter `i` of `f` holds when code outside its unit calls
+    /// it: a hidden capture parameter holds its class environment slot
+    /// (`FuncInfo::captures`); `None` for an argument the caller chooses.
+    pub fn capture_param(&self, f: FnIdx, i: usize) -> Option<NodeId> {
+        let fi = &self.funcs[f as usize];
+        let first = fi.params.len().checked_sub(fi.captures.len())?;
+        i.checked_sub(first).map(|k| fi.captures[k])
+    }
+
     /// Diagnostics: follow the first-arrival chain of ⊤ back to its origin.
     pub fn top_origin(&self, start: NodeId) -> String {
         let mut n = start;
@@ -1443,10 +1632,30 @@ impl Model {
             .get(&f)
             .and_then(|d| d.get(i as usize))
             .is_some_and(|&d| d);
+        if new & MARK_ESCAPE != 0 {
+            self.virt_revoke(t, None);
+        }
         if new & MARK_ESCAPE != 0 && !described {
             self.set_marker_top(t);
             if let Some(&r) = self.marker_reach.get(&t) {
                 self.set_marker_top(r);
+            }
+            // What it reaches under a key is what unknown code stored
+            // there: no ⊤ beside the marker says so (DECISIONS 119).
+            let mut stack = vec![t];
+            while let Some(k) = stack.pop() {
+                let rs: Vec<Tok> = self
+                    .keyed_reach
+                    .get(&k)
+                    .into_iter()
+                    .flatten()
+                    .map(|&(_, r)| r)
+                    .filter(|&r| !self.marker_is_top(r))
+                    .collect();
+                for r in rs {
+                    self.set_marker_top(r);
+                    stack.push(r);
+                }
             }
         }
     }
@@ -1477,6 +1686,10 @@ impl Model {
         self.add_tok(rany, r);
         self.reach_marker.insert(r);
         self.keyed_reach.entry(t).or_default().push((a, r));
+        // An escaped marker's keyed reach reads as ⊤ too (DECISIONS 119).
+        if self.marker_is_top(t) {
+            self.set_marker_top(r);
+        }
         match self.param_marker.get(&t).copied() {
             Some(fi) => {
                 self.param_marker.insert(r, fi);
@@ -1556,6 +1769,9 @@ impl Model {
     /// together), so it adds no kinds.
     pub(crate) fn beside_values(&self, t: Tok) -> bool {
         match self.param_marker.get(&t) {
+            // A published method's receiver marker whose receivers the
+            // running units published (DECISIONS 107): they are beside it.
+            Some(&(f, u32::MAX)) if self.this_args.contains_key(&f) => true,
             Some(&(f, i)) => self
                 .closed_described
                 .get(&f)
@@ -1563,6 +1779,13 @@ impl Model {
                 .is_some_and(|&d| d),
             None => self.beside_markers.contains(&t),
         }
+    }
+
+    /// A marker with no values beside it (DECISIONS 119): it stands for
+    /// another unit's argument whole, and every emitter reads it as ⊤ with
+    /// every primitive kind.
+    pub(crate) fn bare_marker(&self, t: Tok) -> bool {
+        self.is_marker(t) && !self.beside_values(t)
     }
 
     /// A parameter marker or an argument marker (DECISIONS 44).
@@ -1618,6 +1841,7 @@ impl Model {
         self.marker_reach.insert(t, r);
         self.reach_marker.insert(r);
         self.arg_marker_of.insert(n, t);
+        self.arg_marker_node.insert(t, n);
         // It stands for its members alone (DECISIONS 75): beside while it
         // has none, and while each one that links in is beside
         // (`link_marker`). The caller links the arriving markers before
@@ -1638,6 +1862,12 @@ impl Model {
             return;
         }
         self.arg_members.get_mut(&r).unwrap().push(m);
+        let keyed_stores = self.keyed_reach.get(&r).map_or(false, |v| {
+            v.iter().any(|(_, kr)| self.arg_stores.contains_key(kr))
+        });
+        if self.arg_stores.contains_key(&r) || self.arg_src_watch.contains_key(&r) || keyed_stores {
+            self.marker_links.push((m, r));
+        }
         if self.beside_markers.contains(&r) {
             match self.beside_values(m) {
                 true if !self.param_marker.contains_key(&m) => {
@@ -1714,7 +1944,11 @@ impl Model {
             return t;
         }
         let tm = self.tmpls.len() as TmplId;
-        let display = format!("{}:param{i}", self.funcs[f as usize].name);
+        // `u32::MAX`: the receiver of a published method (DECISIONS 57).
+        let display = match i {
+            u32::MAX => format!("{}:this", self.funcs[f as usize].name),
+            _ => format!("{}:param{i}", self.funcs[f as usize].name),
+        };
         self.tmpls.push(Template {
             kind: TmplKind::BObj {
                 module: 0,
@@ -1740,7 +1974,7 @@ impl Model {
         // values reachable from it (§11.2 "the return").
         let rm = self.tmpls.len() as TmplId;
         let mut reach = self.tmpls[tm as usize].clone();
-        reach.display = format!("{}:param{i}:reach", self.funcs[f as usize].name);
+        reach.display = format!("{}:reach", self.tmpls[tm as usize].display);
         self.tmpls.push(reach);
         let r = self.tok(TokKind::Obj(rm, NO_CTX));
         let any = self.field_any(t);

@@ -235,15 +235,33 @@ pub fn map_cons(
         },
         TopSink { reason } => TopSink { reason },
         HandOver { reason } => HandOver { reason },
+        StoreOut {
+            f,
+            dst,
+            reach,
+            via,
+            key,
+            reason,
+        } => StoreOut {
+            f,
+            dst,
+            reach,
+            via,
+            key,
+            reason,
+        },
         ContractThis {
             tmpl,
             reason,
             statics,
+            this,
         } => ContractThis {
             tmpl,
             reason,
             statics,
+            this,
         },
+        OverrideThis { tmpl, key, reason } => OverrideThis { tmpl, key, reason },
         TopIfAny { dst, from, reason } => TopIfAny {
             dst: n(dst),
             from: n(from),
@@ -396,6 +414,7 @@ fn gen_kind(c: &Cons) -> bool {
             | TopSink { .. }
             | HandOver { .. }
             | ContractThis { .. }
+            | OverrideThis { .. }
             | TopIfAny { .. }
             | Hard { .. }
             | AddsKeys
@@ -613,9 +632,10 @@ impl Model {
         };
         let this = tr(s.this);
         // Its parameters hold argument markers (DECISIONS 44).
-        for &p in &s.params {
+        for (j, &p) in s.params.iter().enumerate() {
             if is_slot(p) {
                 self.nodes[tr(p) as usize].param = true;
+                self.param_at.insert(tr(p), (f, j as u32));
             }
         }
         let lay = match key.0 {
@@ -765,6 +785,35 @@ impl Model {
 
     /// Unknown code calls `f`: its `this` is ⊤ (the unknown-code instance's
     /// and the shared node).
+    /// DECISIONS 116: a contract method published with sealed classes'
+    /// receivers only.
+    pub(crate) fn sealed_method(&self, f: FnIdx) -> bool {
+        self.contract_fns.contains(&f)
+            && self.published_this.get(&f).is_some_and(|rs| {
+                !rs.is_empty()
+                    && rs.iter().all(|r| {
+                        self.recv_class
+                            .get(r)
+                            .is_some_and(|c| self.sealed.contains(c))
+                    })
+            })
+    }
+
+    /// DECISIONS 125: a method run on published receivers runs on an
+    /// instance `t` this unit gave out when the join names `t`'s class (its
+    /// own token `Obj(tm, NO_CTX)` is in the join, `Gen::published_receivers`).
+    pub(crate) fn join_holds(&self, f: FnIdx, t: Tok) -> bool {
+        let Some(&n) = self.this_args.get(&f) else {
+            return true;
+        };
+        let Some(tm) = self.tmpl_of(t) else {
+            return false;
+        };
+        self.tok_index
+            .get(&TokKind::Obj(tm, NO_CTX))
+            .is_some_and(|&w| self.nodes[n as usize].pts.contains_tok(w))
+    }
+
     pub(crate) fn escape_this(&mut self, ft: Tok, reason: u32) {
         if !self.sum.ready {
             self.sum.deferred.push(Deferred::EscapeThis(ft, reason));
@@ -777,12 +826,79 @@ impl Model {
             let inst = self.instance((2, 0, ft));
             dsts.push(self.sum.insts[inst as usize].this);
         }
-        let inst = self.published_this.get(&f).copied();
+        let insts = self.published_this.get(&f).cloned().unwrap_or_default();
+        // DECISIONS 116: a method of sealed classes only, published through
+        // its contract, runs on the instances this unit gave out (and the
+        // ones it gives out later, `give_out`): no other unit constructs or
+        // extends them, and a reader's `ContractThis` admits nothing else.
+        if self.pub_reason == Some(reason) && self.sealed_method(f) {
+            let given: Vec<Tok> = insts
+                .iter()
+                .flat_map(|r| self.contract_recv.get(r).cloned().unwrap_or_default())
+                .collect();
+            for &d in &dsts {
+                for &t in &given {
+                    self.add_tok(d, t);
+                }
+            }
+            self.given_this.entry(f).or_default().extend(dsts);
+            return;
+        }
+        // A published method's receiver is one more contract parameter
+        // (DECISIONS 57): its marker records what the body does to it, and
+        // stands for instances of the classes it is published with
+        // (DECISIONS 59).
+        let mk = (!insts.is_empty() && self.contract_fns.contains(&f)).then(|| {
+            let mk = self.param_marker_tok(f, u32::MAX);
+            let classes: Vec<TmplId> = insts
+                .iter()
+                .filter_map(|r| self.recv_class.get(r).copied())
+                .collect();
+            self.register_virt(mk, &classes);
+            mk
+        });
+        // Published through its contract, the receiver is the class's
+        // instances (the receiver token) or what the marker stands for: a
+        // reader's `ContractThis` admits nothing else, and reports a use
+        // beyond that (DECISIONS 85). Any other escape lets unknown code
+        // call it with any receiver.
+        let contract_only = mk.is_some() && self.pub_reason == Some(reason);
+        let joined = contract_only && self.this_args.contains_key(&f);
+        if joined {
+            self.given_this
+                .entry(f)
+                .or_default()
+                .extend(dsts.iter().copied());
+        }
         for d in dsts {
-            self.add_top(d, why);
-            self.add_prim(d, prim::ALL);
-            if let Some(i) = inst {
-                self.add_tok(d, i);
+            if !contract_only {
+                self.add_top(d, why);
+                self.add_prim(d, prim::ALL);
+            }
+            // DECISIONS 107: the receivers the running units published.
+            // DECISIONS 125: they include the instances this unit gave out
+            // (a published class's instance another unit holds may be one
+            // of them), and the ones it gives out later (`give_out`).
+            match self.this_args.get(&f) {
+                Some(&n) if joined => {
+                    self.edge(n, d);
+                    let given: Vec<Tok> = insts
+                        .iter()
+                        .flat_map(|r| self.contract_recv.get(r).cloned().unwrap_or_default())
+                        .filter(|&t| self.join_holds(f, t))
+                        .collect();
+                    for t in given {
+                        self.add_tok(d, t);
+                    }
+                }
+                _ => {
+                    for &i in &insts {
+                        self.add_tok(d, i);
+                    }
+                }
+            }
+            if let Some(mk) = mk {
+                self.add_tok(d, mk);
             }
         }
     }
@@ -927,6 +1043,10 @@ impl Model {
         let fparams = self.funcs[f as usize].params.clone();
         let c = call as usize;
         let nargs = self.calls[c].args.len();
+        // A hidden capture parameter holds its class environment slot,
+        // not what the call passes (DECISIONS 117, 127).
+        let caps: Vec<Option<NodeId>> =
+            (0..terms.len()).map(|i| self.capture_param(f, i)).collect();
         for i in 0..terms.len() {
             let mut dsts = Vec::with_capacity(2);
             if terms[i] != NO_NODE {
@@ -936,7 +1056,9 @@ impl Model {
                 dsts.push(fparams[i]);
             }
             for &d in &dsts {
-                if i < nargs {
+                if let Some(env) = caps[i] {
+                    self.edge(env, d);
+                } else if i < nargs {
                     let a = self.calls[c].args[i];
                     self.edge(a, d);
                 } else {
@@ -955,6 +1077,9 @@ impl Model {
                 },
             );
             for i in 0..terms.len() {
+                if caps[i].is_some() {
+                    continue;
+                }
                 if terms[i] != NO_NODE {
                     self.edge(elems, terms[i]);
                 }
@@ -989,6 +1114,12 @@ impl Model {
         let terms = self.sum.insts[inst as usize].params.clone();
         let fparams = self.funcs[f as usize].params.clone();
         let contract = self.contract_fns.contains(&f);
+        // DECISIONS 119: published through its contract only, a parameter
+        // is its marker, which stands for the whole argument (an object,
+        // a function or a primitive): no ⊤ and no primitive kinds beside it.
+        // The reader replays what the body does to it; emitters read it as
+        // ⊤ (`Model::bare_marker`).
+        let contract_only = contract && self.pub_reason == Some(reason);
         // A closed function's callers are known: what they pass, through
         // its publication only (decision 19).
         let closed = if self.closed_pub_reason == Some(reason) {
@@ -997,14 +1128,26 @@ impl Model {
             None
         };
         for (i, &p) in fparams.iter().enumerate() {
+            // A hidden capture parameter holds its class environment slot
+            // whoever constructs (DECISIONS 117).
+            if let Some(env) = self.capture_param(f, i) {
+                for d in [terms[i], p] {
+                    if d != NO_NODE {
+                        self.edge(env, d);
+                    }
+                }
+                continue;
+            }
             let mk = contract.then(|| self.param_marker_tok(f, i as u32));
             for d in [terms[i], p] {
                 if d != NO_NODE {
                     match closed.as_ref().and_then(|c| c.get(i).copied()) {
                         Some(a) => self.edge(a, d),
                         None => {
-                            self.add_top(d, why);
-                            self.add_prim(d, prim::ALL);
+                            if !contract_only {
+                                self.add_top(d, why);
+                                self.add_prim(d, prim::ALL);
+                            }
                         }
                     }
                     if let Some(mk) = mk {
@@ -1240,7 +1383,10 @@ fn compose(m: &mut Model, obs_of: &dyn Fn(FnIdx, &Model) -> Vec<NodeId>) -> (usi
                     }
                     s.expanded.push((*ci as u32, g));
                     let sg = own_of[&g].clone();
-                    expand(&mut s, *ci, &sg, &obs_of(g, m));
+                    let caps: Vec<Option<NodeId>> = (0..m.funcs[g as usize].params.len())
+                        .map(|i| m.capture_param(g, i))
+                        .collect();
+                    expand(&mut s, *ci, &sg, &obs_of(g, m), &caps);
                     any = true;
                     n += 1;
                 }
@@ -1259,7 +1405,9 @@ fn compose(m: &mut Model, obs_of: &dyn Fn(FnIdx, &Model) -> Vec<NodeId>) -> (usi
 /// operands to it the way a binding would: arguments into the parameters
 /// (and into `g`'s observation parameters `gobs`), missing ones undefined,
 /// spread elements into every parameter, `g`'s result into the call's.
-fn expand(s: &mut Summary, ci: usize, g: &Summary, gobs: &[NodeId]) {
+/// A hidden capture parameter (`caps`) takes its class environment slot,
+/// not the call's argument (DECISIONS 117, 127).
+fn expand(s: &mut Summary, ci: usize, g: &Summary, gobs: &[NodeId], caps: &[Option<NodeId>]) {
     let off = s.nslots;
     let coff = s.calls.len() as u32;
     let tr = |x: NodeId| {
@@ -1318,7 +1466,9 @@ fn expand(s: &mut Summary, ci: usize, g: &Summary, gobs: &[NodeId]) {
     let mut undef = NO_NODE;
     for (i, ds) in dsts.iter().enumerate() {
         for &d in ds {
-            if i < call.args.len() {
+            if let Some(env) = caps.get(i).copied().flatten() {
+                s.edges.push((env, d));
+            } else if i < call.args.len() {
                 if call.args[i] != NO_NODE {
                     s.edges.push((call.args[i], d));
                 }
@@ -1340,7 +1490,10 @@ fn expand(s: &mut Summary, ci: usize, g: &Summary, gobs: &[NodeId]) {
                 dst: elems,
             },
         ));
-        for ds in &dsts {
+        for (i, ds) in dsts.iter().enumerate() {
+            if caps.get(i).copied().flatten().is_some() {
+                continue;
+            }
             for &d in ds {
                 s.edges.push((elems, d));
             }

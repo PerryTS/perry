@@ -373,6 +373,15 @@ fn template_facts(
         chain_problem.get_or_insert_with(|| "E21 native parent without a summary".into());
     }
     let escape = global.clone().or(escape);
+    // DECISIONS 92: per unit, every unit writes a program object through
+    // its cells; no unit sees all its keys or their kinds.
+    let escape = escape.or_else(|| {
+        let program = m.program_cells
+            && m.program_objs
+                .iter()
+                .any(|&(_, t)| matches!(m.toks[t as usize], TokKind::Obj(x, _) if x == tm));
+        program.then(|| "program object every unit writes (DECISIONS 92)".to_string())
+    });
     let prefix_stable = escape.is_none() && hard.is_none() && chain_problem.is_none();
     let adds = m.adds_keys.get(&tm).copied().unwrap_or(0);
     // Slots: birth order, valid up to the first non-definite / accessor key.
@@ -522,6 +531,16 @@ fn ta_one_kind(m: &Model, ts: &[Tok], a: Atom) -> Option<u8> {
     kind
 }
 
+/// A marker standing only for closed functions' parameters (decision 13).
+fn closed_marker(m: &Model, t: Tok) -> bool {
+    m.is_marker(t)
+        && m.marker_members(t).iter().all(|x| {
+            m.param_marker.get(x).is_some_and(|&(f, i)| {
+                m.closed_params.contains_key(&f) || (i == u32::MAX && m.this_args.contains_key(&f))
+            })
+        })
+}
+
 fn field_kind(m: &Model, ts: &[Tok], a: Atom, definite: bool) -> KindFact {
     let mut k = KindFact {
         prims: if definite { 0 } else { prim::UNDEF },
@@ -544,6 +563,16 @@ fn field_kind(m: &Model, ts: &[Tok], a: Atom, definite: bool) -> KindFact {
             }
             match &m.toks[x as usize] {
                 TokKind::Top => k.top = true,
+                // A closed function's parameter marker (decision 13): what
+                // its callers pass is beside it; the marker only records
+                // the uses for its contract (as for a receiver, `site_facts`).
+                TokKind::Obj(..) if closed_marker(m, x) => {}
+                // Any other marker stands for another unit's values with
+                // nothing beside it (DECISIONS 119): it reads as ⊤.
+                TokKind::Obj(..) if m.is_marker(x) => {
+                    k.top = true;
+                    k.prims |= prim::ALL;
+                }
                 TokKind::Obj(tm, _) if m.tmpls[*tm as usize].kind.is_fact_unit() => {
                     objs.push(m.tmpls[*tm as usize].display.clone())
                 }
@@ -696,14 +725,18 @@ fn judge(
             }
             // A closed function's parameter marker (decision 13): what
             // its callers pass is the stand-ins beside it; the marker
-            // only records the uses for its contract.
-            TokKind::Obj(..)
-                if m.is_marker(t)
-                    && m.marker_members(t).iter().all(|x| {
-                        m.param_marker
-                            .get(x)
-                            .is_some_and(|(f, _)| m.closed_params.contains_key(f))
-                    }) => {}
+            // only records the uses for its contract. A published method's
+            // receiver marker with published receivers too (DECISIONS 107).
+            TokKind::Obj(..) if closed_marker(m, t) => {}
+            // Any other marker stands for another unit's values with
+            // nothing beside it (DECISIONS 119): it reads as ⊤.
+            TokKind::Obj(..) if m.is_marker(t) => {
+                top = true;
+                receivers.push(m.tok_name(t));
+                verdict.get_or_insert(Verdict::No(
+                    "receiver is another unit's value (marker)".into(),
+                ));
+            }
             TokKind::Obj(tm, _) => {
                 let Some(tf) = by_id.get(tm) else {
                     receivers.push(m.tok_name(t));

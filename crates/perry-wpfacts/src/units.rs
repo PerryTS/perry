@@ -17,6 +17,12 @@ pub(crate) struct ClassContract {
     pub facts: TemplateFacts,
     pub methods: Vec<(String, String)>,
     pub native_parent: Option<(String, String)>,
+    /// Its parent class when that class is another unit's (DECISIONS 104):
+    /// the parent's display, its contract published beside this one. The
+    /// chain inside the defining unit is in `methods`; past it, a reader
+    /// finds inherited methods on the parent's stand-in, as the defining
+    /// unit does.
+    pub parent: Option<String>,
     /// Fields that hold exactly these functions of the defining unit, each
     /// a function contract (a literal's methods: `errorUtil.errToObj`);
     /// every other field holds unknown values for the reader.
@@ -25,6 +31,15 @@ pub(crate) struct ClassContract {
     /// unit (key, their displays, whether primitives too): nested
     /// contracts (design §18.7, `Gen::nested_fields`).
     pub field_layouts: Vec<(String, Vec<String>, bool)>,
+    /// Fields that hold other units' stand-ins (builtins, unknown values,
+    /// primitives) and nothing of the defining unit: what they hold, as a
+    /// value contract (DECISIONS 88), the reader seeds them with.
+    pub field_values: Vec<(String, ValueContract)>,
+    /// Fields that hold only the defining unit's typed arrays, none escaped
+    /// or hard (DECISIONS 126): key, their one element kind, the primitives
+    /// beside them. The reader holds one stand-in typed array per class and
+    /// key; its census reports `ta <key> of <display>` for what it does.
+    pub field_tas: Vec<(String, Option<u8>, u16)>,
     /// The defining unit stores under computed keys: a reader may find any
     /// key (unknown values). Otherwise the keys are the facts' fields.
     pub open_keys: bool,
@@ -44,6 +59,26 @@ pub(crate) struct ClassContract {
     /// instance's `constructor`) publishes what it passes under that key
     /// (`ProgramFacts::ctor_args_out`).
     pub closed: Option<(String, String, u32)>,
+    /// The prototype methods with a function contract (key, contract), and
+    /// the constructor's (DECISIONS 57): their receiver is a contract
+    /// parameter, so another unit's subclass instance can run them.
+    pub method_fns: Vec<(String, FnContract)>,
+    pub ctor_fn: Option<FnContract>,
+    /// Its instances' birth keys in birth order and the definite ones, and
+    /// whether its constructor or one up its chain leaks `this`, as its own
+    /// unit computed them (`compute_birth_keys`, `ctor_phase`): a subclass
+    /// in another unit takes them as its layout prefix, as a subclass in
+    /// the same unit does.
+    pub birth_keys: Vec<String>,
+    pub definite: Vec<String>,
+    pub ctor_leaks: bool,
+    /// The primitive kinds the published binding may hold beside the
+    /// class (DECISIONS 115): a nested class whose members name it binds
+    /// itself through a one-element cell that holds `undefined` until the
+    /// class is evaluated (DECISIONS 50). A reader's import holds them as
+    /// the defining unit's binding does; a layout reached any other way
+    /// has none.
+    pub binding_prim: u16,
 }
 
 /// A published function as its callers see it (design §11.2): per
@@ -52,6 +87,22 @@ pub(crate) struct ClassContract {
 /// then it escapes), whether its body reads `arguments` (`variadic`: all
 /// arguments escape) or has a rest parameter (`rest`: the arguments past
 /// the parameters escape), and the layouts it returns (`None`: ⊤).
+/// DECISIONS 118: one key a contract function stores into parameter
+/// `dst`'s argument (`reach`: into what it reaches). The reader stores the
+/// arguments of the parameters `from` under it, ⊤ when `top`, and `prim`.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct StoreFlow {
+    pub dst: u32,
+    pub reach: bool,
+    /// Into what the argument holds under this key (a keyed reach, design
+    /// §18.4), not into all it reaches.
+    pub via: Option<String>,
+    pub key: String,
+    pub from: Vec<u32>,
+    pub top: bool,
+    pub prim: u16,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct FnContract {
     pub name: String,
@@ -73,14 +124,39 @@ pub(crate) struct FnContract {
     /// transfers, the caller's own objects come back, nothing escapes.
     pub ret_params: Vec<u32>,
     pub ret_reach: Vec<u32>,
+    /// What the result may hold through one named key of a parameter
+    /// (`return p.k`, `u32::MAX`: the receiver): the reader loads that key
+    /// of its argument, not everything the argument reaches (its
+    /// prototype's methods, its class), as for `reach_keys` (§18.4).
+    pub ret_reach_keys: Vec<(u32, String)>,
     /// The result may also be an unknown value (⊤ to the caller).
     pub ret_unknown: bool,
+    /// The global builtins, program objects and arrays it may return
+    /// (DECISIONS 94, as a value contract holds them).
+    pub ret_value: ValueContract,
     /// The primitive kinds the result may be (`model::prim`), when `ret`
     /// names its layouts; with no layouts (⊤) any.
     pub ret_prim: u16,
     /// Its receiver is not used: an arrow function, or a body that never
     /// reads `this` (§18.2).
     pub lexical_this: bool,
+    /// What the body does to its receiver and to what that reaches
+    /// (`model::MARK_*`; ESCAPE when it has no receiver marker), and the
+    /// keys it stores into it (`None`: a computed key) (DECISIONS 57).
+    pub this_use: u8,
+    pub this_reach: u8,
+    pub this_stores: Option<Vec<String>>,
+    /// The keys the body calls on its receiver that only another unit's
+    /// subclass defines (DECISIONS 97): a reader runs `this.<key>(⊤)` on
+    /// each receiver it admits, the call the defining unit cannot see.
+    pub this_calls: Vec<String>,
+    /// Per parameter, the keys the body stores into the argument (`None`:
+    /// a computed key); a stored value escapes (DECISIONS 84).
+    pub param_stores: Vec<Option<Vec<String>>>,
+    /// What the body stores under a named key into an argument or into
+    /// what it reaches: the arguments of other parameters, or an unknown
+    /// value, or primitives (DECISIONS 118).
+    pub param_flows: Vec<StoreFlow>,
     /// The binding name of a closed function (decision 19): a unit that
     /// calls it as a value publishes what it passes under this name.
     pub closed: Option<String>,
@@ -102,6 +178,22 @@ pub(crate) struct ValueContract {
     pub unknown: bool,
     /// The primitive kinds it may hold (`model::prim` bits).
     pub prim: u16,
+    /// The global builtins it may hold (design §17.16 (a)): a builtin is one
+    /// runtime object for the whole program, the same token in every unit.
+    pub builtins: Vec<crate::model::BuiltinNs>,
+    /// The program objects it may hold (DECISIONS 92: the CommonJS main
+    /// record, `require.cache`, `require.extensions`): one runtime object
+    /// each, the same in every unit; their fields are `<name>:<key>` cells.
+    pub program: Vec<String>,
+    /// The arrays of other units it may hold (DECISIONS 94), by template
+    /// display: their elements are cell `arr:<display>`.
+    pub arrays: Vec<String>,
+}
+
+/// Keeps the prefix `a` and `b` share.
+fn common_prefix(a: &mut Vec<String>, b: &[String]) {
+    let n = a.iter().zip(b).take_while(|(x, y)| x == y).count();
+    a.truncate(n);
 }
 
 /// What the calls of a closed function pass (decision 13,
@@ -180,10 +272,57 @@ impl FnContract {
         union_into(&mut self.ret_params, &o.ret_params);
         union_into(&mut self.ret_reach, &o.ret_reach);
         self.ret_unknown |= o.ret_unknown;
+        union_into(&mut self.ret_reach_keys, &o.ret_reach_keys);
+        self.ret_reach_keys.sort();
+        self.ret_value.join(&o.ret_value);
         self.lexical_this &= o.lexical_this;
+        // The receiver (DECISIONS 57, 97): the marks and the calls grow; a
+        // computed-key store (`None`) absorbs the named keys.
+        self.this_use |= o.this_use;
+        self.this_reach |= o.this_reach;
+        join_stores(&mut self.this_stores, &o.this_stores);
+        union_into(&mut self.this_calls, &o.this_calls);
+        self.this_calls.sort();
+        if self.param_stores.len() < o.param_stores.len() {
+            self.param_stores
+                .resize(o.param_stores.len(), Some(Vec::new()));
+        }
+        for (x, y) in self.param_stores.iter_mut().zip(&o.param_stores) {
+            join_stores(x, y);
+        }
+        // DECISIONS 118: a store flow per (parameter, key): its sources,
+        // ⊤ and primitives grow.
+        for y in &o.param_flows {
+            let same = |x: &StoreFlow| {
+                (x.dst, x.reach, &x.via, &x.key) == (y.dst, y.reach, &y.via, &y.key)
+            };
+            match self.param_flows.iter_mut().find(|x| same(x)) {
+                Some(x) => {
+                    union_into(&mut x.from, &y.from);
+                    x.from.sort_unstable();
+                    x.top |= y.top;
+                    x.prim |= y.prim;
+                }
+                None => self.param_flows.push(y.clone()),
+            }
+        }
+        self.param_flows.sort_by(|x, y| {
+            (x.dst, x.reach, &x.via, &x.key).cmp(&(y.dst, y.reach, &y.via, &y.key))
+        });
         if self.closed.is_none() {
             self.closed = o.closed.clone();
         }
+    }
+}
+
+/// The keys stored into a value: `None` (a computed key) absorbs.
+fn join_stores(a: &mut Option<Vec<String>>, b: &Option<Vec<String>>) {
+    match (a.as_mut(), b) {
+        (Some(x), Some(y)) => {
+            union_into(x, y);
+            x.sort();
+        }
+        _ => *a = None,
     }
 }
 
@@ -285,6 +424,71 @@ impl ClassContract {
             }
         }
         field_layouts.sort();
+        // Nested values (DECISIONS 94) and typed-array fields, as the
+        // layouts: a field one side's facts have without them holds unknown
+        // values; an element kind the two disagree on is none.
+        let plain_v = |c: &ClassContract, k: &str| {
+            c.facts.fields.iter().any(|f| f.key == k) && !c.field_values.iter().any(|(q, _)| q == k)
+        };
+        let mut field_values: Vec<(String, ValueContract)> = Vec::new();
+        for (k, v) in self.field_values.iter().chain(o.field_values.iter()) {
+            if plain_v(self, k) || plain_v(o, k) {
+                continue;
+            }
+            match field_values.iter_mut().find(|(q, _)| q == k) {
+                Some((_, x)) => x.join(v),
+                None => field_values.push((k.clone(), v.clone())),
+            }
+        }
+        field_values.sort_by(|x, y| x.0.cmp(&y.0));
+        let plain_t = |c: &ClassContract, k: &str| {
+            c.facts.fields.iter().any(|f| f.key == k) && !c.field_tas.iter().any(|(q, _, _)| q == k)
+        };
+        let mut field_tas: Vec<(String, Option<u8>, u16)> = Vec::new();
+        for (k, e, p) in self.field_tas.iter().chain(o.field_tas.iter()) {
+            if plain_t(self, k) || plain_t(o, k) {
+                continue;
+            }
+            match field_tas.iter_mut().find(|(q, _, _)| q == k) {
+                Some((_, f, q)) => {
+                    if f != e {
+                        *f = None;
+                    }
+                    *q |= *p;
+                }
+                None => field_tas.push((k.clone(), *e, *p)),
+            }
+        }
+        field_tas.sort();
+        // The methods with a receiver contract and the constructor's
+        // (DECISIONS 57): one function joined; two different ones, the
+        // reader's stub.
+        let mut method_fns: Vec<(String, FnContract)> = Vec::new();
+        for (k, f) in self.method_fns.iter().chain(o.method_fns.iter()) {
+            match method_fns.iter().position(|(q, _)| q == k) {
+                Some(i) if method_fns[i].1.name == f.name => method_fns[i].1.join(f),
+                Some(i) => method_fns[i].1.name.clear(),
+                None => method_fns.push((k.clone(), f.clone())),
+            }
+        }
+        method_fns.retain(|(_, f)| !f.name.is_empty());
+        method_fns.sort_by(|x, y| x.0.cmp(&y.0));
+        match (&mut self.ctor_fn, &o.ctor_fn) {
+            (Some(f), Some(g)) if f.name == g.name => f.join(g),
+            (f, _) => *f = None,
+        }
+        if self.parent != o.parent {
+            self.parent = None;
+        }
+        // The layout prefix a subclass in another unit takes: the common
+        // birth keys, definite in both; a leak in either leaks.
+        common_prefix(&mut self.birth_keys, &o.birth_keys);
+        self.definite.retain(|k| o.definite.contains(k));
+        self.ctor_leaks |= o.ctor_leaks;
+        self.binding_prim |= o.binding_prim;
+        self.field_values = field_values;
+        self.field_tas = field_tas;
+        self.method_fns = method_fns;
         // A closed class (§18.13) only where both say so, the same binding.
         if self.closed != o.closed {
             self.closed = None;
@@ -320,6 +524,13 @@ impl ValueContract {
         join_keyed(&mut self.fns, &o.fns, |f| f.name.clone(), FnContract::join);
         self.unknown |= o.unknown;
         self.prim |= o.prim;
+        // Builtins, program objects and arrays (DECISIONS 94): by identity.
+        union_into(&mut self.builtins, &o.builtins);
+        union_into(&mut self.program, &o.program);
+        union_into(&mut self.arrays, &o.arrays);
+        self.builtins.sort();
+        self.program.sort();
+        self.arrays.sort();
         self.layouts.sort_by(|x, y| x.display.cmp(&y.display));
         self.classes.sort_by(|x, y| x.display.cmp(&y.display));
         self.fns.sort_by(|x, y| x.name.cmp(&y.name));
@@ -372,16 +583,39 @@ pub(crate) struct Published {
     pub(crate) values: FxHashMap<(String, String), ValueContract>,
     /// The layouts contract functions return, by template display.
     pub(crate) layouts: FxHashMap<String, ClassContract>,
+    /// The function contracts by name, each its defining unit's
+    /// (DECISIONS 106), kept across rounds as `layouts`.
+    pub(crate) own_fns: FxHashMap<String, FnContract>,
+    /// DECISIONS 107: per published method (contract name), the receivers
+    /// the units running it published, joined; `this_args_top`: a unit
+    /// over the bound may run any of them on anything.
+    pub(crate) this_args: FxHashMap<String, ValueContract>,
+    pub(crate) this_args_top: bool,
     /// The argument contracts of closed functions (decision 13), by
     /// (module path, name): the union over every unit's calls.
     pub(crate) args: FxHashMap<(String, String), ArgContract>,
     /// Store effects (decision 17): per literal layout or class display,
-    /// the existing keys other units store into and the primitive kinds
-    /// they store, `None` for any value (union over every unit, DECISIONS 73).
-    pub(crate) stores: FxHashMap<String, Vec<(String, Option<u16>)>>,
+    /// the existing keys other units store into and the value contract of
+    /// what they store (union over every unit; DECISIONS 73 is its `prim`,
+    /// design §17.16 (c)).
+    pub(crate) stores: FxHashMap<String, Vec<(String, ValueContract)>>,
     /// The keys of each module's namespace object (design §18.2), and
     /// whether it may hold any key (an `export *` from outside the program).
     pub(crate) ns_keys: FxHashMap<String, (Vec<String>, bool)>,
+    /// The classes (defining module path, export name) a class of another
+    /// unit names in its `extends` (DECISIONS 57): their constructor is a
+    /// contract too, run on any receiver.
+    pub(crate) extended: FxHashSet<(String, String)>,
+    /// Cells (design §17.16 (b)): a runtime location every unit names the
+    /// same way (`cjs:<path>`, the registry union `cjs:*`, a computed path
+    /// `cjs:?`), the value contracts written, each with the units writing
+    /// it (their keys, sorted). A reader joins the other units' writes.
+    /// Grouped by contract (DECISIONS 113): every unit may write one cell
+    /// (`global:*`), and a reader takes each distinct write once.
+    pub(crate) cells: FxHashMap<String, Vec<(ValueContract, Vec<String>)>>,
+    /// A unit solve went over the bound: what it writes is unknown, so
+    /// every cell may hold an unknown value.
+    pub(crate) cells_top: bool,
 }
 
 impl Published {
@@ -413,7 +647,7 @@ impl Published {
     /// otherwise reaches only exports and globals) may call a module's
     /// functions by name. The reach does not say which module's, so none
     /// is closed.
-    pub(crate) fn stored_keys(&self, display: &str) -> &[(String, Option<u16>)] {
+    pub(crate) fn stored_keys(&self, display: &str) -> &[(String, ValueContract)] {
         self.stores.get(display).map_or(&[], |v| v.as_slice())
     }
 
@@ -435,6 +669,11 @@ impl Published {
 
     pub(crate) fn broken(&self, display: &str) -> bool {
         self.broken.contains(display)
+    }
+
+    pub(crate) fn extended(&self, path: &str, name: &str) -> bool {
+        self.extended
+            .contains(&(path.to_string(), name.to_string()))
     }
 
     pub(crate) fn names(&self, path: &str, name: &str) -> bool {
@@ -652,8 +891,16 @@ fn owner_of(out: &[Solve], t: &std::ops::Range<usize>, name: &str) -> Option<usi
 fn solves<'a>(
     sorted: &[(&'a str, &'a Module)],
     flats: &'a [Option<Module>],
-    es: &crate::ExportSources,
+    cfg: &FactsConfig,
 ) -> Vec<Solve<'a>> {
+    // DECISIONS 129: what other modules can name of each module, from the
+    // modules' own imports and re-exports (a unit's imports of its own
+    // module's units are not another module's).
+    let own: Vec<(&str, Vec<&Import>, &[Export])> = sorted
+        .iter()
+        .map(|(p, m)| (*p, m.imports.iter().collect(), m.exports.as_slice()))
+        .collect();
+    let reach = published_surface(&own, cfg);
     let index: FxHashMap<&str, usize> = sorted
         .iter()
         .enumerate()
@@ -667,7 +914,8 @@ fn solves<'a>(
         // for the cut (N5, §12.5): the module's run-once view, one per
         // module, shared by all its units.
         let module: &'a Module = flats[mi].as_ref().unwrap_or(module);
-        for (k, (view, deps)) in crate::decl_units::views(path, module)
+        let named = |n: &str| reach.eval_scopes || reach.names(path, n);
+        for (k, (view, deps)) in crate::decl_units::views(path, module, &named)
             .into_iter()
             .enumerate()
         {
@@ -676,7 +924,10 @@ fn solves<'a>(
                 mi,
                 key: crate::decl_units::unit_path(path, k),
                 module,
-                view,
+                view: crate::decl_units::UnitView {
+                    key: crate::decl_units::unit_path(path, k),
+                    ..view
+                },
                 after: deps.clone(),
                 deps,
             });
@@ -737,10 +988,11 @@ fn solves<'a>(
                 if module.imports.iter().any(|i| &i.source == source) {
                     continue;
                 }
-                let Some(&t) = reexport_source(es, path, std::iter::empty(), source)
-                    .as_deref()
-                    .filter(|t| *t != path)
-                    .and_then(|t| index.get(t))
+                let Some(&t) =
+                    reexport_source(&cfg.export_sources, path, std::iter::empty(), source)
+                        .as_deref()
+                        .filter(|t| *t != path)
+                        .and_then(|t| index.get(t))
                 else {
                     continue;
                 };
@@ -808,7 +1060,7 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
         .iter()
         .map(|(_, m)| crate::decl_units::run_once_flat(m))
         .collect();
-    let solves = solves(sorted, &flats, &cfg.export_sources);
+    let solves = solves(sorted, &flats, cfg);
     let viewed: Vec<(&str, Vec<&Import>, &[Export])> = solves
         .iter()
         .map(|s| {
@@ -825,18 +1077,58 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
         .collect();
     let mut input = published_surface(&viewed, cfg);
     input.ns_keys = namespace_keys(sorted, &cfg.export_sources);
+    // The classes another unit's class extends, through the import its
+    // `extends` names (DECISIONS 57).
+    for s in &solves {
+        for &k in &s.view.classes {
+            let Some(e) = s
+                .module
+                .classes
+                .get(k)
+                .and_then(|c| c.extends_name.as_ref())
+            else {
+                continue;
+            };
+            for imp in s.module.imports.iter().chain(s.view.imports.iter()) {
+                let Some(t) = imp.resolved_path.as_deref() else {
+                    continue;
+                };
+                for sp in &imp.specifiers {
+                    let name = match sp {
+                        ImportSpecifier::Named { imported, local } if local == e => {
+                            imported.clone()
+                        }
+                        ImportSpecifier::Default { local } if local == e => "default".into(),
+                        _ => continue,
+                    };
+                    input
+                        .extended
+                        .insert((crate::decl_units::module_of(t).to_string(), name));
+                }
+            }
+        }
+    }
     let order = dependency_order(&solves);
     let levels = dependency_levels(&solves, &order);
     let mut rounds = 0u32;
+    let compares = std::cell::Cell::new(0u64);
     let mut round_work: Vec<u64> = Vec::new();
     let mut per_unit: Vec<Option<ProgramFacts>> = (0..solves.len()).map(|_| None).collect();
     let mut dirty = vec![true; solves.len()];
+    // The layouts whose entry is their owner's, not a forwarded copy
+    // (DECISIONS 106).
+    let mut owned_layouts: FxHashSet<String> = FxHashSet::default();
     loop {
         rounds += 1;
         input.classes.clear();
         input.fns.clear();
         input.values.clear();
-        input.layouts.clear();
+        // Layouts stay from the last round (DECISIONS 103): a contract a
+        // cell carries names its layouts by display, and their publisher
+        // may solve after the reader: each reader recorded what it read.
+        let mut published_layouts: FxHashSet<String> = FxHashSet::default();
+        let mut owned_now: FxHashSet<String> = FxHashSet::default();
+        let mut published_fns: FxHashSet<String> = FxHashSet::default();
         let mut reports: FxHashSet<String> = FxHashSet::default();
         let mut work = 0u64;
         for level in &levels {
@@ -865,7 +1157,37 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
                     input.values.insert((p.clone(), n.clone()), c.clone());
                 }
                 for c in &u.layouts_out {
-                    input.layouts.insert(c.display.clone(), c.clone());
+                    published_layouts.insert(c.display.clone());
+                    if u.layouts_fwd.contains(&c.display) {
+                        if !owned_layouts.contains(&c.display) {
+                            input.layouts.insert(c.display.clone(), c.clone());
+                        }
+                        continue;
+                    }
+                    owned_now.insert(c.display.clone());
+                    // Several units birth one literal shape (DECISIONS 112):
+                    // its entry is the join of their contracts, ascending
+                    // from the last round's owned entry, so a reader between
+                    // two owners reads at the fixpoint what the last one
+                    // leaves. A class has one defining unit: its latest solve.
+                    let e = match input.layouts.get(&c.display) {
+                        Some(p)
+                            if c.literal_shape
+                                && p.literal_shape
+                                && owned_layouts.contains(&c.display) =>
+                        {
+                            let mut j = p.clone();
+                            j.join(c);
+                            j
+                        }
+                        _ => c.clone(),
+                    };
+                    owned_layouts.insert(c.display.clone());
+                    input.layouts.insert(c.display.clone(), e);
+                }
+                for c in &u.own_fns_out {
+                    published_fns.insert(c.name.clone());
+                    input.own_fns.insert(c.name.clone(), c.clone());
                 }
                 reports.extend(u.reports.iter().cloned());
             }
@@ -920,22 +1242,57 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
             }
         }
         input.args = args;
+        // DECISIONS 107: the receivers of published methods: last round's
+        // joined with every unit's latest solve (D16), so they only grow.
+        // The owners of a method whose join changed are solved again.
+        let mut this_args = input.this_args.clone();
+        let mut this_top = input.this_args_top;
+        for u in per_unit.iter().flatten() {
+            if u.stats.aborted {
+                this_top = true;
+                continue;
+            }
+            for (nm, vc) in &u.this_args_out {
+                this_args.entry(nm.clone()).or_default().join(vc);
+            }
+        }
+        let mut keys: Vec<&String> = this_args.keys().chain(input.this_args.keys()).collect();
+        keys.sort_unstable();
+        keys.dedup();
+        let recv_changed: Vec<String> = keys
+            .into_iter()
+            .filter(|k| {
+                this_top != input.this_args_top
+                    || digest(&this_args.get(*k)) != digest(&input.this_args.get(*k))
+            })
+            .map(|k| format!("fn:{k}"))
+            .collect();
+        if !recv_changed.is_empty() {
+            for (si, u) in per_unit.iter().enumerate() {
+                let u = u.as_ref().expect("every unit solved");
+                if !u.stats.aborted && u.fns_defined.iter().any(|d| recv_changed.contains(d)) {
+                    seeds.push(si);
+                }
+            }
+        }
+        input.this_args = this_args;
+        input.this_args_top = this_top;
         // Decision 17: the store effects: last round's joined with what
         // every unit's latest solve stores (D16), so they only grow too.
         // The owners of a layout whose effect keys grew perform them,
         // solved again with their dependents.
         let mut stores = input.stores.clone();
         for u in per_unit.iter().flatten() {
-            for (d, k, kinds) in &u.stores_out {
+            for (d, k, c) in &u.stores_out {
                 let v = stores.entry(d.clone()).or_default();
                 match v.iter_mut().find(|(k2, _)| k2 == k) {
-                    Some((_, e)) => *e = e.zip(*kinds).map(|(x, y)| x | y),
-                    None => v.push((k.clone(), *kinds)),
+                    Some((_, e)) => e.join(c),
+                    None => v.push((k.clone(), c.clone())),
                 }
             }
         }
         for v in stores.values_mut() {
-            v.sort();
+            v.sort_by(|x, y| x.0.cmp(&y.0));
         }
         // Compared as values: a layout whose keys differ either way (joined,
         // they can only have grown).
@@ -957,6 +1314,143 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
             }
         }
         input.stores = stores;
+        // Design §17.16 (b): the cells, from every unit's latest solve. The
+        // units reading a cell whose writes changed are solved again.
+        let mut cells: FxHashMap<String, Vec<(ValueContract, Vec<String>)>> = FxHashMap::default();
+        let mut group: FxHashMap<(String, String), usize> = FxHashMap::default();
+        for (si, s) in solves.iter().enumerate() {
+            let u = per_unit[si].as_ref().expect("every unit solved");
+            for (k, c) in &u.cells_out {
+                let v = cells.entry(k.clone()).or_default();
+                let i = *group
+                    .entry((k.clone(), format!("{c:?}")))
+                    .or_insert_with(|| {
+                        v.push((c.clone(), Vec::new()));
+                        v.len() - 1
+                    });
+                v[i].1.push(s.key.clone());
+            }
+        }
+        for v in cells.values_mut() {
+            for (_, ws) in v.iter_mut() {
+                ws.sort_unstable();
+            }
+            v.sort_by(|x, y| x.1.cmp(&y.1));
+        }
+        let cells_top = per_unit.iter().flatten().any(|u| u.stats.aborted);
+        // A unit is solved again when what it READS of a cell changed: the
+        // other writers' contracts (its own write is in its own solve,
+        // DECISIONS 89), an unknown one or a unit over the bound being ⊤
+        // that absorbs every other unknown. A reader forwarding the ⊤ it
+        // was seeded with changes no other reader's view.
+        let view = |cells: &FxHashMap<String, Vec<(ValueContract, Vec<String>)>>,
+                    top: bool,
+                    me: &str,
+                    k: &str| {
+            let others: Vec<&ValueContract> = cells
+                .get(k)
+                .into_iter()
+                .flatten()
+                .filter(|(_, ws)| !(ws.len() == 1 && ws[0] == me))
+                .map(|(c, _)| c)
+                .collect();
+            let pure = |c: &ValueContract| {
+                c.unknown
+                    && c.layouts.is_empty()
+                    && c.classes.is_empty()
+                    && c.fns.is_empty()
+                    && c.builtins.is_empty()
+                    && c.program.is_empty()
+                    && c.arrays.is_empty()
+            };
+            let top = top || others.iter().any(|c| pure(c));
+            let mut v: Vec<String> = others
+                .into_iter()
+                .filter(|c| !pure(c))
+                .map(|c| {
+                    let mut c = c.clone();
+                    if top {
+                        c.unknown = false;
+                        c.prim = 0;
+                    }
+                    format!("{c:?}")
+                })
+                .collect();
+            v.sort_unstable();
+            v.dedup();
+            (top, v)
+        };
+        // A layout no unit published this round is gone; a unit that read
+        // a layout which changed during the round read it before its
+        // publisher solved, or the old one: solved again (DECISIONS 103).
+        input.layouts.retain(|k, _| published_layouts.contains(k));
+        owned_layouts.retain(|k| owned_now.contains(k));
+        input.own_fns.retain(|k, _| published_fns.contains(k));
+        // DECISIONS 114: each contract is digested once per round, as its
+        // readers recorded it (`Gen::owner_fn`, `Gen::other_layout`): a
+        // read compares two numbers, so the round does not grow with the
+        // reads (awfy_Richards: 58544 reads of 39 layouts, each digest the
+        // Debug text of a whole contract).
+        let gone = digest(&None::<&ClassContract>);
+        let fns_now: FxHashMap<&str, u64> = input
+            .own_fns
+            .iter()
+            .map(|(k, c)| (k.as_str(), digest(&Some(c))))
+            .collect();
+        let layouts_now: FxHashMap<&str, u64> = input
+            .layouts
+            .iter()
+            .map(|(k, c)| (k.as_str(), digest(&Some(c))))
+            .collect();
+        compares.set(compares.get() + (fns_now.len() + layouts_now.len()) as u64);
+        let fn_changed =
+            |(k, h): &(String, u64)| fns_now.get(k.as_str()).copied().unwrap_or(gone) != *h;
+        for (si, u) in per_unit.iter().enumerate() {
+            let u = u.as_ref().expect("every unit solved");
+            // A unit over the bound keeps its result (`dependents`): what it
+            // read changes nothing it publishes.
+            if !u.stats.aborted && u.fns_read.iter().any(fn_changed) {
+                seeds.push(si);
+            }
+        }
+        let layout_changed =
+            |(k, h): &(String, u64)| layouts_now.get(k.as_str()).copied().unwrap_or(gone) != *h;
+        for (si, u) in per_unit.iter().enumerate() {
+            let u = u.as_ref().expect("every unit solved");
+            // A unit over the bound keeps its result (`dependents`): what it
+            // read changes nothing it publishes.
+            if !u.stats.aborted && u.layouts_read.iter().any(layout_changed) {
+                seeds.push(si);
+            }
+        }
+        // A cell whose writes and whose ⊤ are as last round reads alike in
+        // every unit: only the changed ones are viewed per reader
+        // (DECISIONS 114).
+        let mut keys: Vec<&String> = cells.keys().chain(input.cells.keys()).collect();
+        keys.sort_unstable();
+        keys.dedup();
+        compares.set(compares.get() + keys.len() as u64);
+        let changed: FxHashSet<&str> = keys
+            .into_iter()
+            .filter(|k| format!("{:?}", input.cells.get(*k)) != format!("{:?}", cells.get(*k)))
+            .map(|k| k.as_str())
+            .collect();
+        let top_changed = input.cells_top != cells_top;
+        for (si, u) in per_unit.iter().enumerate() {
+            let u = u.as_ref().expect("every unit solved");
+            let me = solves[si].key.as_str();
+            if u.cells_read.iter().any(|k| {
+                (top_changed || changed.contains(k.as_str())) && {
+                    compares.set(compares.get() + 1);
+                    view(&input.cells, input.cells_top, me, k) != view(&cells, cells_top, me, k)
+                }
+            }) {
+                seeds.push(si);
+            }
+        }
+        drop(changed);
+        input.cells = cells;
+        input.cells_top = cells_top;
         let fresh: Vec<String> = reports
             .into_iter()
             .filter(|d| !input.broken.contains(d))
@@ -1002,6 +1496,7 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
         // The cost of the run is every round's.
         pf.stats.work = round_work.iter().sum();
         pf.round_work = round_work;
+        pf.compares = compares.get();
         pf.broken = {
             let mut b: Vec<String> = input.broken.iter().cloned().collect();
             b.sort();
@@ -1135,6 +1630,9 @@ fn unit_io(
         }
         for ((p, n), c) in &u.ctor_args_out {
             o.push((format!("args:{p}:{n}"), hash(&format!("{c:?}"))));
+        }
+        for (n, c) in &u.this_args_out {
+            o.push((format!("this:{n}"), hash(&format!("{c:?}"))));
         }
         for (d, k, kinds) in &u.stores_out {
             o.push((format!("store:{d}.{k}"), hash(&format!("{kinds:?}"))));
@@ -1270,12 +1768,29 @@ fn resolve_again(
     let owner = owners(per_unit);
     let mut work: Vec<usize> = Vec::new();
     for d in fresh {
+        // An override report changes the overridden class's unit
+        // (DECISIONS 59).
+        // So does a typed-array field report (DECISIONS 126).
+        let d = d
+            .strip_prefix("override ")
+            .or_else(|| d.strip_prefix("ta "))
+            .and_then(|r| r.split_once(" of "))
+            .map_or(d.as_str(), |(_, c)| c);
         match owner.get(d) {
             Some(sis) => work.extend(sis.iter().copied()),
             None => return vec![true; n],
         }
     }
     dependents(solves, per_unit, work)
+}
+
+/// What a reader saw of an entry read by name (a layout, a function
+/// contract, DECISIONS 103/106): it is solved again when the entry differs.
+pub(crate) fn digest<T: std::fmt::Debug>(v: &T) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    format!("{v:?}").hash(&mut h);
+    h.finish()
 }
 
 /// The units defining each display. A display may have several owners:

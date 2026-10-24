@@ -18,10 +18,12 @@ mod protocol_calls;
 mod receiver_this;
 mod summary;
 mod super_heritage;
+mod unit_cjs;
 mod unit_ctor;
 mod unit_extends;
 mod unit_mode;
 mod unit_namespace;
+mod unit_this;
 
 use crate::{compute, FactsConfig, ProgramFacts, Verdict};
 
@@ -1194,8 +1196,10 @@ fn a_parameter_node_holds_its_argument_marker() {
         lexical_this: false,
         no_summary: true,
         gen_step: false,
+        captures: Vec::new(),
         forwards_super: false,
         parent: NO_FN,
+        forwarded: false,
     });
     let (m1, m2) = (m.param_marker_tok(0, 0), m.param_marker_tok(0, 1));
     let a = m.tok(TokKind::ModNs(7));
@@ -1235,7 +1239,9 @@ fn a_store_into_a_marker_makes_no_field_of_it() {
     // DECISIONS 41, the rule itself (the unit-level growth test,
     // unit_mode::a_store_into_an_argument_keeps_no_field_of_the_marker, is
     // also held by DECISIONS 42): a marker stands for another unit's value,
-    // this unit has no storage for it. The store is its escape.
+    // this unit has no storage for it. DECISIONS 84 refines "the store is
+    // its escape": the store is a key of its contract (the reader stores
+    // an unknown value there), and the stored value escapes.
     let mut m = copy_solver_model();
     let (this, ret, args) = (m.node_l("this"), m.node_l("ret"), m.node_l("args"));
     let token = m.tok(TokKind::Func(0, NO_CTX));
@@ -1254,8 +1260,10 @@ fn a_store_into_a_marker_makes_no_field_of_it() {
         lexical_this: false,
         no_summary: true,
         gen_step: false,
+        captures: Vec::new(),
         forwards_super: false,
         parent: NO_FN,
+        forwarded: false,
     });
     let mk = m.param_marker_tok(0, 0);
     let v = m.node_l("v");
@@ -1265,7 +1273,9 @@ fn a_store_into_a_marker_makes_no_field_of_it() {
     let site = m.anon_post_site("test store");
     m.store_into(mk, Key::Named(x), v, site);
     m.solve();
-    assert!(m.marker_use.get(&mk).is_some_and(|u| u & MARK_ESCAPE != 0));
+    assert!(!m.marker_use.get(&mk).is_some_and(|u| u & MARK_ESCAPE != 0));
+    assert_eq!(m.param_stores.get(&(0, 0)), Some(&vec![x]));
+    assert!(m.is_escaped(o), "the stored value escapes");
     assert!(!m.fields.contains_key(&(mk, x)), "a field of the marker");
 }
 
@@ -1295,8 +1305,10 @@ fn an_argument_marker_leaves_beside_when_a_valued_member_links() {
         lexical_this: false,
         no_summary: true,
         gen_step: false,
+        captures: Vec::new(),
         forwards_super: false,
         parent: NO_FN,
+        forwarded: false,
     });
     let mk = m.param_marker_tok(0, 0);
     // `r2` is a member of `r1` (an instance parameter passed on); `mk`

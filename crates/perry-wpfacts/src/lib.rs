@@ -165,6 +165,10 @@ pub struct ProgramFacts {
     pub broken: Vec<String>,
     /// Solve work of every unit, per round (`stats.work` is their sum).
     pub round_work: Vec<u64>,
+    /// Per-unit mode: published contracts the driver compared between
+    /// rounds, over every round (DECISIONS 114: once per contract, not per
+    /// reading unit).
+    pub compares: u64,
     /// One unit's class contracts and census reports (design §11).
     pub(crate) contracts_out: Vec<((String, String), units::ClassContract)>,
     pub(crate) fn_contracts_out: Vec<((String, String), units::FnContract)>,
@@ -183,7 +187,25 @@ pub struct ProgramFacts {
     /// Its store effects into other units' literal layouts and class
     /// instances (decision 17): display, key and the stored kinds
     /// (`Gen::store_effects`).
-    pub(crate) stores_out: Vec<(String, String, Option<u16>)>,
+    pub(crate) stores_out: Vec<(String, String, units::ValueContract)>,
+    /// What it writes into each cell (design §17.16 (b)), and the cells it
+    /// reads (`Gen::seed_cell`).
+    pub(crate) cells_out: Vec<(String, units::ValueContract)>,
+    pub(crate) cells_read: Vec<String>,
+    /// The layouts it named by display (`Gen::other_layout`, DECISIONS 103).
+    pub(crate) layouts_read: Vec<(String, u64)>,
+    /// Its own contract functions' contracts, by name (DECISIONS 106): a
+    /// reader takes the owner's over any copy a cell or a forwarding
+    /// unit's contract carries, and the functions it named so
+    /// (`Gen::owner_fn`), read like a cell.
+    pub(crate) own_fns_out: Vec<units::FnContract>,
+    pub(crate) fns_read: Vec<(String, u64)>,
+    /// DECISIONS 107: per method of another unit (contract name), the
+    /// receivers this unit runs it on.
+    pub(crate) this_args_out: Vec<(String, units::ValueContract)>,
+    /// The displays in `layouts_out` that are other units' layouts (a
+    /// stand-in's contract, forwarded): never over the owner's entry.
+    pub(crate) layouts_fwd: Vec<String>,
     pub(crate) reports: Vec<String>,
     module_digests: Vec<u64>,
 }
@@ -314,6 +336,79 @@ fn literal_field_fns(
     out
 }
 
+/// The value contracts of literal template `tm`'s fields that forward
+/// other units' stand-ins (DECISIONS 88, `Gen::nested_fields`): per key the
+/// join over every instance that left.
+fn field_value_contracts(
+    g: &gen::Gen,
+    templates: &[TemplateFacts],
+    tm: model::TmplId,
+    layouts_out: &mut Vec<units::ClassContract>,
+    open_tm: &pts::FxHashSet<model::TmplId>,
+) -> Vec<(String, units::ValueContract)> {
+    let mut keys: Vec<(model::Atom, Vec<model::NodeId>)> = g
+        .field_values
+        .iter()
+        .filter(|&(&(t, _), _)| t == tm)
+        .map(|(&(_, a), v)| (a, v.clone()))
+        .collect();
+    keys.sort_unstable();
+    let mut out = Vec::new();
+    for (a, ns) in keys {
+        let mut vc = units::ValueContract::default();
+        for n in ns {
+            vc.join(&value_contract_of(
+                g,
+                templates,
+                n,
+                &[],
+                layouts_out,
+                open_tm,
+            ));
+        }
+        out.push((g.m.atoms[a as usize].clone(), vc));
+    }
+    out
+}
+
+/// DECISIONS 126: every value the closed parameter node `p` holds (its
+/// callers' described arguments) holds only stand-in typed arrays under key
+/// `a`. Before any caller published (round 1) it holds nothing: bottom, as
+/// decision 13's closed parameters start (DECISIONS 123); the callers'
+/// arguments make it grow and the body is solved again.
+fn described_ta_key(g: &gen::Gen, p: model::NodeId, a: model::Atom) -> bool {
+    for t in g.m.nodes[p as usize].pts.to_sorted() {
+        if g.m.param_marker.contains_key(&t) {
+            continue;
+        }
+        let Some(&n) = g.m.fields.get(&(t, a)) else {
+            return false;
+        };
+        let ts = g.m.nodes[n as usize].pts.to_sorted();
+        if ts.is_empty()
+            || !ts
+                .iter()
+                .all(|x| g.stand_in_tas.iter().any(|&(_, s)| s == *x))
+        {
+            return false;
+        }
+    }
+    true
+}
+
+/// The typed-array fields of template `tm` (DECISIONS 126,
+/// `Gen::nested_fields`): key, element kind, primitives beside.
+fn field_ta_contracts(g: &gen::Gen, tm: model::TmplId) -> Vec<(String, Option<u8>, u16)> {
+    let mut out: Vec<(String, Option<u8>, u16)> = g
+        .field_tas
+        .iter()
+        .filter(|&(&(t, _), _)| t == tm)
+        .map(|(&(_, a), &(e, p))| (g.m.atoms[a as usize].clone(), e, p))
+        .collect();
+    out.sort();
+    out
+}
+
 /// The nested contracts of literal template `tm`'s fields (design §18.7,
 /// `Gen::nested_fields`): per described key the layouts it holds, each
 /// published in `layouts_out` with its own nested contracts.
@@ -352,17 +447,32 @@ fn nested_layouts(
                     facts,
                     methods: Vec::new(),
                     native_parent: None,
+                    parent: foreign_parent(&g, itm),
                     field_fns: Vec::new(),
                     field_layouts: Vec::new(),
+                    field_values: Vec::new(),
+                    field_tas: Vec::new(),
                     open_keys: open_tm.contains(&itm),
                     statics: Vec::new(),
                     statics_open: false,
                     static_fns: Vec::new(),
                     closed: None,
+                    method_fns: Vec::new(),
+                    ctor_fn: None,
+                    // The shape's own birth keys: a reader's stand-in judges
+                    // birth fields and the CommonJS record marker on them
+                    // (DECISIONS 101).
+                    birth_keys: atoms_of(g, &g.m.tmpls[itm as usize].birth_keys),
+                    definite: atoms_of(g, &g.m.tmpls[itm as usize].definite),
+                    ctor_leaks: true,
+                    binding_prim: 0,
                 });
                 let nl = nested_layouts(g, templates, itm, layouts_out, open_tm);
+                let fv = field_value_contracts(g, templates, itm, layouts_out, open_tm);
                 if let Some(c) = layouts_out.iter_mut().find(|c| c.display == display) {
                     c.field_layouts = nl;
+                    c.field_values = fv;
+                    c.field_tas = field_ta_contracts(g, itm);
                 }
             }
             ds.push(display);
@@ -395,10 +505,55 @@ fn fn_contract_name(g: &gen::Gen, f: model::FnIdx) -> (String, Option<String>) {
             .map(|(nm, _)| nm.clone())
     });
     let name = match &closed {
-        Some(k) if k.contains('#') => format!("{}#{fid}", fi.name),
+        Some(k) if k.contains('#') && !fi.name.ends_with(&format!("#{fid}")) => {
+            format!("{}#{fid}", fi.name)
+        }
         _ => fi.name.clone(),
     };
     (name, closed)
+}
+
+/// A class up whose chain an `extends` value holds no class yet (an empty
+/// parent cell in an early round): bottom, no instance of it exists yet,
+/// so no contract describes it this round (DECISIONS 105). Published as
+/// it stands, a reader would judge its instances by a chain without the
+/// parent and break it for good; its unit publishes it once the value
+/// arrives, and the layouts its readers read re-solve them (DECISIONS 103).
+fn chain_unsettled(g: &gen::Gen, tm: model::TmplId) -> bool {
+    let mut cur = Some(tm);
+    while let Some(c) = cur {
+        let t = &g.m.tmpls[c as usize];
+        if g.m.foreign.contains_key(&c) {
+            return false;
+        }
+        if let (None, Some((pv, _))) = (t.parent, t.parent_value) {
+            let n = &g.m.nodes[pv as usize];
+            // `extends` of a primitive other than null throws when the
+            // class is defined: no instance with that parent exists either.
+            if n.pts.is_empty() && n.prim & model::prim::NULL == 0 {
+                return true;
+            }
+        }
+        cur = t.parent;
+    }
+    false
+}
+
+/// The first class up `tm`'s chain that is another unit's (a stand-in),
+/// by display (DECISIONS 104): the chain below it is this unit's own.
+fn foreign_parent(g: &gen::Gen, tm: model::TmplId) -> Option<String> {
+    let mut cur = g.m.tmpls[tm as usize].parent;
+    while let Some(c) = cur {
+        if g.m.foreign.contains_key(&c) {
+            return Some(g.m.tmpls[c as usize].display.clone());
+        }
+        cur = g.m.tmpls[c as usize].parent;
+    }
+    None
+}
+
+fn atoms_of(g: &gen::Gen, ks: &[model::Atom]) -> Vec<String> {
+    ks.iter().map(|&a| g.m.atoms[a as usize].clone()).collect()
 }
 
 fn fn_contract_of(
@@ -412,8 +567,11 @@ fn fn_contract_of(
     // Its parameters carry markers (the contract states what the body does
     // with them); a contract function without them would claim it uses
     // nothing it is given.
+    // A hidden capture parameter is no argument (DECISIONS 117): no marker.
     debug_assert!(
-        (0..fi.params.len() as u32).all(|i| g.m.marker_of.contains_key(&(f, i))),
+        (0..fi.params.len() as u32)
+            .all(|i| g.m.marker_of.contains_key(&(f, i))
+                || g.m.capture_param(f, i as usize).is_some()),
         "contract function {} has parameters without markers",
         fi.name
     );
@@ -447,19 +605,42 @@ fn fn_contract_of(
     let marker_use = |t: model::Tok| g.m.marker_use.get(&t).copied().unwrap_or(0);
     let reach: Vec<u8> = (0..fi.params.len() as u32)
         .map(|i| {
-            let mk = g.m.marker_of[&(f, i)];
+            let Some(&mk) = g.m.marker_of.get(&(f, i)) else {
+                return 0;
+            };
             g.m.marker_reach.get(&mk).map_or(0, |&r| marker_use(r))
         })
         .collect();
     let reach_keys: Vec<Vec<(String, u8)>> = (0..fi.params.len() as u32)
         .map(|i| {
-            let mk = g.m.marker_of[&(f, i)];
+            let Some(&mk) = g.m.marker_of.get(&(f, i)) else {
+                return Vec::new();
+            };
             let mut v: Vec<(model::Atom, u8)> =
                 g.m.keyed_uses.get(&mk).cloned().unwrap_or_default();
             for &(a, r) in g.m.keyed_reach.get(&mk).into_iter().flatten() {
                 match v.iter_mut().find(|(k, _)| *k == a) {
                     Some((_, u)) => *u |= marker_use(r),
                     None => v.push((a, marker_use(r))),
+                }
+            }
+            // DECISIONS 126: a closed parameter every caller passes a
+            // described value (decision 17): under a key where each such
+            // value holds only stand-in typed arrays, the body reaches
+            // nothing else there, and a typed array is a leaf whose census
+            // (`Gen::reports`) covers every use here: no escape.
+            let held = g.m.closed_params.get(&f).and_then(|ns| ns.get(i as usize));
+            if let (Some(true), Some(&held)) = (
+                g.m.closed_described
+                    .get(&f)
+                    .and_then(|d| d.get(i as usize))
+                    .copied(),
+                held,
+            ) {
+                for (a, u) in v.iter_mut() {
+                    if described_ta_key(g, held, *a) {
+                        *u &= !model::MARK_ESCAPE;
+                    }
                 }
             }
             let mut v: Vec<(String, u8)> = v
@@ -479,14 +660,50 @@ fn fn_contract_of(
             .collect();
     let mut ret_params: Vec<u32> = Vec::new();
     let mut ret_reach: Vec<u32> = Vec::new();
+    let mut ret_reach_keys: Vec<(u32, String)> = Vec::new();
     let mut ret_unknown = false;
-    let ret_prim = rets.iter().fold(0, |p, &n| p | g.m.nodes[n as usize].prim);
+    let mut ret_value = units::ValueContract::default();
+    let mut ret_prim = rets.iter().fold(0, |p, &n| p | g.m.nodes[n as usize].prim);
     let ret = (!g.ret_top.contains(&f) && !rets.is_empty()).then(|| {
         let mut ds: Vec<String> = Vec::new();
         for n in rets {
             // An argument marker reads as the markers it stands for (DECISIONS 44).
-            let toks = g.m.nodes[n as usize].pts.to_sorted();
-            for t in toks.into_iter().flat_map(|t| g.m.marker_members(t)) {
+            let mut toks: Vec<model::Tok> = Vec::new();
+            for t in g.m.nodes[n as usize].pts.to_sorted() {
+                // Its keyed reach is what each member reaches under the key:
+                // one named key of this function's own parameter; anything
+                // else (an escaped member, another function's, a deeper
+                // reach) reads as ⊤, another unit's value whole (DECISIONS
+                // 119: no ⊤ beside the marker stands for it).
+                if let Some(&(p, a)) = g.m.keyed_parent.get(&t) {
+                    let ms = g.m.marker_members(p);
+                    for &m in &ms {
+                        match g.m.param_marker.get(&m) {
+                            Some(&(f2, i))
+                                if f2 == f
+                                    && g.m.marker_of.get(&(f, i)) == Some(&m)
+                                    && !g.m.marker_is_top(m) =>
+                            {
+                                let k = (i, g.m.atoms[a as usize].clone());
+                                if !ret_reach_keys.contains(&k) {
+                                    ret_reach_keys.push(k);
+                                }
+                            }
+                            _ => {
+                                ret_unknown = true;
+                                ret_prim |= model::prim::ALL;
+                            }
+                        }
+                    }
+                    if ms.is_empty() {
+                        ret_unknown = true;
+                        ret_prim |= model::prim::ALL;
+                    }
+                    continue;
+                }
+                toks.extend(g.m.marker_members(t));
+            }
+            for t in toks {
                 // An escaped marker reads as ⊤ (DECISIONS 42).
                 if matches!(
                     g.m.toks[t as usize],
@@ -494,9 +711,42 @@ fn fn_contract_of(
                 ) || g.m.marker_is_top(t)
                 {
                     ret_unknown = true;
+                    // An escaped marker is another unit's value whole
+                    // (DECISIONS 119): any primitive too.
+                    if g.m.is_marker(t) {
+                        ret_prim |= model::prim::ALL;
+                    }
+                    continue;
+                }
+                // A builtin, a program object, an array (DECISIONS 94).
+                let extra = match g.m.toks[t as usize] {
+                    model::TokKind::Builtin(_) => true,
+                    model::TokKind::Obj(tm, _) => {
+                        (g.m.program_cells && g.m.program_objs.iter().any(|&(_, o)| o == t))
+                            || matches!(g.m.tmpls[tm as usize].kind, model::TmplKind::Arr { .. })
+                    }
+                    _ => false,
+                };
+                if extra {
+                    let vc =
+                        value_contract_of_toks(g, templates, 0, vec![t], &[], layouts_out, open_tm);
+                    ret_value.join(&vc);
                     continue;
                 }
                 if let Some(&(_, i)) = g.m.param_marker.get(&t) {
+                    // What the parameter reaches through one named key: a
+                    // keyed reach marker of the parameter's own marker.
+                    let keyed =
+                        g.m.marker_of
+                            .get(&(f, i))
+                            .and_then(|mk| g.m.keyed_reach.get(mk)?.iter().find(|&&(_, r)| r == t));
+                    if let Some(&(a, _)) = keyed {
+                        let k = (i, g.m.atoms[a as usize].clone());
+                        if !ret_reach_keys.contains(&k) {
+                            ret_reach_keys.push(k);
+                        }
+                        continue;
+                    }
                     let v = if g.m.reach_marker.contains(&t) {
                         &mut ret_reach
                     } else {
@@ -534,7 +784,8 @@ fn fn_contract_of(
                     templates.iter().find(|x| x.id == tm),
                     g.m.tmpls[tm as usize].kind.clone(),
                 ) {
-                    if !layouts_out.iter().any(|c| c.display == display) {
+                    if !layouts_out.iter().any(|c| c.display == display) && !chain_unsettled(&g, tm)
+                    {
                         layouts_out.push(units::ClassContract {
                             display: display.clone(),
                             name,
@@ -543,17 +794,32 @@ fn fn_contract_of(
                             facts: facts.clone(),
                             methods: Vec::new(),
                             native_parent: None,
+                            parent: foreign_parent(&g, tm),
                             field_fns: Vec::new(),
                             field_layouts: Vec::new(),
+                            field_values: Vec::new(),
+                            field_tas: Vec::new(),
                             open_keys: open_tm.contains(&tm),
                             statics: Vec::new(),
                             statics_open: false,
                             static_fns: Vec::new(),
                             closed: None,
+                            method_fns: Vec::new(),
+                            ctor_fn: None,
+                            // The shape's own birth keys: a reader's stand-in judges
+                            // birth fields and the CommonJS record marker on them
+                            // (DECISIONS 101).
+                            birth_keys: atoms_of(g, &g.m.tmpls[tm as usize].birth_keys),
+                            definite: atoms_of(g, &g.m.tmpls[tm as usize].definite),
+                            ctor_leaks: true,
+                            binding_prim: 0,
                         });
                         let nl = nested_layouts(g, templates, tm, layouts_out, open_tm);
+                        let fv = field_value_contracts(g, templates, tm, layouts_out, open_tm);
                         if let Some(c) = layouts_out.iter_mut().find(|c| c.display == display) {
                             c.field_layouts = nl;
+                            c.field_values = fv;
+                            c.field_tas = field_ta_contracts(g, tm);
                         }
                         // Its field functions, as a value contract's (DECISIONS 78,
                         // `Gen::note_field_fns`). The layout is out first, so a field
@@ -573,8 +839,80 @@ fn fn_contract_of(
         ds.sort();
         ds
     });
+    // The receiver marker of a published method (DECISIONS 57); without
+    // one nothing is known of what the body does to its receiver.
+    let sealed = g.m.sealed_method(f);
+    let (this_use, this_reach) = match g.m.marker_of.get(&(f, u32::MAX)) {
+        // DECISIONS 116: a sealed class's method runs on this unit's own
+        // instances only; what it does to them is in their facts.
+        _ if sealed => (0, 0),
+        Some(&t) => {
+            let u = |t: model::Tok| g.m.marker_use.get(&t).copied().unwrap_or(0);
+            (
+                u(t),
+                g.m.marker_reach
+                    .get(&t)
+                    .map_or(model::MARK_ESCAPE, |&r| u(r)),
+            )
+        }
+        None => (model::MARK_ESCAPE, model::MARK_ESCAPE),
+    };
+    let this_stores = (sealed || !g.m.this_open.contains(&f)).then(|| {
+        let mut ks: Vec<String> =
+            g.m.this_stores
+                .get(&f)
+                .map(|ks| ks.iter().map(|&a| g.m.atoms[a as usize].clone()).collect())
+                .unwrap_or_default();
+        ks.sort();
+        ks
+    });
+    let param_stores: Vec<Option<Vec<String>>> = (0..fi.params.len() as u32)
+        .map(|i| {
+            (!g.m.param_open.contains(&(f, i))).then(|| {
+                let mut ks: Vec<String> =
+                    g.m.param_stores
+                        .get(&(f, i))
+                        .map(|ks| ks.iter().map(|&a| g.m.atoms[a as usize].clone()).collect())
+                        .unwrap_or_default();
+                ks.sort();
+                ks
+            })
+        })
+        .collect();
+    let mut param_flows: Vec<units::StoreFlow> =
+        g.m.store_flows
+            .iter()
+            .filter(|((h, ..), _)| *h == f)
+            .map(|(&(_, dst, reach, via, a), fl)| {
+                let mut from = fl.from.clone();
+                from.sort();
+                units::StoreFlow {
+                    dst,
+                    reach,
+                    via: via.map(|v| g.m.atoms[v as usize].clone()),
+                    key: g.m.atoms[a as usize].clone(),
+                    from,
+                    top: fl.top,
+                    prim: fl.prim,
+                }
+            })
+            .collect();
+    param_flows
+        .sort_by(|a, b| (a.dst, a.reach, &a.via, &a.key).cmp(&(b.dst, b.reach, &b.via, &b.key)));
+    let mut this_calls: Vec<String> =
+        g.m.this_calls
+            .get(&f)
+            .map(|ks| ks.iter().map(|&a| g.m.atoms[a as usize].clone()).collect())
+            .unwrap_or_default();
+    this_calls.sort();
     let (name, closed) = fn_contract_name(g, f);
     units::FnContract {
+        this_use,
+        this_reach,
+        this_stores,
+        this_calls,
+        param_stores,
+        param_flows,
         name,
         closed,
         params,
@@ -593,7 +931,12 @@ fn fn_contract_of(
             ret_reach.sort();
             ret_reach
         },
+        ret_reach_keys: {
+            ret_reach_keys.sort();
+            ret_reach_keys
+        },
         ret_unknown,
+        ret_value,
         ret_prim,
         lexical_this: fi.lexical_this || !reads_this(g, f),
     }
@@ -644,6 +987,179 @@ fn closed_of(
     let closed = g.view?.closed.get(name) == Some(&fi.func_id);
     (mi == 0 && closed && !fi.has_arguments && fi.rest.is_none())
         .then(|| (path.to_string(), name.clone(), fi.params.len() as u32))
+}
+
+/// The value contract of what a node may hold (design §12): the layouts and
+/// classes of contracts, this unit's contract functions, other units'
+/// stand-ins, builtins, primitive kinds; anything else is unknown.
+fn value_contract_of(
+    g: &gen::Gen,
+    templates: &[TemplateFacts],
+    n: model::NodeId,
+    contracts_out: &[((String, String), units::ClassContract)],
+    layouts_out: &mut Vec<units::ClassContract>,
+    open_tm: &pts::FxHashSet<model::TmplId>,
+) -> units::ValueContract {
+    let node = &g.m.nodes[n as usize];
+    value_contract_of_toks(
+        g,
+        templates,
+        node.prim,
+        node.pts.to_sorted(),
+        contracts_out,
+        layouts_out,
+        open_tm,
+    )
+}
+
+/// `value_contract_of` over these values.
+fn value_contract_of_toks(
+    g: &gen::Gen,
+    templates: &[TemplateFacts],
+    prim: u16,
+    toks: Vec<model::Tok>,
+    contracts_out: &[((String, String), units::ClassContract)],
+    layouts_out: &mut Vec<units::ClassContract>,
+    open_tm: &pts::FxHashSet<model::TmplId>,
+) -> units::ValueContract {
+    let mut vc = units::ValueContract {
+        prim,
+        ..Default::default()
+    };
+    for &t in &toks {
+        let (tm, class) = match g.m.toks[t as usize] {
+            model::TokKind::Top | model::TokKind::BuiltinFn => {
+                vc.unknown = true;
+                continue;
+            }
+            model::TokKind::Builtin(ns) => {
+                if !vc.builtins.contains(&ns) {
+                    vc.builtins.push(ns);
+                }
+                continue;
+            }
+            model::TokKind::Obj(..)
+                if g.m.program_cells && g.m.program_objs.iter().any(|&(_, o)| o == t) =>
+            {
+                // A program object (DECISIONS 92).
+                let name = g.m.program_objs.iter().find(|&&(_, o)| o == t).unwrap().0;
+                if !vc.program.iter().any(|p| p == name) {
+                    vc.program.push(name.to_string());
+                    vc.program.sort();
+                }
+                continue;
+            }
+            // An array (DECISIONS 94): its elements are cell `arr:<display>`.
+            model::TokKind::Obj(tm, _)
+                if matches!(g.m.tmpls[tm as usize].kind, model::TmplKind::Arr { .. }) =>
+            {
+                let d = g.arr_name(t);
+                if !vc.arrays.contains(&d) {
+                    vc.arrays.push(d);
+                    vc.arrays.sort();
+                }
+                continue;
+            }
+            model::TokKind::Obj(tm, _) => (tm, false),
+            model::TokKind::ClassObj(tm) => (tm, true),
+            model::TokKind::Func(f, _) if g.m.funcs[f as usize].func_id != u32::MAX => {
+                // A contract function of this unit (`Gen::contract_check`).
+                let fc = fn_contract_of(g, templates, f, layouts_out, open_tm);
+                if !vc.fns.iter().any(|c| c.name == fc.name) {
+                    vc.fns.push(fc);
+                }
+                continue;
+            }
+            _ => {
+                if let Some(&fc) = g.stand_in_fc.get(&t) {
+                    if !vc.fns.iter().any(|c| c.name == fc.name) {
+                        vc.fns.push(fc.clone());
+                    }
+                }
+                continue;
+            }
+        };
+        let display = &g.m.tmpls[tm as usize].display;
+        let cc = g
+            .stand_in_cc
+            .get(&tm)
+            .cloned()
+            .or_else(|| {
+                contracts_out
+                    .iter()
+                    .find(|(_, c)| &c.display == display)
+                    .map(|(_, c)| c.clone())
+            })
+            .or_else(|| {
+                let facts = templates.iter().find(|x| x.id == tm)?.clone();
+                if chain_unsettled(&g, tm) {
+                    return None;
+                }
+                let (name, class_id, literal_shape) = match g.m.tmpls[tm as usize].kind.clone() {
+                    model::TmplKind::Class {
+                        name,
+                        class_id,
+                        literal_shape,
+                        ..
+                    } => (name, class_id, literal_shape),
+                    // An enum's object (§18.2): a literal layout with
+                    // no class (nothing guards it, so no class id).
+                    // A plain object literal (DECISIONS 94) the same way.
+                    model::TmplKind::Lit { .. } => (display.clone(), 0, true),
+                    _ => return None,
+                };
+                Some(units::ClassContract {
+                    display: display.clone(),
+                    name,
+                    class_id,
+                    literal_shape,
+                    facts,
+                    methods: Vec::new(),
+                    native_parent: None,
+                    parent: foreign_parent(&g, tm),
+                    field_fns: Vec::new(),
+                    field_layouts: Vec::new(),
+                    field_values: Vec::new(),
+                    field_tas: Vec::new(),
+                    open_keys: open_tm.contains(&tm),
+                    statics: Vec::new(),
+                    statics_open: false,
+                    static_fns: Vec::new(),
+                    closed: None,
+                    method_fns: Vec::new(),
+                    ctor_fn: None,
+                    // The shape's own birth keys: a reader's stand-in judges
+                    // birth fields and the CommonJS record marker on them
+                    // (DECISIONS 101).
+                    birth_keys: atoms_of(g, &g.m.tmpls[tm as usize].birth_keys),
+                    definite: atoms_of(g, &g.m.tmpls[tm as usize].definite),
+                    ctor_leaks: true,
+                    binding_prim: 0,
+                })
+            });
+        let Some(mut cc) = cc else {
+            vc.unknown = true;
+            continue;
+        };
+        if !class
+            && !g.stand_in_cc.contains_key(&tm)
+            && !vc.layouts.iter().any(|c| c.display == cc.display)
+        {
+            cc.field_fns = literal_field_fns(&g, templates, &toks, tm, layouts_out, open_tm);
+            cc.field_layouts = nested_layouts(g, templates, tm, layouts_out, open_tm);
+            cc.field_values = field_value_contracts(g, templates, tm, layouts_out, open_tm);
+            cc.field_tas = field_ta_contracts(g, tm);
+        }
+        let v = if class {
+            &mut vc.classes
+        } else {
+            &mut vc.layouts
+        };
+        if !v.iter().any(|c| c.display == cc.display) {
+            v.push(cc);
+        }
+    }
+    vc
 }
 
 fn arg_contract_of(
@@ -733,6 +1249,10 @@ fn arg_contract_of(
                 if g.m.param_marker.contains_key(&t) || g.unit_in.is_some_and(|u| u.broken(display))
                 {
                     vc.unknown = true;
+                    // A marker is the whole argument (DECISIONS 119).
+                    if g.m.param_marker.contains_key(&t) {
+                        vc.prim |= model::prim::ALL;
+                    }
                     continue;
                 }
                 let cc = if let Some(cc) = g.stand_in_cc.get(&tm) {
@@ -762,13 +1282,25 @@ fn arg_contract_of(
                             facts: facts.clone(),
                             methods: Vec::new(),
                             native_parent: None,
+                            parent: foreign_parent(&g, tm),
                             field_fns: Vec::new(),
                             field_layouts: Vec::new(),
+                            field_values: Vec::new(),
+                            field_tas: Vec::new(),
                             open_keys: open_tm.contains(&tm),
                             statics: Vec::new(),
                             statics_open: false,
                             static_fns: Vec::new(),
                             closed: None,
+                            method_fns: Vec::new(),
+                            ctor_fn: None,
+                            // The shape's own birth keys: a reader's stand-in judges
+                            // birth fields and the CommonJS record marker on them
+                            // (DECISIONS 101).
+                            birth_keys: atoms_of(g, &g.m.tmpls[tm as usize].birth_keys),
+                            definite: atoms_of(g, &g.m.tmpls[tm as usize].definite),
+                            ctor_leaks: true,
+                            binding_prim: 0,
                         }),
                         _ => None,
                     }
@@ -828,6 +1360,10 @@ pub(crate) fn compute_in<'a>(
     g.m.max_pts = cfg.max_pts.unwrap_or(0);
     g.m.max_work = cfg.max_work.unwrap_or(0);
     g.m.max_nodes = cfg.max_pts.map(|p| (p / 8) as usize).unwrap_or(0);
+    g.m.interp_free = cfg.dynamic_code.is_none()
+        && !cfg.dynamic_code_reach.globals
+        && cfg.dynamic_code_reach.lexical_modules.is_empty()
+        && cfg.dynamic_code_reach.sites.is_empty();
     if cfg.dynamic_code.is_some() || cfg.dynamic_code_reach.globals {
         // Interpreted code reads and writes any global (E20); the
         // prototype-write guard does not cover it.
@@ -843,6 +1379,7 @@ pub(crate) fn compute_in<'a>(
         // The closed contracts first (decision 19): publishing a closed
         // function is no escape only once its contract is known.
         g.closed_params();
+        g.published_receivers();
         g.unit_boundary(published);
     }
     let gen_ms = t0.elapsed().as_secs_f64() * 1000.0;
@@ -1057,7 +1594,7 @@ pub(crate) fn compute_in<'a>(
     // Per-unit run: the classes this unit publishes as contracts, and what
     // it did beyond other units' contracts (design §11.2, §11.3).
     let reports = if cfg.unit { g.reports() } else { Vec::new() };
-    let stores_out = if cfg.unit {
+    let store_nodes = if cfg.unit {
         g.store_effects()
     } else {
         Vec::new()
@@ -1068,11 +1605,23 @@ pub(crate) fn compute_in<'a>(
         Default::default()
     };
     let mut layouts_out: Vec<units::ClassContract> = Vec::new();
-    let contracts_out: Vec<((String, String), units::ClassContract)> = if cfg.unit && !g.m.aborted {
+    // The class contracts: a class export under its name; a class given out
+    // (DECISIONS 116) under its display only, a layout its readers find.
+    let contracts_all: Vec<(Option<(String, String)>, units::ClassContract)> = if cfg.unit
+        && !g.m.aborted
+    {
         g.class_contracts
             .iter()
-            .filter_map(|&((mi, a), _, tm)| {
+            .filter_map(|&(e, en, tm)| {
+                let mi = match (e, &g.m.tmpls[tm as usize].kind) {
+                    (Some((mi, _)), _) => mi,
+                    (None, model::TmplKind::Class { module, .. }) => *module,
+                    _ => return None,
+                };
                 let facts = templates.iter().find(|t| t.id == tm)?.clone();
+                if chain_unsettled(&g, tm) {
+                    return None;
+                }
                 let model::TmplKind::Class {
                     name,
                     class_id,
@@ -1106,6 +1655,9 @@ pub(crate) fn compute_in<'a>(
                 let ca = g.m.atoms.iter().position(|x| x == "constructor");
                 let mut cur = Some(tm);
                 while let Some(c) = cur {
+                    if g.m.foreign.contains_key(&c) {
+                        break;
+                    }
                     let proto = g.m.tok_index.get(&model::TokKind::Proto(c)).copied();
                     let mut own: Vec<(String, String)> = g
                         .m
@@ -1129,10 +1681,78 @@ pub(crate) fn compute_in<'a>(
                     native_parent = g.m.tmpls[c as usize].native_parent.clone();
                     cur = g.m.tmpls[c as usize].parent;
                 }
-                let key = (
-                    sorted[mi as usize].0.to_string(),
-                    g.m.atoms[a as usize].clone(),
-                );
+                // Methods and the constructor the solve ran as contract
+                // functions (DECISIONS 57).
+                let mut method_fns: Vec<(String, units::FnContract)> = Vec::new();
+                for (k, _) in &methods {
+                    let ka = g.m.atoms.iter().position(|x| x == k);
+                    let mut cur = Some(tm);
+                    while let Some(c) = cur {
+                        if g.m.foreign.contains_key(&c) {
+                            break;
+                        }
+                        let proto = g.m.tok_index.get(&model::TokKind::Proto(c)).copied();
+                        let f = proto
+                            .zip(ka)
+                            .and_then(|(p, a)| g.m.fields.get(&(p, a as model::Atom)))
+                            .and_then(|&n| {
+                                let ts = g.m.nodes[n as usize].pts.to_sorted();
+                                (ts.len() == 1).then(|| g.m.tok_fn(ts[0]))
+                            });
+                        if let Some(f) = f {
+                            if f != model::NO_FN && g.m.contract_fns.contains(&f) {
+                                method_fns.push((
+                                    k.clone(),
+                                    fn_contract_of(&g, &templates, f, &mut layouts_out, &open_tm),
+                                ));
+                            }
+                            break;
+                        }
+                        cur = g.m.tmpls[c as usize].parent;
+                    }
+                }
+                let ctor_fn = match g.m.tmpls[tm as usize].ctor {
+                    _ if !g.m.ctor_published.contains(&tm) => None,
+                    Some(f) => Some(fn_contract_of(
+                        &g,
+                        &templates,
+                        f,
+                        &mut layouts_out,
+                        &open_tm,
+                    )),
+                    // No constructor code: the field initializers store the
+                    // class's own keys into the receiver, nothing else.
+                    None => Some(units::FnContract {
+                        name: format!("{name}.constructor"),
+                        params: Vec::new(),
+                        reach: Vec::new(),
+                        reach_keys: Vec::new(),
+                        variadic: false,
+                        rest: false,
+                        ret: Some(Vec::new()),
+                        ret_params: Vec::new(),
+                        ret_reach: Vec::new(),
+                        ret_reach_keys: Vec::new(),
+                        ret_unknown: false,
+                        ret_value: Default::default(),
+                        // A constructor with no code returns undefined.
+                        ret_prim: model::prim::UNDEF,
+                        lexical_this: false,
+                        closed: None,
+                        this_use: 0,
+                        this_reach: 0,
+                        this_stores: Some(atoms_of(&g, &g.m.tmpls[tm as usize].birth_keys)),
+                        this_calls: Vec::new(),
+                        param_stores: Vec::new(),
+                        param_flows: Vec::new(),
+                    }),
+                };
+                let key = e.map(|(_, a)| {
+                    (
+                        sorted[mi as usize].0.to_string(),
+                        g.m.atoms[a as usize].clone(),
+                    )
+                });
                 Some((
                     key,
                     units::ClassContract {
@@ -1143,13 +1763,38 @@ pub(crate) fn compute_in<'a>(
                         facts,
                         methods,
                         native_parent,
+                        parent: foreign_parent(&g, tm),
                         field_fns: Vec::new(),
-                        field_layouts: Vec::new(),
+                        // Its instances' fields leave key by key (DECISIONS 88).
+                        field_layouts: nested_layouts(
+                            &g,
+                            &templates,
+                            tm,
+                            &mut layouts_out,
+                            &open_tm,
+                        ),
+                        field_tas: field_ta_contracts(&g, tm),
+                        field_values: field_value_contracts(
+                            &g,
+                            &templates,
+                            tm,
+                            &mut layouts_out,
+                            &open_tm,
+                        ),
                         open_keys: open_tm.contains(&tm),
                         statics,
                         statics_open,
                         static_fns,
                         closed: closed_of(&g, sorted[0].0, mi, tm),
+                        method_fns,
+                        ctor_fn,
+                        birth_keys: atoms_of(&g, &g.m.tmpls[tm as usize].birth_keys),
+                        definite: atoms_of(&g, &g.m.tmpls[tm as usize].definite),
+                        ctor_leaks: g.chain_leaks(tm),
+                        binding_prim: match e {
+                            Some(_) => g.m.nodes[en as usize].prim,
+                            None => 0,
+                        },
                     },
                 ))
             })
@@ -1157,6 +1802,13 @@ pub(crate) fn compute_in<'a>(
     } else {
         Vec::new()
     };
+    let (contracts_out, given_out): (Vec<_>, Vec<_>) =
+        contracts_all.into_iter().partition(|(k, _)| k.is_some());
+    let contracts_out: Vec<((String, String), units::ClassContract)> = contracts_out
+        .into_iter()
+        .map(|(k, c)| (k.expect("an export"), c))
+        .collect();
+    let given_out: Vec<units::ClassContract> = given_out.into_iter().map(|(_, c)| c).collect();
     // Its function contracts and the layouts they return (design §11.2).
     let fn_contracts_out: Vec<((String, String), units::FnContract)> = if cfg.unit && !g.m.aborted {
         let mut out = Vec::new();
@@ -1186,117 +1838,35 @@ pub(crate) fn compute_in<'a>(
     } else {
         Vec::new()
     };
+    // DECISIONS 106: every function some contract may describe goes out
+    // under its name, its owner's contract.
+    let own_fns_out: Vec<units::FnContract> = if cfg.unit && !g.m.aborted {
+        let mut fs: Vec<model::FnIdx> =
+            g.m.contract_fns
+                .iter()
+                .copied()
+                .filter(|&f| g.m.funcs[f as usize].func_id != u32::MAX)
+                .collect();
+        fs.sort_unstable();
+        fs.into_iter()
+            .map(|f| fn_contract_of(&g, &templates, f, &mut layouts_out, &open_tm))
+            .collect()
+    } else {
+        Vec::new()
+    };
     // Its value contracts (design §12): per published value binding, the
     // contracts of what it may hold (`Gen::contract_check` accepted them).
     let values_out: Vec<((String, String), units::ValueContract)> = if cfg.unit && !g.m.aborted {
         let mut out = Vec::new();
         for &((mi, a), n) in &g.value_contracts {
-            let node = &g.m.nodes[n as usize];
-            let mut vc = units::ValueContract {
-                layouts: Vec::new(),
-                classes: Vec::new(),
-                fns: Vec::new(),
-                unknown: false,
-                prim: node.prim,
-            };
-            for t in node.pts.to_sorted() {
-                let (tm, class) = match g.m.toks[t as usize] {
-                    model::TokKind::Top | model::TokKind::BuiltinFn => {
-                        vc.unknown = true;
-                        continue;
-                    }
-                    model::TokKind::Obj(tm, _) => (tm, false),
-                    model::TokKind::ClassObj(tm) => (tm, true),
-                    model::TokKind::Func(f, _) if g.m.funcs[f as usize].func_id != u32::MAX => {
-                        // A contract function of this unit (`Gen::contract_check`).
-                        let fc = fn_contract_of(&g, &templates, f, &mut layouts_out, &open_tm);
-                        if !vc.fns.iter().any(|c| c.name == fc.name) {
-                            vc.fns.push(fc);
-                        }
-                        continue;
-                    }
-                    _ => {
-                        if let Some(&fc) = g.stand_in_fc.get(&t) {
-                            if !vc.fns.iter().any(|c| c.name == fc.name) {
-                                vc.fns.push(fc.clone());
-                            }
-                        }
-                        continue;
-                    }
-                };
-                let display = &g.m.tmpls[tm as usize].display;
-                let cc = g
-                    .stand_in_cc
-                    .get(&tm)
-                    .cloned()
-                    .or_else(|| {
-                        contracts_out
-                            .iter()
-                            .find(|(_, c)| &c.display == display)
-                            .map(|(_, c)| c.clone())
-                    })
-                    .or_else(|| {
-                        let facts = templates.iter().find(|x| x.id == tm)?.clone();
-                        let (name, class_id, literal_shape) =
-                            match g.m.tmpls[tm as usize].kind.clone() {
-                                model::TmplKind::Class {
-                                    name,
-                                    class_id,
-                                    literal_shape,
-                                    ..
-                                } => (name, class_id, literal_shape),
-                                // An enum's object (§18.2): a literal layout with
-                                // no class (nothing guards it, so no class id).
-                                model::TmplKind::Lit {
-                                    enum_image: true, ..
-                                } => (display.clone(), 0, true),
-                                _ => return None,
-                            };
-                        Some(units::ClassContract {
-                            display: display.clone(),
-                            name,
-                            class_id,
-                            literal_shape,
-                            facts,
-                            methods: Vec::new(),
-                            native_parent: None,
-                            field_fns: Vec::new(),
-                            field_layouts: Vec::new(),
-                            open_keys: open_tm.contains(&tm),
-                            statics: Vec::new(),
-                            statics_open: false,
-                            static_fns: Vec::new(),
-                            closed: None,
-                        })
-                    });
-                let Some(mut cc) = cc else {
-                    vc.unknown = true;
-                    continue;
-                };
-                if !class
-                    && !g.stand_in_cc.contains_key(&tm)
-                    && !vc.layouts.iter().any(|c| c.display == cc.display)
-                {
-                    cc.field_fns = literal_field_fns(
-                        &g,
-                        &templates,
-                        &node.pts.to_sorted(),
-                        tm,
-                        &mut layouts_out,
-                        &open_tm,
-                    );
-                    cc.field_layouts =
-                        nested_layouts(&g, &templates, tm, &mut layouts_out, &open_tm);
-                }
-                let v = if class {
-                    &mut vc.classes
-                } else {
-                    &mut vc.layouts
-                };
-                if !v.iter().any(|c| c.display == cc.display) {
-                    v.push(cc);
-                }
-            }
+            let vc = value_contract_of(
+                &g,
+                &templates,
+                n,
+                &contracts_out,
+                &mut layouts_out,
+                &open_tm,
+            );
             let key = (
                 sorted[mi as usize].0.to_string(),
                 g.m.atoms[a as usize].clone(),
@@ -1307,6 +1877,120 @@ pub(crate) fn compute_in<'a>(
     } else {
         Vec::new()
     };
+    // Its store effects with their value contracts (design §17.16 (c)): an
+    // undescribed value (`Gen::effect_bad`) or a solve over the bound is
+    // unknown, of any kind.
+    let stores_out: Vec<(String, String, units::ValueContract)> = store_nodes
+        .into_iter()
+        .map(|(d, k, nodes)| {
+            let mut vc = units::ValueContract::default();
+            for n in nodes {
+                if g.m.aborted || g.effect_bad.contains(&n) {
+                    vc.unknown = true;
+                    vc.prim = model::prim::ALL;
+                } else {
+                    vc.join(&value_contract_of(
+                        &g,
+                        &templates,
+                        n,
+                        &contracts_out,
+                        &mut layouts_out,
+                        &open_tm,
+                    ));
+                }
+            }
+            (d, k, vc)
+        })
+        .collect();
+    // What it writes into each cell (design §17.16 (b)): what the cell node
+    // holds, the other units' writes it read included (a forwarded stand-in
+    // is its owner's contract, a join adds nothing): the cells grow
+    // monotonically to the fixpoint. Undescribed (`Gen::cell_bad`) or over
+    // the bound, unknown.
+    let mut cells_out: Vec<(String, units::ValueContract)> = g
+        .cells
+        .iter()
+        .filter_map(|(k, n)| {
+            let node = &g.m.nodes[*n as usize];
+            if g.m.aborted || g.cell_bad.contains(n) {
+                let vc = units::ValueContract {
+                    unknown: true,
+                    prim: model::prim::ALL,
+                    ..Default::default()
+                };
+                return Some((k.clone(), vc));
+            }
+            let toks: Vec<model::Tok> = node.pts.to_sorted();
+            let prim = node.prim;
+            if toks.is_empty() && prim == 0 {
+                return None;
+            }
+            let vc = value_contract_of_toks(
+                &g,
+                &templates,
+                prim,
+                toks,
+                &contracts_out,
+                &mut layouts_out,
+                &open_tm,
+            );
+            Some((k.clone(), vc))
+        })
+        .collect();
+    // Its globals as unmodeled code may write them (the global object
+    // reached ⊤, a computed key was written, a key named after the
+    // boundary): every unit's global cells read ⊤.
+    let gt =
+        g.m.tok_index
+            .get(&model::TokKind::Builtin(model::BuiltinNs::GlobalThis))
+            .copied();
+    if g.m.global_cells
+        && (g.m.aborted
+            || g.m.global_in_top
+            || g.m.global_late
+            || gt.is_some_and(|t| g.m.native_writes.contains_key(&(t, None))))
+    {
+        let vc = units::ValueContract {
+            unknown: true,
+            prim: model::prim::ALL,
+            ..Default::default()
+        };
+        cells_out.push(("global:*".to_string(), vc));
+    }
+    // DECISIONS 92: a program object as unmodeled code may write it (it
+    // escaped, a key was named after the boundary): every unit's fields of
+    // it read ⊤ through `<name>:*`.
+    if g.m.program_cells {
+        for &(name, t) in &g.m.program_objs {
+            if g.m.aborted || g.m.program_late.contains(&name) || g.m.is_escaped(t) {
+                let vc = units::ValueContract {
+                    unknown: true,
+                    prim: model::prim::ALL,
+                    ..Default::default()
+                };
+                let key = format!("{name}:*");
+                cells_out.retain(|(k, _)| *k != key);
+                cells_out.push((key, vc));
+            }
+        }
+    }
+    // DECISIONS 94: an array unmodeled code may write (it escaped): every
+    // unit's elements of it read ⊤.
+    // A named key stored into one: every unit's named fields of it read ⊤.
+    for (key, t) in &g.arr_cells {
+        let vc = units::ValueContract {
+            unknown: true,
+            prim: model::prim::ALL,
+            ..Default::default()
+        };
+        if g.m.aborted || g.m.is_escaped(*t) {
+            cells_out.retain(|(k, _)| k != key);
+            cells_out.push((key.clone(), vc.clone()));
+        }
+        if g.m.aborted || g.m.is_escaped(*t) || g.m.arr_named.contains(t) {
+            cells_out.push((format!("{key}#named"), vc));
+        }
+    }
     // What its calls pass to the other units' closed functions (decision 13).
     let args_out: Vec<(String, units::ArgContract)> = match g.view {
         Some(v) if cfg.unit && !g.m.aborted => {
@@ -1385,13 +2069,90 @@ pub(crate) fn compute_in<'a>(
             .collect(),
         _ => Vec::new(),
     };
+    // DECISIONS 107: per method of another unit, the receivers this unit
+    // runs it on (`Model::this_admitted`), published to the method's unit.
+    // A receiver marker or a published receiver token stands for instances
+    // of classes further units may extend: unknown.
+    let this_args_out: Vec<(String, units::ValueContract)> = match g.view {
+        Some(_) if cfg.unit && !g.m.aborted => {
+            let mut by: Vec<(String, Vec<model::Tok>)> = Vec::new();
+            for &(this, t) in &g.m.this_admitted {
+                let Some(fc) =
+                    g.m.this_contract_fns
+                        .get(this as usize)
+                        .and_then(|ft| g.stand_in_fc.get(ft))
+                else {
+                    continue;
+                };
+                match by.iter_mut().find(|(n, _)| *n == fc.name) {
+                    Some((_, v)) if !v.contains(&t) => v.push(t),
+                    Some(_) => {}
+                    None => by.push((fc.name.clone(), vec![t])),
+                }
+            }
+            by.sort();
+            by.into_iter()
+                .map(|(nm, toks)| {
+                    let opaque = toks.iter().any(|t| {
+                        g.m.param_marker.contains_key(t)
+                            || g.m.recv_class.contains_key(t)
+                            || g.m.reach_marker.contains(t)
+                    });
+                    let mut vc = value_contract_of_toks(
+                        &g,
+                        &templates,
+                        0,
+                        toks,
+                        &contracts_out,
+                        &mut layouts_out,
+                        &open_tm,
+                    );
+                    vc.unknown |= opaque;
+                    (nm, vc)
+                })
+                .collect()
+        }
+        _ => Vec::new(),
+    };
     // A contract class a contract result or value names is published
     // whole (methods, statics): its readers call them on what they get.
     for l in layouts_out.iter_mut() {
-        if let Some((_, c)) = contracts_out.iter().find(|(_, c)| c.display == l.display) {
+        if let Some(c) = contracts_out
+            .iter()
+            .map(|(_, c)| c)
+            .chain(&given_out)
+            .find(|c| c.display == l.display)
+        {
             *l = c.clone();
         }
     }
+    // The other units' parents those contracts name go out beside them,
+    // with the contract this unit holds for them (DECISIONS 104).
+    let mut i = 0;
+    let mut parents: Vec<String> = contracts_out
+        .iter()
+        .map(|(_, c)| c)
+        .chain(&given_out)
+        .filter_map(|c| c.parent.clone())
+        .collect();
+    while i < layouts_out.len() || !parents.is_empty() {
+        if let Some(d) = parents.pop() {
+            if layouts_out.iter().any(|c| c.display == d) {
+                continue;
+            }
+            if let Some(cc) = g.stand_in_cc.values().find(|c| c.display == d) {
+                layouts_out.push(cc.clone());
+            }
+            continue;
+        }
+        parents.extend(layouts_out[i].parent.clone());
+        i += 1;
+    }
+    let layouts_fwd: Vec<String> = layouts_out
+        .iter()
+        .filter(|c| g.stand_in_cc.values().any(|s| s.display == c.display))
+        .map(|c| c.display.clone())
+        .collect();
     let mut pf = ProgramFacts {
         super_unrelinked,
         fnproto_bind_written,
@@ -1410,6 +2171,7 @@ pub(crate) fn compute_in<'a>(
         rounds: 0,
         broken: Vec::new(),
         round_work: Vec::new(),
+        compares: 0,
         contracts_out,
         fn_contracts_out,
         fns_defined,
@@ -1419,6 +2181,13 @@ pub(crate) fn compute_in<'a>(
         ctor_args_out,
         reports,
         stores_out,
+        cells_out,
+        cells_read: std::mem::take(&mut g.cells_read),
+        layouts_read: std::mem::take(&mut g.layouts_read),
+        own_fns_out,
+        fns_read: std::mem::take(&mut g.fns_read),
+        this_args_out,
+        layouts_fwd,
         module_digests: Vec::new(),
     };
     pf.module_digests = dump::module_digests(&pf);

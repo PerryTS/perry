@@ -203,8 +203,10 @@ pub fn resolver(m: &mut Model, dst: NodeId) -> Tok {
         lexical_this: true,
         no_summary: false,
         gen_step: false,
+        captures: Vec::new(),
         forwards_super: false,
         parent: NO_FN,
+        forwarded: false,
     });
     m.add_prim(ret, prim::UNDEF);
     m.resolvers.insert(dst, tok);
@@ -1429,6 +1431,8 @@ pub fn require_parts(m: &mut Model) -> (Tok, Tok) {
     let c = anon_tmpl(m, "require.cache");
     let e = anon_tmpl(m, "require.extensions");
     m.require_parts = Some((c, e));
+    m.program_objs.push(("require.cache", c));
+    m.program_objs.push(("require.extensions", e));
     (c, e)
 }
 
@@ -1492,6 +1496,13 @@ pub fn global_field(m: &mut Model, g: Tok, a: Atom) -> NodeId {
     }
     let n = m.field(g, a);
     m.global_fields.push((a, n));
+    if m.global_cells {
+        m.global_late = true;
+        m.add_top(n, |_| "global named after the unit boundary".into());
+        m.add_prim(n, prim::ALL);
+        let r = m.reason("stored into a global named after the unit boundary");
+        m.sink_node(n, r);
+    }
     n
 }
 

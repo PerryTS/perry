@@ -11,10 +11,30 @@ impl<'a> Gen<'a> {
         if let Some(node) = self.cjs_main {
             return node;
         }
-        let (_, node) = self.bobj(mi, "CjsMain");
+        let (t, node) = self.bobj(mi, "CjsMain");
+        self.m.program_objs.push(("cjsmain", t));
         self.m.add_prim(node, crate::model::prim::UNDEF);
         self.cjs_main = Some(node);
         node
+    }
+
+    /// The program object `name` of this unit (DECISIONS 92), made on
+    /// first use.
+    pub(crate) fn program_obj(&mut self, mi: u32, name: &str) -> Option<Tok> {
+        match name {
+            "cjsmain" => {
+                self.cjs_main_value(mi);
+            }
+            "require.cache" | "require.extensions" => {
+                crate::builtins::require_parts(&mut self.m);
+            }
+            _ => {}
+        }
+        self.m
+            .program_objs
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map(|&(_, t)| t)
     }
 
     /// `require("<literal>")` in a CommonJS-wrapped module. The wrapper's
