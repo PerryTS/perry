@@ -255,6 +255,26 @@ impl Published {
     }
 }
 
+/// The module an `export … from source` of module `path` reads: the
+/// driver's resolution (`FactsConfig::export_sources`), else an import of
+/// the same source, as `Gen::resolve_source`. A re-export declares no import
+/// of its source (`export * as X from "./self"`), so the imports alone miss
+/// it, and the surface, the namespace keys and the order must not.
+fn reexport_source<'i>(
+    es: &crate::ExportSources,
+    path: &str,
+    imports: impl IntoIterator<Item = &'i Import>,
+    source: &str,
+) -> Option<String> {
+    if let Some(p) = es.get(path).and_then(|m| m.get(source)) {
+        return Some(p.clone());
+    }
+    imports
+        .into_iter()
+        .find(|i| i.source == source)
+        .and_then(|i| i.resolved_path.clone())
+}
+
 pub(crate) fn published_surface(
     sorted: &[(&str, Vec<&Import>, &[Export])],
     cfg: &FactsConfig,
@@ -268,10 +288,7 @@ pub(crate) fn published_surface(
     };
     for (path, imports, exports) in sorted {
         let resolve = |source: &str| {
-            imports
-                .iter()
-                .find(|i| i.source == source)
-                .and_then(|i| i.resolved_path.clone())
+            reexport_source(&cfg.export_sources, path, imports.iter().copied(), source)
         };
         for imp in imports.iter().copied() {
             let Some(t) = imp.resolved_path.as_ref().filter(|t| t.as_str() != *path) else {
@@ -340,14 +357,17 @@ pub(crate) fn published_surface(
 /// names, from the declarations (the same ones `Gen::link_exports` puts on
 /// the namespace). `export *` adds the source module's keys but `default`;
 /// a source outside the program makes the namespace open. Syntactic.
-pub(crate) fn namespace_keys(sorted: &[(&str, &Module)]) -> FxHashMap<String, (Vec<String>, bool)> {
+pub(crate) fn namespace_keys(
+    sorted: &[(&str, &Module)],
+    es: &crate::ExportSources,
+) -> FxHashMap<String, (Vec<String>, bool)> {
     let index: FxHashMap<&str, usize> = sorted
         .iter()
         .enumerate()
         .map(|(i, (p, _))| (*p, i))
         .collect();
     let mut own: Vec<(Vec<String>, Vec<Option<usize>>)> = Vec::with_capacity(sorted.len());
-    for (_, m) in sorted {
+    for (path, m) in sorted {
         let mut keys: Vec<String> = Vec::new();
         let mut stars: Vec<Option<usize>> = Vec::new();
         for e in &m.exports {
@@ -357,11 +377,8 @@ pub(crate) fn namespace_keys(sorted: &[(&str, &Module)]) -> FxHashMap<String, (V
                 }
                 Export::NamespaceReExport { name, .. } => keys.push(name.clone()),
                 Export::ExportAll { source } => stars.push(
-                    m.imports
-                        .iter()
-                        .find(|i| &i.source == source)
-                        .and_then(|i| i.resolved_path.as_deref())
-                        .and_then(|t| index.get(t).copied()),
+                    reexport_source(es, path, &m.imports, source)
+                        .and_then(|t| index.get(t.as_str()).copied()),
                 ),
             }
         }
@@ -445,7 +462,11 @@ fn owner_of(out: &[Solve], t: &std::ops::Range<usize>, name: &str) -> Option<usi
     })
 }
 
-fn solves<'a>(sorted: &[(&'a str, &'a Module)], flats: &'a [Option<Module>]) -> Vec<Solve<'a>> {
+fn solves<'a>(
+    sorted: &[(&'a str, &'a Module)],
+    flats: &'a [Option<Module>],
+    es: &crate::ExportSources,
+) -> Vec<Solve<'a>> {
     let index: FxHashMap<&str, usize> = sorted
         .iter()
         .enumerate()
@@ -515,6 +536,31 @@ fn solves<'a>(sorted: &[(&'a str, &'a Module)], flats: &'a [Option<Module>]) -> 
                 }
             }
         }
+        // A re-export whose source the module does not import (resolved
+        // by the driver): the first unit is ordered after all of the source
+        // and depends on it, as for an imported one.
+        if out[si].key.ends_with("#u0") {
+            for e in &module.exports {
+                let (Export::ReExport { source, .. }
+                | Export::ExportAll { source }
+                | Export::NamespaceReExport { source, .. }) = e
+                else {
+                    continue;
+                };
+                if module.imports.iter().any(|i| &i.source == source) {
+                    continue;
+                }
+                let Some(&t) = reexport_source(es, path, std::iter::empty(), source)
+                    .as_deref()
+                    .filter(|t| *t != path)
+                    .and_then(|t| index.get(t))
+                else {
+                    continue;
+                };
+                out[si].deps.extend(range[t].clone());
+                after.extend(range[t].clone());
+            }
+        }
         out[si].after.extend(after);
     }
     out
@@ -573,7 +619,7 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
         .iter()
         .map(|(_, m)| crate::decl_units::run_once_flat(m))
         .collect();
-    let solves = solves(sorted, &flats);
+    let solves = solves(sorted, &flats, &cfg.export_sources);
     let viewed: Vec<(&str, Vec<&Import>, &[Export])> = solves
         .iter()
         .map(|s| {
@@ -589,7 +635,7 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
         })
         .collect();
     let mut input = published_surface(&viewed, cfg);
-    input.ns_keys = namespace_keys(sorted);
+    input.ns_keys = namespace_keys(sorted, &cfg.export_sources);
     let order = dependency_order(&solves);
     let levels = dependency_levels(&solves, &order);
     let mut rounds = 0u32;
