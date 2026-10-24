@@ -799,6 +799,10 @@ impl<'a> Gen<'a> {
                 return (false, true);
             }
             for t in toks {
+                // Nothing of this unit leaves through a marker (DECISIONS 137).
+                if self.m.is_marker(t) {
+                    continue;
+                }
                 if let TokKind::Func(f, _) = self.m.toks[t as usize] {
                     if self.m.funcs[f as usize].func_id != u32::MAX {
                         // A closed function: through its argument contract
@@ -1122,6 +1126,10 @@ impl<'a> Gen<'a> {
     /// A token a value contract describes (`contract_check`).
     fn value_tok_ok(&self, t: Tok) -> bool {
         match self.m.toks[t as usize] {
+            // DECISIONS 137: a marker with values beside it (DECISIONS 74)
+            // stands for no value of its own: the callers' values arrive
+            // with it in every node it reaches and are checked themselves.
+            _ if self.m.is_marker(t) && self.m.beside_values(t) => true,
             // A global builtin is the same object in every unit (§17.16 (a)).
             TokKind::Top | TokKind::BuiltinFn | TokKind::Builtin(_) => true,
             // A program object, the same in every unit (DECISIONS 92).

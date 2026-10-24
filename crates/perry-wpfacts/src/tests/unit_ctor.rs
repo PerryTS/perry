@@ -115,3 +115,41 @@ fn a_constructor_argument_no_contract_describes_escapes() {
         pf.dump_text()
     );
 }
+
+/// DECISIONS 137: CD's RedBlackTree.put stores `this.root` (what its
+/// published receiver reaches) into another unit's Node. The receiver marker
+/// has the running units' receivers beside it (DECISIONS 74/107): it is no
+/// value of its own, so the store is described by those values, not sunk
+/// and published unknown to Node's owner.
+const TREE_ROOT: &str = r#"
+    class Node {
+      parent: Node | null;
+      constructor() { this.parent = null; }
+    }
+    class Tree {
+      root: Node | null;
+      constructor() { this.root = null; }
+      put(): void { const z = new Node(); z.parent = this.root; this.root = z; }
+    }
+    function walk(t: Tree): number {
+      let n = 0;
+      let x: Node | null = t.root;
+      while (x !== null) { n++; x = x.parent; }
+      return n;
+    }
+    const t = new Tree();
+    t.put();
+    t.put();
+    console.log(walk(t));
+    "#;
+
+#[test]
+fn a_receiver_reach_stored_into_another_units_instance_keeps_its_class() {
+    let pf = units(TREE_ROOT);
+    let whole = facts(TREE_ROOT);
+    assert!(pf.broken.is_empty(), "{:?}\n{}", pf.broken, pf.dump_text());
+    let (u, w) = (field(tmpl(&pf, "Node"), "parent"), field(tmpl(&whole, "Node"), "parent"));
+    assert!(!u.kind.top, "{}", pf.dump_text());
+    assert_eq!(u.kind.objs, w.kind.objs, "{}", pf.dump_text());
+    assert_eq!(verdicts(&pf, "parent"), verdicts(&whole, "parent"), "{}", pf.dump_text());
+}

@@ -617,10 +617,16 @@ impl Cons {
     }
 }
 
+/// DECISIONS 118: (function, parameter, into its reach, via, key).
+pub type StoreFlowKey = (FnIdx, u32, bool, Option<Atom>, Atom);
+
 /// DECISIONS 118: one stored key of a contract function's parameter.
 #[derive(Clone, Debug, Default)]
 pub struct StoreFlow {
     pub from: Vec<u32>,
+    /// DECISIONS 136: what parameter `j`'s argument holds under `via`
+    /// (its keyed reach), or reaches (`None`), stored here.
+    pub from_reach: Vec<(u32, Option<Atom>)>,
     pub top: bool,
     pub prim: u16,
 }
@@ -996,6 +1002,12 @@ pub struct Model {
     pub arg_stores: FxHashMap<Tok, Vec<(Atom, NodeId, SiteId)>>,
     pub arg_store_done: crate::pts::FxHashSet<(Tok, Atom, NodeId)>,
     pub arg_src_watch: FxHashMap<Tok, Vec<(FnIdx, u32, u32)>>,
+    /// DECISIONS 136: a store flow whose stored value is (what) an argument
+    /// marker (reaches): (stored marker, flow, reason) per argument marker
+    /// whose members it stands for, replayed as members link in.
+    pub arg_src_flows: FxHashMap<Tok, Vec<(Tok, StoreFlowKey, u32)>>,
+    /// An argument marker's reach marker -> the argument marker.
+    pub arg_reach_base: FxHashMap<Tok, Tok>,
     pub arg_marker_node: FxHashMap<Tok, NodeId>,
     /// The function and parameter index of each parameter node: the
     /// function's own and each summary instance's (a method run through an
@@ -1839,6 +1851,7 @@ impl Model {
             self.arg_members.insert(x, Vec::new());
         }
         self.marker_reach.insert(t, r);
+        self.arg_reach_base.insert(r, t);
         self.reach_marker.insert(r);
         self.arg_marker_of.insert(n, t);
         self.arg_marker_node.insert(t, n);
@@ -1865,7 +1878,11 @@ impl Model {
         let keyed_stores = self.keyed_reach.get(&r).map_or(false, |v| {
             v.iter().any(|(_, kr)| self.arg_stores.contains_key(kr))
         });
-        if self.arg_stores.contains_key(&r) || self.arg_src_watch.contains_key(&r) || keyed_stores {
+        if self.arg_stores.contains_key(&r)
+            || self.arg_src_watch.contains_key(&r)
+            || self.arg_src_flows.contains_key(&r)
+            || keyed_stores
+        {
             self.marker_links.push((m, r));
         }
         if self.beside_markers.contains(&r) {

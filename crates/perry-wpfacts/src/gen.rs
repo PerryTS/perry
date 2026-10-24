@@ -689,6 +689,25 @@ impl<'a> Gen<'a> {
                     self.m.edge(a, n);
                 }
             }
+            // DECISIONS 136: what the reader's argument reaches, under the
+            // key and on from there, or through own properties.
+            for (j, via) in &fl.from_reach {
+                let Some(&a) = params.get(*j as usize) else {
+                    continue;
+                };
+                match via {
+                    Some(k) => self.ret_through_key(a, k, n, &c.name),
+                    None => {
+                        let q = self
+                            .m
+                            .node_named("reach", || format!("reach-from{j}({})", c.name));
+                        self.m.own(q);
+                        self.m.cons(a, Cons::OwnValues { dst: q });
+                        self.m.cons(q, Cons::OwnValues { dst: q });
+                        self.m.edge(q, n);
+                    }
+                }
+            }
             self.m.add_prim(n, fl.prim);
         }
         if top {

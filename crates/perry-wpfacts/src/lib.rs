@@ -886,12 +886,19 @@ fn fn_contract_of(
             .map(|(&(_, dst, reach, via, a), fl)| {
                 let mut from = fl.from.clone();
                 from.sort();
+                let mut from_reach: Vec<(u32, Option<String>)> = fl
+                    .from_reach
+                    .iter()
+                    .map(|&(j, v)| (j, v.map(|v| g.m.atoms[v as usize].clone())))
+                    .collect();
+                from_reach.sort();
                 units::StoreFlow {
                     dst,
                     reach,
                     via: via.map(|v| g.m.atoms[v as usize].clone()),
                     key: g.m.atoms[a as usize].clone(),
                     from,
+                    from_reach,
                     top: fl.top,
                     prim: fl.prim,
                 }
@@ -1038,6 +1045,9 @@ fn value_contract_of_toks(
                 }
                 continue;
             }
+            // DECISIONS 137: a marker with values beside it (DECISIONS 74)
+            // is described by them; it adds no kind of its own.
+            model::TokKind::Obj(..) if g.m.is_marker(t) && g.m.beside_values(t) => continue,
             model::TokKind::Obj(..)
                 if g.m.program_cells && g.m.program_objs.iter().any(|&(_, o)| o == t) =>
             {

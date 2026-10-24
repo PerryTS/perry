@@ -760,6 +760,7 @@ impl Model {
                 reason,
             } => {
                 let mut from = Vec::new();
+                let mut from_reach = Vec::new();
                 let mut top = false;
                 for &t in toks {
                     // The argument marker of `f`'s parameter node `j` is
@@ -789,6 +790,20 @@ impl Model {
                         {
                             from.push(j)
                         }
+                        // DECISIONS 136: what the parameter's argument
+                        // reaches (`y.left = y.left.right`) is a value of
+                        // the reader too: it stores its own, as the whole
+                        // program does, not a value of this unit.
+                        Some(&(g, j)) if g == f && j != u32::MAX => {
+                            from_reach.push((j, self.param_reach_key(f, j, t)));
+                        }
+                        // DECISIONS 136: an argument marker, and what it
+                        // reaches, is its members and what they reach
+                        // (DECISIONS 44); each one is a source of the flow,
+                        // as it links in.
+                        _ if self.is_arg_marker(t) => {
+                            self.store_out_arg_reach(t, (f, dst, reach, via, key), reason);
+                        }
                         _ => {
                             top = true;
                             self.escape(t, reason);
@@ -802,6 +817,11 @@ impl Model {
                 for j in from {
                     if !fl.from.contains(&j) {
                         fl.from.push(j);
+                    }
+                }
+                for r in from_reach {
+                    if !fl.from_reach.contains(&r) {
+                        fl.from_reach.push(r);
                     }
                 }
                 fl.top |= top;
@@ -2092,12 +2112,97 @@ impl Model {
                     self.store_into(mk, Key::Named(a), src, site);
                 }
             }
+            // DECISIONS 136: a flow whose stored value `r`'s members stand for.
+            for (t, flow, reason) in self.arg_src_flows.get(&r).cloned().unwrap_or_default() {
+                self.store_out_arg_reach(t, flow, reason);
+            }
             for (f, j, reason) in self.arg_src_watch.get(&r).cloned().unwrap_or_default() {
                 if self.marker_of.get(&(f, j)) != Some(&m) {
                     self.escape(m, reason);
                 }
             }
         }
+    }
+
+    /// The key `t` is the keyed reach of parameter `j` of `f` under, if
+    /// it is one (`None`: its reach through any key).
+    fn param_reach_key(&self, f: FnIdx, j: u32, t: Tok) -> Option<Atom> {
+        self.marker_of
+            .get(&(f, j))
+            .and_then(|mk| self.keyed_reach.get(mk))
+            .and_then(|v| v.iter().find(|&&(_, r)| r == t))
+            .map(|&(k, _)| k)
+    }
+
+    /// DECISIONS 136: stored value `t`, an argument marker or its reach
+    /// (under a key, or any), stands for each member or that reach of it:
+    /// `f`'s own parameter, or its reach, is a source of the flow (the
+    /// reader stores its own value), any other member's escapes. The
+    /// members that link in later are replayed (`replay_marker_links`).
+    fn store_out_arg_reach(&mut self, t: Tok, flow: StoreFlowKey, reason: u32) {
+        let (f, ..) = flow;
+        // `None`: the members themselves; `Some(k)`: their reach under key
+        // `k`, or any key.
+        let (base, k) = match self.keyed_parent.get(&t).copied() {
+            Some((p, k)) => (p, Some(Some(k))),
+            None => match self.arg_reach_base.get(&t).copied() {
+                Some(p) => (p, Some(None)),
+                None => (t, None),
+            },
+        };
+        let mut st = vec![base];
+        let mut seen = crate::pts::FxHashSet::default();
+        let mut srcs = Vec::new();
+        while let Some(x) = st.pop() {
+            if !seen.insert(x) {
+                continue;
+            }
+            match self.arg_members.get(&x).cloned() {
+                Some(ms) => {
+                    let w = self.arg_src_flows.entry(x).or_default();
+                    if !w.contains(&(t, flow, reason)) {
+                        w.push((t, flow, reason));
+                    }
+                    st.extend(ms);
+                }
+                // A reach marker reaches itself under every key.
+                None if self.reach_marker.contains(&x) => srcs.push(x),
+                None => srcs.push(match k {
+                    None => x,
+                    Some(Some(k)) => self.keyed_reach_of(x, k),
+                    Some(None) => match self.marker_reach.get(&x) {
+                        Some(&r) => r,
+                        None => x,
+                    },
+                }),
+            }
+        }
+        let (mut from, mut from_reach) = (Vec::new(), Vec::new());
+        let mut top = false;
+        for s in srcs {
+            match self.param_marker.get(&s).copied() {
+                Some((g, j)) if g == f && j != u32::MAX && self.reach_marker.contains(&s) => {
+                    from_reach.push((j, self.param_reach_key(f, j, s)));
+                }
+                Some((g, j)) if g == f && j != u32::MAX => from.push(j),
+                _ => {
+                    top = true;
+                    self.escape(s, reason);
+                }
+            }
+        }
+        let fl = self.store_flows.entry(flow).or_default();
+        for j in from {
+            if !fl.from.contains(&j) {
+                fl.from.push(j);
+            }
+        }
+        for r in from_reach {
+            if !fl.from_reach.contains(&r) {
+                fl.from_reach.push(r);
+            }
+        }
+        fl.top |= top;
     }
 
     /// The parameter of `f` whose node argument marker `t` is the marker of.

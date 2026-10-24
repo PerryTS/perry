@@ -99,6 +99,9 @@ pub(crate) struct StoreFlow {
     pub via: Option<String>,
     pub key: String,
     pub from: Vec<u32>,
+    /// DECISIONS 136: what parameter `j`'s argument holds under the key
+    /// (and reaches from there), or reaches (`None`), is stored too.
+    pub from_reach: Vec<(u32, Option<String>)>,
     pub top: bool,
     pub prim: u16,
 }
@@ -300,6 +303,12 @@ impl FnContract {
                 Some(x) => {
                     union_into(&mut x.from, &y.from);
                     x.from.sort_unstable();
+                    for r in &y.from_reach {
+                        if !x.from_reach.contains(r) {
+                            x.from_reach.push(r.clone());
+                        }
+                    }
+                    x.from_reach.sort();
                     x.top |= y.top;
                     x.prim |= y.prim;
                 }
