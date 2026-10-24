@@ -429,7 +429,7 @@ pub(crate) fn encode_non_ascii(s: &str) -> String {
 /// Create a URL object from a string
 pub(crate) fn create_url_object(url_string: &str) -> *mut ObjectHeader {
     let (protocol, mut host, mut hostname, port, pathname, search, hash) = parse_url(url_string);
-    let pathname = encode_non_ascii(&pathname);
+    let pathname = super::url_class::percent_encode_path(&pathname);
     let search = encode_non_ascii(&search);
     let hash = encode_non_ascii(&hash);
 
