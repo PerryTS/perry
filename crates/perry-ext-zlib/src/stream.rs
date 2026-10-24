@@ -830,17 +830,26 @@ unsafe fn create_stream(
     ));
     method(owner.get(), "on", &[event.get(), prefinish.get()]);
     np::own(owner.get(), "bytesWritten", 0.0);
-    own_new!(
-        "_handle",
-        f64::from_bits(
-            JsValue::from_object_ptr(unsafe {
-                perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
-                    perry_ffi::runtime_layouts::RECORD_PCHECKED031
-                ))
-            })
-            .bits()
-        )
+    let handle = roots.root_nanbox(f64::from_bits(
+        JsValue::from_object_ptr(perry_ffi::runtime_layouts::alloc_runtime_record(
+            std::ptr::addr_of!(perry_ffi::runtime_layouts::RECORD_PCHECKED031),
+        ))
+        .bits(),
+    ));
+    let handle_close = roots.root_nanbox(f64::from_bits(
+        JsValue::from_object_ptr(perry_ffi::alloc_closure(
+            perry_ffi::js_function_info!(close_codec_handle, 0),
+            1,
+        ))
+        .bits(),
+    ));
+    perry_ffi::set_closure_capture_f64(
+        JsValue::from_bits(handle_close.get().to_bits()).as_pointer::<RawClosureHeader>(),
+        0,
+        owner.get(),
     );
+    np::own(handle.get(), "close", handle_close.get());
+    np::own(owner.get(), "_handle", handle.get());
     own_new!("_outBuffer", value_bytes(&vec![0; chunk_size]));
     np::own(owner.get(), "_outOffset", 0.0);
     np::own(owner.get(), "_chunkSize", chunk_size as f64);
@@ -995,6 +1004,14 @@ extern "C" fn flush(_: *const RawClosureHeader, this: JsThis, kind: f64, callbac
         kind
     };
     ns::request_flush(owner.get(), kind as i32, cb.get());
+    f64::from_bits(UNDEFINED)
+}
+// Closing the binding releases only its codec, not the owning Transform.
+// Keep the real owner traced even when JS retains the handle after destroy.
+extern "C" fn close_codec_handle(closure: *const RawClosureHeader, _: JsThis) -> f64 {
+    let roots = TransientRootScope::enter();
+    let owner = roots.root_nanbox(unsafe { perry_ffi::closure_capture_f64(closure, 0) });
+    unsafe { np::close_attached(owner.get(), &CODEC_VTABLE) };
     f64::from_bits(UNDEFINED)
 }
 extern "C" fn close(_: *const RawClosureHeader, this: JsThis, callback: f64) -> f64 {

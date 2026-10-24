@@ -49,12 +49,21 @@ extern "C" fn ns_destroy_option_done(
 }
 
 fn queue_destroy_events(stream: f64, err: f64) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let stream = scope.root_nanbox_f64(stream);
+    let err = scope.root_nanbox_f64(err);
+    // Destroy has completed, even though error/close delivery is deferred.
+    // A custom asynchronous _destroy reaches this point only via its callback.
+    super::mark_stream_closed(stream.get_nanbox_f64());
     let closure = js_closure_alloc(crate::fn_info!(ns_destroy_error_microtask, 0), 2);
-    js_closure_set_capture_ptr(closure, 0, stream.to_bits() as i64);
-    js_closure_set_capture_f64(closure, 1, err);
+    js_closure_set_capture_ptr(closure, 0, stream.get_nanbox_u64() as i64);
+    js_closure_set_capture_f64(closure, 1, err.get_nanbox_f64());
     #[cfg(test)]
     if super::native_hooks::stream_sabotage("close_sync") {
-        ns_destroy_error_microtask(closure, crate::closure::JsThis::from_f64(stream));
+        ns_destroy_error_microtask(
+            closure,
+            crate::closure::JsThis::from_f64(stream.get_nanbox_f64()),
+        );
         return;
     }
     crate::builtins::js_queue_microtask(closure as i64);
