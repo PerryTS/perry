@@ -233,9 +233,22 @@ pub struct FuncInfo {
     /// (DECISIONS 49). Its body is not walked: `run_ctor_chain` runs the
     /// parent with the `new` call itself.
     pub forwards_super: bool,
+    /// A class constructor's hidden trailing parameters, one per value the
+    /// class captures (`__perry_cap_*`, perry-hir `synthesize_class_captures`):
+    /// the class environment slot each one is filled from. A construction
+    /// from another module passes the class's own snapshot there, whatever
+    /// arguments it was given (`construct_registered_class_resolved` fills
+    /// only the user slots from them), so another unit never chooses these
+    /// values (DECISIONS 117).
+    pub captures: Vec<NodeId>,
     /// The function whose body creates this closure (`NO_FN` for
     /// declarations, methods and builtins).
     pub parent: FnIdx,
+    /// Another unit's function seen through a contract that lets any unit
+    /// use it (a stand-in's method, a function contract's stand-in; not a
+    /// closed one, whose users its owner knows): published onward, it
+    /// leaves with that contract (DECISIONS 120, `Model::escape`).
+    pub forwarded: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -339,6 +352,19 @@ impl Hard {
 /// Complex constraints, attached to the node whose new tokens trigger them.
 #[derive(Clone, Copy, Debug)]
 pub enum Cons {
+    /// The node is the value a contract function `f` stores under `key`
+    /// into its parameter `dst`'s argument (`reach`: into what it reaches)
+    /// (DECISIONS 118): a marker of one of `f`'s parameters is that
+    /// argument, which the reader stores; any other value escapes.
+    StoreOut {
+        f: FnIdx,
+        dst: u32,
+        reach: bool,
+        /// A keyed reach (design §18.4): what the argument holds under it.
+        via: Option<Atom>,
+        key: Atom,
+        reason: u32,
+    },
     /// dst ⊇ read(t, key) for every t in the node.
     Load { key: Key, dst: NodeId },
     /// Values of own properties only (enumerability over-approximated).
@@ -541,6 +567,7 @@ impl Cons {
             Cons::MCall { .. } => "mcall",
             Cons::Chain { .. } => "chain",
             Cons::TopSink { .. } => "top",
+            Cons::StoreOut { .. } => "storeout",
             Cons::ContractThis { .. } => "contractthis",
             Cons::OverrideThis { .. } => "overridethis",
             Cons::TopIfAny { .. } => "topifany",
@@ -580,6 +607,14 @@ impl Cons {
             Cons::VisitStop { .. } => "visitstop",
         }
     }
+}
+
+/// DECISIONS 118: one stored key of a contract function's parameter.
+#[derive(Clone, Debug, Default)]
+pub struct StoreFlow {
+    pub from: Vec<u32>,
+    pub top: bool,
+    pub prim: u16,
 }
 
 #[derive(Default, Clone, Debug)]
@@ -762,6 +797,11 @@ pub struct Model {
     pub thrown: NodeId,
     /// E14: interpreted code can run (and patch `Object.prototype`).
     pub dyn_eval: Option<String>,
+    /// No interpreted code can run in the program (no dynamic code, no
+    /// dynamic code reach, no direct eval scope): what this unit publishes
+    /// reaches compiled units only, which use another unit's stand-in
+    /// through its contract (DECISIONS 120, `Model::escape`).
+    pub interp_free: bool,
     pub bound_index: FxHashMap<(CallId, Tok), u32>,
     /// Calls the solver makes through a bound value's target (`call_bound`,
     /// `construct`): a bound target reached by one of them goes through
@@ -905,6 +945,12 @@ pub struct Model {
     pub recv_log: FxHashMap<Tok, Vec<RecvEffect>>,
     /// A published class -> its receiver token.
     pub contract_recv_of: FxHashMap<TmplId, Tok>,
+    /// DECISIONS 116: published classes no other unit names (given out
+    /// through a contract result or value): their methods run on the
+    /// instances given out only, and the `this` nodes of those methods
+    /// (`Model::escape_this`), which every later `give_out` reaches.
+    pub sealed: crate::pts::FxHashSet<TmplId>,
+    pub sealed_this: FxHashMap<FnIdx, Vec<NodeId>>,
     /// The receiver contracts of other units' methods this unit calls
     /// (`Cons::ContractThis`'s `this`, DECISIONS 57).
     pub this_contracts: Vec<ThisContract>,
@@ -920,6 +966,26 @@ pub struct Model {
     /// keys it stores into the argument, by (function, parameter index).
     pub param_stores: FxHashMap<(FnIdx, u32), Vec<Atom>>,
     pub param_open: crate::pts::FxHashSet<(FnIdx, u32)>,
+    /// What a contract function stores under a named key into its argument
+    /// or into what that reaches (DECISIONS 118), by (function, parameter,
+    /// into its reach, key): the parameters whose arguments are stored, and
+    /// whether another value (⊤ to the reader) or primitives are.
+    pub store_flows: FxHashMap<(FnIdx, u32, bool, Option<Atom>, Atom), StoreFlow>,
+    pub store_out_done: crate::pts::FxHashSet<(NodeId, FnIdx, u32, bool, Option<Atom>, Atom)>,
+    /// DECISIONS 118, argument markers: the named-key stores into one (each
+    /// replayed on every marker that links in later), the `StoreOut`s it is
+    /// the source of (function, parameter, reason: a member other than that
+    /// parameter's marker escapes), the parameter node it is the marker of,
+    /// and the links not replayed yet (the solver loop replays them).
+    pub arg_stores: FxHashMap<Tok, Vec<(Atom, NodeId, SiteId)>>,
+    pub arg_store_done: crate::pts::FxHashSet<(Tok, Atom, NodeId)>,
+    pub arg_src_watch: FxHashMap<Tok, Vec<(FnIdx, u32, u32)>>,
+    pub arg_marker_node: FxHashMap<Tok, NodeId>,
+    /// The function and parameter index of each parameter node: the
+    /// function's own and each summary instance's (a method run through an
+    /// instance holds its argument marker on the instance's node).
+    pub param_at: FxHashMap<NodeId, (FnIdx, u32)>,
+    pub marker_links: Vec<(Tok, Tok)>,
     /// Published classes whose constructor is a contract (DECISIONS 57).
     pub ctor_published: crate::pts::FxHashSet<TmplId>,
     /// Another unit's templates this unit sees through a contract, with the
@@ -1410,6 +1476,15 @@ impl Model {
         self.relations.as_mut().unwrap().extend(v);
     }
 
+    /// What parameter `i` of `f` holds when code outside its unit calls
+    /// it: a hidden capture parameter holds its class environment slot
+    /// (`FuncInfo::captures`); `None` for an argument the caller chooses.
+    pub fn capture_param(&self, f: FnIdx, i: usize) -> Option<NodeId> {
+        let fi = &self.funcs[f as usize];
+        let first = fi.params.len().checked_sub(fi.captures.len())?;
+        i.checked_sub(first).map(|k| fi.captures[k])
+    }
+
     /// Diagnostics: follow the first-arrival chain of ⊤ back to its origin.
     pub fn top_origin(&self, start: NodeId) -> String {
         let mut n = start;
@@ -1547,6 +1622,23 @@ impl Model {
             if let Some(&r) = self.marker_reach.get(&t) {
                 self.set_marker_top(r);
             }
+            // What it reaches under a key is what unknown code stored
+            // there: no ⊤ beside the marker says so (DECISIONS 119).
+            let mut stack = vec![t];
+            while let Some(k) = stack.pop() {
+                let rs: Vec<Tok> = self
+                    .keyed_reach
+                    .get(&k)
+                    .into_iter()
+                    .flatten()
+                    .map(|&(_, r)| r)
+                    .filter(|&r| !self.marker_is_top(r))
+                    .collect();
+                for r in rs {
+                    self.set_marker_top(r);
+                    stack.push(r);
+                }
+            }
         }
     }
 
@@ -1576,6 +1668,10 @@ impl Model {
         self.add_tok(rany, r);
         self.reach_marker.insert(r);
         self.keyed_reach.entry(t).or_default().push((a, r));
+        // An escaped marker's keyed reach reads as ⊤ too (DECISIONS 119).
+        if self.marker_is_top(t) {
+            self.set_marker_top(r);
+        }
         match self.param_marker.get(&t).copied() {
             Some(fi) => {
                 self.param_marker.insert(r, fi);
@@ -1665,6 +1761,13 @@ impl Model {
         }
     }
 
+    /// A marker with no values beside it (DECISIONS 119): it stands for
+    /// another unit's argument whole, and every emitter reads it as ⊤ with
+    /// every primitive kind.
+    pub(crate) fn bare_marker(&self, t: Tok) -> bool {
+        self.is_marker(t) && !self.beside_values(t)
+    }
+
     /// A parameter marker or an argument marker (DECISIONS 44).
     #[inline]
     pub(crate) fn is_marker(&self, t: Tok) -> bool {
@@ -1718,6 +1821,7 @@ impl Model {
         self.marker_reach.insert(t, r);
         self.reach_marker.insert(r);
         self.arg_marker_of.insert(n, t);
+        self.arg_marker_node.insert(t, n);
         // It stands for its members alone (DECISIONS 75): beside while it
         // has none, and while each one that links in is beside
         // (`link_marker`). The caller links the arriving markers before
@@ -1738,6 +1842,13 @@ impl Model {
             return;
         }
         self.arg_members.get_mut(&r).unwrap().push(m);
+        let keyed_stores = self.keyed_reach.get(&r).map_or(false, |v| {
+            v.iter().any(|(_, kr)| self.arg_stores.contains_key(kr))
+        });
+        if self.arg_stores.contains_key(&r) || self.arg_src_watch.contains_key(&r) || keyed_stores
+        {
+            self.marker_links.push((m, r));
+        }
         if self.beside_markers.contains(&r) {
             match self.beside_values(m) {
                 true if !self.param_marker.contains_key(&m) => {

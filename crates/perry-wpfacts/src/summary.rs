@@ -234,6 +234,21 @@ pub fn map_cons(
             act: act_map(act, &mut n, &mut k),
         },
         TopSink { reason } => TopSink { reason },
+        StoreOut {
+            f,
+            dst,
+            reach,
+            via,
+            key,
+            reason,
+        } => StoreOut {
+            f,
+            dst,
+            reach,
+            via,
+            key,
+            reason,
+        },
         ContractThis {
             tmpl,
             reason,
@@ -615,9 +630,10 @@ impl Model {
         };
         let this = tr(s.this);
         // Its parameters hold argument markers (DECISIONS 44).
-        for &p in &s.params {
+        for (j, &p) in s.params.iter().enumerate() {
             if is_slot(p) {
                 self.nodes[tr(p) as usize].param = true;
+                self.param_at.insert(tr(p), (f, j as u32));
             }
         }
         let lay = match key.0 {
@@ -767,6 +783,18 @@ impl Model {
 
     /// Unknown code calls `f`: its `this` is ⊤ (the unknown-code instance's
     /// and the shared node).
+    /// DECISIONS 116: a contract method published with sealed classes'
+    /// receivers only.
+    pub(crate) fn sealed_method(&self, f: FnIdx) -> bool {
+        self.contract_fns.contains(&f)
+            && self.published_this.get(&f).is_some_and(|rs| {
+                !rs.is_empty()
+                    && rs
+                        .iter()
+                        .all(|r| self.recv_class.get(r).is_some_and(|c| self.sealed.contains(c)))
+            })
+    }
+
     pub(crate) fn escape_this(&mut self, ft: Tok, reason: u32) {
         if !self.sum.ready {
             self.sum.deferred.push(Deferred::EscapeThis(ft, reason));
@@ -780,6 +808,23 @@ impl Model {
             dsts.push(self.sum.insts[inst as usize].this);
         }
         let insts = self.published_this.get(&f).cloned().unwrap_or_default();
+        // DECISIONS 116: a method of sealed classes only, published through
+        // its contract, runs on the instances this unit gave out (and the
+        // ones it gives out later, `give_out`): no other unit constructs or
+        // extends them, and a reader's `ContractThis` admits nothing else.
+        if self.pub_reason == Some(reason) && self.sealed_method(f) {
+            let given: Vec<Tok> = insts
+                .iter()
+                .flat_map(|r| self.contract_recv.get(r).cloned().unwrap_or_default())
+                .collect();
+            for &d in &dsts {
+                for &t in &given {
+                    self.add_tok(d, t);
+                }
+            }
+            self.sealed_this.entry(f).or_default().extend(dsts);
+            return;
+        }
         // A published method's receiver is one more contract parameter
         // (DECISIONS 57): its marker records what the body does to it, and
         // stands for instances of the classes it is published with
@@ -1021,6 +1066,12 @@ impl Model {
         let terms = self.sum.insts[inst as usize].params.clone();
         let fparams = self.funcs[f as usize].params.clone();
         let contract = self.contract_fns.contains(&f);
+        // DECISIONS 119: published through its contract only, a parameter
+        // is its marker, which stands for the whole argument (an object,
+        // a function or a primitive): no ⊤ and no primitive kinds beside it.
+        // The reader replays what the body does to it; emitters read it as
+        // ⊤ (`Model::bare_marker`).
+        let contract_only = contract && self.pub_reason == Some(reason);
         // A closed function's callers are known: what they pass, through
         // its publication only (decision 19).
         let closed = if self.closed_pub_reason == Some(reason) {
@@ -1029,14 +1080,26 @@ impl Model {
             None
         };
         for (i, &p) in fparams.iter().enumerate() {
+            // A hidden capture parameter holds its class environment slot
+            // whoever constructs (DECISIONS 117).
+            if let Some(env) = self.capture_param(f, i) {
+                for d in [terms[i], p] {
+                    if d != NO_NODE {
+                        self.edge(env, d);
+                    }
+                }
+                continue;
+            }
             let mk = contract.then(|| self.param_marker_tok(f, i as u32));
             for d in [terms[i], p] {
                 if d != NO_NODE {
                     match closed.as_ref().and_then(|c| c.get(i).copied()) {
                         Some(a) => self.edge(a, d),
                         None => {
-                            self.add_top(d, why);
-                            self.add_prim(d, prim::ALL);
+                            if !contract_only {
+                                self.add_top(d, why);
+                                self.add_prim(d, prim::ALL);
+                            }
                         }
                     }
                     if let Some(mk) = mk {

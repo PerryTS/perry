@@ -109,7 +109,67 @@ fn units_of(mods: &[(&str, &str)]) -> ProgramFacts {
 }
 
 fn units_with(mods: &[(&str, &str)], cfg: &FactsConfig) -> ProgramFacts {
-    let hirs: Vec<(String, perry_hir::Module)> = mods
+    let hirs = hirs_of(mods);
+    let list: Vec<(String, &perry_hir::Module)> =
+        hirs.iter().map(|(p, h)| (p.clone(), h)).collect();
+    crate::compute_units(&list, cfg)
+}
+
+/// The same modules solved as one whole program: what per-unit mode must
+/// reach (owner 2026-10-23).
+pub(super) fn whole_of(mods: &[(&str, &str)]) -> ProgramFacts {
+    let hirs = hirs_of(mods);
+    let list: Vec<(String, &perry_hir::Module)> =
+        hirs.iter().map(|(p, h)| (p.clone(), h)).collect();
+    crate::compute(&list, &FactsConfig::default())
+}
+
+/// The proven sites, named by module path, offset and key.
+fn proven_set(pf: &ProgramFacts) -> std::collections::BTreeSet<String> {
+    pf.sites
+        .iter()
+        .filter(|s| matches!(s.verdict, Verdict::T0Mono | Verdict::T0Set))
+        .map(|s| format!("{}@{}.{}", pf.module_paths[s.module as usize], s.byte_offset, s.key))
+        .collect()
+}
+
+/// Per unit proves at least what the whole program proves (owner
+/// 2026-10-23), and the census breaks nothing. An `override k of C` report
+/// breaks nothing: it is the key a subclass of another unit holds, which
+/// `C`'s unit reads through its override token (DECISIONS 59); what it
+/// costs shows in `lost`.
+fn assert_parity(mods: &[(&str, &str)]) {
+    let (pf, wp) = (units_of(mods), whole_of(mods));
+    let lost: Vec<_> = proven_set(&wp).difference(&proven_set(&pf)).cloned().collect();
+    let broken: Vec<_> = pf.broken.iter().filter(|d| !d.starts_with("override ")).collect();
+    assert!(!proven_set(&wp).is_empty(), "{}", wp.dump_text());
+    assert!(lost.is_empty() && broken.is_empty(), "lost {lost:?} broken {broken:?}\n{}", pf.dump_text());
+}
+
+#[test]
+#[ignore = "DECISIONS 122: append is an exported function its importers only call; per unit its parameters are open contract markers (decision 13 covers module-private functions only)"]
+fn a_parameter_stored_into_another_parameters_reach_is_a_flow() {
+    // AWFY Richards `RBObject.append(packet, queue)`: `m.link = p` stores
+    // the first argument into what the second reaches. DECISIONS 118: a
+    // flow of the contract the reader replays; DECISIONS 119: `m` is the
+    // argument's marker alone (no ⊤ beside it to store `p` into).
+    let b = "export function append(p: any, q: any) { p.link = null; if (q === null) return p; let m = q; while (m.link !== null) m = m.link; m.link = p; return q; }";
+    let m = "import { append } from './b'; function main() { const a = { link: null as any, v: 1 }; const c = { link: null as any, v: 2 }; const q = append(a, c); console.log(q.v, a.v, c.link.v); } main(); main();";
+    assert_parity(&[("b", b), ("m", m)]);
+}
+
+#[test]
+fn a_subclass_published_with_another_units_parent_forwards_it() {
+    // DECISIONS 120 (B): publishing `S` publishes its parent `R`, a stand-in
+    // in `b`: it leaves with `a`'s contract, no census report breaks `R`.
+    let a = "export class R { v = 0; get() { return this.v; } }";
+    let b = "import { R } from './a'; export class S extends R { constructor() { super(); this.v = 1; } }";
+    let m = "import { S } from './b'; function main() { const s = new S(); console.log(s.get(), s.v); } main(); main();";
+    assert_parity(&[("a", a), ("b", b), ("m", m)]);
+}
+
+fn hirs_of(mods: &[(&str, &str)]) -> Vec<(String, perry_hir::Module)> {
+    mods
         .iter()
         .map(|(name, src)| {
             let path = format!("{name}.ts");
@@ -122,10 +182,7 @@ fn units_with(mods: &[(&str, &str)], cfg: &FactsConfig) -> ProgramFacts {
             }
             (path, hir)
         })
-        .collect();
-    let list: Vec<(String, &perry_hir::Module)> =
-        hirs.iter().map(|(p, h)| (p.clone(), h)).collect();
-    crate::compute_units(&list, cfg)
+        .collect()
 }
 
 #[test]
@@ -685,15 +742,28 @@ fn a_unit_view_is_indices_into_the_one_module() {
 }
 
 #[test]
-fn an_argument_the_callee_writes_escapes() {
-    // `bump` stores into what it is given: the caller's literal escapes.
+fn an_argument_the_callee_writes_is_written_by_the_reader() {
+    // `bump` stores a number into what it is given. DECISIONS 118: that
+    // store is a flow of its contract, and the reader runs it on its own
+    // argument, as the whole program runs `bump`: the caller's literal does
+    // not escape, so `own.warm` is proven exactly as the whole program
+    // proves it (it was an escape before 118).
     let b = "export function bump(o: { n: number }) { o.n = o.n + 1; }";
     // In one function: a module-scope `own` would be ⊤ to the reader's
     // declaration unit (§12.3) and the test could not fail; called twice,
     // so N5 does not run it as module scope.
     let m = "import { bump } from './b'; function main() { const own = { n: 1, warm: 2 }; bump(own); console.log(own.warm); } main(); main();";
+    let mods = [("b", b), ("m", m)];
+    let (pf, wp) = (units_of(&mods), whole_of(&mods));
+    assert!(proven(&wp, "warm"), "{}", wp.dump_text());
+    assert!(proven(&pf, "warm"), "{}", pf.dump_text());
+    // A value of the callee's own unit stored into the argument leaves
+    // with it: the reader's field holds another unit's value (⊤).
+    let b = "export function bump(o: { n: any }) { o.n = { k: 1 }; }";
+    let m = "import { bump } from './b'; function main() { const own = { n: 1 as any, warm: 2 }; bump(own); console.log(own.n.k); } main(); main();";
     let pf = units_of(&[("b", b), ("m", m)]);
-    assert!(!proven(&pf, "warm"), "{}", pf.dump_text());
+    let s: Vec<_> = pf.sites.iter().filter(|s| s.key == "k").collect();
+    assert!(!s.is_empty() && s.iter().all(|s| s.top), "{}", pf.dump_text());
 }
 
 #[test]

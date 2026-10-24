@@ -93,6 +93,13 @@ impl Model {
                 self.edge(all, dst);
             }
         }
+        // A parameter marker has no prototype here (DECISIONS 119): what
+        // its argument inherits is the reader's, which replays the load on
+        // it (the keyed reach above); values beside a marker walk their own
+        // chains. A receiver marker's chain is its classes' (`virt_protos`).
+        if self.is_marker(t) && !self.virt_protos.contains_key(&t) {
+            return;
+        }
         self.with_b(|m| builtins::tok_load(m, t, key, dst));
         // Element reads of array-likes stop at their own elements: their
         // builtin prototype members are approximated by `tok_load`.

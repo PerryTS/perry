@@ -4,6 +4,13 @@ use super::*;
 impl Model {
     /// Bind `call` to callee token `t`. `this_tok` overrides the call's this.
     pub fn call_tok(&mut self, call: CallId, t: Tok, this_tok: Option<Tok>) {
+        // A bare marker is another unit's value (DECISIONS 119): its call
+        // is its contract's escape, and the call itself is one of an
+        // unknown function (the reader cannot follow what it is given).
+        if self.bare_marker(t) {
+            self.mark_use(t, crate::model::MARK_ESCAPE);
+            return self.call_tok(call, TOP, this_tok);
+        }
         if matches!(self.toks[t as usize], TokKind::Top | TokKind::BuiltinFn) {
             // An unknown callee sees only its own receiver token: that one
             // escapes; arguments and result are per call.
@@ -364,6 +371,11 @@ impl Model {
         if !self.construct_done.insert((call, t)) {
             return;
         }
+        // `new` of a bare marker: of an unknown constructor (DECISIONS 119).
+        if self.bare_marker(t) {
+            self.mark_use(t, crate::model::MARK_ESCAPE);
+            return self.construct(call, TOP);
+        }
         let c = self.calls[call as usize].clone();
         match self.toks[t as usize].clone() {
             TokKind::ClassObj(tm) => {
@@ -564,6 +576,11 @@ impl Model {
                 self.bind_via(n, call, t);
             }
         }
+        // A parameter marker has no prototype here (DECISIONS 119,
+        // `load_from`); a receiver marker has its classes'.
+        if self.is_marker(t) && !self.virt_protos.contains_key(&t) {
+            return;
+        }
         // A receiver token / marker is no builtin object: its methods are
         // its classes' (`virt_protos`).
         if !self.virt_protos.contains_key(&t) {
@@ -590,6 +607,30 @@ impl Model {
     pub fn escape(&mut self, t: Tok, reason: u32) {
         if t == TOP || self.is_escaped(t) {
             return;
+        }
+        // Another unit's class, instance, prototype or function (a
+        // stand-in) published onward leaves with its owner's contract, as a
+        // result forwards it (DECISIONS 79/104; DECISIONS 120: every
+        // publication): the next unit reads it through that contract,
+        // nothing of this unit leaves with it, and it is no census report
+        // of this unit. What this unit stores into it is (`Gen::reports`).
+        // A closed contract's users are known to its owner: it escapes.
+        // Interpreted code would hold it beyond any contract (decision 150).
+        if self.interp_free
+            && self.dyn_eval.is_none()
+            && (self.pub_reason == Some(reason) || self.closed_pub_reason == Some(reason))
+        {
+            let fwd = |m: &Self, f: Option<FnIdx>| f.is_some_and(|f| m.funcs[f as usize].forwarded);
+            let stand_in = match self.toks[t as usize] {
+                TokKind::Obj(tm, _) | TokKind::ClassObj(tm) | TokKind::Proto(tm) => {
+                    self.foreign.contains_key(&tm) && fwd(self, self.tmpls[tm as usize].ctor)
+                }
+                TokKind::Func(f, _) => fwd(self, Some(f)),
+                _ => false,
+            };
+            if stand_in {
+                return;
+            }
         }
         if self.closed_pub_reason == Some(reason) {
             if let TokKind::Func(f, _) = self.toks[t as usize] {
@@ -683,12 +724,23 @@ impl Model {
         } else {
             None
         };
+        // DECISIONS 119: published through its contract only, a parameter
+        // is its marker, the whole argument: no ⊤, no primitive kinds.
+        let contract_only = self.contract_fns.contains(&f) && self.pub_reason == Some(reason);
         for (i, &p) in fi.params.iter().enumerate() {
+            // A hidden capture parameter holds its class environment slot
+            // whoever calls (DECISIONS 117).
+            if let Some(env) = self.capture_param(f, i) {
+                self.edge(env, p);
+                continue;
+            }
             match closed.as_ref().and_then(|c| c.get(i).copied()) {
                 Some(a) => self.edge(a, p),
                 None => {
-                    self.add_top(p, why);
-                    self.add_prim(p, prim::ALL);
+                    if !contract_only {
+                        self.add_top(p, why);
+                        self.add_prim(p, prim::ALL);
+                    }
                 }
             }
         }
@@ -699,6 +751,9 @@ impl Model {
         if self.contract_fns.contains(&f) {
             // Design §11.2: other units call it through its contract.
             for (i, &p) in fi.params.iter().enumerate() {
+                if self.capture_param(f, i).is_some() {
+                    continue;
+                }
                 let mk = self.param_marker_tok(f, i as u32);
                 self.add_tok(p, mk);
             }
@@ -738,7 +793,22 @@ impl Model {
     /// subclass instance's `super()`): `this` is ⊤ there, so its sites are
     /// proven behind the entry guard only (DECISIONS 57). A class with no
     /// constructor code publishes an empty constructor contract.
-    pub(crate) fn publish_class(&mut self, tm: TmplId, reason: u32, extended: bool, no_code: bool) {
+    ///
+    /// A `sealed` class (DECISIONS 116) is one no other unit names: it is
+    /// published because this unit gives its instances out. No other unit
+    /// constructs or extends it, so its methods run on those instances
+    /// only (`Model::escape_this`), never on an unknown receiver.
+    pub(crate) fn publish_class(
+        &mut self,
+        tm: TmplId,
+        reason: u32,
+        extended: bool,
+        no_code: bool,
+        sealed: bool,
+    ) {
+        if sealed {
+            self.sealed.insert(tm);
+        }
         let cobj = self.tok(TokKind::ClassObj(tm));
         let inst = self.tok(TokKind::Obj(tm, NO_CTX));
         let rt = self.tmpls.len() as TmplId;
@@ -773,7 +843,10 @@ impl Model {
         self.add_prim(any, prim::ALL);
         // The instance other units construct has the class's prototype.
         self.proto_node(inst);
-        self.contract_recv.insert(recv, vec![inst]);
+        // A sealed class's receiver stands for the instances given out
+        // only: no other unit constructs one.
+        self.contract_recv
+            .insert(recv, if sealed { Vec::new() } else { vec![inst] });
         self.contract_recv_of.insert(tm, recv);
         self.recv_class.insert(recv, tm);
         // `this.m()` through the receiver finds the class's `m` (DECISIONS 59).
@@ -883,6 +956,9 @@ impl Model {
         for n in members {
             self.sink_node(n, reason);
         }
+        if sealed {
+            return;
+        }
         // Other units construct it with unknown arguments.
         let ret = self.node_l("contract-new");
         let args_n = self.node_l("contract-args");
@@ -894,13 +970,23 @@ impl Model {
         });
         self.add_prim(args_n, prim::ALL);
         // A closed class (design §18.13): what the constructing units pass.
-        let args = match self.tmpls[tm as usize]
-            .ctor
-            .and_then(|f| self.closed_params.get(&f))
-        {
+        let ctor = self.tmpls[tm as usize].ctor;
+        let mut args = match ctor.and_then(|f| self.closed_params.get(&f)) {
             Some(nodes) => nodes.clone(),
             None => vec![args_n; 8],
         };
+        // Its hidden capture parameters take the class's environment, not
+        // what the constructing unit passes (DECISIONS 117).
+        if let Some(f) = ctor {
+            for i in 0..self.funcs[f as usize].params.len() {
+                if let Some(env) = self.capture_param(f, i) {
+                    if args.len() <= i {
+                        args.resize(i + 1, args_n);
+                    }
+                    args[i] = env;
+                }
+            }
+        }
         let call = self.calls.len() as CallId;
         self.calls.push(CallSite {
             this: ThisArg::Undef,
@@ -928,6 +1014,18 @@ impl Model {
             return false;
         }
         given.push(t);
+        // DECISIONS 116: a sealed class's methods run on `t` from now on.
+        if self.sealed.contains(&tm) {
+            let ds: Vec<NodeId> = self
+                .sealed_this
+                .iter()
+                .filter(|(f, _)| self.published_this.get(f).is_some_and(|rs| rs.contains(&recv)))
+                .flat_map(|(_, ds)| ds.iter().copied())
+                .collect();
+            for d in ds {
+                self.add_tok(d, t);
+            }
+        }
         for e in self.recv_log.get(&recv).cloned().unwrap_or_default() {
             match e {
                 crate::model::RecvEffect::Store(key, src, site) => {

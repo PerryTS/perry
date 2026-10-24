@@ -14,15 +14,26 @@ const T1: [(&str, &str); 3] = [
     ("/t1/b.js", include_str!("fixtures/cjs_t1/b.js")),
 ];
 
+/// DECISIONS 115: `r.js` keeps its classes inside the factory (they name
+/// the factory's `NONE`); `S extends R` names itself in `static make`, so
+/// the HIR binds `S` through a one-element cell (`[undefined]`, DECISIONS
+/// 50); `T` holds `S` in `k`; `T.run` makes two `S` and appends one to the
+/// other through `R`'s method; `m.js` runs `require("./r").newInstance().run()`.
+const T2: [(&str, &str); 2] = [
+    ("/t2/m.js", include_str!("fixtures/cjs_t2/m.js")),
+    ("/t2/r.js", include_str!("fixtures/cjs_t2/r.js")),
+];
+
 fn hirs(mods: &[(&str, &str)]) -> Vec<(String, perry_hir::Module)> {
     mods.iter()
         .map(|(path, src)| {
-            let name = path.trim_start_matches("/t1/").trim_end_matches(".js");
+            let (dir, file) = path.rsplit_once('/').expect("a path");
+            let name = file.trim_end_matches(".js");
             let module = perry_parser::parse_typescript(src, path).expect("parses");
             let mut hir = perry_hir::lower_module(&module, name, path).expect("lowers");
             for imp in &mut hir.imports {
                 if let Some(n) = imp.source.strip_prefix("./") {
-                    imp.resolved_path = Some(format!("/t1/{n}.js"));
+                    imp.resolved_path = Some(format!("{dir}/{n}.js"));
                 }
             }
             (path.to_string(), hir)
@@ -90,6 +101,44 @@ fn a_commonjs_unit_proves_what_the_whole_program_proves() {
         escaped(&w)
     );
     assert!(escaped(&u).is_empty(), "{:?}", escaped(&u));
+}
+
+/// DECISIONS 115: a class whose binding may hold `undefined` beside the
+/// class (its self cell) is still a contract: per unit `R` and `S` stay
+/// unbroken and every whole-program site is proven. Without the binding's
+/// primitives in the contract, `S`'s unit sinks its export, which escapes
+/// `S`'s prototype and with it `R`'s (the reader census breaks `R`).
+#[test]
+fn a_class_bound_through_its_self_cell_is_a_contract() {
+    let (w, u) = both(&T2);
+    let (pw, pu) = (proven_sites(&w), proven_sites(&u));
+    let lost: Vec<_> = pw.difference(&pu).collect();
+    let classes = |pf: &ProgramFacts| -> Vec<String> {
+        escaped(pf)
+            .into_iter()
+            .filter(|t| t.starts_with("r.js:R ") || t.starts_with("r.js:S "))
+            .collect()
+    };
+    assert!(pw.len() >= 8, "whole-program proves {:?}", pw);
+    assert!(
+        lost.is_empty() && classes(&u).is_empty(),
+        "per unit {} of whole-program {} proven; lost {:?}\nescaped per unit {:?}\nbroken {:?}",
+        pu.len(),
+        pw.len(),
+        lost,
+        escaped(&u),
+        u.broken
+    );
+    // `T.k = S` holds the class and the cell's `undefined` both ways: the
+    // reader's import carries the binding's primitives.
+    let k_kind = |pf: &ProgramFacts| {
+        pf.templates
+            .iter()
+            .find(|t| t.display == "r.js:T")
+            .and_then(|t| t.fields.iter().find(|f| f.key == "k"))
+            .map(|f| (f.kind.top, f.kind.prims))
+    };
+    assert_eq!(k_kind(&u), k_kind(&w), "T.k per unit vs whole-program");
 }
 
 #[test]

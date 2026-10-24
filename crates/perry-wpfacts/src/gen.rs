@@ -140,8 +140,9 @@ pub struct Gen<'a> {
     pub(crate) param_guard: FxHashMap<NodeId, ParamGuard>,
     param_ty: Vec<(NodeId, u32, perry_hir::types::Type)>,
     /// Published class exports: (export, export node, class), checked after
-    /// the solve (`Gen::contract_check`).
-    pub class_contracts: Vec<((u32, Atom), NodeId, TmplId)>,
+    /// the solve (`Gen::contract_check`). No export: a class whose instance
+    /// a contract result or value gives out (DECISIONS 116), no binding.
+    pub class_contracts: Vec<(Option<(u32, Atom)>, NodeId, TmplId)>,
     /// Per-unit run: what the unit publishes and the contracts it imports.
     pub(crate) unit_in: Option<&'a crate::units::Published>,
     /// A declaration unit's view of its module (design §12.6): the other
@@ -556,7 +557,16 @@ impl<'a> Gen<'a> {
         local: &str,
     ) -> NodeId {
         if let Some(c) = self.contract_for(imp, name) {
-            return self.stand_in_class(mi, c);
+            let v = self.contract_class_value(mi, c);
+            if c.binding_prim == 0 {
+                return v;
+            }
+            // The binding's own primitives (DECISIONS 115), on this import
+            // only: the stand-in is the class, shared by every use of it.
+            let n = self.m.node_named("import", || format!("import({local})"));
+            self.m.edge(v, n);
+            self.m.add_prim(n, c.binding_prim);
+            return n;
         }
         if let Some(c) = self.fn_contract_for(imp, name) {
             return self.stand_in_fn(mi, c);
@@ -627,6 +637,42 @@ impl<'a> Gen<'a> {
     /// contract names (stand-ins) or ⊤.
     fn stand_in_fn(&mut self, mi: u32, c: &'a crate::units::FnContract) -> NodeId {
         self.stand_in_fn_of(mi, c, None)
+    }
+
+    /// DECISIONS 118: the value a contract function stores under `key`
+    /// into parameter `dst`'s argument (`reach`: into what it reaches): the
+    /// arguments its flow names, ⊤ and the primitives it stores (an unknown
+    /// value when the contract names no flow).
+    fn stored_value(
+        &mut self,
+        c: &crate::units::FnContract,
+        params: &[NodeId],
+        dst: u32,
+        reach: bool,
+        via: Option<&str>,
+        key: &str,
+    ) -> NodeId {
+        let n = self.m.node_named("top", || format!("stored({})", c.name));
+        self.m.own(n);
+        let fl = c
+            .param_flows
+            .iter()
+            .find(|x| x.dst == dst && x.reach == reach && x.via.as_deref() == via && x.key == key);
+        let top = fl.map_or(true, |fl| fl.top);
+        if let Some(fl) = fl {
+            for &j in &fl.from {
+                if let Some(&a) = params.get(j as usize) {
+                    self.m.edge(a, n);
+                }
+            }
+            self.m.add_prim(n, fl.prim);
+        }
+        if top {
+            self.m
+                .add_top(n, |_| "stored by another unit's function".into());
+            self.m.add_prim(n, prim::ALL);
+        }
+        n
     }
 
     /// A contract result through `k` of `holder` (`ret_reach_keys`): the
@@ -727,8 +773,10 @@ impl<'a> Gen<'a> {
             lexical_this: false,
             no_summary: true,
             gen_step: false,
+            captures: Vec::new(),
             forwards_super: false,
             parent: NO_FN,
+            forwarded: c.closed.is_none(),
         });
         self.m.sink_node(args_all, r);
         if let Some(n) = rest {
@@ -846,10 +894,19 @@ impl<'a> Gen<'a> {
                 self.m.cons(p, Cons::Implicit { reason: r });
             }
             // The keys the callee stores into the argument (DECISIONS 84):
-            // an unknown value under each, a store this unit performs.
+            // what it stores under each (DECISIONS 118), a store this unit
+            // performs.
             match c.param_stores.get(i) {
                 Some(Some(ks)) if ks.is_empty() => {}
                 None => {}
+                Some(Some(ks)) => {
+                    let site = self.m.anon_post_site("store by another unit's function");
+                    for k in ks {
+                        let src = self.stored_value(c, &params, i as u32, false, None, k);
+                        let key = crate::model::Key::Named(self.m.atom(k));
+                        self.m.cons(p, Cons::Store { key, src, site });
+                    }
+                }
                 ks => {
                     let top = self.m.node_named("top", || format!("stored({})", c.name));
                     self.m.own(top);
@@ -921,6 +978,36 @@ impl<'a> Gen<'a> {
                     self.m.cons(p, Cons::Load { key, dst: q });
                 }
             }
+        }
+        // DECISIONS 118: what the callee stores into what an argument
+        // reaches: under the key of what the argument holds under `via`
+        // (its keyed reach), else of every object the argument reaches
+        // through own properties (not the argument itself: a store into it
+        // is a `param_stores` one). Like the callee's reach marker, which
+        // has no prototype chain (DECISIONS 119), the closure follows no
+        // prototype: an intrinsic is no value the argument reaches.
+        for fl in c.param_flows.iter().filter(|x| x.reach) {
+            let Some(&p) = params.get(fl.dst as usize) else {
+                continue;
+            };
+            let q = self
+                .m
+                .node_named("reach", || format!("reach-stored{}({})", fl.dst, c.name));
+            self.m.own(q);
+            match &fl.via {
+                Some(v) => {
+                    let key = crate::model::Key::Named(self.m.atom(v));
+                    self.m.cons(p, Cons::Load { key, dst: q });
+                }
+                None => {
+                    self.m.cons(p, Cons::OwnValues { dst: q });
+                    self.m.cons(q, Cons::OwnValues { dst: q });
+                }
+            }
+            let src = self.stored_value(c, &params, fl.dst, true, fl.via.as_deref(), &fl.key);
+            let site = self.m.anon_post_site("store by another unit's function");
+            let key = crate::model::Key::Named(self.m.atom(&fl.key));
+            self.m.cons(q, Cons::Store { key, src, site });
         }
         // Its primitive kinds are the defining unit's (§18.7), any when ⊤.
         self.m.add_prim(
@@ -1088,7 +1175,7 @@ impl<'a> Gen<'a> {
                 self.m.add_top(n, |_| "broken class of another unit".into());
                 continue;
             }
-            let v = self.stand_in_class(mi, cc);
+            let v = self.contract_class_value(mi, cc);
             self.m.edge(v, n);
         }
         for fc in &c.fns {
@@ -1184,6 +1271,26 @@ impl<'a> Gen<'a> {
     /// that hand the arguments to that unit's code and return unknown
     /// values; its fields and statics hold unknown values. Using it beyond
     /// that is this unit's census report (`Gen::reports`).
+    /// The class value contract `c` names here: this unit's own class
+    /// when the contract names it back (a binding this unit wrote, read
+    /// through its cell: DECISIONS 120), else its stand-in. The class is
+    /// one object; its own unit has its template.
+    fn contract_class_value(&mut self, mi: u32, c: &'a crate::units::ClassContract) -> NodeId {
+        let own = (0..self.m.tmpls.len()).find(|&i| {
+            let t = &self.m.tmpls[i];
+            t.display == c.display
+                && matches!(t.kind, TmplKind::Class { literal_shape: false, .. })
+                && !self.m.foreign.contains_key(&(i as TmplId))
+        });
+        if let Some(i) = own {
+            let n = self.m.node_named("own-class", || format!("own-class({})", c.display));
+            let t = self.m.tok(TokKind::ClassObj(i as TmplId));
+            self.m.add_tok(n, t);
+            return n;
+        }
+        self.stand_in_class(mi, c)
+    }
+
     fn stand_in_class(&mut self, mi: u32, c: &'a crate::units::ClassContract) -> NodeId {
         if let Some((n, _, _)) = self.stand_ins.get(&c.display) {
             return *n;
@@ -1194,7 +1301,7 @@ impl<'a> Gen<'a> {
             .m
             .reason("another unit's class used beyond its contract");
         let tm = self.m.tmpls.len() as TmplId;
-        let ctor = self.stub_fn(mi, &format!("{}.constructor", c.name), tm, false, false, r);
+        let ctor = self.stub_fn(mi, &format!("{}.constructor", c.name), tm, false, false, c.closed.is_none(), r);
         // A closed class (design §18.13): its constructor's parameters
         // collect what this unit's constructions pass, published under the
         // class's key; the arguments still reach the sunk `arguments` node.
@@ -1280,7 +1387,7 @@ impl<'a> Gen<'a> {
             }
             match m {
                 Some(fname) => {
-                    let f = self.stub_fn(mi, fname, tm, true, true, r);
+                    let f = self.stub_fn(mi, fname, tm, true, true, c.closed.is_none(), r);
                     let t = self.m.funcs[f as usize].token;
                     self.m.add_tok(n, t);
                     toks.push(t);
@@ -1305,7 +1412,7 @@ impl<'a> Gen<'a> {
                 method_fns.push((self.m.field(proto, a), fc));
                 continue;
             }
-            let f = self.stub_fn(mi, fname, tm, true, false, r);
+            let f = self.stub_fn(mi, fname, tm, true, false, c.closed.is_none(), r);
             let a = self.m.atom(key);
             let n = self.m.field(proto, a);
             let t = self.m.funcs[f as usize].token;
@@ -1444,6 +1551,7 @@ impl<'a> Gen<'a> {
         class: TmplId,
         ret_top: bool,
         statics: bool,
+        forwarded: bool,
         reason: u32,
     ) -> FnIdx {
         let fx = self.m.funcs.len() as FnIdx;
@@ -1470,8 +1578,10 @@ impl<'a> Gen<'a> {
             lexical_this: false,
             no_summary: true,
             gen_step: false,
+            captures: Vec::new(),
             forwards_super: false,
             parent: NO_FN,
+            forwarded,
         });
         self.m.sink_node(args_all, reason);
         if ret_top {
@@ -1786,8 +1896,10 @@ impl<'a> Gen<'a> {
             lexical_this,
             no_summary: false,
             gen_step: false,
+            captures: Vec::new(),
             forwards_super: false,
             parent: if is_closure { outer_fn } else { NO_FN },
+            forwarded: false,
         });
         self.mods[mi as usize].funcs.insert(id, fx);
         fx
@@ -1846,6 +1958,16 @@ impl<'a> Gen<'a> {
             self.m.funcs[f as usize].ctor_of = Some(tm);
             self.m.funcs[f as usize].forwards_super = forwards_super(ctor);
             self.m.tmpls[tm as usize].ctor = Some(f);
+            // Its hidden capture parameters (DECISIONS 117): slot `i` of the
+            // class environment, in the order the HIR appends them.
+            let caps = ctor
+                .params
+                .iter()
+                .rev()
+                .take_while(|p| p.name.starts_with(perry_hir::cap_fields::CAP_FIELD_PREFIX))
+                .count();
+            self.m.funcs[f as usize].captures =
+                (0..caps).map(|i| self.class_env(mi, &c.name, i)).collect();
         }
         let proto = self.m.tok(TokKind::Proto(tm));
         let cobj = self.m.tok(TokKind::ClassObj(tm));
@@ -1965,8 +2087,10 @@ impl<'a> Gen<'a> {
             lexical_this: false,
             no_summary: false,
             gen_step: false,
+            captures: Vec::new(),
             forwards_super: false,
             parent: NO_FN,
+            forwarded: false,
         });
         fx
     }

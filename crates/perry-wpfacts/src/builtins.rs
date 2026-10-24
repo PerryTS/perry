@@ -203,8 +203,10 @@ pub fn resolver(m: &mut Model, dst: NodeId) -> Tok {
         lexical_this: true,
         no_summary: false,
         gen_step: false,
+        captures: Vec::new(),
         forwards_super: false,
         parent: NO_FN,
+        forwarded: false,
     });
     m.add_prim(ret, prim::UNDEF);
     m.resolvers.insert(dst, tok);

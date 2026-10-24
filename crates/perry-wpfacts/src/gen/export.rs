@@ -234,19 +234,7 @@ impl<'a> Gen<'a> {
                     if published.is_some_and(|p| !p.broken(&self.m.tmpls[tm as usize].display)) =>
                 {
                     let extended = published.is_some_and(|p| p.extended(path_of(self, mi), name));
-                    // No constructor code runs on the receiver but the field
-                    // initializers, which store the class's own keys and do
-                    // not leak `this` (DECISIONS 58).
-                    let t = &self.m.tmpls[tm as usize];
-                    let no_code = t.ctor.is_none()
-                        && t.parent.is_none()
-                        && t.parent_value.is_none()
-                        && t.native_parent.is_none()
-                        && self.ctor_phase.get(&tm).is_some_and(|ph| !ph.leaks);
-                    self.m.publish_class(tm, r, extended, no_code);
-                    self.class_contracts.push(((mi, a), n, tm));
-                    let inst = self.m.tok(TokKind::Obj(tm, NO_CTX));
-                    self.fields_leave(inst, r);
+                    self.publish_contract_class(Some((mi, a)), n, tm, extended, r);
                 }
                 _ => {
                     // A published function is a contract (§11.2): it still
@@ -468,16 +456,79 @@ impl<'a> Gen<'a> {
         }
     }
 
+    /// A class of this unit becomes a contract (§11.2): published, its
+    /// instance's fields leave. `key` is its export; none for a class whose
+    /// instance a contract result or value gives out (DECISIONS 116).
+    fn publish_contract_class(
+        &mut self,
+        key: Option<(u32, Atom)>,
+        n: NodeId,
+        tm: TmplId,
+        extended: bool,
+        r: u32,
+    ) -> bool {
+        // No constructor code runs on the receiver but the field
+        // initializers, which store the class's own keys and do
+        // not leak `this` (DECISIONS 58).
+        let t = &self.m.tmpls[tm as usize];
+        let no_code = t.ctor.is_none()
+            && t.parent.is_none()
+            && t.parent_value.is_none()
+            && t.native_parent.is_none()
+            && self.ctor_phase.get(&tm).is_some_and(|ph| !ph.leaks);
+        self.m.publish_class(tm, r, extended, no_code, key.is_none());
+        self.class_contracts.push((key, n, tm));
+        let inst = self.m.tok(TokKind::Obj(tm, NO_CTX));
+        self.fields_leave(inst, r)
+    }
+
+    /// DECISIONS 116: a class of this unit that no other unit names, whose
+    /// instance a contract result or value gives out (AWFY's
+    /// `exports.newInstance = () => new Richards()`): the reader calls its
+    /// methods on what it gets, as on an exported class's instance, so it
+    /// is the same contract, published under its display. No other unit
+    /// can name it, so none extends it. A census report breaks it as any.
+    fn class_to_give(&self, tm: TmplId) -> bool {
+        let t = &self.m.tmpls[tm as usize];
+        matches!(
+            t.kind,
+            TmplKind::Class {
+                literal_shape: false,
+                ..
+            }
+        ) && !self.stand_in_cc.contains_key(&tm)
+            && self.unit_in.is_some_and(|u| !u.broken(&t.display))
+    }
+
+    /// Gives `t` (an instance of contract class `tm`, or of a class to
+    /// give, published here first) out to other units. True when this
+    /// added constraints.
+    fn give_class(&mut self, tm: TmplId, t: Tok, r: u32) -> bool {
+        let mut changed = false;
+        if !self.contract_class(tm) {
+            self.publish_contract_class(None, u32::MAX, tm, false, r);
+            changed = true;
+        }
+        changed | self.m.give_out(tm, t)
+    }
+
     /// After a solve: a published class export holds its class value only
-    /// (a module may rebind the name); otherwise it escapes after all. True
+    /// (a module may rebind the name); otherwise it escapes after all. The
+    /// primitives beside it are the contract's `binding_prim` (DECISIONS
+    /// 115): no object, so the class is what every reader may find. True
     /// when something changed (solve again).
     pub(crate) fn contract_check(&mut self) -> bool {
         let r = self.m.reason("published to another unit");
         let mut changed = self.apply_store_effects();
         for (e, n, tm) in std::mem::take(&mut self.class_contracts) {
             let c = self.m.tok(TokKind::ClassObj(tm));
+            // A class given out has no binding (DECISIONS 116).
+            if e.is_none() {
+                self.class_contracts.push((e, n, tm));
+                continue;
+            }
             let node = &self.m.nodes[n as usize];
-            if node.prim != 0 || node.pts.to_sorted().iter().any(|&t| t != c) {
+            if node.pts.to_sorted().iter().any(|&t| t != c) {
                 self.m.sink_node(n, r);
                 changed = true;
             } else {
@@ -501,6 +552,18 @@ impl<'a> Gen<'a> {
                 .into_iter()
                 .flat_map(|t| self.m.marker_members(t))
                 .collect();
+            // Another function's marker with nothing beside it (DECISIONS
+            // 119) is another unit's value the caller cannot follow: it
+            // escapes, then reads as ⊤ (DECISIONS 42).
+            for &t in &toks {
+                if self.m.param_marker.get(&t).is_some_and(|&(g, _)| g != f)
+                    && !self.m.beside_values(t)
+                    && !self.m.marker_is_top(t)
+                {
+                    self.m.escape(t, r);
+                    changed = true;
+                }
+            }
             let ok = toks.iter().all(|&t| match self.m.toks[t as usize] {
                 _ if self.m.param_marker.get(&t).is_some_and(|&(g, _)| g == f) => true,
                 // An escaped marker reads as ⊤ (DECISIONS 42), of any
@@ -514,8 +577,9 @@ impl<'a> Gen<'a> {
                 // elements are a cell (`arr_leaves` below).
                 TokKind::Builtin(_) => true,
                 TokKind::Obj(..) if self.program_tok(t) || self.arr_ok(t) => true,
-                // An instance of a contract class: given out (`give_out`).
-                TokKind::Obj(tm, _) if self.contract_class(tm) => true,
+                // An instance of a contract class: given out (`give_out`),
+                // or of a class to give (DECISIONS 116).
+                TokKind::Obj(tm, _) if self.contract_class(tm) || self.class_to_give(tm) => true,
                 // Another unit's instance (a stand-in): forwarded with that
                 // unit's contract (`fn_contract_of`), its proof (§17.10 4).
                 TokKind::Obj(tm, _) if self.stand_in_cc.contains_key(&tm) => !self
@@ -544,8 +608,8 @@ impl<'a> Gen<'a> {
                     continue;
                 }
                 if let TokKind::Obj(tm, _) = self.m.toks[t as usize] {
-                    if self.contract_class(tm) {
-                        changed |= self.m.give_out(tm, t);
+                    if self.contract_class(tm) || self.class_to_give(tm) {
+                        changed |= self.give_class(tm, t, r);
                     } else if self.stand_in_cc.contains_key(&tm) {
                         // Another unit's layout, forwarded with its owner's
                         // contract: nothing of this unit leaves through its
@@ -735,8 +799,8 @@ impl<'a> Gen<'a> {
                 if let TokKind::Obj(tm, _) = self.m.toks[t as usize] {
                     // An instance of a contract class other units hold:
                     // given out, they read its fields and call its methods.
-                    if self.contract_class(tm) {
-                        changed |= self.m.give_out(tm, t);
+                    if self.contract_class(tm) || self.class_to_give(tm) {
+                        changed |= self.give_class(tm, t, r);
                         changed |= self.fields_leave(t, r);
                     } else if self.arr_ok(t) {
                         changed |= self.arr_leaves(t);
@@ -1054,6 +1118,8 @@ impl<'a> Gen<'a> {
                     .is_some_and(|u| u.broken(&self.m.tmpls[tm as usize].display))
             }
             TokKind::Obj(tm, _) | TokKind::ClassObj(tm) if self.contract_class(tm) => true,
+            // DECISIONS 116: an instance of a class to give.
+            TokKind::Obj(tm, _) if self.class_to_give(tm) => true,
             TokKind::Obj(..) if self.arr_ok(t) => true,
             TokKind::Obj(tm, _) => self.literal_ok(tm),
             // A contract function of this unit (made one above).

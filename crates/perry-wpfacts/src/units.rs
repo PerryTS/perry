@@ -67,6 +67,13 @@ pub(crate) struct ClassContract {
     pub birth_keys: Vec<String>,
     pub definite: Vec<String>,
     pub ctor_leaks: bool,
+    /// The primitive kinds the published binding may hold beside the
+    /// class (DECISIONS 115): a nested class whose members name it binds
+    /// itself through a one-element cell that holds `undefined` until the
+    /// class is evaluated (DECISIONS 50). A reader's import holds them as
+    /// the defining unit's binding does; a layout reached any other way
+    /// has none.
+    pub binding_prim: u16,
 }
 
 /// A published function as its callers see it (design §11.2): per
@@ -75,6 +82,22 @@ pub(crate) struct ClassContract {
 /// then it escapes), whether its body reads `arguments` (`variadic`: all
 /// arguments escape) or has a rest parameter (`rest`: the arguments past
 /// the parameters escape), and the layouts it returns (`None`: ⊤).
+/// DECISIONS 118: one key a contract function stores into parameter
+/// `dst`'s argument (`reach`: into what it reaches). The reader stores the
+/// arguments of the parameters `from` under it, ⊤ when `top`, and `prim`.
+#[derive(Clone, Debug)]
+pub(crate) struct StoreFlow {
+    pub dst: u32,
+    pub reach: bool,
+    /// Into what the argument holds under this key (a keyed reach, design
+    /// §18.4), not into all it reaches.
+    pub via: Option<String>,
+    pub key: String,
+    pub from: Vec<u32>,
+    pub top: bool,
+    pub prim: u16,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct FnContract {
     pub name: String,
@@ -125,6 +148,10 @@ pub(crate) struct FnContract {
     /// Per parameter, the keys the body stores into the argument (`None`:
     /// a computed key); a stored value escapes (DECISIONS 84).
     pub param_stores: Vec<Option<Vec<String>>>,
+    /// What the body stores under a named key into an argument or into
+    /// what it reaches: the arguments of other parameters, or an unknown
+    /// value, or primitives (DECISIONS 118).
+    pub param_flows: Vec<StoreFlow>,
     /// The binding name of a closed function (decision 19): a unit that
     /// calls it as a value publishes what it passes under this name.
     pub closed: Option<String>,
@@ -211,6 +238,7 @@ impl ClassContract {
     /// Idempotent and absorbing (`a ⊔ b = a` when `b ≤ a`): the driver joins
     /// the last round's entry with this round's owners.
     pub(crate) fn join(&mut self, b: &ClassContract) {
+        self.binding_prim |= b.binding_prim;
         let (f, g) = (&mut self.facts, &b.facts);
         f.escape = f.escape.take().or_else(|| g.escape.clone());
         f.hard = f.hard.take().or_else(|| g.hard.clone());

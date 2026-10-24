@@ -477,6 +477,12 @@ fn field_kind(m: &Model, ts: &[Tok], a: Atom, definite: bool) -> KindFact {
                 // its callers pass is beside it; the marker only records
                 // the uses for its contract (as for a receiver, `site_facts`).
                 TokKind::Obj(..) if closed_marker(m, x) => {}
+                // Any other marker stands for another unit's values with
+                // nothing beside it (DECISIONS 119): it reads as ⊤.
+                TokKind::Obj(..) if m.is_marker(x) => {
+                    k.top = true;
+                    k.prims |= prim::ALL;
+                }
                 TokKind::Obj(tm, _) if m.tmpls[*tm as usize].kind.is_fact_unit() => {
                     objs.push(m.tmpls[*tm as usize].display.clone())
                 }
@@ -632,6 +638,13 @@ fn judge(
             // only records the uses for its contract. A published method's
             // receiver marker with published receivers too (DECISIONS 107).
             TokKind::Obj(..) if closed_marker(m, t) => {}
+            // Any other marker stands for another unit's values with
+            // nothing beside it (DECISIONS 119): it reads as ⊤.
+            TokKind::Obj(..) if m.is_marker(t) => {
+                top = true;
+                receivers.push(m.tok_name(t));
+                verdict.get_or_insert(Verdict::No("receiver is another unit's value (marker)".into()));
+            }
             TokKind::Obj(tm, _) => {
                 let Some(tf) = by_id.get(tm) else {
                     receivers.push(m.tok_name(t));

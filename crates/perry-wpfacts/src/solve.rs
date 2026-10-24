@@ -301,13 +301,15 @@ impl Model {
                 let p = self.funcs[f].params[i];
                 if p != NO_NODE {
                     self.nodes[p as usize].param = true;
+                    self.param_at.insert(p, (f as FnIdx, i as u32));
                 }
             }
         }
         loop {
             self.fill_instances();
+            self.replay_marker_links();
             let Some(n) = self.wl.pop_front() else {
-                if self.sum.pending.is_empty() {
+                if self.sum.pending.is_empty() && self.marker_links.is_empty() {
                     break;
                 }
                 continue;
@@ -736,6 +738,57 @@ impl Model {
                 for &t in toks {
                     self.escape(t, reason);
                 }
+            }
+            Cons::StoreOut {
+                f,
+                dst,
+                reach,
+                via,
+                key,
+                reason,
+            } => {
+                let mut from = Vec::new();
+                let mut top = false;
+                for &t in toks {
+                    // The argument marker of `f`'s parameter node `j` is
+                    // argument `j`; its other members (the markers this
+                    // unit's own calls pass) escape, as they link in.
+                    let arg = match self.reach_marker.contains(&t) || !self.is_arg_marker(t) {
+                        true => None,
+                        false => self.arg_param_of(t, f),
+                    };
+                    if let Some(j) = arg {
+                        from.push(j);
+                        let w = self.arg_src_watch.entry(t).or_default();
+                        if !w.contains(&(f, j, reason)) {
+                            w.push((f, j, reason));
+                            let own = self.marker_of.get(&(f, j)).copied();
+                            for m in self.arg_members.get(&t).cloned().unwrap_or_default() {
+                                if Some(m) != own {
+                                    self.escape(m, reason);
+                                }
+                            }
+                        }
+                        continue;
+                    }
+                    match self.param_marker.get(&t) {
+                        Some(&(g, j)) if g == f && j != u32::MAX && !self.reach_marker.contains(&t) => {
+                            from.push(j)
+                        }
+                        _ => {
+                            top = true;
+                            self.escape(t, reason);
+                        }
+                    }
+                }
+                let fl = self.store_flows.entry((f, dst, reach, via, key)).or_default();
+                for j in from {
+                    if !fl.from.contains(&j) {
+                        fl.from.push(j);
+                    }
+                }
+                fl.top |= top;
+                fl.prim |= prim;
             }
             Cons::ContractThis {
                 tmpl,
@@ -1342,6 +1395,30 @@ impl Model {
                 self.store_into(i, key, src, site);
             }
         }
+        // DECISIONS 118: an argument marker stands for its members (DECISIONS
+        // 44): a store into it under a named key is a store into each one,
+        // replayed on each one that links in later. A store into its keyed
+        // reach under `k` goes into each member's keyed reach under `k`
+        // alone, not into all its members reach (DECISIONS 121).
+        if let (Key::Named(a), true) = (key, self.is_arg_marker(t)) {
+            if self.arg_store_done.insert((t, a, src)) {
+                self.arg_stores.entry(t).or_default().push((a, src, site));
+                match self.keyed_parent.get(&t).copied() {
+                    Some((p, k)) => {
+                        for m in self.arg_members.get(&p).cloned().unwrap_or_default() {
+                            let mk = self.keyed_reach_of(m, k);
+                            self.store_into(mk, key, src, site);
+                        }
+                    }
+                    None => {
+                        for m in self.arg_members.get(&t).cloned().unwrap_or_default() {
+                            self.store_into(m, key, src, site);
+                        }
+                    }
+                }
+            }
+            return;
+        }
         // A store into a published method's receiver marker is a key of its
         // receiver contract, not an escape (DECISIONS 57): the reader puts an
         // unknown value under the key of the instance it admits. The value
@@ -1369,14 +1446,49 @@ impl Model {
         // closed function's callers' values are beside its marker: the
         // store reaches them there (decision 13).
         if let Some(&(f, i)) = self.param_marker.get(&t) {
+            // DECISIONS 118: under a named key, the store is a flow of the
+            // contract. A parameter's argument stored into another's (or
+            // into what that reaches) is the reader's store of its own
+            // values, as the whole program runs it; any other stored value
+            // goes into another unit's object: it escapes (`Cons::StoreOut`).
+            if let (Key::Named(a), true) =
+                (key, i != u32::MAX && !self.closed_params.contains_key(&f))
+            {
+                let reach = self.reach_marker.contains(&t);
+                if !reach {
+                    let ks = self.param_stores.entry((f, i)).or_default();
+                    if !ks.contains(&a) {
+                        ks.push(a);
+                    }
+                }
+                // Into the parameter's own keyed reach: under `a` of what
+                // the argument holds under `via`, not into all it reaches.
+                let via = self
+                    .marker_of
+                    .get(&(f, i))
+                    .and_then(|mk| self.keyed_reach.get(mk))
+                    .and_then(|v| v.iter().find(|&&(_, r)| r == t))
+                    .map(|&(k, _)| k);
+                self.store_flows.entry((f, i, reach, via, a)).or_default();
+                if self.store_out_done.insert((src, f, i, reach, via, a)) {
+                    let reason = self.reason("stored into another unit's value");
+                    self.cons(
+                        src,
+                        Cons::StoreOut {
+                            f,
+                            dst: i,
+                            reach,
+                            via,
+                            key: a,
+                            reason,
+                        },
+                    );
+                }
+                return;
+            }
             if !self.reach_marker.contains(&t) && !self.closed_params.contains_key(&f) {
                 match key {
-                    Key::Named(a) => {
-                        let ks = self.param_stores.entry((f, i)).or_default();
-                        if !ks.contains(&a) {
-                            ks.push(a);
-                        }
-                    }
+                    Key::Named(_) => unreachable!("a named store is a flow (DECISIONS 118)"),
                     Key::Any => {
                         self.param_open.insert((f, i));
                     }
@@ -1703,8 +1815,10 @@ impl Model {
             lexical_this: false,
             no_summary: true,
             gen_step: false,
+            captures: Vec::new(),
             forwards_super: false,
             parent: NO_FN,
+            forwarded: false,
         });
         let r = self.reason("passed to an unknown function");
         self.sink_node(args_all, r);
@@ -1942,6 +2056,41 @@ impl Model {
         false
     }
 
+    /// DECISIONS 118: what an argument marker's stores and `StoreOut`s do
+    /// to each marker that linked in since (`link_marker`).
+    fn replay_marker_links(&mut self) {
+        while let Some((m, r)) = self.marker_links.pop() {
+            for (a, src, site) in self.arg_stores.get(&r).cloned().unwrap_or_default() {
+                self.store_into(m, Key::Named(a), src, site);
+            }
+            // The stores into `r`'s keyed reaches: into `m`'s under each key.
+            for (k, kr) in self.keyed_reach.get(&r).cloned().unwrap_or_default() {
+                let ss = self.arg_stores.get(&kr).cloned().unwrap_or_default();
+                if ss.is_empty() {
+                    continue;
+                }
+                let mk = self.keyed_reach_of(m, k);
+                for (a, src, site) in ss {
+                    self.store_into(mk, Key::Named(a), src, site);
+                }
+            }
+            for (f, j, reason) in self.arg_src_watch.get(&r).cloned().unwrap_or_default() {
+                if self.marker_of.get(&(f, j)) != Some(&m) {
+                    self.escape(m, reason);
+                }
+            }
+        }
+    }
+
+    /// The parameter of `f` whose node argument marker `t` is the marker of.
+    fn arg_param_of(&self, t: Tok, f: FnIdx) -> Option<u32> {
+        let n = *self.arg_marker_node.get(&t)?;
+        match self.param_at.get(&n) {
+            Some(&(g, j)) if g == f => Some(j),
+            _ => None,
+        }
+    }
+
     /// Everything that reaches `n` escapes (once per node: no sink nodes).
     pub fn sink_node(&mut self, n: NodeId, reason: u32) {
         if self.sunk_nodes.insert(n) {
@@ -2003,6 +2152,18 @@ impl Model {
                 format!("chain {n} {origin} {} {act:?}", self.key_name(*key))
             }
             Cons::TopSink { reason } => format!("top {n} {reason}"),
+            Cons::StoreOut {
+                f,
+                dst,
+                reach,
+                via,
+                key,
+                reason,
+            } => format!(
+                "storeout {n} {f} {dst} {reach} {} {} {reason}",
+                via.map_or("-".to_string(), |v| esc_key(&self.atoms[v as usize])),
+                esc_key(&self.atoms[*key as usize])
+            ),
             Cons::ContractThis {
                 tmpl,
                 reason,
