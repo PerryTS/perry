@@ -1259,14 +1259,16 @@ fn transition_cache_lookup(
             && (e.slot_idx >> 24) == len_marker
     };
     // A two-way bucket (`slot`, `slot ^ 1`): see `transition_cache_way`.
-    let entry = with_transition_cache(|t| unsafe {
-        let primary = (*t)[slot];
-        if edge_is(&primary) {
-            primary
+    // The table pointer is resolved once; both ways are read in place.
+    let table = with_transition_cache(|t| t);
+    let entry = unsafe {
+        let primary = &(*table)[slot];
+        if edge_is(primary) {
+            *primary
         } else {
-            (*t)[slot ^ 1]
+            (*table)[slot ^ 1]
         }
-    });
+    };
     if edge_is(&entry) {
         let entry_slot_idx = entry.slot_idx & TRANSITION_SLOT_IDX_MASK;
         // `key_ptr` is weak address metadata and the target array may still
