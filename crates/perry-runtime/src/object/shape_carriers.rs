@@ -62,6 +62,15 @@ fn stable_target_resolves(entry: TransitionEntry) -> bool {
     target_descriptor_resolves(entry, expected_len)
 }
 
+/// A transition entry owns its target exactly when generated code or the
+/// spread path may publish it without revalidation: a stabilized entry
+/// (`target_len != 0`) or a spread entry. An unstable entry's target is
+/// revalidated by [`unstable_target_resolves`] before use, so it stays weak.
+#[inline]
+fn entry_owns_target(entry: &TransitionEntry) -> bool {
+    entry.target_len != 0 || spread::source_shape(entry).is_some()
+}
+
 /// Rebuild transient cache ownership after a full trace. This runs before a
 /// synchronous trace's uncarried-descriptor prune, so every surviving table
 /// entry that can publish a ShapeId has already claimed it.
@@ -76,7 +85,7 @@ pub(crate) fn recompute_after_full_trace() {
 
     with_transition_cache(|table| unsafe {
         for entry in (*table).iter() {
-            if entry.next_keys != 0 {
+            if entry.next_keys != 0 && entry_owns_target(entry) {
                 // The same set as `transition_cache_insert` / `spread::learn`:
                 // the target only; predecessor and spread source are weak keys.
                 note_shape_id(entry.target_shape_id);

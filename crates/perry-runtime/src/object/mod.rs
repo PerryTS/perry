@@ -1462,13 +1462,14 @@ fn transition_cache_insert(
         entry.slot_idx = slot_idx | (len_marker << 24);
         entry.target_len = target_len;
     });
-    // Only the target is owned: the predecessor is the lookup key, weak by
-    // design. An entry whose predecessor retires is dropped by
-    // `transition_entry_is_dead`; a retired row is never reissued, so no live
-    // receiver can match it meanwhile. `recompute_after_full_trace` notes the
-    // same set.
-    shape_carriers::note_shape_id(target_shape_id);
+    // Only a call-free publisher owns its target (`entry_owns_target`); the
+    // runtime path revalidates an unstable target before publishing it. The
+    // predecessor is the lookup key, weak by design: an entry whose
+    // predecessor retires is dropped by `transition_entry_is_dead`, and a
+    // retired row is never reissued, so no live receiver can match it
+    // meanwhile. `recompute_after_full_trace` notes the same set.
     if target_len != 0 {
+        shape_carriers::note_shape_id(target_shape_id);
         shapes::note_last_key_parent(target_shape_id, prev_shape_id);
     }
     if !array_tail_owner.is_null() {
