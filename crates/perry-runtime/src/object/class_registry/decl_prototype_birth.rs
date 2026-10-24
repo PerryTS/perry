@@ -35,7 +35,7 @@ const METHOD_ENTRY: u8 = crate::object::key_attrs::ENTRY_NON_ENUMERABLE;
 /// Missing proof takes ordinary prototype birth. This check cannot allocate.
 pub(super) fn static_parent_matches(class_id: u32, requested: u32, parent_bits: u64) -> bool {
     use crate::object::shapes::{
-        shape_record_for_word, PROTO_ID_CLASS, PROTO_ID_DEFAULT, PROTO_ID_MIXED,
+        shape_record_by_id, PROTO_ID_CLASS, PROTO_ID_DEFAULT, PROTO_ID_MIXED,
     };
     let declaration = super::declarations::class_declaration(class_id);
     let family_parent = if declaration.is_some_and(|d| !d.instance_layout.is_null()) {
@@ -48,7 +48,7 @@ pub(super) fn static_parent_matches(class_id: u32, requested: u32, parent_bits: 
     } else {
         None
     };
-    let candidate = if let Some(shape) = shape_record_for_word(requested) {
+    let candidate = if let Some(shape) = shape_record_by_id(requested) {
         match shape.proto_id() {
             PROTO_ID_DEFAULT => 0,
             pid if (PROTO_ID_CLASS..PROTO_ID_MIXED).contains(&pid) => pid as u32,

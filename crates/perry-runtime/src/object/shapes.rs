@@ -3793,15 +3793,17 @@ pub(crate) unsafe fn birth_stamp_object_shape(
             && shape_descriptor_field_for_word(runtime_shape_id, |d| {
                 super::field_rep::identity_with_special(d.rep) == rep
             }) == Some(true))
-            || shapes_slot_list::install_external_shape_id(
-                runtime_shape_id,
+            // The installer speaks identities; the supplied word names this
+            // agent's row, whose identity (if any) is what may conflict.
+            || shape_record_for_word(runtime_shape_id).is_some_and(|r| shapes_slot_list::install_external_shape_id(
+                r.identity().0,
                 keys,
                 key_count,
                 live_inline_slot_count,
                 object_proto_id(obj),
                 store_kind::receiver_ordinary_kind(obj),
                 rep,
-            );
+            ));
     if supplied_id_is_local {
         stamp_object_shape_id_with_carrier_note(obj, runtime_shape_id);
         debug_assert_object_shape_parity(obj);
