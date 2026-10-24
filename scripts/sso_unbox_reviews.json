@@ -1,0 +1,227 @@
+{
+  "schema_version": 1,
+  "reviews": [
+    {
+      "path": "crates/perry-runtime/src/gc/barrier_store.rs",
+      "function": "runtime_store_jsvalue_slot_layout_deferred",
+      "body_sha256": "0a2f0535a5d652085010e30677c20c9dc70c4190b0436af040b487db0e54342c",
+      "claim": "The STRING_TAG branch only demotes heap-string alias ownership; the value is always stored and the representation/barrier path always runs. Inline strings have no refcount or GC address.",
+      "rule": "mask-cast",
+      "support_files": []
+    },
+    {
+      "path": "crates/perry-runtime/src/gc/barrier_store.rs",
+      "function": "runtime_store_jsvalue_slot_layout_deferred",
+      "body_sha256": "0a2f0535a5d652085010e30677c20c9dc70c4190b0436af040b487db0e54342c",
+      "claim": "The STRING_TAG branch only demotes heap-string alias ownership; the value is always stored and the representation/barrier path always runs. Inline strings have no refcount or GC address.",
+      "rule": "heap-tag-only",
+      "support_files": []
+    },
+    {
+      "path": "crates/perry-runtime/src/gc/barrier_store.rs",
+      "function": "runtime_store_jsvalue_slot",
+      "body_sha256": "20cec0a2a21c74064651fb594e823b596f5e2e1c6e271b00e82ebed9bafd2f3d",
+      "claim": "The heap tag limits only js_string_addref; slot publication, layout note and write barrier still run for all values, including inline strings.",
+      "rule": "mask-cast",
+      "support_files": []
+    },
+    {
+      "path": "crates/perry-runtime/src/gc/barrier_store.rs",
+      "function": "runtime_store_jsvalue_slot",
+      "body_sha256": "20cec0a2a21c74064651fb594e823b596f5e2e1c6e271b00e82ebed9bafd2f3d",
+      "claim": "The heap tag limits only js_string_addref; slot publication, layout note and write barrier still run for all values, including inline strings.",
+      "rule": "heap-tag-only",
+      "support_files": []
+    },
+    {
+      "path": "crates/perry-runtime/src/object/global_this/generator_state.rs",
+      "function": "resume_fixed_step",
+      "body_sha256": "87d9ffce310900938c77e63b91d7e1dda484b370ab9fcca9fa8434c6e0766431",
+      "claim": "The result is returned unchanged for all values; the heap-only branch solely demotes an aliased StringHeader refcount.",
+      "rule": "mask-cast",
+      "support_files": []
+    },
+    {
+      "path": "crates/perry-runtime/src/object/global_this/generator_state.rs",
+      "function": "resume_fixed_step",
+      "body_sha256": "87d9ffce310900938c77e63b91d7e1dda484b370ab9fcca9fa8434c6e0766431",
+      "claim": "The result is returned unchanged for all values; the heap-only branch solely demotes an aliased StringHeader refcount.",
+      "rule": "heap-tag-only",
+      "support_files": []
+    },
+    {
+      "path": "crates/perry-runtime/src/object/global_this/generator_state.rs",
+      "function": "js_generator_set_slot",
+      "body_sha256": "f77bf32f6416b0f348ad88e15943dbc5e68fac4dea73c0f3afe846d002649941",
+      "claim": "The tag branch performs only heap-string alias demotion; unconditional slot.write(bits) and the write barrier preserve inline values.",
+      "rule": "mask-cast",
+      "support_files": []
+    },
+    {
+      "path": "crates/perry-runtime/src/object/global_this/generator_state.rs",
+      "function": "js_generator_set_slot",
+      "body_sha256": "f77bf32f6416b0f348ad88e15943dbc5e68fac4dea73c0f3afe846d002649941",
+      "claim": "The tag branch performs only heap-string alias demotion; unconditional slot.write(bits) and the write barrier preserve inline values.",
+      "rule": "heap-tag-only",
+      "support_files": []
+    },
+    {
+      "path": "crates/perry-runtime/src/string/alloc.rs",
+      "function": "js_string_addref_if_heap_string",
+      "body_sha256": "ae433c01bf504b3c6b909bb052f06c5ccd13a44077633eacc1a76a5ccba1f93f",
+      "claim": "This operation is specifically a heap-header refcount demotion. Inline values have no header and correctly require no action.",
+      "rule": "mask-cast",
+      "support_files": []
+    },
+    {
+      "path": "crates/perry-runtime/src/string/alloc.rs",
+      "function": "js_string_addref_if_heap_string",
+      "body_sha256": "ae433c01bf504b3c6b909bb052f06c5ccd13a44077633eacc1a76a5ccba1f93f",
+      "claim": "This operation is specifically a heap-header refcount demotion. Inline values have no header and correctly require no action.",
+      "rule": "heap-tag-only",
+      "support_files": []
+    },
+    {
+      "path": "crates/perry-runtime/src/string/concat.rs",
+      "function": "append_chain_all_heap_strings",
+      "body_sha256": "f0495c8c29ff12b765cce3e18cf4dab3bb7a25fdf2afc59d3dcc6ac8ead1d137",
+      "claim": "Every non-heap operand returns through js_string_concat_chain before any header dereference; that full coercion path handles inline strings.",
+      "rule": "mask-cast",
+      "support_files": [
+        "crates/perry-runtime/src/string/concat.rs"
+      ]
+    },
+    {
+      "path": "crates/perry-runtime/src/string/concat.rs",
+      "function": "append_chain_all_heap_strings",
+      "body_sha256": "f0495c8c29ff12b765cce3e18cf4dab3bb7a25fdf2afc59d3dcc6ac8ead1d137",
+      "claim": "Every non-heap operand returns through js_string_concat_chain before any header dereference; that full coercion path handles inline strings.",
+      "rule": "heap-tag-only",
+      "support_files": [
+        "crates/perry-runtime/src/string/concat.rs"
+      ]
+    },
+    {
+      "path": "crates/perry-runtime/src/string/concat.rs",
+      "function": "concat_chain_all_heap_strings_no_collect",
+      "body_sha256": "112fbb007ba5c76a68fb91fc48a721fad736273606dfd0a0c874768e49d3884d",
+      "claim": "The admission pass returns None for every non-heap tag before dereferencing; concat_chain_sized continues into the rooted full-coercion path.",
+      "rule": "mask-cast",
+      "support_files": [
+        "crates/perry-runtime/src/string/concat.rs"
+      ]
+    },
+    {
+      "path": "crates/perry-runtime/src/string/concat.rs",
+      "function": "concat_chain_all_heap_strings_no_collect",
+      "body_sha256": "112fbb007ba5c76a68fb91fc48a721fad736273606dfd0a0c874768e49d3884d",
+      "claim": "The admission pass returns None for every non-heap tag before dereferencing; concat_chain_sized continues into the rooted full-coercion path.",
+      "rule": "heap-tag-only",
+      "support_files": [
+        "crates/perry-runtime/src/string/concat.rs"
+      ]
+    },
+    {
+      "path": "crates/perry-runtime/src/object/canonical_keys.rs",
+      "function": "prepare_old_parent_key",
+      "body_sha256": "ee48e2e2d7e0b330a1c258448e71acf16e4a825e225bf938e1e499556c332cb5",
+      "claim": "Only nursery heap strings need the existing GC tenure bit. Inline key slots have no object to tenure; their bits are retained.",
+      "rule": "heap-tag-only",
+      "support_files": []
+    },
+    {
+      "path": "crates/perry-runtime/src/object/canonical_keys.rs",
+      "function": "publish_canonical",
+      "body_sha256": "779cb716c0bfed3cc22edc5a106ee332475bfb0df413cc0c3556b34047e3b704",
+      "claim": "Only heap strings are replaced by heap atoms. Inline slots remain unchanged; layout rebuild and publication still run for the whole backing.",
+      "rule": "heap-tag-only",
+      "support_files": []
+    },
+    {
+      "path": "crates/perry-runtime/src/object/builtin_proto_entries.rs",
+      "function": "heap_string",
+      "body_sha256": "a6a9d5a7156c619ccc825bf4a5676cdcd852797033f5bee3c99adc7a389d4d5c",
+      "claim": "Returns only an optional heap header. fast_recv explicitly materializes inline receivers; inline operands decline via Option to string_entry/string_by_name, the full native operation.",
+      "rule": "mask-cast",
+      "support_files": [
+        "crates/perry-runtime/src/object/builtin_proto_entries.rs"
+      ]
+    },
+    {
+      "path": "crates/perry-runtime/src/object/builtin_proto_entries.rs",
+      "function": "heap_string",
+      "body_sha256": "a6a9d5a7156c619ccc825bf4a5676cdcd852797033f5bee3c99adc7a389d4d5c",
+      "claim": "Returns only an optional heap header. fast_recv explicitly materializes inline receivers; inline operands decline via Option to string_entry/string_by_name, the full native operation.",
+      "rule": "heap-tag-only",
+      "support_files": [
+        "crates/perry-runtime/src/object/builtin_proto_entries.rs"
+      ]
+    },
+    {
+      "path": "crates/perry-runtime/src/object/store_key.rs",
+      "function": "interned_heap_key",
+      "body_sha256": "635a6c7363c1d17da86425103ea6a59da3a292ef5ae071e1b3fcd409e4a672c2",
+      "claim": "The sole production caller own_overwrite_first routes is_short_string keys to interned_key_for_store first; failed probes return Err(key) to normal Set.",
+      "rule": "mask-cast",
+      "support_files": [
+        "crates/perry-runtime/src/proxy/put_value.rs"
+      ]
+    },
+    {
+      "path": "crates/perry-runtime/src/object/store_key.rs",
+      "function": "interned_heap_key",
+      "body_sha256": "635a6c7363c1d17da86425103ea6a59da3a292ef5ae071e1b3fcd409e4a672c2",
+      "claim": "The sole production caller own_overwrite_first routes is_short_string keys to interned_key_for_store first; failed probes return Err(key) to normal Set.",
+      "rule": "heap-tag-only",
+      "support_files": [
+        "crates/perry-runtime/src/proxy/put_value.rs"
+      ]
+    },
+    {
+      "path": "crates/perry-runtime/src/node_stream_event_emitter_shape.rs",
+      "function": "shape_set",
+      "body_sha256": "fb680ba7b905fcdc16d46e35ae878cd8b3b5f2ef1e7537fc510173ae69db5eae",
+      "claim": "The non-heap key arm uses supplied key bytes to look up its interned atom; a missing atom returns false for the ordinary setter. Inline bytes are not dereferenced as a header.",
+      "rule": "mask-cast",
+      "support_files": [
+        "crates/perry-runtime/src/node_stream_event_emitter.rs"
+      ]
+    },
+    {
+      "path": "crates/perry-runtime/src/node_stream_event_emitter_shape.rs",
+      "function": "shape_set",
+      "body_sha256": "fb680ba7b905fcdc16d46e35ae878cd8b3b5f2ef1e7537fc510173ae69db5eae",
+      "claim": "The non-heap key arm uses supplied key bytes to look up its interned atom; a missing atom returns false for the ordinary setter. Inline bytes are not dereferenced as a header.",
+      "rule": "heap-tag-only",
+      "support_files": [
+        "crates/perry-runtime/src/node_stream_event_emitter.rs"
+      ]
+    },
+    {
+      "path": "crates/perry-runtime/src/node_stream_event_emitter_shape.rs",
+      "function": "add_first_listener_fast",
+      "body_sha256": "cbba4cdb121dd129590b2ad338a5b34a98754d151e67f03622fff18fc2f3ec09",
+      "claim": "with_string_bytes accepts inline strings. Only heap+interned keys dereference the masked pointer; every other string uses intern_lookup_bytes or declines to the full listener path.",
+      "rule": "mask-cast",
+      "support_files": [
+        "crates/perry-runtime/src/node_stream_event_emitter.rs"
+      ]
+    },
+    {
+      "path": "crates/perry-runtime/src/node_stream_event_emitter_shape.rs",
+      "function": "add_first_listener_fast",
+      "body_sha256": "cbba4cdb121dd129590b2ad338a5b34a98754d151e67f03622fff18fc2f3ec09",
+      "claim": "with_string_bytes accepts inline strings. Only heap+interned keys dereference the masked pointer; every other string uses intern_lookup_bytes or declines to the full listener path.",
+      "rule": "heap-tag-only",
+      "support_files": [
+        "crates/perry-runtime/src/node_stream_event_emitter.rs"
+      ]
+    }
+  ],
+  "support_files": {
+    "crates/perry-runtime/src/proxy/put_value.rs": "ffa11d3a1ffef66a3f77b97079cb1cc6dca60d503995897c19a50b36c3105c5f",
+    "crates/perry-runtime/src/node_stream_event_emitter.rs": "db7daa423e8fe604d228fe0e118c7ae8c1504753e86e4cff6735e48b6550962e",
+    "crates/perry-runtime/src/string/concat.rs": "aff51a40e1cf03321ddec88547a7baf0666391598b7289fa8d662f0c19596ed0",
+    "crates/perry-runtime/src/object/builtin_proto_entries.rs": "b69d6e00705c719d0e03a410bc7c9167f45cf578441a71a73805dba18df7f90f"
+  }
+}
