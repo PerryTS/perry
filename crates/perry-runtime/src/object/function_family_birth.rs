@@ -185,24 +185,8 @@ unsafe fn try_symbol_store(
     }
     let obj = address as *mut ObjectHeader;
     let d = &*desc;
-    // The shared descriptor holds no per-evaluation word: the object proves
-    // its own layout. Its shape must have this descriptor's key count and the
-    // key at this position, whose slot is the position (codegen numbers a
-    // function layout's slots by key index).
     if d.variant != crate::codegen_abi::LAYOUT_VARIANT_FUNCTION_CONSTRUCTOR
         || position >= d.key_count
-    {
-        return false;
-    }
-    let Some(record) = super::shapes::shape_record_of_receiver((*obj).parent_class_id) else {
-        return false;
-    };
-    if record.logical_key_count() != d.key_count {
-        return false;
-    }
-    let keys = record.keys() as *const crate::array::ArrayHeader;
-    if keys.is_null()
-        || *crate::array::array_elements_ptr(keys).add(position as usize) != key.to_bits()
     {
         return false;
     }
@@ -212,6 +196,9 @@ unsafe fn try_symbol_store(
         || k.slot >= super::object_inline_capacity(obj)
         || super::proto_validity::object_is_marked_prototype(address)
     {
+        return false;
+    }
+    if !function_layout_admits_store(obj, d, position, key) {
         return false;
     }
     let slots = obj
@@ -232,6 +219,60 @@ unsafe fn try_symbol_store(
     }
     super::store_object_field_slot(obj, k.slot as usize, value.to_bits());
     true
+}
+
+/// Does the receiver carry exactly this descriptor's function-constructor
+/// layout, with the key at `position` a plain writable data property stored
+/// at slot `position`?
+///
+/// The shared descriptor holds no per-evaluation word (each evaluation's
+/// record is interned by facts in `layout_desc::register_bound`), so the
+/// receiver's live word must prove the layout itself. Records are
+/// fact-interned, so the record IS this layout exactly when every fact the
+/// descriptor determines agrees: an ordinary-band, unshadowed word; the
+/// declared kind; the key count, inline slot count and representation; and
+/// positional slots. The facts one evaluation adds (its other bound symbols
+/// and its prototype identity) are not read by this store; the key at
+/// `position` is compared directly. Attributes live in the key list, not in
+/// the count, so the entry at `position` must be exactly the descriptor's
+/// optional plain data entry: an accessor, a non-writable or a private key
+/// fails here and the store takes the complete `[[Set]]`. Dictionary,
+/// exotic and overflow-shadowed receivers fail the word admission.
+unsafe fn function_layout_admits_store(
+    obj: *const ObjectHeader,
+    d: &PerryLayoutDesc,
+    position: u32,
+    key: f64,
+) -> bool {
+    let word = (*obj).parent_class_id;
+    if !super::shapes::is_site_matchable_layout_word(word) {
+        return false;
+    }
+    let meta = (*obj).meta;
+    if !meta.is_null() && (*meta).flags & super::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER != 0 {
+        return false;
+    }
+    // A live receiver word names a published row of this agent.
+    let Some(record) = super::shapes::shape_record_for_word(word) else {
+        return false;
+    };
+    if record.object_kind().code() != u64::from(d.kind)
+        || record.logical_key_count() != d.key_count
+        || record.live_inline_slot_count() != d.slot_count
+        || record.rep() != d.rep
+        || (position < 32 && (d.rep >> (2 * position)) & 0b11 != 0)
+    {
+        return false;
+    }
+    let keys = record.keys() as *const crate::array::ArrayHeader;
+    if keys.is_null()
+        || super::key_attrs::keys_have_slots(keys, d.key_count)
+        || *crate::array::array_elements_ptr(keys).add(position as usize) != key.to_bits()
+    {
+        return false;
+    }
+    let entry = super::key_attrs::keys_entry(keys, position);
+    entry == super::key_attrs::ENTRY_OPTIONAL && super::key_attrs::entry_is_plain_writable_data(entry)
 }
 
 /// Only ordinary physical prototype layouts are admitted, and every live

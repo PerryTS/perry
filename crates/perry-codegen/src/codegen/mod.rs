@@ -1429,6 +1429,7 @@ fn lower_module(
     // that selected global to allocation sites and capability harvesting.
     let mut used_class_keys_globals: std::collections::HashSet<String> =
         std::collections::HashSet::new();
+    let mut keys_class_ids: HashMap<String, u32> = HashMap::new();
     for c in &hir.classes {
         let global_name = helpers::unique_class_keys_global(
             &module_prefix,
@@ -1594,6 +1595,7 @@ fn lower_module(
                 .entry(alias.clone())
                 .or_insert(total_field_count);
         }
+        keys_class_ids.insert(global_name.clone(), c.id);
         class_keys_init_data.push((
             global_name,
             packed_keys,
@@ -1603,6 +1605,7 @@ fn lower_module(
         ));
     }
     let defined_class_keys_len = class_keys_init_data.len();
+    static_shape_ids::set_module_keys_class_ids(keys_class_ids);
     // Same naming convention for IMPORTED class stubs. Pack the field
     // names so the importing module allocates the right inline slot count
     // and the slot index for each field matches what the source module's

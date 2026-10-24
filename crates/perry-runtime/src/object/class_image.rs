@@ -306,6 +306,45 @@ pub fn adopt_image(handle: ClassImageHandle) {
     });
 }
 
+/// Does the calling thread run the process's primary image?
+#[inline]
+fn runs_primary_image() -> bool {
+    match CURRENT_IMAGE.try_with(|slot| slot.get().map(Arc::as_ptr)) {
+        Ok(Some(own)) => PRIMARY_IMAGE
+            .get()
+            .is_some_and(|primary| Arc::as_ptr(&primary.tables) == own),
+        // No image of its own (or TLS teardown): the thread resolves to the
+        // primary, exactly as `current` does.
+        _ => true,
+    }
+}
+
+/// The calling thread's view of a runtime-crate memo static: the static
+/// itself for the primary image, null (no memo) for any other image.
+///
+/// A LayoutWord read by process-shared runtime state must denote one shape
+/// in the whole process. Native rows (below the catalog's N) do, and dynamic
+/// rows do (process-unique chunks). An image's static rows N..S-1 do NOT:
+/// each image's compiler assigns them to its own layouts, and the ordinals are
+/// compile-time constants of that image's guards, birth images and family
+/// ranges, so no image can be given a range disjoint from images it never
+/// sees. A runtime-crate memo static (`runtime_state_key!`) is shared by all
+/// images of a #8546 host, so it is the primary image's storage: an agent of
+/// another image takes the stateless probe and the complete read instead
+/// (correct, without the memo's chain answers). Compiled site memos live in
+/// their image's own data and need no such rule. Cost on the primary image:
+/// this thread-local read and one pointer compare per memo-backed runtime
+/// fixed-key access; no table, epoch or validity bit.
+#[doc(hidden)]
+#[inline]
+pub fn process_shared_memo<T>(memo: &'static T) -> *mut T {
+    if runs_primary_image() {
+        memo as *const T as *mut T
+    } else {
+        std::ptr::null_mut()
+    }
+}
+
 /// Identity of the image the calling thread currently resolves to.
 pub fn current_image_id() -> usize {
     current() as *const ClassImageTables as usize
@@ -686,3 +725,7 @@ pub(crate) const fn runtime_layout_image() -> crate::codegen_abi::PerryLayoutIma
     #[cfg(not(test))]
     { crate::codegen_abi::PerryLayoutImageV1::RUNTIME }
 }
+
+#[cfg(test)]
+#[path = "multi_image_memo_tests.rs"]
+mod multi_image_memo_tests;

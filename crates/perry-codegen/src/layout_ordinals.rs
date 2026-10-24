@@ -398,6 +398,15 @@ pub(crate) fn descriptor_word(
 pub(crate) fn collecting() -> bool {
     MODULE.with(|m| m.borrow().collecting)
 }
+/// An image build of this module: the whole-program ordinal plan is installed
+/// and this is not the births pre-pass. Compiled state of such a build that
+/// agents share may hold only static words.
+pub(crate) fn image_plan_active() -> bool {
+    MODULE.with(|m| {
+        let m = m.borrow();
+        !m.collecting && !m.plan.entries.is_empty()
+    })
+}
 pub(crate) fn current_plan() -> std::sync::Arc<ProgramLayoutOrdinals> {
     MODULE.with(|m| m.borrow().plan.clone())
 }
