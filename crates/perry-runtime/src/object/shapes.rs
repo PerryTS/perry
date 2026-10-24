@@ -2763,6 +2763,18 @@ pub(crate) unsafe fn note_external_shape_carrier(descriptor: Option<ShapeDescrip
 /// descriptor whose last entry was evicted stops being rooted at the next full
 /// trace — the same cadence as `old_carrier`.
 #[inline]
+/// [`note_cache_carrier`] for a live record handle.
+#[inline]
+pub(crate) unsafe fn note_cache_carrier_record(record: ShapeRecordRef) {
+    let ptr = record.0.as_ptr();
+    let newly_armed = !(*ptr).has(RECORD_FLAG_CACHE_CARRIER);
+    // GC_STORE_AUDIT(POINTER_FREE): liveness bookkeeping bit, never a heap reference.
+    (*ptr).set(RECORD_FLAG_CACHE_CARRIER, true);
+    if newly_armed {
+        note_shape_carrier_candidate((*ptr).keys);
+    }
+}
+
 pub(crate) unsafe fn note_cache_carrier(descriptor: Option<ShapeDescriptor>) {
     let Some(descriptor) = descriptor else {
         return;

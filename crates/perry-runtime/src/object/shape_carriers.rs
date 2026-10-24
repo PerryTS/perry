@@ -10,7 +10,10 @@ use super::*;
 
 #[inline]
 pub(crate) fn note_shape_id(shape_id: u32) {
-    unsafe { shapes::note_cache_carrier(shapes::shape_descriptor_for_word(shape_id)) };
+    // The record alone: no descriptor is materialized to set its carrier bit.
+    if let Some(record) = shapes::shape_record_for_word(shape_id) {
+        unsafe { shapes::note_cache_carrier_record(record) };
+    }
 }
 
 #[inline]
