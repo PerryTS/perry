@@ -1,3 +1,5 @@
+// GtkDialog and FileChooserDialog are deprecated since GTK 4.10; migrate to AlertDialog / FileDialog.
+#![allow(deprecated)]
 use gtk4::prelude::*;
 use gtk4::{FileChooserAction, FileChooserDialog, ResponseType, Window};
 
@@ -85,7 +87,6 @@ pub fn alert(title_ptr: *const u8, message_ptr: *const u8, buttons_ptr: *const u
     let title = unsafe { str_from_header(title_ptr) };
     let message = unsafe { str_from_header(message_ptr) };
 
-    // Parse button labels from the Perry array
     let button_labels = parse_button_labels(buttons_ptr);
 
     let window: Option<Window> = None;
@@ -128,7 +129,6 @@ fn parse_button_labels(ptr: *const u8) -> Vec<String> {
     if ptr.is_null() {
         return vec!["OK".to_string()];
     }
-    // Read the array header to get the length
     extern "C" {
         fn js_array_get_length(arr: i64) -> i64;
         fn js_array_get_element_f64(arr: i64, index: i64) -> f64;

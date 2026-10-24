@@ -18,57 +18,30 @@ perry-runtime = { path = "../perry-runtime" }
 perry-ffi.workspace = true
 perry-base64.workspace = true
 libc.workspace = true
-gtk4 = { version = "0.9", features = ["v4_6"] }
+gtk4 = { version = "0.11", features = ["v4_10"] }
 cairo-rs = "0.22"
-# perry/ui MapView (#517). libshumate is GNOME's GTK4-native vector-tile
-# map widget. 0.6.x tracks gtk4-rs 0.9 (0.5 wants gtk4 0.8, 0.7 wants
-# gtk4 0.10 — both conflict on the gtk-4 `links =` value). OSM tiles by
-# default; no API key required. Pure GtkWidget — no webview.
-libshumate = "0.6"
-# WebView component (#658 Phase 4). webkit6 0.4.x is the last release
-# pinned to gtk4 0.9 matching the rest of perry-ui-gtk4; 0.5+ moved
-# to gtk4 0.10. WebKitGTK 6.0 requires libwebkitgtk-6.0-dev at build
-# time (Ubuntu 22.10+, Debian 12+). The `decide-policy::navigation-action`
-# signal gives the same sync-intercept semantics as WKWebView's
-# decidePolicyForNavigationAction on macOS.
-webkit6 = "=0.4"
-# Persistent WebView userDataFolder (#658 v2-B) — XDG-aware data/cache
-# dir resolution for `ephemeral: false`. Pure-Rust crate, no system deps.
+# MapView: libshumate, GNOME's GTK4 vector-tile map widget (OSM tiles, no API key).
+# libshumate and webkit6 minor versions track gtk4-rs; they share its `links = "gtk-4"`.
+libshumate = "0.8"
+# WebView: WebKitGTK 6.0 (libwebkitgtk-6.0-dev). webkit6 needs gtk4-rs `v4_10`, so GTK 4.10+
+# (Ubuntu 24.04+, Debian 13+).
+webkit6 = "0.6"
+# XDG data/cache dirs for the persistent WebView session.
 dirs.workspace = true
-# perry/media — GStreamer playbin for streaming audio playback (#351).
+# perry/media: GStreamer playbin for streaming audio.
 gstreamer = "0.25"
-# perry/ui CameraView — appsink frame pull for the v4l2 live-preview /
-# frame-callback pipeline (#191).
+# CameraView: appsink frame pull for the v4l2 preview pipeline.
 gstreamer-app = "0.25"
-# perry/media — MPRIS D-Bus exposure for GNOME / KDE / playerctl /
-# Bluetooth headphones (#366). Linux-only; zbus has Linux-specific
-# system deps that don't build on macOS / Windows hosts, so the crate
-# stays gated behind cfg(target_os = "linux") in the source.
-# NO tokio here, deliberately (turnloop). `mpris-server`'s `tokio`
-# feature only forwards to `zbus/tokio` and is not in its defaults;
-# with it off, zbus runs on `async-io` and starts its own
-# `zbus::Connection executor` thread for the connection.
+# perry/media: MPRIS over D-Bus (Linux-only; gated by cfg(target_os = "linux") in source).
+# No tokio: without mpris-server's `tokio` feature, zbus runs on async-io with its own thread.
 mpris-server = "0.10"
-# perry/ui — system tray icon support via the StatusNotifierItem
-# (KSNI / KDE / GNOME-with-extension / XFCE / Plasma / Cinnamon)
-# DBus protocol (#490). Pure-Rust — no native systray library
-# dependency. Linux-only because the SNI protocol IS the Linux
-# tray protocol; macOS / Windows have native equivalents handled
-# in their respective UI crates.
-#
-# `async-io` instead of the `tokio` default: the two are mutually
-# exclusive (ksni's `compat` module has a `compile_error!` if both are
-# enabled), and in `async-io` mode ksni owns an `async_executor` driver
-# thread of its own and builds its zbus connection with
-# `internal_executor(false)`. It needs no ambient runtime.
+# System tray via StatusNotifierItem over D-Bus, the Linux tray protocol (pure Rust).
+# ksni uses `async-io`: its `tokio` mode is mutually exclusive (`compile_error!`), and
+# async-io mode runs its own executor thread, so no ambient runtime is needed.
 ksni = { version = "0.3", default-features = false, features = ["async-io"] }
-# The leftovers of what tokio used to provide here, all `smol`-family and
-# all already in the graph under ksni / mpris-server / zbus:
-#   async-executor — the one background thread in `background.rs` that
-#                    replaces `Runtime::spawn` for tray refreshes.
-#   futures-lite   — `block_on`, replacing `Runtime::block_on`.
-#   async-channel  — main thread -> MPRIS server thread property pushes,
-#                    replacing `tokio::sync::mpsc::unbounded_channel`.
+# smol-family replacements for what tokio provided, already in the graph via ksni/zbus:
+# async-executor (tray refresh thread), futures-lite (`block_on`) and async-channel
+# (main thread -> MPRIS server pushes).
 async-executor = "1"
 futures-lite = "2"
 async-channel = "2.5"
