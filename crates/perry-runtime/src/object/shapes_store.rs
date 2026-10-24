@@ -1389,8 +1389,8 @@ impl ShapeSlab {
     /// slab. The pointer stays valid until the record is removed; a removal
     /// only ever happens through the table's own retirement paths.
     #[inline]
-    pub(super) fn record_ptr(&self, id: u32) -> Option<*mut ShapeRecord> {
-        let (band, index) = locate(id);
+    pub(super) fn record_ptr(&self, id: ShapeId) -> Option<*mut ShapeRecord> {
+        let (band, index) = locate(id.0);
         if band >= 3 {
             return None;
         }
@@ -1401,28 +1401,28 @@ impl ShapeSlab {
 
     /// A copy of the record for `id`.
     #[inline]
-    pub(super) fn get(&self, id: u32) -> Option<ShapeRecord> {
+    pub(super) fn get(&self, id: ShapeId) -> Option<ShapeRecord> {
         // SAFETY: `record_ptr` only returns a cell of a live chunk.
         self.record_ptr(id).map(|p| unsafe { *p })
     }
 
     /// Lift `id` to the by-value descriptor.
     #[inline]
-    pub(super) fn lift(&self, id: u32) -> Option<ShapeDescriptor> {
+    pub(super) fn lift(&self, id: ShapeId) -> Option<ShapeDescriptor> {
         // SAFETY: as in `get`.
         self.record_ptr(id).map(|p| unsafe { (*p).lift(p) })
     }
 
     /// Install `record` under `id`, allocating the page and chunk on first
     /// touch. Returns the record it replaced, if the id was already present.
-    pub(super) fn insert(&mut self, id: u32, record: ShapeRecord) -> Option<ShapeRecord> {
+    pub(super) fn insert(&mut self, id: ShapeId, record: ShapeRecord) -> Option<ShapeRecord> {
         // Identity-boundary compatibility. Receivers never enter here.
         if let Some(ptr) = self.record_ptr(id) {
             let previous = unsafe { *ptr };
-            self.write_record(ptr, id, LayoutWord(previous.layout_word), record);
+            self.write_record(ptr, id.0, LayoutWord(previous.layout_word), record);
             Some(previous)
         } else {
-            self.publish_dynamic(ShapeId(id), record)
+            self.publish_dynamic(id, record)
                 .expect("shape publication failed");
             None
         }
@@ -1472,7 +1472,7 @@ impl ShapeSlab {
         identity: ShapeId,
         record: ShapeRecord,
     ) -> Result<PublishedShape, PublishError> {
-        if self.record_ptr(identity.0).is_some() {
+        if self.record_ptr(identity).is_some() {
             return Err(PublishError::IdentityConflict);
         }
         if self.next_row as usize >= self.region.capacity() {
@@ -1511,7 +1511,7 @@ impl ShapeSlab {
         if Self::word_for(identity, word.row().0, &record)? != word {
             return Err(PublishError::InvalidWord);
         }
-        if let Some(p) = self.record_ptr(identity.0) {
+        if let Some(p) = self.record_ptr(identity) {
             let existing = unsafe { &*p };
             let agrees = existing.layout_word == word.0
                 && existing.integrity_flags() == record.integrity_flags()
@@ -1560,13 +1560,13 @@ impl ShapeSlab {
     }
 
     pub(super) fn handle_by_identity(&self, identity: ShapeId) -> Option<LayoutWord> {
-        self.record_ptr(identity.0)
+        self.record_ptr(identity)
             .map(|p| LayoutWord(unsafe { (*p).layout_word }))
     }
 
     /// Clear the record under `id`, returning it if it was present.
-    pub(super) fn remove(&mut self, id: u32) -> Option<ShapeRecord> {
-        let (band, index) = locate(id);
+    pub(super) fn remove(&mut self, id: ShapeId) -> Option<ShapeRecord> {
+        let (band, index) = locate(id.0);
         if band >= 3 {
             return None;
         }
@@ -1590,7 +1590,7 @@ impl ShapeSlab {
 
     /// Visit every present record in id order. The callback may write
     /// through the record pointer; it must not insert or remove.
-    pub(super) fn for_each(&self, mut f: impl FnMut(u32, *mut ShapeRecord)) {
+    pub(super) fn for_each(&self, mut f: impl FnMut(ShapeId, *mut ShapeRecord)) {
         for dict in [0u8, 1, 2] {
             for (page_index, page) in self.dir(dict).iter().enumerate() {
                 let Some(page) = page.owned() else {
@@ -1604,7 +1604,7 @@ impl ShapeSlab {
                     for (slot, cell) in chunk.iter().enumerate() {
                         let p = unsafe { *cell.get() };
                         if !p.is_null() {
-                            f(Self::id_of(dict, base | slot), p);
+                            f(ShapeId(Self::id_of(dict, base | slot)), p);
                         }
                     }
                 }
@@ -1614,7 +1614,7 @@ impl ShapeSlab {
 
     /// Every present id, in id order.
     #[cfg(test)]
-    pub(super) fn ids(&self) -> Vec<u32> {
+    pub(super) fn ids(&self) -> Vec<ShapeId> {
         let mut ids = Vec::with_capacity(self.len);
         self.for_each(|id, _| ids.push(id));
         ids
@@ -1736,8 +1736,8 @@ impl ShapeSlab {
     /// shared empty is never written), and stays valid until the record is
     /// removed.
     #[inline(always)]
-    pub(super) fn agent_record(id: u32) -> *mut ShapeRecord {
-        let rel = id.wrapping_sub(SHAPE_ID_BASE);
+    pub(super) fn agent_record(id: ShapeId) -> *mut ShapeRecord {
+        let rel = id.0.wrapping_sub(SHAPE_ID_BASE);
         let band = band_of(rel);
         let dir = &AGENT_SHAPE_DIR[band];
         let index = rel.wrapping_sub(dir.base_rel) as usize;
@@ -1774,26 +1774,26 @@ impl ShapeSlab {
         unsafe { (*p).present() }.then_some(p)
     }
     /// Requires an existing owner/carrier; never use for identity absence checks.
-    pub(super) fn handle_record_ptr(&self, word: u32) -> Option<*mut ShapeRecord> {
-        if word & crate::codegen_abi::LAYOUT_TAG == 0
-            || LayoutWord(word).band() >= 3
-            || LayoutWord(word).row().0 >= self.next_row
+    pub(super) fn handle_record_ptr(&self, word: LayoutWord) -> Option<*mut ShapeRecord> {
+        if word.0 & crate::codegen_abi::LAYOUT_TAG == 0
+            || word.band() >= 3
+            || word.row().0 >= self.next_row
         {
             return None;
         }
-        let p = unsafe { self.record_for_handle(LayoutWord(word)) };
+        let p = unsafe { self.record_for_handle(word) };
         unsafe { (*p).present() }.then_some(p)
     }
-    pub(super) fn get_handle(&self, word: u32) -> Option<ShapeRecord> {
+    pub(super) fn get_handle(&self, word: LayoutWord) -> Option<ShapeRecord> {
         self.handle_record_ptr(word).map(|p| unsafe { *p })
     }
-    pub(super) fn lift_handle(&self, word: u32) -> Option<ShapeDescriptor> {
+    pub(super) fn lift_handle(&self, word: LayoutWord) -> Option<ShapeDescriptor> {
         self.handle_record_ptr(word)
             .map(|p| unsafe { (*p).lift(p) })
     }
-    pub(super) fn remove_handle(&mut self, word: u32) -> Option<ShapeRecord> {
+    pub(super) fn remove_handle(&mut self, word: LayoutWord) -> Option<ShapeRecord> {
         let p = self.handle_record_ptr(word)?;
-        self.remove(unsafe { (*p).shape_id })
+        self.remove(ShapeId(unsafe { (*p).shape_id }))
     }
     pub(super) fn for_each_handle(&self, mut f: impl FnMut(u32, *mut ShapeRecord)) {
         self.for_each(|_, p| f(unsafe { (*p).layout_word }, p));
@@ -1801,7 +1801,7 @@ impl ShapeSlab {
 
     /// [`Self::agent_record`], or `None` when the record is absent.
     #[inline(always)]
-    pub(super) fn agent_record_present(id: u32) -> Option<*mut ShapeRecord> {
+    pub(super) fn agent_record_present(id: ShapeId) -> Option<*mut ShapeRecord> {
         let record = Self::agent_record(id);
         // SAFETY: `agent_record` never returns null or a dead cell.
         unsafe { (*record).present() }.then_some(record)

@@ -9,8 +9,8 @@ fn record() -> ShapeRecord {
 fn reservation_and_identity_absence_never_commit_records() {
     let mut slab = ShapeSlab::new();
     assert_eq!(slab.region.committed_bytes(), 0);
-    assert!(slab.record_ptr(SHAPE_ID_BASE + 123).is_none());
-    assert!(slab.record_ptr(EXOTIC_SHAPE_ID_BASE + 17).is_none());
+    assert!(slab.record_ptr(ShapeId(SHAPE_ID_BASE + 123)).is_none());
+    assert!(slab.record_ptr(ShapeId(EXOTIC_SHAPE_ID_BASE + 17)).is_none());
     assert_eq!(slab.region.committed_bytes(), 0);
     let id = ShapeId(EXOTIC_SHAPE_ID_BASE + 17);
     let word = LayoutWord::new(LayoutRow(1), LAYOUT_BAND_EXOTIC, LAYOUT_KIND_PLAIN).unwrap();
@@ -19,8 +19,8 @@ fn reservation_and_identity_absence_never_commit_records() {
     assert_eq!(slab.region.committed_bytes(), slab.region.page);
     assert_eq!(slab.handle_by_identity(id), Some(word));
     assert_eq!(unsafe { (*slab.record_for_handle(word)).shape_id }, id.0);
-    slab.remove(id.0).unwrap();
-    assert!(slab.record_ptr(id.0).is_none());
+    slab.remove(id).unwrap();
+    assert!(slab.record_ptr(id).is_none());
     assert_eq!(slab.region.committed_bytes(), 0);
     // Recommit below the issued-row bound; Windows must not trust that bound.
     slab.publish_static(id, word, record()).unwrap();
@@ -34,7 +34,7 @@ fn page_boundary_keeps_partial_page_and_dynamic_rows_never_reuse() {
     let second = slab.publish_dynamic(ShapeId(SHAPE_ID_BASE + 6), record()).unwrap();
     assert_eq!(first.word.row().0, NATIVE_LAYOUT_ROWS);
     assert_eq!(second.word.row().0, NATIVE_LAYOUT_ROWS + 1);
-    slab.remove(first.identity.0).unwrap();
+    slab.remove(first.identity).unwrap();
     assert!(slab.region.committed_bytes() != 0);
     assert_eq!(unsafe { (*slab.record_for_handle(second.word)).shape_id }, second.identity.0);
     let third = slab.publish_dynamic(ShapeId(SHAPE_ID_BASE + 7), record()).unwrap();
@@ -46,9 +46,9 @@ fn page_boundary_keeps_partial_page_and_dynamic_rows_never_reuse() {
         slab.publish_static(identity, word, record()).unwrap();
     }
     let low = ShapeId(SHAPE_ID_BASE + 100 + boundary - 1);
-    slab.remove(low.0).unwrap();
-    assert!(slab.record_ptr(low.0).is_none());
-    assert!(slab.record_ptr(SHAPE_ID_BASE + 100 + boundary).is_some());
+    slab.remove(low).unwrap();
+    assert!(slab.record_ptr(low).is_none());
+    assert!(slab.record_ptr(ShapeId(SHAPE_ID_BASE + 100 + boundary)).is_some());
 }
 
 #[test]

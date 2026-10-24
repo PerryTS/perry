@@ -145,11 +145,12 @@ fn family_birth_keeps_holes_and_live_prototype_and_checks_symbol_identity() {
         )));
         SYMBOL = sym.get_nanbox_u64();
         let obj = scope.root_raw_mut_ptr(allocate(&f, &p).expect("family path must be live"));
+        let first_word = obj.with_const_ptr::<ObjectHeader, _>(|o| (*o).parent_class_id);
         obj.with_const_ptr::<ObjectHeader, _>(|o| {
-            assert_eq!(
-                (*o).parent_class_id,
-                (*std::ptr::addr_of!(LAYOUT)).layout_id
-            );
+            // The shared descriptor stays immutable (no per-evaluation word);
+            // the object's own header names its layout.
+            assert_eq!((*std::ptr::addr_of!(LAYOUT)).layout_id, 0);
+            assert!(super::super::shapes::is_layout_word((*o).parent_class_id));
             assert_eq!(
                 super::super::shapes::shape_object_kind_for_word((*o).parent_class_id),
                 Some(super::super::shapes::ShapeObjectKind::Ordinary)
@@ -184,10 +185,7 @@ fn family_birth_keeps_holes_and_live_prototype_and_checks_symbol_identity() {
         });
         assert!(stored, "the checked fixed-position store must be live");
         obj.with_const_ptr::<ObjectHeader, _>(|o| {
-            assert_eq!(
-                (*o).parent_class_id,
-                (*std::ptr::addr_of!(LAYOUT)).layout_id
-            );
+            assert!(super::super::shapes::is_layout_word((*o).parent_class_id));
             assert_eq!(
                 *o.cast::<u8>()
                     .add(std::mem::size_of::<ObjectHeader>())
@@ -202,10 +200,18 @@ fn family_birth_keeps_holes_and_live_prototype_and_checks_symbol_identity() {
             (q.get_nanbox_u64() & crate::value::POINTER_MASK) as usize,
         )
         .unwrap();
-        assert!(
-            allocate(&f, &q).is_none(),
-            "a different current prototype takes ordinary construction"
+        // The shared descriptor binds nothing: a different prototype is bound
+        // at its own birth, to its own layout.
+        let other = scope.root_raw_mut_ptr(
+            allocate(&f, &q).expect("a different prototype binds its own layout"),
         );
+        other.with_const_ptr::<ObjectHeader, _>(|o| {
+            assert_ne!((*o).parent_class_id, first_word);
+            assert_eq!(
+                super::super::shapes::object_prototype_word(o),
+                q.get_nanbox_u64()
+            );
+        });
         let extra = b"later";
         let key = crate::string::js_string_from_bytes(extra.as_ptr(), extra.len() as u32);
         obj.with_mut_ptr::<ObjectHeader, _>(|o| {
@@ -255,14 +261,18 @@ fn family_birth_keeps_holes_and_live_prototype_and_checks_symbol_identity() {
         );
         let changed = crate::symbol::js_symbol_new(f64::from_bits(crate::value::TAG_UNDEFINED));
         crate::r#box::scope::js_scope_set(cells, 1, changed.to_bits() as i64);
-        assert!(
-            allocate(&scoped, &p).is_none(),
+        let rebound = allocate(&scoped, &p).expect("another binding binds its own layout");
+        assert_ne!(
+            (*rebound).parent_class_id,
+            first_word,
             "another binding cannot reuse this layout"
         );
         SYMBOL =
             crate::symbol::js_symbol_new(f64::from_bits(crate::value::TAG_UNDEFINED)).to_bits();
-        assert!(
-            allocate(&f, &p).is_none(),
+        let rebound = allocate(&f, &p).expect("a different symbol binds its own layout");
+        assert_ne!(
+            (*rebound).parent_class_id,
+            first_word,
             "a different symbol cannot use the first binding's layout"
         );
         SYMBOL = crate::value::TAG_UNDEFINED;

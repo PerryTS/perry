@@ -739,6 +739,21 @@ fn constfn_finalizer_refuses_wrong_body_layout_and_rebindable_this() {
     let entries = [ConstFnStaticEntry { slot: 0, info }];
     let packed = b"ltcf_refuse_m\0";
     let scope = crate::gc::RuntimeHandleScope::new();
+    // The compiled flow seeds the static word before user code; a finalizer
+    // request names only a seeded (published) word.
+    assert_eq!(
+        fixture_shape_seed_plain_constfn(
+            fixture_word(0x7871),
+            packed.as_ptr(),
+            packed.len() as u32,
+            1,
+            1,
+            3,
+            entries.as_ptr(),
+            1
+        ),
+        fixture_word(0x7871)
+    );
     // Establish that these exact birth facts promote with the supported body.
     // Otherwise every refusal below could be an unrelated kind/layout miss.
     let control = scope.root_raw_mut_ptr(alloc_constfn_plain_fixture(&[b"ltcf_refuse_m"]));

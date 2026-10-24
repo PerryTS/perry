@@ -558,8 +558,11 @@ mod descriptor_tests_8067 {
                     alloc_shape_id(proto_id).unwrap(),
                     alloc_exotic_shape_id(proto_id).unwrap(),
                 ] {
-                    assert_eq!(shape_word_kind(id), kind, "{id:#x}");
-                    assert_eq!(shape_word_may_be_linked(id), kind != 0, "{id:#x}");
+                    assert_eq!(
+                        (id & SHAPE_ID_KIND_MASK) >> SHAPE_ID_KIND_SHIFT,
+                        kind,
+                        "{id:#x}"
+                    );
                 }
             }
         }
@@ -629,7 +632,7 @@ mod descriptor_tests_8067 {
         let external =
             alloc_shape_id(PROTO_ID_DEFAULT).expect("shape range unexpectedly exhausted");
         assert!(shapes_slot_list::install_external_shape_id(
-            external,
+            crate::codegen_abi::ShapeId(external),
             keys as *const ArrayHeader,
             1,
             1,
@@ -638,18 +641,22 @@ mod descriptor_tests_8067 {
             crate::object::field_rep::REP_ANY,
         ));
 
+        // Interning speaks layout words; the external IDENTITY is what must
+        // lead the family and be preferred for later births.
+        let preferred = shape_descriptor_ensure(keys as *const ArrayHeader, 1, 1).unwrap();
+        assert_ne!(preferred, local);
         assert_eq!(
-            shape_descriptor_ensure(keys as *const ArrayHeader, 1, 1).unwrap(),
-            external,
+            shape_record_for_word(preferred).unwrap().identity(),
+            crate::codegen_abi::ShapeId(external),
             "the process-global id should be preferred for later births"
         );
         assert_eq!(
             test_shape_ids_for_keys(keys),
-            vec![external, local],
+            vec![preferred, local],
             "the external id must lead the family so interning prefers it"
         );
         assert!(shape_descriptor_for_word(local).is_some());
-        assert!(shape_descriptor_for_word(external).is_some());
+        assert!(shape_descriptor_for_word(preferred).is_some());
 
         test_drop_shape_descriptors(keys);
     }
@@ -703,11 +710,15 @@ mod descriptor_tests_8067 {
                 None,
                 "another RuntimeState resolved a foreign agent's ShapeId"
             );
-            shape_descriptor_ensure(fake_keys as *const ArrayHeader, 2, 2)
-                .expect("shape range unexpectedly exhausted")
+            let word = shape_descriptor_ensure(fake_keys as *const ArrayHeader, 2, 2)
+                .expect("shape range unexpectedly exhausted");
+            shape_record_for_word(word).unwrap().identity()
         })
         .join()
         .expect("agent-isolation thread panicked");
+        // Layout words are per-agent rows and may coincide; the identities
+        // are process-global and may not.
+        let local = shape_record_for_word(local).unwrap().identity();
         assert_ne!(
             local, foreign,
             "process-global ids must not alias by address"
@@ -742,9 +753,12 @@ mod descriptor_tests_8067 {
         .join()
         .expect("agent-isolation thread panicked");
 
+        let identity = shape_record_for_word(id).unwrap().identity();
         test_drop_shape_descriptors(keys);
+        // A retired word may address decommitted Region pages (words are only
+        // read through a live carrier); the retired record is read by identity.
         assert_eq!(
-            shape_object_kind_for_word(id),
+            shape_object_kind_by_id(identity.0),
             None,
             "a retired record must have no kind"
         );
@@ -757,9 +771,12 @@ mod descriptor_tests_8067 {
         let module_id = shape_descriptor_ensure(module_keys as *const ArrayHeader, 2, 2)
             .expect("shape range unexpectedly exhausted");
         let worker_keys = 0x8067_0000_0000_1900usize;
+        // The module's process-global identity; its layout word is this
+        // agent's row and means nothing to the worker.
+        let module_identity = shape_record_for_word(module_id).unwrap().identity();
         std::thread::spawn(move || {
             assert!(shapes_slot_list::install_external_shape_id(
-                module_id,
+                module_identity,
                 worker_keys as *const ArrayHeader,
                 2,
                 2,
@@ -768,7 +785,7 @@ mod descriptor_tests_8067 {
                 crate::object::field_rep::REP_ANY,
             ));
             assert_eq!(
-                shape_descriptor_for_word(module_id).unwrap().keys,
+                shape_descriptor_by_id(module_identity.0).unwrap().keys,
                 worker_keys as u64,
                 "worker resolved a module ShapeId to another agent's keys pointer"
             );

@@ -1773,7 +1773,7 @@ pub(crate) fn shape_descriptor_find_with_rep(
     let ids = inner.by_facts.get(&facts)?;
     let slab = table.slab();
     ids.as_slice().iter().copied().find(|&id| {
-        slab.handle_record_ptr(id).is_some_and(|record| {
+        slab.handle_record_ptr(crate::codegen_abi::LayoutWord(id)).is_some_and(|record| {
             // SAFETY: live slab record, read immediately.
             let record = unsafe { *record };
             record.has(RECORD_FLAG_FACTS_INDEXED)
@@ -2018,7 +2018,7 @@ fn shape_descriptor_intern_with_special_mode(
     if let Some(ids) = inner.by_facts.get(&facts) {
         let slab = table.slab();
         for &id in ids.as_slice() {
-            let Some(record) = slab.handle_record_ptr(id) else {
+            let Some(record) = slab.handle_record_ptr(crate::codegen_abi::LayoutWord(id)) else {
                 continue;
             };
             // SAFETY: live slab record, read immediately.
@@ -2119,7 +2119,7 @@ fn shape_descriptor_mint_fresh(
                 // id in the deterministic namespace, not a mutation epoch.
                 || semantic_generation >> 32 == 0x8000_0000)
             && !super::field_rep::has_deprecated(rep)
-            && table.slab().record_ptr(id).is_none()
+            && table.slab().record_ptr(crate::codegen_abi::ShapeId(id)).is_none()
     });
     if let (Some(requested), None) = (requested, adopted) {
         drop(inner);
@@ -2157,7 +2157,7 @@ fn shape_descriptor_mint_fresh(
         if let Some(ids) = inner.families.get(&keys_id) {
             let slab = table.slab();
             for &fid in ids.as_slice() {
-                if let Some(record) = slab.get_handle(fid) {
+                if let Some(record) = slab.get_handle(crate::codegen_abi::LayoutWord(fid)) {
                     family_facts.push(crate::object::shape_mint_census::MintFacts::of(
                         &record.lift(std::ptr::null_mut()),
                     ));
@@ -3796,7 +3796,7 @@ pub(crate) unsafe fn birth_stamp_object_shape(
             // The installer speaks identities; the supplied word names this
             // agent's row, whose identity (if any) is what may conflict.
             || shape_record_for_word(runtime_shape_id).is_some_and(|r| shapes_slot_list::install_external_shape_id(
-                r.identity().0,
+                r.identity(),
                 keys,
                 key_count,
                 live_inline_slot_count,
@@ -4191,7 +4191,7 @@ fn retire_owned_shape_siblings(keys: u64, keep: u32) {
                 .copied()
                 .filter(|&id| {
                     id != keep
-                        && table.slab().get_handle(id).is_some_and(|record| {
+                        && table.slab().get_handle(crate::codegen_abi::LayoutWord(id)).is_some_and(|record| {
                             !record.has(RECORD_FLAG_CACHE_CARRIER | RECORD_FLAG_EXTERNAL_CARRIER)
                         })
                 })
@@ -5147,7 +5147,7 @@ unsafe fn bits_name_object_of_class(bits: u64, class: u32) -> bool {
 #[inline]
 pub(crate) fn shape_proto_id(id: u32) -> Option<u64> {
     let table = &crate::state::state().shapes;
-    let record = table.slab().handle_record_ptr(id)?;
+    let record = table.slab().handle_record_ptr(crate::codegen_abi::LayoutWord(id))?;
     // SAFETY: live slab record, read immediately on this agent.
     Some(unsafe { (*record).proto_id })
 }
@@ -5336,7 +5336,7 @@ pub(crate) unsafe fn object_layout_stamp(obj: *const crate::object::ObjectHeader
 /// walk skips it (`record_ptr` is `None`) and the next scan drops it.
 fn remove_descriptor_and_reverse_indices(inner: &mut ShapeTableInner, id: u32) {
     let table = &crate::state::state().shapes;
-    let Some(indexed) = table.slab().get_handle(id).map(|record| record.keys) else {
+    let Some(indexed) = table.slab().get_handle(crate::codegen_abi::LayoutWord(id)).map(|record| record.keys) else {
         return;
     };
     remove_descriptor_indexed_under(inner, id, indexed);
@@ -5349,11 +5349,12 @@ fn remove_descriptor_and_reverse_indices(inner: &mut ShapeTableInner, id: u32) {
 fn remove_descriptor_indexed_under(inner: &mut ShapeTableInner, id: u32, indexed: u64) {
     let table = &crate::state::state().shapes;
     // SAFETY: no slab reference is held by the caller across this call.
-    let Some(record) = (unsafe { table.slab_mut().remove_handle(id) }) else {
+    let Some(record) = (unsafe { table.slab_mut().remove_handle(crate::codegen_abi::LayoutWord(id)) }) else {
         return;
     };
     #[cfg(any(test, feature = "shape-mint-diag"))]
-    crate::object::shape_mint_census::note_retire(id);
+    // The census is keyed by the minted identity, not the layout word.
+    crate::object::shape_mint_census::note_retire(record.shape_id);
     if record.has(RECORD_FLAG_FACTS_INDEXED) {
         inner.facts_remove(record.facts_key_with_keys(indexed), id);
     }
@@ -5920,7 +5921,7 @@ fn scan_shape_table_keys_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
         // one (its duty is the strongest), else any present member.
         let mut descriptor: Option<ShapeDescriptor> = None;
         for &id in ids.as_slice() {
-            if let Some(lifted) = slab.lift_handle(id) {
+            if let Some(lifted) = slab.lift_handle(crate::codegen_abi::LayoutWord(id)) {
                 if lifted.old_carrier || lifted.cache_carrier {
                     descriptor = Some(lifted);
                     break;
@@ -5952,7 +5953,7 @@ fn scan_shape_table_keys_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
         }
         if moved {
             for &id in ids.as_slice() {
-                if let Some(record) = slab.handle_record_ptr(id) {
+                if let Some(record) = slab.handle_record_ptr(crate::codegen_abi::LayoutWord(id)) {
                     // SAFETY: live slab record, single-threaded agent. A live
                     // receiver's edge may already have written the same
                     // forwarded address here; the store is idempotent.
@@ -6048,7 +6049,7 @@ fn move_shape_family(table: &ShapeTable, inner: &mut ShapeTableInner, old: u64, 
         return;
     }
     for &id in ids.as_slice() {
-        let Some(record) = table.slab().get_handle(id) else {
+        let Some(record) = table.slab().get_handle(crate::codegen_abi::LayoutWord(id)) else {
             continue;
         };
         // The accelerator was keyed with the OLD address; the other five
@@ -6132,7 +6133,7 @@ fn family_has_root_carrier(table: &ShapeTable, inner: &ShapeTableInner, keys: u6
         ids.as_slice().iter().any(|&id| {
             table
                 .slab()
-                .get_handle(id)
+                .get_handle(crate::codegen_abi::LayoutWord(id))
                 .is_some_and(|record| record.has(RECORD_FLAG_OLD_CARRIER) || record.cache_carrier())
         })
     })
@@ -6219,7 +6220,7 @@ fn scan_shape_keys_address(
         let slab = table.slab();
         let mut descriptor: Option<ShapeDescriptor> = None;
         for &id in &ids {
-            if let Some(lifted) = slab.lift_handle(id) {
+            if let Some(lifted) = slab.lift_handle(crate::codegen_abi::LayoutWord(id)) {
                 if lifted.old_carrier || lifted.cache_carrier {
                     descriptor = Some(lifted);
                     break;
@@ -6246,7 +6247,7 @@ fn scan_shape_keys_address(
                 } else {
                     if moved {
                         for &id in &ids {
-                            if let Some(record) = slab.handle_record_ptr(id) {
+                            if let Some(record) = slab.handle_record_ptr(crate::codegen_abi::LayoutWord(id)) {
                                 // SAFETY: live slab record, single-threaded agent;
                                 // the store is idempotent (see the full walk).
                                 unsafe { (*record).keys = addr as u64 };
@@ -6507,7 +6508,7 @@ pub(crate) use integrity::{transition_object_integrity, INTEGRITY_FLAGS};
 
 /// Resolve an unchanged global identity. Absent IDs never address the Region.
 pub(crate) fn record_by_identity(identity: crate::codegen_abi::ShapeId) -> Option<ShapeRecordRef> {
-    std::ptr::NonNull::new(ShapeSlab::agent_record_present(identity.0)?).map(ShapeRecordRef)
+    std::ptr::NonNull::new(ShapeSlab::agent_record_present(identity)?).map(ShapeRecordRef)
 }
 pub(crate) fn handle_by_identity(
     identity: crate::codegen_abi::ShapeId,

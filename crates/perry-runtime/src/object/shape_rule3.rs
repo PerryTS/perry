@@ -715,8 +715,8 @@ mod tests {
 
     /// `DateCell`'s relayout, with the value that motivated it.
     ///
-    /// `-1.0` is `0xBFF0_0000_0000_0000`: with the timestamp at `+0` its high
-    /// word landed at `+4` as `0xBFF0_0000`, a live-looking ShapeId. The
+    /// `-0.0` is `0x8000_0000_0000_0000`: with the timestamp at `+0` its high
+    /// word landed at `+4` as `0x8000_0000`, a live-looking layout word. The
     /// first assertion pins that the witness is real, so this test cannot
     /// quietly stop testing anything; the rest check every date the JS spec
     /// admits and that the value still round-trips through the new layout.
@@ -724,9 +724,9 @@ mod tests {
     fn rule3_date_cell_never_carries_a_shape_id_at_plus_four() {
         let _lock = crate::gc::global_side_table_test_lock();
         assert!(
-            is_layout_word((f64::to_bits(-1.0) >> 32) as u32),
-            "the witness must still be a witness: the high word of -1.0 is \
-             inside the ShapeId range, which is why the timestamp cannot live \
+            is_layout_word((f64::to_bits(-0.0) >> 32) as u32),
+            "the witness must still be a witness: the high word of -0.0 is \
+             a valid layout word, which is why the timestamp cannot live \
              at payload +0"
         );
 

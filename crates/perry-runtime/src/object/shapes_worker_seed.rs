@@ -15,7 +15,7 @@ use super::ShapeObjectKind;
 
 #[derive(Clone)]
 struct SeedRecord {
-    id: u32,
+    id: crate::codegen_abi::ShapeId,
     static_word: Option<crate::codegen_abi::LayoutWord>,
     names: Vec<Vec<u8>>,
     logical_key_count: u32,
@@ -271,7 +271,7 @@ fn s7b_worker_seeds_an_unbuilt_class_word_without_a_foreign_pointer() {
         assert!(seed
             .0
             .iter()
-            .any(|r| r.id == id && r.class_word == crate::value::TAG_UNDEFINED));
+            .any(|r| r.id.0 == id && r.class_word == crate::value::TAG_UNDEFINED));
         let image = crate::object::class_image::current_image_handle();
         std::thread::spawn(move || {
             crate::object::class_image::adopt_image(image);

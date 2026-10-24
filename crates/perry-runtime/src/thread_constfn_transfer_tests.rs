@@ -169,7 +169,7 @@ fn replay(seed_first: bool, production_seed: bool) {
         if seed_first || production_seed {
             assert_eq!(ids[0], FINAL);
         } else {
-            assert!(!shapes::is_static_shape_id(ids[0]));
+            assert!(!shapes::is_static_layout_word(ids[0]));
             assert!(shapes::shape_is_retired(FINAL));
             // Object-first must keep its old carriers valid when the external
             // static id arrives, and subsequent reconstructions use that id.

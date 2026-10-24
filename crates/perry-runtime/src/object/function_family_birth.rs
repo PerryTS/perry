@@ -183,16 +183,21 @@ unsafe fn try_symbol_store(
     }
     let obj = address as *mut ObjectHeader;
     let d = &*desc;
-    let id = layout_desc::load_layout_id(desc);
+    // The shared descriptor holds no per-evaluation word: the object proves
+    // its own layout. Its shape must have this descriptor's key count and the
+    // key at this position, whose slot is the position (codegen numbers a
+    // function layout's slots by key index).
     if d.variant != crate::codegen_abi::LAYOUT_VARIANT_FUNCTION_CONSTRUCTOR
-        || (*obj).parent_class_id != id
         || position >= d.key_count
     {
         return false;
     }
-    let Some(record) = super::shapes::shape_record_for_word(id) else {
+    let Some(record) = super::shapes::shape_record_for_word((*obj).parent_class_id) else {
         return false;
     };
+    if record.logical_key_count() != d.key_count {
+        return false;
+    }
     let keys = record.keys() as *const crate::array::ArrayHeader;
     if keys.is_null()
         || *crate::array::array_elements_ptr(keys).add(position as usize) != key.to_bits()
@@ -201,6 +206,7 @@ unsafe fn try_symbol_store(
     }
     let k = &*d.keys.add(position as usize);
     if k.attrs != crate::codegen_abi::LAYOUT_KEY_OPTIONAL
+        || k.slot != position
         || k.slot >= super::object_inline_capacity(obj)
         || super::proto_validity::object_is_marked_prototype(address)
     {

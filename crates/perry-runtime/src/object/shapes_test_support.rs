@@ -145,7 +145,7 @@ pub(crate) fn test_rekey_shape_family(old: usize, new: usize) {
     let mut inner = table.inner.borrow_mut();
     if let Some(ids) = inner.families.remove(&(old as u64)) {
         for &id in ids.as_slice() {
-            let Some(record) = table.slab().get_handle(id) else {
+            let Some(record) = table.slab().get_handle(crate::codegen_abi::LayoutWord(id)) else {
                 continue;
             };
             if record.has(shapes_store::RECORD_FLAG_FACTS_INDEXED) {
@@ -206,16 +206,16 @@ pub(crate) fn test_shape_index_len(keys_id: usize) -> u32 {
 /// A process-global shape id no descriptor in this agent has claimed, for the
 /// `install_external_shape_id` path.
 #[cfg(test)]
-pub(crate) fn test_unused_external_shape_id() -> u32 {
+pub(crate) fn test_unused_external_shape_id() -> crate::codegen_abi::ShapeId {
     let table = &crate::state::state().shapes;
     // The top of the ORDINARY band: an external (typed) id is an ordinary
     // shape, which sites may hold; the dictionary band above it is not. Its
     // plain-kind granule, as a default-identity id is minted.
     let mut id = super::SITE_SHAPE_ID_END - 3 * (1 << super::SHAPE_ID_KIND_SHIFT) - 1;
-    while table.slab().record_ptr(id).is_some() {
+    while table.slab().record_ptr(crate::codegen_abi::ShapeId(id)).is_some() {
         id -= 1;
     }
-    id
+    crate::codegen_abi::ShapeId(id)
 }
 
 /// Build the slot index for `keys` through the PRODUCTION path
@@ -256,7 +256,7 @@ pub(crate) fn test_shape_index_migrate_after_delete(
 /// `shapes_slot_list::install_external_shape_id`, same reason.
 #[cfg(test)]
 pub(crate) fn test_install_external_shape_id(
-    id: u32,
+    id: crate::codegen_abi::ShapeId,
     keys: *const super::ArrayHeader,
     logical_key_count: u32,
     live_inline_slot_count: u32,
@@ -278,7 +278,7 @@ pub(crate) fn test_shape_record_is_carrier(id: u32) -> bool {
     crate::state::state()
         .shapes
         .slab()
-        .get_handle(id)
+        .get_handle(crate::codegen_abi::LayoutWord(id))
         .is_some_and(|record| record.cache_carrier())
 }
 
@@ -286,7 +286,7 @@ pub(crate) fn test_shape_record_is_carrier(id: u32) -> bool {
 /// retaining the live authoritative record and its keys family.
 pub(crate) fn test_remove_facts_index(id: u32) {
     let table = &crate::state::state().shapes;
-    let record = table.slab().get_handle(id).unwrap();
+    let record = table.slab().get_handle(crate::codegen_abi::LayoutWord(id)).unwrap();
     let facts = record.facts_key_with_keys(record.keys);
     table.inner.borrow_mut().facts_remove(facts, id);
 }
