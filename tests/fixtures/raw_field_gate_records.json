@@ -1,0 +1,427 @@
+{
+  "records": [
+    {
+      "function": "perry_fn_raw_numeric_object_fields_ts__forceDynamicWrite",
+      "block_label": "stack_guard.ok.1",
+      "region_id": null,
+      "source_function": "forceDynamicWrite",
+      "lowering_block": "stack_guard.ok.1",
+      "local_id": null,
+      "expr_kind": "materialize_js_value_bits",
+      "source_key": null,
+      "semantic": "js_value",
+      "native_rep": {
+        "kind": "js_value_bits"
+      },
+      "native_rep_name": "js_value_bits",
+      "llvm_ty": "i64",
+      "llvm_value": "%r10",
+      "consumer": "materialize_js_value_bits",
+      "bounds_state": null,
+      "alias_state": null,
+      "access_mode": null,
+      "buffer_access": null,
+      "native_owned_view": null,
+      "buffer_view_pointer_state": null,
+      "materialization_reason": "function_abi",
+      "fallback_reason": null,
+      "native_value_state": "materialized",
+      "native_abi_transition": {
+        "from_native_rep": "js_value",
+        "to_native_rep": "js_value_bits",
+        "op": "js_value_to_bits",
+        "reason": "function_abi",
+        "lossy": false
+      },
+      "scalar_conversion": {
+        "from_native_rep": "js_value",
+        "to_native_rep": "js_value_bits",
+        "op": "js_value_to_bits",
+        "reason": "function_abi",
+        "lossy": false
+      },
+      "native_abi_type": null,
+      "pod_layout": null,
+      "pod_record_view": null,
+      "consumed_facts": [
+        {
+          "fact_id": "native_region.representation.unknown.js_value_bits",
+          "kind": "representation",
+          "local_id": null,
+          "state": "consumed",
+          "detail": "js_value_bits",
+          "reason": null
+        }
+      ],
+      "rejected_facts": [
+        {
+          "fact_id": "native_region.materialization_hazard.unknown.function_abi",
+          "kind": "materialization_hazard",
+          "local_id": null,
+          "state": "invalidated",
+          "detail": "function_abi",
+          "reason": "function_abi"
+        }
+      ],
+      "emitted_inbounds": false,
+      "emitted_noalias": false,
+      "notes": []
+    },
+    {
+      "function": "perry_fn_raw_numeric_object_fields_ts__rawNumericObjectFieldsChecksum",
+      "block_label": "classval.join.4",
+      "region_id": null,
+      "source_function": "rawNumericObjectFieldsChecksum",
+      "lowering_block": "classval.join.4",
+      "local_id": 3,
+      "expr_kind": "ScalarObjectFieldSet",
+      "source_key": null,
+      "semantic": "js_value",
+      "native_rep": {
+        "kind": "js_value"
+      },
+      "native_rep_name": "js_value",
+      "llvm_ty": "double",
+      "llvm_value": "4.5",
+      "consumer": "scalar_object_field_store",
+      "bounds_state": null,
+      "alias_state": null,
+      "access_mode": null,
+      "buffer_access": null,
+      "native_owned_view": null,
+      "buffer_view_pointer_state": null,
+      "materialization_reason": null,
+      "fallback_reason": null,
+      "native_value_state": "region_local",
+      "native_abi_transition": null,
+      "scalar_conversion": null,
+      "native_abi_type": null,
+      "pod_layout": null,
+      "pod_record_view": null,
+      "consumed_facts": [],
+      "rejected_facts": [],
+      "emitted_inbounds": false,
+      "emitted_noalias": false,
+      "notes": [
+        "field=value",
+        "raw_f64_field=1"
+      ]
+    },
+    {
+      "function": "perry_fn_raw_numeric_object_fields_ts__rawNumericObjectFieldsChecksum",
+      "block_label": "classval.join.4",
+      "region_id": null,
+      "source_function": "rawNumericObjectFieldsChecksum",
+      "lowering_block": "classval.join.4",
+      "local_id": 3,
+      "expr_kind": "ScalarObjectFieldSet",
+      "source_key": null,
+      "semantic": "js_number",
+      "native_rep": {
+        "kind": "f64"
+      },
+      "native_rep_name": "f64",
+      "llvm_ty": "double",
+      "llvm_value": "4.5",
+      "consumer": "scalar_object_field_store.raw_f64",
+      "bounds_state": null,
+      "alias_state": null,
+      "access_mode": null,
+      "buffer_access": null,
+      "native_owned_view": null,
+      "buffer_view_pointer_state": null,
+      "materialization_reason": null,
+      "fallback_reason": null,
+      "native_value_state": "region_local",
+      "native_abi_transition": null,
+      "scalar_conversion": null,
+      "native_abi_type": null,
+      "pod_layout": null,
+      "pod_record_view": null,
+      "consumed_facts": [
+        {
+          "fact_id": "native_region.representation.3.f64",
+          "kind": "representation",
+          "local_id": 3,
+          "state": "consumed",
+          "detail": "f64",
+          "reason": null
+        }
+      ],
+      "rejected_facts": [],
+      "emitted_inbounds": false,
+      "emitted_noalias": false,
+      "notes": [
+        "field=value",
+        "raw_f64_field=1"
+      ]
+    },
+    {
+      "function": "perry_fn_raw_numeric_object_fields_ts__rawNumericObjectFieldsChecksum",
+      "block_label": "classval.join.4",
+      "region_id": null,
+      "source_function": "rawNumericObjectFieldsChecksum",
+      "lowering_block": "classval.join.4",
+      "local_id": 3,
+      "expr_kind": "ScalarObjectFieldSet",
+      "source_key": null,
+      "semantic": "js_value",
+      "native_rep": {
+        "kind": "js_value"
+      },
+      "native_rep_name": "js_value",
+      "llvm_ty": "double",
+      "llvm_value": "7.5",
+      "consumer": "scalar_object_field_store",
+      "bounds_state": null,
+      "alias_state": null,
+      "access_mode": null,
+      "buffer_access": null,
+      "native_owned_view": null,
+      "buffer_view_pointer_state": null,
+      "materialization_reason": null,
+      "fallback_reason": null,
+      "native_value_state": "region_local",
+      "native_abi_transition": null,
+      "scalar_conversion": null,
+      "native_abi_type": null,
+      "pod_layout": null,
+      "pod_record_view": null,
+      "consumed_facts": [],
+      "rejected_facts": [],
+      "emitted_inbounds": false,
+      "emitted_noalias": false,
+      "notes": [
+        "field=total",
+        "raw_f64_field=1"
+      ]
+    },
+    {
+      "function": "perry_fn_raw_numeric_object_fields_ts__rawNumericObjectFieldsChecksum",
+      "block_label": "classval.join.4",
+      "region_id": null,
+      "source_function": "rawNumericObjectFieldsChecksum",
+      "lowering_block": "classval.join.4",
+      "local_id": 3,
+      "expr_kind": "ScalarObjectFieldSet",
+      "source_key": null,
+      "semantic": "js_number",
+      "native_rep": {
+        "kind": "f64"
+      },
+      "native_rep_name": "f64",
+      "llvm_ty": "double",
+      "llvm_value": "7.5",
+      "consumer": "scalar_object_field_store.raw_f64",
+      "bounds_state": null,
+      "alias_state": null,
+      "access_mode": null,
+      "buffer_access": null,
+      "native_owned_view": null,
+      "buffer_view_pointer_state": null,
+      "materialization_reason": null,
+      "fallback_reason": null,
+      "native_value_state": "region_local",
+      "native_abi_transition": null,
+      "scalar_conversion": null,
+      "native_abi_type": null,
+      "pod_layout": null,
+      "pod_record_view": null,
+      "consumed_facts": [
+        {
+          "fact_id": "native_region.representation.3.f64",
+          "kind": "representation",
+          "local_id": 3,
+          "state": "consumed",
+          "detail": "f64",
+          "reason": null
+        }
+      ],
+      "rejected_facts": [],
+      "emitted_inbounds": false,
+      "emitted_noalias": false,
+      "notes": [
+        "field=total",
+        "raw_f64_field=1"
+      ]
+    },
+    {
+      "function": "perry_fn_raw_numeric_object_fields_ts__rawNumericObjectFieldsChecksum",
+      "block_label": "classval.join.4",
+      "region_id": null,
+      "source_function": "rawNumericObjectFieldsChecksum",
+      "lowering_block": "classval.join.4",
+      "local_id": 3,
+      "expr_kind": "ScalarObjectFieldGet",
+      "source_key": null,
+      "semantic": "js_value",
+      "native_rep": {
+        "kind": "js_value"
+      },
+      "native_rep_name": "js_value",
+      "llvm_ty": "double",
+      "llvm_value": "%r21",
+      "consumer": "scalar_object_field_load",
+      "bounds_state": null,
+      "alias_state": null,
+      "access_mode": null,
+      "buffer_access": null,
+      "native_owned_view": null,
+      "buffer_view_pointer_state": null,
+      "materialization_reason": null,
+      "fallback_reason": null,
+      "native_value_state": "region_local",
+      "native_abi_transition": null,
+      "scalar_conversion": null,
+      "native_abi_type": null,
+      "pod_layout": null,
+      "pod_record_view": null,
+      "consumed_facts": [],
+      "rejected_facts": [],
+      "emitted_inbounds": false,
+      "emitted_noalias": false,
+      "notes": [
+        "field=value",
+        "raw_f64_field=1"
+      ]
+    },
+    {
+      "function": "perry_fn_raw_numeric_object_fields_ts__rawNumericObjectFieldsChecksum",
+      "block_label": "classval.join.4",
+      "region_id": null,
+      "source_function": "rawNumericObjectFieldsChecksum",
+      "lowering_block": "classval.join.4",
+      "local_id": 3,
+      "expr_kind": "ScalarObjectFieldGet",
+      "source_key": null,
+      "semantic": "js_number",
+      "native_rep": {
+        "kind": "f64"
+      },
+      "native_rep_name": "f64",
+      "llvm_ty": "double",
+      "llvm_value": "%r21",
+      "consumer": "scalar_object_field_load.raw_f64",
+      "bounds_state": null,
+      "alias_state": null,
+      "access_mode": null,
+      "buffer_access": null,
+      "native_owned_view": null,
+      "buffer_view_pointer_state": null,
+      "materialization_reason": null,
+      "fallback_reason": null,
+      "native_value_state": "region_local",
+      "native_abi_transition": null,
+      "scalar_conversion": null,
+      "native_abi_type": null,
+      "pod_layout": null,
+      "pod_record_view": null,
+      "consumed_facts": [
+        {
+          "fact_id": "native_region.representation.3.f64",
+          "kind": "representation",
+          "local_id": 3,
+          "state": "consumed",
+          "detail": "f64",
+          "reason": null
+        }
+      ],
+      "rejected_facts": [],
+      "emitted_inbounds": false,
+      "emitted_noalias": false,
+      "notes": [
+        "field=value",
+        "raw_f64_field=1"
+      ]
+    },
+    {
+      "function": "perry_fn_raw_numeric_object_fields_ts__rawNumericObjectFieldsChecksum",
+      "block_label": "classval.join.4",
+      "region_id": null,
+      "source_function": "rawNumericObjectFieldsChecksum",
+      "lowering_block": "classval.join.4",
+      "local_id": 3,
+      "expr_kind": "ScalarObjectFieldGet",
+      "source_key": null,
+      "semantic": "js_value",
+      "native_rep": {
+        "kind": "js_value"
+      },
+      "native_rep_name": "js_value",
+      "llvm_ty": "double",
+      "llvm_value": "%r22",
+      "consumer": "scalar_object_field_load",
+      "bounds_state": null,
+      "alias_state": null,
+      "access_mode": null,
+      "buffer_access": null,
+      "native_owned_view": null,
+      "buffer_view_pointer_state": null,
+      "materialization_reason": null,
+      "fallback_reason": null,
+      "native_value_state": "region_local",
+      "native_abi_transition": null,
+      "scalar_conversion": null,
+      "native_abi_type": null,
+      "pod_layout": null,
+      "pod_record_view": null,
+      "consumed_facts": [],
+      "rejected_facts": [],
+      "emitted_inbounds": false,
+      "emitted_noalias": false,
+      "notes": [
+        "field=total",
+        "raw_f64_field=1"
+      ]
+    },
+    {
+      "function": "perry_fn_raw_numeric_object_fields_ts__rawNumericObjectFieldsChecksum",
+      "block_label": "classval.join.4",
+      "region_id": null,
+      "source_function": "rawNumericObjectFieldsChecksum",
+      "lowering_block": "classval.join.4",
+      "local_id": 3,
+      "expr_kind": "ScalarObjectFieldGet",
+      "source_key": null,
+      "semantic": "js_number",
+      "native_rep": {
+        "kind": "f64"
+      },
+      "native_rep_name": "f64",
+      "llvm_ty": "double",
+      "llvm_value": "%r22",
+      "consumer": "scalar_object_field_load.raw_f64",
+      "bounds_state": null,
+      "alias_state": null,
+      "access_mode": null,
+      "buffer_access": null,
+      "native_owned_view": null,
+      "buffer_view_pointer_state": null,
+      "materialization_reason": null,
+      "fallback_reason": null,
+      "native_value_state": "region_local",
+      "native_abi_transition": null,
+      "scalar_conversion": null,
+      "native_abi_type": null,
+      "pod_layout": null,
+      "pod_record_view": null,
+      "consumed_facts": [
+        {
+          "fact_id": "native_region.representation.3.f64",
+          "kind": "representation",
+          "local_id": 3,
+          "state": "consumed",
+          "detail": "f64",
+          "reason": null
+        }
+      ],
+      "rejected_facts": [],
+      "emitted_inbounds": false,
+      "emitted_noalias": false,
+      "notes": [
+        "field=total",
+        "raw_f64_field=1"
+      ]
+    }
+  ]
+}
