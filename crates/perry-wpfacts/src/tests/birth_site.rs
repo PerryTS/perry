@@ -4,13 +4,12 @@
 
 use super::*;
 
-/// Two vectors filled with different element classes. CWL (layout as the
-/// unit of propagation): each vector's storage is born per `Vec` birth
-/// site, but `append` is one instance for the layout `Vec`, so its write
-/// through `this.storage` reaches both storages: objects of one layout are
-/// not kept apart. Was: each storage held its own elements.
+/// Two vectors filled with different element classes. Each vector's
+/// storage is born in its own birth run, and `append` runs per receiver
+/// object, so each storage holds its own elements (CWL had one `append`
+/// instance per layout writing both storages).
 #[test]
-fn two_vector_objects_of_one_layout_share_appends() {
+fn two_vector_objects_of_one_layout_keep_their_appends() {
     let pf = facts(
         r#"
         class A { a = 1; }
@@ -29,18 +28,13 @@ fn two_vector_objects_of_one_layout_share_appends() {
         console.log(va.at(0).a, vb.at(0).b);
         "#,
     );
-    for key in ["a", "b"] {
+    for (key, want) in [("a", "t.ts:A"), ("b", "t.ts:B")] {
         let site = pf
             .sites
             .iter()
             .find(|s| s.key == key && !s.is_call)
             .expect("site");
-        assert_eq!(
-            site.receivers,
-            vec!["t.ts:A".to_string(), "t.ts:B".to_string()],
-            "{}",
-            pf.dump_text()
-        );
+        assert_eq!(site.receivers, vec![want.to_string()], "{}", pf.dump_text());
     }
     let t = tmpl(&pf, "Vec");
     assert!(t.escape.is_none() && t.hard.is_none(), "{}", pf.dump_text());
@@ -87,11 +81,10 @@ fn a_template_wide_mark_holds_for_every_site() {
 }
 
 /// A subclass constructor (`super(...)`) is summarized: each `new` runs the
-/// parent constructor on its own object. CWL (layout as the unit of
-/// propagation): `append` is one instance for the layout, so both objects'
-/// storages receive both appends. Was: their storage stayed apart.
+/// parent constructor on its own object, and `append` runs per object, so
+/// the two storages stay apart.
 #[test]
-fn subclass_objects_of_one_layout_share_appends() {
+fn subclass_objects_of_one_layout_keep_their_appends() {
     let pf = facts(
         r#"
         class A { a = 1; }
@@ -111,17 +104,12 @@ fn subclass_objects_of_one_layout_share_appends() {
         console.log(pa.at(0).a, pb.at(0).b);
         "#,
     );
-    for key in ["a", "b"] {
+    for (key, want) in [("a", "t.ts:A"), ("b", "t.ts:B")] {
         let site = pf
             .sites
             .iter()
             .find(|s| s.key == key && !s.is_call)
             .expect("site");
-        assert_eq!(
-            site.receivers,
-            vec!["t.ts:A".to_string(), "t.ts:B".to_string()],
-            "{}",
-            pf.dump_text()
-        );
+        assert_eq!(site.receivers, vec![want.to_string()], "{}", pf.dump_text());
     }
 }

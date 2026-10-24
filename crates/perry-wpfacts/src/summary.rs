@@ -34,6 +34,10 @@ pub const LAY_NONE: u32 = 0;
 const LAY_SITE: u32 = 5 << 28;
 /// The lexical context of a kind-5 instance: the object it constructs.
 const LAY_BIRTH: u32 = 6 << 28;
+/// The lexical context of a method instance on one object: the receiver
+/// token (`recv_lay`), the kind `layout_of` gives one-value tokens.
+const LAY_TOK: u32 = 4 << 28;
+const LAY_MASK: u32 = (1 << 28) - 1;
 /// A closure context key for a closure whose captured cells are its
 /// creator's context's (`CAP_OUTER`): the creator's context id with this
 /// bit. Lexical contexts never set it (kinds stop at 7 << 28).
@@ -130,13 +134,14 @@ pub struct SumState {
     /// (kind, layout/site/node, function token) -> instance. Kinds: 0 a
     /// plain call at a program site outside every summary (the unsummarized
     /// body's composition: the callee's effect per site, as `compose`
-    /// expands a static call into a summary), 1 every other binding (the
-    /// receiver's layout for a function with a `this` term, else
-    /// `LAY_NONE`), 2 unknown-code entry, 3 setter group, 4 getter group,
-    /// 5 a birth run (the constructor chain or field initializer of the
-    /// object token being born, i.e. of its birth site). Nothing in a key
-    /// is another instance: the count is (sites + layouts) x functions,
-    /// fixed by the program.
+    /// expands a static call into a summary), 1 every other binding (for a
+    /// function with a `this` term the receiver: one object token, else
+    /// its layout, `recv_lay`; without one `LAY_NONE`), 2 unknown-code
+    /// entry, 3 setter group, 4 getter group, 5 a birth run (the
+    /// constructor chain or field initializer of the object token being
+    /// born). Nothing in a key is another instance: the count is (sites +
+    /// object tokens + layouts) x functions, and the object tokens are the
+    /// program's birth sites under their maker contexts (`made_of`).
     pub inst_key: FxHashMap<(u8, u32, Tok), u32>,
     /// Calls that exist when summaries are built: the program's calls.
     pub n_prog: usize,
@@ -188,6 +193,19 @@ pub struct SumState {
     /// program (closures x (sites + layouts + contexts)), never by an
     /// instance, so closure tokens never multiply through instances.
     pub ctx_of: FxHashMap<(FnIdx, u32), CallId>,
+    /// Maker birth contexts: (birth site, maker key) -> context id,
+    /// counting down from `BORN`. An object a method or constructor of
+    /// object `o` births is `o`'s (`made_ctx`), so a container's backing
+    /// store is per container, and a part a constructor makes is per
+    /// whole. Construction nests (a part of a part of `o` is `o`'s); a
+    /// receiver a method made stands for the object its chain of method
+    /// calls started from (`maker_key`), so results of results never form
+    /// a chain. A site already on the maker chain folds onto the object
+    /// born there.
+    pub made_of: FxHashMap<(CallId, Tok), CallId>,
+    /// Maker context `BORN - 1 - i` -> (its birth site, its maker object,
+    /// made by a method of the maker rather than its construction).
+    pub made: Vec<(CallId, Tok, bool)>,
 }
 
 fn is_slot(x: NodeId) -> bool {
@@ -531,10 +549,10 @@ impl Model {
     }
 
     /// The birth context of an object `call` makes: its program site (one
-    /// token per birth site), within the lexical context of the instance
-    /// that made the call (a method's births are per receiver layout: the
-    /// container a layout's method makes is that layout's), or `BORN` when
-    /// no program site is behind it (a protocol touch).
+    /// token per birth site), as made by the object whose method or
+    /// constructor instance made the call (`made_ctx`: the store a
+    /// container's method makes is that container's), or `BORN` when no
+    /// program site is behind it (a protocol touch).
     pub(crate) fn birth_ctx(&mut self, call: CallId) -> CallId {
         if (call as usize) < self.sum.n_prog || !self.sum.ready {
             return call;
@@ -542,7 +560,86 @@ impl Model {
         let Some(site) = self.origin_of(call) else {
             return BORN;
         };
-        site
+        match self.sum.call_lay.get(&call).copied() {
+            Some(l) => self.made_ctx(site, l),
+            None => site,
+        }
+    }
+
+    /// The object lexical context `lay` names (a constructor run or a
+    /// method instance of one object), and whether it is a method's.
+    fn lay_object(&self, lay: u32) -> Option<(Tok, bool)> {
+        let t = (lay & LAY_MASK) as Tok;
+        let by_method = match lay & !LAY_MASK {
+            LAY_BIRTH => false,
+            LAY_TOK => true,
+            _ => return None,
+        };
+        matches!(self.toks.get(t as usize), Some(TokKind::Obj(..))).then_some((t, by_method))
+    }
+
+    /// The birth context of what `site` births inside lexical context
+    /// `lay`: the site alone, or the site as made by the object `lay` names.
+    /// If that object, or an object on its maker chain, was itself born at
+    /// `site`, the birth is that object's context again (a recursive maker
+    /// folds onto its ancestor).
+    pub(crate) fn made_ctx(&mut self, site: CallId, lay: u32) -> CallId {
+        let Some((o, by_method)) = self.lay_object(lay) else {
+            return site;
+        };
+        let mut x = o;
+        while let TokKind::Obj(_, c) = self.toks[x as usize] {
+            // The walk is solve work: the bound covers a chain that grows.
+            self.work += 1;
+            match self.made_entry(c) {
+                Some((s, _, _)) if s == site => return c,
+                Some((_, m, _)) => x = m,
+                None if c == site => return c,
+                None => break,
+            }
+        }
+        let key = (site, self.maker_key(o, by_method));
+        if let Some(&c) = self.sum.made_of.get(&key) {
+            return c;
+        }
+        let c = BORN - 1 - self.sum.made.len() as CallId;
+        self.sum.made.push((site, o, by_method));
+        self.sum.made_of.insert(key, c);
+        c
+    }
+
+    /// The maker as a context key: the object itself, except that a
+    /// method's receiver which a method made stands for the object that
+    /// chain of method calls started from (what a method makes from a
+    /// method's result is that origin's, never per the chain of calls).
+    fn maker_key(&self, mut o: Tok, by_method: bool) -> Tok {
+        if by_method {
+            while let TokKind::Obj(_, c) = self.toks[o as usize] {
+                match self.made_entry(c) {
+                    Some((_, m, true)) => o = m,
+                    _ => break,
+                }
+            }
+        }
+        o
+    }
+
+    /// The (site, maker, by a method) of maker context `c`, if it is one.
+    fn made_entry(&self, c: CallId) -> Option<(CallId, Tok, bool)> {
+        if c >= BORN {
+            return None;
+        }
+        self.sum.made.get((BORN - 1 - c) as usize).copied()
+    }
+
+    /// The lexical context of a method instance for receiver `t`: an
+    /// object is its own context (what the method births is that
+    /// object's), every other value its layout.
+    pub(crate) fn recv_lay(&self, t: Tok) -> u32 {
+        match self.toks[t as usize] {
+            TokKind::Obj(..) if t <= LAY_MASK => LAY_TOK | t,
+            _ => self.layout_of(t),
+        }
     }
 
     /// `f` is part of the birth of object `t`: the constructor or field
@@ -674,15 +771,16 @@ impl Model {
 
     /// Bind `call` (or no call: `NO_NODE`) to summarized `ft` for receiver
     /// `x` (or the receiver primitives `prim`): the instance of the
-    /// receiver's layout gets the receiver, and the call's arguments and
-    /// result once per (call, instance).
+    /// receiver (`recv_lay`: the object, else its layout) gets the
+    /// receiver, and the call's arguments and result once per (call,
+    /// instance).
     pub(crate) fn bind_layout(&mut self, call: CallId, ft: Tok, x: Option<Tok>, prim: u16) {
         let f = self.tok_fn(ft);
         if call != NO_NODE && self.composed_away(call, f) {
             return;
         }
         let lay = match x {
-            Some(t) if self.has_this_term(f) => self.layout_of(t),
+            Some(t) if self.has_this_term(f) => self.recv_lay(t),
             _ => LAY_NONE,
         };
         let key = match x {
@@ -881,9 +979,10 @@ impl Model {
             let t = self.closure_tok(*g, key, clay, &nodes);
             self.add_tok(base[*slot as usize], t);
         }
-        // Literals born here: one token per (literal, lexical context).
+        // Literals born here: one token per (literal, maker object), or one
+        // per literal in an instance no object is the context of.
         for &(slot, tm) in &s.births {
-            let ctx = BORN;
+            let ctx = self.made_ctx(BORN, lay);
             let t = self.site_tok(tm, ctx);
             self.add_tok(base[slot as usize], t);
         }
