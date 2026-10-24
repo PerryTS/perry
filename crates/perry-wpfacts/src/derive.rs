@@ -70,7 +70,7 @@ impl KindFact {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct FieldFacts {
     pub key: String,
     pub slot: Option<u32>,
@@ -89,7 +89,7 @@ pub struct FieldFacts {
     pub ta_kind: Option<u8>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct TemplateFacts {
     pub id: TmplId,
     pub display: String,

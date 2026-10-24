@@ -8,7 +8,7 @@ use perry_hir::{Export, Import, ImportSpecifier, Module};
 /// A published class as its importers see it (design §11.2): its template
 /// and the facts its defining unit proved, its prototype methods (key,
 /// function name) along the chain inside that unit, and its native parent.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ClassContract {
     pub display: String,
     pub name: String,
@@ -41,7 +41,7 @@ pub(crate) struct ClassContract {
 /// argument (`model::MARK_*`: read, touched by a protocol, or used beyond:
 /// then it escapes), whether extra arguments reach it (`variadic`: all
 /// arguments escape), and the layouts it returns (`None`: ⊤).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct FnContract {
     pub name: String,
     /// Per parameter: what the callee does to the argument itself
@@ -74,7 +74,7 @@ pub(crate) struct FnContract {
 /// may hold, and whether it may hold an unknown value (⊤ to the reader).
 /// The layouts' fields hold unknown values for the reader; a store or an
 /// opening operation through them is the reader's census report.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct ValueContract {
     pub layouts: Vec<ClassContract>,
     pub classes: Vec<ClassContract>,
@@ -90,13 +90,19 @@ pub(crate) struct ValueContract {
 /// it through ⊤ or a broken contract, or claims nothing over the bound).
 /// One unit publishes its calls' (`ProgramFacts::args_out`); the callee
 /// takes the union over every unit.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct ArgContract {
     pub params: Vec<ValueContract>,
     pub top: bool,
 }
 
 impl ArgContract {
+    /// The lattice join (D16): `top`, the parameters, each parameter's
+    /// layouts, classes and functions (by identity), `unknown` and the
+    /// primitive kinds only grow. An entry both hold takes `o`'s
+    /// description: the driver joins last round's contract with what the
+    /// latest solves pass, and those carry the defining unit's contract
+    /// as it is published now (the order is on the identities).
     fn join(&mut self, o: &ArgContract) {
         self.top |= o.top;
         if self.params.len() < o.params.len() {
@@ -104,18 +110,21 @@ impl ArgContract {
         }
         for (a, b) in self.params.iter_mut().zip(&o.params) {
             for l in &b.layouts {
-                if !a.layouts.iter().any(|x| x.display == l.display) {
-                    a.layouts.push(l.clone());
+                match a.layouts.iter_mut().find(|x| x.display == l.display) {
+                    Some(x) => *x = l.clone(),
+                    None => a.layouts.push(l.clone()),
                 }
             }
             for c in &b.classes {
-                if !a.classes.iter().any(|x| x.display == c.display) {
-                    a.classes.push(c.clone());
+                match a.classes.iter_mut().find(|x| x.display == c.display) {
+                    Some(x) => *x = c.clone(),
+                    None => a.classes.push(c.clone()),
                 }
             }
             for f in &b.fns {
-                if !a.fns.iter().any(|x| x.name == f.name) {
-                    a.fns.push(f.clone());
+                match a.fns.iter_mut().find(|x| x.name == f.name) {
+                    Some(x) => *x = f.clone(),
+                    None => a.fns.push(f.clone()),
                 }
             }
             a.unknown |= b.unknown;
@@ -423,8 +432,12 @@ fn dependency_order(solves: &[Solve]) -> Vec<usize> {
 /// contract is broken: it is published as an escape, and the units that see
 /// it again (its defining unit and every unit depending on that one,
 /// transitively: contracts travel only along those edges) are solved again;
-/// every other unit's inputs are unchanged, so its result is kept. Broken
-/// only grows, so this ends.
+/// every other unit's inputs are unchanged, so its result is kept. What
+/// the other units feed back only grows: broken, the argument contracts
+/// (decision 13) and the store effects (decision 17), each last round's
+/// value joined with what the latest solves report (D16). Their elements
+/// (templates, functions, keys, ⊤) are finite, so an input cannot cycle,
+/// and the result covers what every round's solves passed and stored.
 
 pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts {
     let ucfg = FactsConfig {
@@ -497,43 +510,56 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
             }
         }
         round_work.push(work);
-        // Decision 13: the argument contracts of closed functions, from
-        // every unit's latest solve. A closed function whose contract
-        // changed is solved again, with the units depending on it; at the
-        // fixpoint every closed function's parameters hold what its calls
-        // pass.
-        let mut args: FxHashMap<(String, String), ArgContract> = FxHashMap::default();
+        // Decision 13: the argument contracts of closed functions: last
+        // round's joined with what every unit's latest solve passes (D16).
+        // Rebuilt from the latest solves alone, a contract can shrink: a
+        // closed function whose argument is ⊤ makes a caller pass less,
+        // the contract drops, and the cycle repeats (express, ee-first
+        // `callback`, period 3). Joined, it only grows. A closed function
+        // whose contract grew is solved again, with the units depending
+        // on it; at the fixpoint every closed function's parameters hold
+        // what its calls pass.
+        let mut latest: FxHashMap<(String, String), ArgContract> = FxHashMap::default();
         for (si, s) in solves.iter().enumerate() {
             let path = sorted[s.mi].0;
             let u = per_unit[si].as_ref().expect("every unit solved");
             if u.stats.aborted {
                 for nm in &s.view.closed_refs {
-                    args.entry((path.to_string(), nm.clone())).or_default().top = true;
+                    latest
+                        .entry((path.to_string(), nm.clone()))
+                        .or_default()
+                        .top = true;
                 }
                 continue;
             }
             for (nm, ac) in &u.args_out {
-                args.entry((path.to_string(), nm.clone()))
+                latest
+                    .entry((path.to_string(), nm.clone()))
                     .or_default()
                     .join(ac);
             }
+        }
+        let mut args = input.args.clone();
+        for (k, ac) in &latest {
+            args.entry(k.clone()).or_default().join(ac);
         }
         let mut seeds: Vec<usize> = Vec::new();
         for (si, s) in solves.iter().enumerate() {
             let path = sorted[s.mi].0;
             let changed = s.view.closed.keys().any(|nm| {
                 let k = (path.to_string(), nm.clone());
-                format!("{:?}", args.get(&k)) != format!("{:?}", input.args.get(&k))
+                args.get(&k) != input.args.get(&k)
             });
             if changed {
                 seeds.push(si);
             }
         }
         input.args = args;
-        // Decision 17: the store effects, from every unit's latest solve.
-        // The owners of a layout whose effect keys changed perform them,
+        // Decision 17: the store effects: last round's joined with what
+        // every unit's latest solve stores (D16), so they only grow too.
+        // The owners of a layout whose effect keys grew perform them,
         // solved again with their dependents.
-        let mut stores: FxHashMap<String, Vec<String>> = FxHashMap::default();
+        let mut stores = input.stores.clone();
         for u in per_unit.iter().flatten() {
             for (d, k) in &u.stores_out {
                 let v = stores.entry(d.clone()).or_default();
