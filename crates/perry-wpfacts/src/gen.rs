@@ -129,6 +129,11 @@ pub struct Gen<'a> {
     /// the cells it reads.
     pub cells: Vec<(String, NodeId)>,
     pub cell_bad: crate::pts::FxHashSet<NodeId>,
+    /// DECISIONS 162: (function, parameter, array cell key) the function
+    /// stores its argument into, and the markers in those cells that stand
+    /// for such arguments (published by the flow, not in the cell).
+    pub cell_flows: std::collections::BTreeSet<(FnIdx, u32, String)>,
+    pub cell_flow_toks: crate::pts::FxHashSet<Tok>,
     pub cells_read: Vec<String>,
     /// The other units' layouts it looked up by display (DECISIONS 103).
     pub layouts_read: Vec<(String, u64)>,
@@ -404,6 +409,8 @@ impl<'a> Gen<'a> {
             stand_in_tas: Vec::new(),
             cells: Vec::new(),
             cell_bad: Default::default(),
+            cell_flows: Default::default(),
+            cell_flow_toks: Default::default(),
             cells_read: Vec::new(),
             layouts_read: Vec::new(),
             fns_read: Vec::new(),
@@ -1286,6 +1293,29 @@ impl<'a> Gen<'a> {
                         );
                     }
                 }
+            }
+            // DECISIONS 162: the array cells the callee stores the argument
+            // into: this unit's store into its view of each (another unit's
+            // array is a stand-in sharing the cell; its own array leaves by
+            // the same cell). The cell check then describes the argument.
+            for (_, key) in c.param_cells.iter().filter(|(pi, _)| *pi as usize == i) {
+                let Some(name) = key.strip_prefix("arr:") else { continue };
+                let a = match self.arr_cells.iter().find(|(k, _)| k == key) {
+                    Some(&(_, t)) => t,
+                    None => self.stand_in_arr(mi, name),
+                };
+                let an = self.m.node_named("cellarr", || format!("cellarr({key})"));
+                self.m.own(an);
+                self.m.add_tok(an, a);
+                let site = self.m.anon_post_site("store by another unit's function");
+                self.m.cons(
+                    an,
+                    Cons::Store {
+                        key: crate::model::Key::Any,
+                        src: p,
+                        site,
+                    },
+                );
             }
             // What the argument reaches, used apart from the argument
             // (DECISIONS 45). An escape is transitive (`escape` sinks every

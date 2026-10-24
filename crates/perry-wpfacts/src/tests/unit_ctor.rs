@@ -826,3 +826,68 @@ fn an_element_a_callee_reads_is_the_callers_element() {
     assert!(proven(&wf) > 0);
     assert!(proven(&pf) >= proven(&wf), "U {} W {}\n{}", proven(&pf), proven(&wf), pf.dump_text());
 }
+
+const SUB_RECV: &str = r#"
+    class Vec {
+      storage: any; n: number;
+      static tag = 1;
+      constructor() { this.storage = null; this.n = 0; }
+      append(e: any) { if (this.storage === null) { this.storage = new Array(4); } this.storage[this.n] = e; this.n += 1; }
+      hasSome(fn: any): boolean { for (let i = 0; i < this.n; i += 1) { if (fn(this.storage[i])) { return true; } } return false; }
+    }
+    class Bag {
+      items: Vec;
+      static tag = 2;
+      constructor() { this.items = new Vec(); }
+      add(e: any) { this.items.append(e); }
+      hasSome(fn: any): boolean { return this.items.hasSome(fn); }
+      contains(o: any): boolean { return this.hasSome((e: any) => e === o); }
+    }
+    class IdBag extends Bag {
+      contains(o: any): boolean { return this.hasSome((e: any) => e === o); }
+    }
+    class Item { k: number; constructor(k: number) { this.k = k; } }
+    class Tag { k: number; t: number; constructor(t: number) { this.k = 0; this.t = t; } }
+    function main() {
+      const b = new Bag(); b.add(new Tag(3));
+      const it = new Item(1); const v = new Vec(); v.append(it);
+      const e: any = v.storage[0];
+      console.log(b.contains(it) ? 1 : 0, e.k + Vec.tag + Bag.tag);
+    }
+    main();
+    "#;
+
+#[test]
+fn an_argument_a_callee_stores_into_a_shared_array_is_stored_by_the_callers_unit() {
+    // DECISIONS 162: `Bag.add` stores its argument into the storage array
+    // all Vecs share (`this.items.append(e)`): a flow the caller's unit
+    // runs, so main's Tag lands in the cell and `e.k` sees Item and Tag, as
+    // the whole program does. Per-unit facts are whole-program facts
+    // (owner 2026-10-23): every verdict equal, nothing more broken.
+    let pf = units(SUB_RECV);
+    let wf = facts(SUB_RECV);
+    // An override report is the subclass unit telling the parent unit
+    // (DECISIONS 59), no break.
+    assert!(
+        pf.broken.iter().all(|b| b.starts_with("override ") || wf.broken.contains(b)),
+        "{:?} vs {:?}\n{}",
+        pf.broken,
+        wf.broken,
+        pf.dump_text()
+    );
+    let v = |f: &ProgramFacts| -> Vec<String> {
+        let mut v: Vec<String> = f
+            .sites
+            .iter()
+            .map(|s| {
+                let mut r = s.receivers.clone();
+                r.sort();
+                format!("@{} .{} {:?} {:?}", s.byte_offset, s.key, s.verdict, r)
+            })
+            .collect();
+        v.sort();
+        v
+    };
+    assert!(v(&wf).iter().any(|s| s.contains(".k T0Set") && s.contains("Tag")), "{:?}", v(&wf));
+    assert_eq!(v(&pf), v(&wf), "\n{}", pf.dump_text());
+}

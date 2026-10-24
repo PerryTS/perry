@@ -719,6 +719,7 @@ impl<'a> Gen<'a> {
             if self.cell_bad.contains(&n) {
                 continue;
             }
+            changed |= self.cell_flows_of(i);
             let (ok, ch) = self.check_value(n, r);
             changed |= ch;
             if !ok {
@@ -843,6 +844,39 @@ impl<'a> Gen<'a> {
             self.m.edge(v, seed);
         }
         self.m.edge(seed, n);
+    }
+
+    /// DECISIONS 162: array cell `cells[i]` holding a marker that stands
+    /// for own parameters of this unit's contract functions, none escaped
+    /// (`Model::own_param_members`): the body stored the callers' argument
+    /// into a shared array, which their units' solves hold, not this one.
+    /// The marker is described by a flow (`FnContract::param_cells`): each
+    /// caller's unit stores its argument into its view of the cell, as the
+    /// whole program runs that store. A marker that later turns ⊤ is no
+    /// longer described: the cell check sinks it then. Only the elements of
+    /// an array: a named field of a shared array, a global or a program
+    /// object cell keep the check. True when it recorded a new flow.
+    fn cell_flows_of(&mut self, i: usize) -> bool {
+        let (key, n) = (&self.cells[i].0, self.cells[i].1);
+        if !key.starts_with("arr:") || key.ends_with("#named") {
+            return false;
+        }
+        let key = key.clone();
+        let mut changed = false;
+        for t in self.m.nodes[n as usize].pts.to_sorted() {
+            if !self.m.is_marker(t) || self.m.beside_values(t) {
+                continue;
+            }
+            let Some(own) = self.m.own_param_members(t) else {
+                self.cell_flow_toks.remove(&t);
+                continue;
+            };
+            self.cell_flow_toks.insert(t);
+            for (f, p) in own {
+                changed |= self.cell_flows.insert((f, p, key.clone()));
+            }
+        }
+        changed
     }
 
     /// A published value (a binding, a stored value of a store effect):
@@ -1199,6 +1233,8 @@ impl<'a> Gen<'a> {
             // stands for no value of its own: the callers' values arrive
             // with it in every node it reaches and are checked themselves.
             _ if self.m.is_marker(t) && self.m.beside_values(t) => true,
+            // DECISIONS 162: the callers' argument, stored by their units.
+            _ if self.cell_flow_toks.contains(&t) && self.m.own_param_members(t).is_some() => true,
             // A global builtin is the same object in every unit (§17.16 (a)).
             TokKind::Top | TokKind::BuiltinFn | TokKind::Builtin(_) => true,
             // A program object, the same in every unit (DECISIONS 92).

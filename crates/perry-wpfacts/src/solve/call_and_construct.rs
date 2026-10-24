@@ -86,7 +86,7 @@ impl Model {
     /// members, each a contract function's own parameter marker that has
     /// not escaped; a member with values beside it adds none (DECISIONS
     /// 143). `None`: some member is no such marker, or none is left.
-    fn own_param_members(&self, t: Tok) -> Option<Vec<(FnIdx, u32)>> {
+    pub(crate) fn own_param_members(&self, t: Tok) -> Option<Vec<(FnIdx, u32)>> {
         self.marker_members(t)
             .into_iter()
             .map(|m| match self.param_marker.get(&m) {

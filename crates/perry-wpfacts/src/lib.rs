@@ -794,6 +794,13 @@ fn fn_contract_of(
             .unwrap_or_default();
     this_calls.sort();
     let (name, closed) = fn_contract_name(g, f);
+    // DECISIONS 162: the array cells it stores an argument into.
+    let param_cells: Vec<(u32, String)> = g
+        .cell_flows
+        .iter()
+        .filter(|(g_f, _, _)| *g_f == f)
+        .map(|(_, i, k)| (*i, k.clone()))
+        .collect();
     units::FnContract {
         this_use,
         this_reach,
@@ -803,6 +810,7 @@ fn fn_contract_of(
         param_flows,
         param_calls,
         param_handovers,
+        param_cells,
         name,
         closed,
         params,
@@ -855,6 +863,7 @@ fn fn_named(g: &gen::Gen, f: model::FnIdx) -> units::FnContract {
         param_flows: Vec::new(),
         param_calls: Vec::new(),
         param_handovers: Vec::new(),
+        param_cells: Vec::new(),
     }
 }
 
@@ -2097,6 +2106,7 @@ pub(crate) fn compute_in<'a>(
                         param_flows: Vec::new(),
                         param_calls: Vec::new(),
                         param_handovers: Vec::new(),
+                        param_cells: Vec::new(),
                     }),
                 };
                 let key = e.map(|(_, a)| {
@@ -2273,7 +2283,14 @@ pub(crate) fn compute_in<'a>(
                 };
                 return Some((k.clone(), vc));
             }
-            let toks: Vec<model::Tok> = node.pts.to_sorted();
+            // DECISIONS 162: an own parameter's marker in it is the callers'
+            // argument, which their units store there themselves.
+            let toks: Vec<model::Tok> = node
+                .pts
+                .to_sorted()
+                .into_iter()
+                .filter(|t| !g.cell_flow_toks.contains(t))
+                .collect();
             let prim = node.prim;
             if toks.is_empty() && prim == 0 {
                 return None;

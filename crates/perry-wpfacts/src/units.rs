@@ -268,6 +268,10 @@ pub(crate) struct FnContract {
     pub param_calls: Vec<ParamCall>,
     /// The arguments it hands to a closed class's constructor (DECISIONS 152).
     pub param_handovers: Vec<HandOverArg>,
+    /// The array cells (`arr:<name>`, DECISIONS 94) the body stores an
+    /// argument into, per parameter (DECISIONS 162): a caller's unit stores
+    /// its argument into that cell, as the whole program runs the store.
+    pub param_cells: Vec<(u32, String)>,
     /// The binding name of a closed function (decision 19): a unit that
     /// calls it as a value publishes what it passes under this name.
     pub closed: Option<String>,
@@ -429,6 +433,8 @@ impl FnContract {
         join_param_calls(&mut self.param_calls, &o.param_calls);
         union_into(&mut self.param_handovers, &o.param_handovers);
         self.param_handovers.sort();
+        union_into(&mut self.param_cells, &o.param_cells);
+        self.param_cells.sort();
         if self.closed.is_none() {
             self.closed = o.closed.clone();
         }
