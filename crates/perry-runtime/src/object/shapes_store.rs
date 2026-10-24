@@ -1886,20 +1886,31 @@ impl ShapeSlab {
     /// this for a word read from a memo, a record or a parameter.
     #[inline(always)]
     pub(super) fn agent_record_for_receiver(word: u32) -> *mut ShapeRecord {
-        if word & crate::codegen_abi::LAYOUT_TAG == 0 || LayoutWord(word).band() >= 3 {
-            return std::ptr::addr_of!(EMPTY_RECORD.0).cast_mut();
-        }
-        let dir = &AGENT_SHAPE_DIR[0];
-        let row = LayoutWord(word).row().0 as usize;
-        if row >= dir.flat_ids.get() {
-            return std::ptr::addr_of!(EMPTY_RECORD.0).cast_mut();
-        }
-        unsafe { Self::agent_record_for_handle(LayoutWord(word)) }
+        Self::receiver_row_record(word).unwrap_or(std::ptr::addr_of!(EMPTY_RECORD.0).cast_mut())
     }
     #[inline(always)]
     pub(super) fn agent_record_for_receiver_present(word: u32) -> Option<*mut ShapeRecord> {
-        let p = Self::agent_record_for_receiver(word);
+        let p = Self::receiver_row_record(word)?;
         unsafe { (*p).present() }.then_some(p)
+    }
+    /// The row cell a receiver word names, if it is an issued row. A layout
+    /// word is tagged and in band 0..=2; with the shadow bit cleared those are
+    /// exactly `[LAYOUT_TAG, LAYOUT_TAG | 3 << LAYOUT_BAND_SHIFT)`, so the tag
+    /// and band tests are one range compare (as the ShapeId base compare was).
+    #[inline(always)]
+    fn receiver_row_record(word: u32) -> Option<*mut ShapeRecord> {
+        use crate::codegen_abi::{LAYOUT_BAND_SHIFT, LAYOUT_ROW_MASK, LAYOUT_SHADOW_BIT, LAYOUT_TAG};
+        let w = word & !LAYOUT_SHADOW_BIT;
+        if w.wrapping_sub(LAYOUT_TAG) >= 3 << LAYOUT_BAND_SHIFT {
+            return None;
+        }
+        let dir = &AGENT_SHAPE_DIR[0];
+        let row = (w & LAYOUT_ROW_MASK) as usize;
+        if row >= dir.flat_ids.get() {
+            return None;
+        }
+        // SAFETY: an issued row of this agent's readable reservation.
+        Some(unsafe { dir.flat_base.get().add(row) })
     }
     /// Requires an existing owner/carrier; never use for identity absence checks.
     pub(super) fn handle_record_ptr(&self, word: LayoutWord) -> Option<*mut ShapeRecord> {
