@@ -500,6 +500,76 @@ impl<'a> Gen<'a> {
         // leave, an instance of a contract class, another unit's stand-in,
         // an unknown value); anything else and it escapes as before.
         for (e, n) in std::mem::take(&mut self.value_contracts) {
+            match self.value_contract_holds(n, r, false) {
+                Some(c) => changed |= c,
+                None => {
+                    changed = true;
+                    continue;
+                }
+            }
+            self.value_contracts.push((e, n));
+        }
+        // What this unit writes into other units' bindings (`local_write`):
+        // a value contract as a published binding's, its values leave the
+        // same way; one no contract describes escapes.
+        let mut writes: Vec<(u32, NodeId)> = self
+            .binding_writes
+            .iter()
+            .map(|(&id, &n)| (id, n))
+            .filter(|(id, _)| !self.write_top.contains(id))
+            .collect();
+        writes.sort_unstable();
+        for (id, n) in writes {
+            match self.value_contract_holds(n, r, true) {
+                Some(c) => changed |= c,
+                None => {
+                    self.write_top.insert(id);
+                    changed = true;
+                }
+            }
+        }
+        // Its store effects into other units' objects (decision 17): the
+        // stored values are published the same way.
+        let mut stores: Vec<(TmplId, Atom, NodeId)> =
+            self.m.foreign_stores.iter().copied().collect();
+        stores.sort_unstable();
+        for (tm, a, n) in stores {
+            if self.store_top.contains(&(tm, a)) {
+                continue;
+            }
+            match self.value_contract_holds(n, r, true) {
+                Some(c) => changed |= c,
+                None => {
+                    self.store_top.insert((tm, a));
+                    changed = true;
+                }
+            }
+        }
+        changed |= self.nested_fields(r);
+        // A literal of this unit passed to another unit's closed function
+        // (decision 13) is described by the argument contract as a value
+        // contract describes a published literal: its field functions are
+        // contract functions the callee calls through their contract.
+        for t in self.closed_arg_literals() {
+            if !self.field_fns.keys().any(|&(ft, _)| ft == t) {
+                changed |= self.note_field_fns(t);
+            }
+        }
+        changed
+    }
+
+    /// A value published as a contract (a published binding, a write of
+    /// another unit's binding, a store effect): what node `n` may hold must
+    /// be described by a contract (a literal-shape object of this unit whose
+    /// fields then leave, an instance of a contract class, another unit's
+    /// stand-in, an unknown value). `None`: it is not, and it escaped; else
+    /// whether something changed. `back`: an effect, held by a unit solved
+    /// before this one in a round; it reads no layout of this unit by
+    /// display (the driver publishes those level by level, after it), so
+    /// an object's fields leave whole, never as nested layouts.
+    fn value_contract_holds(&mut self, n: NodeId, r: u32, back: bool) -> Option<bool> {
+        let mut changed = false;
+        {
             let toks = self.m.nodes[n as usize].pts.to_sorted();
             // A function of this unit the binding holds, which nothing let
             // escape yet, is a contract function (§11.2, as a published
@@ -514,8 +584,7 @@ impl<'a> Gen<'a> {
             }
             if !toks.iter().all(|&t| self.value_tok_ok(t)) {
                 self.m.sink_node(n, r);
-                changed = true;
-                continue;
+                return None;
             }
             for t in toks {
                 if let TokKind::Func(f, _) = self.m.toks[t as usize] {
@@ -540,22 +609,17 @@ impl<'a> Gen<'a> {
                             changed |= self.note_field_fns(t);
                         }
                         changed |= self.fields_leave(t, r);
+                    } else {
+                        continue;
+                    }
+                    if back && !self.all_sunk.contains(&t) {
+                        self.sink_all_fields(t, r);
+                        changed = true;
                     }
                 }
             }
-            self.value_contracts.push((e, n));
         }
-        changed |= self.nested_fields(r);
-        // A literal of this unit passed to another unit's closed function
-        // (decision 13) is described by the argument contract as a value
-        // contract describes a published literal: its field functions are
-        // contract functions the callee calls through their contract.
-        for t in self.closed_arg_literals() {
-            if !self.field_fns.keys().any(|&(ft, _)| ft == t) {
-                changed |= self.note_field_fns(t);
-            }
-        }
-        changed
+        Some(changed)
     }
 
     /// This unit's literal objects its calls pass to other units' closed
@@ -679,13 +743,14 @@ impl<'a> Gen<'a> {
     }
 
     /// What other units stored into existing fields of this unit's literal
-    /// layouts and class instances (decision 17): a value of the kinds they
-    /// stored (DECISIONS 73), or an unknown one, stored into that field of
+    /// layouts and class instances (decision 17): a value of what the stored
+    /// values' contracts describe (the kinds, DECISIONS 73; the stand-ins of
+    /// the layouts, classes and functions; ⊤), stored into that field of
     /// every instance of the layout by an anonymous writer. True when this
     /// added constraints.
     fn apply_store_effects(&mut self) -> bool {
         let Some(u) = self.unit_in else { return false };
-        let mut want: Vec<(TmplId, &'a String, Option<u16>)> = Vec::new();
+        let mut want: Vec<(TmplId, &'a String, &'a crate::units::ValueContract)> = Vec::new();
         for (tm, t) in self.m.tmpls.iter().enumerate() {
             if !matches!(
                 t.kind,
@@ -698,16 +763,16 @@ impl<'a> Gen<'a> {
             {
                 continue;
             }
-            for (k, kinds) in u.stored_keys(&t.display) {
-                want.push((tm as TmplId, k, *kinds));
+            for (k, vc) in u.stored_keys(&t.display) {
+                want.push((tm as TmplId, k, vc));
             }
         }
         if want.is_empty() {
             return false;
         }
-        let want: Vec<(TmplId, Atom, Option<u16>)> = want
+        let want: Vec<(TmplId, Atom, &'a crate::units::ValueContract)> = want
             .into_iter()
-            .map(|(tm, k, kinds)| (tm, self.m.atom(k), kinds))
+            .map(|(tm, k, vc)| (tm, self.m.atom(k), vc))
             .collect();
         let site = match self.effect_site {
             Some(x) => x,
@@ -722,9 +787,9 @@ impl<'a> Gen<'a> {
             let TokKind::Obj(tm, _) = self.m.toks[t as usize] else {
                 continue;
             };
-            for &(_, a, kinds) in want.iter().filter(|w| w.0 == tm) {
+            for &(_, a, vc) in want.iter().filter(|w| w.0 == tm) {
                 if self.effects_done.insert((t, a)) {
-                    let src = self.effect_src(kinds);
+                    let src = self.effect_src(tm, a, vc);
                     self.m.store_into(t, crate::model::Key::Named(a), src, site);
                     changed = true;
                 }
@@ -733,51 +798,16 @@ impl<'a> Gen<'a> {
         changed
     }
 
-    /// The value a store effect stores: of its primitive kinds, or unknown
-    /// (`None`), one node per kinds.
-    fn effect_src(&mut self, kinds: Option<u16>) -> NodeId {
-        if let Some(&n) = self.effect_srcs.get(&kinds) {
+    /// The value a store effect stores into field `a` of layout `tm`: what
+    /// its contract describes, as an import of that value (one node per
+    /// field).
+    fn effect_src(&mut self, tm: TmplId, a: Atom, vc: &'a crate::units::ValueContract) -> NodeId {
+        if let Some(&n) = self.effect_srcs.get(&(tm, a)) {
             return n;
         }
-        let n = self
-            .m
-            .node_named("stored", || "stored by another unit".into());
-        match kinds {
-            Some(p) => self.m.add_prim(n, p),
-            None => {
-                self.m.add_top(n, |_| "stored by another unit".into());
-                self.m.add_prim(n, prim::ALL);
-            }
-        }
-        self.effect_srcs.insert(kinds, n);
+        let n = self.at_module_scope(|g| g.stand_in_value(0, "stored by another unit", vc));
+        self.effect_srcs.insert((tm, a), n);
         n
-    }
-
-    /// The store effects this unit publishes (decision 17), by template
-    /// display and key, with the primitive kinds of what it stores
-    /// (DECISIONS 73): `None` when a stored value may be an object or ⊤,
-    /// or the solve stopped at the bound.
-    pub(crate) fn store_effects(&self) -> Vec<(String, String, Option<u16>)> {
-        let mut by: FxHashMap<(TmplId, Atom), Option<u16>> = FxHashMap::default();
-        for &(tm, a, n) in &self.m.foreign_stores {
-            let node = &self.m.nodes[n as usize];
-            let kinds = (!self.m.aborted && node.pts.is_empty()).then_some(node.prim);
-            let e = by.entry((tm, a)).or_insert(Some(0));
-            *e = e.zip(kinds).map(|(x, y)| x | y);
-        }
-        let mut out: Vec<(String, String, Option<u16>)> = by
-            .into_iter()
-            .map(|((tm, a), k)| {
-                (
-                    self.m.tmpls[tm as usize].display.clone(),
-                    self.m.atoms[a as usize].clone(),
-                    k,
-                )
-            })
-            .collect();
-        out.sort();
-        out.dedup();
-        out
     }
 
     /// A literal-shape object or an enum's object (§18.2) of this unit no

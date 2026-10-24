@@ -376,9 +376,13 @@ pub(crate) struct Published {
     /// (module path, name): the union over every unit's calls.
     pub(crate) args: FxHashMap<(String, String), ArgContract>,
     /// Store effects (decision 17): per literal layout or class display,
-    /// the existing keys other units store into and the primitive kinds
-    /// they store, `None` for any value (union over every unit, DECISIONS 73).
-    pub(crate) stores: FxHashMap<String, Vec<(String, Option<u16>)>>,
+    /// the existing keys other units store into and the value contract of
+    /// what they store (union over every unit; its kinds, DECISIONS 73).
+    pub(crate) stores: FxHashMap<String, Vec<(String, ValueContract)>>,
+    /// Write effects: per module-scope binding (its unit's path, its name)
+    /// the value contract of what other units store into it (union over
+    /// every unit, `Gen::local_write`).
+    pub(crate) writes: FxHashMap<(String, String), ValueContract>,
     /// Each module's namespace object (design §18.2): its keys, where each
     /// resolves through re-exports (§18.14), and whether it may hold any key
     /// (an `export *` from outside the program).
@@ -414,7 +418,12 @@ impl Published {
     /// otherwise reaches only exports and globals) may call a module's
     /// functions by name. The reach does not say which module's, so none
     /// is closed.
-    pub(crate) fn stored_keys(&self, display: &str) -> &[(String, Option<u16>)] {
+    /// What other units write into binding `name` of unit `path`.
+    pub(crate) fn binding_write(&self, path: &str, name: &str) -> Option<&ValueContract> {
+        self.writes.get(&(path.to_string(), name.to_string()))
+    }
+
+    pub(crate) fn stored_keys(&self, display: &str) -> &[(String, ValueContract)] {
         self.stores.get(display).map_or(&[], |v| v.as_slice())
     }
 
@@ -1236,16 +1245,16 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
         // solved again with their dependents.
         let mut stores = input.stores.clone();
         for u in per_unit.iter().flatten() {
-            for (d, k, kinds) in &u.stores_out {
+            for (d, k, vc) in &u.stores_out {
                 let v = stores.entry(d.clone()).or_default();
                 match v.iter_mut().find(|(k2, _)| k2 == k) {
-                    Some((_, e)) => *e = e.zip(*kinds).map(|(x, y)| x | y),
-                    None => v.push((k.clone(), *kinds)),
+                    Some((_, e)) => e.join(vc),
+                    None => v.push((k.clone(), vc.clone())),
                 }
             }
         }
         for v in stores.values_mut() {
-            v.sort();
+            v.sort_by(|x, y| x.0.cmp(&y.0));
         }
         // Compared as values: a layout whose keys differ either way (joined,
         // they can only have grown).
@@ -1267,6 +1276,28 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
             }
         }
         input.stores = stores;
+        // The write effects: last round's joined with what every unit's
+        // latest solve stores into other units' bindings (an aborted unit:
+        // any value into each it writes), so they only grow (D16, as the
+        // argument contracts). The unit owning a binding whose writes grew
+        // holds them, solved again with its dependents.
+        let mut writes = input.writes.clone();
+        for u in per_unit.iter().flatten() {
+            for (k, vc) in &u.writes_out {
+                writes.entry(k.clone()).or_default().join(vc);
+            }
+        }
+        let mut grown: Vec<&String> = writes
+            .iter()
+            .filter(|(k, v)| input.writes.get(*k) != Some(*v))
+            .map(|((p, _), _)| p)
+            .collect();
+        grown.sort();
+        grown.dedup();
+        for p in grown {
+            seeds.extend(solves.iter().position(|s| &s.key == p));
+        }
+        input.writes = writes;
         let fresh: Vec<String> = reports
             .into_iter()
             .filter(|d| !input.broken.contains(d))
@@ -1444,8 +1475,11 @@ fn unit_io(
         for ((p, n), c) in &u.ctor_args_out {
             o.push((format!("args:{p}:{n}"), hash(&format!("{c:?}"))));
         }
-        for (d, k, kinds) in &u.stores_out {
-            o.push((format!("store:{d}.{k}"), hash(&format!("{kinds:?}"))));
+        for (d, k, vc) in &u.stores_out {
+            o.push((format!("store:{d}.{k}"), hash(&format!("{vc:?}"))));
+        }
+        for ((p, n), vc) in &u.writes_out {
+            o.push((format!("write:{p}.{n}"), hash(&format!("{vc:?}"))));
         }
         for d in &u.reports {
             o.push((format!("report:{d}"), 0));

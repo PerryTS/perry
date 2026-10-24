@@ -389,7 +389,7 @@ impl<'a> Gen<'a> {
             Expr::LocalGet(id) => self.local(mi, *id),
             Expr::LocalSet(id, v) => {
                 let vn = self.expr(fx, v);
-                let l = self.local(mi, *id);
+                let l = self.local_write(mi, *id);
                 self.m.edge(vn, l);
                 vn
             }
@@ -469,7 +469,7 @@ impl<'a> Gen<'a> {
                 match fallback {
                     perry_hir::WithSetFallback::Local(id)
                     | perry_hir::WithSetFallback::SloppyImplicit(id) => {
-                        let l = self.local(mi, *id);
+                        let l = self.local_write(mi, *id);
                         self.m.edge(v, l);
                     }
                     _ => {}
@@ -488,7 +488,8 @@ impl<'a> Gen<'a> {
                         add: false,
                     },
                 );
-                self.m.edge(out, l);
+                let w = self.local_write(mi, *id);
+                self.m.edge(out, w);
                 out
             }
             Expr::Binary { op, left, right } => {

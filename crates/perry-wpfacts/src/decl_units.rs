@@ -31,6 +31,12 @@ pub(crate) struct UnitView<'a> {
     pub closed: FxHashMap<String, u32>,
     /// The other units' closed functions it refers to (it calls them).
     pub closed_refs: Vec<String>,
+    /// Its index among its module's units ([`unit_path`]).
+    pub unit: usize,
+    /// The other units' module-scope bindings it writes (`currentFlow = f`,
+    /// `n++`), by HIR id with the local name of their import: written
+    /// through the binding's write effect (`Gen::local_write`), not joined.
+    pub written: Vec<(u32, String)>,
     /// The names it refers to that no unit of its module owns: its imports
     /// (and globals). The driver orders it after the units owning them
     /// (decision 21).
@@ -81,7 +87,7 @@ pub(crate) fn module_of(p: &str) -> &str {
 }
 
 /// What an item refers to: read edges (`to`) and joins (both ways: a
-/// write of the binding, a store through it, a local two items share).
+/// class's state, a local two items share), and the locals it writes.
 #[derive(Default)]
 struct Refs {
     names: Vec<String>,
@@ -98,6 +104,8 @@ struct Refs {
     closures: Vec<u32>,
     /// The named types of its parameters (an entry guard's class, §11.4).
     param_types: Vec<String>,
+    /// The locals it writes (also in `locals`).
+    writes: Vec<u32>,
 }
 
 fn param_types(params: &[perry_hir::Param], r: &mut Refs) {
@@ -156,10 +164,17 @@ fn declared(module: &Module, it: Item, r: &Refs) -> FxHashSet<u32> {
     d
 }
 
+/// The target of a store `t.k = v`. A class named by its name is the
+/// class's own state (`ZodString.create = …`: a static member of the
+/// declaration, which another unit's store has no channel into): joined. A
+/// binding (`ns.k = f`, `cache[k] = v`) is read, not written: the store goes
+/// into the object the binding holds, and the object model describes it
+/// wherever the store runs, as it does a store from another module: a named
+/// key of another unit's literal layout or definite instance field is a
+/// store effect its defining unit performs (decision 17), any other store
+/// into another unit's object is its census report.
 fn direct_ref(e: &Expr, r: &mut Refs) {
     match e {
-        Expr::LocalGet(id) => r.join_locals.push(*id),
-        Expr::GlobalGet(id) => r.join_globals.push(*id),
         Expr::ClassRef(n) | Expr::ExternFuncRef { name: n, .. } => r.join_names.push(n.clone()),
         Expr::FuncRef(id) => r.funcs.push(*id),
         _ => {}
@@ -169,7 +184,35 @@ fn direct_ref(e: &Expr, r: &mut Refs) {
 fn expr_refs(e: &Expr, r: &mut Refs) {
     match e {
         Expr::LocalGet(id) => r.locals.push(*id),
-        Expr::LocalSet(id, _) | Expr::Update { id, .. } => r.join_locals.push(*id),
+        // A write of a binding reads it, as every use does, and is a write:
+        // a module-scope binding of another unit holds what this item stores
+        // through the binding's write effect (`UnitView::written`), so the
+        // writer is ordered after the binding's unit like any reader, not
+        // joined to it. (tsc: the binder's `currentFlow`, the parser's
+        // `currentToken`, written by the functions reading them, joined
+        // their every reader and writer into one unit.)
+        Expr::LocalSet(id, _) | Expr::Update { id, .. } => {
+            r.locals.push(*id);
+            r.writes.push(*id);
+        }
+        Expr::WithSet {
+            fallback:
+                perry_hir::WithSetFallback::Local(id) | perry_hir::WithSetFallback::SloppyImplicit(id),
+            ..
+        } => {
+            r.locals.push(*id);
+            r.writes.push(*id);
+        }
+        // The evaluation of a class expression initializes its own binding
+        // (ClassDefinitionEvaluation: the inner name holds the class before
+        // its statics run): the class's definition, joined as the class is.
+        Expr::ClassExprFresh {
+            evaluation_owner: Some(id),
+            ..
+        } => {
+            r.join_locals.push(*id);
+            class_name_refs(e, r);
+        }
         Expr::ArrayPush { array_id, .. }
         | Expr::ArrayPushSpread { array_id, .. }
         | Expr::ArrayUnshift { array_id, .. }
@@ -197,13 +240,13 @@ fn expr_refs(e: &Expr, r: &mut Refs) {
             // A capture is a read: `mutable_captures` are the captured
             // locals written anywhere (they need a box), not by this
             // closure; its own writes are `LocalSet`s in its body, walked
-            // with the item (tsc: every function capturing `var Debug`,
-            // assigned once by `Debug || (Debug = {})`, joined one unit).
+            // with the item (as a write, tsc's every function capturing
+            // `var Debug`, assigned once by `Debug || (Debug = {})`, was
+            // one unit).
             r.locals
                 .extend(captures.iter().chain(mutable_captures).copied());
         }
-        // A store through a declaration's name is that declaration's
-        // state (`ZodString.create = …`).
+        // A store through a name (`direct_ref`).
         Expr::PropertySet { object, .. }
         | Expr::PropertyUpdate { object, .. }
         | Expr::IndexSet { object, .. }
@@ -245,11 +288,20 @@ fn class_name_refs(e: &Expr, r: &mut Refs) {
         Expr::ClassExprFresh {
             template: class_name,
             ..
-        }
-        | Expr::RefreshClassExprCaptures {
+        } => r.join_names.push(class_name.clone()),
+        // A refresh re-stores into its class's environment the current
+        // values of the bindings the class's evaluation captured, slot by
+        // slot (`captured_args`, the same capture list). The model holds one
+        // value per binding over the whole run, which that evaluation already
+        // stores into each slot: the refresh adds no state to the class. It
+        // reads the class and its captures (the walk records those) and
+        // writes nothing another unit holds. (tsc: a refresh after every
+        // assignment to a captured binding of a `ts.server` class joined 667
+        // module-scope statements to the classes.)
+        Expr::RefreshClassExprCaptures {
             env_class: Some(class_name),
             ..
-        } => r.join_names.push(class_name.clone()),
+        } => r.names.push(class_name.clone()),
         Expr::StaticFieldSet { class_name, .. }
         | Expr::ClassStaticSymbolSet { class_name, .. }
         | Expr::ClassEnvSet { class_name, .. }
@@ -1317,6 +1369,15 @@ pub(crate) fn views<'a>(path: &str, module: &'a Module) -> Vec<(UnitView<'a>, Ve
                 view.foreign_locals.insert(*id, want(nm, w, &mut deps));
             }
         }
+        view.unit = u;
+        for id in &r.writes {
+            if let Some(local) = view.foreign_locals.get(id) {
+                if !view.written.iter().any(|(i, _)| i == id) {
+                    view.written.push((*id, local.clone()));
+                }
+            }
+        }
+        view.written.sort();
         for id in &r.funcs {
             if let Some(&(w, nm)) = owner_func.get(id).filter(|(w, _)| *w != u) {
                 view.foreign_funcs.insert(*id, want(nm, w, &mut deps));

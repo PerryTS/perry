@@ -181,9 +181,12 @@ pub struct ProgramFacts {
     /// the class's module path and name (`ClassContract::closed`).
     pub(crate) ctor_args_out: Vec<((String, String), units::ArgContract)>,
     /// Its store effects into other units' literal layouts and class
-    /// instances (decision 17): display, key and the stored kinds
-    /// (`Gen::store_effects`).
-    pub(crate) stores_out: Vec<(String, String, Option<u16>)>,
+    /// instances (decision 17): display, key and the value contract of what
+    /// it stores.
+    pub(crate) stores_out: Vec<(String, String, units::ValueContract)>,
+    /// Its writes of other units' module-scope bindings: (unit path, name)
+    /// and the value contract of what it stores (`Gen::local_write`).
+    pub(crate) writes_out: Vec<((String, String), units::ValueContract)>,
     pub(crate) reports: Vec<String>,
     module_digests: Vec<u64>,
 }
@@ -646,6 +649,129 @@ fn closed_of(
         .then(|| (path.to_string(), name.clone(), fi.params.len() as u32))
 }
 
+/// The value contract of what node `n` may hold (`Gen::contract_check`
+/// accepted it): its literal layouts and classes by their contracts, its
+/// functions by theirs, another unit's stand-ins by their owners', ⊤ and
+/// the primitive kinds. `back`: an effect's (`Gen::value_contract_holds`),
+/// whose objects' fields left whole: no nested layouts.
+fn value_contract_of_node(
+    g: &gen::Gen,
+    templates: &[TemplateFacts],
+    n: model::NodeId,
+    contracts_out: &[((String, String), units::ClassContract)],
+    layouts_out: &mut Vec<units::ClassContract>,
+    open_tm: &pts::FxHashSet<model::TmplId>,
+    back: bool,
+) -> units::ValueContract {
+    let node = &g.m.nodes[n as usize];
+    let mut vc = units::ValueContract {
+        layouts: Vec::new(),
+        classes: Vec::new(),
+        fns: Vec::new(),
+        unknown: false,
+        prim: node.prim,
+    };
+    for t in node.pts.to_sorted() {
+        let (tm, class) = match g.m.toks[t as usize] {
+            model::TokKind::Top | model::TokKind::BuiltinFn => {
+                vc.unknown = true;
+                continue;
+            }
+            model::TokKind::Obj(tm, _) => (tm, false),
+            model::TokKind::ClassObj(tm) => (tm, true),
+            model::TokKind::Func(f, _) if g.m.funcs[f as usize].func_id != u32::MAX => {
+                // A contract function of this unit (`Gen::contract_check`).
+                let fc = fn_contract_of(g, templates, f, layouts_out, open_tm);
+                if !vc.fns.iter().any(|c| c.name == fc.name) {
+                    vc.fns.push(fc);
+                }
+                continue;
+            }
+            _ => {
+                if let Some(&fc) = g.stand_in_fc.get(&t) {
+                    if !vc.fns.iter().any(|c| c.name == fc.name) {
+                        vc.fns.push(fc.clone());
+                    }
+                }
+                continue;
+            }
+        };
+        let display = &g.m.tmpls[tm as usize].display;
+        let cc = g
+            .stand_in_cc
+            .get(&tm)
+            .cloned()
+            .or_else(|| {
+                contracts_out
+                    .iter()
+                    .find(|(_, c)| &c.display == display)
+                    .map(|(_, c)| c.clone())
+            })
+            .or_else(|| {
+                let facts = templates.iter().find(|x| x.id == tm)?.clone();
+                let (name, class_id, literal_shape) = match g.m.tmpls[tm as usize].kind.clone() {
+                    model::TmplKind::Class {
+                        name,
+                        class_id,
+                        literal_shape,
+                        ..
+                    } => (name, class_id, literal_shape),
+                    // An enum's object (§18.2): a literal layout with
+                    // no class (nothing guards it, so no class id).
+                    model::TmplKind::Lit {
+                        enum_image: true, ..
+                    } => (display.clone(), 0, true),
+                    _ => return None,
+                };
+                Some(units::ClassContract {
+                    display: display.clone(),
+                    name,
+                    class_id,
+                    literal_shape,
+                    facts,
+                    methods: Vec::new(),
+                    native_parent: None,
+                    field_fns: Vec::new(),
+                    field_layouts: Vec::new(),
+                    open_keys: open_tm.contains(&tm),
+                    statics: Vec::new(),
+                    statics_open: false,
+                    static_fns: Vec::new(),
+                    closed: None,
+                })
+            });
+        let Some(mut cc) = cc else {
+            vc.unknown = true;
+            continue;
+        };
+        if !class
+            && !g.stand_in_cc.contains_key(&tm)
+            && !vc.layouts.iter().any(|c| c.display == cc.display)
+        {
+            cc.field_fns = literal_field_fns(
+                &g,
+                templates,
+                &node.pts.to_sorted(),
+                tm,
+                layouts_out,
+                open_tm,
+            );
+            if !back {
+                cc.field_layouts = nested_layouts(g, templates, tm, layouts_out, open_tm);
+            }
+        }
+        let v = if class {
+            &mut vc.classes
+        } else {
+            &mut vc.layouts
+        };
+        if !v.iter().any(|c| c.display == cc.display) {
+            v.push(cc);
+        }
+    }
+    vc
+}
+
 fn arg_contract_of(
     g: &gen::Gen,
     templates: &[TemplateFacts],
@@ -843,6 +969,7 @@ pub(crate) fn compute_in<'a>(
         // The closed contracts first (decision 19): publishing a closed
         // function is no escape only once its contract is known.
         g.closed_params();
+        g.hold_binding_writes();
         g.unit_boundary(published);
     }
     let gen_ms = t0.elapsed().as_secs_f64() * 1000.0;
@@ -1057,11 +1184,6 @@ pub(crate) fn compute_in<'a>(
     // Per-unit run: the classes this unit publishes as contracts, and what
     // it did beyond other units' contracts (design §11.2, §11.3).
     let reports = if cfg.unit { g.reports() } else { Vec::new() };
-    let stores_out = if cfg.unit {
-        g.store_effects()
-    } else {
-        Vec::new()
-    };
     let open_tm = if cfg.unit && !g.m.aborted {
         open_templates(&g)
     } else {
@@ -1191,112 +1313,15 @@ pub(crate) fn compute_in<'a>(
     let values_out: Vec<((String, String), units::ValueContract)> = if cfg.unit && !g.m.aborted {
         let mut out = Vec::new();
         for &((mi, a), n) in &g.value_contracts {
-            let node = &g.m.nodes[n as usize];
-            let mut vc = units::ValueContract {
-                layouts: Vec::new(),
-                classes: Vec::new(),
-                fns: Vec::new(),
-                unknown: false,
-                prim: node.prim,
-            };
-            for t in node.pts.to_sorted() {
-                let (tm, class) = match g.m.toks[t as usize] {
-                    model::TokKind::Top | model::TokKind::BuiltinFn => {
-                        vc.unknown = true;
-                        continue;
-                    }
-                    model::TokKind::Obj(tm, _) => (tm, false),
-                    model::TokKind::ClassObj(tm) => (tm, true),
-                    model::TokKind::Func(f, _) if g.m.funcs[f as usize].func_id != u32::MAX => {
-                        // A contract function of this unit (`Gen::contract_check`).
-                        let fc = fn_contract_of(&g, &templates, f, &mut layouts_out, &open_tm);
-                        if !vc.fns.iter().any(|c| c.name == fc.name) {
-                            vc.fns.push(fc);
-                        }
-                        continue;
-                    }
-                    _ => {
-                        if let Some(&fc) = g.stand_in_fc.get(&t) {
-                            if !vc.fns.iter().any(|c| c.name == fc.name) {
-                                vc.fns.push(fc.clone());
-                            }
-                        }
-                        continue;
-                    }
-                };
-                let display = &g.m.tmpls[tm as usize].display;
-                let cc = g
-                    .stand_in_cc
-                    .get(&tm)
-                    .cloned()
-                    .or_else(|| {
-                        contracts_out
-                            .iter()
-                            .find(|(_, c)| &c.display == display)
-                            .map(|(_, c)| c.clone())
-                    })
-                    .or_else(|| {
-                        let facts = templates.iter().find(|x| x.id == tm)?.clone();
-                        let (name, class_id, literal_shape) =
-                            match g.m.tmpls[tm as usize].kind.clone() {
-                                model::TmplKind::Class {
-                                    name,
-                                    class_id,
-                                    literal_shape,
-                                    ..
-                                } => (name, class_id, literal_shape),
-                                // An enum's object (§18.2): a literal layout with
-                                // no class (nothing guards it, so no class id).
-                                model::TmplKind::Lit {
-                                    enum_image: true, ..
-                                } => (display.clone(), 0, true),
-                                _ => return None,
-                            };
-                        Some(units::ClassContract {
-                            display: display.clone(),
-                            name,
-                            class_id,
-                            literal_shape,
-                            facts,
-                            methods: Vec::new(),
-                            native_parent: None,
-                            field_fns: Vec::new(),
-                            field_layouts: Vec::new(),
-                            open_keys: open_tm.contains(&tm),
-                            statics: Vec::new(),
-                            statics_open: false,
-                            static_fns: Vec::new(),
-                            closed: None,
-                        })
-                    });
-                let Some(mut cc) = cc else {
-                    vc.unknown = true;
-                    continue;
-                };
-                if !class
-                    && !g.stand_in_cc.contains_key(&tm)
-                    && !vc.layouts.iter().any(|c| c.display == cc.display)
-                {
-                    cc.field_fns = literal_field_fns(
-                        &g,
-                        &templates,
-                        &node.pts.to_sorted(),
-                        tm,
-                        &mut layouts_out,
-                        &open_tm,
-                    );
-                    cc.field_layouts =
-                        nested_layouts(&g, &templates, tm, &mut layouts_out, &open_tm);
-                }
-                let v = if class {
-                    &mut vc.classes
-                } else {
-                    &mut vc.layouts
-                };
-                if !v.iter().any(|c| c.display == cc.display) {
-                    v.push(cc);
-                }
-            }
+            let vc = value_contract_of_node(
+                &g,
+                &templates,
+                n,
+                &contracts_out,
+                &mut layouts_out,
+                &open_tm,
+                false,
+            );
             let key = (
                 sorted[mi as usize].0.to_string(),
                 g.m.atoms[a as usize].clone(),
@@ -1304,6 +1329,83 @@ pub(crate) fn compute_in<'a>(
             out.push((key, vc));
         }
         out
+    } else {
+        Vec::new()
+    };
+    // Its store effects into other units' literal layouts and class
+    // instances (decision 17): per layout display and key the value contract
+    // of what it stores, ⊤ for a value no contract describes and for every
+    // store when the solve stopped at the bound.
+    let stores_out: Vec<(String, String, units::ValueContract)> = if cfg.unit {
+        let unknown = units::ValueContract {
+            unknown: true,
+            prim: model::prim::ALL,
+            ..Default::default()
+        };
+        let mut stored: Vec<(model::TmplId, model::Atom, model::NodeId)> =
+            g.m.foreign_stores.iter().copied().collect();
+        stored.sort_unstable();
+        let mut by: Vec<((model::TmplId, model::Atom), units::ValueContract)> = Vec::new();
+        for (tm, a, n) in stored {
+            let vc = if g.m.aborted || g.store_top.contains(&(tm, a)) {
+                unknown.clone()
+            } else {
+                value_contract_of_node(
+                    &g,
+                    &templates,
+                    n,
+                    &contracts_out,
+                    &mut layouts_out,
+                    &open_tm,
+                    true,
+                )
+            };
+            match by.last_mut() {
+                Some((k, e)) if *k == (tm, a) => e.join(&vc),
+                _ => by.push(((tm, a), vc)),
+            }
+        }
+        by.into_iter()
+            .map(|((tm, a), vc)| {
+                (
+                    g.m.tmpls[tm as usize].display.clone(),
+                    g.m.atoms[a as usize].clone(),
+                    vc,
+                )
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    // What it writes into other units' module-scope bindings (`Gen::local_write`):
+    // per binding (its unit's path, its name) a value contract, as of a
+    // published binding; ⊤ for one no contract describes, and for every
+    // binding it writes when the solve stopped at the bound.
+    let writes_out: Vec<((String, String), units::ValueContract)> = if cfg.unit {
+        let unknown = units::ValueContract {
+            unknown: true,
+            prim: model::prim::ALL,
+            ..Default::default()
+        };
+        g.written_keys()
+            .into_iter()
+            .filter_map(|(id, key)| {
+                if g.m.aborted || g.write_top.contains(&id) {
+                    return Some((key, unknown.clone()));
+                }
+                let &n = g.binding_writes.get(&id)?;
+                let vc = value_contract_of_node(
+                    &g,
+                    &templates,
+                    n,
+                    &contracts_out,
+                    &mut layouts_out,
+                    &open_tm,
+                    true,
+                );
+                Some((key, vc))
+            })
+            .collect()
     } else {
         Vec::new()
     };
@@ -1419,6 +1521,7 @@ pub(crate) fn compute_in<'a>(
         ctor_args_out,
         reports,
         stores_out,
+        writes_out,
         module_digests: Vec::new(),
     };
     pf.module_digests = dump::module_digests(&pf);

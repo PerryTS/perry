@@ -163,6 +163,14 @@ fn an_export_no_unit_names_stays_inside() {
     assert!(!proven(&named, "x"), "{}", named.dump_text());
 }
 
+/// The census broke the literal layout born with keys `keys`.
+fn literal_broken(pf: &ProgramFacts, keys: &[&str]) -> bool {
+    pf.templates
+        .iter()
+        .filter(|t| t.birth_keys == keys)
+        .any(|t| pf.broken.contains(&t.display))
+}
+
 fn verdicts(pf: &ProgramFacts, key: &str) -> Vec<String> {
     pf.sites
         .iter()
@@ -290,25 +298,36 @@ fn a_broken_namespace_field_function_resolves_only_the_units_that_see_it() {
     // escape, so the census breaks it; its defining unit (`a`) owns the
     // display, so round 2 solves `a` and `m` only, not the unrelated `b`/`c`
     // (design §11.3). An unowned display would make every unit dirty.
+    let a = "export var util: any;\n(function (util: any) {\n  function get(x: any) { return x.k; }\n  util.get = get;\n})(util || (util = {}));\n";
+    let m = "import { util } from './a'; (globalThis as any).g = util.get; console.log(util.get({ k: 1 }));";
+    let e = DUAL.replace("class D", "class E").replace("neg", "other");
     let pf = units_of(&[
-        ("a", "export var util: any;\n(function (util: any) {\n  function get(x: any) { return x.k; }\n  util.get = get;\n})(util || (util = {}));\n"),
-        ("m", "import { util } from './a'; (globalThis as any).g = util.get; console.log(util.get({ k: 1 }));"),
-        ("b", &DUAL.replace("class D", "class E").replace("neg", "other")),
-        ("c", "import { E } from './b'; const e = new E([1]); console.log(e.has(1));"),
+        ("a", a),
+        ("m", m),
+        ("b", &e),
+        (
+            "c",
+            "import { E } from './b'; const e = new E([1]); console.log(e.has(1));",
+        ),
     ]);
     assert!(
         pf.broken.iter().any(|d| d == "fn:a.ts:get"),
         "{}",
         pf.dump_text()
     );
-    assert_eq!(pf.round_work.len(), 2, "{:?}", pf.round_work);
-    let w = |p: &str| module_work(&pf, p);
+    // Rewritten for NSS (principle: `util = {}` and `util.get = get` are
+    // effects of their own units, the write effect and the store effect,
+    // each taking the round after the unit making it): the rounds after the
+    // first solve `a` and `m` only, as the same program without `b` and `c`
+    // does round for round.
+    let am = units_of(&[("a", a), ("m", m)]);
+    assert!(pf.round_work.len() >= 2, "{:?}", pf.round_work);
     assert_eq!(
-        pf.round_work[1],
-        w("a.ts") + w("m.ts"),
+        pf.round_work[1..],
+        am.round_work[1..],
         "{:?} {:?}",
         pf.round_work,
-        pf.units
+        am.round_work
     );
 }
 
@@ -539,8 +558,8 @@ fn a_class_a_contract_returns_carries_its_methods() {
 
 #[test]
 fn a_tdz_seed_writes_its_local_in_the_local_unit() {
-    // A TDZ seed is a write of its locals (§12.3: a write joins the unit
-    // of what it writes): `a`'s unit sees the seeded value, as the whole
+    // A TDZ seed initializes its locals (§12.3: the seed statement is the
+    // binding's own, joined with it): `a`'s unit sees the seeded value, as the whole
     // program does, so `k` is not proven to hold only numbers. A seed in a
     // unit of its own would write a stand-in of `a` and be lost.
     let src = "(function () { const g = () => { a = a; const o = { k: a }; return o.k; }; try { console.log(g()); } catch (e) {} let a = 1; console.log(g()); })();";
@@ -893,28 +912,30 @@ fn a_bundle_splits_into_declaration_units() {
 }
 
 #[test]
-fn a_store_through_a_declaration_joins_its_unit() {
-    // A write is shared state (§12.1): a store through a declaration's name
-    // and the declaration are one unit, and two functions writing one `let`
-    // are one unit with it, both ways.
+fn a_store_through_a_class_name_joins_it_a_write_of_a_binding_does_not() {
+    // Rewritten for NSS (principle: the cut follows data dependencies; a
+    // write of another unit's binding is the binding's write effect, a store
+    // through a binding a store effect into the object it holds, neither a
+    // join). A store through a class's name is the class's state (§12.1):
+    // one unit. Two functions writing one `let` are units of their own,
+    // ordered after the binding's unit as its readers are.
     let n = |src: &str| units(src).units.len();
     assert_eq!(n("class C { v = 1; } C.create = () => new C();"), 1);
     assert_eq!(
         n("let k = 0; function inc() { k++; } function dec() { k--; }"),
-        1
+        3
     );
     // A read alone is one way: the reader is a unit of its own.
     assert_eq!(n("const k = 0; function get() { return k; }"), 2);
-    // Also a closure reading a binding written elsewhere (a captured local
-    // that needs a box is no write of the closure); one writing it joins.
-    // In a once-run wrapper (N5), as a CommonJS body: there `D` is a
-    // captured local of the wrapper, not a module-scope name.
+    // In a once-run wrapper (N5), as a CommonJS body, where `D` is a
+    // captured local of the wrapper: a closure writing `D` is a unit of its
+    // own, as one reading it is.
     let wrapped = |body: &str| format!("(function () {{ {body} }})();");
     let reads = n(&wrapped(
         "var D: any; D = D || {}; const f = () => D.a; const g = () => D.b; console.log(f(), g());",
     ));
     let writes = n(&wrapped("var D: any; D = D || {}; const f = () => { D = 1; }; const g = () => D.b; console.log(f(), g());"));
-    assert_eq!(writes + 1, reads, "reads {reads} writes {writes}");
+    assert_eq!(writes, reads, "reads {reads} writes {writes}");
 }
 
 #[test]
@@ -922,7 +943,7 @@ fn a_let_is_its_id_not_its_name() {
     // A binding is its declaration, not its spelling (§12.1): two bodies a
     // once-run wrapper brings to module scope (N5) each declare their own
     // `T`, two bindings of one name, two units; a `var` declared twice is
-    // one binding, and a write through either statement joins both.
+    // one binding: both statements are one unit.
     let n = |src: &str| units(src).units.len();
     let wrapped = |body: &str| format!("(function () {{ {body} }})();");
     let two = |a: &str, b: &str| {
@@ -1189,7 +1210,11 @@ fn a_store_into_an_existing_field_is_a_store_effect() {
         "#;
     let pf = units(src);
     assert!(pf.units.len() >= 3, "{}", pf.dump_text());
-    assert!(pf.broken.is_empty(), "{:?}", pf.broken);
+    // Rewritten for NSS (principle: a store effect carries the stored
+    // value's contract, as a published binding's value): the head is not
+    // broken; the node's layout is, where `main` logs it beyond its
+    // contract.
+    assert!(!literal_broken(&pf, &["next"]), "{:?}", pf.broken);
     assert!(
         !verdicts(&pf, "next").is_empty() && proven(&pf, "next"),
         "{}",
@@ -1779,11 +1804,11 @@ fn the_object_key_follows_what_an_importer_observes() {
 /// share a helper storing one argument into the other.
 fn marker_store_entries(n: usize) -> u64 {
     let mut src = String::from(
-        "let last: any;\nfunction h(a: any, b: any) { a.x = b; last = b; }\nfunction mid(a: any, b: any) { h(a, b); return a.x; }\n",
+        "class S { static last: any = 0; }\nfunction h(a: any, b: any) { a.x = b; S.last = b; }\nfunction mid(a: any, b: any) { h(a, b); return a.x; }\n",
     );
     for i in 0..n {
         src.push_str(&format!(
-            "export function f{i}(a: any, b: any) {{ last = a; return mid(a, b); }}\n"
+            "export function f{i}(a: any, b: any) {{ S.last = a; return mid(a, b); }}\n"
         ));
     }
     // Another module calls every export: each is a contract (§11.1).
@@ -1825,14 +1850,15 @@ fn a_store_into_an_argument_keeps_no_field_of_the_marker() {
 
 /// Pts entries of the largest unit when `n` exported functions pass their
 /// argument through a wrapper into a shared helper that stores into it
-/// (the contract's escape) and returns it; `last` keeps them in one unit.
+/// (the contract's escape) and returns it; `S.last` (the class's state: a
+/// store through a class name joins it) keeps them in one unit.
 fn escaped_marker_entries(n: usize) -> u64 {
     let mut src = String::from(
-        "let last = 0;\nfunction h(a: any) { a.k = 1; last = 0; return a; }\nfunction mid(a: any) { return h(a); }\n",
+        "class S { static last: any = 0; }\nfunction h(a: any) { a.k = 1; S.last = 0; return a; }\nfunction mid(a: any) { return h(a); }\n",
     );
     for i in 0..n {
         src.push_str(&format!(
-            "export function f{i}(a: any) {{ last = {i}; return mid(a); }}\n"
+            "export function f{i}(a: any) {{ S.last = {i}; return mid(a); }}\n"
         ));
     }
     let names: Vec<String> = (0..n).map(|i| format!("f{i}")).collect();
@@ -1876,14 +1902,14 @@ fn an_escaped_marker_is_the_top_beside_it() {
 /// A module whose exported `make` returns, besides its own literal, what
 /// `put`'s caller passed: `held` delivers `put`'s marker to `make`'s
 /// result before `poke`'s store records the escape (a node's successors
-/// are served before its rules). `seen` keeps them in one unit.
+/// are served before its rules). `S`'s statics (the class's state: a store
+/// through a class name joins it) keep them in one unit.
 const HELD: &str = r#"
-    let held: any = 0;
-    let seen = 0;
+    class S { static held: any = 0; static seen = 0; }
     const lit = { n: 1 };
-    export function put(p: any) { seen = 1; held = p; }
-    export function poke() { seen = 2; held.k = 1; }
-    export function make(x: any) { seen = 3; if (x) { return held; } return lit; }
+    export function put(p: any) { S.seen = 1; S.held = p; }
+    export function poke() { S.seen = 2; S.held.k = 1; }
+    export function make(x: any) { S.seen = 3; if (x) { return S.held; } return lit; }
     export function rd() { return lit.n; }
     "#;
 
@@ -1918,11 +1944,11 @@ fn an_escaped_marker_of_another_function_is_no_result_transfer() {
 /// returns it (no escape: the markers do not read as ⊤).
 fn shared_helper_entries(n: usize) -> u64 {
     let mut src = String::from(
-        "let last = 0;\nfunction h(a: any) { last = a.v; return a; }\nfunction mid(a: any) { return h(a); }\n",
+        "class S { static last: any = 0; }\nfunction h(a: any) { S.last = a.v; return a; }\nfunction mid(a: any) { return h(a); }\n",
     );
     for i in 0..n {
         src.push_str(&format!(
-            "export function f{i}(a: any) {{ last = {i}; return mid(a); }}\n"
+            "export function f{i}(a: any) {{ S.last = {i}; return mid(a); }}\n"
         ));
     }
     let names: Vec<String> = (0..n).map(|i| format!("f{i}")).collect();
@@ -2231,7 +2257,13 @@ fn a_store_into_a_class_field_is_a_store_effect() {
         main(1); main(2);
         "#;
     let pf = units(src);
-    assert!(pf.broken.is_empty(), "{:?}", pf.broken);
+    // Rewritten for NSS (a store effect carries the stored value's
+    // contract): `Box` is not broken; `put`'s literal may be.
+    assert!(
+        !pf.broken.iter().any(|d| d == "t.ts:Box"),
+        "{:?}",
+        pf.broken
+    );
     assert!(
         !verdicts(&pf, "key").is_empty() && !proven(&pf, "key"),
         "{}",

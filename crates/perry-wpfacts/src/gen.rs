@@ -144,7 +144,16 @@ pub struct Gen<'a> {
     /// (instance, key) pairs done, the unknown value and the writer site.
     effects_done: crate::pts::FxHashSet<(Tok, Atom)>,
     effect_site: Option<SiteId>,
-    effect_srcs: FxHashMap<Option<u16>, NodeId>,
+    effect_srcs: FxHashMap<(TmplId, Atom), NodeId>,
+    /// This unit's store effects whose stored values no contract describes
+    /// (`Gen::contract_check`: they escaped).
+    pub(crate) store_top: crate::pts::FxHashSet<(TmplId, Atom)>,
+    /// This unit's writes of other units' module-scope bindings
+    /// (`local_write`): per binding (HIR id) the node of what it stores,
+    /// and the bindings whose stored values no contract describes
+    /// (`Gen::contract_check`: they escaped).
+    pub(crate) binding_writes: FxHashMap<u32, NodeId>,
+    pub(crate) write_top: crate::pts::FxHashSet<u32>,
     pub(crate) stand_in_fc: FxHashMap<Tok, &'a crate::units::FnContract>,
     /// Classes with a parent value (§17.2), fed after the bodies.
     pub(crate) parent_values: Vec<(u32, TmplId, Option<String>)>,
@@ -312,6 +321,9 @@ impl<'a> Gen<'a> {
             effects_done: Default::default(),
             effect_site: None,
             effect_srcs: Default::default(),
+            store_top: Default::default(),
+            binding_writes: FxHashMap::default(),
+            write_top: Default::default(),
             stand_in_fc: FxHashMap::default(),
             parent_values: Vec::new(),
             parent_fed: Default::default(),
@@ -1924,6 +1936,86 @@ impl<'a> Gen<'a> {
         self.m.own(n);
         self.mods[mi as usize].locals.insert(id, n);
         n
+    }
+
+    /// The node a write of local `id` stores into. Another unit's
+    /// module-scope binding (`UnitView::written`) is written through its
+    /// write effect: what this unit stores goes into one node, which this
+    /// unit's reads of the binding see and which is published as a value
+    /// contract, checked as a published binding's is (`contract_check`); the
+    /// binding's unit holds what every unit's contract describes
+    /// (`hold_binding_writes`), and publishes the binding with it.
+    pub(crate) fn local_write(&mut self, mi: u32, id: u32) -> NodeId {
+        let written = self
+            .view
+            .is_some_and(|v| v.written.iter().any(|(i, _)| *i == id));
+        if !written {
+            return self.local(mi, id);
+        }
+        if let Some(&w) = self.binding_writes.get(&id) {
+            return w;
+        }
+        let l = self.local(mi, id);
+        let w = self.at_module_scope(|g| {
+            let w = g.m.node_named("written", || format!("written({id})"));
+            g.m.edge(w, l);
+            w
+        });
+        self.binding_writes.insert(id, w);
+        w
+    }
+
+    /// Other units' writes of this unit's module-scope bindings: each
+    /// binding holds what their contracts describe (stand-ins of the layouts,
+    /// classes and functions, ⊤, the kinds), as an import of that value
+    /// would. After the walk, as the closed functions' parameters
+    /// (`closed_params`), before the boundary publishes the bindings.
+    pub(crate) fn hold_binding_writes(&mut self) {
+        let (Some(v), Some(u)) = (self.view, self.unit_in) else {
+            return;
+        };
+        let path = crate::decl_units::unit_path(self.modules[0].0, v.unit);
+        let mut seen: crate::pts::FxHashSet<u32> = Default::default();
+        let lets: Vec<(u32, &'a str)> = self
+            .init_of(0)
+            .iter()
+            .filter_map(|s| match s {
+                Stmt::Let { id, name, .. } => Some((*id, name.as_str())),
+                _ => None,
+            })
+            .collect();
+        for (id, name) in lets {
+            if !seen.insert(id) {
+                continue;
+            }
+            let Some(c) = u.binding_write(&path, name) else {
+                continue;
+            };
+            let n = self.local(0, id);
+            let w = self.at_module_scope(|g| g.stand_in_value(0, name, c));
+            self.m.edge(w, n);
+        }
+    }
+
+    /// The other units' bindings this unit writes (`local_write`), each by
+    /// its HIR id with its key: its unit's path and its name there.
+    pub(crate) fn written_keys(&self) -> Vec<(u32, (String, String))> {
+        let Some(v) = self.view else {
+            return Vec::new();
+        };
+        v.written
+            .iter()
+            .filter_map(|(id, local)| {
+                v.imports.iter().find_map(|imp| {
+                    imp.specifiers.iter().find_map(|s| match s {
+                        ImportSpecifier::Named { imported, local: l } if l == local => {
+                            Some((*id, (imp.source.clone(), imported.clone())))
+                        }
+                        _ => None,
+                    })
+                })
+            })
+            .collect()
     }
 
     pub(crate) fn global(&mut self, mi: u32, id: u32) -> NodeId {

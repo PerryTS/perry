@@ -21,6 +21,7 @@ mod summary;
 mod super_heritage;
 mod unit_alias;
 mod unit_ctor;
+mod unit_effects;
 mod unit_extends;
 mod unit_mode;
 mod unit_namespace;
