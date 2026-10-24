@@ -157,11 +157,28 @@ def claim_files(root: Path):
                     yield path
 
 
+def claim_text(rel: str, text: str) -> str:
+    # A catalog entry is a translation of its `#:` source pages, so it shares their exemption.
+    if not rel.endswith((".po", ".pot")):
+        return text
+    kept = []
+    for entry in text.split("\n\n"):
+        sources = {
+            "docs/" + ref.rsplit(":", 1)[0]
+            for line in entry.splitlines()
+            if line.startswith("#: ")
+            for ref in line[3:].split()
+        }
+        if not sources or not sources <= HISTORICAL_DOCS:
+            kept.append(entry)
+    return "\n\n".join(kept)
+
+
 def claimed_knobs(root: Path) -> dict[str, set[str]]:
     found: dict[str, set[str]] = defaultdict(set)
     for path in claim_files(root):
         rel = path.relative_to(root).as_posix()
-        for name in KNOB_RE.findall(path.read_text(encoding="utf-8")):
+        for name in KNOB_RE.findall(claim_text(rel, path.read_text(encoding="utf-8"))):
             found[name].add(rel)
     return found
 
@@ -207,6 +224,19 @@ def self_test() -> int:
     historical = Path("docs/generational-gc-plan.md").as_posix()
     if historical not in HISTORICAL_DOCS:
         failures.append("the historical generational plan lost its exact exemption")
+
+    page = "src/internals/weakmap-owned-index-validation.md"
+    catalog = (
+        f'#: {page}:1\nmsgid "{deleted}"\n\n'
+        f'#: {page}:2 src/current.md:3\nmsgid "{indirect}"\n'
+    )
+    kept = set(KNOB_RE.findall(claim_text("docs/po/xx.po", catalog)))
+    if deleted in kept:
+        failures.append("a catalog entry from a historical page was still claimed")
+    if indirect not in kept:
+        failures.append("a catalog entry shared with a current page was exempted")
+    if deleted not in KNOB_RE.findall(claim_text("docs/current.md", catalog)):
+        failures.append("the catalog exemption leaked into a non-catalog file")
 
     # #7991: the presence-only detector must be able to say no. Sabotage it
     # with the exact shape that shipped, and with the value-parsed shape that
