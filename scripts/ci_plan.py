@@ -181,7 +181,6 @@ NON_CORE_GLOBS = (
     ".gitignore",
     ".gitattributes",
     ".editorconfig",
-    "gc-handoff/**",
     "benchmarks/**",
     "homebrew/**",
     "packaging/**",
