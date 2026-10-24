@@ -169,8 +169,7 @@ impl OrdinalEntry {
     }
 }
 
-/// Checked compiler encoding. These ABI constants are consumed from perry-abi
-/// once the runtime lane's first ABI commit is available.
+/// Checked compiler encoding using the shared perry-abi constants.
 pub fn encode_layout_word(row: u32, band: u8, proto_kind: u8) -> Result<u32, String> {
     if row >= perry_abi::LAYOUT_ROW_LIMIT || band >= 3 || proto_kind >= 4 {
         return Err("invalid LayoutWord row, band or prototype kind".into());

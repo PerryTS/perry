@@ -243,7 +243,7 @@ const BIRTH_REP_F64: u64 = 0b01;
 /// and Any (`class_birth_image`), independently of this contract.
 ///
 /// This is THE decision. The string pool passes it to the runtime mint
-/// (`js_object_shape_id_for_class_keys{,_live}`),
+/// (`js_object_layout_for_class_keys{,_live}`),
 /// a fused allocation birth-fills its proven `F64` lanes with `+0.0`, ordered
 /// definitions preserve that fill only while it is unobservable, and
 /// every class-field site that reads or writes a lane raw takes its answer

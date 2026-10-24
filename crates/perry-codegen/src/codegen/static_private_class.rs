@@ -17,7 +17,7 @@
 //!   accessors.
 //!
 //! Those facts are a static content like a birth: the driver assigns it an
-//! id, module init mints it by facts (`js_object_final_shape_id_for_class_keys_static_private`),
+//! id, module init mints it by facts (`js_object_final_layout_for_class_keys_static_private`),
 //! and an instance whose construction reaches the same facts is found under
 //! that id by the ordinary transitions. The class guards accept it as a
 //! compatible completed id (`compatible_final_layouts`): its public keys,

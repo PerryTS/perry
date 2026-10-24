@@ -11,12 +11,11 @@
 //! NAMES never identify a shape: an importer's stub keys can differ from the
 //! definer's (#5094), and then the two contents simply get two ids.
 //!
-//! Adoption is the runtime's: module init hands the id to the ordinary mint
-//! as `requested` (`js_object_shape_id_for_class_keys_static`,
-//! `js_object_shape_id_for_class_keys`), which mints it on a by-facts miss and
-//! otherwise returns the existing id; a refused id aborts (ids are by
-//! content, so a refusal is an invariant violation). Births stamp what the
-//! mint RETURNED; only guards compare against the static id as an immediate.
+//! Module init requests publication with a declaration containing this identity
+//! and the independently planned static LayoutWord. Static publication precedes
+//! dynamic by-facts canonicalization and must return the requested word.
+//! Receiver stamps and guards consume LayoutWords; identities remain at seed,
+//! declaration and diagnostic boundaries.
 //!
 //! The content of a birth comes from ONE function, [`class_birth`], which the
 //! string pool uses to emit the mint and the driver's pre-pass uses (through

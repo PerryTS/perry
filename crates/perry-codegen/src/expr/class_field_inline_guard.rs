@@ -517,7 +517,7 @@ pub(crate) fn emit_proven_shape_recheck(
 /// guard CALL observed the access.
 /// * **raw-f64 sites: the class id.** A class whose layout has no pointer
 ///   slot mints its ShapeId from the key list alone
-///   (`js_object_shape_id_for_keys`, `codegen/string_pool.rs`), so an object
+///   (`js_object_layout_for_keys`, `codegen/string_pool.rs`), so an object
 ///   literal or another class with the same keys in the same order shares
 ///   it — and may hold a string where this class declares `number`. Only the
 ///   class id tells the raw-f64 read that the declared type is the one that
