@@ -1120,6 +1120,37 @@ fn transition_cache_slot(prev_shape_id: u32, key_id: usize, namespace: u32) -> u
     (mixed >> (64 - TRANSITION_CACHE_SIZE.trailing_zeros())) as usize
 }
 
+/// The way of the two-way bucket (`slot`, `slot ^ 1`) an insert writes: the
+/// edge's own entry if either way holds it, else an empty way, else the
+/// primary. A direct-mapped table made two hot edges whose slots collide
+/// evict each other on every store, so each one re-published its edge
+/// through the slow path forever (Effect `Schema.make`: `rebuild` and
+/// `makeEffect`, ~4k republishes; which pair collides depends only on the
+/// ids, so it moved whenever the id numbering did). The pair now shares a
+/// bucket; lookups probe the primary first, so a primary hit costs the same.
+#[inline(always)]
+fn transition_cache_way(prev_shape_id: u32, kid: usize, len_marker: u32) -> usize {
+    let slot = transition_cache_slot(prev_shape_id, kid, len_marker);
+    with_transition_cache(|t| unsafe {
+        let holds = |i: usize| {
+            let e = &(*t)[i];
+            e.next_keys != 0
+                && e.prev_shape_id == prev_shape_id
+                && e.key_ptr == kid
+                && (e.slot_idx >> 24) == len_marker
+        };
+        if holds(slot) {
+            slot
+        } else if holds(slot ^ 1) {
+            slot ^ 1
+        } else if (*t)[slot].next_keys == 0 || (*t)[slot ^ 1].next_keys != 0 {
+            slot
+        } else {
+            slot ^ 1
+        }
+    })
+}
+
 /// A content hash selects a bucket; canonical-pointer equality still proves
 /// the key. Property atoms use the hash stored after their payload. Legacy
 /// interned strings hash every immutable byte in full-width chunks: replaying
@@ -1221,12 +1252,22 @@ fn transition_cache_lookup(
 ) -> Option<(ObjectKeys, u32, u32)> {
     let (kid, len_marker) = transition_key_id(interned_key);
     let slot = transition_cache_slot(prev_shape_id, kid, len_marker);
-    let entry = with_transition_cache(|t| unsafe { (*t)[slot] });
-    if entry.next_keys != 0
-        && entry.prev_shape_id == prev_shape_id
-        && entry.key_ptr == kid
-        && (entry.slot_idx >> 24) == len_marker
-    {
+    let edge_is = |e: &TransitionEntry| {
+        e.next_keys != 0
+            && e.prev_shape_id == prev_shape_id
+            && e.key_ptr == kid
+            && (e.slot_idx >> 24) == len_marker
+    };
+    // A two-way bucket (`slot`, `slot ^ 1`): see `transition_cache_way`.
+    let entry = with_transition_cache(|t| unsafe {
+        let primary = (*t)[slot];
+        if edge_is(&primary) {
+            primary
+        } else {
+            (*t)[slot ^ 1]
+        }
+    });
+    if edge_is(&entry) {
         let entry_slot_idx = entry.slot_idx & TRANSITION_SLOT_IDX_MASK;
         // `key_ptr` is weak address metadata and the target array may still
         // have grown unexpectedly after insertion. Content-validate that the
@@ -1380,7 +1421,7 @@ fn transition_cache_insert(
         return;
     }
     let (kid, len_marker) = transition_key_id(interned_key);
-    let slot = transition_cache_slot(prev_shape_id, kid, len_marker);
+    let slot = transition_cache_way(prev_shape_id, kid, len_marker);
     let mut target_len = 0;
     unsafe {
         if slot_idx < TRANSITION_CACHE_EAGER_SHARE_MAX_SLOT

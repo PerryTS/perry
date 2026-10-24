@@ -420,8 +420,10 @@ pub(crate) unsafe fn leaf_key_add(
         return true;
     };
     // The target layout names the new slot live: the stamp alone publishes
-    // it (no bound to re-publish, which could mint).
-    if super::shapes::shape_live_inline_slot_count_of_receiver(target_shape_id)
+    // it (no bound to re-publish, which could mint). The target word came
+    // from the transition cache, not from this receiver's header, so it is
+    // read through the held-word check.
+    if super::shapes::shape_live_inline_slot_count_for_word(target_shape_id)
         .is_none_or(|live| live <= slot_idx)
     {
         return false;
