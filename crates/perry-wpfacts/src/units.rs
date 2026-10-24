@@ -1614,7 +1614,15 @@ fn resolve_again(
     for d in fresh {
         match owner.get(d) {
             Some(sis) => work.extend(sis.iter().copied()),
-            None => return vec![true; n],
+            // No unit owns it: every unit again, but a unit over the bound
+            // keeps its result, as in `dependents` (it claims nothing
+            // whatever its inputs; tsc: the 200M-work unit was solved again
+            // for one unowned display).
+            None => {
+                return (0..n)
+                    .map(|si| !per_unit[si].as_ref().is_some_and(|u| u.stats.aborted))
+                    .collect()
+            }
         }
     }
     dependents(solves, per_unit, work)
