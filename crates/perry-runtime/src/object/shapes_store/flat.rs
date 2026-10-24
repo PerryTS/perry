@@ -11,7 +11,10 @@ pub(super) struct Region {
     // Number of live records intersecting each OS page, in sparse leaves: the
     // bookkeeping is proportional to the pages this agent holds, never to the
     // highest page index (other agents' chunks lie between ours).
-    live: std::collections::BTreeMap<usize, Leaf>,
+    /// Two levels: a small top vector indexed by leaf number (one slot per
+    /// 512 pages) of lazily boxed leaves, so a lookup is two loads and the
+    /// size follows the agent's own pages, not the process's chunk history.
+    live: Vec<Option<Box<Leaf>>>,
 }
 
 /// Pages per leaf of the live-count map.
@@ -132,7 +135,7 @@ impl Region {
                     base: base.cast(),
                     capacity,
                     page: os_page(),
-                    live: std::collections::BTreeMap::new(),
+                    live: Vec::new(),
                 };
             }
             assert!(capacity > MIN_CAPACITY, "cannot reserve shape Region");
@@ -148,7 +151,7 @@ impl Region {
     /// Leaves held: the bookkeeping size, for tests.
     #[cfg(test)]
     pub(super) fn leaf_count(&self) -> usize {
-        self.live.len()
+        self.live.iter().flatten().count()
     }
     fn pages(&self, row: usize) -> core::ops::RangeInclusive<usize> {
         row * RECORD / self.page..=((row + 1) * RECORD - 1) / self.page
@@ -168,15 +171,22 @@ impl Region {
         Ok(unsafe { self.base.add(row) })
     }
     fn count(&self, page: usize) -> u32 {
-        self.live
-            .get(&(page / LEAF_PAGES))
-            .map_or(0, |leaf| leaf.counts[page % LEAF_PAGES])
+        match self.live.get(page / LEAF_PAGES) {
+            Some(Some(leaf)) => leaf.counts[page % LEAF_PAGES],
+            _ => 0,
+        }
     }
     pub(super) fn published(&mut self, row: usize) {
         for p in self.pages(row) {
-            let leaf = self.live.entry(p / LEAF_PAGES).or_insert_with(|| Leaf {
-                used: 0,
-                counts: [0; LEAF_PAGES],
+            let key = p / LEAF_PAGES;
+            if self.live.len() <= key {
+                self.live.resize_with(key + 1, || None);
+            }
+            let leaf = self.live[key].get_or_insert_with(|| {
+                Box::new(Leaf {
+                    used: 0,
+                    counts: [0; LEAF_PAGES],
+                })
             });
             let n = &mut leaf.counts[p % LEAF_PAGES];
             leaf.used += u32::from(*n == 0);
@@ -187,14 +197,18 @@ impl Region {
     pub(super) fn retired(&mut self, row: usize) {
         for p in self.pages(row) {
             let key = p / LEAF_PAGES;
-            let leaf = self.live.get_mut(&key).expect("retired row on a live page");
+            let leaf = self
+                .live
+                .get_mut(key)
+                .and_then(|l| l.as_deref_mut())
+                .expect("retired row on a live page");
             let n = &mut leaf.counts[p % LEAF_PAGES];
             assert!(*n != 0);
             *n -= 1;
             if *n == 0 {
                 leaf.used -= 1;
                 if leaf.used == 0 {
-                    self.live.remove(&key);
+                    self.live[key] = None;
                 }
                 assert!(
                     unsafe { discard(self.base.cast::<u8>().add(p * self.page), self.page) },
@@ -208,7 +222,7 @@ impl Region {
         self.pages(row).all(|p| self.count(p) != 0)
     }
     pub(super) fn committed_bytes(&self) -> usize {
-        self.live.values().map(|leaf| leaf.used as usize).sum::<usize>() * self.page
+        self.live.iter().flatten().map(|leaf| leaf.used as usize).sum::<usize>() * self.page
     }
 }
 impl Drop for Region {

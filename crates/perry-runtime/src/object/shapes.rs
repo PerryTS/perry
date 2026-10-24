@@ -6630,7 +6630,9 @@ pub(crate) fn publish_static_record(
     if !already {
         let mut inner = table.inner.borrow_mut();
         inner.facts_push_front(facts, published.word.0);
-        inner.family_push_front(keys, published.word.0);
+        // Families are set-valued and the word is new here: append (a push to
+        // the front of a spilled list is O(n) and re-indexes the whole list).
+        inner.family_append_fresh(keys, published.word.0);
     }
     Ok(published)
 }
