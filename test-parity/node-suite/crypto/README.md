@@ -13,6 +13,20 @@ The cases in this directory are curated from the upstream Node.js `test/parallel
 - Asymmetric crypto: RSA/RSA-PSS sign/verify/encrypt/decrypt, EC P-256 signing, DH/ECDH/X25519, X25519 KEM encapsulate/decapsulate, key generation, KeyObject/JWK import/export surrogates, and async callback APIs.
 - WebCrypto: digest, HMAC, AES-CBC/CTR/GCM/KW, ECDSA/ECDH P-256/P-384/P-521, Ed25519, X25519, RSA-OAEP/RSA-PSS/RSASSA, JWK import/export, deriveBits/deriveKey, and wrap/unwrap.
 
+The ML-KEM fixtures check that `SubtleCrypto.supports` reports both bit and key
+encapsulation/decapsulation for ML-KEM-512, ML-KEM-768, and ML-KEM-1024, alongside
+the existing operations and their usage checks. This is focused capability
+coverage, not a claim of complete PQC or Crypto parity.
+
+## KeyObject contracts
+
+The public fixtures cover asymmetric `KeyObject` recognition from X509 and
+CryptoKey conversion, including unmarked-string rejection and custom
+`Symbol.hasInstance` precedence. Secret-key binary exports must be independent
+Node Buffers with encoding-aware `toString`; plain Uint8Array string conversion
+and JWK exports retain their own behavior. These contracts do not imply full
+Crypto module parity or change key usage or extractability rules.
+
 ## Known gaps intentionally left for follow-up PRs
 
 - `X509Certificate` and `crypto.Certificate` / SPKAC APIs.

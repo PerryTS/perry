@@ -33,13 +33,35 @@ async function logKmac(label: string, algorithm: any, key: CryptoKey, payload = 
   return sig;
 }
 
+
+async function logKeyLength(label: string, algorithm: any, usages: KeyUsage[] = ["sign", "verify"]) {
+  try {
+    const key = await crypto.subtle.generateKey(algorithm, true, usages);
+    console.log(`${label}:`, "ok", (key.algorithm as any).length);
+  } catch (error: any) {
+    console.log(`${label}:`, "err", error.name, error.message);
+  }
+}
+
 async function main() {
   for (const op of ["generateKey", "importKey", "exportKey", "sign", "verify"] as const) {
     console.log(`supports ${op} KMAC128:`, SubtleCrypto.supports(op, "KMAC128"));
     console.log(`supports ${op} KMAC256:`, SubtleCrypto.supports(op, "KMAC256"));
   }
 
-  const generated128 = await crypto.subtle.generateKey({ name: "KMAC128", length: 16 }, true, ["sign", "verify"]);
+  await logReject("kmac128 invalid16", crypto.subtle.generateKey({ name: "KMAC128", length: 16 }, true, ["sign", "verify"]));
+  for (const name of ["KMAC128", "KMAC256"]) {
+    for (const length of [0, 16, 31, 32, 33, 120, 129, 136]) {
+      await logKeyLength(`length ${name} ${length}`, { name, length });
+    }
+    await logKeyLength(`fraction ${name}`, { name, length: 128.5 });
+    await logKeyLength(`string ${name}`, { name, length: "128" });
+    await logKeyLength(`negative ${name}`, { name, length: -1 });
+  }
+  await logKeyLength("length before empty usage", { name: "KMAC128", length: 16 }, []);
+  await logKeyLength("unsupported usage before length", { name: "KMAC128", length: 16 }, ["encrypt"]);
+
+  const generated128 = await crypto.subtle.generateKey({ name: "KMAC128", length: 128 }, true, ["sign", "verify"]);
   console.log(
     "generated128:",
     generated128.type,
@@ -90,6 +112,7 @@ async function main() {
   const emptySig = await crypto.subtle.sign({ name: "KMAC128", outputLength: 0 }, key128, data);
   console.log("kmac128 zero len:", Buffer.from(emptySig).length);
   console.log("kmac128 zero verify:", await crypto.subtle.verify({ name: "KMAC128", outputLength: 0 }, key128, emptySig, data));
+  console.log("kmac128 zero verify nonempty:", await crypto.subtle.verify({ name: "KMAC128", outputLength: 0 }, key128, new Uint8Array([0]), data));
 
   await logReject("kmac128 raw import", crypto.subtle.importKey("raw", new Uint8Array(8), "KMAC128", true, ["sign"]));
   await logReject("kmac256 raw import", crypto.subtle.importKey("raw", new Uint8Array(8), "KMAC256", true, ["sign"]));
@@ -99,11 +122,11 @@ async function main() {
   await logReject("kmac128 bad key length", crypto.subtle.generateKey({ name: "KMAC128", length: 7 }, true, ["sign"]));
   await logReject("kmac128 zero key", crypto.subtle.importKey("jwk", { kty: "oct", alg: "K128", k: "", ext: true, key_ops: ["sign"] }, "KMAC128", true, ["sign"]));
   await logReject("kmac128 missing jwk key", crypto.subtle.importKey("jwk", { kty: "oct", alg: "K128", ext: true, key_ops: ["sign"] }, "KMAC128", true, ["sign"]));
-  const shortKey = await crypto.subtle.generateKey({ name: "KMAC128", length: 7 }, true, ["sign"]);
+  // Node requires byte-aligned keys of at least 32 bits, including short keys.
+  const shortKey = await crypto.subtle.generateKey({ name: "KMAC128", length: 32 }, true, ["sign"]);
   const shortJwk: any = await crypto.subtle.exportKey("jwk", shortKey);
-  console.log("kmac128 short key:", (shortKey.algorithm as any).length, Buffer.from(shortJwk.k, "base64url")[0] & 1);
-  const shortSig = await crypto.subtle.sign({ name: "KMAC128", outputLength: 7 }, key128, data);
-  console.log("kmac128 short output:", Buffer.from(shortSig).toString("hex"));
+  console.log("kmac128 short key:", (shortKey.algorithm as any).length, Buffer.from(shortJwk.k, "base64url").length);
+  await logReject("kmac128 short output", crypto.subtle.sign({ name: "KMAC128", outputLength: 7 }, key128, data));
 }
 
 await main();

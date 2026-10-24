@@ -271,7 +271,20 @@ pub unsafe extern "C" fn js_webcrypto_verify(
             Err((name, message)) => return reject_with_dom_exception(name, message),
         };
         if output_length == 0 {
-            return resolve_with_bool_provider(false, "SIGNREQUEST");
+            // An explicitly empty KMAC result verifies only a valid empty byte
+            // source, never the generic bytes_from_jsvalue error sentinel.
+            let valid_empty_signature = perry_runtime::buffer::bytes::no_gc(|scope| {
+                let signature = JSValue::from_bits(sig_bits.to_bits());
+                if signature.is_pointer()
+                    && perry_runtime::buffer::buffer_brand(signature.as_pointer::<u8>() as usize)
+                        == Some(perry_runtime::buffer::BufferBrand::KeyMaterial)
+                {
+                    return false;
+                }
+                perry_runtime::buffer::bytes::bytes(sig_bits, scope)
+                    .is_ok_and(|signature| signature.is_empty())
+            });
+            return resolve_with_bool_provider(valid_empty_signature, "SIGNREQUEST");
         }
         let customization =
             object_field_bytes(algo_bits.to_bits(), b"customization").unwrap_or_else(Vec::new);
@@ -480,6 +493,9 @@ unsafe fn kmac_output_length(algo_bits: u64) -> Result<u32, (&'static str, &'sta
     let Some(length) = object_field_number(algo_bits, b"outputLength") else {
         return Err(("TypeError", "KmacParams.outputLength is required"));
     };
+    if length % 8 != 0 {
+        return Err(("NotSupportedError", "Invalid KmacParams outputLength"));
+    }
     Ok(length)
 }
 

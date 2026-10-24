@@ -48,3 +48,11 @@ report("from undefined", () => KeyObject.from(undefined));
 report("from null", () => KeyObject.from(null));
 report("from object", () => KeyObject.from({}));
 report("from KeyObject", () => KeyObject.from(secret));
+
+// Exported bytes must be a detached Node Buffer, not a Uint8Array or key view.
+const exported = secret.export();
+console.log("secret export Buffer:", Buffer.isBuffer(exported));
+console.log("secret export bytes:", exported.length, exported[0], exported[15]);
+exported[0] = 255;
+console.log("secret export copy independence:", secret.export()[0] === 0);
+console.log("plain Uint8Array toString:", new Uint8Array([0, 17, 255]).toString());
