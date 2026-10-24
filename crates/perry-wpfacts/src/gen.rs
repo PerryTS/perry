@@ -696,7 +696,7 @@ impl<'a> Gen<'a> {
                     continue;
                 };
                 match via {
-                    Some(k) => self.ret_through_key(a, k, n, &c.name),
+                    Some(k) => self.ret_through_key(a, k, &None, n, &c.name),
                     None => {
                         let q = self
                             .m
@@ -719,8 +719,16 @@ impl<'a> Gen<'a> {
     }
 
     /// A contract result through `k` of `holder` (`ret_reach_keys`): the
-    /// value of `holder.k` and what it reaches.
-    fn ret_through_key(&mut self, holder: NodeId, k: &str, ret: NodeId, name: &str) {
+    /// value of `holder.k` and what it reaches through `then` repeatedly
+    /// (`None`: any key, DECISIONS 138).
+    fn ret_through_key(
+        &mut self,
+        holder: NodeId,
+        k: &str,
+        then: &Option<Vec<String>>,
+        ret: NodeId,
+        name: &str,
+    ) {
         let q = self.m.node_named("reach", || format!("reach.{k}({name})"));
         self.m.own(q);
         let a = self.m.atom(k);
@@ -731,23 +739,18 @@ impl<'a> Gen<'a> {
                 dst: q,
             },
         );
+        self.m.edge(q, ret);
+        let keys: Vec<crate::model::Key> = match then {
+            None => vec![crate::model::Key::Any],
+            Some(ks) if ks.is_empty() => return,
+            Some(ks) => ks.iter().map(|s| crate::model::Key::Named(self.m.atom(s))).collect(),
+        };
         let r = self.m.node_named("reach", || format!("reach.{k}*({name})"));
         self.m.own(r);
-        self.m.cons(
-            q,
-            Cons::Load {
-                key: crate::model::Key::Any,
-                dst: r,
-            },
-        );
-        self.m.cons(
-            r,
-            Cons::Load {
-                key: crate::model::Key::Any,
-                dst: r,
-            },
-        );
-        self.m.edge(q, ret);
+        for key in keys {
+            self.m.cons(q, Cons::Load { key, dst: r });
+            self.m.cons(r, Cons::Load { key, dst: r });
+        }
         self.m.edge(r, ret);
     }
 
@@ -878,8 +881,8 @@ impl<'a> Gen<'a> {
             if c.ret_params.contains(&u32::MAX) {
                 self.m.edge(this, ret);
             }
-            for (_, k) in c.ret_reach_keys.iter().filter(|(i, _)| *i == u32::MAX) {
-                self.ret_through_key(this, k, ret, &c.name);
+            for (_, k, then) in c.ret_reach_keys.iter().filter(|(i, _, _)| *i == u32::MAX) {
+                self.ret_through_key(this, k, then, ret, &c.name);
             }
             if c.ret_reach.contains(&u32::MAX) {
                 let q = self
@@ -912,8 +915,8 @@ impl<'a> Gen<'a> {
                 if c.ret_params.contains(&(i as u32)) {
                     self.m.edge(p, ret);
                 }
-                for (_, k) in c.ret_reach_keys.iter().filter(|(j, _)| *j == i as u32) {
-                    self.ret_through_key(p, k, ret, &c.name);
+                for (_, k, then) in c.ret_reach_keys.iter().filter(|(j, _, _)| *j == i as u32) {
+                    self.ret_through_key(p, k, then, ret, &c.name);
                 }
                 if c.ret_reach.contains(&(i as u32)) {
                     let q = self

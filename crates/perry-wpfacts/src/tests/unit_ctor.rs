@@ -153,3 +153,59 @@ fn a_receiver_reach_stored_into_another_units_instance_keeps_its_class() {
     assert_eq!(u.kind.objs, w.kind.objs, "{}", pf.dump_text());
     assert_eq!(verdicts(&pf, "parent"), verdicts(&whole, "parent"), "{}", pf.dump_text());
 }
+
+/// DECISIONS 138: CD's Node.successor returns `treeMinimum(this.right)` or
+/// the end of a `.parent` walk: a reach of its receiver, then the keys the
+/// body reads on it, repeatedly. The contract says so (not ⊤, not
+/// everything the receiver reaches, which would add the tree's values), so
+/// another unit's store through the result stays on Node.
+const TREE_SUCC: &str = r#"
+    class Val { v: number; constructor(v: number) { this.v = v; } }
+    function treeMinimum(x: any): any {
+      while (x.left) { x = x.left; }
+      return x;
+    }
+    class Node {
+      value: Val; left: Node | null; right: Node | null; parent: Node | null;
+      constructor(value: Val) { this.value = value; this.left = null; this.right = null; this.parent = null; }
+      successor(): Node | null {
+        let x: Node = this;
+        if (x.right) { return treeMinimum(x.right); }
+        let y = x.parent;
+        while (y && x === y.right) { x = y; y = y.parent; }
+        return y;
+      }
+    }
+    class Tree {
+      root: Node | null;
+      constructor() { this.root = null; }
+      insert(v: number): Node {
+        const z = new Node(new Val(v));
+        z.parent = this.root;
+        if (this.root) { this.root.right = z; } else { this.root = z; }
+        return z;
+      }
+      unlink(): number {
+        const z = this.root;
+        if (!z) { return 0; }
+        const y = z.successor();
+        if (y) { y.parent = null; return y.value.v; }
+        return 0;
+      }
+    }
+    const t = new Tree();
+    t.insert(1);
+    t.insert(2);
+    console.log(t.unlink());
+    "#;
+
+#[test]
+fn a_receiver_walk_result_of_another_units_method_keeps_its_class() {
+    let pf = units(TREE_SUCC);
+    let whole = facts(TREE_SUCC);
+    assert!(pf.broken.is_empty(), "{:?}\n{}", pf.broken, pf.dump_text());
+    let (u, w) = (field(tmpl(&pf, "Node"), "parent"), field(tmpl(&whole, "Node"), "parent"));
+    assert!(!u.kind.top, "{}", pf.dump_text());
+    assert_eq!(u.kind.objs, w.kind.objs, "{}", pf.dump_text());
+    assert_eq!(verdicts(&pf, "parent"), verdicts(&whole, "parent"), "{}", pf.dump_text());
+}

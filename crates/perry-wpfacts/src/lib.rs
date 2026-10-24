@@ -660,7 +660,29 @@ fn fn_contract_of(
             .collect();
     let mut ret_params: Vec<u32> = Vec::new();
     let mut ret_reach: Vec<u32> = Vec::new();
-    let mut ret_reach_keys: Vec<(u32, String)> = Vec::new();
+    let mut ret_reach_keys: Vec<(u32, String, Option<Vec<String>>)> = Vec::new();
+    // A reach marker reaches itself under every key (§18.4): what it stands
+    // for in the result is its reach through the keys the body read on it,
+    // repeatedly; a computed-key read (its all-fields node feeds a reader)
+    // is any key (DECISIONS 138).
+    let keys_read = |t: model::Tok| -> Option<Vec<String>> {
+        if g.m.all_fields.get(&t).is_some_and(|&n| !g.m.nodes[n as usize].succ.is_empty()) {
+            return None;
+        }
+        let mut v: Vec<String> = g.m.field_keys.get(&t).map_or_else(Vec::new, |ks| {
+            ks.iter().map(|&a| g.m.atoms[a as usize].clone()).collect()
+        });
+        v.sort();
+        v.dedup();
+        Some(v)
+    };
+    let join_keys = |a: Option<Vec<String>>, b: Option<Vec<String>>| -> Option<Vec<String>> {
+        let mut v = a?;
+        v.extend(b?);
+        v.sort();
+        v.dedup();
+        Some(v)
+    };
     let mut ret_unknown = false;
     let mut ret_value = units::ValueContract::default();
     let mut ret_prim = rets.iter().fold(0, |p, &n| p | g.m.nodes[n as usize].prim);
@@ -670,23 +692,45 @@ fn fn_contract_of(
             // An argument marker reads as the markers it stands for (DECISIONS 44).
             let mut toks: Vec<model::Tok> = Vec::new();
             for t in g.m.nodes[n as usize].pts.to_sorted() {
-                // Its keyed reach is what each member reaches under the key:
-                // one named key of this function's own parameter; anything
-                // else (an escaped member, another function's, a deeper
-                // reach) reads as ⊤, another unit's value whole (DECISIONS
-                // 119: no ⊤ beside the marker stands for it).
+                // Its keyed reach is what each member reaches under the key,
+                // then under the keys read on it: one named key of this
+                // function's own parameter, or a deeper reach of it (a
+                // keyed reach marker: its key, then the keys read on both,
+                // DECISIONS 138; the any-key reach: what the parameter
+                // reaches). Anything else (an escaped member, another
+                // function's) reads as ⊤, another unit's value whole
+                // (DECISIONS 119: no ⊤ beside the marker stands for it).
                 if let Some(&(p, a)) = g.m.keyed_parent.get(&t) {
                     let ms = g.m.marker_members(p);
+                    let a = g.m.atoms[a as usize].clone();
                     for &m in &ms {
-                        match g.m.param_marker.get(&m) {
-                            Some(&(f2, i))
-                                if f2 == f
-                                    && g.m.marker_of.get(&(f, i)) == Some(&m)
-                                    && !g.m.marker_is_top(m) =>
-                            {
-                                let k = (i, g.m.atoms[a as usize].clone());
+                        let own = match g.m.param_marker.get(&m) {
+                            Some(&(f2, i)) if f2 == f && !g.m.marker_is_top(m) => {
+                                g.m.marker_of.get(&(f, i)).map(|&mk| (i, mk))
+                            }
+                            _ => None,
+                        };
+                        let deeper = own.and_then(|(i, mk)| {
+                            g.m.keyed_reach.get(&mk)?.iter().find(|&&(_, r)| r == m).map(|&(k0, _)| (i, k0))
+                        });
+                        match own {
+                            Some((i, mk)) if mk == m => {
+                                let k = (i, a.clone(), keys_read(t));
                                 if !ret_reach_keys.contains(&k) {
                                     ret_reach_keys.push(k);
+                                }
+                            }
+                            Some((i, _)) if deeper.is_some() => {
+                                let k0 = deeper.map(|(_, k0)| g.m.atoms[k0 as usize].clone()).unwrap();
+                                let ks = join_keys(join_keys(keys_read(m), keys_read(t)), Some(vec![a.clone()]));
+                                let k = (i, k0, ks);
+                                if !ret_reach_keys.contains(&k) {
+                                    ret_reach_keys.push(k);
+                                }
+                            }
+                            Some((i, mk)) if g.m.marker_reach.get(&mk) == Some(&m) => {
+                                if !ret_reach.contains(&i) {
+                                    ret_reach.push(i);
                                 }
                             }
                             _ => {
@@ -741,7 +785,7 @@ fn fn_contract_of(
                             .get(&(f, i))
                             .and_then(|mk| g.m.keyed_reach.get(mk)?.iter().find(|&&(_, r)| r == t));
                     if let Some(&(a, _)) = keyed {
-                        let k = (i, g.m.atoms[a as usize].clone());
+                        let k = (i, g.m.atoms[a as usize].clone(), keys_read(t));
                         if !ret_reach_keys.contains(&k) {
                             ret_reach_keys.push(k);
                         }

@@ -131,7 +131,10 @@ pub(crate) struct FnContract {
     /// (`return p.k`, `u32::MAX`: the receiver): the reader loads that key
     /// of its argument, not everything the argument reaches (its
     /// prototype's methods, its class), as for `reach_keys` (§18.4).
-    pub ret_reach_keys: Vec<(u32, String)>,
+    /// Then the keys the body read on that reach, repeatedly (`Some`), or
+    /// any key (`None`, a computed-key read): `x = p.k; while (x.left) x =
+    /// x.left; return x` is `p.k` then `left`* (DECISIONS 138).
+    pub ret_reach_keys: Vec<(u32, String, Option<Vec<String>>)>,
     /// The result may also be an unknown value (⊤ to the caller).
     pub ret_unknown: bool,
     /// The global builtins, program objects and arrays it may return
