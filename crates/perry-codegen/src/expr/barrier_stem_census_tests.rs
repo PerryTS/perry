@@ -91,6 +91,7 @@ pub(super) enum StemKind {
 
 pub(super) const VERIFIED_BARRIER_STEMS: &[(&str, StemKind)] = &[
     ("apush", StemKind::GenerationTested),
+    ("append", StemKind::ValueAndGenerationTested),
     ("class_field_set", StemKind::PointerTestedStore),
     ("ctor_prologue", StemKind::ValueAndGenerationTested),
     ("dynarr.set", StemKind::ValueAndGenerationTested),
@@ -100,6 +101,9 @@ pub(super) const VERIFIED_BARRIER_STEMS: &[(&str, StemKind)] = &[
     ("idxset.recv_global", StemKind::ValueAndGenerationTested),
     ("idxset.recv_prop", StemKind::ValueAndGenerationTested),
     ("idxset.runtime_key", StemKind::ValueAndGenerationTested),
+    ("family_set", StemKind::PointerTestedStore),
+    ("l2i", StemKind::PointerTestedStore),
+    ("l2s", StemKind::PointerTestedStore),
     ("private_field_set", StemKind::PointerTestedStore),
     ("put.pic", StemKind::PointerTestedStore),
     ("scope_set", StemKind::ValueAndGenerationTested),
@@ -1132,11 +1136,69 @@ fn generator_state_ir() -> String {
         .expect("LLVM IR should be UTF-8")
 }
 
+/// Use the driver's family and birth-content prepasses so the witness reaches
+/// the coloured-key and constructor-run stores, plus a literal-prototype
+/// family add. A null prototype expression has no family binding to follow.
+fn family_store_ir() -> String {
+    let source = r#"
+        class Input {
+            constructor(css) {
+                this.css = css.toString();
+                if (this.css === "bom") {
+                    this.hasBOM = true;
+                    this.css = this.css.toString();
+                } else {
+                    this.hasBOM = false;
+                }
+                this.document = this.css;
+            }
+        }
+        function write(o: any, value: any) { o.css = value; }
+        const input = new Input("plain");
+        write(input, { payload: "pointer-bearing" });
+        console.log(input.document, input.css);
+        const parent = { anchor: 1 };
+        function add(value: any) {
+            const object: any = Object.create(parent);
+            object.late = value;
+            return object;
+        }
+        console.log(add(input).late);
+    "#;
+    let ast = perry_parser::parse_typescript(source, "barrier_family.ts").unwrap();
+    let hir = perry_hir::lower_module(&ast, "barrier_family", "barrier_family.ts").unwrap();
+    let mut opts = crate::temp_root_coverage::entry_opts();
+    opts.program_layouts = std::sync::Arc::new(crate::layout_families::compute(
+        [("barrier_family.ts", &hir)],
+        true,
+        &Default::default(),
+    ));
+    assert!(!opts.program_layouts.families.is_empty());
+    assert!(opts.program_layouts.colored("css").is_some());
+    let births = crate::module_birth_shapes(&hir, opts.clone()).unwrap();
+    opts.static_shape_ids = crate::assign_static_shape_ids(births.iter().map(|b| &b.shape))
+        .into_iter()
+        .collect();
+    String::from_utf8(compile_module(&hir, opts).expect("family stores compile")).unwrap()
+}
+
+fn append_ir() -> String {
+    let source = r#"
+        function append(a: any, value: any) { a[a.length] = value; }
+        append([], "pointer-bearing string");
+    "#;
+    let ast = perry_parser::parse_typescript(source, "barrier_append.ts").unwrap();
+    let hir = perry_hir::lower_module(&ast, "barrier_append", "barrier_append.ts").unwrap();
+    String::from_utf8(compile_module(&hir, ir_opts()).expect("append compiles")).unwrap()
+}
+
 /// The pristine IR for a stem. Exhaustive on the registry: an entry added
 /// without a probe panics HERE, named, instead of passing silently.
 fn probe_ir(stem: &str) -> String {
     match stem {
         "apush" => apush_ir(),
+        "append" => append_ir(),
+        "family_set" | "l2s" | "l2i" => family_store_ir(),
         "class_field_set" => super::class_field_barrier_tests::ir(),
         "ctor_prologue" => ctor_prologue_ir(),
         "dynarr.set" => dynarr_set_ir(),
