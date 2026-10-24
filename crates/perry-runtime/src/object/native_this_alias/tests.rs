@@ -1,6 +1,6 @@
 use super::*;
 use crate::object::shapes::store_kind::receiver_admits_plain_store;
-use crate::object::shapes::{object_shape_stamp, shape_object_kind_by_id, ShapeObjectKind};
+use crate::object::shapes::{object_shape_stamp, shape_object_kind_for_word, ShapeObjectKind};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 // Test-only id in the native handle band; the extension declines every other id.
@@ -46,7 +46,7 @@ fn kind_of(obj: &crate::gc::RuntimeHandle<'_>) -> (u32, Option<ShapeObjectKind>,
         let id = object_shape_stamp(o);
         (
             id,
-            shape_object_kind_by_id(id),
+            shape_object_kind_for_word(id),
             receiver_admits_plain_store(o),
         )
     })

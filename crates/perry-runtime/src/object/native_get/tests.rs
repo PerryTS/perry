@@ -181,7 +181,7 @@ fn a_default_shape_follows_the_resolved_realm_prototype_without_class_metadata()
     js_object_set_field_by_name(ptr, key("shape_read_test"), 31.0);
     let child = js_object_alloc(0, 0);
     assert_eq!(
-        unsafe { shapes::object_shape_identity(child) },
+        unsafe { shapes::object_proto_identity(child) },
         shapes::PROTO_ID_DEFAULT
     );
     assert_eq!(

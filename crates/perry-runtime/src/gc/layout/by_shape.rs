@@ -208,7 +208,7 @@ mod tests {
         let _lock = crate::gc::global_side_table_test_lock();
         unsafe {
             let (obj, id) = number_and_string();
-            let rep = crate::object::shapes::shape_descriptor_by_id(id)
+            let rep = crate::object::shapes::shape_descriptor_for_word(id)
                 .expect("shape")
                 .rep;
             assert_eq!(
@@ -229,7 +229,7 @@ mod tests {
             let correct_ok = skipped_pointer_slot(payload, &correct).is_none();
 
             // Sabotage: the same keys with BOTH lanes F64, stamped on the object.
-            let d = crate::object::shapes::shape_descriptor_by_id(id).expect("shape");
+            let d = crate::object::shapes::shape_descriptor_for_word(id).expect("shape");
             let wrong = crate::object::shapes::publish_shape_result(
                 crate::object::shapes::shape_descriptor_ensure_with_rep(
                     d.keys as usize as *const crate::array::ArrayHeader,

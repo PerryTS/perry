@@ -255,7 +255,7 @@ pub(super) fn record_birth_shape(brand: u64) -> u32 {
     // SAFETY: the record of the id just published in this agent.
     unsafe {
         crate::object::shapes::note_external_shape_carrier(
-            crate::object::shapes::shape_descriptor_by_id(shape),
+            crate::object::shapes::shape_descriptor_for_word(shape),
         );
     }
     shape

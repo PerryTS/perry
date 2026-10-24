@@ -35,7 +35,7 @@ const METHOD_ENTRY: u8 = crate::object::key_attrs::ENTRY_NON_ENUMERABLE;
 /// Missing proof takes ordinary prototype birth. This check cannot allocate.
 pub(super) fn static_parent_matches(class_id: u32, requested: u32, parent_bits: u64) -> bool {
     use crate::object::shapes::{
-        shape_record_by_id, PROTO_ID_CLASS, PROTO_ID_DEFAULT, PROTO_ID_MIXED,
+        shape_record_for_word, PROTO_ID_CLASS, PROTO_ID_DEFAULT, PROTO_ID_MIXED,
     };
     let declaration = super::declarations::class_declaration(class_id);
     let family_parent = if declaration.is_some_and(|d| !d.instance_layout.is_null()) {
@@ -48,7 +48,7 @@ pub(super) fn static_parent_matches(class_id: u32, requested: u32, parent_bits: 
     } else {
         None
     };
-    let candidate = if let Some(shape) = shape_record_by_id(requested) {
+    let candidate = if let Some(shape) = shape_record_for_word(requested) {
         match shape.proto_id() {
             PROTO_ID_DEFAULT => 0,
             pid if (PROTO_ID_CLASS..PROTO_ID_MIXED).contains(&pid) => pid as u32,
@@ -101,8 +101,8 @@ pub(super) fn decl_prototype_born_final(class_id: u32, parent_bits: u64) -> Opti
     // final builder: it can still derive a shape from the actual parent bits,
     // as it did before a static candidate existed. Preserve that allocation
     // path instead of rebuilding every member through transient key shapes.
-    let requested = Some(super::declarations::class_birth_shape(class_id))
-        .filter(|&id| id != 0 && static_parent_matches(class_id, id, parent_bits));
+    let requested = super::declarations::class_birth_layout_request(class_id)
+        .filter(|r| static_parent_matches(class_id, r.identity.0, parent_bits));
     let members = class_prototype_member_names(class_id);
     if members.iter().any(|(name, accessor)| {
         name == b"constructor" || (!*accessor && class_method_entry_bytes(class_id, name).is_none())

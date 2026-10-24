@@ -290,7 +290,7 @@ pub(crate) fn read_field(
 fn remember(site: &'static std::thread::LocalKey<Cell<Option<Birth>>>, input: Input, stream: f64) {
     let obj = object_ptr_from_value(stream).unwrap();
     let shape = unsafe { crate::object::shapes::object_shape_stamp(obj) };
-    let Some(record) = crate::object::shapes::shape_descriptor_by_id(shape) else {
+    let Some(record) = crate::object::shapes::shape_descriptor_for_word(shape) else {
         return;
     };
     if record.hole_count != 0 || record.integrity_flags != 0 {
@@ -315,7 +315,7 @@ fn seed_new_count(stream: f64, proto: f64, source_shape: Option<u32>) {
     let count = crate::runtime_state_key!(b"_eventsCount");
     let obj = object_ptr_from_value(stream.get_nanbox_f64()).unwrap();
     if let Some(from) = source_shape {
-        let Some(shape) = crate::object::shapes::shape_descriptor_by_id(from) else {
+        let Some(shape) = crate::object::shapes::shape_descriptor_for_word(from) else {
             return;
         };
         if unsafe {
@@ -355,7 +355,7 @@ fn begin(
         previous,
     )?;
     if let Some(b) = previous.filter(|b| matches_input(b.input, proof)) {
-        if let Some(shape) = crate::object::shapes::shape_descriptor_by_id(b.shape) {
+        if let Some(shape) = crate::object::shapes::shape_descriptor_for_word(b.shape) {
             let obj = object_ptr_from_value(stream.get_nanbox_f64()).unwrap();
             if unsafe {
                 crate::object::shapes::install_cached_object_shape_transition(

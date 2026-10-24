@@ -17,12 +17,14 @@ static KEYS: [PerryLayoutKey; 1] = [PerryLayoutKey {
 }];
 static mut SYMBOL: u64 = crate::value::TAG_UNDEFINED;
 static mut LAYOUT: PerryLayoutDesc = PerryLayoutDesc {
+    shape_id: 0,
+    _layout_pad: 0,
     family: 0x464e4201,
     variant: crate::codegen_abi::LAYOUT_VARIANT_FUNCTION_CONSTRUCTOR,
     kind: 0,
     integrity: 0,
     slot_count: 1,
-    layout_id: layout_desc::LAYOUT_ID_CARRIED,
+    layout_id: 0,
     rep: 0,
     proto: std::ptr::without_provenance(2),
     keys: KEYS.as_ptr(),
@@ -149,7 +151,7 @@ fn family_birth_keeps_holes_and_live_prototype_and_checks_symbol_identity() {
                 (*std::ptr::addr_of!(LAYOUT)).layout_id
             );
             assert_eq!(
-                super::super::shapes::shape_object_kind_by_id((*o).parent_class_id),
+                super::super::shapes::shape_object_kind_for_word((*o).parent_class_id),
                 Some(super::super::shapes::ShapeObjectKind::Ordinary)
             );
             assert!(

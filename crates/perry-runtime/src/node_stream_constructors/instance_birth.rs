@@ -227,7 +227,7 @@ unsafe fn derived_instance_layout(word: u32) -> Option<*const PerryLayoutDesc> {
     // A derived shape is minted in the dynamic band; a static id (every
     // registered layout, a class family's) is its own layout or none.
     if word & crate::object::layout_desc::LAYOUT_SHADOW_BIT != 0
-        || crate::object::shapes::is_static_shape_id(word)
+        || crate::object::shapes::is_static_layout_word(word)
     {
         return None;
     }

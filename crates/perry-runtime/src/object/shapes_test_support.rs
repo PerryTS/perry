@@ -135,7 +135,7 @@ pub(crate) fn test_rekey_shape_family(old: usize, new: usize) {
     let mut inner = table.inner.borrow_mut();
     if let Some(ids) = inner.families.remove(&(old as u64)) {
         for &id in ids.as_slice() {
-            let Some(record) = table.slab().get(id) else {
+            let Some(record) = table.slab().get_handle(id) else {
                 continue;
             };
             if record.has(shapes_store::RECORD_FLAG_FACTS_INDEXED) {
@@ -276,7 +276,7 @@ pub(crate) fn test_shape_record_is_carrier(id: u32) -> bool {
 /// retaining the live authoritative record and its keys family.
 pub(crate) fn test_remove_facts_index(id: u32) {
     let table = &crate::state::state().shapes;
-    let record = table.slab().get(id).unwrap();
+    let record = table.slab().get_handle(id).unwrap();
     let facts = record.facts_key_with_keys(record.keys);
     table.inner.borrow_mut().facts_remove(facts, id);
 }

@@ -79,10 +79,10 @@ pub(crate) unsafe fn object_evaluation_brand(obj: *const crate::object::ObjectHe
 /// and holder words, which the birth shades as the ordinary link and brand
 /// stamp do. One directory read.
 pub(crate) fn evaluation_copy_birth_edges(copy: u32, family: u32) -> Option<(u64, u64)> {
-    let record = ShapeSlab::agent_record_present(copy)?;
+    let record = ShapeSlab::agent_record_for_word_present(copy)?;
     // SAFETY: a present record of this agent, read immediately.
     let record = unsafe { &*record };
-    if record.evaluation_layout_of != family || family == 0 {
+    if record.family_desc_index_plus_one != family || family == 0 {
         return None;
     }
     let prototype = identity_prototype_word(record.proto_id);

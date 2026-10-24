@@ -104,7 +104,7 @@ fn read_stub_insert(token: u64, key_bits: u64, slot: u64) {
     }
     // Admission belongs to publication. Alias registration changes the shape,
     // so a hit on an admitted shape needs no second shape-kind lookup.
-    if crate::object::shapes::shape_object_kind_by_id(token as u32)
+    if crate::object::shapes::shape_object_kind_for_word(token as u32)
         .is_some_and(crate::object::shapes::ShapeObjectKind::is_native_alias)
     {
         return;

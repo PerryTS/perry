@@ -63,10 +63,10 @@ unsafe fn admitted_receiver(obj: *mut ObjectHeader) -> Option<super::shapes::Sha
         return None;
     }
     let id = (*obj).shape_word();
-    if !super::shapes::is_site_matchable_shape_id(id) {
+    if !super::shapes::is_site_matchable_layout_word(id) {
         return None;
     }
-    let record = super::shapes::shape_record_by_id(id)?;
+    let record = super::shapes::shape_record_for_word(id)?;
     if crate::process::is_process_env_ptr(addr)
         || super::is_arguments_object(obj)
         || crate::url::is_url_object_shape(obj)

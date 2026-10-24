@@ -1004,11 +1004,11 @@ impl Writer<'_> {
     ) -> SerializedValue {
         let index = self.next_index as usize - 1;
         let id = crate::object::shapes::object_shape_stamp(obj);
-        let descriptor = crate::object::shapes::shape_descriptor_by_id(id);
+        let descriptor = crate::object::shapes::shape_descriptor_for_word(id);
         let eligible = descriptor.is_some_and(|d| {
             (d.object_kind.is_ordinary_layout()
                 || d.object_kind == crate::object::shapes::ShapeObjectKind::Class)
-                && crate::object::shapes::is_site_matchable_shape_id(id)
+                && crate::object::shapes::is_site_matchable_layout_word(id)
                 && d.hole_count == 0
                 && d.brands().is_empty()
                 && d.record_ref()

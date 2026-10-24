@@ -123,7 +123,7 @@ fn check_seed_survives(order_seed_first: bool, tag: &str, requested: u32) {
         published_after <= published_before,
         "the collection must not publish key lists ({published_before} -> {published_after})"
     );
-    let seeded = shapes::shape_descriptor_by_id(id).map(|d| d.keys);
+    let seeded = shapes::shape_descriptor_for_word(id).map(|d| d.keys);
     let names: Vec<&[u8]> = literal.iter().map(|n| n.as_bytes()).collect();
     let walked = unsafe { canonical_keys_for_names(&names) }.arr() as u64;
     assert_eq!(

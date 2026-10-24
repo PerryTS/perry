@@ -616,7 +616,7 @@ pub(crate) unsafe fn declared_class_chain_blocks_store(
     for _ in 0..64 {
         class = super::class_generic_origin(class).unwrap_or(class);
         let id = class_registry::declarations::class_birth_shape(class);
-        let record = super::shapes::shape_record_by_id(id)?;
+        let record = super::shapes::shape_record_for_word(id)?;
         let holder = class_registry::class_decl_prototype_object(class);
         if !holder.is_null() {
             if (*holder).parent_class_id != id {

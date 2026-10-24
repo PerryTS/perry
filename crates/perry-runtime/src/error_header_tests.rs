@@ -89,7 +89,7 @@ fn an_error_born_in_a_dead_closure_slot_does_not_inherit_its_shape() {
         );
         let word = *((err as *const u8).add(crate::closure::CLOSURE_SHAPE_OFFSET) as *const u32);
         assert!(
-            !crate::object::shapes::is_shape_id(word),
+            !crate::object::shapes::is_layout_word(word),
             "a recycled closure's ShapeId leaked into the Error's +4 word: {word:#x}"
         );
         assert!(!crate::closure::is_closure_ptr(err as usize));

@@ -10,12 +10,12 @@ use super::*;
 
 #[inline]
 pub(crate) fn note_shape_id(shape_id: u32) {
-    unsafe { shapes::note_cache_carrier(shapes::shape_descriptor_by_id(shape_id)) };
+    unsafe { shapes::note_cache_carrier(shapes::shape_descriptor_for_word(shape_id)) };
 }
 
 #[inline]
 fn target_descriptor_resolves(entry: TransitionEntry, expected_len: u32) -> bool {
-    shapes::shape_descriptor_by_id(entry.target_shape_id).is_some_and(|descriptor| {
+    shapes::shape_descriptor_for_word(entry.target_shape_id).is_some_and(|descriptor| {
         descriptor.keys == entry.next_keys as u64 && descriptor.logical_key_count == expected_len
     })
 }
@@ -70,8 +70,10 @@ pub(crate) fn recompute_after_full_trace() {
 
     with_transition_cache(|table| unsafe {
         for entry in (*table).iter() {
-            if stable_target_resolves(*entry) {
+            if entry.next_keys != 0 {
+                note_shape_id(entry.prev_shape_id);
                 note_shape_id(entry.target_shape_id);
+                if let Some(source) = spread::source_shape(entry) { note_shape_id(source); }
             }
         }
     });
@@ -87,4 +89,5 @@ pub(crate) fn recompute_after_full_trace() {
             note_shape_id(runtime_shape_id);
         }
     }
+    shapes::recompute_record_handle_carriers();
 }

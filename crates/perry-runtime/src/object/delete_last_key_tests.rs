@@ -11,7 +11,7 @@ unsafe fn key(name: &str) -> *mut crate::StringHeader {
 }
 
 unsafe fn key_count(obj: *const ObjectHeader) -> u32 {
-    shapes::shape_record_by_id(shapes::object_shape_stamp(obj))
+    shapes::shape_record_for_word(shapes::object_shape_stamp(obj))
         .expect("a shaped receiver")
         .logical_key_count()
 }

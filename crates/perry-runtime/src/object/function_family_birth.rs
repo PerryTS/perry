@@ -107,22 +107,11 @@ unsafe fn allocate_layout(
     if d.variant != crate::codegen_abi::LAYOUT_VARIANT_FUNCTION_CONSTRUCTOR || tail.count > 64 {
         return None;
     }
-    let existing = layout_desc::registered_layout_id(layout_desc::load_layout_id(tail.layout));
     let p = (prototype.get_nanbox_u64() & crate::value::POINTER_MASK) as *const ObjectHeader;
     let meta = (*p).meta.as_ref()?;
     let proto_id = meta.proto_serial;
     if proto_id == 0 {
         return None;
-    }
-    if let Some(record) = existing.and_then(super::shapes::shape_record_by_id) {
-        if record.proto_id() != proto_id || record.prototype_word() != prototype.get_nanbox_u64() {
-            return None;
-        }
-        if tail.count == 0 {
-            let object = layout_desc::alloc_function_layout(tail.layout);
-            crate::gc::runtime_shade_external_edge(prototype.get_nanbox_u64());
-            return Some(object);
-        }
     }
     let mut bound = [0u64; 64];
     for i in 0..tail.count as usize {
@@ -138,11 +127,11 @@ unsafe fn allocate_layout(
     let _no_gc = crate::gc::GcSuppressScope::new();
     super::shapes::write_identity_word(proto_id, prototype.get_nanbox_u64());
     let id =
-        layout_desc::register_function_layout(tail.layout, existing.unwrap_or(0), bound, proto_id);
+        layout_desc::register_function_layout(tail.layout, 0, bound, proto_id);
     if id == 0 {
         return None;
     }
-    let shape = super::shapes::shape_descriptor_by_id(id)?;
+    let shape = super::shapes::shape_descriptor_for_word(id)?;
     let keys = shape.keys_view();
     let mut next = 0;
     for i in 0..d.key_count {
@@ -154,7 +143,7 @@ unsafe fn allocate_layout(
         }
     }
     drop(_no_gc);
-    let object = layout_desc::alloc_function_layout(tail.layout);
+    let object = layout_desc::alloc_function_layout(tail.layout, id);
     // As for an ordinary Object.create birth, a black newborn shades the
     // existing external prototype edge without allocating receiver metadata.
     crate::gc::runtime_shade_external_edge(prototype.get_nanbox_u64());
@@ -201,7 +190,7 @@ unsafe fn try_symbol_store(
     {
         return false;
     }
-    let Some(record) = super::shapes::shape_record_by_id(id) else {
+    let Some(record) = super::shapes::shape_record_for_word(id) else {
         return false;
     };
     let keys = record.keys() as *const crate::array::ArrayHeader;

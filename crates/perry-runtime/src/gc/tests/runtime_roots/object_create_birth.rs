@@ -45,7 +45,7 @@ fn object_create_refreshes_its_prototype_when_birth_allocation_moves_it() {
         Some(ptr_bits(moved))
     );
     assert_eq!(
-        crate::object::shapes::shape_object_kind_by_id(unsafe {
+        crate::object::shapes::shape_object_kind_for_word(unsafe {
             crate::object::shapes::object_shape_stamp(obj)
         }),
         Some(crate::object::shapes::ShapeObjectKind::Ordinary)

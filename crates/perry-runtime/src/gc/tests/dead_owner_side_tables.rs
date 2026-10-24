@@ -726,7 +726,7 @@ fn test_live_transition_cache_entry_survives_full_gc() {
     let live_key = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_STRING) as usize;
     // This predecessor can recur from a generated module global; without such
     // an owner, retiring it and the now-unusable cache entry is intentional.
-    let prev_shape_id = crate::object::shapes::js_object_shape_id_for_keys(0, 0);
+    let prev_shape_id = crate::object::shapes::js_object_layout_for_keys(0, 0);
     js_shadow_slot_set(0, ptr_bits(next_keys));
     js_shadow_slot_set(1, ptr_bits(live_key));
 
@@ -936,7 +936,7 @@ fn object_meta_expando_is_appended_not_inserted() {
 ///
 /// The entry is seeded with a LIVE `prev_shape_id` on purpose. An earlier
 /// version of this test used `prev_shape_id = 0`, which the prune's
-/// pre-existing `shape_descriptor_by_id(..).is_none()` clause already treats as
+/// pre-existing `shape_descriptor_for_word(..).is_none()` clause already treats as
 /// dead — so it passed with the new clause deleted, proving nothing. Sabotage
 /// check: removing `is_dead_owner(entry.next_keys)` must fail this test.
 #[test]
@@ -950,7 +950,7 @@ fn transition_cache_entry_does_not_pin_its_target() {
         let live_shape = crate::object::shapes::test_shape_id_for_keys(keys as usize)
             .expect("a freshly allocated object must have a registered shape");
         assert!(
-            crate::object::shapes::shape_descriptor_by_id(live_shape).is_some(),
+            crate::object::shapes::shape_descriptor_for_word(live_shape).is_some(),
             "test premise: prev_shape_id must be LIVE, or the prune's existing \
              dead-shape clause decides the outcome and this test is vacuous"
         );

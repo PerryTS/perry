@@ -18,7 +18,7 @@
 
 use super::field_rep::{slot_rep, REP_ANY, REP_F64};
 use super::shapes::{
-    js_object_shape_id_for_class_keys, object_shape_stamp, shape_descriptor_by_id,
+    js_object_layout_for_class_keys, object_shape_stamp, shape_descriptor_for_word,
 };
 use super::ObjectHeader;
 
@@ -37,7 +37,7 @@ fn mixed_ordered_definitions_retain_preceding_numeric_lanes() {
         packed.len() as u32,
         rep,
     ) as usize as u64;
-    let completed = js_object_shape_id_for_class_keys(keys, 3, CLASS, rep);
+    let completed = js_object_layout_for_class_keys(keys, 3, CLASS, rep);
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj = scope.root_raw_mut_ptr(crate::object::js_object_alloc_with_parent(CLASS, 0, 3));
     let label = scope.root_string_ptr(crate::string::js_string_from_bytes(b"label".as_ptr(), 5));
@@ -85,7 +85,7 @@ fn ordered_definitions_reach_the_completed_class_contract_and_mutations_revoke_i
         packed.len() as u32,
         F64_A_B,
     ) as usize as u64;
-    let completed = js_object_shape_id_for_class_keys(keys, 2, CLASS, F64_A_B);
+    let completed = js_object_layout_for_class_keys(keys, 2, CLASS, F64_A_B);
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj = scope.root_raw_mut_ptr(crate::object::js_object_alloc_with_parent(CLASS, 0, 2));
     let a = scope.root_string_ptr(crate::string::js_string_from_bytes(
@@ -136,7 +136,7 @@ fn keys(packed: &[u8], count: u32) -> u64 {
 }
 
 fn rep_of(id: u32) -> u64 {
-    shape_descriptor_by_id(id).expect("live shape").rep
+    shape_descriptor_for_word(id).expect("live shape").rep
 }
 
 unsafe fn slot_bits(obj: *mut ObjectHeader, index: usize) -> u64 {
@@ -161,12 +161,12 @@ unsafe fn birth(keys: u64, count: u32, id: u32) -> *mut ObjectHeader {
 #[test]
 fn a_class_birth_id_carries_its_minted_rep_and_births_fill_its_f64_lanes() {
     let k = keys(b"a\0b\0c\0", 3);
-    let typed = js_object_shape_id_for_class_keys(k, 3, CID, F64_A_B);
-    let untyped = js_object_shape_id_for_class_keys(k, 3, CID, REP_ANY);
+    let typed = js_object_layout_for_class_keys(k, 3, CID, F64_A_B);
+    let untyped = js_object_layout_for_class_keys(k, 3, CID, REP_ANY);
     assert_ne!(typed, untyped, "the rep is shape identity");
     assert_eq!(rep_of(typed), F64_A_B);
     assert_eq!(rep_of(untyped), REP_ANY);
-    assert_eq!(js_object_shape_id_for_class_keys(k, 3, CID, F64_A_B), typed);
+    assert_eq!(js_object_layout_for_class_keys(k, 3, CID, F64_A_B), typed);
     unsafe {
         let obj = birth(k, 3, typed);
         assert_eq!(object_shape_stamp(obj), typed);
@@ -186,7 +186,7 @@ fn a_class_birth_id_carries_its_minted_rep_and_births_fill_its_f64_lanes() {
 #[test]
 fn generalizing_an_instance_moves_the_instance_not_the_class_birth_id() {
     let k = keys(b"u\0v\0", 2);
-    let id = js_object_shape_id_for_class_keys(k, 2, CID, F64_A_B);
+    let id = js_object_layout_for_class_keys(k, 2, CID, F64_A_B);
     unsafe {
         let obj = birth(k, 2, id);
         let key_v = crate::string::js_string_from_bytes(b"v".as_ptr(), 1);
@@ -228,8 +228,8 @@ fn generalizing_an_instance_moves_the_instance_not_the_class_birth_id() {
 fn a_region_word_refuses_a_boxed_store_into_an_f64_lane() {
     use super::shapes::{js_region_loop_pack, REGION_GUARD_WORD_EMPTY};
     let k = keys(b"ra\0rb\0", 2);
-    let typed = js_object_shape_id_for_class_keys(k, 2, CID, REP_F64);
-    let untyped = js_object_shape_id_for_class_keys(k, 2, CID, REP_ANY);
+    let typed = js_object_layout_for_class_keys(k, 2, CID, REP_F64);
+    let untyped = js_object_layout_for_class_keys(k, 2, CID, REP_ANY);
     let (ra, rb) = unsafe {
         let (slots, len) = crate::object::keys_array_dense_slots_resolved(
             k as usize as *const crate::array::ArrayHeader,
@@ -276,8 +276,8 @@ fn a_region_prime_value_tests_a_requested_number_read_on_a_non_identity_lane() {
     use core::sync::atomic::{AtomicU64, Ordering};
 
     let k = keys(b"p7a\0p7b\0", 2);
-    let typed = js_object_shape_id_for_class_keys(k, 2, CID, REP_F64);
-    let untyped = js_object_shape_id_for_class_keys(k, 2, CID, REP_ANY);
+    let typed = js_object_layout_for_class_keys(k, 2, CID, REP_F64);
+    let untyped = js_object_layout_for_class_keys(k, 2, CID, REP_ANY);
     let (a, b) = unsafe {
         let (slots, len) = crate::object::keys_array_dense_slots_resolved(
             k as usize as *const crate::array::ArrayHeader,
@@ -314,7 +314,7 @@ fn a_region_prime_value_tests_a_requested_number_read_on_a_non_identity_lane() {
 
     // A deprecated lane is no longer an identity fact for a new learned
     // region: its R is served by the value test.
-    assert!(super::shapes::shape_record_by_id(typed)
+    assert!(super::shapes::shape_record_for_word(typed)
         .expect("typed shape record")
         .deprecate_rep_slot(0));
     let word = prime(typed, a, 0, 0, 1);
@@ -403,7 +403,7 @@ fn every_birth_path_of_a_rep_literal_and_class_stamps_one_shape_and_fills_its_f6
             F64_A_B,
         ) as usize as u64;
         // Module init's birth id (what the inline `new` bakes in).
-        let id = js_object_shape_id_for_class_keys(k, 3, cid, F64_A_B);
+        let id = js_object_layout_for_class_keys(k, 3, cid, F64_A_B);
         assert_eq!(rep_of(id), F64_A_B);
         let (_, cache_id) =
             super::shape_cache_get_with_id(super::alloc_plain::class_keys_cache_slot(cid, 3));
@@ -495,7 +495,7 @@ fn a_region_constfn_shape_keeps_numeric_admission_and_refuses_special_stores() {
         entries.as_ptr(),
         1,
     );
-    let descriptor = shape_descriptor_by_id(completed).expect("completed CF record");
+    let descriptor = shape_descriptor_for_word(completed).expect("completed CF record");
     assert_eq!(descriptor.special_constfn_mask, 1);
     assert_eq!(descriptor.rep, rep);
     assert_eq!(descriptor.constfn_infos()[0].info, info as usize as u64);

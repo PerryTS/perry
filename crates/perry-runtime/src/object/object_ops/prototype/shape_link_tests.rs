@@ -8,7 +8,7 @@ fn declaration_collision_is_projected_when_the_shape_is_minted() {
     unsafe { crate::object::js_register_anon_shape_class_id(id) };
     let before = crate::object::js_object_alloc(id, 0);
     assert_eq!(
-        unsafe { crate::object::shapes::object_shape_identity(before) },
+        unsafe { crate::object::shapes::object_proto_identity(before) },
         crate::object::shapes::PROTO_ID_DEFAULT
     );
     unsafe { crate::object::js_register_class_name(id, b"ShapeCollision".as_ptr(), 14) };
@@ -19,7 +19,7 @@ fn declaration_collision_is_projected_when_the_shape_is_minted() {
     );
     let after = crate::object::js_object_alloc(id, 0);
     assert_eq!(
-        unsafe { crate::object::shapes::object_shape_identity(after) },
+        unsafe { crate::object::shapes::object_proto_identity(after) },
         crate::object::shapes::PROTO_ID_CLASS | u64::from(id)
     );
     assert_eq!(
@@ -28,7 +28,7 @@ fn declaration_collision_is_projected_when_the_shape_is_minted() {
         "class resolution retains its generation guard"
     );
     assert_eq!(
-        unsafe { crate::object::shapes::object_shape_identity(before) },
+        unsafe { crate::object::shapes::object_proto_identity(before) },
         crate::object::shapes::PROTO_ID_DEFAULT,
         "the earlier anonymous object retains its birth shape"
     );

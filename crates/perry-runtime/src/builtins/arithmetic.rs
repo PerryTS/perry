@@ -938,7 +938,7 @@ mod rel_numeric_fastpath_tests {
             let fn_shape = crate::closure::shape::function_base_shape(
                 crate::closure::shape::FunctionProtoKind::Function,
             );
-            assert!(crate::object::shapes::is_exotic_shape_id(fn_shape));
+            assert!(crate::object::shapes::is_exotic_layout_word(fn_shape));
             let err = crate::error::js_error_new() as *mut u8;
             let word = err.add(crate::closure::CLOSURE_SHAPE_OFFSET) as *mut u32;
             let saved = word.read();

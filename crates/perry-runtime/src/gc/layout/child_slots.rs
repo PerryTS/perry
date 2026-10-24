@@ -372,7 +372,7 @@ pub(in crate::gc) unsafe fn gc_child_slots(header: *mut GcHeader) -> HeapChildSl
             // through every step that needs a shape fact — the field range,
             // the keys edge, the shared pointer mask (`new_object`) and the
             // slot visitor (`object_shape` on the iterator). These used to be
-            // five independent `shape_descriptor_by_id` probes per traced
+            // five independent `shape_descriptor_for_word` probes per traced
             // object, the top leaf of a traced in-place-promotion cycle.
             let shape = crate::object::shapes::object_shape_record(obj);
             let Some(range) = crate::object::gc_field_slot_range(obj, shape) else {

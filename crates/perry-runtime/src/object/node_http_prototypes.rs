@@ -406,7 +406,7 @@ pub extern "C" fn js_node_http_response_layout_receiver(receiver: f64) -> i32 {
     };
     unsafe {
         let word = (*obj).parent_class_id;
-        if !crate::object::shapes::shape_object_kind_by_id(word)
+        if !crate::object::shapes::shape_object_kind_for_word(word)
             .is_some_and(|kind| kind.is_ordinary_layout())
         {
             return 0;

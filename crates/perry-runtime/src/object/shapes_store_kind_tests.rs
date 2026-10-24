@@ -4,14 +4,14 @@
 //! invariant's own must-fail test, which manufactures a disagreement.
 
 use super::*;
-use crate::object::shapes::{object_shape_id, shape_descriptor_by_id, ShapeObjectKind};
+use crate::object::shapes::{object_shape_id, shape_descriptor_for_word, ShapeObjectKind};
 
 fn key(name: &str) -> *mut crate::StringHeader {
     crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32)
 }
 
 unsafe fn kind_of(obj: *const ObjectHeader) -> ShapeObjectKind {
-    crate::object::shapes::shape_object_kind_by_id(object_shape_id(obj))
+    crate::object::shapes::shape_object_kind_for_word(object_shape_id(obj))
         .expect("test premise: a stamped receiver")
 }
 
@@ -40,8 +40,10 @@ fn births_carry_the_kind_their_record_derives() {
         assert_eq!(kind_of(plain), ShapeObjectKind::Ordinary);
         assert!(store_facts_agree(plain));
         assert_eq!(
-            shape_descriptor_by_id(object_shape_id(plain)).unwrap().keys,
-            shape_descriptor_by_id(object_shape_id(unmarked))
+            shape_descriptor_for_word(object_shape_id(plain))
+                .unwrap()
+                .keys,
+            shape_descriptor_for_word(object_shape_id(unmarked))
                 .unwrap()
                 .keys,
             "test premise: the two receivers differ ONLY in the store fact"
@@ -78,8 +80,8 @@ fn marking_moves_a_stamped_receiver_to_its_ordinary_twin() {
         assert_ne!(before, after, "the mark must transition the shape");
         assert_eq!(kind_of(obj), ShapeObjectKind::Ordinary);
         assert_eq!(
-            shape_descriptor_by_id(before).unwrap().keys,
-            shape_descriptor_by_id(after).unwrap().keys
+            shape_descriptor_for_word(before).unwrap().keys,
+            shape_descriptor_for_word(after).unwrap().keys
         );
         assert!(store_facts_agree(obj));
         // Lineage carries the receiver's kind, re-derived.
@@ -248,7 +250,7 @@ fn an_explicit_id_of_the_wrong_kind_is_declined() {
         crate::array::js_array_set(keys, 0, crate::JSValue::string_ptr(name));
         let ordinary = crate::object::shapes::shape_id_for_keys_ensure(keys, 1);
         assert_eq!(
-            crate::object::shapes::shape_object_kind_by_id(ordinary),
+            crate::object::shapes::shape_object_kind_for_word(ordinary),
             Some(ShapeObjectKind::Ordinary)
         );
         let unmarked =

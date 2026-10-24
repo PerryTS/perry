@@ -52,14 +52,14 @@ fn regexp_birth_shape_survives_full_traces_with_no_live_regexp() {
         // The control: this full trace retires uncarried records, so a birth
         // record that survives it survives because it is carried.
         let control = unrooted_semantic_shape();
-        assert!(crate::object::shapes::shape_descriptor_by_id(control).is_some());
+        assert!(crate::object::shapes::shape_descriptor_for_word(control).is_some());
         collect_synchronous_full_trace();
         assert!(
-            crate::object::shapes::shape_descriptor_by_id(control).is_none(),
+            crate::object::shapes::shape_descriptor_for_word(control).is_none(),
             "round {round}: the full trace did not retire an uncarried shape, so it proves nothing"
         );
         assert!(
-            crate::object::shapes::shape_descriptor_by_id(first).is_some(),
+            crate::object::shapes::shape_descriptor_for_word(first).is_some(),
             "#12313 round {round}: the RegExp birth record was retired with no live RegExp"
         );
         let next = unsafe { crate::object::shapes::object_shape_stamp(birth()) };
@@ -124,7 +124,7 @@ fn plain_birth_rejects_a_retired_shape_after_full_collection() {
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let object = crate::object::object_alloc_plain(0);
     let shape = unsafe { crate::object::shapes::transition_object_shape_semantics(object) };
-    assert!(crate::object::shapes::plain_birth_rep_by_id(shape, 0).is_some());
+    assert!(crate::object::shapes::plain_birth_rep_for_word(shape, 0).is_some());
     collect_synchronous_full_trace();
     assert!(
         crate::object::shapes::shape_is_retired(shape),

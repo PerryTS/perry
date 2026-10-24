@@ -146,7 +146,7 @@ fn replay(seed_first: bool, production_seed: bool) {
             )
             .as_pointer::<crate::object::ObjectHeader>();
             let id = shapes::object_shape_stamp(object);
-            let d = shapes::shape_descriptor_by_id(id).unwrap();
+            let d = shapes::shape_descriptor_for_word(id).unwrap();
             assert_eq!(d.rep, REP, "F64 and CF must both survive reconstruction");
             assert_eq!(d.constfn_infos()[0].info, info() as usize as u64);
             let fields = (object as *const u8)
@@ -170,7 +170,7 @@ fn replay(seed_first: bool, production_seed: bool) {
             assert_eq!(ids[0], FINAL);
         } else {
             assert!(!shapes::is_static_shape_id(ids[0]));
-            assert!(shapes::shape_descriptor_by_id(FINAL).is_none());
+            assert!(shapes::shape_descriptor_for_word(FINAL).is_none());
             // Object-first must keep its old carriers valid when the external
             // static id arrives, and subsequent reconstructions use that id.
             shapes::install_worker_shape_seed(&seed);
@@ -179,7 +179,7 @@ fn replay(seed_first: bool, production_seed: bool) {
             let obj = JSValue::from_bits(crate::array::js_array_get_f64(array, 0).to_bits())
                 .as_pointer::<crate::object::ObjectHeader>();
             assert_eq!(shapes::object_shape_stamp(obj), FINAL);
-            assert!(shapes::shape_descriptor_by_id(ids[0]).is_some());
+            assert!(shapes::shape_descriptor_for_word(ids[0]).is_some());
         }
     })
     .join()
@@ -313,7 +313,7 @@ fn constfn_transfer_does_not_resurrect_a_deprecated_final_body_fact() {
         assert_eq!(shapes::object_shape_stamp(obj), FINAL);
         crate::object::store_object_field_slot(obj, 0, TAG_TRUE);
         assert_eq!(
-            shapes::shape_descriptor_by_id(FINAL)
+            shapes::shape_descriptor_for_word(FINAL)
                 .unwrap()
                 .deprecation_targets()
                 .1,
@@ -485,7 +485,7 @@ fn constfn_worker_seed_owns_names_across_source_key_relocation() {
             )
         }) as usize as *const crate::object::ObjectHeader;
         assert_eq!(shapes::object_shape_stamp(finalized), FINAL_ID);
-        let before = shapes::shape_descriptor_by_id(FINAL_ID).unwrap();
+        let before = shapes::shape_descriptor_for_word(FINAL_ID).unwrap();
         let before_heap_key = heap_key_at(before.keys);
         assert!(
             crate::arena::pointer_in_nursery(before.keys as usize),
@@ -518,7 +518,7 @@ fn constfn_worker_seed_owns_names_across_source_key_relocation() {
         // no receiving worker has installed it. Neither saved old address is
         // dereferenced after collection.
         gc::gc_collect_minor();
-        let after = shapes::shape_descriptor_by_id(FINAL_ID).unwrap();
+        let after = shapes::shape_descriptor_for_word(FINAL_ID).unwrap();
         assert_ne!(
             after.keys, before.keys,
             "source key list did not actually relocate"
@@ -551,11 +551,11 @@ fn constfn_worker_seed_owns_names_across_source_key_relocation() {
             let _agent = crate::agent::enter_worker_agent();
             gc::ensure_gc_initialized();
             assert!(
-                shapes::shape_descriptor_by_id(FINAL_ID).is_none(),
+                shapes::shape_descriptor_for_word(FINAL_ID).is_none(),
                 "fresh worker premise"
             );
             shapes::install_worker_shape_seed(&seed);
-            let installed = shapes::shape_descriptor_by_id(FINAL_ID)
+            let installed = shapes::shape_descriptor_for_word(FINAL_ID)
                 .expect("saved seed must install before object reconstruction can mask a failure");
             assert_ne!(
                 installed.keys, relocated_source_keys,
@@ -719,7 +719,7 @@ fn constfn_transfer_compiled_anon_header_preserves_actual_worker_wire() {
             gc::ensure_gc_initialized();
             shapes::install_worker_shape_seed(&seed);
             assert_eq!(
-                shapes::shape_descriptor_by_id(ANON_FINAL).unwrap().rep,
+                shapes::shape_descriptor_for_word(ANON_FINAL).unwrap().rep,
                 ANON_REP
             );
             assert_eq!(shapes::class_proto_id(ANON), shapes::class_proto_id(0));

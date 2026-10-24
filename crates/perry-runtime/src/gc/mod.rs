@@ -1381,12 +1381,22 @@ fn raise_default_thread_stack_floor() {
 
 #[no_mangle]
 pub extern "C" fn js_gc_init() {
+    unsafe { js_gc_init_with_layouts(&crate::object::class_image::runtime_layout_image()) };
+}
+/// The image header must be bound before any runtime state / ShapeTable exists.
+#[no_mangle]
+pub unsafe extern "C" fn js_gc_init_with_layouts(
+    image: *const crate::codegen_abi::PerryLayoutImageV1,
+) {
+    assert!(!image.is_null(), "null layout image");
+
     // #8546: this is the first runtime call of every `main` / `perry_module_init`,
     // on the thread about to run that image's module init — so it is where the
     // thread claims its own class-registry image before any `js_register_class_*`
     // call lands. A host that loads several application images on several
     // threads gets one image per thread; a plain executable gets one.
     crate::object::class_image::enter_current_thread_image();
+    crate::object::class_image::bind_layout_image(*image);
     // #10399: raise the floor for every thread this process will spawn, before
     // it spawns one.
     //

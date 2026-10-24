@@ -404,12 +404,14 @@ static READABLE_STATE_PROTO_INDEX: [u32; 32] = [
     link_section = "perry_layouts"
 )]
 pub(crate) static mut READABLE_STATE_PROTO: PerryLayoutDesc = PerryLayoutDesc {
+    shape_id: 0,
+    _layout_pad: 0,
     family: 0x53500001,
     variant: 0,
     kind: 0,
     integrity: 0,
     slot_count: 16,
-    layout_id: super::super::layout_desc::LAYOUT_ID_CARRIED,
+    layout_id: crate::codegen_abi::native_layout_word("READABLE_STATE_PROTO", 0),
     rep: 0,
     proto: crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
     keys: READABLE_STATE_PROTO_KEYS.as_ptr(),
@@ -561,12 +563,14 @@ static WRITABLE_STATE_PROTO_INDEX: [u32; 32] = [
     link_section = "perry_layouts"
 )]
 pub(crate) static mut WRITABLE_STATE_PROTO: PerryLayoutDesc = PerryLayoutDesc {
+    shape_id: 0,
+    _layout_pad: 0,
     family: 0x53500002,
     variant: 0,
     kind: 0,
     integrity: 0,
     slot_count: 16,
-    layout_id: super::super::layout_desc::LAYOUT_ID_CARRIED,
+    layout_id: crate::codegen_abi::native_layout_word("WRITABLE_STATE_PROTO", 0),
     rep: 0,
     proto: crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
     keys: WRITABLE_STATE_PROTO_KEYS.as_ptr(),
@@ -642,12 +646,14 @@ static EE_ASYNC_RESOURCE_PROTO_INDEX: [u32; 16] = [
     link_section = "perry_layouts"
 )]
 pub(crate) static mut EE_ASYNC_RESOURCE_PROTO: PerryLayoutDesc = PerryLayoutDesc {
+    shape_id: 0,
+    _layout_pad: 0,
     family: 0x53500008,
     variant: 0,
     kind: 0,
     integrity: 0,
     slot_count: 6,
-    layout_id: super::super::layout_desc::LAYOUT_ID_CARRIED,
+    layout_id: crate::codegen_abi::native_layout_word("EE_ASYNC_RESOURCE_PROTO", 0),
     rep: 0,
     proto: crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
     keys: EE_ASYNC_RESOURCE_PROTO_KEYS.as_ptr(),

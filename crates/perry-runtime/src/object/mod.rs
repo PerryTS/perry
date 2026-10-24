@@ -321,7 +321,6 @@ pub use alloc::*;
 pub use arguments::*;
 pub(crate) use array_object_ops::*;
 pub use assert::*;
-pub(crate) use global_this::is_async_generator_instance_value;
 pub(crate) use bigint_dispatch::*;
 pub use buffer_dispatch::*;
 pub use class_constructors::*;
@@ -343,6 +342,7 @@ pub use delete_rest::*;
 pub use descriptors::*;
 pub use field_get_set::*;
 pub use field_set_by_name::*;
+pub(crate) use global_this::is_async_generator_instance_value;
 pub use global_this::*;
 pub(crate) use global_this_tables::*;
 pub use groupby::*;
@@ -1371,7 +1371,7 @@ fn transition_cache_insert(
         return;
     }
     // Generated hits skip the layout note: never learn from a numeric proof.
-    if shapes::shape_object_kind_by_id(prev_shape_id)
+    if shapes::shape_object_kind_for_word(prev_shape_id)
         == Some(shapes::ShapeObjectKind::OrdinaryNumericProof)
     {
         return;
@@ -1419,9 +1419,10 @@ fn transition_cache_insert(
         entry.slot_idx = slot_idx | (len_marker << 24);
         entry.target_len = target_len;
     });
+    shape_carriers::note_shape_id(prev_shape_id);
+    shape_carriers::note_shape_id(target_shape_id);
     if target_len != 0 {
         shapes::note_last_key_parent(target_shape_id, prev_shape_id);
-        shape_carriers::note_shape_id(target_shape_id);
     }
     if !array_tail_owner.is_null() {
         array_tail_transition::record_numeric_tail_transition(
@@ -1691,7 +1692,7 @@ pub(crate) unsafe fn object_is_regular(obj: *const ObjectHeader) -> bool {
     };
     header.obj_type == crate::gc::GC_TYPE_OBJECT
         && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
-        && shapes::shape_object_kind_by_id((*obj).shape_word())
+        && shapes::shape_object_kind_for_word((*obj).shape_word())
             .is_some_and(|kind| kind.is_ordinary_layout())
 }
 
@@ -1775,7 +1776,7 @@ unsafe fn set_object_keys_with_live_rep(
     // and the header store follows with nothing allocating in between.
     //
     // #6759 C3 rung 1: no `class_id == 0` gate. The word is a ShapeId iff
-    // `is_shape_id` says so, for class instances too, so an instance still
+    // `is_layout_word` says so, for class instances too, so an instance still
     // carrying its allocation-time `parent_class_id` (never in the ShapeId
     // range) is left alone.
     // Case 2c: a static family object keeps its layout word for life; the

@@ -717,7 +717,7 @@ unsafe fn record_class_object_template(
         || count >= 1 << 16
         || W_FILLS + 2 * count > cell.len()
         || static_field_mask > 0xff
-        || crate::object::shapes::shape_object_kind_by_id(final_shape)
+        || crate::object::shapes::shape_object_kind_for_word(final_shape)
             != Some(crate::object::shapes::ShapeObjectKind::Class)
     {
         return;
@@ -878,7 +878,7 @@ pub(crate) unsafe fn class_object_add_internal(
             return;
         }
         crate::object::shapes::note_external_shape_carrier(
-            crate::object::shapes::shape_descriptor_by_id(from),
+            crate::object::shapes::shape_descriptor_for_word(from),
         );
         crate::object::shapes::note_external_shape_carrier(Some(d));
         cell.set(W_EDGES + 2 * free, from as u64 | (to as u64) << 32);
@@ -1150,7 +1150,8 @@ pub(crate) unsafe fn evaluation_chain_lost_method(
                 )
             });
     let template_facts = template_cell.and_then(|c| c.proto_template());
-    let template = template_facts.and_then(|t| crate::object::shapes::shape_descriptor_by_id(t.1));
+    let template =
+        template_facts.and_then(|t| crate::object::shapes::shape_descriptor_for_word(t.1));
     if let Some(template) = template {
         // The template's prototype keys, all still there: marking the
         // prototype (its first instance) restamps its shape but keeps them.
@@ -1432,7 +1433,7 @@ pub(crate) unsafe fn record_instance_link(
     };
     let linked = crate::object::shapes::object_shape_stamp(inst);
     let (Some(from), Some(to)) = (
-        crate::object::shapes::shape_descriptor_by_id(birth),
+        crate::object::shapes::shape_descriptor_for_word(birth),
         crate::object::shapes::object_shape_descriptor(inst),
     ) else {
         return;

@@ -88,7 +88,7 @@ fn transition_cache_prunes_a_descriptorless_target_shape() {
     assert_eq!(test_transition_cache_occupancy(), occupancy_before + 1);
 
     crate::object::shapes::test_drop_shape_descriptors(next_keys as usize);
-    assert!(crate::object::shapes::shape_descriptor_by_id(target).is_none());
+    assert!(crate::object::shapes::shape_descriptor_for_word(target).is_none());
     prune_dead_transition_cache_entries(&|_| false);
     assert_eq!(
         test_transition_cache_occupancy(),

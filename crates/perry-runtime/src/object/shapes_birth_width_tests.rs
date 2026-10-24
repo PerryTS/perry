@@ -360,7 +360,9 @@ fn resolved_floor_birth_declines_a_foreign_prototype_and_a_retired_shape() {
             &mut table.inner.borrow_mut(),
             birth.shape,
         );
-        assert!(super::shapes_store::ShapeSlab::agent_record_present(birth.shape).is_none());
+        assert!(
+            super::shapes_store::ShapeSlab::agent_record_for_word_present(birth.shape).is_none()
+        );
         let renewed = super::created_birth_shape(first_id, boxed(first).to_bits(), &birth, 0);
         assert_ne!(
             renewed, birth.shape,
@@ -461,7 +463,7 @@ fn recorded_keyless_birth_revalidates_width_serial_and_retirement() {
         );
         let table = &crate::state::state().shapes;
         super::super::remove_descriptor_and_reverse_indices(&mut table.inner.borrow_mut(), wide);
-        assert!(super::shapes_store::ShapeSlab::agent_record_present(wide).is_none());
+        assert!(super::shapes_store::ShapeSlab::agent_record_for_word_present(wide).is_none());
         let renewed = super::created_birth_shape(serial, boxed(proto).to_bits(), &birth, wide);
         assert_ne!(renewed, wide);
         assert!(

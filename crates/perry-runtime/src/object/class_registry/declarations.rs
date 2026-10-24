@@ -80,7 +80,8 @@ pub struct ClassDeclaration {
     pub member_count: u32,
     pub birth_shape: u32,
     pub flags: u32,
-    pub reserved: u32,
+    /// Immutable static-prefix word for birth_shape, or zero together with that identity.
+    pub birth_layout_word: u32,
     /// The compiler-owned instance layout, independent of class evaluation.
     pub instance_layout: *const crate::object::layout_desc::PerryLayoutDesc,
     /// The family's creation split (`layout_desc::PerryFamilyVariants`), or
@@ -105,7 +106,7 @@ impl ClassDeclaration {
             member_count: members.len() as u32,
             birth_shape: 0,
             flags: Self::flags_of(members),
-            reserved: 0,
+            birth_layout_word: 0,
             instance_layout: std::ptr::null(),
             instance_variants: std::ptr::null(),
             default_derived_initializer: std::ptr::null(),
@@ -326,6 +327,7 @@ pub unsafe extern "C" fn js_register_class_declaration(
         return;
     }
     let decl: &'static ClassDeclaration = &*decl;
+    debug_assert_eq!(decl.birth_shape != 0, decl.birth_layout_word != 0);
     if let Ok(mut index) = CLASS_DECLARATIONS.write() {
         index.set(class_id, decl);
     }
@@ -1003,7 +1005,7 @@ fn test_declare_member_with(
         member_count: members.len() as u32,
         birth_shape,
         flags: ClassDeclaration::flags_of(members),
-        reserved: 0,
+        birth_layout_word: 0,
         instance_layout: std::ptr::null(),
         instance_variants: std::ptr::null(),
         default_derived_initializer: std::ptr::null(),
@@ -1038,7 +1040,7 @@ pub(crate) fn test_declare_computed_member(
         member_count: members.len() as u32,
         birth_shape: class_birth_shape(class_id),
         flags: ClassDeclaration::flags_of(members),
-        reserved: 0,
+        birth_layout_word: 0,
         instance_layout: std::ptr::null(),
         instance_variants: std::ptr::null(),
         default_derived_initializer: std::ptr::null(),
@@ -1060,7 +1062,7 @@ pub(crate) fn test_declare_birth_shape(class_id: u32, shape_id: u32) {
         member_count: members.len() as u32,
         birth_shape: shape_id,
         flags: ClassDeclaration::flags_of(members),
-        reserved: 0,
+        birth_layout_word: 0,
         instance_layout: std::ptr::null(),
         instance_variants: std::ptr::null(),
         default_derived_initializer: std::ptr::null(),
@@ -1092,7 +1094,7 @@ pub(crate) fn test_set_method_entry(class_id: u32, name: &str, entry: usize) {
         member_count: members.len() as u32,
         birth_shape: decl.birth_shape,
         flags: ClassDeclaration::flags_of(members),
-        reserved: 0,
+        birth_layout_word: 0,
         instance_layout: std::ptr::null(),
         instance_variants: std::ptr::null(),
         default_derived_initializer: std::ptr::null(),
@@ -1155,3 +1157,15 @@ pub(crate) fn test_accessor_member(
 #[cfg(test)]
 #[path = "declarations_tests.rs"]
 mod tests;
+
+
+pub(crate) fn class_birth_layout_request(class_id: u32) -> Option<crate::codegen_abi::PublishedShape> {
+    let d = class_declaration(class_id)?;
+    (d.birth_shape != 0).then_some(crate::codegen_abi::PublishedShape {
+        identity: crate::codegen_abi::ShapeId(d.birth_shape),
+        word: crate::codegen_abi::LayoutWord(d.birth_layout_word),
+    })
+}
+const _: () = assert!(std::mem::offset_of!(ClassDeclaration, birth_layout_word)
+    == if cfg!(target_pointer_width = "64") { crate::codegen_abi::CLASS_DECL_BIRTH_LAYOUT_WORD_OFFSET_LP64 }
+       else { crate::codegen_abi::CLASS_DECL_BIRTH_LAYOUT_WORD_OFFSET_ILP32 });

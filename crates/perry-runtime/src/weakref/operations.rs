@@ -56,8 +56,8 @@ impl View {
             // A collection still on its birth layout is its own brand proof
             // (one compare); any other word asks its layout record.
             let brand = match (*object).parent_class_id {
-                crate::object::shapes::WEAKMAP_BIRTH_LAYOUT => CLASS_ID_WEAKMAP,
-                crate::object::shapes::WEAKSET_BIRTH_LAYOUT => CLASS_ID_WEAKSET,
+                crate::codegen_abi::WEAKMAP_BIRTH_LAYOUT_WORD => CLASS_ID_WEAKMAP,
+                crate::codegen_abi::WEAKSET_BIRTH_LAYOUT_WORD => CLASS_ID_WEAKSET,
                 _ => storage::collection_brand(object)?,
             };
             if expected != 0 && brand != expected {

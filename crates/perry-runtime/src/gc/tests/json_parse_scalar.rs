@@ -195,7 +195,7 @@ fn json_small_object_template_survives_evacuation() {
     crate::json::PARSE_SHAPE_CACHE.with(|cache| cache.borrow_mut().clear());
     crate::object::shape_carriers::recompute_after_full_trace();
     assert!(
-        crate::object::shapes::shape_descriptor_by_id(template_shape)
+        crate::object::shapes::shape_descriptor_for_word(template_shape)
             .is_some_and(|descriptor| descriptor.cache_carrier),
         "the reusable object template must rebuild ownership of its ShapeId"
     );

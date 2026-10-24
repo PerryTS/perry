@@ -47,7 +47,7 @@ pub(crate) unsafe fn try_function_shape_method_call(
     // object's ordinary ShapeId) leaves here on one compare, before the
     // agent's base id is even loaded.
     let word = *((addr as *const u8).add(crate::closure::CLOSURE_SHAPE_OFFSET) as *const u32);
-    if !crate::object::shapes::is_exotic_shape_id(word) {
+    if !crate::object::shapes::is_exotic_layout_word(word) {
         return None;
     }
     if !crate::closure::is_closure_ptr(addr) {

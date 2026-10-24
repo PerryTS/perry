@@ -58,7 +58,7 @@ fn immutable_bind_birth_has_three_slots_and_no_metadata_bag() {
             crate::gc::GC_HEADER_SIZE + crate::closure::closure_payload_size(3)
         );
         assert_eq!(
-            crate::object::shapes::shape_object_kind_by_id((*b).shape_id),
+            crate::object::shapes::shape_object_kind_for_word((*b).shape_id),
             Some(crate::object::shapes::ShapeObjectKind::FunctionBound)
         );
         assert_eq!(

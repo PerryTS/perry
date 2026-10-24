@@ -127,7 +127,7 @@ fn a_declared_prototype_is_born_in_its_final_linked_shape() {
             slot(proto, 0),
             crate::object::class_constructor_ref_value(cid).to_bits()
         );
-        let record = crate::object::shapes::shape_record_by_id(
+        let record = crate::object::shapes::shape_record_for_word(
             crate::object::shapes::object_shape_stamp(proto),
         )
         .expect("record");
@@ -308,12 +308,14 @@ static EMPTY_INDEX: [u32; 1] = [u32::MAX];
 )]
 static mut CHECKED_LAYOUT: crate::object::layout_desc::PerryLayoutDesc =
     crate::object::layout_desc::PerryLayoutDesc {
+        shape_id: 0,
+        _layout_pad: 0,
         family: 0x41574202,
         variant: 0,
         kind: 0,
         integrity: 0,
         slot_count: 0,
-        layout_id: crate::object::layout_desc::LAYOUT_ID_CARRIED,
+        layout_id: 0x80000086,
         rep: 0,
         proto: std::ptr::null(),
         keys: EMPTY_KEYS.as_ptr(),
@@ -344,7 +346,7 @@ fn static_prototype_requires_the_candidate_parent_and_its_canonical_holder() {
     let canonical = scope.root_nanbox_f64(class_decl_prototype_value(CHECKED_PARENT));
     // No guard needed a seed: the family still supplies the exact candidate.
     let requested = crate::object::shapes::SHAPE_ID_BASE + 1991;
-    assert!(crate::object::shapes::shape_record_by_id(requested).is_none());
+    assert!(crate::object::shapes::shape_record_for_word(requested).is_none());
     let matches =
         |bits| super::decl_prototype_birth::static_parent_matches(CHECKED_CHILD, requested, bits);
     assert!(
@@ -449,7 +451,7 @@ fn a_refused_static_request_keeps_the_general_born_final_shape() {
     let cid = 0x6e91;
     register(cid, b"RefusedStaticRequest");
     let requested = crate::object::shapes::SHAPE_ID_BASE + 1996;
-    assert!(crate::object::shapes::shape_record_by_id(requested).is_none());
+    assert!(crate::object::shapes::shape_record_for_word(requested).is_none());
     let declaration = Box::leak(Box::new(super::declarations::ClassDeclaration {
         birth_shape: requested,
         ..super::declarations::ClassDeclaration::native(&[])

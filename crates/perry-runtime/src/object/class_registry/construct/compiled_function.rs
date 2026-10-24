@@ -93,7 +93,7 @@ unsafe fn prime_function_site(closure: usize, proto: *const ObjectHeader, site: 
         return;
     }
     let shape = crate::object::shapes::object_shape_stamp(bag);
-    let Some(record) = crate::object::shapes::shape_record_by_id(shape) else {
+    let Some(record) = crate::object::shapes::shape_record_for_word(shape) else {
         return;
     };
     let Some(Some(slot)) = record.own_data_position_of_value(0, b"prototype") else {

@@ -308,7 +308,7 @@ fn private_shape_proof_learn(
     // ordinary shapes are proven; the kind is part of the ShapeId, so a cache
     // hit can only be an ordinary object too.
     let interned = intern_private_name(name)?;
-    if !crate::object::shapes::shape_object_kind_by_id(shape_id)
+    if !crate::object::shapes::shape_object_kind_for_word(shape_id)
         .is_some_and(|kind| kind.is_ordinary_layout())
     {
         return None;
@@ -428,7 +428,7 @@ unsafe fn private_field_site_word(
     {
         return 0;
     }
-    let Some(d) = crate::object::shapes::shape_descriptor_by_id(shape_id) else {
+    let Some(d) = crate::object::shapes::shape_descriptor_for_word(shape_id) else {
         return 0;
     };
     if !d.object_kind.is_ordinary_layout() {
@@ -802,7 +802,7 @@ pub unsafe extern "C-unwind" fn js_private_method_call(
 #[inline]
 fn private_receiver_evaluation_brand(receiver: f64) -> Option<f64> {
     if let Some((object, shape_id)) = unsafe { private_plain_receiver_shape(receiver) } {
-        if crate::object::shapes::shape_object_kind_by_id(shape_id)
+        if crate::object::shapes::shape_object_kind_for_word(shape_id)
             .is_some_and(|kind| kind.is_ordinary_layout())
         {
             let brand = f64::from_bits(unsafe { private_receiver_evaluation_bits(object) });

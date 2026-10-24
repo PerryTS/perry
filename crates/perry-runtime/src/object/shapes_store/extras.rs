@@ -64,6 +64,7 @@ impl ShapeRecord {
     #[cold]
     #[inline(never)]
     pub(in crate::object) fn note_created_birth_shape(&mut self, birth: u32) {
+        self.note_handle_carrier(birth);
         if !self.has_boxed_extras() {
             let rollback = self.rollback_parent();
             self.extras = new_extras(&[], &[]);

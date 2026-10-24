@@ -26,8 +26,8 @@
 
 use super::field_rep::{self, slot_rep, REP_ANY, REP_SLOTS};
 use super::shapes::{
-    object_shape_stamp, publish_shape_result, shape_descriptor_by_id, shape_record_by_id,
-    shape_rep_by_id, stamp_object_shape_id_with_carrier_note,
+    object_shape_stamp, publish_shape_result, shape_descriptor_for_word, shape_record_for_word,
+    shape_rep_for_word, stamp_object_shape_id_with_carrier_note,
 };
 use super::ObjectHeader;
 
@@ -40,7 +40,10 @@ pub(crate) unsafe fn object_slot_rep(obj: *const ObjectHeader, field_index: usiz
     }
     // An unstamped receiver (0) or an id with no record reads the absent
     // record's word: `Any` in every lane.
-    slot_rep(shape_rep_by_id(object_shape_stamp(obj)), field_index as u32)
+    slot_rep(
+        shape_rep_for_word(object_shape_stamp(obj)),
+        field_index as u32,
+    )
 }
 
 /// The store check of the runtime slot funnel (`slot_store`): the bits to
@@ -60,7 +63,7 @@ pub(crate) unsafe fn checked_slot_bits(
         return value_bits;
     }
     if rep == field_rep::REP_SPECIAL {
-        let record = shape_record_by_id(object_shape_stamp(obj));
+        let record = shape_record_for_word(object_shape_stamp(obj));
         let expected = record.and_then(|r| r.constfn_info(field_index as u32));
         if expected.is_some() && expected == constfn_store_info(value_bits) {
             return value_bits;
@@ -115,7 +118,7 @@ pub(crate) unsafe fn constfn_store_info(value_bits: u64) -> Option<u64> {
 #[inline(never)]
 pub(crate) unsafe fn object_store_generalize(obj: *mut ObjectHeader, slot: u32) {
     let id = object_shape_stamp(obj);
-    let Some(record) = shape_record_by_id(id) else {
+    let Some(record) = shape_record_for_word(id) else {
         return;
     };
     deprecate_lane(record, slot);
@@ -159,7 +162,7 @@ unsafe fn converge_key_add(obj: *mut ObjectHeader, id: u32, slot: u32, value_bit
     if slot >= REP_SLOTS {
         return id;
     }
-    let Some(d) = shape_descriptor_by_id(id) else {
+    let Some(d) = shape_descriptor_for_word(id) else {
         return id;
     };
     if field_rep::has_deprecated(d.rep) {
@@ -188,7 +191,7 @@ unsafe fn converge_key_add(obj: *mut ObjectHeader, id: u32, slot: u32, value_bit
         return id;
     };
     let f64_shape = if number { id } else { sibling };
-    if let Some(record) = shape_record_by_id(f64_shape) {
+    if let Some(record) = shape_record_for_word(f64_shape) {
         deprecate_lane(record, slot);
     }
     if !number {
@@ -210,7 +213,7 @@ pub(crate) unsafe fn migrate_deprecated_receiver(obj: *mut ObjectHeader) -> bool
     if id == 0 {
         return false;
     }
-    match shape_record_by_id(id) {
+    match shape_record_for_word(id) {
         Some(record)
             if field_rep::has_deprecated(record.rep()) || record.has_special_deprecation() => {}
         _ => return false,
@@ -255,8 +258,8 @@ pub(crate) fn completed_shape_matches_layout(actual: u32, expected: u32) -> bool
         return true;
     }
     let (Some(a), Some(b)) = (
-        shape_descriptor_by_id(actual),
-        shape_descriptor_by_id(expected),
+        shape_descriptor_for_word(actual),
+        shape_descriptor_for_word(expected),
     ) else {
         return false;
     };
@@ -310,7 +313,7 @@ fn linked_shape_matches_layout(
 /// The rep of shape `id` (`Any` for an unknown id).
 #[inline]
 pub(crate) fn shape_rep(id: u32) -> u64 {
-    shape_record_by_id(id).map_or(REP_ANY, |record| record.rep())
+    shape_record_for_word(id).map_or(REP_ANY, |record| record.rep())
 }
 
 /// T2: the rep of the shape a key-add at `slot` produces from a predecessor
@@ -509,7 +512,7 @@ unsafe fn publish_key_add_rep(
     if id == 0 || crate::object::overflow::has_overflow(obj) {
         return id;
     }
-    let Some(d) = shape_descriptor_by_id(id) else {
+    let Some(d) = shape_descriptor_for_word(id) else {
         return id;
     };
     let rep = key_add_rep(pred_rep, slot, value_bits, inline);
@@ -568,7 +571,7 @@ pub(crate) unsafe fn private_field_lanes_target(
         return None;
     }
     let id = object_shape_stamp(obj);
-    let d = shape_descriptor_by_id(id)?;
+    let d = shape_descriptor_for_word(id)?;
     if field_rep::has_deprecated(d.rep) || field_rep::special_lane_slots(d.rep) != 0 {
         return None;
     }
@@ -614,7 +617,7 @@ pub(crate) unsafe fn install_private_field_lanes(
     if object_shape_stamp(obj) != from {
         return;
     }
-    if slot < REP_SLOTS && slot_rep(shape_rep_by_id(target), slot) == field_rep::REP_F64 {
+    if slot < REP_SLOTS && slot_rep(shape_rep_for_word(target), slot) == field_rep::REP_F64 {
         super::slot_store::store_object_field_slot(obj, slot as usize, bits);
     }
     stamp_object_shape_id_with_carrier_note(obj, target);
@@ -778,7 +781,7 @@ pub(crate) unsafe fn assert_constfn_slot_body(
 /// `F64` lane from identity, so there are at most [`REP_SLOTS`] hops.
 pub(crate) fn normalized_shape(mut id: u32) -> u32 {
     loop {
-        let Some(d) = shape_descriptor_by_id(id) else {
+        let Some(d) = shape_descriptor_for_word(id) else {
             return id;
         };
         let (to_nopointer, to_any) = d.deprecation_targets();
@@ -822,5 +825,5 @@ pub(crate) fn normalized_shape(mut id: u32) -> u32 {
 
 #[inline]
 fn object_slot_rep_of(id: u32, slot: u32) -> u64 {
-    slot_rep(shape_rep_by_id(id), slot)
+    slot_rep(shape_rep_for_word(id), slot)
 }

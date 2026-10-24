@@ -16,6 +16,7 @@ use super::ShapeObjectKind;
 #[derive(Clone)]
 struct SeedRecord {
     id: u32,
+    static_word: Option<crate::codegen_abi::LayoutWord>,
     names: Vec<Vec<u8>>,
     logical_key_count: u32,
     live_inline_slot_count: u32,
@@ -77,6 +78,9 @@ pub(crate) fn worker_shape_seed() -> WorkerShapeSeed {
             }
             seed.push(SeedRecord {
                 id,
+                static_word: (crate::codegen_abi::LayoutWord(r.layout_word).row().0
+                    < crate::object::class_image::layout_image().static_rows)
+                    .then_some(crate::codegen_abi::LayoutWord(r.layout_word)),
                 names,
                 logical_key_count: r.logical_key_count,
                 live_inline_slot_count: r.live_inline_slot_count,
@@ -108,8 +112,9 @@ pub(crate) fn install_worker_shape_seed(seed: &WorkerShapeSeed) {
         }
         let names: Vec<&[u8]> = r.names.iter().map(Vec::as_slice).collect();
         let keys = unsafe { crate::object::static_shapes::canonical_keys_for_names(&names) };
-        let _ = super::shapes_slot_list::install_external_shape_id_with_constfn(
+        let _ = super::shapes_slot_list::install_external_layout_with_constfn(
             r.id,
+            r.static_word,
             keys.arr(),
             r.logical_key_count,
             r.live_inline_slot_count,
@@ -195,6 +200,7 @@ mod tests {
                 crate::gc::ensure_gc_initialized();
                 super::install_worker_shape_seed(&seed);
                 let descriptor = shape_descriptor_by_id(id).expect("seeded birth shape");
+                let word = crate::object::shapes::handle_by_identity(crate::codegen_abi::ShapeId(id)).unwrap().0;
                 assert_ne!(descriptor.keys as usize, source_keys);
                 assert!(
                     unsafe { crate::value::addr_class::try_read_tracked_gc_header(source_keys) }
@@ -209,7 +215,7 @@ mod tests {
                     0,
                     2,
                     source_keys as *mut crate::array::ArrayHeader,
-                    id,
+                    word,
                     rep,
                 );
                 let object = handles.root_raw_mut_ptr(object);

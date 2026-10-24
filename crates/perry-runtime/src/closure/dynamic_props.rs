@@ -127,7 +127,7 @@ pub fn is_closure_ptr(ptr: usize) -> bool {
 
     // Ownership above is the proof that this payload byte is readable.
     let shape = unsafe { *((ptr as *const u8).add(super::CLOSURE_SHAPE_OFFSET) as *const u32) };
-    if !crate::object::shapes::is_exotic_shape_id(shape) {
+    if !crate::object::shapes::is_exotic_layout_word(shape) {
         return false;
     }
     let header = match tracked_header {

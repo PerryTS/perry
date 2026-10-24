@@ -73,7 +73,7 @@ impl BirthWriteSite {
             if chain_shapes(stream, None)
                 .is_some_and(|(chain, depth)| chain == memo.chain && depth == memo.depth)
             {
-                if let Some(to) = crate::object::shapes::shape_descriptor_by_id(memo.to) {
+                if let Some(to) = crate::object::shapes::shape_descriptor_for_word(memo.to) {
                     // SAFETY: this site's exact historical successor is still
                     // present, and the complete predecessor guard matched.
                     if unsafe {
@@ -112,7 +112,7 @@ impl BirthWriteSite {
         let obj = object_ptr_from_value(stream.get_nanbox_f64()).unwrap();
         let to = unsafe { crate::object::shapes::object_shape_stamp(obj) };
         if let (Some((chain, depth)), Some(record)) =
-            (proof, crate::object::shapes::shape_record_by_id(to))
+            (proof, crate::object::shapes::shape_record_for_word(to))
         {
             if let Some(slot) = unsafe {
                 let keys = record.keys() as *mut crate::array::ArrayHeader;
@@ -122,7 +122,7 @@ impl BirthWriteSite {
                     key.bytes,
                 )
             } {
-                let descriptor = crate::object::shapes::shape_descriptor_by_id(to).unwrap();
+                let descriptor = crate::object::shapes::shape_descriptor_for_word(to).unwrap();
                 let entry = unsafe {
                     crate::object::key_attrs::keys_entry(descriptor.keys_view().arr(), slot)
                 };
@@ -164,7 +164,7 @@ pub(super) fn walk_shapes(mut bits: u64, key: Option<&[u8]>) -> Option<([u32; 8]
             return None;
         }
         let shape = unsafe { crate::object::shapes::object_shape_stamp(proto) };
-        let record = crate::object::shapes::shape_descriptor_by_id(shape)?;
+        let record = crate::object::shapes::shape_descriptor_for_word(shape)?;
         chain[depth] = shape;
         depth += 1;
         let keys = record.keys_view();

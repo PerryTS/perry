@@ -132,6 +132,7 @@ pub type ConstructorFlagTable = PtrHashMap<u32, (bool, bool, Option<u32>)>;
 /// that
 /// reach user-visible output, so no caller may rely on their order.
 pub struct ClassImageTables {
+    layout_image: OnceLock<crate::codegen_abi::PerryLayoutImageV1>,
     pub(crate) declarations: RwLock<super::class_registry::declarations::ClassDeclarationIndex>,
     pub(crate) static_methods: RwLock<Option<StaticMethodTable>>,
     pub(crate) static_accessors: RwLock<Option<StaticAccessorTable>>,
@@ -176,6 +177,7 @@ pub struct ClassImageTables {
 impl ClassImageTables {
     fn new() -> Self {
         Self {
+            layout_image: OnceLock::new(),
             declarations: RwLock::new(Default::default()),
             static_methods: RwLock::new(None),
             static_accessors: RwLock::new(None),
@@ -661,4 +663,26 @@ mod tests {
         .expect("re-entering thread panicked");
         assert_eq!(before, after, "re-entering replaced the thread's image");
     }
+}
+
+pub(crate) fn bind_layout_image(image: crate::codegen_abi::PerryLayoutImageV1) {
+    assert!(image.valid(), "invalid layout image ABI/range");
+    let bound = current().layout_image.get_or_init(|| image);
+    assert_eq!(
+        *bound, image,
+        "repeated module initialization changed the layout image"
+    );
+}
+pub(crate) fn layout_image() -> crate::codegen_abi::PerryLayoutImageV1 {
+    *current()
+        .layout_image
+        .get_or_init(runtime_layout_image)
+}
+
+
+pub(crate) const fn runtime_layout_image() -> crate::codegen_abi::PerryLayoutImageV1 {
+    #[cfg(test)]
+    { crate::codegen_abi::PerryLayoutImageV1 { static_rows: 4096, ..crate::codegen_abi::PerryLayoutImageV1::RUNTIME } }
+    #[cfg(not(test))]
+    { crate::codegen_abi::PerryLayoutImageV1::RUNTIME }
 }

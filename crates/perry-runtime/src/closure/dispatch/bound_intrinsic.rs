@@ -256,7 +256,7 @@ pub(crate) unsafe fn packed_apply_values<const N: usize>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::object::shapes::{shape_object_kind_by_id, ShapeObjectKind};
+    use crate::object::shapes::{shape_object_kind_for_word, ShapeObjectKind};
 
     extern "C" fn body(_c: *const ClosureHeader, this: JsThis, a: f64, b: f64) -> f64 {
         this.as_f64() + a + b
@@ -276,7 +276,7 @@ mod tests {
         let bound = unsafe { js_function_bind(adapter_value, args.as_ptr(), 1) };
         let closure = JSValue::from_bits(bound.to_bits()).as_pointer::<ClosureHeader>();
         assert_eq!(
-            shape_object_kind_by_id(unsafe { (*closure).shape_id }),
+            shape_object_kind_for_word(unsafe { (*closure).shape_id }),
             Some(ShapeObjectKind::FunctionBoundCall)
         );
         assert_eq!(unsafe { (*closure).capture_count }, 6);
@@ -296,7 +296,7 @@ mod tests {
         // Internal-slot schema also survives a keyed Function shape transition.
         crate::closure::closure_set_dynamic_prop(closure as usize, "extra", 1.0);
         assert_eq!(
-            shape_object_kind_by_id(unsafe { (*closure).shape_id }),
+            shape_object_kind_for_word(unsafe { (*closure).shape_id }),
             Some(ShapeObjectKind::FunctionBoundCall)
         );
         assert_eq!(unsafe { dispatch(closure, &[10.0, 2.0, 3.0]) }, Some(15.0));
@@ -348,7 +348,7 @@ mod tests {
         let bound = unsafe { js_function_bind(adapter, &target_value, 1) };
         let closure = JSValue::from_bits(bound.to_bits()).as_pointer::<ClosureHeader>();
         assert_eq!(
-            shape_object_kind_by_id(unsafe { (*closure).shape_id }),
+            shape_object_kind_for_word(unsafe { (*closure).shape_id }),
             Some(ShapeObjectKind::FunctionBoundApply)
         );
         let array = crate::array::js_array_alloc(2);
