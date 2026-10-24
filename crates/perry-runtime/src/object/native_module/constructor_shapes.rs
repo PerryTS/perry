@@ -34,7 +34,9 @@ fn install_zlib_closed_getter(proto: f64) {
         crate::value::js_nanbox_get_pointer(proto.get_nanbox_f64()) as usize,
         "_closed".to_string(),
         crate::object::AccessorDescriptor {
-            get: getter.with_mut_ptr(|p| crate::value::js_nanbox_pointer(p as i64).to_bits()),
+            get: getter.with_mut_ptr(|p: *mut crate::closure::ClosureHeader| {
+                crate::value::js_nanbox_pointer(p as i64).to_bits()
+            }),
             set: 0,
         },
         crate::object::PropertyAttrs::new(false, true, true),
