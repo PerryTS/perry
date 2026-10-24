@@ -57,21 +57,27 @@ fn dollar_export_aliases_resolve_function_identity_not_sanitized_spelling() {
     }
     // An exported function alias can carry a local name different from the
     // original body. The recorded function ID is authoritative in that case.
-    module.exports.push(Export::Named {
-        local: "alias".into(),
-        exported: "$renamedWide".into(),
-    });
-    module.exported_functions.push(("$renamedWide".into(), 3));
+    for (exported, id) in [("$renamedN", 1), ("$renamedWide", 3)] {
+        module.exports.push(Export::Named {
+            local: "alias".into(),
+            exported: exported.into(),
+        });
+        module.exported_functions.push((exported.into(), id));
+    }
+    assert_ne!(
+        perry_codegen::user_function_symbol(&module.name, "$n"),
+        perry_codegen::user_function_symbol(&module.name, "_n"),
+        "dollar and underscore bindings must remain distinct",
+    );
     let ir = String::from_utf8(compile_module(&module, empty_opts()).unwrap()).unwrap();
-    for (exported, body, arity) in [
-        ("$n", "$n", 0),
-        ("$wide", "$wide", 6),
-        ("$renamedWide", "$wide", 6),
-    ] {
+    for (exported, body, arity) in [("$renamedN", "$n", 0), ("$renamedWide", "$wide", 6)] {
         let target = perry_codegen::user_function_symbol(&module.name, body);
         for wrapper in [false, true] {
             let prefix = if wrapper { "__perry_wrap_" } else { "" };
-            let symbol = format!("{prefix}perry_fn_export_collision_js__{exported}");
+            let symbol = format!(
+                "{prefix}{}",
+                perry_codegen::user_function_symbol(&module.name, exported)
+            );
             let definition = ir
                 .split(&format!("define double @{symbol}("))
                 .nth(1)

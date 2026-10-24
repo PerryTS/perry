@@ -1,4 +1,7 @@
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
+
+#[path = "native_proof_support/read_memo_contract.rs"]
+mod read_memo_contract;
 use perry_hir::types::{FunctionType, Type};
 use perry_hir::{
     ArgumentsObjectMeta, BinaryOp, Class, ClassField, Expr, Function, Module, ModuleInitKind,
@@ -615,7 +618,11 @@ fn a_default_build_emits_no_typed_feedback_recording_calls() {
     // this test proves the RECORDING is gone, not the program.
     assert!(
         ir.contains("call double @perry_probe_get(")
-            && ir.contains("call double @js_object_get_field_slow("),
+            && read_memo_contract::paired_memo_reads(&ir) == Some(1)
+            && ir
+                .matches(" = private global [5 x i64] zeroinitializer")
+                .count()
+                == 1,
         "the property reads themselves must still be lowered; emitted:\n{ir}"
     );
     // And the helpers that DECIDE something, rather than merely counting, are
@@ -626,7 +633,7 @@ fn a_default_build_emits_no_typed_feedback_recording_calls() {
     // all emitted in a default build, as CALLS (every runtime entry is
     // `declare`d, so a bare symbol match would be satisfied by the declaration).
     assert!(
-        ir.contains("call double @js_object_get_field_nonptr("),
+        ir.contains("call double @js_object_get_field_value_site("),
         "dispatching wrappers must still be emitted in a default build \
          (property get):\n{ir}"
     );
@@ -809,24 +816,41 @@ fn full_outline_ic_collapses_class_field_get_to_single_call() {
 
     let _lock = env_lock();
 
-    // The read site is ALREADY the collapsed form in both modes: one GC-leaf
-    // `perry_probe_get_value` (the hit) and a cold collecting
-    // `js_object_get_field_value` (the miss), with no tower, per-site word or
-    // class guard to outline. Forcing the full outline changes nothing.
+    // Both modes keep one leaf and a complete collecting miss. #12986 selects
+    // a validated memo in the outlined mode; the non-outlined own field keeps
+    // the stateless entrance. No memo storage belongs to the latter site.
     for mode in ["1", "0"] {
         let _g = EnvVarGuard::set("PERRY_FULL_OUTLINE_IC", Some(mode));
         let ir = ir_for(build());
         // One probe per lowering of the body (the guarded clone and the
         // generic body each hold exactly one site).
-        let probes = ir.matches("call double @perry_probe_get_value(").count();
+        let entrance = if mode == "1" {
+            "call double @perry_probe_get_value_memo("
+        } else {
+            "call double @perry_probe_get_value("
+        };
+        let probes = ir.matches(entrance).count();
         assert!(
             (1..=2).contains(&probes),
             "full-outline={mode}: one value probe per body, saw {probes}:\n{ir}"
         );
-        assert!(
-            ir.contains("call double @js_object_get_field_value("),
-            "full-outline={mode}: the cold miss is the complete [[Get]]:\n{ir}"
-        );
+        if mode == "1" {
+            assert_eq!(
+                read_memo_contract::paired_memo_reads(&ir),
+                Some(probes),
+                "{ir}"
+            );
+        } else {
+            assert!(
+                ir.contains("call double @js_object_get_field_value("),
+                "{ir}"
+            );
+            assert_eq!(read_memo_contract::paired_memo_reads(&ir), None, "{ir}");
+            assert!(
+                !ir.contains(" = private global [5 x i64] zeroinitializer"),
+                "{ir}"
+            );
+        }
         assert!(!ir.contains("_packed_get"), "{mode}");
         assert!(
             !ir.contains("call double @js_object_get_field_ic_fast("),
@@ -1343,10 +1367,10 @@ fn typed_feedback_marks_numeric_array_literals() {
         )))],
     ));
 
-    // GcHeader: size=48 (8-byte GcHeader, 16-byte ArrayHeader with its
+    // GcHeader: size=56 (8-byte GcHeader, 24-byte ArrayHeader with its
     // `named` word, three slots), pointer-free/raw-f64 reserved bits=0x4080,
     // flags=ARENA, type=ARRAY. Live birth flags are ORed into this word.
-    let numeric_header = (48u64 << 32) | (0x4080u64 << 16) | 0x0201;
+    let numeric_header = (56u64 << 32) | (0x4080u64 << 16) | 0x0201;
     assert!(numeric_ir.contains(&numeric_header.to_string()));
     assert!(!numeric_ir.contains("call i32 @js_array_mark_numeric_f64_layout"));
 
@@ -1361,7 +1385,7 @@ fn typed_feedback_marks_numeric_array_literals() {
     ));
 
     assert!(!mixed_ir.contains("call i32 @js_array_mark_numeric_f64_layout"));
-    let mixed_raw_f64_header = (32u64 << 32) | (0x4080u64 << 16) | 0x0201;
+    let mixed_raw_f64_header = (48u64 << 32) | (0x4080u64 << 16) | 0x0201;
     assert!(!mixed_ir.contains(&mixed_raw_f64_header.to_string()));
 }
 

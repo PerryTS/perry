@@ -28,7 +28,7 @@ fn namespace_variable_getters_preserve_raw_local_binding_names() {
         .and_then(|rest| rest.split("\n}").next())
         .expect("the namespace live getter must be emitted");
     assert!(
-        getter.contains("call double @perry_fn_provider_js__$item()"),
+        getter.contains("call double @perry_fn_provider_js__.u24item()"),
         "namespace getter must read the raw dollar binding:\n{getter}"
     );
     assert!(!getter.contains("call double @perry_fn_provider_js___item()"));

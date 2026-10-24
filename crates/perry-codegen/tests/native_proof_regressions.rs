@@ -1367,12 +1367,21 @@ fn guards_array_read_inline(ir: &str) -> bool {
         && ir.contains("call double @perry_array_read_cold_shared(")
 }
 
-/// A property read that holds no site state: the receiver layout's probe
-/// (`perry_probe_get*`, a GC-leaf over the live shape) and, when it declines,
-/// the complete `[[Get]]` (`js_object_get_field_slow`).
+#[path = "native_proof_support/read_memo_contract.rs"]
+mod read_memo_contract;
+
+/// #12986 selects validated shape/slot memos where getters are reachable.
+/// Both variants retain a complete [[Get]] miss; selected memo entrances must
+/// pass the same site storage to that miss.
 fn is_layout_probe_read(body: &str) -> bool {
-    body.contains("call double @perry_probe_get")
-        && body.contains("call double @js_object_get_field_slow(")
+    if body.contains("call double @perry_probe_get_memo(")
+        || body.contains("call double @perry_probe_get_value_memo(")
+    {
+        read_memo_contract::paired_memo_reads(body).is_some()
+    } else {
+        body.contains("call double @perry_probe_get")
+            && body.contains("call double @js_object_get_field_slow(")
+    }
 }
 
 /// Whether `ir` births a HEAP receiver object. A class instance is born by the
@@ -1593,14 +1602,8 @@ fn pod_layout_constants_specialize_generic_layout_type_params() {
     module.functions.retain(|func| func.type_params.is_empty());
     module.init.clear();
     let ir = compile_ir_for_module_with_opts(module, pod_layout_specialization_opts()).unwrap();
-    let tiny_ir = function_ir_section(
-        &ir,
-        "perry_fn_pod_layout_specialization_ts__u_layout_24_Tiny",
-    );
-    let wide_ir = function_ir_section(
-        &ir,
-        "perry_fn_pod_layout_specialization_ts__u_layout_24_Wide",
-    );
+    let tiny_ir = function_ir_section(&ir, "perry_fn_pod_layout_specialization_ts__layout.u24Tiny");
+    let wide_ir = function_ir_section(&ir, "perry_fn_pod_layout_specialization_ts__layout.u24Wide");
 
     assert!(
         tiny_ir.contains("8.0") && tiny_ir.contains("4.0") && !tiny_ir.contains("16.0"),
@@ -1641,11 +1644,11 @@ fn native_pod_view_specializes_generic_layout_type_params() {
     let ir = compile_ir_for_module_with_opts(module, pod_layout_specialization_opts()).unwrap();
     let tiny_ir = function_ir_section(
         &ir,
-        "perry_fn_native_pod_view_specialization_ts__u_view_24_Tiny",
+        "perry_fn_native_pod_view_specialization_ts__view.u24Tiny",
     );
     let wide_ir = function_ir_section(
         &ir,
-        "perry_fn_native_pod_view_specialization_ts__u_view_24_Wide",
+        "perry_fn_native_pod_view_specialization_ts__view.u24Wide",
     );
 
     assert!(
@@ -13740,7 +13743,7 @@ fn typed_f64_closure_clone_emits_internal_clone_and_guarded_direct_call() {
         "numeric-guard failure should target the internal generic closure body:\n{ir}"
     );
     assert!(
-        !ir.contains(&format!("call double @{public}(i64 ")),
+        !wrapper_ir.contains(&format!("call double @{public}(i64 ")),
         "typed guard failure must not recursively call the public closure wrapper:\n{ir}"
     );
     assert!(
@@ -13899,7 +13902,7 @@ fn typed_i32_closure_clone_emits_internal_clone_and_guarded_direct_call() {
         "Int32-guard failure should target the internal generic closure body:\n{ir}"
     );
     assert!(
-        !ir.contains(&format!("call double @{public}(i64 ")),
+        !wrapper_ir.contains(&format!("call double @{public}(i64 ")),
         "typed guard failure must not recursively call the public closure wrapper:\n{ir}"
     );
     assert!(
@@ -14098,7 +14101,7 @@ fn typed_i1_closure_clone_emits_internal_clone_and_guarded_direct_call() {
         "boolean-guard failure should target the internal generic closure body:\n{ir}"
     );
     assert!(
-        !ir.contains(&format!("call double @{public}(i64 ")),
+        !wrapper_ir.contains(&format!("call double @{public}(i64 ")),
         "typed guard failure must not recursively call the public closure wrapper:\n{ir}"
     );
     assert!(
@@ -14180,7 +14183,7 @@ fn typed_i1_numeric_predicate_closure_uses_f64_params_and_guarded_direct_call() 
         "numeric-guard failure should target the internal generic closure body:\n{ir}"
     );
     assert!(
-        !ir.contains(&format!("call double @{public}(i64 ")),
+        !wrapper_ir.contains(&format!("call double @{public}(i64 ")),
         "typed guard failure must not recursively call the public closure wrapper:\n{ir}"
     );
 
@@ -14345,7 +14348,7 @@ fn typed_string_closure_clone_emits_internal_clone_and_guarded_direct_call() {
         "string-guard failure should target the internal generic closure body:\n{ir}"
     );
     assert!(
-        !ir.contains(&format!("call double @{public}(i64 ")),
+        !wrapper_ir.contains(&format!("call double @{public}(i64 ")),
         "typed guard failure must not recursively call the public closure wrapper:\n{ir}"
     );
     assert!(
@@ -16652,7 +16655,7 @@ fn packed_clone_reads_a_foreign_counter_without_the_feedback_call() {
     );
 }
 #[test]
-fn static_method_certificate_retains_canonical_layout_clone() {
+fn static_method_shape_guard_retains_canonical_layout_clone() {
     let mut fixture = typed_i32_method_clone_module("eligible");
     fixture.name = "static_certificate.ts".to_string();
     // Receiver-reading body: its exact layout clone must remain reachable.
@@ -16679,6 +16682,7 @@ fn static_method_certificate_retains_canonical_layout_clone() {
     let mut derived = fixture.classes[0].clone();
     derived.id = 206;
     derived.name = "DerivedBits".to_string();
+    derived.extends = Some(fixture.classes[0].id);
     derived.extends_name = Some("Bits".to_string());
     derived.fields.clear();
     derived.methods[0].id = 231;
@@ -16687,39 +16691,52 @@ fn static_method_certificate_retains_canonical_layout_clone() {
     let incomplete = String::from_utf8(compile_module(&fixture, opts.clone()).unwrap()).unwrap();
     let incomplete_caller = body_ir_section(&incomplete, "perry_fn_static_certificate_ts__probe");
     assert!(
-        !incomplete_caller.contains("pconst."),
-        "incomplete prototypes acquired fast arms: {incomplete_caller}"
+        !incomplete_caller.contains("pconst.")
+            && incomplete_caller.contains("icmp ult i32")
+            && incomplete_caller.contains("method_direct.fallback."),
+        "an unassigned layout must be guarded by the runtime ShapeId domain: {incomplete_caller}"
     );
-    // Production compiles assign whole-program shapes before lowering sites.
     let births = perry_codegen::module_birth_shapes(&fixture, opts.clone()).unwrap();
     opts.static_shape_ids = perry_codegen::assign_static_shape_ids(births.iter().map(|b| &b.shape))
         .into_iter()
         .collect();
     let ir = String::from_utf8(compile_module(&fixture, opts).unwrap()).unwrap();
     let caller = body_ir_section(&ir, "perry_fn_static_certificate_ts__probe");
-    assert!(caller.contains("pconst.selected"), "{caller}");
+    // The single-class arm uses the exact live (class, ShapeId) word guard,
+    // not the polymorphic pconst switch. Both retain the canonical-layout body.
+    let deref: String = caller
+        .lines()
+        .skip_while(|line| !line.starts_with("method_direct.inline_deref."))
+        .skip(1)
+        .take_while(|line| line.is_empty() || line.starts_with(' '))
+        .collect::<Vec<_>>()
+        .join("\n");
     assert!(
-        caller.contains(") noinline"),
-        "cold selected bodies must stay shared: {caller}"
+        deref.contains("load i64")
+            && deref.contains("icmp eq i64")
+            && deref.contains("icmp ult i32")
+            && deref.contains("label %method_direct.fast.")
+            && deref.contains("label %method_direct.fallback."),
+        "the canonical receiver word and ShapeId domain must guard the fast arm: {deref}"
     );
     assert!(
-        !caller.contains("@PERRY_PROTO_VALIDITY") && !caller.contains("certify"),
-        "{caller}"
+        caller.contains("call double @perry_method_static_certificate_ts__Bits__mix_i32$pshape(")
+            && caller.contains("call double @js_native_call_method_by_id("),
+        "the guarded layout clone and complete miss must both remain live: {caller}"
+    );
+    let public = function_ir_section(&ir, "perry_fn_static_certificate_ts__probe");
+    assert!(
+        public.contains(") noinline"),
+        "the public wrapper stays shared: {public}"
     );
     assert!(
-        caller.contains("method_direct.layout") && caller.contains("$pshape"),
-        "{caller}"
+        caller.contains("call ptr @perry_class_value_dir_cell("),
+        "the prototype holder must be checked from its live descriptor: {caller}"
     );
     assert!(
-        caller.contains("icmp eq i64"),
-        "canonical receiver-word compare missing: {caller}"
-    );
-    assert!(
-        !caller.contains("holder.") && !caller.contains("perry_class_value_dir_cell"),
-        "live holder walk returned: {caller}"
-    );
-    assert!(
-        !caller.contains("js_native_call_method_by_id_learn"),
-        "second learned memo returned: {caller}"
+        !caller.contains("@PERRY_PROTO_VALIDITY")
+            && !caller.contains("certify")
+            && !caller.contains("js_native_call_method_by_id_learn"),
+        "a detached validity/learned proof must not replace live shape authority: {caller}"
     );
 }
