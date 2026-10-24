@@ -31,6 +31,8 @@ pub mod inprocess;
 pub mod inst;
 pub(crate) mod layout_desc;
 pub mod layout_families;
+pub mod layout_ordinals;
+pub use layout_ordinals::ProgramLayoutOrdinals;
 pub(crate) mod proto_constants;
 pub use layout_desc::array_families::assign_birth_layouts;
 pub use layout_families::ProgramLayouts;

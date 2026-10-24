@@ -120,6 +120,7 @@ pub(crate) const NATIVE_TARGETS: [&str; 2] =
 pub(crate) fn ir_opts(target: &str, is_entry: bool) -> CompileOptions {
     CompileOptions {
         static_shape_ids: Vec::new(),
+        program_layout_ordinals: Default::default(),
         program_class_shape_ids: Default::default(),
         program_facts: Default::default(),
         program_layouts: Default::default(),
