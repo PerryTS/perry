@@ -173,62 +173,6 @@ mod ATOM_SYMBOL_ITERATOR {
     );
 }
 
-/// `Symbol.toStringTag` is shared by all generator intrinsic holders.
-#[used(linker)]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
-#[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
-    link_section = "perry_atoms"
-)]
-#[linkage = "weak_odr"]
-#[export_name = "perry_atom_well_known_toStringTag"]
-static ATOM_SYMBOL_TO_STRING_TAG: StaticAtom = StaticAtom {
-    hash: crate::codegen_abi::well_known_symbol_atom_hash(WELL_KNOWN_SYMBOL_TO_STRING_TAG),
-    string: std::ptr::null(),
-    kind: crate::codegen_abi::ATOM_KIND_WELL_KNOWN_SYMBOL,
-    _pad: [0; 3],
-    index: WELL_KNOWN_SYMBOL_TO_STRING_TAG,
-};
-wasm_atom!(ATOM_SYMBOL_TO_STRING_TAG);
-const WELL_KNOWN_SYMBOL_TO_STRING_TAG: u32 = 4;
-const _: () = assert!(
-    crate::codegen_abi::WELL_KNOWN_SYMBOLS[WELL_KNOWN_SYMBOL_TO_STRING_TAG as usize].len() == 11,
-    "`toStringTag` is well-known symbol 4"
-);
-#[allow(non_snake_case)]
-mod ATOM_SYMBOL_TO_STRING_TAG {
-    pub(crate) const HASH: u64 =
-        crate::codegen_abi::well_known_symbol_atom_hash(super::WELL_KNOWN_SYMBOL_TO_STRING_TAG);
-}
-
-// The sync and async function holders have the same keys and attributes;
-// their constructor/prototype values and intrinsic serials remain distinct.
-runtime_layout!(GENERATOR_FUNCTION_PROTOTYPE, kind = LAYOUT_KIND_UNMARKED, 0x5254_0012, 0,
-    crate::object::layout_desc::LAYOUT_PROTO_OBJECT, [
-    BP_ATOM_CONSTRUCTOR => BUILTIN_READ_ONLY,
-    BP_ATOM_PROTOTYPE => BUILTIN_READ_ONLY,
-    ATOM_SYMBOL_TO_STRING_TAG => BUILTIN_READ_ONLY,
-]);
-runtime_layout!(GENERATOR_PROTOTYPE, kind = LAYOUT_KIND_UNMARKED, 0x5254_0013, 0,
-    crate::object::layout_desc::LAYOUT_PROTO_OBJECT, [
-    BP_ATOM_CONSTRUCTOR => BUILTIN_READ_ONLY,
-    BP_ATOM_NEXT => BUILTIN_METHOD,
-    BP_ATOM_RETURN => BUILTIN_METHOD,
-    BP_ATOM_THROW => BUILTIN_METHOD,
-    ATOM_SYMBOL_ITERATOR => BUILTIN_METHOD,
-    ATOM_SYMBOL_TO_STRING_TAG => BUILTIN_READ_ONLY,
-]);
-// The async iterator method stays on its existing parent, not this holder.
-runtime_layout!(ASYNC_GENERATOR_PROTOTYPE, kind = LAYOUT_KIND_UNMARKED, 0x5254_0014, 0,
-    crate::object::layout_desc::LAYOUT_PROTO_OBJECT, [
-    BP_ATOM_CONSTRUCTOR => BUILTIN_READ_ONLY,
-    BP_ATOM_NEXT => BUILTIN_METHOD,
-    BP_ATOM_RETURN => BUILTIN_METHOD,
-    BP_ATOM_THROW => BUILTIN_METHOD,
-    ATOM_SYMBOL_TO_STRING_TAG => BUILTIN_READ_ONLY,
-]);
-
 // `%Object.prototype%`: ECMA-262 §20.1.3 and Annex B §B.2.2, in V8's own-key
 // order. Its [[Prototype]] is null.
 runtime_layout!(OBJECT_PROTOTYPE, kind = LAYOUT_KIND_UNMARKED, 0x5254_0010, 0,
@@ -329,9 +273,6 @@ pub(crate) unsafe fn on_declared_prototype_layout(obj: *const crate::object::Obj
         std::ptr::addr_of!(OBJECT_PROTOTYPE),
         std::ptr::addr_of!(FUNCTION_PROTOTYPE),
         std::ptr::addr_of!(ARRAY_PROTOTYPE_NAMED),
-        std::ptr::addr_of!(GENERATOR_FUNCTION_PROTOTYPE),
-        std::ptr::addr_of!(GENERATOR_PROTOTYPE),
-        std::ptr::addr_of!(ASYNC_GENERATOR_PROTOTYPE),
     ]
     .iter()
     .any(|d| (**d).layout_id == id)

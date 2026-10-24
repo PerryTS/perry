@@ -12,9 +12,9 @@
 //! own keys are in, [`fit_builtin_prototype`] publishes the bound it actually
 //! uses and returns the unused tail of the allocation. Which keys are inline
 //! is then what it is for any object: a fact of its ShapeId (the live inline
-//! bound), read by every path the same way. There is no per-builtin count and
-//! no table: a prototype with more keys than the room keeps the rest in the
-//! spill buffer, exactly as before.
+//! bound), read by every path the same way. Allocation room is not a lookup
+//! fact: small fixed installers can request less room, and a prototype with
+//! more keys than its room keeps the rest in the spill buffer, as before.
 
 use super::*;
 
@@ -32,7 +32,14 @@ pub(crate) const BUILTIN_PROTOTYPE_ROOM: u32 = 64;
 /// memo that answers from a builtin prototype (`%Object.prototype%` above all,
 /// the terminal of most absent reads) is admitted from the first prime.
 pub(crate) fn alloc_builtin_prototype() -> *mut ObjectHeader {
-    crate::object::object_alloc_prototype_old(0, BUILTIN_PROTOTYPE_ROOM)
+    alloc_builtin_prototype_with_room(BUILTIN_PROTOTYPE_ROOM)
+}
+
+/// The same intrinsic birth with room supplied by a small fixed installer.
+/// This is allocation capacity only; ordinary key installs and the final
+/// fit publish the shape that proves which slots are live and inline.
+pub(crate) fn alloc_builtin_prototype_with_room(room: u32) -> *mut ObjectHeader {
+    crate::object::object_alloc_prototype_old(0, room)
 }
 
 /// Shrink a builtin prototype born by [`alloc_builtin_prototype`] to the
