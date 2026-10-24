@@ -1902,27 +1902,34 @@ impl ShapeSlab {
     /// take the second test; band 3 is no layout word and fails it.
     #[inline(always)]
     fn receiver_row_record(word: u32) -> Option<*mut ShapeRecord> {
-        use crate::codegen_abi::{
-            LAYOUT_BAND_SHIFT, LAYOUT_KIND_MASK, LAYOUT_ROW_MASK, LAYOUT_SHADOW_BIT, LAYOUT_TAG,
-        };
+        use crate::codegen_abi::{LAYOUT_KIND_MASK, LAYOUT_SHADOW_BIT, LAYOUT_TAG};
         let dir = &AGENT_SHAPE_DIR[0];
         let bound = dir.flat_ids.get();
         let band0 = ((word ^ LAYOUT_TAG) & !(LAYOUT_SHADOW_BIT | LAYOUT_KIND_MASK)) as usize;
-        let row = if band0 < bound {
-            band0
-        } else {
-            let w = word & !LAYOUT_SHADOW_BIT;
-            if w.wrapping_sub(LAYOUT_TAG) >= 3 << LAYOUT_BAND_SHIFT {
-                return None;
-            }
-            let row = (w & LAYOUT_ROW_MASK) as usize;
-            if row >= bound {
-                return None;
-            }
-            row
-        };
+        if band0 >= bound {
+            return Self::receiver_row_record_banded(word, bound);
+        }
+        let row = band0;
         // SAFETY: an issued row of this agent's readable reservation.
         Some(unsafe { dir.flat_base.get().add(row) })
+    }
+    /// [`Self::receiver_row_record`] for a word outside band 0 (dictionary,
+    /// exotic) or no issued row: out of line, so the inlined ordinary read
+    /// stays one compare.
+    #[cold]
+    #[inline(never)]
+    fn receiver_row_record_banded(word: u32, bound: usize) -> Option<*mut ShapeRecord> {
+        use crate::codegen_abi::{LAYOUT_BAND_SHIFT, LAYOUT_ROW_MASK, LAYOUT_SHADOW_BIT, LAYOUT_TAG};
+        let w = word & !LAYOUT_SHADOW_BIT;
+        if w.wrapping_sub(LAYOUT_TAG) >= 3 << LAYOUT_BAND_SHIFT {
+            return None;
+        }
+        let row = (w & LAYOUT_ROW_MASK) as usize;
+        if row >= bound {
+            return None;
+        }
+        // SAFETY: an issued row of this agent's readable reservation.
+        Some(unsafe { AGENT_SHAPE_DIR[0].flat_base.get().add(row) })
     }
     /// Requires an existing owner/carrier; never use for identity absence checks.
     pub(super) fn handle_record_ptr(&self, word: LayoutWord) -> Option<*mut ShapeRecord> {
