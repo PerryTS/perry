@@ -67,41 +67,57 @@ mod tests {
     use super::super::deferred_events::*;
     use super::*;
 
+    // The primary count is shared by every primary-agent thread, and every
+    // test thread is one, so exact deltas on it race with parallel tests.
+    // Worker agents own a thread-local count: tests that assert exact
+    // values run as a worker agent on their own thread.
+    fn on_private_agent(body: impl FnOnce() + Send + 'static) {
+        std::thread::spawn(move || {
+            perry_runtime::agent::enter_worker_agent();
+            body();
+        })
+        .join()
+        .unwrap();
+    }
+
     #[test]
     fn activity_count_covers_ref_deferred_close_and_removal() {
-        let count = current_count();
-        let baseline = count.load(Ordering::Relaxed);
-        let mut server = HttpServer::with_handler(0);
-        server.set_listening(true);
-        server.set_listening(true);
-        assert_eq!(count.load(Ordering::Relaxed), baseline + 1);
-        server.set_refed(false);
-        assert_eq!(count.load(Ordering::Relaxed), baseline);
-        queue_deferred_listening_emit(&mut server);
-        assert_eq!(count.load(Ordering::Relaxed), baseline + 1);
-        server.set_listening(false);
-        queue_deferred_close_emit(&mut server, 0);
-        let handle = perry_ffi::register_handle(server);
-        assert_eq!(drain_deferred_listen_for::<HttpServer, _>(handle, |s| s), 0);
-        assert_eq!(count.load(Ordering::Relaxed), baseline + 1);
-        assert_eq!(drain_deferred_close_for::<HttpServer, _>(handle, |s| s), 0);
-        assert_eq!(count.load(Ordering::Relaxed), baseline);
-        assert!(perry_ffi::drop_handle(handle));
-        assert!(!perry_ffi::handle_exists(handle));
+        on_private_agent(|| {
+            let count = current_count();
+            assert_eq!(count.load(Ordering::Relaxed), 0);
+            let mut server = HttpServer::with_handler(0);
+            server.set_listening(true);
+            server.set_listening(true);
+            assert_eq!(count.load(Ordering::Relaxed), 1);
+            server.set_refed(false);
+            assert_eq!(count.load(Ordering::Relaxed), 0);
+            queue_deferred_listening_emit(&mut server);
+            assert_eq!(count.load(Ordering::Relaxed), 1);
+            server.set_listening(false);
+            queue_deferred_close_emit(&mut server, 0);
+            let handle = perry_ffi::register_handle(server);
+            assert_eq!(drain_deferred_listen_for::<HttpServer, _>(handle, |s| s), 0);
+            assert_eq!(count.load(Ordering::Relaxed), 1);
+            assert_eq!(drain_deferred_close_for::<HttpServer, _>(handle, |s| s), 0);
+            assert_eq!(count.load(Ordering::Relaxed), 0);
+            assert!(perry_ffi::drop_handle(handle));
+            assert!(!perry_ffi::handle_exists(handle));
 
-        // Removal must also release an active server, including wrappers.
-        let mut server = HttpServer::with_handler(0);
-        server.set_listening(true);
-        let handle = perry_ffi::register_handle(server);
-        assert_eq!(count.load(Ordering::Relaxed), baseline + 1);
-        assert!(perry_ffi::drop_handle(handle));
-        assert_eq!(count.load(Ordering::Relaxed), baseline);
+            // Removal must also release an active server, including wrappers.
+            let mut server = HttpServer::with_handler(0);
+            server.set_listening(true);
+            let handle = perry_ffi::register_handle(server);
+            assert_eq!(count.load(Ordering::Relaxed), 1);
+            assert!(perry_ffi::drop_handle(handle));
+            assert_eq!(count.load(Ordering::Relaxed), 0);
+        });
     }
 
     #[test]
     fn activity_count_does_not_include_another_agents_servers() {
+        // Each agent's servers retain that agent's own counter; a server
+        // only ever adjusts the counter it retained at creation.
         let primary = current_count();
-        let baseline = primary.load(Ordering::Relaxed);
         let server = std::thread::spawn(|| {
             perry_runtime::agent::enter_worker_agent();
             let mut server = HttpServer::with_handler(0);
@@ -111,16 +127,23 @@ mod tests {
         })
         .join()
         .unwrap();
-        assert_eq!(primary.load(Ordering::Relaxed), baseline);
+        assert!(!Arc::ptr_eq(&server.activity_count, &primary));
         let worker_count = Arc::clone(&server.activity_count);
+        assert_eq!(worker_count.load(Ordering::Relaxed), 1);
         drop(server);
         assert_eq!(worker_count.load(Ordering::Relaxed), 0);
         // A second primary pump thread observes the primary's same count.
+        // Other tests also hold primary servers, so only this server's
+        // contribution is asserted, not the absolute value.
         let mut server = HttpServer::with_handler(0);
         server.set_listening(true);
+        assert!(Arc::ptr_eq(&server.activity_count, &primary));
+        assert!(Arc::ptr_eq(
+            &std::thread::spawn(current_count).join().unwrap(),
+            &primary
+        ));
         assert!(std::thread::spawn(has_active_servers).join().unwrap());
         drop(server);
-        assert_eq!(primary.load(Ordering::Relaxed), baseline);
     }
 
     #[test]
