@@ -1,0 +1,1 @@
+- Restore the complete FNMT fallback CA certificate and validate every embedded root as X.509 DER.
