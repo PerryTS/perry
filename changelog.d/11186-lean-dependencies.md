@@ -11,5 +11,5 @@ no longer depends on the optional async bridge.
 
 Add compatibility tests and CI dependency-boundary checks. Against the PR base,
 the macOS compiler graph drops from 339 to 287 packages (dev CLI: 331 to 255).
-See `docs/audits/lean-dependencies.md` for graph methodology and remaining shared
+See `docs/audits/lean-dependencies.md` (removed in #13193; `git show 44fcf437dd:docs/audits/lean-dependencies.md`) for graph methodology and remaining shared
 transitive dependencies. No version bump, as requested.

@@ -16,4 +16,4 @@ disposal, return-value rooting and exactly-once destruction. On Linux, all
 `23b5c3aadc18237488d6c978ece554483d774c78`. A negative control reproduces the
 old checkpoint dispatching an immediate; the fixed checkpoint leaves it pending
 and preserves a returned value across an actual moving collection. Evidence:
-`docs/validation/component-guest-cleanup-20261021.json`.
+`docs/audits/wasi-component-validation-2026-10-21/component-guest-cleanup-20261021.json`.
