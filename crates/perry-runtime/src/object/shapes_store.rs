@@ -1544,7 +1544,15 @@ impl ShapeSlab {
             let agrees = existing.layout_word == word.0
                 && existing.integrity_flags() == record.integrity_flags()
                 && existing.facts_match_proto_with_special(
-                    record.keys,
+                    // An empty key list is the same fact whether the request
+                    // carries no keys array (a deferred-width class birth) or
+                    // the canonical empty one: one identity may be requested
+                    // from both.
+                    if record.logical_key_count == 0 && existing.logical_key_count == 0 {
+                        existing.keys
+                    } else {
+                        record.keys
+                    },
                     record.logical_key_count,
                     record.live_inline_slot_count,
                     record.semantic_generation,
