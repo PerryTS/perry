@@ -86,8 +86,7 @@ match the checkout.
 ### What does NOT go in a PR (maintainer handles these at merge)
 
 - **Do not bump `[workspace.package] version`** in `Cargo.toml`.
-- **Do not edit `**Current Version:**`** at the top of `CLAUDE.md`.
-- **Do not add a "Recent Changes" entry** to `CLAUDE.md` or `CHANGELOG.md`.
+- **Do not edit `CHANGELOG.md`**; it is frozen. Write a `changelog.d/` fragment instead.
 
 Perry releases frequently — often several patch versions between a PR being opened and merged. If contributors bump the version on their branch, those bumps conflict on merge day through no fault of the contributor. The maintainer folds version + changelog metadata in when landing your PR, so it always matches the actually-shipped release.
 

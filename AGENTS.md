@@ -7,7 +7,7 @@ This file holds only what the code cannot tell you and what is expensive to get 
 ## Every change
 
 - `main` is protected: PRs only, squash or rebase merge. The only required check is `pr-gate`; `scripts/ci_plan.py --table` shows what runs in each tier (`docs/src/testing/ci-tiers.md`).
-- Bump the patch version in `Cargo.toml` (`[workspace.package].version`) and in the `**Current Version:**` line of `CLAUDE.md`. Release tooling fails if they disagree. External contributors skip this step.
+- Bump the patch version in `Cargo.toml` (`[workspace.package].version`); it is the only copy of the version. External contributors skip this step.
 - Add `changelog.d/<PR>-<slug>.md` (see `changelog.d/README.md`). Never edit `CHANGELOG.md`; it is frozen.
 - Read `MERGE_GUIDE.md` before landing a queue of PRs.
 
