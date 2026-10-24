@@ -1468,6 +1468,9 @@ impl ShapeSlab {
         if requested.row().0 >= self.static_rows {
             return Err(PublishError::InvalidWord);
         }
+        if Self::word_for(identity, requested.row().0, &record)? != requested {
+            return Err(PublishError::InvalidWord);
+        }
         record.set(RECORD_FLAG_EXTERNAL_CARRIER, true);
         self.publish(identity, requested, record)
     }
@@ -1477,18 +1480,21 @@ impl ShapeSlab {
         identity: ShapeId,
         record: ShapeRecord,
     ) -> Result<PublishedShape, PublishError> {
-        if self.record_ptr(identity).is_some() {
-            return Err(PublishError::IdentityConflict);
-        }
         if self.next_row >= self.chunk_end {
             let start = claim_dynamic_chunk(self.static_rows, self.region.capacity())?;
             self.next_row = start;
             self.chunk_end = start + DYNAMIC_CHUNK_ROWS;
         }
+        // A present identity always carries a different row than the fresh one
+        // chosen here, so `publish` reports it as a conflict.
         let word = Self::word_for(identity, self.next_row, &record)?;
         let published = self.publish(identity, word, record)?;
         self.next_row += 1;
-        self.publish_dir();
+        if self.agent {
+            // The directory buffers were published by `publish` when they
+            // moved; only the receivers' row bound grows with every mint.
+            AGENT_SHAPE_DIR[0].flat_ids.set(self.next_row as usize);
+        }
         Ok(published)
     }
 
@@ -1515,9 +1521,6 @@ impl ShapeSlab {
         word: LayoutWord,
         mut record: ShapeRecord,
     ) -> Result<PublishedShape, PublishError> {
-        if Self::word_for(identity, word.row().0, &record)? != word {
-            return Err(PublishError::InvalidWord);
-        }
         if let Some(p) = self.record_ptr(identity) {
             let existing = unsafe { &*p };
             let agrees = existing.layout_word == word.0
@@ -1552,12 +1555,15 @@ impl ShapeSlab {
         let (band, index) = locate(identity.0);
         let (page, chunk, slot) = Self::split(index);
         let dir = self.dir_mut(band as u8);
-        if page >= dir.len() {
+        let resized = page >= dir.len();
+        if resized {
             dir.resize_with(page + 1, Slot::empty);
         }
         *dir[page].owned_or_alloc()[chunk].owned_or_alloc()[slot].get_mut() = ptr;
         self.len += 1;
-        self.publish_dir();
+        if resized {
+            self.publish_dir();
+        }
         Ok(PublishedShape { identity, word })
     }
 

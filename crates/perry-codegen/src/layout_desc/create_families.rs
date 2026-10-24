@@ -351,6 +351,9 @@ struct ModuleCreateFamilies {
     bound: BTreeSet<u32>,
     /// The layouts lowering used, by descriptor name.
     used: BTreeMap<String, Site>,
+    /// Every layout lowering could use (a superset of `used`): the births
+    /// pre-pass reserves their ordinals because it does not lower bodies.
+    candidates: BTreeMap<String, Site>,
     /// Checked proofs are emitted (not on 32-bit targets).
     checked: bool,
 }
@@ -676,7 +679,69 @@ pub(crate) fn collect(hir: &Module, module_prefix: &str, target_triple: &str) {
             }
         });
     }
+    if !state.borns.is_empty() {
+        state.candidates = candidate_sites(hir, &state);
+    }
     MODULE_CREATE_FAMILIES.with(|m| *m.borrow_mut() = state);
+}
+
+/// Every layout the module's creation points and literal adds could use:
+/// the states of each `const a = Object.create(P)` family
+/// ([`before_stmt`]) and each literal add's layout ([`site`]).
+fn candidate_sites(hir: &Module, m: &ModuleCreateFamilies) -> BTreeMap<String, Site> {
+    let mut out = BTreeMap::new();
+    perry_hir::tdz_check::for_each_module_stmt_list(hir, &mut |stmts| {
+        for (i, stmt) in stmts.iter().enumerate() {
+            let Stmt::Let {
+                id,
+                mutable: false,
+                init: Some(Expr::ObjectCreate(proto, None)),
+                ..
+            } = stmt
+            else {
+                continue;
+            };
+            let Some(p) = proto_binding(proto) else {
+                continue;
+            };
+            let Some(family) = binding_family(m, *id, p, &stmts[i + 1..]) else {
+                continue;
+            };
+            for (n, desc) in family.states.iter().enumerate() {
+                out.entry(desc.clone()).or_insert_with(|| Site {
+                    desc_global: desc.clone(),
+                    keys: family.keys[..n].to_vec(),
+                    slots: family.keys.len() as u32,
+                    proto_global: family.proto_global.clone(),
+                });
+            }
+        }
+    });
+    perry_hir::for_each_module_expr(hir, &mut |e| {
+        let Expr::ObjectAssign { target, sources } = e else {
+            return;
+        };
+        let Expr::ObjectCreate(proto, None) = target.as_ref() else {
+            return;
+        };
+        let (Some(p), [Expr::New { class_name, args, .. }]) =
+            (proto_binding(proto), sources.as_slice())
+        else {
+            return;
+        };
+        let Some(class) = hir
+            .classes
+            .iter()
+            .find(|c| &c.name == class_name)
+            .filter(|c| c.is_literal_shape())
+        else {
+            return;
+        };
+        if let Some(site) = literal_add_site(m, p, class, args.len()) {
+            out.entry(site.desc_global.clone()).or_insert(site);
+        }
+    });
+    out
 }
 
 /// Must the top-level binding `id` be a module global (a prototype born on
@@ -1006,6 +1071,36 @@ pub(crate) fn lower_holder_read(
 
 /// The family of `Object.assign(Object.create(P), { k1: e1, … })`, when `P`
 /// is bound to a closed literal and every key's add is free.
+/// The layout of `Object.assign(Object.create(P), new Literal(..))` when `P`
+/// is a closed literal and the literal's keys are free adds.
+fn literal_add_site(
+    m: &ModuleCreateFamilies,
+    p: u32,
+    class: &perry_hir::Class,
+    arg_count: usize,
+) -> Option<Site> {
+    let keys: Vec<String> = class.fields.iter().map(|f| f.name.clone()).collect();
+    if keys.is_empty()
+        || keys.len() != arg_count
+        || class.fields.iter().any(|f| f.key_expr.is_some())
+        || !keys.iter().all(|k| layout_key(k))
+        || (1..keys.len()).any(|i| keys[..i].contains(&keys[i]))
+        || !keys.iter().all(|k| add_free(k))
+    {
+        return None;
+    }
+    m.literals.contains(&p).then(|| Site {
+        desc_global: format!(
+            "perry_layout_create_{}_{p}_{:08x}",
+            m.prefix,
+            super::fnv1a(keys.join("\u{1}").as_bytes()) as u32
+        ),
+        slots: keys.len() as u32,
+        keys,
+        proto_global: format!("perry_protofam_{}_{p}", m.prefix),
+    })
+}
+
 pub(crate) fn site(ctx: &FnCtx<'_>, e: &Expr) -> Option<Site> {
     let Expr::ObjectAssign { target, sources } = e else {
         return None;
@@ -1027,29 +1122,7 @@ pub(crate) fn site(ctx: &FnCtx<'_>, e: &Expr) -> Option<Site> {
         .classes
         .get(class_name)
         .filter(|c| c.is_literal_shape())?;
-    let keys: Vec<String> = class.fields.iter().map(|f| f.name.clone()).collect();
-    if keys.is_empty()
-        || keys.len() != args.len()
-        || class.fields.iter().any(|f| f.key_expr.is_some())
-        || !keys.iter().all(|k| layout_key(k))
-        || (1..keys.len()).any(|i| keys[..i].contains(&keys[i]))
-        || !keys.iter().all(|k| add_free(k))
-    {
-        return None;
-    }
-    let site = MODULE_CREATE_FAMILIES.with(|m| {
-        let m = m.borrow();
-        m.literals.contains(&p).then(|| Site {
-            desc_global: format!(
-                "perry_layout_create_{}_{p}_{:08x}",
-                m.prefix,
-                super::fnv1a(keys.join("\u{1}").as_bytes()) as u32
-            ),
-            slots: keys.len() as u32,
-            keys,
-            proto_global: format!("perry_protofam_{}_{p}", m.prefix),
-        })
-    })?;
+    let site = MODULE_CREATE_FAMILIES.with(|m| literal_add_site(&m.borrow(), p, class, args.len()))?;
     use_layout(site.clone());
     Some(site)
 }
@@ -1097,7 +1170,12 @@ pub(crate) fn emission() -> (Vec<String>, Vec<Site>, Vec<ImageDesc>) {
                 })
             })
             .collect();
-        (protos, m.used.values().cloned().collect(), images)
+        let sites = if crate::layout_ordinals::collecting() {
+            m.candidates.values().cloned().collect()
+        } else {
+            m.used.values().cloned().collect()
+        };
+        (protos, sites, images)
     })
 }
 

@@ -389,9 +389,14 @@ pub(crate) fn descriptor_word(
         }
         m.plan
             .entry(&input.key)
-            .expect("descriptor full content in image plan")
+            .unwrap_or_else(|| panic!("descriptor full content in image plan: {symbol} {:?}", String::from_utf8_lossy(match &input.key { LayoutKey::Descriptor { content, .. } => content, _ => &[] })))
             .word()
     })
+}
+/// True while the births pre-pass collects descriptor inputs (bodies are
+/// not lowered, so lowering-driven use sets are empty).
+pub(crate) fn collecting() -> bool {
+    MODULE.with(|m| m.borrow().collecting)
 }
 pub(crate) fn current_plan() -> std::sync::Arc<ProgramLayoutOrdinals> {
     MODULE.with(|m| m.borrow().plan.clone())

@@ -15,8 +15,11 @@ pub(super) fn emit(
     if !deferred_keys {
         return;
     }
-    let birth = crate::codegen::static_shape_ids::static_birth_content(keys_global)
-        .expect("compiled image has static birth facts");
+    // A class the driver gave no static identity has no constant header image
+    // (its births mint through the runtime), so there is nothing to publish.
+    let Some(birth) = crate::codegen::static_shape_ids::static_birth_content(keys_global) else {
+        return;
+    };
     let (identity, _) = crate::layout_ordinals::deferred_word(&birth, live);
     blk.call(
         I32,

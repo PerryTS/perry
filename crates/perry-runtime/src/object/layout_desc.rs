@@ -2519,26 +2519,23 @@ pub(crate) unsafe fn family_own_key_hashed(
     bytes: &[u8],
     hash: Option<u64>,
 ) -> Option<Option<(u32, u32)>> {
-    // One compare first: a word in the section's layout ids without the
-    // shadow bit (an overflow sets it). Most objects are not family objects.
+    // The header word names a family descriptor through its shape record
+    // (static family words and class-evaluation copies alike); most objects
+    // are not family objects and answer from the word's tag bits first.
     let word = (*obj).parent_class_id;
-    let index = word.wrapping_sub(LAYOUT_BASE);
-    let d = if index < LAYOUT_INDEX_LIMIT {
-        let (start, end) = layout_bounds();
-        if index as usize >= end.saturating_sub(start) / std::mem::size_of::<PerryLayoutDesc>() {
-            return None;
-        }
-        let d = &*desc_at(index);
-        if d.class_id == 0 || registered_layout_id(d.layout_id) != Some(word) {
-            return None;
-        }
-        d
-    } else if word & LAYOUT_SHADOW_BIT == 0 {
-        // A class evaluation's copy of the layout: the same keys and slots.
-        evaluation_family_desc_of(word)?
-    } else {
+    // Only a static family word (the image's family rows) or a class
+    // evaluation's copy (a mixed-kind word) can name a descriptor; both tests
+    // read the word alone, before any shape record.
+    if word & LAYOUT_SHADOW_BIT != 0
+        || !(word_in_layout_index(word)
+            || super::shapes::shape_word_kind(word) == super::shapes::SHAPE_ID_KIND_MIXED)
+    {
         return None;
-    };
+    }
+    let d = &*desc_at(layout_index_of_word(word)?);
+    if d.class_id == 0 {
+        return None;
+    }
     desc_own_key(d, bytes, hash)
 }
 
