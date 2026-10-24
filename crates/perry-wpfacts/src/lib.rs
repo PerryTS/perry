@@ -2291,11 +2291,15 @@ pub(crate) fn compute_in<'a>(
         Some(v) if cfg.unit && !g.m.aborted => {
             let mut out: Vec<(String, units::ArgContract)> = Vec::new();
             for nm in &v.closed_refs {
-                let toks = g.mods[0]
-                    .imports
-                    .get(nm)
-                    .map(|&n| g.m.nodes[n as usize].pts.to_sorted())
-                    .unwrap_or_default();
+                // An import binding is made when the unit's code names it
+                // (115-CWL3): one never made is named by no code of this
+                // unit, so no call of it is here (DECISIONS 156). Reached
+                // otherwise (a namespace key, a value it got), its stand-in
+                // publishes below.
+                let Some(&n) = g.mods[0].imports.get(nm) else {
+                    continue;
+                };
+                let toks = g.m.nodes[n as usize].pts.to_sorted();
                 // A closed class through its contract: `ctor_args_out`.
                 if !toks.is_empty()
                     && toks.iter().all(|&t| {
@@ -2324,7 +2328,7 @@ pub(crate) fn compute_in<'a>(
                 .iter()
                 .filter(|((_, holder), _)| holder.is_none())
                 .filter_map(|(_, &(_, t))| Some((g.stand_in_fc.get(&t)?.closed.clone()?, t)))
-                .filter(|(nm, _)| !v.closed_refs.contains(nm))
+                .filter(|(nm, _)| !v.closed_refs.contains(nm) || !g.mods[0].imports.contains_key(nm))
                 .collect();
             got.sort();
             for (nm, t) in got {
