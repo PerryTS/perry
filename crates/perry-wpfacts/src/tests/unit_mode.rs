@@ -712,7 +712,7 @@ fn a_unit_view_carries_only_its_own_table_entries() {
     let m = perry_parser::parse_typescript(src, "a.ts").expect("parses");
     let hir = perry_hir::lower_module(&m, "a", "a.ts").expect("lowers");
     assert_eq!(hir.exported_objects, ["cfg"]);
-    let vs = crate::decl_units::views("a.ts", &hir);
+    let vs = crate::decl_units::views("a.ts", &hir, &|_| true);
     assert!(vs.len() >= 3, "{}", vs.len());
     assert_eq!(
         vs.iter()
@@ -734,7 +734,7 @@ fn a_unit_view_is_indices_into_the_one_module() {
     let src = "export const cfg = { a: 1 }; export function g() { return { b: 2 }; } export function h() { return g().b + cfg.a; } export function k() { return { b: 3 }; }";
     let m = perry_parser::parse_typescript(src, "a.ts").expect("parses");
     let hir = perry_hir::lower_module(&m, "a", "a.ts").expect("lowers");
-    let vs = crate::decl_units::views("a.ts", &hir);
+    let vs = crate::decl_units::views("a.ts", &hir, &|_| true);
     assert!(vs.len() >= 3, "{}", vs.len());
     let sorted = |f: &dyn Fn(&crate::decl_units::UnitView) -> Vec<usize>| {
         let mut all: Vec<usize> = vs.iter().flat_map(|(v, _)| f(v)).collect();

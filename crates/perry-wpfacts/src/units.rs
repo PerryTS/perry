@@ -693,7 +693,19 @@ fn owner_of(out: &[Solve], t: &std::ops::Range<usize>, name: &str) -> Option<usi
     })
 }
 
-fn solves<'a>(sorted: &[(&'a str, &'a Module)], flats: &'a [Option<Module>]) -> Vec<Solve<'a>> {
+fn solves<'a>(
+    sorted: &[(&'a str, &'a Module)],
+    flats: &'a [Option<Module>],
+    cfg: &FactsConfig,
+) -> Vec<Solve<'a>> {
+    // DECISIONS 129: what other modules can name of each module, from the
+    // modules' own imports and re-exports (a unit's imports of its own
+    // module's units are not another module's).
+    let own: Vec<(&str, Vec<&Import>, &[Export])> = sorted
+        .iter()
+        .map(|(p, m)| (*p, m.imports.iter().collect(), m.exports.as_slice()))
+        .collect();
+    let reach = published_surface(&own, cfg);
     let index: FxHashMap<&str, usize> = sorted
         .iter()
         .enumerate()
@@ -707,7 +719,8 @@ fn solves<'a>(sorted: &[(&'a str, &'a Module)], flats: &'a [Option<Module>]) -> 
         // for the cut (N5, §12.5): the module's run-once view, one per
         // module, shared by all its units.
         let module: &'a Module = flats[mi].as_ref().unwrap_or(module);
-        for (k, (view, deps)) in crate::decl_units::views(path, module)
+        let named = |n: &str| reach.eval_scopes || reach.names(path, n);
+        for (k, (view, deps)) in crate::decl_units::views(path, module, &named)
             .into_iter()
             .enumerate()
         {
@@ -820,7 +833,7 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
         .iter()
         .map(|(_, m)| crate::decl_units::run_once_flat(m))
         .collect();
-    let solves = solves(sorted, &flats);
+    let solves = solves(sorted, &flats, cfg);
     let viewed: Vec<(&str, Vec<&Import>, &[Export])> = solves
         .iter()
         .map(|s| {

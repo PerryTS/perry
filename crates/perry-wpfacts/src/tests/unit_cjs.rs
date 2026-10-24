@@ -33,6 +33,30 @@ const T3: [(&str, &str); 3] = [
     ("/t3/benchmark.js", include_str!("fixtures/cjs_t3/benchmark.js")),
 ];
 
+/// DECISIONS 127: hidden capture parameters bound at a direct call and in a
+/// composed summary, the real `cjs_wrap` output of three modules. `b.js`
+/// exports `B` whose `go` calls `this.run()`; `r.js` keeps `P`, `S`, `Q`,
+/// `mk` and `T extends B` in its factory: `S`'s constructor calls a local
+/// function through `.call`, so it has no summary and `new S(1)` binds its
+/// parameters directly; `mk` is a summarized factory function whose
+/// `new Q(n)` is composed into it; `T.run` makes both; `m.js` runs
+/// `require("./r").newInstance().go()`.
+const T5: [(&str, &str); 3] = [
+    ("/t5/m.js", include_str!("fixtures/cjs_t5/m.js")),
+    ("/t5/r.js", include_str!("fixtures/cjs_t5/r.js")),
+    ("/t5/b.js", include_str!("fixtures/cjs_t5/b.js")),
+];
+
+/// AWFY CD as the compiler wraps it: `sa_CD.js` requires `cd.js` (the
+/// red-black tree, vectors and the collision detector), which requires
+/// `benchmark.js` and `som.js`.
+const T6: [(&str, &str); 4] = [
+    ("/t6/sa_CD.js", include_str!("fixtures/cjs_t6/sa_CD.js")),
+    ("/t6/cd.js", include_str!("fixtures/cjs_t6/cd.js")),
+    ("/t6/benchmark.js", include_str!("fixtures/cjs_t6/benchmark.js")),
+    ("/t6/som.js", include_str!("fixtures/cjs_t6/som.js")),
+];
+
 fn hirs(mods: &[(&str, &str)]) -> Vec<(String, perry_hir::Module)> {
     mods.iter()
         .map(|(path, src)| {
@@ -186,11 +210,45 @@ fn richards_per_unit_proves_what_the_whole_program_proves() {
 }
 
 #[test]
+fn capture_parameters_bound_directly_or_composed_hold_the_class_environment() {
+    // DECISIONS 127: `new S(1)` (no summary) and `mk`'s composed `new Q(n)`
+    // bind the hidden capture parameters to the class environment, not to
+    // what the call passes. Per unit, `T.run`'s receiver is a value another
+    // unit hands back; reading `P` through it would make `new P(n)` a `new`
+    // of an unknown constructor and sink `P`.
+    let (w, u) = both(&T5);
+    let (pw, pu) = (proven_sites(&w), proven_sites(&u));
+    let lost: Vec<&String> = pw.difference(&pu).collect();
+    let user = |pf: &ProgramFacts| -> usize {
+        proven_sites(pf).iter().filter(|s| [".v", ".p", ".q", ".get"].iter().any(|k| s.ends_with(k))).count()
+    };
+    let escaped = |pf: &ProgramFacts| -> Vec<String> {
+        pf.templates
+            .iter()
+            .filter(|t| ["r.js:P", "r.js:S", "r.js:Q", "r.js:T"].contains(&t.display.as_str()) && t.escape.is_some())
+            .map(|t| format!("{} {}", t.display, t.escape.as_deref().unwrap_or("")))
+            .collect()
+    };
+    assert!(
+        lost.is_empty() && user(&w) == 9 && user(&u) == 9 && escaped(&u).is_empty() && escaped(&w).is_empty(),
+        "per unit {} of whole-program {}; lost {:?}; escaped per unit {:?}, whole {:?}; broken {:?}",
+        pu.len(),
+        pw.len(),
+        lost,
+        escaped(&u),
+        escaped(&w),
+        u.broken
+    );
+}
+
+#[test]
 #[ignore]
 fn scratch_cjs() {
     let (w, u) = match std::env::var("CW2_T").as_deref() {
         Ok("3") => both(&T3),
         Ok("2") => both(&T2),
+        Ok("5") => both(&T5),
+        Ok("6") => both(&T6),
         _ => both(&T1),
     };
     for (n, pf) in [("WHOLE", &w), ("UNIT", &u)] {

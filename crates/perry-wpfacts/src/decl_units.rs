@@ -567,9 +567,16 @@ fn stmt_name(s: &Stmt) -> Option<(&str, u32)> {
 /// receiver of a method call) lets no value of it flow; when every such
 /// access is in the unit that declares it (`unit_of`), it stays closed and
 /// its own fields stay that unit's (a CommonJS `require` with its `cache`).
+///
+/// DECISIONS 129: an export no other module can name (`named` false for
+/// its exported name: no import of it, no namespace import, `export *` or
+/// `import()` of the module, no dynamic code) is no export here: only the
+/// module's own units reach the binding, as for an unexported one (the
+/// CommonJS wrapper's `export { C }` of every hoisted class).
 pub(crate) fn closed_bindings(
     module: &Module,
     unit_of: &dyn Fn(Item) -> usize,
+    named: &dyn Fn(&str) -> bool,
 ) -> FxHashMap<String, u32> {
     #[derive(Default)]
     struct Use {
@@ -720,8 +727,8 @@ pub(crate) fn closed_bindings(
         module
             .exports
             .iter()
-            .any(|e| matches!(e, Export::Named { local, .. } if local == name))
-            || module.exported_objects.iter().any(|n| n == name)
+            .any(|e| matches!(e, Export::Named { local, exported } if local == name && named(exported)))
+            || module.exported_objects.iter().any(|n| n == name && named(n))
     };
     // The candidates: unexported, uniquely named, never written.
     let mut cand: FxHashMap<(bool, u32), (String, u32)> = FxHashMap::default();
@@ -1091,16 +1098,23 @@ fn sccs(succ: &[Vec<usize>]) -> Vec<Vec<usize>> {
 /// imports of the other units' declarations it refers to (from
 /// [`unit_path`]), its exports, and synthetic exports of its declarations
 /// other units refer to. Also the units each unit refers to.
-pub(crate) fn views(path: &str, module: &Module) -> Vec<(UnitView, Vec<usize>)> {
+/// `named`: another module can name this export (DECISIONS 129).
+pub(crate) fn views(
+    path: &str,
+    module: &Module,
+    named: &dyn Fn(&str) -> bool,
+) -> Vec<(UnitView, Vec<usize>)> {
     let units = decl_units(module);
     let unit_of_item: FxHashMap<Item, usize> = units
         .iter()
         .enumerate()
         .flat_map(|(u, items)| items.iter().map(move |&it| (it, u)))
         .collect();
-    let closed = closed_bindings(module, &|it| {
-        unit_of_item.get(&it).copied().unwrap_or(usize::MAX)
-    });
+    let closed = closed_bindings(
+        module,
+        &|it| unit_of_item.get(&it).copied().unwrap_or(usize::MAX),
+        named,
+    );
     let mut owner_name: FxHashMap<&str, usize> = FxHashMap::default();
     let mut owner_local: FxHashMap<u32, (usize, &str)> = FxHashMap::default();
     let mut owner_func: FxHashMap<u32, (usize, &str)> = FxHashMap::default();
