@@ -2504,3 +2504,38 @@ fn a_forwarded_result_layout_leaves_no_fields() {
         pf.dump_text()
     );
 }
+
+/// DECISIONS 113: every unit storing under a computed global key writes ⊤
+/// into `global:*`, and every unit reading a program-owned global (a
+/// `__` key, `builtins::global_user_key`) reads that cell. The
+/// reader took one stand-in value per writing unit (effect: ~9500 units,
+/// 19k nodes in each reader, quadratic per round); the writes are grouped
+/// by contract, so the reader's solve does not grow with the writers.
+#[test]
+fn a_cell_written_alike_by_many_units_is_read_once() {
+    let reader_nodes = |n: usize| {
+        let srcs: Vec<(String, String)> = (0..n)
+            .map(|i| {
+                (
+                    format!("w{i}"),
+                    format!("(globalThis as any)[String(Math.random())] = {i}; export const v{i} = 1;"),
+                )
+            })
+            .chain(std::iter::once((
+                "r".to_string(),
+                "console.log((globalThis as any).__g);".to_string(),
+            )))
+            .collect();
+        let mods: Vec<(&str, &str)> = srcs.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+        let pf = units_of(&mods);
+        let (_, st) = pf
+            .units
+            .iter()
+            .find(|(p, _)| p.starts_with("r.ts"))
+            .expect("the reader is a unit");
+        (st.nodes, pf.dump_text())
+    };
+    let (few, _) = reader_nodes(4);
+    let (many, dump) = reader_nodes(16);
+    assert_eq!(few, many, "{dump}");
+}

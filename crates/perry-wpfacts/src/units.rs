@@ -390,9 +390,11 @@ pub(crate) struct Published {
     pub(crate) extended: FxHashSet<(String, String)>,
     /// Cells (design §17.16 (b)): a runtime location every unit names the
     /// same way (`cjs:<path>`, the registry union `cjs:*`, a computed path
-    /// `cjs:?`), per writing unit (its key) the value contract of what it
-    /// writes. A reader joins the other units' writes.
-    pub(crate) cells: FxHashMap<String, Vec<(String, ValueContract)>>,
+    /// `cjs:?`), the value contracts written, each with the units writing
+    /// it (their keys, sorted). A reader joins the other units' writes.
+    /// Grouped by contract (DECISIONS 113): every unit may write one cell
+    /// (`global:*`), and a reader takes each distinct write once.
+    pub(crate) cells: FxHashMap<String, Vec<(ValueContract, Vec<String>)>>,
     /// A unit solve went over the bound: what it writes is unknown, so
     /// every cell may hold an unknown value.
     pub(crate) cells_top: bool,
@@ -1015,18 +1017,24 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
         input.stores = stores;
         // Design §17.16 (b): the cells, from every unit's latest solve. The
         // units reading a cell whose writes changed are solved again.
-        let mut cells: FxHashMap<String, Vec<(String, ValueContract)>> = FxHashMap::default();
+        let mut cells: FxHashMap<String, Vec<(ValueContract, Vec<String>)>> = FxHashMap::default();
+        let mut group: FxHashMap<(String, String), usize> = FxHashMap::default();
         for (si, s) in solves.iter().enumerate() {
             let u = per_unit[si].as_ref().expect("every unit solved");
             for (k, c) in &u.cells_out {
-                cells
-                    .entry(k.clone())
-                    .or_default()
-                    .push((s.key.clone(), c.clone()));
+                let v = cells.entry(k.clone()).or_default();
+                let i = *group.entry((k.clone(), format!("{c:?}"))).or_insert_with(|| {
+                    v.push((c.clone(), Vec::new()));
+                    v.len() - 1
+                });
+                v[i].1.push(s.key.clone());
             }
         }
         for v in cells.values_mut() {
-            v.sort_by(|x, y| x.0.cmp(&y.0));
+            for (_, ws) in v.iter_mut() {
+                ws.sort_unstable();
+            }
+            v.sort_by(|x, y| x.1.cmp(&y.1));
         }
         let cells_top = per_unit.iter().flatten().any(|u| u.stats.aborted);
         // A unit is solved again when what it READS of a cell changed: the
@@ -1034,7 +1042,7 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
         // DECISIONS 89), an unknown one or a unit over the bound being ⊤
         // that absorbs every other unknown. A reader forwarding the ⊤ it
         // was seeded with changes no other reader's view.
-        let view = |cells: &FxHashMap<String, Vec<(String, ValueContract)>>,
+        let view = |cells: &FxHashMap<String, Vec<(ValueContract, Vec<String>)>>,
                     top: bool,
                     me: &str,
                     k: &str| {
@@ -1042,8 +1050,8 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
                 .get(k)
                 .into_iter()
                 .flatten()
-                .filter(|(w, _)| w != me)
-                .map(|(_, c)| c)
+                .filter(|(_, ws)| !(ws.len() == 1 && ws[0] == me))
+                .map(|(c, _)| c)
                 .collect();
             let pure = |c: &ValueContract| {
                 c.unknown

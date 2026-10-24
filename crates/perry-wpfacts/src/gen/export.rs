@@ -686,8 +686,10 @@ impl<'a> Gen<'a> {
         }
         let writes = u.cells.get(key).into_iter().flatten();
         let wide = wide.and_then(|w| u.cells.get(w)).into_iter().flatten();
-        for (w, c) in writes.chain(wide) {
-            if *w == me {
+        // One stand-in per distinct write (DECISIONS 113); this unit's own
+        // write is in its own solve (DECISIONS 89).
+        for (c, ws) in writes.chain(wide) {
+            if ws.len() == 1 && ws[0] == me {
                 continue;
             }
             let v = self.stand_in_value(0, key, c);
