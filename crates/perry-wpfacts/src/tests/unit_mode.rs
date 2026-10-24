@@ -1974,9 +1974,13 @@ const EE_FIRST: &str = r#"
 /// Runs `f` on its own thread; `None` when it has not returned in `secs`.
 fn bounded<T: Send + 'static>(secs: u64, f: impl FnOnce() -> T + Send + 'static) -> Option<T> {
     let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let _ = tx.send(f());
-    });
+    // The parser and lowering recurse: a test thread's stack, not 2 MiB.
+    std::thread::Builder::new()
+        .stack_size(64 << 20)
+        .spawn(move || {
+            let _ = tx.send(f());
+        })
+        .expect("spawns");
     rx.recv_timeout(std::time::Duration::from_secs(secs)).ok()
 }
 
@@ -1998,4 +2002,39 @@ fn an_argument_contract_ascends_so_the_units_reach_a_fixpoint() {
     let pf = bounded(60, move || units_of(&[("ee", EE_FIRST), ("m", m)]))
         .expect("D16: the per-unit fixpoint did not end in 60 s");
     assert_eq!(pf.rounds, 4, "rounds {:?}", pf.round_work);
+}
+
+#[test]
+fn a_store_effect_ascends_so_the_units_reach_a_fixpoint() {
+    // D16, the store channel (decision 17): `b` calls the function field
+    // `k` of `a`'s literal and stores into the result, `obj` itself: a
+    // store effect on `obj.k`. `a` performs it (an unknown value), so `k`
+    // no longer holds only a function and `b` reads it as unknown: no
+    // store. Rebuilt from the latest solves only, the effect would drop,
+    // `k` would hold the function again, and the driver would cycle.
+    // Joined with last round's, the effect stays: two rounds.
+    let a = "function k() { return o; } const o = { k: k }; export const obj = o;";
+    let b = "import { obj } from './a'; const f = (obj as any).k; const y = f(); y.k = 1;";
+    let pf = bounded(60, move || units_of(&[("a", a), ("b", b)]))
+        .expect("D16: the per-unit fixpoint did not end in 60 s");
+    assert_eq!(pf.rounds, 2, "rounds {:?}", pf.round_work);
+    // `a` keeps performing the store: `k` is written after construction.
+    let o = pf
+        .templates
+        .iter()
+        .find(|t| t.birth_keys == ["k"])
+        .expect("the literal");
+    assert!(!field(o, "k").readonly, "{}", pf.dump_text());
+}
+
+#[test]
+fn a_member_function_returning_its_own_layout_is_built_once() {
+    // The reader's stand-ins of a layout and of a function its field holds
+    // that returns the layout reach each other: each is registered before
+    // its members are built (the stack overflowed).
+    let a = "const o: any = { k: function () { return o; } }; export function make() { return o; }";
+    let b = "import { make } from './a'; const x = make(); const f = x.k; const y = f(); y.k = 1;";
+    let pf = bounded(60, move || units_of(&[("a", a), ("b", b)]))
+        .expect("D16: the per-unit fixpoint did not end in 60 s");
+    assert_eq!(pf.rounds, 2, "rounds {:?}", pf.round_work);
 }

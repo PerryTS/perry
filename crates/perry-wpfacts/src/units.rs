@@ -96,42 +96,187 @@ pub(crate) struct ArgContract {
     pub top: bool,
 }
 
+/// Joins `b` into `a` as sets: what `b` holds that `a` lacks is appended,
+/// so `a ⊔ a = a` (the driver compares last round's value with the join).
+fn union_into<T: Clone + PartialEq>(a: &mut Vec<T>, b: &[T]) {
+    for x in b {
+        if !a.contains(x) {
+            a.push(x.clone());
+        }
+    }
+}
+
+/// Joins entries keyed by `key`: an entry both hold is joined by `join`,
+/// one only `b` holds is appended.
+fn join_keyed<T: Clone, K: PartialEq>(
+    a: &mut Vec<T>,
+    b: &[T],
+    key: impl Fn(&T) -> K,
+    join: impl Fn(&mut T, &T),
+) {
+    for y in b {
+        match a.iter_mut().find(|x| key(x) == key(y)) {
+            Some(x) => join(x, y),
+            None => a.push(y.clone()),
+        }
+    }
+}
+
+impl FnContract {
+    /// The join of two descriptions of one function (by `name`): every
+    /// claim the caller may rely on holds in both. The marks per
+    /// parameter, variadic, the borrowed and returned parameters and an
+    /// unknown result only grow; the result layouts grow, and a ⊤ result
+    /// (`None`) absorbs them; the receiver is unused only if both say so.
+    pub(crate) fn join(&mut self, o: &FnContract) {
+        for (v, w) in [(&mut self.params, &o.params), (&mut self.reach, &o.reach)] {
+            if v.len() < w.len() {
+                v.resize(w.len(), 0);
+            }
+            for (x, y) in v.iter_mut().zip(w) {
+                *x |= *y;
+            }
+        }
+        self.variadic |= o.variadic;
+        match (&mut self.ret, &o.ret) {
+            (Some(r), Some(s)) => union_into(r, s),
+            (r, _) => *r = None,
+        }
+        union_into(&mut self.ret_params, &o.ret_params);
+        union_into(&mut self.ret_reach, &o.ret_reach);
+        self.ret_unknown |= o.ret_unknown;
+        self.lexical_this &= o.lexical_this;
+        if self.closed.is_none() {
+            self.closed = o.closed.clone();
+        }
+    }
+}
+
+/// A static member of a class contract as its reader builds it
+/// (`Gen::stand_in_class`): a function contract, a stub of the named
+/// method, or an unknown value.
+#[derive(Clone, PartialEq)]
+enum StaticMember {
+    Fn(FnContract),
+    Stub(String),
+    Top,
+}
+
+impl ClassContract {
+    /// The join of two descriptions of one layout or class (by `display`;
+    /// its name, class id, shape and native parent are its identity):
+    /// every claim a reader may rely on holds in both. Facts weaken
+    /// (`derive::TemplateFacts::join`); keys, methods and statics are the
+    /// union, and a member the two describe differently is an unknown
+    /// value; a field holds contract functions only where both say so;
+    /// open keys and open statics only grow.
+    pub(crate) fn join(&mut self, o: &ClassContract) {
+        // Field functions: a field both describe holds the union of their
+        // functions; a field one side's facts have without field functions
+        // holds unknown values, so it has none in the join.
+        let plain = |c: &ClassContract, k: &str| {
+            c.facts.fields.iter().any(|f| f.key == k) && !c.field_fns.iter().any(|(q, _)| q == k)
+        };
+        let mut field_fns: Vec<(String, Vec<FnContract>)> = Vec::new();
+        for (k, fs) in self.field_fns.iter().chain(o.field_fns.iter()) {
+            if plain(self, k) || plain(o, k) {
+                continue;
+            }
+            match field_fns.iter_mut().find(|(q, _)| q == k) {
+                Some((_, v)) => join_keyed(v, fs, |f| f.name.clone(), FnContract::join),
+                None => field_fns.push((k.clone(), fs.clone())),
+            }
+        }
+        // Statics, as the reader builds them.
+        let member = |c: &ClassContract, k: &str| -> Option<StaticMember> {
+            let (_, m) = c.statics.iter().find(|(q, _)| q == k)?;
+            Some(match c.static_fns.iter().find(|(q, _)| q == k) {
+                Some((_, fc)) => StaticMember::Fn(fc.clone()),
+                None => match m {
+                    Some(f) => StaticMember::Stub(f.clone()),
+                    None => StaticMember::Top,
+                },
+            })
+        };
+        let mut statics: Vec<(String, Option<String>)> = Vec::new();
+        let mut static_fns: Vec<(String, FnContract)> = Vec::new();
+        for (k, _) in self.statics.iter().chain(o.statics.iter()) {
+            if statics.iter().any(|(q, _)| q == k) {
+                continue;
+            }
+            let m = match (member(self, k), member(o, k)) {
+                (Some(x), None) | (None, Some(x)) => x,
+                (Some(StaticMember::Fn(mut f)), Some(StaticMember::Fn(g))) if f.name == g.name => {
+                    f.join(&g);
+                    StaticMember::Fn(f)
+                }
+                (Some(x), Some(y)) if x == y => x,
+                _ => StaticMember::Top,
+            };
+            let slot = self
+                .statics
+                .iter()
+                .chain(o.statics.iter())
+                .find(|(q, _)| q == k)
+                .and_then(|(_, m)| m.clone());
+            match m {
+                StaticMember::Fn(f) => {
+                    statics.push((k.clone(), slot));
+                    static_fns.push((k.clone(), f));
+                }
+                StaticMember::Stub(f) => statics.push((k.clone(), Some(f))),
+                StaticMember::Top => statics.push((k.clone(), None)),
+            }
+        }
+        self.facts.join(&o.facts);
+        union_into(&mut self.methods, &o.methods);
+        self.field_fns = field_fns;
+        self.open_keys |= o.open_keys;
+        self.statics = statics;
+        self.statics_open |= o.statics_open;
+        self.static_fns = static_fns;
+    }
+}
+
+impl ValueContract {
+    /// The join of two value contracts: the layouts, classes and
+    /// functions (each by identity, its description joined), an unknown
+    /// value and the primitive kinds only grow.
+    pub(crate) fn join(&mut self, o: &ValueContract) {
+        join_keyed(
+            &mut self.layouts,
+            &o.layouts,
+            |c| c.display.clone(),
+            ClassContract::join,
+        );
+        join_keyed(
+            &mut self.classes,
+            &o.classes,
+            |c| c.display.clone(),
+            ClassContract::join,
+        );
+        join_keyed(&mut self.fns, &o.fns, |f| f.name.clone(), FnContract::join);
+        self.unknown |= o.unknown;
+        self.prim |= o.prim;
+        self.layouts.sort_by(|x, y| x.display.cmp(&y.display));
+        self.classes.sort_by(|x, y| x.display.cmp(&y.display));
+        self.fns.sort_by(|x, y| x.name.cmp(&y.name));
+    }
+}
+
 impl ArgContract {
-    /// The lattice join (D16): `top`, the parameters, each parameter's
-    /// layouts, classes and functions (by identity), `unknown` and the
-    /// primitive kinds only grow. An entry both hold takes `o`'s
-    /// description: the driver joins last round's contract with what the
-    /// latest solves pass, and those carry the defining unit's contract
-    /// as it is published now (the order is on the identities).
+    /// The lattice join (D16): `top`, the parameters and each parameter's
+    /// value contract (`ValueContract::join`, descriptions included) only
+    /// grow. Every component is a join in a finite lattice, so the driver's
+    /// argument contracts, last round's joined with what the latest solves
+    /// pass, ascend and stop changing.
     fn join(&mut self, o: &ArgContract) {
         self.top |= o.top;
         if self.params.len() < o.params.len() {
             self.params.resize(o.params.len(), ValueContract::default());
         }
         for (a, b) in self.params.iter_mut().zip(&o.params) {
-            for l in &b.layouts {
-                match a.layouts.iter_mut().find(|x| x.display == l.display) {
-                    Some(x) => *x = l.clone(),
-                    None => a.layouts.push(l.clone()),
-                }
-            }
-            for c in &b.classes {
-                match a.classes.iter_mut().find(|x| x.display == c.display) {
-                    Some(x) => *x = c.clone(),
-                    None => a.classes.push(c.clone()),
-                }
-            }
-            for f in &b.fns {
-                match a.fns.iter_mut().find(|x| x.name == f.name) {
-                    Some(x) => *x = f.clone(),
-                    None => a.fns.push(f.clone()),
-                }
-            }
-            a.unknown |= b.unknown;
-            a.prim |= b.prim;
-            a.layouts.sort_by(|x, y| x.display.cmp(&y.display));
-            a.classes.sort_by(|x, y| x.display.cmp(&y.display));
-            a.fns.sort_by(|x, y| x.name.cmp(&y.name));
+            a.join(b);
         }
     }
 }
@@ -435,9 +580,11 @@ fn dependency_order(solves: &[Solve]) -> Vec<usize> {
 /// every other unit's inputs are unchanged, so its result is kept. What
 /// the other units feed back only grows: broken, the argument contracts
 /// (decision 13) and the store effects (decision 17), each last round's
-/// value joined with what the latest solves report (D16). Their elements
-/// (templates, functions, keys, ⊤) are finite, so an input cannot cycle,
-/// and the result covers what every round's solves passed and stored.
+/// value joined with what the latest solves report (D16): the entries
+/// (templates, functions, keys, ⊤) and their descriptions are joins in
+/// finite lattices (`ArgContract::join`), so every such input ascends and
+/// the loop ends, and the result covers what every round's solves passed
+/// and stored.
 
 pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts {
     let ucfg = FactsConfig {
@@ -571,11 +718,16 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
         for v in stores.values_mut() {
             v.sort();
         }
-        let changed: Vec<String> = stores
-            .iter()
-            .filter(|(d, v)| input.stores.get(*d) != Some(*v))
-            .map(|(d, _)| d.clone())
+        // Compared as values: a layout whose keys differ either way (joined,
+        // they can only have grown).
+        let mut changed: Vec<String> = stores
+            .keys()
+            .chain(input.stores.keys())
+            .filter(|d| stores.get(*d) != input.stores.get(*d))
+            .cloned()
             .collect();
+        changed.sort();
+        changed.dedup();
         if !changed.is_empty() {
             let owner = owners(&per_unit);
             for d in &changed {
