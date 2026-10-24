@@ -80,6 +80,33 @@ fn a_result_holding_another_units_instance_forwards_its_contract() {
     );
 }
 
+/// DECISIONS 112: every object literal of one key set in a module is one
+/// shape. Two units of `a` birth `{ x, y }` (and `{ o }`), and `b` reads the
+/// layout by display between them in level order (f, then g, then h). Each
+/// owner overwrote the entry: `b` read f's, h left its own, and every
+/// round re-solved `b` (effect's JsonSchema.ts `{ dialect, schema,
+/// definitions }` never converged). The entry is the owners' join: the
+/// rounds end, bounded by the test.
+#[test]
+fn a_literal_shape_born_in_two_units_is_one_joined_layout() {
+    let a = "import { g } from './b';\nexport function f() { return { o: { x: 1, y: 2 } }; }\nexport function h() { return { o: { x: g(), y: 'z' } }; }";
+    let b = "import { f } from './a'; export function g() { const r = f(); return r.o.x + r.o.y; }";
+    let m = "import { h } from './a'; import { g } from './b'; console.log(h().o.x, g());";
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let pf = units_of(&[("a", a), ("b", b), ("m", m)]);
+        let _ = tx.send((pf.rounds, pf.broken.clone(), verdicts(&pf, "y"), pf.dump_text()));
+    });
+    let (rounds, broken, y, dump) = rx
+        .recv_timeout(std::time::Duration::from_secs(60))
+        .expect("the per-unit rounds converge");
+    assert!(broken.is_empty(), "{broken:?}\n{dump}");
+    assert!(rounds <= 4, "rounds {rounds}\n{dump}");
+    // `y` sits in one slot of the one shape in every birth: b's read is
+    // proven (b holds the one layout beside its own view of it: T0Set).
+    assert!(y.iter().any(|v| v.starts_with("T0")), "{y:?}\n{dump}");
+}
+
 /// DECISIONS 108: a function's contract is published and read under its
 /// name, so the name must be the function's identity. Two classes of one
 /// module each with a `contains` method (som.js's Set and IdentitySet) are

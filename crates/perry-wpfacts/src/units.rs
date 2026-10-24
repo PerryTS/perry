@@ -202,6 +202,116 @@ impl ValueContract {
     }
 }
 
+impl ClassContract {
+    /// The join of two units' contracts for one literal shape (DECISIONS
+    /// 112): the HIR gives every object literal of one key set in a module
+    /// one shape, and the units birthing it each publish what their own
+    /// births hold. One runtime shape carries one fact set, so readers get
+    /// what holds for every birth, as the whole program's one template.
+    /// Idempotent and absorbing (`a ⊔ b = a` when `b ≤ a`): the driver joins
+    /// the last round's entry with this round's owners.
+    pub(crate) fn join(&mut self, b: &ClassContract) {
+        let (f, g) = (&mut self.facts, &b.facts);
+        f.escape = f.escape.take().or_else(|| g.escape.clone());
+        f.hard = f.hard.take().or_else(|| g.hard.clone());
+        f.chain = f.chain.take().or_else(|| g.chain.clone());
+        f.prefix_stable &= g.prefix_stable;
+        f.fixed_layout &= g.fixed_layout;
+        f.adds_keys = f.adds_keys.max(g.adds_keys);
+        f.sabotaged |= g.sabotaged;
+        common_prefix(&mut f.birth_keys, &g.birth_keys);
+        for y in &g.fields {
+            match f.fields.iter_mut().find(|x| x.key == y.key) {
+                Some(x) => {
+                    if x.slot != y.slot {
+                        x.slot = None;
+                    }
+                    x.definite &= y.definite;
+                    x.data_field &= y.data_field;
+                    x.readonly &= y.readonly;
+                    x.writers_ctor = x.writers_ctor.max(y.writers_ctor);
+                    x.writers_post = x.writers_post.max(y.writers_post);
+                    x.ta_stable &= y.ta_stable;
+                    if x.ta_kind != y.ta_kind {
+                        x.ta_kind = None;
+                    }
+                    let (k, l) = (&mut x.kind, &y.kind);
+                    k.top |= l.top;
+                    k.prims |= l.prims;
+                    k.funcs = k.funcs.max(l.funcs);
+                    k.builtin_objs = k.builtin_objs.max(l.builtin_objs);
+                    for o in &l.objs {
+                        if !k.objs.contains(o) {
+                            k.objs.push(o.clone());
+                        }
+                    }
+                    k.objs.sort();
+                }
+                None => {
+                    let mut y = y.clone();
+                    y.definite = false;
+                    f.fields.push(y);
+                }
+            }
+        }
+        for x in f.fields.iter_mut() {
+            if !g.fields.iter().any(|y| y.key == x.key) {
+                x.definite = false;
+            }
+        }
+        // A field both sides describe the same way keeps the union; a
+        // field one side describes another way, or not at all, holds
+        // unknown values for the reader.
+        let mut fns = Vec::new();
+        for (k, v) in &self.field_fns {
+            if let Some((_, w)) = b.field_fns.iter().find(|(x, _)| x == k) {
+                let mut v = v.clone();
+                for c in w {
+                    if !v.iter().any(|x| x.name == c.name) {
+                        v.push(c.clone());
+                    }
+                }
+                v.sort_by(|x, y| x.name.cmp(&y.name));
+                fns.push((k.clone(), v));
+            }
+        }
+        let mut lays = Vec::new();
+        for (k, v, p) in &self.field_layouts {
+            if let Some((_, w, q)) = b.field_layouts.iter().find(|(x, _, _)| x == k) {
+                let mut v = v.clone();
+                for d in w {
+                    if !v.contains(d) {
+                        v.push(d.clone());
+                    }
+                }
+                v.sort();
+                lays.push((k.clone(), v, *p || *q));
+            }
+        }
+        let mut vals = Vec::new();
+        for (k, v) in &self.field_values {
+            if let Some((_, w)) = b.field_values.iter().find(|(x, _)| x == k) {
+                let mut v = v.clone();
+                v.join(w);
+                vals.push((k.clone(), v));
+            }
+        }
+        self.field_fns = fns;
+        self.field_layouts = lays;
+        self.field_values = vals;
+        self.open_keys |= b.open_keys;
+        self.ctor_leaks |= b.ctor_leaks;
+        common_prefix(&mut self.birth_keys, &b.birth_keys);
+        self.definite.retain(|k| b.definite.contains(k));
+    }
+}
+
+/// Keeps the prefix `a` and `b` share.
+fn common_prefix(a: &mut Vec<String>, b: &[String]) {
+    let n = a.iter().zip(b).take_while(|(x, y)| x == y).count();
+    a.truncate(n);
+}
+
 /// What the calls of a closed function pass (decision 13,
 /// `decl_units::closed_bindings`): per parameter the value contract of the
 /// arguments, and whether some call may pass anything (`top`: a unit calls
@@ -772,8 +882,25 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
                         continue;
                     }
                     owned_now.insert(c.display.clone());
+                    // Several units birth one literal shape (DECISIONS 112):
+                    // its entry is the join of their contracts, ascending
+                    // from the last round's owned entry, so a reader between
+                    // two owners reads at the fixpoint what the last one
+                    // leaves. A class has one defining unit: its latest solve.
+                    let e = match input.layouts.get(&c.display) {
+                        Some(p)
+                            if c.literal_shape
+                                && p.literal_shape
+                                && owned_layouts.contains(&c.display) =>
+                        {
+                            let mut j = p.clone();
+                            j.join(c);
+                            j
+                        }
+                        _ => c.clone(),
+                    };
                     owned_layouts.insert(c.display.clone());
-                    input.layouts.insert(c.display.clone(), c.clone());
+                    input.layouts.insert(c.display.clone(), e);
                 }
                 for c in &u.own_fns_out {
                     published_fns.insert(c.name.clone());
