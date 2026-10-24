@@ -478,6 +478,36 @@ const APPEND_SET: &str = r#"
     function main() { const v = new Vec(); v.items = []; v.append(new P(1)); console.log(v.items[0].x); }
     main();
     "#;
+/// The caller reads its own array the constructor was handed (`B2`): its
+/// elements are what Vec's unit stores there, by the element cell.
+const APPEND_ALIAS: &str = r#"
+    class Vec {
+      items: any[]; n: number;
+      constructor(a: any[]) { this.items = a; this.n = 0; }
+      append(e: any) { this.items[this.n] = e; this.n = this.n + 1; }
+    }
+    class P { x: number; constructor(x: number) { this.x = x; } }
+    function main() { const a: any[] = []; const v = new Vec(a); v.append(new P(1)); console.log(a[0].x); }
+    main();
+    "#;
+/// A constructor filling the array it is handed, keeping no field of it.
+const FILL_ARG: &str = r#"
+    class P { x: number; constructor(x: number) { this.x = x; } }
+    class Filler { n: number; constructor(a: any[]) { a[0] = new P(1); this.n = 1; } }
+    function main() { const a: any[] = []; const f = new Filler(a); console.log(a[0].x, f.n); }
+    main();
+    "#;
+/// The storage handed to the constructor by the caller (`B`).
+const APPEND_ARG: &str = r#"
+    class Vec {
+      items: any[]; n: number;
+      constructor(a: any[]) { this.items = a; this.n = 0; }
+      append(e: any) { this.items[this.n] = e; this.n = this.n + 1; }
+    }
+    class P { x: number; constructor(x: number) { this.x = x; } }
+    function main() { const v = new Vec([]); v.append(new P(1)); console.log(v.items[0].x); }
+    main();
+    "#;
 
 #[test]
 fn an_argument_stored_into_what_the_receiver_reaches_stays_the_callers() {
@@ -486,8 +516,11 @@ fn an_argument_stored_into_what_the_receiver_reaches_stays_the_callers() {
     // runs it: append's parameter is its receiver flow, which `main`
     // replays on its stand-in's storage, not an escape in Vec's unit (the
     // storage there is published: its elements come back from `main`).
+    // DECISIONS 149e: the caller's own array handed to the closed
+    // constructor leaves by its element cell and comes back to the caller
+    // as that array, so the replay lands on it.
     // Per-unit facts are whole-program facts (owner 2026-10-23).
-    for src in [APPEND_OWN, APPEND_SET] {
+    for src in [APPEND_OWN, APPEND_SET, APPEND_ARG] {
         let pf = units(src);
         let w = verdicts(&facts(src), "x");
         assert!(pf.broken.is_empty(), "{}", pf.dump_text());
@@ -496,5 +529,18 @@ fn an_argument_stored_into_what_the_receiver_reaches_stays_the_callers() {
             "{w:?}"
         );
         assert_eq!(verdicts(&pf, "x"), w, "{}", pf.dump_text());
+    }
+    // DECISIONS 149e: the caller's own array handed to the closed
+    // constructor is the array Vec's unit stores into: the caller reads
+    // what append stored there through the element cell. (The whole
+    // program does not see `P` at `a[0]` today, an open item of 149e, so
+    // this asserts the per-unit fact itself.)
+    // The same when the constructor keeps no field of it (`FILL_ARG`):
+    // the array is handed over by its element cell itself.
+    for src in [APPEND_ALIAS, FILL_ARG] {
+        let pf = units(src);
+        assert!(pf.broken.is_empty(), "{}", pf.dump_text());
+        let u = verdicts(&pf, "x");
+        assert!(!u.is_empty() && u.iter().all(|v| v.starts_with("T0")), "{u:?}");
     }
 }

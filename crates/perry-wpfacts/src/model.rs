@@ -407,8 +407,10 @@ pub enum Cons {
     /// DECISIONS 109): an instance of another unit's contract (a stand-in)
     /// goes to the defining unit's constructor through the argument
     /// contract, which describes it there as the same stand-in, so that
-    /// unit's census covers what the constructor does with it; any other
-    /// token escapes, with the reason.
+    /// unit's census covers what the constructor does with it; an array
+    /// leaves by its element cell (DECISIONS 94, 149e: the parameter is
+    /// checked as a published value, `Gen::check_value`, and the argument
+    /// contract names it); any other token escapes, with the reason.
     HandOver { reason: u32 },
     /// DECISIONS 149d: what a receiver-rooted store of function `f` puts
     /// into an object of this unit: every value but `f`'s parameter and

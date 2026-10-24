@@ -1412,6 +1412,16 @@ fn arg_contract_of(
                     vc.unknown = true;
                     continue;
                 };
+                // DECISIONS 149e: an array leaves by its element cell
+                // (`Gen::contract_check`), named as a value contract names it (94).
+                if matches!(g.m.tmpls[tm as usize].kind, model::TmplKind::Arr { .. }) {
+                    let d = g.arr_name(t);
+                    if !vc.arrays.contains(&d) {
+                        vc.arrays.push(d);
+                        vc.arrays.sort();
+                    }
+                    continue;
+                }
                 let display = &g.m.tmpls[tm as usize].display;
                 // A closed caller passing its own parameter on: what its
                 // callers pass is beside the marker (decision 13).

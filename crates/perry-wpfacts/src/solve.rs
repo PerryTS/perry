@@ -759,7 +759,10 @@ impl Model {
                 for &t in toks {
                     let stand_in = matches!(self.toks[t as usize], TokKind::Obj(tm, _)
                         if self.foreign.contains_key(&tm));
-                    if !stand_in {
+                    // DECISIONS 149e: an array leaves by its element cell.
+                    let arr = matches!(self.toks[t as usize], TokKind::Obj(tm, _)
+                        if matches!(self.tmpls[tm as usize].kind, TmplKind::Arr { .. }));
+                    if !stand_in && !arr {
                         self.escape(t, reason);
                     }
                 }
