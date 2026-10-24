@@ -316,6 +316,7 @@ fn object_alloc_with_parent_impl<
         let id = crate::object::shapes::birth_publish_object_shape(ptr, field_count);
         if memo {
             KEYLESS_BIRTH.with(|birth| birth.set(id));
+            crate::object::shape_carriers::note_shape_id(id);
         }
 
         ptr
@@ -325,8 +326,17 @@ fn object_alloc_with_parent_impl<
 thread_local! {
     /// One memo at this allocation site, validated against all birth facts
     /// on every use. A polymorphic allocation misses and replaces the memo;
-    /// there is no count/kind-indexed table.
+    /// there is no count/kind-indexed table. The memo word is dereferenced by
+    /// that validation, so it is a cache carrier (note_keyless_birth_carrier).
     static KEYLESS_BIRTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Claim the layout word the keyless-birth memo names (full-trace recompute).
+pub(crate) fn note_keyless_birth_carrier() {
+    let id = KEYLESS_BIRTH.with(std::cell::Cell::get);
+    if id != 0 {
+        crate::object::shape_carriers::note_shape_id(id);
+    }
 }
 
 /// An object born on a known birth shape: `class_id`, `field_count` live
@@ -341,7 +351,7 @@ pub(crate) fn object_alloc_born(
     object_alloc_born_impl(class_id, field_count, shape_id, false)
 }
 
-/// A plain ordinary receiver on a cached shape, or its keyless birth shape
+/// A plain ordinary receiver on a carried shape, or its keyless birth shape
 /// when the memo is absent or collection pruned it. Returns the receiver
 /// and, when it was born on `shape_id`, that shape's representation word
 /// (read from the same record that validated it).
