@@ -38,6 +38,7 @@
 //! adds one is therefore always a dynamic write, wherever in the runtime the
 //! write lands.
 
+use crate::object::shapes::shape_record_of_receiver;
 use super::layout_desc::{
     carry_shadow, layout_id_of_word, word_is_shadowed, StaticAtom, LAYOUT_SHADOW_BIT,
 };
@@ -470,7 +471,7 @@ pub(crate) unsafe fn note_prototype_slot_store(
     {
         return;
     }
-    let Some(record) = shape_record_for_word((*obj).shape_word()) else {
+    let Some(record) = shape_record_of_receiver((*obj).shape_word()) else {
         return;
     };
     let n = record.logical_key_count() as usize;

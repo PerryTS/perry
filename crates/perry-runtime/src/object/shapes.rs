@@ -2506,9 +2506,17 @@ fn shape_descriptor_field_for_word<T>(shape_id: u32, read: impl Fn(&ShapeRecord)
     Some(read(unsafe { &*record }))
 }
 
-/// The live inline-slot bound for `shape_id`, without copying its descriptor.
+/// The live inline-slot bound for a HELD `shape_id`, without copying its
+/// descriptor (checked).
 pub(crate) fn shape_live_inline_slot_count_for_word(shape_id: u32) -> Option<u32> {
     shape_descriptor_field_for_word(shape_id, |d| d.live_inline_slot_count)
+}
+
+/// The same for a live receiver's own header word (unchecked).
+pub(crate) fn shape_live_inline_slot_count_of_receiver(shape_id: u32) -> Option<u32> {
+    let record = ShapeSlab::agent_record_for_receiver_present(shape_id)?;
+    // SAFETY: a present record named by a live receiver's word.
+    Some(unsafe { (*record).live_inline_slot_count })
 }
 
 /// The key list, logical key count and prototype identity of `shape_id`,
@@ -2533,11 +2541,27 @@ pub(crate) fn shape_descriptor_for_word(shape_id: u32) -> Option<ShapeDescriptor
     Some(unsafe { (*record).lift(record) })
 }
 
+/// [`shape_descriptor_for_word`] for a live receiver's own header word: the
+/// receiver carries the row, so no committed-row check is made.
+#[inline]
+pub(crate) fn shape_descriptor_of_receiver(shape_id: u32) -> Option<ShapeDescriptor> {
+    let record = ShapeSlab::agent_record_for_receiver_present(shape_id)?;
+    // SAFETY: a present record named by a live receiver's word.
+    Some(unsafe { (*record).lift(record) })
+}
+
 /// The record named by `shape_id`, borrowed in place: the same slab probe as
 /// [`shape_descriptor_for_word`], without lifting a copy (#10362).
 #[inline]
 pub(crate) fn shape_record_for_word(shape_id: u32) -> Option<ShapeRecordRef> {
     let record = ShapeSlab::agent_record_for_word_present(shape_id)?;
+    std::ptr::NonNull::new(record).map(ShapeRecordRef)
+}
+
+/// [`shape_record_for_word`] for a live receiver's own header word (unchecked).
+#[inline]
+pub(crate) fn shape_record_of_receiver(shape_id: u32) -> Option<ShapeRecordRef> {
+    let record = ShapeSlab::agent_record_for_receiver_present(shape_id)?;
     std::ptr::NonNull::new(record).map(ShapeRecordRef)
 }
 
@@ -2589,6 +2613,22 @@ pub(crate) fn test_descriptor_for_retained_word(shape_id: u32) -> Option<ShapeDe
     if shape_is_retired(shape_id) { None } else { shape_descriptor_for_word(shape_id) }
 }
 
+#[cfg(test)]
+pub(crate) fn test_worker_seed_len() -> usize {
+    shapes_worker_seed::worker_shape_seed().test_len()
+}
+#[cfg(test)]
+pub(crate) fn test_row_committed(word: u32) -> bool {
+    crate::state::state()
+        .shapes
+        .slab()
+        .region_row_committed(crate::codegen_abi::LayoutWord(word).row().0 as usize)
+}
+#[cfg(test)]
+pub(crate) fn test_record_count() -> usize {
+    crate::state::state().shapes.slab().len()
+}
+
 /// The field-representation word (`field_rep`) of `shape_id` in this agent,
 /// deprecated lanes included. An id that names no record here reads the
 /// absent record's word, 0 — `Any` in every lane, which is exactly the
@@ -2596,7 +2636,17 @@ pub(crate) fn test_descriptor_for_retained_word(shape_id: u32) -> Option<ShapeDe
 /// test: the step 5 store check asks this on every checked store.
 #[inline]
 pub(crate) fn shape_rep_for_word(shape_id: u32) -> u64 {
-    let record = ShapeSlab::agent_record_for_word(shape_id);
+    shape_rep_of_record(ShapeSlab::agent_record_for_word(shape_id))
+}
+
+/// [`shape_rep_for_word`] for a live receiver's own header word (unchecked).
+#[inline]
+pub(crate) fn shape_rep_of_receiver(shape_id: u32) -> u64 {
+    shape_rep_of_record(ShapeSlab::agent_record_for_receiver(shape_id))
+}
+
+#[inline]
+fn shape_rep_of_record(record: *mut ShapeRecord) -> u64 {
     // SAFETY: `agent_record` never returns null; `rep` is an 8-aligned u64 of
     // a `#[repr(C)]` record (asserted 8-aligned), read the way
     // `ShapeRecordRef::rep` reads it because a published record's word is
@@ -2613,6 +2663,12 @@ pub(crate) fn shape_rep_for_word(shape_id: u32) -> u64 {
 #[inline]
 pub(crate) fn shape_object_kind_for_word(shape_id: u32) -> Option<ShapeObjectKind> {
     shape_record_for_word(shape_id).map(ShapeRecordRef::object_kind)
+}
+
+/// [`shape_object_kind_for_word`] for a live receiver's own header word.
+#[inline]
+pub(crate) fn shape_object_kind_of_receiver(shape_id: u32) -> Option<ShapeObjectKind> {
+    shape_record_of_receiver(shape_id).map(ShapeRecordRef::object_kind)
 }
 
 /// Record that a shape is carried by an OLD-generation receiver.
@@ -4609,7 +4665,7 @@ pub(crate) unsafe fn class_object_first_key_is(
     obj: *const crate::object::ObjectHeader,
     key: &[u8],
 ) -> bool {
-    let Some(record) = ShapeSlab::agent_record_for_word_present(object_shape_stamp(obj)) else {
+    let Some(record) = ShapeSlab::agent_record_for_receiver_present(object_shape_stamp(obj)) else {
         return false;
     };
     let record = &*record;
@@ -4948,7 +5004,7 @@ fn filled_birth(
 /// `obj` is a live `ObjectHeader`.
 #[inline]
 pub(crate) unsafe fn object_proto_identity(obj: *const crate::object::ObjectHeader) -> u64 {
-    (*ShapeSlab::agent_record_for_word(object_shape_stamp(obj))).proto_id
+    (*ShapeSlab::agent_record_for_receiver(object_shape_stamp(obj))).proto_id
 }
 
 /// The first synthetic class id (`class_registry::prototype_objects`): a
@@ -5014,7 +5070,7 @@ unsafe fn null_linked_prototype_word(obj: *const crate::object::ObjectHeader) ->
 unsafe fn linked_object_prototype_word(obj: *const crate::object::ObjectHeader) -> u64 {
     // The agent directory read: never null, an absent id reads the empty
     // record (identity 0, the default).
-    let record = &*ShapeSlab::agent_record_for_word(object_shape_stamp(obj));
+    let record = &*ShapeSlab::agent_record_for_receiver(object_shape_stamp(obj));
     let proto_id = record.proto_id;
     if (PROTO_ID_CLASS..PROTO_ID_MIXED).contains(&proto_id) {
         // CLASS is an implied link, rather than an instance override.
@@ -5309,7 +5365,7 @@ fn debug_assert_brands_carried(previous: u32, next: u32) {
 pub(crate) unsafe fn object_shape_descriptor(
     obj: *const crate::object::ObjectHeader,
 ) -> Option<ShapeDescriptor> {
-    shape_descriptor_for_word(object_shape_stamp(obj))
+    shape_descriptor_of_receiver(object_shape_stamp(obj))
 }
 
 /// [`object_shape_descriptor`]'s record, borrowed in place (#10362).
@@ -5317,7 +5373,7 @@ pub(crate) unsafe fn object_shape_descriptor(
 pub(crate) unsafe fn object_shape_record(
     obj: *const crate::object::ObjectHeader,
 ) -> Option<ShapeRecordRef> {
-    shape_record_for_word(object_shape_stamp(obj))
+    shape_record_of_receiver(object_shape_stamp(obj))
 }
 
 #[inline]
@@ -6554,15 +6610,20 @@ pub(crate) fn publish_static_record(
     let facts = record.facts_key_with_keys(record.keys);
     let keys = record.keys;
     let table = &crate::state::state().shapes;
+    // A repeated agreeing request publishes nothing new: its word is already
+    // in the indexes, and pushing it again would duplicate the bucket entry.
+    let already = table.slab().record_ptr(request.identity).is_some();
     let published = unsafe {
         table
             .slab_mut()
             .publish_static(request.identity, request.word, record)
     }
     .unwrap_or_else(|error| panic!("static layout publication mismatch: {request:?}: {error:?}"));
-    let mut inner = table.inner.borrow_mut();
-    inner.facts_push_front(facts, published.word.0);
-    inner.family_push_front(keys, published.word.0);
+    if !already {
+        let mut inner = table.inner.borrow_mut();
+        inner.facts_push_front(facts, published.word.0);
+        inner.family_push_front(keys, published.word.0);
+    }
     Ok(published)
 }
 #[allow(clippy::too_many_arguments)]

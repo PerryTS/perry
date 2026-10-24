@@ -43,7 +43,7 @@ unsafe fn ordinary_object(bits: u64) -> Option<(*const crate::ObjectHeader, usiz
 
 unsafe fn record(bits: u64) -> Option<Record> {
     let (obj, size) = ordinary_object(bits)?;
-    let descriptor = crate::object::shapes::shape_descriptor_for_word(
+    let descriptor = crate::object::shapes::shape_descriptor_of_receiver(
         crate::object::shapes::object_shape_stamp(obj),
     )?;
     let len = key_count(descriptor.keys_view())?;

@@ -283,3 +283,31 @@ fn keyless_birth_memo_word_is_carried_across_full_traces() {
         let _ = crate::object::object_alloc_plain(0);
     }
 }
+
+/// #6 (DPA review): every held-word helper answers absent for a retired word
+/// whose page was decommitted; none may touch the PROT_NONE page.
+#[test]
+fn held_word_helpers_are_checked_for_retired_decommitted_rows() {
+    use crate::object::shapes as sh;
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _scan = ConservativeScanDisabledGuard::new();
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    // More than two chunks of dead semantic shapes: at least one whole chunk
+    // page has no live record after the trace.
+    let words: Vec<u32> = (0..100).map(|_| unrooted_semantic_shape()).collect();
+    collect_synchronous_full_trace();
+    assert!(
+        words.iter().any(|&w| !sh::test_row_committed(w)),
+        "no row page was decommitted, the test proves nothing"
+    );
+    for &w in &words {
+        assert!(sh::shape_is_retired(w));
+        assert!(sh::shape_descriptor_for_word(w).is_none());
+        assert!(sh::shape_record_for_word(w).is_none());
+        assert!(sh::shape_object_kind_for_word(w).is_none());
+        assert!(sh::shape_brands_for_word(w).is_none());
+        assert!(sh::shape_keys_and_proto_for_word(w).is_none());
+        assert!(sh::shape_live_inline_slot_count_for_word(w).is_none());
+        assert_eq!(sh::shape_rep_for_word(w), 0);
+    }
+}

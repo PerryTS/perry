@@ -882,7 +882,7 @@ pub extern "C" fn js_private_field_add(
     }
     // The claim allocates the key (inside its own no-move window); the store
     // re-reads the holder from its handle.
-    let pred_rep = crate::object::shapes::shape_rep_for_word(unsafe {
+    let pred_rep = crate::object::shapes::shape_rep_of_receiver(unsafe {
         crate::object::shapes::object_shape_stamp(holder)
     });
     let holder = scope.root_raw_mut_ptr(holder);

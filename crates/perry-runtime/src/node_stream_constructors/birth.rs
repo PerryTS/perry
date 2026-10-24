@@ -46,10 +46,42 @@ struct BirthWrite {
     chain: [u32; 8],
     depth: usize,
 }
-pub(crate) struct BirthWriteSite(std::cell::Cell<Option<BirthWrite>>);
+pub(crate) struct BirthWriteSite(
+    std::cell::Cell<Option<BirthWrite>>,
+    std::cell::Cell<bool>,
+);
+thread_local! {
+    /// Sites of this thread that ever held a memo (thread-local statics live as
+    /// long as the thread, so the pointers stay valid for every recompute).
+    static WRITE_SITES: std::cell::RefCell<Vec<*const BirthWriteSite>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+/// Claim the successor word of every write memo (full-trace recompute): the
+/// memo names a row by word and reads it, so the row must not retire.
+pub(crate) fn note_write_site_carriers() {
+    WRITE_SITES.with(|sites| {
+        for &site in sites.borrow().iter() {
+            // SAFETY: registered from a live thread-local of this thread.
+            if let Some(memo) = unsafe { (*site).0.get() } {
+                crate::object::shape_carriers::note_shape_id(memo.to);
+            }
+        }
+    });
+}
 impl BirthWriteSite {
     pub(crate) const fn new() -> Self {
-        Self(std::cell::Cell::new(None))
+        Self(std::cell::Cell::new(None), std::cell::Cell::new(false))
+    }
+
+    /// Remember a transition: the successor row is claimed now and re-claimed
+    /// after every full trace (`note_write_site_carriers`), because `write`
+    /// reads it by word on the next birth.
+    fn set_memo(&self, memo: BirthWrite) {
+        crate::object::shape_carriers::note_shape_id(memo.to);
+        if !self.1.replace(true) {
+            WRITE_SITES.with(|s| s.borrow_mut().push(self as *const _));
+        }
+        self.0.set(Some(memo));
     }
 
     #[inline(never)]
@@ -131,13 +163,13 @@ impl BirthWriteSite {
                 {
                     return;
                 }
-                self.0.set(Some(BirthWrite {
+                self.set_memo(BirthWrite {
                     from,
                     to,
                     slot,
                     chain,
                     depth,
-                }));
+                });
             }
         }
     }
@@ -202,6 +234,32 @@ pub(crate) use stream_birth_field;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// F2 #3: a write memo's successor word survives full traces with no
+    /// receiver on it; fails if the recompute does not re-note it.
+    #[test]
+    fn write_memo_successor_is_carried_across_full_traces() {
+        let _guard = crate::gc::CopyingNurseryTestGuard::new(0);
+        let site = BirthWriteSite::new();
+        let to = {
+            let obj = crate::object::js_object_alloc(0, 0);
+            unsafe { crate::object::shapes::transition_object_shape_semantics(obj) }
+        };
+        site.set_memo(BirthWrite { from: 0, to, slot: 0, chain: [0; 8], depth: 0 });
+        let control = {
+            let obj = crate::object::js_object_alloc(0, 0);
+            unsafe { crate::object::shapes::transition_object_shape_semantics(obj) }
+        };
+        for round in 0..3 {
+            crate::gc::test_collect_synchronous_full_trace();
+            assert!(crate::object::shapes::shape_is_retired(control), "control must retire");
+            assert!(
+                !crate::object::shapes::shape_is_retired(to),
+                "round {round}: write memo successor retired"
+            );
+            assert!(crate::object::shapes::shape_descriptor_for_word(to).is_some());
+        }
+    }
 
     #[test]
     fn shell_has_node_state_layout_and_bounded_inline_prefix() {

@@ -421,7 +421,7 @@ pub(crate) unsafe fn leaf_key_add(
     };
     // The target layout names the new slot live: the stamp alone publishes
     // it (no bound to re-publish, which could mint).
-    if super::shapes::shape_live_inline_slot_count_for_word(target_shape_id)
+    if super::shapes::shape_live_inline_slot_count_of_receiver(target_shape_id)
         .is_none_or(|live| live <= slot_idx)
     {
         return false;
@@ -815,7 +815,7 @@ fn object_set_field_by_name_transition_fast_impl_value<const CHAIN_PROVEN: bool>
         // The header probe above already established a live ordinary heap
         // allocation; ask only its shape for the layout kind here.
         let object_kind =
-            super::shapes::shape_object_kind_for_word(super::shapes::object_shape_stamp(obj))?;
+            super::shapes::shape_object_kind_of_receiver(super::shapes::object_shape_stamp(obj))?;
         if !object_kind.is_ordinary_layout() || (*obj).class_id == NATIVE_MODULE_CLASS_ID {
             return None;
         }
@@ -978,7 +978,7 @@ fn object_set_field_by_name_transition_fast_impl_value<const CHAIN_PROVEN: bool>
                     // target's representation and canonicalized numeric bits.
                     // Reuse its result with the same alias and mark barriers.
                     debug_assert_eq!(
-                        super::shapes::shape_object_kind_for_word(
+                        super::shapes::shape_object_kind_of_receiver(
                             super::shapes::object_shape_stamp(obj)
                         ),
                         Some(super::shapes::ShapeObjectKind::Ordinary)

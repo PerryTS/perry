@@ -65,3 +65,40 @@ pub(crate) fn fresh_semantic_generation() -> u64 {
     }
     generation
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// F2 #8: repeated agreeing static requests keep one entry per word in
+    /// by_facts and families.
+    #[test]
+    fn repeated_agreeing_static_requests_do_not_duplicate_index_entries() {
+        crate::test_support::bootstrap_test_thread();
+        let id = allocate_declared_layout_id(PROTO_ID_DEFAULT);
+        let word = crate::codegen_abi::LayoutWord::new(crate::codegen_abi::LayoutRow(3001), 0, 0)
+            .unwrap()
+            .0;
+        for _ in 0..3 {
+            unsafe {
+                install_declared_layout(
+                    id, word, 0, std::ptr::null_mut(), 0, 0,
+                    ShapeObjectKind::Ordinary, PROTO_ID_DEFAULT, 0, 0, 0, 0,
+                );
+            }
+        }
+        let table = &crate::state::state().shapes;
+        let inner = table.inner.borrow();
+        let in_facts: usize = inner
+            .by_facts
+            .values()
+            .map(|ids| ids.as_slice().iter().filter(|&&w| w == word).count())
+            .sum();
+        let in_families: usize = inner
+            .families
+            .values()
+            .map(|ids| ids.as_slice().iter().filter(|&&w| w == word).count())
+            .sum();
+        assert_eq!((in_facts, in_families), (1, 1));
+    }
+}

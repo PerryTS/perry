@@ -47,6 +47,14 @@ thread_local! {
     static P_EXISTING: Cell<Option<Birth>> = const { Cell::new(None) };
     static E_EXISTING: Cell<Option<Birth>> = const { Cell::new(None) };
 }
+/// Claim the shape word every birth memo names (full-trace recompute).
+pub(crate) fn note_birth_carriers() {
+    for site in [&R_EXISTING, &W_EXISTING, &D_EXISTING, &T_EXISTING, &P_EXISTING, &E_EXISTING] {
+        if let Some(b) = site.with(Cell::get) {
+            crate::object::shape_carriers::note_shape_id(b.shape);
+        }
+    }
+}
 fn existing(kind: Kind) -> &'static std::thread::LocalKey<Cell<Option<Birth>>> {
     match kind {
         Kind::Readable => &R_EXISTING,
@@ -296,6 +304,7 @@ fn remember(site: &'static std::thread::LocalKey<Cell<Option<Birth>>>, input: In
     if record.hole_count != 0 || record.integrity_flags != 0 {
         return;
     }
+    crate::object::shape_carriers::note_shape_id(shape);
     site.with(|m| {
         m.set(Some(Birth {
             input,
@@ -396,6 +405,41 @@ pub(super) fn finish_emitter(stream: f64, proof: Option<Input>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// F2 #3: a birth memo's shape word survives full traces with no stream
+    /// on it; fails if the recompute does not re-note it.
+    #[test]
+    fn birth_memo_shape_is_carried_across_full_traces() {
+        let _guard = crate::gc::CopyingNurseryTestGuard::new(0);
+        let input = Input {
+            source: 0,
+            options: 0,
+            option_chain: [0; 8],
+            option_depth: 0,
+            prototypes: [0; 8],
+            prototype_depth: 0,
+            presence: 0,
+        };
+        let shape = {
+            let obj = crate::object::js_object_alloc(0, 0);
+            unsafe { crate::object::shapes::transition_object_shape_semantics(obj) };
+            box_pointer(obj.cast())
+        };
+        remember(&P_EXISTING, input, shape);
+        let word = P_EXISTING.with(Cell::get).expect("memo recorded").shape;
+        let control = {
+            let obj = crate::object::js_object_alloc(0, 0);
+            unsafe { crate::object::shapes::transition_object_shape_semantics(obj) }
+        };
+        for round in 0..3 {
+            crate::gc::test_collect_synchronous_full_trace();
+            assert!(crate::object::shapes::shape_is_retired(control), "control must retire");
+            assert!(
+                !crate::object::shapes::shape_is_retired(word),
+                "round {round}: birth memo shape retired"
+            );
+        }
+    }
     extern "C" fn read_hook(_: *const ClosureHeader, _: crate::closure::JsThis, _: f64) -> f64 {
         f64::from_bits(TAG_UNDEFINED)
     }

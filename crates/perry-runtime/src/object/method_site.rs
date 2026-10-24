@@ -113,7 +113,7 @@ unsafe fn ordinary_receiver(addr: usize) -> Option<*const ObjectHeader> {
     // the kind, and its summary says whether the layout can have holes, whose
     // optional keys are own or absent per object (`key_view`): no site
     // learns from such a receiver.
-    let Some(record) = super::shapes::shape_record_for_word((*obj).shape_word()) else {
+    let Some(record) = super::shapes::shape_record_of_receiver((*obj).shape_word()) else {
         return None;
     };
     if !record.object_kind().is_ordinary_layout()

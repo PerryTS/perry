@@ -851,6 +851,12 @@ fn gc_collect_inner_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
     gc_collect_full_mark_sweep_with_trigger(trigger)
 }
 
+#[cfg(test)]
+pub(crate) fn test_collect_synchronous_full_trace() {
+    gc_collect_minor();
+    let _ = gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct));
+}
+
 fn gc_collect_full_mark_sweep_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome {
     // Build the stack-map index if it is still owed. This is the chokepoint:
     // every collection funnels through one of these three entries, and here

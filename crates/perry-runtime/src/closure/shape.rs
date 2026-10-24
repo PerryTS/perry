@@ -697,7 +697,7 @@ mod tests {
     }
 
     fn kind_of(c: *const ClosureHeader) -> Option<ShapeObjectKind> {
-        shapes::shape_object_kind_for_word(unsafe { (*c).shape_id })
+        shapes::shape_object_kind_of_receiver(unsafe { (*c).shape_id })
     }
 
     static PLAIN_BODY: crate::closure::JsFunctionInfo = crate::closure::JsFunctionInfo::of(
@@ -862,7 +862,7 @@ mod tests {
         assert_eq!(kind_of(a), Some(ShapeObjectKind::Function));
         let bag = unsafe { (*a).props };
         let bag_desc = unsafe { shapes::object_shape_descriptor(bag) }.unwrap();
-        let fn_desc = shapes::shape_descriptor_for_word(unsafe { (*a).shape_id }).unwrap();
+        let fn_desc = shapes::shape_descriptor_of_receiver(unsafe { (*a).shape_id }).unwrap();
         assert_eq!(fn_desc.keys, bag_desc.keys);
         assert_eq!(fn_desc.logical_key_count, bag_desc.logical_key_count);
         assert_eq!(

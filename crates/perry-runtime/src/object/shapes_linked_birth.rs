@@ -128,7 +128,7 @@ pub(crate) unsafe fn declaration_parent_identity(
     obj: *const crate::object::ObjectHeader,
     recorded: u64,
 ) -> Option<u64> {
-    let record = &*ShapeSlab::agent_record_for_word(object_shape_stamp(obj));
+    let record = &*ShapeSlab::agent_record_for_receiver(object_shape_stamp(obj));
     if record.semantic_generation >> 32 != 0x8000_0000 {
         return None;
     }
