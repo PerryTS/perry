@@ -685,7 +685,10 @@ fn test_dead_transition_cache_key_pruned_on_full_gc() {
 }
 
 #[test]
-fn test_transition_cache_owns_its_predecessor_until_eviction() {
+fn test_dead_transition_cache_predecessor_shape_pruned_on_full_gc() {
+    // The predecessor is the entry's weak lookup key: the cache owns only its
+    // target, so a predecessor without another carrier retires and takes the
+    // entry with it.
     let _guard = CopyingNurseryTestGuard::new(1);
     gc_register_mutable_root_scanner(crate::object::scan_transition_cache_roots_mut);
     gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
@@ -709,15 +712,12 @@ fn test_transition_cache_owns_its_predecessor_until_eviction() {
 
     full_gc();
 
+    assert!(crate::object::shapes::shape_is_retired(prev_shape_id));
     assert_eq!(
         crate::object::test_transition_cache_occupancy(),
-        occupancy_before + 1,
-        "a transition must retain the predecessor handle it can read"
+        occupancy_before,
+        "a transition whose predecessor descriptor died must release its rooted target"
     );
-    crate::object::prune_dead_transition_cache_entries(&|addr| addr == next_keys);
-    full_gc();
-    assert!(crate::object::shapes::shape_is_retired(prev_shape_id));
-    assert_eq!(crate::object::test_transition_cache_occupancy(), occupancy_before);
     js_shadow_slot_set(0, 0);
 }
 

@@ -18,8 +18,9 @@ pub(super) struct Region {
     /// size follows the agent's own pages, not the process's chunk history.
     live: Vec<Option<Box<Leaf>>>,
     /// Pages `0..static_pages` hold the static prefix and are committed once,
-    /// for the Region's life ([`Self::commit_static`]): a static record is an
-    /// external carrier and never retires, so its page is never given back.
+    /// for the Region's life ([`Self::commit_static`]): retiring the last
+    /// record of such a page leaves it committed, so a later publication of
+    /// another static row on it needs no protection change.
     static_pages: usize,
 }
 
@@ -249,7 +250,6 @@ impl Region {
     /// Caller removed identity membership and zeroed the row after proving no carrier.
     pub(super) fn retired(&mut self, row: usize) {
         let p = self.page_of(row);
-        debug_assert!(p >= self.static_pages, "a static record never retires");
         let key = p / LEAF_PAGES;
         let leaf = self
             .live
@@ -265,7 +265,8 @@ impl Region {
                 self.live[key] = None;
             }
             assert!(
-                unsafe { discard(self.base.cast::<u8>().add(p * self.page), self.page) },
+                p < self.static_pages
+                    || unsafe { discard(self.base.cast::<u8>().add(p * self.page), self.page) },
                 "shape Region page decommit failed"
             );
         }
