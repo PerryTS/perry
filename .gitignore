@@ -254,3 +254,6 @@ test-files/.perry-cache/
 android-build/app/src/main/jniLibs/
 /res/
 .cache/wasi/
+
+# Stray build/install logs at the repo root
+/*.log

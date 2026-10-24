@@ -263,6 +263,9 @@ pub unsafe extern "C" fn js_webcrypto_import_key(
     if key_algo == KeyAlgo::ChaCha20Poly1305 && key_bytes.len() != 32 {
         return reject_with_dom_exception("DataError", "Invalid key length");
     }
+    if matches!(key_algo, KeyAlgo::Kmac128 | KeyAlgo::Kmac256) && key_bytes.len() < 4 {
+        return reject_with_dom_exception("NotSupportedError", "Invalid key length");
+    }
     if key_bytes.is_empty()
         && !matches!(
             key_algo,

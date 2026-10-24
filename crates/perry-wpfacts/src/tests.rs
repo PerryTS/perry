@@ -18,8 +18,10 @@ mod protocol_calls;
 mod receiver_this;
 mod summary;
 mod super_heritage;
+mod unit_ctor;
 mod unit_extends;
 mod unit_mode;
+mod unit_namespace;
 
 use crate::{compute, FactsConfig, ProgramFacts, Verdict};
 
@@ -1265,4 +1267,116 @@ fn a_store_into_a_marker_makes_no_field_of_it() {
     m.solve();
     assert!(m.marker_use.get(&mk).is_some_and(|u| u & MARK_ESCAPE != 0));
     assert!(!m.fields.contains_key(&(mk, x)), "a field of the marker");
+}
+
+#[test]
+fn an_argument_marker_leaves_beside_when_a_valued_member_links() {
+    use crate::model::{Cons, FuncInfo, TokKind, NO_CTX, NO_FN};
+    // DECISIONS 75: an argument marker stands for its members alone. With
+    // none (or only described closed parameter markers) it adds no kinds to
+    // arithmetic; once a member that stands for real values links in (`f`
+    // is not a described closed function here), the arithmetic result it
+    // skipped takes the object kinds (ToPrimitive), monotone.
+    let mut m = copy_solver_model();
+    let (this, ret, args) = (m.node_l("this"), m.node_l("ret"), m.node_l("args"));
+    let token = m.tok(TokKind::Func(0, NO_CTX));
+    m.funcs.push(FuncInfo {
+        module: 0,
+        func_id: 0,
+        name: "f".into(),
+        params: Vec::new(),
+        rest: None,
+        this,
+        ret,
+        args_all: args,
+        has_arguments: false,
+        token,
+        ctor_of: None,
+        lexical_this: false,
+        no_summary: true,
+        gen_step: false,
+        forwards_super: false,
+        parent: NO_FN,
+    });
+    let mk = m.param_marker_tok(0, 0);
+    // `r2` is a member of `r1` (an instance parameter passed on); `mk`
+    // links into `r2` later, so `r1` leaves with it.
+    let (n1, n2) = (m.node_l("p1"), m.node_l("p2"));
+    let (src, dst) = (m.node_l("src"), m.node_l("dst"));
+    let r1 = m.arg_marker(n1);
+    let r2 = m.arg_marker(n2);
+    m.link_marker(r2, r1);
+    m.cons(src, Cons::Arith { dst, add: false });
+    m.add_tok(src, r1);
+    m.solve();
+    assert_eq!(m.nodes[dst as usize].prim, 0, "beside: no kinds of its own");
+    m.link_marker(mk, r2);
+    m.solve();
+    let k = m.nodes[dst as usize].prim;
+    assert!(
+        k & crate::model::prim::NUM != 0 && k & crate::model::prim::BIGINT != 0,
+        "a valued member: the skipped result takes the object kinds ({k:#x})"
+    );
+}
+
+#[test]
+fn a_use_through_an_argument_marker_is_solve_work() {
+    use crate::model::MARK_ESCAPE;
+    // 113-CWL3: a use of an argument marker (DECISIONS 44), under a key
+    // too (design §18.4), walks every marker it stands for. The walk is
+    // solve work, so the work bound sees it: uncounted, checker.ts#u18
+    // took 4.4x main's solve time for the same counted work.
+    let mut m = copy_solver_model();
+    // A parameter marker exists (else no use is recorded at all).
+    m.param_marker.insert(u32::MAX - 1, (0, 0));
+    let n0 = m.node_l("p0");
+    let r = m.arg_marker(n0);
+    let n = 64u64;
+    for _ in 0..n {
+        let ni = m.node_l("p");
+        let ri = m.arg_marker(ni);
+        m.link_marker(ri, r);
+    }
+    let a = m.atom("k");
+    let w = m.work;
+    m.keyed_use(r, a, MARK_ESCAPE);
+    assert!(
+        m.work - w >= n,
+        "a keyed use walked {n} members for {} work",
+        m.work - w
+    );
+    let w = m.work;
+    m.mark_use(r, MARK_ESCAPE);
+    assert!(
+        m.work - w >= n,
+        "a use walked {n} members for {} work",
+        m.work - w
+    );
+}
+
+#[test]
+fn a_keyed_use_reaches_every_marker_an_argument_marker_stands_for() {
+    use crate::model::MARK_ESCAPE;
+    // Design §18.4: argument marker `r2` stands for `r1` and `r3`. A use of
+    // what `r2` reaches under `inner` is a use of what each of them reaches
+    // under `inner`: `r1` is linked after the use (the callee read
+    // `p.inner` before the second caller's marker arrived), `r3` before.
+    let mut m = copy_solver_model();
+    let (n1, n2, n3) = (m.node_l("p1"), m.node_l("p2"), m.node_l("p3"));
+    let r1 = m.arg_marker(n1);
+    let r2 = m.arg_marker(n2);
+    let r3 = m.arg_marker(n3);
+    let a = m.atom("inner");
+    m.link_marker(r3, r2);
+    m.keyed_use(r2, a, MARK_ESCAPE);
+    m.link_marker(r1, r2);
+    for r in [r1, r3] {
+        assert!(
+            m.keyed_uses
+                .get(&r)
+                .is_some_and(|v| v.contains(&(a, MARK_ESCAPE))),
+            "{:?}",
+            m.keyed_uses
+        );
+    }
 }

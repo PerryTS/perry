@@ -121,8 +121,12 @@ fn resource_ownership_borrows_transfer_and_exactly_once_disposal() {
     let mut borrowed = resource.clone();
     borrowed["owned"] = json!(false);
     assert_eq!(
-        host.call(INTERFACE, "[method]counter.read", &[borrowed.clone()])
-            .unwrap(),
+        host.call(
+            INTERFACE,
+            "[method]counter.read",
+            std::slice::from_ref(&borrowed)
+        )
+        .unwrap(),
         Some(json!(42))
     );
     assert!(host.call(INTERFACE, "consume", &[borrowed]).is_err());
@@ -134,7 +138,7 @@ fn resource_ownership_borrows_transfer_and_exactly_once_disposal() {
         )
         .is_err());
     assert!(drops.lock().unwrap().is_empty());
-    host.call(INTERFACE, "consume", &[resource.clone()])
+    host.call(INTERFACE, "consume", std::slice::from_ref(&resource))
         .unwrap();
     assert_eq!(*drops.lock().unwrap(), vec![json!(42)]);
     assert!(host

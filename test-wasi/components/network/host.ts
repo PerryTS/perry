@@ -89,4 +89,20 @@ check(freshUdp.tag === "err" && freshUdp.value === "access-denied", "UDP permiss
 const freshTcp = probe(fresh).connect(tcpPort, "denied");
 check(freshTcp.tag === "err" && freshTcp.value === "access-denied", "TCP permission leaked");
 fresh.dispose();
-console.log("PASS component networking: TCP/UDP traffic, exact grants, DNS, isolation");
+// A JS timer becomes due while the guest is blocked in a WASI clock poll.
+// The guest may turn the shared native driver, but JS must not re-enter here.
+const waiting = instance({});
+let inGuest = true;
+let callbacks = 0;
+setTimeout(() => {
+  check(!inGuest, "JS timer re-entered a synchronous guest call");
+  callbacks++;
+}, 1);
+probe(waiting).wait(50);
+inGuest = false;
+check(callbacks === 0, "guest wait dispatched JS before returning");
+waiting.dispose();
+setTimeout(() => {
+  check(callbacks === 1, "due JS callback must run exactly once after guest return");
+  console.log("PASS component networking: TCP/UDP traffic, exact grants, DNS, isolation");
+}, 5);

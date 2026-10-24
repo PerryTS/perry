@@ -35,4 +35,4 @@ stamp" is a presence check that both-stamped and both-unstamped each satisfy —
 only the mixture is the bug, and only a test comparing the two sides can see it.
 This one passes in either uniform state, so it survives a future policy flip.
 
-Working notes, including the full bisect and the two dead ends: `gc-handoff/BISECT-NOTES.md`.
+Working notes, including the full bisect and the two dead ends: `gc-handoff/BISECT-NOTES.md` (removed in #13193; `git show 44fcf437dd:gc-handoff/BISECT-NOTES.md`).

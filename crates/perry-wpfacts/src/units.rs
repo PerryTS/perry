@@ -21,6 +21,10 @@ pub(crate) struct ClassContract {
     /// a function contract (a literal's methods: `errorUtil.errToObj`);
     /// every other field holds unknown values for the reader.
     pub field_fns: Vec<(String, Vec<FnContract>)>,
+    /// Fields that hold only instances of these layouts of the defining
+    /// unit (key, their displays, whether primitives too): nested
+    /// contracts (design §18.7, `Gen::nested_fields`).
+    pub field_layouts: Vec<(String, Vec<String>, bool)>,
     /// The defining unit stores under computed keys: a reader may find any
     /// key (unknown values). Otherwise the keys are the facts' fields.
     pub open_keys: bool,
@@ -34,23 +38,35 @@ pub(crate) struct ClassContract {
     /// defining unit checked their results (an instance of a contract
     /// class is given out, `Model::give_out`).
     pub static_fns: Vec<(String, FnContract)>,
+    /// A closed class (design §18.13, `decl_units::closed_bindings`): its
+    /// defining module's path and binding name, and its constructor's
+    /// parameter count. Every unit constructing it (by name or through an
+    /// instance's `constructor`) publishes what it passes under that key
+    /// (`ProgramFacts::ctor_args_out`).
+    pub closed: Option<(String, String, u32)>,
 }
 
 /// A published function as its callers see it (design §11.2): per
 /// parameter what the callee does with everything reachable from the
 /// argument (`model::MARK_*`: read, touched by a protocol, or used beyond:
-/// then it escapes), whether extra arguments reach it (`variadic`: all
-/// arguments escape), and the layouts it returns (`None`: ⊤).
+/// then it escapes), whether its body reads `arguments` (`variadic`: all
+/// arguments escape) or has a rest parameter (`rest`: the arguments past
+/// the parameters escape), and the layouts it returns (`None`: ⊤).
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct FnContract {
     pub name: String,
     /// Per parameter: what the callee does to the argument itself
     /// (`model::MARK_*`), and to what the argument reaches (its fields,
     /// transitively). Two sets: reading `p.n` and converting it is no
-    /// conversion of `p`.
+    /// conversion of `p`. `reach` is what the callee does to what it reads
+    /// under a computed key; `reach_keys` what it does to what it reads
+    /// under each named key `p.k` (design §18.4: `p.left[i] = v` writes
+    /// into `p.left`, not into `p`'s prototype).
     pub params: Vec<u8>,
     pub reach: Vec<u8>,
+    pub reach_keys: Vec<Vec<(String, u8)>>,
     pub variadic: bool,
+    pub rest: bool,
     pub ret: Option<Vec<String>>,
     /// The parameters whose argument the result may be, and those whose
     /// reachable values (fields, transitively) it may hold: result
@@ -59,7 +75,11 @@ pub(crate) struct FnContract {
     pub ret_reach: Vec<u32>,
     /// The result may also be an unknown value (⊤ to the caller).
     pub ret_unknown: bool,
-    /// An arrow function: its receiver is not used.
+    /// The primitive kinds the result may be (`model::prim`), when `ret`
+    /// names its layouts; with no layouts (⊤) any.
+    pub ret_prim: u16,
+    /// Its receiver is not used: an arrow function, or a body that never
+    /// reads `this` (§18.2).
     pub lexical_this: bool,
     /// The binding name of a closed function (decision 19): a unit that
     /// calls it as a value publishes what it passes under this name.
@@ -137,7 +157,22 @@ impl FnContract {
                 *x |= *y;
             }
         }
+        // Per named key (§18.4): the marks grow, a key either reads is read.
+        if self.reach_keys.len() < o.reach_keys.len() {
+            self.reach_keys.resize(o.reach_keys.len(), Vec::new());
+        }
+        for (v, w) in self.reach_keys.iter_mut().zip(&o.reach_keys) {
+            for (k, u) in w {
+                match v.iter_mut().find(|(q, _)| q == k) {
+                    Some((_, x)) => *x |= *u,
+                    None => v.push((k.clone(), *u)),
+                }
+            }
+            v.sort();
+        }
         self.variadic |= o.variadic;
+        self.rest |= o.rest;
+        self.ret_prim |= o.ret_prim;
         match (&mut self.ret, &o.ret) {
             (Some(r), Some(s)) => union_into(r, s),
             (r, _) => *r = None,
@@ -228,9 +263,36 @@ impl ClassContract {
                 StaticMember::Top => statics.push((k.clone(), None)),
             }
         }
+        // Nested layouts (§18.7), as the field functions: a field both
+        // describe holds the union of their layouts (primitives too if
+        // either says so); a field one side's facts have without them holds
+        // unknown values, so it has none in the join.
+        let plain_l = |c: &ClassContract, k: &str| {
+            c.facts.fields.iter().any(|f| f.key == k)
+                && !c.field_layouts.iter().any(|(q, _, _)| q == k)
+        };
+        let mut field_layouts: Vec<(String, Vec<String>, bool)> = Vec::new();
+        for (k, ds, p) in self.field_layouts.iter().chain(o.field_layouts.iter()) {
+            if plain_l(self, k) || plain_l(o, k) {
+                continue;
+            }
+            match field_layouts.iter_mut().find(|(q, _, _)| q == k) {
+                Some((_, v, q)) => {
+                    union_into(v, ds);
+                    *q |= *p;
+                }
+                None => field_layouts.push((k.clone(), ds.clone(), *p)),
+            }
+        }
+        field_layouts.sort();
+        // A closed class (§18.13) only where both say so, the same binding.
+        if self.closed != o.closed {
+            self.closed = None;
+        }
         self.facts.join(&o.facts);
         union_into(&mut self.methods, &o.methods);
         self.field_fns = field_fns;
+        self.field_layouts = field_layouts;
         self.open_keys |= o.open_keys;
         self.statics = statics;
         self.statics_open |= o.statics_open;
@@ -288,6 +350,10 @@ impl ArgContract {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Published {
     whole: FxHashSet<String>,
+    /// Modules whose namespace object itself reaches other units as a value
+    /// no contract describes: a dynamic `import()` or an `export * as`
+    /// re-export. A static namespace import is described (§18.2).
+    ns_object: FxHashSet<String>,
     names: FxHashMap<String, FxHashSet<String>>,
     /// Interpreted code can import any module: everything is published.
     all: bool,
@@ -309,9 +375,13 @@ pub(crate) struct Published {
     /// The argument contracts of closed functions (decision 13), by
     /// (module path, name): the union over every unit's calls.
     pub(crate) args: FxHashMap<(String, String), ArgContract>,
-    /// Store effects (decision 17): per literal layout display, the
-    /// existing keys other units store into (union over every unit).
-    pub(crate) stores: FxHashMap<String, Vec<String>>,
+    /// Store effects (decision 17): per literal layout or class display,
+    /// the existing keys other units store into and the primitive kinds
+    /// they store, `None` for any value (union over every unit, DECISIONS 73).
+    pub(crate) stores: FxHashMap<String, Vec<(String, Option<u16>)>>,
+    /// The keys of each module's namespace object (design §18.2), and
+    /// whether it may hold any key (an `export *` from outside the program).
+    pub(crate) ns_keys: FxHashMap<String, (Vec<String>, bool)>,
 }
 
 impl Published {
@@ -343,12 +413,24 @@ impl Published {
     /// otherwise reaches only exports and globals) may call a module's
     /// functions by name. The reach does not say which module's, so none
     /// is closed.
-    pub(crate) fn stored_keys(&self, display: &str) -> &[String] {
+    pub(crate) fn stored_keys(&self, display: &str) -> &[(String, Option<u16>)] {
         self.stores.get(display).map_or(&[], |v| v.as_slice())
     }
 
     pub(crate) fn eval_scopes(&self) -> bool {
         self.eval_scopes
+    }
+
+    /// Module `path`'s namespace object reaches other units undescribed.
+    /// Interpreted code (decision 150) holds what escaped, the globals and
+    /// what is thrown, as in the whole-program solve: no namespace object
+    /// unless a direct eval can name a module's bindings (DECISIONS 65).
+    pub(crate) fn ns_object(&self, path: &str) -> bool {
+        self.eval_scopes || self.ns_object.contains(path)
+    }
+
+    pub(crate) fn ns_keys(&self, path: &str) -> Option<&(Vec<String>, bool)> {
+        self.ns_keys.get(path)
     }
 
     pub(crate) fn broken(&self, display: &str) -> bool {
@@ -358,6 +440,26 @@ impl Published {
     pub(crate) fn names(&self, path: &str, name: &str) -> bool {
         self.whole(path) || self.names.get(path).is_some_and(|n| n.contains(name))
     }
+}
+
+/// The module an `export … from source` of module `path` reads: the
+/// driver's resolution (`FactsConfig::export_sources`), else an import of
+/// the same source, as `Gen::resolve_source`. A re-export declares no import
+/// of its source (`export * as X from "./self"`), so the imports alone miss
+/// it, and the surface, the namespace keys and the order must not.
+fn reexport_source<'i>(
+    es: &crate::ExportSources,
+    path: &str,
+    imports: impl IntoIterator<Item = &'i Import>,
+    source: &str,
+) -> Option<String> {
+    if let Some(p) = es.get(path).and_then(|m| m.get(source)) {
+        return Some(p.clone());
+    }
+    imports
+        .into_iter()
+        .find(|i| i.source == source)
+        .and_then(|i| i.resolved_path.clone())
 }
 
 pub(crate) fn published_surface(
@@ -373,10 +475,7 @@ pub(crate) fn published_surface(
     };
     for (path, imports, exports) in sorted {
         let resolve = |source: &str| {
-            imports
-                .iter()
-                .find(|i| i.source == source)
-                .and_then(|i| i.resolved_path.clone())
+            reexport_source(&cfg.export_sources, path, imports.iter().copied(), source)
         };
         for imp in imports.iter().copied() {
             let Some(t) = imp.resolved_path.as_ref().filter(|t| t.as_str() != *path) else {
@@ -388,8 +487,11 @@ pub(crate) fn published_surface(
             if imp.type_only || imp.runtime_erased {
                 continue;
             }
-            if imp.is_dynamic {
+            // `import()` hands over the namespace object itself, also where
+            // the driver folds it into a static import of the same module.
+            if imp.is_dynamic || imp.is_dynamic_target {
                 p.whole.insert(t.clone());
+                p.ns_object.insert(t.clone());
             }
             for s in &imp.specifiers {
                 match s {
@@ -420,9 +522,15 @@ pub(crate) fn published_surface(
                         p.names.entry(t).or_default().insert(imported.clone());
                     }
                 }
-                Export::ExportAll { source } | Export::NamespaceReExport { source, .. } => {
+                Export::ExportAll { source } => {
                     if let Some(t) = resolve(source) {
                         p.whole.insert(t);
+                    }
+                }
+                Export::NamespaceReExport { source, .. } => {
+                    if let Some(t) = resolve(source) {
+                        p.whole.insert(t.clone());
+                        p.ns_object.insert(t);
                     }
                 }
                 Export::Named { .. } => {}
@@ -430,6 +538,82 @@ pub(crate) fn published_surface(
         }
     }
     p
+}
+
+/// The keys of each module's namespace object (design §18.2): its export
+/// names, from the declarations (the same ones `Gen::link_exports` puts on
+/// the namespace). `export *` adds the source module's keys but `default`;
+/// a source outside the program makes the namespace open. Syntactic.
+pub(crate) fn namespace_keys(
+    sorted: &[(&str, &Module)],
+    es: &crate::ExportSources,
+) -> FxHashMap<String, (Vec<String>, bool)> {
+    let index: FxHashMap<&str, usize> = sorted
+        .iter()
+        .enumerate()
+        .map(|(i, (p, _))| (*p, i))
+        .collect();
+    let mut own: Vec<(Vec<String>, Vec<Option<usize>>)> = Vec::with_capacity(sorted.len());
+    for (path, m) in sorted {
+        let mut keys: Vec<String> = Vec::new();
+        let mut stars: Vec<Option<usize>> = Vec::new();
+        for e in &m.exports {
+            match e {
+                Export::Named { exported, .. } | Export::ReExport { exported, .. } => {
+                    keys.push(exported.clone())
+                }
+                Export::NamespaceReExport { name, .. } => keys.push(name.clone()),
+                Export::ExportAll { source } => stars.push(
+                    reexport_source(es, path, &m.imports, source)
+                        .and_then(|t| index.get(t.as_str()).copied()),
+                ),
+            }
+        }
+        keys.extend(m.exported_functions.iter().map(|(n, _)| n.clone()));
+        keys.extend(
+            m.functions
+                .iter()
+                .filter(|f| f.is_exported)
+                .map(|f| f.name.clone()),
+        );
+        keys.extend(
+            m.classes
+                .iter()
+                .filter(|c| c.is_exported)
+                .map(|c| c.name.clone()),
+        );
+        keys.extend(
+            m.enums
+                .iter()
+                .filter(|e| e.is_exported)
+                .map(|e| e.name.clone()),
+        );
+        keys.extend(m.exported_objects.iter().cloned());
+        own.push((keys, stars));
+    }
+    let mut out = FxHashMap::default();
+    for (i, (path, _)) in sorted.iter().enumerate() {
+        let mut keys: FxHashSet<String> = own[i].0.iter().cloned().collect();
+        let mut open = false;
+        let mut seen = vec![i];
+        let mut st: Vec<Option<usize>> = own[i].1.clone();
+        while let Some(s) = st.pop() {
+            let Some(s) = s else {
+                open = true;
+                continue;
+            };
+            if seen.contains(&s) {
+                continue;
+            }
+            seen.push(s);
+            keys.extend(own[s].0.iter().filter(|k| k.as_str() != "default").cloned());
+            st.extend(own[s].1.iter().copied());
+        }
+        let mut keys: Vec<String> = keys.into_iter().collect();
+        keys.sort();
+        out.insert(path.to_string(), (keys, open));
+    }
+    out
 }
 
 /// One solve of the per-unit driver: a declaration unit of module `mi`
@@ -465,7 +649,11 @@ fn owner_of(out: &[Solve], t: &std::ops::Range<usize>, name: &str) -> Option<usi
     })
 }
 
-fn solves<'a>(sorted: &[(&'a str, &'a Module)], flats: &'a [Option<Module>]) -> Vec<Solve<'a>> {
+fn solves<'a>(
+    sorted: &[(&'a str, &'a Module)],
+    flats: &'a [Option<Module>],
+    es: &crate::ExportSources,
+) -> Vec<Solve<'a>> {
     let index: FxHashMap<&str, usize> = sorted
         .iter()
         .enumerate()
@@ -535,6 +723,31 @@ fn solves<'a>(sorted: &[(&'a str, &'a Module)], flats: &'a [Option<Module>]) -> 
                 }
             }
         }
+        // A re-export whose source the module does not import (resolved
+        // by the driver): the first unit is ordered after all of the source
+        // and depends on it, as for an imported one.
+        if out[si].key.ends_with("#u0") {
+            for e in &module.exports {
+                let (Export::ReExport { source, .. }
+                | Export::ExportAll { source }
+                | Export::NamespaceReExport { source, .. }) = e
+                else {
+                    continue;
+                };
+                if module.imports.iter().any(|i| &i.source == source) {
+                    continue;
+                }
+                let Some(&t) = reexport_source(es, path, std::iter::empty(), source)
+                    .as_deref()
+                    .filter(|t| *t != path)
+                    .and_then(|t| index.get(t))
+                else {
+                    continue;
+                };
+                out[si].deps.extend(range[t].clone());
+                after.extend(range[t].clone());
+            }
+        }
         out[si].after.extend(after);
     }
     out
@@ -595,7 +808,7 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
         .iter()
         .map(|(_, m)| crate::decl_units::run_once_flat(m))
         .collect();
-    let solves = solves(sorted, &flats);
+    let solves = solves(sorted, &flats, &cfg.export_sources);
     let viewed: Vec<(&str, Vec<&Import>, &[Export])> = solves
         .iter()
         .map(|s| {
@@ -611,6 +824,7 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
         })
         .collect();
     let mut input = published_surface(&viewed, cfg);
+    input.ns_keys = namespace_keys(sorted, &cfg.export_sources);
     let order = dependency_order(&solves);
     let levels = dependency_levels(&solves, &order);
     let mut rounds = 0u32;
@@ -685,6 +899,10 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
                     .or_default()
                     .join(ac);
             }
+            // A closed class's constructions, from any module (§18.13).
+            for (k, ac) in &u.ctor_args_out {
+                latest.entry(k.clone()).or_default().join(ac);
+            }
         }
         let mut args = input.args.clone();
         for (k, ac) in &latest {
@@ -708,10 +926,11 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
         // solved again with their dependents.
         let mut stores = input.stores.clone();
         for u in per_unit.iter().flatten() {
-            for (d, k) in &u.stores_out {
+            for (d, k, kinds) in &u.stores_out {
                 let v = stores.entry(d.clone()).or_default();
-                if !v.contains(k) {
-                    v.push(k.clone());
+                match v.iter_mut().find(|(k2, _)| k2 == k) {
+                    Some((_, e)) => *e = e.zip(*kinds).map(|(x, y)| x | y),
+                    None => v.push((k.clone(), *kinds)),
                 }
             }
         }
@@ -914,8 +1133,11 @@ fn unit_io(
         for (n, c) in &u.args_out {
             o.push((format!("args:{n}"), hash(&format!("{c:?}"))));
         }
-        for (d, k) in &u.stores_out {
-            o.push((format!("store:{d}.{k}"), 0));
+        for ((p, n), c) in &u.ctor_args_out {
+            o.push((format!("args:{p}:{n}"), hash(&format!("{c:?}"))));
+        }
+        for (d, k, kinds) in &u.stores_out {
+            o.push((format!("store:{d}.{k}"), hash(&format!("{kinds:?}"))));
         }
         for d in &u.reports {
             o.push((format!("report:{d}"), 0));

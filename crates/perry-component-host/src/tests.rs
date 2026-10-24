@@ -111,8 +111,12 @@ fn records_strings_bytes_imports_and_automatic_post_return() {
     for n in 0..20 {
         let input = json!({"text":format!("héllo 🌍 {n}"),"bytes":[0,1,127,255]});
         assert_eq!(
-            host.call("perry:test/transform@1.0.0", "echo", &[input.clone()])
-                .unwrap(),
+            host.call(
+                "perry:test/transform@1.0.0",
+                "echo",
+                std::slice::from_ref(&input)
+            )
+            .unwrap(),
             Some(input)
         );
         assert_eq!(

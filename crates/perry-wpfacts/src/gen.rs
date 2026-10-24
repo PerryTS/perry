@@ -24,6 +24,36 @@ pub struct ReadSite {
     pub func: FnIdx,
 }
 
+/// Another unit's module namespace object as this unit holds it (§18.2,
+/// DECISIONS 115-CWL3). A key holds what a named import of it binds, and
+/// that value exists in this unit once the unit names the key: `ns.k` read
+/// or called (`Gen::ns_member`) makes key `k`; any other use of the
+/// namespace value (passed, stored, a computed key, a receiver its callee
+/// uses) lets it reach code that may read every key, so it makes all of
+/// them (`Gen::ns_whole`). The unit's code is all there is: a key it never
+/// names under a namespace that never leaves those reads is no value of
+/// this unit.
+pub struct NsStandIn<'a> {
+    pub node: NodeId,
+    tok: Tok,
+    mi: u32,
+    imp: &'a Import,
+    local: String,
+    /// The keys made, each with the value node it holds.
+    made: FxHashMap<String, NodeId>,
+    whole: bool,
+    /// Its keys that hold another unit's value are made (`Gen::ns_escape`).
+    escaped: bool,
+}
+
+/// Whether unknown code holding another unit's function `c` reaches
+/// anything its defining unit does not grant it already: a closed function
+/// or one using its receiver is reported (`Gen::reports`), a result with
+/// layouts is (`Gen::ns_escape`).
+fn escape_carries(c: &crate::units::FnContract) -> bool {
+    c.closed.is_some() || !c.lexical_this || c.ret.as_ref().is_some_and(|r| !r.is_empty())
+}
+
 /// The candidates a parameter's TS type picks for its entry guard: one
 /// class, or the object type's keys (resolved after the census).
 #[derive(Clone, Debug, PartialEq)]
@@ -72,10 +102,29 @@ pub struct Gen<'a> {
     pub fn_contracts: Vec<((u32, Atom), FnIdx)>,
     /// Contract results accepted so far (their fields were sunk once).
     pub ret_ok: crate::pts::FxHashSet<Tok>,
+    /// Published literals of this unit whose fields leave key by key
+    /// (design §18.7): a field holding only literal layouts of this unit is
+    /// described by them (`field_layouts`, per template and key; whether it
+    /// may hold primitives too: `field_prims`); any other field is sunk
+    /// (`sunk_fields`, its nodes `sunk_field_toks`). `all_sunk`: the
+    /// published objects whose fields all leave.
+    pub leaving: Vec<Tok>,
+    pub field_layouts: FxHashMap<(TmplId, Atom), Vec<TmplId>>,
+    pub field_prims: crate::pts::FxHashSet<(TmplId, Atom)>,
+    pub sunk_fields: crate::pts::FxHashSet<(TmplId, Atom)>,
+    pub sunk_field_toks: crate::pts::FxHashSet<(Tok, Atom)>,
+    pub all_sunk: crate::pts::FxHashSet<Tok>,
     pub ret_top: crate::pts::FxHashSet<FnIdx>,
     /// Stand-ins of other units' functions (by name): value node, token.
     /// By (name, the stand-in template it is a field of, if any).
     pub stand_in_fns: FxHashMap<(String, Option<(TmplId, bool)>), (NodeId, Tok)>,
+    /// Stand-in namespaces of other units' modules (§18.2), by module path.
+    pub stand_in_nss: FxHashMap<String, NsStandIn<'a>>,
+    /// An import of another unit's export or module namespace not yet
+    /// named by this unit's code, by (module, local): the import and the
+    /// export name, `None` for the namespace (DECISIONS 115-CWL3,
+    /// `Gen::bind_import`).
+    pub(crate) unnamed_imports: FxHashMap<(u32, String), (&'a Import, Option<String>)>,
     /// DECISIONS 45: what other units' functions let escape, or touch, of
     /// what their arguments reach: one node each for the unit.
     pub reach_escape: Option<NodeId>,
@@ -83,10 +132,14 @@ pub struct Gen<'a> {
     /// The contracts behind the stand-ins: a stand-in template's class or
     /// layout contract, a stand-in function token's function contract.
     pub(crate) stand_in_cc: FxHashMap<TmplId, crate::units::ClassContract>,
+    /// The stand-ins of closed classes (design §18.13): their key
+    /// (`ClassContract::closed`), template and constructor token.
+    pub(crate) closed_ctors: Vec<((String, String), TmplId, Tok)>,
     /// Store effects of other units performed here (decision 17): the
     /// (instance, key) pairs done, the unknown value and the writer site.
     effects_done: crate::pts::FxHashSet<(Tok, Atom)>,
-    effect_src: Option<(NodeId, SiteId)>,
+    effect_site: Option<SiteId>,
+    effect_srcs: FxHashMap<Option<u16>, NodeId>,
     pub(crate) stand_in_fc: FxHashMap<Tok, &'a crate::units::FnContract>,
     /// Classes with a parent value (§17.2), fed after the bodies.
     pub(crate) parent_values: Vec<(u32, TmplId, Option<String>)>,
@@ -305,13 +358,23 @@ impl<'a> Gen<'a> {
             export_fn: FxHashMap::default(),
             fn_contracts: Vec::new(),
             ret_ok: Default::default(),
+            leaving: Vec::new(),
+            field_layouts: FxHashMap::default(),
+            field_prims: Default::default(),
+            sunk_fields: Default::default(),
+            sunk_field_toks: Default::default(),
+            all_sunk: Default::default(),
             ret_top: Default::default(),
             stand_in_fns: FxHashMap::default(),
+            stand_in_nss: FxHashMap::default(),
+            unnamed_imports: FxHashMap::default(),
             reach_escape: None,
             reach_touch: None,
             stand_in_cc: FxHashMap::default(),
+            closed_ctors: Vec::new(),
             effects_done: Default::default(),
-            effect_src: None,
+            effect_site: None,
+            effect_srcs: Default::default(),
             stand_in_fc: FxHashMap::default(),
             parent_values: Vec::new(),
             parent_fed: Default::default(),
@@ -473,43 +536,30 @@ impl<'a> Gen<'a> {
                             self.m.add_tok(n, tok);
                             (local.clone(), n)
                         }
-                        // Another unit's class with a contract (§11.2).
-                        (ImportSpecifier::Named { imported, local }, None)
-                            if self.contract_for(imp, imported).is_some() =>
-                        {
-                            let c = self.contract_for(imp, imported).unwrap();
-                            (local.clone(), self.stand_in_class(mi, c))
+                        // Another unit's export: its contract (§11.2), or ⊤;
+                        // its module as a namespace (§18.2). Each is made
+                        // when the unit's code names it (115-CWL3).
+                        (ImportSpecifier::Named { imported, local }, None) => {
+                            let k = (mi, local.clone());
+                            self.unnamed_imports
+                                .insert(k, (imp, Some(imported.clone())));
+                            continue;
                         }
-                        (ImportSpecifier::Default { local }, None)
-                            if self.contract_for(imp, "default").is_some() =>
-                        {
-                            let c = self.contract_for(imp, "default").unwrap();
-                            (local.clone(), self.stand_in_class(mi, c))
+                        (ImportSpecifier::Default { local }, None) => {
+                            let k = (mi, local.clone());
+                            self.unnamed_imports
+                                .insert(k, (imp, Some("default".into())));
+                            continue;
                         }
-                        (ImportSpecifier::Named { imported, local }, None)
-                            if self.fn_contract_for(imp, imported).is_some() =>
+                        (ImportSpecifier::Namespace { local }, None)
+                            if self.ns_keys_for(imp).is_some() =>
                         {
-                            let c = self.fn_contract_for(imp, imported).unwrap();
-                            (local.clone(), self.stand_in_fn(mi, c))
-                        }
-                        // Another unit's module-scope value with a value
-                        // contract (§12 value contracts).
-                        (ImportSpecifier::Named { imported, local }, None)
-                            if self.value_contract_for(imp, imported).is_some() =>
-                        {
-                            let c = self.value_contract_for(imp, imported).unwrap();
-                            (local.clone(), self.stand_in_value(mi, local, c))
-                        }
-                        (ImportSpecifier::Default { local }, None)
-                            if self.value_contract_for(imp, "default").is_some() =>
-                        {
-                            let c = self.value_contract_for(imp, "default").unwrap();
-                            (local.clone(), self.stand_in_value(mi, local, c))
+                            self.unnamed_imports
+                                .insert((mi, local.clone()), (imp, None));
+                            continue;
                         }
                         // Native / builtin / unresolved modules: ⊤ values.
-                        (ImportSpecifier::Named { local, .. }, None)
-                        | (ImportSpecifier::Default { local }, None)
-                        | (ImportSpecifier::Namespace { local }, None) => {
+                        (ImportSpecifier::Namespace { local }, None) => {
                             let why =
                                 format!("import from native/unresolved module {}", imp.source);
                             (local.clone(), self.m.top_val(&why))
@@ -519,6 +569,234 @@ impl<'a> Gen<'a> {
                 }
             }
         }
+    }
+
+    /// What `import { name as local }` binds from another unit: the stand-in
+    /// of its class, function or value contract, else ⊤ (a native, builtin
+    /// or unresolved module, or an export without a contract).
+    fn imported_value(
+        &mut self,
+        mi: u32,
+        imp: &'a perry_hir::Import,
+        name: &str,
+        local: &str,
+    ) -> NodeId {
+        if let Some(c) = self.contract_for(imp, name) {
+            return self.stand_in_class(mi, c);
+        }
+        if let Some(c) = self.fn_contract_for(imp, name) {
+            return self.stand_in_fn(mi, c);
+        }
+        if let Some(c) = self.value_contract_for(imp, name) {
+            return self.stand_in_value(mi, local, c);
+        }
+        let why = format!("import from native/unresolved module {}", imp.source);
+        self.m.top_val(&why)
+    }
+
+    fn ns_keys_for(&self, imp: &perry_hir::Import) -> Option<&'a (Vec<String>, bool)> {
+        self.unit_in?.ns_keys(imp.resolved_path.as_deref()?)
+    }
+
+    /// Another unit's module namespace object (design §18.2): one object per
+    /// imported module, its keys the module's export names, each holding
+    /// what a named import of it binds; open (⊤ under any key) when an
+    /// `export *` source is outside the program. A namespace's shape is its
+    /// module's declarations, so nothing about it is guarded.
+    fn stand_in_ns(&mut self, mi: u32, imp: &'a perry_hir::Import, local: &str) -> NodeId {
+        let path = imp
+            .resolved_path
+            .clone()
+            .expect("a namespace with keys has a path");
+        if let Some(e) = self.stand_in_nss.get(&path) {
+            return e.node;
+        }
+        let (_, open) = self.ns_keys_for(imp).expect("namespace keys");
+        // Past this unit's own modules' namespaces (`ModInfo::ns_tok`).
+        let id = (self.modules.len() + self.stand_in_nss.len()) as u32;
+        let tok = self.m.tok(TokKind::ModNs(id));
+        let n = self
+            .m
+            .node_named("ns-import", || format!("ns-import({local})"));
+        self.m.add_tok(n, tok);
+        // Its keys' values are made as the unit names them (`NsStandIn`).
+        self.stand_in_nss.insert(
+            path,
+            NsStandIn {
+                node: n,
+                tok,
+                mi,
+                imp,
+                local: local.to_string(),
+                made: Default::default(),
+                whole: false,
+                escaped: false,
+            },
+        );
+        if *open {
+            let fa = self.m.field_any(tok);
+            let src = imp.source.clone();
+            self.m.add_top(fa, |_| {
+                format!("namespace of {src}: export * from outside the program")
+            });
+        }
+        n
+    }
+
+    /// The stand-in namespace node `n` is, by module path.
+    fn ns_path_of(&self, n: NodeId) -> Option<String> {
+        self.stand_in_nss
+            .iter()
+            .find(|(_, e)| e.node == n)
+            .map(|(p, _)| p.clone())
+    }
+
+    /// Key `k` of stand-in namespace `path`: what `import { k }` binds, held
+    /// under `k`; `None` when `k` is no export (the read is `undefined`).
+    fn ns_key(&mut self, path: &str, k: &str) -> Option<NodeId> {
+        let e = &self.stand_in_nss[path];
+        if let Some(&v) = e.made.get(k) {
+            return Some(v);
+        }
+        let (mi, imp, tok) = (e.mi, e.imp, e.tok);
+        let local = format!("{}.{k}", e.local);
+        if !self
+            .ns_keys_for(imp)
+            .is_some_and(|(keys, _)| keys.iter().any(|x| x == k))
+        {
+            return None;
+        }
+        let v = self.at_module_scope(|g| g.imported_value(mi, imp, k, &local));
+        let a = self.m.atom(k);
+        let f = self.m.field(tok, a);
+        self.m.edge(v, f);
+        let e = self.stand_in_nss.get_mut(path).expect("namespace");
+        e.made.insert(k.to_string(), v);
+        Some(v)
+    }
+
+    /// Node `n` used as a value beyond reading a named key: when it is a
+    /// stand-in namespace, every key of it (`NsStandIn`).
+    pub(crate) fn ns_whole(&mut self, n: NodeId) {
+        let Some(path) = self.ns_path_of(n) else {
+            return;
+        };
+        if self.stand_in_nss[&path].whole {
+            return;
+        }
+        let imp = self.stand_in_nss[&path].imp;
+        let (keys, _) = self.ns_keys_for(imp).expect("namespace keys");
+        for k in keys {
+            self.ns_key(&path, k);
+        }
+        self.stand_in_nss.get_mut(&path).unwrap().whole = true;
+    }
+
+    /// Stand-in namespace `path` handed to code outside this unit: what its
+    /// keys hold escapes with it, so each key whose value carries something
+    /// its defining unit does not already grant unknown code is made: a
+    /// class (its instances and statics may be written), a function that
+    /// is closed or uses its receiver (its `fn:` report), a function whose
+    /// result has layouts (their reports), a value holding such. An open
+    /// function returning no layouts is run by its defining unit for any
+    /// caller already (`Gen::open_fn`), and ⊤ or a primitive is what
+    /// unknown code holds: such a key escapes nothing and is not made
+    /// (DECISIONS 116-CWL3). Code of this unit that reads
+    /// the namespace by any key still makes every key (`ns_whole`).
+    fn ns_escape(&mut self, path: &str) {
+        let e = &self.stand_in_nss[path];
+        if e.whole || e.escaped {
+            return;
+        }
+        let imp = e.imp;
+        let (keys, _) = self.ns_keys_for(imp).expect("namespace keys");
+        for k in keys {
+            let carries = self.contract_for(imp, k).is_some()
+                || self.fn_contract_for(imp, k).is_some_and(escape_carries)
+                || self.value_contract_for(imp, k).is_some_and(|c| {
+                    !c.layouts.is_empty()
+                        || !c.classes.is_empty()
+                        || c.fns.iter().any(escape_carries)
+                });
+            if carries {
+                self.ns_key(path, k);
+            }
+        }
+        self.stand_in_nss.get_mut(path).unwrap().escaped = true;
+    }
+
+    /// `object.key` where `object` names a stand-in namespace import: the
+    /// namespace node, with key `key` made (`NsStandIn`). A call
+    /// `ns.key(…)` passes the namespace as its receiver. A stand-in
+    /// function that ignores its receiver leaves it here; one that uses it
+    /// sinks it, and an unknown callee (⊤, or no such key) lets it escape:
+    /// code outside this unit gets it (`ns_escape`). Any other callee may
+    /// read every key (`ns_whole`).
+    pub(crate) fn ns_member(
+        &mut self,
+        mi: u32,
+        object: &perry_hir::Expr,
+        key: &str,
+        call: bool,
+    ) -> Option<NodeId> {
+        let perry_hir::Expr::ExternFuncRef { name, .. } = object else {
+            return None;
+        };
+        let n = self.bind_import(mi, name)?;
+        let path = self.ns_path_of(n)?;
+        let v = self.ns_key(&path, key);
+        if call {
+            let toks = v.map_or(Vec::new(), |v| self.m.nodes[v as usize].pts.to_sorted());
+            let fc = |t: &Tok| self.stand_in_fc.get(t);
+            let ignores =
+                !toks.is_empty() && toks.iter().all(|t| fc(t).is_some_and(|c| c.lexical_this));
+            let outside = v.is_none()
+                || (!toks.is_empty() && toks.iter().all(|&t| t == TOP || fc(&t).is_some()));
+            if !ignores && outside {
+                self.ns_escape(&path);
+            } else if !ignores {
+                self.ns_whole(n);
+            }
+        }
+        Some(n)
+    }
+
+    /// An import binding of module `mi` named by the unit's code: another
+    /// unit's export imported by name is made now, as the bind would have
+    /// made it (`unnamed_imports`); a stand-in namespace read as a value
+    /// holds every key (`ns_whole`).
+    pub(crate) fn import_value(&mut self, mi: u32, name: &str) -> Option<NodeId> {
+        let n = self.bind_import(mi, name)?;
+        self.ns_whole(n);
+        Some(n)
+    }
+
+    /// The import binding `name` of module `mi`, made now if the unit's code
+    /// had not named it yet, as binding the imports would have made it.
+    fn bind_import(&mut self, mi: u32, name: &str) -> Option<NodeId> {
+        if let Some((imp, export)) = self.unnamed_imports.remove(&(mi, name.to_string())) {
+            let n = self.at_module_scope(|g| match &export {
+                Some(e) => g.imported_value(mi, imp, e, name),
+                None => g.stand_in_ns(mi, imp, name),
+            });
+            self.mods[mi as usize].imports.insert(name.to_string(), n);
+        }
+        self.mods[mi as usize].imports.get(name).copied()
+    }
+
+    /// Whether `name` is an import binding of module `mi`.
+    pub(crate) fn is_import(&self, mi: u32, name: &str) -> bool {
+        self.mods[mi as usize].imports.contains_key(name)
+            || self.unnamed_imports.contains_key(&(mi, name.to_string()))
+    }
+
+    /// `f` run where the import bindings are made: at module scope, so the
+    /// values it makes belong to no function of the unit.
+    fn at_module_scope<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+        let outer = std::mem::replace(&mut self.m.cur_fn, NO_FN);
+        let r = f(self);
+        self.m.cur_fn = outer;
+        r
     }
 
     fn fn_contract_for(
@@ -577,13 +855,24 @@ impl<'a> Gen<'a> {
         for &p in &params {
             self.m.own(p);
         }
+        // The rest array of the callee's body (§18.11): the arguments past
+        // its parameters land in it. The contract does not describe what
+        // the body does with it, so it escapes, and its elements with it.
+        let rest = c.rest.then(|| {
+            let n = self.m.node_named("rest", || format!("rest({})", c.name));
+            self.m.own(n);
+            let arr = self.new_arr_template(mi, "rest");
+            let at = self.m.tok(TokKind::Obj(arr, NO_CTX));
+            self.m.add_tok(n, at);
+            n
+        });
         self.m.cur_fn = outer_fn;
         self.m.funcs.push(FuncInfo {
             module: mi,
             func_id: u32::MAX,
             name: c.name.clone(),
             params: params.clone(),
-            rest: None,
+            rest,
             this,
             ret,
             args_all,
@@ -603,6 +892,9 @@ impl<'a> Gen<'a> {
         self.stand_in_fns.insert((c.name.clone(), holder), (n, tok));
         self.stand_in_fc.insert(tok, c);
         self.m.sink_node(args_all, r);
+        if let Some(n) = rest {
+            self.m.sink_node(n, r);
+        }
         match holder {
             _ if c.lexical_this => {}
             Some((tm, statics)) => self.m.cons(
@@ -660,50 +952,53 @@ impl<'a> Gen<'a> {
             // what it holds. The union of the parameters' closures is the
             // closure of their union, so one node per use holds the same
             // facts as one per parameter. A read only runs nothing here.
-            if ru & MARK_ESCAPE != 0 {
-                let q = match self.reach_escape {
-                    Some(q) => q,
-                    None => {
-                        let q = self.m.node_named("reach", || "reached(escape)".into());
-                        self.m.sink_node(q, r);
-                        self.reach_escape = Some(q);
-                        q
-                    }
-                };
-                self.m.cons(
-                    p,
-                    Cons::Load {
-                        key: crate::model::Key::Any,
-                        dst: q,
-                    },
-                );
-            } else if ru & MARK_TOUCH != 0 {
-                let q = match self.reach_touch {
-                    Some(q) => q,
-                    None => {
-                        let q = self.m.node_named("reach", || "reached(touch)".into());
-                        self.m.cons(
-                            q,
-                            Cons::Load {
-                                key: crate::model::Key::Any,
-                                dst: q,
-                            },
-                        );
-                        self.m.cons(q, Cons::Implicit { reason: r });
-                        self.reach_touch = Some(q);
-                        q
-                    }
-                };
-                self.m.cons(
-                    p,
-                    Cons::Load {
-                        key: crate::model::Key::Any,
-                        dst: q,
-                    },
-                );
+            // Per key the callee read it under (§18.4): what `p.k` reaches
+            // is the argument's `k`; a computed key reaches all of it.
+            let mut buckets = vec![(crate::model::Key::Any, ru)];
+            for (k, u) in c.reach_keys.get(i).into_iter().flatten() {
+                buckets.push((crate::model::Key::Named(self.m.atom(k)), *u));
+            }
+            for (key, ru) in buckets {
+                if ru & MARK_ESCAPE != 0 {
+                    let q = match self.reach_escape {
+                        Some(q) => q,
+                        None => {
+                            let q = self.m.node_named("reach", || "reached(escape)".into());
+                            self.m.sink_node(q, r);
+                            self.reach_escape = Some(q);
+                            q
+                        }
+                    };
+                    self.m.cons(p, Cons::Load { key, dst: q });
+                } else if ru & MARK_TOUCH != 0 {
+                    let q = match self.reach_touch {
+                        Some(q) => q,
+                        None => {
+                            let q = self.m.node_named("reach", || "reached(touch)".into());
+                            self.m.cons(
+                                q,
+                                Cons::Load {
+                                    key: crate::model::Key::Any,
+                                    dst: q,
+                                },
+                            );
+                            self.m.cons(q, Cons::Implicit { reason: r });
+                            self.reach_touch = Some(q);
+                            q
+                        }
+                    };
+                    self.m.cons(p, Cons::Load { key, dst: q });
+                }
             }
         }
-        self.m.add_prim(ret, prim::ALL);
+        // Its primitive kinds are the defining unit's (§18.7), any when ⊤.
+        self.m.add_prim(
+            ret,
+            match c.ret {
+                Some(_) => c.ret_prim,
+                None => prim::ALL,
+            },
+        );
         if c.ret_unknown {
             self.m
                 .add_top(ret, |_| "result of another unit's function".into());
@@ -819,7 +1114,41 @@ impl<'a> Gen<'a> {
             .m
             .reason("another unit's class used beyond its contract");
         let tm = self.m.tmpls.len() as TmplId;
-        let ctor = self.stub_fn(mi, &format!("{}.constructor", c.name), tm, false, false, r);
+        // A closed class (design §18.13): its constructor's parameters
+        // collect what this unit's constructions pass, published under the
+        // class's key. Its body reads no `arguments` and has no rest
+        // parameter (`lib::closed_of`), so an argument past them reaches
+        // nothing; what a parameter holds goes to the defining unit's
+        // constructor through the argument contract: another unit's
+        // stand-in stays inside its contract there, anything else escapes
+        // (`Cons::HandOver`, DECISIONS 109).
+        let ctor = self.stub_fn_of(
+            mi,
+            &format!("{}.constructor", c.name),
+            tm,
+            false,
+            false,
+            r,
+            c.closed.is_none(),
+        );
+        if let Some((path, name, n)) = &c.closed {
+            let outer_fn = std::mem::replace(&mut self.m.cur_fn, ctor);
+            let params: Vec<NodeId> = (0..*n)
+                .map(|i| {
+                    let p = self
+                        .m
+                        .node_named("param", || format!("param{i}({}.constructor)", c.name));
+                    self.m.own(p);
+                    self.m.cons(p, Cons::HandOver { reason: r });
+                    p
+                })
+                .collect();
+            self.m.cur_fn = outer_fn;
+            self.m.funcs[ctor as usize].params = params;
+            let t = self.m.funcs[ctor as usize].token;
+            self.closed_ctors
+                .push(((path.clone(), name.clone()), tm, t));
+        }
         self.m.tmpls.push(Template {
             kind: TmplKind::Class {
                 module: mi,
@@ -907,15 +1236,46 @@ impl<'a> Gen<'a> {
             self.m.add_tok(n, t);
             toks.push(t);
         }
+        let mut nested: Vec<(NodeId, &'a (String, Vec<String>, bool))> = Vec::new();
+        let mut fn_fields: Vec<(NodeId, &'a Vec<crate::units::FnContract>)> = Vec::new();
+        let mut class_fields: Vec<(NodeId, &'a crate::derive::KindFact, bool)> = Vec::new();
         for fld in &c.facts.fields {
             let a = self.m.atom(&fld.key);
             let n = self.m.field(inst, a);
-            // A field holding only contract functions: their stand-ins.
+            // A field holding only the defining unit's literal layouts:
+            // instances of their stand-ins (§18.7), made below.
+            if let Some(fl) = c.field_layouts.iter().find(|(k, _, _)| k == &fld.key) {
+                nested.push((n, fl));
+                continue;
+            }
+            // A field holding only contract functions: their stand-ins,
+            // made below.
             if let Some((_, fcs)) = c.field_fns.iter().find(|(k, _)| k == &fld.key) {
-                for fc in fcs {
-                    let v = self.stand_in_fn_of(mi, fc, Some((tm, false)));
-                    self.m.edge(v, n);
-                }
+                fn_fields.push((n, fcs));
+                continue;
+            }
+            // A data field that holds only primitives (DECISIONS 74): their
+            // kinds, as the defining unit's solve found them with every
+            // unit's store effects (DECISIONS 73) performed; a read before
+            // the field exists is undefined.
+            let k = &fld.kind;
+            if fld.data_field
+                && !k.top
+                && k.objs.is_empty()
+                && k.funcs == 0
+                && k.builtin_objs == 0
+                && k.prims != 0
+            {
+                let undef = if fld.definite { 0 } else { prim::UNDEF };
+                self.m.add_prim(n, k.prims | undef);
+                continue;
+            }
+            // A data field that holds only instances of classes (and
+            // primitives), as the defining unit's solve found them
+            // (DECISIONS 110): made below.
+            if fld.data_field && !k.top && !k.objs.is_empty() && k.funcs == 0 && k.builtin_objs == 0
+            {
+                class_fields.push((n, k, fld.definite));
                 continue;
             }
             self.m
@@ -930,6 +1290,58 @@ impl<'a> Gen<'a> {
         }
         if let Some(e) = self.stand_ins.get_mut(&c.display) {
             e.2.extend(toks);
+        }
+        // After the layout's stand-in exists: a field function whose result
+        // is this layout again (a literal returning itself) finds it
+        // (DECISIONS 78).
+        for (fnode, fcs) in fn_fields {
+            for fc in fcs {
+                let v = self.stand_in_fn_of(mi, fc, Some((tm, false)));
+                self.m.edge(v, fnode);
+            }
+        }
+        // DECISIONS 110 (73 for objects): a field whose published kind names
+        // only this class (a tree's or a list's links) reads as this
+        // stand-in's instance. The kind is the defining unit's at the
+        // fixpoint, every unit's stores performed (a store of an object is
+        // `None`: ⊤ there), so the field holds exactly such instances; using
+        // one beyond the contract is this unit's census report. It needs no
+        // other contract than this one. Another class it names reads ⊤ as
+        // before: its contract would be a read by display, which the driver
+        // does not track across rounds (CW2 DECISIONS 103).
+        for (fnode, k, definite) in class_fields {
+            if c.literal_shape || k.objs.iter().any(|d| *d != c.display) {
+                self.m
+                    .add_top(fnode, |_| "field of another unit's class".into());
+                self.m.add_prim(fnode, prim::ALL);
+                continue;
+            }
+            self.m.add_tok(fnode, inst);
+            let undef = if definite { 0 } else { prim::UNDEF };
+            self.m.add_prim(fnode, k.prims | undef);
+        }
+        for (fnode, (_, ds, prims)) in nested {
+            for d in ds {
+                // A broken layout is ⊤ to every reader (§11.3).
+                match self
+                    .unit_in
+                    .filter(|u| !u.broken(d))
+                    .and_then(|u| u.layout(d))
+                {
+                    Some(ic) => {
+                        self.stand_in_class(mi, ic);
+                        let itm = self.stand_ins[&ic.display].1;
+                        let it = self.m.tok(TokKind::Obj(itm, NO_CTX));
+                        self.m.add_tok(fnode, it);
+                    }
+                    None => self
+                        .m
+                        .add_top(fnode, |_| "field of another unit's class".into()),
+                }
+            }
+            if *prims {
+                self.m.add_prim(fnode, prim::ALL);
+            }
         }
         for (field, fc) in static_fns {
             let v = self.stand_in_fn_of(mi, fc, Some((tm, true)));
@@ -953,6 +1365,22 @@ impl<'a> Gen<'a> {
         ret_top: bool,
         statics: bool,
         reason: u32,
+    ) -> FnIdx {
+        self.stub_fn_of(mi, name, class, ret_top, statics, reason, true)
+    }
+
+    /// `stub_fn`; `sink_args` false for a closed class's constructor, whose
+    /// parameters hand their values over instead (`stand_in_class`).
+    #[allow(clippy::too_many_arguments)]
+    fn stub_fn_of(
+        &mut self,
+        mi: u32,
+        name: &str,
+        class: TmplId,
+        ret_top: bool,
+        statics: bool,
+        reason: u32,
+        sink_args: bool,
     ) -> FnIdx {
         let fx = self.m.funcs.len() as FnIdx;
         let tok = self.m.tok(TokKind::Func(fx, NO_CTX));
@@ -981,7 +1409,9 @@ impl<'a> Gen<'a> {
             forwards_super: false,
             parent: NO_FN,
         });
-        self.m.sink_node(args_all, reason);
+        if sink_args {
+            self.m.sink_node(args_all, reason);
+        }
         if ret_top {
             self.m
                 .add_top(ret, |_| "result of another unit's method".into());
@@ -1016,12 +1446,25 @@ impl<'a> Gen<'a> {
             .map(|(d, _)| d.clone())
             .collect();
         for ((name, _), &(_, t)) in &self.stand_in_fns {
-            if self.m.aborted || self.m.is_escaped(t) || self.m.hard.contains_key(&t) {
+            let escaped = self.m.is_escaped(t) && !self.open_fn(t);
+            if self.m.aborted || escaped || self.m.hard.contains_key(&t) {
                 out.push(format!("fn:{name}"));
             }
         }
         out.sort();
         out
+    }
+
+    /// A stand-in of another unit's function that unknown code may hold
+    /// (design §18.9, DECISIONS 67): an open contract function (no
+    /// argument contract, decision 19) whose receiver is unused. Its
+    /// defining unit already runs it for any caller with ⊤ arguments and
+    /// checks its result; an escape here sinks the result (its layouts
+    /// still get their census reports), so it is no report of its own.
+    pub(crate) fn open_fn(&self, t: Tok) -> bool {
+        self.stand_in_fc
+            .get(&t)
+            .is_some_and(|c| c.closed.is_none() && c.lexical_this)
     }
 
     /// Resolve the typed parameters' entry-guard candidates (every class and
@@ -1037,14 +1480,15 @@ impl<'a> Gen<'a> {
     /// The candidates parameter type `ty` of module `mi` picks for an entry
     /// guard (design §11.4): a class (this unit's or another's through a
     /// contract), or the keys of an object type / interface / alias.
-    pub(crate) fn guard_of(&self, mi: u32, ty: &perry_hir::types::Type) -> Option<ParamGuard> {
+    /// A parameter type naming an import names it (`import_value`).
+    pub(crate) fn guard_of(&mut self, mi: u32, ty: &perry_hir::types::Type) -> Option<ParamGuard> {
         use perry_hir::types::Type;
         match ty {
             Type::Named(n) => {
                 if let Some(&tm) = self.mods[mi as usize].classes.get(n) {
                     return Some(ParamGuard::Class(tm));
                 }
-                if let Some(&node) = self.mods[mi as usize].imports.get(n) {
+                if let Some(node) = self.import_value(mi, n) {
                     return self.m.nodes[node as usize]
                         .pts
                         .to_sorted()
@@ -1435,8 +1879,8 @@ impl<'a> Gen<'a> {
             }
             let (pv, _) = self.m.tmpls[tm as usize].parent_value.unwrap();
             let bound = name.as_deref().and_then(|n| {
-                let m = &self.mods[mi as usize];
-                m.imports.get(n).or_else(|| m.scope.get(n)).copied()
+                self.import_value(mi, n)
+                    .or_else(|| self.mods[mi as usize].scope.get(n).copied())
             });
             match bound {
                 Some(b) => self.m.edge(b, pv),
@@ -1459,7 +1903,7 @@ impl<'a> Gen<'a> {
         if let Some(&tm) = self.mods[mi as usize].classes.get(name) {
             return Some(tm);
         }
-        let imp = *self.mods[mi as usize].imports.get(name)?;
+        let imp = self.import_value(mi, name)?;
         // Import bindings are filled during solving; peek through the
         // export chain statically: an export of a class name.
         self.static_class_of_node(imp)

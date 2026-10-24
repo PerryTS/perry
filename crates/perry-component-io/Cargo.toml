@@ -1,0 +1,16 @@
+[package]
+name = "perry-component-io"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Native operation ownership at Perry's optional component boundary"
+[lints]
+workspace = true
+[dependencies]
+perry-abi.workspace = true
+turnloop.workspace = true
+
+[features]
+default = []
+standalone = []

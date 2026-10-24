@@ -354,43 +354,32 @@ fn object_has_property_generic(obj: f64, key: f64) -> f64 {
         };
     }
 
-    // A Web Fetch / zlib handle-band value (Headers/Request/Response, zlib
-    // streams) at or above the fetch band is a registry id, not a heap object —
-    // the pointer paths below would dereference the id and segfault. A blanket
-    // `false` was wrong, though: a `Request`/`Response` DOES have `body` /
-    // `method` / `url` / `headers` / … properties. Auth.js's request-body parser
-    // gates on `"body" in request` (`if(!("body" in e) || !e.body …) return`),
-    // so reporting `false` made it skip parsing the credentials POST body — the
-    // `csrfToken` field never reached the CSRF check and every login failed with
-    // `MissingCSRF`. Delegate a STRING key to the same handle property dispatcher
-    // that property *reads* use (safe for these ids — no heap deref): the
-    // property exists if it resolves to a non-undefined value. A symbol key has
-    // no own-property meaning on these handles, so it still reports `false`.
-    // Common/small handles (below the fetch band) are intentionally NOT caught
-    // here: they fall through to the registered small-handle property path later
-    // in this function.
+    // Every native HANDLE_TAG value is a registry id, not a heap pointer.
+    // Dispatch common/small handles (including crypto) here too: they fail the
+    // heap-only is_pointer guard below and cannot reach its legacy handle-band
+    // path. Use the same string-property dispatcher as reads, so numeric zero
+    // is present and an undefined result is absent. Symbol keys remain absent,
+    // and no native handle falls through to a heap dereference.
     if obj_val.is_handle() {
         let addr = obj_val.as_handle();
-        if addr >= crate::value::addr_class::COMMON_HANDLE_BAND_END {
-            if key_val.is_any_string() {
-                if let Some(dispatch) = super::super::class_registry::handle_property_dispatch() {
-                    unsafe {
-                        let key_ptr = crate::value::js_get_string_pointer_unified(key)
-                            as *const crate::StringHeader;
-                        if !key_ptr.is_null() {
-                            let name_ptr = (key_ptr as *const u8)
-                                .add(std::mem::size_of::<crate::StringHeader>());
-                            let name_len = (*key_ptr).byte_len as usize;
-                            let result = dispatch(addr as i64, name_ptr, name_len);
-                            if result.to_bits() != crate::value::TAG_UNDEFINED {
-                                return nanbox_true;
-                            }
+        if key_val.is_any_string() {
+            if let Some(dispatch) = super::super::class_registry::handle_property_dispatch() {
+                unsafe {
+                    let key_ptr = crate::value::js_get_string_pointer_unified(key)
+                        as *const crate::StringHeader;
+                    if !key_ptr.is_null() {
+                        let name_ptr =
+                            (key_ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                        let name_len = (*key_ptr).byte_len as usize;
+                        let result = dispatch(addr as i64, name_ptr, name_len);
+                        if result.to_bits() != crate::value::TAG_UNDEFINED {
+                            return nanbox_true;
                         }
                     }
                 }
             }
-            return nanbox_false;
         }
+        return nanbox_false;
     }
 
     // #6160: `Symbol in Class` where the member is a Symbol-keyed STATIC member

@@ -11,7 +11,9 @@ mod limits;
 mod resources;
 mod transport;
 pub use host_resources::{ResourceEvent, ResourceHook, ResourceRef};
+mod sync_wasi;
 mod wasi;
+pub use sync_wasi::{add_to_linker as add_wasi_to_linker, State as WasiState};
 mod wire;
 pub use wasi::{Address, Network, Preopen, WasiOptions};
 
@@ -109,7 +111,11 @@ impl Host {
         let host_resources = host_resources::HostResources::new(world, options, resource_hook)?;
         let mut linker = Linker::<StoreData>::new(&engine);
         if options.wasi.is_some() {
-            wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
+            sync_wasi::add_to_linker(&mut linker, |data: &mut StoreData| {
+                data.wasi
+                    .as_mut()
+                    .expect("WASI providers require explicit options")
+            })?;
         }
         for interface in &world.imports {
             if options.wasi.is_some() && interface.name.starts_with("wasi:") {
@@ -207,7 +213,7 @@ impl Host {
                         .get_export_index(&mut store, namespace.as_ref(), &function.name)
                         .context("missing validated function")?;
                     let func = instance
-                        .get_func(&mut store, &index)
+                        .get_func(&mut store, index)
                         .context("export is not callable")?;
                     exports.insert((interface.name.clone(), function.name.clone()), func);
                 }

@@ -127,6 +127,10 @@ fn debug_hir_uses_url_engine(hir_debug: &str) -> bool {
         // namespace at run time; its members are then reached dynamically.
         || hir_debug.contains("String(\"node:url\")")
         || hir_debug.contains("String(\"url\")")
+        // A default or namespace import (`import url from "node:url"`) reaches
+        // helpers through that object, so no `module: "url"` marker survives
+        // (#12864 follow-up: `url.domainToASCII` alone linked no engine).
+        || hir_debug.contains("NativeModuleRef(\"url\")")
         // A TypeScript `require("node:url")` keeps no specifier in the HIR, so
         // the factory name is the only surviving signal (#11560).
         || hir_debug.contains("pathToFileURL")

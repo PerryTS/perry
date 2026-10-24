@@ -48,9 +48,26 @@ fn a_result_holding_another_units_instance_forwards_its_contract() {
         assert_eq!(verdicts(&pf, "k"), ["E0"], "{}", pf.dump_text());
         assert_eq!(verdicts(&pf, "get"), ["T0Mono"], "{}", pf.dump_text());
     }
-    // Soundness: the caller storing into what it got is beyond R's
-    // contract: the census breaks R and `this.k` is no longer proven.
+    // Soundness: the caller stores into what it got. `k` is a definite data
+    // field of every R from its birth, so the store adds no key: a store
+    // effect R's unit performs (decision 17, extended to class instances in
+    // CW2 C), not a census report. R's layout holds, so `this.k` keeps its
+    // slot; its value is the caller's: `k` is written after birth and holds
+    // an unknown value.
     let m = "import { newInstance } from './a'; function f() { const s: any = newInstance(); s.k = 'x'; return s.get(); } console.log(f());";
+    let pf = units_of(&[("a", MAKE), ("m", m)]);
+    assert!(pf.broken.is_empty(), "{:?}", pf.broken);
+    let k = field(tmpl(&pf, "R"), "k");
+    // Rewritten for DECISIONS 73 (principle: a store effect carries the kinds
+    // it stores): the field holds the stored primitive, not ⊤.
+    assert!(
+        !k.readonly && k.kind.prims & crate::model::prim::STR != 0,
+        "{}",
+        pf.dump_text()
+    );
+    // A store of a key R does not hold from birth is beyond the contract:
+    // the census breaks R and `this.k` is no longer proven.
+    let m = "import { newInstance } from './a'; function f() { const s: any = newInstance(); s.j = 'x'; return s.get(); } console.log(f());";
     let pf = units_of(&[("a", MAKE), ("m", m)]);
     assert!(
         pf.broken.iter().any(|d| d.ends_with(":R")),

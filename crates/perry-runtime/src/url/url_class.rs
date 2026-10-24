@@ -3,10 +3,10 @@
 use super::*;
 
 use super::parse::{
-    create_url_object, is_valid_absolute_url, rebuild_url_host, rebuild_url_href, resolve_url,
-    throw_invalid_url, URL_FIELD_COUNT, URL_HASH, URL_HOST, URL_HOSTNAME, URL_HREF, URL_ORIGIN,
-    URL_PASSWORD, URL_PATHNAME, URL_PORT, URL_PROTOCOL, URL_SEARCH, URL_SEARCH_PARAMS,
-    URL_USERNAME,
+    create_url_object, is_special_url_scheme, is_valid_absolute_url, normalize_path,
+    rebuild_url_host, rebuild_url_href, resolve_url, throw_invalid_url, URL_FIELD_COUNT, URL_HASH,
+    URL_HOST, URL_HOSTNAME, URL_HREF, URL_ORIGIN, URL_PASSWORD, URL_PATHNAME, URL_PORT,
+    URL_PROTOCOL, URL_SEARCH, URL_SEARCH_PARAMS, URL_USERNAME,
 };
 use super::search_params::{
     create_url_search_params_object, parse_query_string, URL_SEARCH_PARAMS_OWNER,
@@ -73,13 +73,6 @@ fn should_strip_url_ascii_whitespace(b: u8) -> bool {
     matches!(b, b'\t' | b'\n' | b'\r')
 }
 
-fn is_special_url_scheme(protocol: &str) -> bool {
-    matches!(
-        protocol,
-        "ftp:" | "file:" | "http:" | "https:" | "ws:" | "wss:"
-    )
-}
-
 fn normalize_protocol_value(raw: &str) -> Option<String> {
     let scheme = raw.strip_suffix(':').unwrap_or(raw);
     let mut chars = scheme.chars();
@@ -105,7 +98,7 @@ fn should_percent_encode_path_byte(b: u8) -> bool {
         || b >= 0x7F
         || matches!(
             b,
-            b' ' | b'"' | b'#' | b'<' | b'>' | b'?' | b'`' | b'{' | b'}'
+            b' ' | b'"' | b'#' | b'<' | b'>' | b'?' | b'`' | b'{' | b'}' | b'^'
         )
 }
 
@@ -175,7 +168,7 @@ fn normalize_hostname_value(raw: &str) -> Option<String> {
     super::whatwg_canonicalize_host(raw)
 }
 
-fn percent_encode_path(raw: &str) -> String {
+pub(super) fn percent_encode_path(raw: &str) -> String {
     percent_encode_url_component(raw, should_percent_encode_path_byte)
 }
 
@@ -258,12 +251,9 @@ pub extern "C" fn js_url_get_href(url: *mut ObjectHeader) -> f64 {
     crate::object::js_object_get_field_f64(url, URL_HREF)
 }
 
-/// Issue #650: `url.pathname = value` setter. Per WHATWG, the setter
-/// normalizes a leading `/` for hierarchical schemes — but Node's actual
-/// runtime behavior on `u.pathname = "changed"` produces pathname
-/// `"/changed"` ONLY when the URL has an authority component, leaving
-/// opaque (non-hierarchical) URLs alone. We follow Node: prepend `/`
-/// when the URL has a non-empty `host`.
+/// Issue #650: `url.pathname = value` setter. Re-runs the parser's path states,
+/// so the value is folded, rooted and normalized as in construction (#12864).
+/// An opaque URL has no segment list, so the assignment is ignored.
 #[no_mangle]
 pub extern "C" fn js_url_set_pathname(url: *mut ObjectHeader, value: f64) {
     if url.is_null() {
@@ -272,12 +262,29 @@ pub extern "C" fn js_url_set_pathname(url: *mut ObjectHeader, value: f64) {
     let raw = coerce_url_setter_value(value);
     unsafe {
         let host = get_string_content(crate::object::js_object_get_field_f64(url, URL_HOST));
-        let normalized = if !host.is_empty() && !raw.starts_with('/') {
+        let protocol =
+            get_string_content(crate::object::js_object_get_field_f64(url, URL_PROTOCOL));
+        let current = get_string_content(crate::object::js_object_get_field_f64(url, URL_PATHNAME));
+        if host.is_empty() && protocol != "file:" && !current.starts_with('/') {
+            return;
+        }
+        let hierarchical = !host.is_empty() || protocol == "file:";
+        let raw = if is_special_url_scheme(&protocol) {
+            raw.replace('\\', "/")
+        } else {
+            raw
+        };
+        let normalized = if hierarchical && !raw.starts_with('/') {
             format!("/{}", raw)
         } else {
             raw
         };
         let encoded = percent_encode_path(&normalized);
+        let encoded = if hierarchical {
+            normalize_path(&encoded, protocol == "file:")
+        } else {
+            encoded
+        };
         js_object_set_field_f64(url, URL_PATHNAME, create_string_f64(&encoded));
         rebuild_url_href(url);
     }

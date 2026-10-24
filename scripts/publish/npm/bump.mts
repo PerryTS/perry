@@ -38,15 +38,6 @@ export function readCargoVersion(cwd: string = rootPath): string | undefined {
   return undefined
 }
 
-/** Read the `**Current Version:**` line from CLAUDE.md. */
-export function readClaudeVersion(cwd: string = rootPath): string | undefined {
-  const claude = path.join(cwd, 'CLAUDE.md')
-  if (!existsSync(claude)) return undefined
-  const text = readFileSync(claude, 'utf8')
-  const m = text.match(/\*\*Current Version:\*\*\s*(\S+)/)
-  return m ? m[1] : undefined
-}
-
 /** True when at least one `changelog.d/<number>-*.md` fragment exists. */
 export function hasChangelogFragments(cwd: string = rootPath): boolean {
   const dir = path.join(cwd, CHANGELOG_D)
@@ -86,12 +77,6 @@ export async function checkVersionGate(cwd: string = rootPath): Promise<VersionG
   if (!version) {
     reasons.push('could not parse [workspace.package].version from Cargo.toml')
     return { version: '', ok: false, reasons }
-  }
-  const claude = readClaudeVersion(cwd)
-  if (claude !== version) {
-    reasons.push(
-      `Cargo.toml says ${version} but CLAUDE.md's Current Version line says ${claude ?? '(missing)'} — fix the drift before releasing.`,
-    )
   }
   try {
     if (await tagExists(version, cwd)) {

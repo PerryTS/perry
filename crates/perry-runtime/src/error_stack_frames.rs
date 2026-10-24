@@ -47,7 +47,6 @@
 //! shape the stack-parsing libraries in real bundles expect.
 
 use super::*;
-use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::OnceLock;
 
@@ -710,7 +709,7 @@ struct CodeSymbolIndex {
     /// registrations are intentionally absent from this index.
     source_len: usize,
     /// `(function start address, display name)`, sorted by address.
-    entries: Vec<(usize, Arc<[u8]>)>,
+    entries: Vec<(usize, &'static [u8])>,
 }
 
 fn index_slot() -> &'static Mutex<Option<CodeSymbolIndex>> {
@@ -737,7 +736,7 @@ fn index_slot() -> &'static Mutex<Option<CodeSymbolIndex>> {
 /// `ip` inside one resolves to the previous mapped function"). Closing it
 /// needs per-function extents, which this registry and Mach-O do not expose;
 /// on ELF the `.eh_frame_hdr` FDE that covers `ip` supplies them.
-fn symbol_for_ip(index: &CodeSymbolIndex, ip: usize) -> Option<(usize, &Arc<[u8]>)> {
+fn symbol_for_ip(index: &CodeSymbolIndex, ip: usize) -> Option<(usize, &'static [u8])> {
     let at = index.entries.partition_point(|(addr, _)| *addr <= ip);
     let at = at.checked_sub(1)?;
     let (start, name) = &index.entries[at];
@@ -755,10 +754,10 @@ fn symbol_for_ip(index: &CodeSymbolIndex, ip: usize) -> Option<(usize, &Arc<[u8]
             return None;
         }
     }
-    Some((*start, name))
+    Some((*start, *name))
 }
 
-fn name_for_ip(index: &CodeSymbolIndex, ip: usize) -> Option<&Arc<[u8]>> {
+fn name_for_ip(index: &CodeSymbolIndex, ip: usize) -> Option<&'static [u8]> {
     symbol_for_ip(index, ip).map(|(_, name)| name)
 }
 
@@ -1055,8 +1054,8 @@ mod tests {
         let index = CodeSymbolIndex {
             source_len: 2,
             entries: vec![
-                (0x1000, Arc::from(&b"first"[..])),
-                (0x2000, Arc::from(&b"second"[..])),
+                (0x1000, &b"first"[..]),
+                (0x2000, &b"second"[..]),
             ],
         };
         assert_eq!(

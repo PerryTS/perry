@@ -133,7 +133,7 @@ impl<'a> Gen<'a> {
             .flat_map(|i| i.specifiers.iter().map(spec_local))
             .collect();
         for l in locals {
-            if let Some(&n) = self.mods[mi as usize].imports.get(&l) {
+            if let Some(n) = self.import_value(mi, &l) {
                 self.m.edge(n, out);
             }
         }

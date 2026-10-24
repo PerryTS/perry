@@ -79,6 +79,15 @@ impl Model {
                 self.edge(all, dst);
             }
         }
+        // A marker (decision 13, DECISIONS 44) is use tracking, not a value:
+        // the values it stands for sit beside it (DECISIONS 74, 76) or
+        // arrive with ⊤, and a load from them reads what the parameter
+        // holds. A load from the marker reads its fields only, the reach
+        // markers of what the argument reaches (`field`): no builtin
+        // member, no prototype chain (DECISIONS 111).
+        if self.is_marker(t) {
+            return;
+        }
         self.with_b(|m| builtins::tok_load(m, t, key, dst));
         // Element reads of array-likes stop at their own elements: their
         // builtin prototype members are approximated by `tok_load`.

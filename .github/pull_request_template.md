@@ -2,9 +2,7 @@
 Thanks for contributing to Perry! A few things to know before you submit:
 
 1. Please do NOT bump `[workspace.package] version` in Cargo.toml.
-2. Please do NOT edit the "**Current Version:**" line or add a "Recent
-   Changes" entry in CLAUDE.md.
-3. Please do NOT edit CHANGELOG.md.
+2. Please do NOT edit CHANGELOG.md.
 
 The maintainer folds all of that metadata in at merge time — Perry
 releases frequently, and version bumps conflict if they live on the
@@ -44,6 +42,6 @@ How did you verify this works? A paste of the commands you ran is perfect.
 
 ## Checklist
 
-- [ ] I have NOT bumped the workspace version or edited CLAUDE.md / CHANGELOG.md (maintainer handles these at merge)
+- [ ] I have NOT bumped the workspace version or edited CHANGELOG.md (maintainer handles these at merge)
 - [ ] My commits follow the loose `feat:` / `fix:` / `docs:` / `chore:` prefix convention used in the log
 - [ ] I've read [CONTRIBUTING.md](../CONTRIBUTING.md) and agree to the [Code of Conduct](../CODE_OF_CONDUCT.md)

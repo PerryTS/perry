@@ -4,6 +4,24 @@ use super::*;
 
 use super::search_params::{create_url_search_params_object, parse_query_string};
 
+/// WHATWG "special scheme": has a host, and its parser treats `\` as a path
+/// separator (`foo:`, `mailto:`, `data:` paths keep it).
+pub(crate) fn is_special_url_scheme(protocol: &str) -> bool {
+    is_special_scheme_name(protocol.strip_suffix(':').unwrap_or(protocol))
+}
+
+fn is_special_scheme_name(scheme: &str) -> bool {
+    ["ftp", "file", "http", "https", "ws", "wss"]
+        .iter()
+        .any(|name| scheme.eq_ignore_ascii_case(name))
+}
+
+fn special_scheme_prefix(input: &str) -> bool {
+    input
+        .find(':')
+        .is_some_and(|colon| is_special_scheme_name(&input[..colon]))
+}
+
 /// Simple URL parser
 /// Returns (protocol, host, hostname, port, pathname, search, hash)
 pub(crate) fn parse_url(url_str: &str) -> (String, String, String, String, String, String, String) {
@@ -35,6 +53,17 @@ pub(crate) fn parse_url(url_str: &str) -> (String, String, String, String, Strin
         remaining = &remaining[..query_idx];
     }
 
+    // A special scheme's `\` is a separator, including where the authority
+    // marker sits. Query and fragment keep theirs (their encode sets don't
+    // encode it) and were split off above, so the fold happens here.
+    let folded;
+    let mut remaining = if special_scheme_prefix(remaining) && remaining.contains('\\') {
+        folded = remaining.replace('\\', "/");
+        folded.as_str()
+    } else {
+        remaining
+    };
+
     // Track whether the `file:` URL carried a `//` authority marker so the
     // file branch below can split out a UNC-style host (`file://host/path`)
     // from a hostless path (`file:///path`, `file:/path`). #2975
@@ -56,9 +85,8 @@ pub(crate) fn parse_url(url_str: &str) -> (String, String, String, String, Strin
             remaining = remaining.strip_prefix("//").unwrap_or(remaining);
         }
     } else if let Some(colon_idx) = remaining.find(':') {
-        // Non-special opaque scheme: `mailto:`, `data:`, `urn:`, etc. The
-        // characters before the colon must look like a scheme. The whole
-        // remainder is the opaque pathname; host/hostname/port stay empty.
+        // A special scheme is always hierarchical (the `//` is optional), so
+        // only the other schemes are opaque.
         let scheme = &remaining[..colon_idx];
         let scheme_ok = !scheme.is_empty()
             && scheme
@@ -70,17 +98,28 @@ pub(crate) fn parse_url(url_str: &str) -> (String, String, String, String, Strin
                 .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.');
         if scheme_ok {
             protocol = format!("{}:", scheme.to_ascii_lowercase());
-            pathname = remaining[colon_idx + 1..].to_string();
-            return (
-                protocol,
-                String::new(),
-                String::new(),
-                String::new(),
-                pathname,
-                search,
-                hash,
-            );
+            if is_special_url_scheme(&protocol) {
+                remaining = &remaining[colon_idx + 1..];
+            } else {
+                pathname = remaining[colon_idx + 1..].to_string();
+                return (
+                    protocol,
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    pathname,
+                    search,
+                    hash,
+                );
+            }
         }
+    }
+
+    let special = is_special_url_scheme(&protocol);
+    if special && protocol != "file:" {
+        // A special scheme skips the whole separator run. `file:` keeps its
+        // extra separators as path (`file:////x` is the path `//x`).
+        remaining = remaining.trim_start_matches('/');
     }
 
     // For file: URLs, the rest is the pathname — unless an authority was
@@ -188,7 +227,81 @@ pub(crate) fn parse_url(url_str: &str) -> (String, String, String, String, Strin
         }
     }
 
+    let pathname = normalize_path(&pathname, protocol == "file:");
+
     (protocol, host, hostname, port, pathname, search, hash)
+}
+
+/// Apply the WHATWG path state to a hierarchical path: the `file:` drive-letter
+/// canonicalization, then dot-segment removal.
+pub(crate) fn normalize_path(path: &str, file_scheme: bool) -> String {
+    let drive = if file_scheme {
+        normalize_file_drive_letter(path)
+    } else {
+        None
+    };
+    let path = drive.as_deref().unwrap_or(path);
+    // No `.` and no `%` means no dot segment: `%2e` has no literal dot.
+    if !path.starts_with('/') || !path.contains(['.', '%']) {
+        return path.to_string();
+    }
+
+    let parts: Vec<&str> = path[1..].split('/').collect();
+    let final_index = parts.len() - 1;
+    let mut segments: Vec<&str> = Vec::with_capacity(parts.len());
+    for (index, part) in parts.iter().enumerate() {
+        let is_final = index == final_index;
+        if is_double_dot_segment(part) {
+            let keeps_drive = file_scheme
+                && segments.len() == 1
+                && is_normalized_windows_drive_letter(segments[0]);
+            if !keeps_drive {
+                segments.pop();
+            }
+            // A trailing dot segment leaves an empty segment behind: `/a/..`
+            // is `/` while `/a/b/..` is `/a/`.
+            if is_final {
+                segments.push("");
+            }
+        } else if is_single_dot_segment(part) {
+            if is_final {
+                segments.push("");
+            }
+        } else {
+            segments.push(part);
+        }
+    }
+    format!("/{}", segments.join("/"))
+}
+
+fn normalize_file_drive_letter(path: &str) -> Option<String> {
+    let rest = path.strip_prefix('/')?;
+    let (first, tail) = match rest.find('/') {
+        Some(index) => (&rest[..index], &rest[index..]),
+        None => (rest, ""),
+    };
+    let bytes = first.as_bytes();
+    if bytes.len() == 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b'|' {
+        Some(format!("/{}:{}", &first[..1], tail))
+    } else {
+        None
+    }
+}
+
+fn is_single_dot_segment(segment: &str) -> bool {
+    segment == "." || segment.eq_ignore_ascii_case("%2e")
+}
+
+fn is_double_dot_segment(segment: &str) -> bool {
+    segment == ".."
+        || segment.eq_ignore_ascii_case(".%2e")
+        || segment.eq_ignore_ascii_case("%2e.")
+        || segment.eq_ignore_ascii_case("%2e%2e")
+}
+
+fn is_normalized_windows_drive_letter(segment: &str) -> bool {
+    let bytes = segment.as_bytes();
+    bytes.len() == 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
 }
 
 /// Resolve a relative URL against a base URL
@@ -316,7 +429,7 @@ pub(crate) fn encode_non_ascii(s: &str) -> String {
 /// Create a URL object from a string
 pub(crate) fn create_url_object(url_string: &str) -> *mut ObjectHeader {
     let (protocol, mut host, mut hostname, port, pathname, search, hash) = parse_url(url_string);
-    let pathname = encode_non_ascii(&pathname);
+    let pathname = super::url_class::percent_encode_path(&pathname);
     let search = encode_non_ascii(&search);
     let hash = encode_non_ascii(&hash);
 
@@ -360,11 +473,9 @@ pub(crate) fn create_url_object(url_string: &str) -> *mut ObjectHeader {
     // IPv4-shorthand hosts also canonicalize to dotted-quad. We reuse the
     // `url`-crate-backed `whatwg_canonicalize_host` (reparses `http://<host>/`),
     // which is the same path the hostname setter uses. Only special hierarchical
-    // schemes get host canonicalization; opaque schemes have no host.
-    let is_special = matches!(
-        protocol.as_str(),
-        "http:" | "https:" | "ws:" | "wss:" | "ftp:"
-    );
+    // schemes get host canonicalization; opaque schemes have no host, and
+    // `file:` is one of them for this purpose too (`file://SERVER/x` → `server`).
+    let is_special = is_special_url_scheme(&protocol);
     if is_special && !hostname.is_empty() {
         if let Some(canon) = super::whatwg_canonicalize_host(&hostname) {
             hostname = canon.clone();
@@ -601,25 +712,41 @@ pub(crate) fn is_valid_absolute_url(s: &str) -> bool {
     if scheme_end >= s.len() || s.as_bytes()[scheme_end] != b':' {
         return false;
     }
-    // For hierarchical schemes (http, https, ws, wss, ftp, file) WHATWG
-    // requires `//` before the authority. For others (mailto:, data:, etc.)
-    // Node accepts anything non-empty after `:`. Match that for ergonomics.
     let after_scheme = &s[scheme_end + 1..];
     let scheme = &s[..scheme_end];
-    let needs_authority = matches!(scheme, "http" | "https" | "ws" | "wss" | "ftp" | "file");
-    if needs_authority {
-        if !after_scheme.starts_with("//") {
+    if is_special_scheme_name(scheme) {
+        let folded;
+        let after_scheme = if after_scheme.contains('\\') {
+            folded = after_scheme.replace('\\', "/");
+            folded.as_str()
+        } else {
+            after_scheme
+        };
+        // The `//` is optional for a special scheme, and `file:` also allows a
+        // hostless path.
+        if scheme == "file" {
+            if let Some(authority) = after_scheme.strip_prefix("//") {
+                let authority = authority.split(['/', '?', '#']).next().unwrap_or_default();
+                if !is_valid_url_authority(scheme, authority) {
+                    return false;
+                }
+            }
+        } else {
+            let rest = after_scheme.trim_start_matches('/');
+            let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+            if !is_valid_url_authority(scheme, authority) {
+                return false;
+            }
+        }
+    } else if let Some(authority) = after_scheme.strip_prefix("//") {
+        // `\` is a forbidden host code point, so `foo://a\b` is not a URL.
+        let authority = authority.split(['/', '?', '#']).next().unwrap_or_default();
+        let host = authority
+            .rsplit_once('@')
+            .map_or(authority, |(_, host)| host);
+        if host.contains('\\') {
             return false;
         }
-        let authority = after_scheme[2..]
-            .split(['/', '?', '#'])
-            .next()
-            .unwrap_or_default();
-        if !is_valid_url_authority(scheme, authority) {
-            return false;
-        }
-    } else if after_scheme.is_empty() {
-        return false;
     }
     true
 }
@@ -646,7 +773,10 @@ pub(super) fn normalize_file_drive_authority(input: &str) -> String {
         .unwrap_or(authority_and_path.len());
     let authority = &authority_and_path[..drive_end];
     let drive_bytes = authority.as_bytes();
-    if drive_bytes.len() != 2 || !drive_bytes[0].is_ascii_alphabetic() || drive_bytes[1] != b':' {
+    if drive_bytes.len() != 2
+        || !drive_bytes[0].is_ascii_alphabetic()
+        || !matches!(drive_bytes[1], b':' | b'|')
+    {
         return input.to_string();
     }
 

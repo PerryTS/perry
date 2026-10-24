@@ -45,6 +45,14 @@ fn facts_of(g: &Gen, n: u32) -> BindingFacts {
             out.other = true;
             continue;
         }
+        // A marker beside its values (a closed function's described
+        // parameter, what it reaches, an argument marker of only such
+        // markers; DECISIONS 74, 75) stands for no value of its own: the
+        // callers' values are the contract's, beside it in this node. It
+        // adds no class and is not `other` (DECISIONS 76).
+        if m.beside_values(t) {
+            continue;
+        }
         match &m.toks[t as usize] {
             TokKind::Obj(tm, _) => match m.tmpls[*tm as usize].kind {
                 TmplKind::Class { class_id, .. } => out.class_ids.push(class_id),

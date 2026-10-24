@@ -56,6 +56,7 @@
       "perry-codegen-swiftui",
       "perry-codegen-wasm",
       "perry-codegen-wear-tiles",
+      "perry-component-io",
       "perry-container-compose",
       "perry-diagnostics",
       "perry-dispatch",
@@ -181,6 +182,10 @@
       "decision": "review"
     },
     "perry-component-host": {
+      "category": "runtime-core",
+      "decision": "keep"
+    },
+    "perry-component-io": {
       "category": "runtime-core",
       "decision": "keep"
     },

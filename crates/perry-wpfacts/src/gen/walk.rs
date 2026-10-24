@@ -61,6 +61,7 @@ impl<'a> Gen<'a> {
             }
             for s in self.init_of(mi as usize) {
                 self.stmt(&fx, s);
+                self.name_enum_object(mi, s);
             }
             for f in self.functions_of(mi as usize) {
                 if self.m.aborted {
@@ -469,6 +470,39 @@ impl<'a> Gen<'a> {
         let prev = std::mem::replace(&mut self.m.cur_fn, fx.f);
         self.stmt_inner(fx, s);
         self.m.cur_fn = prev;
+    }
+
+    /// Per unit: a module-scope TS enum's object (`let E = { … }`, the
+    /// lowering of `enum E`) is named `<module>:enum E`, the same in every
+    /// unit (a site number is not), so another unit can name its contract
+    /// (§18.2). An enum name is one module-scope binding.
+    fn name_enum_object(&mut self, mi: u32, s: &Stmt) {
+        let Stmt::Let {
+            name,
+            init: Some(e),
+            ..
+        } = s
+        else {
+            return;
+        };
+        if self.view.is_none()
+            || !self.modules[mi as usize]
+                .1
+                .enums
+                .iter()
+                .any(|x| &x.name == name)
+        {
+            return;
+        }
+        let Some(&(tm, _)) = self.lit_births.get(&(e as *const perry_hir::Expr as usize)) else {
+            return;
+        };
+        let display = format!("{}:enum {name}", self.mods[mi as usize].path_short());
+        let t = &mut self.m.tmpls[tm as usize];
+        if let TmplKind::Lit { enum_image, .. } = &mut t.kind {
+            *enum_image = true;
+            t.display = display;
+        }
     }
 
     fn stmt_inner(&mut self, fx: &Fx, s: &Stmt) {

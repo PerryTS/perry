@@ -630,31 +630,60 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
         } else {
             "Unsupported key usage for KMAC256 key"
         };
+        let default_length = if key_algo == KeyAlgo::Kmac128 {
+            128
+        } else {
+            256
+        };
+        // Normalize the supplied scalar before usage validation. The optional
+        // numeric-field helper drops invalid negatives and string numerals as
+        // missing; KmacKeyGenParams must distinguish them from an omitted field.
+        let scope = perry_runtime::gc::RuntimeHandleScope::new();
+        let algorithm = scope.root_nanbox_f64(algo_bits);
+        let key_usages = scope.root_nanbox_f64(usages_bits);
+        let bit_len = if algo_is_string {
+            default_length
+        } else {
+            let length_name = perry_runtime::js_string_from_bytes(b"length".as_ptr(), 6);
+            let object = strip_ptr(algorithm.get_nanbox_f64().to_bits())
+                as *const perry_runtime::ObjectHeader;
+            let length = perry_runtime::js_object_get_field_by_name(object, length_name);
+            if length.is_undefined() {
+                default_length
+            } else {
+                let numeric =
+                    perry_runtime::builtins::js_number_coerce(f64::from_bits(length.bits()))
+                        .trunc();
+                if !numeric.is_finite() || numeric < 0.0 || numeric > u32::MAX as f64 {
+                    let message = b"Failed to normalize algorithm: length in passed algorithm is outside the expected range of 0 to 4294967295.";
+                    let message =
+                        perry_runtime::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+                    let error = perry_runtime::error::js_typeerror_new(message);
+                    return perry_runtime::js_promise_rejected(f64::from_bits(
+                        JSValue::pointer(error as *const u8).bits(),
+                    ));
+                }
+                numeric as u32
+            }
+        };
         let usages = match validate_key_usages(
             key_algo,
             KeyKind::Secret,
-            usages_bits.to_bits(),
-            false,
+            key_usages.get_nanbox_f64().to_bits(),
+            true,
             "Usages cannot be empty when creating a key.",
             bad_message,
         ) {
             Ok(u) => u,
             Err((name, message)) => return reject_with_dom_exception(name, message),
         };
-        let default_length = if key_algo == KeyAlgo::Kmac128 {
-            128
-        } else {
-            256
-        };
-        let bit_len = if string_from_jsvalue(algo_bits.to_bits()).is_some() {
-            default_length
-        } else {
-            object_field_number(algo_bits.to_bits(), b"length").unwrap_or(default_length)
-        };
-        if bit_len == 0 {
+        if bit_len < 32 || bit_len % 8 != 0 {
+            return reject_with_dom_exception("NotSupportedError", "Invalid key length");
+        }
+        if usages == 0 {
             return reject_with_dom_exception(
-                "OperationError",
-                "KmacKeyGenParams.length cannot be 0",
+                "SyntaxError",
+                "Usages cannot be empty when creating a key.",
             );
         }
         let mut key_bytes = vec![0u8; bit_len.div_ceil(8) as usize];

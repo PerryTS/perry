@@ -194,14 +194,14 @@ perry/
 │   ├── perry-ui-ios/       # iOS UIKit UI
 │   └── perry-ext-*/        # Selectively linked native bindings
 ├── docs/                   # This documentation (mdBook)
-├── CLAUDE.md               # Detailed implementation notes
+├── AGENTS.md               # Agent and contributor traps
 └── CHANGELOG.md            # Version history
 ```
 
 ## Next Steps
 
 - [Architecture](architecture.md) — Crate map and pipeline overview
-- See `CLAUDE.md` for detailed implementation notes and pitfalls
+- See `AGENTS.md` for implementation pitfalls
 
 ## Development debug information
 

@@ -455,7 +455,16 @@ impl Flat<'_> {
 /// A function literal whose body may run as statements of the module scope.
 fn inline_literal(e: &Expr) -> bool {
     matches!(e, Expr::Closure { params, body, is_async: false, is_generator: false, captures_this: false, captures_new_target: false, is_arrow, .. }
-        if runs_inline(params, body, !is_arrow))
+        if runs_inline(params, body, !is_arrow) && !obj_literal_iife(params))
+}
+
+/// The lowering of an object literal in source order (`((__perry_obj_iife)
+/// => { …; return __perry_obj_iife })({})`): an expression, whose defines
+/// are the literal's birth (`Gen::call_expr`), not a body that runs once.
+/// Flat, its parts would be module-scope items of their own, the literal
+/// born empty in one unit and its keys stored by others (design §18.9).
+pub(crate) fn obj_literal_iife(params: &[perry_hir::Param]) -> bool {
+    params.len() == 1 && params[0].name == "__perry_obj_iife"
 }
 
 /// A body that can run as statements of the module scope: no `return` but
@@ -551,42 +560,60 @@ pub(crate) fn closed_bindings(module: &Module) -> FxHashMap<String, u32> {
         checks: u32,
     }
     let mut uses: FxHashMap<(bool, u32), Use> = FxHashMap::default();
+    // Per class name: the expressions naming it, and the `new`s of it.
+    let mut class_uses: FxHashMap<String, (u32, u32)> = FxHashMap::default();
     let mut with = false;
     {
+        let mut named = |e: &Expr| {
+            let mut r = Refs::default();
+            class_name_refs(e, &mut r);
+            if let Expr::ClassRef(n) = e {
+                r.names.push(n.clone());
+            }
+            for n in r.names.into_iter().chain(r.join_names) {
+                class_uses.entry(n).or_default().0 += 1;
+            }
+            if let Expr::New { class_name, .. } = e {
+                class_uses.entry(class_name.clone()).or_default().1 += 1;
+            }
+        };
         let key = |e: &Expr| match e {
             Expr::LocalGet(id) => Some((false, *id)),
             Expr::FuncRef(id) => Some((true, *id)),
             _ => None,
         };
-        let f = &mut |e: &Expr| match e {
-            Expr::Call { callee, args, .. } => {
-                if let Some(id) = perry_hir::tdz_check::checked_binding(e) {
-                    uses.entry((false, id)).or_default().checks += 1;
-                }
-                if let Some(k) = key(callee) {
-                    uses.entry(k).or_default().calls += 1;
-                    for a in args.iter().filter_map(key) {
-                        uses.entry(a).or_default().args_of.push(k);
+        let f = &mut |e: &Expr| {
+            named(e);
+            match e {
+                Expr::Call { callee, args, .. } => {
+                    if let Some(id) = perry_hir::tdz_check::checked_binding(e) {
+                        uses.entry((false, id)).or_default().checks += 1;
+                    }
+                    if let Some(k) = key(callee) {
+                        uses.entry(k).or_default().calls += 1;
+                        for a in args.iter().filter_map(key) {
+                            uses.entry(a).or_default().args_of.push(k);
+                        }
                     }
                 }
+                Expr::LocalGet(id) => uses.entry((false, *id)).or_default().refs += 1,
+                Expr::FuncRef(id) => uses.entry((true, *id)).or_default().refs += 1,
+                Expr::LocalSet(id, _)
+                | Expr::Update { id, .. }
+                | Expr::ScopedTemp { id, .. }
+                | Expr::ArrayPush { array_id: id, .. }
+                | Expr::ArrayPushSpread { array_id: id, .. }
+                | Expr::ArrayUnshift { array_id: id, .. }
+                | Expr::ArraySplice { array_id: id, .. }
+                | Expr::ArrayCopyWithin { array_id: id, .. }
+                | Expr::ArrayPop(id)
+                | Expr::ArrayShift(id)
+                | Expr::SetAdd { set_id: id, .. } => {
+                    uses.entry((false, *id)).or_default().written = true
+                }
+                Expr::WithGet { .. } | Expr::WithSet { .. } => with = true,
+                _ => {}
             }
-            Expr::LocalGet(id) => uses.entry((false, *id)).or_default().refs += 1,
-            Expr::FuncRef(id) => uses.entry((true, *id)).or_default().refs += 1,
-            Expr::LocalSet(id, _)
-            | Expr::Update { id, .. }
-            | Expr::ScopedTemp { id, .. }
-            | Expr::ArrayPush { array_id: id, .. }
-            | Expr::ArrayPushSpread { array_id: id, .. }
-            | Expr::ArrayUnshift { array_id: id, .. }
-            | Expr::ArraySplice { array_id: id, .. }
-            | Expr::ArrayCopyWithin { array_id: id, .. }
-            | Expr::ArrayPop(id)
-            | Expr::ArrayShift(id)
-            | Expr::SetAdd { set_id: id, .. } => {
-                uses.entry((false, *id)).or_default().written = true
-            }
-            Expr::WithGet { .. } | Expr::WithSet { .. } => with = true,
-            _ => {}
         };
         for func in &module.functions {
             for_each_function_expr(func, f);
@@ -601,9 +628,8 @@ pub(crate) fn closed_bindings(module: &Module) -> FxHashMap<String, u32> {
         }
         perry_hir::tdz_check::for_each_stmts_expr(&module.init, f);
     }
-    let out: FxHashMap<String, u32> = FxHashMap::default();
     if with {
-        return out;
+        return FxHashMap::default();
     }
     let mut names: FxHashMap<&str, u32> = FxHashMap::default();
     // Per local: its module-scope `let`s besides the function literal one;
@@ -724,7 +750,44 @@ pub(crate) fn closed_bindings(module: &Module) -> FxHashMap<String, u32> {
             cand.remove(&k);
         }
     }
-    cand.into_values().collect()
+    let mut out: FxHashMap<String, u32> = cand.into_values().collect();
+    // Closed classes (design §18.13): a class with a constructor, no export
+    // of the module, whose name no other module-scope binding has, with no
+    // static member, which no class extends, and whose every naming
+    // expression is a direct `new` of it (no value use: a spread `new` takes
+    // the class as a value). Every construction is a `new` in the module or
+    // through the `constructor` of an instance, both modeled where they
+    // run: its constructor's parameters hold what the constructing units
+    // pass (`units::ClassContract::closed`), keyed by the class name with
+    // the constructor's HIR id.
+    for c in &module.classes {
+        let Some(ctor) = &c.constructor else {
+            continue;
+        };
+        if c.is_literal_shape()
+            || names.get(c.name.as_str()) != Some(&1)
+            || exported(&c.name)
+            || !c.aliases.is_empty()
+            || !c.static_fields.is_empty()
+            || !c.static_methods.is_empty()
+            || !c.static_accessor_names.is_empty()
+            || ctor.params.iter().any(|p| p.is_rest)
+            || module
+                .classes
+                .iter()
+                .any(|d| d.extends_name.as_deref() == Some(c.name.as_str()))
+            || out.contains_key(&c.name)
+        {
+            continue;
+        }
+        if class_uses
+            .get(&c.name)
+            .is_some_and(|&(refs, news)| refs == news)
+        {
+            out.insert(c.name.clone(), ctor.id);
+        }
+    }
+    out
 }
 
 /// The declaration units of `module`, in dependency order (a unit before
@@ -1022,6 +1085,11 @@ pub(crate) fn views(path: &str, module: &Module) -> Vec<(UnitView, Vec<usize>)> 
                     } => Some((name.as_str(), *func_id)),
                     _ => None,
                 },
+                // A closed class: by its constructor (design §18.13).
+                Item::Class(k) => {
+                    let c = &module.classes[k];
+                    c.constructor.as_ref().map(|f| (c.name.as_str(), f.id))
+                }
                 _ => None,
             };
             if let Some((nm, id)) = own.filter(|(nm, id)| closed.get(*nm) == Some(id)) {

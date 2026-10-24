@@ -186,10 +186,6 @@ jobs:
             # Same STOP conditions the /release skill enforces, checked here
             # so a bad dispatch fails in seconds instead of after 40 min of
             # builds.
-            if ! grep -qF "**Current Version:** $VERSION" CLAUDE.md; then
-              echo "::error::Cargo.toml says $VERSION but CLAUDE.md's Current Version line disagrees — fix the drift before releasing."
-              exit 1
-            fi
             if gh api "repos/$REPO/git/ref/tags/$TAG" --silent 2>/dev/null; then
               echo "::error::tag $TAG already exists — the version in Cargo.toml was already released. Land a version bump or use existing_tag to re-publish."
               exit 1

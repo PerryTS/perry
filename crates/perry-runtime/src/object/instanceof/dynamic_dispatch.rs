@@ -186,6 +186,34 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
             f64::from_bits(TAG_FALSE)
         };
     }
+    // Asymmetric KeyObjects use marked heap strings, not ObjectHeader values.
+    // Recognize only this native constructor before ordinary primitive checks;
+    // user-defined @@hasInstance above still has first refusal.
+    if matches!(rhs.kind, RhsKind::Native) {
+        if let Some((module, method)) = unsafe { bound_native_callable_module_and_method(type_ref) }
+        {
+            if module == "crypto" && method == "KeyObject" {
+                let lhs = crate::JSValue::from_bits(value.to_bits());
+                let matched = if lhs.is_string() {
+                    // is_string admits only heap STRING_TAG, never inline text.
+                    // The existing registry owns this brand; do not dereference
+                    // a string as a BufferHeader or relax object_ref_addr.
+                    let addr = (value.to_bits() & crate::value::POINTER_MASK) as usize;
+                    crate::buffer::asymmetric_key_meta(addr).is_some()
+                } else {
+                    let addr = value_addr(value);
+                    addr != 0
+                        && (crate::buffer::is_secret_key(addr)
+                            || crate::buffer::asymmetric_key_meta(addr).is_some())
+                };
+                return f64::from_bits(if matched {
+                    crate::value::TAG_TRUE
+                } else {
+                    TAG_FALSE
+                });
+            }
+        }
+    }
     // Hooks precede OrdinaryHasInstance. A class must still consult its
     // lifted/static hooks before using this primitive fact.
     let primitive = instanceof_lhs_is_primitive(value);
@@ -551,17 +579,6 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
             && crate::builtins::is_console_instance_value(value)
         {
             return f64::from_bits(crate::value::TAG_TRUE);
-        }
-        if module == "crypto" && method == "KeyObject" {
-            let addr = value_addr(value);
-            return if addr != 0
-                && (crate::buffer::is_secret_key(addr)
-                    || crate::buffer::asymmetric_key_meta(addr).is_some())
-            {
-                f64::from_bits(crate::value::TAG_TRUE)
-            } else {
-                f64::from_bits(TAG_FALSE)
-            };
         }
         // #11919 P0: a native-payload family answers by its class id.
         if let Some(class_id) = crate::native_payload::export_class_id(&module, &method) {

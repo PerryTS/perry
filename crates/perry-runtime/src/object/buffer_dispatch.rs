@@ -865,7 +865,7 @@ pub unsafe fn dispatch_buffer_method(
                 return secret_key_jwk_object(buf_ptr);
             }
             crate::buffer::bytes::copy_value(
-                crate::buffer::bytes::Brand::Uint8Array,
+                crate::buffer::bytes::Brand::Buffer,
                 crate::value::js_nanbox_pointer(addr as i64),
             )
             .expect("live key bytes")

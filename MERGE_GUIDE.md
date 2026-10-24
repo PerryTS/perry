@@ -121,11 +121,10 @@ Linux addresses — use `is_above_handle_band` / `HANDLE_BAND_MAX`, never a bare
 `>= 0x10000`.
 
 **Version metadata.** External contributors must not touch
-`[workspace.package] version` in `Cargo.toml` or `**Current Version:**` in
-`CLAUDE.md`. Check and strip:
+`[workspace.package] version` in `Cargo.toml`. Check and strip:
 
 ```bash
-git diff origin/main train<N> -- Cargo.toml CLAUDE.md | grep -cE '^\+.*(^version|Current Version)'   # want 0
+git diff origin/main train<N> -- Cargo.toml | grep -cE '^\+version'   # want 0
 ```
 
 **Changelog.** Every PR needs `changelog.d/<PR>-<slug>.md`. Never append to

@@ -19,6 +19,11 @@ fn address(port: u16) -> network::IpSocketAddress {
 }
 
 impl Guest for Probe {
+    fn wait(milliseconds: u32) {
+        wasi::clocks::monotonic_clock::subscribe_duration(u64::from(milliseconds) * 1_000_000)
+            .block();
+    }
+
     fn connect(port: u16, payload: String) -> Result<String, String> {
         let network = instance_network::instance_network();
         let socket =

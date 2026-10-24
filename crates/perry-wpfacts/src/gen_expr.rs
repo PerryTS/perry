@@ -261,7 +261,11 @@ impl<'a> Gen<'a> {
             crate::gen::push_unique(&mut atoms, a);
         }
         self.m.tmpls.push(Template {
-            kind: TmplKind::Lit { module: mi, site },
+            kind: TmplKind::Lit {
+                module: mi,
+                site,
+                enum_image: false,
+            },
             display: format!("{}:{{lit#{site}}}", self.mods[mi as usize].path_short()),
             birth_keys: atoms.clone(),
             definite: atoms,
@@ -604,7 +608,10 @@ impl<'a> Gen<'a> {
                 property,
                 byte_offset,
             } => {
-                let o = self.expr(fx, object);
+                let o = match self.ns_member(mi, object, property, false) {
+                    Some(o) => o,
+                    None => self.expr(fx, object),
+                };
                 let a = self.m.atom(property);
                 if *byte_offset != 0 {
                     self.read_sites.push(ReadSite {

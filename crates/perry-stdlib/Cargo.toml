@@ -52,7 +52,7 @@ bundled-events = []
 # module needs no async runtime at all, so `async-runtime` is gone from this
 # gate too. The framework module is in `full`, so those were edges every
 # default build of perry-stdlib carried.
-http-server = ["dep:perry-http-server", "dep:http-body-util", "dep:bytes"]
+http-server = ["dep:perry-http-server", "dep:bytes"]
 
 # Web Fetch compatibility surface. The well-known flip can strip this
 # when the external binding owns the imported surface.
@@ -153,7 +153,6 @@ tls-runtime = [
     "async-bridge",
     "dep:perry-tls-session",
     "dep:rustls",
-    "dep:rustls-native-certs",
     "dep:rustls-pemfile",
     "dep:perry-base64",
     "dep:x509-cert",
@@ -166,7 +165,6 @@ external-tls-server = [
     "async-bridge",
     "dep:perry-tls-session",
     "dep:rustls",
-    "dep:rustls-native-certs",
     "dep:rustls-pemfile",
     "dep:perry-base64",
     "dep:x509-cert",
@@ -200,7 +198,7 @@ database-sqlite = ["dep:rusqlite"]
 # bindings so the well-known flip (#466 Phase 4 step 2) can route them
 # to perry-ext-bcrypt / perry-ext-argon2 without taking the rest of
 # the crypto surface offline.
-crypto = ["perry-uuid/v4", "perry-uuid/v7", "dep:sha2", "dep:openssl-sys", "dep:sha1", "dep:sha3", "dep:shake", "dep:sha3_010", "dep:sha3-utils", "dep:rsa-sha1", "dep:md-5", "dep:perry-hex", "dep:hmac", "dep:aes", "dep:aes_09", "dep:cbc", "dep:ecb", "dep:ctr", "dep:scrypt", "dep:pbkdf2", "dep:perry-base64", "dep:x25519-dalek", "dep:x448", "dep:ed25519-dalek", "dep:ed448-goldilocks", "dep:aes-gcm", "dep:chacha20poly1305", "dep:ghash", "dep:aes-kw", "dep:hkdf", "dep:p256", "dep:p384", "dep:p521", "dep:rsa", "dep:spki", "dep:x509-cert", "dep:ml-kem", "async-bridge", "ids", "bundled-bcrypt", "bundled-argon2", "bundled-ethers"]
+crypto = ["perry-uuid/v4", "perry-uuid/v7", "dep:sha2", "dep:openssl-sys", "dep:sha1", "dep:shake", "dep:sha3_010", "dep:sha3-utils", "dep:rsa-sha1", "dep:md-5", "dep:perry-hex", "dep:hmac", "dep:aes", "dep:aes_09", "dep:cbc", "dep:ecb", "dep:ctr", "dep:scrypt", "dep:pbkdf2", "dep:perry-base64", "dep:x25519-dalek", "dep:x448", "dep:ed25519-dalek", "dep:ed448-goldilocks", "dep:aes-gcm", "dep:chacha20poly1305", "dep:ghash", "dep:aes-kw", "dep:hkdf", "dep:p256", "dep:p384", "dep:p521", "dep:rsa", "dep:x509-cert", "dep:ml-kem", "async-bridge", "ids", "bundled-bcrypt", "bundled-argon2", "bundled-ethers"]
 bundled-bcrypt = ["dep:bcrypt", "async-bridge"]
 bundled-argon2 = ["dep:argon2", "async-bridge"]
 # ethers blockchain utilities — pure Rust, no extra deps. Default-on
@@ -320,7 +318,6 @@ rand_core_06 = { package = "rand_core", version = "0.6", features = ["getrandom"
 
 # HTTP Server
 perry-http-server = { workspace = true, optional = true }
-http-body-util = { workspace = true, optional = true }
 bytes = { workspace = true, optional = true }
 # DashMap is used by the always-on handle registry (`common/handle.rs`),
 # so it must NOT be optional — every minimal-stdlib build needs it.
@@ -332,7 +329,6 @@ dashmap.workspace = true
 # sans-I/O session (declared with the turnloop client engines above), not on
 # tokio-rustls (turnloop P8 group H).
 rustls = { workspace = true, optional = true }
-rustls-native-certs = { version = "0.8", optional = true }
 rustls-pemfile = { workspace = true, optional = true }
 
 # Database
@@ -347,7 +343,6 @@ rusqlite = { version = "0.39", features = ["bundled", "column_decltype", "limits
 openssl-sys = { version = "0.9", optional = true, features = ["vendored"] }
 sha2 = { version = "0.11", optional = true }
 sha1 = { version = "0.11", optional = true }
-sha3 = { version = "0.12", optional = true }
 # SHAKE128/256 moved out of `sha3`'s root into this crate as of sha3 0.12.
 shake = { version = "0.1", optional = true }
 sha3_010 = { package = "sha3", version = "0.10", optional = true, default-features = false }
@@ -365,7 +360,6 @@ rsa = { version = "0.9", optional = true, default-features = false, features = [
 # the direct dependency use DER/SPKI 0.8; jsonwebtoken's current RSA and
 # elliptic-curve dependencies retain their transitive SPKI 0.7 stack.
 x509-cert = { version = "0.3", optional = true, default-features = false, features = ["pem"] }
-spki = { version = "0.8", optional = true, default-features = false, features = ["pem", "alloc"] }
 aes = { version = "0.8", optional = true }
 aes_09 = { package = "aes", version = "0.9", optional = true }
 cbc = { version = "0.2", optional = true }

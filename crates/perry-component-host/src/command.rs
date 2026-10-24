@@ -1,20 +1,14 @@
 //! One-shot WASI P2 command execution, separate from reusable library worlds.
+use crate::sync_wasi::bindings::CommandPre;
+use crate::sync_wasi::Exit as I32Exit;
 use crate::{limits::Limits, wasi, Options, WasiOptions};
 use anyhow::{bail, ensure, Context, Result};
 use wasmtime::component::{types::ComponentItem, Component, Linker, Type};
 use wasmtime::{Config, Engine, Store};
-use wasmtime_wasi::p2::bindings::sync::CommandPre;
-use wasmtime_wasi::{I32Exit, WasiCtxView, WasiView};
 
 struct State {
     limits: Limits,
     wasi: wasi::State,
-}
-
-impl WasiView for State {
-    fn ctx(&mut self) -> WasiCtxView<'_> {
-        self.wasi.view()
-    }
 }
 
 fn validate_command(component: &Component) -> Result<()> {
@@ -64,7 +58,7 @@ pub fn run_command(bytes: &[u8], options: &Options) -> Result<i32> {
     // after instantiation. Validate the signature before an initializer exits.
     validate_command(&component).context("validating wasi:cli/run command export")?;
     let mut linker = Linker::<State>::new(&engine);
-    wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
+    crate::sync_wasi::add_to_linker(&mut linker, |state: &mut State| &mut state.wasi)?;
     // Validate the command export before an initializer can request exit.
     // A malformed component must not turn an init-time exit(0) into success.
     let command = CommandPre::new(linker.instantiate_pre(&component)?)

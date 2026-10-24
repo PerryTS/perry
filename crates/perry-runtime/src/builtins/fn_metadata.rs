@@ -379,13 +379,13 @@ pub(crate) fn with_bundle_function_names<R>(
 /// That entry point is codegen-only by contract, which makes this an exact
 /// provenance filter. The general metadata readers continue to merge this map
 /// with runtime-owned overrides for `fn.name` and reflection.
-pub fn bundle_function_name_registry_entries() -> Option<Vec<(usize, std::sync::Arc<[u8]>)>> {
+pub fn bundle_function_name_registry_entries() -> Option<Vec<(usize, &'static [u8])>> {
     Some(
         function_name_registry()
             .lock()
             .ok()?
             .iter()
-            .map(|(address, name)| (*address, std::sync::Arc::from(*name)))
+            .map(|(address, name)| (*address, *name))
             .collect(),
     )
 }

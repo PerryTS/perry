@@ -164,7 +164,10 @@ fn deferred_host_cleanup_checks_generation_and_current_ownership() {
     let events: Arc<Mutex<Vec<ResourceEvent>>> = Arc::default();
     let mut host = host(COMPONENT, events.clone(), false).unwrap();
     let original = fresh("collected");
-    let returned = host.call("", "echo", &[original.clone()]).unwrap().unwrap();
+    let returned = host
+        .call("", "echo", std::slice::from_ref(&original))
+        .unwrap()
+        .unwrap();
     let reference = |value: &Value| ResourceRef {
         token: value["$hostResource"].as_str().unwrap().into(),
         type_key: value["type"].as_str().unwrap().into(),
@@ -202,7 +205,7 @@ fn deferred_host_cleanup_checks_generation_and_current_ownership() {
     assert!(!released);
 
     let kept = fresh("guest-held");
-    host.call("", "keep", &[kept.clone()]).unwrap();
+    host.call("", "keep", std::slice::from_ref(&kept)).unwrap();
     host.collect_resource(
         CollectedResource::Host {
             resource: reference(&kept),
@@ -234,17 +237,22 @@ fn host_resources_round_trip_borrow_and_drop_with_distinct_generations() {
     let events: Arc<Mutex<Vec<ResourceEvent>>> = Arc::default();
     let mut host = host(COMPONENT, events.clone(), false).unwrap();
     let original = fresh("local");
-    let returned = host.call("", "echo", &[original.clone()]).unwrap().unwrap();
+    let returned = host
+        .call("", "echo", std::slice::from_ref(&original))
+        .unwrap()
+        .unwrap();
     assert_eq!(returned["$hostResource"], "local");
     assert_eq!(returned["generation"], 2);
     assert!(host.call("", "echo", &[original]).is_err());
     for _ in 0..3 {
         assert_eq!(
-            host.call("", "read", &[returned.clone()]).unwrap(),
+            host.call("", "read", std::slice::from_ref(&returned))
+                .unwrap(),
             Some(json!(42))
         );
     }
-    host.call("", "consume", &[returned.clone()]).unwrap();
+    host.call("", "consume", std::slice::from_ref(&returned))
+        .unwrap();
     assert!(host.call("", "consume", &[returned]).is_err());
     assert_eq!(drops(&events), ["local"]);
     let made = host.call("", "make", &[]).unwrap().unwrap();
