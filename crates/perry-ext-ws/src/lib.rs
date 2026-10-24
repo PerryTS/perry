@@ -23,11 +23,13 @@
 //! the per-connection `select!` task are `tcp_connect`, `accept_start` and the
 //! completion sink. This crate declares no async runtime.
 //!
-//! A host with no turnloop loop — a `worker_threads` agent — therefore has no
-//! WebSocket transport at all, and says so: `new WebSocket(url)` rejects and
+//! Every agent that owns a turnloop loop — the main thread and each
+//! `worker_threads` worker — is a complete WebSocket host: its clients and
+//! servers live on its own loop, and the events they raise are queued under
+//! that agent and delivered by that agent's own pump, on its own thread. An
+//! agent with no loop says so: `new WebSocket(url)` rejects and
 //! `new WebSocketServer({port})` raises `'error'` rather than silently doing
-//! nothing. That is a real narrowing and it is written down in
-//! `changelog.d/`, not hidden behind a fallback nobody exercises.
+//! nothing.
 //!
 //! Architecture mirrors perry-stdlib's existing copy minus the iOS
 //! `NSURLSessionWebSocketTask` delegation path (out of scope for an
@@ -35,7 +37,7 @@
 //!
 //!   - Per-client: no task and no channel. Bytes arrive as completions on the
 //!     agent's loop, go through the codec, and leave as `PendingWsEvent`s that
-//!     `js_ws_process_pending` dispatches on the main thread's own tick.
+//!     `js_ws_process_pending` dispatches on that agent's own tick.
 //!   - Per-server: one multishot `accept_start` inside `perry-http-server`,
 //!     which decodes the upgrade request and hands it to [`server`]'s `Host`.
 //!   - GC root scanner walks WS_CLIENT_LISTENERS + every
@@ -71,12 +73,11 @@ mod upgrade_tests;
 
 use perry_ffi::{
     alloc_set, alloc_string, gc_register_mutable_root_scanner_named, get_handle_mut,
-    iter_handles_of_mut, notify_main_thread, register_aux_event_pump, register_handle, set_add,
+    iter_handles_of_mut, notify_main_thread, register_agent_event_pump, register_handle, set_add,
     set_delete, take_handle, GcRootVisitor, Handle, JsClosure, JsString, JsValue, RawClosureHeader,
     StringHeader, TransientRootScope,
 };
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::Mutex;
 
 use crate::codec::{Incoming, Message, WsError};
@@ -129,6 +130,9 @@ enum WsTransport {
 }
 
 struct WsConnection {
+    /// The agent whose loop the connection lives on: only that agent's loop is
+    /// kept alive by it.
+    agent: u64,
     transport: WsTransport,
     messages: Vec<WsPayload>,
     is_open: bool,
@@ -236,7 +240,35 @@ static WS_PENDING_EVENTS: std::sync::LazyLock<
 /// own callback would find it neither queued nor delivered and replay it.
 static WS_DISPATCHING: Mutex<Vec<ReplayKey>> = Mutex::new(Vec::new());
 
-static WS_ACTIVE_SERVERS: AtomicI32 = AtomicI32::new(0);
+/// Bound, listening servers per owning agent: a listening server keeps its
+/// own agent's loop alive and no other's.
+static WS_ACTIVE_SERVERS: Mutex<Vec<(u64, u32)>> = Mutex::new(Vec::new());
+
+fn active_servers_add(agent: u64) {
+    let mut servers = WS_ACTIVE_SERVERS.lock().unwrap();
+    match servers.iter_mut().find(|(owner, _)| *owner == agent) {
+        Some((_, count)) => *count += 1,
+        None => servers.push((agent, 1)),
+    }
+}
+
+fn active_servers_release(agent: u64) {
+    let mut servers = WS_ACTIVE_SERVERS.lock().unwrap();
+    if let Some(at) = servers.iter().position(|(owner, _)| *owner == agent) {
+        servers[at].1 -= 1;
+        if servers[at].1 == 0 {
+            servers.swap_remove(at);
+        }
+    }
+}
+
+fn agent_has_active_servers(agent: u64) -> bool {
+    WS_ACTIVE_SERVERS
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|(owner, _)| *owner == agent)
+}
 static WS_RUNTIME_HOOKS_REGISTERED: std::sync::Once = std::sync::Once::new();
 
 extern "C" {
@@ -252,7 +284,7 @@ fn ensure_runtime_hooks_registered() {
     gc_register_mutable_root_scanner_named("perry-ext-ws", scan_ws_roots);
     WS_RUNTIME_HOOKS_REGISTERED.call_once(|| {
         perry_ffi::agent_post::register_retire_hook(retire_socket_edges);
-        register_aux_event_pump(js_ws_process_pending, js_ws_has_pending);
+        register_agent_event_pump(js_ws_process_pending, js_ws_has_pending);
         unsafe {
             js_register_handle_property_dispatch_extension(js_ext_ws_handle_property_dispatch);
             dispatch::register_method_dispatch();
@@ -495,6 +527,7 @@ pub(crate) fn allocate_client_id() -> usize {
     WS_CONNECTIONS.lock().unwrap().insert(
         ws_id,
         WsConnection {
+            agent: perry_ffi::agent_post::current_agent(),
             transport: WsTransport::Connecting(Vec::new()),
             messages: Vec::new(),
             is_open: false,
@@ -750,10 +783,10 @@ fn start_connect(
         Err(message) => return refuse(message, token),
     };
     if !turnloop_io::available() {
-        // The honest answer, not a silent no-op. This agent owns no
-        // `turnloop::Loop` — a `worker_threads` agent — and this crate has
-        // no second transport to fall back to since the tokio one was
-        // deleted.
+        // The honest answer, not a silent no-op. This thread cannot own a
+        // `turnloop::Loop` (a thread that does not run an agent's event loop)
+        // and this crate has no second transport to fall back to since the
+        // tokio one was deleted.
         return refuse(
             "no event loop on this thread: `ws` needs a turnloop agent".to_string(),
             token,
@@ -1287,7 +1320,7 @@ pub extern "C" fn js_ws_server_close_with(handle: i64, callback: f64) {
         // accept loop's `shutdown_rx` arm did — it broke out of `select!` and
         // left every spawned per-client task running.
         perry_http_server::close_listener(listener_id);
-        WS_ACTIVE_SERVERS.fetch_sub(1, Ordering::Relaxed);
+        active_servers_release(perry_ffi::agent_post::current_agent());
     }
     push_ws_event(PendingWsEvent::ServerClose(handle));
 }
@@ -1699,22 +1732,23 @@ pub extern "C" fn js_ws_process_pending() -> i32 {
 
 #[no_mangle]
 pub extern "C" fn js_ws_has_pending() -> i32 {
+    let agent = perry_ffi::agent_post::current_agent();
     if WS_PENDING_EVENTS
         .lock()
         .unwrap()
         .iter()
-        .any(|(owner, _)| *owner == perry_ffi::agent_post::current_agent())
+        .any(|(owner, _)| *owner == agent)
     {
         return 1;
     }
-    if WS_ACTIVE_SERVERS.load(Ordering::Relaxed) > 0 {
+    if agent_has_active_servers(agent) {
         return 1;
     }
     let any_live = WS_CONNECTIONS
         .lock()
         .unwrap()
         .values()
-        .any(connection_is_live);
+        .any(|c| c.agent == agent && connection_is_live(c));
     if any_live {
         1
     } else {

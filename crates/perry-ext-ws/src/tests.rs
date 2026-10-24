@@ -1,5 +1,6 @@
 use super::*;
 use perry_ffi::{drop_handle, get_handle, register_handle};
+use std::sync::atomic::Ordering;
 use std::sync::{Mutex, MutexGuard};
 
 static GC_TEST_LOCK: Mutex<()> = Mutex::new(());
@@ -486,6 +487,7 @@ fn client_handles_do_not_alias_registered_servers() {
 #[test]
 fn keepalive_counts_connecting_clients_but_not_failed_ones() {
     let connection = |transport, is_open, is_closed| WsConnection {
+        agent: 0,
         transport,
         messages: Vec::new(),
         is_open,
@@ -529,6 +531,7 @@ fn ready_state_reports_npm_ws_lifecycle() {
     WS_CONNECTIONS.lock().unwrap().insert(
         ws_id,
         WsConnection {
+            agent: 0,
             // CONNECTING is a real transport state now rather than a
             // channel with nothing on the other end: a `close()` here is
             // queued, which is exactly what the assertions below check

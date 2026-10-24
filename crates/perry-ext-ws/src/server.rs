@@ -238,7 +238,7 @@ pub extern "C" fn js_ws_server_new(opts_f64: f64) -> Handle {
                 server.host = bound.address;
                 server.listener_id = Some(bound.listener_id);
             }
-            WS_ACTIVE_SERVERS.fetch_add(1, Ordering::Relaxed);
+            active_servers_add(perry_ffi::agent_post::current_agent());
             push_ws_event(PendingWsEvent::Listening(server_handle));
         }
         Err(e) => {

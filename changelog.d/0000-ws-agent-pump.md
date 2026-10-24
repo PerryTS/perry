@@ -1,0 +1,1 @@
+`perry-ext-ws` now runs on every agent's own loop: its event pump is registered as a per-agent pump (`register_agent_event_pump`) and the keepalive (`js_ws_has_pending`) counts only the calling agent's connections and listening servers, so a `worker_threads` worker's ws events are drained by that worker's loop instead of piling up undelivered.
