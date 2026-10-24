@@ -1122,7 +1122,7 @@ buffer_slow_path_accesses_static = 0
 
 [[workloads.dynamic_fractional_array_index.ir_checks]]
 name = "dynamic_fractional_get_uses_runtime_key"
-contains = "js_array_get_index_or_string"
+contains = "call double @perry_array_read_cold_shared("
 detail = "dynamic fractional array reads preserve the original numeric key"
 
 [[workloads.dynamic_fractional_array_index.ir_checks]]

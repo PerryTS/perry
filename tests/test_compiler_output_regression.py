@@ -2166,6 +2166,38 @@ idxset.bounded_numeric_merge.5:
         )
         self.assertEqual(report["status"], "pass", report["errors"])
 
+    def test_fractional_index_gate_requires_a_call_and_exact_result(self):
+        call = "  %read = call double @perry_array_read_cold_shared(double %array, double %key, i64 0)"
+        ir = "\n".join([
+            "define double @fractional(double %array, double %key) {",
+            "entry:",
+            call,
+            "  %set = call i64 @js_typed_feedback_array_set_index_or_string(i64 1, i64 0, double %key, double 99.0, i32 1)",
+            "  ret double %read",
+            "}",
+        ])
+        def verify(text, stdout):
+            return HARNESS.verify_artifacts(
+                workload="dynamic_fractional_array_index",
+                ir_before=text,
+                ir_after=text,
+                assembly=GOOD_ASM,
+                benchmark={"runs": [{"exit_code": 0, "stdout_first": stdout}]},
+                vectorization={"vectorized_count": 0, "missed_count": 0, "analysis_count": 0},
+            )
+        good = verify(ir, "122\n")
+        self.assertEqual(good["status"], "pass", good["errors"])
+        declaration_only = ir.replace(call, "  %read = fadd double %key, 0.0") + (
+            "\ndeclare double @perry_array_read_cold_shared(double, double, i64)\n"
+        )
+        missing_call = verify(declaration_only, "122\n")
+        self.assertTrue(any("dynamic_fractional_get_uses_runtime_key" in error
+                            for error in missing_call["errors"]), missing_call)
+        # Truncating 1.5 to the element index 1 reads 20 instead of property 99.
+        wrong_key = verify(ir, "43\n")
+        self.assertTrue(any("dynamic_fractional_array_index_checksum" in error
+                            for error in wrong_key["errors"]), wrong_key)
+
     def test_stdout_checks_require_benchmark_data(self):
         ir = numeric_arrays_inline_ir()
         report = HARNESS.verify_artifacts(
