@@ -45,6 +45,7 @@ members = [
     "crates/perry-wasm-host",
     "crates/perry-wit",
     "crates/perry-component-host",
+    "crates/perry-component-io",
     "crates/perry-container-compose",
     "crates/perry-container-e2e",
     "crates/perry-stdlib",
@@ -439,38 +440,17 @@ memchr = "2"
 # before this release clears the 7-day publish-age window. Cargo.lock pins the
 # verified registry artifact; the global window is unchanged.
 perex = "0.1.14"
-# turnloop P0/P1: the per-agent event-loop wait driver and, since P1, Perry's
-# stream sockets (docs/turnloop/p0-report.md, crates/perry-runtime/src/turnloop_net).
-# 0.1.0-alpha.3 switched turnloop's own dependency requirements from exact pins
-# to carets, which is what lifts the forced downgrades alpha.2 imposed on libc,
-# tokio, redis and wasm-bindgen across this workspace. A caret here for the same
-# reason; the exact version is pinned by Cargo.lock, locked once with the
-# owner-approved one-time publish-age override. alpha.7 carries turnloop#98-#106;
-# alpha.8 adds only `Detached::from_listener_fd` (turnloop#108) and semver-checks
-# rated it API-compatible, so every alpha.7 -> alpha.8 change is additive. The
-# RELEASING.md exception wants the release source commit:
-# d72fea0b4644af0b13376bf62b3b8181206d359e (turnloop release PR #109).
-# alpha.9 (turnloop#114, release PR #110 at adc7918faf20b15e95c6cff635f059b5bf1b61f0)
-# only fixes the Android build (Bionic __errno instead of __errno_location;
-# inotify_rm_watch descriptor type) and takes rustls 0.23.46; it is locked once
-# with the owner-approved publish-age override (2026-10-16), which lapses on its
-# own when alpha.9 clears the 7-day window on 2026-10-23.
-# What reaches Perry: `TcpOpts` gains `connect_timeout` and `PoolConfig` gains
-# `max_undelivered`, so both need `..Default::default()` in a struct literal;
-# `Backend::poll` takes a `Budget` (invisible here — Perry implements no
-# `Backend`); and `Loop::rebuild(config)` is new. The alpha.7 change most likely
-# to be mistaken for Perry's problem is `LocalExecutor::turn` retaining
-# completions it did not issue: that is `turnloop-io`'s executor, which Perry
-# deliberately does not use (see the P5 note below). Perry drives
-# `Driver::turn(timeout, &mut Completions)`, whose body is unchanged but for the
-# new `self.budget()` argument, so there is no completion-retention change on
-# any path Perry takes. Published 2026-09-23T02:46:06Z, sha256
-# 35a7b66fdeab8e9365eb7dbe27edea9ed45e92e612558d301c69497f4373a60b — the
-# checksum Cargo.lock records, verified against the crates.io API rather than
-# against the publishing workflow going green. The soak skill's rule holds:
-# opting out is a committed, reviewable change and never a silent one, so the
-# override lives here in the diff and the lock pins the exact artifact.
-turnloop = "0.1.0-alpha.9"
+# The per-agent event-loop driver. alpha.10 adds owned TCP connect, live socket
+# controls and cancellation-safe shutdown used by the synchronous WASI adapter.
+# Release source: e31526b5399d00e94b1452ffe8a8e0e76e4824ad (turnloop PR #115).
+# Resolved once on 2026-10-24 with CARGO_RESOLVER_INCOMPATIBLE_PUBLISH_AGE=allow
+# before this release clears the 7-day publish-age window (bounded exception for
+# exactly this crate and version, first-party turnloop release for the no-tokio WASI
+# host, owner-approved 10-24; published 2026-10-24T08:07Z, expires 2026-10-31T08:07Z).
+# The global window is unchanged. Cargo.lock pins the published artifact, verified against the
+# crates.io sparse index and .cargo_vcs_info.json; SHA256:
+# f579fbcc6620a3bda7ea47135ea3c3e8ea0a10f110cd7206350ad78b136d26d2
+turnloop = "0.1.0-alpha.10"
 # turnloop P5 (DESIGN §5b, §12 "P5"): the sans-I/O protocol crates that
 # replace hyper's HTTP/1.1 parser and framer on Perry's server path, and
 # `tokio_rustls` on every TLS path the loop owns. Default features only — the
@@ -587,6 +567,7 @@ perry-codegen = { path = "crates/perry-codegen" }
 perry-dispatch = { path = "crates/perry-dispatch" }
 perry-runtime-manifest = { path = "crates/perry-runtime-manifest" }
 perry-abi = { path = "crates/perry-abi", version = "0.5.1654" }
+perry-component-io = { path = "crates/perry-component-io" }
 # #1112: `perry-ffi` is published for external native wrappers. Its optional
 # `runtime-link` edge supplies runtime symbols to in-tree adapter tests.
 # The dependency-free registration core sits below both crates so future
@@ -680,3 +661,4 @@ inherits = "release"
 debug-assertions = true
 lto = false
 codegen-units = 1
+

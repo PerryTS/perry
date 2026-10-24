@@ -977,6 +977,7 @@ pub const BYTES_ELEMENT_SHIFT: [u8; 19] = [0, 0, 0, 1, 1, 2, 2, 1, 2, 3, 3, 3, 0
 
 pub mod component_guest;
 pub mod component_host;
+pub mod component_io;
 pub mod native_class_ids;
 pub mod wasm_host;
 

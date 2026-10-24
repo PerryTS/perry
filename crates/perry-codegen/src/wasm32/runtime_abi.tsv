@@ -3590,6 +3590,7 @@ js_run_ext_pump	void
 js_run_module_init_catching	void	i64
 js_run_module_init_guarded	void	i64,i64
 js_run_stdlib_pump	void	
+js_runtime_component_io_ops	ptr	
 js_runtime_describe_received	f64	f64
 js_runtime_init	void	
 js_runtime_install_bun_cli_utils	void	

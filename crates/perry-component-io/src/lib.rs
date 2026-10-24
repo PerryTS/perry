@@ -1,7 +1,7 @@
 //! Own native operations while an optional WASI host borrows the process driver.
-//! This crate creates no driver. The embedding supplies exclusive access and
-//! completion extraction, and is responsible for never dispatching callbacks
-//! from turn_and_take.
+//! The embedding supplies exclusive driver access and completion extraction.
+//! The standalone feature supplies one shared driver per embedding thread.
+//! Guest waits select their own completions without dispatching callbacks.
 use perry_abi::{component_host::Buffer, component_io as abi};
 use std::{
     marker::PhantomData,

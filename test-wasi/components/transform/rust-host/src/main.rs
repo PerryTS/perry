@@ -4,9 +4,9 @@ mod resources;
 mod values;
 
 use anyhow::{ensure, Context, Result};
+use perry_component_host::{add_wasi_to_linker, WasiOptions, WasiState};
 use wasmtime::component::{Component, ComponentType, Lift, Linker, Lower, ResourceTable};
 use wasmtime::{Config, Engine, Store, StoreContextMut, StoreLimits, StoreLimitsBuilder};
-use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
 #[derive(Debug, PartialEq, ComponentType, Lift, Lower)]
 #[component(record)]
@@ -25,19 +25,10 @@ enum Failure {
 }
 
 struct State {
-    wasi: WasiCtx,
+    wasi: WasiState,
     table: ResourceTable,
     limits: StoreLimits,
     logs: Vec<String>,
-}
-
-impl WasiView for State {
-    fn ctx(&mut self) -> WasiCtxView<'_> {
-        WasiCtxView {
-            ctx: &mut self.wasi,
-            table: &mut self.table,
-        }
-    }
 }
 
 fn main() -> Result<()> {
@@ -59,7 +50,7 @@ fn main() -> Result<()> {
     let engine = Engine::new(&config)?;
     let component = Component::from_binary(&engine, &std::fs::read(path)?)?;
     let mut linker = Linker::<State>::new(&engine);
-    wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
+    add_wasi_to_linker(&mut linker, |state: &mut State| &mut state.wasi)?;
     if resource_profile {
         resources::link(&mut linker)?;
     } else if all_values {
@@ -90,12 +81,9 @@ fn main() -> Result<()> {
                 },
             )?;
     }
-    let mut wasi = WasiCtxBuilder::new();
-    wasi.allow_tcp(false)
-        .allow_udp(false)
-        .allow_ip_name_lookup(false);
+    let mut wasi = WasiOptions::default();
     if resource_profile {
-        wasi.inherit_stderr();
+        wasi.inherit_stderr = true;
     }
     if moving_resources {
         for name in [
@@ -103,10 +91,10 @@ fn main() -> Result<()> {
             "PERRY_GC_VERIFY_EVACUATION",
             "PERRY_GC_DIAG",
         ] {
-            wasi.env(name, "1");
+            wasi.env.insert(name.into(), "1".into());
         }
     }
-    let wasi = wasi.build();
+    let wasi = WasiState::new(&wasi)?;
     let mut store = Store::new(
         &engine,
         State {

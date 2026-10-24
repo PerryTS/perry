@@ -33,6 +33,8 @@ use std::time::Duration;
 #[cfg(not(target_arch = "wasm32"))]
 mod agent_loop;
 #[cfg(not(target_arch = "wasm32"))]
+pub(crate) use agent_loop::component_turn_and_take;
+#[cfg(not(target_arch = "wasm32"))]
 mod precise_wait;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use agent_loop::arm_timer as arm_agent_timer;

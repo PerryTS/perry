@@ -485,6 +485,7 @@ notify.workspace = true
 # are wired per agent (P3/P4).
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 turnloop.workspace = true
+perry-component-io.workspace = true
 
 # `os.hostname()` under `full`. WASI has no hostname (the crate refuses the
 # target), so `js_os_hostname` answers "localhost" there (#11377).

@@ -45,7 +45,9 @@ Socket/stream phases, queued bytes and pending operations represent actual
 protocol state and ownership. Socket settings are read from the kernel.
 Changing a quiescent UDP association transfers the native socket out of the
 driver and adopts it again; no borrowed descriptor is mutated behind the
-driver. Bound TCP connect preserves the guest's chosen local endpoint.
+driver. Bound TCP connect preserves the guest's chosen local endpoint. Unbound TCP
+leaves port allocation to Unix connect; Windows binds during adoption for
+ConnectEx. Adoption selects the API from the socket's actual native endpoint.
 
 ## Thread and allocator boundaries
 

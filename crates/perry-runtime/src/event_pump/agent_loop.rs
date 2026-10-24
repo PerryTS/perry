@@ -469,6 +469,10 @@ fn dispatch_staged() {
         return;
     }
     for completion in batch.drain(..) {
+        if is_component_io(&completion) {
+            STAGED.with(|staged| staged.borrow_mut().push(completion));
+            continue;
+        }
         if completion.token == TIMER_TOKEN {
             // The JS timer heap's deadline. Nothing to deliver: the expiry IS
             // the wake, and the timers phase reads the heap. Counted so a
@@ -502,6 +506,71 @@ fn dispatch_staged() {
             *slot = batch;
         }
     });
+}
+
+/// Component completions belong to their native operation owners. They are
+/// consumed explicitly, including when a normal event-pump turn discovers them.
+pub(crate) const COMPONENT_IO_TOKEN: Token = perry_component_io::TOKEN;
+
+fn is_component_io(completion: &turnloop::Completion) -> bool {
+    completion.token == COMPONENT_IO_TOKEN
+}
+
+/// Turn the existing driver without invoking any subsystem or JS callback.
+///
+/// A guest wait supplies full operation identities, never reusable numeric
+/// slots. Foreign completions remain in STAGED in their original order. Close
+/// acknowledgements are selected by full handle identity because Closed has no
+/// operation ID. This function neither owns nor creates a second driver.
+pub(crate) fn component_turn_and_take(
+    operations: &[turnloop::OpId],
+    closing: &[Handle],
+    timeout: Timeout,
+) -> turnloop::Result<Vec<turnloop::Completion>> {
+    fn take(operations: &[turnloop::OpId], closing: &[Handle]) -> Vec<turnloop::Completion> {
+        STAGED.with(|staged| {
+            staged
+                .borrow_mut()
+                .extract_if(.., |completion| {
+                    is_component_io(completion)
+                        && (completion.op.is_some_and(|op| operations.contains(&op))
+                            || (matches!(completion.result, turnloop::OpResult::Closed)
+                                && completion.handle.is_some_and(|h| closing.contains(&h))))
+                })
+                .collect()
+        })
+    }
+    let completed = take(operations, closing);
+    if !completed.is_empty() {
+        return Ok(completed);
+    }
+    if !ensure_loop_with(Profile::Net) {
+        return Err(turnloop::Error::new(turnloop::ErrorKind::Unsupported));
+    }
+    AGENT_LOOP.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let agent = slot.as_mut().expect("ensured agent loop");
+        // Publish the same wake endpoint used by the ordinary event pump.
+        // Do not inspect NOTIFIED: unrelated JS work cannot interrupt this
+        // guest wait by forcing repeated zero-time turns.
+        agent.in_turn.store(true, Ordering::SeqCst);
+        PARKED_LOOPS.fetch_add(1, Ordering::SeqCst);
+        let result = agent.driver.turn(timeout, &mut agent.completions);
+        agent.in_turn.store(false, Ordering::SeqCst);
+        PARKED_LOOPS.fetch_sub(1, Ordering::SeqCst);
+        match result {
+            Ok(info) => {
+                agent.record(&info);
+                Ok(())
+            }
+            Err(error) => {
+                agent.stats.turns += 1;
+                agent.stats.turn_errors += 1;
+                Err(error)
+            }
+        }
+    })?;
+    Ok(take(operations, closing))
 }
 
 /// Whether this thread may take the precise park path. One TLS read once the

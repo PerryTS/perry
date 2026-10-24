@@ -42,6 +42,14 @@ def main():
         shutil.copyfile(fixture / name, work / name)
     shutil.copytree(fixture / "rust-host", work / "rust-host", dirs_exist_ok=True,
                     ignore=shutil.ignore_patterns("target"))
+    # The standalone host shares the production WASI adapter. Its source-relative
+    # path must still name this checkout when the fixture is copied into output.
+    host_manifest = work / "rust-host/Cargo.toml"
+    host_manifest.write_text(host_manifest.read_text().replace(
+        '"../../../../crates/perry-component-host"',
+        json.dumps(str(root / "crates/perry-component-host")),
+    ))
+
     shutil.copytree(fixture / "rust-logger", work / "rust-logger", dirs_exist_ok=True,
                     ignore=shutil.ignore_patterns("target"))
     sdk = args.wasi_sdk.resolve()
