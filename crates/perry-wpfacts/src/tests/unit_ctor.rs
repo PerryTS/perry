@@ -763,8 +763,8 @@ const PUB_CTOR_ESCAPE: &str = r#"
     class Box { k: number; constructor(k: number) { this.k = k; } }
     class Vec {
       cap: any;
+      static tag = 1;
       constructor(n: any) { this.cap = n; }
-      static of(n: any): Vec { return new Vec(n); }
     }
     function main() {
       const v = new Vec(new Box(3));
@@ -779,6 +779,8 @@ fn a_published_class_another_unit_lets_escape_has_unknown_constructor_arguments(
     // DECISIONS 157, the census guard: `main`'s unit hands Vec's stand-in to
     // unknown code, which may construct it with anything: its report breaks
     // Vec, and Vec's unit runs the constructor with ⊤ arguments again.
+    // The fixture has no static method: one taking a parameter into
+    // `new Vec` would make `cap` ⊤ on its own and hide the guard.
     let pf = units(PUB_CTOR_ESCAPE);
     assert!(pf.broken.iter().any(|b| b.ends_with(":Vec")), "{:?}", pf.broken);
     let u = field(tmpl(&pf, "Vec"), "cap");
