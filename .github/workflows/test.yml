@@ -2277,6 +2277,25 @@ jobs:
       - name: Build compiler + runtime + Windows UI crates (dev)
         shell: bash
         run: |
+          set -euo pipefail
+          # Match the release build: Git Bash's stripped Perl lacks modules
+          # required by vendored OpenSSL. Use an installed complete Perl.
+          OPENSSL_SRC_PERL=
+          while IFS= read -r perl_exe; do
+            perl_exe=${perl_exe%$'\r'}
+            [ -n "$perl_exe" ] || continue
+            if "$(cygpath -u "$perl_exe")" -MIPC::Cmd -MPod::Usage -MLocale::Maketext::Simple -e1 2>/dev/null; then
+              OPENSSL_SRC_PERL=$perl_exe
+              break
+            fi
+          done < <(where.exe perl 2>/dev/null; echo 'C:\Strawberry\perl\bin\perl.exe')
+          if [ -z "$OPENSSL_SRC_PERL" ]; then
+            echo "::error::no complete Windows Perl for vendored OpenSSL Configure"
+            exit 1
+          fi
+          export OPENSSL_SRC_PERL
+          echo "OPENSSL_SRC_PERL=$OPENSSL_SRC_PERL"
+          printf 'OPENSSL_SRC_PERL=%s\n' "$OPENSSL_SRC_PERL" >> "$GITHUB_ENV"
           cargo build-perry --profile dev -p perry-ui-windows -p perry-ui-windows-winui
           scripts/gc_call_effects/sidecars.sh target/debug
 
@@ -2292,7 +2311,7 @@ jobs:
       # dev-profile build of a ~340k-line crate.
       - name: perry-runtime unit tests (single-threaded, #7356)
         shell: bash
-        run: RUST_TEST_THREADS=1 cargo test --profile dev --lib -p perry-runtime
+        run: RUST_BACKTRACE=1 RUST_TEST_THREADS=1 cargo test --profile dev --lib -p perry-runtime -- --nocapture
 
       - name: Windows runtime regressions against pinned Node
         run: python scripts/run_windows_runtime_regressions.py
@@ -2394,6 +2413,17 @@ jobs:
         with:
           arch: amd64_arm64
 
+      - name: Pin the ARM64 MSVC linker
+        shell: pwsh
+        run: |
+          # Git Bash prepends its own link.exe. Cargo must use the linker
+          # selected by vcvarsall, including for native build scripts.
+          $linker = Join-Path $env:VCToolsInstallDir "bin\Host$($env:VSCMD_ARG_HOST_ARCH)\$($env:VSCMD_ARG_TGT_ARCH)\link.exe"
+          if (!(Test-Path $linker -PathType Leaf)) {
+            throw "MSVC linker missing: $linker"
+          }
+          "CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER=$linker" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+
       - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
         with:
           shared-key: "${{ runner.os }}-${{ runner.arch }}-perry"
@@ -2402,6 +2432,25 @@ jobs:
       - name: Build ARM64 compiler and static libraries (dev)
         shell: bash
         run: |
+          set -euo pipefail
+          # Match the release build: Git Bash's stripped Perl lacks modules
+          # required by vendored OpenSSL. Use an installed complete Perl.
+          OPENSSL_SRC_PERL=
+          while IFS= read -r perl_exe; do
+            perl_exe=${perl_exe%$'\r'}
+            [ -n "$perl_exe" ] || continue
+            if "$(cygpath -u "$perl_exe")" -MIPC::Cmd -MPod::Usage -MLocale::Maketext::Simple -e1 2>/dev/null; then
+              OPENSSL_SRC_PERL=$perl_exe
+              break
+            fi
+          done < <(where.exe perl 2>/dev/null; echo 'C:\Strawberry\perl\bin\perl.exe')
+          if [ -z "$OPENSSL_SRC_PERL" ]; then
+            echo "::error::no complete Windows Perl for vendored OpenSSL Configure"
+            exit 1
+          fi
+          export OPENSSL_SRC_PERL
+          echo "OPENSSL_SRC_PERL=$OPENSSL_SRC_PERL"
+          printf 'OPENSSL_SRC_PERL=%s\n' "$OPENSSL_SRC_PERL" >> "$GITHUB_ENV"
           cargo build-perry --profile dev
           scripts/gc_call_effects/sidecars.sh target/debug
 
@@ -4922,6 +4971,27 @@ jobs:
         # errors looking for Windows SDK libs.
         if: matrix.os == 'windows-2022'
         uses: ./.github/actions/perry/ilammy/msvc-dev-cmd # v1
+
+      - name: Pin Windows doc-test native tools
+        if: matrix.os == 'windows-2022'
+        shell: pwsh
+        run: |
+          # The doc harness invokes Bash for sidecars. Keep Git's link.exe
+          # and stripped Perl out of native Cargo build-script resolution.
+          $linker = Join-Path $env:VCToolsInstallDir "bin\Host$($env:VSCMD_ARG_HOST_ARCH)\$($env:VSCMD_ARG_TGT_ARCH)\link.exe"
+          if (!(Test-Path $linker -PathType Leaf)) {
+            throw "MSVC linker missing: $linker"
+          }
+          "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=$linker" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+          $perl = @((Get-Command perl.exe -All -ErrorAction SilentlyContinue).Source) + @('C:\Strawberry\perl\bin\perl.exe') |
+            Where-Object { $_ -and (Test-Path $_ -PathType Leaf) } |
+            Select-Object -Unique |
+            Where-Object {
+              & $_ -MIPC::Cmd -MPod::Usage -MLocale::Maketext::Simple -e1 2>$null
+              $LASTEXITCODE -eq 0
+            } | Select-Object -First 1
+          if (!$perl) { throw 'No complete Windows Perl for vendored OpenSSL Configure' }
+          "OPENSSL_SRC_PERL=$perl" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Install GTK4 + GStreamer + Xvfb + PulseAudio headers (Linux)
         if: matrix.os == 'ubuntu-24.04'
