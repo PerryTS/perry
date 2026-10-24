@@ -2126,6 +2126,17 @@ pub(crate) fn compute_in<'a>(
             *l = c.clone();
         }
     }
+    // DECISIONS 130: every class this unit publishes goes out under its
+    // display too, the owner's contract of this round. A reader holding a
+    // copy (a value or argument contract describes it as the publishing
+    // unit saw it) builds its stand-in over the owner's
+    // (`Gen::other_layout`), a read the driver tracks: when the owner's
+    // contract changes, the reader is solved again.
+    for c in contracts_out.iter().map(|(_, c)| c).chain(&given_out) {
+        if !layouts_out.iter().any(|l| l.display == c.display) {
+            layouts_out.push(c.clone());
+        }
+    }
     // The other units' parents those contracts name go out beside them,
     // with the contract this unit holds for them (DECISIONS 104).
     let mut i = 0;
