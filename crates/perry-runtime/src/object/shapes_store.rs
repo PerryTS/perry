@@ -1224,6 +1224,20 @@ static AGENT_SHAPE_DIR: [BandDir; 4] = [
     BandDir::empty(3),
 ];
 
+/// This agent's commit view of its Region (top vector of live-page leaves,
+/// its length, the page shift), published beside [`AGENT_SHAPE_DIR`] so a
+/// held-word read proves its row is committed without reaching the slab.
+#[thread_local]
+static AGENT_COMMIT: (
+    std::cell::Cell<*const ()>,
+    std::cell::Cell<usize>,
+    std::cell::Cell<u32>,
+) = (
+    std::cell::Cell::new(std::ptr::null()),
+    std::cell::Cell::new(0),
+    std::cell::Cell::new(0),
+);
+
 /// An ordinary-band directory of no pages, never written: the value of the
 /// agent's shape-directory pointer slot until the agent publishes its own
 /// (`agent_ptrs::PERRY_AGENT_PTRS`), and what a `length` read site passes
@@ -1281,6 +1295,8 @@ impl Drop for ShapeSlab {
                 band.proto_cell.set(std::ptr::null());
                 band.word_dir.set(std::ptr::null());
             }
+            AGENT_COMMIT.0.set(std::ptr::null());
+            AGENT_COMMIT.1.set(0);
             self.protos.unpublish();
         }
         // Retired records release on removal; live records release at agent
@@ -1578,6 +1594,7 @@ impl ShapeSlab {
         }
         self.write_record(ptr, identity.0, word, record);
         self.region.published(row);
+        self.publish_commit();
         let (band, index) = locate(identity.0);
         let (page, chunk, slot) = Self::split(index);
         let dir = self.dir_mut(band as u8);
@@ -1693,10 +1710,21 @@ impl ShapeSlab {
     /// the agent's slab. Called after every change to a page vector (a
     /// resize or shrink moves its buffer); a page or chunk allocated or
     /// released in place is visible through the published buffer already.
+    #[inline]
+    fn publish_commit(&self) {
+        if self.agent {
+            let (tops, len, shift) = self.region.commit_view();
+            AGENT_COMMIT.0.set(tops);
+            AGENT_COMMIT.1.set(len);
+            AGENT_COMMIT.2.set(shift);
+        }
+    }
+
     fn publish_dir(&self) {
         if !self.agent {
             return;
         }
+        self.publish_commit();
         for (band, dir) in [&self.pages, &self.dict_pages, &self.exotic_pages]
             .into_iter()
             .enumerate()
@@ -1807,7 +1835,34 @@ impl ShapeSlab {
         if word & crate::codegen_abi::LAYOUT_TAG == 0 {
             return None;
         }
-        crate::state::state().shapes.slab().handle_record_ptr(LayoutWord(word))
+        // The checked read of a held word, answered from this thread's
+        // published directory (the same facts `handle_record_ptr` proves):
+        // tag, band, row below the issued bound, row committed, record present.
+        let dir = &AGENT_SHAPE_DIR[0];
+        let base = dir.flat_base.get();
+        if base.is_null() {
+            // A slab that publishes nothing (tests): the slab answers.
+            return crate::state::state().shapes.slab().handle_record_ptr(LayoutWord(word));
+        }
+        let w = LayoutWord(word);
+        if w.band() >= 3 {
+            return None;
+        }
+        let row = w.row().0 as usize;
+        if row >= dir.flat_ids.get()
+            || !unsafe {
+                flat::committed_in(
+                    AGENT_COMMIT.0.get(),
+                    AGENT_COMMIT.1.get(),
+                    AGENT_COMMIT.2.get(),
+                    row,
+                )
+            }
+        {
+            return None;
+        }
+        let p = unsafe { base.add(row) };
+        unsafe { (*p).present() }.then_some(p)
     }
 
     /// A live receiver's own header word, or zero for an unshaped receiver.

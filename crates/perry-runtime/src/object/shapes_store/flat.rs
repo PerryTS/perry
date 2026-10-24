@@ -230,6 +230,11 @@ impl Region {
     pub(super) fn row_committed(&self, row: usize) -> bool {
         self.count(self.page_of(row)) != 0
     }
+    /// The commit bookkeeping a reader of this agent can walk without the
+    /// slab: (top-vector pointer, its length, page shift). See [`committed_in`].
+    pub(super) fn commit_view(&self) -> (*const (), usize, u32) {
+        (self.live.as_ptr().cast(), self.live.len(), self.shift)
+    }
     pub(super) fn committed_bytes(&self) -> usize {
         self.live.iter().flatten().map(|leaf| leaf.used as usize).sum::<usize>() * self.page
     }
@@ -237,5 +242,22 @@ impl Region {
 impl Drop for Region {
     fn drop(&mut self) {
         unsafe { unreserve(self.base.cast(), self.capacity * RECORD) };
+    }
+}
+
+/// [`Region::row_committed`] over a published [`Region::commit_view`].
+///
+/// # Safety
+/// `tops`/`len` are the live view of an existing Region of this thread.
+#[inline(always)]
+pub(super) unsafe fn committed_in(tops: *const (), len: usize, shift: u32, row: usize) -> bool {
+    let page = (row * RECORD) >> shift;
+    let leaf = page / LEAF_PAGES;
+    if leaf >= len {
+        return false;
+    }
+    match &*(tops as *const Option<Box<Leaf>>).add(leaf) {
+        Some(l) => l.counts[page % LEAF_PAGES] != 0,
+        None => false,
     }
 }
