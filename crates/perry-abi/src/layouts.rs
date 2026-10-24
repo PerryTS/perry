@@ -392,3 +392,21 @@ mod tests {
         }
     }
 }
+
+/// OC3 001: static prototype birth word occupies the old declaration padding.
+/// Nonzero exactly when birth_shape is nonzero; neither field proves publication.
+pub const CLASS_DECL_BIRTH_LAYOUT_WORD_OFFSET_LP64: usize = 20;
+pub const CLASS_DECL_BIRTH_LAYOUT_WORD_OFFSET_ILP32: usize = 16;
+#[repr(C)]
+pub struct PerryClassDeclarationPrefixV1 {
+    pub members: *const core::ffi::c_void,
+    pub member_count: u32,
+    pub birth_shape: u32,
+    pub flags: u32,
+    pub birth_layout_word: u32,
+}
+const _: () = {
+    assert!(core::mem::offset_of!(PerryClassDeclarationPrefixV1, birth_layout_word)
+        == if cfg!(target_pointer_width = "64") { CLASS_DECL_BIRTH_LAYOUT_WORD_OFFSET_LP64 }
+           else { CLASS_DECL_BIRTH_LAYOUT_WORD_OFFSET_ILP32 });
+};
