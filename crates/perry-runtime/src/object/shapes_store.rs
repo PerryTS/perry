@@ -1257,7 +1257,7 @@ pub(crate) struct ShapeSlab {
     row_bound: u32,
     /// Starts of the chunks this agent owns; returned to the process
     /// allocator when the slab drops.
-    chunks: Vec<u32>,
+    chunks: OwnedChunks,
     /// End (exclusive) of the current chunk; reaching it claims another.
     chunk_end: u32,
     /// Present records.
@@ -1294,7 +1294,7 @@ impl Drop for ShapeSlab {
             Self::free_dir(self.dir_mut(band), band);
         }
         // The Region unmaps with the slab; its chunks go back to the process.
-        CHUNKS.release(&self.chunks);
+        CHUNKS.release(self.chunks.inline(), &self.chunks.more);
     }
 }
 
@@ -1309,7 +1309,7 @@ impl ShapeSlab {
             static_rows: crate::codegen_abi::NATIVE_LAYOUT_ROWS,
             next_row: crate::codegen_abi::NATIVE_LAYOUT_ROWS,
             row_bound: crate::codegen_abi::NATIVE_LAYOUT_ROWS,
-            chunks: Vec::new(),
+            chunks: OwnedChunks::new(),
             chunk_end: 0,
             len: 0,
             agent: false,
@@ -2395,12 +2395,11 @@ impl ChunkAllocator {
         }
     }
 
-    pub(super) fn release(&self, starts: &[u32]) {
-        if !starts.is_empty() {
-            self.free
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .extend_from_slice(starts);
+    pub(super) fn release(&self, first: &[u32], more: &[u32]) {
+        if !first.is_empty() {
+            let mut free = self.free.lock().unwrap_or_else(|e| e.into_inner());
+            free.extend_from_slice(first);
+            free.extend_from_slice(more);
         }
     }
 
@@ -2410,3 +2409,36 @@ impl ChunkAllocator {
     }
 }
 pub(super) static CHUNKS: ChunkAllocator = ChunkAllocator::new();
+
+/// The chunks one agent owns. The first few live inline, so a typical agent
+/// (one or two chunks) allocates nothing for the list.
+struct OwnedChunks {
+    n: usize,
+    first: [u32; 4],
+    more: Vec<u32>,
+}
+impl OwnedChunks {
+    const fn new() -> Self {
+        Self { n: 0, first: [0; 4], more: Vec::new() }
+    }
+    fn push(&mut self, start: u32) {
+        if self.n < self.first.len() {
+            self.first[self.n] = start;
+            self.n += 1;
+        } else {
+            self.more.push(start);
+        }
+    }
+    fn inline(&self) -> &[u32] {
+        &self.first[..self.n]
+    }
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.n + self.more.len()
+    }
+    #[cfg(test)]
+    fn clear(&mut self) {
+        self.n = 0;
+        self.more.clear();
+    }
+}

@@ -137,7 +137,7 @@ fn dead_agents_chunks_are_reused_only_when_the_space_is_exhausted() {
     let (x, y) = (alloc.claim(cap).unwrap(), alloc.claim(cap).unwrap());
     assert_eq!((x, y), (BASE, BASE + C));
     assert_eq!(alloc.claim(cap), Err(PublishError::Capacity), "exhausted with both live");
-    alloc.release(&[x]);
+    alloc.release(&[x], &[]);
     assert_eq!(alloc.claim(cap), Ok(x), "a dead agent's chunk is reused, not a panic");
     assert_eq!(alloc.claim(cap), Err(PublishError::Capacity));
 }
