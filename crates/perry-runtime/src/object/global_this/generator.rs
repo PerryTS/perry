@@ -883,10 +883,25 @@ fn build_generator_tower(
     );
     // Realm intrinsics, built once: born old and never-move (O3), so the
     // method sites that answer from them are admitted before any minor.
-    // Use the ordinary builtin prototype birth: all protocol properties
-    // remain inline, including return/throw and the iterator symbol.
-    let proto = super::proto_room::alloc_builtin_prototype(); // %Generator% / %AsyncGenerator%
-    let gen_proto = super::proto_room::alloc_builtin_prototype(); // %Generator.prototype%
+    // Use the same declared-layout birth as Object/Array prototypes. The
+    // shape owns every key and inline slot, without retaining spare old space.
+    // SAFETY: registered runtime descriptors with the ordinary prototype;
+    // every declared slot is populated below before either holder is exposed.
+    let (proto, gen_proto) = unsafe {
+        let proto = crate::object::layout_desc::alloc_layout_prototype(
+            std::ptr::addr_of!(crate::object::runtime_layouts::GENERATOR_FUNCTION_PROTOTYPE),
+            0,
+        );
+        let layout = if is_async {
+            std::ptr::addr_of!(crate::object::runtime_layouts::ASYNC_GENERATOR_PROTOTYPE)
+        } else {
+            std::ptr::addr_of!(crate::object::runtime_layouts::GENERATOR_PROTOTYPE)
+        };
+        (
+            proto,
+            crate::object::layout_desc::alloc_layout_prototype(layout, 0),
+        )
+    };
     if ctor.is_null() || proto.is_null() || gen_proto.is_null() {
         return;
     }
@@ -1005,12 +1020,6 @@ fn build_generator_tower(
         install_proto_symbol_self_method(gen_proto, symbol_name, display_name, thunk);
     }
     set_intrinsic_to_string_tag(gen_proto, inst_tag);
-    // SAFETY: both holders are fresh and unexposed, under the tower's
-    // no-move scope. Their completed shapes retain exactly the used slots.
-    unsafe {
-        super::proto_room::fit_builtin_prototype(proto);
-        super::proto_room::fit_builtin_prototype(gen_proto);
-    }
 
     // SAFETY: `proto` is the live, just-built %(Async)GeneratorFunction.prototype%.
     unsafe {

@@ -28,6 +28,16 @@ fn generator_intrinsic_keys_share_images_and_inline_shapes() {
                 let proto = slot.load(Ordering::Acquire) as *mut ObjectHeader;
                 assert!(!proto.is_null());
                 let shape = crate::object::shapes::object_shape_descriptor(proto).unwrap();
+                let header = (proto as *const u8).sub(crate::gc::GC_HEADER_SIZE)
+                    as *const crate::gc::GcHeader;
+                assert!(crate::gc::never_move::is_never_move(header));
+                assert_eq!(
+                    (*header).size as usize,
+                    crate::gc::GC_HEADER_SIZE
+                        + std::mem::size_of::<ObjectHeader>()
+                        + shape.live_inline_slot_count as usize * 8,
+                    "old intrinsic holders retain only their live inline slots"
+                );
                 let keys = crate::object::object_keys(proto);
                 assert!(keys.count() >= 3);
                 for i in 0..keys.count() {
