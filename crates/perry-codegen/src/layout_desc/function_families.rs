@@ -223,7 +223,8 @@ pub(crate) fn emit(
                 }
                 Key::Binding(id) => {
                     let name = format!("{desc}$key{slot}");
-                    llmod.add_raw_global(format!("@{name} = private global {ATOM_TY} {{ i64 0, ptr null, i8 {}, [3 x i8] zeroinitializer, i32 {slot} }}, section \"{atom_sect}\", align 8", crate::runtime_abi::ATOM_KIND_BINDING_SYMBOL));
+                    let atom_storage = super::atom_storage(&llmod.target_triple);
+                    llmod.add_raw_global(format!("@{name} = private {atom_storage} {ATOM_TY} {{ i64 0, ptr null, i8 {}, [3 x i8] zeroinitializer, i32 {slot} }}, section \"{atom_sect}\", align 8", crate::runtime_abi::ATOM_KIND_BINDING_SYMBOL));
                     let source = &sources[id];
                     // A metadata constant cannot hold the address of a TLS
                     // binding for every agent. This immutable reader is one

@@ -829,7 +829,13 @@ impl LlModule {
                 // COFF section bounds do not retain unreferenced COMDATs.
                 // Atom iteration is a real use: retain one resolved symbol
                 // with a linker directive, without adding runtime data.
-                if self.target_triple.contains("windows") && rhs.starts_with("weak_odr global ") {
+                let image_atom = rhs.starts_with("weak_odr constant ")
+                    && rhs
+                        .split_once(", section \"")
+                        .is_some_and(|(_, attrs)| attrs.starts_with(".perryatm$m\""));
+                if self.target_triple.contains("windows")
+                    && (rhs.starts_with("weak_odr global ") || image_atom)
+                {
                     ir.push_str(&format!(
                         concat!(
                             "module asm \".section .drectve,\\22yni\\22\\0A.ascii ",
