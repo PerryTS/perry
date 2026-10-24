@@ -384,6 +384,16 @@ impl ClassIdsByKeysName {
     pub(crate) fn get(&self, encoded_class: &str) -> u32 {
         self.0.get(encoded_class).copied().unwrap_or(0)
     }
+
+    /// The class id of the class whose keys global is `keys_global`: the
+    /// defining class itself for one of this module's classes (a repeated
+    /// class name gets a suffixed global, `unique_class_keys_global`, and the
+    /// name-keyed map names only one of the classes), else by name.
+    pub(crate) fn of_keys_global(&self, keys_global: &str, encoded_class: &str) -> u32 {
+        MODULE_KEYS_CLASS_IDS
+            .with(|m| m.borrow().get(keys_global).copied())
+            .unwrap_or_else(|| self.get(encoded_class))
+    }
 }
 
 /// One class keys global's birth, as the string pool mints it.
@@ -415,7 +425,7 @@ pub(crate) fn class_birth(
     let (global_name, packed, field_count, _raw_mask_words, _pointer_mask_words) = entry;
     let prefix = crate::symbol_names::class_keys_prefix(module_prefix);
     let encoded_class = global_name.strip_prefix(&prefix).unwrap_or("");
-    let class_id = class_ids.get(encoded_class);
+    let class_id = class_ids.of_keys_global(global_name, encoded_class);
     let image = class_header_image_inits.get(global_name);
     let wide_live = match image {
         Some(&(_, _, birth_live)) if birth_live > *field_count => birth_live,
@@ -455,6 +465,10 @@ pub(crate) fn class_birth(
 }
 
 thread_local! {
+    /// This module's own classes by keys global: the class each global was
+    /// reserved for (`lower_module`). Compiler-internal; nothing of it is
+    /// emitted.
+    static MODULE_KEYS_CLASS_IDS: RefCell<HashMap<String, u32>> = RefCell::new(HashMap::new());
     /// This module's static id per class keys global: the id its mint
     /// requests and its guards compare as an immediate (the definer's id for
     /// a structural stub of the definer's facts, see
@@ -476,6 +490,11 @@ thread_local! {
     static MODULE_SEEDS: RefCell<BTreeMap<u32, BirthShape>> = RefCell::new(BTreeMap::new());
     /// This module's slice of the program-wide map (foreign shape globals).
     static MODULE_PROGRAM_IDS: RefCell<ProgramClassShapeIds> = RefCell::new(ProgramClassShapeIds::default());
+}
+
+/// Install the class each of this module's own class keys globals belongs to.
+pub(crate) fn set_module_keys_class_ids(map: HashMap<String, u32>) {
+    MODULE_KEYS_CLASS_IDS.with(|m| *m.borrow_mut() = map);
 }
 
 /// Install this module's static id maps: for each class keys global whose
@@ -935,8 +954,19 @@ pub(crate) fn static_region_slots(
 /// key-cache builder already mints its plain layout before the class mint, so
 /// it needs a startup seed even when no guard embeds this id. Declared-class
 /// prototypes differ from the plain key-cache layout and do not need a seed.
+///
+/// In an image build every class keys global names a compiler-known birth
+/// layout, and the driver assigns every such content a static identity and
+/// ordinal (`assign_static_shape_ids` over the same `class_birth`
+/// derivation), so the class's shape-word global is a compile-time constant.
+/// A missing identity there is a compiler bug, never a reason to store a
+/// runtime-minted word in module state: module-state globals are shared by
+/// every agent of the image (perry/thread workers never run module init),
+/// while a dynamic LayoutWord names a row of the minting agent only. `None`
+/// is returned only outside an image build (the births pre-pass, or a
+/// codegen compile without a program plan).
 pub(crate) fn requested_shape_id_for_keys_global(keys_global: &str) -> Option<u32> {
-    MODULE_STATIC_IDS.with(|m| {
+    let id = MODULE_STATIC_IDS.with(|m| {
         m.borrow()
             .get(keys_global)
             .filter(|(_, shape)| shape.constfn.is_empty())
@@ -944,7 +974,15 @@ pub(crate) fn requested_shape_id_for_keys_global(keys_global: &str) -> Option<u3
                 note_guard_id(*id, Some(shape));
                 *id
             })
-    })
+    });
+    if id.is_none() && crate::layout_ordinals::image_plan_active() {
+        panic!(
+            "class keys global {keys_global} has no static layout identity in the image plan: \
+             a compiler-known class layout must carry a static ordinal, and a dynamic \
+             LayoutWord must not enter agent-shared module state"
+        );
+    }
+    id
 }
 
 /// The static id behind ANOTHER module's shape-id global `shape_id_global`

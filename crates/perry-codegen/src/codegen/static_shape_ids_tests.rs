@@ -885,3 +885,45 @@ fn a_literal_birth_mints_its_shape_with_the_plain_prototype_on_both_routes() {
         "the literal's static mint must name class id 0, as its seed does: {calls:?}"
     );
 }
+
+/// DPA-F1 #1: a class keys global of an image build always names a static
+/// ordinal. A missing identity used to fall back to a runtime mint stored in
+/// a module-state global, which every agent of the image shares (perry/thread
+/// workers never run module init), while the minted word names a row of the
+/// minting agent only.
+#[test]
+#[should_panic(expected = "no static layout identity")]
+fn an_image_build_never_requests_a_dynamic_class_word() {
+    set_module_static_ids(
+        "probe_lost",
+        &[],
+        &HashMap::new(),
+        &HashMap::new(),
+        &HashMap::new(),
+        &[],
+        &ProgramClassShapeIds::default(),
+    );
+    install_test_ordinals();
+    let _ = requested_shape_id_for_keys_global("perry_class_keys_probe_lost__Lost");
+}
+
+/// The births pre-pass and a compile without a program plan have no static
+/// identities to request; neither is an image build.
+#[test]
+fn the_births_pre_pass_requests_no_identity() {
+    set_module_static_ids(
+        "probe_pre",
+        &[],
+        &HashMap::new(),
+        &HashMap::new(),
+        &HashMap::new(),
+        &[],
+        &ProgramClassShapeIds::default(),
+    );
+    let plan = crate::ProgramLayoutOrdinals::assign(crate::layout_ordinals::native_inputs(), Vec::new())
+        .unwrap();
+    crate::layout_ordinals::begin_module("pre", std::sync::Arc::new(plan), true);
+    assert_eq!(requested_shape_id_for_keys_global("perry_class_keys_probe_pre__C"), None);
+    crate::layout_ordinals::begin_module("none", Default::default(), false);
+    assert_eq!(requested_shape_id_for_keys_global("perry_class_keys_probe_pre__C"), None);
+}
