@@ -56,6 +56,7 @@
       "perry-codegen-swiftui",
       "perry-codegen-wasm",
       "perry-codegen-wear-tiles",
+      "perry-component-io",
       "perry-container-compose",
       "perry-diagnostics",
       "perry-dispatch",
