@@ -27,12 +27,23 @@ struct Leaf {
     counts: [u32; LEAF_PAGES],
 }
 
+/// Every row of a unix or Wasm Region reads a record whether or not its page
+/// is held: the reservation is readable from the start (untouched and given
+/// back pages read the zero page, an absent record), and only held pages are
+/// writable. A held-word read then proves liveness from the record itself
+/// (row below the issued bound, record present). A Windows reservation cannot
+/// be read before commit, so there a held-word read also asks the page
+/// bookkeeping ([`committed_in`]).
+pub(super) const RESERVATION_READABLE: bool = !cfg!(windows);
+
 #[cfg(unix)]
 unsafe fn reserve(bytes: usize) -> *mut u8 {
+    // Readable, not writable: see [`RESERVATION_READABLE`]. MAP_NORESERVE:
+    // reading an untouched page maps the shared zero page and charges nothing.
     let p = libc::mmap(
         core::ptr::null_mut(),
         bytes,
-        libc::PROT_NONE,
+        libc::PROT_READ,
         libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_NORESERVE,
         -1,
         0,
@@ -49,8 +60,9 @@ unsafe fn commit(at: *mut u8, bytes: usize) -> bool {
 }
 #[cfg(unix)]
 unsafe fn discard(at: *mut u8, bytes: usize) -> bool {
+    // Given back, read-only again: a stale word reads the zero page (absent).
     libc::madvise(at.cast(), bytes, libc::MADV_DONTNEED) == 0
-        && libc::mprotect(at.cast(), bytes, libc::PROT_NONE) == 0
+        && libc::mprotect(at.cast(), bytes, libc::PROT_READ) == 0
 }
 #[cfg(unix)]
 unsafe fn unreserve(at: *mut u8, bytes: usize) {

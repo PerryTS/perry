@@ -1830,24 +1830,27 @@ impl ShapeSlab {
     }
 
     /// The record of a held word (memo, record link, parameter): checked
-    /// against this agent's committed rows, so a retired, unpublished or
-    /// other-agent word answers absent instead of touching a PROT_NONE page.
+    /// against this agent's issued rows, so a retired, unpublished or
+    /// other-agent word answers absent: its row reads the zero (absent)
+    /// record of a readable reservation, or on Windows, where a reservation
+    /// cannot be read, the page bookkeeping answers first.
     pub(super) fn agent_record_for_word(word: u32) -> *mut ShapeRecord {
         Self::agent_record_for_word_present(word)
             .unwrap_or(std::ptr::addr_of!(EMPTY_RECORD.0).cast_mut())
     }
+    #[inline]
     pub(super) fn agent_record_for_word_present(word: u32) -> Option<*mut ShapeRecord> {
         if word & crate::codegen_abi::LAYOUT_TAG == 0 {
             return None;
         }
         // The checked read of a held word, answered from this thread's
         // published directory (the same facts `handle_record_ptr` proves):
-        // tag, band, row below the issued bound, row committed, record present.
+        // tag, band, row below the issued bound, record present (and, where
+        // the reservation is not readable, row committed).
         let dir = &AGENT_SHAPE_DIR[0];
         let base = dir.flat_base.get();
         if base.is_null() {
-            // A slab that publishes nothing (tests): the slab answers.
-            return crate::state::state().shapes.slab().handle_record_ptr(LayoutWord(word));
+            return Self::unpublished_record_for_word(word);
         }
         let w = LayoutWord(word);
         if w.band() >= 3 {
@@ -1855,7 +1858,7 @@ impl ShapeSlab {
         }
         let row = w.row().0 as usize;
         if row >= dir.flat_ids.get()
-            || !unsafe {
+            || !flat::RESERVATION_READABLE && !unsafe {
                 flat::committed_in(
                     AGENT_COMMIT.0.get(),
                     AGENT_COMMIT.1.get(),
@@ -1868,6 +1871,13 @@ impl ShapeSlab {
         }
         let p = unsafe { base.add(row) };
         unsafe { (*p).present() }.then_some(p)
+    }
+
+    /// A slab that publishes nothing (tests): the slab answers.
+    #[cold]
+    #[inline(never)]
+    fn unpublished_record_for_word(word: u32) -> Option<*mut ShapeRecord> {
+        crate::state::state().shapes.slab().handle_record_ptr(LayoutWord(word))
     }
 
     /// A live receiver's own header word, or zero for an unshaped receiver.
@@ -1893,7 +1903,7 @@ impl ShapeSlab {
         if word.0 & crate::codegen_abi::LAYOUT_TAG == 0
             || word.band() >= 3
             || word.row().0 >= self.row_bound
-            || !self.region.row_committed(word.row().0 as usize)
+            || !flat::RESERVATION_READABLE && !self.region.row_committed(word.row().0 as usize)
         {
             return None;
         }
