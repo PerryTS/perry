@@ -11,6 +11,7 @@ pub(super) fn relocated_keys(a: &[u8], b: &[u8]) -> (Vec<u64>, usize, usize) {
     for (addr, bytes) in [(first, a), (second, b)] {
         unsafe {
             let key = addr as *mut crate::StringHeader;
+            // GC_STORE_AUDIT(POINTER_FREE): Writes only five scalar StringHeader fields into test-owned Vec<u64> backing. No fields contain GC child pointers.
             key.write(crate::StringHeader {
                 utf16_len: bytes.len() as u32,
                 byte_len: bytes.len() as u32,

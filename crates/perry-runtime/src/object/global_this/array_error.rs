@@ -911,6 +911,7 @@ unsafe fn array_variadic_mutator(
     let heap;
     let cells: &[UnsafeCell<f64>] = if values.len() <= stack.len() {
         for (slot, value) in stack.iter_mut().zip(values) {
+            // GC_STORE_AUDIT(STACK): Writes initialize local MaybeUninit<UnsafeCell<f64>> stack array. Every populated cell is registered by RuntimeHandleScope.root_nanbox_cell before array_proto_mutator can run user setters/traps; scope drops before backing cells (array_error.rs909-935).
             slot.write(UnsafeCell::new(*value));
         }
         std::slice::from_raw_parts(stack.as_ptr().cast(), values.len())

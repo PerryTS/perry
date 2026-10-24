@@ -786,6 +786,7 @@ fn owned_list_is_published_without_copying_and_keeps_key_facts_after_gc() {
         });
         let duplicate = crate::object::key_attrs::alloc_canonical_key_list(2, false, true);
         let src = root.get_raw_mut_ptr::<ArrayHeader>();
+        // GC_STORE_AUDIT(INIT): Duplicate is a fresh unpublished stationary old canonical-key list. Source already passed publish_canonical, which prepares old-parent keys (canonical_keys.rs1483-1500), and survives explicit collect. Copy of two existing stable canonical key values plus attributes runs allocation-free; canonicalize_owned then returns existing identity.
         std::ptr::copy_nonoverlapping(
             crate::array::array_elements_ptr(src),
             crate::array::array_elements_ptr(duplicate),

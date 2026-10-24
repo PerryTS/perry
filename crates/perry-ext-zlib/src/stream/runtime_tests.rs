@@ -282,6 +282,7 @@ extern "C" fn copying_level(c: *const RawClosureHeader, _: JsThis) -> f64 {
     if count == 2 {
         let input = bytes::pin(JsValue::from_bits(input.to_bits())).unwrap();
         // This test owns the Buffer and no byte borrow is live.
+        // GC_STORE_AUDIT(POINTER_FREE): Writes one byte X into pinned Buffer byte payload; test owns Buffer and no byte borrow is live.
         unsafe { input.as_mut_ptr().write(b'X') };
     }
     6.0

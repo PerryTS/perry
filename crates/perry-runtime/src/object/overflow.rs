@@ -132,6 +132,7 @@ unsafe fn allocate(capacity: u32) -> *mut Table {
     let size =
         std::mem::size_of::<Table>() + 3 * capacity as usize * 8 + index_capacity as usize * 4;
     let t = crate::arena::arena_alloc_gc(size, 8, crate::gc::GC_TYPE_OVERFLOW) as *mut Table;
+    // GC_STORE_AUDIT(POINTER_FREE): Table header has six u32 fields (length,capacity,fixed_prefix,deleted,index_capacity,summary); initialization writes only scalar counts and zeros.
     t.write(Table {
         length: 0,
         capacity,
@@ -141,6 +142,7 @@ unsafe fn allocate(capacity: u32) -> *mut Table {
         summary: 0,
     });
     for i in 0..index_capacity as usize {
+        // GC_STORE_AUDIT(POINTER_FREE): index(t) returns *mut u32 scalar slot-index column; writes EMPTY=u32::MAX, not the key/value columns.
         index(t).add(i).write(EMPTY);
     }
     t
@@ -170,11 +172,13 @@ unsafe fn place(t: *mut Table, slot: u32) {
     while *index(t).add(p) != EMPTY {
         let previous = *index(t).add(p);
         if *key_at(t, previous) == key {
+            // GC_STORE_AUDIT(POINTER_FREE): place writes u32 slot ordinal into *mut u32 index column after hashing the key; never copies key bits or heap addresses.
             index(t).add(p).write(slot);
             return;
         }
         p = (p + 1) & mask;
     }
+    // GC_STORE_AUDIT(POINTER_FREE): place writes u32 slot ordinal into *mut u32 index column after hashing the key; never copies key bits or heap addresses.
     index(t).add(p).write(slot);
 }
 
@@ -354,6 +358,7 @@ unsafe fn reserve(obj: *mut ObjectHeader) -> *mut Table {
         (*t).length = out;
         (*t).deleted = 0;
         for i in 0..(*t).index_capacity as usize {
+            // GC_STORE_AUDIT(POINTER_FREE): Compaction clears scalar u32 hash-index column to EMPTY; the separate managed key/value columns receive their own visit_slots barrier.
             index(t).add(i).write(EMPTY);
         }
         for i in 0..out {

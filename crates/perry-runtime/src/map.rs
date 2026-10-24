@@ -1741,6 +1741,7 @@ unsafe fn ensure_capacity(map: *mut MapHeader) -> bool {
         (*next).entries as *mut u64,
         (*next).used * 2,
     );
+    // GC_STORE_AUDIT(POINTER_FREE): Retired previous Map header entries alias is cleared to null; no new edge is introduced.
     (*previous).entries = ptr::null_mut();
     (*previous).used = 0;
     (*previous).capacity = 0;

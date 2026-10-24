@@ -546,6 +546,7 @@ pub(crate) unsafe fn closure_alloc_bound_function(
         .add(2)
         .write(super::dispatch::bound::inline_args_marker(args.len(), true));
     for (i, arg) in args.iter().enumerate() {
+        // GC_STORE_AUDIT(BARRIERED): Each inline bound argument written into capture slot3+i is covered by runtime_write_barrier_newborn_slots(closure, slots, count) whenever newborn_parent_needs_barrier is true; complete capture extent includes these arguments (alloc.rs542-553).
         slots.add(3 + i).write(arg.to_bits());
     }
     if crate::gc::newborn_parent_needs_barrier(closure as usize) {

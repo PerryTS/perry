@@ -37,5 +37,6 @@ pub(super) fn emit(
         "{image} = insertelement <2 x i64> <i64 {gc_packed}, i64 0>, i64 {header_word}, i32 1"
     ));
     let global = crate::typed_shape::header_image_global_name_from_keys_global(keys_global);
+    // GC_STORE_AUDIT(POINTER_FREE): The vector image contains gc_packed header bits and zext(shape_id)<<32 | class_id. Both lanes are scalar allocation/header metadata; no pointer bits are introduced.
     blk.emit_raw(format!("store <2 x i64> {image}, ptr @{global}, align 8"));
 }

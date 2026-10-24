@@ -47,6 +47,7 @@ pub(super) unsafe fn alloc_store_in<const OLD: bool>(capacity: usize) -> *mut Se
         .cast::<u8>()
         .add(std::mem::size_of::<SetStore>())
         .cast::<f64>();
+    // GC_STORE_AUDIT(INIT): Fresh SetStore owns its own inline elements pointer, capacity,used=0 and None indexes; payload is zeroed before return. No existing child edge is copied.
     ptr::write(
         store,
         SetStore {
@@ -83,6 +84,7 @@ pub(crate) unsafe fn owned_store_moved_for_gc(old_user: usize, new_user: usize) 
 /// the Set's rewrite hook after a pass rewrote the `store` edge.
 pub(crate) unsafe fn refresh_elements_alias(set: *mut SetHeader) {
     if let Some(store) = (*set).store.as_ref() {
+        // GC_STORE_AUDIT(ROOT): Only caller is gc::types::run_gc_rewrite_hook SetElements after rewriting traced set.store (types.rs1314). elements re-derived from live store inline payload; no independent edge.
         (*set).elements = store.elements;
     }
 }
