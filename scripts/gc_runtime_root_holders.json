@@ -37,6 +37,12 @@
   "holders": [
     {
       "file": "crates/perry-runtime/src/gc/tenuring.rs",
+      "name": "CAP_PHASE_CYCLES",
+      "verdict": "not_a_gc_pointer",
+      "why": "Cell<CapPhaseCycles> holds only nursery byte/count measurements and booleans: last/before_last come from eden_live_bytes, whole/open totals from those readings, and START resets all counts. No address, handle, JSValue or GC allocation enters any field."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/tenuring.rs",
       "name": "CAP_PHASE_INFLUX_BYTES",
       "verdict": "not_a_gc_pointer",
       "why": "Cell<u64> stores only capped cumulative Eden byte counts from note_cap_phase_reading and zero at start_cap_phase; no address or NaN-boxed value is stored."
