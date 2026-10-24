@@ -1,40 +1,21 @@
-//! The ordinary band's records at FIXED addresses: record `rel` (a ShapeId
-//! minus `SHAPE_ID_BASE`) lives at `base + rel` in one per-agent virtual
-//! reservation (64-bit targets).
-//!
-//! This is what makes "layout word to layout record" ONE address computation
-//! (OBJECT_MODEL_2026-10-13.md §3.7 case 3): the unknown-receiver probe
-//! (`object/layout_probe.rs`) and every by-id reader load the record base
-//! once and index it with the id, instead of walking a page and a chunk
-//! directory. The paged directory stays as the slab's bookkeeping (which runs
-//! are allocated, release, enumeration); on these targets its chunks are
-//! windows of the reservation rather than boxes, so both views name the same
-//! cells.
-//!
-//! The reservation is address space only. A directory page's id range is
-//! committed (made readable) when the directory grows to it, so every id below
-//! [`Region::committed_ids`] reads a record: an untouched one is all zero,
-//! which is `ShapeRecord::EMPTY` (not present). Released chunks are zero
-//! (their records were removed) and give their whole OS pages back.
-use super::ShapeRecord;
-
-/// Ordinary-band ids: `[SHAPE_ID_BASE, SITE_SHAPE_ID_END)`.
-pub(super) const ORDINARY_IDS: usize = (super::SITE_SHAPE_ID_END - super::SHAPE_ID_BASE) as usize;
-/// The smallest reservation accepted when address space is limited.
-const MIN_IDS: usize = 1 << 22;
+//! Sole, immovable record Region. ShapeIds never participate in address arithmetic.
+//! Page ownership is publication/retirement bookkeeping, never a receiver probe.
+use super::{PublishError, ShapeRecord};
+use crate::codegen_abi::LAYOUT_ROW_LIMIT;
+const RECORD: usize = core::mem::size_of::<ShapeRecord>();
 
 pub(super) struct Region {
     base: *mut ShapeRecord,
-    reserved_ids: usize,
-    committed_ids: usize,
+    capacity: usize,
+    pub(super) page: usize,
+    // Number of live records intersecting each OS page. Grows only on publication.
+    live: Vec<u32>,
 }
-
-const RECORD: usize = std::mem::size_of::<ShapeRecord>();
 
 #[cfg(unix)]
 unsafe fn reserve(bytes: usize) -> *mut u8 {
     let p = libc::mmap(
-        std::ptr::null_mut(),
+        core::ptr::null_mut(),
         bytes,
         libc::PROT_NONE,
         libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_NORESERVE,
@@ -42,25 +23,20 @@ unsafe fn reserve(bytes: usize) -> *mut u8 {
         0,
     );
     if p == libc::MAP_FAILED {
-        std::ptr::null_mut()
+        core::ptr::null_mut()
     } else {
         p.cast()
     }
 }
-
 #[cfg(unix)]
 unsafe fn commit(at: *mut u8, bytes: usize) -> bool {
     libc::mprotect(at.cast(), bytes, libc::PROT_READ | libc::PROT_WRITE) == 0
 }
-
 #[cfg(unix)]
-unsafe fn discard(at: *mut u8, bytes: usize) {
-    // The pages hold only zero records already; giving them back keeps a
-    // long-running agent's RSS at its live records, as releasing a boxed
-    // chunk did.
-    libc::madvise(at.cast(), bytes, libc::MADV_DONTNEED);
+unsafe fn discard(at: *mut u8, bytes: usize) -> bool {
+    libc::madvise(at.cast(), bytes, libc::MADV_DONTNEED) == 0
+        && libc::mprotect(at.cast(), bytes, libc::PROT_NONE) == 0
 }
-
 #[cfg(unix)]
 unsafe fn unreserve(at: *mut u8, bytes: usize) {
     libc::munmap(at.cast(), bytes);
@@ -68,117 +44,139 @@ unsafe fn unreserve(at: *mut u8, bytes: usize) {
 
 #[cfg(windows)]
 unsafe fn reserve(bytes: usize) -> *mut u8 {
-    use windows_sys::Win32::System::Memory::{VirtualAlloc, MEM_RESERVE, PAGE_NOACCESS};
-    VirtualAlloc(std::ptr::null(), bytes, MEM_RESERVE, PAGE_NOACCESS).cast()
+    use windows_sys::Win32::System::Memory::*;
+    VirtualAlloc(core::ptr::null(), bytes, MEM_RESERVE, PAGE_NOACCESS).cast()
 }
-
 #[cfg(windows)]
 unsafe fn commit(at: *mut u8, bytes: usize) -> bool {
-    use windows_sys::Win32::System::Memory::{VirtualAlloc, MEM_COMMIT, PAGE_READWRITE};
+    use windows_sys::Win32::System::Memory::*;
     !VirtualAlloc(at.cast(), bytes, MEM_COMMIT, PAGE_READWRITE).is_null()
 }
-
 #[cfg(windows)]
-unsafe fn discard(_at: *mut u8, _bytes: usize) {}
-
+unsafe fn discard(at: *mut u8, bytes: usize) -> bool {
+    use windows_sys::Win32::System::Memory::*;
+    VirtualFree(at.cast(), bytes, MEM_DECOMMIT) != 0
+}
 #[cfg(windows)]
 unsafe fn unreserve(at: *mut u8, _bytes: usize) {
-    use windows_sys::Win32::System::Memory::{VirtualFree, MEM_RELEASE};
-    VirtualFree(at.cast(), 0, MEM_RELEASE);
+    use windows_sys::Win32::System::Memory::*;
+    assert!(
+        VirtualFree(at.cast(), 0, MEM_RELEASE) != 0,
+        "shape Region release failed"
+    );
+}
+
+// Wasm/limited-address-space targets keep a fixed, nonmoving allocation.
+#[cfg(not(any(unix, windows)))]
+unsafe fn reserve(bytes: usize) -> *mut u8 {
+    std::alloc::alloc_zeroed(std::alloc::Layout::from_size_align(bytes, 4096).unwrap())
+}
+#[cfg(not(any(unix, windows)))]
+unsafe fn commit(_at: *mut u8, _bytes: usize) -> bool {
+    true
+}
+#[cfg(not(any(unix, windows)))]
+unsafe fn discard(at: *mut u8, bytes: usize) -> bool {
+    core::ptr::write_bytes(at, 0, bytes);
+    true
+}
+#[cfg(not(any(unix, windows)))]
+unsafe fn unreserve(at: *mut u8, bytes: usize) {
+    std::alloc::dealloc(
+        at,
+        std::alloc::Layout::from_size_align(bytes, 4096).unwrap(),
+    );
 }
 
 fn os_page() -> usize {
     #[cfg(unix)]
     {
-        // SAFETY: sysconf has no preconditions.
-        let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
-        if page > 0 {
-            return page as usize;
+        let p = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+        if p > 0 {
+            return p as usize;
         }
     }
+    #[cfg(windows)]
+    {
+        let mut info = unsafe { core::mem::zeroed() };
+        unsafe { windows_sys::Win32::System::SystemInformation::GetSystemInfo(&mut info) };
+        return info.dwPageSize as usize;
+    }
+    #[allow(unreachable_code)]
     4096
 }
-
 impl Region {
-    /// Reserve the whole ordinary band (or, under an address-space limit,
-    /// the largest power-of-two share of it down to [`MIN_IDS`]).
-    pub(super) fn new() -> Region {
-        let mut ids = ORDINARY_IDS;
+    pub(super) fn new() -> Self {
+        let mut capacity = if cfg!(target_pointer_width = "64") {
+            LAYOUT_ROW_LIMIT as usize
+        } else {
+            1 << 16
+        };
         loop {
-            // SAFETY: a fresh anonymous reservation.
-            let base = unsafe { reserve(ids * RECORD) };
+            let base = unsafe { reserve(capacity * RECORD) };
             if !base.is_null() {
-                return Region {
+                return Self {
                     base: base.cast(),
-                    reserved_ids: ids,
-                    committed_ids: 0,
+                    capacity,
+                    page: os_page(),
+                    live: Vec::new(),
                 };
             }
-            assert!(
-                ids > MIN_IDS,
-                "Perry internal error: cannot reserve address space for the shape records"
-            );
-            ids /= 2;
+            assert!(capacity > (1 << 12), "cannot reserve shape Region");
+            capacity /= 2;
         }
     }
-
-    #[inline(always)]
     pub(super) fn base(&self) -> *mut ShapeRecord {
         self.base
     }
-
-    /// Ids below this read a record.
-    #[inline(always)]
-    pub(super) fn committed_ids(&self) -> usize {
-        self.committed_ids
+    pub(super) fn capacity(&self) -> usize {
+        self.capacity
     }
-
-    /// Make ids `[0, ids)` readable. Returns the new committed bound.
-    pub(super) fn ensure(&mut self, ids: usize) -> usize {
-        if ids <= self.committed_ids {
-            return self.committed_ids;
+    fn pages(&self, row: usize) -> core::ops::RangeInclusive<usize> {
+        row * RECORD / self.page..=((row + 1) * RECORD - 1) / self.page
+    }
+    /// Commit all intersecting pages BEFORE reading or initializing this row.
+    pub(super) fn prepare(&mut self, row: usize) -> Result<*mut ShapeRecord, PublishError> {
+        if row >= self.capacity {
+            return Err(PublishError::Capacity);
         }
-        assert!(
-            ids <= self.reserved_ids,
-            "Perry internal error: ShapeId {ids:#x} past the shape-record reservation"
-        );
-        let page = os_page();
-        let from = (self.committed_ids * RECORD) & !(page - 1);
-        let to = ((ids * RECORD) + page - 1) & !(page - 1);
-        let to = to.min(self.reserved_ids * RECORD);
-        // SAFETY: inside this reservation.
-        let ok = unsafe { commit((self.base as *mut u8).add(from), to - from) };
-        assert!(ok, "Perry internal error: cannot commit shape-record pages");
-        self.committed_ids = (to / RECORD).min(self.reserved_ids);
-        self.committed_ids
-    }
-
-    /// The cells of slab chunk `index` (`chunk_len` records from
-    /// `index * chunk_len`). The caller ensured they are committed.
-    #[inline]
-    pub(super) fn chunk_cells(&self, index: usize, chunk_len: usize) -> *mut ShapeRecord {
-        debug_assert!((index + 1) * chunk_len <= self.committed_ids);
-        // SAFETY: inside the committed prefix.
-        unsafe { self.base.add(index * chunk_len) }
-    }
-
-    /// Give back the OS pages wholly inside ids `[from, to)`, whose records
-    /// are all absent (zero).
-    pub(super) fn discard_ids(&self, from: usize, to: usize) {
-        let page = os_page();
-        let start = ((from * RECORD) + page - 1) & !(page - 1);
-        let end = (to.min(self.committed_ids) * RECORD) & !(page - 1);
-        if end > start {
-            // SAFETY: inside the committed prefix; every record there is EMPTY.
-            unsafe { discard((self.base as *mut u8).add(start), end - start) };
+        let end = *self.pages(row).end();
+        if self.live.len() <= end {
+            self.live.resize(end + 1, 0);
         }
+        for p in self.pages(row) {
+            if self.live[p] == 0
+                && !unsafe { commit(self.base.cast::<u8>().add(p * self.page), self.page) }
+            {
+                return Err(PublishError::Commit);
+            }
+        }
+        Ok(unsafe { self.base.add(row) })
+    }
+    pub(super) fn published(&mut self, row: usize) {
+        for p in self.pages(row) {
+            self.live[p] += 1;
+        }
+    }
+    /// Caller removed identity membership and zeroed the row after proving no carrier.
+    pub(super) fn retired(&mut self, row: usize) {
+        for p in self.pages(row) {
+            assert!(self.live[p] != 0);
+            self.live[p] -= 1;
+            if self.live[p] == 0 {
+                assert!(
+                    unsafe { discard(self.base.cast::<u8>().add(p * self.page), self.page) },
+                    "shape Region page decommit failed"
+                );
+            }
+        }
+    }
+    pub(super) fn committed_bytes(&self) -> usize {
+        self.live.iter().filter(|&&n| n != 0).count() * self.page
     }
 }
-
 impl Drop for Region {
     fn drop(&mut self) {
-        // SAFETY: the reservation made in `new`; nothing reads it after the
-        // slab (its only owner) is dropped.
-        unsafe { unreserve(self.base.cast(), self.reserved_ids * RECORD) };
+        unsafe { unreserve(self.base.cast(), self.capacity * RECORD) };
     }
 }
