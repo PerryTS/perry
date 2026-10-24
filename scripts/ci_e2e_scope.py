@@ -25,9 +25,9 @@ Selection rules (a suite is a `tests/*.rs` target of a workspace crate):
     a `common/` helper module or a `fixtures/` data dir): every suite in that
     crate can be affected, so all of them are selected, unless an explicit
     `SOURCE_SUITE_MAP` entry names the helper's consumers.
-  * `SOURCE_SUITE_MAP` — one hand-maintained exception to the rule below, for
-    `crates/perry-codegen/src/`, whose suites are in-process compiles rather
-    than `perry compile` subprocesses. As of #7708 it is COMPLETE for that
+  * `SOURCE_SUITE_MAP` — explicit cheap in-process checks: codegen sources
+    select their compiler suites, and API-manifest sources select the dispatch
+    signature contract. As of #7708 the codegen map is COMPLETE for that
     crate and checked to stay so: every `crates/perry-codegen/tests/*.rs` must
     be either mapped or listed in `SUITE_EXCLUSIONS` with its failing test and
     an issue, and `--self-test` fails on one that is neither. See its
@@ -172,6 +172,9 @@ _CODEGEN_SUITES = [
 
 SOURCE_SUITE_MAP = {
     _CODEGEN_SRC: [("perry-codegen", suite) for suite in _CODEGEN_SUITES],
+    # #13150: declaration changes must run the existing dispatch/manifest
+    # contract even when no compiler source or test file changes.
+    "crates/perry-api-manifest/src/": [("perry-codegen", "manifest_consistency")],
     # #11124: selecting every codegen suite for this shared helper hits the
     # named-suite cap before either consumer. Keep both in the uncapped tier.
     "crates/perry-codegen/tests/native_proof_support/": [
@@ -478,8 +481,11 @@ def _self_test() -> int:
                 ["crates/perry-codegen/src/codegen/helpers.rs"],
                 sorted(SOURCE_SUITE_MAP["crates/perry-codegen/src/"]),
             ),
-            # …and no other crate's `src/` maps to anything. The general
-            # refusal is still the rule; this is one named exception.
+            (
+                ["crates/perry-api-manifest/src/entries/part_2.rs"],
+                [("perry-codegen", "manifest_consistency")],
+            ),
+            # Unmapped source crates retain the general refusal.
             (["crates/perry-hir/src/lower.rs", "crates/perry/src/main.rs"], []),
             # a perry-codegen source change plus one of its own suites is the
             # union, deduplicated.

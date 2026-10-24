@@ -4425,7 +4425,7 @@ declare module "zlib" {
   /** stdlib */
   export function inflateRawSync(p0: string): Buffer;
   /** stdlib */
-  export function inflateSync(p0: any): Buffer;
+  export function inflateSync(p0: any, options?: any): Buffer;
   /** stdlib */
   export function unzip(buffer: any, options?: any, callback?: any): void;
   /** stdlib */

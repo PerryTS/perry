@@ -321,7 +321,7 @@ pub(crate) const API_MANIFEST_PART_2: &[ApiEntry] = &[
         "inflateSync",
         false,
         None,
-        &[p_any("p0")],
+        &[p_any("p0"), ZLIB_OPTIONS_PARAM],
         TypeSpec::Buffer,
     ),
     method_sig(
