@@ -139,18 +139,24 @@ pub(super) unsafe fn attach(name: &str, constructor: f64) -> f64 {
     let prototype = scope.root_nanbox_f64(prototype);
     for (name, info, length) in methods {
         let method = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc_singleton(info));
-        crate::object::native_module::set_bound_native_closure_name(method.get_raw_mut_ptr(), name);
-        crate::object::native_module::set_builtin_closure_length(
-            method.get_raw_mut_ptr::<ClosureHeader>() as usize,
-            length,
-        );
+        method.with_mut_ptr(|method| {
+            crate::object::native_module::set_bound_native_closure_name(method, name)
+        });
+        method.with_const_ptr::<ClosureHeader, _>(|method| {
+            crate::object::native_module::set_builtin_closure_length(method as usize, length)
+        });
         let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
         let key = scope.root_string_ptr(key);
-        crate::object::js_object_set_field_by_name(
-            crate::value::js_nanbox_get_pointer(prototype.get_nanbox_f64()) as *mut ObjectHeader,
-            key.get_raw_mut_ptr(),
-            crate::value::js_nanbox_pointer(method.get_raw_mut_ptr::<ClosureHeader>() as i64),
-        );
+        key.with_const_ptr(|key| {
+            method.with_const_ptr::<ClosureHeader, _>(|method| {
+                crate::object::js_object_set_field_by_name(
+                    crate::value::js_nanbox_get_pointer(prototype.get_nanbox_f64())
+                        as *mut ObjectHeader,
+                    key,
+                    crate::value::js_nanbox_pointer(method as i64),
+                )
+            })
+        });
         crate::object::set_builtin_property_attrs(
             crate::value::js_nanbox_get_pointer(prototype.get_nanbox_f64()) as usize,
             name.to_string(),
@@ -193,10 +199,12 @@ mod tests {
             let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
             let key = roots.root_string_ptr(key);
             let read = |value| {
-                crate::object::js_object_get_field_by_name(
-                    crate::value::js_nanbox_get_pointer(value) as *const ObjectHeader,
-                    key.get_raw_mut_ptr(),
-                )
+                key.with_const_ptr(|key| {
+                    crate::object::js_object_get_field_by_name(
+                        crate::value::js_nanbox_get_pointer(value) as *const ObjectHeader,
+                        key,
+                    )
+                })
             };
             let actual = read(first.get_nanbox_f64());
             assert!(actual.is_pointer(), "{name} must be a real method value");

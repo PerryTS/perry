@@ -418,28 +418,29 @@ unsafe fn build_v8_instance(module: &str, id: usize) -> f64 {
     ));
     let mname = js_string_from_bytes(module.as_ptr(), module.len() as u32);
     let mname = scope.root_string_ptr(mname);
-    crate::object::js_object_set_field(
-        obj.get_raw_mut_ptr(),
-        0,
-        JSValue::string_ptr(mname.get_raw_mut_ptr()),
-    );
-    crate::object::js_object_set_field(obj.get_raw_mut_ptr(), 1, JSValue::number(id as f64));
+    obj.with_mut_ptr(|obj| {
+        mname.with_const_ptr(|mname| {
+            crate::object::js_object_set_field(obj, 0, JSValue::string_ptr(mname))
+        })
+    });
+    obj.with_mut_ptr(|obj| crate::object::js_object_set_field(obj, 1, JSValue::number(id as f64)));
     let keys = scope.root_raw_mut_ptr(crate::array::js_array_alloc(2));
     for k in [b"__module__".as_slice(), b"__v8_id__".as_slice()] {
         let kp = js_string_from_bytes(k.as_ptr(), k.len() as u32);
         let kp = scope.root_string_ptr(kp);
-        let pushed = crate::array::js_array_push(
-            keys.get_raw_mut_ptr(),
-            JSValue::string_ptr(kp.get_raw_mut_ptr()),
-        );
+        let pushed = keys.with_mut_ptr(|keys| {
+            kp.with_const_ptr(|kp| crate::array::js_array_push(keys, JSValue::string_ptr(kp)))
+        });
         keys.set_raw_mut_ptr(pushed);
     }
-    crate::object::js_object_set_keys(obj.get_raw_mut_ptr(), keys.get_raw_mut_ptr());
-    crate::object::prototype_chain::object_set_static_prototype(
-        obj.get_raw_mut_ptr::<ObjectHeader>() as usize,
-        prototype.get_nanbox_u64(),
-    );
-    crate::value::js_nanbox_pointer(obj.get_raw_mut_ptr::<ObjectHeader>() as i64)
+    obj.with_mut_ptr(|obj| keys.with_mut_ptr(|keys| crate::object::js_object_set_keys(obj, keys)));
+    obj.with_mut_ptr::<ObjectHeader, _>(|obj| {
+        crate::object::prototype_chain::object_set_static_prototype(
+            obj as usize,
+            prototype.get_nanbox_u64(),
+        )
+    });
+    obj.with_const_ptr::<ObjectHeader, _>(|obj| crate::value::js_nanbox_pointer(obj as i64))
 }
 
 /// Read the registry id out of a v8 instance object's field[1].
