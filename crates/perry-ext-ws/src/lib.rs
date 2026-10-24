@@ -43,7 +43,13 @@
 //!   - GC root scanner walks WS_CLIENT_LISTENERS + every
 //!     WsServerHandle's listeners, marking every closure pointer
 //!     so a malloc-triggered sweep can't free them between
-//!     registration and dispatch (issue #35 pattern).
+//!     registration and dispatch (issue #35 pattern). Each owner records the
+//!     agent whose heap allocated its slots, and a collection visits only
+//!     the current agent's.
+//!   - Teardown: the agent's retire hook (`retire_agent_state`) drops every
+//!     row the agent owns — events, the listening count, connections,
+//!     listeners, parent links, protocol state, handles — without queueing or
+//!     running anything.
 //!
 pub mod codec;
 mod connect;
@@ -183,10 +189,30 @@ enum WsCommand {
 }
 
 struct WsClientListeners {
+    /// The agent whose heap allocated these closures: only that agent's
+    /// collections may visit the slots, and only that agent's teardown drops
+    /// them.
+    agent: u64,
     listeners: HashMap<String, Vec<i64>>,
 }
 
+impl WsClientListeners {
+    /// An empty listener table owned by the calling agent.
+    fn new() -> Self {
+        Self {
+            agent: perry_ffi::agent_post::current_agent(),
+            listeners: HashMap::new(),
+        }
+    }
+}
+
 pub struct WsServerHandle {
+    /// The agent that created the server: its listeners and `clients` Set live
+    /// on that agent's heap, and its listening count is that agent's.
+    pub owner_agent: u64,
+    /// This server holds one count in `WS_ACTIVE_SERVERS` for `owner_agent`.
+    /// Cleared when the count is released, so releasing is idempotent.
+    pub counted: bool,
     /// Event name → list of closure pointers.
     pub listeners: HashMap<String, Vec<i64>>,
     pub port: u16,
@@ -262,6 +288,14 @@ fn active_servers_release(agent: u64) {
     }
 }
 
+/// Release the server's listening count, once, to the agent that took it —
+/// whichever thread or agent happens to be closing the server.
+fn release_server_count(server: &mut WsServerHandle) {
+    if std::mem::take(&mut server.counted) {
+        active_servers_release(server.owner_agent);
+    }
+}
+
 fn agent_has_active_servers(agent: u64) -> bool {
     WS_ACTIVE_SERVERS
         .lock()
@@ -283,7 +317,7 @@ extern "C" {
 fn ensure_runtime_hooks_registered() {
     gc_register_mutable_root_scanner_named("perry-ext-ws", scan_ws_roots);
     WS_RUNTIME_HOOKS_REGISTERED.call_once(|| {
-        perry_ffi::agent_post::register_retire_hook(retire_socket_edges);
+        perry_ffi::agent_post::register_retire_hook(retire_agent_state);
         register_agent_event_pump(js_ws_process_pending, js_ws_has_pending);
         unsafe {
             js_register_handle_property_dispatch_extension(js_ext_ws_handle_property_dispatch);
@@ -292,21 +326,71 @@ fn ensure_runtime_hooks_registered() {
     });
 }
 
-extern "C" fn retire_socket_edges(agent: u64) {
+/// Agent teardown: drop every row this agent owns, from every per-agent table.
+///
+/// The retiring agent's heap is about to go away, so nothing left here could
+/// legally be delivered or rooted. It purges, as `perry-ext-http`'s
+/// `retire_client_roots` does, and never runs JS and never touches the dying
+/// agent's driver (the runtime retires driver capabilities separately).
+/// Closing is therefore a state change, not an event: no `'close'` is queued,
+/// so no listener can run on another agent's pump.
+extern "C" fn retire_agent_state(agent: u64) {
+    // Servers first: their handles name the clients they parent.
+    let mut servers = Vec::new();
+    perry_ffi::iter_handle_ids_of::<WsServerHandle, _>(|id| servers.push(id));
+    servers.retain(|id| {
+        get_handle_mut::<WsServerHandle>(*id).is_some_and(|server| {
+            if server.owner_agent != agent {
+                return false;
+            }
+            release_server_count(server);
+            true
+        })
+    });
+    let mut gone: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    {
+        let mut connections = WS_CONNECTIONS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        connections.retain(|ws_id, connection| {
+            let ours = connection.agent == agent;
+            if ours {
+                gone.insert(*ws_id);
+            }
+            !ours
+        });
+    }
+    {
+        let mut listeners = WS_CLIENT_LISTENERS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        listeners.retain(|ws_id, client| {
+            let ours = client.agent == agent;
+            if ours {
+                gone.insert(*ws_id);
+            }
+            !ours
+        });
+    }
+    WS_CLIENT_PARENT_SERVER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .retain(|ws_id, server| !gone.contains(ws_id) && !servers.contains(server));
     WS_PENDING_EVENTS
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .retain(|(owner, _)| *owner != agent);
-    let mut connections = WS_CONNECTIONS
+    WS_ACTIVE_SERVERS
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    for connection in connections.values_mut() {
-        if matches!(connection.transport, WsTransport::Socket { agent: owner, .. } if owner == agent)
-        {
-            connection.transport = WsTransport::Closed;
-            connection.is_open = false;
-            connection.is_closed = true;
-        }
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .retain(|(owner, _)| *owner != agent);
+    turnloop_io::forget_clients(&gone);
+    turnloop_link::forget_links(&gone);
+    for ws_id in gone {
+        let _ = take_handle::<WsClientHandle>(ws_id as Handle);
+    }
+    for server in servers {
+        let _ = take_handle::<WsServerHandle>(server);
     }
 }
 
@@ -339,9 +423,14 @@ pub unsafe extern "C" fn js_ext_ws_handle_property_dispatch(
     dispatch::property(handle, property_name_ptr, property_name_len, out)
 }
 
+/// Visit the calling agent's ws roots, and only those: every slot below is a
+/// heap address, so a collection on one agent must neither rewrite nor mark
+/// another agent's. Each table records the agent whose thread allocated the
+/// slot's value — the thread that registered the listener or created the
+/// server, which is `current_agent()` at that call.
 fn scan_ws_roots(visitor: &mut GcRootVisitor<'_>) {
+    let current = perry_ffi::agent_post::current_agent();
     if let Ok(mut connections) = WS_CONNECTIONS.lock() {
-        let current = perry_ffi::agent_post::current_agent();
         for connection in connections.values_mut() {
             if let WsTransport::Socket { owner, agent } = &mut connection.transport {
                 if *agent == current {
@@ -351,7 +440,7 @@ fn scan_ws_roots(visitor: &mut GcRootVisitor<'_>) {
         }
     }
     if let Ok(mut per_client) = WS_CLIENT_LISTENERS.lock() {
-        for client in per_client.values_mut() {
+        for client in per_client.values_mut().filter(|c| c.agent == current) {
             for cb_vec in client.listeners.values_mut() {
                 for cb in cb_vec.iter_mut() {
                     visitor.visit_i64_slot(cb);
@@ -360,6 +449,9 @@ fn scan_ws_roots(visitor: &mut GcRootVisitor<'_>) {
         }
     }
     iter_handles_of_mut::<WsServerHandle, _>(|server| {
+        if server.owner_agent != current {
+            return;
+        }
         visitor.visit_nanbox_u64_slot(&mut server.clients_bits);
         for cb_vec in server.listeners.values_mut() {
             for cb in cb_vec.iter_mut() {
@@ -535,12 +627,10 @@ pub(crate) fn allocate_client_id() -> usize {
             is_closed: false,
         },
     );
-    WS_CLIENT_LISTENERS.lock().unwrap().insert(
-        ws_id,
-        WsClientListeners {
-            listeners: HashMap::new(),
-        },
-    );
+    WS_CLIENT_LISTENERS
+        .lock()
+        .unwrap()
+        .insert(ws_id, WsClientListeners::new());
     ws_id
 }
 
@@ -1029,9 +1119,7 @@ pub unsafe extern "C" fn js_ws_on_client_i64(
     let ws_id = handle as usize;
     {
         let mut g = WS_CLIENT_LISTENERS.lock().unwrap();
-        let entry = g.entry(ws_id).or_insert_with(|| WsClientListeners {
-            listeners: HashMap::new(),
-        });
+        let entry = g.entry(ws_id).or_insert_with(WsClientListeners::new);
         entry
             .listeners
             .entry(event_name.clone())
@@ -1236,9 +1324,7 @@ pub unsafe extern "C" fn js_ws_on(
         && !replay_is_pending(ReplayKey::Open(ws_id));
     let replay_messages = event_name == "message";
     let mut g = WS_CLIENT_LISTENERS.lock().unwrap();
-    let entry = g.entry(ws_id).or_insert_with(|| WsClientListeners {
-        listeners: HashMap::new(),
-    });
+    let entry = g.entry(ws_id).or_insert_with(WsClientListeners::new);
     entry
         .listeners
         .entry(event_name)
@@ -1313,6 +1399,8 @@ pub extern "C" fn js_ws_server_close_with(handle: i64, callback: f64) {
                 .push(callback_ptr);
         }
         server.is_listening = false;
+        // The count goes back to the agent that took it, not to this caller.
+        release_server_count(server);
         server.listener_id.take()
     };
     if let Some(listener_id) = shutdown {
@@ -1320,7 +1408,6 @@ pub extern "C" fn js_ws_server_close_with(handle: i64, callback: f64) {
         // accept loop's `shutdown_rx` arm did — it broke out of `select!` and
         // left every spawned per-client task running.
         perry_http_server::close_listener(listener_id);
-        active_servers_release(perry_ffi::agent_post::current_agent());
     }
     push_ws_event(PendingWsEvent::ServerClose(handle));
 }

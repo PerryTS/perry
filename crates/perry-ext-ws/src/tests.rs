@@ -96,6 +96,7 @@ fn pending_message_reloads_relocated_listener_and_payload() {
     WS_CLIENT_LISTENERS.lock().unwrap().insert(
         client_id,
         WsClientListeners {
+            agent: perry_ffi::agent_post::current_agent(),
             listeners: HashMap::from([("message".to_string(), vec![first_before, second_before])]),
         },
     );
@@ -149,6 +150,7 @@ fn gc_mutable_scanner_rewrites_client_and_server_listener_roots() {
     WS_CLIENT_LISTENERS.lock().unwrap().insert(
         client_id,
         WsClientListeners {
+            agent: perry_ffi::agent_post::current_agent(),
             listeners: HashMap::from([("message".to_string(), vec![client_callback_before])]),
         },
     );
@@ -157,6 +159,8 @@ fn gc_mutable_scanner_rewrites_client_and_server_listener_roots() {
     let server_callback_before = server_callback.get_raw_mut_ptr::<u64>() as i64;
     let clients_before = alloc_set(4).bits();
     let server_handle = register_handle(WsServerHandle {
+        owner_agent: perry_ffi::agent_post::current_agent(),
+        counted: false,
         listeners: HashMap::from([("connection".to_string(), vec![server_callback_before])]),
         port: 0,
         host: "0.0.0.0".into(),
@@ -560,4 +564,343 @@ fn ready_state_reports_npm_ws_lifecycle() {
     assert_eq!(js_ws_ready_state(ws_id as i64), 3.0);
     WS_CONNECTIONS.lock().unwrap().remove(&ws_id);
     assert_eq!(js_ws_ready_state(ws_id as i64), 3.0);
+}
+
+fn ping_queued_for(ws_id: usize) -> usize {
+    WS_PENDING_EVENTS
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(_, ev)| matches!(ev, PendingWsEvent::Ping(id, _) if *id == ws_id))
+        .count()
+}
+
+/// Every agent may own a loop and pump `js_ws_process_pending`, but an event's
+/// listeners live on the heap of the agent that queued it. Another agent's
+/// drain must leave it queued — it used to take it and call the closures on
+/// the wrong thread, so the owner never saw the event (a noServer upgrade
+/// test stalled whenever a sibling test pumped first).
+#[test]
+fn one_agents_drain_leaves_another_agents_events_queued() {
+    const WS_ID: usize = usize::MAX - 7;
+    let (queued_tx, queued_rx) = std::sync::mpsc::channel();
+    let (other_drained_tx, other_drained_rx) = std::sync::mpsc::channel();
+    let owner = std::thread::spawn(move || {
+        let agent = perry_runtime::agent::enter_worker_agent();
+        push_ws_event(PendingWsEvent::Ping(WS_ID, Vec::new()));
+        queued_tx.send(()).unwrap();
+        other_drained_rx.recv().unwrap();
+        assert_eq!(js_ws_has_pending(), 1, "the owner sees its own event");
+        js_ws_process_pending();
+        assert_eq!(ping_queued_for(WS_ID), 0, "the owner's drain delivers it");
+        perry_runtime::agent::retire_agent(agent);
+    });
+    queued_rx.recv().unwrap();
+    std::thread::spawn(move || {
+        let agent = perry_runtime::agent::enter_worker_agent();
+        js_ws_process_pending();
+        assert_eq!(ping_queued_for(WS_ID), 1, "another agent's drain leaves it");
+        perry_runtime::agent::retire_agent(agent);
+    })
+    .join()
+    .unwrap();
+    other_drained_tx.send(()).unwrap();
+    owner.join().unwrap();
+}
+
+/// One agent's ws state across every per-agent table.
+struct AgentRows {
+    agent: u64,
+    client: usize,
+    server: perry_ffi::Handle,
+    link: i64,
+}
+
+fn link_write(_: i64, _: &[u8]) {}
+fn link_end(_: i64) {}
+
+/// Create, as the calling agent, one row in every per-agent table: a queued
+/// event, a listening-server count, a connection, a client listener table, a
+/// client-to-server parent link, a protocol link, and the server handle.
+fn seed_agent_rows(link: i64) -> AgentRows {
+    ensure_runtime_hooks_registered();
+    let agent = perry_ffi::agent_post::current_agent();
+    let client = register_turnloop_client(link);
+    turnloop_link::adopt_existing(
+        link,
+        client,
+        turnloop_link::Transport {
+            write: link_write,
+            finish: link_end,
+            destroy: link_end,
+        },
+        codec::Role::Server,
+        &[],
+    );
+    let server = register_handle(WsServerHandle {
+        owner_agent: agent,
+        counted: true,
+        listeners: HashMap::new(),
+        port: 1,
+        host: "127.0.0.1".into(),
+        attached_server: None,
+        no_server: false,
+        is_listening: true,
+        client_ids: vec![client],
+        clients_bits: JsValue::UNDEFINED.bits(),
+        listener_id: None,
+    });
+    active_servers_add(agent);
+    WS_CLIENT_PARENT_SERVER
+        .lock()
+        .unwrap()
+        .insert(client, server);
+    push_ws_event(PendingWsEvent::Ping(client, Vec::new()));
+    AgentRows {
+        agent,
+        client,
+        server,
+        link,
+    }
+}
+
+impl AgentRows {
+    /// Whether any table still holds a row for this agent's state.
+    fn survivors(&self) -> Vec<&'static str> {
+        let mut found = Vec::new();
+        let mut note = |present: bool, table: &'static str| {
+            if present {
+                found.push(table)
+            }
+        };
+        note(ping_queued_for(self.client) != 0, "WS_PENDING_EVENTS");
+        note(
+            WS_PENDING_EVENTS
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(owner, _)| *owner == self.agent),
+            "WS_PENDING_EVENTS (any)",
+        );
+        note(
+            WS_ACTIVE_SERVERS
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(owner, _)| *owner == self.agent),
+            "WS_ACTIVE_SERVERS",
+        );
+        note(
+            WS_CONNECTIONS.lock().unwrap().contains_key(&self.client),
+            "WS_CONNECTIONS",
+        );
+        note(
+            WS_CLIENT_LISTENERS
+                .lock()
+                .unwrap()
+                .contains_key(&self.client),
+            "WS_CLIENT_LISTENERS",
+        );
+        note(
+            WS_CLIENT_PARENT_SERVER
+                .lock()
+                .unwrap()
+                .contains_key(&self.client),
+            "WS_CLIENT_PARENT_SERVER",
+        );
+        note(turnloop_link::owns(self.link), "turnloop_link::links");
+        note(perry_ffi::handle_exists(self.server), "server handle");
+        note(
+            perry_ffi::handle_exists(self.client as i64),
+            "client handle",
+        );
+        found
+    }
+}
+
+/// A `worker_threads` worker that owns ws state and exits leaves nothing
+/// behind, and a sibling agent's state is untouched by it. The retire path is
+/// the runtime's own `retire_agent`, which is what the worker thread calls.
+#[test]
+fn retiring_an_agent_purges_its_ws_state_and_only_its_own() {
+    std::thread::spawn(|| {
+        let a = perry_runtime::agent::enter_worker_agent();
+        let a_rows = seed_agent_rows(-2_001);
+        let b = perry_runtime::agent::enter_worker_agent();
+        let b_rows = seed_agent_rows(-2_002);
+        assert_eq!((a_rows.agent, b_rows.agent), (a, b));
+        assert_eq!(a_rows.survivors().len(), b_rows.survivors().len());
+        assert!(b_rows.survivors().len() >= 8, "{:?}", b_rows.survivors());
+        assert_eq!(js_ws_has_pending(), 1, "B is alive through its own rows");
+
+        perry_runtime::agent::retire_agent(b);
+
+        let left = b_rows.survivors();
+        assert!(left.is_empty(), "retired agent B still has rows: {left:?}");
+        // A is a different agent: every row it owns is still there.
+        perry_runtime::agent::enter_agent_for_test(a);
+        assert_eq!(
+            a_rows.survivors().len(),
+            9,
+            "A lost rows: {:?}",
+            a_rows.survivors()
+        );
+        assert_eq!(js_ws_has_pending(), 1, "A is alive through its own rows");
+        perry_runtime::agent::retire_agent(a);
+        assert!(a_rows.survivors().is_empty(), "{:?}", a_rows.survivors());
+    })
+    .join()
+    .unwrap();
+}
+
+/// One agent's connection, listening server or queued event must not keep a
+/// different agent's loop alive: only the owner's pump may drain them.
+#[test]
+fn another_agents_ws_state_does_not_keep_this_agents_loop_alive() {
+    std::thread::spawn(|| {
+        let a = perry_runtime::agent::enter_worker_agent();
+        assert_eq!(js_ws_has_pending(), 0, "a fresh agent has nothing pending");
+        let b = perry_runtime::agent::enter_worker_agent();
+        let b_rows = seed_agent_rows(-2_003);
+        assert_eq!(js_ws_has_pending(), 1);
+
+        // Each kind of B state alone, with the others removed, to show that
+        // every one of them is scoped: events, the server count, and a live
+        // connection.
+        perry_runtime::agent::enter_agent_for_test(a);
+        assert_eq!(js_ws_has_pending(), 0, "B's state keeps A's loop alive");
+        perry_runtime::agent::enter_agent_for_test(b);
+        WS_PENDING_EVENTS
+            .lock()
+            .unwrap()
+            .retain(|(owner, _)| *owner != b);
+        assert_eq!(js_ws_has_pending(), 1, "B still has a server and a socket");
+        WS_ACTIVE_SERVERS
+            .lock()
+            .unwrap()
+            .retain(|(owner, _)| *owner != b);
+        assert_eq!(js_ws_has_pending(), 1, "B still has a live connection");
+        perry_runtime::agent::enter_agent_for_test(a);
+        assert_eq!(js_ws_has_pending(), 0);
+        perry_runtime::agent::retire_agent(b);
+        perry_runtime::agent::retire_agent(a);
+        assert!(b_rows.survivors().is_empty());
+    })
+    .join()
+    .unwrap();
+}
+
+/// A collection on one agent visits only that agent's ws slots. A sibling
+/// agent's slots hold addresses on a heap this collection does not own:
+/// rewriting or marking them is wrong, so they must be left exactly as they
+/// were while this agent's own slots are rewritten.
+#[test]
+fn a_collection_visits_only_the_current_agents_ws_roots() {
+    std::thread::spawn(|| {
+        let guard = GcTestGuard::new();
+        perry_ffi::gc_register_mutable_root_scanner_named("perry-ext-ws", scan_ws_roots);
+        let a = perry_runtime::agent::enter_worker_agent();
+        let b = perry_runtime::agent::enter_worker_agent();
+
+        // One client listener table and one server per agent, each pointing
+        // at a young closure-like root the collection will move.
+        let mut seed = |agent: u64, client: usize| {
+            perry_runtime::agent::enter_agent_for_test(agent);
+            let for_client = guard.scope.root_raw_mut_ptr(young_gc_root() as *mut u64);
+            let for_server = guard.scope.root_raw_mut_ptr(young_gc_root() as *mut u64);
+            let client_cb = for_client.get_raw_mut_ptr::<u64>() as i64;
+            let server_cb = for_server.get_raw_mut_ptr::<u64>() as i64;
+            let mut listeners = WsClientListeners::new();
+            listeners
+                .listeners
+                .insert("message".to_string(), vec![client_cb]);
+            WS_CLIENT_LISTENERS
+                .lock()
+                .unwrap()
+                .insert(client, listeners);
+            let server = register_handle(WsServerHandle {
+                owner_agent: agent,
+                counted: false,
+                listeners: HashMap::from([("connection".to_string(), vec![server_cb])]),
+                port: 0,
+                host: "127.0.0.1".into(),
+                attached_server: None,
+                no_server: true,
+                is_listening: false,
+                client_ids: Vec::new(),
+                clients_bits: JsValue::UNDEFINED.bits(),
+                listener_id: None,
+            });
+            (client_cb, server_cb, server)
+        };
+        let (a_client_before, a_server_before, a_server) = seed(a, usize::MAX - 20_001);
+        let (b_client_before, b_server_before, b_server) = seed(b, usize::MAX - 20_002);
+
+        // Collect as agent A.
+        perry_runtime::agent::enter_agent_for_test(a);
+        let _ = perry_runtime::gc::gc_collect_minor();
+
+        let listener_of =
+            |client: usize| WS_CLIENT_LISTENERS.lock().unwrap()[&client].listeners["message"][0];
+        let server_listener_of =
+            |server| get_handle::<WsServerHandle>(server).unwrap().listeners["connection"][0];
+        assert_rewritten(a_client_before, listener_of(usize::MAX - 20_001));
+        assert_rewritten(a_server_before, server_listener_of(a_server));
+        assert_eq!(
+            listener_of(usize::MAX - 20_002),
+            b_client_before,
+            "A's collection rewrote B's client listener slot"
+        );
+        assert_eq!(
+            server_listener_of(b_server),
+            b_server_before,
+            "A's collection rewrote B's server listener slot"
+        );
+
+        WS_CLIENT_LISTENERS
+            .lock()
+            .unwrap()
+            .remove(&(usize::MAX - 20_001));
+        WS_CLIENT_LISTENERS
+            .lock()
+            .unwrap()
+            .remove(&(usize::MAX - 20_002));
+        drop_handle(a_server);
+        drop_handle(b_server);
+    })
+    .join()
+    .unwrap();
+}
+
+/// A server's listening count goes back to the agent that took it, however
+/// many times and from whichever agent the release runs, and never to the
+/// caller's own count.
+#[test]
+fn releasing_a_server_count_credits_the_creating_agent_once() {
+    std::thread::spawn(|| {
+        let a = perry_runtime::agent::enter_worker_agent();
+        let a_rows = seed_agent_rows(-2_004);
+        let b = perry_runtime::agent::enter_worker_agent();
+        let b_rows = seed_agent_rows(-2_005);
+        assert!(agent_has_active_servers(a) && agent_has_active_servers(b));
+
+        // B (the calling agent) releases A's server, twice.
+        for _ in 0..2 {
+            let server = get_handle_mut::<WsServerHandle>(a_rows.server).unwrap();
+            release_server_count(server);
+        }
+        assert!(!agent_has_active_servers(a), "A's count was not released");
+        assert!(agent_has_active_servers(b), "B paid for A's server");
+        assert_eq!(
+            js_ws_has_pending(),
+            1,
+            "B is still alive through its server"
+        );
+
+        perry_runtime::agent::retire_agent(a);
+        perry_runtime::agent::retire_agent(b);
+        assert!(a_rows.survivors().is_empty() && b_rows.survivors().is_empty());
+    })
+    .join()
+    .unwrap();
 }
