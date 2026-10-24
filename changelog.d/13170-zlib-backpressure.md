@@ -1,0 +1,1 @@
+- Verify compressed pipeline backpressure at every sink write, independent of transform chunk sizes.
