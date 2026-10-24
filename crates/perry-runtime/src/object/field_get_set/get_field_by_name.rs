@@ -58,6 +58,12 @@ pub extern "C" fn js_object_get_field_by_name(
     key: *const crate::StringHeader,
 ) -> JSValue {
     let receiver_bits = obj as u64;
+    // This ABI also accepts raw native registry ids. They must reach the
+    // handle dispatcher without first being boxed as GC-headed pointers by
+    // either of the callback-free heap probes below.
+    if crate::value::addr_class::is_handle_band(receiver_bits as usize) {
+        return get_field_by_name_past_data_probe(obj, key);
+    }
     let receiver = JSValue::from_bits(receiver_bits);
     if receiver.is_bool() || receiver.is_bigint() {
         if !key.is_null() {
