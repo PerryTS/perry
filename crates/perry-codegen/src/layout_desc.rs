@@ -35,6 +35,16 @@ mod methods;
 pub const KEY_TY: &str = "{ ptr, i32, i8, [3 x i8] }";
 /// `%StaticAtom`: hash, string, kind, pad, index (24 bytes; §6a).
 pub const ATOM_TY: &str = "{ i64, ptr, i8, [3 x i8], i32 }";
+// Windows atom records share one read-only COFF image with the Rust atoms
+// and boundary markers. A writable input would be split into another section.
+fn atom_storage(target: &str) -> &'static str {
+    if target.contains("windows") {
+        "constant"
+    } else {
+        "global"
+    }
+}
+
 /// Byte offset of the immutable template LayoutWord in a descriptor.
 pub const DESC_LAYOUT_ID_OFFSET: u32 = 12;
 
@@ -273,8 +283,9 @@ fn atom(
         "__DATA,__perry_atoms",
         ".perryatm$m",
     );
+    let atom_storage = atom_storage(&llmod.target_triple);
     llmod.add_coalesced_global(&name, format!(
-        "@{name} = weak_odr global {ATOM_TY} {{ i64 {}, ptr {image}, i8 {}, [3 x i8] [i8 {}, i8 0, i8 0], i32 {} }}, section \"{sect}\", align 8",
+        "@{name} = weak_odr {atom_storage} {ATOM_TY} {{ i64 {}, ptr {image}, i8 {}, [3 x i8] [i8 {}, i8 0, i8 0], i32 {} }}, section \"{sect}\", align 8",
         fnv1a(key.as_bytes()) as i64,
         crate::runtime_abi::ATOM_KIND_STRING,
         u8::from(colour.is_some()),
@@ -314,8 +325,9 @@ fn symbol_atom(
             "__DATA,__perry_atoms",
             ".perryatm$m",
         );
+        let atom_storage = atom_storage(&llmod.target_triple);
         llmod.add_raw_global(format!(
-            "@{name} = internal global {ATOM_TY} {{ i64 {}, ptr null, i8 {}, [3 x i8] zeroinitializer, i32 0 }}, section \"{sect}\", align 8",
+            "@{name} = internal {atom_storage} {ATOM_TY} {{ i64 {}, ptr null, i8 {}, [3 x i8] zeroinitializer, i32 0 }}, section \"{sect}\", align 8",
             hash as i64,
             crate::runtime_abi::ATOM_KIND_BINDING_SYMBOL,
         ));
@@ -356,8 +368,9 @@ fn symbol_atom(
         "__DATA,__perry_atoms",
         ".perryatm$m",
     );
+    let atom_storage = atom_storage(&llmod.target_triple);
     llmod.add_coalesced_global(&name, format!(
-        "@{name} = weak_odr global {ATOM_TY} {{ i64 {}, ptr {image}, i8 {kind}, [3 x i8] zeroinitializer, i32 {index} }}, section \"{sect}\", align 8",
+        "@{name} = weak_odr {atom_storage} {ATOM_TY} {{ i64 {}, ptr {image}, i8 {kind}, [3 x i8] zeroinitializer, i32 {index} }}, section \"{sect}\", align 8",
         hash as i64,
     ));
     emitted.insert(spelling, name.clone());
@@ -828,8 +841,9 @@ pub(crate) fn emit_module_layouts(
             );
             // weak_odr coalesces one well-known atom across modules.
             if !atoms.contains_key(name) {
+                let atom_storage = atom_storage(&llmod.target_triple);
                 llmod.add_coalesced_global(name, format!(
-                    "@{name} = weak_odr global {ATOM_TY} {{ i64 {}, ptr null, i8 {}, [3 x i8] zeroinitializer, i32 {} }}, section \"{atom_sect}\", align 8",
+                    "@{name} = weak_odr {atom_storage} {ATOM_TY} {{ i64 {}, ptr null, i8 {}, [3 x i8] zeroinitializer, i32 {} }}, section \"{atom_sect}\", align 8",
                     hash as i64, crate::runtime_abi::ATOM_KIND_WELL_KNOWN_SYMBOL,
                     crate::runtime_abi::WELL_KNOWN_SYMBOL_ITERATOR));
                 atoms.insert(name.into(), name.into());

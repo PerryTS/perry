@@ -391,6 +391,17 @@ const SENTINEL_FAMILY: u32 = u32::MAX;
 
 macro_rules! section_sentinel {
     ($name:ident, $ty:ty, $init:expr, $elf:literal, $mach:literal, $win:literal) => {
+        section_sentinel!(@storage [mut], $name, $ty, $init, $elf, $mach, $win);
+    };
+    (@atom $name:ident, $ty:ty, $init:expr, $elf:literal, $mach:literal, $win:literal) => {
+        // COFF splits read-only and writable inputs even with the same section
+        // name. Atoms are immutable; match the runtime and emitted records.
+        #[cfg(target_os = "windows")]
+        section_sentinel!(@storage [], $name, $ty, $init, $elf, $mach, $win);
+        #[cfg(not(target_os = "windows"))]
+        section_sentinel!(@storage [mut], $name, $ty, $init, $elf, $mach, $win);
+    };
+    (@storage [$($mutable:tt)*], $name:ident, $ty:ty, $init:expr, $elf:literal, $mach:literal, $win:literal) => {
         // Always create the section (programs without layouts, Rust tests):
         // `used(linker)` keeps it, and `bounds` references it.
         #[used(linker)]
@@ -400,7 +411,7 @@ macro_rules! section_sentinel {
             not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
             link_section = $elf
         )]
-        static mut $name: $ty = $init;
+        static $($mutable)* $name: $ty = $init;
     };
 }
 
@@ -431,7 +442,7 @@ section_sentinel!(
     ".perrylay$m"
 );
 section_sentinel!(
-    ATOM_SECTION_SENTINEL,
+    @atom ATOM_SECTION_SENTINEL,
     StaticAtom,
     StaticAtom {
         hash: 0,
@@ -2971,6 +2982,24 @@ mod windows_layout_bounds_tests {
             let address = record as usize;
             assert!(address >= start && address + std::mem::size_of::<PerryLayoutDesc>() <= end);
             assert!(image_layouts().any(|entry| std::ptr::eq(entry, record)));
+        }
+    }
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod windows_atom_bounds_tests {
+    use super::*;
+
+    #[test]
+    fn image_bounds_include_runtime_atoms_and_sentinel() {
+        let (start, end) = atom_bounds();
+        let atom = crate::object::runtime_layouts::test_image_atom();
+        let sentinel = std::ptr::addr_of!(ATOM_SECTION_SENTINEL);
+        assert!(start < end, "COFF atom image must not be empty");
+        for record in [atom, sentinel] {
+            let address = record as usize;
+            assert!(address >= start && address + std::mem::size_of::<StaticAtom>() <= end);
+            assert!(image_atoms().any(|entry| std::ptr::eq(entry, record)));
         }
     }
 }

@@ -517,6 +517,11 @@ pub(crate) unsafe fn layout_id(desc: *const PerryLayoutDesc) -> u32 {
 static IMAGE_0: ImageString<14> = image(*b"highWaterMark\0");
 wasm_string_image!(IMAGE_0);
 
+#[cfg(all(test, target_os = "windows"))]
+pub(crate) fn test_image_atom() -> *const StaticAtom {
+    std::ptr::addr_of!(ATOM_0)
+}
+
 #[cfg(test)]
 pub(crate) fn test_image_string() -> *const StringHeader {
     &IMAGE_0.string
