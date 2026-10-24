@@ -331,8 +331,10 @@ impl Model {
     /// template-wide mark already on the template's own token holds for it.
     pub(crate) fn site_tok(&mut self, tm: TmplId, call: CallId) -> Tok {
         // Another unit's class: one token for all its instances here (its
-        // facts are its defining unit's).
-        let call = if self.foreign.contains_key(&tm) {
+        // facts are its defining unit's). The instance other units construct
+        // of a published class is its own token (DECISIONS 125): what the
+        // constructor does to it happens to the instance its methods run on.
+        let call = if self.foreign.contains_key(&tm) || self.contract_new.contains(&call) {
             NO_CTX
         } else {
             call
@@ -995,6 +997,7 @@ impl Model {
             ret,
             site: 0,
         });
+        self.contract_new.insert(call);
         self.construct(call, cobj);
         // ... and read its fields: they leave key by key, described by the
         // class contract (`Gen::fields_leave`, DECISIONS 88).
@@ -1014,17 +1017,18 @@ impl Model {
             return false;
         }
         given.push(t);
-        // DECISIONS 116: a sealed class's methods run on `t` from now on.
-        if self.sealed.contains(&tm) {
-            let ds: Vec<NodeId> = self
-                .sealed_this
-                .iter()
-                .filter(|(f, _)| self.published_this.get(f).is_some_and(|rs| rs.contains(&recv)))
-                .flat_map(|(_, ds)| ds.iter().copied())
-                .collect();
-            for d in ds {
-                self.add_tok(d, t);
-            }
+        // A sealed class's methods (DECISIONS 116) and the methods run on
+        // published receivers (DECISIONS 125) run on `t` from now on.
+        let sealed = self.sealed.contains(&tm);
+        let ds: Vec<NodeId> = self
+            .given_this
+            .iter()
+            .filter(|(f, _)| self.published_this.get(f).is_some_and(|rs| rs.contains(&recv)))
+            .filter(|(&f, _)| sealed || self.join_holds(f, t))
+            .flat_map(|(_, ds)| ds.iter().copied())
+            .collect();
+        for d in ds {
+            self.add_tok(d, t);
         }
         for e in self.recv_log.get(&recv).cloned().unwrap_or_default() {
             match e {

@@ -83,6 +83,15 @@ pub struct Gen<'a> {
     /// and nothing of this unit (DECISIONS 88): its nodes over the
     /// instances that left, published as one value contract.
     pub field_values: FxHashMap<(TmplId, Atom), Vec<NodeId>>,
+    /// DECISIONS 126: a field holding only this unit's typed arrays, none
+    /// escaped or hard: published as the owner's typed arrays (their one
+    /// element kind, the primitives beside them). `ta_reported`: the fields
+    /// a reader's census reported (`ta <key> of <display>`): sunk.
+    pub field_tas: FxHashMap<(TmplId, Atom), (Option<u8>, u16)>,
+    pub ta_reported: crate::pts::FxHashSet<(String, String)>,
+    /// DECISIONS 126: the stand-ins of other units' typed-array fields
+    /// (report, token), one per class and key.
+    pub stand_in_tas: Vec<(String, Tok)>,
     /// Design §17.16 (b): the cells this unit names (key, node), the cells
     /// whose values no contract describes (sunk, published unknown), and
     /// the cells it reads.
@@ -339,6 +348,9 @@ impl<'a> Gen<'a> {
             field_layouts: FxHashMap::default(),
             field_prims: Default::default(),
             field_values: FxHashMap::default(),
+            field_tas: FxHashMap::default(),
+            ta_reported: Default::default(),
+            stand_in_tas: Vec::new(),
             cells: Vec::new(),
             cell_bad: Default::default(),
             cells_read: Vec::new(),
@@ -1080,13 +1092,18 @@ impl<'a> Gen<'a> {
     /// `this` holds them in place of the class's receiver token
     /// (`Model::escape_this`); this unit's own display is its own class's
     /// instance. A changed join solves the owner again (`units::run`).
+    /// DECISIONS 123: no receiver published yet (the running units solve
+    /// after the owner) is no receiver, as a closed function's parameters
+    /// hold nothing before its callers publish (decision 13): the join only
+    /// grows from there.
     pub(crate) fn published_receivers(&mut self) {
         let Some(unit_in) = self.unit_in else {
             return;
         };
-        if unit_in.this_args_top || unit_in.eval_scopes() || unit_in.this_args.is_empty() {
+        if unit_in.this_args_top || unit_in.eval_scopes() {
             return;
         }
+        let mut none = None;
         for f in 0..self.m.funcs.len() as FnIdx {
             let fi = &self.m.funcs[f as usize];
             if fi.module != 0
@@ -1099,6 +1116,8 @@ impl<'a> Gen<'a> {
             }
             let name = fi.name.clone();
             let Some(vc) = unit_in.this_args.get(&name) else {
+                let n = *none.get_or_insert_with(|| self.m.node_l("this-args-none"));
+                self.m.this_args.insert(f, n);
                 continue;
             };
             let described = !vc.unknown
@@ -1222,6 +1241,23 @@ impl<'a> Gen<'a> {
             self.layouts_read.push((d.to_string(), seen));
         }
         self.unit_in.filter(|u| !u.broken(d)).and_then(|u| u.layout(d))
+    }
+
+    /// DECISIONS 126: another unit's typed arrays in field `key` of class
+    /// `display`, as this unit sees them: one typed array of their element
+    /// kind. When it escapes or takes a hard mark here, the census reports
+    /// `ta <key> of <display>` and the owner sinks the field.
+    fn stand_in_ta(&mut self, mi: u32, display: &str, key: &str, elem: Option<u8>) -> Tok {
+        let rep = format!("ta {key} of {display}");
+        if let Some(&(_, t)) = self.stand_in_tas.iter().find(|(r, _)| *r == rep) {
+            return t;
+        }
+        let (t, _) = self.bobj(mi, "TypedArray");
+        if let (Some(k), Some(tm)) = (elem, self.m.tmpl_of(t)) {
+            self.m.ta_elem.insert(tm, k);
+        }
+        self.stand_in_tas.push((rep, t));
+        t
     }
 
     /// DECISIONS 94: another unit's array as this unit sees it: an array
@@ -1425,6 +1461,15 @@ impl<'a> Gen<'a> {
         for fld in &c.facts.fields {
             let a = self.m.atom(&fld.key);
             let n = self.m.field(inst, a);
+            // DECISIONS 126: a field holding only the defining unit's typed
+            // arrays: one stand-in typed array per class and key, whose uses
+            // here the census reports (`Gen::reports`).
+            if let Some((_, elem, p)) = c.field_tas.iter().find(|(k, _, _)| k == &fld.key) {
+                let t = self.stand_in_ta(mi, &c.display, &fld.key, *elem);
+                self.m.add_tok(n, t);
+                self.m.add_prim(n, *p);
+                continue;
+            }
             // A field holding only the defining unit's literal layouts:
             // instances of their stand-ins (§18.7), made below.
             if let Some(fl) = c.field_layouts.iter().find(|(k, _, _)| k == &fld.key) {
@@ -1622,6 +1667,20 @@ impl<'a> Gen<'a> {
             let escaped = self.m.is_escaped(t) && !self.open_fn(t);
             if self.m.aborted || escaped || self.m.hard.contains_key(&t) {
                 out.push(format!("fn:{name}"));
+            }
+        }
+        // A value stored under a named key of it is one the owner does not
+        // see (an element store is the typed array's own data).
+        for (rep, t) in &self.stand_in_tas {
+            let written = self.m.field_keys.get(t).is_some_and(|ks| {
+                ks.iter().any(|&a| {
+                    self.m.fields.get(&(*t, a)).is_some_and(|&n| {
+                        !self.m.nodes[n as usize].pts.is_empty() || self.m.nodes[n as usize].prim != 0
+                    })
+                })
+            });
+            if self.m.aborted || written || self.m.is_escaped(*t) || self.m.hard.contains_key(t) {
+                out.push(rep.clone());
             }
         }
         out.extend(self.override_reports());

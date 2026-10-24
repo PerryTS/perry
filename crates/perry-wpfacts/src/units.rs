@@ -35,6 +35,11 @@ pub(crate) struct ClassContract {
     /// primitives) and nothing of the defining unit: what they hold, as a
     /// value contract (DECISIONS 88), the reader seeds them with.
     pub field_values: Vec<(String, ValueContract)>,
+    /// Fields that hold only the defining unit's typed arrays, none escaped
+    /// or hard (DECISIONS 126): key, their one element kind, the primitives
+    /// beside them. The reader holds one stand-in typed array per class and
+    /// key; its census reports `ta <key> of <display>` for what it does.
+    pub field_tas: Vec<(String, Option<u8>, u16)>,
     /// The defining unit stores under computed keys: a reader may find any
     /// key (unknown values). Otherwise the keys are the facts' fields.
     pub open_keys: bool,
@@ -324,9 +329,16 @@ impl ClassContract {
                 vals.push((k.clone(), v));
             }
         }
+        let mut tas = Vec::new();
+        for (k, e, p) in &self.field_tas {
+            if let Some((_, f, q)) = b.field_tas.iter().find(|(x, _, _)| x == k) {
+                tas.push((k.clone(), if e == f { *e } else { None }, *p | *q));
+            }
+        }
         self.field_fns = fns;
         self.field_layouts = lays;
         self.field_values = vals;
+        self.field_tas = tas;
         self.open_keys |= b.open_keys;
         self.ctor_leaks |= b.ctor_leaks;
         common_prefix(&mut self.birth_keys, &b.birth_keys);
@@ -1501,8 +1513,10 @@ fn resolve_again(
     for d in fresh {
         // An override report changes the overridden class's unit
         // (DECISIONS 59).
+        // So does a typed-array field report (DECISIONS 126).
         let d = d
             .strip_prefix("override ")
+            .or_else(|| d.strip_prefix("ta "))
             .and_then(|r| r.split_once(" of "))
             .map_or(d.as_str(), |(_, c)| c);
         match owner.get(d) {

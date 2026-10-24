@@ -24,6 +24,15 @@ const T2: [(&str, &str); 2] = [
     ("/t2/r.js", include_str!("fixtures/cjs_t2/r.js")),
 ];
 
+/// AWFY Richards as the compiler wraps it: `sa_Richards.js` requires
+/// `richards.js` (RBObject and its eight subclasses), which requires
+/// `benchmark.js`.
+const T3: [(&str, &str); 3] = [
+    ("/t3/sa_Richards.js", include_str!("fixtures/cjs_t3/sa_Richards.js")),
+    ("/t3/richards.js", include_str!("fixtures/cjs_t3/richards.js")),
+    ("/t3/benchmark.js", include_str!("fixtures/cjs_t3/benchmark.js")),
+];
+
 fn hirs(mods: &[(&str, &str)]) -> Vec<(String, perry_hir::Module)> {
     mods.iter()
         .map(|(path, src)| {
@@ -144,7 +153,11 @@ fn a_class_bound_through_its_self_cell_is_a_contract() {
 #[test]
 #[ignore]
 fn scratch_cjs() {
-    let (w, u) = both(&T1);
+    let (w, u) = match std::env::var("CW2_T").as_deref() {
+        Ok("3") => both(&T3),
+        Ok("2") => both(&T2),
+        _ => both(&T1),
+    };
     for (n, pf) in [("WHOLE", &w), ("UNIT", &u)] {
         eprintln!("===== {n}");
         for t in &pf.templates {

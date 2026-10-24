@@ -222,6 +222,15 @@ impl<'a> Gen<'a> {
                 }
             }
         }
+        // Census (DECISIONS 126): the typed-array fields a reader escapes or
+        // marks hard: `nested_fields` sinks them.
+        if let Some(p) = published {
+            for d in &p.broken {
+                if let Some((k, disp)) = d.strip_prefix("ta ").and_then(|r| r.split_once(" of ")) {
+                    self.ta_reported.insert((disp.to_string(), k.to_string()));
+                }
+            }
+        }
         for ((mi, a), n) in exports {
             let name = &self.m.atoms[a as usize];
             if !published.is_none_or(|p| p.names(path_of(self, mi), name)) {
@@ -1228,6 +1237,7 @@ impl<'a> Gen<'a> {
                     // Broken by the census: every field leaves as before.
                     self.field_layouts.retain(|&(t2, _), _| t2 != tm);
                     self.field_values.retain(|&(t2, _), _| t2 != tm);
+                    self.field_tas.retain(|&(t2, _), _| t2 != tm);
                     for &t in &ts {
                         if !self.all_sunk.contains(&t) {
                             self.sink_all_fields(t, r);
@@ -1248,14 +1258,35 @@ impl<'a> Gen<'a> {
                     let mut prim = false;
                     let mut fwd = false;
                     let mut arrs: Vec<Tok> = Vec::new();
+                    // DECISIONS 126: this unit's typed arrays, none escaped
+                    // or hard, in a field no reader reported.
+                    let mut tas: Vec<Tok> = Vec::new();
+                    let mut pbits: u16 = 0;
+                    let reported = self.ta_reported.contains(&(
+                        self.m.tmpls[tm as usize].display.clone(),
+                        self.m.atoms[a as usize].clone(),
+                    ));
                     if ok {
                         'toks: for &t in &ts {
                             let Some(&n) = self.m.fields.get(&(t, a)) else {
                                 continue;
                             };
                             prim |= self.m.nodes[n as usize].prim != 0;
+                            pbits |= self.m.nodes[n as usize].prim;
                             for x in self.m.nodes[n as usize].pts.to_sorted() {
                                 match self.m.toks[x as usize] {
+                                    TokKind::Obj(xtm, _)
+                                        if !reported
+                                            && matches!(
+                                                self.m.tmpls[xtm as usize].kind,
+                                                TmplKind::BObj { what: "TypedArray", .. }
+                                            )
+                                            && !self.stand_in_tas.iter().any(|&(_, s)| s == x)
+                                            && !self.m.is_escaped(x)
+                                            && !self.m.hard.contains_key(&x) =>
+                                    {
+                                        tas.push(x)
+                                    }
                                     TokKind::Obj(itm, _)
                                         if self.nested_ok(itm) && !self.m.is_escaped(x) =>
                                     {
@@ -1277,6 +1308,33 @@ impl<'a> Gen<'a> {
                                     }
                                 }
                             }
+                        }
+                    }
+                    // DECISIONS 126: only typed arrays (and `undefined`
+                    // before the field is written): the owner's typed arrays,
+                    // described; mixed with anything else, sunk.
+                    if ok && !tas.is_empty() {
+                        if fwd || !inner.is_empty() || pbits & !crate::model::prim::UNDEF != 0 {
+                            ok = false;
+                        } else {
+                            let mut elem = None;
+                            let mut one = true;
+                            for &x in &tas {
+                                let k = self.m.tmpl_of(x).and_then(|xtm| self.m.ta_elem.get(&xtm).copied());
+                                match (elem, k) {
+                                    (_, None) => one = false,
+                                    (None, Some(k)) => elem = Some(k),
+                                    (Some(e), Some(k)) if e != k => one = false,
+                                    _ => {}
+                                }
+                            }
+                            let v = (elem.filter(|_| one), pbits);
+                            if self.field_tas.insert((tm, a), v) != Some(v) {
+                                changed = true;
+                            }
+                            self.field_layouts.remove(&(tm, a));
+                            self.field_values.remove(&(tm, a));
+                            continue;
                         }
                     }
                     // Forwarded stand-ins (beside this unit's layouts, which
@@ -1316,6 +1374,7 @@ impl<'a> Gen<'a> {
                     self.sunk_fields.insert((tm, a));
                     self.field_layouts.remove(&(tm, a));
                     self.field_values.remove(&(tm, a));
+                    self.field_tas.remove(&(tm, a));
                     self.field_prims.remove(&(tm, a));
                     for &t in &ts {
                         if let Some(&n) = self.m.fields.get(&(t, a)) {

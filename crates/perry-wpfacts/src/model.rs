@@ -945,12 +945,20 @@ pub struct Model {
     pub recv_log: FxHashMap<Tok, Vec<RecvEffect>>,
     /// A published class -> its receiver token.
     pub contract_recv_of: FxHashMap<TmplId, Tok>,
+    /// DECISIONS 125: the call by which other units construct a published
+    /// class (`Model::publish_class`): its instance is the class's own
+    /// token `Obj(tm, NO_CTX)`, the one its receiver token and the
+    /// published receivers (DECISIONS 107) stand for (`Model::site_tok`).
+    pub contract_new: crate::pts::FxHashSet<CallId>,
     /// DECISIONS 116: published classes no other unit names (given out
     /// through a contract result or value): their methods run on the
-    /// instances given out only, and the `this` nodes of those methods
-    /// (`Model::escape_this`), which every later `give_out` reaches.
+    /// instances given out only.
     pub sealed: crate::pts::FxHashSet<TmplId>,
-    pub sealed_this: FxHashMap<FnIdx, Vec<NodeId>>,
+    /// The `this` nodes of the methods that run on the instances given out
+    /// (`Model::escape_this`: a sealed class's methods, DECISIONS 116, and
+    /// the methods run on published receivers, DECISIONS 125), which every
+    /// later `give_out` reaches.
+    pub given_this: FxHashMap<FnIdx, Vec<NodeId>>,
     /// The receiver contracts of other units' methods this unit calls
     /// (`Cons::ContractThis`'s `this`, DECISIONS 57).
     pub this_contracts: Vec<ThisContract>,

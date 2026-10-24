@@ -795,6 +795,21 @@ impl Model {
             })
     }
 
+    /// DECISIONS 125: a method run on published receivers runs on an
+    /// instance `t` this unit gave out when the join names `t`'s class (its
+    /// own token `Obj(tm, NO_CTX)` is in the join, `Gen::published_receivers`).
+    pub(crate) fn join_holds(&self, f: FnIdx, t: Tok) -> bool {
+        let Some(&n) = self.this_args.get(&f) else {
+            return true;
+        };
+        let Some(tm) = self.tmpl_of(t) else {
+            return false;
+        };
+        self.tok_index
+            .get(&TokKind::Obj(tm, NO_CTX))
+            .is_some_and(|&w| self.nodes[n as usize].pts.contains_tok(w))
+    }
+
     pub(crate) fn escape_this(&mut self, ft: Tok, reason: u32) {
         if !self.sum.ready {
             self.sum.deferred.push(Deferred::EscapeThis(ft, reason));
@@ -822,7 +837,7 @@ impl Model {
                     self.add_tok(d, t);
                 }
             }
-            self.sealed_this.entry(f).or_default().extend(dsts);
+            self.given_this.entry(f).or_default().extend(dsts);
             return;
         }
         // A published method's receiver is one more contract parameter
@@ -844,14 +859,31 @@ impl Model {
         // beyond that (DECISIONS 85). Any other escape lets unknown code
         // call it with any receiver.
         let contract_only = mk.is_some() && self.pub_reason == Some(reason);
+        let joined = contract_only && self.this_args.contains_key(&f);
+        if joined {
+            self.given_this.entry(f).or_default().extend(dsts.iter().copied());
+        }
         for d in dsts {
             if !contract_only {
                 self.add_top(d, why);
                 self.add_prim(d, prim::ALL);
             }
             // DECISIONS 107: the receivers the running units published.
+            // DECISIONS 125: they include the instances this unit gave out
+            // (a published class's instance another unit holds may be one
+            // of them), and the ones it gives out later (`give_out`).
             match self.this_args.get(&f) {
-                Some(&n) if contract_only => self.edge(n, d),
+                Some(&n) if joined => {
+                    self.edge(n, d);
+                    let given: Vec<Tok> = insts
+                        .iter()
+                        .flat_map(|r| self.contract_recv.get(r).cloned().unwrap_or_default())
+                        .filter(|&t| self.join_holds(f, t))
+                        .collect();
+                    for t in given {
+                        self.add_tok(d, t);
+                    }
+                }
                 _ => {
                     for &i in &insts {
                         self.add_tok(d, i);

@@ -100,7 +100,12 @@ impl Model {
         if self.is_marker(t) && !self.virt_protos.contains_key(&t) {
             return;
         }
-        self.with_b(|m| builtins::tok_load(m, t, key, dst));
+        // DECISIONS 124: a receiver marker with values beside it stands for
+        // instances of its classes, whose builtin members are the chain's
+        // (`cv` below reaches Object.prototype): no builtin object's.
+        if !(self.is_marker(t) && self.beside_values(t)) {
+            self.with_b(|m| builtins::tok_load(m, t, key, dst));
+        }
         // Element reads of array-likes stop at their own elements: their
         // builtin prototype members are approximated by `tok_load`.
         if key == Key::Any && self.is_array_like(t) {

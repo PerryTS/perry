@@ -362,6 +362,40 @@ fn field_value_contracts(
     out
 }
 
+/// DECISIONS 126: every value the closed parameter node `p` holds (its
+/// callers' described arguments) holds only stand-in typed arrays under key
+/// `a`. Before any caller published (round 1) it holds nothing: bottom, as
+/// decision 13's closed parameters start (DECISIONS 123); the callers'
+/// arguments make it grow and the body is solved again.
+fn described_ta_key(g: &gen::Gen, p: model::NodeId, a: model::Atom) -> bool {
+    for t in g.m.nodes[p as usize].pts.to_sorted() {
+        if g.m.param_marker.contains_key(&t) {
+            continue;
+        }
+        let Some(&n) = g.m.fields.get(&(t, a)) else {
+            return false;
+        };
+        let ts = g.m.nodes[n as usize].pts.to_sorted();
+        if ts.is_empty() || !ts.iter().all(|x| g.stand_in_tas.iter().any(|&(_, s)| s == *x)) {
+            return false;
+        }
+    }
+    true
+}
+
+/// The typed-array fields of template `tm` (DECISIONS 126,
+/// `Gen::nested_fields`): key, element kind, primitives beside.
+fn field_ta_contracts(g: &gen::Gen, tm: model::TmplId) -> Vec<(String, Option<u8>, u16)> {
+    let mut out: Vec<(String, Option<u8>, u16)> = g
+        .field_tas
+        .iter()
+        .filter(|&(&(t, _), _)| t == tm)
+        .map(|(&(_, a), &(e, p))| (g.m.atoms[a as usize].clone(), e, p))
+        .collect();
+    out.sort();
+    out
+}
+
 /// The nested contracts of literal template `tm`'s fields (design §18.7,
 /// `Gen::nested_fields`): per described key the layouts it holds, each
 /// published in `layouts_out` with its own nested contracts.
@@ -404,6 +438,7 @@ fn nested_layouts(
                     field_fns: Vec::new(),
                     field_layouts: Vec::new(),
                     field_values: Vec::new(),
+                    field_tas: Vec::new(),
                     open_keys: open_tm.contains(&itm),
                     statics: Vec::new(),
                     statics_open: false,
@@ -424,6 +459,7 @@ fn nested_layouts(
                 if let Some(c) = layouts_out.iter_mut().find(|c| c.display == display) {
                     c.field_layouts = nl;
                     c.field_values = fv;
+                    c.field_tas = field_ta_contracts(g, itm);
                 }
             }
             ds.push(display);
@@ -572,6 +608,22 @@ fn fn_contract_of(
                 match v.iter_mut().find(|(k, _)| *k == a) {
                     Some((_, u)) => *u |= marker_use(r),
                     None => v.push((a, marker_use(r))),
+                }
+            }
+            // DECISIONS 126: a closed parameter every caller passes a
+            // described value (decision 17): under a key where each such
+            // value holds only stand-in typed arrays, the body reaches
+            // nothing else there, and a typed array is a leaf whose census
+            // (`Gen::reports`) covers every use here: no escape.
+            let held = g.m.closed_params.get(&f).and_then(|ns| ns.get(i as usize));
+            if let (Some(true), Some(&held)) = (
+                g.m.closed_described.get(&f).and_then(|d| d.get(i as usize)).copied(),
+                held,
+            ) {
+                for (a, u) in v.iter_mut() {
+                    if described_ta_key(g, held, *a) {
+                        *u &= !model::MARK_ESCAPE;
+                    }
                 }
             }
             let mut v: Vec<(String, u8)> = v
@@ -735,6 +787,7 @@ fn fn_contract_of(
                             field_fns: Vec::new(),
                             field_layouts: Vec::new(),
                             field_values: Vec::new(),
+                            field_tas: Vec::new(),
                             open_keys: open_tm.contains(&tm),
                             statics: Vec::new(),
                             statics_open: false,
@@ -755,6 +808,7 @@ fn fn_contract_of(
                         if let Some(c) = layouts_out.iter_mut().find(|c| c.display == display) {
                             c.field_layouts = nl;
                             c.field_values = fv;
+                            c.field_tas = field_ta_contracts(g, tm);
                         }
                         // Its field functions, as a value contract's (DECISIONS 78,
                         // `Gen::note_field_fns`). The layout is out first, so a field
@@ -1058,6 +1112,7 @@ fn value_contract_of_toks(
                     field_fns: Vec::new(),
                     field_layouts: Vec::new(),
                     field_values: Vec::new(),
+                    field_tas: Vec::new(),
                     open_keys: open_tm.contains(&tm),
                     statics: Vec::new(),
                     statics_open: false,
@@ -1092,6 +1147,7 @@ fn value_contract_of_toks(
             );
             cc.field_layouts = nested_layouts(g, templates, tm, layouts_out, open_tm);
             cc.field_values = field_value_contracts(g, templates, tm, layouts_out, open_tm);
+            cc.field_tas = field_ta_contracts(g, tm);
         }
         let v = if class {
             &mut vc.classes
@@ -1228,6 +1284,7 @@ fn arg_contract_of(
                             field_fns: Vec::new(),
                             field_layouts: Vec::new(),
                             field_values: Vec::new(),
+                            field_tas: Vec::new(),
                             open_keys: open_tm.contains(&tm),
                             statics: Vec::new(),
                             statics_open: false,
@@ -1698,6 +1755,7 @@ pub(crate) fn compute_in<'a>(
                         field_fns: Vec::new(),
                         // Its instances' fields leave key by key (DECISIONS 88).
                         field_layouts: nested_layouts(&g, &templates, tm, &mut layouts_out, &open_tm),
+                        field_tas: field_ta_contracts(&g, tm),
                         field_values: field_value_contracts(
                             &g,
                             &templates,
