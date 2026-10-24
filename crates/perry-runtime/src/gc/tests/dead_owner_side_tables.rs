@@ -907,7 +907,7 @@ fn object_meta_expando_edge_is_enumerated_by_the_trace_visitor() {
 }
 
 /// `ObjectMeta`'s field offsets are a contract with codegen (there are
-/// `offset_of!` asserts on `spill`, `reserved_48` and
+/// `offset_of!` asserts on `spill`, `function_layout_birth` and
 /// `array_tail_object_hot`). `expando` therefore has to be APPENDED, never
 /// inserted — inserting it after `spill` shifted the 48/56 fields and failed
 /// those compile-time asserts.

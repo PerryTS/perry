@@ -2011,7 +2011,7 @@ fn shape_descriptor_intern_with_special_mode(
         .with_summary(summary)
         .with_special_facts(rep, infos, brands);
         record.set_integrity_flags(integrity_flags);
-        return publish_static_record(request, record).map(|p| p.word.0);
+        return publish_static_record(request, record, facts).map(|p| p.word.0);
     }
     let table = &crate::state::state().shapes;
     let inner = table.inner.borrow();
@@ -2574,14 +2574,15 @@ pub(crate) fn plain_birth_rep_for_word(shape_id: u32, field_count: u32) -> Optio
     // Unchecked on purpose (it runs on every object-literal birth): the callers'
     // words come from the carried keyless-birth memo or from published literal
     // layouts, both of which keep their records alive.
-    debug_assert!(
-        crate::codegen_abi::LayoutWord(shape_id).row().0 == 0
-            || ShapeSlab::agent_record_for_word_present(shape_id).is_some(),
-        "plain-birth word {shape_id:#x} names no live record"
-    );
     // SAFETY: the directory is this agent's live published ordinary band.
     let record =
         unsafe { ShapeSlab::ordinary_record_in(ShapeSlab::ordinary_dir_addr(), shape_id) }?;
+    // A word that names no ordinary row is rejected above; one that names a
+    // row must name a live record.
+    debug_assert!(
+        crate::codegen_abi::LayoutWord(shape_id).row().0 == 0 || record.present(),
+        "plain-birth word {shape_id:#x} names no live record"
+    );
     record
         .admits_plain_birth(field_count)
         .then(|| ShapeRecordRef(std::ptr::NonNull::from(record)).rep())
@@ -6620,23 +6621,27 @@ pub(crate) unsafe fn object_shape_identity(
 }
 
 /// Publish a static request before generic exact-facts canonicalization.
+/// `facts` is the record's exact-facts key, which the caller already
+/// computed for its request (`record.facts_key_with_keys(record.keys)`).
 pub(crate) fn publish_static_record(
     request: crate::codegen_abi::PublishedShape,
     record: ShapeRecord,
+    facts: u64,
 ) -> Result<crate::codegen_abi::PublishedShape, ShapeDescriptorError> {
-    let facts = record.facts_key_with_keys(record.keys);
+    debug_assert_eq!(facts, record.facts_key_with_keys(record.keys));
     let keys = record.keys;
     let table = &crate::state::state().shapes;
-    // A repeated agreeing request publishes nothing new: its word is already
-    // in the indexes, and pushing it again would duplicate the bucket entry.
-    let already = table.slab().record_ptr(request.identity).is_some();
+    // A repeated agreeing request publishes nothing new (the slab's record
+    // count does not move): its word is already in the indexes, and pushing
+    // it again would duplicate the bucket entry.
+    let before = table.slab().len();
     let published = unsafe {
         table
             .slab_mut()
             .publish_static(request.identity, request.word, record)
     }
     .unwrap_or_else(|error| panic!("static layout publication mismatch: {request:?}: {error:?}"));
-    if !already {
+    if table.slab().len() != before {
         let mut inner = table.inner.borrow_mut();
         inner.facts_push_front(facts, published.word.0);
         // Families are set-valued and the word is new here: append (a push to

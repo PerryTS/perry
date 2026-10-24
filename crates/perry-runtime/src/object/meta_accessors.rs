@@ -32,7 +32,7 @@ pub(crate) unsafe fn object_meta_ensure_for_cell(user_ptr: usize) -> Option<*mut
     (*meta).private_evaluation_brand = 0;
     (*meta).proto_serial = 0;
     (*meta).native_state = 0;
-    (*meta).reserved_48 = 0;
+    (*meta).function_layout_birth = 0;
     #[cfg(feature = "shape-mint-diag")]
     crate::object::shape_mint_census::note_event("ObjectMeta record born");
     (*meta).array_tail_object_hot = 0;
@@ -85,7 +85,7 @@ pub(crate) unsafe fn object_meta_ensure(obj: *mut ObjectHeader) -> *mut ObjectMe
     (*meta).private_evaluation_brand = 0;
     (*meta).proto_serial = 0;
     (*meta).native_state = 0;
-    (*meta).reserved_48 = 0;
+    (*meta).function_layout_birth = 0;
     #[cfg(feature = "shape-mint-diag")]
     crate::object::shape_mint_census::note_event("ObjectMeta record born");
     (*meta).array_tail_object_hot = 0;

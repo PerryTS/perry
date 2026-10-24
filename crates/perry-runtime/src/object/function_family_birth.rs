@@ -98,6 +98,48 @@ pub(crate) unsafe fn allocate(
     allocate_layout(prototype, closure, tail)
 }
 
+/// Does `record`'s key list hold exactly `bound` at the descriptor's binding
+/// symbol positions (in key order)? A record is interned by its key words, so
+/// another binding of the same body names another record.
+unsafe fn binds_current_symbols(
+    record: super::shapes::ShapeRecordRef,
+    d: &PerryLayoutDesc,
+    bound: &[u64],
+) -> bool {
+    if bound.is_empty() {
+        return true;
+    }
+    let keys = record.keys() as *const crate::array::ArrayHeader;
+    if keys.is_null() {
+        return false;
+    }
+    let words = crate::array::array_elements_ptr(keys);
+    let mut next = 0;
+    for i in 0..d.key_count as usize {
+        if (*(*d.keys.add(i)).atom).kind == crate::codegen_abi::ATOM_KIND_BINDING_SYMBOL {
+            if next >= bound.len() || *words.add(i) != bound[next] {
+                return false;
+            }
+            next += 1;
+        }
+    }
+    true
+}
+
+/// The image address every [`birth_tag`] is relative to.
+static BIRTH_TAG_ANCHOR: u8 = 0;
+
+/// A constructor layout descriptor's identity in 32 bits, for a prototype's
+/// `ObjectMeta::function_layout_birth`: its signed distance from an anchor in
+/// the same image. Descriptors are immutable image data, so the distance is
+/// fixed and distinct per descriptor; one too far away (never, for an image
+/// under 2 GiB) has no holder fact and always interns.
+#[inline]
+fn birth_tag(desc: *const PerryLayoutDesc) -> Option<u32> {
+    let delta = (desc as isize).wrapping_sub(std::ptr::addr_of!(BIRTH_TAG_ANCHOR) as isize);
+    i32::try_from(delta).ok().map(|delta| delta as u32)
+}
+
 unsafe fn allocate_layout(
     prototype: &RuntimeHandle<'_>,
     closure: *const ClosureHeader,
@@ -107,9 +149,9 @@ unsafe fn allocate_layout(
     if d.variant != crate::codegen_abi::LAYOUT_VARIANT_FUNCTION_CONSTRUCTOR || tail.count > 64 {
         return None;
     }
-    let p = (prototype.get_nanbox_u64() & crate::value::POINTER_MASK) as *const ObjectHeader;
-    let meta = (*p).meta.as_ref()?;
-    let proto_id = meta.proto_serial;
+    let prototype_bits = prototype.get_nanbox_u64();
+    let p = (prototype_bits & crate::value::POINTER_MASK) as *const ObjectHeader;
+    let proto_id = (*p).meta.as_ref()?.proto_serial;
     if proto_id == 0 {
         return None;
     }
@@ -124,24 +166,36 @@ unsafe fn allocate_layout(
     let bound = &bound[..tail.count as usize];
     // register_one_bound copies keys under suppression. Existing registrations
     // must match every symbol, including different factories/cross-module aliases.
+    let tag = birth_tag(tail.layout);
     let _no_gc = crate::gc::GcSuppressScope::new();
-    super::shapes::write_identity_word(proto_id, prototype.get_nanbox_u64());
-    let id =
-        layout_desc::register_function_layout(tail.layout, 0, bound, proto_id);
-    if id == 0 {
-        return None;
-    }
-    let shape = super::shapes::shape_descriptor_for_word(id)?;
-    let keys = shape.keys_view();
-    let mut next = 0;
-    for i in 0..d.key_count {
-        if (*(*d.keys.add(i as usize)).atom).kind == crate::codegen_abi::ATOM_KIND_BINDING_SYMBOL {
-            if keys.get(i).bits() != bound[next] {
-                return None;
-            }
-            next += 1;
+    // The record the instances are born with is a fact on the holder (the
+    // prototype's metadata), validated on every use as main validates its
+    // descriptor cell: same layout, the record still present, it names this
+    // prototype identity and serial, and its bound symbol keys are the
+    // current bindings. Otherwise intern by facts and rewrite the holder.
+    let meta = (*p).meta;
+    let held = (*meta).function_layout_birth;
+    let holds = tag.is_some_and(|tag| held >> 32 == u64::from(tag))
+        && super::shapes::shape_record_for_word(held as u32).is_some_and(|record| {
+            record.proto_id() == proto_id
+                && record.prototype_word() == prototype_bits
+                && binds_current_symbols(record, d, bound)
+        });
+    let id = if holds {
+        held as u32
+    } else {
+        super::shapes::write_identity_word(proto_id, prototype_bits);
+        let id = layout_desc::register_function_layout(tail.layout, 0, bound, proto_id);
+        if id == 0 || !binds_current_symbols(super::shapes::shape_record_for_word(id)?, d, bound) {
+            return None;
         }
-    }
+        if let Some(tag) = tag {
+            // GC_STORE_AUDIT(POINTER_FREE): a scalar birth word on the rooted
+            // prototype's own metadata, under suppression; no child edge.
+            (*meta).function_layout_birth = (u64::from(tag) << 32) | u64::from(id);
+        }
+        id
+    };
     // Suppression stays up through the birth: the record is carried by no one
     // until the object is stamped with its word.
     let object = layout_desc::alloc_function_layout(tail.layout, id);

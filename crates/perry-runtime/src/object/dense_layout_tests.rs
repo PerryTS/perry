@@ -1,5 +1,5 @@
 use super::*;
-use crate::codegen_abi::PerryStaticLayoutRequestV1;
+use crate::codegen_abi::{LayoutWord, PerryStaticLayoutRequestV1, ShapeId};
 
 #[test]
 fn prior_dynamic_then_static_preserves_both_and_canonicalizes_static() {

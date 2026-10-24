@@ -43,13 +43,14 @@ pub(crate) unsafe fn install_declared_layout(
         ),
         integrity,
     );
-    let _ = (table, facts);
+    let _ = table;
     super::publish_static_record(
         crate::codegen_abi::PublishedShape {
             identity: crate::codegen_abi::ShapeId(id),
             word: crate::codegen_abi::LayoutWord(word),
         },
         record,
+        facts,
     )
     .expect("declared layout publication");
 }

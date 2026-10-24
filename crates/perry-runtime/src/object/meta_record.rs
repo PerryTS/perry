@@ -69,10 +69,18 @@ pub struct ObjectMeta {
     /// shape and allocate no metadata solely for this word. This remains a
     /// traced edge without consuming a user field slot.
     pub private_evaluation_brand: u64,
-    /// A retired word (it held the Array-subclass named-prefix token the
-    /// deleted read caches compared), kept so the metadata offsets emitted
-    /// code addresses stay fixed. Always zero.
-    pub reserved_48: u64,
+    /// On a function's prototype object: the birth word of the instances
+    /// `new F()` makes with this prototype, as a fact on the holder (the
+    /// record the instances are born with). Low 32 bits: the agent-local
+    /// LayoutWord; high 32 bits: the constructor layout descriptor's identity
+    /// (`function_family_birth::birth_tag`). Every use validates it
+    /// as main validates its descriptor cell: the record is still present
+    /// (rows are never reused, so a present row is the record published)
+    /// and names this prototype identity and serial; a miss re-interns and
+    /// rewrites it (`function_family_birth::allocate_layout`). A scalar, not
+    /// traced. Zero elsewhere. (`instance_birth` is the keyless
+    /// synthetic-class birth of a function WITHOUT a constructor layout.)
+    pub function_layout_birth: u64,
     /// Native pointer to this receiver's per-thread [`ObjectHotTables`].
     /// Array-subclass tail transitions are agent-local: their ShapeIds and
     /// rooted key arrays belong to the same thread that owns the object. Once
@@ -211,7 +219,7 @@ pub struct ObjectMeta {
 // ObjectMeta record and buffer elements one word past the ArrayHeader. Keep
 // codegen and these structs in lock-step.
 const _: () = assert!(std::mem::offset_of!(ObjectMeta, spill) == 32);
-const _: () = assert!(std::mem::offset_of!(ObjectMeta, reserved_48) == 48);
+const _: () = assert!(std::mem::offset_of!(ObjectMeta, function_layout_birth) == 48);
 const _: () = assert!(std::mem::offset_of!(ObjectMeta, array_tail_object_hot) == 56);
 // The Array-subclass elements store: codegen's inline `elem.*` tiers load
 // `ObjectHeader.meta` then this word (perry-codegen `expr/index_get` and
