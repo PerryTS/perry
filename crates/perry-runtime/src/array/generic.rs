@@ -163,7 +163,10 @@ fn to_length(v: f64) -> i64 {
 /// that is not an Array (`Array.prototype.keys.call({ length: 2 })`).
 pub(super) fn is_generic_arraylike_receiver(recv: f64) -> bool {
     as_real_array(recv).is_null()
-        && matches!(classify_pointer(recv), Some(PtrKind::Proxy) | Some(PtrKind::Object))
+        && matches!(
+            classify_pointer(recv),
+            Some(PtrKind::Proxy) | Some(PtrKind::Object)
+        )
 }
 
 pub(super) fn as_real_array(recv: f64) -> *mut ArrayHeader {

@@ -31,9 +31,9 @@ mod fetch_globals;
 pub(crate) fn install_dyn_eval() {
     fetch_globals::install_global_eval();
 }
+mod async_generator_state;
 mod generator;
 mod generator_state;
-mod async_generator_state;
 mod install_static;
 mod math_temporal;
 
@@ -95,6 +95,8 @@ pub(crate) use array_error::{
     object_prototype_property_is_enumerable_thunk, object_prototype_to_locale_string_thunk,
     object_prototype_to_string_thunk, object_prototype_value_of_thunk,
 };
+pub(crate) use async_generator_state::is_async_generator_instance_value;
+pub use async_generator_state::js_async_generator_create;
 pub(crate) use bigint_promise::{
     array_from_thunk, array_is_array_thunk, array_of_thunk, bigint_as_int_n_thunk,
     bigint_as_n_dispatch, bigint_as_uint_n_thunk, map_group_by_thunk, number_is_finite_thunk,
@@ -176,8 +178,6 @@ pub(crate) use generator_state::{
     generator_record_prototype_word,
 };
 pub use generator_state::{js_generator_create, js_generator_result, js_generator_set_slot};
-pub use async_generator_state::js_async_generator_create;
-pub(crate) use async_generator_state::{async_generator_record, is_async_generator_instance_value};
 pub use install_static::js_promise_static_function_value;
 pub(crate) use install_static::{
     builtin_species_getter_thunk, install_atomics_namespace_members,

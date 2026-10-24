@@ -11,13 +11,8 @@
 //! `al_has`), so Proxy traps fire in the order the specification gives.
 #![allow(non_snake_case)]
 
-use super::generic::{al_get, al_has, al_length, callable, callback_pointer, nanbox_arr, to_object};
+use super::generic::{al_get, al_has, al_length, nanbox_arr, to_object};
 use super::*;
-
-/// `IsArray(value)`: a real Array, or a Proxy whose target is one.
-fn is_array_for_flatten(value: f64) -> bool {
-    crate::array::js_array_is_array(value).to_bits() == crate::value::TAG_TRUE
-}
 
 /// Append `value` to the rooted result array, keeping the root current.
 fn push_rooted(result: &crate::gc::RuntimeHandle<'_>, value: f64) {

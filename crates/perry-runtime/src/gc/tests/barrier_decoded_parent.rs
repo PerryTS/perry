@@ -421,12 +421,19 @@ fn birth_slots_barrier_remembers_value_slots_and_skips_raw_lanes() {
     let (old_obj, fields) = unsafe { alloc_old_test_object(1) };
     unsafe { *fields = child_bits };
     js_write_barrier_birth_slots(old_obj as u64, fields as u64, 1, 1);
-    assert_eq!(remembered_dirty_page_count(), 0, "a raw lane owes no barrier");
+    assert_eq!(
+        remembered_dirty_page_count(),
+        0,
+        "a raw lane owes no barrier"
+    );
 
     // The same slot as a value: remembered.
     js_write_barrier_birth_slots(old_obj as u64, fields as u64, 1, 0);
     let page = crate::arena::generation_page_for_addr(fields as usize);
-    assert!(old_page_dirty_for(page), "a value slot's young child is remembered");
+    assert!(
+        old_page_dirty_for(page),
+        "a value slot's young child is remembered"
+    );
     reset_remembered_set();
 
     // A wide birth: the young child sits past slot 32, every head slot raw.
@@ -439,6 +446,9 @@ fn birth_slots_barrier_remembers_value_slots_and_skips_raw_lanes() {
     }
     js_write_barrier_birth_slots(old_obj as u64, fields as u64, 40, u32::MAX);
     let page = crate::arena::generation_page_for_addr(fields as usize + 37 * 8);
-    assert!(old_page_dirty_for(page), "a tail slot's young child is remembered");
+    assert!(
+        old_page_dirty_for(page),
+        "a tail slot's young child is remembered"
+    );
     reset_remembered_set();
 }

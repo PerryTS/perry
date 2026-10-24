@@ -54,7 +54,10 @@ const KIND_PROXY_ENTRIES: i32 = 7;
 
 /// The iterator kinds whose backing is read through `[[Get]]`.
 fn reads_generic_backing(kind: i32) -> bool {
-    matches!(kind, KIND_PROXY_VALUES | KIND_PROXY_KEYS | KIND_PROXY_ENTRIES)
+    matches!(
+        kind,
+        KIND_PROXY_VALUES | KIND_PROXY_KEYS | KIND_PROXY_ENTRIES
+    )
 }
 
 /// Clean a NaN-boxed array pointer to a raw `*mut ArrayHeader`, or null.
