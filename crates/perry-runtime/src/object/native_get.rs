@@ -34,7 +34,9 @@ pub(crate) unsafe fn try_data_get_by_name(
     }
     let bits = object as u64;
     let receiver = match bits >> 48 {
-        0 => JSValue::pointer(object as *mut u8),
+        0 if crate::value::addr_class::is_above_handle_band(bits as usize) => {
+            JSValue::pointer(object as *mut u8)
+        }
         0x7FFD => JSValue::from_bits(bits),
         _ => return None,
     };
