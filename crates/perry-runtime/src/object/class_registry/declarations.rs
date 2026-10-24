@@ -725,8 +725,16 @@ pub(crate) fn class_method_decl_by_entry(
 }
 
 /// The compiler's candidate prototype shape of class `class_id` (0: none).
+#[cfg(test)]
 pub(crate) fn class_birth_shape(class_id: u32) -> u32 {
     class_declaration(class_id).map_or(0, |d| d.birth_shape)
+}
+
+/// The immutable layout word of class `class_id`'s declared prototype birth
+/// (0: none). Receivers carry words, never identities: a holder or record
+/// lookup for the birth layout goes through this, not [`class_birth_shape`].
+pub(crate) fn class_birth_word(class_id: u32) -> u32 {
+    class_declaration(class_id).map_or(0, |d| d.birth_layout_word)
 }
 
 /// Does class `class_id` declare a computed instance member?
@@ -1053,6 +1061,22 @@ pub(crate) fn test_declare_computed_member(
 /// Set class `class_id`'s compiler birth-shape candidate.
 #[cfg(test)]
 pub(crate) fn test_declare_birth_shape(class_id: u32, shape_id: u32) {
+    test_declare_birth_layout(
+        class_id,
+        shape_id,
+        if shape_id == 0 {
+            0
+        } else {
+            crate::object::static_shapes::fixtures::fixture_word(shape_id)
+        },
+    );
+}
+
+/// Set class `class_id`'s compiler birth layout: the identity and the
+/// receiver word it was published under (distinct values, as the compiler
+/// emits them).
+#[cfg(test)]
+pub(crate) fn test_declare_birth_layout(class_id: u32, identity: u32, word: u32) {
     let previous: Vec<ClassMemberDecl> = class_declaration(class_id)
         .map(|d| d.members().to_vec())
         .unwrap_or_default();
@@ -1060,9 +1084,9 @@ pub(crate) fn test_declare_birth_shape(class_id: u32, shape_id: u32) {
     let decl: &'static ClassDeclaration = Box::leak(Box::new(ClassDeclaration {
         members: members.as_ptr(),
         member_count: members.len() as u32,
-        birth_shape: shape_id,
+        birth_shape: identity,
         flags: ClassDeclaration::flags_of(members),
-        birth_layout_word: if shape_id == 0 { 0 } else { crate::object::static_shapes::fixtures::fixture_word(shape_id) },
+        birth_layout_word: word,
         instance_layout: std::ptr::null(),
         instance_variants: std::ptr::null(),
         default_derived_initializer: std::ptr::null(),

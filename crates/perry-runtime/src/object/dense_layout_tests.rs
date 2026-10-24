@@ -1,5 +1,5 @@
 use super::*;
-use crate::codegen_abi::{LayoutWord, PerryStaticLayoutRequestV1, ShapeId};
+use crate::codegen_abi::PerryStaticLayoutRequestV1;
 
 #[test]
 fn prior_dynamic_then_static_preserves_both_and_canonicalizes_static() {
@@ -55,4 +55,41 @@ fn worker_seed_replays_static_rows_and_allocates_fresh_dynamic_rows() {
             assert_eq!(shapes::shape_descriptor_by_id(dynamic_id).unwrap().logical_key_count, 1);
         }).join().unwrap();
     }).join().unwrap();
+}
+
+/// BUG (found by the typed-seam conversion): `declared_class_chain_blocks_store`
+/// looked up the class's birth layout record, and compared its prototype
+/// holder's stamp, with the declaration's birth IDENTITY (`birth_shape`) as if
+/// it were a receiver word. Identities and words are distinct in the dense
+/// layout ABI, so the lookup read an unrelated row (or none) and the declared
+/// fast path never answered. It must use the declared `birth_layout_word`.
+#[test]
+fn declared_class_birth_lookup_uses_the_layout_word_not_the_identity() {
+    std::thread::spawn(|| {
+        let mut request = PerryStaticLayoutRequestV1 {
+            shape_id: shapes::SHAPE_ID_BASE + 0x7f31,
+            layout_word: 0x8000_07d3,
+        };
+        let word = js_object_layout_for_class_keys_static(0, 0, 3, 0, &mut request, 0);
+        assert_eq!(word, request.layout_word);
+        assert_ne!(request.shape_id, request.layout_word, "identity and word must differ");
+        let class_id = crate::object::class_registry::prototype_objects::test_alloc_synthetic_class_id();
+        crate::object::class_registry::declarations::test_declare_birth_layout(
+            class_id,
+            request.shape_id,
+            request.layout_word,
+        );
+        assert_eq!(
+            unsafe {
+                crate::object::descriptor_state::declared_class_chain_blocks_store(
+                    class_id,
+                    b"dpa_declared_name",
+                )
+            },
+            Some(false),
+            "the declared birth layout resolves through its word"
+        );
+    })
+    .join()
+    .unwrap();
 }
