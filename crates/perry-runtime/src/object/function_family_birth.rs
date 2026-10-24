@@ -280,18 +280,20 @@ unsafe fn try_symbol_store(
 /// at slot `position`?
 ///
 /// The shared descriptor holds no per-evaluation word (each evaluation's
-/// record is interned by facts in `layout_desc::register_bound`), so the
-/// receiver's live word must prove the layout itself. Records are
-/// fact-interned, so the record IS this layout exactly when every fact the
-/// descriptor determines agrees: an ordinary-band, unshadowed word; the
-/// declared kind; the key count, inline slot count and representation; and
-/// positional slots. The facts one evaluation adds (its other bound symbols
-/// and its prototype identity) are not read by this store; the key at
-/// `position` is compared directly. Attributes live in the key list, not in
-/// the count, so the entry at `position` must be exactly the descriptor's
-/// optional plain data entry: an accessor, a non-writable or a private key
-/// fails here and the store takes the complete `[[Set]]`. Dictionary,
-/// exotic and overflow-shadowed receivers fail the word admission.
+/// record is interned by facts), so the fact is on the holder, as for the
+/// birth itself (`allocate_layout`): the receiver's prototype's
+/// `ObjectMeta::function_layout_birth` names this descriptor and holds the
+/// word its instances are born with, and that holder was validated against
+/// the record (prototype identity, serial, current symbol bindings) when it
+/// was written. The receiver's own word equal to it, validated here on every
+/// use, IS that layout: records are immutable facts, so any key add, delete,
+/// attribute change, generalization, prototype change or shadowing restamps
+/// the receiver with another word and fails the compare. The receiver names
+/// its prototype through its own record, so the holder read is the one the
+/// birth wrote for that prototype. The key at `position` is still compared
+/// directly, and the entry must be the descriptor's optional plain data
+/// entry: anything else takes the complete `[[Set]]`.
+#[inline]
 unsafe fn function_layout_admits_store(
     obj: *const ObjectHeader,
     d: &PerryLayoutDesc,
@@ -299,34 +301,50 @@ unsafe fn function_layout_admits_store(
     key: f64,
 ) -> bool {
     let word = (*obj).parent_class_id;
-    if !super::shapes::is_site_matchable_layout_word(word) {
+    if !super::shapes::is_site_matchable_layout_word(word)
+        || (position < 32 && (d.rep >> (2 * position)) & 0b11 != 0)
+    {
         return false;
     }
     let meta = (*obj).meta;
     if !meta.is_null() && (*meta).flags & super::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER != 0 {
         return false;
     }
-    // A live receiver word names a published row of this agent.
-    let Some(record) = super::shapes::shape_record_for_word(word) else {
+    let Some(tag) = birth_tag(d) else {
         return false;
     };
-    if record.object_kind().code() != u64::from(d.kind)
-        || record.logical_key_count() != d.key_count
-        || record.live_inline_slot_count() != d.slot_count
-        || record.rep() != d.rep
-        || (position < 32 && (d.rep >> (2 * position)) & 0b11 != 0)
+    // The receiver is the carrier of its own word.
+    let Some(record) = super::shapes::shape_record_of_receiver(word) else {
+        return false;
+    };
+    let prototype_bits = record.prototype_word();
+    if prototype_bits & crate::value::TAG_MASK != crate::value::POINTER_TAG {
+        return false;
+    }
+    // Any receiver can reach here, so its prototype may be any heap kind;
+    // only an ordinary object carries the holder metadata.
+    let address = (prototype_bits & crate::value::POINTER_MASK) as usize;
+    if crate::value::addr_class::try_read_gc_header(address)
+        .is_none_or(|gc| gc.obj_type != crate::gc::GC_TYPE_OBJECT)
     {
+        return false;
+    }
+    let prototype = address as *const ObjectHeader;
+    let Some(holder) = (*prototype).meta.as_ref() else {
+        return false;
+    };
+    if holder.function_layout_birth != (u64::from(tag) << 32) | u64::from(word) {
         return false;
     }
     let keys = record.keys() as *const crate::array::ArrayHeader;
     if keys.is_null()
-        || super::key_attrs::keys_have_slots(keys, d.key_count)
         || *crate::array::array_elements_ptr(keys).add(position as usize) != key.to_bits()
     {
         return false;
     }
     let entry = super::key_attrs::keys_entry(keys, position);
-    entry == super::key_attrs::ENTRY_OPTIONAL && super::key_attrs::entry_is_plain_writable_data(entry)
+    entry == super::key_attrs::ENTRY_OPTIONAL
+        && super::key_attrs::entry_is_plain_writable_data(entry)
 }
 
 /// Only ordinary physical prototype layouts are admitted, and every live

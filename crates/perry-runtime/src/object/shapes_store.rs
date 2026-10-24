@@ -1894,21 +1894,33 @@ impl ShapeSlab {
         unsafe { (*p).present() }.then_some(p)
     }
     /// The row cell a receiver word names, if it is an issued row. A layout
-    /// word is tagged and in band 0..=2; with the shadow bit cleared those are
-    /// exactly `[LAYOUT_TAG, LAYOUT_TAG | 3 << LAYOUT_BAND_SHIFT)`, so the tag
-    /// and band tests are one range compare (as the ShapeId base compare was).
+    /// word is tagged and in band 0..=2. With the tag flipped and the shadow
+    /// and kind bits cleared, a band-0 word is its row, and rows are below
+    /// `1 << LAYOUT_BAND_SHIFT`: so an ordinary receiver (the common one) is a
+    /// single compare against the row bound, and an untagged word reads as at
+    /// least `LAYOUT_TAG` and fails it. Bands 1 and 2 (dictionary, exotic)
+    /// take the second test; band 3 is no layout word and fails it.
     #[inline(always)]
     fn receiver_row_record(word: u32) -> Option<*mut ShapeRecord> {
-        use crate::codegen_abi::{LAYOUT_BAND_SHIFT, LAYOUT_ROW_MASK, LAYOUT_SHADOW_BIT, LAYOUT_TAG};
-        let w = word & !LAYOUT_SHADOW_BIT;
-        if w.wrapping_sub(LAYOUT_TAG) >= 3 << LAYOUT_BAND_SHIFT {
-            return None;
-        }
+        use crate::codegen_abi::{
+            LAYOUT_BAND_SHIFT, LAYOUT_KIND_MASK, LAYOUT_ROW_MASK, LAYOUT_SHADOW_BIT, LAYOUT_TAG,
+        };
         let dir = &AGENT_SHAPE_DIR[0];
-        let row = (w & LAYOUT_ROW_MASK) as usize;
-        if row >= dir.flat_ids.get() {
-            return None;
-        }
+        let bound = dir.flat_ids.get();
+        let band0 = ((word ^ LAYOUT_TAG) & !(LAYOUT_SHADOW_BIT | LAYOUT_KIND_MASK)) as usize;
+        let row = if band0 < bound {
+            band0
+        } else {
+            let w = word & !LAYOUT_SHADOW_BIT;
+            if w.wrapping_sub(LAYOUT_TAG) >= 3 << LAYOUT_BAND_SHIFT {
+                return None;
+            }
+            let row = (w & LAYOUT_ROW_MASK) as usize;
+            if row >= bound {
+                return None;
+            }
+            row
+        };
         // SAFETY: an issued row of this agent's readable reservation.
         Some(unsafe { dir.flat_base.get().add(row) })
     }
