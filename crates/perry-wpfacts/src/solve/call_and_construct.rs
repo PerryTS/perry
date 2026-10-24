@@ -8,6 +8,43 @@ impl Model {
         // is its contract's escape, and the call itself is one of an
         // unknown function (the reader cannot follow what it is given).
         if self.bare_marker(t) {
+            // DECISIONS 140: a plain call of a parameter's own marker is a
+            // call the caller's unit runs on the function it passed, with
+            // the arguments as the contract describes them (checked as the
+            // result is, `contract_check`): nothing escapes here. The
+            // result is that unknown function's. An argument marker is a
+            // call of each parameter it stands for (DECISIONS 44).
+            let cs = &self.calls[call as usize];
+            let plain = this_tok.is_none() && matches!(cs.this, ThisArg::Undef) && cs.spread.is_empty();
+            let own: Option<Vec<(FnIdx, u32)>> = plain.then(|| {
+                self.marker_members(t)
+                    .into_iter()
+                    .map(|m| match self.param_marker.get(&m) {
+                        Some(&(f, i))
+                            if i != u32::MAX
+                                && self.marker_of.get(&(f, i)) == Some(&m)
+                                && !self.marker_is_top(m) =>
+                        {
+                            Some((f, i))
+                        }
+                        _ => None,
+                    })
+                    .collect::<Option<Vec<_>>>()
+            }).flatten().filter(|v| !v.is_empty());
+            if let Some(own) = own {
+                if self.bind_done.insert((call, t, u32::MAX - 3)) {
+                    self.mark_use(t, crate::model::MARK_READ);
+                    for (f, i) in own {
+                        if !self.marker_calls.contains(&(f, i, call)) {
+                            self.marker_calls.push((f, i, call));
+                        }
+                    }
+                    let ret = self.calls[call as usize].ret;
+                    self.add_tok(ret, TOP);
+                    self.add_prim(ret, prim::ALL);
+                }
+                return;
+            }
             self.mark_use(t, crate::model::MARK_ESCAPE);
             return self.call_tok(call, TOP, this_tok);
         }

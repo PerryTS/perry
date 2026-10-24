@@ -530,6 +530,92 @@ impl<'a> Gen<'a> {
     /// primitives beside it are the contract's `binding_prim` (DECISIONS
     /// 115): no object, so the class is what every reader may find. True
     /// when something changed (solve again).
+    /// A value contract function `f` hands the caller's unit (its result,
+    /// or an argument of a call through its parameter, DECISIONS 140), node
+    /// `n`: `None` if no contract describes what it holds, else whether
+    /// publishing it changed anything (its fields leave, classes go out).
+    fn publish_result(&mut self, f: FnIdx, n: NodeId, r: u32) -> Option<bool> {
+        let mut changed = false;
+        // An argument marker reads as the markers it stands for (DECISIONS 44).
+        let toks: Vec<Tok> = self.m.nodes[n as usize]
+            .pts
+            .to_sorted()
+            .into_iter()
+            .flat_map(|t| self.m.marker_members(t))
+            .collect();
+        // Another function's marker with nothing beside it (DECISIONS
+        // 119) is another unit's value the caller cannot follow: it
+        // escapes, then reads as ⊤ (DECISIONS 42).
+        for &t in &toks {
+            if self.m.param_marker.get(&t).is_some_and(|&(g, _)| g != f)
+                && !self.m.beside_values(t)
+                && !self.m.marker_is_top(t)
+            {
+                self.m.escape(t, r);
+                changed = true;
+            }
+        }
+        let ok = toks.iter().all(|&t| match self.m.toks[t as usize] {
+            _ if self.m.param_marker.get(&t).is_some_and(|&(g, _)| g == f) => true,
+            // An escaped marker reads as ⊤ (DECISIONS 42), of any
+            // contract function: another unit's value.
+            _ if self.m.marker_is_top(t) => true,
+            // An unknown value or a builtin function in the result is
+            // the caller's ⊤, nothing of this unit leaves through it.
+            TokKind::Top | TokKind::BuiltinFn => true,
+            // A builtin, a program object, an array (DECISIONS 94): one
+            // runtime object every unit names alike, or an array whose
+            // elements are a cell (`arr_leaves` below).
+            TokKind::Builtin(_) => true,
+            TokKind::Obj(..) if self.program_tok(t) || self.arr_ok(t) => true,
+            // An instance of a contract class: given out (`give_out`),
+            // or of a class to give (DECISIONS 116).
+            TokKind::Obj(tm, _) if self.contract_class(tm) || self.class_to_give(tm) => true,
+            // Another unit's instance (a stand-in): forwarded with that
+            // unit's contract (`fn_contract_of`), its proof (§17.10 4).
+            TokKind::Obj(tm, _) if self.stand_in_cc.contains_key(&tm) => !self
+                .unit_in
+                .is_some_and(|u| u.broken(&self.m.tmpls[tm as usize].display)),
+            TokKind::Obj(tm, _) => self.literal_ok(tm),
+            _ => false,
+        });
+        if !ok {
+            return None;
+        }
+        for t in toks {
+            if matches!(
+                self.m.toks[t as usize],
+                TokKind::Top | TokKind::BuiltinFn | TokKind::Builtin(_)
+            ) || self.m.param_marker.contains_key(&t)
+                || self.program_tok(t)
+            {
+                continue;
+            }
+            if self.arr_ok(t) {
+                changed |= self.arr_leaves(t);
+                continue;
+            }
+            if let TokKind::Obj(tm, _) = self.m.toks[t as usize] {
+                if self.contract_class(tm) || self.class_to_give(tm) {
+                    changed |= self.give_class(tm, t, r);
+                } else if self.stand_in_cc.contains_key(&tm) {
+                    // Another unit's layout, forwarded with its owner's
+                    // contract: nothing of this unit leaves through its
+                    // fields, as for a published value (DECISIONS 79).
+                    continue;
+                } else if !self.ret_ok.contains(&t) {
+                    // A literal result is the same layout contract as a
+                    // published literal: its field functions are contract
+                    // functions the caller calls through their contract
+                    // (DECISIONS 78, as the value path below).
+                    changed |= self.note_field_fns(t);
+                }
+            }
+            changed |= self.fields_leave(t, r);
+        }
+        Some(changed)
+    }
+
     pub(crate) fn contract_check(&mut self) -> bool {
         let r = self.m.reason("published to another unit");
         let mut changed = self.apply_store_effects();
@@ -558,85 +644,39 @@ impl<'a> Gen<'a> {
             if self.ret_top.contains(&f) {
                 continue;
             }
-            // An argument marker reads as the markers it stands for (DECISIONS 44).
-            let toks: Vec<Tok> = self.m.nodes[ret as usize]
-                .pts
-                .to_sorted()
-                .into_iter()
-                .flat_map(|t| self.m.marker_members(t))
-                .collect();
-            // Another function's marker with nothing beside it (DECISIONS
-            // 119) is another unit's value the caller cannot follow: it
-            // escapes, then reads as ⊤ (DECISIONS 42).
-            for &t in &toks {
-                if self.m.param_marker.get(&t).is_some_and(|&(g, _)| g != f)
-                    && !self.m.beside_values(t)
-                    && !self.m.marker_is_top(t)
-                {
-                    self.m.escape(t, r);
+            match self.publish_result(f, ret, r) {
+                Some(ch) => changed |= ch,
+                None => {
+                    self.ret_top.insert(f);
+                    self.m.sink_node(ret, r);
                     changed = true;
                 }
             }
-            let ok = toks.iter().all(|&t| match self.m.toks[t as usize] {
-                _ if self.m.param_marker.get(&t).is_some_and(|&(g, _)| g == f) => true,
-                // An escaped marker reads as ⊤ (DECISIONS 42), of any
-                // contract function: another unit's value.
-                _ if self.m.marker_is_top(t) => true,
-                // An unknown value or a builtin function in the result is
-                // the caller's ⊤, nothing of this unit leaves through it.
-                TokKind::Top | TokKind::BuiltinFn => true,
-                // A builtin, a program object, an array (DECISIONS 94): one
-                // runtime object every unit names alike, or an array whose
-                // elements are a cell (`arr_leaves` below).
-                TokKind::Builtin(_) => true,
-                TokKind::Obj(..) if self.program_tok(t) || self.arr_ok(t) => true,
-                // An instance of a contract class: given out (`give_out`),
-                // or of a class to give (DECISIONS 116).
-                TokKind::Obj(tm, _) if self.contract_class(tm) || self.class_to_give(tm) => true,
-                // Another unit's instance (a stand-in): forwarded with that
-                // unit's contract (`fn_contract_of`), its proof (§17.10 4).
-                TokKind::Obj(tm, _) if self.stand_in_cc.contains_key(&tm) => !self
-                    .unit_in
-                    .is_some_and(|u| u.broken(&self.m.tmpls[tm as usize].display)),
-                TokKind::Obj(tm, _) => self.literal_ok(tm),
-                _ => false,
-            });
-            if !ok {
-                self.ret_top.insert(f);
-                self.m.sink_node(ret, r);
-                changed = true;
-                continue;
-            }
-            for t in toks {
-                if matches!(
-                    self.m.toks[t as usize],
-                    TokKind::Top | TokKind::BuiltinFn | TokKind::Builtin(_)
-                ) || self.m.param_marker.contains_key(&t)
-                    || self.program_tok(t)
-                {
+        }
+        // DECISIONS 140: the arguments of a call through a parameter marker
+        // go to the caller's unit as the result does; undescribed, or once
+        // the marker escapes (the caller's function is then unknown code),
+        // they escape as before.
+        let calls = self.m.marker_calls.clone();
+        for (f, i, call) in calls {
+            let top = self
+                .m
+                .marker_of
+                .get(&(f, i))
+                .is_some_and(|&t| self.m.marker_is_top(t));
+            for a in self.m.calls[call as usize].args.clone() {
+                if self.call_arg_top.contains(&a) {
                     continue;
                 }
-                if self.arr_ok(t) {
-                    changed |= self.arr_leaves(t);
-                    continue;
-                }
-                if let TokKind::Obj(tm, _) = self.m.toks[t as usize] {
-                    if self.contract_class(tm) || self.class_to_give(tm) {
-                        changed |= self.give_class(tm, t, r);
-                    } else if self.stand_in_cc.contains_key(&tm) {
-                        // Another unit's layout, forwarded with its owner's
-                        // contract: nothing of this unit leaves through its
-                        // fields, as for a published value (DECISIONS 79).
-                        continue;
-                    } else if !self.ret_ok.contains(&t) {
-                        // A literal result is the same layout contract as a
-                        // published literal: its field functions are contract
-                        // functions the caller calls through their contract
-                        // (DECISIONS 78, as the value path below).
-                        changed |= self.note_field_fns(t);
+                match (!top).then(|| self.publish_result(f, a, r)).flatten() {
+                    Some(ch) => changed |= ch,
+                    None => {
+                        self.call_arg_top.insert(a);
+                        let ru = self.m.reason("passed to a call of an unknown function value");
+                        self.m.sink_node(a, ru);
+                        changed = true;
                     }
                 }
-                changed |= self.fields_leave(t, r);
             }
         }
         // A published value binding: what it may hold must be described by

@@ -2325,12 +2325,16 @@ fn an_argument_contract_ascends_so_the_units_reach_a_fixpoint() {
     // Joined with last round's (it only grows), the run ends: rounds 1-3
     // pass the contracts on, round 4 changes nothing. Bounded by the test,
     // so a driver that cycles fails here instead of hanging the suite.
+    // DECISIONS 140: `onevent`'s `done(err, ee, event, args)` is a call
+    // through `listener`'s parameter, published as one more contract input
+    // that ascends (D16: every input joins with last round's): it is passed
+    // on one round later, so round 5 is the one that changes nothing.
     let m = r#"import first from "./ee";
         const t = first([[process, "exit"]], function (err: any) { console.log(err); });
         t.cancel();"#;
     let pf = bounded(60, move || units_of(&[("ee", EE_FIRST), ("m", m)]))
         .expect("D16: the per-unit fixpoint did not end in 60 s");
-    assert_eq!(pf.rounds, 4, "rounds {:?}", pf.round_work);
+    assert_eq!(pf.rounds, 5, "rounds {:?}", pf.round_work);
 }
 
 #[test]

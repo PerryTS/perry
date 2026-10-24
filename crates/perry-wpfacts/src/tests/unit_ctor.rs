@@ -209,3 +209,55 @@ fn a_receiver_walk_result_of_another_units_method_keeps_its_class() {
     assert_eq!(u.kind.objs, w.kind.objs, "{}", pf.dump_text());
     assert_eq!(verdicts(&pf, "parent"), verdicts(&whole, "parent"), "{}", pf.dump_text());
 }
+
+/// DECISIONS 140: CD's RedBlackTree.forEach calls its parameter with an
+/// instance of its own unit (`fn(new Entry(..))`). The function is the
+/// caller unit's: that unit runs the call on it with the argument the
+/// contract describes, as it takes a contract result, so the instance does
+/// not escape and the closure's reads stay on Entry. (What Entry's fields
+/// hold per unit is DECISIONS 141: its constructor arguments are reaches of
+/// the method's receiver, ⊤ to Entry's unit, with or without a callback.)
+const TREE_EACH: &str = r#"
+    class Val { v: number; constructor(v: number) { this.v = v; } }
+    class Entry {
+      key: number; value: Val;
+      constructor(key: number, value: Val) { this.key = key; this.value = value; }
+    }
+    class Tree {
+      key: number; val: Val;
+      constructor() { this.key = 1; this.val = new Val(2); }
+      forEach(fn: (e: Entry) => void): void { fn(new Entry(this.key, this.val)); }
+    }
+    const t = new Tree();
+    let s = 0;
+    t.forEach((e: Entry) => { s += e.key + e.value.v; });
+    console.log(s);
+    "#;
+
+#[test]
+fn a_call_through_a_parameter_hands_its_argument_to_the_callers_unit() {
+    let pf = units(TREE_EACH);
+    let whole = facts(TREE_EACH);
+    assert!(pf.broken.is_empty(), "{:?}\n{}", pf.broken, pf.dump_text());
+    assert_eq!(verdicts(&pf, "value"), verdicts(&whole, "value"), "{}", pf.dump_text());
+    assert_eq!(verdicts(&pf, "key"), verdicts(&whole, "key"), "{}", pf.dump_text());
+}
+
+/// DECISIONS 140, soundness: what the caller's function does to the
+/// argument is that unit's census on the stand-in, reported to the owner
+/// (§11.3): a store of another kind reaches Entry's facts.
+#[test]
+fn a_store_into_an_argument_handed_through_a_parameter_reaches_its_owner() {
+    let src = TREE_EACH.replace("s += e.key + e.value.v;", "s += e.key; e.value = null as any;");
+    let pf = units(&src);
+    let whole = facts(&src);
+    let broken = pf.broken.iter().any(|b| b.contains("Entry"));
+    assert!(
+        broken || verdicts(&pf, "value") == verdicts(&whole, "value"),
+        "{:?}\n{}",
+        pf.broken,
+        pf.dump_text()
+    );
+    let (u, w) = (field(tmpl(&pf, "Entry"), "value"), field(tmpl(&whole, "Entry"), "value"));
+    assert!(broken || u.kind.top || u.kind.prims & w.kind.prims == w.kind.prims, "{}", pf.dump_text());
+}

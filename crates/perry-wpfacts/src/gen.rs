@@ -112,6 +112,9 @@ pub struct Gen<'a> {
     pub sunk_field_toks: crate::pts::FxHashSet<(Tok, Atom)>,
     pub all_sunk: crate::pts::FxHashSet<Tok>,
     pub ret_top: crate::pts::FxHashSet<FnIdx>,
+    /// The arguments of calls through a parameter marker the contract
+    /// cannot describe (DECISIONS 140): sunk, ⊤ to the reader.
+    pub call_arg_top: crate::pts::FxHashSet<NodeId>,
     /// Stand-ins of other units' functions (by name): value node, token.
     /// By (name, the stand-in template it is a field of, if any).
     pub stand_in_fns: FxHashMap<(String, Option<(TmplId, bool)>), (NodeId, Tok)>,
@@ -372,6 +375,7 @@ impl<'a> Gen<'a> {
             sunk_field_toks: Default::default(),
             all_sunk: Default::default(),
             ret_top: Default::default(),
+            call_arg_top: Default::default(),
             stand_in_fns: FxHashMap::default(),
             stand_in_nss: FxHashMap::default(),
             reach_escape: None,
@@ -718,6 +722,107 @@ impl<'a> Gen<'a> {
         n
     }
 
+    /// Node `out` holds what value `d` of contract `c` may be (DECISIONS
+    /// 140): its result, or an argument it passes a function of this unit.
+    /// The receiver or an argument itself, what it holds under a key or
+    /// reaches (unless the contract sinks it: then nothing of it comes
+    /// back), the builtins, program objects and arrays (`value`: `d`'s,
+    /// the contract's own for its result), the layouts.
+    #[allow(clippy::too_many_arguments)]
+    fn fill_described(
+        &mut self,
+        mi: u32,
+        c: &crate::units::FnContract,
+        d: &crate::units::Described,
+        value: &'a crate::units::ValueContract,
+        this: NodeId,
+        params: &[NodeId],
+        out: NodeId,
+        why: &'static str,
+    ) {
+        use crate::model::MARK_ESCAPE;
+        if !c.lexical_this && c.this_use & MARK_ESCAPE == 0 {
+            if d.params.contains(&u32::MAX) {
+                self.m.edge(this, out);
+            }
+            for (_, k, then) in d.reach_keys.iter().filter(|(i, _, _)| *i == u32::MAX) {
+                self.ret_through_key(this, k, then, out, &c.name);
+            }
+            if d.reach.contains(&u32::MAX) {
+                self.reach_into(this, out, "reach-this", &c.name);
+            }
+        }
+        for (i, &p) in params.iter().enumerate() {
+            if c.params[i] & MARK_ESCAPE != 0 {
+                continue;
+            }
+            if d.params.contains(&(i as u32)) {
+                self.m.edge(p, out);
+            }
+            for (_, k, then) in d.reach_keys.iter().filter(|(j, _, _)| *j == i as u32) {
+                self.ret_through_key(p, k, then, out, &c.name);
+            }
+            if d.reach.contains(&(i as u32)) {
+                self.reach_into(p, out, "reach", &c.name);
+            }
+        }
+        // Its primitive kinds are the defining unit's (§18.7), any when ⊤.
+        self.m.add_prim(
+            out,
+            match d.layouts {
+                Some(_) => d.prim,
+                None => prim::ALL,
+            },
+        );
+        if d.unknown {
+            self.m.add_top(out, |_| why.into());
+        }
+        // DECISIONS 94: the builtins, program objects and arrays it holds.
+        if !(value.builtins.is_empty() && value.program.is_empty() && value.arrays.is_empty()) {
+            let v = self.stand_in_value(mi, why, value);
+            self.m.edge(v, out);
+        }
+        match &d.layouts {
+            Some(ds) => {
+                for x in ds {
+                    // A broken layout is ⊤ to every reader (§11.3).
+                    match self.other_layout(x) {
+                        Some(cc) => {
+                            self.stand_in_class(mi, cc);
+                            let tm = self.stand_ins[&cc.display].1;
+                            let inst = self.m.tok(TokKind::Obj(tm, NO_CTX));
+                            self.m.add_tok(out, inst);
+                        }
+                        None => self.m.add_top(out, |_| why.into()),
+                    }
+                }
+            }
+            None => self.m.add_top(out, |_| why.into()),
+        }
+    }
+
+    /// `out` holds everything `holder` reaches through own and inherited
+    /// fields, transitively (a contract's `ret_reach`).
+    fn reach_into(&mut self, holder: NodeId, out: NodeId, label: &str, name: &str) {
+        let q = self.m.node_named("reach", || format!("{label}({name})"));
+        self.m.own(q);
+        self.m.cons(
+            holder,
+            Cons::Load {
+                key: crate::model::Key::Any,
+                dst: q,
+            },
+        );
+        self.m.cons(
+            q,
+            Cons::Load {
+                key: crate::model::Key::Any,
+                dst: q,
+            },
+        );
+        self.m.edge(q, out);
+    }
+
     /// A contract result through `k` of `holder` (`ret_reach_keys`): the
     /// value of `holder.k` and what it reaches through `then` repeatedly
     /// (`None`: any key, DECISIONS 138).
@@ -876,70 +981,9 @@ impl<'a> Gen<'a> {
             }
             None => self.m.sink_node(this, r),
         }
-        // The result may be the receiver, or what it reaches (`return this`).
-        if !c.lexical_this && c.this_use & MARK_ESCAPE == 0 {
-            if c.ret_params.contains(&u32::MAX) {
-                self.m.edge(this, ret);
-            }
-            for (_, k, then) in c.ret_reach_keys.iter().filter(|(i, _, _)| *i == u32::MAX) {
-                self.ret_through_key(this, k, then, ret, &c.name);
-            }
-            if c.ret_reach.contains(&u32::MAX) {
-                let q = self
-                    .m
-                    .node_named("reach", || format!("reach-this({})", c.name));
-                self.m.own(q);
-                self.m.cons(
-                    this,
-                    Cons::Load {
-                        key: crate::model::Key::Any,
-                        dst: q,
-                    },
-                );
-                self.m.cons(
-                    q,
-                    Cons::Load {
-                        key: crate::model::Key::Any,
-                        dst: q,
-                    },
-                );
-                self.m.edge(q, ret);
-            }
-        }
         for (i, &p) in params.iter().enumerate() {
             let u = c.params[i];
             let ru = c.reach[i];
-            if u & MARK_ESCAPE == 0 {
-                // Result transfers: the argument itself, or what it reaches,
-                // may come back as the result.
-                if c.ret_params.contains(&(i as u32)) {
-                    self.m.edge(p, ret);
-                }
-                for (_, k, then) in c.ret_reach_keys.iter().filter(|(j, _, _)| *j == i as u32) {
-                    self.ret_through_key(p, k, then, ret, &c.name);
-                }
-                if c.ret_reach.contains(&(i as u32)) {
-                    let q = self
-                        .m
-                        .node_named("reach", || format!("reach{i}({})", c.name));
-                    self.m.own(q);
-                    self.m.cons(
-                        p,
-                        Cons::Load {
-                            key: crate::model::Key::Any,
-                            dst: q,
-                        },
-                    );
-                    self.m.cons(
-                        q,
-                        Cons::Load {
-                            key: crate::model::Key::Any,
-                            dst: q,
-                        },
-                    );
-                    self.m.edge(q, ret);
-                }
-            }
             if u & MARK_ESCAPE != 0 {
                 self.m.sink_node(p, r);
                 continue;
@@ -1063,46 +1107,43 @@ impl<'a> Gen<'a> {
             let key = crate::model::Key::Named(self.m.atom(&fl.key));
             self.m.cons(q, Cons::Store { key, src, site });
         }
-        // Its primitive kinds are the defining unit's (§18.7), any when ⊤.
-        self.m.add_prim(
-            ret,
-            match c.ret {
-                Some(_) => c.ret_prim,
-                None => prim::ALL,
-            },
-        );
-        if c.ret_unknown {
-            self.m
-                .add_top(ret, |_| "result of another unit's function".into());
-        }
-        // DECISIONS 94: the builtins, program objects and arrays it returns.
-        if !(c.ret_value.builtins.is_empty()
-            && c.ret_value.program.is_empty()
-            && c.ret_value.arrays.is_empty())
-        {
-            let v = self.stand_in_value(mi, "result of another unit's function", &c.ret_value);
-            self.m.edge(v, ret);
-        }
-        match &c.ret {
-            Some(ds) => {
-                for d in ds {
-                    // A broken layout is ⊤ to every reader (§11.3).
-                    match self.other_layout(d) {
-                        Some(cc) => {
-                            self.stand_in_class(mi, cc);
-                            let tm = self.stand_ins[&cc.display].1;
-                            let inst = self.m.tok(TokKind::Obj(tm, NO_CTX));
-                            self.m.add_tok(ret, inst);
-                        }
-                        None => self
-                            .m
-                            .add_top(ret, |_| "result of another unit's function".into()),
-                    }
-                }
+        // What it returns, as the defining unit described it.
+        let res = crate::units::Described {
+            layouts: c.ret.clone(),
+            params: c.ret_params.clone(),
+            reach: c.ret_reach.clone(),
+            reach_keys: c.ret_reach_keys.clone(),
+            unknown: c.ret_unknown,
+            value: Default::default(),
+            prim: c.ret_prim,
+        };
+        let why = "result of another unit's function";
+        self.fill_described(mi, c, &res, &c.ret_value, this, &params, ret, why);
+        // DECISIONS 140: the calls its body makes through a parameter. The
+        // defining unit described their arguments; this unit runs each call
+        // on what it passes (the function is this unit's, or one it holds a
+        // contract of). What they return goes to the defining unit, which
+        // reads it as unknown: it leaves.
+        for pc in &c.param_calls {
+            let i = pc.param as usize;
+            let Some(&p) = params.get(i) else {
+                continue;
+            };
+            if c.params[i] & MARK_ESCAPE != 0 {
+                continue;
             }
-            None => self
-                .m
-                .add_top(ret, |_| "result of another unit's function".into()),
+            let mut args = Vec::with_capacity(pc.args.len());
+            for (j, d) in pc.args.iter().enumerate() {
+                let a = self
+                    .m
+                    .node_named("arg", || format!("called{i}-arg{j}({})", c.name));
+                self.m.own(a);
+                let why = "argument from another unit's function";
+                self.fill_described(mi, c, d, &d.value, this, &params, a, why);
+                args.push(a);
+            }
+            let res = self.call_value(p, ThisArg::Undef, args, Vec::new());
+            self.m.sink_node(res, r);
         }
         n
     }

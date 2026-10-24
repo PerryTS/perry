@@ -106,6 +106,70 @@ pub(crate) struct StoreFlow {
     pub prim: u16,
 }
 
+/// DECISIONS 140: a value a contract function hands the caller's unit, its
+/// result or an argument of a call through a parameter, as the reader sees
+/// it: the layouts it may be (`None`: ⊤), the parameters (`u32::MAX`: the
+/// receiver) it may be or whose reach it may hold, what it holds through
+/// one named key of one (then the keys read on it, DECISIONS 138), an
+/// unknown value beside, the builtins, program objects and arrays
+/// (DECISIONS 94), and its primitive kinds.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Described {
+    pub layouts: Option<Vec<String>>,
+    pub params: Vec<u32>,
+    pub reach: Vec<u32>,
+    pub reach_keys: Vec<(u32, String, Option<Vec<String>>)>,
+    pub unknown: bool,
+    pub value: ValueContract,
+    pub prim: u16,
+}
+
+impl Described {
+    /// Every value either may be: a ⊤ (`None`) absorbs the layouts.
+    pub(crate) fn join(&mut self, o: &Described) {
+        match (&mut self.layouts, &o.layouts) {
+            (Some(r), Some(s)) => {
+                union_into(r, s);
+                r.sort();
+            }
+            (r, _) => *r = None,
+        }
+        for (v, w) in [(&mut self.params, &o.params), (&mut self.reach, &o.reach)] {
+            union_into(v, w);
+            v.sort_unstable();
+        }
+        union_into(&mut self.reach_keys, &o.reach_keys);
+        self.reach_keys.sort();
+        self.unknown |= o.unknown;
+        self.value.join(&o.value);
+        self.prim |= o.prim;
+    }
+}
+
+/// DECISIONS 140: the body calls parameter `param`'s argument with these
+/// arguments (no receiver: `fn(a, b)`), so the caller's unit, which knows
+/// the function it passed, runs that call; one entry per (parameter, number
+/// of arguments), its arguments joined over the calls.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ParamCall {
+    pub param: u32,
+    pub args: Vec<Described>,
+}
+
+impl ParamCall {
+    pub(crate) fn join(&mut self, o: &ParamCall) {
+        for (x, y) in self.args.iter_mut().zip(&o.args) {
+            x.join(y);
+        }
+    }
+}
+
+/// Joins `b`'s calls into `a` by (parameter, number of arguments).
+pub(crate) fn join_param_calls(a: &mut Vec<ParamCall>, b: &[ParamCall]) {
+    join_keyed(a, b, |x| (x.param, x.args.len()), |x, y| x.join(y));
+    a.sort_by_key(|x| (x.param, x.args.len()));
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct FnContract {
     pub name: String,
@@ -163,6 +227,8 @@ pub(crate) struct FnContract {
     /// what it reaches: the arguments of other parameters, or an unknown
     /// value, or primitives (DECISIONS 118).
     pub param_flows: Vec<StoreFlow>,
+    /// The calls the body makes through a parameter (DECISIONS 140).
+    pub param_calls: Vec<ParamCall>,
     /// The binding name of a closed function (decision 19): a unit that
     /// calls it as a value publishes what it passes under this name.
     pub closed: Option<String>,
@@ -321,6 +387,7 @@ impl FnContract {
         self.param_flows.sort_by(|x, y| {
             (x.dst, x.reach, &x.via, &x.key).cmp(&(y.dst, y.reach, &y.via, &y.key))
         });
+        join_param_calls(&mut self.param_calls, &o.param_calls);
         if self.closed.is_none() {
             self.closed = o.closed.clone();
         }

@@ -658,6 +658,138 @@ fn fn_contract_of(
             .filter(|(g2, _)| *g2 == f)
             .map(|&(_, n)| n)
             .collect();
+    let d = describe_nodes(g, templates, f, rets, g.ret_top.contains(&f), layouts_out, open_tm);
+    // DECISIONS 140: the calls the body makes through a parameter marker,
+    // each argument described as the result is.
+    let mut param_calls: Vec<units::ParamCall> = Vec::new();
+    for &(f2, i, call) in &g.m.marker_calls {
+        if f2 != f {
+            continue;
+        }
+        let args: Vec<units::Described> = g.m.calls[call as usize]
+            .args
+            .iter()
+            .map(|&a| {
+                let top = g.call_arg_top.contains(&a);
+                describe_nodes(g, templates, f, vec![a], top, layouts_out, open_tm)
+            })
+            .collect();
+        units::join_param_calls(&mut param_calls, &[units::ParamCall { param: i, args }]);
+    }
+    // The receiver marker of a published method (DECISIONS 57); without
+    // one nothing is known of what the body does to its receiver.
+    let sealed = g.m.sealed_method(f);
+    let (this_use, this_reach) = match g.m.marker_of.get(&(f, u32::MAX)) {
+        // DECISIONS 116: a sealed class's method runs on this unit's own
+        // instances only; what it does to them is in their facts.
+        _ if sealed => (0, 0),
+        Some(&t) => {
+            let u = |t: model::Tok| g.m.marker_use.get(&t).copied().unwrap_or(0);
+            (
+                u(t),
+                g.m.marker_reach
+                    .get(&t)
+                    .map_or(model::MARK_ESCAPE, |&r| u(r)),
+            )
+        }
+        None => (model::MARK_ESCAPE, model::MARK_ESCAPE),
+    };
+    let this_stores = (sealed || !g.m.this_open.contains(&f)).then(|| {
+        let mut ks: Vec<String> =
+            g.m.this_stores
+                .get(&f)
+                .map(|ks| ks.iter().map(|&a| g.m.atoms[a as usize].clone()).collect())
+                .unwrap_or_default();
+        ks.sort();
+        ks
+    });
+    let param_stores: Vec<Option<Vec<String>>> = (0..fi.params.len() as u32)
+        .map(|i| {
+            (!g.m.param_open.contains(&(f, i))).then(|| {
+                let mut ks: Vec<String> =
+                    g.m.param_stores
+                        .get(&(f, i))
+                        .map(|ks| ks.iter().map(|&a| g.m.atoms[a as usize].clone()).collect())
+                        .unwrap_or_default();
+                ks.sort();
+                ks
+            })
+        })
+        .collect();
+    let mut param_flows: Vec<units::StoreFlow> =
+        g.m.store_flows
+            .iter()
+            .filter(|((h, ..), _)| *h == f)
+            .map(|(&(_, dst, reach, via, a), fl)| {
+                let mut from = fl.from.clone();
+                from.sort();
+                let mut from_reach: Vec<(u32, Option<String>)> = fl
+                    .from_reach
+                    .iter()
+                    .map(|&(j, v)| (j, v.map(|v| g.m.atoms[v as usize].clone())))
+                    .collect();
+                from_reach.sort();
+                units::StoreFlow {
+                    dst,
+                    reach,
+                    via: via.map(|v| g.m.atoms[v as usize].clone()),
+                    key: g.m.atoms[a as usize].clone(),
+                    from,
+                    from_reach,
+                    top: fl.top,
+                    prim: fl.prim,
+                }
+            })
+            .collect();
+    param_flows
+        .sort_by(|a, b| (a.dst, a.reach, &a.via, &a.key).cmp(&(b.dst, b.reach, &b.via, &b.key)));
+    let mut this_calls: Vec<String> =
+        g.m.this_calls
+            .get(&f)
+            .map(|ks| ks.iter().map(|&a| g.m.atoms[a as usize].clone()).collect())
+            .unwrap_or_default();
+    this_calls.sort();
+    let (name, closed) = fn_contract_name(g, f);
+    units::FnContract {
+        this_use,
+        this_reach,
+        this_stores,
+        this_calls,
+        param_stores,
+        param_flows,
+        param_calls,
+        name,
+        closed,
+        params,
+        reach,
+        reach_keys,
+        // A rest parameter takes only the arguments past the others
+        // (design §18.11); `arguments` aliases every argument.
+        variadic: fi.has_arguments,
+        rest: fi.rest.is_some() && !fi.has_arguments,
+        ret: d.layouts,
+        ret_params: d.params,
+        ret_reach: d.reach,
+        ret_reach_keys: d.reach_keys,
+        ret_unknown: d.unknown,
+        ret_value: d.value,
+        ret_prim: d.prim,
+        lexical_this: fi.lexical_this || !reads_this(g, f),
+    }
+}
+
+/// What a value contract function `f` hands the caller's unit may be
+/// (DECISIONS 140): its result, or an argument of a call through one of its
+/// parameters; `nodes` hold it, `top` when no contract describes it.
+fn describe_nodes(
+    g: &gen::Gen,
+    templates: &[TemplateFacts],
+    f: model::FnIdx,
+    nodes: Vec<model::NodeId>,
+    top: bool,
+    layouts_out: &mut Vec<units::ClassContract>,
+    open_tm: &pts::FxHashSet<model::TmplId>,
+) -> units::Described {
     let mut ret_params: Vec<u32> = Vec::new();
     let mut ret_reach: Vec<u32> = Vec::new();
     let mut ret_reach_keys: Vec<(u32, String, Option<Vec<String>>)> = Vec::new();
@@ -685,10 +817,10 @@ fn fn_contract_of(
     };
     let mut ret_unknown = false;
     let mut ret_value = units::ValueContract::default();
-    let mut ret_prim = rets.iter().fold(0, |p, &n| p | g.m.nodes[n as usize].prim);
-    let ret = (!g.ret_top.contains(&f) && !rets.is_empty()).then(|| {
+    let mut ret_prim = nodes.iter().fold(0, |p, &n| p | g.m.nodes[n as usize].prim);
+    let layouts = (!top && !nodes.is_empty()).then(|| {
         let mut ds: Vec<String> = Vec::new();
-        for n in rets {
+        for n in nodes {
             // An argument marker reads as the markers it stands for (DECISIONS 44).
             let mut toks: Vec<model::Tok> = Vec::new();
             for t in g.m.nodes[n as usize].pts.to_sorted() {
@@ -883,113 +1015,17 @@ fn fn_contract_of(
         ds.sort();
         ds
     });
-    // The receiver marker of a published method (DECISIONS 57); without
-    // one nothing is known of what the body does to its receiver.
-    let sealed = g.m.sealed_method(f);
-    let (this_use, this_reach) = match g.m.marker_of.get(&(f, u32::MAX)) {
-        // DECISIONS 116: a sealed class's method runs on this unit's own
-        // instances only; what it does to them is in their facts.
-        _ if sealed => (0, 0),
-        Some(&t) => {
-            let u = |t: model::Tok| g.m.marker_use.get(&t).copied().unwrap_or(0);
-            (
-                u(t),
-                g.m.marker_reach
-                    .get(&t)
-                    .map_or(model::MARK_ESCAPE, |&r| u(r)),
-            )
-        }
-        None => (model::MARK_ESCAPE, model::MARK_ESCAPE),
-    };
-    let this_stores = (sealed || !g.m.this_open.contains(&f)).then(|| {
-        let mut ks: Vec<String> =
-            g.m.this_stores
-                .get(&f)
-                .map(|ks| ks.iter().map(|&a| g.m.atoms[a as usize].clone()).collect())
-                .unwrap_or_default();
-        ks.sort();
-        ks
-    });
-    let param_stores: Vec<Option<Vec<String>>> = (0..fi.params.len() as u32)
-        .map(|i| {
-            (!g.m.param_open.contains(&(f, i))).then(|| {
-                let mut ks: Vec<String> =
-                    g.m.param_stores
-                        .get(&(f, i))
-                        .map(|ks| ks.iter().map(|&a| g.m.atoms[a as usize].clone()).collect())
-                        .unwrap_or_default();
-                ks.sort();
-                ks
-            })
-        })
-        .collect();
-    let mut param_flows: Vec<units::StoreFlow> =
-        g.m.store_flows
-            .iter()
-            .filter(|((h, ..), _)| *h == f)
-            .map(|(&(_, dst, reach, via, a), fl)| {
-                let mut from = fl.from.clone();
-                from.sort();
-                let mut from_reach: Vec<(u32, Option<String>)> = fl
-                    .from_reach
-                    .iter()
-                    .map(|&(j, v)| (j, v.map(|v| g.m.atoms[v as usize].clone())))
-                    .collect();
-                from_reach.sort();
-                units::StoreFlow {
-                    dst,
-                    reach,
-                    via: via.map(|v| g.m.atoms[v as usize].clone()),
-                    key: g.m.atoms[a as usize].clone(),
-                    from,
-                    from_reach,
-                    top: fl.top,
-                    prim: fl.prim,
-                }
-            })
-            .collect();
-    param_flows
-        .sort_by(|a, b| (a.dst, a.reach, &a.via, &a.key).cmp(&(b.dst, b.reach, &b.via, &b.key)));
-    let mut this_calls: Vec<String> =
-        g.m.this_calls
-            .get(&f)
-            .map(|ks| ks.iter().map(|&a| g.m.atoms[a as usize].clone()).collect())
-            .unwrap_or_default();
-    this_calls.sort();
-    let (name, closed) = fn_contract_name(g, f);
-    units::FnContract {
-        this_use,
-        this_reach,
-        this_stores,
-        this_calls,
-        param_stores,
-        param_flows,
-        name,
-        closed,
-        params,
-        reach,
-        reach_keys,
-        // A rest parameter takes only the arguments past the others
-        // (design §18.11); `arguments` aliases every argument.
-        variadic: fi.has_arguments,
-        rest: fi.rest.is_some() && !fi.has_arguments,
-        ret,
-        ret_params: {
-            ret_params.sort();
-            ret_params
-        },
-        ret_reach: {
-            ret_reach.sort();
-            ret_reach
-        },
-        ret_reach_keys: {
-            ret_reach_keys.sort();
-            ret_reach_keys
-        },
-        ret_unknown,
-        ret_value,
-        ret_prim,
-        lexical_this: fi.lexical_this || !reads_this(g, f),
+    ret_params.sort();
+    ret_reach.sort();
+    ret_reach_keys.sort();
+    units::Described {
+        layouts,
+        params: ret_params,
+        reach: ret_reach,
+        reach_keys: ret_reach_keys,
+        unknown: ret_unknown,
+        value: ret_value,
+        prim: ret_prim,
     }
 }
 
@@ -1799,6 +1835,7 @@ pub(crate) fn compute_in<'a>(
                         this_calls: Vec::new(),
                         param_stores: Vec::new(),
                         param_flows: Vec::new(),
+                        param_calls: Vec::new(),
                     }),
                 };
                 let key = e.map(|(_, a)| {
