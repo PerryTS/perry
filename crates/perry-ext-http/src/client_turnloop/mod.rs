@@ -20,8 +20,18 @@ use std::sync::atomic::{AtomicU64, Ordering};
 pub(crate) const SUBSYSTEM: u8 = 6;
 const NO_LOOP_CODE: &str = "ENOTSUP";
 
+#[cfg(not(test))]
 static ACCEPTED: AtomicU64 = AtomicU64::new(0);
+#[cfg(not(test))]
 static COMPLETED: AtomicU64 = AtomicU64::new(0);
+// Unit fixtures run independent worker agents concurrently and assert exact
+// deltas on their own loop thread. Production and integration-test binaries
+// retain process-wide telemetry; only unit-test observations are isolated.
+#[cfg(test)]
+thread_local! {
+    static ACCEPTED: AtomicU64 = const { AtomicU64::new(0) };
+    static COMPLETED: AtomicU64 = const { AtomicU64::new(0) };
+}
 static REUSED: AtomicU64 = AtomicU64::new(0);
 static HANDSHAKES: AtomicU64 = AtomicU64::new(0);
 static TIMED_OUT: AtomicU64 = AtomicU64::new(0);
@@ -30,12 +40,26 @@ static DEFERRED_FIRED: AtomicU64 = AtomicU64::new(0);
 
 /// Exchanges handed to this module (directly or posted to the loop owner).
 pub fn accepted_total() -> u64 {
-    ACCEPTED.load(Ordering::Relaxed)
+    #[cfg(not(test))]
+    {
+        ACCEPTED.load(Ordering::Relaxed)
+    }
+    #[cfg(test)]
+    {
+        ACCEPTED.with(|counter| counter.load(Ordering::Relaxed))
+    }
 }
 
 /// Exchanges whose response was decoded through to its end.
 pub fn completed_total() -> u64 {
-    COMPLETED.load(Ordering::Relaxed)
+    #[cfg(not(test))]
+    {
+        COMPLETED.load(Ordering::Relaxed)
+    }
+    #[cfg(test)]
+    {
+        COMPLETED.with(|counter| counter.load(Ordering::Relaxed))
+    }
 }
 
 /// Exchanges that ran on a pooled (kept-alive) connection.
@@ -283,7 +307,10 @@ pub(crate) fn dispatch(request: Request<'_>) -> Route {
             return Route::Refused;
         }
     };
+    #[cfg(not(test))]
     ACCEPTED.fetch_add(1, Ordering::Relaxed);
+    #[cfg(test)]
+    ACCEPTED.with(|counter| counter.fetch_add(1, Ordering::Relaxed));
     let direct = available();
     let carried = on_loop(move || start(outbound));
     if !carried {
