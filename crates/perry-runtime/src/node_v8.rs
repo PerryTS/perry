@@ -419,7 +419,7 @@ unsafe fn build_v8_instance(module: &str, id: usize) -> f64 {
     let mname = js_string_from_bytes(module.as_ptr(), module.len() as u32);
     let mname = scope.root_string_ptr(mname);
     obj.with_mut_ptr(|obj| {
-        mname.with_const_ptr(|mname| {
+        mname.with_mut_ptr(|mname| {
             crate::object::js_object_set_field(obj, 0, JSValue::string_ptr(mname))
         })
     });
@@ -429,7 +429,7 @@ unsafe fn build_v8_instance(module: &str, id: usize) -> f64 {
         let kp = js_string_from_bytes(k.as_ptr(), k.len() as u32);
         let kp = scope.root_string_ptr(kp);
         let pushed = keys.with_mut_ptr(|keys| {
-            kp.with_const_ptr(|kp| crate::array::js_array_push(keys, JSValue::string_ptr(kp)))
+            kp.with_mut_ptr(|kp| crate::array::js_array_push(keys, JSValue::string_ptr(kp)))
         });
         keys.set_raw_mut_ptr(pushed);
     }
