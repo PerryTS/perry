@@ -572,7 +572,9 @@ impl<'a> Gen<'a> {
             // a stand-in instance does, unless it is closed: a closed
             // contract's users are known to its owner (`Model::escape`).
             TokKind::Func(f, _) if self.m.funcs[f as usize].func_id != u32::MAX => true,
-            TokKind::Func(f, _) if self.stand_in_fc.contains_key(&t) => self.m.funcs[f as usize].forwarded,
+            TokKind::Func(f, _) if self.stand_in_fc.contains_key(&t) => {
+                self.m.funcs[f as usize].forwarded
+            }
             TokKind::Obj(..) if self.program_tok(t) || self.arr_ok(t) => true,
             // An instance of a contract class: given out (`give_out`),
             // or of a class to give (DECISIONS 116).
@@ -697,7 +699,9 @@ impl<'a> Gen<'a> {
                     Some(ch) => changed |= ch,
                     None => {
                         self.call_arg_top.insert(a);
-                        let ru = self.m.reason("passed to a call of an unknown function value");
+                        let ru = self
+                            .m
+                            .reason("passed to a call of an unknown function value");
                         self.m.sink_node(a, ru);
                         changed = true;
                     }

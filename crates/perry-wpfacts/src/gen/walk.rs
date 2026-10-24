@@ -234,6 +234,7 @@ impl<'a> Gen<'a> {
         if fn_ctor {
             self.note_fn_phase(fxi, crate::ctor_phase::analyze_fn(f));
         }
+        self.rooted_stores.extend(crate::rooted::stores(&f.body));
         let fx = Fx {
             module: mi,
             f: fxi,
@@ -449,6 +450,8 @@ impl<'a> Gen<'a> {
             ctor_phase_of,
             birth,
             ctor_fn: None,
+            rooted: false,
+            deep: false,
         });
         id
     }

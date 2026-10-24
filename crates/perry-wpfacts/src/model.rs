@@ -354,16 +354,23 @@ impl Hard {
 pub enum Cons {
     /// The node is the value a contract function `f` stores under `key`
     /// into its parameter `dst`'s argument (`reach`: into what it reaches)
-    /// (DECISIONS 118): a marker of one of `f`'s parameters is that
-    /// argument, which the reader stores; any other value escapes.
+    /// (DECISIONS 118; `dst` `u32::MAX`: into what its receiver reaches,
+    /// and `Key::Any` a computed key, DECISIONS 149): a marker of one of
+    /// `f`'s parameters is that argument, which the reader stores; any
+    /// other value escapes.
     StoreOut {
         f: FnIdx,
         dst: u32,
         reach: bool,
         /// A keyed reach (design §18.4): what the argument holds under it.
         via: Option<Atom>,
-        key: Atom,
+        key: Key,
         reason: u32,
+        /// The receiver's reach marker stored into (`dst` `u32::MAX`).
+        at: Tok,
+        /// What the store met: `at`, or (a receiver-rooted store, DECISIONS
+        /// 149b) another function's marker or ⊤.
+        to: Tok,
     },
     /// dst ⊇ read(t, key) for every t in the node.
     Load { key: Key, dst: NodeId },
@@ -403,6 +410,10 @@ pub enum Cons {
     /// unit's census covers what the constructor does with it; any other
     /// token escapes, with the reason.
     HandOver { reason: u32 },
+    /// DECISIONS 149d: what a receiver-rooted store of function `f` puts
+    /// into an object of this unit: every value but `f`'s parameter and
+    /// argument markers, which are `f`'s receiver flow (`Cons::StoreOut`).
+    OwnOnly { f: FnIdx, dst: NodeId },
     /// The `this` of a contract stand-in of another unit's class `tmpl`
     /// (design §11.2): its instances are inside the contract; any other
     /// receiver escapes (that unit runs the method on it unseen).
@@ -575,6 +586,7 @@ impl Cons {
             Cons::Chain { .. } => "chain",
             Cons::TopSink { .. } => "top",
             Cons::HandOver { .. } => "handover",
+            Cons::OwnOnly { .. } => "ownonly",
             Cons::StoreOut { .. } => "storeout",
             Cons::ContractThis { .. } => "contractthis",
             Cons::OverrideThis { .. } => "overridethis",
@@ -618,7 +630,7 @@ impl Cons {
 }
 
 /// DECISIONS 118: (function, parameter, into its reach, via, key).
-pub type StoreFlowKey = (FnIdx, u32, bool, Option<Atom>, Atom);
+pub type StoreFlowKey = (FnIdx, u32, bool, Option<Atom>, Key);
 
 /// DECISIONS 118: one stored key of a contract function's parameter.
 #[derive(Clone, Debug, Default)]
@@ -673,6 +685,12 @@ pub struct StoreSite {
     /// `this.f = v` in this function's body before `this` leaks: a
     /// construction-phase writer for `new f()` instances.
     pub ctor_fn: Option<FnIdx>,
+    /// DECISIONS 149b: the object stored into is reached from `func`'s
+    /// receiver by a chain of loads (`rooted.rs`).
+    pub rooted: bool,
+    /// DECISIONS 149d: rooted, and the object is a load (not `this`): it
+    /// holds a reach marker of the receiver.
+    pub deep: bool,
 }
 
 #[derive(Default, Clone, Debug)]
@@ -989,11 +1007,16 @@ pub struct Model {
     pub param_stores: FxHashMap<(FnIdx, u32), Vec<Atom>>,
     pub param_open: crate::pts::FxHashSet<(FnIdx, u32)>,
     /// What a contract function stores under a named key into its argument
-    /// or into what that reaches (DECISIONS 118), by (function, parameter,
-    /// into its reach, key): the parameters whose arguments are stored, and
-    /// whether another value (⊤ to the reader) or primitives are.
-    pub store_flows: FxHashMap<(FnIdx, u32, bool, Option<Atom>, Atom), StoreFlow>,
-    pub store_out_done: crate::pts::FxHashSet<(NodeId, FnIdx, u32, bool, Option<Atom>, Atom)>,
+    /// or into what that reaches (DECISIONS 118), under any key into what
+    /// an argument or its receiver reaches (DECISIONS 149), by (function,
+    /// parameter, into its reach, key): the parameters whose arguments are
+    /// stored, and whether another value (⊤ to the reader) or primitives
+    /// are.
+    pub store_flows: FxHashMap<StoreFlowKey, StoreFlow>,
+    pub store_out_done: crate::pts::FxHashSet<(NodeId, FnIdx, u32, bool, Option<Atom>, Key, Tok)>,
+    /// DECISIONS 149d: per (stored node, function) the node of its values
+    /// that are not the function's markers (`Cons::OwnOnly`).
+    pub rooted_own: FxHashMap<(NodeId, FnIdx), NodeId>,
     /// DECISIONS 118, argument markers: the named-key stores into one (each
     /// replayed on every marker that links in later), the `StoreOut`s it is
     /// the source of (function, parameter, reason: a member other than that
@@ -1351,6 +1374,8 @@ impl Model {
             ctor_phase_of: None,
             birth: false,
             ctor_fn: None,
+            rooted: false,
+            deep: false,
         });
         id
     }
@@ -1364,6 +1389,8 @@ impl Model {
             ctor_phase_of: None,
             birth: true,
             ctor_fn: None,
+            rooted: false,
+            deep: false,
         });
         id
     }

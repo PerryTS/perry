@@ -167,8 +167,25 @@ impl<'a> Gen<'a> {
     ) -> SiteId {
         let site = self.store_site(fx.module, fx.f, desc, owner, false);
         self.mark_fn_phase(fx, e, object, site);
+        self.mark_rooted(e, site);
         self.m.cons(recv, Cons::Store { key, src, site });
         site
+    }
+
+    /// DECISIONS 149b: a receiver-rooted store's site says so before its
+    /// constraint exists (generation solves online).
+    fn mark_rooted(&mut self, e: &Expr, site: SiteId) {
+        if let Some(&deep) = self.rooted_stores.get(&(e as *const Expr as usize)) {
+            self.m.stores[site as usize].rooted = true;
+            self.m.stores[site as usize].deep = deep;
+        }
+    }
+
+    /// An element store (`o[k] = v`): no construction phase, maybe rooted.
+    fn store_elem(&mut self, fx: &Fx, e: &Expr, recv: NodeId, key: Key, src: NodeId, desc: &str) {
+        let site = self.store_site(fx.module, fx.f, desc.into(), None, false);
+        self.mark_rooted(e, site);
+        self.m.cons(recv, Cons::Store { key, src, site });
     }
 
     /// A `this.k = v` store in a function `new` may call, before `this`
@@ -724,7 +741,7 @@ impl<'a> Gen<'a> {
                 self.m.cons(i, Cons::Implicit { reason: r });
                 let v = self.expr(fx, value);
                 let key = self.key_of(index);
-                self.store(fx, o, key, v, "[]=".into(), None, false);
+                self.store_elem(fx, e, o, key, v, "[]=");
                 v
             }
             Expr::IndexUpdate { object, index, .. } => {
@@ -744,7 +761,7 @@ impl<'a> Gen<'a> {
                         add: false,
                     },
                 );
-                self.store(fx, o, key, nv, "[]++".into(), None, false);
+                self.store_elem(fx, e, o, key, nv, "[]++");
                 nv
             }
             Expr::Delete(target) => {

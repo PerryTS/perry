@@ -148,10 +148,18 @@ fn a_receiver_reach_stored_into_another_units_instance_keeps_its_class() {
     let pf = units(TREE_ROOT);
     let whole = facts(TREE_ROOT);
     assert!(pf.broken.is_empty(), "{:?}\n{}", pf.broken, pf.dump_text());
-    let (u, w) = (field(tmpl(&pf, "Node"), "parent"), field(tmpl(&whole, "Node"), "parent"));
+    let (u, w) = (
+        field(tmpl(&pf, "Node"), "parent"),
+        field(tmpl(&whole, "Node"), "parent"),
+    );
     assert!(!u.kind.top, "{}", pf.dump_text());
     assert_eq!(u.kind.objs, w.kind.objs, "{}", pf.dump_text());
-    assert_eq!(verdicts(&pf, "parent"), verdicts(&whole, "parent"), "{}", pf.dump_text());
+    assert_eq!(
+        verdicts(&pf, "parent"),
+        verdicts(&whole, "parent"),
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// DECISIONS 138: CD's Node.successor returns `treeMinimum(this.right)` or
@@ -204,10 +212,18 @@ fn a_receiver_walk_result_of_another_units_method_keeps_its_class() {
     let pf = units(TREE_SUCC);
     let whole = facts(TREE_SUCC);
     assert!(pf.broken.is_empty(), "{:?}\n{}", pf.broken, pf.dump_text());
-    let (u, w) = (field(tmpl(&pf, "Node"), "parent"), field(tmpl(&whole, "Node"), "parent"));
+    let (u, w) = (
+        field(tmpl(&pf, "Node"), "parent"),
+        field(tmpl(&whole, "Node"), "parent"),
+    );
     assert!(!u.kind.top, "{}", pf.dump_text());
     assert_eq!(u.kind.objs, w.kind.objs, "{}", pf.dump_text());
-    assert_eq!(verdicts(&pf, "parent"), verdicts(&whole, "parent"), "{}", pf.dump_text());
+    assert_eq!(
+        verdicts(&pf, "parent"),
+        verdicts(&whole, "parent"),
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// DECISIONS 140: CD's RedBlackTree.forEach calls its parameter with an
@@ -239,8 +255,18 @@ fn a_call_through_a_parameter_hands_its_argument_to_the_callers_unit() {
     let pf = units(TREE_EACH);
     let whole = facts(TREE_EACH);
     assert!(pf.broken.is_empty(), "{:?}\n{}", pf.broken, pf.dump_text());
-    assert_eq!(verdicts(&pf, "value"), verdicts(&whole, "value"), "{}", pf.dump_text());
-    assert_eq!(verdicts(&pf, "key"), verdicts(&whole, "key"), "{}", pf.dump_text());
+    assert_eq!(
+        verdicts(&pf, "value"),
+        verdicts(&whole, "value"),
+        "{}",
+        pf.dump_text()
+    );
+    assert_eq!(
+        verdicts(&pf, "key"),
+        verdicts(&whole, "key"),
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// DECISIONS 142: a published method's receiver reaches (`this.key`,
@@ -262,10 +288,18 @@ fn a_receiver_reach_passed_to_another_units_constructor_keeps_its_kinds() {
     let whole = facts(&src);
     assert!(pf.broken.is_empty(), "{:?}\n{}", pf.broken, pf.dump_text());
     for k in ["key", "value"] {
-        let (u, w) = (field(tmpl(&pf, "Entry"), k), field(tmpl(&whole, "Entry"), k));
+        let (u, w) = (
+            field(tmpl(&pf, "Entry"), k),
+            field(tmpl(&whole, "Entry"), k),
+        );
         assert!(!w.kind.top && !u.kind.top, "{k}\n{}", pf.dump_text());
     }
-    assert_eq!(verdicts(&pf, "v"), verdicts(&whole, "v"), "{}", pf.dump_text());
+    assert_eq!(
+        verdicts(&pf, "v"),
+        verdicts(&whole, "v"),
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// DECISIONS 143: SOM's `Vector.sort`/`sortRange` recursion passes a
@@ -298,8 +332,18 @@ fn a_call_through_a_parameter_that_may_hold_a_receiver_field_keeps_its_argument(
     // No call of an unknown function value: `cmp(this.val)` stays a call
     // through the parameter (a receiver reach member escaped it before).
     assert_eq!(pf.stats.top_calls, 0, "{}", pf.dump_text());
-    assert!(!pf.broken.iter().any(|b| b.contains("Val")), "{:?}\n{}", pf.broken, pf.dump_text());
-    assert_eq!(verdicts(&pf, "v"), verdicts(&whole, "v"), "{}", pf.dump_text());
+    assert!(
+        !pf.broken.iter().any(|b| b.contains("Val")),
+        "{:?}\n{}",
+        pf.broken,
+        pf.dump_text()
+    );
+    assert_eq!(
+        verdicts(&pf, "v"),
+        verdicts(&whole, "v"),
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// DECISIONS 140, soundness: what the caller's function does to the
@@ -307,7 +351,10 @@ fn a_call_through_a_parameter_that_may_hold_a_receiver_field_keeps_its_argument(
 /// (§11.3): a store of another kind reaches Entry's facts.
 #[test]
 fn a_store_into_an_argument_handed_through_a_parameter_reaches_its_owner() {
-    let src = TREE_EACH.replace("s += e.key + e.value.v;", "s += e.key; e.value = null as any;");
+    let src = TREE_EACH.replace(
+        "s += e.key + e.value.v;",
+        "s += e.key; e.value = null as any;",
+    );
     let pf = units(&src);
     let whole = facts(&src);
     let broken = pf.broken.iter().any(|b| b.contains("Entry"));
@@ -317,11 +364,18 @@ fn a_store_into_an_argument_handed_through_a_parameter_reaches_its_owner() {
         pf.broken,
         pf.dump_text()
     );
-    let (u, w) = (field(tmpl(&pf, "Entry"), "value"), field(tmpl(&whole, "Entry"), "value"));
+    let (u, w) = (
+        field(tmpl(&pf, "Entry"), "value"),
+        field(tmpl(&whole, "Entry"), "value"),
+    );
     // A test must be able to fail (DECISIONS 142 lit it): Entry's fields
     // are described per unit now, so a ⊤ field would hide a missing store.
     assert!(broken || !u.kind.top, "{}", pf.dump_text());
-    assert!(broken || u.kind.prims & w.kind.prims == w.kind.prims, "{}", pf.dump_text());
+    assert!(
+        broken || u.kind.prims & w.kind.prims == w.kind.prims,
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// DECISIONS 144: CD's `reduceCollisionSet(motions)` calls a method of its
@@ -361,7 +415,12 @@ fn a_method_call_on_a_parameter_runs_in_the_callers_unit() {
     // function's parameter: E0 per unit (Val beside ⊤), DECISIONS 148, open.)
     assert!(pf.broken.is_empty(), "{:?}\n{}", pf.broken, pf.dump_text());
     for k in ["val"] {
-        assert_eq!(verdicts(&pf, k), verdicts(&whole, k), "{k}\n{}", pf.dump_text());
+        assert_eq!(
+            verdicts(&pf, k),
+            verdicts(&whole, k),
+            "{k}\n{}",
+            pf.dump_text()
+        );
     }
 }
 
@@ -390,5 +449,52 @@ fn a_function_handed_to_another_unit_is_called_through_its_contract() {
     // function calls nothing, so `f(..).v` in the caller's unit sees no
     // receiver (`x.v` alone cannot tell: its conservative entry holds Val).
     let vs: Vec<_> = pf.sites.iter().filter(|s| s.key == "v").collect();
-    assert!(vs.len() == 2 && vs.iter().all(|s| !s.receivers.is_empty()), "{}", pf.dump_text());
+    assert!(
+        vs.len() == 2 && vs.iter().all(|s| !s.receivers.is_empty()),
+        "{}",
+        pf.dump_text()
+    );
+}
+
+/// The storage a method's receiver reaches: made by the constructor (`D`),
+/// or stored by the caller (`C`).
+const APPEND_OWN: &str = r#"
+    class Vec {
+      storage: any[]; n: number;
+      constructor() { this.storage = new Array(4); this.n = 0; }
+      append(e: any) { this.storage[this.n] = e; this.n = this.n + 1; }
+    }
+    class P { x: number; constructor(x: number) { this.x = x; } }
+    function main() { const v = new Vec(); v.append(new P(1)); console.log(v.storage[0].x); }
+    main();
+    "#;
+const APPEND_SET: &str = r#"
+    class Vec {
+      items: any; n: number;
+      constructor() { this.items = null; this.n = 0; }
+      append(e: any) { this.items[this.n] = e; this.n = this.n + 1; }
+    }
+    class P { x: number; constructor(x: number) { this.x = x; } }
+    function main() { const v = new Vec(); v.items = []; v.append(new P(1)); console.log(v.items[0].x); }
+    main();
+    "#;
+
+#[test]
+fn an_argument_stored_into_what_the_receiver_reaches_stays_the_callers() {
+    // DECISIONS 149, 149b, 149d: `this.storage[n] = e` stores the caller's
+    // argument into the caller's view of the storage, as the whole program
+    // runs it: append's parameter is its receiver flow, which `main`
+    // replays on its stand-in's storage, not an escape in Vec's unit (the
+    // storage there is published: its elements come back from `main`).
+    // Per-unit facts are whole-program facts (owner 2026-10-23).
+    for src in [APPEND_OWN, APPEND_SET] {
+        let pf = units(src);
+        let w = verdicts(&facts(src), "x");
+        assert!(pf.broken.is_empty(), "{}", pf.dump_text());
+        assert!(
+            !w.is_empty() && w.iter().all(|v| v.starts_with("T0")),
+            "{w:?}"
+        );
+        assert_eq!(verdicts(&pf, "x"), w, "{}", pf.dump_text());
+    }
 }

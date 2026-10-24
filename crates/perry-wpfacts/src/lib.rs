@@ -31,6 +31,7 @@ mod gen_expr;
 mod gen_rest;
 pub mod model;
 pub mod pts;
+mod rooted;
 mod solve;
 mod summary;
 #[cfg(test)]
@@ -658,7 +659,15 @@ fn fn_contract_of(
             .filter(|(g2, _)| *g2 == f)
             .map(|&(_, n)| n)
             .collect();
-    let d = describe_nodes(g, templates, f, rets, g.ret_top.contains(&f), layouts_out, open_tm);
+    let d = describe_nodes(
+        g,
+        templates,
+        f,
+        rets,
+        g.ret_top.contains(&f),
+        layouts_out,
+        open_tm,
+    );
     // DECISIONS 140: the calls the body makes through a parameter marker,
     // each argument described as the result is.
     let mut param_calls: Vec<units::ParamCall> = Vec::new();
@@ -675,7 +684,14 @@ fn fn_contract_of(
             })
             .collect();
         let key = key.map(|a| g.m.atoms[a as usize].clone());
-        units::join_param_calls(&mut param_calls, &[units::ParamCall { param: i, key, args }]);
+        units::join_param_calls(
+            &mut param_calls,
+            &[units::ParamCall {
+                param: i,
+                key,
+                args,
+            }],
+        );
     }
     // The receiver marker of a published method (DECISIONS 57); without
     // one nothing is known of what the body does to its receiver.
@@ -734,7 +750,10 @@ fn fn_contract_of(
                     dst,
                     reach,
                     via: via.map(|v| g.m.atoms[v as usize].clone()),
-                    key: g.m.atoms[a as usize].clone(),
+                    key: match a {
+                        model::Key::Named(a) => Some(g.m.atoms[a as usize].clone()),
+                        model::Key::Any => None,
+                    },
                     from,
                     from_reach,
                     top: fl.top,
@@ -833,7 +852,11 @@ fn describe_nodes(
     // repeatedly; a computed-key read (its all-fields node feeds a reader)
     // is any key (DECISIONS 138).
     let keys_read = |t: model::Tok| -> Option<Vec<String>> {
-        if g.m.all_fields.get(&t).is_some_and(|&n| !g.m.nodes[n as usize].succ.is_empty()) {
+        if g.m
+            .all_fields
+            .get(&t)
+            .is_some_and(|&n| !g.m.nodes[n as usize].succ.is_empty())
+        {
             return None;
         }
         let mut v: Vec<String> = g.m.field_keys.get(&t).map_or_else(Vec::new, |ks| {
@@ -878,7 +901,11 @@ fn describe_nodes(
                             _ => None,
                         };
                         let deeper = own.and_then(|(i, mk)| {
-                            g.m.keyed_reach.get(&mk)?.iter().find(|&&(_, r)| r == m).map(|&(k0, _)| (i, k0))
+                            g.m.keyed_reach
+                                .get(&mk)?
+                                .iter()
+                                .find(|&&(_, r)| r == m)
+                                .map(|&(k0, _)| (i, k0))
                         });
                         match own {
                             Some((i, mk)) if mk == m => {
@@ -888,8 +915,13 @@ fn describe_nodes(
                                 }
                             }
                             Some((i, _)) if deeper.is_some() => {
-                                let k0 = deeper.map(|(_, k0)| g.m.atoms[k0 as usize].clone()).unwrap();
-                                let ks = join_keys(join_keys(keys_read(m), keys_read(t)), Some(vec![a.clone()]));
+                                let k0 = deeper
+                                    .map(|(_, k0)| g.m.atoms[k0 as usize].clone())
+                                    .unwrap();
+                                let ks = join_keys(
+                                    join_keys(keys_read(m), keys_read(t)),
+                                    Some(vec![a.clone()]),
+                                );
                                 let k = (i, k0, ks);
                                 if !ret_reach_keys.contains(&k) {
                                     ret_reach_keys.push(k);

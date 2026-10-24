@@ -180,6 +180,9 @@ pub struct Gen<'a> {
     pub iife_birth: FxHashMap<NodeId, TmplId>,
     /// Construction-phase analysis of plain functions used as constructors.
     pub fn_phase: FxHashMap<FnIdx, CtorPhase>,
+    /// DECISIONS 149b: the receiver-rooted stores (`rooted.rs`), by
+    /// expression address.
+    pub rooted_stores: std::collections::BTreeMap<usize, bool>,
     /// Locals holding a class method's lexical home (`ClassMethodHome`):
     /// (module, local) → the class. `super` through such a home starts at
     /// that class's parent, exactly like `SuperPropertyGet`.
@@ -407,6 +410,7 @@ impl<'a> Gen<'a> {
             export_sources: Default::default(),
             iife_birth: FxHashMap::default(),
             fn_phase: FxHashMap::default(),
+            rooted_stores: Default::default(),
             class_homes: FxHashMap::default(),
             chunk_objects: Vec::new(),
             cell_locals: Default::default(),
@@ -678,14 +682,13 @@ impl<'a> Gen<'a> {
         dst: u32,
         reach: bool,
         via: Option<&str>,
-        key: &str,
+        key: Option<&str>,
     ) -> NodeId {
         let n = self.m.node_named("top", || format!("stored({})", c.name));
         self.m.own(n);
-        let fl = c
-            .param_flows
-            .iter()
-            .find(|x| x.dst == dst && x.reach == reach && x.via.as_deref() == via && x.key == key);
+        let fl = c.param_flows.iter().find(|x| {
+            x.dst == dst && x.reach == reach && x.via.as_deref() == via && x.key.as_deref() == key
+        });
         let top = fl.map_or(true, |fl| fl.top);
         if let Some(fl) = fl {
             for &j in &fl.from {
@@ -853,7 +856,10 @@ impl<'a> Gen<'a> {
         let keys: Vec<crate::model::Key> = match then {
             None => vec![crate::model::Key::Any],
             Some(ks) if ks.is_empty() => return,
-            Some(ks) => ks.iter().map(|s| crate::model::Key::Named(self.m.atom(s))).collect(),
+            Some(ks) => ks
+                .iter()
+                .map(|s| crate::model::Key::Named(self.m.atom(s)))
+                .collect(),
         };
         let r = self.m.node_named("reach", || format!("reach.{k}*({name})"));
         self.m.own(r);
@@ -1005,7 +1011,7 @@ impl<'a> Gen<'a> {
                 Some(Some(ks)) => {
                     let site = self.m.anon_post_site("store by another unit's function");
                     for k in ks {
-                        let src = self.stored_value(c, &params, i as u32, false, None, k);
+                        let src = self.stored_value(c, &params, i as u32, false, None, Some(k));
                         let key = crate::model::Key::Named(self.m.atom(k));
                         self.m.cons(p, Cons::Store { key, src, site });
                     }
@@ -1089,9 +1095,15 @@ impl<'a> Gen<'a> {
         // is a `param_stores` one). Like the callee's reach marker, which
         // has no prototype chain (DECISIONS 119), the closure follows no
         // prototype: an intrinsic is no value the argument reaches.
+        // DECISIONS 149: into what the receiver reaches too (the instances
+        // `this` admits), and under a computed key.
         for fl in c.param_flows.iter().filter(|x| x.reach) {
-            let Some(&p) = params.get(fl.dst as usize) else {
-                continue;
+            let p = match fl.dst {
+                u32::MAX => this,
+                d => match params.get(d as usize) {
+                    Some(&p) => p,
+                    None => continue,
+                },
             };
             let q = self
                 .m
@@ -1107,9 +1119,19 @@ impl<'a> Gen<'a> {
                     self.m.cons(q, Cons::OwnValues { dst: q });
                 }
             }
-            let src = self.stored_value(c, &params, fl.dst, true, fl.via.as_deref(), &fl.key);
+            let src = self.stored_value(
+                c,
+                &params,
+                fl.dst,
+                true,
+                fl.via.as_deref(),
+                fl.key.as_deref(),
+            );
             let site = self.m.anon_post_site("store by another unit's function");
-            let key = crate::model::Key::Named(self.m.atom(&fl.key));
+            let key = match &fl.key {
+                Some(k) => crate::model::Key::Named(self.m.atom(k)),
+                None => crate::model::Key::Any,
+            };
             self.m.cons(q, Cons::Store { key, src, site });
         }
         // What it returns, as the defining unit described it.

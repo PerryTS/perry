@@ -18,7 +18,8 @@ impl Model {
             // it reaches, DECISIONS 107) is described by them and adds no
             // callee of its own (DECISIONS 143): the values are called.
             let cs = &self.calls[call as usize];
-            let plain = this_tok.is_none() && matches!(cs.this, ThisArg::Undef) && cs.spread.is_empty();
+            let plain =
+                this_tok.is_none() && matches!(cs.this, ThisArg::Undef) && cs.spread.is_empty();
             if let Some(own) = plain.then(|| self.own_param_members(t)).flatten() {
                 if self.bind_done.insert((call, t, u32::MAX - 3)) {
                     self.mark_use(t, crate::model::MARK_READ);
@@ -372,6 +373,8 @@ impl Model {
             ctor_phase_of: None,
             birth: true,
             ctor_fn: None,
+            rooted: false,
+            deep: false,
         });
         id
     }

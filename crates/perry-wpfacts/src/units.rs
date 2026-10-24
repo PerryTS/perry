@@ -90,6 +90,8 @@ pub(crate) struct ClassContract {
 /// DECISIONS 118: one key a contract function stores into parameter
 /// `dst`'s argument (`reach`: into what it reaches). The reader stores the
 /// arguments of the parameters `from` under it, ⊤ when `top`, and `prim`.
+/// DECISIONS 149: `dst` `u32::MAX` is the receiver (into what it reaches),
+/// `key` `None` a computed key.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct StoreFlow {
     pub dst: u32,
@@ -97,7 +99,7 @@ pub(crate) struct StoreFlow {
     /// Into what the argument holds under this key (a keyed reach, design
     /// §18.4), not into all it reaches.
     pub via: Option<String>,
-    pub key: String,
+    pub key: Option<String>,
     pub from: Vec<u32>,
     /// DECISIONS 136: what parameter `j`'s argument holds under the key
     /// (and reaches from there), or reaches (`None`), is stored too.
@@ -168,7 +170,12 @@ impl ParamCall {
 
 /// Joins `b`'s calls into `a` by (parameter, key, number of arguments).
 pub(crate) fn join_param_calls(a: &mut Vec<ParamCall>, b: &[ParamCall]) {
-    join_keyed(a, b, |x| (x.param, x.key.clone(), x.args.len()), |x, y| x.join(y));
+    join_keyed(
+        a,
+        b,
+        |x| (x.param, x.key.clone(), x.args.len()),
+        |x, y| x.join(y),
+    );
     a.sort_by(|x, y| (x.param, &x.key, x.args.len()).cmp(&(y.param, &y.key, y.args.len())));
 }
 

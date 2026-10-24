@@ -235,6 +235,7 @@ pub fn map_cons(
         },
         TopSink { reason } => TopSink { reason },
         HandOver { reason } => HandOver { reason },
+        OwnOnly { f, dst } => OwnOnly { f, dst: n(dst) },
         StoreOut {
             f,
             dst,
@@ -242,6 +243,8 @@ pub fn map_cons(
             via,
             key,
             reason,
+            at,
+            to,
         } => StoreOut {
             f,
             dst,
@@ -249,6 +252,8 @@ pub fn map_cons(
             via,
             key,
             reason,
+            at,
+            to,
         },
         ContractThis {
             tmpl,

@@ -742,6 +742,19 @@ impl Model {
                     self.escape(t, reason);
                 }
             }
+            Cons::OwnOnly { f, dst } => {
+                self.add_prim(dst, prim);
+                for &t in toks {
+                    let flow = self.is_arg_marker(t)
+                        || self
+                            .param_marker
+                            .get(&t)
+                            .is_some_and(|&(g, j)| g == f && j != u32::MAX);
+                    if !flow {
+                        self.add_tok(dst, t);
+                    }
+                }
+            }
             Cons::HandOver { reason } => {
                 for &t in toks {
                     let stand_in = matches!(self.toks[t as usize], TokKind::Obj(tm, _)
@@ -758,6 +771,8 @@ impl Model {
                 via,
                 key,
                 reason,
+                at,
+                to,
             } => {
                 let mut from = Vec::new();
                 let mut from_reach = Vec::new();
@@ -803,6 +818,18 @@ impl Model {
                         // as it links in.
                         _ if self.is_arg_marker(t) => {
                             self.store_out_arg_reach(t, (f, dst, reach, via, key), reason);
+                        }
+                        // DECISIONS 149: only the arguments are the
+                        // reader's own values in what its receiver reaches;
+                        // this unit's value stored there takes the path of
+                        // a store into the receiver's reach marker (its
+                        // reach escapes, the value goes where the
+                        // receiver's beside values take it).
+                        // DECISIONS 149b: a value of this unit a rooted store
+                        // put into another function's marker or ⊤ goes there
+                        // as before: ⊤ to the reader, and it escapes (below).
+                        _ if dst == u32::MAX && to == at => {
+                            self.mark_use(at, crate::model::MARK_ESCAPE);
                         }
                         _ => {
                             top = true;
@@ -1366,6 +1393,124 @@ impl Model {
         }
     }
 
+    /// DECISIONS 118/149: `src` stored under `key` into parameter `i`'s
+    /// argument of contract function `f` (or what it reaches, marker `t`)
+    /// is a flow of `f`'s contract (`Cons::StoreOut`).
+    #[allow(clippy::too_many_arguments)]
+    fn store_flow_out(
+        &mut self,
+        t: Tok,
+        to: Tok,
+        f: FnIdx,
+        i: u32,
+        reach: bool,
+        key: Key,
+        src: NodeId,
+    ) {
+        // Into the parameter's own keyed reach: under `a` of what the
+        // argument holds under `via`, not into all it reaches.
+        let via = self
+            .marker_of
+            .get(&(f, i))
+            .and_then(|mk| self.keyed_reach.get(mk))
+            .and_then(|v| v.iter().find(|&&(_, r)| r == t))
+            .map(|&(k, _)| k);
+        self.store_flows.entry((f, i, reach, via, key)).or_default();
+        if self.store_out_done.insert((src, f, i, reach, via, key, to)) {
+            let reason = self.reason("stored into another unit's value");
+            self.cons(
+                src,
+                Cons::StoreOut {
+                    f,
+                    dst: i,
+                    reach,
+                    via,
+                    key,
+                    reason,
+                    at: t,
+                    to,
+                },
+            );
+        }
+    }
+
+    /// DECISIONS 149b: a receiver-rooted store (its object is reached from
+    /// its function G's `this` by loads) is G's store into what its
+    /// receiver reaches, which the whole program runs in the caller's own
+    /// objects: a contract function's marker it meets there (a
+    /// constructor's argument kept in a field), or ⊤ (a value another unit
+    /// gave), is the caller's value. G's parameters stored there are G's
+    /// receiver flow; any other value takes the path it took before
+    /// (`Cons::StoreOut`). Whether the target is reached is the reader's
+    /// own solve: its view of the receiver, ⊤ fields included.
+    fn rooted_store(&mut self, t: Tok, key: Key, src: NodeId, site: SiteId) -> bool {
+        // A replayed summary keeps no store sites: nothing there is rooted.
+        let Some(s) = self.stores.get(site as usize) else {
+            return false;
+        };
+        let g = s.func;
+        if !s.rooted || self.closed_params.contains_key(&g) {
+            return false;
+        }
+        match self.param_marker.get(&t) {
+            Some(&(f, _)) if self.closed_params.contains_key(&f) => return false,
+            // G's own receiver (and what it reaches) is DECISIONS 149's.
+            Some(&(f, u32::MAX)) if f == g => return false,
+            Some(_) => {}
+            None if t == TOP => {}
+            None => return false,
+        }
+        let Some(at) = self
+            .marker_of
+            .get(&(g, u32::MAX))
+            .and_then(|m| self.marker_reach.get(m))
+            .copied()
+        else {
+            return false;
+        };
+        self.store_flow_out(at, t, g, u32::MAX, true, key, src);
+        true
+    }
+
+    /// DECISIONS 149d: a deep receiver-rooted store of contract function G
+    /// (its object is loaded from `this`, `rooted.rs`) into an object of
+    /// this unit (`this.storage[n] = e`, the storage G's constructor made). Its caller's argument is the caller's value,
+    /// which the whole program stores into the caller's view of that object:
+    /// G's parameter (and argument) markers are not stored there: they are
+    /// G's receiver flow, which the reader replays on what its receiver
+    /// reaches (a published field's stand-in, whose stores come back here
+    /// through their contract, or ⊤, where it escapes). The flow is the
+    /// store's into the receiver's keyed reach marker, which the store's
+    /// object holds beside this object by construction (it is loaded from
+    /// G's `this` marker, and a load from a marker reads its reach markers,
+    /// DECISIONS 111). Every other value is stored as before. Returns the
+    /// node to store.
+    fn rooted_own_store(&mut self, t: Tok, key: Key, src: NodeId, site: SiteId) -> NodeId {
+        if t == TOP || !matches!(self.toks[t as usize], TokKind::Obj(..)) {
+            return src;
+        }
+        let Some(s) = self.stores.get(site as usize) else {
+            return src;
+        };
+        let g = s.func;
+        if !s.deep || self.closed_params.contains_key(&g) {
+            return src;
+        }
+        if !self.marker_of.contains_key(&(g, u32::MAX)) {
+            return src;
+        }
+        let own = match self.rooted_own.get(&(src, g)) {
+            Some(&n) => n,
+            None => {
+                let n = self.node_named("rooted", || format!("rooted-own({src})"));
+                self.rooted_own.insert((src, g), n);
+                self.cons(src, Cons::OwnOnly { f: g, dst: n });
+                n
+            }
+        };
+        own
+    }
+
     pub(crate) fn store_into(&mut self, t: Tok, key: Key, src: NodeId, site: SiteId) {
         {
             self.virt_revoke(
@@ -1403,6 +1548,10 @@ impl Model {
             }
         }
         if t == TOP {
+            // DECISIONS 149b: ⊤ reached from the receiver is the reader's.
+            if self.rooted_store(t, key, src, site) {
+                return;
+            }
             let r = self.reason("stored into a value from unmodeled code");
             self.sink_node(src, r);
             return;
@@ -1477,6 +1626,10 @@ impl Model {
                 return;
             }
         }
+        // DECISIONS 149b: a receiver-rooted store meeting a marker.
+        if self.param_marker.contains_key(&t) && self.rooted_store(t, key, src, site) {
+            return;
+        }
         // The same for a contract function's parameter (DECISIONS 84): the
         // reader stores an unknown value under the key of its argument. The
         // stored value goes into another unit's object: it escapes. A
@@ -1488,39 +1641,23 @@ impl Model {
             // into what that reaches) is the reader's store of its own
             // values, as the whole program runs it; any other stored value
             // goes into another unit's object: it escapes (`Cons::StoreOut`).
-            if let (Key::Named(a), true) =
-                (key, i != u32::MAX && !self.closed_params.contains_key(&f))
+            // DECISIONS 149: so is a store into what an argument or the
+            // receiver reaches under a computed key (`this.items[i] = e`):
+            // the reader stores into its own object under any key, as the
+            // whole program does. (A store into the receiver itself is a
+            // key of its receiver contract, above.)
+            let reach = self.reach_marker.contains(&t);
+            if !self.closed_params.contains_key(&f)
+                && (i != u32::MAX || reach)
+                && (reach || matches!(key, Key::Named(_)))
             {
-                let reach = self.reach_marker.contains(&t);
-                if !reach {
+                if let (false, Key::Named(a)) = (reach, key) {
                     let ks = self.param_stores.entry((f, i)).or_default();
                     if !ks.contains(&a) {
                         ks.push(a);
                     }
                 }
-                // Into the parameter's own keyed reach: under `a` of what
-                // the argument holds under `via`, not into all it reaches.
-                let via = self
-                    .marker_of
-                    .get(&(f, i))
-                    .and_then(|mk| self.keyed_reach.get(mk))
-                    .and_then(|v| v.iter().find(|&&(_, r)| r == t))
-                    .map(|&(k, _)| k);
-                self.store_flows.entry((f, i, reach, via, a)).or_default();
-                if self.store_out_done.insert((src, f, i, reach, via, a)) {
-                    let reason = self.reason("stored into another unit's value");
-                    self.cons(
-                        src,
-                        Cons::StoreOut {
-                            f,
-                            dst: i,
-                            reach,
-                            via,
-                            key: a,
-                            reason,
-                        },
-                    );
-                }
+                self.store_flow_out(t, t, f, i, reach, key, src);
                 return;
             }
             if !self.reach_marker.contains(&t) && !self.closed_params.contains_key(&f) {
@@ -1546,6 +1683,7 @@ impl Model {
         if self.is_marker(t) {
             return;
         }
+        let src = self.rooted_own_store(t, key, src, site);
         // A store into another unit's instance, class object or prototype
         // is beyond its contract (census report).
         let tm = match self.toks[t as usize] {
@@ -2276,6 +2414,7 @@ impl Model {
             }
             Cons::TopSink { reason } => format!("top {n} {reason}"),
             Cons::HandOver { reason } => format!("handover {n} {reason}"),
+            Cons::OwnOnly { f, dst } => format!("ownonly {n} {f} {dst}"),
             Cons::StoreOut {
                 f,
                 dst,
@@ -2283,10 +2422,11 @@ impl Model {
                 via,
                 key,
                 reason,
+                ..
             } => format!(
                 "storeout {n} {f} {dst} {reach} {} {} {reason}",
                 via.map_or("-".to_string(), |v| esc_key(&self.atoms[v as usize])),
-                esc_key(&self.atoms[*key as usize])
+                self.key_name(*key)
             ),
             Cons::ContractThis {
                 tmpl,
