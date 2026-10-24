@@ -20,12 +20,19 @@ const ACCESSOR: u32 = 1 << 31;
 const SPILL: u32 = 1 << 30;
 const SLOT_MASK: u32 = SPILL - 1;
 
-/// Exactly five (ShapeId, slot) pairs. Zero shape means an empty answer.
-/// Shared integer storage, never indexed through a registry. ShapeIds are
-/// process-global and never reused. Each atomic word is a complete proof for
-/// this fixed key; a racing writer can cause a shape mismatch, never a torn
-/// (shape, slot). Every continuation revalidates the live link and next shape.
-/// There is no whole-memo validity bit, epoch, or cached heap address.
+/// Exactly five (LayoutWord, slot) pairs. Zero shape means an empty answer.
+/// Shared integer storage, never indexed through a registry. A LayoutWord is
+/// agent-local storage of a row, but within one image it names one shape in
+/// every agent: static rows are the image's compile-time ordinals, dynamic
+/// rows come from process-unique chunks. A compiled site's memo lives in its
+/// image's data; a runtime-crate memo is shared by every image of the process,
+/// whose static rows N..S-1 differ, so it serves only the primary image
+/// (`class_image::process_shared_memo`). A hit also needs a live receiver
+/// carrying the word, so the row it reads is published in this agent. Each
+/// atomic word is a complete proof for this fixed key; a racing writer can
+/// cause a shape mismatch, never a torn (shape, slot). Every continuation
+/// revalidates the live link and next shape. There is no whole-memo validity
+/// bit, epoch, or cached heap address.
 #[repr(C)]
 pub struct ReadSiteMemo {
     pairs: [AtomicU64; PAIRS],
