@@ -819,7 +819,7 @@ mod tests {
         let mut state = State::new(&WasiOptions::default()).unwrap();
         let input: Resource<Input> = state.table.push(Input::Empty).unwrap();
         let pollable = HostInputStream::subscribe(&mut state, borrow(&input)).unwrap();
-        assert!(HostInputStream::drop(&mut state, borrow(&input)).is_err());
+        assert!(HostInputStream::drop(&mut state, Resource::new_own(input.rep())).is_err());
         super::super::bindings::wasi::io::poll::HostPollable::drop(&mut state, pollable).unwrap();
         HostInputStream::drop(&mut state, input).unwrap();
         let output: Resource<Output> = state.table.push(Output::Sink).unwrap();
