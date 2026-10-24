@@ -732,13 +732,13 @@ unsafe fn create_stream(
         for (key, option) in [
             ("_defaultFlushFlag", "flush"),
             ("_finishFlushFlag", "finishFlush"),
-            ("_maxOutputLength", "maxOutputLength"),
         ] {
             let value = field(base.get(), option);
             np::own(owner.get(), key, value);
         }
         let source = transform_source.as_ref().unwrap();
         own_new!("_info", field(source.get(), "info"));
+        own_new!("_maxOutputLength", field(base.get(), "maxOutputLength"));
         let reject = field(source.get(), "rejectGarbageAfterEnd");
         np::own(
             owner.get(),

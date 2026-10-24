@@ -84,6 +84,7 @@ unsafe fn attach(core: &mut TransportCore, link: OwnerLink, id: i64) {
     core.id = Some(id);
 }
 pub(super) unsafe fn core_init(core: *mut TransportCore, route: u8) {
+    // GC_STORE_AUDIT(POINTER_FREE): TransportCore initializer writes id=None,timer=None,route u8,referenced bool; no owner link or pointer is installed.
     core.write(TransportCore {
         id: None,
         timer: None,

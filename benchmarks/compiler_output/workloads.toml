@@ -1209,48 +1209,150 @@ name = "raw_numeric_object_fields_checksum"
 equals = "raw_numeric_object_fields:26.25\n"
 detail = "raw numeric object field fixture stdout checksum"
 
-# #10784 / fc54e1b181 ("codegen: collapse the class-field GET tower to one
-# exit"): this check used to look for `js_typed_feedback_class_field_get_guard`
-# in the OPTIMIZED IR. That symbol is now emitted NOWHERE as a call -- the
-# one-exit tower replaced the old guard call + three miss-arm call sites with a
-# volatile load of the per-class `@perry_class_shape_id_*` expectation plus a
-# single `js_class_field_get_ic` miss exit. (A bare substring over the
-# unoptimized IR would still have "passed" on the leftover `declare` line
-# alone, which is why fc54e1b181's own codegen tests assert CALL forms.)
-#
-# The property this check names -- "reads are guarded before raw slot loads" --
-# still holds, so the check is re-pointed at the structure that now carries it
-# rather than deleted: the `class_field_inline.deref.N` block loads the class
-# ShapeId (S6 retired the poisonable `@perry_class_guard_shape_*` twin),
-# compares it against the receiver's shape word, and branches INTO
-# `class_field_get.fast.N`. Scoped to the checksum function and read from
-# `llvm_before`, matching its sibling `raw_numeric_field_get_scoped_raw_load`,
-# which asserts the raw load on the other side of that branch.
-[[workloads.raw_numeric_object_fields.ir_checks]]
-name = "raw_numeric_field_get_guard"
-section = "llvm_before"
-function_contains = "rawNumericObjectFieldsChecksum"
-regex = '''class_field_inline\.deref\.\d+:(?:(?!\n\n)[\s\S])*?load volatile i32, ptr @perry_class_shape_id_(?:(?!\n\n)[\s\S])*?br i1 %\w+, label %class_field_get\.fast\.\d+,'''
-detail = "class numeric field reads are guarded before raw slot loads"
+# Declared-family births (#12870) replaced the retired ClassField tower.
+# Preserve scalar raw-f64 requirements below; check dynamic shape admission,
+# record/representation guards and refusal fallbacks in the emitted functions.
 
 [[workloads.raw_numeric_object_fields.ir_checks]]
-name = "raw_numeric_field_set_guard"
-contains = "js_typed_feedback_class_field_set_guard"
-detail = "class numeric field writes are guarded before raw slot stores"
+name = "raw_field_l2c_receiver"
+section = "llvm_before"
+function_contains = "forceDynamicRead"
+regex_all = [
+  '''stack_guard.ok\.\d+:\n(?:(?!\n\n)[\s\S])*?(?P<recv>%[\w.]+) = sub i64 %[\w.]+, 9222527611926740992\n\s*(?P<ok>%[\w.]+) = icmp ult i64 (?P=recv), 281474974613504\n\s*br i1 (?P=ok), label %l2c\.word\.\d+, label %l2c\.miss\.\d+''',
+]
+detail = "Only an admitted object receiver reaches the shape-word load."
 
 [[workloads.raw_numeric_object_fields.ir_checks]]
-name = "raw_numeric_field_get_scoped_raw_load"
+name = "raw_field_l2c_shape_bound"
 section = "llvm_before"
-function_contains = "rawNumericObjectFieldsChecksum"
-regex = '''class_field_get\.fast\.\d+:[\s\S]*?load double, ptr %\w+[\s\S]*?br label %class_field_get\.merge'''
-detail = "checksum function raw numeric field read performs a scoped guarded load double"
+function_contains = "forceDynamicRead"
+regex_all = [
+  '''l2c.word\.\d+:\n(?:(?!\n\n)[\s\S])*?load i32, ptr %[\w.]+(?:(?!\n\n)[\s\S])*?and i32 %[\w.]+, -1073741825(?:(?!\n\n)[\s\S])*?(?P<index>%[\w.]+) = zext i32 %[\w.]+ to i64(?:(?!\n\n)[\s\S])*?(?P<limit>%[\w.]+) = load i64, ptr %[\w.]+\n\s*(?P<ok>%[\w.]+) = icmp ult i64 (?P=index), (?P=limit)\n\s*br i1 (?P=ok), label %l2c\.record\.\d+, label %l2c\.miss\.\d+''',
+]
+detail = "The masked shape index must be below the published record bound."
 
 [[workloads.raw_numeric_object_fields.ir_checks]]
-name = "raw_numeric_field_set_scoped_raw_store"
+name = "raw_field_l2s_receiver"
+section = "llvm_before"
+function_contains = "forceDynamicWrite"
+regex_all = [
+  '''stack_guard.ok\.\d+:\n(?:(?!\n\n)[\s\S])*?(?P<recv>%[\w.]+) = sub i64 %[\w.]+, 9222527611926740992\n\s*(?P<ok>%[\w.]+) = icmp ult i64 (?P=recv), 281474974613504\n\s*br i1 (?P=ok), label %l2s\.word\.\d+, label %l2s\.miss\.\d+''',
+]
+detail = "Only an admitted object receiver reaches the shape-word load."
+
+[[workloads.raw_numeric_object_fields.ir_checks]]
+name = "raw_field_l2s_shape_bound"
+section = "llvm_before"
+function_contains = "forceDynamicWrite"
+regex_all = [
+  '''l2s.word\.\d+:\n(?:(?!\n\n)[\s\S])*?load i32, ptr %[\w.]+(?:(?!\n\n)[\s\S])*?and i32 %[\w.]+, -1073741825(?:(?!\n\n)[\s\S])*?(?P<index>%[\w.]+) = zext i32 %[\w.]+ to i64(?:(?!\n\n)[\s\S])*?(?P<limit>%[\w.]+) = load i64, ptr %[\w.]+\n\s*(?P<ok>%[\w.]+) = icmp ult i64 (?P=index), (?P=limit)\n\s*br i1 (?P=ok), label %l2c\.record\.\d+, label %l2s\.miss\.\d+''',
+]
+detail = "The masked shape index must be below the published record bound."
+
+[[workloads.raw_numeric_object_fields.ir_checks]]
+name = "raw_field_read_record"
+section = "llvm_before"
+function_contains = "forceDynamicRead"
+regex_all = [
+  '''l2c.record\.\d+:\n(?:(?!\n\n)[\s\S])*?getelementptr i8, ptr %[\w.]+, i64 88(?:(?!\n\n)[\s\S])*?(?P<bits>%[\w.]+) = and i64 %[\w.]+, 2\n\s*(?P<ok>%[\w.]+) = icmp ne i64 (?P=bits), 0\n\s*br i1 (?P=ok), label %l2c\.load\.\d+, label %l2c\.miss\.\d+''',
+]
+detail = "The shape record admits the requested readable slot before loading it."
+
+[[workloads.raw_numeric_object_fields.ir_checks]]
+name = "raw_field_read_slot"
+section = "llvm_before"
+function_contains = "forceDynamicRead"
+regex_all = [
+  '''l2c.load\.\d+:\n(?:(?!\n\n)[\s\S])*?(?P<slot>%[\w.]+) = load i64, ptr %[\w.]+\n\s*(?P<absent>%[\w.]+) = icmp eq i64 (?P=slot), 9222246136947933200\n\s*br i1 (?P=absent), label %l2c\.miss\.\d+, label %l2c\.hit\.\d+''',
+]
+detail = "An absent slot takes the refusal path rather than becoming a value."
+
+[[workloads.raw_numeric_object_fields.ir_checks]]
+name = "raw_field_read_fallback"
+section = "llvm_before"
+function_contains = "forceDynamicRead"
+regex_all = [
+  '''pget.recv_ok\.\d+:\n(?:(?!\n\n)[\s\S])*?(?P<probe>%[\w.]+) = call double @perry_probe_get\([^\n]+\)\n\s*(?P<bits>%[\w.]+) = bitcast double (?P=probe) to i64\n\s*(?P<ok>%[\w.]+) = icmp ne i64 (?P=bits), 9222246136947933200\n\s*br i1 (?P=ok), label %pget\.recv_merge\.\d+, label %pget\.slow\.\d+''',
+  '''pget.slow\.\d+:\n(?:(?!\n\n)[\s\S])*?call double @js_object_get_field_value\(''',
+]
+detail = "A refused property probe reaches the generic getter."
+
+[[workloads.raw_numeric_object_fields.ir_checks]]
+name = "raw_field_write_record"
+section = "llvm_before"
+function_contains = "forceDynamicWrite"
+regex_all = [
+  '''l2c.record\.\d+:\n(?:(?!\n\n)[\s\S])*?getelementptr i8, ptr %[\w.]+, i64 104(?:(?!\n\n)[\s\S])*?(?P<bits>%[\w.]+) = and i64 %[\w.]+, 2\n\s*(?P<ok>%[\w.]+) = icmp ne i64 (?P=bits), 0\n\s*br i1 (?P=ok), label %l2s\.lane\.\d+, label %l2s\.miss\.\d+''',
+]
+detail = "The shape record must admit a writable slot."
+
+[[workloads.raw_numeric_object_fields.ir_checks]]
+name = "raw_field_write_representation"
+section = "llvm_before"
+function_contains = "forceDynamicWrite"
+regex_all = [
+  '''l2s.lane\.\d+:\n(?:(?!\n\n)[\s\S])*?(?P<bits>%[\w.]+) = and i64 %[\w.]+, 9218868437227405312\n\s*(?P<numeric>%[\w.]+) = icmp ne i64 (?P=bits), 9218868437227405312\n\s*br i1 (?P=numeric), label %l2s\.meta\.\d+, label %l2s\.rep\.\d+''',
+  '''l2s.rep\.\d+:\n(?:(?!\n\n)[\s\S])*?getelementptr i8, ptr %[\w.]+, i64 48(?:(?!\n\n)[\s\S])*?(?P<rep>%[\w.]+) = and i64 %[\w.]+, 3\n\s*(?P<boxed>%[\w.]+) = icmp eq i64 (?P=rep), 0\n\s*br i1 (?P=boxed), label %l2s\.meta\.\d+, label %l2s\.miss\.\d+''',
+]
+detail = "Finite numbers are admitted directly; other bits require the boxed slot representation."
+
+[[workloads.raw_numeric_object_fields.ir_checks]]
+name = "raw_field_write_metadata"
+section = "llvm_before"
+function_contains = "forceDynamicWrite"
+regex_all = [
+  '''l2s.meta\.\d+:\n(?:(?!\n\n)[\s\S])*?(?P<meta>%[\w.]+) = load i64, ptr %[\w.]+\n\s*(?P<plain>%[\w.]+) = icmp eq i64 (?P=meta), 0\n\s*br i1 (?P=plain), label %l2s\.load\.\d+, label %l2s\.miss\.\d+''',
+]
+detail = "Nonempty object metadata refuses the inline write."
+
+[[workloads.raw_numeric_object_fields.ir_checks]]
+name = "raw_field_write_slot"
+section = "llvm_before"
+function_contains = "forceDynamicWrite"
+regex_all = [
+  '''l2s.load\.\d+:\n(?:(?!\n\n)[\s\S])*?(?P<slot>%[\w.]+) = load i64, ptr %[\w.]+\n\s*(?P<absent>%[\w.]+) = icmp eq i64 (?P=slot), 9222246136947933200\n\s*br i1 (?P=absent), label %l2s\.miss\.\d+, label %l2s\.hit\.\d+''',
+]
+detail = "The write refuses an absent slot."
+
+[[workloads.raw_numeric_object_fields.ir_checks]]
+name = "raw_field_write_store_and_barrier"
+section = "llvm_before"
+function_contains = "forceDynamicWrite"
+regex_all = [
+  '''l2s\.hit\.\d+:\n\s*store double %[\w.]+, ptr %[\w.]+(?:(?!\n\n)[\s\S])*?br i1 %[\w.]+, label %l2s\.classify\.\d+, label %l2s\.gc_bookkeeping\.done\.\d+''',
+  '''l2s.barrier\.\d+:\n(?:(?!\n\n)[\s\S])*?call void @js_write_barrier_slot_validated_parent\(''',
+]
+detail = "An admitted write stores its value and retains GC barrier bookkeeping."
+
+[[workloads.raw_numeric_object_fields.ir_checks]]
+name = "raw_field_write_fallback"
+section = "llvm_before"
+function_contains = "forceDynamicWrite"
+regex_all = [
+  '''l2s.miss\.\d+:\n(?:(?!\n\n)[\s\S])*?(?P<probe>%[\w.]+) = call i32 @perry_probe_set\([^\n]+\)\n\s*(?P<ok>%[\w.]+) = icmp ne i32 (?P=probe), 0\n\s*br i1 (?P=ok), label %put\.pic\.merge\.\d+, label %put\.pic\.set\.\d+''',
+  '''put.pic.set\.\d+:\n(?:(?!\n\n)[\s\S])*?call double @js_put_value_set\(''',
+]
+detail = "A refused write probe reaches the generic setter."
+
+
+[[workloads.raw_numeric_object_fields.ir_checks]]
+name = "raw_field_family_shape"
 section = "llvm_before"
 function_contains = "rawNumericObjectFieldsChecksum"
-regex = '''class_field_set\.fast\.\d+:[\s\S]*?call double @js_array_numeric_value_to_raw_f64[\s\S]*?store double %\w+, ptr %\w+[\s\S]*?br label %class_field_set\.merge'''
-detail = "checksum function raw numeric field write canonicalizes and performs a scoped guarded store double"
+regex_all = [
+  '''class_family\.word\.\d+:\n(?:(?!\n\n)[\s\S])*?(?P<receiver>%[\w.]+) = load i32, ptr %[\w.]+(?:(?!\n\n)[\s\S])*?(?P<declared>%[\w.]+) = load i32, ptr %[\w.]+(?:(?!\n\n)[\s\S])*?(?P<range>%[\w.]+) = icmp ult i32 %[\w.]+, 1073741824\n\s*(?P<same>%[\w.]+) = icmp eq i32 (?P=receiver), (?P=declared)\n\s*(?P<admit>%[\w.]+) = and i1 (?P=range), (?P=same)\n\s*(?P<ok>%[\w.]+) = or i1 false, (?P=admit)\n\s*br i1 (?P=ok), label %class_family\.load\.\d+, label %class_family\.next\.\d+''',
+]
+detail = "The family read requires a valid declared shape identical to the receiver shape."
+
+[[workloads.raw_numeric_object_fields.ir_checks]]
+name = "raw_field_family_slot"
+section = "llvm_before"
+function_contains = "rawNumericObjectFieldsChecksum"
+regex_all = [
+  '''class_family\.load\.\d+:\n(?:(?!\n\n)[\s\S])*?(?P<value>%[\w.]+) = load i64, ptr %[\w.]+\n\s*(?P<present>%[\w.]+) = icmp ne i64 (?P=value), 9222246136947933200\n\s*br i1 (?P=present), label %class_family\.present\.\d+, label %class_family\.miss\.\d+''',
+  '''class_family\.miss\.\d+:\n(?:(?!\n\n)[\s\S])*?br i1 %[\w.]+, label %l2c\.word\.\d+, label %l2c\.miss\.\d+''',
+]
+detail = "An absent family slot enters the shared checked read and its fallback."
 
 [workloads.raw_numeric_object_fields.native_rep_checks]
 allow_materialization_reasons = ["runtime_api", "return_abi"]
@@ -1275,130 +1377,16 @@ access_mode = "none"
 consumed_fact_kind = "representation"
 consumed_fact_state = "consumed"
 
-[[workloads.raw_numeric_object_fields.native_rep_checks.require_records]]
-name = "raw_class_field_get_fast_f64"
-source_function = "rawNumericObjectFieldsChecksum"
-expr_kind = "ClassFieldGet"
-consumer = "class_field_get.raw_f64_load"
-native_rep_name = "f64"
-access_mode = "checked_native"
-bounds_state = "proven_or_guarded"
-consumed_fact_kind = "raw_f64_layout"
-consumed_fact_state = "consumed"
-
-[[workloads.raw_numeric_object_fields.native_rep_checks.require_records]]
-name = "raw_class_field_get_guard_consumed"
-source_function = "rawNumericObjectFieldsChecksum"
-expr_kind = "ClassFieldGet"
-consumer = "class_field_get.raw_f64_load"
-native_rep_name = "f64"
-access_mode = "checked_native"
-bounds_state = "proven_or_guarded"
-consumed_fact_kind = "bounds"
-consumed_fact_state = "consumed"
-
-# #10784 / fc54e1b181: the ClassFieldGet miss arm's `consumer` changed from
-# `js_object_get_field_by_name_f64` to `js_class_field_get_ic` when the GET
-# tower collapsed to one exit. Every other field of these three records --
-# access_mode, materialization_reason, fallback_reason, and all three
-# rejected-fact triples -- is recorded exactly as before; the consumer string
-# is the only difference, and fc54e1b181 updated its own codegen unit tests but
-# not this file. (This workload is a member of BOTH `native-region-proof` and
-# `native-abi-proof` with identical arguments, so one stale string showed up as
-# eight job-log occurrences.)
-[[workloads.raw_numeric_object_fields.native_rep_checks.require_records]]
-name = "raw_class_field_get_dynamic_fallback"
-source_function = "rawNumericObjectFieldsChecksum"
-expr_kind = "ClassFieldGet"
-consumer = "js_class_field_get_ic"
-access_mode = "dynamic_fallback"
-materialization_reason = "runtime_api"
-fallback_reason = "runtime_api"
-rejected_fact_kind = "raw_f64_layout"
-rejected_fact_state = "rejected"
-rejected_fact_reason = "runtime_api"
-
-[[workloads.raw_numeric_object_fields.native_rep_checks.require_records]]
-name = "raw_class_field_get_dynamic_fallback_invalidates_layout"
-source_function = "rawNumericObjectFieldsChecksum"
-expr_kind = "ClassFieldGet"
-consumer = "js_class_field_get_ic"
-access_mode = "dynamic_fallback"
-materialization_reason = "runtime_api"
-fallback_reason = "runtime_api"
-rejected_fact_kind = "raw_f64_layout"
-rejected_fact_state = "invalidated"
-rejected_fact_reason = "runtime_api"
-
-[[workloads.raw_numeric_object_fields.native_rep_checks.require_records]]
-name = "raw_class_field_get_materialization_hazard_invalidated"
-source_function = "rawNumericObjectFieldsChecksum"
-expr_kind = "ClassFieldGet"
-consumer = "js_class_field_get_ic"
-access_mode = "dynamic_fallback"
-materialization_reason = "runtime_api"
-fallback_reason = "runtime_api"
-rejected_fact_kind = "materialization_hazard"
-rejected_fact_state = "invalidated"
-rejected_fact_reason = "runtime_api"
-
-[[workloads.raw_numeric_object_fields.native_rep_checks.require_records]]
-name = "raw_class_field_set_fast_f64"
-source_function = "rawNumericObjectFieldsChecksum"
-expr_kind = "ClassFieldSet"
-consumer = "class_field_set.raw_f64_store"
-native_rep_name = "f64"
-access_mode = "checked_native"
-bounds_state = "proven_or_guarded"
-consumed_fact_kind = "raw_f64_layout"
-consumed_fact_state = "consumed"
-
-[[workloads.raw_numeric_object_fields.native_rep_checks.require_records]]
-name = "raw_class_field_set_guard_consumed"
-source_function = "rawNumericObjectFieldsChecksum"
-expr_kind = "ClassFieldSet"
-consumer = "class_field_set.raw_f64_store"
-native_rep_name = "f64"
-access_mode = "checked_native"
-bounds_state = "proven_or_guarded"
-consumed_fact_kind = "bounds"
-consumed_fact_state = "consumed"
-
-[[workloads.raw_numeric_object_fields.native_rep_checks.require_records]]
-name = "raw_class_field_set_dynamic_fallback"
-source_function = "rawNumericObjectFieldsChecksum"
-expr_kind = "ClassFieldSet"
-consumer = "js_object_set_field_by_name"
-access_mode = "dynamic_fallback"
-materialization_reason = "runtime_api"
-fallback_reason = "runtime_api"
-rejected_fact_kind = "raw_f64_layout"
-rejected_fact_state = "rejected"
-rejected_fact_reason = "runtime_api"
-
-[[workloads.raw_numeric_object_fields.native_rep_checks.require_records]]
-name = "raw_class_field_set_dynamic_fallback_invalidates_layout"
-source_function = "rawNumericObjectFieldsChecksum"
-expr_kind = "ClassFieldSet"
-consumer = "js_object_set_field_by_name"
-access_mode = "dynamic_fallback"
-materialization_reason = "runtime_api"
-fallback_reason = "runtime_api"
-rejected_fact_kind = "raw_f64_layout"
-rejected_fact_state = "invalidated"
-rejected_fact_reason = "runtime_api"
-
-[[workloads.raw_numeric_object_fields.native_rep_checks.require_records]]
-name = "raw_class_field_set_materialization_hazard_invalidated"
-source_function = "rawNumericObjectFieldsChecksum"
-expr_kind = "ClassFieldSet"
-consumer = "js_object_set_field_by_name"
-access_mode = "dynamic_fallback"
-materialization_reason = "runtime_api"
-fallback_reason = "runtime_api"
-rejected_fact_kind = "materialization_hazard"
-rejected_fact_state = "invalidated"
-rejected_fact_reason = "runtime_api"
+[[workloads.raw_numeric_object_fields.native_rep_checks.review_materializations]]
+name = "dynamic_write_value_abi"
+claim = "The dynamic value parameter materializes once at the function ABI, before the checked shape/record/representation store and its refusal fallback."
+function = "perry_fn_raw_numeric_object_fields_ts__forceDynamicWrite"
+source_function = "forceDynamicWrite"
+block_label = "stack_guard.ok.1"
+expr_kind = "materialize_js_value_bits"
+consumer = "materialize_js_value_bits"
+native_rep_name = "js_value_bits"
+materialization_reason = "function_abi"
 
 [workloads.scalar_replacement_literals]
 source = "benchmarks/compiler_output/fixtures/scalar_replacement_literals.ts"

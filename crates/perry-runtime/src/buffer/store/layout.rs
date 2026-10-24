@@ -696,6 +696,7 @@ pub(crate) fn alloc_foreign(brand: u8, data: *mut u8, length: u32) -> *mut Buffe
         (*ptr).header.capacity = length;
         (*ptr).header.link = 0;
         (*ptr).data = data;
+        // GC_STORE_AUDIT(POINTER_FREE): Only ForeignBuffer.owned is initialized to Option::None; no child edge is installed by this write.
         std::ptr::write(&mut (*ptr).owned, None);
         {
             (*ptr).finalizer = None;
@@ -941,6 +942,7 @@ pub(crate) unsafe fn externalize_on_attach_for_test(addr: usize) {
         header.capacity,
     );
     let data = backing.data();
+    // GC_STORE_AUDIT(INIT): cfg(test) sabotage externalizes a test Buffer under bag_ensure GcSuppressScope (store.rs83-86). Header.link is preserved, native Backing copy supplies data/owned, finalizer=None; no new managed child. Whole-cell replacement preserves existing bag edge rather than inventing one.
     std::ptr::write(
         addr as *mut ForeignBuffer,
         ForeignBuffer {

@@ -412,6 +412,7 @@ fn class_value_mint(class_id: u32) -> *mut ClosureHeader {
             captures.add(CLASS_PROTOTYPE_LINK_CAPTURE),
             crate::value::TAG_UNDEFINED,
         );
+        // GC_STORE_AUDIT(POINTER_FREE): CLASS_EVALUATION_STATE_SLOT receives INT32_TAG encoding numeric zero; no pointer payload, before class function publication.
         std::ptr::write(
             crate::closure::closure_capture_slots_mut(ptr).add(CLASS_EVALUATION_STATE_SLOT),
             crate::value::INT32_TAG,

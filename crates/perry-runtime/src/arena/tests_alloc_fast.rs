@@ -148,6 +148,7 @@ fn zero_bound_birth_keeps_hidden_floor_slots_out_of_initialization() {
         let floor = expected.add(std::mem::size_of::<crate::object::ObjectHeader>()) as *mut u64;
         let poison = 0x0123_4567_89ab_cdef;
         for i in 0..crate::object::INLINE_SLOT_FLOOR {
+            // GC_STORE_AUDIT(POINTER_FREE): Fixture writes finite numeric poison0x0123456789abcdef into allocation slack before object birth; no JS pointer tag and later asserts slack never becomes a live slot.
             floor.add(i).write(poison);
         }
         let value = crate::object::js_object_create(proto_value);

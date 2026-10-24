@@ -504,10 +504,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
                 crate::fn_info!(array_prototype_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 0,
             );
-            install_noop_proto_methods(
-                proto_obj,
-                &[("toLocaleString", 0), ("toSpliced", 2)],
-            );
+            install_noop_proto_methods(proto_obj, &[("toLocaleString", 0), ("toSpliced", 2)]);
             install_proto_method(
                 proto_obj,
                 "entries",

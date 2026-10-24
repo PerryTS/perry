@@ -110,6 +110,8 @@ pub(crate) unsafe fn http_methods_array() -> f64 {
         *elements_ptr.add(i) = nanboxed;
         crate::array::note_array_slot_layout_only(arr, i, nanboxed.to_bits());
     }
+    // The list is fresh and every slot holds a method name.
+    crate::array::ek_birth_prefix(arr, METHODS.len() as u32);
     let value = crate::value::js_nanbox_pointer(arr as i64);
     // GC_STORE_AUDIT(ROOT): HTTP_METHODS_CACHE is a mutable root visited by scan_object_cache_roots_mut.
     crate::object::HTTP_METHODS_CACHE.with_slot(|slot| {

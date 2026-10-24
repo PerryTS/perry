@@ -224,6 +224,7 @@ pub extern "C" fn js_proxy_new(target: f64, handler: f64) -> f64 {
             callable,
             "Proxy [[Call]] must agree with its creation-time target"
         );
+        // GC_STORE_AUDIT(INIT): Fresh ProxyEntry under GcSuppressScope begins with target/handler numeric0 and props=null. Real target and handler are subsequently installed through runtime_store_gc_jsvalue_slot (proxy.rs210-247).
         std::ptr::write(
             cell,
             ProxyEntry {

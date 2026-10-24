@@ -479,6 +479,11 @@ pub(crate) fn initialize_slots(stream: f64, slots: &[(Slot, f64)], data: &[(Stat
         // once, and the scope prevents any safepoint across this fill.
         unsafe {
             crate::array::note_array_slot_layout_only(record, slot, value.to_bits());
+            // The record may already be live with a prefix, and the
+            // layout-only helper does no EK work: a hole leaves the prefix.
+            if value.to_bits() == crate::value::TAG_HOLE {
+                crate::array::ek_lower_prefix(record, slot as u32);
+            }
         }
     }
 }

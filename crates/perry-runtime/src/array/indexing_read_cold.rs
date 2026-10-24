@@ -145,6 +145,7 @@ unsafe fn read_cold_dispatch(
             coerce,
             ptr::null_mut(),
         );
+        // GC_STORE_AUDIT(STACK): source is ColdArgs.source in caller-owned scratch (indexing_read_cold.rs5-22,76-89), written after read_cold_dispatch and any getter GC from a RuntimeHandleScope-rooted receiver. Never a persistent heap edge.
         source.write(receiver.get_nanbox_f64());
         return value;
     }

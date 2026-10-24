@@ -83,6 +83,7 @@ pub(super) fn new(
             crate::gc::GC_TYPE_ASYNC_RESOURCE_STATE,
         )
         .cast::<ResourceState>();
+        // GC_STORE_AUDIT(BARRIERED): new holds GcSuppressScope from resource classification through publication. Immediately after ResourceState initialization, resource is stored through runtime_store_gc_jsvalue_slot and every context store gets runtime_write_barrier_external_slot (resource_state.rs60,101-115).
         std::ptr::write(
             state,
             ResourceState {

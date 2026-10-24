@@ -13,9 +13,9 @@ mod element_kind;
 #[cfg(test)]
 mod element_kind_tests;
 pub(crate) use element_kind::{
-    ek_debug_verify, ek_debug_verify_read, ek_lower_prefix, ek_note_descriptor_edits,
-    ek_note_published, ek_note_slot, ek_prefix_after_copy_within, ek_prefix_after_splice,
-    ek_set_prefix,
+    ek_birth_prefix, ek_debug_verify, ek_debug_verify_read, ek_lower_prefix,
+    ek_note_descriptor_edits, ek_note_published, ek_note_slot, ek_prefix_after_copy_within,
+    ek_prefix_after_splice, ek_set_prefix,
 };
 mod element_shape;
 mod fill_extend;
@@ -24,9 +24,7 @@ mod forwarding;
 mod from_concat;
 mod generic;
 mod generic_copy;
-pub use self::generic_copy::{
-    js_arraylike_toReversed, js_arraylike_toSorted, js_arraylike_with,
-};
+pub use self::generic_copy::{js_arraylike_toReversed, js_arraylike_toSorted, js_arraylike_with};
 #[cfg(test)]
 mod generic_callback_tests;
 mod generic_mutators;

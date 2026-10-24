@@ -140,10 +140,9 @@ mod tests {
                     }
                 }
             });
-            assert!(
-                continuations >= if is_async { 3 } else { 1 },
-                "all protocol operations must restore the brand"
-            );
+            // next/return/throw share one resume closure. It must capture and
+            // restore the brand, including return cleanup and the finally arm.
+            assert_eq!(continuations, 1, "the shared resume must restore the brand");
         }
     }
 }

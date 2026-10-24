@@ -36,6 +36,18 @@
   ],
   "holders": [
     {
+      "file": "crates/perry-ext-ws/src/lib.rs",
+      "name": "WS_PENDING_EVENTS",
+      "verdict": "not_a_gc_pointer",
+      "why": "The queue owns only agent/socket/server handle IDs, status codes, Rust String and Vec<u8> payloads. PendingWsEvent and WsPayload contain no JSValue or GC pointer; close callbacks remain in the separately scanned listener maps and JS values are created only after an event is removed for its owning agent."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/tenuring.rs",
+      "name": "CAP_PHASE_CYCLES",
+      "verdict": "not_a_gc_pointer",
+      "why": "Cell<CapPhaseCycles> holds only nursery byte/count measurements and booleans: last/before_last come from eden_live_bytes, whole/open totals from those readings, and START resets all counts. No address, handle, JSValue or GC allocation enters any field."
+    },
+    {
       "file": "crates/perry-runtime/src/gc/tenuring.rs",
       "name": "CAP_PHASE_INFLUX_BYTES",
       "verdict": "not_a_gc_pointer",
@@ -2783,7 +2795,7 @@
       "verdict": "weak_heap_change_cache",
       "why": "Re-audited 2026-10-23 against the pinned-source diffs. The existing direct-mapped string-reuse cache is weak: every collection HeapChange clears all entries at entry before any free or move. gc_realloc validates the malloc cell and clears before realloc only for GC_TYPE_STRING; unrelated reallocations leave cached string addresses unchanged. Both production insertion funnels still use publish_intern_entry, which refuses publication throughout every open HeapChange, including nested scopes and realloc. Ordinary readers need no per-lookup scope check. New property-atom creation, image seeding, mixed-hash probing and weak metadata rewrite/prune operate on the separate ATOMS table; atom hits published into INTERN_TABLE still use the same guarded publication funnel. The cache itself is not scanned and holds no strong root. Const-initialized malloc bookkeeping only defers native Vec capacity reservation; it does not change string realloc validation or HeapChange ordering. Concat changes isolate numeric test counters and add no publication path. Existing tests cover unrelated/string realloc, nested publication exclusion through both writers, young-string death and live relocation.",
       "sources": {
-        "crates/perry-runtime/src/string/intern.rs": "c1c01e95364e9f1e3fb64f1ef9f00de6a34489238bff7acccafc8281d3f6c29f",
+        "crates/perry-runtime/src/string/intern.rs": "3f4a540909bf538320cd2b4f49f124de286a0e61e6dd6304edd3bbc4f8b70ec8",
         "crates/perry-runtime/src/gc/heap_generation.rs": "8344c9995c62342714b40a947dd20338a56fcd1cb8f031356e865b9121d6ee2f",
         "crates/perry-runtime/src/string/concat.rs": "aff51a40e1cf03321ddec88547a7baf0666391598b7289fa8d662f0c19596ed0",
         "crates/perry-runtime/src/gc/malloc.rs": "5473dff1ad0d1b5e596268b2193e341f823d11a659e66b6fe6537a5e021c9076"

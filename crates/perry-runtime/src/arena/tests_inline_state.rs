@@ -33,7 +33,10 @@ fn gc_init_establishes_inline_state_on_each_live_worker_heap() {
                     (*raw).birth_seeds as usize,
                 );
                 rendezvous.wait();
-                let allocated = js_inline_arena_slow_alloc(raw, 48, 8);
+                let size = crate::gc::GC_HEADER_SIZE
+                    + std::mem::size_of::<crate::array::ArrayHeader>()
+                    + 3 * std::mem::size_of::<u64>();
+                let allocated = js_inline_arena_slow_alloc(raw, size, 8);
                 assert!(!allocated.is_null());
                 allocated
                     .cast::<crate::gc::GcHeader>()
@@ -41,21 +44,22 @@ fn gc_init_establishes_inline_state_on_each_live_worker_heap() {
                         obj_type: crate::gc::GC_TYPE_ARRAY,
                         gc_flags: crate::gc::GC_FLAG_ARENA,
                         _reserved: 0,
-                        size: 48,
+                        size: size as u32,
                     });
-                allocated.add(8).cast::<crate::array::ArrayHeader>().write(
-                    crate::array::ArrayHeader {
-                        length: 0,
-                        capacity: 3,
-                        named: std::ptr::null_mut(),
-                        ek_prefix: 0,
-                        ek_kind: 0,
-                    },
-                );
+                let array = allocated
+                    .add(crate::gc::GC_HEADER_SIZE)
+                    .cast::<crate::array::ArrayHeader>();
+                array.write(crate::array::ArrayHeader {
+                    length: 0,
+                    capacity: 3,
+                    named: std::ptr::null_mut(),
+                    ek_prefix: 0,
+                    ek_kind: 0,
+                });
                 for i in 0..3 {
-                    allocated
-                        .add(24 + i * 8)
+                    crate::array::array_elements_ptr(array)
                         .cast::<u64>()
+                        .add(i)
                         .write(crate::value::TAG_HOLE);
                 }
                 assert_eq!(

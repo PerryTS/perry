@@ -71,6 +71,7 @@ mod tests {
         }
         let ptr = start as *mut u8;
         for i in 0..HP * 2 {
+            // GC_STORE_AUDIT(POINTER_FREE): Both writes fill owned mmap test spans with (i%251) as u8 before remap/mprotect checks. Byte patterns, not GC child fields.
             ptr.add(i).write((i % 251) as u8);
         }
         // Prevent in-place anonymous collapse on the fixture. The ON
@@ -195,6 +196,7 @@ mod tests {
         }
         let ptr = start as *mut u8;
         for i in 0..HP * 3 {
+            // GC_STORE_AUDIT(POINTER_FREE): Both writes fill owned mmap test spans with (i%251) as u8 before remap/mprotect checks. Byte patterns, not GC child fields.
             ptr.add(i).write((i % 251) as u8);
         }
         assert_eq!(libc::madvise(ptr.cast(), HP * 3, libc::MADV_NOHUGEPAGE), 0);

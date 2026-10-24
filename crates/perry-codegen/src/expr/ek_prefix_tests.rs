@@ -175,9 +175,10 @@ fn frontier_raises(ll: &str) -> usize {
         let Some(zext) = def(ll, z).filter(|d| d.contains("zext i1 ")) else {
             continue;
         };
-        let not_hole = regs(zext).first().and_then(|r| def(ll, r)).is_some_and(|d| {
-            d.contains("icmp ne i64 ") && d.contains(crate::nanbox::TAG_HOLE_I64)
-        });
+        let not_hole = regs(zext)
+            .first()
+            .and_then(|r| def(ll, r))
+            .is_some_and(|d| d.contains("icmp ne i64 ") && d.contains(crate::nanbox::TAG_HOLE_I64));
         let Some(raise_block) = block_of(ll, &store) else {
             continue;
         };
@@ -185,9 +186,10 @@ fn frontier_raises(ll: &str) -> usize {
         let at_frontier = ll.lines().map(str::trim).any(|l| {
             l.starts_with("br i1 ")
                 && l.contains(&taken)
-                && regs(l).first().and_then(|c| def(ll, c)).is_some_and(|d| {
-                    d.contains("icmp eq i32 ") && regs(d).contains(load)
-                })
+                && regs(l)
+                    .first()
+                    .and_then(|c| def(ll, c))
+                    .is_some_and(|d| d.contains("icmp eq i32 ") && regs(d).contains(load))
         });
         if at_frontier && not_hole {
             n += 1;

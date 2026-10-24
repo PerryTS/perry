@@ -397,6 +397,7 @@ pub(crate) unsafe fn capacity(addr: usize) -> u32 {
 }
 #[inline(always)]
 pub(crate) unsafe fn initialize_shared_block(cell: *mut BufferHeader, size: u32) {
+    // GC_STORE_AUDIT(POINTER_FREE): BufferHeader initialization contains u32 length/capacity and link=0; no pointer bits are installed.
     std::ptr::write(
         cell,
         BufferHeader {

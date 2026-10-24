@@ -128,9 +128,11 @@ impl WitnessWords {
         // every byte is initialized when the words are read.
         unsafe {
             let at = words.as_mut_ptr().cast::<u8>();
+            // GC_STORE_AUDIT(STACK): Destination is local MaybeUninit<[u64;WITNESS_WORDS]> in WitnessWords::new; typed write never publishes directly into GC memory.
             at.cast::<perex::binding::ProgramWitness>().write(witness);
             for (i, &pad) in padding.iter().enumerate() {
                 if pad {
+                    // GC_STORE_AUDIT(STACK): Zeroes padding bytes of same local MaybeUninit word array before assume_init; no heap slot write.
                     at.add(i).write(0);
                 }
             }
@@ -169,7 +171,9 @@ fn witness_padding() -> &'static [bool; WITNESS_BYTES] {
             let base = at.cast::<perex::binding::ProgramWitness>().read();
             for (i, pad) in padding.iter_mut().enumerate() {
                 let same = |byte: u8| {
+                    // GC_STORE_AUDIT(STACK): Destination is local image=[0u64;WITNESS_WORDS] used only to inspect witness padding; no GC heap publication.
                     at.cast::<perex::binding::ProgramWitness>().write(base);
+                    // GC_STORE_AUDIT(STACK): Writes one probe byte into same local image during witness_padding; destination cannot be a GC slot.
                     at.add(i).write(byte);
                     at.cast::<perex::binding::ProgramWitness>().read() == base
                 };

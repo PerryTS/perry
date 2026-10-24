@@ -41,6 +41,8 @@ extern "C" fn one_shot(_: *const RawClosureHeader, _: JsThis, err: f64, output: 
 #[test]
 fn ten_thousand_one_shots_keep_captures_through_a_collection_before_run() {
     let _agent = super::OwnAgent::enter();
+    let _barriers = CompiledBarriers::new();
+    let copies_before = perry_runtime::gc::copying_minor_cycles();
     clear();
     ONE_SHOTS.with(|n| n.set(0));
     ONE_SHOT_ERRORS.with(|v| v.borrow_mut().clear());
@@ -84,6 +86,10 @@ fn ten_thousand_one_shots_keep_captures_through_a_collection_before_run() {
         ONE_SHOT_ERRORS.with(|v| v.borrow().clone())
     );
     assert_eq!(ONE_SHOTS.with(std::cell::Cell::get), 10000);
+    assert!(
+        perry_runtime::gc::copying_minor_cycles() > copies_before,
+        "queued captures must also survive copying collections",
+    );
 }
 // These witnesses are intentionally UNRUN locally; the hosted runner owns Rust execution.
 extern "C" fn settled_one_shot(
@@ -282,6 +288,7 @@ extern "C" fn copying_level(c: *const RawClosureHeader, _: JsThis) -> f64 {
     if count == 2 {
         let input = bytes::pin(JsValue::from_bits(input.to_bits())).unwrap();
         // This test owns the Buffer and no byte borrow is live.
+        // GC_STORE_AUDIT(POINTER_FREE): Writes one byte X into pinned Buffer byte payload; test owns Buffer and no byte borrow is live.
         unsafe { input.as_mut_ptr().write(b'X') };
     }
     6.0
@@ -638,6 +645,9 @@ fn eleven_codecs_are_deferred_runtime_transforms_and_release_on_completion() {
 }
 #[test]
 fn real_gunzip_bomb_parks_on_pause_and_keeps_the_input_traced() {
+    let Some(_isolated) = isolated_rss_guard() else {
+        return;
+    };
     let _agent = super::OwnAgent::enter();
     clear();
     let _barriers = CompiledBarriers::new();
@@ -836,6 +846,46 @@ impl Drop for CompiledBarriers {
     }
 }
 
+// RSS describes the entire process. Other libtest agents can retain gigabytes
+// while this fixture samples, so a thread-local agent does not isolate it.
+// Re-exec the exact test and require a completion marker as well as success.
+struct IsolatedRssDone(String);
+impl Drop for IsolatedRssDone {
+    fn drop(&mut self) {
+        println!("zlib RSS witness completed: {}", self.0);
+    }
+}
+
+fn isolated_rss_guard() -> Option<IsolatedRssDone> {
+    const CHILD_ENV: &str = "PERRY_ZLIB_RSS_TEST_NAME";
+    let thread = std::thread::current();
+    let name = thread.name().expect("libtest must name its test thread");
+    if std::env::var(CHILD_ENV).ok().as_deref() == Some(name) {
+        return Some(IsolatedRssDone(name.to_string()));
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            name,
+            "--nocapture",
+            "--include-ignored",
+            "--test-threads=1",
+        ])
+        .env(CHILD_ENV, name)
+        .output()
+        .expect("launch isolated zlib RSS witness");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let completed = format!("zlib RSS witness completed: {name}");
+    assert!(
+        output.status.success() && stdout.lines().any(|line| line.ends_with(&completed)),
+        "isolated RSS witness {name} did not complete: {}\nstdout:\n{stdout}\nstderr:\n{stderr}",
+        output.status,
+    );
+    eprint!("{stderr}");
+    None
+}
+
 fn rss() -> usize {
     std::fs::read_to_string("/proc/self/statm")
         .unwrap()
@@ -849,6 +899,9 @@ fn rss() -> usize {
 #[test]
 #[ignore = "full Z8: 50,000 completions per codec plus 50,000 immediate destroys"]
 fn fifty_thousand_churn_per_codec_releases_native_bytes_and_has_flat_rss() {
+    let Some(_isolated) = isolated_rss_guard() else {
+        return;
+    };
     let _agent = super::OwnAgent::enter();
     clear();
     let _barriers = CompiledBarriers::new();
@@ -1054,6 +1107,9 @@ fn destroy_mid_stream_returns_payload_buffers_before_any_collection() {
 }
 #[test]
 fn mid_stream_destroy_churn_keeps_buffers_and_rss_flat() {
+    let Some(_isolated) = isolated_rss_guard() else {
+        return;
+    };
     let _agent = super::OwnAgent::enter();
     let roots = TransientRootScope::enter();
     let opts = roots.root_nanbox(options());
