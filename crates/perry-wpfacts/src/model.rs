@@ -1128,6 +1128,19 @@ pub struct Model {
     pub keyed_reach: FxHashMap<Tok, Vec<(Atom, Tok)>>,
     /// An argument marker's keyed reach marker -> (the argument marker, key).
     pub keyed_parent: FxHashMap<Tok, (Tok, Atom)>,
+    /// DECISIONS 158: a parameter's keyed reach marker, and each step below
+    /// it -> (the marker it was read from, the key; `None`: a computed
+    /// key). A path marker stands for the values at its path in the
+    /// argument (the shape's path), not for everything read from them.
+    pub path_parent: FxHashMap<Tok, (Tok, Option<Atom>)>,
+    /// A path marker's step under a key: a marker of its own, or the
+    /// earlier marker on its path read under the same key (the fold).
+    pub path_step: FxHashMap<(Tok, Option<Atom>), Tok>,
+    /// The steps made below each path marker (not the folds).
+    pub path_steps: FxHashMap<Tok, Vec<Tok>>,
+    /// The keys a fold repeats at a path marker: the path goes on through
+    /// them any number of times there.
+    pub path_loops: FxHashMap<Tok, Vec<Option<Atom>>>,
     /// Uses under a named key that reached a marker through argument
     /// markers (`keyed_use`), by marker.
     pub keyed_uses: FxHashMap<Tok, Vec<(Atom, u8)>>,
@@ -1675,6 +1688,17 @@ impl Model {
         let Some(&(f, i)) = self.param_marker.get(&t) else {
             return;
         };
+        // DECISIONS 158: a step's use is a use of its keyed reach marker:
+        // the contract publishes uses per key, and the reader applies them
+        // to all its argument reaches under that key.
+        if self
+            .path_parent
+            .get(&t)
+            .is_some_and(|&(p, _)| self.path_parent.contains_key(&p))
+        {
+            let r = self.path_root(t);
+            self.mark_use(r, bits);
+        }
         let u = self.marker_use.entry(t).or_default();
         let new = bits & !*u;
         *u |= bits;
@@ -1699,7 +1723,8 @@ impl Model {
                 self.set_marker_top(r);
             }
             // What it reaches under a key is what unknown code stored
-            // there: no ⊤ beside the marker says so (DECISIONS 119).
+            // there: no ⊤ beside the marker says so (DECISIONS 119). So is
+            // each step below it (DECISIONS 158).
             let mut stack = vec![t];
             while let Some(k) = stack.pop() {
                 let rs: Vec<Tok> = self
@@ -1708,6 +1733,7 @@ impl Model {
                     .into_iter()
                     .flatten()
                     .map(|&(_, r)| r)
+                    .chain(self.path_steps.get(&k).into_iter().flatten().copied())
                     .filter(|&r| !self.marker_is_top(r))
                     .collect();
                 for r in rs {
@@ -1724,6 +1750,10 @@ impl Model {
     /// `a` alone, not to everything the argument reaches (its prototype,
     /// its class).
     pub(crate) fn keyed_reach_of(&mut self, t: Tok, a: Atom) -> Tok {
+        // DECISIONS 158: a path marker's keyed reach is its step.
+        if self.is_path_marker(t) {
+            return self.path_step_of(t, Some(a));
+        }
         if let Some(&(_, r)) = self
             .keyed_reach
             .get(&t)
@@ -1740,8 +1770,16 @@ impl Model {
         );
         let rm = self.marker_template(display);
         let r = self.tok(TokKind::Obj(rm, NO_CTX));
-        let rany = self.field_any(r);
-        self.add_tok(rany, r);
+        // A parameter's own keyed reach is a path marker (DECISIONS 158):
+        // what is read from it is a step of its own. Any other keyed reach
+        // reaches itself under every key.
+        let path = self.param_marker.contains_key(&t) && !self.reach_marker.contains(&t);
+        if path {
+            self.path_parent.insert(r, (t, Some(a)));
+        } else {
+            let rany = self.field_any(r);
+            self.add_tok(rany, r);
+        }
         self.reach_marker.insert(r);
         self.keyed_reach.entry(t).or_default().push((a, r));
         // An escaped marker's keyed reach reads as ⊤ too (DECISIONS 119).
@@ -1769,6 +1807,87 @@ impl Model {
             }
         }
         r
+    }
+
+    /// DECISIONS 158: `t` is a parameter's keyed reach marker or a step
+    /// below it.
+    #[inline]
+    pub(crate) fn is_path_marker(&self, t: Tok) -> bool {
+        self.path_parent.contains_key(&t)
+    }
+
+    /// The keyed reach marker path marker `t` is a step below (itself).
+    pub(crate) fn path_root(&self, t: Tok) -> Tok {
+        let mut x = t;
+        while let Some(&(p, _)) = self.path_parent.get(&x) {
+            if !self.path_parent.contains_key(&p) {
+                break;
+            }
+            x = p;
+        }
+        x
+    }
+
+    /// Path marker `t`'s markers and keys from its parameter on.
+    pub(crate) fn path_keys(&self, t: Tok) -> Vec<(Tok, Option<Atom>)> {
+        let mut v = Vec::new();
+        let mut x = t;
+        while let Some(&(p, k)) = self.path_parent.get(&x) {
+            v.push((x, k));
+            x = p;
+        }
+        v.reverse();
+        v
+    }
+
+    /// DECISIONS 158: path marker `t`'s step under key `k` (`None`: a
+    /// computed key): the values the callee read there, which the reader
+    /// finds by walking the same keys on its argument. A key already on
+    /// the path folds back to the marker of that earlier step, which then
+    /// repeats the keys of the cycle (`x = x.next` in a loop): a path
+    /// holds each key once, so a unit's markers are finite, with no depth
+    /// cutoff.
+    pub(crate) fn path_step_of(&mut self, t: Tok, k: Option<Atom>) -> Tok {
+        if let Some(&s) = self.path_step.get(&(t, k)) {
+            return s;
+        }
+        let path = self.path_keys(t);
+        let s = match path.iter().position(|&(_, pk)| pk == k) {
+            Some(j) => {
+                let at = path[j].0;
+                let l = self.path_loops.entry(at).or_default();
+                for x in path[j + 1..].iter().map(|&(_, pk)| pk).chain([k]) {
+                    if !l.contains(&x) {
+                        l.push(x);
+                    }
+                }
+                at
+            }
+            None => {
+                let TokKind::Obj(tm, _) = self.toks[t as usize] else {
+                    unreachable!("a marker is an object token")
+                };
+                let key = match k {
+                    Some(a) => self.atoms[a as usize].clone(),
+                    None => "[]".to_string(),
+                };
+                let display = format!("{}.{key}", self.tmpls[tm as usize].display);
+                let rm = self.marker_template(display);
+                let s = self.tok(TokKind::Obj(rm, NO_CTX));
+                self.reach_marker.insert(s);
+                if let Some(&fi) = self.param_marker.get(&t) {
+                    self.param_marker.insert(s, fi);
+                }
+                self.path_parent.insert(s, (t, k));
+                self.path_steps.entry(t).or_default().push(s);
+                if self.marker_is_top(t) {
+                    self.set_marker_top(s);
+                }
+                s
+            }
+        };
+        self.path_step.insert((t, k), s);
+        s
     }
 
     /// A use `bits` of what marker `t` reaches through named key `a`

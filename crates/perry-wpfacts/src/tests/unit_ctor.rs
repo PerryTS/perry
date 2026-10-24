@@ -786,3 +786,43 @@ fn a_published_class_another_unit_lets_escape_has_unknown_constructor_arguments(
     let u = field(tmpl(&pf, "Vec"), "cap");
     assert!(u.kind.top, "{:?}\n{}", u.kind, pf.dump_text());
 }
+
+const ELEM_READ: &str = r#"
+    class Vec {
+      storage: any; n: number;
+      static tag = 1;
+      constructor() { this.storage = null; this.n = 0; }
+      append(e: any) { if (this.storage === null) { this.storage = new Array(4); } this.storage[this.n] = e; this.n += 1; }
+      forEach(fn: any) { for (let i = 0; i < this.n; i += 1) { fn(this.storage[i]); } }
+      size(): number { return this.n; }
+    }
+    class Item { k: number; constructor(k: number) { this.k = k; } }
+    function group(): Vec { const r = new Vec(); const a = new Vec(); a.append(new Item(1)); r.append(a); return r; }
+    function main() {
+      const all = group(); let s = 0;
+      all.forEach((v: any) => { for (let i = 0; i < v.size(); i += 1) { s += 1; } });
+      console.log(s + Vec.tag);
+    }
+    main();
+    "#;
+
+#[test]
+fn an_element_a_callee_reads_is_the_callers_element() {
+    // DECISIONS 158: `forEach` hands its callback `this.storage[i]`, a
+    // step below the receiver's `storage` path. The reader walks
+    // `storage` then a computed key on its own Vec: the callback gets the
+    // inner Vecs, not the storage array, so `v.size()` is Vec's method
+    // and no storage array escapes. Per-unit facts are whole-program facts
+    // (owner 2026-10-23).
+    let pf = units(ELEM_READ);
+    let wf = facts(ELEM_READ);
+    assert!(pf.broken.is_empty(), "{:?}\n{}", pf.broken, pf.dump_text());
+    let proven = |f: &ProgramFacts| {
+        f.sites
+            .iter()
+            .filter(|s| !format!("{:?}", s.verdict).starts_with("No"))
+            .count()
+    };
+    assert!(proven(&wf) > 0);
+    assert!(proven(&pf) >= proven(&wf), "U {} W {}\n{}", proven(&pf), proven(&wf), pf.dump_text());
+}

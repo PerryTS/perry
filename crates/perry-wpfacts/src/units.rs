@@ -119,12 +119,24 @@ pub(crate) struct StoreFlow {
 /// one named key of one (then the keys read on it, DECISIONS 138), an
 /// unknown value beside, the builtins, program objects and arrays
 /// (DECISIONS 94), and its primitive kinds.
+/// What a value holds through a parameter's reach (DECISIONS 138, 158):
+/// the parameter (`u32::MAX`: the receiver), its first named key, the keys
+/// the path repeats there (`Some`; `None`: any key), then each further
+/// step's key (`None`: a computed key) with the keys repeated there. The
+/// reader walks the same keys on its argument.
+pub(crate) type ReachKey = (
+    u32,
+    String,
+    Option<Vec<String>>,
+    Vec<(Option<String>, Option<Vec<String>>)>,
+);
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct Described {
     pub layouts: Option<Vec<String>>,
     pub params: Vec<u32>,
     pub reach: Vec<u32>,
-    pub reach_keys: Vec<(u32, String, Option<Vec<String>>)>,
+    pub reach_keys: Vec<ReachKey>,
     pub unknown: bool,
     pub value: ValueContract,
     pub prim: u16,
@@ -223,7 +235,7 @@ pub(crate) struct FnContract {
     /// Then the keys the body read on that reach, repeatedly (`Some`), or
     /// any key (`None`, a computed-key read): `x = p.k; while (x.left) x =
     /// x.left; return x` is `p.k` then `left`* (DECISIONS 138).
-    pub ret_reach_keys: Vec<(u32, String, Option<Vec<String>>)>,
+    pub ret_reach_keys: Vec<ReachKey>,
     /// The result may also be an unknown value (⊤ to the caller).
     pub ret_unknown: bool,
     /// The global builtins, program objects and arrays it may return

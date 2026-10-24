@@ -910,7 +910,7 @@ impl<'a> Gen<'a> {
                     continue;
                 };
                 match via {
-                    Some(k) => self.ret_through_key(a, k, &None, n, &c.name),
+                    Some(k) => self.ret_through_key(a, k, &None, &[], n, &c.name),
                     None => {
                         let q = self
                             .m
@@ -955,8 +955,8 @@ impl<'a> Gen<'a> {
             if d.params.contains(&u32::MAX) {
                 self.m.edge(this, out);
             }
-            for (_, k, then) in d.reach_keys.iter().filter(|(i, _, _)| *i == u32::MAX) {
-                self.ret_through_key(this, k, then, out, &c.name);
+            for (_, k, then, steps) in d.reach_keys.iter().filter(|r| r.0 == u32::MAX) {
+                self.ret_through_key(this, k, then, steps, out, &c.name);
             }
             if d.reach.contains(&u32::MAX) {
                 self.reach_into(this, out, "reach-this", &c.name);
@@ -969,8 +969,8 @@ impl<'a> Gen<'a> {
             if d.params.contains(&(i as u32)) {
                 self.m.edge(p, out);
             }
-            for (_, k, then) in d.reach_keys.iter().filter(|(j, _, _)| *j == i as u32) {
-                self.ret_through_key(p, k, then, out, &c.name);
+            for (_, k, then, steps) in d.reach_keys.iter().filter(|r| r.0 == i as u32) {
+                self.ret_through_key(p, k, then, steps, out, &c.name);
             }
             if d.reach.contains(&(i as u32)) {
                 self.reach_into(p, out, "reach", &c.name);
@@ -1040,12 +1040,14 @@ impl<'a> Gen<'a> {
 
     /// A contract result through `k` of `holder` (`ret_reach_keys`): the
     /// value of `holder.k` and what it reaches through `then` repeatedly
-    /// (`None`: any key, DECISIONS 138).
+    /// (`None`: any key, DECISIONS 138), then each further step of the
+    /// path with the keys repeated there (DECISIONS 158).
     fn ret_through_key(
         &mut self,
         holder: NodeId,
         k: &str,
         then: &Option<Vec<String>>,
+        steps: &[(Option<String>, Option<Vec<String>>)],
         ret: NodeId,
         name: &str,
     ) {
@@ -1059,6 +1061,42 @@ impl<'a> Gen<'a> {
                 dst: q,
             },
         );
+        if !steps.is_empty() {
+            // The values at the path: each step loads its key from the
+            // values of the step before, then repeats its loop keys.
+            let mut cur = q;
+            for (j, (sk, l)) in std::iter::once((&Some(k.to_string()), then))
+                .chain(steps.iter().map(|(sk, l)| (sk, l)))
+                .enumerate()
+            {
+                let n = match j {
+                    0 => q,
+                    _ => {
+                        let n = self.m.node_named("reach", || format!("reach.{k}.{j}({name})"));
+                        self.m.own(n);
+                        let key = match sk {
+                            Some(s) => crate::model::Key::Named(self.m.atom(s)),
+                            None => crate::model::Key::Any,
+                        };
+                        self.m.cons(cur, Cons::Load { key, dst: n });
+                        n
+                    }
+                };
+                let keys: Vec<crate::model::Key> = match l {
+                    None => vec![crate::model::Key::Any],
+                    Some(ks) => ks
+                        .iter()
+                        .map(|s| crate::model::Key::Named(self.m.atom(s)))
+                        .collect(),
+                };
+                for key in keys {
+                    self.m.cons(n, Cons::Load { key, dst: n });
+                }
+                cur = n;
+            }
+            self.m.edge(cur, ret);
+            return;
+        }
         self.m.edge(q, ret);
         let keys: Vec<crate::model::Key> = match then {
             None => vec![crate::model::Key::Any],

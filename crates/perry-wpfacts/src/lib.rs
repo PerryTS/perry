@@ -872,7 +872,7 @@ fn describe_nodes(
 ) -> units::Described {
     let mut ret_params: Vec<u32> = Vec::new();
     let mut ret_reach: Vec<u32> = Vec::new();
-    let mut ret_reach_keys: Vec<(u32, String, Option<Vec<String>>)> = Vec::new();
+    let mut ret_reach_keys: Vec<units::ReachKey> = Vec::new();
     // A reach marker reaches itself under every key (§18.4): what it stands
     // for in the result is its reach through the keys the body read on it,
     // repeatedly; a computed-key read (its all-fields node feeds a reader)
@@ -899,6 +899,35 @@ fn describe_nodes(
         v.dedup();
         Some(v)
     };
+    // DECISIONS 158: a parameter's path marker stands for the values at
+    // its path, each step with the keys its folds repeat there.
+    let loops = |t: model::Tok| -> Option<Vec<String>> {
+        let l = g.m.path_loops.get(&t).map_or(&[][..], |l| &l[..]);
+        let mut v = Vec::new();
+        for k in l {
+            v.push(g.m.atoms[(*k)? as usize].clone());
+        }
+        v.sort();
+        v.dedup();
+        Some(v)
+    };
+    let path_of = |t: model::Tok| -> Option<units::ReachKey> {
+        if !g.m.is_path_marker(t) {
+            return None;
+        }
+        let ks = g.m.path_keys(t);
+        let (r, a0) = ks[0];
+        let (p, _) = g.m.path_parent[&r];
+        let &(_, i) = g.m.param_marker.get(&p)?;
+        if g.m.marker_of.get(&(f, i)) != Some(&p) {
+            return None;
+        }
+        let steps = ks[1..]
+            .iter()
+            .map(|&(x, k)| (k.map(|a| g.m.atoms[a as usize].clone()), loops(x)))
+            .collect();
+        Some((i, g.m.atoms[a0? as usize].clone(), loops(r), steps))
+    };
     let mut ret_unknown = false;
     let mut ret_value = units::ValueContract::default();
     let mut ret_prim = nodes.iter().fold(0, |p, &n| p | g.m.nodes[n as usize].prim);
@@ -920,6 +949,15 @@ fn describe_nodes(
                     let ms = g.m.marker_members(p);
                     let a = g.m.atoms[a as usize].clone();
                     for &m in &ms {
+                        // A member on a path of this function's own
+                        // parameter: that path, then `a` (DECISIONS 158).
+                        if let Some(mut k) = path_of(m).filter(|_| !g.m.marker_is_top(m)) {
+                            k.3.push((Some(a.clone()), keys_read(t)));
+                            if !ret_reach_keys.contains(&k) {
+                                ret_reach_keys.push(k);
+                            }
+                            continue;
+                        }
                         let own = match g.m.param_marker.get(&m) {
                             Some(&(f2, i)) if f2 == f && !g.m.marker_is_top(m) => {
                                 g.m.marker_of.get(&(f, i)).map(|&mk| (i, mk))
@@ -935,7 +973,7 @@ fn describe_nodes(
                         });
                         match own {
                             Some((i, mk)) if mk == m => {
-                                let k = (i, a.clone(), keys_read(t));
+                                let k = (i, a.clone(), keys_read(t), Vec::new());
                                 if !ret_reach_keys.contains(&k) {
                                     ret_reach_keys.push(k);
                                 }
@@ -948,7 +986,7 @@ fn describe_nodes(
                                     join_keys(keys_read(m), keys_read(t)),
                                     Some(vec![a.clone()]),
                                 );
-                                let k = (i, k0, ks);
+                                let k = (i, k0, ks, Vec::new());
                                 if !ret_reach_keys.contains(&k) {
                                     ret_reach_keys.push(k);
                                 }
@@ -1021,6 +1059,12 @@ fn describe_nodes(
                     }
                     continue;
                 }
+                if let Some(k) = path_of(t) {
+                    if !ret_reach_keys.contains(&k) {
+                        ret_reach_keys.push(k);
+                    }
+                    continue;
+                }
                 if let Some(&(_, i)) = g.m.param_marker.get(&t) {
                     // What the parameter reaches through one named key: a
                     // keyed reach marker of the parameter's own marker.
@@ -1029,7 +1073,7 @@ fn describe_nodes(
                             .get(&(f, i))
                             .and_then(|mk| g.m.keyed_reach.get(mk)?.iter().find(|&&(_, r)| r == t));
                     if let Some(&(a, _)) = keyed {
-                        let k = (i, g.m.atoms[a as usize].clone(), keys_read(t));
+                        let k = (i, g.m.atoms[a as usize].clone(), keys_read(t), Vec::new());
                         if !ret_reach_keys.contains(&k) {
                             ret_reach_keys.push(k);
                         }

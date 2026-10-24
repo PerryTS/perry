@@ -437,7 +437,8 @@ impl Model {
         // A marker has no fields (`store_into`): its any-key field holds
         // only its reach marker. Under a named key it holds that key's
         // reach marker instead (design §18.4).
-        if self.is_marker(t) && !self.reach_marker.contains(&t) {
+        // A path marker's named field holds its step (DECISIONS 158).
+        if self.is_marker(t) && (!self.reach_marker.contains(&t) || self.is_path_marker(t)) {
             let r = self.keyed_reach_of(t, a);
             self.add_tok(n, r);
         } else {
@@ -545,6 +546,12 @@ impl Model {
         self.nodes[n as usize].obs = self.obs_toks.contains(&t);
         self.all_fields.insert(t, n);
         self.rel(|| format!("allfields {n} {t}"));
+        // A path marker read under a computed key: its `[]` step
+        // (DECISIONS 158).
+        if self.is_path_marker(t) {
+            let s = self.path_step_of(t, None);
+            self.add_tok(n, s);
+        }
         n
     }
 
@@ -1422,7 +1429,7 @@ impl Model {
             .marker_of
             .get(&(f, i))
             .and_then(|mk| self.keyed_reach.get(mk))
-            .and_then(|v| v.iter().find(|&&(_, r)| r == t))
+            .and_then(|v| v.iter().find(|&&(_, r)| r == self.path_root(t)))
             .map(|&(k, _)| k);
         self.store_flows.entry((f, i, reach, via, key)).or_default();
         if self.store_out_done.insert((src, f, i, reach, via, key, to)) {
@@ -2315,7 +2322,7 @@ impl Model {
         self.marker_of
             .get(&(f, j))
             .and_then(|mk| self.keyed_reach.get(mk))
-            .and_then(|v| v.iter().find(|&&(_, r)| r == t))
+            .and_then(|v| v.iter().find(|&&(_, r)| r == self.path_root(t)))
             .map(|&(k, _)| k)
     }
 
