@@ -50,6 +50,8 @@ const zstdKeys = Object.keys(zlib.constants || {})
 console.log("zlib ZSTD count:", zstdKeys.length);
 console.log("zlib ZSTD sample:", JSON.stringify(zstdKeys.slice(0, 8)));
 console.log("zlib total keys:", Object.keys(zlib.constants).length);
+console.log("Brotli block-switch error:", z.BROTLI_DECODER_ERROR_FORMAT_BLOCK_SWITCH);
+console.log("Brotli block-switch enumerable:", Object.keys(zlib.constants).includes("BROTLI_DECODER_ERROR_FORMAT_BLOCK_SWITCH"));
 
 // ── #3678: util.types predicate tail ──
 console.log("isDataView type:", typeof util.types.isDataView);
