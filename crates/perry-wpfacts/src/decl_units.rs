@@ -225,7 +225,26 @@ fn class_name_refs(e: &Expr, r: &mut Refs) {
         Expr::NativeMethodCall {
             class_name: Some(class_name),
             ..
+        }
+        | Expr::SuperPropertySet {
+            parent_class_name: Some(class_name),
+            ..
         } => r.names.push(class_name.clone()),
+        // A class expression's evaluation (`var _V = class _V {..}` in a
+        // run-once body: the HIR's `ClassExprFresh`) is its class's
+        // definition: it makes the class object and runs its static
+        // initializers, the class's state, as the declaration's own static
+        // stores are (`StaticFieldSet`). Not naming it left the evaluating
+        // unit without the class (a ⊤ value from unknown code there) and
+        // the class unit without the units constructing it.
+        Expr::ClassExprFresh {
+            template: class_name,
+            ..
+        }
+        | Expr::RefreshClassExprCaptures {
+            env_class: Some(class_name),
+            ..
+        } => r.join_names.push(class_name.clone()),
         Expr::StaticFieldSet { class_name, .. }
         | Expr::ClassStaticSymbolSet { class_name, .. }
         | Expr::ClassEnvSet { class_name, .. }
@@ -1023,6 +1042,20 @@ fn sccs(succ: &[Vec<usize>]) -> Vec<Vec<usize>> {
 pub(crate) fn views(path: &str, module: &Module) -> Vec<(UnitView, Vec<usize>)> {
     let units = decl_units(module);
     let closed = closed_bindings(module);
+    // Two namespaces share the module's names. A reference by name (a
+    // class name, `ClassRef`, `new C`, `extends C`, an extern function)
+    // names a function, class (or class alias) or global: the items
+    // `decl_units` joins by name (`owner_ref`). A module-scope binding, what
+    // an export's local names, is a function, global or statement-declared
+    // local, and a class only where no other binding has its name
+    // (`owner_name`): `var _Version = class _Version {..}` declares the
+    // class `_Version` and the binding `_Version` holding it, two items of
+    // two units. One map for both made the class unit import its own name
+    // from the binding's unit, and the binding's unit read the class as its
+    // own binding: the class value left its unit with no import, no
+    // contract and no escape (per-unit facts had no other unit construct it).
+    let mut owner_ref: FxHashMap<&str, usize> = FxHashMap::default();
+    let mut class_names: Vec<(&str, usize)> = Vec::new();
     let mut owner_name: FxHashMap<&str, usize> = FxHashMap::default();
     let mut owner_local: FxHashMap<u32, (usize, &str)> = FxHashMap::default();
     let mut owner_func: FxHashMap<u32, (usize, &str)> = FxHashMap::default();
@@ -1034,19 +1067,23 @@ pub(crate) fn views(path: &str, module: &Module) -> Vec<(UnitView, Vec<usize>)> 
                 Item::Func(k) => {
                     let f = &module.functions[k];
                     owner_name.insert(&f.name, u);
+                    owner_ref.insert(&f.name, u);
                     owner_func.insert(f.id, (u, &f.name));
                 }
                 Item::Class(k) => {
                     let c = &module.classes[k];
-                    owner_name.insert(&c.name, u);
+                    class_names.push((&c.name, u));
+                    owner_ref.insert(&c.name, u);
                     owner_class.insert(&c.name, u);
                     for a in &c.aliases {
-                        owner_name.insert(a, u);
+                        class_names.push((a, u));
+                        owner_ref.insert(a, u);
                     }
                 }
                 Item::Global(k) => {
                     let g = &module.globals[k];
                     owner_name.insert(&g.name, u);
+                    owner_ref.insert(&g.name, u);
                     owner_global.insert(g.id, (u, &g.name));
                 }
                 Item::Init(k) => {
@@ -1058,9 +1095,17 @@ pub(crate) fn views(path: &str, module: &Module) -> Vec<(UnitView, Vec<usize>)> 
             }
         }
     }
+    for (n, u) in class_names {
+        owner_name.entry(n).or_insert(u);
+    }
+    // A name reference resolves in the reference namespace, else to the
+    // binding of that name (a name only a statement declares).
+    let ref_owner = |n: &str| owner_ref.get(n).or_else(|| owner_name.get(n)).copied();
     // Per unit: the foreign names it refers to.
     let mut wanted: Vec<FxHashSet<String>> = vec![FxHashSet::default(); units.len()];
-    let mut imports_of: Vec<FxHashSet<(usize, String)>> = vec![FxHashSet::default(); units.len()];
+    // Per unit: (source unit, its export name, the local name).
+    let mut imports_of: Vec<FxHashSet<(usize, String, String)>> =
+        vec![FxHashSet::default(); units.len()];
     let shapes: FxHashMap<&str, usize> = module
         .classes
         .iter()
@@ -1173,19 +1218,30 @@ pub(crate) fn views(path: &str, module: &Module) -> Vec<(UnitView, Vec<usize>)> 
             .iter()
             .chain(&r.join_names)
             .chain(&r.param_types)
-            .filter(|nm| !owner_name.contains_key(nm.as_str()))
+            .filter(|nm| ref_owner(nm.as_str()).is_none())
             .cloned()
             .collect();
         let mut deps: FxHashSet<usize> = FxHashSet::default();
         let imp = &mut imports_of[u];
+        // The local name is the export name, unless this unit already
+        // imports that name from another unit (the class `_Version` by name
+        // and the binding `_Version` by id): then the later import gets a
+        // local of its own, which no source name can spell.
         let mut want = |name: &str, w: usize, deps: &mut FxHashSet<usize>| {
             deps.insert(w);
             wanted[w].insert(name.to_string());
-            imp.insert((w, name.to_string()));
-            name.to_string()
+            if let Some((_, _, l)) = imp.iter().find(|(v, n, _)| *v == w && n == name) {
+                return l.clone();
+            }
+            let local = match imp.iter().any(|(_, _, l)| l == name) {
+                false => name.to_string(),
+                true => format!("{name}#u{w}"),
+            };
+            imp.insert((w, name.to_string(), local.clone()));
+            local
         };
         for nm in r.names.iter().chain(&r.join_names) {
-            if let Some(&w) = owner_name.get(nm.as_str()).filter(|&&w| w != u) {
+            if let Some(w) = ref_owner(nm.as_str()).filter(|&w| w != u) {
                 want(nm, w, &mut deps);
             }
         }
@@ -1237,15 +1293,15 @@ pub(crate) fn views(path: &str, module: &Module) -> Vec<(UnitView, Vec<usize>)> 
     // Imports of the other units' names; exports of the own ones.
     let real_owned = |u: usize, local: &str| owner_name.get(local) == Some(&u);
     for (u, (view, _)) in out.iter_mut().enumerate() {
-        let mut per: FxHashMap<usize, Vec<String>> = FxHashMap::default();
-        for (w, nm) in std::mem::take(&mut imports_of[u]) {
+        let mut per: FxHashMap<usize, Vec<(String, String)>> = FxHashMap::default();
+        for (w, nm, local) in std::mem::take(&mut imports_of[u]) {
             if closed.contains_key(&nm) {
                 view.closed_refs.push(nm.clone());
             }
-            per.entry(w).or_default().push(nm);
+            per.entry(w).or_default().push((nm, local));
         }
         view.closed_refs.sort();
-        let mut per: Vec<(usize, Vec<String>)> = per.into_iter().collect();
+        let mut per: Vec<(usize, Vec<(String, String)>)> = per.into_iter().collect();
         per.sort();
         for (_, names) in per.iter_mut() {
             names.sort();
@@ -1257,10 +1313,7 @@ pub(crate) fn views(path: &str, module: &Module) -> Vec<(UnitView, Vec<usize>)> 
                 resolved_path: Some(p),
                 specifiers: names
                     .into_iter()
-                    .map(|n| ImportSpecifier::Named {
-                        imported: n.clone(),
-                        local: n,
-                    })
+                    .map(|(n, local)| ImportSpecifier::Named { imported: n, local })
                     .collect(),
                 is_native: false,
                 module_kind: Default::default(),

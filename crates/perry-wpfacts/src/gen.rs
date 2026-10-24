@@ -1475,7 +1475,32 @@ impl<'a> Gen<'a> {
     /// aborted unit reports every contract it consumed, but an open contract
     /// function: an aborted unit is unknown code holding it, as for one that
     /// escapes (`open_fn`).
-    pub(crate) fn reports(&self) -> Vec<String> {
+    ///
+    /// An aborted unit is unknown code holding everything its code names,
+    /// not only what its walk reached before the node bound stopped it: the
+    /// imports it names (its unit imports, the module imports among its
+    /// names) still unnamed are made first (their stand-ins, the layouts
+    /// their contracts reach, every key of a namespace), so each is
+    /// reported. A module import the unit never names is not its to hold.
+    pub(crate) fn reports(&mut self) -> Vec<String> {
+        if self.m.aborted {
+            let view = self.view;
+            let mut rest: Vec<(u32, String)> = self
+                .unnamed_imports
+                .iter()
+                .filter(|((_, local), (imp, _))| {
+                    view.is_none_or(|v| {
+                        v.ext_names.contains(local)
+                            || crate::decl_units::module_of(&imp.source) != imp.source
+                    })
+                })
+                .map(|(k, _)| k.clone())
+                .collect();
+            rest.sort_unstable();
+            for (mi, name) in rest {
+                self.import_value(mi, &name);
+            }
+        }
         let mut out: Vec<String> = self
             .stand_ins
             .iter()

@@ -1147,19 +1147,32 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
             for &si in level {
                 let s = &solves[si];
                 let u = per_unit[si].as_ref().expect("every unit solved");
-                // Published under the module's path (other modules import it)
-                // and the unit's (the module's other units import it).
+                // Published under the unit's path (the module's other units
+                // import it) and, when it is an export of the module, under
+                // the module's (other modules import it). A name exported to
+                // the module's units only is no export of the module: under
+                // the module's path it would stand for the module's binding
+                // of that name, another unit's (`var _C = class _C {..};
+                // export { _C }`: the module exports the binding, the class
+                // `_C` goes to the binding's unit only).
+                let module_export = |n: &String| !s.view.unit_exports.contains(n);
                 for ((p, n), c) in &u.contracts_out {
                     input.classes.insert((s.key.clone(), n.clone()), c.clone());
-                    input.classes.insert((p.clone(), n.clone()), c.clone());
+                    if module_export(n) {
+                        input.classes.insert((p.clone(), n.clone()), c.clone());
+                    }
                 }
                 for ((p, n), c) in &u.fn_contracts_out {
                     input.fns.insert((s.key.clone(), n.clone()), c.clone());
-                    input.fns.insert((p.clone(), n.clone()), c.clone());
+                    if module_export(n) {
+                        input.fns.insert((p.clone(), n.clone()), c.clone());
+                    }
                 }
                 for ((p, n), c) in &u.values_out {
                     input.values.insert((s.key.clone(), n.clone()), c.clone());
-                    input.values.insert((p.clone(), n.clone()), c.clone());
+                    if module_export(n) {
+                        input.values.insert((p.clone(), n.clone()), c.clone());
+                    }
                 }
                 for c in &u.layouts_out {
                     input.layouts.insert(c.display.clone(), c.clone());

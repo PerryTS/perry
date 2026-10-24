@@ -18,6 +18,7 @@ mod protocol_calls;
 mod receiver_this;
 mod summary;
 mod super_heritage;
+mod unit_alias;
 mod unit_ctor;
 mod unit_extends;
 mod unit_mode;
