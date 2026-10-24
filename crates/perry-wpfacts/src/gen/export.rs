@@ -1253,6 +1253,14 @@ impl<'a> Gen<'a> {
                 keys.sort_unstable();
                 keys.dedup();
                 for a in keys {
+                    // A hidden capture field (`__perry_cap_*`) is the class's
+                    // environment, not the instance's data (DECISIONS 117,
+                    // 128): reflection never shows it (the runtime's
+                    // `is_class_capture_key`), and only the class's own
+                    // members read it, in this unit. It does not leave.
+                    if perry_hir::cap_fields::cap_field_outer_id(&self.m.atoms[a as usize]).is_some() {
+                        continue;
+                    }
                     let mut ok = !self.sunk_fields.contains(&(tm, a));
                     let mut inner: Vec<(TmplId, Tok)> = Vec::new();
                     let mut prim = false;

@@ -133,11 +133,16 @@ impl Model {
             .then_some(self.funcs[f].args_all);
         let nparams = self.funcs[f].params.len();
         let nargs = self.calls[c].args.len();
+        // A hidden capture parameter holds its class environment slot,
+        // not what the call passes (DECISIONS 117, 127).
+        let caps: Vec<Option<NodeId>> = (0..nparams)
+            .map(|i| self.capture_param(f as FnIdx, i))
+            .collect();
         for i in 0..nargs {
             let a = self.calls[c].args[i];
             if i < nparams {
                 let p = self.funcs[f].params[i];
-                self.edge(a, p);
+                self.edge(caps[i].unwrap_or(a), p);
             } else if let Some(rest) = rest {
                 let fa = self.field_any_node_of_node(rest);
                 self.edge(a, fa);
@@ -149,7 +154,10 @@ impl Model {
         // Missing arguments are undefined.
         for i in nargs..nparams {
             let p = self.funcs[f].params[i];
-            self.add_prim(p, prim::UNDEF);
+            match caps[i] {
+                Some(env) => self.edge(env, p),
+                None => self.add_prim(p, prim::UNDEF),
+            }
         }
         let nspread = self.calls[c].spread.len();
         for j in 0..nspread {
@@ -164,8 +172,10 @@ impl Model {
                 },
             );
             for i in 0..nparams {
-                let p = self.funcs[f].params[i];
-                self.edge(elems, p);
+                if caps[i].is_none() {
+                    let p = self.funcs[f].params[i];
+                    self.edge(elems, p);
+                }
             }
             if let Some(rest) = rest {
                 let fa = self.field_any_node_of_node(rest);

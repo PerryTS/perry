@@ -1036,6 +1036,11 @@ impl Model {
         let fparams = self.funcs[f as usize].params.clone();
         let c = call as usize;
         let nargs = self.calls[c].args.len();
+        // A hidden capture parameter holds its class environment slot,
+        // not what the call passes (DECISIONS 117, 127).
+        let caps: Vec<Option<NodeId>> = (0..terms.len())
+            .map(|i| self.capture_param(f, i))
+            .collect();
         for i in 0..terms.len() {
             let mut dsts = Vec::with_capacity(2);
             if terms[i] != NO_NODE {
@@ -1045,7 +1050,9 @@ impl Model {
                 dsts.push(fparams[i]);
             }
             for &d in &dsts {
-                if i < nargs {
+                if let Some(env) = caps[i] {
+                    self.edge(env, d);
+                } else if i < nargs {
                     let a = self.calls[c].args[i];
                     self.edge(a, d);
                 } else {
@@ -1064,6 +1071,9 @@ impl Model {
                 },
             );
             for i in 0..terms.len() {
+                if caps[i].is_some() {
+                    continue;
+                }
                 if terms[i] != NO_NODE {
                     self.edge(elems, terms[i]);
                 }
@@ -1367,7 +1377,10 @@ fn compose(m: &mut Model, obs_of: &dyn Fn(FnIdx, &Model) -> Vec<NodeId>) -> (usi
                     }
                     s.expanded.push((*ci as u32, g));
                     let sg = own_of[&g].clone();
-                    expand(&mut s, *ci, &sg, &obs_of(g, m));
+                    let caps: Vec<Option<NodeId>> = (0..m.funcs[g as usize].params.len())
+                        .map(|i| m.capture_param(g, i))
+                        .collect();
+                    expand(&mut s, *ci, &sg, &obs_of(g, m), &caps);
                     any = true;
                     n += 1;
                 }
@@ -1386,7 +1399,9 @@ fn compose(m: &mut Model, obs_of: &dyn Fn(FnIdx, &Model) -> Vec<NodeId>) -> (usi
 /// operands to it the way a binding would: arguments into the parameters
 /// (and into `g`'s observation parameters `gobs`), missing ones undefined,
 /// spread elements into every parameter, `g`'s result into the call's.
-fn expand(s: &mut Summary, ci: usize, g: &Summary, gobs: &[NodeId]) {
+/// A hidden capture parameter (`caps`) takes its class environment slot,
+/// not the call's argument (DECISIONS 117, 127).
+fn expand(s: &mut Summary, ci: usize, g: &Summary, gobs: &[NodeId], caps: &[Option<NodeId>]) {
     let off = s.nslots;
     let coff = s.calls.len() as u32;
     let tr = |x: NodeId| {
@@ -1445,7 +1460,9 @@ fn expand(s: &mut Summary, ci: usize, g: &Summary, gobs: &[NodeId]) {
     let mut undef = NO_NODE;
     for (i, ds) in dsts.iter().enumerate() {
         for &d in ds {
-            if i < call.args.len() {
+            if let Some(env) = caps.get(i).copied().flatten() {
+                s.edges.push((env, d));
+            } else if i < call.args.len() {
                 if call.args[i] != NO_NODE {
                     s.edges.push((call.args[i], d));
                 }
@@ -1467,7 +1484,10 @@ fn expand(s: &mut Summary, ci: usize, g: &Summary, gobs: &[NodeId]) {
                 dst: elems,
             },
         ));
-        for ds in &dsts {
+        for (i, ds) in dsts.iter().enumerate() {
+            if caps.get(i).copied().flatten().is_some() {
+                continue;
+            }
             for &d in ds {
                 s.edges.push((elems, d));
             }

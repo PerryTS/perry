@@ -150,6 +150,41 @@ fn a_class_bound_through_its_self_cell_is_a_contract() {
     assert_eq!(k_kind(&u), k_kind(&w), "T.k per unit vs whole-program");
 }
 
+/// DECISIONS 127, 128 (AWFY Richards as wrapped): `Richards::benchmark`
+/// runs `new Scheduler()`, whose 21 hidden capture parameters take
+/// `Scheduler`'s environment slots, not the `this.__perry_cap_*` the call
+/// reads off a receiver other units choose (127); `newInstance` hands out a
+/// `Richards`, whose `__perry_cap_*` fields hold the richards classes and
+/// do not leave (128). Either one missing breaks every richards class per
+/// unit (10 of 122 proven). Per unit proves every whole-program site but
+/// `mouse.link` in `RBObject::append`: its parameter is a contract marker
+/// per unit (DECISIONS 122, design, not built).
+#[test]
+fn richards_per_unit_proves_what_the_whole_program_proves() {
+    let (w, u) = both(&T3);
+    let (pw, pu) = (proven_sites(&w), proven_sites(&u));
+    let lost: Vec<&String> = pw.difference(&pu).collect();
+    assert!(pw.len() >= 120, "whole-program proves {}", pw.len());
+    let classes = |pf: &ProgramFacts| -> Vec<String> {
+        pf.templates
+            .iter()
+            .filter(|t| t.escape.is_some() && t.display.starts_with("richards.js:") && !t.display.contains("__"))
+            .filter(|t| !t.display.contains('#'))
+            .map(|t| format!("{} {}", t.display, t.escape.as_deref().unwrap_or("")))
+            .collect()
+    };
+    assert!(
+        lost.iter().all(|s| s.as_str() == "/t3/richards.js@14169.link") && classes(&u) == classes(&w),
+        "per unit {} of whole-program {} proven; lost {:?}\nescaped per unit {:?}\nwhole-program {:?}\nbroken {:?}",
+        pu.len(),
+        pw.len(),
+        lost,
+        classes(&u),
+        classes(&w),
+        u.broken
+    );
+}
+
 #[test]
 #[ignore]
 fn scratch_cjs() {
