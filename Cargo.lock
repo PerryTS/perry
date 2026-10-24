@@ -3273,29 +3273,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "http-body"
-version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1efedce1fb8e6913f23e0c92de8e62cd5b772a67e7b3946df930a62566c93184"
-dependencies = [
- "bytes",
- "http",
-]
-
-[[package]]
-name = "http-body-util"
-version = "0.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23169fe34a5fbcdd3f3862e78fb9b6fccd5f02a6dc6f732547005d45631ce71c"
-dependencies = [
- "bytes",
- "futures-core",
- "http",
- "http-body",
- "pin-project-lite",
-]
-
-[[package]]
 name = "httparse"
 version = "1.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5645,7 +5622,6 @@ dependencies = [
  "perry-ext-ws",
  "perry-ffi",
  "perry-runtime",
- "perry-tls-session",
  "pkcs5 0.8.1",
  "ring",
  "rustls",
@@ -5973,7 +5949,6 @@ dependencies = [
  "hkdf 0.13.0",
  "hmac 0.13.0",
  "http",
- "http-body-util",
  "image",
  "libc",
  "md-5 0.11.0",
@@ -5999,7 +5974,6 @@ dependencies = [
  "rsa",
  "rusqlite",
  "rustls",
- "rustls-native-certs",
  "rustls-pemfile",
  "scraper",
  "scrypt 0.11.0",
@@ -6010,10 +5984,8 @@ dependencies = [
  "sha1 0.11.0",
  "sha2 0.11.0",
  "sha3 0.10.9",
- "sha3 0.12.0",
  "sha3-utils",
  "shake",
- "spki 0.8.0",
  "turnloop-http",
  "turnloop-smtp",
  "turnloop-tls",
@@ -6262,13 +6234,11 @@ dependencies = [
 name = "perry-updater"
 version = "0.5.1663"
 dependencies = [
- "anyhow",
  "ed25519-dalek",
  "perry-base64",
  "perry-hex",
  "perry-runtime",
  "semver",
- "serde",
  "sha2 0.11.0",
  "tempfile",
 ]
@@ -7641,17 +7611,6 @@ checksum = "be176f1a57ce4e3d31c1a166222d9768de5954f811601fb7ca06fc8203905ce1"
 dependencies = [
  "digest 0.11.3",
  "keccak 0.2.0",
-]
-
-[[package]]
-name = "sha3"
-version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc9bad02c26382724b2d2692c6f179285e4b54eeecd7968f52a50059c3c11759"
-dependencies = [
- "digest 0.11.3",
- "keccak 0.2.0",
- "sponge-cursor",
 ]
 
 [[package]]
