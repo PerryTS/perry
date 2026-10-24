@@ -608,7 +608,10 @@ impl<'a> Gen<'a> {
                 property,
                 byte_offset,
             } => {
-                let o = self.expr(fx, object);
+                let o = match self.ns_member(mi, object, property, false) {
+                    Some(o) => o,
+                    None => self.expr(fx, object),
+                };
                 let a = self.m.atom(property);
                 if *byte_offset != 0 {
                     self.read_sites.push(ReadSite {
