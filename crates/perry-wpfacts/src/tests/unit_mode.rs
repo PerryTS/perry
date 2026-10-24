@@ -2139,6 +2139,7 @@ fn an_argument_contract_ascends_so_the_units_reach_a_fixpoint() {
     let pf = bounded(60, move || units_of(&[("ee", EE_FIRST), ("m", m)]))
         .expect("D16: the per-unit fixpoint did not end in 60 s");
     assert_eq!(pf.rounds, 4, "rounds {:?}", pf.round_work);
+}
 
 #[test]
 fn a_store_into_a_class_field_is_a_store_effect() {

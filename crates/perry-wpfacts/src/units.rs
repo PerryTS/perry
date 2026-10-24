@@ -712,7 +712,7 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
             }
             // A closed class's constructions, from any module (§18.13).
             for (k, ac) in &u.ctor_args_out {
-                args.entry(k.clone()).or_default().join(ac);
+                latest.entry(k.clone()).or_default().join(ac);
             }
         }
         let mut args = input.args.clone();
