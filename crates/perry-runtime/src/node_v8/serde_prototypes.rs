@@ -166,7 +166,7 @@ mod tests {
 
     #[test]
     fn serializer_instances_share_declared_methods_and_prototypes() {
-        crate::object::native_module_registry::js_nm_install_v8();
+        crate::object::js_nm_install_v8();
         let roots = crate::gc::RuntimeHandleScope::new();
         let first = roots.root_nanbox_f64(js_v8_serializer_new(undefined()));
         let second = roots.root_nanbox_f64(js_v8_serializer_new(undefined()));
@@ -210,7 +210,7 @@ mod tests {
 
     #[test]
     fn default_constructor_alias_uses_the_real_inheritance_chain() {
-        crate::object::native_module_registry::js_nm_install_v8();
+        crate::object::js_nm_install_v8();
         let roots = crate::gc::RuntimeHandleScope::new();
         let value = unsafe {
             super::super::serde_constructor("v8", "DefaultSerializer", std::ptr::null(), 0).unwrap()
