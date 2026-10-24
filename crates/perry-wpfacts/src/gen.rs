@@ -1122,8 +1122,9 @@ impl<'a> Gen<'a> {
         // DECISIONS 140: the calls its body makes through a parameter. The
         // defining unit described their arguments; this unit runs each call
         // on what it passes (the function is this unit's, or one it holds a
-        // contract of). What they return goes to the defining unit, which
-        // reads it as unknown: it leaves.
+        // contract of; DECISIONS 144: a method call runs that method of
+        // it). What they return goes to the defining unit, which reads it as
+        // unknown: it leaves.
         for pc in &c.param_calls {
             let i = pc.param as usize;
             let Some(&p) = params.get(i) else {
@@ -1142,7 +1143,13 @@ impl<'a> Gen<'a> {
                 self.fill_described(mi, c, d, &d.value, this, &params, a, why);
                 args.push(a);
             }
-            let res = self.call_value(p, ThisArg::Undef, args, Vec::new());
+            let res = match &pc.key {
+                None => self.call_value(p, ThisArg::Undef, args, Vec::new()),
+                Some(k) => {
+                    let key = Key::Named(self.m.atom(k));
+                    self.mcall(p, key, args, Vec::new())
+                }
+            };
             self.m.sink_node(res, r);
         }
         n

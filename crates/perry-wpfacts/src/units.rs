@@ -148,11 +148,13 @@ impl Described {
 
 /// DECISIONS 140: the body calls parameter `param`'s argument with these
 /// arguments (no receiver: `fn(a, b)`), so the caller's unit, which knows
-/// the function it passed, runs that call; one entry per (parameter, number
-/// of arguments), its arguments joined over the calls.
+/// the function it passed, runs that call; one entry per (parameter, key,
+/// number of arguments), its arguments joined over the calls. With `key`
+/// the body calls that method of the argument (`p.k(a, b)`, DECISIONS 144).
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ParamCall {
     pub param: u32,
+    pub key: Option<String>,
     pub args: Vec<Described>,
 }
 
@@ -164,10 +166,10 @@ impl ParamCall {
     }
 }
 
-/// Joins `b`'s calls into `a` by (parameter, number of arguments).
+/// Joins `b`'s calls into `a` by (parameter, key, number of arguments).
 pub(crate) fn join_param_calls(a: &mut Vec<ParamCall>, b: &[ParamCall]) {
-    join_keyed(a, b, |x| (x.param, x.args.len()), |x, y| x.join(y));
-    a.sort_by_key(|x| (x.param, x.args.len()));
+    join_keyed(a, b, |x| (x.param, x.key.clone(), x.args.len()), |x, y| x.join(y));
+    a.sort_by(|x, y| (x.param, &x.key, x.args.len()).cmp(&(y.param, &y.key, y.args.len())));
 }
 
 #[derive(Clone, Debug, PartialEq)]

@@ -1069,9 +1069,10 @@ pub struct Model {
     pub closed_pub: crate::pts::FxHashSet<Tok>,
     pub contract_rets: Vec<(FnIdx, NodeId)>,
     /// The calls through a contract function's parameter marker
-    /// (function, parameter, call): their arguments go to the caller's
-    /// unit, described as the result is (DECISIONS 140).
-    pub marker_calls: Vec<(FnIdx, u32, CallId)>,
+    /// (function, parameter, method key, call): `p(..)` (no key, DECISIONS
+    /// 140) or `p.k(..)` (DECISIONS 144). Their arguments go to the
+    /// caller's unit, described as the result is.
+    pub marker_calls: Vec<(FnIdx, u32, Option<Atom>, CallId)>,
     /// A contract function's parameter markers: one object token per
     /// parameter standing for everything the caller passes (anything read
     /// from it is the marker again), and what the callee did with it

@@ -19,33 +19,10 @@ impl Model {
             // callee of its own (DECISIONS 143): the values are called.
             let cs = &self.calls[call as usize];
             let plain = this_tok.is_none() && matches!(cs.this, ThisArg::Undef) && cs.spread.is_empty();
-            let own: Option<Vec<(FnIdx, u32)>> = plain.then(|| {
-                self.marker_members(t)
-                    .into_iter()
-                    .map(|m| match self.param_marker.get(&m) {
-                        _ if self.beside_values(m) => Some(None),
-                        Some(&(f, i))
-                            if i != u32::MAX
-                                && self.marker_of.get(&(f, i)) == Some(&m)
-                                && !self.marker_is_top(m) =>
-                        {
-                            Some(Some((f, i)))
-                        }
-                        _ => None,
-                    })
-                    .collect::<Option<Vec<_>>>()
-            }).flatten().map(|v| v.into_iter().flatten().collect::<Vec<_>>()).filter(|v| !v.is_empty());
-            if let Some(own) = own {
+            if let Some(own) = plain.then(|| self.own_param_members(t)).flatten() {
                 if self.bind_done.insert((call, t, u32::MAX - 3)) {
                     self.mark_use(t, crate::model::MARK_READ);
-                    for (f, i) in own {
-                        if !self.marker_calls.contains(&(f, i, call)) {
-                            self.marker_calls.push((f, i, call));
-                        }
-                    }
-                    let ret = self.calls[call as usize].ret;
-                    self.add_tok(ret, TOP);
-                    self.add_prim(ret, prim::ALL);
+                    self.marker_call(own, None, call);
                 }
                 return;
             }
@@ -102,6 +79,43 @@ impl Model {
                 self.mark_use(t, crate::model::MARK_ESCAPE);
             }
         }
+    }
+
+    /// The own parameters marker `t` stands for (DECISIONS 140): its
+    /// members, each a contract function's own parameter marker that has
+    /// not escaped; a member with values beside it adds none (DECISIONS
+    /// 143). `None`: some member is no such marker, or none is left.
+    fn own_param_members(&self, t: Tok) -> Option<Vec<(FnIdx, u32)>> {
+        self.marker_members(t)
+            .into_iter()
+            .map(|m| match self.param_marker.get(&m) {
+                _ if self.beside_values(m) => Some(None),
+                Some(&(f, i))
+                    if i != u32::MAX
+                        && self.marker_of.get(&(f, i)) == Some(&m)
+                        && !self.marker_is_top(m) =>
+                {
+                    Some(Some((f, i)))
+                }
+                _ => None,
+            })
+            .collect::<Option<Vec<_>>>()
+            .map(|v| v.into_iter().flatten().collect::<Vec<_>>())
+            .filter(|v| !v.is_empty())
+    }
+
+    /// Records a call through the parameters `own` (`key`: a method of
+    /// theirs) for the caller's unit to run (DECISIONS 140/144); its
+    /// result is that unknown code's.
+    fn marker_call(&mut self, own: Vec<(FnIdx, u32)>, key: Option<Atom>, call: CallId) {
+        for (f, i) in own {
+            if !self.marker_calls.contains(&(f, i, key, call)) {
+                self.marker_calls.push((f, i, key, call));
+            }
+        }
+        let ret = self.calls[call as usize].ret;
+        self.add_tok(ret, TOP);
+        self.add_prim(ret, prim::ALL);
     }
 
     /// Unknown callee (⊤ or an opaque builtin function value): arguments
@@ -610,6 +624,23 @@ impl Model {
         } else {
             crate::model::MARK_ESCAPE
         };
+        // DECISIONS 144: a method call on a parameter's own marker
+        // (`p.forEach(cb)`, `key.compareTo(k)`) is a call the caller's unit
+        // runs on the value it passed, as a plain call through it is
+        // (DECISIONS 140): its receiver use is a read of the key, the
+        // arguments go to the caller's unit described as the result is.
+        if let (Key::Named(a), None, false) = (key, virt, self.protocol_calls.contains(&call)) {
+            let plain = self.calls[call as usize].spread.is_empty();
+            if let Some(own) = plain.then(|| self.own_param_members(t)).flatten() {
+                if self.bind_done.insert((call, t, u32::MAX - 4)) {
+                    self.mark_use(t, crate::model::MARK_READ);
+                    let r = self.keyed_reach_of(t, a);
+                    self.mark_use(r, crate::model::MARK_READ);
+                    self.marker_call(own, Some(a), call);
+                }
+                return;
+            }
+        }
         self.mark_use(t, bits);
         if t == TOP {
             self.call_tok(call, TOP, Some(TOP));

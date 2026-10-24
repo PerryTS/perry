@@ -662,7 +662,7 @@ fn fn_contract_of(
     // DECISIONS 140: the calls the body makes through a parameter marker,
     // each argument described as the result is.
     let mut param_calls: Vec<units::ParamCall> = Vec::new();
-    for &(f2, i, call) in &g.m.marker_calls {
+    for &(f2, i, key, call) in &g.m.marker_calls {
         if f2 != f {
             continue;
         }
@@ -674,7 +674,8 @@ fn fn_contract_of(
                 describe_nodes(g, templates, f, vec![a], top, layouts_out, open_tm)
             })
             .collect();
-        units::join_param_calls(&mut param_calls, &[units::ParamCall { param: i, args }]);
+        let key = key.map(|a| g.m.atoms[a as usize].clone());
+        units::join_param_calls(&mut param_calls, &[units::ParamCall { param: i, key, args }]);
     }
     // The receiver marker of a published method (DECISIONS 57); without
     // one nothing is known of what the body does to its receiver.

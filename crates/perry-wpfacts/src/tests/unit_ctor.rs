@@ -323,3 +323,46 @@ fn a_store_into_an_argument_handed_through_a_parameter_reaches_its_owner() {
     assert!(broken || !u.kind.top, "{}", pf.dump_text());
     assert!(broken || u.kind.prims & w.kind.prims == w.kind.prims, "{}", pf.dump_text());
 }
+
+/// DECISIONS 144: CD's `reduceCollisionSet(motions)` calls a method of its
+/// parameter (`motions.forEach(cb)`), RedBlackTree.put calls one of its key
+/// (`key.compareTo(k)`). The value is the caller unit's: that unit runs the
+/// method on what it passed, with the arguments the contract describes, as
+/// it runs a call through a parameter (DECISIONS 140), so the instance does
+/// not escape and the callback's reads stay on the class.
+const PARAM_MCALL: &str = r#"
+    class Val { v: number; constructor(v: number) { this.v = v; } }
+    class Coll {
+      val: Val;
+      constructor() { this.val = new Val(1); }
+      each(fn: (x: Val) => void): void { fn(this.val); }
+    }
+    class Key {
+      k: number;
+      constructor(k: number) { this.k = k; }
+      cmp(o: Key): number { return this.k - o.k; }
+    }
+    class Det {
+      reduce(c: Coll): number { let s = 0; c.each((x: Val) => { s += x.v; }); return s; }
+      put(key: Key, other: Key): number { return key.cmp(other); }
+    }
+    const d = new Det();
+    console.log(d.reduce(new Coll()) + d.put(new Key(1), new Key(2)));
+    "#;
+
+#[test]
+fn a_method_call_on_a_parameter_runs_in_the_callers_unit() {
+    let pf = units(PARAM_MCALL);
+    let whole = facts(PARAM_MCALL);
+    // The callback itself is Det's function handed to the caller's unit as
+    // an argument: no contract describes a function there yet, so it is ⊤
+    // to the caller and Val, passed to it, escapes (DECISIONS 147, open).
+    // What the method calls own (Coll, Key, their methods) stays whole.
+    // (`o.k` inside Key.cmp reads a published method's parameter: E0 per
+    // unit with or without Det, DECISIONS 148, open.)
+    let own = |b: &String| b.contains("Coll") || b.contains("Key");
+    assert!(!pf.broken.iter().any(own), "{:?}\n{}", pf.broken, pf.dump_text());
+    for k in ["val"] {
+        assert_eq!(verdicts(&pf, k), verdicts(&whole, k), "{k}\n{}", pf.dump_text());
+    }
+}
