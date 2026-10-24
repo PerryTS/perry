@@ -171,6 +171,10 @@ impl Region {
             }
         }
     }
+    /// True when every OS page of  is committed in THIS Region.
+    pub(super) fn row_committed(&self, row: usize) -> bool {
+        self.pages(row).all(|p| self.live.get(p).is_some_and(|&n| n != 0))
+    }
     pub(super) fn committed_bytes(&self) -> usize {
         self.live.iter().filter(|&&n| n != 0).count() * self.page
     }

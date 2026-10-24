@@ -431,15 +431,9 @@ fn keyed_ways_never_rebind_a_published_proofs_key() {
     }
 }
 
-// OPEN (DPA-R-done "Open questions" 1): a site memo is compiled-site storage
-// shared by every agent, but it stores the receiver's header word, and a
-// DYNAMIC word is a per-agent row: two agents' different shapes can carry the
-// same word, so one agent's (word, slot) proof answers for the other's shape.
-// This test is that witness. It stays red until the owner decides how shared
-// site words are made agent-proof (static-only, identity-keyed, or
-// agent-partitioned dynamic rows); it must not be deleted or weakened.
+// This test is that witness: dynamic rows are process-unique (chunked), so
+// the shared memo word names one shape in every agent.
 #[test]
-#[ignore = "DPA-R open question 1: shared site memos hold per-agent dynamic words"]
 fn shared_keyed_ways_do_not_mix_different_keys_proofs() {
     let _lock = crate::gc::global_side_table_test_lock();
     let memo = std::sync::Arc::new(unsafe { std::mem::zeroed::<KeyedSiteMemo>() });

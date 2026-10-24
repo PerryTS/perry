@@ -32,13 +32,14 @@ fn page_boundary_keeps_partial_page_and_dynamic_rows_never_reuse() {
     let mut slab = ShapeSlab::new();
     let first = slab.publish_dynamic(ShapeId(SHAPE_ID_BASE + 5), record()).unwrap();
     let second = slab.publish_dynamic(ShapeId(SHAPE_ID_BASE + 6), record()).unwrap();
-    assert_eq!(first.word.row().0, NATIVE_LAYOUT_ROWS);
-    assert_eq!(second.word.row().0, NATIVE_LAYOUT_ROWS + 1);
+    let start = first.word.row().0;
+    assert!(start >= NATIVE_LAYOUT_ROWS && start % super::DYNAMIC_CHUNK_ROWS == 0);
+    assert_eq!(second.word.row().0, start + 1);
     slab.remove(first.identity).unwrap();
     assert!(slab.region.committed_bytes() != 0);
     assert_eq!(unsafe { (*slab.record_for_handle(second.word)).shape_id }, second.identity.0);
     let third = slab.publish_dynamic(ShapeId(SHAPE_ID_BASE + 7), record()).unwrap();
-    assert_eq!(third.word.row().0, NATIVE_LAYOUT_ROWS + 2);
+    assert_eq!(third.word.row().0, start + 2);
     let boundary = (slab.region.page / 128) as u32;
     for row in [boundary - 1, boundary] {
         let identity = ShapeId(SHAPE_ID_BASE + 100 + row);
@@ -64,8 +65,10 @@ fn publication_checks_capacity_tags_and_identity_ownership() {
         Err(PublishError::RowConflict));
     assert_eq!(slab.publish_static(ShapeId(id.0 + 1), LayoutWord(u32::MAX), record()),
         Err(PublishError::InvalidWord));
-    slab.next_row = slab.region.capacity() as u32;
-    assert_eq!(slab.publish_dynamic(ShapeId(id.0 + 1), record()), Err(PublishError::Capacity));
+    assert_eq!(
+        super::claim_dynamic_chunk(slab.static_rows, slab.static_rows as usize),
+        Err(PublishError::Capacity)
+    );
 }
 
 #[test]
@@ -75,4 +78,33 @@ fn record_abi_offsets_are_target_independent() {
     assert_eq!(std::mem::offset_of!(ShapeRecord, family_desc_index_plus_one), 76);
     assert_eq!(std::mem::offset_of!(ShapeRecord, shape_id), 120);
     assert_eq!(std::mem::offset_of!(ShapeRecord, layout_word), 124);
+}
+
+#[test]
+fn agents_never_receive_the_same_dynamic_row() {
+    // Two agents publish dynamic rows concurrently; their rows are disjoint,
+    // chunk-aligned and committed only in the owner's Region. Fails if the
+    // chunk counter were per-agent (both would start at the same row).
+    let rows = |n: u32| {
+        std::thread::spawn(move || {
+            let mut slab = ShapeSlab::new();
+            let mut out = Vec::new();
+            for i in 0..n {
+                let id = ShapeId(SHAPE_ID_BASE + 1000 + i);
+                out.push(slab.publish_dynamic(id, record()).unwrap().word.row().0);
+            }
+            // A row of the other agent's chunk is not committed here.
+            let foreign = out[0] + super::DYNAMIC_CHUNK_ROWS * 1000;
+            assert!(!slab.region.row_committed(foreign as usize));
+            out
+        })
+    };
+    let (a, b) = (rows(100), rows(100));
+    let (a, b) = (a.join().unwrap(), b.join().unwrap());
+    for r in &a {
+        assert!(!b.contains(r), "row {r} handed to two agents");
+    }
+    let chunks: std::collections::HashSet<u32> =
+        a.iter().chain(&b).map(|r| r / super::DYNAMIC_CHUNK_ROWS).collect();
+    assert_eq!(chunks.len(), 2 * 100usize.div_ceil(super::DYNAMIC_CHUNK_ROWS as usize));
 }

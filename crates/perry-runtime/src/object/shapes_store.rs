@@ -1249,7 +1249,11 @@ pub(crate) struct ShapeSlab {
     /// The ordinary band's chunks live here (`flat.rs`).
     region: flat::Region,
     static_rows: u32,
+    /// Next free dynamic row inside this agent's current chunk (the static
+    /// row count before the first claim). Also the high-water bound readers use.
     next_row: u32,
+    /// End (exclusive) of the current chunk; reaching it claims another.
+    chunk_end: u32,
     /// Present records.
     len: usize,
     /// This is the agent's slab (the runtime state's shape table), so it
@@ -1296,6 +1300,7 @@ impl ShapeSlab {
             region: flat::Region::new(),
             static_rows: crate::codegen_abi::NATIVE_LAYOUT_ROWS,
             next_row: crate::codegen_abi::NATIVE_LAYOUT_ROWS,
+            chunk_end: 0,
             len: 0,
             agent: false,
             protos: Default::default(),
@@ -1475,8 +1480,10 @@ impl ShapeSlab {
         if self.record_ptr(identity).is_some() {
             return Err(PublishError::IdentityConflict);
         }
-        if self.next_row as usize >= self.region.capacity() {
-            return Err(PublishError::Capacity);
+        if self.next_row >= self.chunk_end {
+            let start = claim_dynamic_chunk(self.static_rows, self.region.capacity())?;
+            self.next_row = start;
+            self.chunk_end = start + DYNAMIC_CHUNK_ROWS;
         }
         let word = Self::word_for(identity, self.next_row, &record)?;
         let published = self.publish(identity, word, record)?;
@@ -1778,6 +1785,7 @@ impl ShapeSlab {
         if word.0 & crate::codegen_abi::LAYOUT_TAG == 0
             || word.band() >= 3
             || word.row().0 >= self.next_row
+            || (word.row().0 >= self.static_rows && !self.region.row_committed(word.row().0 as usize))
         {
             return None;
         }
@@ -2296,3 +2304,23 @@ pub(super) use transitions::integrity_facts_key;
 #[cfg(test)]
 #[path = "shapes_store/dense_tests.rs"]
 mod dense_tests;
+
+/// Dynamic rows per chunk: one 4 KiB page of 128-byte records.
+pub(crate) const DYNAMIC_CHUNK_ROWS: u32 = 4096 / 128;
+/// Process-wide count of dynamic chunks claimed. Chunk k is the rows
+/// align_up(S, CHUNK) + k * CHUNK.. in every agent's Region, so a dynamic
+/// LayoutWord names one shape in the whole process. One atomic per 32 rows.
+static DYNAMIC_CHUNKS_CLAIMED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// Claim the next process-unique chunk; returns its first row.
+pub(super) fn claim_dynamic_chunk(static_rows: u32, capacity: usize) -> Result<u32, PublishError> {
+    use std::sync::atomic::Ordering::Relaxed;
+    let base = static_rows.div_ceil(DYNAMIC_CHUNK_ROWS) * DYNAMIC_CHUNK_ROWS;
+    let k = DYNAMIC_CHUNKS_CLAIMED
+        .fetch_update(Relaxed, Relaxed, |k| {
+            let end = u64::from(base) + (u64::from(k) + 1) * u64::from(DYNAMIC_CHUNK_ROWS);
+            (end <= capacity as u64).then_some(k + 1)
+        })
+        .map_err(|_| PublishError::Capacity)?;
+    Ok(base + k * DYNAMIC_CHUNK_ROWS)
+}
