@@ -755,8 +755,13 @@ impl Model {
                     }
                 }
             }
-            Cons::HandOver { reason } => {
+            Cons::HandOver { reason, ctor, arg } => {
                 for &t in toks {
+                    if self.is_marker(t) {
+                        self.handed.insert((t, ctor, arg));
+                        self.hand_over_marker(t, reason);
+                        continue;
+                    }
                     let stand_in = matches!(self.toks[t as usize], TokKind::Obj(tm, _)
                         if self.foreign.contains_key(&tm));
                     // DECISIONS 149e: an array leaves by its element cell.
@@ -2263,6 +2268,39 @@ impl Model {
                     self.escape(m, reason);
                 }
             }
+            for reason in self.handover_watch.get(&r).cloned().unwrap_or_default() {
+                self.hand_over_marker(m, reason);
+            }
+        }
+    }
+
+    /// DECISIONS 152: marker `t` handed to a closed class's constructor
+    /// (`Cons::HandOver`). A parameter's own marker is its function's: that
+    /// function's contract hands it over, and each caller's unit passes
+    /// what it holds to the constructor itself. What a parameter reaches
+    /// is not the parameter (its keyed reach marker shares the parameter's
+    /// entry, §18.4). An argument marker stands
+    /// for its members, also those that link in later
+    /// (`replay_marker_links`); any other marker (a receiver's, a reach,
+    /// also an argument marker's reach) escapes, as a value no contract
+    /// describes does.
+    fn hand_over_marker(&mut self, t: Tok, reason: u32) {
+        if self.is_arg_marker(t) && !self.reach_marker.contains(&t) {
+            let w = self.handover_watch.entry(t).or_default();
+            if w.contains(&reason) {
+                return;
+            }
+            w.push(reason);
+            for m in self.arg_members.get(&t).cloned().unwrap_or_default() {
+                self.hand_over_marker(m, reason);
+            }
+            return;
+        }
+        let own = self.param_marker.get(&t).is_some_and(|&(f, j)| {
+            j != u32::MAX && self.marker_of.get(&(f, j)) == Some(&t)
+        });
+        if !own {
+            self.escape(t, reason);
         }
     }
 
@@ -2430,7 +2468,7 @@ impl Model {
                 format!("chain {n} {origin} {} {act:?}", self.key_name(*key))
             }
             Cons::TopSink { reason } => format!("top {n} {reason}"),
-            Cons::HandOver { reason } => format!("handover {n} {reason}"),
+            Cons::HandOver { reason, ctor, arg } => format!("handover {n} {reason} {ctor} {arg}"),
             Cons::OwnOnly { f, dst } => format!("ownonly {n} {f} {dst}"),
             Cons::StoreOut {
                 f,

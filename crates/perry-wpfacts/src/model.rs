@@ -411,7 +411,11 @@ pub enum Cons {
     /// leaves by its element cell (DECISIONS 94, 149e: the parameter is
     /// checked as a published value, `Gen::check_value`, and the argument
     /// contract names it); any other token escapes, with the reason.
-    HandOver { reason: u32 },
+    /// DECISIONS 152: a parameter marker of this unit's function (its
+    /// callers' value) is handed over by that function's contract
+    /// (`FnContract::param_handovers`): the callers' units pass what they
+    /// hold to argument `arg` of the constructor `ctor` themselves.
+    HandOver { reason: u32, ctor: Tok, arg: u32 },
     /// DECISIONS 149d: what a receiver-rooted store of function `f` puts
     /// into an object of this unit: every value but `f`'s parameter and
     /// argument markers, which are `f`'s receiver flow (`Cons::StoreOut`).
@@ -1027,6 +1031,12 @@ pub struct Model {
     pub arg_stores: FxHashMap<Tok, Vec<(Atom, NodeId, SiteId)>>,
     pub arg_store_done: crate::pts::FxHashSet<(Tok, Atom, NodeId)>,
     pub arg_src_watch: FxHashMap<Tok, Vec<(FnIdx, u32, u32)>>,
+    /// DECISIONS 152: the markers handed to a closed class's constructor
+    /// (marker, constructor token, argument), published per parameter by
+    /// the function the marker is of; per argument marker the reasons a
+    /// member that is no parameter marker escapes with, as members link in.
+    pub handed: crate::pts::FxHashSet<(Tok, Tok, u32)>,
+    pub handover_watch: FxHashMap<Tok, Vec<u32>>,
     /// DECISIONS 136: a store flow whose stored value is (what) an argument
     /// marker (reaches): (stored marker, flow, reason) per argument marker
     /// whose members it stands for, replayed as members link in; the
@@ -1916,6 +1926,7 @@ impl Model {
         });
         if self.arg_stores.contains_key(&r)
             || self.arg_src_watch.contains_key(&r)
+            || self.handover_watch.contains_key(&r)
             || self.arg_src_flows.contains_key(&r)
             || keyed_stores
         {

@@ -179,6 +179,18 @@ pub(crate) fn join_param_calls(a: &mut Vec<ParamCall>, b: &[ParamCall]) {
     a.sort_by(|x, y| (x.param, &x.key, x.args.len()).cmp(&(y.param, &y.key, y.args.len())));
 }
 
+/// DECISIONS 152: the body hands parameter `param`'s argument to argument
+/// `arg` of the constructor of closed class `class` (another unit's, by its
+/// key, design §18.13): the caller's unit, which holds the value, passes it
+/// there itself, so it reaches that constructor's argument contract as the
+/// caller's own construction would.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct HandOverArg {
+    pub param: u32,
+    pub class: (String, String),
+    pub arg: u32,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct FnContract {
     pub name: String,
@@ -238,6 +250,8 @@ pub(crate) struct FnContract {
     pub param_flows: Vec<StoreFlow>,
     /// The calls the body makes through a parameter (DECISIONS 140).
     pub param_calls: Vec<ParamCall>,
+    /// The arguments it hands to a closed class's constructor (DECISIONS 152).
+    pub param_handovers: Vec<HandOverArg>,
     /// The binding name of a closed function (decision 19): a unit that
     /// calls it as a value publishes what it passes under this name.
     pub closed: Option<String>,
@@ -397,6 +411,8 @@ impl FnContract {
             (x.dst, x.reach, &x.via, &x.key).cmp(&(y.dst, y.reach, &y.via, &y.key))
         });
         join_param_calls(&mut self.param_calls, &o.param_calls);
+        union_into(&mut self.param_handovers, &o.param_handovers);
+        self.param_handovers.sort();
         if self.closed.is_none() {
             self.closed = o.closed.clone();
         }

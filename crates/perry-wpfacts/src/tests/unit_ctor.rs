@@ -613,3 +613,68 @@ fn a_layout_whose_link_holds_it_beside_another_units_instance_is_described_once(
         assert_eq!(verdicts(&pf, k), w, "{k} {}", pf.dump_text());
     }
 }
+
+/// DECISIONS 152: a closed class's constructor handed a value of the
+/// constructing unit (the caller's argument, a contract marker): CD's
+/// RedBlackTree.treeInsert `new Node(key, value)`.
+const CTOR_MARK: &str = r#"
+    class Key { x: number; constructor(x: number) { this.x = x; } cmp(o: number): number { return this.x - o; } }
+    class Node { k: any; left: any; constructor(k: any) { this.k = k; this.left = null; } }
+    class Tree {
+      root: any;
+      constructor() { this.root = null; }
+      insert(k: any) {
+        const z = new Node(k);
+        if (this.root === null) { this.root = z; } else if (k.cmp(this.root.k.x) < 0) { this.root.left = z; }
+      }
+    }
+    function main() { const t = new Tree(); t.insert(new Key(2)); t.insert(new Key(1)); console.log(t.root.k.x + t.root.left.k.x); }
+    main();
+    "#;
+
+#[test]
+fn a_constructor_argument_of_the_constructing_unit_stays_the_callers() {
+    // DECISIONS 152: `new Node(k)` hands Tree's parameter (the caller's
+    // value) to the closed class's constructor. Node's unit publishes what
+    // its constructor does with each argument (its function contract:
+    // `this.k = k`), so Tree's unit replays that on its own marker instead
+    // of letting it escape, and `t.root.k.x` keeps Key.
+    // Per-unit facts are whole-program facts (owner 2026-10-23).
+    let pf = units(CTOR_MARK);
+    let wf = facts(CTOR_MARK);
+    assert!(pf.broken.is_empty(), "{:?}\n{}", pf.broken, pf.dump_text());
+    for k in ["k", "x", "left"] {
+        let w = verdicts(&wf, k);
+        assert!(!w.is_empty() && w.iter().all(|v| v.starts_with("T0")), "{k} {w:?}");
+        assert_eq!(verdicts(&pf, k), w, "{k}\n{}", pf.dump_text());
+    }
+}
+
+/// DECISIONS 152: what the parameter reaches handed to the constructor.
+const CTOR_REACH: &str = r#"
+    class Inner { y: number; constructor(y: number) { this.y = y; } }
+    class Key { x: number; inner: any; constructor(x: number) { this.x = x; this.inner = new Inner(x); } cmp(o: number): number { return this.x - o; } }
+    class Node { k: any; left: any; constructor(k: any) { this.k = k; this.left = null; } }
+    class Tree {
+      root: any;
+      constructor() { this.root = null; }
+      insert(k: any) {
+        const z = new Node(k.inner);
+        if (this.root === null) { this.root = z; } else if (k.cmp(this.root.k.y) < 0) { this.root.left = z; }
+      }
+    }
+    function main() { const t = new Tree(); t.insert(new Key(2)); t.insert(new Key(1)); console.log(t.root.k.y + t.root.left.k.y); }
+    main();
+    "#;
+
+#[test]
+fn a_constructor_argument_read_from_a_parameter_is_not_the_parameter() {
+    // Soundness of DECISIONS 152: `new Node(k.inner)` hands over what the
+    // parameter reaches, not the parameter. Its keyed reach marker shares
+    // the parameter's entry; were it handed over as the parameter, Node's
+    // unit would see Key in `k`, where the program stores Inner.
+    let pf = units(CTOR_REACH);
+    let k = &field(tmpl(&pf, "Node"), "k").kind;
+    assert!(!k.objs.iter().any(|o| o.ends_with(":Key")), "{k:?}\n{}", pf.dump_text());
+    assert!(k.top || k.objs.iter().any(|o| o.ends_with(":Inner")), "{k:?}\n{}", pf.dump_text());
+}

@@ -1179,6 +1179,38 @@ impl<'a> Gen<'a> {
             };
             self.m.sink_node(res, r);
         }
+        // DECISIONS 152: the arguments the body hands to a closed class's
+        // constructor: this unit holds them, so it passes them there as its
+        // own construction would (the constructor's parameters publish what
+        // they hold, `stand_in_class`). No contract of the class: they leave.
+        for ho in &c.param_handovers {
+            let i = ho.param as usize;
+            let Some(&p) = params.get(i) else {
+                continue;
+            };
+            if c.params[i] & MARK_ESCAPE != 0 {
+                continue;
+            }
+            let cc = self
+                .unit_in
+                .and_then(|u| u.class_contract(&ho.class.0, &ho.class.1));
+            let tm = cc.and_then(|cc| match self.own_class(&cc.display) {
+                Some(tm) => Some(tm),
+                None => {
+                    self.stand_in_class(mi, cc);
+                    self.stand_ins.get(&cc.display).map(|e| e.1)
+                }
+            });
+            let q = tm
+                .and_then(|tm| self.m.tmpls[tm as usize].ctor)
+                .map(|f| self.m.funcs[f as usize].params.get(ho.arg as usize).copied());
+            match q {
+                Some(Some(q)) => self.m.edge(p, q),
+                // Past its parameters: reaches nothing (`lib::closed_of`).
+                Some(None) => {}
+                None => self.m.sink_node(p, r),
+            }
+        }
         n
     }
 
@@ -1497,6 +1529,7 @@ impl<'a> Gen<'a> {
             c.closed.is_none(),
         );
         if let Some((path, name, n)) = &c.closed {
+            let ct = self.m.funcs[ctor as usize].token;
             let outer_fn = std::mem::replace(&mut self.m.cur_fn, ctor);
             let params: Vec<NodeId> = (0..*n)
                 .map(|i| {
@@ -1504,7 +1537,14 @@ impl<'a> Gen<'a> {
                         .m
                         .node_named("param", || format!("param{i}({}.constructor)", c.name));
                     self.m.own(p);
-                    self.m.cons(p, Cons::HandOver { reason: r });
+                    self.m.cons(
+                        p,
+                        Cons::HandOver {
+                            reason: r,
+                            ctor: ct,
+                            arg: i,
+                        },
+                    );
                     p
                 })
                 .collect();

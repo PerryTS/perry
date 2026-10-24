@@ -693,6 +693,29 @@ fn fn_contract_of(
             }],
         );
     }
+    // DECISIONS 152: the parameters' markers handed to a closed class's
+    // constructor (`Model::handed`): the callers' units pass what they hold.
+    let mut param_handovers: Vec<units::HandOverArg> = Vec::new();
+    for &(t, ct, arg) in &g.m.handed {
+        let Some((class, _, _)) = g.closed_ctors.iter().find(|c| c.2 == ct) else {
+            continue;
+        };
+        for m in g.m.marker_members(t) {
+            let own = g.m.param_marker.get(&m).is_some_and(|&(f2, i)| {
+                f2 == f && i != u32::MAX && g.m.marker_of.get(&(f2, i)) == Some(&m)
+            });
+            if own {
+                let param = g.m.param_marker[&m].1;
+                param_handovers.push(units::HandOverArg {
+                    param,
+                    class: class.clone(),
+                    arg,
+                });
+            }
+        }
+    }
+    param_handovers.sort();
+    param_handovers.dedup();
     // The receiver marker of a published method (DECISIONS 57); without
     // one nothing is known of what the body does to its receiver.
     let sealed = g.m.sealed_method(f);
@@ -778,6 +801,7 @@ fn fn_contract_of(
         param_stores,
         param_flows,
         param_calls,
+        param_handovers,
         name,
         closed,
         params,
@@ -829,6 +853,7 @@ fn fn_named(g: &gen::Gen, f: model::FnIdx) -> units::FnContract {
         param_stores: vec![None; n],
         param_flows: Vec::new(),
         param_calls: Vec::new(),
+        param_handovers: Vec::new(),
     }
 }
 
@@ -1357,6 +1382,43 @@ fn value_contract_of_toks(
     vc
 }
 
+/// DECISIONS 152: `t` is what an argument marker reaches (its reach, or
+/// its reach under a key, transitively), and a member of that argument
+/// marker stands for values no contract describes: a parameter marker that
+/// is no closed caller's (decision 13: its callers' values are beside it)
+/// and has no values beside it (DECISIONS 142).
+fn arg_reach_unknown(g: &gen::Gen, t: model::Tok) -> bool {
+    if !g.m.is_arg_marker(t) || !g.m.reach_marker.contains(&t) {
+        return false;
+    }
+    let mut a = t;
+    while g.m.reach_marker.contains(&a) {
+        let up = g
+            .m
+            .marker_reach
+            .iter()
+            .find(|(_, &r)| r == a)
+            .map(|(&p, _)| p)
+            .or_else(|| {
+                g.m.keyed_reach
+                    .iter()
+                    .find(|(_, v)| v.iter().any(|&(_, r)| r == a))
+                    .map(|(&p, _)| p)
+            });
+        match up {
+            Some(p) => a = p,
+            // No marker it is the reach of: nothing says what it holds.
+            None => return true,
+        }
+    }
+    g.m.marker_members(a).into_iter().any(|m| {
+        !g.m.param_marker
+            .get(&m)
+            .is_some_and(|(f, _)| g.m.closed_params.contains_key(f))
+            && !g.m.beside_values(m)
+    })
+}
+
 fn arg_contract_of(
     g: &gen::Gen,
     templates: &[TemplateFacts],
@@ -1379,7 +1441,8 @@ fn arg_contract_of(
         // A closed class's stand-in constructor: its body reads no
         // `arguments` (`closed_of`); its parameters hand over what they
         // hold (`Gen::stand_in_class`).
-        if fi.has_arguments && !g.closed_ctors.iter().any(|c| c.2 == t) {
+        let closed_ctor = g.closed_ctors.iter().any(|c| c.2 == t);
+        if fi.has_arguments && !closed_ctor {
             ac.top = true;
             continue;
         }
@@ -1397,6 +1460,14 @@ fn arg_contract_of(
             vc.prim |= node.prim;
             // An argument marker reads as the markers it stands for (DECISIONS 44).
             let toks = node.pts.to_sorted();
+            // DECISIONS 152: what an argument marker reaches (`p.k`) has no
+            // members of its own: it reads as what its members reach, a
+            // value no contract describes here (as a parameter marker's
+            // reach is), not as nothing.
+            if toks.iter().any(|&t| arg_reach_unknown(g, t)) {
+                vc.unknown = true;
+                vc.prim |= model::prim::ALL;
+            }
             for t in toks.into_iter().flat_map(|t| g.m.marker_members(t)) {
                 // Another unit's function value (decision 19): by its
                 // contract; the callee's calls of it publish what they pass
@@ -1442,6 +1513,17 @@ fn arg_contract_of(
                     continue;
                 }
                 let display = &g.m.tmpls[tm as usize].display;
+                // DECISIONS 152: a parameter marker handed to a closed
+                // class's constructor: its function's contract hands it
+                // over (`Model::handed`), and the callers' units publish
+                // what they pass here.
+                if closed_ctor
+                    && g.m.param_marker.get(&t).is_some_and(|&(f, j)| {
+                        j != u32::MAX && g.m.marker_of.get(&(f, j)) == Some(&t)
+                    })
+                {
+                    continue;
+                }
                 // A closed caller passing its own parameter on: what its
                 // callers pass is beside the marker (decision 13).
                 if g.m
@@ -1957,6 +2039,7 @@ pub(crate) fn compute_in<'a>(
                         param_stores: Vec::new(),
                         param_flows: Vec::new(),
                         param_calls: Vec::new(),
+                        param_handovers: Vec::new(),
                     }),
                 };
                 let key = e.map(|(_, a)| {
