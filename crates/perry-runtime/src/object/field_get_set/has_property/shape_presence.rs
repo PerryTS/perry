@@ -158,7 +158,7 @@ pub(crate) unsafe fn first_possible_holder(
             }
             prototype as *const ObjectHeader
         } else {
-            let Some(record) = shapes::shape_record_for_word(shapes::object_shape_stamp(obj))
+            let Some(record) = shapes::shape_record_of_receiver(shapes::object_shape_stamp(obj))
             else {
                 return ChainHolder::At(obj);
             };

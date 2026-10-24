@@ -142,8 +142,10 @@ unsafe fn allocate_layout(
             next += 1;
         }
     }
-    drop(_no_gc);
+    // Suppression stays up through the birth: the record is carried by no one
+    // until the object is stamped with its word.
     let object = layout_desc::alloc_function_layout(tail.layout, id);
+    drop(_no_gc);
     // As for an ordinary Object.create birth, a black newborn shades the
     // existing external prototype edge without allocating receiver metadata.
     crate::gc::runtime_shade_external_edge(prototype.get_nanbox_u64());
@@ -192,7 +194,7 @@ unsafe fn try_symbol_store(
     {
         return false;
     }
-    let Some(record) = super::shapes::shape_record_for_word((*obj).parent_class_id) else {
+    let Some(record) = super::shapes::shape_record_of_receiver((*obj).parent_class_id) else {
         return false;
     };
     if record.logical_key_count() != d.key_count {

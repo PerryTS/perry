@@ -946,7 +946,10 @@ unsafe fn register_bound(
         let word = super::shapes::publish_shape_result(super::shapes::shape_descriptor_intern_with_rep(
             list, key_count, slot_count, generation, kind, 0, proto_id, summary, rep,
             &[], None, integrity));
-        super::shapes::note_external_shape_carrier(super::shapes::shape_descriptor_for_word(word));
+        // A per-evaluation record is NOT an external carrier: the objects born
+        // on it (and the prototype they name) keep it live, and it retires
+        // with the last of them. The caller holds GC suppression from here to
+        // the birth's stamp (function_family_birth::allocate_layout).
         return word;
     }
     let proposed = if let Some(id) = existing {

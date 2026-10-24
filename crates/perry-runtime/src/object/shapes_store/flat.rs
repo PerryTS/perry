@@ -8,8 +8,18 @@ pub(super) struct Region {
     base: *mut ShapeRecord,
     capacity: usize,
     pub(super) page: usize,
-    // Number of live records intersecting each OS page. Grows only on publication.
-    live: Vec<u32>,
+    // Number of live records intersecting each OS page, in sparse leaves: the
+    // bookkeeping is proportional to the pages this agent holds, never to the
+    // highest page index (other agents' chunks lie between ours).
+    live: std::collections::BTreeMap<usize, Leaf>,
+}
+
+/// Pages per leaf of the live-count map.
+const LEAF_PAGES: usize = 512;
+struct Leaf {
+    /// Pages of this leaf with a nonzero count; the leaf is dropped at zero.
+    used: u32,
+    counts: [u32; LEAF_PAGES],
 }
 
 #[cfg(unix)]
@@ -105,6 +115,9 @@ fn os_page() -> usize {
     #[allow(unreachable_code)]
     4096
 }
+/// A Region smaller than the fixed dynamic base plus a few chunks cannot hold
+/// the process-wide chunk space.
+pub(super) const MIN_CAPACITY: usize = 2 * super::DYNAMIC_BASE_ROWS as usize;
 impl Region {
     pub(super) fn new() -> Self {
         let mut capacity = if cfg!(target_pointer_width = "64") {
@@ -119,10 +132,10 @@ impl Region {
                     base: base.cast(),
                     capacity,
                     page: os_page(),
-                    live: Vec::new(),
+                    live: std::collections::BTreeMap::new(),
                 };
             }
-            assert!(capacity > (1 << 12), "cannot reserve shape Region");
+            assert!(capacity > MIN_CAPACITY, "cannot reserve shape Region");
             capacity /= 2;
         }
     }
@@ -132,6 +145,11 @@ impl Region {
     pub(super) fn capacity(&self) -> usize {
         self.capacity
     }
+    /// Leaves held: the bookkeeping size, for tests.
+    #[cfg(test)]
+    pub(super) fn leaf_count(&self) -> usize {
+        self.live.len()
+    }
     fn pages(&self, row: usize) -> core::ops::RangeInclusive<usize> {
         row * RECORD / self.page..=((row + 1) * RECORD - 1) / self.page
     }
@@ -140,12 +158,8 @@ impl Region {
         if row >= self.capacity {
             return Err(PublishError::Capacity);
         }
-        let end = *self.pages(row).end();
-        if self.live.len() <= end {
-            self.live.resize(end + 1, 0);
-        }
         for p in self.pages(row) {
-            if self.live[p] == 0
+            if self.count(p) == 0
                 && !unsafe { commit(self.base.cast::<u8>().add(p * self.page), self.page) }
             {
                 return Err(PublishError::Commit);
@@ -153,17 +167,35 @@ impl Region {
         }
         Ok(unsafe { self.base.add(row) })
     }
+    fn count(&self, page: usize) -> u32 {
+        self.live
+            .get(&(page / LEAF_PAGES))
+            .map_or(0, |leaf| leaf.counts[page % LEAF_PAGES])
+    }
     pub(super) fn published(&mut self, row: usize) {
         for p in self.pages(row) {
-            self.live[p] += 1;
+            let leaf = self.live.entry(p / LEAF_PAGES).or_insert_with(|| Leaf {
+                used: 0,
+                counts: [0; LEAF_PAGES],
+            });
+            let n = &mut leaf.counts[p % LEAF_PAGES];
+            leaf.used += u32::from(*n == 0);
+            *n += 1;
         }
     }
     /// Caller removed identity membership and zeroed the row after proving no carrier.
     pub(super) fn retired(&mut self, row: usize) {
         for p in self.pages(row) {
-            assert!(self.live[p] != 0);
-            self.live[p] -= 1;
-            if self.live[p] == 0 {
+            let key = p / LEAF_PAGES;
+            let leaf = self.live.get_mut(&key).expect("retired row on a live page");
+            let n = &mut leaf.counts[p % LEAF_PAGES];
+            assert!(*n != 0);
+            *n -= 1;
+            if *n == 0 {
+                leaf.used -= 1;
+                if leaf.used == 0 {
+                    self.live.remove(&key);
+                }
                 assert!(
                     unsafe { discard(self.base.cast::<u8>().add(p * self.page), self.page) },
                     "shape Region page decommit failed"
@@ -173,10 +205,10 @@ impl Region {
     }
     /// True when every OS page of  is committed in THIS Region.
     pub(super) fn row_committed(&self, row: usize) -> bool {
-        self.pages(row).all(|p| self.live.get(p).is_some_and(|&n| n != 0))
+        self.pages(row).all(|p| self.count(p) != 0)
     }
     pub(super) fn committed_bytes(&self) -> usize {
-        self.live.iter().filter(|&&n| n != 0).count() * self.page
+        self.live.values().map(|leaf| leaf.used as usize).sum::<usize>() * self.page
     }
 }
 impl Drop for Region {

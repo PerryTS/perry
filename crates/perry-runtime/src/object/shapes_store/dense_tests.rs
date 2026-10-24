@@ -66,7 +66,7 @@ fn publication_checks_capacity_tags_and_identity_ownership() {
     assert_eq!(slab.publish_static(ShapeId(id.0 + 1), LayoutWord(u32::MAX), record()),
         Err(PublishError::InvalidWord));
     assert_eq!(
-        super::claim_dynamic_chunk(slab.static_rows, slab.static_rows as usize),
+        super::ChunkAllocator::new().claim(super::DYNAMIC_BASE_ROWS as usize),
         Err(PublishError::Capacity)
     );
 }
@@ -107,4 +107,68 @@ fn agents_never_receive_the_same_dynamic_row() {
     let chunks: std::collections::HashSet<u32> =
         a.iter().chain(&b).map(|r| r / super::DYNAMIC_CHUNK_ROWS).collect();
     assert_eq!(chunks.len(), 2 * 100usize.div_ceil(super::DYNAMIC_CHUNK_ROWS as usize));
+}
+
+#[test]
+fn images_with_different_static_counts_never_share_a_chunk_row() {
+    // F2 #4(b): the dynamic base is one process-wide value, independent of S.
+    let mut a = ShapeSlab::new();
+    a.static_rows = 130;
+    a.next_row = 130;
+    let mut b = ShapeSlab::new();
+    b.static_rows = 500;
+    b.next_row = 500;
+    let mut rows = std::collections::HashSet::new();
+    for i in 0..70u32 {
+        for (slab, tag) in [(&mut a, 0), (&mut b, 1)] {
+            let id = ShapeId(SHAPE_ID_BASE + 5000 + i * 2 + tag);
+            let row = slab.publish_dynamic(id, record()).unwrap().word.row().0;
+            assert!(row >= super::DYNAMIC_BASE_ROWS, "dynamic row {row} below the fixed base");
+            assert!(rows.insert(row), "row {row} handed to two images");
+        }
+    }
+}
+
+#[test]
+fn dead_agents_chunks_are_never_handed_out_again() {
+    use super::{ChunkAllocator, DYNAMIC_BASE_ROWS as BASE, DYNAMIC_CHUNK_ROWS as C};
+    let alloc = ChunkAllocator::new();
+    let cap = (BASE + 2 * C) as usize;
+    let (x, y) = (alloc.claim(cap).unwrap(), alloc.claim(cap).unwrap());
+    assert_eq!((x, y), (BASE, BASE + C));
+    assert_eq!(alloc.claim(cap), Err(PublishError::Capacity), "exhausted with both live");
+    alloc.release(&[x], &[]);
+    assert_eq!(
+        alloc.claim(cap),
+        Err(PublishError::Capacity),
+        "a freed chunk is never reused: process-shared memos may still name its words"
+    );
+    assert_eq!(alloc.free_len(), 1, "the freed chunk stays on the list");
+}
+
+#[test]
+fn a_dropped_slab_returns_its_chunks_to_the_process() {
+    let before = super::CHUNKS.free_len();
+    let mut slab = ShapeSlab::new();
+    for i in 0..(super::DYNAMIC_CHUNK_ROWS + 1) {
+        slab.publish_dynamic(ShapeId(SHAPE_ID_BASE + 9000 + i), record()).unwrap();
+    }
+    assert_eq!(slab.chunks.len(), 2);
+    drop(slab);
+    assert_eq!(super::CHUNKS.free_len(), before + 2);
+}
+
+#[test]
+fn region_bookkeeping_is_independent_of_process_history() {
+    // Burn a long history of chunks (live elsewhere), then a late agent's
+    // bookkeeping covers only its own chunk.
+    let mut burned = ShapeSlab::new();
+    for _ in 0..4000 {
+        super::CHUNKS.claim(burned.region.capacity()).unwrap();
+    }
+    burned.chunks.clear();
+    let mut late = ShapeSlab::new();
+    late.publish_dynamic(ShapeId(SHAPE_ID_BASE + 12000), record()).unwrap();
+    assert_eq!(late.region.leaf_count(), 1);
+    assert_eq!(late.region.committed_bytes(), late.region.page);
 }

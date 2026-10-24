@@ -278,3 +278,45 @@ fn family_birth_keeps_holes_and_live_prototype_and_checks_symbol_identity() {
         SYMBOL = crate::value::TAG_UNDEFINED;
     }
 }
+
+/// #5 (DPA review): per-evaluation function-constructor records are carried by
+/// their objects only. A loop of evaluations keeps the record count bounded
+/// across full GCs, and the worker seed holds none of the dead ones.
+#[test]
+fn per_evaluation_records_retire_and_are_not_seeded() {
+    crate::gc::initialize_runtime_fixture();
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let scope = RuntimeHandleScope::new();
+    let c = crate::closure::js_closure_alloc(&INFO.base, 0);
+    let f = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(c as i64));
+    let p = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+        crate::object::js_object_alloc_plain(0) as i64,
+    ));
+    let collect = crate::gc::test_collect_synchronous_full_trace;
+    unsafe {
+        super::super::proto_validity::mark_object_as_prototype(
+            (p.get_nanbox_u64() & crate::value::POINTER_MASK) as usize,
+        )
+        .unwrap();
+        let seed_before = super::super::shapes::test_worker_seed_len();
+        let mut counts = Vec::new();
+        for round in 0..4 {
+            for _ in 0..100 {
+                SYMBOL = crate::symbol::js_symbol_new(f64::from_bits(crate::value::TAG_UNDEFINED))
+                    .to_bits();
+                assert!(allocate(&f, &p).is_some());
+            }
+            SYMBOL = crate::value::TAG_UNDEFINED;
+            collect();
+            collect();
+            counts.push(super::super::shapes::test_record_count());
+            assert!(round == 0 || counts[round] <= counts[0] + 8, "records grew: {counts:?}");
+        }
+        assert_eq!(
+            super::super::shapes::test_worker_seed_len(),
+            seed_before,
+            "a dead per-evaluation record was seeded"
+        );
+    }
+}

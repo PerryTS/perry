@@ -67,7 +67,7 @@ fn new_slow(shape: u32, data: impl FnOnce() -> *const RegExpData) -> *mut RegExp
         if unsafe { crate::object::shapes::object_shape_stamp(receiver) } != shape {
             receiver = prepare_shape(receiver);
         }
-        crate::object::shapes::shape_rep_for_word(unsafe {
+        crate::object::shapes::shape_rep_of_receiver(unsafe {
             crate::object::shapes::object_shape_stamp(receiver)
         })
     });

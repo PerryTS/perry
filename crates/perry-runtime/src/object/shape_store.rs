@@ -965,7 +965,7 @@ unsafe fn try_function_store(
         return None;
     }
     let closure = ptr as *const crate::closure::ClosureHeader;
-    let descriptor = shapes::shape_descriptor_for_word((*closure).shape_id)?;
+    let descriptor = shapes::shape_descriptor_of_receiver((*closure).shape_id)?;
     if crate::closure::shape::is_class_info((*closure).info) {
         return None;
     }

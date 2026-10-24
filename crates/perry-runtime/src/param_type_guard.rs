@@ -6,6 +6,7 @@
 //! shape it cannot validate cheaply and directly simply takes the generic
 //! function fallback.
 
+use crate::object::shapes::shape_descriptor_of_receiver;
 use crate::array::ArrayHeader;
 use crate::object::ObjectHeader;
 use crate::value::{JSValue, POINTER_MASK, TAG_FALSE, TAG_HOLE, TAG_TRUE};
@@ -923,7 +924,7 @@ mod tests {
             "an all-`Any` shape carries no value fact"
         );
         unsafe {
-            let d = shape_descriptor_for_word(object_shape_stamp(object)).expect("live shape");
+            let d = shape_descriptor_of_receiver(object_shape_stamp(object)).expect("live shape");
             let rep = with_slot_rep(with_slot_rep(REP_ANY, 0, REP_F64), 1, REP_F64);
             let id = publish_shape_result(shape_descriptor_ensure_with_rep(
                 d.keys as usize as *const crate::array::ArrayHeader,

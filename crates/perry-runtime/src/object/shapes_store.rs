@@ -1252,6 +1252,12 @@ pub(crate) struct ShapeSlab {
     /// Next free dynamic row inside this agent's current chunk (the static
     /// row count before the first claim). Also the high-water bound readers use.
     next_row: u32,
+    /// One past the highest row this agent ever issued: the bound readers use
+    /// (`flat_ids`). Chunks need not arrive in increasing order.
+    row_bound: u32,
+    /// Starts of the chunks this agent owns; returned to the process
+    /// allocator when the slab drops.
+    chunks: OwnedChunks,
     /// End (exclusive) of the current chunk; reaching it claims another.
     chunk_end: u32,
     /// Present records.
@@ -1287,6 +1293,8 @@ impl Drop for ShapeSlab {
         for band in [0u8, 1, 2] {
             Self::free_dir(self.dir_mut(band), band);
         }
+        // The Region unmaps with the slab; its chunks go back to the process.
+        CHUNKS.release(self.chunks.inline(), &self.chunks.more);
     }
 }
 
@@ -1300,6 +1308,8 @@ impl ShapeSlab {
             region: flat::Region::new(),
             static_rows: crate::codegen_abi::NATIVE_LAYOUT_ROWS,
             next_row: crate::codegen_abi::NATIVE_LAYOUT_ROWS,
+            row_bound: crate::codegen_abi::NATIVE_LAYOUT_ROWS,
+            chunks: OwnedChunks::new(),
             chunk_end: 0,
             len: 0,
             agent: false,
@@ -1312,9 +1322,15 @@ impl ShapeSlab {
     pub(super) fn new_agent() -> Self {
         let mut slab = Self::new();
         let image = crate::object::class_image::layout_image();
-        assert!(image.static_rows as usize <= slab.region.capacity());
+        // The dynamic base is one process-wide value; an image's static rows
+        // lie below it, so images with different S never share a chunk row.
+        assert!(
+            image.static_rows <= DYNAMIC_BASE_ROWS,
+            "layout image has more static rows than the process dynamic base"
+        );
         slab.static_rows = image.static_rows;
         slab.next_row = image.static_rows;
+        slab.row_bound = image.static_rows;
         slab.agent = true;
         slab.publish_dir();
         slab.protos.make_agent();
@@ -1481,7 +1497,8 @@ impl ShapeSlab {
         record: ShapeRecord,
     ) -> Result<PublishedShape, PublishError> {
         if self.next_row >= self.chunk_end {
-            let start = claim_dynamic_chunk(self.static_rows, self.region.capacity())?;
+            let start = CHUNKS.claim(self.region.capacity())?;
+            self.chunks.push(start);
             self.next_row = start;
             self.chunk_end = start + DYNAMIC_CHUNK_ROWS;
         }
@@ -1490,10 +1507,11 @@ impl ShapeSlab {
         let word = Self::word_for(identity, self.next_row, &record)?;
         let published = self.publish(identity, word, record)?;
         self.next_row += 1;
+        self.row_bound = self.row_bound.max(self.next_row);
         if self.agent {
             // The directory buffers were published by `publish` when they
             // moved; only the receivers' row bound grows with every mint.
-            AGENT_SHAPE_DIR[0].flat_ids.set(self.next_row as usize);
+            AGENT_SHAPE_DIR[0].flat_ids.set(self.row_bound as usize);
         }
         Ok(published)
     }
@@ -1679,7 +1697,7 @@ impl ShapeSlab {
             AGENT_SHAPE_DIR[band].len.set(dir.len());
         }
         AGENT_SHAPE_DIR[0].flat_base.set(self.region.base());
-        AGENT_SHAPE_DIR[0].flat_ids.set(self.next_row as usize);
+        AGENT_SHAPE_DIR[0].flat_ids.set(self.row_bound as usize);
         AGENT_SHAPE_DIR[0]
             .proto_cell
             .set(crate::array::object_prototype_cell());
@@ -1770,8 +1788,24 @@ impl ShapeSlab {
             .add(word.row().0 as usize)
     }
 
-    /// Requires a live carrier, or zero for an unshaped receiver.
+    /// The record of a held word (memo, record link, parameter): checked
+    /// against this agent's committed rows, so a retired, unpublished or
+    /// other-agent word answers absent instead of touching a PROT_NONE page.
     pub(super) fn agent_record_for_word(word: u32) -> *mut ShapeRecord {
+        Self::agent_record_for_word_present(word)
+            .unwrap_or(std::ptr::addr_of!(EMPTY_RECORD.0).cast_mut())
+    }
+    pub(super) fn agent_record_for_word_present(word: u32) -> Option<*mut ShapeRecord> {
+        if word & crate::codegen_abi::LAYOUT_TAG == 0 {
+            return None;
+        }
+        crate::state::state().shapes.slab().handle_record_ptr(LayoutWord(word))
+    }
+
+    /// A live receiver's own header word, or zero for an unshaped receiver.
+    /// The receiver is the carrier, so the unchecked read is sound; never use
+    /// this for a word read from a memo, a record or a parameter.
+    pub(super) fn agent_record_for_receiver(word: u32) -> *mut ShapeRecord {
         if word & crate::codegen_abi::LAYOUT_TAG == 0 || LayoutWord(word).band() >= 3 {
             return std::ptr::addr_of!(EMPTY_RECORD.0).cast_mut();
         }
@@ -1782,21 +1816,25 @@ impl ShapeSlab {
         }
         unsafe { Self::agent_record_for_handle(LayoutWord(word)) }
     }
-    pub(super) fn agent_record_for_word_present(word: u32) -> Option<*mut ShapeRecord> {
-        let p = Self::agent_record_for_word(word);
+    pub(super) fn agent_record_for_receiver_present(word: u32) -> Option<*mut ShapeRecord> {
+        let p = Self::agent_record_for_receiver(word);
         unsafe { (*p).present() }.then_some(p)
     }
     /// Requires an existing owner/carrier; never use for identity absence checks.
     pub(super) fn handle_record_ptr(&self, word: LayoutWord) -> Option<*mut ShapeRecord> {
         if word.0 & crate::codegen_abi::LAYOUT_TAG == 0
             || word.band() >= 3
-            || word.row().0 >= self.next_row
-            || (word.row().0 >= self.static_rows && !self.region.row_committed(word.row().0 as usize))
+            || word.row().0 >= self.row_bound
+            || !self.region.row_committed(word.row().0 as usize)
         {
             return None;
         }
         let p = unsafe { self.record_for_handle(word) };
         unsafe { (*p).present() }.then_some(p)
+    }
+    #[cfg(test)]
+    pub(super) fn region_row_committed(&self, row: usize) -> bool {
+        self.region.row_committed(row)
     }
     pub(super) fn get_handle(&self, word: LayoutWord) -> Option<ShapeRecord> {
         self.handle_record_ptr(word).map(|p| unsafe { *p })
@@ -2313,20 +2351,97 @@ mod dense_tests;
 
 /// Dynamic rows per chunk: one 4 KiB page of 128-byte records.
 pub(crate) const DYNAMIC_CHUNK_ROWS: u32 = 4096 / 128;
-/// Process-wide count of dynamic chunks claimed. Chunk k is the rows
-/// align_up(S, CHUNK) + k * CHUNK.. in every agent's Region, so a dynamic
-/// LayoutWord names one shape in the whole process. One atomic per 32 rows.
-static DYNAMIC_CHUNKS_CLAIMED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+/// First dynamic row of the process: one fixed value, independent of any
+/// image's static row count S (an image needs S <= this), so a dynamic
+/// LayoutWord names one shape in the whole process whatever image an agent
+/// runs. ILP32/Wasm Regions hold only 1 << 16 rows.
+pub(crate) const DYNAMIC_BASE_ROWS: u32 = if cfg!(target_pointer_width = "64") {
+    1 << 20
+} else {
+    1 << 14
+};
 
-/// Claim the next process-unique chunk; returns its first row.
-pub(super) fn claim_dynamic_chunk(static_rows: u32, capacity: usize) -> Result<u32, PublishError> {
-    use std::sync::atomic::Ordering::Relaxed;
-    let base = static_rows.div_ceil(DYNAMIC_CHUNK_ROWS) * DYNAMIC_CHUNK_ROWS;
-    let k = DYNAMIC_CHUNKS_CLAIMED
-        .fetch_update(Relaxed, Relaxed, |k| {
-            let end = u64::from(base) + (u64::from(k) + 1) * u64::from(DYNAMIC_CHUNK_ROWS);
+/// The process-wide chunk space. Allocator state, not a cache: `next` hands
+/// out never-used chunks (one atomic per 32 rows); `free` records the chunks
+/// of dead agents but is never handed out (see `claim`): a word keeps naming
+/// one shape for the life of the process, or the claim fails cleanly.
+pub(super) struct ChunkAllocator {
+    next: std::sync::atomic::AtomicU32,
+    free: std::sync::Mutex<Vec<u32>>,
+}
+impl ChunkAllocator {
+    pub(super) const fn new() -> Self {
+        Self {
+            next: std::sync::atomic::AtomicU32::new(0),
+            free: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Claim a chunk; returns its first row. `capacity` is the Region's rows.
+    pub(super) fn claim(&self, capacity: usize) -> Result<u32, PublishError> {
+        use std::sync::atomic::Ordering::Relaxed;
+        let fresh = self.next.fetch_update(Relaxed, Relaxed, |k| {
+            let end = u64::from(DYNAMIC_BASE_ROWS) + (u64::from(k) + 1) * u64::from(DYNAMIC_CHUNK_ROWS);
             (end <= capacity as u64).then_some(k + 1)
-        })
-        .map_err(|_| PublishError::Capacity)?;
-    Ok(base + k * DYNAMIC_CHUNK_ROWS)
+        });
+        // A freed chunk is NEVER handed out again. Process-shared memos (the
+        // runtime's read-site memos, compiled PIC tokens) key on the layout
+        // word, so a reused chunk would give a dead agent's word to a new
+        // shape and a stale (word, slot) proof could answer for it: a wrong
+        // answer is worse than the clean fatal error raised when fresh chunk
+        // space is exhausted. Freed chunks stay on the list for bookkeeping;
+        // sound reuse (a memo epoch or a proof that no memo names the chunk)
+        // is later work.
+        match fresh {
+            Ok(k) => Ok(DYNAMIC_BASE_ROWS + k * DYNAMIC_CHUNK_ROWS),
+            Err(_) => Err(PublishError::Capacity),
+        }
+    }
+
+    pub(super) fn release(&self, first: &[u32], more: &[u32]) {
+        if !first.is_empty() {
+            let mut free = self.free.lock().unwrap_or_else(|e| e.into_inner());
+            free.extend_from_slice(first);
+            free.extend_from_slice(more);
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn free_len(&self) -> usize {
+        self.free.lock().unwrap_or_else(|e| e.into_inner()).len()
+    }
+}
+pub(super) static CHUNKS: ChunkAllocator = ChunkAllocator::new();
+
+/// The chunks one agent owns. The first few live inline, so a typical agent
+/// (one or two chunks) allocates nothing for the list.
+struct OwnedChunks {
+    n: usize,
+    first: [u32; 4],
+    more: Vec<u32>,
+}
+impl OwnedChunks {
+    const fn new() -> Self {
+        Self { n: 0, first: [0; 4], more: Vec::new() }
+    }
+    fn push(&mut self, start: u32) {
+        if self.n < self.first.len() {
+            self.first[self.n] = start;
+            self.n += 1;
+        } else {
+            self.more.push(start);
+        }
+    }
+    fn inline(&self) -> &[u32] {
+        &self.first[..self.n]
+    }
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.n + self.more.len()
+    }
+    #[cfg(test)]
+    fn clear(&mut self) {
+        self.n = 0;
+        self.more.clear();
+    }
 }

@@ -294,3 +294,10 @@ fn s7b_worker_seeds_an_unbuilt_class_word_without_a_foreign_pointer() {
     .join()
     .unwrap();
 }
+
+#[cfg(test)]
+impl WorkerShapeSeed {
+    pub(crate) fn test_len(&self) -> usize {
+        self.0.len()
+    }
+}

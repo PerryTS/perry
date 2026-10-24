@@ -667,7 +667,7 @@ mod tests {
             );
             assert_eq!(sibling_descriptor.logical_key_count, 0);
             let first_descriptor =
-                crate::object::shapes::shape_descriptor_for_word((*first).shape_word())
+                crate::object::shapes::shape_descriptor_of_receiver((*first).shape_word())
                     .expect("defineProperty growth must install an exact descriptor");
             assert_eq!(
                 first_descriptor.keys,
