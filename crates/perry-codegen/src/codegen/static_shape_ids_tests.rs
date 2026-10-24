@@ -456,7 +456,7 @@ fn a_class_id_defined_twice_has_no_program_entry() {
 }
 
 #[test]
-fn class_birth_names_anon_shapes_as_literals_and_skips_class_zero() {
+fn class_birth_names_anon_shapes_and_class_zero_as_literals() {
     let prefix = "m";
     let mut class_ids = HashMap::new();
     class_ids.insert("__AnonShape_3".to_string(), 55u32);
@@ -506,8 +506,10 @@ fn class_birth_names_anon_shapes_as_literals_and_skips_class_zero() {
         &HashMap::new(),
         &ClassIdsByKeysName::new(&class_ids),
     );
+    // A keys global that resolves to no class is minted on the plain
+    // prototype: compile-time-known content, so it carries a static ordinal.
     assert_eq!(o.class_id, 0);
-    assert!(o.shape.is_none());
+    assert_eq!(o.shape.unwrap().proto, BirthProto::Literal);
 }
 
 #[test]
