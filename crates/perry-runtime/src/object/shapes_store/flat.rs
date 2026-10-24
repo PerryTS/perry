@@ -8,6 +8,8 @@ pub(super) struct Region {
     base: *mut ShapeRecord,
     capacity: usize,
     pub(super) page: usize,
+    /// `page` is a power of two no smaller than a record: a row never straddles pages.
+    shift: u32,
     // Number of live records intersecting each OS page, in sparse leaves: the
     // bookkeeping is proportional to the pages this agent holds, never to the
     // highest page index (other agents' chunks lie between ours).
@@ -135,6 +137,7 @@ impl Region {
                     base: base.cast(),
                     capacity,
                     page: os_page(),
+                    shift: os_page().trailing_zeros(),
                     live: Vec::new(),
                 };
             }
@@ -153,8 +156,13 @@ impl Region {
     pub(super) fn leaf_count(&self) -> usize {
         self.live.iter().flatten().count()
     }
+    #[inline(always)]
+    fn page_of(&self, row: usize) -> usize {
+        (row * RECORD) >> self.shift
+    }
     fn pages(&self, row: usize) -> core::ops::RangeInclusive<usize> {
-        row * RECORD / self.page..=((row + 1) * RECORD - 1) / self.page
+        let p = self.page_of(row);
+        p..=p
     }
     /// Commit all intersecting pages BEFORE reading or initializing this row.
     pub(super) fn prepare(&mut self, row: usize) -> Result<*mut ShapeRecord, PublishError> {
@@ -170,6 +178,7 @@ impl Region {
         }
         Ok(unsafe { self.base.add(row) })
     }
+    #[inline(always)]
     fn count(&self, page: usize) -> u32 {
         match self.live.get(page / LEAF_PAGES) {
             Some(Some(leaf)) => leaf.counts[page % LEAF_PAGES],
@@ -219,7 +228,7 @@ impl Region {
     }
     /// True when every OS page of  is committed in THIS Region.
     pub(super) fn row_committed(&self, row: usize) -> bool {
-        self.pages(row).all(|p| self.count(p) != 0)
+        self.count(self.page_of(row)) != 0
     }
     pub(super) fn committed_bytes(&self) -> usize {
         self.live.iter().flatten().map(|leaf| leaf.used as usize).sum::<usize>() * self.page
