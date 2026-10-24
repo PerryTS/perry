@@ -563,3 +563,217 @@ fn a_rest_parameter_takes_only_the_extra_arguments() {
     ]);
     assert_ne!(verdicts(&args, "n"), ["T0Mono"], "{}", args.dump_text());
 }
+
+/// The stand-in functions of module `path`'s units (`Stats::functions`).
+fn unit_functions(pf: &ProgramFacts, path: &str) -> usize {
+    pf.units
+        .iter()
+        .filter(|(q, _)| crate::decl_units::module_of(q) == path)
+        .map(|(_, s)| s.functions)
+        .sum()
+}
+
+const MANY: &str = "export const E = { A: 1, B: 2 };\nexport function f() { return 1; }\nexport function f1(x: any) { return x; }\nexport function f2(x: any) { return [x]; }\nexport function f3(x: any) { return { x }; }\nexport class C { x = 1; }\nexport function mk() { return new C(); }\nexport function self(this: any) { return this; }";
+
+#[test]
+fn a_namespace_makes_only_the_keys_its_unit_names() {
+    // DECISIONS 115-CWL3: `p.E` and `p.f()` make keys E and f only, the
+    // values `import { E, f }` binds: the unit holds at most what the named
+    // imports hold, not a stand-in of every export of `a`.
+    let named = units_of(&[
+        ("a", MANY),
+        (
+            "m",
+            "import { E, f } from './a'; function g() { return E.A + f(); } console.log(g());",
+        ),
+    ]);
+    let ns = units_of(&[
+        ("a", MANY),
+        (
+            "m",
+            "import * as p from './a'; function g() { return p.E.A + p.f(); } console.log(g());",
+        ),
+    ]);
+    assert_eq!(
+        verdicts(&ns, "A"),
+        verdicts(&named, "A"),
+        "{}",
+        ns.dump_text()
+    );
+    // Per unit: a unit names fewer keys than its module imports by name.
+    assert!(
+        unit_functions(&ns, "m.ts") <= unit_functions(&named, "m.ts"),
+        "{:?}\n{:?}",
+        ns.units,
+        named.units
+    );
+}
+
+#[test]
+fn a_namespace_used_as_a_value_holds_every_key() {
+    // A namespace that leaves the named-key reads may be read under any
+    // key: `q.E` holds E's contract as `p.E` does.
+    let alias = units_of(&[
+        ("a", MANY),
+        (
+            "m",
+            "import * as p from './a'; function g() { const q: any = p; return q.E.A; } console.log(g());",
+        ),
+    ]);
+    assert_eq!(verdicts(&alias, "A"), ["T0Mono"], "{}", alias.dump_text());
+}
+
+#[test]
+fn a_namespace_receiver_its_callee_uses_holds_every_key() {
+    // Soundness: `p.self()` runs a body that reads `this`, the namespace:
+    // it escapes with every key, `mk` among them, which the unit names only
+    // as a named import. A callee that ignores its receiver leaves the
+    // namespace here.
+    let src = |call: &str| {
+        format!("import {{ mk }} from './a'; import * as p from './a'; function g() {{ {call} const c = mk(); return c.x; }} console.log(g());")
+    };
+    let quiet = units_of(&[("a", MANY), ("m", &src("p.f();"))]);
+    let used = units_of(&[("a", MANY), ("m", &src("p.self();"))]);
+    let escaped = units_of(&[
+        ("a", MANY),
+        (
+            "m",
+            "import { mk } from './a'; import * as p from './a'; declare function h(x: any): void; function g() { h(p); const c = mk(); return c.x; } console.log(g());",
+        ),
+    ]);
+    assert_eq!(
+        verdicts(&used, "x"),
+        verdicts(&escaped, "x"),
+        "{}",
+        used.dump_text()
+    );
+    assert_ne!(
+        verdicts(&used, "x"),
+        verdicts(&quiet, "x"),
+        "{}\n{}",
+        used.dump_text(),
+        quiet.dump_text()
+    );
+}
+
+#[test]
+fn a_named_import_is_made_where_its_unit_names_it() {
+    // DECISIONS 115-CWL3: the units of `m` share its import list; each
+    // holds the stand-ins of the imports its code names, `g`'s unit E's
+    // only, as if `m` imported E alone.
+    let one = units_of(&[
+        ("a", MANY),
+        (
+            "m",
+            "import { E } from './a'; function g() { return E.A; } console.log(g());",
+        ),
+    ]);
+    let all = units_of(&[
+        ("a", MANY),
+        (
+            "m",
+            "import { E, f, f1, f2, f3, mk, self, C } from './a'; function g() { return E.A; } console.log(g());",
+        ),
+    ]);
+    assert_eq!(
+        verdicts(&all, "A"),
+        verdicts(&one, "A"),
+        "{}",
+        all.dump_text()
+    );
+    assert_eq!(
+        unit_functions(&all, "m.ts"),
+        unit_functions(&one, "m.ts"),
+        "{:?}\n{:?}",
+        all.units,
+        one.units
+    );
+}
+
+/// Module `a` with `n` exports that hold no contract (each a value of
+/// unknown code, ⊤ to every importer) and `n` open functions returning no
+/// layout, beside `mk`, an open function returning `C`s, a class `a` does
+/// not export.
+fn top_exports(n: usize) -> String {
+    let mut s = String::from("class C { x = 1; }\nexport function mk() { return new C(); }\n");
+    for i in 0..n {
+        s.push_str(&format!(
+            "declare const k{i}: any;\nexport const t{i} = k{i};\nexport function o{i}(x: any) {{ return {i}; }}\n"
+        ));
+    }
+    s
+}
+
+/// The nodes of module `path`'s units (`Stats::nodes`).
+fn unit_nodes(pf: &ProgramFacts, path: &str) -> usize {
+    pf.units
+        .iter()
+        .filter(|(q, _)| crate::decl_units::module_of(q) == path)
+        .map(|(_, s)| s.nodes)
+        .sum()
+}
+
+#[test]
+fn a_namespace_receiver_of_an_unknown_callee_makes_only_the_keys_that_carry() {
+    // DECISIONS 116-CWL3: `p.t0()` calls ⊤ with the namespace as receiver:
+    // it escapes, and with it `mk`, whose result has a layout, so `c.x` is
+    // what `h(p)` leaves it. The keys holding ⊤ and the open functions
+    // returning no layout escape nothing and are not made: the unit is as
+    // big with 2 of each as with 40.
+    let src = |call: &str| {
+        format!("import {{ mk }} from './a'; import * as p from './a'; declare function h(x: any): void; function g() {{ {call} const c = mk(); return c.x; }} console.log(g());")
+    };
+    let few = units_of(&[("a", &top_exports(2)), ("m", &src("p.t0();"))]);
+    let many = units_of(&[("a", &top_exports(40)), ("m", &src("p.t0();"))]);
+    let escaped = units_of(&[("a", &top_exports(2)), ("m", &src("h(p);"))]);
+    let quiet = units_of(&[("a", &top_exports(2)), ("m", &src(""))]);
+    assert_eq!(
+        verdicts(&few, "x"),
+        verdicts(&escaped, "x"),
+        "{}",
+        few.dump_text()
+    );
+    assert_ne!(
+        verdicts(&few, "x"),
+        verdicts(&quiet, "x"),
+        "{}\n{}",
+        few.dump_text(),
+        quiet.dump_text()
+    );
+    assert_eq!(
+        unit_nodes(&few, "m.ts"),
+        unit_nodes(&many, "m.ts"),
+        "{:?}\n{:?}",
+        few.units,
+        many.units
+    );
+}
+
+#[test]
+fn an_escaped_namespace_reports_its_functions_that_use_their_receiver() {
+    // DECISIONS 116-CWL3: unknown code holding the namespace may call
+    // `self` with any receiver, which its unit does not grant: `self` is
+    // reported (`fn:`); the open `o0` its unit runs for any caller already.
+    let a = format!(
+        "{}export function self(this: any) {{ return this; }}\n",
+        top_exports(1)
+    );
+    let pf = units_of(&[
+        ("a", &a),
+        (
+            "m",
+            "import * as p from './a'; function g() { p.t0(); } g();",
+        ),
+    ]);
+    assert!(
+        pf.broken.iter().any(|d| d == "fn:a.ts:self"),
+        "{:?}\n{}",
+        pf.broken,
+        pf.dump_text()
+    );
+    assert!(
+        !pf.broken.iter().any(|d| d == "fn:a.ts:o0"),
+        "{:?}",
+        pf.broken
+    );
+}

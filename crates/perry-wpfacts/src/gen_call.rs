@@ -115,7 +115,10 @@ impl<'a> Gen<'a> {
                 property,
                 byte_offset: pb,
             } => {
-                let o = self.expr(fx, object);
+                let o = match self.ns_member(fx.module, object, property, true) {
+                    Some(o) => o,
+                    None => self.expr(fx, object),
+                };
                 let a = self.m.atom(property);
                 let off = if *pb != 0 { *pb } else { byte_offset };
                 if off != 0 {
@@ -155,14 +158,14 @@ impl<'a> Gen<'a> {
 
     fn is_runtime_extern(&self, mi: u32, name: &str) -> bool {
         name.starts_with("js_")
-            && !self.mods[mi as usize].imports.contains_key(name)
+            && !self.is_import(mi, name)
             && !self.mods[mi as usize].scope.contains_key(name)
     }
 
     /// `ExternFuncRef { name }` read as a value: an import binding, a
     /// module-scope name, or an unknown runtime/global value (⊤).
     pub(crate) fn extern_value(&mut self, mi: u32, name: &str) -> NodeId {
-        if let Some(&n) = self.mods[mi as usize].imports.get(name) {
+        if let Some(n) = self.import_value(mi, name) {
             return n;
         }
         if let Some(&n) = self.mods[mi as usize].scope.get(name) {
@@ -247,7 +250,7 @@ impl<'a> Gen<'a> {
         let callee = if let Some(&tm) = self.mods[mi as usize].classes.get(name) {
             let t = self.m.tok(TokKind::ClassObj(tm));
             Some(self.tok_node(t))
-        } else if let Some(&n) = self.mods[mi as usize].imports.get(name) {
+        } else if let Some(n) = self.import_value(mi, name) {
             Some(n)
         } else {
             self.mods[mi as usize].scope.get(name).copied()
@@ -284,7 +287,7 @@ impl<'a> Gen<'a> {
             let t = self.m.tok(TokKind::ClassObj(tm));
             return self.tok_node(t);
         }
-        if let Some(&n) = self.mods[mi as usize].imports.get(name) {
+        if let Some(n) = self.import_value(mi, name) {
             return n;
         }
         if let Some(&n) = self.mods[mi as usize].scope.get(name) {

@@ -1536,7 +1536,7 @@ impl<'a> Gen<'a> {
         if let Some(&n) = self.mods[mi as usize].scope.get(name) {
             return n;
         }
-        if let Some(&n) = self.mods[mi as usize].imports.get(name) {
+        if let Some(n) = self.import_value(mi, name) {
             return n;
         }
         self.m.top_val(&format!("unresolved scope name {name}"))
