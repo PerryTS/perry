@@ -37,7 +37,9 @@ pub struct NsStandIn<'a> {
     pub node: NodeId,
     tok: Tok,
     mi: u32,
-    imp: &'a Import,
+    /// The module's path, and the source text its reasons name.
+    path: &'a str,
+    src: &'a str,
     local: String,
     /// The keys made, each with the value node it holds.
     made: FxHashMap<String, NodeId>,
@@ -552,7 +554,11 @@ impl<'a> Gen<'a> {
                             continue;
                         }
                         (ImportSpecifier::Namespace { local }, None)
-                            if self.ns_keys_for(imp).is_some() =>
+                            if imp
+                                .resolved_path
+                                .as_deref()
+                                .and_then(|p| self.ns_keys_for(p))
+                                .is_some() =>
                         {
                             self.unnamed_imports
                                 .insert((mi, local.clone()), (imp, None));
@@ -571,31 +577,53 @@ impl<'a> Gen<'a> {
         }
     }
 
-    /// What `import { name as local }` binds from another unit: the stand-in
-    /// of its class, function or value contract, else ⊤ (a native, builtin
-    /// or unresolved module, or an export without a contract).
+    /// What `import { name as local }` binds from another unit (module
+    /// `path`, written `src`): the stand-in of its class, function or value
+    /// contract, else ⊤ (a native, builtin or unresolved module, or an
+    /// export without a contract). A name `path` re-exports is the binding
+    /// it resolves to (§18.14, ECMAScript ResolveExport): the declaring
+    /// module's contract, or that module's namespace.
     fn imported_value(
         &mut self,
         mi: u32,
-        imp: &'a perry_hir::Import,
+        path: Option<&'a str>,
+        src: &'a str,
         name: &str,
         local: &str,
     ) -> NodeId {
-        if let Some(c) = self.contract_for(imp, name) {
+        let unresolved = |g: &mut Self| {
+            let why = format!("import from native/unresolved module {src}");
+            g.m.top_val(&why)
+        };
+        let Some(path) = path else {
+            return unresolved(self);
+        };
+        let (path, name) = match self.unit_in.and_then(|u| u.resolve(path, name)) {
+            Some(crate::units::Resolved::Binding(p, n)) => (p, n),
+            Some(crate::units::Resolved::Namespace(p)) => {
+                return self.stand_in_ns(mi, p, p, local);
+            }
+            Some(crate::units::Resolved::Unknown) => {
+                return self.m.top_val(&format!(
+                    "export {name} of {src}: re-exported from outside the program or ambiguous"
+                ));
+            }
+            None => (path, name),
+        };
+        if let Some(c) = self.contract_for(path, name) {
             return self.stand_in_class(mi, c);
         }
-        if let Some(c) = self.fn_contract_for(imp, name) {
+        if let Some(c) = self.fn_contract_for(path, name) {
             return self.stand_in_fn(mi, c);
         }
-        if let Some(c) = self.value_contract_for(imp, name) {
+        if let Some(c) = self.value_contract_for(path, name) {
             return self.stand_in_value(mi, local, c);
         }
-        let why = format!("import from native/unresolved module {}", imp.source);
-        self.m.top_val(&why)
+        unresolved(self)
     }
 
-    fn ns_keys_for(&self, imp: &perry_hir::Import) -> Option<&'a (Vec<String>, bool)> {
-        self.unit_in?.ns_keys(imp.resolved_path.as_deref()?)
+    fn ns_keys_for(&self, path: &str) -> Option<&'a crate::units::ModExports> {
+        self.unit_in?.ns_keys(path)
     }
 
     /// Another unit's module namespace object (design §18.2): one object per
@@ -603,15 +631,11 @@ impl<'a> Gen<'a> {
     /// what a named import of it binds; open (⊤ under any key) when an
     /// `export *` source is outside the program. A namespace's shape is its
     /// module's declarations, so nothing about it is guarded.
-    fn stand_in_ns(&mut self, mi: u32, imp: &'a perry_hir::Import, local: &str) -> NodeId {
-        let path = imp
-            .resolved_path
-            .clone()
-            .expect("a namespace with keys has a path");
-        if let Some(e) = self.stand_in_nss.get(&path) {
+    fn stand_in_ns(&mut self, mi: u32, path: &'a str, src: &'a str, local: &str) -> NodeId {
+        if let Some(e) = self.stand_in_nss.get(path) {
             return e.node;
         }
-        let (_, open) = self.ns_keys_for(imp).expect("namespace keys");
+        let open = self.ns_keys_for(path).expect("namespace keys").open;
         // Past this unit's own modules' namespaces (`ModInfo::ns_tok`).
         let id = (self.modules.len() + self.stand_in_nss.len()) as u32;
         let tok = self.m.tok(TokKind::ModNs(id));
@@ -621,21 +645,21 @@ impl<'a> Gen<'a> {
         self.m.add_tok(n, tok);
         // Its keys' values are made as the unit names them (`NsStandIn`).
         self.stand_in_nss.insert(
-            path,
+            path.to_string(),
             NsStandIn {
                 node: n,
                 tok,
                 mi,
-                imp,
+                path,
+                src,
                 local: local.to_string(),
                 made: Default::default(),
                 whole: false,
                 escaped: false,
             },
         );
-        if *open {
+        if open {
             let fa = self.m.field_any(tok);
-            let src = imp.source.clone();
             self.m.add_top(fa, |_| {
                 format!("namespace of {src}: export * from outside the program")
             });
@@ -658,20 +682,21 @@ impl<'a> Gen<'a> {
         if let Some(&v) = e.made.get(k) {
             return Some(v);
         }
-        let (mi, imp, tok) = (e.mi, e.imp, e.tok);
+        let (mi, p, src, tok) = (e.mi, e.path, e.src, e.tok);
         let local = format!("{}.{k}", e.local);
-        if !self
-            .ns_keys_for(imp)
-            .is_some_and(|(keys, _)| keys.iter().any(|x| x == k))
-        {
+        if !self.ns_keys_for(p).is_some_and(|x| x.has(k)) {
             return None;
         }
-        let v = self.at_module_scope(|g| g.imported_value(mi, imp, k, &local));
+        let v = self.at_module_scope(|g| g.imported_value(mi, Some(p), src, k, &local));
         let a = self.m.atom(k);
         let f = self.m.field(tok, a);
         self.m.edge(v, f);
         let e = self.stand_in_nss.get_mut(path).expect("namespace");
         e.made.insert(k.to_string(), v);
+        // A namespace held under a key (`export * as n`, `import * as n;
+        // export { n }`) is read as a value, its keys named by nothing
+        // here: every key (`ns_whole`).
+        self.ns_whole(v);
         Some(v)
     }
 
@@ -681,15 +706,16 @@ impl<'a> Gen<'a> {
         let Some(path) = self.ns_path_of(n) else {
             return;
         };
-        if self.stand_in_nss[&path].whole {
+        let e = self.stand_in_nss.get_mut(&path).expect("namespace");
+        // Set first: a namespace may reach itself through its keys.
+        if std::mem::replace(&mut e.whole, true) {
             return;
         }
-        let imp = self.stand_in_nss[&path].imp;
-        let (keys, _) = self.ns_keys_for(imp).expect("namespace keys");
-        for k in keys {
+        let p = e.path;
+        let x = self.ns_keys_for(p).expect("namespace keys");
+        for (k, _) in &x.keys {
             self.ns_key(&path, k);
         }
-        self.stand_in_nss.get_mut(&path).unwrap().whole = true;
     }
 
     /// Stand-in namespace `path` handed to code outside this unit: what its
@@ -708,12 +734,23 @@ impl<'a> Gen<'a> {
         if e.whole || e.escaped {
             return;
         }
-        let imp = e.imp;
-        let (keys, _) = self.ns_keys_for(imp).expect("namespace keys");
-        for k in keys {
-            let carries = self.contract_for(imp, k).is_some()
-                || self.fn_contract_for(imp, k).is_some_and(escape_carries)
-                || self.value_contract_for(imp, k).is_some_and(|c| {
+        let p = e.path;
+        let x = self.ns_keys_for(p).expect("namespace keys");
+        for (k, _) in &x.keys {
+            // The binding the key resolves to (through re-exports): its
+            // declaring module holds the contract.
+            let (dp, dn) = match self.unit_in.and_then(|u| u.resolve(p, k)) {
+                Some(crate::units::Resolved::Binding(dp, dn)) => (dp, dn),
+                Some(crate::units::Resolved::Namespace(_)) => {
+                    self.ns_key(path, k);
+                    continue;
+                }
+                Some(crate::units::Resolved::Unknown) => continue,
+                None => (p, k.as_str()),
+            };
+            let carries = self.contract_for(dp, dn).is_some()
+                || self.fn_contract_for(dp, dn).is_some_and(escape_carries)
+                || self.value_contract_for(dp, dn).is_some_and(|c| {
                     !c.layouts.is_empty()
                         || !c.classes.is_empty()
                         || c.fns.iter().any(escape_carries)
@@ -775,9 +812,15 @@ impl<'a> Gen<'a> {
     /// had not named it yet, as binding the imports would have made it.
     fn bind_import(&mut self, mi: u32, name: &str) -> Option<NodeId> {
         if let Some((imp, export)) = self.unnamed_imports.remove(&(mi, name.to_string())) {
+            let p = imp.resolved_path.as_deref();
             let n = self.at_module_scope(|g| match &export {
-                Some(e) => g.imported_value(mi, imp, e, name),
-                None => g.stand_in_ns(mi, imp, name),
+                Some(e) => g.imported_value(mi, p, &imp.source, e, name),
+                None => g.stand_in_ns(
+                    mi,
+                    p.expect("a namespace with keys has a path"),
+                    &imp.source,
+                    name,
+                ),
             });
             self.mods[mi as usize].imports.insert(name.to_string(), n);
         }
@@ -799,13 +842,8 @@ impl<'a> Gen<'a> {
         r
     }
 
-    fn fn_contract_for(
-        &self,
-        imp: &perry_hir::Import,
-        name: &str,
-    ) -> Option<&'a crate::units::FnContract> {
-        self.unit_in?
-            .fn_contract(imp.resolved_path.as_deref()?, name)
+    fn fn_contract_for(&self, path: &str, name: &str) -> Option<&'a crate::units::FnContract> {
+        self.unit_in?.fn_contract(path, name)
     }
 
     /// Another unit's function as this unit sees it through its contract
@@ -1033,11 +1071,10 @@ impl<'a> Gen<'a> {
 
     fn value_contract_for(
         &self,
-        imp: &perry_hir::Import,
+        path: &str,
         name: &str,
     ) -> Option<&'a crate::units::ValueContract> {
-        self.unit_in?
-            .value_contract(imp.resolved_path.as_deref()?, name)
+        self.unit_in?.value_contract(path, name)
     }
 
     /// Another unit's module-scope value as this unit sees it through its
@@ -1091,13 +1128,8 @@ impl<'a> Gen<'a> {
         n
     }
 
-    fn contract_for(
-        &self,
-        imp: &perry_hir::Import,
-        name: &str,
-    ) -> Option<&'a crate::units::ClassContract> {
-        self.unit_in?
-            .class_contract(imp.resolved_path.as_deref()?, name)
+    fn contract_for(&self, path: &str, name: &str) -> Option<&'a crate::units::ClassContract> {
+        self.unit_in?.class_contract(path, name)
     }
 
     /// Another unit's class as this unit sees it through its contract
@@ -1430,7 +1462,9 @@ impl<'a> Gen<'a> {
 
     /// After the solve: the other units' classes this unit used beyond their
     /// contract (census reports, design §11.3), by template display. An
-    /// aborted unit reports every contract it consumed.
+    /// aborted unit reports every contract it consumed, but an open contract
+    /// function: an aborted unit is unknown code holding it, as for one that
+    /// escapes (`open_fn`).
     pub(crate) fn reports(&self) -> Vec<String> {
         let mut out: Vec<String> = self
             .stand_ins
@@ -1446,8 +1480,8 @@ impl<'a> Gen<'a> {
             .map(|(d, _)| d.clone())
             .collect();
         for ((name, _), &(_, t)) in &self.stand_in_fns {
-            let escaped = self.m.is_escaped(t) && !self.open_fn(t);
-            if self.m.aborted || escaped || self.m.hard.contains_key(&t) {
+            let escaped = (self.m.aborted || self.m.is_escaped(t)) && !self.open_fn(t);
+            if escaped || self.m.hard.contains_key(&t) {
                 out.push(format!("fn:{name}"));
             }
         }

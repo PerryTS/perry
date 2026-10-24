@@ -149,11 +149,48 @@ impl<'a> Gen<'a> {
         // An export a module never declares, asked for by an importer, reads
         // through `export *` chains: route every export node through the
         // namespace's computed-key node (the `export *` targets feed it).
+        // A name the module declares itself is not read through them: an
+        // own export shadows every `export *` (ECMAScript ResolveExport,
+        // §18.14).
+        let mut own: crate::pts::FxHashSet<(u32, Atom)> = Default::default();
+        for mi in 0..modules.len() {
+            let mut names: Vec<&str> = Vec::new();
+            for e in self.exports_of(mi) {
+                match e {
+                    Export::Named { exported, .. } | Export::ReExport { exported, .. } => {
+                        names.push(exported)
+                    }
+                    Export::NamespaceReExport { name, .. } => names.push(name),
+                    Export::ExportAll { .. } => {}
+                }
+            }
+            names.extend(
+                self.exported_functions_of(mi)
+                    .iter()
+                    .map(|(n, _)| n.as_str()),
+            );
+            for f in self.functions_of(mi) {
+                if f.is_exported {
+                    names.push(&f.name);
+                }
+            }
+            for c in self.classes_of(mi) {
+                if c.is_exported {
+                    names.push(&c.name);
+                }
+            }
+            names.extend(self.exported_objects_of(mi).iter().map(|n| n.as_str()));
+            for n in names {
+                let a = self.m.atom(n);
+                own.insert((mi as u32, a));
+            }
+        }
         let keys: Vec<(u32, Atom)> = self.exports.keys().copied().collect();
         for (mi, a) in keys {
             if self
                 .view
                 .is_some_and(|v| v.unit_exports.contains(&self.m.atoms[a as usize]))
+                || own.contains(&(mi, a))
             {
                 continue;
             }

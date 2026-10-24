@@ -379,9 +379,10 @@ pub(crate) struct Published {
     /// the existing keys other units store into and the primitive kinds
     /// they store, `None` for any value (union over every unit, DECISIONS 73).
     pub(crate) stores: FxHashMap<String, Vec<(String, Option<u16>)>>,
-    /// The keys of each module's namespace object (design §18.2), and
-    /// whether it may hold any key (an `export *` from outside the program).
-    pub(crate) ns_keys: FxHashMap<String, (Vec<String>, bool)>,
+    /// Each module's namespace object (design §18.2): its keys, where each
+    /// resolves through re-exports (§18.14), and whether it may hold any key
+    /// (an `export *` from outside the program).
+    pub(crate) exports: Exports,
 }
 
 impl Published {
@@ -429,8 +430,13 @@ impl Published {
         self.eval_scopes || self.ns_object.contains(path)
     }
 
-    pub(crate) fn ns_keys(&self, path: &str) -> Option<&(Vec<String>, bool)> {
-        self.ns_keys.get(path)
+    pub(crate) fn ns_keys(&self, path: &str) -> Option<&ModExports> {
+        self.exports.by_path.get(path)
+    }
+
+    /// Where `import { name } from path` leads (§18.14).
+    pub(crate) fn resolve(&self, path: &str, name: &str) -> Option<Resolved<'_>> {
+        self.exports.resolve(path, name)
     }
 
     pub(crate) fn broken(&self, display: &str) -> bool {
@@ -465,6 +471,7 @@ fn reexport_source<'i>(
 pub(crate) fn published_surface(
     sorted: &[(&str, Vec<&Import>, &[Export])],
     cfg: &FactsConfig,
+    ex: &Exports,
 ) -> Published {
     let mut p = Published {
         all: cfg.dynamic_code.is_some()
@@ -537,67 +544,315 @@ pub(crate) fn published_surface(
             }
         }
     }
+    // A name a module re-exports is named where it is declared (§18.14):
+    // published there, as the importer reads its contract there; a
+    // re-exported namespace is whole there.
+    let mut add: Vec<(String, String)> = Vec::new();
+    let mut whole: Vec<String> = p.whole.iter().cloned().collect();
+    for (t, names) in &p.names {
+        for n in names {
+            match ex.resolve(t, n) {
+                Some(Resolved::Binding(d, m)) if d != t || m != n => {
+                    add.push((d.to_string(), m.to_string()))
+                }
+                Some(Resolved::Namespace(d)) => whole.push(d.to_string()),
+                _ => {}
+            }
+        }
+    }
+    let mut seen: FxHashSet<String> = FxHashSet::default();
+    while let Some(t) = whole.pop() {
+        if !seen.insert(t.clone()) {
+            continue;
+        }
+        p.whole.insert(t.clone());
+        let Some(me) = ex.by_path.get(&t) else {
+            continue;
+        };
+        for (k, target) in &me.keys {
+            match target {
+                ExportTarget::Binding(d, m) => {
+                    let d = &ex.paths[*d as usize];
+                    if *d != t || m != k {
+                        add.push((d.clone(), m.clone()));
+                    }
+                }
+                ExportTarget::Namespace(d) => whole.push(ex.paths[*d as usize].clone()),
+                ExportTarget::Unknown => {}
+            }
+        }
+    }
+    for (d, m) in add {
+        p.names.entry(d).or_default().insert(m);
+    }
     p
 }
 
-/// The keys of each module's namespace object (design §18.2): its export
-/// names, from the declarations (the same ones `Gen::link_exports` puts on
-/// the namespace). `export *` adds the source module's keys but `default`;
-/// a source outside the program makes the namespace open. Syntactic.
-pub(crate) fn namespace_keys(
-    sorted: &[(&str, &Module)],
-    es: &crate::ExportSources,
-) -> FxHashMap<String, (Vec<String>, bool)> {
+/// Where an export name of a module leads (ECMAScript ResolveExport, design
+/// §18.14): a binding some module declares, a module's namespace object
+/// (`export * as n from`, `import * as n; export { n }`), or unknown.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum ExportTarget {
+    /// Binding `.1` that module `.0` (an index into `Exports::paths`) declares.
+    Binding(u32, String),
+    /// The namespace object of module `.0`.
+    Namespace(u32),
+    /// A source outside the program, or a name two `export *` sources bind
+    /// differently (the namespace leaves it out, a named import of it is a
+    /// link error): nothing is known of it.
+    Unknown,
+}
+
+/// A module's namespace (design §18.2): its export names, each with where
+/// it resolves, sorted by name; open when an `export *` source in reach is
+/// outside the program (any other key may be there).
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ModExports {
+    pub(crate) keys: Vec<(String, ExportTarget)>,
+    pub(crate) open: bool,
+}
+
+impl ModExports {
+    pub(crate) fn get(&self, k: &str) -> Option<&ExportTarget> {
+        self.keys
+            .binary_search_by(|(x, _)| x.as_str().cmp(k))
+            .ok()
+            .map(|i| &self.keys[i].1)
+    }
+
+    pub(crate) fn has(&self, k: &str) -> bool {
+        self.get(k).is_some()
+    }
+}
+
+/// Every module's namespace, by path; `paths` names the modules targets
+/// point at.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Exports {
+    pub(crate) paths: Vec<String>,
+    pub(crate) by_path: FxHashMap<String, ModExports>,
+}
+
+/// What an import of a name from a module binds (`Published::resolve`).
+#[derive(Debug, PartialEq)]
+pub(crate) enum Resolved<'a> {
+    /// Binding `.1` declared by module `.0`: its contract is keyed so.
+    Binding(&'a str, &'a str),
+    /// The namespace object of module `.0`.
+    Namespace(&'a str),
+    Unknown,
+}
+
+impl Exports {
+    /// The other modules declaring a binding module `m`'s namespace holds,
+    /// through the namespaces it holds too (`m` itself left out).
+    pub(crate) fn reach(&self, m: usize) -> Vec<usize> {
+        let mut out: Vec<usize> = Vec::new();
+        let mut seen: FxHashSet<usize> = FxHashSet::default();
+        let mut todo = vec![m];
+        while let Some(x) = todo.pop() {
+            if !seen.insert(x) {
+                continue;
+            }
+            let Some(me) = self.by_path.get(&self.paths[x]) else {
+                continue;
+            };
+            for (_, t) in &me.keys {
+                match *t {
+                    ExportTarget::Binding(d, _) if d as usize != m => out.push(d as usize),
+                    ExportTarget::Namespace(d) => todo.push(d as usize),
+                    _ => {}
+                }
+            }
+        }
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
+    /// Where `import { name } from path` leads: `None` when `path` has no
+    /// such key (no export the declarations name: its contract, if any, is
+    /// keyed by `path` itself).
+    pub(crate) fn resolve<'s>(&'s self, path: &str, name: &str) -> Option<Resolved<'s>> {
+        Some(match self.by_path.get(path)?.get(name)? {
+            ExportTarget::Binding(m, n) => Resolved::Binding(&self.paths[*m as usize], n),
+            ExportTarget::Namespace(m) => Resolved::Namespace(&self.paths[*m as usize]),
+            ExportTarget::Unknown => Resolved::Unknown,
+        })
+    }
+}
+
+/// One module's own export entries, as ResolveExport reads them.
+enum Own<'m> {
+    /// Declared by the module under its export name.
+    Here,
+    /// An indirect export: name `.1` of module `.0` (`export { a } from`,
+    /// `import { a }; export { a }`); `None`: a module outside the program.
+    Indirect(Option<usize>, &'m str),
+    /// The namespace of module `.0` (`None`: outside the program).
+    Ns(Option<usize>),
+}
+
+struct Resolver<'m> {
+    own: Vec<FxHashMap<&'m str, Own<'m>>>,
+    stars: Vec<Vec<Option<usize>>>,
+    /// Resolutions reached without cutting a cycle: the same from every
+    /// resolve set.
+    memo: Vec<FxHashMap<&'m str, Option<ExportTarget>>>,
+}
+
+impl<'m> Resolver<'m> {
+    /// ResolveExport(m, name) (ECMA-262 16.2.1.6.3): `None` when not
+    /// found; `.1` when a cycle was cut on the way (the result then
+    /// depends on the resolve set and is not memoized).
+    fn resolve(
+        &mut self,
+        m: usize,
+        name: &'m str,
+        set: &mut Vec<(usize, &'m str)>,
+    ) -> (Option<ExportTarget>, bool) {
+        if let Some(r) = self.memo[m].get(name) {
+            return (r.clone(), false);
+        }
+        if set.contains(&(m, name)) {
+            return (None, true);
+        }
+        set.push((m, name));
+        let mut cyc = false;
+        let r = match self.own[m].get(name) {
+            Some(Own::Here) => Some(ExportTarget::Binding(m as u32, name.to_string())),
+            Some(Own::Ns(Some(t))) => Some(ExportTarget::Namespace(*t as u32)),
+            Some(Own::Ns(None) | Own::Indirect(None, _)) => Some(ExportTarget::Unknown),
+            Some(&Own::Indirect(Some(t), imported)) => {
+                let (r, c) = self.resolve(t, imported, set);
+                cyc |= c;
+                // An indirect export that resolves nowhere is a link error.
+                Some(r.unwrap_or(ExportTarget::Unknown))
+            }
+            // `export *` never re-exports `default`.
+            None if name == "default" => None,
+            None => {
+                let mut acc: Option<ExportTarget> = None;
+                for i in 0..self.stars[m].len() {
+                    let r = match self.stars[m][i] {
+                        None => Some(ExportTarget::Unknown),
+                        Some(s) => {
+                            let (r, c) = self.resolve(s, name, set);
+                            cyc |= c;
+                            r
+                        }
+                    };
+                    acc = match (acc, r) {
+                        (a, None) => a,
+                        (None, b) => b,
+                        (Some(a), Some(b)) if a == b => Some(a),
+                        // Two different bindings (ambiguous), or a source
+                        // outside the program that may bind it too.
+                        _ => Some(ExportTarget::Unknown),
+                    };
+                }
+                acc
+            }
+        };
+        set.pop();
+        if !cyc {
+            self.memo[m].insert(name, r.clone());
+        }
+        (r, cyc)
+    }
+}
+
+/// Each module's namespace (design §18.2, §18.14): its export names
+/// (GetExportedNames: its own, then every `export *` source's but
+/// `default`, a revisited module ending the walk) and where each resolves
+/// (ResolveExport), from the HIR's import and export declarations.
+/// Compiler-internal: nothing of it is emitted.
+pub(crate) fn module_exports(sorted: &[(&str, &Module)], es: &crate::ExportSources) -> Exports {
     let index: FxHashMap<&str, usize> = sorted
         .iter()
         .enumerate()
         .map(|(i, (p, _))| (*p, i))
         .collect();
-    let mut own: Vec<(Vec<String>, Vec<Option<usize>>)> = Vec::with_capacity(sorted.len());
+    let mut own: Vec<FxHashMap<&str, Own>> = Vec::with_capacity(sorted.len());
+    let mut stars: Vec<Vec<Option<usize>>> = Vec::with_capacity(sorted.len());
     for (path, m) in sorted {
-        let mut keys: Vec<String> = Vec::new();
-        let mut stars: Vec<Option<usize>> = Vec::new();
-        for e in &m.exports {
-            match e {
-                Export::Named { exported, .. } | Export::ReExport { exported, .. } => {
-                    keys.push(exported.clone())
-                }
-                Export::NamespaceReExport { name, .. } => keys.push(name.clone()),
-                Export::ExportAll { source } => stars.push(
-                    reexport_source(es, path, &m.imports, source)
-                        .and_then(|t| index.get(t.as_str()).copied()),
-                ),
+        let module_of = |p: Option<String>| p.and_then(|t| index.get(t.as_str()).copied());
+        // The module's import bindings: an export of one is indirect.
+        let mut imported: FxHashMap<&str, Own> = FxHashMap::default();
+        for imp in m.imports.iter().filter(|i| !i.type_only) {
+            let t = || module_of(imp.resolved_path.clone());
+            for sp in &imp.specifiers {
+                let (local, o) = match sp {
+                    ImportSpecifier::Named { imported, local } => {
+                        (local, Own::Indirect(t(), imported.as_str()))
+                    }
+                    ImportSpecifier::Default { local } => (local, Own::Indirect(t(), "default")),
+                    ImportSpecifier::Namespace { local } => (local, Own::Ns(t())),
+                };
+                imported.insert(local.as_str(), o);
             }
         }
-        keys.extend(m.exported_functions.iter().map(|(n, _)| n.clone()));
-        keys.extend(
-            m.functions
-                .iter()
-                .filter(|f| f.is_exported)
-                .map(|f| f.name.clone()),
-        );
-        keys.extend(
-            m.classes
-                .iter()
-                .filter(|c| c.is_exported)
-                .map(|c| c.name.clone()),
-        );
-        keys.extend(
-            m.enums
-                .iter()
-                .filter(|e| e.is_exported)
-                .map(|e| e.name.clone()),
-        );
-        keys.extend(m.exported_objects.iter().cloned());
-        own.push((keys, stars));
+        let mut o: FxHashMap<&str, Own> = FxHashMap::default();
+        let mut st: Vec<Option<usize>> = Vec::new();
+        for e in &m.exports {
+            let src = |source: &str| module_of(reexport_source(es, path, &m.imports, source));
+            match e {
+                Export::Named { local, exported } => {
+                    let v = match imported.get(local.as_str()) {
+                        Some(&Own::Indirect(t, n)) => Own::Indirect(t, n),
+                        Some(&Own::Ns(t)) => Own::Ns(t),
+                        _ => Own::Here,
+                    };
+                    o.insert(exported.as_str(), v);
+                }
+                Export::ReExport {
+                    source,
+                    imported,
+                    exported,
+                } => {
+                    o.insert(
+                        exported.as_str(),
+                        Own::Indirect(src(source), imported.as_str()),
+                    );
+                }
+                Export::NamespaceReExport { source, name } => {
+                    o.insert(name.as_str(), Own::Ns(src(source)));
+                }
+                Export::ExportAll { source } => st.push(src(source)),
+            }
+        }
+        let decls = m
+            .exported_functions
+            .iter()
+            .map(|(n, _)| n)
+            .chain(
+                m.functions
+                    .iter()
+                    .filter(|f| f.is_exported)
+                    .map(|f| &f.name),
+            )
+            .chain(m.classes.iter().filter(|c| c.is_exported).map(|c| &c.name))
+            .chain(m.enums.iter().filter(|e| e.is_exported).map(|e| &e.name))
+            .chain(m.exported_objects.iter());
+        for n in decls {
+            o.entry(n.as_str()).or_insert(Own::Here);
+        }
+        own.push(o);
+        stars.push(st);
     }
-    let mut out = FxHashMap::default();
+    let mut r = Resolver {
+        own,
+        stars,
+        memo: (0..sorted.len()).map(|_| FxHashMap::default()).collect(),
+    };
+    let mut by_path = FxHashMap::default();
     for (i, (path, _)) in sorted.iter().enumerate() {
-        let mut keys: FxHashSet<String> = own[i].0.iter().cloned().collect();
+        // GetExportedNames.
+        let mut names: FxHashSet<&str> = r.own[i].keys().copied().collect();
         let mut open = false;
         let mut seen = vec![i];
-        let mut st: Vec<Option<usize>> = own[i].1.clone();
-        while let Some(s) = st.pop() {
+        let mut todo: Vec<Option<usize>> = r.stars[i].clone();
+        while let Some(s) = todo.pop() {
             let Some(s) = s else {
                 open = true;
                 continue;
@@ -606,14 +861,23 @@ pub(crate) fn namespace_keys(
                 continue;
             }
             seen.push(s);
-            keys.extend(own[s].0.iter().filter(|k| k.as_str() != "default").cloned());
-            st.extend(own[s].1.iter().copied());
+            names.extend(r.own[s].keys().copied().filter(|k| *k != "default"));
+            todo.extend(r.stars[s].iter().copied());
         }
-        let mut keys: Vec<String> = keys.into_iter().collect();
-        keys.sort();
-        out.insert(path.to_string(), (keys, open));
+        let mut keys: Vec<(String, ExportTarget)> = names
+            .into_iter()
+            .filter_map(|k| {
+                let t = r.resolve(i, k, &mut Vec::new()).0?;
+                Some((k.to_string(), t))
+            })
+            .collect();
+        keys.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+        by_path.insert(path.to_string(), ModExports { keys, open });
     }
-    out
+    Exports {
+        paths: sorted.iter().map(|(p, _)| p.to_string()).collect(),
+        by_path,
+    }
 }
 
 /// One solve of the per-unit driver: a declaration unit of module `mi`
@@ -653,6 +917,7 @@ fn solves<'a>(
     sorted: &[(&'a str, &'a Module)],
     flats: &'a [Option<Module>],
     es: &crate::ExportSources,
+    ex: &Exports,
 ) -> Vec<Solve<'a>> {
     let index: FxHashMap<&str, usize> = sorted
         .iter()
@@ -683,9 +948,11 @@ fn solves<'a>(
         }
         range.push(base..out.len());
     }
+    let mut ns_reach: FxHashMap<usize, Vec<usize>> = FxHashMap::default();
     for si in 0..out.len() {
         let (path, module) = sorted[out[si].mi];
         let mut after: Vec<usize> = Vec::new();
+        let mut deps: Vec<usize> = Vec::new();
         for imp in &module.imports {
             let Some(&t) = imp
                 .resolved_path
@@ -717,9 +984,32 @@ fn solves<'a>(
                 if !out[si].view.ext_names.contains(local) {
                     continue;
                 }
-                match name.and_then(|n| owner_of(&out, &range[t], n)) {
+                // A name another module re-exports is read where it is
+                // declared (§18.14): ordered after, and depending on, the
+                // declaring unit, not the re-exporting module (whose units
+                // are ordered after all of their sources, a cycle when the
+                // declaring module imports the re-exporter too).
+                let (d, name) = match name.and_then(|n| ex.resolve(sorted[t].0, n)) {
+                    Some(Resolved::Binding(p, n)) => (index[p], Some(n)),
+                    Some(Resolved::Namespace(p)) => (index[p], None),
+                    _ => (t, name),
+                };
+                if d != t {
+                    deps.extend(range[d].clone());
+                }
+                // A namespace's keys are read where they are declared: its
+                // unit is ordered after those modules too.
+                if name.is_none() {
+                    for &r in ns_reach.entry(d).or_insert_with(|| ex.reach(d)).iter() {
+                        if r != out[si].mi {
+                            deps.extend(range[r].clone());
+                            after.extend(range[r].clone());
+                        }
+                    }
+                }
+                match name.and_then(|n| owner_of(&out, &range[d], n)) {
                     Some(w) => after.push(w),
-                    None => after.extend(range[t].clone()),
+                    None => after.extend(range[d].clone()),
                 }
             }
         }
@@ -748,7 +1038,13 @@ fn solves<'a>(
                 after.extend(range[t].clone());
             }
         }
+        // Each once, in first-named order (the order's DFS follows it).
+        let mut once: FxHashSet<usize> = FxHashSet::default();
+        after.retain(|&w| once.insert(w));
         out[si].after.extend(after);
+        deps.sort_unstable();
+        deps.dedup();
+        out[si].deps.extend(deps);
     }
     out
 }
@@ -808,7 +1104,8 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
         .iter()
         .map(|(_, m)| crate::decl_units::run_once_flat(m))
         .collect();
-    let solves = solves(sorted, &flats, &cfg.export_sources);
+    let exports = module_exports(sorted, &cfg.export_sources);
+    let solves = solves(sorted, &flats, &cfg.export_sources, &exports);
     let viewed: Vec<(&str, Vec<&Import>, &[Export])> = solves
         .iter()
         .map(|s| {
@@ -823,8 +1120,8 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
             )
         })
         .collect();
-    let mut input = published_surface(&viewed, cfg);
-    input.ns_keys = namespace_keys(sorted, &cfg.export_sources);
+    let mut input = published_surface(&viewed, cfg, &exports);
+    input.exports = exports;
     let order = dependency_order(&solves);
     let levels = dependency_levels(&solves, &order);
     let mut rounds = 0u32;
