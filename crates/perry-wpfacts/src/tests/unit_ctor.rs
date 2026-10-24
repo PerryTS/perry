@@ -372,10 +372,10 @@ fn a_method_call_on_a_parameter_runs_in_the_callers_unit() {
 const RESULT_FN: &str = r#"
     class Val { v: number; constructor(v: number) { this.v = v; } }
     class Det {
-      reader(): (x: Val) => number { return (x: Val) => x.v; }
+      reader(): (x: Val) => Val { return (x: Val) => new Val(x.v + 1); }
     }
     const f = new Det().reader();
-    console.log(f(new Val(1)));
+    console.log(f(new Val(1)).v);
     "#;
 
 #[test]
@@ -387,7 +387,8 @@ fn a_function_handed_to_another_unit_is_called_through_its_contract() {
     // (E0) vs T0Mono whole, DECISIONS 148 (open); without 147 Val breaks.
     assert!(!whole.broken.iter().any(|b| b.contains("Val")));
     // A test must be able to fail: a reader that drops the described
-    // function calls nothing, and `x.v` sees no Val at all.
+    // function calls nothing, so `f(..).v` in the caller's unit sees no
+    // receiver (`x.v` alone cannot tell: its conservative entry holds Val).
     let vs: Vec<_> = pf.sites.iter().filter(|s| s.key == "v").collect();
-    assert!(!vs.is_empty() && vs.iter().all(|s| !s.receivers.is_empty()), "{}", pf.dump_text());
+    assert!(vs.len() == 2 && vs.iter().all(|s| !s.receivers.is_empty()), "{}", pf.dump_text());
 }
