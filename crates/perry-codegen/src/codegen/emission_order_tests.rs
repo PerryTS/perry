@@ -727,8 +727,9 @@ fn retained_source_ranges_preserve_registrations_and_ownership() {
                     "source length must reuse the idle versioned-captures field: {info}"
                 );
                 assert!(
-                    info.contains(&format!("constant {{ {info_type}, i32, i32 }}")),
-                    "ordinary source must reuse the base fields; only the name range follows: {info}"
+                    info.contains(&format!("constant {{ {info_type}, i32, i32 }}"))
+                        || info.contains(&format!("constant {{ {info_type}, i32, i32, ptr }}")),
+                    "ordinary source must reuse the base fields before name and entry metadata: {info}"
                 );
                 assert!(
                     info.contains(&format!("{global_suffix} to i64")),

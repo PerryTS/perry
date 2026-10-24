@@ -89,11 +89,11 @@ fn assert_shape_read(constructor: bool) {
     // (a sentinel result means "not served by the shape"), and only a miss
     // reaches the ordinary Get, which can run a getter.
     assert!(
-        ir.contains("call double @perry_probe_get(") && ir.contains("icmp ne i64"),
+        ir.contains("call double @perry_probe_get_memo(") && ir.contains("icmp ne i64"),
         "the site must probe the live receiver's shape and test for a miss: {ir}"
     );
     assert!(
-        ir.contains("call double @js_object_get_field_slow("),
+        ir.contains("call double @js_object_get_field_value_site("),
         "a shape miss must retain the ordinary Get, which can run a getter: {ir}"
     );
     let start = ir.find("\npget.recv_ok.").expect("probe block is emitted");
@@ -108,7 +108,7 @@ fn assert_shape_read(constructor: bool) {
     let slow = &ir[slow + 1..];
     let slow = &slow[..slow.find("\n\n").expect("end of miss block")];
     assert!(
-        slow.contains("@js_object_get_field_slow("),
+        slow.contains("@js_object_get_field_value_site("),
         "the miss block must hold the ordinary Get: {slow}"
     );
 }

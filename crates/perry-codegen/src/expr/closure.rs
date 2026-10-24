@@ -456,7 +456,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 blk.add(
                     I32,
                     &kind,
-                    &crate::runtime_abi::FUNCTION_SHAPE_BASE.to_string(),
+                    &crate::runtime_abi::FUNCTION_LAYOUT_WORD.to_string(),
                 )
             };
             let birth_header = {

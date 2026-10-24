@@ -293,8 +293,9 @@ fn assert_versioned_loop_lowered(ir: &str, what: &str) {
     assert!(
         ir.lines()
             .any(|line| line.contains("call i64 @js_region_loop_prime(")
-                && line.contains("i32 1, i32 0, i32 1)")),
-        "{what}: increment must request stored=1, boxed=0 and R=1"
+                && line.contains("i32 1, i32 0, i32 1)"))
+            || ir.contains("rloop.guard.static."),
+        "{what}: numeric stores need either the learned R=1 request or a static shape guard"
     );
 }
 

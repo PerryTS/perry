@@ -320,8 +320,8 @@ pub use static_shape_ids::{
     TypedMasks, STATIC_SEED_FORMAT,
 };
 pub(crate) use static_shape_ids::{
-    compatible_final_shape_ids, compatible_final_shapes, slot_may_be_constfn, static_region_slots,
-    static_shape_id_for_foreign_global, static_shape_id_for_keys_global,
+    compatible_final_layout_words, compatible_final_layouts, slot_may_be_constfn,
+    static_layout_word_for_foreign_global, static_layout_word_for_keys_global, static_region_slots,
 };
 mod class_declarations;
 mod string_pool;
@@ -513,7 +513,8 @@ pub fn user_function_symbol(module_name: &str, function_name: &str) -> String {
 /// served on subsequent builds. The `&` here is the load-bearing
 /// guarantee — do not change to `&mut` without also moving the cache
 /// hash to AFTER codegen.
-pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> {
+pub fn compile_module(hir: &HirModule, mut opts: CompileOptions) -> Result<Vec<u8>> {
+    ensure_layout_plan(hir, &mut opts)?;
     let _fallback = crate::fallback_diag::begin(
         &hir.name,
         opts.module_source.as_deref(),
@@ -528,7 +529,8 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
 
 /// Compile an owned HIR input, releasing it at the lowering/LLVM boundary.
 /// Lowering only borrows the input, preserving its object-cache identity.
-pub fn compile_module_owned(hir: HirModule, opts: CompileOptions) -> Result<Vec<u8>> {
+pub fn compile_module_owned(hir: HirModule, mut opts: CompileOptions) -> Result<Vec<u8>> {
+    ensure_layout_plan(&hir, &mut opts)?;
     let _fallback = crate::fallback_diag::begin(
         &hir.name,
         opts.module_source.as_deref(),
@@ -550,6 +552,47 @@ pub fn module_birth_shapes(hir: &HirModule, opts: CompileOptions) -> Result<Vec<
     Ok(births)
 }
 
+fn ensure_layout_plan(hir: &HirModule, opts: &mut CompileOptions) -> Result<()> {
+    if !opts.program_layout_ordinals.entries.is_empty() {
+        return Ok(());
+    }
+    let births = module_birth_shapes(hir, opts.clone())?;
+    if opts.static_shape_ids.is_empty() {
+        opts.static_shape_ids = assign_static_shape_ids(
+            births
+                .iter()
+                .map(|b| &b.shape)
+                .filter(|s| !s.is_completed()),
+        )
+        .into_iter()
+        .collect();
+        opts.static_shape_ids.sort();
+    }
+    let assigned = assign_static_shape_ids(
+        births
+            .iter()
+            .map(|b| &b.shape)
+            .filter(|s| !s.is_completed()),
+    );
+    for (shape, id) in assigned {
+        if !opts.static_shape_ids.iter().any(|(s, _)| *s == shape) {
+            opts.static_shape_ids.push((shape, id));
+        }
+    }
+    opts.static_shape_ids.sort();
+    let mut inputs = crate::layout_ordinals::take_module_layout_inputs();
+    inputs.extend(
+        opts.static_shape_ids
+            .iter()
+            .map(|(s, id)| crate::layout_ordinals::identity_input(s, *id)),
+    );
+    opts.program_layout_ordinals = std::sync::Arc::new(
+        crate::ProgramLayoutOrdinals::assign(crate::layout_ordinals::native_inputs(), inputs)
+            .map_err(|e| anyhow::anyhow!(e))?,
+    );
+    Ok(())
+}
+
 /// Lower the module, or collect births and return before body lowering.
 fn lower_module(
     hir: &HirModule,
@@ -559,6 +602,11 @@ fn lower_module(
     let reach_census = reach_report::active();
     let _reach_scope = reach_census.as_ref().map(|_| reach_report::enter_module());
     let collect_births = births.is_some();
+    crate::layout_ordinals::begin_module(
+        &hir.name,
+        opts.program_layout_ordinals.clone(),
+        collect_births,
+    );
     // No family facts of a previous module on this thread reach this one's
     // early analyses; this module's are installed once its births are known.
     crate::layout_desc::set_module_families(Default::default(), Vec::new());
@@ -1396,18 +1444,8 @@ fn lower_module(
         // whole-program capability. Generic callers in other modules load it
         // to guard reverse-discovered direct method arms. The keys array stays
         // private; only the opaque process-unique identity is exported.
-        llmod.add_module_state_global(
-            &crate::typed_shape::shape_id_global_name_from_keys_global(&global_name),
-            I32,
-            "0",
-        );
         // #8122: the inline-`new` header image, composed at module init
         // (`string_pool.rs`) for the classes `class_header_images` admits.
-        llmod.add_internal_module_state_global(
-            &crate::typed_shape::header_image_global_name_from_keys_global(&global_name),
-            "<2 x i64>",
-            "zeroinitializer",
-        );
 
         // Build the packed-keys string. Format: each field name
         // followed by `\0`. Parent classes contribute their fields
@@ -1592,18 +1630,8 @@ fn lower_module(
         // #10399: composed by module init -> per-thread when the program
         // constructs a Worker.
         llmod.add_internal_module_state_global(&global_name, I64, "0");
-        llmod.add_internal_module_state_global(
-            &crate::typed_shape::shape_id_global_name_from_keys_global(&global_name),
-            I32,
-            "0",
-        );
         // #8122: the inline-`new` header image, composed at module init
         // (`string_pool.rs`) for the classes `class_header_images` admits.
-        llmod.add_internal_module_state_global(
-            &crate::typed_shape::header_image_global_name_from_keys_global(&global_name),
-            "<2 x i64>",
-            "zeroinitializer",
-        );
         class_keys_globals_map.insert(c.name.clone(), global_name.clone());
         let mut packed_keys = String::new();
         let keyable_count = |fields: &[perry_hir::ClassField]| -> u32 {
@@ -2766,6 +2794,21 @@ fn lower_module(
             &class_birth_reps_map,
             &class_ids,
         );
+        let deferred: Vec<_> = births
+            .iter()
+            .filter(|b| b.shape.key_count != 0 && matches!(b.shape.proto, BirthProto::Class(_)))
+            .map(|b| {
+                let mut b = b.clone();
+                b.keys_global.push_str("$deferred");
+                b.defined = false;
+                b.shape.keys.clear();
+                b.shape.key_count = 0;
+                b.shape.rep = 0;
+                b.shape.typed = None;
+                b
+            })
+            .collect();
+        births.extend(deferred);
         if constfn_enabled {
             let reps = class_keys_globals_map
                 .iter()
@@ -2822,7 +2865,6 @@ fn lower_module(
             );
             births.extend(private_finals);
         }
-        return Ok(None);
     }
     static_shape_ids::set_module_static_ids(
         &module_prefix,
@@ -2833,14 +2875,46 @@ fn lower_module(
         &opts.static_shape_ids,
         &opts.program_class_shape_ids,
     );
+    crate::layout_ordinals::emit_requests(&mut llmod, &opts.static_shape_ids);
     if !constfn_enabled {
         static_shape_ids::disable_static_final_shapes();
+    }
+    for (keys, _, count, _, _) in &class_keys_init_data {
+        let shape_global = crate::typed_shape::shape_id_global_name_from_keys_global(keys);
+        let requested = static_shape_ids::requested_shape_id_for_keys_global(keys);
+        if let Some(id) = requested.filter(|_| !collect_births) {
+            crate::layout_ordinals::emit_request(&mut llmod, id);
+            let word = crate::layout_ordinals::static_word(id);
+            llmod.add_raw_global(format!("@{shape_global} = constant i32 {word}, align 4"));
+            if let Some(&(cid, packed, live)) = class_header_image_inits.get(keys) {
+                let birth = static_shape_ids::static_birth_content(keys).expect("static content");
+                let deferred = !matches!(birth.proto, BirthProto::Literal)
+                    && *count != 0
+                    && !class_table.values().any(|class| {
+                        class_ids.get(&class.name) == Some(&cid)
+                            && crate::lower_call::new_alloc::keys_defined_at_birth(class)
+                    });
+                let image_word = if deferred {
+                    crate::layout_ordinals::deferred_word(&birth, live.max(*count)).1
+                } else {
+                    word
+                };
+                let image = crate::typed_shape::header_image_global_name_from_keys_global(keys);
+                let header = u64::from(cid) | (u64::from(image_word) << 32);
+                llmod.add_raw_global(format!(
+                    "@{image} = internal constant <2 x i64> <i64 {packed}, i64 {header}>, align 8"
+                ));
+            }
+        } else {
+            llmod.add_module_state_global(&shape_global, I32, "0");
+        }
     }
     let class_header_images_map: std::collections::HashMap<String, (String, u64, u32)> =
         class_keys_globals_map
             .iter()
             .filter_map(|(class_name, keys_global)| {
                 let &(class_id, gc_packed, _) = class_header_image_inits.get(keys_global)?;
+                static_shape_ids::requested_shape_id_for_keys_global(keys_global)?;
                 Some((
                     class_name.clone(),
                     (
@@ -2898,7 +2972,7 @@ fn lower_module(
         }
     }
     for shape in imported_shapes {
-        llmod.add_external_module_state_global(shape, I32);
+        llmod.add_external_global(shape, I32);
     }
 
     // A function whose body reads its dynamic `this` gets a receiver-taking
@@ -3412,6 +3486,20 @@ fn lower_module(
         crate::layout_desc::layouts_enabled(&opts.output_type, &triple)
             && !crate::target_layout::target_is_ilp32(&triple),
     );
+    if collect_births {
+        crate::layout_desc::emit_module_layouts(
+            &mut llmod,
+            &mut strings,
+            hir,
+            &module_prefix,
+            &opts.output_type,
+            &opts.program_layouts,
+            opts.is_entry_module,
+            &opts.namespace_entries,
+            cross_module.namespace_adopts_cjs_exports,
+        );
+        return Ok(None);
+    }
     // Step 5C: a method site whose static lane names one of these bodies
     // calls it directly, so it needs each body's exact parameter count.
     static_constfn::set_module_body_arities(&module_prefix, &closure_arities);

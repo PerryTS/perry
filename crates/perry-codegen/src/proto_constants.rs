@@ -146,7 +146,7 @@ pub(crate) fn class_method_is_constant(
 /// `i1`: the layout word `word` (an `i32` read at header `+4`) is
 /// unshadowed (`perry_abi::UNSHADOWED_WORD_END`).
 pub(crate) fn emit_word_unshadowed(blk: &mut crate::block::LlBlock, word: &str) -> String {
-    let end = crate::runtime_abi::UNSHADOWED_WORD_END as i32;
+    let end = crate::runtime_abi::LAYOUT_ORDINARY_END as i32;
     blk.icmp_ult(I32, word, &end.to_string())
 }
 
@@ -541,7 +541,7 @@ fn holder_class(ctx: &crate::expr::FnCtx<'_>, class: &str, property: &str) -> Op
         .map(|(_, slot)| *slot);
     let chain = crate::codegen::static_prototype::chain(ctx, class, property)?;
     let &(holder_cid, _) = chain.last()?;
-    let (_, shape) = crate::codegen::static_shape_ids::static_prototype_shape(holder_cid)?;
+    let (_, shape) = crate::codegen::static_shape_ids::static_prototype_layout(holder_cid)?;
     let holder_slot = shape
         .keys
         .split(|&b| b == 0)

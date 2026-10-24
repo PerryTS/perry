@@ -101,7 +101,7 @@ impl BirthShape {
     /// are one ShapeId. Class contents are seeded by their class
     /// registration, typed ones by their typed install.
     pub fn is_seedable(&self) -> bool {
-        self.proto == BirthProto::Literal && self.typed.is_none()
+        self.proto == BirthProto::Literal && self.typed.is_none() && self.key_count != 0
     }
 
     /// The facts the runtime mints for this content, without the masks: a
@@ -427,7 +427,7 @@ pub(crate) fn class_birth(
     // static id (its mint would only ever by-facts hit the counter id), so it
     // is not given one.
     let literal = encoded_class.starts_with("__AnonShape_");
-    let shape = (class_id != 0 && !(literal && *field_count == 0)).then(|| BirthShape {
+    let shape = (class_id != 0).then(|| BirthShape {
         keys: packed.as_bytes().to_vec(),
         key_count: *field_count,
         live: if wide_live > 0 {
@@ -551,13 +551,13 @@ pub(crate) fn static_birth_content(keys_global: &str) -> Option<BirthShape> {
 }
 
 /// Final ids are requested only after construction, never by allocation guards.
-pub(crate) fn static_content_id(shape: &BirthShape) -> Option<u32> {
+pub(crate) fn static_content_word(shape: &BirthShape) -> Option<u32> {
     let id = MODULE_CONTENT_IDS.with(|m| m.borrow().get(shape).copied())?;
     note_guard_id(id, Some(shape));
-    Some(id)
+    Some(crate::layout_ordinals::static_word(id))
 }
 
-pub(crate) fn static_final_shape_id(shape: &BirthShape) -> Option<u32> {
+pub(crate) fn static_final_shape_identity(shape: &BirthShape) -> Option<u32> {
     let id = MODULE_FINAL_IDS.with(|m| m.borrow().get(shape).copied())?;
     note_guard_id(id, Some(shape));
     MODULE_FINAL_USES.with(|s| {
@@ -602,7 +602,7 @@ pub(crate) fn module_seed_keys() -> Vec<String> {
 ///
 /// The static shape-seed object references each of these records, so the
 /// module must emit every one of them as a linkable (`hidden`) definition. A
-/// shape can join the seed set through a guard (`compatible_final_shapes`)
+/// shape can join the seed set through a guard (`compatible_final_layouts`)
 /// without being named by a finalizer, and [`module_final_seeds`] lists only
 /// the latter; requesting from this set instead keeps the seed table and the
 /// emitted records in agreement by construction.
@@ -745,7 +745,7 @@ pub fn decode_static_seed(line: &str) -> Option<(u32, BirthShape)> {
 /// The static id a GUARD compares against for the class whose keys global is
 /// `keys_global`, when the driver assigned one and the global belongs to this
 /// module. A literal content joins the module's seed set.
-pub(crate) fn static_shape_id_for_keys_global(keys_global: &str) -> Option<u32> {
+pub(crate) fn static_layout_word_for_keys_global(keys_global: &str) -> Option<u32> {
     MODULE_STATIC_IDS.with(|m| {
         let m = m.borrow();
         let (id, shape) = m.get(keys_global)?;
@@ -753,7 +753,7 @@ pub(crate) fn static_shape_id_for_keys_global(keys_global: &str) -> Option<u32> 
             return None;
         }
         note_guard_id(*id, Some(shape));
-        Some(*id)
+        Some(crate::layout_ordinals::static_word(*id))
     })
 }
 
@@ -789,8 +789,8 @@ pub(crate) fn body_has_constfn_lane(body: &str) -> bool {
 /// Guard-only compatible completed identities. Allocation suppliers continue
 /// returning the ordinary birth id. Match all structural facts and preserve
 /// every base representation; a written SPECIAL slot cannot use a raw store.
-pub(crate) fn compatible_final_shape_ids(expected: &str, written_slots: &[u32]) -> Vec<u32> {
-    let mut ids: Vec<u32> = compatible_final_shapes(expected, written_slots)
+pub(crate) fn compatible_final_layout_words(expected: &str, written_slots: &[u32]) -> Vec<u32> {
+    let mut ids: Vec<u32> = compatible_final_layouts(expected, written_slots)
         .into_iter()
         .map(|(id, _)| id)
         .collect();
@@ -799,9 +799,9 @@ pub(crate) fn compatible_final_shape_ids(expected: &str, written_slots: &[u32]) 
     ids
 }
 
-/// [`compatible_final_shape_ids`] with each id's content, sorted by id. Every
+/// [`compatible_final_layout_words`] with each id's content, sorted by id. Every
 /// returned id joins the module's seed set exactly as a guard immediate does.
-pub(crate) fn compatible_final_shapes(
+pub(crate) fn compatible_final_layouts(
     expected: &str,
     written_slots: &[u32],
 ) -> Vec<(u32, BirthShape)> {
@@ -812,7 +812,7 @@ pub(crate) fn compatible_final_shapes(
         .with(|m| {
             m.borrow()
                 .values()
-                .find(|(id, _)| *id == expected)
+                .find(|(id, _)| crate::layout_ordinals::static_word(*id) == expected)
                 .map(|(_, s)| s.clone())
         })
         .or_else(|| {
@@ -820,7 +820,7 @@ pub(crate) fn compatible_final_shapes(
                 m.borrow()
                     .0
                     .values()
-                    .find(|d| d.id == expected)
+                    .find(|d| crate::layout_ordinals::static_word(d.id) == expected)
                     .map(|d| d.shape.clone())
             })
         });
@@ -863,7 +863,7 @@ pub(crate) fn compatible_final_shapes(
     let mut out = Vec::new();
     for (shape, id) in candidates {
         note_guard_id(id, Some(&shape));
-        out.push((id, shape));
+        out.push((crate::layout_ordinals::static_word(id), shape));
     }
     out.sort_by_key(|(id, _)| *id);
     out.dedup_by_key(|(id, _)| *id);
@@ -928,7 +928,7 @@ pub(crate) fn static_region_slots(
             }
         });
         note_guard_id(*id, Some(shape));
-        Some((*id, slots, r_mask))
+        Some((crate::layout_ordinals::static_word(*id), slots, r_mask))
     })
 }
 
@@ -951,7 +951,7 @@ pub(crate) fn requested_shape_id_for_keys_global(keys_global: &str) -> Option<u3
 /// The static id behind ANOTHER module's shape-id global `shape_id_global`
 /// for class `class_id`: the defining module's id, when the program map names
 /// that class and the global is the definer's.
-pub(crate) fn static_shape_id_for_foreign_global(
+pub(crate) fn static_layout_word_for_foreign_global(
     class_id: u32,
     shape_id_global: &str,
 ) -> Option<u32> {
@@ -967,7 +967,7 @@ pub(crate) fn static_shape_id_for_foreign_global(
             return None;
         }
         note_guard_id(d.id, Some(&d.shape));
-        Some(d.id)
+        Some(crate::layout_ordinals::static_word(d.id))
     })
 }
 
@@ -1009,13 +1009,18 @@ pub(crate) fn module_births(
 mod tests;
 
 /// A prototype candidate from the program-wide completed content set.
-pub(crate) fn static_prototype_shape(cid: u32) -> Option<(u32, BirthShape)> {
+pub(crate) fn static_prototype_identity(cid: u32) -> Option<(u32, BirthShape)> {
     MODULE_FINAL_IDS.with(|m| {
         m.borrow().iter().find_map(|(shape, id)| {
             matches!(shape.proto, BirthProto::Prototype(c, _) if c == cid)
                 .then(|| (*id, shape.clone()))
         })
     })
+}
+
+pub(crate) fn static_prototype_layout(cid: u32) -> Option<(u32, BirthShape)> {
+    static_prototype_identity(cid)
+        .map(|(id, shape)| (crate::layout_ordinals::static_word(id), shape))
 }
 
 /// Can any complete prototype contribute this named method to a static family

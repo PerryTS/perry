@@ -145,12 +145,16 @@ impl ProgramLayoutOrdinals {
     /// Exact stable cache input, including full keys (not just content hashes),
     /// header bounds, ABI version and the entire native catalog.
     pub fn cache_key(&self) -> String {
-        format!("layout-word-v1:{self:?}")
+        format!(
+            "layout-word-v{}:{self:?}",
+            perry_abi::LAYOUT_WORD_ABI_VERSION
+        )
     }
 
     pub fn image_initializer(&self) -> String {
         format!(
-            "{{ i32 1, i32 {}, i32 {}, i32 {} }}",
+            "{{ i32 {}, i32 {}, i32 {}, i32 {} }}",
+            perry_abi::LAYOUT_WORD_ABI_VERSION,
             self.static_rows(),
             self.family_first,
             self.family_count
@@ -168,10 +172,16 @@ impl OrdinalEntry {
 /// Checked compiler encoding. These ABI constants are consumed from perry-abi
 /// once the runtime lane's first ABI commit is available.
 pub fn encode_layout_word(row: u32, band: u8, proto_kind: u8) -> Result<u32, String> {
-    if row >= (1 << 26) || band >= 3 || proto_kind >= 4 {
+    if row >= perry_abi::LAYOUT_ROW_LIMIT || band >= 3 || proto_kind >= 4 {
         return Err("invalid LayoutWord row, band or prototype kind".into());
     }
-    Ok(0x8000_0000 | (u32::from(band) << 28) | (u32::from(proto_kind) << 26) | row)
+    Ok(perry_abi::LayoutWord::new(
+        perry_abi::LayoutRow(row),
+        u32::from(band),
+        u32::from(proto_kind),
+    )
+    .expect("validated compiler word")
+    .0)
 }
 
 #[cfg(test)]
@@ -261,4 +271,182 @@ mod tests {
             2
         );
     }
+}
+
+/// One authoritative ABI catalog, including absent target variants.
+pub fn native_inputs() -> Vec<OrdinalInput> {
+    use perry_abi::*;
+    let mut inputs = Vec::new();
+    for index in 0..9 {
+        let word = intrinsic_function_layout_word(index);
+        inputs.push(OrdinalInput {
+            key: LayoutKey::Native(format!("intrinsic_function_{index}")),
+            requested_shape_id: if index == 4 {
+                FUNCTION_DICTIONARY_SHAPE
+            } else {
+                FUNCTION_SHAPE_BASE + index
+            },
+            band: ((word & LAYOUT_BAND_MASK) >> LAYOUT_BAND_SHIFT) as u8,
+            proto_kind: ((word & LAYOUT_KIND_MASK) >> LAYOUT_KIND_SHIFT) as u8,
+            role: LayoutRole::Native,
+        });
+    }
+    for name in ["WeakMap", "WeakSet"]
+        .into_iter()
+        .chain(NATIVE_LAYOUT_DESCRIPTORS.iter().copied())
+    {
+        inputs.push(OrdinalInput {
+            key: LayoutKey::Native(name.into()),
+            requested_shape_id: 0,
+            band: 0,
+            proto_kind: 0,
+            role: LayoutRole::Native,
+        });
+    }
+    assert_eq!(inputs.len(), NATIVE_LAYOUT_ROWS as usize);
+    inputs
+}
+
+pub fn identity_input(shape: &crate::BirthShape, identity: u32) -> OrdinalInput {
+    OrdinalInput {
+        key: LayoutKey::Identity(identity, shape.clone()),
+        requested_shape_id: identity,
+        band: 0,
+        proto_kind: match shape.proto {
+            crate::BirthProto::Literal => 0,
+            crate::BirthProto::Class(_) => 0,
+            crate::BirthProto::Prototype(_, _) => 0,
+        },
+        role: LayoutRole::OtherStatic,
+    }
+}
+
+#[derive(Default)]
+struct ModulePlan {
+    module: String,
+    plan: std::sync::Arc<ProgramLayoutOrdinals>,
+    collecting: bool,
+    inputs: Vec<OrdinalInput>,
+    emitted_requests: std::collections::BTreeSet<u32>,
+}
+thread_local! {
+    static MODULE: std::cell::RefCell<ModulePlan> = Default::default();
+}
+pub(crate) fn begin_module(
+    module: &str,
+    plan: std::sync::Arc<ProgramLayoutOrdinals>,
+    collecting: bool,
+) {
+    MODULE.with(|m| {
+        *m.borrow_mut() = ModulePlan {
+            module: module.into(),
+            plan,
+            collecting,
+            inputs: Vec::new(),
+            emitted_requests: Default::default(),
+        }
+    });
+}
+pub fn take_module_layout_inputs() -> Vec<OrdinalInput> {
+    MODULE.with(|m| std::mem::take(&mut m.borrow_mut().inputs))
+}
+pub(crate) fn descriptor_word(
+    symbol: &str,
+    content: String,
+    kind: u8,
+    family: bool,
+    carried: bool,
+    identity: u32,
+) -> u32 {
+    MODULE.with(|m| {
+        let mut m = m.borrow_mut();
+        let input = OrdinalInput {
+            key: LayoutKey::Descriptor {
+                module: m.module.clone(),
+                symbol: symbol.into(),
+                content: content.into_bytes(),
+            },
+            requested_shape_id: identity,
+            band: 0,
+            proto_kind: kind,
+            role: if family {
+                LayoutRole::ClassFamily
+            } else {
+                LayoutRole::OtherStatic
+            },
+        };
+        if m.collecting {
+            m.inputs.push(input);
+            return 0;
+        }
+        if !carried {
+            return 0;
+        }
+        if identity != 0 {
+            return m
+                .plan
+                .identity_word(identity)
+                .expect("static descriptor identity in image plan");
+        }
+        m.plan
+            .entry(&input.key)
+            .expect("descriptor full content in image plan")
+            .word()
+    })
+}
+pub(crate) fn current_plan() -> std::sync::Arc<ProgramLayoutOrdinals> {
+    MODULE.with(|m| m.borrow().plan.clone())
+}
+
+pub(crate) fn static_word(identity: u32) -> u32 {
+    if MODULE.with(|m| m.borrow().collecting) {
+        return 0;
+    }
+    current_plan()
+        .identity_word(identity)
+        .expect("compiler identity in whole-image ordinal plan")
+}
+pub(crate) fn request_symbol(identity: u32) -> String {
+    format!("perry_layout_request_{identity}")
+}
+pub(crate) fn emit_request(module: &mut crate::module::LlModule, id: u32) {
+    let plan = current_plan();
+    let Some(word) = plan.identity_word(id) else {
+        return;
+    };
+    if !MODULE.with(|m| m.borrow_mut().emitted_requests.insert(id)) {
+        return;
+    }
+    let symbol = request_symbol(id);
+    module.add_coalesced_global(
+        &symbol,
+        format!("@{symbol} = weak_odr global {{ i32, i32 }} {{ i32 {id}, i32 {word} }}, align 4"),
+    );
+}
+pub(crate) fn emit_requests(
+    module: &mut crate::module::LlModule,
+    identities: &[(crate::BirthShape, u32)],
+) {
+    for (_, id) in identities {
+        emit_request(module, *id);
+    }
+}
+
+pub(crate) fn deferred_word(birth: &crate::BirthShape, live: u32) -> (u32, u32) {
+    let mut content = birth.clone();
+    content.keys.clear();
+    content.key_count = 0;
+    content.live = live;
+    content.rep = 0;
+    content.typed = None;
+    let plan = current_plan();
+    let entry = plan
+        .entries
+        .iter()
+        .find(|e| {
+            matches!(&e.key,
+        LayoutKey::Identity(_, shape) if *shape == content)
+        })
+        .expect("deferred width has a static ordinal");
+    (entry.requested_shape_id, entry.word())
 }

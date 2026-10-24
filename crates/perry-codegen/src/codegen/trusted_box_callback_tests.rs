@@ -493,7 +493,7 @@ fn additive_property_callback_gets_a_cold_deopting_private_body() {
     );
     assert!(
         // The property read's decline reaches the cacheless slow read.
-        special.contains("js_object_get_field_slow")
+        special.contains("js_object_get_field_value_site")
             && special.contains("guarded_add.dynamic")
             && special.contains("versioned_callback.deopt.mark"),
         "both observable cold arms must poison the loop before fallback:\n{special}"

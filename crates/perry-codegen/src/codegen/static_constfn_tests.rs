@@ -568,7 +568,7 @@ fn general_class_records_follow_registration_and_finalize_the_completed_result()
         .collect();
     let ordinary = births.iter().find(|b| b.shape.constfn.is_empty()).unwrap();
     let final_content = births.iter().find(|b| !b.shape.constfn.is_empty()).unwrap();
-    assert_eq!(births.len(), 2);
+    assert_eq!(births.len(), 3);
     assert_eq!(ordinary.shape.keys, final_content.shape.keys);
     assert_eq!(ordinary.shape.proto, final_content.shape.proto);
     assert_eq!(ordinary.shape.rep, 0);
@@ -585,7 +585,7 @@ fn general_class_records_follow_registration_and_finalize_the_completed_result()
         .collect::<Vec<_>>();
     let mint = calls
         .iter()
-        .position(|l| l.contains("@js_object_final_shape_id_for_class_keys_static_constfn"))
+        .position(|l| l.contains("@js_object_final_layout_for_class_keys_static_constfn"))
         .unwrap();
     assert!(
         calls
@@ -596,7 +596,7 @@ fn general_class_records_follow_registration_and_finalize_the_completed_result()
     );
     let mint_line = calls[mint];
     assert!(
-        mint_line.contains(&format!("i32 {final_id}, i64 3")),
+        mint_line.contains(&format!("ptr @perry_layout_request_{final_id}, i64 3")),
         "{mint_line}"
     );
     assert!(mint_line.contains("ptr @perry_constfn_final_cf_user_class__"));
@@ -635,9 +635,7 @@ fn general_class_records_follow_registration_and_finalize_the_completed_result()
     assert_eq!(ir, warm);
     options.output_type = "dylib".into();
     let unloadable = String::from_utf8(crate::compile_module(&m, options).unwrap()).unwrap();
-    assert!(
-        !unloadable.contains("call i32 @js_object_final_shape_id_for_class_keys_static_constfn")
-    );
+    assert!(!unloadable.contains("call i32 @js_object_final_layout_for_class_keys_static_constfn"));
     assert!(!unloadable.contains("call i64 @js_object_finalize_constfn_static"));
 }
 
@@ -731,9 +729,12 @@ fn default_derived_class_finalizes_inherited_and_own_closure_fields() {
         .filter(|l| l.contains("call i64 @js_object_finalize_constfn_static"))
         .collect::<Vec<_>>();
     assert_eq!(finalizers.len(), 1);
-    assert!(finalizers[0].contains(&format!("i32 {id},")) && finalizers[0].contains("i64 15,"));
+    assert!(
+        finalizers[0].contains(&format!("i32 {},", crate::layout_ordinals::static_word(id)))
+            && finalizers[0].contains("i64 15,")
+    );
     assert_eq!(
-        ir.matches("call i32 @js_object_final_shape_id_for_class_keys_static_constfn")
+        ir.matches("call i32 @js_object_final_layout_for_class_keys_static_constfn")
             .count(),
         2
     );
@@ -769,9 +770,9 @@ fn completed_class_mints_unbox_the_registered_keys_word() {
         .collect();
         let ir = String::from_utf8(crate::compile_module(&module, options).unwrap()).unwrap();
         let callee = if private {
-            "@js_object_final_shape_id_for_class_keys_static_private"
+            "@js_object_final_layout_for_class_keys_static_private"
         } else {
-            "@js_object_final_shape_id_for_class_keys_static_constfn"
+            "@js_object_final_layout_for_class_keys_static_constfn"
         };
         let call = ir
             .lines()

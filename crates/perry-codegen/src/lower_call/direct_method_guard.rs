@@ -5,8 +5,8 @@
 //! header constants and their anti-drift tests stay there.
 
 use super::method_override::{
-    GC_OBJECT_METHOD_GUARD_MASK_I32, GC_TYPE_OBJECT, POINTER_TAG_HI16, SHAPE_ID_BASE_NEG_I32,
-    SHAPE_ID_RANGE_LEN,
+    GC_OBJECT_METHOD_GUARD_MASK_I32, GC_TYPE_OBJECT, LAYOUT_TAG_NEG_I32, ORDINARY_LAYOUT_RANGE_LEN,
+    POINTER_TAG_HI16,
 };
 use crate::expr::FnCtx;
 use crate::types::{I1, I32, I64, I8};
@@ -102,8 +102,8 @@ pub(crate) fn emit_inline_direct_method_shape_guard(
         // `is_shape_id` is `[0x8000_0000, 0xC000_0000)`. Subtract the base
         // modulo i32 and compare with the range length, matching the runtime
         // helper. Equality above transfers this proof to the live header.
-        let shape_id_rel = blk.add(I32, expected_shape_id, SHAPE_ID_BASE_NEG_I32);
-        let shape_valid = blk.icmp_ult(I32, &shape_id_rel, SHAPE_ID_RANGE_LEN);
+        let shape_id_rel = blk.add(I32, expected_shape_id, LAYOUT_TAG_NEG_I32);
+        let shape_valid = blk.icmp_ult(I32, &shape_id_rel, ORDINARY_LAYOUT_RANGE_LEN);
 
         let pass = blk.and(I1, &gc_header_ok, &class_shape_ok);
         let pass = blk.and(I1, &pass, &shape_valid);

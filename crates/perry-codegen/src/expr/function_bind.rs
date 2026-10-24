@@ -61,7 +61,7 @@ pub(crate) fn emit_bind_call(
         let base = blk.icmp_eq(
             I32,
             &shape,
-            &(crate::runtime_abi::FUNCTION_SHAPE as i32).to_string(),
+            &(crate::runtime_abi::FUNCTION_LAYOUT_WORD as i32).to_string(),
         );
         blk.and(I1, &is_closure, &base)
     };

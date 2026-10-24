@@ -68,6 +68,17 @@ fn nested_evaluation_needs_the_structural_run_once_program_proof() {
 }
 #[test]
 fn run_once_program_proof_is_revoked_by_loader_escape_or_repeated_structure() {
+    // The dynamic-code census is process-wide. Isolate this whole-program
+    // positive/negative proof from unrelated tests which record eval sites.
+    if std::env::var_os("PERRY_DPA_C_PROTO_TEST_CHILD").is_none() {
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "codegen::static_prototype::tests::run_once_program_proof_is_revoked_by_loader_escape_or_repeated_structure", "--nocapture"])
+            .env("PERRY_DPA_C_PROTO_TEST_CHILD", "1")
+            .status().unwrap();
+        assert!(status.success());
+        return;
+    }
+
     let mut base = module(
         "/base",
         "export class Base { constructor() { this.base = 1; } }",

@@ -81,12 +81,12 @@ fn emit_mask_test_record(
     let id = blk.and(
         I32,
         &word,
-        &((!crate::runtime_abi::LAYOUT_SHADOW_BIT) as i32).to_string(),
+        &(crate::runtime_abi::LAYOUT_PROBE_INDEX_MASK as i32).to_string(),
     );
     let rel = blk.sub(
         I32,
         &id,
-        &(crate::runtime_abi::SHAPE_ID_BASE as i32).to_string(),
+        &(crate::runtime_abi::LAYOUT_TAG as i32).to_string(),
     );
     let rel64 = blk.zext(I32, &rel, I64);
     let dir = crate::expr::agent_ptr::emit_agent_ptr_or(
@@ -738,32 +738,29 @@ fn run_arm(
 /// is the runtime's answer (`perry_family_run_admits`); a word outside both
 /// never names one.
 fn emit_family_word_test(blk: &mut crate::block::LlBlock, word: &str) -> String {
-    let base = crate::runtime_abi::SHAPE_ID_BASE + crate::runtime_abi::STATIC_SHAPE_ID_COUNT / 2;
+    let plan = crate::layout_ordinals::current_plan();
+    let base = crate::runtime_abi::LAYOUT_TAG | plan.family_first;
     let rel = blk.sub(I32, word, &(base as i32).to_string());
-    let in_static = blk.icmp_ult(
-        I32,
-        &rel,
-        &(crate::runtime_abi::STATIC_SHAPE_ID_COUNT / 2).to_string(),
-    );
+    let in_static = blk.icmp_ult(I32, &rel, &plan.family_count.to_string());
     let kind = blk.and(
         I32,
         word,
-        &(crate::runtime_abi::SHAPE_ID_KIND_MASK as i32).to_string(),
+        &(crate::runtime_abi::LAYOUT_KIND_MASK as i32).to_string(),
     );
     let linked = blk.icmp_eq(
         I32,
         &kind,
-        &(crate::runtime_abi::SHAPE_ID_KIND_MASK as i32).to_string(),
+        &(crate::runtime_abi::LAYOUT_KIND_MASK as i32).to_string(),
     );
     let ordinary_rel = blk.sub(
         I32,
         word,
-        &(crate::runtime_abi::SHAPE_ID_BASE as i32).to_string(),
+        &(crate::runtime_abi::LAYOUT_TAG as i32).to_string(),
     );
     let unshadowed = blk.icmp_ult(
         I32,
         &ordinary_rel,
-        &((crate::runtime_abi::UNSHADOWED_WORD_END - crate::runtime_abi::SHAPE_ID_BASE) as i32)
+        &((crate::runtime_abi::LAYOUT_ORDINARY_END - crate::runtime_abi::LAYOUT_TAG) as i32)
             .to_string(),
     );
     let copy = blk.and(crate::types::I1, &linked, &unshadowed);

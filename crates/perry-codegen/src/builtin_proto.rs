@@ -56,7 +56,7 @@ pub(crate) enum BuiltinProto {
 /// was modified, i.e. the direct builtin call is NOT proven: the shadow bit of
 /// the agent's intrinsic, two loads and a compare.
 pub(crate) fn emit_patched_test(ctx: &mut crate::expr::FnCtx<'_>, family: BuiltinProto) -> String {
-    let end = (crate::runtime_abi::UNSHADOWED_WORD_END as i32).to_string();
+    let end = (crate::runtime_abi::LAYOUT_ORDINARY_END as i32).to_string();
     let proto = crate::expr::agent_ptr::emit_intrinsic_proto(ctx, family as usize);
     let at = ctx.block().gep(crate::types::I8, &proto, &[(I64, "4")]);
     let own = ctx.block().load(I32, &at);
@@ -104,7 +104,7 @@ pub(crate) fn emit_namespace_patched(ctx: &mut crate::expr::FnCtx<'_>, ns: &str)
     let Some(family) = crate::runtime_abi::builtin_namespace_family(ns) else {
         return "true".to_string();
     };
-    let end = (crate::runtime_abi::UNSHADOWED_WORD_END as i32).to_string();
+    let end = (crate::runtime_abi::LAYOUT_ORDINARY_END as i32).to_string();
     let holder = crate::expr::agent_ptr::emit_intrinsic_proto(ctx, family);
     let at = ctx.block().gep(crate::types::I8, &holder, &[(I64, "4")]);
     let word = ctx.block().load(I32, &at);

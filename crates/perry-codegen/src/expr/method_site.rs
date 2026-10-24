@@ -553,12 +553,15 @@ pub(crate) fn emit_method_site(
         let index = ctx.block().sub(
             I32,
             &word,
-            &(crate::runtime_abi::SHAPE_ID_BASE + (1 << 19)).to_string(),
+            &(crate::runtime_abi::LAYOUT_TAG | crate::layout_ordinals::current_plan().family_first)
+                .to_string(),
         );
         let family_word = ctx.block().icmp_ult(
             I32,
             &index,
-            &(crate::runtime_abi::STATIC_SHAPE_ID_COUNT / 2).to_string(),
+            &crate::layout_ordinals::current_plan()
+                .family_count
+                .to_string(),
         );
         ctx.block()
             .cond_br(&family_word, &family_probe_l, &ordinary_l);

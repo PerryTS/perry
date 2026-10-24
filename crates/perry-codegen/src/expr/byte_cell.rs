@@ -729,7 +729,12 @@ mod tests {
                 .lines()
                 .find(|line| line.contains("; bytes.hoist.roots "))
                 .unwrap();
-            let roots = crate::testing::root_slots::bound_slots(&ir);
+            let function = ir
+                .split("define double @perry_fn_buffer_param_owner_ts__read(")
+                .nth(1)
+                .expect("subject function");
+            let function = &function[..function.find("\n}").expect("function end")];
+            let roots = crate::testing::root_slots::bound_slots(function);
             for field in ["receiver=", "owner="] {
                 let slot = format!(
                     "%{}",

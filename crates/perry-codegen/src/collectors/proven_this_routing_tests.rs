@@ -1180,7 +1180,7 @@ fn single_arm_method_shape_guard_is_inlined_with_the_runtime_contract() {
             && probe.contains("add i32")
             && probe.contains(", -2147483648")
             && probe.contains("icmp ult i32")
-            && probe.contains(", 1073741824"),
+            && probe.contains(", 268435456"),
         "the packed header block must check the GC type, forwarding flag, own-descriptor bit, exact class/ShapeId pair, and ShapeId domain:\n{probe}"
     );
 }
