@@ -14,15 +14,9 @@ Set-Location $RepoRoot
 # Build perry + UI backend + harness in release mode. Skipped transparently
 # if already built. Keep the async database/mail wrappers in this same Cargo
 # graph as perry-stdlib so they share its feature unification.
-cargo build --release `
-    -p perry `
-    -p perry-runtime `
-    -p perry-stdlib `
-    -p perry-runtime-static `
-    -p perry-stdlib-static `
+cargo build-perry --release `
     -p perry-ui-windows `
-    -p perry-doc-tests `
-    -p perry-ext-nodemailer
+    -p perry-doc-tests
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 # GC effects sidecars (<archive>.gc-effects) over the archives just built. The

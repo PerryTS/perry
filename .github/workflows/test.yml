@@ -4972,6 +4972,27 @@ jobs:
         if: matrix.os == 'windows-2022'
         uses: ./.github/actions/perry/ilammy/msvc-dev-cmd # v1
 
+      - name: Pin Windows doc-test native tools
+        if: matrix.os == 'windows-2022'
+        shell: pwsh
+        run: |
+          # The doc harness invokes Bash for sidecars. Keep Git's link.exe
+          # and stripped Perl out of native Cargo build-script resolution.
+          $linker = Join-Path $env:VCToolsInstallDir "bin\Host$($env:VSCMD_ARG_HOST_ARCH)\$($env:VSCMD_ARG_TGT_ARCH)\link.exe"
+          if (!(Test-Path $linker -PathType Leaf)) {
+            throw "MSVC linker missing: $linker"
+          }
+          "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=$linker" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+          $perl = @((Get-Command perl.exe -All -ErrorAction SilentlyContinue).Source) + @('C:\Strawberry\perl\bin\perl.exe') |
+            Where-Object { $_ -and (Test-Path $_ -PathType Leaf) } |
+            Select-Object -Unique |
+            Where-Object {
+              & $_ -MIPC::Cmd -MPod::Usage -MLocale::Maketext::Simple -e1 2>$null
+              $LASTEXITCODE -eq 0
+            } | Select-Object -First 1
+          if (!$perl) { throw 'No complete Windows Perl for vendored OpenSSL Configure' }
+          "OPENSSL_SRC_PERL=$perl" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Install GTK4 + GStreamer + Xvfb + PulseAudio headers (Linux)
         if: matrix.os == 'ubuntu-24.04'
         run: |
