@@ -877,7 +877,8 @@ pub(crate) fn default_object_prototype_bits() -> Option<u64> {
 }
 
 pub(crate) unsafe fn default_object_prototype_for_owner(obj_ptr: usize) -> Option<u64> {
-    if obj_ptr == 0 {
+    // Native handle receivers have no object or GC header to inspect.
+    if !crate::value::addr_class::is_above_handle_band(obj_ptr) {
         return None;
     }
     let obj = obj_ptr as *const crate::ObjectHeader;
@@ -1220,6 +1221,34 @@ mod proxy_reentry_tests;
 
 #[cfg(test)]
 mod readpath_null_tests {
+    #[test]
+    fn default_owner_prototype_rejects_handles_and_keeps_ordinary_objects() {
+        use crate::value::addr_class::*;
+        for address in [
+            0,
+            1,
+            COMMON_HANDLE_BAND_END - 1,
+            FETCH_HANDLE_BAND_START,
+            FETCH_HANDLE_BAND_END - 1,
+            PROXY_ID_BAND_START,
+            STREAM_ID_BAND_START,
+            HANDLE_BAND_MAX - 1,
+        ] {
+            assert_eq!(
+                unsafe { super::default_object_prototype_for_owner(address) },
+                None,
+                "handle {address:#x} must not be read as an object header"
+            );
+        }
+        let _no_move = crate::gc::GcSuppressScope::new();
+        let expected = super::default_object_prototype_bits().expect("Object prototype");
+        let object = crate::object::js_object_alloc(0, 0);
+        assert_eq!(
+            unsafe { super::default_object_prototype_for_owner(object as usize) },
+            Some(expected)
+        );
+    }
+
     #[test]
     fn nonclass_link_keeps_ordinary_reads_without_a_class_surface() {
         use crate::object::{self, prototype_chain as chain};

@@ -1,0 +1,1 @@
+- Reject native handle IDs before reading default-prototype receiver headers.
