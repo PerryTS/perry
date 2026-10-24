@@ -777,8 +777,13 @@ impl<'a> Gen<'a> {
         if d.unknown {
             self.m.add_top(out, |_| why.into());
         }
-        // DECISIONS 94: the builtins, program objects and arrays it holds.
-        if !(value.builtins.is_empty() && value.program.is_empty() && value.arrays.is_empty()) {
+        // DECISIONS 94: the builtins, program objects and arrays it holds;
+        // DECISIONS 147: the functions.
+        if !(value.builtins.is_empty()
+            && value.program.is_empty()
+            && value.arrays.is_empty()
+            && value.fns.is_empty())
+        {
             let v = self.stand_in_value(mi, why, value);
             self.m.edge(v, out);
         }

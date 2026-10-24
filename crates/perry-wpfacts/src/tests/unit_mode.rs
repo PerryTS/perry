@@ -2329,12 +2329,16 @@ fn an_argument_contract_ascends_so_the_units_reach_a_fixpoint() {
     // through `listener`'s parameter, published as one more contract input
     // that ascends (D16: every input joins with last round's): it is passed
     // on one round later, so round 5 is the one that changes nothing.
+    // DECISIONS 147: `listener`'s result `onevent` is a function handed to
+    // the caller's unit, now a contract function (its markers, its own
+    // contract) rather than a sunk result: one more input passed on a round
+    // later, so round 6 is the one that changes nothing.
     let m = r#"import first from "./ee";
         const t = first([[process, "exit"]], function (err: any) { console.log(err); });
         t.cancel();"#;
     let pf = bounded(60, move || units_of(&[("ee", EE_FIRST), ("m", m)]))
         .expect("D16: the per-unit fixpoint did not end in 60 s");
-    assert_eq!(pf.rounds, 5, "rounds {:?}", pf.round_work);
+    assert_eq!(pf.rounds, 6, "rounds {:?}", pf.round_work);
 }
 
 #[test]

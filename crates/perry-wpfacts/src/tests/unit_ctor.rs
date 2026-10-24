@@ -354,15 +354,40 @@ const PARAM_MCALL: &str = r#"
 fn a_method_call_on_a_parameter_runs_in_the_callers_unit() {
     let pf = units(PARAM_MCALL);
     let whole = facts(PARAM_MCALL);
-    // The callback itself is Det's function handed to the caller's unit as
-    // an argument: no contract describes a function there yet, so it is ⊤
-    // to the caller and Val, passed to it, escapes (DECISIONS 147, open).
-    // What the method calls own (Coll, Key, their methods) stays whole.
-    // (`o.k` inside Key.cmp reads a published method's parameter: E0 per
-    // unit with or without Det, DECISIONS 148, open.)
-    let own = |b: &String| b.contains("Coll") || b.contains("Key");
-    assert!(!pf.broken.iter().any(own), "{:?}\n{}", pf.broken, pf.dump_text());
+    // The callback is Det's function handed to the caller's unit as an
+    // argument: a contract function there (DECISIONS 147), so Val, passed
+    // to it, goes back to Det's unit through its contract.
+    // (`o.k` in Key.cmp and `x.v` in the callback read a contract
+    // function's parameter: E0 per unit (Val beside ⊤), DECISIONS 148, open.)
+    assert!(pf.broken.is_empty(), "{:?}\n{}", pf.broken, pf.dump_text());
     for k in ["val"] {
         assert_eq!(verdicts(&pf, k), verdicts(&whole, k), "{k}\n{}", pf.dump_text());
     }
+}
+
+/// DECISIONS 147: a function a contract function hands the caller's unit
+/// (here its result) is a contract function of its defining unit: the
+/// caller calls it through that contract, so the instance it passes is
+/// published to the defining unit instead of escaping into unknown code.
+const RESULT_FN: &str = r#"
+    class Val { v: number; constructor(v: number) { this.v = v; } }
+    class Det {
+      reader(): (x: Val) => number { return (x: Val) => x.v; }
+    }
+    const f = new Det().reader();
+    console.log(f(new Val(1)));
+    "#;
+
+#[test]
+fn a_function_handed_to_another_unit_is_called_through_its_contract() {
+    let pf = units(RESULT_FN);
+    let whole = facts(RESULT_FN);
+    assert!(pf.broken.is_empty(), "{:?}\n{}", pf.broken, pf.dump_text());
+    // `x.v` reads the handed-out function's parameter: Val beside ⊤ per unit
+    // (E0) vs T0Mono whole, DECISIONS 148 (open); without 147 Val breaks.
+    assert!(!whole.broken.iter().any(|b| b.contains("Val")));
+    // A test must be able to fail: a reader that drops the described
+    // function calls nothing, and `x.v` sees no Val at all.
+    let vs: Vec<_> = pf.sites.iter().filter(|s| s.key == "v").collect();
+    assert!(!vs.is_empty() && vs.iter().all(|s| !s.receivers.is_empty()), "{}", pf.dump_text());
 }

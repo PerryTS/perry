@@ -779,6 +779,40 @@ fn fn_contract_of(
     }
 }
 
+/// DECISIONS 147: function `f` of this unit named in a value it hands out.
+/// The reader takes the owner's entry by the name (`Gen::owner_fn`,
+/// DECISIONS 106); until the owner published one, this entry claims
+/// nothing: every argument escapes, the result is unknown.
+fn fn_named(g: &gen::Gen, f: model::FnIdx) -> units::FnContract {
+    let fi = &g.m.funcs[f as usize];
+    let n = fi.params.len();
+    let (name, closed) = fn_contract_name(g, f);
+    units::FnContract {
+        name,
+        closed,
+        params: vec![model::MARK_ESCAPE; n],
+        reach: vec![model::MARK_ESCAPE; n],
+        reach_keys: vec![Vec::new(); n],
+        variadic: fi.has_arguments,
+        rest: fi.rest.is_some() && !fi.has_arguments,
+        ret: None,
+        ret_params: Vec::new(),
+        ret_reach: Vec::new(),
+        ret_reach_keys: Vec::new(),
+        ret_unknown: true,
+        ret_value: Default::default(),
+        ret_prim: model::prim::ALL,
+        lexical_this: fi.lexical_this,
+        this_use: model::MARK_ESCAPE,
+        this_reach: model::MARK_ESCAPE,
+        this_stores: None,
+        this_calls: Vec::new(),
+        param_stores: vec![None; n],
+        param_flows: Vec::new(),
+        param_calls: Vec::new(),
+    }
+}
+
 /// What a value contract function `f` hands the caller's unit may be
 /// (DECISIONS 140): its result, or an argument of a call through one of its
 /// parameters; `nodes` hold it, `top` when no contract describes it.
@@ -908,6 +942,25 @@ fn describe_nodes(
                     let vc =
                         value_contract_of_toks(g, templates, 0, vec![t], &[], layouts_out, open_tm);
                     ret_value.join(&vc);
+                    continue;
+                }
+                // DECISIONS 147: a function it hands out, by name: the reader
+                // calls it through its owner's entry (DECISIONS 106), a
+                // function of this unit is one (`Gen::publish_result` made it
+                // a contract function, `own_fns_out`); another unit's by its
+                // stand-in contract.
+                if let model::TokKind::Func(f2, _) = g.m.toks[t as usize] {
+                    let fc = match g.stand_in_fc.get(&t) {
+                        Some(&fc) => fc.clone(),
+                        None if g.m.funcs[f2 as usize].func_id != u32::MAX => fn_named(g, f2),
+                        None => {
+                            ret_unknown = true;
+                            continue;
+                        }
+                    };
+                    if !ret_value.fns.iter().any(|c| c.name == fc.name) {
+                        ret_value.fns.push(fc);
+                    }
                     continue;
                 }
                 if let Some(&(_, i)) = g.m.param_marker.get(&t) {

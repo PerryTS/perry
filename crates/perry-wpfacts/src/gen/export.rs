@@ -567,6 +567,12 @@ impl<'a> Gen<'a> {
             // runtime object every unit names alike, or an array whose
             // elements are a cell (`arr_leaves` below).
             TokKind::Builtin(_) => true,
+            // DECISIONS 147: a function of this unit is a contract function
+            // (below); another unit's leaves with its owner's contract, as
+            // a stand-in instance does, unless it is closed: a closed
+            // contract's users are known to its owner (`Model::escape`).
+            TokKind::Func(f, _) if self.m.funcs[f as usize].func_id != u32::MAX => true,
+            TokKind::Func(f, _) if self.stand_in_fc.contains_key(&t) => self.m.funcs[f as usize].forwarded,
             TokKind::Obj(..) if self.program_tok(t) || self.arr_ok(t) => true,
             // An instance of a contract class: given out (`give_out`),
             // or of a class to give (DECISIONS 116).
@@ -593,6 +599,25 @@ impl<'a> Gen<'a> {
             }
             if self.arr_ok(t) {
                 changed |= self.arr_leaves(t);
+                continue;
+            }
+            // DECISIONS 147: the caller's unit calls a function it is
+            // handed through its contract (§11.2, as a published binding's,
+            // `check_value`): its parameters carry markers, its result is
+            // checked; a closed one leaves through its argument contract.
+            // Another unit's function leaves with its owner's contract.
+            if let TokKind::Func(f, _) = self.m.toks[t as usize] {
+                if self.m.funcs[f as usize].func_id != u32::MAX {
+                    changed |= self.m.contract_fns.insert(f);
+                    let rf = match self.m.closed_params.contains_key(&f) {
+                        true => self.m.closed_pub_reason.unwrap_or(r),
+                        false => r,
+                    };
+                    self.m.escape(t, rf);
+                }
+                continue;
+            }
+            if self.stand_in_fc.contains_key(&t) {
                 continue;
             }
             if let TokKind::Obj(tm, _) = self.m.toks[t as usize] {
