@@ -363,6 +363,86 @@ fn gzip_option_record(entries: &[(&str, f64)]) -> f64 {
     }
 }
 
+/// Sync DEFLATE captures codec values before the real Transform spread.
+/// The caller copies the selected dictionary before any later getter runs.
+#[no_mangle]
+pub extern "C" fn js_zlib_sync_codec_options(opts: f64, min_window_bits: i32) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let opts = scope.root_nanbox_f64(opts);
+    let read = |key| gzip_read_option(opts.get_nanbox_f64(), key);
+    let first = crate::value::JSValue::from_bits(read(b"windowBits").to_bits());
+    if !first.is_null() && !first.is_undefined() {
+        read(b"windowBits");
+    }
+    let window_value = read(b"windowBits");
+    let window =
+        if min_window_bits == 0 && option_number(window_value, "options.windowBits") == Some(0.0) {
+            0.0
+        } else {
+            gzip_range(window_value, "options.windowBits", 8, 15, 15.0)
+        };
+    let level = gzip_range(read(b"level"), "options.level", -1, 9, -1.0);
+    let mem = gzip_range(read(b"memLevel"), "options.memLevel", 1, 9, 8.0);
+    let strategy = gzip_range(read(b"strategy"), "options.strategy", 0, 4, 0.0);
+    let dict = scope.root_nanbox_f64(read(b"dictionary"));
+    let value = dict.get_nanbox_f64();
+    if !crate::value::JSValue::from_bits(value.to_bits()).is_undefined()
+        && crate::object::view_brand::view_brand(value).is_none()
+        && crate::buffer::buffer_brand(crate::value::addr_class::object_ref_addr(value))
+            != Some(crate::buffer::BufferBrand::ArrayBuffer)
+    {
+        crate::validators::throw_invalid_arg_type(
+            "options.dictionary",
+            "an instance of Buffer, TypedArray, DataView, or ArrayBuffer",
+            dict.get_nanbox_f64(),
+        );
+    }
+    gzip_option_record(&[
+        ("windowBits", window),
+        ("level", level),
+        ("memLevel", mem),
+        ("strategy", strategy),
+        ("dictionary", dict.get_nanbox_f64()),
+    ])
+}
+
+/// Complete the actual option spread, then retain the last info read once.
+/// Internal records contain data fields only; copying them cannot invoke JS.
+#[no_mangle]
+pub extern "C" fn js_zlib_sync_finish_options(opts: f64, codec: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let opts = scope.root_nanbox_f64(opts);
+    let codec = scope.root_nanbox_f64(codec);
+    let base = scope.root_nanbox_f64(js_zlib_gzip_base_options(opts.get_nanbox_f64()));
+    let source = scope.root_nanbox_f64(js_zlib_gzip_transform_options(opts.get_nanbox_f64(), 0));
+    let copy = scope.root_nanbox_f64(js_zlib_gzip_transform_options(source.get_nanbox_f64(), 1));
+    let info = scope.root_nanbox_f64(gzip_read_option(source.get_nanbox_f64(), b"info"));
+    let selected = scope.root_nanbox_f64(gzip_option_record(&[
+        ("info", info.get_nanbox_f64()),
+        (
+            "_syncInfo",
+            f64::from_bits(
+                crate::value::JSValue::bool(crate::value::js_is_truthy(info.get_nanbox_f64()) != 0)
+                    .bits(),
+            ),
+        ),
+    ]));
+    for record in [&codec, &base, &selected] {
+        unsafe {
+            crate::object::js_object_literal_spread(copy.get_nanbox_f64(), record.get_nanbox_f64());
+        }
+    }
+    copy.get_nanbox_f64()
+}
+
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_ZLIB_SYNC_CODEC_OPTIONS: extern "C" fn(f64, i32) -> f64 = js_zlib_sync_codec_options;
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_ZLIB_SYNC_FINISH_OPTIONS: extern "C" fn(f64, f64) -> f64 =
+    js_zlib_sync_finish_options;
+
 /// Capture FIRST validated codec values before native codec initialization.
 /// The returned traced record also retains the selected dictionary; accepting
 /// it still does not apply a preset dictionary to the compression backend.

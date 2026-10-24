@@ -23,6 +23,8 @@ extern "C" {
     pub(crate) fn js_zlib_resolve_level(opts: f64) -> i32;
     pub(crate) fn js_zlib_validate_params(level: f64, strategy: f64) -> i32;
     pub(crate) fn js_zlib_validate_options(opts: f64, min_window_bits: i32);
+    fn js_zlib_sync_codec_options(opts: f64, min_window_bits: i32) -> f64;
+    fn js_zlib_sync_finish_options(opts: f64, codec: f64) -> f64;
     fn js_zlib_deflate_options(opts: f64, min_window_bits: i32) -> f64;
     pub(crate) fn js_zlib_validate_buffer_arg(data_bits: i64);
     pub(crate) fn js_zlib_validate_callback(callback: f64) -> i64;
@@ -89,6 +91,99 @@ pub(crate) unsafe fn dictionary_options(opts: f64, min_window_bits: i32) -> Opti
         )
     }))
 }
+/// Capture user getters once per constructor phase; later consumers see only
+/// data properties. Copy dictionary bytes before the Transform spread can run.
+pub(crate) unsafe fn sync_options(opts: f64, min_window_bits: i32) -> (f64, Option<Vec<u8>>) {
+    let roots = TransientRootScope::enter();
+    let opts = roots.root_nanbox(opts);
+    let codec = roots.root_nanbox(js_zlib_sync_codec_options(opts.get(), min_window_bits));
+    let dictionary = dictionary_options(codec.get(), min_window_bits);
+    (
+        js_zlib_sync_finish_options(opts.get(), codec.get()),
+        dictionary,
+    )
+}
+pub(crate) fn sync_info(opts: f64) -> bool {
+    field(opts, "_syncInfo").to_bits() == JsValue::TRUE.bits()
+}
+
+/// The returned engine is the sole owner of the codec that produces buffer.
+/// No codec/native reference crosses progress, field allocation or error throws.
+pub(crate) unsafe fn sync_info_result(
+    data: Vec<u8>,
+    opts: f64,
+    codec: Codec,
+    dictionary: Option<Vec<u8>>,
+) -> f64 {
+    let roots = TransientRootScope::enter();
+    let opts = roots.root_nanbox(opts);
+    let family = if matches!(codec, Codec::Deflate) {
+        &DEFLATE
+    } else {
+        &INFLATE
+    };
+    // Use an isolated captured dictionary value: the original view may already
+    // have been mutated by a later getter. The real owner uses these exact bytes.
+    let dictionary = dictionary.map(|bytes| roots.root_nanbox(value_bytes(&bytes)));
+    if let Some(dict) = &dictionary {
+        np::own(opts.get(), "dictionary", dict.get());
+    }
+    let owner = roots.root_nanbox(create_stream(codec, family, opts.get(), None));
+    let info = roots.root_nanbox(field(opts.get(), "info"));
+    np::own(owner.get(), "_info", info.get());
+    let mut consumed = 0;
+    let mut output = Vec::new();
+    let error = loop {
+        let (status, failure, native_bytes) = {
+            let payload = payload(owner.get()).expect("sync codec owner");
+            let mut out = ns::StepOut {
+                consumed: 0,
+                out: std::ptr::null(),
+                out_len: 0,
+                status: ns::StepStatus::NEED_INPUT,
+                code: 0,
+                external_bytes: 0,
+            };
+            payload.step(
+                &ns::StepIn {
+                    op: ns::StreamOp::FINAL,
+                    flush_kind: 0,
+                    input: data.as_ptr().add(consumed),
+                    len: data.len() - consumed,
+                },
+                &mut out,
+            );
+            consumed += out.consumed.min(data.len() - consumed);
+            if out.out_len != 0 {
+                output.extend_from_slice(std::slice::from_raw_parts(out.out, out.out_len));
+            }
+            let failure = if out.status == ns::StepStatus::ERROR {
+                Some(payload.error_details(out.code))
+            } else {
+                None
+            };
+            (out.status, failure, payload.external_bytes())
+        };
+        np::set_external_bytes(owner.get(), &CODEC_VTABLE, native_bytes);
+        if failure.is_some() || status != ns::StepStatus::MORE {
+            break failure;
+        }
+    };
+    drop(data);
+    progress(owner.get());
+    release(owner.get());
+    if let Some((message, code, _)) = error {
+        drop(output);
+        perry_ffi::throw_with_code(&message, &code, ErrorKind::Error);
+    }
+    let buffer = roots.root_nanbox(value_bytes(&output));
+    drop(output);
+    let result = roots.root_nanbox(f64::from_bits(perry_ffi::alloc_object().bits()));
+    np::own(result.get(), "buffer", buffer.get());
+    np::own(result.get(), "engine", owner.get());
+    result.get()
+}
+
 pub(crate) unsafe fn compression_from_opts(opts: f64) -> Compression {
     Compression::new(js_zlib_resolve_level(opts) as u32)
 }

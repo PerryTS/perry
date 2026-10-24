@@ -265,3 +265,13 @@ Legacy aliases remain non-enumerable; ordinary function exports remain mutable
 and can be restored after an override. Descriptor values share the same
 `constants` object as ordinary reads. This supplements `constants/immutability`
 and `imports/legacy-constant-aliases` without changing those fixtures.
+
+### Synchronous DEFLATE info results
+
+`deflateSync` and `inflateSync` return an enumerable `{ buffer, engine }`
+record when `options.info` is truthy. The genuine `Deflate` or `Inflate` owner
+processes the input through its attached codec; `bytesWritten` reports consumed
+input, and releasing its native handle does not destroy or close the Transform.
+False/default info retains the bare Buffer and existing one-shot backend.
+The public fixture covers named, namespace and captured calls, truthiness,
+option-getter order, malformed input, and view-bounded input accounting.

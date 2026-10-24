@@ -169,9 +169,14 @@ pub unsafe extern "C" fn js_zlib_deflate_sync(data_bits: i64, opts: f64) -> f64 
     let roots = perry_ffi::TransientRootScope::enter();
     let data = roots.root_nanbox(f64::from_bits(data_bits as u64));
     let opts = roots.root_nanbox(opts);
-    let dictionary = stream::dictionary_options(opts.get(), 8);
+    let (captured, dictionary) = stream::sync_options(opts.get(), 8);
+    let opts = roots.root_nanbox(captured);
     stream::js_zlib_validate_buffer_arg(data.get().to_bits() as i64);
     let level = stream::compression_from_opts(opts.get());
+    if stream::sync_info(opts.get()) {
+        let input = stream::read_input_from_bits(data.get().to_bits() as i64).unwrap();
+        return stream::sync_info_result(input, opts.get(), stream::Codec::Deflate, dictionary);
+    }
     match stream::read_input_from_bits(data.get().to_bits() as i64).map(|d| {
         if let Some(dictionary) = dictionary {
             stream::deflate_dictionary_bytes(&d, level, &dictionary)
@@ -193,8 +198,14 @@ pub unsafe extern "C" fn js_zlib_deflate_sync(data_bits: i64, opts: f64) -> f64 
 pub unsafe extern "C" fn js_zlib_inflate_sync(data_bits: i64, opts: f64) -> f64 {
     let roots = perry_ffi::TransientRootScope::enter();
     let data = roots.root_nanbox(f64::from_bits(data_bits as u64));
-    let dictionary = stream::dictionary_options(opts, 0);
+    let opts = roots.root_nanbox(opts);
+    let (captured, dictionary) = stream::sync_options(opts.get(), 0);
+    let opts = roots.root_nanbox(captured);
     stream::js_zlib_validate_buffer_arg(data.get().to_bits() as i64);
+    if stream::sync_info(opts.get()) {
+        let input = stream::read_input_from_bits(data.get().to_bits() as i64).unwrap();
+        return stream::sync_info_result(input, opts.get(), stream::Codec::Inflate, dictionary);
+    }
     match stream::read_input_from_bits(data.get().to_bits() as i64)
         .map(|d| stream::decode_dictionary_bytes(&d, dictionary))
     {
