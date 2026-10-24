@@ -98,7 +98,7 @@ fn should_percent_encode_path_byte(b: u8) -> bool {
         || b >= 0x7F
         || matches!(
             b,
-            b' ' | b'"' | b'#' | b'<' | b'>' | b'?' | b'`' | b'{' | b'}'
+            b' ' | b'"' | b'#' | b'<' | b'>' | b'?' | b'`' | b'{' | b'}' | b'^'
         )
 }
 
@@ -168,7 +168,7 @@ fn normalize_hostname_value(raw: &str) -> Option<String> {
     super::whatwg_canonicalize_host(raw)
 }
 
-fn percent_encode_path(raw: &str) -> String {
+pub(super) fn percent_encode_path(raw: &str) -> String {
     percent_encode_url_component(raw, should_percent_encode_path_byte)
 }
 
@@ -252,8 +252,8 @@ pub extern "C" fn js_url_get_href(url: *mut ObjectHeader) -> f64 {
 }
 
 /// Issue #650: `url.pathname = value` setter. Re-runs the parser's path states,
-/// so the value is folded, rooted and normalized as in construction (#12864);
-/// an opaque URL keeps whatever it is given.
+/// so the value is folded, rooted and normalized as in construction (#12864).
+/// An opaque URL has no segment list, so the assignment is ignored.
 #[no_mangle]
 pub extern "C" fn js_url_set_pathname(url: *mut ObjectHeader, value: f64) {
     if url.is_null() {
@@ -264,6 +264,10 @@ pub extern "C" fn js_url_set_pathname(url: *mut ObjectHeader, value: f64) {
         let host = get_string_content(crate::object::js_object_get_field_f64(url, URL_HOST));
         let protocol =
             get_string_content(crate::object::js_object_get_field_f64(url, URL_PROTOCOL));
+        let current = get_string_content(crate::object::js_object_get_field_f64(url, URL_PATHNAME));
+        if host.is_empty() && protocol != "file:" && !current.starts_with('/') {
+            return;
+        }
         let hierarchical = !host.is_empty() || protocol == "file:";
         let raw = if is_special_url_scheme(&protocol) {
             raw.replace('\\', "/")
