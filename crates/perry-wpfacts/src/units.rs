@@ -831,6 +831,7 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
     let order = dependency_order(&solves);
     let levels = dependency_levels(&solves, &order);
     let mut rounds = 0u32;
+    let compares = std::cell::Cell::new(0u64);
     let mut round_work: Vec<u64> = Vec::new();
     let mut per_unit: Vec<Option<ProgramFacts>> = (0..solves.len()).map(|_| None).collect();
     let mut dirty = vec![true; solves.len()];
@@ -1085,8 +1086,25 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
         input.layouts.retain(|k, _| published_layouts.contains(k));
         owned_layouts.retain(|k| owned_now.contains(k));
         input.own_fns.retain(|k, _| published_fns.contains(k));
+        // DECISIONS 114: each contract is digested once per round, as its
+        // readers recorded it (`Gen::owner_fn`, `Gen::other_layout`): a
+        // read compares two numbers, so the round does not grow with the
+        // reads (awfy_Richards: 58544 reads of 39 layouts, each digest the
+        // Debug text of a whole contract).
+        let gone = digest(&None::<&ClassContract>);
+        let fns_now: FxHashMap<&str, u64> = input
+            .own_fns
+            .iter()
+            .map(|(k, c)| (k.as_str(), digest(&Some(c))))
+            .collect();
+        let layouts_now: FxHashMap<&str, u64> = input
+            .layouts
+            .iter()
+            .map(|(k, c)| (k.as_str(), digest(&Some(c))))
+            .collect();
+        compares.set(compares.get() + (fns_now.len() + layouts_now.len()) as u64);
         let fn_changed = |(k, h): &(String, u64)| {
-            digest(&input.own_fns.get(k)) != *h
+            fns_now.get(k.as_str()).copied().unwrap_or(gone) != *h
         };
         for (si, u) in per_unit.iter().enumerate() {
             let u = u.as_ref().expect("every unit solved");
@@ -1097,7 +1115,7 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
             }
         }
         let layout_changed = |(k, h): &(String, u64)| {
-            digest(&input.layouts.get(k)) != *h
+            layouts_now.get(k.as_str()).copied().unwrap_or(gone) != *h
         };
         for (si, u) in per_unit.iter().enumerate() {
             let u = u.as_ref().expect("every unit solved");
@@ -1107,23 +1125,33 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
                 seeds.push(si);
             }
         }
+        // A cell whose writes and whose ⊤ are as last round reads alike in
+        // every unit: only the changed ones are viewed per reader
+        // (DECISIONS 114).
+        let mut keys: Vec<&String> = cells.keys().chain(input.cells.keys()).collect();
+        keys.sort_unstable();
+        keys.dedup();
+        compares.set(compares.get() + keys.len() as u64);
+        let changed: FxHashSet<&str> = keys
+            .into_iter()
+            .filter(|k| format!("{:?}", input.cells.get(*k)) != format!("{:?}", cells.get(*k)))
+            .map(|k| k.as_str())
+            .collect();
+        let top_changed = input.cells_top != cells_top;
         for (si, u) in per_unit.iter().enumerate() {
             let u = u.as_ref().expect("every unit solved");
             let me = solves[si].key.as_str();
             if u.cells_read.iter().any(|k| {
-                view(&input.cells, input.cells_top, me, k) != view(&cells, cells_top, me, k)
+                (top_changed || changed.contains(k.as_str()))
+                    && {
+                        compares.set(compares.get() + 1);
+                        view(&input.cells, input.cells_top, me, k) != view(&cells, cells_top, me, k)
+                    }
             }) {
                 seeds.push(si);
             }
         }
-        let mut changed: Vec<String> = cells
-            .keys()
-            .chain(input.cells.keys())
-            .filter(|k| format!("{:?}", input.cells.get(*k)) != format!("{:?}", cells.get(*k)))
-            .cloned()
-            .collect();
-        changed.sort_unstable();
-        changed.dedup();
+        drop(changed);
         input.cells = cells;
         input.cells_top = cells_top;
         let fresh: Vec<String> = reports
@@ -1171,6 +1199,7 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
         // The cost of the run is every round's.
         pf.stats.work = round_work.iter().sum();
         pf.round_work = round_work;
+        pf.compares = compares.get();
         pf.broken = {
             let mut b: Vec<String> = input.broken.iter().cloned().collect();
             b.sort();

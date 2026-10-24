@@ -156,6 +156,10 @@ pub struct ProgramFacts {
     pub broken: Vec<String>,
     /// Solve work of every unit, per round (`stats.work` is their sum).
     pub round_work: Vec<u64>,
+    /// Per-unit mode: published contracts the driver compared between
+    /// rounds, over every round (DECISIONS 114: once per contract, not per
+    /// reading unit).
+    pub compares: u64,
     /// One unit's class contracts and census reports (design §11).
     pub(crate) contracts_out: Vec<((String, String), units::ClassContract)>,
     pub(crate) fn_contracts_out: Vec<((String, String), units::FnContract)>,
@@ -1975,6 +1979,7 @@ pub(crate) fn compute_in<'a>(
         rounds: 0,
         broken: Vec::new(),
         round_work: Vec::new(),
+        compares: 0,
         contracts_out,
         fn_contracts_out,
         fns_defined,

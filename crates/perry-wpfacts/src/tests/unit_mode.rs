@@ -2539,3 +2539,33 @@ fn a_cell_written_alike_by_many_units_is_read_once() {
     let (many, dump) = reader_nodes(16);
     assert_eq!(few, many, "{dump}");
 }
+
+/// DECISIONS 114: the driver compares what a unit read with what is
+/// published now. Each layout and function contract is digested once per
+/// round, so those compares do not grow with the readers (awfy_Richards:
+/// 58544 reads of 39 layouts, 125 s a round); a cell is viewed per reader
+/// only in a round its writes changed.
+#[test]
+fn the_driver_compares_each_contract_once_per_round() {
+    let compares = |n: usize, writer: &str, reader: &str| {
+        let srcs: Vec<(String, String)> = std::iter::once(("a".to_string(), writer.to_string()))
+            .chain((0..n).map(|i| (format!("r{i}"), reader.replace("I", &i.to_string()))))
+            .collect();
+        let mods: Vec<(&str, &str)> = srcs.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+        let pf = units_of(&mods);
+        (pf.compares, pf.rounds, pf.dump_text())
+    };
+    let class = "export class P { x = 1; y = 'p'; } export function mk() { return new P(); }";
+    let (few, r1, _) = compares(4, class, "import { mk } from './a'; export const vI = mk().x;");
+    let (many, r2, dump) = compares(16, class, "import { mk } from './a'; export const vI = mk().x;");
+    assert_eq!(r1, r2, "{dump}");
+    assert_eq!(few, many, "layouts and functions: {dump}");
+    let global = "(globalThis as any)[String(Math.random())] = 1;";
+    let (few, r1, _) = compares(4, global, "export const vI = (globalThis as any).__g;");
+    let (many, r2, dump) = compares(16, global, "export const vI = (globalThis as any).__g;");
+    assert_eq!(r1, r2, "{dump}");
+    // A reader is viewed at most once per round boundary: only a cell
+    // whose writes changed is viewed, and the first changed view seeds it.
+    let bound = (16 - 4) * (r1 as u64 - 1);
+    assert!(many - few <= bound, "cells: {few} -> {many}, rounds {r1}: {dump}");
+}
