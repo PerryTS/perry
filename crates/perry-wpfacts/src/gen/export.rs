@@ -1276,6 +1276,9 @@ impl<'a> Gen<'a> {
                     // DECISIONS 126: this unit's typed arrays, none escaped
                     // or hard, in a field no reader reported.
                     let mut tas: Vec<Tok> = Vec::new();
+                    // DECISIONS 133: instances of this unit's contract
+                    // classes, none escaped.
+                    let mut cls: Vec<Tok> = Vec::new();
                     let mut pbits: u16 = 0;
                     let reported = self.ta_reported.contains(&(
                         self.m.tmpls[tm as usize].display.clone(),
@@ -1310,6 +1313,19 @@ impl<'a> Gen<'a> {
                                     {
                                         inner.push((itm, x))
                                     }
+                                    // An instance of this unit's contract
+                                    // class (one a caller handed back to
+                                    // its constructor, DECISIONS 133): the
+                                    // field's published kind names the
+                                    // class (DECISIONS 110), and the
+                                    // instance leaves key by key itself.
+                                    TokKind::Obj(itm, _)
+                                        if self.contract_class(itm)
+                                            && !self.stand_in_cc.contains_key(&itm)
+                                            && !self.m.is_escaped(x) =>
+                                    {
+                                        cls.push(x)
+                                    }
                                     // An array: its elements are a cell
                                     // (DECISIONS 94).
                                     _ if self.arr_ok(x) => {
@@ -1332,7 +1348,11 @@ impl<'a> Gen<'a> {
                     // before the field is written): the owner's typed arrays,
                     // described; mixed with anything else, sunk.
                     if ok && !tas.is_empty() {
-                        if fwd || !inner.is_empty() || pbits & !crate::model::prim::UNDEF != 0 {
+                        if fwd
+                            || !inner.is_empty()
+                            || !cls.is_empty()
+                            || pbits & !crate::model::prim::UNDEF != 0
+                        {
                             ok = false;
                         } else {
                             let mut elem = None;
@@ -1356,6 +1376,11 @@ impl<'a> Gen<'a> {
                             self.field_layouts.remove(&(tm, a));
                             self.field_values.remove(&(tm, a));
                             continue;
+                        }
+                    }
+                    if ok {
+                        for x in std::mem::take(&mut cls) {
+                            changed |= self.fields_leave(x, r);
                         }
                     }
                     // Forwarded stand-ins (beside this unit's layouts, which

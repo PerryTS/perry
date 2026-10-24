@@ -2126,7 +2126,7 @@ pub(crate) fn compute_in<'a>(
             *l = c.clone();
         }
     }
-    // DECISIONS 130: every class this unit publishes goes out under its
+    // DECISIONS 132: every class this unit publishes goes out under its
     // display too, the owner's contract of this round. A reader holding a
     // copy (a value or argument contract describes it as the publishing
     // unit saw it) builds its stand-in over the owner's
@@ -2159,9 +2159,19 @@ pub(crate) fn compute_in<'a>(
         parents.extend(layouts_out[i].parent.clone());
         i += 1;
     }
+    // Forwarded: another unit's layout this unit holds a stand-in of. A
+    // class this unit defines is its own publication, whatever stand-in
+    // it also holds (DECISIONS 133).
     let layouts_fwd: Vec<String> = layouts_out
         .iter()
         .filter(|c| g.stand_in_cc.values().any(|s| s.display == c.display))
+        .filter(|c| {
+            !contracts_out
+                .iter()
+                .map(|(_, o)| o)
+                .chain(&given_out)
+                .any(|o| o.display == c.display)
+        })
         .map(|c| c.display.clone())
         .collect();
     let mut pf = ProgramFacts {

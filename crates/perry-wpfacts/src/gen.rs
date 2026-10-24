@@ -1173,6 +1173,25 @@ impl<'a> Gen<'a> {
         }
     }
 
+    /// This unit's own class named by display: a class has one defining
+    /// unit (a literal shape may have several, DECISIONS 112).
+    fn own_class(&self, display: &str) -> Option<TmplId> {
+        (0..self.m.tmpls.len())
+            .find(|&i| {
+                let t = &self.m.tmpls[i];
+                t.display == display
+                    && matches!(
+                        t.kind,
+                        TmplKind::Class {
+                            literal_shape: false,
+                            ..
+                        }
+                    )
+                    && !self.m.foreign.contains_key(&(i as TmplId))
+            })
+            .map(|i| i as TmplId)
+    }
+
     fn value_contract_for(
         &self,
         imp: &perry_hir::Import,
@@ -1202,8 +1221,17 @@ impl<'a> Gen<'a> {
                     .add_top(n, |_| "broken layout of another unit".into());
                 continue;
             }
-            self.stand_in_class(mi, cc);
-            let tm = self.stand_ins[&cc.display].1;
+            // An instance of this unit's class described back to it (a
+            // caller passes this unit's instances to its closed
+            // constructor, DECISIONS 133): its own template, whose facts
+            // this solve makes, as for the class value (DECISIONS 120).
+            let tm = match self.own_class(&cc.display) {
+                Some(tm) => tm,
+                None => {
+                    self.stand_in_class(mi, cc);
+                    self.stand_ins[&cc.display].1
+                }
+            };
             let inst = self.m.tok(TokKind::Obj(tm, NO_CTX));
             self.m.add_tok(n, inst);
         }
@@ -1332,23 +1360,11 @@ impl<'a> Gen<'a> {
     /// through its cell: DECISIONS 120), else its stand-in. The class is
     /// one object; its own unit has its template.
     fn contract_class_value(&mut self, mi: u32, c: &'a crate::units::ClassContract) -> NodeId {
-        let own = (0..self.m.tmpls.len()).find(|&i| {
-            let t = &self.m.tmpls[i];
-            t.display == c.display
-                && matches!(
-                    t.kind,
-                    TmplKind::Class {
-                        literal_shape: false,
-                        ..
-                    }
-                )
-                && !self.m.foreign.contains_key(&(i as TmplId))
-        });
-        if let Some(i) = own {
+        if let Some(i) = self.own_class(&c.display) {
             let n = self
                 .m
                 .node_named("own-class", || format!("own-class({})", c.display));
-            let t = self.m.tok(TokKind::ClassObj(i as TmplId));
+            let t = self.m.tok(TokKind::ClassObj(i));
             self.m.add_tok(n, t);
             return n;
         }

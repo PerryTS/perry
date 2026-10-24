@@ -1118,6 +1118,13 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
     // The layouts whose entry is their owner's, not a forwarded copy
     // (DECISIONS 106).
     let mut owned_layouts: FxHashSet<String> = FxHashSet::default();
+    // The function contracts each unit published at its latest solve
+    // (DECISIONS 134).
+    let mut fns_of: Vec<Vec<String>> = vec![Vec::new(); solves.len()];
+    // The layouts each unit published as their owner at its latest solve.
+    let mut layouts_of: Vec<Vec<String>> = vec![Vec::new(); solves.len()];
+    // The unit whose forwarded copy an entry is (DECISIONS 134).
+    let mut copy_of: FxHashMap<String, usize> = FxHashMap::default();
     loop {
         rounds += 1;
         input.classes.clear();
@@ -1156,15 +1163,33 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
                     input.values.insert((s.key.clone(), n.clone()), c.clone());
                     input.values.insert((p.clone(), n.clone()), c.clone());
                 }
+                // DECISIONS 134: a layout this unit owned at its last solve
+                // and no longer publishes is gone now, unless another unit
+                // births it too (DECISIONS 112).
+                let now: Vec<String> = u
+                    .layouts_out
+                    .iter()
+                    .filter(|c| !u.layouts_fwd.contains(&c.display))
+                    .map(|c| c.display.clone())
+                    .collect();
+                for d in std::mem::replace(&mut layouts_of[si], now) {
+                    if !layouts_of.iter().any(|v| v.contains(&d)) {
+                        input.layouts.remove(&d);
+                        owned_layouts.remove(&d);
+                        copy_of.remove(&d);
+                    }
+                }
                 for c in &u.layouts_out {
                     published_layouts.insert(c.display.clone());
                     if u.layouts_fwd.contains(&c.display) {
                         if !owned_layouts.contains(&c.display) {
                             input.layouts.insert(c.display.clone(), c.clone());
+                            copy_of.insert(c.display.clone(), si);
                         }
                         continue;
                     }
                     owned_now.insert(c.display.clone());
+                    copy_of.remove(&c.display);
                     // Several units birth one literal shape (DECISIONS 112):
                     // its entry is the join of their contracts, ascending
                     // from the last round's owned entry, so a reader between
@@ -1184,6 +1209,16 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
                     };
                     owned_layouts.insert(c.display.clone());
                     input.layouts.insert(c.display.clone(), e);
+                }
+                // DECISIONS 134: a contract this unit published at its last
+                // solve and no longer publishes is gone now, not at the end
+                // of the round: a reader solving later in this round reads
+                // what this solve left, and needs no round to see it go.
+                let now: Vec<String> = u.own_fns_out.iter().map(|c| c.name.clone()).collect();
+                for nm in std::mem::replace(&mut fns_of[si], now) {
+                    if !u.own_fns_out.iter().any(|c| c.name == nm) {
+                        input.own_fns.remove(&nm);
+                    }
                 }
                 for c in &u.own_fns_out {
                     published_fns.insert(c.name.clone());
@@ -1384,6 +1419,7 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
         // a layout which changed during the round read it before its
         // publisher solved, or the old one: solved again (DECISIONS 103).
         input.layouts.retain(|k, _| published_layouts.contains(k));
+        copy_of.retain(|k, _| input.layouts.contains_key(k));
         owned_layouts.retain(|k| owned_now.contains(k));
         input.own_fns.retain(|k, _| published_fns.contains(k));
         // DECISIONS 114: each contract is digested once per round, as its
@@ -1419,7 +1455,16 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
             let u = u.as_ref().expect("every unit solved");
             // A unit over the bound keeps its result (`dependents`): what it
             // read changes nothing it publishes.
-            if !u.stats.aborted && u.layouts_read.iter().any(layout_changed) {
+            // DECISIONS 134: a unit's own forwarded copy is built from
+            // what it read through the other channels, each tracked: it
+            // does not solve its publisher again.
+            let own_copy = |(k, _): &&(String, u64)| copy_of.get(k.as_str()) == Some(&si);
+            if !u.stats.aborted
+                && u.layouts_read
+                    .iter()
+                    .filter(|r| !own_copy(r))
+                    .any(layout_changed)
+            {
                 seeds.push(si);
             }
         }
