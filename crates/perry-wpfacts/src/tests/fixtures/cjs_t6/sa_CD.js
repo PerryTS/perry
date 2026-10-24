@@ -16,22 +16,20 @@ function __perry_cjs_factory() {
     // #6769: the Node `Module` record surface. Set before user code so a
     // recursive load of this module observes the same shape Node exposes.
     //
-    // ONE object literal, so the record is allocated with its final shape.
-    // As eleven sequential assignments it walked eleven shape transitions and
-    // eleven cold property stores — about 10k instructions each at module-init
-    // time — in every CommonJS module in the graph. Folding only some of the
-    // fields does not help: the trailing assignments keep transitioning the
-    // record and the win disappears (measured at -0.08%), so the whole surface
-    // folds or none of it does.
+    // ONE runtime call, so the record is born with its final layout
+    // (`CJS_MODULE_RECORD`): Node's keys, the `__perry_cjs_record` marker, and
+    // a private slot for the factory that no script can name. As sequential
+    // assignments it walked a shape transition and a cold property store per
+    // key, about 10k instructions each at module-init time, in every CommonJS
+    // module in the graph. `exports`, `children` and `paths` stay the
+    // wrapper's own literals.
     //
-    // `cjs_scaffolding.rs`'s `record_binding` matches this field list
-    // positionally. Adding or reordering a field drops the record back to being
-    // reported as a denied user candidate in the `Ptr<Shape>` report;
-    // `preamble_canary_tests` is what catches that.
+    // `cjs_scaffolding.rs`'s `record_binding` matches this call. Changing it
+    // drops the record back to being reported as a denied user candidate in
+    // the `Ptr<Shape>` report; `preamble_canary_tests` is what catches that.
     const __cjs_module = __perry_get_cjs_main_module();
     __cjs_module.exports = {};
     __cjs_module.__perry_cjs_record = true;
-    __cjs_module.__perry_cjs_factory = __perry_cjs_factory;
     __cjs_module.id = "/t6/sa_CD.js";
     __cjs_module.path = "/t6";
     __cjs_module.filename = "/t6/sa_CD.js";
@@ -40,6 +38,7 @@ function __perry_cjs_factory() {
     __cjs_module.parent = globalThis.__perry_cjs_pending_parent;
     __cjs_module.paths = ["/t6" + '/node_modules'];
     __cjs_module.require = undefined;
+    __perry_set_cjs_factory(__cjs_module, __perry_cjs_factory);
     globalThis.__perry_cjs_pending_parent = undefined;
     // Node populates `module.parent` before the body evaluates, so link it
     // here rather than at the tail's registry publication.
@@ -212,6 +211,7 @@ return __perry_cjs_factory();
 })();
 
 export default _cjs;
+
 
 
 

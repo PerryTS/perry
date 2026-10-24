@@ -17,31 +17,26 @@ function __perry_cjs_factory() {
     // #6769: the Node `Module` record surface. Set before user code so a
     // recursive load of this module observes the same shape Node exposes.
     //
-    // ONE object literal, so the record is allocated with its final shape.
-    // As eleven sequential assignments it walked eleven shape transitions and
-    // eleven cold property stores — about 10k instructions each at module-init
-    // time — in every CommonJS module in the graph. Folding only some of the
-    // fields does not help: the trailing assignments keep transitioning the
-    // record and the win disappears (measured at -0.08%), so the whole surface
-    // folds or none of it does.
+    // ONE runtime call, so the record is born with its final layout
+    // (`CJS_MODULE_RECORD`): Node's keys, the `__perry_cjs_record` marker, and
+    // a private slot for the factory that no script can name. As sequential
+    // assignments it walked a shape transition and a cold property store per
+    // key, about 10k instructions each at module-init time, in every CommonJS
+    // module in the graph. `exports`, `children` and `paths` stay the
+    // wrapper's own literals.
     //
-    // `cjs_scaffolding.rs`'s `record_binding` matches this field list
-    // positionally. Adding or reordering a field drops the record back to being
-    // reported as a denied user candidate in the `Ptr<Shape>` report;
-    // `preamble_canary_tests` is what catches that.
-    const __cjs_module = {
-        exports: {},
-        __perry_cjs_record: true,
-        __perry_cjs_factory: __perry_cjs_factory,
-        id: "/t1/a.js",
-        path: "/t1",
-        filename: "/t1/a.js",
-        loaded: false,
-        children: [],
-        parent: globalThis.__perry_cjs_pending_parent,
-        paths: ["/t1" + '/node_modules'],
-        require: undefined,
-    };
+    // `cjs_scaffolding.rs`'s `record_binding` matches this call. Changing it
+    // drops the record back to being reported as a denied user candidate in
+    // the `Ptr<Shape>` report; `preamble_canary_tests` is what catches that.
+    const __cjs_module = __perry_cjs_module_record(
+        {},
+        "/t1/a.js",
+        "/t1",
+        [],
+        globalThis.__perry_cjs_pending_parent,
+        ["/t1" + '/node_modules'],
+        __perry_cjs_factory
+    );
     globalThis.__perry_cjs_pending_parent = undefined;
     // Node populates `module.parent` before the body evaluates, so link it
     // here rather than at the tail's registry publication.
