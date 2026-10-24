@@ -4,6 +4,19 @@ use super::*;
 
 use super::search_params::{create_url_search_params_object, parse_query_string};
 
+/// WHATWG "special scheme": the ones with a host and a slash-separated path
+/// list, whose parser also treats `\` as a path separator and as an authority
+/// terminator. Everything else (`foo:`, `mailto:`, `data:`, `urn:`) is
+/// non-special.
+pub(crate) fn is_special_url_scheme(protocol: &str) -> bool {
+    is_special_scheme_name(protocol.strip_suffix(':').unwrap_or(protocol))
+}
+
+/// The same test for a scheme name without its trailing `:`.
+fn is_special_scheme_name(scheme: &str) -> bool {
+    matches!(scheme, "ftp" | "file" | "http" | "https" | "ws" | "wss")
+}
+
 /// Simple URL parser
 /// Returns (protocol, host, hostname, port, pathname, search, hash)
 pub(crate) fn parse_url(url_str: &str) -> (String, String, String, String, String, String, String) {
@@ -39,6 +52,10 @@ pub(crate) fn parse_url(url_str: &str) -> (String, String, String, String, Strin
     // file branch below can split out a UNC-style host (`file://host/path`)
     // from a hostless path (`file:///path`, `file:/path`). #2975
     let mut file_had_authority = false;
+    // Whether a `://` separator was consumed. The `file:`-only spelling has to
+    // look for its own authority marker *after* the backslash folding below,
+    // because `file:\host` carries one written with backslashes (#12864).
+    let mut scheme_slashes_consumed = false;
 
     // Extract protocol. WHATWG canonicalization lowercases the scheme, so
     // `HTTP://...` parses identically to `http://...` (and default-port
@@ -46,6 +63,7 @@ pub(crate) fn parse_url(url_str: &str) -> (String, String, String, String, Strin
     if let Some(proto_idx) = remaining.find("://") {
         protocol = format!("{}:", remaining[..proto_idx].to_ascii_lowercase());
         file_had_authority = protocol == "file:";
+        scheme_slashes_consumed = true;
         remaining = &remaining[proto_idx + 3..];
     } else if remaining.starts_with("file:") {
         protocol = "file:".to_string();
@@ -56,9 +74,11 @@ pub(crate) fn parse_url(url_str: &str) -> (String, String, String, String, Strin
             remaining = remaining.strip_prefix("//").unwrap_or(remaining);
         }
     } else if let Some(colon_idx) = remaining.find(':') {
-        // Non-special opaque scheme: `mailto:`, `data:`, `urn:`, etc. The
-        // characters before the colon must look like a scheme. The whole
-        // remainder is the opaque pathname; host/hostname/port stay empty.
+        // A scheme prefix. `mailto:`, `data:`, `urn:` and friends are opaque:
+        // the whole remainder is the pathname and host/hostname/port stay
+        // empty. A special scheme is ALWAYS hierarchical, though, and WHATWG
+        // makes its `//` optional (`https:x` hosts `x`, `https:/x` too), so
+        // those fall through to the hierarchical branch below.
         let scheme = &remaining[..colon_idx];
         let scheme_ok = !scheme.is_empty()
             && scheme
@@ -70,17 +90,48 @@ pub(crate) fn parse_url(url_str: &str) -> (String, String, String, String, Strin
                 .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.');
         if scheme_ok {
             protocol = format!("{}:", scheme.to_ascii_lowercase());
-            pathname = remaining[colon_idx + 1..].to_string();
-            return (
-                protocol,
-                String::new(),
-                String::new(),
-                String::new(),
-                pathname,
-                search,
-                hash,
-            );
+            if is_special_url_scheme(&protocol) {
+                remaining = &remaining[colon_idx + 1..];
+            } else {
+                pathname = remaining[colon_idx + 1..].to_string();
+                return (
+                    protocol,
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    pathname,
+                    search,
+                    hash,
+                );
+            }
         }
+    }
+
+    // WHATWG treats `\` as a path separator for special schemes, and the
+    // standard's "special authority ignore slashes" state skips a whole run of
+    // `/` (or `\`) after the scheme — so `http://x\a\b` is `http://x/a/b` and
+    // `https:///x` keeps host `x` instead of reading an empty authority.
+    // Folding happens after hash/search were split off above because the query
+    // and fragment encode sets do NOT encode `\`: `?q=\a` keeps its backslash.
+    // A non-special URL path keeps it too (`foo://a/b\c` is `/b\c`). #12864
+    let backslash_folded;
+    let special = is_special_url_scheme(&protocol);
+    let mut remaining = if special && remaining.contains('\\') {
+        backslash_folded = remaining.replace('\\', "/");
+        backslash_folded.as_str()
+    } else {
+        remaining
+    };
+    // `file:` has its own slash states: extra separators are path, not
+    // authority (`file:////x` is an empty host with the path `//x`), so only
+    // non-file special schemes skip the run.
+    if special && protocol != "file:" {
+        remaining = remaining.trim_start_matches('/');
+    }
+    // `file:\host` only shows its authority marker after the folding above.
+    if protocol == "file:" && !scheme_slashes_consumed && remaining.starts_with("//") {
+        file_had_authority = true;
+        remaining = remaining.strip_prefix("//").unwrap_or(remaining);
     }
 
     // For file: URLs, the rest is the pathname — unless an authority was
@@ -188,7 +239,127 @@ pub(crate) fn parse_url(url_str: &str) -> (String, String, String, String, Strin
         }
     }
 
+    // WHATWG removes dot segments while it reads the path ("path state"), so
+    // the serialized pathname never carries them: `/a/b/../c` → `/a/c`.
+    // Perry stored the raw path, which is what #12864 reported. Opaque
+    // schemes (`mailto:`, `data:`) already returned above and keep theirs.
+    let pathname = normalize_hierarchical_path(&pathname, protocol == "file:");
+
     (protocol, host, hostname, port, pathname, search, hash)
+}
+
+/// Apply the two path-shape rules the WHATWG "path state" contributes to a
+/// path string: the `file:` Windows-drive canonicalization and dot-segment
+/// removal. The standard interleaves them while reading; here they run in the
+/// same order over the finished text.
+///
+/// `file_scheme` enables both scheme-dependent rules — the drive letter
+/// canonicalization (`file:///C|/x` → `/C:/x`) and the refusal to shorten a
+/// path that is only a drive letter (`file:///C:/..` → `/C:/`).
+pub(crate) fn normalize_hierarchical_path(path: &str, file_scheme: bool) -> String {
+    let drive_normalized;
+    let path = if file_scheme {
+        match normalize_file_drive_letter(path) {
+            Some(normalized) => {
+                drive_normalized = normalized;
+                drive_normalized.as_str()
+            }
+            None => path,
+        }
+    } else {
+        path
+    };
+    remove_dot_segments(path, file_scheme)
+}
+
+/// WHATWG: while a `file:` path is being built, a Windows drive letter keeps
+/// its drive meaning — its second code point becomes `:` — and a `|` spelling
+/// is accepted for it, so `file:///C|/x` serializes as `/C:/x`. Only the FIRST
+/// segment sits in that position, and the two-character drive shape is what
+/// distinguishes it from an ordinary segment that merely ends in `|`
+/// (`/ab|/x` keeps its text).
+fn normalize_file_drive_letter(path: &str) -> Option<String> {
+    let rest = path.strip_prefix('/')?;
+    let (first, tail) = match rest.find('/') {
+        Some(index) => (&rest[..index], &rest[index..]),
+        None => (rest, ""),
+    };
+    let bytes = first.as_bytes();
+    if bytes.len() == 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b'|' {
+        Some(format!("/{}:{}", &first[..1], tail))
+    } else {
+        None
+    }
+}
+
+/// WHATWG dot-segment removal for one hierarchical (slash-separated, leading
+/// `/`) URL path — the effect of the standard's "path state", applied to a
+/// path string instead of as it is read.
+///
+/// The spec shortens the segment list for every *double-dot path segment* and
+/// drops every *single-dot path segment*, but appends an empty segment when the
+/// dot segment is the last thing in the path (no following separator). That
+/// asymmetry is why `/a/..` serializes as `/` while `/a/b/..` serializes as
+/// `/a/`, and it is why this cannot be a plain `Vec::pop` loop. Everything else
+/// the spec says is preserved verbatim, including empty segments from a `//`
+/// run (`//a/../b` → `//b`) and any segment that merely contains a dot
+/// (`/a/.../b` stays).
+///
+/// `file_scheme` enables the one scheme-dependent rule: a `file:` path whose
+/// whole path is a single normalized Windows drive letter is never shortened,
+/// so `file:///C:/..` stays `/C:/` instead of collapsing to `/`.
+pub(crate) fn remove_dot_segments(path: &str, file_scheme: bool) -> String {
+    // A non-hierarchical path has no segment separators to work with, and a
+    // path with neither `.` nor `%` cannot spell a dot segment (`%2e` carries
+    // no literal dot): the common case returns the borrowed text untouched.
+    if !path.starts_with('/') || !path.contains(['.', '%']) {
+        return path.to_string();
+    }
+
+    let parts: Vec<&str> = path[1..].split('/').collect();
+    let final_index = parts.len() - 1;
+    let mut segments: Vec<&str> = Vec::with_capacity(parts.len());
+    for (index, part) in parts.iter().enumerate() {
+        let is_final = index == final_index;
+        if is_double_dot_segment(part) {
+            let keeps_windows_drive = file_scheme
+                && segments.len() == 1
+                && is_normalized_windows_drive_letter(segments[0]);
+            if !keeps_windows_drive {
+                segments.pop();
+            }
+            if is_final {
+                segments.push("");
+            }
+        } else if is_single_dot_segment(part) {
+            if is_final {
+                segments.push("");
+            }
+        } else {
+            segments.push(part);
+        }
+    }
+    format!("/{}", segments.join("/"))
+}
+
+/// WHATWG "single-dot path segment": `.` or its percent-encoded spelling
+/// `%2e` (the standard compares ASCII case-insensitively).
+fn is_single_dot_segment(segment: &str) -> bool {
+    segment == "." || segment.eq_ignore_ascii_case("%2e")
+}
+
+/// WHATWG "double-dot path segment": `..`, `.%2e`, `%2e.` or `%2e%2e`.
+fn is_double_dot_segment(segment: &str) -> bool {
+    segment == ".."
+        || segment.eq_ignore_ascii_case(".%2e")
+        || segment.eq_ignore_ascii_case("%2e.")
+        || segment.eq_ignore_ascii_case("%2e%2e")
+}
+
+/// WHATWG "normalized Windows drive letter": an ASCII alpha followed by `:`.
+fn is_normalized_windows_drive_letter(segment: &str) -> bool {
+    let bytes = segment.as_bytes();
+    bytes.len() == 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
 }
 
 /// Resolve a relative URL against a base URL
@@ -360,11 +531,10 @@ pub(crate) fn create_url_object(url_string: &str) -> *mut ObjectHeader {
     // IPv4-shorthand hosts also canonicalize to dotted-quad. We reuse the
     // `url`-crate-backed `whatwg_canonicalize_host` (reparses `http://<host>/`),
     // which is the same path the hostname setter uses. Only special hierarchical
-    // schemes get host canonicalization; opaque schemes have no host.
-    let is_special = matches!(
-        protocol.as_str(),
-        "http:" | "https:" | "ws:" | "wss:" | "ftp:"
-    );
+    // schemes get host canonicalization; opaque schemes have no host. `file:`
+    // is one of them for this purpose too: its host is a regular WHATWG host
+    // (`file://SERVER/x` → `server`, `file://123/x` → `0.0.0.123`).
+    let is_special = is_special_url_scheme(&protocol);
     if is_special && !hostname.is_empty() {
         if let Some(canon) = super::whatwg_canonicalize_host(&hostname) {
             hostname = canon.clone();
@@ -601,25 +771,49 @@ pub(crate) fn is_valid_absolute_url(s: &str) -> bool {
     if scheme_end >= s.len() || s.as_bytes()[scheme_end] != b':' {
         return false;
     }
-    // For hierarchical schemes (http, https, ws, wss, ftp, file) WHATWG
-    // requires `//` before the authority. For others (mailto:, data:, etc.)
-    // Node accepts anything non-empty after `:`. Match that for ergonomics.
+    // For hierarchical schemes the WHATWG parser requires a host for every
+    // special scheme except `file:`, and it accepts the `//` as optional
+    // (`https:x` and `https:/x` both host `x`). A `\` is a separator, never
+    // part of the authority, so validation reads the same folded text the
+    // parser does. For every other scheme Node accepts whatever follows `:`,
+    // empty included, and non-empty input is an opaque path.
     let after_scheme = &s[scheme_end + 1..];
     let scheme = &s[..scheme_end];
-    let needs_authority = matches!(scheme, "http" | "https" | "ws" | "wss" | "ftp" | "file");
-    if needs_authority {
-        if !after_scheme.starts_with("//") {
+    if is_special_scheme_name(scheme) {
+        let folded;
+        let after_scheme = if after_scheme.contains('\\') {
+            folded = after_scheme.replace('\\', "/");
+            folded.as_str()
+        } else {
+            after_scheme
+        };
+        if scheme == "file" {
+            // The authority exists only in the `//` spelling; `file:`, `file:x`
+            // and `file:////x` are hostless paths with nothing to validate.
+            if let Some(authority) = after_scheme.strip_prefix("//") {
+                let authority = authority.split(['/', '?', '#']).next().unwrap_or_default();
+                if !is_valid_url_authority(scheme, authority) {
+                    return false;
+                }
+            }
+        } else {
+            let rest = after_scheme.trim_start_matches('/');
+            let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+            if !is_valid_url_authority(scheme, authority) {
+                return false;
+            }
+        }
+    } else if let Some(authority) = after_scheme.strip_prefix("//") {
+        // A non-special `//` authority is a host too, and `\` is a forbidden
+        // host code point: `foo://a\b` is invalid in Node. Its path form
+        // (`foo://a/b\c`) stays valid — a path has no such restriction.
+        let authority = authority.split(['/', '?', '#']).next().unwrap_or_default();
+        let host = authority
+            .rsplit_once('@')
+            .map_or(authority, |(_, host)| host);
+        if host.contains('\\') {
             return false;
         }
-        let authority = after_scheme[2..]
-            .split(['/', '?', '#'])
-            .next()
-            .unwrap_or_default();
-        if !is_valid_url_authority(scheme, authority) {
-            return false;
-        }
-    } else if after_scheme.is_empty() {
-        return false;
     }
     true
 }
@@ -646,7 +840,13 @@ pub(super) fn normalize_file_drive_authority(input: &str) -> String {
         .unwrap_or(authority_and_path.len());
     let authority = &authority_and_path[..drive_end];
     let drive_bytes = authority.as_bytes();
-    if drive_bytes.len() != 2 || !drive_bytes[0].is_ascii_alphabetic() || drive_bytes[1] != b':' {
+    // A `|` spelling is a Windows drive letter too (`file://C|/x`), so it takes
+    // the same drive-authority path and lets the path-level rule canonicalize
+    // the separators (`file:///C:/x`) (#12864).
+    if drive_bytes.len() != 2
+        || !drive_bytes[0].is_ascii_alphabetic()
+        || !matches!(drive_bytes[1], b':' | b'|')
+    {
         return input.to_string();
     }
 

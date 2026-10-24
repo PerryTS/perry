@@ -3,10 +3,10 @@
 use super::*;
 
 use super::parse::{
-    create_url_object, is_valid_absolute_url, rebuild_url_host, rebuild_url_href, resolve_url,
-    throw_invalid_url, URL_FIELD_COUNT, URL_HASH, URL_HOST, URL_HOSTNAME, URL_HREF, URL_ORIGIN,
-    URL_PASSWORD, URL_PATHNAME, URL_PORT, URL_PROTOCOL, URL_SEARCH, URL_SEARCH_PARAMS,
-    URL_USERNAME,
+    create_url_object, is_special_url_scheme, is_valid_absolute_url, normalize_hierarchical_path,
+    rebuild_url_host, rebuild_url_href, resolve_url, throw_invalid_url, URL_FIELD_COUNT, URL_HASH,
+    URL_HOST, URL_HOSTNAME, URL_HREF, URL_ORIGIN, URL_PASSWORD, URL_PATHNAME, URL_PORT,
+    URL_PROTOCOL, URL_SEARCH, URL_SEARCH_PARAMS, URL_USERNAME,
 };
 use super::search_params::{
     create_url_search_params_object, parse_query_string, URL_SEARCH_PARAMS_OWNER,
@@ -71,13 +71,6 @@ fn percent_encode_userinfo(raw: &str) -> String {
 
 fn should_strip_url_ascii_whitespace(b: u8) -> bool {
     matches!(b, b'\t' | b'\n' | b'\r')
-}
-
-fn is_special_url_scheme(protocol: &str) -> bool {
-    matches!(
-        protocol,
-        "ftp:" | "file:" | "http:" | "https:" | "ws:" | "wss:"
-    )
 }
 
 fn normalize_protocol_value(raw: &str) -> Option<String> {
@@ -258,12 +251,14 @@ pub extern "C" fn js_url_get_href(url: *mut ObjectHeader) -> f64 {
     crate::object::js_object_get_field_f64(url, URL_HREF)
 }
 
-/// Issue #650: `url.pathname = value` setter. Per WHATWG, the setter
-/// normalizes a leading `/` for hierarchical schemes — but Node's actual
-/// runtime behavior on `u.pathname = "changed"` produces pathname
-/// `"/changed"` ONLY when the URL has an authority component, leaving
-/// opaque (non-hierarchical) URLs alone. We follow Node: prepend `/`
-/// when the URL has a non-empty `host`.
+/// Issue #650: `url.pathname = value` setter. Per WHATWG the assignment clears
+/// the URL's path and re-runs the parser's path states over the new value, so
+/// everything construction does to a path applies here too: a `\` is a segment
+/// separator for a special scheme, the value gains a leading separator when it
+/// has none, and dot segments (and a `file:` Windows drive letter) are
+/// canonicalized (#12864). Non-hierarchical URLs keep their opaque path, and a
+/// non-special one keeps backslashes literally — `foo://x` + `/b\c` is
+/// `/b\c`, matching Node.
 #[no_mangle]
 pub extern "C" fn js_url_set_pathname(url: *mut ObjectHeader, value: f64) {
     if url.is_null() {
@@ -272,12 +267,24 @@ pub extern "C" fn js_url_set_pathname(url: *mut ObjectHeader, value: f64) {
     let raw = coerce_url_setter_value(value);
     unsafe {
         let host = get_string_content(crate::object::js_object_get_field_f64(url, URL_HOST));
-        let normalized = if !host.is_empty() && !raw.starts_with('/') {
+        let protocol =
+            get_string_content(crate::object::js_object_get_field_f64(url, URL_PROTOCOL));
+        let special = is_special_url_scheme(&protocol);
+        let hierarchical = !host.is_empty() || protocol == "file:";
+        // Fold before the leading-separator test: for a special URL `\a` is
+        // already a rooted path, so it must not gain a second separator.
+        let raw = if special { raw.replace('\\', "/") } else { raw };
+        let normalized = if hierarchical && !raw.starts_with('/') {
             format!("/{}", raw)
         } else {
             raw
         };
         let encoded = percent_encode_path(&normalized);
+        let encoded = if hierarchical {
+            normalize_hierarchical_path(&encoded, protocol == "file:")
+        } else {
+            encoded
+        };
         js_object_set_field_f64(url, URL_PATHNAME, create_string_f64(&encoded));
         rebuild_url_href(url);
     }
