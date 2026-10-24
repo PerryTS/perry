@@ -31,37 +31,6 @@ pub(crate) fn unstable_target_resolves(entry: TransitionEntry) -> bool {
     target_descriptor_resolves(entry, expected_len)
 }
 
-/// A stabilized entry is a call-free generated-code publisher only while its
-/// exact target array and descriptor facts still agree with the cached edge.
-#[inline]
-fn stable_target_resolves(entry: TransitionEntry) -> bool {
-    let expected_len = if spread::source_shape(&entry).is_some() {
-        entry.target_len
-    } else {
-        (entry.slot_idx & TRANSITION_SLOT_IDX_MASK).wrapping_add(1)
-    };
-    if entry.target_len != expected_len {
-        return false;
-    }
-    let Some(header) =
-        (unsafe { crate::value::addr_class::try_read_tracked_gc_header(entry.next_keys) })
-    else {
-        return false;
-    };
-    unsafe {
-        if (*header.as_ptr()).obj_type != crate::gc::GC_TYPE_ARRAY {
-            return false;
-        }
-        let keys = entry.next_keys as *const ArrayHeader;
-        // The target is the backing's first `expected_len` keys; a canonical
-        // backing that grew past them since (its tip) still holds them.
-        if (*keys).length < expected_len || (*keys).length > (*keys).capacity {
-            return false;
-        }
-    }
-    target_descriptor_resolves(entry, expected_len)
-}
-
 /// A transition entry owns its target exactly when generated code or the
 /// spread path may publish it without revalidation: a stabilized entry
 /// (`target_len != 0`) or a spread entry. An unstable entry's target is
