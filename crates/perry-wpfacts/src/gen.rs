@@ -598,6 +598,7 @@ impl<'a> Gen<'a> {
         let Some(path) = path else {
             return unresolved(self);
         };
+        let imp_path = path;
         let (path, name) = match self.unit_in.and_then(|u| u.resolve(path, name)) {
             Some(crate::units::Resolved::Binding(p, n)) => (p, n),
             Some(crate::units::Resolved::Namespace(p)) => {
@@ -610,6 +611,7 @@ impl<'a> Gen<'a> {
             }
             None => (path, name),
         };
+        let reexported = path != imp_path;
         if let Some(c) = self.contract_for(path, name) {
             return self.stand_in_class(mi, c);
         }
@@ -618,6 +620,14 @@ impl<'a> Gen<'a> {
         }
         if let Some(c) = self.value_contract_for(path, name) {
             return self.stand_in_value(mi, local, c);
+        }
+        if reexported {
+            // Re-exported: the declaring unit published no contract (broken
+            // by the census, solved after this unit in a cycle, or none).
+            let file = path.rsplit('/').next().unwrap_or(path);
+            return self.m.top_val(&format!(
+                "re-exported by {src}: no contract of {file} for it"
+            ));
         }
         unresolved(self)
     }
