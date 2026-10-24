@@ -760,7 +760,7 @@ pub(crate) fn emit_method_site_lookup(
             let plain = if crate::builtin_proto::weak_families(families) {
                 let wp = emit_field_ptr(blk, &biased, 4);
                 let word = blk.load(I32, &wp);
-                let base = (crate::runtime_abi::WEAKMAP_BIRTH_LAYOUT as i32).to_string();
+                let base = (crate::runtime_abi::WEAKMAP_BIRTH_LAYOUT_WORD as i32).to_string();
                 let off = blk.sub(I32, &word, &base);
                 let born = blk.icmp_ult(I32, &off, "2");
                 let not_born = blk.xor(I1, &born, "true");

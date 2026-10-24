@@ -546,14 +546,14 @@ pub(crate) fn builtin_method(method: &str, argc: usize) -> Option<String> {
 }
 
 /// A WeakMap/WeakSet method call on a receiver whose layout word is its
-/// family's birth layout (Z2, `runtime_abi::WEAKMAP_BIRTH_LAYOUT`): the
+/// family's birth layout word (Z2, `runtime_abi::WEAKMAP_BIRTH_LAYOUT_WORD`): the
 /// runtime operation it calls and, per admitting birth layout, the family
 /// whose `Pristine` the call needs. `has`/`delete` serve both families.
 pub(crate) fn weak_method_entry(
     method: &str,
     argc: usize,
 ) -> Option<(&'static str, &'static [(u32, BuiltinProto)])> {
-    use crate::runtime_abi::{WEAKMAP_BIRTH_LAYOUT as WM, WEAKSET_BIRTH_LAYOUT as WS};
+    use crate::runtime_abi::{WEAKMAP_BIRTH_LAYOUT_WORD as WM, WEAKSET_BIRTH_LAYOUT_WORD as WS};
     const MAP: &[(u32, BuiltinProto)] = &[(WM, BuiltinProto::WeakMap)];
     const SET: &[(u32, BuiltinProto)] = &[(WS, BuiltinProto::WeakSet)];
     const BOTH: &[(u32, BuiltinProto)] =
@@ -682,3 +682,8 @@ mod ir_tests;
 #[cfg(test)]
 #[path = "untyped_receiver_dispatch_tests.rs"]
 mod untyped_receiver_dispatch_tests;
+
+const _: () = assert!(
+    crate::runtime_abi::WEAKSET_BIRTH_LAYOUT_WORD == crate::runtime_abi::WEAKMAP_BIRTH_LAYOUT_WORD + 1,
+    "method sites test both weak birth words with one range compare"
+);
