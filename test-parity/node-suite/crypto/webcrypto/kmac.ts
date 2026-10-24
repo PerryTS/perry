@@ -114,6 +114,23 @@ async function main() {
   console.log("kmac128 zero verify:", await crypto.subtle.verify({ name: "KMAC128", outputLength: 0 }, key128, emptySig, data));
   console.log("kmac128 zero verify nonempty:", await crypto.subtle.verify({ name: "KMAC128", outputLength: 0 }, key128, new Uint8Array([0]), data));
 
+  const zeroGuard = { name: "KMAC128", outputLength: 0 };
+  const zeroGuardEmpty = new Uint8Array(0);
+  const zeroGuardData = new Uint8Array([1, 2]);
+  console.log("kmac128 zero arraybuffer signature:", await crypto.subtle.verify(zeroGuard, key128, new ArrayBuffer(0), zeroGuardData));
+  console.log("kmac128 zero dataview signature:", await crypto.subtle.verify(zeroGuard, key128, new DataView(new ArrayBuffer(0)), zeroGuardData));
+  const zeroGuardMaterial = crypto.createSecretKey(Buffer.from([1, 2, 3, 4]));
+  const zeroGuardHmac = await crypto.subtle.importKey(
+    "raw", new Uint8Array([1, 2, 3, 4]), { name: "HMAC", hash: "SHA-256" }, true, ["sign", "verify"],
+  );
+  await logReject("kmac128 zero data object", crypto.subtle.verify(zeroGuard, key128, zeroGuardEmpty, {} as any));
+  await logReject("kmac128 zero data string", crypto.subtle.verify(zeroGuard, key128, zeroGuardEmpty, "hello" as any));
+  await logReject("kmac128 zero data null", crypto.subtle.verify(zeroGuard, key128, zeroGuardEmpty, null as any));
+  await logReject("kmac128 zero data undefined", crypto.subtle.verify(zeroGuard, key128, zeroGuardEmpty, undefined as any));
+  await logReject("kmac128 zero data keymaterial", crypto.subtle.verify(zeroGuard, key128, zeroGuardEmpty, zeroGuardMaterial as any));
+  await logReject("kmac128 zero data cryptokey", crypto.subtle.verify(zeroGuard, key128, zeroGuardEmpty, zeroGuardHmac as any));
+
+
   await logReject("kmac128 raw import", crypto.subtle.importKey("raw", new Uint8Array(8), "KMAC128", true, ["sign"]));
   await logReject("kmac256 raw import", crypto.subtle.importKey("raw", new Uint8Array(8), "KMAC256", true, ["sign"]));
   await logReject("kmac128 raw export", crypto.subtle.exportKey("raw", key128));

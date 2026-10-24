@@ -284,6 +284,29 @@ pub unsafe extern "C" fn js_webcrypto_verify(
                 perry_runtime::buffer::bytes::bytes(sig_bits, scope)
                     .is_ok_and(|signature| signature.is_empty())
             });
+            if valid_empty_signature {
+                // The lossy data_bytes conversion above is not BufferSource
+                // admission. Prove data before the zero-output success exit.
+                let valid_data = perry_runtime::buffer::bytes::no_gc(|scope| {
+                    let data = JSValue::from_bits(data_bits.to_bits());
+                    if data.is_pointer()
+                        && perry_runtime::buffer::buffer_brand(data.as_pointer::<u8>() as usize)
+                            == Some(perry_runtime::buffer::BufferBrand::KeyMaterial)
+                    {
+                        return false;
+                    }
+                    perry_runtime::buffer::bytes::bytes(data_bits, scope).is_ok()
+                });
+                if !valid_data {
+                    let message = b"The \"data\" argument must be an instance of ArrayBuffer, Buffer, TypedArray, or DataView.";
+                    let message =
+                        perry_runtime::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+                    let error = perry_runtime::error::js_typeerror_new(message);
+                    return perry_runtime::js_promise_rejected(f64::from_bits(
+                        JSValue::pointer(error as *const u8).bits(),
+                    ));
+                }
+            }
             return resolve_with_bool_provider(valid_empty_signature, "SIGNREQUEST");
         }
         let customization =
