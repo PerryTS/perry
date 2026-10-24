@@ -232,7 +232,11 @@ fn an_export_no_unit_names_stays_inside() {
         ("a", a),
         ("m", "import { Ball } from './a'; console.log(new Ball(1));"),
     ]);
-    assert!(!proven(&named, "x"), "{}", named.dump_text());
+    // DECISIONS 157: an imported class takes its constructions from the
+    // units holding it (its stand-in publishes what each `new` passes):
+    // m passes a number, so the constructor's `this.x = r` stays proven
+    // (it went generic while other units constructed it with ⊤ arguments).
+    assert!(proven(&named, "x"), "{}", named.dump_text());
 }
 
 fn verdicts(pf: &ProgramFacts, key: &str) -> Vec<String> {

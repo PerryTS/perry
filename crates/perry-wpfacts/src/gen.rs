@@ -1731,7 +1731,7 @@ impl<'a> Gen<'a> {
             tm,
             false,
             false,
-            c.closed.is_none(),
+            c.closed.is_none() || c.forwards,
             r,
             c.closed.is_none(),
         );
@@ -1834,7 +1834,7 @@ impl<'a> Gen<'a> {
             }
             match m {
                 Some(fname) => {
-                    let f = self.stub_fn(mi, fname, tm, true, true, c.closed.is_none(), r);
+                    let f = self.stub_fn(mi, fname, tm, true, true, c.closed.is_none() || c.forwards, r);
                     let t = self.m.funcs[f as usize].token;
                     self.m.add_tok(n, t);
                     toks.push(t);
@@ -1859,7 +1859,7 @@ impl<'a> Gen<'a> {
                 method_fns.push((self.m.field(proto, a), fc));
                 continue;
             }
-            let f = self.stub_fn(mi, fname, tm, true, false, c.closed.is_none(), r);
+            let f = self.stub_fn(mi, fname, tm, true, false, c.closed.is_none() || c.forwards, r);
             let a = self.m.atom(key);
             let n = self.m.field(proto, a);
             let t = self.m.funcs[f as usize].token;

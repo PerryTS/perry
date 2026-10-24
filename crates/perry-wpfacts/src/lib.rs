@@ -458,6 +458,7 @@ fn nested_layouts(
                     statics_open: false,
                     static_fns: Vec::new(),
                     closed: None,
+                    forwards: false,
                     method_fns: Vec::new(),
                     ctor_fn: None,
                     // The shape's own birth keys: a reader's stand-in judges
@@ -1091,6 +1092,7 @@ fn describe_nodes(
                             statics_open: false,
                             static_fns: Vec::new(),
                             closed: None,
+                            forwards: false,
                             method_fns: Vec::new(),
                             ctor_fn: None,
                             // The shape's own birth keys: a reader's stand-in judges
@@ -1185,6 +1187,15 @@ fn closed_of(
     let closed = g.view?.closed.get(name) == Some(&fi.func_id);
     (mi == 0 && closed && !fi.has_arguments && fi.rest.is_none())
         .then(|| (path.to_string(), name.clone(), fi.params.len() as u32))
+}
+
+/// DECISIONS 157: a class of this unit that is published
+/// (`UnitView::published`): its holders forward its stand-in.
+fn forwards_of(g: &gen::Gen, mi: u32, tm: model::TmplId) -> bool {
+    let model::TmplKind::Class { name, .. } = &g.m.tmpls[tm as usize].kind else {
+        return false;
+    };
+    mi == 0 && g.view.is_some_and(|v| v.published.contains(name))
 }
 
 /// The value contract of what a node may hold (design §12): the layouts and
@@ -1327,6 +1338,7 @@ fn value_contract_of_toks(
                     statics_open: false,
                     static_fns: Vec::new(),
                     closed: None,
+                    forwards: false,
                     method_fns: Vec::new(),
                     ctor_fn: None,
                     // The shape's own birth keys: a reader's stand-in judges
@@ -1585,6 +1597,7 @@ fn arg_contract_of(
                             statics_open: false,
                             static_fns: Vec::new(),
                             closed: None,
+                            forwards: false,
                             method_fns: Vec::new(),
                             ctor_fn: None,
                             // The shape's own birth keys: a reader's stand-in judges
@@ -2081,6 +2094,7 @@ pub(crate) fn compute_in<'a>(
                         statics_open,
                         static_fns,
                         closed: closed_of(&g, sorted[0].0, mi, tm),
+                        forwards: forwards_of(&g, mi, tm),
                         method_fns,
                         ctor_fn,
                         birth_keys: atoms_of(&g, &g.m.tmpls[tm as usize].birth_keys),

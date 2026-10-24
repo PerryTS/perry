@@ -29,6 +29,11 @@ pub(crate) struct UnitView {
     pub closed: FxHashMap<String, u32>,
     /// The other units' closed functions it refers to (it calls them).
     pub closed_refs: Vec<String>,
+    /// DECISIONS 157: the published classes among `closed` (exported, used
+    /// as a value, extended, with static members): every unit holding one
+    /// holds its stand-in, which forwards it as an open class's and
+    /// publishes what its constructions pass.
+    pub published: FxHashSet<String>,
     /// The names it refers to that no unit of its module owns: its imports
     /// (and globals). The driver orders it after the units owning them
     /// (decision 21).
@@ -577,7 +582,7 @@ pub(crate) fn closed_bindings(
     module: &Module,
     unit_of: &dyn Fn(Item) -> usize,
     named: &dyn Fn(&str) -> bool,
-) -> FxHashMap<String, u32> {
+) -> (FxHashMap<String, u32>, FxHashSet<String>) {
     #[derive(Default)]
     struct Use {
         refs: u32,
@@ -697,7 +702,7 @@ pub(crate) fn closed_bindings(
         }
     }
     if with {
-        return FxHashMap::default();
+        return Default::default();
     }
     let mut names: FxHashMap<&str, u32> = FxHashMap::default();
     // Per local: its module-scope `let`s besides the function literal one;
@@ -841,34 +846,49 @@ pub(crate) fn closed_bindings(
     // run: its constructor's parameters hold what the constructing units
     // pass (`units::ClassContract::closed`), keyed by the class name with
     // the constructor's HIR id.
+    //
+    // DECISIONS 157: any other class with a constructor (exported, used as a
+    // value, extended, with static members) is published: every unit
+    // holding it holds its stand-in (it reaches another unit only through
+    // the unit boundary), whose `new` and `super(...)` publish what they
+    // pass under the same key. A use of the stand-in beyond its contract is
+    // that unit's census report: the class is broken, its constructor's
+    // parameters ⊤. Its own unit's escapes of it other than the
+    // publication construct it with ⊤ arguments as before.
+    let mut published: FxHashSet<String> = FxHashSet::default();
     for c in &module.classes {
         let Some(ctor) = &c.constructor else {
             continue;
         };
+        // Its key is its name: no other class or function of the module has
+        // it (a CommonJS module's `export const C = _cjs.C` binds it too).
         if c.is_literal_shape()
-            || names.get(c.name.as_str()) != Some(&1)
-            || exported(&c.name)
+            || module.classes.iter().filter(|d| d.name == c.name).count() != 1
+            || module.functions.iter().any(|f| f.name == c.name)
             || !c.aliases.is_empty()
-            || !c.static_fields.is_empty()
-            || !c.static_methods.is_empty()
-            || !c.static_accessor_names.is_empty()
             || ctor.params.iter().any(|p| p.is_rest)
-            || module
-                .classes
-                .iter()
-                .any(|d| d.extends_name.as_deref() == Some(c.name.as_str()))
             || out.contains_key(&c.name)
         {
             continue;
         }
-        if class_uses
-            .get(&c.name)
-            .is_some_and(|&(refs, news)| refs == news)
-        {
-            out.insert(c.name.clone(), ctor.id);
+        let closed = names.get(c.name.as_str()) == Some(&1)
+            && !exported(&c.name)
+            && c.static_fields.is_empty()
+            && c.static_methods.is_empty()
+            && c.static_accessor_names.is_empty()
+            && !module
+                .classes
+                .iter()
+                .any(|d| d.extends_name.as_deref() == Some(c.name.as_str()))
+            && class_uses
+                .get(&c.name)
+                .is_some_and(|&(refs, news)| refs == news);
+        if !closed {
+            published.insert(c.name.clone());
         }
+        out.insert(c.name.clone(), ctor.id);
     }
-    out
+    (out, published)
 }
 
 /// The declaration units of `module`, in dependency order (a unit before
@@ -1113,7 +1133,7 @@ pub(crate) fn views(
         .enumerate()
         .flat_map(|(u, items)| items.iter().map(move |&it| (it, u)))
         .collect();
-    let closed = closed_bindings(
+    let (closed, published) = closed_bindings(
         module,
         &|it| unit_of_item.get(&it).copied().unwrap_or(usize::MAX),
         named,
@@ -1189,6 +1209,9 @@ pub(crate) fn views(
             };
             if let Some((nm, id)) = own.filter(|(nm, id)| closed.get(*nm) == Some(id)) {
                 view.closed.insert(nm.to_string(), id);
+                if published.contains(nm) {
+                    view.published.insert(nm.to_string());
+                }
             }
             // Its closed locals (decision 23): the unit that runs them.
             let mut ls: Vec<(u32, Option<(String, u32)>)> = Vec::new();
@@ -1334,7 +1357,9 @@ pub(crate) fn views(
     for (u, (view, _)) in out.iter_mut().enumerate() {
         let mut per: FxHashMap<usize, Vec<String>> = FxHashMap::default();
         for (w, nm) in std::mem::take(&mut imports_of[u]) {
-            if closed.contains_key(&nm) {
+            // A published class (DECISIONS 157) is no call of the unit: its
+            // constructions publish through its stand-in.
+            if closed.contains_key(&nm) && !published.contains(&nm) {
                 view.closed_refs.push(nm.clone());
             }
             per.entry(w).or_default().push(nm);

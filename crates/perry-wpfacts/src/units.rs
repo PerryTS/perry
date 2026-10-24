@@ -59,6 +59,10 @@ pub(crate) struct ClassContract {
     /// instance's `constructor`) publishes what it passes under that key
     /// (`ProgramFacts::ctor_args_out`).
     pub closed: Option<(String, String, u32)>,
+    /// DECISIONS 157: `closed` is a published class (`UnitView::published`):
+    /// a unit holding its stand-in forwards it as an open class's (the next
+    /// unit holds its stand-in too, its constructions publish there).
+    pub forwards: bool,
     /// The prototype methods with a function contract (key, contract), and
     /// the constructor's (DECISIONS 57): their receiver is a contract
     /// parameter, so another unit's subclass instance can run them.
@@ -594,8 +598,9 @@ impl ClassContract {
         self.field_tas = field_tas;
         self.method_fns = method_fns;
         // A closed class (§18.13) only where both say so, the same binding.
-        if self.closed != o.closed {
+        if self.closed != o.closed || self.forwards != o.forwards {
             self.closed = None;
+            self.forwards = false;
         }
         self.facts.join(&o.facts);
         union_into(&mut self.methods, &o.methods);
@@ -1342,10 +1347,12 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
         // on it; at the fixpoint every closed function's parameters hold
         // what its calls pass.
         let mut latest: FxHashMap<(String, String), ArgContract> = FxHashMap::default();
+        let mut aborted = false;
         for (si, s) in solves.iter().enumerate() {
             let path = sorted[s.mi].0;
             let u = per_unit[si].as_ref().expect("every unit solved");
             if u.stats.aborted {
+                aborted = true;
                 for nm in &s.view.closed_refs {
                     latest
                         .entry((path.to_string(), nm.clone()))
@@ -1363,6 +1370,20 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
             // A closed class's constructions, from any module (§18.13).
             for (k, ac) in &u.ctor_args_out {
                 latest.entry(k.clone()).or_default().join(ac);
+            }
+        }
+        // DECISIONS 157: an aborted unit may hold any published class (it
+        // need not name it: a namespace, a value), and its constructions
+        // publish nothing.
+        if aborted {
+            for s in &solves {
+                let path = sorted[s.mi].0;
+                for nm in &s.view.published {
+                    latest
+                        .entry((path.to_string(), nm.clone()))
+                        .or_default()
+                        .top = true;
+                }
             }
         }
         let mut args = input.args.clone();

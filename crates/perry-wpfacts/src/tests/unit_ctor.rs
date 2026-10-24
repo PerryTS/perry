@@ -726,3 +726,61 @@ fn a_constructor_argument_the_receiver_reaches_stays_the_callers() {
     let (u, w) = (field(tmpl(&pf, "Res"), "v"), field(tmpl(&wf, "Res"), "v"));
     assert_eq!(u.kind, w.kind, "{}", pf.dump_text());
 }
+
+const PUB_CTOR: &str = r#"
+    class Box { k: number; constructor(k: number) { this.k = k; } }
+    class Vec {
+      cap: any;
+      static tag = 1;
+      constructor(n: any) { this.cap = n; }
+    }
+    function main() {
+      const v = new Vec(new Box(3));
+      const w = new Vec(new Box(4));
+      console.log(v.cap.k + w.cap.k + Vec.tag);
+    }
+    main();
+    "#;
+
+#[test]
+fn a_published_class_takes_its_constructions_from_the_units_holding_it() {
+    // DECISIONS 157: Vec has a static field, so it is no closed class
+    // (§18.13) and its unit published it with ⊤ constructor arguments.
+    // Every unit holding it holds its stand-in, whose `new` publishes what
+    // it passes: `cap` holds Box as in the whole program, and `.k` proves.
+    // Per-unit facts are whole-program facts (owner 2026-10-23).
+    let pf = units(PUB_CTOR);
+    let wf = facts(PUB_CTOR);
+    assert!(pf.broken.is_empty(), "{:?}\n{}", pf.broken, pf.dump_text());
+    let w = verdicts(&wf, "k");
+    assert!(!w.is_empty() && w.iter().all(|v| v.starts_with("T0")), "{w:?}");
+    assert_eq!(verdicts(&pf, "k"), w, "{}", pf.dump_text());
+    let (u, w) = (field(tmpl(&pf, "Vec"), "cap"), field(tmpl(&wf, "Vec"), "cap"));
+    assert_eq!(u.kind, w.kind, "{}", pf.dump_text());
+}
+
+const PUB_CTOR_ESCAPE: &str = r#"
+    class Box { k: number; constructor(k: number) { this.k = k; } }
+    class Vec {
+      cap: any;
+      constructor(n: any) { this.cap = n; }
+      static of(n: any): Vec { return new Vec(n); }
+    }
+    function main() {
+      const v = new Vec(new Box(3));
+      (globalThis as any).ext(Vec);
+      console.log(v.cap.k);
+    }
+    main();
+    "#;
+
+#[test]
+fn a_published_class_another_unit_lets_escape_has_unknown_constructor_arguments() {
+    // DECISIONS 157, the census guard: `main`'s unit hands Vec's stand-in to
+    // unknown code, which may construct it with anything: its report breaks
+    // Vec, and Vec's unit runs the constructor with ⊤ arguments again.
+    let pf = units(PUB_CTOR_ESCAPE);
+    assert!(pf.broken.iter().any(|b| b.ends_with(":Vec")), "{:?}", pf.broken);
+    let u = field(tmpl(&pf, "Vec"), "cap");
+    assert!(u.kind.top, "{:?}\n{}", u.kind, pf.dump_text());
+}
