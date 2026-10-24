@@ -206,7 +206,7 @@ CORE_OVERRIDES = (
     ".github/actions/**",
     "docs/api/**",  # generated API docs are checked for drift by `check`
     "docs/src/api/**",
-    "CLAUDE.md",  # lint's doc-claim audits read it
+    "AGENTS.md",  # lint's doc-claim audits read it
 )
 
 # A change here can alter the dependency graph or the supply-chain policy,
@@ -455,7 +455,7 @@ def _self_test() -> int:
     check("shared action change is core", is_core(".github/actions/setup-llvm22/action.yml"))
     check("other workflow change is not core", not is_core(".github/workflows/benchmark.yml"))
     check("nested .md is not core", not is_core("crates/perry/README.md"))
-    check("CLAUDE.md is core (lint doc-claim audits)", is_core("CLAUDE.md"))
+    check("AGENTS.md is core (lint doc-claim audits)", is_core("AGENTS.md"))
     check("a .ts test file is core", is_core("test-files/test_gap_x.ts"))
     check("scripts are core", is_core("scripts/run_gap_tests.sh"))
     check("generated api docs are core", is_core("docs/api/perry.d.ts"))

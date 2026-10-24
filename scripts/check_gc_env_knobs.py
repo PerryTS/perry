@@ -148,7 +148,7 @@ def presence_only_problems(found: dict[str, set[str]]) -> list[str]:
 
 
 def claim_files(root: Path):
-    yield root / "CLAUDE.md"
+    yield root / "AGENTS.md"
     for base in CLAIM_ROOTS:
         for path in (root / base).rglob("*"):
             if path.is_file() and path.suffix in CLAIM_SUFFIXES:

@@ -2,15 +2,15 @@
 
 Thanks for your interest in Perry. This document covers everything you need to land a PR — what to build, how to test, and what the review flow looks like.
 
-For building and installing Perry as a user, see [README.md](README.md#installation). For runtime/compiler architecture, see [CLAUDE.md](CLAUDE.md). This file is about *contributing*, not using.
+For building and installing Perry as a user, see [README.md](README.md#installation). For runtime/compiler architecture, see [docs/src/contributing/architecture.md](docs/src/contributing/architecture.md); agent and contributor traps are in [AGENTS.md](AGENTS.md). This file is about *contributing*, not using.
 
 ## Ways to contribute
 
 All of these are welcome and none are ranked:
 
 - **Fix a bug.** Check the [issue tracker](https://github.com/PerryTS/perry/issues), especially [`good first issue`](https://github.com/PerryTS/perry/labels/good%20first%20issue) and [`help wanted`](https://github.com/PerryTS/perry/labels/help%20wanted).
-- **Close a TypeScript parity gap.** The [gap test suite](test-files/) tracks divergences from `node --experimental-strip-types`; CLAUDE.md's "TypeScript Parity Status" table is the current scoreboard.
-- **Add a platform backend or widget.** See the "To add a new widget" and "Native UI" sections in [CLAUDE.md](CLAUDE.md).
+- **Close a TypeScript parity gap.** The [gap test suite](test-files/) tracks divergences from `node --experimental-strip-types`; run `./scripts/run_gap_tests.sh` for the current snapshot.
+- **Add a platform backend or widget.** See "Adding a native UI widget" in [docs/src/contributing/architecture.md](docs/src/contributing/architecture.md).
 - **Improve docs or examples.** Everything under [`docs/src/`](docs/src/) and [`docs/examples/`](docs/examples/) is fair game.
 - **Report an issue.** File one even if you don't have a fix — reproducers are themselves a contribution.
 
