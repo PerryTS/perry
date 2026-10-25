@@ -76,6 +76,9 @@ pub struct BindingFacts {
     pub other: bool,
     /// It holds only these compiled bodies (`bodies_of`); empty otherwise.
     pub bodies: Vec<BodyRef>,
+    /// It holds exactly one class object and nothing else: that class's id
+    /// (a call of one of its constant statics is a static call, FVA 3.4).
+    pub class_object: Option<u32>,
 }
 
 /// Per module: `(local id, facts)` and `(HIR function id, facts of this)`,
@@ -119,7 +122,33 @@ fn facts_of(g: &Gen, n: u32) -> BindingFacts {
     out.class_ids.sort_unstable();
     out.class_ids.dedup();
     out.bodies = bodies_of(m, n);
+    out.class_object = class_object_of(m, n);
     out
+}
+
+/// The class id of the one class object node `n` holds when it holds
+/// nothing else (markers beside their values aside).
+fn class_object_of(m: &Model, n: NodeId) -> Option<u32> {
+    let node = &m.nodes[n as usize];
+    if node.prim != 0 {
+        return None;
+    }
+    let mut one = None;
+    for t in node.pts.to_sorted() {
+        if t != TOP && (m.beside_values(t) || m.closed_marker(t)) {
+            continue;
+        }
+        let TokKind::ClassObj(tm) = m.toks[t as usize] else {
+            return None;
+        };
+        let TmplKind::Class { class_id, .. } = m.tmpls[tm as usize].kind else {
+            return None;
+        };
+        if one.replace(class_id).is_some_and(|c| c != class_id) {
+            return None;
+        }
+    }
+    one
 }
 
 pub(crate) fn collect(g: &Gen) -> Vec<ModuleBindings> {

@@ -176,6 +176,19 @@ pub(crate) fn proven_receiver_classes(ctx: &FnCtx<'_>, object: &Expr) -> Option<
         .then(|| (r.class_ids, r.nullable && !tested_in_block(ctx, object)))
 }
 
+/// FVA 3.4: the facts prove class `cid`'s own static `key` holds its
+/// definition for the program's life (no write, no escape of the class
+/// object, no interpreted code).
+pub(crate) fn proves_static(ctx: &FnCtx<'_>, cid: u32, key: &str) -> bool {
+    !ctx.wpfacts_off
+        && !ctx.wpfacts.interp_guard
+        && ctx
+            .wpfacts
+            .class_statics
+            .get(&cid)
+            .is_some_and(|ks| ks.iter().any(|k| k == key))
+}
+
 /// The class id of a receiver the facts prove one of their classes: one
 /// load of its header word (the read shape's `select_by_class` load). A
 /// `nullable` receiver tests its tag first and gives 0 when it is nullish
@@ -257,7 +270,7 @@ pub(crate) fn proves_raw_f64(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
 }
 
 /// The local class of class id `cid` (its own name, not an alias).
-fn class_name_of(ctx: &FnCtx<'_>, cid: u32) -> Option<String> {
+pub(crate) fn class_name_of(ctx: &FnCtx<'_>, cid: u32) -> Option<String> {
     ctx.classes
         .iter()
         .find(|(name, c)| c.id == cid && c.name == **name)

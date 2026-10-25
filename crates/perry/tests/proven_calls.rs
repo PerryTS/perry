@@ -170,3 +170,41 @@ fn a_call_through_a_local_holding_two_closures_is_one_indirect_call() {
         }
     }
 }
+
+const STATICS: &str = r#"
+class Body { m: number; constructor(m: number) { this.m = m; } static sun() { return new Body(1); } static jupiter() { return new Body(2); } }
+class Pk { static of(n: number) { return n * 3; } static x = 5; }
+function make() { return [Body.sun(), Body.jupiter()]; }
+function viaValue(k: any) { return k.of(2) + k.x; }
+let s = 0;
+for (let i = 0; i < 3; i++) s += viaValue(Pk);
+console.log("statics", make().map((b) => b.m).join(","), s, Pk.of(1));
+class C { static k() { return 1; } }
+function callC() { return C.k(); }
+console.log("replaced", callC());
+(C as any).k = () => 2;
+console.log("replaced", callC());
+"#;
+
+#[test]
+fn a_proven_static_is_called_without_its_guard() {
+    // FVA 3.4: a static that holds its declaration for the program's life
+    // (`Body.sun`, `Pk.of` through a value) is its body's direct call; one
+    // replaced after its definition (`C.k`) keeps the guarded call.
+    let d = tmp("statics");
+    for whole in [true, false] {
+        let (ll, out) = compile_and_run(&d, STATICS, whole);
+        assert_eq!(
+            out, "statics 1,2 33 3\nreplaced 1\nreplaced 2\n",
+            "whole={whole}"
+        );
+        if !whole {
+            continue;
+        }
+        let make = body(&ll, "make");
+        assert!(!make.contains("js_class_static_call_guard("), "{make}");
+        assert!(make.contains("@perry_static_main_ts__Body__"), "{make}");
+        let call_c = body(&ll, "callC");
+        assert!(call_c.contains("js_class_static_call_guard("), "{call_c}");
+    }
+}

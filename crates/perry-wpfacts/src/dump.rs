@@ -22,7 +22,7 @@ fn b(v: bool) -> u8 {
 
 pub(crate) fn template_lines(t: &TemplateFacts) -> Vec<String> {
     let mut v = vec![format!(
-        "T {} kind={} class_id={} prefix_stable={} fixed_layout={} adds_keys={} birth=[{}] escape=\"{}\" hard=\"{}\" chain=\"{}\"",
+        "T {} kind={} class_id={} prefix_stable={} fixed_layout={} adds_keys={} birth=[{}] escape=\"{}\" hard=\"{}\" chain=\"{}\" statics=[{}]",
         t.display,
         t.kind,
         t.class_id.map(|c| c.to_string()).unwrap_or_else(|| "-".into()),
@@ -33,6 +33,7 @@ pub(crate) fn template_lines(t: &TemplateFacts) -> Vec<String> {
         t.escape.clone().unwrap_or_default(),
         t.hard.clone().unwrap_or_default(),
         t.chain.clone().unwrap_or_default(),
+        t.statics.join(","),
     )];
     for f in &t.fields {
         v.push(format!(

@@ -681,6 +681,9 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
     if let Some(v) = proven_call::try_lower_proven_field_call(ctx, callee, args)? {
         return Ok(v);
     }
+    if let Some(v) = proven_call::try_lower_proven_static_call(ctx, callee, args)? {
+        return Ok(v);
+    }
     if let Some(v) = early_branches::try_lower_closure_typed_local_call(ctx, callee, args)? {
         return Ok(v);
     }

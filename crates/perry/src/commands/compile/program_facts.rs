@@ -360,6 +360,18 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
         if !fs.is_empty() {
             out.local_bodies.insert(*id, fs);
         }
+        if let Some(cid) = b.class_object.filter(|_| !interp) {
+            out.local_classes.insert(*id, cid);
+        }
+    }
+    // FVA 3.4: every class's constant statics (a static call names its class
+    // by id, which may be another module's).
+    if !interp {
+        for t in &pf.templates {
+            if let (Some(cid), false) = (t.class_id, t.statics.is_empty()) {
+                out.class_statics.insert(cid, t.statics.clone());
+            }
+        }
     }
     for (id, b) in &mb.this_of {
         if let Some(r) = recv(b) {

@@ -91,6 +91,12 @@ pub struct ElisionFacts {
     /// Local id → the bodies it holds, when it holds nothing else (FVA): a
     /// call through it is a call of them.
     pub local_bodies: std::collections::BTreeMap<u32, Vec<FactsBody>>,
+    /// Local id → the class id of the one class object it holds, when it
+    /// holds nothing else (FVA 3.4): `x.k(...)` is `C.k(...)`.
+    pub local_classes: std::collections::BTreeMap<u32, u32>,
+    /// Class id → its own statics that hold their definition for the
+    /// program's life (FVA 3.4): a call of one is its declaration, unguarded.
+    pub class_statics: std::collections::BTreeMap<u32, Vec<String>>,
     /// Class id → layout facts (prefix-stable classes only).
     pub classes: std::collections::BTreeMap<u32, FactsClass>,
     /// Contract build: every elided site asserts its facts at run time.
@@ -112,7 +118,11 @@ pub struct ElisionFacts {
 
 impl ElisionFacts {
     pub fn is_empty(&self) -> bool {
-        self.locals.is_empty() && self.this_of.is_empty() && self.local_bodies.is_empty()
+        self.locals.is_empty()
+            && self.this_of.is_empty()
+            && self.local_bodies.is_empty()
+            && self.local_classes.is_empty()
+            && self.class_statics.is_empty()
     }
 
     pub fn field(&self, class_id: u32, key: &str) -> Option<&FactsField> {

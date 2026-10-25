@@ -7,6 +7,7 @@ mod birth_site;
 mod callback_origin;
 mod captured;
 mod cjs_require;
+mod class_statics;
 mod closed_world;
 mod closure_context;
 mod function_values;
