@@ -784,11 +784,9 @@ pub struct Model {
     /// (`bindings::BodyRef`: what codegen may call without the dispatcher).
     pub closures: crate::pts::FxHashSet<FnIdx>,
     pub decls: crate::pts::FxHashSet<FnIdx>,
-    /// A class's named static fields and how many stores define them: the
-    /// HIR emits one `StaticFieldSet` where the class is evaluated for a
-    /// field with an initializer (or a private one), none otherwise. A store
-    /// beyond them is a later write (FVA 3.4, `derive::constant_statics`).
-    pub static_defs: FxHashMap<(TmplId, Atom), usize>,
+    /// A class's declared named static fields (FVA 3.4,
+    /// `derive::constant_statics`).
+    pub static_fields: crate::pts::FxHashSet<(TmplId, Atom)>,
     pub thrown: NodeId,
     /// E14: interpreted code can run (and patch `Object.prototype`).
     pub dyn_eval: Option<String>,

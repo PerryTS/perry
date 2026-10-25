@@ -357,12 +357,12 @@ impl<'a> Gen<'a> {
         };
         let cobj = self.m.tok(TokKind::ClassObj(tm));
         for f in &c.static_fields {
-            // How many stores define the field (`Model::static_defs`): the
-            // HIR emits them where the class is evaluated, nested or not.
+            // A declared static field (`Model::static_fields`), whether the
+            // walk sees its initializer here or where a nested class is
+            // evaluated.
             if f.key_expr.is_none() {
                 let a = self.m.atom(&f.name);
-                let defs = usize::from(f.init.is_some() || f.is_private);
-                self.m.static_defs.insert((tm, a), defs);
+                self.m.static_fields.insert((tm, a));
             }
             if c.is_nested && (f.init.is_some() || f.key_expr.is_some()) {
                 // A nested class's static initializers run where the class
