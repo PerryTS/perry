@@ -1607,7 +1607,11 @@ pub extern "C" fn js_tls_check_server_identity(hostname: f64, cert: f64) -> f64 
     let Some(cert_obj) = object_ptr(cert.get_nanbox_f64()) else {
         return f64::from_bits(TAG_UNDEFINED);
     };
-    let match_host = tls_domain_to_ascii(&host);
+    // IPv6 literals are not DNS names; keep them out of DNS canonicalization.
+    let match_host = host
+        .parse::<std::net::IpAddr>()
+        .map(|ip| ip.to_string())
+        .unwrap_or_else(|_| tls_domain_to_ascii(&host));
     let san = value_to_string(get_field(cert_obj, "subjectaltname")).unwrap_or_default();
     let dns_names = if san.is_empty() {
         Vec::new()
@@ -1818,6 +1822,48 @@ mod tests {
             tls_domain_to_ascii("foo。bar.example.com"),
             "foo.bar.example.com"
         );
+    }
+
+    #[test]
+    fn identity_ip_literals_match_canonical_sans() {
+        crate::gc::gc_init();
+        for (host, san, matches) in [
+            ("::1", "IP Address:0:0:0:0:0:0:0:1", true),
+            ("0:0:0:0:0:0:0:1", "IP Address:::1", true),
+            ("::2", "IP Address:::1", false),
+            ("::1", "DNS:::1", false),
+            ("127.0.0.1", "IP Address:127.0.0.1", true),
+            ("127.0.0.2", "IP Address:127.0.0.1", false),
+            ("a.example", "DNS:a.example", true),
+            ("other.example", "DNS:a.example", false),
+        ] {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let cert = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
+            unsafe { set_rooted_object_field(&cert, "subjectaltname", string_value(san)) };
+            let hostname = scope.root_nanbox_f64(string_value(host));
+            let result = scope.root_nanbox_f64(js_tls_check_server_identity(
+                hostname.get_nanbox_f64(),
+                cert.with_mut_ptr(|cert: *mut ObjectHeader| ptr_value(cert)),
+            ));
+            assert_eq!(
+                JSValue::from_bits(result.get_nanbox_f64().to_bits()).is_undefined(),
+                matches,
+                "host={host}, SAN={san}"
+            );
+            if !matches {
+                let code = scope.root_nanbox_f64(unsafe {
+                    crate::value::js_get_property(
+                        result.get_nanbox_f64(),
+                        b"code".as_ptr() as i64,
+                        4,
+                    )
+                });
+                assert_eq!(
+                    value_to_string(code.get_nanbox_f64()).as_deref(),
+                    Some("ERR_TLS_CERT_ALTNAME_INVALID")
+                );
+            }
+        }
     }
 }
 
