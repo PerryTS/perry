@@ -4,6 +4,7 @@ mod async_values;
 mod requests;
 #[cfg(test)]
 mod tests;
+mod writers;
 use crate::{
     asynchronous::{dispatch, origin, Invocation},
     transport, Host,
@@ -33,7 +34,7 @@ type Run = Pin<Box<dyn Future<Output = Result<Host>>>>;
 /// the last client returns the Host if quiescent and retires it otherwise.
 /// Generic future/stream results use Store-local owned JSON descriptors.
 /// Read or close them through DriverClient; transfer them as call arguments.
-/// Native producer factories and TypeScript wrappers remain unfinished.
+/// TypeScript wrappers and producer interfaces remain unfinished.
 pub struct Driver {
     state: Rc<State>,
     run: Option<Run>,
@@ -95,7 +96,26 @@ impl Host {
     pub fn into_driver(self) -> Result<(Driver, DriverClient)> {
         ensure!(self.live.is_some(), "component is disposed");
         let (send, receive) = mpsc::unbounded();
-        let state = Rc::new(State::default());
+        let state = Rc::new(State::new(
+            self.live
+                .as_ref()
+                .unwrap()
+                .store
+                .data()
+                .async_values
+                .types(),
+        ));
+        for (token, stream) in self
+            .live
+            .as_ref()
+            .unwrap()
+            .store
+            .data()
+            .async_values
+            .writer_metadata()
+        {
+            state.register_writer(token, stream);
+        }
         let driver = Driver {
             state: state.clone(),
             run: Some(Box::pin(run(self, receive, state.clone()))),

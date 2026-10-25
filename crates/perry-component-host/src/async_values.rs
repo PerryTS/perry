@@ -56,3 +56,11 @@ mod transfer_tests;
 #[cfg(test)]
 #[path = "async_values/writer_tests.rs"]
 mod writer_tests;
+
+#[path = "async_values/writers.rs"]
+pub(crate) mod writers;
+pub use writers::AsyncValueType;
+
+#[cfg(test)]
+#[path = "async_values/producer_tests.rs"]
+mod producer_tests;

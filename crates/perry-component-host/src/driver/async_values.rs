@@ -10,7 +10,7 @@ use wasmtime::{
     AsContextMut,
 };
 
-async fn call(
+pub(super) async fn call(
     accessor: &Accessor<StoreData>,
     function: Func,
     args: &[Val],
@@ -29,7 +29,7 @@ async fn call(
     .await?;
     Ok(())
 }
-fn field<'a>(packet: &'a Val, name: &str) -> Result<&'a Val> {
+pub(super) fn field<'a>(packet: &'a Val, name: &str) -> Result<&'a Val> {
     let Val::Record(fields) = packet else {
         anyhow::bail!("invalid canonical read packet")
     };
@@ -45,6 +45,12 @@ pub(super) async fn execute(
     fuel: u64,
     reset: bool,
 ) -> Completion {
+    if matches!(
+        command.target,
+        Target::Factory(_) | Target::Write(..) | Target::WriterControl(..)
+    ) {
+        return super::writers::execute(accessor, command, fuel, reset).await;
+    }
     if command.cancelled.get() {
         return (
             command,

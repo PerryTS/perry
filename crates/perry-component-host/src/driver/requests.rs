@@ -14,7 +14,11 @@ use std::{
 };
 use wasmtime::component::Func;
 
-type ReadKey = (bool, String);
+type ReadKey = (u8, String);
+struct WriterMeta {
+    stream: bool,
+    closing: bool,
+}
 type ReadRegistrations = BTreeMap<ReadKey, BTreeMap<InvocationId, Weak<ReadIntent>>>;
 
 pub(super) struct State {
@@ -26,6 +30,8 @@ pub(super) struct State {
     pub waker: AtomicWaker,
     replies: RefCell<BTreeMap<InvocationId, oneshot::Sender<Reply>>>,
     reads: RefCell<ReadRegistrations>,
+    writers: RefCell<BTreeMap<String, WriterMeta>>,
+    pub types: Vec<crate::AsyncValueType>,
 }
 impl Default for State {
     fn default() -> Self {
@@ -38,11 +44,32 @@ impl Default for State {
             waker: AtomicWaker::new(),
             replies: RefCell::new(BTreeMap::new()),
             reads: RefCell::new(BTreeMap::new()),
+            writers: RefCell::new(BTreeMap::new()),
+            types: Vec::new(),
         }
     }
 }
 impl State {
+    pub fn new(types: Vec<crate::AsyncValueType>) -> Self {
+        Self {
+            types,
+            ..Self::default()
+        }
+    }
+    pub fn register_writer(&self, token: String, stream: bool) {
+        self.writers.borrow_mut().insert(
+            token,
+            WriterMeta {
+                stream,
+                closing: false,
+            },
+        );
+    }
+    pub fn remove_writer(&self, token: &str) {
+        self.writers.borrow_mut().remove(token);
+    }
     pub fn fail_all(&self, message: &str) {
+        self.writers.borrow_mut().clear();
         let replies = std::mem::take(&mut *self.replies.borrow_mut());
         for reply in replies.into_values() {
             let _ = reply.send(Err(anyhow::anyhow!("{message}")));
@@ -85,6 +112,8 @@ pub(super) struct ReadIntent {
     pub cancelled: Cell<bool>,
     pub committed: Cell<bool>,
     pub closed: Cell<bool>,
+    pub close: Cell<bool>,
+    pub operation: Cell<Option<u32>>,
     key: ReadKey,
     origin: InvocationId,
     state: Weak<State>,
@@ -103,9 +132,19 @@ impl Drop for ReadIntent {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum WriterAction {
+    Cancel,
+    Close,
+    Abort,
+}
+
 #[derive(Clone)]
 pub(super) enum Target {
     Export,
+    Factory(crate::AsyncValueType),
+    Write(Value, Option<Rc<ReadIntent>>),
+    WriterControl(Value, WriterAction, Vec<Rc<ReadIntent>>),
     Read(Value, u32, Option<Rc<ReadIntent>>),
     Close(Value, Vec<Rc<ReadIntent>>),
 }
@@ -131,6 +170,9 @@ pub(super) struct Command {
     pub cancelled: Rc<Cell<bool>>,
 }
 impl Command {
+    pub fn state(&self) -> &State {
+        &self._permit.0
+    }
     pub fn new(request: Request, function: Option<Func>) -> Self {
         Self {
             _permit: request.permit,
@@ -184,6 +226,80 @@ impl DriverClient {
         crate::async_values::values::token(value)?;
         self.submit("", "", &[], Target::Close(value.clone(), Vec::new()))
     }
+    /// Factory types are branded to this component and retain WIT payload aliases.
+    pub fn async_value_types(&self) -> &[crate::AsyncValueType] {
+        self.state.assert_owner();
+        &self.state.types
+    }
+    /// Create a readable descriptor and a private owned writer descriptor:
+    /// {value: future_or_stream, writer: writer_descriptor}.
+    pub fn create_async_value(&self, ty: &crate::AsyncValueType) -> Result<DriverCall> {
+        self.state.assert_owner();
+        ensure!(
+            self.state.types.contains(ty),
+            "async factory type belongs to another component"
+        );
+        self.submit("", "", &[], Target::Factory(ty.clone()))
+    }
+    fn writer(&self, value: &Value) -> Result<bool> {
+        self.state.assert_owner();
+        let token = crate::async_values::writers::token(value)?;
+        let writers = self.state.writers.borrow();
+        let writer = writers
+            .get(token)
+            .context("writer is closed or belongs to another component")?;
+        ensure!(!writer.closing, "writer is closing or being aborted");
+        Ok(writer.stream)
+    }
+    /// Write a bounded list. A future requires one element; void/unit payloads
+    /// use null placeholders. Returns {written,remaining,cancelled,closed}.
+    /// Ownership transfers only after all values pass preflight. A partial or
+    /// cancelled write returns its remaining values. After canonical transfer,
+    /// those values receive fresh owned descriptors.
+    pub fn write_async_value(&self, writer: &Value, values: &[Value]) -> Result<DriverCall> {
+        let stream = self.writer(writer)?;
+        ensure!(
+            (1..=65536).contains(&values.len()) && (stream || values.len() == 1),
+            "invalid async write count"
+        );
+        self.submit("", "", values, Target::Write(writer.clone(), None))
+    }
+    /// Cancel only writes already submitted; retain the writer for retry if
+    /// it has not completed. Await the write to recover its unconsumed values.
+    pub fn cancel_async_write(&self, writer: &Value) -> Result<DriverCall> {
+        self.writer(writer)?;
+        self.submit(
+            "",
+            "",
+            &[],
+            Target::WriterControl(writer.clone(), WriterAction::Cancel, Vec::new()),
+        )
+    }
+    /// Close a stream writer, cancelling pending writes and disposing their
+    /// unconsumed values. Accepted close requests survive observer drop.
+    pub fn close_async_writer(&self, writer: &Value) -> Result<DriverCall> {
+        ensure!(
+            self.writer(writer)?,
+            "an unwritten future writer must be completed or explicitly aborted"
+        );
+        self.submit(
+            "",
+            "",
+            &[],
+            Target::WriterControl(writer.clone(), WriterAction::Close, Vec::new()),
+        )
+    }
+    /// Abort a producer by retiring its Store and cancelling sibling guest
+    /// work. This is the explicit failure path for an unwritten future writer.
+    pub fn abort_async_writer(&self, writer: &Value) -> Result<DriverCall> {
+        self.writer(writer)?;
+        self.submit(
+            "",
+            "",
+            &[],
+            Target::WriterControl(writer.clone(), WriterAction::Abort, Vec::new()),
+        )
+    }
     fn submit(
         &self,
         interface: &str,
@@ -212,13 +328,19 @@ impl DriverClient {
         let started = Rc::new(Cell::new(false));
         let cancelled = Rc::new(Cell::new(false));
         match &mut target {
-            Target::Read(value, _, slot) => {
-                let (token, stream) = crate::async_values::values::token(value)?;
-                let key = (stream, token.to_string());
+            Target::Read(value, _, slot) | Target::Write(value, slot) => {
+                let key = if value.get("$writer").is_some() {
+                    (2, crate::async_values::writers::token(value)?.to_string())
+                } else {
+                    let (token, stream) = crate::async_values::values::token(value)?;
+                    (u8::from(stream), token.to_string())
+                };
                 let intent = Rc::new(ReadIntent {
                     cancelled: Cell::new(false),
                     committed: Cell::new(false),
                     closed: Cell::new(false),
+                    close: Cell::new(false),
+                    operation: Cell::new(None),
                     key: key.clone(),
                     origin,
                     state: Rc::downgrade(&self.state),
@@ -233,7 +355,12 @@ impl DriverClient {
             }
             Target::Close(value, intents) => {
                 let (token, stream) = crate::async_values::values::token(value)?;
-                if let Some(entries) = self.state.reads.borrow().get(&(stream, token.to_string())) {
+                if let Some(entries) = self
+                    .state
+                    .reads
+                    .borrow()
+                    .get(&(u8::from(stream), token.to_string()))
+                {
                     for intent in entries.values().filter_map(Weak::upgrade) {
                         if !intent.committed.get() {
                             intent.cancelled.set(true);
@@ -242,10 +369,32 @@ impl DriverClient {
                     }
                 }
             }
-            Target::Export => {}
+            Target::WriterControl(value, action, intents) => {
+                let token = crate::async_values::writers::token(value)?;
+                if let Some(entries) = self.state.reads.borrow().get(&(2, token.to_string())) {
+                    for intent in entries.values().filter_map(Weak::upgrade) {
+                        if !intent.committed.get() {
+                            if *action != WriterAction::Abort {
+                                intent.cancelled.set(true);
+                                intent.close.set(*action == WriterAction::Close);
+                            }
+                            intents.push(intent);
+                        }
+                    }
+                }
+                if *action != WriterAction::Cancel {
+                    self.state
+                        .writers
+                        .borrow_mut()
+                        .get_mut(token)
+                        .context("writer disappeared")?
+                        .closing = true;
+                }
+            }
+            Target::Export | Target::Factory(_) => {}
         }
 
-        let close = matches!(target, Target::Close(..));
+        let close = matches!(target, Target::Close(..) | Target::WriterControl(..));
         self.send
             .unbounded_send(Request {
                 permit: permit.clone(),

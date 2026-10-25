@@ -3,6 +3,7 @@
 mod async_values;
 mod asynchronous;
 mod driver;
+pub use async_values::AsyncValueType;
 pub use asynchronous::origin::{current_invocation, InvocationId};
 pub use driver::{Driver, DriverCall, DriverClient};
 mod imports;
@@ -284,7 +285,7 @@ impl Host {
                 })
                 .transpose()?;
             let mut adapters = Vec::new();
-            for name in &prepared.readers {
+            for (index, name) in prepared.readers.iter().enumerate() {
                 let namespace = instance
                     .get_export_index(&mut store, None, name)
                     .context("missing canonical reader instance")?;
@@ -296,7 +297,36 @@ impl Host {
                     .context("missing canonical disposal")?;
                 let read = instance.get_func(&mut store, read).unwrap();
                 let dispose = instance.get_func(&mut store, dispose).unwrap();
-                adapters.push(async_values::Adapter::new(&store, read, dispose)?);
+                let writer_namespace = instance
+                    .get_export_index(&mut store, None, &format!("perry-writer-{index}"))
+                    .context("missing canonical writer instance")?;
+                let mut writer_func = |name: &str| -> Result<Func> {
+                    let index = instance
+                        .get_export_index(&mut store, Some(&writer_namespace), name)
+                        .context("missing canonical writer function")?;
+                    instance
+                        .get_func(&mut store, index)
+                        .context("invalid canonical writer function")
+                };
+                let new = writer_func("writer-new")?;
+                let write = writer_func("writer-write")?;
+                let close = writer_func("writer-close")?;
+                let writer_dispose = writer_func("dispose")?;
+                let list = write.ty(&store).params().nth(1).unwrap().1;
+                let writer = async_values::writers::WriterFunctions {
+                    new,
+                    write,
+                    close,
+                    dispose: writer_dispose,
+                    list,
+                };
+                adapters.push(Arc::new(async_values::Adapter::new(
+                    &store,
+                    read,
+                    dispose,
+                    prepared.schemas[index].clone(),
+                    writer,
+                )?));
             }
             store.data_mut().async_values.adapters = adapters;
             let mut exports = BTreeMap::new();

@@ -15,6 +15,7 @@ pub(crate) struct Prepared {
     pub component: Component,
     pub control: Option<String>,
     pub readers: Vec<String>,
+    pub schemas: Vec<Wit>,
 }
 impl Prepared {
     pub fn new(
@@ -49,6 +50,7 @@ impl Prepared {
                 component: original,
                 control: None,
                 readers: Vec::new(),
+                schemas: Vec::new(),
             });
         }
         let ty = original.component_type();
@@ -126,6 +128,7 @@ impl Prepared {
         let original_node = graph.instantiate(package);
         graph.export(original_node, ORIGINAL)?;
         let mut readers = Vec::new();
+        let mut schemas = Vec::new();
         for (index, (stream, payload)) in specs.into_iter().enumerate() {
             let text = reader::generate(world, payload.as_ref(), stream, &bindings, &control)?;
             let package = Package::from_bytes(
@@ -164,6 +167,11 @@ impl Prepared {
             graph.export(helper, &name)?;
             graph.export(writer, format!("perry-writer-{index}"))?;
             readers.push(name);
+            schemas.push(if stream {
+                Wit::Stream(payload.map(Box::new))
+            } else {
+                Wit::Future(payload.map(Box::new))
+            });
         }
         let bytes = graph.encode(EncodeOptions::default())?;
         Ok(Self {
@@ -172,6 +180,7 @@ impl Prepared {
                 .context("compiling generic async composition")?,
             control: Some(control),
             readers,
+            schemas,
         })
     }
     pub fn original(&self) -> Option<&str> {

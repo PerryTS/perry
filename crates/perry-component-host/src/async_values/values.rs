@@ -6,7 +6,10 @@ use anyhow::{ensure, Context, Result};
 use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
 };
 use wasmtime::{
     component::{Func, Linker, Type, Val},
@@ -19,9 +22,17 @@ pub(crate) struct Adapter {
     pub dispose: Func,
     pub ty: Type,
     pub list: Type,
+    pub schema: perry_wit::Type,
+    pub writer: super::writers::WriterFunctions,
 }
 impl Adapter {
-    pub fn new(store: &Store<crate::StoreData>, read: Func, dispose: Func) -> Result<Self> {
+    pub fn new(
+        store: &Store<crate::StoreData>,
+        read: Func,
+        dispose: Func,
+        schema: perry_wit::Type,
+        writer: super::writers::WriterFunctions,
+    ) -> Result<Self> {
         let signature = read.ty(store);
         let params = signature.params().collect::<Vec<_>>();
         let signature = dispose.ty(store);
@@ -35,6 +46,8 @@ impl Adapter {
             dispose,
             ty: params[0].1.clone(),
             list: inputs[0].1.clone(),
+            schema,
+            writer,
         })
     }
 }
@@ -46,15 +59,17 @@ struct Entry {
     end: bool,
 }
 pub(crate) struct Values {
-    nonce: u64,
+    pub(super) nonce: u64,
     next: u64,
-    pub adapters: Vec<Adapter>,
+    pub(super) reserved: usize,
+    pub(super) writers: BTreeMap<String, super::writers::Entry>,
+    pub adapters: Vec<Arc<Adapter>>,
     entries: BTreeMap<String, Entry>,
-    control: Control,
+    pub(super) control: Control,
 }
 pub(crate) struct Read {
     pub token: String,
-    pub adapter: Adapter,
+    pub adapter: Arc<Adapter>,
     pub reader: Val,
     pub operation: Operation,
 }
@@ -87,19 +102,32 @@ impl Values {
         Ok(Self {
             nonce,
             next: 0,
+            reserved: 0,
+            writers: BTreeMap::new(),
             adapters: Vec::new(),
             entries: BTreeMap::new(),
             control: Control::default(),
         })
     }
+    pub(super) fn capacity(&self, additional: usize) -> Result<()> {
+        ensure!(
+            self.entries.len() + self.writers.len() + self.reserved + additional <= 1024,
+            "too many live component async values"
+        );
+        Ok(())
+    }
+    pub(super) fn fresh_token(&mut self) -> Result<String> {
+        self.next = self
+            .next
+            .checked_add(1)
+            .context("async value identity exhausted")?;
+        Ok(format!("{}:{}", self.nonce, self.next))
+    }
     pub fn link(&self, linker: &mut Linker<crate::StoreData>, name: &str) -> Result<()> {
         self.control.link(linker, name)
     }
     pub fn insert(&mut self, value: &Val, ty: &Type) -> Result<Value> {
-        ensure!(
-            self.entries.len() < 1024,
-            "too many live component async values"
-        );
+        self.capacity(1)?;
         ensure!(
             self.adapters.iter().any(|a| a.ty == *ty),
             "no canonical adapter for async payload type"
@@ -109,12 +137,7 @@ impl Values {
             (Val::Stream(_), Type::Stream(_)) => true,
             _ => anyhow::bail!("async canonical value/type mismatch"),
         };
-        let next = self
-            .next
-            .checked_add(1)
-            .context("async value identity exhausted")?;
-        self.next = next;
-        let token = format!("{}:{next}", self.nonce);
+        let token = self.fresh_token()?;
         self.entries.insert(
             token.clone(),
             Entry {

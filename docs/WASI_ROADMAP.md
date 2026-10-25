@@ -197,10 +197,11 @@ permits one pending invocation per component. One-shot 0.3.0 command hosting
 and TypeScript/Rust async HTTP handler entry points have separate Linux
 qualification, including task exit after a result is published. The Rust
 persistent driver supports concurrent calls, post-return work and generic WIT
-future/stream reads and transfers. Private canonical factory/write helpers cover
-backpressure and unconsumed ownership. Native producer APIs, traced TypeScript
-wrappers, per-invocation runtime frames, async guest adapters and complete
-host/guest composition remain unfinished.
+future/stream reads, transfers and native producer factories. Bounded writes
+preserve backpressure and unconsumed ownership through cancellation, retry and
+peer closure. Traced TypeScript wrappers and producer interfaces, per-invocation
+runtime frames, async guest adapters and complete host/guest composition remain
+unfinished.
 See [the component qualification record](WASI_COMPONENTS.md) for exact APIs and
 receipts.
 

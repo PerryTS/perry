@@ -81,10 +81,36 @@ foreign, duplicate and incompatible transfers fail before entering the guest.
 Closing a pending read cancels it without retiring the Store. A close accepted
 before the read commits prevents publication and destroys any copied owned
 payload exactly once. An accepted close still executes if its result observer
-is dropped. Closing an unread value wakes its producer. Producer factories,
-writer APIs and the TypeScript runtime wrappers remain unfinished. Components
-with generic async values require the persistent Rust driver; legacy `call`
-and `call_async` reject them before executing an export.
+is dropped. Closing an unread value wakes its producer. Components with generic
+async values require the persistent Rust driver; legacy `call` and `call_async`
+reject them before executing an export.
+
+Rust producers discover `AsyncValueType` handles through
+`client.async_value_types()`. Each handle belongs to its component and preserves
+the selected world's WIT payload aliases. `client.create_async_value(&ty)`
+returns `{value,writer}` with separate owned descriptors. Use
+`client.write_async_value(&writer, values)` for bounded writes; a future takes
+one element and void/unit payloads use null placeholders. The result is
+`{written,remaining,cancelled,closed}`. Partial writes return the unconsumed
+suffix; after canonical transfer, its owned resources and nested async values
+receive fresh descriptors. Preflight failures preserve the original owners.
+
+`cancel_async_write` targets writes registered when cancellation was submitted
+and returns their remaining ownership through each write's result. It retains
+an unfinished writer for retry. `close_async_writer` closes a stream, cancels
+pending writes and disposes unconsumed owners. Accepted cancellation and close
+commands execute even if their observers are dropped. A future finishes by
+writing its one value; `abort_async_writer` is the explicit producer failure
+path and retires that Store, including sibling work. An ordinary WIT `result`
+payload can carry an application error without retiring the component.
+
+The quota counts both readable and writable descriptors, including reservations
+for factories in progress. Writer handles survive quiescent Host recovery and
+restarting its driver. The [native producer receipt](validation/wasi-native-producers-20261025.json)
+records 138 engine and 22 WIT tests in development and production panic-abort,
+real guest reads through imports and exports, and failing controls for late
+cancellation and close races. TypeScript wrappers and producer interfaces remain
+unfinished.
 
 This is a subset of the WASI 0.3 milestone. Enabling `wasi` now links the
 Turnloop-backed 0.3.0 providers as well as the P2 providers. WIT manifests
@@ -121,8 +147,8 @@ chunks, and nominal resource identity. The helper is now composed into productio
 Rust hosts, with private read/disposal functions sharing the original component's
 resource identities. End-to-end checks cover imported and exported resources,
 pruned provider imports, nested futures, large compound payloads, transactional
-transfers and close races. Traced TypeScript wrappers and producer interfaces
-remain unfinished.
+transfers and close races. Traced TypeScript wrappers and their producer
+interfaces remain unfinished.
 
 Private canonical factory/write helpers additionally create readable/writable
 pairs, perform bounded writes with backpressure, and return unconsumed payloads.
@@ -131,8 +157,8 @@ writes within one instance for nonnumeric payloads. Both instances retain the
 original resource identities and share the Store's limits. Checks cover void,
 wide integers, Unicode, compound bytes, partial streams, unit counts, cancellation
 and retry, peer closure, and exactly-once disposal of consumed and unconsumed
-owners. These helpers are a foundation for native producer APIs; their private
-writer integers are not application handles. See the
+owners. Native producer APIs wrap these helpers with owned descriptors; the
+private writer integers are not application handles. See the
 [canonical writer receipt](validation/wasi-generic-canonical-writers-20261025.json).
 
 The standalone Rust guest acceptance host also uses `perry-wasi` and Turnloop,

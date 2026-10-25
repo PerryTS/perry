@@ -6,7 +6,13 @@ const NS: &str = "test:producer/data";
 fn driver() -> (Driver, crate::DriverClient) {
     instance(false)
 }
-fn instance(stream: bool) -> (Driver, crate::DriverClient) {
+pub(super) fn instance(stream: bool) -> (Driver, crate::DriverClient) {
+    instance_hook(stream, std::sync::Arc::new(|_| Ok(Vec::new())))
+}
+pub(super) fn instance_hook(
+    stream: bool,
+    hook: crate::ResourceHook,
+) -> (Driver, crate::DriverClient) {
     let world=perry_wit::parse("package test:producer; interface data { resource thing; make: async func() -> future<own<thing>>; drops: func() -> u32; consume: func(value: own<thing>); } world plugin { export data; }",None).unwrap();
     let mut text = include_str!("producer.component.wat").to_string();
     let world = if stream {
@@ -31,7 +37,9 @@ fn instance(stream: bool) -> (Driver, crate::DriverClient) {
         world
     };
     let bytes = wat::parse_str(text).unwrap();
-    let host = Host::new(&bytes, &world, &BTreeMap::new(), &Options::default()).unwrap();
+    let host =
+        Host::new_with_resource_hook(&bytes, &world, &BTreeMap::new(), &Options::default(), hook)
+            .unwrap();
     host.into_driver().unwrap()
 }
 pub(super) fn result(driver: &mut Driver, call: &mut DriverCall) -> anyhow::Result<Option<Value>> {
