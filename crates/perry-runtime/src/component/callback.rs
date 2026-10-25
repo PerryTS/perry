@@ -3,6 +3,9 @@ use crate::gc::RuntimeHandle;
 use std::cell::Cell;
 
 mod batch;
+pub(super) mod saved;
+#[cfg(test)]
+mod saved_tests;
 pub(super) use batch::FrameBatch;
 
 pub(super) enum FrameValue<'a> {

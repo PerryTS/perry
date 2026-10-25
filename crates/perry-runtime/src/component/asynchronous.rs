@@ -18,6 +18,7 @@ struct Operation {
     interface: String,
     function: String,
     args: Vec<u8>,
+    ids: crate::async_hooks::AsyncResourceIds,
     http_request: *mut core::ffi::c_void,
     started: bool,
     failed: bool,
@@ -101,6 +102,7 @@ fn submit_kind(
     let owner = scope.root_nanbox_f64(undefined());
     let promise = scope.root_raw_mut_ptr::<crate::promise::Promise>(std::ptr::null_mut());
     let retained = scope.root_nanbox_f64(undefined());
+    let saved_context = scope.root_nanbox_f64(undefined());
     let mut encoded = Vec::new();
     let result = crate::exception::catch_js_throw(|| {
         retained.set_nanbox_f64(crate::value::js_nanbox_pointer(
@@ -134,7 +136,17 @@ fn submit_kind(
                     .cast_mut(),
             );
         }
+        let (record, ids) = callback::saved::capture(crate::value::js_nanbox_pointer(
+            promise.get_raw_mut_ptr::<crate::promise::Promise>() as i64,
+        ));
+        saved_context.set_nanbox_f64(record);
         owner.set_nanbox_f64(payload::alloc_closed(&OPERATION, &[]));
+        payload::state_set(
+            owner.get_nanbox_f64(),
+            &OPERATION,
+            b"context",
+            saved_context.get_nanbox_f64(),
+        );
         payload::state_set(
             owner.get_nanbox_f64(),
             &OPERATION,
@@ -182,6 +194,7 @@ fn submit_kind(
                 interface: interface.to_owned(),
                 function: function.to_owned(),
                 args: std::mem::take(&mut encoded),
+                ids,
                 http_request,
                 started: false,
                 failed: false,
@@ -218,10 +231,16 @@ fn step(owner: f64) -> bool {
         &OPERATION,
         b"promise",
     ));
+    let saved_context = scope.root_nanbox_f64(payload::state_get(
+        owner.get_nanbox_f64(),
+        &OPERATION,
+        b"context",
+    ));
+    let ids = native(owner.get_nanbox_f64()).ids;
     let primary_batch = callback::FrameBatch::new(&scope, component.get_nanbox_f64());
     let cleanup_batch = callback::FrameBatch::new(&scope, component.get_nanbox_f64());
-    let primary = primary_batch.for_promise(1, promise.get_nanbox_f64());
-    let cleanup = cleanup_batch.for_promise(1, promise.get_nanbox_f64());
+    let primary = primary_batch.for_context(1, saved_context.get_nanbox_f64(), ids);
+    let cleanup = cleanup_batch.for_context(1, saved_context.get_nanbox_f64(), ids);
     let result_value = scope.root_nanbox_f64(undefined());
     let mut output = Vec::new();
     let mut parsed = Value::Null;

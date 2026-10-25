@@ -26,30 +26,47 @@ impl<'a> FrameBatch<'a> {
         }
     }
 
-    /// Capture the origin on first use in this poll. Repeated use keeps the
-    /// original context and first exception, even if the caller context changes.
-    /// No Promise edge remains in the frame after construction.
-    pub fn for_promise(&self, origin: u64, promise: f64) -> &InvocationFrame<'a> {
+    /// Saved records are ordinary component-owned edges between polls. No
+    /// public Promise or previous poll frame is needed to create this frame.
+    pub fn for_context(
+        &self,
+        origin: u64,
+        record: f64,
+        ids: AsyncResourceIds,
+    ) -> &InvocationFrame<'a> {
         let existing = self
             .frames
             .borrow()
             .get(&origin)
             .map(|frame| &**frame as *const InvocationFrame<'a>);
         let pointer = existing.unwrap_or_else(|| {
-            // Never hold a map borrow across allocation or user code. In
-            // particular, never allocate outer-scope handle slots here: an
-            // enclosing callback's scope would truncate those on return.
             let frame = Box::new(InvocationFrame::new(
                 self.rows,
                 self.owner.get_nanbox_f64(),
-                promise,
+                record,
+                ids,
             ));
             let mut frames = self.frames.borrow_mut();
             &**frames.entry(origin).or_insert(frame) as *const InvocationFrame<'a>
         });
-        // Entries are boxed, never replaced or removed, and live until this
-        // batch is dropped. The returned reference cannot outlive the batch.
+        // Boxes are never replaced or removed, and cannot outlive this batch.
         unsafe { &*pointer }
+    }
+
+    #[cfg(test)]
+    fn for_promise(&self, origin: u64, promise: f64) -> &InvocationFrame<'a> {
+        if self.frames.borrow().contains_key(&origin) {
+            return self.for_context(
+                origin,
+                undefined(),
+                AsyncResourceIds {
+                    async_id: 0,
+                    trigger_async_id: 0,
+                },
+            );
+        }
+        let (record, ids) = super::saved::capture(promise);
+        self.for_context(origin, record, ids)
     }
 }
 
@@ -95,35 +112,18 @@ impl<'a> Deref for InvocationFrame<'a> {
 }
 
 impl<'a> InvocationFrame<'a> {
-    fn new(rows: RuntimeHandle<'a>, owner: f64, promise: f64) -> Self {
+    fn new(rows: RuntimeHandle<'a>, owner: f64, record: f64, ids: AsyncResourceIds) -> Self {
         let scope = RuntimeHandleScope::new();
         let owner = scope.root_nanbox_f64(owner);
-        let promise = scope.root_nanbox_f64(promise);
-        let pointer = JSValue::from_bits(promise.get_nanbox_f64().to_bits())
-            .as_pointer::<crate::promise::Promise>();
-        let ids = unsafe {
-            AsyncResourceIds {
-                async_id: (*pointer).async_id,
-                trigger_async_id: (*pointer).trigger_async_id,
-            }
-        };
-        let metadata = scope.root_nanbox_f64(
-            if crate::async_hooks::resource_state::get(ids.async_id).is_some() {
-                crate::value::js_nanbox_pointer(ids.async_id as i64)
-            } else {
-                undefined()
-            },
-        );
-        let snapshot = scope.root_raw_mut_ptr(als::alloc_snapshot_holder(
-            crate::promise::context_for_promise(pointer.cast_mut()),
-        ));
+        let record = scope.root_nanbox_f64(record);
+        let record = array_pointer(record.get_nanbox_f64()).expect("saved invocation context");
+        let snapshot = scope.root_nanbox_f64(crate::array::js_array_get_f64(record, 0));
+        let metadata = scope.root_nanbox_f64(crate::array::js_array_get_f64(record, 1));
         let row = scope.root_raw_mut_ptr(crate::array::js_array_alloc_with_length(4));
         for (index, value) in [
             owner.get_nanbox_f64(),
             undefined(),
-            crate::value::js_nanbox_pointer(
-                snapshot.get_raw_mut_ptr::<als::AsyncSnapshotHolder>() as i64
-            ),
+            snapshot.get_nanbox_f64(),
             metadata.get_nanbox_f64(),
         ]
         .into_iter()
@@ -153,7 +153,7 @@ impl<'a> InvocationFrame<'a> {
             },
             snapshot: slot(2),
             metadata: slot(3),
-            serial: crate::async_hooks::resource_state::public_id(ids.async_id),
+            serial: ids.async_id,
             trigger: ids.trigger_async_id,
         }
     }

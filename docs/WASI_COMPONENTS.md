@@ -175,8 +175,15 @@ Frames created during another callback keep their values in private traced array
 rows: appending an outer-scope runtime handle during a nested callback would
 lose that root when the nested scope returns. Frames preserve separate captured
 contexts and first exceptions, and cleanup can enter saved ALS without retrying
-a failing before hook. These batches prepare origin routing; cross-poll records
-and persistent TypeScript execution still need integration.
+a failing before hook. These batches prepare origin routing; persistent
+TypeScript execution still needs integration.
+
+Pending operations now own saved context records between polls. The records
+trace snapshots and observed metadata; native fields contain public serial IDs.
+A saved record can reconstruct a fresh poll frame after earlier frames and
+the public Promise have been collected. This separates context retention
+from public-result retention; the persistent driver must still manage per-origin
+records and consume its ownership receipts.
 
 Construct Rust hosts with `Host::new_for_driver` before `into_driver` to
 prepare resource disposal. The C driver constructor selects this path. It
