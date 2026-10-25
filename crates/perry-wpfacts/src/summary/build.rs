@@ -899,6 +899,10 @@ pub(super) fn build_summaries(m: &mut Model) {
             .collect()
     };
     let (ncomposed, nsccs) = compose(m, &obs_of);
+    for s in m.sum.of.values_mut() {
+        let rel = relative_params(s);
+        Rc::make_mut(s).rel = rel;
+    }
     let size_after: usize = m
         .sum
         .of
@@ -968,4 +972,31 @@ pub(super) fn build_summaries(m: &mut Model) {
         nsccs,
         size_after
     );
+}
+
+/// Per parameter of summary `s`: a slot only the calls write (DECISIONS 44
+/// (b)). Any edge, rule term, call result or seeded token naming the slot
+/// may put a value there that is not this run's argument (`x = x.parent`),
+/// so the parameter's marker would stand for that value too.
+fn relative_params(s: &Summary) -> Vec<bool> {
+    let mut written: FxHashSet<NodeId> = FxHashSet::default();
+    for &(_, b) in &s.edges {
+        written.insert(b);
+    }
+    for (h, c) in &s.cons {
+        let (ns, _) = cons_fields(c);
+        written.extend(ns.into_iter().filter(|x| x != h));
+    }
+    for (_, cs) in &s.calls {
+        written.insert(cs.ret);
+    }
+    for (sl, toks, _) in &s.seeds {
+        if !toks.is_empty() {
+            written.insert(SLOT | sl);
+        }
+    }
+    s.params
+        .iter()
+        .map(|&p| is_slot(p) && !written.contains(&p))
+        .collect()
 }

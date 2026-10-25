@@ -11,6 +11,7 @@
 //!
 //! Whether a function is summarized follows from its body alone; nothing
 //! depends on a size, count or depth.
+use crate::delta::Tokens;
 use crate::model::*;
 use crate::pts::{FxHashMap, FxHashSet};
 use std::rc::Rc;
@@ -99,6 +100,10 @@ pub struct Summary {
     /// this summary's direct calls; the calls copied in with a callee's
     /// body bind instances (design §14.3).
     pub expanded: Vec<(u32, FnIdx)>,
+    /// Per parameter: a slot nothing of the body writes (no edge, rule,
+    /// call result or seed puts a value into it), so it holds only what
+    /// the calls pass (DECISIONS 44 (b), `relative_params`).
+    pub rel: Vec<bool>,
 }
 
 #[derive(Clone, Debug)]
@@ -113,6 +118,9 @@ pub struct Inst {
     pub params: Vec<NodeId>,
     pub ret: NodeId,
     pub this: NodeId,
+    /// The calls whose results take this instance's result through
+    /// `Cons::RetInto` (DECISIONS 44 (b)).
+    pub calls: Vec<CallId>,
 }
 
 #[derive(Default)]
@@ -312,6 +320,12 @@ pub fn map_cons(
         ShareBuffer { ta } => ShareBuffer { ta },
         ThisTo { origin } => ThisTo { origin },
         CallArgs { call } => CallArgs { call: k(call) },
+        RetInto { call, run } => RetInto { call: k(call), run },
+        ArgInto { call, run, i } => ArgInto {
+            call: k(call),
+            run,
+            i,
+        },
         Spread { into, site } => Spread {
             into: n(into),
             site,
@@ -599,7 +613,12 @@ impl Model {
         }
         let base: Vec<NodeId> = (0..s.nslots)
             .map(|i| match outer_at[i as usize] {
-                u32::MAX => self.node_named("inst", || format!("inst{inst}.{i}")),
+                u32::MAX => {
+                    let n = self.node_named("inst", || format!("inst{inst}.{i}"));
+                    // A fresh slot holds one run's values.
+                    self.nodes[n as usize].frame = inst + 1;
+                    n
+                }
                 _ if ctx == NO_CTX => s.orig[i as usize],
                 j => self.sum.ctx_nodes[ctx as usize][j as usize],
             })
@@ -612,10 +631,13 @@ impl Model {
             }
         };
         let this = tr(s.this);
-        // Its parameters hold argument markers (DECISIONS 44).
-        for &p in &s.params {
+        // Its parameters hold argument markers (DECISIONS 44), relative
+        // ones while only the calls write them (44 (b)).
+        for (i, &p) in s.params.iter().enumerate() {
             if is_slot(p) {
-                self.nodes[tr(p) as usize].param = true;
+                let n = &mut self.nodes[tr(p) as usize];
+                n.param = true;
+                n.rel = s.rel.get(i).is_some_and(|&r| r) && n.frame == inst + 1;
             }
         }
         let lay = match key.0 {
@@ -633,6 +655,7 @@ impl Model {
             params: s.params.iter().map(|&p| tr(p)).collect(),
             ret: tr(s.ret),
             this,
+            calls: Vec::new(),
         });
         self.sum.inst_key.insert(key, inst);
         self.sum.pending.push((inst, base));
@@ -964,9 +987,184 @@ impl Model {
             }
         }
         let r = self.sum.insts[inst as usize].ret;
-        if r != NO_NODE {
-            let cret = self.calls[c].ret;
+        if r == NO_NODE {
+            return;
+        }
+        let cret = self.calls[c].ret;
+        if !self.rel_into(call, inst + 1, &terms) {
             self.edge(r, cret);
+        }
+    }
+
+    /// Relative transfer (DECISIONS 44 (b)): with markers in the unit and
+    /// no spread argument, what run `run`'s result returns of a relative
+    /// parameter's marker family is `call`'s argument there. False when
+    /// the call takes the result as it is (a copy edge).
+    pub(crate) fn rel_into(&mut self, call: CallId, run: u32, params: &[NodeId]) -> bool {
+        let c = call as usize;
+        let n = params.len().min(self.calls[c].args.len());
+        let rel: Vec<usize> = (0..n)
+            .filter(|&i| params[i] != NO_NODE && self.nodes[params[i] as usize].rel)
+            .collect();
+        if self.param_marker.is_empty() || !self.calls[c].spread.is_empty() || rel.is_empty() {
+            return false;
+        }
+        let r = self.run_ret(run);
+        let cret = self.calls[c].ret;
+        self.rel(|| format!("copy {r} {cret}"));
+        match run & FN_RUN {
+            0 => self.sum.insts[(run - 1) as usize].calls.push(call),
+            _ => self.funcs[(run & !FN_RUN) as usize].calls.push(call),
+        }
+        self.cons(r, Cons::RetInto { call, run });
+        for i in rel {
+            let a = self.calls[c].args[i];
+            self.cons(a, Cons::ArgInto { call, run, i: i as u32 });
+        }
+        true
+    }
+
+    /// The result node and the parameters of run `run`.
+    fn run_ret(&self, run: u32) -> NodeId {
+        match run & FN_RUN {
+            0 => self.sum.insts[(run - 1) as usize].ret,
+            _ => self.funcs[(run & !FN_RUN) as usize].ret,
+        }
+    }
+
+    fn run_params(&self, run: u32) -> &[NodeId] {
+        match run & FN_RUN {
+            0 => &self.sum.insts[(run - 1) as usize].params,
+            _ => &self.funcs[(run & !FN_RUN) as usize].params,
+        }
+    }
+
+    /// `Cons::RetInto`: run `run`'s result values `toks` reach `call`'s
+    /// result. A token of the family of the run's argument marker for
+    /// parameter i (while it stays in its run) is that parameter's value at
+    /// this call: for each marker `m` of the call's argument i, the same
+    /// token of `m` (`Model::lift`). Every other token arrives as itself.
+    pub(crate) fn ret_into(&mut self, call: CallId, run: u32, toks: Tokens<'_>, prim: u16) {
+        let cret = self.calls[call as usize].ret;
+        let mut raw: Vec<Tok> = Vec::new();
+        let mut lifted: Vec<Tok> = Vec::new();
+        let mut args: Vec<Option<Vec<Tok>>> = Vec::new();
+        for &t in toks {
+            let (b, h) = self.fam.get(t as usize).copied().unwrap_or((0, 0));
+            if h != run || self.fam_left(b) {
+                raw.push(t);
+                continue;
+            }
+            let Some(i) = self.param_of(run, b) else {
+                raw.push(t);
+                continue;
+            };
+            if args.len() <= i {
+                args.resize(i + 1, None);
+            }
+            if args[i].is_none() {
+                args[i] = Some(self.arg_markers(call, i));
+            }
+            for &m in args[i].as_ref().unwrap() {
+                // Each lifted token is solve work, as a delivery is.
+                self.work += 1;
+                let x = self.lift(m, b, t);
+                lifted.push(x);
+            }
+        }
+        raw.extend(lifted);
+        self.add(cret, &raw, prim);
+    }
+
+    /// `Cons::ArgInto`: argument i of `call` gains `toks`; each marker
+    /// among them is what run `run`'s result returns of the parameter's
+    /// marker family so far (`ret_into` lifts the later ones).
+    pub(crate) fn arg_into(&mut self, call: CallId, run: u32, i: u32, toks: Tokens<'_>) {
+        let ms: Vec<Tok> = toks.iter().copied().filter(|&t| self.is_marker(t)).collect();
+        if ms.is_empty() {
+            return;
+        }
+        let p = self.run_params(run)[i as usize];
+        let Some(&b) = self.arg_marker_of.get(&p) else {
+            return;
+        };
+        if self.fam_home(b) != run || self.fam_left(b) {
+            return;
+        }
+        let r = self.run_ret(run);
+        let held: Vec<Tok> = self
+            .family(b)
+            .into_iter()
+            .filter(|&t| self.nodes[r as usize].pts.contains_tok(t))
+            .collect();
+        if held.is_empty() {
+            return;
+        }
+        let mut out = Vec::with_capacity(ms.len() * held.len());
+        for &m in &ms {
+            for &t in &held {
+                self.work += 1;
+                out.push(self.lift(m, b, t));
+            }
+        }
+        let cret = self.calls[call as usize].ret;
+        self.add(cret, &out, 0);
+    }
+
+    /// The parameter of run `run` whose argument marker is `b`.
+    fn param_of(&self, run: u32, b: Tok) -> Option<usize> {
+        self.run_params(run)
+            .iter()
+            .position(|p| self.arg_marker_of.get(p) == Some(&b))
+    }
+
+    /// The markers argument i of `call` holds now (none for an argument
+    /// the call does not pass: the parameter is `undefined` there).
+    fn arg_markers(&self, call: CallId, i: usize) -> Vec<Tok> {
+        let Some(&a) = self.calls[call as usize].args.get(i) else {
+            return Vec::new();
+        };
+        let mut v = Vec::new();
+        self.nodes[a as usize].pts.sorted_into(&mut v);
+        v.retain(|&t| self.is_marker(t));
+        v
+    }
+
+    /// Argument marker `b`'s family entered a node of no run of its home
+    /// (DECISIONS 44 (b)): a value of one run may now be read by another,
+    /// so its callers take the family itself from now on, every caller's
+    /// value, as without (b); what the result holds of it goes to every
+    /// bound call now.
+    pub(crate) fn leave_frame(&mut self, b: Tok) {
+        if self.fam_left(b) {
+            return;
+        }
+        let w = (b >> 6) as usize;
+        if self.fam_out.len() <= w {
+            self.fam_out.resize(w + 1, 0);
+        }
+        self.fam_out[w] |= 1 << (b & 63);
+        let run = self.fam_home(b);
+        let r = self.run_ret(run);
+        if r == NO_NODE {
+            return;
+        }
+        let held: Vec<Tok> = self
+            .family(b)
+            .into_iter()
+            .filter(|&t| self.nodes[r as usize].pts.contains_tok(t))
+            .collect();
+        if held.is_empty() {
+            return;
+        }
+        let calls = match run & FN_RUN {
+            0 => self.sum.insts[(run - 1) as usize].calls.clone(),
+            _ => self.funcs[(run & !FN_RUN) as usize].calls.clone(),
+        };
+        for c in calls {
+            self.work += held.len() as u64;
+            let cret = self.calls[c as usize].ret;
+            self.add(cret, &held, 0);
         }
     }
 

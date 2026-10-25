@@ -236,6 +236,9 @@ pub struct FuncInfo {
     /// The function whose body creates this closure (`NO_FN` for
     /// declarations, methods and builtins).
     pub parent: FnIdx,
+    /// The calls whose results take this function's result through
+    /// `Cons::RetInto` (DECISIONS 44 (b)).
+    pub calls: Vec<CallId>,
 }
 
 #[derive(Clone, Debug)]
@@ -472,6 +475,15 @@ pub enum Cons {
     /// nodes its receivers found): arguments and result bind once per
     /// (call, function) (the argument half of `CallThis`).
     CallArgs { call: CallId },
+    /// The node is the result of run `run` (`Node::frame`), bound to
+    /// `call`: the call's result takes each value, except that the family
+    /// of the run's argument marker for a parameter is the caller's own
+    /// argument there (DECISIONS 44 (b), `Model::ret_into`).
+    RetInto { call: CallId, run: u32 },
+    /// The node is argument `i` of `call`, bound to run `run`: each marker
+    /// it gains is what the run's result returns of that parameter's marker
+    /// family (DECISIONS 44 (b), `Model::arg_into`).
+    ArgInto { call: CallId, run: u32, i: u32 },
     /// The node is the source of an object spread / `Object.assign` into
     /// the values of `into`: each source object copies its own keys, key
     /// by key, into each target (`Model::spread_into`), never through one
@@ -555,6 +567,8 @@ impl Cons {
             Cons::ShareBuffer { .. } => "sharebuffer",
             Cons::ThisTo { .. } => "thisto",
             Cons::CallArgs { .. } => "callargs",
+            Cons::RetInto { .. } => "retinto",
+            Cons::ArgInto { .. } => "arginto",
             Cons::Spread { .. } => "spread",
             Cons::SpreadFrom { .. } => "spreadfrom",
             Cons::ThisInst { .. } => "thisinst",
@@ -591,6 +605,19 @@ pub struct Node {
     /// A parameter node (an instance's, a function's): it holds its
     /// argument marker in place of the markers that arrive (DECISIONS 44).
     pub param: bool,
+    /// The run this node belongs to (DECISIONS 44 (b)): an instance + 1, or
+    /// `FN_RUN | f` for a function with one body for every call (another
+    /// unit's function); 0: none. Its fresh slots, the field nodes of its
+    /// argument markers' families, the temporaries of its calls. What it
+    /// holds is one run's.
+    pub frame: u32,
+    /// No value leaves the node (no successor, its rules only use what it
+    /// holds): a value entering it reaches no run (DECISIONS 44 (b)).
+    pub sink: bool,
+    /// A parameter slot only the instance's calls write: its argument
+    /// marker is the caller's argument at each call's result
+    /// (DECISIONS 44 (b)).
+    pub rel: bool,
 }
 
 /// A store site: where, and whether it is a construction-phase writer for
@@ -919,6 +946,16 @@ pub struct Model {
     pub arg_linked: crate::pts::FxHashSet<(Tok, Tok)>,
     /// Argument markers, a bit per token.
     pub arg_bits: Vec<u64>,
+    /// DECISIONS 44 (b): per token of an argument marker's family (the
+    /// marker, its reach marker, its keyed reach markers) the marker and
+    /// its home, the instance whose relative parameter holds it (+ 1; 0:
+    /// none, the family is never substituted).
+    pub fam: Vec<(Tok, u32)>,
+    /// Families that left their home's run (a token entered a node of no
+    /// run of the home: the heap, a closure cell, a shared node, another
+    /// instance), a bit per marker. Monotone: from then on the callers get
+    /// the family itself, every caller's value, as without (b).
+    pub fam_out: Vec<u64>,
     /// The `this` node of each instance method / accessor of a class: the
     /// binding its entry guard tests (design §11.4).
     pub this_class: FxHashMap<NodeId, TmplId>,
@@ -962,6 +999,9 @@ pub struct AccGroup {
 
 pub const NO_NODE: NodeId = u32::MAX;
 pub const NO_FN: FnIdx = u32::MAX;
+/// The run of a function with one body for every call (`Node::frame`);
+/// instance runs count from 1 below it.
+pub const FN_RUN: u32 = 1 << 31;
 
 /// Marks a `super` walk's start in `Model::walk_nodes` keys (it begins with
 /// a stop check at the start prototype, unlike a receiver's own walk).
@@ -1487,6 +1527,12 @@ impl Model {
         );
         let rm = self.marker_template(display);
         let r = self.tok(TokKind::Obj(rm, NO_CTX));
+        // What an argument marker reaches is of its family (its field
+        // nodes are of the same run).
+        let home = self.fam_home(t);
+        if home != 0 {
+            self.set_fam(r, t, home);
+        }
         let rany = self.field_any(r);
         self.add_tok(rany, r);
         self.reach_marker.insert(r);
@@ -1759,6 +1805,13 @@ impl Model {
         self.marker_reach.insert(t, r);
         self.reach_marker.insert(r);
         self.arg_marker_of.insert(n, t);
+        // A relative parameter's marker is the caller's argument at each
+        // call's result while it stays in its run (DECISIONS 44 (b)).
+        if self.nodes[n as usize].rel {
+            let home = self.nodes[n as usize].frame;
+            self.set_fam(t, t, home);
+            self.set_fam(r, t, home);
+        }
         // It stands for its members alone (DECISIONS 75): beside while it
         // has none, and while each one that links in is beside
         // (`link_marker`). The caller links the arriving markers before
@@ -1825,6 +1878,80 @@ impl Model {
                 st.extend(ks.iter().map(|&(_, r)| r));
             }
         }
+    }
+
+    fn set_fam(&mut self, t: Tok, base: Tok, home: u32) {
+        let i = t as usize;
+        if self.fam.len() <= i {
+            self.fam.resize(i + 1, (0, 0));
+        }
+        self.fam[i] = (base, home);
+    }
+
+    /// The home of token `t`'s argument marker family (+ 1), 0 for any
+    /// other token (DECISIONS 44 (b)).
+    #[inline]
+    pub(crate) fn fam_home(&self, t: Tok) -> u32 {
+        self.fam.get(t as usize).map_or(0, |&(_, h)| h)
+    }
+
+    /// The family of argument marker `b` left its home's run.
+    #[inline]
+    pub(crate) fn fam_left(&self, b: Tok) -> bool {
+        marker_top_bit(&self.fam_out, b)
+    }
+
+    /// What a load from marker `m` gives (solve.rs `field`): under a named
+    /// key its keyed reach marker, under a computed key its reach marker;
+    /// a reach marker reaches itself under every key.
+    pub(crate) fn marker_load(&mut self, m: Tok, key: Option<Atom>) -> Tok {
+        if self.reach_marker.contains(&m) {
+            return m;
+        }
+        match key {
+            Some(a) => self.keyed_reach_of(m, a),
+            None => self.marker_reach[&m],
+        }
+    }
+
+    /// Token `t` of argument marker `b`'s family, with marker `m` in place
+    /// of `b`: `m` itself, what `m` reaches, or what it reaches through the
+    /// same key (DECISIONS 44 (b)).
+    pub(crate) fn lift(&mut self, m: Tok, b: Tok, t: Tok) -> Tok {
+        if t == b {
+            return m;
+        }
+        let key = self.keyed_parent.get(&t).map(|&(_, a)| a);
+        self.marker_load(m, key)
+    }
+
+    /// The run of `call` (`Node::frame`): the run its result node belongs
+    /// to (a call an instance made has its own result slot). A temporary
+    /// the solver makes for one call is of that run.
+    pub(crate) fn call_run(&self, call: CallId) -> u32 {
+        let Some(c) = self.calls.get(call as usize) else {
+            return 0;
+        };
+        // Its operands are nodes of the run that made it.
+        let this = match c.this {
+            ThisArg::Node(n) => Some(n),
+            _ => None,
+        };
+        std::iter::once(c.ret)
+            .chain(this)
+            .chain(c.args.iter().copied())
+            .filter(|&n| n != NO_NODE)
+            .map(|n| self.nodes[n as usize].frame)
+            .find(|&f| f != 0)
+            .unwrap_or(0)
+    }
+
+    /// The tokens of argument marker `b`'s family.
+    pub(crate) fn family(&self, b: Tok) -> Vec<Tok> {
+        let mut v = vec![b];
+        v.extend(self.marker_reach.get(&b).copied());
+        v.extend(self.keyed_reach.get(&b).into_iter().flatten().map(|&(_, r)| r));
+        v
     }
 
     fn marker_template(&mut self, display: String) -> TmplId {

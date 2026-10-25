@@ -2036,6 +2036,158 @@ fn an_argument_a_shared_body_returns_comes_back_to_the_caller() {
     assert!(!field(tmpl(&pf, "Box"), "v").readonly, "{}", pf.dump_text());
 }
 
+/// Every function writes `S.last`, so they are one unit (the writers of a
+/// binding join its declaration, decl_units.rs).
+const JOIN: &str = "class S { static last: any = 0; }\n";
+
+/// Pts entries of the largest unit when `n` exported functions each read
+/// their own key of what a shared helper returns, and then any key of it.
+fn relative_result_entries(n: usize) -> u64 {
+    let mut src = format!(
+        "{JOIN}function h(a: any) {{ S.last = 0; return a; }}\nfunction id(a: any) {{ S.last = 1; return h(a); }}\n"
+    );
+    for i in 0..n {
+        src.push_str(&format!(
+            "export function f{i}(a: any, k: string) {{ S.last = {i}; const r = id(a); const x = r.k{i}; return [x, r[k]]; }}\n"
+        ));
+    }
+    let names: Vec<String> = (0..n).map(|i| format!("f{i}")).collect();
+    let calls: Vec<String> = names
+        .iter()
+        .map(|f| format!("console.log({f}({{ v: 1 }}, 'v'));"))
+        .collect();
+    let user = format!(
+        "import {{ {} }} from './t'; {}",
+        names.join(", "),
+        calls.join(" ")
+    );
+    let pf = units_of(&[("t", src.as_str()), ("u", user.as_str())]);
+    pf.units
+        .iter()
+        .map(|(_, s)| s.pts_entries)
+        .max()
+        .unwrap_or(0)
+}
+
+#[test]
+fn a_shared_body_returns_each_caller_its_own_argument() {
+    // DECISIONS 44 (b): the shared `h` (and `id`) return their argument
+    // marker; at each call's result it is that caller's own argument. Without
+    // it every caller gets the shared marker back, reads its own key of it
+    // (one keyed reach marker per caller on the shared marker) and then any
+    // key of it (all of them): the unit grows with the square of the callers.
+    let (e8, e16, e32) = (
+        relative_result_entries(8),
+        relative_result_entries(16),
+        relative_result_entries(32),
+    );
+    let (d1, d2) = (e16 - e8, e32 - e16);
+    assert!(
+        d1 > 0 && d2 < 3 * d1,
+        "entries {e8} {e16} {e32}: quadratic in the callers"
+    );
+}
+
+/// One exported function `both` of `b.ts` (one unit: everything below is
+/// its body), whose inner callers share one method instance (a method of a
+/// local object: never composed into the callers' summaries), and `m`.
+fn both(body: &str, m: &str) -> ProgramFacts {
+    let b = format!("export function both(o: any, c: any) {{ {body} }}");
+    units_of(&[("b", b.as_str()), ("m", m)])
+}
+
+#[test]
+fn a_caller_gets_back_only_what_it_passed() {
+    // DECISIONS 44 (b): `id` and `id2` return their argument through the
+    // shared `H.h`. `id`'s result is `id`'s argument alone, so `both`
+    // returns `o`, not `c`, and the store through it is a store into the
+    // `Box`, not into the `Crate`.
+    let pf = both(
+        "const H = { h(p: any) { return p; } }; function id(p: any) { return H.h(p); } function id2(p: any) { return H.h(p); } id2(c); return id(o);",
+        "import { both } from './b'; class Box { v: any = 1; } class Crate { v: any = 1; } const r = both(new Box(), new Crate()); r.v = 'x'; console.log(r.v);",
+    );
+    assert!(!field(tmpl(&pf, "Box"), "v").readonly, "{}", pf.dump_text());
+    assert!(field(tmpl(&pf, "Crate"), "v").readonly, "{}", pf.dump_text());
+}
+
+#[test]
+fn an_argument_a_closure_keeps_is_every_callers() {
+    // DECISIONS 44 (b): `H.h` keeps its first argument in a closure and
+    // returns it on every later call, so `b`'s result is `a`'s argument.
+    // The marker entered a closure cell (it left its run): its family comes
+    // back as every caller's argument, and `both` may return `o`.
+    let pf = both(
+        "let saved: any = null; const H = { h(p: any) { if (!saved) saved = () => p; return saved(); } }; function a(p: any) { return H.h(p); } function b(p: any) { return H.h(p); } a(o); return b(c);",
+        "import { both } from './b'; class Box { v: any = 1; } both(new Box(), 0).v = 'x'; console.log(1);",
+    );
+    assert!(!field(tmpl(&pf, "Box"), "v").readonly, "{}", pf.dump_text());
+}
+
+#[test]
+fn an_argument_the_heap_keeps_is_every_callers() {
+    // DECISIONS 44 (b): as above through an object field: the marker entered
+    // the heap (it left its run).
+    let pf = both(
+        "const keep: any = { p: null }; const H = { h(p: any) { if (!keep.p) keep.p = p; return keep.p; } }; function a(p: any) { return H.h(p); } function b(p: any) { return H.h(p); } a(o); return b(c);",
+        "import { both } from './b'; class Box { v: any = 1; } both(new Box(), 0).v = 'x'; console.log(1);",
+    );
+    assert!(!field(tmpl(&pf, "Box"), "v").readonly, "{}", pf.dump_text());
+}
+
+#[test]
+fn a_recursion_returns_what_its_argument_reaches() {
+    // DECISIONS 44 (b) through a recursion: `W.walk` returns its argument
+    // or, through itself, what its argument reaches under `next`. At the
+    // recursive call's result the keyed reach marker of `next` is the
+    // caller's `n.next`, and a reach marker reaches itself under every key,
+    // so the substitution ends. `both` may return the `Tail`.
+    let pf = both(
+        "const W = { walk(n: any): any { return n.next ? W.walk(n.next) : n; } }; function last(p: any) { return W.walk(p); } function last2(p: any) { return W.walk(p); } last2(c); return last(o);",
+        "import { both } from './b'; class Head { v: any = 1; next: any = null; } class Tail { v: any = 1; } const h = new Head(); h.next = new Tail(); both(h, 0).v = 'x'; console.log(h.v);",
+    );
+    assert!(!field(tmpl(&pf, "Tail"), "v").readonly, "{}", pf.dump_text());
+    assert!(pf.units.iter().all(|(_, s)| !s.aborted), "{:?}", pf.units);
+}
+
+#[test]
+fn a_written_parameter_is_not_the_callers_argument() {
+    // DECISIONS 44 (b): `U.up` writes its parameter (`n = n.parent`), so its
+    // marker stands for the caller's `n.parent` too and is never replaced
+    // by the caller's argument alone: `both` may return the `Parent`.
+    let pf = both(
+        "const U = { up(n: any) { n = n.parent; return n; } }; function top(p: any) { return U.up(p); } function top2(p: any) { return U.up(p); } top2(c); return top(o);",
+        "import { both } from './b'; class Parent { v: any = 1; } class Child { v: any = 1; parent: any = new Parent(); } both(new Child(), 0).v = 'x'; console.log(1);",
+    );
+    assert!(!field(tmpl(&pf, "Parent"), "v").readonly, "{}", pf.dump_text());
+}
+
+#[test]
+fn an_argument_marker_that_arrives_late_is_lifted() {
+    // DECISIONS 44 (b): `b` passes `H.h` the result of `H.g`, whose marker
+    // arrives after `H.h`'s result already holds its family (from `a`'s
+    // call): the call's argument rule lifts it then. `both` returns `c`.
+    let pf = both(
+        "const H = { h(p: any) { return p; }, g(p: any) { return p; } }; function a(p: any) { return H.h(p); } function b(p: any) { return H.h(H.g(p)); } a(o); return b(c);",
+        "import { both } from './b'; class Box { v: any = 1; } both(0, new Box()).v = 'x'; console.log(1);",
+    );
+    assert!(!field(tmpl(&pf, "Box"), "v").readonly, "{}", pf.dump_text());
+}
+
+#[test]
+fn another_units_function_returns_each_caller_its_own_argument() {
+    // DECISIONS 44 (b) through another unit's function: `pass` (unit `p`)
+    // returns its argument and touches what it reaches under `k` (its
+    // stand-in's touch node takes nothing back). Its stand-in is one body
+    // for every call: its parameter's marker is the caller's argument at
+    // each call's result, so `id`'s result is `id`'s argument alone.
+    let p = "export function pass(x: any) { const s = '' + x.k; return x; }";
+    let c = format!("{JOIN}import {{ pass }} from './p';\nfunction h(q: any) {{ S.last = 0; return pass(q); }}\nexport function id(q: any) {{ S.last = 1; return h(q); }}\nexport function id2(q: any) {{ S.last = 2; return h(q); }}");
+    let m = "import { id, id2 } from './c'; class Box { v: any = 1; } class Crate { v: any = 1; } const o = new Box(); const c = new Crate(); const r = id(o); id2(c); r.v = 'x'; console.log(o.v, c.v);";
+    let pf = units_of(&[("p", p), ("c", c.as_str()), ("m", m)]);
+    assert!(!field(tmpl(&pf, "Box"), "v").readonly, "{}", pf.dump_text());
+    assert!(field(tmpl(&pf, "Crate"), "v").readonly, "{}", pf.dump_text());
+}
+
 #[test]
 fn a_result_an_argument_reaches_is_the_callers_reach() {
     // An argument marker's keyed reach reads as what its members reach: `up`

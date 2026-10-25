@@ -1199,6 +1199,7 @@ fn a_parameter_node_holds_its_argument_marker() {
         gen_step: false,
         forwards_super: false,
         parent: NO_FN,
+        calls: Vec::new(),
     });
     let (m1, m2) = (m.param_marker_tok(0, 0), m.param_marker_tok(0, 1));
     let a = m.tok(TokKind::ModNs(7));
@@ -1259,6 +1260,7 @@ fn a_store_into_a_marker_makes_no_field_of_it() {
         gen_step: false,
         forwards_super: false,
         parent: NO_FN,
+        calls: Vec::new(),
     });
     let mk = m.param_marker_tok(0, 0);
     let v = m.node_l("v");
@@ -1300,6 +1302,7 @@ fn an_argument_marker_leaves_beside_when_a_valued_member_links() {
         gen_step: false,
         forwards_super: false,
         parent: NO_FN,
+        calls: Vec::new(),
     });
     let mk = m.param_marker_tok(0, 0);
     // `r2` is a member of `r1` (an instance parameter passed on); `mk`
@@ -1345,6 +1348,7 @@ fn marker_model() -> crate::model::Model {
         gen_step: false,
         forwards_super: false,
         parent: NO_FN,
+        calls: Vec::new(),
     });
     m
 }

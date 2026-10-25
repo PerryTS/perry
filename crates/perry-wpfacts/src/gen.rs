@@ -842,6 +842,16 @@ impl<'a> Gen<'a> {
             n
         });
         self.m.cur_fn = outer_fn;
+        // One body for every call, written by the calls alone: a run whose
+        // parameters are relative (DECISIONS 44 (b)).
+        let run = crate::model::FN_RUN | fx;
+        for &p in &params {
+            self.m.nodes[p as usize].frame = run;
+            self.m.nodes[p as usize].rel = true;
+        }
+        for n in [this, ret] {
+            self.m.nodes[n as usize].frame = run;
+        }
         self.m.funcs.push(FuncInfo {
             module: mi,
             func_id: u32::MAX,
@@ -859,6 +869,7 @@ impl<'a> Gen<'a> {
             gen_step: false,
             forwards_super: false,
             parent: NO_FN,
+            calls: Vec::new(),
         });
         // Registered before its result is built: a result layout whose
         // field holds this function reaches it again (`stand_in_class`).
@@ -866,6 +877,8 @@ impl<'a> Gen<'a> {
         self.m.add_tok(n, tok);
         self.stand_in_fns.insert((c.name.clone(), holder), (n, tok));
         self.stand_in_fc.insert(tok, c);
+        // What unknown code receives goes nowhere here.
+        self.m.nodes[args_all as usize].sink = true;
         self.m.sink_node(args_all, r);
         if let Some(n) = rest {
             self.m.sink_node(n, r);
@@ -896,6 +909,7 @@ impl<'a> Gen<'a> {
                         .m
                         .node_named("reach", || format!("reach{i}({})", c.name));
                     self.m.own(q);
+                    self.m.nodes[q as usize].frame = crate::model::FN_RUN | fx;
                     self.m.cons(
                         p,
                         Cons::Load {
@@ -939,6 +953,7 @@ impl<'a> Gen<'a> {
                         Some(q) => q,
                         None => {
                             let q = self.m.node_named("reach", || "reached(escape)".into());
+                            self.m.nodes[q as usize].sink = true;
                             self.m.sink_node(q, r);
                             self.reach_escape = Some(q);
                             q
@@ -950,6 +965,7 @@ impl<'a> Gen<'a> {
                         Some(q) => q,
                         None => {
                             let q = self.m.node_named("reach", || "reached(touch)".into());
+                            self.m.nodes[q as usize].sink = true;
                             self.m.cons(
                                 q,
                                 Cons::Load {
@@ -1377,6 +1393,7 @@ impl<'a> Gen<'a> {
             gen_step: false,
             forwards_super: false,
             parent: NO_FN,
+            calls: Vec::new(),
         });
         if sink_args {
             self.m.sink_node(args_all, reason);
@@ -1635,6 +1652,7 @@ impl<'a> Gen<'a> {
             gen_step: false,
             forwards_super: false,
             parent: if is_closure { outer_fn } else { NO_FN },
+            calls: Vec::new(),
         });
         self.mods[mi as usize].funcs.insert(id, fx);
         fx
@@ -1806,6 +1824,7 @@ impl<'a> Gen<'a> {
             gen_step: false,
             forwards_super: false,
             parent: NO_FN,
+            calls: Vec::new(),
         });
         fx
     }

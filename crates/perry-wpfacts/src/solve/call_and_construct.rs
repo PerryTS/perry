@@ -170,7 +170,10 @@ impl Model {
         }
         let fret = self.funcs[f].ret;
         let cret = self.calls[c].ret;
-        self.edge(fret, cret);
+        let params = self.funcs[f].params.clone();
+        if !self.rel_into(call, FN_RUN | f as u32, &params) {
+            self.edge(fret, cret);
+        }
     }
 
     /// Calling a bound function: its target with the bound this; bound +
