@@ -141,6 +141,10 @@ impl Prepared {
                 .collect();
             let package = graph.register_package(package)?;
             let helper = graph.instantiate(package);
+            // Wasmtime rejects intra-component reads/writes of non-numeric
+            // payloads. Factory/writes use a distinct instance with the same
+            // original resource aliases; readable transport stays here.
+            let writer = graph.instantiate(package);
             for (local, (namespace, name)) in &explicit {
                 if !helper_imports.contains(local) {
                     continue;
@@ -154,9 +158,11 @@ impl Prepared {
                     },
                 )?;
                 graph.set_instantiation_argument(helper, local, node)?;
+                graph.set_instantiation_argument(writer, local, node)?;
             }
             let name = format!("perry-reader-{index}");
             graph.export(helper, &name)?;
+            graph.export(writer, format!("perry-writer-{index}"))?;
             readers.push(name);
         }
         let bytes = graph.encode(EncodeOptions::default())?;

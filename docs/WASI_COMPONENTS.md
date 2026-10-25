@@ -124,6 +124,17 @@ pruned provider imports, nested futures, large compound payloads, transactional
 transfers and close races. Traced TypeScript wrappers and producer interfaces
 remain unfinished.
 
+Private canonical factory/write helpers additionally create readable/writable
+pairs, perform bounded writes with backpressure, and return unconsumed payloads.
+Writers use a separate helper instance from readers: Wasmtime rejects reads and
+writes within one instance for nonnumeric payloads. Both instances retain the
+original resource identities and share the Store's limits. Checks cover void,
+wide integers, Unicode, compound bytes, partial streams, unit counts, cancellation
+and retry, peer closure, and exactly-once disposal of consumed and unconsumed
+owners. These helpers are a foundation for native producer APIs; their private
+writer integers are not application handles. See the
+[canonical writer receipt](validation/wasi-generic-canonical-writers-20261025.json).
+
 The standalone Rust guest acceptance host also uses `perry-wasi` and Turnloop,
 with Wasmtime 48.0.7. The Tokio gate checks its separate workspace, lockfile and
 source as well as the main workspace. Qualification may pass an explicit

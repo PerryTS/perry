@@ -17,19 +17,19 @@ use wasmtime::{
     Config, Engine, Store,
 };
 
-type Signals = Arc<Mutex<BTreeMap<u32, oneshot::Sender<()>>>>;
+pub(super) type Signals = Arc<Mutex<BTreeMap<u32, oneshot::Sender<()>>>>;
 
-fn world() -> World {
+pub(super) fn world() -> World {
     perry_wit::parse("package test:read; world plugin {}", None).unwrap()
 }
 
-fn engine() -> Engine {
+pub(super) fn engine() -> Engine {
     let mut config = Config::new();
     config.wasm_component_model_async(true);
     Engine::new(&config).unwrap()
 }
 
-fn component(
+pub(super) fn component(
     engine: &Engine,
     world: &World,
     payload: Option<&Type>,
@@ -41,7 +41,7 @@ fn component(
     Component::from_binary(engine, &bytes).unwrap()
 }
 
-fn control(linker: &mut Linker<()>) -> Signals {
+pub(super) fn control(linker: &mut Linker<()>) -> Signals {
     let signals: Signals = Arc::default();
     let pending = signals.clone();
     linker
@@ -60,7 +60,7 @@ fn control(linker: &mut Linker<()>) -> Signals {
     signals
 }
 
-fn ready<F: std::future::Future>(future: F) -> F::Output {
+pub(super) fn ready<F: std::future::Future>(future: F) -> F::Output {
     let mut future = Box::pin(future);
     for _ in 0..256 {
         if let Some(result) = block_on(poll_once(future.as_mut())) {
@@ -70,7 +70,7 @@ fn ready<F: std::future::Future>(future: F) -> F::Output {
     panic!("ready helper failed to drain its local tasks")
 }
 
-fn invoke(store: &mut Store<()>, function: Func, input: &[Val]) -> Val {
+pub(super) fn invoke(store: &mut Store<()>, function: Func, input: &[Val]) -> Val {
     let mut output = [Val::Bool(false)];
     ready(store.run_concurrent(async |accessor| {
         function
@@ -84,7 +84,7 @@ fn invoke(store: &mut Store<()>, function: Func, input: &[Val]) -> Val {
     output[0].clone()
 }
 
-fn field<'a>(packet: &'a Val, name: &str) -> &'a Val {
+pub(super) fn field<'a>(packet: &'a Val, name: &str) -> &'a Val {
     let Val::Record(fields) = packet else {
         panic!("packet")
     };

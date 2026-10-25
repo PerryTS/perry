@@ -81,9 +81,20 @@ pub(super) fn generate(
     let list_type = types.value(&list, 0)?;
     let mut disposal = Disposal::default();
     disposal.visit(world, &list, &fields[20].1, &mut types, 0)?;
+    let writer = super::writer::generate(world, payload, stream, &reader, &mut types)?;
     let kind = if stream { "stream" } else { "future" };
     let mut text = include_str!("reader.component.wat").to_string();
     let replacements = [
+        ("@writer-intrinsics@", writer.intrinsics),
+        ("@writer-imports@", writer.imports),
+        ("@writer-exports@", writer.exports),
+        ("@writer-functions@", writer.functions),
+        ("@writer-interface@", writer.interface),
+        (
+            "@write-capacity@",
+            if stream { "(local.get $count)" } else { "" }.into(),
+        ),
+        ("@write-event@", if stream { "3" } else { "5" }.into()),
         ("@imports@", types.imports()),
         ("@types@", types.text),
         ("@control@", quote(control)),

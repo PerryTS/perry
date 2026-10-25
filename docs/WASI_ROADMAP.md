@@ -195,8 +195,12 @@ optional Perry component engine now links these providers and exposes native
 async functions through Promise-based TypeScript host bindings. It currently
 permits one pending invocation per component. One-shot 0.3.0 command hosting
 and TypeScript/Rust async HTTP handler entry points have separate Linux
-qualification, including task exit after a result is published. Generic WIT
-future/stream values, async guest adapters, concurrent calls within one instance and complete host/guest composition remain unfinished.
+qualification, including task exit after a result is published. The Rust
+persistent driver supports concurrent calls, post-return work and generic WIT
+future/stream reads and transfers. Private canonical factory/write helpers cover
+backpressure and unconsumed ownership. Native producer APIs, traced TypeScript
+wrappers, per-invocation runtime frames, async guest adapters and complete
+host/guest composition remain unfinished.
 See [the component qualification record](WASI_COMPONENTS.md) for exact APIs and
 receipts.
 

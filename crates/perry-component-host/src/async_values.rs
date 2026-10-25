@@ -26,6 +26,8 @@ mod reader_cleanup;
 mod reader_tests;
 #[path = "async_values/reader_types.rs"]
 mod reader_types;
+#[path = "async_values/writer.rs"]
+mod writer;
 
 #[path = "async_values/reader_dispose.rs"]
 mod reader_dispose;
@@ -50,3 +52,7 @@ mod integration_cancel_tests;
 #[cfg(test)]
 #[path = "async_values/transfer_tests.rs"]
 mod transfer_tests;
+
+#[cfg(test)]
+#[path = "async_values/writer_tests.rs"]
+mod writer_tests;
