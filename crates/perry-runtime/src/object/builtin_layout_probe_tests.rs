@@ -503,11 +503,15 @@ fn indexed_named_computed_and_inherited_reads_observe_updates() {
             "alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta", "iota", "kappa",
             "lambda", "mu",
         ];
-        let obj = crate::object::js_object_alloc(0, 16) as usize;
+        let obj = crate::object::js_object_alloc_plain(16) as usize;
         for (i, key) in names.iter().enumerate() {
             set(obj, key, i as f64 + 1.0);
         }
         let record = record_of(test_dir(), (*(obj as *const ObjectHeader)).parent_class_id);
+        assert_eq!(
+            (*record).object_kind(),
+            super::super::ShapeObjectKind::Ordinary
+        );
         assert!((*record).logical_key_count > SCAN_KEYS);
         let word = probe_word(record);
         assert_ne!(word & !PROBE_FLAGS, 0, "the fixture must use a key index");
@@ -563,7 +567,7 @@ fn indexed_accessor_lookup_preserves_the_holder_pair() {
     on_a_fresh_thread(|| unsafe {
         let _no_move = crate::gc::GcSuppressScope::new();
         let _ = realm();
-        let obj = crate::object::js_object_alloc(0, 16) as usize;
+        let obj = crate::object::js_object_alloc_plain(16) as usize;
         for (i, key) in [
             "alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta", "iota", "kappa",
             "lambda", "mu",
