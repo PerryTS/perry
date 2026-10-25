@@ -2037,6 +2037,19 @@ fn an_argument_a_shared_body_returns_comes_back_to_the_caller() {
 }
 
 #[test]
+fn a_result_an_argument_reaches_is_the_callers_reach() {
+    // An argument marker's keyed reach reads as what its members reach: `up`
+    // (its own unit, a closed function) returns `x.parent`, which its
+    // argument marker holds as a keyed reach marker of itself. Read as
+    // nothing, `up`'s contract would say it returns its argument alone and
+    // the store through `top`'s result would miss the `Parent`.
+    let b = "function up(x: any) { x = x.parent; return x; }\nexport function top(x: any) { return up(x); }\nexport function top2(x: any) { return up(x); }";
+    let m = "import { top, top2 } from './b'; class Parent { v: any = 1; } class Child { v: any = 1; parent: any = new Parent(); } const c = new Child(); top2(0); top(c).v = 'x'; console.log(c.v);";
+    let pf = units_of(&[("b", b), ("m", m)]);
+    assert!(!field(tmpl(&pf, "Parent"), "v").readonly, "{}", pf.dump_text());
+}
+
+#[test]
 fn an_aborted_unit_checks_no_contracts() {
     // 113-CWL3: past the bound a unit claims nothing (sound), so checking
     // its contracts only spends time: a walk over every argument marker's
