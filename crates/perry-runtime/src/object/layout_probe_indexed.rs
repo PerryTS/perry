@@ -2,6 +2,14 @@
 //! collisions. A hit need not retain the collision loop's mask and index.
 use super::*;
 
+/// Use both halves of the atom hash when selecting a shape-index bucket.
+/// Construction and every lookup share this compression; the hash itself
+/// remains unchanged for key identity and TEXT-entry comparisons.
+#[inline(always)]
+pub(super) fn initial_bucket(hash: u64, mask: usize) -> usize {
+    (hash ^ (hash >> 32)) as usize & mask
+}
+
 #[inline(never)]
 pub(super) unsafe fn get<const ABSENT: bool, const SITE: bool, const LAZY_HASH: bool>(
     dir: *const u8,
@@ -12,7 +20,10 @@ pub(super) unsafe fn get<const ABSENT: bool, const SITE: bool, const LAZY_HASH: 
     memo: *const site_memo::ReadSiteMemo,
 ) -> f64 {
     let table = ((*r).probe & !PROBE_FLAGS) as *const KeyIndex;
-    let b = site_key_hash::<LAZY_HASH>(key_bits, hash) as usize & (*table).mask as usize;
+    let b = initial_bucket(
+        site_key_hash::<LAZY_HASH>(key_bits, hash),
+        (*table).mask as usize,
+    );
     let pos = *KeyIndex::buckets(table).add(b);
     if pos == u32::MAX {
         return if SITE {
@@ -74,7 +85,8 @@ pub(super) unsafe fn continued<const ABSENT: bool, const SITE: bool, const LAZY_
     let list = crate::array::array_elements_ptr((*r).keys as usize as *const _) as *const u64;
     let mask = (*table).mask as usize;
     let slots = KeyIndex::buckets(table);
-    let mut b = (site_key_hash::<LAZY_HASH>(key_bits, hash) as usize).wrapping_add(1) & mask;
+    let mut b =
+        initial_bucket(site_key_hash::<LAZY_HASH>(key_bits, hash), mask).wrapping_add(1) & mask;
     let (pos, load) = loop {
         let pos = *slots.add(b);
         if pos == u32::MAX {

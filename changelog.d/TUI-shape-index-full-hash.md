@@ -1,0 +1,1 @@
+- Use both halves of property hashes in shape-owned key indexes, reducing collisions without changing key identity or object layouts.

@@ -100,7 +100,7 @@ const NO_LOAD: u32 = u32::MAX;
 const PROBE_FLAGS: u64 = 7 | PROBE_CHECKED | PROBE_ATTRS;
 
 /// A derived key index: `count` alias words, then `mask + 1` buckets of key
-/// positions, `u32::MAX` = empty, open addressing from `hash & mask`. The
+/// positions, `u32::MAX` = empty, open addressing from the folded full hash. The
 /// alias word of a [`TEXT_ENTRY`] position holds its text's hash, of a
 /// [`SLOT_ENTRY`] position its inline slot.
 ///
@@ -601,7 +601,7 @@ unsafe fn derive_word(rec: &ShapeRecord) -> u64 {
         let Some(h) = h else {
             continue;
         };
-        let mut b = *h as usize & (buckets - 1);
+        let mut b = indexed::initial_bucket(*h, buckets - 1);
         while *slots.add(b) != u32::MAX {
             b = (b + 1) & (buckets - 1);
         }
@@ -778,7 +778,7 @@ unsafe fn own_entry(r: *mut ShapeRecord, key_bits: u64, hash: u64) -> Result<(u3
     let list = crate::array::array_elements_ptr((*r).keys as usize as *const _) as *const u64;
     let mask = (*table).mask as usize;
     let slots = KeyIndex::buckets(table);
-    let mut b = hash as usize & mask;
+    let mut b = indexed::initial_bucket(hash, mask);
     loop {
         let pos = *slots.add(b);
         if pos == u32::MAX {
@@ -1783,7 +1783,7 @@ unsafe fn list_position(
     }
     let mask = (*table).mask as usize;
     let slots = KeyIndex::buckets(table);
-    let mut b = hash as usize & mask;
+    let mut b = indexed::initial_bucket(hash, mask);
     loop {
         let pos = *slots.add(b);
         if pos == u32::MAX {
