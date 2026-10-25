@@ -1799,3 +1799,7 @@ mod tostring_tests;
 #[cfg(test)]
 #[path = "error_header_tests.rs"]
 mod header_unification_tests;
+
+#[cfg(test)]
+#[path = "error_module_frame_label_tests.rs"]
+mod module_frame_label_tests;

@@ -1,0 +1,1 @@
+Fixed `Error.stack` for the top level of a CommonJS module: the frame now reads `at Object.<anonymous> (/abs/path.js)` instead of `at __perry_cjs_factory (<anonymous>)`, so libraries that parse the file name out of the caller frame (e.g. fastify-plugin) no longer throw.
