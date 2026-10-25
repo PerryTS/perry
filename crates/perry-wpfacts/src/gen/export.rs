@@ -439,31 +439,46 @@ impl<'a> Gen<'a> {
             if self.ret_top.contains(&f) {
                 continue;
             }
+            // A marker of no family of this run (the result's own marker,
+            // standing for what crossed into it, MRK) is another call's
+            // value: a parameter of `f` it stands for was this run's
+            // argument in some other call, not this one's. It says no more
+            // than ⊤ only when everything it stands for reads as ⊤.
+            let frame = self.m.nodes[ret as usize].frame;
+            let held = self.m.nodes[ret as usize].pts.to_sorted();
+            let foreign = held.iter().any(|&t| {
+                self.m.is_arg_marker(t)
+                    && (self.m.fam_home(t) == 0 || self.m.fam_home(t) != frame)
+                    && !self
+                        .m
+                        .marker_members(t)
+                        .iter()
+                        .all(|&x| self.m.marker_is_top(x))
+            });
             // An argument marker reads as the markers it stands for (DECISIONS 44).
-            let toks: Vec<Tok> = self.m.nodes[ret as usize]
-                .pts
-                .to_sorted()
+            let toks: Vec<Tok> = held
                 .into_iter()
                 .flat_map(|t| self.m.marker_members(t))
                 .collect();
-            let ok = toks.iter().all(|&t| match self.m.toks[t as usize] {
-                _ if self.m.param_marker.get(&t).is_some_and(|&(g, _)| g == f) => true,
-                // An escaped marker reads as ⊤ (DECISIONS 42), of any
-                // contract function: another unit's value.
-                _ if self.m.marker_is_top(t) => true,
-                // An unknown value or a builtin function in the result is
-                // the caller's ⊤, nothing of this unit leaves through it.
-                TokKind::Top | TokKind::BuiltinFn => true,
-                // An instance of a contract class: given out (`give_out`).
-                TokKind::Obj(tm, _) if self.contract_class(tm) => true,
-                // Another unit's instance (a stand-in): forwarded with that
-                // unit's contract (`fn_contract_of`), its proof (§17.10 4).
-                TokKind::Obj(tm, _) if self.stand_in_cc.contains_key(&tm) => !self
-                    .unit_in
-                    .is_some_and(|u| u.broken(&self.m.tmpls[tm as usize].display)),
-                TokKind::Obj(tm, _) => self.literal_ok(tm),
-                _ => false,
-            });
+            let ok = !foreign
+                && toks.iter().all(|&t| match self.m.toks[t as usize] {
+                    _ if self.m.param_marker.get(&t).is_some_and(|&(g, _)| g == f) => true,
+                    // An escaped marker reads as ⊤ (DECISIONS 42), of any
+                    // contract function: another unit's value.
+                    _ if self.m.marker_is_top(t) => true,
+                    // An unknown value or a builtin function in the result is
+                    // the caller's ⊤, nothing of this unit leaves through it.
+                    TokKind::Top | TokKind::BuiltinFn => true,
+                    // An instance of a contract class: given out (`give_out`).
+                    TokKind::Obj(tm, _) if self.contract_class(tm) => true,
+                    // Another unit's instance (a stand-in): forwarded with that
+                    // unit's contract (`fn_contract_of`), its proof (§17.10 4).
+                    TokKind::Obj(tm, _) if self.stand_in_cc.contains_key(&tm) => !self
+                        .unit_in
+                        .is_some_and(|u| u.broken(&self.m.tmpls[tm as usize].display)),
+                    TokKind::Obj(tm, _) => self.literal_ok(tm),
+                    _ => false,
+                });
             if !ok {
                 self.ret_top.insert(f);
                 self.m.sink_node(ret, r);
