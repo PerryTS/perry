@@ -2915,6 +2915,25 @@ fn a_boundary_parameters_field_read_in_a_helper_is_proven() {
 }
 
 #[test]
+fn a_helpers_result_never_holds_another_helpers_argument() {
+    // `H.h1` and `H.h2` both store their argument into one cell, whose
+    // marker stands for both; `h1` returns its own argument. The cell's
+    // marker never enters `h1`'s run as `h2`'s family, so `a`'s result is
+    // `a`'s argument alone: the store through `both`'s result reaches the
+    // `Box`, not the `Crate`.
+    let pf = both(
+        "const keep: any = { p: null }; const H = { h1(p: any) { keep.p = p; return p; }, h2(p: any) { keep.p = p; return p; } }; function a(p: any) { return H.h1(p); } function b(p: any) { return H.h2(p); } b(c); return a(o);",
+        "import { both } from './b'; class Box { v: any = 1; } class Crate { v: any = 1; } const r = both(new Box(), new Crate()); r.v = 'x'; console.log(r.v);",
+    );
+    assert!(!field(tmpl(&pf, "Box"), "v").readonly, "{}", pf.dump_text());
+    assert!(
+        field(tmpl(&pf, "Crate"), "v").readonly,
+        "{}",
+        pf.dump_text()
+    );
+}
+
+#[test]
 fn what_a_cell_holds_is_used_as_its_members() {
     // `f` stores its argument into a cell; `g` hands the cell's value to
     // unknown code. The cell holds its own marker with `f`'s argument as a
@@ -2927,6 +2946,24 @@ fn what_a_cell_holds_is_used_as_its_members() {
     let pf = units_of(&[("b", b), ("m", m)]);
     assert!(!verdicts(&pf, "v").is_empty(), "{}", pf.dump_text());
     assert!(!proven(&pf, "v"), "{}", pf.dump_text());
+}
+
+#[test]
+fn a_written_parameter_is_each_callers_own() {
+    // `first` writes its parameter (`n = id(n)`): its binding holds the
+    // marker, the variable what `id` returns of it, a token of its run. So
+    // `top` returns its own argument: the store through its result is a
+    // store into the caller's `Box`, not into the `Crate` passed to `top2`.
+    let b = format!("{JOIN}function id(x: any) {{ S.last = 0; return x; }}\nfunction first(n: any) {{ S.last = 1; n = id(n); return n; }}\nexport function top(x: any) {{ S.last = 2; return first(x); }}\nexport function top2(x: any) {{ S.last = 3; return first(x); }}");
+    let b = b.as_str();
+    let m = "import { top, top2 } from './b'; class Box { v: any = 1; } class Crate { v: any = 2; } function main() { const o = new Box(); const c = new Crate(); top(o).v = 'x'; top2(c); console.log(o.v, c.v); } main(); main();";
+    let pf = units_of(&[("b", b), ("m", m)]);
+    assert!(!field(tmpl(&pf, "Box"), "v").readonly, "{}", pf.dump_text());
+    assert!(
+        field(tmpl(&pf, "Crate"), "v").readonly,
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// Pts entries of the largest unit when `n` exported functions store their
