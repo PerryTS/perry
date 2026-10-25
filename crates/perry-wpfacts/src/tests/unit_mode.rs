@@ -3391,3 +3391,28 @@ fn another_units_json_of_a_parameter_runs_to_json_and_ends() {
         .expect("w literal");
     assert!(!field(w, "n").readonly, "{}", pf.dump_text());
 }
+
+#[test]
+fn a_published_literal_field_may_hold_another_units_layout() {
+    // ts.Diagnostics (diagnosticInformationMap.generated.ts): `diag()`'s
+    // result layout is its unit's; the `Diagnostics` literal of another
+    // unit holds such records in its fields. Forwarded with the owner's
+    // contract (DECISIONS 79), nothing of the literal's unit leaves through
+    // them: the field is described by that layout, the layout stays whole
+    // and a reader of `Diagnostics.A.code` reads its kind. Was: the field
+    // was sunk, the records escaped, the census broke the layout and every
+    // round sank it again.
+    let b = "function diag(code: number, message: string) { return { code, message }; } export const Diagnostics = { A: diag(1, 'a'), B: diag(2, 'b') };";
+    let m = "import { Diagnostics } from './b'; function main() { const d = Diagnostics.A; console.log(d.code + 1, Diagnostics.B.message); } main();";
+    let pf = units_of(&[("b", b), ("m", m)]);
+    assert!(
+        !literal_broken(&pf, &["code", "message"]),
+        "{}",
+        pf.dump_text()
+    );
+    for k in ["code", "message"] {
+        for s in pf.sites.iter().filter(|s| s.key == k) {
+            assert!(!s.top, ".{k} reads ⊤\n{}", pf.dump_text());
+        }
+    }
+}
