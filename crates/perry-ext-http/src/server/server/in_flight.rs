@@ -1,24 +1,7 @@
-// ============================================================================
-// #4728 — in-flight (async-handler) request tracking.
-//
-// A `(req, res) => { … }` handler that finishes the response on a *later*
-// event-loop tick — an outbound `fetch()`, a `setTimeout`, any `await`
-// chain that calls `res.end()` from a microtask/timer/I/O resolution —
-// returns to `process_pending` before `res.end()` has run. Pre-#4728,
-// `process_pending` then synthesized a default empty 200 and freed the
-// per-request handles immediately, so the real `res.end(...)` later fired
-// on a dropped handle (no-op) and the client saw an empty/closed reply.
-//
-// Fix: when the handler returns without ending the response, park the
-// request here instead of synthesizing+freeing. The reaper runs each pump
-// tick (the codegen-emitted main loop keeps ticking while the server is a
-// live handle, draining timers / fetch resolutions / microtasks), and
-// finalizes a parked request once `res.end()` has flushed the real
-// response — or, as a safety net mirroring Node's `requestTimeout`,
-// synthesizes the default response and frees the handles if the handler
-// never responds within the grace window so a buggy handler can't pin a
-// connection (and its request handles) forever.
-// ============================================================================
+// Async responses remain owned here until res.end() or transport teardown.
+// requestTimeout belongs to incomplete request decoding, never response age.
+// The retirement grace below only protects a dropped response handle from a
+// suspended handler's late write; it starts when that response is retired.
 
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -27,9 +10,7 @@ use perry_ffi::get_handle;
 
 use crate::server::request::close_incoming_message;
 use crate::server::response::ServerResponse;
-use crate::server::server::{
-    synthesize_default_response_if_needed, HttpPendingRequest, HttpServer,
-};
+use crate::server::server::{HttpPendingRequest, HttpServer};
 
 /// A request whose handler returned before finishing the response.
 pub(crate) struct InFlightRequest {
@@ -38,16 +19,20 @@ pub(crate) struct InFlightRequest {
     pub(crate) server_handle: i64,
     pub(crate) request_handle: i64,
     pub(crate) response_handle: i64,
-    /// Mirrors `HttpPendingRequest::skip_default_response`: when true the
-    /// response is driven elsewhere (e.g. an upgraded/stream path) so the
-    /// reaper must not synthesize a default on timeout.
-    skip_default_response: bool,
-    /// Grace deadline. Past this, synthesize the default response (unless
-    /// `skip_default_response`) and free the handles regardless.
-    pub(crate) deadline: Instant,
+    /// Quarantine duration after a peer/force close with an unfinished
+    /// response. It is not an active-response expiration deadline.
+    retire_grace: Duration,
     /// The agent whose pump parked it — the server's owner (#11433). Only that
     /// agent reaps it, fires its `'drain'` listeners, or is kept alive by it.
     owner_agent: u64,
+}
+
+impl InFlightRequest {
+    pub(super) fn recycle_deadline(&self) -> Instant {
+        Instant::now()
+            .checked_add(self.retire_grace)
+            .unwrap_or_else(Instant::now)
+    }
 }
 
 pub(crate) static IN_FLIGHT: Mutex<Vec<InFlightRequest>> = Mutex::new(Vec::new());
@@ -102,11 +87,9 @@ pub(crate) fn has_in_flight_requests() -> bool {
 
 /// Finalize parked requests whose handler has now called `res.end()` (the
 /// common case — fetch/timer/await resolved on a later tick), or whose
-/// grace deadline has elapsed (a handler that never responds). Called each
-/// pump tick. #4728.
+/// peer has disconnected. An unfinished live response has no age cutoff.
 pub(crate) fn reap_in_flight_requests() {
-    // (request_handle, response_handle, needs_synthesize, recycle_deadline)
-    let mut to_finalize: Vec<(i64, i64, bool, Option<Instant>)> = Vec::new();
+    let mut to_finalize: Vec<(i64, i64, Option<Instant>)> = Vec::new();
     let mut drain_listeners: Vec<Vec<i64>> = Vec::new();
     {
         let mut guard = match IN_FLIGHT.lock() {
@@ -116,7 +99,6 @@ pub(crate) fn reap_in_flight_requests() {
         if guard.is_empty() {
             return;
         }
-        let now = Instant::now();
         let agent = perry_ffi::agent_post::current_agent();
         guard.retain(|e| {
             if e.owner_agent != agent {
@@ -138,31 +120,9 @@ pub(crate) fn reap_in_flight_requests() {
             // be flushed, so don't pin the event loop for the rest of the
             // grace window.
             let peer_gone = crate::server::response::stream_receiver_gone(e.response_handle);
-            let expired = now >= e.deadline;
-            if ended || expired || peer_gone {
-                // Only synthesize when we're giving up on a handler
-                // that never ended the response — not when it ended
-                // it itself, never for skip-default paths, and never
-                // when the peer is gone (nothing to deliver to).
-                let needs_synth = !ended && !e.skip_default_response && !peer_gone;
-                // If the response will NOT be ended after finalize (it wasn't
-                // ended and we're not synthesizing it to ended — the peer-gone
-                // and not-ended-skip-default paths), its `writable_ended` stays
-                // unset, so a handler suspended on a slow `await` could resume
-                // later and write through the bare id. Defer recycling that id
-                // until the request's grace deadline so the late write lands on
-                // an empty slot for the whole window, not a recycled response.
-                let recycle_deadline = if ended || needs_synth {
-                    None
-                } else {
-                    Some(e.deadline)
-                };
-                to_finalize.push((
-                    e.request_handle,
-                    e.response_handle,
-                    needs_synth,
-                    recycle_deadline,
-                ));
+            if ended || peer_gone {
+                let recycle_deadline = (!ended).then(|| e.recycle_deadline());
+                to_finalize.push((e.request_handle, e.response_handle, recycle_deadline));
                 false
             } else {
                 true
@@ -172,13 +132,8 @@ pub(crate) fn reap_in_flight_requests() {
     for ls in drain_listeners {
         crate::server::request::emit_no_arg_to_listeners(&ls);
     }
-    // Finalize outside the lock — `synthesize_default_response_if_needed`
-    // and `drop_handle` don't touch `IN_FLIGHT`, but keeping them off the
-    // lock avoids any future re-entrancy surprise.
-    for (req, res, needs_synth, recycle_deadline) in to_finalize {
-        if needs_synth {
-            synthesize_default_response_if_needed(res);
-        }
+    // Retire outside the queue borrow; teardown can deliver close callbacks.
+    for (req, res, recycle_deadline) in to_finalize {
         finalize_request_handles_deferred(req, res, recycle_deadline);
     }
 }
@@ -192,28 +147,34 @@ pub(crate) fn finalize_or_park_request(pending: &HttpPendingRequest) {
         finalize_request_handles(pending.request_handle, pending.response_handle);
         return;
     }
-    // Grace window mirrors Node's `requestTimeout` (default 300s; `0` =
-    // disabled, so fall back to the default rather than parking forever).
+    // Keep the existing late-write retirement grace. Disabled receiving
+    // timeouts still use a finite quarantine after explicit teardown.
     let grace_ms = get_handle::<HttpServer>(pending.server_handle)
         .map(|s| s.request_timeout)
         .filter(|t| *t > 0.0)
         .unwrap_or(300_000.0);
-    let deadline = Instant::now() + Duration::from_millis(grace_ms as u64);
+    let retire_grace = Duration::from_millis(grace_ms as u64);
     if let Ok(mut guard) = IN_FLIGHT.lock() {
         guard.push(InFlightRequest {
             server_handle: pending.server_handle,
             request_handle: pending.request_handle,
             response_handle: pending.response_handle,
-            skip_default_response: pending.skip_default_response,
-            deadline,
+            retire_grace,
             owner_agent: perry_ffi::agent_post::current_agent(),
         });
     } else {
-        // Lock poisoned — fall back to the old immediate behavior so we
-        // never leak the handles.
-        if !pending.skip_default_response {
-            synthesize_default_response_if_needed(pending.response_handle);
+        // An internal queue failure destroys the actual response connection;
+        // it must not invent a successful response for an unfinished handler.
+        let connection = get_handle::<ServerResponse>(pending.response_handle)
+            .and_then(|response| response.turnloop.map(|(connection, _)| connection));
+        if let Some(connection) = connection {
+            crate::server::turnloop_route::destroy(&connection.root());
         }
-        finalize_request_handles(pending.request_handle, pending.response_handle);
+        let deadline = Instant::now().checked_add(retire_grace);
+        finalize_request_handles_deferred(
+            pending.request_handle,
+            pending.response_handle,
+            deadline,
+        );
     }
 }
