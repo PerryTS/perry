@@ -881,7 +881,7 @@ fn take_census(label: &str, pass1: Option<Vec<usize>>) {
         "perry_gc_census": 1,
         "seq": seq,
         "label": label,
-        "pid": std::process::id(),
+        "pid": crate::os::current_process_id(),
         "thread_id": crate::agent::current_thread_native_id(),
         "agent_id": crate::agent::current_agent(),
         "elapsed_ms": started.elapsed().as_secs_f64() * 1000.0,
