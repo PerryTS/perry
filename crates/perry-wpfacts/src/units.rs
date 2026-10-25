@@ -747,7 +747,7 @@ pub(crate) struct Published {
     /// it (their keys, sorted). A reader joins the other units' writes.
     /// Grouped by contract (DECISIONS 113): every unit may write one cell
     /// (`global:*`), and a reader takes each distinct write once.
-    pub(crate) cells: FxHashMap<String, Vec<(ValueContract, Vec<String>)>>,
+    pub(crate) cells: FxHashMap<String, Vec<CellWrite>>,
     /// A unit solve went over the bound: what it writes is unknown, so
     /// every cell may hold an unknown value.
     pub(crate) cells_top: bool,
@@ -1535,26 +1535,27 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
         input.stores = stores;
         // Design §17.16 (b): the cells, from every unit's latest solve. The
         // units reading a cell whose writes changed are solved again.
-        let mut cells: FxHashMap<String, Vec<(ValueContract, Vec<String>)>> = FxHashMap::default();
+        let mut cells: FxHashMap<String, Vec<CellWrite>> = FxHashMap::default();
         for (si, s) in solves.iter().enumerate() {
             let u = per_unit[si].as_ref().expect("every unit solved");
             for (k, c) in &u.cells_out {
                 let v = cells.entry(k.clone()).or_default();
-                let i = match v.iter().position(|(x, _)| x == c) {
+                let d = digest(c);
+                let i = match v.iter().position(|w| w.digest == d && w.c == *c) {
                     Some(i) => i,
                     None => {
-                        v.push((c.clone(), Vec::new()));
+                        v.push(CellWrite::new(c.clone(), d));
                         v.len() - 1
                     }
                 };
-                v[i].1.push(s.key.clone());
+                v[i].writers.push(s.key.clone());
             }
         }
         for v in cells.values_mut() {
-            for (_, ws) in v.iter_mut() {
-                ws.sort_unstable();
+            for w in v.iter_mut() {
+                w.writers.sort_unstable();
             }
-            v.sort_by(|x, y| x.1.cmp(&y.1));
+            v.sort_by(|x, y| x.writers.cmp(&y.writers));
         }
         let cells_top = per_unit.iter().flatten().any(|u| u.stats.aborted);
         // A unit is solved again when what it READS of a cell changed: the
@@ -1562,16 +1563,15 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
         // DECISIONS 89), an unknown one or a unit over the bound being ⊤
         // that absorbs every other unknown. A reader forwarding the ⊤ it
         // was seeded with changes no other reader's view.
-        let view = |cells: &FxHashMap<String, Vec<(ValueContract, Vec<String>)>>,
-                    top: bool,
-                    me: &str,
-                    k: &str| {
-            let others: Vec<&ValueContract> = cells
+        // DECISIONS 169: the view is the writes' digests (taken once per
+        // round, `CellWrite`), not their contracts cloned and sorted per
+        // reader: AWFY rounds 2-4 viewed 180K cell reads, 18.8 s of 26.6.
+        let view = |cells: &FxHashMap<String, Vec<CellWrite>>, top: bool, me: &str, k: &str| {
+            let others: Vec<&CellWrite> = cells
                 .get(k)
                 .into_iter()
                 .flatten()
-                .filter(|(_, ws)| !(ws.len() == 1 && ws[0] == me))
-                .map(|(c, _)| c)
+                .filter(|w| !(w.writers.len() == 1 && w.writers[0] == me))
                 .collect();
             let pure = |c: &ValueContract| {
                 c.unknown
@@ -1582,22 +1582,13 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
                     && c.program.is_empty()
                     && c.arrays.is_empty()
             };
-            let top = top || others.iter().any(|c| pure(c));
-            let mut v: Vec<ValueContract> = others
+            let top = top || others.iter().any(|w| pure(&w.c));
+            let mut v: Vec<u64> = others
                 .into_iter()
-                .filter(|c| !pure(c))
-                .map(|c| {
-                    let mut c = c.clone();
-                    if top {
-                        c.unknown = false;
-                        c.prim = 0;
-                    }
-                    c
-                })
+                .filter(|w| !pure(&w.c))
+                .map(|w| if top { w.top } else { w.digest })
                 .collect();
-            // Ordered by digest, equal ones dropped: two views of the same
-            // contracts compare equal (a digest tie only re-solves).
-            v.sort_by_key(digest);
+            v.sort_unstable();
             v.dedup();
             (top, v)
         };
@@ -2029,6 +2020,34 @@ impl<T: std::hash::Hash> Digested<T> {
     pub(crate) fn new(c: T) -> Self {
         let digest = digest(&Some(&c));
         Digested { c, digest }
+    }
+}
+
+/// One distinct write of a cell (design §17.16 (b)): its contract and the
+/// units writing it (their keys, sorted). DECISIONS 169: its digests are
+/// taken once, when the round groups the writes (`digest`; `top`: with
+/// the unknown value and the primitives dropped, as a reader whose view is
+/// ⊤ sees it), so a reader's view of the cell compares numbers, as a
+/// layout read does (DECISIONS 166).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct CellWrite {
+    pub digest: u64,
+    pub top: u64,
+    pub writers: Vec<String>,
+    pub c: ValueContract,
+}
+
+impl CellWrite {
+    fn new(c: ValueContract, digest: u64) -> Self {
+        let mut t = c.clone();
+        t.unknown = false;
+        t.prim = 0;
+        CellWrite {
+            digest,
+            top: self::digest(&t),
+            writers: Vec::new(),
+            c,
+        }
     }
 }
 
