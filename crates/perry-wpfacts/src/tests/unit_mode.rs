@@ -3036,6 +3036,25 @@ fn a_shared_cell_holds_one_marker() {
 }
 
 #[test]
+fn a_primitive_method_on_a_receiver_beside_top_is_that_top() {
+    // `x` is another unit's value: ⊤ with every primitive kind beside it.
+    // `x.trim()` is a call of an unknown function value (the arguments
+    // escape, the result is ⊤); the primitive method's summary of the same
+    // call says nothing more. Its container of primitives would stand
+    // beside the literal in `f`'s result and, no literal shape, sink the
+    // result: the literal escaped for no reason.
+    let b = "export function f(x: any, c: boolean) { const r = x.trim(); const o = { v: 1 }; return c ? r : o; }";
+    let m = "import { f } from './b'; console.log(f((globalThis as any).u, true).v);";
+    let pf = units_of(&[("b", b), ("m", m)]);
+    let lit = pf
+        .templates
+        .iter()
+        .find(|t| t.display.starts_with("b.ts:__AnonShape"))
+        .unwrap_or_else(|| panic!("{}", pf.dump_text()));
+    assert!(lit.escape.is_none(), "{}", pf.dump_text());
+}
+
+#[test]
 fn a_written_parameter_without_a_summary_is_each_callers_own() {
     // `up` reads `arguments`, so it has no summary: one body for every call,
     // a run of its own whose parameters get bindings the calls write. It
