@@ -304,6 +304,21 @@ unsafe fn construct_function_impl(
         if let Some(worker) = worker_threads_construct(&module, &method, args_ptr, args_len) {
             return worker;
         }
+        // `new dns.Resolver()` / `new dp.Resolver()` where the constructor was read
+        // off the namespace as a value (`const dp = require("dns/promises")`).
+        if matches!(module.as_str(), "dns" | "dns/promises") && method == "Resolver" {
+            let mut arr = crate::array::js_array_alloc(args_len as u32);
+            if !args_ptr.is_null() {
+                for i in 0..args_len {
+                    arr = crate::array::js_array_push_f64(arr, *args_ptr.add(i));
+                }
+            }
+            if let Some(resolver) =
+                crate::dns::dispatch_export(module == "dns/promises", "Resolver", arr as i64)
+            {
+                return resolver;
+            }
+        }
         if module == "zlib"
             && matches!(
                 method.as_str(),
