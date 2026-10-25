@@ -348,7 +348,7 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
         let fields = t
             .fields
             .iter()
-            .filter(|f| f.definite && f.data_field)
+            .filter(|f| (f.definite || f.declared) && f.data_field)
             .filter_map(|f| {
                 Some(FactsField {
                     key: f.key.clone(),
@@ -357,6 +357,7 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
                     kind_mask: f.kind.mask(),
                     ta_stable: f.ta_stable,
                     ta_kind: f.ta_kind,
+                    declared: f.declared,
                 })
             })
             .collect();

@@ -480,7 +480,6 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
     let c = m.calls[call as usize].clone();
     let elems = m.field_any(t);
     match (what, name) {
-        ("CjsMain" | "CjsRecord", _) => {}
         ("Iterator", _) => iterator_method(m, t, name, call),
         // Iterables or plain results, not iterators: no `next`/`return`/
         // `throw` (a call throws).

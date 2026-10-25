@@ -173,6 +173,10 @@ pub struct Template {
     pub birth_keys: Vec<Atom>,
     /// Birth keys that are definitely present at birth.
     pub definite: Vec<Atom>,
+    /// Birth keys the class declares (`ClassFieldOrigin::Declared`): known
+    /// slots, absent until stored (each read pairs its load with the hole
+    /// compare).
+    pub declared: Vec<Atom>,
     /// Parent template (class `extends`), when statically known.
     pub parent: Option<TmplId>,
     /// The constructor function of a class template (None: implicit ctor).
@@ -793,8 +797,17 @@ pub struct Model {
     pub cjs_union: NodeId,
     pub cjs_unknown: NodeId,
     pub cjs_paths: FxHashMap<Atom, NodeId>,
-    /// `require.cache` / `require.extensions` of [`BuiltinNs::Require`].
+    /// `require.cache` / `require.extensions` of [`BuiltinNs::Require`]:
+    /// the runtime's own objects, opaque, when no CommonJS support module
+    /// installs the program's (`cjs_cache`, `cjs_ext` hold them as well).
     pub require_parts: Option<(Tok, Tok)>,
+    /// What `require.cache` / `require.extensions` / `require.main` are at
+    /// run time: the support module's cache and the extensions the runtime
+    /// returned to it (`__perry_runtime.cjsInstall`), the runtime's own
+    /// objects otherwise, and the main record or `undefined`.
+    pub cjs_cache: NodeId,
+    pub cjs_ext: NodeId,
+    pub cjs_main: NodeId,
     /// Fields of the global object under program-owned keys.
     pub global_fields: Vec<(Atom, NodeId)>,
     /// A ⊤ value may be the global object: it reached unmodeled code, or
@@ -1695,6 +1708,7 @@ impl Model {
             display,
             birth_keys: Vec::new(),
             definite: Vec::new(),
+            declared: Vec::new(),
             parent: None,
             ctor: None,
             native_parent: None,
@@ -1724,6 +1738,7 @@ impl Model {
             display,
             birth_keys: Vec::new(),
             definite: Vec::new(),
+            declared: Vec::new(),
             parent: None,
             ctor: None,
             native_parent: None,

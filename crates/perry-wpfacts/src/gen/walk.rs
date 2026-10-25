@@ -106,14 +106,20 @@ impl<'a> Gen<'a> {
         let Some(c) = module.classes.iter().find(|c| c.name == name) else {
             return;
         };
+        let mut declared = Vec::new();
         for f in &c.fields {
             if f.is_private || f.key_expr.is_some() {
                 continue;
             }
             let a = self.m.atom(&f.name);
             push_unique(&mut keys, a);
-            push_unique(&mut definite, a);
+            if f.origin == perry_hir::ClassFieldOrigin::Declared {
+                push_unique(&mut declared, a);
+            } else {
+                push_unique(&mut definite, a);
+            }
         }
+        self.m.tmpls[tm as usize].declared = declared;
         if let Some(ph) = self.ctor_phase.get(&tm).cloned() {
             for k in &ph.assigned_order {
                 let a = self.m.atom(k);

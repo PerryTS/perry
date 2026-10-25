@@ -218,51 +218,45 @@ impl<'a> Gen<'a> {
                     self.m.cons(value, Cons::CjsPublish { dst: registry });
                     self.m.edge(value, self.cjs_registry);
                 }
+                // The partial publication hands over the module's factory:
+                // the runtime's path entry keeps it and calls it, with no
+                // receiver and no arguments, when the module is required
+                // again after its cache entry was deleted.
+                if method == "registerPathModulePartial" {
+                    if let Some(factory) = arg(2) {
+                        let _ = self.call_value(factory, ThisArg::Undef, vec![], vec![]);
+                    }
+                }
                 self.prim_node(prim::UNDEF)
             }
-            "newCjsModuleRecord" => {
-                // `CJS_MODULE_RECORD`: a fresh record per call whose fields
-                // are the arguments (exports, filename, dir, children,
-                // parent, paths) plus the marker, `loaded` and `require`.
-                let (_, record) = self.bobj(fx.module, "CjsRecord");
-                let fields: [(&str, Option<usize>, u16); 10] = [
-                    ("exports", Some(0), prim::UNDEF),
-                    ("__perry_cjs_record", None, prim::BOOL),
-                    ("id", Some(1), prim::UNDEF),
-                    ("path", Some(2), prim::UNDEF),
-                    ("filename", Some(1), prim::UNDEF),
-                    ("loaded", None, prim::BOOL),
-                    ("children", Some(3), prim::UNDEF),
-                    ("parent", Some(4), prim::UNDEF),
-                    ("paths", Some(5), prim::UNDEF),
-                    ("require", None, prim::UNDEF),
-                ];
-                for (name, from, fallback) in fields {
-                    let value = match from.and_then(arg) {
-                        Some(v) => v,
-                        None => self.prim_node(fallback),
-                    };
-                    let key = self.m.atom(name);
+            "cjsInstall" => {
+                // The CommonJS support module's cache and main record become
+                // the runtime's `Module._cache` / `createRequire().cache` and
+                // `process.mainModule`. Reads through `createRequire().cache`
+                // are modelled (`builtins`, `Require.cache`); the runtime also
+                // caches every record a computed specifier loads, under keys
+                // it computes. The main record is what `process.mainModule`
+                // reads (`builtins`). The result is `require.extensions`.
+                if let Some(cache) = arg(0) {
+                    self.m.edge(cache, self.m.cjs_cache);
+                    let registry = self.cjs_registry;
                     self.store(
                         fx,
-                        record,
-                        Key::Named(key),
-                        value,
-                        "cjs record".into(),
+                        cache,
+                        Key::Any,
+                        registry,
+                        "records the runtime caches".into(),
                         None,
                         false,
                     );
                 }
-                if let Some(factory) = arg(6) {
-                    self.cjs_factory_slot(fx, record, factory);
+                if let Some(main) = arg(1) {
+                    self.m.edge(main, self.m.cjs_main);
                 }
-                record
-            }
-            "setCjsFactory" => {
-                if let (Some(record), Some(factory)) = (arg(0), arg(1)) {
-                    self.cjs_factory_slot(fx, record, factory);
-                }
-                self.prim_node(prim::UNDEF)
+                crate::builtins::require_parts(&mut self.m);
+                let out = self.tmp("cjs-extensions");
+                self.m.edge(self.m.cjs_ext, out);
+                out
             }
             "linkPathModuleParent" => {
                 // The helper links an existing record through require.cache;
@@ -270,6 +264,22 @@ impl<'a> Gen<'a> {
                 // Keep the record in the dynamic loader summary.
                 if let Some(record) = arg(0) {
                     self.m.edge(record, self.cjs_registry);
+                    // The runtime links the requiring module's cached record,
+                    // or a stand-in object it makes for a parent outside the
+                    // cache (`module_require.rs` `link_parent`).
+                    let pa = self.m.atom("parent");
+                    let (_, stand_in) = self.bobj(fx.module, "CjsParent");
+                    let registry = self.cjs_registry;
+                    self.m.edge(registry, stand_in);
+                    self.store(
+                        fx,
+                        record,
+                        Key::Named(pa),
+                        stand_in,
+                        "runtime parent link".into(),
+                        None,
+                        false,
+                    );
                 }
                 self.prim_node(prim::UNDEF)
             }
@@ -305,15 +315,6 @@ impl<'a> Gen<'a> {
                 self.m.add_prim(out, prim::UNDEF);
                 out
             }
-            "getCjsMainModule" => self.cjs_main_value(fx.module),
-            "setCjsMainModule" => {
-                let main = self.cjs_main_value(fx.module);
-                if let Some(record) = arg(0) {
-                    self.m.edge(record, main);
-                    self.to_sink(record, "CJS main record published to process.mainModule");
-                }
-                self.prim_node(prim::UNDEF)
-            }
             _ => {
                 let why = format!("argument of runtime glue {method}");
                 for n in object.into_iter().chain(args) {
@@ -322,24 +323,6 @@ impl<'a> Gen<'a> {
                 self.m.top_val(&format!("result of runtime glue {method}"))
             }
         }
-    }
-
-    /// A CommonJS record's private factory slot. The slot belongs to the
-    /// record: whatever reaches the record's contents (an escape) reaches the
-    /// factory. The runtime calls it, with no receiver and no arguments, when
-    /// a loaded module is required again after its cache entry was deleted.
-    pub(crate) fn cjs_factory_slot(&mut self, fx: &Fx, record: NodeId, factory: NodeId) {
-        let key = self.m.atom("__perry_cjs_factory");
-        self.store(
-            fx,
-            record,
-            Key::Named(key),
-            factory,
-            "cjs factory slot".into(),
-            None,
-            false,
-        );
-        let _ = self.call_value(factory, ThisArg::Undef, vec![], vec![]);
     }
 
     pub(crate) fn iter_out_node(&mut self, fx: &Fx) -> NodeId {

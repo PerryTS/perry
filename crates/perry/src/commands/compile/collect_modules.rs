@@ -141,6 +141,28 @@ pub(crate) struct PreparedModule {
 }
 
 #[allow(clippy::too_many_arguments)]
+/// The CommonJS support module's path: under the cache dir, named by the
+/// entry, so one program always compiles it at the same path.
+pub(super) fn cjs_support_path(ctx: &mut CompilationContext) -> PathBuf {
+    if let Some(p) = &ctx.cjs_support_path {
+        return p.clone();
+    }
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    ctx.entry_canonical.hash(&mut hasher);
+    // Canonical, like every collected module's key: the file itself is
+    // written only after the walk, so its directory is canonicalized.
+    let dir = ctx.cache_dir.join("synthetic-modules");
+    let _ = std::fs::create_dir_all(&dir);
+    let dir = dir.canonicalize().unwrap_or(dir);
+    let path = dir.join(format!("perry-cjs-{:016x}.mjs", hasher.finish()));
+    // Compiler-generated code: compiled natively wherever the cache dir is
+    // (by default under `node_modules/.cache`).
+    ctx.aot_discovered_modules.insert(path.clone());
+    ctx.cjs_support_path = Some(path.clone());
+    path
+}
+
 fn collect_module_one(
     entry_path: &PathBuf,
     canonical: PathBuf,
@@ -1288,6 +1310,13 @@ fn collect_module_one(
 
     // Process imports and update their resolved paths and module kinds
     for import in &mut hir_module.imports {
+        // The CommonJS support module: written by the walk once the graph is
+        // complete (`walk::write_cjs_support`), so it is not queued here.
+        if import.source == super::cjs_wrap::support::SPECIFIER {
+            import.resolved_path = Some(cjs_support_path(ctx).to_string_lossy().into_owned());
+            import.module_kind = ModuleKind::NativeCompiled;
+            continue;
+        }
         ensure_bunfs_import_resolves(&import.source, &canonical, ctx)?;
         // Resolve TypeScript type-only imports for metadata, but never queue
         // their target as a runtime module. The final graph may already
@@ -1902,6 +1931,7 @@ fn collect_module_one(
                 || import.is_dynamic
                 || import.is_native
                 || import.module_kind != perry_hir::ModuleKind::NativeCompiled
+                || import.source == super::cjs_wrap::support::SPECIFIER
             {
                 continue;
             }

@@ -256,10 +256,12 @@ impl<'a> Gen<'a> {
             }
             self.m.sink_node(n, r);
         }
-        for n in [self.cjs_registry, self.cjs_unknown_path]
-            .into_iter()
-            .chain(self.cjs_main)
-        {
+        for n in [
+            self.cjs_registry,
+            self.cjs_unknown_path,
+            self.m.cjs_cache,
+            self.m.cjs_main,
+        ] {
             self.m
                 .add_top(n, |_| "CommonJS registry shared with other units".into());
             self.m.sink_node(n, r);

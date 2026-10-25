@@ -159,6 +159,7 @@ fn site_tmpl(m: &mut Model, call: CallId, what: &'static str) -> Tok {
         display: format!("{what}@call{site}"),
         birth_keys: vec![],
         definite: vec![],
+        declared: Vec::new(),
         parent: None,
         ctor: None,
         native_parent: None,
@@ -351,13 +352,13 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
         }
         TokKind::Builtin(BuiltinNs::Require) => match name.as_deref() {
             Some("cache") | Some("extensions") => {
-                let (cache, ext) = require_parts(m);
+                require_parts(m);
                 let p = if name.as_deref() == Some("cache") {
-                    cache
+                    m.cjs_cache
                 } else {
-                    ext
+                    m.cjs_ext
                 };
-                m.add_tok(dst, p);
+                m.edge(p, dst);
             }
             Some("main") => {
                 let u = m.cjs_union;
@@ -374,10 +375,18 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
             }
         },
         TokKind::Builtin(BuiltinNs::Process) => {
-            m.add_top(dst, |_| {
-                format!("process.{}", name.as_deref().unwrap_or("[computed]"))
-            });
-            m.add_prim(dst, prim::ALL);
+            // `process.mainModule` is the CommonJS main record the support
+            // module installed (or `undefined`); a computed key may name it.
+            if matches!(name.as_deref(), Some("mainModule") | None) {
+                let main = m.cjs_main;
+                m.edge(main, dst);
+            }
+            if name.as_deref() != Some("mainModule") {
+                m.add_top(dst, |_| {
+                    format!("process.{}", name.as_deref().unwrap_or("[computed]"))
+                });
+                m.add_prim(dst, prim::ALL);
+            }
         }
         TokKind::Builtin(_) => match name.as_deref() {
             Some("prototype") => {
@@ -433,7 +442,6 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                 // The CJS bootstrap main record starts empty. Its actual
                 // fields are supplied by generated wrapper stores, not by
                 // opaque builtin-method summaries.
-                _ if matches!(what, "CjsMain" | "CjsRecord") => m.add_prim(dst, prim::UNDEF),
                 Some("buffer") if what == "TypedArray" => {
                     // B1: the backing buffer is observed (it can be
                     // transferred, detached or wrapped by another view).
@@ -932,6 +940,15 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
 pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
     match ns {
         BuiltinNs::Require => {
+            // `require('module')` is the node:module namespace, which hands
+            // out `Module._cache`: the cache reaches code nothing models.
+            if m.call_lit.get(&call).is_some_and(|a| {
+                matches!(m.atoms[*a as usize].as_str(), "module" | "node:module")
+            }) {
+                let r = m.reason("node:module namespace hands out Module._cache");
+                let cache = m.cjs_cache;
+                m.sink_node(cache, r);
+            }
             // A compiled module named by a constant path: its exports (the
             // registry record's `exports`, as `require.cache[path]` holds).
             let rec = m
@@ -1429,6 +1446,9 @@ pub fn require_parts(m: &mut Model) -> (Tok, Tok) {
     let c = anon_tmpl(m, "require.cache");
     let e = anon_tmpl(m, "require.extensions");
     m.require_parts = Some((c, e));
+    let (cache, ext) = (m.cjs_cache, m.cjs_ext);
+    m.add_tok(cache, c);
+    m.add_tok(ext, e);
     (c, e)
 }
 
@@ -1444,6 +1464,7 @@ fn anon_tmpl(m: &mut Model, what: &'static str) -> Tok {
         display: what.to_string(),
         birth_keys: vec![],
         definite: vec![],
+        declared: Vec::new(),
         parent: None,
         ctor: None,
         native_parent: None,

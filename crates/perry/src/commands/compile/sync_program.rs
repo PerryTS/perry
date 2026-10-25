@@ -45,6 +45,7 @@ const SYNC_NAMES: &[&str] = &[
     // and constructor bodies remain in the Debug walk below.
     "Definition",
     "ConstructorStore",
+    "Declared",
     "ClassMethod",
     "ClassAccessor",
     "ClassStaticBlock",

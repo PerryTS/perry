@@ -160,6 +160,7 @@ pub(crate) fn settle_reservations(
     });
     fields.sort_by_key(|field| match field.origin {
         ClassFieldOrigin::Definition => 0,
+        ClassFieldOrigin::Declared => usize::MAX,
         ClassFieldOrigin::ConstructorStore => order
             .iter()
             .position(|name| *name == field.name)

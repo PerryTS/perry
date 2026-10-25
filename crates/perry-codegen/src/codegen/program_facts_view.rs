@@ -57,6 +57,10 @@ pub struct FactsField {
     /// F6 element kind (`perry_hir::TYPED_ARRAY_KIND_*`) when every typed
     /// array the field holds is an owner of that one kind.
     pub ta_kind: Option<u8>,
+    /// A declared key (`perry_hir::ClassFieldOrigin::Declared`): the slot is
+    /// known, presence is not. A read pairs the load with the hole compare;
+    /// stores stay on the checked route (an add orders the key).
+    pub declared: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]

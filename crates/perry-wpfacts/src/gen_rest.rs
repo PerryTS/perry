@@ -88,7 +88,14 @@ impl<'a> Gen<'a> {
     pub(crate) fn expr_rest(&mut self, fx: &Fx, e: &Expr) -> NodeId {
         let mi = fx.module;
         match e {
-            Expr::NativeModuleRef(m) => self.m.top_val(&format!("native module ref {m}")),
+            Expr::NativeModuleRef(m) => {
+                // node:module as a value hands out `Module._cache`.
+                if m.strip_prefix("node:").unwrap_or(m) == "module" {
+                    let cache = self.m.cjs_cache;
+                    self.to_sink(cache, "node:module names Module._cache");
+                }
+                self.m.top_val(&format!("native module ref {m}"))
+            }
             Expr::NativeMethodCall {
                 module,
                 object,
@@ -672,6 +679,7 @@ impl<'a> Gen<'a> {
                     ),
                     birth_keys: vec![],
                     definite: vec![],
+                    declared: Vec::new(),
                     parent: None,
                     ctor: None,
                     native_parent: None,

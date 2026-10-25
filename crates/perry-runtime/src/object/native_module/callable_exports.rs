@@ -12,7 +12,7 @@ mod module_cjs;
 pub(crate) use builtin_closure_metadata::*;
 use module_cjs::attach_module_cjs_constructor_statics;
 pub(crate) use module_cjs::{
-    module_builtin_modules_value, module_cjs_cache_value, module_cjs_extensions_value,
+    install_module_cjs_cache_value, module_builtin_modules_value, module_cjs_cache_value, module_cjs_extensions_value,
     module_cjs_global_paths_value, module_cjs_path_cache_value, module_cjs_prototype_for_instance,
     module_constants_value,
 };

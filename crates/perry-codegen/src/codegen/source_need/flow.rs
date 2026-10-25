@@ -1039,10 +1039,9 @@ impl<'a> Build<'a> {
                 vec![]
             }
             Expr::Call { callee, args, .. } => self.call(cx, callee, args),
-            // The CommonJS wrapper hands its factory to the runtime: as the
-            // last argument of the record it builds, or (the entry's record)
-            // through setCjsFactory. The runtime keeps it in the record's
-            // private slot (no property) and only ever calls it
+            // The CommonJS wrapper hands its factory to the runtime as the
+            // last argument of the partial publication. The runtime's path
+            // entry keeps it (no property) and only ever calls it
             // (`module_require.rs`), so the factory reaches no sink here. A
             // valued function's return already flows to the untracked-caller
             // sink. Every other argument stays a builtin sink.
@@ -1052,10 +1051,8 @@ impl<'a> Build<'a> {
                 object: None,
                 args,
                 ..
-            } if module == "__perry_runtime"
-                && (method == "setCjsFactory" || method == "newCjsModuleRecord") =>
-            {
-                let factory = if method == "setCjsFactory" { 1 } else { 6 };
+            } if module == "__perry_runtime" && method == "registerPathModulePartial" => {
+                let factory = 2;
                 let detail = format!("NativeMethodCall:{module}.{method}");
                 for (i, a) in args.iter().enumerate() {
                     let v = self.expr(cx, a);

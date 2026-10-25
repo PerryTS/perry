@@ -1145,6 +1145,66 @@ impl LoweringContext {
         class_name
     }
 
+    /// The class of `__perry_declared_keys(k1, k2, ...)`: no constructor, one
+    /// `ClassFieldOrigin::Declared` field per key in the given order
+    /// ([`crate::Class::is_declared_keys_record`]). Content-addressed like
+    /// the anon-shape classes, so equal key lists share one name.
+    pub(crate) fn synthesize_declared_keys_class(&mut self, keys: &[String]) -> String {
+        let shape_key = format!("@declared-keys:{}", keys.join("\u{0}"));
+        if let Some(existing) = self.anon_shape_classes.get(&shape_key) {
+            return existing.clone();
+        }
+        let mut h: u64 = 0xcbf29ce484222325;
+        for b in shape_key.as_bytes() {
+            h ^= *b as u64;
+            h = h.wrapping_mul(0x100000001b3);
+        }
+        let class_name = format!("{}{:016x}", crate::DECLARED_KEYS_CLASS_PREFIX, h);
+        let class_id = self.fresh_class();
+        let fields: Vec<ClassField> = keys
+            .iter()
+            .map(|name| ClassField {
+                origin: crate::ClassFieldOrigin::Declared,
+                name: name.clone(),
+                key_expr: None,
+                ty: Type::Any,
+                init: None,
+                is_private: false,
+                is_readonly: false,
+                decorators: Vec::new(),
+            })
+            .collect();
+        self.register_class(class_name.clone(), class_id);
+        self.pending_classes.push(Class {
+            id: class_id,
+            name: class_name.clone(),
+            type_params: Vec::new(),
+            extends: None,
+            extends_name: None,
+            native_extends: None,
+            extends_expr: None,
+            heritage_lexically_shadowed: false,
+            fields,
+            constructor: None,
+            methods: Vec::new(),
+            getters: Vec::new(),
+            setters: Vec::new(),
+            static_accessor_names: Vec::new(),
+            static_accessor_fn_ids: Vec::new(),
+            static_fields: Vec::new(),
+            static_methods: Vec::new(),
+            computed_members: Vec::new(),
+            decorators: Vec::new(),
+            is_exported: false,
+            aliases: Vec::new(),
+            is_nested: false,
+            alloc_width_hint: 0,
+            specialized_from: None,
+        });
+        self.anon_shape_classes.insert(shape_key, class_name.clone());
+        class_name
+    }
+
     pub(crate) fn lookup_func_name(&self, func_id: FuncId) -> Option<&str> {
         self.functions
             .iter()
