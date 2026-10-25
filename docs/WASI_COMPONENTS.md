@@ -151,6 +151,14 @@ rejections keep their origin until reported; retirement uses the cleanup context
 Consume completed results before trimming context records. Invocation IDs are
 strings in JSON to preserve all 64 bits in JavaScript.
 
+Schedule an initial poll after constructing a persistent driver, even before
+submitting an export call. A core start can enqueue an async import which runs
+on that first poll at origin zero. Outstanding embedding reply channels keep
+the C driver `active`, including when Wasmtime considers the unobserved subtask
+quiescent. Resolving the import allows it to become idle; rejection retires the
+Store and reports failed origin zero. Preserve initialization context separately
+from the nonzero invocation IDs in `retained`.
+
 `perry_component_driver_cancel` discards an observer. Before execution it skips
 the request; after execution starts it retires the Store on the next poll.
 Accepted soft cancellation and close commands still execute. Explicit

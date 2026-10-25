@@ -26,6 +26,9 @@ struct PendingReply {
     send: oneshot::Sender<ReplyResult>,
 }
 impl Replies {
+    pub(super) fn is_pending(&self) -> bool {
+        !self.entries.lock().unwrap().is_empty()
+    }
     pub(super) fn failure_serial(&self) -> u64 {
         self.failure_serial.load(Ordering::Relaxed)
     }

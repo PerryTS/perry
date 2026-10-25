@@ -270,6 +270,12 @@ pub unsafe extern "C" fn perry_component_driver_poll(
             let wake = wake.context("driver poll requires a native wake callback")?;
             bridge.entered(context, cleanup_context, || {
                 let mut result = actor(bridge)?.poll(wake, agent)?;
+                // A core start can enqueue an async import without a guest
+                // invocation observing its subtask yet. Wasmtime may call
+                // that quiescent, but the embedding still owes this reply.
+                if result["retired"] == false && bridge.async_replies.is_pending() {
+                    result["active"] = json!(true);
+                }
                 result["failedOrigins"] = json!(bridge.async_replies.take_failures());
                 Ok(serde_json::to_vec(&result)?)
             })

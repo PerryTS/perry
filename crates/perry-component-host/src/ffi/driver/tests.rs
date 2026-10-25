@@ -1,5 +1,6 @@
 use super::*;
 mod disposal_tests;
+mod initialization_tests;
 mod interop_tests;
 mod ownership_tests;
 use perry_abi::component_host::ASYNC_PENDING;
