@@ -265,8 +265,12 @@ pub fn module_digests(pf: &ProgramFacts) -> Vec<u64> {
 /// ```
 pub fn contract_section(pf: &ProgramFacts, module: u32) -> Vec<u8> {
     let mut recs: Vec<Vec<u8>> = Vec::new();
+    // A class id names one runtime class: its claims are what every
+    // description of it says (per unit, several units describe one layout),
+    // and a layout the census broke claims nothing (its readers hold TOP).
+    let stable = pf.stable_classes();
     for t in &pf.templates {
-        if t.module != Some(module) {
+        if t.module != Some(module) || pf.broken.contains(&t.display) {
             continue;
         }
         let Some(cid) = t.class_id else {
@@ -275,7 +279,8 @@ pub fn contract_section(pf: &ProgramFacts, module: u32) -> Vec<u8> {
         if cid == 0 {
             continue;
         }
-        let claims_any = t.prefix_stable
+        let prefix_stable = stable.contains_key(&cid);
+        let claims_any = prefix_stable
             || t.fields
                 .iter()
                 .any(|f| f.readonly || f.kind.mask() != 0xffff);
@@ -284,7 +289,7 @@ pub fn contract_section(pf: &ProgramFacts, module: u32) -> Vec<u8> {
         }
         let mut r = Vec::new();
         r.extend_from_slice(&cid.to_le_bytes());
-        let flags = (t.prefix_stable as u32) | ((t.fixed_layout as u32) << 1);
+        let flags = (prefix_stable as u32) | (((prefix_stable && t.fixed_layout) as u32) << 1);
         r.extend_from_slice(&flags.to_le_bytes());
         r.extend_from_slice(&(t.ancestors.len() as u16).to_le_bytes());
         for a in &t.ancestors {
