@@ -694,7 +694,14 @@ impl Model {
                 }
             }
             Cons::MCall { key, call } => {
-                if prim != 0 {
+                // The primitive kinds beside ⊤ add nothing to the call: the
+                // call of the unknown value escapes the arguments and returns
+                // ⊤ with every kind, which covers the primitive method's touch,
+                // its primitive result and its container of primitives
+                // (DECISIONS 42's reason, for a receiver's kinds). Made anyway,
+                // the container is a value of its own at every ⊤ site the
+                // result reaches: one per call site, each with field storage.
+                if prim != 0 && !self.nodes[n as usize].pts.contains_tok(TOP) {
                     self.with_b(|m| builtins::prim_method(m, prim, key, call));
                 }
                 for &t in toks {
