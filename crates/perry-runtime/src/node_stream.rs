@@ -1563,7 +1563,8 @@ pub extern "C" fn js_node_stream_method_readable(stream_handle: i64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_node_stream_method_readable_ended(stream_handle: i64) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
-    if stream_hidden_ended(stream) {
+    // Node's `readableEnded` is `endEmitted`; "EOF pushed" is `ended`.
+    if has_truthy_hidden(stream, hidden_end_emitted_key()) {
         f64::from_bits(TAG_TRUE)
     } else {
         f64::from_bits(TAG_FALSE)
