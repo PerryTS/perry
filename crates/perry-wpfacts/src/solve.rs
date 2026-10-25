@@ -760,6 +760,34 @@ impl Model {
                     self.mark_hard(t, kind, reason);
                 }
             }
+            Cons::DefineAccessor { key, reason } => {
+                for &t in toks {
+                    // A key the layout already holds as data may move into an
+                    // accessor pair in its slot, and a class instance's layout
+                    // is the class's: E5 HARD, as any defineProperty was. (On
+                    // another unit's layout the accessor is beyond its contract
+                    // in any case: the census breaks it.)
+                    let new_key = match self.toks[t as usize] {
+                        TokKind::Obj(tm, _) => {
+                            let tpl = &self.tmpls[tm as usize];
+                            matches!(
+                                tpl.kind,
+                                TmplKind::Lit { .. }
+                                    | TmplKind::Class {
+                                        literal_shape: true,
+                                        ..
+                                    }
+                            ) && !tpl.birth_keys.contains(&key)
+                        }
+                        _ => false,
+                    };
+                    if !new_key {
+                        self.mark_hard(t, Hard::E5DefineProperty, reason);
+                    } else if let Some(tm) = self.tmpl_of(t) {
+                        *self.adds_keys.entry(tm).or_default() += 1;
+                    }
+                }
+            }
             Cons::AddsKeys => {
                 for &t in toks {
                     let t = self
@@ -1636,6 +1664,12 @@ impl Model {
             ),
             Cons::Hard { kind, reason } => format!("hard {n} {} {reason}", kind.code()),
             Cons::AddsKeys => format!("addskeys {n}"),
+            Cons::DefineAccessor { key, reason } => {
+                format!(
+                    "defineaccessor {n} {} {reason}",
+                    self.key_name(Key::Named(*key))
+                )
+            }
             Cons::Implicit { reason } => format!("implicit {n} {reason}"),
             Cons::CreateProto { reason } => format!("createproto {n} {reason}"),
             Cons::ChainUnion { key, dst } => {

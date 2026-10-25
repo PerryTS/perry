@@ -18,6 +18,36 @@ fn kids(e: &Expr) -> Vec<&Expr> {
 }
 
 impl<'a> Gen<'a> {
+    /// FVA 4.3a: `d` is an accessor descriptor literal: a closed literal
+    /// layout whose keys are within get/set/enumerable/configurable and
+    /// name a getter or a setter (no value, no writable).
+    fn accessor_descriptor(&self, mi: u32, d: &Expr) -> bool {
+        let Expr::New { class_name, .. } = d else {
+            return false;
+        };
+        let Some(&tm) = self.mods[mi as usize].classes.get(class_name) else {
+            return false;
+        };
+        let tpl = &self.m.tmpls[tm as usize];
+        if !matches!(
+            tpl.kind,
+            TmplKind::Class {
+                literal_shape: true,
+                ..
+            }
+        ) {
+            return false;
+        }
+        let keys: Vec<&str> = tpl
+            .birth_keys
+            .iter()
+            .map(|a| self.m.atoms[*a as usize].as_str())
+            .collect();
+        keys.iter()
+            .all(|k| matches!(*k, "get" | "set" | "enumerable" | "configurable"))
+            && keys.iter().any(|k| matches!(*k, "get" | "set"))
+    }
+
     fn prim_kids(&mut self, fx: &Fx, e: &Expr, result: u16, why: &str) -> NodeId {
         let ks = kids(e);
         self.prim_op(fx, &ks, result, why)
@@ -624,7 +654,8 @@ impl<'a> Gen<'a> {
                     Expr::String(s) => Some(s.clone()),
                     _ => None,
                 };
-                self.define_property(fx, on, key, dn, r);
+                let accessor = self.accessor_descriptor(mi, d);
+                self.define_property(fx, on, key, dn, r, accessor);
                 on
             }
             Expr::ObjectDefineProperties(o, props) => {
@@ -641,7 +672,7 @@ impl<'a> Gen<'a> {
                 let r = self.m.reason(&why);
                 let descs = self.tmp("own-descriptors");
                 self.m.cons(pn, Cons::OwnValues { dst: descs });
-                self.define_property(fx, on, None, descs, r);
+                self.define_property(fx, on, None, descs, r, false);
                 on
             }
             Expr::ObjectGetOwnPropertyDescriptor(o, k)
@@ -689,7 +720,7 @@ impl<'a> Gen<'a> {
                 if let Some(props) = props {
                     let pv = self.expr(fx, props);
                     let descs = self.load(pv, Key::Any);
-                    self.define_property(fx, n, None, descs, r);
+                    self.define_property(fx, n, None, descs, r, false);
                 }
                 n
             }

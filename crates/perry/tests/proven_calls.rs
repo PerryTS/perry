@@ -208,3 +208,29 @@ fn a_proven_static_is_called_without_its_guard() {
         assert!(call_c.contains("js_class_static_call_guard("), "{call_c}");
     }
 }
+
+const ACCESSORS: &str = r#"
+class A { a = 1; }
+const ns: any = { tag: 1 };
+Object.defineProperty(ns, "k", { get: () => new A(), enumerable: true });
+function rd(o: any) { return o.k.a + o.tag; }
+let s = 0;
+for (let i = 0; i < 5; i++) s += rd(ns);
+console.log("accessors", s, Object.keys(ns).join(","));
+const m: any = { tag: 2 };
+Object.defineProperty(m, "tag", { get: () => 7 });
+function rd2(o: any) { return o.tag; }
+console.log("redefined", rd2(m), rd2({ tag: 3 }));
+"#;
+
+#[test]
+fn a_getter_on_a_new_key_keeps_the_layout() {
+    // FVA 4.3a: `defineProperty(ns, "k", { get })` adds an accessor key to
+    // the literal's layout (not E5), and a getter over an existing data key
+    // (`m.tag`) stays E5. Output pinned to node in both modes.
+    let d = tmp("accessors");
+    for whole in [true, false] {
+        let (_, out) = compile_and_run(&d, ACCESSORS, whole);
+        assert_eq!(out, "accessors 10 tag,k\nredefined 7 3\n", "whole={whole}");
+    }
+}

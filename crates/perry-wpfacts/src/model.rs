@@ -389,6 +389,12 @@ pub enum Cons {
     },
     /// Every object token reaches a HARD operation.
     Hard { kind: Hard, reason: u32 },
+    /// `Object.defineProperty(o, key, {get/set})` with a constant key and an
+    /// accessor descriptor (FVA 4.3a): on a token whose layout does not hold
+    /// `key` as data the key becomes an accessor key (the getter and setter
+    /// are installed by `Accessor`) and the layout gains it; on any other
+    /// token (a key it holds as data, a class instance, ⊤) it is E5 HARD.
+    DefineAccessor { key: Atom, reason: u32 },
     /// Every token gains keys after birth (computed store …).
     AddsKeys,
     /// Builtin protocol touch: ToPrimitive / iterator / toJSON / then …
@@ -539,6 +545,7 @@ impl Cons {
             Cons::TopIfAny { .. } => "topifany",
             Cons::Hard { .. } => "hard",
             Cons::AddsKeys => "addskeys",
+            Cons::DefineAccessor { .. } => "defineaccessor",
             Cons::Implicit { .. } => "implicit",
             Cons::CreateProto { .. } => "createproto",
             Cons::ChainUnion { .. } => "chainunion",
