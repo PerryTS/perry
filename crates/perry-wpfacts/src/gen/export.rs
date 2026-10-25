@@ -549,7 +549,15 @@ impl<'a> Gen<'a> {
             self.m.foreign_stores.iter().copied().collect();
         stores.sort_unstable();
         for (tm, a, n) in stores {
+            // Once the field holds an unknown value, every value stored
+            // into it reaches unknown code: each escapes, not only the one
+            // no contract described (that one may be the shared body's
+            // observation node, whose sink runs no effect).
             if self.store_top.contains(&(tm, a)) {
+                if !self.m.sunk_nodes.contains(&n) {
+                    self.m.sink_node(n, r);
+                    changed = true;
+                }
                 continue;
             }
             match self.value_contract_holds(n, r, true) {
