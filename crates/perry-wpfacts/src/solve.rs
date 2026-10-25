@@ -1662,6 +1662,14 @@ impl Model {
                 return;
             }
             if !self.is_arg_marker(x) {
+                // DECISIONS 194: a closed function no other unit calls has
+                // every caller here; the store composes on their values
+                // beside its marker, and no flow crosses a unit edge.
+                if self.param_marker.get(&x).is_some_and(|&(f, _)| {
+                    self.closed_params.contains_key(&f) && !self.closed_called_out.contains(&f)
+                }) {
+                    continue;
+                }
                 let y = match k {
                     Some(k) => self.keyed_reach_of(x, k),
                     None => x,

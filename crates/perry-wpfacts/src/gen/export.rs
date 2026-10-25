@@ -494,6 +494,9 @@ impl<'a> Gen<'a> {
                 })
                 .collect();
             self.m.closed_described.insert(fx, described);
+            if ac.is_some() {
+                self.m.closed_called_out.insert(fx);
+            }
             let mut nodes = Vec::with_capacity(n);
             for i in 0..n {
                 // A described position holds undefined when a call passes

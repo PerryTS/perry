@@ -1141,6 +1141,10 @@ pub struct Model {
     /// Closed functions (decision 13): per parameter the node holding what
     /// the other units' calls pass (`Gen::closed_params`), instead of ⊤.
     pub closed_params: FxHashMap<FnIdx, Vec<NodeId>>,
+    /// DECISIONS 194: the closed functions another unit's code calls (an
+    /// argument contract names them): only their parameters carry store
+    /// flows across the unit edge.
+    pub closed_called_out: crate::pts::FxHashSet<FnIdx>,
     /// Per closed function: which parameters every caller passes a
     /// described value (no unknown one) (decision 17).
     pub closed_described: FxHashMap<FnIdx, Vec<bool>>,
