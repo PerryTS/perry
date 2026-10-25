@@ -1183,8 +1183,16 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
                         input.values.insert((p.clone(), n.clone()), c.clone());
                     }
                 }
+                // Several units describe one layout (literals of one shape
+                // in different units): a reader relies only on what all of
+                // them say, and a field holds every unit's functions.
                 for c in &u.layouts_out {
-                    input.layouts.insert(c.display.clone(), c.clone());
+                    match input.layouts.get_mut(&c.display) {
+                        Some(have) => have.join(c),
+                        None => {
+                            input.layouts.insert(c.display.clone(), c.clone());
+                        }
+                    }
                 }
                 reports.extend(u.reports.iter().cloned());
             }
@@ -1670,6 +1678,17 @@ fn dependents(
     dirty
 }
 
+/// A unit's bodies by program module: its solve's module 0 is the unit's
+/// own module (`mi`); a body of any other module is no claim here.
+fn program_bodies(bodies: &mut Vec<crate::bindings::BodyRef>, mi: usize) {
+    if bodies.iter().any(|b| b.module != 0) {
+        bodies.clear();
+    }
+    for b in bodies.iter_mut() {
+        b.module = mi as u32;
+    }
+}
+
 fn merge_unit(
     pf: &mut ProgramFacts,
     mi: usize,
@@ -1682,6 +1701,9 @@ fn merge_unit(
             continue;
         }
         t.module = Some(mi as u32);
+        for f in t.fields.iter_mut() {
+            program_bodies(&mut f.fns, mi);
+        }
         t.id = pf.templates.len() as crate::model::TmplId;
         pf.templates.push(t);
     }
@@ -1689,7 +1711,10 @@ fn merge_unit(
         module: mi as u32,
         ..s
     }));
-    if let Some(b) = u.bindings.into_iter().next() {
+    if let Some(mut b) = u.bindings.into_iter().next() {
+        for (_, f) in b.locals.iter_mut().chain(b.this_of.iter_mut()) {
+            program_bodies(&mut f.bodies, mi);
+        }
         let into = &mut pf.bindings[mi];
         into.locals.extend(
             b.locals

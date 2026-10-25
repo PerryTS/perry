@@ -371,6 +371,29 @@ pub(crate) fn try_lower_instance_method_call(
                 .zip(&impl_class)
                 .map(|((_, f), class)| select::cased(ctx, class, property, f))
                 .collect();
+            // FVA: the facts prove the receiver one of its classes, each a
+            // cased implementor: the site is the T0set read shape, one load
+            // of the receiver's class id and a switch whose arms are the
+            // direct calls, with no probe. Its generic arm is only a nullable
+            // receiver's (the receiver test a read keeps): a nullish receiver
+            // reads its method, before the arguments, and throws.
+            let proven: Option<(Vec<(u32, usize)>, bool)> =
+                crate::expr::wpfacts_access::proven_receiver_classes(ctx, object).and_then(
+                    |(cids, nullable)| {
+                        cids.iter()
+                            .map(|&cid| {
+                                implementors
+                                    .iter()
+                                    .zip(&cased)
+                                    .position(|((c, _), &k)| k && *c == cid)
+                                    .map(|i| (cid, i))
+                            })
+                            .collect::<Option<Vec<_>>>()
+                            .map(|m| (m, nullable))
+                    },
+                );
+            let closed = proven.as_ref().is_some_and(|(_, nullable)| !nullable);
+            let split = split && !closed;
             let post_args_may_collect = ctx.strings.call_location_for(call_byte_offset).is_some()
                 || impl_meta
                     .iter()
@@ -389,7 +412,9 @@ pub(crate) fn try_lower_instance_method_call(
             // Object model step 3: the receiver's class id selects the
             // constant body, a branch over the compile-time set of cased
             // classes. 0 = no compiled body: the site's generic arm.
-            let selected = if cased.contains(&true) {
+            let selected = if let Some((_, nullable)) = &proven {
+                crate::expr::wpfacts_access::emit_class_id(ctx, &recv, *nullable)
+            } else if cased.contains(&true) {
                 select::select(ctx, &recv, property, &implementors, &cased)
             } else {
                 "0".to_string()
@@ -435,11 +460,41 @@ pub(crate) fn try_lower_instance_method_call(
                 .filter(|&(i, _)| cased[i])
                 .map(|(i, _)| (i, ctx.new_block(&format!("idispatch.case{i}"))))
                 .collect();
-            let mut switch = format!("switch i32 {selected}, label %{generic_label} [");
-            for &(i, idx) in &case_idxs {
-                switch.push_str(&format!(" i32 {}, label %{}", i + 1, ctx.block_label(idx)));
-            }
-            switch.push_str(" ]");
+            let switch = match &proven {
+                // The proven classes' ids select their implementors. The last
+                // class is the default arm (the receiver is one of them), as
+                // the read shape's last slot is; a contract build lists every
+                // class and its default is the witness.
+                Some((map, nullable)) => {
+                    let label_of = |i: usize| {
+                        case_idxs
+                            .iter()
+                            .find(|(j, _)| *j == i)
+                            .map(|&(_, idx)| ctx.block_label(idx))
+                            .expect("a proven class's implementor is cased")
+                    };
+                    let contracts = crate::codegen::helpers::check_contracts();
+                    let (listed, default) = if *nullable || contracts {
+                        (&map[..], generic_label.clone())
+                    } else {
+                        (&map[..map.len() - 1], label_of(map[map.len() - 1].1))
+                    };
+                    let mut s = format!("switch i32 {selected}, label %{default} [");
+                    for &(cid, i) in listed {
+                        s.push_str(&format!(" i32 {cid}, label %{}", label_of(i)));
+                    }
+                    s.push_str(" ]");
+                    s
+                }
+                None => {
+                    let mut s = format!("switch i32 {selected}, label %{generic_label} [");
+                    for &(i, idx) in &case_idxs {
+                        s.push_str(&format!(" i32 {}, label %{}", i + 1, ctx.block_label(idx)));
+                    }
+                    s.push_str(" ]");
+                    s
+                }
+            };
             ctx.block().emit_raw(switch);
             ctx.block().mark_terminated();
             let mut phi_inputs: Vec<(String, String)> = Vec::new();
@@ -481,35 +536,50 @@ pub(crate) fn try_lower_instance_method_call(
                 phi_inputs.push((v, after));
             }
             // The generic arm: the split call half (the method was read before
-            // the arguments), else the universal method site.
+            // the arguments), else the universal method site. A proven site
+            // has none: its block is the contract build's witness, or dead.
             ctx.current_block = generic_idx;
-            let v_generic = match pre_lookup {
-                Some((lookup, value_root)) => {
-                    let value = roots.reread_emitted(ctx, value_root);
-                    crate::lower_call::console_promise::emit_split_call_half(
+            if closed {
+                if crate::codegen::helpers::check_contracts() {
+                    let site = ctx.wpfacts_sites as i64;
+                    ctx.wpfacts_sites += 1;
+                    let _ = ctx.block().call(
+                        I32,
+                        "perry_wpfacts_check_call_miss",
+                        &[(crate::types::PTR, "null"), (I64, &site.to_string())],
+                    );
+                }
+                ctx.block().unreachable();
+            }
+            if !closed {
+                let v_generic = match pre_lookup {
+                    Some((lookup, value_root)) => {
+                        let value = roots.reread_emitted(ctx, value_root);
+                        crate::lower_call::console_promise::emit_split_call_half(
+                            ctx,
+                            &lookup,
+                            &recv_box,
+                            &value,
+                            &static_user_args,
+                            property,
+                            call_byte_offset,
+                            &method_id,
+                        )
+                    }
+                    None => crate::lower_call::console_promise::emit_native_method_str_dispatch(
                         ctx,
-                        &lookup,
-                        &recv_box,
-                        &value,
-                        &static_user_args,
                         property,
                         call_byte_offset,
-                        &method_id,
-                    )
+                        &recv_box,
+                        &static_user_args,
+                    ),
+                };
+                let after_generic = ctx.block().label.clone();
+                if !ctx.block().is_terminated() {
+                    ctx.block().br(&merge_label);
                 }
-                None => crate::lower_call::console_promise::emit_native_method_str_dispatch(
-                    ctx,
-                    property,
-                    call_byte_offset,
-                    &recv_box,
-                    &static_user_args,
-                ),
-            };
-            let after_generic = ctx.block().label.clone();
-            if !ctx.block().is_terminated() {
-                ctx.block().br(&merge_label);
+                phi_inputs.push((v_generic, after_generic));
             }
-            phi_inputs.push((v_generic, after_generic));
             ctx.current_block = merge_idx;
             let phi_args: Vec<(&str, &str)> = phi_inputs
                 .iter()

@@ -24,6 +24,9 @@ pub struct ReadSite {
     pub key: Atom,
     pub recv: NodeId,
     pub is_call: bool,
+    /// A call through a value (`f(x)`): `recv` is the callee node, `key`
+    /// the atom `()`.
+    pub value_call: bool,
     pub func: FnIdx,
 }
 
@@ -380,7 +383,8 @@ impl<'a> Gen<'a> {
                 iterout: FxHashMap::default(),
             });
             for f in self.functions_of(mi as usize) {
-                self.register_fn(mi, f.id, &f.name, &f.params, false, false);
+                let fx = self.register_fn(mi, f.id, &f.name, &f.params, false, false);
+                self.m.decls.insert(fx);
             }
             for c in self.classes_of(mi as usize) {
                 self.register_class(mi, c);
@@ -1085,6 +1089,98 @@ impl<'a> Gen<'a> {
         self.unit_in?.class_contract(path, name)
     }
 
+    /// A second description of a layout this unit already stands in for:
+    /// literals of one shape that different units publish, or one class
+    /// seen through two contracts. The reader relies only on what every
+    /// description says (`ClassContract::join`): the facts join, a field
+    /// both describe by their functions holds the functions of both, and a
+    /// field, method or static the descriptions give differently holds what
+    /// either may hold (⊤ unless both name functions). The stand-in only
+    /// grows, so the order the contracts arrive in does not matter.
+    fn widen_stand_in(&mut self, mi: u32, tm: TmplId, c: &'a crate::units::ClassContract) {
+        let old = self.stand_in_cc[&tm].clone();
+        let mut joined = old.clone();
+        joined.join(c);
+        let r = self
+            .m
+            .reason("another unit's class used beyond its contract");
+        let inst = self.m.tok(TokKind::Obj(tm, NO_CTX));
+        let top = |g: &mut Self, n: NodeId| {
+            g.m.add_top(n, |_| "field of another unit's class".into());
+            g.m.add_prim(n, prim::ALL);
+        };
+        for fld in &joined.facts.fields {
+            let a = self.m.atom(&fld.key);
+            let n = self.m.field(inst, a);
+            let fns = |cc: &crate::units::ClassContract| {
+                cc.field_fns
+                    .iter()
+                    .find(|(k, _)| k == &fld.key)
+                    .map(|(_, f)| f.clone())
+            };
+            let layouts = |cc: &crate::units::ClassContract| {
+                cc.field_layouts
+                    .iter()
+                    .find(|(k, _, _)| k == &fld.key)
+                    .cloned()
+            };
+            let kind = |cc: &crate::units::ClassContract| {
+                cc.facts
+                    .fields
+                    .iter()
+                    .find(|f| f.key == fld.key)
+                    .map(|f| (f.kind.clone(), f.definite))
+            };
+            // The join keeps field functions only where every description
+            // names them: the old ones are wired, the new ones are `c`'s.
+            if fns(&joined).is_some() {
+                if let Some((_, fcs)) = c.field_fns.iter().find(|(k, _)| k == &fld.key) {
+                    for fc in fcs {
+                        let v = self.stand_in_fn_of(mi, fc, Some((tm, false)));
+                        self.m.edge(v, n);
+                    }
+                }
+                continue;
+            }
+            if layouts(&joined).is_some() && layouts(&joined) == layouts(&old) {
+                continue;
+            }
+            if layouts(&joined).is_none() && fns(&old).is_none() && kind(&joined) == kind(&old) {
+                continue;
+            }
+            top(self, n);
+        }
+        if joined.open_keys && !old.open_keys {
+            let n = self.m.field_any(inst);
+            top(self, n);
+        }
+        let proto = self.m.tok(TokKind::Proto(tm));
+        for (key, fname) in &joined.methods {
+            if old.methods.iter().any(|(k, f)| k == key && f == fname) {
+                continue;
+            }
+            let f = self.stub_fn(mi, fname, tm, true, false, r);
+            let a = self.m.atom(key);
+            let n = self.m.field(proto, a);
+            let t = self.m.funcs[f as usize].token;
+            self.m.add_tok(n, t);
+        }
+        let cobj = self.m.tok(TokKind::ClassObj(tm));
+        if joined.statics != old.statics || joined.static_fns != old.static_fns {
+            for (key, _) in &joined.statics {
+                let a = self.m.atom(key);
+                let n = self.m.field(cobj, a);
+                top(self, n);
+            }
+        }
+        if joined.statics_open && !old.statics_open {
+            let any = self.m.field_any(cobj);
+            top(self, any);
+        }
+        self.m.foreign.insert(tm, joined.facts.clone());
+        self.stand_in_cc.insert(tm, joined);
+    }
+
     /// Another unit's class as this unit sees it through its contract
     /// (design §11.2): `new` gives an instance of its template, whose facts
     /// are the defining unit's; its methods and constructor are stand-ins
@@ -1092,8 +1188,11 @@ impl<'a> Gen<'a> {
     /// values; its fields and statics hold unknown values. Using it beyond
     /// that is this unit's census report (`Gen::reports`).
     fn stand_in_class(&mut self, mi: u32, c: &'a crate::units::ClassContract) -> NodeId {
-        if let Some((n, _, _)) = self.stand_ins.get(&c.display) {
-            return *n;
+        if let Some(&(n, tm, _)) = self.stand_ins.get(&c.display) {
+            if self.stand_in_cc.get(&tm) != Some(c) {
+                self.widen_stand_in(mi, tm, c);
+            }
+            return n;
         }
         let r = self
             .m
@@ -1574,6 +1673,9 @@ impl<'a> Gen<'a> {
         }
         let fx = self.m.funcs.len() as FnIdx;
         let tok = self.m.tok(TokKind::Func(fx, NO_CTX));
+        if is_closure {
+            self.m.closures.insert(fx);
+        }
         let this = self.m.node_named("this", || format!("this({name})"));
         let ret = self.m.node_named("ret", || format!("ret({name})"));
         let args_all = self.m.node_named("args", || format!("args({name})"));

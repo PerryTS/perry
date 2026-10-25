@@ -164,7 +164,7 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
             Verdict::No(r) => format!("no:{r}"),
         };
         out.push_str(&format!(
-            "S {} {} .{} call={} fixed={} recv={{{}}} top={} target={} verdict={}\n",
+            "S {} {} .{} call={} fixed={} recv={{{}}} top={} targets={{{}}} verdict={}\n",
             st.module,
             st.byte_offset,
             crate::model::esc_key(&st.key),
@@ -172,7 +172,7 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
             b(st.fixed_shape),
             st.receivers.join(","),
             b(st.top),
-            st.call_target.clone().unwrap_or_else(|| "-".into()),
+            st.targets.join(","),
             v
         ));
     }

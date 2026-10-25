@@ -108,9 +108,12 @@ fn a_store_through_a_binding_joins_nothing() {
 }
 
 #[test]
-fn a_namespace_member_stored_by_another_unit_keeps_its_target() {
+fn a_namespace_member_stored_by_another_unit_keeps_its_function() {
     // `ns.g = g` is a store effect into `ns`'s literal: it carries `g`'s
-    // contract, so the reader's call of `ns.g` keeps its single target.
+    // contract, so the field holds `g` in the reader's unit, not ⊤. The
+    // call `ns.g(o)` is proven in neither mode: `g` is no birth key of the
+    // literal, so the read has no slot (it is `undefined` before the
+    // store), and a call is proven only through the read rule's lookup.
     let src = r#"
         const ns: any = {};
         function g(x: any) { return x.k; }
@@ -119,10 +122,19 @@ fn a_namespace_member_stored_by_another_unit_keeps_its_target() {
         console.log(use({ k: 1 }));
         "#;
     let w = whole(src);
-    assert!(proven(&w, "g"), "{}", w.dump_text());
+    assert!(
+        refused(&w, "g", "key not a definite birth field"),
+        "{}",
+        w.dump_text()
+    );
     let u = assert_sound(src);
     assert!(u.units.len() >= 4, "{:?}", u.units);
-    assert!(proven(&u, "g"), "{}", u.dump_text());
+    assert!(holds_fn(&u, "g"), "{}", u.dump_text());
+    assert!(
+        refused(&u, "g", "key not a definite birth field"),
+        "{}",
+        u.dump_text()
+    );
 }
 
 #[test]
@@ -195,7 +207,9 @@ fn a_namespace_object_made_by_its_first_write_keeps_its_members() {
     // TypeScript's namespace: `var eu;` declares the binding, the wrapper's
     // `eu || (eu = {})` makes its object (a write effect of another unit,
     // carrying the literal's layout contract), and `eu2.f = …` stores the
-    // member (a store effect). The reader's call keeps its target.
+    // member (a store effect). The reader's field holds the function (not
+    // ⊤); its call is refused as whole program refuses it: `f` is written
+    // after birth, so the read has no slot.
     let src = r#"
         var eu: any;
         ((eu2: any) => { eu2.f = (m: any) => m; })(eu || (eu = {}));
@@ -204,7 +218,18 @@ fn a_namespace_object_made_by_its_first_write_keeps_its_members() {
         "#;
     let u = assert_sound(src);
     assert!(u.units.len() >= 3, "{:?}", u.units);
-    assert!(proven(&u, "f"), "{}", u.dump_text());
+    assert!(holds_fn(&u, "f"), "{}", u.dump_text());
+    assert!(
+        refused(&u, "f", "key not a definite birth field"),
+        "{}",
+        u.dump_text()
+    );
+    let w = whole(src);
+    assert!(
+        refused(&w, "f", "key not a definite birth field"),
+        "{}",
+        w.dump_text()
+    );
 }
 
 #[test]

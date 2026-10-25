@@ -166,6 +166,58 @@ fn receiver(ctx: &FnCtx<'_>, object: &Expr) -> Option<(crate::codegen::FactsRecv
     }
 }
 
+/// FVA: the class ids the facts prove a call's receiver to be one of (an
+/// unchecked binding, no interpreted code), and whether it may also be
+/// null or undefined (then the site keeps that receiver test, as a read
+/// does). A virtual call over them is the T0set read shape.
+pub(crate) fn proven_receiver_classes(ctx: &FnCtx<'_>, object: &Expr) -> Option<(Vec<u32>, bool)> {
+    let (r, _) = receiver(ctx, object)?;
+    (!r.checked && !ctx.wpfacts.interp_guard && !r.class_ids.is_empty())
+        .then(|| (r.class_ids, r.nullable && !tested_in_block(ctx, object)))
+}
+
+/// The class id of a receiver the facts prove one of their classes: one
+/// load of its header word (the read shape's `select_by_class` load). A
+/// `nullable` receiver tests its tag first and gives 0 when it is nullish
+/// (no class id is 0).
+pub(crate) fn emit_class_id(ctx: &mut FnCtx<'_>, recv_box: &str, nullable: bool) -> String {
+    let load = |ctx: &mut FnCtx<'_>| {
+        let blk = ctx.block();
+        let bits = blk.bitcast_double_to_i64(recv_box);
+        let biased = blk.sub(
+            I64,
+            &bits,
+            &(super::receiver_range::RECEIVER_BIAS as i64).to_string(),
+        );
+        let hdr = super::receiver_range::emit_field_ptr(blk, &biased, 0);
+        blk.load(I32, &hdr)
+    };
+    if !nullable {
+        return load(ctx);
+    }
+    let is_obj = {
+        let blk = ctx.block();
+        let bits = blk.bitcast_double_to_i64(recv_box);
+        let top16 = blk.lshr(I64, &bits, "48");
+        blk.icmp_eq(I64, &top16, crate::nanbox::POINTER_TAG_TOP16_I64)
+    };
+    let from = ctx.block().label.clone();
+    let load_idx = ctx.new_block("proven_recv.class_id");
+    let join_idx = ctx.new_block("proven_recv.join");
+    let load_label = ctx.block_label(load_idx);
+    let join_label = ctx.block_label(join_idx);
+    ctx.block().cond_br(&is_obj, &load_label, &join_label);
+    ctx.current_block = load_idx;
+    let cid = load(ctx);
+    let loaded = ctx.block().label.clone();
+    ctx.block().br(&join_label);
+    ctx.current_block = join_idx;
+    ctx.block().phi(
+        I32,
+        &[(cid.as_str(), loaded.as_str()), ("0", from.as_str())],
+    )
+}
+
 /// A local that is never reassigned in this function holds one value for
 /// the whole body, so once an earlier access in the CURRENT basic block
 /// passed its receiver test (whose other arm does not return), every later

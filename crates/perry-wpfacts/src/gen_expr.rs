@@ -621,6 +621,7 @@ impl<'a> Gen<'a> {
                         key: a,
                         recv: o,
                         is_call: false,
+                        value_call: false,
                         func: fx.f,
                     });
                 }

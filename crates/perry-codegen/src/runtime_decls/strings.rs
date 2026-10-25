@@ -740,6 +740,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         I32,
         &[DOUBLE, DOUBLE, I64, I64, I64, I32, I32, I32, I64],
     );
+    // FVA: the contract witness of an elided call (`lower_call/proven_call.rs`).
+    module.declare_function("perry_wpfacts_check_call", PTR, &[DOUBLE, I64, I64]);
+    module.declare_function("perry_wpfacts_check_call_miss", I32, &[PTR, I64]);
     // #8655: guarded packed-array / dense Array-subclass read before the
     // fully generic dynamic dispatcher. Used by unknown-receiver loop reads,
     // and (#T2) the single out-of-line exit of the emitted dynamic `obj[i]`
