@@ -73,11 +73,24 @@ impl<'a> Lowering<'a> {
                 .as_str()
                 .context("expected guest resource")?;
             self.reserve(format!("guest:{token}"), owned)?;
-            return self
-                .store
-                .data()
-                .resources
-                .get(token, ty, owned, &mut self.guest_transfers);
+            let resource =
+                self.store
+                    .data()
+                    .resources
+                    .get(token, ty, owned, &mut self.guest_transfers)?;
+            if !resource.owned() {
+                ensure!(
+                    !owned && value["$borrow"] == token,
+                    "invalid resource borrow capability"
+                );
+                self.reserve(format!("lease:{token}"), false)?;
+            } else {
+                ensure!(
+                    value.get("$borrow").is_none(),
+                    "unexpected resource borrow capability"
+                );
+            }
+            return Ok(resource);
         }
         let token = value["$hostResource"]
             .as_str()
@@ -110,6 +123,20 @@ impl<'a> Lowering<'a> {
             ty == ResourceType::host_dynamic(id),
             "host resource type mismatch"
         );
+        if let Some(borrow) = value.get("$borrow") {
+            ensure!(
+                !owned && value["owned"] == false,
+                "a borrow capability cannot transfer ownership"
+            );
+            let borrow = borrow.as_str().context("invalid borrow capability")?;
+            let handle = self
+                .store
+                .data()
+                .resources
+                .host_borrow(borrow, &reference, ty)?;
+            self.reserve(format!("lease:{borrow}"), false)?;
+            return Ok(handle);
+        }
         let handle = if let Some(entry) = self.pending.get(token) {
             ensure!(
                 entry.reference == reference,
@@ -222,14 +249,33 @@ pub(crate) fn lift(
     })
 }
 
-fn lift_resource(
+pub(crate) fn lift_import(
+    mut store: StoreContextMut<'_, StoreData>,
+    value: &Val,
+    ty: &Type,
+    prepared: &mut std::collections::VecDeque<Value>,
+) -> Result<Value> {
+    wire::lift_typed(value, ty, &mut |value, ty| match (value, ty) {
+        (Val::Resource(_), Type::Borrow(_)) => prepared
+            .pop_front()
+            .context("missing prepared import borrow"),
+        (Val::Resource(resource), Type::Own(_)) => lift_resource(store.as_context_mut(), *resource),
+        (Val::Future(_) | Val::Stream(_), _) => store.data_mut().async_values.insert(value, ty),
+        _ => anyhow::bail!("unsupported managed value"),
+    })
+}
+
+pub(crate) fn lift_resource(
     mut store: StoreContextMut<'_, StoreData>,
     resource: ResourceAny,
 ) -> Result<Value> {
     if !store.data().host_resources.is_host(resource.ty()) {
-        return Ok(
-            json!({"$resource":store.data_mut().resources.insert(resource),"owned":resource.owned()}),
-        );
+        let token = store.data_mut().resources.insert(resource);
+        let mut value = json!({"$resource":token,"owned":resource.owned()});
+        if !resource.owned() {
+            value["$borrow"] = value["$resource"].clone();
+        }
+        return Ok(value);
     }
     let dynamic = resource.try_into_resource_dynamic(store.as_context_mut())?;
     let state = &store.data().host_resources;
@@ -245,6 +291,7 @@ fn lift_resource(
     );
     let mut reference = entry.reference.clone();
     let owned = dynamic.owned();
+    let mut borrowed = None;
     if owned {
         ensure!(
             entry.handle.is_none(),
@@ -270,9 +317,19 @@ fn lift_resource(
             .unwrap();
         entry.reference = reference.clone();
         entry.handle = Some(handle);
+    } else {
+        let handle = dynamic.try_into_resource_any(store.as_context_mut())?;
+        borrowed = Some(
+            store
+                .data_mut()
+                .resources
+                .insert_host_borrow(handle, reference.clone()),
+        );
     }
-    Ok(
-        json!({"$hostResource":reference.token,"type":reference.type_key,
-        "generation":reference.generation,"owned":owned,"new":false}),
-    )
+    let mut value = json!({"$hostResource":reference.token,"type":reference.type_key,
+        "generation":reference.generation,"owned":owned,"new":false});
+    if let Some(borrow) = borrowed {
+        value["$borrow"] = json!(borrow);
+    }
+    Ok(value)
 }

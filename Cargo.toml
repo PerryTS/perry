@@ -95,6 +95,7 @@ members = [
 # them out of the `crates/perry-ui*` globs used by the GC/lint census gates.
 exclude = [
     "third_party/windows-winui",
+    "third_party/wac-graph",
 ]
 
 # Build only the host-independent product set by default: the compiler and

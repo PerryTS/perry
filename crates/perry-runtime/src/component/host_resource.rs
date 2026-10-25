@@ -12,6 +12,7 @@ const GENERATION: u32 = 2;
 const STATE: u32 = 3;
 const LIFETIME: u32 = 4;
 const PARENT: u32 = 5;
+const BORROW: u32 = 6;
 const OWNED: f64 = 1.0;
 const BORROWED: f64 = 0.0;
 const DISPOSED: f64 = 2.0;
@@ -61,13 +62,22 @@ fn live(resource: f64) -> (f64, f64) {
     (fields, record)
 }
 
-fn wrap(owner: f64, id: u32, generation: u32, owned: bool, lifetime: f64, parent: f64) -> f64 {
+fn wrap(
+    owner: f64,
+    id: u32,
+    generation: u32,
+    owned: bool,
+    lifetime: f64,
+    parent: f64,
+    capability: f64,
+) -> f64 {
     let scope = RuntimeHandleScope::new();
     let owner = scope.root_nanbox_f64(owner);
     let lifetime = scope.root_nanbox_f64(lifetime);
     let parent = scope.root_nanbox_f64(parent);
+    let capability = scope.root_nanbox_f64(capability);
     let fields = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
-        crate::array::js_array_alloc_with_length(6) as i64,
+        crate::array::js_array_alloc_with_length(7) as i64,
     ));
     for (index, value) in [
         (OWNER, owner.get_nanbox_f64()),
@@ -76,6 +86,7 @@ fn wrap(owner: f64, id: u32, generation: u32, owned: bool, lifetime: f64, parent
         (STATE, if owned { OWNED } else { BORROWED }),
         (LIFETIME, lifetime.get_nanbox_f64()),
         (PARENT, parent.get_nanbox_f64()),
+        (BORROW, capability.get_nanbox_f64()),
     ] {
         set(fields.get_nanbox_f64(), index, value);
     }
@@ -134,11 +145,14 @@ pub(super) fn encode(resource: f64, owner: f64) -> Option<Value> {
     if get(fields, OWNER).to_bits() != owner.to_bits() {
         fail("Host resource belongs to another component");
     }
-    Some(
-        serde_json::json!({"$hostResource":(get(fields, ID) as u32).to_string(),
+    let mut value = serde_json::json!({"$hostResource":(get(fields, ID) as u32).to_string(),
         "type":string(get(record, payload::TYPE)),"generation":get(fields, GENERATION) as u32,
-        "owned":get(fields, STATE) == OWNED,"new":get(record, payload::MATERIALIZED) == 0.0}),
-    )
+        "owned":get(fields, STATE) == OWNED,"new":get(record, payload::MATERIALIZED) == 0.0});
+    let borrow = get(fields, BORROW);
+    if !JSValue::from_bits(borrow.to_bits()).is_undefined() {
+        value["$borrow"] = Value::String(string(borrow));
+    }
+    Some(value)
 }
 
 pub(super) fn decode(owner: f64, value: &Value, lifetime: f64) -> f64 {
@@ -163,7 +177,25 @@ pub(super) fn decode(owner: f64, value: &Value, lifetime: f64) -> f64 {
     if !owned && JSValue::from_bits(lifetime.to_bits()).is_undefined() {
         fail("A host resource borrow needs a live callback");
     }
-    wrap(owner, id, generation, owned, lifetime, undefined())
+    let scope = RuntimeHandleScope::new();
+    let owner = scope.root_nanbox_f64(owner);
+    let lifetime = scope.root_nanbox_f64(lifetime);
+    let borrow = match value.get("$borrow") {
+        Some(Value::String(token)) if !owned => crate::value::js_nanbox_string(
+            crate::string::js_string_from_bytes(token.as_ptr(), token.len() as u32) as i64,
+        ),
+        None => undefined(),
+        _ => fail("Invalid host resource borrow capability"),
+    };
+    wrap(
+        owner.get_nanbox_f64(),
+        id,
+        generation,
+        owned,
+        lifetime.get_nanbox_f64(),
+        undefined(),
+        borrow,
+    )
 }
 
 extern "C" fn borrow(
@@ -183,6 +215,7 @@ extern "C" fn borrow(
         false,
         undefined(),
         resource.get_nanbox_f64(),
+        undefined(),
     )
 }
 

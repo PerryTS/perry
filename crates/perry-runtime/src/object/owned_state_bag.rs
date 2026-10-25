@@ -22,6 +22,7 @@ pub(crate) const COMPONENT_HOST_RESOURCE: u32 = 19;
 pub(crate) const COMPONENT_FINALIZATION: u32 = 20;
 pub(crate) const COMPONENT_RESOURCE_PARENT: u32 = 21;
 pub(crate) const COMPONENT_ASYNC_IMPORTS: u32 = 22;
+pub(crate) const COMPONENT_RESOURCE_BORROW: u32 = 23;
 
 pub(crate) unsafe fn bag(owner: usize, create: bool, last_slot: u32) -> *mut ArrayHeader {
     let _publication = crate::gc::GcSuppressScope::new();

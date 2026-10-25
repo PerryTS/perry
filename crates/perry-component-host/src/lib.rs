@@ -70,6 +70,7 @@ struct StoreData {
     wasi: Option<wasi::State>,
     disposers: Vec<(wasmtime::component::ResourceType, Func)>,
     borrowed: borrowed::Registry,
+    retiring: Arc<std::sync::atomic::AtomicBool>,
 }
 
 struct Live {
@@ -304,6 +305,7 @@ impl Host {
                 async_values,
                 disposers: Vec::new(),
                 borrowed: borrowed::Registry::default(),
+                retiring: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 origins: asynchronous::origin::Origins::default(),
                 limits,
                 resources: resources::Resources::default(),
@@ -438,6 +440,10 @@ impl Host {
         let exports = match initialized {
             Ok(exports) => exports,
             Err(error) => {
+                store
+                    .data_mut()
+                    .retiring
+                    .store(true, std::sync::atomic::Ordering::Release);
                 let _ = host_resources::dispose(store.as_context_mut());
                 return Err(error);
             }
@@ -525,6 +531,10 @@ impl Host {
         let Some(mut live) = self.live.take() else {
             return Ok(());
         };
+        live.store
+            .data_mut()
+            .retiring
+            .store(true, std::sync::atomic::Ordering::Release);
         let mut first_error = None;
         for resource in live.store.data_mut().resources.drain() {
             live.store.set_fuel(live.fuel)?;
@@ -559,6 +569,12 @@ impl Host {
     /// Release engine memory without executing guest code. Resource disposal
     /// runs explicitly or in a deferred cleanup job before native teardown.
     pub(crate) fn abandon(&mut self) {
+        if let Some(live) = self.live.as_mut() {
+            live.store
+                .data_mut()
+                .retiring
+                .store(true, std::sync::atomic::Ordering::Release);
+        }
         self.live.take();
     }
 }

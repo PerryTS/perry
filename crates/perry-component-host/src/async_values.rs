@@ -34,6 +34,9 @@ mod reader_dispose;
 
 #[path = "async_values/compose.rs"]
 mod compose;
+#[cfg(test)]
+#[path = "async_values/compose_tests.rs"]
+mod compose_tests;
 mod resource_dispose;
 pub(crate) use compose::Prepared;
 #[path = "async_values/control.rs"]

@@ -1,5 +1,7 @@
 //! Async calls own the Store across suspension; only Accessor callbacks borrow it.
+pub(crate) mod borrows;
 pub(crate) mod dispatch;
+pub(crate) mod import_values;
 pub(crate) mod origin;
 pub(crate) mod retention;
 use crate::{host_resources, transport, Host, Import, Imports, Live, StoreData};
@@ -42,27 +44,33 @@ pub(super) fn link_import(
         Box::pin(async move {
             let captured = accessor.with(|mut store| origin::capture(store.as_context_mut()))?;
             origin::captured(captured, async move {
-                // Wasmtime's eager first poll occurs on the guest's fiber. Once
-                // suspended, concurrent host tasks are polled by run_concurrent
-                // on the embedding stack, with Accessor's Store TLS active.
+                let (prepared, ids) = accessor.with(|mut store| {
+                    let checkpoint = store.data_mut().resources.checkpoint();
+                    let values = import_values::prepare(store.as_context_mut(), params);
+                    let ids = store.data_mut().resources.borrowed_since(checkpoint);
+                    (values, ids)
+                });
+                let mut borrows = borrows::Scope::new(accessor, ids);
+                // Borrow handles need the initial canonical scope. Only their
+                // native conversion runs on the guest fiber; JS follows yield.
                 if embedding_stack {
                     futures_lite::future::yield_now().await;
                 }
-                let (args, borrows) = accessor.with(|mut store| {
-                    let args = params
+                let args = accessor.with(|mut store| -> Result<Vec<Value>> {
+                    let mut prepared = prepared?;
+                    params
                         .iter()
                         .zip(ty.params())
-                        .map(|(v, (_, ty))| transport::lift(store.as_context_mut(), v, &ty))
-                        .collect::<Result<Vec<_>>>();
-                    // Take only this import's newly lifted borrows before yielding.
-                    // Another async import may acquire its own borrows meanwhile.
-                    let borrows = store.data_mut().resources.take_borrows();
-                    (args, borrows)
+                        .map(|(v, (_, ty))| {
+                            transport::lift_import(store.as_context_mut(), v, &ty, &mut prepared)
+                        })
+                        .collect()
                 });
                 let value = match args {
                     Ok(args) => callback(args).await,
                     Err(error) => Err(error),
                 };
+                let cleanup = borrows.finish().await;
                 accessor.with(|mut store| {
                     let outcome = (|| -> Result<()> {
                         let cleanup = host_resources::drain(store.as_context_mut());
@@ -80,14 +88,8 @@ pub(super) fn link_import(
                         }
                         Ok(())
                     })();
-                    let mut cleanup = Ok(());
-                    for borrow in borrows {
-                        if let Err(error) = borrow.resource_drop(&mut store) {
-                            cleanup = Err(error);
-                        }
-                    }
                     outcome.map_err(wasmtime::Error::from_anyhow)?;
-                    cleanup
+                    cleanup.map_err(wasmtime::Error::from_anyhow)
                 })
             })
             .await
@@ -109,12 +111,16 @@ impl Invocation<'_> {
         self.host.live = self.live.take();
     }
     pub(super) fn retire(&mut self) -> Result<()> {
-        let Some(live) = self.live.take() else {
+        let Some(mut live) = self.live.take() else {
             return Ok(());
         };
         if let Some(before) = self.before_retire.take() {
             before();
         }
+        live.store
+            .data_mut()
+            .retiring
+            .store(true, std::sync::atomic::Ordering::Release);
         let mut data = live.store.into_data();
         let hook = data.host_resources.hook.clone();
         let entries = std::mem::take(&mut data.host_resources.entries);

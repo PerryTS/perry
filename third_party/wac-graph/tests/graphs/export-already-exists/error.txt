@@ -1,0 +1,4 @@
+failed to export node 0 in export 1 for test case `export-already-exists`
+
+Caused by:
+    an export with the name `foo` already exists

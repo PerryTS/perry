@@ -9180,8 +9180,6 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 [[package]]
 name = "wac-graph"
 version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f0418130ea1c8f995ac51fd495080942604bca6455e6fb11f110aa1cefd3f549"
 dependencies = [
  "anyhow",
  "id-arena",

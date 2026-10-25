@@ -12,6 +12,7 @@ use std::{
 #[derive(Default)]
 struct State {
     counts: BTreeMap<String, usize>,
+    leases: BTreeMap<String, bool>,
     waiters: BTreeMap<InvocationId, Waker>,
 }
 #[derive(Clone, Default)]
@@ -21,6 +22,67 @@ pub(crate) struct Guard {
     keys: Vec<String>,
 }
 impl Registry {
+    pub fn open(&self, ids: &[String], asynchronous: bool) {
+        let mut state = self.0.lock().unwrap();
+        for id in ids {
+            assert!(state.leases.insert(id.clone(), asynchronous).is_none());
+        }
+    }
+    pub fn close(&self, ids: &[String]) {
+        let mut state = self.0.lock().unwrap();
+        for id in ids {
+            state.leases.remove(id);
+        }
+    }
+    pub fn requests(&self, values: &[serde_json::Value]) -> anyhow::Result<Guard> {
+        fn visit(
+            value: &serde_json::Value,
+            keys: &mut std::collections::BTreeSet<String>,
+            ids: &mut std::collections::BTreeSet<String>,
+            depth: usize,
+        ) -> anyhow::Result<()> {
+            anyhow::ensure!(depth < 128, "component argument nesting exceeds 128");
+            if let Some(id) = value.get("$borrow").and_then(serde_json::Value::as_str) {
+                anyhow::ensure!(
+                    value["owned"] == false,
+                    "borrow capability requires a borrowed descriptor"
+                );
+                let key = match (value["$hostResource"].as_str(), value["$resource"].as_str()) {
+                    (Some(token), None) => format!("host:{token}"),
+                    (None, Some(token)) if token == id => format!("guest:{token}"),
+                    _ => anyhow::bail!("borrow capability requires its resource descriptor"),
+                };
+                ids.insert(id.to_string());
+                keys.insert(format!("lease:{id}"));
+                keys.insert(key);
+            }
+            match value {
+                serde_json::Value::Array(values) => {
+                    for value in values {
+                        visit(value, keys, ids, depth + 1)?;
+                    }
+                }
+                serde_json::Value::Object(values) => {
+                    for value in values.values() {
+                        visit(value, keys, ids, depth + 1)?;
+                    }
+                }
+                _ => {}
+            }
+            Ok(())
+        }
+        let mut keys = std::collections::BTreeSet::new();
+        let mut ids = std::collections::BTreeSet::new();
+        for value in values {
+            visit(value, &mut keys, &mut ids, 0)?;
+        }
+        let state = self.0.lock().unwrap();
+        for id in ids {
+            anyhow::ensure!(state.leases.get(&id)==Some(&true),"borrow capability expired, belongs to another component, or came from a synchronous import");
+        }
+        drop(state);
+        Ok(self.acquire(keys.into_iter().collect()))
+    }
     pub fn contains(&self, key: &str) -> bool {
         self.0.lock().unwrap().counts.contains_key(key)
     }

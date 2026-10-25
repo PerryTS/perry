@@ -104,6 +104,16 @@ impl HostResources {
 }
 
 pub(crate) fn destroy(mut store: StoreContextMut<'_, StoreData>, rep: u32, ty: u32) -> Result<()> {
+    let token = store
+        .data()
+        .host_resources
+        .reps
+        .get(&rep)
+        .context("unknown host resource representation")?;
+    ensure!(
+        !store.data().borrowed.contains(&format!("host:{token}")),
+        "host resource is borrowed by an active component call"
+    );
     let state = &mut store.data_mut().host_resources;
     let reference = state.remove(rep, ty)?;
     let hook = state.hook.clone();

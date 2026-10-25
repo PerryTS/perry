@@ -119,6 +119,7 @@ impl Host {
                 .origins
                 .registry
                 .clone(),
+            self.live.as_ref().unwrap().store.data().borrowed.clone(),
         ));
         for (token, stream) in self
             .live

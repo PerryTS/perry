@@ -190,6 +190,30 @@ It does not wait for background task exit. The native registry contains token
 strings, counts and native wakers only. Cancellation removes waiting collectors
 and guards during Store retirement.
 
+Async import arguments have separate borrow scopes. A resource loaned to an
+async application import can be forwarded through the driver's queue to another
+export while that import is pending. Submission pins the native alias before
+execution, including when the import returns immediately after submitting work.
+Settlement rejects new forwarding and waits for already accepted borrowers.
+Completing one import, or calling a synchronous import, does not remove another
+import's aliases. Expired, foreign and ownership-changing borrow descriptors
+reject before entering the guest. Synchronous import loans cannot outlive their
+callback and cannot be submitted as queued forwarding work.
+
+This applies to JavaScript-backed host resources and provider resources; the
+native C tests forward an actual WASI network resource. Borrow aliases use the
+maintained async cleanup API without retaining a Store borrow across polls.
+The runtime codec keeps their native capability and expiration lifetime in
+private GC-traced state. The TypeScript persistent driver migration is still
+pending; these codec checks do not qualify that public call path.
+
+Composition uses the pinned `wac-graph` 0.12.0 source with a local nominal
+resource alias fix. Freestanding functions can borrow or own imported resources,
+including anonymous interfaces, identical resource names and nested signatures
+that reference outer resources without re-exporting them. The unchanged upstream
+composition fixtures also pass. See [vendor provenance](../third_party/wac-graph/VENDORED.md)
+and the [borrow interop receipt](validation/wasi-import-borrows-20261025.json).
+
 For readable future/stream wrappers, `client.collect_async_value(&value)` and
 the C `collect` command ignore descriptors already consumed, closed or transferred.
 Live pending reads use the same cancellation protocol as explicit `close`.

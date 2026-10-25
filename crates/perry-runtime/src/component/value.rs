@@ -278,11 +278,11 @@ fn decode_at(
                     _ => fail("Invalid component float"),
                 };
             }
-            if let Some(token) = object.get("$resource").and_then(Value::as_str) {
-                return super::resource::wrap(
+            if object.contains_key("$resource") {
+                return super::resource::decode(
                     owner.get_nanbox_f64(),
-                    token,
-                    object.get("owned") == Some(&Value::Bool(true)),
+                    value,
+                    lifetime.get_nanbox_f64(),
                 );
             }
             let output = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(

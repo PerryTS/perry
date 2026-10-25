@@ -1,5 +1,6 @@
 use super::*;
 mod disposal_tests;
+mod interop_tests;
 use perry_abi::component_host::ASYNC_PENDING;
 
 #[derive(Default)]
@@ -12,6 +13,8 @@ struct State {
     resources: Vec<(Value, u64, u64)>,
     reject_drop: bool,
     guest_drops: Vec<(u32, u64, u64)>,
+    loans: BTreeMap<u64, Value>,
+    forward_during_loan: bool,
 }
 struct Frame {
     state: *mut State,
@@ -82,6 +85,42 @@ unsafe extern "C" fn callback(
 ) -> i32 {
     let frame = &*(context as usize as *const Frame);
     let state = &mut *frame.state;
+    if bytes(function, function_len).unwrap() == b"ping" {
+        let args: Value = serde_json::from_slice(bytes(args, args_len).unwrap()).unwrap();
+        let value = if args[0].get("$resource").is_some() {
+            42
+        } else {
+            args[0]["$hostResource"]
+                .as_str()
+                .unwrap()
+                .strip_prefix("loan-")
+                .unwrap()
+                .parse::<u32>()
+                .unwrap()
+        };
+        output(out, serde_json::to_vec(&json!(value)).unwrap());
+        return OK;
+    }
+    if bytes(function, function_len).unwrap() == b"loan" {
+        let args: Value = serde_json::from_slice(bytes(args, args_len).unwrap()).unwrap();
+        let ticket = args["args"][1]["$bigint"]
+            .as_str()
+            .unwrap()
+            .parse::<u64>()
+            .unwrap();
+        state.loans.insert(ticket, args["args"][0].clone());
+        if state.forward_during_loan {
+            state.nested = Some(submit(state.host, json!({"op":"call","interface":"","function":"inspect","args":[args["args"][0]]})).unwrap());
+            output(out, b"null".to_vec());
+            return OK;
+        }
+        state.requests.insert(
+            ticket,
+            args["$asyncRequest"].as_str().unwrap().parse().unwrap(),
+        );
+        state.seen.push((ticket, origin, frame.marker));
+        return ASYNC_PENDING;
+    }
     if bytes(function, function_len).unwrap() == b"dropped" {
         let args: Value = serde_json::from_slice(bytes(args, args_len).unwrap()).unwrap();
         state
@@ -133,6 +172,9 @@ unsafe extern "C" fn callback(
     ASYNC_PENDING
 }
 unsafe fn new(state: &mut State, source: &str, component: &str) {
+    new_options(state, source, component, &[]);
+}
+unsafe fn new_options(state: &mut State, source: &str, component: &str, options: &[u8]) {
     let world = perry_wit::parse(source, None).unwrap();
     let wasm = wat::parse_str(component).unwrap();
     let contract = serde_json::to_vec(&world).unwrap();
@@ -143,8 +185,8 @@ unsafe fn new(state: &mut State, source: &str, component: &str) {
         wasm.len(),
         contract.as_ptr(),
         contract.len(),
-        std::ptr::null(),
-        0,
+        options.as_ptr(),
+        options.len(),
         Some(callback),
         Some(perry_component_host_buffer_drop),
         Some(resource_callback),

@@ -33,6 +33,7 @@ pub(super) struct State {
     writers: RefCell<BTreeMap<String, WriterMeta>>,
     pub types: Vec<crate::AsyncValueType>,
     retention: crate::asynchronous::retention::Registry,
+    borrowed: crate::borrowed::Registry,
 }
 impl Default for State {
     fn default() -> Self {
@@ -48,6 +49,7 @@ impl Default for State {
             writers: RefCell::new(BTreeMap::new()),
             types: Vec::new(),
             retention: Default::default(),
+            borrowed: Default::default(),
         }
     }
 }
@@ -55,10 +57,12 @@ impl State {
     pub fn new(
         types: Vec<crate::AsyncValueType>,
         retention: crate::asynchronous::retention::Registry,
+        borrowed: crate::borrowed::Registry,
     ) -> Self {
         Self {
             types,
             retention,
+            borrowed,
             ..Self::default()
         }
     }
@@ -159,6 +163,7 @@ pub(super) enum Target {
 pub(super) struct Request {
     pub target: Target,
     permit: Rc<Permit>,
+    borrows: crate::borrowed::Guard,
     pub origin: InvocationId,
     pub interface: String,
     pub name: String,
@@ -170,6 +175,7 @@ pub(super) struct Request {
 pub(super) struct Command {
     pub target: Target,
     _permit: Rc<Permit>,
+    _borrows: crate::borrowed::Guard,
     pub origin: InvocationId,
     pub function: Option<Func>,
     pub args: Vec<Value>,
@@ -184,6 +190,7 @@ impl Command {
     pub fn new(request: Request, function: Option<Func>) -> Self {
         Self {
             _permit: request.permit,
+            _borrows: request.borrows,
             target: request.target,
             origin: request.origin,
             function,
@@ -386,6 +393,7 @@ impl DriverClient {
             self.state.outstanding.get() < 64,
             "too many pending component calls"
         );
+        let borrows = self.state.borrowed.requests(args)?;
         let origin = InvocationId::fresh()?;
         let (reply, receive) = oneshot::channel();
         self.state.replies.borrow_mut().insert(origin, reply);
@@ -474,6 +482,7 @@ impl DriverClient {
         self.send
             .unbounded_send(Request {
                 permit: permit.clone(),
+                borrows,
                 target,
                 origin,
                 interface: interface.into(),
