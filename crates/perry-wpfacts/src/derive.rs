@@ -282,15 +282,17 @@ pub fn derive(g: &mut Gen) -> (Vec<TemplateFacts>, Vec<SiteFacts>) {
     (out, sites)
 }
 
-/// FVA 3.4: the class object's own statics that hold their definition for
-/// the program's life. Statics are created when the class is evaluated (a
-/// static method by its declaration, a static field by the store the HIR
-/// emits there, `Model::static_defs`); one is constant when nothing else
-/// stores it: its store sites are exactly its definition's (stores of the
-/// key on the class's instances count too, the writers being per template),
-/// the class object reaches no unknown code (which could write it), carries
-/// no HARD operation (defineProperty, delete, a prototype write), has no
-/// computed static member, and the key is no accessor.
+/// FVA 3.4: the class object's own statics whose read is the one load of
+/// the property the class's evaluation created. The class object reaches no
+/// unknown code (which could write or delete them), carries no HARD
+/// operation (defineProperty, delete), has no computed static member, and
+/// the key is no accessor. A static method (or `prototype`) is its
+/// declaration for the program's life: no store of the key exists (stores of
+/// it on the class's instances count too, the writers being per template),
+/// so a call of it is the declaration's body. A declared static field is
+/// one load whatever stores it later: they widen its value set, which every
+/// reader already takes (the HIR stores the definition where the class is
+/// evaluated, once or more for a nested class).
 fn constant_statics(m: &Model, tm: TmplId) -> Vec<String> {
     let Some(&cobj) = m.tok_index.get(&TokKind::ClassObj(tm)) else {
         return Vec::new();
@@ -314,12 +316,11 @@ fn constant_statics(m: &Model, tm: TmplId) -> Vec<String> {
         if !m.fields.get(&(cobj, a)).is_some_and(|&n| holds(n)) {
             continue;
         }
-        let stores = m
+        let stored = m
             .writers
             .get(&(tm, a))
-            .map_or(0, |w| w.ctor.len() + w.post.len());
-        let defined_only = stores == m.static_defs.get(&(tm, a)).copied().unwrap_or(0);
-        if defined_only {
+            .is_some_and(|w| !w.ctor.is_empty() || !w.post.is_empty());
+        if m.static_fields.contains(&(tm, a)) || !stored {
             out.push(m.atoms[a as usize].clone());
         }
     }

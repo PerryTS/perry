@@ -77,7 +77,7 @@ fn a_nested_class_static_is_defined_where_the_class_is_evaluated() {
 }
 
 #[test]
-fn a_static_stored_after_its_definition_is_not_constant() {
+fn a_static_method_stored_after_its_definition_is_not_constant() {
     let src = PK.replace(
         "console.log(useIt(Pk));",
         "console.log(useIt(Pk)); (Pk as any).of = (n: number) => n; console.log(useIt(Pk));",
