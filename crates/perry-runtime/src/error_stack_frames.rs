@@ -54,8 +54,10 @@ static STATIC_SYMBOL_SPAWN_ATTEMPTS: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 
 #[cfg(test)]
-static FRAME_RESOLUTION_ATTEMPTS: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
+per_test_global! {
+    static FRAME_RESOLUTION_ATTEMPTS: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+}
 
 /// Return addresses captured per construction, and the ceiling on
 /// `Error.stackTraceLimit`. 16 words = 128 bytes of encoded blob. On x86_64
