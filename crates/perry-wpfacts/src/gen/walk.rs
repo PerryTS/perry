@@ -357,6 +357,13 @@ impl<'a> Gen<'a> {
         };
         let cobj = self.m.tok(TokKind::ClassObj(tm));
         for f in &c.static_fields {
+            // How many stores define the field (`Model::static_defs`): the
+            // HIR emits them where the class is evaluated, nested or not.
+            if f.key_expr.is_none() {
+                let a = self.m.atom(&f.name);
+                let defs = usize::from(f.init.is_some() || f.is_private);
+                self.m.static_defs.insert((tm, a), defs);
+            }
             if c.is_nested && (f.init.is_some() || f.key_expr.is_some()) {
                 // A nested class's static initializers run where the class
                 // is evaluated (`StaticFieldSet`, `ClassStaticSymbolSet`,
@@ -375,11 +382,7 @@ impl<'a> Gen<'a> {
                     let _ = self.expr(&sfx, k);
                     self.m.field_any(cobj)
                 }
-                None => {
-                    let defs = usize::from(f.init.is_some() || f.is_private);
-                    self.m.static_defs.insert((tm, a), defs);
-                    self.m.field(cobj, a)
-                }
+                None => self.m.field(cobj, a),
             };
             self.m.edge(v, fl);
         }

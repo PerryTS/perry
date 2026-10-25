@@ -57,6 +57,26 @@ fn a_constant_static_called_through_a_value_is_proven() {
 }
 
 #[test]
+fn a_nested_class_static_is_defined_where_the_class_is_evaluated() {
+    // A class inside a function (as every class of a CommonJS module is):
+    // its static fields are stored where it is evaluated, once each.
+    let pf = facts(
+        r#"
+        function mk() { class N { static t = 5; static of() { return N.t; } } return N; }
+        function use(k: any) { return k.of() + k.t; }
+        console.log(use(mk()));
+        "#,
+    );
+    assert_eq!(
+        tmpl(&pf, "N").statics,
+        ["of", "prototype", "t"],
+        "{}",
+        pf.dump_text()
+    );
+    assert!(proven(&pf, "of") && proven(&pf, "t"), "{}", pf.dump_text());
+}
+
+#[test]
 fn a_static_stored_after_its_definition_is_not_constant() {
     let src = PK.replace(
         "console.log(useIt(Pk));",
