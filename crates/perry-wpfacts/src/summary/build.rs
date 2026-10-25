@@ -900,8 +900,9 @@ pub(super) fn build_summaries(m: &mut Model) {
     };
     let (ncomposed, nsccs) = compose(m, &obs_of);
     for s in m.sum.of.values_mut() {
-        let rel = relative_params(s);
-        Rc::make_mut(s).rel = rel;
+        let s = Rc::make_mut(s);
+        bind_written_params(s);
+        s.rel = relative_params(s);
     }
     let size_after: usize = m
         .sum
@@ -974,11 +975,40 @@ pub(super) fn build_summaries(m: &mut Model) {
     );
 }
 
+/// A parameter the body writes (`x = x.parent`, a default value, a
+/// destructuring) gets a binding of its own: a fresh slot the calls write,
+/// which holds the argument marker and feeds the variable. The variable
+/// then holds the marker and what the body put there (`x.parent`) as tokens
+/// of one family, each the caller's at the result (DECISIONS 44 (b)),
+/// instead of the parameter node's marker standing for both.
+fn bind_written_params(s: &mut Summary) {
+    let written = written_slots(s);
+    for i in 0..s.params.len() {
+        let p = s.params[i];
+        if is_slot(p) && written.contains(&p) {
+            let b = SLOT | s.nslots;
+            s.nslots += 1;
+            s.orig.push(NO_NODE);
+            s.edges.push((b, p));
+            s.params[i] = b;
+        }
+    }
+}
+
 /// Per parameter of summary `s`: a slot only the calls write (DECISIONS 44
-/// (b)). Any edge, rule term, call result or seeded token naming the slot
-/// may put a value there that is not this run's argument (`x = x.parent`),
-/// so the parameter's marker would stand for that value too.
+/// (b)); after `bind_written_params` every slot parameter is one. A
+/// parameter that is not a slot (a captured parameter's node) is not.
 fn relative_params(s: &Summary) -> Vec<bool> {
+    let written = written_slots(s);
+    s.params
+        .iter()
+        .map(|&p| is_slot(p) && !written.contains(&p))
+        .collect()
+}
+
+/// The slots some edge, rule term, call result or seeded token names as a
+/// destination: they may hold a value that no call passed.
+fn written_slots(s: &Summary) -> FxHashSet<NodeId> {
     let mut written: FxHashSet<NodeId> = FxHashSet::default();
     for &(_, b) in &s.edges {
         written.insert(b);
@@ -995,8 +1025,5 @@ fn relative_params(s: &Summary) -> Vec<bool> {
             written.insert(SLOT | sl);
         }
     }
-    s.params
-        .iter()
-        .map(|&p| is_slot(p) && !written.contains(&p))
-        .collect()
+    written
 }
