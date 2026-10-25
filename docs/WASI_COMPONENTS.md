@@ -13,7 +13,7 @@ import `load` from `bindings.ts`; the generated `exports` object has the WIT
 function signatures. Interface identifiers retain their package versions.
 
 The native embedding and Rust component oracle use the lockfile-pinned
-Wasmtime 48.0.5 engine. The standalone command runner is qualified separately
+Wasmtime 48.0.7 engine. The standalone command runner is qualified separately
 with Wasmtime CLI 48.0.0.
 
 The native `perry/component` module links a separate
@@ -29,6 +29,52 @@ Application-defined resource imports use the factories described below.
 `wasi:http` client imports are implemented; their Linux engine and canonical
 component qualification is described below. Incoming HTTP handling and authored
 HTTP components are qualified on Linux below; native WASI 0.3 remains in progress.
+
+### Native async functions
+
+WIT `async func` declarations use the canonical async calling convention.
+The manifest preserves this bit and the engine checks it before instantiation;
+a synchronous manifest cannot silently call an async export. Generated native
+TypeScript bindings return `Promise<T>` and accept Promise-returning async
+imports. Synchronous declarations and legacy manifests keep their existing
+calling convention. The native Rust embedding exposes `Host::call_async` and
+`Host::new_with_async_imports`.
+
+Each component permits one pending async invocation. A second async call is
+rejected until the first settles; independent components can progress through
+the same agent event pump. Native I/O wakes that agent using its identifier.
+Only the owning thread executes guest code, JavaScript imports or cleanup.
+Pending operation payloads trace the component, result Promise and original
+JavaScript rejection. Argument values are snapshotted at submission, and resource
+wrappers remain traced while queued and while async import results are lowered.
+Import arguments cross the engine as owned JSON values,
+and borrowed host resources remain valid until their import Promise settles.
+Successful calls retain the Store for reuse. Traps, rejected imports and explicit
+disposal cancel suspended guest tasks and retire that component's Store.
+
+This is a subset of the WASI 0.3 milestone. Enabling `wasi` now links the
+Turnloop-backed 0.3.0 providers as well as the P2 providers, but generic
+`future<T>`, `stream<T>` and `error-context` values are still rejected by WIT
+bindings. Async Perry-authored guest functions also require a rooted canonical
+adapter and are explicitly rejected by `perry-wit --guest-c`. P3 commands and
+the production P3 HTTP handler entry point remain separate work. Do not infer
+complete P3 support from async function support or the Rust provider receipts.
+
+`scripts/component_async_acceptance.py` exercises a compiled TypeScript host
+against a canonical async component, including a suspended JS import, Store
+reuse, original rejection identity, cancellation, ALS and explicit collection.
+The native host/runtime boundary uses ABI 7; rebuild the matching compiler,
+runtime and optional engine archives together. Other host platforms and final
+distribution packages still require qualification.
+
+The [Linux qualification receipt](validation/wasi-native-async-functions-20261025.json)
+records 57 native engine tests in development and production panic-abort, 39
+runtime component tests and strict TypeScript checking. The actual compiled
+TypeScript host moves 3,858 objects across 19 verified copying collections with
+protected from-space. It also exercises canonical resource destruction and a
+throwing destructor during import rejection. Matching ABI 7 archives retain
+all 28 P2 library, nine command and eight HTTP regression phases, including
+moving-GC execution.
 
 ### Native WASI commands
 
@@ -58,7 +104,7 @@ budgets throw `ERR_COMPONENT`. Export validation happens before component
 initializers execute. Initialization and execution share one fuel budget;
 fuel does not interrupt time spent in synchronous host I/O.
 
-The combined component-host boundary uses ABI 6; compiler, runtime and
+The combined component-host boundary uses ABI 7; compiler, runtime and
 optional host archive must be built together. The separate command feature
 was qualified using ABI 3; the combined Linux qualification is recorded below.
 This API is native-only. Unit fixtures and
@@ -104,8 +150,9 @@ and optional port; omitting the port explicitly grants all ports on that IP.
 These grants cover binds and connections. `network.dns` separately enables
 name resolution and does not authorize access to resolved addresses. All
 three switches default to false, and the address list defaults to empty.
-This is a synchronous host: fuel and epoch interruption bound guest execution,
-not time spent in blocking host I/O. Host I/O cancellation remains future work.
+P2 calls are synchronous: fuel and epoch interruption bound guest execution,
+not time spent in blocking P2 host I/O. Canonical async calls use the suspension
+and cancellation path described above.
 
 With providers enabled, the `wasi:` import namespace is provider-owned;
 application callbacks cannot override it. Generated `ApplicationImports`
@@ -142,15 +189,15 @@ That receipt covers the client; incoming-handler qualification is recorded below
 Perry-generated TypeScript HTTP guests under moving GC have the separate
 qualification below. Other native platforms and final shipping packages remain open.
 The experimental `informational-outbound-responses` interface is disabled.
-Native Perry WASI 0.3 integration remains unimplemented. The provider crate
-has optional `p3` clocks/random, CLI, filesystem, socket and HTTP providers at 0.3.0; they are not yet
-enabled by the Perry component engine. See [provider provenance](../crates/perry-wasi/PROVENANCE.md)
+Native Perry WASI 0.3 integration remains incomplete. The provider crate
+has optional `p3` clocks/random, CLI, filesystem, socket and HTTP providers at 0.3.0, now
+linked by the optional component engine. See [provider provenance](../crates/perry-wasi/PROVENANCE.md)
 and the [Linux filesystem qualification](validation/wasi-p3-filesystem-20261023.json)
 and [socket qualification](validation/wasi-p3-sockets-20261023.json), plus
 [HTTP qualification](validation/wasi-p3-http-20261023.json). HTTP supports
 canonical body streams, trailers and transmission futures, async client calls
-and Rust handler embedding over Turnloop HTTP/1.1. The production async engine
-and TypeScript bindings remain unfinished.
+and Rust handler embedding over Turnloop HTTP/1.1. Generic future/stream
+bindings and the production P3 HTTP handler path remain unfinished.
 
 The Rust embedding API now provides an HTTP/1.1 origin server through
 `perry_wasi::http::server::Server` and canonical handler invocation through
@@ -279,8 +326,8 @@ The value mapping uses BigInt for `s64/u64`, Uint8Array for `list<u8>`, and
 tagged objects for options, results, and variants. In particular,
 `some(none)` stays distinct from `none`. Resource wrappers retain private
 ownership tokens; application objects cannot forge a token by adding public
-properties. Async functions, futures, and streams require the future P3
-profile and are rejected by this P2 generator.
+properties. Native async functions use the Promise mapping above. Futures,
+streams and async guest adapters remain unsupported.
 
 ## Disposal and traps
 
@@ -589,7 +636,7 @@ Still required before claiming the full milestone:
   with that workflow exercises these extended resource fixtures.
 
 
-P3 async support remains a subsequent milestone.
+Completing P3 async support remains a subsequent milestone.
 
 ## Native host platform qualification
 

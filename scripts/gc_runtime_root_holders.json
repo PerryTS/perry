@@ -2946,6 +2946,18 @@
       "why": "I3 weak shape authority: every backing is allocated old and movement-pinned by alloc_canonical_key_list. The registered full-trace death prune retires nodes before sweep can reuse addresses. No root or relocation scanner is required; gc_keylist_invariant.py checks those production funnels."
     },
     {
+      "file": "crates/perry-runtime/src/component/asynchronous.rs",
+      "name": "PENDING",
+      "verdict": "not_a_gc_pointer",
+      "why": "Stable native-payload OwnerLink tokens retained with link_ref. Pinned payload cells trace and rewrite the owner back-edge and all ordinary managed state (component, Promise and primary error). Completion unrefs each link; agent retirement clears tokens before arena teardown. No JS address is retained in this queue. Moving-GC acceptance tests assert the queued operation evacuates while suspended."
+    },
+    {
+      "file": "crates/perry-runtime/src/component/asynchronous.rs",
+      "name": "PUMPING",
+      "verdict": "not_a_gc_pointer",
+      "why": "Boolean reentrancy guard for the component Promise pump; contains no managed value or address."
+    },
+    {
       "file": "crates/perry-runtime/src/component/http/pump.rs",
       "name": "PENDING",
       "verdict": "not_a_gc_pointer",

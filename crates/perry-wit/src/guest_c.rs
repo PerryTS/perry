@@ -2,7 +2,7 @@
 //! typed C functions to Perry's rooted frame API; it never invents Wasm layouts.
 mod values;
 
-use anyhow::Result;
+use anyhow::{ensure, Result};
 use heck::ToSnakeCase;
 use std::{
     collections::{BTreeMap, HashMap},
@@ -24,6 +24,15 @@ pub fn canonical_guest(path: &Path, selected: Option<&str>) -> Result<BTreeMap<S
     // so its resource factories and the generated callbacks share TypeIds.
     resolve.generate_nominal_type_ids(id);
     let world = crate::resolve::convert(&resolve, id)?;
+    ensure!(
+        world
+            .imports
+            .iter()
+            .chain(&world.exports)
+            .flat_map(|i| &i.functions)
+            .all(|f| !f.async_),
+        "async guest functions require the P3 rooted-frame adapter"
+    );
     let mut files = Files::default();
     wit_bindgen_c::Opts {
         no_sig_flattening: true,

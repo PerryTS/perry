@@ -115,13 +115,19 @@ impl Typescript<'_> {
             .map(|(i, field)| format!("arg{i}: {}", self.ty(&field.ty)))
             .collect::<Vec<_>>()
             .join(", ");
-        format!(
-            "({params}) => {}",
-            function
-                .result
-                .as_ref()
-                .map_or_else(|| "void".into(), |t| self.ty(t))
-        )
+        format!("({params}) => {}", self.result(function))
+    }
+
+    fn result(&self, function: &Function) -> String {
+        let result = function
+            .result
+            .as_ref()
+            .map_or_else(|| "void".into(), |t| self.ty(t));
+        if function.async_ {
+            format!("Promise<{result}>")
+        } else {
+            result
+        }
     }
 
     fn interface(&self, out: &mut String, name: &str, interfaces: &[Interface]) {
@@ -164,10 +170,7 @@ impl Typescript<'_> {
                     .map(|i| format!("arg{i}"))
                     .collect::<Vec<_>>()
                     .join(", ");
-                let result = function
-                    .result
-                    .as_ref()
-                    .map_or_else(|| "void".into(), |t| self.ty(t));
+                let result = self.result(function);
                 writeln!(
                     out,
                     "      {}: ({params}): {result} => {call}{}, {}, [{args}]) as {result},",

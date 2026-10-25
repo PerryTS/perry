@@ -1,5 +1,8 @@
 //! Optional native Component Model engine. A host owns its Store, resource
 //! handles and limits. No Perry heap pointer crosses this crate boundary.
+mod asynchronous;
+mod imports;
+pub use asynchronous::{AsyncImport, AsyncImports};
 mod cleanup;
 mod command;
 pub mod http;
@@ -68,6 +71,7 @@ struct Live {
 pub struct Host {
     live: Option<Live>,
     engine: Engine,
+    dispatcher: Option<Arc<asynchronous::dispatch::Dispatcher>>,
 }
 
 /// Independent of the calling thread. Incrementing the epoch interrupts this
@@ -92,6 +96,45 @@ impl Host {
         options: &Options,
         resource_hook: ResourceHook,
     ) -> Result<Self> {
+        Self::new_with_async_imports(
+            bytes,
+            world,
+            imports,
+            &AsyncImports::new(),
+            options,
+            resource_hook,
+        )
+    }
+
+    /// Native async imports receive owned values and never retain a Store borrow.
+    pub fn new_with_async_imports(
+        bytes: &[u8],
+        world: &World,
+        imports: &Imports,
+        async_imports: &AsyncImports,
+        options: &Options,
+        resource_hook: ResourceHook,
+    ) -> Result<Self> {
+        Self::new_with_dispatcher(
+            bytes,
+            world,
+            imports,
+            async_imports,
+            options,
+            resource_hook,
+            None,
+        )
+    }
+
+    fn new_with_dispatcher(
+        bytes: &[u8],
+        world: &World,
+        imports: &Imports,
+        async_imports: &AsyncImports,
+        options: &Options,
+        resource_hook: ResourceHook,
+        dispatcher: Option<Arc<asynchronous::dispatch::Dispatcher>>,
+    ) -> Result<Self> {
         ensure!(
             options.memory_bytes > 0 && options.fuel > 0 && options.instances > 0,
             "component limits must be positive"
@@ -99,6 +142,7 @@ impl Host {
         let mut config = Config::new();
         config
             .wasm_component_model(true)
+            .wasm_component_model_async(true)
             .consume_fuel(true)
             .epoch_interruption(true);
         config.wasm_exceptions(true);
@@ -111,6 +155,7 @@ impl Host {
         let mut linker = Linker::<StoreData>::new(&engine);
         if options.wasi.is_some() {
             perry_wasi::p2::add_to_linker_sync(&mut linker)?;
+            perry_wasi::p3::add_to_linker(&mut linker)?;
         }
         for interface in &world.imports {
             if options.wasi.is_some() && interface.name.starts_with("wasi:") {
@@ -123,6 +168,23 @@ impl Host {
             };
             for (name, key) in &interface.resources {
                 let id = host_resources.types[key];
+                if let Some(dispatcher) = &dispatcher {
+                    let dispatcher = dispatcher.clone();
+                    namespace.resource_async(
+                        name,
+                        wasmtime::component::ResourceType::host_dynamic(id),
+                        move |store, rep| {
+                            let dispatcher = dispatcher.clone();
+                            Box::new(async move {
+                                dispatcher
+                                    .run(move || host_resources::destroy(store, rep, id))
+                                    .await?
+                                    .map_err(wasmtime::Error::from_anyhow)
+                            })
+                        },
+                    )?;
+                    continue;
+                }
                 namespace.resource(
                     name,
                     wasmtime::component::ResourceType::host_dynamic(id),
@@ -133,6 +195,17 @@ impl Host {
                 )?;
             }
             for function in &interface.functions {
+                if function.async_ {
+                    asynchronous::link_import(
+                        &mut namespace,
+                        &interface.name,
+                        &function.name,
+                        imports,
+                        async_imports,
+                        dispatcher.is_some(),
+                    )?;
+                    continue;
+                }
                 let callback = imports
                     .get(&interface.name)
                     .and_then(|items| items.get(&function.name))
@@ -140,38 +213,7 @@ impl Host {
                         format!("missing import {} / {}", interface.name, function.name)
                     })?
                     .clone();
-                namespace.func_new(&function.name, move |mut store, ty, params, results| {
-                    let result = (|| -> Result<()> {
-                        let args = params
-                            .iter()
-                            .map(|value| transport::lift(store.as_context_mut(), value))
-                            .collect::<Result<Vec<_>>>()?;
-                        let value = callback(&args);
-                        let cleanup = host_resources::drain(store.as_context_mut());
-                        let value = value?;
-                        cleanup?;
-                        let types: Vec<_> = ty.results().collect();
-                        ensure!(
-                            results.len() == usize::from(value.is_some()),
-                            "host import result count mismatch"
-                        );
-                        if let Some(value) = value {
-                            let mut lowering = transport::Lowering::new(store.as_context_mut());
-                            results[0] = lowering.value(&value, &types[0])?;
-                            lowering.commit()?;
-                        }
-                        Ok(())
-                    })();
-                    let borrows = store.data_mut().resources.take_borrows();
-                    let mut cleanup = Ok(());
-                    for borrow in borrows {
-                        if let Err(error) = borrow.resource_drop(&mut store) {
-                            cleanup = Err(error);
-                        }
-                    }
-                    result.map_err(wasmtime::Error::from_anyhow)?;
-                    cleanup
-                })?;
+                imports::link(&mut namespace, &function.name, callback, dispatcher.clone())?;
             }
         }
         let limits = limits::Limits::new(options.memory_bytes, options.instances);
@@ -188,10 +230,22 @@ impl Host {
         store.set_fuel(options.fuel)?;
         store.set_epoch_deadline(1);
         let initialized = (|| -> Result<_> {
-            let instance = linker
-                .instantiate(&mut store, &component)
-                .map_err(anyhow::Error::from)
-                .context("instantiating component")?;
+            let needs_async = world
+                .imports
+                .iter()
+                .chain(&world.exports)
+                .flat_map(|i| &i.functions)
+                .any(|f| f.async_);
+            let instance = if needs_async {
+                futures_lite::future::block_on(asynchronous::dispatch::drive(
+                    dispatcher.as_ref(),
+                    linker.instantiate_async(&mut store, &component),
+                ))
+            } else {
+                linker.instantiate(&mut store, &component)
+            }
+            .map_err(anyhow::Error::from)
+            .context("instantiating component")?;
             let mut exports = BTreeMap::new();
             for interface in &world.exports {
                 let namespace = if interface.name.is_empty() {
@@ -224,6 +278,7 @@ impl Host {
         };
         Ok(Self {
             engine,
+            dispatcher,
             live: Some(Live {
                 store,
                 exports,
@@ -243,6 +298,10 @@ impl Host {
             .get(&(interface.to_string(), name.to_string()))
             .context("function is outside the selected WIT world")?;
         let ty = func.ty(&live.store);
+        ensure!(!ty.async_(), "async component function requires call_async");
+        if self.dispatcher.is_some() {
+            return futures_lite::future::block_on(self.call_async(interface, name, args));
+        }
         let params: Vec<_> = ty.params().map(|(_, ty)| ty).collect();
         ensure!(
             params.len() == args.len(),
@@ -284,8 +343,7 @@ impl Host {
         *released = true;
         live.store.set_fuel(live.fuel)?;
         live.store.set_epoch_deadline(1);
-        resource
-            .resource_drop(&mut live.store)
+        drop_guest_resource(self.dispatcher.as_ref(), resource, &mut live.store)
             .map_err(anyhow::Error::from)
     }
 
@@ -297,7 +355,9 @@ impl Host {
         for resource in live.store.data_mut().resources.drain() {
             live.store.set_fuel(live.fuel)?;
             live.store.set_epoch_deadline(1);
-            if let Err(error) = resource.resource_drop(&mut live.store) {
+            if let Err(error) =
+                drop_guest_resource(self.dispatcher.as_ref(), resource, &mut live.store)
+            {
                 first_error.get_or_insert(anyhow::Error::from(error));
             }
         }
@@ -305,6 +365,19 @@ impl Host {
             first_error.get_or_insert(error);
         }
         first_error.map_or(Ok(()), Err)
+    }
+}
+
+fn drop_guest_resource(
+    dispatcher: Option<&Arc<asynchronous::dispatch::Dispatcher>>,
+    resource: wasmtime::component::ResourceAny,
+    store: &mut Store<StoreData>,
+) -> wasmtime::Result<()> {
+    match dispatcher {
+        Some(dispatcher) => {
+            futures_lite::future::block_on(dispatcher.drive(resource.resource_drop_async(store)))
+        }
+        None => resource.resource_drop(store),
     }
 }
 
@@ -330,3 +403,6 @@ mod resource_tests;
 
 #[cfg(test)]
 mod host_resource_tests;
+
+#[cfg(test)]
+mod asynchronous_tests;

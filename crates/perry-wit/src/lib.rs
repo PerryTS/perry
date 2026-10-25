@@ -41,6 +41,13 @@ pub struct Function {
     pub params: Vec<Field>,
     pub result: Option<Type>,
     pub kind: FunctionKind,
+    /// Canonical async calling convention; absent in legacy synchronous manifests.
+    #[serde(default, rename = "async", skip_serializing_if = "is_false")]
+    pub async_: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

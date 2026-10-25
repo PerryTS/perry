@@ -2,7 +2,7 @@
 //! Byte buffers are freed by the allocator that produced them. Neither WIT
 //! values nor callbacks expose Perry heap addresses to component guests.
 // Combined command, host-resource, HTTP reactor and deferred-cleanup operations.
-pub const ABI_VERSION: u32 = 6;
+pub const ABI_VERSION: u32 = 7;
 
 pub const OK: i32 = 0;
 pub const ERROR: i32 = 1;
@@ -19,6 +19,8 @@ pub const DEFERRED: i32 = 3;
 pub const HTTP_PENDING: i32 = 4;
 /// An owned request is ready for exactly one incoming-handler invocation.
 pub const HTTP_READY: i32 = 5;
+/// A component call/import is suspended; wakeups only notify the owning agent.
+pub const ASYNC_PENDING: i32 = 6;
 /// A process-lifetime native wake function. Context is an agent identifier,
 /// never a Perry heap address. May be called on the native I/O driver thread.
 pub type WakeCallback = unsafe extern "C" fn(agent: u64);
@@ -69,6 +71,9 @@ macro_rules! component_host_entry_points {
         perry_component_host_buffer_drop(buffer: $crate::component_host::Buffer) -> ();
         perry_component_host_new(bytes: *const u8, len: usize, contract: *const u8, contract_len: usize, options: *const u8, options_len: usize, callback: Option<$crate::component_host::Callback>, free_callback: Option<$crate::component_host::FreeCallback>, resource_callback: Option<$crate::component_host::ResourceCallback>, context: u64, error: *mut $crate::component_host::Buffer) -> *mut core::ffi::c_void;
         perry_component_host_call(handle: *mut core::ffi::c_void, interface: *const u8, interface_len: usize, function: *const u8, function_len: usize, args: *const u8, args_len: usize, context: u64, output: *mut $crate::component_host::Buffer) -> i32;
+        perry_component_host_call_async_start(handle: *mut core::ffi::c_void, interface: *const u8, interface_len: usize, function: *const u8, function_len: usize, args: *const u8, args_len: usize, context: u64, cleanup_context: u64, wake: Option<$crate::component_host::WakeCallback>, agent: u64, output: *mut $crate::component_host::Buffer) -> i32;
+        perry_component_host_call_async_poll(handle: *mut core::ffi::c_void, context: u64, cleanup_context: u64, wake: Option<$crate::component_host::WakeCallback>, agent: u64, output: *mut $crate::component_host::Buffer) -> i32;
+        perry_component_host_async_import_resolve(handle: *mut core::ffi::c_void, request: u64, success: bool, value: *const u8, value_len: usize, output: *mut $crate::component_host::Buffer) -> i32;
         perry_component_host_dispose(handle: *mut core::ffi::c_void, context: u64, error: *mut $crate::component_host::Buffer) -> i32;
         perry_component_host_resource_drop(handle: *mut core::ffi::c_void, token: *const u8, token_len: usize, context: u64, error: *mut $crate::component_host::Buffer) -> i32;
         perry_component_host_resource_collect(handle: *mut core::ffi::c_void, request: *const u8, request_len: usize, context: u64, error: *mut $crate::component_host::Buffer) -> i32;

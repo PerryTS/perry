@@ -188,13 +188,14 @@ exports still need a specified WIT contract and matching bindings.
 
 ## 4. Add P3 native async
 
-The optional provider feature now implements 0.3.0 clocks/random and CLI through
-Turnloop. A canonical async component test interleaves suspended clock calls
-and verifies Store retirement during a pending call. This foundation is not
-yet enabled by the Perry component engine. CLI tests pass streams and result
-futures through a canonical component, including inherited native stdio and
-large binary transfers. Remaining work includes the other
-WASI providers and the complete TypeScript host/guest async bridge below.
+The optional provider feature implements 0.3.0 clocks/random, CLI, filesystem,
+sockets and HTTP through Turnloop. Canonical provider tests cover suspended
+calls, streams, result futures, large transfers and Store retirement. The
+optional Perry component engine now links these providers and exposes native
+async functions through Promise-based TypeScript host bindings. It currently
+permits one pending invocation per component. Generic WIT future/stream values,
+async guest adapters, P3 command/HTTP entry points, concurrent calls within one
+instance and complete host/guest composition remain unfinished.
 
 Pin an explicit WASI 0.3 interface version and supported Component Model
 feature set. Integrate native async lifting/lowering with Perry's promise

@@ -119,14 +119,10 @@ impl Converter<'_> {
     fn function(&mut self, function: &wit_parser::Function) -> Result<Function> {
         use wit_parser::FunctionKind as Kind;
         let kind = match function.kind {
-            Kind::Freestanding => FunctionKind::Function,
+            Kind::Freestanding | Kind::AsyncFreestanding => FunctionKind::Function,
             Kind::Constructor(id) => FunctionKind::Constructor(self.definition(id)?),
-            Kind::Method(id) => FunctionKind::Method(self.definition(id)?),
-            Kind::Static(id) => FunctionKind::Static(self.definition(id)?),
-            _ => bail!(
-                "{}: async functions require the P3 binding profile",
-                function.name
-            ),
+            Kind::Method(id) | Kind::AsyncMethod(id) => FunctionKind::Method(self.definition(id)?),
+            Kind::Static(id) | Kind::AsyncStatic(id) => FunctionKind::Static(self.definition(id)?),
         };
         let params = function
             .params
@@ -143,6 +139,7 @@ impl Converter<'_> {
             params,
             result: function.result.map(|ty| self.ty(ty)).transpose()?,
             kind,
+            async_: function.kind.is_async(),
         })
     }
 

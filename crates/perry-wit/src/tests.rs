@@ -139,11 +139,7 @@ fn resources_keep_identity_ownership_and_method_signatures() {
 
 #[test]
 fn rejects_async_types_instead_of_generating_any() {
-    for signature in [
-        "func() -> future<string>",
-        "func() -> stream<u8>",
-        "async func() -> string",
-    ] {
+    for signature in ["func() -> future<string>", "func() -> stream<u8>"] {
         let source =
             format!("package test:async-types; world plugin {{ export call: {signature}; }}");
         let error = parse(&source, None).unwrap_err();
@@ -416,4 +412,22 @@ fn incoming_http_host_binding_uses_the_selected_interface_version() {
     ));
     assert!(!typescript_guest(&world).contains("handleComponentHttpRequest"));
     assert!(!typescript(&parse(TRANSFORM, None).unwrap()).contains("handleHttp"));
+}
+
+#[test]
+fn async_calling_conventions_survive_manifest_round_trips_and_legacy_defaults() {
+    let world = parse("package test:async-calls; interface jobs { resource job { run: async func() -> u32; make: static async func() -> own<job>; } execute: async func(value: u32) -> u32; } world plugin { export jobs; }", None).unwrap();
+    assert!(world.exports[0].functions.iter().all(|f| f.async_));
+    let json = serde_json::to_string(&world).unwrap();
+    assert!(json.contains("\"async\":true"));
+    assert_eq!(serde_json::from_str::<World>(&json).unwrap(), world);
+    let legacy = parse(TRANSFORM, None).unwrap();
+    let json = serde_json::to_string(&legacy).unwrap();
+    assert!(!json.contains("\"async\":"));
+    assert!(serde_json::from_str::<World>(&json)
+        .unwrap()
+        .exports
+        .iter()
+        .flat_map(|i| &i.functions)
+        .all(|f| !f.async_));
 }

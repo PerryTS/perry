@@ -110,6 +110,10 @@ impl Checker<'_> {
         let ComponentItem::ComponentFunc(actual) = actual else {
             bail!("expected component function");
         };
+        ensure!(
+            expected.async_ == actual.async_(),
+            "async calling convention mismatch"
+        );
         let params: Vec<_> = actual.params().collect();
         ensure!(
             expected.params.len() == params.len(),

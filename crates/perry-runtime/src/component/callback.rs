@@ -65,6 +65,9 @@ pub(super) unsafe extern "C" fn invoke(
     let scope = RuntimeHandleScope::new();
     let lifetime = scope.root_nanbox_f64(undefined());
     let mut parsed_args: Vec<Value> = Vec::new();
+    let mut pending = false;
+    let mut input = Value::Null;
+    let mut request = None;
     let mut roots = Vec::new();
     let mut values = Vec::new();
     let outcome = crate::exception::catch_js_throw(|| {
@@ -72,8 +75,17 @@ pub(super) unsafe extern "C" fn invoke(
             .unwrap_or_else(|_| fail("Invalid component interface name"));
         let function = std::str::from_utf8(std::slice::from_raw_parts(function, function_len))
             .unwrap_or_else(|_| fail("Invalid component function name"));
-        parsed_args = serde_json::from_slice(std::slice::from_raw_parts(args, args_len))
+        input = serde_json::from_slice(std::slice::from_raw_parts(args, args_len))
             .unwrap_or_else(|_| fail("Invalid component callback arguments"));
+        request = input["$asyncRequest"].as_str().map(str::to_owned);
+        parsed_args = (if request.is_some() {
+            &input["args"]
+        } else {
+            &input
+        })
+        .as_array()
+        .unwrap_or_else(|| fail("Invalid component callback arguments"))
+        .clone();
         let imports = scope.root_nanbox_f64(context::imports(frame.owner.get_nanbox_f64()));
         let namespace = scope.root_nanbox_f64(if interface.is_empty() {
             imports.get_nanbox_f64()
@@ -85,6 +97,9 @@ pub(super) unsafe extern "C" fn invoke(
         let context = context::get(frame.owner.get_nanbox_f64());
         let world = &(*context).world;
         let signature = context::signature(world, "imports", interface, function);
+        if (signature["async"] == true) != request.is_some() {
+            fail("Component import calling convention mismatch");
+        }
         let params = signature["params"].as_array().unwrap();
         if params.len() != parsed_args.len() {
             fail("Component callback argument count mismatch");
@@ -109,16 +124,34 @@ pub(super) unsafe extern "C" fn invoke(
             values.as_ptr(),
             values.len(),
         );
-        serde_json::to_vec(&value::encode_for(result, frame.owner.get_nanbox_f64()))
-            .expect("component value is JSON")
+        if let Some(request) = request.as_deref() {
+            super::asynchronous::imports::register(
+                frame.owner.get_nanbox_f64(),
+                request,
+                result,
+                lifetime.get_nanbox_f64(),
+            );
+            pending = true;
+            Vec::new()
+        } else {
+            serde_json::to_vec(&value::encode_for(result, frame.owner.get_nanbox_f64()))
+                .expect("component value is JSON")
+        }
     });
-    if let Some(array) = array_pointer(lifetime.get_nanbox_f64()) {
-        crate::array::js_array_set_f64(array, 0, 0.0);
+    if !pending {
+        if let Some(array) = array_pointer(lifetime.get_nanbox_f64()) {
+            crate::array::js_array_set_f64(array, 0, 0.0);
+        }
     }
+    drop((input, request));
     match outcome {
         Ok(bytes) => {
             reply(output, bytes);
-            perry_abi::component_host::OK
+            if pending {
+                perry_abi::component_host::ASYNC_PENDING
+            } else {
+                perry_abi::component_host::OK
+            }
         }
         Err(error) => {
             frame.capture(error);

@@ -1,5 +1,6 @@
 //! Perry's typed component boundary. Native engines and guest canonical
 //! adapters are optional; module code owns all JS roots and exceptions.
+mod asynchronous;
 mod callback;
 mod cleanup;
 mod command;
@@ -7,8 +8,8 @@ mod command;
 mod context;
 mod guest;
 mod host;
-mod http;
 mod host_resource;
+mod http;
 mod resource;
 mod value;
 
@@ -221,6 +222,21 @@ pub extern "C" fn js_component_call(owner: f64, interface: f64, function: f64, a
         let context = context::get(owner.get_nanbox_f64());
         if unsafe { (*context).host.is_null() } {
             fail("Component is not initialized");
+        }
+        if context::signature(
+            unsafe { &(*context).world },
+            "exports",
+            &interface,
+            &function,
+        )["async"]
+            == true
+        {
+            return asynchronous::submit(
+                owner.get_nanbox_f64(),
+                &interface,
+                &function,
+                args_input.get_nanbox_f64(),
+            );
         }
         args = serde_json::to_vec(&value::encode_for(
             args_input.get_nanbox_f64(),

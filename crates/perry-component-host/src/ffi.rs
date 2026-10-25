@@ -1,5 +1,7 @@
 //! Allocator-safe callback transport. JS exceptions must be caught by the
 //! runtime callback; every call returns through Wasmtime before JS can throw.
+mod async_calls;
+use async_calls::*;
 mod http;
 use http::*;
 
@@ -22,27 +24,48 @@ struct Bridge {
     busy: Cell<bool>,
     context: Arc<AtomicU64>,
     interrupt: Interrupt,
+    pending: UnsafeCell<Option<async_calls::PendingCall>>,
+    cleanup_context: Arc<AtomicU64>,
+    async_replies: Arc<async_calls::Replies>,
 }
 
 impl Bridge {
-    fn with<R>(&self, context: u64, call: impl FnOnce(&mut Host) -> Result<R>) -> Result<R> {
+    fn entered<R>(
+        &self,
+        context: u64,
+        cleanup_context: u64,
+        call: impl FnOnce() -> Result<R>,
+    ) -> Result<R> {
         ensure!(
             !self.busy.replace(true),
             "component cannot be re-entered during a call"
         );
-        struct Guard<'a>(&'a Bridge, u64);
+        struct Guard<'a>(&'a Bridge, u64, u64);
         impl Drop for Guard<'_> {
             fn drop(&mut self) {
                 self.0.context.store(self.1, Ordering::Release);
+                self.0.cleanup_context.store(self.2, Ordering::Release);
                 self.0.busy.set(false);
             }
         }
-        let guard = Guard(self, self.context.swap(context, Ordering::AcqRel));
-        // The busy check happens before forming the mutable reference. Nested
-        // callbacks may enter other components, but cannot alias this Store.
-        let result = call(unsafe { &mut *self.host.get() });
+        let guard = Guard(
+            self,
+            self.context.swap(context, Ordering::AcqRel),
+            self.cleanup_context.swap(cleanup_context, Ordering::AcqRel),
+        );
+        let result = call();
         drop(guard);
         result
+    }
+    fn with<R>(&self, context: u64, call: impl FnOnce(&mut Host) -> Result<R>) -> Result<R> {
+        self.entered(context, context, || {
+            ensure!(
+                unsafe { (&*self.pending.get()).is_none() },
+                "component has a pending async call"
+            );
+            // The guard precedes every mutable borrow, including reentrant JS callbacks.
+            call(unsafe { &mut *self.host.get() })
+        })
     }
 }
 
@@ -163,6 +186,9 @@ pub unsafe extern "C" fn perry_component_host_new(
         };
         let current = Arc::new(AtomicU64::new(context));
         let mut imports = Imports::new();
+        let mut async_imports = crate::AsyncImports::new();
+        let async_replies = Arc::new(async_calls::Replies::default());
+        let cleanup_context = Arc::new(AtomicU64::new(context));
         for interface in &world.imports {
             if options.wasi.is_some() && interface.name.starts_with("wasi:") {
                 continue;
@@ -174,6 +200,22 @@ pub unsafe extern "C" fn perry_component_host_new(
                 let interface_name = interface.name.clone();
                 let function_name = function.name.clone();
                 let has_result = function.result.is_some();
+                if function.async_ {
+                    let handler = async_calls::import(
+                        callback,
+                        free,
+                        current.clone(),
+                        async_replies.clone(),
+                        interface_name,
+                        function_name,
+                        has_result,
+                    );
+                    async_imports
+                        .entry(interface.name.clone())
+                        .or_default()
+                        .insert(function.name.clone(), handler);
+                    continue;
+                }
                 let current = current.clone();
                 let handler: Import = Arc::new(move |args| {
                     let context = current.load(Ordering::Acquire);
@@ -228,12 +270,21 @@ pub unsafe extern "C" fn perry_component_host_new(
             }
             Ok(serde_json::from_slice(bytes(reply.0.data, reply.0.len)?)?)
         });
-        let host = Host::new_with_resource_hook(
+        let dispatcher = world
+            .imports
+            .iter()
+            .chain(&world.exports)
+            .flat_map(|i| &i.functions)
+            .any(|f| f.async_)
+            .then(|| Arc::new(crate::asynchronous::dispatch::Dispatcher::default()));
+        let host = Host::new_with_dispatcher(
             bytes(wasm, wasm_len)?,
             &world,
             &imports,
+            &async_imports,
             &options,
             resource_hook,
+            dispatcher,
         )?;
         current.store(0, Ordering::Release);
         let interrupt = host.interrupt_handle();
@@ -242,6 +293,9 @@ pub unsafe extern "C" fn perry_component_host_new(
             busy: Cell::new(false),
             context: current,
             interrupt,
+            pending: UnsafeCell::new(None),
+            cleanup_context,
+            async_replies,
         })
     })();
     match result {
@@ -312,7 +366,10 @@ pub unsafe extern "C" fn perry_component_host_dispose(
         out,
         bridge(handle)
             .and_then(|bridge| {
-                bridge.with(context, |host| {
+                bridge.entered(context, context, || {
+                    // Cancel suspended guest tasks while the cleanup frame is live.
+                    drop(unsafe { (&mut *bridge.pending.get()).take() });
+                    let host = unsafe { &mut *bridge.host.get() };
                     // Host::dispose takes the store before running destructors:
                     // even a trap releases it. A rejected nested call never
                     // reaches this closure and must keep its callback captures.
@@ -393,7 +450,9 @@ pub unsafe extern "C" fn perry_component_host_resource_collect(
 ) -> i32 {
     // Check before forming a mutable Host reference. Finalization jobs can be
     // delivered by a nested microtask pump inside a guest's host callback.
-    if bridge(handle).is_ok_and(|bridge| bridge.busy.get()) {
+    if bridge(handle)
+        .is_ok_and(|bridge| bridge.busy.get() || unsafe { (&*bridge.pending.get()).is_some() })
+    {
         return perry_abi::component_host::DEFERRED;
     }
     let mut released = false;
@@ -429,6 +488,9 @@ pub unsafe extern "C" fn perry_component_host_drop(handle: *mut c_void) {
             "a live component call retains its owner"
         );
         // GC native finalizers must not enter Wasm or invoke JavaScript.
+        bridge.context.store(0, Ordering::Release);
+        bridge.cleanup_context.store(0, Ordering::Release);
+        drop((&mut *bridge.pending.get()).take());
         (&mut *bridge.host.get()).abandon();
         drop(bridge);
     }

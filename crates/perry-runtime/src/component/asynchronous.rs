@@ -1,0 +1,406 @@
+//! Promise-based native component calls run only on their owning agent.
+pub(super) mod imports;
+#[cfg(test)]
+mod tests;
+use super::*;
+use crate::native_payload::{self as payload, NativePayloadFamily, OwnerLink};
+use perry_abi::component_host::{ASYNC_PENDING, OK, RELEASED_ERROR};
+use std::cell::{Cell, RefCell};
+static OPERATION: NativePayloadFamily = NativePayloadFamily {
+    class_id: crate::native_class_ids::COMPONENT_CALL_OPERATION,
+    links_owner: true,
+    name: "ComponentCallOperation",
+    constructor_export: None,
+    constructor_length: 0,
+    install_prototype: |_| {},
+};
+struct Operation {
+    interface: String,
+    function: String,
+    args: Vec<u8>,
+    started: bool,
+    failed: bool,
+}
+thread_local! {
+    // Native links retain traced payload cells; this queue holds no JS address.
+    static PENDING: RefCell<Vec<OwnerLink>> = const { RefCell::new(Vec::new()) };
+    static PUMPING: Cell<bool> = const { Cell::new(false) };
+}
+unsafe extern "C" fn wake(agent: u64) {
+    #[cfg(not(target_arch = "wasm32"))]
+    crate::event_pump::notify_agent_work(agent);
+    #[cfg(target_arch = "wasm32")]
+    let _ = agent;
+}
+fn native<'a>(owner: f64) -> &'a mut Operation {
+    unsafe { payload::payload_mut::<Operation>(owner, &OPERATION) }.expect("live component call")
+}
+fn remember(owner: f64, error: f64) {
+    if native(owner).failed {
+        return;
+    }
+    let scope = RuntimeHandleScope::new();
+    let owner = scope.root_nanbox_f64(owner);
+    payload::state_set(owner.get_nanbox_f64(), &OPERATION, b"error", error);
+    native(owner.get_nanbox_f64()).failed = true;
+}
+/// Cancellation must still run in the submission's ALS context when a before
+/// hook itself threw. Re-running that hook would prevent native retirement.
+fn retire_in_context(promise: f64, completion: impl FnOnce() -> f64) -> Result<f64, f64> {
+    let scope = RuntimeHandleScope::new();
+    let promise = scope.root_nanbox_f64(promise);
+    let captured = scope.root_raw_mut_ptr(crate::async_context::alloc_snapshot_holder(
+        crate::promise::context_for_promise(
+            JSValue::from_bits(promise.get_nanbox_f64().to_bits())
+                .as_pointer::<crate::promise::Promise>()
+                .cast_mut(),
+        ),
+    ));
+    let previous = scope.root_raw_mut_ptr(crate::async_context::alloc_snapshot_holder(
+        crate::async_context::capture_context(),
+    ));
+    unsafe {
+        drop(crate::async_context::enter_context(
+            &(*captured.get_raw_mut_ptr::<crate::async_context::AsyncSnapshotHolder>()).snapshot,
+        ));
+    }
+    let outcome = crate::exception::catch_js_throw(completion);
+    unsafe {
+        crate::async_context::restore_context(
+            (*previous.get_raw_mut_ptr::<crate::async_context::AsyncSnapshotHolder>())
+                .snapshot
+                .clone(),
+        );
+    }
+    outcome
+}
+fn retire(agent: crate::agent::AgentId) {
+    if agent == crate::agent::current_agent() {
+        PENDING.with(|q| q.borrow_mut().clear());
+    }
+}
+extern "C" fn has_active() -> i32 {
+    i32::from(PUMPING.with(Cell::get) || PENDING.with(|q| !q.borrow().is_empty()))
+}
+pub(super) fn submit(component: f64, interface: &str, function: &str, args: f64) -> f64 {
+    let scope = RuntimeHandleScope::new();
+    let component = scope.root_nanbox_f64(component);
+    let args = scope.root_nanbox_f64(args);
+    let owner = scope.root_nanbox_f64(undefined());
+    let promise = scope.root_raw_mut_ptr::<crate::promise::Promise>(std::ptr::null_mut());
+    let retained = scope.root_nanbox_f64(undefined());
+    let mut encoded = Vec::new();
+    let result = crate::exception::catch_js_throw(|| {
+        retained.set_nanbox_f64(crate::value::js_nanbox_pointer(
+            crate::array::js_array_alloc(0) as i64,
+        ));
+        encoded = serde_json::to_vec(&value::encode_for_retained(
+            args.get_nanbox_f64(),
+            component.get_nanbox_f64(),
+            retained.get_nanbox_f64(),
+        ))
+        .unwrap();
+        let captured = scope.root_raw_mut_ptr(crate::async_context::alloc_snapshot_holder(
+            crate::async_context::capture_context(),
+        ));
+        promise.set_raw_mut_ptr(crate::promise::js_promise_new());
+        crate::promise::set_promise_context_snapshot(promise.get_raw_mut_ptr(), unsafe {
+            (*captured.get_raw_mut_ptr::<crate::async_context::AsyncSnapshotHolder>())
+                .snapshot
+                .clone()
+        });
+        owner.set_nanbox_f64(payload::alloc_closed(&OPERATION, &[]));
+        payload::state_set(
+            owner.get_nanbox_f64(),
+            &OPERATION,
+            b"component",
+            component.get_nanbox_f64(),
+        );
+        payload::state_set(
+            owner.get_nanbox_f64(),
+            &OPERATION,
+            b"arguments",
+            retained.get_nanbox_f64(),
+        );
+        payload::state_set(
+            owner.get_nanbox_f64(),
+            &OPERATION,
+            b"promise",
+            crate::value::js_nanbox_pointer(
+                promise.get_raw_mut_ptr::<crate::promise::Promise>() as i64
+            ),
+        );
+        let ctx = context::get(component.get_nanbox_f64());
+        if unsafe { (*ctx).host.is_null() || !(*ctx).alive } {
+            fail("Component is not initialized or has been disposed");
+        }
+        if unsafe { (*ctx).async_active } {
+            fail("Component already has a pending async call");
+        }
+        let external_bytes = encoded
+            .capacity()
+            .saturating_add(interface.len())
+            .saturating_add(function.len())
+            .saturating_add(std::mem::size_of::<Operation>());
+        payload::attach(
+            owner.get_nanbox_f64(),
+            &OPERATION,
+            Operation {
+                interface: interface.to_owned(),
+                function: function.to_owned(),
+                args: std::mem::take(&mut encoded),
+                started: false,
+                failed: false,
+            },
+            external_bytes,
+        )
+        .unwrap_or_else(|_| fail("Cannot attach async component call"));
+        unsafe { (*ctx).async_active = true };
+        let link = payload::owner_link(owner.get_nanbox_f64(), &OPERATION).unwrap();
+        unsafe { payload::link_ref(link) };
+        crate::agent::register_retire_hook(retire);
+        crate::stdlib_pump::js_register_agent_aux_pump(pump);
+        crate::stdlib_pump::js_register_aux_has_active(has_active);
+        PENDING.with(|q| q.borrow_mut().push(link));
+        unsafe { wake(crate::agent::current_agent()) };
+        crate::value::js_nanbox_pointer(promise.get_raw_mut_ptr::<crate::promise::Promise>() as i64)
+    });
+    if result.is_err() {
+        payload::close(owner.get_nanbox_f64(), &OPERATION);
+    }
+    drop(encoded);
+    finish(result)
+}
+fn step(owner: f64) -> bool {
+    let scope = RuntimeHandleScope::new();
+    let owner = scope.root_nanbox_f64(owner);
+    let component = scope.root_nanbox_f64(payload::state_get(
+        owner.get_nanbox_f64(),
+        &OPERATION,
+        b"component",
+    ));
+    let promise = scope.root_nanbox_f64(payload::state_get(
+        owner.get_nanbox_f64(),
+        &OPERATION,
+        b"promise",
+    ));
+    let primary = callback::Frame::new(&scope, component.get_nanbox_f64());
+    let cleanup = callback::Frame::new(&scope, component.get_nanbox_f64());
+    let result_value = scope.root_nanbox_f64(undefined());
+    let mut output = Vec::new();
+    let mut parsed = Value::Null;
+    let mut status = OK;
+    let outcome = unsafe {
+        crate::async_hooks::try_run_promise_scope(
+            JSValue::from_bits(promise.get_nanbox_f64().to_bits())
+                .as_pointer::<crate::promise::Promise>()
+                .cast_mut(),
+            || {
+                let result = crate::exception::catch_js_throw(|| {
+                    let ctx = context::get(component.get_nanbox_f64());
+                    if (*ctx).host.is_null() || !(*ctx).alive {
+                        fail("Component has been disposed");
+                    }
+                    imports::drain(owner.get_nanbox_f64(), component.get_nanbox_f64());
+                    if native(owner.get_nanbox_f64()).failed {
+                        let mut buffer = Buffer::default();
+                        (host::ops().perry_component_host_dispose)(
+                            (*ctx).host,
+                            cleanup.token(),
+                            &mut buffer,
+                        );
+                        drop(take(buffer));
+                        status = RELEASED_ERROR;
+                        return undefined();
+                    }
+                    let mut buffer = Buffer::default();
+                    status = if !native(owner.get_nanbox_f64()).started {
+                        native(owner.get_nanbox_f64()).started = true;
+                        let op = native(owner.get_nanbox_f64());
+                        (host::ops().perry_component_host_call_async_start)(
+                            (*ctx).host,
+                            op.interface.as_ptr(),
+                            op.interface.len(),
+                            op.function.as_ptr(),
+                            op.function.len(),
+                            op.args.as_ptr(),
+                            op.args.len(),
+                            primary.token(),
+                            cleanup.token(),
+                            Some(wake),
+                            crate::agent::current_agent(),
+                            &mut buffer,
+                        )
+                    } else {
+                        (host::ops().perry_component_host_call_async_poll)(
+                            (*ctx).host,
+                            primary.token(),
+                            cleanup.token(),
+                            Some(wake),
+                            crate::agent::current_agent(),
+                            &mut buffer,
+                        )
+                    };
+                    output = take(buffer);
+                    if primary.threw.get() {
+                        remember(owner.get_nanbox_f64(), primary.error.get_nanbox_f64());
+                    }
+                    if status == ASYNC_PENDING {
+                        return undefined();
+                    }
+                    if status != OK {
+                        if !native(owner.get_nanbox_f64()).failed {
+                            fail(&String::from_utf8_lossy(&output));
+                        }
+                        return undefined();
+                    }
+                    parsed = serde_json::from_slice(&output)
+                        .unwrap_or_else(|_| fail("Invalid async component result"));
+                    if parsed["returned"] == true {
+                        let op = native(owner.get_nanbox_f64());
+                        let signature = context::signature(
+                            &(*ctx).world,
+                            "exports",
+                            &op.interface,
+                            &op.function,
+                        );
+                        result_value.set_nanbox_f64(value::decode(
+                            &parsed["value"],
+                            &signature["result"],
+                            &(*ctx).world,
+                            component.get_nanbox_f64(),
+                        ));
+                    }
+                    undefined()
+                });
+                // Finalizers that ran while Wasm was suspended queued native
+                // identities. Drain them after the Store is available again,
+                // under the same captured context and primary-error precedence.
+                if status != ASYNC_PENDING && status != RELEASED_ERROR {
+                    cleanup::finish_call(component.get_nanbox_f64(), result)
+                } else {
+                    finish(result)
+                }
+            },
+        )
+    };
+    if let Err(error) = outcome {
+        remember(owner.get_nanbox_f64(), error);
+    }
+    if native(owner.get_nanbox_f64()).failed
+        && (status == ASYNC_PENDING || outcome.is_err())
+        && native(owner.get_nanbox_f64()).started
+        && unsafe { (*context::get(component.get_nanbox_f64())).alive }
+    {
+        let _ = retire_in_context(promise.get_nanbox_f64(), || {
+            let mut buffer = Buffer::default();
+            let ctx = context::get(component.get_nanbox_f64());
+            unsafe {
+                (host::ops().perry_component_host_dispose)(
+                    (*ctx).host,
+                    cleanup.token(),
+                    &mut buffer,
+                );
+                drop(take(buffer));
+            }
+            undefined()
+        });
+        status = RELEASED_ERROR;
+    }
+    if status == RELEASED_ERROR {
+        let disposed = retire_in_context(promise.get_nanbox_f64(), || {
+            context::finish_disposal(component.get_nanbox_f64(), status);
+            cleanup.rethrow();
+            undefined()
+        });
+        if let Err(error) = disposed {
+            remember(owner.get_nanbox_f64(), error);
+        }
+    }
+    drop((output, parsed));
+    if status == ASYNC_PENDING && outcome.is_ok() {
+        return false;
+    }
+    let failed = native(owner.get_nanbox_f64()).failed;
+    let primary_error = scope.root_nanbox_f64(payload::state_get(
+        owner.get_nanbox_f64(),
+        &OPERATION,
+        b"error",
+    ));
+    unsafe { (*context::get(component.get_nanbox_f64())).async_active = false };
+    payload::close(owner.get_nanbox_f64(), &OPERATION);
+    let settled = Cell::new(false);
+    let settled_result = unsafe {
+        crate::async_hooks::try_run_promise_scope(
+            JSValue::from_bits(promise.get_nanbox_f64().to_bits())
+                .as_pointer::<crate::promise::Promise>()
+                .cast_mut(),
+            || {
+                settled.set(true);
+                let ptr = JSValue::from_bits(promise.get_nanbox_f64().to_bits())
+                    .as_pointer::<crate::promise::Promise>()
+                    .cast_mut();
+                if failed {
+                    crate::promise::js_promise_reject(ptr, primary_error.get_nanbox_f64());
+                } else {
+                    crate::promise::js_promise_resolve(ptr, result_value.get_nanbox_f64());
+                }
+                undefined()
+            },
+        )
+    };
+    if let Err(error) = settled_result {
+        if settled.get() {
+            crate::exception::js_throw(error);
+        }
+        crate::promise::js_promise_reject(
+            JSValue::from_bits(promise.get_nanbox_f64().to_bits())
+                .as_pointer::<crate::promise::Promise>()
+                .cast_mut(),
+            if failed {
+                primary_error.get_nanbox_f64()
+            } else {
+                error
+            },
+        );
+    }
+    true
+}
+extern "C" fn pump() -> i32 {
+    if PUMPING.with(|v| v.replace(true)) {
+        return 0;
+    }
+    let scope = RuntimeHandleScope::new();
+    let first = scope.root_nanbox_f64(undefined());
+    let mut threw = false;
+    let mut completed = 0i32;
+    let pending = PENDING.with(|q| std::mem::take(&mut *q.borrow_mut()));
+    for link in pending {
+        let result = crate::exception::catch_js_throw(|| {
+            unsafe { payload::link_event_owner(link) }.map_or(true, step)
+        });
+        match result {
+            Ok(false) => PENDING.with(|q| q.borrow_mut().push(link)),
+            result => {
+                if let Err(error) = result {
+                    if !threw {
+                        first.set_nanbox_f64(error);
+                        threw = true;
+                    }
+                    if let Some(owner) = unsafe { payload::link_event_owner(link) } {
+                        let component = payload::state_get(owner, &OPERATION, b"component");
+                        unsafe { (*context::get(component)).async_active = false };
+                        payload::close(owner, &OPERATION);
+                    }
+                }
+                unsafe { payload::link_unref(link) };
+                completed = completed.saturating_add(1);
+            }
+        }
+    }
+    PUMPING.with(|v| v.set(false));
+    if threw {
+        crate::exception::js_throw(first.get_nanbox_f64());
+    }
+    completed
+}
