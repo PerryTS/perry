@@ -390,6 +390,9 @@ pub(crate) fn lower_var_decl_with_destructuring(
                     _ => {}
                 }
             }
+            if matches!(&init, Some(Expr::NativeModuleRef(module)) if module == "undici") {
+                ctx.undici_namespace_locals.insert(id);
+            }
             result.push(Stmt::Let {
                 id,
                 name,
@@ -538,6 +541,9 @@ pub(crate) fn lower_var_decl_with_destructuring(
             ctx.record_local_source_span(id, decl.name.span());
             if !mutable {
                 ctx.mark_local_immutable(id);
+            }
+            if matches!(&init, Some(Expr::NativeModuleRef(module)) if module == "undici") {
+                ctx.undici_namespace_locals.insert(id);
             }
             result.push(Stmt::Let {
                 id,

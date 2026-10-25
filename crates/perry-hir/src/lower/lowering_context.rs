@@ -957,6 +957,12 @@ pub struct LoweringContext {
     /// `Any`, but an *annotated* structural object type can still be backed by
     /// an accessor.
     pub(crate) closed_shape_literal_locals: HashMap<LocalId, String>,
+    /// Runtime locals initialised straight from `require("undici")`, the
+    /// shape esbuild's CommonJS output uses (`var import_undici =
+    /// require("undici")`). A `var`/`let` cannot be registered as a namespace
+    /// alias (it may be reassigned and keeps a runtime slot), but `new
+    /// <local>.Agent(...)` still has to reach the native constructor row.
+    pub(crate) undici_namespace_locals: HashSet<LocalId>,
     /// Set while lowering a directly exported binding/default expression.
     /// Eligible method literals consume this flag and retain the seeded IIFE
     /// representation needed to publish an exact cross-module own-method
