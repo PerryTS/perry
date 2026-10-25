@@ -684,6 +684,16 @@ fn lower_guarded_get(
             ctx.block().cond_br(&both, &chk_label, &miss_label);
             ctx.current_block = chk_idx;
             let blk = ctx.block();
+            // Word 0 is an object's class id but also an array's or a
+            // string's `length`: `[x]` would pass for a class whose id is 1.
+            // Only a GC_TYPE_OBJECT carries a class id there.
+            let type_ptr = super::receiver_range::emit_field_ptr(
+                blk,
+                &recv.biased,
+                -(perry_abi::GC_HEADER_SIZE as i64),
+            );
+            let type_byte = blk.load(I8, &type_ptr);
+            let is_object = blk.icmp_eq(I8, &type_byte, &perry_abi::GC_TYPE_OBJECT.to_string());
             let hdr = super::receiver_range::emit_field_ptr(blk, &recv.biased, 0);
             let cid = blk.load(I32, &hdr);
             let mut any: Option<String> = None;
@@ -694,7 +704,7 @@ fn lower_guarded_get(
                     None => eq,
                 });
             }
-            ok = any;
+            ok = any.map(|any| blk.and(crate::types::I1, &is_object, &any));
         } else {
             ok = Some(both);
         }
