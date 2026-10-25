@@ -505,6 +505,7 @@ fn gc_collect_minor_with_trigger_inner(
                 .borrow_mut()
                 .record_collection(freed_bytes, elapsed_us);
         });
+        telemetry::log_collection(false, trigger.kind, freed_bytes, elapsed_us);
         restore_minor_in_alloc(prev_in_alloc);
         if let Some(trace) = trace.as_mut() {
             trace.pause_us = elapsed_us;

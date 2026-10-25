@@ -10,6 +10,14 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 const MIB: usize = 1024 * 1024;
 const PUBLISH_BYTES: usize = MIB;
 const PROCESS_BYTES: usize = 64 * MIB;
+/// Smallest amount of large-birth garbage worth a full. Native buffers are
+/// born in the old generation and only a full trace can prove one dead, so a
+/// request loop that streams 1-6 MiB bodies owes a full for every band of
+/// them. A full costs a trace of the whole live set (about 3 ms per MiB on a
+/// WASI host), so the band is the knob that trades resident garbage for
+/// collector time; it grows with the live set so a large heap pays
+/// proportionally fewer fulls.
+const LARGE_BAND_FLOOR: usize = 32 * MIB;
 static PROCESS_DEBT: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Clone, Copy, Default)]
@@ -20,6 +28,10 @@ struct Debt {
     /// mid-task full can find them live and must not erase this signal.
     burst: usize,
     burst_backoff: u32,
+    /// The part of `burst` the last full left unpaid. Those births were live
+    /// when it traced, so they sit inside `live_after_full` while still owing
+    /// the reclaim; growth past the last full is measured without them.
+    burst_unpaid_at_full: usize,
     boundary_full: bool,
     burst_at_full_start: usize,
     mature_at_full_start: usize,
@@ -71,28 +83,61 @@ pub(crate) fn note_allocation(bytes: usize, large: bool) {
 }
 
 pub(super) fn due(old_pressure: usize, burst_boundary: bool) -> bool {
+    due_arm(old_pressure, burst_boundary).is_some()
+}
+
+/// Which arm of the byte-pacing policy asks for a full, if any.
+///
+/// `pacing` pays total allocation once the mature heap has also grown. The two
+/// burst arms pay a large-allocation burst at a task boundary, and they ask
+/// for the same evidence of mature growth: a nursery-resident burst dies in
+/// the next minor, while a full costs a trace of the whole live set. Without
+/// the growth test a warm request loop whose buffers all die young paid a
+/// full (about 50 ms at 25 MB live) every few requests that freed almost
+/// nothing, because the volume of large births alone kept crossing the band
+/// even at the maximum backoff.
+fn due_arm(old_pressure: usize, burst_boundary: bool) -> Option<&'static str> {
     sample_arena();
     ACCOUNT.with(|account| {
         let debt = account.0.get();
         let band = (128 * MIB).max(debt.live_after_full.saturating_mul(2));
-        let large_band = (8 * MIB).max(debt.live_after_full / 2);
+        let large_band = LARGE_BAND_FLOOR.max(debt.live_after_full);
         let scale = 1usize << debt.backoff;
         let burst_scale = 1usize << debt.burst_backoff;
-        let owed = (debt.published >= band.saturating_mul(scale)
+        let mature = old_pressure.saturating_add(super::malloc::malloc_resident_bytes());
+        if mature < 8 * MIB {
+            return None;
+        }
+        if debt.published >= band.saturating_mul(scale)
             // Total allocation includes nursery garbage. A full pays mature
             // growth; a stable old heap must leave this debt to minors.
-            && old_pressure.saturating_add(super::malloc::malloc_resident_bytes())
-                >= debt.live_after_full
-                .saturating_add(large_band.saturating_mul(scale)))
-            || (burst_boundary
-                && debt.allocated >= large_band.saturating_mul(burst_scale)
-                // Nursery churn alone is paid cheaply by minors. Shared
-                // pressure selects heaps that also grew substantial backing.
-                && debt.large >= 4 * MIB
-                && PROCESS_DEBT.load(Ordering::Relaxed) >= PROCESS_BYTES * burst_scale)
-            || (burst_boundary && debt.burst >= large_band.saturating_mul(burst_scale));
-        owed && (old_pressure >= 8 * MIB
-            || old_pressure.saturating_add(super::malloc::malloc_resident_bytes()) >= 8 * MIB)
+            && mature >= debt.live_after_full.saturating_add(large_band.saturating_mul(scale))
+        {
+            return Some("pacing");
+        }
+        if !burst_boundary {
+            return None;
+        }
+        let burst_grown = mature
+            >= debt
+                .live_after_full
+                .saturating_sub(debt.burst_unpaid_at_full)
+                .saturating_add(large_band.saturating_mul(burst_scale));
+        if !burst_grown {
+            return None;
+        }
+        if debt.allocated >= large_band.saturating_mul(burst_scale)
+            // Nursery churn alone is paid cheaply by minors. Shared
+            // pressure selects heaps that also grew substantial backing.
+            && debt.large >= 4 * MIB
+            && PROCESS_DEBT.load(Ordering::Relaxed) >= PROCESS_BYTES * burst_scale
+        {
+            return Some("burst-allocated");
+        }
+        if debt.burst >= large_band.saturating_mul(burst_scale) {
+            return Some("burst-large");
+        }
+        None
     })
 }
 
@@ -137,6 +182,7 @@ pub(super) fn finish_full(live: usize, freed: usize) {
             live_after_full: mature_live,
             backoff: next_backoff(previous.backoff),
             burst: previous.burst.saturating_sub(previous.burst_at_full_start),
+            burst_unpaid_at_full: previous.burst.saturating_sub(previous.burst_at_full_start),
             burst_backoff: if boundary { next_backoff(previous.burst_backoff) }
                 else { previous.burst_backoff },
             seen_arena: previous.seen_arena,
@@ -155,23 +201,36 @@ fn mature_resident_bytes() -> usize {
 
 /// A burst boundary still uses the normal guarded precise collection path.
 pub(crate) fn burst_boundary() -> bool {
+    // Bytes a mutator already released are not reclaimable by a full; only
+    // old storage and live external bytes can be owed to this boundary.
     let pressure = || {
         super::policy::old_gen_reclaimable_pressure_bytes()
-            .saturating_add(super::policy::external_side_old_reclaim_pressure_bytes())
+            .saturating_add(super::policy::external_side_live_bytes())
     };
-    if !due(pressure(), true) {
+    let Some(arm) = due_arm(pressure(), true) else {
         return false;
-    }
+    };
     // An unfinished non-moving minor blocks every precise safepoint. A
     // worker about to park might never supply its remaining slices. Finish
     // it through its guarded stepper only when mature reclaim is owed.
     // Keep forced budgeted-old schedules sliced for sweep-window testing.
+    let mut arm = arm;
     if super::policy::gc_budgeted_cycle_active() && !super::schedule::budgeted_old_reclaim_forced()
     {
         super::policy::gc_drain_active_budgeted_cycle();
-        if !due(pressure(), true) {
-            return false;
+        match due_arm(pressure(), true) {
+            Some(again) => arm = again,
+            None => return false,
         }
+    }
+    super::telemetry::note_old_reclaim_why(arm);
+    if super::telemetry::gc_log_enabled() {
+        let debt = ACCOUNT.with(|account| account.0.get());
+        eprintln!(
+            "[gc-log] owed arm={arm} pressure={} allocated={} large={} burst={} live_after_full={} unpaid={} backoff={} burst_backoff={}",
+            pressure(), debt.allocated, debt.large, debt.burst, debt.live_after_full,
+            debt.burst_unpaid_at_full, debt.backoff, debt.burst_backoff
+        );
     }
     super::policy::GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(true));
     true

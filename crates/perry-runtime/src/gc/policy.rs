@@ -3807,10 +3807,19 @@ fn gc_budgeted_due_trigger_probe() -> (Option<BudgetedGcTrigger>, bool, TriggerW
     let old_reclaimable = old_gen_reclaimable_pressure_bytes();
     let old_in_use = old_reclaimable.saturating_add(external_side_old_reclaim_pressure_bytes());
     let old_baseline = GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|bytes| bytes.get());
-    if old_pending
-        || super::allocation_pacing::due(old_in_use, false)
-        || old_reclaim_pressure_due(old_in_use, old_baseline)
-    {
+    let old_reclaim_why = if old_pending {
+        Some("pending")
+    } else if super::allocation_pacing::due(old_in_use, false) {
+        Some("pacing")
+    } else if old_reclaim_pressure_due(old_in_use, old_baseline) {
+        Some("growth_band")
+    } else {
+        None
+    };
+    if let Some(why) = old_reclaim_why {
+        if why != "pending" {
+            super::telemetry::note_old_reclaim_why(why);
+        }
         return (Some(BudgetedGcTrigger::OldReclaim), true, RETIRED);
     }
 

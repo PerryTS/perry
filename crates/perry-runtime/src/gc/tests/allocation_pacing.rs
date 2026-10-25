@@ -5,6 +5,8 @@ use super::super::*;
 use super::support::*;
 
 const MIB: usize = 1024 * 1024;
+/// 4 MiB buffers it takes to fill one large-birth band (32 MiB floor).
+const BURST_BUFFERS: usize = 9;
 
 #[test]
 fn nursery_garbage_cannot_reset_mature_reclaim_backoff() {
@@ -62,7 +64,7 @@ fn an_owed_boundary_full_does_not_start_a_redundant_budgeted_minor() {
     js_shadow_slot_set(0, ptr_bits(young_leaf()));
     let keep = crate::buffer::js_buffer_alloc(MIB as i32, 37);
     js_shadow_slot_set(1, crate::value::JSValue::pointer(keep.cast()).bits());
-    for _ in 0..5 {
+    for _ in 0..BURST_BUFFERS {
         crate::buffer::js_buffer_alloc((4 * MIB) as i32, 13);
     }
     thresholds.make_arena_trigger_due();
@@ -93,11 +95,14 @@ fn a_parked_budgeted_minor_cannot_block_a_dead_large_buffer_burst() {
     let _moving = policy::force_moving_gc_pacing();
     let thresholds = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     finish_full(0, 4 * MIB);
+    // The old-reclaim growth band is a separate 32 MiB trigger. This fixture
+    // is about the byte pacer, so keep that one from picking a full first.
+    policy::GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|bytes| bytes.set(usize::MAX / 4));
     let frame = js_shadow_frame_push(2);
     js_shadow_slot_set(0, ptr_bits(young_leaf()));
     let keep = crate::buffer::js_buffer_alloc(MIB as i32, 37);
     js_shadow_slot_set(1, crate::value::JSValue::pointer(keep.cast()).bits());
-    for _ in 0..5 {
+    for _ in 0..BURST_BUFFERS {
         crate::buffer::js_buffer_alloc((4 * MIB) as i32, 13);
     }
     thresholds.make_arena_trigger_due();
@@ -133,7 +138,7 @@ fn a_budgeted_full_pays_only_the_burst_present_at_its_boundary_start() {
     let _moving = policy::force_moving_gc_pacing();
     let _thresholds = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     finish_full(0, 4 * MIB);
-    for _ in 0..5 {
+    for _ in 0..BURST_BUFFERS {
         crate::buffer::js_buffer_alloc((4 * MIB) as i32, 1);
     }
     {
@@ -148,7 +153,7 @@ fn a_budgeted_full_pays_only_the_burst_present_at_its_boundary_start() {
     }
     // These births are marked live by the active full, even though they have
     // no roots by its completion. Its earlier snapshot cannot pay this burst.
-    for _ in 0..5 {
+    for _ in 0..BURST_BUFFERS {
         crate::buffer::js_buffer_alloc((4 * MIB) as i32, 2);
     }
     {
@@ -161,7 +166,7 @@ fn a_budgeted_full_pays_only_the_burst_present_at_its_boundary_start() {
     assert_eq!(test_debt(), (0, 0));
     let old_before = crate::arena::old_gen_in_use_bytes();
     assert!(
-        old_before >= 20 * MIB,
+        old_before >= BURST_BUFFERS * 4 * MIB,
         "allocate-black births must survive this cycle"
     );
     assert!(
@@ -209,17 +214,17 @@ fn large_buffer_burst_reclaims_at_a_precise_boundary_and_keeps_roots() {
     let frame = js_shadow_frame_push(1);
     let keep = crate::buffer::js_buffer_alloc(MIB as i32, 37);
     js_shadow_slot_set(0, crate::value::JSValue::pointer(keep as *mut u8).bits());
-    for _ in 0..5 {
+    for _ in 0..BURST_BUFFERS {
         crate::buffer::js_buffer_alloc(4 * MIB as i32, 13);
     }
     let debt = test_debt();
-    assert!(debt.0 >= 21 * MIB && debt.1 >= 21 * MIB);
+    assert!(debt.0 >= 36 * MIB && debt.1 >= 36 * MIB);
     assert!(
-        !due(21 * MIB, false),
+        !due(37 * MIB, false),
         "the burst has not filled the allocation band"
     );
     assert!(
-        due(21 * MIB, true),
+        due(37 * MIB, true),
         "a completed large burst must get a full opportunity"
     );
     let old_before = crate::arena::old_gen_in_use_bytes();
@@ -302,17 +307,17 @@ fn process_pressure_combines_heaps_and_thread_exit_removes_their_debt() {
         exit_rx.recv().unwrap();
     });
     ready_rx.recv().unwrap();
-    allocation_pacing::note_allocation(12 * MIB, false);
+    allocation_pacing::note_allocation(28 * MIB, false);
     assert!(
-        !due(8 * MIB, true),
+        !due(40 * MIB, true),
         "shared pressure must not turn nursery-only churn into a full"
     );
     allocation_pacing::note_allocation(4 * MIB, true);
-    assert!(due(8 * MIB, true), "another heap's pressure must count");
+    assert!(due(40 * MIB, true), "another heap's pressure must count");
     exit_tx.send(()).unwrap();
     worker.join().unwrap();
     assert!(
-        !due(8 * MIB, true),
+        !due(40 * MIB, true),
         "retired heaps must not leave process pressure behind"
     );
 }
@@ -390,14 +395,14 @@ fn a_mid_task_full_does_not_erase_the_later_dead_buffer_opportunity() {
     let _moving = policy::force_moving_gc_pacing();
     let _thresholds = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     finish_full(0, 4 * MIB);
-    let frame = js_shadow_frame_push(5);
-    for slot in 0..5 {
+    let frame = js_shadow_frame_push(BURST_BUFFERS as u32);
+    for slot in 0..BURST_BUFFERS as u32 {
         let buffer = crate::buffer::js_buffer_alloc((4 * MIB) as i32, slot as i32);
         js_shadow_slot_set(slot, crate::value::JSValue::pointer(buffer.cast()).bits());
     }
     gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct));
     assert_eq!(test_debt(), (0, 0));
-    for slot in 0..5 {
+    for slot in 0..BURST_BUFFERS as u32 {
         js_shadow_slot_set(slot, 0);
     }
     let old_before = crate::arena::old_gen_in_use_bytes();
@@ -442,6 +447,42 @@ fn stable_mature_heap_does_not_turn_nursery_debt_into_old_reclaim() {
     );
     // Genuine old growth still supplies a full-trace opportunity.
     assert!(due(old.saturating_add(80 * MIB), false));
+    js_shadow_frame_pop(frame);
+    gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct));
+}
+
+#[test]
+fn large_births_that_leave_the_mature_heap_unchanged_do_not_owe_a_full() {
+    let _placement = policy::ByteStorePolicyTestGuard::new(usize::MAX);
+    let _isolation = GcTestIsolationGuard::new();
+    let _moving = policy::force_moving_gc_pacing();
+    let _thresholds = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let frame = js_shadow_frame_push(1);
+    let keep = crate::buffer::js_buffer_alloc(12 * MIB as i32, 7);
+    js_shadow_slot_set(0, ptr_bits(keep as usize));
+    {
+        let _boundary = allocation_pacing::BurstBoundaryGuard::enter();
+        gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct));
+    }
+    let old = policy::old_gen_reclaimable_pressure_bytes();
+    assert!(
+        old >= 8 * MIB,
+        "fixture must exceed the mature pressure guard"
+    );
+    // A request loop whose large buffers all die young: plenty of large
+    // births, no mature growth. A full would pay a trace of the whole live
+    // set to free nothing, so neither burst arm may ask for one.
+    for _ in 0..8 {
+        note_allocation(64 * MIB, true);
+    }
+    assert!(
+        !due(old, true),
+        "volume of large births alone must not owe a full"
+    );
+    assert!(
+        due(old + 40 * MIB, true),
+        "large births that left the mature heap bigger still owe one"
+    );
     js_shadow_frame_pop(frame);
     gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct));
 }

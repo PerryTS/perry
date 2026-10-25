@@ -23,6 +23,61 @@ pub fn gc_diag_enabled() -> bool {
     *crate::once_init::get_or_init(&ENABLED, || env_flag_enabled("PERRY_GC_DIAG"))
 }
 
+/// Is `PERRY_GC_LOG` ON? One line on stderr per finished collection (kind,
+/// trigger, pause, bytes freed, old-generation and external bytes after). Unlike
+/// the `PERRY_GC_TRACE` JSON it needs no instrumented runtime, so a release
+/// module can count its collections per request.
+pub(crate) fn gc_log_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *crate::once_init::get_or_init(&ENABLED, || env_flag_enabled("PERRY_GC_LOG"))
+}
+
+crate::perry_thread_local! {
+    /// Which pacing arm made the pending old-reclaim full due, for the log line.
+    static OLD_RECLAIM_WHY: std::cell::Cell<&'static str> = const { std::cell::Cell::new("") };
+}
+
+pub(super) fn note_old_reclaim_why(why: &'static str) {
+    OLD_RECLAIM_WHY.with(|c| c.set(why));
+}
+
+/// Compiled-code temp roots held right now (WASI only; other targets root
+/// compiled temporaries on the native stack).
+fn temp_root_depth() -> usize {
+    #[cfg(target_os = "wasi")]
+    {
+        super::roots::temp_root_len()
+    }
+    #[cfg(not(target_os = "wasi"))]
+    {
+        0
+    }
+}
+
+pub(super) fn log_collection(
+    full: bool,
+    trigger: super::policy::GcTriggerKind,
+    freed_bytes: u64,
+    elapsed_us: u64,
+) {
+    if !gc_log_enabled() {
+        return;
+    }
+    let why = OLD_RECLAIM_WHY.with(|c| c.replace(""));
+    eprintln!(
+        "[gc-log] kind={} trigger={:?} why={} pause_us={} freed={} old={} ext={} handles={} temps={}",
+        if full { "full" } else { "minor" },
+        trigger,
+        if full && !why.is_empty() { why } else { "-" },
+        elapsed_us,
+        freed_bytes,
+        crate::arena::old_gen_in_use_bytes(),
+        super::policy::external_side_live_bytes(),
+        super::runtime_handle_stack_len(),
+        temp_root_depth(),
+    );
+}
+
 #[cfg(test)]
 thread_local! {
     /// Test-only per-thread override of `PERRY_GC_DIAG`: the live reader is a
