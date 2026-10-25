@@ -533,6 +533,33 @@ fn exit_uncaught(value: f64) -> ! {
     std::process::exit(status);
 }
 
+/// `PERRY_TRACE_THROW=1`: report every thrown value and the native call chain
+/// at `js_throw` time, before any transport, so an error that is swallowed,
+/// rethrown, or reaches the uncaught path is visible at its origin. Parsed by
+/// value and read once; with the knob off a throw pays one cached load.
+fn trace_throw_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *crate::once_init::get_or_init(&ON, || {
+        matches!(
+            std::env::var("PERRY_TRACE_THROW").ok().as_deref(),
+            Some("1") | Some("on") | Some("true")
+        )
+    })
+}
+
+#[cold]
+#[inline(never)]
+fn trace_throw(value: f64) {
+    eprintln!("[trace-throw] thrown value:");
+    print_uncaught(value);
+    let mut ips = [0usize; crate::error::MAX_CAPTURED_FRAMES];
+    let n = crate::error::capture_ips(&mut ips);
+    eprintln!(
+        "[trace-throw] throw site, innermost first: {}",
+        crate::error::describe_chain(&ips[..n], n)
+    );
+}
+
 /// Throw an exception with the given value
 ///
 /// `C-unwind` is required for the landingpad transport: when the fast walker
@@ -559,6 +586,9 @@ pub extern "C-unwind" fn js_throw(value: f64) -> ! {
             std::process::abort();
         }
     });
+    if trace_throw_enabled() {
+        trace_throw(value);
+    }
     // WASI handlers (generated and runtime traps) use libsetjmp over
     // standardized wasm EH. Restore to the handler frame's mark, exactly as a
     // landing pad at that frame would, then jump.
