@@ -893,7 +893,7 @@ impl Model {
         extended: bool,
         no_code: bool,
         sealed: bool,
-    ) {
+    ) -> Vec<(Atom, NodeId)> {
         if sealed {
             self.sealed.insert(tm);
         }
@@ -941,12 +941,14 @@ impl Model {
         self.register_virt(recv, &[tm]);
         // Static members and the class object's own fields.
         let pa = self.atom("prototype");
-        let mut statics: Vec<NodeId> = self
+        let mut named: Vec<(Atom, NodeId)> = self
             .fields
             .iter()
             .filter(|(&(h, a), _)| h == cobj && a != pa)
-            .map(|(_, &n)| n)
+            .map(|(&(_, a), &n)| (a, n))
             .collect();
+        named.sort_unstable();
+        let mut statics: Vec<NodeId> = named.iter().map(|&(_, n)| n).collect();
         statics.extend(self.field_any.get(&cobj).copied());
         statics.sort_unstable();
         // Other units call a static method on the class object, through
@@ -961,6 +963,10 @@ impl Model {
                     if !self.is_escaped(t) && self.funcs[f as usize].func_id != u32::MAX && !broken
                     {
                         self.contract_fns.insert(f);
+                        // A static function leaves through its contract
+                        // (markers on its parameters), whatever else the
+                        // static holds (DECISIONS 173).
+                        self.escape(t, reason);
                     }
                     if !self.funcs[f as usize].lexical_this {
                         let this = self.funcs[f as usize].this;
@@ -969,8 +975,12 @@ impl Model {
                 }
             }
         }
-        for n in statics {
-            self.sink_node(n, reason);
+        // A named static leaves as a published value binding does (DECISIONS
+        // 173): the caller checks it after the solve (`Gen::contract_check`),
+        // so an instance of this class it holds is given out, not escaped
+        // with its prototype chain. What a computed key holds is unknown.
+        if let Some(&any) = self.field_any.get(&cobj) {
+            self.sink_node(any, reason);
         }
         // Methods along the chain inside the unit: they run on `inst` and on
         // unknown receivers.
@@ -1045,7 +1055,7 @@ impl Model {
             self.sink_node(n, reason);
         }
         if sealed {
-            return;
+            return named;
         }
         // Other units construct it with unknown arguments.
         let ret = self.node_l("contract-new");
@@ -1087,6 +1097,7 @@ impl Model {
         self.construct(call, cobj);
         // ... and read its fields: they leave key by key, described by the
         // class contract (`Gen::fields_leave`, DECISIONS 88).
+        named
     }
 
     /// This unit gives `t`, an instance of its published class `tm`, to

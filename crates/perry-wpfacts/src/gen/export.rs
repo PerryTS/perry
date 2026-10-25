@@ -334,8 +334,18 @@ impl<'a> Gen<'a> {
                 .add_top(n, |_| "CommonJS registry shared with other units".into());
             self.m.sink_node(n, r);
         }
+        // A thrown value reaches the units whose `catch` is up the stack
+        // (DECISIONS 174): per unit it is one cell, `thrown`, every unit
+        // names alike, as a registry entry is: what this unit throws leaves
+        // through the cell's contract, what the others throw is seeded into
+        // what its `catch` reads (beside the runtime's errors, ⊤).
         let thrown = self.thrown;
-        self.m.sink_node(thrown, r);
+        if cells {
+            self.seed_cell("thrown", thrown);
+            self.cells.push(("thrown".to_string(), thrown));
+        } else {
+            self.m.sink_node(thrown, r);
+        }
         let gt = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
         if cells {
             // Design §17.16 (b): a program-owned global is a cell as well.
@@ -488,8 +498,14 @@ impl<'a> Gen<'a> {
             && t.parent_value.is_none()
             && t.native_parent.is_none()
             && self.ctor_phase.get(&tm).is_some_and(|ph| !ph.leaks);
-        self.m
+        let statics = self
+            .m
             .publish_class(tm, r, extended, no_code, key.is_none());
+        for (a, sn) in statics {
+            if !self.static_values.contains(&(tm, a, sn)) {
+                self.static_values.push((tm, a, sn));
+            }
+        }
         self.class_contracts.push((key, n, tm));
         let inst = self.m.tok(TokKind::Obj(tm, NO_CTX));
         self.fields_leave(inst, r)
@@ -555,7 +571,85 @@ impl<'a> Gen<'a> {
                 changed = true;
             }
         }
-        let ok = toks.iter().all(|&t| match self.m.toks[t as usize] {
+        // A value no contract describes escapes alone (DECISIONS 174, 175):
+        // the result still describes the others, and its contract says
+        // unknown beside them (`describe_nodes`). Nothing described at all
+        // and the result is unknown (`ret_top`).
+        let (toks, bad): (Vec<Tok>, Vec<Tok>) =
+            toks.into_iter().partition(|&t| self.result_tok_ok(f, t));
+        if !bad.is_empty() && toks.is_empty() {
+            return None;
+        }
+        for t in bad {
+            if !self.m.is_escaped(t) {
+                self.m.escape(t, r);
+                changed = true;
+            }
+        }
+        for t in toks {
+            if matches!(
+                self.m.toks[t as usize],
+                TokKind::Top | TokKind::BuiltinFn | TokKind::Builtin(_)
+            ) || self.m.param_marker.contains_key(&t)
+                || self.program_tok(t)
+            {
+                continue;
+            }
+            if self.arr_ok(t) {
+                changed |= self.arr_leaves(t);
+                continue;
+            }
+            // DECISIONS 147: the caller's unit calls a function it is
+            // handed through its contract (§11.2, as a published binding's,
+            // `check_value`): its parameters carry markers, its result is
+            // checked; a closed one leaves through its argument contract.
+            // Another unit's function leaves with its owner's contract.
+            if let TokKind::Func(f, _) = self.m.toks[t as usize] {
+                if self.m.funcs[f as usize].func_id != u32::MAX {
+                    let new = self.m.contract_fns.insert(f);
+                    changed |= new;
+                    let rf = match self.m.closed_params.contains_key(&f) {
+                        true => self.m.closed_pub_reason.unwrap_or(r),
+                        false => r,
+                    };
+                    // One that escaped already, as no contract function,
+                    // gets its markers now (as a published field function,
+                    // `note_field_fns`).
+                    match self.m.escaped.get(&t).copied() {
+                        Some(r0) if new => self.m.escape_fn_params(t, r0),
+                        _ => self.m.escape(t, rf),
+                    }
+                }
+                continue;
+            }
+            if self.stand_in_fc.contains_key(&t) {
+                continue;
+            }
+            if let TokKind::Obj(tm, _) = self.m.toks[t as usize] {
+                if self.contract_class(tm) || self.class_to_give(tm) {
+                    changed |= self.give_class(tm, t, r);
+                } else if self.stand_in_cc.contains_key(&tm) {
+                    // Another unit's layout, forwarded with its owner's
+                    // contract: nothing of this unit leaves through its
+                    // fields, as for a published value (DECISIONS 79).
+                    continue;
+                } else if !self.ret_ok.contains(&t) {
+                    // A literal result is the same layout contract as a
+                    // published literal: its field functions are contract
+                    // functions the caller calls through their contract
+                    // (DECISIONS 78, as the value path below).
+                    changed |= self.note_field_fns(t);
+                }
+            }
+            changed |= self.fields_leave(t, r);
+        }
+        Some(changed)
+    }
+
+    /// One value a contract function `f` hands the caller's unit
+    /// (`publish_result`): whether a contract describes it.
+    pub(crate) fn result_tok_ok(&self, f: FnIdx, t: Tok) -> bool {
+        match self.m.toks[t as usize] {
             _ if self.m.param_marker.get(&t).is_some_and(|&(g, _)| g == f) => true,
             // An escaped marker reads as ⊤ (DECISIONS 42), of any
             // contract function: another unit's value.
@@ -586,61 +680,7 @@ impl<'a> Gen<'a> {
                 .is_some_and(|u| u.broken(&self.m.tmpls[tm as usize].display)),
             TokKind::Obj(tm, _) => self.literal_ok(tm),
             _ => false,
-        });
-        if !ok {
-            return None;
         }
-        for t in toks {
-            if matches!(
-                self.m.toks[t as usize],
-                TokKind::Top | TokKind::BuiltinFn | TokKind::Builtin(_)
-            ) || self.m.param_marker.contains_key(&t)
-                || self.program_tok(t)
-            {
-                continue;
-            }
-            if self.arr_ok(t) {
-                changed |= self.arr_leaves(t);
-                continue;
-            }
-            // DECISIONS 147: the caller's unit calls a function it is
-            // handed through its contract (§11.2, as a published binding's,
-            // `check_value`): its parameters carry markers, its result is
-            // checked; a closed one leaves through its argument contract.
-            // Another unit's function leaves with its owner's contract.
-            if let TokKind::Func(f, _) = self.m.toks[t as usize] {
-                if self.m.funcs[f as usize].func_id != u32::MAX {
-                    changed |= self.m.contract_fns.insert(f);
-                    let rf = match self.m.closed_params.contains_key(&f) {
-                        true => self.m.closed_pub_reason.unwrap_or(r),
-                        false => r,
-                    };
-                    self.m.escape(t, rf);
-                }
-                continue;
-            }
-            if self.stand_in_fc.contains_key(&t) {
-                continue;
-            }
-            if let TokKind::Obj(tm, _) = self.m.toks[t as usize] {
-                if self.contract_class(tm) || self.class_to_give(tm) {
-                    changed |= self.give_class(tm, t, r);
-                } else if self.stand_in_cc.contains_key(&tm) {
-                    // Another unit's layout, forwarded with its owner's
-                    // contract: nothing of this unit leaves through its
-                    // fields, as for a published value (DECISIONS 79).
-                    continue;
-                } else if !self.ret_ok.contains(&t) {
-                    // A literal result is the same layout contract as a
-                    // published literal: its field functions are contract
-                    // functions the caller calls through their contract
-                    // (DECISIONS 78, as the value path below).
-                    changed |= self.note_field_fns(t);
-                }
-            }
-            changed |= self.fields_leave(t, r);
-        }
-        Some(changed)
     }
 
     pub(crate) fn contract_check(&mut self) -> bool {
@@ -676,6 +716,28 @@ impl<'a> Gen<'a> {
                 None => {
                     self.ret_top.insert(f);
                     self.m.sink_node(ret, r);
+                    changed = true;
+                }
+            }
+        }
+        // DECISIONS 176: what a contract function stores of this unit into
+        // the caller's values goes there as its result does.
+        let mut flows: Vec<(crate::model::StoreFlowKey, NodeId)> = self
+            .m
+            .store_flows
+            .iter()
+            .filter(|(_, fl)| !fl.vals_top)
+            .filter_map(|(&k, fl)| Some((k, fl.vals?)))
+            .collect();
+        flows.sort_unstable_by_key(|&(_, v)| v);
+        for (k, v) in flows {
+            match self.publish_result(k.0, v, r) {
+                Some(ch) => changed |= ch,
+                None => {
+                    if let Some(fl) = self.m.store_flows.get_mut(&k) {
+                        fl.vals_top = true;
+                    }
+                    self.m.sink_node(v, r);
                     changed = true;
                 }
             }
@@ -731,6 +793,16 @@ impl<'a> Gen<'a> {
             changed |= ch;
             if ok {
                 self.value_contracts.push((e, n));
+            }
+        }
+        // A published class's static member is a value binding of the class
+        // (DECISIONS 173): checked the same way; undescribed, it is sunk and
+        // its readers find an unknown value.
+        for (tm, a, n) in std::mem::take(&mut self.static_values) {
+            let (ok, ch) = self.check_value(n, r);
+            changed |= ch;
+            if ok {
+                self.static_values.push((tm, a, n));
             }
         }
         // Decision 17 with its value (design §17.16 (c)): what this unit
@@ -921,9 +993,14 @@ impl<'a> Gen<'a> {
     /// what it may hold must be described by a contract; anything else and
     /// it escapes (sunk). Returns (described, changed).
     fn check_value(&mut self, n: NodeId, r: u32) -> (bool, bool) {
+        let toks = self.m.nodes[n as usize].pts.to_sorted();
+        self.check_toks(toks, r)
+    }
+
+    /// `check_value` over these values (of one published node).
+    fn check_toks(&mut self, toks: Vec<Tok>, r: u32) -> (bool, bool) {
         let mut changed = false;
         {
-            let toks = self.m.nodes[n as usize].pts.to_sorted();
             // A function of this unit the binding holds, which nothing let
             // escape yet, is a contract function (§11.2, as a published
             // literal's field functions are, `note_field_fns`): other units
@@ -931,13 +1008,28 @@ impl<'a> Gen<'a> {
             for &t in &toks {
                 if let TokKind::Func(f, _) = self.m.toks[t as usize] {
                     if self.m.funcs[f as usize].func_id != u32::MAX && !self.m.is_escaped(t) {
-                        changed |= self.m.contract_fns.insert(f);
+                        let new = self.m.contract_fns.insert(f);
+                        changed |= new;
+                        // Another closure value of it escaped already, as no
+                        // contract function: its markers now (as
+                        // `note_field_fns`).
+                        let ft = self.m.funcs[f as usize].token;
+                        if let Some(r0) = self.m.escaped.get(&ft).copied().filter(|_| new) {
+                            self.m.escape_fn_params(ft, r0);
+                        }
                     }
                 }
             }
-            if !toks.iter().all(|&t| self.value_tok_ok(t)) {
-                self.m.sink_node(n, r);
-                return (false, true);
+            // A value no contract describes escapes alone (DECISIONS 174):
+            // the binding still describes the others, and its contract says
+            // unknown beside them (`value_contract_of`).
+            let (toks, bad): (Vec<Tok>, Vec<Tok>) =
+                toks.into_iter().partition(|&t| self.value_tok_ok(t));
+            for t in bad {
+                if !self.m.is_escaped(t) {
+                    self.m.escape(t, r);
+                    changed = true;
+                }
             }
             for t in toks {
                 // Nothing of this unit leaves through a marker (DECISIONS 137).

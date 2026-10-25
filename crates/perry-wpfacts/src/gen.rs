@@ -191,6 +191,9 @@ pub struct Gen<'a> {
     /// Published module-scope value bindings (export, export node), checked
     /// after the solve (`Gen::contract_check`, design §12 value contracts).
     pub value_contracts: Vec<((u32, Atom), NodeId)>,
+    /// A published class's named static members (class, key, field node),
+    /// checked after the solve as value bindings are (DECISIONS 173).
+    pub static_values: Vec<(TmplId, Atom, NodeId)>,
     /// Fields of published literals that hold only functions of this unit
     /// not escaped before: those functions are contracts (`contract_check`).
     pub field_fns: FxHashMap<(Tok, Atom), Vec<FnIdx>>,
@@ -443,6 +446,7 @@ impl<'a> Gen<'a> {
             parent_values: Vec::new(),
             parent_fed: Default::default(),
             value_contracts: Vec::new(),
+            static_values: Vec::new(),
             field_fns: FxHashMap::default(),
             param_guard: FxHashMap::default(),
             param_ty: Vec::new(),
@@ -896,9 +900,12 @@ impl<'a> Gen<'a> {
     /// into parameter `dst`'s argument (`reach`: into what it reaches): the
     /// arguments its flow names, ⊤ and the primitives it stores (an unknown
     /// value when the contract names no flow).
+    #[allow(clippy::too_many_arguments)]
     fn stored_value(
         &mut self,
-        c: &crate::units::FnContract,
+        mi: u32,
+        this: NodeId,
+        c: &'a crate::units::FnContract,
         params: &[NodeId],
         dst: u32,
         reach: bool,
@@ -937,6 +944,19 @@ impl<'a> Gen<'a> {
                 }
             }
             self.m.add_prim(n, fl.prim);
+            // DECISIONS 176: the defining unit's values it stores.
+            if let Some(d) = &fl.value {
+                self.fill_described(
+                    mi,
+                    c,
+                    d,
+                    &d.value,
+                    this,
+                    params,
+                    n,
+                    "stored by another unit's function",
+                );
+            }
         }
         if top {
             self.m
@@ -1086,7 +1106,9 @@ impl<'a> Gen<'a> {
                 let n = match j {
                     0 => q,
                     _ => {
-                        let n = self.m.node_named("reach", || format!("reach.{k}.{j}({name})"));
+                        let n = self
+                            .m
+                            .node_named("reach", || format!("reach.{k}.{j}({name})"));
                         self.m.own(n);
                         let key = match sk {
                             Some(s) => crate::model::Key::Named(self.m.atom(s)),
@@ -1270,7 +1292,8 @@ impl<'a> Gen<'a> {
                 Some(Some(ks)) => {
                     let site = self.m.anon_post_site("store by another unit's function");
                     for k in ks {
-                        let src = self.stored_value(c, &params, i as u32, false, None, Some(k));
+                        let src =
+                            self.stored_value(mi, this, c, &params, i as u32, false, None, Some(k));
                         let key = crate::model::Key::Named(self.m.atom(k));
                         self.m.cons(p, Cons::Store { key, src, site });
                     }
@@ -1306,7 +1329,9 @@ impl<'a> Gen<'a> {
             // array is a stand-in sharing the cell; its own array leaves by
             // the same cell). The cell check then describes the argument.
             for (_, key) in c.param_cells.iter().filter(|(pi, _)| *pi as usize == i) {
-                let Some(name) = key.strip_prefix("arr:") else { continue };
+                let Some(name) = key.strip_prefix("arr:") else {
+                    continue;
+                };
                 let a = match self.arr_cells.iter().find(|(k, _)| k == key) {
                     Some(&(_, t)) => t,
                     None => self.stand_in_arr(mi, name),
@@ -1402,6 +1427,8 @@ impl<'a> Gen<'a> {
                 }
             }
             let src = self.stored_value(
+                mi,
+                this,
                 c,
                 &params,
                 fl.dst,
@@ -1483,9 +1510,12 @@ impl<'a> Gen<'a> {
                     self.stand_ins.get(&cc.display).map(|e| e.1)
                 }
             });
-            let q = tm
-                .and_then(|tm| self.m.tmpls[tm as usize].ctor)
-                .map(|f| self.m.funcs[f as usize].params.get(ho.arg as usize).copied());
+            let q = tm.and_then(|tm| self.m.tmpls[tm as usize].ctor).map(|f| {
+                self.m.funcs[f as usize]
+                    .params
+                    .get(ho.arg as usize)
+                    .copied()
+            });
             match q {
                 Some(Some(q)) => self.m.edge(p, q),
                 // Past its parameters: reaches nothing (`lib::closed_of`).
@@ -1928,6 +1958,8 @@ impl<'a> Gen<'a> {
         // unknown value; other keys only when the defining unit's class
         // object is open.
         let mut static_fns: Vec<(NodeId, &'a crate::units::FnContract)> = Vec::new();
+        let mut static_values: Vec<(NodeId, &'a (String, crate::units::ValueContract))> =
+            Vec::new();
         for (key, m) in &c.statics {
             let a = self.m.atom(key);
             let n = self.m.field(cobj, a);
@@ -1935,9 +1967,23 @@ impl<'a> Gen<'a> {
                 static_fns.push((n, fc));
                 continue;
             }
+            // A data static with a value contract (DECISIONS 173): what it
+            // describes, made below.
+            if let Some(sv) = c.static_values.iter().find(|(k, _)| k == key) {
+                static_values.push((n, sv));
+                continue;
+            }
             match m {
                 Some(fname) => {
-                    let f = self.stub_fn(mi, fname, tm, true, true, c.closed.is_none() || c.forwards, r);
+                    let f = self.stub_fn(
+                        mi,
+                        fname,
+                        tm,
+                        true,
+                        true,
+                        c.closed.is_none() || c.forwards,
+                        r,
+                    );
                     let t = self.m.funcs[f as usize].token;
                     self.m.add_tok(n, t);
                     toks.push(t);
@@ -1962,7 +2008,15 @@ impl<'a> Gen<'a> {
                 method_fns.push((self.m.field(proto, a), fc));
                 continue;
             }
-            let f = self.stub_fn(mi, fname, tm, true, false, c.closed.is_none() || c.forwards, r);
+            let f = self.stub_fn(
+                mi,
+                fname,
+                tm,
+                true,
+                false,
+                c.closed.is_none() || c.forwards,
+                r,
+            );
             // DECISIONS 165: a call of it runs that method.
             self.m.stub_methods.insert(f);
             let a = self.m.atom(key);
@@ -2090,7 +2144,7 @@ impl<'a> Gen<'a> {
                 self.m.add_prim(fnode, prim::ALL);
             }
         }
-        for (fnode, (key, vc)) in value_fields {
+        for (fnode, (key, vc)) in value_fields.into_iter().chain(static_values) {
             let v = self.stand_in_value(mi, key, vc);
             self.m.edge(v, fnode);
         }

@@ -1275,7 +1275,15 @@ fn a_store_into_a_marker_makes_no_field_of_it() {
     m.solve();
     assert!(!m.marker_use.get(&mk).is_some_and(|u| u & MARK_ESCAPE != 0));
     assert_eq!(m.param_stores.get(&(0, 0)), Some(&vec![x]));
-    assert!(m.is_escaped(o), "the stored value escapes");
+    // DECISIONS 176: a value of this unit stored into the argument goes to
+    // the reader as a result does: the flow holds it, and the contract
+    // check after the solve (`Gen::contract_check`, none in this bare
+    // model) describes it or lets it escape alone.
+    let vals = m.store_flows.values().find_map(|fl| fl.vals);
+    assert!(
+        vals.is_some_and(|n| m.nodes[n as usize].pts.to_sorted().contains(&o)),
+        "the stored value is the flow's"
+    );
     assert!(!m.fields.contains_key(&(mk, x)), "a field of the marker");
 }
 

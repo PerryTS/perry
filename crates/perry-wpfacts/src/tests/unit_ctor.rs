@@ -541,7 +541,10 @@ fn an_argument_stored_into_what_the_receiver_reaches_stays_the_callers() {
         let pf = units(src);
         assert!(pf.broken.is_empty(), "{}", pf.dump_text());
         let u = verdicts(&pf, "x");
-        assert!(!u.is_empty() && u.iter().all(|v| v.starts_with("T0")), "{u:?}");
+        assert!(
+            !u.is_empty() && u.iter().all(|v| v.starts_with("T0")),
+            "{u:?}"
+        );
     }
 }
 
@@ -593,7 +596,10 @@ fn a_receiver_reach_handed_to_an_in_unit_call_and_stored_back_stays_the_callers(
         assert!(pf.broken.is_empty(), "{}", pf.dump_text());
         for k in ["left", "right"] {
             let w = verdicts(&wf, k);
-            assert!(!w.is_empty() && w.iter().all(|v| v.starts_with("T0")), "{w:?}");
+            assert!(
+                !w.is_empty() && w.iter().all(|v| v.starts_with("T0")),
+                "{w:?}"
+            );
             assert_eq!(verdicts(&pf, k), w, "{}", pf.dump_text());
         }
     }
@@ -645,7 +651,10 @@ fn a_constructor_argument_of_the_constructing_unit_stays_the_callers() {
     assert!(pf.broken.is_empty(), "{:?}\n{}", pf.broken, pf.dump_text());
     for k in ["k", "x", "left"] {
         let w = verdicts(&wf, k);
-        assert!(!w.is_empty() && w.iter().all(|v| v.starts_with("T0")), "{k} {w:?}");
+        assert!(
+            !w.is_empty() && w.iter().all(|v| v.starts_with("T0")),
+            "{k} {w:?}"
+        );
         assert_eq!(verdicts(&pf, k), w, "{k}\n{}", pf.dump_text());
     }
 }
@@ -675,8 +684,16 @@ fn a_constructor_argument_read_from_a_parameter_is_not_the_parameter() {
     // unit would see Key in `k`, where the program stores Inner.
     let pf = units(CTOR_REACH);
     let k = &field(tmpl(&pf, "Node"), "k").kind;
-    assert!(!k.objs.iter().any(|o| o.ends_with(":Key")), "{k:?}\n{}", pf.dump_text());
-    assert!(k.top || k.objs.iter().any(|o| o.ends_with(":Inner")), "{k:?}\n{}", pf.dump_text());
+    assert!(
+        !k.objs.iter().any(|o| o.ends_with(":Key")),
+        "{k:?}\n{}",
+        pf.dump_text()
+    );
+    assert!(
+        k.top || k.objs.iter().any(|o| o.ends_with(":Inner")),
+        "{k:?}\n{}",
+        pf.dump_text()
+    );
 }
 
 /// DECISIONS 155: what the receiver reaches handed to a closed class's
@@ -719,7 +736,10 @@ fn a_constructor_argument_the_receiver_reaches_stays_the_callers() {
     assert!(pf.broken.is_empty(), "{:?}\n{}", pf.broken, pf.dump_text());
     for k in ["v", "n", "value", "left"] {
         let w = verdicts(&wf, k);
-        assert!(!w.is_empty() && w.iter().all(|v| v.starts_with("T0")), "{k} {w:?}");
+        assert!(
+            !w.is_empty() && w.iter().all(|v| v.starts_with("T0")),
+            "{k} {w:?}"
+        );
         assert_eq!(verdicts(&pf, k), w, "{k}\n{}", pf.dump_text());
     }
     // Soundness: Res's unit sees the caller's Val in `v`, as the program.
@@ -753,9 +773,15 @@ fn a_published_class_takes_its_constructions_from_the_units_holding_it() {
     let wf = facts(PUB_CTOR);
     assert!(pf.broken.is_empty(), "{:?}\n{}", pf.broken, pf.dump_text());
     let w = verdicts(&wf, "k");
-    assert!(!w.is_empty() && w.iter().all(|v| v.starts_with("T0")), "{w:?}");
+    assert!(
+        !w.is_empty() && w.iter().all(|v| v.starts_with("T0")),
+        "{w:?}"
+    );
     assert_eq!(verdicts(&pf, "k"), w, "{}", pf.dump_text());
-    let (u, w) = (field(tmpl(&pf, "Vec"), "cap"), field(tmpl(&wf, "Vec"), "cap"));
+    let (u, w) = (
+        field(tmpl(&pf, "Vec"), "cap"),
+        field(tmpl(&wf, "Vec"), "cap"),
+    );
     assert_eq!(u.kind, w.kind, "{}", pf.dump_text());
 }
 
@@ -782,7 +808,11 @@ fn a_published_class_another_unit_lets_escape_has_unknown_constructor_arguments(
     // The fixture has no static method: one taking a parameter into
     // `new Vec` would make `cap` ⊤ on its own and hide the guard.
     let pf = units(PUB_CTOR_ESCAPE);
-    assert!(pf.broken.iter().any(|b| b.ends_with(":Vec")), "{:?}", pf.broken);
+    assert!(
+        pf.broken.iter().any(|b| b.ends_with(":Vec")),
+        "{:?}",
+        pf.broken
+    );
     let u = field(tmpl(&pf, "Vec"), "cap");
     assert!(u.kind.top, "{:?}\n{}", u.kind, pf.dump_text());
 }
@@ -824,7 +854,13 @@ fn an_element_a_callee_reads_is_the_callers_element() {
             .count()
     };
     assert!(proven(&wf) > 0);
-    assert!(proven(&pf) >= proven(&wf), "U {} W {}\n{}", proven(&pf), proven(&wf), pf.dump_text());
+    assert!(
+        proven(&pf) >= proven(&wf),
+        "U {} W {}\n{}",
+        proven(&pf),
+        proven(&wf),
+        pf.dump_text()
+    );
 }
 
 const SUB_RECV: &str = r#"
@@ -869,7 +905,9 @@ fn an_argument_a_callee_stores_into_a_shared_array_is_stored_by_the_callers_unit
     // An override report is the subclass unit telling the parent unit
     // (DECISIONS 59), no break.
     assert!(
-        pf.broken.iter().all(|b| b.starts_with("override ") || wf.broken.contains(b)),
+        pf.broken
+            .iter()
+            .all(|b| b.starts_with("override ") || wf.broken.contains(b)),
         "{:?} vs {:?}\n{}",
         pf.broken,
         wf.broken,
@@ -888,7 +926,13 @@ fn an_argument_a_callee_stores_into_a_shared_array_is_stored_by_the_callers_unit
         v.sort();
         v
     };
-    assert!(v(&wf).iter().any(|s| s.contains(".k T0Set") && s.contains("Tag")), "{:?}", v(&wf));
+    assert!(
+        v(&wf)
+            .iter()
+            .any(|s| s.contains(".k T0Set") && s.contains("Tag")),
+        "{:?}",
+        v(&wf)
+    );
     assert_eq!(v(&pf), v(&wf), "\n{}", pf.dump_text());
 }
 
@@ -918,7 +962,9 @@ fn a_receiver_reach_stored_back_into_a_leaving_field_adds_no_kinds() {
     let pf = units(ROOT_BACK);
     let wf = facts(ROOT_BACK);
     assert!(
-        pf.broken.iter().all(|b| b.starts_with("override ") || wf.broken.contains(b)),
+        pf.broken
+            .iter()
+            .all(|b| b.starts_with("override ") || wf.broken.contains(b)),
         "{:?} vs {:?}\n{}",
         pf.broken,
         wf.broken,
@@ -941,7 +987,11 @@ fn a_receiver_reach_stored_back_into_a_leaving_field_adds_no_kinds() {
         v.sort();
         v
     };
-    assert!(v(&wf).iter().any(|s| s.contains(".k T0Mono")), "{:?}", v(&wf));
+    assert!(
+        v(&wf).iter().any(|s| s.contains(".k T0Mono")),
+        "{:?}",
+        v(&wf)
+    );
     assert_eq!(v(&pf), v(&wf), "\n{}", pf.dump_text());
 }
 
@@ -969,12 +1019,20 @@ fn a_method_its_readers_cannot_name_is_run_by_its_owner() {
     let wf = facts(TWO_FN_KEY);
     let at = TWO_FN_KEY.find("m(x").unwrap() as u32..TWO_FN_KEY.find("own()").unwrap() as u32;
     let site = |f: &ProgramFacts| -> String {
-        let s = f.sites.iter().find(|s| at.contains(&s.byte_offset) && s.key == "v").expect("x.v site");
+        let s = f
+            .sites
+            .iter()
+            .find(|s| at.contains(&s.byte_offset) && s.key == "v")
+            .expect("x.v site");
         let mut r = s.receivers.clone();
         r.sort();
         format!("{:?} {:?}", s.verdict, r)
     };
     assert!(site(&wf).contains("R"), "{}", site(&wf));
     let u = site(&pf);
-    assert!(u.contains("R") || !u.contains("T0"), "{u}\n{}", pf.dump_text());
+    assert!(
+        u.contains("R") || !u.contains("T0"),
+        "{u}\n{}",
+        pf.dump_text()
+    );
 }

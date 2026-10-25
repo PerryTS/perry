@@ -460,6 +460,7 @@ fn nested_layouts(
                     statics: Vec::new(),
                     statics_open: false,
                     static_fns: Vec::new(),
+                    static_values: Vec::new(),
                     closed: None,
                     forwards: false,
                     method_fns: Vec::new(),
@@ -765,6 +766,20 @@ fn fn_contract_of(
             .iter()
             .filter(|((h, ..), _)| *h == f)
             .map(|(&(_, dst, reach, via, a), fl)| {
+                // DECISIONS 176: what it stores of this unit; ⊤ once no
+                // contract describes it.
+                let value = match fl.vals {
+                    Some(n) if !fl.vals_top => Some(describe_nodes(
+                        g,
+                        templates,
+                        f,
+                        vec![n],
+                        false,
+                        layouts_out,
+                        open_tm,
+                    )),
+                    _ => None,
+                };
                 let mut from = fl.from.clone();
                 from.sort();
                 let mut from_reach: Vec<(u32, Option<String>)> = fl
@@ -783,8 +798,9 @@ fn fn_contract_of(
                     },
                     from,
                     from_reach,
-                    top: fl.top,
+                    top: fl.top || (fl.vals.is_some() && fl.vals_top),
                     prim: fl.prim,
+                    value,
                 }
             })
             .collect();
@@ -1067,6 +1083,12 @@ fn describe_nodes(
                     }
                     continue;
                 }
+                // A value no contract describes escaped alone
+                // (`Gen::publish_result`, DECISIONS 175): unknown.
+                if !g.result_tok_ok(f, t) {
+                    ret_unknown = true;
+                    continue;
+                }
                 // A builtin, a program object, an array (DECISIONS 94).
                 let extra = match g.m.toks[t as usize] {
                     model::TokKind::Builtin(_) => true,
@@ -1177,6 +1199,7 @@ fn describe_nodes(
                             statics: Vec::new(),
                             statics_open: false,
                             static_fns: Vec::new(),
+                            static_values: Vec::new(),
                             closed: None,
                             forwards: false,
                             method_fns: Vec::new(),
@@ -1360,6 +1383,15 @@ fn value_contract_of_toks(
             }
             model::TokKind::Obj(tm, _) => (tm, false),
             model::TokKind::ClassObj(tm) => (tm, true),
+            // A function of this unit that escaped before any contract
+            // named it is no contract function: it left alone, and the
+            // value says unknown beside the rest (DECISIONS 174, 178).
+            model::TokKind::Func(f, _)
+                if g.m.funcs[f as usize].func_id != u32::MAX && !g.m.contract_fns.contains(&f) =>
+            {
+                vc.unknown = true;
+                continue;
+            }
             model::TokKind::Func(f, _) if g.m.funcs[f as usize].func_id != u32::MAX => {
                 // A contract function of this unit (`Gen::contract_check`).
                 let fc = fn_contract_of(g, templates, f, layouts_out, open_tm);
@@ -1423,6 +1455,7 @@ fn value_contract_of_toks(
                     statics: Vec::new(),
                     statics_open: false,
                     static_fns: Vec::new(),
+                    static_values: Vec::new(),
                     closed: None,
                     forwards: false,
                     method_fns: Vec::new(),
@@ -1491,18 +1524,17 @@ fn arg_reach_unknown(g: &gen::Gen, t: model::Tok) -> bool {
     }
     let mut a = t;
     while g.m.reach_marker.contains(&a) {
-        let up = g
-            .m
-            .marker_reach
-            .iter()
-            .find(|(_, &r)| r == a)
-            .map(|(&p, _)| p)
-            .or_else(|| {
-                g.m.keyed_reach
-                    .iter()
-                    .find(|(_, v)| v.iter().any(|&(_, r)| r == a))
-                    .map(|(&p, _)| p)
-            });
+        let up =
+            g.m.marker_reach
+                .iter()
+                .find(|(_, &r)| r == a)
+                .map(|(&p, _)| p)
+                .or_else(|| {
+                    g.m.keyed_reach
+                        .iter()
+                        .find(|(_, v)| v.iter().any(|&(_, r)| r == a))
+                        .map(|(&p, _)| p)
+                });
         match up {
             Some(p) => a = p,
             // No marker it is the reach of: nothing says what it holds.
@@ -1682,6 +1714,7 @@ fn arg_contract_of(
                             statics: Vec::new(),
                             statics_open: false,
                             static_fns: Vec::new(),
+                            static_values: Vec::new(),
                             closed: None,
                             forwards: false,
                             method_fns: Vec::new(),
@@ -2184,6 +2217,7 @@ pub(crate) fn compute_in<'a>(
                         statics,
                         statics_open,
                         static_fns,
+                        static_values: Vec::new(),
                         closed: closed_of(&g, sorted[0].0, mi, tm),
                         forwards: forwards_of(&g, mi, tm),
                         method_fns,
@@ -2208,7 +2242,40 @@ pub(crate) fn compute_in<'a>(
         .into_iter()
         .map(|(k, c)| (k.expect("an export"), c))
         .collect();
-    let given_out: Vec<units::ClassContract> = given_out.into_iter().map(|(_, c)| c).collect();
+    let mut given_out: Vec<units::ClassContract> = given_out.into_iter().map(|(_, c)| c).collect();
+    // DECISIONS 173: the static members `Gen::contract_check` accepted, by
+    // class, with the contracts of what they hold.
+    let mut contracts_out = contracts_out;
+    if cfg.unit && !g.m.aborted {
+        let mut sv: Vec<(String, String, units::ValueContract)> = Vec::new();
+        for &(tm, a, n) in &g.static_values {
+            let vc = value_contract_of(
+                &g,
+                &templates,
+                n,
+                &contracts_out,
+                &mut layouts_out,
+                &open_tm,
+            );
+            sv.push((
+                g.m.tmpls[tm as usize].display.clone(),
+                g.m.atoms[a as usize].clone(),
+                vc,
+            ));
+        }
+        sv.sort_by(|x, y| (&x.0, &x.1).cmp(&(&y.0, &y.1)));
+        for c in contracts_out
+            .iter_mut()
+            .map(|(_, c)| c)
+            .chain(given_out.iter_mut())
+        {
+            c.static_values = sv
+                .iter()
+                .filter(|(d, k, _)| d == &c.display && c.statics.iter().any(|(q, _)| q == k))
+                .map(|(_, k, v)| (k.clone(), v.clone()))
+                .collect();
+        }
+    }
     // Its function contracts and the layouts they return (design §11.2).
     let fn_contracts_out: Vec<((String, String), units::FnContract)> = if cfg.unit && !g.m.aborted {
         let mut out = Vec::new();
@@ -2314,16 +2381,15 @@ pub(crate) fn compute_in<'a>(
     // not repeat the any-key cell once per key the unit names
     // (`Gen::program_cells`; AWFY: 257 keys of `require.cache`, each the 17
     // module records).
-    let program_any: Vec<(String, model::NodeId)> = g
-        .m
-        .program_objs
-        .iter()
-        .filter_map(|&(name, _)| {
-            let key = format!("{name}:*");
-            let &(_, n) = g.cells.iter().find(|(k, _)| *k == key)?;
-            Some((format!("{name}:"), n))
-        })
-        .collect();
+    let program_any: Vec<(String, model::NodeId)> =
+        g.m.program_objs
+            .iter()
+            .filter_map(|&(name, _)| {
+                let key = format!("{name}:*");
+                let &(_, n) = g.cells.iter().find(|(k, _)| *k == key)?;
+                Some((format!("{name}:"), n))
+            })
+            .collect();
     let mut cells_out: Vec<(String, units::ValueContract)> = g
         .cells
         .iter()
@@ -2462,7 +2528,9 @@ pub(crate) fn compute_in<'a>(
                 .iter()
                 .filter(|((_, holder), _)| holder.is_none())
                 .filter_map(|(_, &(_, t))| Some((g.stand_in_fc.get(&t)?.closed.clone()?, t)))
-                .filter(|(nm, _)| !v.closed_refs.contains(nm) || !g.mods[0].imports.contains_key(nm))
+                .filter(|(nm, _)| {
+                    !v.closed_refs.contains(nm) || !g.mods[0].imports.contains_key(nm)
+                })
                 .collect();
             got.sort();
             for (nm, t) in got {
@@ -2728,10 +2796,7 @@ impl ProgramFacts {
         by_class
             .into_iter()
             .filter(|(_, ts)| {
-                ts.iter().all(|t| t.prefix_stable)
-                    && ts
-                        .iter()
-                        .all(|t| t.fields == ts[0].fields)
+                ts.iter().all(|t| t.prefix_stable) && ts.iter().all(|t| t.fields == ts[0].fields)
             })
             .map(|(c, ts)| (c, ts[0]))
             .collect()

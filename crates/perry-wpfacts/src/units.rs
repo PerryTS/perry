@@ -53,6 +53,9 @@ pub(crate) struct ClassContract {
     /// defining unit checked their results (an instance of a contract
     /// class is given out, `Model::give_out`).
     pub static_fns: Vec<(String, FnContract)>,
+    /// The data statics with a value contract (key, contract, DECISIONS
+    /// 173): the defining unit checked what they hold after its solve.
+    pub static_values: Vec<(String, ValueContract)>,
     /// A closed class (design §18.13, `decl_units::closed_bindings`): its
     /// defining module's path and binding name, and its constructor's
     /// parameter count. Every unit constructing it (by name or through an
@@ -110,6 +113,9 @@ pub(crate) struct StoreFlow {
     pub from_reach: Vec<(u32, Option<String>)>,
     pub top: bool,
     pub prim: u16,
+    /// DECISIONS 176: the values of the defining unit it stores, described
+    /// as a result is (DECISIONS 140).
+    pub value: Option<Described>,
 }
 
 /// DECISIONS 140: a value a contract function hands the caller's unit, its
@@ -428,6 +434,11 @@ impl FnContract {
                     x.from_reach.sort();
                     x.top |= y.top;
                     x.prim |= y.prim;
+                    match (&mut x.value, &y.value) {
+                        (Some(a), Some(b)) => a.join(b),
+                        (a @ None, Some(b)) => *a = Some(b.clone()),
+                        _ => {}
+                    }
                 }
                 None => self.param_flows.push(y.clone()),
             }
@@ -464,6 +475,7 @@ fn join_stores(a: &mut Option<Vec<String>>, b: &Option<Vec<String>>) {
 enum StaticMember {
     Fn(FnContract),
     Stub(String),
+    Value(ValueContract),
     Top,
 }
 
@@ -497,6 +509,10 @@ impl ClassContract {
             let (_, m) = c.statics.iter().find(|(q, _)| q == k)?;
             Some(match c.static_fns.iter().find(|(q, _)| q == k) {
                 Some((_, fc)) => StaticMember::Fn(fc.clone()),
+                None if c.static_values.iter().any(|(q, _)| q == k) => {
+                    let (_, vc) = c.static_values.iter().find(|(q, _)| q == k).unwrap();
+                    StaticMember::Value(vc.clone())
+                }
                 None => match m {
                     Some(f) => StaticMember::Stub(f.clone()),
                     None => StaticMember::Top,
@@ -505,6 +521,7 @@ impl ClassContract {
         };
         let mut statics: Vec<(String, Option<String>)> = Vec::new();
         let mut static_fns: Vec<(String, FnContract)> = Vec::new();
+        let mut static_values: Vec<(String, ValueContract)> = Vec::new();
         for (k, _) in self.statics.iter().chain(o.statics.iter()) {
             if statics.iter().any(|(q, _)| q == k) {
                 continue;
@@ -514,6 +531,10 @@ impl ClassContract {
                 (Some(StaticMember::Fn(mut f)), Some(StaticMember::Fn(g))) if f.name == g.name => {
                     f.join(&g);
                     StaticMember::Fn(f)
+                }
+                (Some(StaticMember::Value(mut v)), Some(StaticMember::Value(w))) => {
+                    v.join(&w);
+                    StaticMember::Value(v)
                 }
                 (Some(x), Some(y)) if x == y => x,
                 _ => StaticMember::Top,
@@ -530,6 +551,10 @@ impl ClassContract {
                     static_fns.push((k.clone(), f));
                 }
                 StaticMember::Stub(f) => statics.push((k.clone(), Some(f))),
+                StaticMember::Value(v) => {
+                    statics.push((k.clone(), None));
+                    static_values.push((k.clone(), v));
+                }
                 StaticMember::Top => statics.push((k.clone(), None)),
             }
         }
@@ -633,6 +658,7 @@ impl ClassContract {
         self.statics = statics;
         self.statics_open |= o.statics_open;
         self.static_fns = static_fns;
+        self.static_values = static_values;
     }
 }
 
@@ -773,7 +799,9 @@ impl Published {
     /// What a reader of layout `display` records (DECISIONS 114): its
     /// digest, or the digest of no entry.
     pub(crate) fn layout_seen(&self, display: &str) -> u64 {
-        self.layouts.get(display).map_or_else(|| digest(&None::<&ClassContract>), |e| e.digest)
+        self.layouts
+            .get(display)
+            .map_or_else(|| digest(&None::<&ClassContract>), |e| e.digest)
     }
 
     pub(crate) fn own_fn(&self, name: &str) -> Option<&FnContract> {
@@ -782,7 +810,9 @@ impl Published {
 
     /// What a reader of function contract `name` records, as `layout_seen`.
     pub(crate) fn own_fn_seen(&self, name: &str) -> u64 {
-        self.own_fns.get(name).map_or_else(|| digest(&None::<&FnContract>), |e| e.digest)
+        self.own_fns
+            .get(name)
+            .map_or_else(|| digest(&None::<&FnContract>), |e| e.digest)
     }
 
     pub(crate) fn class_contract(&self, path: &str, name: &str) -> Option<&ClassContract> {
@@ -1369,7 +1399,9 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
                     published_layouts.insert(c.display.clone());
                     if u.layouts_fwd.contains(&c.display) {
                         if !owned_layouts.contains(&c.display) {
-                            input.layouts.insert(c.display.clone(), Digested::new(c.clone()));
+                            input
+                                .layouts
+                                .insert(c.display.clone(), Digested::new(c.clone()));
                             copy_of.insert(c.display.clone(), si);
                         }
                         continue;
@@ -1408,7 +1440,9 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
                 }
                 for c in &u.own_fns_out {
                     published_fns.insert(c.name.clone());
-                    input.own_fns.insert(c.name.clone(), Digested::new(c.clone()));
+                    input
+                        .own_fns
+                        .insert(c.name.clone(), Digested::new(c.clone()));
                 }
                 reports.extend(u.reports.iter().cloned());
             }

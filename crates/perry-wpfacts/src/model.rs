@@ -647,6 +647,11 @@ pub struct StoreFlow {
     pub from_reach: Vec<(u32, Option<Atom>)>,
     pub top: bool,
     pub prim: u16,
+    /// DECISIONS 176: this unit's values stored here (its own instances,
+    /// other units' stand-ins), handed to the caller's unit as a result is
+    /// (`Gen::publish_result`); `vals_top` once no contract describes them.
+    pub vals: Option<NodeId>,
+    pub vals_top: bool,
 }
 
 #[derive(Default, Clone, Debug)]
@@ -1978,7 +1983,9 @@ impl Model {
     /// assumption narrows what its sites read, never its contract.
     pub(crate) fn unrun_param(&self, t: Tok) -> bool {
         self.param_marker.get(&t).is_some_and(|&(f, i)| {
-            i != u32::MAX && !self.closed_described.contains_key(&f) && self.method_described(f).is_some()
+            i != u32::MAX
+                && !self.closed_described.contains_key(&f)
+                && self.method_described(f).is_some()
         })
     }
 

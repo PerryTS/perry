@@ -795,6 +795,7 @@ impl Model {
                 let mut from = Vec::new();
                 let mut from_reach = Vec::new();
                 let mut top = false;
+                let mut vals = Vec::new();
                 for &t in toks {
                     // The argument marker of `f`'s parameter node `j` is
                     // argument `j`; its other members (the markers this
@@ -836,7 +837,13 @@ impl Model {
                         // as it links in.
                         _ if self.is_arg_marker(t) => {
                             let own = (dst == u32::MAX && to == at).then_some(at);
-                            self.store_out_arg_reach(t, (f, dst, reach, via, key), reason, own, None);
+                            self.store_out_arg_reach(
+                                t,
+                                (f, dst, reach, via, key),
+                                reason,
+                                own,
+                                None,
+                            );
                         }
                         // DECISIONS 149: only the arguments are the
                         // reader's own values in what its receiver reaches;
@@ -850,10 +857,32 @@ impl Model {
                         _ if dst == u32::MAX && to == at => {
                             self.mark_use(at, crate::model::MARK_ESCAPE);
                         }
-                        _ => {
+                        // Another function's marker: another unit's value
+                        // the reader cannot follow (DECISIONS 149b).
+                        _ if self.is_marker(t) => {
                             top = true;
                             self.escape(t, reason);
                         }
+                        // DECISIONS 176: a value of this unit goes to the
+                        // reader's object as a result goes to the caller
+                        // (DECISIONS 140): checked after the solve
+                        // (`Gen::contract_check`), described by the flow.
+                        _ => vals.push(t),
+                    }
+                }
+                if !vals.is_empty() {
+                    let k = (f, dst, reach, via, key);
+                    let v = match self.store_flows.get(&k).and_then(|fl| fl.vals) {
+                        Some(v) => v,
+                        None => {
+                            let v = self.node_named("stored", || "stored-vals".into());
+                            self.node_fn[v as usize] = f;
+                            self.store_flows.entry(k).or_default().vals = Some(v);
+                            v
+                        }
+                    };
+                    for t in vals {
+                        self.add_tok(v, t);
                     }
                 }
                 let fl = self
@@ -1504,7 +1533,7 @@ impl Model {
     /// G's `this` marker, and a load from a marker reads its reach markers,
     /// DECISIONS 111). Every other value is stored as before. Returns the
     /// node to store.
-    fn rooted_own_store(&mut self, t: Tok, key: Key, src: NodeId, site: SiteId) -> NodeId {
+    fn rooted_own_store(&mut self, t: Tok, src: NodeId, site: SiteId) -> NodeId {
         if t == TOP || !matches!(self.toks[t as usize], TokKind::Obj(..)) {
             return src;
         }
@@ -1713,7 +1742,7 @@ impl Model {
         if self.is_marker(t) {
             return;
         }
-        let src = self.rooted_own_store(t, key, src, site);
+        let src = self.rooted_own_store(t, src, site);
         // A store into another unit's instance, class object or prototype
         // is beyond its contract (census report).
         let tm = match self.toks[t as usize] {
@@ -2327,9 +2356,10 @@ impl Model {
             }
             return;
         }
-        let own = self.param_marker.get(&t).is_some_and(|&(f, j)| {
-            j != u32::MAX && self.marker_of.get(&(f, j)) == Some(&t)
-        });
+        let own = self
+            .param_marker
+            .get(&t)
+            .is_some_and(|&(f, j)| j != u32::MAX && self.marker_of.get(&(f, j)) == Some(&t));
         let beside = self.reach_marker.contains(&t) && self.beside_values(t);
         if !own && !beside {
             self.escape(t, reason);
@@ -2392,7 +2422,10 @@ impl Model {
             match self.arg_members.get(&x).cloned() {
                 Some(ms) => {
                     if self.arg_src_flow_done.insert((x, t, flow, reason, own)) {
-                        self.arg_src_flows.entry(x).or_default().push((t, flow, reason, own));
+                        self.arg_src_flows
+                            .entry(x)
+                            .or_default()
+                            .push((t, flow, reason, own));
                     }
                     st.extend(ms);
                 }

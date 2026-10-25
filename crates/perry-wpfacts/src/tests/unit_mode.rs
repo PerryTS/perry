@@ -822,17 +822,16 @@ fn an_argument_the_callee_writes_is_written_by_the_reader() {
     let (pf, wp) = (units_of(&mods), whole_of(&mods));
     assert!(proven(&wp, "warm"), "{}", wp.dump_text());
     assert!(proven(&pf, "warm"), "{}", pf.dump_text());
-    // A value of the callee's own unit stored into the argument leaves
-    // with it: the reader's field holds another unit's value (⊤).
+    // DECISIONS 176: a value of the callee's own unit stored into the
+    // argument goes to the reader as a result does: the reader's field
+    // holds the stand-in of its layout, so `own.n.k` is proven as the
+    // whole program proves it (it was ⊤ before 176).
     let b = "export function bump(o: { n: any }) { o.n = { k: 1 }; }";
     let m = "import { bump } from './b'; function main() { const own = { n: 1 as any, warm: 2 }; bump(own); console.log(own.n.k); } main(); main();";
-    let pf = units_of(&[("b", b), ("m", m)]);
-    let s: Vec<_> = pf.sites.iter().filter(|s| s.key == "k").collect();
-    assert!(
-        !s.is_empty() && s.iter().all(|s| s.top),
-        "{}",
-        pf.dump_text()
-    );
+    let mods = [("b", b), ("m", m)];
+    let (pf, wp) = (units_of(&mods), whole_of(&mods));
+    assert!(proven(&wp, "k"), "{}", wp.dump_text());
+    assert!(proven(&pf, "k"), "{}", pf.dump_text());
 }
 
 #[test]
@@ -2965,4 +2964,43 @@ fn the_driver_compares_each_contract_once_per_round() {
         many - few <= bound,
         "cells: {few} -> {many}, rounds {r1}: {dump}"
     );
+}
+
+#[test]
+fn a_static_instance_is_a_value_binding_of_its_class() {
+    // DECISIONS 173: `P.D` is a binding on the class object, part of P's
+    // contract (§11.2), checked as an export binding is: the instance it
+    // gives out does not escape with its prototype chain, so `Q`, a
+    // subclass of another unit, finds `P` unbroken.
+    let b = "export class P { v: number; constructor() { this.v = 1; } get(): number { return this.v; } static D = new P(); }";
+    let m = "import { P } from './b'; class Q extends P { w: number = 2; } function main() { const d = P.D; console.log(d.get()); const q = new Q(); console.log(q.v, q.w, q.get()); } main(); main();";
+    assert_parity(&[("b", b), ("m", m)]);
+}
+
+#[test]
+fn a_value_no_contract_describes_escapes_alone() {
+    // DECISIONS 174: a published union is its members. `pick` holds an `A`
+    // or a runtime-made Error, which no contract describes: the Error
+    // escapes alone, the binding describes the `A` and says unknown beside
+    // it, so `A` stays unbroken.
+    let b = "export class A { n: number; constructor() { this.n = 1; } } export const pick: any = Math.random() > 2 ? new A() : new Error('e'); export function own(): number { const a = new A(); return a.n; }";
+    let m = "import { pick, own } from './b'; function main() { console.log(pick.n, own()); } main(); main();";
+    assert_parity(&[("b", b), ("m", m)]);
+    // The thrown values are a cell (174): the catching unit reads the
+    // `A` another unit throws beside an Error.
+    let b = "export class A { n: number; constructor() { this.n = 1; } } export function f(k: number): number { if (k > 1) throw new A(); if (k < 0) throw new Error('e'); const a = new A(); return a.n; }";
+    let m = "import { f } from './b'; function main() { try { console.log(f(2)); } catch (e: any) { console.log(e.n); } } main(); main();";
+    assert_parity(&[("b", b), ("m", m)]);
+}
+
+#[test]
+fn a_result_value_no_contract_describes_escapes_alone() {
+    // DECISIONS 175: 174's rule for a contract function's result. `mk`
+    // returns an `A` or a primitive method's box (`primbox`, on a string of
+    // its own: `k` is a marker per unit, no primitive receiver): the box
+    // escapes alone, the result describes the `A`: it is given out, not
+    // escaped, so `a.n` in `mk` is proven as the whole program proves it.
+    let b = "export class A { n: number; constructor() { this.n = 1; } } export function mk(k: number): any { const a = new A(); console.log(a.n); return k > 1 ? a : 'ab'.slice(k); } export function own(): number { const a = new A(); return a.n; }";
+    let m = "import { mk, own } from './b'; function main() { const v = mk(2); console.log(v.n, own()); } main(); main();";
+    assert_parity(&[("b", b), ("m", m)]);
 }
