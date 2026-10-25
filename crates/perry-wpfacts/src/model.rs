@@ -1630,6 +1630,25 @@ impl Model {
             .is_some_and(|w| w & (1 << (t & 63)) != 0)
     }
 
+    /// DECISIONS 94/184: an array, or a primitive method's container of
+    /// primitives (`primbox`, array-like: split/match results): its
+    /// elements leave through cell `arr:<name>` (`Gen::arr_leaves`).
+    pub fn is_cell_arr(&self, t: Tok) -> bool {
+        match self.toks[t as usize] {
+            TokKind::Obj(tm, _) => matches!(
+                self.tmpls[tm as usize].kind,
+                TmplKind::Arr { .. } | TmplKind::BObj { what: "primbox", .. }
+            ),
+            _ => false,
+        }
+    }
+
+    /// DECISIONS 184: a primitive method's container (`is_cell_arr`).
+    pub fn is_box(&self, t: Tok) -> bool {
+        matches!(self.toks[t as usize], TokKind::Obj(tm, _)
+            if matches!(self.tmpls[tm as usize].kind, TmplKind::BObj { what: "primbox", .. }))
+    }
+
     pub fn tmpl_of(&self, t: Tok) -> Option<TmplId> {
         match self.toks[t as usize] {
             TokKind::Obj(tm, _) => Some(tm),

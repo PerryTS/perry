@@ -3079,3 +3079,29 @@ fn a_published_cell_holding_another_units_prototype_terminates() {
     let pu = units_of(&[("b", b), ("d", d), ("m", m)]);
     assert!(!pu.sites.is_empty());
 }
+
+#[test]
+fn a_primitive_method_container_crosses_units_as_a_container() {
+    // DECISIONS 184: `parts` returns `split`'s array (a `primbox`). Its
+    // contract describes it (cell `box:<name>`, as an array's, DECISIONS
+    // 94), so `m` holds a container of its own kind, not an unknown value:
+    // `forEach` calls the closure with primitives and `a` stays this unit's,
+    // as in the whole program.
+    let b = "export function parts(s: string): any { return s.split(','); }";
+    let m = "import { parts } from './b'; class A { n = 0; inc(x: any) { this.n = this.n + x.length; } } function main() { const a = new A(); const p = parts(process.argv.length > 9 ? 'a' : 'a,b'); p.forEach((x: any) => a.inc(x)); console.log(a.n); } main(); main();";
+    assert_parity(&[("b", b), ("m", m)]);
+}
+
+#[test]
+fn a_primitive_method_box_in_another_units_storage_keeps_its_elements_described() {
+    // DECISIONS 184 (AWFY Json: json.js#u18 appends `input.substring(..)`
+    // to som.js's Vector): `m` stores a `primbox` and an instance of `a`'s
+    // `P` into `a`'s Vector storage. The storage cell's write describes the
+    // box (cell `box:<name>`), so `a` reads no ⊤ element: `storage.slice`
+    // (a named read that sees the elements, Key::Any) calls no unknown
+    // callee, the storage and its `P` stay unescaped, as in the whole
+    // program.
+    let a = "export class P { x: number; constructor(x: number) { this.x = x; } get(): number { return this.x; } } export class Vector { storage: any[]; n: number; constructor() { this.storage = new Array(2); this.n = 0; } append(e: any) { if (this.n >= this.storage.length) { const s = this.storage.slice(); this.storage = new Array(this.n * 2); for (let i = 0; i < this.n; i++) this.storage[i] = s[i]; } this.storage[this.n] = e; this.n = this.n + 1; } at(i: number): any { return this.storage[i]; } }";
+    let m = "import { P, Vector } from './a'; class J { input: string; v: Vector; constructor(s: string) { this.input = s; this.v = new Vector(); } run() { for (let i = 0; i < 4; i++) { this.v.append(new P(i)); this.v.append(this.input.substring(i, i + 1)); } return this.v.at(0).get(); } } function main() { const j = new J(process.argv.length > 9 ? 'abcdef' : 'xyzuvw'); console.log(j.run()); } main(); main();";
+    assert_parity(&[("a", a), ("m", m)]);
+}

@@ -1100,12 +1100,13 @@ fn describe_nodes(
                     ret_unknown = true;
                     continue;
                 }
-                // A builtin, a program object, an array (DECISIONS 94).
+                // A builtin, a program object, an array (DECISIONS 94), a
+                // primitive method's container (184).
                 let extra = match g.m.toks[t as usize] {
                     model::TokKind::Builtin(_) => true,
-                    model::TokKind::Obj(tm, _) => {
+                    model::TokKind::Obj(..) => {
                         (g.m.program_cells && g.m.program_objs.iter().any(|&(_, o)| o == t))
-                            || matches!(g.m.tmpls[tm as usize].kind, model::TmplKind::Arr { .. })
+                            || g.m.is_cell_arr(t)
                     }
                     _ => false,
                 };
@@ -1382,13 +1383,12 @@ fn value_contract_of_toks(
                 continue;
             }
             // An array (DECISIONS 94): its elements are cell `arr:<display>`.
-            model::TokKind::Obj(tm, _)
-                if matches!(g.m.tmpls[tm as usize].kind, model::TmplKind::Arr { .. }) =>
-            {
+            model::TokKind::Obj(..) if g.m.is_cell_arr(t) => {
                 let d = g.arr_name(t);
-                if !vc.arrays.contains(&d) {
-                    vc.arrays.push(d);
-                    vc.arrays.sort();
+                let v = if g.m.is_box(t) { &mut vc.boxes } else { &mut vc.arrays };
+                if !v.contains(&d) {
+                    v.push(d);
+                    v.sort();
                 }
                 continue;
             }
@@ -1645,11 +1645,12 @@ fn arg_contract_of(
                 };
                 // DECISIONS 149e: an array leaves by its element cell
                 // (`Gen::contract_check`), named as a value contract names it (94).
-                if matches!(g.m.tmpls[tm as usize].kind, model::TmplKind::Arr { .. }) {
+                if g.m.is_cell_arr(t) {
                     let d = g.arr_name(t);
-                    if !vc.arrays.contains(&d) {
-                        vc.arrays.push(d);
-                        vc.arrays.sort();
+                    let v = if g.m.is_box(t) { &mut vc.boxes } else { &mut vc.arrays };
+                    if !v.contains(&d) {
+                        v.push(d);
+                        v.sort();
                     }
                     continue;
                 }

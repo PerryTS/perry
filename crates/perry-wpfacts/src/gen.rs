@@ -1031,6 +1031,7 @@ impl<'a> Gen<'a> {
         if !(value.builtins.is_empty()
             && value.program.is_empty()
             && value.arrays.is_empty()
+            && value.boxes.is_empty()
             && value.fns.is_empty())
         {
             let v = self.stand_in_value(mi, why, value);
@@ -1344,12 +1345,15 @@ impl<'a> Gen<'a> {
             // array is a stand-in sharing the cell; its own array leaves by
             // the same cell). The cell check then describes the argument.
             for (_, key) in c.param_cells.iter().filter(|(pi, _)| *pi as usize == i) {
-                let Some(name) = key.strip_prefix("arr:") else {
-                    continue;
+                // DECISIONS 184: `box:` names a primitive method container.
+                let (name, boxed) = match (key.strip_prefix("arr:"), key.strip_prefix("box:")) {
+                    (Some(n), _) => (n, false),
+                    (_, Some(n)) => (n, true),
+                    _ => continue,
                 };
                 let a = match self.arr_cells.iter().find(|(k, _)| k == key) {
                     Some(&(_, t)) => t,
-                    None => self.stand_in_arr(mi, name),
+                    None => self.stand_in_arr(mi, name, boxed),
                 };
                 let an = self.m.node_named("cellarr", || format!("cellarr({key})"));
                 self.m.own(an);
@@ -1600,6 +1604,7 @@ impl<'a> Gen<'a> {
                 && vc.fns.is_empty()
                 && vc.builtins.is_empty()
                 && vc.arrays.is_empty()
+                && vc.boxes.is_empty()
                 && vc.program.is_empty()
                 && vc.layouts.iter().all(|c| !unit_in.broken(&c.display));
             if !described {
@@ -1745,7 +1750,12 @@ impl<'a> Gen<'a> {
         }
         // DECISIONS 94: another unit's array.
         for d in &c.arrays {
-            let t = self.stand_in_arr(mi, d);
+            let t = self.stand_in_arr(mi, d, false);
+            self.m.add_tok(n, t);
+        }
+        // DECISIONS 184: another unit's primitive method container.
+        for d in &c.boxes {
+            let t = self.stand_in_arr(mi, d, true);
             self.m.add_tok(n, t);
         }
         // DECISIONS 92: a program object is this unit's own token of it.
@@ -1795,15 +1805,23 @@ impl<'a> Gen<'a> {
     /// DECISIONS 94: another unit's array as this unit sees it: an array
     /// (its methods are the builtins) whose elements are cell
     /// `arr:<display>`, what every unit holding it writes there.
-    fn stand_in_arr(&mut self, mi: u32, display: &str) -> Tok {
+    fn stand_in_arr(&mut self, mi: u32, display: &str, boxed: bool) -> Tok {
         if let Some(&t) = self.stand_in_arrs.get(display) {
             return t;
         }
         let tm = self.m.tmpls.len() as TmplId;
         self.m.tmpls.push(Template {
-            kind: TmplKind::Arr {
-                module: mi,
-                site: u32::MAX,
+            kind: if boxed {
+                TmplKind::BObj {
+                    module: mi,
+                    site: u32::MAX,
+                    what: "primbox",
+                }
+            } else {
+                TmplKind::Arr {
+                    module: mi,
+                    site: u32::MAX,
+                }
             },
             display: display.to_string(),
             birth_keys: vec![],

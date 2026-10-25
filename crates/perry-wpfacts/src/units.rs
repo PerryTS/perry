@@ -313,6 +313,10 @@ pub(crate) struct ValueContract {
     /// The arrays of other units it may hold (DECISIONS 94), by template
     /// display: their elements are cell `arr:<display>`.
     pub arrays: Vec<String>,
+    /// DECISIONS 184: the primitive method containers (`primbox`) it may
+    /// hold, by name as `arrays`: their elements are cell `arr:<name>`; a
+    /// reader's stand-in is a container of its own kind.
+    pub boxes: Vec<String>,
 }
 
 /// Keeps the prefix `a` and `b` share.
@@ -686,9 +690,11 @@ impl ValueContract {
         union_into(&mut self.builtins, &o.builtins);
         union_into(&mut self.program, &o.program);
         union_into(&mut self.arrays, &o.arrays);
+        union_into(&mut self.boxes, &o.boxes);
         self.builtins.sort();
         self.program.sort();
         self.arrays.sort();
+        self.boxes.sort();
         self.layouts.sort_by(|x, y| x.display.cmp(&y.display));
         self.classes.sort_by(|x, y| x.display.cmp(&y.display));
         self.fns.sort_by(|x, y| x.name.cmp(&y.name));
@@ -1651,6 +1657,7 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
                     && c.builtins.is_empty()
                     && c.program.is_empty()
                     && c.arrays.is_empty()
+                    && c.boxes.is_empty()
             };
             let top = top || others.iter().any(|w| pure(&w.c));
             let mut v: Vec<u64> = others

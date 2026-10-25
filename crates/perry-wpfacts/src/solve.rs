@@ -774,9 +774,9 @@ impl Model {
                     }
                     let stand_in = matches!(self.toks[t as usize], TokKind::Obj(tm, _)
                         if self.foreign.contains_key(&tm));
-                    // DECISIONS 149e: an array leaves by its element cell.
-                    let arr = matches!(self.toks[t as usize], TokKind::Obj(tm, _)
-                        if matches!(self.tmpls[tm as usize].kind, TmplKind::Arr { .. }));
+                    // DECISIONS 149e: an array leaves by its element cell,
+                    // a primitive method's container too (184).
+                    let arr = self.is_cell_arr(t);
                     if !stand_in && !arr {
                         self.escape(t, reason);
                     }
@@ -1810,9 +1810,7 @@ impl Model {
                 let r =
                     self.reason("stored into a named field of an array shared with other units");
                 self.sink_node(src, r);
-            } else if matches!(self.toks[t as usize], TokKind::Obj(tm, _)
-                if matches!(self.tmpls[tm as usize].kind, TmplKind::Arr { .. }))
-            {
+            } else if self.is_cell_arr(t) {
                 self.arr_named_srcs.entry(t).or_default().push(src);
             }
         }

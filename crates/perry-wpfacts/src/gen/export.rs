@@ -965,7 +965,7 @@ impl<'a> Gen<'a> {
     /// object cell keep the check. True when it recorded a new flow.
     fn cell_flows_of(&mut self, i: usize) -> bool {
         let (key, n) = (&self.cells[i].0, self.cells[i].1);
-        if !key.starts_with("arr:") || key.ends_with("#named") {
+        if !(key.starts_with("arr:") || key.starts_with("box:")) || key.ends_with("#named") {
             return false;
         }
         let key = key.clone();
@@ -1303,10 +1303,7 @@ impl<'a> Gen<'a> {
     /// another unit's stand-in: its elements leave through cell
     /// `arr:<display>`, so it describes every value it holds.
     fn arr_ok(&self, t: Tok) -> bool {
-        match self.m.toks[t as usize] {
-            TokKind::Obj(tm, _) => matches!(self.m.tmpls[tm as usize].kind, TmplKind::Arr { .. }),
-            _ => false,
-        }
+        self.m.is_cell_arr(t)
     }
 
     /// DECISIONS 94: array `t` leaves (published, a published field holds
@@ -1318,7 +1315,10 @@ impl<'a> Gen<'a> {
         if self.m.cell_arrs.contains_key(&t) {
             return false;
         }
-        let key = format!("arr:{}", self.arr_name(t));
+        // DECISIONS 184: a container's cell is `box:<name>`, so a reader
+        // knows its kind from the key alone (`FnContract::param_cells`).
+        let kind = if self.m.is_box(t) { "box" } else { "arr" };
+        let key = format!("{kind}:{}", self.arr_name(t));
         let named = self.m.node_named("cell", || format!("cell({key}#named)"));
         self.seed_cell(&format!("{key}#named"), named);
         self.m.cell_arrs.insert(t, named);
@@ -1340,6 +1340,12 @@ impl<'a> Gen<'a> {
             }
         }
         let n = self.m.field_any(t);
+        // DECISIONS 184: a container's elements are primitives besides
+        // what was stored (`builtins::tok_load`): its cell says so, as a
+        // reader's own container of the same kind reads them.
+        if self.m.is_box(t) {
+            self.m.add_prim(n, crate::model::prim::ALL);
+        }
         self.seed_cell(&key, n);
         self.cells.push((key.clone(), n));
         self.arr_cells.push((key, t));
