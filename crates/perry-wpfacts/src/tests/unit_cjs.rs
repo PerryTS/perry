@@ -266,6 +266,45 @@ fn only_a_unit_consuming_the_registry_union_reads_it() {
     );
 }
 
+/// DECISIONS 171 (arm A171b): `a.js`'s `peek` reads `require.main` through
+/// the builtin `require` it finds on `globalThis` (the wrapper's shared
+/// `createRequire`). Its unit consumes the registry union `cjs:*` only once
+/// its solve resolves that load, so the cell was deferred at the boundary:
+/// the consumer wakes it, it is seeded, and the `.exports` read sees the
+/// main record as in the whole-program solve.
+#[test]
+fn a_registry_union_consumed_during_the_solve_is_seeded() {
+    const PEEK: &str = "function peek() { const r = globalThis.__perry_cjs_shared_require; return r.main.exports.k; }\nexports.peek = peek;";
+    let a = T1[1].1.replace(
+        "exports.newInstance = () => new Main();",
+        &format!("exports.newInstance = () => new Main();\n{PEEK}"),
+    );
+    let m = T1[0].1.replace(
+        "console.log(b.run());",
+        "console.log(b.run());\nconsole.log(require(\"./a\").peek());",
+    );
+    let mods = [(T1[0].0, m.as_str()), (T1[1].0, a.as_str()), T1[2]];
+    let (w, u) = both(&mods);
+    let off = a.find(PEEK).expect("inserted") as u32;
+    let end = off + PEEK.len() as u32;
+    let main_reads = |pf: &ProgramFacts| -> Vec<String> {
+        pf.sites
+            .iter()
+            .filter(|s| {
+                pf.module_paths[s.module as usize].ends_with("/a.js")
+                    && (off..end).contains(&s.byte_offset)
+                    && s.key.to_string() == "exports"
+            })
+            .flat_map(|s| s.receivers.iter().map(|r| r.to_string()))
+            .collect()
+    };
+    let (rw, ru) = (main_reads(&w), main_reads(&u));
+    assert!(
+        rw.iter().any(|r| r.contains("CjsMain")) && ru.iter().any(|r| r.contains("CjsMain")),
+        "whole {rw:?} unit {ru:?}"
+    );
+}
+
 #[test]
 fn richards_per_unit_proves_what_the_whole_program_proves() {
     let (w, u) = both(&T3);
