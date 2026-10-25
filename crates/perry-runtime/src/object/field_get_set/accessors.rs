@@ -515,7 +515,7 @@ pub(crate) unsafe fn ordinary_object_prototype_property_value(
     // a miss must remain eligible for Object.prototype (including user-added
     // properties).  Keep excluding unregistered native/synthetic class ids:
     // those object kinds resolve their own intrinsic prototype chains.
-    if class_id != 0 && !is_anon_shape_class_id(class_id) {
+    if class_id != 0 && !super::super::shapes::object_is_plain_record(obj) {
         if !super::super::class_registry::is_class_id_registered(class_id) {
             return None;
         }

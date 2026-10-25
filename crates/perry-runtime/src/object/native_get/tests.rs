@@ -435,7 +435,7 @@ fn plain_object(name: &str, value: f64) -> *mut ObjectHeader {
 /// An instance of an object literal's synthetic anon-shape class, the way
 /// codegen births `{}` and `{ a: 1 }`: a nonzero class id, no birth mark.
 fn anon_shape_object(class_id: u32) -> *mut ObjectHeader {
-    unsafe { crate::object::js_register_anon_shape_class_id(class_id) };
+    unsafe { crate::object::class_registry::declarations::test_declare_anonymous(class_id) };
     crate::object::js_object_alloc_class_with_keys(class_id, 0, 0, std::ptr::null(), 0)
 }
 
@@ -607,7 +607,7 @@ fn the_settled_miss_is_taken_only_for_plain_ordinary_receivers() {
 }
 
 #[test]
-fn an_anon_shape_literal_settles_until_its_class_gains_a_surface() {
+fn an_anon_shape_literal_keeps_its_role_and_a_declared_class_does_not_settle() {
     let _no_gc = crate::gc::GcSuppressScope::new();
     let _ = crate::object::builtin_prototype_value("Object");
     let settled = |object: *mut ObjectHeader, name: &str| unsafe {
@@ -620,12 +620,17 @@ fn an_anon_shape_literal_settles_until_its_class_gains_a_surface() {
     assert_eq!(settled(literal, "a"), Some(1.0f64.to_bits()));
     assert_eq!(settled(literal, "missing"), Some(undefined));
     assert_ne!(settled(literal, "toString"), Some(undefined));
-    // An id that is a declared class (a name and a method) keeps the generic
-    // read, even when an anon-shape id once had the same number.
+    // Cross-role reuse is rejected without changing the literal's owner.
+    assert!(
+        crate::object::class_registry::declarations::register_declared_identity(class_id).is_err()
+    );
+    assert_eq!(settled(literal, "missing"), Some(undefined));
+    // A distinct declared class keeps the generic read, even when empty.
+    let declared_id = 0x5A00_0011;
     unsafe {
-        crate::object::js_register_class_name(class_id, b"Declared".as_ptr(), 8);
+        crate::object::js_register_class_name(declared_id, b"Declared".as_ptr(), 8);
         crate::object::js_register_class_method(
-            class_id as i64,
+            declared_id as i64,
             b"run".as_ptr(),
             3,
             0 as usize as i64,
@@ -634,10 +639,12 @@ fn an_anon_shape_literal_settles_until_its_class_gains_a_surface() {
             0,
         );
     }
-    assert_eq!(settled(literal, "missing"), None);
-    // A class id nothing registered as an anon shape never settles.
+    let declared =
+        crate::object::js_object_alloc_class_with_keys(declared_id, 0, 0, std::ptr::null(), 0);
+    assert_eq!(settled(declared, "missing"), None);
+    // An unregistered identity is not a compiler-proven anonymous record.
     let foreign =
-        crate::object::js_object_alloc_class_with_keys(0x5A00_0011, 0, 0, std::ptr::null(), 0);
+        crate::object::js_object_alloc_class_with_keys(0x5A00_0012, 0, 0, std::ptr::null(), 0);
     assert_eq!(settled(foreign, "missing"), None);
 }
 

@@ -557,7 +557,7 @@ fn a_class_instance_key_add_earns_the_lane_too() {
             "a plain object earns the lane"
         );
         let inst = crate::object::js_object_alloc(0x00C0_FFEE, 4);
-        assert!(!crate::object::is_anon_shape_class_id((*inst).class_id));
+        assert!(!crate::object::class_registry::declarations::class_is_anonymous((*inst).class_id));
         crate::object::js_object_set_field_by_name(inst, key("n"), 1.5);
         let inst_rep = super::field_rep_store::shape_rep(object_shape_stamp(inst));
         assert_ne!(object_shape_stamp(inst), 0, "the instance is shaped");

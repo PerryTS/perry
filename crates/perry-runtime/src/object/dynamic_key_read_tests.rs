@@ -11,7 +11,7 @@ fn atom(text: &[u8]) -> *mut crate::StringHeader {
 const DKR_ANON_CLASS_ID: u32 = 0x1075_3001;
 
 fn literal_object() -> *mut ObjectHeader {
-    unsafe { crate::object::js_register_anon_shape_class_id(DKR_ANON_CLASS_ID) };
+    unsafe { crate::object::declarations::test_declare_anonymous(DKR_ANON_CLASS_ID) };
     crate::object::js_object_alloc(DKR_ANON_CLASS_ID, 8)
 }
 

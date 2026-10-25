@@ -498,7 +498,7 @@ pub extern "C" fn js_object_delete_field(
                     (*obj_gc)._reserved & crate::gc::OBJ_FLAG_STABLE_TOMBSTONES != 0;
                 let stable_identity = already_stable
                     || (*obj).class_id == 0
-                    || super::is_anon_shape_class_id((*obj).class_id);
+                    || super::shapes::object_is_plain_record(obj);
                 // The stable marker also certifies that the receiver is not a
                 // direct-method guard target. Those registries are immutable
                 // for an existing ordinary object, so the expensive reverse

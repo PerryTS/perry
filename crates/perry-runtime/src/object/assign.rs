@@ -393,7 +393,7 @@ unsafe fn positional_source_plan(src: *const ObjectHeader) -> PositionalPlan {
         return PositionalPlan::Refused;
     }
     let class_id = (*src).class_id;
-    if (class_id != 0 && !super::class_registry::is_anon_shape_class_id(class_id))
+    if (class_id != 0 && !super::shapes::object_is_plain_record(src))
         || super::overflow::has_overflow(src)
         || super::string_wrapper::length(src_raw).is_some()
         || (class_id == 0 && crate::url::is_url_object_shape(src as *mut ObjectHeader))

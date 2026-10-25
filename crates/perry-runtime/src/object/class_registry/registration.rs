@@ -13,11 +13,9 @@ pub fn is_class_id_registered(class_id: u32) -> bool {
 
 /// An unbuilt holder is a CLASS identity fact. Registration precedes
 /// instances, and publishing its surface makes negative probes decline.
-pub(super) fn publish_unbuilt_holder(class_id: u32) {
+pub(super) fn publish_unbuilt_holder(class_id: u32, has_surface: bool) {
     let pid = crate::object::shapes::PROTO_ID_CLASS | u64::from(class_id);
-    if crate::object::shapes::identity_prototype_word(pid) == 0
-        && (!super::is_anon_shape_class_id(class_id) || super::class_meta::class_has_name(class_id))
-    {
+    if crate::object::shapes::identity_prototype_word(pid) == 0 && has_surface {
         crate::object::shapes::write_identity_word(pid, crate::value::TAG_UNDEFINED);
     }
     let mut registered = REGISTERED_CLASS_IDS.write().unwrap();
@@ -51,9 +49,6 @@ pub(crate) fn record_class_string_member_order(
         .and_modify(|order| *order = (*order).min(definition_order))
         .or_insert(definition_order);
     drop(guard);
-    if !is_static {
-        super::class_meta::refresh_anon_declaration_role(class_id);
-    }
 }
 
 /// A configurable class element that is deleted and later recreated is a new
@@ -84,9 +79,6 @@ pub(crate) fn invalidate_class_string_member_order_bytes(
         .unwrap()
         .insert((class_id, is_static, name.to_vec()), u32::MAX);
     drop(guard);
-    if !is_static {
-        super::class_meta::refresh_anon_declaration_role(class_id);
-    }
 }
 
 pub(crate) unsafe fn record_class_symbol_member_order(

@@ -886,7 +886,7 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
             let ptr = jsval.as_pointer::<crate::object::ObjectHeader>();
             if !ptr.is_null() && crate::object::is_valid_obj_ptr(ptr as *const u8) {
                 let class_id = crate::object::js_object_get_class_id(ptr);
-                if class_id != 0 {
+                if class_id != 0 && crate::object::shapes::receiver_has_class_identity(ptr) {
                     // Computed Symbol ClassBody members are real properties of
                     // the declared prototype shape. Materialize that shape and
                     // resolve it before the compiled dispatch registries: an
@@ -1282,7 +1282,9 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
                 // `Symbol.iterator` (→ `SingleShotGen`), so `yield* effectValue`
                 // / `Symbol.iterator in effectValue` resolve.
                 if let Some(at_name) = well_known_symbol_method_key(sym_f64) {
-                    if class_chain_has_method(cid, at_name) {
+                    if crate::object::shapes::receiver_has_class_identity(obj_ptr)
+                        && class_chain_has_method(cid, at_name)
+                    {
                         return crate::object::js_class_method_bind(
                             obj_f64,
                             at_name.as_ptr(),

@@ -1528,7 +1528,6 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // literals (`{ x: 1 }`) return the global `Object` constructor
     // instead of the synthetic class ref. Refs #968 / date-fns
     // `constructFrom` blocker.
-    module.declare_function("js_register_anon_shape_class_id", VOID, &[I32]);
     // Built-in constructor / namespace value-lookup on the globalThis
     // singleton. Used to wire `instance.constructor` and bare
     // `Date`/`Array`/`Object` identifiers to the same closure pointer

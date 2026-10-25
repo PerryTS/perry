@@ -1332,7 +1332,9 @@ pub fn plain_object_value(arr: *const ArrayHeader) -> Option<f64> {
     }
     let class_id = crate::object::js_object_get_class_id(arr as *const crate::object::ObjectHeader);
     if class_id != 0
-        && !crate::object::is_anon_shape_class_id(class_id)
+        && !unsafe {
+            crate::object::shapes::object_is_plain_record(arr as *const crate::object::ObjectHeader)
+        }
         && !super::subclass::is_array_subclass_class_id(class_id)
     {
         return None;
@@ -1683,7 +1685,7 @@ pub fn try_object_arraylike_mutator(
     let raw = (object.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *const crate::object::ObjectHeader;
     let class_id = crate::object::js_object_get_class_id(raw);
     if class_id != 0
-        && !crate::object::is_anon_shape_class_id(class_id)
+        && !unsafe { crate::object::shapes::object_is_plain_record(raw) }
         && !super::subclass::is_array_subclass_class_id(class_id)
     {
         return None;

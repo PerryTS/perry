@@ -350,7 +350,7 @@ fn a_rep_literal_seed_is_the_shape_its_lazy_mints_reach_and_keeps_its_f64_lanes(
 
     // The literal's module-init mint WITHOUT a static id (a module whose
     // guards embed none): the lazy mint of the same facts is the seeded id.
-    unsafe { crate::object::js_register_anon_shape_class_id(REP_SEED_ANON_CLASS_ID) };
+    unsafe { crate::object::declarations::test_declare_anonymous(REP_SEED_ANON_CLASS_ID) };
     let packed = b"lt5s_a\0lt5s_b\0";
     let keys = crate::object::js_build_class_keys_array(
         REP_SEED_ANON_CLASS_ID,

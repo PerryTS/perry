@@ -1250,9 +1250,13 @@ unsafe fn ordinary_has_property(
                     // `js_object_get_prototype_of` uses — so the walk is
                     // order-independent, including a first read before any prototype
                     // assignment has materialized the decl-proto object.
-                    if let Some(decl_proto) =
-                        crate::object::class_decl_prototype_value_for_instance_class(cur_class_id)
+                    let declared_proto = if crate::object::shapes::receiver_has_class_identity(cur)
                     {
+                        crate::object::class_decl_prototype_value_for_instance_class(cur_class_id)
+                    } else {
+                        None
+                    };
+                    if let Some(decl_proto) = declared_proto {
                         let decl_ptr = (decl_proto.to_bits() & crate::value::POINTER_MASK)
                             as *const ObjectHeader;
                         // The decl-proto object is allocated WITH the class's own id
@@ -1282,6 +1286,7 @@ unsafe fn ordinary_has_property(
         if let Some(name) = key_name {
             let class_id = unsafe { (*obj_ptr).class_id };
             if class_id != 0
+                && crate::object::shapes::receiver_has_class_identity(obj_ptr)
                 && super::super::native_module::class_instance_has_method(class_id, name)
             {
                 return true;

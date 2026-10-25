@@ -236,7 +236,7 @@ fn every_ordinary_receiver_kind_deletes_through_the_overflow() {
     let _global = crate::gc::global_side_table_test_lock();
     unsafe {
         const ANON_ID: u32 = 0x6E06_4001;
-        crate::object::js_register_anon_shape_class_id(ANON_ID);
+        crate::object::declarations::test_declare_anonymous(ANON_ID);
         for (class_id, prefix) in [(0x0004_2101, "instT_"), (ANON_ID, "anonT_")] {
             let obj = receiver_20(class_id, prefix);
             for victim in [19u32, 6] {

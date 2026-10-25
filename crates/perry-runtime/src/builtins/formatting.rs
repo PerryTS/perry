@@ -1079,7 +1079,7 @@ unsafe fn format_object_as_json(
         // (see crates/perry-hir/src/lower_decl/class_decl.rs). Walk the
         // object's class chain when the instance lookup misses.
         let class_id = (*obj_ptr).class_id;
-        if class_id != 0 {
+        if class_id != 0 && crate::object::shapes::receiver_has_class_identity(obj_ptr) {
             if let Some((func_ptr, param_count, has_synthetic_arguments, has_rest)) =
                 crate::object::class_method_slot_target(class_id, "__perry_inspect_custom__")
             {

@@ -1530,15 +1530,24 @@ pub fn async_local_storage_prototype_value() -> f64 {
 /// (a declaration, or a registered runtime class)? An object literal's
 /// anon-shape id is registered for `typeof` and may carry literal methods,
 /// but its [[Prototype]] is `Object.prototype`: it has no declaration holder,
-/// publishes no CLASS word and stays on ordinary property lookup. A declared
-/// class whose id collides with an anon shape keeps its name.
+/// publishes no CLASS word and stays on ordinary property lookup. Compiler
+/// declarations have distinct ids and carry their role in the descriptor.
 pub(crate) fn class_identity_has_surface(class_id: u32) -> bool {
-    class_id != 0
-        && if super::is_anon_shape_class_id(class_id) {
-            super::class_meta::class_has_name(class_id)
-        } else {
-            is_class_id_registered(class_id) || super::class_meta::class_has_name(class_id)
-        }
+    if class_id == 0 {
+        return false;
+    }
+    if crate::object::shapes::identity_prototype_word(
+        crate::object::shapes::PROTO_ID_CLASS | u64::from(class_id),
+    ) != 0
+    {
+        return true;
+    }
+    // A worker/realm has the image descriptor but has not built its own
+    // holder yet. The locked descriptor read belongs to that cold birth.
+    super::declarations::class_declaration(class_id).map_or_else(
+        || is_class_id_registered(class_id) || super::class_meta::class_has_name(class_id),
+        ClassDeclaration::is_declared,
+    )
 }
 
 pub(crate) fn class_decl_prototype_value(class_id: u32) -> f64 {

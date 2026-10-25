@@ -64,9 +64,9 @@ pub(crate) unsafe fn own_data_shape(dir: *const u8, shape_id: u32) -> Option<Opt
 /// native-backed cells, `arguments`, `process.env`, per-object prototypes. This
 /// admits only an ordinary plain object: either one the runtime birthed class-
 /// less and marked (`OBJ_FLAG_PLAIN_ORDINARY`, no class id), or an instance of
-/// an object literal's synthetic anon-shape class that no registry knows
-/// anything else about (`class_id_admissible`, the proof the thenable probe
-/// already relies on). Its live shape must be the plain `Ordinary` kind and its
+/// an object literal whose live shape and absent CLASS holder prove record
+/// semantics (the same receiver proof the thenable probe uses). Its live
+/// shape must be the plain `Ordinary` kind and its
 /// [[Prototype]] the realm default or null by identity, never a recorded link.
 /// Anything else keeps the generic read.
 ///
@@ -93,9 +93,6 @@ pub(crate) unsafe fn plain_receiver_miss_is_final(object: *const ObjectHeader, k
     // the proof there. A class-less receiver needs the birth mark instead.
     let class_id = (*object).class_id;
     let classless = class_id == 0;
-    if !classless && !crate::promise::then_probe::class_id_admissible(class_id) {
-        return false;
-    }
     let header = &*crate::gc::header_from_trusted_user_ptr(object.cast());
     const BLOCKING: u16 = OBJ_FLAG_TYPED_ARRAY_PROTO
         | OBJ_FLAG_ARGUMENTS
@@ -122,6 +119,10 @@ pub(crate) unsafe fn plain_receiver_miss_is_final(object: *const ObjectHeader, k
     let Some(record) = ShapeSlab::ordinary_record_in(super::ordinary_dir_addr(), shape_id) else {
         return false;
     };
+    if !classless && !super::shape_is_plain_record(class_id, record.proto_id, record.object_kind())
+    {
+        return false;
+    }
     if record.object_kind() != ShapeObjectKind::Ordinary
         || record.weak_collection_brand().is_some()
         || !record.brands().is_empty()

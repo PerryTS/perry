@@ -33,7 +33,7 @@ fn plain_add_uses_the_existing_chain_answer_without_recording_another_fact() {
         let key = crate::string::canonical_key(b"plainShapeAnswerOnly");
         let boxed_key = crate::value::js_nanbox_string(key as i64);
         const ANON: u32 = 0x63C2;
-        super::super::class_registry::js_register_anon_shape_class_id(ANON);
+        crate::object::declarations::test_declare_anonymous(ANON);
         for obj in [
             super::super::js_object_alloc(0, 0),
             super::super::js_object_alloc_null_proto(0, 0),
