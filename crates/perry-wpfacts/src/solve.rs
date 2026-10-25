@@ -794,6 +794,7 @@ impl Model {
             } => {
                 let mut from = Vec::new();
                 let mut from_reach = Vec::new();
+                let mut from_path = Vec::new();
                 let mut top = false;
                 let mut vals = Vec::new();
                 for &t in toks {
@@ -828,8 +829,26 @@ impl Model {
                         // reaches (`y.left = y.left.right`) is a value of
                         // the reader too: it stores its own, as the whole
                         // program does, not a value of this unit.
+                        Some(&(g, j)) if g == f && j != u32::MAX && self.is_path_step(t) => {
+                            from_path.push((j, t, None));
+                        }
                         Some(&(g, j)) if g == f && j != u32::MAX => {
                             from_reach.push((j, self.param_reach_key(f, j, t)));
+                        }
+                        // DECISIONS 179: the receiver, and what it
+                        // reaches, stored into the receiver (or into what
+                        // it reaches) is the reader's own value too: the
+                        // reader replays the store on its own receiver.
+                        // An own reach flow keeps DECISIONS 149 (below).
+                        Some(&(g, u32::MAX)) if g == f && dst == u32::MAX && !reach => {
+                            match self.reach_marker.contains(&t) {
+                                // DECISIONS 180: a step below the keyed
+                                // reach is the value at its path.
+                                true if self.is_path_step(t) => from_path.push((u32::MAX, t, None)),
+                                true => from_reach
+                                    .push((u32::MAX, self.param_reach_key(f, u32::MAX, t))),
+                                false => from.push(u32::MAX),
+                            }
                         }
                         // DECISIONS 136: an argument marker, and what it
                         // reaches, is its members and what they reach
@@ -854,7 +873,7 @@ impl Model {
                         // DECISIONS 149b: a value of this unit a rooted store
                         // put into another function's marker or ⊤ goes there
                         // as before: ⊤ to the reader, and it escapes (below).
-                        _ if dst == u32::MAX && to == at => {
+                        _ if dst == u32::MAX && reach && to == at => {
                             self.mark_use(at, crate::model::MARK_ESCAPE);
                         }
                         // Another function's marker: another unit's value
@@ -897,6 +916,11 @@ impl Model {
                 for r in from_reach {
                     if !fl.from_reach.contains(&r) {
                         fl.from_reach.push(r);
+                    }
+                }
+                for r in from_path {
+                    if !fl.from_path.contains(&r) {
+                        fl.from_path.push(r);
                     }
                 }
                 fl.top |= top;
@@ -1457,12 +1481,7 @@ impl Model {
     ) {
         // Into the parameter's own keyed reach: under `a` of what the
         // argument holds under `via`, not into all it reaches.
-        let via = self
-            .marker_of
-            .get(&(f, i))
-            .and_then(|mk| self.keyed_reach.get(mk))
-            .and_then(|v| v.iter().find(|&&(_, r)| r == self.path_root(t)))
-            .map(|&(k, _)| k);
+        let via = self.param_reach_key(f, i, to);
         self.store_flows.entry((f, i, reach, via, key)).or_default();
         if self.store_out_done.insert((src, f, i, reach, via, key, to)) {
             let reason = self.reason("stored into another unit's value");
@@ -1665,10 +1684,11 @@ impl Model {
             return;
         }
         // A store into a published method's receiver marker is a key of its
-        // receiver contract, not an escape (DECISIONS 57): the reader puts an
-        // unknown value under the key of the instance it admits. The value
-        // goes where the receiver's other values take it (the receiver
-        // token's log, ⊤ beside it).
+        // receiver contract, not an escape (DECISIONS 57): the reader puts
+        // what the method stores under the key of the instance it admits.
+        // DECISIONS 179: under a named key, what it stores is a flow of the
+        // contract, as for a parameter (DECISIONS 118, 176): the reader's
+        // arguments and receiver it names, this unit's values given out.
         if let Some(&(f, u32::MAX)) = self.param_marker.get(&t) {
             if !self.reach_marker.contains(&t) {
                 match key {
@@ -1677,6 +1697,9 @@ impl Model {
                         if !ks.contains(&a) {
                             ks.push(a);
                         }
+                        // A closed constructor too: a subclass instance
+                        // of another unit runs it on the reader's object.
+                        self.store_flow_out(t, t, f, u32::MAX, false, key, src);
                     }
                     Key::Any => {
                         self.this_open.insert(f);
@@ -2235,9 +2258,11 @@ impl Model {
         let site = self.anon_post_site("store by another unit's method");
         match &c.stores {
             Some(ks) => {
-                for k in ks {
+                // DECISIONS 179: what the method's flow stores there.
+                for (i, k) in ks.iter().enumerate() {
                     let a = self.atom(k);
-                    self.store_into(t, Key::Named(a), top, site);
+                    let v = c.values.get(i).copied().unwrap_or(top);
+                    self.store_into(t, Key::Named(a), v, site);
                 }
             }
             None => self.store_into(t, Key::Any, top, site),
@@ -2397,7 +2422,7 @@ impl Model {
         own: Option<Tok>,
         from: Option<Tok>,
     ) {
-        let (f, ..) = flow;
+        let (f, dst, reach, ..) = flow;
         // `None`: the members themselves; `Some(k)`: their reach under key
         // `k`, or any key.
         let (base, k) = match self.keyed_parent.get(&t).copied() {
@@ -2429,24 +2454,49 @@ impl Model {
                     }
                     st.extend(ms);
                 }
+                // DECISIONS 180: a parameter's path marker does not reach
+                // itself: the argument's reach holds what is one step
+                // below its path, and all it reaches from there.
+                None if self.is_path_marker(x) => srcs.push((x, k.map(|k| (k, t)))),
                 // A reach marker reaches itself under every key.
-                None if self.reach_marker.contains(&x) => srcs.push(x),
-                None => srcs.push(match k {
-                    None => x,
-                    Some(Some(k)) => self.keyed_reach_of(x, k),
-                    Some(None) => match self.marker_reach.get(&x) {
-                        Some(&r) => r,
+                None if self.reach_marker.contains(&x) => srcs.push((x, None)),
+                None => srcs.push((
+                    match k {
                         None => x,
+                        Some(Some(k)) => self.keyed_reach_of(x, k),
+                        Some(None) => match self.marker_reach.get(&x) {
+                            Some(&r) => r,
+                            None => x,
+                        },
                     },
-                }),
+                    None,
+                )),
             }
         }
-        let (mut from, mut from_reach) = (Vec::new(), Vec::new());
+        let (mut from, mut from_reach, mut from_path) = (Vec::new(), Vec::new(), Vec::new());
         let mut top = false;
-        for s in srcs {
+        for (s, step) in srcs {
+            // DECISIONS 180: a path marker's path, or the step below it.
+            let path = match step {
+                Some(_) => Some(step),
+                None => self.is_path_step(s).then_some(None),
+            };
             match self.param_marker.get(&s).copied() {
+                // DECISIONS 179: as in `Cons::StoreOut`.
+                Some((g, u32::MAX)) if g == f && dst == u32::MAX && !reach => {
+                    match (path, self.reach_marker.contains(&s)) {
+                        (Some(p), _) => from_path.push((u32::MAX, s, p)),
+                        (None, true) => {
+                            from_reach.push((u32::MAX, self.param_reach_key(f, u32::MAX, s)))
+                        }
+                        (None, false) => from.push(u32::MAX),
+                    }
+                }
                 Some((g, j)) if g == f && j != u32::MAX && self.reach_marker.contains(&s) => {
-                    from_reach.push((j, self.param_reach_key(f, j, s)));
+                    match path {
+                        Some(p) => from_path.push((j, s, p)),
+                        None => from_reach.push((j, self.param_reach_key(f, j, s))),
+                    }
                 }
                 Some((g, j)) if g == f && j != u32::MAX => from.push(j),
                 _ => match own {
@@ -2467,6 +2517,11 @@ impl Model {
         for r in from_reach {
             if !fl.from_reach.contains(&r) {
                 fl.from_reach.push(r);
+            }
+        }
+        for r in from_path {
+            if !fl.from_path.contains(&r) {
+                fl.from_path.push(r);
             }
         }
         fl.top |= top;

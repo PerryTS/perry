@@ -111,6 +111,9 @@ pub(crate) struct StoreFlow {
     /// DECISIONS 136: what parameter `j`'s argument holds under the key
     /// (and reaches from there), or reaches (`None`), is stored too.
     pub from_reach: Vec<(u32, Option<String>)>,
+    /// DECISIONS 180: what parameter `j`'s argument holds at a path of its
+    /// reach (DECISIONS 158), walked as a result's is.
+    pub from_path: Vec<ReachKey>,
     pub top: bool,
     pub prim: u16,
     /// DECISIONS 176: the values of the defining unit it stores, described
@@ -432,6 +435,12 @@ impl FnContract {
                         }
                     }
                     x.from_reach.sort();
+                    for r in &y.from_path {
+                        if !x.from_path.contains(r) {
+                            x.from_path.push(r.clone());
+                        }
+                    }
+                    x.from_path.sort();
                     x.top |= y.top;
                     x.prim |= y.prim;
                     match (&mut x.value, &y.value) {

@@ -3004,3 +3004,78 @@ fn a_result_value_no_contract_describes_escapes_alone() {
     let m = "import { mk, own } from './b'; function main() { const v = mk(2); console.log(v.n, own()); } main(); main();";
     assert_parity(&[("b", b), ("m", m)]);
 }
+
+#[test]
+fn a_callees_rooted_store_on_its_callers_receiver_is_the_callers_flow() {
+    // AWFY som.js Dictionary::resize -> transferEntries: `move` runs on
+    // `grow`'s receiver and stores what that receiver reaches into what it
+    // reaches. The reader replays it on its own object (DECISIONS 179/180:
+    // receiver flows and their path steps; 181: `d`'s own `D` stand-in is
+    // `D2`'s parent, so `D2` runs `d`'s published `move`), as the whole
+    // program moves the entries inside one `D`; `E`, a class of a third
+    // unit, is not escaped by it.
+    let b = "export class E { v: number; constructor(v: number) { this.v = v; } }";
+    let d = "import { E } from './b'; export class D { b: any[]; constructor() { this.b = new Array(2); } put(k: number, v: number) { this.b[k] = new E(v); } grow() { const o = this.b; this.b = new Array(4); this.move(o); } move(o: any[]) { this.b[0] = o[0]; } }";
+    let m = "import { D } from './d'; class D2 extends D { w: number = 1; } function main() { const x = new D2(); x.put(0, 1); x.grow(); console.log(x.b[0].v, x.w); } main(); main();";
+    assert_parity(&[("b", b), ("d", d), ("m", m)]);
+}
+
+#[test]
+fn a_numeric_index_step_of_a_stored_path_is_the_element() {
+    // DECISIONS 179/181: `copy` on a `D2` (another unit's subclass) is
+    // replayed on the reader's own object, whose `a` holds `E` only: the
+    // element read gives `E`, as in the whole program.
+    let b = "export class E { v: number; constructor(v: number) { this.v = v; } }";
+    let d = "import { E } from './b'; export class D { a: any[]; b: any[]; constructor() { this.a = new Array(2); this.b = new Array(2); } put(v: number) { this.a[0] = new E(v); } copy() { const o = this.a; this.b[0] = o[0]; } }";
+    let m = "import { D } from './d'; class D2 extends D { w: number = 1; } function main() { const x = new D2(); x.put(1); x.copy(); console.log(x.b[0].v, x.w); } main(); main();";
+    assert_parity(&[("b", b), ("d", d), ("m", m)]);
+}
+
+#[test]
+fn a_string_index_step_of_a_stored_path_reads_any_key() {
+    // Soundness of the replay (DECISIONS 179-181): `o[k]` with a string `k`
+    // may name a prototype member (`push`): the reader's replay of `move`
+    // on its `D2` finds the array's builtin methods beside its elements, as
+    // the whole program does. `x.b[0].v` is proven in neither mode.
+    let b = "export class E { v: number; constructor(v: number) { this.v = v; } }";
+    let d = "import { E } from './b'; export class D { b: any[]; constructor() { this.b = new Array(2); } put(k: number, v: number) { this.b[k] = new E(v); } grow(k: string) { const o = this.b; this.b = new Array(4); this.move(o, k); } move(o: any[], k: string) { this.b[0] = (o as any)[k]; } }";
+    let m = "import { D } from './d'; class D2 extends D { w: number = 1; } function main(k: string) { const x = new D2(); x.put(0, 1); x.grow(k); console.log(x.b[0].v, x.w); } main('push'); main('0');";
+    let mods = [("b", b), ("d", d), ("m", m)];
+    let (wp, pu) = (whole_of(&mods), units_of(&mods));
+    let read = |pf: &ProgramFacts| {
+        proven_set(pf)
+            .iter()
+            .any(|s| s.starts_with("m.ts@") && s.ends_with(".v"))
+    };
+    assert!(!read(&wp), "whole program reads a builtin method beside E");
+    assert!(
+        !read(&pu),
+        "per unit must not prove what the whole program cannot"
+    );
+}
+
+#[test]
+#[ignore = "DECISIONS 148 open: a published method's parameter is a bare marker per unit"]
+fn a_published_methods_parameter_holds_its_callers_arguments() {
+    // DECISIONS 148: `o.items` on `take`'s parameter is proven in the whole
+    // program (o is m's literal); per unit the parameter is a marker only,
+    // as no channel publishes the arguments callers pass to a published
+    // method (107 does it for the receiver).
+    let b = "export class E { v: number; constructor(v: number) { this.v = v; } }";
+    let d = "export class D { b: any[]; constructor() { this.b = new Array(2); } take(o: any) { this.b[0] = o.items[0]; } }";
+    let m = "import { D } from './d'; import { E } from './b'; function main() { const x = new D(); x.take({ items: [new E(1)] }); console.log(x.b[0].v); } main(); main();";
+    assert_parity(&[("b", b), ("d", d), ("m", m)]);
+}
+
+#[test]
+fn a_published_cell_holding_another_units_prototype_terminates() {
+    // DECISIONS 180 (found with it): a cell holding a stand-in published
+    // onward (another unit's class prototype) is undescribed, and its
+    // escape is a no-op: only an escape that took effect is a change of
+    // the unit's contract check, so the check ends.
+    let b = "export class E { v: number; constructor(v: number) { this.v = v; } }";
+    let d = "import { E } from './b'; export let p: any = E.prototype; export function set(q: any) { p = q; }";
+    let m = "import { p, set } from './d'; import { E } from './b'; function main() { set(Object.getPrototypeOf(new E(1))); console.log(p.constructor, new E(2).v); } main(); main();";
+    let pu = units_of(&[("b", b), ("d", d), ("m", m)]);
+    assert!(!pu.sites.is_empty());
+}

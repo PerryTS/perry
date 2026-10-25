@@ -788,6 +788,29 @@ fn fn_contract_of(
                     .map(|&(j, v)| (j, v.map(|v| g.m.atoms[v as usize].clone())))
                     .collect();
                 from_reach.sort();
+                // DECISIONS 180: a path, then the step below it and the
+                // keys read on from there (DECISIONS 138).
+                let mut path_top = false;
+                let mut from_path: Vec<units::ReachKey> = fl
+                    .from_path
+                    .iter()
+                    .filter_map(|&(_, t, step)| {
+                        // A path no contract walks: unknown, as it was.
+                        let Some(mut k) = reach_key_of(g, f, t) else {
+                            path_top = true;
+                            return None;
+                        };
+                        if let Some((sk, m)) = step {
+                            k.3.push((
+                                sk.map(|a| g.m.atoms[a as usize].to_string()),
+                                keys_read(g, m),
+                            ));
+                        }
+                        Some(k)
+                    })
+                    .collect();
+                from_path.sort();
+                from_path.dedup();
                 units::StoreFlow {
                     dst,
                     reach,
@@ -798,7 +821,8 @@ fn fn_contract_of(
                     },
                     from,
                     from_reach,
-                    top: fl.top || (fl.vals.is_some() && fl.vals_top),
+                    from_path,
+                    top: fl.top || path_top || (fl.vals.is_some() && fl.vals_top),
                     prim: fl.prim,
                     value,
                 }
@@ -916,6 +940,63 @@ fn fn_named(g: &gen::Gen, f: model::FnIdx) -> units::FnContract {
     }
 }
 
+/// A reach marker reaches itself under every key (§18.4): what it stands
+/// for in the result is its reach through the keys the body read on it,
+/// repeatedly; a computed-key read (its all-fields node feeds a reader)
+/// is any key (DECISIONS 138).
+fn keys_read(g: &gen::Gen, t: model::Tok) -> Option<Vec<String>> {
+    if g.m
+        .all_fields
+        .get(&t)
+        .is_some_and(|&n| !g.m.nodes[n as usize].succ.is_empty())
+    {
+        return None;
+    }
+    let mut v: Vec<String> = g.m.field_keys.get(&t).map_or_else(Vec::new, |ks| {
+        ks.iter().map(|&a| g.m.atoms[a as usize].clone()).collect()
+    });
+    v.sort();
+    v.dedup();
+    Some(v)
+}
+
+/// DECISIONS 158: a parameter's path marker stands for the values at
+/// its path, each step with the keys its folds repeat there.
+fn path_loops(g: &gen::Gen, t: model::Tok) -> Option<Vec<String>> {
+    let l = g.m.path_loops.get(&t).map_or(&[][..], |l| &l[..]);
+    let mut v = Vec::new();
+    for k in l {
+        v.push(g.m.atoms[(*k)? as usize].clone());
+    }
+    v.sort();
+    v.dedup();
+    Some(v)
+}
+
+/// The path of `f`'s parameter path marker `t`, as the reader walks it.
+fn reach_key_of(g: &gen::Gen, f: model::FnIdx, t: model::Tok) -> Option<units::ReachKey> {
+    if !g.m.is_path_marker(t) {
+        return None;
+    }
+    let ks = g.m.path_keys(t);
+    let (r, a0) = ks[0];
+    let (p, _) = g.m.path_parent[&r];
+    let &(_, i) = g.m.param_marker.get(&p)?;
+    if g.m.marker_of.get(&(f, i)) != Some(&p) {
+        return None;
+    }
+    let steps = ks[1..]
+        .iter()
+        .map(|&(x, k)| {
+            (
+                k.map(|a| g.m.atoms[a as usize].to_string()),
+                path_loops(g, x),
+            )
+        })
+        .collect();
+    Some((i, g.m.atoms[a0? as usize].clone(), path_loops(g, r), steps))
+}
+
 /// What a value contract function `f` hands the caller's unit may be
 /// (DECISIONS 140): its result, or an argument of a call through one of its
 /// parameters; `nodes` hold it, `top` when no contract describes it.
@@ -931,25 +1012,7 @@ fn describe_nodes(
     let mut ret_params: Vec<u32> = Vec::new();
     let mut ret_reach: Vec<u32> = Vec::new();
     let mut ret_reach_keys: Vec<units::ReachKey> = Vec::new();
-    // A reach marker reaches itself under every key (§18.4): what it stands
-    // for in the result is its reach through the keys the body read on it,
-    // repeatedly; a computed-key read (its all-fields node feeds a reader)
-    // is any key (DECISIONS 138).
-    let keys_read = |t: model::Tok| -> Option<Vec<String>> {
-        if g.m
-            .all_fields
-            .get(&t)
-            .is_some_and(|&n| !g.m.nodes[n as usize].succ.is_empty())
-        {
-            return None;
-        }
-        let mut v: Vec<String> = g.m.field_keys.get(&t).map_or_else(Vec::new, |ks| {
-            ks.iter().map(|&a| g.m.atoms[a as usize].clone()).collect()
-        });
-        v.sort();
-        v.dedup();
-        Some(v)
-    };
+    let keys_read = |t: model::Tok| keys_read(g, t);
     let join_keys = |a: Option<Vec<String>>, b: Option<Vec<String>>| -> Option<Vec<String>> {
         let mut v = a?;
         v.extend(b?);
@@ -957,35 +1020,7 @@ fn describe_nodes(
         v.dedup();
         Some(v)
     };
-    // DECISIONS 158: a parameter's path marker stands for the values at
-    // its path, each step with the keys its folds repeat there.
-    let loops = |t: model::Tok| -> Option<Vec<String>> {
-        let l = g.m.path_loops.get(&t).map_or(&[][..], |l| &l[..]);
-        let mut v = Vec::new();
-        for k in l {
-            v.push(g.m.atoms[(*k)? as usize].clone());
-        }
-        v.sort();
-        v.dedup();
-        Some(v)
-    };
-    let path_of = |t: model::Tok| -> Option<units::ReachKey> {
-        if !g.m.is_path_marker(t) {
-            return None;
-        }
-        let ks = g.m.path_keys(t);
-        let (r, a0) = ks[0];
-        let (p, _) = g.m.path_parent[&r];
-        let &(_, i) = g.m.param_marker.get(&p)?;
-        if g.m.marker_of.get(&(f, i)) != Some(&p) {
-            return None;
-        }
-        let steps = ks[1..]
-            .iter()
-            .map(|&(x, k)| (k.map(|a| g.m.atoms[a as usize].clone()), loops(x)))
-            .collect();
-        Some((i, g.m.atoms[a0? as usize].clone(), loops(r), steps))
-    };
+    let path_of = |t: model::Tok| reach_key_of(g, f, t);
     let mut ret_unknown = false;
     let mut ret_value = units::ValueContract::default();
     let mut ret_prim = nodes.iter().fold(0, |p, &n| p | g.m.nodes[n as usize].prim);

@@ -692,6 +692,17 @@ impl Model {
 
     // --------------------------------------------------------------- escape
 
+    /// Escapes `t`, and whether that took effect: a stand-in published
+    /// onward does not escape (`escape`), so only an escape that took
+    /// effect is a change of a unit's contract check (DECISIONS 180).
+    pub fn escape_changed(&mut self, t: Tok, reason: u32) -> bool {
+        if self.is_escaped(t) {
+            return false;
+        }
+        self.escape(t, reason);
+        self.is_escaped(t)
+    }
+
     pub fn escape(&mut self, t: Tok, reason: u32) {
         if t == TOP || self.is_escaped(t) {
             return;

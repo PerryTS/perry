@@ -919,15 +919,20 @@ impl<'a> Gen<'a> {
         });
         let top = fl.map_or(true, |fl| fl.top);
         if let Some(fl) = fl {
+            // DECISIONS 179: source `u32::MAX` is the receiver.
+            let arg = |j: u32| match j {
+                u32::MAX => Some(this).filter(|&t| t != crate::model::NO_NODE),
+                _ => params.get(j as usize).copied(),
+            };
             for &j in &fl.from {
-                if let Some(&a) = params.get(j as usize) {
+                if let Some(a) = arg(j) {
                     self.m.edge(a, n);
                 }
             }
             // DECISIONS 136: what the reader's argument reaches, under the
             // key and on from there, or through own properties.
             for (j, via) in &fl.from_reach {
-                let Some(&a) = params.get(*j as usize) else {
+                let Some(a) = arg(*j) else {
                     continue;
                 };
                 match via {
@@ -941,6 +946,12 @@ impl<'a> Gen<'a> {
                         self.m.cons(q, Cons::OwnValues { dst: q });
                         self.m.edge(q, n);
                     }
+                }
+            }
+            // DECISIONS 180: what it holds at a path of its reach.
+            for (j, k, then, steps) in &fl.from_path {
+                if let Some(a) = arg(*j) {
+                    self.ret_through_key(a, k, then, steps, n, &c.name);
                 }
             }
             self.m.add_prim(n, fl.prim);
@@ -1110,11 +1121,16 @@ impl<'a> Gen<'a> {
                             .m
                             .node_named("reach", || format!("reach.{k}.{j}({name})"));
                         self.m.own(n);
-                        let key = match sk {
-                            Some(s) => crate::model::Key::Named(self.m.atom(s)),
-                            None => crate::model::Key::Any,
-                        };
-                        self.m.cons(cur, Cons::Load { key, dst: n });
+                        match sk {
+                            Some(s) => {
+                                let key = crate::model::Key::Named(self.m.atom(s));
+                                self.m.cons(cur, Cons::Load { key, dst: n });
+                            }
+                            None => {
+                                let key = crate::model::Key::Any;
+                                self.m.cons(cur, Cons::Load { key, dst: n });
+                            }
+                        }
                         n
                     }
                 };
@@ -1237,10 +1253,20 @@ impl<'a> Gen<'a> {
                 // Its receiver contract (DECISIONS 57): a subclass instance
                 // may run it.
                 let tc = (!statics).then(|| {
+                    // DECISIONS 179: what it stores under each key.
+                    let values = c
+                        .this_stores
+                        .iter()
+                        .flatten()
+                        .map(|k| {
+                            self.stored_value(mi, this, c, &params, u32::MAX, false, None, Some(k))
+                        })
+                        .collect();
                     self.m.this_contracts.push(crate::model::ThisContract {
                         uses: c.this_use,
                         reach: c.this_reach,
                         stores: c.this_stores.clone(),
+                        values,
                     });
                     self.m.this_contract_fns.push(tok);
                     self.m.this_contracts.len() as u32 - 1
@@ -1921,9 +1947,15 @@ impl<'a> Gen<'a> {
         self.stand_in_cc.insert(tm, c.clone());
         // Its parent from another unit (DECISIONS 104): that class's own
         // stand-in, so an inherited method resolves up the chain as in the
-        // defining unit. Unpublished, the chain ends here as before.
+        // defining unit. Unpublished, the chain ends here as before. A
+        // parent of this unit is its own class (DECISIONS 181): a method the
+        // subclass does not override is this unit's own code, run on the
+        // subclass's object as in the whole program, not a replay of the
+        // contract this unit published for it.
         if let Some(d) = &c.parent {
-            if let Some(pc) = self.other_layout(d) {
+            if let Some(ptm) = self.own_class(d) {
+                self.m.tmpls[tm as usize].parent = Some(ptm);
+            } else if let Some(pc) = self.other_layout(d) {
                 self.stand_in_class(mi, pc);
                 let ptm = self.stand_ins[&pc.display].1;
                 self.m.tmpls[tm as usize].parent = Some(ptm);

@@ -581,10 +581,7 @@ impl<'a> Gen<'a> {
             return None;
         }
         for t in bad {
-            if !self.m.is_escaped(t) {
-                self.m.escape(t, r);
-                changed = true;
-            }
+            changed |= self.m.escape_changed(t, r);
         }
         for t in toks {
             if matches!(
@@ -1026,10 +1023,7 @@ impl<'a> Gen<'a> {
             let (toks, bad): (Vec<Tok>, Vec<Tok>) =
                 toks.into_iter().partition(|&t| self.value_tok_ok(t));
             for t in bad {
-                if !self.m.is_escaped(t) {
-                    self.m.escape(t, r);
-                    changed = true;
-                }
+                changed |= self.m.escape_changed(t, r);
             }
             for t in toks {
                 // Nothing of this unit leaves through a marker (DECISIONS 137).
