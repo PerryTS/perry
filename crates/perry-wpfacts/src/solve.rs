@@ -1631,6 +1631,98 @@ impl Model {
         }
     }
 
+    /// DECISIONS 187: stores `ss`, made on an argument marker, reach what
+    /// each marker of `from` stands for under its key (`None`: the marker
+    /// itself; `Some(k)`: its reach under `k`, DECISIONS 121). An argument marker stands for
+    /// its members; its keyed reach under `k` for its parent's members'
+    /// reaches under `k`, and has no members of its own (`link_marker` links
+    /// only into a parameter's argument marker and its reach). Each (marker,
+    /// key) is visited once and each visit is solve work (XUC-1), so a
+    /// member several argument markers stand for takes the stores once and
+    /// no argument marker on the way keeps a copy: a store costs the
+    /// markers below it, not the paths to them.
+    pub(crate) fn arg_store_fan(
+        &mut self,
+        from: Vec<(Tok, Option<Atom>)>,
+        ss: &[(Atom, NodeId, SiteId)],
+    ) {
+        let mut st = from;
+        let mut seen = crate::pts::FxHashSet::default();
+        while let Some((x, k)) = st.pop() {
+            if !seen.insert((x, k)) {
+                continue;
+            }
+            self.work += 1;
+            if self.max_work != 0 && self.work > self.max_work {
+                self.aborted = true;
+                return;
+            }
+            if !self.is_arg_marker(x) {
+                let y = match k {
+                    Some(k) => self.keyed_reach_of(x, k),
+                    None => x,
+                };
+                for &(a, src, site) in ss {
+                    self.store_into(y, Key::Named(a), src, site);
+                }
+                continue;
+            }
+            match (k, self.keyed_parent.get(&x).copied()) {
+                (None, Some((p, k))) => {
+                    for m in self.arg_members.get(&p).cloned().unwrap_or_default() {
+                        st.push((m, Some(k)));
+                    }
+                }
+                // A keyed reach's own reach: no member stands under it.
+                (Some(_), Some(_)) => {}
+                (k, None) => {
+                    if k.is_none() {
+                        for &(a, src, site) in ss {
+                            self.arg_store_on(x, a, src, site);
+                        }
+                    }
+                    for m in self.arg_members.get(&x).cloned().unwrap_or_default() {
+                        st.push((m, k));
+                    }
+                }
+            }
+        }
+    }
+
+    /// What a store under named key `a` does to argument marker `t` itself:
+    /// the published classes it stands for gain the key (`virt_revoke`),
+    /// and a contract receiver takes it (`contract_recv`).
+    fn arg_store_on(&mut self, t: Tok, a: Atom, src: NodeId, site: SiteId) {
+        if self.virt_protos.contains_key(&t) {
+            self.virt_revoke(t, Some(a));
+        }
+        if let Some(is) = self.contract_recv.get(&t).cloned() {
+            self.recv_log
+                .entry(t)
+                .or_default()
+                .push(crate::model::RecvEffect::Store(Key::Named(a), src, site));
+            for i in is {
+                self.store_into(i, Key::Named(a), src, site);
+            }
+        }
+    }
+
+    /// DECISIONS 187: the argument markers `t` stands in and itself.
+    fn arg_markers_above(&mut self, t: Tok) -> Vec<Tok> {
+        let mut out = Vec::new();
+        let mut st = vec![t];
+        let mut seen = crate::pts::FxHashSet::default();
+        while let Some(x) = st.pop() {
+            if !seen.insert(x) {
+                continue;
+            }
+            self.work += 1;
+            out.push(x);
+            st.extend(self.arg_parents.get(&x).into_iter().flatten().copied());
+        }
+        out
+    }
+
     pub(crate) fn store_into(&mut self, t: Tok, key: Key, src: NodeId, site: SiteId) {
         {
             self.virt_revoke(
@@ -1712,28 +1804,27 @@ impl Model {
                 return;
             }
             if self.arg_store_done.insert((t, a, src)) {
-                // Each store an argument marker hands to a member is solve
-                // work (113-CWL3: marker walks are solve work), so the unit's
-                // bound sees the fan-out (XUC-1).
-                self.work += 1;
-                if self.max_work != 0 && self.work > self.max_work {
-                    self.aborted = true;
-                    return;
-                }
+                // DECISIONS 187: kept on `t` alone, where it was made (the
+                // links replay it from there), and walked once to what `t`
+                // stands for.
                 self.arg_stores.entry(t).or_default().push((a, src, site));
-                match self.keyed_parent.get(&t).copied() {
-                    Some((p, k)) => {
-                        for m in self.arg_members.get(&p).cloned().unwrap_or_default() {
-                            let mk = self.keyed_reach_of(m, k);
-                            self.store_into(mk, key, src, site);
-                        }
-                    }
-                    None => {
-                        for m in self.arg_members.get(&t).cloned().unwrap_or_default() {
-                            self.store_into(m, key, src, site);
-                        }
-                    }
-                }
+                let from: Vec<(Tok, Option<Atom>)> = match self.keyed_parent.get(&t).copied() {
+                    Some((p, k)) => self
+                        .arg_members
+                        .get(&p)
+                        .into_iter()
+                        .flatten()
+                        .map(|&m| (m, Some(k)))
+                        .collect(),
+                    None => self
+                        .arg_members
+                        .get(&t)
+                        .into_iter()
+                        .flatten()
+                        .map(|&m| (m, None))
+                        .collect(),
+                };
+                self.arg_store_fan(from, &[(a, src, site)]);
             }
             return;
         }
@@ -2378,19 +2469,45 @@ impl Model {
                 self.marker_links.clear();
                 return;
             }
-            for (a, src, site) in self.arg_stores.get(&r).cloned().unwrap_or_default() {
-                self.store_into(m, Key::Named(a), src, site);
+            // DECISIONS 187: a store stays on the marker it was made on. What
+            // reaches `r` is made on `r` or an argument marker above it; what
+            // reaches `r`'s reach under `k`, on such a marker's keyed reach
+            // under `k` or on an argument marker that keyed reach is a member
+            // of, or above that. `m` takes them as `r` would.
+            let above = self.arg_markers_above(r);
+            let mut plain: Vec<(Atom, NodeId, SiteId)> = Vec::new();
+            let mut keyed: Vec<(Atom, Vec<(Atom, NodeId, SiteId)>)> = Vec::new();
+            for &x in &above {
+                plain.extend(self.arg_stores.get(&x).into_iter().flatten().copied());
+                for (k, kr) in self.keyed_reach.get(&x).cloned().unwrap_or_default() {
+                    let mut ss = Vec::new();
+                    for y in self.arg_markers_above(kr) {
+                        ss.extend(self.arg_stores.get(&y).into_iter().flatten().copied());
+                    }
+                    if !ss.is_empty() {
+                        keyed.push((k, ss));
+                    }
+                }
             }
-            // The stores into `r`'s keyed reaches: into `m`'s under each key.
-            for (k, kr) in self.keyed_reach.get(&r).cloned().unwrap_or_default() {
-                let ss = self.arg_stores.get(&kr).cloned().unwrap_or_default();
-                if ss.is_empty() {
-                    continue;
+            let dedup = |v: &mut Vec<(Atom, NodeId, SiteId)>| {
+                v.sort_unstable();
+                v.dedup_by_key(|&mut (a, src, _)| (a, src));
+            };
+            dedup(&mut plain);
+            if !plain.is_empty() {
+                self.arg_store_fan(vec![(m, None)], &plain);
+            }
+            keyed.sort_by_key(|&(k, _)| k);
+            let mut i = 0;
+            while i < keyed.len() {
+                let k = keyed[i].0;
+                let mut ss = Vec::new();
+                while i < keyed.len() && keyed[i].0 == k {
+                    ss.append(&mut keyed[i].1);
+                    i += 1;
                 }
-                let mk = self.keyed_reach_of(m, k);
-                for (a, src, site) in ss {
-                    self.store_into(mk, Key::Named(a), src, site);
-                }
+                dedup(&mut ss);
+                self.arg_store_fan(vec![(m, Some(k))], &ss);
             }
             // DECISIONS 136: a flow whose stored value `r`'s members stand for.
             // Only `m` is new below `r`: the walk from `r`'s base has seen
