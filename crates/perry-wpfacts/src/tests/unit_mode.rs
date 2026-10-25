@@ -2624,3 +2624,25 @@ fn a_member_function_returning_its_own_layout_is_built_once() {
         .expect("D16: the per-unit fixpoint did not end in 60 s");
     assert_eq!(pf.rounds, 2, "rounds {:?}", pf.round_work);
 }
+
+#[test]
+fn a_nested_initializer_and_its_hoisted_var_are_one_emitted_binding() {
+    let src = r#"
+        const loaded = (function() {
+            try { var imported = { value: 123 }; } catch (unused) {}
+            return { get: () => imported.value };
+        })();
+        console.log(loaded.get());
+    "#;
+    let pf = units(src);
+    assert!(pf.broken.is_empty(), "{:?}", pf.broken);
+    // The one binding is published once even though its hoisted seed and
+    // nested initializer are distinct init statements after run-once flatten.
+    let bindings = pf.bindings_for("t.ts").unwrap();
+    let mut ids: Vec<_> = bindings.locals.iter().map(|(id, _)| *id).collect();
+    let count = ids.len();
+    assert!(count > 0, "the captured module binding must be live");
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(ids.len(), count);
+}

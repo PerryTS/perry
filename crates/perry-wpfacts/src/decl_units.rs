@@ -928,6 +928,21 @@ pub(crate) fn decl_units(module: &Module) -> Vec<Vec<Item>> {
                 }
             }
         }
+        // Init items split ONE emitted lexical frame. A nested var
+        // initializer (for example under try) writes its hoisted binding;
+        // unlike a copied function frame, it is not a second declaration.
+        if let Item::Init(k) = *it {
+            perry_hir::tdz_check::for_each_stmt_shallow(
+                std::slice::from_ref(&module.init[k]),
+                &mut |s| {
+                    if let Stmt::Let { id, .. } = s {
+                        for &j in by_local.get(id).into_iter().flatten() {
+                            edge(j, true);
+                        }
+                    }
+                },
+            );
+        }
         // Repeated creation expressions with this FuncId share ONE emitted
         // body. Its receiver/capture facts must cover every creation/caller.
         for id in &r.closures {
