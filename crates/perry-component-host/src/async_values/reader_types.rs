@@ -41,7 +41,7 @@ impl<'a> Types<'a> {
         }
     }
 
-    fn resource(&mut self, key: &str, depth: usize) -> Result<String> {
+    pub fn resource(&mut self, key: &str, depth: usize) -> Result<String> {
         ensure!(depth < 128, "async resource nesting exceeds 128");
         let definition = self
             .world

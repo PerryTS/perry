@@ -50,7 +50,8 @@ pub(super) fn link_import(
                 let (args, borrows) = accessor.with(|mut store| {
                     let args = params
                         .iter()
-                        .map(|v| transport::lift(store.as_context_mut(), v))
+                        .zip(ty.params())
+                        .map(|(v, (_, ty))| transport::lift(store.as_context_mut(), v, &ty))
                         .collect::<Result<Vec<_>>>();
                     // Take only this import's newly lifted borrows before yielding.
                     // Another async import may acquire its own borrows meanwhile.
@@ -156,6 +157,10 @@ impl Host {
     ) -> Result<Option<Value>> {
         let dispatcher = self.dispatcher.clone();
         let live = self.live.as_mut().context("component is disposed")?;
+        ensure!(
+            live.store.data().async_values.adapters.is_empty(),
+            "generic async values require the persistent driver"
+        );
         let func = *live
             .exports
             .get(&(interface.to_owned(), name.to_owned()))
@@ -195,7 +200,11 @@ impl Host {
             .context("async component call trapped")
             .and_then(|()| match results.as_slice() {
                 [] => Ok(None),
-                [value] => Ok(Some(transport::lift(live.store.as_context_mut(), value)?)),
+                [value] => Ok(Some(transport::lift(
+                    live.store.as_context_mut(),
+                    value,
+                    &ty.results().next().unwrap(),
+                )?)),
                 _ => anyhow::bail!("selected WIT function has multiple results"),
             })
         };

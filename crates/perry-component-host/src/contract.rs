@@ -12,7 +12,7 @@ pub(crate) fn validate(
     component: &Component,
     world: &World,
     wasi_enabled: bool,
-) -> Result<()> {
+) -> Result<BTreeMap<String, ResourceType>> {
     ensure!(
         world.schema_version == SCHEMA_VERSION,
         "unsupported WIT manifest version"
@@ -35,7 +35,8 @@ pub(crate) fn validate(
         .context("component imports do not match WIT")?;
     checker
         .interfaces(engine, &world.exports, &exports, false)
-        .context("component exports do not match WIT")
+        .context("component exports do not match WIT")?;
+    Ok(checker.resources)
 }
 
 struct Checker<'a> {

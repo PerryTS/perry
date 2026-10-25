@@ -14,6 +14,7 @@ pub(crate) struct Lowering<'a> {
     requests: BTreeMap<String, bool>,
     guest_transfers: BTreeSet<String>,
     host_transfers: BTreeSet<String>,
+    async_transfers: BTreeSet<String>,
 }
 
 impl<'a> Lowering<'a> {
@@ -24,12 +25,22 @@ impl<'a> Lowering<'a> {
             requests: BTreeMap::new(),
             guest_transfers: BTreeSet::new(),
             host_transfers: BTreeSet::new(),
+            async_transfers: BTreeSet::new(),
         }
     }
 
     pub fn value(&mut self, value: &Value, ty: &Type) -> Result<Val> {
-        wire::lower_with(value, ty, &mut |value, ty, own| {
-            self.resource(value, ty, own)
+        wire::lower_typed(value, ty, &mut |value, ty| match ty {
+            Type::Own(r) | Type::Borrow(r) => self
+                .resource(value, *r, matches!(ty, Type::Own(_)))
+                .map(Val::Resource),
+            Type::Future(_) | Type::Stream(_) => {
+                self.store
+                    .data()
+                    .async_values
+                    .get(value, ty, &mut self.async_transfers)
+            }
+            _ => anyhow::bail!("unsupported managed value"),
         })
     }
 
@@ -166,6 +177,10 @@ impl<'a> Lowering<'a> {
             .data_mut()
             .resources
             .transferred(&self.guest_transfers);
+        self.store
+            .data_mut()
+            .async_values
+            .transferred(&self.async_transfers);
         Ok(())
     }
 }
@@ -183,9 +198,15 @@ impl Drop for Lowering<'_> {
     }
 }
 
-pub(crate) fn lift(mut store: StoreContextMut<'_, StoreData>, value: &Val) -> Result<Value> {
-    wire::lift_with(value, &mut |resource| {
-        lift_resource(store.as_context_mut(), resource)
+pub(crate) fn lift(
+    mut store: StoreContextMut<'_, StoreData>,
+    value: &Val,
+    ty: &Type,
+) -> Result<Value> {
+    wire::lift_typed(value, ty, &mut |value, ty| match value {
+        Val::Resource(resource) => lift_resource(store.as_context_mut(), *resource),
+        Val::Future(_) | Val::Stream(_) => store.data_mut().async_values.insert(value, ty),
+        _ => anyhow::bail!("unsupported managed value"),
     })
 }
 

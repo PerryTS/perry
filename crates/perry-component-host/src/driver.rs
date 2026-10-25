@@ -1,5 +1,6 @@
 //! A persistent, owner-thread Store driver. Results can be published before
 //! guest tasks exit, and subsequent commands share the same run_concurrent.
+mod async_values;
 mod requests;
 #[cfg(test)]
 mod tests;
@@ -30,7 +31,9 @@ type Run = Pin<Box<dyn Future<Output = Result<Host>>>>;
 /// Unlike Host::call_async, exported results do not stop background guest tasks.
 /// Drop an unconsumed call after it starts to retire the component. Dropping
 /// the last client returns the Host if quiescent and retires it otherwise.
-/// This Rust API does not yet supply generic future/stream application values.
+/// Generic future/stream results use Store-local owned JSON descriptors.
+/// Read or close them through DriverClient; transfer them as call arguments.
+/// Native producer factories and TypeScript wrappers remain unfinished.
 pub struct Driver {
     state: Rc<State>,
     run: Option<Run>,
@@ -110,6 +113,12 @@ async fn execute(
     fuel: u64,
     reset_budget: bool,
 ) -> Completion {
+    if !matches!(command.target, requests::Target::Export) {
+        return async_values::execute(accessor, command, fuel, reset_budget).await;
+    }
+    let function = command
+        .function
+        .expect("export command has a validated function");
     if command.cancelled.get() {
         return (
             command,
@@ -119,7 +128,7 @@ async fn execute(
     }
     let prepared = accessor.with(|mut store| -> Result<_> {
         let _scope = origin::Scope::enter(Some(command.origin));
-        let function = command.function;
+
         let ty = function.ty(&store);
         let params: Vec<_> = ty.params().map(|(_, ty)| ty).collect();
         ensure!(
@@ -158,10 +167,7 @@ async fn execute(
     command.started.set(true);
     let call = accessor.with(|mut store| {
         let _scope = origin::Scope::enter(Some(command.origin));
-        let call =
-            command
-                .function
-                .start_call_concurrent(store.as_context_mut(), &args, &mut output)?;
+        let call = function.start_call_concurrent(store.as_context_mut(), &args, &mut output)?;
         store
             .data_mut()
             .origins
@@ -174,7 +180,7 @@ async fn execute(
     };
     let result = origin::scoped(
         Some(command.origin),
-        command.function.finish_call_concurrent(accessor, call),
+        function.finish_call_concurrent(accessor, call),
     )
     .await;
     let result = result
@@ -185,7 +191,10 @@ async fn execute(
                 let _scope = origin::Scope::enter(Some(command.origin));
                 match output.as_slice() {
                     [] => Ok(None),
-                    [value] => transport::lift(store.as_context_mut(), value).map(Some),
+                    [value] => {
+                        let ty = function.ty(&store).results().next().unwrap();
+                        transport::lift(store.as_context_mut(), value, &ty).map(Some)
+                    }
                     _ => anyhow::bail!("selected WIT function has multiple results"),
                 }
             })
@@ -244,6 +253,16 @@ async fn run(
                                 )));
                                 continue;
                             }
+                            if !matches!(request.target, requests::Target::Export) {
+                                let reset = std::mem::replace(&mut fresh_budget, false);
+                                pending.push(execute(
+                                    accessor,
+                                    Command::new(request, None),
+                                    fuel,
+                                    reset,
+                                ));
+                                continue;
+                            }
                             let function: Option<Func> = exports
                                 .get(&(request.interface.clone(), request.name.clone()))
                                 .copied();
@@ -252,7 +271,7 @@ async fn run(
                                     let reset = std::mem::replace(&mut fresh_budget, false);
                                     pending.push(execute(
                                         accessor,
-                                        Command::new(request, function),
+                                        Command::new(request, Some(function)),
                                         fuel,
                                         reset,
                                     ));

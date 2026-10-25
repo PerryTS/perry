@@ -60,6 +60,7 @@ impl Default for Options {
 }
 
 struct StoreData {
+    async_values: async_values::Values,
     origins: asynchronous::origin::Origins,
     limits: limits::Limits,
     resources: resources::Resources,
@@ -155,7 +156,17 @@ impl Host {
         let component = Component::from_binary(&engine, bytes)
             .map_err(anyhow::Error::from)
             .context("compiling component")?;
-        contract::validate(&engine, &component, world, options.wasi.is_some())?;
+        let identities = contract::validate(&engine, &component, world, options.wasi.is_some())?;
+        let prepared = async_values::Prepared::new(
+            &engine,
+            bytes,
+            component,
+            world,
+            options.wasi.is_some(),
+            &identities,
+        )?;
+        let component = &prepared.component;
+        let async_values = async_values::Values::new()?;
         let host_resources = host_resources::HostResources::new(world, options, resource_hook)?;
         let mut linker = Linker::<StoreData>::new(&engine);
         if options.wasi.is_some() {
@@ -228,10 +239,14 @@ impl Host {
                 imports::link(&mut namespace, &function.name, callback, dispatcher.clone())?;
             }
         }
+        if let Some(control) = &prepared.control {
+            async_values.link(&mut linker, control)?;
+        }
         let limits = limits::Limits::new(options.memory_bytes, options.instances);
         let mut store = Store::new(
             &engine,
             StoreData {
+                async_values,
                 origins: asynchronous::origin::Origins::default(),
                 limits,
                 resources: resources::Resources::default(),
@@ -248,25 +263,50 @@ impl Host {
                 .iter()
                 .chain(&world.exports)
                 .flat_map(|i| &i.functions)
-                .any(|f| f.async_);
+                .any(|f| f.async_)
+                || prepared.control.is_some();
             let instance = if needs_async {
                 futures_lite::future::block_on(asynchronous::dispatch::drive(
                     dispatcher.as_ref(),
-                    linker.instantiate_async(&mut store, &component),
+                    linker.instantiate_async(&mut store, component),
                 ))
             } else {
-                linker.instantiate(&mut store, &component)
+                linker.instantiate(&mut store, component)
             }
             .map_err(anyhow::Error::from)
             .context("instantiating component")?;
+            let root = prepared
+                .original()
+                .map(|name| {
+                    instance
+                        .get_export_index(&mut store, None, name)
+                        .context("missing original component instance")
+                })
+                .transpose()?;
+            let mut adapters = Vec::new();
+            for name in &prepared.readers {
+                let namespace = instance
+                    .get_export_index(&mut store, None, name)
+                    .context("missing canonical reader instance")?;
+                let read = instance
+                    .get_export_index(&mut store, Some(&namespace), "read")
+                    .context("missing canonical reader")?;
+                let dispose = instance
+                    .get_export_index(&mut store, Some(&namespace), "dispose")
+                    .context("missing canonical disposal")?;
+                let read = instance.get_func(&mut store, read).unwrap();
+                let dispose = instance.get_func(&mut store, dispose).unwrap();
+                adapters.push(async_values::Adapter::new(&store, read, dispose)?);
+            }
+            store.data_mut().async_values.adapters = adapters;
             let mut exports = BTreeMap::new();
             for interface in &world.exports {
                 let namespace = if interface.name.is_empty() {
-                    None
+                    root
                 } else {
                     Some(
                         instance
-                            .get_export_index(&mut store, None, &interface.name)
+                            .get_export_index(&mut store, root.as_ref(), &interface.name)
                             .context("missing validated interface")?,
                     )
                 };
@@ -311,6 +351,10 @@ impl Host {
             .get(&(interface.to_string(), name.to_string()))
             .context("function is outside the selected WIT world")?;
         let ty = func.ty(&live.store);
+        ensure!(
+            live.store.data().async_values.adapters.is_empty(),
+            "generic async values require the persistent driver"
+        );
         ensure!(!ty.async_(), "async component function requires call_async");
         if self.dispatcher.is_some() {
             return futures_lite::future::block_on(self.call_async(interface, name, args));
@@ -336,7 +380,11 @@ impl Host {
             .context("component call trapped")?;
         match results.as_slice() {
             [] => Ok(None),
-            [value] => Ok(Some(transport::lift(live.store.as_context_mut(), value)?)),
+            [value] => Ok(Some(transport::lift(
+                live.store.as_context_mut(),
+                value,
+                &ty.results().next().unwrap(),
+            )?)),
             _ => bail!("selected WIT function has multiple results"),
         }
     }

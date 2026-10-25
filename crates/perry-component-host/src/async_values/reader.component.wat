@@ -18,6 +18,7 @@
   (core func $drop-set (canon waitable-set.drop))
   (core func $cancel-task (canon subtask.cancel))
   (core func $drop-task (canon subtask.drop))
+  @dispose-intrinsics@
   (core module $code
     (import "host" "memory" (memory 1))
     (import "host" "alloc" (func $alloc (param i32) (result i32)))
@@ -34,7 +35,16 @@
     (import "host" "drop-set" (func $drop-set (param i32)))
     (import "host" "cancel-task" (func $cancel-task (param i32) (result i32)))
     (import "host" "drop-task" (func $drop-task (param i32)))
+    @dispose-imports@
     @cleanup@
+    @dispose-functions@
+    (func (export "dispose") (param $ptr i32) (param $len i32) (local $header i32)
+      (local.set $header (call $alloc (i32.const 8)))
+      (i32.store (local.get $header) (local.get $ptr))
+      (i32.store offset=4 (local.get $header) (local.get $len))
+      (call $discard@list-id@ (local.get $header))
+      (call $clean@list-id@ (local.get $header))
+      (call $free (local.get $header)))
     ;; Context slot zero points to this task's frame. No mutable global can
     ;; confuse overlapping reads. The helper's memory is charged to Store limits.
     ;; reader0,set4,signal8,done12,cancelled16,id20,buffer24,capacity28,packet32,status36.
@@ -141,6 +151,7 @@
       (call $io-complete (local.get $code)))
     (func (export "pages") (result i32) (memory.size)))
   (core instance $code (instantiate $code (with "host" (instance
+    @dispose-exports@
     (export "memory" (memory $memory))
     (export "alloc" (func $heap "alloc")) (export "free" (func $heap "free"))
     (export "get" (func $get)) (export "set" (func $set))
@@ -151,4 +162,6 @@
     (export "cancel-task" (func $cancel-task)) (export "drop-task" (func $drop-task))))))
   (func (export "read") async (param "value" @reader@) (param "capacity" u32) (param "id" u32) (result @packet@)
     (canon lift (core func $code "read") async (memory $memory) (callback (core func $code "callback"))))
+  (func (export "dispose") (param "values" @list-type@)
+    (canon lift (core func $code "dispose") (memory $memory) (realloc (core func $heap "realloc"))))
   (func (export "pages") (result u32) (canon lift (core func $code "pages"))))

@@ -65,14 +65,32 @@ outstanding requests, including queued requests whose futures were dropped.
 Dropping a call before execution skips it; dropping an unconsumed call after it
 starts requests Store retirement. Dropping the last client returns the Host if
 quiescent and retires it otherwise. The existing TypeScript bridge still needs
-per-invocation callback frames before it can use this driver. Generic async
-application values and producer APIs remain unfinished.
+per-invocation callback frames before it can use this driver.
+
+The Rust driver transports generic `future<T>` and `stream<T>` values as owned,
+Store-local JSON descriptors. Use `client.read_async_value(&value, capacity)`
+and `client.close_async_value(&value)`, or transfer a descriptor as an exported
+function argument. Futures yield one payload (`None` for void). Streams yield
+`{done:false,value:[...]}` chunks, including a final partial chunk, followed by
+`{done:true}`. Unit streams preserve element counts with null placeholders.
+Only one read may be pending per descriptor. Capacity is bounded to 65,536
+elements, and the Store permits at most 1,024 live descriptors. Exact instantiated
+payload and resource identities are checked before ownership transfers;
+foreign, duplicate and incompatible transfers fail before entering the guest.
+
+Closing a pending read cancels it without retiring the Store. A close accepted
+before the read commits prevents publication and destroys any copied owned
+payload exactly once. An accepted close still executes if its result observer
+is dropped. Closing an unread value wakes its producer. Producer factories,
+writer APIs and the TypeScript runtime wrappers remain unfinished. Components
+with generic async values require the persistent Rust driver; legacy `call`
+and `call_async` reject them before executing an export.
 
 This is a subset of the WASI 0.3 milestone. Enabling `wasi` now links the
 Turnloop-backed 0.3.0 providers as well as the P2 providers. WIT manifests
 and generated TypeScript declarations now preserve `future<T>` and `stream<T>`,
 including nested, payload-free and byte-stream types. The declared handles are
-owned and nonthenable. Their application runtime transport is still unfinished;
+owned and nonthenable. Their TypeScript runtime transport is still unfinished;
 generating declarations does not make their `read()` methods executable.
 `stream<char>` is explicitly rejected; use bytes with an explicit encoding.
 `error-context` remains unsupported. Async Perry-authored guest functions and
@@ -99,9 +117,12 @@ The internal generic-reader checks additionally cover canonical layouts from
 `wit-parser::SizeAlign`, shared metadata for repeated aliases, a reusable
 quota-limited Wasm allocator, and task-local frames. They exercise concurrent
 reads and baseline cancellation, Unicode and 3 MiB compound values, final stream
-chunks, and nominal resource identity. This helper remains test-only pending the
-persistent native driver, traced runtime wrappers and producer interfaces. It
-does not add a public generic future/stream runtime API.
+chunks, and nominal resource identity. The helper is now composed into production
+Rust hosts, with private read/disposal functions sharing the original component's
+resource identities. End-to-end checks cover imported and exported resources,
+pruned provider imports, nested futures, large compound payloads, transactional
+transfers and close races. Traced TypeScript wrappers and producer interfaces
+remain unfinished.
 
 The standalone Rust guest acceptance host also uses `perry-wasi` and Turnloop,
 with Wasmtime 48.0.7. The Tokio gate checks its separate workspace, lockfile and

@@ -26,5 +26,5 @@ wasmtime = { version = "48.0.7", default-features = false, features = ["anyhow",
 
 perry-wasi = { path = "../perry-wasi", features = ["p3"] }
 
-[dev-dependencies]
+wac-graph = "=0.12.0"
 wat = "1.254"

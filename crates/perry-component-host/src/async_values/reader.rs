@@ -1,7 +1,8 @@
-//! Build the private read helper. It remains test-only until the persistent
-//! native driver and ownership transport can keep early-return tasks alive.
+//! Build the canonical read/disposal helper composed into production hosts.
+//! The persistent native driver keeps early-return producer tasks alive.
 use super::{
     reader_cleanup,
+    reader_dispose::Disposal,
     reader_types::{quote, Resources, Types},
     HEAP,
 };
@@ -76,12 +77,22 @@ pub(super) fn generate(
     let mut types = Types::new(world, resources);
     let reader_type = types.value(&reader, 0)?;
     let packet_type = types.value(&packet, 0)?;
+    let list = Type::List(Box::new(payload.cloned().unwrap_or(Type::U8)));
+    let list_type = types.value(&list, 0)?;
+    let mut disposal = Disposal::default();
+    disposal.visit(world, &list, &fields[20].1, &mut types, 0)?;
     let kind = if stream { "stream" } else { "future" };
     let mut text = include_str!("reader.component.wat").to_string();
     let replacements = [
         ("@imports@", types.imports()),
         ("@types@", types.text),
         ("@control@", quote(control)),
+        ("@list-type@", list_type),
+        ("@list-id@", fields[20].1.node_id().to_string()),
+        ("@dispose-intrinsics@", disposal.intrinsics),
+        ("@dispose-imports@", disposal.imports),
+        ("@dispose-exports@", disposal.exports),
+        ("@dispose-functions@", disposal.functions),
         ("@reader@", reader_type),
         ("@packet@", packet_type),
         ("@kind@", kind.into()),

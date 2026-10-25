@@ -14,6 +14,9 @@ use std::{
 };
 use wasmtime::component::Func;
 
+type ReadKey = (bool, String);
+type ReadRegistrations = BTreeMap<ReadKey, BTreeMap<InvocationId, Weak<ReadIntent>>>;
+
 pub(super) struct State {
     pub owner: std::thread::ThreadId,
     pub alive: Cell<bool>,
@@ -22,6 +25,7 @@ pub(super) struct State {
     pub outstanding: Cell<usize>,
     pub waker: AtomicWaker,
     replies: RefCell<BTreeMap<InvocationId, oneshot::Sender<Reply>>>,
+    reads: RefCell<ReadRegistrations>,
 }
 impl Default for State {
     fn default() -> Self {
@@ -33,6 +37,7 @@ impl Default for State {
             outstanding: Cell::new(0),
             waker: AtomicWaker::new(),
             replies: RefCell::new(BTreeMap::new()),
+            reads: RefCell::new(BTreeMap::new()),
         }
     }
 }
@@ -74,7 +79,38 @@ impl ReplyPort {
     }
 }
 
+/// Shared native intent is visible before the close command can be polled.
+/// Keep registrations weak so neither completed reads nor clients form a cycle.
+pub(super) struct ReadIntent {
+    pub cancelled: Cell<bool>,
+    pub committed: Cell<bool>,
+    pub closed: Cell<bool>,
+    key: ReadKey,
+    origin: InvocationId,
+    state: Weak<State>,
+}
+impl Drop for ReadIntent {
+    fn drop(&mut self) {
+        if let Some(state) = self.state.upgrade() {
+            let mut reads = state.reads.borrow_mut();
+            if let Some(entries) = reads.get_mut(&self.key) {
+                entries.remove(&self.origin);
+                if entries.is_empty() {
+                    reads.remove(&self.key);
+                }
+            }
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(super) enum Target {
+    Export,
+    Read(Value, u32, Option<Rc<ReadIntent>>),
+    Close(Value, Vec<Rc<ReadIntent>>),
+}
 pub(super) struct Request {
+    pub target: Target,
     permit: Rc<Permit>,
     pub origin: InvocationId,
     pub interface: String,
@@ -85,18 +121,20 @@ pub(super) struct Request {
     pub cancelled: Rc<Cell<bool>>,
 }
 pub(super) struct Command {
+    pub target: Target,
     _permit: Rc<Permit>,
     pub origin: InvocationId,
-    pub function: Func,
+    pub function: Option<Func>,
     pub args: Vec<Value>,
     pub reply: ReplyPort,
     pub started: Rc<Cell<bool>>,
     pub cancelled: Rc<Cell<bool>>,
 }
 impl Command {
-    pub fn new(request: Request, function: Func) -> Self {
+    pub fn new(request: Request, function: Option<Func>) -> Self {
         Self {
             _permit: request.permit,
+            target: request.target,
             origin: request.origin,
             function,
             args: request.args,
@@ -120,6 +158,39 @@ impl DriverClient {
     /// Queue an owned argument snapshot without running guest or callback code.
     /// At most 64 unconsumed calls may exist at once. Poll the driver to execute.
     pub fn call(&self, interface: &str, name: &str, args: &[Value]) -> Result<DriverCall> {
+        self.submit(interface, name, args, Target::Export)
+    }
+    /// Read a Store-local future or stream descriptor, including nested values.
+    /// Futures yield one payload (None for void); streams yield
+    /// {done:false,value:[...]} chunks and finally {done:true}. A future is
+    /// consumed by its read; a stream keeps its descriptor until EOF or close.
+    /// Capacity defaults to 1 for futures and 4096 for streams (maximum 65536).
+    /// Only one read may be pending per descriptor. A rejected preflight leaves
+    /// it usable; dropping a started read's observer retires the Store.
+    pub fn read_async_value(&self, value: &Value, max_elements: Option<u32>) -> Result<DriverCall> {
+        let (_, stream) = crate::async_values::values::token(value)?;
+        let max = max_elements.unwrap_or(if stream { 4096 } else { 1 });
+        ensure!(
+            (1..=65536).contains(&max) && (stream || max == 1),
+            "invalid async read capacity"
+        );
+        self.submit("", "", &[], Target::Read(value.clone(), max, None))
+    }
+    /// Close an owned descriptor or cancel its pending read without retiring
+    /// the Store. Accepted closes execute even if their observer is dropped.
+    /// Queuing close before a pending read commits prevents payload publication
+    /// and disposes copied owned values using their original resource types.
+    pub fn close_async_value(&self, value: &Value) -> Result<DriverCall> {
+        crate::async_values::values::token(value)?;
+        self.submit("", "", &[], Target::Close(value.clone(), Vec::new()))
+    }
+    fn submit(
+        &self,
+        interface: &str,
+        name: &str,
+        args: &[Value],
+        mut target: Target,
+    ) -> Result<DriverCall> {
         self.state.assert_owner();
         ensure!(
             self.state.alive.get() && !self.state.abort.get(),
@@ -140,9 +211,45 @@ impl DriverClient {
         let permit = Rc::new(Permit(self.state.clone()));
         let started = Rc::new(Cell::new(false));
         let cancelled = Rc::new(Cell::new(false));
+        match &mut target {
+            Target::Read(value, _, slot) => {
+                let (token, stream) = crate::async_values::values::token(value)?;
+                let key = (stream, token.to_string());
+                let intent = Rc::new(ReadIntent {
+                    cancelled: Cell::new(false),
+                    committed: Cell::new(false),
+                    closed: Cell::new(false),
+                    key: key.clone(),
+                    origin,
+                    state: Rc::downgrade(&self.state),
+                });
+                self.state
+                    .reads
+                    .borrow_mut()
+                    .entry(key)
+                    .or_default()
+                    .insert(origin, Rc::downgrade(&intent));
+                *slot = Some(intent);
+            }
+            Target::Close(value, intents) => {
+                let (token, stream) = crate::async_values::values::token(value)?;
+                if let Some(entries) = self.state.reads.borrow().get(&(stream, token.to_string())) {
+                    for intent in entries.values().filter_map(Weak::upgrade) {
+                        if !intent.committed.get() {
+                            intent.cancelled.set(true);
+                            intents.push(intent);
+                        }
+                    }
+                }
+            }
+            Target::Export => {}
+        }
+
+        let close = matches!(target, Target::Close(..));
         self.send
             .unbounded_send(Request {
                 permit: permit.clone(),
+                target,
                 origin,
                 interface: interface.into(),
                 name: name.into(),
@@ -165,6 +272,7 @@ impl DriverClient {
             started,
             cancelled,
             complete: false,
+            close,
         })
     }
 }
@@ -174,9 +282,10 @@ impl Drop for DriverClient {
     }
 }
 
-/// Future for one exported result. It does not own the background guest task.
+/// Future for one export, read or close result. It does not own background guest work.
 /// Dropping it before execution skips the call; after execution starts, dropping
 /// an unobserved result requests hard Store retirement on the next driver poll.
+/// Accepted close requests always execute, even if their observer is dropped.
 pub struct DriverCall {
     _permit: Option<Rc<Permit>>,
     origin: InvocationId,
@@ -185,6 +294,7 @@ pub struct DriverCall {
     started: Rc<Cell<bool>>,
     cancelled: Rc<Cell<bool>>,
     complete: bool,
+    close: bool,
 }
 impl DriverCall {
     pub fn id(&self) -> InvocationId {
@@ -210,7 +320,7 @@ impl Future for DriverCall {
 impl Drop for DriverCall {
     fn drop(&mut self) {
         self.state.assert_owner();
-        if !self.complete {
+        if !self.complete && !self.close {
             self.cancelled.set(true);
             if self.started.get() && self.state.alive.get() {
                 self.state.abort.set(true);

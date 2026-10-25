@@ -2,21 +2,21 @@
 //! Resource/future/stream handles have transferred to the embedding by then.
 use anyhow::{bail, Result};
 use perry_wit::canonical::{Layout, LayoutKind};
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 
 pub(super) fn visitors(root: &Layout) -> Result<String> {
-    fn emit(layout: &Layout, seen: &mut BTreeSet<u32>, output: &mut String) -> Result<()> {
-        if !seen.insert(layout.node_id()) {
-            return Ok(());
+    fn emit(layout: &Layout, seen: &mut BTreeMap<u32, bool>, output: &mut String) -> Result<bool> {
+        if let Some(needed) = seen.get(&layout.node_id()) {
+            return Ok(*needed);
         }
         let mut body = String::new();
         match &layout.kind {
             LayoutKind::Scalar => {}
             LayoutKind::String => body += "(call $free (i32.load (local.get $p)))",
             LayoutKind::List { element } => {
-                emit(element, seen, output)?;
-                body += &format!(
-                    r#"
+                if emit(element, seen, output)? {
+                    body += &format!(
+                        r#"
                   (local.set $n (i32.load offset=4 (local.get $p)))
                   (local.set $q (i32.load (local.get $p)))
                   (block $done (loop $each
@@ -24,19 +24,21 @@ pub(super) fn visitors(root: &Layout) -> Result<String> {
                     (call $clean{} (local.get $q))
                     (local.set $q (i32.add (local.get $q) (i32.const {})))
                     (local.set $n (i32.sub (local.get $n) (i32.const 1)))
-                    (br $each)))
-                  (call $free (i32.load (local.get $p)))"#,
-                    element.node_id(),
-                    element.size
-                );
+                    (br $each)))"#,
+                        element.node_id(),
+                        element.size
+                    );
+                }
+                body += "(call $free (i32.load (local.get $p)))";
             }
             LayoutKind::Fields(fields) => {
                 for (offset, field) in fields {
-                    emit(field, seen, output)?;
-                    body += &format!(
-                        "(call $clean{} (i32.add (local.get $p) (i32.const {offset})))\n",
-                        field.node_id()
-                    );
+                    if emit(field, seen, output)? {
+                        body += &format!(
+                            "(call $clean{} (i32.add (local.get $p) (i32.const {offset})))\n",
+                            field.node_id()
+                        );
+                    }
                 }
             }
             LayoutKind::Variant {
@@ -50,12 +52,15 @@ pub(super) fn visitors(root: &Layout) -> Result<String> {
                     4 => "i32.load",
                     _ => bail!("unsupported canonical discriminant"),
                 };
-                body += &format!("(local.set $n ({load} (local.get $p)))\n");
                 for (tag, case) in cases.iter().enumerate() {
                     if let Some(case) = case {
-                        emit(case, seen, output)?;
-                        body += &format!("(if (i32.eq (local.get $n) (i32.const {tag})) (then (call $clean{} (i32.add (local.get $p) (i32.const {payload_offset})))))\n", case.node_id());
+                        if emit(case, seen, output)? {
+                            body += &format!("(if (i32.eq (local.get $n) (i32.const {tag})) (then (call $clean{} (i32.add (local.get $p) (i32.const {payload_offset})))))\n", case.node_id());
+                        }
                     }
+                }
+                if !body.is_empty() {
+                    body = format!("(local.set $n ({load} (local.get $p)))\n{body}");
                 }
             }
         }
@@ -63,9 +68,11 @@ pub(super) fn visitors(root: &Layout) -> Result<String> {
             "(func $clean{} (param $p i32) (local $n i32) (local $q i32) {body})\n",
             layout.node_id()
         );
-        Ok(())
+        let needed = !body.is_empty();
+        seen.insert(layout.node_id(), needed);
+        Ok(needed)
     }
     let mut output = String::new();
-    emit(root, &mut BTreeSet::new(), &mut output)?;
+    emit(root, &mut BTreeMap::new(), &mut output)?;
     Ok(output)
 }

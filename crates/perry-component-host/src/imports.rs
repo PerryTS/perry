@@ -21,7 +21,8 @@ fn invoke(
     let result = (|| -> Result<()> {
         let args = params
             .iter()
-            .map(|value| transport::lift(store.as_context_mut(), value))
+            .zip(ty.params())
+            .map(|(value, (_, ty))| transport::lift(store.as_context_mut(), value, &ty))
             .collect::<Result<Vec<_>>>()?;
         let value = callback(&args);
         let cleanup = host_resources::drain(store.as_context_mut());

@@ -605,7 +605,16 @@ fn cancellation_preserves_partial_owned_payloads_for_native_disposal() {
         0,
         "memory cleanup must preserve transferred handles"
     );
-    block_on(resource.resource_drop_async(&mut store)).unwrap();
+    let dispose = instance.get_func(&mut store, "dispose").unwrap();
+    ready(store.run_concurrent(async |accessor| {
+        dispose
+            .call_concurrent(accessor, &[Val::List(values.clone())], &mut [])
+            .await?;
+        std::future::poll_fn(|cx| accessor.poll_no_interesting_tasks(cx)).await;
+        Ok::<_, wasmtime::Error>(())
+    }))
+    .unwrap()
+    .unwrap();
     assert!(block_on(resource.resource_drop_async(&mut store)).is_err());
     assert_eq!(drops.load(Ordering::SeqCst), 1);
 }
@@ -667,5 +676,106 @@ fn nested_future_payloads_survive_outer_canonical_memory_cleanup() {
             .unwrap()
             .send(())
             .is_err());
+    }
+}
+
+#[test]
+fn canonical_disposal_consumes_nested_owned_handles_and_recycles_payload_storage() {
+    struct Item;
+    struct Probe(Arc<AtomicUsize>);
+    impl Drop for Probe {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    let world = perry_wit::parse(
+        "package test:dispose; interface types { resource item; } world plugin { export types; }",
+        None,
+    )
+    .unwrap();
+    let key = world.exports[0].resources["item"].clone();
+    let resources = [(key.clone(), ("types".into(), "item".into()))]
+        .into_iter()
+        .collect();
+    let payload = Type::Tuple(vec![
+        Type::U64,
+        Type::String,
+        Type::List(Box::new(Type::Tuple(vec![
+            Type::Option(Box::new(Type::Own(key))),
+            Type::String,
+        ]))),
+        Type::Future(Some(Box::new(Type::U64))),
+    ]);
+    let engine = engine();
+    let component = component(&engine, &world, Some(&payload), false, &resources);
+    let mut linker = Linker::new(&engine);
+    let signals = control(&mut linker);
+    let drops = Arc::new(AtomicUsize::new(0));
+    let dropped = drops.clone();
+    linker
+        .instance("types")
+        .unwrap()
+        .resource("item", ResourceType::host::<Item>(), move |_, rep| {
+            assert!([77, 78].contains(&rep));
+            dropped.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        })
+        .unwrap();
+    let future_drops = Arc::new(AtomicUsize::new(0));
+    let mut store = Store::new(&engine, ());
+    let instance = block_on(linker.instantiate_async(&mut store, &component)).unwrap();
+    let (read, pages) = functions(&mut store, instance);
+    let dispose = instance.get_func(&mut store, "dispose").unwrap();
+    let mut previous = None;
+    for id in 1..=3 {
+        let guard = Probe(future_drops.clone());
+        let inner = FutureReader::new(&mut store, async move {
+            let _guard = guard;
+            std::future::pending::<wasmtime::Result<u64>>().await
+        })
+        .unwrap();
+        let value = (
+            0xFEDCBA9876543210u64,
+            "héllo 🌍".repeat(1024),
+            vec![
+                (Some(Resource::<Item>::new_own(77)), "nested".to_string()),
+                (None, "empty".to_string()),
+                (Some(Resource::<Item>::new_own(78)), "深い".to_string()),
+            ],
+            inner,
+        );
+        let outer =
+            FutureReader::new(&mut store, async move { Ok::<_, wasmtime::Error>(value) }).unwrap();
+        let outer = FutureAny::try_from_future_reader(&mut store, outer).unwrap();
+        let packet = invoke(
+            &mut store,
+            read,
+            &[Val::Future(outer), Val::U32(1), Val::U32(id)],
+        );
+        let values = field(&packet, "values").clone();
+        assert_eq!(drops.load(Ordering::SeqCst), 2 * (id as usize - 1));
+        ready(store.run_concurrent(async |accessor| {
+            dispose
+                .call_concurrent(accessor, &[values], &mut [])
+                .await?;
+            std::future::poll_fn(|cx| accessor.poll_no_interesting_tasks(cx)).await;
+            Ok::<_, wasmtime::Error>(())
+        }))
+        .unwrap()
+        .unwrap();
+        assert_eq!(drops.load(Ordering::SeqCst), 2 * id as usize);
+        assert_eq!(future_drops.load(Ordering::SeqCst), id as usize);
+        assert!(signals
+            .lock()
+            .unwrap()
+            .remove(&id)
+            .unwrap()
+            .send(())
+            .is_err());
+        let current = invoke(&mut store, pages, &[]);
+        if let Some(previous) = &previous {
+            assert_eq!(&current, previous);
+        }
+        previous = Some(current);
     }
 }
