@@ -62,7 +62,7 @@ fn late_key_ok(k: &str) -> bool {
 }
 
 /// One receiver group's static keys.
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub(super) struct Group {
     /// Module-local binding identity, retained only for code selection.
     local: Option<u32>,
@@ -75,7 +75,7 @@ pub(super) struct Group {
     /// The local is a new object: initialised by `new`, or by a factory call
     /// whose callee returns one of its own locals (the stores of a creation
     /// group come before any later phase's).
-    creation: bool,
+    pub(super) creation: bool,
     /// The number literals of the arguments of the call (or `new`) that
     /// initialises the local, by position (`None`: not a number literal).
     /// A family whose constructor stores a parameter into a constructor key

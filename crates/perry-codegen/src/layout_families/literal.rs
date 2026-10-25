@@ -204,6 +204,10 @@ mod tests {
             .find(|line| line.starts_with(&format!("@perry_layout_class_{id} = global")))
             .expect("literal family descriptor must be defined");
         assert!(
+            descriptor.contains(r#"section "perry_literal_layouts""#),
+            "unused literal family must be outside startup's descriptor section"
+        );
+        assert!(
             descriptor.contains("i32 -1, i64 0, i64 0,"),
             "literal family must register a carried layout with Object.prototype"
         );
@@ -215,6 +219,28 @@ mod tests {
             walk_ir.contains("icmp eq i32"),
             "current shape must be compared"
         );
+    }
+
+    #[test]
+    fn unknown_shared_name_stores_do_not_admit_literal_families() {
+        let source = r#"
+            function make() { const record = { first: 1, second: 2 }; return record; }
+            function edit(record) {
+                console.log(record.first, record.second);
+                record.unrelated = 3;
+            }
+            const item = make();
+            edit(item);
+        "#;
+        let ast = perry_parser::parse_typescript(source, "unknown-late.ts").unwrap();
+        let hir = perry_hir::lower_module(&ast, "unknown-late", "unknown-late.ts").unwrap();
+        assert!(hir.classes.iter().any(Class::is_literal_shape));
+        let layouts = compute([("unknown-late.ts", &hir)], true, &BTreeMap::new());
+        assert!(
+            layouts.literal_families.is_empty(),
+            "a parameter's shared keys are not creation-linked late stores"
+        );
+        assert!(receiver_candidates(&hir, &layouts).is_empty());
     }
 
     #[test]

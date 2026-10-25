@@ -1017,14 +1017,27 @@ pub(crate) fn emit_module_layouts(
             variants.push((v.key_bits, vnamed, v.slot_count));
         }
         let methods = methods::emit(llmod, strings, &mut atoms, fam);
-        let identity = if layouts.literal_families.contains(&fam.class_id) {
+        let literal = layouts.literal_families.contains(&fam.class_id);
+        let identity = if literal {
             (0, 0)
         } else {
             (fam.class_id, fam.parent_class_id)
         };
+        // First-birth literal descriptors are static image data outside the
+        // startup enumeration. The runtime owns their ShapeId publication.
+        let family_section = if literal {
+            section(
+                &llmod.target_triple,
+                "perry_literal_layouts",
+                "__DATA,__perry_litlay",
+                ".perrylit$m",
+            )
+        } else {
+            sect.clone()
+        };
         emit_desc(
             llmod,
-            &sect,
+            &family_section,
             (
                 &format!("perry_layout_keys_{module_prefix}_{n}"),
                 &format!("perry_layout_index_{module_prefix}_{n}"),

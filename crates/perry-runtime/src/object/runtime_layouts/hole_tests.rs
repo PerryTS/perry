@@ -677,3 +677,95 @@ fn classless_optional_family_keeps_shape_and_routes_unknown_keys_to_overflow() {
     });
     finish();
 }
+
+// No eager counterpart shares these keys: the second agent must materialize
+// its own record even though the image word was published by the first.
+#[cfg(not(target_family = "wasm"))]
+mod first_birth {
+    use super::*;
+
+    runtime_atom!(LAZY_A, "first_birth_a", "66697273745f62697274685f61");
+    runtime_atom!(LAZY_B, "first_birth_b", "66697273745f62697274685f62");
+
+    const ATOMS: [LayoutAtom; 2] = [
+        (std::ptr::addr_of!(LAZY_A), LAZY_A::HASH, OPT, None),
+        (std::ptr::addr_of!(LAZY_B), LAZY_B::HASH, OPT, None),
+    ];
+    static KEYS: [PerryLayoutKey; 2] = layout_keys(ATOMS);
+    static INDEX: [u32; 4] = layout_index(&ATOMS);
+
+    #[used(linker)]
+    #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_litlay")]
+    #[cfg_attr(target_os = "windows", link_section = ".perrylit$m")]
+    #[cfg_attr(
+        not(any(target_vendor = "apple", target_os = "windows")),
+        link_section = "perry_literal_layouts"
+    )]
+    static mut LITERAL: PerryLayoutDesc = PerryLayoutDesc {
+        family: 0x7f000015,
+        variant: 0,
+        kind: 0,
+        integrity: 0,
+        slot_count: 2,
+        layout_id: crate::object::layout_desc::LAYOUT_ID_CARRIED,
+        rep: 0,
+        proto: crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
+        keys: KEYS.as_ptr(),
+        key_count: 2,
+        index_mask: 3,
+        index: INDEX.as_ptr(),
+        class_id: 0,
+        parent_class_id: 0,
+        methods: std::ptr::null(),
+    };
+
+    #[test]
+    fn unused_literal_stays_static_and_first_birth_installs_each_agents_record() {
+        crate::gc::initialize_runtime_fixture();
+        let desc = std::ptr::addr_of!(LITERAL);
+        unsafe {
+            assert_eq!(
+                crate::object::layout_desc::load_layout_id(desc),
+                crate::object::layout_desc::LAYOUT_ID_CARRIED,
+                "ordinary startup must not register an unused literal"
+            );
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let obj = scope.root_raw_mut_ptr(crate::object::layout_desc::perry_alloc_layout(desc));
+            let id = obj.with_const_ptr(|p: *const ObjectHeader| (*p).parent_class_id);
+            assert!(crate::object::shapes::shape_descriptor_by_id(id).is_some());
+            assert_eq!(crate::object::layout_desc::load_layout_id(desc), id);
+            obj.with_mut_ptr(|p: *mut ObjectHeader| {
+                assert!(std::ptr::eq(
+                    crate::object::layout_desc::family_desc_of(p).unwrap(),
+                    desc
+                ));
+                js_object_set_field_by_name(p, LAZY_A.string, 17.0);
+                assert_eq!(js_object_get_field_by_name_f64(p, LAZY_A.string), 17.0);
+            });
+            std::thread::spawn(move || {
+                crate::gc::initialize_runtime_fixture();
+                let desc = std::ptr::addr_of!(LITERAL);
+                assert_eq!(crate::object::layout_desc::load_layout_id(desc), id);
+                assert!(
+                    crate::object::shapes::shape_descriptor_by_id(id).is_none(),
+                    "a shared image word must not stand in for this agent's record"
+                );
+                let scope = crate::gc::RuntimeHandleScope::new();
+                let obj =
+                    scope.root_raw_mut_ptr(crate::object::layout_desc::perry_alloc_layout(desc));
+                assert!(crate::object::shapes::shape_descriptor_by_id(id).is_some());
+                obj.with_mut_ptr(|p: *mut ObjectHeader| {
+                    assert_eq!((*p).parent_class_id, id);
+                    assert!(std::ptr::eq(
+                        crate::object::layout_desc::family_desc_of(p).unwrap(),
+                        desc
+                    ));
+                    js_object_set_field_by_name(p, LAZY_B.string, 23.0);
+                    assert_eq!(js_object_get_field_by_name_f64(p, LAZY_B.string), 23.0);
+                });
+            })
+            .join()
+            .unwrap();
+        }
+    }
+}

@@ -28,6 +28,7 @@
 //! full ShapeId value, and bit 30 ([`LAYOUT_SHADOW_BIT`]) is the shadow bit,
 //! which no ShapeId carries (object model §3.6; set by `object::shadow`).
 
+mod literal_birth;
 mod optional_family;
 
 use super::ObjectHeader;
@@ -1031,7 +1032,7 @@ pub unsafe extern "C" fn perry_alloc_layout(desc: *const PerryLayoutDesc) -> *mu
     #[cfg(test)]
     crate::test_support::bootstrap_test_thread();
     let d = &*desc;
-    let Some(id) = registered_layout_id(d.layout_id) else {
+    let Some(id) = literal_birth::registered_for_birth(desc) else {
         eprintln!(
             "Perry internal error: perry_alloc_layout of an unregistered layout (family {:#x})",
             d.family
@@ -1708,16 +1709,14 @@ fn layout_id_of_index(index: u32) -> Option<u32> {
 #[inline]
 pub(crate) fn layout_index_of_word(word: u32) -> Option<u32> {
     let index = layout_id_of_word(word).wrapping_sub(LAYOUT_BASE);
-    let (start, end) = layout_bounds();
-    let count = (end.saturating_sub(start) / std::mem::size_of::<PerryLayoutDesc>()) as u32;
+    let count = literal_birth::descriptor_count();
     (index < count && index < LAYOUT_INDEX_LIMIT).then_some(index)
 }
 
 /// Descriptor `index` of the section.
 #[inline]
 fn desc_at(index: u32) -> *const PerryLayoutDesc {
-    (layout_bounds().0 + index as usize * std::mem::size_of::<PerryLayoutDesc>())
-        as *const PerryLayoutDesc
+    literal_birth::descriptor_at(index)
 }
 
 /// The class declaration owns the immutable pointer to its instance layout.
@@ -2560,8 +2559,7 @@ pub(crate) unsafe fn family_own_key_hashed(
     let word = (*obj).parent_class_id;
     let index = word.wrapping_sub(LAYOUT_BASE);
     let d = if index < LAYOUT_INDEX_LIMIT {
-        let (start, end) = layout_bounds();
-        if index as usize >= end.saturating_sub(start) / std::mem::size_of::<PerryLayoutDesc>() {
+        if index >= literal_birth::descriptor_count() {
             return None;
         }
         let d = &*desc_at(index);

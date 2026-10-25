@@ -533,9 +533,16 @@ fn emit_instance_alloc_inner(
         *constructor_stores_ready = true;
         // A complete prologue's values go straight into the emitted birth.
         let fields = constructor_birth.and_then(|birth| birth.fields.as_deref());
-        let birth_class = if class.is_literal_shape() { 0 } else { cid };
+        if class.is_literal_shape() {
+            // The image word is shared by agents, while ShapeRecords are
+            // agent-local. The allocation operation proves this agent owns
+            // the record, installing it on its first birth without a memo.
+            let raw = ctx.block().call(PTR, "perry_alloc_layout", &[(PTR, &desc)]);
+            *fields_written = None;
+            return ctx.block().ptrtoint(&raw, I64);
+        }
         let (handle, written) =
-            crate::expr::inline_birth::layout_with(ctx, &desc, slots, birth_class, fields);
+            crate::expr::inline_birth::layout_with(ctx, &desc, slots, cid, fields);
         *fields_written = written;
         return handle;
     }
