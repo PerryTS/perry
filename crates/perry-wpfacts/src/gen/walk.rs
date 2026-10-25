@@ -375,7 +375,11 @@ impl<'a> Gen<'a> {
                     let _ = self.expr(&sfx, k);
                     self.m.field_any(cobj)
                 }
-                None => self.m.field(cobj, a),
+                None => {
+                    let defs = usize::from(f.init.is_some() || f.is_private);
+                    self.m.static_defs.insert((tm, a), defs);
+                    self.m.field(cobj, a)
+                }
             };
             self.m.edge(v, fl);
         }

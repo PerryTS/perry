@@ -108,6 +108,9 @@ pub struct TemplateFacts {
     pub adds_keys: u32,
     pub birth_keys: Vec<String>,
     pub fields: Vec<FieldFacts>,
+    /// A class's own statics that hold their definition for the program's
+    /// life (FVA 3.4, `constant_statics`), sorted.
+    pub statics: Vec<String>,
     pub sabotaged: bool,
     /// Class ids of the parent chain (leaf's parent first).
     pub ancestors: Vec<u32>,
@@ -223,6 +226,7 @@ impl TemplateFacts {
         self.adds_keys = self.adds_keys.max(o.adds_keys);
         common_prefix(&mut self.birth_keys, &o.birth_keys);
         common_prefix(&mut self.ancestors, &o.ancestors);
+        self.statics.retain(|k| o.statics.contains(k));
         self.sabotaged |= o.sabotaged;
         for f in self.fields.iter_mut() {
             match o.fields.iter().find(|g| g.key == f.key) {
@@ -276,6 +280,52 @@ pub fn derive(g: &mut Gen) -> (Vec<TemplateFacts>, Vec<SiteFacts>) {
     let foreign = &g.m.foreign;
     out.retain(|t| !foreign.contains_key(&t.id));
     (out, sites)
+}
+
+/// FVA 3.4: the class object's own statics that hold their definition for
+/// the program's life. Statics are created when the class is evaluated (a
+/// static method by its declaration, a static field by the store the HIR
+/// emits there, `Model::static_defs`); one is constant when nothing else
+/// stores it: its store sites are exactly its definition's (stores of the
+/// key on the class's instances count too, the writers being per template),
+/// the class object reaches no unknown code (which could write it), carries
+/// no HARD operation (defineProperty, delete, a prototype write), has no
+/// computed static member, and the key is no accessor.
+fn constant_statics(m: &Model, tm: TmplId) -> Vec<String> {
+    let Some(&cobj) = m.tok_index.get(&TokKind::ClassObj(tm)) else {
+        return Vec::new();
+    };
+    let holds = |n: NodeId| {
+        let nd = &m.nodes[n as usize];
+        !nd.pts.is_empty() || nd.prim != 0
+    };
+    if m.is_escaped(cobj)
+        || m.hard.contains_key(&cobj)
+        || m.field_any.get(&cobj).is_some_and(|&n| holds(n))
+    {
+        return Vec::new();
+    }
+    let accessors = m.accessor_keys.get(&cobj);
+    let mut out: Vec<String> = Vec::new();
+    for &a in m.field_keys.get(&cobj).into_iter().flatten() {
+        if accessors.is_some_and(|ks| ks.contains(&a)) {
+            continue;
+        }
+        if !m.fields.get(&(cobj, a)).is_some_and(|&n| holds(n)) {
+            continue;
+        }
+        let stores = m
+            .writers
+            .get(&(tm, a))
+            .map_or(0, |w| w.ctor.len() + w.post.len());
+        let defined_only = stores == m.static_defs.get(&(tm, a)).copied().unwrap_or(0);
+        if defined_only {
+            out.push(m.atoms[a as usize].clone());
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
 }
 
 /// The static prototype chain tokens of a template (plus every prototype
@@ -482,6 +532,7 @@ fn template_facts(
             .map(|a| m.atoms[*a as usize].clone())
             .collect(),
         fields,
+        statics: constant_statics(m, tm),
         sabotaged: false,
         ancestors: {
             let mut v = Vec::new();
@@ -750,6 +801,8 @@ fn judge(
     let mut fixed_shape = true;
     // A call: the nodes whose values the lookups give.
     let mut callee: Vec<NodeId> = Vec::new();
+    // Reads of a class object's constant static (3.4).
+    let mut statics = 0usize;
     for &t in toks {
         match &m.toks[t as usize] {
             TokKind::Top => {
@@ -808,6 +861,25 @@ fn judge(
                     }
                 }
             }
+            // A class object: the key is one of its constant statics (3.4).
+            // A static it inherits is not proven (the class objects' chain is
+            // not modeled).
+            TokKind::ClassObj(tm) => {
+                receivers.push(m.tok_name(t));
+                let constant = by_id
+                    .get(tm)
+                    .is_some_and(|tf| tf.statics.iter().any(|k| k == key));
+                let n = m.fields.get(&(t, s.key)).copied();
+                match n {
+                    Some(n) if constant && s.is_call => callee.push(n),
+                    Some(_) if constant => statics += 1,
+                    _ => {
+                        verdict.get_or_insert(Verdict::No(
+                            "not a constant static of the class (3.4)".into(),
+                        ));
+                    }
+                }
+            }
             other => {
                 receivers.push(m.tok_name(t));
                 let _ = other;
@@ -853,6 +925,16 @@ fn judge(
                     }
                 }
                 Err(why) => Verdict::No(why),
+            }
+        }
+        None if statics > 0 && !slots.is_empty() => {
+            Verdict::No("receivers mix class objects and instances".into())
+        }
+        None if statics > 0 => {
+            if receivers.len() == 1 {
+                Verdict::T0Mono
+            } else {
+                Verdict::T0Set
             }
         }
         None => {

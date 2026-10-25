@@ -180,6 +180,49 @@ pub(crate) fn try_lower_proven_field_call(
     Ok(Some(v))
 }
 
+/// `x.k(args)` where the local `x` holds exactly class C's class object and
+/// the facts prove C's own static `k` holds its declaration (FVA 3.4): the
+/// static call `C.k(args)`, whose lowering then needs no guard. The receiver
+/// is still evaluated (a TDZ read throws).
+pub(crate) fn try_lower_proven_static_call(
+    ctx: &mut FnCtx<'_>,
+    callee: &Expr,
+    args: &[Expr],
+) -> Result<Option<String>> {
+    let Expr::PropertyGet {
+        object, property, ..
+    } = callee
+    else {
+        return Ok(None);
+    };
+    let Expr::LocalGet(id) = object.as_ref() else {
+        return Ok(None);
+    };
+    if ctx.wpfacts_off {
+        return Ok(None);
+    }
+    let Some(&cid) = ctx.wpfacts.local_classes.get(id) else {
+        return Ok(None);
+    };
+    let Some(class_name) = crate::expr::wpfacts_access::class_name_of(ctx, cid) else {
+        return Ok(None);
+    };
+    let declared = ctx
+        .classes
+        .get(&class_name)
+        .is_some_and(|c| c.static_methods.iter().any(|m| m.name == *property));
+    if !declared || !crate::expr::wpfacts_access::proves_static(ctx, cid, property) {
+        return Ok(None);
+    }
+    let _ = lower_expr(ctx, object)?;
+    let call = Expr::StaticMethodCall {
+        class_name,
+        method_name: property.clone(),
+        args: args.to_vec(),
+    };
+    lower_expr(ctx, &call).map(Some)
+}
+
 /// The call of the proven bodies `bodies` (symbols `symbols`) through the
 /// function object `callee_box`, receiver `this_bits`, over lowered
 /// arguments.
