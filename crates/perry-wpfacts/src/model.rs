@@ -1253,9 +1253,12 @@ pub struct Model {
     /// over the member graph as the readers ask (`marker_members`); the
     /// graph only grows while solving, so a solve starts it over.
     pub members_settled: std::cell::RefCell<FxHashMap<Tok, std::rc::Rc<[Tok]>>>,
-    /// A marker -> the argument markers it stands in (`arg_members`
-    /// inverted, DECISIONS 187).
-    pub arg_parents: FxHashMap<Tok, Vec<Tok>>,
+    /// DECISIONS 187: per argument marker, the markers whose stores reached
+    /// it (`arg_stores`, the marker the store was made on) and the key they
+    /// reach it under (`None`: the marker itself); `arg_origin_done` keeps
+    /// each (marker, origin, key) once.
+    pub arg_store_origins: FxHashMap<Tok, Vec<(Tok, Option<Atom>)>>,
+    pub arg_origin_done: crate::pts::FxHashSet<(Tok, Tok, Option<Atom>)>,
     pub arg_linked: crate::pts::FxHashSet<(Tok, Tok)>,
     /// Argument markers, a bit per token.
     pub arg_bits: Vec<u64>,
@@ -2470,10 +2473,14 @@ impl Model {
         if !self.members_settled.get_mut().is_empty() {
             self.members_settled.get_mut().clear();
         }
-        self.arg_parents.entry(m).or_default().push(r);
-        // DECISIONS 187: the stores `m` takes are those made on `r`, on the
-        // argument markers above it and on their keyed reaches.
-        if !self.arg_stores.is_empty()
+        // DECISIONS 187: the stores `m` takes are those made on `r`, on its
+        // keyed reaches, and on the markers whose stores reached `r`.
+        let keyed_stores = self.keyed_reach.get(&r).map_or(false, |v| {
+            v.iter().any(|(_, kr)| self.arg_stores.contains_key(kr))
+        });
+        if self.arg_stores.contains_key(&r)
+            || keyed_stores
+            || self.arg_store_origins.contains_key(&r)
             || self.arg_src_watch.contains_key(&r)
             || self.handover_watch.contains_key(&r)
             || self.arg_src_flows.contains_key(&r)

@@ -1641,10 +1641,14 @@ impl Model {
     /// member several argument markers stand for takes the stores once and
     /// no argument marker on the way keeps a copy: a store costs the
     /// markers below it, not the paths to them.
+    /// `origin`: the marker the stores were made on; each argument marker the
+    /// walk reaches records it with the key (`arg_store_origins`), so a marker
+    /// linking in there later takes its stores (`replay_marker_links`).
     pub(crate) fn arg_store_fan(
         &mut self,
         from: Vec<(Tok, Option<Atom>)>,
         ss: &[(Atom, NodeId, SiteId)],
+        origin: Tok,
     ) {
         let mut st = from;
         let mut seen = crate::pts::FxHashSet::default();
@@ -1676,6 +1680,9 @@ impl Model {
                 // A keyed reach's own reach: no member stands under it.
                 (Some(_), Some(_)) => {}
                 (k, None) => {
+                    if self.arg_origin_done.insert((x, origin, k)) {
+                        self.arg_store_origins.entry(x).or_default().push((origin, k));
+                    }
                     if k.is_none() {
                         for &(a, src, site) in ss {
                             self.arg_store_on(x, a, src, site);
@@ -1705,22 +1712,6 @@ impl Model {
                 self.store_into(i, Key::Named(a), src, site);
             }
         }
-    }
-
-    /// DECISIONS 187: the argument markers `t` stands in and itself.
-    fn arg_markers_above(&mut self, t: Tok) -> Vec<Tok> {
-        let mut out = Vec::new();
-        let mut st = vec![t];
-        let mut seen = crate::pts::FxHashSet::default();
-        while let Some(x) = st.pop() {
-            if !seen.insert(x) {
-                continue;
-            }
-            self.work += 1;
-            out.push(x);
-            st.extend(self.arg_parents.get(&x).into_iter().flatten().copied());
-        }
-        out
     }
 
     pub(crate) fn store_into(&mut self, t: Tok, key: Key, src: NodeId, site: SiteId) {
@@ -1824,7 +1815,7 @@ impl Model {
                         .map(|&m| (m, None))
                         .collect(),
                 };
-                self.arg_store_fan(from, &[(a, src, site)]);
+                self.arg_store_fan(from, &[(a, src, site)], t);
             }
             return;
         }
@@ -2490,44 +2481,20 @@ impl Model {
                 return;
             }
             // DECISIONS 187: a store stays on the marker it was made on. What
-            // reaches `r` is made on `r` or an argument marker above it; what
-            // reaches `r`'s reach under `k`, on such a marker's keyed reach
-            // under `k` or on an argument marker that keyed reach is a member
-            // of, or above that. `m` takes them as `r` would.
-            let above = self.arg_markers_above(r);
-            let mut plain: Vec<(Atom, NodeId, SiteId)> = Vec::new();
-            let mut keyed: Vec<(Atom, Vec<(Atom, NodeId, SiteId)>)> = Vec::new();
-            for &x in &above {
-                plain.extend(self.arg_stores.get(&x).into_iter().flatten().copied());
-                for (k, kr) in self.keyed_reach.get(&x).cloned().unwrap_or_default() {
-                    let mut ss = Vec::new();
-                    for y in self.arg_markers_above(kr) {
-                        ss.extend(self.arg_stores.get(&y).into_iter().flatten().copied());
-                    }
-                    if !ss.is_empty() {
-                        keyed.push((k, ss));
-                    }
-                }
+            // reaches `r` is made on `r`, on its keyed reaches (under their
+            // key), or on a marker whose walk reached `r`
+            // (`arg_store_origins`); `m` takes each as `r` did, its walk
+            // recording the origin below `m` in turn.
+            let mut from: Vec<(Tok, Option<Atom>)> = vec![(r, None)];
+            for (k, kr) in self.keyed_reach.get(&r).cloned().unwrap_or_default() {
+                from.push((kr, Some(k)));
             }
-            let dedup = |v: &mut Vec<(Atom, NodeId, SiteId)>| {
-                v.sort_unstable();
-                v.dedup_by_key(|&mut (a, src, _)| (a, src));
-            };
-            dedup(&mut plain);
-            if !plain.is_empty() {
-                self.arg_store_fan(vec![(m, None)], &plain);
-            }
-            keyed.sort_by_key(|&(k, _)| k);
-            let mut i = 0;
-            while i < keyed.len() {
-                let k = keyed[i].0;
-                let mut ss = Vec::new();
-                while i < keyed.len() && keyed[i].0 == k {
-                    ss.append(&mut keyed[i].1);
-                    i += 1;
+            from.extend(self.arg_store_origins.get(&r).cloned().unwrap_or_default());
+            for (o, k) in from {
+                let ss = self.arg_stores.get(&o).cloned().unwrap_or_default();
+                if !ss.is_empty() {
+                    self.arg_store_fan(vec![(m, k)], &ss, o);
                 }
-                dedup(&mut ss);
-                self.arg_store_fan(vec![(m, Some(k))], &ss);
             }
             // DECISIONS 136: a flow whose stored value `r`'s members stand for.
             // Only `m` is new below `r`: the walk from `r`'s base has seen
