@@ -1004,6 +1004,7 @@ pub(crate) fn compute_in<'a>(
     } {
         g.m.solve();
     }
+    g.m.settle_keyed_uses();
     g.settle_parent_layouts();
     if cfg.profile || cfg.explain {
         let mut kinds = [0usize; 6];

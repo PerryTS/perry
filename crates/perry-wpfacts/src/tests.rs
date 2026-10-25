@@ -1322,6 +1322,33 @@ fn an_argument_marker_leaves_beside_when_a_valued_member_links() {
     );
 }
 
+/// A model with one function `f` whose parameter markers the tests make.
+fn marker_model() -> crate::model::Model {
+    use crate::model::{FuncInfo, TokKind, NO_CTX, NO_FN};
+    let mut m = copy_solver_model();
+    let (this, ret, args) = (m.node_l("this"), m.node_l("ret"), m.node_l("args"));
+    let token = m.tok(TokKind::Func(0, NO_CTX));
+    m.funcs.push(FuncInfo {
+        module: 0,
+        func_id: 0,
+        name: "f".into(),
+        params: Vec::new(),
+        rest: None,
+        this,
+        ret,
+        args_all: args,
+        has_arguments: false,
+        token,
+        ctor_of: None,
+        lexical_this: false,
+        no_summary: true,
+        gen_step: false,
+        forwards_super: false,
+        parent: NO_FN,
+    });
+    m
+}
+
 #[test]
 fn a_use_through_an_argument_marker_is_solve_work() {
     use crate::model::MARK_ESCAPE;
@@ -1341,8 +1368,9 @@ fn a_use_through_an_argument_marker_is_solve_work() {
         m.link_marker(ri, r);
     }
     let a = m.atom("k");
+    let k = m.keyed_reach_of(r, a);
     let w = m.work;
-    m.keyed_use(r, a, MARK_ESCAPE);
+    m.mark_use(k, MARK_ESCAPE);
     assert!(
         m.work - w >= n,
         "a keyed use walked {n} members for {} work",
@@ -1359,27 +1387,135 @@ fn a_use_through_an_argument_marker_is_solve_work() {
 
 #[test]
 fn a_keyed_use_reaches_every_marker_an_argument_marker_stands_for() {
-    use crate::model::MARK_ESCAPE;
-    // Design §18.4: argument marker `r2` stands for `r1` and `r3`. A use of
-    // what `r2` reaches under `inner` is a use of what each of them reaches
-    // under `inner`: `r1` is linked after the use (the callee read
+    use crate::model::{MARK_ESCAPE, MARK_READ};
+    // Design §18.4: argument marker `r2` stands for `r1` and `r3`, and `r1`
+    // for `r2` (a recursion passing its argument on): `mk1` and `mk3`, the
+    // markers they stand for, take every use of what `r1` and `r2` reach
+    // under a key. `r1` is linked after the use of `inner` (the callee read
     // `p.inner` before the second caller's marker arrived), `r3` before.
-    let mut m = copy_solver_model();
+    let mut m = marker_model();
+    let (mk1, mk3) = (m.param_marker_tok(0, 0), m.param_marker_tok(0, 1));
     let (n1, n2, n3) = (m.node_l("p1"), m.node_l("p2"), m.node_l("p3"));
     let r1 = m.arg_marker(n1);
     let r2 = m.arg_marker(n2);
     let r3 = m.arg_marker(n3);
-    let a = m.atom("inner");
+    let (inner, other) = (m.atom("inner"), m.atom("other"));
+    m.link_marker(mk1, r1);
+    m.link_marker(mk3, r3);
     m.link_marker(r3, r2);
-    m.keyed_use(r2, a, MARK_ESCAPE);
+    let k = m.keyed_reach_of(r2, inner);
+    m.mark_use(k, MARK_ESCAPE);
     m.link_marker(r1, r2);
-    for r in [r1, r3] {
-        assert!(
-            m.keyed_uses
-                .get(&r)
-                .is_some_and(|v| v.contains(&(a, MARK_ESCAPE))),
+    m.link_marker(r2, r1);
+    let k = m.keyed_reach_of(r1, other);
+    m.mark_use(k, MARK_READ);
+    m.settle_keyed_uses();
+    for mk in [mk1, mk3] {
+        assert_eq!(
+            m.keyed_uses.get(&mk),
+            Some(&vec![(inner, MARK_ESCAPE), (other, MARK_READ)]),
             "{:?}",
             m.keyed_uses
         );
+    }
+    // A keyed use is the contract's fact alone: the marker itself is not ⊤.
+    assert!(!m.marker_is_top(mk1) && !m.marker_is_top(mk3));
+}
+
+#[test]
+fn a_keyed_use_is_a_use_of_each_reach_marker_it_stands_for() {
+    use crate::model::MARK_ESCAPE;
+    // Design §18.4 with DECISIONS 42: what a parameter reaches arrives at a
+    // shared body (`r` stands for the reach marker `pr`); the body lets
+    // `p.k` escape, so `pr`, which reaches itself under every key, escaped
+    // and reads as ⊤ during the solve. A member that links in after the
+    // use (`pr2`) takes it too.
+    let mut m = marker_model();
+    let (mk, mk2) = (m.param_marker_tok(0, 0), m.param_marker_tok(0, 1));
+    let (pr, pr2) = (m.marker_reach[&mk], m.marker_reach[&mk2]);
+    let n0 = m.node_l("p");
+    let r = m.arg_marker(n0);
+    m.link_marker(pr, r);
+    let a = m.atom("k");
+    let k = m.keyed_reach_of(r, a);
+    m.mark_use(k, MARK_ESCAPE);
+    assert!(m.marker_is_top(pr), "the reach member escaped");
+    assert!(!m.marker_is_top(pr2));
+    m.link_marker(pr2, r);
+    assert!(
+        m.marker_is_top(pr2),
+        "a late reach member takes the keyed use"
+    );
+}
+
+#[test]
+fn a_repeated_keyed_use_costs_one_step() {
+    use crate::model::MARK_READ;
+    // A keyed use costs what the use names: once `p.k` was read, reading
+    // it again (each `p.k.x` reads it) is the step on its keyed reach
+    // marker alone, not a walk to the argument marker and its members.
+    let mut m = marker_model();
+    let mk = m.param_marker_tok(0, 0);
+    let n0 = m.node_l("p");
+    let r = m.arg_marker(n0);
+    for _ in 0..64 {
+        let ni = m.node_l("pi");
+        let ri = m.arg_marker(ni);
+        m.link_marker(mk, ri);
+        m.link_marker(ri, r);
+    }
+    let a = m.atom("k");
+    let k = m.keyed_reach_of(r, a);
+    m.mark_use(k, MARK_READ);
+    let reps = 100;
+    let w = m.work;
+    for _ in 0..reps {
+        m.mark_use(k, MARK_READ);
+    }
+    assert!(
+        m.work - w <= reps,
+        "{reps} repeated uses cost {} work",
+        m.work - w
+    );
+}
+
+#[test]
+fn a_keyed_use_in_a_recursion_walks_each_member_once_per_bit() {
+    use crate::model::MARK_ESCAPE;
+    // The checker.ts#u18 / typescript.js createTypeChecker fan-out: a ring
+    // of `n` argument markers (helpers passing their argument around a
+    // recursion) each stand for every other; `keys` keys of it are used.
+    // Each key costs its own use; the bits cross each member once, so the
+    // work is keys + n, not keys x n. After the solve every parameter
+    // marker in the ring has every key.
+    let mut m = marker_model();
+    let n = 32u32;
+    let keys = 64u64;
+    let rs: Vec<_> = (0..n)
+        .map(|_| {
+            let p = m.node_l("p");
+            m.arg_marker(p)
+        })
+        .collect();
+    let mks: Vec<_> = (0..n).map(|i| m.param_marker_tok(0, i)).collect();
+    for i in 0..n as usize {
+        m.link_marker(mks[i], rs[i]);
+        m.link_marker(rs[(i + 1) % n as usize], rs[i]);
+    }
+    let w = m.work;
+    let atoms: Vec<_> = (0..keys).map(|i| m.atom(&format!("k{i}"))).collect();
+    for &a in &atoms {
+        let k = m.keyed_reach_of(rs[0], a);
+        m.mark_use(k, MARK_ESCAPE);
+    }
+    let spent = m.work - w;
+    assert!(
+        spent <= 3 * keys + 2 * n as u64 + 4,
+        "{keys} keys on a ring of {n} cost {spent} work"
+    );
+    m.settle_keyed_uses();
+    for mk in mks {
+        let v = m.keyed_uses.get(&mk).map_or(0, |v| v.len());
+        assert_eq!(v as u64, keys, "a ring member has {v} of {keys} keys");
     }
 }

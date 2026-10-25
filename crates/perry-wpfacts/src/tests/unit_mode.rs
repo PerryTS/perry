@@ -2000,6 +2000,20 @@ fn a_use_in_a_shared_body_is_a_use_of_each_callers_argument() {
 }
 
 #[test]
+fn a_keyed_use_in_a_recursion_is_a_use_of_each_callers_argument() {
+    // Design §18.4 with DECISIONS 44 when the shared bodies recurse: `h`
+    // and `mid` pass their argument to each other, so their argument
+    // markers stand for each other (one cycle of the member graph). `h`
+    // lets `p.inner` escape; the keyed use reaches `keep`'s parameter
+    // through the cycle (settled after the solve), so the caller's
+    // `o.inner` is not its own.
+    let b = "function h(p: any, n: number) { if (n > 0) mid(p, n - 1); (globalThis as any).k = p.inner; }\nfunction mid(p: any, n: number) { h(p, n); }\nexport function keep(p: any) { mid(p, 2); }\nexport function keep2(p: any) { mid(p, 2); }";
+    let m = "import { keep, keep2 } from './b'; function main() { const o = { inner: { v: 1 } }; keep(o); keep2({ inner: 0 }); (globalThis as any).k.v = 'x'; console.log(o.inner.v); } main(); main();";
+    let pf = units_of(&[("b", b), ("m", m)]);
+    assert!(!proven(&pf, "v"), "{}", pf.dump_text());
+}
+
+#[test]
 fn a_computed_key_use_in_a_shared_body_is_a_use_of_each_callers_argument() {
     // DECISIONS 44 under design §18.4: a named key reaches through its keyed
     // reach marker; a computed key through the marker's reach marker, which

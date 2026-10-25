@@ -894,9 +894,15 @@ pub struct Model {
     pub keyed_reach: FxHashMap<Tok, Vec<(Atom, Tok)>>,
     /// An argument marker's keyed reach marker -> (the argument marker, key).
     pub keyed_parent: FxHashMap<Tok, (Tok, Atom)>,
-    /// Uses under a named key that reached a marker through argument
-    /// markers (`keyed_use`), by marker.
+    /// A parameter marker's uses under a named key that reach it through
+    /// argument markers, settled after the solve (`settle_keyed_uses`):
+    /// the contract publishes them.
     pub keyed_uses: FxHashMap<Tok, Vec<(Atom, u8)>>,
+    /// An argument marker: the uses some named key of it had, its own
+    /// (its keyed reach markers') and its containers' (`keyed_use`). During
+    /// the solve a keyed use matters to the markers it stands for only as
+    /// these bits; the keys themselves are settled after it.
+    pub keyed_any: FxHashMap<Tok, u8>,
     /// Markers that read as ⊤ (DECISIONS 42), a bit per token: the
     /// contract records the escape, so the consumer sinks the argument and
     /// reads nothing else of it; the marker says no more than the ⊤ beside
@@ -1412,8 +1418,16 @@ impl Model {
                     self.mark_use(x, b);
                     continue;
                 }
-                if let Some(&(p, a)) = self.keyed_parent.get(&x) {
-                    self.keyed_use(p, a, b);
+                // A use of what argument marker `p` reaches under one key is
+                // recorded on that key's reach marker `x`, the token the use
+                // names: a repeated use costs this step alone.
+                if let Some(&(p, _)) = self.keyed_parent.get(&x) {
+                    let u = self.marker_use.entry(x).or_default();
+                    let new = b & !*u;
+                    *u |= b;
+                    if new != 0 {
+                        self.keyed_use(p, new);
+                    }
                     continue;
                 }
                 let u = self.marker_use.entry(x).or_default();
@@ -1482,8 +1496,9 @@ impl Model {
                 self.param_marker.insert(r, fi);
             }
             // An argument marker's keyed reach: its uses are its members'
-            // uses under the same key (DECISIONS 44), kept per (marker, key)
-            // in `keyed_uses`, not as a token per member (`keyed_use`).
+            // uses under the same key (DECISIONS 44), recorded on this token
+            // and settled onto the parameter markers after the solve
+            // (`settle_keyed_uses`), not as a token per member.
             None => {
                 let w = (r >> 6) as usize;
                 if self.arg_bits.len() <= w {
@@ -1500,11 +1515,15 @@ impl Model {
         r
     }
 
-    /// A use `bits` of what marker `t` reaches through named key `a`
-    /// (design §18.4). A parameter marker records it for its contract; an
-    /// argument marker passes it to each marker it stands for; a reach
-    /// marker reaches itself under every key.
-    pub(crate) fn keyed_use(&mut self, t: Tok, a: Atom, bits: u8) {
+    /// A use `bits` of what argument marker `t` reaches through some named
+    /// key (design §18.4). Each marker it stands for takes the bits: a
+    /// reach marker as a use of itself (it reaches itself under every key),
+    /// an argument marker passes them on, once per bit. A parameter marker
+    /// takes nothing here: which keys it was used under is a fact for its
+    /// contract alone, settled after the solve (`settle_keyed_uses`). So a
+    /// key costs the use that names it, not a walk over every marker the
+    /// argument marker stands for.
+    pub(crate) fn keyed_use(&mut self, t: Tok, bits: u8) {
         let mut st = vec![(t, bits)];
         while let Some((x, b)) = st.pop() {
             // Each marker the walk visits is solve work (113-CWL3).
@@ -1513,24 +1532,139 @@ impl Model {
                 self.mark_use(x, b);
                 continue;
             }
-            let v = self.keyed_uses.entry(x).or_default();
-            let new = match v.iter_mut().find(|(k, _)| *k == a) {
-                Some((_, u)) => {
-                    let new = b & !*u;
-                    *u |= b;
-                    new
-                }
-                None => {
-                    v.push((a, b));
-                    b
-                }
-            };
-            if new == 0 {
+            if !self.is_arg_marker(x) {
                 continue;
             }
-            if self.is_arg_marker(x) {
+            let u = self.keyed_any.entry(x).or_default();
+            let new = b & !*u;
+            *u |= b;
+            if new != 0 {
                 st.extend(self.arg_members[&x].iter().map(|&m| (m, new)));
             }
+        }
+    }
+
+    /// The keyed uses of each parameter marker that some argument marker
+    /// stands for (design §18.4, DECISIONS 44): the keys every argument
+    /// marker standing for it, directly or through other argument markers,
+    /// was used under. Read once the model is final, in one pass over the
+    /// member graph: the markers of a cycle (a recursion passing its
+    /// argument on) stand for each other and have one set of uses, so its
+    /// strongly connected components are taken in topological order and
+    /// each key set moves along each edge between them once.
+    pub(crate) fn settle_keyed_uses(&mut self) {
+        self.keyed_uses.clear();
+        // The argument markers a keyed use walks through (`keyed_use`).
+        let inner = |s: &Self, x: Tok| s.is_arg_marker(x) && !s.reach_marker.contains(&x);
+        let mut ids: Vec<Tok> = self
+            .arg_members
+            .keys()
+            .copied()
+            .filter(|&x| inner(self, x))
+            .collect();
+        ids.sort_unstable();
+        let at: FxHashMap<Tok, usize> = ids.iter().enumerate().map(|(i, &t)| (t, i)).collect();
+        let n = ids.len();
+        let succ: Vec<Vec<usize>> = ids
+            .iter()
+            .map(|x| {
+                self.arg_members[x]
+                    .iter()
+                    .filter_map(|m| at.get(m).copied())
+                    .collect()
+            })
+            .collect();
+        // Tarjan, iterative: a component gets its number after every
+        // component it reaches, so descending numbers are topological.
+        const NONE: usize = usize::MAX;
+        let (mut index, mut low, mut comp) = (vec![NONE; n], vec![0; n], vec![NONE; n]);
+        let mut on = vec![false; n];
+        let (mut stack, mut next, mut ncomp) = (Vec::new(), 0usize, 0usize);
+        for s0 in 0..n {
+            if index[s0] != NONE {
+                continue;
+            }
+            let mut frames = vec![(s0, 0usize)];
+            index[s0] = next;
+            low[s0] = next;
+            next += 1;
+            stack.push(s0);
+            on[s0] = true;
+            while let Some(&(v, e)) = frames.last() {
+                if let Some(&w) = succ[v].get(e) {
+                    frames.last_mut().unwrap().1 += 1;
+                    if index[w] == NONE {
+                        index[w] = next;
+                        low[w] = next;
+                        next += 1;
+                        stack.push(w);
+                        on[w] = true;
+                        frames.push((w, 0));
+                    } else if on[w] {
+                        low[v] = low[v].min(index[w]);
+                    }
+                    continue;
+                }
+                frames.pop();
+                if let Some(&(u, _)) = frames.last() {
+                    low[u] = low[u].min(low[v]);
+                }
+                if low[v] == index[v] {
+                    while let Some(w) = stack.pop() {
+                        on[w] = false;
+                        comp[w] = ncomp;
+                        if w == v {
+                            break;
+                        }
+                    }
+                    ncomp += 1;
+                }
+            }
+        }
+        let mut members_of: Vec<Vec<usize>> = vec![Vec::new(); ncomp];
+        for v in 0..n {
+            members_of[comp[v]].push(v);
+        }
+        let mut acc: Vec<FxHashMap<Atom, u8>> = vec![FxHashMap::default(); ncomp];
+        let mut out: FxHashMap<Tok, FxHashMap<Atom, u8>> = FxHashMap::default();
+        let merge = |into: &mut FxHashMap<Atom, u8>, from: &FxHashMap<Atom, u8>| {
+            for (&a, &b) in from {
+                *into.entry(a).or_default() |= b;
+            }
+        };
+        for c in (0..ncomp).rev() {
+            let mut set = std::mem::take(&mut acc[c]);
+            // Its own uses: what its keyed reach markers were used for.
+            for &v in &members_of[c] {
+                for &(a, r) in self.keyed_reach.get(&ids[v]).into_iter().flatten() {
+                    let u = self.marker_use.get(&r).copied().unwrap_or(0);
+                    if u != 0 {
+                        *set.entry(a).or_default() |= u;
+                    }
+                }
+            }
+            if set.is_empty() {
+                continue;
+            }
+            for &v in &members_of[c] {
+                for &m in &self.arg_members[&ids[v]] {
+                    match at.get(&m) {
+                        Some(&w) if comp[w] != c => merge(&mut acc[comp[w]], &set),
+                        Some(_) => {}
+                        None if self.param_marker.contains_key(&m)
+                            && !self.reach_marker.contains(&m) =>
+                        {
+                            merge(out.entry(m).or_default(), &set)
+                        }
+                        None => {}
+                    }
+                }
+            }
+        }
+        for (p, set) in out {
+            let mut v: Vec<(Atom, u8)> = set.into_iter().collect();
+            v.sort_unstable();
+            self.keyed_uses.insert(p, v);
         }
     }
 
@@ -1656,10 +1790,12 @@ impl Model {
         if (mr, rr) != (m, r) {
             self.link_marker(mr, rr);
         }
-        // And per key (§18.4): what `m` reaches through `k` takes the uses
-        // of what `r` reaches through `k` so far (later ones: `keyed_use`).
-        for (a, b) in self.keyed_uses.get(&r).cloned().unwrap_or_default() {
-            self.keyed_use(m, a, b);
+        // And per key (§18.4): what `m` reaches through a key takes the
+        // uses of what `r` reaches through it so far, as bits (later ones:
+        // `keyed_use`; the keys: `settle_keyed_uses`).
+        let k = self.keyed_any.get(&r).copied().unwrap_or(0);
+        if k != 0 {
+            self.keyed_use(m, k);
         }
     }
 
