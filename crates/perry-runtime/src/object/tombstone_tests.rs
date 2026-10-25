@@ -303,6 +303,64 @@ fn a_later_non_configurable_descriptor_refuses_delete() {
     }
 }
 
+/// An old receiver (born outside the nursery, so no minor enumerates it) with
+/// 20 keys, two of them deleted (the delete installs a young metadata record
+/// and a young overflow), then `added_after`.
+unsafe fn old_receiver_with_young_overflow() -> *mut crate::object::ObjectHeader {
+    let slots = 24usize;
+    let header_size = std::mem::size_of::<crate::object::ObjectHeader>();
+    let obj = crate::arena::arena_alloc_gc_old(
+        header_size + slots * std::mem::size_of::<u64>(),
+        8,
+        crate::gc::GC_TYPE_OBJECT,
+    ) as *mut crate::object::ObjectHeader;
+    (*obj).class_id = 0;
+    (*obj).parent_class_id = 0;
+    (*obj).meta = std::ptr::null_mut();
+    let fields = (obj as *mut u8).add(header_size) as *mut u64;
+    for i in 0..slots {
+        // GC_STORE_AUDIT(INIT): fresh unpublished storage, pointer-free.
+        std::ptr::write(fields.add(i), crate::value::TAG_UNDEFINED);
+    }
+    crate::gc::layout_init_pointer_free(obj as *mut u8);
+    super::shapes::birth_publish_object_shape(obj, slots as u32);
+    assert!(!crate::arena::pointer_in_nursery(obj as usize));
+    for i in 0..20 {
+        js_object_set_field_by_name(obj, key(&format!("key_number_{i:02}")), i as f64);
+    }
+    for victim in ["key_number_11", "key_number_03"] {
+        assert_eq!(
+            super::delete_rest::js_object_delete_field(obj, key(victim)),
+            1
+        );
+    }
+    js_object_set_field_by_name(obj, key("added_after"), 42.0);
+    obj
+}
+
+/// Every key and value of [`old_receiver_with_young_overflow`] reads back.
+unsafe fn assert_old_receiver_intact(obj: *mut crate::object::ObjectHeader, at: &str) {
+    assert!(crate::object::overflow::has_overflow(obj), "{at}");
+    assert_eq!(own_names(obj).len(), 19, "{at}");
+    for i in 0..20u32 {
+        let value = js_object_get_field_by_name(obj, key(&format!("key_number_{i:02}")));
+        if i == 3 || i == 11 {
+            assert!(value.is_undefined(), "{at}");
+        } else {
+            assert_eq!(
+                value.bits(),
+                f64::from(i).to_bits(),
+                "key {i} after the minor, {at}"
+            );
+        }
+    }
+    assert_eq!(
+        js_object_get_field_by_name(obj, key("added_after")).bits(),
+        42.0f64.to_bits(),
+        "{at}"
+    );
+}
+
 /// A receiver born outside the nursery (no minor enumerates it) keeps its
 /// young overflow, keys and values across a minor: the overflow edge from
 /// its old metadata is remembered (#9200's failure shape).
@@ -310,53 +368,9 @@ fn a_later_non_configurable_descriptor_refuses_delete() {
 fn an_old_receiver_keeps_its_overflow_across_a_minor() {
     let _global = crate::gc::global_side_table_test_lock();
     unsafe {
-        let slots = 24usize;
-        let header_size = std::mem::size_of::<crate::object::ObjectHeader>();
-        let obj = crate::arena::arena_alloc_gc_old(
-            header_size + slots * std::mem::size_of::<u64>(),
-            8,
-            crate::gc::GC_TYPE_OBJECT,
-        ) as *mut crate::object::ObjectHeader;
-        (*obj).class_id = 0;
-        (*obj).parent_class_id = 0;
-        (*obj).meta = std::ptr::null_mut();
-        let fields = (obj as *mut u8).add(header_size) as *mut u64;
-        for i in 0..slots {
-            // GC_STORE_AUDIT(INIT): fresh unpublished storage, pointer-free.
-            std::ptr::write(fields.add(i), crate::value::TAG_UNDEFINED);
-        }
-        crate::gc::layout_init_pointer_free(obj as *mut u8);
-        super::shapes::birth_publish_object_shape(obj, slots as u32);
-        assert!(!crate::arena::pointer_in_nursery(obj as usize));
-        for i in 0..20 {
-            js_object_set_field_by_name(obj, key(&format!("key_number_{i:02}")), i as f64);
-        }
-        for victim in ["key_number_11", "key_number_03"] {
-            assert_eq!(
-                super::delete_rest::js_object_delete_field(obj, key(victim)),
-                1
-            );
-        }
-        js_object_set_field_by_name(obj, key("added_after"), 42.0);
+        let obj = old_receiver_with_young_overflow();
         let _ = crate::gc::gc_collect_minor();
-        assert!(crate::object::overflow::has_overflow(obj));
-        assert_eq!(own_names(obj).len(), 19);
-        for i in 0..20u32 {
-            let value = js_object_get_field_by_name(obj, key(&format!("key_number_{i:02}")));
-            if i == 3 || i == 11 {
-                assert!(value.is_undefined());
-            } else {
-                assert_eq!(
-                    value.bits(),
-                    f64::from(i).to_bits(),
-                    "key {i} after the minor"
-                );
-            }
-        }
-        assert_eq!(
-            js_object_get_field_by_name(obj, key("added_after")).bits(),
-            42.0f64.to_bits()
-        );
+        assert_old_receiver_intact(obj, "one receiver");
     }
 }
 
@@ -438,5 +452,45 @@ fn delete_with_descriptors_transitions_and_still_refuses_non_configurable() {
             js_object_get_field_by_name(obj, locked).bits(),
             5.0f64.to_bits()
         );
+    }
+}
+
+/// The same receiver at every position on several generation pages. The
+/// remembered set is page granular, so a receiver whose metadata edge is not
+/// remembered still survives when a neighbour happened to dirty its page:
+/// whether it did depends on everything allocated old before it (a smaller
+/// static layout set was enough to move it onto a clean page). Each round
+/// shifts the old bump position by a pointer-free filler, and every round
+/// must remember the edge itself and keep the overflow.
+#[test]
+fn an_old_receiver_keeps_its_overflow_at_every_page_offset() {
+    let _global = crate::gc::global_side_table_test_lock();
+    unsafe {
+        let mut pages = Vec::new();
+        for round in 0..256usize {
+            let _filler = crate::arena::arena_alloc_gc_old(
+                8 * (1 + round % 7),
+                8,
+                crate::gc::GC_TYPE_STRING,
+            );
+            let obj = old_receiver_with_young_overflow();
+            let meta_slot = std::ptr::addr_of!((*obj).meta) as usize;
+            let at = format!("round {round}, meta slot {meta_slot:#x}");
+            assert!(crate::arena::pointer_in_nursery((*obj).meta as usize), "premise, {at}");
+            assert!(
+                crate::gc::old_slot_page_is_remembered_for_test(meta_slot),
+                "the young metadata edge is not remembered, {at}"
+            );
+            let _ = crate::gc::gc_collect_minor();
+            assert_old_receiver_intact(obj, &at);
+            let page = crate::arena::generation_page_for_addr(meta_slot);
+            if !pages.contains(&page) {
+                pages.push(page);
+            }
+            if pages.len() > 4 {
+                return;
+            }
+        }
+        panic!("premise: the sweep visited only {} generation pages", pages.len());
     }
 }

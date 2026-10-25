@@ -86,6 +86,7 @@ mod native_this_alias;
 mod net_transport;
 mod noncollecting_root_lock;
 mod object_create;
+mod old_birth_tenured;
 mod old_free_intrusive;
 mod oldgen;
 mod os_tag;

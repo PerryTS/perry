@@ -1478,11 +1478,6 @@ pub(super) fn evacuate_tenured_nursery_objects_collecting(
             layout_transfer(user_ptr, new_user);
             (*new_header).gc_flags |= GC_FLAG_MARKED;
             gc_type_after_payload_move((*header).obj_type, user_ptr as usize, new_user as usize);
-            // Carry TENURED forward — the new copy is logically
-            // the same object, just relocated. Without this the
-            // age-bump pass on the next cycle would treat it as
-            // a fresh young object.
-            (*new_header).gc_flags |= GC_FLAG_TENURED;
             evacuated_original_headers.push(header);
             evacuated_new_headers.push(new_header);
             evacuated.objects += 1;
@@ -1604,9 +1599,8 @@ pub(super) fn evacuate_selected_old_pages_collecting(
             );
             (*new_header)._reserved = (*header)._reserved;
             layout_transfer(user_ptr, new_user);
-            (*new_header).gc_flags |= GC_FLAG_MARKED
-                | GC_FLAG_TENURED
-                | (flags & (GC_FLAG_SHAPE_SHARED | GC_FLAG_INTERNED));
+            (*new_header).gc_flags |=
+                GC_FLAG_MARKED | (flags & (GC_FLAG_SHAPE_SHARED | GC_FLAG_INTERNED));
             gc_type_after_payload_move((*header).obj_type, user_ptr as usize, new_user as usize);
 
             evacuated_original_headers.push(header);
