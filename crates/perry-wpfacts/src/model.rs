@@ -236,9 +236,6 @@ pub struct FuncInfo {
     /// The function whose body creates this closure (`NO_FN` for
     /// declarations, methods and builtins).
     pub parent: FnIdx,
-    /// The calls whose results take this function's result through
-    /// `Cons::RetInto` (DECISIONS 44 (b)).
-    pub calls: Vec<CallId>,
 }
 
 #[derive(Clone, Debug)]
@@ -618,6 +615,12 @@ pub struct Node {
     /// marker is the caller's argument at each call's result
     /// (DECISIONS 44 (b)).
     pub rel: bool,
+    /// The result node of a run: what it returns of no parameter of the
+    /// run leaves through it as one marker (MRK, `Model::crosses`).
+    pub result: bool,
+    /// A field node of a marker (its any-key, keyed and all-fields
+    /// nodes): it holds the marker's reach markers as themselves.
+    pub of_marker: bool,
 }
 
 /// A store site: where, and whether it is a construction-phase writer for
@@ -951,11 +954,6 @@ pub struct Model {
     /// its home, the instance whose relative parameter holds it (+ 1; 0:
     /// none, the family is never substituted).
     pub fam: Vec<(Tok, u32)>,
-    /// Families that left their home's run (a token entered a node of no
-    /// run of the home: the heap, a closure cell, a shared node, another
-    /// instance), a bit per marker. Monotone: from then on the callers get
-    /// the family itself, every caller's value, as without (b).
-    pub fam_out: Vec<u64>,
     /// The `this` node of each instance method / accessor of a class: the
     /// binding its entry guard tests (design §11.4).
     pub this_class: FxHashMap<NodeId, TmplId>,
@@ -1533,8 +1531,6 @@ impl Model {
         if home != 0 {
             self.set_fam(r, t, home);
         }
-        let rany = self.field_any(r);
-        self.add_tok(rany, r);
         self.reach_marker.insert(r);
         self.keyed_reach.entry(t).or_default().push((a, r));
         match self.param_marker.get(&t).copied() {
@@ -1558,6 +1554,9 @@ impl Model {
                 }
             }
         }
+        // A marker before its field node: that node is of the marker.
+        let rany = self.field_any(r);
+        self.add_tok(rany, r);
         r
     }
 
@@ -1895,10 +1894,28 @@ impl Model {
         self.fam.get(t as usize).map_or(0, |&(_, h)| h)
     }
 
-    /// The family of argument marker `b` left its home's run.
+    /// Marker `t` arriving at node `n` crosses into it as a member of
+    /// `n`'s own marker (MRK; DECISIONS 44 for parameters): a marker is a
+    /// token only inside its run. A parameter takes every marker; a node
+    /// of no run of `t`'s family (another run's node, storage) takes its
+    /// family tokens; a result or storage takes the markers of no run
+    /// (another node's marker, a contract parameter's). Storage is every
+    /// node of no run but an observation node, a sink and a marker's own
+    /// field nodes. Inside its run a family token stays itself, so a
+    /// result can return it relative to each call (44 (b)).
     #[inline]
-    pub(crate) fn fam_left(&self, b: Tok) -> bool {
-        marker_top_bit(&self.fam_out, b)
+    pub(crate) fn crosses(&self, n: NodeId, t: Tok) -> bool {
+        let node = &self.nodes[n as usize];
+        if node.param {
+            return self.is_marker(t);
+        }
+        if node.obs || node.sink || node.of_marker || !self.is_marker(t) {
+            return false;
+        }
+        match self.fam_home(t) {
+            0 => node.result || node.frame == 0,
+            h => h != node.frame,
+        }
     }
 
     /// What a load from marker `m` gives (solve.rs `field`): under a named
@@ -1912,6 +1929,15 @@ impl Model {
             Some(a) => self.keyed_reach_of(m, a),
             None => self.marker_reach[&m],
         }
+    }
+
+    /// What marker `m` reaches under a computed key: its reach marker, or
+    /// itself for a reach marker.
+    pub(crate) fn reach_of(&self, m: Tok) -> Tok {
+        if self.reach_marker.contains(&m) {
+            return m;
+        }
+        self.marker_reach.get(&m).copied().unwrap_or(m)
     }
 
     /// Token `t` of argument marker `b`'s family, with marker `m` in place
@@ -1950,7 +1976,13 @@ impl Model {
     pub(crate) fn family(&self, b: Tok) -> Vec<Tok> {
         let mut v = vec![b];
         v.extend(self.marker_reach.get(&b).copied());
-        v.extend(self.keyed_reach.get(&b).into_iter().flatten().map(|&(_, r)| r));
+        v.extend(
+            self.keyed_reach
+                .get(&b)
+                .into_iter()
+                .flatten()
+                .map(|&(_, r)| r),
+        );
         v
     }
 
@@ -2013,15 +2045,16 @@ impl Model {
         reach.display = format!("{}:param{i}:reach", self.funcs[f as usize].name);
         self.tmpls.push(reach);
         let r = self.tok(TokKind::Obj(rm, NO_CTX));
-        let any = self.field_any(t);
-        self.add_tok(any, r);
-        let rany = self.field_any(r);
-        self.add_tok(rany, r);
         self.param_marker.insert(t, (f, i));
         self.param_marker.insert(r, (f, i));
         self.reach_marker.insert(r);
         self.marker_reach.insert(t, r);
         self.marker_of.insert((f, i), t);
+        // Markers before their field nodes: those nodes are of the marker.
+        let any = self.field_any(t);
+        self.add_tok(any, r);
+        let rany = self.field_any(r);
+        self.add_tok(rany, r);
         t
     }
 }

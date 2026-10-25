@@ -117,12 +117,11 @@ impl Model {
             return false;
         }
         // A marker that reads as ⊤ is delivered by `add_tokens` (DECISIONS 42),
-        // a marker into a parameter node too (DECISIONS 44).
-        if self.nodes[dst as usize].param
-            && !self.param_marker.is_empty()
+        // a marker crossing into the node too (MRK, `Model::crosses`).
+        if !self.param_marker.is_empty()
             && Tokens::Delivery(delta, dst)
                 .iter()
-                .any(|&t| self.is_marker(t))
+                .any(|&t| self.crosses(dst, t))
         {
             return false;
         }
@@ -132,20 +131,6 @@ impl Model {
                 .any(|&t| self.marker_is_top(t))
         {
             return false;
-        }
-        // A family token leaving its home's run is seen by `add_tokens`
-        // (DECISIONS 44 (b)).
-        if !self.fam.is_empty() {
-            let frame = self.nodes[dst as usize].frame;
-            if !self.nodes[dst as usize].obs
-                && !self.nodes[dst as usize].sink
-                && Tokens::Delivery(delta, dst).iter().any(|&t| {
-                    let (b, h) = self.fam.get(t as usize).copied().unwrap_or((0, 0));
-                    h != 0 && h != frame && !self.fam_left(b)
-                })
-            {
-                return false;
-            }
         }
         let batch = delta.batch_for(dst);
         let pts = self.nodes[src as usize].pts.shared_clone();

@@ -25,25 +25,27 @@ impl Model {
     }
     fn add_tokens(&mut self, n: NodeId, toks: Tokens<'_>, prim: u16) {
         let mut later: Vec<Tok> = Vec::new();
-        // A parameter node holds its argument marker in place of the
-        // markers that arrive (DECISIONS 44); it no longer holds every value
-        // of its sources.
-        let own = match self.nodes[n as usize].param
-            && !self.param_marker.is_empty()
-            && toks.iter().any(|&t| self.is_marker(t))
-        {
-            true => {
-                let r = self.arg_marker(n);
-                for &t in toks {
-                    if self.is_marker(t) {
-                        self.link_marker(t, r);
+        // A marker crossing into the node arrives as a member of the node's
+        // own marker (MRK, `Model::crosses`; DECISIONS 44 for parameters):
+        // the node no longer holds every value of its sources.
+        let crossed: Option<Vec<Tok>> =
+            match !self.param_marker.is_empty() && toks.iter().any(|&t| self.crosses(n, t)) {
+                true => {
+                    let r = self.arg_marker(n);
+                    let mut v = Vec::with_capacity(toks.len());
+                    for &t in toks {
+                        if self.crosses(n, t) {
+                            self.link_marker(t, r);
+                            v.push(r);
+                        } else {
+                            v.push(t);
+                        }
                     }
+                    self.nodes[n as usize].dropped = true;
+                    Some(v)
                 }
-                self.nodes[n as usize].dropped = true;
-                Some(r)
-            }
-            false => None,
-        };
+                false => None,
+            };
         let targets = if toks.is_empty() {
             Targets::Empty
         } else {
@@ -55,19 +57,11 @@ impl Model {
         let node = &mut self.nodes[n as usize];
         let mut changed = false;
         let mut top_new = false;
-        // A family token entering a node of no run of its home: the family
-        // left its frame (DECISIONS 44 (b)).
-        let mut left: Vec<Tok> = Vec::new();
-        let frame = if node.obs || node.sink { u32::MAX } else { node.frame };
+        let toks = match &crossed {
+            Some(v) => Tokens::Slice(v),
+            None => toks,
+        };
         for &t in toks {
-            let t = match own {
-                Some(r)
-                    if self.param_marker.contains_key(&t) || marker_top_bit(&self.arg_bits, t) =>
-                {
-                    r
-                }
-                _ => t,
-            };
             // A marker that reads as ⊤ (DECISIONS 42) is decided after the
             // other tokens, once it is known whether ⊤ arrived with them.
             if marker_top_bit(&self.marker_top, t) {
@@ -79,11 +73,6 @@ impl Model {
                 changed = true;
                 self.pts_entries += 1;
                 top_new |= t == TOP;
-                if let Some(&(b, h)) = self.fam.get(t as usize) {
-                    if h != 0 && h != frame && frame != u32::MAX && !marker_top_bit(&self.fam_out, b) {
-                        left.push(b);
-                    }
-                }
             }
         }
         // Beside ⊤ it is that ⊤: every rule does to ⊤ at least what it does
@@ -98,11 +87,6 @@ impl Model {
                         node.delta.push_to(t, &targets);
                         changed = true;
                         self.pts_entries += 1;
-                        if let Some(&(b, h)) = self.fam.get(t as usize) {
-                            if h != 0 && h != frame && frame != u32::MAX && !marker_top_bit(&self.fam_out, b) {
-                                left.push(b);
-                            }
-                        }
                     }
                 }
             }
@@ -131,9 +115,6 @@ impl Model {
         if changed && !node.in_wl {
             node.in_wl = true;
             self.wl.push_back(n);
-        }
-        for b in left {
-            self.leave_frame(b);
         }
     }
 
@@ -442,6 +423,7 @@ impl Model {
         let n = self.node_named("field", || format!("field({t},{a})"));
         self.nodes[n as usize].obs = self.obs_toks.contains(&t);
         self.nodes[n as usize].frame = self.fam_home(t);
+        self.nodes[n as usize].of_marker = self.is_marker(t);
         self.fields.insert((t, a), n);
         self.field_keys.entry(t).or_default().push(a);
         self.rel(|| format!("fieldnode {n} {t} {a}"));
@@ -522,6 +504,7 @@ impl Model {
         let n = self.node_named("fieldany", || format!("fieldany({t})"));
         self.nodes[n as usize].obs = self.obs_toks.contains(&t);
         self.nodes[n as usize].frame = self.fam_home(t);
+        self.nodes[n as usize].of_marker = self.is_marker(t);
         self.field_any.insert(t, n);
         self.rel(|| format!("fieldany {n} {t}"));
         let all = self.all_fields(t);
@@ -537,6 +520,7 @@ impl Model {
         let n = self.node_named("allfields", || format!("allfields({t})"));
         self.nodes[n as usize].obs = self.obs_toks.contains(&t);
         self.nodes[n as usize].frame = self.fam_home(t);
+        self.nodes[n as usize].of_marker = self.is_marker(t);
         self.all_fields.insert(t, n);
         self.rel(|| format!("allfields {n} {t}"));
         n
@@ -1528,6 +1512,14 @@ impl Model {
     /// chain runs with `this` = `t` and unknown primitive arguments.
     pub fn implicit(&mut self, t: Tok, reason: u32) {
         self.mark_use(t, crate::model::MARK_TOUCH);
+        // A marker: the protocol runs on the values beside it; on the
+        // marker it calls what the marker reaches, an escape of that
+        // (`method_on`, DECISIONS 111).
+        if self.is_marker(t) {
+            let r = self.reach_of(t);
+            self.mark_use(r, crate::model::MARK_ESCAPE);
+            return;
+        }
         if t == TOP || !self.implicit_done.insert(t) {
             return;
         }

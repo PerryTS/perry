@@ -118,9 +118,6 @@ pub struct Inst {
     pub params: Vec<NodeId>,
     pub ret: NodeId,
     pub this: NodeId,
-    /// The calls whose results take this instance's result through
-    /// `Cons::RetInto` (DECISIONS 44 (b)).
-    pub calls: Vec<CallId>,
 }
 
 #[derive(Default)]
@@ -631,6 +628,12 @@ impl Model {
             }
         };
         let this = tr(s.this);
+        // Its result: what it returns of no parameter leaves as one marker
+        // (MRK, `Model::crosses`).
+        let ret = tr(s.ret);
+        if ret != NO_NODE && self.nodes[ret as usize].frame == inst + 1 {
+            self.nodes[ret as usize].result = true;
+        }
         // Its parameters hold argument markers (DECISIONS 44), relative
         // ones while only the calls write them (44 (b)).
         for (i, &p) in s.params.iter().enumerate() {
@@ -653,9 +656,8 @@ impl Model {
             tok: key.2,
             lay,
             params: s.params.iter().map(|&p| tr(p)).collect(),
-            ret: tr(s.ret),
+            ret,
             this,
-            calls: Vec::new(),
         });
         self.sum.inst_key.insert(key, inst);
         self.sum.pending.push((inst, base));
@@ -1012,14 +1014,17 @@ impl Model {
         let r = self.run_ret(run);
         let cret = self.calls[c].ret;
         self.rel(|| format!("copy {r} {cret}"));
-        match run & FN_RUN {
-            0 => self.sum.insts[(run - 1) as usize].calls.push(call),
-            _ => self.funcs[(run & !FN_RUN) as usize].calls.push(call),
-        }
         self.cons(r, Cons::RetInto { call, run });
         for i in rel {
             let a = self.calls[c].args[i];
-            self.cons(a, Cons::ArgInto { call, run, i: i as u32 });
+            self.cons(
+                a,
+                Cons::ArgInto {
+                    call,
+                    run,
+                    i: i as u32,
+                },
+            );
         }
         true
     }
@@ -1051,7 +1056,7 @@ impl Model {
         let mut args: Vec<Option<Vec<Tok>>> = Vec::new();
         for &t in toks {
             let (b, h) = self.fam.get(t as usize).copied().unwrap_or((0, 0));
-            if h != run || self.fam_left(b) {
+            if h != run {
                 raw.push(t);
                 continue;
             }
@@ -1080,7 +1085,11 @@ impl Model {
     /// among them is what run `run`'s result returns of the parameter's
     /// marker family so far (`ret_into` lifts the later ones).
     pub(crate) fn arg_into(&mut self, call: CallId, run: u32, i: u32, toks: Tokens<'_>) {
-        let ms: Vec<Tok> = toks.iter().copied().filter(|&t| self.is_marker(t)).collect();
+        let ms: Vec<Tok> = toks
+            .iter()
+            .copied()
+            .filter(|&t| self.is_marker(t))
+            .collect();
         if ms.is_empty() {
             return;
         }
@@ -1088,7 +1097,7 @@ impl Model {
         let Some(&b) = self.arg_marker_of.get(&p) else {
             return;
         };
-        if self.fam_home(b) != run || self.fam_left(b) {
+        if self.fam_home(b) != run {
             return;
         }
         let r = self.run_ret(run);
@@ -1130,41 +1139,46 @@ impl Model {
         v
     }
 
-    /// Argument marker `b`'s family entered a node of no run of its home
-    /// (DECISIONS 44 (b)): a value of one run may now be read by another,
-    /// so its callers take the family itself from now on, every caller's
-    /// value, as without (b); what the result holds of it goes to every
-    /// bound call now.
-    pub(crate) fn leave_frame(&mut self, b: Tok) {
-        if self.fam_left(b) {
-            return;
-        }
-        let w = (b >> 6) as usize;
-        if self.fam_out.len() <= w {
-            self.fam_out.resize(w + 1, 0);
-        }
-        self.fam_out[w] |= 1 << (b & 63);
-        let run = self.fam_home(b);
-        let r = self.run_ret(run);
-        if r == NO_NODE {
-            return;
-        }
-        let held: Vec<Tok> = self
-            .family(b)
-            .into_iter()
-            .filter(|&t| self.nodes[r as usize].pts.contains_tok(t))
-            .collect();
-        if held.is_empty() {
-            return;
-        }
-        let calls = match run & FN_RUN {
-            0 => self.sum.insts[(run - 1) as usize].calls.clone(),
-            _ => self.funcs[(run & !FN_RUN) as usize].calls.clone(),
+    /// A compiled function without a summary has one body for every call:
+    /// that body is its run (`FN_RUN | f`), so its parameters' markers are
+    /// tokens there and its result returns them to each call relative to
+    /// it (DECISIONS 44 (b)), not as a crossing marker (MRK). Each
+    /// parameter gets a binding the calls write and nothing in the body
+    /// does; the body's variable takes the binding and the writes (as
+    /// `bind_written_params` does for a summary).
+    fn run_unsummarized(&mut self) {
+        let one = |m: &Self, f: FnIdx| {
+            f != NO_FN && !m.summarized(f) && m.funcs[f as usize].func_id != u32::MAX
         };
-        for c in calls {
-            self.work += held.len() as u64;
-            let cret = self.calls[c as usize].ret;
-            self.add(cret, &held, 0);
+        for n in 0..self.nodes.len() {
+            let f = self.node_fn[n];
+            if one(self, f) && !self.nodes[n].obs && self.nodes[n].frame == 0 {
+                self.nodes[n].frame = FN_RUN | f;
+            }
+        }
+        for f in 0..self.funcs.len() as FnIdx {
+            if !one(self, f) {
+                continue;
+            }
+            let run = FN_RUN | f;
+            let ret = self.funcs[f as usize].ret;
+            if ret != NO_NODE {
+                self.nodes[ret as usize].frame = run;
+                self.nodes[ret as usize].result = true;
+            }
+            for i in 0..self.funcs[f as usize].params.len() {
+                let p = self.funcs[f as usize].params[i];
+                if p == NO_NODE {
+                    continue;
+                }
+                let b = self.node_l("param-bind");
+                self.node_fn[b as usize] = f;
+                self.nodes[b as usize].frame = run;
+                self.nodes[b as usize].rel = true;
+                self.nodes[p as usize].frame = run;
+                self.edge(b, p);
+                self.funcs[f as usize].params[i] = b;
+            }
         }
     }
 
@@ -1265,6 +1279,7 @@ impl Model {
             }
         }
         self.sum.ready = true;
+        self.run_unsummarized();
         self.mark_params();
         let deferred = std::mem::take(&mut self.sum.deferred);
         let nd = deferred.len();

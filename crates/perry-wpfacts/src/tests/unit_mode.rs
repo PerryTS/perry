@@ -2107,7 +2107,11 @@ fn a_caller_gets_back_only_what_it_passed() {
         "import { both } from './b'; class Box { v: any = 1; } class Crate { v: any = 1; } const r = both(new Box(), new Crate()); r.v = 'x'; console.log(r.v);",
     );
     assert!(!field(tmpl(&pf, "Box"), "v").readonly, "{}", pf.dump_text());
-    assert!(field(tmpl(&pf, "Crate"), "v").readonly, "{}", pf.dump_text());
+    assert!(
+        field(tmpl(&pf, "Crate"), "v").readonly,
+        "{}",
+        pf.dump_text()
+    );
 }
 
 #[test]
@@ -2145,7 +2149,11 @@ fn a_recursion_returns_what_its_argument_reaches() {
         "const W = { walk(n: any): any { return n.next ? W.walk(n.next) : n; } }; function last(p: any) { return W.walk(p); } function last2(p: any) { return W.walk(p); } last2(c); return last(o);",
         "import { both } from './b'; class Head { v: any = 1; next: any = null; } class Tail { v: any = 1; } const h = new Head(); h.next = new Tail(); both(h, 0).v = 'x'; console.log(h.v);",
     );
-    assert!(!field(tmpl(&pf, "Tail"), "v").readonly, "{}", pf.dump_text());
+    assert!(
+        !field(tmpl(&pf, "Tail"), "v").readonly,
+        "{}",
+        pf.dump_text()
+    );
     assert!(pf.units.iter().all(|(_, s)| !s.aborted), "{:?}", pf.units);
 }
 
@@ -2158,7 +2166,11 @@ fn a_written_parameter_is_not_the_callers_argument() {
         "const U = { up(n: any) { n = n.parent; return n; } }; function top(p: any) { return U.up(p); } function top2(p: any) { return U.up(p); } top2(c); return top(o);",
         "import { both } from './b'; class Parent { v: any = 1; } class Child { v: any = 1; parent: any = new Parent(); } both(new Child(), 0).v = 'x'; console.log(1);",
     );
-    assert!(!field(tmpl(&pf, "Parent"), "v").readonly, "{}", pf.dump_text());
+    assert!(
+        !field(tmpl(&pf, "Parent"), "v").readonly,
+        "{}",
+        pf.dump_text()
+    );
 }
 
 #[test]
@@ -2185,7 +2197,11 @@ fn another_units_function_returns_each_caller_its_own_argument() {
     let m = "import { id, id2 } from './c'; class Box { v: any = 1; } class Crate { v: any = 1; } const o = new Box(); const c = new Crate(); const r = id(o); id2(c); r.v = 'x'; console.log(o.v, c.v);";
     let pf = units_of(&[("p", p), ("c", c.as_str()), ("m", m)]);
     assert!(!field(tmpl(&pf, "Box"), "v").readonly, "{}", pf.dump_text());
-    assert!(field(tmpl(&pf, "Crate"), "v").readonly, "{}", pf.dump_text());
+    assert!(
+        field(tmpl(&pf, "Crate"), "v").readonly,
+        "{}",
+        pf.dump_text()
+    );
 }
 
 #[test]
@@ -2198,7 +2214,11 @@ fn a_result_an_argument_reaches_is_the_callers_reach() {
     let b = "function up(x: any) { x = x.parent; return x; }\nexport function top(x: any) { return up(x); }\nexport function top2(x: any) { return up(x); }";
     let m = "import { top, top2 } from './b'; class Parent { v: any = 1; } class Child { v: any = 1; parent: any = new Parent(); } const c = new Child(); top2(0); top(c).v = 'x'; console.log(c.v);";
     let pf = units_of(&[("b", b), ("m", m)]);
-    assert!(!field(tmpl(&pf, "Parent"), "v").readonly, "{}", pf.dump_text());
+    assert!(
+        !field(tmpl(&pf, "Parent"), "v").readonly,
+        "{}",
+        pf.dump_text()
+    );
 }
 
 #[test]
@@ -2856,4 +2876,214 @@ fn a_nested_initializer_and_its_hoisted_var_are_one_emitted_binding() {
     ids.sort_unstable();
     ids.dedup();
     assert_eq!(ids.len(), count);
+}
+
+// MRK: a marker is a token only inside its run; it crosses into a result,
+// storage or another run as a member of that node's own marker.
+
+#[test]
+fn an_inner_helper_given_two_objects_holds_no_marker() {
+    // No marker arrives at `h`'s parameter (both callers pass objects of
+    // their own), so it holds the two objects alone and `p.x` is proven on
+    // both layouts: a marker there would be a receiver no fact covers.
+    let b = "class A { x: any = 1; a: any = 0; }\nclass B { x: any = 2; b: any = 0; }\nexport function run() { function h(p: any) { return p.x; } return h(new A()) + h(new B()); }";
+    let pf = units_of(&[
+        ("b", b),
+        ("m", "import { run } from './b'; console.log(run());"),
+    ]);
+    assert_eq!(verdicts(&pf, "x"), ["T0Set"], "{}", pf.dump_text());
+}
+
+#[test]
+fn an_inner_helper_published_through_a_literal_keeps_its_marker() {
+    // `h` is published as a field of `api`: its parameter's marker stays a
+    // token in its run, so its contract still returns parameter 0 and the
+    // caller's store through the result is a store into its own `Box`, not
+    // into the `Crate` it never passed. (In a function: a module-scope value
+    // is ⊤ to the reader's declaration unit, §12.3.)
+    let b = "function h(p: any) { return p; }\nexport const api = { h };";
+    let m = "import { api } from './b'; class Box { v: any = 1; } class Crate { v: any = 1; } function main() { const o = new Box(); const c = new Crate(); api.h(o).v = 'x'; console.log(o.v, c.v); } main(); main();";
+    let pf = units_of(&[("b", b), ("m", m)]);
+    assert!(!field(tmpl(&pf, "Box"), "v").readonly, "{}", pf.dump_text());
+    assert!(
+        field(tmpl(&pf, "Crate"), "v").readonly,
+        "{}",
+        pf.dump_text()
+    );
+}
+
+#[test]
+fn a_boundary_parameters_field_read_in_a_helper_is_proven() {
+    // `join` is closed (decision 13): its callers' literal is beside its
+    // parameter's marker. The inner `rd` reads `i.prev`: its parameter's
+    // marker stands for `join`'s, all of whose members are closed, so the
+    // site is proven on the callers' layout.
+    let src = r#"
+        function mkIndent() { return { prev: 'a', base: 'b' }; }
+        function join(xs: any, indent: any) { function rd(i: any) { return i.prev; } return xs + rd(indent) + indent.base; }
+        function main(x: any) { const ind = mkIndent(); console.log(join(x, ind)); }
+        main(1); main(2);
+        "#;
+    let pf = units(src);
+    assert!(!verdicts(&pf, "prev").is_empty(), "{}", pf.dump_text());
+    assert!(
+        proven(&pf, "prev") && proven(&pf, "base"),
+        "{}",
+        pf.dump_text()
+    );
+}
+
+#[test]
+fn what_a_cell_holds_is_used_as_its_members() {
+    // `f` stores its argument into a cell; `g` hands the cell's value to
+    // unknown code. The cell holds its own marker with `f`'s argument as a
+    // member, so the escape at `g` is an escape of `f`'s parameter, and the
+    // caller's `o.v` is not proven. (One unit: `mk`'s body. With the cell a
+    // declaration of its own, `f`'s store into another unit's literal is
+    // bug 3, unsound on main.)
+    let b = "export function mk() { const cell: any = { s: null }; return { f(x: any) { cell.s = x; }, g() { (globalThis as any).k = cell.s; } }; }";
+    let m = "import { mk } from './b'; class Box { v: any = 1; } function main() { const api = mk(); const o = new Box(); api.f(o); api.g(); (globalThis as any).k.v = 'x'; console.log(o.v); } main(); main();";
+    let pf = units_of(&[("b", b), ("m", m)]);
+    assert!(!verdicts(&pf, "v").is_empty(), "{}", pf.dump_text());
+    assert!(!proven(&pf, "v"), "{}", pf.dump_text());
+}
+
+/// Pts entries of the largest unit when `n` exported functions store their
+/// argument into one cell through helpers of their own, and `n` readers
+/// each read their own key of what the cell holds.
+fn shared_cell_entries(n: usize) -> u64 {
+    // The cell is a static of `S` and every function names `S`: one unit (a
+    // cell of its own declaration unit would be another unit's literal).
+    let mut src = "class S { static last: any = 0; static cell: any = { s: null }; }\n".to_string();
+    for i in 0..n {
+        src.push_str(&format!(
+            "function h{i}(a: any) {{ S.last = {i}; S.cell.s = a; }}\nexport function f{i}(a: any) {{ S.last = {i}; h{i}(a); }}\nexport function g{i}() {{ S.last = {i}; const x = S.cell.s; return x.k{i}; }}\n"
+        ));
+    }
+    let names: Vec<String> = (0..n)
+        .flat_map(|i| [format!("f{i}"), format!("g{i}")])
+        .collect();
+    let calls: Vec<String> = (0..n)
+        .map(|i| format!("f{i}({{ k{i}: 1 }}); console.log(g{i}());"))
+        .collect();
+    let user = format!(
+        "import {{ {} }} from './t'; {}",
+        names.join(", "),
+        calls.join(" ")
+    );
+    let pf = units_of(&[("t", src.as_str()), ("u", user.as_str())]);
+    pf.units
+        .iter()
+        .map(|(_, s)| s.pts_entries)
+        .max()
+        .unwrap_or(0)
+}
+
+#[test]
+fn a_shared_cell_holds_one_marker() {
+    // MRK: every helper's argument crosses into the cell as a member of its
+    // one marker; each reader gets that marker and its own key's reach.
+    // With the families themselves in the cell each reader would get every
+    // helper's family and its key of each: the square of the helpers.
+    let (e8, e16, e32) = (
+        shared_cell_entries(8),
+        shared_cell_entries(16),
+        shared_cell_entries(32),
+    );
+    let (d1, d2) = (e16 - e8, e32 - e16);
+    assert!(
+        d1 > 0 && d2 < 3 * d1,
+        "entries {e8} {e16} {e32}: quadratic in the helpers"
+    );
+}
+
+#[test]
+fn a_written_parameter_without_a_summary_is_each_callers_own() {
+    // `up` reads `arguments`, so it has no summary: one body for every call,
+    // a run of its own whose parameters get bindings the calls write. It
+    // writes its parameter (`n = n.parent`): the variable holds the marker
+    // and what it reaches under `parent`, two tokens of its run, so `top`'s
+    // result is what the caller's argument reaches. Read as the marker alone
+    // (the parameter node's marker standing for both) the result would be
+    // the caller's `Child` and the store through it would miss the `Parent`.
+    let b = format!("{JOIN}function up(n: any) {{ S.last = 0; if (arguments.length > 1) return null; n = n.parent; return n; }}\nexport function top(x: any) {{ S.last = 1; return up(x); }}\nexport function top2(x: any) {{ S.last = 2; return up(x); }}");
+    let b = b.as_str();
+    let m = "import { top, top2 } from './b'; class Parent { v: any = 1; } class Child { v: any = 1; parent: any = new Parent(); } class Crate { v: any = 2; parent: any = null; } function main() { const c = new Child(); top(c).v = 'x'; top2(new Crate()); console.log(c.v); } main(); main();";
+    let pf = units_of(&[("b", b), ("m", m)]);
+    assert!(
+        !field(tmpl(&pf, "Parent"), "v").readonly,
+        "{}",
+        pf.dump_text()
+    );
+    assert!(
+        field(tmpl(&pf, "Crate"), "v").readonly,
+        "{}",
+        pf.dump_text()
+    );
+}
+
+/// Pts entries of the largest unit when `n` exported functions store their
+/// argument into a cell each, one function returns any of the cells, and
+/// `n` readers each read their own key of what it returns.
+fn result_holder_entries(n: usize) -> u64 {
+    // The cells are statics of `S` (one unit with the functions); `pick` is
+    // a method of a local object, never composed into its callers, so its
+    // result node is the one every caller reads.
+    let cells: Vec<String> = (0..n)
+        .map(|i| format!("static c{i}: any = {{ s: null }};"))
+        .collect();
+    let mut src = format!("class S {{ static last: any = 0; {} }}\n", cells.join(" "));
+    for i in 0..n {
+        src.push_str(&format!(
+            "export function f{i}(a: any) {{ S.last = {i}; S.c{i}.s = a; }}\n"
+        ));
+    }
+    // `pick` returns its parameter `d` when no cell matches: its result is
+    // a slot of its instance's run (it depends on a parameter), which the
+    // cells' markers cross into.
+    src.push_str("const P = { pick(k: number, d: any): any { S.last = -1;\n");
+    for i in 0..n {
+        src.push_str(&format!("if (k === {i}) return S.c{i}.s;\n"));
+    }
+    src.push_str("return d; } };\n");
+    for i in 0..n {
+        src.push_str(&format!(
+            "export function g{i}(k: number, a: any) {{ S.last = {i}; const x = P.pick(k, a); return x.k{i}; }}\n"
+        ));
+    }
+    let names: Vec<String> = (0..n)
+        .flat_map(|i| [format!("f{i}"), format!("g{i}")])
+        .collect();
+    let calls: Vec<String> = (0..n)
+        .map(|i| format!("f{i}({{ k{i}: 1 }}); console.log(g{i}({i}, {{ k{i}: 2 }}));"))
+        .collect();
+    let user = format!(
+        "import {{ {} }} from './t'; {}",
+        names.join(", "),
+        calls.join(" ")
+    );
+    let pf = units_of(&[("t", src.as_str()), ("u", user.as_str())]);
+    pf.units
+        .iter()
+        .map(|(_, s)| s.pts_entries)
+        .max()
+        .unwrap_or(0)
+}
+
+#[test]
+fn a_result_holds_one_marker() {
+    // MRK: `pick` returns what any of `n` cells holds; its result holds one
+    // marker standing for the cells' markers, and each reader gets that one.
+    // With the cells' markers returned as themselves each reader would get
+    // all `n` and its key of each: the square of the cells.
+    let (e8, e16, e32) = (
+        result_holder_entries(8),
+        result_holder_entries(16),
+        result_holder_entries(32),
+    );
+    let (d1, d2) = (e16 - e8, e32 - e16);
+    assert!(
+        d1 > 0 && d2 < 3 * d1,
+        "entries {e8} {e16} {e32}: quadratic in the cells"
+    );
 }
