@@ -603,7 +603,6 @@ impl<'a> Gen<'a> {
             | "js_object_to_string"
             | "js_object_has_own"
             | "js_object_property_is_enumerable"
-            | "js_object_literal_infer_computed_function_name"
             | "js_process_exit_code_get"
             | "js_process_exit_code_set"
             | "js_weakset_has"
@@ -619,15 +618,22 @@ impl<'a> Gen<'a> {
                 }
                 let out = self.tmp("rt-prim");
                 self.m.add_prim(out, prim::ALL);
-                if name == "js_object_literal_infer_computed_function_name" {
-                    if let Some(v) = arg(0) {
-                        self.m.edge(v, out);
-                    }
-                }
                 if name == "js_weakset_add" {
                     if let Some(v) = arg(0) {
                         self.m.edge(v, out);
                     }
+                }
+                out
+            }
+            // SetFunctionName for a computed key (`{ [k]: f }`): the runtime
+            // names the closure after the key, which
+            // `js_object_literal_to_property_key` already converted. It calls
+            // nothing, so the function does not escape: the value
+            // (argument 1) passes through.
+            "js_object_literal_infer_computed_function_name" => {
+                let out = self.tmp("rt-name");
+                if let Some(v) = arg(1) {
+                    self.m.edge(v, out);
                 }
                 out
             }
