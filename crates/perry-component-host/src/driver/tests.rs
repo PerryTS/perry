@@ -607,3 +607,141 @@ fn an_idle_driver_is_woken_by_submission_and_by_native_import_readiness() {
     drop(client);
     assert!(ready(driver).unwrap().live.is_some());
 }
+
+#[test]
+fn retained_origins_include_queued_and_suspended_calls_then_clear_after_completion() {
+    let (host, gates, _, _) = host(false);
+    let (mut driver, client) = host.into_driver().unwrap();
+    assert!(client.retained_origins().is_empty());
+    let mut call = client.call("", "run", &[json!({"$bigint":"1"})]).unwrap();
+    let origin = call.id();
+    assert_eq!(client.retained_origins(), vec![origin]);
+    tick(&mut driver);
+    assert_eq!(client.retained_origins(), vec![origin]);
+    gates
+        .lock()
+        .unwrap()
+        .remove(&1)
+        .unwrap()
+        .send(Ok(()))
+        .unwrap();
+    assert!(result(&mut driver, &mut call).is_ok());
+    tick(&mut driver);
+    assert!(client.retained_origins().is_empty());
+    let skipped = client.call("", "run", &[json!({"$bigint":"2"})]).unwrap();
+    let skipped_origin = skipped.id();
+    drop(skipped);
+    assert_eq!(client.retained_origins(), vec![skipped_origin]);
+    tick(&mut driver);
+    assert!(client.retained_origins().is_empty());
+    let mut invalid = client.call("", "missing", &[]).unwrap();
+    assert_eq!(client.retained_origins(), vec![invalid.id()]);
+    assert!(result(&mut driver, &mut invalid).is_err());
+    tick(&mut driver);
+    assert!(client.retained_origins().is_empty());
+}
+
+#[test]
+fn retained_contexts_stay_bounded_while_an_older_post_return_task_remains_active() {
+    let (host, gates, observed, drops) = host(true);
+    let (mut driver, client) = host.into_driver().unwrap();
+    let mut first = client.call("", "run", &[json!({"$bigint":"1"})]).unwrap();
+    let first_origin = first.id();
+    assert!(result(&mut driver, &mut first).is_ok());
+    let mut completed = Vec::new();
+    let mut peak = 0;
+    for value in 2..=512 {
+        let mut call = client
+            .call("", "run", &[json!({"$bigint":value.to_string()})])
+            .unwrap();
+        let origin = call.id();
+        assert!(result(&mut driver, &mut call).is_ok());
+        let retained = client.retained_origins();
+        assert!(retained.contains(&first_origin));
+        assert!(retained.contains(&origin));
+        gates
+            .lock()
+            .unwrap()
+            .remove(&value)
+            .unwrap()
+            .send(Ok(()))
+            .unwrap();
+        tick(&mut driver);
+        completed.push(origin);
+        let retained = client.retained_origins();
+        peak = peak.max(retained.len());
+        assert!(retained.contains(&first_origin));
+        assert!(
+            retained.len() <= 8,
+            "completed origins accumulated behind an active background task: {}",
+            retained.len()
+        );
+        assert!(driver.is_active());
+    }
+    assert!(
+        completed
+            .iter()
+            .filter(|id| !client.retained_origins().contains(id))
+            .count()
+            > 500,
+        "completed contexts must actually become releasable before global quiescence"
+    );
+    assert!(peak > 0);
+    gates
+        .lock()
+        .unwrap()
+        .remove(&1)
+        .unwrap()
+        .send(Ok(()))
+        .unwrap();
+    tick(&mut driver);
+    assert_eq!(
+        observed.lock().unwrap().last(),
+        Some(&(1, first_origin, "end"))
+    );
+    assert_eq!(drops.load(Ordering::SeqCst), 512);
+    assert!(client.retained_origins().is_empty());
+}
+
+#[test]
+fn retirement_clears_retained_origins_and_old_drivers_do_not_clear_a_restarted_host() {
+    let (component, gates, _, drops) = host(false);
+    let (mut driver, client) = component.into_driver().unwrap();
+    let call = client.call("", "run", &[json!({"$bigint":"1"})]).unwrap();
+    let origin = call.id();
+    tick(&mut driver);
+    assert!(client.retained_origins().contains(&origin));
+    drop(call);
+    assert!(ready(&mut driver).is_err());
+    assert!(client.retained_origins().is_empty());
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
+    assert!(gates
+        .lock()
+        .unwrap()
+        .remove(&1)
+        .unwrap()
+        .send(Ok(()))
+        .is_err());
+    let (host, gates, _, _) = host(false);
+    let (mut old, old_client) = host.into_driver().unwrap();
+    // Host recovery requires closing all senders, so retain only the old Driver.
+    drop(old_client);
+    let host = ready(&mut old).unwrap();
+    let (mut driver, client) = host.into_driver().unwrap();
+    let mut call = client.call("", "run", &[json!({"$bigint":"2"})]).unwrap();
+    let origin = call.id();
+    tick(&mut driver);
+    assert_eq!(client.retained_origins(), vec![origin]);
+    drop(old);
+    assert_eq!(client.retained_origins(), vec![origin]);
+    gates
+        .lock()
+        .unwrap()
+        .remove(&2)
+        .unwrap()
+        .send(Ok(()))
+        .unwrap();
+    assert!(result(&mut driver, &mut call).is_ok());
+    tick(&mut driver);
+    assert!(client.retained_origins().is_empty());
+}

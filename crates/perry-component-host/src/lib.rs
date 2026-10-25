@@ -195,13 +195,17 @@ impl Host {
                             Box::new(async move {
                                 let captured =
                                     asynchronous::origin::capture(store.as_context_mut())?;
-                                dispatcher
-                                    .run(move || {
-                                        let _scope = asynchronous::origin::Scope::enter(captured);
-                                        host_resources::destroy(store, rep, id)
-                                    })
-                                    .await?
-                                    .map_err(wasmtime::Error::from_anyhow)
+                                let id_resource = id;
+                                let id = captured.id;
+                                asynchronous::origin::captured(
+                                    captured,
+                                    dispatcher.run(move || {
+                                        let _scope = asynchronous::origin::Scope::enter(id);
+                                        host_resources::destroy(store, rep, id_resource)
+                                    }),
+                                )
+                                .await?
+                                .map_err(wasmtime::Error::from_anyhow)
                             })
                         },
                     )?;
@@ -212,7 +216,7 @@ impl Host {
                     wasmtime::component::ResourceType::host_dynamic(id),
                     move |mut store, rep| {
                         let captured = asynchronous::origin::capture(store.as_context_mut())?;
-                        let _scope = asynchronous::origin::Scope::enter(captured);
+                        let _scope = asynchronous::origin::Scope::enter(captured.id);
                         host_resources::destroy(store, rep, id)
                             .map_err(wasmtime::Error::from_anyhow)
                     },

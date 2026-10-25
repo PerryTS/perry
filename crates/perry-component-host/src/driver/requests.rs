@@ -32,6 +32,7 @@ pub(super) struct State {
     reads: RefCell<ReadRegistrations>,
     writers: RefCell<BTreeMap<String, WriterMeta>>,
     pub types: Vec<crate::AsyncValueType>,
+    retention: crate::asynchronous::retention::Registry,
 }
 impl Default for State {
     fn default() -> Self {
@@ -46,13 +47,18 @@ impl Default for State {
             reads: RefCell::new(BTreeMap::new()),
             writers: RefCell::new(BTreeMap::new()),
             types: Vec::new(),
+            retention: Default::default(),
         }
     }
 }
 impl State {
-    pub fn new(types: Vec<crate::AsyncValueType>) -> Self {
+    pub fn new(
+        types: Vec<crate::AsyncValueType>,
+        retention: crate::asynchronous::retention::Registry,
+    ) -> Self {
         Self {
             types,
+            retention,
             ..Self::default()
         }
     }
@@ -225,6 +231,19 @@ impl DriverClient {
     pub fn close_async_value(&self, value: &Value) -> Result<DriverCall> {
         crate::async_values::values::token(value)?;
         self.submit("", "", &[], Target::Close(value.clone(), Vec::new()))
+    }
+    /// IDs whose callback context may still be needed on later driver polls.
+    /// Includes queued/unpublished requests, conservative guest-root bindings
+    /// and captured host futures. Completed root bindings can remain until an
+    /// engine task ID is reused or the Store becomes quiescent; this is not a
+    /// per-task exit notification. Retain separate context for results not yet
+    /// consumed by the embedding. Store retirement clears guest roots;
+    /// deferred callback leases remain until their cleanup has finished.
+    pub fn retained_origins(&self) -> Vec<InvocationId> {
+        self.state.assert_owner();
+        let mut origins = self.state.retention.snapshot();
+        origins.extend(self.state.replies.borrow().keys().copied());
+        origins.into_iter().collect()
     }
     /// Factory types are branded to this component and retain WIT payload aliases.
     pub fn async_value_types(&self) -> &[crate::AsyncValueType] {

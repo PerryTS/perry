@@ -1,6 +1,7 @@
 //! Async calls own the Store across suspension; only Accessor callbacks borrow it.
 pub(crate) mod dispatch;
 pub(crate) mod origin;
+pub(crate) mod retention;
 use crate::{host_resources, transport, Host, Import, Imports, Live, StoreData};
 use anyhow::{ensure, Context, Result};
 use serde_json::Value;
@@ -40,7 +41,7 @@ pub(super) fn link_import(
         let callback = callback.clone();
         Box::pin(async move {
             let captured = accessor.with(|mut store| origin::capture(store.as_context_mut()))?;
-            origin::scoped(captured, async move {
+            origin::captured(captured, async move {
                 // Wasmtime's eager first poll occurs on the guest's fiber. Once
                 // suspended, concurrent host tasks are polled by run_concurrent
                 // on the embedding stack, with Accessor's Store TLS active.

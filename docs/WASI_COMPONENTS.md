@@ -67,6 +67,23 @@ starts requests Store retirement. Dropping the last client returns the Host if
 quiescent and retires it otherwise. The existing TypeScript bridge still needs
 per-invocation callback frames before it can use this driver.
 
+`DriverClient::retained_origins()` reports native invocation IDs whose callback
+context may still be needed. It combines queued/unpublished requests, guest-root
+bindings and leases held by captured host futures. Reused engine task IDs replace
+old bindings, so completed calls can release their context while older background
+work continues. This is conservative bookkeeping, not a task-exit notification:
+a completed root binding can remain until its ID is reused or the Store becomes
+quiescent. Embeddings must also retain context for results they have not consumed.
+Store retirement clears guest roots; captured callback context remains available
+until future cleanup finishes, including futures dropped before their first poll.
+
+The [native context-retention receipt](validation/wasi-native-context-retention-20261025.json)
+records 142 engine and 22 WIT tests in development and production panic-abort,
+a 512-call workload with older background work still active, and independently
+failing controls for context accumulation and premature cleanup. The registry
+contains IDs and counts only. It does not yet wire TypeScript frame allocation,
+ALS snapshots, error routing or wrapper GC.
+
 The Rust driver transports generic `future<T>` and `stream<T>` values as owned,
 Store-local JSON descriptors. Use `client.read_async_value(&value, capacity)`
 and `client.close_async_value(&value)`, or transfer a descriptor as an exported

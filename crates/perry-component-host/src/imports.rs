@@ -64,19 +64,22 @@ pub(crate) fn link(
             Box::new(async move {
                 let mut store = store;
                 let captured = origin::capture(store.as_context_mut())?;
-                dispatcher
-                    .run(move || {
-                        let _scope = origin::Scope::enter(captured);
+                let id = captured.id;
+                origin::captured(
+                    captured,
+                    dispatcher.run(move || {
+                        let _scope = origin::Scope::enter(id);
                         invoke(store, ty, params, results, &callback)
-                    })
-                    .await?
+                    }),
+                )
+                .await?
             })
         })?;
     } else {
         namespace.func_new(name, move |store, ty, params, results| {
             let mut store = store;
             let captured = origin::capture(store.as_context_mut())?;
-            let _scope = origin::Scope::enter(captured);
+            let _scope = origin::Scope::enter(captured.id);
             invoke(store, ty, params, results, &callback)
         })?;
     }

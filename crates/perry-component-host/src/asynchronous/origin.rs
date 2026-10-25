@@ -1,11 +1,11 @@
 //! Invocation identities are native integers, never callback frames or JS roots.
 //! Capture guest ancestry before the first host-task yield, then restore the
 //! captured identity on every poll instead of querying the ambient stack later.
+use super::retention::{Lease, Registry};
 use crate::StoreData;
 use anyhow::Result;
 use std::{
     cell::Cell,
-    collections::BTreeMap,
     future::Future,
     marker::PhantomData,
     pin::Pin,
@@ -52,6 +52,7 @@ impl Drop for Scope {
 struct Scoped<F> {
     origin: Option<InvocationId>,
     future: Option<Pin<Box<F>>>,
+    capture: Option<Captured>,
 }
 impl<F: Future> Future for Scoped<F> {
     type Output = F::Output;
@@ -64,6 +65,8 @@ impl<F> Drop for Scoped<F> {
     fn drop(&mut self) {
         let _scope = Scope::enter(self.origin);
         self.future.take();
+        // Cleanup in the inner future must still find its retained context.
+        self.capture.take();
     }
 }
 
@@ -74,36 +77,54 @@ pub(crate) fn scoped<F: Future>(
     Scoped {
         origin,
         future: Some(Box::pin(future)),
+        capture: None,
     }
 }
 
+/// Captured before yielding off the guest fiber. Its lease outlives the
+/// callback future, including cancellation and borrowed-dispatch cleanup.
+pub(crate) struct Captured {
+    pub id: Option<InvocationId>,
+    _lease: Option<Lease>,
+}
+pub(crate) fn captured<F: Future>(capture: Captured, future: F) -> impl Future<Output = F::Output> {
+    Scoped {
+        origin: capture.id,
+        future: Some(Box::pin(future)),
+        capture: Some(capture),
+    }
+}
 #[derive(Default)]
 pub(crate) struct Origins {
-    roots: BTreeMap<GuestTaskId, InvocationId>,
+    pub registry: Registry,
+}
+impl Drop for Origins {
+    fn drop(&mut self) {
+        self.registry.clear_roots();
+    }
 }
 impl Origins {
     pub fn register(&mut self, root: GuestTaskId, origin: InvocationId) {
-        // GuestTaskId indices may be reused after a task exits. Replace their
-        // registration before the new task runs; host futures retain integers.
-        self.roots.insert(root, origin);
+        self.registry.register(root, origin);
     }
     pub fn clear(&mut self) {
-        self.roots.clear();
+        self.registry.clear_roots();
     }
+}
+pub(crate) fn capture(mut store: StoreContextMut<'_, StoreData>) -> wasmtime::Result<Captured> {
+    let registry = store.data().origins.registry.clone();
+    let ancestry = if registry.is_empty() {
+        Vec::new()
+    } else {
+        store.async_call_stack()?.collect::<Vec<_>>()
+    };
+    let (id, lease) = match registry.capture(&ancestry, current_invocation()) {
+        Some((id, lease)) => (Some(id), Some(lease)),
+        None => (None, None),
+    };
+    Ok(Captured { id, _lease: lease })
 }
 
-pub(crate) fn capture(
-    mut store: StoreContextMut<'_, StoreData>,
-) -> wasmtime::Result<Option<InvocationId>> {
-    if store.data().origins.roots.is_empty() {
-        return Ok(None);
-    }
-    let ancestry = store.async_call_stack()?.collect::<Vec<_>>();
-    // The oldest registered ancestor owns this invocation, including helper
-    // calls and imported functions invoked after its original task.return.
-    Ok(ancestry
-        .iter()
-        .rev()
-        .find_map(|root| store.data().origins.roots.get(root).copied())
-        .or_else(current_invocation))
-}
+#[cfg(test)]
+#[path = "origin_tests.rs"]
+mod tests;

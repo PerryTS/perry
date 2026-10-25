@@ -104,6 +104,14 @@ impl Host {
                 .data()
                 .async_values
                 .types(),
+            self.live
+                .as_ref()
+                .unwrap()
+                .store
+                .data()
+                .origins
+                .registry
+                .clone(),
         ));
         for (token, stream) in self
             .live
