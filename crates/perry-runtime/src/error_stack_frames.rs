@@ -33,9 +33,9 @@
 //! `(compiled address, JS display name)` once per function in
 //! `__perry_init_strings_*` (72,713 entries for the claude-code bundle) so
 //! `fn.name` and `[Function: f]` work. That table is keyed by exact function
-//! address; a return address points into the MIDDLE of a function, so this
-//! module snapshots it into an address-sorted vector once and answers
-//! containment with a binary search.
+//! address and is itself address-ordered; a return address points into the
+//! MIDDLE of a function, so containment reads its predecessor directly. No
+//! copied index or validity check is needed.
 //!
 //! # Why the frames are named but not positioned
 //!
@@ -47,11 +47,14 @@
 //! shape the stack-parsing libraries in real bundles expect.
 
 use super::*;
-use std::sync::Mutex;
 use std::sync::OnceLock;
 
 #[cfg(all(test, unix))]
 static STATIC_SYMBOL_SPAWN_ATTEMPTS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(test)]
+static FRAME_RESOLUTION_ATTEMPTS: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 
 /// Return addresses captured per construction, and the ceiling on
@@ -454,9 +457,9 @@ pub(crate) fn capture_ips(out: &mut [usize; MAX_CAPTURED_FRAMES]) -> usize {
 /// retained static symbol. Never called on a hot path — the JS-name index takes
 /// a lock, while the expensive static table is never loaded by default.
 pub(crate) fn describe_ip(ip: usize) -> String {
-    let js = with_index(|index| {
+    let js = crate::builtins::with_bundle_function_names(|names| {
         let lookup_ip = ip.saturating_sub(1);
-        symbol_for_ip(index, lookup_ip).and_then(|(start, name)| {
+        symbol_for_ip(names, lookup_ip).and_then(|(start, name)| {
             std::str::from_utf8(name)
                 .ok()
                 .map(|name| (start, name.to_string()))
@@ -704,19 +707,6 @@ pub(crate) fn describe_chain(pcs: &[usize], max: usize) -> String {
 // Resolution: address -> JS display name.
 // ---------------------------------------------------------------------------
 
-struct CodeSymbolIndex {
-    /// Generated-bundle registry size the snapshot was taken at. Runtime-owned
-    /// registrations are intentionally absent from this index.
-    source_len: usize,
-    /// `(function start address, display name)`, sorted by address.
-    entries: Vec<(usize, &'static [u8])>,
-}
-
-fn index_slot() -> &'static Mutex<Option<CodeSymbolIndex>> {
-    static INDEX: OnceLock<Mutex<Option<CodeSymbolIndex>>> = OnceLock::new();
-    crate::once_init::get_or_init(&INDEX, || Mutex::new(None))
-}
-
 /// Resolve `ip` to the display name of the function containing it.
 ///
 /// The binary search already guarantees the NEXT registered function starts
@@ -736,10 +726,11 @@ fn index_slot() -> &'static Mutex<Option<CodeSymbolIndex>> {
 /// `ip` inside one resolves to the previous mapped function"). Closing it
 /// needs per-function extents, which this registry and Mach-O do not expose;
 /// on ELF the `.eh_frame_hdr` FDE that covers `ip` supplies them.
-fn symbol_for_ip(index: &CodeSymbolIndex, ip: usize) -> Option<(usize, &'static [u8])> {
-    let at = index.entries.partition_point(|(addr, _)| *addr <= ip);
-    let at = at.checked_sub(1)?;
-    let (start, name) = &index.entries[at];
+fn symbol_for_ip(
+    names: &std::collections::BTreeMap<usize, &'static [u8]>,
+    ip: usize,
+) -> Option<(usize, &'static [u8])> {
+    let (start, name) = names.range(..=ip).next_back()?;
     if ip - *start > MAX_FUNCTION_SPAN {
         return None;
     }
@@ -757,26 +748,11 @@ fn symbol_for_ip(index: &CodeSymbolIndex, ip: usize) -> Option<(usize, &'static 
     Some((*start, *name))
 }
 
-fn name_for_ip(index: &CodeSymbolIndex, ip: usize) -> Option<&'static [u8]> {
-    symbol_for_ip(index, ip).map(|(_, name)| name)
-}
-
-fn with_index<R>(f: impl FnOnce(&CodeSymbolIndex) -> R) -> Option<R> {
-    let mut slot = index_slot().lock().ok()?;
-    let current_len = crate::builtins::bundle_function_name_registry_len()?;
-    let stale = match slot.as_ref() {
-        Some(index) => index.source_len != current_len,
-        None => true,
-    };
-    if stale {
-        let mut entries = crate::builtins::bundle_function_name_registry_entries()?;
-        entries.sort_unstable_by_key(|(addr, _)| *addr);
-        *slot = Some(CodeSymbolIndex {
-            source_len: current_len,
-            entries,
-        });
-    }
-    slot.as_ref().map(f)
+fn name_for_ip(
+    names: &std::collections::BTreeMap<usize, &'static [u8]>,
+    ip: usize,
+) -> Option<&'static [u8]> {
+    symbol_for_ip(names, ip).map(|(_, name)| name)
 }
 
 /// Render captured frames as `.stack` frame lines, or `None` when nothing in
@@ -789,20 +765,22 @@ fn with_index<R>(f: impl FnOnce(&CodeSymbolIndex) -> R) -> Option<R> {
 /// returns `None` so the caller can fall back to the pre-#9486 single line
 /// instead of producing a headed stack with no frames at all.
 pub(crate) fn render_frames(blob: &[u8], limit: usize) -> Option<String> {
+    #[cfg(test)]
+    FRAME_RESOLUTION_ATTEMPTS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let pcs = decode_pcs(blob);
     if pcs.is_empty() {
         return None;
     }
-    with_index(|index| {
+    crate::builtins::with_bundle_function_names(|names| {
         if diag_enabled() {
             eprintln!(
                 "[stackdiag] resolve: registry_entries={} first={:#x} last={:#x}",
-                index.entries.len(),
-                index.entries.first().map(|(a, _)| *a).unwrap_or(0),
-                index.entries.last().map(|(a, _)| *a).unwrap_or(0)
+                names.len(),
+                names.first_key_value().map(|(a, _)| *a).unwrap_or(0),
+                names.last_key_value().map(|(a, _)| *a).unwrap_or(0)
             );
             for pc in &pcs {
-                let hit = name_for_ip(index, pc.saturating_sub(1))
+                let hit = name_for_ip(names, pc.saturating_sub(1))
                     .and_then(|n| std::str::from_utf8(n).ok().map(|s| s.to_string()));
                 eprintln!("[stackdiag]   ip={pc:#x} -> {hit:?}");
             }
@@ -817,7 +795,7 @@ pub(crate) fn render_frames(blob: &[u8], limit: usize) -> Option<String> {
             // position that byte can belong to the next function, so resolve
             // the call site itself.
             let lookup_ip = pc.saturating_sub(1);
-            let Some((start, name)) = symbol_for_ip(index, lookup_ip) else {
+            let Some((start, name)) = symbol_for_ip(names, lookup_ip) else {
                 continue;
             };
             let Ok(name) = std::str::from_utf8(name) else {
@@ -1051,32 +1029,110 @@ mod tests {
         assert!(decode_pcs(b"").is_empty(), "empty blob");
     }
 
+    #[inline(never)]
+    fn unread_error_probe() -> *mut ErrorHeader {
+        crate::error::js_error_new()
+    }
+
+    #[test]
+    fn constructing_an_error_does_not_resolve_its_captured_names() {
+        unsafe {
+            crate::builtins::js_register_function_name_static(
+                unread_error_probe as *const u8,
+                b"unreadErrorProbe".as_ptr(),
+                16,
+            );
+        }
+        let before = FRAME_RESOLUTION_ATTEMPTS.load(std::sync::atomic::Ordering::SeqCst);
+        let error = unread_error_probe();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let rooted = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(error as i64));
+        unsafe {
+            assert!(
+                (*error).stack.is_null(),
+                "construction must keep stack lazy"
+            );
+            assert!(
+                !(*error).frames.is_null(),
+                "the capture must actually be live"
+            );
+            assert_eq!(
+                FRAME_RESOLUTION_ATTEMPTS.load(std::sync::atomic::Ordering::SeqCst),
+                before,
+                "names belong to the stack read, not construction",
+            );
+            assert!(!crate::error::js_error_get_stack(error).is_null());
+            assert!(
+                FRAME_RESOLUTION_ATTEMPTS.load(std::sync::atomic::Ordering::SeqCst) > before,
+                "the stack read must exercise resolution",
+            );
+            let error =
+                crate::value::js_nanbox_get_pointer(rooted.get_nanbox_f64()) as *mut ErrorHeader;
+            assert!(
+                (*error).frames.is_null(),
+                "materialization must consume the capture"
+            );
+        }
+    }
+
+    #[test]
+    fn bundle_name_replacement_is_visible_without_a_new_entry() {
+        const START: usize = 0x0000_7d10_0010_0000;
+        const BEFORE: &[u8] = b"bundleNameBefore";
+        const AFTER: &[u8] = b"bundleNameAfter";
+        unsafe {
+            crate::builtins::js_register_function_name_static(
+                START as *const u8,
+                BEFORE.as_ptr(),
+                BEFORE.len() as u32,
+            );
+        }
+        let mut blob = [0u8; MAX_CAPTURED_FRAMES * PC_CHARS];
+        let len = encode_pcs(&[START + 32], &mut blob);
+        assert_eq!(
+            render_frames(&blob[..len], RENDER_LIMIT).as_deref(),
+            Some("    at bundleNameBefore (<anonymous>)")
+        );
+        let count = crate::builtins::with_bundle_function_names(|names| names.len());
+        unsafe {
+            crate::builtins::js_register_function_name_static(
+                START as *const u8,
+                AFTER.as_ptr(),
+                AFTER.len() as u32,
+            );
+        }
+        assert_eq!(
+            crate::builtins::with_bundle_function_names(|names| names.len()),
+            count
+        );
+        assert_eq!(
+            render_frames(&blob[..len], RENDER_LIMIT).as_deref(),
+            Some("    at bundleNameAfter (<anonymous>)"),
+            "a new stack read must use the metadata owner's current name"
+        );
+    }
+
     /// The containment rule is the whole correctness story of the resolver: a
     /// registry entry names a function START, and mis-reading the gap after
     /// the last one is how a runtime frame would acquire a JS function's name.
     #[test]
     fn containment_rejects_addresses_past_a_function() {
-        let index = CodeSymbolIndex {
-            source_len: 2,
-            entries: vec![
-                (0x1000, &b"first"[..]),
-                (0x2000, &b"second"[..]),
-            ],
-        };
+        let names =
+            std::collections::BTreeMap::from([(0x1000, &b"first"[..]), (0x2000, &b"second"[..])]);
         assert_eq!(
-            name_for_ip(&index, 0x1004).map(|n| n.to_vec()),
+            name_for_ip(&names, 0x1004).map(|n| n.to_vec()),
             Some(b"first".to_vec())
         );
         assert_eq!(
-            name_for_ip(&index, 0x2000).map(|n| n.to_vec()),
+            name_for_ip(&names, 0x2000).map(|n| n.to_vec()),
             Some(b"second".to_vec())
         );
         assert!(
-            name_for_ip(&index, 0x0fff).is_none(),
+            name_for_ip(&names, 0x0fff).is_none(),
             "below the first entry belongs to nobody"
         );
         assert!(
-            name_for_ip(&index, 0x2000 + MAX_FUNCTION_SPAN + 1).is_none(),
+            name_for_ip(&names, 0x2000 + MAX_FUNCTION_SPAN + 1).is_none(),
             "past the last entry by more than a function's plausible span is \
              a runtime frame, not `second`"
         );
@@ -1103,11 +1159,6 @@ mod tests {
                 THUNK_NAME.len() as u32,
             );
         }
-        // Tests run with one thread for this process-global registry. Force a
-        // post-registration snapshot so changing the snapshot source back to
-        // the combined registry is a real, deterministic sabotage.
-        *index_slot().lock().expect("code-symbol index lock") = None;
-
         assert_eq!(
             crate::builtins::function_name_for_ptr(THUNK_START).as_deref(),
             Some("get years"),
@@ -1115,8 +1166,10 @@ mod tests {
         );
         assert_eq!(describe_ip(BUNDLE_START + 32), "js:bundleWitness9979");
         let ip = THUNK_START + 32;
-        let last_bundle_start =
-            with_index(|index| index.entries.last().map(|(start, _)| *start)).flatten();
+        let last_bundle_start = crate::builtins::with_bundle_function_names(|names| {
+            names.last_key_value().map(|(start, _)| *start)
+        })
+        .flatten();
         assert!(
             last_bundle_start.is_none_or(|start| ip.saturating_sub(start) > MAX_FUNCTION_SPAN),
             "the fake runtime thunk must sit outside the generated bundle range"
