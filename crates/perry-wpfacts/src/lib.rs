@@ -995,6 +995,7 @@ pub(crate) fn compute_in<'a>(
         eprintln!("perry: wpfacts {}", g.m.sum.stats);
     }
     g.m.solve();
+    let first_solve_ms = t1.elapsed().as_secs_f64() * 1000.0;
     // Past the bound the unit claims nothing (sound): its contracts are
     // neither checked nor published (113-CWL3).
     let mut checks = 0u64;
@@ -1004,8 +1005,15 @@ pub(crate) fn compute_in<'a>(
     } {
         g.m.solve();
     }
+    let checks_ms = t1.elapsed().as_secs_f64() * 1000.0 - first_solve_ms;
     g.m.settle_keyed_uses();
     g.settle_parent_layouts();
+    if cfg.profile {
+        eprintln!(
+            "perry: wpfacts post-solve: first solve {first_solve_ms:.0} ms, {checks} contract checks with their solves {checks_ms:.0} ms, settle {:.0} ms",
+            t1.elapsed().as_secs_f64() * 1000.0 - first_solve_ms - checks_ms
+        );
+    }
     if cfg.profile || cfg.explain {
         let mut kinds = [0usize; 6];
         let mut fnkeyed = 0;
@@ -1108,6 +1116,12 @@ pub(crate) fn compute_in<'a>(
         dump::apply_sabotage(&mut templates, spec);
     }
     let derive_ms = t2.elapsed().as_secs_f64() * 1000.0;
+    if cfg.profile {
+        eprintln!(
+            "perry: wpfacts post-solve: derive {derive_ms:.0} ms, {} markers' members settled",
+            g.m.members_settled.borrow().len()
+        );
+    }
     let stats = Stats {
         modules: sorted.len(),
         templates: g.m.tmpls.len(),

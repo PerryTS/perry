@@ -946,6 +946,10 @@ pub struct Model {
     pub arg_marker_of: FxHashMap<NodeId, Tok>,
     /// An argument marker -> the markers it stands for.
     pub arg_members: FxHashMap<Tok, Vec<Tok>>,
+    /// The parameter markers each argument marker stands for, settled
+    /// over the member graph as the readers ask (`marker_members`); the
+    /// graph only grows while solving, so a solve starts it over.
+    pub members_settled: std::cell::RefCell<FxHashMap<Tok, std::rc::Rc<[Tok]>>>,
     pub arg_linked: crate::pts::FxHashSet<(Tok, Tok)>,
     /// Argument markers, a bit per token.
     pub arg_bits: Vec<u64>,
@@ -1772,28 +1776,114 @@ impl Model {
     /// a key (its keyed reach marker, whose uses are settled per key and
     /// which has no members of its own) is part of what it reaches: it
     /// stands for its reach marker's members.
+    ///
+    /// Settled once per marker over the member graph's strongly connected
+    /// components (a recursion's markers stand for each other and have one
+    /// set), each component's set the union of its members' leaves and its
+    /// successors' sets, shared by its members: the readers after a solve
+    /// ask for the same markers at every site, result and contract.
     pub(crate) fn marker_members(&self, t: Tok) -> Vec<Tok> {
         if !self.is_arg_marker(t) {
             return vec![t];
         }
-        let mut out = Vec::new();
-        let mut seen = crate::pts::FxHashSet::default();
-        let mut st = vec![t];
-        while let Some(x) = st.pop() {
-            if !seen.insert(x) {
+        if let Some(s) = self.members_settled.borrow().get(&t) {
+            return s.to_vec();
+        }
+        self.settle_members_from(t);
+        self.members_settled.borrow()[&t].to_vec()
+    }
+
+    /// The successors of argument marker `x` in the member graph: its
+    /// members, or for a keyed reach marker its argument marker's reach.
+    fn member_succ(&self, x: Tok) -> Vec<Tok> {
+        if let Some(&(p, _)) = self.keyed_parent.get(&x) {
+            return vec![self.marker_reach[&p]];
+        }
+        self.arg_members.get(&x).cloned().unwrap_or_default()
+    }
+
+    /// Tarjan from `root` over the argument markers not settled yet; a
+    /// settled marker and a parameter marker are leaves of the walk.
+    fn settle_members_from(&self, root: Tok) {
+        use crate::pts::{FxHashMap, FxHashSet};
+        let mut index: FxHashMap<Tok, (u32, u32)> = FxHashMap::default();
+        let mut on: FxHashSet<Tok> = FxHashSet::default();
+        let mut stack: Vec<Tok> = Vec::new();
+        let mut next = 0u32;
+        // (marker, its successors, the next successor to visit)
+        let mut frames: Vec<(Tok, Vec<Tok>, usize)> = Vec::new();
+        let succ = self.member_succ(root);
+        index.insert(root, (0, 0));
+        next += 1;
+        stack.push(root);
+        on.insert(root);
+        frames.push((root, succ, 0));
+        while let Some(frame) = frames.last_mut() {
+            let (v, ref ss, ref mut i) = *frame;
+            if *i < ss.len() {
+                let w = ss[*i];
+                *i += 1;
+                if !self.is_arg_marker(w) || self.members_settled.borrow().contains_key(&w) {
+                    continue;
+                }
+                match index.get(&w) {
+                    None => {
+                        index.insert(w, (next, next));
+                        next += 1;
+                        stack.push(w);
+                        on.insert(w);
+                        let ws = self.member_succ(w);
+                        frames.push((w, ws, 0));
+                    }
+                    Some(&(wi, _)) if on.contains(&w) => {
+                        let e = index.get_mut(&v).unwrap();
+                        e.1 = e.1.min(wi);
+                    }
+                    Some(_) => {}
+                }
                 continue;
             }
-            if let Some(&(p, _)) = self.keyed_parent.get(&x) {
-                st.push(self.marker_reach[&p]);
+            let (vi, vlow) = index[&v];
+            frames.pop();
+            if let Some(&(u, _, _)) = frames.last() {
+                let e = index.get_mut(&u).unwrap();
+                e.1 = e.1.min(vlow);
+            }
+            if vlow != vi {
                 continue;
             }
-            match self.arg_members.get(&x) {
-                Some(ms) => st.extend(ms.iter().copied()),
-                None => out.push(x),
+            // The component is complete: its leaves and its successors'
+            // settled sets, one set for every member.
+            let mut comp: Vec<Tok> = Vec::new();
+            while let Some(w) = stack.pop() {
+                on.remove(&w);
+                comp.push(w);
+                if w == v {
+                    break;
+                }
+            }
+            let mut set: Vec<Tok> = Vec::new();
+            {
+                let settled = self.members_settled.borrow();
+                for &w in &comp {
+                    for s in self.member_succ(w) {
+                        if !self.is_arg_marker(s) {
+                            set.push(s);
+                        } else if let Some(ss) = settled.get(&s) {
+                            set.extend(ss.iter().copied());
+                        }
+                        // else: a member of this component.
+                    }
+                }
+            }
+            set.sort_unstable();
+            set.dedup();
+            let rc: std::rc::Rc<[Tok]> = set.into();
+            let mut settled = self.members_settled.borrow_mut();
+            for w in comp {
+                settled.insert(w, rc.clone());
             }
         }
-        out.sort_unstable();
-        out
     }
 
     /// Parameter node `n`'s argument marker, with its own reach marker.
@@ -1843,6 +1933,10 @@ impl Model {
             return;
         }
         self.arg_members.get_mut(&r).unwrap().push(m);
+        // A new link changes the sets settled so far (`marker_members`).
+        if !self.members_settled.get_mut().is_empty() {
+            self.members_settled.get_mut().clear();
+        }
         if self.beside_markers.contains(&r) {
             match self.beside_values(m) {
                 true if !self.param_marker.contains_key(&m) => {
