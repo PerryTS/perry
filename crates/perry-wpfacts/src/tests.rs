@@ -1044,8 +1044,9 @@ fn cjs_main_is_one_record_and_does_not_alias_every_export() {
     let pf = facts(
         r#"
         class Value { x = 1; }
-        const first = __perry_get_cjs_main_module();
-        const second = __perry_get_cjs_main_module();
+        __perry_cjs_install(__perry_declared_keys(), { exports: undefined, __perry_cjs_record: true });
+        const first = process.mainModule;
+        const second = process.mainModule;
         first.exports = new Value();
         Object.defineProperties(first, { tag: { value: 1 } });
         console.log(second.exports.x);
@@ -1057,14 +1058,19 @@ fn cjs_main_is_one_record_and_does_not_alias_every_export() {
 }
 
 #[test]
-fn cjs_explicit_main_publication_exposes_the_record() {
+fn cjs_main_record_reaches_code_through_process_main_module() {
+    // The installed main record is what `process.mainModule` reads: a store
+    // through it is a store on the record, not lost to unmodeled code.
     let pf = facts(
         r#"
         class Value { x = 1; }
-        __perry_set_cjs_main_module(new Value());
+        __perry_cjs_install(__perry_declared_keys(), new Value());
+        process.mainModule.x = "written";
     "#,
     );
-    assert!(!tmpl(&pf, "Value").prefix_stable, "{}", pf.dump_text());
+    let x = field(tmpl(&pf, "Value"), "x");
+    assert!(!x.readonly, "{}", pf.dump_text());
+    assert!(x.kind.prims & crate::model::prim::STR != 0, "{}", pf.dump_text());
 }
 
 #[test]
@@ -1091,7 +1097,8 @@ fn cjs_main_can_carry_a_user_iterator_protocol() {
     let pf = facts(
         r#"
         class Value { x = 1; }
-        const main = __perry_get_cjs_main_module();
+        __perry_cjs_install(__perry_declared_keys(), { exports: undefined, __perry_cjs_record: true });
+        const main = process.mainModule;
         main[Symbol.iterator] = () => main;
         main.next = () => ({ value: new Value(), done: false });
         for (const value of main) { console.log(value.x); break; }

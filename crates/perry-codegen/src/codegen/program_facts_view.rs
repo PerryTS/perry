@@ -57,6 +57,10 @@ pub struct FactsField {
     /// F6 element kind (`perry_hir::TYPED_ARRAY_KIND_*`) when every typed
     /// array the field holds is an owner of that one kind.
     pub ta_kind: Option<u8>,
+    /// A declared key (`perry_hir::ClassFieldOrigin::Declared`): the slot is
+    /// known, presence is not. A read pairs the load with the hole compare;
+    /// stores stay on the checked route (an add orders the key).
+    pub declared: bool,
     /// The field holds only these bodies of this module (FVA): a call
     /// through it is a call of them. Empty when it may hold anything else.
     pub fns: Vec<FactsBody>,

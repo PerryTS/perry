@@ -45,6 +45,45 @@ pub(crate) fn module_cjs_cache_value() -> f64 {
     })
 }
 
+/// The CommonJS support module's `require.cache` becomes `Module._cache`
+/// (`js_cjs_install`). It runs before any CommonJS body; an entry something
+/// already cached through the runtime's own object (an ESM module's
+/// `createRequire` that ran first) moves over, in its order.
+pub(crate) fn install_module_cjs_cache_value(cache: f64) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let cache = scope.root_nanbox_f64(cache);
+    let previous = MODULE_CJS_CACHE_VALUE.with(Cell::get);
+    if previous != 0 && previous != cache.get_nanbox_f64().to_bits() {
+        let previous = scope.root_nanbox_f64(f64::from_bits(previous));
+        let old = || {
+            crate::value::js_nanbox_get_pointer(previous.get_nanbox_f64()) as *mut ObjectHeader
+        };
+        let keys = scope.root_raw_mut_ptr(crate::object::js_object_keys(old()));
+        let count = keys.with_mut_ptr(|keys: *mut crate::array::ArrayHeader| {
+            crate::array::js_array_length(keys)
+        });
+        for i in 0..count {
+            let key = keys.with_mut_ptr(|keys: *mut crate::array::ArrayHeader| {
+                crate::array::js_array_get_f64(keys, i)
+            });
+            let key = scope.root_nanbox_f64(key);
+            let key_ptr = || {
+                crate::value::js_nanbox_get_pointer(key.get_nanbox_f64())
+                    as *const crate::StringHeader
+            };
+            let value = crate::object::js_object_get_field_by_name(old(), key_ptr());
+            crate::object::js_object_set_field_by_name(
+                crate::value::js_nanbox_get_pointer(cache.get_nanbox_f64()) as *mut ObjectHeader,
+                key_ptr(),
+                f64::from_bits(value.bits()),
+            );
+        }
+    }
+    MODULE_CJS_CACHE_VALUE.with(|slot| {
+        store_module_cjs_root(slot, cache.get_nanbox_f64());
+    });
+}
+
 pub(crate) fn module_cjs_path_cache_value() -> f64 {
     MODULE_CJS_PATH_CACHE_VALUE.with(|slot| {
         let bits = slot.get();

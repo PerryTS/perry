@@ -291,7 +291,37 @@ pub struct Class {
     pub specialized_from: Option<String>,
 }
 
+/// Name prefix of the classes [`Class::is_declared_keys_record`] admits.
+pub const DECLARED_KEYS_CLASS_PREFIX: &str = "__PerryDeclaredKeys_";
+
 impl Class {
+    /// The class `__perry_declared_keys(k1, k2, ...)` births: an object with
+    /// a null prototype whose keys are exactly the declared ones, each absent
+    /// until stored (`ClassFieldOrigin::Declared`). It has no constructor and
+    /// no members, so a birth runs no code.
+    pub fn is_declared_keys_record(&self) -> bool {
+        self.name.starts_with(DECLARED_KEYS_CLASS_PREFIX)
+            && self.constructor.is_none()
+            && self.extends.is_none()
+            && self.extends_name.is_none()
+            && self.extends_expr.is_none()
+            && self.native_extends.is_none()
+            && self.methods.is_empty()
+            && self.getters.is_empty()
+            && self.setters.is_empty()
+            && self.static_fields.is_empty()
+            && self.static_methods.is_empty()
+            && self.computed_members.is_empty()
+            && self.decorators.is_empty()
+            && self.fields.iter().all(|f| {
+                f.origin == ClassFieldOrigin::Declared
+                    && f.init.is_none()
+                    && f.key_expr.is_none()
+                    && !f.is_private
+                    && f.decorators.is_empty()
+            })
+    }
+
     /// The shape-only class synthesized for a closed object literal. Check the
     /// complete constructor rather than trusting its name: data materialization
     /// may bypass this body only when it does exactly these positional stores.
@@ -423,6 +453,20 @@ pub struct ClassComputedMember {
 pub enum ClassFieldOrigin {
     Definition,
     ConstructorStore,
+    /// A key the compiler knows exactly but whose presence is dynamic: a
+    /// family key that holds the hole, and so is absent, until a store adds
+    /// it. Never written at birth, never a constructor argument, and not
+    /// limited by the late-key budget. Only [`Class::is_declared_keys_record`]
+    /// classes carry it.
+    Declared,
+}
+
+impl ClassFieldOrigin {
+    /// The field defines no property at birth (a reservation the
+    /// constructor or a later store fills).
+    pub fn is_reservation(self) -> bool {
+        matches!(self, ClassFieldOrigin::ConstructorStore | ClassFieldOrigin::Declared)
+    }
 }
 
 #[derive(Debug, Clone)]

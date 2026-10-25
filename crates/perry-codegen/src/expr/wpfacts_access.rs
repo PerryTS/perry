@@ -97,6 +97,10 @@ pub(crate) struct FieldProof {
     /// Interpreted code can run: the site tests
     /// `PERRY_INTERP_PROTO_WRITTEN` (decision 150).
     pub interp_guard: bool,
+    /// The key is declared in some receiver class: present only once stored,
+    /// so the load is followed by the hole compare, whose miss is the site's
+    /// complete generic operation.
+    pub maybe_absent: bool,
 }
 
 impl FieldProof {
@@ -107,7 +111,7 @@ impl FieldProof {
 
     /// The site tests the proof at run time and has a generic miss arm.
     pub(crate) fn guarded(&self) -> bool {
-        self.checked || self.interp_guard
+        self.checked || self.interp_guard || self.maybe_absent
     }
 
     pub(crate) fn may_hold_string(&self) -> bool {
@@ -322,6 +326,7 @@ pub(crate) fn prove(
         return None;
     }
     let mut slot: Option<u32> = None;
+    let mut maybe_absent = false;
     let mut kind_mask = 0u16;
     let mut ta_stable = true;
     let mut ta_kind: Option<Option<u8>> = None;
@@ -330,14 +335,41 @@ pub(crate) fn prove(
     let mut names = Vec::new();
     let mut slots = Vec::new();
     for &cid in &recv.class_ids {
-        let name = class_name_of(ctx, cid).or_else(|| {
-            crate::fallback_diag::refuse("receiver class is absent from codegen class metadata");
-            None
-        })?;
         let f = ctx.wpfacts.field(cid, property).or_else(|| {
             crate::fallback_diag::refuse(
                 "key is not a definite data birth field of every receiver class",
             );
+            None
+        })?;
+        if f.declared {
+            // A declared key lives at its family slot: the object is born on
+            // the family layout and keeps it for life, so the program-wide
+            // layout is the authority (the class may be another module's).
+            // Stores add the key on the checked route.
+            let fam_slot = ctx.program_layouts.families.get(&cid).and_then(|fam| {
+                fam.keys
+                    .iter()
+                    .find(|(k, _)| *k == property)
+                    .map(|(_, s)| *s)
+            });
+            let Some(idx) = fam_slot.filter(|_| access == Access::Get) else {
+                crate::fallback_diag::refuse(
+                    "declared key: stores add it on the checked route; reads need the family",
+                );
+                return None;
+            };
+            maybe_absent = true;
+            slot.get_or_insert(idx);
+            slots.push(idx);
+            kind_mask |= f.kind_mask;
+            ta_stable = false;
+            ta_kind = Some(None);
+            all_f64 = false;
+            names.push(format!("class#{cid}"));
+            continue;
+        }
+        let name = class_name_of(ctx, cid).or_else(|| {
+            crate::fallback_diag::refuse("receiver class is absent from codegen class metadata");
             None
         })?;
         // Codegen's own layout must agree with the facts' birth slot.
@@ -396,6 +428,7 @@ pub(crate) fn prove(
         binding,
         checked,
         interp_guard,
+        maybe_absent,
     })
 }
 
@@ -775,8 +808,17 @@ fn lower_guarded_get(
         emit_witness(ctx, &recv_box, &val, property, &p, 0, site);
         val
     };
+    if p.maybe_absent {
+        // A declared key holds the hole until stored: an absent key reads
+        // through the prototype chain, which is the generic operation.
+        let blk = ctx.block();
+        let bits = blk.bitcast_double_to_i64(&fast);
+        let hole = blk.icmp_eq(I64, &bits, &crate::nanbox::i64_literal(crate::nanbox::TAG_HOLE));
+        blk.cond_br(&hole, &miss_label, &done_label);
+    } else {
+        ctx.block().br(&done_label);
+    }
     let fast_end = ctx.block().label.clone();
-    ctx.block().br(&done_label);
     ctx.current_block = miss_idx;
     let generic = Expr::PropertyGet {
         object: Box::new(object.clone()),

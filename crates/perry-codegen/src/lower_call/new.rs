@@ -91,6 +91,30 @@ pub(crate) fn lower_new_checked(ctx: &mut FnCtx<'_>, name: &str, args: &[Expr]) 
     lower_new_impl(ctx, name, args, 0, true)
 }
 
+/// A declared-keys record (`perry_hir::Class::is_declared_keys_record`): its
+/// family descriptor carries every declared key as a hole and a null
+/// prototype, so the birth is the descriptor's allocation and runs no code.
+/// Without a family (layouts off: a dylib, a wasm target) the same object is a
+/// null-prototype ordinary object with no keys, and no site is elided on it.
+fn lower_declared_keys_birth(ctx: &mut FnCtx<'_>, class_name: &str) -> String {
+    let family = ctx
+        .class_ids
+        .get(class_name)
+        .copied()
+        .filter(|cid| ctx.program_layouts.families.contains_key(cid));
+    let raw = match family {
+        Some(cid) => {
+            let desc = crate::layout_desc::note_family_desc_use(cid);
+            let ptr = ctx.block().call(PTR, "perry_alloc_layout", &[(PTR, &desc)]);
+            ctx.block().ptrtoint(&ptr, I64)
+        }
+        None => ctx
+            .block()
+            .call(I64, "js_object_alloc_null_proto_ordinary", &[(I32, "0")]),
+    };
+    crate::expr::nanbox_inline::nanbox_pointer_inline(ctx.block(), &raw)
+}
+
 fn lower_new_impl(
     ctx: &mut FnCtx<'_>,
     class_name: &str,
@@ -99,6 +123,9 @@ fn lower_new_impl(
     heritage_checked: bool,
 ) -> Result<String> {
     if let Some(class) = ctx.classes.get(class_name).copied() {
+        if class.is_declared_keys_record() {
+            return Ok(lower_declared_keys_birth(ctx, class_name));
+        }
         let own_body = class.constructor.is_some()
             || ctx
                 .imported_class_ctors

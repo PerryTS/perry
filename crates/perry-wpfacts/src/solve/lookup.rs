@@ -302,7 +302,7 @@ impl Model {
         match self.toks[t as usize] {
             TokKind::Obj(tm, _) => match self.tmpls[tm as usize].kind {
                 TmplKind::Arr { .. } => true,
-                TmplKind::BObj { what, .. } => what != "CjsMain",
+                TmplKind::BObj { .. } => true,
                 _ => false,
             },
             _ => false,

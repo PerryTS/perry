@@ -111,7 +111,7 @@ pub(crate) fn chain_birth_f64_fields(
         .iter()
         .flat_map(|class| &class.fields)
         .filter(|field| {
-            field.origin == perry_hir::ClassFieldOrigin::ConstructorStore
+            field.origin.is_reservation()
                 && candidate.contains(&field.name)
         })
         .map(|field| field.name.clone())

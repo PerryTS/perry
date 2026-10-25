@@ -477,7 +477,7 @@ impl Model {
                 true
             }
             TokKind::Obj(tm, _) => matches!(self.tmpls[*tm as usize].kind,
-                TmplKind::BObj { what, .. } if what != "CjsMain"),
+                TmplKind::BObj { .. }),
             _ => false,
         };
         let fa_d = self.field_any(d);
@@ -654,7 +654,7 @@ impl Model {
                         | TokKind::BuiltinFn
                         | TokKind::NativeProto(_) => true,
                         TokKind::Obj(tm, _) => matches!(self.tmpls[*tm as usize].kind,
-                            TmplKind::BObj { what, .. } if !matches!(what, "CjsMain" | "CjsRecord")),
+                            TmplKind::BObj { .. }),
                         _ => false,
                     };
                     if opaque {

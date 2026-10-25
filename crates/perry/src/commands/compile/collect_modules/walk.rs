@@ -268,6 +268,13 @@ fn walk_modules(
         }
         let pending = reexport_prune::settle(ctx);
         if pending.is_empty() {
+            // Every CommonJS module is known: the support module they import
+            // can be written, and it imports no compiled module itself.
+            if let Some(support) = write_cjs_support(ctx, visited, &entry_canonical)? {
+                stack.push(WorkFrame::Enter(support));
+                submit(&stack, visited);
+                continue;
+            }
             break;
         }
         stack.extend(pending.into_iter().rev().map(WorkFrame::Enter));
@@ -275,4 +282,36 @@ fn walk_modules(
     }
     worker_url::link_accepted(ctx, format);
     Ok(())
+}
+
+/// Write the CommonJS support module (`cjs_wrap::support`) once the walk has
+/// collected every module that imports it, and hand back its path to walk.
+/// `None` when no module imports it or it is already collected.
+fn write_cjs_support(
+    ctx: &mut CompilationContext,
+    visited: &HashSet<PathBuf>,
+    entry_canonical: &std::path::Path,
+) -> Result<Option<PathBuf>> {
+    let Some(path) = ctx.cjs_support_path.clone() else {
+        return Ok(None);
+    };
+    if ctx.cjs_support_keys.is_empty() {
+        return Ok(None);
+    }
+    let entry_key = entry_canonical.to_string_lossy();
+    let entry_is_cjs = ctx.cjs_support_keys.iter().any(|k| *k == entry_key);
+    let source = super::super::cjs_wrap::support::source(&ctx.cjs_support_keys, entry_is_cjs);
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| anyhow!("create {}: {}", dir.display(), e))?;
+    }
+    // Rewrite only on a change, so an unchanged graph keeps the file (and
+    // the object cache keyed by it) as it was.
+    if std::fs::read_to_string(&path).ok().as_deref() != Some(source.as_str()) {
+        std::fs::write(&path, &source).map_err(|e| anyhow!("write {}: {}", path.display(), e))?;
+    }
+    let canonical = path.canonicalize()?;
+    if visited.contains(&canonical) {
+        return Ok(None);
+    }
+    Ok(Some(path))
 }

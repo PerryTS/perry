@@ -269,6 +269,7 @@ impl<'a> Gen<'a> {
             display: format!("{}:{{lit#{site}}}", self.mods[mi as usize].path_short()),
             birth_keys: atoms.clone(),
             definite: atoms,
+            declared: Vec::new(),
             parent: None,
             ctor: None,
             native_parent: None,

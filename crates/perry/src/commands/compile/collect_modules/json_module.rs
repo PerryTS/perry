@@ -34,7 +34,8 @@ pub(super) fn synthesize_json_module(raw: &str, canonical: &Path) -> Result<Stri
     Ok(format!(
         "function __perry_json_factory() {{ return JSON.parse({serialized}); }}\n\
          const __perry_json_default = __perry_json_factory();\n\
-         const __perry_json_module = __perry_cjs_module_record(__perry_json_default, {path:?}, {dir:?}, [], undefined, [{dir:?} + '/node_modules'], __perry_json_factory);\n\
+         const __perry_json_module = {{ exports: __perry_json_default, __perry_cjs_record: true, id: {path:?}, path: {dir:?}, filename: {path:?}, loaded: false, children: [], parent: undefined, paths: [{dir:?} + '/node_modules'], require: undefined }};\n\
+         __perry_register_path_module_partial({path:?}, __perry_json_module, __perry_json_factory);\n\
          __perry_register_path_module({path:?}, __perry_json_module);\n\
          export default __perry_json_default;\n"
     ))

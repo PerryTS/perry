@@ -75,6 +75,9 @@ pub struct FieldFacts {
     pub key: String,
     pub slot: Option<u32>,
     pub definite: bool,
+    /// A declared key (`Template::declared`): `slot` is known, presence is
+    /// not, so a read is the load plus the hole compare.
+    pub declared: bool,
     pub data_field: bool,
     pub readonly: bool,
     pub writers_ctor: usize,
@@ -191,6 +194,7 @@ impl FieldFacts {
             self.slot = None;
         }
         self.definite &= o.definite;
+        self.declared &= o.declared;
         self.data_field &= o.data_field;
         self.readonly &= o.readonly;
         self.writers_ctor = self.writers_ctor.max(o.writers_ctor);
@@ -459,11 +463,12 @@ fn template_facts(
         let birth = i < tpl.birth_keys.len();
         let is_accessor = accessor_keys.contains(&a);
         let definite = birth && tpl.definite.contains(&a) && !is_accessor;
-        if birth && !definite {
+        let declared = birth && tpl.declared.contains(&a) && !is_accessor;
+        if birth && !definite && !declared {
             slot_ok = false;
             fixed_layout = false;
         }
-        let slot = (birth && definite && slot_ok).then_some(i as u32);
+        let slot = (birth && (definite || declared) && slot_ok).then_some(i as u32);
         let w = m.writers.get(&(tm, a)).cloned().unwrap_or_default();
         let any = m.any_writers.get(&tm).cloned().unwrap_or_default();
         let readonly = escape.is_none()
@@ -493,6 +498,7 @@ fn template_facts(
             key: m.atoms[a as usize].clone(),
             slot,
             definite,
+            declared,
             data_field: !is_accessor,
             readonly,
             writers_ctor: w.ctor.len(),
@@ -851,7 +857,9 @@ fn judge(
                     continue;
                 }
                 match tf.fields.iter().find(|f| f.key == *key) {
-                    Some(f) if f.definite && f.data_field && f.slot.is_some() => slots.push(f.slot),
+                    Some(f) if (f.definite || f.declared) && f.data_field && f.slot.is_some() => {
+                        slots.push(f.slot)
+                    }
                     Some(f) if !f.data_field => {
                         verdict.get_or_insert(Verdict::No("accessor key (E25)".into()));
                     }

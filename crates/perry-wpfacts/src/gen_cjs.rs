@@ -5,18 +5,6 @@ use crate::model::*;
 use perry_hir::{CompareOp, Expr, ImportSpecifier, Stmt};
 
 impl<'a> Gen<'a> {
-    /// Runtime bootstrap allocates one empty main record before CJS entry
-    /// initialization. ESM entries have no record, hence the undefined arm.
-    pub(crate) fn cjs_main_value(&mut self, mi: u32) -> NodeId {
-        if let Some(node) = self.cjs_main {
-            return node;
-        }
-        let (_, node) = self.bobj(mi, "CjsMain");
-        self.m.add_prim(node, crate::model::prim::UNDEF);
-        self.cjs_main = Some(node);
-        node
-    }
-
     /// `require("<literal>")` in a CommonJS-wrapped module. The wrapper's
     /// synthetic `require(specifier)` resolved that specifier at compile
     /// time into one arm, `if (specifier === "<literal>") { ... "<absolute

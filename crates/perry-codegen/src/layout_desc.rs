@@ -674,6 +674,7 @@ fn emit_desc(
     slot_count: u32,
     class: (u32, u32),
     methods: &str,
+    null_proto: bool,
 ) {
     let (keys_name, index_name, desc_name) = names;
     let count = keys.len();
@@ -721,8 +722,10 @@ fn emit_desc(
         index_items.join(", ")
     ));
     llmod.add_raw_global(format!(
-        "@{desc_name} = global {DESC_TY} {{ i32 {family}, i16 0, i8 0, i8 0, i32 {slot_count}, i32 {}, i64 0, i64 0, ptr @{keys_name}, i32 {count}, i32 {}, ptr @{index_name}, i32 {}, i32 {}, ptr {methods} }}, section \"{sect}\", align 8",
+        "@{desc_name} = global {DESC_TY} {{ i32 {family}, i16 0, i8 0, i8 0, i32 {slot_count}, i32 {}, i64 0, i64 {}, ptr @{keys_name}, i32 {count}, i32 {}, ptr @{index_name}, i32 {}, i32 {}, ptr {methods} }}, section \"{sect}\", align 8",
         if class.0 == 0 { 0 } else { LAYOUT_ID_CARRIED as i32 },
+        // `LAYOUT_PROTO_NULL` is the address 1 (perry-runtime `layout_desc`).
+        u8::from(null_proto),
         cap - 1,
         class.0,
         class.1
@@ -1030,6 +1033,7 @@ pub(crate) fn emit_module_layouts(
             fam.slot_count,
             (fam.class_id, fam.parent_class_id),
             &methods,
+            class.is_declared_keys_record(),
         );
         n += 1;
         let mut entries = Vec::with_capacity(variants.len());
@@ -1048,6 +1052,7 @@ pub(crate) fn emit_module_layouts(
                 *slot_count,
                 (fam.class_id, fam.parent_class_id),
                 &methods,
+                class.is_declared_keys_record(),
             );
             n += 1;
             entries.push((*key_bits, name));

@@ -100,7 +100,6 @@ pub struct Gen<'a> {
     pub cjs_paths: FxHashMap<String, NodeId>,
     /// Nonliteral publications may replace any named path.
     pub cjs_unknown_path: NodeId,
-    pub cjs_main: Option<NodeId>,
     pub read_sites: Vec<ReadSite>,
     /// Exports whose value is a class declaration (design §11.2).
     pub export_class: FxHashMap<(u32, Atom), TmplId>,
@@ -285,6 +284,11 @@ impl<'a> Gen<'a> {
         let cjs_unknown_path = m.node_l("CJSUNKNOWNPATH");
         m.cjs_union = cjs_registry;
         m.cjs_unknown = cjs_unknown_path;
+        m.cjs_cache = m.node_l("CJSCACHE");
+        m.cjs_ext = m.node_l("CJSEXT");
+        // An ESM entry installs no main record: `require.main` is undefined.
+        m.cjs_main = m.node_l("CJSMAIN");
+        m.add_prim(m.cjs_main, prim::UNDEF);
         let _ = m.tok(TokKind::ObjectProto);
         let mut path_index = FxHashMap::default();
         for (i, (p, _)) in modules.iter().enumerate() {
@@ -301,7 +305,6 @@ impl<'a> Gen<'a> {
             cjs_registry,
             cjs_paths: Default::default(),
             cjs_unknown_path,
-            cjs_main: None,
             read_sites: Vec::new(),
             export_class: FxHashMap::default(),
             export_fn: FxHashMap::default(),
@@ -1243,6 +1246,7 @@ impl<'a> Gen<'a> {
             display: c.display.clone(),
             birth_keys: Vec::new(),
             definite: Vec::new(),
+            declared: Vec::new(),
             parent: None,
             ctor: Some(ctor),
             native_parent: c.native_parent.clone(),
@@ -1788,6 +1792,7 @@ impl<'a> Gen<'a> {
             display,
             birth_keys: Vec::new(),
             definite: Vec::new(),
+            declared: Vec::new(),
             parent: None,
             ctor: None,
             native_parent: c.native_extends.clone(),
@@ -2174,6 +2179,7 @@ impl<'a> Gen<'a> {
             display: format!("{}:[{what}#{site}]", self.mods[mi as usize].path_short()),
             birth_keys: vec![],
             definite: vec![],
+            declared: Vec::new(),
             parent: None,
             ctor: None,
             native_parent: None,
@@ -2208,6 +2214,7 @@ impl<'a> Gen<'a> {
             display: format!("{}:{what}#{site}", self.mods[mi as usize].path_short()),
             birth_keys: vec![],
             definite: vec![],
+            declared: Vec::new(),
             parent: None,
             ctor: None,
             native_parent: None,
