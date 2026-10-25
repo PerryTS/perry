@@ -402,6 +402,49 @@ fn inline_arena_state_is_resolved_through_the_hot_cache_on_apple_aarch64() {
     );
 }
 
+/// The hot-cache `mrs` read is an inline asm call, which RS4GC cannot wrap in
+/// a statepoint ("Cannot take the address of an inline asm!"). A body with no
+/// root slots is not lowered through the native-root pass that marks asm as
+/// GC-leaf, but its text can still be inlined into a body that is; the asm must
+/// therefore carry the leaf mark where it is emitted, in every body.
+#[test]
+fn the_hot_cache_read_is_marked_gc_leaf_in_bodies_without_root_slots() {
+    assert_inline_new_not_forced();
+    if std::env::var_os("PERRY_INLINE_HOT_TLS").as_deref() == Some(std::ffi::OsStr::new("0")) {
+        return;
+    }
+    let mut module = Module::new("rootless.ts");
+    module.functions = vec![Function {
+        id: WALK_ID,
+        name: "rootless".to_string(),
+        type_params: Vec::new(),
+        params: Vec::new(),
+        return_type: Type::Number,
+        body: vec![Stmt::Return(Some(Expr::Number(1.0)))],
+        is_async: false,
+        is_generator: false,
+        is_strict: true,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+        was_plain_async: false,
+        was_unrolled: false,
+    }];
+    module.init_kind = ModuleInitKind::Eager;
+    let ir = ir_for_target(module, "arm64-apple-macosx15.0.0");
+    let reads: Vec<&str> = ir
+        .lines()
+        .filter(|line| line.contains("mrs $0, tpidrro_el0"))
+        .collect();
+    assert!(!reads.is_empty(), "expected inline hot-cache reads:\n{ir}");
+    for line in reads {
+        assert!(
+            line.contains("\"gc-leaf-function\""),
+            "unmarked inline asm would be wrapped in a statepoint after inlining: {line}"
+        );
+    }
+}
+
 /// Guard against `PERRY_INLINE_NEW`, which forces the inline form everywhere
 /// and would make the positive arm pass and the negative arm fail for a reason
 /// that has nothing to do with the gate.

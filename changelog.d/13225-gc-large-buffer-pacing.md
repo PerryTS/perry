@@ -1,0 +1,1 @@
+Reduced full-GC frequency in loops that allocate large (over 4 KiB) buffers: the large-birth band now scales with the live heap and a burst full is owed only when the old heap has grown. `PERRY_GC_LOG=1` prints one line per finished collection.

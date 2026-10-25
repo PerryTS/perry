@@ -520,8 +520,25 @@ pub fn get(owner: f64, key: &str) -> f64 {
 pub fn write(owner: f64, bytes: &[u8], user: u64) -> Result<usize, tl::NetError> {
     crate::payload_tls::write(owner, bytes, user)
 }
+/// End the write side on the protocol layer's behalf. This is `socket.end()` as
+/// far as the Socket is concerned (Node ends an HTTP connection with
+/// `destroySoon()`), so it marks `write_ended`: an application's own `end()`
+/// afterwards is then a no-op, as in Node, instead of a second transport
+/// shutdown. That one fails (EPIPE on WASI), and `end()` reports the failure by
+/// destroying the socket with an `'error'` nothing listens for on a server
+/// connection.
 pub fn shutdown(owner: f64, user: u64) -> Result<(), tl::NetError> {
-    crate::payload_tls::shutdown(owner, user)
+    let scope = TransientRootScope::enter();
+    let owner = scope.root_nanbox(owner);
+    let link = socket::link(owner.get());
+    // SAFETY: The retained link belongs to this agent; projection checks family/open lifecycle, and
+    // field/core access ends before allocation or JS.
+    unsafe {
+        if let Ok(payload) = p::socket_ptr(link) {
+            (*payload).ext.write_ended = true;
+        }
+    }
+    crate::payload_tls::shutdown(owner.get(), user)
 }
 pub fn install_server_tls(
     owner: f64,

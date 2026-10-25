@@ -812,10 +812,18 @@ impl Model {
             )
         });
         self.add_prim(args_n, prim::ALL);
+        // A closed class (design §18.13): what the constructing units pass.
+        let args = match self.tmpls[tm as usize]
+            .ctor
+            .and_then(|f| self.closed_params.get(&f))
+        {
+            Some(nodes) => nodes.clone(),
+            None => vec![args_n; 8],
+        };
         let call = self.calls.len() as CallId;
         self.calls.push(CallSite {
             this: ThisArg::Undef,
-            args: vec![args_n; 8],
+            args,
             spread: vec![],
             ret,
             site: 0,

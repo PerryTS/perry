@@ -432,8 +432,16 @@ impl Model {
         self.fields.insert((t, a), n);
         self.field_keys.entry(t).or_default().push(a);
         self.rel(|| format!("fieldnode {n} {t} {a}"));
-        let any = self.field_any(t);
-        self.edge(any, n);
+        // A marker has no fields (`store_into`): its any-key field holds
+        // only its reach marker. Under a named key it holds that key's
+        // reach marker instead (design §18.4).
+        if self.is_marker(t) && !self.reach_marker.contains(&t) {
+            let r = self.keyed_reach_of(t, a);
+            self.add_tok(n, r);
+        } else {
+            let any = self.field_any(t);
+            self.edge(any, n);
+        }
         let all = self.all_fields(t);
         self.edge(n, all);
         // A key gained after a spread of `t`: the targets get it too.
@@ -702,6 +710,15 @@ impl Model {
             Cons::TopSink { reason } => {
                 for &t in toks {
                     self.escape(t, reason);
+                }
+            }
+            Cons::HandOver { reason } => {
+                for &t in toks {
+                    let stand_in = matches!(self.toks[t as usize], TokKind::Obj(tm, _)
+                        if self.foreign.contains_key(&tm));
+                    if !stand_in {
+                        self.escape(t, reason);
+                    }
                 }
             }
             Cons::ContractThis {
@@ -1067,9 +1084,19 @@ impl Model {
             }
             Cons::Arith { dst, add } => {
                 let mut out = 0u16;
-                if !toks.is_empty() {
-                    // Objects go through ToPrimitive (user valueOf/toString).
-                    out |= prim::NUM | prim::BIGINT | if add { prim::STR } else { 0 };
+                // Objects go through ToPrimitive (user valueOf/toString).
+                let objs = prim::NUM | prim::BIGINT | if add { prim::STR } else { 0 };
+                // A described parameter's marker is no value (DECISIONS 74);
+                // an argument marker is none while it stands for such
+                // markers alone, and adds the kinds if it leaves (75).
+                if toks.iter().any(|&t| !self.beside_values(t)) {
+                    out |= objs;
+                } else {
+                    for &t in toks {
+                        if self.beside_markers.contains(&t) {
+                            self.beside_arith.entry(t).or_default().push((dst, objs));
+                        }
+                    }
                 }
                 if prim & prim::BIGINT != 0 {
                     out |= prim::BIGINT;
@@ -1276,21 +1303,33 @@ impl Model {
         // A store into an existing data field of another unit's literal
         // layout opens nothing (§5): a store effect its defining unit
         // performs with an unknown value (decision 17). The value escapes:
-        // every other unit reads that field as unknown.
+        // every other unit reads that field as unknown. A class instance's
+        // field is existing when every instance holds it from its birth
+        // (definite): the store adds no key (CW2 C, binarytrees_arena).
+        // A literal layout's new data key is a shape transition its defining
+        // unit performs the same way (design §16, DECISIONS 66): the layout
+        // gains the key. `__proto__` and an accessor key store no data.
         let effect = match (tm.and_then(|tm| self.foreign.get(&tm)), key) {
             (Some(facts), Key::Named(a)) if matches!(self.toks[t as usize], TokKind::Obj(..)) => {
-                facts.kind == "litclass"
-                    && facts
+                let k = &self.atoms[a as usize];
+                match facts.kind {
+                    "litclass" | "lit" => {
+                        k != "__proto__"
+                            && !facts.fields.iter().any(|f| !f.data_field && &f.key == k)
+                    }
+                    "class" => facts
                         .fields
                         .iter()
-                        .any(|f| f.data_field && f.key == self.atoms[a as usize])
+                        .any(|f| f.data_field && &f.key == k && f.definite),
+                    _ => false,
+                }
             }
             _ => false,
         };
         if let Some(tm) = tm.filter(|tm| self.foreign.contains_key(tm)) {
             match key {
                 Key::Named(a) if effect => {
-                    self.foreign_stores.insert((tm, a));
+                    self.foreign_stores.insert((tm, a, src));
                     let r = self.reason("stored into another unit's object");
                     self.sink_node(src, r);
                 }
@@ -1505,6 +1544,7 @@ impl Model {
                 format!("chain {n} {origin} {} {act:?}", self.key_name(*key))
             }
             Cons::TopSink { reason } => format!("top {n} {reason}"),
+            Cons::HandOver { reason } => format!("handover {n} {reason}"),
             Cons::ContractThis {
                 tmpl,
                 reason,

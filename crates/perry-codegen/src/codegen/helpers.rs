@@ -462,6 +462,7 @@ pub(super) fn enable_module_init_shadow_frame(
     func: &mut crate::function::LlFunction,
     stmts: &[perry_hir::Stmt],
     flat_const_ids: &std::collections::HashSet<u32>,
+    scope_map: &crate::scope_env::ScopeMap,
 ) -> (HashMap<u32, u32>, HashMap<usize, Vec<u32>>) {
     if !precise_root_analysis_enabled() {
         return (HashMap::new(), HashMap::new());
@@ -474,7 +475,7 @@ pub(super) fn enable_module_init_shadow_frame(
     // before the frame is built.
     func.enable_post_init_shadow_frame(shadow_slot_map.len() as u32);
     let shadow_slot_clears_after_stmt =
-        crate::collectors::collect_shadow_slot_clear_points(stmts, &shadow_slot_map);
+        crate::collectors::collect_shadow_slot_clear_points(stmts, &shadow_slot_map, scope_map);
     (shadow_slot_map, shadow_slot_clears_after_stmt)
 }
 

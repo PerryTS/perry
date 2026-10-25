@@ -233,8 +233,11 @@ impl<'a> Gen<'a> {
                 }
             }
         }
+        // A static namespace import of another unit sees the exports'
+        // contracts (§18.2); the namespace object itself escapes only where
+        // it reaches other units as a value.
         for mi in 0..self.mods.len() {
-            if published.is_none_or(|p| p.whole(path_of(self, mi as u32))) {
+            if published.is_none_or(|p| p.ns_object(path_of(self, mi as u32))) {
                 let t = self.mods[mi].ns_tok;
                 self.m.escape(t, r);
             }
@@ -308,7 +311,18 @@ impl<'a> Gen<'a> {
                 true => format!("fn:{}#{fid}", self.m.funcs[fx as usize].name),
                 false => format!("fn:{}", self.m.funcs[fx as usize].name),
             };
-            if ac.is_some_and(|a| a.top) || unit_in.broken(&name) {
+            // A closed class (design §18.13) is broken by its display; its
+            // constructor reads no `arguments` (`lib::closed_of`).
+            let broken = match self.m.funcs[fx as usize].ctor_of {
+                Some(tm) => {
+                    let fi = &self.m.funcs[fx as usize];
+                    fi.has_arguments
+                        || fi.rest.is_some()
+                        || unit_in.broken(&self.m.tmpls[tm as usize].display)
+                }
+                None => unit_in.broken(&name),
+            };
+            if ac.is_some_and(|a| a.top) || broken {
                 continue;
             }
             let n = self.m.funcs[fx as usize].params.len();
@@ -321,11 +335,16 @@ impl<'a> Gen<'a> {
             self.m.closed_described.insert(fx, described);
             let mut nodes = Vec::with_capacity(n);
             for i in 0..n {
+                // A described position holds undefined when a call passes
+                // fewer arguments: its contract's kinds carry it (DECISIONS 77).
                 let node = match ac.and_then(|a| a.params.get(i)) {
                     Some(vc) => self.stand_in_value(0, &format!("{nm}:arg{i}"), vc),
-                    None => self.m.node_named("arg", || format!("arg{i}({nm})")),
+                    None => {
+                        let node = self.m.node_named("arg", || format!("arg{i}({nm})"));
+                        self.m.add_prim(node, prim::UNDEF);
+                        node
+                    }
                 };
-                self.m.add_prim(node, prim::UNDEF);
                 nodes.push(node);
             }
             self.m.closed_params.insert(fx, nodes);
@@ -423,6 +442,17 @@ impl<'a> Gen<'a> {
                 if let TokKind::Obj(tm, _) = self.m.toks[t as usize] {
                     if self.contract_class(tm) {
                         changed |= self.m.give_out(tm, t);
+                    } else if self.stand_in_cc.contains_key(&tm) {
+                        // Another unit's layout, forwarded with its owner's
+                        // contract: nothing of this unit leaves through its
+                        // fields, as for a published value (DECISIONS 79).
+                        continue;
+                    } else if !self.ret_ok.contains(&t) {
+                        // A literal result is the same layout contract as a
+                        // published literal: its field functions are contract
+                        // functions the caller calls through their contract
+                        // (DECISIONS 78, as the value path below).
+                        changed |= self.note_field_fns(t);
                     }
                 }
                 changed |= self.fields_leave(t, r);
@@ -478,6 +508,7 @@ impl<'a> Gen<'a> {
             }
             self.value_contracts.push((e, n));
         }
+        changed |= self.nested_fields(r);
         // A literal of this unit passed to another unit's closed function
         // (decision 13) is described by the argument contract as a value
         // contract describes a published literal: its field functions are
@@ -563,7 +594,9 @@ impl<'a> Gen<'a> {
             let fs: Option<Vec<(FnIdx, Tok)>> = toks
                 .iter()
                 .map(|&ft| match self.m.toks[ft as usize] {
-                    TokKind::Func(f, _) if self.m.funcs[f as usize].func_id != u32::MAX => {
+                    TokKind::Func(f, _)
+                        if self.m.funcs[f as usize].func_id != u32::MAX || self.open_fn(ft) =>
+                    {
                         Some((f, ft))
                     }
                     _ => None,
@@ -571,6 +604,11 @@ impl<'a> Gen<'a> {
                 .collect();
             if let Some(fs) = fs {
                 for &(f, ft) in &fs {
+                    // Another unit's open function: the field forwards its
+                    // contract (design §18.9).
+                    if self.m.funcs[f as usize].func_id == u32::MAX {
+                        continue;
+                    }
                     // Other units call it with what they have: it escapes
                     // as a contract function (⊤ parameters that carry
                     // markers, its result checked). One that escaped
@@ -604,45 +642,42 @@ impl<'a> Gen<'a> {
     }
 
     /// What other units stored into existing fields of this unit's literal
-    /// layouts (decision 17): an unknown value, stored into that field of
+    /// layouts and class instances (decision 17): a value of the kinds they
+    /// stored (DECISIONS 73), or an unknown one, stored into that field of
     /// every instance of the layout by an anonymous writer. True when this
     /// added constraints.
     fn apply_store_effects(&mut self) -> bool {
         let Some(u) = self.unit_in else { return false };
-        let mut want: Vec<(TmplId, &'a String)> = Vec::new();
+        let mut want: Vec<(TmplId, &'a String, Option<u16>)> = Vec::new();
         for (tm, t) in self.m.tmpls.iter().enumerate() {
             if !matches!(
                 t.kind,
-                TmplKind::Class {
-                    literal_shape: true,
-                    ..
-                }
+                TmplKind::Class { .. }
+                    | TmplKind::Lit {
+                        enum_image: true,
+                        ..
+                    }
             ) || self.stand_in_cc.contains_key(&(tm as TmplId))
             {
                 continue;
             }
-            for k in u.stored_keys(&t.display) {
-                want.push((tm as TmplId, k));
+            for (k, kinds) in u.stored_keys(&t.display) {
+                want.push((tm as TmplId, k, *kinds));
             }
         }
         if want.is_empty() {
             return false;
         }
-        let want: Vec<(TmplId, Atom)> = want
+        let want: Vec<(TmplId, Atom, Option<u16>)> = want
             .into_iter()
-            .map(|(tm, k)| (tm, self.m.atom(k)))
+            .map(|(tm, k, kinds)| (tm, self.m.atom(k), kinds))
             .collect();
-        let (src, site) = match self.effect_src {
+        let site = match self.effect_site {
             Some(x) => x,
             None => {
-                let n = self
-                    .m
-                    .node_named("stored", || "stored by another unit".into());
-                self.m.add_top(n, |_| "stored by another unit".into());
-                self.m.add_prim(n, prim::ALL);
                 let site = self.m.anon_post_site("store by another unit");
-                self.effect_src = Some((n, site));
-                (n, site)
+                self.effect_site = Some(site);
+                site
             }
         };
         let mut changed = false;
@@ -650,8 +685,9 @@ impl<'a> Gen<'a> {
             let TokKind::Obj(tm, _) = self.m.toks[t as usize] else {
                 continue;
             };
-            for &(_, a) in want.iter().filter(|w| w.0 == tm) {
+            for &(_, a, kinds) in want.iter().filter(|w| w.0 == tm) {
                 if self.effects_done.insert((t, a)) {
+                    let src = self.effect_src(kinds);
                     self.m.store_into(t, crate::model::Key::Named(a), src, site);
                     changed = true;
                 }
@@ -660,17 +696,45 @@ impl<'a> Gen<'a> {
         changed
     }
 
-    /// The store effects this unit publishes (decision 17), by template
-    /// display and key.
-    pub(crate) fn store_effects(&self) -> Vec<(String, String)> {
-        let mut out: Vec<(String, String)> = self
+    /// The value a store effect stores: of its primitive kinds, or unknown
+    /// (`None`), one node per kinds.
+    fn effect_src(&mut self, kinds: Option<u16>) -> NodeId {
+        if let Some(&n) = self.effect_srcs.get(&kinds) {
+            return n;
+        }
+        let n = self
             .m
-            .foreign_stores
-            .iter()
-            .map(|&(tm, a)| {
+            .node_named("stored", || "stored by another unit".into());
+        match kinds {
+            Some(p) => self.m.add_prim(n, p),
+            None => {
+                self.m.add_top(n, |_| "stored by another unit".into());
+                self.m.add_prim(n, prim::ALL);
+            }
+        }
+        self.effect_srcs.insert(kinds, n);
+        n
+    }
+
+    /// The store effects this unit publishes (decision 17), by template
+    /// display and key, with the primitive kinds of what it stores
+    /// (DECISIONS 73): `None` when a stored value may be an object or ⊤,
+    /// or the solve stopped at the bound.
+    pub(crate) fn store_effects(&self) -> Vec<(String, String, Option<u16>)> {
+        let mut by: FxHashMap<(TmplId, Atom), Option<u16>> = FxHashMap::default();
+        for &(tm, a, n) in &self.m.foreign_stores {
+            let node = &self.m.nodes[n as usize];
+            let kinds = (!self.m.aborted && node.pts.is_empty()).then_some(node.prim);
+            let e = by.entry((tm, a)).or_insert(Some(0));
+            *e = e.zip(kinds).map(|(x, y)| x | y);
+        }
+        let mut out: Vec<(String, String, Option<u16>)> = by
+            .into_iter()
+            .map(|((tm, a), k)| {
                 (
                     self.m.tmpls[tm as usize].display.clone(),
                     self.m.atoms[a as usize].clone(),
+                    k,
                 )
             })
             .collect();
@@ -679,13 +743,17 @@ impl<'a> Gen<'a> {
         out
     }
 
-    /// A literal-shape object of this unit no census report broke.
+    /// A literal-shape object or an enum's object (§18.2) of this unit no
+    /// census report broke.
     fn literal_ok(&self, tm: TmplId) -> bool {
         let t = &self.m.tmpls[tm as usize];
         matches!(
             t.kind,
             TmplKind::Class {
                 literal_shape: true,
+                ..
+            } | TmplKind::Lit {
+                enum_image: true,
                 ..
             }
         ) && !self.unit_in.is_some_and(|u| u.broken(&t.display))
@@ -717,12 +785,22 @@ impl<'a> Gen<'a> {
     /// A published literal object's fields go to another unit: their
     /// contents leave once (accessors run with unknown receivers). True when
     /// this added constraints.
+    ///
+    /// A literal of this unit (`nested_ok`) leaves key by key instead
+    /// (design §18.7, `nested_fields`): what it holds under a computed key
+    /// leaves here, each named field once `contract_check` decided it.
     fn fields_leave(&mut self, t: Tok, r: u32) -> bool {
         if !self.ret_ok.insert(t) {
             return false;
         }
-        let all = self.m.all_fields(t);
-        self.m.cons(all, Cons::TopSink { reason: r });
+        match self.m.toks[t as usize] {
+            TokKind::Obj(tm, _) if self.nested_ok(tm) => {
+                self.leaving.push(t);
+                let any = self.m.field_any(t);
+                self.m.sink_node(any, r);
+            }
+            _ => self.sink_all_fields(t, r),
+        }
         let rl = self.m.node_l("contract-ret-load");
         self.m.sink_node(rl, r);
         self.m.accessor_walk(
@@ -732,6 +810,123 @@ impl<'a> Gen<'a> {
             crate::model::ChainAct::Load(rl),
         );
         true
+    }
+
+    fn sink_all_fields(&mut self, t: Tok, r: u32) {
+        if self.all_sunk.insert(t) {
+            let all = self.m.all_fields(t);
+            self.m.cons(all, Cons::TopSink { reason: r });
+        }
+    }
+
+    /// A literal layout of this unit a published value's field may hold
+    /// as a nested contract (design §18.7): no census broke it, it is no
+    /// stand-in or contract class. (A closed callee of another unit that
+    /// gets it as an argument sees no nested fields; what it does to them
+    /// comes back through its parameter's reach uses, decision 13.)
+    fn nested_ok(&self, tm: TmplId) -> bool {
+        self.literal_ok(tm) && !self.stand_in_cc.contains_key(&tm) && !self.contract_class(tm)
+    }
+
+    /// Design §18.7: the named fields of the published literals that leave
+    /// key by key, decided per template and key over every instance that
+    /// leaves. A field holding only instances of literal layouts this unit
+    /// may publish (`nested_ok`, none escaped) is described by those
+    /// layouts, which leave the same way; any other content and the field
+    /// is sunk for good. A field holding only primitives so far stays
+    /// undecided (nothing leaves through it; a reader sees ⊤). Re-run to
+    /// the fixpoint by `contract_check`: a described field whose contents
+    /// grow is checked again. True when this added constraints.
+    fn nested_fields(&mut self, r: u32) -> bool {
+        let mut changed = false;
+        loop {
+            let n0 = self.leaving.len();
+            let mut by: FxHashMap<TmplId, Vec<Tok>> = FxHashMap::default();
+            for &t in &self.leaving {
+                if let Some(tm) = self.m.tmpl_of(t) {
+                    by.entry(tm).or_default().push(t);
+                }
+            }
+            let mut tms: Vec<TmplId> = by.keys().copied().collect();
+            tms.sort_unstable();
+            for tm in tms {
+                let ts = by.remove(&tm).unwrap_or_default();
+                if !self.nested_ok(tm) {
+                    // Broken by the census: every field leaves as before.
+                    self.field_layouts.retain(|&(t2, _), _| t2 != tm);
+                    for &t in &ts {
+                        if !self.all_sunk.contains(&t) {
+                            self.sink_all_fields(t, r);
+                            changed = true;
+                        }
+                    }
+                    continue;
+                }
+                let mut keys: Vec<Atom> = ts
+                    .iter()
+                    .flat_map(|t| self.m.field_keys.get(t).into_iter().flatten().copied())
+                    .collect();
+                keys.sort_unstable();
+                keys.dedup();
+                for a in keys {
+                    let mut ok = !self.sunk_fields.contains(&(tm, a));
+                    let mut inner: Vec<(TmplId, Tok)> = Vec::new();
+                    let mut prim = false;
+                    if ok {
+                        'toks: for &t in &ts {
+                            let Some(&n) = self.m.fields.get(&(t, a)) else {
+                                continue;
+                            };
+                            prim |= self.m.nodes[n as usize].prim != 0;
+                            for x in self.m.nodes[n as usize].pts.to_sorted() {
+                                match self.m.toks[x as usize] {
+                                    TokKind::Obj(itm, _)
+                                        if self.nested_ok(itm) && !self.m.is_escaped(x) =>
+                                    {
+                                        inner.push((itm, x))
+                                    }
+                                    _ => {
+                                        ok = false;
+                                        break 'toks;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if ok && inner.is_empty() {
+                        continue;
+                    }
+                    if ok {
+                        let mut itms: Vec<TmplId> = inner.iter().map(|&(i, _)| i).collect();
+                        itms.sort_unstable();
+                        itms.dedup();
+                        self.field_layouts.insert((tm, a), itms);
+                        if prim {
+                            self.field_prims.insert((tm, a));
+                        }
+                        for (_, x) in inner {
+                            changed |= self.fields_leave(x, r);
+                        }
+                        continue;
+                    }
+                    self.sunk_fields.insert((tm, a));
+                    self.field_layouts.remove(&(tm, a));
+                    self.field_prims.remove(&(tm, a));
+                    for &t in &ts {
+                        if let Some(&n) = self.m.fields.get(&(t, a)) {
+                            if self.sunk_field_toks.insert((t, a)) {
+                                self.m.sink_node(n, r);
+                                changed = true;
+                            }
+                        }
+                    }
+                }
+            }
+            if self.leaving.len() == n0 {
+                break;
+            }
+        }
+        changed
     }
 
     /// The module an `export … from source` of module `mi` reads: the
@@ -754,7 +949,7 @@ impl<'a> Gen<'a> {
         if let Some(&n) = self.mods[mi as usize].scope.get(name) {
             return n;
         }
-        if let Some(&n) = self.mods[mi as usize].imports.get(name) {
+        if let Some(n) = self.import_value(mi, name) {
             return n;
         }
         self.m.top_val(&format!("unresolved scope name {name}"))

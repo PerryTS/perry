@@ -135,3 +135,51 @@ srv.listen(0, (): void => {
         );
     }
 }
+
+/// A server-side request has the same `pipe` contract: the handler runs once
+/// the body is buffered, so `req.pipe(dest)` has to write it to `dest`, end
+/// `dest`, and return `dest`. It used to fall through the server request's
+/// method dispatch as a silent no-op, which left a proxy
+/// (`req.pipe(new PassThrough())`) empty and a `stream.pipeline` from it
+/// into a file waiting forever.
+#[test]
+fn server_request_pipe_forwards_body_and_returns_dest() {
+    let source = r#"
+import http from "http";
+import { PassThrough } from "stream";
+
+const srv = http.createServer((req: any, res: any): void => {
+  const proxy = new PassThrough();
+  const ret = req.pipe(proxy);
+  const chunks: any[] = [];
+  proxy.on("data", (c: any): void => { chunks.push(c); });
+  proxy.on("end", (): void => {
+    res.end("returned-dest:" + (ret === proxy) + " body:" + Buffer.concat(chunks).toString());
+  });
+});
+srv.listen(0, (): void => {
+  const port = (srv.address() as any).port;
+  const req = http.request(
+    { host: "127.0.0.1", port, method: "POST", path: "/" },
+    (res: any): void => {
+      const chunks: any[] = [];
+      res.on("data", (c: any): void => { chunks.push(c); });
+      res.on("end", (): void => {
+        console.log("REPLY:" + Buffer.concat(chunks).toString());
+        srv.close();
+      });
+    }
+  );
+  req.end("hello server body");
+});
+"#;
+
+    for (mode, no_auto_optimize) in [("auto-optimize", false), ("no-auto-optimize", true)] {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let out = compile_and_run(dir.path(), source, no_auto_optimize);
+        assert!(
+            out.contains("REPLY:returned-dest:true body:hello server body"),
+            "{mode}: server request pipe() must return dest and deliver the body: {out}"
+        );
+    }
+}

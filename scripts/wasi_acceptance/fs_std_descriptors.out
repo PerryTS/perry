@@ -1,0 +1,7 @@
+to fd 1
+sync string 8
+buffer to fd 1
+sync buffer 15
+async to fd 1
+callback true 14
+exit 0

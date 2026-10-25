@@ -18,6 +18,7 @@ use crate::object::{js_object_alloc, js_object_set_field_by_name, ObjectHeader};
 use crate::value::{js_nanbox_pointer, JSValue, TAG_NULL, TAG_UNDEFINED};
 
 mod ffi;
+pub(crate) use ffi::dispatch_export;
 mod records;
 mod resolve_build;
 

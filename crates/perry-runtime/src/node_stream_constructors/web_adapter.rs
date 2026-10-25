@@ -209,6 +209,17 @@ fn call_stream_callback(callback: f64, err: f64) {
     }
 }
 
+/// A readable that is a bare handle (an http `IncomingMessage`) rather than a
+/// node:stream object: it has no node:stream buffer state, so it is read and
+/// destroyed through its own `read()`/`destroy()` methods.
+fn is_bare_handle_value(value: f64) -> bool {
+    let bits = value.to_bits();
+    bits & crate::value::TAG_MASK == crate::value::HANDLE_TAG
+        && !crate::value::addr_class::is_stream_id_band(
+            (bits & crate::value::POINTER_MASK) as usize,
+        )
+}
+
 extern "C" fn node_to_web_readable_pull(
     closure: *const ClosureHeader,
     _this: crate::closure::JsThis,
@@ -218,10 +229,16 @@ extern "C" fn node_to_web_readable_pull(
         return f64::from_bits(TAG_UNDEFINED);
     }
     let node_stream = js_closure_get_capture_f64(closure, 0);
-    let chunk = read_stream_with_size_arg(node_stream, f64::from_bits(TAG_UNDEFINED));
+    let handle = is_bare_handle_value(node_stream);
+    let chunk = if handle {
+        call_method_no_args(node_stream, crate::runtime_state_key!(b"read"))
+    } else {
+        read_stream_with_size_arg(node_stream, f64::from_bits(TAG_UNDEFINED))
+    };
     match chunk.to_bits() {
         TAG_NULL | TAG_UNDEFINED => {
-            if stream_hidden_ended(node_stream) || !readable_chunks_nonempty(node_stream) {
+            if handle || stream_hidden_ended(node_stream) || !readable_chunks_nonempty(node_stream)
+            {
                 if let Some(close) = web_readable_close() {
                     unsafe {
                         close(controller);
@@ -374,7 +391,12 @@ extern "C" fn node_to_web_readable_cancel(
     reason: f64,
 ) -> f64 {
     if !closure.is_null() {
-        destroy_stream(js_closure_get_capture_f64(closure, 0), reason);
+        let stream = js_closure_get_capture_f64(closure, 0);
+        if is_bare_handle_value(stream) {
+            destroy_foreign_readable(stream, reason);
+        } else {
+            destroy_stream(stream, reason);
+        }
     }
     f64::from_bits(TAG_UNDEFINED)
 }

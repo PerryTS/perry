@@ -845,7 +845,12 @@ pub(crate) fn render_frames(blob: &[u8], limit: usize) -> Option<String> {
                 out.push_str(&format!("{pc:#x}"));
                 out.push(']');
             }
-            out.push_str(" (<anonymous>)");
+            // A module's top-level frame is registered with its own location
+            // (`Object.<anonymous> (<path>)`, node's spelling); the name
+            // already carries the position, so do not append an unknown one.
+            if !name.starts_with("Object.<anonymous> (") {
+                out.push_str(" (<anonymous>)");
+            }
             rendered += 1;
         }
         if rendered == 0 {

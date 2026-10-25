@@ -623,6 +623,19 @@ pub extern "C" fn js_process_argv() -> *mut ArrayHeader {
     result
 }
 
+/// The OS process id for names and log lines. `std::process::id()` panics on
+/// wasm32-wasi, which has no process ids; there it is 0, like `process.pid`.
+pub(crate) fn current_process_id() -> u32 {
+    #[cfg(target_os = "wasi")]
+    {
+        0
+    }
+    #[cfg(not(target_os = "wasi"))]
+    {
+        std::process::id()
+    }
+}
+
 /// Get the current process ID (process.pid)
 #[no_mangle]
 pub extern "C" fn js_process_pid() -> f64 {

@@ -790,6 +790,11 @@ pub unsafe extern "C" fn js_ext_http_incoming_message_dispatch_method(
             );
             self_ref
         }
+        "pipe" if !args.is_empty() => crate::server::request::js_node_http_im_pipe(
+            handle,
+            args[0],
+            args.get(1).copied().unwrap_or(undef),
+        ),
         "pause" => {
             js_node_http_im_pause(handle);
             self_ref
@@ -1543,6 +1548,7 @@ fn incoming_method_bytes(name: &str) -> Option<&'static [u8]> {
         "setTimeout" => Some(b"setTimeout"),
         "pause" => Some(b"pause"),
         "resume" => Some(b"resume"),
+        "pipe" => Some(b"pipe"),
         "destroy" => Some(b"destroy"),
         "read" => Some(b"read"),
         "unref" => Some(b"unref"),

@@ -533,10 +533,6 @@ fn exit_uncaught(value: f64) -> ! {
     std::process::exit(status);
 }
 
-/// `_URC_END_OF_STACK`: phase 1 walked every frame and none had a handler.
-#[cfg(all(not(target_os = "wasi"), not(windows)))]
-const URC_END_OF_STACK: i32 = 5;
-
 /// Throw an exception with the given value
 ///
 /// `C-unwind` is required for the landingpad transport: when the fast walker
@@ -601,11 +597,14 @@ pub extern "C-unwind" fn js_throw(value: f64) -> ! {
         let reason = crate::eh::raise_perry_exception();
         // Itanium: phase 1 found no pad anywhere, and the raise returned
         // without unwinding. The stack is intact, so exit listeners and the
-        // backtrace behave as before. (Windows reaches its uncaught path in
-        // the unhandled-exception filter, before RaiseException returns.)
+        // backtrace behave as before. Classified by the personality's
+        // verdicts, not by `reason`: some libgcc builds return garbage from
+        // `_Unwind_RaiseException` (see `eh::raise_found_no_handler`).
+        // (Windows reaches its uncaught path in the unhandled-exception
+        // filter, before RaiseException returns.)
         #[cfg(not(windows))]
-        if reason == URC_END_OF_STACK {
-            crate::eh::diagnose_end_of_stack();
+        if crate::eh::raise_found_no_handler() {
+            crate::eh::diagnose_end_of_stack(reason);
             exit_uncaught(value)
         }
         eprintln!(
