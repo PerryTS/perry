@@ -264,6 +264,13 @@ impl Values {
         }
         Ok(false)
     }
+    pub fn collect(&mut self, value: &Value) -> Result<Option<Val>> {
+        let (token, _) = token(value)?;
+        if !self.entries.contains_key(token) {
+            return Ok(None);
+        }
+        self.close(value)
+    }
     pub fn close(&mut self, value: &Value) -> Result<Option<Val>> {
         let (token, stream) = token(value)?;
         let entry = self

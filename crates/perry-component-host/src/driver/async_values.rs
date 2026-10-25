@@ -45,6 +45,9 @@ pub(super) async fn execute(
     fuel: u64,
     reset: bool,
 ) -> Completion {
+    if matches!(command.target, Target::Resource(..)) {
+        return super::resources::execute(accessor, command, fuel, reset).await;
+    }
     if matches!(
         command.target,
         Target::Factory(_) | Target::Write(..) | Target::WriterControl(..)
@@ -70,9 +73,17 @@ pub(super) async fn execute(
                 Ok::<_, wasmtime::Error>(())
             })?;
         }
-        if let Target::Close(value, intents) = &command.target {
+        if let Target::Close(value, intents) | Target::CollectAsync(value, intents) =
+            &command.target
+        {
             let reader = accessor
-                .with(|mut store| store.data_mut().async_values.close(value))
+                .with(|mut store| {
+                    if matches!(command.target, Target::CollectAsync(..)) {
+                        store.data_mut().async_values.collect(value)
+                    } else {
+                        store.data_mut().async_values.close(value)
+                    }
+                })
                 .or_else(|error| {
                     if intents.iter().any(|intent| intent.closed.get()) {
                         Ok(None)

@@ -8,6 +8,7 @@ pub use asynchronous::origin::{current_invocation, InvocationId};
 pub use driver::{Driver, DriverCall, DriverClient};
 mod imports;
 pub use asynchronous::{AsyncImport, AsyncImports};
+mod borrowed;
 mod cleanup;
 mod command;
 pub mod http;
@@ -67,6 +68,8 @@ struct StoreData {
     resources: resources::Resources,
     host_resources: host_resources::HostResources,
     wasi: Option<wasi::State>,
+    disposers: Vec<(wasmtime::component::ResourceType, Func)>,
+    borrowed: borrowed::Registry,
 }
 
 struct Live {
@@ -142,6 +145,52 @@ impl Host {
         resource_hook: ResourceHook,
         dispatcher: Option<Arc<asynchronous::dispatch::Dispatcher>>,
     ) -> Result<Self> {
+        Self::new_prepared(
+            bytes,
+            world,
+            imports,
+            async_imports,
+            options,
+            resource_hook,
+            dispatcher,
+            false,
+        )
+    }
+
+    /// Construct a host for the persistent driver, including private concurrent
+    /// resource disposal. Call into_driver next. All callbacks use the owning
+    /// embedding stack, including synchronous WIT functions and destructors.
+    pub fn new_for_driver(
+        bytes: &[u8],
+        world: &World,
+        imports: &Imports,
+        async_imports: &AsyncImports,
+        options: &Options,
+        resource_hook: ResourceHook,
+    ) -> Result<Self> {
+        Self::new_prepared(
+            bytes,
+            world,
+            imports,
+            async_imports,
+            options,
+            resource_hook,
+            Some(Arc::new(asynchronous::dispatch::Dispatcher::default())),
+            true,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new_prepared(
+        bytes: &[u8],
+        world: &World,
+        imports: &Imports,
+        async_imports: &AsyncImports,
+        options: &Options,
+        resource_hook: ResourceHook,
+        dispatcher: Option<Arc<asynchronous::dispatch::Dispatcher>>,
+        disposal: bool,
+    ) -> Result<Self> {
         ensure!(
             options.memory_bytes > 0 && options.fuel > 0 && options.instances > 0,
             "component limits must be positive"
@@ -165,6 +214,7 @@ impl Host {
             world,
             options.wasi.is_some(),
             &identities,
+            disposal,
         )?;
         let component = &prepared.component;
         let async_values = async_values::Values::new()?;
@@ -252,6 +302,8 @@ impl Host {
             &engine,
             StoreData {
                 async_values,
+                disposers: Vec::new(),
+                borrowed: borrowed::Registry::default(),
                 origins: asynchronous::origin::Origins::default(),
                 limits,
                 resources: resources::Resources::default(),
@@ -334,6 +386,32 @@ impl Host {
                 )?));
             }
             store.data_mut().async_values.adapters = adapters;
+            if let Some(name) = &prepared.disposers {
+                let namespace = instance
+                    .get_export_index(&mut store, None, name)
+                    .context("missing private resource disposer")?;
+                let mut disposers = Vec::new();
+                for index in 0..identities.len() {
+                    let function = instance
+                        .get_export_index(&mut store, Some(&namespace), &format!("dispose-{index}"))
+                        .context("missing typed resource disposer")?;
+                    let function = instance
+                        .get_func(&mut store, function)
+                        .context("invalid typed resource disposer")?;
+                    let ty = function
+                        .ty(&store)
+                        .params()
+                        .next()
+                        .context("missing disposer parameter")?
+                        .1;
+                    let wasmtime::component::Type::Own(resource) = ty else {
+                        bail!("invalid private resource disposal type")
+                    };
+                    disposers.push((resource, function));
+                }
+                store.data_mut().disposers = disposers;
+            }
+
             let mut exports = BTreeMap::new();
             for interface in &world.exports {
                 let namespace = if interface.name.is_empty() {

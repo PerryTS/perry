@@ -1,4 +1,5 @@
 use super::*;
+mod disposal_tests;
 use perry_abi::component_host::ASYNC_PENDING;
 
 #[derive(Default)]
@@ -10,6 +11,7 @@ struct State {
     reentry_rejected: bool,
     resources: Vec<(Value, u64, u64)>,
     reject_drop: bool,
+    guest_drops: Vec<(u32, u64, u64)>,
 }
 struct Frame {
     state: *mut State,
@@ -80,6 +82,18 @@ unsafe extern "C" fn callback(
 ) -> i32 {
     let frame = &*(context as usize as *const Frame);
     let state = &mut *frame.state;
+    if bytes(function, function_len).unwrap() == b"dropped" {
+        let args: Value = serde_json::from_slice(bytes(args, args_len).unwrap()).unwrap();
+        state
+            .guest_drops
+            .push((args[0].as_u64().unwrap() as u32, origin, frame.marker));
+        if state.reject_drop {
+            output(out, b"guest destructor rejected".to_vec());
+            return ERROR;
+        }
+        output(out, b"null".to_vec());
+        return OK;
+    }
     if bytes(function, function_len).unwrap() == b"consume" {
         output(out, b"primary synchronous import error".to_vec());
         return ERROR;
@@ -144,7 +158,7 @@ unsafe fn new(state: &mut State, source: &str, component: &str) {
     );
     perry_component_host_buffer_drop(error);
 }
-unsafe fn fixture(state: &mut State, early: bool) {
+fn fixture_text(early: bool) -> (String, String) {
     let source = "package test:driver; interface clock { now: func() -> u64; wait-for: async func(value: u64); } world plugin { import clock; export run: async func(value: u64) -> u64; }";
     let world = perry_wit::parse(source, None).unwrap();
     let heap =
@@ -161,7 +175,11 @@ unsafe fn fixture(state: &mut State, early: bool) {
         text = text.replace("      (call $return (i64.load (local.get $frame)))\n", "")
             .replace("      (local.set $status (call $wait (local.get $value)))", "      (call $return (local.get $value))\n      (local.set $status (call $wait (local.get $value)))");
     }
-    new(state, source, &text);
+    (source.to_owned(), text)
+}
+unsafe fn fixture(state: &mut State, early: bool) {
+    let (source, text) = fixture_text(early);
+    new(state, &source, &text);
 }
 fn call(value: u64) -> Value {
     json!({"op":"call","interface":"","function":"run","args":[{"$bigint":value.to_string()}]})

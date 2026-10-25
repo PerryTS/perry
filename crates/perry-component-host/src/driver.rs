@@ -2,6 +2,7 @@
 //! guest tasks exit, and subsequent commands share the same run_concurrent.
 mod async_values;
 mod requests;
+mod resources;
 #[cfg(test)]
 mod tests;
 mod writers;
@@ -181,15 +182,17 @@ async fn execute(
             .zip(&params)
             .map(|(v, t)| lowering.value(v, t))
             .collect::<Result<Vec<_>>>()?;
+        let borrowed = lowering.borrowed_keys();
         lowering.commit()?;
+        let borrows = store.data_mut().borrowed.acquire(borrowed);
         if reset_budget {
             store.as_context_mut().set_fuel(fuel)?;
             store.as_context_mut().set_epoch_deadline(1);
         }
         let result_count = ty.results().len();
-        Ok((args, vec![Val::Bool(false); result_count]))
+        Ok((args, vec![Val::Bool(false); result_count], borrows))
     });
-    let (args, mut output) = match prepared {
+    let (args, mut output, _borrows) = match prepared {
         Ok(prepared) => prepared,
         Err(error) => return (command, Err(error), false),
     };

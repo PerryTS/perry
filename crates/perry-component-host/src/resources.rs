@@ -61,6 +61,15 @@ impl Resources {
             .context("resource is disposed, transferred, or belongs to another component")
     }
 
+    pub fn owned(&self, id: &str) -> Result<ResourceAny> {
+        let resource = *self
+            .entries
+            .get(id)
+            .context("resource is disposed, transferred, or belongs to another component")?;
+        anyhow::ensure!(resource.owned(), "cannot dispose a borrowed resource");
+        Ok(resource)
+    }
+
     pub fn owns(&self, id: &str) -> bool {
         self.entries.get(id).is_some_and(ResourceAny::owned)
     }

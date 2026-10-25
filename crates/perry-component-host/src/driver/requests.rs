@@ -149,10 +149,12 @@ pub(super) enum WriterAction {
 pub(super) enum Target {
     Export,
     Factory(crate::AsyncValueType),
+    Resource(crate::cleanup::CollectedResource, bool),
     Write(Value, Option<Rc<ReadIntent>>),
     WriterControl(Value, WriterAction, Vec<Rc<ReadIntent>>),
     Read(Value, u32, Option<Rc<ReadIntent>>),
     Close(Value, Vec<Rc<ReadIntent>>),
+    CollectAsync(Value, Vec<Rc<ReadIntent>>),
 }
 pub(super) struct Request {
     pub target: Target,
@@ -208,6 +210,48 @@ impl DriverClient {
     pub fn call(&self, interface: &str, name: &str, args: &[Value]) -> Result<DriverCall> {
         self.submit(interface, name, args, Target::Export)
     }
+    /// Dispose one owned resource through a private canonical helper. Construct
+    /// the Host with new_for_driver to enable this operation. An accepted drop
+    /// executes even if its observer is discarded; destructor traps retire the
+    /// Store, while invalid/borrowed/foreign tokens reject without changing it.
+    pub fn drop_resource(&self, value: &Value) -> Result<DriverCall> {
+        ensure!(
+            value["owned"] == true,
+            "cannot dispose a borrowed resource descriptor"
+        );
+        let guest = value.get("$resource").is_some();
+        let host = value.get("$hostResource").is_some();
+        ensure!(
+            guest != host,
+            "expected exactly one resource descriptor kind"
+        );
+        let request = if guest {
+            crate::cleanup::CollectedResource::Guest {
+                token: value["$resource"]
+                    .as_str()
+                    .context("invalid guest resource token")?
+                    .into(),
+            }
+        } else {
+            ensure!(
+                value["new"] != true,
+                "host resource is not registered with the component"
+            );
+            crate::cleanup::CollectedResource::Host {
+                resource: serde_json::from_value(serde_json::json!({
+                    "token":value["$hostResource"],"type":value["type"],"generation":value["generation"],
+                }))?,
+            }
+        };
+        self.submit("", "", &[], Target::Resource(request, true))
+    }
+    /// Deferred collector request: {kind:"guest",token} or {kind:"host",resource}.
+    /// Ignore stale, transferred and old-generation owners instead of reclaiming
+    /// ownership from the guest. Accepted cleanup survives observer drop.
+    pub fn collect_resource(&self, request: &Value) -> Result<DriverCall> {
+        let request = serde_json::from_value(request.clone())?;
+        self.submit("", "", &[], Target::Resource(request, false))
+    }
     /// Read a Store-local future or stream descriptor, including nested values.
     /// Futures yield one payload (None for void); streams yield
     /// {done:false,value:[...]} chunks and finally {done:true}. A future is
@@ -231,6 +275,13 @@ impl DriverClient {
     pub fn close_async_value(&self, value: &Value) -> Result<DriverCall> {
         crate::async_values::values::token(value)?;
         self.submit("", "", &[], Target::Close(value.clone(), Vec::new()))
+    }
+    /// Deferred cleanup of a readable future/stream. Ignore a descriptor that
+    /// was already consumed, closed or transferred. Live pending reads cancel
+    /// using the same ownership protocol as close_async_value.
+    pub fn collect_async_value(&self, value: &Value) -> Result<DriverCall> {
+        crate::async_values::values::token(value)?;
+        self.submit("", "", &[], Target::CollectAsync(value.clone(), Vec::new()))
     }
     /// IDs whose callback context may still be needed on later driver polls.
     /// Includes queued/unpublished requests, conservative guest-root bindings
@@ -372,7 +423,7 @@ impl DriverClient {
                     .insert(origin, Rc::downgrade(&intent));
                 *slot = Some(intent);
             }
-            Target::Close(value, intents) => {
+            Target::Close(value, intents) | Target::CollectAsync(value, intents) => {
                 let (token, stream) = crate::async_values::values::token(value)?;
                 if let Some(entries) = self
                     .state
@@ -410,10 +461,16 @@ impl DriverClient {
                         .closing = true;
                 }
             }
-            Target::Export | Target::Factory(_) => {}
+            Target::Export | Target::Factory(_) | Target::Resource(..) => {}
         }
 
-        let close = matches!(target, Target::Close(..) | Target::WriterControl(..));
+        let close = matches!(
+            target,
+            Target::Close(..)
+                | Target::CollectAsync(..)
+                | Target::WriterControl(..)
+                | Target::Resource(..)
+        );
         self.send
             .unbounded_send(Request {
                 permit: permit.clone(),

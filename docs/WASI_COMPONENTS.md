@@ -133,7 +133,8 @@ The versioned C boundary now also exposes a persistent driver. Construct it
 with `perry_component_driver_new`, discover local factory indices with
 `perry_component_driver_types`, and submit JSON commands through
 `perry_component_driver_submit`. Supported operations are `call`, `read`,
-`close`, `create`, `write`, `cancel-write`, `close-writer` and `abort-writer`.
+`close`, `collect`, `create`, `write`, `cancel-write`, `close-writer`,
+`abort-writer`, `resource-drop` and `resource-collect`.
 Submission snapshots native JSON and returns a decimal-string invocation ID
 without executing Wasm. Queue-only submission is permitted from a callback;
 recursive execution is rejected. A submission requires an output buffer so its
@@ -156,11 +157,47 @@ Accepted soft cancellation and close commands still execute. Explicit
 `perry_component_host_dispose` retires a driver and reports `RELEASED_ERROR`
 when its embedding destructor fails. Native `host_drop` does not invoke embedding
 callbacks. Legacy execution, resource and HTTP entries reject persistent handles;
-resource collection and HTTP have not yet migrated to driver commands. The
+typed resource cleanup now has driver commands; HTTP has not migrated. The
 TypeScript runtime continues using the legacy entry points. This C transport
 requires ABI 9 and does not yet implement traced TypeScript frames, ALS routing,
 future/stream wrappers or their GC cleanup. See the
 [persistent C driver receipt](validation/wasi-persistent-driver-ffi-20261025.json).
+
+Construct Rust hosts with `Host::new_for_driver` before `into_driver` to
+prepare resource disposal. The C driver constructor selects this path. It
+composes one private helper with the original nominal resource aliases and
+resolves its disposal functions to actual instantiated resource types. The
+helper uses no linear memory and adds one core instance when resources are
+present; it shares the configured instance/fuel limits. Legacy constructors
+retain their previous composition and limits. No invented future/stream factory
+types are exposed for ordinary resource worlds.
+
+`client.drop_resource(&descriptor)` and the C `resource-drop` command take a
+complete owned descriptor (`value`), distinguishing guest from host resources
+and validating host generation. An invalid or borrowed descriptor rejects
+before execution. A trapping destructor retires the Store. Accepted disposal
+still runs if its observer is discarded. `client.collect_resource(&request)`
+and C `resource-collect` use the existing typed collector request and ignore
+stale or transferred ownership. Guest and host tokens with identical text
+remain distinct. Both operations run canonical destructors within the
+persistent Store loop, with callbacks dispatched on the owning embedding stack.
+
+Export argument borrow guards prevent concurrent owned transfer or explicit
+disposal of a borrowed owner. Deferred collection waits for every active borrower,
+then revalidates ownership before disposal. The guard ends when the exported
+result is published: Wasmtime returns canonical resource borrows at `task.return`.
+It does not wait for background task exit. The native registry contains token
+strings, counts and native wakers only. Cancellation removes waiting collectors
+and guards during Store retirement.
+
+For readable future/stream wrappers, `client.collect_async_value(&value)` and
+the C `collect` command ignore descriptors already consumed, closed or transferred.
+Live pending reads use the same cancellation protocol as explicit `close`.
+This keeps a late GC request from taking ownership back from a guest or a newer
+wrapper. Explicit close retains its validation errors. The
+[persistent cleanup receipt](validation/wasi-persistent-cleanup-20261025.json)
+records the native boundary checks; traced TypeScript wrapper/GC integration
+is still pending.
 
 This is a subset of the WASI 0.3 milestone. Enabling `wasi` now links the
 Turnloop-backed 0.3.0 providers as well as the P2 providers. WIT manifests

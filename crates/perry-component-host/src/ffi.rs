@@ -320,15 +320,26 @@ unsafe fn new_bridge(
                 .flat_map(|i| &i.functions)
                 .any(|f| f.async_))
         .then(|| Arc::new(crate::asynchronous::dispatch::Dispatcher::default()));
-        let mut host = Host::new_with_dispatcher(
-            bytes(wasm, wasm_len)?,
-            &world,
-            &imports,
-            &async_imports,
-            &options,
-            resource_hook,
-            dispatcher,
-        )?;
+        let mut host = if persistent {
+            Host::new_for_driver(
+                bytes(wasm, wasm_len)?,
+                &world,
+                &imports,
+                &async_imports,
+                &options,
+                resource_hook,
+            )?
+        } else {
+            Host::new_with_dispatcher(
+                bytes(wasm, wasm_len)?,
+                &world,
+                &imports,
+                &async_imports,
+                &options,
+                resource_hook,
+                dispatcher,
+            )?
+        };
         current.store(0, Ordering::Release);
         let interrupt = host.interrupt_handle();
         let driver = if persistent {

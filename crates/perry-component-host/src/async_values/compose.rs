@@ -16,6 +16,7 @@ pub(crate) struct Prepared {
     pub control: Option<String>,
     pub readers: Vec<String>,
     pub schemas: Vec<Wit>,
+    pub disposers: Option<String>,
 }
 impl Prepared {
     pub fn new(
@@ -25,6 +26,7 @@ impl Prepared {
         world: &World,
         wasi: bool,
         identities: &BTreeMap<String, ResourceType>,
+        disposal: bool,
     ) -> Result<Self> {
         let mut specs = Vec::new();
         let mut seen = BTreeSet::new();
@@ -45,12 +47,13 @@ impl Prepared {
                 }
             }
         }
-        if specs.is_empty() {
+        if specs.is_empty() && (!disposal || identities.is_empty()) {
             return Ok(Self {
                 component: original,
                 control: None,
                 readers: Vec::new(),
                 schemas: Vec::new(),
+                disposers: None,
             });
         }
         let ty = original.component_type();
@@ -173,6 +176,41 @@ impl Prepared {
                 Wit::Future(payload.map(Box::new))
             });
         }
+        let disposers = if disposal && !bindings.is_empty() {
+            let text = super::resource_dispose::generate(world, &bindings)?;
+            let package = Package::from_bytes(
+                "perry:resource-disposal",
+                None,
+                wat::parse_str(text)?,
+                graph.types_mut(),
+            )?;
+            let helper_imports: BTreeSet<_> = graph.types()[package.ty()]
+                .imports
+                .keys()
+                .cloned()
+                .collect();
+            let package = graph.register_package(package)?;
+            let helper = graph.instantiate(package);
+            for (local, (namespace, name)) in &explicit {
+                if !helper_imports.contains(local) {
+                    continue;
+                }
+                let node = graph.alias_instance_export(
+                    original_node,
+                    if namespace.is_empty() {
+                        name
+                    } else {
+                        namespace
+                    },
+                )?;
+                graph.set_instantiation_argument(helper, local, node)?;
+            }
+            let name = "perry-resource-disposal";
+            graph.export(helper, name)?;
+            Some(name.to_string())
+        } else {
+            None
+        };
         let bytes = graph.encode(EncodeOptions::default())?;
         Ok(Self {
             component: Component::from_binary(engine, &bytes)
@@ -181,6 +219,7 @@ impl Prepared {
             control: Some(control),
             readers,
             schemas,
+            disposers,
         })
     }
     pub fn original(&self) -> Option<&str> {

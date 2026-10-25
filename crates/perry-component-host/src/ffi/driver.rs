@@ -22,8 +22,17 @@ enum Request {
     Close {
         value: Value,
     },
+    Collect {
+        value: Value,
+    },
     Create {
         index: usize,
+    },
+    ResourceDrop {
+        value: Value,
+    },
+    ResourceCollect {
+        request: Value,
     },
     Write {
         writer: Value,
@@ -67,6 +76,7 @@ impl Actor {
             } => self.client.call(&interface, &function, &args)?,
             Request::Read { value, capacity } => self.client.read_async_value(&value, capacity)?,
             Request::Close { value } => self.client.close_async_value(&value)?,
+            Request::Collect { value } => self.client.collect_async_value(&value)?,
             Request::Create { index } => {
                 let ty = self
                     .client
@@ -75,6 +85,8 @@ impl Actor {
                     .context("unknown async factory type index")?;
                 self.client.create_async_value(ty)?
             }
+            Request::ResourceDrop { value } => self.client.drop_resource(&value)?,
+            Request::ResourceCollect { request } => self.client.collect_resource(&request)?,
             Request::Write { writer, values } => self.client.write_async_value(&writer, &values)?,
             Request::CancelWrite { writer } => self.client.cancel_async_write(&writer)?,
             Request::CloseWriter { writer } => self.client.close_async_writer(&writer)?,

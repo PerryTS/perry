@@ -44,7 +44,19 @@ impl<'a> Lowering<'a> {
         })
     }
 
+    pub fn borrowed_keys(&self) -> Vec<String> {
+        self.requests
+            .iter()
+            .filter(|(_, owned)| !**owned)
+            .map(|(key, _)| key.clone())
+            .collect()
+    }
+
     fn reserve(&mut self, token: String, owned: bool) -> Result<()> {
+        ensure!(
+            !owned || !self.store.data().borrowed.contains(&token),
+            "resource is borrowed by an active component call"
+        );
         if let Some(previous) = self.requests.get(&token) {
             ensure!(
                 !owned && !previous,
