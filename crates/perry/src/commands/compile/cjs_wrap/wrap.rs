@@ -97,6 +97,20 @@ fn resolve_compiled_require_target(
     (target.extension().and_then(|extension| extension.to_str()) != Some("node")).then_some(target)
 }
 
+/// Is `target` an ES module rather than CommonJS? `.mjs`/`.mts` always are,
+/// `.cjs`/`.cts` never; other files must show a top-level `import`/`export`
+/// (a script with no module syntax stays on the default-import path).
+fn is_es_module_target(target: &Path) -> bool {
+    match target.extension().and_then(|extension| extension.to_str()) {
+        Some("mjs" | "mts") => true,
+        Some("cjs" | "cts") => false,
+        Some("js" | "jsx" | "ts" | "tsx") => std::fs::read_to_string(target).is_ok_and(|source| {
+            super::detect::has_top_level_esm(&super::detect::strip_comments_and_strings(&source))
+        }),
+        _ => false,
+    }
+}
+
 /// Is `name` a JS global-builtin VALUE (a constructor/namespace reachable as a
 /// bare identifier at runtime)? Used only to decide whether a CJS named export
 /// whose KEY equals such a name (`module.exports = { Error: Error }`) needs the
@@ -555,42 +569,53 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
             // explicit compilePackages opt-in. Resolving them to watcher.node
             // creates a compiled-module import whose body is intentionally absent.
             let watcher_facade = is_watcher_facade(spec);
-            let resolved_require_spec = if !watcher_facade && import_spec == spec
+            let resolved_require_path = if !watcher_facade
+                && import_spec == spec
                 && !spec.starts_with("./")
                 && !spec.starts_with("../")
                 && !std::path::Path::new(spec).is_absolute()
                 && compile_packages.is_none_or(|packages| {
-                    let (package_name, _) =
-                        super::super::resolve::parse_package_specifier(spec);
+                    let (package_name, _) = super::super::resolve::parse_package_specifier(spec);
                     packages.contains("*") || packages.contains(&package_name)
+                }) {
+                source_path.parent().and_then(|module_dir| {
+                    super::super::collect_modules::static_require_transform::resolve_static_require(
+                        module_dir, spec, None,
+                    )
                 })
-            {
-                source_path
-                    .parent()
-                    .and_then(|module_dir| {
-                        super::super::collect_modules::static_require_transform::resolve_static_require(
-                            module_dir,
-                            spec,
-                            None,
-                        )
-                    })
-                    // Keep the resolved target relative to the importing
-                    // module. Absolute node_modules imports are classified as
-                    // ordinary runtime JS by the general resolver because the
-                    // original package name (and therefore compilePackages
-                    // opt-in) is no longer visible there.
-                    .and_then(|path| {
-                        source_path
-                            .parent()
-                            .and_then(|module_dir| relative_import_specifier(module_dir, &path))
-                    })
             } else {
                 None
             };
+            // `require()` of an ES module yields its namespace object (Node
+            // 22's require(esm)). A default import would instead yield the
+            // `export default` value: `@platformatic/globals` exports named
+            // functions plus `export default getGlobal`, so a CommonJS
+            // consumer's `require(..).getGlobal` read a property off the
+            // function. A deferred spec is loaded through the path registry,
+            // not this binding.
+            let namespace_binding = !lazy_specs.contains(spec)
+                && resolved_require_path
+                    .as_deref()
+                    .is_some_and(is_es_module_target);
+            let binding = if namespace_binding {
+                format!("* as {local}")
+            } else {
+                local.clone()
+            };
+            // Keep the resolved target relative to the importing module.
+            // Absolute node_modules imports are classified as ordinary
+            // runtime JS by the general resolver because the original package
+            // name (and therefore compilePackages opt-in) is no longer
+            // visible there.
+            let resolved_require_spec = resolved_require_path.as_deref().and_then(|path| {
+                source_path
+                    .parent()
+                    .and_then(|module_dir| relative_import_specifier(module_dir, path))
+            });
             if let Some(resolved) = resolved_require_spec {
                 format!(
                     "import {} from {};",
-                    local,
+                    binding,
                     serde_json::to_string(&resolved)
                         .expect("CJS import specifier is JSON encodable")
                 )
