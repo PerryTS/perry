@@ -1310,6 +1310,33 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
     } else {
         "__perry_cjs_factory"
     };
+    // The born `exports` object: an object whose keys are the names this
+    // module itself assigns (`exports.X = ...`), each absent until assigned,
+    // so every such read and the export snapshots are slots of its layout.
+    // It is the contract of this object only: a module that replaces
+    // `module.exports` publishes whatever it assigned instead.
+    let exports_init = {
+        let mut keys: Vec<&str> = Vec::new();
+        for name in &plain_exports {
+            let ok = !name.is_empty()
+                && name.len() <= 64
+                && name != "__proto__"
+                && name != "constructor"
+                && !name.bytes().all(|b| b.is_ascii_digit());
+            if ok && !keys.contains(&name.as_str()) {
+                keys.push(name);
+            }
+        }
+        if keys.is_empty() {
+            "{}".to_string()
+        } else {
+            let list: Vec<String> = keys
+                .iter()
+                .map(|k| serde_json::to_string(k).expect("export name is JSON encodable"))
+                .collect();
+            format!("__perry_declared_keys_object({})", list.join(", "))
+        }
+    };
     // #10735: `require.main` is the process ENTRY module's record, `module`
     // there and that same record everywhere else (or `undefined` for an ESM
     // entry). The support module (`perry:cjs`, imported first by every wrapped
@@ -1329,7 +1356,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
     let cjs_module_init_stmt = if is_entry_module {
         format!(
             r#"const __cjs_module = __perry_cjs_main;
-    __cjs_module.exports = {{}};
+    __cjs_module.exports = {exports_init};
     __cjs_module.__perry_cjs_record = true;
     __cjs_module.id = {module_filename_literal};
     __cjs_module.path = {module_dir_literal};
@@ -1343,7 +1370,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
     } else {
         format!(
             r#"const __cjs_module = {{
-        exports: {{}},
+        exports: {exports_init},
         __perry_cjs_record: true,
         id: {module_filename_literal},
         path: {module_dir_literal},

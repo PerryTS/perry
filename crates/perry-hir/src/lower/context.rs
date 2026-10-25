@@ -1157,12 +1157,14 @@ impl LoweringContext {
         class_name
     }
 
-    /// The class of `__perry_declared_keys(k1, k2, ...)`: no constructor, one
-    /// `ClassFieldOrigin::Declared` field per key in the given order
-    /// ([`crate::Class::is_declared_keys_record`]). Content-addressed like
-    /// the anon-shape classes, so equal key lists share one name.
-    pub(crate) fn synthesize_declared_keys_class(&mut self, keys: &[String]) -> String {
-        let shape_key = format!("@declared-keys:{}", keys.join("\u{0}"));
+    /// The class of `__perry_declared_keys(k1, k2, ...)` (null prototype) or
+    /// `__perry_declared_keys_object(...)` (`%Object.prototype%`): no
+    /// constructor, one `ClassFieldOrigin::Declared` field per key in the
+    /// given order ([`crate::Class::is_declared_keys_record`]).
+    /// Content-addressed like the anon-shape classes, so equal key lists
+    /// share one name.
+    pub(crate) fn synthesize_declared_keys_class(&mut self, keys: &[String], null_proto: bool) -> String {
+        let shape_key = format!("@declared-keys:{null_proto}:{}", keys.join("\u{0}"));
         if let Some(existing) = self.anon_shape_classes.get(&shape_key) {
             return existing.clone();
         }
@@ -1171,7 +1173,12 @@ impl LoweringContext {
             h ^= *b as u64;
             h = h.wrapping_mul(0x100000001b3);
         }
-        let class_name = format!("{}{:016x}", crate::DECLARED_KEYS_CLASS_PREFIX, h);
+        let prefix = if null_proto {
+            crate::DECLARED_KEYS_CLASS_PREFIX
+        } else {
+            crate::DECLARED_KEYS_OBJECT_CLASS_PREFIX
+        };
+        let class_name = format!("{prefix}{h:016x}");
         let class_id = self.fresh_class();
         let fields: Vec<ClassField> = keys
             .iter()

@@ -136,7 +136,7 @@ fn the_cjs_preamble_is_still_recognised_as_scaffolding_allocation() {
     // opaque count mismatch.
     for (needle, conjunct) in [
         (
-            "const __cjs_module = {\n        exports: {},",
+            "const __cjs_module = {\n        exports: ",
             "R1/R2 (the record literal and its leading `exports: {}` literal)",
         ),
         (

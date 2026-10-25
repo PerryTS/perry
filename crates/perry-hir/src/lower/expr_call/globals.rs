@@ -327,10 +327,10 @@ pub(super) fn try_global_builtins(
                 }));
             }
             // An object whose keys are exactly the given string literals, each
-            // absent until stored, with a null prototype
-            // (`Class::is_declared_keys_record`). The CommonJS support module's
-            // `require.cache` is one.
-            "__perry_declared_keys" => {
+            // absent until stored (`Class::is_declared_keys_record`), with a
+            // null prototype (`require.cache`) or `%Object.prototype%` (a
+            // CommonJS module's `exports`).
+            "__perry_declared_keys" | "__perry_declared_keys_object" => {
                 let mut keys = Vec::with_capacity(args.len());
                 for arg in &args {
                     match arg {
@@ -342,7 +342,8 @@ pub(super) fn try_global_builtins(
                         }
                     }
                 }
-                let class_name = ctx.synthesize_declared_keys_class(&keys);
+                let class_name = ctx
+                    .synthesize_declared_keys_class(&keys, func_name == "__perry_declared_keys");
                 return Ok(Ok(Expr::New {
                     class_name,
                     args: Vec::new(),
