@@ -98,6 +98,25 @@ pub(crate) fn store_class_env_slot(
     }
 }
 
+/// Store a capture of a template-keyed snapshot refresh (`RegisterClassCaptures`)
+/// into the class's slots. Unlike [`store_class_env_slot`] this also serves a
+/// guarded class: the snapshot of a shared-first declaration runs only for the
+/// first evaluation (`guard_shared_first_capture_snapshot`), which owns the
+/// guarded slots, so a binding initialized after the class (`const later = ..`)
+/// reaches them when its refresh runs.
+pub(crate) fn store_first_evaluation_slot(
+    ctx: &mut FnCtx<'_>,
+    class_name: &str,
+    index: u32,
+    value: &str,
+    expr: &Expr,
+) {
+    if let Some(slot) = class_env_global(ctx, class_name, index) {
+        // GC_STORE_AUDIT(ROOT): registered mutable root slot.
+        emit_root_nanbox_store_for_expr(ctx, value, &slot, expr);
+    }
+}
+
 /// `js_class_env_evaluate` / `js_class_env_refresh` for a guarded class:
 /// `class_value` (NaN-boxed) evaluated or refreshed with capture array
 /// `caps` (NaN-boxed). No-op for an unguarded class.
