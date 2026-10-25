@@ -124,7 +124,7 @@ mod tests {
                 "live shared-backing premise"
             );
             assert_eq!(crate::array::js_array_length(first.as_ptr()), 2);
-            crate::object::js_register_anon_shape_class_id(0x12345);
+            crate::object::declarations::test_declare_anonymous(0x12345);
             let obj = crate::object::js_object_alloc(0x12345, 4);
             crate::object::set_object_keys_with_live(obj, first.view(), 4);
             let result = try_keys(obj).expect("ordinary shape must take the bulk copy");

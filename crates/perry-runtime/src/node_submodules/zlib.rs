@@ -347,6 +347,33 @@ fn gzip_range(value: f64, name: &str, min: i64, max: i64, default: f64) -> f64 {
     n
 }
 
+/// Snapshot only the synchronous decoder's completion policy. The caller roots
+/// data/options across these getter reads and copies dictionaries beforehand.
+#[no_mangle]
+pub extern "C" fn js_zlib_decode_completion_options(opts: f64) -> i32 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let opts = scope.root_nanbox_f64(opts);
+    let finish = gzip_range(
+        gzip_read_option(opts.get_nanbox_f64(), b"finishFlush"),
+        "options.finishFlush",
+        0,
+        5,
+        4.0,
+    );
+    let reject = scope.root_nanbox_f64(gzip_read_option(
+        opts.get_nanbox_f64(),
+        b"rejectGarbageAfterEnd",
+    ));
+    let value = crate::value::JSValue::from_bits(reject.get_nanbox_f64().to_bits());
+    if !value.is_undefined() {
+        crate::validators::validate_boolean(
+            reject.get_nanbox_f64(),
+            "options.rejectGarbageAfterEnd",
+        );
+    }
+    i32::from(value.is_bool() && value.as_bool()) | (i32::from(finish as i32 != 4) << 1)
+}
+
 /// Resolve only Brotli one-shot output policy; do not reorder shared validators.
 #[no_mangle]
 pub extern "C" fn js_zlib_brotli_max_output_length(opts: f64) -> usize {
@@ -695,6 +722,10 @@ static KEEP_JS_ZLIB_VALIDATE_PARAMS: extern "C" fn(f64, f64) -> i32 = js_zlib_va
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
 static KEEP_JS_ZLIB_VALIDATE_OPTIONS: extern "C" fn(f64, i32) = js_zlib_validate_options;
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_ZLIB_DECODE_COMPLETION_OPTIONS: extern "C" fn(f64) -> i32 =
+    js_zlib_decode_completion_options;
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
 static KEEP_JS_ZLIB_DEFLATE_OPTIONS: extern "C" fn(f64, i32) -> f64 = js_zlib_deflate_options;

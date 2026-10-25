@@ -4023,10 +4023,6 @@
     },
     {
       "file": "crates/perry-runtime/src/promise/then_probe.rs",
-      "name": "ADMISSIBLE_MEMO"
-    },
-    {
-      "file": "crates/perry-runtime/src/promise/then_probe.rs",
       "name": "PROTO_VERDICT"
     },
     {

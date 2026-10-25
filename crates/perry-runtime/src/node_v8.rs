@@ -165,7 +165,7 @@ fn default_heap_snapshot_path() -> String {
         .unwrap_or(0);
     let name = format!(
         "Heap-{}-{}-{}.heapsnapshot",
-        std::process::id(),
+        crate::os::current_process_id(),
         crate::agent::current_thread_native_id(),
         millis
     );

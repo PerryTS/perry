@@ -51,6 +51,13 @@ fn gunzip_bytes(data: &[u8]) -> std::io::Result<Vec<u8>> {
 }
 
 fn throw_deflate_decode_error(err: IoError) -> ! {
+    if stream::is_trailing_garbage(&err) {
+        perry_ffi::throw_with_code(
+            &err.to_string(),
+            "ERR_TRAILING_JUNK_AFTER_STREAM_END",
+            ErrorKind::TypeError,
+        );
+    }
     if stream::needs_dictionary(&err) {
         perry_ffi::throw_with_code(&err.to_string(), "Z_NEED_DICT", ErrorKind::Error);
     }
@@ -92,10 +99,6 @@ fn deflate_raw_bytes_with(data: &[u8], level: Compression) -> std::io::Result<Ve
     let mut compressed = Vec::new();
     encoder.read_to_end(&mut compressed)?;
     Ok(compressed)
-}
-
-fn inflate_raw_bytes(data: &[u8]) -> std::io::Result<Vec<u8>> {
-    stream::decode_bytes(data, stream::Codec::InflateRaw)
 }
 
 fn unzip_bytes(data: &[u8]) -> std::io::Result<Vec<u8>> {
@@ -142,15 +145,34 @@ pub unsafe extern "C" fn js_zlib_gzip_sync(data_bits: i64, opts: f64) -> f64 {
     }
 }
 
-/// `zlib.gunzipSync(data)`.
+/// Compatibility entrypoint retaining the original one-argument native ABI.
+///
+/// # Safety
+///
+/// See `js_zlib_gunzip_sync_options` for the data argument contract.
+#[no_mangle]
+pub unsafe extern "C" fn js_zlib_gunzip_sync(data_bits: i64) -> f64 {
+    js_zlib_gunzip_sync_options(
+        data_bits,
+        f64::from_bits(perry_ffi::JsValue::UNDEFINED.bits()),
+    )
+}
+
+/// `zlib.gunzipSync(data, options?)`.
 ///
 /// # Safety
 ///
 /// `data_bits` is the raw NaN-box bit pattern of the data argument (#2935).
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_gunzip_sync(data_bits: i64) -> f64 {
-    stream::js_zlib_validate_buffer_arg(data_bits); // #3662
-    match stream::read_input_from_bits(data_bits).map(|d| gunzip_bytes(&d)) {
+pub unsafe extern "C" fn js_zlib_gunzip_sync_options(data_bits: i64, opts: f64) -> f64 {
+    let roots = perry_ffi::TransientRootScope::enter();
+    let data = roots.root_nanbox(f64::from_bits(data_bits as u64));
+    let opts = roots.root_nanbox(opts);
+    stream::js_zlib_validate_buffer_arg(data.get().to_bits() as i64); // #3662
+    let policy = stream::completion_options(opts.get());
+    match stream::read_input_from_bits(data.get().to_bits() as i64)
+        .map(|d| stream::decode_options_bytes(&d, stream::Codec::Gunzip, None, policy))
+    {
         Some(Ok(out)) => stream::value_bytes(&out),
         Some(Err(err)) => throw_deflate_decode_error(err),
         _ => f64::from_bits(perry_ffi::JsValue::UNDEFINED.bits()),
@@ -206,8 +228,9 @@ pub unsafe extern "C" fn js_zlib_inflate_sync(data_bits: i64, opts: f64) -> f64 
         let input = stream::read_input_from_bits(data.get().to_bits() as i64).unwrap();
         return stream::sync_info_result(input, opts.get(), stream::Codec::Inflate, dictionary);
     }
+    let policy = stream::completion_options(opts.get());
     match stream::read_input_from_bits(data.get().to_bits() as i64)
-        .map(|d| stream::decode_dictionary_bytes(&d, dictionary))
+        .map(|d| stream::decode_options_bytes(&d, stream::Codec::Inflate, dictionary, policy))
     {
         Some(Ok(out)) => stream::value_bytes(&out),
         Some(Err(err)) => throw_deflate_decode_error(err),
@@ -220,7 +243,7 @@ pub unsafe extern "C" fn js_zlib_inflate_sync(data_bits: i64, opts: f64) -> f64 
 /// # Safety
 ///
 /// NOTE THE ABI: codegen declares this pair as `(DOUBLE, DOUBLE)` and
-/// `(DOUBLE)` (`runtime_decls/stdlib_ffi/third_party.rs`), unlike the
+/// `(DOUBLE, DOUBLE)` (`runtime_decls/stdlib_ffi/third_party.rs`), unlike the
 /// zlib-format one-shots beside it which take the data as `I64`. The parameter
 /// types must match the DECLARATION, not this crate's local convention — the
 /// bits are the same NaN-boxed value either way, so a mismatch would link
@@ -239,16 +262,34 @@ pub unsafe extern "C" fn js_zlib_deflate_raw_sync(data_value: f64, opts: f64) ->
     }
 }
 
-/// `zlib.inflateRawSync(data)` — raw inflate, no zlib wrapper.
+/// Compatibility entrypoint retaining the original one-argument native ABI.
+///
+/// # Safety
+///
+/// See `js_zlib_inflate_raw_sync_options` for the data argument contract.
+#[no_mangle]
+pub unsafe extern "C" fn js_zlib_inflate_raw_sync(data_value: f64) -> f64 {
+    js_zlib_inflate_raw_sync_options(
+        data_value,
+        f64::from_bits(perry_ffi::JsValue::UNDEFINED.bits()),
+    )
+}
+
+/// `zlib.inflateRawSync(data, options?)` — raw inflate, no zlib wrapper.
 ///
 /// # Safety
 ///
 /// See `js_zlib_deflate_raw_sync` on the `DOUBLE` ABI.
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_inflate_raw_sync(data_value: f64) -> f64 {
-    let data_bits = data_value.to_bits() as i64;
-    stream::js_zlib_validate_buffer_arg(data_bits);
-    match stream::read_input_from_bits(data_bits).map(|d| inflate_raw_bytes(&d)) {
+pub unsafe extern "C" fn js_zlib_inflate_raw_sync_options(data_value: f64, opts: f64) -> f64 {
+    let roots = perry_ffi::TransientRootScope::enter();
+    let data = roots.root_nanbox(data_value);
+    let opts = roots.root_nanbox(opts);
+    stream::js_zlib_validate_buffer_arg(data.get().to_bits() as i64);
+    let policy = stream::completion_options(opts.get());
+    match stream::read_input_from_bits(data.get().to_bits() as i64)
+        .map(|d| stream::decode_options_bytes(&d, stream::Codec::InflateRaw, None, policy))
+    {
         Some(Ok(out)) => stream::value_bytes(&out),
         Some(Err(err)) => throw_deflate_decode_error(err),
         None => f64::from_bits(perry_ffi::JsValue::UNDEFINED.bits()),
@@ -404,11 +445,11 @@ pub unsafe extern "C" fn js_ext_zlib_native_dispatch(
 
     match name {
         "gzipSync" => js_zlib_gzip_sync(arg(0).to_bits() as i64, arg(1)),
-        "gunzipSync" => js_zlib_gunzip_sync(arg(0).to_bits() as i64),
+        "gunzipSync" => js_zlib_gunzip_sync_options(arg(0).to_bits() as i64, arg(1)),
         "deflateSync" => js_zlib_deflate_sync(arg(0).to_bits() as i64, arg(1)),
         "inflateSync" => js_zlib_inflate_sync(arg(0).to_bits() as i64, arg(1)),
         "deflateRawSync" => js_zlib_deflate_raw_sync(arg(0), arg(1)),
-        "inflateRawSync" => js_zlib_inflate_raw_sync(arg(0)),
+        "inflateRawSync" => js_zlib_inflate_raw_sync_options(arg(0), arg(1)),
         "unzipSync" => js_zlib_unzip_sync(arg(0)),
         "brotliCompressSync" => js_zlib_brotli_compress_sync(arg(0).to_bits() as i64),
         "brotliDecompressSync" => js_zlib_brotli_decompress_sync(arg(0).to_bits() as i64, arg(1)),

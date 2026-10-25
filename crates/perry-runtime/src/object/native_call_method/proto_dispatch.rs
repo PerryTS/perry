@@ -235,7 +235,9 @@ pub(crate) unsafe fn try_dispatch_instance_method_value(
     // `js_object_get_class_id` returns 0 for anything that isn't a user class
     // instance (null/non-pointer, Set/Map/Regex headers, closures, namespaces).
     let class_id = crate::object::js_object_get_class_id(ptr);
-    if class_id == 0 {
+    if class_id == 0 || !crate::object::shapes::receiver_has_class_identity(ptr) {
+        // Literal/native-module methods follow ordinary value dispatch.
+        // The receiver's identity proves no class holder needs materializing.
         return None;
     }
     let name = std::str::from_utf8(std::slice::from_raw_parts(

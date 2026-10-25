@@ -148,6 +148,25 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
                 };
                 perry_runtime::async_hooks::js_async_resource_new(type_value, options)
             }
+            // `new sd.StringDecoder(enc)` where `StringDecoder` was read off the
+            // `string_decoder` namespace as a value: the same handle the static
+            // `new StringDecoder(enc)` arm allocates.
+            b"StringDecoder" => {
+                let encoding = if !args_ptr.is_null() && args_len > 0 {
+                    (*args_ptr).to_bits()
+                } else {
+                    TAG_UNDEFINED_F64.to_bits()
+                };
+                let handle = crate::string_decoder::js_string_decoder_new(encoding as i64);
+                if handle == 0 {
+                    f64::from_bits(0x7FFC_0000_0000_0002)
+                } else {
+                    f64::from_bits(
+                        perry_runtime::value::HANDLE_TAG
+                            | ((handle as u64) & 0x0000_FFFF_FFFF_FFFF),
+                    )
+                }
+            }
             _ => TAG_UNDEFINED_F64,
         }
     }

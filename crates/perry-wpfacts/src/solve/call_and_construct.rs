@@ -170,7 +170,10 @@ impl Model {
         }
         let fret = self.funcs[f].ret;
         let cret = self.calls[c].ret;
-        self.edge(fret, cret);
+        let params = self.funcs[f].params.clone();
+        if !self.rel_into(call, FN_RUN | f as u32, &params) {
+            self.edge(fret, cret);
+        }
     }
 
     /// Calling a bound function: its target with the bound this; bound +
@@ -514,6 +517,7 @@ impl Model {
             display: format!("new {name}"),
             birth_keys,
             definite,
+            declared: Vec::new(),
             parent: None,
             ctor: Some(f),
             native_parent: None,
@@ -539,6 +543,18 @@ impl Model {
         self.mark_use(t, bits);
         if t == TOP {
             self.call_tok(call, TOP, Some(TOP));
+            return;
+        }
+        // A marker is use tracking, not a value (DECISIONS 111): the values
+        // it stands for sit beside it and are called there. It has no chain
+        // and no accessors; its method is what it reaches under the key,
+        // and calling that is an escape of it (`call_tok`).
+        if self.is_marker(t) {
+            let m = match key {
+                Key::Named(a) => self.marker_load(t, Some(a)),
+                Key::Any => self.reach_of(t),
+            };
+            self.mark_use(m, crate::model::MARK_ESCAPE);
             return;
         }
         // Own function-valued fields, then the prototype chain.
@@ -725,6 +741,7 @@ impl Model {
             display,
             birth_keys: Vec::new(),
             definite: Vec::new(),
+            declared: Vec::new(),
             parent: None,
             ctor: None,
             native_parent: None,
@@ -865,6 +882,15 @@ impl Model {
 
     pub(super) fn escape_inner(&mut self, t: Tok, reason: u32) {
         self.mark_use(t, crate::model::MARK_ESCAPE);
+        // A marker: unknown code gets what it stands for, and what that
+        // reaches (its fields are its reach markers). The values sit beside
+        // it and escape there (DECISIONS 111).
+        if self.is_marker(t) {
+            let r = self.reach_of(t);
+            self.mark_use(r, crate::model::MARK_ESCAPE);
+            self.mark_escaped(t, reason);
+            return;
+        }
         if let Some(is) = self.contract_recv.get(&t).cloned() {
             self.recv_log
                 .entry(t)

@@ -52,6 +52,10 @@ pub unsafe extern "C" fn js_register_class_name(class_id: u32, name_ptr: *const 
         Ok(s) => s.to_string(),
         Err(_) => return,
     };
+    if let Err(error) = super::declarations::register_declared_identity(class_id) {
+        eprintln!("{error}");
+        std::process::abort();
+    }
     {
         let mut guard = CLASS_NAMES.write().unwrap();
         if guard.is_none() {
@@ -59,12 +63,12 @@ pub unsafe extern "C" fn js_register_class_name(class_id: u32, name_ptr: *const 
         }
         guard.as_mut().unwrap().insert(class_id, name);
     }
+
     // A declaration has a prototype surface even when its body is empty.
     // Publish that fact at registration, including anonymous declarations;
     // literal-only ids never register a declaration name.
-    super::registration::publish_unbuilt_holder(class_id);
+    super::registration::publish_unbuilt_holder(class_id, true);
     crate::object::class_value::note_intrinsic_registration(class_id, "name");
-    refresh_anon_declaration_role(class_id);
 }
 
 /// Look up the user-visible name of a registered class. Returns `None`
@@ -430,263 +434,6 @@ pub unsafe extern "C" fn js_decompression_stream_new() -> f64 {
 #[no_mangle]
 pub unsafe extern "C" fn js_text_encoding_stream_new() -> f64 {
     js_text_encoder_stream_new()
-}
-
-/// Synthetic-anonymous-shape class IDs: classes the HIR generates for
-/// bare object literals (`{ x: 1 }` → `__AnonShape_<hash>`). Instances
-/// of these shapes should report `Object` from `.constructor`, not the
-/// synthetic class itself, so date-fns's `new value.constructor(...)`,
-/// drizzle's `value.constructor === Object` duck checks, and the standard
-/// `({}).constructor === Object` semantics all match Node. The HIR
-/// lowering registers each anon shape's id here at module init.
-pub static ANON_SHAPE_CLASS_IDS: ImageTable<RwLock<Option<PtrHashMap<u32, bool>>>> =
-    ImageTable::new(|image| &image.anon_shape_class_ids);
-
-/// Mark `class_id` as a synthetic anon-shape class so `.constructor`
-/// reads on instances of that class return the global `Object`
-/// constructor rather than the synthetic class ref.
-/// The lock-free read mirror lives in the class IMAGE
-/// (`class_image::anon_fast_lookup` / `anon_fast_insert`), next to
-/// `parent_dense`, because `ANON_SHAPE_CLASS_IDS` is an `ImageTable` and every
-/// access resolves through `current()`. A process-global mirror would answer
-/// one image's question out of another image's registrations.
-///
-/// Why a mirror at all: `is_anon_shape_class_id` is asked once per dynamic
-/// property read from `native_get::try_data_get_bytes`, and taking an `RwLock`
-/// read guard to do it was 16.1% of an `o[k]` loop — the largest single frame
-/// left in that profile. A guard is an atomic read-modify-write on a lock word
-/// shared by every thread in the image, paid to consult a set written only
-/// from module init.
-///
-/// A sticky "is the set empty" flag does NOT work here, and that was measured
-/// before this was written: object literals ARE anon shapes, so such a flag is
-/// true in essentially every real program and the lock is taken anyway.
-///
-/// Membership is insert-only, so the open-addressed mirror needs no
-/// reclamation: a published id stays valid for the life of the image. Its
-/// declaration-role bit is refreshed when declaration metadata is registered.
-#[no_mangle]
-pub unsafe extern "C" fn js_register_anon_shape_class_id(class_id: u32) {
-    if class_id == 0 {
-        return;
-    }
-    // Mirror FIRST: a reader that sees the id here is right, and one that does
-    // not yet see it falls through to the locked set below, which the write
-    // guard is about to update. The reverse order would let a reader miss in
-    // both.
-    let mut guard = ANON_SHAPE_CLASS_IDS.write().unwrap();
-    if guard.is_none() {
-        *guard = Some(new_ptr_hash_map());
-    }
-    let declared = declaration_has_identity(class_id);
-    super::super::class_image::anon_fast_insert(class_id, declared);
-    guard.as_mut().unwrap().insert(class_id, declared);
-}
-
-/// True when `class_id` is marked as an anon shape but is really a DECLARED
-/// class, so reflective lookups must prefer the declared class.
-///
-/// Class ids are handed out per module, so one module's anon-shape id can be
-/// the same number as another module's declared class. When that module's init
-/// runs `js_register_anon_shape_class_id`, every instance of the unrelated
-/// declared class starts reporting `Object.prototype` from
-/// `Object.getPrototypeOf` — and the standard prototype-preserving clone
-/// `Object.create(Object.getPrototypeOf(x), descriptors)` then yields an object
-/// with the fields but none of the methods. Effect's `SchemaAST` hit this: its
-/// monomorphized `Union$AST` collided with an anon-shape id, so
-/// `modifyOwnPropertyDescriptors` produced Unions whose `recur` was gone
-/// ("recur is not a function" at OpenCode startup).
-///
-/// A registered class NAME plus a published CLASS holder word is positive
-/// evidence of a real declared class; an anon shape has neither.
-pub fn declared_class_outranks_anon_shape(class_id: u32) -> bool {
-    anonymous_class_role(class_id) == Some(true)
-}
-
-/// One metadata read supplies both anonymous membership and declaration
-/// precedence: None for a non-member, false for a plain record, true for a
-/// colliding declaration. Shape minting must not probe membership separately.
-pub(crate) fn anonymous_class_role(class_id: u32) -> Option<bool> {
-    if class_id == 0 {
-        return None;
-    }
-    if let Some(role) = super::super::class_image::anon_role_lookup(class_id) {
-        return role;
-    }
-    ANON_SHAPE_CLASS_IDS
-        .read()
-        .ok()
-        .and_then(|g| g.as_ref()?.get(&class_id).copied())
-}
-
-/// Registration-time projection, stored in the existing anonymous class
-/// metadata. No name cloning, method enumeration or second registry walk is
-/// required when an object shape is minted.
-fn declaration_has_identity(class_id: u32) -> bool {
-    let named = CLASS_NAMES.read().ok().is_some_and(|g| {
-        g.as_ref()
-            .is_some_and(|names| names.contains_key(&class_id))
-    });
-    named
-        && crate::object::shapes::identity_prototype_word(
-            crate::object::shapes::class_identity_proto_id(class_id),
-        ) != 0
-}
-
-/// Called after either declaration input is registered; supports any module
-/// initialization order, including an anonymous marking before the class.
-pub(crate) fn refresh_anon_declaration_role(class_id: u32) {
-    let mut guard = ANON_SHAPE_CLASS_IDS.write().unwrap();
-    if let Some(role) = guard.as_mut().and_then(|map| map.get_mut(&class_id)) {
-        // Serialize projection with anonymous registration. Input registrars
-        // release their own locks first, so a late refresh cannot overwrite
-        // a complete declaration with an earlier partial snapshot.
-        let declared = declaration_has_identity(class_id);
-        *role = declared;
-        super::super::class_image::anon_fast_insert(class_id, declared);
-    }
-}
-
-/// True if `class_id` was registered via `js_register_anon_shape_class_id`.
-pub fn is_anon_shape_class_id(class_id: u32) -> bool {
-    if class_id == 0 {
-        return false;
-    }
-    if let Some(verdict) = super::super::class_image::anon_fast_lookup(class_id) {
-        return verdict;
-    }
-    if let Ok(guard) = ANON_SHAPE_CLASS_IDS.read() {
-        if let Some(set) = guard.as_ref() {
-            return set.contains_key(&class_id);
-        }
-    }
-    false
-}
-
-#[cfg(test)]
-mod anon_shape_collision_tests {
-    use super::*;
-
-    #[test]
-    fn declaration_role_survives_member_retirement() {
-        let id = 0x4322_1000;
-        unsafe {
-            js_register_anon_shape_class_id(id);
-            js_register_class_name(id, b"SymbolOnly".as_ptr(), 10);
-            crate::object::js_register_class_method(
-                id as i64,
-                b"@@iterator".as_ptr(),
-                10,
-                0x1000,
-                0,
-                0,
-                0,
-            );
-        }
-        assert_eq!(anonymous_class_role(id), Some(true));
-        super::super::registration::invalidate_class_string_member_order(id, "@@iterator", false);
-        assert_eq!(
-            anonymous_class_role(id),
-            Some(true),
-            "a declaration keeps its identity after delete"
-        );
-    }
-
-    #[test]
-    fn declaration_role_is_projected_for_every_registration_order() {
-        for (offset, order) in [
-            [0, 1, 2],
-            [0, 2, 1],
-            [1, 0, 2],
-            [1, 2, 0],
-            [2, 0, 1],
-            [2, 1, 0],
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let id = 0x4322_0000 + offset as u32;
-            let mut seen = [false; 3];
-            for operation in order {
-                unsafe {
-                    match operation {
-                        0 => js_register_anon_shape_class_id(id),
-                        1 => js_register_class_name(id, b"".as_ptr(), 0),
-                        2 => crate::object::js_register_class_method(
-                            id as i64,
-                            b"m".as_ptr(),
-                            1,
-                            0x1000,
-                            1,
-                            0,
-                            0,
-                        ),
-                        _ => unreachable!(),
-                    }
-                }
-                seen[operation] = true;
-                assert_eq!(declared_class_outranks_anon_shape(id), seen[0] && seen[1]);
-                assert_eq!(
-                    anonymous_class_role(id),
-                    seen[0].then_some(seen[1]),
-                    "one projection preserves membership and precedence"
-                );
-            }
-        }
-    }
-
-    fn seed_declared_class(class_id: u32, name: &str, method: &str) {
-        unsafe { js_register_class_name(class_id, name.as_ptr(), name.len() as u32) };
-        crate::object::class_registry::declarations::test_declare_member_quiet(
-            class_id,
-            method.as_bytes(),
-            crate::object::class_registry::declarations::test_method_member(
-                0x1000, 1, false, false, 0,
-            ),
-        );
-        crate::object::shapes::write_identity_word(
-            crate::object::shapes::class_identity_proto_id(class_id),
-            crate::value::TAG_UNDEFINED,
-        );
-    }
-
-    /// Class ids are allocated per module, so one module's anon-shape id can
-    /// collide with another module's declared class. The declared class must
-    /// keep its reflective prototype, or `Object.getPrototypeOf(instance)`
-    /// starts answering `Object.prototype` and the standard clone
-    /// `Object.create(Object.getPrototypeOf(x), descriptors)` silently drops
-    /// every method (Effect's `Union$AST` → "recur is not a function").
-    #[test]
-    fn declared_class_outranks_a_colliding_anon_shape_id() {
-        let class_id = 0x4321_0001;
-        seed_declared_class(class_id, "Union$AST", "recur");
-
-        assert!(
-            !declared_class_outranks_anon_shape(class_id),
-            "a class that was never marked an anon shape needs no override"
-        );
-
-        unsafe { js_register_anon_shape_class_id(class_id) };
-        assert!(is_anon_shape_class_id(class_id));
-        assert!(
-            declared_class_outranks_anon_shape(class_id),
-            "a named class with a prototype vtable must outrank the colliding \
-             anon-shape marking"
-        );
-    }
-
-    /// A real anon shape has neither a registered name nor a vtable, so it must
-    /// keep reporting the ordinary object prototype.
-    #[test]
-    fn a_genuine_anon_shape_does_not_outrank_itself() {
-        let class_id = 0x4321_0002;
-        unsafe { js_register_anon_shape_class_id(class_id) };
-        assert!(is_anon_shape_class_id(class_id));
-        assert!(
-            !declared_class_outranks_anon_shape(class_id),
-            "an unnamed, vtable-less anon shape must not be treated as declared"
-        );
-    }
 }
 
 #[cfg(test)]

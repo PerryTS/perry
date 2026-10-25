@@ -14,6 +14,7 @@ extern "C" {
     fn js_zlib_stream_error(message: *const u8, len: usize, truncated: i32) -> f64;
     fn js_zlib_is_callback(value: f64) -> i32;
     fn js_zlib_stream_option(opts: f64, which: i32) -> usize;
+    fn js_zlib_decode_completion_options(opts: f64) -> i32;
     fn js_zlib_brotli_max_output_length(opts: f64) -> usize;
     fn js_zlib_gzip_codec_options(opts: f64) -> f64;
     fn js_zlib_gzip_base_options(opts: f64) -> f64;
@@ -35,7 +36,7 @@ mod deflate_context;
 mod driver;
 mod inflate_context;
 pub(crate) use deflate_context::encode_bytes as deflate_dictionary_bytes;
-pub(crate) use driver::{decode_bytes, decode_dictionary_bytes};
+pub(crate) use driver::{decode_bytes, decode_options_bytes, is_trailing_garbage};
 pub(crate) use inflate_context::needs_dictionary;
 mod one_shot_callback;
 mod zlib_encoder;
@@ -97,6 +98,19 @@ unsafe fn copy_dictionary(dictionary: f64) -> Option<Vec<u8>> {
             ErrorKind::TypeError,
         )
     }))
+}
+/// Native-only snapshot: no JS values or input borrows survive policy getters.
+#[derive(Default)]
+pub(crate) struct DecodePolicy {
+    reject_garbage: bool,
+    allow_incomplete: bool,
+}
+pub(crate) unsafe fn completion_options(opts: f64) -> DecodePolicy {
+    let flags = js_zlib_decode_completion_options(opts);
+    DecodePolicy {
+        reject_garbage: flags & 1 != 0,
+        allow_incomplete: flags & 2 != 0,
+    }
 }
 /// Capture user getters once per constructor phase; later consumers see only
 /// data properties. Copy dictionary bytes before the Transform spread can run.
@@ -878,17 +892,26 @@ unsafe fn create_stream(
     ));
     method(owner.get(), "on", &[event.get(), prefinish.get()]);
     np::own(owner.get(), "bytesWritten", 0.0);
-    own_new!(
-        "_handle",
-        f64::from_bits(
-            JsValue::from_object_ptr(unsafe {
-                perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
-                    perry_ffi::runtime_layouts::RECORD_PCHECKED031
-                ))
-            })
-            .bits()
-        )
+    let handle = roots.root_nanbox(f64::from_bits(
+        JsValue::from_object_ptr(perry_ffi::runtime_layouts::alloc_runtime_record(
+            std::ptr::addr_of!(perry_ffi::runtime_layouts::RECORD_PCHECKED031),
+        ))
+        .bits(),
+    ));
+    let handle_close = roots.root_nanbox(f64::from_bits(
+        JsValue::from_object_ptr(perry_ffi::alloc_closure(
+            perry_ffi::js_function_info!(close_codec_handle, 0),
+            1,
+        ))
+        .bits(),
+    ));
+    perry_ffi::set_closure_capture_f64(
+        JsValue::from_bits(handle_close.get().to_bits()).as_pointer::<RawClosureHeader>(),
+        0,
+        owner.get(),
     );
+    np::own(handle.get(), "close", handle_close.get());
+    np::own(owner.get(), "_handle", handle.get());
     own_new!("_outBuffer", value_bytes(&vec![0; chunk_size]));
     np::own(owner.get(), "_outOffset", 0.0);
     np::own(owner.get(), "_chunkSize", chunk_size as f64);
@@ -1043,6 +1066,14 @@ extern "C" fn flush(_: *const RawClosureHeader, this: JsThis, kind: f64, callbac
         kind
     };
     ns::request_flush(owner.get(), kind as i32, cb.get());
+    f64::from_bits(UNDEFINED)
+}
+// Closing the binding releases only its codec, not the owning Transform.
+// Keep the real owner traced even when JS retains the handle after destroy.
+extern "C" fn close_codec_handle(closure: *const RawClosureHeader, _: JsThis) -> f64 {
+    let roots = TransientRootScope::enter();
+    let owner = roots.root_nanbox(unsafe { perry_ffi::closure_capture_f64(closure, 0) });
+    unsafe { np::close_attached(owner.get(), &CODEC_VTABLE) };
     f64::from_bits(UNDEFINED)
 }
 extern "C" fn close(_: *const RawClosureHeader, this: JsThis, callback: f64) -> f64 {

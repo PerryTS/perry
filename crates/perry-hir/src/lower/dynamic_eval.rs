@@ -214,7 +214,13 @@ pub(crate) fn lower(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
         .map(|(i, (name, id, _))| (i, name.clone(), ctx.sloppy_implicit_global_ids.contains(id)))
         .collect();
     for (index, name, implicit_global) in locals.into_iter().rev() {
-        if !seen.insert(name.clone()) || name.starts_with("__perry") {
+        // A pending class binding hidden from the member being lowered is no
+        // name the source can spell (the generated bindings object would not
+        // parse); the member reads that class statically.
+        if !seen.insert(name.clone())
+            || name.starts_with("__perry")
+            || crate::lower_decl::is_hidden_pending_binding(&name)
+        {
             continue;
         }
         // A sloppy implicit global is a global binding wherever it was

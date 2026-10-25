@@ -1,0 +1,1 @@
+Make compiler class descriptors the sole authority for anonymous object-literal roles, register them before shape birth, and remove duplicate anonymous-class tables. Preserve ordinary literal constructor/prototype semantics and image-local worker metadata, and reject conflicting native class-role registrations.

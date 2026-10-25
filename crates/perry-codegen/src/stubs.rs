@@ -150,6 +150,46 @@ pub fn generate_stub_object_full(
     compile_ll_to_object(&ll, triple.as_deref())
 }
 
+/// Whether an object for `triple` (`None` = the host) is ELF, where the
+/// startup-registration unit must use `.init_array`.
+fn elf_object(triple: Option<&str>) -> bool {
+    match triple {
+        Some(t) => {
+            t.contains("linux")
+                || t.contains("android")
+                || t.contains("freebsd")
+                || t.contains("netbsd")
+                || t.contains("openbsd")
+        }
+        None => cfg!(all(unix, not(target_vendor = "apple"))),
+    }
+}
+
+/// IR that runs `func` (an internal `void()`) before `main`.
+///
+/// On ELF this is a pointer in `.init_array`, not `@llvm.global_ctors`: the
+/// in-process TargetMachine is built with `UseInitArray=false` (it must match
+/// the native-roots object layout), so LLVM lowers `global_ctors` to the legacy
+/// `.ctors` section, which glibc on aarch64 (and any `DT_INIT_ARRAY`-only
+/// startup) never runs. The registration then silently never happened: no
+/// feature installers, no static shape seed. The pointer is `global`, not
+/// `constant`, so the section gets the writable flags the linker expects for
+/// `.init_array`, and `@llvm.used` keeps it through `--gc-sections`. Mach-O
+/// (`__mod_init_func`) and COFF keep `global_ctors`.
+fn startup_registration_ll(func: &str, triple: Option<&str>) -> String {
+    if elf_object(triple) {
+        format!(
+            "@{func}_init_ptr = internal global ptr @{func}, section \".init_array\", align 8\n\
+             @llvm.used = appending global [1 x ptr] [ptr @{func}_init_ptr], section \"llvm.metadata\"\n"
+        )
+    } else {
+        format!(
+            "@llvm.global_ctors = appending global [1 x {{ i32, ptr, ptr }}] \
+             [{{ i32, ptr, ptr }} {{ i32 65535, ptr @{func}, ptr null }}]\n"
+        )
+    }
+}
+
 /// Generate the object that tells the runtime (and perry-stdlib, when linked)
 /// which optional features this program installs.
 ///
@@ -206,11 +246,11 @@ pub fn generate_feature_installer_object(
     }
     ctor.push_str("  ret void\n}\n\n");
     ll.push_str(&ctor);
-    ll.push_str("@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] ");
-    ll.push_str(
-        "[{ i32, ptr, ptr } { i32 65535, ptr @perry_register_feature_installers, ptr null }]\n",
-    );
     let triple = target.and_then(crate::resolve_target_triple);
+    ll.push_str(&startup_registration_ll(
+        "perry_register_feature_installers",
+        triple.as_deref(),
+    ));
     compile_ll_to_object(&ll, triple.as_deref())
 }
 
@@ -222,12 +262,16 @@ pub fn generate_feature_installer_object(
 /// through `js_shape_run_static_seed` (`main` after `js_gc_init`, every other
 /// agent at its start).
 pub fn static_shape_seed_ll(seeds: &[(u32, crate::BirthShape)]) -> String {
-    static_shape_seed_ll_impl(seeds, true)
+    static_shape_seed_ll_impl(seeds, true, None)
 }
 
 /// The caller supplies only permanent-image final facts or ordinary births.
 /// Body-aware seeds create records; they do not stamp incomplete objects.
-fn static_shape_seed_ll_impl(seeds: &[(u32, crate::BirthShape)], allow_constfn: bool) -> String {
+fn static_shape_seed_ll_impl(
+    seeds: &[(u32, crate::BirthShape)],
+    allow_constfn: bool,
+    triple: Option<&str>,
+) -> String {
     let plan = crate::ProgramLayoutOrdinals::assign(
         crate::layout_ordinals::native_inputs(),
         seeds
@@ -235,13 +279,14 @@ fn static_shape_seed_ll_impl(seeds: &[(u32, crate::BirthShape)], allow_constfn: 
             .map(|(id, shape)| crate::layout_ordinals::identity_input(shape, *id)),
     )
     .expect("standalone seed plan");
-    static_shape_seed_ll_with_plan(seeds, &plan, allow_constfn)
+    static_shape_seed_ll_with_plan(seeds, &plan, allow_constfn, triple)
 }
 
 pub fn static_shape_seed_ll_with_plan(
     seeds: &[(u32, crate::BirthShape)],
     plan: &crate::ProgramLayoutOrdinals,
     allow_constfn: bool,
+    triple: Option<&str>,
 ) -> String {
     assert!(
         allow_constfn || seeds.iter().all(|(_, shape)| shape.constfn.is_empty()),
@@ -341,10 +386,10 @@ pub fn static_shape_seed_ll_with_plan(
     ll.push_str("define internal void @perry_register_static_shape_seed() {\n");
     ll.push_str("  call void @js_shape_register_static_seed(ptr @perry_static_shape_seed)\n");
     ll.push_str("  ret void\n}\n\n");
-    ll.push_str("@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] ");
-    ll.push_str(
-        "[{ i32, ptr, ptr } { i32 65535, ptr @perry_register_static_shape_seed, ptr null }]\n",
-    );
+    ll.push_str(&startup_registration_ll(
+        "perry_register_static_shape_seed",
+        triple,
+    ));
     ll
 }
 
@@ -354,7 +399,10 @@ pub fn generate_static_shape_seed_object(
     target: Option<&str>,
 ) -> Result<Vec<u8>> {
     let triple = target.and_then(crate::resolve_target_triple);
-    compile_ll_to_object(&static_shape_seed_ll(seeds), triple.as_deref())
+    compile_ll_to_object(
+        &static_shape_seed_ll_impl(seeds, true, triple.as_deref()),
+        triple.as_deref(),
+    )
 }
 
 /// Driver entry: the seed unit consumes the exact plan shared by every package.
@@ -365,7 +413,7 @@ pub fn generate_static_shape_seed_object_with_plan(
 ) -> Result<Vec<u8>> {
     let triple = target.and_then(crate::resolve_target_triple);
     compile_ll_to_object(
-        &static_shape_seed_ll_with_plan(seeds, plan, true),
+        &static_shape_seed_ll_with_plan(seeds, plan, true, triple.as_deref()),
         triple.as_deref(),
     )
 }
@@ -446,7 +494,7 @@ mod tests {
             brands: Vec::new(),
             attrs: Vec::new(),
         };
-        let ll = static_shape_seed_ll_impl(&[(0x1000_0044, shape)], true);
+        let ll = static_shape_seed_ll_impl(&[(0x1000_0044, shape)], true, None);
         assert!(ll.contains("@perry_static_seed_constfn_0 = private constant [1 x { i32, ptr }] [{ i32, ptr } { i32 0, ptr @perry_closure_m__method$info }]"), "{ll}");
         assert!(ll.contains("@perry_closure_m__method$info = external constant { ptr, i16, i16, i32, i32, i32, ptr, i64, ptr, i32, i16, i16, i64 }"), "{ll}");
         assert!(ll.contains("call i32 @js_layout_seed_plain_constfn(ptr @perry_layout_request_268435524, ptr @perry_static_seed_keys_0, i32 7, i32 1, i32 1, i64 3, ptr @perry_static_seed_constfn_0, i32 1)"), "{ll}");
@@ -507,5 +555,18 @@ mod tests {
             vec!["__perry_wrap_perry_fn_node_modules_uuid_dist_sha1_js__default".to_string()];
         let bytes = generate_stub_object_full(&[], &[], &[], &wrappers, None).unwrap();
         assert!(bytes.len() > 64);
+    }
+
+    /// Mach-O and COFF keep `global_ctors` (`__mod_init_func` / `.CRT$XCU`).
+    #[test]
+    fn non_elf_startup_registration_keeps_global_ctors() {
+        for triple in ["aarch64-apple-darwin", "x86_64-pc-windows-msvc"] {
+            let ll = startup_registration_ll("perry_register_x", Some(triple));
+            assert!(ll.contains("@llvm.global_ctors"), "{triple}: {ll}");
+            assert!(!ll.contains(".init_array"), "{triple}: {ll}");
+        }
+        let ll = startup_registration_ll("perry_register_x", Some("aarch64-unknown-linux-gnu"));
+        assert!(ll.contains("section \".init_array\""), "{ll}");
+        assert!(!ll.contains("@llvm.global_ctors"), "{ll}");
     }
 }

@@ -614,8 +614,8 @@ fn constfn_transfer_compiled_anon_header_preserves_actual_worker_wire() {
     let _lock = gc::global_side_table_test_lock();
     std::thread::spawn(move || unsafe {
         crate::object::class_image::enter_current_thread_image();
-        crate::object::js_register_anon_shape_class_id(ANON);
-        assert!(crate::object::is_anon_shape_class_id(ANON));
+        crate::object::declarations::test_declare_anonymous(ANON);
+        assert!(crate::object::declarations::class_is_anonymous(ANON));
         assert_eq!(shapes::class_proto_id(ANON), shapes::class_proto_id(0));
         assert_eq!((*arrow_info()).flags, 6200, "actual producer info flags");
         assert_eq!(

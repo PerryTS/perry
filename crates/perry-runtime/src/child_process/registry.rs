@@ -133,13 +133,16 @@ pub extern "C" fn js_child_process_spawn_background(
 
         // Add arguments if provided
         if args_ptr != 0 {
-            let arr_ptr = args_ptr as *const crate::array::ArrayHeader;
-            let args_len = (*arr_ptr).length as usize;
-            let args_data =
-                crate::array::array_elements_ptr(arr_ptr as *const crate::array::ArrayHeader)
-                    as *const f64;
+            // The args list may have grown after it was handed over, leaving
+            // this pointer on a forwarding stub; resolve it first.
+            let arr_ptr = crate::array::clean_arr_ptr(args_ptr as *const crate::array::ArrayHeader);
+            let args_len = if arr_ptr.is_null() {
+                0
+            } else {
+                (*arr_ptr).length as usize
+            };
             for i in 0..args_len {
-                let arg_val = *args_data.add(i);
+                let arg_val = crate::array::js_array_get_f64(arr_ptr, i as u32);
                 if let Some(arg_str) = extract_string_from_nanboxed(arg_val) {
                     command.arg(arg_str);
                 }
@@ -266,13 +269,16 @@ pub extern "C" fn js_child_process_spawn_detached(
 
         let mut owned_args: Vec<String> = Vec::new();
         if args_ptr != 0 {
-            let arr_ptr = args_ptr as *const crate::array::ArrayHeader;
-            let args_len = (*arr_ptr).length as usize;
-            let args_data =
-                crate::array::array_elements_ptr(arr_ptr as *const crate::array::ArrayHeader)
-                    as *const f64;
+            // The args list may have grown after it was handed over, leaving
+            // this pointer on a forwarding stub; resolve it first.
+            let arr_ptr = crate::array::clean_arr_ptr(args_ptr as *const crate::array::ArrayHeader);
+            let args_len = if arr_ptr.is_null() {
+                0
+            } else {
+                (*arr_ptr).length as usize
+            };
             for i in 0..args_len {
-                let arg_val = *args_data.add(i);
+                let arg_val = crate::array::js_array_get_f64(arr_ptr, i as u32);
                 if let Some(arg_str) = extract_string_from_nanboxed(arg_val) {
                     owned_args.push(arg_str);
                 }

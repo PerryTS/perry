@@ -101,15 +101,7 @@ pub(crate) unsafe fn nm_dispatch_util(ctx: &NmCtx, module_name: &str, method_nam
         ("util", "callbackify") => crate::util_promisify::js_util_callbackify(arg(0)),
         ("util", "deprecate") => crate::util_promisify::js_util_deprecate(arg(0), arg(1), arg(2)),
         ("util", "parseArgs") => crate::util_parse_args::js_util_parse_args(arg(0)),
-        ("util", "isPromise") => {
-            let v = JSValue::from_bits(arg(0).to_bits());
-            bool_tag(
-                v.is_pointer()
-                    && crate::promise::js_is_promise(
-                        v.as_pointer::<crate::promise::Promise>() as *mut crate::promise::Promise
-                    ) != 0,
-            )
-        }
+        ("util", "isPromise") => bool_tag(crate::promise::js_value_is_promise(arg(0)) != 0),
         ("util", "isArrayBuffer") => bool_tag(crate::buffer::is_array_buffer(ptr_addr(arg(0)))),
         ("util", "isSharedArrayBuffer") => {
             bool_tag(crate::buffer::is_shared_array_buffer(ptr_addr(arg(0))))

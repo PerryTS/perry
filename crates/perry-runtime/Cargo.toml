@@ -270,7 +270,7 @@ ohos-napi = []
 # default builds carry it; the auto-optimize path enables it only when the
 # program contains a deferred dynamic-eval site (the #5206 notice machinery
 # already counts them).
-dyn-eval = ["dep:perry-parser", "dep:perry-diagnostics"]
+dyn-eval = ["dep:perry-parser", "dep:perry-diagnostics", "dep:swc_ecma_visit"]
 
 [dependencies]
 # Replacement/search metadata stays inline until it outgrows the operation stack.
@@ -313,6 +313,7 @@ dirs = { workspace = true, optional = true }
 # generated `new Function` bodies (no second parser). perry-parser depends
 # only on swc + perry-diagnostics — no cycle back into perry-runtime.
 perry-parser = { path = "../perry-parser", optional = true }
+swc_ecma_visit = { workspace = true, optional = true }
 perry-diagnostics = { path = "../perry-diagnostics", optional = true }
 node-semver = { version = "2.2.0", optional = true }
 toml = { workspace = true, optional = true }

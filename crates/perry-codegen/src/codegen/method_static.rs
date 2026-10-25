@@ -219,8 +219,11 @@ pub(in crate::codegen) fn compile_static_method(
         &mut shadow_slot_map,
         native_facts.number_by_construction_locals(),
     );
-    let shadow_slot_clears_after_stmt =
-        crate::collectors::collect_shadow_slot_clear_points(&f.body, &shadow_slot_map);
+    let shadow_slot_clears_after_stmt = crate::collectors::collect_shadow_slot_clear_points(
+        &f.body,
+        &shadow_slot_map,
+        &cross_module.scope_map,
+    );
 
     // Representation-selection context gates (see codegen/function.rs).
     let repsel_flags =

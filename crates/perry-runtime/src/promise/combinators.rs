@@ -1332,8 +1332,9 @@ pub extern "C" fn js_assimilate_thenable(value: f64) -> f64 {
         }
         (*obj_ptr).class_id
     };
-    if class_id == 0 {
-        // A plain object literal (`{ then(resolve, reject) {…} }` / `{ get then()
+    if class_id == 0 || !unsafe { crate::object::shapes::receiver_has_class_identity(obj_ptr) } {
+        // Ordinary/native receivers without a class holder use the actual
+        // `then` property. A plain literal (`{ then(resolve, reject) {…} }` / `{ get then()
         // {…} }`) has no class vtable, so the method-chain probe below can't see
         // its `then`. Per ECMA-262 PromiseResolveThenableJob the thenable check
         // is `Get(value, "then")` + IsCallable — independent of how `then` is

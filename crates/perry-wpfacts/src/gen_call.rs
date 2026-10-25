@@ -128,6 +128,7 @@ impl<'a> Gen<'a> {
                         key: a,
                         recv: o,
                         is_call: true,
+                        value_call: false,
                         func: fx.f,
                     });
                 }
@@ -137,7 +138,13 @@ impl<'a> Gen<'a> {
                 let o = self.expr(fx, object);
                 let i = self.expr(fx, index);
                 let r = self.m.reason("ToPropertyKey");
-                self.m.cons(i, Cons::Implicit { reason: r });
+                self.m.cons(
+                    i,
+                    Cons::Implicit {
+                        reason: r,
+                        proto: Protocol::ToPrimitive,
+                    },
+                );
                 let key = self.read_key(index);
                 self.mcall(o, key, args, spread)
             }
@@ -146,6 +153,26 @@ impl<'a> Gen<'a> {
             }
             _ => {
                 let c = self.expr(fx, callee);
+                // A call through a value is a site: the bodies the callee
+                // node holds. A function named by the source (a declaration,
+                // an import binding, a closure expression) is no value call.
+                if byte_offset != 0
+                    && !matches!(
+                        callee,
+                        Expr::FuncRef(_) | Expr::ExternFuncRef { .. } | Expr::Closure { .. }
+                    )
+                {
+                    let key = self.m.atom("()");
+                    self.read_sites.push(ReadSite {
+                        module: fx.module,
+                        byte_offset,
+                        key,
+                        recv: c,
+                        is_call: true,
+                        value_call: true,
+                        func: fx.f,
+                    });
+                }
                 let r = self.call_value(c, ThisArg::Undef, args, spread);
                 if let Some(a) = lit {
                     let call = self.m.calls.len() as CallId - 1;
@@ -176,6 +203,11 @@ impl<'a> Gen<'a> {
 
     /// A closure expression: register, walk its body, return its token.
     pub(crate) fn closure(&mut self, fx: &Fx, e: &Expr) -> NodeId {
+        let Expr::Closure { func_id: id, .. } = e else {
+            return self.m.top_tok_node;
+        };
+        let canonical = self.emitted_closure(fx.module, *id).unwrap_or(e);
+        self.feed_closure_captures(fx.module, e, canonical);
         let Expr::Closure {
             func_id,
             params,
@@ -185,7 +217,7 @@ impl<'a> Gen<'a> {
             is_async,
             is_generator,
             ..
-        } = e
+        } = canonical
         else {
             return self.m.top_tok_node;
         };
@@ -583,7 +615,13 @@ impl<'a> Gen<'a> {
             "js_object_lookup_getter" | "js_object_lookup_setter" => {
                 let r = self.m.reason("__lookupGetter__ result");
                 for a in &args {
-                    self.m.cons(*a, Cons::Implicit { reason: r });
+                    self.m.cons(
+                        *a,
+                        Cons::Implicit {
+                            reason: r,
+                            proto: Protocol::Any,
+                        },
+                    );
                 }
                 self.m.top_val("__lookupGetter__ result")
             }
@@ -603,7 +641,6 @@ impl<'a> Gen<'a> {
             | "js_object_to_string"
             | "js_object_has_own"
             | "js_object_property_is_enumerable"
-            | "js_object_literal_infer_computed_function_name"
             | "js_process_exit_code_get"
             | "js_process_exit_code_set"
             | "js_weakset_has"
@@ -615,19 +652,32 @@ impl<'a> Gen<'a> {
             | "js_set_compaction_epoch" => {
                 let r = self.m.reason("ToPrimitive in runtime helper");
                 for a in &args {
-                    self.m.cons(*a, Cons::Implicit { reason: r });
+                    self.m.cons(
+                        *a,
+                        Cons::Implicit {
+                            reason: r,
+                            proto: Protocol::ToPrimitive,
+                        },
+                    );
                 }
                 let out = self.tmp("rt-prim");
                 self.m.add_prim(out, prim::ALL);
-                if name == "js_object_literal_infer_computed_function_name" {
-                    if let Some(v) = arg(0) {
-                        self.m.edge(v, out);
-                    }
-                }
                 if name == "js_weakset_add" {
                     if let Some(v) = arg(0) {
                         self.m.edge(v, out);
                     }
+                }
+                out
+            }
+            // SetFunctionName for a computed key (`{ [k]: f }`): the runtime
+            // names the closure after the key, which
+            // `js_object_literal_to_property_key` already converted. It calls
+            // nothing, so the function does not escape: the value
+            // (argument 1) passes through.
+            "js_object_literal_infer_computed_function_name" => {
+                let out = self.tmp("rt-name");
+                if let Some(v) = arg(1) {
+                    self.m.edge(v, out);
                 }
                 out
             }

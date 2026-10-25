@@ -976,7 +976,9 @@ pub(crate) unsafe fn prototype_from_template<'s>(
 ) -> Option<crate::gc::RuntimeHandle<'s>> {
     let cell = class_object_template_cell(class)?;
     let (field_count, final_shape, fills, proto_id) = cell.proto_template()?;
-    if crate::object::shapes::stable_linked_proto_id(class_id, parent_proto) != Some(proto_id) {
+    if crate::object::shapes::stable_declared_linked_proto_id(class_id, parent_proto)
+        != Some(proto_id)
+    {
         return None;
     }
     #[cfg(test)]
@@ -1051,7 +1053,8 @@ pub(crate) unsafe fn record_prototype_template(
     if !cell.owned() || cell.get(W_CLASS_SETTLED) == 0 || cell.get(W_PROTO_SHAPE) != 0 {
         return;
     }
-    let Some(proto_id) = crate::object::shapes::stable_linked_proto_id(class_id, parent_proto)
+    let Some(proto_id) =
+        crate::object::shapes::stable_declared_linked_proto_id(class_id, parent_proto)
     else {
         return;
     };
@@ -1381,7 +1384,8 @@ pub(crate) unsafe fn template_instance(
     // The derivation the link was recorded for: this evaluation's
     // prototype identity, which the linked shape names.
     let link = recorded_evaluation_prototype_in(cell, class).and_then(|proto| {
-        let proto_id = crate::object::shapes::stable_linked_proto_id(class_id, proto.to_bits())?;
+        let proto_id =
+            crate::object::shapes::stable_declared_linked_proto_id(class_id, proto.to_bits())?;
         (proto_id == cell.get(W_INSTANCE_PROTO_ID)).then_some((proto, proto_id))
     });
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -1427,7 +1431,7 @@ pub(crate) unsafe fn record_instance_link(
         return;
     }
     let Some(proto_id) =
-        crate::object::shapes::stable_linked_proto_id((*inst).class_id, proto_bits)
+        crate::object::shapes::stable_declared_linked_proto_id((*inst).class_id, proto_bits)
     else {
         return;
     };

@@ -288,7 +288,7 @@ fn elide_enabled() -> bool {
 /// the prefix-stable classes and takes its complete generic operation
 /// otherwise. An over-budget solve gives no entry at all.
 fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::ElisionFacts {
-    use perry_codegen::{ElisionFacts, FactsClass, FactsField, FactsRecv};
+    use perry_codegen::{ElisionFacts, FactsBody, FactsClass, FactsField, FactsRecv};
     use perry_wpfacts::model::prim;
     let mut out = ElisionFacts {
         contracts: contracts_requested(),
@@ -331,9 +331,48 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
             checked,
         })
     };
+    // FVA: the bodies a binding or a field holds, when every one is a plain
+    // body of this module. Interpreted code needs no guard here (decision
+    // 150): a value it can hand a binding is TOP there, and then the binding
+    // has no bodies. (A field is read through its proof, which declines a
+    // guarded one; statics and the method tower depend on objects
+    // interpreted code may write, and keep `interp`.)
+    let interp = out.interp_guard;
+    let bodies = |bs: &[perry_wpfacts::BodyRef]| -> Vec<FactsBody> {
+        if bs.is_empty()
+            || !bs.iter().all(|b| {
+                b.plain && pf.module_paths.get(b.module as usize).map(String::as_str) == Some(path)
+            })
+        {
+            return Vec::new();
+        }
+        bs.iter()
+            .map(|b| FactsBody {
+                func_id: b.func_id,
+                params: b.params,
+                closure: b.closure,
+            })
+            .collect()
+    };
     for (id, b) in &mb.locals {
         if let Some(r) = recv(b) {
             out.locals.insert(*id, r);
+        }
+        let fs = bodies(&b.bodies);
+        if !fs.is_empty() {
+            out.local_bodies.insert(*id, fs);
+        }
+        if let Some(cid) = b.class_object.filter(|_| !interp) {
+            out.local_classes.insert(*id, cid);
+        }
+    }
+    // FVA 3.4: every class's constant statics (a static call names its class
+    // by id, which may be another module's).
+    if !interp {
+        for t in &pf.templates {
+            if let (Some(cid), false) = (t.class_id, t.statics.is_empty()) {
+                out.class_statics.insert(cid, t.statics.clone());
+            }
         }
     }
     for (id, b) in &mb.this_of {
@@ -348,15 +387,17 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
         let fields = t
             .fields
             .iter()
-            .filter(|f| f.definite && f.data_field)
+            .filter(|f| (f.definite || f.declared) && f.data_field)
             .filter_map(|f| {
                 Some(FactsField {
+                    fns: bodies(&f.fns),
                     key: f.key.clone(),
                     slot: f.slot?,
                     readonly: f.readonly,
                     kind_mask: f.kind.mask(),
                     ta_stable: f.ta_stable,
                     ta_kind: f.ta_kind,
+                    declared: f.declared,
                 })
             })
             .collect();

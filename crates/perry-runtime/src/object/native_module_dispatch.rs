@@ -324,6 +324,20 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ""
     };
     let (module_name, assert_skip_prototype) = normalize_dispatch_module_name(module_name);
+    // A module the submodule registry implements (`stream/promises`,
+    // `timers/promises`, `stream/web`, ...) has no dispatch bucket: a direct
+    // method call on its module value runs the registry's export, the same
+    // function the property read resolves to.
+    if let Some(callable) =
+        crate::node_submodules::registry_backed_module_callable(module_name, method_name)
+    {
+        return crate::closure::js_native_call_value(
+            callable,
+            crate::closure::plain_call_receiver(),
+            args_ptr,
+            args_len,
+        );
+    }
     let ctx = NmCtx {
         obj,
         args_ptr,
@@ -332,7 +346,11 @@ pub(crate) unsafe fn dispatch_native_module_method(
     };
     match super::native_module_registry::nm_dispatch_lookup(module_name) {
         Some(f) => f(&ctx, module_name, method_name),
-        None => f64::from_bits(JSValue::undefined().bits()),
+        // No bucket and no registry export: answering `undefined` hid a missing
+        // implementation behind a call that appeared to succeed.
+        None => crate::collection_iter::throw_type_error(&format!(
+            "{module_name}.{method_name} is not supported"
+        )),
     }
 }
 
@@ -491,6 +509,70 @@ mod cjs_default_dispatch_tests {
         assert_eq!(
             normalize_dispatch_module_name("module.default"),
             ("module", false)
+        );
+    }
+}
+
+#[cfg(test)]
+mod registry_backed_dispatch_tests {
+    use super::*;
+    use crate::object::native_module_registry::nm_dispatch_lookup;
+
+    /// One callable export per registry-backed module id.
+    const REGISTRY_BACKED: &[(&str, &str)] = &[
+        ("fs/promises", "readFile"),
+        ("timers/promises", "setTimeout"),
+        ("readline/promises", "createInterface"),
+        ("stream/promises", "pipeline"),
+        ("stream/promises", "finished"),
+        ("stream/consumers", "text"),
+        ("stream/web", "ReadableStream"),
+        ("diagnostics_channel", "hasSubscribers"),
+        ("trace_events", "getEnabledCategories"),
+    ];
+
+    /// These modules answer `undefined` from the bucket registry: the exports
+    /// live in the submodule registry, so every route that reaches a callable
+    /// export must resolve it there instead of minting a bound closure that
+    /// dispatches to no bucket.
+    #[test]
+    fn registry_backed_modules_have_no_dispatch_bucket() {
+        for (module, _) in REGISTRY_BACKED {
+            assert!(
+                nm_dispatch_lookup(module).is_none(),
+                "{module} gained a dispatch bucket: drop it from registry_backed_module_key"
+            );
+        }
+    }
+
+    #[test]
+    fn property_reads_resolve_to_the_registry_export() {
+        for (module, name) in REGISTRY_BACKED {
+            let expected = crate::node_submodules::registry_backed_module_callable(module, name)
+                .unwrap_or_else(|| panic!("{module}.{name} is not a registry callable"));
+            for spelling in [module.to_string(), format!("node:{module}")] {
+                let bound = bound_native_callable_export_value(&spelling, name);
+                assert_eq!(
+                    bound.to_bits(),
+                    expected.to_bits(),
+                    "{spelling}.{name} minted a different value than the registry export"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn method_calls_run_the_registry_export() {
+        let module = "diagnostics_channel";
+        let ns = js_create_native_module_namespace(module.as_ptr(), module.len());
+        let obj = (ns.to_bits() & crate::value::POINTER_MASK) as *const ObjectHeader;
+        let channel_name = crate::string::js_string_from_bytes(b"registry-dispatch".as_ptr(), 17);
+        let arg = crate::value::js_nanbox_string(channel_name as i64);
+        let result = unsafe { dispatch_native_module_method(obj, "hasSubscribers", &arg, 1) };
+        assert_eq!(
+            result.to_bits(),
+            crate::value::TAG_FALSE,
+            "hasSubscribers on a channel nobody subscribed to must be false, not undefined"
         );
     }
 }

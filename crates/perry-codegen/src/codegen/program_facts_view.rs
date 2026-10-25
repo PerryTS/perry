@@ -57,6 +57,24 @@ pub struct FactsField {
     /// F6 element kind (`perry_hir::TYPED_ARRAY_KIND_*`) when every typed
     /// array the field holds is an owner of that one kind.
     pub ta_kind: Option<u8>,
+    /// A declared key (`perry_hir::ClassFieldOrigin::Declared`): the slot is
+    /// known, presence is not. A read pairs the load with the hole compare;
+    /// stores stay on the checked route (an add orders the key).
+    pub declared: bool,
+    /// The field holds only these bodies of this module (FVA): a call
+    /// through it is a call of them. Empty when it may hold anything else.
+    pub fns: Vec<FactsBody>,
+}
+
+/// A plain compiled body of this module that a binding or a field holds
+/// (FVA): a closure expression (`perry_closure_<prefix>__<id>`) or a
+/// function declaration, with no rest parameter and no `arguments`.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct FactsBody {
+    pub func_id: u32,
+    /// Declared parameters: a call passing fewer pads with `undefined`.
+    pub params: u32,
+    pub closure: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
@@ -74,6 +92,15 @@ pub struct ElisionFacts {
     pub locals: std::collections::BTreeMap<u32, FactsRecv>,
     /// HIR function id → receiver facts of its `this`.
     pub this_of: std::collections::BTreeMap<u32, FactsRecv>,
+    /// Local id → the bodies it holds, when it holds nothing else (FVA): a
+    /// call through it is a call of them.
+    pub local_bodies: std::collections::BTreeMap<u32, Vec<FactsBody>>,
+    /// Local id → the class id of the one class object it holds, when it
+    /// holds nothing else (FVA 3.4): `x.k(...)` is `C.k(...)`.
+    pub local_classes: std::collections::BTreeMap<u32, u32>,
+    /// Class id → its own statics that hold their definition for the
+    /// program's life (FVA 3.4): a call of one is its declaration, unguarded.
+    pub class_statics: std::collections::BTreeMap<u32, Vec<String>>,
     /// Class id → layout facts (prefix-stable classes only).
     pub classes: std::collections::BTreeMap<u32, FactsClass>,
     /// Contract build: every elided site asserts its facts at run time.
@@ -95,7 +122,11 @@ pub struct ElisionFacts {
 
 impl ElisionFacts {
     pub fn is_empty(&self) -> bool {
-        self.locals.is_empty() && self.this_of.is_empty()
+        self.locals.is_empty()
+            && self.this_of.is_empty()
+            && self.local_bodies.is_empty()
+            && self.local_classes.is_empty()
+            && self.class_statics.is_empty()
     }
 
     pub fn field(&self, class_id: u32, key: &str) -> Option<&FactsField> {

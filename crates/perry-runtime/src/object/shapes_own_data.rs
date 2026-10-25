@@ -1,6 +1,7 @@
 //! Positive own-slot lookup whose authority is the receiver's live shape.
-use super::{ShapeSlab, PROTO_ID_PER_OBJECT};
+use super::{ShapeObjectKind, ShapeSlab, PROTO_ID_DEFAULT, PROTO_ID_NULL, PROTO_ID_PER_OBJECT};
 use crate::array::ArrayHeader;
+use crate::object::ObjectHeader;
 
 /// Owner facts borrowed for one callback-free read. No allocation or shape
 /// mutation may occur between obtaining these facts and using them.
@@ -52,6 +53,88 @@ pub(crate) unsafe fn own_data_shape(dir: *const u8, shape_id: u32) -> Option<Opt
         summary: record.summary(),
         proto_id: record.proto_id,
     }))
+}
+
+/// May a definite miss from the data walk (`native_get::try_data_lookup_key`
+/// answering `Some(None)`) stand for the whole `[[Get]]` of `key` on `object`?
+///
+/// The walk proves the key is listed by no link of the chain. The generic read
+/// also answers keys no link lists, for receivers whose reads are not decided
+/// by their shape alone: class instances and their getters, brands, exotic and
+/// native-backed cells, `arguments`, `process.env`, per-object prototypes. This
+/// admits only an ordinary plain object: either one the runtime birthed class-
+/// less and marked (`OBJ_FLAG_PLAIN_ORDINARY`, no class id), or an instance of
+/// an object literal whose live shape and absent CLASS holder prove record
+/// semantics (the same receiver proof the thenable probe uses). Its live
+/// shape must be the plain `Ordinary` kind and its
+/// [[Prototype]] the realm default or null by identity, never a recorded link.
+/// Anything else keeps the generic read.
+///
+/// # Safety
+/// `object` is a pointer the data walk accepted as a shaped `ObjectHeader`.
+#[inline]
+pub(crate) unsafe fn plain_receiver_miss_is_final(object: *const ObjectHeader, key: &[u8]) -> bool {
+    use crate::gc::{
+        GC_FLAG_ARENA, GC_FLAG_FORWARDED, GC_OBJECT_CALLABLE, GC_TYPE_OBJECT, OBJ_FLAG_ARGUMENTS,
+        OBJ_FLAG_HAS_DESCRIPTORS, OBJ_FLAG_PLAIN_ORDINARY, OBJ_FLAG_TYPED_ARRAY_PROTO,
+    };
+    // `@@name` keys carry the well-known-symbol members class surfaces answer.
+    if key.starts_with(b"@@") {
+        return false;
+    }
+    let addr = object as usize;
+    if !crate::value::addr_class::is_above_handle_band(addr)
+        || !addr.is_multiple_of(std::mem::align_of::<ObjectHeader>())
+    {
+        return false;
+    }
+    // A literal `{ ... }` is an instance of a synthetic anon-shape class, so its
+    // class id is nonzero and it carries no birth mark; the class identity is
+    // the proof there. A class-less receiver needs the birth mark instead.
+    let class_id = (*object).class_id;
+    let classless = class_id == 0;
+    let header = &*crate::gc::header_from_trusted_user_ptr(object.cast());
+    const BLOCKING: u16 = OBJ_FLAG_TYPED_ARRAY_PROTO
+        | OBJ_FLAG_ARGUMENTS
+        | GC_OBJECT_CALLABLE
+        | OBJ_FLAG_HAS_DESCRIPTORS;
+    if header.obj_type != GC_TYPE_OBJECT
+        || header.gc_flags & (GC_FLAG_ARENA | GC_FLAG_FORWARDED) != GC_FLAG_ARENA
+        || header._reserved & BLOCKING != 0
+        || (classless && header._reserved & OBJ_FLAG_PLAIN_ORDINARY == 0)
+    {
+        return false;
+    }
+    let meta = (*object).meta;
+    if !meta.is_null()
+        && (*meta).flags
+            & (crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER
+                | crate::object::OBJECT_META_FLAG_NATIVE_ALIAS
+                | crate::object::meta_flags::OBJECT_META_FLAG_SEALED_INTRINSIC)
+            != 0
+    {
+        return false;
+    }
+    let shape_id = crate::object::layout_desc::layout_id_of_word((*object).parent_class_id);
+    let Some(record) = ShapeSlab::ordinary_record_in(super::ordinary_dir_addr(), shape_id) else {
+        return false;
+    };
+    if !classless && !super::shape_is_plain_record(class_id, record.proto_id, record.object_kind())
+    {
+        return false;
+    }
+    if record.object_kind() != ShapeObjectKind::Ordinary
+        || record.weak_collection_brand().is_some()
+        || !record.brands().is_empty()
+    {
+        return false;
+    }
+    let recorded = super::object_prototype_word(object);
+    match record.proto_id {
+        PROTO_ID_DEFAULT => recorded == 0,
+        PROTO_ID_NULL => recorded == 0 || recorded == crate::value::TAG_NULL,
+        _ => false,
+    }
 }
 
 impl OwnDataShape {

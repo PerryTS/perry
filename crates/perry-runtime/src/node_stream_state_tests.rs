@@ -80,13 +80,14 @@ fn readable_lifecycle_flags_reflect_ended_state() {
         js_object_get_field_by_name_f64(obj, hidden_key(b"readable")).to_bits(),
         TAG_FALSE
     );
+    // `readableEnded` is "'end' was emitted"; pushing EOF only ends the buffer.
     assert_eq!(
         js_node_stream_method_readable_ended(handle).to_bits(),
-        TAG_TRUE
+        TAG_FALSE
     );
     assert_eq!(
         js_object_get_field_by_name_f64(obj, hidden_key(b"readableEnded")).to_bits(),
-        TAG_TRUE
+        TAG_FALSE
     );
 }
 

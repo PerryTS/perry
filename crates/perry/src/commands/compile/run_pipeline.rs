@@ -1278,6 +1278,13 @@ pub fn run_with_parse_cache(
     let mut native_provider_installs: Vec<String> = ctx
         .native_routing
         .wrapper_install_hooks(program_modules.iter().map(String::as_str));
+    // A program that names `dns` arms the router for the lookup/resolve
+    // exports a CommonJS `require('node:dns')` reaches through the dynamic
+    // native module dispatch (`js_dns_install_exports`); one that does not
+    // keeps those FFIs, and the host resolver behind them, out of the link.
+    if ctx.uses_dns {
+        native_provider_installs.push("js_dns_install_exports".to_string());
+    }
     // #11616: only the direct `process.getBuiltinModule(id)` call reaches the
     // devirt entry that arms the install-all hooks. Reached any other way — a
     // `const proc = process` alias, `process?.getBuiltinModule?.(id)` — the
@@ -3997,6 +4004,12 @@ pub fn run_with_parse_cache(
         let mut namespace_member_nested: std::collections::HashSet<(String, String)> =
             std::collections::HashSet::new();
         let mut imported_classes: Vec<perry_codegen::ImportedClass> = Vec::new();
+        // Lexical bindings exist before any import metadata is scanned.
+        // Only implicit flat class metadata yields to them; explicit namespace
+        // routes must never be discarded because their origin was also seen
+        // by the implicit scan.
+        let specifier_bound_names =
+            super::class_imports::explicit_import_names(&hir_module.imports);
         let mut imported_enums: Vec<(String, Vec<(String, perry_hir::EnumValue)>)> = Vec::new();
         let mut imported_async_set: std::collections::HashSet<String> =
             std::collections::HashSet::new();
@@ -5497,7 +5510,9 @@ pub fn run_with_parse_cache(
                     // An EXPLICIT `import { Request } from "./mod.js"` is
                     // pushed by the specifier-driven sites above and already
                     // wins the name dedup below, so it is unaffected.
-                    if perry_hir::analysis::is_global_intrinsic_value_name(&class.name) {
+                    if perry_hir::analysis::is_global_intrinsic_value_name(&class.name)
+                        || specifier_bound_names.contains(&class.name)
+                    {
                         continue;
                     }
                     // Dedup across multiple import statements: the same class

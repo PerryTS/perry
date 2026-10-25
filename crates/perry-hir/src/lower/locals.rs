@@ -15,8 +15,8 @@
 //! position in a name's list is the innermost binding, so `lookup`,
 //! `lookup_index`, and `lookup_type` are O(1).
 //!
-//! Every operation that moves a binding's position (`push`, `drain_from`,
-//! `extend`, `remove`) goes through an inherent method here that keeps
+//! Every operation that moves or renames a binding (`push`, `drain_from`,
+//! `extend`, `remove`, `rename_at`) goes through an inherent method here that keeps
 //! `index` in sync. Read-only and in-place ops (`iter`, `iter_mut`,
 //! slicing, `len`) reach the underlying slice via `Deref`/`DerefMut` —
 //! those never move a binding or rename it, so the index stays valid. Note
@@ -181,6 +181,24 @@ impl Locals {
         let removed = self.entries.remove(idx);
         self.reindex();
         removed
+    }
+
+    /// Rename the binding at `pos` in place. No binding moves, so every
+    /// position (and every scope mark recorded as one) stays valid; only the
+    /// two name lists of the index change. Renaming a binding to a name no
+    /// source identifier can spell takes it out of name resolution without
+    /// taking it out of scope, and renaming it back undoes that.
+    pub(crate) fn rename_at(&mut self, pos: usize, name: String) {
+        let old = std::mem::replace(&mut self.entries[pos].0, name.clone());
+        if let Some(positions) = self.index.get_mut(&old) {
+            positions.retain(|&p| p != pos);
+            if positions.is_empty() {
+                self.index.remove(&old);
+            }
+        }
+        let positions = self.index.entry(name).or_default();
+        let at = positions.partition_point(|&p| p < pos);
+        positions.insert(at, pos);
     }
 
     /// Rebuild the whole name→positions index and the id set from `entries`.

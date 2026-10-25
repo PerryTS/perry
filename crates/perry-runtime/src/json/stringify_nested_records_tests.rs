@@ -413,7 +413,11 @@ fn json_nested_records_cached_shape_still_checks_each_instance() {
             assert!(exotic.is_none());
 
             let class = (*object).class_id;
-            (*object).class_id = 1;
+            // A real declared descriptor/holder, not an arbitrary header id,
+            // is the class surface the fast path must refuse.
+            const DECLARED: u32 = 0x32a0_0020;
+            crate::object::js_register_class_name(DECLARED, b"Declared".as_ptr(), 8);
+            (*object).class_id = DECLARED;
             let class_instance = emitter.emit_record(second, true, &mut output);
             (*object).class_id = class;
             assert!(class_instance.is_none());

@@ -710,7 +710,6 @@ pub(crate) fn localize_cross_module_functions(
     }
 
     let mut next_func_id = crate::generator::compute_max_func_id(module).saturating_add(1);
-    let mut next_local_id = crate::generator::compute_max_local_id(module).saturating_add(1);
     let mut call_rewrites: HashMap<String, FuncId> = HashMap::new();
     let mut localized_functions = Vec::new();
 
@@ -758,27 +757,8 @@ pub(crate) fn localize_cross_module_functions(
             );
             function.is_exported = false;
 
-            let mut local_remap: HashMap<LocalId, Expr> = HashMap::new();
-            for param in &function.params {
-                local_remap.entry(param.id).or_insert_with(|| {
-                    let fresh = next_local_id;
-                    next_local_id = next_local_id.saturating_add(1);
-                    Expr::LocalGet(fresh)
-                });
-            }
-            for id in collect_body_local_ids(&function.body) {
-                local_remap.entry(id).or_insert_with(|| {
-                    let fresh = next_local_id;
-                    next_local_id = next_local_id.saturating_add(1);
-                    Expr::LocalGet(fresh)
-                });
-            }
             for param in &mut function.params {
-                if let Some(Expr::LocalGet(fresh)) = local_remap.get(&param.id) {
-                    param.id = *fresh;
-                }
                 if let Some(default) = &mut param.default {
-                    substitute_locals(default, &local_remap, &mut next_local_id);
                     rewrite_candidate_expr(
                         default,
                         &func_id_remap,
@@ -788,7 +768,6 @@ pub(crate) fn localize_cross_module_functions(
                     );
                 }
             }
-            substitute_locals_in_stmts(&mut function.body, &local_remap, &mut next_local_id);
             rewrite_candidate_stmts(
                 &mut function.body,
                 &func_id_remap,
@@ -800,6 +779,13 @@ pub(crate) fn localize_cross_module_functions(
         }
     }
 
+    let mut frame_ids = perry_hir::lexical_frames::FrameIds::new(module);
+    frame_ids.reserve_functions(&localized_functions);
+    for function in &mut localized_functions {
+        // Source metadata belongs to the foreign module; a numeric source
+        // id must never pick up an unrelated destination binding's metadata.
+        perry_hir::lexical_frames::relocated_function(function, &mut frame_ids);
+    }
     module.functions.extend(localized_functions);
     rewrite_direct_extern_calls_in_module(module, &call_rewrites);
 }

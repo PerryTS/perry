@@ -13,7 +13,6 @@ use std::collections::HashMap;
 use perry_hir::Module as HirModule;
 
 // Collector and boxing-analysis walkers live in dedicated modules.
-use crate::collectors::collect_closures_in_stmts;
 
 // `spec_function_length` is a trunk free fn (also reachable via `super::*`).
 use super::spec_function_length;
@@ -630,68 +629,10 @@ pub(crate) fn collect_module_closures(hir: &HirModule) -> ModuleClosures {
     // otherwise a closure body in (say) a `get size() { return arr.filter(...).length }`
     // ends up referenced by `js_closure_alloc(@perry_closure_*)` but
     // never defined, and clang errors with "use of undefined value".
-    let mut closures: Vec<(perry_hir::types::FuncId, perry_hir::Expr)> = Vec::new();
-    {
-        let mut seen: std::collections::HashSet<perry_hir::types::FuncId> =
-            std::collections::HashSet::new();
-        for f in &hir.functions {
-            collect_closures_in_stmts(&f.body, &mut seen, &mut closures);
-        }
-        for c in &hir.classes {
-            for m in &c.methods {
-                collect_closures_in_stmts(&m.body, &mut seen, &mut closures);
-            }
-            for (_, getter_fn) in &c.getters {
-                collect_closures_in_stmts(&getter_fn.body, &mut seen, &mut closures);
-            }
-            for (_, setter_fn) in &c.setters {
-                collect_closures_in_stmts(&setter_fn.body, &mut seen, &mut closures);
-            }
-            for sm in &c.static_methods {
-                collect_closures_in_stmts(&sm.body, &mut seen, &mut closures);
-            }
-            for member in &c.computed_members {
-                collect_closures_in_stmts(&member.function.body, &mut seen, &mut closures);
-            }
-            if let Some(ctor) = &c.constructor {
-                collect_closures_in_stmts(&ctor.body, &mut seen, &mut closures);
-            }
-            // Class field initializers (`private foo = (x) => this.bar(x)`) are
-            // hoisted into the constructor at codegen time via
-            // `apply_field_initializers_recursive`, so any closure literal inside
-            // an `init` expression gets a `js_closure_alloc(@perry_closure_*)`
-            // emission. We must walk the inits too, otherwise the body never
-            // gets compiled and clang errors with "use of undefined value" (#261).
-            for field in &c.fields {
-                if let Some(init) = &field.init {
-                    collect_closures_in_stmts(
-                        &[perry_hir::Stmt::Expr(init.clone())],
-                        &mut seen,
-                        &mut closures,
-                    );
-                }
-            }
-            // #338: static fields with closure inits (`static make = (x) =>
-            // ...`) emit `js_closure_alloc(@perry_closure_*)` at module-init
-            // time too — the codegen path that initialises
-            // `@perry_static_<class>__<field>` globals. Pre-fix this loop
-            // walked instance fields (`c.fields`) only, so closures inside
-            // `c.static_fields[i].init` were never collected and clang
-            // errored on the undefined `@perry_closure_*` reference.
-            // Surfaced on Effect's `SchemaAST.ts` (Union.make / Union.unify)
-            // and any class shipping arrow-style static helpers.
-            for field in &c.static_fields {
-                if let Some(init) = &field.init {
-                    collect_closures_in_stmts(
-                        &[perry_hir::Stmt::Expr(init.clone())],
-                        &mut seen,
-                        &mut closures,
-                    );
-                }
-            }
-        }
-        collect_closures_in_stmts(&hir.init, &mut seen, &mut closures);
-    }
+    let closures: Vec<_> = perry_hir::emitted_closures(hir)
+        .into_iter()
+        .map(|(id, e)| (id, e.clone()))
+        .collect();
 
     let mut direct_call_closures = std::collections::HashSet::new();
     for f in &hir.functions {

@@ -21,6 +21,17 @@ pub(crate) fn collect_module_finish(
         module_name,
         mut hir_module,
     } = prepared;
+    // A wrapped module's cache key, in finish (evaluation) order.
+    if hir_module
+        .imports
+        .iter()
+        .any(|i| i.source == super::super::cjs_wrap::support::SPECIFIER)
+    {
+        let key = canonical.to_string_lossy().into_owned();
+        if !ctx.cjs_support_keys.contains(&key) {
+            ctx.cjs_support_keys.push(key);
+        }
+    }
 
     // Issue #535 — `perry/ui` `state<T>` desugar pass.
     let is_harmonyos = matches!(target, Some("harmonyos") | Some("harmonyos-simulator"));

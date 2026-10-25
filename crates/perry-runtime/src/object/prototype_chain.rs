@@ -889,7 +889,7 @@ pub(crate) unsafe fn default_object_prototype_for_owner(obj_ptr: usize) -> Optio
         return None;
     }
     if (*gc).obj_type != crate::gc::GC_TYPE_OBJECT
-        || ((*obj).class_id != 0 && !super::is_anon_shape_class_id((*obj).class_id))
+        || ((*obj).class_id != 0 && !super::shapes::object_is_plain_record(obj))
     {
         return None;
     }

@@ -70,6 +70,9 @@ mod field_init;
 mod func_ref;
 #[cfg(test)]
 mod pipeline_call_tests;
+mod proven_call;
+#[cfg(test)]
+mod proven_call_tests;
 /// #8770: an under-applied same-module direct call must pad the missing
 /// trailing parameters with `TAG_UNDEFINED` (the cross-module arm always did).
 #[cfg(test)]
@@ -669,6 +672,16 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
         return Ok(v);
     }
     if let Some(v) = early_branches::try_lower_current_step_closure_call(ctx, callee, args)? {
+        return Ok(v);
+    }
+    // FVA: a call whose callee set the facts prove is a call of its bodies.
+    if let Some(v) = proven_call::try_lower_proven_value_call(ctx, callee, args)? {
+        return Ok(v);
+    }
+    if let Some(v) = proven_call::try_lower_proven_field_call(ctx, callee, args)? {
+        return Ok(v);
+    }
+    if let Some(v) = proven_call::try_lower_proven_static_call(ctx, callee, args)? {
         return Ok(v);
     }
     if let Some(v) = early_branches::try_lower_closure_typed_local_call(ctx, callee, args)? {

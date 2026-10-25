@@ -939,7 +939,7 @@ impl Prop {
             Prop::ReadableObjectMode => slot(Slot::ReadableObjectMode),
             Prop::ReadableFlowing => slot(Slot::ReadableFlowing),
             Prop::Readable => slot(Slot::Readable),
-            Prop::ReadableEnded => slot(Slot::ReadableEnded),
+            Prop::ReadableEnded => slot(Slot::EndEmitted),
             Prop::ReadableDidRead => slot(Slot::Disturbed),
             Prop::ReadableEncoding => slot(Slot::ReadableEncoding),
             Prop::ReadableBuffer => match get_hidden_value(stream, hidden_chunks_key()) {

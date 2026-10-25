@@ -1,0 +1,1 @@
+Fixed `stream.pipeline(stream..., async fn)`: when the first stream has nothing buffered yet, the function now receives the live stream and sees data written later, instead of a snapshot taken when the pipeline started.

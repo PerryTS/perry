@@ -478,18 +478,20 @@ pub extern "C" fn js_nm_install_process() {
     );
 }
 
-/// Install the dispatch surface behind the `process` / `console` VALUES
-/// (binary size). Both namespaces exist from realm bootstrap, but their
+/// Install the dispatch surface behind the `process` / `console` / `performance`
+/// VALUES (binary size). The namespaces exist from realm bootstrap, but their
 /// runtime dispatch buckets are only needed once a program holds one as a
-/// value — `const p = process; p.exit()`, `console[m](…)`, `globalThis.process`
-/// — because direct `process.x` / `console.log(…)` member forms lower to
-/// intrinsics. Codegen emits this (or the per-module installer) at every such
-/// value site; the dyn-eval and `node:vm` entry points call it because
-/// interpreted code can reach either global by name.
+/// value — `const p = process; p.exit()`, `console[m](…)`, `globalThis.process`,
+/// `const t = performance; t.now()` — because direct `process.x` /
+/// `console.log(…)` member forms lower to intrinsics. Codegen emits this (or
+/// the per-module installer) at every such value site; the dyn-eval and
+/// `node:vm` entry points call it because interpreted code can reach either
+/// global by name.
 #[no_mangle]
 pub extern "C" fn js_install_global_value_surfaces() {
     js_nm_install_process();
     js_nm_install_console();
+    js_nm_install_perf();
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_punycode() {
@@ -517,6 +519,8 @@ pub extern "C" fn js_nm_install_readline() {
         Ordering::Relaxed,
     );
     nm_register_ctor(NmBucket::Readline, nm_ctor_readline);
+    // `readline.promises` resolves through the readline/promises registry.
+    crate::node_submodules::arm_readline_promises();
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_repl() {
@@ -574,6 +578,8 @@ pub extern "C" fn js_nm_install_stream() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_timers() {
+    // `timers.promises` resolves through the timers/promises registry.
+    crate::node_submodules::js_node_submod_install_timers_promises();
     NM_DISPATCH_REGISTRY[NmBucket::Timers as usize].store(
         nm_dispatch_timers as NmDispatchFn as *mut (),
         Ordering::Relaxed,

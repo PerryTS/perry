@@ -743,6 +743,25 @@ pub struct LoweringContext {
     /// Their TDZ cells are also allocated at block entry, rather than function
     /// entry, to preserve per-entry binding identity and the TDZ in loops.
     pub(crate) nested_forward_scope_ids: HashSet<LocalId>,
+    /// The class bindings `forward_class_bindings` pre-registered whose
+    /// declaration has not been lowered yet (`take_forward_class_binding`
+    /// removes one), each with the function that owns it (`current_fn_scope`
+    /// when it was registered) and its source name. A class member lowered in
+    /// that function while the binding is pending cannot capture it (the
+    /// binding is in its dead zone, and a class snapshots its captures);
+    /// `with_pending_forward_class_bindings_hidden` takes these out of name
+    /// resolution for the member's lowering.
+    pub(crate) pending_forward_class_bindings: HashMap<LocalId, (u32, String)>,
+    /// Identity of the function or closure whose body is being lowered. 0 is
+    /// the module top level. `enter_scope` gives every function-like scope a
+    /// fresh id and `exit_scope` restores the enclosing one; a catch clause
+    /// (`enter_catch_scope`) is a scope of the function it sits in, so it
+    /// keeps that function's id although it bumps `scope_depth`.
+    pub(crate) current_fn_scope: u32,
+    /// The next id `enter_scope` hands out.
+    pub(crate) next_fn_scope: u32,
+    /// The enclosing `current_fn_scope` of every active `enter_scope`.
+    pub(crate) fn_scope_saves: Vec<u32>,
     /// Shadow index: function name -> index in `functions` Vec (last entry for shadowing)
     pub(crate) functions_index: HashMap<String, usize>,
     /// Shadow index: class name -> index in `classes` Vec
@@ -957,6 +976,12 @@ pub struct LoweringContext {
     /// `Any`, but an *annotated* structural object type can still be backed by
     /// an accessor.
     pub(crate) closed_shape_literal_locals: HashMap<LocalId, String>,
+    /// Runtime locals initialised straight from `require("undici")`, the
+    /// shape esbuild's CommonJS output uses (`var import_undici =
+    /// require("undici")`). A `var`/`let` cannot be registered as a namespace
+    /// alias (it may be reassigned and keeps a runtime slot), but `new
+    /// <local>.Agent(...)` still has to reach the native constructor row.
+    pub(crate) undici_namespace_locals: HashSet<LocalId>,
     /// Set while lowering a directly exported binding/default expression.
     /// Eligible method literals consume this flag and retain the seeded IIFE
     /// representation needed to publish an exact cross-module own-method
@@ -1093,6 +1118,12 @@ pub struct LoweringContext {
     /// the HIR (where codegen consumes them) rather than being patched in
     /// after lowering.
     pub(crate) let_class_aliases: Vec<(String, String)>,
+    /// Names in `let_class_aliases` whose class is the global intrinsic read
+    /// off `globalThis` (`const NativeHeaders = globalThis.Headers`,
+    /// `const { Headers: H } = globalThis`) rather than a class declared in
+    /// the program. A same-named user binding (`class Headers {}` in the same
+    /// scope) shadows the bare name but not the alias's value.
+    pub(crate) global_class_aliases: HashSet<String>,
     /// LocalIds known to hold the global object (`globalThis`). This lets
     /// value-read recognisers treat `const g = globalThis; g.Response` like
     /// `globalThis.Response` without relying on source-level names.

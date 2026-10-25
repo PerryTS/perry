@@ -1282,3 +1282,6 @@ fn class_declaration_statement_remains_unsupported() {
     let err = catch_throw(|| call(f, &[])).expect_err("class declaration must throw");
     assert!(error_message(err).contains("class declaration"));
 }
+
+#[path = "block_scope_tests.rs"]
+mod block_scope_tests;

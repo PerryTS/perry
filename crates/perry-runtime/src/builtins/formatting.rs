@@ -722,6 +722,12 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                     let error_ptr = ptr as *const crate::error::ErrorHeader;
                     errors::format_error_value(error_ptr, depth)
                 } else if gc_type == crate::gc::GC_TYPE_ARRAY {
+                    // A grown array's old head is a forwarding stub; inspect the
+                    // live header (and key the cycle check on it) instead.
+                    let ptr = crate::array::clean_arr_ptr(ptr);
+                    if ptr.is_null() {
+                        return "[]".to_string();
+                    }
                     // Array — format as [ elem1, elem2, ... ] matching Node.js util.inspect.
                     // Cycle check FIRST so back-edges win over depth truncation
                     // (#1204): `a=[]; a.push(a); console.log(a)` should print
@@ -1073,7 +1079,7 @@ unsafe fn format_object_as_json(
         // (see crates/perry-hir/src/lower_decl/class_decl.rs). Walk the
         // object's class chain when the instance lookup misses.
         let class_id = (*obj_ptr).class_id;
-        if class_id != 0 {
+        if class_id != 0 && crate::object::shapes::receiver_has_class_identity(obj_ptr) {
             if let Some((func_ptr, param_count, has_synthetic_arguments, has_rest)) =
                 crate::object::class_method_slot_target(class_id, "__perry_inspect_custom__")
             {
@@ -1506,6 +1512,12 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
                         let error_ptr = ptr as *const crate::error::ErrorHeader;
                         errors::format_error_value(error_ptr, depth)
                     } else if gc_type == crate::gc::GC_TYPE_ARRAY {
+                        // A grown array's old head is a forwarding stub; inspect the
+                        // live header (and key the cycle check on it) instead.
+                        let ptr = crate::array::clean_arr_ptr(ptr);
+                        if ptr.is_null() {
+                            return "[]".to_string();
+                        }
                         // Cycle check FIRST so back-edges always print as
                         // `[Circular *N]` regardless of depth (#1204). The
                         // depth cap is overridable via INSPECT_DEPTH_LIMIT

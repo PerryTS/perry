@@ -17,6 +17,7 @@ impl Model {
         if a == b {
             return;
         }
+        debug_assert!(!self.nodes[a as usize].sink, "an edge out of a sink node");
         // An observation node feeds only observation nodes.
         if self.nodes[a as usize].obs && !self.nodes[b as usize].obs {
             return;
@@ -116,19 +117,18 @@ impl Model {
             return false;
         }
         // A marker that reads as ⊤ is delivered by `add_tokens` (DECISIONS 42),
-        // a marker into a parameter node too (DECISIONS 44).
-        if self.nodes[dst as usize].param
-            && !self.param_marker.is_empty()
+        // a marker crossing into the node too (MRK, `Model::crosses`).
+        if !self.param_marker.is_empty()
             && Tokens::Delivery(delta, dst)
                 .iter()
-                .any(|&t| self.is_marker(t))
+                .any(|&t| self.crosses(dst, t))
         {
             return false;
         }
-        if !self.marker_top.is_empty()
+        if (!self.marker_top.is_empty() || !self.escaped.is_empty())
             && Tokens::Delivery(delta, dst)
                 .iter()
-                .any(|&t| self.marker_is_top(t))
+                .any(|&t| self.marker_is_top(t) || self.top_beside(t))
         {
             return false;
         }

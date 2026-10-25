@@ -44,8 +44,10 @@ mod extract_exports;
 mod extract_requires;
 pub(super) mod family_syntax;
 mod hoist_classes;
+mod package_patches;
 mod run_once_syntax;
 mod strictness;
+pub(super) mod support;
 mod wrap;
 
 #[cfg(test)]
@@ -56,6 +58,8 @@ mod issue_10662_tests;
 mod issue_10760_tests;
 #[cfg(test)]
 mod issue_6585_tests;
+#[cfg(test)]
+mod module_objects_tests;
 #[cfg(test)]
 mod package_resolution_tests;
 #[cfg(test)]

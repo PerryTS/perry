@@ -595,15 +595,65 @@ pub extern "C" fn js_array_fill(arr: *mut ArrayHeader, value: f64) -> *mut Array
         if crate::array::array_has_element_descriptors_resolved(arr) {
             return fill_through_set(arr, value, 0, len);
         }
-        let elements = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut f64;
-        for i in 0..len {
-            // GC_STORE_AUDIT(BARRIERED): fill slot writes are followed by layout/barrier rebuild.
-            *elements.add(i) = value;
-        }
-        ek_after_fill(arr, value, 0, len as u32);
-        rebuild_array_layout(arr);
-        arr
+        fill_slots(arr, 0, len, value)
     }
+}
+
+/// Store `value` in `[start, end)` of a resolved array and return its head.
+///
+/// `end` may be past `capacity`: `new Array(n)` above a million elements is a
+/// logical length over a small backing store (`js_array_constructor_single`),
+/// and every index past that store is a hole. A write loop bounded by
+/// `length` alone ran off the end of the allocation, on wasm32 until it left
+/// linear memory. The range is made addressable first, which can replace the
+/// head (the old one forwards to it), so the caller returns the head this gives
+/// back.
+///
+/// The store is grown to `end` when that stays dense: the range starts within
+/// the indexed-store gap limit of the store's end, or covers at least as many
+/// slots as the gap it leaves, and no index property already sits past the
+/// store (reads below `capacity` skip the named table, so growing over one would
+/// hide it). Otherwise, and when growth is refused (sealed, frozen, not
+/// extensible), each index goes through the ordinary extending store, which
+/// keeps its sparse and integrity rules.
+///
+/// # Safety
+/// `arr` is a live, forwarding-resolved array and `start <= end <= length`.
+unsafe fn fill_slots(
+    arr: *mut ArrayHeader,
+    start: usize,
+    end: usize,
+    value: f64,
+) -> *mut ArrayHeader {
+    let mut arr = arr;
+    let mut value = value;
+    if end > (*arr).capacity as usize {
+        // Growing allocates, so a heap value must stay rooted across it.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let value_handle = scope.root_nanbox_f64(value);
+        let capacity = (*arr).capacity as usize;
+        let gap = start.saturating_sub(capacity);
+        if (gap <= super::indexing_support::DENSE_ARRAY_GAP_LIMIT as usize || end - start >= gap)
+            && !super::named_props::array_has_sparse_index_properties_resolved(arr)
+        {
+            arr = clean_arr_ptr_mut(js_array_grow(arr, end as u32));
+        }
+        if end > (*arr).capacity as usize {
+            for i in start..end {
+                arr = js_array_set_f64_extend(arr, i as u32, value_handle.get_nanbox_f64());
+            }
+            return clean_arr_ptr_mut(arr);
+        }
+        value = value_handle.get_nanbox_f64();
+    }
+    let elements = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut f64;
+    for i in start..end {
+        // GC_STORE_AUDIT(BARRIERED): fill slot writes are followed by layout/barrier rebuild.
+        *elements.add(i) = value;
+    }
+    ek_after_fill(arr, value, start as u32, end as u32);
+    rebuild_array_layout(arr);
+    arr
 }
 
 /// `Array.prototype.fill(value, start, end)` — fills the index range
@@ -639,14 +689,34 @@ pub extern "C" fn js_array_fill_range(
     // An explicit `undefined` end means "to length" (step 7) — coercing it
     // gave NaN → 0 → no-op (`[0, 0].fill(1, 0, undefined)` stayed [0, 0],
     // test262 fill/coerced-indexes).
-    let start = crate::builtins::js_to_integer_or_infinity(start);
-    let end = if end.to_bits() == crate::value::TAG_UNDEFINED {
-        f64::INFINITY
-    } else {
-        crate::builtins::js_to_integer_or_infinity(end)
-    };
+    //
+    // Both coercions run user code, which can allocate enough to run a moving
+    // collection and can rebind, grow or shrink the receiver. `arr`, `value`
+    // and the operand not coerced yet are rooted across them and re-read after
+    // each one (a raw `*mut ArrayHeader` or heap pointer held in a local goes
+    // stale on wasm32, which has no conservative scan). `len` is read before
+    // any coercion, as the spec reads LengthOfArrayLike first.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let arr_handle = scope.root_raw_mut_ptr(arr);
+    let value_handle = scope.root_nanbox_f64(value);
+    let end_handle = scope.root_nanbox_f64(end);
+    let len = unsafe { (*arr).length as i64 };
+    let ((start, end), arr) = arr_handle.across_mut::<ArrayHeader, _>(|| {
+        let start = crate::builtins::js_to_integer_or_infinity(start);
+        let end = end_handle.get_nanbox_f64();
+        let end = if end.to_bits() == crate::value::TAG_UNDEFINED {
+            f64::INFINITY
+        } else {
+            crate::builtins::js_to_integer_or_infinity(end)
+        };
+        (start, end)
+    });
+    let arr = clean_arr_ptr_mut(arr);
+    let value = value_handle.get_nanbox_f64();
+    if arr.is_null() {
+        return arr;
+    }
     unsafe {
-        let len = (*arr).length as i64;
         if len == 0 {
             return arr;
         }
@@ -683,14 +753,16 @@ pub extern "C" fn js_array_fill_range(
         if crate::array::array_has_element_descriptors_resolved(arr) {
             return fill_through_set(arr, value, s as usize, e as usize);
         }
-        let elements = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut f64;
-        for i in s..e {
-            // GC_STORE_AUDIT(BARRIERED): fill range writes are followed by layout/barrier rebuild.
-            *elements.add(i as usize) = value;
+        if e > (*arr).length as i64 {
+            // The coercions shrank the receiver below the range they were
+            // clamped against: each index is a Set that re-extends it.
+            let mut arr = arr;
+            for i in s..e {
+                arr = js_array_set_f64_extend(arr, i as u32, value_handle.get_nanbox_f64());
+            }
+            return clean_arr_ptr_mut(arr);
         }
-        ek_after_fill(arr, value, s as u32, e as u32);
-        rebuild_array_layout(arr);
-        arr
+        fill_slots(arr, s as usize, e as usize, value)
     }
 }
 

@@ -1,0 +1,1 @@
+Fixed `new Array(n).fill(...)`, `copyWithin`, `flat` and `for...of` on an unfilled array longer than 1,000,000 elements writing or reading past the array store, and `fill` overwriting a variable its arguments reassigned or using a stale receiver after a `valueOf` that allocates.

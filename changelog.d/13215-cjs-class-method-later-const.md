@@ -1,0 +1,1 @@
+Fixed a class method in a CommonJS module (one that assigns `exports`) not seeing a `const`/`let` declared after the class: the guarded class-environment slots are now refreshed once the binding is initialised.

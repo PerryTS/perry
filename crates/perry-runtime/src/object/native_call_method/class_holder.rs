@@ -193,9 +193,24 @@ pub(crate) unsafe fn next_holder(
 /// `start` is a live object.
 #[inline(never)]
 pub(crate) unsafe fn chain_method(start: *const ObjectHeader, key: &MethodKey<'_>) -> ChainMethod {
+    chain_method_admitting(start, key, |_| true)
+}
+
+/// [`chain_method`] that asks `admit` about each holder before reading its
+/// shape: a refused holder answers [`ChainMethod::Get`] with itself, exactly
+/// as a holder the shape cannot answer does. `admit` runs no user code.
+///
+/// # Safety
+/// `start` is a live object.
+#[inline(always)]
+unsafe fn chain_method_admitting(
+    start: *const ObjectHeader,
+    key: &MethodKey<'_>,
+    mut admit: impl FnMut(*const ObjectHeader) -> bool,
+) -> ChainMethod {
     let mut holder = start;
     for _ in 0..MAX_CHAIN_DEPTH {
-        if !shape_answers(holder as usize) {
+        if !admit(holder) || !shape_answers(holder as usize) {
             return ChainMethod::Get { holder };
         }
         // A family object with no overflow: its layout's index answers, and
@@ -304,6 +319,106 @@ pub(crate) unsafe fn chain_method(start: *const ObjectHeader, key: &MethodKey<'_
         }
     }
     ChainMethod::Get { holder: start }
+}
+
+/// The inherited read of `key` on an instance of a declared class, when the
+/// chain's shapes decide it without the generic read: `Some(undefined)` when
+/// neither the instance nor any holder up to `%Object.prototype%` lists the
+/// name, `Some(value)` when `%Object.prototype%` supplies it as a data
+/// property, `None` when anything else (a class member, an accessor, a link
+/// the declaration does not name, a receiver the class surface does not
+/// decide alone) needs the generic read.
+///
+/// The generic read of such an instance consults, after the own keys, the
+/// class's accessors, its prototype registrations, a per-instance
+/// `[[Prototype]]`, an evaluation's pinned heritage and finally
+/// `%Object.prototype%`. Every one of them answers from a holder's shape or
+/// from a link the shapes name, so a chain of pure compiled declared
+/// prototypes (each linked to its declared parent's prototype, no registered
+/// prototype object beside it) whose shapes all lack the name has nothing to
+/// answer with. The walk is live: a method or accessor added to any holder, a
+/// holder relinked, an instance given another prototype or an own property
+/// changes the shape it reads, so no verdict is kept and nothing needs
+/// retiring. A class whose prototype object is not built yet declines (the
+/// generic read builds it).
+///
+/// # Safety
+/// `receiver` is a pointer value.
+#[inline]
+pub(crate) unsafe fn class_instance_inherited_read(
+    receiver: crate::JSValue,
+    key: &[u8],
+) -> Option<crate::JSValue> {
+    // `constructor` and `__proto__` are answered by the class and the realm
+    // (a prototype's back-edge, an accessor), `#x` and `@@x` by private
+    // members and symbol-keyed members.
+    if key.is_empty()
+        || key[0] == b'#'
+        || key == b"constructor"
+        || key == b"__proto__"
+        || key.starts_with(b"@@")
+        || is_non_property_member_name(key)
+    {
+        return None;
+    }
+    let recv = super::class_receiver_fast_guard(f64::from_bits(receiver.bits()), key)?;
+    let obj = recv.addr as *const ObjectHeader;
+    if !recv.recorded_prototype.is_null()
+        || crate::object::shapes::object_prototype_word(obj) != 0
+        || !shape_answers(recv.addr)
+    {
+        return None;
+    }
+    // The class the receiver's shape names, a bare CLASS identity: no
+    // per-instance prototype, no per-evaluation class.
+    let named = shape_named_class(obj)?;
+    if named == 0
+        || named >= crate::object::class_value::FIRST_RUNTIME_CLASS_ID
+        || crate::object::class_registry::instance_pinned_constructing_class(obj).is_some()
+    {
+        return None;
+    }
+    let start = crate::object::class_registry::class_decl_prototype_object(named);
+    if start.is_null() {
+        return None;
+    }
+    let object_prototype = crate::array::object_prototype_addr_if_resolved();
+    if object_prototype == 0 {
+        return None;
+    }
+    // `Some(class)`: the next holder must be that class's declared prototype;
+    // `None`: the declared chain is over and the next must be
+    // `%Object.prototype%`.
+    let mut class = Some(named);
+    let found = chain_method_admitting(start, &MethodKey::bytes(key), |holder| match class {
+        Some(c) => {
+            if c == 0
+                || c >= crate::object::class_value::FIRST_RUNTIME_CLASS_ID
+                || crate::object::class_registry::class_decl_prototype_object(c).cast_const()
+                    != holder
+                || !crate::object::class_registry::class_prototype_object(c).is_null()
+                || crate::object::class_registry::prototype_objects::decl_prototype_relinked(
+                    c,
+                    holder.cast_mut(),
+                )
+            {
+                return false;
+            }
+            class = match crate::object::class_registry::get_parent_class_id(c) {
+                Some(parent) if parent != 0 && parent != c => Some(parent),
+                _ => None,
+            };
+            true
+        }
+        None => holder as usize == object_prototype,
+    });
+    match found {
+        ChainMethod::Absent => Some(crate::JSValue::undefined()),
+        ChainMethod::Data { value, holder, .. } if holder as usize == object_prototype => {
+            Some(crate::JSValue::from_bits(value))
+        }
+        _ => None,
+    }
 }
 
 /// The class whose declared prototype `obj`'s shape names as its

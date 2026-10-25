@@ -20,6 +20,21 @@ pub(super) unsafe fn array_oob_prototype_get(receiver: usize, index: u32) -> f64
     array_miss_index_get(receiver as *const ArrayHeader, index)
 }
 
+/// Is every hole of `arr` (and every index past its `length`) genuinely
+/// absent — so `HasProperty` reduces to "is the dense slot a non-hole"?
+///
+/// True when the array has no element descriptors or recorded `[[Prototype]]`,
+/// lives entirely in its dense store, and neither `Array.prototype` nor
+/// `Object.prototype` has ever carried an indexed property or been retargeted.
+/// All of those latches are set by the write that creates the condition, so a
+/// property added later is seen by the next call.
+#[inline]
+pub(crate) fn array_holes_are_absent(arr: *const ArrayHeader) -> bool {
+    !array_iteration_is_exotic(arr)
+        && !array_index_fast_path_invalid_for(0)
+        && !crate::object::prototype_chain::array_static_proto_recorded()
+}
+
 /// Spec `[[HasProperty]]`(O, ToString(index)) for an ordinary Array receiver:
 /// own property OR inherited indexed property from `Array.prototype`.
 pub(crate) fn array_spec_has_index(arr: *const ArrayHeader, index: u32) -> bool {
@@ -28,6 +43,16 @@ pub(crate) fn array_spec_has_index(arr: *const ArrayHeader, index: u32) -> bool 
         return false;
     }
     unsafe {
+        // Nothing below the dense store can answer: a hole (or an index past
+        // `length`) is simply absent, with no per-index key allocation or
+        // prototype walk.
+        if array_holes_are_absent(arr) {
+            return index < (*arr).length
+                && ptr::read(
+                    (crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const u64)
+                        .add(index as usize),
+                ) != crate::value::TAG_HOLE;
+        }
         if array_has_own_index(arr, index) {
             return true;
         }

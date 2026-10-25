@@ -1240,11 +1240,11 @@ fn specializations_do_not_reuse_other_modules_class_or_literal_ids() {
     first.classes.push(generic_class(1, "First"));
     let mut second = Module::new("second");
     second.classes.push(generic_class(2, "Second"));
-    let mut literal = generic_class(1001, "Literal");
+    let mut literal = generic_class(1001, "__AnonShape_1001");
     literal.type_params.clear();
     second.classes.push(literal);
     let mut third = Module::new("third");
-    let mut last_literal = generic_class(1100, "LastLiteral");
+    let mut last_literal = generic_class(1100, "__AnonShape_1100");
     last_literal.type_params.clear();
     third.classes.push(last_literal);
 

@@ -10,6 +10,7 @@
 //! construct (see `bridge::throw_unsupported`).
 
 use perry_parser::swc_ecma_ast as ast;
+use swc_ecma_visit::{Visit, VisitWith};
 
 use super::bridge::{self, throw_unsupported};
 use super::expr::eval_expr;
@@ -639,7 +640,58 @@ pub(crate) fn exec_direct_eval_stmts(
     Flow::Normal
 }
 
+/// A block owns its lexical declarations and block-level functions, including
+/// sloppy-mode Annex B functions. A binding-free block can execute in its
+/// parent's already-rooted environment. Decide directly from the borrowed AST;
+/// nothing is prepared or retained between executions.
+fn block_needs_environment(block: &ast::BlockStmt) -> bool {
+    if block.stmts.iter().any(|stmt| {
+        matches!(stmt, ast::Stmt::Decl(decl)
+            if !matches!(decl, ast::Decl::Var(var) if var.kind == ast::VarDeclKind::Var))
+    }) {
+        return true;
+    }
+
+    // Conservatively keep the current environment for potentially direct
+    // eval. Eval's own let/const have a separate lexical environment, so this
+    // could later be relaxed after a focused semantic proof.
+    struct DirectEval(bool);
+    impl Visit for DirectEval {
+        fn visit_expr(&mut self, expr: &ast::Expr) {
+            if !self.0 {
+                expr.visit_children_with(self);
+            }
+        }
+
+        fn visit_call_expr(&mut self, call: &ast::CallExpr) {
+            fn is_eval(expr: &ast::Expr) -> bool {
+                match expr {
+                    ast::Expr::Ident(ident) => ident.sym == "eval",
+                    ast::Expr::Paren(paren) => is_eval(&paren.expr),
+                    _ => false,
+                }
+            }
+            if matches!(&call.callee, ast::Callee::Expr(expr) if is_eval(expr)) {
+                self.0 = true;
+            } else if !self.0 {
+                call.visit_children_with(self);
+            }
+        }
+
+        // These calls execute in their own function environment. Their eval
+        // cannot introduce a binding into the block being considered here.
+        fn visit_function(&mut self, _: &ast::Function) {}
+        fn visit_arrow_expr(&mut self, _: &ast::ArrowExpr) {}
+    }
+    let mut direct_eval = DirectEval(false);
+    block.visit_with(&mut direct_eval);
+    direct_eval.0
+}
+
 fn exec_block_scope(ctx: &Ctx, block: &ast::BlockStmt, env_idx: usize) -> Flow {
+    if !block_needs_environment(block) {
+        return exec_stmts(ctx, &block.stmts, env_idx);
+    }
     let child = env::env_new(root_get(env_idx));
     let child_idx = root_push(child);
     hoist_fn_decls(ctx, &block.stmts, child_idx, true);

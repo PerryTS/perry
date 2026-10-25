@@ -148,12 +148,10 @@ pub(crate) use console::{
     try_console_instance_method_dispatch, CONSOLE_INSTANCE_CLASS_ID,
 };
 
-#[cfg(all(target_arch = "x86_64", target_os = "linux"))]
 pub(crate) use fn_metadata::with_bundle_function_names;
 pub(crate) use fn_metadata::{function_name_for_closure, function_name_image};
 
 pub use fn_metadata::{
-    bundle_function_name_registry_entries, bundle_function_name_registry_len,
     function_is_non_strict_ordinary_for_ptr, function_name_for_ptr, function_name_registry_entries,
     function_name_registry_len, function_source_for_func_ptr, function_source_for_info_or_native,
     function_source_for_ptr, js_register_function_name, js_register_function_name_static,

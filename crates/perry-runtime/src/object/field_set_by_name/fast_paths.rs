@@ -858,7 +858,7 @@ fn object_set_field_by_name_transition_fast_impl_value<const CHAIN_PROVEN: bool>
         // alongside genuinely class-id-zero objects; a real user class must
         // retain the full inherited-setter/prototype walk.
         let class_id = (*obj).class_id;
-        if !CHAIN_PROVEN && class_id != 0 && !crate::object::is_anon_shape_class_id(class_id) {
+        if !CHAIN_PROVEN && class_id != 0 && !crate::object::shapes::object_is_plain_record(obj) {
             return None;
         }
 

@@ -67,6 +67,16 @@ pub(crate) fn runtime_bucket_install_symbol(name: &str) -> Option<&'static str> 
         // the default import must arm that registry before asking the generic
         // native-module property dispatcher for `default` / `test`.
         "test" => Some("js_node_submod_install_test"),
+        // Modules with no dispatch bucket whose exports live in the submodule
+        // registry (`registry_backed_module_key` in perry-runtime): arming the
+        // registry where the module is named lets the runtime resolve every
+        // property read and method call to the registry's own export.
+        "timers/promises" => Some("js_node_submod_install_timers_promises"),
+        "readline/promises" => Some("js_node_submod_install_readline_promises"),
+        "stream/consumers" => Some("js_node_submod_install_stream_consumers"),
+        "stream/web" => Some("js_node_submod_install_stream_web"),
+        "diagnostics_channel" => Some("js_node_submod_install_diagnostics_channel"),
+        "trace_events" => Some("js_node_submod_install_trace_events"),
         "timers" => Some("js_nm_install_timers"),
         "tls" => Some("js_nm_install_tls"),
         "tty" => Some("js_nm_install_tty"),
@@ -214,6 +224,18 @@ mod tests {
         assert_eq!(
             nm_install_symbol("node:test"),
             Some("js_node_submod_install_test")
+        );
+    }
+
+    #[test]
+    fn registry_backed_modules_install_their_submodule_registry() {
+        assert_eq!(
+            nm_install_symbol("node:timers/promises"),
+            Some("js_node_submod_install_timers_promises")
+        );
+        assert_eq!(
+            nm_install_symbol("stream/web"),
+            Some("js_node_submod_install_stream_web")
         );
     }
 

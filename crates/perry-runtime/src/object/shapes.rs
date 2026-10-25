@@ -42,9 +42,15 @@ pub(crate) use layout_registration::{
 #[path = "shapes_spread.rs"]
 mod shapes_spread;
 
+#[path = "shapes_class_role.rs"]
+mod shapes_class_role;
+pub(crate) use shapes_class_role::{
+    object_is_plain_record, receiver_has_class_identity, shape_is_plain_record,
+};
+
 #[path = "shapes_own_data.rs"]
 mod shapes_own_data;
-pub(crate) use shapes_own_data::own_data_shape;
+pub(crate) use shapes_own_data::{own_data_shape, plain_receiver_miss_is_final};
 
 #[path = "shapes_branded_birth.rs"]
 mod shapes_branded_birth;
@@ -3966,7 +3972,7 @@ pub(crate) unsafe fn try_birth_stamp_preinstalled_shape(
         || descriptor.live_inline_slot_count != live_inline_slot_count
         || descriptor.semantic_generation != 0
         || descriptor.object_kind != store_kind::receiver_ordinary_kind(obj)
-        || descriptor.proto_id != object_proto_id(obj)
+        || !shapes_class_role::newborn_proto_matches(obj, descriptor.proto_id)
     {
         if descriptor.object_kind.is_ordinary_layout()
             && descriptor.object_kind != store_kind::receiver_ordinary_kind(obj)
@@ -4838,19 +4844,18 @@ fn vtable_class(class_id: u32) -> u32 {
     {
         return 0;
     }
-    // Module-local anonymous ids may collide with declarations. Project the
-    // existing reflective precedence when minting the shape, so a CLASS
-    // link remains a shape fact instead of a registry check on every read.
-    if crate::object::class_registry::anonymous_class_role(class_id) == Some(false) {
+    // The descriptor's compiler-owned role precedes the first shape birth.
+    // Later receiver operations carry this prototype fact on the shape.
+    if crate::object::class_registry::declarations::class_declaration(class_id)
+        .is_some_and(|d| d.is_anonymous() && !d.is_declared())
+    {
         return 0;
     }
     crate::object::class_generic_origin(class_id).unwrap_or(class_id)
 }
 
-/// The CLASS word of a class identity, including a closed-literal id that
-/// later collides with a declaration. Receiver birth classification is a
-/// separate fact: an anon receiver can have DEFAULT while its class acquires
-/// a holder, and probes must observe that publication.
+/// The CLASS word of a class identity. A receiver's actual prototype role
+/// lives on its shape; a native holder publication remains observable there.
 pub(crate) fn class_identity_proto_id(class_id: u32) -> u64 {
     if class_id == 0 {
         return PROTO_ID_DEFAULT;
@@ -4890,23 +4895,34 @@ unsafe fn prototype_serial(bits: u64) -> u64 {
     }
 }
 
-/// The [[Prototype]] identity of an ordinary object of class `class_id` whose
-/// meta record links prototype `bits` (NaN-boxed, or `TAG_NULL`): the rule
-/// [`object_proto_id`] applies to a recorded prototype. `None` when that link
-/// has no stable identity (a prototype with no serial, or a serial past the
-/// mixed band), which `object_proto_id` answers with a fresh unique id.
+/// The linked prototype identity of an already-proven declared class.
+/// The caller has the class's template holder, so its declared identity is
+/// authoritative; reconstructing anonymous membership here would lock once
+/// per template instantiation. Ordinary receiver transitions instead carry
+/// their role from the predecessor shape in `object_proto_id_for`.
 ///
 /// # Safety
-/// `bits` is a live prototype value or `TAG_NULL`.
-pub(crate) unsafe fn stable_linked_proto_id(class_id: u32, bits: u64) -> Option<u64> {
+/// `bits` is a live prototype value or `TAG_NULL`, and `class_id` belongs to
+/// the declared class holder the caller has already validated.
+pub(crate) unsafe fn stable_declared_linked_proto_id(class_id: u32, bits: u64) -> Option<u64> {
+    let class = if class_id == 0
+        || class_id >= crate::object::class_registry::prototype_objects::SYNTHETIC_CLASS_ID_BASE
+    {
+        0
+    } else {
+        crate::object::class_generic_origin(class_id).unwrap_or(class_id)
+    };
+    stable_linked_proto_id_for_class(class, bits)
+}
+
+fn stable_linked_proto_id_for_class(class: u32, bits: u64) -> Option<u64> {
     if bits == crate::value::TAG_NULL {
         return Some(PROTO_ID_NULL);
     }
-    let serial = prototype_serial(bits);
+    let serial = unsafe { prototype_serial(bits) };
     if serial == 0 {
         return None;
     }
-    let class = vtable_class(class_id);
     if class == 0 {
         return Some(serial);
     }
@@ -5045,7 +5061,6 @@ pub(crate) unsafe fn object_proto_identity(obj: *const crate::object::ObjectHead
 
 /// The first synthetic class id (`class_registry::prototype_objects`): a
 /// plain function constructor's instances.
-#[cfg(test)]
 pub(crate) const SYNTHETIC_CLASS_ID_BASE: u32 =
     crate::object::class_registry::prototype_objects::SYNTHETIC_CLASS_ID_BASE;
 
@@ -5162,7 +5177,7 @@ pub(crate) unsafe fn object_proto_id_for(
         }
     }
     let class_id = (*obj).class_id;
-    let class = vtable_class(class_id);
+    let class = shapes_class_role::receiver_vtable_class(obj);
     if recorded != 0 {
         if let Some(pid) = shapes_linked_birth::declaration_parent_identity(obj, recorded) {
             return pid;
@@ -5181,7 +5196,7 @@ pub(crate) unsafe fn object_proto_id_for(
                 return PROTO_ID_CLASS | u64::from(class);
             }
         }
-        if let Some(id) = stable_linked_proto_id(class_id, recorded) {
+        if let Some(id) = stable_linked_proto_id_for_class(class, recorded) {
             return id;
         }
         // A prototype with no stable identity gets one per link, carried by

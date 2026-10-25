@@ -324,7 +324,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             for (index, c) in captures.iter().enumerate() {
                 let v = lower_expr(ctx, c)?;
                 // A class-environment class's evaluation publishes here too.
-                super::class_env::store_class_env_slot(ctx, class_name, index as u32, &v, c);
+                super::class_env::store_first_evaluation_slot(ctx, class_name, index as u32, &v, c);
                 lowered.push(v);
             }
             ctx.block().call_void("js_tdz_suppress_end", &[]);

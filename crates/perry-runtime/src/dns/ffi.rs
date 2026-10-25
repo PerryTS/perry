@@ -479,3 +479,76 @@ pub extern "C" fn js_dns_promises_lookup_service(args: i64) -> f64 {
         Err(error) => throw_error_value(error),
     }
 }
+
+/// Calls the DNS export `method` of `dns` (`promises == false`) or
+/// `dns/promises` (`promises == true`) with `args` (a packed `ArrayHeader`
+/// pointer, the same shape the static native table passes). Returns `None`
+/// when `method` is not a lookup/resolve/reverse export.
+///
+/// The static native table (`NODE_DNS_ROWS`) resolves these at compile time
+/// for ESM and literal `dns.*` calls. A namespace obtained at runtime (the
+/// synthetic CommonJS `require`) reaches them through the dynamic native
+/// module dispatch instead, which funnels here through [`dispatch_export`].
+fn route_export(promises: bool, method: &str, args: i64) -> Option<f64> {
+    macro_rules! route {
+        ($($name:literal => $cb:ident, $pr:ident;)*) => {
+            match (promises, method) {
+                $(
+                    (false, $name) => Some($cb(args)),
+                    (true, $name) => Some($pr(args)),
+                )*
+                _ => None,
+            }
+        };
+    }
+    route! {
+        "lookup" => js_dns_lookup, js_dns_promises_lookup;
+        "lookupService" => js_dns_lookup_service, js_dns_promises_lookup_service;
+        "resolve" => js_dns_resolve, js_dns_promises_resolve;
+        "resolve4" => js_dns_resolve4, js_dns_promises_resolve4;
+        "resolve6" => js_dns_resolve6, js_dns_promises_resolve6;
+        "resolveAny" => js_dns_resolve_any, js_dns_promises_resolve_any;
+        "resolveCaa" => js_dns_resolve_caa, js_dns_promises_resolve_caa;
+        "resolveCname" => js_dns_resolve_cname, js_dns_promises_resolve_cname;
+        "resolveMx" => js_dns_resolve_mx, js_dns_promises_resolve_mx;
+        "resolveNaptr" => js_dns_resolve_naptr, js_dns_promises_resolve_naptr;
+        "resolveNs" => js_dns_resolve_ns, js_dns_promises_resolve_ns;
+        "resolvePtr" => js_dns_resolve_ptr, js_dns_promises_resolve_ptr;
+        "resolveSoa" => js_dns_resolve_soa, js_dns_promises_resolve_soa;
+        "resolveSrv" => js_dns_resolve_srv, js_dns_promises_resolve_srv;
+        "resolveTlsa" => js_dns_resolve_tlsa, js_dns_promises_resolve_tlsa;
+        "resolveTxt" => js_dns_resolve_txt, js_dns_promises_resolve_txt;
+        "reverse" => js_dns_reverse, js_dns_promises_reverse;
+    }
+}
+
+type ExportRouter = fn(bool, &str, i64) -> Option<f64>;
+
+/// The router, once a program that names `dns` armed it. The dynamic native
+/// module dispatch is linked into every CommonJS program (all buckets are
+/// pinned there), so it must not reference the lookup and resolve FFIs
+/// directly: that would link the lookup and resolve FFIs, and the host
+/// resolver they reach, into programs that never use `dns`. Only
+/// `js_dns_install_exports`, which codegen emits for programs that import or
+/// require `dns` / `dns/promises`, references them.
+static EXPORT_ROUTER: std::sync::atomic::AtomicPtr<()> =
+    std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+
+#[no_mangle]
+pub extern "C" fn js_dns_install_exports() {
+    // `black_box` keeps the store opaque: with a single stored value the
+    // optimizer would devirtualize the load in `dispatch_export` into a direct
+    // reference and pin the FFIs in every program that links the dispatch.
+    let router = std::hint::black_box(route_export as ExportRouter);
+    EXPORT_ROUTER.store(router as *mut (), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// [`route_export`] when this program armed it, `None` otherwise.
+pub(crate) fn dispatch_export(promises: bool, method: &str, args: i64) -> Option<f64> {
+    let p = EXPORT_ROUTER.load(std::sync::atomic::Ordering::Relaxed);
+    if p.is_null() {
+        return None;
+    }
+    let router = unsafe { std::mem::transmute::<*mut (), ExportRouter>(p) };
+    router(promises, method, args)
+}

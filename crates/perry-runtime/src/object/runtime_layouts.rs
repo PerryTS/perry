@@ -259,12 +259,11 @@ mod spawn_sync_result {
 pub(crate) use spawn_sync_result::spawn_sync_slot;
 pub use spawn_sync_result::SPAWN_SYNC_RESULT;
 
-/// A CommonJS module record (`module`), in Node's key order, plus perry's
-/// `__perry_cjs_record` marker. The last entry is a private slot, never a
-/// property: the module's factory, which a reload after
-/// `delete require.cache[...]` runs again (`module_require.rs`). No own-key
-/// reader lists it and no script can name it, so the compiler need not retain
-/// the factory's text (the whole module) for it.
+/// The former runtime CommonJS module record layout. Records are compiler
+/// layouts now (the wrapper's record literal) and nothing allocates this one.
+/// Removing it makes `tombstone_tests::an_old_receiver_keeps_its_overflow_across_a_minor`
+/// lose an old receiver's young overflow in a minor collection: a latent
+/// collector dependency on the static layout set, open and separate.
 mod cjs_module_record {
     use super::record_atoms::*;
     use super::*;
@@ -298,22 +297,7 @@ mod cjs_module_record {
         CJS_ATOM_REQUIRE,
         CJS_ATOM_FACTORY => crate::object::key_attrs::PRIVATE_FIELD_ENTRY,
     ]);
-    /// The slots of [`CJS_MODULE_RECORD`].
-    pub(crate) mod cjs_module_slot {
-        pub(crate) const EXPORTS: u32 = 0;
-        pub(crate) const RECORD: u32 = 1;
-        pub(crate) const ID: u32 = 2;
-        pub(crate) const PATH: u32 = 3;
-        pub(crate) const FILENAME: u32 = 4;
-        pub(crate) const LOADED: u32 = 5;
-        pub(crate) const CHILDREN: u32 = 6;
-        pub(crate) const PARENT: u32 = 7;
-        pub(crate) const PATHS: u32 = 8;
-        pub(crate) const REQUIRE: u32 = 9;
-        pub(crate) const FACTORY: u32 = 10;
-    }
 }
-pub(crate) use cjs_module_record::cjs_module_slot;
 pub use cjs_module_record::CJS_MODULE_RECORD;
 
 /// Allocate a fixed record with every declared property present, including undefined values.

@@ -194,7 +194,7 @@ struct ClassValueDir {
 ///
 /// Anything else (`0`, the ShapeId range) is not a class id and has no slot.
 const CLASS_VALUE_BANDS: usize = 4;
-const FIRST_RUNTIME_CLASS_ID: u32 = 0x7FFF_FF00;
+pub(crate) const FIRST_RUNTIME_CLASS_ID: u32 = 0x7FFF_FF00;
 const SYNTHETIC_CLASS_ID_BASE: u32 =
     super::class_registry::prototype_objects::SYNTHETIC_CLASS_ID_BASE;
 const SYNTHETIC_CLASS_ID_END: u32 =

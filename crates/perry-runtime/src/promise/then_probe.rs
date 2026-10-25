@@ -38,9 +38,8 @@
 //! * no `OBJ_FLAG_HAS_DESCRIPTORS` / `OBJ_FLAG_STABLE_TOMBSTONES` /
 //!   `OBJ_FLAG_TYPED_ARRAY_PROTO` ⇒ no own accessor, non-default descriptor
 //!   or deleted slot can shadow the answer;
-//! * an ADMISSIBLE class id ([`class_id_admissible`]): `0` (a plain object
-//!   literal), or an anonymous SHAPE id that the class registries provably
-//!   know nothing about — an empty CLASS identity word and no parent edge. That excludes every class instance, every
+//! * a plain receiver shape with an empty CLASS identity word and no parent
+//!   edge, excluding every class instance, every
 //!   plain-function-constructor instance, the native-module namespace id,
 //!   WeakMap/WeakSet, Map/Set iterators, DisposableStack, boxed String,
 //!   AbortSignal and TTY hosts, so no class holder chain is in play;
@@ -504,7 +503,7 @@ unsafe fn prove_no_then(value: f64) -> Outcome {
     if !crate::object::object_is_regular(obj as *mut ObjectHeader) {
         return Outcome::NotPlainObject;
     }
-    if !class_id_admissible((*obj).class_id) {
+    if !crate::object::shapes::object_is_plain_record(obj) {
         return Outcome::ClassId;
     }
     // `js_object_get_field_by_name_f64` forwards a MISSED read to an aliased
@@ -545,89 +544,10 @@ unsafe fn prove_no_then(value: f64) -> Outcome {
     }
 }
 
-// ── Admissible receiver class ids ──────────────────────────────────────────
-
-/// Memo for [`class_id_admissible`]. Registration adds a class's members
-/// before any instance of it exists, so it cannot change a recorded verdict;
-/// the SEMANTIC epoch covers class-prototype-object registration
-/// and parent-static linking (both call `prop_plan_epoch_bump`). GC is
-/// deliberately not an input: it never adds a registry entry, and the
-/// dead-owner prune only ever REMOVES entries for objects that are dead, which
-/// can make a stale `false` verdict conservative but never a stale `true` one.
-#[derive(Clone, Copy)]
-struct AdmissibleEntry {
-    class_id: u32,
-    epoch: u64,
-    identity_word: u64,
-    admissible: bool,
-}
-
-const ADMISSIBLE_SLOTS: usize = 16;
-
-const EMPTY_ADMISSIBLE: AdmissibleEntry = AdmissibleEntry {
-    // 0 is answered without consulting the memo, so it is a safe "empty" tag.
-    class_id: 0,
-    epoch: 0,
-    identity_word: 0,
-    admissible: false,
-};
-
-crate::perry_thread_local! {
-    /// Per-slot `Cell`s rather than a `Cell<[…; N]>`: the latter copies the
-    /// whole table in AND out on every probe, which on this path is per promise
-    /// resolution.
-    static ADMISSIBLE_MEMO: [std::cell::Cell<AdmissibleEntry>; ADMISSIBLE_SLOTS] =
-        const { [const { std::cell::Cell::new(EMPTY_ADMISSIBLE) }; ADMISSIBLE_SLOTS] };
-}
-
-/// May a receiver with this `class_id` be reasoned about here?
-///
-/// `0` — a plain object literal — always. A NONZERO id must clear two
-/// independent bars:
-///
-/// 1. `is_anon_shape_class_id` — positive membership in a set codegen
-///    populates only for `__AnonShape_*`, the synthetic ids minted for CLOSED
-///    object-literal shapes. This is what excludes the reserved builtin ids
-///    (`WeakMap`/`WeakSet`, Map/Set iterators, `DisposableStack`, boxed
-///    `String`, `AbortSignal`, TTY …), which are recognised by *constant
-///    comparison* in their arms and never appear in any registry.
-/// 2. [`class_identity_empty`] — the class registries actually know nothing
-///    about the id. Without this, admitting anon shapes would rest on two
-///    COMPILE-TIME facts nothing checks at runtime (`is_closed_shape` refusing
-///    getters/setters/methods, and codegen skipping `js_register_class_name`
-///    for `__AnonShape_*`). A future lowering that admitted an accessor into
-///    the closed-shape path would arm a missed thenable — a HANG — silently.
-///    Checking the registry converts that assumption into an observed fact.
-fn class_id_admissible(class_id: u32) -> bool {
-    if class_id == 0 {
-        return true;
-    }
-    if class_id == crate::object::NATIVE_MODULE_CLASS_ID {
-        return false;
-    }
-    let epoch = crate::object::prop_plan::prop_plan_semantic_epoch();
-    let slot = (class_id as usize).wrapping_mul(0x9E37_79B1) >> 12 & (ADMISSIBLE_SLOTS - 1);
-    let identity_word = crate::object::shapes::identity_prototype_word(
-        crate::object::shapes::class_identity_proto_id(class_id),
-    );
-    let e = ADMISSIBLE_MEMO.with(|t| t[slot].get());
-    if e.class_id == class_id && e.epoch == epoch && e.identity_word == identity_word {
-        return e.admissible;
-    }
-    let admissible =
-        crate::object::is_anon_shape_class_id(class_id) && class_identity_empty(class_id);
-    ADMISSIBLE_MEMO.with(|t| {
-        t[slot].set(AdmissibleEntry {
-            class_id,
-            epoch,
-            identity_word,
-            admissible,
-        })
-    });
-    admissible
-}
+// ── Test-only identity witness ─────────────────────────────────────────────
 
 /// An empty CLASS identity has no declared or published holder surface.
+#[cfg(test)]
 pub(crate) fn class_identity_empty(class_id: u32) -> bool {
     crate::object::get_parent_class_id(class_id).is_none()
         && crate::object::shapes::identity_prototype_word(
@@ -684,18 +604,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn s7b_negative_probe_observes_unbuilt_holder_publication() {
+    fn s7b_negative_probe_excludes_a_declared_receiver() {
         let cid = 190_703;
         unsafe {
-            crate::object::js_register_anon_shape_class_id(cid);
+            crate::object::declarations::test_declare_anonymous(cid);
         }
-        assert!(class_id_admissible(cid), "the negative memo must be live");
+        let obj = crate::object::js_object_alloc(cid, 0);
+        assert!(
+            unsafe { crate::object::shapes::object_is_plain_record(obj) },
+            "literal receiver proof must be live"
+        );
         unsafe {
-            // A real anonymous declaration can acquire an id previously used
-            // by a literal. Literal methods alone have no CLASS surface.
-            crate::object::js_register_class_name(cid, b"".as_ptr(), 0);
+            // Declared and literal classes have distinct compiler ids.
+            crate::object::js_register_class_name(cid + 1, b"".as_ptr(), 0);
             crate::object::js_register_class_method(
-                cid as i64,
+                (cid + 1) as i64,
                 b"then".as_ptr(),
                 4,
                 probe_body as *const () as usize as i64,
@@ -704,9 +627,10 @@ mod tests {
                 0,
             );
         }
+        let declared = crate::object::js_object_alloc(cid + 1, 0);
         assert!(
-            !class_id_admissible(cid),
-            "publication must retire the cached negative without an epoch bump"
+            !unsafe { crate::object::shapes::object_is_plain_record(declared) },
+            "a declared descriptor must not qualify for a literal negative proof"
         );
     }
 

@@ -73,6 +73,8 @@ fn scan_function_shell_for_max_local(func: &Function, max_id: &mut LocalId) {
 
 /// FuncId companion to [`scan_function_shell_for_max_local`].
 fn scan_function_shell_for_max_func(func: &Function, max_id: &mut FuncId) {
+    // Class members are emitted functions too, even with an empty body.
+    *max_id = (*max_id).max(func.id);
     scan_params_for_max_func(&func.params, max_id);
     scan_decorators_for_max_func(&func.decorators, max_id);
 }
@@ -901,5 +903,31 @@ mod tests {
             56,
             "function/class decorator-arg closure FuncIds must be counted"
         );
+    }
+    #[test]
+    fn class_member_without_nested_closures_reserves_its_emitted_identity() {
+        let mut module = Module::new("test");
+        let mut class = class_with_fields("Methods", Vec::new());
+        let member = |id| Function {
+            id,
+            name: "member".into(),
+            type_params: Vec::new(),
+            params: Vec::new(),
+            return_type: Type::Any,
+            body: vec![Stmt::Return(Some(Expr::Integer(1)))],
+            is_async: false,
+            is_generator: false,
+            is_strict: false,
+            was_plain_async: false,
+            was_unrolled: false,
+            is_exported: false,
+            captures: Vec::new(),
+            decorators: Vec::new(),
+        };
+        class.methods.push(member(999));
+        module.classes.push(class);
+        assert_eq!(compute_max_func_id(&module), 999);
+        module.classes[0].constructor = Some(member(1001));
+        assert_eq!(compute_max_func_id(&module), 1001);
     }
 }

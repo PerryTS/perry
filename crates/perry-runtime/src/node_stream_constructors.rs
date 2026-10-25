@@ -267,6 +267,7 @@ pub(super) fn init_readable_state(
             (Slot::ReadableFlowing, f64::from_bits(TAG_NULL)),
             (Slot::Readable, bool_value(true)),
             (Slot::ReadableEnded, bool_value(false)),
+            (Slot::EndEmitted, bool_value(false)),
             (Slot::Disturbed, bool_value(false)),
             (Slot::ReadableEncoding, encoding.get_nanbox_f64()),
             (Slot::EmitClose, bool_value(emit_close)),

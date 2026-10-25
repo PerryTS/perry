@@ -176,9 +176,9 @@ suite.
 | `options/validation-order.ts`            | [`lib/zlib.js`][node-lib]                                                                                            | Observable option getters run in Node's exact order.                                                  |
 | `options/window-bits-zero.ts`            | [`test-zlib-zero-windowBits.js`][node-zero-window]                                                                   | Zero is valid for inflate/gunzip/unzip; nonzero 1..7 and 16 reject, 8/15 and defaults remain valid, wrong types reject, and raw codecs/compressors reject zero.                                   |
 | `streams/bytes-written-trailing.ts`      | [`test-zlib-premature-end.js`][node-premature], [`bytesWritten.test.ts`][bun-bytes-written]                          | A decoder counts consumed compressed bytes, not fixed trailing input.                                 |
-| `streams/close-state.ts`                 | [`test-zlib-close-after-write.js`][node-close-write], [`lib/zlib.js`][node-lib]                                      | `close()` returns undefined, clears the handle, sets closed state, and stays idempotent.              |
+| `streams/close-state.ts`                 | [`test-zlib-close-after-write.js`][node-close-write], [`lib/zlib.js`][node-lib]                                      | `close()` is idempotent; `_closed` follows handle falsiness, while deferred destroy completion controls Transform closed state.              |
 | `streams/codec-roundtrips.ts`            | [`test-zlib-create-raw.js`][node-create-raw], [`test-zlib-brotli-from-string.js`][node-brotli-string]                | Deflate, raw, gzip, unzip, and Brotli factories each complete a stream round-trip.                    |
-| `streams/error-close.ts`                 | [`test-zlib-close-after-error.js`][node-close-error]                                                                 | A decode error closes and destroys the zlib stream before a second close.                             |
+| `streams/error-close.ts`                 | [`test-zlib-close-after-error.js`][node-close-error]                                                                 | Decode errors observe completed closed state before error/close delivery; generic deferred destroy preserves replacement errors and event order.                             |
 | `streams/flush-order.ts`                 | [`test-zlib-flush-write-sync-interleaved.js`][node-flush-order]                                                      | Write and flush callbacks keep enqueue order through end.                                             |
 | `streams/reset-before-write.ts`          | [`test-zlib-reset-before-write.js`][node-reset-before]                                                               | `reset()` and `params()` both work before the first write.                                            |
 | `unzip/one-byte-members.ts`              | [`test-zlib-unzip-one-byte-chunks.js`][node-one-byte]                                                                | Streaming unzip detects concatenated gzip members across one-byte writes.                             |
@@ -279,6 +279,24 @@ Legacy aliases remain non-enumerable; ordinary function exports remain mutable
 and can be restored after an override. Descriptor values share the same
 `constants` object as ordinary reads. This supplements `constants/immutability`
 and `imports/legacy-constant-aliases` without changing those fixtures.
+
+## Synchronous decoder completion
+
+`inflateSync`, `gunzipSync`, and `inflateRawSync` retain completion options on
+both direct imports and captured exports for their bare-Buffer paths.
+The genuine `inflateSync` `info: true` owner path retains its existing behavior;
+combining info results with completion policy is outside this decoder change. `rejectGarbageAfterEnd` accepts only
+booleans or `undefined`; explicit `true` rejects bytes after the first stream
+with `TypeError [ERR_TRAILING_JUNK_AFTER_STREAM_END]`, including another gzip
+member. Defaults still accept concatenated gzip members and gzip zero padding.
+An explicit permissive `finishFlush` returns the available prefix only for
+exhausted-input EOF, never corruption or missing/wrong dictionary errors.
+
+The validation fixtures cover direct/captured calls, defaults and error controls.
+Truncated decoding uses identical fixed Node 26.12.1 wire inputs, not halves of
+independently compressed streams with different Huffman representations; fixed
+miniz prefixes also cover exhausted input producing an empty Buffer. This tests
+decoder completion without requiring identical compressor output.
 
 ### Synchronous DEFLATE info results
 

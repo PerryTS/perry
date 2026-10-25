@@ -1779,8 +1779,8 @@ crate::perry_thread_local! {
 /// Running count of [`BLOCK_PERSIST_FORCE_MARKS`] on this thread. Compare
 /// across a collection: an unchanged value means block persistence force-marked
 /// nothing, so an object left unmarked by that collection was genuinely
-/// unreachable rather than merely a neighbour of something reachable.
-#[cfg(test)]
+/// unreachable rather than merely a neighbour of something reachable. Also
+/// read by the `PERRY_GC_DIAG` block-persistence line (`window=`).
 pub(crate) fn block_persist_force_mark_count() -> u64 {
     BLOCK_PERSIST_FORCE_MARKS.with(std::cell::Cell::get)
 }

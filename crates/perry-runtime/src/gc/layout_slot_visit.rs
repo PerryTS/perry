@@ -188,7 +188,15 @@ pub(super) unsafe fn visit_gc_layout_slot_descriptors_inline<F>(
         }
     }
     if let Some(slot) = child_slots.take_meta_child_slot() {
-        let descriptor = if matches!((*header).obj_type, GC_TYPE_OBJECT | GC_TYPE_CLOSURE) {
+        // The meta word of an object, closure or array is a raw machine
+        // pointer (`ObjectHeader::meta`, `ClosureHeader::props`,
+        // `ArrayHeader::named`), not an eight-byte JS value. On wasm32 it is
+        // four bytes followed by padding, so reading it as a `u64` would fold
+        // uninitialised padding into the address and hide the edge.
+        let descriptor = if matches!(
+            (*header).obj_type,
+            GC_TYPE_OBJECT | GC_TYPE_CLOSURE | GC_TYPE_ARRAY
+        ) {
             pointer_slot(slot.cast())
         } else {
             fixed_slot(slot)

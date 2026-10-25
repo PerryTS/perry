@@ -73,7 +73,7 @@
 use crate::fast_hash::{PtrHashMap, PtrHashSet};
 use std::cell::OnceCell;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, LockResult, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::thread::ThreadId;
 
@@ -103,6 +103,56 @@ pub type StaticNameMap<V> = HashMap<Vec<u8>, V, ahash::RandomState>;
 /// id, which is allocated while walking the class body and therefore orders
 /// entries across the otherwise separate method/getter/setter registries.
 pub type StringMemberOrderTable = HashMap<(u32, bool, Vec<u8>), u32>;
+
+// Borrow the existing composite key without constructing a temporary Vec for
+// every comparison in class reflection. Both views hash the same tuple of
+// class identity, static/instance partition and exact property-name bytes.
+trait StringMemberOrderKey {
+    fn parts(&self) -> (u32, bool, &[u8]);
+}
+
+impl StringMemberOrderKey for (u32, bool, Vec<u8>) {
+    fn parts(&self) -> (u32, bool, &[u8]) {
+        (self.0, self.1, &self.2)
+    }
+}
+
+impl StringMemberOrderKey for (u32, bool, &[u8]) {
+    fn parts(&self) -> (u32, bool, &[u8]) {
+        (self.0, self.1, self.2)
+    }
+}
+
+impl std::hash::Hash for dyn StringMemberOrderKey + '_ {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::hash::Hash::hash(&self.parts(), state);
+    }
+}
+
+impl PartialEq for dyn StringMemberOrderKey + '_ {
+    fn eq(&self, other: &Self) -> bool {
+        self.parts() == other.parts()
+    }
+}
+
+impl Eq for dyn StringMemberOrderKey + '_ {}
+
+impl<'a> std::borrow::Borrow<dyn StringMemberOrderKey + 'a> for (u32, bool, Vec<u8>) {
+    fn borrow(&self) -> &(dyn StringMemberOrderKey + 'a) {
+        self
+    }
+}
+
+pub(crate) fn string_member_order(
+    orders: &StringMemberOrderTable,
+    class_id: u32,
+    is_static: bool,
+    name: &[u8],
+) -> Option<u32> {
+    let key = (class_id, is_static, name);
+    orders.get(&key as &dyn StringMemberOrderKey).copied()
+}
+
 /// class_id -> (ctor func_ptr, total param count, signature capture count).
 pub type ConstructorTable = PtrHashMap<u32, (usize, u32, u32)>;
 /// class_id -> (has_synthetic_arguments, has_rest, parameters before the first
@@ -161,17 +211,6 @@ pub struct ClassImageTables {
     pub(crate) extends_typed_array: RwLock<Option<PtrHashSet<u32>>>,
     pub(crate) names: RwLock<Option<PtrHashMap<u32, String>>>,
     pub(crate) lengths: RwLock<Option<PtrHashMap<u32, u32>>>,
-    pub(crate) anon_shape_class_ids: RwLock<Option<PtrHashMap<u32, bool>>>,
-    /// Lock-free read mirror of `anon_shape_class_ids`, open-addressed.
-    /// `0` is an empty slot; `js_register_anon_shape_class_id` rejects id 0,
-    /// so the sentinel is unambiguous. Per IMAGE, like `parent_dense` — a
-    /// process-global mirror would answer one image's question out of
-    /// another's registrations, since `ImageTable` resolves every access
-    /// through `current()`.
-    pub(crate) anon_shape_fast: OnceLock<Box<[AtomicU64]>>,
-    /// Set when an insert exhausted its probe run: from then on an empty slot
-    /// no longer proves absence, so a miss must consult the locked set.
-    pub(crate) anon_shape_fast_overflow: AtomicBool,
 }
 
 impl ClassImageTables {
@@ -198,9 +237,6 @@ impl ClassImageTables {
             extends_typed_array: RwLock::new(None),
             names: RwLock::new(None),
             lengths: RwLock::new(None),
-            anon_shape_class_ids: RwLock::new(None),
-            anon_shape_fast: OnceLock::new(),
-            anon_shape_fast_overflow: AtomicBool::new(false),
         }
     }
 }
@@ -410,92 +446,63 @@ fn zeroed_atomic_table(len: usize) -> Box<[AtomicU32]> {
     unsafe { Box::<[AtomicU32]>::new_zeroed_slice(len).assume_init() }
 }
 
-/// Slot count of the per-image anon-shape mirror. Power of two.
-pub(crate) const ANON_FAST_SLOTS: usize = 4096;
-const ANON_FAST_MASK: usize = ANON_FAST_SLOTS - 1;
-const ANON_FAST_MAX_PROBE: usize = 8;
-
-#[inline]
-fn anon_fast_index(class_id: u32) -> usize {
-    // splitmix32 finaliser: anon ids come from a counter, so the low bits
-    // alone would cluster one module's ids into a single probe run.
-    let mut z = class_id ^ 0x9E37_79B9;
-    z = (z ^ (z >> 16)).wrapping_mul(0x85EB_CA6B);
-    z = (z ^ (z >> 13)).wrapping_mul(0xC2B2_AE35);
-    ((z ^ (z >> 16)) as usize) & ANON_FAST_MASK
-}
-
-#[inline]
-fn anon_fast_table() -> &'static [AtomicU64] {
-    current().anon_shape_fast.get_or_init(|| unsafe {
-        Box::<[AtomicU64]>::new_zeroed_slice(ANON_FAST_SLOTS).assume_init()
-    })
-}
-
-/// `Some(verdict)` when the calling image's mirror can answer; `None` when the
-/// caller must fall back to the locked set.
-#[inline]
-pub(crate) fn anon_fast_lookup(class_id: u32) -> Option<bool> {
-    anon_role_lookup(class_id).map(|role| role.is_some())
-}
-
-/// Anonymous membership and declaration precedence in the same metadata word.
-/// The low half retains the full class id; bit 32 records the declared role.
-/// None means overflow fallback, Some(None) means not anonymous.
-#[inline]
-pub(crate) fn anon_role_lookup(class_id: u32) -> Option<Option<bool>> {
-    let table = anon_fast_table();
-    let mut i = anon_fast_index(class_id);
-    for _ in 0..ANON_FAST_MAX_PROBE {
-        let v = table[i].load(Ordering::Acquire);
-        if v != 0 && v as u32 == class_id {
-            return Some(Some(v >> 32 != 0));
-        }
-        if v == 0 {
-            return if current().anon_shape_fast_overflow.load(Ordering::Acquire) {
-                None
-            } else {
-                Some(None)
-            };
-        }
-        i = (i + 1) & ANON_FAST_MASK;
-    }
-    None
-}
-
-/// Publish `class_id` into the calling image's mirror. Idempotent.
-pub(crate) fn anon_fast_insert(class_id: u32, declared: bool) {
-    let word = u64::from(class_id) | (u64::from(declared) << 32);
-    let table = anon_fast_table();
-    let mut i = anon_fast_index(class_id);
-    for _ in 0..ANON_FAST_MAX_PROBE {
-        let v = table[i].load(Ordering::Acquire);
-        if v != 0 && v as u32 == class_id {
-            table[i].store(word, Ordering::Release);
-            return;
-        }
-        if v == 0
-            && table[i]
-                .compare_exchange(0, word, Ordering::AcqRel, Ordering::Acquire)
-                .is_ok()
-        {
-            return;
-        }
-        if table[i].load(Ordering::Acquire) as u32 == class_id {
-            table[i].store(word, Ordering::Release);
-            return;
-        }
-        i = (i + 1) & ANON_FAST_MASK;
-    }
-    current()
-        .anon_shape_fast_overflow
-        .store(true, Ordering::Release);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::Barrier;
+
+    #[test]
+    fn descriptor_roles_are_image_local_and_adopted_by_workers() {
+        use crate::object::class_registry::declarations::{
+            class_declaration, js_register_class_declaration, ClassDeclaration,
+        };
+        const CID: u32 = 0x32a0_0005;
+        static ANON: ClassDeclaration = ClassDeclaration::anonymous();
+        static DECLARED: ClassDeclaration = ClassDeclaration::native(&[]);
+        let barrier = Arc::new(Barrier::new(2));
+        let applications: Vec<_> = [false, true]
+            .into_iter()
+            .map(|declared| {
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    enter_current_thread_image();
+                    unsafe {
+                        js_register_class_declaration(CID, if declared { &DECLARED } else { &ANON })
+                    };
+                    let image = current_image_handle();
+                    let identity = current_image_id();
+                    barrier.wait();
+                    let d = class_declaration(CID).unwrap();
+                    assert_eq!(d.is_declared(), declared);
+                    assert_eq!(d.is_anonymous(), !declared);
+                    let address = d as *const ClassDeclaration as usize;
+                    let child = std::thread::spawn(move || {
+                        adopt_image(image);
+                        let d = class_declaration(CID).unwrap();
+                        assert_eq!(d.is_declared(), declared);
+                        assert_eq!(d.is_anonymous(), !declared);
+                        (current_image_id(), d as *const ClassDeclaration as usize)
+                    })
+                    .join()
+                    .unwrap();
+                    assert_eq!(
+                        child,
+                        (identity, address),
+                        "worker must adopt the same descriptor owner"
+                    );
+                    identity
+                })
+            })
+            .collect();
+        let ids: Vec<_> = applications
+            .into_iter()
+            .map(|a| a.join().unwrap())
+            .collect();
+        assert_ne!(
+            ids[0], ids[1],
+            "distinct application images must stay distinct"
+        );
+    }
 
     #[test]
     fn absent_parent_reads_do_not_allocate_the_dense_table() {

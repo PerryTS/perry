@@ -444,7 +444,9 @@ enum GcSlotOwner {
 
 #[derive(Clone, Copy)]
 pub(in crate::gc) struct GcMutableSlot {
-    #[cfg(target_pointer_width = "32")]
+    // Kept in test builds on every target so a 64-bit host can assert which
+    // descriptors are pointer-width (see `is_pointer_width`).
+    #[cfg(any(test, target_pointer_width = "32"))]
     pointer_width: bool,
     pub(in crate::gc) slot: *mut u64,
     pub(in crate::gc) layout_kind: Option<HeapChildSlotReadKind>,
@@ -458,7 +460,7 @@ impl GcMutableSlot {
             slot,
             layout_kind,
             owner: GcSlotOwner::Parent,
-            #[cfg(target_pointer_width = "32")]
+            #[cfg(any(test, target_pointer_width = "32"))]
             pointer_width: false,
         }
     }
@@ -486,9 +488,18 @@ impl GcMutableSlot {
             slot: slot.cast(),
             layout_kind: None,
             owner: GcSlotOwner::Parent,
-            #[cfg(target_pointer_width = "32")]
+            #[cfg(any(test, target_pointer_width = "32"))]
             pointer_width: true,
         }
+    }
+
+    /// Was this slot described as a machine pointer (`GcMutableSlot::pointer`)
+    /// rather than an eight-byte JS value? On wasm32 the two read different
+    /// widths; on a 64-bit host they read alike, so this is how a test sees the
+    /// classification.
+    #[cfg(test)]
+    pub(in crate::gc) fn is_pointer_width(self) -> bool {
+        self.pointer_width
     }
 
     #[inline(always)]

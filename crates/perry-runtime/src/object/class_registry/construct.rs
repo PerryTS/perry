@@ -289,8 +289,9 @@ unsafe fn construct_function_impl(
         // this the instance was a class_id=0 empty object whose `.getStore` read
         // back `undefined` -> "getStore is not a function" at server startup.
         // Route to the stdlib handle constructor via the registered dispatcher.
-        if module == "async_hooks"
-            && matches!(method.as_str(), "AsyncLocalStorage" | "AsyncResource")
+        if (module == "async_hooks"
+            && matches!(method.as_str(), "AsyncLocalStorage" | "AsyncResource"))
+            || (module == "string_decoder" && method == "StringDecoder")
         {
             let ptr = crate::value::JS_NATIVE_ASYNC_HOOKS_CONSTRUCT
                 .load(std::sync::atomic::Ordering::SeqCst);

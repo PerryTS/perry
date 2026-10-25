@@ -609,7 +609,7 @@ mod tests {
         let key_handle = scope.root_nanbox_f64(crate::value::js_nanbox_string(key_ptr as i64));
         const ANON_CLASS_ID: u32 = 0x8783_1001;
         const USER_CLASS_ID: u32 = 0x8783_1002;
-        unsafe { crate::object::js_register_anon_shape_class_id(ANON_CLASS_ID) };
+        unsafe { crate::object::declarations::test_declare_anonymous(ANON_CLASS_ID) };
         let first_handle = scope.root_raw_mut_ptr(crate::object::js_object_alloc(ANON_CLASS_ID, 0));
         let second_handle =
             scope.root_raw_mut_ptr(crate::object::js_object_alloc(ANON_CLASS_ID, 0));

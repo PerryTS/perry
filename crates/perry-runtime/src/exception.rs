@@ -533,9 +533,32 @@ fn exit_uncaught(value: f64) -> ! {
     std::process::exit(status);
 }
 
-/// `_URC_END_OF_STACK`: phase 1 walked every frame and none had a handler.
-#[cfg(all(not(target_os = "wasi"), not(windows)))]
-const URC_END_OF_STACK: i32 = 5;
+/// `PERRY_TRACE_THROW=1`: report every thrown value and the native call chain
+/// at `js_throw` time, before any transport, so an error that is swallowed,
+/// rethrown, or reaches the uncaught path is visible at its origin. Parsed by
+/// value and read once; with the knob off a throw pays one cached load.
+fn trace_throw_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *crate::once_init::get_or_init(&ON, || {
+        matches!(
+            std::env::var("PERRY_TRACE_THROW").ok().as_deref(),
+            Some("1") | Some("on") | Some("true")
+        )
+    })
+}
+
+#[cold]
+#[inline(never)]
+fn trace_throw(value: f64) {
+    eprintln!("[trace-throw] thrown value:");
+    print_uncaught(value);
+    let mut ips = [0usize; crate::error::MAX_CAPTURED_FRAMES];
+    let n = crate::error::capture_ips(&mut ips);
+    eprintln!(
+        "[trace-throw] throw site, innermost first: {}",
+        crate::error::describe_chain(&ips[..n], n)
+    );
+}
 
 /// Throw an exception with the given value
 ///
@@ -563,6 +586,9 @@ pub extern "C-unwind" fn js_throw(value: f64) -> ! {
             std::process::abort();
         }
     });
+    if trace_throw_enabled() {
+        trace_throw(value);
+    }
     // WASI handlers (generated and runtime traps) use libsetjmp over
     // standardized wasm EH. Restore to the handler frame's mark, exactly as a
     // landing pad at that frame would, then jump.
@@ -601,11 +627,14 @@ pub extern "C-unwind" fn js_throw(value: f64) -> ! {
         let reason = crate::eh::raise_perry_exception();
         // Itanium: phase 1 found no pad anywhere, and the raise returned
         // without unwinding. The stack is intact, so exit listeners and the
-        // backtrace behave as before. (Windows reaches its uncaught path in
-        // the unhandled-exception filter, before RaiseException returns.)
+        // backtrace behave as before. Classified by the personality's
+        // verdicts, not by `reason`: some libgcc builds return garbage from
+        // `_Unwind_RaiseException` (see `eh::raise_found_no_handler`).
+        // (Windows reaches its uncaught path in the unhandled-exception
+        // filter, before RaiseException returns.)
         #[cfg(not(windows))]
-        if reason == URC_END_OF_STACK {
-            crate::eh::diagnose_end_of_stack();
+        if crate::eh::raise_found_no_handler() {
+            crate::eh::diagnose_end_of_stack(reason);
             exit_uncaught(value)
         }
         eprintln!(

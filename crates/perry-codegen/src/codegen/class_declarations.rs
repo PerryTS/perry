@@ -45,7 +45,7 @@ struct Member {
 /// The declaration constants of `local_classes` (classes this module
 /// defines, keyed by their ClassId). `info_ref` names (and requests) the
 /// `JsFunctionInfo` global of a body. A class with no instance member and no
-/// birth shape gets none.
+/// birth shape still gets its semantic role descriptor.
 pub(super) fn class_declaration_globals(
     local_classes: &[(u32, &perry_hir::Class)],
     strings: &StringPool,
@@ -198,9 +198,6 @@ pub(super) fn class_declaration_globals(
         } else {
             "null".to_owned()
         };
-        if members.is_empty() && birth_shape == 0 && layout == "null" && !default_derived {
-            continue;
-        }
         members.sort_by_key(|m| m.order);
         let members_symbol = format!("__perry_class_decl_members_{cid}");
         let symbol = format!("__perry_class_decl_{cid}");
@@ -232,7 +229,11 @@ pub(super) fn class_declaration_globals(
         };
         // Summary flags (runtime `CLASS_DECL_HAS_ACCESSORS` = 1,
         // `CLASS_DECL_HAS_COMPUTED` = 2).
-        let flags = if default_derived { 4 } else { 0 }
+        let flags = if class.name.starts_with("__AnonShape_") {
+            8
+        } else {
+            16
+        } | if default_derived { 4 } else { 0 }
             | u32::from(members.iter().any(|m| m.kind != KIND_METHOD))
             | if members
                 .iter()

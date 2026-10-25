@@ -454,6 +454,45 @@ pub(crate) unsafe fn js_array_from_arraylike_holey(
     js_array_from_arraylike_with_missing(obj, f64::from_bits(crate::value::TAG_HOLE))
 }
 
+/// Is `obj` a plain ordinary data object that provably owns and inherits no
+/// indexed property, so every `HasProperty(obj, <index>)` answers false?
+///
+/// Own keys: the shape is a default-attribute data shape (no accessors, no
+/// tombstones, no overflow) whose key list holds no canonical array index.
+/// Inherited: the receiver stands on the default `Object.prototype` (class id
+/// 0, no recorded or null prototype), and `Object.prototype` has never been
+/// given an indexed property (`OBJECT_PROTO_HAS_INDEX`, flipped by every
+/// index write / `defineProperty` on it, so a later addition is seen by the
+/// next call). Anything else keeps the spec-shaped per-index walk.
+pub(crate) unsafe fn arraylike_has_no_indexed_properties(
+    obj: *const crate::object::ObjectHeader,
+) -> bool {
+    if crate::array::object_prototype_has_index_flag() {
+        return false;
+    }
+    let value = f64::from_bits(crate::value::JSValue::pointer(obj as *const u8).bits());
+    let Some((receiver, shape)) = crate::object::descriptors::own_keys::ordinary_data_shape(value)
+    else {
+        return false;
+    };
+    // A closed object literal carries an anonymous class id, but its DEFAULT
+    // shape prototype proves no class vtable sits on its chain; a declared class
+    // instance or a synthetic id has a different prototype identity.
+    let class_id = (*receiver).class_id;
+    if class_id != 0
+        && (class_id >= crate::object::shapes::SYNTHETIC_CLASS_ID_BASE
+            || shape.proto_id != crate::object::shapes::PROTO_ID_DEFAULT)
+    {
+        return false;
+    }
+    if crate::object::shapes::object_prototype_word(receiver) != 0 {
+        return false;
+    }
+    let keys =
+        crate::object::ObjectKeys::new(shape.keys as *mut ArrayHeader, shape.logical_key_count);
+    !crate::object::keys_contain_array_index(keys)
+}
+
 unsafe fn js_array_from_arraylike_with_missing(
     obj: *const crate::object::ObjectHeader,
     missing_value: f64,
@@ -478,6 +517,18 @@ unsafe fn js_array_from_arraylike_with_missing(
     (*arr).length = len;
     clear_array_numeric_layout(arr);
     let elements = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut f64;
+    // `length` was read above and may have run user code, so the proof that no
+    // index can be found is taken now. When it holds, `HasProperty(obj, i)` is
+    // false for every `i` and no per-index lookup can observe anything.
+    if arraylike_has_no_indexed_properties(obj) {
+        let missing = missing_value.to_bits();
+        for i in 0..len as usize {
+            // GC_STORE_AUDIT(POINTER_FREE): `missing` is the undefined / hole sentinel.
+            ptr::write(elements.add(i) as *mut u64, missing);
+        }
+        rebuild_array_layout_exact(arr);
+        return arr;
+    }
     for i in 0..len {
         let key_str = i.to_string();
         let key = crate::string::js_string_from_bytes(key_str.as_ptr(), key_str.len() as u32);

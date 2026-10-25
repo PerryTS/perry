@@ -287,7 +287,6 @@ pub(crate) fn new_view(
         (*cell).length = length;
         (*cell).capacity = offset;
         (*cell).link = owning;
-        (*header(cell as usize)).gc_flags |= crate::gc::GC_FLAG_TENURED;
         if tracking && (brand & 0x1f == 14 || super::is_resizable_buffer(owning)) {
             (*header(cell as usize))._reserved |= crate::codegen_abi::BYTES_LENGTH_TRACKING;
         }

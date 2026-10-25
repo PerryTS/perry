@@ -30,6 +30,7 @@ pub(crate) mod sync_program;
 // comment/string masker for its source scans (D005) instead of duplicating a
 // subtle scanner.
 pub(crate) mod cjs_wrap;
+mod class_imports;
 mod codegen_steps;
 mod collect_modules;
 mod collect_modules_helpers;

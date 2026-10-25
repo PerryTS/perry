@@ -1,0 +1,1 @@
+Fix property reads in separately emitted generic bodies by giving their lexical frames distinct binding identities. Deduplicated closure bodies keep one identity and receiver facts covering every creation's captures and callers. Duplicate emitted-body binding identities now produce a compiler error instead of selecting another body's field layout.

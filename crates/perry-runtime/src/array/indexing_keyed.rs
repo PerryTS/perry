@@ -49,15 +49,14 @@ pub extern "C" fn js_array_set_string_key(
     // receiver's gc_type and route accordingly. For Object/Closure
     // (non-array) receivers, just call the object setter directly so
     // the standard expando-property path runs.
-    let is_array = unsafe {
-        if (arr as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
-            let gc_header =
-                (arr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-            (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY
-        } else {
-            false
-        }
-    };
+    // The receiver word is of unknown kind: an array or object address, a raw
+    // native registry id, or a `HANDLE_TAG` word (`headers[k] ??= v` on a
+    // `Headers` handle passes 0xFFF9_0000_0004_0000). The canonical header
+    // reader rejects the id bands and every non-heap word without touching
+    // memory (the old one-page floor dereferenced both); a rejected word goes
+    // to the by-name setter, which routes handles to their property setter.
+    let is_array = unsafe { crate::value::addr_class::try_read_gc_header(arr as usize) }
+        .is_some_and(|header| header.obj_type == crate::gc::GC_TYPE_ARRAY);
     if !is_array {
         crate::object::js_object_set_field_by_name(
             arr as *mut crate::object::ObjectHeader,

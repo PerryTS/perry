@@ -392,7 +392,7 @@ fn importer_first_birth_keeps_definer_rep_and_stub_slots_distinct() {
 fn every_birth_path_of_a_rep_literal_and_class_stamps_one_shape_and_fills_its_f64_lanes() {
     for (cid, literal) in [(0x511A_u32, true), (0x511B_u32, false)] {
         if literal {
-            unsafe { crate::object::js_register_anon_shape_class_id(cid) };
+            unsafe { crate::object::declarations::test_declare_anonymous(cid) };
         }
         let packed = b"pa\0pb\0pc\0";
         let k = crate::object::js_build_class_keys_array(

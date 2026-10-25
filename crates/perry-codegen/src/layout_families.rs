@@ -625,6 +625,17 @@ fn own_keys(class: &Class, has_parent: bool, fresh: bool) -> Result<OwnKeys, Str
             && !f.name.starts_with("__perry_cap_");
         match f.origin {
             ClassFieldOrigin::ConstructorStore if plain && f.init.is_none() => {}
+            // A declared key (`Class::is_declared_keys_record`): a key of the
+            // family that no birth writes, so never an initialization.
+            ClassFieldOrigin::Declared if plain && f.init.is_none() => {
+                if f.name == "__proto__" || f.name == "constructor" {
+                    return Err("reserved key".into());
+                }
+                defined_open = false;
+                if !defined.iter().any(|(x, _)| *x == f.name) {
+                    defined.push((FamilyKey::Name(f.name.clone()), false));
+                }
+            }
             ClassFieldOrigin::Definition if plain => {
                 if f.name == "__proto__" || f.name == "constructor" {
                     return Err("reserved key".into());

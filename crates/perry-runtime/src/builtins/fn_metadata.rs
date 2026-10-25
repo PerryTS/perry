@@ -110,16 +110,15 @@ fn descriptor_pointer<T>(base: *const u8, offset: i32) -> *const T {
 /// is written only by [`js_register_function_name_static`], whose contract is
 /// process lifetime.
 ///
-/// Keyed by code address with the runtime's pointer hasher: `Error`
-/// construction probes it once per frame it walks.
+/// Ordered by code address so exact reflection/capture lookups and predecessor
+/// lookups for stack rendering share this one owner. No stack-side snapshot.
 fn function_name_registry(
-) -> &'static std::sync::Mutex<crate::fast_hash::PtrHashMap<usize, &'static [u8]>> {
+) -> &'static std::sync::Mutex<std::collections::BTreeMap<usize, &'static [u8]>> {
     use std::sync::OnceLock;
-    static REGISTRY: OnceLock<
-        std::sync::Mutex<crate::fast_hash::PtrHashMap<usize, &'static [u8]>>,
-    > = OnceLock::new();
+    static REGISTRY: OnceLock<std::sync::Mutex<std::collections::BTreeMap<usize, &'static [u8]>>> =
+        OnceLock::new();
     crate::once_init::get_or_init(&REGISTRY, || {
-        std::sync::Mutex::new(crate::fast_hash::new_ptr_hash_map())
+        std::sync::Mutex::new(std::collections::BTreeMap::new())
     })
 }
 
@@ -262,7 +261,6 @@ pub unsafe extern "C" fn js_register_function_names_static(descriptors: *const u
     let Ok(mut map) = function_name_registry().lock() else {
         return;
     };
-    map.reserve(entries.len());
     for entry in entries {
         if entry.byte_len == 0 {
             continue;
@@ -349,45 +347,15 @@ pub fn function_name_registry_entries() -> Option<Vec<(usize, std::sync::Arc<[u8
     Some(out)
 }
 
-/// Number of generated-bundle function names in the codegen-only image map.
-///
-/// Unlike [`function_name_registry_len`], this deliberately excludes the
-/// owned override map. Runtime builtin/getter thunks register there, and their
-/// addresses must never participate in the address-containment index used to
-/// name captured JS stack frames: that index has starts but no function
-/// extents, so a runtime function following a thunk would inherit its name.
-pub fn bundle_function_name_registry_len() -> Option<usize> {
-    Some(function_name_registry().lock().ok()?.len())
-}
-
-/// Run `f` with the generated-bundle name map held, keyed by function start
-/// address: the set `Error.stack` resolves against, so a capture can tell a
-/// JS frame from a runtime one while it walks (and stop at
-/// `Error.stackTraceLimit` JS frames). `f` must not register names. Only
-/// the x86_64 Linux capture classifies frames as it walks.
-#[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+/// Borrow the generated-bundle metadata owner for exact capture/reflection or
+/// address-containment lookups. Runtime-owned names stay outside this table:
+/// their thunk addresses must never name adjacent runtime frames. `f` must
+/// not register names while it holds the owner lock.
 pub(crate) fn with_bundle_function_names<R>(
-    f: impl FnOnce(&crate::fast_hash::PtrHashMap<usize, &'static [u8]>) -> R,
+    f: impl FnOnce(&std::collections::BTreeMap<usize, &'static [u8]>) -> R,
 ) -> Option<R> {
     let names = function_name_registry().lock().ok()?;
     Some(f(&names))
-}
-
-/// Snapshot only the generated-bundle names registered through
-/// [`js_register_function_name_static`].
-///
-/// That entry point is codegen-only by contract, which makes this an exact
-/// provenance filter. The general metadata readers continue to merge this map
-/// with runtime-owned overrides for `fn.name` and reflection.
-pub fn bundle_function_name_registry_entries() -> Option<Vec<(usize, &'static [u8])>> {
-    Some(
-        function_name_registry()
-            .lock()
-            .ok()?
-            .iter()
-            .map(|(address, name)| (*address, *name))
-            .collect(),
-    )
 }
 
 /// The image string a compiled body's name range is the text of
@@ -762,12 +730,11 @@ pub(crate) fn function_registries_census() -> Vec<crate::gc::census::SideTableRo
         // Image names cost nothing beyond the map slot (they point into the
         // binary); only the owned maps below carry heap payload.
         rows.push((
-            "fn.name_registry",
+            // BTreeMap does not expose allocated node capacity. Report the
+            // live entry payload explicitly, excluding node overhead.
+            "fn.name_registry(entry-bytes)",
             map.len(),
-            hash_table_bytes(
-                map.capacity(),
-                std::mem::size_of::<(usize, &'static [u8])>(),
-            ),
+            map.len() * std::mem::size_of::<(usize, &'static [u8])>(),
         ));
     }
     if let Ok(map) = function_name_overrides().lock() {

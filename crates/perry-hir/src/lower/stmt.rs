@@ -1565,7 +1565,7 @@ fn lower_stmt_inner(
 
             // Lower catch clause (if present)
             let catch = if let Some(ref catch_clause) = try_stmt.handler {
-                let scope_mark = ctx.enter_scope();
+                let scope_mark = ctx.enter_catch_scope();
 
                 let mut binding_stmts: Vec<Stmt> = Vec::new();
                 let param = if let Some(ref pat) = catch_clause.param {

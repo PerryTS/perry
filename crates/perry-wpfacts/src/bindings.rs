@@ -7,7 +7,60 @@
 //! offset, so the binding (not the site) is the key.
 
 use crate::gen::Gen;
-use crate::model::{TmplKind, TokKind, TOP};
+use crate::model::{Model, NodeId, TmplKind, TokKind, TOP};
+
+/// A compiled body a binding or a field may hold (FVA): what codegen needs
+/// to call it without the runtime's dispatch.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct BodyRef {
+    /// The defining module (program module index) and the body's HIR id.
+    pub module: u32,
+    pub func_id: u32,
+    /// Its declared parameters (a rest parameter not counted).
+    pub params: u32,
+    /// No rest parameter and no `arguments`: a call passing at least
+    /// `params` arguments enters the body directly.
+    pub plain: bool,
+    /// A closure expression; else a function declaration.
+    pub closure: bool,
+}
+
+/// The bodies node `n` holds when it holds nothing else: every value is a
+/// compiled closure or function declaration (no ⊤, primitive, object,
+/// builtin, bound function, method, another unit's function or a function
+/// only the runtime has). Empty otherwise.
+pub(crate) fn bodies_of(m: &Model, n: NodeId) -> Vec<BodyRef> {
+    let node = &m.nodes[n as usize];
+    if node.prim != 0 {
+        return Vec::new();
+    }
+    let mut out: Vec<BodyRef> = Vec::new();
+    for t in node.pts.to_sorted() {
+        // A marker beside its values, or a closed function's parameter
+        // marker (the site rule skips it: `derive::callee_set`).
+        if t != TOP && (m.beside_values(t) || m.closed_marker(t)) {
+            continue;
+        }
+        let TokKind::Func(f, _) = m.toks[t as usize] else {
+            return Vec::new();
+        };
+        let fi = &m.funcs[f as usize];
+        let closure = m.closures.contains(&f);
+        if fi.func_id == u32::MAX || !(closure || m.decls.contains(&f)) {
+            return Vec::new();
+        }
+        out.push(BodyRef {
+            module: fi.module,
+            func_id: fi.func_id,
+            params: fi.params.len() as u32,
+            plain: fi.rest.is_none() && !fi.has_arguments,
+            closure,
+        });
+    }
+    out.sort();
+    out.dedup();
+    out
+}
 
 /// What one binding can hold.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -21,6 +74,11 @@ pub struct BindingFacts {
     pub prims: u16,
     /// It can hold ⊤ or any non-class object (literal, builtin, function).
     pub other: bool,
+    /// It holds only these compiled bodies (`bodies_of`); empty otherwise.
+    pub bodies: Vec<BodyRef>,
+    /// It holds exactly one class object and nothing else: that class's id
+    /// (a call of one of its constant statics is a static call, FVA 3.4).
+    pub class_object: Option<u32>,
 }
 
 /// Per module: `(local id, facts)` and `(HIR function id, facts of this)`,
@@ -63,7 +121,34 @@ fn facts_of(g: &Gen, n: u32) -> BindingFacts {
     }
     out.class_ids.sort_unstable();
     out.class_ids.dedup();
+    out.bodies = bodies_of(m, n);
+    out.class_object = class_object_of(m, n);
     out
+}
+
+/// The class id of the one class object node `n` holds when it holds
+/// nothing else (markers beside their values aside).
+fn class_object_of(m: &Model, n: NodeId) -> Option<u32> {
+    let node = &m.nodes[n as usize];
+    if node.prim != 0 {
+        return None;
+    }
+    let mut one = None;
+    for t in node.pts.to_sorted() {
+        if t != TOP && (m.beside_values(t) || m.closed_marker(t)) {
+            continue;
+        }
+        let TokKind::ClassObj(tm) = m.toks[t as usize] else {
+            return None;
+        };
+        let TmplKind::Class { class_id, .. } = m.tmpls[tm as usize].kind else {
+            return None;
+        };
+        if one.replace(class_id).is_some_and(|c| c != class_id) {
+            return None;
+        }
+    }
+    one
 }
 
 pub(crate) fn collect(g: &Gen) -> Vec<ModuleBindings> {

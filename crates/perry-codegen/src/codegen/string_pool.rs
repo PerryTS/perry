@@ -540,31 +540,32 @@ pub(super) fn emit_string_pool(
         );
     }
 
-    // Mark each `__AnonShape_<hash>` class id. `({ x: 1 }).constructor ===
-    // Object` duck-checks (date-fns / drizzle / lodash) resolve through it,
-    // and it is what makes `class_proto_id` answer the ordinary object
-    // prototype an anon shape's instances are born with.
-    {
-        let mut anon_shape_ids: Vec<u32> = Vec::new();
-        for (class_name, class) in classes.iter() {
-            if *class_name != class.name || !class_name.starts_with("__AnonShape_") {
-                continue;
-            }
-            if let Some(cid) = class_ids.get(class_name).copied().filter(|&c| c != 0) {
-                anon_shape_ids.push(cid);
-            }
-        }
-        anon_shape_ids.sort_unstable();
-        anon_shape_ids.dedup();
-        chunker.literals = true;
-        for cid in anon_shape_ids {
+    // Class role descriptors must precede every role-dependent shape birth.
+    let declarations = super::class_declarations::class_declaration_globals(
+        &local_classes,
+        strings,
+        module_prefix,
+        &mut |body| {
             chunker.roll_if_full();
-            let blk = chunker.current_block();
-            blk.call_void(
-                "js_register_anon_shape_class_id",
-                &[(crate::types::I32, &cid.to_string())],
-            );
+            chunker.current_block().fn_info_ref(body)
+        },
+        layouts,
+    );
+    for decl in declarations {
+        for global in decl.globals {
+            chunker.module().add_raw_global(global);
         }
+        chunker.literals = local_classes
+            .iter()
+            .any(|(cid, class)| *cid == decl.cid && class.name.starts_with("__AnonShape_"));
+        chunker.roll_if_full();
+        chunker.current_block().call_void(
+            "js_register_class_declaration",
+            &[
+                (I32, &decl.cid.to_string()),
+                (PTR, &format!("@{}", decl.symbol)),
+            ],
+        );
     }
 
     // Build per-class keys arrays via js_build_class_keys_array,
@@ -1077,27 +1078,6 @@ pub(super) fn emit_string_pool(
             "@{global} = internal global [{words} x i64] [i64 {words}{}]",
             ", i64 0".repeat(words - 1)
         ));
-    }
-    // Each class's instance members: one image constant, registered once.
-    let declarations = super::class_declarations::class_declaration_globals(
-        &local_classes,
-        strings,
-        module_prefix,
-        &mut |body| chunker.current_block().fn_info_ref(body),
-        layouts,
-    );
-    for decl in declarations {
-        for global in decl.globals {
-            chunker.module().add_raw_global(global);
-        }
-        chunker.roll_if_full();
-        chunker.current_block().call_void(
-            "js_register_class_declaration",
-            &[
-                (I32, &decl.cid.to_string()),
-                (PTR, &format!("@{}", decl.symbol)),
-            ],
-        );
     }
     method_triples.sort_unstable();
     let mut method_entries: Vec<StaticMethodEntry> = Vec::new();

@@ -1046,18 +1046,7 @@ pub fn lower_class_decl(
                 // later recognizes the prefix and emits a call to each
                 // such method right after static field init, so they
                 // run once at module startup.
-                let scope_mark = ctx.enter_scope();
-                let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
-                ctx.in_nonarrow_fn = true;
-                // A static block is its own var-scope (OrdinaryFunctionCreate
-                // per ClassStaticBlockDefinitionEvaluation): `lower_block_stmt`
-                // only lowers nested statements without hoisting `var`s to this
-                // boundary, so a `var` declared in one block leaked into the
-                // next block/module scope instead of staying local (test262
-                // static-init-scope-var-close.js).
-                let body = lower_fn_body_block_stmt(ctx, block.body.span, &block.body.stmts)?;
-                ctx.exit_scope(scope_mark);
-                ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
+                let body = lower_static_block_body(ctx, block)?;
 
                 let block_idx = static_methods
                     .iter()

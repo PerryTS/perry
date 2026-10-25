@@ -45,7 +45,6 @@ js_object_layout_for_class_keys	Reenters	no
 js_object_layout_for_class_keys_live	Reenters	no
 js_object_layout_for_class_keys_static	Reenters	no
 js_process_pending_exit_code	Leaf	no
-js_register_anon_shape_class_id	Leaf	no
 js_register_class_constructor	Leaf	no
 js_register_class_string_member_order	Leaf	no
 js_register_function_names_static	Leaf	no
