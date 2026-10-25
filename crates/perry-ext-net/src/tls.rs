@@ -221,7 +221,10 @@ unsafe fn tls_preflight(_port: u16, _servername: &str, _options: f64) -> i32 {
 fn preflight_error(code: i32) -> &'static str {
     match code {
         1 => "ERR_TLS_ALPN_CALLBACK_INVALID_RESULT",
-        2 => "ERR_SSL_TLSV1_ALERT_NO_APPLICATION_PROTOCOL",
+        2 => concat!(
+            "ERR_SSL_TLSV1_ALERT_NO_APPLICATION_PROTOCOL:",
+            "ERR_SSL_TLSV1_ALERT_NO_APPLICATION_PROTOCOL"
+        ),
         3 => "ERR_TLS_SNI_CALLBACK_FAILED",
         _ => "ERR_TLS_HANDSHAKE_FAILED",
     }
