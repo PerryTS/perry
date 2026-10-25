@@ -1727,6 +1727,18 @@ impl Model {
         marker_top_bit(&self.marker_top, t)
     }
 
+    /// An escaped value beside ⊤ is that ⊤ (DECISIONS 42's reason, for a
+    /// value): unknown code holds it, so its fields are ⊤ and sink what they
+    /// get, every function reachable from it runs with ⊤, and its layout is
+    /// escaped; a rule on it at a node that holds ⊤ does nothing the rule on
+    /// ⊤ does not. Left out there, it never rides ⊤ through the unit. A
+    /// marker is decided by `marker_is_top` (its escape may be no sink,
+    /// decision 17).
+    #[inline]
+    pub(crate) fn top_beside(&self, t: Tok) -> bool {
+        self.is_escaped(t) && !self.is_marker(t)
+    }
+
     /// A marker that stands for no value of its own (DECISIONS 74): one of
     /// a closed function's described parameter (decision 17), what it
     /// reaches, or an argument marker all of whose members are such

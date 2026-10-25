@@ -3073,6 +3073,53 @@ fn a_primitive_method_on_a_receiver_beside_top_is_that_top() {
     assert!(lit.escape.is_none(), "{}", pf.dump_text());
 }
 
+/// Pts entries of the largest unit when `n` escaped literals (each stored
+/// into ⊤ and read back beside it) are merged into one value that `n`
+/// arrays hold.
+fn escaped_beside_top_entries(n: usize) -> u64 {
+    let mut src = format!("{JOIN}");
+    for i in 0..n {
+        src.push_str(&format!(
+            "function l{i}(o: any) {{ S.last = {i}; return o.l{i} || (o.l{i} = {{ v: {i} }}); }}\n"
+        ));
+    }
+    src.push_str("export function f(x: any, c: boolean) { S.last = -1; let y: any = l0(x);\n");
+    for i in 1..n {
+        src.push_str(&format!("if (c) y = l{i}(x);\n"));
+    }
+    for i in 0..n {
+        src.push_str(&format!("const z{i} = [y];\n"));
+    }
+    let zs: Vec<String> = (0..n).map(|i| format!("z{i}.length")).collect();
+    src.push_str(&format!("return {}; }}\n", zs.join(" + ")));
+    let user = "import { f } from './t'; console.log(f((globalThis as any).u, true));";
+    let pf = units_of(&[("t", src.as_str()), ("u", user)]);
+    pf.units
+        .iter()
+        .map(|(_, s)| s.pts_entries)
+        .max()
+        .unwrap_or(0)
+}
+
+#[test]
+fn an_escaped_value_beside_top_is_that_top() {
+    // Each `l{i}` literal is stored into ⊤ (it escapes) and read back beside
+    // ⊤; merged into `y`, the `n` literals ride ⊤ into every array that
+    // holds `y`: the square of `n`. Beside ⊤ an escaped value says nothing a
+    // reader can use (its layout is escaped, its fields are ⊤), so it is
+    // left out there and `y` is ⊤ alone.
+    let (e8, e16, e32) = (
+        escaped_beside_top_entries(8),
+        escaped_beside_top_entries(16),
+        escaped_beside_top_entries(32),
+    );
+    let (d1, d2) = (e16 - e8, e32 - e16);
+    assert!(
+        d1 > 0 && d2 < 3 * d1,
+        "entries {e8} {e16} {e32}: quadratic in the escaped values"
+    );
+}
+
 #[test]
 fn a_written_parameter_without_a_summary_is_each_callers_own() {
     // `up` reads `arguments`, so it has no summary: one body for every call,

@@ -1097,9 +1097,13 @@ fn own_descriptor_enumeration_observes_late_accessor_constraints() {
         console.log(target.a.x);
     "#,
     );
-    let site = pf.sites.iter().find(|s| s.key == "x").expect("site");
+    // The getter ran: its `Value` left through the accessor of the unknown
+    // descriptor value, so the template is escaped. (At the `x` site the
+    // escaped `Value` stands beside ⊤, where it is that ⊤ and left out, so
+    // the receiver list is no witness there.)
+    assert!(pf.sites.iter().any(|s| s.key == "x"), "{}", pf.dump_text());
     assert!(
-        site.receivers.iter().any(|r| r.ends_with(":Value")),
+        tmpl(&pf, "Value").escape.as_deref() == Some("accessor of unknown function value"),
         "{}",
         pf.dump_text()
     );
