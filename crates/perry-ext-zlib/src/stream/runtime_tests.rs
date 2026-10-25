@@ -623,7 +623,7 @@ fn eleven_codecs_are_deferred_runtime_transforms_and_release_on_completion() {
         let output = match codec {
             Codec::Gzip => crate::gunzip_bytes(&output).unwrap(),
             Codec::Deflate => crate::inflate_bytes(&output).unwrap(),
-            Codec::DeflateRaw => crate::inflate_raw_bytes(&output).unwrap(),
+            Codec::DeflateRaw => decode_bytes(&output, Codec::InflateRaw).unwrap(),
             Codec::BrotliCompress => brotli_decompress_bytes(&output).unwrap(),
             Codec::ZstdCompress => zstd::stream::decode_all(output.as_slice()).unwrap(),
             _ => output,
