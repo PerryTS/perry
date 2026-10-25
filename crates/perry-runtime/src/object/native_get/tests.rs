@@ -878,3 +878,79 @@ fn a_class_extending_a_native_never_settles() {
     assert_eq!(settled_bits(instance, "missing"), None);
     assert_eq!(settled_bits(instance, "toString"), None);
 }
+
+/// A native registry id in the id band, as `new Headers()` hands one out.
+const RAW_NATIVE_ID: usize = 0x40000;
+
+unsafe extern "C" fn raw_id_property(handle: i64, key: *const u8, len: usize) -> f64 {
+    if handle as usize == RAW_NATIVE_ID && std::slice::from_raw_parts(key, len) == b"length" {
+        42.0
+    } else {
+        f64::from_bits(crate::value::TAG_UNDEFINED)
+    }
+}
+
+/// `js_object_get_field_by_name`'s typed-array probe takes the raw ABI
+/// receiver. A native id must box through the unknown-word constructor (never
+/// the heap-only `JSValue::pointer`, which a contract build rejects) and still
+/// reach the native-handle property dispatch, for a metadata name the probe
+/// reads and for an ordinary miss.
+#[test]
+fn raw_native_id_receiver_reaches_handle_dispatch_past_the_typed_array_probe() {
+    let prev = crate::object::class_handles::swap_handle_property_dispatch_for_test(
+        raw_id_property as *mut (),
+    );
+    let receiver = RAW_NATIVE_ID as *const ObjectHeader;
+    let length = crate::object::js_object_get_field_by_name(receiver, key("length"));
+    let missing = crate::object::js_object_get_field_by_name(receiver, key("missing"));
+    crate::object::class_handles::swap_handle_property_dispatch_for_test(prev);
+    assert_eq!(f64::from_bits(length.bits()), 42.0);
+    assert_eq!(missing.bits(), crate::value::TAG_UNDEFINED);
+}
+
+/// The settled data lane's raw receiver: a native id has no shape, so the lane
+/// declines (`None`) rather than answering a definite miss, and it boxes the id
+/// through the unknown-word constructor.
+#[test]
+fn settled_data_lane_declines_a_raw_native_id_receiver() {
+    let receiver = RAW_NATIVE_ID as *const ObjectHeader;
+    unsafe {
+        assert!(try_data_lookup_by_name(receiver, key("missing")).is_none());
+        assert!(try_settled_get_by_name(receiver, key("length")).is_none());
+    }
+}
+
+static RAW_ID_SET_HITS: AtomicUsize = AtomicUsize::new(0);
+
+unsafe extern "C" fn raw_id_property_set(handle: i64, key: *const u8, len: usize, value: f64) {
+    if handle as usize == RAW_NATIVE_ID
+        && std::slice::from_raw_parts(key, len) == b"missing"
+        && value == 3.0
+    {
+        RAW_ID_SET_HITS.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+/// The polymorphic keyed setter (`receiver[k] ??= v`) gets the receiver word
+/// unclassified. A native id, bare or `HANDLE_TAG`-boxed, is no allocation, so
+/// it must not be read as an array header (unmapped memory); it reaches the
+/// by-name setter's handle-property-set dispatch.
+#[test]
+fn keyed_setter_routes_a_raw_native_id_receiver_to_handle_set_dispatch() {
+    let prev = crate::object::class_handles::swap_handle_property_set_dispatch_for_test(
+        raw_id_property_set as *mut (),
+    );
+    let before = RAW_ID_SET_HITS.load(Ordering::SeqCst);
+    // Both words codegen hands this setter for a handle: the bare id and the
+    // `HANDLE_TAG` value of an `any` binding.
+    let raw = RAW_NATIVE_ID as *mut crate::array::ArrayHeader;
+    let tagged = crate::value::JSValue::handle(RAW_NATIVE_ID).bits() as usize
+        as *mut crate::array::ArrayHeader;
+    let returned_raw = crate::array::js_array_set_string_key(raw, key("missing"), 3.0);
+    let returned_tagged = crate::array::js_array_set_string_key(tagged, key("missing"), 3.0);
+    let hits = RAW_ID_SET_HITS.load(Ordering::SeqCst) - before;
+    crate::object::class_handles::swap_handle_property_set_dispatch_for_test(prev);
+    assert_eq!(returned_raw, raw);
+    assert_eq!(returned_tagged, tagged);
+    assert_eq!(hits, 2);
+}

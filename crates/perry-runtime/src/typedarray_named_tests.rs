@@ -36,10 +36,7 @@ fn own_metadata_withdraws_the_leaf_before_publication() {
         crate::buffer::buffer_define_own_data_prop(b as usize, "length", 91.0);
         assert_eq!(try_get(boxed(b as usize), b"length"), None);
         let key = crate::string::intern_ascii_literal(b"length");
-        assert_eq!(
-            get(f64::from_bits(boxed(b as usize).bits()), key),
-            Some(91.0)
-        );
+        assert_eq!(get(boxed(b as usize).bits(), key), Some(91.0));
     }
 }
 
