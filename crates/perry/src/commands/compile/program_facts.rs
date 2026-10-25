@@ -332,12 +332,14 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
         })
     };
     // FVA: the bodies a binding or a field holds, when every one is a plain
-    // body of this module. With interpreted code able to run there is no
-    // claim (the call would need a guard, and a proven call has none).
+    // body of this module. Interpreted code needs no guard here (decision
+    // 150): a value it can hand a binding is TOP there, and then the binding
+    // has no bodies. (A field is read through its proof, which declines a
+    // guarded one; statics and the method tower depend on objects
+    // interpreted code may write, and keep `interp`.)
     let interp = out.interp_guard;
     let bodies = |bs: &[perry_wpfacts::BodyRef]| -> Vec<FactsBody> {
-        if interp
-            || bs.is_empty()
+        if bs.is_empty()
             || !bs.iter().all(|b| {
                 b.plain && pf.module_paths.get(b.module as usize).map(String::as_str) == Some(path)
             })
