@@ -2305,10 +2305,31 @@ pub(crate) fn compute_in<'a>(
     // is its owner's contract, a join adds nothing): the cells grow
     // monotonically to the fixpoint. Undescribed (`Gen::cell_bad`) or over
     // the bound, unknown.
+    // DECISIONS 168: a program object's named field holds what its any-key
+    // field holds (`Model::field`), and that is cell `<name>:*`; every
+    // reader's named field holds that cell again through its own any-key
+    // field. A named cell says only what was stored under its key: it does
+    // not repeat the any-key cell once per key the unit names
+    // (`Gen::program_cells`; AWFY: 257 keys of `require.cache`, each the 17
+    // module records).
+    let program_any: Vec<(String, model::NodeId)> = g
+        .m
+        .program_objs
+        .iter()
+        .filter_map(|&(name, _)| {
+            let key = format!("{name}:*");
+            let &(_, n) = g.cells.iter().find(|(k, _)| *k == key)?;
+            Some((format!("{name}:"), n))
+        })
+        .collect();
     let mut cells_out: Vec<(String, units::ValueContract)> = g
         .cells
         .iter()
         .filter_map(|(k, n)| {
+            let any = program_any
+                .iter()
+                .find(|(pre, a)| *a != *n && k.starts_with(pre.as_str()))
+                .map(|&(_, a)| &g.m.nodes[a as usize]);
             let node = &g.m.nodes[*n as usize];
             if g.m.aborted || g.cell_bad.contains(n) {
                 let vc = units::ValueContract {
@@ -2325,8 +2346,9 @@ pub(crate) fn compute_in<'a>(
                 .to_sorted()
                 .into_iter()
                 .filter(|t| !g.cell_flow_toks.contains(t))
+                .filter(|&t| !any.is_some_and(|a| a.pts.contains_tok(t)))
                 .collect();
-            let prim = node.prim;
+            let prim = node.prim & !any.map_or(0, |a| a.prim);
             if toks.is_empty() && prim == 0 {
                 return None;
             }

@@ -200,6 +200,38 @@ fn a_class_bound_through_its_self_cell_is_a_contract() {
 /// `exports` reaches the factory's other units as a nested contract (a
 /// builtin object there left `exports` unknown: 0 sites per unit). The
 /// site offset is the same `mouse.link` in the regenerated wrap.
+/// DECISIONS 168: every module stores its record into `require.cache`
+/// under a computed key, so each named field of it holds the records
+/// (`Model::field`). A unit publishes them once, as cell
+/// `require.cache:*`; a named cell does not repeat them for every key the
+/// unit names, and the per-unit facts are the whole program's.
+#[test]
+fn a_program_object_named_cell_does_not_repeat_its_any_key_cell() {
+    let hirs = hirs(&T6);
+    let list: Vec<(String, &perry_hir::Module)> =
+        hirs.iter().map(|(p, h)| (p.clone(), h)).collect();
+    let cfg = FactsConfig {
+        explain: true,
+        unit_io: true,
+        ..Default::default()
+    };
+    let u = crate::compute_units(&list, &cfg);
+    let cells: Vec<&str> = u
+        .unit_io
+        .iter()
+        .filter_map(|l| l.split(' ').nth(3).filter(|_| l.starts_with("# uout ")))
+        .filter(|n| n.starts_with("cell:require.cache:"))
+        .collect();
+    assert!(
+        cells.iter().any(|n| *n == "cell:require.cache:*"),
+        "{cells:?}"
+    );
+    assert!(
+        cells.iter().all(|n| *n == "cell:require.cache:*"),
+        "named cells repeat the any-key cell: {cells:?}"
+    );
+}
+
 #[test]
 fn richards_per_unit_proves_what_the_whole_program_proves() {
     let (w, u) = both(&T3);

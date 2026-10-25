@@ -1866,6 +1866,9 @@ fn unit_io(
         for (d, k, kinds) in &u.stores_out {
             o.push((format!("store:{d}.{k}"), digest(kinds)));
         }
+        for (k, c) in &u.cells_out {
+            o.push((format!("cell:{k}"), digest(c)));
+        }
         for d in &u.reports {
             o.push((format!("report:{d}"), 0));
         }
