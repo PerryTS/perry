@@ -291,8 +291,11 @@ pub struct Class {
     pub specialized_from: Option<String>,
 }
 
-/// Name prefix of the classes [`Class::is_declared_keys_record`] admits.
+/// Name prefix of the classes [`Class::is_declared_keys_record`] admits:
+/// a null prototype (`require.cache`) ...
 pub const DECLARED_KEYS_CLASS_PREFIX: &str = "__PerryDeclaredKeys_";
+/// ... or `%Object.prototype%` (a module's `exports`).
+pub const DECLARED_KEYS_OBJECT_CLASS_PREFIX: &str = "__PerryDeclaredKeysObject_";
 
 impl Class {
     /// The class `__perry_declared_keys(k1, k2, ...)` births: an object with
@@ -300,7 +303,8 @@ impl Class {
     /// until stored (`ClassFieldOrigin::Declared`). It has no constructor and
     /// no members, so a birth runs no code.
     pub fn is_declared_keys_record(&self) -> bool {
-        self.name.starts_with(DECLARED_KEYS_CLASS_PREFIX)
+        (self.name.starts_with(DECLARED_KEYS_CLASS_PREFIX)
+            || self.name.starts_with(DECLARED_KEYS_OBJECT_CLASS_PREFIX))
             && self.constructor.is_none()
             && self.extends.is_none()
             && self.extends_name.is_none()
@@ -320,6 +324,13 @@ impl Class {
                     && !f.is_private
                     && f.decorators.is_empty()
             })
+    }
+
+    /// A declared-keys record born with a null prototype (otherwise
+    /// `%Object.prototype%`).
+    pub fn declared_keys_null_proto(&self) -> bool {
+        self.is_declared_keys_record()
+            && !self.name.starts_with(DECLARED_KEYS_OBJECT_CLASS_PREFIX)
     }
 
     /// The shape-only class synthesized for a closed object literal. Check the

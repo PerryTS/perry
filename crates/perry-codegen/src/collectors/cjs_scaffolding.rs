@@ -500,7 +500,12 @@ fn record_binding(stmt: &Stmt) -> Option<u32> {
     else {
         return None;
     };
-    if !inner.starts_with(ANON_SHAPE_PREFIX) || !inner_args.is_empty() {
+    // `exports` is `{}` or, for a module that names its exports, the
+    // declared-keys object born with them (`__perry_declared_keys_object`).
+    if !(inner.starts_with(ANON_SHAPE_PREFIX)
+        || inner.starts_with(perry_hir::DECLARED_KEYS_OBJECT_CLASS_PREFIX))
+        || !inner_args.is_empty()
+    {
         return None;
     }
     // The seven fixed fields the wrapper folds into the record literal, and the

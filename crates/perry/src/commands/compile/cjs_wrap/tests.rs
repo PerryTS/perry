@@ -259,7 +259,7 @@ fn wrap_module_and_exports_are_reassignable_vars() {
     // The record is one literal whose first key is the `exports` literal,
     // so assert the `const` binding and that key.
     assert!(
-        wrapped.contains("const __cjs_module = {\n        exports: {},"),
+        wrapped.contains("const __cjs_module = {\n        exports: "),
         "expected stable __cjs_module, got:\n{}",
         wrapped
     );
@@ -979,7 +979,7 @@ fn wrap_flat_emits_class_module_exports_that_closes_over_top_level_const() {
         wrapped
     );
     // The CommonJS runtime shims still run at module scope.
-    assert!(wrapped.contains("const __cjs_module = {\n        exports: {},"));
+    assert!(wrapped.contains("const __cjs_module = {\n        exports: "));
     assert!(wrapped.contains("const _cjs = __cjs_module.exports;"));
     let ast = perry_parser::parse_typescript(&wrapped, "stack-utils.js")
         .expect("flat class wrap must parse");

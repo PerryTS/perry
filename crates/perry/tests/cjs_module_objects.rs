@@ -83,3 +83,42 @@ fn commonjs_cache_records_and_main_keep_node_semantics() {
          builtin function\n"
     );
 }
+
+const ORD: &str = "exports.b = 2;\nexports.a = 1;\nexports.c = 3;\n";
+const COMP: &str = "const k = [\"x\", \"y\"][Number(process.argv.length > 99)];\nexports[k] = \"computed\";\nexports.y = \"named\";\nexports.x = exports.x + \"!\";\n";
+const ESB: &str = "var __defProp = Object.defineProperty;\nvar __export = (target, all) => { for (var name in all) __defProp(target, name, { get: all[name], enumerable: true }); };\nlet val = 1;\n__export(exports, { val: () => val, bump: () => bump });\nfunction bump() { val++; }\nexports.plain = \"p\";\n";
+const REPL: &str = "exports.a = 1;\nmodule.exports = { other: 2 };\n";
+const MAIN: &str = r#"
+const ord = require("./ord.js"), comp = require("./comp.js"), esb = require("./esb.js"), repl = require("./repl.js");
+console.log("proto", Object.getPrototypeOf(ord) === Object.prototype, ord.constructor === Object, typeof ord.hasOwnProperty);
+console.log("order", Object.keys(ord).join(","), JSON.stringify(ord));
+console.log("comp", JSON.stringify(comp), Object.keys(comp).join(","));
+console.log("esb", esb.val, (esb.bump(), esb.val), Object.keys(esb).join(","), typeof Object.getOwnPropertyDescriptor(esb, "val").get);
+console.log("repl", JSON.stringify(repl), "a" in repl);
+console.log("in", "a" in ord, "zz" in ord, ord.zz);
+exports.late = 1;
+console.log("main", Object.keys(module.exports).join(","));
+"#;
+
+/// Step 2: `exports` is born with the module's export names as declared
+/// keys. Node's prototype, key order, computed stores, esbuild accessors and
+/// replacement all hold.
+#[test]
+fn born_exports_objects_keep_node_semantics() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let stdout = compile_and_run(
+        dir.path(),
+        &[("ord.js", ORD), ("comp.js", COMP), ("esb.js", ESB), ("repl.js", REPL), ("main.js", MAIN)],
+        "main.js",
+    );
+    assert_eq!(
+        stdout,
+        "proto true true function\n\
+         order b,a,c {\"b\":2,\"a\":1,\"c\":3}\n\
+         comp {\"x\":\"computed!\",\"y\":\"named\"} x,y\n\
+         esb 1 2 val,bump,plain function\n\
+         repl {\"other\":2} false\n\
+         in true false undefined\n\
+         main late\n"
+    );
+}
