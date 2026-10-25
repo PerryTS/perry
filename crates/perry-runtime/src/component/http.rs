@@ -38,6 +38,7 @@ struct Operation {
     interface: String,
     invoked: bool,
     failed: bool,
+    delegated: bool,
 }
 
 fn server_pointer(server: f64) -> *mut c_void {
@@ -177,6 +178,7 @@ pub extern "C" fn js_component_http_handle(server: f64, component: f64, interfac
                 interface: std::mem::take(&mut interface),
                 invoked: false,
                 failed: false,
+                delegated: false,
             },
             0,
         )
@@ -200,3 +202,9 @@ static KEEP_CLOSE: extern "C" fn(f64) -> f64 = js_component_http_server_close;
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
 static KEEP_HANDLE: extern "C" fn(f64, f64, f64) -> f64 = js_component_http_handle;
+
+/// The async driver owns this traced HTTP cell after handoff. Native accept
+/// state is released before its shared public Promise is observably settled.
+pub(super) fn finish_delegation(owner: f64) {
+    payload::close(owner, &OPERATION);
+}

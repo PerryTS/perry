@@ -109,7 +109,8 @@ pub(super) fn import(
 
 type CallFuture = Pin<Box<dyn Future<Output = (Host, ReplyResult)>>>;
 pub(super) struct PendingCall {
-    future: CallFuture,
+    pub(super) future: CallFuture,
+    pub(super) http: bool,
 }
 struct Notify(WakeCallback, u64);
 impl Wake for Notify {
@@ -120,7 +121,12 @@ impl Wake for Notify {
         unsafe { (self.0)(self.1) }
     }
 }
-fn poll_call(bridge: &Bridge, wake: WakeCallback, agent: u64, out: *mut Buffer) -> Result<i32> {
+pub(super) fn poll_call(
+    bridge: &Bridge,
+    wake: WakeCallback,
+    agent: u64,
+    out: *mut Buffer,
+) -> Result<i32> {
     let waker = Waker::from(Arc::new(Notify(wake, agent)));
     let mut cx = TaskContext::from_waker(&waker);
     let mut pending =
@@ -146,6 +152,8 @@ fn poll_call(bridge: &Bridge, wake: WakeCallback, agent: u64, out: *mut Buffer) 
             );
             Ok(if retired && status == ERROR {
                 RELEASED_ERROR
+            } else if pending.http && status == ERROR {
+                perry_abi::component_host::HTTP_FAILURE
             } else {
                 status
             })
@@ -196,6 +204,7 @@ pub unsafe extern "C" fn perry_component_host_call_async_start(
             let current = bridge.context.clone();
             let cleanup = bridge.cleanup_context.clone();
             *bridge.pending.get() = Some(PendingCall {
+                http: false,
                 future: Box::pin(async move {
                     let result = host
                         .call_async_with_retirement(&interface, &function, &args, move || {

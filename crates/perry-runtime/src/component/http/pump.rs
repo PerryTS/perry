@@ -134,6 +134,7 @@ fn step(owner: f64) -> bool {
         b"promise",
     ));
     let mut output = Vec::new();
+    let mut interface = String::new();
     let result = crate::exception::catch_js_throw(|| {
         if !operation(owner.get_nanbox_f64()).invoked {
             let component = payload::state_get(owner.get_nanbox_f64(), &OPERATION, b"component");
@@ -156,6 +157,21 @@ fn step(owner: f64) -> bool {
             HTTP_PENDING => false,
             HTTP_READY if !operation(owner.get_nanbox_f64()).invoked => {
                 operation(owner.get_nanbox_f64()).invoked = true;
+                if operation(owner.get_nanbox_f64()).interface == "wasi:http/handler@0.3.0" {
+                    interface = operation(owner.get_nanbox_f64()).interface.clone();
+                    let pointer = operation(owner.get_nanbox_f64()).handle.pointer;
+                    let component =
+                        payload::state_get(owner.get_nanbox_f64(), &OPERATION, b"component");
+                    super::super::asynchronous::submit_http(
+                        component,
+                        &interface,
+                        owner.get_nanbox_f64(),
+                        pointer,
+                        promise.get_nanbox_f64(),
+                    );
+                    operation(owner.get_nanbox_f64()).delegated = true;
+                    return true;
+                }
                 let result = unsafe {
                     crate::async_hooks::try_run_promise_scope(
                         JSValue::from_bits(promise.get_nanbox_f64().to_bits())
@@ -184,7 +200,12 @@ fn step(owner: f64) -> bool {
             }
         }
     });
-    drop(output);
+    drop((output, interface));
+    // The async call driver now owns the public Promise and a traced edge to
+    // this cell. Remove only our queue pin; it will close the native accept.
+    if operation(owner.get_nanbox_f64()).delegated {
+        return true;
+    }
     let done = match result {
         Ok(done) => done,
         Err(error) => {

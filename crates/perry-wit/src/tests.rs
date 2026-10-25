@@ -431,3 +431,21 @@ fn async_calling_conventions_survive_manifest_round_trips_and_legacy_defaults() 
         .flat_map(|i| &i.functions)
         .all(|f| !f.async_));
 }
+
+#[test]
+fn p3_http_host_binding_keeps_exact_handler_version_and_async_exports() {
+    for version in ["0.3.0", "0.3.1"] {
+        let world=parse(&format!("package wasi:http@{version}; interface handler {{ handle: async func(); }} world proxy {{ export handler; }}"), None).unwrap();
+        let host = typescript(&world);
+        assert_eq!(
+            host.contains("handleHttp(server: ComponentHttpServer): Promise<void>"),
+            version == "0.3.0"
+        );
+        assert!(!typescript_guest(&world).contains("handleComponentHttpRequest"));
+        if version == "0.3.0" {
+            assert!(host.contains(
+                "handleComponentHttpRequest(server, handle, \"wasi:http/handler@0.3.0\")"
+            ));
+        }
+    }
+}

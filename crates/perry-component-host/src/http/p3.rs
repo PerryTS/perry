@@ -4,7 +4,10 @@ use crate::{
     Host, StoreData,
 };
 use anyhow::{ensure, Context, Result};
-use futures_util::FutureExt;
+use futures_util::{
+    future::{select, Either},
+    FutureExt,
+};
 use perry_wasi::{
     http::{
         p2::{WasiHttp, WasiHttpCtxView},
@@ -12,6 +15,7 @@ use perry_wasi::{
     },
     p3::http::{bindings::http::types::ErrorCode, Request, Response},
 };
+use std::cell::RefCell;
 use wasmtime::component::{Accessor, Resource, TypedFunc};
 
 #[cfg(test)]
@@ -33,8 +37,21 @@ impl Host {
     pub async fn handle_http_async(
         &mut self,
         interface: &str,
+        request: server::Request,
+        completion: server::Completion,
+    ) -> Result<std::result::Result<(), Error>> {
+        self.handle_http_async_with_retirement(interface, request, completion, || {})
+            .await
+    }
+
+    /// The C bridge installs a fresh cleanup frame on every poll. Load its
+    /// current token only when retiring, never retain a poll's borrowed frame.
+    pub(crate) async fn handle_http_async_with_retirement(
+        &mut self,
+        interface: &str,
         mut request: server::Request,
         completion: server::Completion,
+        before_retire: impl FnOnce(),
     ) -> Result<std::result::Result<(), Error>> {
         let preflight = (|| -> Result<Handler> {
             let live = self.live.as_mut().context("component is disposed")?;
@@ -73,16 +90,16 @@ impl Host {
         let mut invocation = Invocation {
             live: self.live.take(),
             host: self,
-            before_retire: None,
+            before_retire: Some(Box::new(before_retire)),
         };
         let completion = completion.finish().boxed().shared();
         let finished = completion.clone();
-        let mut guest_error = None;
+        let guest_error = RefCell::new(None);
         let outcome = {
             let live = invocation.live.as_mut().unwrap();
             live.store.set_fuel(live.fuel)?;
             live.store.set_epoch_deadline(1);
-            dispatch::drive(
+            let running = dispatch::drive(
                 dispatcher.as_ref(),
                 live.store.run_concurrent(async |accessor| {
                     let http: Accessor<StoreData, WasiHttp> = accessor.with_getter(|state| {
@@ -109,7 +126,7 @@ impl Host {
                         }),
                         Err(error) => {
                             let error: Error = error.into();
-                            guest_error = Some(error.clone());
+                            *guest_error.borrow_mut() = Some(error.clone());
                             Ok(Err(error))
                         }
                     };
@@ -118,7 +135,8 @@ impl Host {
                         return Ok(Err(Error::ConnectionTerminated));
                     }
                     let result = finished.clone().await;
-                    if result.is_ok() || guest_error.as_ref() == result.as_ref().err() {
+                    let expected_error = guest_error.borrow().as_ref() == result.as_ref().err();
+                    if result.is_ok() || expected_error {
                         // A handler may publish its response and keep a task
                         // alive to observe transmission completion. Let that
                         // task exit before returning its Store to the host.
@@ -126,14 +144,28 @@ impl Host {
                     }
                     wasmtime::error::Ok(result)
                 }),
-            )
-            .await
+            );
+            let completed = finished.clone();
+            futures_util::pin_mut!(running, completed);
+            match select(running, completed).await {
+                Either::Left((result, _)) => result,
+                Either::Right((result, pending)) => {
+                    let expected_error = guest_error.borrow().as_ref() == result.as_ref().err();
+                    if result.is_ok() || expected_error {
+                        pending.await
+                    } else {
+                        // The pinned driver drops at the end of this block,
+                        // before Invocation retires the suspended Store.
+                        Ok(Ok(result))
+                    }
+                }
+            }
             .map_err(anyhow::Error::from)
             .and_then(|result| result.map_err(anyhow::Error::from))
             .context("P3 HTTP handler trapped")
         };
         if matches!(&outcome, Ok(Ok(())))
-            || matches!((&outcome, &guest_error), (Ok(Err(error)), Some(rejection)) if error == rejection)
+            || matches!((&outcome, &*guest_error.borrow()), (Ok(Err(error)), Some(rejection)) if error == rejection)
         {
             invocation.restore();
         } else {

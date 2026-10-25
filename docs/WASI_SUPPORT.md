@@ -24,7 +24,7 @@ WASI versions here mean 0.1 (Preview 1), 0.2 (Preview 2), and 0.3
 | WASI 0.2 output | Command components on Linux/macOS/Windows; synchronous libraries, resources, deferred cleanup and HTTP guests qualified on Linux | Wider library/HTTP platform qualification and final combined packages |
 | WASI 0.2 component hosting | Optional native `perry/component` host with typed WIT values, resources, commands, Turnloop providers and HTTP client/server; current Turnloop integration qualified on Linux | Blocking P2 I/O cancellation, current provider qualification on macOS/Windows, released dependencies and final packages |
 | WASI 0.3 output | No supported async guest adapter | Rooted persistent guest frames, future/stream/error-context bindings and cross-language async composition |
-| WASI 0.3 hosting | Linux-qualified canonical async functions with Promise bindings, Turnloop 0.3.0 providers, one-shot commands and typed Rust HTTP handlers | Generic future/stream/error-context bindings, TypeScript HTTP bridge, concurrent calls per instance, other platforms and final packages |
+| WASI 0.3 hosting | Linux-qualified canonical async functions with Promise bindings, Turnloop 0.3.0 providers, one-shot commands and TypeScript/Rust HTTP handlers | Generic future/stream/error-context bindings, concurrent calls per instance, other platforms and final packages |
 
 Perry's existing `perry/plugin` API loads native shared libraries; it does
 not load Wasm components. A command component with a `wasi:cli/run` export

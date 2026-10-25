@@ -1,5 +1,6 @@
 //! The native transport has separate real-socket tests. This controlled engine
 //! makes moving GC, pump reentry and simultaneous primary/cleanup errors exact.
+mod p3;
 use super::*;
 use perry_abi::component_host::{ComponentHostOps, ERROR};
 use std::sync::{

@@ -2,7 +2,7 @@
 //! Byte buffers are freed by the allocator that produced them. Neither WIT
 //! values nor callbacks expose Perry heap addresses to component guests.
 // Combined command, host-resource, HTTP reactor and deferred-cleanup operations.
-pub const ABI_VERSION: u32 = 7;
+pub const ABI_VERSION: u32 = 8;
 
 pub const OK: i32 = 0;
 pub const ERROR: i32 = 1;
@@ -21,6 +21,9 @@ pub const HTTP_PENDING: i32 = 4;
 pub const HTTP_READY: i32 = 5;
 /// A component call/import is suspended; wakeups only notify the owning agent.
 pub const ASYNC_PENDING: i32 = 6;
+/// Async HTTP handling completed with an HTTP/validation error while keeping
+/// its Store live. No call remains pending; the embedding must not cancel it.
+pub const HTTP_FAILURE: i32 = 7;
 /// A process-lifetime native wake function. Context is an agent identifier,
 /// never a Perry heap address. May be called on the native I/O driver thread.
 pub type WakeCallback = unsafe extern "C" fn(agent: u64);
@@ -82,6 +85,7 @@ macro_rules! component_host_entry_points {
         perry_component_http_accept(server: *mut core::ffi::c_void, output: *mut $crate::component_host::Buffer) -> *mut core::ffi::c_void;
         perry_component_http_poll(operation: *mut core::ffi::c_void, wake: Option<$crate::component_host::WakeCallback>, agent: u64, output: *mut $crate::component_host::Buffer) -> i32;
         perry_component_http_handle(handle: *mut core::ffi::c_void, operation: *mut core::ffi::c_void, interface: *const u8, interface_len: usize, context: u64, cleanup_context: u64, output: *mut $crate::component_host::Buffer) -> i32;
+        perry_component_http_handle_async_start(handle: *mut core::ffi::c_void, operation: *mut core::ffi::c_void, interface: *const u8, interface_len: usize, context: u64, cleanup_context: u64, wake: Option<$crate::component_host::WakeCallback>, agent: u64, output: *mut $crate::component_host::Buffer) -> i32;
         perry_component_http_drop(operation: *mut core::ffi::c_void) -> ();
         perry_component_host_interrupt(handle: *mut core::ffi::c_void) -> ();
         perry_component_host_drop(handle: *mut core::ffi::c_void) -> ();

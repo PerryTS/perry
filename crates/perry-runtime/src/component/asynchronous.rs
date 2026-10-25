@@ -4,7 +4,7 @@ pub(super) mod imports;
 mod tests;
 use super::*;
 use crate::native_payload::{self as payload, NativePayloadFamily, OwnerLink};
-use perry_abi::component_host::{ASYNC_PENDING, OK, RELEASED_ERROR};
+use perry_abi::component_host::{ASYNC_PENDING, HTTP_FAILURE, OK, RELEASED_ERROR};
 use std::cell::{Cell, RefCell};
 static OPERATION: NativePayloadFamily = NativePayloadFamily {
     class_id: crate::native_class_ids::COMPONENT_CALL_OPERATION,
@@ -18,6 +18,7 @@ struct Operation {
     interface: String,
     function: String,
     args: Vec<u8>,
+    http_request: *mut core::ffi::c_void,
     started: bool,
     failed: bool,
 }
@@ -83,9 +84,50 @@ extern "C" fn has_active() -> i32 {
     i32::from(PUMPING.with(Cell::get) || PENDING.with(|q| !q.borrow().is_empty()))
 }
 pub(super) fn submit(component: f64, interface: &str, function: &str, args: f64) -> f64 {
+    submit_kind(
+        component,
+        interface,
+        function,
+        args,
+        undefined(),
+        std::ptr::null_mut(),
+        undefined(),
+    )
+}
+/// The traced HTTP owner retains this native accept handle until the call
+/// settles. The child contains no borrowed JS pointer or callback frame.
+pub(super) fn submit_http(
+    component: f64,
+    interface: &str,
+    owner: f64,
+    request: *mut core::ffi::c_void,
+    promise: f64,
+) -> f64 {
+    assert!(!request.is_null());
+    submit_kind(
+        component,
+        interface,
+        "handle",
+        undefined(),
+        owner,
+        request,
+        promise,
+    )
+}
+fn submit_kind(
+    component: f64,
+    interface: &str,
+    function: &str,
+    args: f64,
+    http_owner: f64,
+    http_request: *mut core::ffi::c_void,
+    completion: f64,
+) -> f64 {
     let scope = RuntimeHandleScope::new();
     let component = scope.root_nanbox_f64(component);
     let args = scope.root_nanbox_f64(args);
+    let http_owner = scope.root_nanbox_f64(http_owner);
+    let completion = scope.root_nanbox_f64(completion);
     let owner = scope.root_nanbox_f64(undefined());
     let promise = scope.root_raw_mut_ptr::<crate::promise::Promise>(std::ptr::null_mut());
     let retained = scope.root_nanbox_f64(undefined());
@@ -94,21 +136,34 @@ pub(super) fn submit(component: f64, interface: &str, function: &str, args: f64)
         retained.set_nanbox_f64(crate::value::js_nanbox_pointer(
             crate::array::js_array_alloc(0) as i64,
         ));
-        encoded = serde_json::to_vec(&value::encode_for_retained(
-            args.get_nanbox_f64(),
-            component.get_nanbox_f64(),
-            retained.get_nanbox_f64(),
-        ))
-        .unwrap();
-        let captured = scope.root_raw_mut_ptr(crate::async_context::alloc_snapshot_holder(
-            crate::async_context::capture_context(),
-        ));
-        promise.set_raw_mut_ptr(crate::promise::js_promise_new());
-        crate::promise::set_promise_context_snapshot(promise.get_raw_mut_ptr(), unsafe {
-            (*captured.get_raw_mut_ptr::<crate::async_context::AsyncSnapshotHolder>())
-                .snapshot
-                .clone()
-        });
+        encoded = if http_request.is_null() {
+            serde_json::to_vec(&value::encode_for_retained(
+                args.get_nanbox_f64(),
+                component.get_nanbox_f64(),
+                retained.get_nanbox_f64(),
+            ))
+            .unwrap()
+        } else {
+            b"[]".to_vec()
+        };
+        if http_request.is_null() {
+            let captured = scope.root_raw_mut_ptr(crate::async_context::alloc_snapshot_holder(
+                crate::async_context::capture_context(),
+            ));
+            promise.set_raw_mut_ptr(crate::promise::js_promise_new());
+            crate::promise::set_promise_context_snapshot(promise.get_raw_mut_ptr(), unsafe {
+                (*captured.get_raw_mut_ptr::<crate::async_context::AsyncSnapshotHolder>())
+                    .snapshot
+                    .clone()
+            });
+        } else {
+            // HTTP's existing public Promise already owns its ALS snapshot.
+            promise.set_raw_mut_ptr(
+                JSValue::from_bits(completion.get_nanbox_f64().to_bits())
+                    .as_pointer::<crate::promise::Promise>()
+                    .cast_mut(),
+            );
+        }
         owner.set_nanbox_f64(payload::alloc_closed(&OPERATION, &[]));
         payload::state_set(
             owner.get_nanbox_f64(),
@@ -130,6 +185,14 @@ pub(super) fn submit(component: f64, interface: &str, function: &str, args: f64)
                 promise.get_raw_mut_ptr::<crate::promise::Promise>() as i64
             ),
         );
+        if !http_request.is_null() {
+            payload::state_set(
+                owner.get_nanbox_f64(),
+                &OPERATION,
+                b"http-owner",
+                http_owner.get_nanbox_f64(),
+            );
+        }
         let ctx = context::get(component.get_nanbox_f64());
         if unsafe { (*ctx).host.is_null() || !(*ctx).alive } {
             fail("Component is not initialized or has been disposed");
@@ -149,6 +212,7 @@ pub(super) fn submit(component: f64, interface: &str, function: &str, args: f64)
                 interface: interface.to_owned(),
                 function: function.to_owned(),
                 args: std::mem::take(&mut encoded),
+                http_request,
                 started: false,
                 failed: false,
             },
@@ -217,20 +281,34 @@ fn step(owner: f64) -> bool {
                     status = if !native(owner.get_nanbox_f64()).started {
                         native(owner.get_nanbox_f64()).started = true;
                         let op = native(owner.get_nanbox_f64());
-                        (host::ops().perry_component_host_call_async_start)(
-                            (*ctx).host,
-                            op.interface.as_ptr(),
-                            op.interface.len(),
-                            op.function.as_ptr(),
-                            op.function.len(),
-                            op.args.as_ptr(),
-                            op.args.len(),
-                            primary.token(),
-                            cleanup.token(),
-                            Some(wake),
-                            crate::agent::current_agent(),
-                            &mut buffer,
-                        )
+                        if op.http_request.is_null() {
+                            (host::ops().perry_component_host_call_async_start)(
+                                (*ctx).host,
+                                op.interface.as_ptr(),
+                                op.interface.len(),
+                                op.function.as_ptr(),
+                                op.function.len(),
+                                op.args.as_ptr(),
+                                op.args.len(),
+                                primary.token(),
+                                cleanup.token(),
+                                Some(wake),
+                                crate::agent::current_agent(),
+                                &mut buffer,
+                            )
+                        } else {
+                            (host::ops().perry_component_http_handle_async_start)(
+                                (*ctx).host,
+                                op.http_request,
+                                op.interface.as_ptr(),
+                                op.interface.len(),
+                                primary.token(),
+                                cleanup.token(),
+                                Some(wake),
+                                crate::agent::current_agent(),
+                                &mut buffer,
+                            )
+                        }
                     } else {
                         (host::ops().perry_component_host_call_async_poll)(
                             (*ctx).host,
@@ -288,6 +366,7 @@ fn step(owner: f64) -> bool {
         remember(owner.get_nanbox_f64(), error);
     }
     if native(owner.get_nanbox_f64()).failed
+        && status != HTTP_FAILURE
         && (status == ASYNC_PENDING || outcome.is_err())
         && native(owner.get_nanbox_f64()).started
         && unsafe { (*context::get(component.get_nanbox_f64())).alive }
@@ -328,6 +407,7 @@ fn step(owner: f64) -> bool {
         b"error",
     ));
     unsafe { (*context::get(component.get_nanbox_f64())).async_active = false };
+    finish_http(owner.get_nanbox_f64());
     payload::close(owner.get_nanbox_f64(), &OPERATION);
     let settled = Cell::new(false);
     let settled_result = unsafe {
@@ -364,7 +444,16 @@ fn step(owner: f64) -> bool {
             },
         );
     }
+    unsafe { wake(crate::agent::current_agent()) };
     true
+}
+fn finish_http(owner: f64) {
+    let scope = RuntimeHandleScope::new();
+    let owner = scope.root_nanbox_f64(owner);
+    let http = payload::state_get(owner.get_nanbox_f64(), &OPERATION, b"http-owner");
+    if JSValue::from_bits(http.to_bits()).is_pointer() {
+        super::http::finish_delegation(http);
+    }
 }
 extern "C" fn pump() -> i32 {
     if PUMPING.with(|v| v.replace(true)) {
@@ -390,6 +479,7 @@ extern "C" fn pump() -> i32 {
                     if let Some(owner) = unsafe { payload::link_event_owner(link) } {
                         let component = payload::state_get(owner, &OPERATION, b"component");
                         unsafe { (*context::get(component)).async_active = false };
+                        finish_http(owner);
                         payload::close(owner, &OPERATION);
                     }
                 }

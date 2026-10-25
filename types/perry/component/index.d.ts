@@ -52,17 +52,19 @@ export interface ComponentHttpServerOptions {
 /** Native-only HTTP/1.1 listener. Each accepted connection serves one request.
  * Creating a listener does not grant a component outbound network access. */
 export function createComponentHttpServer(options: ComponentHttpServerOptions): ComponentHttpServer;
-/** Accept one request and invoke the named wasi:http/incoming-handler export.
+/** Accept one request and invoke the selected P2 incoming-handler or P3 0.3.0 handler.
  * Prefer generated Component.handleHttp(server), which supplies its WIT version.
  * Resolves after the response transport completes; traps, cancellation and
  * transport errors reject. Bodies stream through bounded native buffers.
  * Pending work keeps the event loop alive. The P2 guest handler executes
- * synchronously on the owning JS thread; fuel does not bound host I/O waits. */
+ * synchronously on the owning JS thread. P3 suspends canonical tasks and async
+ * imports without blocking that thread. Closing the listener or disposing the
+ * component cancels pending P3 handling. Fuel does not bound host I/O waits. */
 export function handleComponentHttpRequest(server: ComponentHttpServer, handle: ComponentHandle, interfaceName: string): Promise<void>;
 /** Idempotently stop the listener and cancel pending accepts and exchanges. */
 export function closeComponentHttpServer(server: ComponentHttpServer): void;
 
-/** Execute a WASI P2 command once in an isolated native store, then release it.
+/** Execute a WASI P2 or 0.3.0 command once in an isolated native store, then release it.
  * Returns 0/1 for wasi:cli/run's ok/err and preserves explicit WASI exit codes.
  * Guest exit never terminates Perry. Invalid components, traps and exhausted
  * limits throw ERR_COMPONENT. No WIT bindings or application imports are needed.

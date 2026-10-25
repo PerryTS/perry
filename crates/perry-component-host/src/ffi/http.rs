@@ -289,3 +289,87 @@ pub unsafe extern "C" fn perry_component_http_drop(op: *mut c_void) {
         drop(operation);
     }
 }
+
+/// Transfer one ready P3 request to the component's async call driver. Resume
+/// with host_call_async_poll and fresh primary/cleanup callback frames. The
+/// accept operation becomes consumed; its handle remains owned by the caller.
+/// Reentrant or overlapping calls leave the ready request unconsumed.
+/// # Safety
+/// Handles and interface bytes must be live on their owner thread. Both frame
+/// tokens are valid only for this poll; wake must be process-lifetime and only
+/// notify the agent. Free output with buffer_drop, and drop the accept once.
+#[no_mangle]
+pub unsafe extern "C" fn perry_component_http_handle_async_start(
+    handle: *mut c_void,
+    op: *mut c_void,
+    interface: *const u8,
+    interface_len: usize,
+    context: u64,
+    cleanup_context: u64,
+    wake: Option<WakeCallback>,
+    agent: u64,
+    out: *mut Buffer,
+) -> i32 {
+    if !out.is_null() {
+        *out = Buffer::default();
+    }
+    let result = (|| -> Result<i32> {
+        let interface = std::str::from_utf8(bytes(interface, interface_len)?)?.to_owned();
+        let wake = wake.context("async HTTP handling requires a native wake callback")?;
+        let operation = operation(op)?;
+        ensure!(
+            operation.server_alive.load(Ordering::Acquire),
+            "HTTP server is closed"
+        );
+        operation.with(|state| {
+            ensure!(
+                matches!(state, State::Ready(..)),
+                "HTTP request is not ready or was already handled"
+            );
+            let bridge = bridge(handle)?;
+            bridge.entered(context, cleanup_context, || {
+                ensure!(
+                    (&*bridge.pending.get()).is_none(),
+                    "component has a pending async call"
+                );
+                let original = &mut *bridge.host.get();
+                ensure!(original.live.is_some(), "component is disposed");
+                let mut host = Host {
+                    engine: original.engine.clone(),
+                    live: original.live.take(),
+                    dispatcher: original.dispatcher.clone(),
+                };
+                let State::Ready(request, completion) = std::mem::replace(state, State::Done)
+                else {
+                    unreachable!()
+                };
+                let current = bridge.context.clone();
+                let cleanup = bridge.cleanup_context.clone();
+                *bridge.pending.get() = Some(PendingCall {
+                    http: true,
+                    future: Box::pin(async move {
+                        let result = host
+                            .handle_http_async_with_retirement(
+                                &interface,
+                                *request,
+                                completion,
+                                move || {
+                                    current
+                                        .store(cleanup.load(Ordering::Acquire), Ordering::Release);
+                                },
+                            )
+                            .await
+                            .and_then(|transport| transport.map(|()| None).map_err(Into::into));
+                        (host, result)
+                    }),
+                });
+                // Poll immediately so cancellation owns a started invocation.
+                poll_call(bridge, wake, agent, out)
+            })
+        })
+    })();
+    match result {
+        Ok(status) => status,
+        Err(error) => respond(out, Err(error)),
+    }
+}

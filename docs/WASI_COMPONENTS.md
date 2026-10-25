@@ -56,15 +56,14 @@ This is a subset of the WASI 0.3 milestone. Enabling `wasi` now links the
 Turnloop-backed 0.3.0 providers as well as the P2 providers, but generic
 `future<T>`, `stream<T>` and `error-context` values are still rejected by WIT
 bindings. Async Perry-authored guest functions also require a rooted canonical
-adapter and are explicitly rejected by `perry-wit --guest-c`. The production
-P3 HTTP handler bridge for TypeScript remains separate work; the Rust
-embedding has the separately qualified async entry point below. Do not infer
-complete P3 support from async function support or the Rust provider receipts.
+adapter and are explicitly rejected by `perry-wit --guest-c`. The TypeScript
+HTTP bridge and Rust HTTP embedding use the separately qualified entry points
+below. Do not infer complete P3 support from async function support or the Rust provider receipts.
 
 `scripts/component_async_acceptance.py` exercises a compiled TypeScript host
 against a canonical async component, including a suspended JS import, Store
 reuse, original rejection identity, cancellation, ALS and explicit collection.
-The native host/runtime boundary uses ABI 7; rebuild the matching compiler,
+The native host/runtime boundary uses ABI 8; rebuild the matching compiler,
 runtime and optional engine archives together. Other host platforms and final
 distribution packages still require qualification.
 
@@ -123,7 +122,7 @@ records the separate development, production panic-abort and moving-GC checks.
 This qualification covers Linux; other native platforms and final packages
 remain open.
 
-The combined component-host boundary uses ABI 7; compiler, runtime and
+The combined component-host boundary uses ABI 8; compiler, runtime and
 optional host archive must be built together. The separate command feature
 was qualified using ABI 3; the combined Linux qualification is recorded below.
 This API is native-only. Unit fixtures and
@@ -217,8 +216,9 @@ and [socket qualification](validation/wasi-p3-sockets-20261023.json), plus
 [HTTP qualification](validation/wasi-p3-http-20261023.json). HTTP supports
 canonical body streams, trailers and transmission futures, async client calls
 and Rust handler embedding over Turnloop HTTP/1.1. Generic future/stream
-bindings and the P3 HTTP bridge for TypeScript remain unfinished. Rust
-embeddings can invoke the pinned handler through `Host::handle_http_async`.
+application bindings remain unfinished. Native TypeScript bindings expose
+`Component.handleHttp` for the pinned handler; Rust embeddings can invoke it
+through `Host::handle_http_async`.
 
 The Rust embedding can await `Host::handle_http_async` for the exact
 `wasi:http/handler@0.3.0` interface. It takes an accepted native `server::Request`
@@ -229,7 +229,29 @@ explicit guest HTTP errors preserve the instance. Traps, cancelled handling and
 transport failures retire it. Receiving the request supplies no outbound grants.
 The selected manifest must expose the handler's resource identities and result
 contract; this typed Rust entry point does not enable generic application
-`future<T>` or `stream<T>` bindings. The TypeScript HTTP API still supports P2.
+`future<T>` or `stream<T>` bindings. The TypeScript HTTP API supports both
+P2 incoming handlers and the exact P3 0.3.0 handler.
+
+Generated native bindings select `wasi:http/handler@0.3.0` explicitly for
+`Component.handleHttp(server)`. Its public Promise remains rooted across
+suspended imports and body I/O, retains its captured ALS context and settles
+only after transport completion and task exit. The owning agent supplies fresh
+primary and cleanup frames on every resumed poll. Explicit HTTP errors preserve
+the instance for reuse. Closing the listener cancels even a handler waiting on
+an unresolved JavaScript import; disposing the component also cancels handling.
+A late trap rejects the Promise and retires the Store, but cannot retract bytes
+already flushed to the peer, so that response may be truncated.
+
+The [TypeScript P3 HTTP receipt](validation/wasi-p3-http-typescript-20261025.json)
+records 75 native host tests in development and production panic-abort, 40 runtime
+component tests, 16 WIT tests and strict TypeScript checking. Actual compiled
+TypeScript hosts exercise plain HTTP and verified TLS in ordinary and moving-GC
+modes, including 3 MiB binary bodies and trailers, two suspended imports per
+successful request, explicit error reuse, original rejection identity, traps and
+cancellation. ABI 8 is required; rebuild the compiler, runtime and optional
+engine together. Matching archives also pass the full 28 library, nine command
+and eight HTTP P2 regression phases. Other platforms, released Turnloop
+dependencies and final distribution packages remain open.
 
 The [P3 HTTP embedding receipt](validation/wasi-p3-http-host-20261025.json)
 records live Linux requests with empty, 65,537-byte and 3 MiB bodies, trailers,

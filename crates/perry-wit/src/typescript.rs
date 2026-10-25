@@ -253,6 +253,7 @@ fn generate(world: &World, guest: bool) -> String {
         interface
             .name
             .starts_with("wasi:http/incoming-handler@0.2.")
+            || interface.name == "wasi:http/handler@0.3.0"
     });
     let mut out = String::from("// Generated from WIT by perry-wit. Do not edit.\n");
     if guest {
