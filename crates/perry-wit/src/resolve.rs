@@ -248,6 +248,22 @@ impl Converter<'_> {
                 err: result.err.map(|ty| self.ty(ty).map(Box::new)).transpose()?,
             },
             TypeDefKind::List(ty) => Type::List(Box::new(self.ty(*ty)?)),
+            TypeDefKind::Future(ty) => {
+                Type::Future(ty.map(|t| self.ty(t).map(Box::new)).transpose()?)
+            }
+            TypeDefKind::Stream(ty) => {
+                let mut payload = *ty;
+                while let Some(wit_parser::Type::Id(id)) = payload {
+                    if let TypeDefKind::Type(next) = self.resolve.types[id].kind {
+                        payload = Some(next);
+                    } else {
+                        break;
+                    }
+                }
+                ensure!(payload != Some(wit_parser::Type::Char),
+                    "type {name}: stream<char> is unsupported; use stream<u8> with an explicit encoding");
+                Type::Stream(ty.map(|t| self.ty(t).map(Box::new)).transpose()?)
+            }
             unsupported => bail!(
                 "type {name}: {} is unsupported by the P2 binding profile",
                 unsupported.as_str()

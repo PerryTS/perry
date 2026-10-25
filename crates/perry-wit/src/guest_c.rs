@@ -26,6 +26,13 @@ pub fn canonical_guest(path: &Path, selected: Option<&str>) -> Result<BTreeMap<S
     let world = crate::resolve::convert(&resolve, id)?;
     ensure!(
         world
+            .types
+            .values()
+            .all(|d| !matches!(d.ty, crate::Type::Future(_) | crate::Type::Stream(_))),
+        "future/stream guest values require the P3 rooted-frame adapter"
+    );
+    ensure!(
+        world
             .imports
             .iter()
             .chain(&world.exports)

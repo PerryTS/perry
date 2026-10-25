@@ -134,6 +134,12 @@ impl Checker<'_> {
     }
 
     fn resource(&mut self, key: &str, actual: ResourceType) -> Result<()> {
+        ensure!(
+            self.resources
+                .iter()
+                .all(|(other, ty)| other == key || *ty != actual),
+            "distinct WIT resources share a canonical identity"
+        );
         if let Some(previous) = self.resources.insert(key.to_string(), actual) {
             ensure!(previous == actual, "resource identity mismatch for {key}");
         }
@@ -169,6 +175,12 @@ impl Checker<'_> {
                 self.resource(key, *resource)?
             }
             (Wit::List(expected), Type::List(actual)) => self.ty(expected, &actual.ty(), depth)?,
+            (Wit::Future(expected), Type::Future(actual)) => {
+                self.optional(expected.as_deref(), actual.ty().as_ref(), depth)?
+            }
+            (Wit::Stream(expected), Type::Stream(actual)) => {
+                self.optional(expected.as_deref(), actual.ty().as_ref(), depth)?
+            }
             (Wit::Option(expected), Type::Option(actual)) => {
                 self.ty(expected, &actual.ty(), depth)?
             }

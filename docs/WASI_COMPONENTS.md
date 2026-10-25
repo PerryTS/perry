@@ -53,10 +53,15 @@ Successful calls retain the Store for reuse. Traps, rejected imports and explici
 disposal cancel suspended guest tasks and retire that component's Store.
 
 This is a subset of the WASI 0.3 milestone. Enabling `wasi` now links the
-Turnloop-backed 0.3.0 providers as well as the P2 providers, but generic
-`future<T>`, `stream<T>` and `error-context` values are still rejected by WIT
-bindings. Async Perry-authored guest functions also require a rooted canonical
-adapter and are explicitly rejected by `perry-wit --guest-c`. The TypeScript
+Turnloop-backed 0.3.0 providers as well as the P2 providers. WIT manifests
+and generated TypeScript declarations now preserve `future<T>` and `stream<T>`,
+including nested, payload-free and byte-stream types. The declared handles are
+owned and nonthenable. Their application runtime transport is still unfinished;
+generating declarations does not make their `read()` methods executable.
+`stream<char>` is explicitly rejected; use bytes with an explicit encoding.
+`error-context` remains unsupported. Async Perry-authored guest functions and
+future/stream guest values still require the rooted canonical adapter and are
+explicitly rejected by `perry-wit --guest-c`. The TypeScript
 HTTP bridge and Rust HTTP embedding use the separately qualified entry points
 below. Do not infer complete P3 support from async function support or the Rust provider receipts.
 
@@ -73,6 +78,14 @@ implementation, 35 Turnloop-based WASI guest acceptance phases, and all eight
 plain/TLS combinations of native and guest moving GC. It also preserves
 separate future/stream architecture prototypes; those results do not qualify
 production bindings.
+
+The internal generic-reader checks additionally cover canonical layouts from
+`wit-parser::SizeAlign`, shared metadata for repeated aliases, a reusable
+quota-limited Wasm allocator, and task-local frames. They exercise concurrent
+reads and baseline cancellation, Unicode and 3 MiB compound values, final stream
+chunks, and nominal resource identity. This helper remains test-only pending the
+persistent native driver, traced runtime wrappers and producer interfaces. It
+does not add a public generic future/stream runtime API.
 
 The standalone Rust guest acceptance host also uses `perry-wasi` and Turnloop,
 with Wasmtime 48.0.7. The Tokio gate checks its separate workspace, lockfile and

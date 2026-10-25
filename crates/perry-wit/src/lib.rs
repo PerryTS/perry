@@ -1,5 +1,6 @@
 //! The WIT contract shared by component binding generation and validation.
 //! TypeScript declarations never substitute `any` for an unsupported WIT type.
+pub mod canonical;
 mod guest_c;
 mod resolve;
 mod typescript;
@@ -101,6 +102,8 @@ pub enum Type {
         err: Option<Box<Type>>,
     },
     List(Box<Type>),
+    Future(Option<Box<Type>>),
+    Stream(Option<Box<Type>>),
     Resource,
     Own(String),
     Borrow(String),

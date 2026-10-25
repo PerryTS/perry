@@ -68,6 +68,22 @@ impl Typescript<'_> {
             ),
             Type::List(inner) if self.is_byte(inner) => "Uint8Array".into(),
             Type::List(inner) => format!("Array<{}>", self.ty(inner)),
+            Type::Future(inner) => format!(
+                "ComponentFuture<{}>",
+                inner
+                    .as_deref()
+                    .map_or_else(|| "void".into(), |t| self.ty(t))
+            ),
+            Type::Stream(inner) => {
+                let payload = inner
+                    .as_deref()
+                    .map_or_else(|| "void".into(), |t| self.ty(t));
+                if inner.as_deref().is_some_and(|t| self.is_byte(t)) {
+                    format!("ComponentStream<{payload}, Uint8Array>")
+                } else {
+                    format!("ComponentStream<{payload}>")
+                }
+            }
             Type::Resource => "never".into(), // Resources are used through own/borrow handles.
             Type::Own(key) => format!(
                 "OwnedResource<{}>",
@@ -261,13 +277,13 @@ fn generate(world: &World, guest: bool) -> String {
             "import { registerComponentExports, callComponentImport, createComponentResource, getComponentResourceValue } from \"perry/component\";\n",
         );
         out.push_str(
-            "import type { OwnedResource, BorrowedResource } from \"perry/component\";\n\n",
+            "import type { OwnedResource, BorrowedResource, ComponentFuture, ComponentStream } from \"perry/component\";\n\n",
         );
     } else {
         out.push_str(
             "import { loadComponent, callComponent, disposeComponent, createComponentHostResource, getComponentHostResourceValue } from \"perry/component\";\n",
         );
-        out.push_str("import type { ComponentOptions, ComponentHandle, OwnedResource, BorrowedResource } from \"perry/component\";\n\n");
+        out.push_str("import type { ComponentOptions, ComponentHandle, OwnedResource, BorrowedResource, ComponentFuture, ComponentStream } from \"perry/component\";\n\n");
         if incoming_http.is_some() {
             out.push_str("import { handleComponentHttpRequest } from \"perry/component\";\nimport type { ComponentHttpServer } from \"perry/component\";\n\n");
         }

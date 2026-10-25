@@ -138,15 +138,30 @@ fn resources_keep_identity_ownership_and_method_signatures() {
 }
 
 #[test]
-fn rejects_async_types_instead_of_generating_any() {
-    for signature in ["func() -> future<string>", "func() -> stream<u8>"] {
+fn async_values_keep_their_payload_and_are_not_promise_aliases() {
+    for signature in [
+        "async func() -> future<string>",
+        "func() -> stream<u8>",
+        "func() -> future",
+        "func() -> stream",
+    ] {
         let source =
             format!("package test:async-types; world plugin {{ export call: {signature}; }}");
-        let error = parse(&source, None).unwrap_err();
-        let message = format!("{error:#}");
-        assert!(
-            message.contains("P3") || message.contains("P2 binding profile"),
-            "{message}"
+        let world = parse(&source, None).unwrap();
+        let ts = typescript(&world);
+        assert!(!ts.contains("any"));
+        if signature.starts_with("async") {
+            assert!(ts.contains("Promise<"));
+        }
+        if signature.contains("future") {
+            assert!(ts.contains("= ComponentFuture<"));
+        }
+        if signature.contains("stream<u8>") {
+            assert!(ts.contains("= ComponentStream<number, Uint8Array>"));
+        }
+        assert_eq!(
+            serde_json::from_str::<World>(&serde_json::to_string(&world).unwrap()).unwrap(),
+            world
         );
     }
 }
@@ -448,4 +463,21 @@ fn p3_http_host_binding_keeps_exact_handler_version_and_async_exports() {
             ));
         }
     }
+}
+
+#[test]
+fn character_streams_are_rejected_before_emitting_unloadable_bindings() {
+    for payload in ["char", "letter"] {
+        let source = format!("package test:chars; interface data {{ type letter = char; get: func() -> stream<{payload}>; }} world plugin {{ export data; }}");
+        let error = parse(&source, None).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("stream<char> is unsupported"),
+            "{error:#}"
+        );
+    }
+    assert!(parse(
+        "package test:chars; world plugin { export get: func() -> future<char>; }",
+        None
+    )
+    .is_ok());
 }

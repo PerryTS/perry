@@ -24,6 +24,26 @@ export interface OwnedResource<T extends string> extends BorrowedResource<T> {
   dispose(): void;
 }
 
+declare const futureBrand: unique symbol;
+declare const streamBrand: unique symbol;
+/** Declaration for an owned canonical future; deliberately not thenable.
+ * Generic application runtime transport is not yet implemented. */
+export interface ComponentFuture<T> {
+  readonly [futureBrand]: (value: T) => T;
+  /** Consume its single value; reading twice is an error. */
+  read(): Promise<T>;
+  /** Close the readable end, cancelling an outstanding read if present. */
+  dispose(): void;
+}
+/** Declaration for an owned canonical stream. Byte streams use Uint8Array.
+ * Generic application runtime transport is not yet implemented. */
+export interface ComponentStream<T, Chunk = Array<T>> {
+  readonly [streamBrand]: (value: T) => T;
+  /** Read a bounded chunk. Only one read may be pending on this stream. */
+  read(maxElements?: number): Promise<{ done: false; value: Chunk } | { done: true }>;
+  dispose(): void;
+}
+
 /** Use generated WIT bindings for application calls. These lower-level entry
  * points validate the manifest and component's canonical types at load time. */
 export function loadComponent(bytes: Uint8Array, contract: string, imports: unknown, options?: ComponentOptions): ComponentHandle;
