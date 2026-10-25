@@ -648,11 +648,6 @@ pub struct StoreFlow {
     /// DECISIONS 136: what parameter `j`'s argument holds under `via`
     /// (its keyed reach), or reaches (`None`), stored here.
     pub from_reach: Vec<(u32, Option<Atom>)>,
-    /// DECISIONS 180: what parameter `j`'s argument holds at the path of
-    /// a path marker of it (DECISIONS 158), or (`Some((k, m))`) one step
-    /// below that path under key `k` (`None`: a computed key), and on from
-    /// there through the keys read on reach marker `m`, stored here.
-    pub from_path: Vec<(u32, Tok, Option<(Option<Atom>, Tok)>)>,
     pub top: bool,
     pub prim: u16,
     /// DECISIONS 176: this unit's values stored here (its own instances,
@@ -1844,15 +1839,6 @@ impl Model {
     #[inline]
     pub(crate) fn is_path_marker(&self, t: Tok) -> bool {
         self.path_parent.contains_key(&t)
-    }
-
-    /// DECISIONS 180: `t` is a step below a parameter's keyed reach marker
-    /// (the value at its path, not what the keyed reach reaches).
-    #[inline]
-    pub(crate) fn is_path_step(&self, t: Tok) -> bool {
-        self.path_parent
-            .get(&t)
-            .is_some_and(|&(p, _)| self.path_parent.contains_key(&p))
     }
 
     /// The keyed reach marker path marker `t` is a step below (itself).

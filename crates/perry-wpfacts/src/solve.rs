@@ -794,7 +794,6 @@ impl Model {
             } => {
                 let mut from = Vec::new();
                 let mut from_reach = Vec::new();
-                let mut from_path = Vec::new();
                 let mut top = false;
                 let mut vals = Vec::new();
                 for &t in toks {
@@ -829,9 +828,6 @@ impl Model {
                         // reaches (`y.left = y.left.right`) is a value of
                         // the reader too: it stores its own, as the whole
                         // program does, not a value of this unit.
-                        Some(&(g, j)) if g == f && j != u32::MAX && self.is_path_step(t) => {
-                            from_path.push((j, t, None));
-                        }
                         Some(&(g, j)) if g == f && j != u32::MAX => {
                             from_reach.push((j, self.param_reach_key(f, j, t)));
                         }
@@ -842,9 +838,6 @@ impl Model {
                         // An own reach flow keeps DECISIONS 149 (below).
                         Some(&(g, u32::MAX)) if g == f && dst == u32::MAX && !reach => {
                             match self.reach_marker.contains(&t) {
-                                // DECISIONS 180: a step below the keyed
-                                // reach is the value at its path.
-                                true if self.is_path_step(t) => from_path.push((u32::MAX, t, None)),
                                 true => from_reach
                                     .push((u32::MAX, self.param_reach_key(f, u32::MAX, t))),
                                 false => from.push(u32::MAX),
@@ -916,11 +909,6 @@ impl Model {
                 for r in from_reach {
                     if !fl.from_reach.contains(&r) {
                         fl.from_reach.push(r);
-                    }
-                }
-                for r in from_path {
-                    if !fl.from_path.contains(&r) {
-                        fl.from_path.push(r);
                     }
                 }
                 fl.top |= top;
@@ -2454,49 +2442,31 @@ impl Model {
                     }
                     st.extend(ms);
                 }
-                // DECISIONS 180: a parameter's path marker does not reach
-                // itself: the argument's reach holds what is one step
-                // below its path, and all it reaches from there.
-                None if self.is_path_marker(x) => srcs.push((x, k.map(|k| (k, t)))),
                 // A reach marker reaches itself under every key.
-                None if self.reach_marker.contains(&x) => srcs.push((x, None)),
-                None => srcs.push((
-                    match k {
+                None if self.reach_marker.contains(&x) => srcs.push(x),
+                None => srcs.push(match k {
+                    None => x,
+                    Some(Some(k)) => self.keyed_reach_of(x, k),
+                    Some(None) => match self.marker_reach.get(&x) {
+                        Some(&r) => r,
                         None => x,
-                        Some(Some(k)) => self.keyed_reach_of(x, k),
-                        Some(None) => match self.marker_reach.get(&x) {
-                            Some(&r) => r,
-                            None => x,
-                        },
                     },
-                    None,
-                )),
+                }),
             }
         }
-        let (mut from, mut from_reach, mut from_path) = (Vec::new(), Vec::new(), Vec::new());
+        let (mut from, mut from_reach) = (Vec::new(), Vec::new());
         let mut top = false;
-        for (s, step) in srcs {
-            // DECISIONS 180: a path marker's path, or the step below it.
-            let path = match step {
-                Some(_) => Some(step),
-                None => self.is_path_step(s).then_some(None),
-            };
+        for s in srcs {
             match self.param_marker.get(&s).copied() {
                 // DECISIONS 179: as in `Cons::StoreOut`.
                 Some((g, u32::MAX)) if g == f && dst == u32::MAX && !reach => {
-                    match (path, self.reach_marker.contains(&s)) {
-                        (Some(p), _) => from_path.push((u32::MAX, s, p)),
-                        (None, true) => {
-                            from_reach.push((u32::MAX, self.param_reach_key(f, u32::MAX, s)))
-                        }
-                        (None, false) => from.push(u32::MAX),
+                    match self.reach_marker.contains(&s) {
+                        true => from_reach.push((u32::MAX, self.param_reach_key(f, u32::MAX, s))),
+                        false => from.push(u32::MAX),
                     }
                 }
                 Some((g, j)) if g == f && j != u32::MAX && self.reach_marker.contains(&s) => {
-                    match path {
-                        Some(p) => from_path.push((j, s, p)),
-                        None => from_reach.push((j, self.param_reach_key(f, j, s))),
-                    }
+                    from_reach.push((j, self.param_reach_key(f, j, s)));
                 }
                 Some((g, j)) if g == f && j != u32::MAX => from.push(j),
                 _ => match own {
@@ -2517,11 +2487,6 @@ impl Model {
         for r in from_reach {
             if !fl.from_reach.contains(&r) {
                 fl.from_reach.push(r);
-            }
-        }
-        for r in from_path {
-            if !fl.from_path.contains(&r) {
-                fl.from_path.push(r);
             }
         }
         fl.top |= top;

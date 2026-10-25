@@ -3009,8 +3009,8 @@ fn a_result_value_no_contract_describes_escapes_alone() {
 fn a_callees_rooted_store_on_its_callers_receiver_is_the_callers_flow() {
     // AWFY som.js Dictionary::resize -> transferEntries: `move` runs on
     // `grow`'s receiver and stores what that receiver reaches into what it
-    // reaches. The reader replays it on its own object (DECISIONS 179/180:
-    // receiver flows and their path steps; 181: `d`'s own `D` stand-in is
+    // reaches. The reader replays it on its own object (DECISIONS 179:
+    // receiver flows; 181: `d`'s own `D` stand-in is
     // `D2`'s parent, so `D2` runs `d`'s published `move`), as the whole
     // program moves the entries inside one `D`; `E`, a class of a third
     // unit, is not escaped by it.

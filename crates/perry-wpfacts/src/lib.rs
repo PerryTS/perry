@@ -788,29 +788,6 @@ fn fn_contract_of(
                     .map(|&(j, v)| (j, v.map(|v| g.m.atoms[v as usize].clone())))
                     .collect();
                 from_reach.sort();
-                // DECISIONS 180: a path, then the step below it and the
-                // keys read on from there (DECISIONS 138).
-                let mut path_top = false;
-                let mut from_path: Vec<units::ReachKey> = fl
-                    .from_path
-                    .iter()
-                    .filter_map(|&(_, t, step)| {
-                        // A path no contract walks: unknown, as it was.
-                        let Some(mut k) = reach_key_of(g, f, t) else {
-                            path_top = true;
-                            return None;
-                        };
-                        if let Some((sk, m)) = step {
-                            k.3.push((
-                                sk.map(|a| g.m.atoms[a as usize].to_string()),
-                                keys_read(g, m),
-                            ));
-                        }
-                        Some(k)
-                    })
-                    .collect();
-                from_path.sort();
-                from_path.dedup();
                 units::StoreFlow {
                     dst,
                     reach,
@@ -821,8 +798,7 @@ fn fn_contract_of(
                     },
                     from,
                     from_reach,
-                    from_path,
-                    top: fl.top || path_top || (fl.vals.is_some() && fl.vals_top),
+                    top: fl.top || (fl.vals.is_some() && fl.vals_top),
                     prim: fl.prim,
                     value,
                 }

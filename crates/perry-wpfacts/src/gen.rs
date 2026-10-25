@@ -948,12 +948,6 @@ impl<'a> Gen<'a> {
                     }
                 }
             }
-            // DECISIONS 180: what it holds at a path of its reach.
-            for (j, k, then, steps) in &fl.from_path {
-                if let Some(a) = arg(*j) {
-                    self.ret_through_key(a, k, then, steps, n, &c.name);
-                }
-            }
             self.m.add_prim(n, fl.prim);
             // DECISIONS 176: the defining unit's values it stores.
             if let Some(d) = &fl.value {
@@ -1121,16 +1115,11 @@ impl<'a> Gen<'a> {
                             .m
                             .node_named("reach", || format!("reach.{k}.{j}({name})"));
                         self.m.own(n);
-                        match sk {
-                            Some(s) => {
-                                let key = crate::model::Key::Named(self.m.atom(s));
-                                self.m.cons(cur, Cons::Load { key, dst: n });
-                            }
-                            None => {
-                                let key = crate::model::Key::Any;
-                                self.m.cons(cur, Cons::Load { key, dst: n });
-                            }
-                        }
+                        let key = match sk {
+                            Some(s) => crate::model::Key::Named(self.m.atom(s)),
+                            None => crate::model::Key::Any,
+                        };
+                        self.m.cons(cur, Cons::Load { key, dst: n });
                         n
                     }
                 };
