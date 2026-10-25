@@ -1067,6 +1067,7 @@ impl Model {
             }
         }
         self.sum.ready = true;
+        self.mark_params();
         let deferred = std::mem::take(&mut self.sum.deferred);
         let nd = deferred.len();
         for d in deferred {

@@ -296,14 +296,7 @@ impl Model {
 
     pub fn solve(&mut self) {
         self.rel_phase = b'S';
-        for f in 0..self.funcs.len() {
-            for i in 0..self.funcs[f].params.len() {
-                let p = self.funcs[f].params[i];
-                if p != NO_NODE {
-                    self.nodes[p as usize].param = true;
-                }
-            }
-        }
+        self.mark_params();
         loop {
             self.fill_instances();
             let Some(n) = self.wl.pop_front() else {
@@ -1481,6 +1474,20 @@ impl Model {
             work.extend(t.parent_links.iter().copied());
         }
         false
+    }
+
+    /// Every function's parameter nodes hold their argument marker
+    /// (DECISIONS 44), from before the first binding reaches them: the
+    /// queued bindings run when the summaries exist, before the solve.
+    pub(crate) fn mark_params(&mut self) {
+        for f in 0..self.funcs.len() {
+            for i in 0..self.funcs[f].params.len() {
+                let p = self.funcs[f].params[i];
+                if p != NO_NODE {
+                    self.nodes[p as usize].param = true;
+                }
+            }
+        }
     }
 
     /// Everything that reaches `n` escapes (once per node: no sink nodes).
