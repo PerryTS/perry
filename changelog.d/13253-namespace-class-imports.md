@@ -1,0 +1,1 @@
+Preserve explicitly imported namespace classes when another import binds the same bare class name. Implicit class metadata now yields to source import bindings before collection, so namespace static members, constructors, instanceof checks, and iterators retain the correct class identity in every import order.
