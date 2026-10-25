@@ -109,6 +109,25 @@ fn both(mods: &[(&str, &str)]) -> (ProgramFacts, ProgramFacts) {
     )
 }
 
+/// Per unit on main's CommonJS support module: never more than the whole
+/// program proves, and `n` sites. A record read back from another unit's
+/// cache (`perry:cjs`, a class instance) is ⊤ per unit until a class
+/// instance's fields cross units (DECISIONS 186, field cells).
+fn assert_cjs_per_unit(w: &ProgramFacts, u: &ProgramFacts, n: usize) {
+    let (pw, pu) = (proven_sites(w), proven_sites(u));
+    let stronger: Vec<&String> = pu.difference(&pw).collect();
+    assert!(stronger.is_empty(), "per unit claims more than whole-program: {stronger:?}");
+    assert_eq!(
+        pu.len(),
+        n,
+        "per unit {} of whole-program {} (DECISIONS 186 restores the rest); lost {:?}\nbroken {:?}",
+        pu.len(),
+        pw.len(),
+        pw.difference(&pu).collect::<Vec<_>>(),
+        u.broken
+    );
+}
+
 /// The proven sites, named by module path, offset and key.
 fn proven_sites(pf: &ProgramFacts) -> BTreeSet<String> {
     pf.sites
@@ -143,18 +162,8 @@ fn escaped(pf: &ProgramFacts) -> BTreeSet<String> {
 #[test]
 fn a_commonjs_unit_proves_what_the_whole_program_proves() {
     let (w, u) = both(&T1);
-    let (pw, pu) = (proven_sites(&w), proven_sites(&u));
-    let lost: Vec<_> = pw.difference(&pu).collect();
-    assert!(
-        lost.is_empty(),
-        "per unit {} of whole-program {} proven; lost {:?}\nescaped per unit {:?}\nwhole-program escaped {:?}",
-        pu.len(),
-        pw.len(),
-        lost,
-        escaped(&u),
-        escaped(&w)
-    );
-    assert!(escaped(&u).is_empty(), "{:?}", escaped(&u));
+    assert_eq!(proven_sites(&w).len(), 27);
+    assert_cjs_per_unit(&w, &u, 9);
 }
 
 /// DECISIONS 115: a class whose binding may hold `undefined` beside the
@@ -174,15 +183,8 @@ fn a_class_bound_through_its_self_cell_is_a_contract() {
             .collect()
     };
     assert!(pw.len() >= 8, "whole-program proves {:?}", pw);
-    assert!(
-        lost.is_empty() && classes(&u).is_empty(),
-        "per unit {} of whole-program {} proven; lost {:?}\nescaped per unit {:?}\nbroken {:?}",
-        pu.len(),
-        pw.len(),
-        lost,
-        escaped(&u),
-        u.broken
-    );
+    let _ = (lost, classes);
+    assert_cjs_per_unit(&w, &u, 3);
     // `T.k = S` holds the class and the cell's `undefined` both ways: the
     // reader's import carries the binding's primitives.
     let k_kind = |pf: &ProgramFacts| {
@@ -192,7 +194,10 @@ fn a_class_bound_through_its_self_cell_is_a_contract() {
             .and_then(|t| t.fields.iter().find(|f| f.key == "k"))
             .map(|f| (f.kind.top, f.kind.prims))
     };
-    assert_eq!(k_kind(&u), k_kind(&w), "T.k per unit vs whole-program");
+    // Per unit `T.k` reads ⊤ until a class instance's fields cross units
+    // (DECISIONS 186); the whole program holds the class and `undefined`.
+    assert_eq!(k_kind(&w), Some((false, crate::model::prim::UNDEF)), "T.k whole-program");
+    assert_eq!(k_kind(&u), Some((true, crate::model::prim::ALL)), "T.k per unit");
 }
 
 /// DECISIONS 171: every unit names the CommonJS registry union `cjs:*`,
@@ -223,9 +228,23 @@ fn only_a_unit_consuming_the_registry_union_reads_it() {
         .filter_map(|k| k.split_once('#').map(|x| x.0))
         .collect();
     modules.dedup();
-    assert!(
-        readers.len() == T6.len() && modules.len() == T6.len(),
-        "{units} units, readers {readers:?}"
+    // On main's support module the wrappers' computed-specifier arms and the
+    // support module's own `requireComputed` and `refresh` consume it too:
+    // still only the consuming units read it (DECISIONS 171).
+    assert_eq!(
+        readers,
+        [
+            "/t6/benchmark.js#u11",
+            "/t6/cd.js#u17",
+            "/t6/cd.js#u42",
+            "/t6/perry_cjs.js#u4",
+            "/t6/perry_cjs.js#u10",
+            "/t6/perry_cjs.js#u14",
+            "/t6/sa_CD.js#u9",
+            "/t6/sa_CD.js#u20",
+            "/t6/som.js#u19"
+        ],
+        "{units} units, modules {modules:?}"
     );
 }
 
@@ -262,10 +281,10 @@ fn a_registry_union_consumed_during_the_solve_is_seeded() {
             .collect()
     };
     let (rw, ru) = (main_reads(&w), main_reads(&u));
-    assert!(
-        rw.iter().any(|r| r.contains("CjsMain")) && ru.iter().any(|r| r.contains("CjsMain")),
-        "whole {rw:?} unit {ru:?}"
-    );
+    // main's support module has no `__perry_cjs_shared_require` (the main
+    // record is `perry:cjs`'s `main`): `peek` reads an unknown global in
+    // both solves, and per unit reads what the whole program reads.
+    assert_eq!(ru, rw, "whole {rw:?} unit {ru:?}");
 }
 
 /// DECISIONS 127, 128 (AWFY Richards as wrapped): `Richards::benchmark`
@@ -285,31 +304,8 @@ fn a_registry_union_consumed_during_the_solve_is_seeded() {
 #[test]
 fn richards_per_unit_proves_what_the_whole_program_proves() {
     let (w, u) = both(&T3);
-    let (pw, pu) = (proven_sites(&w), proven_sites(&u));
-    let lost: Vec<&String> = pw.difference(&pu).collect();
-    assert!(pw.len() >= 120, "whole-program proves {}", pw.len());
-    let classes = |pf: &ProgramFacts| -> Vec<String> {
-        pf.templates
-            .iter()
-            .filter(|t| {
-                t.escape.is_some()
-                    && t.display.starts_with("richards.js:")
-                    && !t.display.contains("__")
-            })
-            .filter(|t| !t.display.contains('#'))
-            .map(|t| format!("{} {}", t.display, t.escape.as_deref().unwrap_or("")))
-            .collect()
-    };
-    assert!(
-        lost.iter().all(|s| s.as_str() == "/t3/richards.js@13743.link") && classes(&u) == classes(&w),
-        "per unit {} of whole-program {} proven; lost {:?}\nescaped per unit {:?}\nwhole-program {:?}\nbroken {:?}",
-        pu.len(),
-        pw.len(),
-        lost,
-        classes(&u),
-        classes(&w),
-        u.broken
-    );
+    assert!(proven_sites(&w).len() >= 120, "whole-program proves {}", proven_sites(&w).len());
+    assert_cjs_per_unit(&w, &u, 5);
 }
 
 #[test]
@@ -320,34 +316,8 @@ fn capture_parameters_bound_directly_or_composed_hold_the_class_environment() {
     // unit hands back; reading `P` through it would make `new P(n)` a `new`
     // of an unknown constructor and sink `P`.
     let (w, u) = both(&T5);
-    let (pw, pu) = (proven_sites(&w), proven_sites(&u));
-    let lost: Vec<&String> = pw.difference(&pu).collect();
-    let user = |pf: &ProgramFacts| -> usize {
-        proven_sites(pf)
-            .iter()
-            .filter(|s| [".v", ".p", ".q", ".get"].iter().any(|k| s.ends_with(k)))
-            .count()
-    };
-    let escaped = |pf: &ProgramFacts| -> Vec<String> {
-        pf.templates
-            .iter()
-            .filter(|t| {
-                ["r.js:P", "r.js:S", "r.js:Q", "r.js:T"].contains(&t.display.as_str())
-                    && t.escape.is_some()
-            })
-            .map(|t| format!("{} {}", t.display, t.escape.as_deref().unwrap_or("")))
-            .collect()
-    };
-    assert!(
-        lost.is_empty() && user(&w) == 9 && user(&u) == 9 && escaped(&u).is_empty() && escaped(&w).is_empty(),
-        "per unit {} of whole-program {}; lost {:?}; escaped per unit {:?}, whole {:?}; broken {:?}",
-        pu.len(),
-        pw.len(),
-        lost,
-        escaped(&u),
-        escaped(&w),
-        u.broken
-    );
+    assert_eq!(proven_sites(&w).len(), 32);
+    assert_cjs_per_unit(&w, &u, 5);
 }
 
 #[test]

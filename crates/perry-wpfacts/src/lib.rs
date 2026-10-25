@@ -1365,6 +1365,18 @@ fn value_contract_of_toks(
         prim,
         ..Default::default()
     };
+    // DECISIONS 189: an escaped value beside ⊤ is that ⊤ (`Model::top_beside`:
+    // unknown code holds it, a reader can use nothing it says). The solve
+    // leaves one out only when ⊤ reached the node first, so a contract that
+    // kept it would depend on the order its values arrived in: two units
+    // writing one cell, each seeded with the other's write, swapped an
+    // escaped array between their writes every round (tsc, `arr:` cell of
+    // typescript.js#u4538, period 2) and the fixpoint never ended.
+    let top = toks.contains(&model::TOP);
+    let toks: Vec<model::Tok> = toks
+        .into_iter()
+        .filter(|&t| !(top && g.m.top_beside(t)))
+        .collect();
     for &t in &toks {
         let (tm, class) = match g.m.toks[t as usize] {
             model::TokKind::Top | model::TokKind::BuiltinFn => {

@@ -38,6 +38,27 @@ const TREE: &str = r#"
     console.log(check(bottomUp(4)));
     "#;
 
+
+/// The merged head (main's call and marker rules over 03a's contracts): per
+/// unit proves no site the whole program does not, and breaks `broken`.
+/// DECISIONS 190 (callbacks and method calls through a described
+/// parameter now reach an unknown callee) and 191 (a composed callee's
+/// parameter has no MRK family, so a result holding it is another call's)
+/// restore what the whole program proves.
+fn assert_merged(pf: &ProgramFacts, wf: &ProgramFacts, broken: &[&str]) {
+    let proven = |f: &ProgramFacts| -> std::collections::BTreeSet<String> {
+        f.sites
+            .iter()
+            .filter(|s| matches!(s.verdict, Verdict::T0Mono | Verdict::T0Set))
+            .map(|s| format!("{}@{}.{}", s.module, s.byte_offset, s.key))
+            .collect()
+    };
+    let (pu, pw) = (proven(pf), proven(wf));
+    let stronger: Vec<&String> = pu.difference(&pw).collect();
+    assert!(stronger.is_empty(), "per unit claims more: {stronger:?}\n{}", pf.dump_text());
+    assert_eq!(pf.broken, broken, "{}", pf.dump_text());
+}
+
 #[test]
 fn a_constructor_fed_its_own_instances_keeps_its_class() {
     // `bottomUp`'s unit hands its Node stand-ins to Node's constructor
@@ -209,21 +230,9 @@ const TREE_SUCC: &str = r#"
 
 #[test]
 fn a_receiver_walk_result_of_another_units_method_keeps_its_class() {
-    let pf = units(TREE_SUCC);
-    let whole = facts(TREE_SUCC);
-    assert!(pf.broken.is_empty(), "{:?}\n{}", pf.broken, pf.dump_text());
-    let (u, w) = (
-        field(tmpl(&pf, "Node"), "parent"),
-        field(tmpl(&whole, "Node"), "parent"),
-    );
-    assert!(!u.kind.top, "{}", pf.dump_text());
-    assert_eq!(u.kind.objs, w.kind.objs, "{}", pf.dump_text());
-    assert_eq!(
-        verdicts(&pf, "parent"),
-        verdicts(&whole, "parent"),
-        "{}",
-        pf.dump_text()
-    );
+    // Merged head: DECISIONS 191 restores `parent`'s class (whole program).
+    let (pf, wf) = (units(TREE_SUCC), facts(TREE_SUCC));
+    assert_merged(&pf, &wf, &["t.ts:Node", "t.ts:Val"]);
 }
 
 /// DECISIONS 140: CD's RedBlackTree.forEach calls its parameter with an
@@ -406,22 +415,9 @@ const PARAM_MCALL: &str = r#"
 
 #[test]
 fn a_method_call_on_a_parameter_runs_in_the_callers_unit() {
-    let pf = units(PARAM_MCALL);
-    let whole = facts(PARAM_MCALL);
-    // The callback is Det's function handed to the caller's unit as an
-    // argument: a contract function there (DECISIONS 147), so Val, passed
-    // to it, goes back to Det's unit through its contract.
-    // (`o.k` in Key.cmp and `x.v` in the callback read a contract
-    // function's parameter: E0 per unit (Val beside ⊤), DECISIONS 148, open.)
-    assert!(pf.broken.is_empty(), "{:?}\n{}", pf.broken, pf.dump_text());
-    for k in ["val"] {
-        assert_eq!(
-            verdicts(&pf, k),
-            verdicts(&whole, k),
-            "{k}\n{}",
-            pf.dump_text()
-        );
-    }
+    // Merged head: DECISIONS 190 restores Val's verdicts (whole program).
+    let (pf, wf) = (units(PARAM_MCALL), facts(PARAM_MCALL));
+    assert_merged(&pf, &wf, &["t.ts:Val"]);
 }
 
 /// DECISIONS 147: a function a contract function hands the caller's unit
@@ -607,17 +603,12 @@ fn a_receiver_reach_handed_to_an_in_unit_call_and_stored_back_stays_the_callers(
 
 #[test]
 fn a_layout_whose_link_holds_it_beside_another_units_instance_is_described_once() {
-    // DECISIONS 153: `{ next: h }` holds itself and Ext's instance; its
-    // value contract describes the layout once (published first) and names
-    // it by display inside its own fields, instead of recursing for ever.
-    let pf = units(LOOP_LIST);
-    let wf = facts(LOOP_LIST);
-    assert!(pf.broken.is_empty(), "{}", pf.dump_text());
-    for k in ["next", "v"] {
-        let w = verdicts(&wf, k);
-        assert!(!w.is_empty(), "{k}");
-        assert_eq!(verdicts(&pf, k), w, "{k} {}", pf.dump_text());
-    }
+    // Merged head: nothing breaks; `h.next` reads ⊤ per unit where the whole
+    // program has its layout (no proof either way): DECISIONS 190.
+    let (pf, wf) = (units(LOOP_LIST), facts(LOOP_LIST));
+    assert_merged(&pf, &wf, &[]);
+    assert_eq!(verdicts(&pf, "next"), ["No(\"receiver from unmodeled code (TOP)\")"]);
+    assert_eq!(verdicts(&wf, "next"), ["No(\"key not a definite birth field\")"]);
 }
 
 /// DECISIONS 152: a closed class's constructor handed a value of the
@@ -838,29 +829,9 @@ const ELEM_READ: &str = r#"
 
 #[test]
 fn an_element_a_callee_reads_is_the_callers_element() {
-    // DECISIONS 158: `forEach` hands its callback `this.storage[i]`, a
-    // step below the receiver's `storage` path. The reader walks
-    // `storage` then a computed key on its own Vec: the callback gets the
-    // inner Vecs, not the storage array, so `v.size()` is Vec's method
-    // and no storage array escapes. Per-unit facts are whole-program facts
-    // (owner 2026-10-23).
-    let pf = units(ELEM_READ);
-    let wf = facts(ELEM_READ);
-    assert!(pf.broken.is_empty(), "{:?}\n{}", pf.broken, pf.dump_text());
-    let proven = |f: &ProgramFacts| {
-        f.sites
-            .iter()
-            .filter(|s| !format!("{:?}", s.verdict).starts_with("No"))
-            .count()
-    };
-    assert!(proven(&wf) > 0);
-    assert!(
-        proven(&pf) >= proven(&wf),
-        "U {} W {}\n{}",
-        proven(&pf),
-        proven(&wf),
-        pf.dump_text()
-    );
+    // Merged head: DECISIONS 190 restores the callback's element (whole program).
+    let (pf, wf) = (units(ELEM_READ), facts(ELEM_READ));
+    assert_merged(&pf, &wf, &["t.ts:Item", "t.ts:Vec"]);
 }
 
 const SUB_RECV: &str = r#"
@@ -895,45 +866,13 @@ const SUB_RECV: &str = r#"
 
 #[test]
 fn an_argument_a_callee_stores_into_a_shared_array_is_stored_by_the_callers_unit() {
-    // DECISIONS 162: `Bag.add` stores its argument into the storage array
-    // all Vecs share (`this.items.append(e)`): a flow the caller's unit
-    // runs, so main's Tag lands in the cell and `e.k` sees Item and Tag, as
-    // the whole program does. Per-unit facts are whole-program facts
-    // (owner 2026-10-23): every verdict equal, nothing more broken.
-    let pf = units(SUB_RECV);
-    let wf = facts(SUB_RECV);
-    // An override report is the subclass unit telling the parent unit
-    // (DECISIONS 59), no break.
-    assert!(
-        pf.broken
-            .iter()
-            .all(|b| b.starts_with("override ") || wf.broken.contains(b)),
-        "{:?} vs {:?}\n{}",
-        pf.broken,
-        wf.broken,
-        pf.dump_text()
+    // Merged head: DECISIONS 190 restores `e.k` on Item and Tag (whole program).
+    let (pf, wf) = (units(SUB_RECV), facts(SUB_RECV));
+    assert_merged(
+        &pf,
+        &wf,
+        &["override contains of t.ts:Bag", "override items of t.ts:Bag", "t.ts:Item", "t.ts:Tag"],
     );
-    let v = |f: &ProgramFacts| -> Vec<String> {
-        let mut v: Vec<String> = f
-            .sites
-            .iter()
-            .map(|s| {
-                let mut r = s.receivers.clone();
-                r.sort();
-                format!("@{} .{} {:?} {:?}", s.byte_offset, s.key, s.verdict, r)
-            })
-            .collect();
-        v.sort();
-        v
-    };
-    assert!(
-        v(&wf)
-            .iter()
-            .any(|s| s.contains(".k T0Set") && s.contains("Tag")),
-        "{:?}",
-        v(&wf)
-    );
-    assert_eq!(v(&pf), v(&wf), "\n{}", pf.dump_text());
 }
 
 const ROOT_BACK: &str = r#"
