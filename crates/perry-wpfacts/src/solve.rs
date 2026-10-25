@@ -1924,7 +1924,9 @@ impl Model {
         // (`Gen::contract_check`: a value no contract describes escapes, and
         // the field holds an unknown value). A class instance's
         // field is existing when every instance holds it from its birth
-        // (definite): the store adds no key (CW2 C, binarytrees_arena).
+        // (definite) or its slot is born with it, present or a hole
+        // (declared, `__perry_declared_keys`: DECISIONS 188): the store adds
+        // no key (CW2 C, binarytrees_arena; the CommonJS cache).
         // A literal layout's new data key is a shape transition its defining
         // unit performs the same way (design §16, DECISIONS 66): the layout
         // gains the key. `__proto__` and an accessor key store no data.
@@ -1939,9 +1941,19 @@ impl Model {
                     "class" => facts
                         .fields
                         .iter()
-                        .any(|f| f.data_field && &f.key == k && f.definite),
+                        .any(|f| f.data_field && &f.key == k && (f.definite || f.declared)),
                     _ => false,
                 }
+            }
+            // DECISIONS 188: a declared-keys object (`__perry_declared_keys`,
+            // the CommonJS cache) under a computed key: a store its defining
+            // unit performs as one under a computed key into its own object
+            // (the runtime caching a record under a path it computes,
+            // `cjsInstall`); published under `*`, it opens the keys there as
+            // the whole program does. Any other layout a computed key opens:
+            // a census report (§5).
+            (Some(facts), Key::Any) if matches!(self.toks[t as usize], TokKind::Obj(..)) => {
+                facts.kind == "class" && facts.fields.iter().any(|f| f.declared)
             }
             _ => false,
         };
@@ -1950,6 +1962,10 @@ impl Model {
                 // The stored value is published with the effect, checked
                 // as a published value (`Gen::contract_check`, §17.16 (c)).
                 Key::Named(a) if effect => {
+                    self.foreign_stores.insert((tm, a, src));
+                }
+                Key::Any if effect => {
+                    let a = self.atom(crate::STAR_KEY);
                     self.foreign_stores.insert((tm, a, src));
                 }
                 _ => {
@@ -2003,7 +2019,11 @@ impl Model {
                         w.ctor.push(site);
                     } else {
                         w.post.push(site);
-                        *self.adds_keys.entry(tm).or_default() += 1;
+                        // A store effect (DECISIONS 188): its defining unit
+                        // opens the key set, performing it.
+                        if !effect {
+                            *self.adds_keys.entry(tm).or_default() += 1;
+                        }
                     }
                 }
             }

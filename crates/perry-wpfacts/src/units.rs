@@ -719,6 +719,10 @@ impl ArgContract {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Published {
     whole: FxHashSet<String>,
+    /// DECISIONS 188: the CommonJS support module (the module every wrapped
+    /// module imports as `perry:cjs`): its `cache` and `main` are the
+    /// program's `require.cache` and main record.
+    pub(crate) cjs_support: Option<String>,
     /// Modules whose namespace object itself reaches other units as a value
     /// no contract describes: a dynamic `import()` or an `export * as`
     /// re-export. A static namespace import is described (§18.2).
@@ -931,6 +935,11 @@ pub(crate) fn published_surface(
             reexport_source(&cfg.export_sources, path, imports.iter().copied(), source)
         };
         for imp in imports.iter().copied() {
+            if imp.source == "perry:cjs" {
+                if let Some(t) = &imp.resolved_path {
+                    p.cjs_support = Some(t.clone());
+                }
+            }
             let Some(t) = imp.resolved_path.as_ref().filter(|t| t.as_str() != *path) else {
                 continue;
             };

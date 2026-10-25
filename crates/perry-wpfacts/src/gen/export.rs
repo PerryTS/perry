@@ -349,9 +349,35 @@ impl<'a> Gen<'a> {
             self.m.sink_node(n, r);
         }
         // The registry union and the unknown-path registry are cells
-        // (DECISIONS 171); `require.cache` and the main record are the
-        // program's, shared with every unit.
-        let mut shared: Vec<NodeId> = vec![self.m.cjs_cache, self.m.cjs_main];
+        // (DECISIONS 171). DECISIONS 188: `require.cache` and the main record
+        // are the support module's `cache` and `main` (`perry:cjs`), born
+        // there once for the program: per unit each holds that binding's
+        // value, the unit's own where it binds it, else its value contract's
+        // stand-in; what a unit stores into them is a store effect its owner
+        // performs (decision 17), so they leave through no ⊤. Without a
+        // support module, or with no contract of it, they are the program's,
+        // shared with every unit: ⊤.
+        let mut shared: Vec<NodeId> = Vec::new();
+        for (n, name) in [(self.m.cjs_cache, "cache"), (self.m.cjs_main, "main")] {
+            let support = self.unit_in.and_then(|u| u.cjs_support.as_deref());
+            let own = support.and_then(|sp| {
+                self.exports
+                    .iter()
+                    .find(|(&(mi, a), _)| path_of(self, mi) == sp && self.m.atoms[a as usize] == name)
+                    .map(|(_, &b)| b)
+            });
+            let value = match (cells, own, support) {
+                (true, Some(b), _) => Some(b),
+                (true, None, Some(sp)) => self
+                    .value_contract_for(sp, name)
+                    .map(|vc| self.stand_in_value(0, name, vc)),
+                _ => None,
+            };
+            match value {
+                Some(v) => self.m.edge(v, n),
+                None => shared.push(n),
+            }
+        }
         for (key, n) in [
             ("cjs:*", self.cjs_registry),
             ("cjs:?", self.cjs_unknown_path),
@@ -1239,7 +1265,12 @@ impl<'a> Gen<'a> {
             for &(_, a, c) in want.iter().filter(|w| w.0 == tm) {
                 if self.effects_done.insert((t, a)) {
                     let src = self.effect_src(tm, a, c);
-                    self.m.store_into(t, crate::model::Key::Named(a), src, site);
+                    // `*`: a store under a computed key (DECISIONS 188).
+                    let key = match self.m.atoms[a as usize] == crate::STAR_KEY {
+                        true => crate::model::Key::Any,
+                        false => crate::model::Key::Named(a),
+                    };
+                    self.m.store_into(t, key, src, site);
                     changed = true;
                 }
             }
