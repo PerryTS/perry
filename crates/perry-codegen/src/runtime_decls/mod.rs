@@ -273,4 +273,33 @@ mod tests {
             "got: {plain}"
         );
     }
+
+    /// `perry-ext-net` defines `js_ext_net_socket_on` as returning the handle
+    /// (`i64`), and the checked-in wasm32 ABI table records that. Declaring it
+    /// `void` is invisible on native targets, where the result register is
+    /// simply ignored, but wasm requires every declaration to match its
+    /// definition's type exactly, and `wasm-ld` rejects the mismatch when the
+    /// objects are linked without LTO.
+    #[test]
+    fn net_socket_on_is_declared_with_the_return_type_the_runtime_defines() {
+        let abi = include_str!("../wasm32/runtime_abi.tsv");
+        let row: Vec<&str> = abi
+            .lines()
+            .map(|line| line.split('\t').collect::<Vec<_>>())
+            .find(|columns| columns.first() == Some(&"js_ext_net_socket_on"))
+            .expect("js_ext_net_socket_on must stay in the wasm32 runtime ABI table");
+        assert_eq!(row[1], "i64", "the runtime returns the socket handle");
+
+        let mut module = crate::module::LlModule::new("wasm32-unknown-wasip2");
+        declare_stdlib_ffi(&mut module);
+        let declaration = module
+            .declaration_lines()
+            .find(|(name, _)| *name == "js_ext_net_socket_on")
+            .map(|(_, line)| line.to_string())
+            .expect("js_ext_net_socket_on must be declared");
+        assert!(
+            declaration.starts_with("declare i64 @js_ext_net_socket_on(i64, i64, i64)"),
+            "the declaration must return the i64 the runtime defines. Got: {declaration}"
+        );
+    }
 }
