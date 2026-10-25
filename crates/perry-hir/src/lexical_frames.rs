@@ -23,6 +23,12 @@ impl FrameIds {
         }
     }
 
+    /// Existing substitution walkers allocate expression-private locals
+    /// through this same monotonically increasing module namespace.
+    pub fn local_ids(&mut self) -> &mut LocalId {
+        &mut self.next_local_id
+    }
+
     pub(crate) fn fresh_func_id(&mut self) -> FuncId {
         let id = self.next_func_id;
         self.next_func_id = id.checked_add(1).expect("frame FuncId overflow");
@@ -231,6 +237,19 @@ pub fn max_ids(module: &Module) -> (LocalId, FuncId) {
             _ => {}
         }
     });
+    // Retained binding metadata must not attach to a newly allocated id,
+    // even when its original declaration was removed by an earlier pass.
+    ids.locals
+        .extend(module.classic_for_lexical_bindings.iter().copied());
+    ids.locals.extend(module.local_source_spans.keys().copied());
+    ids.funcs
+        .extend(module.closure_display_names.keys().copied());
+    ids.funcs.extend(module.closure_source_text.keys().copied());
+    ids.funcs
+        .extend(module.gen_param_prologue_len.keys().copied());
+    ids.funcs.extend(module.async_step_closures.iter().copied());
+    ids.funcs
+        .extend(module.async_generator_funcs.iter().copied());
     (
         ids.locals.last().copied().unwrap_or(0),
         ids.funcs.last().copied().unwrap_or(0),

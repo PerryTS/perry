@@ -174,3 +174,33 @@ fn copied_functions_keep_their_name_and_async_generator_metadata() {
         Some("named")
     );
 }
+
+#[test]
+fn fresh_frames_do_not_inherit_retained_metadata_of_removed_bindings() {
+    let ast = perry_parser::parse_typescript(
+        "function identity<T>(value: T) { return value; } console.log(identity<number>(1));",
+        "retained.ts",
+    )
+    .unwrap();
+    let mut module = crate::lower_module(&ast, "retained", "retained.ts").unwrap();
+    let (local, func) = max_ids(&module);
+    // These ids were used by bindings removed before specialization.
+    module.classic_for_lexical_bindings.insert(local + 1);
+    module.async_generator_funcs.insert(func + 1000);
+    crate::monomorphize_module(&mut module);
+    let copy = module
+        .functions
+        .iter()
+        .find(|f| f.name.starts_with("identity$"))
+        .unwrap();
+    assert!(
+        !module
+            .classic_for_lexical_bindings
+            .contains(&copy.params[0].id),
+        "an ordinary formal must not inherit a removed loop binding's cell rule"
+    );
+    assert!(
+        !module.async_generator_funcs.contains(&copy.id),
+        "an ordinary copy must not inherit a removed async generator's kind"
+    );
+}

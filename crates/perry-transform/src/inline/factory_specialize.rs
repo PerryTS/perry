@@ -263,6 +263,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
         classes: &[Class],
         new_classes: &mut Vec<Class>,
         next_class_counter: &mut usize,
+        next_local_id: &mut LocalId,
         base_class_counter_seed: &str,
     ) {
         for stmt in stmts.iter_mut() {
@@ -275,6 +276,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
                         classes,
                         new_classes,
                         next_class_counter,
+                        next_local_id,
                         base_class_counter_seed,
                     );
                 }
@@ -286,6 +288,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
                         classes,
                         new_classes,
                         next_class_counter,
+                        next_local_id,
                         base_class_counter_seed,
                     );
                 }
@@ -301,6 +304,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
                         classes,
                         new_classes,
                         next_class_counter,
+                        next_local_id,
                         base_class_counter_seed,
                     );
                     visit_stmts(
@@ -310,6 +314,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
                         classes,
                         new_classes,
                         next_class_counter,
+                        next_local_id,
                         base_class_counter_seed,
                     );
                     if let Some(eb) = else_branch {
@@ -320,6 +325,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
                             classes,
                             new_classes,
                             next_class_counter,
+                            next_local_id,
                             base_class_counter_seed,
                         );
                     }
@@ -332,6 +338,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
                         classes,
                         new_classes,
                         next_class_counter,
+                        next_local_id,
                         base_class_counter_seed,
                     );
                     visit_stmts(
@@ -341,6 +348,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
                         classes,
                         new_classes,
                         next_class_counter,
+                        next_local_id,
                         base_class_counter_seed,
                     );
                 }
@@ -359,6 +367,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
                             classes,
                             new_classes,
                             next_class_counter,
+                            next_local_id,
                             base_class_counter_seed,
                         );
                         if tmp.len() == 1 {
@@ -373,6 +382,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
                             classes,
                             new_classes,
                             next_class_counter,
+                            next_local_id,
                             base_class_counter_seed,
                         );
                     }
@@ -384,6 +394,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
                             classes,
                             new_classes,
                             next_class_counter,
+                            next_local_id,
                             base_class_counter_seed,
                         );
                     }
@@ -394,6 +405,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
                         classes,
                         new_classes,
                         next_class_counter,
+                        next_local_id,
                         base_class_counter_seed,
                     );
                 }
@@ -409,6 +421,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
                         classes,
                         new_classes,
                         next_class_counter,
+                        next_local_id,
                         base_class_counter_seed,
                     );
                     if let Some(c) = catch {
@@ -419,6 +432,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
                             classes,
                             new_classes,
                             next_class_counter,
+                            next_local_id,
                             base_class_counter_seed,
                         );
                     }
@@ -430,6 +444,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
                             classes,
                             new_classes,
                             next_class_counter,
+                            next_local_id,
                             base_class_counter_seed,
                         );
                     }
@@ -445,6 +460,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
                         classes,
                         new_classes,
                         next_class_counter,
+                        next_local_id,
                         base_class_counter_seed,
                     );
                     for case in cases {
@@ -456,6 +472,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
                                 classes,
                                 new_classes,
                                 next_class_counter,
+                                next_local_id,
                                 base_class_counter_seed,
                             );
                         }
@@ -466,6 +483,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
                             classes,
                             new_classes,
                             next_class_counter,
+                            next_local_id,
                             base_class_counter_seed,
                         );
                     }
@@ -479,6 +497,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
                         classes,
                         new_classes,
                         next_class_counter,
+                        next_local_id,
                         base_class_counter_seed,
                     );
                     if tmp.len() == 1 {
@@ -501,6 +520,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
         classes: &[Class],
         new_classes: &mut Vec<Class>,
         next_class_counter: &mut usize,
+        next_local_id: &mut LocalId,
         base_class_counter_seed: &str,
     ) {
         // First, recurse so deeply-nested calls are rewritten bottom-up. We
@@ -517,6 +537,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
                     classes,
                     new_classes,
                     next_class_counter,
+                    next_local_id,
                     base_class_counter_seed,
                 );
                 for a in args.iter_mut() {
@@ -527,6 +548,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
                         classes,
                         new_classes,
                         next_class_counter,
+                        next_local_id,
                         base_class_counter_seed,
                     );
                 }
@@ -541,6 +563,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
                     classes,
                     new_classes,
                     next_class_counter,
+                    next_local_id,
                     base_class_counter_seed,
                 );
                 rewrite_call_init(
@@ -550,6 +573,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
                     classes,
                     new_classes,
                     next_class_counter,
+                    next_local_id,
                     base_class_counter_seed,
                 );
             }
@@ -561,6 +585,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
                     classes,
                     new_classes,
                     next_class_counter,
+                    next_local_id,
                     base_class_counter_seed,
                 );
             }
@@ -576,6 +601,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
                     classes,
                     new_classes,
                     next_class_counter,
+                    next_local_id,
                     base_class_counter_seed,
                 );
                 rewrite_call_init(
@@ -585,6 +611,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
                     classes,
                     new_classes,
                     next_class_counter,
+                    next_local_id,
                     base_class_counter_seed,
                 );
                 rewrite_call_init(
@@ -594,6 +621,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
                     classes,
                     new_classes,
                     next_class_counter,
+                    next_local_id,
                     base_class_counter_seed,
                 );
             }
@@ -606,6 +634,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
                         classes,
                         new_classes,
                         next_class_counter,
+                        next_local_id,
                         base_class_counter_seed,
                     );
                 }
@@ -618,6 +647,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
                     classes,
                     new_classes,
                     next_class_counter,
+                    next_local_id,
                     base_class_counter_seed,
                 );
             }
@@ -633,6 +663,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
                     classes,
                     new_classes,
                     next_class_counter,
+                    next_local_id,
                     base_class_counter_seed,
                 );
                 rewrite_call_init(
@@ -642,6 +673,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
                     classes,
                     new_classes,
                     next_class_counter,
+                    next_local_id,
                     base_class_counter_seed,
                 );
             }
@@ -654,6 +686,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
                         classes,
                         new_classes,
                         next_class_counter,
+                        next_local_id,
                         base_class_counter_seed,
                     );
                 }
@@ -666,6 +699,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
                     classes,
                     new_classes,
                     next_class_counter,
+                    next_local_id,
                     base_class_counter_seed,
                 );
             }
@@ -677,6 +711,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
                     classes,
                     new_classes,
                     next_class_counter,
+                    next_local_id,
                     base_class_counter_seed,
                 );
                 rewrite_call_init(
@@ -686,6 +721,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
                     classes,
                     new_classes,
                     next_class_counter,
+                    next_local_id,
                     base_class_counter_seed,
                 );
             }
@@ -725,6 +761,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
                     classes,
                     new_classes,
                     next_class_counter,
+                    next_local_id,
                     base_class_counter_seed,
                 ) {
                     return;
@@ -756,6 +793,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
             classes,
             new_classes,
             next_class_counter,
+            next_local_id,
             base_class_counter_seed,
         );
     }
@@ -768,6 +806,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
         classes: &[Class],
         new_classes: &mut Vec<Class>,
         next_class_counter: &mut usize,
+        next_local_id: &mut LocalId,
         base_class_counter_seed: &str,
     ) -> bool {
         let Some(class) = classes.iter().find(|c| c.name == target_name) else {
@@ -827,7 +866,6 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
             return false;
         }
         // Clone and specialize the class.
-        let mut next_id_seed: LocalId = 0;
         let cloned_name = format!(
             "{}__inline_{}_{}",
             target_name, base_class_counter_seed, *next_class_counter
@@ -845,7 +883,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
         // Re-emit the dynamic registration at the call site instead (#6356).
         let mut dynamic_parent_expr: Option<Expr> = None;
         if let Some(extends_expr) = cloned.extends_expr.as_mut() {
-            substitute_locals(extends_expr, &param_subst, &mut next_id_seed);
+            substitute_locals(extends_expr, &param_subst, next_local_id);
             if let Expr::ClassRef(parent_name) = extends_expr.as_ref() {
                 cloned.extends_name = Some(parent_name.clone());
                 cloned.extends = classes
@@ -884,7 +922,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
                 // Drop the capture ctor params.
                 ctor.params.retain(|p| !cap_param_ids.contains(&p.id));
                 // Substitute remaining body refs to those param ids.
-                substitute_locals_in_stmts(&mut ctor.body, &subst, &mut next_id_seed);
+                substitute_locals_in_stmts(&mut ctor.body, &subst, next_local_id);
                 // Drop ctor body statements that were the synthesized
                 // assignment `this.__perry_cap_<outer> = LocalGet(...)`. After
                 // substitution above those LocalGets are gone, so the assign
@@ -901,21 +939,21 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
                 // Substitute remaining field inits / key exprs.
                 for field in cloned.fields.iter_mut() {
                     if let Some(init) = field.init.as_mut() {
-                        substitute_locals(init, &subst, &mut next_id_seed);
+                        substitute_locals(init, &subst, next_local_id);
                     }
                     if let Some(key) = field.key_expr.as_mut() {
-                        substitute_locals(key, &subst, &mut next_id_seed);
+                        substitute_locals(key, &subst, next_local_id);
                     }
                 }
                 // Substitute in methods/getters/setters.
                 for m in cloned.methods.iter_mut() {
-                    substitute_locals_in_stmts(&mut m.body, &subst, &mut next_id_seed);
+                    substitute_locals_in_stmts(&mut m.body, &subst, next_local_id);
                 }
                 for (_, g) in cloned.getters.iter_mut() {
-                    substitute_locals_in_stmts(&mut g.body, &subst, &mut next_id_seed);
+                    substitute_locals_in_stmts(&mut g.body, &subst, next_local_id);
                 }
                 for (_, s) in cloned.setters.iter_mut() {
-                    substitute_locals_in_stmts(&mut s.body, &subst, &mut next_id_seed);
+                    substitute_locals_in_stmts(&mut s.body, &subst, next_local_id);
                 }
             }
         }
@@ -977,6 +1015,8 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
     }
 
     // Visit module init.
+    let mut frame_ids = perry_hir::lexical_frames::FrameIds::new(module);
+    let next_local_id = frame_ids.local_ids();
     let classes_snapshot = module.classes.clone();
     visit_stmts(
         &mut module.init,
@@ -985,6 +1025,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
         &classes_snapshot,
         &mut new_classes,
         &mut next_class_counter,
+        next_local_id,
         "init",
     );
     // Dynamic parent registration with a now-static class result: after
@@ -1037,6 +1078,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
             &classes_snapshot,
             &mut new_classes,
             &mut next_class_counter,
+            next_local_id,
             &format!("fn{}", fi),
         );
     }
@@ -1050,6 +1092,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
                 &classes_snapshot,
                 &mut new_classes,
                 &mut next_class_counter,
+                next_local_id,
                 &format!("c{}ctor", ci),
             );
         }
@@ -1061,6 +1104,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
                 &classes_snapshot,
                 &mut new_classes,
                 &mut next_class_counter,
+                next_local_id,
                 &format!("c{}m{}", ci, mi),
             );
         }
@@ -1072,6 +1116,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
                 &classes_snapshot,
                 &mut new_classes,
                 &mut next_class_counter,
+                next_local_id,
                 &format!("c{}g{}", ci, gi),
             );
         }
@@ -1083,12 +1128,13 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
                 &classes_snapshot,
                 &mut new_classes,
                 &mut next_class_counter,
+                next_local_id,
                 &format!("c{}s{}", ci, si),
             );
         }
     }
     // Each class name has its own emitted methods and constructors.
-    let mut frame_ids = perry_hir::lexical_frames::FrameIds::new(module);
+    // Continue the allocator used for private parent/key expression temps.
     for class in &mut new_classes {
         perry_hir::lexical_frames::class(class, &mut frame_ids).metadata(module);
     }
