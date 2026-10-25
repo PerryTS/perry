@@ -961,6 +961,8 @@ pub(crate) struct CrossModuleCtx {
     /// Case 2c: the program's families and colouring
     /// (`CompileOptions::program_layouts`).
     pub program_layouts: std::sync::Arc<crate::layout_families::ProgramLayouts>,
+    /// Per-module compile-time receiver candidates, not emitted target state.
+    pub receiver_families: std::sync::Arc<std::collections::BTreeMap<u32, u32>>,
     pub program_has_worker: bool,
     pub program_has_thread_agents: bool,
     /// The class and method tables inverted (`class_hierarchy`). Set once

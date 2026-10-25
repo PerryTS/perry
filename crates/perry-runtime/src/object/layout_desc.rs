@@ -28,6 +28,8 @@
 //! full ShapeId value, and bit 30 ([`LAYOUT_SHADOW_BIT`]) is the shadow bit,
 //! which no ShapeId carries (object model §3.6; set by `object::shadow`).
 
+mod optional_family;
+
 use super::ObjectHeader;
 mod define_field;
 pub(crate) mod methods;
@@ -1958,7 +1960,8 @@ static KEEP_PERRY_LAYOUT_INDEX_PROBE: unsafe extern "C" fn(
 pub(crate) fn is_family_layout_word(word: u32) -> bool {
     layout_index_of_word(word).is_some_and(|i| unsafe {
         let d = &*desc_at(i);
-        d.class_id != 0 && registered_layout_id(d.layout_id) == Some(layout_id_of_word(word))
+        optional_family::is_family(d)
+            && registered_layout_id(d.layout_id) == Some(layout_id_of_word(word))
     })
 }
 
@@ -2005,8 +2008,9 @@ pub(crate) unsafe fn family_desc_of(obj: *const ObjectHeader) -> Option<&'static
         return evaluation_family_desc_of(word);
     };
     let d = &*desc_at(index);
-    (d.class_id != 0 && registered_layout_id(d.layout_id) == Some(layout_id_of_word(word)))
-        .then_some(d)
+    (optional_family::is_family(d)
+        && registered_layout_id(d.layout_id) == Some(layout_id_of_word(word)))
+    .then_some(d)
 }
 
 /// Is `obj` a class family object: on its family layout, or on a class
@@ -2561,7 +2565,7 @@ pub(crate) unsafe fn family_own_key_hashed(
             return None;
         }
         let d = &*desc_at(index);
-        if d.class_id == 0 || registered_layout_id(d.layout_id) != Some(word) {
+        if !optional_family::is_family(d) || registered_layout_id(d.layout_id) != Some(word) {
             return None;
         }
         d

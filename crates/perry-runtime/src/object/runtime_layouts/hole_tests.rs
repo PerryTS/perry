@@ -117,6 +117,14 @@ static mut CLASS_HOLEY: PerryLayoutDesc = PerryLayoutDesc {
     methods: std::ptr::null(),
 };
 
+runtime_layout!(
+    LITERAL_OPTIONAL,
+    0x7f000014,
+    0,
+    crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
+    [H_A => OPT, H_B => OPT, H_C => OPT, H_D => OPT]
+);
+
 const TRUE: u64 = crate::value::TAG_TRUE;
 
 unsafe fn string(value: crate::JSValue) -> String {
@@ -603,4 +611,69 @@ fn absent_layout_methods_throw_or_resolve_an_inherited_method() {
             "inherited method receives the original this"
         );
     }
+}
+
+#[test]
+fn classless_optional_family_keeps_shape_and_routes_unknown_keys_to_overflow() {
+    crate::gc::initialize_runtime_fixture();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let desc = std::ptr::addr_of!(LITERAL_OPTIONAL);
+    let object =
+        scope.root_raw_mut_ptr(unsafe { crate::object::layout_desc::perry_alloc_layout(desc) });
+    object.with_mut_ptr(|obj: *mut ObjectHeader| unsafe {
+        assert_eq!((*obj).class_id, 0);
+        let word = (*obj).parent_class_id;
+        assert!(
+            crate::object::layout_desc::is_family_layout_word(word),
+            "must enter the classless family operation"
+        );
+        assert!(std::ptr::eq(
+            crate::object::layout_desc::family_desc_of(obj).unwrap(),
+            desc
+        ));
+        assert_absent_own(obj, &H_A);
+        assert_eq!(
+            crate::object::layout_desc::family_own_key(obj, b"holes_a"),
+            Some(Some((0, 0)))
+        );
+        js_object_set_field_by_name(obj, H_A.string, 17.0);
+        js_object_set_field_by_name(obj, H_B.string, 23.0);
+        assert_eq!(
+            (*obj).parent_class_id,
+            word,
+            "ordered fills keep the family shape"
+        );
+        assert_order(obj, &["holes_a", "holes_b"]);
+    });
+    let extra = scope.root_string_ptr(crate::string::js_string_from_bytes(
+        b"holes_extra".as_ptr(),
+        11,
+    ));
+    object.with_mut_ptr(|obj: *mut ObjectHeader| unsafe {
+        js_object_set_field_by_name(obj, extra.get_raw_mut_ptr(), 31.0);
+        assert!(
+            !(*obj).meta.is_null() && (*(*obj).meta).overflow != 0,
+            "an unmodeled key must enter the authoritative overflow"
+        );
+        assert_order(obj, &["holes_a", "holes_b", "holes_extra"]);
+        assert_eq!(js_object_get_field_by_name_f64(obj, H_A.string), 17.0);
+    });
+    crate::gc::js_gc_collect();
+    object.with_mut_ptr(|obj: *mut ObjectHeader| unsafe {
+        assert_order(obj, &["holes_a", "holes_b", "holes_extra"]);
+        assert_eq!(
+            js_object_get_field_by_name_f64(obj, extra.get_raw_mut_ptr()),
+            31.0
+        );
+    });
+    let mixed = scope.root_raw_mut_ptr(unsafe {
+        crate::object::layout_desc::perry_alloc_layout(std::ptr::addr_of!(HOLEY))
+    });
+    mixed.with_const_ptr(|obj: *const ObjectHeader| unsafe {
+        assert!(
+            crate::object::layout_desc::family_desc_of(obj).is_none(),
+            "mixed required/optional runtime layouts are not newly admitted"
+        );
+    });
+    finish();
 }

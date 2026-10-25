@@ -722,7 +722,7 @@ fn emit_desc(
     ));
     llmod.add_raw_global(format!(
         "@{desc_name} = global {DESC_TY} {{ i32 {family}, i16 0, i8 0, i8 0, i32 {slot_count}, i32 {}, i64 0, i64 0, ptr @{keys_name}, i32 {count}, i32 {}, ptr @{index_name}, i32 {}, i32 {}, ptr {methods} }}, section \"{sect}\", align 8",
-        if class.0 == 0 { 0 } else { LAYOUT_ID_CARRIED as i32 },
+        LAYOUT_ID_CARRIED as i32,
         cap - 1,
         class.0,
         class.1
@@ -1017,6 +1017,11 @@ pub(crate) fn emit_module_layouts(
             variants.push((v.key_bits, vnamed, v.slot_count));
         }
         let methods = methods::emit(llmod, strings, &mut atoms, fam);
+        let identity = if layouts.literal_families.contains(&fam.class_id) {
+            (0, 0)
+        } else {
+            (fam.class_id, fam.parent_class_id)
+        };
         emit_desc(
             llmod,
             &sect,
@@ -1028,7 +1033,7 @@ pub(crate) fn emit_module_layouts(
             family,
             &named,
             fam.slot_count,
-            (fam.class_id, fam.parent_class_id),
+            identity,
             &methods,
         );
         n += 1;
@@ -1046,7 +1051,7 @@ pub(crate) fn emit_module_layouts(
                 family,
                 vnamed,
                 *slot_count,
-                (fam.class_id, fam.parent_class_id),
+                identity,
                 &methods,
             );
             n += 1;

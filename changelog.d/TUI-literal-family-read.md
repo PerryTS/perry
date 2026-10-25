@@ -1,0 +1,1 @@
+- Keep bounded late fields of closed literal families in their declared layout, and check that layout at reads through reassigned receivers.
