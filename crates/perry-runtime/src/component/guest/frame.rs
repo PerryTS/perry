@@ -1,16 +1,46 @@
-//! Stable native cells root every value retained by a canonical C adapter.
+//! Owned traced arrays retain canonical values across suspension and interleaving.
 //! Every potentially throwing operation catches before returning to C.
 use super::super::*;
-use std::{cell::UnsafeCell, ffi::c_void};
+use crate::native_payload::{self as payload, NativePayloadFamily, OwnerLink};
+use std::{
+    ffi::c_void,
+    marker::PhantomData,
+    rc::Rc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+};
+
+static FRAME: NativePayloadFamily = NativePayloadFamily {
+    class_id: crate::native_class_ids::COMPONENT_GUEST_FRAME,
+    links_owner: true,
+    name: "ComponentGuestFrame",
+    constructor_export: None,
+    constructor_length: 0,
+    install_prototype: |_| {},
+};
+
+// Teardown may finalize the GC cell before a cancelled C task frees its frame.
+// This shared native flag outlives that cell; its Drop never touches JS or TLS.
+struct Anchor(Arc<AtomicBool>);
+impl Drop for Anchor {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
 
 #[cfg(test)]
 #[path = "frame_tests.rs"]
 mod tests;
 
 pub(super) struct Frame {
-    // Field drop order matters: remove roots before freeing their cells.
-    scope: RuntimeHandleScope,
-    values: Vec<Box<UnsafeCell<f64>>>,
+    owner: OwnerLink,
+    alive: Arc<AtomicBool>,
+    length: u32,
+    // OwnerLink must only be resolved on its creating agent. The C ABI has the
+    // same affinity requirement; Rust callers cannot move a frame to a worker.
+    _thread: PhantomData<Rc<()>>,
     failed: bool,
     pub(super) transfers: Vec<u32>,
     pub(super) borrows: Vec<u32>,
@@ -19,35 +49,82 @@ pub(super) struct Frame {
 
 impl Frame {
     pub fn new() -> Self {
-        let mut frame = Self {
-            scope: RuntimeHandleScope::new(),
-            values: Vec::new(),
+        let scope = RuntimeHandleScope::new();
+        let values = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+            crate::array::js_array_alloc_with_length(1) as i64,
+        ));
+        let owner = scope.root_nanbox_f64(payload::alloc_closed(&FRAME, &[]));
+        payload::state_set(
+            owner.get_nanbox_f64(),
+            &FRAME,
+            b"values",
+            values.get_nanbox_f64(),
+        );
+        let alive = Arc::new(AtomicBool::new(true));
+        payload::attach(
+            owner.get_nanbox_f64(),
+            &FRAME,
+            Anchor(alive.clone()),
+            std::mem::size_of::<Self>(),
+        )
+        .expect("new private canonical frame");
+        let owner =
+            payload::owner_link(owner.get_nanbox_f64(), &FRAME).expect("canonical frame owner");
+        unsafe { payload::link_ref(owner) };
+        Self {
+            owner,
+            alive,
+            length: 1,
+            _thread: PhantomData,
             failed: false,
             transfers: Vec::new(),
             borrows: Vec::new(),
             lifetime: None,
-        };
-        frame.add(undefined()); // Slot zero retains the original exception.
-        frame
+        }
+    }
+
+    // This read never allocates or calls JS: the private state object has only
+    // direct data slots. No transient handle remains registered after the read.
+    fn values(&self) -> f64 {
+        assert!(
+            self.alive.load(Ordering::Acquire),
+            "canonical frame used after heap teardown"
+        );
+        let owner = unsafe { payload::link_event_owner(self.owner) }
+            .expect("canonical frame on owner thread");
+        payload::state_get(owner, &FRAME, b"values")
     }
 
     pub fn add(&mut self, value: f64) -> u32 {
-        let index = u32::try_from(self.values.len())
-            .unwrap_or_else(|_| fail("Too many component frame values"));
-        let cell = Box::new(UnsafeCell::new(value));
-        unsafe {
-            self.scope.root_nanbox_cell(&cell);
-        }
-        self.values.push(cell);
+        let index = self.length;
+        let next = index
+            .checked_add(1)
+            .unwrap_or_else(|| fail("Too many component frame values"));
+        // Growing the owned array can collect. Root the incoming value before
+        // any managed allocation, then let the array's ordinary barrier own it.
+        let scope = RuntimeHandleScope::new();
+        let value = scope.root_nanbox_f64(value);
+        let values = scope.root_nanbox_f64(self.values());
+        let grown = crate::array::js_array_set_f64_extend(
+            array(values.get_nanbox_f64()),
+            index,
+            value.get_nanbox_f64(),
+        );
+        // Array growth can replace its header outside the collector. Publish
+        // the returned head, not an old forwarding stub, into the owner edge.
+        let values = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(grown as i64));
+        let owner =
+            unsafe { payload::link_event_owner(self.owner) }.expect("canonical frame owner");
+        payload::state_set(owner, &FRAME, b"values", values.get_nanbox_f64());
+        self.length = next;
         index
     }
 
     pub fn get(&self, index: u32) -> f64 {
-        let cell = self
-            .values
-            .get(index as usize)
-            .unwrap_or_else(|| fail("Invalid component frame slot"));
-        unsafe { *cell.get() }
+        if index >= self.length {
+            fail("Invalid component frame slot");
+        }
+        crate::array::js_array_get_f64(array(self.values()), index)
     }
 
     pub(super) fn lifetime(&mut self) -> f64 {
@@ -73,10 +150,16 @@ impl Frame {
         match crate::exception::catch_js_throw(|| body(self)) {
             Ok(value) => value,
             Err(error) => {
-                // Slot zero predates the trap and survives its root restore.
-                unsafe {
-                    crate::gc::runtime_store_root_nanbox_f64_raw_slot(self.values[0].get(), error);
-                }
+                // The owned slot array survives transient exception-root
+                // restoration. Keep the original error before later cleanup.
+                let scope = RuntimeHandleScope::new();
+                let error = scope.root_nanbox_f64(error);
+                let values = scope.root_nanbox_f64(self.values());
+                crate::array::js_array_set_f64(
+                    array(values.get_nanbox_f64()),
+                    0,
+                    error.get_nanbox_f64(),
+                );
                 self.failed = true;
                 T::default()
             }
@@ -86,8 +169,16 @@ impl Frame {
 
 impl Drop for Frame {
     fn drop(&mut self) {
-        if let Some(slot) = self.lifetime {
-            crate::array::js_array_set_f64(array(self.get(slot)), 0, 0.0);
+        // The GC-cell finalizer flips this flag before heap unmapping. A late
+        // native C-task drop must free only Rust state after that point.
+        if self.alive.load(Ordering::Acquire) {
+            if let Some(slot) = self.lifetime {
+                crate::array::js_array_set_f64(array(self.get(slot)), 0, 0.0);
+            }
+            let owner = unsafe { payload::link_event_owner(self.owner) }
+                .expect("canonical frame on owner thread");
+            payload::close(owner, &FRAME);
+            unsafe { payload::link_unref(self.owner) };
         }
     }
 }
@@ -475,9 +566,8 @@ pub unsafe extern "C" fn perry_component_frame_call(
             values.as_ptr(),
             values.len(),
         );
-        // A frame slot must outlive this call's temporary handles. Publishing
-        // it before their scope ends would let that scope truncate its root.
-        drop(scope);
+        // Publish into the owned frame before releasing this call's temporary
+        // handles. Its lifetime is independent of their stack checkpoint.
         frame.add(value)
     });
     drop(values);

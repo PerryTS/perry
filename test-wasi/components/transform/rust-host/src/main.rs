@@ -4,9 +4,9 @@ mod resources;
 mod values;
 
 use anyhow::{ensure, Context, Result};
+use perry_wasi::{WasiCtx, WasiCtxView, WasiView};
 use wasmtime::component::{Component, ComponentType, Lift, Linker, Lower, ResourceTable};
 use wasmtime::{Config, Engine, Store, StoreContextMut, StoreLimits, StoreLimitsBuilder};
-use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
 #[derive(Debug, PartialEq, ComponentType, Lift, Lower)]
 #[component(record)]
@@ -59,7 +59,7 @@ fn main() -> Result<()> {
     let engine = Engine::new(&config)?;
     let component = Component::from_binary(&engine, &std::fs::read(path)?)?;
     let mut linker = Linker::<State>::new(&engine);
-    wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
+    perry_wasi::p2::add_to_linker_sync(&mut linker)?;
     if resource_profile {
         resources::link(&mut linker)?;
     } else if all_values {
@@ -90,12 +90,10 @@ fn main() -> Result<()> {
                 },
             )?;
     }
-    let mut wasi = WasiCtxBuilder::new();
-    wasi.allow_tcp(false)
-        .allow_udp(false)
-        .allow_ip_name_lookup(false);
+    // Turnloop contexts grant no files, network, environment or stdio by default.
+    let mut wasi = WasiCtx::new(64)?;
     if resource_profile {
-        wasi.inherit_stderr();
+        wasi.cli.inherit_stderr();
     }
     if moving_resources {
         for name in [
@@ -103,10 +101,9 @@ fn main() -> Result<()> {
             "PERRY_GC_VERIFY_EVACUATION",
             "PERRY_GC_DIAG",
         ] {
-            wasi.env(name, "1");
+            wasi.cli.environment.push((name.into(), "1".into()));
         }
     }
-    let wasi = wasi.build();
     let mut store = Store::new(
         &engine,
         State {

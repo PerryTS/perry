@@ -200,6 +200,11 @@ future/stream values, async guest adapters, concurrent calls within one instance
 See [the component qualification record](WASI_COMPONENTS.md) for exact APIs and
 receipts.
 
+Canonical guest frames now own traced slot arrays through stable native links.
+Their lifetime is independent of a native handle scope, and frames can finish
+out of order. This supplies the rooting foundation for suspension; the C async
+adapter and generic future/stream bindings remain separate implementation work.
+
 Pin an explicit WASI 0.3 interface version and supported Component Model
 feature set. Integrate native async lifting/lowering with Perry's promise
 scheduler, task suspension/resumption, futures and streams. Upgrading a host
@@ -215,6 +220,8 @@ composition and a streaming HTTP example before claiming P3 support.
 Retain the P2 command/profile tests during adoption. Specify the minor
 version: the official release table records additional Component Model
 features for 0.3.1, so a generic "P3 supported" label is insufficient.
+The current 0.3.0 target does not require `error-context`: the official roadmap
+still lists that type among experimental candidate features.
 
 ## Sources
 

@@ -130,7 +130,7 @@ fn adapter_slots_are_rewritten_by_a_real_moving_collection() {
     let _nursery = crate::gc::CopyingNurseryTestGuard::new(0);
     let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _evacuate = crate::gc::knob_overrides::ForcedEvacuationTestGuard::on();
-    crate::gc::register_runtime_handle_root_scanner_for_tests();
+    crate::gc::gc_init();
     unsafe {
         let frame = perry_component_frame_new();
         let text = "A heap string that must survive collection 🌍";
@@ -158,7 +158,7 @@ fn canonical_byte_lists_are_owned_and_survive_moving_collection() {
     let _nursery = crate::gc::CopyingNurseryTestGuard::new(0);
     let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _evacuate = crate::gc::knob_overrides::ForcedEvacuationTestGuard::on();
-    crate::gc::register_runtime_handle_root_scanner_for_tests();
+    crate::gc::gc_init();
     for len in [0, 31, 4097, 3 * 1024 * 1024 + 137] {
         let expected: Vec<u8> = (0..len).map(|i| (i * 31 + 7) as u8).collect();
         let mut input = expected.clone();
@@ -194,7 +194,7 @@ fn failed_frame_keeps_the_original_heap_exception_rooted() {
     let _nursery = crate::gc::CopyingNurseryTestGuard::new(0);
     let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _evacuate = crate::gc::knob_overrides::ForcedEvacuationTestGuard::on();
-    crate::gc::register_runtime_handle_root_scanner_for_tests();
+    crate::gc::gc_init();
     let mut frame = Frame::new();
     frame.guard::<()>(|_| {
         let thrown =
@@ -261,4 +261,129 @@ fn adapter_copies_strings_bytes_and_unicode_scalars() {
         assert_eq!(perry_component_frame_failed(frame), 1);
         perry_component_frame_drop(frame);
     }
+}
+
+#[test]
+fn guest_frames_can_finish_out_of_order_without_truncating_other_roots() {
+    let _nursery = crate::gc::CopyingNurseryTestGuard::new(0);
+    let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _evacuate = crate::gc::knob_overrides::ForcedEvacuationTestGuard::on();
+    crate::gc::gc_init();
+    let older = Frame::new();
+    let mut suspended = Frame::new();
+    let slot = suspended.add(crate::value::js_nanbox_pointer(
+        crate::array::js_array_alloc_with_length(3) as i64,
+    ));
+    let before = suspended.get(slot).to_bits();
+    drop(older);
+    crate::gc::gc_collect_minor();
+    assert_ne!(suspended.get(slot).to_bits(), before, "the suspended frame's sole retained array must actually move after an older frame finishes");
+    assert_eq!(crate::array::js_array_length(array(suspended.get(slot))), 3);
+}
+
+#[test]
+fn guest_frames_survive_the_native_scope_that_created_them() {
+    let _nursery = crate::gc::CopyingNurseryTestGuard::new(0);
+    let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _evacuate = crate::gc::knob_overrides::ForcedEvacuationTestGuard::on();
+    crate::gc::gc_init();
+    let (frame, slot, before) = {
+        let temporary = RuntimeHandleScope::new();
+        let _temporary_value = temporary.root_nanbox_f64(undefined());
+        let mut frame = Frame::new();
+        let slot = frame.add(crate::value::js_nanbox_pointer(
+            crate::array::js_array_alloc_with_length(5) as i64,
+        ));
+        let before = frame.get(slot).to_bits();
+        (frame, slot, before)
+    };
+    crate::gc::gc_collect_minor();
+    assert_ne!(
+        frame.get(slot).to_bits(),
+        before,
+        "a canonical frame must retain its values after its submitting native scope returns"
+    );
+    assert_eq!(crate::array::js_array_length(array(frame.get(slot))), 5);
+}
+
+#[test]
+fn guest_frame_growth_publishes_live_heads_and_keeps_all_slots_traced() {
+    let _nursery = crate::gc::CopyingNurseryTestGuard::new(0);
+    let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _evacuate = crate::gc::knob_overrides::ForcedEvacuationTestGuard::on();
+    crate::gc::gc_init();
+    let mut frame = Frame::new();
+    for n in 0..1025 {
+        let value =
+            crate::value::js_nanbox_pointer(crate::array::js_array_alloc_with_length(n % 7) as i64);
+        assert_eq!(frame.add(value), n + 1);
+        // The frame owns this live private array; this only inspects its
+        // tracked header to reject a pre-growth forwarding stub.
+        let header = unsafe {
+            crate::value::addr_class::try_read_tracked_gc_header(array(frame.values()) as usize)
+        }
+        .unwrap();
+        assert_eq!(
+            unsafe { header.as_ref().gc_flags } & crate::gc::GC_FLAG_FORWARDED,
+            0,
+            "an owned frame must publish each grown array head"
+        );
+        if n % 127 == 0 {
+            crate::gc::gc_collect_minor();
+        }
+    }
+    crate::gc::gc_collect_minor();
+    for n in 0..1025 {
+        assert_eq!(
+            crate::array::js_array_length(array(frame.get(n + 1))),
+            n % 7
+        );
+    }
+}
+
+#[test]
+fn dropping_a_guest_frame_preserves_later_temporary_handle_scopes() {
+    let _nursery = crate::gc::CopyingNurseryTestGuard::new(0);
+    let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _evacuate = crate::gc::knob_overrides::ForcedEvacuationTestGuard::on();
+    crate::gc::gc_init();
+    let frame = Frame::new();
+    let temporary = RuntimeHandleScope::new();
+    let value = temporary.root_nanbox_f64(crate::value::js_nanbox_pointer(
+        crate::array::js_array_alloc_with_length(7) as i64,
+    ));
+    let before = value.get_nanbox_f64().to_bits();
+    drop(frame);
+    crate::gc::gc_collect_minor();
+    assert_ne!(
+        value.get_nanbox_f64().to_bits(),
+        before,
+        "dropping a persistent frame must not truncate another scope's root"
+    );
+    assert_eq!(
+        crate::array::js_array_length(array(value.get_nanbox_f64())),
+        7
+    );
+}
+
+#[test]
+fn guest_frame_drop_after_cell_teardown_never_resolves_its_stale_link() {
+    crate::gc::gc_init();
+    let mut frame = Frame::new();
+    let alive = Arc::downgrade(&frame.alive);
+    unsafe {
+        crate::native_handle::finalize_native_handle_at_teardown(
+            frame.owner.0 as *mut crate::native_handle::NativeHandleHeader,
+        );
+        assert!(!frame.alive.load(Ordering::Acquire));
+        // The real teardown unmaps the cell. Release its test-only pin while
+        // storage is still mapped, then poison the inert post-teardown token.
+        payload::link_unref(frame.owner);
+    }
+    frame.owner = OwnerLink(usize::MAX);
+    drop(frame);
+    assert!(
+        alive.upgrade().is_none(),
+        "both native anchor references must be released"
+    );
 }

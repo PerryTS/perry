@@ -24,6 +24,9 @@ Each of these, absolutely (there is no allowlist to add an entry to):
     host would hide still counts;
   * a package in `TOKIO` appearing in **`Cargo.lock`** (whatever pulled it in,
     including a third-party crate turning a `tokio` feature on);
+  * the same dependency, lockfile and source violations in the standalone
+    `test-wasi/components/*/*` Rust fixtures, which root workspace metadata
+    does not include;
   * a **source line** (not a comment) in `crates/*/src`, `crates/*/tests`,
     `crates/*/benches` or `crates/*/examples` that names a tokio path
     (`tokio::`, `tokio_rustls::`, …) or a `#[tokio::main]` / `#[tokio::test]`
@@ -192,6 +195,32 @@ def source_hits(root: Path) -> list[str]:
     return hits
 
 
+def wasi_fixture_problems(root: Path, metadata_loader=None) -> list[str]:
+    """Standalone component fixtures have their own workspaces and lockfiles.
+
+    Root workspace metadata cannot see these dependency graphs. Check them
+    independently so a provider used only by acceptance tests cannot add Tokio.
+    """
+    metadata_loader = metadata_loader or load_metadata
+    problems = []
+    for manifest in sorted((root / "test-wasi/components").glob("*/*/Cargo.toml")):
+        directory = manifest.parent
+        label = str(directory.relative_to(root))
+        for edge in edges_from_metadata(metadata_loader(directory)):
+            problems.append(f"{label}: tokio edge {edge['crate']} -> {edge['dep']}")
+        lock = directory / "Cargo.lock"
+        if lock.is_file():
+            for name, versions in tokio_in_lock(lock_entries(lock.read_text())).items():
+                problems.append(f"{label}/Cargo.lock: tokio package {name} {', '.join(versions)}")
+        for sub in SOURCE_DIRS:
+            for path in sorted((directory / sub).rglob("*.rs")):
+                for n, line in enumerate(path.read_text().splitlines(), 1):
+                    stripped = line.lstrip()
+                    if not stripped.startswith(("//", "*")) and SOURCE_RE.search(line):
+                        problems.append(f"tokio in source: {path.relative_to(root)}:{n}: {stripped[:120]}")
+    return problems
+
+
 # ---------------------------------------------------------------------------
 # The check
 # ---------------------------------------------------------------------------
@@ -307,12 +336,40 @@ def self_test() -> int:
     if not any("Re-check the reason" in p for p in check(baseline, [], bumped, [])):
         failures.append("a not_tokio version change did not have to be re-recorded")
 
+    # Standalone fixture workspaces are invisible to root workspace metadata.
+    # Plant each failure outside crates/ and the root Cargo.lock.
+    import tempfile
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        fixture = root / "test-wasi/components/probe/rust"
+        (fixture / "src").mkdir(parents=True)
+        (fixture / "Cargo.toml").write_text("[workspace]\n")
+        lock = fixture / "Cargo.lock"
+        lock.write_text(clean_lock)
+        no_edges = lambda _: {"packages": []}
+        if wasi_fixture_problems(root, no_edges):
+            failures.append("a clean standalone fixture did not pass")
+        lock.write_text(clean_lock + '\n[[package]]\nname = "tokio"\nversion = "1.53.1"\n')
+        if not any("tokio package" in p for p in wasi_fixture_problems(root, no_edges)):
+            failures.append("Tokio hidden in a standalone fixture lockfile was not caught")
+        lock.write_text(clean_lock)
+        source = fixture / "src/lib.rs"
+        source.write_text("// tokio::spawn is historical prose\n")
+        if wasi_fixture_problems(root, no_edges):
+            failures.append("fixture source comments were treated as Tokio usage")
+        source.write_text("#[tokio::test]\nasync fn hidden_test() {}\n")
+        if not any("tokio in source" in p for p in wasi_fixture_problems(root, no_edges)):
+            failures.append("Tokio hidden in standalone fixture source was not caught")
+        source.unlink()
+        if not any("tokio edge" in p for p in wasi_fixture_problems(root, lambda _: metadata)):
+            failures.append("a standalone fixture's target-gated Tokio dev edge was not caught")
+
     if failures:
         print("tokio_inventory self-test FAILED:", file=sys.stderr)
         for f in failures:
             print(f"  - {f}", file=sys.stderr)
         return 1
-    print("tokio_inventory self-test: OK (8 planted changes, all caught)")
+    print("tokio_inventory self-test: OK (workspace and standalone fixture controls caught)")
     return 0
 
 
@@ -364,9 +421,10 @@ def main() -> int:
     edges = edges_from_metadata(load_metadata(root))
     entries = lock_entries((root / "Cargo.lock").read_text(encoding="utf-8"))
     hits = source_hits(root)
+    fixture_problems = wasi_fixture_problems(root)
 
     if args.update:
-        if edges or tokio_in_lock(entries) or hits:
+        if edges or tokio_in_lock(entries) or hits or fixture_problems:
             print("refusing --update: tokio is in the tree; the gate below says where.",
                   file=sys.stderr)
         else:
@@ -382,12 +440,13 @@ def main() -> int:
         print(f"manifest edges to a tokio crate: {len(edges)}")
         print(f"tokio packages in Cargo.lock:    {len(tokio_in_lock(entries))}")
         print(f"tokio source lines:              {len(hits)}")
+        print(f"standalone WASI fixture issues:   {len(fixture_problems)}")
         print(f"banned names ({len(TOKIO)}): {', '.join(TOKIO)}")
         print("not tokio (checked against Cargo.lock):")
         for note in baseline.get("not_tokio", []):
             print(f"  {note['name']:<14} {', '.join(sorted(v for v, _ in entries.get(note['name'], [])))}")
 
-    problems = check(baseline, edges, entries, hits)
+    problems = check(baseline, edges, entries, hits) + fixture_problems
     if problems:
         print("tokio gate FAILED — tokio was removed from the workspace:", file=sys.stderr)
         for p in problems:
@@ -396,7 +455,7 @@ def main() -> int:
     if not args.list:
         print(
             f"tokio gate: 0 manifest edges, 0 tokio packages in Cargo.lock, 0 source lines; "
-            f"{len(baseline.get('not_tokio', []))} not-tokio notes verified."
+            f"standalone WASI fixtures clean; {len(baseline.get('not_tokio', []))} not-tokio notes verified."
         )
     return 0
 

@@ -60,6 +60,31 @@ adapter and are explicitly rejected by `perry-wit --guest-c`. The TypeScript
 HTTP bridge and Rust HTTP embedding use the separately qualified entry points
 below. Do not infer complete P3 support from async function support or the Rust provider receipts.
 
+The existing C frame API now retains values through frame-owned traced arrays,
+using stable native links instead of retaining a transient root scope. Frames
+can outlive their creating scope and finish in any order, while the collector
+can still move their values. Array growth publishes its replacement head;
+exceptions remain rooted; a late frame drop after heap teardown touches only
+native state. The frame stays on its creating agent. This is the foundation
+for async guest adapters, not an implementation of those adapters.
+The [owned frame receipt](validation/wasi-owned-guest-frames-20261025.json)
+records 45 runtime tests, both failing controls against the previous frame
+implementation, 35 Turnloop-based WASI guest acceptance phases, and all eight
+plain/TLS combinations of native and guest moving GC. It also preserves
+separate future/stream architecture prototypes; those results do not qualify
+production bindings.
+
+The standalone Rust guest acceptance host also uses `perry-wasi` and Turnloop,
+with Wasmtime 48.0.7. The Tokio gate checks its separate workspace, lockfile and
+source as well as the main workspace. Qualification may pass an explicit
+`--cargo-config` for immutable provider sources; that does not establish that
+the required Turnloop changes have been released or qualify final packages.
+
+`error-context` is still explicitly rejected. It is an experimental
+[candidate feature](https://wasi.dev/roadmap#wasi-03), separate from the async
+lift/lower, future and stream features required by the
+[0.3.0 adoption table](https://wasi.dev/releases#component-model-features).
+
 `scripts/component_async_acceptance.py` exercises a compiled TypeScript host
 against a canonical async component, including a suspended JS import, Store
 reuse, original rejection identity, cancellation, ALS and explicit collection.

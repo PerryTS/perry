@@ -25,6 +25,8 @@ def main():
     parser.add_argument("--runtime-dir", required=True, type=Path)
     parser.add_argument("--wasi-sdk", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--cargo-config", type=Path,
+                        help="additional Cargo configuration for provider dependency qualification")
     parser.add_argument("--native-runtime-dir", type=Path,
                         help="also qualify native Perry hosting with WASI providers")
     parser.add_argument("--moving-gc", action="store_true")
@@ -42,6 +44,14 @@ def main():
         shutil.copyfile(fixture / name, work / name)
     shutil.copytree(fixture / "rust-host", work / "rust-host", dirs_exist_ok=True,
                     ignore=shutil.ignore_patterns("target"))
+    # Keep the copied fixture executable from an arbitrary output directory.
+    # Its in-tree manifest uses the same Turnloop provider as the native host.
+    host_manifest = work / "rust-host/Cargo.toml"
+    provider_path = '"../../../../crates/perry-wasi"'
+    manifest = host_manifest.read_text()
+    assert manifest.count(provider_path) == 1, "Rust host provider path changed"
+    host_manifest.write_text(manifest.replace(provider_path,
+        json.dumps(str(root / "crates/perry-wasi"))))
     shutil.copytree(fixture / "rust-logger", work / "rust-logger", dirs_exist_ok=True,
                     ignore=shutil.ignore_patterns("target"))
     sdk = args.wasi_sdk.resolve()
@@ -58,7 +68,9 @@ def main():
     # Clear a previous verdict before any build can fail.
     (output / "results.json").write_text("[]\n")
 
-    def run(name, command, expected=None, timeout=600, environment=None, moving=False, guest_moving=False):
+    def run(name, command, expected=None, timeout=600, environment=None, moving=False, guest_moving=False, provider=False):
+        if provider and args.cargo_config:
+            command = ["cargo", "--config", args.cargo_config.resolve(), *command[1:]]
         log = output / (name + ".log")
         start = time.monotonic()
         try:
@@ -109,8 +121,11 @@ def main():
         return component
 
     component = build_guest(work)
+    if args.cargo_config:
+        run("rust-host-provider-lock", ["cargo", "update", "--manifest-path",
+            work / "rust-host/Cargo.toml", "-p", "turnloop"], provider=True)
     run("build-rust-host", ["cargo", "build", "--locked", "--release", "--manifest-path",
-                            work / "rust-host/Cargo.toml"], timeout=1800)
+                            work / "rust-host/Cargo.toml"], timeout=1800, provider=True)
     host = output / "rust-host-target/release" / ("perry-component-rust-host" + suffix)
     run("run-rust-host", [host, component], timeout=120,
         expected="PASS Perry component: Rust host, 51 typed calls, Unicode, bytes, guest GC, imports")

@@ -142,7 +142,7 @@ fn staged_resource_owners_and_borrows_survive_actual_moving_gc() {
     let _nursery = crate::gc::CopyingNurseryTestGuard::new(0);
     let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _evacuate = crate::gc::knob_overrides::ForcedEvacuationTestGuard::on();
-    crate::gc::register_runtime_handle_root_scanner_for_tests();
+    crate::gc::gc_init();
     let scope = RuntimeHandleScope::new();
     let _registry = Registry::new(&scope);
     let mut frame = Frame::new();
@@ -209,7 +209,7 @@ fn exported_payload_survives_transfer_and_gc_then_is_destroyed_exactly_once() {
     let _nursery = crate::gc::CopyingNurseryTestGuard::new(0);
     let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _evacuate = crate::gc::knob_overrides::ForcedEvacuationTestGuard::on();
-    crate::gc::register_runtime_handle_root_scanner_for_tests();
+    crate::gc::gc_init();
     let scope = RuntimeHandleScope::new();
     let _registry = Registry::new(&scope);
     unsafe {
