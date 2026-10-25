@@ -58,15 +58,23 @@ fn computed_relative_require_uses_the_calling_module_directory() {
     // path that exists on disk, and registration falls back to the raw string
     // when it does not, so `<dir>/./chunks/2.js` would miss `<dir>/chunks/2.js`
     // in exactly the deployed case. Pin that shape, not the superseded one.
+    // The wrapper hands the support module its own directory ...
     assert!(
-        wrapped
-            .contains("__perry_path_spec = \"/fixture/.next/server\" + '/' + specifier.slice(2);"),
-        "computed relative require must be rebased before the path-registry lookup\n{wrapped}"
+        wrapped.contains(
+            "return __perry_cjs_require_computed(specifier, \"/fixture/.next/server\", __perry_cjs_reloader);"
+        ),
+        "computed relative require must carry the calling module's directory\n{wrapped}"
     );
-    assert!(wrapped.contains("__perry_require_path_module(__perry_path_spec)"));
+    // ... which rebases before the path-registry lookup.
+    let support = super::support::source(&[path.to_string_lossy().into_owned()], false);
     assert!(
-        !wrapped.contains("__perry_require_path_module(specifier)"),
-        "the registry lookup must not use the un-rebased specifier\n{wrapped}"
+        support.contains("path = dir + '/' + specifier.slice(2);"),
+        "computed relative require must be rebased before the path-registry lookup\n{support}"
+    );
+    assert!(support.contains("__perry_require_path_module(path)"));
+    assert!(
+        !support.contains("__perry_require_path_module(specifier)"),
+        "the registry lookup must not use the un-rebased specifier\n{support}"
     );
 }
 
@@ -76,15 +84,20 @@ fn computed_bare_directory_requires_use_the_calling_module_directory() {
     let path = PathBuf::from("/fixture/.next/server/webpack-runtime.js");
     let wrapped = wrap_commonjs(source, &path);
 
+    assert!(
+        wrapped.contains("__perry_cjs_require_computed(specifier, \"/fixture/.next/server\","),
+        "computed require must carry the calling module's directory\n{wrapped}"
+    );
+    let support = super::support::source(&[path.to_string_lossy().into_owned()], false);
     for specifier in ["specifier === '.'", "specifier === '..'"] {
         assert!(
-            wrapped.contains(specifier),
-            "computed require must treat {specifier} as relative\n{wrapped}"
+            support.contains(specifier),
+            "computed require must treat {specifier} as relative\n{support}"
         );
     }
     assert!(
-        wrapped.contains("__perry_path_spec = \"/fixture/.next/server\" + '/' + specifier;"),
-        "bare directory specifiers must be rebased before registry lookup\n{wrapped}"
+        support.contains("path = dir + '/' + specifier;"),
+        "bare directory specifiers must be rebased before registry lookup\n{support}"
     );
 }
 
@@ -243,10 +256,10 @@ fn wrap_module_and_exports_are_reassignable_vars() {
     // exports back from a stable, body-untouchable `__cjs_module`.
     let src = "exports.foo = 42;";
     let wrapped = wrap_commonjs(src, &PathBuf::from("/tmp/test.js"));
-    // The record is built in one runtime call whose first argument is the
-    // `exports` literal, so assert the `const` binding and that argument.
+    // The record is one literal whose first key is the `exports` literal,
+    // so assert the `const` binding and that key.
     assert!(
-        wrapped.contains("const __cjs_module = __perry_cjs_module_record(\n        {},"),
+        wrapped.contains("const __cjs_module = {\n        exports: "),
         "expected stable __cjs_module, got:\n{}",
         wrapped
     );
@@ -966,7 +979,7 @@ fn wrap_flat_emits_class_module_exports_that_closes_over_top_level_const() {
         wrapped
     );
     // The CommonJS runtime shims still run at module scope.
-    assert!(wrapped.contains("const __cjs_module = __perry_cjs_module_record(\n        {},"));
+    assert!(wrapped.contains("const __cjs_module = {\n        exports: "));
     assert!(wrapped.contains("const _cjs = __cjs_module.exports;"));
     let ast = perry_parser::parse_typescript(&wrapped, "stack-utils.js")
         .expect("flat class wrap must parse");

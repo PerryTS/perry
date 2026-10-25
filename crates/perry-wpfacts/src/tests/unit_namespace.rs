@@ -88,23 +88,6 @@ fn a_namespace_with_an_export_star_from_outside_is_open() {
         "{}",
         pf.dump_text()
     );
-    // An `export *` inside the program adds the source's keys: `p.F` is a
-    // key, holding what `import { F } from './a'` binds (⊤: a re-export
-    // has no contract at `a`), not only `undefined`.
-    let pf = units_of(&[
-        ("b", "export const F = { A: 1 };"),
-        ("a", "export * from './b';"),
-        (
-            "m",
-            "import * as p from './a'; function g() { return p.F.A; } console.log(g());",
-        ),
-    ]);
-    let s: Vec<_> = pf.sites.iter().filter(|s| s.key == "A").collect();
-    assert!(
-        !s.is_empty() && s.iter().all(|s| s.top),
-        "{}",
-        pf.dump_text()
-    );
 }
 
 /// `units_of` with the compile driver's dynamic edges (collect_modules):
@@ -776,4 +759,177 @@ fn an_escaped_namespace_reports_its_functions_that_use_their_receiver() {
         "{:?}",
         pf.broken
     );
+}
+
+// Design §18.14: an import resolves through re-exports to the binding it
+// names (ECMAScript ResolveExport), and reads that binding's contract.
+
+/// `units_of` with the driver's re-export sources (`FactsConfig::
+/// export_sources`): `export … from './x'` reads `x.ts`.
+fn units_es(mods: &[(&str, &str)]) -> ProgramFacts {
+    let hirs: Vec<(String, perry_hir::Module)> = mods
+        .iter()
+        .map(|(name, src)| {
+            let path = format!("{name}.ts");
+            let module = perry_parser::parse_typescript(src, &path).expect("parses");
+            let mut hir = perry_hir::lower_module(&module, name, &path).expect("lowers");
+            for imp in &mut hir.imports {
+                if let Some(n) = imp.source.strip_prefix("./") {
+                    imp.resolved_path = Some(format!("{n}.ts"));
+                }
+            }
+            (path, hir)
+        })
+        .collect();
+    let mut cfg = FactsConfig::default();
+    for (path, hir) in &hirs {
+        for e in &hir.exports {
+            let (perry_hir::Export::ReExport { source, .. }
+            | perry_hir::Export::ExportAll { source }
+            | perry_hir::Export::NamespaceReExport { source, .. }) = e
+            else {
+                continue;
+            };
+            if let Some(n) = source.strip_prefix("./") {
+                cfg.export_sources
+                    .entry(path.clone())
+                    .or_default()
+                    .insert(source.clone(), format!("{n}.ts"));
+            }
+        }
+    }
+    let list: Vec<(String, &perry_hir::Module)> =
+        hirs.iter().map(|(p, h)| (p.clone(), h)).collect();
+    crate::compute_units(&list, &cfg)
+}
+
+fn proven(pf: &ProgramFacts, key: &str) -> bool {
+    let v = verdicts(pf, key);
+    !v.is_empty() && v.iter().all(|v| v == "T0Mono")
+}
+
+fn unproven(pf: &ProgramFacts, key: &str) -> bool {
+    let v = verdicts(pf, key);
+    !v.is_empty() && v.iter().all(|v| v.starts_with("No"))
+}
+
+#[test]
+fn a_named_import_through_a_barrel_reads_the_declaring_module() {
+    // `export *` re-exports `F`: `import { F } from './a'` binds b's `F`,
+    // with b's contract (it was ⊤: a contract is keyed by its declaring
+    // module). Also through a nested barrel and an explicit re-export.
+    for (a, c) in [
+        ("export * from './b';", "export const Unused = 1;"),
+        ("export * from './c';", "export * from './b';"),
+        ("export { F } from './c';", "export * from './b';"),
+        (
+            "import { F } from './c'; export { F };",
+            "export * from './b';",
+        ),
+    ] {
+        let pf = units_es(&[
+            ("b", "export const F = { A: 1 };"),
+            ("c", c),
+            ("a", a),
+            (
+                "m",
+                "import { F } from './a'; function g() { return F.A; } console.log(g());",
+            ),
+        ]);
+        assert!(proven(&pf, "A"), "{a} / {c}\n{}", pf.dump_text());
+    }
+}
+
+#[test]
+fn a_namespace_of_a_barrel_holds_the_declaring_modules_bindings() {
+    // `p.F` is what `import { F } from './a'` binds: b's contract. A key
+    // that is a namespace (`import * as n; export { n }`) holds that
+    // module's namespace, every key of it, read through or named.
+    let a = "export * from './b';\nimport * as nb from './b';\nexport { nb };";
+    for m in [
+        "import * as p from './a'; function g() { return p.F.A; } console.log(g());",
+        "import * as p from './a'; function g() { return p.nb.F.A; } console.log(g());",
+        "import { nb } from './a'; function g() { return nb.F.A; } console.log(g());",
+    ] {
+        let pf = units_es(&[("b", "export const F = { A: 1 };"), ("a", a), ("m", m)]);
+        assert!(proven(&pf, "A"), "{m}\n{}", pf.dump_text());
+    }
+}
+
+#[test]
+fn an_ambiguous_star_export_is_unknown() {
+    // Two `export *` sources bind `F` differently: no key `F` on the
+    // namespace (a named import of it is a link error). Nothing is proven
+    // through it; a module's own `F` shadows both stars.
+    let b = "export const F = { A: 1 };";
+    let c = "export const F = { A: 'x', B: 2 };";
+    let m = "import * as p from './a'; function g() { return (p as any).F.A; } console.log(g());";
+    let pf = units_es(&[
+        ("b", b),
+        ("c", c),
+        ("a", "export * from './b';\nexport * from './c';"),
+        ("m", m),
+    ]);
+    assert!(unproven(&pf, "A"), "{}", pf.dump_text());
+    // The same binding through two stars is not ambiguous.
+    let pf = units_es(&[
+        ("b", b),
+        ("c", "export * from './b';"),
+        ("a", "export * from './b';\nexport * from './c';"),
+        ("m", m),
+    ]);
+    assert!(proven(&pf, "A"), "{}", pf.dump_text());
+    let pf = units_es(&[
+        ("b", b),
+        ("c", c),
+        (
+            "a",
+            "export * from './b';\nexport * from './c';\nexport const F = { A: 3 };",
+        ),
+        ("m", m),
+    ]);
+    assert!(proven(&pf, "A"), "{}", pf.dump_text());
+}
+
+#[test]
+fn a_star_export_cycle_resolves_and_ends() {
+    // a and b re-export each other: each name resolves to its declaring
+    // module; a name neither declares is no key (not found, the walk ends).
+    let a = "export * from './b';\nexport const X = { A: 1 };";
+    let b = "export * from './a';\nexport const F = { A: 2 };";
+    for m in [
+        "import { F, X } from './a'; function g() { return F.A + X.A; } console.log(g());",
+        "import { F, X } from './b'; function g() { return F.A + X.A; } console.log(g());",
+    ] {
+        let pf = units_es(&[("a", a), ("b", b), ("m", m)]);
+        assert!(proven(&pf, "A"), "{m}\n{}", pf.dump_text());
+    }
+    let m = "import * as p from './a'; function g() { return (p as any).Z.A; } console.log(g());";
+    let pf = units_es(&[("a", a), ("b", b), ("m", m)]);
+    assert!(unproven(&pf, "A"), "{}", pf.dump_text()); // A resolution cut by the cycle on one path is not the module's:
+                                                       // `b` reaches `F` through `a`'s other star (ResolveExport memoizes
+                                                       // only what no cycle cut).
+    let m = "import { F } from './b'; function g() { return F.A; } console.log(g());";
+    let pf = units_es(&[
+        ("a", "export * from './b';\nexport * from './c';"),
+        ("b", "export * from './a';"),
+        ("c", "export const F = { A: 1 };"),
+        ("m", m),
+    ]);
+    assert!(proven(&pf, "A"), "{}", pf.dump_text());
+}
+
+#[test]
+fn a_barrel_its_sources_import_orders_units_by_declaration() {
+    // TypeScript's `_namespaces/ts.ts` shape: b and c import from the
+    // barrel that re-exports them. Each unit is ordered after the unit
+    // declaring the name it imports, not after the barrel (ordered after
+    // all of b and c: a cycle, whose back edge read ⊤).
+    let b = "import { G } from './a';\nexport const F = { A: 1 };\nexport function useG() { return G.B; }";
+    let c = "import { F } from './a';\nexport const G = { B: 2 };\nexport function useF() { return F.A; }";
+    let a = "export * from './b';\nexport * from './c';";
+    let m = "import { useF, useG } from './a'; console.log(useF() + useG());";
+    let pf = units_es(&[("a", a), ("b", b), ("c", c), ("m", m)]);
+    assert!(proven(&pf, "A"), "{}", pf.dump_text());
+    assert!(proven(&pf, "B"), "{}", pf.dump_text());
 }

@@ -242,6 +242,61 @@ pub extern "C" fn perry_wpfacts_check_field(
     0
 }
 
+/// One elided call (FVA): a call through a value or a field whose callee
+/// set the facts prove, lowered to a direct call of a body or to one
+/// `info.code` load and an indirect call. The callee must be a live function
+/// object whose body is plain (no rest, no `arguments`) and declares at most
+/// `argc` parameters (the arguments the site passes, padded). Returns the
+/// body's info: the site compares it with the proven bodies' infos and calls
+/// [`perry_wpfacts_check_call_miss`] when it is none of them.
+#[no_mangle]
+pub extern "C" fn perry_wpfacts_check_call(
+    callee: f64,
+    argc: i64,
+    site: i64,
+) -> *const crate::closure::JsFunctionInfo {
+    let site = site as u64;
+    CHECKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let bits = callee.to_bits();
+    if bits & TAG_MASK != POINTER_TAG {
+        violate(
+            site,
+            "callee set",
+            format!("callee bits {bits:#018x} are not a function object"),
+        );
+    }
+    let closure = (bits & POINTER_MASK) as usize as *const crate::closure::ClosureHeader;
+    let Some(info) = crate::closure::closure_info(closure) else {
+        violate(
+            site,
+            "callee set",
+            format!("callee {closure:p} is not a function object"),
+        );
+    };
+    let params = info.plain_params();
+    if params == crate::codegen_abi::NOT_PLAIN || i64::from(params) > argc {
+        violate(
+            site,
+            "call form",
+            format!("the body declares {params} plain parameters, the site passes {argc}"),
+        );
+    }
+    info
+}
+
+/// The callee's body is none of the proven set (`perry_wpfacts_check_call`).
+#[no_mangle]
+pub extern "C" fn perry_wpfacts_check_call_miss(
+    info: *const crate::closure::JsFunctionInfo,
+    site: i64,
+) -> i32 {
+    violate(
+        site as u64,
+        "callee set",
+        format!("body info {info:p} is not a proven body"),
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -28,6 +28,13 @@ pub fn monomorphize_modules<'a>(modules: impl IntoIterator<Item = &'a mut Module
 }
 
 fn monomorphize_with_context(module: &mut Module, ctx: &mut MonomorphizationContext) {
+    for c in &mut module.classes {
+        if c.is_literal_shape() {
+            if let Some(f) = &mut c.constructor {
+                crate::lexical_frames::literal_constructor(f, &mut ctx.frame_ids);
+            }
+        }
+    }
     let idx = ModuleIndex::new(module);
 
     // First pass: collect all generic instantiations from the code
@@ -65,7 +72,14 @@ fn monomorphize_with_context(module: &mut Module, ctx: &mut MonomorphizationCont
                     }
                     // Continue with specialization even on constraint errors (for now)
                 }
-                let specialized = specialize_function(original, &request.type_args, request.new_id);
+                let mut specialized =
+                    specialize_function(original, &request.type_args, request.new_id);
+                crate::lexical_frames::function(
+                    &mut specialized,
+                    request.original_id,
+                    &mut ctx.frame_ids,
+                )
+                .metadata(module);
                 new_functions.push(specialized);
             }
         }
@@ -122,7 +136,8 @@ fn monomorphize_with_context(module: &mut Module, ctx: &mut MonomorphizationCont
                 if let Some(src) = module.class_source_text.get(&original.id).cloned() {
                     new_source_texts.push((new_id, src));
                 }
-                let specialized = specialize_class(original, &request.type_args, new_id);
+                let mut specialized = specialize_class(original, &request.type_args, new_id);
+                crate::lexical_frames::class(&mut specialized, &mut ctx.frame_ids).metadata(module);
                 new_classes.push(specialized);
             }
         }

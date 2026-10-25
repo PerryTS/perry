@@ -750,25 +750,13 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
                 // class_id 0 / anonymous-shape / unregistered ids), so synthetic
                 // function-ctor instances and plain objects keep the existing
                 // `constructor`-based resolution unchanged.
-                // A declared class keeps its reflective prototype even when its
-                // id is ALSO marked as an anon shape. Class ids are allocated
-                // per module, so one module's anon-shape id can collide with
-                // another's declared class (observed: Effect's monomorphized
-                // `Union$AST`, whose instances started reporting
-                // `Object.prototype` once an unrelated module's init registered
-                // the same number). `Object.create(Object.getPrototypeOf(ast),
-                // descriptors)` — the standard prototype-preserving clone, used
-                // by SchemaAST's `modifyOwnPropertyDescriptors` — then produced
-                // objects with none of the class's methods. A registered class
-                // name plus a non-empty prototype vtable is positive evidence of
-                // a real declared class, so prefer it over the collision.
+                // The descriptor fixed the receiver's prototype role at birth.
+                // Its shape and published holder select a declared instance
+                // without an anonymous class-id membership lookup.
                 let instance_class_id = (*obj).class_id;
                 if (*gc).obj_type == crate::gc::GC_TYPE_OBJECT
                     && instance_class_id != 0
-                    && (!is_anon_shape_class_id(instance_class_id)
-                        || super::super::class_registry::declared_class_outranks_anon_shape(
-                            instance_class_id,
-                        ))
+                    && super::super::shapes::receiver_has_class_identity(obj)
                 {
                     if let Some(proto) =
                         super::super::class_registry::class_decl_prototype_value_for_instance_class(
@@ -808,7 +796,7 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
                 // by name and then the constructor's `prototype`, on every
                 // `instanceof` hop.
                 if (*gc).obj_type == crate::gc::GC_TYPE_OBJECT
-                    && ((*obj).class_id == 0 || is_anon_shape_class_id((*obj).class_id))
+                    && ((*obj).class_id == 0 || super::super::shapes::object_is_plain_record(obj))
                 {
                     if let Some(proto) = default_link_prototype(obj) {
                         return proto;
@@ -818,7 +806,7 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
                     return proto;
                 }
                 if (*gc).obj_type == crate::gc::GC_TYPE_OBJECT
-                    && ((*obj).class_id == 0 || is_anon_shape_class_id((*obj).class_id))
+                    && ((*obj).class_id == 0 || super::super::shapes::object_is_plain_record(obj))
                 {
                     if let Some(proto_bits) =
                         super::super::prototype_chain::default_object_prototype_for_owner(
@@ -840,12 +828,14 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
                     {
                         return proto;
                     }
-                    if let Some(proto) =
-                        super::super::class_registry::class_decl_prototype_value_for_instance_class(
-                            (*obj).class_id,
-                        )
-                    {
-                        return proto;
+                    if super::super::shapes::receiver_has_class_identity(obj) {
+                        if let Some(proto) =
+                            super::super::class_registry::class_decl_prototype_value_for_instance_class(
+                                (*obj).class_id,
+                            )
+                        {
+                            return proto;
+                        }
                     }
                     // #3986: `Object.create(proto)` and `new F()` (a plain
                     // function ctor, whose instances carry a synthetic
@@ -882,6 +872,9 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
                 // walk reaches a LEAF_PROTOTYPE and stops.
                 if (*obj).class_id == super::super::native_module::NATIVE_MODULE_CLASS_ID {
                     return namespace_default_prototype();
+                }
+                if let Some(proto) = super::host_prototype::native_host_prototype((*obj).class_id) {
+                    return proto;
                 }
             }
             return obj_value;
@@ -967,7 +960,7 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
                 return proto;
             }
             if (*gc).obj_type == crate::gc::GC_TYPE_OBJECT
-                && ((*obj).class_id == 0 || is_anon_shape_class_id((*obj).class_id))
+                && ((*obj).class_id == 0 || super::super::shapes::object_is_plain_record(obj))
             {
                 if let Some(proto_bits) =
                     super::super::prototype_chain::default_object_prototype_for_owner(bits as usize)
@@ -981,12 +974,14 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
                 {
                     return proto;
                 }
-                if let Some(proto) =
-                    super::super::class_registry::class_decl_prototype_value_for_instance_class(
-                        (*obj).class_id,
-                    )
-                {
-                    return proto;
+                if super::super::shapes::receiver_has_class_identity(obj) {
+                    if let Some(proto) =
+                        super::super::class_registry::class_decl_prototype_value_for_instance_class(
+                            (*obj).class_id,
+                        )
+                    {
+                        return proto;
+                    }
                 }
                 // #3986: `Object.create(proto)` and `new F()` (a plain
                 // function ctor, whose instances carry a synthetic
@@ -1022,6 +1017,9 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
                 // walk reaches a LEAF_PROTOTYPE and stops.
                 if (*obj).class_id == super::super::native_module::NATIVE_MODULE_CLASS_ID {
                     return namespace_default_prototype();
+                }
+                if let Some(proto) = super::host_prototype::native_host_prototype((*obj).class_id) {
+                    return proto;
                 }
             }
         }

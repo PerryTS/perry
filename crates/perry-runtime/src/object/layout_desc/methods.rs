@@ -106,7 +106,7 @@ pub unsafe extern "C" fn perry_probe_family_method(
     }
     let mut holder = std::ptr::null::<ObjectHeader>();
     for guard in std::slice::from_raw_parts(entry.guards, entry.depth as usize) {
-        let pid = super::super::shapes::class_proto_id(guard.class_id);
+        let pid = super::super::shapes::class_identity_proto_id(guard.class_id);
         let Some(cell) = super::super::shapes::identity_word_slot_in(word_dir, pid) else {
             return 0;
         };

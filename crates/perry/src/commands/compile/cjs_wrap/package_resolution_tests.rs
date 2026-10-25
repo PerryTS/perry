@@ -100,7 +100,7 @@ fn lazy_require_of_compiled_package_uses_resolved_path_after_sources_are_removed
         .expect("canonical target");
     let target = serde_json::to_string(&target.to_string_lossy()).unwrap();
     assert!(
-        wrapped.contains(&format!("__perry_require_path_module({target})")),
+        wrapped.contains(&format!("__perry_cjs_require_deferred({target}, ")),
         "lazy compiled-package require must resolve through its compiled path after source removal:\n{wrapped}"
     );
     assert!(

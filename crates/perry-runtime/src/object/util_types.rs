@@ -144,13 +144,8 @@ pub extern "C" fn js_util_types_is_boxed_primitive(value: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_util_types_is_promise(value: f64) -> f64 {
-    let v = JSValue::from_bits(value.to_bits());
-    nanbox_bool(
-        v.is_pointer()
-            && crate::promise::js_is_promise(
-                v.as_pointer::<crate::promise::Promise>() as *mut crate::promise::Promise
-            ) != 0,
-    )
+    // `js_is_promise` only null-checks; `js_value_is_promise` reads the GC type.
+    nanbox_bool(crate::promise::js_value_is_promise(value) != 0)
 }
 
 #[no_mangle]

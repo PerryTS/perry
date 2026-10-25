@@ -205,7 +205,7 @@ pub(crate) fn class_instances_have_constructor_reservations(
             if class
                 .fields
                 .iter()
-                .any(|field| field.origin == perry_hir::ClassFieldOrigin::ConstructorStore)
+                .any(|field| field.origin.is_reservation())
             {
                 return true;
             }

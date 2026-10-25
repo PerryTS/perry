@@ -75,6 +75,9 @@ pub struct FieldFacts {
     pub key: String,
     pub slot: Option<u32>,
     pub definite: bool,
+    /// A declared key (`Template::declared`): `slot` is known, presence is
+    /// not, so a read is the load plus the hole compare.
+    pub declared: bool,
     pub data_field: bool,
     pub readonly: bool,
     pub writers_ctor: usize,
@@ -87,6 +90,10 @@ pub struct FieldFacts {
     /// typed array the field can hold, when all are `TypedArrayNew` owners
     /// of that kind.
     pub ta_kind: Option<u8>,
+    /// A definite data field holding only these compiled bodies
+    /// (`bindings::bodies_of` over every token of the layout); empty when
+    /// it may hold anything else.
+    pub fns: Vec<crate::bindings::BodyRef>,
 }
 
 #[derive(Clone, Debug, PartialEq, Hash)]
@@ -104,6 +111,9 @@ pub struct TemplateFacts {
     pub adds_keys: u32,
     pub birth_keys: Vec<String>,
     pub fields: Vec<FieldFacts>,
+    /// A class's own statics that hold their definition for the program's
+    /// life (FVA 3.4, `constant_statics`), sorted.
+    pub statics: Vec<String>,
     pub sabotaged: bool,
     /// Class ids of the parent chain (leaf's parent first).
     pub ancestors: Vec<u32>,
@@ -129,7 +139,9 @@ pub struct SiteFacts {
     pub top: bool,
     pub verdict: Verdict,
     pub fixed_shape: bool,
-    pub call_target: Option<String>,
+    /// A call site: the bodies its callee set holds (every body, sorted;
+    /// empty when the set holds anything that is not a body).
+    pub targets: Vec<String>,
     /// Per-unit run: the receiver is a parameter whose TS object type
     /// names these keys; its verdict is decided after the census
     /// (`units::typed_param_verdicts`).
@@ -182,6 +194,7 @@ impl FieldFacts {
             self.slot = None;
         }
         self.definite &= o.definite;
+        self.declared &= o.declared;
         self.data_field &= o.data_field;
         self.readonly &= o.readonly;
         self.writers_ctor = self.writers_ctor.max(o.writers_ctor);
@@ -190,6 +203,14 @@ impl FieldFacts {
         self.ta_stable &= o.ta_stable;
         if self.ta_kind != o.ta_kind {
             self.ta_kind = None;
+        }
+        // Each says the field holds only its bodies: both, their union.
+        if self.fns.is_empty() || o.fns.is_empty() {
+            self.fns.clear();
+        } else {
+            self.fns.extend(o.fns.iter().cloned());
+            self.fns.sort();
+            self.fns.dedup();
         }
     }
 }
@@ -209,6 +230,7 @@ impl TemplateFacts {
         self.adds_keys = self.adds_keys.max(o.adds_keys);
         common_prefix(&mut self.birth_keys, &o.birth_keys);
         common_prefix(&mut self.ancestors, &o.ancestors);
+        self.statics.retain(|k| o.statics.contains(k));
         self.sabotaged |= o.sabotaged;
         for f in self.fields.iter_mut() {
             match o.fields.iter().find(|g| g.key == f.key) {
@@ -262,6 +284,53 @@ pub fn derive(g: &mut Gen) -> (Vec<TemplateFacts>, Vec<SiteFacts>) {
     let foreign = &g.m.foreign;
     out.retain(|t| !foreign.contains_key(&t.id));
     (out, sites)
+}
+
+/// FVA 3.4: the class object's own statics whose read is the one load of
+/// the property the class's evaluation created. The class object reaches no
+/// unknown code (which could write or delete them), carries no HARD
+/// operation (defineProperty, delete), has no computed static member, and
+/// the key is no accessor. A static method (or `prototype`) is its
+/// declaration for the program's life: no store of the key exists (stores of
+/// it on the class's instances count too, the writers being per template),
+/// so a call of it is the declaration's body. A declared static field is
+/// one load whatever stores it later: they widen its value set, which every
+/// reader already takes (the HIR stores the definition where the class is
+/// evaluated, once or more for a nested class).
+fn constant_statics(m: &Model, tm: TmplId) -> Vec<String> {
+    let Some(&cobj) = m.tok_index.get(&TokKind::ClassObj(tm)) else {
+        return Vec::new();
+    };
+    let holds = |n: NodeId| {
+        let nd = &m.nodes[n as usize];
+        !nd.pts.is_empty() || nd.prim != 0
+    };
+    if m.is_escaped(cobj)
+        || m.hard.contains_key(&cobj)
+        || m.field_any.get(&cobj).is_some_and(|&n| holds(n))
+    {
+        return Vec::new();
+    }
+    let accessors = m.accessor_keys.get(&cobj);
+    let mut out: Vec<String> = Vec::new();
+    for &a in m.field_keys.get(&cobj).into_iter().flatten() {
+        if accessors.is_some_and(|ks| ks.contains(&a)) {
+            continue;
+        }
+        if !m.fields.get(&(cobj, a)).is_some_and(|&n| holds(n)) {
+            continue;
+        }
+        let stored = m
+            .writers
+            .get(&(tm, a))
+            .is_some_and(|w| !w.ctor.is_empty() || !w.post.is_empty());
+        if m.static_fields.contains(&(tm, a)) || !stored {
+            out.push(m.atoms[a as usize].clone());
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
 }
 
 /// The static prototype chain tokens of a template (plus every prototype
@@ -373,15 +442,6 @@ fn template_facts(
         chain_problem.get_or_insert_with(|| "E21 native parent without a summary".into());
     }
     let escape = global.clone().or(escape);
-    // DECISIONS 92: per unit, every unit writes a program object through
-    // its cells; no unit sees all its keys or their kinds.
-    let escape = escape.or_else(|| {
-        let program = m.program_cells
-            && m.program_objs
-                .iter()
-                .any(|&(_, t)| matches!(m.toks[t as usize], TokKind::Obj(x, _) if x == tm));
-        program.then(|| "program object every unit writes (DECISIONS 92)".to_string())
-    });
     let prefix_stable = escape.is_none() && hard.is_none() && chain_problem.is_none();
     let adds = m.adds_keys.get(&tm).copied().unwrap_or(0);
     // Slots: birth order, valid up to the first non-definite / accessor key.
@@ -403,11 +463,12 @@ fn template_facts(
         let birth = i < tpl.birth_keys.len();
         let is_accessor = accessor_keys.contains(&a);
         let definite = birth && tpl.definite.contains(&a) && !is_accessor;
-        if birth && !definite {
+        let declared = birth && tpl.declared.contains(&a) && !is_accessor;
+        if birth && !definite && !declared {
             slot_ok = false;
             fixed_layout = false;
         }
-        let slot = (birth && definite && slot_ok).then_some(i as u32);
+        let slot = (birth && (definite || declared) && slot_ok).then_some(i as u32);
         let w = m.writers.get(&(tm, a)).cloned().unwrap_or_default();
         let any = m.any_writers.get(&tm).cloned().unwrap_or_default();
         let readonly = escape.is_none()
@@ -425,12 +486,19 @@ fn template_facts(
         } else {
             None
         };
+        let fns = if slot.is_some() && !is_accessor && escape.is_none() {
+            field_bodies(m, &ts, a)
+        } else {
+            Vec::new()
+        };
         fields.push(FieldFacts {
+            fns,
             ta_stable,
             ta_kind,
             key: m.atoms[a as usize].clone(),
             slot,
             definite,
+            declared,
             data_field: !is_accessor,
             readonly,
             writers_ctor: w.ctor.len(),
@@ -471,6 +539,7 @@ fn template_facts(
             .map(|a| m.atoms[*a as usize].clone())
             .collect(),
         fields,
+        statics: constant_statics(m, tm),
         sabotaged: false,
         ancestors: {
             let mut v = Vec::new();
@@ -488,6 +557,29 @@ fn template_facts(
 
 /// The field holds only typed-array objects, none exposed, transferred,
 /// resized or escaped.
+/// The compiled bodies field `a` holds over every token of a layout, when
+/// it holds nothing else (`bindings::bodies_of`); empty otherwise.
+fn field_bodies(m: &Model, ts: &[Tok], a: Atom) -> Vec<crate::bindings::BodyRef> {
+    let mut out = Vec::new();
+    for &t in ts {
+        let Some(&n) = m.fields.get(&(t, a)) else {
+            continue;
+        };
+        let nd = &m.nodes[n as usize];
+        if nd.pts.is_empty() && nd.prim == 0 {
+            continue;
+        }
+        let b = crate::bindings::bodies_of(m, n);
+        if b.is_empty() {
+            return Vec::new();
+        }
+        out.extend(b);
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
 fn ta_only_sealed(m: &Model, ts: &[Tok], a: Atom) -> bool {
     let ns: Vec<NodeId> = ts
         .iter()
@@ -531,21 +623,6 @@ fn ta_one_kind(m: &Model, ts: &[Tok], a: Atom) -> Option<u8> {
     kind
 }
 
-/// A marker standing only for closed functions' parameters (decision 13).
-fn closed_marker(m: &Model, t: Tok) -> bool {
-    m.is_marker(t)
-        && m.marker_members(t).iter().all(|x| {
-            m.param_marker.get(x).is_some_and(|&(f, i)| {
-                m.closed_params.contains_key(&f)
-                    || (i == u32::MAX && m.this_args.contains_key(&f))
-                    || (i != u32::MAX
-                        && m.method_described(f)
-                            .and_then(|d| d.get(i as usize))
-                            .is_some_and(|&d| d))
-            })
-        })
-}
-
 fn field_kind(m: &Model, ts: &[Tok], a: Atom, definite: bool) -> KindFact {
     let mut k = KindFact {
         prims: if definite { 0 } else { prim::UNDEF },
@@ -571,7 +648,7 @@ fn field_kind(m: &Model, ts: &[Tok], a: Atom, definite: bool) -> KindFact {
                 // A closed function's parameter marker (decision 13): what
                 // its callers pass is beside it; the marker only records
                 // the uses for its contract (as for a receiver, `site_facts`).
-                TokKind::Obj(..) if closed_marker(m, x) => {}
+                TokKind::Obj(..) if m.closed_marker(x) => {}
                 // Any other marker stands for another unit's values with
                 // nothing beside it (DECISIONS 119): it reads as ⊤.
                 TokKind::Obj(..) if m.is_marker(x) => {
@@ -608,10 +685,14 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
     }
     // One fact per read site: records of the same site (a body walked
     // twice) unite their receivers.
-    let mut first: FxHashMap<(u32, u32, u32, bool), usize> = FxHashMap::default();
+    let mut first: FxHashMap<(u32, u32, u32, bool, bool), usize> = FxHashMap::default();
     let mut groups: Vec<(usize, Vec<u32>)> = Vec::new();
+    // The functions only the runtime has (a promise's resolvers). Every
+    // other function token is a body: compiled here, or another unit's,
+    // held by its contract (a stand-in, a foreign class's method).
+    let runtime: FxHashSet<FnIdx> = m.resolvers.values().map(|&t| m.tok_fn(t)).collect();
     for (i, s) in g.read_sites.iter().enumerate() {
-        let k = (s.module, s.byte_offset, s.key, s.is_call);
+        let k = (s.module, s.byte_offset, s.key, s.is_call, s.value_call);
         match first.get(&k) {
             Some(&gi) => groups[gi].1.push(s.recv),
             None => {
@@ -636,7 +717,7 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
             .unwrap_or(s.recv);
         let key = m.atoms[s.key as usize].clone();
         let (mut receivers, mut top, mut verdict, mut fixed_shape, mut targets) =
-            judge(m, &by_id, s, &key, &toks, prim, top_recv);
+            judge(m, &by_id, &runtime, s, &key, &toks, prim, top_recv);
         // Design §11.4: a site whose receiver is the `this` of a method of
         // class C runs, in the typed body behind the entry guard
         // `class_id(this) == C`, on C's instances only: E0 when it is T0
@@ -669,7 +750,8 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
                 .and_then(|g| g.first().copied())
             {
                 if let Some(&it) = class_tok.get(&tm) {
-                    let (r2, _, v2, f2, t2) = judge(m, &by_id, s, &key, &[it], 0, top_recv);
+                    let (r2, _, v2, f2, t2) =
+                        judge(m, &by_id, &runtime, s, &key, &[it], 0, top_recv);
                     if matches!(v2, Verdict::T0Mono | Verdict::T0Set) {
                         (receivers, top, verdict, fixed_shape, targets) =
                             (r2, true, Verdict::E0, f2, t2);
@@ -679,6 +761,7 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
         }
         let mut t: Vec<String> = targets.into_values().collect();
         t.sort();
+        t.dedup();
         out.push(SiteFacts {
             module: s.module,
             byte_offset: s.byte_offset,
@@ -688,7 +771,7 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
             top,
             verdict,
             fixed_shape,
-            call_target: t.first().cloned(),
+            targets: t,
             guard_keys,
         });
     }
@@ -696,23 +779,47 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
 }
 
 /// The verdict of one site over receiver tokens `toks` (and primitive kinds
-/// `prim`): receivers, ⊤, verdict, fixed shape, method targets.
+/// `prim`): receivers, ⊤, verdict, fixed shape, the bodies a call runs.
+///
+/// A call is proven when its lookup is the read rule's (every receiver
+/// names the key by one definite data field of its layout, or resolves it
+/// on its stable chain) and every value the lookups give, the callee set,
+/// is a compiled body. Several bodies are fine: each runs in its own form.
+/// A call through a value has the callee node's values as its set.
+#[allow(clippy::too_many_arguments)]
 fn judge(
     m: &Model,
     by_id: &FxHashMap<TmplId, &TemplateFacts>,
+    runtime: &FxHashSet<FnIdx>,
     s: &crate::gen::ReadSite,
     key: &str,
     toks: &[Tok],
     prim: u16,
     top_recv: NodeId,
 ) -> (Vec<String>, bool, Verdict, bool, FxHashMap<FnIdx, String>) {
+    if s.value_call {
+        let top = toks.contains(&TOP);
+        return match callee_set(m, runtime, toks, prim, top_recv) {
+            Ok(t) if t.len() == 1 => (Vec::new(), top, Verdict::T0Mono, true, t),
+            Ok(t) => (Vec::new(), top, Verdict::T0Set, true, t),
+            Err(why) => (
+                Vec::new(),
+                top,
+                Verdict::No(why),
+                true,
+                FxHashMap::default(),
+            ),
+        };
+    }
     let mut receivers = Vec::new();
     let mut top = false;
     let mut verdict: Option<Verdict> = None;
     let mut slots: Vec<Option<u32>> = Vec::new();
     let mut fixed_shape = true;
-    // Keyed by the function itself: two methods may share a name.
-    let mut targets: FxHashMap<FnIdx, String> = FxHashMap::default();
+    // A call: the nodes whose values the lookups give.
+    let mut callee: Vec<NodeId> = Vec::new();
+    // Reads of a class object's constant static (3.4).
+    let mut statics = 0usize;
     for &t in toks {
         match &m.toks[t as usize] {
             TokKind::Top => {
@@ -732,7 +839,7 @@ fn judge(
             // its callers pass is the stand-ins beside it; the marker
             // only records the uses for its contract. A published method's
             // receiver marker with published receivers too (DECISIONS 107).
-            TokKind::Obj(..) if closed_marker(m, t) => {}
+            TokKind::Obj(..) if m.closed_marker(t) => {}
             // Any other marker stands for another unit's values with
             // nothing beside it (DECISIONS 119): it reads as ⊤.
             TokKind::Obj(..) if m.is_marker(t) => {
@@ -764,22 +871,18 @@ fn judge(
                     fixed_shape = false;
                 }
                 if s.is_call {
-                    // F5: the method resolves through the (stable) chain.
-                    let tgt = resolve_method(m, t, s.key);
-                    match tgt {
-                        Some((f, name)) => {
-                            targets.insert(f, name);
-                        }
-                        None => {
-                            verdict.get_or_insert(Verdict::No(
-                                "method not resolved to one body".into(),
-                            ));
+                    match lookup(m, tf, t, key, s.key) {
+                        Ok(ns) => callee.extend(ns),
+                        Err(why) => {
+                            verdict.get_or_insert(Verdict::No(why));
                         }
                     }
                     continue;
                 }
                 match tf.fields.iter().find(|f| f.key == *key) {
-                    Some(f) if f.definite && f.data_field && f.slot.is_some() => slots.push(f.slot),
+                    Some(f) if (f.definite || f.declared) && f.data_field && f.slot.is_some() => {
+                        slots.push(f.slot)
+                    }
                     Some(f) if !f.data_field => {
                         verdict.get_or_insert(Verdict::No("accessor key (E25)".into()));
                     }
@@ -787,6 +890,25 @@ fn judge(
                         // Not a definite birth field: a prototype member
                         // or a key added after birth.
                         verdict.get_or_insert(Verdict::No("key not a definite birth field".into()));
+                    }
+                }
+            }
+            // A class object: the key is one of its constant statics (3.4).
+            // A static it inherits is not proven (the class objects' chain is
+            // not modeled).
+            TokKind::ClassObj(tm) => {
+                receivers.push(m.tok_name(t));
+                let constant = by_id
+                    .get(tm)
+                    .is_some_and(|tf| tf.statics.iter().any(|k| k == key));
+                let n = m.fields.get(&(t, s.key)).copied();
+                match n {
+                    Some(n) if constant && s.is_call => callee.push(n),
+                    Some(_) if constant => statics += 1,
+                    _ => {
+                        verdict.get_or_insert(Verdict::No(
+                            "not a constant static of the class (3.4)".into(),
+                        ));
                     }
                 }
             }
@@ -806,17 +928,45 @@ fn judge(
     if toks.is_empty() && prim != 0 {
         verdict.get_or_insert(Verdict::No("primitive receiver".into()));
     }
+    let mut targets = FxHashMap::default();
     let verdict = match verdict {
         Some(v) => v,
         None if s.is_call => {
-            if targets.len() == 1 {
-                if receivers.len() == 1 {
-                    Verdict::T0Mono
-                } else {
-                    Verdict::T0Set
+            callee.sort_unstable();
+            callee.dedup();
+            let mut ts: Vec<Tok> = callee
+                .iter()
+                .flat_map(|&n| m.nodes[n as usize].pts.to_sorted())
+                .collect();
+            ts.sort_unstable();
+            ts.dedup();
+            let p = callee.iter().fold(0, |p, &n| p | m.nodes[n as usize].prim);
+            let top_node = callee
+                .iter()
+                .copied()
+                .find(|&n| m.nodes[n as usize].pts.contains_tok(TOP))
+                .unwrap_or(top_recv);
+            match callee_set(m, runtime, &ts, p, top_node) {
+                Ok(t) => {
+                    let one = t.len() == 1 && receivers.len() == 1;
+                    targets = t;
+                    if one {
+                        Verdict::T0Mono
+                    } else {
+                        Verdict::T0Set
+                    }
                 }
+                Err(why) => Verdict::No(why),
+            }
+        }
+        None if statics > 0 && !slots.is_empty() => {
+            Verdict::No("receivers mix class objects and instances".into())
+        }
+        None if statics > 0 => {
+            if receivers.len() == 1 {
+                Verdict::T0Mono
             } else {
-                Verdict::No(format!("{} method targets", targets.len()))
+                Verdict::T0Set
             }
         }
         None => {
@@ -835,46 +985,124 @@ fn judge(
     (receivers, top, verdict, fixed_shape, targets)
 }
 
-/// F5: the single function `key` resolves to on token `t` (own field or
-/// the first prototype that holds it), if exactly one.
-fn resolve_method(m: &Model, t: Tok, key: Atom) -> Option<(FnIdx, String)> {
-    let mut cur = vec![t];
-    let mut seen: FxHashSet<Tok> = FxHashSet::default();
-    while !cur.is_empty() {
-        let mut found: Vec<Tok> = Vec::new();
-        for &h in &cur {
-            if let Some(&n) = m.fields.get(&(h, key)) {
-                for x in m.nodes[n as usize].pts.to_sorted() {
-                    if !found.contains(&x) {
-                        found.push(x);
-                    }
-                }
-            }
-            if let Some(&n) = m.field_any.get(&h) {
-                if !m.nodes[n as usize].pts.is_empty() {
-                    return None;
-                }
-            }
-        }
-        if !found.is_empty() {
-            // One function, whatever closure contexts its tokens carry.
-            let f = m.tok_fn(found[0]);
-            if f != NO_FN && found.iter().all(|&x| m.tok_fn(x) == f) {
-                return Some((f, m.funcs[f as usize].name.clone()));
-            }
-            return None;
-        }
-        let mut next = Vec::new();
-        for &h in &cur {
-            if let Some(&pn) = m.proto_node.get(&h) {
-                for p in m.nodes[pn as usize].pts.to_sorted() {
-                    if seen.insert(p) {
-                        next.push(p);
-                    }
-                }
-            }
-        }
-        cur = next;
+/// The bodies a callee set holds, or why it is not a set of bodies: it
+/// holds ⊤, a builtin function value, a bound function, a class, a function
+/// only the runtime has (a resolver), or a value that is no
+/// function (calling a primitive throws).
+fn callee_set(
+    m: &Model,
+    runtime: &FxHashSet<FnIdx>,
+    toks: &[Tok],
+    prim: u16,
+    top_node: NodeId,
+) -> Result<FxHashMap<FnIdx, String>, String> {
+    if toks.contains(&TOP) {
+        return Err(if m.explain {
+            format!("callee set holds ⊤ <- {}", m.top_origin(top_node))
+        } else {
+            "callee set holds ⊤".into()
+        });
     }
-    None
+    let mut out = FxHashMap::default();
+    for &t in toks {
+        let why = match &m.toks[t as usize] {
+            TokKind::Func(f, _) if !runtime.contains(f) => {
+                out.insert(*f, body_name(m, *f));
+                continue;
+            }
+            TokKind::Obj(..) if m.closed_marker(t) => continue,
+            TokKind::BuiltinFn | TokKind::Builtin(_) => {
+                "callee set holds a builtin function value".into()
+            }
+            TokKind::Bound(_) => "callee set holds a bound function".into(),
+            TokKind::ClassObj(_) => "callee set holds a class".into(),
+            TokKind::Func(..) => "callee set holds a runtime function".into(),
+            _ => "callee set holds a non-function value".into(),
+        };
+        return Err(why);
+    }
+    if prim != 0 {
+        return Err("callee set holds a non-function value".into());
+    }
+    if out.is_empty() {
+        return Err("dead site (no callee flows)".into());
+    }
+    Ok(out)
+}
+
+/// A body's name in a site record: a compiled body by its HIR id too (two
+/// methods share a name), another unit's by its contract name.
+fn body_name(m: &Model, f: FnIdx) -> String {
+    let fi = &m.funcs[f as usize];
+    if fi.func_id == u32::MAX {
+        fi.name.clone()
+    } else {
+        format!("{}#{}", fi.name, fi.func_id)
+    }
+}
+
+/// The read rule's lookup of `key` on receiver token `t` (layout `tf`): one
+/// definite data birth field of the layout, or else, per holder, the first
+/// prototype on the stable chain that holds the key (F5). The nodes whose
+/// values the read gives; a holder that does not have the key and ends its
+/// chain makes the read `undefined`, which no call admits.
+fn lookup(
+    m: &Model,
+    tf: &TemplateFacts,
+    t: Tok,
+    key: &str,
+    a: Atom,
+) -> Result<Vec<NodeId>, String> {
+    let computed = |h: Tok| {
+        m.field_any
+            .get(&h)
+            .is_some_and(|&n| !m.nodes[n as usize].pts.is_empty())
+    };
+    let holds = |h: Tok| {
+        m.fields.get(&(h, a)).copied().filter(|&n| {
+            let nd = &m.nodes[n as usize];
+            !nd.pts.is_empty() || nd.prim != 0
+        })
+    };
+    if computed(t) {
+        return Err("a computed key may hold it".into());
+    }
+    // A key the layout never writes (a read names it) is the chain's.
+    match tf.fields.iter().find(|f| f.key == *key) {
+        Some(f) if f.definite && f.data_field && f.slot.is_some() => {
+            return Ok(holds(t).into_iter().collect());
+        }
+        Some(f) if !f.data_field => return Err("accessor key (E25)".into()),
+        Some(f) if f.writers_ctor + f.writers_post > 0 || tf.birth_keys.contains(&f.key) => {
+            return Err("key not a definite birth field".into());
+        }
+        _ if holds(t).is_some() => return Err("key not a definite birth field".into()),
+        _ => {}
+    }
+    let mut out = Vec::new();
+    let mut seen: FxHashSet<Tok> = FxHashSet::default();
+    let mut todo = vec![t];
+    while let Some(h) = todo.pop() {
+        let protos: Vec<Tok> = m
+            .proto_node
+            .get(&h)
+            .map(|&pn| m.nodes[pn as usize].pts.to_sorted())
+            .unwrap_or_default();
+        if protos.is_empty() {
+            return Err("method not found on the chain".into());
+        }
+        for p in protos {
+            if !seen.insert(p) {
+                continue;
+            }
+            if computed(p) {
+                return Err("a computed key may hold it".into());
+            }
+            match holds(p) {
+                Some(n) => out.push(n),
+                None => todo.push(p),
+            }
+        }
+    }
+    Ok(out)
 }

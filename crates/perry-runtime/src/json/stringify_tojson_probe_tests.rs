@@ -472,33 +472,36 @@ fn class_chain_tojson_memo_holds_every_shape_of_one_nested_literal() {
 
 #[test]
 fn only_a_surface_free_anon_shape_is_a_plain_record() {
-    assert!(super::class_is_plain_record(0));
+    let plain = crate::object::js_object_alloc(0, 0);
+    assert!(unsafe { super::object_is_plain_record(plain) });
 
     let never_registered = probe_test_class_id(0x81);
     assert!(
-        !super::class_is_plain_record(never_registered),
+        !unsafe {
+            super::object_is_plain_record(crate::object::js_object_alloc(never_registered, 0))
+        },
         "a class id that is not a registered anon shape is a real class"
     );
 
     let anon = probe_test_class_id(0x82);
-    unsafe { crate::object::js_register_anon_shape_class_id(anon) };
-    assert!(super::class_is_plain_record(anon));
+    unsafe { crate::object::declarations::test_declare_anonymous(anon) };
+    assert!(unsafe { super::object_is_plain_record(crate::object::js_object_alloc(anon, 0)) });
 
-    // Class ids are per module, so an anon shape id can collide with a declared
-    // class. A registered name is that class's evidence.
+    // A declared descriptor has its own identity even when its body is empty.
     let named = probe_test_class_id(0x83);
     unsafe {
-        crate::object::js_register_anon_shape_class_id(named);
         crate::object::js_register_class_name(named, b"Declared".as_ptr(), 8);
     }
-    assert!(!super::class_is_plain_record(named));
+    assert!(!unsafe { super::object_is_plain_record(crate::object::js_object_alloc(named, 0)) });
 
     let with_proto_object = probe_test_class_id(0x84);
-    unsafe { crate::object::js_register_anon_shape_class_id(with_proto_object) };
+    unsafe { crate::object::declarations::test_declare_anonymous(with_proto_object) };
     let proto = crate::object::js_object_alloc(0, 0);
     crate::object::class_prototype_object_root_store(with_proto_object, proto);
     assert!(
-        !super::class_is_plain_record(with_proto_object),
+        !unsafe {
+            super::object_is_plain_record(crate::object::js_object_alloc(with_proto_object, 0))
+        },
         "a materialized prototype object can carry arbitrary properties"
     );
 }
@@ -506,13 +509,14 @@ fn only_a_surface_free_anon_shape_is_a_plain_record() {
 #[test]
 fn a_late_prototype_to_json_retires_a_cached_plain_record_verdict() {
     let anon = probe_test_class_id(0x91);
-    unsafe { crate::object::js_register_anon_shape_class_id(anon) };
-    assert!(super::class_is_plain_record(anon));
+    unsafe { crate::object::declarations::test_declare_anonymous(anon) };
+    let receiver = crate::object::js_object_alloc(anon, 0);
+    assert!(unsafe { super::object_is_plain_record(receiver) });
     let proto = crate::object::js_object_alloc(0, 1);
     crate::object::test_seed_class_prototype_object_root(anon, proto as usize);
     crate::object::class_prototype_set(anon, "toJSON".to_string(), probe_test_method_bits());
     assert!(
-        !super::class_is_plain_record(anon),
+        !unsafe { super::object_is_plain_record(receiver) },
         "a cached plain-record verdict must not outlive a prototype `toJSON`"
     );
 }
@@ -539,7 +543,7 @@ fn object_literal_shapes_reach_the_flat_emitter() {
 
         // What HIR does to a closed-shape literal: an anon shape class.
         let anon = probe_test_class_id(0xA1);
-        crate::object::js_register_anon_shape_class_id(anon);
+        crate::object::declarations::test_declare_anonymous(anon);
         (*obj()).class_id = anon;
         let bits = value.get_nanbox_f64().to_bits();
         let result = super::super::stringify_flat::try_object(bits)
@@ -548,6 +552,7 @@ fn object_literal_shapes_reach_the_flat_emitter() {
 
         // A real class with the same own fields must keep the general walk.
         let declared = probe_test_class_id(0xA2);
+        crate::object::js_register_class_name(declared, b"Declared".as_ptr(), 8);
         (*obj()).class_id = declared;
         let bits = value.get_nanbox_f64().to_bits();
         assert!(super::super::stringify_flat::try_object(bits).is_none());
@@ -659,10 +664,12 @@ fn plain_object_member_admits_only_what_the_member_dispatch_would_walk() {
 
         // An anon-shape literal qualifies; a declared class does not.
         let anon = probe_test_class_id(0xB1);
-        crate::object::js_register_anon_shape_class_id(anon);
+        crate::object::declarations::test_declare_anonymous(anon);
         (*obj(&plain)).class_id = anon;
         assert!(super::plain_object_member(bits, &mut proof).is_some());
-        (*obj(&plain)).class_id = probe_test_class_id(0xB2);
+        let declared = probe_test_class_id(0xB2);
+        crate::object::js_register_class_name(declared, b"Declared".as_ptr(), 8);
+        (*obj(&plain)).class_id = declared;
         assert!(super::plain_object_member(bits, &mut proof).is_none());
         (*obj(&plain)).class_id = 0;
 

@@ -239,6 +239,14 @@ fn an_export_no_unit_names_stays_inside() {
     assert!(proven(&named, "x"), "{}", named.dump_text());
 }
 
+/// The census broke the literal layout born with keys `keys`.
+fn literal_broken(pf: &ProgramFacts, keys: &[&str]) -> bool {
+    pf.templates
+        .iter()
+        .filter(|t| t.birth_keys == keys)
+        .any(|t| pf.broken.contains(&t.display))
+}
+
 fn verdicts(pf: &ProgramFacts, key: &str) -> Vec<String> {
     pf.sites
         .iter()
@@ -396,11 +404,17 @@ fn a_broken_namespace_field_function_resolves_only_the_units_that_see_it() {
     // escape, so the census breaks it; its defining unit (`a`) owns the
     // display, so round 2 solves `a` and `m` only, not the unrelated `b`/`c`
     // (design §11.3). An unowned display would make every unit dirty.
+    let a = "export var util: any;\n(function (util: any) {\n  function get(x: any) { return x.k; }\n  util.get = get;\n})(util || (util = {}));\n";
+    let m = "import { util } from './a'; (globalThis as any).g = util.get; console.log(util.get({ k: 1 }));";
+    let e = DUAL.replace("class D", "class E").replace("neg", "other");
     let pf = units_of(&[
-        ("a", "export var util: any;\n(function (util: any) {\n  function get(x: any) { return x.k; }\n  util.get = get;\n})(util || (util = {}));\n"),
-        ("m", "import { util } from './a'; (globalThis as any).g = util.get; console.log(util.get({ k: 1 }));"),
-        ("b", &DUAL.replace("class D", "class E").replace("neg", "other")),
-        ("c", "import { E } from './b'; const e = new E([1]); console.log(e.has(1));"),
+        ("a", a),
+        ("m", m),
+        ("b", &e),
+        (
+            "c",
+            "import { E } from './b'; const e = new E([1]); console.log(e.has(1));",
+        ),
     ]);
     // Rewritten for DECISIONS 108 (principle: a function's name is its
     // identity): a nested function declaration carries its function id.
@@ -691,8 +705,8 @@ fn a_class_a_contract_returns_carries_its_methods() {
 
 #[test]
 fn a_tdz_seed_writes_its_local_in_the_local_unit() {
-    // A TDZ seed is a write of its locals (§12.3: a write joins the unit
-    // of what it writes): `a`'s unit sees the seeded value, as the whole
+    // A TDZ seed initializes its locals (§12.3: the seed statement is the
+    // binding's own, joined with it): `a`'s unit sees the seeded value, as the whole
     // program does, so `k` is not proven to hold only numbers. A seed in a
     // unit of its own would write a stand-in of `a` and be lost.
     let src = "(function () { const g = () => { a = a; const o = { k: a }; return o.k; }; try { console.log(g()); } catch (e) {} let a = 1; console.log(g()); })();";
@@ -1073,28 +1087,30 @@ fn a_bundle_splits_into_declaration_units() {
 }
 
 #[test]
-fn a_store_through_a_declaration_joins_its_unit() {
-    // A write is shared state (§12.1): a store through a declaration's name
-    // and the declaration are one unit, and two functions writing one `let`
-    // are one unit with it, both ways.
+fn a_store_through_a_class_name_joins_it_a_write_of_a_binding_does_not() {
+    // Rewritten for NSS (principle: the cut follows data dependencies; a
+    // write of another unit's binding is the binding's write effect, a store
+    // through a binding a store effect into the object it holds, neither a
+    // join). A store through a class's name is the class's state (§12.1):
+    // one unit. Two functions writing one `let` are units of their own,
+    // ordered after the binding's unit as its readers are.
     let n = |src: &str| units(src).units.len();
     assert_eq!(n("class C { v = 1; } C.create = () => new C();"), 1);
     assert_eq!(
         n("let k = 0; function inc() { k++; } function dec() { k--; }"),
-        1
+        3
     );
     // A read alone is one way: the reader is a unit of its own.
     assert_eq!(n("const k = 0; function get() { return k; }"), 2);
-    // Also a closure reading a binding written elsewhere (a captured local
-    // that needs a box is no write of the closure); one writing it joins.
-    // In a once-run wrapper (N5), as a CommonJS body: there `D` is a
-    // captured local of the wrapper, not a module-scope name.
+    // In a once-run wrapper (N5), as a CommonJS body, where `D` is a
+    // captured local of the wrapper: a closure writing `D` is a unit of its
+    // own, as one reading it is.
     let wrapped = |body: &str| format!("(function () {{ {body} }})();");
     let reads = n(&wrapped(
         "var D: any; D = D || {}; const f = () => D.a; const g = () => D.b; console.log(f(), g());",
     ));
     let writes = n(&wrapped("var D: any; D = D || {}; const f = () => { D = 1; }; const g = () => D.b; console.log(f(), g());"));
-    assert_eq!(writes + 1, reads, "reads {reads} writes {writes}");
+    assert_eq!(writes, reads, "reads {reads} writes {writes}");
 }
 
 #[test]
@@ -1102,7 +1118,7 @@ fn a_let_is_its_id_not_its_name() {
     // A binding is its declaration, not its spelling (§12.1): two bodies a
     // once-run wrapper brings to module scope (N5) each declare their own
     // `T`, two bindings of one name, two units; a `var` declared twice is
-    // one binding, and a write through either statement joins both.
+    // one binding: both statements are one unit.
     let n = |src: &str| units(src).units.len();
     let wrapped = |body: &str| format!("(function () {{ {body} }})();");
     let two = |a: &str, b: &str| {
@@ -1136,12 +1152,9 @@ fn a_literal_shape_is_copied_into_each_unit_that_births_it() {
 }
 
 #[test]
-fn an_inlined_copy_does_not_join_its_units() {
-    // An inner local is its declaring item's own (§12.1): a body copied into
-    // another item (inlining keeps the HIR ids) declares the same locals
-    // again, a second binding, not shared state, so the two items stay
-    // apart. A function reading a local it does not declare (a capture of
-    // the enclosing function's local) shares it: one unit.
+fn copies_of_one_emitted_closure_join_their_units() {
+    // Closure creation copies retain FuncId and share one emitted body.
+    // All callers and captures belong to one solve for that emitted body.
     let src = r#"
         function a() { return [1, 2].filter((x) => !!x).length; }
         function b() { return 2; }
@@ -1153,7 +1166,7 @@ fn an_inlined_copy_does_not_join_its_units() {
     let ka = hir.functions.iter().position(|f| f.name == "a").unwrap();
     let kb = hir.functions.iter().position(|f| f.name == "b").unwrap();
     hir.functions[kb].body = hir.functions[ka].body.clone();
-    assert_eq!(crate::decl_units::decl_units(&hir).len(), base);
+    assert_eq!(crate::decl_units::decl_units(&hir).len(), base - 1);
     let src = r#"
         function outer() { let s = { a: 1 }; function inner() { return s.a; } return inner(); }
         console.log(outer());
@@ -1167,26 +1180,33 @@ fn a_literal_method_called_from_another_unit_keeps_its_target() {
     // A published literal's field holding only a function of its unit is a
     // function contract (§11.2 applied to the field, §12 value contracts):
     // the reader's call keeps its single target.
-    for src in [
-        r#"
+    let src = r#"
         const util = { f: (m: any) => m, g: (m: any) => m };
         function a(x: any) { return util.f(x); }
         function b(x: any) { return util.g(x); }
         console.log(a("s"), b(1));
-        "#,
-        r#"
+        "#;
+    let whole = facts(src);
+    assert!(proven(&whole, "f"), "{}", whole.dump_text());
+    let pf = units(src);
+    assert!(pf.units.len() >= 3, "{}", pf.dump_text());
+    assert!(proven(&pf, "f"), "{}", pf.dump_text());
+    // A member stored after birth (TypeScript's namespace): the reader's
+    // field holds the function, not ⊤, but the call is refused in both
+    // modes, as its read is: no slot, `undefined` before the store.
+    let src = r#"
         var eu: any;
         (function (eu: any) { eu.f = (m: any) => m; })(eu || (eu = {}));
         function a(x: any) { return eu.f(x); }
         console.log(a("s"));
-        "#,
-    ] {
-        let whole = facts(src);
-        assert!(proven(&whole, "f"), "{}", whole.dump_text());
-        let pf = units(src);
-        assert!(pf.units.len() >= 3, "{}", pf.dump_text());
-        assert!(proven(&pf, "f"), "{}", pf.dump_text());
-    }
+        "#;
+    let why = "key not a definite birth field";
+    let whole = facts(src);
+    assert!(refused(&whole, "f", why), "{}", whole.dump_text());
+    let pf = units(src);
+    assert!(pf.units.len() >= 3, "{}", pf.dump_text());
+    assert!(holds_fn(&pf, "f"), "{}", pf.dump_text());
+    assert!(refused(&pf, "f", why), "{}", pf.dump_text());
 }
 
 #[test]
@@ -1966,11 +1986,11 @@ fn the_object_key_follows_what_an_importer_observes() {
 /// share a helper storing one argument into the other.
 fn marker_store_entries(n: usize) -> u64 {
     let mut src = String::from(
-        "let last: any;\nfunction h(a: any, b: any) { a.x = b; last = b; }\nfunction mid(a: any, b: any) { h(a, b); return a.x; }\n",
+        "class S { static last: any = 0; }\nfunction h(a: any, b: any) { a.x = b; S.last = b; }\nfunction mid(a: any, b: any) { h(a, b); return a.x; }\n",
     );
     for i in 0..n {
         src.push_str(&format!(
-            "export function f{i}(a: any, b: any) {{ last = a; return mid(a, b); }}\n"
+            "export function f{i}(a: any, b: any) {{ S.last = a; return mid(a, b); }}\n"
         ));
     }
     // Another module calls every export: each is a contract (§11.1).
@@ -2012,14 +2032,15 @@ fn a_store_into_an_argument_keeps_no_field_of_the_marker() {
 
 /// Pts entries of the largest unit when `n` exported functions pass their
 /// argument through a wrapper into a shared helper that stores into it
-/// (the contract's escape) and returns it; `last` keeps them in one unit.
+/// (the contract's escape) and returns it; `S.last` (the class's state: a
+/// store through a class name joins it) keeps them in one unit.
 fn escaped_marker_entries(n: usize) -> u64 {
     let mut src = String::from(
-        "let last = 0;\nfunction h(a: any) { a.k = 1; last = 0; return a; }\nfunction mid(a: any) { return h(a); }\n",
+        "class S { static last: any = 0; }\nfunction h(a: any) { a.k = 1; S.last = 0; return a; }\nfunction mid(a: any) { return h(a); }\n",
     );
     for i in 0..n {
         src.push_str(&format!(
-            "export function f{i}(a: any) {{ last = {i}; return mid(a); }}\n"
+            "export function f{i}(a: any) {{ S.last = {i}; return mid(a); }}\n"
         ));
     }
     let names: Vec<String> = (0..n).map(|i| format!("f{i}")).collect();
@@ -2063,14 +2084,14 @@ fn an_escaped_marker_is_the_top_beside_it() {
 /// A module whose exported `make` returns, besides its own literal, what
 /// `put`'s caller passed: `held` delivers `put`'s marker to `make`'s
 /// result before `poke`'s store records the escape (a node's successors
-/// are served before its rules). `seen` keeps them in one unit.
+/// are served before its rules). `S`'s statics (the class's state: a store
+/// through a class name joins it) keep them in one unit.
 const HELD: &str = r#"
-    let held: any = 0;
-    let seen = 0;
+    class S { static held: any = 0; static seen = 0; }
     const lit = { n: 1 };
-    export function put(p: any) { seen = 1; held = p; }
-    export function poke() { seen = 2; held.k = 1; }
-    export function make(x: any) { seen = 3; if (x) { return held; } return lit; }
+    export function put(p: any) { S.seen = 1; S.held = p; }
+    export function poke() { S.seen = 2; S.held.k = 1; }
+    export function make(x: any) { S.seen = 3; if (x) { return S.held; } return lit; }
     export function rd() { return lit.n; }
     "#;
 
@@ -2105,11 +2126,11 @@ fn an_escaped_marker_of_another_function_is_no_result_transfer() {
 /// returns it (no escape: the markers do not read as ⊤).
 fn shared_helper_entries(n: usize) -> u64 {
     let mut src = String::from(
-        "let last = 0;\nfunction h(a: any) { last = a.v; return a; }\nfunction mid(a: any) { return h(a); }\n",
+        "class S { static last: any = 0; }\nfunction h(a: any) { S.last = a.v; return a; }\nfunction mid(a: any) { return h(a); }\n",
     );
     for i in 0..n {
         src.push_str(&format!(
-            "export function f{i}(a: any) {{ last = {i}; return mid(a); }}\n"
+            "export function f{i}(a: any) {{ S.last = {i}; return mid(a); }}\n"
         ));
     }
     let names: Vec<String> = (0..n).map(|i| format!("f{i}")).collect();
@@ -2161,6 +2182,20 @@ fn a_use_in_a_shared_body_is_a_use_of_each_callers_argument() {
 }
 
 #[test]
+fn a_keyed_use_in_a_recursion_is_a_use_of_each_callers_argument() {
+    // Design §18.4 with DECISIONS 44 when the shared bodies recurse: `h`
+    // and `mid` pass their argument to each other, so their argument
+    // markers stand for each other (one cycle of the member graph). `h`
+    // lets `p.inner` escape; the keyed use reaches `keep`'s parameter
+    // through the cycle (settled after the solve), so the caller's
+    // `o.inner` is not its own.
+    let b = "function h(p: any, n: number) { if (n > 0) mid(p, n - 1); (globalThis as any).k = p.inner; }\nfunction mid(p: any, n: number) { h(p, n); }\nexport function keep(p: any) { mid(p, 2); }\nexport function keep2(p: any) { mid(p, 2); }";
+    let m = "import { keep, keep2 } from './b'; function main() { const o = { inner: { v: 1 } }; keep(o); keep2({ inner: 0 }); (globalThis as any).k.v = 'x'; console.log(o.inner.v); } main(); main();";
+    let pf = units_of(&[("b", b), ("m", m)]);
+    assert!(!proven(&pf, "v"), "{}", pf.dump_text());
+}
+
+#[test]
 fn a_computed_key_use_in_a_shared_body_is_a_use_of_each_callers_argument() {
     // DECISIONS 44 under design §18.4: a named key reaches through its keyed
     // reach marker; a computed key through the marker's reach marker, which
@@ -2181,6 +2216,191 @@ fn an_argument_a_shared_body_returns_comes_back_to_the_caller() {
     let m = "import { id, id2 } from './b'; class Box { v: any = 1; } const o = new Box(); const r = id(o); id2(0); r.v = 'x'; console.log(o.v);";
     let pf = units_of(&[("b", b), ("m", m)]);
     assert!(!field(tmpl(&pf, "Box"), "v").readonly, "{}", pf.dump_text());
+}
+
+/// Every function writes `S.last`, so they are one unit (the writers of a
+/// binding join its declaration, decl_units.rs).
+const JOIN: &str = "class S { static last: any = 0; }\n";
+
+/// Pts entries of the largest unit when `n` exported functions each read
+/// their own key of what a shared helper returns, and then any key of it.
+fn relative_result_entries(n: usize) -> u64 {
+    let mut src = format!(
+        "{JOIN}function h(a: any) {{ S.last = 0; return a; }}\nfunction id(a: any) {{ S.last = 1; return h(a); }}\n"
+    );
+    for i in 0..n {
+        src.push_str(&format!(
+            "export function f{i}(a: any, k: string) {{ S.last = {i}; const r = id(a); const x = r.k{i}; return [x, r[k]]; }}\n"
+        ));
+    }
+    let names: Vec<String> = (0..n).map(|i| format!("f{i}")).collect();
+    let calls: Vec<String> = names
+        .iter()
+        .map(|f| format!("console.log({f}({{ v: 1 }}, 'v'));"))
+        .collect();
+    let user = format!(
+        "import {{ {} }} from './t'; {}",
+        names.join(", "),
+        calls.join(" ")
+    );
+    let pf = units_of(&[("t", src.as_str()), ("u", user.as_str())]);
+    pf.units
+        .iter()
+        .map(|(_, s)| s.pts_entries)
+        .max()
+        .unwrap_or(0)
+}
+
+#[test]
+fn a_shared_body_returns_each_caller_its_own_argument() {
+    // DECISIONS 44 (b): the shared `h` (and `id`) return their argument
+    // marker; at each call's result it is that caller's own argument. Without
+    // it every caller gets the shared marker back, reads its own key of it
+    // (one keyed reach marker per caller on the shared marker) and then any
+    // key of it (all of them): the unit grows with the square of the callers.
+    let (e8, e16, e32) = (
+        relative_result_entries(8),
+        relative_result_entries(16),
+        relative_result_entries(32),
+    );
+    let (d1, d2) = (e16 - e8, e32 - e16);
+    assert!(
+        d1 > 0 && d2 < 3 * d1,
+        "entries {e8} {e16} {e32}: quadratic in the callers"
+    );
+}
+
+/// One exported function `both` of `b.ts` (one unit: everything below is
+/// its body), whose inner callers share one method instance (a method of a
+/// local object: never composed into the callers' summaries), and `m`.
+fn both(body: &str, m: &str) -> ProgramFacts {
+    let b = format!("export function both(o: any, c: any) {{ {body} }}");
+    units_of(&[("b", b.as_str()), ("m", m)])
+}
+
+#[test]
+fn a_caller_gets_back_only_what_it_passed() {
+    // DECISIONS 44 (b): `id` and `id2` return their argument through the
+    // shared `H.h`. `id`'s result is `id`'s argument alone, so `both`
+    // returns `o`, not `c`, and the store through it is a store into the
+    // `Box`, not into the `Crate`.
+    let pf = both(
+        "const H = { h(p: any) { return p; } }; function id(p: any) { return H.h(p); } function id2(p: any) { return H.h(p); } id2(c); return id(o);",
+        "import { both } from './b'; class Box { v: any = 1; } class Crate { v: any = 1; } const r = both(new Box(), new Crate()); r.v = 'x'; console.log(r.v);",
+    );
+    assert!(!field(tmpl(&pf, "Box"), "v").readonly, "{}", pf.dump_text());
+    assert!(
+        field(tmpl(&pf, "Crate"), "v").readonly,
+        "{}",
+        pf.dump_text()
+    );
+}
+
+#[test]
+fn an_argument_a_closure_keeps_is_every_callers() {
+    // DECISIONS 44 (b): `H.h` keeps its first argument in a closure and
+    // returns it on every later call, so `b`'s result is `a`'s argument.
+    // The marker entered a closure cell (it left its run): its family comes
+    // back as every caller's argument, and `both` may return `o`.
+    let pf = both(
+        "let saved: any = null; const H = { h(p: any) { if (!saved) saved = () => p; return saved(); } }; function a(p: any) { return H.h(p); } function b(p: any) { return H.h(p); } a(o); return b(c);",
+        "import { both } from './b'; class Box { v: any = 1; } both(new Box(), 0).v = 'x'; console.log(1);",
+    );
+    assert!(!field(tmpl(&pf, "Box"), "v").readonly, "{}", pf.dump_text());
+}
+
+#[test]
+fn an_argument_the_heap_keeps_is_every_callers() {
+    // DECISIONS 44 (b): as above through an object field: the marker entered
+    // the heap (it left its run).
+    let pf = both(
+        "const keep: any = { p: null }; const H = { h(p: any) { if (!keep.p) keep.p = p; return keep.p; } }; function a(p: any) { return H.h(p); } function b(p: any) { return H.h(p); } a(o); return b(c);",
+        "import { both } from './b'; class Box { v: any = 1; } both(new Box(), 0).v = 'x'; console.log(1);",
+    );
+    assert!(!field(tmpl(&pf, "Box"), "v").readonly, "{}", pf.dump_text());
+}
+
+#[test]
+fn a_recursion_returns_what_its_argument_reaches() {
+    // DECISIONS 44 (b) through a recursion: `W.walk` returns its argument
+    // or, through itself, what its argument reaches under `next`. At the
+    // recursive call's result the keyed reach marker of `next` is the
+    // caller's `n.next`, and a reach marker reaches itself under every key,
+    // so the substitution ends. `both` may return the `Tail`.
+    let pf = both(
+        "const W = { walk(n: any): any { return n.next ? W.walk(n.next) : n; } }; function last(p: any) { return W.walk(p); } function last2(p: any) { return W.walk(p); } last2(c); return last(o);",
+        "import { both } from './b'; class Head { v: any = 1; next: any = null; } class Tail { v: any = 1; } const h = new Head(); h.next = new Tail(); both(h, 0).v = 'x'; console.log(h.v);",
+    );
+    assert!(
+        !field(tmpl(&pf, "Tail"), "v").readonly,
+        "{}",
+        pf.dump_text()
+    );
+    assert!(pf.units.iter().all(|(_, s)| !s.aborted), "{:?}", pf.units);
+}
+
+#[test]
+fn a_written_parameter_is_not_the_callers_argument() {
+    // DECISIONS 44 (b): `U.up` writes its parameter (`n = n.parent`), so its
+    // marker stands for the caller's `n.parent` too and is never replaced
+    // by the caller's argument alone: `both` may return the `Parent`.
+    let pf = both(
+        "const U = { up(n: any) { n = n.parent; return n; } }; function top(p: any) { return U.up(p); } function top2(p: any) { return U.up(p); } top2(c); return top(o);",
+        "import { both } from './b'; class Parent { v: any = 1; } class Child { v: any = 1; parent: any = new Parent(); } both(new Child(), 0).v = 'x'; console.log(1);",
+    );
+    assert!(
+        !field(tmpl(&pf, "Parent"), "v").readonly,
+        "{}",
+        pf.dump_text()
+    );
+}
+
+#[test]
+fn an_argument_marker_that_arrives_late_is_lifted() {
+    // DECISIONS 44 (b): `b` passes `H.h` the result of `H.g`, whose marker
+    // arrives after `H.h`'s result already holds its family (from `a`'s
+    // call): the call's argument rule lifts it then. `both` returns `c`.
+    let pf = both(
+        "const H = { h(p: any) { return p; }, g(p: any) { return p; } }; function a(p: any) { return H.h(p); } function b(p: any) { return H.h(H.g(p)); } a(o); return b(c);",
+        "import { both } from './b'; class Box { v: any = 1; } both(0, new Box()).v = 'x'; console.log(1);",
+    );
+    assert!(!field(tmpl(&pf, "Box"), "v").readonly, "{}", pf.dump_text());
+}
+
+#[test]
+fn another_units_function_returns_each_caller_its_own_argument() {
+    // DECISIONS 44 (b) through another unit's function: `pass` (unit `p`)
+    // returns its argument and touches what it reaches under `k` (its
+    // stand-in's touch node takes nothing back). Its stand-in is one body
+    // for every call: its parameter's marker is the caller's argument at
+    // each call's result, so `id`'s result is `id`'s argument alone.
+    let p = "export function pass(x: any) { const s = '' + x.k; return x; }";
+    let c = format!("{JOIN}import {{ pass }} from './p';\nfunction h(q: any) {{ S.last = 0; return pass(q); }}\nexport function id(q: any) {{ S.last = 1; return h(q); }}\nexport function id2(q: any) {{ S.last = 2; return h(q); }}");
+    let m = "import { id, id2 } from './c'; class Box { v: any = 1; } class Crate { v: any = 1; } const o = new Box(); const c = new Crate(); const r = id(o); id2(c); r.v = 'x'; console.log(o.v, c.v);";
+    let pf = units_of(&[("p", p), ("c", c.as_str()), ("m", m)]);
+    assert!(!field(tmpl(&pf, "Box"), "v").readonly, "{}", pf.dump_text());
+    assert!(
+        field(tmpl(&pf, "Crate"), "v").readonly,
+        "{}",
+        pf.dump_text()
+    );
+}
+
+#[test]
+fn a_result_an_argument_reaches_is_the_callers_reach() {
+    // An argument marker's keyed reach reads as what its members reach: `up`
+    // (its own unit, a closed function) returns `x.parent`, which its
+    // argument marker holds as a keyed reach marker of itself. Read as
+    // nothing, `up`'s contract would say it returns its argument alone and
+    // the store through `top`'s result would miss the `Parent`.
+    let b = "function up(x: any) { x = x.parent; return x; }\nexport function top(x: any) { return up(x); }\nexport function top2(x: any) { return up(x); }";
+    let m = "import { top, top2 } from './b'; class Parent { v: any = 1; } class Child { v: any = 1; parent: any = new Parent(); } const c = new Child(); top2(0); top(c).v = 'x'; console.log(c.v);";
+    let pf = units_of(&[("b", b), ("m", m)]);
+    assert!(
+        !field(tmpl(&pf, "Parent"), "v").readonly,
+        "{}",
+        pf.dump_text()
+    );
 }
 
 #[test]
@@ -2426,7 +2646,13 @@ fn a_store_into_a_class_field_is_a_store_effect() {
         main(1); main(2);
         "#;
     let pf = units(src);
-    assert!(pf.broken.is_empty(), "{:?}", pf.broken);
+    // Rewritten for NSS (a store effect carries the stored value's
+    // contract): `Box` is not broken; `put`'s literal may be.
+    assert!(
+        !pf.broken.iter().any(|d| d == "t.ts:Box"),
+        "{:?}",
+        pf.broken
+    );
     assert!(
         !verdicts(&pf, "key").is_empty() && !proven(&pf, "key"),
         "{}",
@@ -3191,4 +3417,496 @@ fn a_primitive_method_box_in_another_units_storage_keeps_its_elements_described(
     let a = "export class P { x: number; constructor(x: number) { this.x = x; } get(): number { return this.x; } } export class Vector { storage: any[]; n: number; constructor() { this.storage = new Array(2); this.n = 0; } append(e: any) { if (this.n >= this.storage.length) { const s = this.storage.slice(); this.storage = new Array(this.n * 2); for (let i = 0; i < this.n; i++) this.storage[i] = s[i]; } this.storage[this.n] = e; this.n = this.n + 1; } at(i: number): any { return this.storage[i]; } }";
     let m = "import { P, Vector } from './a'; class J { input: string; v: Vector; constructor(s: string) { this.input = s; this.v = new Vector(); } run() { for (let i = 0; i < 4; i++) { this.v.append(new P(i)); this.v.append(this.input.substring(i, i + 1)); } return this.v.at(0).get(); } } function main() { const j = new J(process.argv.length > 9 ? 'abcdef' : 'xyzuvw'); console.log(j.run()); } main(); main();";
     assert_parity(&[("a", a), ("m", m)]);
+}
+
+#[test]
+fn a_nested_initializer_and_its_hoisted_var_are_one_emitted_binding() {
+    let src = r#"
+        const loaded = (function() {
+            try { var imported = { value: 123 }; } catch (unused) {}
+            return { get: () => imported.value };
+        })();
+        console.log(loaded.get());
+    "#;
+    let pf = units(src);
+    assert!(pf.broken.is_empty(), "{:?}", pf.broken);
+    // The one binding is published once even though its hoisted seed and
+    // nested initializer are distinct init statements after run-once flatten.
+    let bindings = pf.bindings_for("t.ts").unwrap();
+    let mut ids: Vec<_> = bindings.locals.iter().map(|(id, _)| *id).collect();
+    let count = ids.len();
+    assert!(count > 0, "the captured module binding must be live");
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(ids.len(), count);
+}
+
+// MRK: a marker is a token only inside its run; it crosses into a result,
+// storage or another run as a member of that node's own marker.
+
+#[test]
+fn an_inner_helper_given_two_objects_holds_no_marker() {
+    // No marker arrives at `h`'s parameter (both callers pass objects of
+    // their own), so it holds the two objects alone and `p.x` is proven on
+    // both layouts: a marker there would be a receiver no fact covers.
+    let b = "class A { x: any = 1; a: any = 0; }\nclass B { x: any = 2; b: any = 0; }\nexport function run() { function h(p: any) { return p.x; } return h(new A()) + h(new B()); }";
+    let pf = units_of(&[
+        ("b", b),
+        ("m", "import { run } from './b'; console.log(run());"),
+    ]);
+    assert_eq!(verdicts(&pf, "x"), ["T0Set"], "{}", pf.dump_text());
+}
+
+#[test]
+fn an_inner_helper_published_through_a_literal_keeps_its_marker() {
+    // `h` is published as a field of `api`: its parameter's marker stays a
+    // token in its run, so its contract still returns parameter 0 and the
+    // caller's store through the result is a store into its own `Box`, not
+    // into the `Crate` it never passed. (In a function: a module-scope value
+    // is ⊤ to the reader's declaration unit, §12.3.)
+    let b = "function h(p: any) { return p; }\nexport const api = { h };";
+    let m = "import { api } from './b'; class Box { v: any = 1; } class Crate { v: any = 1; } function main() { const o = new Box(); const c = new Crate(); api.h(o).v = 'x'; console.log(o.v, c.v); } main(); main();";
+    let pf = units_of(&[("b", b), ("m", m)]);
+    assert!(!field(tmpl(&pf, "Box"), "v").readonly, "{}", pf.dump_text());
+    assert!(
+        field(tmpl(&pf, "Crate"), "v").readonly,
+        "{}",
+        pf.dump_text()
+    );
+}
+
+#[test]
+fn a_boundary_parameters_field_read_in_a_helper_is_proven() {
+    // `join` is closed (decision 13): its callers' literal is beside its
+    // parameter's marker. The inner `rd` reads `i.prev`: its parameter's
+    // marker stands for `join`'s, all of whose members are closed, so the
+    // site is proven on the callers' layout.
+    let src = r#"
+        function mkIndent() { return { prev: 'a', base: 'b' }; }
+        function join(xs: any, indent: any) { function rd(i: any) { return i.prev; } return xs + rd(indent) + indent.base; }
+        function main(x: any) { const ind = mkIndent(); console.log(join(x, ind)); }
+        main(1); main(2);
+        "#;
+    let pf = units(src);
+    assert!(!verdicts(&pf, "prev").is_empty(), "{}", pf.dump_text());
+    assert!(
+        proven(&pf, "prev") && proven(&pf, "base"),
+        "{}",
+        pf.dump_text()
+    );
+}
+
+#[test]
+fn a_helpers_result_never_holds_another_helpers_argument() {
+    // `H.h1` and `H.h2` both store their argument into one cell, whose
+    // marker stands for both; `h1` returns its own argument. The cell's
+    // marker never enters `h1`'s run as `h2`'s family, so `a`'s result is
+    // `a`'s argument alone: the store through `both`'s result reaches the
+    // `Box`, not the `Crate`.
+    let pf = both(
+        "const keep: any = { p: null }; const H = { h1(p: any) { keep.p = p; return p; }, h2(p: any) { keep.p = p; return p; } }; function a(p: any) { return H.h1(p); } function b(p: any) { return H.h2(p); } b(c); return a(o);",
+        "import { both } from './b'; class Box { v: any = 1; } class Crate { v: any = 1; } const r = both(new Box(), new Crate()); r.v = 'x'; console.log(r.v);",
+    );
+    assert!(!field(tmpl(&pf, "Box"), "v").readonly, "{}", pf.dump_text());
+    assert!(
+        field(tmpl(&pf, "Crate"), "v").readonly,
+        "{}",
+        pf.dump_text()
+    );
+}
+
+#[test]
+fn what_a_cell_holds_is_used_as_its_members() {
+    // `f` stores its argument into a cell; `g` hands the cell's value to
+    // unknown code. The cell holds its own marker with `f`'s argument as a
+    // member, so the escape at `g` is an escape of `f`'s parameter, and the
+    // caller's `o.v` is not proven. (One unit: `mk`'s body. With the cell a
+    // declaration of its own, `f`'s store into another unit's literal is
+    // bug 3, unsound on main.)
+    let b = "export function mk() { const cell: any = { s: null }; return { f(x: any) { cell.s = x; }, g() { (globalThis as any).k = cell.s; } }; }";
+    let m = "import { mk } from './b'; class Box { v: any = 1; } function main() { const api = mk(); const o = new Box(); api.f(o); api.g(); (globalThis as any).k.v = 'x'; console.log(o.v); } main(); main();";
+    let pf = units_of(&[("b", b), ("m", m)]);
+    assert!(!verdicts(&pf, "v").is_empty(), "{}", pf.dump_text());
+    assert!(!proven(&pf, "v"), "{}", pf.dump_text());
+}
+
+#[test]
+fn a_parameter_a_cell_gives_back_is_another_calls() {
+    // `f` returns what an earlier call stored: another call's argument, not
+    // this one's. `n` passes a `Crate` first, `m` a `Box` and stores through
+    // the result. Read as "returns parameter 0" `m` would store into its own
+    // `Box` while the result is `n`'s `Crate`, which would stay read-only
+    // (unsound). The result's marker stands for another call's argument: the
+    // result is another unit's value and the argument leaves through it. (The
+    // cell is a static of `S`, so it is in `f`'s unit: bug 3 otherwise.)
+    let b = "class S { static last: any = 0; static cell: any = { s: null }; }\nexport function f(x: any) { S.last = 1; const o = S.cell.s; S.cell.s = x; return o; }";
+    let n = "import { f } from './b'; class Crate { w: any = 0; v: any = 2; } function main() { const c = new Crate(); f(c); console.log(c.v); } main(); main();";
+    let m = "import { f } from './b'; class Box { v: any = 1; } function main() { const r = f(new Box()); r.v = 'x'; console.log(r.v); } main(); main();";
+    let pf = units_of(&[("b", b), ("n", n), ("m", m)]);
+    assert!(
+        !field(tmpl(&pf, "Crate"), "v").readonly,
+        "{}",
+        pf.dump_text()
+    );
+}
+
+#[test]
+fn a_written_parameter_is_each_callers_own() {
+    // `first` writes its parameter (`n = id(n)`): its binding holds the
+    // marker, the variable what `id` returns of it, a token of its run. So
+    // `top` returns its own argument: the store through its result is a
+    // store into the caller's `Box`, not into the `Crate` passed to `top2`.
+    let b = format!("{JOIN}function id(x: any) {{ S.last = 0; return x; }}\nfunction first(n: any) {{ S.last = 1; n = id(n); return n; }}\nexport function top(x: any) {{ S.last = 2; return first(x); }}\nexport function top2(x: any) {{ S.last = 3; return first(x); }}");
+    let b = b.as_str();
+    let m = "import { top, top2 } from './b'; class Box { v: any = 1; } class Crate { v: any = 2; } function main() { const o = new Box(); const c = new Crate(); top(o).v = 'x'; top2(c); console.log(o.v, c.v); } main(); main();";
+    let pf = units_of(&[("b", b), ("m", m)]);
+    assert!(!field(tmpl(&pf, "Box"), "v").readonly, "{}", pf.dump_text());
+    assert!(
+        field(tmpl(&pf, "Crate"), "v").readonly,
+        "{}",
+        pf.dump_text()
+    );
+}
+
+/// Pts entries of the largest unit when `n` exported functions store their
+/// argument into one cell through helpers of their own, and `n` readers
+/// each read their own key of what the cell holds.
+fn shared_cell_entries(n: usize) -> u64 {
+    // The cell is a static of `S` and every function names `S`: one unit (a
+    // cell of its own declaration unit would be another unit's literal).
+    let mut src = "class S { static last: any = 0; static cell: any = { s: null }; }\n".to_string();
+    for i in 0..n {
+        src.push_str(&format!(
+            "function h{i}(a: any) {{ S.last = {i}; S.cell.s = a; }}\nexport function f{i}(a: any) {{ S.last = {i}; h{i}(a); }}\nexport function g{i}() {{ S.last = {i}; const x = S.cell.s; return x.k{i}; }}\n"
+        ));
+    }
+    let names: Vec<String> = (0..n)
+        .flat_map(|i| [format!("f{i}"), format!("g{i}")])
+        .collect();
+    let calls: Vec<String> = (0..n)
+        .map(|i| format!("f{i}({{ k{i}: 1 }}); console.log(g{i}());"))
+        .collect();
+    let user = format!(
+        "import {{ {} }} from './t'; {}",
+        names.join(", "),
+        calls.join(" ")
+    );
+    let pf = units_of(&[("t", src.as_str()), ("u", user.as_str())]);
+    pf.units
+        .iter()
+        .map(|(_, s)| s.pts_entries)
+        .max()
+        .unwrap_or(0)
+}
+
+#[test]
+fn a_shared_cell_holds_one_marker() {
+    // MRK: every helper's argument crosses into the cell as a member of its
+    // one marker; each reader gets that marker and its own key's reach.
+    // With the families themselves in the cell each reader would get every
+    // helper's family and its key of each: the square of the helpers.
+    let (e8, e16, e32) = (
+        shared_cell_entries(8),
+        shared_cell_entries(16),
+        shared_cell_entries(32),
+    );
+    let (d1, d2) = (e16 - e8, e32 - e16);
+    assert!(
+        d1 > 0 && d2 < 3 * d1,
+        "entries {e8} {e16} {e32}: quadratic in the helpers"
+    );
+}
+
+#[test]
+fn a_primitive_method_on_a_receiver_beside_top_is_that_top() {
+    // `x` is another unit's value: ⊤ with every primitive kind beside it.
+    // `x.trim()` is a call of an unknown function value (the arguments
+    // escape, the result is ⊤); the primitive method's summary of the same
+    // call says nothing more. Its container of primitives would stand
+    // beside the literal in `f`'s result and, no literal shape, sink the
+    // result: the literal escaped for no reason.
+    let b = "export function f(x: any, c: boolean) { const r = x.trim(); const o = { v: 1 }; return c ? r : o; }";
+    let m = "import { f } from './b'; console.log(f((globalThis as any).u, true).v);";
+    let pf = units_of(&[("b", b), ("m", m)]);
+    let lit = pf
+        .templates
+        .iter()
+        .find(|t| t.display.starts_with("b.ts:__AnonShape"))
+        .unwrap_or_else(|| panic!("{}", pf.dump_text()));
+    assert!(lit.escape.is_none(), "{}", pf.dump_text());
+}
+
+/// Pts entries of the largest unit when `n` escaped literals (each stored
+/// into ⊤ and read back beside it) are merged into one value that `n`
+/// arrays hold.
+fn escaped_beside_top_entries(n: usize) -> u64 {
+    let mut src = format!("{JOIN}");
+    for i in 0..n {
+        src.push_str(&format!(
+            "function l{i}(o: any) {{ S.last = {i}; return o.l{i} || (o.l{i} = {{ v: {i} }}); }}\n"
+        ));
+    }
+    src.push_str("export function f(x: any, c: boolean) { S.last = -1; let y: any = l0(x);\n");
+    for i in 1..n {
+        src.push_str(&format!("if (c) y = l{i}(x);\n"));
+    }
+    for i in 0..n {
+        src.push_str(&format!("const z{i} = [y];\n"));
+    }
+    let zs: Vec<String> = (0..n).map(|i| format!("z{i}.length")).collect();
+    src.push_str(&format!("return {}; }}\n", zs.join(" + ")));
+    let user = "import { f } from './t'; console.log(f((globalThis as any).u, true));";
+    let pf = units_of(&[("t", src.as_str()), ("u", user)]);
+    pf.units
+        .iter()
+        .map(|(_, s)| s.pts_entries)
+        .max()
+        .unwrap_or(0)
+}
+
+#[test]
+fn an_escaped_value_beside_top_is_that_top() {
+    // Each `l{i}` literal is stored into ⊤ (it escapes) and read back beside
+    // ⊤; merged into `y`, the `n` literals ride ⊤ into every array that
+    // holds `y`: the square of `n`. Beside ⊤ an escaped value says nothing a
+    // reader can use (its layout is escaped, its fields are ⊤), so it is
+    // left out there and `y` is ⊤ alone.
+    let (e8, e16, e32) = (
+        escaped_beside_top_entries(8),
+        escaped_beside_top_entries(16),
+        escaped_beside_top_entries(32),
+    );
+    let (d1, d2) = (e16 - e8, e32 - e16);
+    assert!(
+        d1 > 0 && d2 < 3 * d1,
+        "entries {e8} {e16} {e32}: quadratic in the escaped values"
+    );
+}
+
+#[test]
+fn a_written_parameter_without_a_summary_is_each_callers_own() {
+    // `up` reads `arguments`, so it has no summary: one body for every call,
+    // a run of its own whose parameters get bindings the calls write. It
+    // writes its parameter (`n = n.parent`): the variable holds the marker
+    // and what it reaches under `parent`, two tokens of its run, so `top`'s
+    // result is what the caller's argument reaches. Read as the marker alone
+    // (the parameter node's marker standing for both) the result would be
+    // the caller's `Child` and the store through it would miss the `Parent`.
+    let b = format!("{JOIN}function up(n: any) {{ S.last = 0; if (arguments.length > 1) return null; n = n.parent; return n; }}\nexport function top(x: any) {{ S.last = 1; return up(x); }}\nexport function top2(x: any) {{ S.last = 2; return up(x); }}");
+    let b = b.as_str();
+    let m = "import { top, top2 } from './b'; class Parent { v: any = 1; } class Child { v: any = 1; parent: any = new Parent(); } class Crate { v: any = 2; parent: any = null; } function main() { const c = new Child(); top(c).v = 'x'; top2(new Crate()); console.log(c.v); } main(); main();";
+    let pf = units_of(&[("b", b), ("m", m)]);
+    assert!(
+        !field(tmpl(&pf, "Parent"), "v").readonly,
+        "{}",
+        pf.dump_text()
+    );
+    assert!(
+        field(tmpl(&pf, "Crate"), "v").readonly,
+        "{}",
+        pf.dump_text()
+    );
+}
+
+/// Pts entries of the largest unit when `n` exported functions store their
+/// argument into a cell each, one function returns any of the cells, and
+/// `n` readers each read their own key of what it returns.
+fn result_holder_entries(n: usize) -> u64 {
+    // The cells are statics of `S` (one unit with the functions); `pick` is
+    // a method of a local object, never composed into its callers, so its
+    // result node is the one every caller reads.
+    let cells: Vec<String> = (0..n)
+        .map(|i| format!("static c{i}: any = {{ s: null }};"))
+        .collect();
+    let mut src = format!("class S {{ static last: any = 0; {} }}\n", cells.join(" "));
+    for i in 0..n {
+        src.push_str(&format!(
+            "export function f{i}(a: any) {{ S.last = {i}; S.c{i}.s = a; }}\n"
+        ));
+    }
+    // `pick` returns its parameter `d` when no cell matches: its result is
+    // a slot of its instance's run (it depends on a parameter), which the
+    // cells' markers cross into.
+    src.push_str("const P = { pick(k: number, d: any): any { S.last = -1;\n");
+    for i in 0..n {
+        src.push_str(&format!("if (k === {i}) return S.c{i}.s;\n"));
+    }
+    src.push_str("return d; } };\n");
+    for i in 0..n {
+        src.push_str(&format!(
+            "export function g{i}(k: number, a: any) {{ S.last = {i}; const x = P.pick(k, a); return x.k{i}; }}\n"
+        ));
+    }
+    let names: Vec<String> = (0..n)
+        .flat_map(|i| [format!("f{i}"), format!("g{i}")])
+        .collect();
+    let calls: Vec<String> = (0..n)
+        .map(|i| format!("f{i}({{ k{i}: 1 }}); console.log(g{i}({i}, {{ k{i}: 2 }}));"))
+        .collect();
+    let user = format!(
+        "import {{ {} }} from './t'; {}",
+        names.join(", "),
+        calls.join(" ")
+    );
+    let pf = units_of(&[("t", src.as_str()), ("u", user.as_str())]);
+    pf.units
+        .iter()
+        .map(|(_, s)| s.pts_entries)
+        .max()
+        .unwrap_or(0)
+}
+
+#[test]
+fn a_result_holds_one_marker() {
+    // MRK: `pick` returns what any of `n` cells holds; its result holds one
+    // marker standing for the cells' markers, and each reader gets that one.
+    // With the cells' markers returned as themselves each reader would get
+    // all `n` and its key of each: the square of the cells.
+    let (e8, e16, e32) = (
+        result_holder_entries(8),
+        result_holder_entries(16),
+        result_holder_entries(32),
+    );
+    let (d1, d2) = (e16 - e8, e32 - e16);
+    assert!(
+        d1 > 0 && d2 < 3 * d1,
+        "entries {e8} {e16} {e32}: quadratic in the cells"
+    );
+}
+
+/// The unit of `f` (a store) and `r` (a read of a builtin function value's
+/// member, then a read of the result): whether the read site holds ⊤.
+fn builtin_fn_read_top(store: &str) -> bool {
+    let b = format!("{JOIN}export function f(x: any, c: boolean) {{ S.last = 1; const g: any = Math.max; {store} }}\nexport function r() {{ S.last = 2; const m: any = Math.min; const y: any = m.foo; return y.v; }}");
+    let m = "import { f, r } from './b'; function main() { f((globalThis as any).u, true); console.log(r()); } main(); main();";
+    let pf = units_of(&[("b", b.as_str()), ("m", m)]);
+    let s = pf
+        .sites
+        .iter()
+        .find(|s| s.key == "v")
+        .unwrap_or_else(|| panic!("{}", pf.dump_text()));
+    s.top
+}
+
+#[test]
+fn a_store_beside_top_writes_no_builtin_function_value() {
+    // `h` holds another unit's value (⊤) and `Math.max` (the opaque builtin
+    // function value, one token for every one). `Math.max` reaches `h`
+    // first (a constant), ⊤ later; once the solve settles `h` holds ⊤, so the
+    // store into it is a store into a value from unmodeled code, not into a
+    // builtin function value, and `Math.min.foo` keeps its builtin members:
+    // `y.v` holds no ⊤. Decided when the store first ran, it marked every
+    // builtin function value written.
+    assert!(
+        !builtin_fn_read_top("const h: any = c ? x : g; h.k = 1;"),
+        "a store into ⊤ marked builtin function values written"
+    );
+    // A store into a builtin function value itself still marks them written
+    // (one token for every one): the read is ⊤.
+    assert!(
+        builtin_fn_read_top("g.k = 1;"),
+        "a store into a builtin function value must mark them written"
+    );
+}
+
+/// RTX bug 3: `h` stores its argument into `saved.p`, a literal of another
+/// declaration unit, and `b` returns it: `b`'s result is the `Box` given to
+/// `a`, which the reader writes.
+const SAVED_B: &str = "const saved: any = { p: null };\nfunction h(p: any) { if (!saved.p) saved.p = p; return saved.p; }\nexport function a(p: any) { return h(p); }\nexport function b(p: any) { return h(p); }";
+const SAVED_M: &str = "import { a, b } from './b'; class Box { v: any = 1; } const o = new Box(); a(o); const r = b(0); r.v = 'x'; console.log(o.v);";
+
+#[test]
+fn a_value_stored_into_another_units_literal_escapes() {
+    let pf = units_of(&[("b", SAVED_B), ("m", SAVED_M)]);
+    assert!(!field(tmpl(&pf, "Box"), "v").readonly, "{}", pf.dump_text());
+}
+
+#[test]
+fn a_value_stored_into_another_units_literal_is_written_in_the_whole_program() {
+    let pf = whole_of(&[("b", SAVED_B), ("m", SAVED_M)]);
+    assert!(!field(tmpl(&pf, "Box"), "v").readonly, "{}", pf.dump_text());
+}
+
+#[test]
+fn a_parameter_stored_through_a_result_into_another_units_literal_escapes() {
+    // `get()` gives `saved`, another declaration unit's literal: `a`'s store
+    // is a store effect, and the field holds an unknown value (an exported
+    // function's parameter). The shared body's observation node and the
+    // instance's slot both store `p`: each escapes, so `a`'s argument leaves
+    // and `Box.v`, written through `b()`, is not read-only.
+    let b = "const saved: any = { p: null };\nfunction get() { return saved; }\nexport function a(p: any) { get().p = p; }\nexport function b() { return saved.p; }";
+    let m = "import { a, b } from './b'; class Box { v: any = 1; } const o = new Box(); a(o); const r = b(); r.v = 'x'; console.log(o.v);";
+    let mods = [("b", b), ("m", m)];
+    assert!(!field(tmpl(&whole_of(&mods), "Box"), "v").readonly);
+    let pf = units_of(&mods);
+    assert!(!field(tmpl(&pf, "Box"), "v").readonly, "{}", pf.dump_text());
+}
+
+#[test]
+fn a_closure_stores_into_another_units_literal() {
+    // `f` and `g` are a literal's methods; the cell they share is a
+    // declaration unit of its own. What `f` stores, `g` hands to unknown
+    // code: `o.v` is written.
+    let b = "const cell: any = { s: null };\nexport function mk() { return { f(x: any) { cell.s = x; }, g() { (globalThis as any).k = cell.s; } }; }";
+    let m = "import { mk } from './b'; class Box { v: any = 1; } function main() { const api = mk(); const o = new Box(); api.f(o); api.g(); (globalThis as any).k.v = 'x'; console.log(o.v); } main(); main();";
+    let pf = units_of(&[("b", b), ("m", m)]);
+    assert!(!field(tmpl(&pf, "Box"), "v").readonly, "{}", pf.dump_text());
+}
+
+#[test]
+fn an_arrow_stores_into_another_units_literal() {
+    // An exported arrow (a closure of the module scope) stores its argument
+    // into `saved.p`; `b()` gives it back and the reader writes it.
+    let b = "const saved: any = { p: null };\nexport const put = (p: any) => { saved.p = p; };\nexport function b() { return saved.p; }";
+    let m = "import { put, b } from './b'; class Box { v: any = 1; } const o = new Box(); put(o); const r = b(); r.v = 'x'; console.log(o.v);";
+    let pf = units_of(&[("b", b), ("m", m)]);
+    assert!(!field(tmpl(&pf, "Box"), "v").readonly, "{}", pf.dump_text());
+}
+
+/// The kinds per unit cover the whole program's: ⊤, or every primitive
+/// kind and layout the whole program finds.
+fn kinds_cover(u: &crate::derive::FieldFacts, w: &crate::derive::FieldFacts) -> bool {
+    u.kind.top
+        || (u.kind.prims & w.kind.prims == w.kind.prims
+            && w.kind.objs.iter().all(|o| u.kind.objs.contains(o)))
+}
+
+#[test]
+fn a_store_into_another_units_literal_carries_the_stored_kinds() {
+    // The field `saved.p` holds what `a` stores (DECISIONS 73): per unit
+    // its kinds are never fewer than the whole program's.
+    let b = "const saved: any = { p: null };\nexport function a() { saved.p = 5; }\nexport function c() { return saved.p; }";
+    let m = "import { a, c } from './b'; a(); console.log(c());";
+    let mods = [("b", b), ("m", m)];
+    let (pf, w) = (units_of(&mods), whole_of(&mods));
+    let lit = |pf: &ProgramFacts| -> crate::derive::FieldFacts {
+        let t = pf
+            .templates
+            .iter()
+            .find(|t| t.display.starts_with("b.ts:__AnonShape"))
+            .unwrap_or_else(|| panic!("{}", pf.dump_text()));
+        field(t, "p").clone()
+    };
+    let (fu, fw) = (lit(&pf), lit(&w));
+    assert!(
+        kinds_cover(&fu, &fw),
+        "{:?} vs {:?}\n{}",
+        fu.kind,
+        fw.kind,
+        pf.dump_text()
+    );
+    assert!(!fu.readonly, "{}", pf.dump_text());
+}
+
+#[test]
+fn a_store_into_the_units_own_literal_publishes_nothing() {
+    // The literal is `f`'s own: the store is no store effect, nothing
+    // leaves, and `o.s.w` is proven as in the whole program.
+    let b = "class Inner { w: number = 1; }\nexport function f() { const o: any = { s: null }; o.s = new Inner(); return o.s.w; }";
+    let m = "import { f } from './b'; console.log(f());";
+    let mods = [("b", b), ("m", m)];
+    let (pf, w) = (units_of(&mods), whole_of(&mods));
+    assert_eq!(verdicts(&pf, "w"), verdicts(&w, "w"), "{}", pf.dump_text());
+    assert!(proven(&pf, "w"), "{}", pf.dump_text());
+    assert!(tmpl(&pf, "Inner").escape.is_none(), "{}", pf.dump_text());
 }

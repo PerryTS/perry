@@ -531,6 +531,7 @@ impl LoweringContext {
     /// so `Expr::New { class_name: <let_name> }` can resolve to the
     /// underlying class for capture-forwarding purposes.
     pub(crate) fn register_let_class_alias(&mut self, let_name: String, class_name: String) {
+        self.global_class_aliases.remove(&let_name);
         if let Some(entry) = self
             .let_class_aliases
             .iter_mut()
@@ -540,6 +541,17 @@ impl LoweringContext {
         } else {
             self.let_class_aliases.push((let_name, class_name));
         }
+    }
+
+    /// Register an alias whose value is the global intrinsic `class_name` read
+    /// off `globalThis` (see `global_class_aliases`).
+    pub(crate) fn register_global_class_alias(&mut self, let_name: String, class_name: String) {
+        self.register_let_class_alias(let_name.clone(), class_name);
+        self.global_class_aliases.insert(let_name);
+    }
+
+    pub(crate) fn is_global_class_alias(&self, name: &str) -> bool {
+        self.global_class_aliases.contains(name)
     }
 
     /// Look up the underlying class name for a let/const/var alias. Walks
@@ -1145,6 +1157,73 @@ impl LoweringContext {
         class_name
     }
 
+    /// The class of `__perry_declared_keys(k1, k2, ...)` (null prototype) or
+    /// `__perry_declared_keys_object(...)` (`%Object.prototype%`): no
+    /// constructor, one `ClassFieldOrigin::Declared` field per key in the
+    /// given order ([`crate::Class::is_declared_keys_record`]).
+    /// Content-addressed like the anon-shape classes, so equal key lists
+    /// share one name.
+    pub(crate) fn synthesize_declared_keys_class(&mut self, keys: &[String], null_proto: bool) -> String {
+        let shape_key = format!("@declared-keys:{null_proto}:{}", keys.join("\u{0}"));
+        if let Some(existing) = self.anon_shape_classes.get(&shape_key) {
+            return existing.clone();
+        }
+        let mut h: u64 = 0xcbf29ce484222325;
+        for b in shape_key.as_bytes() {
+            h ^= *b as u64;
+            h = h.wrapping_mul(0x100000001b3);
+        }
+        let prefix = if null_proto {
+            crate::DECLARED_KEYS_CLASS_PREFIX
+        } else {
+            crate::DECLARED_KEYS_OBJECT_CLASS_PREFIX
+        };
+        let class_name = format!("{prefix}{h:016x}");
+        let class_id = self.fresh_class();
+        let fields: Vec<ClassField> = keys
+            .iter()
+            .map(|name| ClassField {
+                origin: crate::ClassFieldOrigin::Declared,
+                name: name.clone(),
+                key_expr: None,
+                ty: Type::Any,
+                init: None,
+                is_private: false,
+                is_readonly: false,
+                decorators: Vec::new(),
+            })
+            .collect();
+        self.register_class(class_name.clone(), class_id);
+        self.pending_classes.push(Class {
+            id: class_id,
+            name: class_name.clone(),
+            type_params: Vec::new(),
+            extends: None,
+            extends_name: None,
+            native_extends: None,
+            extends_expr: None,
+            heritage_lexically_shadowed: false,
+            fields,
+            constructor: None,
+            methods: Vec::new(),
+            getters: Vec::new(),
+            setters: Vec::new(),
+            static_accessor_names: Vec::new(),
+            static_accessor_fn_ids: Vec::new(),
+            static_fields: Vec::new(),
+            static_methods: Vec::new(),
+            computed_members: Vec::new(),
+            decorators: Vec::new(),
+            is_exported: false,
+            aliases: Vec::new(),
+            is_nested: false,
+            alloc_width_hint: 0,
+            specialized_from: None,
+        });
+        self.anon_shape_classes.insert(shape_key, class_name.clone());
+        class_name
+    }
+
     pub(crate) fn lookup_func_name(&self, func_id: FuncId) -> Option<&str> {
         self.functions
             .iter()
@@ -1720,6 +1799,9 @@ impl LoweringContext {
             .push(std::mem::take(&mut self.forward_lexical_names));
         let local_mark = self.locals.len();
         self.scope_depth += 1;
+        self.fn_scope_saves.push(self.current_fn_scope);
+        self.current_fn_scope = self.next_fn_scope;
+        self.next_fn_scope += 1;
         self.scope_local_marks.push(local_mark);
         // #wall5: parallel mark for the native-module shadow stack, restored in
         // exit_scope (kept off the returned tuple to avoid churning its callers).
@@ -1732,8 +1814,22 @@ impl LoweringContext {
         )
     }
 
+    /// `enter_scope` for a catch clause: a scope of the function it sits in
+    /// rather than a function of its own, so the function identity
+    /// (`current_fn_scope`) stays the enclosing function's.
+    pub(crate) fn enter_catch_scope(&mut self) -> (usize, usize, usize) {
+        let mark = self.enter_scope();
+        if let Some(&enclosing) = self.fn_scope_saves.last() {
+            self.current_fn_scope = enclosing;
+        }
+        mark
+    }
+
     pub(crate) fn exit_scope(&mut self, mark: (usize, usize, usize)) {
         debug_assert!(self.scope_depth > 0, "exit_scope called at module depth");
+        if let Some(enclosing) = self.fn_scope_saves.pop() {
+            self.current_fn_scope = enclosing;
+        }
         // #6062: restore the enclosing block's forward-lexical set saved in the
         // matching `enter_scope`.
         self.forward_lexical_names = self.forward_lexical_saves.pop().unwrap_or_default();

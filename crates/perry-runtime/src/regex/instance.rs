@@ -161,19 +161,34 @@ fn prepare_shape(receiver: *mut RegExpHeader) -> *mut RegExpHeader {
 }
 
 /// The builtin-RegExp fact: `value` is a RegExp still on this agent's birth
-/// layout, and `%RegExp.prototype%` has not been written since the realm
-/// sealed it. Then every property the RegExp operations read is the builtin:
-/// the birth layout's own keys are only `[[RegExpMatcher]]` (slot 0) and a
-/// writable data `lastIndex` (slot 1), its `[[Prototype]]` is the intrinsic,
-/// and `exec`, `test`, the flag getters and the `@@replace`/`@@match`/
-/// `@@split`/`@@search`/`@@matchAll` methods are that prototype's own builtins.
-/// An own key, an attribute change, a `[[Prototype]]` relink or a subclass
-/// birth gives the receiver another layout word; a prototype write sets its
-/// shadow bit. Both are set where the change happens; this reads them.
+/// layout ([`birth_layout`]), and `%RegExp.prototype%` has not been written
+/// since the realm sealed it. Then every property the RegExp operations read
+/// is the builtin: the birth layout's own keys are only `[[RegExpMatcher]]`
+/// (slot 0) and a writable data `lastIndex` (slot 1), its `[[Prototype]]` is
+/// the intrinsic, and `exec`, `test`, the flag getters and the `@@replace`/
+/// `@@match`/`@@split`/`@@search`/`@@matchAll` methods are that prototype's
+/// own builtins. A prototype write sets its shadow bit, which this reads.
 ///
 /// Leaf, NoCollect, NoThrow. Returns the receiver for the slot accessors.
 #[inline(always)]
 pub(crate) fn builtin(value: f64) -> Option<*mut RegExpHeader> {
+    let receiver = birth_layout(value)?;
+    crate::object::builtin_proto::prototype_unwritten(
+        crate::object::builtin_proto::BuiltinProto::RegExp,
+    )
+    .then_some(receiver)
+}
+
+/// The receiver half of [`builtin`]: `value` is a RegExp still on this
+/// agent's birth layout. An own key, an attribute change, a `[[Prototype]]`
+/// relink or a subclass birth gives the receiver another layout word, so this
+/// proves the receiver's own keys and its `[[Prototype]]` only; what the
+/// prototype currently holds is a separate fact (`builtin`'s shadow bit, or
+/// `regex_read_sites::flag_getters`' proof of the flag accessors alone).
+///
+/// Leaf, NoCollect, NoThrow.
+#[inline(always)]
+pub(crate) fn birth_layout(value: f64) -> Option<*mut RegExpHeader> {
     let header = crate::value::addr_class::pointer_value_header(value.to_bits())?;
     if header.obj_type != crate::gc::GC_TYPE_OBJECT
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
@@ -184,12 +199,8 @@ pub(crate) fn builtin(value: f64) -> Option<*mut RegExpHeader> {
     let receiver = (value.to_bits() & crate::value::POINTER_MASK) as *mut RegExpHeader;
     // The header's first word is `class_id` (0 for every RegExp) and the
     // layout word, whose shadow bit is clear on the birth layout.
-    (shape != 0
-        && unsafe { std::ptr::read(receiver as *const u64) } == u64::from(shape) << 32
-        && crate::object::builtin_proto::prototype_unwritten(
-            crate::object::builtin_proto::BuiltinProto::RegExp,
-        ))
-    .then_some(receiver)
+    (shape != 0 && unsafe { std::ptr::read(receiver as *const u64) } == u64::from(shape) << 32)
+        .then_some(receiver)
 }
 
 /// The birth layout's inline slot `index` of a receiver [`builtin`] admitted.

@@ -92,6 +92,25 @@ pub(super) fn pipeline_args(args: *const crate::array::ArrayHeader) -> Vec<f64> 
 pub(super) fn is_pipeline_stream(value: f64) -> bool {
     get_hidden_value(value, hidden_readable_flag_key()).is_some()
         || get_hidden_value(value, hidden_writable_flag_key()).is_some()
+        || is_fs_write_stream(value)
+}
+
+/// `fs.createWriteStream` objects are their own object type (own `write`, `end`
+/// and `on` methods over the fs stream registry) and carry none of the hidden
+/// classic-stream flags, so the flag checks alone cannot tell one from an
+/// options object.
+pub(super) fn is_fs_write_stream(value: f64) -> bool {
+    crate::fs::is_fs_stream_instance_value(value, "WriteStream")
+}
+
+/// Register a pipeline completion listener. An fs write stream keeps its
+/// listeners in the fs registry, reached only through its own `on`.
+fn add_pipeline_listener(stage: f64, event: &'static [u8], event_value: f64, listener: f64) {
+    if is_fs_write_stream(stage) {
+        destination_listener(stage, event, listener, false);
+    } else {
+        add_stream_listener_for_event(stage, event_value, listener);
+    }
 }
 
 pub(super) fn is_pipeline_options_arg(value: f64) -> bool {
@@ -202,8 +221,9 @@ pub(super) fn add_pipeline_callback_listeners(
             crate::fn_info!(pipeline_error_callback, 1; with_declared(1)),
             &[&state, callback, stages],
         );
-        add_stream_listener_for_event(
+        add_pipeline_listener(
             stage.get_nanbox_f64(),
+            b"error",
             error_event.get_nanbox_f64(),
             listener.get_nanbox_f64(),
         );
@@ -213,8 +233,9 @@ pub(super) fn add_pipeline_callback_listeners(
                 crate::fn_info!(pipeline_close_callback, 0; with_declared(0)),
                 &[&state, callback, stages, &stage],
             );
-            add_stream_listener_for_event(
+            add_pipeline_listener(
                 stage.get_nanbox_f64(),
+                b"close",
                 close_event.get_nanbox_f64(),
                 close_listener.get_nanbox_f64(),
             );
@@ -230,13 +251,14 @@ pub(super) fn add_pipeline_callback_listeners(
         len - 1
     };
     let success_stage = scope.root_nanbox_f64(rooted_array_at(stages, success_index));
-    let success_event =
-        if get_hidden_value(success_stage.get_nanbox_f64(), hidden_writable_flag_key()).is_some()
-            && options.end_final
-        {
-            literal_string_value(b"finish")
+    let writable_success =
+        get_hidden_value(success_stage.get_nanbox_f64(), hidden_writable_flag_key()).is_some()
+            || is_fs_write_stream(success_stage.get_nanbox_f64());
+    let (success_name, success_event): (&'static [u8], f64) =
+        if writable_success && options.end_final {
+            (b"finish", literal_string_value(b"finish"))
         } else {
-            literal_string_value(b"end")
+            (b"end", literal_string_value(b"end"))
         };
     let success_event = scope.root_nanbox_f64(success_event);
     let success = rooted_closure(
@@ -244,8 +266,9 @@ pub(super) fn add_pipeline_callback_listeners(
         crate::fn_info!(pipeline_success_callback, 0; with_declared(0)),
         &[&state, callback],
     );
-    add_stream_listener_for_event(
+    add_pipeline_listener(
         success_stage.get_nanbox_f64(),
+        success_name,
         success_event.get_nanbox_f64(),
         success.get_nanbox_f64(),
     );
@@ -623,11 +646,91 @@ pub(super) fn complete_collected_pipeline(callback: f64, value: f64) {
 /// stream stages, run in order on fully collected chunks. Every stage runs
 /// user code that can collect, so the stage list, the callback and the
 /// current chunks are held in handles and reread after each stage.
+/// A pipeline of streams ending in a function stage whose first stream has
+/// nothing to read yet: its data arrives after the pipeline starts, so a
+/// snapshot of the chunks present now would hand the function an empty source.
+fn pipeline_is_live_stream_to_function(stages: &crate::gc::RuntimeHandle<'_>) -> bool {
+    let len = rooted_array_len(stages);
+    if len < 2 || !is_callable_value(rooted_array_at(stages, len - 1)) {
+        return false;
+    }
+    if !(0..len - 1).all(|i| is_pipeline_stream(rooted_array_at(stages, i))) {
+        return false;
+    }
+    let first = rooted_array_at(stages, 0);
+    !readable_chunks_nonempty(first)
+        && !stream_hidden_ended(first)
+        && get_hidden_value(first, READABLE_SOURCE_ITERATOR_KEY).is_none()
+}
+
+extern "C" fn live_pipeline_source_error(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    err: f64,
+) -> f64 {
+    if !closure.is_null() {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let err = scope.root_nanbox_f64(err);
+        let next = scope.root_nanbox_f64(js_closure_get_capture_f64(closure, 0));
+        destroy_stream(next.get_nanbox_f64(), err.get_nanbox_f64());
+    }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+/// Wire the streams end to end and hand the last one, live, to the function
+/// stage, which consumes it as the data arrives.
+fn run_live_stream_to_function_pipeline(
+    stages: &crate::gc::RuntimeHandle<'_>,
+    callback: &crate::gc::RuntimeHandle<'_>,
+) -> f64 {
+    install_collected_pipeline_error_guards(stages);
+    let len = rooted_array_len(stages);
+    let streams = len - 1;
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let error = scope.root_nanbox_f64(literal_string_value(b"error"));
+    for i in 0..streams - 1 {
+        wire_pipeline_pair(
+            rooted_array_at(stages, i),
+            rooted_array_at(stages, i + 1),
+            true,
+        );
+        // A source failure must reach the stream the function is reading.
+        let next = scope.root_nanbox_f64(rooted_array_at(stages, streams - 1));
+        let listener = rooted_closure(
+            &scope,
+            crate::fn_info!(live_pipeline_source_error, 1; with_declared(1)),
+            &[&next],
+        );
+        add_stream_listener_for_event(
+            rooted_array_at(stages, i),
+            error.get_nanbox_f64(),
+            listener.get_nanbox_f64(),
+        );
+    }
+    for i in 0..streams - 1 {
+        start_pipeline_readable(rooted_array_at(stages, i));
+    }
+    let result = call_pipeline_function_stage(
+        rooted_array_at(stages, len - 1),
+        rooted_array_at(stages, streams - 1),
+    );
+    match result {
+        Ok(settled) => {
+            complete_collected_pipeline(callback.get_nanbox_f64(), settled.value);
+        }
+        Err(err) => fail_collected_pipeline(stages, callback, err),
+    }
+    rooted_array_at(stages, len - 1)
+}
+
 pub(super) fn run_collected_pipeline(
     stages: &crate::gc::RuntimeHandle<'_>,
     callback: &crate::gc::RuntimeHandle<'_>,
     options: PipelineOptions,
 ) -> f64 {
+    if pipeline_is_live_stream_to_function(stages) {
+        return run_live_stream_to_function_pipeline(stages, callback);
+    }
     install_collected_pipeline_error_guards(stages);
     let len = rooted_array_len(stages);
     let last = || rooted_array_at(stages, len - 1);

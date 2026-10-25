@@ -1,6 +1,6 @@
 use super::*;
 use crate::object::class_image::{
-    ImageTable, StaticAccessorTable, StaticMethodTable, StringMemberOrderTable,
+    string_member_order, ImageTable, StaticAccessorTable, StaticMethodTable, StringMemberOrderTable,
 };
 use std::collections::HashMap;
 use std::sync::RwLock;
@@ -136,7 +136,7 @@ pub(crate) fn proto_member_has_no_string_key_bytes(class_id: u32, name: &[u8]) -
             .and_then(|guard| {
                 guard
                     .as_ref()
-                    .map(|map| map.contains_key(&(class_id, false, name.to_vec())))
+                    .map(|map| string_member_order(map, class_id, false, name).is_some())
             })
             .unwrap_or(false)
 }
@@ -1125,7 +1125,7 @@ fn order_class_string_member_names(class_id: u32, is_static: bool, names: &mut V
         orders
             .as_ref()
             .and_then(|guard| guard.as_ref())
-            .and_then(|map| map.get(&(class_id, is_static, name.to_vec())).copied())
+            .and_then(|map| string_member_order(map, class_id, is_static, name))
     };
     names.retain(|name| {
         let key = name.as_ref();
@@ -1530,15 +1530,24 @@ pub fn async_local_storage_prototype_value() -> f64 {
 /// (a declaration, or a registered runtime class)? An object literal's
 /// anon-shape id is registered for `typeof` and may carry literal methods,
 /// but its [[Prototype]] is `Object.prototype`: it has no declaration holder,
-/// publishes no CLASS word and stays on ordinary property lookup. A declared
-/// class whose id collides with an anon shape keeps its name.
+/// publishes no CLASS word and stays on ordinary property lookup. Compiler
+/// declarations have distinct ids and carry their role in the descriptor.
 pub(crate) fn class_identity_has_surface(class_id: u32) -> bool {
-    class_id != 0
-        && if super::is_anon_shape_class_id(class_id) {
-            super::class_meta::class_has_name(class_id)
-        } else {
-            is_class_id_registered(class_id) || super::class_meta::class_has_name(class_id)
-        }
+    if class_id == 0 {
+        return false;
+    }
+    if crate::object::shapes::identity_prototype_word(
+        crate::object::shapes::PROTO_ID_CLASS | u64::from(class_id),
+    ) != 0
+    {
+        return true;
+    }
+    // A worker/realm has the image descriptor but has not built its own
+    // holder yet. The locked descriptor read belongs to that cold birth.
+    super::declarations::class_declaration(class_id).map_or_else(
+        || is_class_id_registered(class_id) || super::class_meta::class_has_name(class_id),
+        ClassDeclaration::is_declared,
+    )
 }
 
 pub(crate) fn class_decl_prototype_value(class_id: u32) -> f64 {
@@ -1961,3 +1970,7 @@ mod class_parent_prototype_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "member_order_tests.rs"]
+mod borrowed_member_order_tests;

@@ -623,7 +623,7 @@ fn eleven_codecs_are_deferred_runtime_transforms_and_release_on_completion() {
         let output = match codec {
             Codec::Gzip => crate::gunzip_bytes(&output).unwrap(),
             Codec::Deflate => crate::inflate_bytes(&output).unwrap(),
-            Codec::DeflateRaw => crate::inflate_raw_bytes(&output).unwrap(),
+            Codec::DeflateRaw => decode_bytes(&output, Codec::InflateRaw).unwrap(),
             Codec::BrotliCompress => brotli_decompress_bytes(&output).unwrap(),
             Codec::ZstdCompress => zstd::stream::decode_all(output.as_slice()).unwrap(),
             _ => output,
@@ -704,6 +704,74 @@ fn real_gunzip_bomb_parks_on_pause_and_keeps_the_input_traced() {
     );
     eprintln!("Z2 bytes={count} baseline_rss={baseline} peak_rss={peak} rss_delta={} readable_peak={readable_peak} native_peak={native_peak}", peak.saturating_sub(baseline));
 }
+#[test]
+fn codec_handle_close_releases_payload_without_destroying_transform() {
+    let _agent = super::OwnAgent::enter();
+    clear();
+    let roots = TransientRootScope::enter();
+    let before = driver::PAYLOAD_COUNTS.with(std::cell::Cell::get);
+    let owner = roots.root_nanbox(factory("Gzip", undefined()));
+    let handle = roots.root_nanbox(field(owner.get(), "_handle"));
+    let buffers = ledger(owner.get());
+    listen(owner.get(), 0.0);
+    assert!(unsafe { js_zlib_is_callback(field(handle.get(), "close")) } != 0);
+    assert!(unsafe { payload(owner.get()) }.is_some());
+    assert!(native_bytes(owner.get()) > 0);
+    assert!(buffers.bytes() > 0, "premise: codec buffers are live");
+    assert_eq!(
+        driver::PAYLOAD_COUNTS.with(std::cell::Cell::get),
+        (before.0 + 1, before.1)
+    );
+
+    let gcs = collections();
+    assert_eq!(
+        unsafe { method(handle.get(), "close", &[]) }.to_bits(),
+        UNDEFINED
+    );
+    assert_eq!(collections(), gcs, "release does not wait for collection");
+    assert!(unsafe { payload(owner.get()) }.is_none());
+    assert_eq!(native_bytes(owner.get()), 0);
+    assert_eq!(buffers.bytes(), 0, "codec buffers released synchronously");
+    assert_eq!(
+        driver::PAYLOAD_COUNTS.with(std::cell::Cell::get),
+        (before.0 + 1, before.1 + 1)
+    );
+    assert_eq!(
+        field(owner.get(), "_handle").to_bits(),
+        handle.get().to_bits()
+    );
+    unsafe { method(handle.get(), "close", &[]) };
+    pump();
+    for name in ["destroyed", "closed", "_closed"] {
+        assert_eq!(field(owner.get(), name).to_bits(), JsValue::FALSE.bits());
+    }
+    assert!(EVENTS.with(|v| v.borrow().is_empty()));
+
+    // The saved handle remains callable after the ordinary destroy clears it.
+    unsafe { method(owner.get(), "destroy", &[]) };
+    assert_eq!(
+        field(owner.get(), "destroyed").to_bits(),
+        JsValue::TRUE.bits()
+    );
+    assert_eq!(field(owner.get(), "closed").to_bits(), JsValue::TRUE.bits());
+    assert_eq!(
+        field(owner.get(), "_handle").to_bits(),
+        JsValue::NULL.bits()
+    );
+    pump();
+    unsafe {
+        method(handle.get(), "close", &[]);
+        method(owner.get(), "destroy", &[]);
+    }
+    pump();
+    assert_eq!(EVENTS.with(|v| v.borrow().clone()), ["close"]);
+    assert_eq!(native_bytes(owner.get()), 0);
+    assert_eq!(
+        driver::PAYLOAD_COUNTS.with(std::cell::Cell::get),
+        (before.0 + 1, before.1 + 1)
+    );
+}
+
 #[test]
 fn brotli_destroy_inside_data_releases_before_gc_and_closes_once_later() {
     let _agent = super::OwnAgent::enter();

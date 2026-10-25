@@ -38,7 +38,7 @@ mod summary;
 mod tests;
 mod units;
 
-pub use bindings::{BindingFacts, ModuleBindings};
+pub use bindings::{BindingFacts, BodyRef, ModuleBindings};
 pub use derive::{FieldFacts, KindFact, SiteFacts, TemplateFacts, Verdict};
 use perry_hir::Module;
 
@@ -186,9 +186,12 @@ pub struct ProgramFacts {
     /// the class's module path and name (`ClassContract::closed`).
     pub(crate) ctor_args_out: Vec<((String, String), units::ArgContract)>,
     /// Its store effects into other units' literal layouts and class
-    /// instances (decision 17): display, key and the stored kinds
-    /// (`Gen::store_effects`).
+    /// instances (decision 17): display, key and the value contract of what
+    /// it stores.
     pub(crate) stores_out: Vec<(String, String, units::ValueContract)>,
+    /// Its writes of other units' module-scope bindings: (unit path, name)
+    /// and the value contract of what it stores (`Gen::local_write`).
+    pub(crate) writes_out: Vec<((String, String), units::ValueContract)>,
     /// What it writes into each cell (design §17.16 (b)), and the cells it
     /// reads (`Gen::seed_cell`).
     pub(crate) cells_out: Vec<(String, units::ValueContract)>,
@@ -1109,14 +1112,11 @@ fn describe_nodes(
                     ret_unknown = true;
                     continue;
                 }
-                // A builtin, a program object, an array (DECISIONS 94), a
-                // primitive method's container (184).
+                // A builtin, an array (DECISIONS 94), a primitive method's
+                // container (184).
                 let extra = match g.m.toks[t as usize] {
                     model::TokKind::Builtin(_) => true,
-                    model::TokKind::Obj(..) => {
-                        (g.m.program_cells && g.m.program_objs.iter().any(|&(_, o)| o == t))
-                            || g.m.is_cell_arr(t)
-                    }
+                    model::TokKind::Obj(..) => g.m.is_cell_arr(t),
                     _ => false,
                 };
                 if extra {
@@ -1380,17 +1380,6 @@ fn value_contract_of_toks(
             // DECISIONS 137: a marker with values beside it (DECISIONS 74)
             // is described by them; it adds no kind of its own.
             model::TokKind::Obj(..) if g.m.is_marker(t) && g.m.beside_values(t) => continue,
-            model::TokKind::Obj(..)
-                if g.m.program_cells && g.m.program_objs.iter().any(|&(_, o)| o == t) =>
-            {
-                // A program object (DECISIONS 92).
-                let name = g.m.program_objs.iter().find(|&&(_, o)| o == t).unwrap().0;
-                if !vc.program.iter().any(|p| p == name) {
-                    vc.program.push(name.to_string());
-                    vc.program.sort();
-                }
-                continue;
-            }
             // An array (DECISIONS 94): its elements are cell `arr:<display>`.
             model::TokKind::Obj(..) if g.m.is_cell_arr(t) => {
                 let d = g.arr_name(t);
@@ -1835,6 +1824,7 @@ pub(crate) fn compute_in<'a>(
         g.closed_params();
         g.published_receivers();
         g.published_args();
+        g.hold_binding_writes();
         g.unit_boundary(published);
     }
     let gen_ms = t0.elapsed().as_secs_f64() * 1000.0;
@@ -1860,6 +1850,7 @@ pub(crate) fn compute_in<'a>(
         eprintln!("perry: wpfacts {}", g.m.sum.stats);
     }
     g.m.solve();
+    let first_solve_ms = t1.elapsed().as_secs_f64() * 1000.0;
     // Past the bound the unit claims nothing (sound): its contracts are
     // neither checked nor published (113-CWL3).
     let mut checks = 0u64;
@@ -1871,7 +1862,15 @@ pub(crate) fn compute_in<'a>(
     } {
         g.m.solve();
     }
+    let checks_ms = t1.elapsed().as_secs_f64() * 1000.0 - first_solve_ms;
+    g.m.settle_keyed_uses();
     g.settle_parent_layouts();
+    if cfg.profile {
+        eprintln!(
+            "perry: wpfacts post-solve: first solve {first_solve_ms:.0} ms, {checks} contract checks with their solves {checks_ms:.0} ms, settle {:.0} ms",
+            t1.elapsed().as_secs_f64() * 1000.0 - first_solve_ms - checks_ms
+        );
+    }
     if cfg.profile || cfg.explain {
         let mut kinds = [0usize; 6];
         let mut fnkeyed = 0;
@@ -1974,6 +1973,12 @@ pub(crate) fn compute_in<'a>(
         dump::apply_sabotage(&mut templates, spec);
     }
     let derive_ms = t2.elapsed().as_secs_f64() * 1000.0;
+    if cfg.profile {
+        eprintln!(
+            "perry: wpfacts post-solve: derive {derive_ms:.0} ms, {} markers' members settled",
+            g.m.members_settled.borrow().len()
+        );
+    }
     let stats = Stats {
         modules: sorted.len(),
         templates: g.m.tmpls.len(),
@@ -2193,8 +2198,12 @@ pub(crate) fn compute_in<'a>(
                         ret_reach_keys: Vec::new(),
                         ret_unknown: false,
                         ret_value: Default::default(),
-                        // A constructor with no code returns undefined.
-                        ret_prim: model::prim::UNDEF,
+                        // A constructor with no code returns nothing `new`
+                        // keeps: its result is the instance, as for one with
+                        // code (the walk adds no undefined for falling off
+                        // its end). Undefined here reached every `new` of the
+                        // class in a reader and the arguments it published.
+                        ret_prim: 0,
                         lexical_this: false,
                         closed: None,
                         this_use: 0,
@@ -2403,30 +2412,10 @@ pub(crate) fn compute_in<'a>(
     // is its owner's contract, a join adds nothing): the cells grow
     // monotonically to the fixpoint. Undescribed (`Gen::cell_bad`) or over
     // the bound, unknown.
-    // DECISIONS 168: a program object's named field holds what its any-key
-    // field holds (`Model::field`), and that is cell `<name>:*`; every
-    // reader's named field holds that cell again through its own any-key
-    // field. A named cell says only what was stored under its key: it does
-    // not repeat the any-key cell once per key the unit names
-    // (`Gen::program_cells`; AWFY: 257 keys of `require.cache`, each the 17
-    // module records).
-    let program_any: Vec<(String, model::NodeId)> =
-        g.m.program_objs
-            .iter()
-            .filter_map(|&(name, _)| {
-                let key = format!("{name}:*");
-                let &(_, n) = g.cells.iter().find(|(k, _)| *k == key)?;
-                Some((format!("{name}:"), n))
-            })
-            .collect();
     let mut cells_out: Vec<(String, units::ValueContract)> = g
         .cells
         .iter()
         .filter_map(|(k, n)| {
-            let any = program_any
-                .iter()
-                .find(|(pre, a)| *a != *n && k.starts_with(pre.as_str()))
-                .map(|&(_, a)| &g.m.nodes[a as usize]);
             let node = &g.m.nodes[*n as usize];
             if g.m.aborted || g.cell_bad.contains(n) {
                 let vc = units::ValueContract {
@@ -2443,9 +2432,8 @@ pub(crate) fn compute_in<'a>(
                 .to_sorted()
                 .into_iter()
                 .filter(|t| !g.cell_flow_toks.contains(t))
-                .filter(|&t| !any.is_some_and(|a| a.pts.contains_tok(t)))
                 .collect();
-            let prim = node.prim & !any.map_or(0, |a| a.prim);
+            let prim = node.prim;
             if toks.is_empty() && prim == 0 {
                 return None;
             }
@@ -2481,23 +2469,6 @@ pub(crate) fn compute_in<'a>(
         };
         cells_out.push(("global:*".to_string(), vc));
     }
-    // DECISIONS 92: a program object as unmodeled code may write it (it
-    // escaped, a key was named after the boundary): every unit's fields of
-    // it read ⊤ through `<name>:*`.
-    if g.m.program_cells {
-        for &(name, t) in &g.m.program_objs {
-            if g.m.aborted || g.m.program_late.contains(&name) || g.m.is_escaped(t) {
-                let vc = units::ValueContract {
-                    unknown: true,
-                    prim: model::prim::ALL,
-                    ..Default::default()
-                };
-                let key = format!("{name}:*");
-                cells_out.retain(|(k, _)| *k != key);
-                cells_out.push((key, vc));
-            }
-        }
-    }
     // DECISIONS 94: an array unmodeled code may write (it escaped): every
     // unit's elements of it read ⊤.
     // A named key stored into one: every unit's named fields of it read ⊤.
@@ -2515,6 +2486,37 @@ pub(crate) fn compute_in<'a>(
             cells_out.push((format!("{key}#named"), vc));
         }
     }
+    // What it writes into other units' module-scope bindings (`Gen::local_write`):
+    // per binding (its unit's path, its name) a value contract, as of a
+    // published binding; ⊤ for one no contract describes, and for every
+    // binding it writes when the solve stopped at the bound.
+    let writes_out: Vec<((String, String), units::ValueContract)> = if cfg.unit {
+        let unknown = units::ValueContract {
+            unknown: true,
+            prim: model::prim::ALL,
+            ..Default::default()
+        };
+        g.written_keys()
+            .into_iter()
+            .filter_map(|(id, key)| {
+                if g.m.aborted || g.write_top.contains(&id) {
+                    return Some((key, unknown.clone()));
+                }
+                let &n = g.binding_writes.get(&id)?;
+                let vc = value_contract_of(
+                    &g,
+                    &templates,
+                    n,
+                    &contracts_out,
+                    &mut layouts_out,
+                    &open_tm,
+                );
+                Some((key, vc))
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
     // What its calls pass to the other units' closed functions (decision 13).
     let args_out: Vec<(String, units::ArgContract)> = match g.view {
         Some(v) if cfg.unit && !g.m.aborted => {
@@ -2824,6 +2826,7 @@ pub(crate) fn compute_in<'a>(
         method_runs_out,
         method_args_out,
         layouts_fwd,
+        writes_out,
         module_digests: Vec::new(),
     };
     pf.module_digests = dump::module_digests(&pf);

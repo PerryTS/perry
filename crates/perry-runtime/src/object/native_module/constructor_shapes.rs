@@ -2,6 +2,47 @@
 //! No property resolver or instanceof path needs an inheritance side table.
 use super::*;
 
+// ZlibBase exposes codec lifetime separately from its Transform's lifetime.
+extern "C" fn zlib_closed_getter(
+    _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(this.as_f64());
+    let key = scope.root_nanbox_f64(f64::from_bits(
+        JSValue::string_ptr(crate::string::intern_ascii_literal(b"_handle") as *mut _).bits(),
+    ));
+    let handle = unsafe {
+        crate::object::js_object_get_property_key(receiver.get_nanbox_f64(), key.get_nanbox_f64())
+    };
+    f64::from_bits(if crate::value::js_is_truthy(handle) == 0 {
+        crate::value::TAG_TRUE
+    } else {
+        crate::value::TAG_FALSE
+    })
+}
+
+fn install_zlib_closed_getter(proto: f64) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let proto = scope.root_nanbox_f64(proto);
+    let getter = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
+        crate::fn_info!(zlib_closed_getter, 0; with_declared(0)),
+        0,
+    ));
+    getter.with_mut_ptr(|p| callable_exports::set_bound_native_closure_name(p, "get"));
+    crate::object::install_fresh_accessor_property(
+        crate::value::js_nanbox_get_pointer(proto.get_nanbox_f64()) as usize,
+        "_closed".to_string(),
+        crate::object::AccessorDescriptor {
+            get: getter.with_mut_ptr(|p: *mut crate::closure::ClosureHeader| {
+                crate::value::js_nanbox_pointer(p as i64).to_bits()
+            }),
+            set: 0,
+        },
+        crate::object::PropertyAttrs::new(false, true, true),
+    );
+}
+
 #[inline(always)]
 fn native_parent(module: &str, name: &str) -> Option<(&'static str, &'static str)> {
     Some(match (module, name) {
@@ -183,6 +224,9 @@ unsafe fn attach(module: &str, name: &str, value: f64) -> f64 {
             );
         }
         link_parent(ctor.get_nanbox_f64(), parent.get_nanbox_f64());
+    }
+    if (module, name) == ("zlib", "#ZlibBase") {
+        install_zlib_closed_getter(prototype(ctor.get_nanbox_f64()));
     }
     if (module, name) == ("crypto", "#LazyTransform") {
         let proto = prototype(ctor.get_nanbox_f64());

@@ -48,7 +48,7 @@ pub(crate) use callable_exports::{
     builtin_closure_is_non_constructable_value, builtin_closure_length,
     cached_buffer_intrinsic_prototype_value, fs_namespace_descriptor_getter_value,
     fs_namespace_descriptor_setter_value, is_buffer_constructor_value, is_cluster_emitter_method,
-    module_builtin_modules_value, module_cjs_cache_value, module_cjs_extensions_value,
+    install_module_cjs_cache_value, module_builtin_modules_value, module_cjs_cache_value, module_cjs_extensions_value,
     module_cjs_global_paths_value, module_cjs_path_cache_value, module_cjs_prototype_for_instance,
     module_constants_value, native_string_value, scan_tls_derived_prototype_roots_mut,
     set_bound_native_closure_metadata, set_bound_native_closure_name, set_builtin_closure_length,
@@ -735,8 +735,11 @@ pub(crate) fn normalize_native_module_alias(module_name: &str) -> &str {
             crate::node_submodules::emit_sys_deprecation_warning_once();
             "util"
         }
-        "path/posix" => "path.posix",
-        "path/win32" => "path.win32",
+        // The subpath module IS the object `path.posix` / `path.win32` / `util.types`
+        // read as (the CJS default namespace for the path pair), so identity holds.
+        "path/posix" => "path.posix.default",
+        "path/win32" => "path.win32.default",
+        "util/types" => "util.types",
         // #6563: `@lydell/node-pty` is an API-identical fork of node-pty
         // (opencode's import); both names resolve to the one runtime pty.
         "@lydell/node-pty" | "bun-pty" => "node-pty",
@@ -899,6 +902,11 @@ unsafe fn native_module_property_by_name_impl(
             )
         };
     }
+    // `readline.promises` is the `readline/promises` submodule namespace.
+    if module_name == "readline" && property_name == "promises" {
+        let submodule = "readline/promises";
+        return js_create_native_module_namespace(submodule.as_ptr(), submodule.len());
+    }
     if module_name == "dns" && property_name == "promises" {
         crate::dns::dns_promises_init_servers_from_callback_if_unset();
         return cjs_default_export_value("dns/promises").unwrap_or_else(|| {
@@ -980,6 +988,13 @@ unsafe fn native_module_property_by_name_impl(
 
     if let Some(val) = get_native_module_constant(module_name, property_name, 0.0) {
         return val;
+    }
+    // Modules the submodule registry implements (`timers/promises`, `stream/web`,
+    // ...) have no dispatch bucket; their exports are the registry's own values.
+    if let Some(value) =
+        crate::node_submodules::registry_backed_module_export(module_name, property_name)
+    {
+        return value;
     }
     // For native modules whose surface includes known callable methods or
     // class exports, return a bound-method closure so `typeof` and property

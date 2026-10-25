@@ -119,7 +119,7 @@ fn a_class_id_rewrite_moves_the_store_kind() {
         // nothing, so only `restamp_object_proto_id`'s store-kind re-derive
         // can move the shape.
         const ANON: u32 = 0x5F3C;
-        crate::object::class_registry::js_register_anon_shape_class_id(ANON);
+        crate::object::declarations::test_declare_anonymous(ANON);
         let third = with_key(crate::object::js_object_alloc(0, 0), "sk_c");
         let proto_before = crate::object::shapes::shape_proto_id(object_shape_id(third));
         (*third).class_id = ANON;

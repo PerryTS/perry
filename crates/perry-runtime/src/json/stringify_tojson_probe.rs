@@ -435,9 +435,6 @@ struct ClassChainToJsonEntry {
     semantic_epoch: u64,
     identity_word: u64,
     may_have: bool,
-    /// [`class_is_plain_record_uncached`]'s answer, filled under the same
-    /// shape and epoch facts (#10529). Implies `!may_have`.
-    plain_record: bool,
 }
 
 /// Sized for the distinct object-literal SHAPES a serialization walk touches,
@@ -455,7 +452,6 @@ const EMPTY_CLASS_CHAIN_TOJSON: ClassChainToJsonEntry = ClassChainToJsonEntry {
     semantic_epoch: 0,
     identity_word: 0,
     may_have: false,
-    plain_record: false,
 };
 
 crate::perry_thread_local! {
@@ -503,28 +499,7 @@ fn class_chain_to_json_entry(class_id: u32) -> ClassChainToJsonEntry {
     class_chain_to_json_memo_fill(class_id, semantic_epoch, identity_word, slot)
 }
 
-/// Is an instance of `class_id` serialized by `JSON.stringify` exactly like a
-/// `class_id == 0` plain object — own enumerable data fields only, nothing
-/// reachable through the class? (#10529, #10696)
-///
-/// HIR lowers closed-shape object literals to synthetic `__AnonShape_<hash>`
-/// classes, so `class_id != 0` is true of essentially every literal. The
-/// plain-data emitters (`stringify_flat`, `stringify_record_output`,
-/// `stringify_nested_records`, `stringify_data_record`, the shape template)
-/// used `class_id != 0` as their "might have a prototype `toJSON` or private
-/// elements" gate, which declined every literal and left them serving only
-/// `JSON.parse` output. This is the precise form of that gate. It rides the
-/// per-class memo above, so it costs one slot compare per object.
-///
-/// Per-instance facts (an own `toJSON` key, `Object.setPrototypeOf`,
-/// descriptors, `Object.prototype.toJSON`) are NOT covered: callers keep
-/// checking those exactly as they do for `class_id == 0`.
-#[inline]
-pub(super) fn class_is_plain_record(class_id: u32) -> bool {
-    class_id == 0 || class_chain_to_json_entry(class_id).plain_record
-}
-
-/// [`class_is_plain_record`] of `obj`'s class, for an object no class
+/// The shape proves ordinary record semantics, for an object no class
 /// installed a private field on (#11791): a base constructor that returns a
 /// plain object lets a derived class add one to it, and a raw own-field
 /// emitter would print it.
@@ -533,30 +508,10 @@ pub(super) fn class_is_plain_record(class_id: u32) -> bool {
 /// `obj` is a live `ObjectHeader`.
 #[inline]
 pub(super) unsafe fn object_is_plain_record(obj: *const crate::ObjectHeader) -> bool {
-    class_is_plain_record((*obj).class_id)
+    crate::object::shapes::object_is_plain_record(obj)
         && crate::object::key_attrs::object_summary(obj)
             & (crate::object::key_attrs::SUMMARY_PRIVATE | crate::object::key_attrs::SUMMARY_HOLES)
             == 0
-}
-
-/// A registered anon shape whose class surface is empty — the same proof the
-/// thenable probe uses (`promise::then_probe::class_identity_empty`: no
-/// published holder surface or parent edge) — plus no
-/// registered class name, which a declared class whose per-module id collides
-/// with an anon-shape id carries (`declared_class_outranks_anon_shape`). Anon
-/// shapes carry no private elements or runtime-internal keys; those only come
-/// from declared classes.
-///
-/// Staleness is safe in the direction that matters: the anon-shape set is
-/// insert-only, and a vtable entry, prototype object or parent edge appearing
-/// later moves one of the generations this is memoized under. A stale `false`
-/// only keeps the general walk.
-fn class_is_plain_record_uncached(class_id: u32, may_have: bool) -> bool {
-    !may_have
-        && class_id != crate::object::NATIVE_MODULE_CLASS_ID
-        && crate::object::is_anon_shape_class_id(class_id)
-        && crate::promise::then_probe::class_identity_empty(class_id)
-        && crate::object::class_name_for_id(class_id).is_none()
 }
 
 #[cold]
@@ -575,7 +530,6 @@ fn class_chain_to_json_memo_fill(
         semantic_epoch,
         identity_word,
         may_have,
-        plain_record: class_is_plain_record_uncached(class_id, may_have),
     };
     CLASS_CHAIN_TOJSON_MEMO.with(|table| table[slot].set(entry));
     entry
@@ -665,7 +619,7 @@ pub(super) unsafe fn to_json_definitely_absent_after_own_keys(ptr: *const u8) ->
 /// Once its constructor property is cached, even a dirty verdict is recomputed
 /// with direct reads only; class/prototype overrides still decline normally.
 pub(super) unsafe fn to_json_definitely_absent_without_gc(ptr: *const u8) -> bool {
-    if !class_is_plain_record((*(ptr as *const crate::ObjectHeader)).class_id)
+    if !object_is_plain_record(ptr as *const crate::ObjectHeader)
         || (OBJECT_PROTO_TOJSON_STATE.with(|c| c.get()) == PROTO_TOJSON_DIRTY
             && CACHED_OBJECT_PROTO_BITS.with(|c| c.get()) == 0)
     {
@@ -685,7 +639,7 @@ pub(super) unsafe fn to_json_definitely_absent_without_gc(ptr: *const u8) -> boo
 /// probe. Once that cache is warm, even a dirty verdict is recomputed with
 /// direct reads only (see `to_json_definitely_absent_without_gc`).
 ///
-/// `class_plain_record` is [`class_is_plain_record`] of `ptr`'s class, which
+/// `class_plain_record` is [`object_is_plain_record`] of `ptr`'s class, which
 /// the caller also needs for itself.
 #[inline]
 pub(super) unsafe fn inherited_to_json_possible_without_gc(
@@ -715,7 +669,7 @@ pub(super) unsafe fn inherited_to_json_possible_without_gc(
 /// - a validated, unforwarded `GC_TYPE_OBJECT` header excludes the handle
 ///   band and the RegExp, Date, Temporal and Symbol cells, which carry their
 ///   own GC types;
-/// - [`class_is_plain_record`] excludes the reserved boxed-primitive and
+/// - [`object_is_plain_record`] excludes the reserved boxed-primitive and
 ///   raw-JSON class ids, native module namespaces and every declared class,
 ///   and implies no class chain can produce a `toJSON`;
 /// - a null meta record means no recorded prototype (a shaped object answers

@@ -13,7 +13,12 @@ use perry_hir::{Export, Expr, Import, ImportSpecifier, Module, Stmt};
 /// declaration (module-scope names are unique: lowering keeps one function
 /// and one class per name), and its own declarations other units import.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct UnitView {
+pub(crate) struct UnitView<'a> {
+    pub closure_bodies: FxHashMap<u32, &'a Expr>,
+    /// Bindings declared by this unit's source items. Literal-layout classes
+    /// copied into the view are analysis context, not owned lexical bodies.
+    pub binding_locals: FxHashSet<u32>,
+    pub binding_funcs: FxHashSet<u32>,
     pub foreign_locals: FxHashMap<u32, String>,
     pub foreign_funcs: FxHashMap<u32, String>,
     pub foreign_globals: FxHashMap<u32, String>,
@@ -34,6 +39,12 @@ pub(crate) struct UnitView {
     /// holds its stand-in, which forwards it as an open class's and
     /// publishes what its constructions pass.
     pub published: FxHashSet<String>,
+    /// Its index among its module's units ([`unit_path`]).
+    pub unit: usize,
+    /// The other units' module-scope bindings it writes (`currentFlow = f`,
+    /// `n++`), by HIR id with the local name of their import: written
+    /// through the binding's write effect (`Gen::local_write`), not joined.
+    pub written: Vec<(u32, String)>,
     /// The names it refers to that no unit of its module owns: its imports
     /// (and globals). The driver orders it after the units owning them
     /// (decision 21).
@@ -84,7 +95,7 @@ pub(crate) fn module_of(p: &str) -> &str {
 }
 
 /// What an item refers to: read edges (`to`) and joins (both ways: a
-/// write of the binding, a store through it, a local two items share).
+/// class's state, a local two items share), and the locals it writes.
 #[derive(Default)]
 struct Refs {
     names: Vec<String>,
@@ -101,6 +112,8 @@ struct Refs {
     closures: Vec<u32>,
     /// The named types of its parameters (an entry guard's class, §11.4).
     param_types: Vec<String>,
+    /// The locals it writes (also in `locals`).
+    writes: Vec<u32>,
 }
 
 fn param_types(params: &[perry_hir::Param], r: &mut Refs) {
@@ -159,10 +172,17 @@ fn declared(module: &Module, it: Item, r: &Refs) -> FxHashSet<u32> {
     d
 }
 
+/// The target of a store `t.k = v`. A class named by its name is the
+/// class's own state (`ZodString.create = …`: a static member of the
+/// declaration, which another unit's store has no channel into): joined. A
+/// binding (`ns.k = f`, `cache[k] = v`) is read, not written: the store goes
+/// into the object the binding holds, and the object model describes it
+/// wherever the store runs, as it does a store from another module: a named
+/// key of another unit's literal layout or definite instance field is a
+/// store effect its defining unit performs (decision 17), any other store
+/// into another unit's object is its census report.
 fn direct_ref(e: &Expr, r: &mut Refs) {
     match e {
-        Expr::LocalGet(id) => r.join_locals.push(*id),
-        Expr::GlobalGet(id) => r.join_globals.push(*id),
         Expr::ClassRef(n) | Expr::ExternFuncRef { name: n, .. } => r.join_names.push(n.clone()),
         Expr::FuncRef(id) => r.funcs.push(*id),
         _ => {}
@@ -172,7 +192,35 @@ fn direct_ref(e: &Expr, r: &mut Refs) {
 fn expr_refs(e: &Expr, r: &mut Refs) {
     match e {
         Expr::LocalGet(id) => r.locals.push(*id),
-        Expr::LocalSet(id, _) | Expr::Update { id, .. } => r.join_locals.push(*id),
+        // A write of a binding reads it, as every use does, and is a write:
+        // a module-scope binding of another unit holds what this item stores
+        // through the binding's write effect (`UnitView::written`), so the
+        // writer is ordered after the binding's unit like any reader, not
+        // joined to it. (tsc: the binder's `currentFlow`, the parser's
+        // `currentToken`, written by the functions reading them, joined
+        // their every reader and writer into one unit.)
+        Expr::LocalSet(id, _) | Expr::Update { id, .. } => {
+            r.locals.push(*id);
+            r.writes.push(*id);
+        }
+        Expr::WithSet {
+            fallback:
+                perry_hir::WithSetFallback::Local(id) | perry_hir::WithSetFallback::SloppyImplicit(id),
+            ..
+        } => {
+            r.locals.push(*id);
+            r.writes.push(*id);
+        }
+        // The evaluation of a class expression initializes its own binding
+        // (ClassDefinitionEvaluation: the inner name holds the class before
+        // its statics run): the class's definition, joined as the class is.
+        Expr::ClassExprFresh {
+            evaluation_owner: Some(id),
+            ..
+        } => {
+            r.join_locals.push(*id);
+            class_name_refs(e, r);
+        }
         Expr::ArrayPush { array_id, .. }
         | Expr::ArrayPushSpread { array_id, .. }
         | Expr::ArrayUnshift { array_id, .. }
@@ -200,14 +248,15 @@ fn expr_refs(e: &Expr, r: &mut Refs) {
             // A capture is a read: `mutable_captures` are the captured
             // locals written anywhere (they need a box), not by this
             // closure; its own writes are `LocalSet`s in its body, walked
-            // with the item (tsc: every function capturing `var Debug`,
-            // assigned once by `Debug || (Debug = {})`, joined one unit).
+            // with the item (as a write, tsc's every function capturing
+            // `var Debug`, assigned once by `Debug || (Debug = {})`, was
+            // one unit).
             r.locals
                 .extend(captures.iter().chain(mutable_captures).copied());
         }
-        // A store through a declaration's name is that declaration's
-        // state (`ZodString.create = …`), through a named member path of it
-        // too (`require.resolve.paths = …`, `F.prototype.m = …`; DECISIONS 93).
+        // A store through a name (`direct_ref`), through a named member
+        // path of it too (`require.resolve.paths = …`, `F.prototype.m = …`;
+        // DECISIONS 93).
         Expr::PropertySet { object, .. }
         | Expr::PropertyUpdate { object, .. }
         | Expr::IndexSet { object, .. }
@@ -240,6 +289,34 @@ fn class_name_refs(e: &Expr, r: &mut Refs) {
         Expr::NativeMethodCall {
             class_name: Some(class_name),
             ..
+        }
+        | Expr::SuperPropertySet {
+            parent_class_name: Some(class_name),
+            ..
+        } => r.names.push(class_name.clone()),
+        // A class expression's evaluation (`var _V = class _V {..}` in a
+        // run-once body: the HIR's `ClassExprFresh`) is its class's
+        // definition: it makes the class object and runs its static
+        // initializers, the class's state, as the declaration's own static
+        // stores are (`StaticFieldSet`). Not naming it left the evaluating
+        // unit without the class (a ⊤ value from unknown code there) and
+        // the class unit without the units constructing it.
+        Expr::ClassExprFresh {
+            template: class_name,
+            ..
+        } => r.join_names.push(class_name.clone()),
+        // A refresh re-stores into its class's environment the current
+        // values of the bindings the class's evaluation captured, slot by
+        // slot (`captured_args`, the same capture list). The model holds one
+        // value per binding over the whole run, which that evaluation already
+        // stores into each slot: the refresh adds no state to the class. It
+        // reads the class and its captures (the walk records those) and
+        // writes nothing another unit holds. (tsc: a refresh after every
+        // assignment to a captured binding of a `ts.server` class joined 667
+        // module-scope statements to the classes.)
+        Expr::RefreshClassExprCaptures {
+            env_class: Some(class_name),
+            ..
         } => r.names.push(class_name.clone()),
         Expr::StaticFieldSet { class_name, .. }
         | Expr::ClassStaticSymbolSet { class_name, .. }
@@ -251,11 +328,6 @@ fn class_name_refs(e: &Expr, r: &mut Refs) {
         | Expr::RegisterClassParentDynamic { class_name, .. }
         | Expr::RegisterClassStaticSymbol { class_name, .. }
         | Expr::RegisterPrototypeMethod { class_name, .. } => r.join_names.push(class_name.clone()),
-        // Evaluating a class expression yields its class and writes the
-        // class's own state (statics, captured environment, evaluated
-        // parent): the statement and the class item are one binding, as a
-        // static store through the class name is (DECISIONS 98).
-        Expr::ClassExprFresh { template, .. } => r.join_names.push(template.clone()),
         _ => {}
     }
 }
@@ -960,6 +1032,7 @@ pub(crate) fn decl_units(module: &Module) -> Vec<Vec<Item>> {
     // items is two bindings (an inlined body is a copy, not shared state).
     // A local no item declares joins every item referring to it.
     let mut inner_refs: FxHashMap<u32, Vec<usize>> = FxHashMap::default();
+    let mut closure_owner = FxHashMap::default();
     let mut decl_of: FxHashMap<u32, Vec<usize>> = FxHashMap::default();
     let mut free: Vec<(usize, u32)> = Vec::new();
     for (i, it) in items.iter().enumerate() {
@@ -1021,6 +1094,30 @@ pub(crate) fn decl_units(module: &Module) -> Vec<Vec<Item>> {
                         }
                     }
                 }
+            }
+        }
+        // Init items split ONE emitted lexical frame. A nested var
+        // initializer (for example under try) writes its hoisted binding;
+        // unlike a copied function frame, it is not a second declaration.
+        if let Item::Init(k) = *it {
+            perry_hir::tdz_check::for_each_stmt_shallow(
+                std::slice::from_ref(&module.init[k]),
+                &mut |s| {
+                    if let Stmt::Let { id, .. } = s {
+                        for &j in by_local.get(id).into_iter().flatten() {
+                            edge(j, true);
+                        }
+                    }
+                },
+            );
+        }
+        // Repeated creation expressions with this FuncId share ONE emitted
+        // body. Its receiver/capture facts must cover every creation/caller.
+        for id in &r.closures {
+            if let Some(&j) = closure_owner.get(id) {
+                edge(j, true);
+            } else {
+                closure_owner.insert(*id, i);
             }
         }
         let own = declared(module, *it, &r);
@@ -1122,11 +1219,12 @@ fn sccs(succ: &[Vec<usize>]) -> Vec<Vec<usize>> {
 /// [`unit_path`]), its exports, and synthetic exports of its declarations
 /// other units refer to. Also the units each unit refers to.
 /// `named`: another module can name this export (DECISIONS 129).
-pub(crate) fn views(
+pub(crate) fn views<'a>(
     path: &str,
-    module: &Module,
+    module: &'a Module,
     named: &dyn Fn(&str) -> bool,
-) -> Vec<(UnitView, Vec<usize>)> {
+) -> Vec<(UnitView<'a>, Vec<usize>)> {
+    let closure_bodies: FxHashMap<_, _> = perry_hir::emitted_closures(module).into_iter().collect();
     let units = decl_units(module);
     let unit_of_item: FxHashMap<Item, usize> = units
         .iter()
@@ -1138,6 +1236,20 @@ pub(crate) fn views(
         &|it| unit_of_item.get(&it).copied().unwrap_or(usize::MAX),
         named,
     );
+    // Two namespaces share the module's names. A reference by name (a
+    // class name, `ClassRef`, `new C`, `extends C`, an extern function)
+    // names a function, class (or class alias) or global: the items
+    // `decl_units` joins by name (`owner_ref`). A module-scope binding, what
+    // an export's local names, is a function, global or statement-declared
+    // local, and a class only where no other binding has its name
+    // (`owner_name`): `var _Version = class _Version {..}` declares the
+    // class `_Version` and the binding `_Version` holding it, two items of
+    // two units. One map for both made the class unit import its own name
+    // from the binding's unit, and the binding's unit read the class as its
+    // own binding: the class value left its unit with no import, no
+    // contract and no escape (per-unit facts had no other unit construct it).
+    let mut owner_ref: FxHashMap<&str, usize> = FxHashMap::default();
+    let mut class_names: Vec<(&str, usize)> = Vec::new();
     let mut owner_name: FxHashMap<&str, usize> = FxHashMap::default();
     let mut owner_local: FxHashMap<u32, (usize, &str)> = FxHashMap::default();
     let mut owner_func: FxHashMap<u32, (usize, &str)> = FxHashMap::default();
@@ -1149,19 +1261,23 @@ pub(crate) fn views(
                 Item::Func(k) => {
                     let f = &module.functions[k];
                     owner_name.insert(&f.name, u);
+                    owner_ref.insert(&f.name, u);
                     owner_func.insert(f.id, (u, &f.name));
                 }
                 Item::Class(k) => {
                     let c = &module.classes[k];
-                    owner_name.insert(&c.name, u);
+                    class_names.push((&c.name, u));
+                    owner_ref.insert(&c.name, u);
                     owner_class.insert(&c.name, u);
                     for a in &c.aliases {
-                        owner_name.insert(a, u);
+                        class_names.push((a, u));
+                        owner_ref.insert(a, u);
                     }
                 }
                 Item::Global(k) => {
                     let g = &module.globals[k];
                     owner_name.insert(&g.name, u);
+                    owner_ref.insert(&g.name, u);
                     owner_global.insert(g.id, (u, &g.name));
                 }
                 Item::Init(k) => {
@@ -1173,9 +1289,17 @@ pub(crate) fn views(
             }
         }
     }
+    for (n, u) in class_names {
+        owner_name.entry(n).or_insert(u);
+    }
+    // A name reference resolves in the reference namespace, else to the
+    // binding of that name (a name only a statement declares).
+    let ref_owner = |n: &str| owner_ref.get(n).or_else(|| owner_name.get(n)).copied();
     // Per unit: the foreign names it refers to.
     let mut wanted: Vec<FxHashSet<String>> = vec![FxHashSet::default(); units.len()];
-    let mut imports_of: Vec<FxHashSet<(usize, String)>> = vec![FxHashSet::default(); units.len()];
+    // Per unit: (source unit, its export name, the local name).
+    let mut imports_of: Vec<FxHashSet<(usize, String, String)>> =
+        vec![FxHashSet::default(); units.len()];
     let shapes: FxHashMap<&str, usize> = module
         .classes
         .iter()
@@ -1251,6 +1375,33 @@ pub(crate) fn views(
                 }
             }
         }
+        view.closure_bodies.extend(
+            r.closures
+                .iter()
+                .filter_map(|id| closure_bodies.get(id).map(|&body| (*id, body))),
+        );
+        view.binding_funcs.extend(r.closures.iter().copied());
+        for it in items {
+            view.binding_locals.extend(declared(module, *it, &r));
+            match *it {
+                Item::Func(k) => {
+                    view.binding_funcs.insert(module.functions[k].id);
+                }
+                Item::Class(k) => {
+                    let c = &module.classes[k];
+                    view.binding_funcs.extend(
+                        c.constructor
+                            .iter()
+                            .chain(&c.methods)
+                            .chain(&c.static_methods)
+                            .chain(c.getters.iter().chain(&c.setters).map(|(_, f)| f))
+                            .chain(c.computed_members.iter().map(|m| &m.function))
+                            .map(|f| f.id),
+                    );
+                }
+                _ => {}
+            }
+        }
         for it in items {
             match *it {
                 Item::Func(k) => param_types(&module.functions[k].params, &mut r),
@@ -1291,19 +1442,30 @@ pub(crate) fn views(
             .iter()
             .chain(&r.join_names)
             .chain(&r.param_types)
-            .filter(|nm| !owner_name.contains_key(nm.as_str()))
+            .filter(|nm| ref_owner(nm.as_str()).is_none())
             .cloned()
             .collect();
         let mut deps: FxHashSet<usize> = FxHashSet::default();
         let imp = &mut imports_of[u];
+        // The local name is the export name, unless this unit already
+        // imports that name from another unit (the class `_Version` by name
+        // and the binding `_Version` by id): then the later import gets a
+        // local of its own, which no source name can spell.
         let mut want = |name: &str, w: usize, deps: &mut FxHashSet<usize>| {
             deps.insert(w);
             wanted[w].insert(name.to_string());
-            imp.insert((w, name.to_string()));
-            name.to_string()
+            if let Some((_, _, l)) = imp.iter().find(|(v, n, _)| *v == w && n == name) {
+                return l.clone();
+            }
+            let local = match imp.iter().any(|(_, _, l)| l == name) {
+                false => name.to_string(),
+                true => format!("{name}#u{w}"),
+            };
+            imp.insert((w, name.to_string(), local.clone()));
+            local
         };
         for nm in r.names.iter().chain(&r.join_names) {
-            if let Some(&w) = owner_name.get(nm.as_str()).filter(|&&w| w != u) {
+            if let Some(w) = ref_owner(nm.as_str()).filter(|&w| w != u) {
                 want(nm, w, &mut deps);
             }
         }
@@ -1321,6 +1483,15 @@ pub(crate) fn views(
                 view.foreign_locals.insert(*id, want(nm, w, &mut deps));
             }
         }
+        view.unit = u;
+        for id in &r.writes {
+            if let Some(local) = view.foreign_locals.get(id) {
+                if !view.written.iter().any(|(i, _)| i == id) {
+                    view.written.push((*id, local.clone()));
+                }
+            }
+        }
+        view.written.sort();
         for id in &r.funcs {
             if let Some(&(w, nm)) = owner_func.get(id).filter(|(w, _)| *w != u) {
                 view.foreign_funcs.insert(*id, want(nm, w, &mut deps));
@@ -1355,17 +1526,17 @@ pub(crate) fn views(
     // Imports of the other units' names; exports of the own ones.
     let real_owned = |u: usize, local: &str| owner_name.get(local) == Some(&u);
     for (u, (view, _)) in out.iter_mut().enumerate() {
-        let mut per: FxHashMap<usize, Vec<String>> = FxHashMap::default();
-        for (w, nm) in std::mem::take(&mut imports_of[u]) {
+        let mut per: FxHashMap<usize, Vec<(String, String)>> = FxHashMap::default();
+        for (w, nm, local) in std::mem::take(&mut imports_of[u]) {
             // A published class (DECISIONS 157) is no call of the unit: its
             // constructions publish through its stand-in.
             if closed.contains_key(&nm) && !published.contains(&nm) {
                 view.closed_refs.push(nm.clone());
             }
-            per.entry(w).or_default().push(nm);
+            per.entry(w).or_default().push((nm, local));
         }
         view.closed_refs.sort();
-        let mut per: Vec<(usize, Vec<String>)> = per.into_iter().collect();
+        let mut per: Vec<(usize, Vec<(String, String)>)> = per.into_iter().collect();
         per.sort();
         for (_, names) in per.iter_mut() {
             names.sort();
@@ -1377,10 +1548,7 @@ pub(crate) fn views(
                 resolved_path: Some(p),
                 specifiers: names
                     .into_iter()
-                    .map(|n| ImportSpecifier::Named {
-                        imported: n.clone(),
-                        local: n,
-                    })
+                    .map(|(n, local)| ImportSpecifier::Named { imported: n, local })
                     .collect(),
                 is_native: false,
                 module_kind: Default::default(),

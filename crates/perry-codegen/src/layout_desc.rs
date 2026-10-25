@@ -662,6 +662,20 @@ pub(crate) fn layouts_enabled(output_type: &str, target_triple: &str) -> bool {
         && std::env::var("PERRY_LAYOUT_DESCS").as_deref() != Ok("0")
 }
 
+/// The descriptor prototype tag of a class family: 0 (the class's own
+/// prototype) for every class but a declared-keys record, whose instances
+/// have a null prototype (1, `require.cache`) or `%Object.prototype%` (3,
+/// `exports`).
+fn declared_proto_tag(class: &perry_hir::Class) -> u8 {
+    if !class.is_declared_keys_record() {
+        0
+    } else if class.declared_keys_null_proto() {
+        1
+    } else {
+        3
+    }
+}
+
 /// One descriptor plus its keys and index tables. `keys` is the key sequence
 /// in enumeration order with each key's slot.
 #[allow(clippy::too_many_arguments)]
@@ -674,6 +688,7 @@ fn emit_desc(
     slot_count: u32,
     class: (u32, u32),
     methods: &str,
+    proto: u8,
 ) {
     let (keys_name, index_name, desc_name) = names;
     let count = keys.len();
@@ -721,8 +736,10 @@ fn emit_desc(
         index_items.join(", ")
     ));
     llmod.add_raw_global(format!(
-        "@{desc_name} = global {DESC_TY} {{ i32 {family}, i16 0, i8 0, i8 0, i32 {slot_count}, i32 {}, i64 0, i64 0, ptr @{keys_name}, i32 {count}, i32 {}, ptr @{index_name}, i32 {}, i32 {}, ptr {methods} }}, section \"{sect}\", align 8",
+        "@{desc_name} = global {DESC_TY} {{ i32 {family}, i16 0, i8 0, i8 0, i32 {slot_count}, i32 {}, i64 0, i64 {}, ptr @{keys_name}, i32 {count}, i32 {}, ptr @{index_name}, i32 {}, i32 {}, ptr {methods} }}, section \"{sect}\", align 8",
         if class.0 == 0 { 0 } else { LAYOUT_ID_CARRIED as i32 },
+        // The `PerryLayoutDesc.proto` tag (perry-runtime `layout_desc`).
+        proto,
         cap - 1,
         class.0,
         class.1
@@ -1030,6 +1047,7 @@ pub(crate) fn emit_module_layouts(
             fam.slot_count,
             (fam.class_id, fam.parent_class_id),
             &methods,
+            declared_proto_tag(class),
         );
         n += 1;
         let mut entries = Vec::with_capacity(variants.len());
@@ -1048,6 +1066,7 @@ pub(crate) fn emit_module_layouts(
                 *slot_count,
                 (fam.class_id, fam.parent_class_id),
                 &methods,
+                declared_proto_tag(class),
             );
             n += 1;
             entries.push((*key_bits, name));

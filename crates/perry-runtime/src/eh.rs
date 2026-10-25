@@ -17,7 +17,9 @@
 //! are landing pads too: the trap shim `ffi/perry_trap.ll` invokes the body
 //! under a catch-all pad with this personality, so the walk lands in
 //! whichever handler is innermost. With no handler at all, phase 1 returns
-//! `_URC_END_OF_STACK` without unwinding: that is the uncaught path.
+//! without unwinding: that is the uncaught path, recognised from the
+//! personality's own verdicts ([`raise_found_no_handler`]), NOT from the
+//! status `_Unwind_RaiseException` returns (see there).
 //!
 //! The personality routine and LSDA walk are a port of Rust std's
 //! `rust_eh_personality` / `sys::personality::dwarf` (MIT OR Apache-2.0),
@@ -60,7 +62,9 @@ pub struct UnwindContext {
 }
 
 extern "C" {
-    /// Returns only on failure (`_URC_END_OF_STACK` when no handler exists).
+    /// Returns only on failure (`_URC_END_OF_STACK` when no handler exists —
+    /// but see [`raise_found_no_handler`]: the returned status is not
+    /// reliable on every libgcc).
     fn _Unwind_RaiseException(exception: *mut UnwindException) -> UnwindReasonCode;
     fn _Unwind_GetLanguageSpecificData(ctx: *mut UnwindContext) -> *const u8;
     fn _Unwind_GetIPInfo(ctx: *mut UnwindContext, ip_before_insn: *mut c_int) -> usize;
@@ -142,12 +146,14 @@ fn selfcheck_frame_b() -> usize {
     std::hint::black_box(n)
 }
 
-/// The raise returned `_URC_END_OF_STACK`: no frame had a handler, or a frame
-/// without CFI ended the walk early. `PERRY_EH_TRACE=1` tells the two apart:
-/// a `_Unwind_Backtrace` from here reports how many frames it stepped and why
-/// it stopped (`5` = it reached the outermost frame).
+/// The raise ended with no frame accepting the throw: no frame had a handler,
+/// or a frame without CFI ended the walk early. `PERRY_EH_TRACE=1` tells the
+/// two apart: a `_Unwind_Backtrace` from here reports how many frames it
+/// stepped and why it stopped (`5` = it reached the outermost frame), and
+/// names the raw status the raise itself returned (see
+/// [`raise_found_no_handler`] for why that one is only reported, not used).
 #[cfg(not(target_os = "wasi"))]
-pub(crate) fn diagnose_end_of_stack() {
+pub(crate) fn diagnose_end_of_stack(raise_status: UnwindReasonCode) {
     if !eh_trace_enabled() {
         return;
     }
@@ -163,7 +169,7 @@ pub(crate) fn diagnose_end_of_stack() {
         unsafe { _Unwind_Backtrace(count, &mut n as *mut usize as *mut core::ffi::c_void) };
     eprintln!(
         "[perry-eh] uncaught: no handler in {n} frame(s); walk ended with reason {reason} \
-         ({})",
+         ({}); the raise returned {raise_status}",
         if reason == 5 {
             "reached the outermost frame"
         } else {
@@ -214,14 +220,61 @@ pub(crate) fn exception_object_addr() -> u64 {
     EXC_OBJECT.with(|c| c.get()) as u64
 }
 
+/// What the personality concluded about the raise in progress. A search that
+/// walks the whole stack without any personality accepting leaves it at
+/// [`VERDICT_NONE`].
+#[cfg(not(target_os = "wasi"))]
+const VERDICT_NONE: u8 = 0;
+/// Phase 1 accepted a handler (`_URC_HANDLER_FOUND`): a raise that then
+/// returns lost the handler between the two phases.
+#[cfg(not(target_os = "wasi"))]
+const VERDICT_HANDLER_FOUND: u8 = 1;
+/// The personality could not decode a frame's LSDA (`_URC_FATAL_PHASE1_ERROR`).
+#[cfg(not(target_os = "wasi"))]
+const VERDICT_PHASE1_ERROR: u8 = 2;
+
+#[cfg(not(target_os = "wasi"))]
+crate::perry_thread_local! {
+    static RAISE_VERDICT: std::cell::Cell<u8> = const { std::cell::Cell::new(VERDICT_NONE) };
+}
+
+#[cfg(not(target_os = "wasi"))]
+#[inline]
+fn record_verdict(verdict: u8) {
+    RAISE_VERDICT.with(|v| v.set(verdict));
+}
+
+/// After [`raise_perry_exception`] returned: did phase 1 simply find no
+/// handler (the uncaught path, stack intact), as opposed to the transport
+/// failing?
+///
+/// This reads the personality's own verdicts instead of the status
+/// `_Unwind_RaiseException` returned. libgcc's aarch64 `_Unwind_RaiseException`
+/// shares its epilogue with the `__builtin_eh_return` path used to install a
+/// context, and PAC-enabled builds hand the caller the exception object
+/// pointer in the return register instead of `_URC_END_OF_STACK` (observed:
+/// a different 32-bit "status" per run, tracking ASLR). C++ never notices —
+/// `__cxa_throw` ignores the status — but an uncaught `throw` here would be
+/// reported as a transport failure and abort instead of exiting with the
+/// uncaught report and status 1. The personality's verdicts are ours, so they
+/// are the only thing a caller may trust: no handler accepted and no LSDA
+/// failed means the search ended at the outermost frame.
+#[cfg(not(target_os = "wasi"))]
+pub(crate) fn raise_found_no_handler() -> bool {
+    RAISE_VERDICT.with(|v| v.get()) == VERDICT_NONE
+}
+
 /// Raise the per-thread Perry exception. Returns ONLY if the unwinder found
 /// no handler (the caller reports the uncaught exception and exits) — with a
 /// handler-stack entry present this indicates lost unwind tables between the
 /// throw point and the handler frame (e.g. a stray `RUSTFLAGS` dropped
 /// `-C force-unwind-tables` from the runtime build), which the caller must
-/// report loudly rather than mask.
+/// report loudly rather than mask. The returned status is diagnostic only:
+/// classify the outcome with [`raise_found_no_handler`].
 pub(crate) fn raise_perry_exception() -> UnwindReasonCode {
     crate::gc::allocation_pacing::forbid_throw_in_collection();
+    #[cfg(not(target_os = "wasi"))]
+    record_verdict(VERDICT_NONE);
     let exc = EXC_OBJECT.with(|c| c.get());
     unsafe {
         // Re-arm the header on every raise: the unwinder scribbles on the
@@ -307,6 +360,8 @@ pub unsafe extern "C" fn perry_eh_personality(
                     _Unwind_GetRegionStart(context),
                 );
             }
+            #[cfg(not(target_os = "wasi"))]
+            record_verdict(VERDICT_PHASE1_ERROR);
             return _URC_FATAL_PHASE1_ERROR;
         }
     };
@@ -340,7 +395,11 @@ pub unsafe extern "C" fn perry_eh_personality(
     }
     if actions & _UA_SEARCH_PHASE != 0 {
         match lpad {
-            Some(_) => _URC_HANDLER_FOUND,
+            Some(_) => {
+                #[cfg(not(target_os = "wasi"))]
+                record_verdict(VERDICT_HANDLER_FOUND);
+                _URC_HANDLER_FOUND
+            }
             None => _URC_CONTINUE_UNWIND,
         }
     } else {

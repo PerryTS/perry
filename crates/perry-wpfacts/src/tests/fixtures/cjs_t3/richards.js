@@ -1,3 +1,4 @@
+import { cache as __perry_cjs_cache, main as __perry_cjs_main, extensions as __perry_cjs_extensions, setPending as __perry_cjs_set_pending, takePending as __perry_cjs_take_pending, builtin as __perry_cjs_builtin, link as __perry_cjs_link, requireComputed as __perry_cjs_require_computed, requireError as __perry_cjs_require_error } from 'perry:cjs';
 import { createRequire as __perry_cjs_create_require, isBuiltin as __perry_cjs_is_builtin } from 'node:module';
 import _req_0 from './benchmark';
 
@@ -15,28 +16,18 @@ function __perry_cjs_factory() {
     // correct regardless of what the body does to its `module` local.
     // #6769: the Node `Module` record surface. Set before user code so a
     // recursive load of this module observes the same shape Node exposes.
-    //
-    // ONE runtime call, so the record is born with its final layout
-    // (`CJS_MODULE_RECORD`): Node's keys, the `__perry_cjs_record` marker, and
-    // a private slot for the factory that no script can name. As sequential
-    // assignments it walked a shape transition and a cold property store per
-    // key, about 10k instructions each at module-init time, in every CommonJS
-    // module in the graph. `exports`, `children` and `paths` stay the
-    // wrapper's own literals.
-    //
-    // `cjs_scaffolding.rs`'s `record_binding` matches this call. Changing it
-    // drops the record back to being reported as a denied user candidate in
-    // the `Ptr<Shape>` report; `preamble_canary_tests` is what catches that.
-    const __cjs_module = __perry_cjs_module_record(
-        {},
-        "/t3/richards.js",
-        "/t3",
-        [],
-        globalThis.__perry_cjs_pending_parent,
-        ["/t3" + '/node_modules'],
-        __perry_cjs_factory
-    );
-    globalThis.__perry_cjs_pending_parent = undefined;
+    const __cjs_module = {
+        exports: __perry_declared_keys_object("newInstance"),
+        __perry_cjs_record: true,
+        id: "/t3/richards.js",
+        path: "/t3",
+        filename: "/t3/richards.js",
+        loaded: false,
+        children: [],
+        parent: __perry_cjs_take_pending(),
+        paths: ["/t3" + '/node_modules'],
+        require: undefined
+    };
     // Node populates `module.parent` before the body evaluates, so link it
     // here rather than at the tail's registry publication.
     __perry_link_path_module_parent(__cjs_module);
@@ -44,124 +35,30 @@ function __perry_cjs_factory() {
     // #10178: esbuild replaces module.exports before requiring its peer.
     // Holding the initial empty object loses that replacement at re-entry;
     // the runtime's existing record unwrap reads the current exports instead.
-    // This needs no getter enumeration, copying, or extra publication calls.
-    __perry_register_path_module_partial("/t3/richards.js", __cjs_module);
+    __perry_register_path_module_partial("/t3/richards.js", __cjs_module, __perry_cjs_factory);
     var module = __cjs_module;
     var exports = __cjs_module.exports;
-    // One `createRequire` instance for the whole program, not one per module.
-    // It is used only for `.cache`, `.extensions` and loading builtins, and all
-    // three are process-global in Node — nothing here is bound to this
-    // module's path. The call costs ~117k instructions, so paying it per module
-    // cost OpenCode's ~2,200 CJS modules a quarter of a billion instructions
-    // before any user code ran.
-    const __perry_cjs_base_require = (globalThis.__perry_cjs_shared_require
-        || (globalThis.__perry_cjs_shared_require = __perry_cjs_create_require("/t3/richards.js")));
-    __perry_cjs_base_require.cache["/t3/richards.js"] = __cjs_module;
-    function __perry_cjs_require_error(kind, code, message) {
-        const err = kind === 'type' ? new TypeError(message) : new Error(message);
-        err.code = code;
-        return err;
-    }
-    // Keep the original spelling: prefix-only builtins are packages when
-    // requested without `node:` (#10410).
-    function __perry_cjs_require_is_builtin(specifier) {
-        return __perry_cjs_is_builtin(specifier);
-    }
-    // `isBuiltin` comes from `node:module` instead of a switch emitted into
-    // EVERY CommonJS module. The switch carried both spellings of all 58
-    // builtin names, so each module interned ~120 string constants and
-    // initialised its own copy of the table before running a line of user
-    // code. It was also more permissive than Node: `sea`, `sqlite`, `test` and
-    // `test/reporters` are builtins only in their `node:` form, and the switch
-    // accepted the bare spelling too. The runtime predicate agrees with Node
-    // 26 on all 58 names in both spellings.
+    // The program's `require.cache` (the support module's object, whose keys
+    // are the graph's module paths): this module's key is a slot.
+    const __perry_cjs_c = __perry_cjs_cache;
+    __perry_cjs_c["/t3/richards.js"] = __cjs_module;
 
-    // A path-registry initializer runs once, while deleting require.cache
-    // requests another execution of a loaded CommonJS factory. Allocate this
-    // module-bound loader only on that cold path; ordinary loads keep the
-    // registry and live-record fast paths above.
+    // This module's own loader for the cold paths (a reload after
+    // `delete require.cache[...]`, a computed specifier outside the graph),
+    // created on first use: `createRequire` costs ~117k instructions.
     let __perry_cjs_reload_require;
-    function __perry_cjs_refresh_path(path, value) {
-        const cached = __perry_cjs_base_require.cache[path];
-        if (cached !== undefined) return cached.exports;
-        if (!__perry_has_path_module(path)) return value;
+    function __perry_cjs_reloader() {
         if (__perry_cjs_reload_require === undefined) __perry_cjs_reload_require = __perry_cjs_create_require("/t3/richards.js");
-        return __perry_cjs_reload_require(path);
+        return __perry_cjs_reload_require;
     }
     function require(specifier) {
         if (typeof specifier !== 'string') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_TYPE', 'The "id" argument must be of type string.');
         if (specifier === '') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_VALUE', 'The argument "id" must be a non-empty string.');
-        if (specifier === './benchmark') { const __perry_cached = require.cache["/t3/benchmark.js"]; if (__perry_cached !== undefined) { const child = require.cache["/t3/benchmark.js"]; if (child) { if (child.parent === undefined) child.parent = module; if (module.children.indexOf(child) === -1) module.children.push(child); } return __perry_cached.exports; } return __perry_cjs_refresh_path("/t3/benchmark.js", _req_0); }
-        // #sdxgen: Node.js built-in modules that were NOT hoisted as static
-        // imports (see the builtin_requires filter above). Resolve them via
-        // createRequire at runtime, which calls js_create_native_module_namespace
-        // under the hood — the same path Node.js uses for require("process").
-        if (__perry_cjs_require_is_builtin(specifier)) {
-            return __perry_cjs_base_require(specifier);
-        }
-        // Native addons resolve through the same authenticated manifest and
-        // cache as createRequire and process.dlopen, including computed paths.
-        if (specifier.slice(-5) === '.node') {
-            if (__perry_cjs_reload_require === undefined) __perry_cjs_reload_require = __perry_cjs_create_require("/t3/richards.js");
-            return __perry_cjs_reload_require(specifier);
-        }
-        // Runtime `require(path)` of a module Perry AOT-compiled but that is
-        // only reachable via a computed path. Next's webpack runtime uses both
-        // absolute page paths and relative chunk paths (`./chunks/` + id).
-        // Resolve the latter against this CJS module's directory before probing
-        // the path registry, mirroring Node's per-module `require` binding.
-        // `js_require_path_module` canonicalizes the joined path, so `./` and
-        // `../` segments need no source-level normalization here.
-        {
-            // A runtime-COMPUTED *relative* specifier never matches that
-            // registry, which is keyed by absolute source path. Next's
-            // production webpack runtime does exactly this — `.next/server/
-            // webpack-runtime.js` calls `require("./chunks/" + g.u(a))` — so
-            // every lazy chunk missed and the App Route died at startup with
-            // `Cannot find module './chunks/2.js'` even though that chunk WAS
-            // compiled into the image. Statically-known relative specifiers are
-            // already handled by the cases above; only computed ones reach
-            // here, so join them against this module's own directory.
-            //
-            // The `./` prefix is stripped textually rather than left to
-            // `std::fs::canonicalize`: that only normalizes a path that exists
-            // on disk, and registration falls back to the raw string when it
-            // does not, so `<dir>/./chunks/2.js` would miss `<dir>/chunks/2.js`
-            // in exactly the deployed case where the sources are absent.
-            var __perry_path_spec = specifier;
-            if (specifier.charCodeAt(0) === 46) {
-                if (specifier.charCodeAt(1) === 47) {
-                    __perry_path_spec = "/t3" + '/' + specifier.slice(2);
-                } else if (specifier.charCodeAt(1) === 46 && specifier.charCodeAt(2) === 47) {
-                    __perry_path_spec = "/t3" + '/' + specifier;
-                } else if (specifier === '.' || specifier === '..') {
-                    // The bare directory specifiers carry no trailing
-                    // separator, so the two prefix tests above miss them —
-                    // yet Node accepts `require('.')` / `require('..')` and
-                    // resolves them through the directory's `index.js` /
-                    // package `main`, which `js_require_path_module` also
-                    // does via its directory-candidate fallback. Without the
-                    // join the key stays a bare `.` and can never hit.
-                    __perry_path_spec = "/t3" + '/' + specifier;
-                }
-            }
-            const __perry_path_mod = __perry_require_path_module(__perry_path_spec);
-            if (__perry_path_mod !== undefined || __perry_has_path_module(__perry_path_spec)) return __perry_cjs_refresh_path(__perry_path_spec, __perry_path_mod);
-        }
-        // Runtime `require(absolutePath)` of a `.json` file (Next.js loads
-        // manifests this way: `require(this.middlewareManifestPath)`). Node's
-        // require reads + JSON.parses `.json` files; the statically-resolved
-        // cases above only cover specifiers known at compile time, so a path
-        // computed at runtime falls here. `.json` is pure data (no eval), so we
-        // read it from disk and parse it. Uncompiled `.js` runtime require
-        // stays unsupported — that would require evaluating arbitrary code.
-        if ((specifier.charCodeAt(0) === 47 || (specifier.length > 2 && specifier.charCodeAt(1) === 58)) && specifier.slice(-5) === '.json') {
-            return __perry_require_json_disk(specifier);
-        }
-        // A computed bare platform package can name a manifest-listed addon
-        // through package.json main, without a .node suffix in the request.
-        if (__perry_cjs_reload_require === undefined) __perry_cjs_reload_require = __perry_cjs_create_require("/t3/richards.js");
-        return __perry_cjs_reload_require(specifier);
+        if (specifier === './benchmark') { const __perry_cached = __perry_cjs_c["/t3/benchmark.js"]; if (__perry_cached !== undefined) { __perry_cjs_link(module, __perry_cached); return __perry_cached.exports; } if (!__perry_has_path_module("/t3/benchmark.js")) return _req_0; return __perry_cjs_reloader()("/t3/benchmark.js"); }
+        // A specifier no case above resolved: builtins, native addons, a
+        // compiled module reached by a computed path, a `.json` file, a
+        // package outside the graph (`perry:cjs`'s `requireComputed`).
+        return __perry_cjs_require_computed(specifier, "/t3", __perry_cjs_reloader);
     }
     // No `defineProperty(require, 'name', ...)`: a `function require(...)`
     // declaration already carries exactly
@@ -170,26 +67,25 @@ function __perry_cjs_factory() {
     // the require object OBJ_FLAG_HAS_DESCRIPTORS, which pushed every later
     // `require.resolve = ...` / `require.cache = ...` assignment onto the
     // descriptor-bearing store path (#10287) in every CommonJS module.
-    require.resolve = function resolve(specifier, options) {
+    const __perry_cjs_resolve = function resolve(specifier, options) {
         if (typeof specifier !== 'string') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_TYPE', 'The "request" argument must be of type string.');
         if (specifier === "./benchmark") return "/t3/benchmark.js";
-        if (__perry_cjs_require_is_builtin(specifier)) return specifier;
+        if (__perry_cjs_is_builtin(specifier)) return specifier;
         var __perry_nm_resolved = __perry_require_resolve_node_modules("/t3", specifier);
         if (__perry_nm_resolved !== undefined) return __perry_nm_resolved;
         throw __perry_cjs_require_error('error', 'MODULE_NOT_FOUND', 'Cannot find module ' + specifier);
     };
-    require.resolve.paths = function paths(specifier) {
+    __perry_cjs_resolve.paths = function paths(specifier) {
         if (typeof specifier !== 'string') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_TYPE', 'The "request" argument must be of type string.');
         return null;
     };
-    // `cache` and `extensions` come straight from the createRequire instance:
-    // the placeholder object literals they used to be initialised with were
-    // overwritten on the very next line, so every CJS module allocated an
-    // object plus three closures and immediately dropped them. At OpenCode's
-    // ~2,200 CJS modules that is pure startup garbage.
-    require.cache = __perry_cjs_base_require.cache;
-    require.extensions = __perry_cjs_base_require.extensions;
-    require.main = __perry_get_cjs_main_module();
+    require.resolve = __perry_cjs_resolve;
+    // `cache`, `extensions` and `main` are the program's (`perry:cjs`): Node's
+    // loader reads `Module._cache`, never this property, so reassigning
+    // `require.cache` does not redirect loading.
+    require.cache = __perry_cjs_c;
+    require.extensions = __perry_cjs_extensions;
+    require.main = __perry_cjs_main;
     module.require = function moduleRequire(specifier) { return require(specifier); };
 
     // @ts-check

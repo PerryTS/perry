@@ -11,6 +11,7 @@
 //!
 //! Whether a function is summarized follows from its body alone; nothing
 //! depends on a size, count or depth.
+use crate::delta::Tokens;
 use crate::model::*;
 use crate::pts::{FxHashMap, FxHashSet};
 use std::rc::Rc;
@@ -33,6 +34,10 @@ pub const LAY_NONE: u32 = 0;
 const LAY_SITE: u32 = 5 << 28;
 /// The lexical context of a kind-5 instance: the object it constructs.
 const LAY_BIRTH: u32 = 6 << 28;
+/// The lexical context of a method instance on one object: the receiver
+/// token (`recv_lay`), the kind `layout_of` gives one-value tokens.
+const LAY_TOK: u32 = 4 << 28;
+const LAY_MASK: u32 = (1 << 28) - 1;
 /// A closure context key for a closure whose captured cells are its
 /// creator's context's (`CAP_OUTER`): the creator's context id with this
 /// bit. Lexical contexts never set it (kinds stop at 7 << 28).
@@ -99,6 +104,10 @@ pub struct Summary {
     /// this summary's direct calls; the calls copied in with a callee's
     /// body bind instances (design §14.3).
     pub expanded: Vec<(u32, FnIdx)>,
+    /// Per parameter: a slot nothing of the body writes (no edge, rule,
+    /// call result or seed puts a value into it), so it holds only what
+    /// the calls pass (DECISIONS 44 (b), `relative_params`).
+    pub rel: Vec<bool>,
 }
 
 #[derive(Clone, Debug)]
@@ -125,13 +134,14 @@ pub struct SumState {
     /// (kind, layout/site/node, function token) -> instance. Kinds: 0 a
     /// plain call at a program site outside every summary (the unsummarized
     /// body's composition: the callee's effect per site, as `compose`
-    /// expands a static call into a summary), 1 every other binding (the
-    /// receiver's layout for a function with a `this` term, else
-    /// `LAY_NONE`), 2 unknown-code entry, 3 setter group, 4 getter group,
-    /// 5 a birth run (the constructor chain or field initializer of the
-    /// object token being born, i.e. of its birth site). Nothing in a key
-    /// is another instance: the count is (sites + layouts) x functions,
-    /// fixed by the program.
+    /// expands a static call into a summary), 1 every other binding (for a
+    /// function with a `this` term the receiver: an object as its maker
+    /// key, else its layout, `recv_lay`; without one `LAY_NONE`), 2 unknown-code
+    /// entry, 3 setter group, 4 getter group, 5 a birth run (the
+    /// constructor chain or field initializer of the object token being
+    /// born). Nothing in a key is another instance: the count is (sites +
+    /// object tokens + layouts) x functions, and the object tokens are the
+    /// program's birth sites under their maker contexts (`made_of`).
     pub inst_key: FxHashMap<(u8, u32, Tok), u32>,
     /// Calls that exist when summaries are built: the program's calls.
     pub n_prog: usize,
@@ -183,6 +193,19 @@ pub struct SumState {
     /// program (closures x (sites + layouts + contexts)), never by an
     /// instance, so closure tokens never multiply through instances.
     pub ctx_of: FxHashMap<(FnIdx, u32), CallId>,
+    /// Maker birth contexts: (birth site, maker key) -> context id,
+    /// counting down from `BORN`. An object a method or constructor of
+    /// object `o` births is `o`'s (`made_ctx`), so a container's backing
+    /// store is per container, and a part a constructor makes is per
+    /// whole. Construction nests (a part of a part of `o` is `o`'s); a
+    /// receiver a method made stands for the object its chain of method
+    /// calls started from (`maker_key`), so results of results never form
+    /// a chain. A site already on the maker chain folds onto the object
+    /// born there.
+    pub made_of: FxHashMap<(CallId, Tok), CallId>,
+    /// Maker context `BORN - 1 - i` -> (its birth site, its maker object,
+    /// made by a method of the maker rather than its construction).
+    pub made: Vec<(CallId, Tok, bool)>,
 }
 
 fn is_slot(x: NodeId) -> bool {
@@ -274,6 +297,7 @@ pub fn map_cons(
         },
         Hard { kind, reason } => Hard { kind, reason },
         AddsKeys => AddsKeys,
+        DefineAccessor { key, reason } => DefineAccessor { key, reason },
         Implicit { reason } => Implicit { reason },
         CreateProto { reason } => CreateProto { reason },
         ChainUnion { key, dst } => ChainUnion { key, dst: n(dst) },
@@ -335,6 +359,12 @@ pub fn map_cons(
         ShareBuffer { ta } => ShareBuffer { ta },
         ThisTo { origin } => ThisTo { origin },
         CallArgs { call } => CallArgs { call: k(call) },
+        RetInto { call, run } => RetInto { call: k(call), run },
+        ArgInto { call, run, i } => ArgInto {
+            call: k(call),
+            run,
+            i,
+        },
         Spread { into, site } => Spread {
             into: n(into),
             site,
@@ -422,6 +452,7 @@ fn gen_kind(c: &Cons) -> bool {
             | OverrideThis { .. }
             | TopIfAny { .. }
             | Hard { .. }
+            | DefineAccessor { .. }
             | AddsKeys
             | Implicit { .. }
             | IdxLoad { .. }
@@ -542,10 +573,10 @@ impl Model {
     }
 
     /// The birth context of an object `call` makes: its program site (one
-    /// token per birth site), within the lexical context of the instance
-    /// that made the call (a method's births are per receiver layout: the
-    /// container a layout's method makes is that layout's), or `BORN` when
-    /// no program site is behind it (a protocol touch).
+    /// token per birth site), as made by the object whose method or
+    /// constructor instance made the call (`made_ctx`: the store a
+    /// container's method makes is that container's), or `BORN` when no
+    /// program site is behind it (a protocol touch).
     pub(crate) fn birth_ctx(&mut self, call: CallId) -> CallId {
         if (call as usize) < self.sum.n_prog || !self.sum.ready {
             return call;
@@ -553,7 +584,91 @@ impl Model {
         let Some(site) = self.origin_of(call) else {
             return BORN;
         };
-        site
+        match self.sum.call_lay.get(&call).copied() {
+            Some(l) => self.made_ctx(site, l),
+            None => site,
+        }
+    }
+
+    /// The object lexical context `lay` names (a constructor run or a
+    /// method instance of one object), and whether it is a method's.
+    fn lay_object(&self, lay: u32) -> Option<(Tok, bool)> {
+        let t = (lay & LAY_MASK) as Tok;
+        let by_method = match lay & !LAY_MASK {
+            LAY_BIRTH => false,
+            LAY_TOK => true,
+            _ => return None,
+        };
+        matches!(self.toks.get(t as usize), Some(TokKind::Obj(..))).then_some((t, by_method))
+    }
+
+    /// The birth context of what `site` births inside lexical context
+    /// `lay`: the site alone, or the site as made by the object `lay` names.
+    /// If that object, or an object on its maker chain, was itself born at
+    /// `site`, the birth is that object's context again (a recursive maker
+    /// folds onto its ancestor).
+    pub(crate) fn made_ctx(&mut self, site: CallId, lay: u32) -> CallId {
+        let Some((o, by_method)) = self.lay_object(lay) else {
+            return site;
+        };
+        let mut x = o;
+        while let TokKind::Obj(_, c) = self.toks[x as usize] {
+            // The walk is solve work: the bound covers a chain that grows.
+            self.work += 1;
+            match self.made_entry(c) {
+                Some((s, _, _)) if s == site => return c,
+                Some((_, m, _)) => x = m,
+                None if c == site => return c,
+                None => break,
+            }
+        }
+        let key = (site, self.maker_key(o, by_method));
+        if let Some(&c) = self.sum.made_of.get(&key) {
+            return c;
+        }
+        let c = BORN - 1 - self.sum.made.len() as CallId;
+        self.sum.made.push((site, o, by_method));
+        self.sum.made_of.insert(key, c);
+        c
+    }
+
+    /// The maker as a context key: the object itself, except that a
+    /// method's receiver which a method made stands for the object that
+    /// chain of method calls started from (what a method makes from a
+    /// method's result is that origin's, never per the chain of calls).
+    fn maker_key(&self, mut o: Tok, by_method: bool) -> Tok {
+        if by_method {
+            while let TokKind::Obj(_, c) = self.toks[o as usize] {
+                match self.made_entry(c) {
+                    Some((_, m, true)) => o = m,
+                    _ => break,
+                }
+            }
+        }
+        o
+    }
+
+    /// The (site, maker, by a method) of maker context `c`, if it is one.
+    fn made_entry(&self, c: CallId) -> Option<(CallId, Tok, bool)> {
+        if c >= BORN {
+            return None;
+        }
+        self.sum.made.get((BORN - 1 - c) as usize).copied()
+    }
+
+    /// The lexical context of a method instance for receiver `t`: an
+    /// object is its maker key's context (what the method births is that
+    /// object's), every other value its layout. A receiver a method made
+    /// runs its methods as the object its chain of method calls started
+    /// from, as it births as that object's (`maker_key`): every object of
+    /// a persistent structure births the same (site, origin) objects, so
+    /// one instance per origin holds them all. What a method reads from
+    /// its receiver stays per receiver (argument markers, DECISIONS 44).
+    pub(crate) fn recv_lay(&self, t: Tok) -> u32 {
+        match self.toks[t as usize] {
+            TokKind::Obj(..) if t <= LAY_MASK => LAY_TOK | self.maker_key(t, true),
+            _ => self.layout_of(t),
+        }
     }
 
     /// `f` is part of the birth of object `t`: the constructor or field
@@ -623,7 +738,12 @@ impl Model {
         }
         let base: Vec<NodeId> = (0..s.nslots)
             .map(|i| match outer_at[i as usize] {
-                u32::MAX => self.node_named("inst", || format!("inst{inst}.{i}")),
+                u32::MAX => {
+                    let n = self.node_named("inst", || format!("inst{inst}.{i}"));
+                    // A fresh slot holds one run's values.
+                    self.nodes[n as usize].frame = inst + 1;
+                    n
+                }
                 _ if ctx == NO_CTX => s.orig[i as usize],
                 j => self.sum.ctx_nodes[ctx as usize][j as usize],
             })
@@ -636,10 +756,19 @@ impl Model {
             }
         };
         let this = tr(s.this);
-        // Its parameters hold argument markers (DECISIONS 44).
+        // Its result: what it returns of no parameter leaves as one marker
+        // (MRK, `Model::crosses`).
+        let ret = tr(s.ret);
+        if ret != NO_NODE && self.nodes[ret as usize].frame == inst + 1 {
+            self.nodes[ret as usize].result = true;
+        }
+        // Its parameters hold argument markers (DECISIONS 44), relative
+        // ones while only the calls write them (44 (b)).
         for (j, &p) in s.params.iter().enumerate() {
             if is_slot(p) {
-                self.nodes[tr(p) as usize].param = true;
+                let n = &mut self.nodes[tr(p) as usize];
+                n.param = true;
+                n.rel = s.rel.get(j).is_some_and(|&r| r) && n.frame == inst + 1;
                 self.param_at.insert(tr(p), (f, j as u32));
             }
         }
@@ -656,7 +785,7 @@ impl Model {
             tok: key.2,
             lay,
             params: s.params.iter().map(|&p| tr(p)).collect(),
-            ret: tr(s.ret),
+            ret,
             this,
         });
         self.sum.inst_key.insert(key, inst);
@@ -672,15 +801,16 @@ impl Model {
 
     /// Bind `call` (or no call: `NO_NODE`) to summarized `ft` for receiver
     /// `x` (or the receiver primitives `prim`): the instance of the
-    /// receiver's layout gets the receiver, and the call's arguments and
-    /// result once per (call, instance).
+    /// receiver (`recv_lay`: the object's maker key, else its layout) gets the
+    /// receiver, and the call's arguments and result once per (call,
+    /// instance).
     pub(crate) fn bind_layout(&mut self, call: CallId, ft: Tok, x: Option<Tok>, prim: u16) {
         let f = self.tok_fn(ft);
         if call != NO_NODE && self.composed_away(call, f) {
             return;
         }
         let lay = match x {
-            Some(t) if self.has_this_term(f) => self.layout_of(t),
+            Some(t) if self.has_this_term(f) => self.recv_lay(t),
             _ => LAY_NONE,
         };
         let key = match x {
@@ -975,9 +1105,10 @@ impl Model {
             let t = self.closure_tok(*g, key, clay, &nodes);
             self.add_tok(base[*slot as usize], t);
         }
-        // Literals born here: one token per (literal, lexical context).
+        // Literals born here: one token per (literal, maker object), or one
+        // per literal in an instance no object is the context of.
         for &(slot, tm) in &s.births {
-            let ctx = BORN;
+            let ctx = self.made_ctx(BORN, lay);
             let t = self.site_tok(tm, ctx);
             self.add_tok(base[slot as usize], t);
         }
@@ -1094,9 +1225,196 @@ impl Model {
             }
         }
         let r = self.sum.insts[inst as usize].ret;
-        if r != NO_NODE {
-            let cret = self.calls[c].ret;
+        if r == NO_NODE {
+            return;
+        }
+        let cret = self.calls[c].ret;
+        if !self.rel_into(call, inst + 1, &terms) {
             self.edge(r, cret);
+        }
+    }
+
+    /// Relative transfer (DECISIONS 44 (b)): with markers in the unit and
+    /// no spread argument, what run `run`'s result returns of a relative
+    /// parameter's marker family is `call`'s argument there. False when
+    /// the call takes the result as it is (a copy edge).
+    pub(crate) fn rel_into(&mut self, call: CallId, run: u32, params: &[NodeId]) -> bool {
+        let c = call as usize;
+        let n = params.len().min(self.calls[c].args.len());
+        let rel: Vec<usize> = (0..n)
+            .filter(|&i| params[i] != NO_NODE && self.nodes[params[i] as usize].rel)
+            .collect();
+        if self.param_marker.is_empty() || !self.calls[c].spread.is_empty() || rel.is_empty() {
+            return false;
+        }
+        let r = self.run_ret(run);
+        let cret = self.calls[c].ret;
+        self.rel(|| format!("copy {r} {cret}"));
+        self.cons(r, Cons::RetInto { call, run });
+        for i in rel {
+            let a = self.calls[c].args[i];
+            self.cons(
+                a,
+                Cons::ArgInto {
+                    call,
+                    run,
+                    i: i as u32,
+                },
+            );
+        }
+        true
+    }
+
+    /// The result node and the parameters of run `run`.
+    fn run_ret(&self, run: u32) -> NodeId {
+        match run & FN_RUN {
+            0 => self.sum.insts[(run - 1) as usize].ret,
+            _ => self.funcs[(run & !FN_RUN) as usize].ret,
+        }
+    }
+
+    fn run_params(&self, run: u32) -> &[NodeId] {
+        match run & FN_RUN {
+            0 => &self.sum.insts[(run - 1) as usize].params,
+            _ => &self.funcs[(run & !FN_RUN) as usize].params,
+        }
+    }
+
+    /// `Cons::RetInto`: run `run`'s result values `toks` reach `call`'s
+    /// result. A token of the family of the run's argument marker for
+    /// parameter i (while it stays in its run) is that parameter's value at
+    /// this call: for each marker `m` of the call's argument i, the same
+    /// token of `m` (`Model::lift`). Every other token arrives as itself.
+    pub(crate) fn ret_into(&mut self, call: CallId, run: u32, toks: Tokens<'_>, prim: u16) {
+        let cret = self.calls[call as usize].ret;
+        let mut raw: Vec<Tok> = Vec::new();
+        let mut lifted: Vec<Tok> = Vec::new();
+        let mut args: Vec<Option<Vec<Tok>>> = Vec::new();
+        for &t in toks {
+            let (b, h) = self.fam.get(t as usize).copied().unwrap_or((0, 0));
+            if h != run {
+                raw.push(t);
+                continue;
+            }
+            let Some(i) = self.param_of(run, b) else {
+                raw.push(t);
+                continue;
+            };
+            if args.len() <= i {
+                args.resize(i + 1, None);
+            }
+            if args[i].is_none() {
+                args[i] = Some(self.arg_markers(call, i));
+            }
+            for &m in args[i].as_ref().unwrap() {
+                // Each lifted token is solve work, as a delivery is.
+                self.work += 1;
+                let x = self.lift(m, b, t);
+                lifted.push(x);
+            }
+        }
+        raw.extend(lifted);
+        self.add(cret, &raw, prim);
+    }
+
+    /// `Cons::ArgInto`: argument i of `call` gains `toks`; each marker
+    /// among them is what run `run`'s result returns of the parameter's
+    /// marker family so far (`ret_into` lifts the later ones).
+    pub(crate) fn arg_into(&mut self, call: CallId, run: u32, i: u32, toks: Tokens<'_>) {
+        let ms: Vec<Tok> = toks
+            .iter()
+            .copied()
+            .filter(|&t| self.is_marker(t))
+            .collect();
+        if ms.is_empty() {
+            return;
+        }
+        let p = self.run_params(run)[i as usize];
+        let Some(&b) = self.arg_marker_of.get(&p) else {
+            return;
+        };
+        if self.fam_home(b) != run {
+            return;
+        }
+        let r = self.run_ret(run);
+        let held: Vec<Tok> = self
+            .family(b)
+            .into_iter()
+            .filter(|&t| self.nodes[r as usize].pts.contains_tok(t))
+            .collect();
+        if held.is_empty() {
+            return;
+        }
+        let mut out = Vec::with_capacity(ms.len() * held.len());
+        for &m in &ms {
+            for &t in &held {
+                self.work += 1;
+                out.push(self.lift(m, b, t));
+            }
+        }
+        let cret = self.calls[call as usize].ret;
+        self.add(cret, &out, 0);
+    }
+
+    /// The parameter of run `run` whose argument marker is `b`.
+    fn param_of(&self, run: u32, b: Tok) -> Option<usize> {
+        self.run_params(run)
+            .iter()
+            .position(|p| self.arg_marker_of.get(p) == Some(&b))
+    }
+
+    /// The markers argument i of `call` holds now (none for an argument
+    /// the call does not pass: the parameter is `undefined` there).
+    fn arg_markers(&self, call: CallId, i: usize) -> Vec<Tok> {
+        let Some(&a) = self.calls[call as usize].args.get(i) else {
+            return Vec::new();
+        };
+        let mut v = Vec::new();
+        self.nodes[a as usize].pts.sorted_into(&mut v);
+        v.retain(|&t| self.is_marker(t));
+        v
+    }
+
+    /// A compiled function without a summary has one body for every call:
+    /// that body is its run (`FN_RUN | f`), so its parameters' markers are
+    /// tokens there and its result returns them to each call relative to
+    /// it (DECISIONS 44 (b)), not as a crossing marker (MRK). Each
+    /// parameter gets a binding the calls write and nothing in the body
+    /// does; the body's variable takes the binding and the writes (as
+    /// `bind_written_params` does for a summary).
+    fn run_unsummarized(&mut self) {
+        let one = |m: &Self, f: FnIdx| {
+            f != NO_FN && !m.summarized(f) && m.funcs[f as usize].func_id != u32::MAX
+        };
+        for n in 0..self.nodes.len() {
+            let f = self.node_fn[n];
+            if one(self, f) && !self.nodes[n].obs && self.nodes[n].frame == 0 {
+                self.nodes[n].frame = FN_RUN | f;
+            }
+        }
+        for f in 0..self.funcs.len() as FnIdx {
+            if !one(self, f) {
+                continue;
+            }
+            let run = FN_RUN | f;
+            let ret = self.funcs[f as usize].ret;
+            if ret != NO_NODE {
+                self.nodes[ret as usize].frame = run;
+                self.nodes[ret as usize].result = true;
+            }
+            for i in 0..self.funcs[f as usize].params.len() {
+                let p = self.funcs[f as usize].params[i];
+                if p == NO_NODE {
+                    continue;
+                }
+                let b = self.node_l("param-bind");
+                self.node_fn[b as usize] = f;
+                self.nodes[b as usize].frame = run;
+                self.nodes[b as usize].rel = true;
+                self.nodes[p as usize].frame = run;
+                self.edge(b, p);
+                self.funcs[f as usize].params[i] = b;
+            }
         }
     }
 
@@ -1223,6 +1541,8 @@ impl Model {
             }
         }
         self.sum.ready = true;
+        self.run_unsummarized();
+        self.mark_params();
         let deferred = std::mem::take(&mut self.sum.deferred);
         let nd = deferred.len();
         for d in deferred {

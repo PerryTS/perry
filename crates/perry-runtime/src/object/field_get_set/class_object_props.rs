@@ -668,7 +668,7 @@ pub(super) unsafe fn instance_constructor_value(
     // #11868: an anonymous shape is not a constructor identity. Let the
     // ordinary lookup read Object.prototype's own property, including edits,
     // deletion and accessors. The writable global Object binding is unrelated.
-    if class_id != 0 && is_anon_shape_class_id(class_id) {
+    if class_id != 0 && super::super::shapes::object_is_plain_record(obj) {
         return None;
     }
     // #10478: an `Object.create(proto)` result is stamped with a synthetic

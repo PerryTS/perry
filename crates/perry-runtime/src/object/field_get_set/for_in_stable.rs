@@ -159,7 +159,7 @@ fn stable_single_own_for_in_keys(value: f64) -> Option<*mut ArrayHeader> {
     let object = receiver_addr as *const ObjectHeader;
     let descriptor = unsafe {
         let class_id = (*object).class_id;
-        if class_id != 0 && !super::super::is_anon_shape_class_id(class_id) {
+        if class_id != 0 && !super::super::shapes::object_is_plain_record(object) {
             return stable_miss("receiver_class");
         }
         if !(*object).meta.is_null() {

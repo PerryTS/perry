@@ -641,7 +641,7 @@ extern "C" fn process_warning_callback(
 }
 
 pub(crate) fn schedule_warning(warning: f64, label: &str, code: &str, msg: &str, detail: &str) {
-    let pid = std::process::id();
+    let pid = crate::os::current_process_id();
     let line = if code.is_empty() {
         format!("(node:{pid}) {label}: {msg}")
     } else {

@@ -96,7 +96,17 @@ pub(crate) unsafe fn class_shape_reaches(
             if cid == want {
                 return true;
             }
-            let mut next = crate::object::class_value::class_decl_prototype_link(cid);
+            // The CLASS word owns the actual holder, including native
+            // intrinsic prototypes. A separate class-value link may be absent
+            // for those; materializing a declared class would replace it.
+            let holder = crate::JSValue::from_bits(
+                crate::object::class_registry::class_holder_word_selected(cid),
+            );
+            let mut next = if holder.is_pointer() {
+                holder.as_pointer::<ObjectHeader>() as *mut ObjectHeader
+            } else {
+                std::ptr::null_mut()
+            };
             if next.is_null() && build {
                 let v = crate::JSValue::from_bits(
                     crate::object::class_registry::class_decl_prototype_value(cid).to_bits(),
@@ -195,6 +205,35 @@ unsafe fn physical_target<'scope>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_class_word_survives_ancestry_and_keeps_its_iterable_adder() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let _no_move = crate::gc::GcSuppressScope::new();
+        let prototype = crate::object::builtin_prototype_value("WeakMap");
+        let native = crate::weakref::CLASS_ID_WEAKMAP;
+        let word = shapes::identity_prototype_word(shapes::PROTO_ID_CLASS | u64::from(native));
+        assert_eq!(
+            word,
+            prototype.to_bits(),
+            "the native prototype must already own the CLASS word"
+        );
+        let object = crate::weakref::js_weakmap_new();
+        // Static instanceof uses a different public builtin identity. The
+        // unequal CLASS path must follow the existing native holder.
+        assert!(!unsafe { class_shape_reaches(object, 0xFFFF002C, true) });
+        assert_eq!(
+            shapes::identity_prototype_word(shapes::PROTO_ID_CLASS | u64::from(native)),
+            word,
+            "ancestry must not replace the intrinsic with a declared-class prototype"
+        );
+        let receiver = crate::value::js_nanbox_pointer(object as i64);
+        let adder = crate::collection_iter::constructor_adder("set", receiver);
+        assert!(
+            crate::collection_iter::is_callable(adder),
+            "the iterable constructor's Get(set) must remain callable"
+        );
+    }
+
     #[test]
     fn class_shape_walk_observes_holder_and_receiver_relinks() {
         let _lock = crate::gc::global_side_table_test_lock();

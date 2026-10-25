@@ -6,6 +6,12 @@ use std::borrow::Cow;
 use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
 
+use super::package_patches::{
+    is_depd_index_path, is_function_bind_implementation_path, is_safe_buffer_path,
+    is_safer_buffer_path, rewrite_depd_dynamic_wrapper, rewrite_function_bind_dynamic_wrapper,
+    rewrite_safe_buffer_slow_buffer_fallback, rewrite_safer_buffer_private_binding,
+};
+
 fn relative_import_specifier(from: &Path, to: &Path) -> Option<String> {
     let from: Vec<Component<'_>> = from.components().collect();
     let to: Vec<Component<'_>> = to.components().collect();
@@ -95,6 +101,20 @@ fn resolve_compiled_require_target(
         )
     })?;
     (target.extension().and_then(|extension| extension.to_str()) != Some("node")).then_some(target)
+}
+
+/// Is `target` an ES module rather than CommonJS? `.mjs`/`.mts` always are,
+/// `.cjs`/`.cts` never; other files must show a top-level `import`/`export`
+/// (a script with no module syntax stays on the default-import path).
+fn is_es_module_target(target: &Path) -> bool {
+    match target.extension().and_then(|extension| extension.to_str()) {
+        Some("mjs" | "mts") => true,
+        Some("cjs" | "cts") => false,
+        Some("js" | "jsx" | "ts" | "tsx") => std::fs::read_to_string(target).is_ok_and(|source| {
+            super::detect::has_top_level_esm(&super::detect::strip_comments_and_strings(&source))
+        }),
+        _ => false,
+    }
 }
 
 /// Is `name` a JS global-builtin VALUE (a constructor/namespace reachable as a
@@ -555,42 +575,53 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
             // explicit compilePackages opt-in. Resolving them to watcher.node
             // creates a compiled-module import whose body is intentionally absent.
             let watcher_facade = is_watcher_facade(spec);
-            let resolved_require_spec = if !watcher_facade && import_spec == spec
+            let resolved_require_path = if !watcher_facade
+                && import_spec == spec
                 && !spec.starts_with("./")
                 && !spec.starts_with("../")
                 && !std::path::Path::new(spec).is_absolute()
                 && compile_packages.is_none_or(|packages| {
-                    let (package_name, _) =
-                        super::super::resolve::parse_package_specifier(spec);
+                    let (package_name, _) = super::super::resolve::parse_package_specifier(spec);
                     packages.contains("*") || packages.contains(&package_name)
+                }) {
+                source_path.parent().and_then(|module_dir| {
+                    super::super::collect_modules::static_require_transform::resolve_static_require(
+                        module_dir, spec, None,
+                    )
                 })
-            {
-                source_path
-                    .parent()
-                    .and_then(|module_dir| {
-                        super::super::collect_modules::static_require_transform::resolve_static_require(
-                            module_dir,
-                            spec,
-                            None,
-                        )
-                    })
-                    // Keep the resolved target relative to the importing
-                    // module. Absolute node_modules imports are classified as
-                    // ordinary runtime JS by the general resolver because the
-                    // original package name (and therefore compilePackages
-                    // opt-in) is no longer visible there.
-                    .and_then(|path| {
-                        source_path
-                            .parent()
-                            .and_then(|module_dir| relative_import_specifier(module_dir, &path))
-                    })
             } else {
                 None
             };
+            // `require()` of an ES module yields its namespace object (Node
+            // 22's require(esm)). A default import would instead yield the
+            // `export default` value: `@platformatic/globals` exports named
+            // functions plus `export default getGlobal`, so a CommonJS
+            // consumer's `require(..).getGlobal` read a property off the
+            // function. A deferred spec is loaded through the path registry,
+            // not this binding.
+            let namespace_binding = !lazy_specs.contains(spec)
+                && resolved_require_path
+                    .as_deref()
+                    .is_some_and(is_es_module_target);
+            let binding = if namespace_binding {
+                format!("* as {local}")
+            } else {
+                local.clone()
+            };
+            // Keep the resolved target relative to the importing module.
+            // Absolute node_modules imports are classified as ordinary
+            // runtime JS by the general resolver because the original package
+            // name (and therefore compilePackages opt-in) is no longer
+            // visible there.
+            let resolved_require_spec = resolved_require_path.as_deref().and_then(|path| {
+                source_path
+                    .parent()
+                    .and_then(|module_dir| relative_import_specifier(module_dir, path))
+            });
             if let Some(resolved) = resolved_require_spec {
                 format!(
                     "import {} from {};",
-                    local,
+                    binding,
                     serde_json::to_string(&resolved)
                         .expect("CJS import specifier is JSON encodable")
                 )
@@ -601,9 +632,11 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
         .collect::<Vec<_>>()
         .join("\n");
     let imports = format!(
-        "import {{ createRequire as {create_require}, isBuiltin as __perry_cjs_is_builtin }} from 'node:module';\n{imports}"
+        "{support}\nimport {{ createRequire as {create_require}, isBuiltin as __perry_cjs_is_builtin }} from 'node:module';\n{imports}",
+        support = super::support::SUPPORT_IMPORT
     );
 
+    let uses_deferred_helper = std::cell::Cell::new(false);
     // An UNRESOLVABLE adopted specifier (`require('@opentelemetry/api')`
     // with only Next's vendored copy on disk) leaves its hoisted import
     // binding as the boolean TRUE sentinel at runtime. Returning that from
@@ -650,7 +683,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
                 .as_ref()
                 .map(|target| {
                     format!(
-                        "const child = require.cache[{path:?}]; if (child) {{ if (child.parent === undefined) child.parent = module; if (module.children.indexOf(child) === -1) module.children.push(child); }} ",
+                        "__perry_cjs_link(module, __perry_cjs_c[{path:?}]); ",
                         path = target.to_string_lossy(),
                     )
                 })
@@ -664,20 +697,20 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
                 resolved_target
                     .as_ref()
                     .map(|target| {
-                        let warnings = if cyclic_specs.contains(spec) {
-                            cyclic_missing_property_names(source, source_path, spec, target)
-                                .into_iter()
-                                .map(|property| {
-                                    // #10178: this scan only nominates possible
-                                    // misses. __export helpers and class statics
-                                    // can already be present on a replacement
-                                    // module.exports. Check the returned value
-                                    // without invoking the exported getter.
-                                    format!(
-                                        "if (childBefore && childBefore.loaded === false && required != null && (typeof required === 'object' || typeof required === 'function') && !('{property}' in required)) globalThis.process?.emitWarning?.(\"Accessing non-existent property '{property}' of module exports inside circular dependency\"); "
-                                    )
-                                })
-                                .collect::<String>()
+                        // A cyclic target reports the properties the cycle can
+                        // read before they exist (#10178), in the shared helper.
+                        let missing = if cyclic_specs.contains(spec) {
+                            let names =
+                                cyclic_missing_property_names(source, source_path, spec, target);
+                            if names.is_empty() {
+                                String::new()
+                            } else {
+                                format!(
+                                    ", {}",
+                                    serde_json::to_string(&names)
+                                        .expect("property names are JSON encodable")
+                                )
+                            }
                         } else {
                             String::new()
                         };
@@ -694,9 +727,23 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
                         // miss-vs-`undefined`-export discriminator (a real
                         // module may export `undefined`), and on a genuine miss
                         // the import binding is the value this arm returned
-                        // before the target was deferred at all.
+                        // before the target was deferred at all. The binding is
+                        // read through a thunk because reading it can itself
+                        // initialize the target.
+                        //
+                        // The registry call, its `try`/`finally`, the cycle
+                        // warning and the child link live in one helper per
+                        // module instead of being repeated in every case.
+                        // `require` holds one case per specifier, and each
+                        // inlined copy carried a returns-twice frame on wasm32:
+                        // the sjlj lowering threads every value of every case
+                        // through one dispatch loop, so the function grew with
+                        // the square of the specifier count (17 MB for a 3 KB
+                        // barrel module) and passed the 7.6 MB function size
+                        // limit of wasmtime and wasm-tools.
+                        uses_deferred_helper.set(true);
                         format!(
-                            "const childBefore = require.cache[{path:?}]; globalThis.__perry_cjs_pending_parent = module; let required; try {{ required = __perry_require_path_module({path:?}); required = __perry_cjs_refresh_path({path:?}, required); }} finally {{ globalThis.__perry_cjs_pending_parent = undefined; }} if (required === undefined && !__perry_has_path_module({path:?})) required = {local}; {warnings}{link_child}const __perry_rec = require.cache[{path:?}]; if (__perry_rec !== undefined && __perry_rec.loaded === true) {local}__rec = __perry_rec; return required;",
+                            "const required = __perry_cjs_require_deferred({path:?}, () => {local}{missing}); const __perry_rec = __perry_cjs_c[{path:?}]; if (__perry_rec !== undefined && __perry_rec.loaded === true) {local}__rec = __perry_rec; return required;",
                             path = target.to_string_lossy(),
                             local = local,
                         )
@@ -710,10 +757,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
                 // codegen does not initialize for native modules in CJS-wrapped
                 // modules). createRequire calls js_create_native_module_namespace
                 // under the hood — the same path Node.js uses for require("process").
-                format!(
-                    "{link_child}return (globalThis.__perry_cjs_shared_require || (globalThis.__perry_cjs_shared_require = {create_require}({:?})))(specifier);",
-                    source_path.to_string_lossy()
-                )
+                format!("{link_child}return __perry_cjs_builtin(specifier);")
             } else if needs_runtime_record {
                 runtime_require.clone().unwrap_or_else(|| format!("return {local};"))
             } else if let Some(target) = resolved_target.as_ref() {
@@ -721,7 +765,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
                 // deletion and replacement. Read the live record, and use
                 // the same cold re-evaluation path as a deferred require.
                 format!(
-                    "const __perry_cached = require.cache[{path:?}]; if (__perry_cached !== undefined) {{ {link_child}return __perry_cached.exports; }} return __perry_cjs_refresh_path({path:?}, {local});",
+                    "const __perry_cached = __perry_cjs_c[{path:?}]; if (__perry_cached !== undefined) {{ __perry_cjs_link(module, __perry_cached); return __perry_cached.exports; }} if (!__perry_has_path_module({path:?})) return {local}; return __perry_cjs_reloader()({path:?});",
                     path = target.to_string_lossy(),
                 )
             } else {
@@ -757,7 +801,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
                     // Validate identity against the public cache on every hit:
                     // deletion and replacement revoke this saved record.
                     format!(
-                        "        if (specifier === '{spec}') {{ if ({local}__rec !== undefined && require.cache[{path:?}] === {local}__rec) return {local}__rec.exports; {required_value} }}",
+                        "        if (specifier === '{spec}') {{ if ({local}__rec !== undefined && __perry_cjs_c[{path:?}] === {local}__rec) return {local}__rec.exports; {required_value} }}",
                         path = resolved_target.as_ref().unwrap().to_string_lossy(),
                     )
                 } else if link_child.is_empty() {
@@ -788,6 +832,40 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
         .map(|(_, local)| format!("    let {local}__rec;"))
         .collect::<Vec<_>>()
         .join("\n");
+    // The first, registry-backed require of a deferred target (see the case
+    // above). `fallback` is a thunk: reading the import binding can initialize
+    // the target, so it is read only when the registry has no such module.
+    let deferred_helper = if uses_deferred_helper.get() {
+        r#"    function __perry_cjs_require_deferred(path, fallback, missing) {
+        const childBefore = __perry_cjs_c[path];
+        __perry_cjs_set_pending(module);
+        let required;
+        try {
+            required = __perry_require_path_module(path);
+            const live = __perry_cjs_c[path];
+            if (live !== undefined) required = live.exports;
+            else if (__perry_has_path_module(path)) required = __perry_cjs_reloader()(path);
+        } finally {
+            __perry_cjs_set_pending(undefined);
+        }
+        if (required === undefined && !__perry_has_path_module(path)) required = fallback();
+        if (missing !== undefined && childBefore && childBefore.loaded === false && required != null && (typeof required === 'object' || typeof required === 'function')) {
+            // #10178: this scan only nominates possible misses. __export helpers
+            // and class statics can already be present on a replacement
+            // module.exports. Check the returned value without invoking the
+            // exported getter.
+            for (let i = 0; i < missing.length; i++) {
+                const property = missing[i];
+                if (!(property in required)) globalThis.process?.emitWarning?.("Accessing non-existent property '" + property + "' of module exports inside circular dependency");
+            }
+        }
+        __perry_cjs_link(module, __perry_cjs_c[path]);
+        return required;
+    }
+"#
+    } else {
+        ""
+    };
     // Heuristic: is any `require('<spec>')` call site lexically inside a
     // `try { … }` block? Reverse brace-depth scan from the call offset to
     // the nearest unmatched `{`, checking whether `try` precedes it.
@@ -1222,71 +1300,87 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
     );
     let module_path_literal = format!("{:?}", source_path.to_string_lossy());
     let module_filename_literal = module_path_literal.clone();
-    // The factory a reload after `delete require.cache[...]` runs again. The
-    // runtime keeps it in the record's private slot (`CJS_MODULE_RECORD`): not
-    // a property, so user code cannot read (or stringify) it, and its text
-    // (the whole module) is not retained for it. The flat emission (#4933) has
-    // no factory.
+    // The factory a reload after `delete require.cache[...]` runs again. It
+    // goes to the runtime's path entry with the partial publication: never a
+    // property, so user code cannot read (or stringify) it, and its text (the
+    // whole module) is not retained for it. The flat emission (#4933) has no
+    // factory.
     let cjs_factory_value = if flat_default_class.is_some() {
         "undefined"
     } else {
         "__perry_cjs_factory"
     };
-    // #10735: `require.main` must be the process ENTRY module only —
-    // `module` there, unequal (or `undefined`, for an ESM entry) everywhere
-    // else. `codegen::entry::compile_module_entry` already published a
-    // placeholder object as the shared "main module" in `main()`, BEFORE any
-    // module ran — see `js_bootstrap_cjs_main_module_placeholder`'s doc
-    // comment for why that has to happen outside any module's own preamble
-    // (ESM eval order runs a CJS entry's own static-import dependencies
-    // before the entry's own top-level code, so a naive "entry publishes
-    // first thing in its own preamble" is too late for every hoisted
-    // `require('./relative')`).
-    //
-    // The entry module CLAIMS that placeholder (same object identity a
-    // dependency may already have captured as `require.main`) and fills in
-    // its real fields; every non-entry module just reads it back instead of
-    // building its own — the latter is what made `require.main === module`
-    // trivially true in every compiled CommonJS module, not just the true
-    // entry point (#10735).
+    // The born `exports` object: an object whose keys are the names this
+    // module itself assigns (`exports.X = ...`), each absent until assigned,
+    // so every such read and the export snapshots are slots of its layout.
+    // It is the contract of this object only: a module that replaces
+    // `module.exports` publishes whatever it assigned instead.
+    let exports_init = {
+        let mut keys: Vec<&str> = Vec::new();
+        for name in &plain_exports {
+            let ok = !name.is_empty()
+                && name.len() <= 64
+                && name != "__proto__"
+                && name != "constructor"
+                && !name.bytes().all(|b| b.is_ascii_digit());
+            if ok && !keys.contains(&name.as_str()) {
+                keys.push(name);
+            }
+        }
+        if keys.is_empty() {
+            "{}".to_string()
+        } else {
+            let list: Vec<String> = keys
+                .iter()
+                .map(|k| serde_json::to_string(k).expect("export name is JSON encodable"))
+                .collect();
+            format!("__perry_declared_keys_object({})", list.join(", "))
+        }
+    };
+    // #10735: `require.main` is the process ENTRY module's record, `module`
+    // there and that same record everywhere else (or `undefined` for an ESM
+    // entry). The support module (`perry:cjs`, imported first by every wrapped
+    // module) births it before any CommonJS body runs, so a dependency that
+    // reads `require.main` before the entry's own preamble sees the same
+    // object the entry then fills in place.
     let require_main_stmt = if is_entry_module {
         "require.main = module;"
     } else {
-        "require.main = __perry_get_cjs_main_module();"
+        "require.main = __perry_cjs_main;"
     };
-    // #10735: entry-only. A non-entry module builds its record in one runtime
-    // call below (recognised by `cjs_scaffolding.rs`'s `Ptr<Shape>` report).
-    // The entry instead fills the ALREADY-PUBLISHED placeholder in place,
-    // field by field, so its identity matches what a dependency may have
-    // captured before this preamble ran. The placeholder is born with the
-    // record layout, so these are stores to existing keys, and the factory
-    // goes to its private slot.
+    // The record: Node's keys plus the `__perry_cjs_record` marker, in one
+    // literal, so it is born with its final layout (a closed-shape class the
+    // compiler lays out; `cjs_scaffolding.rs`'s `record_binding` matches it).
+    // The entry fills the support module's main record in place instead,
+    // field by field: its identity is what dependencies already hold.
     let cjs_module_init_stmt = if is_entry_module {
         format!(
-            r#"const __cjs_module = __perry_get_cjs_main_module();
-    __cjs_module.exports = {{}};
+            r#"const __cjs_module = __perry_cjs_main;
+    __cjs_module.exports = {exports_init};
     __cjs_module.__perry_cjs_record = true;
     __cjs_module.id = {module_filename_literal};
     __cjs_module.path = {module_dir_literal};
     __cjs_module.filename = {module_filename_literal};
     __cjs_module.loaded = false;
     __cjs_module.children = [];
-    __cjs_module.parent = globalThis.__perry_cjs_pending_parent;
+    __cjs_module.parent = __perry_cjs_take_pending();
     __cjs_module.paths = [{module_dir_literal} + '/node_modules'];
-    __cjs_module.require = undefined;
-    __perry_set_cjs_factory(__cjs_module, {cjs_factory_value});"#
+    __cjs_module.require = undefined;"#
         )
     } else {
         format!(
-            r#"const __cjs_module = __perry_cjs_module_record(
-        {{}},
-        {module_filename_literal},
-        {module_dir_literal},
-        [],
-        globalThis.__perry_cjs_pending_parent,
-        [{module_dir_literal} + '/node_modules'],
-        {cjs_factory_value}
-    );"#
+            r#"const __cjs_module = {{
+        exports: {exports_init},
+        __perry_cjs_record: true,
+        id: {module_filename_literal},
+        path: {module_dir_literal},
+        filename: {module_filename_literal},
+        loaded: false,
+        children: [],
+        parent: __perry_cjs_take_pending(),
+        paths: [{module_dir_literal} + '/node_modules'],
+        require: undefined
+    }};"#
         )
     };
     let cjs_preamble = format!(
@@ -1301,20 +1395,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
     // correct regardless of what the body does to its `module` local.
     // #6769: the Node `Module` record surface. Set before user code so a
     // recursive load of this module observes the same shape Node exposes.
-    //
-    // ONE runtime call, so the record is born with its final layout
-    // (`CJS_MODULE_RECORD`): Node's keys, the `__perry_cjs_record` marker, and
-    // a private slot for the factory that no script can name. As sequential
-    // assignments it walked a shape transition and a cold property store per
-    // key, about 10k instructions each at module-init time, in every CommonJS
-    // module in the graph. `exports`, `children` and `paths` stay the
-    // wrapper's own literals.
-    //
-    // `cjs_scaffolding.rs`'s `record_binding` matches this call. Changing it
-    // drops the record back to being reported as a denied user candidate in
-    // the `Ptr<Shape>` report; `preamble_canary_tests` is what catches that.
     {cjs_module_init_stmt}
-    globalThis.__perry_cjs_pending_parent = undefined;
     // Node populates `module.parent` before the body evaluates, so link it
     // here rather than at the tail's registry publication.
     __perry_link_path_module_parent(__cjs_module);
@@ -1322,124 +1403,30 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
     // #10178: esbuild replaces module.exports before requiring its peer.
     // Holding the initial empty object loses that replacement at re-entry;
     // the runtime's existing record unwrap reads the current exports instead.
-    // This needs no getter enumeration, copying, or extra publication calls.
-    __perry_register_path_module_partial({module_path_literal}, __cjs_module);
+    __perry_register_path_module_partial({module_path_literal}, __cjs_module, {cjs_factory_value});
     var module = __cjs_module;
     var exports = __cjs_module.exports;
-    // One `createRequire` instance for the whole program, not one per module.
-    // It is used only for `.cache`, `.extensions` and loading builtins, and all
-    // three are process-global in Node — nothing here is bound to this
-    // module's path. The call costs ~117k instructions, so paying it per module
-    // cost OpenCode's ~2,200 CJS modules a quarter of a billion instructions
-    // before any user code ran.
-    const __perry_cjs_base_require = (globalThis.__perry_cjs_shared_require
-        || (globalThis.__perry_cjs_shared_require = {create_require}({module_filename_literal})));
-    __perry_cjs_base_require.cache[{module_filename_literal}] = __cjs_module;
-    function __perry_cjs_require_error(kind, code, message) {{
-        const err = kind === 'type' ? new TypeError(message) : new Error(message);
-        err.code = code;
-        return err;
-    }}
-    // Keep the original spelling: prefix-only builtins are packages when
-    // requested without `node:` (#10410).
-    function __perry_cjs_require_is_builtin(specifier) {{
-        return __perry_cjs_is_builtin(specifier);
-    }}
-    // `isBuiltin` comes from `node:module` instead of a switch emitted into
-    // EVERY CommonJS module. The switch carried both spellings of all 58
-    // builtin names, so each module interned ~120 string constants and
-    // initialised its own copy of the table before running a line of user
-    // code. It was also more permissive than Node: `sea`, `sqlite`, `test` and
-    // `test/reporters` are builtins only in their `node:` form, and the switch
-    // accepted the bare spelling too. The runtime predicate agrees with Node
-    // 26 on all 58 names in both spellings.
+    // The program's `require.cache` (the support module's object, whose keys
+    // are the graph's module paths): this module's key is a slot.
+    const __perry_cjs_c = __perry_cjs_cache;
+    __perry_cjs_c[{module_filename_literal}] = __cjs_module;
 {lazy_cache_decls}
-    // A path-registry initializer runs once, while deleting require.cache
-    // requests another execution of a loaded CommonJS factory. Allocate this
-    // module-bound loader only on that cold path; ordinary loads keep the
-    // registry and live-record fast paths above.
+    // This module's own loader for the cold paths (a reload after
+    // `delete require.cache[...]`, a computed specifier outside the graph),
+    // created on first use: `createRequire` costs ~117k instructions.
     let __perry_cjs_reload_require;
-    function __perry_cjs_refresh_path(path, value) {{
-        const cached = __perry_cjs_base_require.cache[path];
-        if (cached !== undefined) return cached.exports;
-        if (!__perry_has_path_module(path)) return value;
+    function __perry_cjs_reloader() {{
         if (__perry_cjs_reload_require === undefined) __perry_cjs_reload_require = {create_require}({module_filename_literal});
-        return __perry_cjs_reload_require(path);
+        return __perry_cjs_reload_require;
     }}
-    function require(specifier) {{
+{deferred_helper}    function require(specifier) {{
         if (typeof specifier !== 'string') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_TYPE', 'The "id" argument must be of type string.');
         if (specifier === '') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_VALUE', 'The argument "id" must be a non-empty string.');
 {require_cases}
-        // #sdxgen: Node.js built-in modules that were NOT hoisted as static
-        // imports (see the builtin_requires filter above). Resolve them via
-        // createRequire at runtime, which calls js_create_native_module_namespace
-        // under the hood — the same path Node.js uses for require("process").
-        if (__perry_cjs_require_is_builtin(specifier)) {{
-            return __perry_cjs_base_require(specifier);
-        }}
-        // Native addons resolve through the same authenticated manifest and
-        // cache as createRequire and process.dlopen, including computed paths.
-        if (specifier.slice(-5) === '.node') {{
-            if (__perry_cjs_reload_require === undefined) __perry_cjs_reload_require = {create_require}({module_filename_literal});
-            return __perry_cjs_reload_require(specifier);
-        }}
-        // Runtime `require(path)` of a module Perry AOT-compiled but that is
-        // only reachable via a computed path. Next's webpack runtime uses both
-        // absolute page paths and relative chunk paths (`./chunks/` + id).
-        // Resolve the latter against this CJS module's directory before probing
-        // the path registry, mirroring Node's per-module `require` binding.
-        // `js_require_path_module` canonicalizes the joined path, so `./` and
-        // `../` segments need no source-level normalization here.
-        {{
-            // A runtime-COMPUTED *relative* specifier never matches that
-            // registry, which is keyed by absolute source path. Next's
-            // production webpack runtime does exactly this — `.next/server/
-            // webpack-runtime.js` calls `require("./chunks/" + g.u(a))` — so
-            // every lazy chunk missed and the App Route died at startup with
-            // `Cannot find module './chunks/2.js'` even though that chunk WAS
-            // compiled into the image. Statically-known relative specifiers are
-            // already handled by the cases above; only computed ones reach
-            // here, so join them against this module's own directory.
-            //
-            // The `./` prefix is stripped textually rather than left to
-            // `std::fs::canonicalize`: that only normalizes a path that exists
-            // on disk, and registration falls back to the raw string when it
-            // does not, so `<dir>/./chunks/2.js` would miss `<dir>/chunks/2.js`
-            // in exactly the deployed case where the sources are absent.
-            var __perry_path_spec = specifier;
-            if (specifier.charCodeAt(0) === 46) {{
-                if (specifier.charCodeAt(1) === 47) {{
-                    __perry_path_spec = {module_dir_literal} + '/' + specifier.slice(2);
-                }} else if (specifier.charCodeAt(1) === 46 && specifier.charCodeAt(2) === 47) {{
-                    __perry_path_spec = {module_dir_literal} + '/' + specifier;
-                }} else if (specifier === '.' || specifier === '..') {{
-                    // The bare directory specifiers carry no trailing
-                    // separator, so the two prefix tests above miss them —
-                    // yet Node accepts `require('.')` / `require('..')` and
-                    // resolves them through the directory's `index.js` /
-                    // package `main`, which `js_require_path_module` also
-                    // does via its directory-candidate fallback. Without the
-                    // join the key stays a bare `.` and can never hit.
-                    __perry_path_spec = {module_dir_literal} + '/' + specifier;
-                }}
-            }}
-            const __perry_path_mod = __perry_require_path_module(__perry_path_spec);
-            if (__perry_path_mod !== undefined || __perry_has_path_module(__perry_path_spec)) return __perry_cjs_refresh_path(__perry_path_spec, __perry_path_mod);
-        }}
-        // Runtime `require(absolutePath)` of a `.json` file (Next.js loads
-        // manifests this way: `require(this.middlewareManifestPath)`). Node's
-        // require reads + JSON.parses `.json` files; the statically-resolved
-        // cases above only cover specifiers known at compile time, so a path
-        // computed at runtime falls here. `.json` is pure data (no eval), so we
-        // read it from disk and parse it. Uncompiled `.js` runtime require
-        // stays unsupported — that would require evaluating arbitrary code.
-        if ((specifier.charCodeAt(0) === 47 || (specifier.length > 2 && specifier.charCodeAt(1) === 58)) && specifier.slice(-5) === '.json') {{
-            return __perry_require_json_disk(specifier);
-        }}
-        // A computed bare platform package can name a manifest-listed addon
-        // through package.json main, without a .node suffix in the request.
-        if (__perry_cjs_reload_require === undefined) __perry_cjs_reload_require = {create_require}({module_filename_literal});
-        return __perry_cjs_reload_require(specifier);
+        // A specifier no case above resolved: builtins, native addons, a
+        // compiled module reached by a computed path, a `.json` file, a
+        // package outside the graph (`perry:cjs`'s `requireComputed`).
+        return __perry_cjs_require_computed(specifier, {module_dir_literal}, __perry_cjs_reloader);
     }}
     // No `defineProperty(require, 'name', ...)`: a `function require(...)`
     // declaration already carries exactly
@@ -1448,25 +1435,24 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
     // the require object OBJ_FLAG_HAS_DESCRIPTORS, which pushed every later
     // `require.resolve = ...` / `require.cache = ...` assignment onto the
     // descriptor-bearing store path (#10287) in every CommonJS module.
-    require.resolve = function resolve(specifier, options) {{
+    const __perry_cjs_resolve = function resolve(specifier, options) {{
         if (typeof specifier !== 'string') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_TYPE', 'The "request" argument must be of type string.');
 {require_resolve_cases}
-        if (__perry_cjs_require_is_builtin(specifier)) return specifier;
+        if (__perry_cjs_is_builtin(specifier)) return specifier;
         var __perry_nm_resolved = __perry_require_resolve_node_modules({module_dir_literal}, specifier);
         if (__perry_nm_resolved !== undefined) return __perry_nm_resolved;
         throw __perry_cjs_require_error('error', 'MODULE_NOT_FOUND', 'Cannot find module ' + specifier);
     }};
-    require.resolve.paths = function paths(specifier) {{
+    __perry_cjs_resolve.paths = function paths(specifier) {{
         if (typeof specifier !== 'string') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_TYPE', 'The "request" argument must be of type string.');
         return null;
     }};
-    // `cache` and `extensions` come straight from the createRequire instance:
-    // the placeholder object literals they used to be initialised with were
-    // overwritten on the very next line, so every CJS module allocated an
-    // object plus three closures and immediately dropped them. At OpenCode's
-    // ~2,200 CJS modules that is pure startup garbage.
-    require.cache = __perry_cjs_base_require.cache;
-    require.extensions = __perry_cjs_base_require.extensions;
+    require.resolve = __perry_cjs_resolve;
+    // `cache`, `extensions` and `main` are the program's (`perry:cjs`): Node's
+    // loader reads `Module._cache`, never this property, so reassigning
+    // `require.cache` does not redirect loading.
+    require.cache = __perry_cjs_c;
+    require.extensions = __perry_cjs_extensions;
     {require_main_stmt}"#
     );
     let cjs_preamble = format!(
@@ -1847,115 +1833,6 @@ fn inactive_platform_guarded_requires(
         }
     }
     inactive
-}
-
-fn is_depd_index_path(source_path: &Path) -> bool {
-    source_path
-        .file_name()
-        .map(|name| name == "index.js")
-        .unwrap_or(false)
-        && source_path
-            .components()
-            .any(|component| component.as_os_str().to_string_lossy() == "depd")
-}
-
-fn is_function_bind_implementation_path(source_path: &Path) -> bool {
-    source_path
-        .file_name()
-        .map(|name| name == "implementation.js")
-        .unwrap_or(false)
-        && source_path
-            .components()
-            .any(|component| component.as_os_str().to_string_lossy() == "function-bind")
-}
-
-fn is_safer_buffer_path(source_path: &Path) -> bool {
-    source_path
-        .file_name()
-        .map(|name| name == "safer.js")
-        .unwrap_or(false)
-        && source_path
-            .components()
-            .any(|component| component.as_os_str().to_string_lossy() == "safer-buffer")
-}
-
-fn is_safe_buffer_path(source_path: &Path) -> bool {
-    source_path
-        .file_name()
-        .map(|name| name == "index.js")
-        .unwrap_or(false)
-        && source_path
-            .components()
-            .any(|component| component.as_os_str().to_string_lossy() == "safe-buffer")
-}
-
-fn rewrite_depd_dynamic_wrapper(source: &str) -> Option<String> {
-    let needle = r#"  // eslint-disable-next-line no-new-func
-  var deprecatedfn = new Function('fn', 'log', 'deprecate', 'message', 'site',
-    '"use strict"\n' +
-    'return function (' + args + ') {' +
-    'log.call(deprecate, message, site)\n' +
-    'return fn.apply(this, arguments)\n' +
-    '}')(fn, log, this, message, site)"#;
-
-    let replacement = r#"  var deprecatedfn = (function (fn, log, deprecate, message, site) {
-    "use strict"
-    return function () {
-      log.call(deprecate, message, site)
-      return fn.apply(this, arguments)
-    }
-  })(fn, log, this, message, site)"#;
-
-    if source.contains(needle) {
-        Some(source.replace(needle, replacement))
-    } else {
-        None
-    }
-}
-
-fn rewrite_function_bind_dynamic_wrapper(source: &str) -> Option<String> {
-    let needle = r#"    bound = Function('binder', 'return function (' + joiny(boundArgs, ',') + '){ return binder.apply(this,arguments); }')(binder);"#;
-    let replacement = r#"    bound = function () {
-        return binder.apply(this, arguments);
-    };"#;
-
-    if source.contains(needle) {
-        Some(source.replace(needle, replacement))
-    } else {
-        None
-    }
-}
-
-fn rewrite_safer_buffer_private_binding(source: &str) -> Option<String> {
-    let needle = r#"if (!safer.kStringMaxLength) {
-  try {
-    safer.kStringMaxLength = process.binding('buffer').kStringMaxLength
-  } catch (e) {
-    // we can't determine kStringMaxLength in environments where process.binding
-    // is unsupported, so let's not set it
-  }
-}"#;
-
-    let replacement = r#"if (!safer.kStringMaxLength) {
-  safer.kStringMaxLength = 536870888
-}"#;
-
-    if source.contains(needle) {
-        Some(source.replace(needle, replacement))
-    } else {
-        None
-    }
-}
-
-fn rewrite_safe_buffer_slow_buffer_fallback(source: &str) -> Option<String> {
-    let needle = "return buffer.SlowBuffer(size)";
-    let replacement = "return Buffer.allocUnsafeSlow(size)";
-
-    if source.contains(needle) {
-        Some(source.replace(needle, replacement))
-    } else {
-        None
-    }
 }
 
 #[cfg(test)]

@@ -336,7 +336,7 @@ fn anon_shape_is_registered_before_its_shape_id_is_minted() {
     // that are defined, and called, in emission order, so textual order in
     // the IR is execution order.
     let ir = compile_ir(&literal_module(method(METHOD, false, false)));
-    let register = first_line_with(&ir, &["call void @js_register_anon_shape_class_id(i32 1)"])
+    let register = first_line_with(&ir, &["call void @js_register_class_declaration(i32 1,"])
         .unwrap_or_else(|| panic!("the literal's shape class is never registered:\n{ir}"));
     let mint = ["@js_object_shape_id_for_class_keys"]
         .iter()
@@ -345,7 +345,7 @@ fn anon_shape_is_registered_before_its_shape_id_is_minted() {
         .unwrap_or_else(|| panic!("the literal's ShapeId is never minted:\n{ir}"));
     assert!(
         register < mint,
-        "js_register_anon_shape_class_id must run before the class ShapeId is minted"
+        "the anonymous descriptor must register before the class ShapeId is minted"
     );
 }
 
@@ -406,7 +406,7 @@ fn cyclic_literal_bootstrap_precedes_dependencies_without_prewarming_user_classe
         })
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(literal_chunks.contains("call void @js_register_anon_shape_class_id"));
+    assert!(literal_chunks.contains("call void @js_register_class_declaration"));
     assert!(literal_chunks.contains("@perry_class_keys_literal_method_this_test____AnonShape_"));
     assert!(!literal_chunks.contains("@perry_class_keys_literal_method_this_test__Declared"));
     assert!(!literal_chunks.contains("call void @js_register_class_constructor"));
@@ -417,4 +417,34 @@ fn cyclic_literal_bootstrap_precedes_dependencies_without_prewarming_user_classe
     );
     assert!(body("literal_method_this_test__init_body")
         .contains("call void @__perry_init_strings_literal_method_this_test()"));
+}
+
+#[test]
+fn even_memberless_layoutless_classes_get_compiler_role_descriptors() {
+    let mut literal = anon_shape(0x32a0, SHAPE, 90, 60);
+    literal.fields.clear();
+    literal.constructor = None;
+    let mut declared = anon_shape(0x32a1, "EmptyDeclared", 91, 70);
+    declared.fields.clear();
+    declared.constructor = None;
+    let records = super::class_declarations::class_declaration_globals(
+        &[(literal.id, &literal), (declared.id, &declared)],
+        &crate::strings::StringPool::new(),
+        "empty_roles",
+        &mut |_| panic!("a memberless class must not request a function body"),
+        &crate::layout_families::ProgramLayouts::default(),
+    );
+    assert_eq!(
+        records.len(),
+        2,
+        "neither role may be omitted without members or layout"
+    );
+    assert!(
+        records[0].globals[1].contains("i32 8, i32 0, ptr null"),
+        "literal role is compiler-owned"
+    );
+    assert!(
+        records[1].globals[1].contains("i32 16, i32 0, ptr null"),
+        "empty declaration has a distinct role"
+    );
 }

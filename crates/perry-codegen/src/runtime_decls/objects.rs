@@ -392,6 +392,7 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function("js_nm_install_worker_threads", VOID, &[]);
     module.declare_function("js_nm_install_all", VOID, &[]);
     module.declare_function("js_nm_enable_install_all", VOID, &[]);
+    module.declare_function("js_dns_install_exports", VOID, &[]);
     // The named read's entries behind the probe (`object/field_get_set/
     // get_slow.rs`): the complete read of a heap receiver the probe declined
     // (payload, key handle); the complete read of any value (bits, key handle,
@@ -455,31 +456,21 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function("js_import_meta_resolve_value", DOUBLE, &[DOUBLE]);
     module.declare_function("js_globalthis_seed_async_local_storage", VOID, &[]);
     // Next.js wall 54: runtime `require(absolutePath.js)` -> AOT-compiled module.
-    module.declare_function("js_register_path_module_partial", VOID, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_register_path_module_partial", VOID, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_register_path_module", VOID, &[DOUBLE, DOUBLE]);
     // #6769: parent linking, emitted in the preamble ahead of the body.
     module.declare_function("js_link_path_module_parent", VOID, &[DOUBLE]);
-    module.declare_function("js_cjs_record_set_factory", VOID, &[DOUBLE, DOUBLE]);
-    module.declare_function(
-        "js_cjs_module_record",
-        DOUBLE,
-        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
-    );
     module.declare_function("js_run_module_init_catching", VOID, &[I64]);
     module.declare_function("js_run_module_init_guarded", VOID, &[I64, I64]);
     module.declare_function("js_require_path_module", DOUBLE, &[DOUBLE]);
     module.declare_function("js_has_path_module", DOUBLE, &[DOUBLE]);
     // #10360: `--platform bun` marker (see `__perry_runtime.setBunPlatform`).
     module.declare_function("js_set_bun_platform", VOID, &[]);
-    // #10735: shared CJS "main module" (`require.main`) — the entry module
-    // publishes, every other CJS module reads back. See
-    // `__perry_runtime.setCjsMainModule` / `.getCjsMainModule`.
-    module.declare_function("js_set_cjs_main_module", VOID, &[DOUBLE]);
-    module.declare_function("js_get_cjs_main_module", DOUBLE, &[]);
-    // #10735: allocates and publishes the placeholder `require.main` object
-    // BEFORE any module's `__init` runs (called directly from `main()`, not
-    // from generated module JS — see `codegen::entry::compile_module_entry`).
-    module.declare_function("js_bootstrap_cjs_main_module_placeholder", VOID, &[]);
+    // The CommonJS support module hands the runtime its cache and main
+    // record and receives `require.extensions` (`__perry_runtime.cjsInstall`).
+    module.declare_function("js_cjs_install", DOUBLE, &[DOUBLE, DOUBLE]);
+    // A declared-keys record's birth when no family layout exists.
+    module.declare_function("js_object_alloc_null_proto_ordinary", I64, &[I32]);
     // Next.js wall 54 (part 2): register a Deferred module's `__init` address by
     // path so a runtime `require(absolutePath)` can trigger its lazy init.
     module.declare_function("js_register_path_init", VOID, &[PTR, I64, I64]);

@@ -42,6 +42,12 @@ pub struct DateCell {
     /// from `GcRewriteDescriptorKind::Leaf` (a no-op arm) to `MetaOnly` and its
     /// `pointer_free` flag to `false` — a cell with a pointer must be scanned.
     pub meta: *mut crate::object::ObjectMeta,
+    /// ILP32: the four bytes between the pointer and the eight-byte-aligned
+    /// timestamp. They are the word at payload `+4` that every property read
+    /// loads as a ShapeId, so `alloc_date_cell` must zero them (64-bit targets
+    /// have the pointer's high half there, which is zero already).
+    #[cfg(target_pointer_width = "32")]
+    pub(crate) _meta_padding: u32,
     /// Milliseconds since the epoch, or NaN for an *Invalid Date*. A raw IEEE
     /// double, so a setter's store needs no write barrier.
     pub ts: f64,
@@ -75,6 +81,13 @@ pub fn alloc_date_cell(ts: f64) -> f64 {
         // emitted read path loads as a ShapeId, so it is written FIRST: the
         // cell must never be observable carrying a dead tenant's shape.
         (*ptr).meta = std::ptr::null_mut();
+        #[cfg(target_pointer_width = "32")]
+        {
+            // The arena does not zero reused memory, and a pointer-width store
+            // above leaves this word as the previous tenant's (a dead object's
+            // ShapeId makes the Date read as an ordinary object).
+            (*ptr)._meta_padding = 0;
+        }
         (*ptr).ts = ts;
         f64::from_bits(crate::value::JSValue::pointer(ptr as *const u8).bits())
     }

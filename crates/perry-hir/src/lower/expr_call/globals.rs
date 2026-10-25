@@ -305,33 +305,14 @@ pub(super) fn try_global_builtins(
                     args: vec![from, specifier],
                 }));
             }
-            // Wall 54: publish the initial CJS exports object before the body
-            // so a recursive path require can observe partial exports.
+            // Wall 54: publish a CommonJS module's record before the body so a
+            // recursive path require can observe partial exports. The third
+            // argument is the module's factory: the runtime's path entry keeps
+            // it (never a property) for a reload after `delete require.cache[...]`.
             "__perry_register_path_module_partial" => {
-                let path = if !args.is_empty() {
-                    args.remove(0)
-                } else {
-                    Expr::Undefined
-                };
-                let exports = if !args.is_empty() {
-                    args.remove(0)
-                } else {
-                    Expr::Undefined
-                };
-                return Ok(Ok(Expr::NativeMethodCall {
-                    module: "__perry_runtime".to_string(),
-                    class_name: None,
-                    object: None,
-                    method: "registerPathModulePartial".to_string(),
-                    args: vec![path, exports],
-                }));
-            }
-            // A CommonJS module record, born with its final layout: exports,
-            // filename, dir, children, parent, paths, factory (private slot).
-            "__perry_cjs_module_record" => {
-                let mut record_args = Vec::with_capacity(7);
-                for _ in 0..7 {
-                    record_args.push(if !args.is_empty() {
+                let mut call_args = Vec::with_capacity(3);
+                for _ in 0..3 {
+                    call_args.push(if !args.is_empty() {
                         args.remove(0)
                     } else {
                         Expr::Undefined
@@ -341,30 +322,54 @@ pub(super) fn try_global_builtins(
                     module: "__perry_runtime".to_string(),
                     class_name: None,
                     object: None,
-                    method: "newCjsModuleRecord".to_string(),
-                    args: record_args,
+                    method: "registerPathModulePartial".to_string(),
+                    args: call_args,
                 }));
             }
-            // Hand a CommonJS record's factory to the runtime, which keeps it
-            // in the record's internal slot (never a property) for a reload
-            // after `delete require.cache[...]`.
-            "__perry_set_cjs_factory" => {
-                let record = if !args.is_empty() {
-                    args.remove(0)
-                } else {
-                    Expr::Undefined
-                };
-                let factory = if !args.is_empty() {
-                    args.remove(0)
-                } else {
-                    Expr::Undefined
-                };
+            // An object whose keys are exactly the given string literals, each
+            // absent until stored (`Class::is_declared_keys_record`), with a
+            // null prototype (`require.cache`) or `%Object.prototype%` (a
+            // CommonJS module's `exports`).
+            "__perry_declared_keys" | "__perry_declared_keys_object" => {
+                let mut keys = Vec::with_capacity(args.len());
+                for arg in &args {
+                    match arg {
+                        Expr::String(k) => keys.push(k.clone()),
+                        _ => {
+                            return Err(anyhow!(
+                                "__perry_declared_keys takes string literal keys only"
+                            ))
+                        }
+                    }
+                }
+                let class_name = ctx
+                    .synthesize_declared_keys_class(&keys, func_name == "__perry_declared_keys");
+                return Ok(Ok(Expr::New {
+                    class_name,
+                    args: Vec::new(),
+                    type_args: Vec::new(),
+                    byte_offset: 0,
+                    cap_args_appended: 0,
+                }));
+            }
+            // The CommonJS support module hands the runtime its cache and
+            // main record (`Module._cache`, `process.mainModule`,
+            // `createRequire().cache`) and receives `require.extensions`.
+            "__perry_cjs_install" => {
+                let mut call_args = Vec::with_capacity(2);
+                for _ in 0..2 {
+                    call_args.push(if !args.is_empty() {
+                        args.remove(0)
+                    } else {
+                        Expr::Undefined
+                    });
+                }
                 return Ok(Ok(Expr::NativeMethodCall {
                     module: "__perry_runtime".to_string(),
                     class_name: None,
                     object: None,
-                    method: "setCjsFactory".to_string(),
-                    args: vec![record, factory],
+                    method: "cjsInstall".to_string(),
+                    args: call_args,
                 }));
             }
             // #6769: link `module.parent` before the wrapper body runs.
@@ -433,38 +438,6 @@ pub(super) fn try_global_builtins(
                     object: None,
                     method: "hasPathModule".to_string(),
                     args: vec![path],
-                }));
-            }
-            // #10735: `require.main` must be the process ENTRY module only —
-            // equal to `module` there, unequal (or `undefined`, when the
-            // process entry is ESM) everywhere else. The CJS preamble
-            // (`cjs_wrap/wrap.rs`) emits exactly one of these two calls per
-            // module depending on whether IT is the compile-time entry:
-            // the entry publishes its own `module` record as the shared
-            // "main module"; every other CJS module reads it back instead of
-            // assigning its OWN `module` (which is the bug — it made
-            // `require.main === module` trivially true everywhere).
-            "__perry_set_cjs_main_module" => {
-                let module = if !args.is_empty() {
-                    args.remove(0)
-                } else {
-                    Expr::Undefined
-                };
-                return Ok(Ok(Expr::NativeMethodCall {
-                    module: "__perry_runtime".to_string(),
-                    class_name: None,
-                    object: None,
-                    method: "setCjsMainModule".to_string(),
-                    args: vec![module],
-                }));
-            }
-            "__perry_get_cjs_main_module" => {
-                return Ok(Ok(Expr::NativeMethodCall {
-                    module: "__perry_runtime".to_string(),
-                    class_name: None,
-                    object: None,
-                    method: "getCjsMainModule".to_string(),
-                    args: vec![],
                 }));
             }
             "Symbol" => {

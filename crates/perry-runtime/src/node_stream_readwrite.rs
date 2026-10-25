@@ -237,7 +237,12 @@ pub(crate) fn is_classic_stream_instance_value(value: f64) -> bool {
 
 pub(crate) fn is_classic_stream_instance_of(value: f64, constructor_name: &str) -> bool {
     if constructor_name == "Stream" {
-        return is_classic_stream_instance_value(value);
+        // The flags cover instances built by the stream constructors; a host
+        // stream (`fs.createReadStream`) carries none, so it answers through
+        // its prototype chain, as in node.
+        return is_classic_stream_instance_value(value)
+            || (object_ptr_from_value(value).is_some()
+                && super::proto_methods::chain_reaches_stream_prototype(value, "Stream"));
     }
     if object_ptr_from_value(value).is_none() {
         return false;

@@ -149,11 +149,48 @@ impl<'a> Gen<'a> {
         // An export a module never declares, asked for by an importer, reads
         // through `export *` chains: route every export node through the
         // namespace's computed-key node (the `export *` targets feed it).
+        // A name the module declares itself is not read through them: an
+        // own export shadows every `export *` (ECMAScript ResolveExport,
+        // §18.14).
+        let mut own: crate::pts::FxHashSet<(u32, Atom)> = Default::default();
+        for mi in 0..modules.len() {
+            let mut names: Vec<&str> = Vec::new();
+            for e in self.exports_of(mi) {
+                match e {
+                    Export::Named { exported, .. } | Export::ReExport { exported, .. } => {
+                        names.push(exported)
+                    }
+                    Export::NamespaceReExport { name, .. } => names.push(name),
+                    Export::ExportAll { .. } => {}
+                }
+            }
+            names.extend(
+                self.exported_functions_of(mi)
+                    .iter()
+                    .map(|(n, _)| n.as_str()),
+            );
+            for f in self.functions_of(mi) {
+                if f.is_exported {
+                    names.push(&f.name);
+                }
+            }
+            for c in self.classes_of(mi) {
+                if c.is_exported {
+                    names.push(&c.name);
+                }
+            }
+            names.extend(self.exported_objects_of(mi).iter().map(|n| n.as_str()));
+            for n in names {
+                let a = self.m.atom(n);
+                own.insert((mi as u32, a));
+            }
+        }
         let keys: Vec<(u32, Atom)> = self.exports.keys().copied().collect();
         for (mi, a) in keys {
             if self
                 .view
                 .is_some_and(|v| v.unit_exports.contains(&self.m.atoms[a as usize]))
+                || own.contains(&(mi, a))
             {
                 continue;
             }
@@ -311,13 +348,10 @@ impl<'a> Gen<'a> {
             }
             self.m.sink_node(n, r);
         }
-        // DECISIONS 92: per unit the main record is no value of another
-        // unit; its fields are cells (`program_cells`).
-        let mut shared: Vec<NodeId> = if cells {
-            vec![]
-        } else {
-            self.cjs_main.into_iter().collect()
-        };
+        // The registry union and the unknown-path registry are cells
+        // (DECISIONS 171); `require.cache` and the main record are the
+        // program's, shared with every unit.
+        let mut shared: Vec<NodeId> = vec![self.m.cjs_cache, self.m.cjs_main];
         for (key, n) in [
             ("cjs:*", self.cjs_registry),
             ("cjs:?", self.cjs_unknown_path),
@@ -364,7 +398,6 @@ impl<'a> Gen<'a> {
                 self.cells.push((key, n));
             }
             self.m.global_cells = true;
-            self.program_cells();
         } else {
             self.m.escape(gt, r);
         }
@@ -552,10 +585,27 @@ impl<'a> Gen<'a> {
     /// publishing it changed anything (its fields leave, classes go out).
     fn publish_result(&mut self, f: FnIdx, n: NodeId, r: u32) -> Option<bool> {
         let mut changed = false;
+        // A marker of no family of this run (the result's own marker,
+        // standing for what crossed into it, MRK) is another call's value: a
+        // parameter of `f` it stands for was this run's argument in some
+        // other call, not this one's. It says no more than ⊤ only when
+        // everything it stands for reads as ⊤.
+        let frame = self.m.nodes[n as usize].frame;
+        let held = self.m.nodes[n as usize].pts.to_sorted();
+        let foreign = held.iter().any(|&t| {
+            self.m.is_arg_marker(t)
+                && (self.m.fam_home(t) == 0 || self.m.fam_home(t) != frame)
+                && !self
+                    .m
+                    .marker_members(t)
+                    .iter()
+                    .all(|&x| self.m.marker_is_top(x))
+        });
+        if foreign {
+            return None;
+        }
         // An argument marker reads as the markers it stands for (DECISIONS 44).
-        let toks: Vec<Tok> = self.m.nodes[n as usize]
-            .pts
-            .to_sorted()
+        let toks: Vec<Tok> = held
             .into_iter()
             .flat_map(|t| self.m.marker_members(t))
             .collect();
@@ -588,7 +638,6 @@ impl<'a> Gen<'a> {
                 self.m.toks[t as usize],
                 TokKind::Top | TokKind::BuiltinFn | TokKind::Builtin(_)
             ) || self.m.param_marker.contains_key(&t)
-                || self.program_tok(t)
             {
                 continue;
             }
@@ -666,7 +715,7 @@ impl<'a> Gen<'a> {
             TokKind::Func(f, _) if self.stand_in_fc.contains_key(&t) => {
                 self.m.funcs[f as usize].forwarded
             }
-            TokKind::Obj(..) if self.program_tok(t) || self.arr_ok(t) => true,
+            TokKind::Obj(..) if self.arr_ok(t) => true,
             // An instance of a contract class: given out (`give_out`),
             // or of a class to give (DECISIONS 116).
             TokKind::Obj(tm, _) if self.contract_class(tm) || self.class_to_give(tm) => true,
@@ -818,6 +867,24 @@ impl<'a> Gen<'a> {
                 self.effect_bad.insert(n);
             }
         }
+        // What this unit writes into other units' bindings (`local_write`):
+        // a value contract as a published binding's, its values leave the
+        // same way.
+        let mut writes: Vec<(u32, NodeId)> = self
+            .binding_writes
+            .iter()
+            .map(|(&id, &n)| (id, n))
+            .filter(|(id, _)| !self.write_top.contains(id))
+            .collect();
+        writes.sort_unstable();
+        for (id, n) in writes {
+            let (ok, ch) = self.check_value(n, r);
+            changed |= ch;
+            if !ok {
+                self.write_top.insert(id);
+                changed = true;
+            }
+        }
         changed |= self.nested_fields(r);
         // A literal of this unit passed to another unit's closed function
         // (decision 13) is described by the argument contract as a value
@@ -834,57 +901,6 @@ impl<'a> Gen<'a> {
     /// Design §17.16 (b): cell `key` as this unit reads it: node `n` also
     /// holds what the other units write (their contracts' stand-ins), and
     /// an unknown value when a unit solve went over the bound.
-    /// DECISIONS 92: a program object (`Model::program_objs`) is one
-    /// runtime object for the whole program, so every unit names it alike
-    /// (`value_tok_ok`), as the global object. Each key this unit or a
-    /// writing unit names of it is cell `<name>:<key>`, what it holds under
-    /// a computed key `<name>:*` (its any-key field, which flows into every
-    /// named one). A field named after the boundary, or an object made
-    /// after it, holds ⊤ (`Model::field`).
-    fn program_cells(&mut self) {
-        let Some(u) = self.unit_in else {
-            self.m.program_cells = true;
-            return;
-        };
-        let atoms: Vec<String> = self
-            .m
-            .atoms
-            .iter()
-            .filter(|k| k.as_str() != crate::STAR_KEY)
-            .cloned()
-            .collect();
-        // Seeding a cell may bring another program object (a seeded value
-        // holding it): it gets its cells too.
-        let mut i = 0;
-        while i < self.m.program_objs.len() {
-            let (name, t) = self.m.program_objs[i];
-            i += 1;
-            let pre = format!("{name}:");
-            let mut keys = atoms.clone();
-            keys.extend(
-                u.cells
-                    .keys()
-                    .filter_map(|k| k.strip_prefix(pre.as_str()))
-                    .filter(|k| *k != "*")
-                    .map(str::to_string),
-            );
-            keys.sort_unstable();
-            keys.dedup();
-            for k in keys {
-                let a = self.m.atom(&k);
-                let n = self.m.field(t, a);
-                let key = format!("{name}:{k}");
-                self.seed_cell(&key, n);
-                self.cells.push((key, n));
-            }
-            let any = self.m.field_any(t);
-            let key = format!("{name}:*");
-            self.seed_cell(&key, any);
-            self.cells.push((key, any));
-        }
-        self.m.program_cells = true;
-    }
-
     /// DECISIONS 171: a unit reads a cell where its solve consumes the
     /// cell's node (a successor edge or a constraint on it). One nothing
     /// consumes yet is neither seeded nor read: the other units' writes
@@ -1049,8 +1065,6 @@ impl<'a> Gen<'a> {
                         changed |= self.fields_leave(t, r);
                     } else if self.arr_ok(t) {
                         changed |= self.arr_leaves(t);
-                    } else if self.program_tok(t) {
-                        // Its fields are cells already (DECISIONS 92).
                     } else if !self.stand_in_cc.contains_key(&tm) {
                         if !self.ret_ok.contains(&t) {
                             changed |= self.note_field_fns(t);
@@ -1184,8 +1198,9 @@ impl<'a> Gen<'a> {
     }
 
     /// What other units stored into existing fields of this unit's literal
-    /// layouts and class instances (decision 17): a value of the kinds they
-    /// stored (DECISIONS 73), or an unknown one, stored into that field of
+    /// layouts and class instances (decision 17): a value of what the stored
+    /// values' contracts describe (the kinds, DECISIONS 73; the stand-ins of
+    /// the layouts, classes and functions; ⊤), stored into that field of
     /// every instance of the layout by an anonymous writer. True when this
     /// added constraints.
     fn apply_store_effects(&mut self) -> bool {
@@ -1239,7 +1254,7 @@ impl<'a> Gen<'a> {
         if let Some(&n) = self.effect_srcs.get(&(tm, a)) {
             return n;
         }
-        let n = self.stand_in_value(0, "stored by another unit", c);
+        let n = self.at_module_scope(|g| g.stand_in_value(0, "stored by another unit", c));
         self.effect_srcs.insert((tm, a), n);
         n
     }
@@ -1292,11 +1307,6 @@ impl<'a> Gen<'a> {
         }
         let me = self.view.map_or("", |v| v.key.as_str());
         format!("{me}:{d}")
-    }
-
-    /// A program object (DECISIONS 92) in cell mode.
-    fn program_tok(&self, t: Tok) -> bool {
-        self.m.program_cells && self.m.program_objs.iter().any(|&(_, o)| o == t)
     }
 
     /// DECISIONS 94: an array a value contract describes, this unit's or
@@ -1367,8 +1377,6 @@ impl<'a> Gen<'a> {
             _ if self.cell_flow_toks.contains(&t) && self.m.own_param_members(t).is_some() => true,
             // A global builtin is the same object in every unit (§17.16 (a)).
             TokKind::Top | TokKind::BuiltinFn | TokKind::Builtin(_) => true,
-            // A program object, the same in every unit (DECISIONS 92).
-            TokKind::Obj(..) if self.program_tok(t) => true,
             TokKind::Obj(tm, _) | TokKind::ClassObj(tm) if self.stand_in_cc.contains_key(&tm) => {
                 !self
                     .unit_in
@@ -1423,7 +1431,6 @@ impl<'a> Gen<'a> {
     fn forwarded_tok(&self, t: Tok) -> bool {
         match self.m.toks[t as usize] {
             TokKind::Top | TokKind::BuiltinFn | TokKind::Builtin(_) => true,
-            TokKind::Obj(..) if self.program_tok(t) => true,
             TokKind::Obj(tm, _) | TokKind::ClassObj(tm) => {
                 self.stand_in_cc.contains_key(&tm)
                     && !self

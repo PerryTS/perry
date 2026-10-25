@@ -882,7 +882,14 @@ pub(crate) fn lower_record_index(
     let i = ctx.block().fptoui(DOUBLE, index, I32);
     let length_ptr = ctx.block().inttoptr(I64, &handle);
     let length = ctx.block().load(I32, &length_ptr);
-    let in_bounds = ctx.block().icmp_ult(I32, &i, &length);
+    let logical = ctx.block().icmp_ult(I32, &i, &length);
+    // A pre-sized `new Array(n)` above the dense limit has a logical length
+    // over its backing store: a slot at or past capacity is a hole, which the
+    // cold dispatcher answers, not a raw load.
+    let capacity_ptr = ctx.block().gep(I8, &length_ptr, &[(I64, "4")]);
+    let capacity = ctx.block().load(I32, &capacity_ptr);
+    let backed = ctx.block().icmp_ult(I32, &i, &capacity);
+    let in_bounds = ctx.block().and(I1, &logical, &backed);
     ctx.block().cond_br(&in_bounds, &ll, &cl);
     ctx.current_block = load;
     let value = lower_trusted_plain_array_index_get(ctx, &handle, &i);
@@ -919,12 +926,14 @@ pub(crate) fn lower_record_next(
 ) -> Result<(String, String)> {
     let guard = ctx.new_block("record.next.guard");
     let bounds = ctx.new_block("record.next.bounds");
+    let unloadable = ctx.new_block("record.next.unloadable");
     let load = ctx.new_block("record.next.load");
     let exhausted = ctx.new_block("record.next.exhausted");
     let cold = ctx.new_block("record.next.cold");
     let merge = ctx.new_block("record.next.merge");
     let gl = ctx.block_label(guard);
     let bl = ctx.block_label(bounds);
+    let ul = ctx.block_label(unloadable);
     let ll = ctx.block_label(load);
     let el = ctx.block_label(exhausted);
     let cl = ctx.block_label(cold);
@@ -951,7 +960,16 @@ pub(crate) fn lower_record_next(
     let ptr = ctx.block().inttoptr(I64, &handle);
     let len = ctx.block().load(I32, &ptr);
     let ready = ctx.block().icmp_ult(I32, &i, &len);
-    ctx.block().cond_br(&ready, &ll, &el);
+    // Below the logical length but at or past the backing store (a pre-sized
+    // `new Array(n)` above the dense limit): not exhausted, and not loadable
+    // raw. The cold dispatcher steps it as a hole.
+    let capacity_ptr = ctx.block().gep(I8, &ptr, &[(I64, "4")]);
+    let capacity = ctx.block().load(I32, &capacity_ptr);
+    let backed = ctx.block().icmp_ult(I32, &i, &capacity);
+    let loadable = ctx.block().and(I1, &ready, &backed);
+    ctx.block().cond_br(&loadable, &ll, &ul);
+    ctx.current_block = unloadable;
+    ctx.block().cond_br(&ready, &cl, &el);
     ctx.current_block = load;
     let fast_value = lower_trusted_plain_array_index_get(ctx, &handle, &i);
     let fp = ctx.block().label.clone();

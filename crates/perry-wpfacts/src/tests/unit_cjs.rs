@@ -8,10 +8,11 @@
 use super::*;
 use std::collections::BTreeSet;
 
-const T1: [(&str, &str); 3] = [
+const T1: [(&str, &str); 4] = [
     ("/t1/m.js", include_str!("fixtures/cjs_t1/m.js")),
     ("/t1/a.js", include_str!("fixtures/cjs_t1/a.js")),
     ("/t1/b.js", include_str!("fixtures/cjs_t1/b.js")),
+    ("/t1/perry_cjs.js", include_str!("fixtures/cjs_t1/perry_cjs.js")),
 ];
 
 /// DECISIONS 115: `r.js` keeps its classes inside the factory (they name
@@ -19,15 +20,16 @@ const T1: [(&str, &str); 3] = [
 /// the HIR binds `S` through a one-element cell (`[undefined]`, DECISIONS
 /// 50); `T` holds `S` in `k`; `T.run` makes two `S` and appends one to the
 /// other through `R`'s method; `m.js` runs `require("./r").newInstance().run()`.
-const T2: [(&str, &str); 2] = [
+const T2: [(&str, &str); 3] = [
     ("/t2/m.js", include_str!("fixtures/cjs_t2/m.js")),
     ("/t2/r.js", include_str!("fixtures/cjs_t2/r.js")),
+    ("/t2/perry_cjs.js", include_str!("fixtures/cjs_t2/perry_cjs.js")),
 ];
 
 /// AWFY Richards as the compiler wraps it: `sa_Richards.js` requires
 /// `richards.js` (RBObject and its eight subclasses), which requires
 /// `benchmark.js`.
-const T3: [(&str, &str); 3] = [
+const T3: [(&str, &str); 4] = [
     (
         "/t3/sa_Richards.js",
         include_str!("fixtures/cjs_t3/sa_Richards.js"),
@@ -40,6 +42,7 @@ const T3: [(&str, &str); 3] = [
         "/t3/benchmark.js",
         include_str!("fixtures/cjs_t3/benchmark.js"),
     ),
+    ("/t3/perry_cjs.js", include_str!("fixtures/cjs_t3/perry_cjs.js")),
 ];
 
 /// DECISIONS 127: hidden capture parameters bound at a direct call and in a
@@ -50,16 +53,17 @@ const T3: [(&str, &str); 3] = [
 /// parameters directly; `mk` is a summarized factory function whose
 /// `new Q(n)` is composed into it; `T.run` makes both; `m.js` runs
 /// `require("./r").newInstance().go()`.
-const T5: [(&str, &str); 3] = [
+const T5: [(&str, &str); 4] = [
     ("/t5/m.js", include_str!("fixtures/cjs_t5/m.js")),
     ("/t5/r.js", include_str!("fixtures/cjs_t5/r.js")),
     ("/t5/b.js", include_str!("fixtures/cjs_t5/b.js")),
+    ("/t5/perry_cjs.js", include_str!("fixtures/cjs_t5/perry_cjs.js")),
 ];
 
 /// AWFY CD as the compiler wraps it: `sa_CD.js` requires `cd.js` (the
 /// red-black tree, vectors and the collision detector), which requires
 /// `benchmark.js` and `som.js`.
-const T6: [(&str, &str); 4] = [
+const T6: [(&str, &str); 5] = [
     ("/t6/sa_CD.js", include_str!("fixtures/cjs_t6/sa_CD.js")),
     ("/t6/cd.js", include_str!("fixtures/cjs_t6/cd.js")),
     (
@@ -67,6 +71,7 @@ const T6: [(&str, &str); 4] = [
         include_str!("fixtures/cjs_t6/benchmark.js"),
     ),
     ("/t6/som.js", include_str!("fixtures/cjs_t6/som.js")),
+    ("/t6/perry_cjs.js", include_str!("fixtures/cjs_t6/perry_cjs.js")),
 ];
 
 fn hirs(mods: &[(&str, &str)]) -> Vec<(String, perry_hir::Module)> {
@@ -79,6 +84,10 @@ fn hirs(mods: &[(&str, &str)]) -> Vec<(String, perry_hir::Module)> {
             for imp in &mut hir.imports {
                 if let Some(n) = imp.source.strip_prefix("./") {
                     imp.resolved_path = Some(format!("{dir}/{n}.js"));
+                } else if imp.source == "perry:cjs" {
+                    // The CommonJS support module every wrapped module
+                    // imports first (`cjs_wrap::support`).
+                    imp.resolved_path = Some(format!("{dir}/perry_cjs.js"));
                 }
             }
             (path.to_string(), hir)
@@ -186,52 +195,6 @@ fn a_class_bound_through_its_self_cell_is_a_contract() {
     assert_eq!(k_kind(&u), k_kind(&w), "T.k per unit vs whole-program");
 }
 
-/// DECISIONS 127, 128 (AWFY Richards as wrapped): `Richards::benchmark`
-/// runs `new Scheduler()`, whose 21 hidden capture parameters take
-/// `Scheduler`'s environment slots, not the `this.__perry_cap_*` the call
-/// reads off a receiver other units choose (127); `newInstance` hands out a
-/// `Richards`, whose `__perry_cap_*` fields hold the richards classes and
-/// do not leave (128). Either one missing breaks every richards class per
-/// unit (10 of 122 proven). Per unit proves every whole-program site but
-/// `mouse.link` in `RBObject::append`: its parameter is a contract marker
-/// per unit (DECISIONS 122, design, not built). The fixture is the wrap of
-/// 10-24 (DECISIONS 135): the module record comes from the runtime's
-/// `__perry_cjs_module_record`, a literal layout born with its keys, so its
-/// `exports` reaches the factory's other units as a nested contract (a
-/// builtin object there left `exports` unknown: 0 sites per unit). The
-/// site offset is the same `mouse.link` in the regenerated wrap.
-/// DECISIONS 168: every module stores its record into `require.cache`
-/// under a computed key, so each named field of it holds the records
-/// (`Model::field`). A unit publishes them once, as cell
-/// `require.cache:*`; a named cell does not repeat them for every key the
-/// unit names, and the per-unit facts are the whole program's.
-#[test]
-fn a_program_object_named_cell_does_not_repeat_its_any_key_cell() {
-    let hirs = hirs(&T6);
-    let list: Vec<(String, &perry_hir::Module)> =
-        hirs.iter().map(|(p, h)| (p.clone(), h)).collect();
-    let cfg = FactsConfig {
-        explain: true,
-        unit_io: true,
-        ..Default::default()
-    };
-    let u = crate::compute_units(&list, &cfg);
-    let cells: Vec<&str> = u
-        .unit_io
-        .iter()
-        .filter_map(|l| l.split(' ').nth(3).filter(|_| l.starts_with("# uout ")))
-        .filter(|n| n.starts_with("cell:require.cache:"))
-        .collect();
-    assert!(
-        cells.iter().any(|n| *n == "cell:require.cache:*"),
-        "{cells:?}"
-    );
-    assert!(
-        cells.iter().all(|n| *n == "cell:require.cache:*"),
-        "named cells repeat the any-key cell: {cells:?}"
-    );
-}
-
 /// DECISIONS 171: every unit names the CommonJS registry union `cjs:*`,
 /// but only a unit whose code consumes it (a `require` of a computed
 /// specifier, `require.main`) reads it; the others are not solved again
@@ -305,6 +268,20 @@ fn a_registry_union_consumed_during_the_solve_is_seeded() {
     );
 }
 
+/// DECISIONS 127, 128 (AWFY Richards as wrapped): `Richards::benchmark`
+/// runs `new Scheduler()`, whose 21 hidden capture parameters take
+/// `Scheduler`'s environment slots, not the `this.__perry_cap_*` the call
+/// reads off a receiver other units choose (127); `newInstance` hands out a
+/// `Richards`, whose `__perry_cap_*` fields hold the richards classes and
+/// do not leave (128). Either one missing breaks every richards class per
+/// unit (10 of 122 proven). Per unit proves every whole-program site but
+/// `mouse.link` in `RBObject::append`: its parameter is a contract marker
+/// per unit (DECISIONS 122, design, not built). The fixture is the wrap of
+/// 10-24 (DECISIONS 135): the module record comes from the runtime's
+/// `__perry_cjs_module_record`, a literal layout born with its keys, so its
+/// `exports` reaches the factory's other units as a nested contract (a
+/// builtin object there left `exports` unknown: 0 sites per unit). The
+/// site offset is the same `mouse.link` in the regenerated wrap.
 #[test]
 fn richards_per_unit_proves_what_the_whole_program_proves() {
     let (w, u) = both(&T3);

@@ -112,7 +112,7 @@ fn throw_report_invalid_arg_type(name: &str, expected: &str, value: f64) -> ! {
 }
 
 fn process_report_default_filename() -> String {
-    format!("report.{}.json", std::process::id())
+    format!("report.{}.json", crate::os::current_process_id())
 }
 
 thread_local! {
@@ -243,7 +243,10 @@ fn process_report_header_object(trigger: &str, filename: Option<&str>) -> f64 {
         JSValue::from_bits((module_string_value(&format!("{:.0}", now_ms / 1000.0))).to_bits()),
     );
     obj.set(5, JSValue::from_bits((now_ms).to_bits()));
-    obj.set(6, JSValue::from_bits((std::process::id() as f64).to_bits()));
+    obj.set(
+        6,
+        JSValue::from_bits((crate::os::current_process_id() as f64).to_bits()),
+    );
     obj.set(7, JSValue::from_bits((0.0f64).to_bits()));
     obj.set(
         8,
@@ -459,7 +462,7 @@ pub(crate) fn process_report_json_string(trigger: &str, filename: Option<&str>) 
             "filename": filename.unwrap_or(""),
             "dumpEventTime": format!("{:.0}", now_ms / 1000.0),
             "dumpEventTimeStamp": now_ms,
-            "processId": std::process::id(),
+            "processId": crate::os::current_process_id(),
             "threadId": 0,
             "cwd": std::env::current_dir().map_or_else(
                 |_| String::new(),

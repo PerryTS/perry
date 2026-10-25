@@ -1,26 +1,31 @@
 use super::*;
 
 #[test]
-fn declaration_collision_is_projected_when_the_shape_is_minted() {
+fn distinct_descriptor_roles_are_projected_when_shapes_are_minted() {
     let _lock = crate::gc::global_side_table_test_lock();
     let _no_move = crate::gc::GcSuppressScope::new();
     let id = 0x4321_0011;
-    unsafe { crate::object::js_register_anon_shape_class_id(id) };
+    unsafe { crate::object::declarations::test_declare_anonymous(id) };
     let before = crate::object::js_object_alloc(id, 0);
     assert_eq!(
         unsafe { crate::object::shapes::object_shape_identity(before) },
         crate::object::shapes::PROTO_ID_DEFAULT
     );
-    unsafe { crate::object::js_register_class_name(id, b"ShapeCollision".as_ptr(), 14) };
+    assert!(
+        crate::object::declarations::register_declared_identity(id).is_err(),
+        "the literal id cannot be reused by a declaration"
+    );
+    let declared = id + 1;
+    unsafe { crate::object::js_register_class_name(declared, b"Declared".as_ptr(), 8) };
     crate::object::class_registry::declarations::test_declare_member_quiet(
-        id,
+        declared,
         b"recur",
         crate::object::class_registry::declarations::test_method_member(0x1000, 1, false, false, 0),
     );
-    let after = crate::object::js_object_alloc(id, 0);
+    let after = crate::object::js_object_alloc(declared, 0);
     assert_eq!(
         unsafe { crate::object::shapes::object_shape_identity(after) },
-        crate::object::shapes::PROTO_ID_CLASS | u64::from(id)
+        crate::object::shapes::PROTO_ID_CLASS | u64::from(declared)
     );
     assert_eq!(
         unsafe { shape_link_prototype(after, false) },

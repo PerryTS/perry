@@ -357,10 +357,9 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
         has_receiver: false,
         method: "gunzipSync",
         class_filter: None,
-        runtime: "js_zlib_gunzip_sync",
-        // #2935: data as raw NaN-box bits so the codec unboxes the buffer
-        // pointer itself (a Buffer/string both decompress correctly).
-        args: &[NA_JSV],
+        runtime: "js_zlib_gunzip_sync_options",
+        // Preserve completion options on direct calls as well as captured exports.
+        args: &[NA_JSV, NA_F64],
         ret: NR_F64,
     },
     NativeModSig {
@@ -462,8 +461,8 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
         has_receiver: false,
         method: "inflateRawSync",
         class_filter: None,
-        runtime: "js_zlib_inflate_raw_sync",
-        args: &[NA_F64],
+        runtime: "js_zlib_inflate_raw_sync_options",
+        args: &[NA_F64, NA_F64],
         ret: NR_F64,
     },
     NativeModSig {

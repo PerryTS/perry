@@ -140,20 +140,18 @@ pub(crate) use prototype_objects::{test_alloc_synthetic_class_id, SYNTHETIC_CLAS
 #[cfg(test)]
 pub(crate) use class_meta::test_text_encoding_stream_new_with_constructor;
 pub(crate) use class_meta::text_decoder_bool_option;
+pub use class_meta::{
+    class_length_for_id, class_name_for_id, class_ref_inspect_label, class_ref_to_string,
+    class_source_for_id, js_compression_stream_new, js_decompression_stream_new,
+    js_register_class_id, js_register_class_length, js_register_class_name,
+    js_register_class_source, js_register_class_source_static, js_text_decoder_stream_new,
+    js_text_encoder_stream_new, js_text_encoding_stream_new, CLASS_LENGTHS, CLASS_NAMES,
+};
 pub(crate) use class_meta::{
-    anonymous_class_role, identify_global_builtin_constructor, report_dispatch_miss,
+    identify_global_builtin_constructor, report_dispatch_miss,
     text_encoding_stream_new_with_constructor, validate_web_compression_stream_format,
     CLASS_ID_COMPRESSION_STREAM, CLASS_ID_DECOMPRESSION_STREAM, CLASS_ID_TEXT_DECODER_STREAM,
     CLASS_ID_TEXT_ENCODER_STREAM,
-};
-pub use class_meta::{
-    class_length_for_id, class_name_for_id, class_ref_inspect_label, class_ref_to_string,
-    class_source_for_id, declared_class_outranks_anon_shape, is_anon_shape_class_id,
-    js_compression_stream_new, js_decompression_stream_new, js_register_anon_shape_class_id,
-    js_register_class_id, js_register_class_length, js_register_class_name,
-    js_register_class_source, js_register_class_source_static, js_text_decoder_stream_new,
-    js_text_encoder_stream_new, js_text_encoding_stream_new, ANON_SHAPE_CLASS_IDS, CLASS_LENGTHS,
-    CLASS_NAMES,
 };
 // ── prototype_methods.rs ────────────────────────────────────────────────────
 #[cfg(test)]

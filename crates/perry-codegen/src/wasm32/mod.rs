@@ -10,6 +10,7 @@ mod closure_abi;
 /// The wasm32 lowering applied to one finished module's IR text.
 pub(crate) fn lower_module(ir: &str) -> String {
     let (ir, closure_bodies) = closure_abi::retype_closure_bodies(ir);
+    let ir = closure_abi::retype_indirect_body_calls(&ir);
     rename_entry_point(&protect_setjmp_locals(&abi_adapt::adapt_runtime_abi(
         &ir,
         &closure_bodies,

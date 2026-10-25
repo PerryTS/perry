@@ -58,6 +58,19 @@ pub fn lower_constructor(
     ctor: &ast::Constructor,
     field_inits: &[&ast::ClassProp],
 ) -> Result<Function> {
+    // A deferred member body never resolves a pending forward class binding
+    // (see `with_pending_forward_class_bindings_hidden`).
+    with_pending_forward_class_bindings_hidden(ctx, |ctx| {
+        lower_constructor_in_scope(ctx, class_name, ctor, field_inits)
+    })
+}
+
+fn lower_constructor_in_scope(
+    ctx: &mut LoweringContext,
+    class_name: &str,
+    ctor: &ast::Constructor,
+    field_inits: &[&ast::ClassProp],
+) -> Result<Function> {
     let scope_mark = ctx.enter_scope();
     let class_expr_capture_mark = ctx.body_class_expr_captures.len();
     let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
@@ -452,9 +465,21 @@ pub fn lower_class_method_with_name(
     method: &ast::ClassMethod,
     name: String,
 ) -> Result<Function> {
-    // Lower decorators from the method's function
+    // Lower decorators from the method's function. They run when the class is
+    // defined, not with the body, so they resolve names as the class's own
+    // definition does.
     let decorators = lower_decorators(ctx, &method.function.decorators);
+    with_pending_forward_class_bindings_hidden(ctx, |ctx| {
+        lower_class_method_in_scope(ctx, method, name, decorators)
+    })
+}
 
+fn lower_class_method_in_scope(
+    ctx: &mut LoweringContext,
+    method: &ast::ClassMethod,
+    name: String,
+    decorators: Vec<Decorator>,
+) -> Result<Function> {
     // Extract method-level type parameters (e.g., method<U>(x: U): T)
     // Note: Class-level type params are already in scope from lower_class_decl
     let type_params = method
@@ -731,6 +756,16 @@ pub fn lower_getter_method_with_name(
     method: &ast::ClassMethod,
     name: String,
 ) -> Result<Function> {
+    with_pending_forward_class_bindings_hidden(ctx, |ctx| {
+        lower_getter_method_in_scope(ctx, method, name)
+    })
+}
+
+fn lower_getter_method_in_scope(
+    ctx: &mut LoweringContext,
+    method: &ast::ClassMethod,
+    name: String,
+) -> Result<Function> {
     let scope_mark = ctx.enter_scope();
     let method_home = super::class_home::begin(ctx, &method.function);
     let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
@@ -837,6 +872,16 @@ pub fn lower_setter_method(
 }
 
 pub fn lower_setter_method_with_name(
+    ctx: &mut LoweringContext,
+    method: &ast::ClassMethod,
+    name: String,
+) -> Result<Function> {
+    with_pending_forward_class_bindings_hidden(ctx, |ctx| {
+        lower_setter_method_in_scope(ctx, method, name)
+    })
+}
+
+fn lower_setter_method_in_scope(
     ctx: &mut LoweringContext,
     method: &ast::ClassMethod,
     name: String,
@@ -993,6 +1038,30 @@ pub fn lower_setter_method_with_name(
     })
 }
 
+/// Lower the body of a `static { ... }` block. It becomes a synthetic static
+/// method, so it is a deferred member body for the class's capture analysis
+/// (`with_pending_forward_class_bindings_hidden`).
+pub fn lower_static_block_body(
+    ctx: &mut LoweringContext,
+    block: &ast::StaticBlock,
+) -> Result<Vec<Stmt>> {
+    with_pending_forward_class_bindings_hidden(ctx, |ctx| {
+        let scope_mark = ctx.enter_scope();
+        let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
+        ctx.in_nonarrow_fn = true;
+        // A static block is its own var-scope (OrdinaryFunctionCreate
+        // per ClassStaticBlockDefinitionEvaluation): `lower_block_stmt`
+        // only lowers nested statements without hoisting `var`s to this
+        // boundary, so a `var` declared in one block leaked into the
+        // next block/module scope instead of staying local (test262
+        // static-init-scope-var-close.js).
+        let body = lower_fn_body_block_stmt(ctx, block.body.span, &block.body.stmts)?;
+        ctx.exit_scope(scope_mark);
+        ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
+        Ok(body)
+    })
+}
+
 pub fn lower_class_prop(ctx: &mut LoweringContext, prop: &ast::ClassProp) -> Result<ClassField> {
     // Computed property keys (`[Symbol.for("k")]`, `[Parent.Symbol.X]`, etc.)
     // can't be reduced to a string at compile time. ClassDefinitionEvaluation
@@ -1059,17 +1128,27 @@ pub fn lower_class_prop(ctx: &mut LoweringContext, prop: &ast::ClassProp) -> Res
     let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
     ctx.in_class_field_init = true;
     ctx.in_nonarrow_fn = true;
+    // An instance initializer is a deferred member body (it runs per
+    // construction, and the class's capture analysis reads it); a static one
+    // runs when the class is defined, like a computed key.
     let init = prop
         .value
         .as_ref()
         .map(|e| {
-            if key_expr.is_none() && crate::lower::expr_assign::rhs_accepts_assignment_name(e) {
-                let old = ctx.assignment_inferred_name.replace(name.clone());
-                let result = lower_expr(ctx, e);
-                ctx.assignment_inferred_name = old;
-                result
+            let lower_init = |ctx: &mut LoweringContext| {
+                if key_expr.is_none() && crate::lower::expr_assign::rhs_accepts_assignment_name(e) {
+                    let old = ctx.assignment_inferred_name.replace(name.clone());
+                    let result = lower_expr(ctx, e);
+                    ctx.assignment_inferred_name = old;
+                    result
+                } else {
+                    lower_expr(ctx, e)
+                }
+            };
+            if prop.is_static {
+                lower_init(ctx)
             } else {
-                lower_expr(ctx, e)
+                with_pending_forward_class_bindings_hidden(ctx, lower_init)
             }
         })
         .transpose();

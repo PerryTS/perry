@@ -195,6 +195,14 @@ pub unsafe extern "C-unwind" fn js_class_value_super_construct_site(
             b"Super constructor is not a constructor",
         );
     }
+    // A native Error-family parent initializes the receiver the derived `new`
+    // already allocated; it does not replace it. Constructing a fresh
+    // `ErrorHeader` here made `this` an exotic cell: the user class's methods
+    // and own fields then stopped resolving on the dynamic dispatch path
+    // (`error.render()` returned `{}`, `{...error}` lost `statusCode`/`code`).
+    if let Some(receiver) = init_error_family_receiver(parent, this, args_ptr, args_len) {
+        return receiver;
+    }
     // Reified builtins have a Construct entry distinct from their Call entry
     // (Map/Set deliberately throw on Call). Preserve the current newTarget.
     if crate::proxy::js_proxy_is_proxy(parent) != 0
@@ -235,6 +243,63 @@ fn link_native_super_result(result: f64, receiver: f64) {
     if JSValue::from_bits(proto.to_bits()).is_pointer() {
         crate::object::prototype_chain::object_set_static_prototype(handle, proto.to_bits());
     }
+}
+
+/// `super(message, options)` into a built-in Error-family constructor, run on
+/// the class instance the derived construct already allocated. This is the
+/// initialization the direct `super()` lowering emits
+/// (`js_error_subclass_default_init_with_options`); the receiver stays the
+/// ordinary object carrying the class identity, with `message`, the captured
+/// `stack` and `cause` as own properties. `AggregateError` takes its errors
+/// argument through the generic construct below.
+unsafe fn init_error_family_receiver(
+    parent: f64,
+    this: f64,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    use super::super::super::global_this_tables::BuiltinConstructorIdentity as Identity;
+    if !matches!(
+        crate::object::global_this_tables::constructor_identity(parent)?,
+        Identity::Error
+            | Identity::TypeError
+            | Identity::RangeError
+            | Identity::ReferenceError
+            | Identity::SyntaxError
+            | Identity::EvalError
+            | Identity::URIError
+    ) {
+        return None;
+    }
+    let receiver = JSValue::from_bits(this.to_bits());
+    if !receiver.is_pointer()
+        || !crate::value::addr_class::try_read_gc_header(
+            receiver.as_pointer::<ObjectHeader>() as usize
+        )
+        .is_some_and(|header| header.obj_type == crate::gc::GC_TYPE_OBJECT)
+    {
+        return None;
+    }
+    let args = if args_ptr.is_null() {
+        &[][..]
+    } else {
+        std::slice::from_raw_parts(args_ptr, args_len)
+    };
+    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+    // The init runs user JS (`message` ToString, an `options.cause` getter) and
+    // so can run a moving collection: hand the caller the refreshed receiver,
+    // not the raw `this` it passed in, or the caller's own root is overwritten
+    // with a stale address.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let this_h = scope.root_nanbox_f64(this);
+    let message = args.first().copied().unwrap_or(undefined);
+    let options = args.get(1).copied().unwrap_or(undefined);
+    super::super::super::class_constructors::js_error_subclass_default_init_with_options(
+        this_h.get_nanbox_f64(),
+        message,
+        options,
+    );
+    Some(this_h.get_nanbox_f64())
 }
 
 #[used(compiler)]

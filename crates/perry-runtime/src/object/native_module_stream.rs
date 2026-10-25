@@ -83,17 +83,12 @@ pub(crate) fn attach_stream_legacy_prototype(constructor_value: f64) {
     for &name in STREAM_MODULE_EXPORT_KEYS {
         let value = match name {
             "Stream" => constructor.get_nanbox_f64(),
-            // The `stream_promises` submodule namespace — what
-            // `require('stream').promises` resolved to while the module value
-            // was a namespace object — whose `pipeline`/`finished` are the
-            // promise-returning implementations.
-            "promises" => unsafe {
-                let submodule = b"stream_promises";
-                crate::node_submodules::js_node_submodule_namespace(
-                    submodule.as_ptr(),
-                    submodule.len() as u32,
-                )
-            },
+            // The cached `stream/promises` namespace — the object
+            // `require('stream/promises')` and `import * as` hand out.
+            "promises" => {
+                let module = "stream/promises";
+                super::js_create_native_module_namespace(module.as_ptr(), module.len())
+            }
             _ => unsafe {
                 let module = b"stream";
                 super::js_native_module_property_by_name(

@@ -1218,6 +1218,18 @@ pub extern "C" fn js_arraylike_slice(
         super::species::array_species_create(recv_h.get_nanbox_f64(), count.max(0) as usize)
     };
     let result_h = scope.root_nanbox_f64(result);
+    // A plain object that owns and inherits no indexed property has no element
+    // in any range: the species result is already `count` holes.
+    let recv_bits = JSValue::from_bits(recv_h.get_nanbox_f64().to_bits());
+    if recv_bits.is_pointer()
+        && unsafe {
+            crate::array::arraylike_has_no_indexed_properties(
+                recv_bits.as_pointer::<crate::object::ObjectHeader>(),
+            )
+        }
+    {
+        return result_h.get_nanbox_f64();
+    }
     let value_h = scope.root_nanbox_f64(undef());
     for n in 0..count {
         let k = s + n;
@@ -1332,7 +1344,9 @@ pub fn plain_object_value(arr: *const ArrayHeader) -> Option<f64> {
     }
     let class_id = crate::object::js_object_get_class_id(arr as *const crate::object::ObjectHeader);
     if class_id != 0
-        && !crate::object::is_anon_shape_class_id(class_id)
+        && !unsafe {
+            crate::object::shapes::object_is_plain_record(arr as *const crate::object::ObjectHeader)
+        }
         && !super::subclass::is_array_subclass_class_id(class_id)
     {
         return None;
@@ -1683,7 +1697,7 @@ pub fn try_object_arraylike_mutator(
     let raw = (object.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *const crate::object::ObjectHeader;
     let class_id = crate::object::js_object_get_class_id(raw);
     if class_id != 0
-        && !crate::object::is_anon_shape_class_id(class_id)
+        && !unsafe { crate::object::shapes::object_is_plain_record(raw) }
         && !super::subclass::is_array_subclass_class_id(class_id)
     {
         return None;

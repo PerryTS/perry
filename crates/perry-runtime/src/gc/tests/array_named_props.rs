@@ -342,3 +342,40 @@ fn test_full_array_dead_named_layout_stops_rooting_its_value_in_the_first_full_g
     full_gc();
     assert!(!malloc_user_ptr_tracked(value as *mut u8));
 }
+
+/// `ArrayHeader::named` is a raw machine pointer, not an eight-byte JS value:
+/// on wasm32 it is four bytes followed by padding, and a collector that reads
+/// the word as a `u64` folds the padding into the address, so the property
+/// holder is neither marked nor rewritten. The two widths read alike on a
+/// 64-bit host, so the observable here is the descriptor the layout visitor
+/// hands the collector: it must be the pointer-width one.
+#[test]
+fn test_array_named_holder_is_described_as_a_pointer_width_slot() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _scan = ConservativeScanDisabledGuard::new();
+    let _side_tables = ArraySideTableTestGuard::new();
+    register_array_side_table_scanners();
+    crate::arena::arena_reset_all_blocks_to_zero();
+
+    let owner = crate::array::js_array_alloc(0);
+    let owner = unsafe { set_array_named_property(owner, "payload", 1.0) };
+    assert!(!unsafe { crate::array::array_property_bag(owner) }.is_null());
+    let holder = unsafe { std::ptr::addr_of_mut!((*owner).named) }.cast::<u64>();
+    let header = unsafe { header_from_user_ptr(owner.cast()) } as *mut GcHeader;
+
+    let mut seen = Vec::new();
+    unsafe {
+        visit_gc_layout_slot_descriptors(header, &mut |descriptor| {
+            descriptor.visit_slots(&mut |slot| {
+                if slot.slot == holder {
+                    seen.push(slot.is_pointer_width());
+                }
+            });
+        });
+    }
+    assert_eq!(
+        seen,
+        vec![true],
+        "the named-property holder must be enumerated exactly once, as a pointer-width slot"
+    );
+}

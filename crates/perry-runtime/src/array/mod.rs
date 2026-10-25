@@ -200,7 +200,7 @@ pub use self::immutable::{
     js_array_with, js_arraylike_copy_within,
 };
 pub(crate) use self::indexing::{
-    array_custom_prototype, array_has_own_index, array_iteration_is_exotic,
+    array_custom_prototype, array_has_own_index, array_holes_are_absent, array_iteration_is_exotic,
     array_iteration_is_exotic_cleaned, array_iteration_is_exotic_resolved, array_spec_get,
     array_spec_has_index, array_spec_set, try_strict_dense_index_set,
 };
@@ -321,7 +321,9 @@ pub use self::splice_slice::{
 pub(crate) use self::alloc::array_length_from_property_value_or_throw;
 #[cfg(feature = "regex-engine")]
 pub(crate) use self::alloc::js_array_alloc_named_props_reserved;
-pub(crate) use self::alloc::{js_array_from_arraylike, js_array_from_string_codepoints};
+pub(crate) use self::alloc::{
+    arraylike_has_no_indexed_properties, js_array_from_arraylike, js_array_from_string_codepoints,
+};
 pub(crate) use self::flat_clone::{
     dense_spread_copy, dense_spread_source, flattenable_array_ptr, plain_call_spread_source,
 };

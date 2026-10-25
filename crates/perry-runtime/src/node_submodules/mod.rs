@@ -92,6 +92,7 @@ pub(crate) mod blob;
 pub(crate) mod consumers;
 mod fs_promises;
 mod hono_jsx;
+mod registry_backed;
 mod stream_promises;
 pub(crate) mod test;
 mod timers;
@@ -130,6 +131,10 @@ use fs_promises::{
     thunk_fs_promises_symlink, thunk_fs_promises_truncate, thunk_fs_promises_unlink,
     thunk_fs_promises_utimes, thunk_fs_promises_watch, thunk_fs_promises_writeFile,
     thunk_readline_Interface, thunk_readline_Readline, thunk_readline_createInterface,
+};
+use registry_backed::native_namespace_as_default;
+pub(crate) use registry_backed::{
+    registry_backed_module_callable, registry_backed_module_export, stream_promises_export_callable,
 };
 use stream_promises::{thunk_streamP_finished, thunk_streamP_pipeline, value_from_ptr};
 use test::{
@@ -965,6 +970,11 @@ pub extern "C" fn js_node_submod_install_fs_promises() {
 #[no_mangle]
 pub extern "C" fn js_node_submod_install_readline_promises() {
     crate::object::js_nm_install_readline();
+    arm_readline_promises();
+}
+/// The registry store alone, for `js_nm_install_readline`: a program that names
+/// `readline` can read `readline.promises`, whose exports live in this spec.
+pub(crate) fn arm_readline_promises() {
     SUBMOD_REGISTRY[SubmodBucket::ReadlinePromises as usize].store(
         &SUBMOD_READLINE_PROMISES as *const SubmoduleSpec as *mut SubmoduleSpec,
         Ordering::Relaxed,
@@ -1124,7 +1134,7 @@ pub(crate) fn emit_sys_deprecation_warning_once() {
     {
         return;
     }
-    let pid = std::process::id();
+    let pid = crate::os::current_process_id();
     eprintln!(
         "(node:{pid}) [DEP0025] DeprecationWarning: sys is deprecated. Use `node:util` instead."
     );
@@ -1762,6 +1772,13 @@ pub unsafe extern "C" fn js_node_submodule_export_as_function(
         if let Some(value) = submodule_default_object_value(submod) {
             return value;
         }
+        // A submodule without a default export object: `import x from "node:<sub>"`
+        // binds the namespace itself (CommonJS `module.exports`), never the
+        // unknown-export sentinel (registry-backed modules only). It is the one `require("<sub>")`
+        // and `import * as` hand out, so identity holds across the forms.
+        if let Some(value) = native_namespace_as_default(submod) {
+            return value;
+        }
     }
     if submod.key == "timers" && name == "promises" {
         return crate::object::timers_promises_parent_namespace();
@@ -1775,25 +1792,6 @@ pub unsafe extern "C" fn js_node_submodule_export_as_function(
     };
     let closure_ptr = ensure_export_singleton(submod, export);
     f64::from_bits(JSValue::pointer(closure_ptr as *const u8).bits())
-}
-
-/// #6692: the `node:stream/promises` `pipeline` / `finished` callable — the
-/// promise-based implementations Node exposes via
-/// `stream.pipeline[util.promisify.custom]`. Installs the submodule registry
-/// entry first so the lookup succeeds even when the program never imported
-/// `node:stream/promises` itself. Returns NaN-boxed `TAG_TRUE` (the historical
-/// unlisted-export sentinel) if `name` is unknown — callers should verify the
-/// result is a callable closure before using it.
-pub(crate) fn stream_promises_export_callable(name: &str) -> f64 {
-    js_node_submod_install_stream_promises();
-    unsafe {
-        js_node_submodule_export_as_function(
-            b"stream_promises".as_ptr(),
-            "stream_promises".len() as u32,
-            name.as_ptr(),
-            name.len() as u32,
-        )
-    }
 }
 
 /// Returns a namespace-member value for a known Node submodule namespace import.
@@ -1861,6 +1859,9 @@ pub unsafe extern "C" fn js_node_submodule_namespace_member(
     }
     if name == "default" {
         if let Some(value) = submodule_default_object_value(submod) {
+            return value;
+        }
+        if let Some(value) = native_namespace_as_default(submod) {
             return value;
         }
     }

@@ -101,12 +101,6 @@ pub(super) fn compile_module_init(
         let _ = evaluate_fn.create_block("entry");
         {
             let blk = evaluate_fn.block_mut(0).unwrap();
-            // A CommonJS program entry claims this thread's main-module
-            // record in its wrapper preamble. Main publishes it before eager
-            // imports; a worker also needs it before evaluating dependencies.
-            if is_entry && crate::collectors::is_cjs_wrapped_module(hir) {
-                blk.call_void("js_bootstrap_cjs_main_module_placeholder", &[]);
-            }
             // Cyclic dependencies may call our hoisted functions before
             // our body. Prepare literal infrastructure without evaluating
             // declared classes or any user statement ahead of dependencies.
@@ -188,8 +182,12 @@ pub(super) fn compile_module_init(
     init_fn.mark_entry_init_boundary();
     let flat_const_ids: std::collections::HashSet<u32> =
         cross_module.flat_const_arrays.keys().copied().collect();
-    let (mut init_shadow_slot_map, _) =
-        enable_module_init_shadow_frame(init_fn, &hir.init, &flat_const_ids);
+    let (mut init_shadow_slot_map, _) = enable_module_init_shadow_frame(
+        init_fn,
+        &hir.init,
+        &flat_const_ids,
+        &cross_module.scope_map,
+    );
     // #10663: module init is the textbook run-once body.
     crate::codegen::helpers::decide_straight_line_store_outline(init_fn, &hir.init);
 
@@ -240,8 +238,11 @@ pub(super) fn compile_module_init(
         &mut init_shadow_slot_map,
         init_native_facts.number_by_construction_locals(),
     );
-    let init_shadow_slot_clears_after_stmt =
-        crate::collectors::collect_shadow_slot_clear_points(&hir.init, &init_shadow_slot_map);
+    let init_shadow_slot_clears_after_stmt = crate::collectors::collect_shadow_slot_clear_points(
+        &hir.init,
+        &init_shadow_slot_map,
+        &cross_module.scope_map,
+    );
 
     // #7109: the module-init body participates in canonical (i32/u32/Str)
     // selection on exactly the per-value rules a function body uses. There

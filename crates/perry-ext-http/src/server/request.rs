@@ -607,6 +607,58 @@ pub extern "C" fn js_node_http_im_destroy(handle: i64) {
     close_incoming_message(handle);
 }
 
+/// `req.pipe(dest, options)` — a server request's body is already buffered
+/// when the handler runs, so piping writes it to `dest` as one chunk and ends
+/// `dest` (unless `options.end === false`), the way a Readable flows into its
+/// destination. Returns `dest`, per Node's pipe-returns-destination contract.
+/// A body a `'data'` listener or an earlier pipe already consumed is not sent
+/// twice.
+///
+/// # Safety
+/// `dest` and `options` are NaN-boxed JS values; `handle` names a live
+/// `IncomingMessage`.
+pub unsafe fn js_node_http_im_pipe(handle: i64, dest: f64, options: f64) -> f64 {
+    let scope = perry_ffi::TransientRootScope::enter();
+    let dest = scope.root_nanbox(dest);
+    let options = scope.root_nanbox(options);
+    let (body, encoding) = match get_handle_mut::<IncomingMessage>(handle) {
+        Some(im) if !im.data_emitted => {
+            im.data_emitted = true;
+            im.end_emitted = true;
+            im.complete = true;
+            (Some(im.body_bytes.clone()), im.encoding.clone())
+        }
+        _ => (None, None),
+    };
+    let end_dest = if JsValue::from_bits(options.get().to_bits()).is_pointer() {
+        extern "C" {
+            fn js_object_get_field_by_name(
+                obj: *const perry_ffi::ObjectHeader,
+                key: *const StringHeader,
+            ) -> JsValue;
+        }
+        let key = alloc_string("end");
+        let value = js_object_get_field_by_name(
+            (options.get().to_bits() & PTR_MASK) as *const perry_ffi::ObjectHeader,
+            key.as_raw(),
+        );
+        value.bits() != crate::server::types::TAG_FALSE
+    } else {
+        true
+    };
+    if let Some(body) = body {
+        if !body.is_empty() {
+            let chunk = crate::client_surface::body_chunk_value(&body, encoding.as_deref());
+            let chunk = scope.root_nanbox(chunk);
+            crate::client_events::forward_pipe_write_value(dest.get(), chunk.get());
+        }
+        if end_dest {
+            crate::client_events::forward_pipe_end(dest.get().to_bits());
+        }
+    }
+    dest.get()
+}
+
 /// `req.on(event, cb)` — register a listener. For `'data'` and `'end'`
 /// the listener fires immediately against the buffered body so the
 /// canonical Express body-collection pattern resolves on its

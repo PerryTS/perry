@@ -232,7 +232,12 @@ extern "C" fn logger_thunk(
         let value = crate::builtins::js_util_format(rest_ptr);
         string_from_value(value)
     };
-    let line = format!("{} {}: {}\n", section, std::process::id(), formatted);
+    let line = format!(
+        "{} {}: {}\n",
+        section,
+        crate::os::current_process_id(),
+        formatted
+    );
     write_stderr_line(&line);
 
     TAG_UNDEFINED_F64

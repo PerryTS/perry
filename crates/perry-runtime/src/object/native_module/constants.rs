@@ -730,12 +730,10 @@ pub(crate) unsafe fn get_native_module_constant(
         },
         "stream" => match property {
             "Stream" | "default" => Some(bound_native_callable_export_value("stream", "Stream")),
-            "promises" => Some(unsafe {
-                crate::node_submodules::js_node_submodule_namespace(
-                    b"stream_promises".as_ptr(),
-                    "stream_promises".len() as u32,
-                )
-            }),
+            "promises" => Some(crate::object::js_create_native_module_namespace(
+                "stream/promises".as_ptr(),
+                "stream/promises".len(),
+            )),
             _ => None,
         },
         "repl" => match property {

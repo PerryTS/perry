@@ -16,6 +16,21 @@
 use super::*;
 use crate::object::native_call_method::class_holder::{chain_method, ChainMethod, MethodKey};
 
+/// The receiver as the witness asks about it: a live object (not forwarded).
+/// Not the method site's `ordinary_receiver`, which also refuses objects a
+/// site must not learn from (outside the arena's generations, a layout with
+/// holes or overflow): those are still objects the bound call is made on,
+/// and the checks below re-derive everything the binding relied on.
+unsafe fn object_receiver(addr: usize) -> Option<*const ObjectHeader> {
+    if !crate::value::addr_class::is_above_handle_band(addr) {
+        return None;
+    }
+    let header = crate::value::addr_class::try_read_gc_header(addr)?;
+    (header.obj_type == crate::gc::GC_TYPE_OBJECT
+        && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0)
+        .then_some(addr as *const ObjectHeader)
+}
+
 /// `PERRY_CHECK_CONTRACTS=1`: the run-time witness of a prototype-constant
 /// call. `class_id` is the class the call was bound for (0: any), `info` the
 /// bound body's `JsFunctionInfo`.
@@ -36,7 +51,7 @@ pub unsafe extern "C-unwind" fn js_proto_constant_contract_check(
         .unwrap_or(b"?");
     let addr = (recv.to_bits() & crate::value::POINTER_MASK) as usize;
     let Some(obj) = super::is_site_receiver(recv)
-        .then(|| ordinary_receiver(addr))
+        .then(|| object_receiver(addr))
         .flatten()
     else {
         abort(

@@ -369,6 +369,17 @@ fn ordinary_has_instance_prototype_walk_rooted(
     }
     // Walk `value`'s real [[Prototype]] chain looking for identity with P.
     let cur = scope.root_nanbox_f64(unsafe { js_object_get_prototype_of(value.get_nanbox_f64()) });
+    // `js_object_get_prototype_of` answers the receiver itself for a value it
+    // cannot place on a chain (a native stream wrapper, a registry-backed
+    // object): a self link, which a real chain never has. Following it spun
+    // to the depth cap on every check -- 100k prototype lookups, ~100 ms per
+    // `stream instanceof Error`. A self link, or any cycle, ends the chain.
+    // Brent's cycle test keeps one rooted "tortoise" that is re-seated at
+    // each power of two; comparing identities (not addresses held across a
+    // call) stays correct when a collection moves the objects.
+    let tortoise = scope.root_nanbox_f64(value.get_nanbox_f64());
+    let mut power = 1usize;
+    let mut lap = 0usize;
     let mut depth = 0usize;
     while depth < 100_000 {
         // Identity/tag tests do not collect. These snapshots end at the
@@ -388,7 +399,22 @@ fn ordinary_has_instance_prototype_walk_rooted(
         if let Some(matches) = terminal_prototype_matches(current, target_value) {
             return matches;
         }
+        // Revisiting the tortoise closes a cycle (its first stop is `value`
+        // itself, so a self link is caught on the first hop).
+        if cur_addr == proto_identity_addr(tortoise.get_nanbox_f64()) {
+            return false;
+        }
+        if lap == power {
+            tortoise.set_nanbox_f64(current);
+            power <<= 1;
+            lap = 0;
+        }
         let next = unsafe { js_object_get_prototype_of(current) };
+        lap += 1;
+        // `current` may have moved during the call; the roots are current.
+        if proto_identity_addr(next) == proto_identity_addr(cur.get_nanbox_f64()) {
+            return false;
+        }
         cur.set_nanbox_f64(next);
         depth += 1;
     }

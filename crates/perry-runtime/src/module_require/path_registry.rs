@@ -40,6 +40,10 @@ struct PathModuleEntry {
     /// partial/final publication also runs for eagerly initialized modules, so
     /// `init_addr` alone cannot distinguish the two completion boundaries.
     active_claim: Option<std::thread::ThreadId>,
+    /// The CommonJS wrapper's factory (a closure), handed over with the
+    /// partial publication: a reload after `delete require.cache[path]` calls
+    /// it. Never a property of any object.
+    factory: Option<u64>,
 }
 
 #[derive(Default)]
@@ -155,6 +159,7 @@ impl PathModuleRegistry {
             exports: None,
             status: PathModuleStatus::Registered,
             active_claim: None,
+            factory: None,
         });
         entry.init_addr = Some(init_addr);
         true
@@ -178,6 +183,7 @@ impl PathModuleRegistry {
                 exports: None,
                 status: PathModuleStatus::Registered,
                 active_claim: None,
+                factory: None,
             },
         );
         true
@@ -188,6 +194,12 @@ impl PathModuleRegistry {
     /// Only same-thread recursive loads may observe it; unrelated waiters stay
     /// parked while the status is `Initializing`.
     pub(super) fn register_partial_exports(&self, key: String, exports: u64) -> bool {
+        self.register_partial(key, exports, None)
+    }
+
+    /// [`Self::register_partial_exports`] with the wrapper's factory, which
+    /// the entry keeps for a reload.
+    pub(super) fn register_partial(&self, key: String, exports: u64, factory: Option<u64>) -> bool {
         let current = std::thread::current().id();
         let stored = {
             let mut state = self.lock();
@@ -210,6 +222,7 @@ impl PathModuleRegistry {
                     exports: None,
                     status: PathModuleStatus::Registered,
                     active_claim: None,
+                    factory: None,
                 });
                 if matches!(entry.status, PathModuleStatus::Failed(_))
                     || matches!(entry.status, PathModuleStatus::Initializing(owner) if owner != current)
@@ -217,6 +230,9 @@ impl PathModuleRegistry {
                     return false;
                 }
                 entry.exports = Some(exports);
+                if factory.is_some() {
+                    entry.factory = factory;
+                }
                 if entry.status == PathModuleStatus::Registered {
                     entry.status = PathModuleStatus::Initializing(current);
                     (true, entry.active_claim.is_none())
@@ -264,6 +280,7 @@ impl PathModuleRegistry {
                     exports: None,
                     status: PathModuleStatus::Registered,
                     active_claim: None,
+                    factory: None,
                 });
                 if matches!(entry.status, PathModuleStatus::Failed(_))
                     || entry.active_claim.is_some_and(|owner| owner != current)
@@ -520,11 +537,19 @@ impl PathModuleRegistry {
         })
     }
 
+    /// The factory the wrapper of `key` handed over, if any.
+    pub(super) fn factory(&self, key: &str) -> Option<u64> {
+        self.lock().entries.get(key).and_then(|entry| entry.factory)
+    }
+
     pub(super) fn scan_roots(&self, visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
         let mut state = crate::gc::lock_gc_root_registry(&self.state);
         for entry in state.entries.values_mut() {
             if let Some(exports) = entry.exports.as_mut() {
                 visitor.visit_nanbox_u64_slot(exports);
+            }
+            if let Some(factory) = entry.factory.as_mut() {
+                visitor.visit_nanbox_u64_slot(factory);
             }
             if let PathModuleStatus::Failed(error) = &mut entry.status {
                 visitor.visit_nanbox_u64_slot(error);
