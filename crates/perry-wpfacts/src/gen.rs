@@ -135,6 +135,8 @@ pub struct Gen<'a> {
     pub cell_flows: std::collections::BTreeSet<(FnIdx, u32, String)>,
     pub cell_flow_toks: crate::pts::FxHashSet<Tok>,
     pub cells_read: Vec<String>,
+    /// DECISIONS 171: the cells seeded once their node is consumed.
+    pub cells_deferred: Vec<(String, NodeId)>,
     /// The other units' layouts it looked up by display (DECISIONS 103).
     pub layouts_read: Vec<(String, u64)>,
     /// The other units' functions it took by contract name (DECISIONS 106).
@@ -415,6 +417,7 @@ impl<'a> Gen<'a> {
             cell_flows: Default::default(),
             cell_flow_toks: Default::default(),
             cells_read: Vec::new(),
+            cells_deferred: Vec::new(),
             layouts_read: Vec::new(),
             fns_read: Vec::new(),
             arr_cells: Vec::new(),

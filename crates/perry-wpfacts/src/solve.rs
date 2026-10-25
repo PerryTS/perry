@@ -274,6 +274,9 @@ impl Model {
             self.rel(|| line);
         }
         self.nodes[n as usize].cons.push(c);
+        if !self.cell_watch.is_empty() && self.cell_watch.remove(&n) {
+            self.cell_woken.push(n);
+        }
         if self.aborted {
             return;
         }

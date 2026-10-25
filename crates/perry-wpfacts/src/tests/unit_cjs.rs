@@ -232,6 +232,40 @@ fn a_program_object_named_cell_does_not_repeat_its_any_key_cell() {
     );
 }
 
+/// DECISIONS 171: every unit names the CommonJS registry union `cjs:*`,
+/// but only a unit whose code consumes it (a `require` of a computed
+/// specifier, `require.main`) reads it; the others are not solved again
+/// when another module's exports change, and the facts are the same.
+#[test]
+fn only_a_unit_consuming_the_registry_union_reads_it() {
+    let hirs = hirs(&T6);
+    let list: Vec<(String, &perry_hir::Module)> =
+        hirs.iter().map(|(p, h)| (p.clone(), h)).collect();
+    let cfg = FactsConfig {
+        explain: true,
+        unit_io: true,
+        ..Default::default()
+    };
+    let u = crate::compute_units(&list, &cfg);
+    let units = u.unit_io.iter().filter(|l| l.starts_with("# uio ")).count();
+    let readers: Vec<&str> = u
+        .unit_io
+        .iter()
+        .filter(|l| l.starts_with("# uread ") && l.ends_with(" cell:cjs:*"))
+        .filter_map(|l| l.split(' ').nth(2))
+        .collect();
+    // One reader per module: the unit holding its wrapper's `require`.
+    let mut modules: Vec<&str> = readers
+        .iter()
+        .filter_map(|k| k.split_once('#').map(|x| x.0))
+        .collect();
+    modules.dedup();
+    assert!(
+        readers.len() == T6.len() && modules.len() == T6.len(),
+        "{units} units, readers {readers:?}"
+    );
+}
+
 #[test]
 fn richards_per_unit_proves_what_the_whole_program_proves() {
     let (w, u) = both(&T3);

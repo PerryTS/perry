@@ -1803,7 +1803,9 @@ pub(crate) fn compute_in<'a>(
     let mut checks = 0u64;
     while cfg.unit && !g.m.aborted && {
         checks += 1;
-        g.contract_check()
+        // DECISIONS 171: a cell its solve came to consume is seeded first.
+        let woke = g.wake_cells();
+        g.contract_check() | woke
     } {
         g.m.solve();
     }

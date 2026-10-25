@@ -886,6 +886,11 @@ pub struct Model {
     /// published under each constant path (`Gen::cjs_path_node`).
     pub cjs_union: NodeId,
     pub cjs_unknown: NodeId,
+    /// DECISIONS 171: cell nodes nothing in the unit consumed when it was
+    /// seeded (`Gen::seed_cell`); the first successor or constraint of one
+    /// moves it to `cell_woken`, and the unit seeds it then.
+    pub cell_watch: crate::pts::FxHashSet<NodeId>,
+    pub cell_woken: Vec<NodeId>,
     pub cjs_paths: FxHashMap<Atom, NodeId>,
     /// `require.cache` / `require.extensions` of [`BuiltinNs::Require`].
     pub require_parts: Option<(Tok, Tok)>,

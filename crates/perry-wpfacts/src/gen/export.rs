@@ -816,7 +816,45 @@ impl<'a> Gen<'a> {
         self.m.program_cells = true;
     }
 
+    /// DECISIONS 171: a unit reads a cell where its solve consumes the
+    /// cell's node (a successor edge or a constraint on it). One nothing
+    /// consumes yet is neither seeded nor read: the other units' writes
+    /// cannot reach its facts, and what it publishes there is its own
+    /// write. The first consumer wakes it (`Model::cell_watch`) and
+    /// `wake_cells` seeds it before the unit solves again. Every unit
+    /// names the registry union `cjs:*`; on AWFY 18 of 471 consume it.
     pub(crate) fn seed_cell(&mut self, key: &str, n: NodeId) {
+        let node = &self.m.nodes[n as usize];
+        if self.unit_in.is_some() && node.succ.is_empty() && node.cons.is_empty() {
+            self.cells_deferred.push((key.to_string(), n));
+            self.m.cell_watch.insert(n);
+            return;
+        }
+        self.seed_cell_now(key, n);
+    }
+
+    /// The deferred cells a consumer reached in the last solve, seeded now.
+    /// True when there were any: the unit solves again.
+    pub(crate) fn wake_cells(&mut self) -> bool {
+        let woken = std::mem::take(&mut self.m.cell_woken);
+        if woken.is_empty() {
+            return false;
+        }
+        let mut now: Vec<(String, NodeId)> = Vec::new();
+        self.cells_deferred.retain(|(k, n)| {
+            let w = woken.contains(n);
+            if w {
+                now.push((k.clone(), *n));
+            }
+            !w
+        });
+        for (k, n) in now {
+            self.seed_cell_now(&k, n);
+        }
+        true
+    }
+
+    fn seed_cell_now(&mut self, key: &str, n: NodeId) {
         self.cells_read.push(key.to_string());
         // A unit whose globals unmodeled code may write publishes `global:*`
         // unknown: every global cell reads it.

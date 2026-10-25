@@ -2011,6 +2011,13 @@ fn unit_io(
         for (n, x) in &outs[si] {
             lines.push(format!("# uout {} {n} {x:016x}", s.key));
         }
+        // The cells it read (DECISIONS 171: the ones its solve consumed).
+        let mut reads: Vec<&String> = u.cells_read.iter().collect();
+        reads.sort();
+        reads.dedup();
+        for k in reads {
+            lines.push(format!("# uread {} cell:{k}", s.key));
+        }
     }
     lines
 }
