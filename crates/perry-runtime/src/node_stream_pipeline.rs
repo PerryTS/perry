@@ -92,6 +92,25 @@ pub(super) fn pipeline_args(args: *const crate::array::ArrayHeader) -> Vec<f64> 
 pub(super) fn is_pipeline_stream(value: f64) -> bool {
     get_hidden_value(value, hidden_readable_flag_key()).is_some()
         || get_hidden_value(value, hidden_writable_flag_key()).is_some()
+        || is_fs_write_stream(value)
+}
+
+/// `fs.createWriteStream` objects are their own object type (own `write`, `end`
+/// and `on` methods over the fs stream registry) and carry none of the hidden
+/// classic-stream flags, so the flag checks alone cannot tell one from an
+/// options object.
+pub(super) fn is_fs_write_stream(value: f64) -> bool {
+    crate::fs::is_fs_stream_instance_value(value, "WriteStream")
+}
+
+/// Register a pipeline completion listener. An fs write stream keeps its
+/// listeners in the fs registry, reached only through its own `on`.
+fn add_pipeline_listener(stage: f64, event: &'static [u8], event_value: f64, listener: f64) {
+    if is_fs_write_stream(stage) {
+        destination_listener(stage, event, listener, false);
+    } else {
+        add_stream_listener_for_event(stage, event_value, listener);
+    }
 }
 
 pub(super) fn is_pipeline_options_arg(value: f64) -> bool {
@@ -202,8 +221,9 @@ pub(super) fn add_pipeline_callback_listeners(
             crate::fn_info!(pipeline_error_callback, 1; with_declared(1)),
             &[&state, callback, stages],
         );
-        add_stream_listener_for_event(
+        add_pipeline_listener(
             stage.get_nanbox_f64(),
+            b"error",
             error_event.get_nanbox_f64(),
             listener.get_nanbox_f64(),
         );
@@ -213,8 +233,9 @@ pub(super) fn add_pipeline_callback_listeners(
                 crate::fn_info!(pipeline_close_callback, 0; with_declared(0)),
                 &[&state, callback, stages, &stage],
             );
-            add_stream_listener_for_event(
+            add_pipeline_listener(
                 stage.get_nanbox_f64(),
+                b"close",
                 close_event.get_nanbox_f64(),
                 close_listener.get_nanbox_f64(),
             );
@@ -230,13 +251,14 @@ pub(super) fn add_pipeline_callback_listeners(
         len - 1
     };
     let success_stage = scope.root_nanbox_f64(rooted_array_at(stages, success_index));
-    let success_event =
-        if get_hidden_value(success_stage.get_nanbox_f64(), hidden_writable_flag_key()).is_some()
-            && options.end_final
-        {
-            literal_string_value(b"finish")
+    let writable_success =
+        get_hidden_value(success_stage.get_nanbox_f64(), hidden_writable_flag_key()).is_some()
+            || is_fs_write_stream(success_stage.get_nanbox_f64());
+    let (success_name, success_event): (&'static [u8], f64) =
+        if writable_success && options.end_final {
+            (b"finish", literal_string_value(b"finish"))
         } else {
-            literal_string_value(b"end")
+            (b"end", literal_string_value(b"end"))
         };
     let success_event = scope.root_nanbox_f64(success_event);
     let success = rooted_closure(
@@ -244,8 +266,9 @@ pub(super) fn add_pipeline_callback_listeners(
         crate::fn_info!(pipeline_success_callback, 0; with_declared(0)),
         &[&state, callback],
     );
-    add_stream_listener_for_event(
+    add_pipeline_listener(
         success_stage.get_nanbox_f64(),
+        success_name,
         success_event.get_nanbox_f64(),
         success.get_nanbox_f64(),
     );
