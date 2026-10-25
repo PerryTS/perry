@@ -1,0 +1,1 @@
+Fixed an uncaught `throw` aborting with `exception transport failed` instead of the uncaught-error report and exit status 1 on aarch64 Linux builds whose libgcc returns a garbage status from `_Unwind_RaiseException`.
