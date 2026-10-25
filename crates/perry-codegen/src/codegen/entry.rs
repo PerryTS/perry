@@ -649,8 +649,12 @@ pub(super) fn compile_module_entry(
         let main_init: &[perry_hir::Stmt] = if entry_in_init { &[] } else { &hir.init };
         let flat_const_ids: std::collections::HashSet<u32> =
             cross_module.flat_const_arrays.keys().copied().collect();
-        let (mut main_shadow_slot_map, _) =
-            enable_module_init_shadow_frame(main, main_init, &flat_const_ids);
+        let (mut main_shadow_slot_map, _) = enable_module_init_shadow_frame(
+            main,
+            main_init,
+            &flat_const_ids,
+            &cross_module.scope_map,
+        );
         // #10663: module init is the textbook run-once body.
         super::helpers::decide_straight_line_store_outline(main, main_init);
 
@@ -705,7 +709,11 @@ pub(super) fn compile_module_entry(
             main_native_facts.number_by_construction_locals(),
         );
         let main_shadow_slot_clears_after_stmt =
-            crate::collectors::collect_shadow_slot_clear_points(main_init, &main_shadow_slot_map);
+            crate::collectors::collect_shadow_slot_clear_points(
+                main_init,
+                &main_shadow_slot_map,
+                &cross_module.scope_map,
+            );
 
         // #7109: the program-entry body participates in canonical (i32/u32/Str)
         // selection on exactly the per-value rules a function body uses. There

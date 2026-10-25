@@ -87,6 +87,18 @@ fn std_fd_registry() -> StdHashMap<i32, fs::File> {
             }
         }
     }
+    // WASI has no `dup`: the registry entry wraps the descriptor itself, so
+    // `closeSync(1)` closes stdout, as it does in Node. The single-threaded
+    // module runs no thread-local destructors, so nothing else closes it.
+    #[cfg(target_os = "wasi")]
+    {
+        use std::os::fd::FromRawFd;
+        for fd in 0..=2 {
+            // SAFETY: descriptors 0..=2 are the preopened standard streams
+            // and this thread-local is their only owner.
+            map.insert(fd, unsafe { fs::File::from_raw_fd(fd) });
+        }
+    }
     map
 }
 
@@ -1587,7 +1599,7 @@ pub(crate) fn mkdtemp_bytes_result(prefix_value: f64) -> Result<Vec<u8>, f64> {
         // Try a handful of candidate suffixes until one succeeds. Only real
         // EEXIST collisions are retried; permission/missing-parent errors are
         // reported against the attempted candidate path.
-        let pid = std::process::id() as u64;
+        let pid = crate::os::current_process_id() as u64;
         let mut last_collision_path = None;
         for attempt in 0..64u64 {
             let n = COUNTER.fetch_add(1, Ordering::Relaxed);

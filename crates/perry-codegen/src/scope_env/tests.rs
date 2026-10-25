@@ -487,3 +487,66 @@ fn an_inner_activation_is_not_retained_by_an_outer_capture() {
     assert_eq!(map.slot(1).unwrap().rep, map.slot(2).unwrap().rep);
     assert_eq!(map.members(map.slot(1).unwrap().rep), &[1, 2]);
 }
+
+/// A group's one frame root is the representative's shadow slot, so its
+/// lexical-death clear must wait for the last reference to ANY member, not
+/// just the representative. `late` is the member the statement after the
+/// closure writes (`42`): with the representative (10) the clear is after
+/// that write in both arms; with the other member (11) it must be too. A clear
+/// that only counted the representative's references lands before the write,
+/// and a moving collection in between leaves the frame holding the scope
+/// object's retired copy (ajv's `properties` generator).
+///
+/// Returns (clears before the write, clears after it) in the probe function.
+fn group_root_clears_around_write(late: u32) -> (usize, usize) {
+    let _shadow = crate::codegen::helpers::NativeRootsPin::shadow();
+    let mut module = module_with(vec![
+        let_num(10, 1.0),
+        let_num(11, 2.0),
+        Stmt::Let {
+            id: 9,
+            name: "f".to_string(),
+            ty: Type::Any,
+            mutable: false,
+            init: Some(mutating_closure(100, &[10, 11])),
+        },
+        Stmt::Expr(Expr::LocalSet(late, Box::new(Expr::Number(42.0)))),
+        Stmt::Expr(Expr::LocalGet(9)),
+        Stmt::Return(Some(Expr::LocalGet(9))),
+    ]);
+    group_scope_boxes(&mut module);
+    let boxed = crate::codegen::boxed_locals::collect_module_boxed_vars(&module);
+    let map = ScopeMap::build(&module, &boxed, &Default::default());
+    assert_eq!(map.slot(10).expect("scoped").rep, 10, "{map:?}");
+    assert_eq!(map.slot(11).expect("scoped").rep, 10, "{map:?}");
+
+    let ir = compile_ir(&module);
+    let fn_ir =
+        crate::testing::root_slots::function_slice(&ir, "perry_fn_scope_env_probe_ts__probe1");
+    let lines: Vec<&str> = fn_ir.lines().collect();
+    let write_at = lines
+        .iter()
+        .position(|l| l.contains("bitcast double 42.0 to i64"))
+        .unwrap_or_else(|| panic!("the write of 42 is not in the artifact:\n{fn_ir}"));
+    let is_clear = |l: &str| l.contains("@js_shadow_slot_set(") && l.trim_end().ends_with("i64 0)");
+    let before = lines[..write_at].iter().filter(|l| is_clear(l)).count();
+    let after = lines[write_at..].iter().filter(|l| is_clear(l)).count();
+    (before, after)
+}
+
+#[test]
+fn a_group_root_outlives_the_last_reference_to_any_member() {
+    let (rep_before, rep_after) = group_root_clears_around_write(10);
+    let (member_before, member_after) = group_root_clears_around_write(11);
+    assert!(
+        rep_after >= 1,
+        "control: the root is cleared after the representative's last reference \
+         ({rep_before} before, {rep_after} after the write)"
+    );
+    assert_eq!(
+        (member_before, member_after),
+        (rep_before, rep_after),
+        "a write through a later member must keep the root live exactly as one through the \
+         representative does"
+    );
+}

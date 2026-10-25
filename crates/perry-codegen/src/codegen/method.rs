@@ -512,8 +512,11 @@ pub(super) fn compile_method(
         &mut shadow_slot_map,
         native_facts.number_by_construction_locals(),
     );
-    let shadow_slot_clears_after_stmt =
-        crate::collectors::collect_shadow_slot_clear_points(method_body, &shadow_slot_map);
+    let shadow_slot_clears_after_stmt = crate::collectors::collect_shadow_slot_clear_points(
+        method_body,
+        &shadow_slot_map,
+        &cross_module.scope_map,
+    );
     let mut index_clone_integer_locals = native_facts.integer_locals().clone();
     index_clone_integer_locals.extend(index_param_ids.iter().copied());
     let index_param_proofs: HashMap<u32, perry_hir::types::Type> = index_param_ids

@@ -1278,6 +1278,13 @@ pub fn run_with_parse_cache(
     let mut native_provider_installs: Vec<String> = ctx
         .native_routing
         .wrapper_install_hooks(program_modules.iter().map(String::as_str));
+    // A program that names `dns` arms the router for the lookup/resolve
+    // exports a CommonJS `require('node:dns')` reaches through the dynamic
+    // native module dispatch (`js_dns_install_exports`); one that does not
+    // keeps those FFIs, and the host resolver behind them, out of the link.
+    if ctx.uses_dns {
+        native_provider_installs.push("js_dns_install_exports".to_string());
+    }
     // #11616: only the direct `process.getBuiltinModule(id)` call reaches the
     // devirt entry that arms the install-all hooks. Reached any other way — a
     // `const proc = process` alias, `process?.getBuiltinModule?.(id)` — the
@@ -3997,6 +4004,12 @@ pub fn run_with_parse_cache(
         let mut namespace_member_nested: std::collections::HashSet<(String, String)> =
             std::collections::HashSet::new();
         let mut imported_classes: Vec<perry_codegen::ImportedClass> = Vec::new();
+        // #13100: `(name, source_prefix)` of every entry pushed by the
+        // transitive walk below rather than by this module's own specifier
+        // list. Read where the list is finalized, to drop a transitive entry
+        // whose name an explicit import of this module already binds.
+        let mut transitively_reached: std::collections::HashSet<(String, String)> =
+            std::collections::HashSet::new();
         let mut imported_enums: Vec<(String, Vec<(String, perry_hir::EnumValue)>)> = Vec::new();
         let mut imported_async_set: std::collections::HashSet<String> =
             std::collections::HashSet::new();
@@ -5515,6 +5528,7 @@ pub fn run_with_parse_cache(
                         &ctx.project_root,
                         &ctx.module_prefix_overrides,
                     );
+                    transitively_reached.insert((class.name.clone(), class_prefix.clone()));
                     imported_classes.push(imported_class_from_hir(
                         class,
                         class_prefix,
@@ -5707,6 +5721,36 @@ pub fn run_with_parse_cache(
         // `class_table` and its field types are unknown. Closing
         // over field types lets `PropertyGet` recursion resolve
         // the receiver class at every step of the chain.
+        // An explicitly imported class outranks a same-named class that merely
+        // came along for the ride. The walk above registers every exported
+        // class of every module transitively reachable through an import, so a
+        // module importing `helper` from a file that also exports an unrelated
+        // `class Shared` registers that `Shared` too. Codegen then binds the
+        // name twice, with OPPOSITE tie-breaks: `class_ids` is first-writer-wins
+        // (`codegen/mod.rs`, `entry().or_insert()`, deliberate per #665) while
+        // `imported_class_ctors` is last-writer-wins (built by `collect()` into
+        // a `HashMap` keyed on `effective_name`). No ordering of this list can
+        // satisfy both, so `new Shared(cb)` either stamped the unrelated class's
+        // id — empty method table, every method call threw "is not a function" —
+        // or bound its argument-less constructor and silently dropped `cb`.
+        //
+        // In this module's scope the colliding name cannot refer to the
+        // transitive class at all: the explicit import binds it. So drop those
+        // entries instead of ordering them, leaving exactly one holder of the
+        // name and making both maps agree. Transitive entries whose name is NOT
+        // claimed by a specifier here are untouched — they are how a class
+        // reached only through a re-export barrel still resolves.
+        let specifier_bound_names: std::collections::HashSet<String> = imported_classes
+            .iter()
+            .filter(|ic| {
+                !transitively_reached.contains(&(ic.name.clone(), ic.source_prefix.clone()))
+            })
+            .map(|ic| ic.name.clone())
+            .collect();
+        imported_classes.retain(|ic| {
+            !transitively_reached.contains(&(ic.name.clone(), ic.source_prefix.clone()))
+                || !specifier_bound_names.contains(&ic.name)
+        });
         let mut visited_imports: std::collections::HashSet<String> =
             imported_classes.iter().map(|ic| ic.name.clone()).collect();
         // Issue #26 / #321: a class's `extends` parent must be resolved in

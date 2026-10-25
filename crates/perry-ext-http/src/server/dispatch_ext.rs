@@ -137,6 +137,7 @@ fn is_incoming_message_member(name: &str) -> bool {
             | "setTimeout"
             | "pause"
             | "resume"
+            | "pipe"
             | "destroy"
             | "read"
             | "unref"

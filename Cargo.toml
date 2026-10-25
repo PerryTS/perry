@@ -523,7 +523,6 @@ notify = "8.2"
 # removed with tokio (final tokio lane) — every socket, TLS session and HTTP
 # exchange runs on turnloop. `python3 scripts/tokio_inventory.py` fails if any
 # tokio package reappears in Cargo.lock.
-http-body-util = "0.1"
 # The `http` types crate. Already in the graph via hyper/reqwest/turnloop-http;
 # named here so perry-stdlib can reach `StatusCode::canonical_reason` directly.
 http = "1"
@@ -540,7 +539,6 @@ http = "1"
 rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "logging", "ring"] }
 rustls-pemfile = "2"
 socket2 = "0.6"
-futures-util = "0.3"
 url = "2"
 dirs = "7"
 
@@ -552,7 +550,6 @@ tar = "0.4"
 # RFC 6455 §4.2.2's `Sec-WebSocket-Accept` digest. Already in the lockfile
 # through perry-stdlib's optional `sha1`, so naming it here adds no package.
 sha1 = "0.11"
-zip = "9"
 # zstd for transparent decompression of the npm-shipped `*.a.zst` archives.
 # Statically vendored (no system libzstd dependency on the user's machine).
 zstd = "0.13"

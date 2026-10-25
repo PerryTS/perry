@@ -19,7 +19,7 @@ extern "C" {
 /// Forward a body chunk to a `.pipe(dest)` destination: `dest.write(chunk)`.
 /// Both arguments are NaN-boxed JS values and are rooted before method-name
 /// allocation or dynamic dispatch can collect.
-unsafe fn forward_pipe_write_value(dest: f64, chunk: f64) {
+pub(crate) unsafe fn forward_pipe_write_value(dest: f64, chunk: f64) {
     if chunk.to_bits() == TAG_UNDEFINED {
         return;
     }
@@ -40,7 +40,7 @@ unsafe fn forward_pipe_write_value(dest: f64, chunk: f64) {
 }
 
 /// Finish a `.pipe(dest)` destination once the response body ends: `dest.end()`.
-unsafe fn forward_pipe_end(dest_bits: u64) {
+pub(crate) unsafe fn forward_pipe_end(dest_bits: u64) {
     let scope = perry_ffi::TransientRootScope::enter();
     let dest = scope.root_nanbox(f64::from_bits(dest_bits));
     let name = alloc_string("end");

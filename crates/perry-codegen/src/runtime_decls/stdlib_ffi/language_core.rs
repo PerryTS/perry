@@ -291,7 +291,7 @@ pub(crate) fn declare_core(module: &mut LlModule) {
     module.declare_function("js_net_socket_address", I64, &[I64]);
     module.declare_function("js_net_socket_once", I64, &[I64, I64, I64]);
     module.declare_function("js_ext_net_socket_once", I64, &[I64, I64, I64]);
-    module.declare_function("js_ext_net_socket_on", VOID, &[I64, I64, I64]);
+    module.declare_function("js_ext_net_socket_on", I64, &[I64, I64, I64]);
     module.declare_function(
         "js_net_subclass_init",
         DOUBLE,

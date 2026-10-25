@@ -455,6 +455,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     while lowered.len() < declared_count {
                         lowered.push(undef.clone());
                     }
+                    // JavaScript ignores arguments past the declared width, and a
+                    // wasm32 call must match the callee's signature exactly. The
+                    // extras are already evaluated above.
+                    if let Some(&declared) = ctx.method_param_counts.get(&key) {
+                        lowered.truncate(declared);
+                    }
                 }
                 let arg_slices: Vec<(crate::types::LlvmType, &str)> =
                     lowered.iter().map(|s| (DOUBLE, s.as_str())).collect();

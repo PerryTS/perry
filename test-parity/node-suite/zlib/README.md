@@ -72,8 +72,22 @@ pointers. Native codec working allocations remain in the payload buffer ledger.
 
 `dictionary/deflate-wrong-dictionary.ts` pins the Node 26.12.1 errors for missing
 and wrong dictionaries (`Z_NEED_DICT`, with distinct messages), a sliced DataView,
-and reset followed by split input. Brotli and Zstd dictionary application remain
-separate unsupported codec work; this change makes no claim about either.
+and reset followed by split input. Brotli dictionary application remains separate
+unsupported codec work.
+
+## Zstd dictionary history
+
+`dictionary/zstd-roundtrip.ts` covers direct and captured synchronous APIs and
+stream constructors, sliced DataView/TypedArray dictionaries, reset followed by
+split input, and ordinary no-history controls. Sync calls read only the dictionary
+option; stream constructors retain their existing validation schedule. Each codec
+owns an immediate view-bounded byte snapshot, and reset reloads it into the new
+native context through the existing payload owner and allocation accounting.
+Actual backend error numbers determine Zstd error codes, not message matching.
+A wrong raw-content dictionary can succeed with incorrect plaintext; the fixture
+does not invent a universal wrong-dictionary error. Missing-history rejection
+distinguishes real dictionary application from an ordinary roundtrip.
+Callback option capture and settlement are unchanged by this sync/stream work.
 
 ## Brotli one-shot output limits
 
@@ -269,7 +283,9 @@ and `imports/legacy-constant-aliases` without changing those fixtures.
 ## Synchronous decoder completion
 
 `inflateSync`, `gunzipSync`, and `inflateRawSync` retain completion options on
-both direct imports and captured exports. `rejectGarbageAfterEnd` accepts only
+both direct imports and captured exports for their bare-Buffer paths.
+The genuine `inflateSync` `info: true` owner path retains its existing behavior;
+combining info results with completion policy is outside this decoder change. `rejectGarbageAfterEnd` accepts only
 booleans or `undefined`; explicit `true` rejects bytes after the first stream
 with `TypeError [ERR_TRAILING_JUNK_AFTER_STREAM_END]`, including another gzip
 member. Defaults still accept concatenated gzip members and gzip zero padding.
@@ -281,3 +297,13 @@ Truncated decoding uses identical fixed Node 26.12.1 wire inputs, not halves of
 independently compressed streams with different Huffman representations; fixed
 miniz prefixes also cover exhausted input producing an empty Buffer. This tests
 decoder completion without requiring identical compressor output.
+
+### Synchronous DEFLATE info results
+
+`deflateSync` and `inflateSync` return an enumerable `{ buffer, engine }`
+record when `options.info` is truthy. The genuine `Deflate` or `Inflate` owner
+processes the input through its attached codec; `bytesWritten` reports consumed
+input, and releasing its native handle does not destroy or close the Transform.
+False/default info retains the bare Buffer and existing one-shot backend.
+The public fixture covers named, namespace and captured calls, truthiness,
+option-getter order, malformed input, and view-bounded input accounting.

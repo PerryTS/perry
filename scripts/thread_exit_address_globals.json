@@ -1328,6 +1328,14 @@
    "why": "AtomicPtr to a `&'static NmNamespaceOps` function-pointer table, stored by arm_nm_namespace_ops (nm_namespace_hooks.rs:51); address of a static."
   },
   {
+   "file": "crates/perry-runtime/src/dns/ffi.rs",
+   "names": [
+    "EXPORT_ROUTER"
+   ],
+   "verdict": "no_heap_address",
+   "why": "AtomicPtr<()> holding the bits of a plain `fn` pointer (route_export as ExportRouter), stored once by js_dns_install_exports (dns/ffi.rs:541) and read by dispatch_export; null = not armed. It is the address of a function in the image, never a heap or arena address, so thread exit cannot leave it dangling."
+  },
+  {
    "file": "crates/perry-runtime/src/object/nm_namespace_hooks.rs",
    "names": [
     "NM_EE_OPS"

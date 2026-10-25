@@ -6,6 +6,12 @@ use std::borrow::Cow;
 use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
 
+use super::package_patches::{
+    is_depd_index_path, is_function_bind_implementation_path, is_safe_buffer_path,
+    is_safer_buffer_path, rewrite_depd_dynamic_wrapper, rewrite_function_bind_dynamic_wrapper,
+    rewrite_safe_buffer_slow_buffer_fallback, rewrite_safer_buffer_private_binding,
+};
+
 fn relative_import_specifier(from: &Path, to: &Path) -> Option<String> {
     let from: Vec<Component<'_>> = from.components().collect();
     let to: Vec<Component<'_>> = to.components().collect();
@@ -95,6 +101,20 @@ fn resolve_compiled_require_target(
         )
     })?;
     (target.extension().and_then(|extension| extension.to_str()) != Some("node")).then_some(target)
+}
+
+/// Is `target` an ES module rather than CommonJS? `.mjs`/`.mts` always are,
+/// `.cjs`/`.cts` never; other files must show a top-level `import`/`export`
+/// (a script with no module syntax stays on the default-import path).
+fn is_es_module_target(target: &Path) -> bool {
+    match target.extension().and_then(|extension| extension.to_str()) {
+        Some("mjs" | "mts") => true,
+        Some("cjs" | "cts") => false,
+        Some("js" | "jsx" | "ts" | "tsx") => std::fs::read_to_string(target).is_ok_and(|source| {
+            super::detect::has_top_level_esm(&super::detect::strip_comments_and_strings(&source))
+        }),
+        _ => false,
+    }
 }
 
 /// Is `name` a JS global-builtin VALUE (a constructor/namespace reachable as a
@@ -555,42 +575,53 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
             // explicit compilePackages opt-in. Resolving them to watcher.node
             // creates a compiled-module import whose body is intentionally absent.
             let watcher_facade = is_watcher_facade(spec);
-            let resolved_require_spec = if !watcher_facade && import_spec == spec
+            let resolved_require_path = if !watcher_facade
+                && import_spec == spec
                 && !spec.starts_with("./")
                 && !spec.starts_with("../")
                 && !std::path::Path::new(spec).is_absolute()
                 && compile_packages.is_none_or(|packages| {
-                    let (package_name, _) =
-                        super::super::resolve::parse_package_specifier(spec);
+                    let (package_name, _) = super::super::resolve::parse_package_specifier(spec);
                     packages.contains("*") || packages.contains(&package_name)
+                }) {
+                source_path.parent().and_then(|module_dir| {
+                    super::super::collect_modules::static_require_transform::resolve_static_require(
+                        module_dir, spec, None,
+                    )
                 })
-            {
-                source_path
-                    .parent()
-                    .and_then(|module_dir| {
-                        super::super::collect_modules::static_require_transform::resolve_static_require(
-                            module_dir,
-                            spec,
-                            None,
-                        )
-                    })
-                    // Keep the resolved target relative to the importing
-                    // module. Absolute node_modules imports are classified as
-                    // ordinary runtime JS by the general resolver because the
-                    // original package name (and therefore compilePackages
-                    // opt-in) is no longer visible there.
-                    .and_then(|path| {
-                        source_path
-                            .parent()
-                            .and_then(|module_dir| relative_import_specifier(module_dir, &path))
-                    })
             } else {
                 None
             };
+            // `require()` of an ES module yields its namespace object (Node
+            // 22's require(esm)). A default import would instead yield the
+            // `export default` value: `@platformatic/globals` exports named
+            // functions plus `export default getGlobal`, so a CommonJS
+            // consumer's `require(..).getGlobal` read a property off the
+            // function. A deferred spec is loaded through the path registry,
+            // not this binding.
+            let namespace_binding = !lazy_specs.contains(spec)
+                && resolved_require_path
+                    .as_deref()
+                    .is_some_and(is_es_module_target);
+            let binding = if namespace_binding {
+                format!("* as {local}")
+            } else {
+                local.clone()
+            };
+            // Keep the resolved target relative to the importing module.
+            // Absolute node_modules imports are classified as ordinary
+            // runtime JS by the general resolver because the original package
+            // name (and therefore compilePackages opt-in) is no longer
+            // visible there.
+            let resolved_require_spec = resolved_require_path.as_deref().and_then(|path| {
+                source_path
+                    .parent()
+                    .and_then(|module_dir| relative_import_specifier(module_dir, path))
+            });
             if let Some(resolved) = resolved_require_spec {
                 format!(
                     "import {} from {};",
-                    local,
+                    binding,
                     serde_json::to_string(&resolved)
                         .expect("CJS import specifier is JSON encodable")
                 )
@@ -604,6 +635,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
         "import {{ createRequire as {create_require}, isBuiltin as __perry_cjs_is_builtin }} from 'node:module';\n{imports}"
     );
 
+    let uses_deferred_helper = std::cell::Cell::new(false);
     // An UNRESOLVABLE adopted specifier (`require('@opentelemetry/api')`
     // with only Next's vendored copy on disk) leaves its hoisted import
     // binding as the boolean TRUE sentinel at runtime. Returning that from
@@ -664,20 +696,20 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
                 resolved_target
                     .as_ref()
                     .map(|target| {
-                        let warnings = if cyclic_specs.contains(spec) {
-                            cyclic_missing_property_names(source, source_path, spec, target)
-                                .into_iter()
-                                .map(|property| {
-                                    // #10178: this scan only nominates possible
-                                    // misses. __export helpers and class statics
-                                    // can already be present on a replacement
-                                    // module.exports. Check the returned value
-                                    // without invoking the exported getter.
-                                    format!(
-                                        "if (childBefore && childBefore.loaded === false && required != null && (typeof required === 'object' || typeof required === 'function') && !('{property}' in required)) globalThis.process?.emitWarning?.(\"Accessing non-existent property '{property}' of module exports inside circular dependency\"); "
-                                    )
-                                })
-                                .collect::<String>()
+                        // A cyclic target reports the properties the cycle can
+                        // read before they exist (#10178), in the shared helper.
+                        let missing = if cyclic_specs.contains(spec) {
+                            let names =
+                                cyclic_missing_property_names(source, source_path, spec, target);
+                            if names.is_empty() {
+                                String::new()
+                            } else {
+                                format!(
+                                    ", {}",
+                                    serde_json::to_string(&names)
+                                        .expect("property names are JSON encodable")
+                                )
+                            }
                         } else {
                             String::new()
                         };
@@ -694,9 +726,23 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
                         // miss-vs-`undefined`-export discriminator (a real
                         // module may export `undefined`), and on a genuine miss
                         // the import binding is the value this arm returned
-                        // before the target was deferred at all.
+                        // before the target was deferred at all. The binding is
+                        // read through a thunk because reading it can itself
+                        // initialize the target.
+                        //
+                        // The registry call, its `try`/`finally`, the cycle
+                        // warning and the child link live in one helper per
+                        // module instead of being repeated in every case.
+                        // `require` holds one case per specifier, and each
+                        // inlined copy carried a returns-twice frame on wasm32:
+                        // the sjlj lowering threads every value of every case
+                        // through one dispatch loop, so the function grew with
+                        // the square of the specifier count (17 MB for a 3 KB
+                        // barrel module) and passed the 7.6 MB function size
+                        // limit of wasmtime and wasm-tools.
+                        uses_deferred_helper.set(true);
                         format!(
-                            "const childBefore = require.cache[{path:?}]; globalThis.__perry_cjs_pending_parent = module; let required; try {{ required = __perry_require_path_module({path:?}); required = __perry_cjs_refresh_path({path:?}, required); }} finally {{ globalThis.__perry_cjs_pending_parent = undefined; }} if (required === undefined && !__perry_has_path_module({path:?})) required = {local}; {warnings}{link_child}const __perry_rec = require.cache[{path:?}]; if (__perry_rec !== undefined && __perry_rec.loaded === true) {local}__rec = __perry_rec; return required;",
+                            "const required = __perry_cjs_require_deferred({path:?}, () => {local}{missing}); const __perry_rec = require.cache[{path:?}]; if (__perry_rec !== undefined && __perry_rec.loaded === true) {local}__rec = __perry_rec; return required;",
                             path = target.to_string_lossy(),
                             local = local,
                         )
@@ -788,6 +834,42 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
         .map(|(_, local)| format!("    let {local}__rec;"))
         .collect::<Vec<_>>()
         .join("\n");
+    // The first, registry-backed require of a deferred target (see the case
+    // above). `fallback` is a thunk: reading the import binding can initialize
+    // the target, so it is read only when the registry has no such module.
+    let deferred_helper = if uses_deferred_helper.get() {
+        r#"    function __perry_cjs_require_deferred(path, fallback, missing) {
+        const childBefore = require.cache[path];
+        globalThis.__perry_cjs_pending_parent = module;
+        let required;
+        try {
+            required = __perry_require_path_module(path);
+            required = __perry_cjs_refresh_path(path, required);
+        } finally {
+            globalThis.__perry_cjs_pending_parent = undefined;
+        }
+        if (required === undefined && !__perry_has_path_module(path)) required = fallback();
+        if (missing !== undefined && childBefore && childBefore.loaded === false && required != null && (typeof required === 'object' || typeof required === 'function')) {
+            // #10178: this scan only nominates possible misses. __export helpers
+            // and class statics can already be present on a replacement
+            // module.exports. Check the returned value without invoking the
+            // exported getter.
+            for (let i = 0; i < missing.length; i++) {
+                const property = missing[i];
+                if (!(property in required)) globalThis.process?.emitWarning?.("Accessing non-existent property '" + property + "' of module exports inside circular dependency");
+            }
+        }
+        const child = require.cache[path];
+        if (child) {
+            if (child.parent === undefined) child.parent = module;
+            if (module.children.indexOf(child) === -1) module.children.push(child);
+        }
+        return required;
+    }
+"#
+    } else {
+        ""
+    };
     // Heuristic: is any `require('<spec>')` call site lexically inside a
     // `try { … }` block? Reverse brace-depth scan from the call offset to
     // the nearest unmatched `{`, checking whether `try` precedes it.
@@ -1366,7 +1448,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
         if (__perry_cjs_reload_require === undefined) __perry_cjs_reload_require = {create_require}({module_filename_literal});
         return __perry_cjs_reload_require(path);
     }}
-    function require(specifier) {{
+{deferred_helper}    function require(specifier) {{
         if (typeof specifier !== 'string') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_TYPE', 'The "id" argument must be of type string.');
         if (specifier === '') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_VALUE', 'The argument "id" must be a non-empty string.');
 {require_cases}
@@ -1847,115 +1929,6 @@ fn inactive_platform_guarded_requires(
         }
     }
     inactive
-}
-
-fn is_depd_index_path(source_path: &Path) -> bool {
-    source_path
-        .file_name()
-        .map(|name| name == "index.js")
-        .unwrap_or(false)
-        && source_path
-            .components()
-            .any(|component| component.as_os_str().to_string_lossy() == "depd")
-}
-
-fn is_function_bind_implementation_path(source_path: &Path) -> bool {
-    source_path
-        .file_name()
-        .map(|name| name == "implementation.js")
-        .unwrap_or(false)
-        && source_path
-            .components()
-            .any(|component| component.as_os_str().to_string_lossy() == "function-bind")
-}
-
-fn is_safer_buffer_path(source_path: &Path) -> bool {
-    source_path
-        .file_name()
-        .map(|name| name == "safer.js")
-        .unwrap_or(false)
-        && source_path
-            .components()
-            .any(|component| component.as_os_str().to_string_lossy() == "safer-buffer")
-}
-
-fn is_safe_buffer_path(source_path: &Path) -> bool {
-    source_path
-        .file_name()
-        .map(|name| name == "index.js")
-        .unwrap_or(false)
-        && source_path
-            .components()
-            .any(|component| component.as_os_str().to_string_lossy() == "safe-buffer")
-}
-
-fn rewrite_depd_dynamic_wrapper(source: &str) -> Option<String> {
-    let needle = r#"  // eslint-disable-next-line no-new-func
-  var deprecatedfn = new Function('fn', 'log', 'deprecate', 'message', 'site',
-    '"use strict"\n' +
-    'return function (' + args + ') {' +
-    'log.call(deprecate, message, site)\n' +
-    'return fn.apply(this, arguments)\n' +
-    '}')(fn, log, this, message, site)"#;
-
-    let replacement = r#"  var deprecatedfn = (function (fn, log, deprecate, message, site) {
-    "use strict"
-    return function () {
-      log.call(deprecate, message, site)
-      return fn.apply(this, arguments)
-    }
-  })(fn, log, this, message, site)"#;
-
-    if source.contains(needle) {
-        Some(source.replace(needle, replacement))
-    } else {
-        None
-    }
-}
-
-fn rewrite_function_bind_dynamic_wrapper(source: &str) -> Option<String> {
-    let needle = r#"    bound = Function('binder', 'return function (' + joiny(boundArgs, ',') + '){ return binder.apply(this,arguments); }')(binder);"#;
-    let replacement = r#"    bound = function () {
-        return binder.apply(this, arguments);
-    };"#;
-
-    if source.contains(needle) {
-        Some(source.replace(needle, replacement))
-    } else {
-        None
-    }
-}
-
-fn rewrite_safer_buffer_private_binding(source: &str) -> Option<String> {
-    let needle = r#"if (!safer.kStringMaxLength) {
-  try {
-    safer.kStringMaxLength = process.binding('buffer').kStringMaxLength
-  } catch (e) {
-    // we can't determine kStringMaxLength in environments where process.binding
-    // is unsupported, so let's not set it
-  }
-}"#;
-
-    let replacement = r#"if (!safer.kStringMaxLength) {
-  safer.kStringMaxLength = 536870888
-}"#;
-
-    if source.contains(needle) {
-        Some(source.replace(needle, replacement))
-    } else {
-        None
-    }
-}
-
-fn rewrite_safe_buffer_slow_buffer_fallback(source: &str) -> Option<String> {
-    let needle = "return buffer.SlowBuffer(size)";
-    let replacement = "return Buffer.allocUnsafeSlow(size)";
-
-    if source.contains(needle) {
-        Some(source.replace(needle, replacement))
-    } else {
-        None
-    }
 }
 
 #[cfg(test)]

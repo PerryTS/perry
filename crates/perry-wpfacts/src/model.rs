@@ -131,8 +131,14 @@ pub enum TmplKind {
         class_id: u32,
         literal_shape: bool,
     },
-    /// An object literal site that stays an `Expr::Object` / `ObjectSpread`.
-    Lit { module: u32, site: SiteId },
+    /// An object literal site that stays an `Expr::Object` / `ObjectSpread`,
+    /// or a TS enum's object (`enum_image`: its keys are the members, named
+    /// by the enum, §18.2).
+    Lit {
+        module: u32,
+        site: SiteId,
+        enum_image: bool,
+    },
     /// Instances of `new f()` on a constructor-function body.
     FnInst { func: FnIdx },
     /// `Object.create(p)` result at a site (a separate template; E10 makes
@@ -355,6 +361,13 @@ pub enum Cons {
     },
     /// Every token escapes (goes to ⊤), with the reason.
     TopSink { reason: u32 },
+    /// A parameter of a closed class's stand-in constructor (design §18.13,
+    /// DECISIONS 109): an instance of another unit's contract (a stand-in)
+    /// goes to the defining unit's constructor through the argument
+    /// contract, which describes it there as the same stand-in, so that
+    /// unit's census covers what the constructor does with it; any other
+    /// token escapes, with the reason.
+    HandOver { reason: u32 },
     /// The `this` of a contract stand-in of another unit's class `tmpl`
     /// (design §11.2): its instances are inside the contract; any other
     /// receiver escapes (that unit runs the method on it unseen).
@@ -512,6 +525,7 @@ impl Cons {
             Cons::MCall { .. } => "mcall",
             Cons::Chain { .. } => "chain",
             Cons::TopSink { .. } => "top",
+            Cons::HandOver { .. } => "handover",
             Cons::ContractThis { .. } => "contractthis",
             Cons::TopIfAny { .. } => "topifany",
             Cons::Hard { .. } => "hard",
@@ -830,9 +844,11 @@ pub struct Model {
     pub foreign: FxHashMap<TmplId, crate::TemplateFacts>,
     /// Foreign templates this unit stored into (a census report).
     pub foreign_written: crate::pts::FxHashSet<TmplId>,
-    /// Existing data fields of other units' literal layouts this unit
-    /// stored into: store effects, not census reports (decision 17).
-    pub foreign_stores: crate::pts::FxHashSet<(TmplId, Atom)>,
+    /// Existing data fields of other units' literal layouts and class
+    /// instances this unit stored into: store effects, not census reports
+    /// (decision 17), with the node of each stored value (its kinds are
+    /// published, DECISIONS 73).
+    pub foreign_stores: crate::pts::FxHashSet<(TmplId, Atom, NodeId)>,
     /// Published functions with a contract (design §11.2): their results
     /// are checked after the solve instead of escaping.
     pub contract_fns: crate::pts::FxHashSet<FnIdx>,
@@ -842,6 +858,16 @@ pub struct Model {
     /// Per closed function: which parameters every caller passes a
     /// described value (no unknown one) (decision 17).
     pub closed_described: FxHashMap<FnIdx, Vec<bool>>,
+    /// Argument markers (and their reach markers) that stand only for
+    /// markers beside their values (`beside_values`, DECISIONS 74, 75).
+    /// A marker leaves it when a member that is not beside links in.
+    pub beside_markers: crate::pts::FxHashSet<Tok>,
+    /// Per beside argument marker: the argument markers it is a member of
+    /// that are beside too (they leave with it, DECISIONS 75).
+    pub beside_up: FxHashMap<Tok, Vec<Tok>>,
+    /// Per beside argument marker: the arithmetic results that took no
+    /// object kinds for it (DECISIONS 75); they take them if it leaves.
+    pub beside_arith: FxHashMap<Tok, Vec<(NodeId, u16)>>,
     /// Decision 19: the reason a closed function is published to the
     /// module's other units (`Gen::unit_boundary`). Published that way its
     /// token does not escape: its parameters hold the closed contract's
@@ -857,10 +883,20 @@ pub struct Model {
     pub param_marker: FxHashMap<Tok, (FnIdx, u32)>,
     pub marker_of: FxHashMap<(FnIdx, u32), Tok>,
     pub marker_use: FxHashMap<Tok, u8>,
-    /// The markers of what a parameter reaches (not the argument itself).
+    /// The markers of what a parameter or argument reaches (not the
+    /// argument itself).
     pub reach_marker: crate::pts::FxHashSet<Tok>,
     /// A parameter marker's reach marker.
     pub marker_reach: FxHashMap<Tok, Tok>,
+    /// A parameter marker's reach markers by the named key it was read
+    /// under (`p.k`, design §18.4): what the argument reaches through `k`.
+    /// The reach marker above stands for what a computed key reaches.
+    pub keyed_reach: FxHashMap<Tok, Vec<(Atom, Tok)>>,
+    /// An argument marker's keyed reach marker -> (the argument marker, key).
+    pub keyed_parent: FxHashMap<Tok, (Tok, Atom)>,
+    /// Uses under a named key that reached a marker through argument
+    /// markers (`keyed_use`), by marker.
+    pub keyed_uses: FxHashMap<Tok, Vec<(Atom, u8)>>,
     /// Markers that read as ⊤ (DECISIONS 42), a bit per token: the
     /// contract records the escape, so the consumer sinks the argument and
     /// reads nothing else of it; the marker says no more than the ⊤ beside
@@ -1370,8 +1406,14 @@ impl Model {
         if self.is_arg_marker(t) {
             let mut st = vec![(t, bits)];
             while let Some((x, b)) = st.pop() {
+                // Each marker the walk visits is solve work (113-CWL3).
+                self.work += 1;
                 if !self.is_arg_marker(x) {
                     self.mark_use(x, b);
+                    continue;
+                }
+                if let Some(&(p, a)) = self.keyed_parent.get(&x) {
+                    self.keyed_use(p, a, b);
                     continue;
                 }
                 let u = self.marker_use.entry(x).or_default();
@@ -1409,6 +1451,89 @@ impl Model {
         }
     }
 
+    /// Parameter marker `t`'s reach marker for named key `a` (design
+    /// §18.4): the value of `p.a`, and everything read from it. Its uses
+    /// are published per key, so the caller applies them to its argument's
+    /// `a` alone, not to everything the argument reaches (its prototype,
+    /// its class).
+    pub(crate) fn keyed_reach_of(&mut self, t: Tok, a: Atom) -> Tok {
+        if let Some(&(_, r)) = self
+            .keyed_reach
+            .get(&t)
+            .and_then(|v| v.iter().find(|(k, _)| *k == a))
+        {
+            return r;
+        }
+        let TokKind::Obj(tm, _) = self.toks[t as usize] else {
+            unreachable!("a marker is an object token")
+        };
+        let display = format!(
+            "{}:reach.{}",
+            self.tmpls[tm as usize].display, self.atoms[a as usize]
+        );
+        let rm = self.marker_template(display);
+        let r = self.tok(TokKind::Obj(rm, NO_CTX));
+        let rany = self.field_any(r);
+        self.add_tok(rany, r);
+        self.reach_marker.insert(r);
+        self.keyed_reach.entry(t).or_default().push((a, r));
+        match self.param_marker.get(&t).copied() {
+            Some(fi) => {
+                self.param_marker.insert(r, fi);
+            }
+            // An argument marker's keyed reach: its uses are its members'
+            // uses under the same key (DECISIONS 44), kept per (marker, key)
+            // in `keyed_uses`, not as a token per member (`keyed_use`).
+            None => {
+                let w = (r >> 6) as usize;
+                if self.arg_bits.len() <= w {
+                    self.arg_bits.resize(w + 1, 0);
+                }
+                self.arg_bits[w] |= 1 << (r & 63);
+                self.arg_members.insert(r, Vec::new());
+                self.keyed_parent.insert(r, (t, a));
+                if self.beside_markers.contains(&t) {
+                    self.beside_markers.insert(r);
+                }
+            }
+        }
+        r
+    }
+
+    /// A use `bits` of what marker `t` reaches through named key `a`
+    /// (design §18.4). A parameter marker records it for its contract; an
+    /// argument marker passes it to each marker it stands for; a reach
+    /// marker reaches itself under every key.
+    pub(crate) fn keyed_use(&mut self, t: Tok, a: Atom, bits: u8) {
+        let mut st = vec![(t, bits)];
+        while let Some((x, b)) = st.pop() {
+            // Each marker the walk visits is solve work (113-CWL3).
+            self.work += 1;
+            if self.reach_marker.contains(&x) {
+                self.mark_use(x, b);
+                continue;
+            }
+            let v = self.keyed_uses.entry(x).or_default();
+            let new = match v.iter_mut().find(|(k, _)| *k == a) {
+                Some((_, u)) => {
+                    let new = b & !*u;
+                    *u |= b;
+                    new
+                }
+                None => {
+                    v.push((a, b));
+                    b
+                }
+            };
+            if new == 0 {
+                continue;
+            }
+            if self.is_arg_marker(x) {
+                st.extend(self.arg_members[&x].iter().map(|&m| (m, new)));
+            }
+        }
+    }
+
     pub(crate) fn set_marker_top(&mut self, t: Tok) {
         let w = (t >> 6) as usize;
         if self.marker_top.len() <= w {
@@ -1421,6 +1546,23 @@ impl Model {
     #[inline]
     pub(crate) fn marker_is_top(&self, t: Tok) -> bool {
         marker_top_bit(&self.marker_top, t)
+    }
+
+    /// A marker that stands for no value of its own (DECISIONS 74): one of
+    /// a closed function's described parameter (decision 17), what it
+    /// reaches, or an argument marker all of whose members are such
+    /// markers (DECISIONS 75), and what that reaches. The callers' values
+    /// are the contract's, beside it in every node it reaches (they arrive
+    /// together), so it adds no kinds.
+    pub(crate) fn beside_values(&self, t: Tok) -> bool {
+        match self.param_marker.get(&t) {
+            Some(&(f, i)) => self
+                .closed_described
+                .get(&f)
+                .and_then(|d| d.get(i as usize))
+                .is_some_and(|&d| d),
+            None => self.beside_markers.contains(&t),
+        }
     }
 
     /// A parameter marker or an argument marker (DECISIONS 44).
@@ -1474,7 +1616,14 @@ impl Model {
             self.arg_members.insert(x, Vec::new());
         }
         self.marker_reach.insert(t, r);
+        self.reach_marker.insert(r);
         self.arg_marker_of.insert(n, t);
+        // It stands for its members alone (DECISIONS 75): beside while it
+        // has none, and while each one that links in is beside
+        // (`link_marker`). The caller links the arriving markers before
+        // the marker reaches any node.
+        self.beside_markers.insert(t);
+        self.beside_markers.insert(r);
         let any = self.field_any(t);
         self.add_tok(any, r);
         let rany = self.field_any(r);
@@ -1489,6 +1638,15 @@ impl Model {
             return;
         }
         self.arg_members.get_mut(&r).unwrap().push(m);
+        if self.beside_markers.contains(&r) {
+            match self.beside_values(m) {
+                true if !self.param_marker.contains_key(&m) => {
+                    self.beside_up.entry(m).or_default().push(r)
+                }
+                true => {}
+                false => self.leave_beside(r),
+            }
+        }
         let u = self.marker_use.get(&r).copied().unwrap_or(0);
         if u != 0 {
             self.mark_use(m, u);
@@ -1497,6 +1655,32 @@ impl Model {
         let (mr, rr) = (reach(self, m), reach(self, r));
         if (mr, rr) != (m, r) {
             self.link_marker(mr, rr);
+        }
+        // And per key (§18.4): what `m` reaches through `k` takes the uses
+        // of what `r` reaches through `k` so far (later ones: `keyed_use`).
+        for (a, b) in self.keyed_uses.get(&r).cloned().unwrap_or_default() {
+            self.keyed_use(m, a, b);
+        }
+    }
+
+    /// Argument marker `t` stands for a value of its own now (DECISIONS
+    /// 75): so do what it reaches and the argument markers it is a member
+    /// of, and each arithmetic result that skipped it takes the object
+    /// kinds it would have taken. Beside only ever turns off: monotone.
+    pub(crate) fn leave_beside(&mut self, t: Tok) {
+        let mut st = vec![t];
+        while let Some(x) = st.pop() {
+            if !self.beside_markers.remove(&x) {
+                continue;
+            }
+            for (dst, out) in self.beside_arith.remove(&x).unwrap_or_default() {
+                self.add_prim(dst, out);
+            }
+            st.extend(self.beside_up.remove(&x).unwrap_or_default());
+            st.extend(self.marker_reach.get(&x).copied());
+            if let Some(ks) = self.keyed_reach.get(&x) {
+                st.extend(ks.iter().map(|&(_, r)| r));
+            }
         }
     }
 

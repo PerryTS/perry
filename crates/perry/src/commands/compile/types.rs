@@ -996,6 +996,12 @@ pub struct CompilationContext {
     /// module is only known at runtime, so auto-optimized runtimes must retain
     /// optional builtin namespace data such as the HTTP/2 key tables.
     pub uses_get_builtin_module: bool,
+    /// Whether any module imports, requires, or names (`getBuiltinModule`)
+    /// `dns` / `dns/promises`. Arms the dns export router so a namespace
+    /// created at runtime (a CommonJS `require('node:dns')`) reaches
+    /// `lookup` / `resolve*` / `reverse`; programs without it keep those FFIs
+    /// out of the link (see `js_dns_install_exports`).
+    pub uses_dns: bool,
     /// Whether `perry/thread` is imported. When true, the runtime must
     /// keep `panic = "unwind"` so that worker-thread panics translate to
     /// promise rejections via `catch_unwind` in `perry-runtime/src/thread.rs`
@@ -1401,6 +1407,7 @@ impl CompilationContext {
             uses_dgram: false,
             uses_node_test: false,
             uses_get_builtin_module: false,
+            uses_dns: false,
             needs_thread: false,
             cross_module_class_field_types: HashMap::new(),
             patched_builtins: Default::default(),

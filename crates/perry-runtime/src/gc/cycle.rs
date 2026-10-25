@@ -1832,6 +1832,12 @@ impl GcCycleState {
                 .borrow_mut()
                 .record_collection(self.freed_bytes, elapsed_us);
         });
+        super::telemetry::log_collection(
+            self.minor.is_none(),
+            self.trigger_kind,
+            self.freed_bytes,
+            elapsed_us,
+        );
 
         if let Some(minor) = self.minor.as_ref() {
             restore_minor_in_alloc(minor.prev_in_alloc);

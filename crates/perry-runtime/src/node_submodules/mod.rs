@@ -1124,7 +1124,7 @@ pub(crate) fn emit_sys_deprecation_warning_once() {
     {
         return;
     }
-    let pid = std::process::id();
+    let pid = crate::os::current_process_id();
     eprintln!(
         "(node:{pid}) [DEP0025] DeprecationWarning: sys is deprecated. Use `node:util` instead."
     );
