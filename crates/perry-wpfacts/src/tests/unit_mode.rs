@@ -109,6 +109,20 @@ fn units_of(mods: &[(&str, &str)]) -> ProgramFacts {
 }
 
 fn units_with(mods: &[(&str, &str)], cfg: &FactsConfig) -> ProgramFacts {
+    program_of(mods, cfg, crate::compute_units)
+}
+
+/// The whole-program facts of the same modules: the bar per-unit facts may
+/// never be stronger than.
+fn whole_of(mods: &[(&str, &str)]) -> ProgramFacts {
+    program_of(mods, &FactsConfig::default(), crate::compute)
+}
+
+fn program_of(
+    mods: &[(&str, &str)],
+    cfg: &FactsConfig,
+    run: fn(&[(String, &perry_hir::Module)], &FactsConfig) -> ProgramFacts,
+) -> ProgramFacts {
     let hirs: Vec<(String, perry_hir::Module)> = mods
         .iter()
         .map(|(name, src)| {
@@ -125,7 +139,7 @@ fn units_with(mods: &[(&str, &str)], cfg: &FactsConfig) -> ProgramFacts {
         .collect();
     let list: Vec<(String, &perry_hir::Module)> =
         hirs.iter().map(|(p, h)| (p.clone(), h)).collect();
-    crate::compute_units(&list, cfg)
+    run(&list, cfg)
 }
 
 #[test]
@@ -3225,4 +3239,106 @@ fn a_store_beside_top_writes_no_builtin_function_value() {
         builtin_fn_read_top("g.k = 1;"),
         "a store into a builtin function value must mark them written"
     );
+}
+
+/// RTX bug 3: `h` stores its argument into `saved.p`, a literal of another
+/// declaration unit, and `b` returns it: `b`'s result is the `Box` given to
+/// `a`, which the reader writes.
+const SAVED_B: &str = "const saved: any = { p: null };\nfunction h(p: any) { if (!saved.p) saved.p = p; return saved.p; }\nexport function a(p: any) { return h(p); }\nexport function b(p: any) { return h(p); }";
+const SAVED_M: &str = "import { a, b } from './b'; class Box { v: any = 1; } const o = new Box(); a(o); const r = b(0); r.v = 'x'; console.log(o.v);";
+
+#[test]
+fn a_value_stored_into_another_units_literal_escapes() {
+    let pf = units_of(&[("b", SAVED_B), ("m", SAVED_M)]);
+    assert!(!field(tmpl(&pf, "Box"), "v").readonly, "{}", pf.dump_text());
+}
+
+#[test]
+fn a_value_stored_into_another_units_literal_is_written_in_the_whole_program() {
+    let pf = whole_of(&[("b", SAVED_B), ("m", SAVED_M)]);
+    assert!(!field(tmpl(&pf, "Box"), "v").readonly, "{}", pf.dump_text());
+}
+
+#[test]
+fn a_parameter_stored_through_a_result_into_another_units_literal_escapes() {
+    // `get()` gives `saved`, another declaration unit's literal: `a`'s store
+    // is a store effect, and the field holds an unknown value (an exported
+    // function's parameter). The shared body's observation node and the
+    // instance's slot both store `p`: each escapes, so `a`'s argument leaves
+    // and `Box.v`, written through `b()`, is not read-only.
+    let b = "const saved: any = { p: null };\nfunction get() { return saved; }\nexport function a(p: any) { get().p = p; }\nexport function b() { return saved.p; }";
+    let m = "import { a, b } from './b'; class Box { v: any = 1; } const o = new Box(); a(o); const r = b(); r.v = 'x'; console.log(o.v);";
+    let mods = [("b", b), ("m", m)];
+    assert!(!field(tmpl(&whole_of(&mods), "Box"), "v").readonly);
+    let pf = units_of(&mods);
+    assert!(!field(tmpl(&pf, "Box"), "v").readonly, "{}", pf.dump_text());
+}
+
+#[test]
+fn a_closure_stores_into_another_units_literal() {
+    // `f` and `g` are a literal's methods; the cell they share is a
+    // declaration unit of its own. What `f` stores, `g` hands to unknown
+    // code: `o.v` is written.
+    let b = "const cell: any = { s: null };\nexport function mk() { return { f(x: any) { cell.s = x; }, g() { (globalThis as any).k = cell.s; } }; }";
+    let m = "import { mk } from './b'; class Box { v: any = 1; } function main() { const api = mk(); const o = new Box(); api.f(o); api.g(); (globalThis as any).k.v = 'x'; console.log(o.v); } main(); main();";
+    let pf = units_of(&[("b", b), ("m", m)]);
+    assert!(!field(tmpl(&pf, "Box"), "v").readonly, "{}", pf.dump_text());
+}
+
+#[test]
+fn an_arrow_stores_into_another_units_literal() {
+    // An exported arrow (a closure of the module scope) stores its argument
+    // into `saved.p`; `b()` gives it back and the reader writes it.
+    let b = "const saved: any = { p: null };\nexport const put = (p: any) => { saved.p = p; };\nexport function b() { return saved.p; }";
+    let m = "import { put, b } from './b'; class Box { v: any = 1; } const o = new Box(); put(o); const r = b(); r.v = 'x'; console.log(o.v);";
+    let pf = units_of(&[("b", b), ("m", m)]);
+    assert!(!field(tmpl(&pf, "Box"), "v").readonly, "{}", pf.dump_text());
+}
+
+/// The kinds per unit cover the whole program's: ⊤, or every primitive
+/// kind and layout the whole program finds.
+fn kinds_cover(u: &crate::derive::FieldFacts, w: &crate::derive::FieldFacts) -> bool {
+    u.kind.top
+        || (u.kind.prims & w.kind.prims == w.kind.prims
+            && w.kind.objs.iter().all(|o| u.kind.objs.contains(o)))
+}
+
+#[test]
+fn a_store_into_another_units_literal_carries_the_stored_kinds() {
+    // The field `saved.p` holds what `a` stores (DECISIONS 73): per unit
+    // its kinds are never fewer than the whole program's.
+    let b = "const saved: any = { p: null };\nexport function a() { saved.p = 5; }\nexport function c() { return saved.p; }";
+    let m = "import { a, c } from './b'; a(); console.log(c());";
+    let mods = [("b", b), ("m", m)];
+    let (pf, w) = (units_of(&mods), whole_of(&mods));
+    let lit = |pf: &ProgramFacts| -> crate::derive::FieldFacts {
+        let t = pf
+            .templates
+            .iter()
+            .find(|t| t.display.starts_with("b.ts:__AnonShape"))
+            .unwrap_or_else(|| panic!("{}", pf.dump_text()));
+        field(t, "p").clone()
+    };
+    let (fu, fw) = (lit(&pf), lit(&w));
+    assert!(
+        kinds_cover(&fu, &fw),
+        "{:?} vs {:?}\n{}",
+        fu.kind,
+        fw.kind,
+        pf.dump_text()
+    );
+    assert!(!fu.readonly, "{}", pf.dump_text());
+}
+
+#[test]
+fn a_store_into_the_units_own_literal_publishes_nothing() {
+    // The literal is `f`'s own: the store is no store effect, nothing
+    // leaves, and `o.s.w` is proven as in the whole program.
+    let b = "class Inner { w: number = 1; }\nexport function f() { const o: any = { s: null }; o.s = new Inner(); return o.s.w; }";
+    let m = "import { f } from './b'; console.log(f());";
+    let mods = [("b", b), ("m", m)];
+    let (pf, w) = (units_of(&mods), whole_of(&mods));
+    assert_eq!(verdicts(&pf, "w"), verdicts(&w, "w"), "{}", pf.dump_text());
+    assert!(proven(&pf, "w"), "{}", pf.dump_text());
+    assert!(tmpl(&pf, "Inner").escape.is_none(), "{}", pf.dump_text());
 }
