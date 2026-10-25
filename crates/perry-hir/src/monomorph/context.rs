@@ -60,6 +60,7 @@ pub struct MonomorphizationContext {
     pub(crate) class_work_queue: VecDeque<ClassSpecRequest>,
     /// Counter for generating unique function IDs
     pub(crate) next_func_id: FuncId,
+    pub(crate) next_local_id: crate::types::LocalId,
     /// Counter for generating unique class IDs
     pub(crate) next_class_id: ClassId,
     /// Set of already processed specializations (to avoid duplicates)
@@ -96,7 +97,7 @@ pub(crate) struct ClassSpecRequest {
 impl MonomorphizationContext {
     pub fn new(module: &Module) -> Self {
         // Find the highest existing func_id and class_id
-        let max_func_id = module.functions.iter().map(|f| f.id).max().unwrap_or(0);
+        let (max_local_id, max_func_id) = super::freshen::max_ids(module);
 
         let max_class_id = module.classes.iter().map(|c| c.id).max().unwrap_or(0);
 
@@ -105,14 +106,19 @@ impl MonomorphizationContext {
             specialized_classes: HashMap::new(),
             func_work_queue: VecDeque::new(),
             class_work_queue: VecDeque::new(),
-            next_func_id: max_func_id + 1000, // Leave room for original IDs
+            next_func_id: max_func_id
+                .checked_add(1000)
+                .expect("monomorph FuncId overflow"),
+            next_local_id: max_local_id
+                .checked_add(1)
+                .expect("monomorph LocalId overflow"),
             next_class_id: max_class_id + 1,
             processed_funcs: HashSet::new(),
             processed_classes: HashSet::new(),
         }
     }
 
-    fn fresh_func_id(&mut self) -> FuncId {
+    pub(crate) fn fresh_func_id(&mut self) -> FuncId {
         let id = self.next_func_id;
         self.next_func_id += 1;
         id

@@ -14,6 +14,10 @@ use perry_hir::{Export, Expr, Import, ImportSpecifier, Module, Stmt};
 /// and one class per name), and its own declarations other units import.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct UnitView {
+    /// Bindings declared by this unit's source items. Literal-layout classes
+    /// copied into the view are analysis context, not owned lexical bodies.
+    pub binding_locals: FxHashSet<u32>,
+    pub binding_funcs: FxHashSet<u32>,
     pub foreign_locals: FxHashMap<u32, String>,
     pub foreign_funcs: FxHashMap<u32, String>,
     pub foreign_globals: FxHashMap<u32, String>,
@@ -1131,6 +1135,28 @@ pub(crate) fn views(path: &str, module: &Module) -> Vec<(UnitView, Vec<usize>)> 
                         view.init.push(k);
                     }
                 }
+            }
+        }
+        view.binding_funcs.extend(r.closures.iter().copied());
+        for it in items {
+            view.binding_locals.extend(declared(module, *it, &r));
+            match *it {
+                Item::Func(k) => {
+                    view.binding_funcs.insert(module.functions[k].id);
+                }
+                Item::Class(k) => {
+                    let c = &module.classes[k];
+                    view.binding_funcs.extend(
+                        c.constructor
+                            .iter()
+                            .chain(&c.methods)
+                            .chain(&c.static_methods)
+                            .chain(c.getters.iter().chain(&c.setters).map(|(_, f)| f))
+                            .chain(c.computed_members.iter().map(|m| &m.function))
+                            .map(|f| f.id),
+                    );
+                }
+                _ => {}
             }
         }
         for it in items {

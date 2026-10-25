@@ -1,0 +1,1 @@
+Fix property reads in specialized generic bodies by giving each copied lexical frame distinct binding identities. Declaration-unit facts now export only bindings their source items own, and duplicate binding identities are rejected instead of silently selecting another body's field layout.

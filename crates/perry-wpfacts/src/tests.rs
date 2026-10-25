@@ -4,6 +4,7 @@ mod array_ctor;
 mod array_length;
 mod array_record;
 mod birth_site;
+mod body_identity;
 mod callback_origin;
 mod captured;
 mod cjs_require;

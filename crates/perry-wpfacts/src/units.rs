@@ -988,13 +988,11 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
         }
         for (si, u) in per_unit.into_iter().enumerate() {
             let u = u.expect("every unit solved");
-            merge_unit(&mut pf, solves[si].mi, &solves[si].key, u);
+            merge_unit(&mut pf, solves[si].mi, &solves[si].key, &solves[si].view, u);
         }
-        for b in pf.bindings.iter_mut() {
-            b.locals.sort_by_key(|(id, _)| *id);
-            b.locals.dedup_by_key(|(id, _)| *id);
-            b.this_of.sort_by_key(|(id, _)| *id);
-            b.this_of.dedup_by_key(|(id, _)| *id);
+        for (path, b) in pf.module_paths.iter().zip(&mut pf.bindings) {
+            unique_bindings(&mut b.locals, path, "LocalId");
+            unique_bindings(&mut b.this_of, path, "this-of FuncId");
         }
         pf.stats.modules = sorted.len();
         typed_param_verdicts(&mut pf);
@@ -1320,7 +1318,13 @@ fn dependents(
     dirty
 }
 
-fn merge_unit(pf: &mut ProgramFacts, mi: usize, path: &str, u: ProgramFacts) {
+fn merge_unit(
+    pf: &mut ProgramFacts,
+    mi: usize,
+    path: &str,
+    view: &crate::decl_units::UnitView,
+    u: ProgramFacts,
+) {
     for mut t in u.templates {
         if t.module != Some(0) {
             continue;
@@ -1335,8 +1339,16 @@ fn merge_unit(pf: &mut ProgramFacts, mi: usize, path: &str, u: ProgramFacts) {
     }));
     if let Some(b) = u.bindings.into_iter().next() {
         let into = &mut pf.bindings[mi];
-        into.locals.extend(b.locals);
-        into.this_of.extend(b.this_of);
+        into.locals.extend(
+            b.locals
+                .into_iter()
+                .filter(|(id, _)| view.binding_locals.contains(id)),
+        );
+        into.this_of.extend(
+            b.this_of
+                .into_iter()
+                .filter(|(id, _)| view.binding_funcs.contains(id)),
+        );
     }
     pf.super_unrelinked.extend(u.super_unrelinked);
     pf.interp_guard = pf.interp_guard.take().or(u.interp_guard);
@@ -1408,5 +1420,33 @@ fn typed_param_verdicts(pf: &mut ProgramFacts) {
             s.receivers = cands.iter().map(|&i| tfs[i].display.clone()).collect();
             s.verdict = crate::Verdict::E0;
         }
+    }
+}
+
+/// Facts must name one lexical binding. A second declaration with the same
+/// id is a compiler bug, not a choice of which declaration's proof to keep.
+fn unique_bindings<T>(values: &mut [(u32, T)], module: &str, kind: &str) {
+    values.sort_by_key(|(id, _)| *id);
+    for pair in values.windows(2) {
+        assert_ne!(
+            pair[0].0, pair[1].0,
+            "per-unit facts: duplicate {kind} {} in {module}; cloned bodies must have distinct binding identities",
+            pair[0].0,
+        );
+    }
+}
+
+#[cfg(test)]
+mod binding_collision_tests {
+    #[test]
+    #[should_panic(expected = "duplicate LocalId 7")]
+    fn duplicate_local_is_an_internal_compiler_error() {
+        super::unique_bindings(&mut [(7, ()), (7, ())], "clones.ts", "LocalId");
+    }
+
+    #[test]
+    #[should_panic(expected = "duplicate this-of FuncId 9")]
+    fn duplicate_this_is_an_internal_compiler_error() {
+        super::unique_bindings(&mut [(9, ()), (9, ())], "clones.ts", "this-of FuncId");
     }
 }

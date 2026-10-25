@@ -21,6 +21,7 @@ mod constraints;
 mod context;
 mod defaults;
 mod driver;
+mod freshen;
 mod infer;
 mod inference_lookup;
 mod mangle;
