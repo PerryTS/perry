@@ -85,18 +85,17 @@ pub(crate) unsafe fn keys_array_dense_slots(
     )
 }
 
-/// FNV-1a hash of the bytes behind a string header. Same hash function
+/// Canonical hash of the bytes behind a string header. Same hash function
 /// as `key_content_hash_impl` so callers can mix paths.
 #[inline(always)]
 pub(crate) fn key_bytes_hash(name_ptr: *const u8, name_len: usize) -> u64 {
-    let mut h: u64 = 0xcbf29ce484222325;
-    unsafe {
-        for i in 0..name_len {
-            h ^= *name_ptr.add(i) as u64;
-            h = h.wrapping_mul(0x100000001b3);
-        }
-    }
-    h
+    // SAFETY: callers supply a live byte range; empty input needs no pointer.
+    let bytes = if name_len == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(name_ptr, name_len) }
+    };
+    crate::codegen_abi::property_hash::hash(bytes)
 }
 
 /// Find `key_bytes` among the first `key_count` keys of `keys`.

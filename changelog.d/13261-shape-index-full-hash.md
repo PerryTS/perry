@@ -1,1 +1,1 @@
-- Use both halves of property hashes in shape-owned key indexes, reducing collisions without changing key identity or object layouts.
+- Finalize canonical property hashes once for runtime and compiled images, reducing shape-index collisions without repeating hash folding at every lookup.

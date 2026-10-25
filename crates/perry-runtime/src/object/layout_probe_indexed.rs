@@ -2,12 +2,11 @@
 //! collisions. A hit need not retain the collision loop's mask and index.
 use super::*;
 
-/// Use both halves of the atom hash when selecting a shape-index bucket.
-/// Construction and every lookup share this compression; the hash itself
-/// remains unchanged for key identity and TEXT-entry comparisons.
+/// Canonical property hashes are already finalized at production.
+/// Construction and every lookup mask that same existing hash word.
 #[inline(always)]
 pub(super) fn initial_bucket(hash: u64, mask: usize) -> usize {
-    (hash ^ (hash >> 32)) as usize & mask
+    hash as usize & mask
 }
 
 #[inline(never)]

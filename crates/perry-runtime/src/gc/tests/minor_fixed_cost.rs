@@ -24,12 +24,7 @@ impl Drop for ClearTablesOnDrop {
 }
 
 fn fnv(bytes: &[u8]) -> u64 {
-    let mut hash = 0xcbf2_9ce4_8422_2325u64;
-    for &b in bytes {
-        hash ^= b as u64;
-        hash = hash.wrapping_mul(0x0100_0000_01b3);
-    }
-    hash
+    crate::codegen_abi::property_hash::hash(bytes)
 }
 
 /// A runtime string reachable only through weak interning dies in a minor.

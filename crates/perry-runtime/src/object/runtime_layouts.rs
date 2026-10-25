@@ -507,13 +507,7 @@ pub(crate) const fn atom_hash(bytes: &[u8]) -> u64 {
 }
 
 const fn atom_hash_prefix(bytes: &[u8], len: usize) -> u64 {
-    let mut hash = 0xcbf2_9ce4_8422_2325u64;
-    let mut i = 0;
-    while i < len {
-        hash = (hash ^ bytes[i] as u64).wrapping_mul(0x0100_0000_01b3);
-        i += 1;
-    }
-    hash
+    crate::codegen_abi::property_hash::hash_prefix(bytes, len)
 }
 
 #[inline]

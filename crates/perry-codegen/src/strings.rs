@@ -206,7 +206,7 @@ impl StringPool {
             bytes_global,
             handle_global,
             dispatch_global,
-            dispatch_hash: fnv1a(value.as_bytes()),
+            dispatch_hash: crate::runtime_abi::property_hash::hash(value.as_bytes()),
             dispatch_used: false,
             is_wtf8: false,
         };
@@ -249,7 +249,7 @@ impl StringPool {
             bytes_global,
             handle_global,
             dispatch_global,
-            dispatch_hash: fnv1a(bytes),
+            dispatch_hash: crate::runtime_abi::property_hash::hash(bytes),
             dispatch_used: false,
             is_wtf8: true,
         };
@@ -344,15 +344,6 @@ fn escape_for_llvm_ir(bytes: &[u8]) -> String {
     s
 }
 
-fn fnv1a(bytes: &[u8]) -> u64 {
-    let mut hash = 0xcbf2_9ce4_8422_2325u64;
-    for &byte in bytes {
-        hash ^= byte as u64;
-        hash = hash.wrapping_mul(0x0100_0000_01b3);
-    }
-    hash
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -398,7 +389,12 @@ mod tests {
         let e = pool.entry(idx);
         assert_eq!(global, ".str.0.dispatch");
         assert!(e.dispatch_used);
-        assert_eq!(e.dispatch_hash, 0xe2bf_e841_1c47_2768);
+        assert_eq!(e.dispatch_hash, 0xe2bf_e841_fef8_cf29);
+        assert_eq!(
+            e.dispatch_hash,
+            crate::layout_desc::atom_hash("publish"),
+            "the string image and descriptor must carry the same canonical hash"
+        );
     }
 
     #[test]

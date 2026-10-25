@@ -14,12 +14,7 @@ unsafe fn gc_header_for_string(s: *const StringHeader) -> *const crate::gc::GcHe
 }
 
 fn fnv1a_for_test(bytes: &[u8]) -> u64 {
-    let mut h: u64 = 0xcbf29ce484222325;
-    for &b in bytes {
-        h ^= b as u64;
-        h = h.wrapping_mul(0x100000001b3);
-    }
-    h
+    crate::codegen_abi::property_hash::hash(bytes)
 }
 
 #[test]
@@ -1853,4 +1848,39 @@ fn ascii_prefix_with_trailing_lone_surrogate_preserves_flag_and_bytes() {
             "the lone surrogate must keep the result flagged"
         );
     }
+}
+
+#[test]
+fn canonical_property_hash_matches_headers_images_and_concat() {
+    let _stable = crate::gc::GcSuppressScope::new();
+    let long = [b'x'; 97];
+    for bytes in [&b""[..], &b"publish"[..], &b"\xED\xA0\x80"[..], &long[..]] {
+        let expected = crate::codegen_abi::property_hash::hash(bytes);
+        let key = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+        assert_eq!(crate::object::key_content_hash(key), expected);
+        assert_eq!(
+            crate::object::key_bytes_hash(bytes.as_ptr(), bytes.len()),
+            expected
+        );
+    }
+    // An independent fixed image operand detects an accidentally raw FNV producer.
+    let image_hash = 0xe2bf_e841_fef8_cf29u64;
+    assert_eq!(
+        crate::object::runtime_layouts::atom_hash(b"publish"),
+        image_hash
+    );
+    let prefix = js_string_from_bytes(b"pub".as_ptr(), 3);
+    let suffix = js_string_from_bytes(b"lish".as_ptr(), 4);
+    assert_eq!(
+        unsafe { intern::property_hash_concat(prefix, 3, suffix, 4) },
+        image_hash
+    );
+    let joined = js_string_concat(prefix, suffix);
+    let atom = unsafe { property_atom(joined) };
+    assert!(
+        !atom.is_null(),
+        "the concat must exercise actual atom production"
+    );
+    assert_eq!(unsafe { property_atom_hash(atom) }, image_hash);
+    assert_eq!(unsafe { existing_property_atom(joined) }, Some(atom));
 }

@@ -2587,17 +2587,7 @@ pub(crate) unsafe fn layouts_admit_add(
 }
 
 /// The property-atom hash of `__proto__` (FNV-1a, `key_bytes_hash`).
-const PROTO_KEY_HASH: u64 = {
-    let bytes = b"__proto__";
-    let mut h: u64 = 0xcbf29ce484222325;
-    let mut i = 0;
-    while i < bytes.len() {
-        h ^= bytes[i] as u64;
-        h = h.wrapping_mul(0x100000001b3);
-        i += 1;
-    }
-    h
-};
+const PROTO_KEY_HASH: u64 = crate::codegen_abi::property_hash::hash(b"__proto__");
 
 /// Does `obj`'s prototype chain let `[[Set]]` add `key` as an own data
 /// property of `obj` (record `r`)? No accessor and no non-writable property

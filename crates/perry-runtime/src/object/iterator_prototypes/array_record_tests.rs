@@ -380,11 +380,7 @@ fn array_record_image_next_key_survives_intern_collision() {
         let shape = super::super::shapes::object_shape_record(proto).unwrap();
         let old_key =
             *crate::array::array_elements_ptr(shape.keys() as *const crate::array::ArrayHeader);
-        let hash = |bytes: &[u8]| {
-            bytes.iter().fold(0xcbf29ce484222325u64, |h, b| {
-                (h ^ u64::from(*b)).wrapping_mul(0x100000001b3)
-            })
-        };
+        let hash = crate::codegen_abi::property_hash::hash;
         let slot = hash(b"next") & 8191;
         let collision = (0..100000)
             .map(|i| format!("array-record-key-{i}"))

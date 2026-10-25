@@ -1,7 +1,8 @@
 //! String concatenation: pairwise, fused with NaN-boxed value, and n-way chain.
 
 use super::intern::{
-    concat_content_matches, fnv1a_concat, with_intern_table, INTERN_MAX_BYTE_LEN, INTERN_TABLE_MASK,
+    concat_content_matches, property_hash_concat, with_intern_table, INTERN_MAX_BYTE_LEN,
+    INTERN_TABLE_MASK,
 };
 use super::*;
 
@@ -493,7 +494,7 @@ crate::perry_thread_local! {
 /// concatenation. FNV-1a is a streaming hash — folding in `a`'s bytes then
 /// `b`'s bytes is bit-identical to folding in `(a ++ b)`'s bytes — so a
 /// two-operand walk needs no scratch buffer at all. This is the memo's
-/// analogue of the intern table's `fnv1a_concat`, over raw byte slices
+/// analogue of the intern table's `property_hash_concat`, over raw byte slices
 /// instead of `StringHeader` pointers (the memo's operands may be an SSO
 /// scratch view, not a heap header).
 #[inline]
@@ -768,7 +769,7 @@ pub extern "C" fn js_string_concat(
     // "field_" + j return the existing interned pointer — zero allocation.
     if total_blen > 0 && total_blen <= INTERN_MAX_BYTE_LEN {
         unsafe {
-            let hash = fnv1a_concat(a, blen_a, b, blen_b);
+            let hash = property_hash_concat(a, blen_a, b, blen_b);
             let slot = (hash as usize) & INTERN_TABLE_MASK;
             let hit = with_intern_table(|table| {
                 let entry = &(*table)[slot];

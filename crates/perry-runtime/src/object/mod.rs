@@ -1010,7 +1010,7 @@ fn with_transition_cache<R>(
     }
 }
 
-/// FNV-1a content hash for a property-name string.
+/// Canonical content hash for a property-name string.
 /// Exported as `perry_key_content_hash` for the codegen write-PIC to
 /// call without going through the full `js_object_set_field_by_name`.
 #[no_mangle]
@@ -1045,12 +1045,7 @@ fn key_content_hash_impl(key: *const crate::StringHeader) -> u64 {
     unsafe {
         let len = (*key).byte_len as usize;
         let data = keys_lookup::string_header_payload(key);
-        let mut h: u64 = 0xcbf29ce484222325;
-        for i in 0..len {
-            h ^= *data.add(i) as u64;
-            h = h.wrapping_mul(0x100000001b3);
-        }
-        h
+        keys_lookup::key_bytes_hash(data, len)
     }
 }
 
