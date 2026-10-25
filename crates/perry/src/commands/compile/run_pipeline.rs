@@ -580,6 +580,39 @@ pub fn run_with_parse_cache(
     let mut args = args;
     args.target = apply_libc_to_target(args.target.take(), args.libc.as_deref())?;
 
+    // `--source-root` / `PERRY_SOURCE_ROOT`: bake module source paths relative
+    // to a root so the output does not depend on the build directory. Resolved
+    // into `args` first so the build-cache key sees the effective value, and
+    // held for the whole compile (HIR lowering, wrapper generation and
+    // codegen all read the process-global remap).
+    if args.source_root.is_none() {
+        args.source_root = std::env::var_os("PERRY_SOURCE_ROOT")
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from);
+    }
+    if args.source_root_target.is_none() {
+        args.source_root_target = std::env::var("PERRY_SOURCE_ROOT_TARGET")
+            .ok()
+            .filter(|v| !v.is_empty());
+    }
+    let _source_remap = match args.source_root.as_deref() {
+        Some(root) => {
+            let canonical_root = fs::canonicalize(root)
+                .with_context(|| format!("--source-root: cannot resolve {}", root.display()))?;
+            if !canonical_root.is_dir() {
+                bail!("--source-root: {} is not a directory", root.display());
+            }
+            let target = args.source_root_target.as_deref().unwrap_or("/");
+            if !target.starts_with('/') {
+                bail!("--source-root-target must be an absolute '/' path, got {target:?}");
+            }
+            Some(perry_hir::source_remap::install(
+                perry_hir::source_remap::SourceRemap::new(canonical_root, target),
+            ))
+        }
+        None => None,
+    };
+
     // Long native builds must never look hung. The codegen crate owns the
     // detailed phase/unit reporter; enable it for human-readable CLI output
     // and keep JSON output machine-clean.
@@ -6579,12 +6612,18 @@ pub fn run_with_parse_cache(
         // so it cannot mutate the HIR after the hash is taken.
         let (cache_key, hir_hash_for_diag) = if object_cache.is_enabled() {
             let hir_hash = perry_hir::stable_hash::hash_module(hir_module);
+            let mut object_hash = super::defines::object_hash(hir_hash, &ctx.expression_defines);
+            // `--source-root` also changes the path keys codegen interns for
+            // dynamic imports and workers, which the HIR hash does not see.
+            if let Some(remap) = perry_hir::source_remap::fingerprint() {
+                use std::hash::{Hash, Hasher};
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                object_hash.hash(&mut hasher);
+                remap.hash(&mut hasher);
+                object_hash = hasher.finish();
+            }
             (
-                Some(compute_object_cache_key(
-                    &opts,
-                    super::defines::object_hash(hir_hash, &ctx.expression_defines),
-                    perry_version,
-                )),
+                Some(compute_object_cache_key(&opts, object_hash, perry_version)),
                 Some(hir_hash),
             )
         } else {

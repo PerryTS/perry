@@ -112,7 +112,12 @@ impl VisitMut for Resolve<'_> {
         let Some(path) = resolved.and_then(|path| std::fs::canonicalize(path).ok()) else {
             return;
         };
-        let Ok(url) = url::Url::from_file_path(&path) else {
+        // The literal is baked into the program: name the remapped location.
+        let url = match perry_hir::source_remap::rebased(&path) {
+            Some(baked) => url::Url::from_file_path(baked),
+            None => url::Url::from_file_path(&path),
+        };
+        let Ok(url) = url else {
             return;
         };
         self.ctx.resolve_inputs.insert(path);

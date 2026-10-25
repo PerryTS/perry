@@ -34,6 +34,7 @@ mod number;
 pub use number::js_number_to_string;
 pub mod patched_builtins;
 pub mod solid_jsx;
+pub mod source_remap;
 pub mod stable_hash;
 pub mod tdz_check;
 pub mod type_alias_resolve;

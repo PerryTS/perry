@@ -621,6 +621,14 @@ const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
         "Stops before object emission; the build-cache probe rejects diagnostic/no-link modes.",
     ),
     (
+        "PERRY_SOURCE_ROOT",
+        "Fallback for `--source-root`: resolved into `CompileArgs`, whose Debug form keys the build cache.",
+    ),
+    (
+        "PERRY_SOURCE_ROOT_TARGET",
+        "Fallback for `--source-root-target`: resolved into `CompileArgs`, whose Debug form keys the build cache.",
+    ),
+    (
         "PERRY_SPLIT_DUMP",
         "Writes IR/report files or diagnostic output without changing emitted objects.",
     ),

@@ -92,6 +92,21 @@ pub struct CompileArgs {
     #[arg(long, value_name = "NAME=EXPR")]
     pub define: Vec<String>,
 
+    /// Bake module source paths relative to this directory instead of their
+    /// build location (also via `PERRY_SOURCE_ROOT`). A module at `<DIR>/a/b.js`
+    /// sees `<TARGET>/a/b.js` in `__dirname`, `__filename`, `import.meta.*`,
+    /// `require` resolution, stack-frame labels and runtime error text, so the
+    /// program no longer depends on the directory it was built in. Compile-time
+    /// file access is unchanged. A module outside `<DIR>` keeps its real path
+    /// (with a warning).
+    #[arg(long, value_name = "DIR")]
+    pub source_root: Option<PathBuf>,
+
+    /// Absolute path that `--source-root` is mapped onto (also via
+    /// `PERRY_SOURCE_ROOT_TARGET`; default `/`).
+    #[arg(long, value_name = "PATH")]
+    pub source_root_target: Option<String>,
+
     /// Keep intermediate files (for debugging)
     #[arg(long)]
     pub keep_intermediates: bool,

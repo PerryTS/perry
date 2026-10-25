@@ -261,7 +261,7 @@ pub(super) fn compile_module_entry(
                 .entry_source_path
                 .as_deref()
                 .filter(|path| !path.is_empty())
-                .map(|path| llmod.add_string_constant(path))
+                .map(|path| llmod.add_string_constant(&perry_hir::source_remap::baked_path(path)))
         };
         // i18n startup init: when the project configures `[i18n]`, bake the
         // configured locale-code list (and the optional `[i18n.currencies]`
@@ -339,7 +339,8 @@ pub(super) fn compile_module_entry(
             .nextjs_path_init_modules
             .iter()
             .map(|(path, prefix)| {
-                let (cn, len) = llmod.add_string_constant(path);
+                let (cn, len) =
+                    llmod.add_string_constant(&perry_hir::source_remap::baked_path(path));
                 (cn, len, prefix.clone())
             })
             .collect();
@@ -353,7 +354,8 @@ pub(super) fn compile_module_entry(
                     prefix == module_prefix || non_entry_module_prefixes.contains(prefix)
                 })
                 .map(|(path, prefix)| {
-                    let (cn, len) = llmod.add_string_constant(path);
+                    let (cn, len) =
+                        llmod.add_string_constant(&perry_hir::source_remap::baked_path(path));
                     // A program with worker entries always has thread-local
                     // init guards (`program_has_worker`), so the guarded
                     // wrapper runs once per thread.

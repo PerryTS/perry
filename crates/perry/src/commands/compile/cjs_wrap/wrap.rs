@@ -684,7 +684,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
                 .map(|target| {
                     format!(
                         "__perry_cjs_link(module, __perry_cjs_c[{path:?}]); ",
-                        path = target.to_string_lossy(),
+                        path = perry_hir::source_remap::baked_path_of(target),
                     )
                 })
                 .unwrap_or_default();
@@ -744,7 +744,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
                         uses_deferred_helper.set(true);
                         format!(
                             "const required = __perry_cjs_require_deferred({path:?}, () => {local}{missing}); const __perry_rec = __perry_cjs_c[{path:?}]; if (__perry_rec !== undefined && __perry_rec.loaded === true) {local}__rec = __perry_rec; return required;",
-                            path = target.to_string_lossy(),
+                            path = perry_hir::source_remap::baked_path_of(target),
                             local = local,
                         )
                     })
@@ -766,7 +766,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
                 // the same cold re-evaluation path as a deferred require.
                 format!(
                     "const __perry_cached = __perry_cjs_c[{path:?}]; if (__perry_cached !== undefined) {{ __perry_cjs_link(module, __perry_cached); return __perry_cached.exports; }} if (!__perry_has_path_module({path:?})) return {local}; return __perry_cjs_reloader()({path:?});",
-                    path = target.to_string_lossy(),
+                    path = perry_hir::source_remap::baked_path_of(target),
                 )
             } else {
                 format!("{link_child}return {local};")
@@ -802,7 +802,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
                     // deletion and replacement revoke this saved record.
                     format!(
                         "        if (specifier === '{spec}') {{ if ({local}__rec !== undefined && __perry_cjs_c[{path:?}] === {local}__rec) return {local}__rec.exports; {required_value} }}",
-                        path = resolved_target.as_ref().unwrap().to_string_lossy(),
+                        path = perry_hir::source_remap::baked_path_of(resolved_target.as_ref().unwrap()),
                     )
                 } else if link_child.is_empty() {
                     format!("        if (specifier === '{spec}') return {local};")
@@ -940,7 +940,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
                             super::super::collect_modules::static_require_transform::resolve_static_require(
                                 module_dir, spec, None,
                             )
-                        }).map(|path| path.to_string_lossy().into_owned())
+                        }).map(|path| perry_hir::source_remap::baked_path_of(&path).into_owned())
                     })
                     .or_else(|| perry_hir::is_native_module_specifier(spec).then(|| spec.clone()))
             }?;
@@ -1295,10 +1295,10 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
         "{:?}",
         source_path
             .parent()
-            .map(|p| p.to_string_lossy().into_owned())
+            .map(|p| perry_hir::source_remap::baked_path_of(p).into_owned())
             .unwrap_or_default()
     );
-    let module_path_literal = format!("{:?}", source_path.to_string_lossy());
+    let module_path_literal = format!("{:?}", perry_hir::source_remap::baked_path_of(source_path));
     let module_filename_literal = module_path_literal.clone();
     // The factory a reload after `delete require.cache[...]` runs again. It
     // goes to the runtime's path entry with the partial publication: never a

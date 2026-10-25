@@ -4,6 +4,28 @@ Reference for the public `perry compile` flags plus Perry's global flags. The
 installed binary remains authoritative for feature-gated commands; use
 `perry --help` and `perry <command> --help` to inspect that exact build.
 
+## Build-location independent paths
+
+`--source-root <DIR>` (or `PERRY_SOURCE_ROOT=<DIR>`) bakes module source paths
+relative to `<DIR>` instead of the directory the program was built in. A module
+at `<DIR>/a/b.js` sees `/a/b.js` in `__dirname`, `__filename` and
+`import.meta.{url,dirname,filename,resolve}`, as the base of `require` /
+`createRequire`, in `require.cache` keys, `require.resolve` results, stack-frame
+labels and the text of runtime error messages. `--source-root-target <PATH>`
+(or `PERRY_SOURCE_ROOT_TARGET`) replaces the default `/` with another absolute
+path, so `--source-root /build/app --source-root-target /srv/app` bakes
+`/srv/app/a/b.js`.
+
+```sh
+perry compile src/index.js --source-root "$PWD" -o app
+```
+
+Compile-time file access, diagnostics and `--debug-symbols` are unchanged;
+only values the program can observe are rebased. A module outside `<DIR>`
+(a linked package, say) keeps its real path and the compiler warns once per
+such module. Without the option the output is byte-identical to before. Both
+build and object caches include the effective root and target.
+
 ## Build-time defines
 
 `--define NAME=EXPR` is repeatable. It replaces unbound identifier reads and

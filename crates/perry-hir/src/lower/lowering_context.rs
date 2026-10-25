@@ -442,7 +442,8 @@ pub struct LoweringContext {
     /// Extern function types: name -> (param_types, return_type)
     /// Stores type information for declare function statements (FFI)
     pub(crate) extern_func_types: Vec<(String, Vec<Type>, Type)>,
-    /// Source file path (for import.meta.url)
+    /// Real absolute source file path. Compile-time I/O and diagnostics use
+    /// this; values baked into the program use [`Self::baked_source_path`].
     pub(crate) source_file_path: String,
     /// #6812 (w16): span.lo of empty object literals whose builder width the
     /// pre-lowering scan proved (`builder_fold::empty_builder_width_hints`)

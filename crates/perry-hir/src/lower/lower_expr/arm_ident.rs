@@ -230,7 +230,7 @@ pub(crate) fn lower_ident_expr(ctx: &mut LoweringContext, ident: &ast::Ident) ->
         // which silently corrupts any path computation built on
         // path.join(__dirname, ...). Mirrors the import.meta arm
         // (expr_misc::import_meta_paths) so both surfaces agree.
-        let path = ctx.source_file_path.replace('\\', "/");
+        let path = ctx.baked_source_path().replace('\\', "/");
         let value = if name == "__filename" {
             path.clone()
         } else {
@@ -282,7 +282,7 @@ pub(crate) fn lower_ident_expr(ctx: &mut LoweringContext, ident: &ast::Ident) ->
                 param_types: vec![Type::Any],
                 return_type: Type::Any,
             }),
-            args: vec![Expr::String(ctx.source_file_path.replace('\\', "/"))],
+            args: vec![Expr::String(ctx.baked_source_path().replace('\\', "/"))],
             type_args: Vec::new(),
             byte_offset: 0,
         })

@@ -81,7 +81,9 @@ pub(super) fn lower_candidates(
         let result = ctx.func.alloca_entry(DOUBLE);
         let join = ctx.new_block("worker_join");
         for (path, target) in &aliases {
-            let key = ctx.strings.intern(path);
+            let key = ctx
+                .strings
+                .intern(&perry_hir::source_remap::baked_path(path));
             let global = format!("@{}", ctx.strings.entry(key).handle_global);
             let key = ctx.block().load(DOUBLE, &global);
             let key = ctx
