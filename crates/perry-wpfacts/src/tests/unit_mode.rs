@@ -2949,6 +2949,26 @@ fn what_a_cell_holds_is_used_as_its_members() {
 }
 
 #[test]
+fn a_parameter_a_cell_gives_back_is_another_calls() {
+    // `f` returns what an earlier call stored: another call's argument, not
+    // this one's. `n` passes a `Crate` first, `m` a `Box` and stores through
+    // the result. Read as "returns parameter 0" `m` would store into its own
+    // `Box` while the result is `n`'s `Crate`, which would stay read-only
+    // (unsound). The result's marker stands for another call's argument: the
+    // result is another unit's value and the argument leaves through it. (The
+    // cell is a static of `S`, so it is in `f`'s unit: bug 3 otherwise.)
+    let b = "class S { static last: any = 0; static cell: any = { s: null }; }\nexport function f(x: any) { S.last = 1; const o = S.cell.s; S.cell.s = x; return o; }";
+    let n = "import { f } from './b'; class Crate { w: any = 0; v: any = 2; } function main() { const c = new Crate(); f(c); console.log(c.v); } main(); main();";
+    let m = "import { f } from './b'; class Box { v: any = 1; } function main() { const r = f(new Box()); r.v = 'x'; console.log(r.v); } main(); main();";
+    let pf = units_of(&[("b", b), ("n", n), ("m", m)]);
+    assert!(
+        !field(tmpl(&pf, "Crate"), "v").readonly,
+        "{}",
+        pf.dump_text()
+    );
+}
+
+#[test]
 fn a_written_parameter_is_each_callers_own() {
     // `first` writes its parameter (`n = id(n)`): its binding holds the
     // marker, the variable what `id` returns of it, a token of its run. So
