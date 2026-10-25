@@ -1711,7 +1711,10 @@ impl Model {
     }
 
     /// The parameter markers token `t` stands for: itself, unless it is an
-    /// argument marker (DECISIONS 44).
+    /// argument marker (DECISIONS 44). What an argument marker reaches under
+    /// a key (its keyed reach marker, whose uses are settled per key and
+    /// which has no members of its own) is part of what it reaches: it
+    /// stands for its reach marker's members.
     pub(crate) fn marker_members(&self, t: Tok) -> Vec<Tok> {
         if !self.is_arg_marker(t) {
             return vec![t];
@@ -1721,6 +1724,10 @@ impl Model {
         let mut st = vec![t];
         while let Some(x) = st.pop() {
             if !seen.insert(x) {
+                continue;
+            }
+            if let Some(&(p, _)) = self.keyed_parent.get(&x) {
+                st.push(self.marker_reach[&p]);
                 continue;
             }
             match self.arg_members.get(&x) {
