@@ -2388,9 +2388,8 @@ impl Model {
             }
             match self.arg_members.get(&x).cloned() {
                 Some(ms) => {
-                    let w = self.arg_src_flows.entry(x).or_default();
-                    if !w.contains(&(t, flow, reason, own)) {
-                        w.push((t, flow, reason, own));
+                    if self.arg_src_flow_done.insert((x, t, flow, reason, own)) {
+                        self.arg_src_flows.entry(x).or_default().push((t, flow, reason, own));
                     }
                     st.extend(ms);
                 }

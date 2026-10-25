@@ -167,6 +167,9 @@ pub struct Gen<'a> {
     /// The contracts behind the stand-ins: a stand-in template's class or
     /// layout contract, a stand-in function token's function contract.
     pub(crate) stand_in_cc: FxHashMap<TmplId, crate::units::ClassContract>,
+    /// This unit's classes (not literal shapes) by display, the first
+    /// declared of a display (`own_class`).
+    own_classes: FxHashMap<String, TmplId>,
     /// The stand-ins of closed classes (design §18.13): their key
     /// (`ClassContract::closed`), template and constructor token.
     pub(crate) closed_ctors: Vec<((String, String), TmplId, Tok)>,
@@ -427,6 +430,7 @@ impl<'a> Gen<'a> {
             reach_escape: None,
             reach_touch: None,
             stand_in_cc: FxHashMap::default(),
+            own_classes: FxHashMap::default(),
             closed_ctors: Vec::new(),
             effects_done: Default::default(),
             effect_site: None,
@@ -1497,12 +1501,13 @@ impl<'a> Gen<'a> {
     /// again when the contract changes.
     fn owner_fn(&mut self, c: &'a crate::units::FnContract) -> &'a crate::units::FnContract {
         if !self.fns_read.iter().any(|(x, _)| *x == c.name) {
-            let seen = crate::units::digest(&self.unit_in.and_then(|u| u.own_fns.get(&c.name)));
+            let seen = self.unit_in.map_or_else(
+                || crate::units::digest(&None::<&crate::units::FnContract>),
+                |u| u.own_fn_seen(&c.name),
+            );
             self.fns_read.push((c.name.clone(), seen));
         }
-        self.unit_in
-            .and_then(|u| u.own_fns.get(&c.name))
-            .unwrap_or(c)
+        self.unit_in.and_then(|u| u.own_fn(&c.name)).unwrap_or(c)
     }
 
     /// DECISIONS 107: a published method runs on what the units running it
@@ -1614,20 +1619,10 @@ impl<'a> Gen<'a> {
     /// This unit's own class named by display: a class has one defining
     /// unit (a literal shape may have several, DECISIONS 112).
     fn own_class(&self, display: &str) -> Option<TmplId> {
-        (0..self.m.tmpls.len())
-            .find(|&i| {
-                let t = &self.m.tmpls[i];
-                t.display == display
-                    && matches!(
-                        t.kind,
-                        TmplKind::Class {
-                            literal_shape: false,
-                            ..
-                        }
-                    )
-                    && !self.m.foreign.contains_key(&(i as TmplId))
-            })
-            .map(|i| i as TmplId)
+        self.own_classes
+            .get(display)
+            .copied()
+            .filter(|tm| !self.m.foreign.contains_key(tm))
     }
 
     fn value_contract_for(
@@ -1721,7 +1716,10 @@ impl<'a> Gen<'a> {
     /// is solved again when the layout changes.
     fn other_layout(&mut self, d: &str) -> Option<&'a crate::units::ClassContract> {
         if !self.layouts_read.iter().any(|(x, _)| x == d) {
-            let seen = crate::units::digest(&self.unit_in.and_then(|u| u.layout(d)));
+            let seen = self.unit_in.map_or_else(
+                || crate::units::digest(&None::<&crate::units::ClassContract>),
+                |u| u.layout_seen(d),
+            );
             self.layouts_read.push((d.to_string(), seen));
         }
         self.unit_in
@@ -2547,6 +2545,9 @@ impl<'a> Gen<'a> {
             push_unique(&mut v, a);
             v
         };
+        if !c.is_literal_shape() {
+            self.own_classes.entry(display.clone()).or_insert(tm);
+        }
         self.m.tmpls.push(Template {
             kind: TmplKind::Class {
                 module: mi,

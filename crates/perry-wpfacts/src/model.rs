@@ -1043,6 +1043,8 @@ pub struct Model {
     /// receiver reach marker stored into when the store met it
     /// (DECISIONS 151).
     pub arg_src_flows: FxHashMap<Tok, Vec<(Tok, StoreFlowKey, u32, Option<Tok>)>>,
+    /// `arg_src_flows` entries by (argument marker, entry): each once.
+    pub arg_src_flow_done: crate::pts::FxHashSet<(Tok, Tok, StoreFlowKey, u32, Option<Tok>)>,
     /// An argument marker's reach marker -> the argument marker.
     pub arg_reach_base: FxHashMap<Tok, Tok>,
     pub arg_marker_node: FxHashMap<Tok, NodeId>,

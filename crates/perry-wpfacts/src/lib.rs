@@ -2707,7 +2707,7 @@ impl ProgramFacts {
                 ts.iter().all(|t| t.prefix_stable)
                     && ts
                         .iter()
-                        .all(|t| format!("{:?}", t.fields) == format!("{:?}", ts[0].fields))
+                        .all(|t| t.fields == ts[0].fields)
             })
             .map(|(c, ts)| (c, ts[0]))
             .collect()

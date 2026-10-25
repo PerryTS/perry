@@ -5,7 +5,7 @@ use crate::gen::Gen;
 use crate::model::*;
 use crate::pts::{FxHashMap, FxHashSet};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct KindFact {
     pub prims: u16,
     /// Object templates the field can hold (display names), sorted.
@@ -70,7 +70,7 @@ impl KindFact {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Hash)]
 pub struct FieldFacts {
     pub key: String,
     pub slot: Option<u32>,
@@ -89,7 +89,7 @@ pub struct FieldFacts {
     pub ta_kind: Option<u8>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Hash)]
 pub struct TemplateFacts {
     pub id: TmplId,
     pub display: String,
@@ -109,7 +109,7 @@ pub struct TemplateFacts {
     pub ancestors: Vec<u32>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Verdict {
     T0Mono,
     T0Set,
