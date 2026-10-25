@@ -205,7 +205,6 @@ pub fn resolver(m: &mut Model, dst: NodeId) -> Tok {
         gen_step: false,
         forwards_super: false,
         parent: NO_FN,
-        calls: Vec::new(),
     });
     m.add_prim(ret, prim::UNDEF);
     m.resolvers.insert(dst, tok);

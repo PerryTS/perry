@@ -937,6 +937,7 @@ impl<'a> Gen<'a> {
         for n in [this, ret] {
             self.m.nodes[n as usize].frame = run;
         }
+        self.m.nodes[ret as usize].result = true;
         self.m.funcs.push(FuncInfo {
             module: mi,
             func_id: u32::MAX,
@@ -954,7 +955,6 @@ impl<'a> Gen<'a> {
             gen_step: false,
             forwards_super: false,
             parent: NO_FN,
-            calls: Vec::new(),
         });
         // Registered before its result is built: a result layout whose
         // field holds this function reaches it again (`stand_in_class`).
@@ -1478,7 +1478,6 @@ impl<'a> Gen<'a> {
             gen_step: false,
             forwards_super: false,
             parent: NO_FN,
-            calls: Vec::new(),
         });
         if sink_args {
             self.m.sink_node(args_all, reason);
@@ -1737,7 +1736,6 @@ impl<'a> Gen<'a> {
             gen_step: false,
             forwards_super: false,
             parent: if is_closure { outer_fn } else { NO_FN },
-            calls: Vec::new(),
         });
         self.mods[mi as usize].funcs.insert(id, fx);
         fx
@@ -1909,7 +1907,6 @@ impl<'a> Gen<'a> {
             gen_step: false,
             forwards_super: false,
             parent: NO_FN,
-            calls: Vec::new(),
         });
         fx
     }
