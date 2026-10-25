@@ -5822,6 +5822,7 @@ dependencies = [
  "simdutf8",
  "smallvec",
  "socket2",
+ "swc_ecma_visit",
  "taffy",
  "temporal_rs",
  "timezone_provider",

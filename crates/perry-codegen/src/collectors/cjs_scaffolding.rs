@@ -98,11 +98,10 @@
 //! carries all four of:
 //!
 //! * **R1** `Stmt::Let` named `__cjs_module`, `mutable: false`, initialized by
-//!   the runtime record build `wrap.rs` emits (`__perry_runtime.
-//!   newCjsModuleRecord`, seven arguments) or by an `Expr::New` of an
-//!   `__AnonShape_…` class (an object literal);
-//! * **R2** the build's first argument, or that literal's only or first
-//!   field, is an argument-less `__AnonShape_…` allocation (`exports: {}`);
+//!   an `Expr::New` of an `__AnonShape_…` class (the record literal `wrap.rs`
+//!   emits);
+//! * **R2** that literal's only or first field is an argument-less
+//!   `__AnonShape_…` allocation (`exports: {}`);
 //!   the literal may also be one of the folded seven- or ten-field record
 //!   templates;
 //! * **R3** exactly one top-level statement satisfying R1+R2, so "the record"
@@ -476,34 +475,6 @@ fn note_region(stmts: &[Stmt], out: &mut CjsPreambleCensus) {
 /// enforcement points for one conjunct is how a sabotage hole gets in — either
 /// one can be deleted with every test still green.
 fn record_binding(stmt: &Stmt) -> Option<u32> {
-    // The record the runtime builds with its final layout
-    // (`__perry_cjs_module_record`): its first argument is the argument-less
-    // `exports` object literal.
-    if let Stmt::Let {
-        id,
-        mutable: false,
-        init:
-            Some(Expr::NativeMethodCall {
-                module,
-                method,
-                object: None,
-                args,
-                ..
-            }),
-        ..
-    } = stmt
-    {
-        let exports_literal = matches!(
-            args.first(),
-            Some(Expr::New { class_name, args, .. })
-                if class_name.starts_with(ANON_SHAPE_PREFIX) && args.is_empty()
-        );
-        return (module == "__perry_runtime"
-            && method == "newCjsModuleRecord"
-            && args.len() == 7
-            && exports_literal)
-            .then_some(*id);
-    }
     let Stmt::Let {
         id,
         mutable: false,
@@ -529,7 +500,12 @@ fn record_binding(stmt: &Stmt) -> Option<u32> {
     else {
         return None;
     };
-    if !inner.starts_with(ANON_SHAPE_PREFIX) || !inner_args.is_empty() {
+    // `exports` is `{}` or, for a module that names its exports, the
+    // declared-keys object born with them (`__perry_declared_keys_object`).
+    if !(inner.starts_with(ANON_SHAPE_PREFIX)
+        || inner.starts_with(perry_hir::DECLARED_KEYS_OBJECT_CLASS_PREFIX))
+        || !inner_args.is_empty()
+    {
         return None;
     }
     // The seven fixed fields the wrapper folds into the record literal, and the

@@ -348,7 +348,7 @@ pub(crate) fn keys_defined_at_birth(class: &Class) -> bool {
     !class
         .fields
         .iter()
-        .any(|f| f.origin == perry_hir::ClassFieldOrigin::ConstructorStore)
+        .any(|f| f.origin.is_reservation())
         && (class.is_literal_shape()
             || (class
                 .constructor

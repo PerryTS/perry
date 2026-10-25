@@ -68,40 +68,23 @@ pub extern "C" fn js_get_cjs_main_module() -> f64 {
     CJS_MAIN_MODULE.with(|slot| slot.borrow().map(f64::from_bits).unwrap_or_else(undefined))
 }
 
-/// Codegen FFI: emitted ONCE, in `main()`, before ANY module's `__init` runs
-/// — including the entry's own, since ESM's static-import evaluation order
-/// runs every hoisted dependency's top-level code before the importing
-/// module's (see `cjs_wrap`'s `require('./x')` -> `import` hoist). Node's
-/// loader sets up `require.main`/`process.mainModule` before invoking the
-/// entry's script body at all, so no CommonJS module - not even one loaded
-/// before the entry's own preamble textually runs - ever observes it unset.
-/// Perry can't replicate that ordering directly (the entry's real `module`
-/// record is built by JS the entry's own preamble emits, which necessarily
-/// runs LAST among a CJS entry's static imports), so this allocates a bare
-/// placeholder object and publishes THAT via [`js_set_cjs_main_module`]
-/// up front. Every non-entry module's `require.main` resolves to this same
-/// object from heap birth. When the entry's own preamble finally runs, it
-/// reclaims this exact object (via [`js_get_cjs_main_module`]) and fills in
-/// its real fields in place — same identity throughout, so a dependency that
-/// captured `require.main` before the entry ran still `===`-matches the
-/// entry's `module` afterward (JS identity survives mutation).
-///
-/// Codegen emits the call only when the entry module is itself CJS-wrapped
-/// (`collectors::is_cjs_wrapped_module`); an ESM entry never calls this, so
-/// [`js_get_cjs_main_module`] stays `undefined` for the lifetime of the heap
-/// — matching Node, where a CJS module reached only via `import` from an ESM
-/// entry has no CommonJS "main" at all.
+/// Codegen FFI: the CommonJS support module's one handoff, run before any
+/// CommonJS module body (every wrapped module imports the support module
+/// first). `cache` is the program's `require.cache` (a compiler-owned object
+/// whose keys are the graph's module paths); `main` is the entry's record, or
+/// `undefined` when the entry is not CommonJS (an ESM entry: `require.main`
+/// stays `undefined`, as in Node). From here on `Module._cache`,
+/// `createRequire().cache` and `process.mainModule` are these objects.
+/// Returns `require.extensions`.
 #[no_mangle]
-pub extern "C" fn js_bootstrap_cjs_main_module_placeholder() {
-    // Born with the CommonJS record layout: the entry's preamble fills the
-    // public keys in place and its factory goes to the private slot.
-    // SAFETY: `CJS_MODULE_RECORD` is a registered runtime layout.
-    let placeholder = object_value(unsafe {
-        crate::object::runtime_layouts::perry_alloc_runtime_record(std::ptr::addr_of!(
-            crate::object::runtime_layouts::CJS_MODULE_RECORD
-        ))
-    });
-    js_set_cjs_main_module(placeholder);
+pub extern "C" fn js_cjs_install(cache: f64, main: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let main = scope.root_nanbox_f64(main);
+    crate::object::install_module_cjs_cache_value(cache);
+    if !JSValue::from_bits(main.get_nanbox_f64().to_bits()).is_undefined() {
+        js_set_cjs_main_module(main.get_nanbox_f64());
+    }
+    crate::object::module_cjs_extensions_value()
 }
 
 /// GC root scanner for [`CJS_MAIN_MODULE`]: a raw heap pointer cached outside
@@ -622,108 +605,20 @@ fn cjs_record_field(value: f64, name: &str) -> Option<f64> {
     ))
 }
 
-/// A CommonJS record's ordinary-object header, for its internal slot.
-fn cjs_record_object(record: f64) -> Option<*mut crate::object::ObjectHeader> {
-    let jv = JSValue::from_bits(record.to_bits());
-    if !jv.is_pointer() {
-        return None;
-    }
-    let addr = crate::value::js_nanbox_get_pointer(record) as usize;
-    // SAFETY: a pointer-tagged value names a live GC cell or nothing.
-    let header = unsafe { crate::value::addr_class::try_read_gc_header(addr) }?;
-    (header.obj_type == crate::gc::GC_TYPE_OBJECT)
-        .then_some(addr as *mut crate::object::ObjectHeader)
-}
-
-/// The private slot key of [`CJS_MODULE_RECORD`](crate::object::runtime_layouts::CJS_MODULE_RECORD)
-/// that holds the module's factory.
-const CJS_FACTORY_KEY: &[u8] = b"#<perry:cjs-module-factory>";
-
 fn is_closure_value(value: f64) -> bool {
     JSValue::from_bits(value.to_bits()).is_pointer()
         && crate::closure::is_closure_ptr(crate::value::js_nanbox_get_pointer(value) as usize)
 }
 
-/// The factory slot of a CommonJS record: the private entry
-/// [`CJS_MODULE_RECORD`](crate::object::runtime_layouts::CJS_MODULE_RECORD)
-/// declares. A record whose keys were edited keeps the entry; any other
-/// object has none.
-fn cjs_record_factory_slot(obj: *mut crate::object::ObjectHeader) -> Option<u32> {
-    // SAFETY: `obj` is a live ordinary object; its keys are read, not kept.
-    unsafe {
-        let keys = crate::object::object_keys(obj);
-        if keys.is_null() {
-            return None;
-        }
-        crate::object::keys_find_private_slot_by_bytes(keys.arr(), keys.count(), CJS_FACTORY_KEY)
-    }
-}
-
-/// Codegen FFI: a CommonJS wrapper's module record, born with its final
-/// layout ([`CJS_MODULE_RECORD`](crate::object::runtime_layouts::CJS_MODULE_RECORD)):
-/// `exports`, `children` and `paths` are the wrapper's own literals, `id` and
-/// `filename` the module's path. `factory` goes to the private slot: not a
-/// property, so user code cannot read (or stringify) it, and its text (the
-/// whole module) is not retained for it.
-#[no_mangle]
-pub extern "C" fn js_cjs_module_record(
-    exports: f64,
-    filename: f64,
-    dir: f64,
-    children: f64,
-    parent: f64,
-    paths: f64,
-    factory: f64,
-) -> f64 {
-    use crate::object::runtime_layouts::cjs_module_slot as slot;
-    crate::object::runtime_layouts::runtime_record!(record, CJS_MODULE_RECORD);
-    let set = |s: u32, value: f64| record.set(s, JSValue::from_bits(value.to_bits()));
-    let undefined = f64::from_bits(TAG_UNDEFINED);
-    set(slot::EXPORTS, exports);
-    set(slot::RECORD, f64::from_bits(TAG_TRUE));
-    set(slot::ID, filename);
-    set(slot::PATH, dir);
-    set(slot::FILENAME, filename);
-    set(slot::LOADED, f64::from_bits(TAG_FALSE));
-    set(slot::CHILDREN, children);
-    set(slot::PARENT, parent);
-    set(slot::PATHS, paths);
-    set(slot::REQUIRE, undefined);
-    set(
-        slot::FACTORY,
-        if is_closure_value(factory) {
-            factory
-        } else {
-            undefined
-        },
-    );
-    object_value(record.finish())
-}
-
-/// Codegen FFI: store the entry module's factory in its record's private slot.
-/// The entry fills the main-module placeholder in place (its identity may
-/// already be `require.main` elsewhere), and the placeholder is born with the
-/// record layout, so the slot exists.
-#[no_mangle]
-pub extern "C" fn js_cjs_record_set_factory(record: f64, factory: f64) {
-    if !is_closure_value(factory) {
-        return;
-    }
-    let Some(obj) = cjs_record_object(record) else {
-        return;
-    };
-    if let Some(slot) = cjs_record_factory_slot(obj) {
-        crate::object::js_object_set_field(obj, slot, JSValue::from_bits(factory.to_bits()));
-    }
-}
-
-/// The factory kept in a CommonJS record's private slot.
-fn cjs_record_factory(record: f64) -> Option<f64> {
-    cjs_record_exports(record)?;
-    let obj = cjs_record_object(record)?;
-    let slot = cjs_record_factory_slot(obj)?;
-    let factory = f64::from_bits(crate::object::js_object_get_field(obj, slot).bits());
-    is_closure_value(factory).then_some(factory)
+/// The factory a CommonJS wrapper handed over with its partial publication
+/// (the path entry keeps it, never a property): a reload after
+/// `delete require.cache[path]` runs it again.
+fn path_module_factory(path: &str) -> Option<f64> {
+    let key = module_lookup_key(path);
+    MODULE_PATH_REGISTRY
+        .with(|registry| registry.factory(&key))
+        .map(f64::from_bits)
+        .filter(|factory| is_closure_value(*factory))
 }
 
 /// The value a completed path module published, WITHOUT triggering a deferred
@@ -862,7 +757,7 @@ fn require_path(cache: f64, path: &std::path::Path, parent_filename: &str) -> f6
         JSValue::from_bits(loaded.to_bits()).is_bool()
             && JSValue::from_bits(loaded.to_bits()).as_bool()
     }) {
-        if let Some(factory) = cjs_record_factory(registered) {
+        if let Some(factory) = path_module_factory(&filename) {
             let factory_handle = scope.root_nanbox_f64(factory);
             let exports = crate::closure::js_closure_call0(
                 crate::value::js_nanbox_get_pointer(factory_handle.get_nanbox_f64())
@@ -1255,9 +1150,10 @@ pub unsafe extern "C" fn js_register_path_init(path_ptr: *const u8, path_len: i6
 /// thread; concurrent callers wait for [`js_register_path_module`] and the
 /// generated initializer to complete.
 #[no_mangle]
-pub extern "C" fn js_register_path_module_partial(path_value: f64, exports: f64) {
+pub extern "C" fn js_register_path_module_partial(path_value: f64, exports: f64, factory: f64) {
     let key = value_to_string(path_value, "path");
-    if !MODULE_PATH_REGISTRY.with(|r| r.register_partial_exports(key, exports.to_bits())) {
+    let factory = is_closure_value(factory).then(|| factory.to_bits());
+    if !MODULE_PATH_REGISTRY.with(|r| r.register_partial(key, exports.to_bits(), factory)) {
         crate::fs::validate::throw_error_with_code(
             "Perry rejected path-module partial exports from a non-owner initializer",
             "ERR_PERRY_PATH_MODULE_OWNER",

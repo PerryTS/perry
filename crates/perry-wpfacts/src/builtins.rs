@@ -89,11 +89,11 @@ fn unknown_method(m: &mut Model, call: CallId, why: &str) {
     m.add_prim(c.ret, prim::ALL);
 }
 
-fn implicit_args(m: &mut Model, call: CallId, why: &str) {
+fn implicit_args(m: &mut Model, call: CallId, why: &str, proto: Protocol) {
     let c = m.calls[call as usize].clone();
     let r = m.reason(why);
     for &a in c.args.iter().chain(c.spread.iter()) {
-        m.cons(a, Cons::Implicit { reason: r });
+        m.cons(a, Cons::Implicit { reason: r, proto });
     }
 }
 
@@ -159,6 +159,7 @@ fn site_tmpl(m: &mut Model, call: CallId, what: &'static str) -> Tok {
         display: format!("{what}@call{site}"),
         birth_keys: vec![],
         definite: vec![],
+        declared: Vec::new(),
         parent: None,
         ctor: None,
         native_parent: None,
@@ -351,13 +352,13 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
         }
         TokKind::Builtin(BuiltinNs::Require) => match name.as_deref() {
             Some("cache") | Some("extensions") => {
-                let (cache, ext) = require_parts(m);
+                require_parts(m);
                 let p = if name.as_deref() == Some("cache") {
-                    cache
+                    m.cjs_cache
                 } else {
-                    ext
+                    m.cjs_ext
                 };
-                m.add_tok(dst, p);
+                m.edge(p, dst);
             }
             Some("main") => {
                 let u = m.cjs_union;
@@ -374,10 +375,18 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
             }
         },
         TokKind::Builtin(BuiltinNs::Process) => {
-            m.add_top(dst, |_| {
-                format!("process.{}", name.as_deref().unwrap_or("[computed]"))
-            });
-            m.add_prim(dst, prim::ALL);
+            // `process.mainModule` is the CommonJS main record the support
+            // module installed (or `undefined`); a computed key may name it.
+            if matches!(name.as_deref(), Some("mainModule") | None) {
+                let main = m.cjs_main;
+                m.edge(main, dst);
+            }
+            if name.as_deref() != Some("mainModule") {
+                m.add_top(dst, |_| {
+                    format!("process.{}", name.as_deref().unwrap_or("[computed]"))
+                });
+                m.add_prim(dst, prim::ALL);
+            }
         }
         TokKind::Builtin(_) => match name.as_deref() {
             Some("prototype") => {
@@ -433,7 +442,6 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                 // The CJS bootstrap main record starts empty. Its actual
                 // fields are supplied by generated wrapper stores, not by
                 // opaque builtin-method summaries.
-                _ if matches!(what, "CjsMain" | "CjsRecord") => m.add_prim(dst, prim::UNDEF),
                 Some("buffer") if what == "TypedArray" => {
                     // B1: the backing buffer is observed (it can be
                     // transferred, detached or wrapped by another view).
@@ -535,7 +543,7 @@ pub fn prim_method(m: &mut Model, prim: u16, _key: Key, call: CallId) {
     }
     // String/number/boolean methods: callbacks are called by the runtime
     // with primitives (replace), object arguments are coerced.
-    implicit_args(m, call, "argument of a primitive method");
+    implicit_args(m, call, "argument of a primitive method", Protocol::Any);
     ret_prim(m, call, prim::ALL);
     let pb = site_tmpl(m, call, "primbox");
     ret_tok(m, call, pb);
@@ -610,7 +618,7 @@ fn proto_method_inner(m: &mut Model, p: Tok, origin: Tok, key: Key, call: CallId
     match m.toks[p as usize].clone() {
         TokKind::ObjectProto => match name.as_str() {
             "hasOwnProperty" | "propertyIsEnumerable" | "isPrototypeOf" => {
-                implicit_args(m, call, "ToPropertyKey");
+                implicit_args(m, call, "ToPropertyKey", Protocol::ToPrimitive);
                 ret_prim(m, call, prim::BOOL);
             }
             "toString" | "toLocaleString" => {
@@ -624,7 +632,7 @@ fn proto_method_inner(m: &mut Model, p: Tok, origin: Tok, key: Key, call: CallId
                 unknown_method(m, call, "E5 __defineGetter__ argument");
             }
             "__lookupGetter__" | "__lookupSetter__" => {
-                m.implicit(origin, 0);
+                m.implicit(origin, 0, Protocol::Any);
                 ret_tok(m, call, TOP);
             }
             _ => {}
@@ -640,11 +648,21 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
     };
     match (ns, name) {
         (BuiltinNs::Other, n) if CONSOLE_METHODS.contains(&n) => {
-            implicit_args(m, call, "console argument (formatted by the runtime)");
+            implicit_args(
+                m,
+                call,
+                "console argument (formatted by the runtime)",
+                Protocol::Any,
+            );
             ret_prim(m, call, prim::UNDEF);
         }
         (BuiltinNs::Console, _) => {
-            implicit_args(m, call, "console argument (formatted by the runtime)");
+            implicit_args(
+                m,
+                call,
+                "console argument (formatted by the runtime)",
+                Protocol::Any,
+            );
             ret_prim(m, call, prim::UNDEF);
         }
         (BuiltinNs::Other, "setTimeout" | "setInterval" | "setImmediate" | "queueMicrotask") => {
@@ -677,7 +695,7 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
             | "decodeURIComponent" | "encodeURI" | "decodeURI" | "escape" | "unescape" | "atob"
             | "btoa" | "String" | "Number" | "Boolean" | "BigInt",
         ) => {
-            implicit_args(m, call, "ToPrimitive");
+            implicit_args(m, call, "ToPrimitive", Protocol::ToPrimitive);
             ret_prim(m, call, prim::ALL);
         }
         (BuiltinNs::Object, "keys" | "getOwnPropertyNames" | "getOwnPropertySymbols") => {
@@ -785,11 +803,31 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
             ret_tok(m, call, arr);
         }
         (BuiltinNs::Json, "stringify") => {
-            implicit_args(m, call, "JSON.stringify value");
+            // The value is serialized; a replacer is called back.
+            let c = m.calls[call as usize].clone();
+            let r = m.reason("JSON.stringify value");
+            let rr = m.reason("JSON.stringify replacer");
+            for (i, &a) in c.args.iter().enumerate() {
+                let (reason, proto) = if i == 0 {
+                    (r, Protocol::Json)
+                } else {
+                    (rr, Protocol::Any)
+                };
+                m.cons(a, Cons::Implicit { reason, proto });
+            }
+            for &a in &c.spread {
+                m.cons(
+                    a,
+                    Cons::Implicit {
+                        reason: rr,
+                        proto: Protocol::Any,
+                    },
+                );
+            }
             ret_prim(m, call, prim::STR | prim::UNDEF);
         }
         (BuiltinNs::Json, "parse") => {
-            implicit_args(m, call, "JSON.parse text");
+            implicit_args(m, call, "JSON.parse text", Protocol::ToPrimitive);
             let j = site_tmpl(m, call, "json");
             let fa = m.field_any(j);
             m.add_prim(fa, prim::ALL);
@@ -818,11 +856,18 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
         }
         // Every Math function returns a Number (ECMA-262 Math).
         (BuiltinNs::Math, _) => {
-            implicit_args(m, call, "ToPrimitive");
+            implicit_args(m, call, "ToPrimitive", Protocol::ToPrimitive);
             ret_prim(m, call, prim::NUM);
         }
+        (BuiltinNs::Number, _) | (BuiltinNs::String, _) if name == "raw" => {
+            // `String.raw` reads `raw` and its elements.
+            implicit_args(m, call, "String.raw template", Protocol::Any);
+            ret_prim(m, call, prim::ALL);
+            let pb = site_tmpl(m, call, "primbox");
+            ret_tok(m, call, pb);
+        }
         (BuiltinNs::Number, _) | (BuiltinNs::String, _) => {
-            implicit_args(m, call, "ToPrimitive");
+            implicit_args(m, call, "ToPrimitive", Protocol::ToPrimitive);
             ret_prim(m, call, prim::ALL);
             if name == "raw" || name == "split" {
                 let pb = site_tmpl(m, call, "primbox");
@@ -830,7 +875,7 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
             }
         }
         (BuiltinNs::Symbol, _) => {
-            implicit_args(m, call, "ToString");
+            implicit_args(m, call, "ToString", Protocol::ToPrimitive);
             ret_prim(m, call, prim::SYMBOL | prim::STR | prim::UNDEF);
         }
         (BuiltinNs::Promise, "resolve" | "reject") => {
@@ -883,7 +928,7 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
             ret_tok(m, call, p);
         }
         (BuiltinNs::Reflect, "ownKeys" | "has") => {
-            implicit_args(m, call, "ToPropertyKey");
+            implicit_args(m, call, "ToPropertyKey", Protocol::ToPrimitive);
             let pb = site_tmpl(m, call, "primbox");
             ret_tok(m, call, pb);
             ret_prim(m, call, prim::BOOL);
@@ -932,6 +977,16 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
 pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
     match ns {
         BuiltinNs::Require => {
+            // `require('module')` is the node:module namespace, which hands
+            // out `Module._cache`: the cache reaches code nothing models.
+            if m.call_lit
+                .get(&call)
+                .is_some_and(|a| matches!(m.atoms[*a as usize].as_str(), "module" | "node:module"))
+            {
+                let r = m.reason("node:module namespace hands out Module._cache");
+                let cache = m.cjs_cache;
+                m.sink_node(cache, r);
+            }
             // A compiled module named by a constant path: its exports (the
             // registry record's `exports`, as `require.cache[path]` holds).
             let rec = m
@@ -975,7 +1030,7 @@ pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
                     // All of it only once a specifier reaches the call: a
                     // shared loader body no computed specifier reaches
                     // yields nothing.
-                    implicit_args(m, call, "require specifier");
+                    implicit_args(m, call, "require specifier", Protocol::ToPrimitive);
                     let ret = m.calls[call as usize].ret;
                     // The registry part stays inside that ⊤ as on main.
                     // It caches the registry records it loads.
@@ -1002,12 +1057,12 @@ pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             unknown_method(m, call, "E14 dynamic code");
         }
         BuiltinNs::Error => {
-            implicit_args(m, call, "Error message");
+            implicit_args(m, call, "Error message", Protocol::Any);
             let e = error_tok(m, call);
             ret_tok(m, call, e);
         }
         BuiltinNs::String | BuiltinNs::Number | BuiltinNs::Boolean | BuiltinNs::Symbol => {
-            implicit_args(m, call, "ToPrimitive");
+            implicit_args(m, call, "ToPrimitive", Protocol::ToPrimitive);
             ret_prim(m, call, prim::ALL);
         }
         BuiltinNs::Object => {
@@ -1091,7 +1146,7 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             ret_tok(m, call, p);
         }
         BuiltinNs::Error => {
-            implicit_args(m, call, "Error message");
+            implicit_args(m, call, "Error message", Protocol::Any);
             let e = error_tok(m, call);
             if let Some(o) = arg(m, call, 1) {
                 let ca = m.atom("cause");
@@ -1116,7 +1171,7 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             ret_tok(m, call, o);
         }
         _ => {
-            implicit_args(m, call, "builtin constructor argument");
+            implicit_args(m, call, "builtin constructor argument", Protocol::Any);
             let o = site_tmpl(m, call, "builtin");
             ret_tok(m, call, o);
         }
@@ -1131,14 +1186,14 @@ pub fn construct_named(m: &mut Model, name: &str, call: CallId) {
     match name {
         "Date" | "RegExp" | "URL" | "URLSearchParams" | "TextEncoder" | "TextDecoder"
         | "AbortController" | "Headers" => {
-            implicit_args(m, call, "builtin constructor argument");
+            implicit_args(m, call, "builtin constructor argument", Protocol::Any);
             let o = site_tmpl(m, call, "builtin");
             ret_tok(m, call, o);
         }
         "Uint8Array" | "Int8Array" | "Uint16Array" | "Int16Array" | "Uint32Array"
         | "Int32Array" | "Float32Array" | "Float64Array" | "BigInt64Array" | "BigUint64Array"
         | "Uint8ClampedArray" | "ArrayBuffer" | "DataView" => {
-            implicit_args(m, call, "typed array source");
+            implicit_args(m, call, "typed array source", Protocol::Any);
             let o = site_tmpl(m, call, "TypedArray");
             let fa = m.field_any(o);
             m.add_prim(fa, prim::NUM | prim::BIGINT);
@@ -1211,7 +1266,7 @@ pub fn native_parent_ctor(m: &mut Model, tm: TmplId, call: CallId, inst: Tok) {
         unknown_method(m, call, "E21 native parent constructor argument");
         return;
     }
-    implicit_args(m, call, "native parent constructor argument");
+    implicit_args(m, call, "native parent constructor argument", Protocol::Any);
     let site = m.anon_birth_site(&format!("{name} constructor"));
     for k in native_parent_keys(&name) {
         let a = m.atom(k);
@@ -1429,6 +1484,9 @@ pub fn require_parts(m: &mut Model) -> (Tok, Tok) {
     let c = anon_tmpl(m, "require.cache");
     let e = anon_tmpl(m, "require.extensions");
     m.require_parts = Some((c, e));
+    let (cache, ext) = (m.cjs_cache, m.cjs_ext);
+    m.add_tok(cache, c);
+    m.add_tok(ext, e);
     (c, e)
 }
 
@@ -1444,6 +1502,7 @@ fn anon_tmpl(m: &mut Model, what: &'static str) -> Tok {
         display: what.to_string(),
         birth_keys: vec![],
         definite: vec![],
+        declared: Vec::new(),
         parent: None,
         ctor: None,
         native_parent: None,

@@ -345,7 +345,7 @@ module.exports = { get };
         for (needle, why) in [
             ("__rec;", "the per-site memo slot declaration"),
             (
-                "__rec !== undefined && require.cache[",
+                "__rec !== undefined && __perry_cjs_c[",
                 "the short-circuit that skips the registry",
             ),
             (

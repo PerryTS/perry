@@ -302,7 +302,7 @@ impl Model {
         match self.toks[t as usize] {
             TokKind::Obj(tm, _) => match self.tmpls[tm as usize].kind {
                 TmplKind::Arr { .. } => true,
-                TmplKind::BObj { what, .. } => what != "CjsMain",
+                TmplKind::BObj { .. } => true,
                 _ => false,
             },
             _ => false,
@@ -702,6 +702,7 @@ impl Model {
             Some(&r) => r,
             None => {
                 let r = self.node_l("callee-relay");
+                self.nodes[r as usize].frame = self.call_run(call);
                 self.relays.insert(call, r);
                 self.cons(r, Cons::CallArgs { call });
                 r

@@ -1059,6 +1059,12 @@ pub struct CompilationContext {
     /// call canonicalizes the entry; bundle-extension entries don't update
     /// it, so their `import.meta.main` correctly resolves to false.
     pub entry_canonical: Option<PathBuf>,
+    /// The CommonJS support module (`cjs_wrap::support`, imported as
+    /// `perry:cjs` by every wrapped module): its path, fixed by the entry, and
+    /// the wrapped modules' canonical paths in collection-finish order (its
+    /// cache's keys). The walk writes it once every CommonJS module is known.
+    pub cjs_support_path: Option<PathBuf>,
+    pub cjs_support_keys: Vec<String>,
     /// Extra perry-stdlib Cargo features the codegen-side FFI registry
     /// (`perry-codegen::ext_registry`) recorded during compilation.
     /// Populated by the drain right before `build_optimized_libs` from
@@ -1418,6 +1424,8 @@ impl CompilationContext {
             min_windows_version: "10".to_string(),
             windows_subsystem: "auto".to_string(),
             entry_canonical: None,
+            cjs_support_path: None,
+            cjs_support_keys: Vec::new(),
             extra_stdlib_features: BTreeSet::new(),
             // #5263: default-allow dynamic stdlib member access. Dynamic
             // `fs[name]` over the *linked* namespace can only select among

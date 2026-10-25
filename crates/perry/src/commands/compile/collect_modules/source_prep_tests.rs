@@ -253,12 +253,13 @@ fn second_walk_with_first_walk_sources_collects_identical_modules() {
     let dir = tempfile::tempdir().expect("tempdir");
     fixture(dir.path());
     let (fresh, kept, _) = collect_twice(dir.path(), 0, false);
-    // main, a, c, b, point, shared, meta, data.json, note.txt.
-    assert_eq!(kept, 9, "the first walk keeps every plain module source");
+    // main, a, c, b, point, shared, meta, data.json, note.txt, and the
+    // CommonJS support module the wrapped ones import.
+    assert_eq!(kept, 10, "the first walk keeps every plain module source");
     assert!(fresh.join("\n").contains("__perry_cjs_factory"));
     for workers in [0, 4, 1] {
         let (reused, kept, left) = collect_twice(dir.path(), workers, true);
-        assert_eq!(kept, 9);
+        assert_eq!(kept, 10);
         assert_eq!(left, 0, "the second walk takes every kept source");
         assert_eq!(reused, fresh, "workers {workers}");
     }

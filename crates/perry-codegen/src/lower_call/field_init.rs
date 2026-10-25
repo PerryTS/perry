@@ -823,7 +823,7 @@ pub(crate) fn apply_field_initializers_recursive(
                 .get(&class_name_in_chain)
                 .is_some_and(|cid| ctx.program_layouts.families.contains_key(cid));
         for field in &class_fields {
-            if field.origin == perry_hir::ClassFieldOrigin::ConstructorStore || family_stub {
+            if field.origin.is_reservation() || family_stub {
                 continue;
             }
             // Closed literals publish their positional keys and undefined fills

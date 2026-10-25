@@ -108,13 +108,22 @@ pub(crate) unsafe fn try_get(receiver: JSValue, name: &[u8]) -> Option<f64> {
 /// Known metadata names after the proof was withdrawn. Resolve own properties
 /// and the actual prototype chain, with the original view as getter receiver.
 /// Both inputs stay rooted across bootstrap and arbitrary user getters.
-pub(crate) unsafe fn get(receiver: f64, key: *const crate::StringHeader) -> Option<f64> {
+///
+/// `receiver` is the by-name ABI word: a `POINTER_TAG` value or a raw word of
+/// unknown kind, a heap address or a native registry id. A raw word is boxed
+/// by the unknown-word constructor, which boxes the id band as `HANDLE_TAG`
+/// (never the heap-only `JSValue::pointer`), and only for a metadata name.
+pub(crate) unsafe fn get(receiver: u64, key: *const crate::StringHeader) -> Option<f64> {
     let bytes =
         std::slice::from_raw_parts(crate::string::string_data(key), (*key).byte_len as usize);
     if !is_metadata_name(bytes) {
         return None;
     }
-    let value = JSValue::from_bits(receiver.to_bits());
+    let value = match receiver >> 48 {
+        0 => JSValue::from_bits(crate::value::js_nanbox_pointer(receiver as i64).to_bits()),
+        0x7FFD => JSValue::from_bits(receiver),
+        _ => return None,
+    };
     if let Some(result) = try_get(value, bytes) {
         return Some(result);
     }
@@ -142,7 +151,7 @@ pub(crate) unsafe fn get(receiver: f64, key: *const crate::StringHeader) -> Opti
         _ => "byteOffset",
     };
     let scope = crate::gc::RuntimeHandleScope::new();
-    let receiver = scope.root_nanbox_f64(receiver);
+    let receiver = scope.root_nanbox_f64(f64::from_bits(value.bits()));
     let key = scope.root_raw_const_ptr(key);
     let own = if matches!(
         header.obj_type,

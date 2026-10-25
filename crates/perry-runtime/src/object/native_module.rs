@@ -48,7 +48,7 @@ pub(crate) use callable_exports::{
     builtin_closure_is_non_constructable_value, builtin_closure_length,
     cached_buffer_intrinsic_prototype_value, fs_namespace_descriptor_getter_value,
     fs_namespace_descriptor_setter_value, is_buffer_constructor_value, is_cluster_emitter_method,
-    module_builtin_modules_value, module_cjs_cache_value, module_cjs_extensions_value,
+    install_module_cjs_cache_value, module_builtin_modules_value, module_cjs_cache_value, module_cjs_extensions_value,
     module_cjs_global_paths_value, module_cjs_path_cache_value, module_cjs_prototype_for_instance,
     module_constants_value, native_string_value, scan_tls_derived_prototype_roots_mut,
     set_bound_native_closure_metadata, set_bound_native_closure_name, set_builtin_closure_length,

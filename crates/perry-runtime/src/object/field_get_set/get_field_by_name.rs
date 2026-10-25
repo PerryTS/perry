@@ -76,15 +76,10 @@ pub extern "C" fn js_object_get_field_by_name(
         return JSValue::undefined();
     }
     if !key.is_null() {
-        let bits = obj as u64;
-        let receiver = match bits >> 48 {
-            0 => JSValue::pointer(obj as *mut u8),
-            0x7FFD => JSValue::from_bits(bits),
-            _ => JSValue::undefined(),
-        };
-        if let Some(value) =
-            unsafe { crate::typedarray_named::get(f64::from_bits(receiver.bits()), key) }
-        {
+        // The probe classifies the raw ABI word itself, after its name test:
+        // a native handle id (`headers[key]`) reaches here before the handle
+        // dispatch below.
+        if let Some(value) = unsafe { crate::typedarray_named::get(obj as u64, key) } {
             return JSValue::from_bits(value.to_bits());
         }
     }

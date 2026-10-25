@@ -25,25 +25,27 @@ impl Model {
     }
     fn add_tokens(&mut self, n: NodeId, toks: Tokens<'_>, prim: u16) {
         let mut later: Vec<Tok> = Vec::new();
-        // A parameter node holds its argument marker in place of the
-        // markers that arrive (DECISIONS 44); it no longer holds every value
-        // of its sources.
-        let own = match self.nodes[n as usize].param
-            && !self.param_marker.is_empty()
-            && toks.iter().any(|&t| self.is_marker(t))
-        {
-            true => {
-                let r = self.arg_marker(n);
-                for &t in toks {
-                    if self.is_marker(t) {
-                        self.link_marker(t, r);
+        // A marker crossing into the node arrives as a member of the node's
+        // own marker (MRK, `Model::crosses`; DECISIONS 44 for parameters):
+        // the node no longer holds every value of its sources.
+        let crossed: Option<Vec<Tok>> =
+            match !self.param_marker.is_empty() && toks.iter().any(|&t| self.crosses(n, t)) {
+                true => {
+                    let r = self.arg_marker(n);
+                    let mut v = Vec::with_capacity(toks.len());
+                    for &t in toks {
+                        if self.crosses(n, t) {
+                            self.link_marker(t, r);
+                            v.push(r);
+                        } else {
+                            v.push(t);
+                        }
                     }
+                    self.nodes[n as usize].dropped = true;
+                    Some(v)
                 }
-                self.nodes[n as usize].dropped = true;
-                Some(r)
-            }
-            false => None,
-        };
+                false => None,
+            };
         let targets = if toks.is_empty() {
             Targets::Empty
         } else {
@@ -55,18 +57,18 @@ impl Model {
         let node = &mut self.nodes[n as usize];
         let mut changed = false;
         let mut top_new = false;
+        let toks = match &crossed {
+            Some(v) => Tokens::Slice(v),
+            None => toks,
+        };
         for &t in toks {
-            let t = match own {
-                Some(r)
-                    if self.param_marker.contains_key(&t) || marker_top_bit(&self.arg_bits, t) =>
-                {
-                    r
-                }
-                _ => t,
-            };
             // A marker that reads as ⊤ (DECISIONS 42) is decided after the
-            // other tokens, once it is known whether ⊤ arrived with them.
-            if marker_top_bit(&self.marker_top, t) {
+            // other tokens, once it is known whether ⊤ arrived with them. So
+            // is an escaped value (`Model::top_beside`): unknown code holds
+            // it, so beside ⊤ it is that ⊤.
+            let escaped_value = marker_top_bit(&self.esc_bits, t)
+                && !(self.param_marker.contains_key(&t) || marker_top_bit(&self.arg_bits, t));
+            if marker_top_bit(&self.marker_top, t) || escaped_value {
                 later.push(t);
                 continue;
             }
@@ -263,6 +265,8 @@ impl Model {
                 c,
                 Cons::ThisTo { .. }
                     | Cons::CallArgs { .. }
+                    | Cons::RetInto { .. }
+                    | Cons::ArgInto { .. }
                     | Cons::ThisInst { .. }
                     | Cons::BuiltinCallee
                     | Cons::HolderStep { .. }
@@ -296,18 +300,12 @@ impl Model {
 
     pub fn solve(&mut self) {
         self.rel_phase = b'S';
-        for f in 0..self.funcs.len() {
-            for i in 0..self.funcs[f].params.len() {
-                let p = self.funcs[f].params[i];
-                if p != NO_NODE {
-                    self.nodes[p as usize].param = true;
-                }
-            }
-        }
+        self.mark_params();
+        self.members_settled.get_mut().clear();
         loop {
             self.fill_instances();
             let Some(n) = self.wl.pop_front() else {
-                if self.sum.pending.is_empty() {
+                if self.sum.pending.is_empty() && !self.settle_bf_written() {
                     break;
                 }
                 continue;
@@ -429,6 +427,8 @@ impl Model {
         }
         let n = self.node_named("field", || format!("field({t},{a})"));
         self.nodes[n as usize].obs = self.obs_toks.contains(&t);
+        self.nodes[n as usize].frame = self.fam_home(t);
+        self.nodes[n as usize].of_marker = self.is_marker(t);
         self.fields.insert((t, a), n);
         self.field_keys.entry(t).or_default().push(a);
         self.rel(|| format!("fieldnode {n} {t} {a}"));
@@ -476,8 +476,7 @@ impl Model {
             TokKind::Top | TokKind::Builtin(_) | TokKind::BuiltinFn | TokKind::NativeProto(_) => {
                 true
             }
-            TokKind::Obj(tm, _) => matches!(self.tmpls[*tm as usize].kind,
-                TmplKind::BObj { what, .. } if what != "CjsMain"),
+            TokKind::Obj(tm, _) => matches!(self.tmpls[*tm as usize].kind, TmplKind::BObj { .. }),
             _ => false,
         };
         let fa_d = self.field_any(d);
@@ -508,6 +507,8 @@ impl Model {
         }
         let n = self.node_named("fieldany", || format!("fieldany({t})"));
         self.nodes[n as usize].obs = self.obs_toks.contains(&t);
+        self.nodes[n as usize].frame = self.fam_home(t);
+        self.nodes[n as usize].of_marker = self.is_marker(t);
         self.field_any.insert(t, n);
         self.rel(|| format!("fieldany {n} {t}"));
         let all = self.all_fields(t);
@@ -522,6 +523,8 @@ impl Model {
         }
         let n = self.node_named("allfields", || format!("allfields({t})"));
         self.nodes[n as usize].obs = self.obs_toks.contains(&t);
+        self.nodes[n as usize].frame = self.fam_home(t);
+        self.nodes[n as usize].of_marker = self.is_marker(t);
         self.all_fields.insert(t, n);
         self.rel(|| format!("allfields {n} {t}"));
         n
@@ -649,8 +652,9 @@ impl Model {
                         | TokKind::Builtin(_)
                         | TokKind::BuiltinFn
                         | TokKind::NativeProto(_) => true,
-                        TokKind::Obj(tm, _) => matches!(self.tmpls[*tm as usize].kind,
-                            TmplKind::BObj { what, .. } if !matches!(what, "CjsMain" | "CjsRecord")),
+                        TokKind::Obj(tm, _) => {
+                            matches!(self.tmpls[*tm as usize].kind, TmplKind::BObj { .. })
+                        }
                         _ => false,
                     };
                     if opaque {
@@ -670,9 +674,11 @@ impl Model {
                 }
             }
             Cons::Store { key, src, site } => {
+                self.store_at = Some(n);
                 for &t in toks {
                     self.store_into(t, key, src, site);
                 }
+                self.store_at = None;
             }
             Cons::Call { call } => {
                 for &t in toks {
@@ -695,7 +701,14 @@ impl Model {
                 }
             }
             Cons::MCall { key, call } => {
-                if prim != 0 {
+                // The primitive kinds beside ⊤ add nothing to the call: the
+                // call of the unknown value escapes the arguments and returns
+                // ⊤ with every kind, which covers the primitive method's touch,
+                // its primitive result and its container of primitives
+                // (DECISIONS 42's reason, for a receiver's kinds). Made anyway,
+                // the container is a value of its own at every ⊤ site the
+                // result reaches: one per call site, each with field storage.
+                if prim != 0 && !self.nodes[n as usize].pts.contains_tok(TOP) {
                     self.with_b(|m| builtins::prim_method(m, prim, key, call));
                 }
                 for &t in toks {
@@ -747,6 +760,34 @@ impl Model {
                     self.mark_hard(t, kind, reason);
                 }
             }
+            Cons::DefineAccessor { key, reason } => {
+                for &t in toks {
+                    // A key the layout already holds as data may move into an
+                    // accessor pair in its slot, and a class instance's layout
+                    // is the class's: E5 HARD, as any defineProperty was. (On
+                    // another unit's layout the accessor is beyond its contract
+                    // in any case: the census breaks it.)
+                    let new_key = match self.toks[t as usize] {
+                        TokKind::Obj(tm, _) => {
+                            let tpl = &self.tmpls[tm as usize];
+                            matches!(
+                                tpl.kind,
+                                TmplKind::Lit { .. }
+                                    | TmplKind::Class {
+                                        literal_shape: true,
+                                        ..
+                                    }
+                            ) && !tpl.birth_keys.contains(&key)
+                        }
+                        _ => false,
+                    };
+                    if !new_key {
+                        self.mark_hard(t, Hard::E5DefineProperty, reason);
+                    } else if let Some(tm) = self.tmpl_of(t) {
+                        *self.adds_keys.entry(tm).or_default() += 1;
+                    }
+                }
+            }
             Cons::AddsKeys => {
                 for &t in toks {
                     let t = self
@@ -760,13 +801,19 @@ impl Model {
                     }
                 }
             }
-            Cons::Implicit { reason } => {
+            Cons::Implicit { reason, proto } => {
                 for &t in toks {
                     match self.toks[t as usize] {
-                        // A function handed to the runtime: it may be
-                        // called back with anything.
-                        TokKind::Func(_, _) | TokKind::Bound(_) => self.escape(t, reason),
-                        _ => self.implicit(t, reason),
+                        // A function handed to a reflecting runtime helper:
+                        // it may be called back with anything.
+                        TokKind::Func(_, _) | TokKind::Bound(_) if proto == Protocol::Any => {
+                            self.escape(t, reason)
+                        }
+                        // `instanceof` a bound function runs its target's.
+                        TokKind::Bound(_) if proto == Protocol::HasInstance => {
+                            self.escape(t, reason)
+                        }
+                        _ => self.implicit(t, reason, proto),
                     }
                 }
             }
@@ -1144,6 +1191,8 @@ impl Model {
                     self.call_args(call, t);
                 }
             }
+            Cons::RetInto { call, run } => self.ret_into(call, run, toks, prim),
+            Cons::ArgInto { call, run, i } => self.arg_into(call, run, i, toks),
             Cons::Spread { into, site } => {
                 for &s in toks {
                     self.cons(into, Cons::SpreadFrom { src: s, site });
@@ -1226,6 +1275,41 @@ impl Model {
         }
     }
 
+    /// Every builtin function value may have been written: every property
+    /// read of one is ⊤ from now on.
+    fn write_builtin_fns(&mut self, r: u32) {
+        if self.bf_written.is_some() {
+            return;
+        }
+        self.bf_written = Some(r);
+        self.bf_stores.clear();
+        for dst in std::mem::take(&mut self.bf_reads) {
+            self.add_top(dst, |_| {
+                "property of a written builtin function value".into()
+            });
+        }
+    }
+
+    /// The stores into a builtin function value, once the worklist is
+    /// empty: one at a node without ⊤ wrote one (true: solve on). A node
+    /// that holds ⊤ keeps it, so its stores are stores into ⊤ for good.
+    fn settle_bf_written(&mut self) -> bool {
+        if self.bf_written.is_some() || self.bf_stores.is_empty() {
+            return false;
+        }
+        let stores = std::mem::take(&mut self.bf_stores);
+        match stores
+            .iter()
+            .find(|&&(n, _)| !self.nodes[n as usize].pts.contains_tok(TOP))
+        {
+            Some(&(_, r)) => {
+                self.write_builtin_fns(r);
+                true
+            }
+            None => false,
+        }
+    }
+
     pub(crate) fn store_into(&mut self, t: Tok, key: Key, src: NodeId, site: SiteId) {
         // A program-owned global: an ordinary field of the global object.
         if let (TokKind::Builtin(BuiltinNs::GlobalThis), Key::Named(a)) =
@@ -1264,12 +1348,13 @@ impl Model {
             // read of such a value is ⊤ from now on (`load_from`).
             let r = self.reason("stored into a builtin function value");
             self.sink_node(src, r);
+            // Beside ⊤ the value is that ⊤ (`Model::top_beside`), but it may
+            // reach the node before ⊤ does: the node decides once the
+            // worklist is empty. A store from no rule's node decides now.
             if self.bf_written.is_none() {
-                self.bf_written = Some(r);
-                for dst in std::mem::take(&mut self.bf_reads) {
-                    self.add_top(dst, |_| {
-                        "property of a written builtin function value".into()
-                    });
+                match self.store_at {
+                    Some(n) => self.bf_stores.push((n, r)),
+                    None => self.write_builtin_fns(r),
                 }
             }
             return;
@@ -1302,8 +1387,10 @@ impl Model {
         };
         // A store into an existing data field of another unit's literal
         // layout opens nothing (§5): a store effect its defining unit
-        // performs with an unknown value (decision 17). The value escapes:
-        // every other unit reads that field as unknown. A class instance's
+        // performs (decision 17) with what the stored value's contract
+        // describes, published as a published binding's value is
+        // (`Gen::contract_check`: a value no contract describes escapes, and
+        // the field holds an unknown value). A class instance's
         // field is existing when every instance holds it from its birth
         // (definite): the store adds no key (CW2 C, binarytrees_arena).
         // A literal layout's new data key is a shape transition its defining
@@ -1330,8 +1417,6 @@ impl Model {
             match key {
                 Key::Named(a) if effect => {
                     self.foreign_stores.insert((tm, a, src));
-                    let r = self.reason("stored into another unit's object");
-                    self.sink_node(src, r);
                 }
                 _ => {
                     self.foreign_written.insert(tm);
@@ -1340,7 +1425,13 @@ impl Model {
         }
         if self.is_array_length(t, key) {
             let r = self.reason("ToNumber of an array length store");
-            self.cons(src, Cons::Implicit { reason: r });
+            self.cons(
+                src,
+                Cons::Implicit {
+                    reason: r,
+                    proto: Protocol::ToPrimitive,
+                },
+            );
             return;
         }
         match key {
@@ -1483,6 +1574,20 @@ impl Model {
         false
     }
 
+    /// Every function's parameter nodes hold their argument marker
+    /// (DECISIONS 44), from before the first binding reaches them: the
+    /// queued bindings run when the summaries exist, before the solve.
+    pub(crate) fn mark_params(&mut self) {
+        for f in 0..self.funcs.len() {
+            for i in 0..self.funcs[f].params.len() {
+                let p = self.funcs[f].params[i];
+                if p != NO_NODE {
+                    self.nodes[p as usize].param = true;
+                }
+            }
+        }
+    }
+
     /// Everything that reaches `n` escapes (once per node: no sink nodes).
     pub fn sink_node(&mut self, n: NodeId, reason: u32) {
         if self.sunk_nodes.insert(n) {
@@ -1495,14 +1600,78 @@ impl Model {
     /// Builtin protocol touch on `t` (ToPrimitive, iteration, toJSON, then,
     /// inspect …): every function reachable as a property of `t` or its
     /// chain runs with `this` = `t` and unknown primitive arguments.
-    pub fn implicit(&mut self, t: Tok, reason: u32) {
-        self.mark_use(t, crate::model::MARK_TOUCH);
-        if t == TOP || !self.implicit_done.insert(t) {
+    pub fn implicit(&mut self, t: Tok, reason: u32, proto: Protocol) {
+        // The touch looks up and calls the protocol's keys and reads its
+        // values, nothing else.
+        let keys: Option<Vec<Atom>> = proto
+            .keys()
+            .map(|ks| ks.iter().map(|k| self.atom(k)).collect());
+        let mut reads: Vec<Key> = proto
+            .reads()
+            .iter()
+            .map(|k| Key::Named(self.atom(k)))
+            .collect();
+        if proto == Protocol::Json {
+            reads.push(Key::Any);
+        }
+        let calls = keys.as_ref().is_none_or(|k| !k.is_empty());
+        if !calls && reads.is_empty() {
             return;
         }
-        let _ = reason;
+        self.mark_use(t, crate::model::MARK_TOUCH);
+        // A marker: the protocol runs on the values beside it; on the
+        // marker it calls what the marker reaches under the protocol's
+        // keys, an escape of that (`method_on`, DECISIONS 111). It has no
+        // accessors, so its reads run nothing; what JSON serializes in turn
+        // is what it reaches, touched (DECISIONS 45).
+        if self.is_marker(t) {
+            match &keys {
+                None => {
+                    let r = self.reach_of(t);
+                    self.mark_use(r, crate::model::MARK_ESCAPE);
+                }
+                Some(ks) => {
+                    for &a in ks {
+                        let m = self.marker_load(t, Some(a));
+                        self.mark_use(m, crate::model::MARK_ESCAPE);
+                    }
+                }
+            }
+            if proto == Protocol::Json {
+                let r = self.reach_of(t);
+                self.mark_use(r, crate::model::MARK_TOUCH);
+            }
+            return;
+        }
+        if t == TOP || !self.implicit_done.insert((t, proto)) {
+            return;
+        }
+        // The protocol calls on a marker family's token are of its run
+        // (`call_run`): what they find on it is the family's.
+        let home = self.fam_home(t);
+        // The values the protocol reads (getters run in the load) and, for
+        // JSON, serializes in turn.
+        for key in reads {
+            let recv = self.node_l("implicit-recv");
+            let dst = self.node_l("implicit-read");
+            self.nodes[recv as usize].frame = home;
+            self.nodes[dst as usize].frame = home;
+            self.nodes[dst as usize].sink = true;
+            self.cons(recv, Cons::Load { key, dst });
+            if proto == Protocol::Json {
+                self.cons(dst, Cons::Implicit { reason, proto });
+            }
+            self.add_tok(recv, t);
+        }
+        if !calls {
+            return;
+        }
         let ret = self.node_named("implicit-ret", || format!("implicit-ret({t})"));
+        // Protocol results go back to the runtime only (touched below).
+        self.nodes[ret as usize].sink = true;
         let arg = self.node_l("implicit-arg");
+        self.nodes[ret as usize].frame = home;
+        self.nodes[arg as usize].frame = home;
         self.add_prim(arg, prim::ALL);
         // Protocol arguments are primitives (hints, keys). The one protocol
         // that hands user code runtime functions, `then(resolve, reject)`,
@@ -1518,10 +1687,26 @@ impl Model {
         });
         self.protocol_calls.insert(call);
         self.rel(|| format!("implicitcall {call} {t} {ret} {arg}"));
-        self.method_on(t, Key::Any, call);
-        // Results of protocol methods flow back to the runtime (iterator
-        // results, ToPrimitive values, then-ables): treat as touched too.
-        self.cons(ret, Cons::Implicit { reason });
+        match keys {
+            None => self.method_on(t, Key::Any, call),
+            Some(ks) => {
+                for a in ks {
+                    self.method_on(t, Key::Named(a), call);
+                }
+            }
+        }
+        // Results of protocol methods flow back to the runtime: what the
+        // protocol runs on them (an iterator's `next`, a result's `value`,
+        // what `toJSON` returns) is a touch of its own.
+        if let Some(next) = proto.of_result() {
+            self.cons(
+                ret,
+                Cons::Implicit {
+                    reason,
+                    proto: next,
+                },
+            );
+        }
     }
 
     pub fn cons_line(&self, n: NodeId, c: &Cons) -> String {
@@ -1556,7 +1741,15 @@ impl Model {
             ),
             Cons::Hard { kind, reason } => format!("hard {n} {} {reason}", kind.code()),
             Cons::AddsKeys => format!("addskeys {n}"),
-            Cons::Implicit { reason } => format!("implicit {n} {reason}"),
+            Cons::DefineAccessor { key, reason } => {
+                format!(
+                    "defineaccessor {n} {} {reason}",
+                    self.key_name(Key::Named(*key))
+                )
+            }
+            Cons::Implicit { reason, proto } => {
+                format!("implicit {n} {reason} {}", proto.name())
+            }
             Cons::CreateProto { reason } => format!("createproto {n} {reason}"),
             Cons::ChainUnion { key, dst } => {
                 format!("chainunion {n} {} {dst}", self.key_name(*key))
@@ -1610,6 +1803,8 @@ impl Model {
             Cons::IdxKey { obj, dst } => format!("idxkey {n} {obj} {dst}"),
             Cons::ThisTo { origin } => format!("thisto {n} {origin}"),
             Cons::CallArgs { call } => format!("callargs {n} {call}"),
+            Cons::RetInto { call, run } => format!("retinto {n} {call} {run}"),
+            Cons::ArgInto { call, run, i } => format!("arginto {n} {call} {run} {i}"),
             Cons::Spread { into, site } => format!("spread {n} {into} {site}"),
             Cons::SpreadFrom { src, site } => format!("spreadfrom {n} {src} {site}"),
             Cons::ThisInst { call, ft } => format!("thisinst {n} {call} {ft}"),

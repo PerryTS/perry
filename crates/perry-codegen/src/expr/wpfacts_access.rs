@@ -97,6 +97,10 @@ pub(crate) struct FieldProof {
     /// Interpreted code can run: the site tests
     /// `PERRY_INTERP_PROTO_WRITTEN` (decision 150).
     pub interp_guard: bool,
+    /// The key is declared in some receiver class: present only once stored,
+    /// so the load is followed by the hole compare, whose miss is the site's
+    /// complete generic operation.
+    pub maybe_absent: bool,
 }
 
 impl FieldProof {
@@ -107,7 +111,7 @@ impl FieldProof {
 
     /// The site tests the proof at run time and has a generic miss arm.
     pub(crate) fn guarded(&self) -> bool {
-        self.checked || self.interp_guard
+        self.checked || self.interp_guard || self.maybe_absent
     }
 
     pub(crate) fn may_hold_string(&self) -> bool {
@@ -166,6 +170,71 @@ fn receiver(ctx: &FnCtx<'_>, object: &Expr) -> Option<(crate::codegen::FactsRecv
     }
 }
 
+/// FVA: the class ids the facts prove a call's receiver to be one of (an
+/// unchecked binding, no interpreted code), and whether it may also be
+/// null or undefined (then the site keeps that receiver test, as a read
+/// does). A virtual call over them is the T0set read shape.
+pub(crate) fn proven_receiver_classes(ctx: &FnCtx<'_>, object: &Expr) -> Option<(Vec<u32>, bool)> {
+    let (r, _) = receiver(ctx, object)?;
+    (!r.checked && !ctx.wpfacts.interp_guard && !r.class_ids.is_empty())
+        .then(|| (r.class_ids, r.nullable && !tested_in_block(ctx, object)))
+}
+
+/// FVA 3.4: the facts prove class `cid`'s own static `key` holds its
+/// definition for the program's life (no write, no escape of the class
+/// object, no interpreted code).
+pub(crate) fn proves_static(ctx: &FnCtx<'_>, cid: u32, key: &str) -> bool {
+    !ctx.wpfacts_off
+        && !ctx.wpfacts.interp_guard
+        && ctx
+            .wpfacts
+            .class_statics
+            .get(&cid)
+            .is_some_and(|ks| ks.iter().any(|k| k == key))
+}
+
+/// The class id of a receiver the facts prove one of their classes: one
+/// load of its header word (the read shape's `select_by_class` load). A
+/// `nullable` receiver tests its tag first and gives 0 when it is nullish
+/// (no class id is 0).
+pub(crate) fn emit_class_id(ctx: &mut FnCtx<'_>, recv_box: &str, nullable: bool) -> String {
+    let load = |ctx: &mut FnCtx<'_>| {
+        let blk = ctx.block();
+        let bits = blk.bitcast_double_to_i64(recv_box);
+        let biased = blk.sub(
+            I64,
+            &bits,
+            &(super::receiver_range::RECEIVER_BIAS as i64).to_string(),
+        );
+        let hdr = super::receiver_range::emit_field_ptr(blk, &biased, 0);
+        blk.load(I32, &hdr)
+    };
+    if !nullable {
+        return load(ctx);
+    }
+    let is_obj = {
+        let blk = ctx.block();
+        let bits = blk.bitcast_double_to_i64(recv_box);
+        let top16 = blk.lshr(I64, &bits, "48");
+        blk.icmp_eq(I64, &top16, crate::nanbox::POINTER_TAG_TOP16_I64)
+    };
+    let from = ctx.block().label.clone();
+    let load_idx = ctx.new_block("proven_recv.class_id");
+    let join_idx = ctx.new_block("proven_recv.join");
+    let load_label = ctx.block_label(load_idx);
+    let join_label = ctx.block_label(join_idx);
+    ctx.block().cond_br(&is_obj, &load_label, &join_label);
+    ctx.current_block = load_idx;
+    let cid = load(ctx);
+    let loaded = ctx.block().label.clone();
+    ctx.block().br(&join_label);
+    ctx.current_block = join_idx;
+    ctx.block().phi(
+        I32,
+        &[(cid.as_str(), loaded.as_str()), ("0", from.as_str())],
+    )
+}
+
 /// A local that is never reassigned in this function holds one value for
 /// the whole body, so once an earlier access in the CURRENT basic block
 /// passed its receiver test (whose other arm does not return), every later
@@ -205,7 +274,7 @@ pub(crate) fn proves_raw_f64(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
 }
 
 /// The local class of class id `cid` (its own name, not an alias).
-fn class_name_of(ctx: &FnCtx<'_>, cid: u32) -> Option<String> {
+pub(crate) fn class_name_of(ctx: &FnCtx<'_>, cid: u32) -> Option<String> {
     ctx.classes
         .iter()
         .find(|(name, c)| c.id == cid && c.name == **name)
@@ -257,6 +326,7 @@ pub(crate) fn prove(
         return None;
     }
     let mut slot: Option<u32> = None;
+    let mut maybe_absent = false;
     let mut kind_mask = 0u16;
     let mut ta_stable = true;
     let mut ta_kind: Option<Option<u8>> = None;
@@ -265,14 +335,41 @@ pub(crate) fn prove(
     let mut names = Vec::new();
     let mut slots = Vec::new();
     for &cid in &recv.class_ids {
-        let name = class_name_of(ctx, cid).or_else(|| {
-            crate::fallback_diag::refuse("receiver class is absent from codegen class metadata");
-            None
-        })?;
         let f = ctx.wpfacts.field(cid, property).or_else(|| {
             crate::fallback_diag::refuse(
                 "key is not a definite data birth field of every receiver class",
             );
+            None
+        })?;
+        if f.declared {
+            // A declared key lives at its family slot: the object is born on
+            // the family layout and keeps it for life, so the program-wide
+            // layout is the authority (the class may be another module's).
+            // Stores add the key on the checked route.
+            let fam_slot = ctx.program_layouts.families.get(&cid).and_then(|fam| {
+                fam.keys
+                    .iter()
+                    .find(|(k, _)| *k == property)
+                    .map(|(_, s)| *s)
+            });
+            let Some(idx) = fam_slot.filter(|_| access == Access::Get) else {
+                crate::fallback_diag::refuse(
+                    "declared key: stores add it on the checked route; reads need the family",
+                );
+                return None;
+            };
+            maybe_absent = true;
+            slot.get_or_insert(idx);
+            slots.push(idx);
+            kind_mask |= f.kind_mask;
+            ta_stable = false;
+            ta_kind = Some(None);
+            all_f64 = false;
+            names.push(format!("class#{cid}"));
+            continue;
+        }
+        let name = class_name_of(ctx, cid).or_else(|| {
+            crate::fallback_diag::refuse("receiver class is absent from codegen class metadata");
             None
         })?;
         // Codegen's own layout must agree with the facts' birth slot.
@@ -331,6 +428,7 @@ pub(crate) fn prove(
         binding,
         checked,
         interp_guard,
+        maybe_absent,
     })
 }
 
@@ -684,6 +782,16 @@ fn lower_guarded_get(
             ctx.block().cond_br(&both, &chk_label, &miss_label);
             ctx.current_block = chk_idx;
             let blk = ctx.block();
+            // Word 0 is an object's class id but also an array's or a
+            // string's `length`: `[x]` would pass for a class whose id is 1.
+            // Only a GC_TYPE_OBJECT carries a class id there.
+            let type_ptr = super::receiver_range::emit_field_ptr(
+                blk,
+                &recv.biased,
+                -(perry_abi::GC_HEADER_SIZE as i64),
+            );
+            let type_byte = blk.load(I8, &type_ptr);
+            let is_object = blk.icmp_eq(I8, &type_byte, &perry_abi::GC_TYPE_OBJECT.to_string());
             let hdr = super::receiver_range::emit_field_ptr(blk, &recv.biased, 0);
             let cid = blk.load(I32, &hdr);
             let mut any: Option<String> = None;
@@ -694,7 +802,7 @@ fn lower_guarded_get(
                     None => eq,
                 });
             }
-            ok = any;
+            ok = any.map(|any| blk.and(crate::types::I1, &is_object, &any));
         } else {
             ok = Some(both);
         }
@@ -710,8 +818,17 @@ fn lower_guarded_get(
         emit_witness(ctx, &recv_box, &val, property, &p, 0, site);
         val
     };
+    if p.maybe_absent {
+        // A declared key holds the hole until stored: an absent key reads
+        // through the prototype chain, which is the generic operation.
+        let blk = ctx.block();
+        let bits = blk.bitcast_double_to_i64(&fast);
+        let hole = blk.icmp_eq(I64, &bits, &crate::nanbox::i64_literal(crate::nanbox::TAG_HOLE));
+        blk.cond_br(&hole, &miss_label, &done_label);
+    } else {
+        ctx.block().br(&done_label);
+    }
     let fast_end = ctx.block().label.clone();
-    ctx.block().br(&done_label);
     ctx.current_block = miss_idx;
     let generic = Expr::PropertyGet {
         object: Box::new(object.clone()),

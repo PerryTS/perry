@@ -1014,7 +1014,7 @@ unsafe fn concat_capacity_hint(recv: *const ArrayHeader, args_ptr: *const f64, c
 }
 
 /// Validate one concat source for the all-dense bulk path: a genuine plain
-/// dense hole-free `ArrayHeader`. `Some((ptr, len))` on success (null →
+/// dense `ArrayHeader` whose holes (if any) are provably absent. `Some((ptr, len))` on success (null →
 /// `Some((null, 0))`), `None` for anything the bulk path must not touch.
 /// Pure reads — runs no user code, allocates nothing.
 unsafe fn dense_concat_array_source(src: *const ArrayHeader) -> Option<(*const ArrayHeader, u32)> {
@@ -1076,10 +1076,12 @@ unsafe fn dense_concat_array_source(src: *const ArrayHeader) -> Option<(*const A
     if len > (*src).capacity {
         return None;
     }
-    let elems = crate::array::array_elements_ptr(src as *const ArrayHeader) as *const f64;
-    for i in 0..len as usize {
-        if (*elems.add(i)).to_bits() == crate::value::TAG_HOLE {
-            return None;
+    if !crate::array::array_holes_are_absent(src) {
+        let elems = crate::array::array_elements_ptr(src as *const ArrayHeader) as *const f64;
+        for i in 0..len as usize {
+            if (*elems.add(i)).to_bits() == crate::value::TAG_HOLE {
+                return None;
+            }
         }
     }
     Some((src, len))
@@ -1245,10 +1247,15 @@ unsafe fn try_append_spread_array_dense(
     // punt those to the slow path. String addrefs happen only after the copy
     // has committed below, so a mid-scan bail can't leave the fallback path
     // double-retaining an already-addref'd string.
-    let src_elems = crate::array::array_elements_ptr(src as *const ArrayHeader) as *const f64;
-    for i in 0..src_len as usize {
-        if (*src_elems.add(i)).to_bits() == crate::value::TAG_HOLE {
-            return None;
+    // When every hole is provably absent (no descriptors, custom prototype or
+    // indexed property on the chain) the spec read finds nothing at a hole, and
+    // the hole is carried over verbatim.
+    if !crate::array::array_holes_are_absent(src) {
+        let src_elems = crate::array::array_elements_ptr(src as *const ArrayHeader) as *const f64;
+        for i in 0..src_len as usize {
+            if (*src_elems.add(i)).to_bits() == crate::value::TAG_HOLE {
+                return None;
+            }
         }
     }
     let dest_len = (*array).length;
@@ -1319,6 +1326,27 @@ unsafe fn append_concat_proxy(result: *mut ArrayHeader, proxy: f64) -> *mut Arra
     result
 }
 
+/// `src` itself when it is a genuine `GC_TYPE_ARRAY` (not a set, map, typed
+/// array or buffer) whose indices line up with a `len`-long clone of it.
+unsafe fn real_array_source(src: *const ArrayHeader, len: u32) -> Option<*const ArrayHeader> {
+    let src = clean_arr_ptr(src);
+    let raw = src as usize;
+    if src.is_null() || raw < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return None;
+    }
+    let hdr = (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    if (*hdr).obj_type != crate::gc::GC_TYPE_ARRAY
+        || crate::set::is_registered_set(raw)
+        || crate::map::is_registered_map(raw)
+        || crate::typedarray::lookup_typed_array_kind(raw).is_some()
+        || crate::buffer::is_registered_buffer(raw)
+        || (*src).length != len
+    {
+        return None;
+    }
+    Some(src)
+}
+
 /// Append every element of the (already-materializable) source array `src`
 /// into `result`, returning the (possibly reallocated) result. `src` is
 /// materialized via `js_array_clone` so sets/maps/typed-arrays/buffers spread
@@ -1333,6 +1361,10 @@ fn append_spread_array(result: *mut ArrayHeader, src: *const ArrayHeader) -> *mu
         return result;
     }
     unsafe {
+        // The clone has the default prototype, so a hole's inherited element
+        // must be read from the SOURCE when that is a real array (its own
+        // `setPrototypeOf` link, or a subclass prototype, is not the clone's).
+        let spec_src = real_array_source(src, (*materialized).length).unwrap_or(materialized);
         let len = (*materialized).length;
         let elems =
             crate::array::array_elements_ptr(materialized as *const ArrayHeader) as *const f64;
@@ -1346,9 +1378,9 @@ fn append_spread_array(result: *mut ArrayHeader, src: *const ArrayHeader) -> *mu
         for i in 0..len as usize {
             let v = *elems.add(i);
             if v.to_bits() == crate::value::TAG_HOLE
-                && crate::array::array_spec_has_index(materialized, i as u32)
+                && crate::array::array_spec_has_index(spec_src, i as u32)
             {
-                out = js_array_push_f64(out, crate::array::array_spec_get(materialized, i as u32));
+                out = js_array_push_f64(out, crate::array::array_spec_get(spec_src, i as u32));
                 continue;
             }
             out = js_array_push_f64(out, v);

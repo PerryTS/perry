@@ -182,6 +182,12 @@ const _: () = assert!(LAYOUT_BASE == crate::codegen_abi::SHAPE_ID_BASE + (1 << 1
 /// (`runtime_layouts::*_PROTO_FAMILY`, whose serial is a reserved intrinsic one).
 pub const LAYOUT_PROTO_OBJECT: *const PerryProtoFamily = std::ptr::null();
 pub const LAYOUT_PROTO_NULL: *const PerryProtoFamily = std::ptr::without_provenance(1);
+/// `%Object.prototype%` for a class family whose instances do not inherit
+/// from the class (a compiler declared-keys record, `exports`); `OBJECT` (0)
+/// there means the class's own prototype. A class family tagged `NULL` keeps
+/// the class's shape identity and is born with the null-prototype flag
+/// (`mark_layout_object_facts`).
+pub const LAYOUT_PROTO_OBJECT_EXPLICIT: *const PerryProtoFamily = std::ptr::without_provenance(3);
 /// `PerryLayoutDesc.proto` addresses at or above this are a
 /// `*const PerryProtoFamily`.
 pub const LAYOUT_PROTO_TAG_END: usize = 4096;
@@ -868,6 +874,7 @@ unsafe fn register_bound(
     // its id is its record's (`layout_index_of_word`).
     let class_family = d.class_id != 0;
     let proto_id = match d.proto.addr() {
+        3 => super::shapes::PROTO_ID_DEFAULT,
         _ if class_family => super::shapes::class_proto_id(d.class_id),
         0 => super::shapes::PROTO_ID_DEFAULT,
         1 => super::shapes::PROTO_ID_NULL,

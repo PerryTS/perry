@@ -113,6 +113,7 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
 
 fn cb_call(m: &mut Model, by: CallId, cb: NodeId, this: ThisArg, args: Vec<NodeId>) -> NodeId {
     let ret = m.node_l("cb-ret");
+    m.nodes[ret as usize].frame = m.call_run(by);
     let call2 = m.calls.len() as CallId;
     m.solver_call(
         by,
@@ -134,10 +135,12 @@ fn cb_call(m: &mut Model, by: CallId, cb: NodeId, this: ThisArg, args: Vec<NodeI
 pub(super) fn iterate(m: &mut Model, call: CallId, v: NodeId) -> NodeId {
     let site = m.calls[call as usize].site;
     let out = m.node_l("b-iterated");
+    m.nodes[out as usize].frame = m.call_run(call);
     let ik = m.iter_key();
     m.cons(v, Cons::Load { key: ik, dst: out });
     let sub = |m: &mut Model, this: NodeId, key: Key| -> NodeId {
         let ret = m.node_l("b-iter-ret");
+        m.nodes[ret as usize].frame = m.call_run(call);
         let c2 = m.solver_call(
             call,
             CallSite {
@@ -385,7 +388,13 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
             if let Some(&cb) = c.args.first() {
                 let r = cb_call(m, call, cb, ThisArg::Undef, vec![elems, elems]);
                 let why = m.reason("sort comparator result");
-                m.cons(r, Cons::Implicit { reason: why });
+                m.cons(
+                    r,
+                    Cons::Implicit {
+                        reason: why,
+                        proto: Protocol::ToPrimitive,
+                    },
+                );
             }
             if name == Some("toSorted") {
                 let out = site_tmpl(m, call, "Array");
@@ -454,8 +463,14 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
         }
         Some("join" | "toString" | "toLocaleString") => {
             let why = m.reason("array join (element ToString)");
-            m.cons(elems, Cons::Implicit { reason: why });
-            implicit_args(m, call, "join separator");
+            m.cons(
+                elems,
+                Cons::Implicit {
+                    reason: why,
+                    proto: Protocol::ToPrimitive,
+                },
+            );
+            implicit_args(m, call, "join separator", Protocol::ToPrimitive);
             ret_prim(m, call, prim::STR);
         }
         Some("keys") => {
@@ -480,7 +495,6 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
     let c = m.calls[call as usize].clone();
     let elems = m.field_any(t);
     match (what, name) {
-        ("CjsMain" | "CjsRecord", _) => {}
         ("Iterator", _) => iterator_method(m, t, name, call),
         // Iterables or plain results, not iterators: no `next`/`return`/
         // `throw` (a call throws).
@@ -570,7 +584,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             "Date" | "RegExp" | "URL" | "TextCodec" | "builtin" | "BoxedPrimitive" | "Timer",
             Some(n),
         ) if !n.starts_with("on") && n != "addEventListener" => {
-            implicit_args(m, call, "builtin method argument");
+            implicit_args(m, call, "builtin method argument", Protocol::Any);
             ret_prim(m, call, prim::ALL);
             let pb = site_tmpl(m, call, "primbox");
             ret_tok(m, call, pb);
@@ -593,10 +607,10 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             let r = m.reason("B2 buffer transfer/resize");
             m.mark_hard(t, Hard::B2BufferResize, r);
             ret_tok(m, call, t);
-            implicit_args(m, call, "buffer resize argument");
+            implicit_args(m, call, "buffer resize argument", Protocol::ToPrimitive);
         }
         ("TypedArray", Some(_)) => {
-            implicit_args(m, call, "typed array method argument");
+            implicit_args(m, call, "typed array method argument", Protocol::Any);
             ret_prim(m, call, prim::ALL);
             let pb = site_tmpl(m, call, "primbox");
             ret_tok(m, call, pb);

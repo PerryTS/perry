@@ -2112,6 +2112,21 @@ jobs:
               cargo build --release "${runtime_packages[@]}"
               scripts/gc_call_effects/sidecars.sh target/release
             fi
+            # A suite that compiles with a GC/diagnostic instrument knob
+            # (PERRY_CHECK_CONTRACTS, PERRY_GC_TRACE, PERRY_GC_INSTRUMENTS, a
+            # schedule seed, ...) links the instrumented archives, as in the
+            # full-tier integration shards. Build them when a selected suite
+            # sets one.
+            needs_instr=0
+            while read -r package suite bound; do
+              [ "$package" = perry ] || continue
+              if grep -qE 'PERRY_(CHECK_CONTRACTS|GC_INSTRUMENTS|GC_TRACE|GC_SCHEDULE_SEED)' "crates/perry/tests/$suite.rs" 2>/dev/null; then
+                needs_instr=1
+              fi
+            done <<< "$SUITES"
+            if [ "$needs_instr" = 1 ]; then
+              PERRY_INSTR_PACKAGES=runtime scripts/build_instr_runtime.sh
+            fi
             export PERRY_RUNTIME_DIR="$PWD/target/release"
           fi
 

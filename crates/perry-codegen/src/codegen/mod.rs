@@ -297,7 +297,9 @@ mod native_namespace_exports;
 mod number_exactness_tests;
 mod opts;
 mod program_facts_view;
-pub use program_facts_view::{ElisionFacts, FactsClass, FactsField, FactsRecv, ProgramFactsView};
+pub use program_facts_view::{
+    ElisionFacts, FactsBody, FactsClass, FactsField, FactsRecv, ProgramFactsView,
+};
 #[cfg(test)]
 mod ordinary_param_guard_tests;
 mod param_guard;

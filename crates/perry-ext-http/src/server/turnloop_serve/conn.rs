@@ -14,6 +14,9 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Mutex, OnceLock};
+use std::time::Instant;
+
+use super::receive_timeout::Clock;
 
 use perry_ext_net::native_transport::{self as net, RootedSocket};
 use perry_ffi::native_payload::{self as np, PayloadFamily};
@@ -82,6 +85,7 @@ pub(crate) struct Conn {
     decoder: http1::Decoder,
     input: Vec<u8>,
     building: Option<Building>,
+    clock: Clock,
     active: Option<Active>,
     seq: u64,
     /// Requests decoded on this connection, for `maxRequestsPerSocket`.
@@ -361,6 +365,11 @@ fn initialize_connection(owner: f64, server_handle: i64, announce: bool) {
                 decoder: http1::Decoder::new(http1::Mode::Request, Default::default()),
                 input: Vec::with_capacity(8 * 1024),
                 building: None,
+                clock: if secure {
+                    Clock::Off
+                } else {
+                    Clock::Receiving(Instant::now())
+                },
                 active: None,
                 seq: 0,
                 requests: 0,
@@ -386,11 +395,24 @@ fn initialize_connection(owner: f64, server_handle: i64, announce: bool) {
         net::destroy(socket.value());
         return;
     }
+    if secure && announce {
+        // HTTP receipt begins after TLS, including a peer that sends no HTTP
+        // bytes. This ordinary once-listener is owned by the same Socket.
+        let callback = scope.root_addr(perry_ffi::alloc_closure(
+            perry_ffi::js_function_info!(secure_ready, 0; with_flags(perry_ffi::FN_BUILTIN)),
+            0,
+        ) as i64);
+        net::once(
+            socket.value(),
+            "secure",
+            f64::from_bits(JsValue::from_object_ptr(callback.get() as *mut u8).bits()),
+        );
+    }
     if announce {
         crate::server::server::emit_connection(server_handle, socket.value());
     }
     if socket.is_current() {
-        arm_idle(&socket);
+        refresh_deadline(&socket);
     }
 }
 
@@ -398,7 +420,11 @@ fn initialize_connection(owner: f64, server_handle: i64, announce: bool) {
 pub(crate) fn adopt_alpn_http1(socket: f64, server_handle: i64, leftover: Vec<u8>) -> bool {
     let socket = RootedSocket::new(socket);
     initialize_connection(socket.value(), server_handle, false);
-    with_conn(&socket, |connection| connection.handshaking = false);
+    with_conn(&socket, |connection| {
+        connection.handshaking = false;
+        connection.clock = Clock::Receiving(Instant::now());
+    });
+    refresh_deadline(&socket);
     if !leftover.is_empty() {
         feed(&socket, &leftover);
     }
@@ -411,9 +437,18 @@ fn is_websocket(id: &RootedSocket) -> bool {
 }
 
 fn feed_step(id: &RootedSocket, c: &mut Conn, bytes: &[u8]) -> Option<Step> {
-    c.handshaking = false;
     if c.websocket {
         return None;
+    }
+    if c.closing || c.destroyed {
+        return Some(Step::Idle);
+    }
+    if c.handshaking {
+        c.clock = Clock::Receiving(Instant::now());
+        c.handshaking = false;
+    }
+    if c.active.is_none() && !c.paused && !bytes.is_empty() {
+        c.clock.receiving(Instant::now());
     }
     c.input.extend_from_slice(bytes);
     Some(decode_step(id, c))
@@ -458,6 +493,9 @@ fn decode_step(id: &RootedSocket, c: &mut Conn) -> Step {
     loop {
         if c.destroyed || c.paused || c.handshaking {
             return Step::Idle;
+        }
+        if !c.input.is_empty() && c.active.is_none() {
+            c.clock.receiving(Instant::now());
         }
         let step = match c.decoder.receive(&c.input) {
             Ok(step) => step,
@@ -516,6 +554,7 @@ fn decode_step(id: &RootedSocket, c: &mut Conn) -> Step {
             // stopped being dispatched as a request at all. None of that is
             // a compile error, because the arm already existed.
             Some(http1::Event::End | http1::Event::Upgrade) => {
+                c.clock = Clock::Off;
                 outcome = match c.building.take() {
                     // A WebSocket upgrade with a `WebSocketServer` attached
                     // to this server is answered here, before the generic
@@ -572,6 +611,10 @@ fn decode_after(id: &RootedSocket, mut initial: Option<Step>) {
         let step = initial
             .take()
             .or_else(|| with_conn(id, |c| decode_step(id, c)));
+        refresh_deadline(id);
+        if with_conn(id, |c| c.closing || c.destroyed).unwrap_or(true) {
+            return;
+        }
         match step {
             None | Some(Step::Idle) => return,
             Some(Step::Again) => continue,
@@ -580,6 +623,7 @@ fn decode_after(id: &RootedSocket, mut initial: Option<Step>) {
                 continue;
             }
             Some(Step::Dispatch(request, send_continue)) => {
+                cancel_deadline(id);
                 let server_handle = request.server_handle;
                 queue_pending(server_handle, request);
                 // Outside the connection borrow: `write_raw` takes the same
@@ -590,10 +634,12 @@ fn decode_after(id: &RootedSocket, mut initial: Option<Step>) {
                 return;
             }
             Some(Step::Upgrade(building)) => {
+                cancel_deadline(id);
                 on_upgrade(id, building);
                 return;
             }
             Some(Step::WebSocket(building)) => {
+                cancel_deadline(id);
                 on_websocket(id, building);
                 return;
             }
@@ -987,11 +1033,14 @@ fn complete_response(conn_id: &RootedSocket, seq: u64, framing: Framing) {
             // response headers alone would leave the next request parsed
             // against a decoder that never restarted.
             && c.decoder.reset().is_ok();
+        if reuse {
+            c.clock = Clock::KeepAlive(Instant::now());
+        }
         Some(reuse)
     });
     match decision {
         Some(Some(true)) => {
-            arm_idle(conn_id);
+            refresh_deadline(conn_id);
             // A pipelined request may already be buffered.
             decode(conn_id);
         }
@@ -1007,7 +1056,7 @@ pub(crate) fn destroy_connection(conn_id: &RootedSocket) {
 }
 
 fn finish_and_close(conn_id: &RootedSocket) {
-    cancel_idle(conn_id);
+    cancel_deadline(conn_id);
     with_conn(conn_id, |c| c.closing = true);
     if net::shutdown(conn_id.value(), 0).is_err() {
         net::destroy(conn_id.value());
@@ -1136,11 +1185,23 @@ fn on_closed(id: &RootedSocket) {
 }
 
 fn on_timer(id: &RootedSocket) {
-    // The idle keep-alive deadline. Node closes the connection; an exchange
-    // that started in the meantime cancelled the deadline already.
-    let idle = with_conn(id, |c| c.active.is_none() && c.building.is_none()).unwrap_or(false);
-    if idle {
-        finish_and_close(id);
+    let state = deadline_state(id);
+    match state {
+        Some((Clock::Receiving(_), Some(left))) if left.is_zero() => {
+            with_conn(id, |c| {
+                c.paused = true;
+                c.clock = Clock::Off;
+                c.building = None;
+                c.input.clear();
+            });
+            write_raw(
+                id,
+                b"HTTP/1.1 408 Request Timeout\r\nConnection: close\r\n\r\n",
+            );
+            finish_and_close(id);
+        }
+        Some((Clock::KeepAlive(_), Some(left))) if left.is_zero() => finish_and_close(id),
+        _ => refresh_deadline(id),
     }
 }
 
@@ -1161,23 +1222,63 @@ fn on_error(id: &RootedSocket, code: Option<&str>, syscall: Option<&str>, termin
     destroy_connection(id);
 }
 
-// ── Idle deadline ───────────────────────────────────────────────────────────
+// ── HTTP receipt and keep-alive deadline ────────────────────────────────────
 
-/// Arm the connection's idle close.
-///
-/// Node 26.5.1, measured: the server FINs an idle keep-alive connection at
-/// `keepAliveTimeout + keepAliveTimeoutBuffer` (defaults 5000 + 1000 ms), and
-/// `keepAliveTimeout = 0` disables the close entirely while *keeping*
-/// keep-alive on. Zero here therefore arms nothing.
-fn arm_idle(id: &RootedSocket) {
-    let ms = with_conn(id, |c| c.idle_close_ms).unwrap_or(0);
-    if ms == 0 {
-        return;
-    }
-    net::deadline_arm(id.value(), ms);
+unsafe extern "C" fn secure_ready(
+    _: *const perry_ffi::RawClosureHeader,
+    this: perry_ffi::JsThis,
+) -> f64 {
+    let socket = RootedSocket::new(this.as_f64());
+    with_conn(&socket, |c| {
+        if c.handshaking {
+            c.handshaking = false;
+            c.clock = Clock::Receiving(Instant::now());
+        }
+    });
+    refresh_deadline(&socket);
+    f64::from_bits(JsValue::UNDEFINED.bits())
 }
 
-fn cancel_idle(id: &RootedSocket) {
+fn deadline_state(id: &RootedSocket) -> Option<(Clock, Option<std::time::Duration>)> {
+    with_conn(id, |c| {
+        if c.handshaking || c.closing || c.websocket {
+            return (Clock::Off, None);
+        }
+        let (request, headers) = with_base_server(c.server_handle, |server| {
+            (server.request_timeout, server.headers_timeout)
+        })
+        .unwrap_or((300_000.0, 60_000.0));
+        (
+            c.clock,
+            c.clock.remaining(
+                c.building.is_some(),
+                request,
+                headers,
+                c.idle_close_ms,
+                Instant::now(),
+            ),
+        )
+    })
+}
+
+fn refresh_deadline(id: &RootedSocket) {
+    let Some((clock, remaining)) = deadline_state(id) else {
+        return;
+    };
+    match remaining {
+        Some(left) if left.is_zero() => on_timer(id),
+        Some(left) => {
+            let ms = u64::try_from(left.as_millis())
+                .unwrap_or(u64::MAX)
+                .saturating_add(u64::from(left.subsec_nanos() % 1_000_000 != 0));
+            net::deadline_arm(id.value(), ms.max(1));
+        }
+        None if !matches!(clock, Clock::Off) => cancel_deadline(id),
+        None => {}
+    }
+}
+
+fn cancel_deadline(id: &RootedSocket) {
     net::deadline_cancel(id.value());
 }
 
@@ -1224,7 +1325,7 @@ fn on_websocket(id: &RootedSocket, building: Building) {
             return;
         }
     };
-    cancel_idle(id);
+    cancel_deadline(id);
     // The 101 goes out through the ordinary write path, so an HTTPS server's
     // attached WebSocket is encrypted exactly like its HTTP responses were.
     write_raw(id, &response);
@@ -1293,7 +1394,7 @@ fn on_upgrade(id: &RootedSocket, building: Building) {
         destroy_connection(id);
         return;
     }
-    cancel_idle(id);
+    cancel_deadline(id);
     #[cfg(test)]
     let sabotage_route = std::env::var("PERRY_NET_A_HTTP_SABOTAGE").as_deref() == Ok("route");
     #[cfg(not(test))]

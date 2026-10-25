@@ -607,14 +607,6 @@ pub(super) fn compile_module_entry(
                     ],
                 );
             }
-            // #10735: publish the shared `require.main` placeholder before
-            // ANY module's `__init` below runs (those are this CJS entry's
-            // OWN static imports, which ESM eval order runs before the
-            // entry's own preamble). See the callee's doc comment. Skipped
-            // for an ESM entry, which must leave `require.main` `undefined`.
-            if crate::collectors::is_cjs_wrapped_module(hir) {
-                blk.call_void("js_bootstrap_cjs_main_module_placeholder", &[]);
-            }
             // The topo sort intentionally drops cyclic evaluation back-edges.
             // A first eager module can therefore call a later module's hoisted
             // factory without ever reaching that module's __init wrapper. All

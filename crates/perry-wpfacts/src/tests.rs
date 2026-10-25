@@ -1,6 +1,8 @@
 //! Unit tests: small programs lowered from source, facts checked directly.
 
+mod accessor_keys;
 mod array_ctor;
+mod array_elements;
 mod array_length;
 mod array_record;
 mod birth_site;
@@ -8,19 +10,24 @@ mod body_identity;
 mod callback_origin;
 mod captured;
 mod cjs_require;
+mod class_statics;
 mod closed_world;
 mod closure_context;
+mod function_values;
 mod hub_tokens;
 mod layout_key;
 mod native_proto;
 mod parent_value;
 mod prim_result;
 mod protocol_calls;
+mod protocol_keys;
 mod receiver_this;
+mod runtime_helpers;
 mod summary;
 mod super_heritage;
 mod unit_alias;
 mod unit_ctor;
+mod unit_effects;
 mod unit_extends;
 mod unit_mode;
 mod unit_namespace;
@@ -45,6 +52,25 @@ fn tmpl<'a>(pf: &'a ProgramFacts, name: &str) -> &'a crate::TemplateFacts {
         .iter()
         .find(|t| t.display.ends_with(&format!(":{name}")))
         .unwrap_or_else(|| panic!("template {name} in\n{}", pf.dump_text()))
+}
+
+/// Some layout's field `key` holds a function, and never ⊤.
+fn holds_fn(pf: &ProgramFacts, key: &str) -> bool {
+    let fs: Vec<_> = pf
+        .templates
+        .iter()
+        .flat_map(|t| &t.fields)
+        .filter(|f| f.key == key)
+        .collect();
+    fs.iter().any(|f| f.kind.funcs > 0) && fs.iter().all(|f| !f.kind.top)
+}
+
+/// Every site of `key` is refused, for `why`.
+fn refused(pf: &ProgramFacts, key: &str, why: &str) -> bool {
+    let s: Vec<_> = pf.sites.iter().filter(|s| s.key == key).collect();
+    !s.is_empty()
+        && s.iter()
+            .all(|s| matches!(&s.verdict, Verdict::No(r) if r.starts_with(why)))
 }
 
 fn field<'a>(t: &'a crate::TemplateFacts, k: &str) -> &'a crate::FieldFacts {
@@ -1019,8 +1045,9 @@ fn cjs_main_is_one_record_and_does_not_alias_every_export() {
     let pf = facts(
         r#"
         class Value { x = 1; }
-        const first = __perry_get_cjs_main_module();
-        const second = __perry_get_cjs_main_module();
+        __perry_cjs_install(__perry_declared_keys(), { exports: undefined, __perry_cjs_record: true });
+        const first = process.mainModule;
+        const second = process.mainModule;
         first.exports = new Value();
         Object.defineProperties(first, { tag: { value: 1 } });
         console.log(second.exports.x);
@@ -1032,14 +1059,23 @@ fn cjs_main_is_one_record_and_does_not_alias_every_export() {
 }
 
 #[test]
-fn cjs_explicit_main_publication_exposes_the_record() {
+fn cjs_main_record_reaches_code_through_process_main_module() {
+    // The installed main record is what `process.mainModule` reads: a store
+    // through it is a store on the record, not lost to unmodeled code.
     let pf = facts(
         r#"
         class Value { x = 1; }
-        __perry_set_cjs_main_module(new Value());
+        __perry_cjs_install(__perry_declared_keys(), new Value());
+        process.mainModule.x = "written";
     "#,
     );
-    assert!(!tmpl(&pf, "Value").prefix_stable, "{}", pf.dump_text());
+    let x = field(tmpl(&pf, "Value"), "x");
+    assert!(!x.readonly, "{}", pf.dump_text());
+    assert!(
+        x.kind.prims & crate::model::prim::STR != 0,
+        "{}",
+        pf.dump_text()
+    );
 }
 
 #[test]
@@ -1066,7 +1102,8 @@ fn cjs_main_can_carry_a_user_iterator_protocol() {
     let pf = facts(
         r#"
         class Value { x = 1; }
-        const main = __perry_get_cjs_main_module();
+        __perry_cjs_install(__perry_declared_keys(), { exports: undefined, __perry_cjs_record: true });
+        const main = process.mainModule;
         main[Symbol.iterator] = () => main;
         main.next = () => ({ value: new Value(), done: false });
         for (const value of main) { console.log(value.x); break; }
@@ -1096,9 +1133,15 @@ fn own_descriptor_enumeration_observes_late_accessor_constraints() {
         console.log(target.a.x);
     "#,
     );
-    let site = pf.sites.iter().find(|s| s.key == "x").expect("site");
+    // The getter ran: its `{ value: Value }` is a descriptor
+    // `defineProperties` reads, so `target.a` holds the `Value`. (FVA 4.3a:
+    // `descriptors` gains `a` as an accessor key, so the descriptor value is
+    // the getter's result, not an unknown accessor's.)
+    let x: Vec<_> = pf.sites.iter().filter(|s| s.key == "x").collect();
+    assert!(!x.is_empty(), "{}", pf.dump_text());
     assert!(
-        site.receivers.iter().any(|r| r.ends_with(":Value")),
+        x.iter()
+            .all(|s| s.receivers.iter().any(|r| r.ends_with(":Value"))),
         "{}",
         pf.dump_text()
     );
@@ -1148,6 +1191,11 @@ fn a_delivery_never_adopts_a_marker_that_turned_top_beside_a_top() {
     let a = m.tok(TokKind::ModNs(901));
     m.param_marker.insert(mk, (0, 0));
     let (x, s, d) = (m.node_l("x"), m.node_l("s"), m.node_l("d"));
+    // The nodes of one run: a contract parameter's marker is a token there
+    // (in storage it would cross as a member of the node's marker, MRK).
+    for n in [x, s, d] {
+        m.nodes[n as usize].frame = 1;
+    }
     m.add(s, &[a], 0);
     m.add_tok(s, TOP);
     m.edge(s, d);
@@ -1321,6 +1369,33 @@ fn an_argument_marker_leaves_beside_when_a_valued_member_links() {
     );
 }
 
+/// A model with one function `f` whose parameter markers the tests make.
+fn marker_model() -> crate::model::Model {
+    use crate::model::{FuncInfo, TokKind, NO_CTX, NO_FN};
+    let mut m = copy_solver_model();
+    let (this, ret, args) = (m.node_l("this"), m.node_l("ret"), m.node_l("args"));
+    let token = m.tok(TokKind::Func(0, NO_CTX));
+    m.funcs.push(FuncInfo {
+        module: 0,
+        func_id: 0,
+        name: "f".into(),
+        params: Vec::new(),
+        rest: None,
+        this,
+        ret,
+        args_all: args,
+        has_arguments: false,
+        token,
+        ctor_of: None,
+        lexical_this: false,
+        no_summary: true,
+        gen_step: false,
+        forwards_super: false,
+        parent: NO_FN,
+    });
+    m
+}
+
 #[test]
 fn a_use_through_an_argument_marker_is_solve_work() {
     use crate::model::MARK_ESCAPE;
@@ -1340,8 +1415,9 @@ fn a_use_through_an_argument_marker_is_solve_work() {
         m.link_marker(ri, r);
     }
     let a = m.atom("k");
+    let k = m.keyed_reach_of(r, a);
     let w = m.work;
-    m.keyed_use(r, a, MARK_ESCAPE);
+    m.mark_use(k, MARK_ESCAPE);
     assert!(
         m.work - w >= n,
         "a keyed use walked {n} members for {} work",
@@ -1358,27 +1434,165 @@ fn a_use_through_an_argument_marker_is_solve_work() {
 
 #[test]
 fn a_keyed_use_reaches_every_marker_an_argument_marker_stands_for() {
-    use crate::model::MARK_ESCAPE;
-    // Design §18.4: argument marker `r2` stands for `r1` and `r3`. A use of
-    // what `r2` reaches under `inner` is a use of what each of them reaches
-    // under `inner`: `r1` is linked after the use (the callee read
+    use crate::model::{MARK_ESCAPE, MARK_READ};
+    // Design §18.4: argument marker `r2` stands for `r1` and `r3`, and `r1`
+    // for `r2` (a recursion passing its argument on): `mk1` and `mk3`, the
+    // markers they stand for, take every use of what `r1` and `r2` reach
+    // under a key. `r1` is linked after the use of `inner` (the callee read
     // `p.inner` before the second caller's marker arrived), `r3` before.
-    let mut m = copy_solver_model();
+    let mut m = marker_model();
+    let (mk1, mk3) = (m.param_marker_tok(0, 0), m.param_marker_tok(0, 1));
     let (n1, n2, n3) = (m.node_l("p1"), m.node_l("p2"), m.node_l("p3"));
     let r1 = m.arg_marker(n1);
     let r2 = m.arg_marker(n2);
     let r3 = m.arg_marker(n3);
-    let a = m.atom("inner");
+    let (inner, other) = (m.atom("inner"), m.atom("other"));
+    m.link_marker(mk1, r1);
+    m.link_marker(mk3, r3);
     m.link_marker(r3, r2);
-    m.keyed_use(r2, a, MARK_ESCAPE);
+    let k = m.keyed_reach_of(r2, inner);
+    m.mark_use(k, MARK_ESCAPE);
     m.link_marker(r1, r2);
-    for r in [r1, r3] {
-        assert!(
-            m.keyed_uses
-                .get(&r)
-                .is_some_and(|v| v.contains(&(a, MARK_ESCAPE))),
+    m.link_marker(r2, r1);
+    let k = m.keyed_reach_of(r1, other);
+    m.mark_use(k, MARK_READ);
+    m.settle_keyed_uses();
+    for mk in [mk1, mk3] {
+        assert_eq!(
+            m.keyed_uses.get(&mk),
+            Some(&vec![(inner, MARK_ESCAPE), (other, MARK_READ)]),
             "{:?}",
             m.keyed_uses
         );
     }
+    // A keyed use is the contract's fact alone: the marker itself is not ⊤.
+    assert!(!m.marker_is_top(mk1) && !m.marker_is_top(mk3));
+}
+
+#[test]
+fn a_keyed_use_is_a_use_of_each_reach_marker_it_stands_for() {
+    use crate::model::MARK_ESCAPE;
+    // Design §18.4 with DECISIONS 42: what a parameter reaches arrives at a
+    // shared body (`r` stands for the reach marker `pr`); the body lets
+    // `p.k` escape, so `pr`, which reaches itself under every key, escaped
+    // and reads as ⊤ during the solve. A member that links in after the
+    // use (`pr2`) takes it too.
+    let mut m = marker_model();
+    let (mk, mk2) = (m.param_marker_tok(0, 0), m.param_marker_tok(0, 1));
+    let (pr, pr2) = (m.marker_reach[&mk], m.marker_reach[&mk2]);
+    let n0 = m.node_l("p");
+    let r = m.arg_marker(n0);
+    m.link_marker(pr, r);
+    let a = m.atom("k");
+    let k = m.keyed_reach_of(r, a);
+    m.mark_use(k, MARK_ESCAPE);
+    assert!(m.marker_is_top(pr), "the reach member escaped");
+    assert!(!m.marker_is_top(pr2));
+    m.link_marker(pr2, r);
+    assert!(
+        m.marker_is_top(pr2),
+        "a late reach member takes the keyed use"
+    );
+}
+
+#[test]
+fn a_repeated_keyed_use_costs_one_step() {
+    use crate::model::MARK_READ;
+    // A keyed use costs what the use names: once `p.k` was read, reading
+    // it again (each `p.k.x` reads it) is the step on its keyed reach
+    // marker alone, not a walk to the argument marker and its members.
+    let mut m = marker_model();
+    let mk = m.param_marker_tok(0, 0);
+    let n0 = m.node_l("p");
+    let r = m.arg_marker(n0);
+    for _ in 0..64 {
+        let ni = m.node_l("pi");
+        let ri = m.arg_marker(ni);
+        m.link_marker(mk, ri);
+        m.link_marker(ri, r);
+    }
+    let a = m.atom("k");
+    let k = m.keyed_reach_of(r, a);
+    m.mark_use(k, MARK_READ);
+    let reps = 100;
+    let w = m.work;
+    for _ in 0..reps {
+        m.mark_use(k, MARK_READ);
+    }
+    assert!(
+        m.work - w <= reps,
+        "{reps} repeated uses cost {} work",
+        m.work - w
+    );
+}
+
+#[test]
+fn a_keyed_use_in_a_recursion_walks_each_member_once_per_bit() {
+    use crate::model::MARK_ESCAPE;
+    // The checker.ts#u18 / typescript.js createTypeChecker fan-out: a ring
+    // of `n` argument markers (helpers passing their argument around a
+    // recursion) each stand for every other; `keys` keys of it are used.
+    // Each key costs its own use; the bits cross each member once, so the
+    // work is keys + n, not keys x n. After the solve every parameter
+    // marker in the ring has every key.
+    let mut m = marker_model();
+    let n = 32u32;
+    let keys = 64u64;
+    let rs: Vec<_> = (0..n)
+        .map(|_| {
+            let p = m.node_l("p");
+            m.arg_marker(p)
+        })
+        .collect();
+    let mks: Vec<_> = (0..n).map(|i| m.param_marker_tok(0, i)).collect();
+    for i in 0..n as usize {
+        m.link_marker(mks[i], rs[i]);
+        m.link_marker(rs[(i + 1) % n as usize], rs[i]);
+    }
+    let w = m.work;
+    let atoms: Vec<_> = (0..keys).map(|i| m.atom(&format!("k{i}"))).collect();
+    for &a in &atoms {
+        let k = m.keyed_reach_of(rs[0], a);
+        m.mark_use(k, MARK_ESCAPE);
+    }
+    let spent = m.work - w;
+    assert!(
+        spent <= 3 * keys + 2 * n as u64 + 4,
+        "{keys} keys on a ring of {n} cost {spent} work"
+    );
+    m.settle_keyed_uses();
+    for mk in mks {
+        let v = m.keyed_uses.get(&mk).map_or(0, |v| v.len());
+        assert_eq!(v as u64, keys, "a ring member has {v} of {keys} keys");
+    }
+}
+
+#[test]
+fn a_protocol_touch_of_an_argument_marker_reads_nothing() {
+    use crate::model::{Protocol, MARK_ESCAPE, MARK_TOUCH};
+    // A marker has no accessors: a touch reads nothing off it (a read node
+    // per touch would take a fresh marker each, `Model::crosses`, and JSON
+    // would touch that one in turn without end). JSON's nested values are
+    // what the marker reaches, touched; `toJSON` is what it reaches under
+    // that key, called: an escape (DECISIONS 111).
+    let mut m = copy_solver_model();
+    m.param_marker.insert(u32::MAX - 1, (0, 0));
+    let n0 = m.node_l("p0");
+    let r = m.arg_marker(n0);
+    let nodes = m.nodes.len();
+    for p in [Protocol::Json, Protocol::IterResult, Protocol::ToPrimitive] {
+        m.implicit(r, 0, p);
+    }
+    let reads = (nodes..m.nodes.len())
+        .filter(|&n| m.labels[n].starts_with("implicit"))
+        .count();
+    assert_eq!(reads, 0, "a touch of a marker made read or call nodes");
+    let reach = m.reach_of(r);
+    assert!(m
+        .marker_use
+        .get(&reach)
+        .is_some_and(|&u| u & MARK_TOUCH != 0));
+    let a = m.atom("toJSON");
+    let tj = m.marker_load(r, Some(a));
+    assert!(m.marker_use.get(&tj).is_some_and(|&u| u & MARK_ESCAPE != 0));
 }

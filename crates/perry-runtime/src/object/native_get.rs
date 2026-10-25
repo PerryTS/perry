@@ -47,6 +47,11 @@ unsafe fn named_lookup_inputs<'a>(
     }
     let bits = object as u64;
     let receiver = match bits >> 48 {
+        // A raw receiver in the id band is a native registry id (a `Headers`
+        // handle): the unknown-word classification makes it a `HANDLE_TAG`
+        // value, which has no shape, so this lane declines it before any
+        // boxing. Every other raw receiver is a heap address.
+        0 if crate::value::addr_class::is_handle_band(bits as usize) => return None,
         0 => JSValue::pointer(object as *mut u8),
         0x7FFD => JSValue::from_bits(bits),
         _ => return None,

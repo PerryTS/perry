@@ -29,7 +29,10 @@ fn placeholder_move_under_forced_evacuation_increments_the_rewrite_counter() {
     // one under test back.
     gc_register_mutable_root_scanner(crate::module_require::scan_cjs_main_module_root_mut);
 
-    crate::module_require::js_bootstrap_cjs_main_module_placeholder();
+    // The CommonJS support module publishes the entry's record through
+    // `js_cjs_install`; any heap object stands in for it here.
+    let record = crate::value::js_nanbox_pointer(crate::object::js_object_alloc(0, 0) as i64);
+    crate::module_require::js_set_cjs_main_module(record);
     let before_bits =
         crate::module_require::test_cjs_main_module_bits().expect("placeholder must be published");
     let rewrites_before = crate::module_require::test_cjs_main_module_rewrite_count();

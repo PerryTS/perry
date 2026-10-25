@@ -299,44 +299,34 @@ return crate::lower_array_record_length::lower(ctx, &args[0]);
                 return Ok(result);
             }
             // Publish the CJS record before its body so same-thread recursive
-            // requires see its current exports, including replacements.
+            // requires see its current exports, including replacements. The
+            // factory goes to the runtime's path entry for a reload.
             "registerPathModulePartial" => {
-                let (arg_values, arg_group) = super::lower_call_args_rooted(ctx, &args[..args.len().min(2)])?;
-                let path = arg_values.first().cloned().unwrap_or_else(|| double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
-                let exports = arg_values.get(1).cloned().unwrap_or_else(|| double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+                let (arg_values, arg_group) = super::lower_call_args_rooted(ctx, &args[..args.len().min(3)])?;
+                let undefined = || double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                let path = arg_values.first().cloned().unwrap_or_else(undefined);
+                let record = arg_values.get(1).cloned().unwrap_or_else(undefined);
+                let factory = arg_values.get(2).cloned().unwrap_or_else(undefined);
                 ctx.block().call_void(
                     "js_register_path_module_partial",
-                    &[(DOUBLE, &path), (DOUBLE, &exports)],
-                );
-                let result = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-                arg_group.release(ctx);
-                return Ok(result);
-            }
-            // A CommonJS module record born with its final layout.
-            "newCjsModuleRecord" => {
-                let (arg_values, arg_group) =
-                    super::lower_call_args_rooted(ctx, &args[..args.len().min(7)])?;
-                let undefined = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-                let values: Vec<String> = (0..7)
-                    .map(|i| arg_values.get(i).cloned().unwrap_or_else(|| undefined.clone()))
-                    .collect();
-                let typed: Vec<(_, &str)> = values.iter().map(|v| (DOUBLE, v.as_str())).collect();
-                let record = ctx.block().call(DOUBLE, "js_cjs_module_record", &typed);
-                arg_group.release(ctx);
-                return Ok(record);
-            }
-            // A CommonJS record's factory, kept off its properties.
-            "setCjsFactory" => {
-                let (arg_values, arg_group) = super::lower_call_args_rooted(ctx, &args[..args.len().min(2)])?;
-                let undefined = || double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-                let record = arg_values.first().cloned().unwrap_or_else(undefined);
-                let factory = arg_values.get(1).cloned().unwrap_or_else(undefined);
-                ctx.block().call_void(
-                    "js_cjs_record_set_factory",
-                    &[(DOUBLE, &record), (DOUBLE, &factory)],
+                    &[(DOUBLE, &path), (DOUBLE, &record), (DOUBLE, &factory)],
                 );
                 arg_group.release(ctx);
                 return Ok(undefined());
+            }
+            // The CommonJS support module's one runtime handoff.
+            "cjsInstall" => {
+                let (arg_values, arg_group) = super::lower_call_args_rooted(ctx, &args[..args.len().min(2)])?;
+                let undefined = || double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                let cache = arg_values.first().cloned().unwrap_or_else(undefined);
+                let main = arg_values.get(1).cloned().unwrap_or_else(undefined);
+                let extensions = ctx.block().call(
+                    DOUBLE,
+                    "js_cjs_install",
+                    &[(DOUBLE, &cache), (DOUBLE, &main)],
+                );
+                arg_group.release(ctx);
+                return Ok(extensions);
             }
             // #6769: link `module.parent` before the wrapper body runs.
             "linkPathModuleParent" => {
@@ -381,23 +371,6 @@ return crate::lower_array_record_length::lower(ctx, &args[0]);
                 return Ok(ctx
                     .block()
                     .call(DOUBLE, "js_has_path_module", &[(DOUBLE, &path)]));
-            }
-            // #10735: publish/read the shared CJS "main module" —
-            // `require.main` for the process entry module vs. for every
-            // other CJS-wrapped module. See `cjs_wrap/wrap.rs` and
-            // `perry-runtime::module_require::{js_set_cjs_main_module,
-            // js_get_cjs_main_module}`.
-            "setCjsMainModule" => {
-                let module = args.first().map_or_else(
-                    || Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))),
-                    |arg| lower_expr(ctx, arg),
-                )?;
-                ctx.block()
-                    .call_void("js_set_cjs_main_module", &[(DOUBLE, &module)]);
-                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
-            }
-            "getCjsMainModule" => {
-                return Ok(ctx.block().call(DOUBLE, "js_get_cjs_main_module", &[]));
             }
             // #10360: seeded into every module init under `--platform bun`
             // so the runtime can follow Bun where its Web APIs differ from

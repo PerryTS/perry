@@ -173,6 +173,10 @@ pub struct Template {
     pub birth_keys: Vec<Atom>,
     /// Birth keys that are definitely present at birth.
     pub definite: Vec<Atom>,
+    /// Birth keys the class declares (`ClassFieldOrigin::Declared`): known
+    /// slots, absent until stored (each read pairs its load with the hole
+    /// compare).
+    pub declared: Vec<Atom>,
     /// Parent template (class `extends`), when statically known.
     pub parent: Option<TmplId>,
     /// The constructor function of a class template (None: implicit ctor).
@@ -327,6 +331,95 @@ impl Hard {
     }
 }
 
+/// What a builtin protocol touch reads on the touched value: the keys it
+/// looks up (getters included) and calls with the value as `this`, and the
+/// values it reads. The site that issues the touch knows its protocol (the
+/// operator, the syntax or the runtime helper); ECMA-262 fixes each key set.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Protocol {
+    /// ToPrimitive (ECMA-262 7.1.1), and through it ToString, ToNumber,
+    /// ToNumeric and ToPropertyKey: `@@toPrimitive`, else
+    /// OrdinaryToPrimitive's `valueOf` and `toString`. What they return is a
+    /// primitive or is discarded: nothing runs on it.
+    ToPrimitive,
+    /// GetIterator (7.4.3): `@@iterator`; it returns an iterator.
+    Iterate,
+    /// IteratorNext / IteratorClose: `next`, `return`, `throw`; they return
+    /// iterator results.
+    IterNext,
+    /// IteratorComplete / IteratorValue: reads `done` and `value`, calls
+    /// nothing.
+    IterResult,
+    /// SerializeJSONProperty (25.5.2.2): `toJSON`; what it returns and every
+    /// value read off the object are serialized in turn.
+    Json,
+    /// InstanceofOperator (13.10.2): `@@hasInstance`. OrdinaryHasInstance
+    /// reads `prototype`, which no program can make an accessor of a
+    /// function (it is non-configurable).
+    HasInstance,
+    /// [[OwnPropertyKeys]] and for-in enumeration: no lookup on an ordinary
+    /// object (a Proxy is ⊤).
+    OwnKeys,
+    /// A runtime helper that reflects over the value or mixes protocols:
+    /// any key, and a function may be called back with anything.
+    Any,
+}
+
+impl Protocol {
+    /// The keys looked up and called; `None`: any key.
+    pub fn keys(self) -> Option<&'static [&'static str]> {
+        Some(match self {
+            Protocol::ToPrimitive => &[WK_TO_PRIMITIVE, "valueOf", "toString"],
+            Protocol::Iterate => &[crate::builtins::WK_ITERATOR],
+            Protocol::IterNext => &["next", "return", "throw"],
+            Protocol::Json => &["toJSON"],
+            Protocol::HasInstance => &[WK_HAS_INSTANCE],
+            Protocol::IterResult | Protocol::OwnKeys => &[],
+            Protocol::Any => return None,
+        })
+    }
+
+    /// The keys whose values are read (and touched again for JSON).
+    pub fn reads(self) -> &'static [&'static str] {
+        match self {
+            Protocol::IterResult => &["done", "value"],
+            _ => &[],
+        }
+    }
+
+    /// The protocol run on what the called methods return.
+    pub fn of_result(self) -> Option<Protocol> {
+        match self {
+            Protocol::Iterate => Some(Protocol::IterNext),
+            Protocol::IterNext => Some(Protocol::IterResult),
+            Protocol::Json => Some(Protocol::Json),
+            Protocol::Any => Some(Protocol::Any),
+            Protocol::ToPrimitive
+            | Protocol::IterResult
+            | Protocol::HasInstance
+            | Protocol::OwnKeys => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Protocol::ToPrimitive => "toprimitive",
+            Protocol::Iterate => "iterate",
+            Protocol::IterNext => "iternext",
+            Protocol::IterResult => "iterresult",
+            Protocol::Json => "json",
+            Protocol::HasInstance => "hasinstance",
+            Protocol::OwnKeys => "ownkeys",
+            Protocol::Any => "any",
+        }
+    }
+}
+
+/// `Symbol.toPrimitive` / `Symbol.hasInstance` as HIR folds them
+/// (`Gen::read_key`).
+pub const WK_TO_PRIMITIVE: &str = "@@__perry_wk_toPrimitive";
+pub const WK_HAS_INSTANCE: &str = "@@__perry_wk_hasInstance";
+
 /// Complex constraints, attached to the node whose new tokens trigger them.
 #[derive(Clone, Copy, Debug)]
 pub enum Cons {
@@ -389,10 +482,16 @@ pub enum Cons {
     },
     /// Every object token reaches a HARD operation.
     Hard { kind: Hard, reason: u32 },
+    /// `Object.defineProperty(o, key, {get/set})` with a constant key and an
+    /// accessor descriptor (FVA 4.3a): on a token whose layout does not hold
+    /// `key` as data the key becomes an accessor key (the getter and setter
+    /// are installed by `Accessor`) and the layout gains it; on any other
+    /// token (a key it holds as data, a class instance, ⊤) it is E5 HARD.
+    DefineAccessor { key: Atom, reason: u32 },
     /// Every token gains keys after birth (computed store …).
     AddsKeys,
-    /// Builtin protocol touch: ToPrimitive / iterator / toJSON / then …
-    Implicit { reason: u32 },
+    /// Builtin protocol touch: what `proto` reads on every token.
+    Implicit { reason: u32, proto: Protocol },
     /// The node holds `Object.create` prototype arguments (E10).
     CreateProto { reason: u32 },
     /// The node is `ProtoNode(t)`: dst ⊇ the values of `key` on each
@@ -472,6 +571,15 @@ pub enum Cons {
     /// nodes its receivers found): arguments and result bind once per
     /// (call, function) (the argument half of `CallThis`).
     CallArgs { call: CallId },
+    /// The node is the result of run `run` (`Node::frame`), bound to
+    /// `call`: the call's result takes each value, except that the family
+    /// of the run's argument marker for a parameter is the caller's own
+    /// argument there (DECISIONS 44 (b), `Model::ret_into`).
+    RetInto { call: CallId, run: u32 },
+    /// The node is argument `i` of `call`, bound to run `run`: each marker
+    /// it gains is what the run's result returns of that parameter's marker
+    /// family (DECISIONS 44 (b), `Model::arg_into`).
+    ArgInto { call: CallId, run: u32, i: u32 },
     /// The node is the source of an object spread / `Object.assign` into
     /// the values of `into`: each source object copies its own keys, key
     /// by key, into each target (`Model::spread_into`), never through one
@@ -530,6 +638,7 @@ impl Cons {
             Cons::TopIfAny { .. } => "topifany",
             Cons::Hard { .. } => "hard",
             Cons::AddsKeys => "addskeys",
+            Cons::DefineAccessor { .. } => "defineaccessor",
             Cons::Implicit { .. } => "implicit",
             Cons::CreateProto { .. } => "createproto",
             Cons::ChainUnion { .. } => "chainunion",
@@ -555,6 +664,8 @@ impl Cons {
             Cons::ShareBuffer { .. } => "sharebuffer",
             Cons::ThisTo { .. } => "thisto",
             Cons::CallArgs { .. } => "callargs",
+            Cons::RetInto { .. } => "retinto",
+            Cons::ArgInto { .. } => "arginto",
             Cons::Spread { .. } => "spread",
             Cons::SpreadFrom { .. } => "spreadfrom",
             Cons::ThisInst { .. } => "thisinst",
@@ -591,6 +702,25 @@ pub struct Node {
     /// A parameter node (an instance's, a function's): it holds its
     /// argument marker in place of the markers that arrive (DECISIONS 44).
     pub param: bool,
+    /// The run this node belongs to (DECISIONS 44 (b)): an instance + 1, or
+    /// `FN_RUN | f` for a function with one body for every call (another
+    /// unit's function); 0: none. Its fresh slots, the field nodes of its
+    /// argument markers' families, the temporaries of its calls. What it
+    /// holds is one run's.
+    pub frame: u32,
+    /// No value leaves the node (no successor, its rules only use what it
+    /// holds): a value entering it reaches no run (DECISIONS 44 (b)).
+    pub sink: bool,
+    /// A parameter slot only the instance's calls write: its argument
+    /// marker is the caller's argument at each call's result
+    /// (DECISIONS 44 (b)).
+    pub rel: bool,
+    /// The result node of a run: what it returns of no parameter of the
+    /// run leaves through it as one marker (MRK, `Model::crosses`).
+    pub result: bool,
+    /// A field node of a marker (its any-key, keyed and all-fields
+    /// nodes): it holds the marker's reach markers as themselves.
+    pub of_marker: bool,
 }
 
 /// A store site: where, and whether it is a construction-phase writer for
@@ -665,7 +795,7 @@ pub struct Model {
     // dedup of bindings / chain walks
     pub bind_done: crate::pts::FxHashSet<(CallId, Tok, Tok)>,
     pub chain_done: crate::pts::FxHashSet<(NodeId, Tok, Key, ChainAct)>,
-    pub implicit_done: crate::pts::FxHashSet<Tok>,
+    pub implicit_done: crate::pts::FxHashSet<(Tok, Protocol)>,
     pub construct_done: crate::pts::FxHashSet<(CallId, Tok)>,
     pub idx_done: crate::pts::FxHashSet<(NodeId, Tok, NodeId, u8)>,
     pub callthis_done: crate::pts::FxHashSet<(NodeId, CallId, Tok)>,
@@ -743,6 +873,13 @@ pub struct Model {
     /// element kind (`perry_hir::TYPED_ARRAY_KIND_*`).
     pub ta_elem: FxHashMap<TmplId, u8>,
     pub resolvers: FxHashMap<NodeId, Tok>,
+    /// The bodies of closure expressions and of function declarations
+    /// (`bindings::BodyRef`: what codegen may call without the dispatcher).
+    pub closures: crate::pts::FxHashSet<FnIdx>,
+    pub decls: crate::pts::FxHashSet<FnIdx>,
+    /// A class's declared named static fields (FVA 3.4,
+    /// `derive::constant_statics`).
+    pub static_fields: crate::pts::FxHashSet<(TmplId, Atom)>,
     pub thrown: NodeId,
     /// E14: interpreted code can run (and patch `Object.prototype`).
     pub dyn_eval: Option<String>,
@@ -784,6 +921,15 @@ pub struct Model {
     /// reads made before.
     pub bf_written: Option<u32>,
     pub bf_reads: Vec<NodeId>,
+    /// Stores into a builtin function value at a node, with their reason:
+    /// the node decides once the worklist is empty (`settle_bf_written`). The
+    /// opaque builtin function value (one token for every one) runs as
+    /// unknown code under every rule, so beside ⊤ it is that ⊤: a node that
+    /// holds ⊤ by then stored into ⊤. Only a store at a node without ⊤ marks
+    /// builtin function values written.
+    pub bf_stores: Vec<(NodeId, u32)>,
+    /// The node a `Cons::Store` runs on, while it runs.
+    pub store_at: Option<NodeId>,
     /// A call's constant first argument (a string), for callees whose
     /// result depends on it (`BuiltinNs::Require`). Compiler data.
     pub call_lit: FxHashMap<CallId, Atom>,
@@ -793,8 +939,17 @@ pub struct Model {
     pub cjs_union: NodeId,
     pub cjs_unknown: NodeId,
     pub cjs_paths: FxHashMap<Atom, NodeId>,
-    /// `require.cache` / `require.extensions` of [`BuiltinNs::Require`].
+    /// `require.cache` / `require.extensions` of [`BuiltinNs::Require`]:
+    /// the runtime's own objects, opaque, when no CommonJS support module
+    /// installs the program's (`cjs_cache`, `cjs_ext` hold them as well).
     pub require_parts: Option<(Tok, Tok)>,
+    /// What `require.cache` / `require.extensions` / `require.main` are at
+    /// run time: the support module's cache and the extensions the runtime
+    /// returned to it (`__perry_runtime.cjsInstall`), the runtime's own
+    /// objects otherwise, and the main record or `undefined`.
+    pub cjs_cache: NodeId,
+    pub cjs_ext: NodeId,
+    pub cjs_main: NodeId,
     /// Fields of the global object under program-owned keys.
     pub global_fields: Vec<(Atom, NodeId)>,
     /// A ⊤ value may be the global object: it reached unmodeled code, or
@@ -894,9 +1049,15 @@ pub struct Model {
     pub keyed_reach: FxHashMap<Tok, Vec<(Atom, Tok)>>,
     /// An argument marker's keyed reach marker -> (the argument marker, key).
     pub keyed_parent: FxHashMap<Tok, (Tok, Atom)>,
-    /// Uses under a named key that reached a marker through argument
-    /// markers (`keyed_use`), by marker.
+    /// A parameter marker's uses under a named key that reach it through
+    /// argument markers, settled after the solve (`settle_keyed_uses`):
+    /// the contract publishes them.
     pub keyed_uses: FxHashMap<Tok, Vec<(Atom, u8)>>,
+    /// An argument marker: the uses some named key of it had, its own
+    /// (its keyed reach markers') and its containers' (`keyed_use`). During
+    /// the solve a keyed use matters to the markers it stands for only as
+    /// these bits; the keys themselves are settled after it.
+    pub keyed_any: FxHashMap<Tok, u8>,
     /// Markers that read as ⊤ (DECISIONS 42), a bit per token: the
     /// contract records the escape, so the consumer sinks the argument and
     /// reads nothing else of it; the marker says no more than the ⊤ beside
@@ -910,9 +1071,18 @@ pub struct Model {
     pub arg_marker_of: FxHashMap<NodeId, Tok>,
     /// An argument marker -> the markers it stands for.
     pub arg_members: FxHashMap<Tok, Vec<Tok>>,
+    /// The parameter markers each argument marker stands for, settled
+    /// over the member graph as the readers ask (`marker_members`); the
+    /// graph only grows while solving, so a solve starts it over.
+    pub members_settled: std::cell::RefCell<FxHashMap<Tok, std::rc::Rc<[Tok]>>>,
     pub arg_linked: crate::pts::FxHashSet<(Tok, Tok)>,
     /// Argument markers, a bit per token.
     pub arg_bits: Vec<u64>,
+    /// DECISIONS 44 (b): per token of an argument marker's family (the
+    /// marker, its reach marker, its keyed reach markers) the marker and
+    /// its home, the instance whose relative parameter holds it (+ 1; 0:
+    /// none, the family is never substituted).
+    pub fam: Vec<(Tok, u32)>,
     /// The `this` node of each instance method / accessor of a class: the
     /// binding its entry guard tests (design §11.4).
     pub this_class: FxHashMap<NodeId, TmplId>,
@@ -956,6 +1126,9 @@ pub struct AccGroup {
 
 pub const NO_NODE: NodeId = u32::MAX;
 pub const NO_FN: FnIdx = u32::MAX;
+/// The run of a function with one body for every call (`Node::frame`);
+/// instance runs count from 1 below it.
+pub const FN_RUN: u32 = 1 << 31;
 
 /// Marks a `super` walk's start in `Model::walk_nodes` keys (it begins with
 /// a stop check at the start prototype, unlike a receiver's own walk).
@@ -1412,8 +1585,16 @@ impl Model {
                     self.mark_use(x, b);
                     continue;
                 }
-                if let Some(&(p, a)) = self.keyed_parent.get(&x) {
-                    self.keyed_use(p, a, b);
+                // A use of what argument marker `p` reaches under one key is
+                // recorded on that key's reach marker `x`, the token the use
+                // names: a repeated use costs this step alone.
+                if let Some(&(p, _)) = self.keyed_parent.get(&x) {
+                    let u = self.marker_use.entry(x).or_default();
+                    let new = b & !*u;
+                    *u |= b;
+                    if new != 0 {
+                        self.keyed_use(p, new);
+                    }
                     continue;
                 }
                 let u = self.marker_use.entry(x).or_default();
@@ -1473,8 +1654,12 @@ impl Model {
         );
         let rm = self.marker_template(display);
         let r = self.tok(TokKind::Obj(rm, NO_CTX));
-        let rany = self.field_any(r);
-        self.add_tok(rany, r);
+        // What an argument marker reaches is of its family (its field
+        // nodes are of the same run).
+        let home = self.fam_home(t);
+        if home != 0 {
+            self.set_fam(r, t, home);
+        }
         self.reach_marker.insert(r);
         self.keyed_reach.entry(t).or_default().push((a, r));
         match self.param_marker.get(&t).copied() {
@@ -1482,8 +1667,9 @@ impl Model {
                 self.param_marker.insert(r, fi);
             }
             // An argument marker's keyed reach: its uses are its members'
-            // uses under the same key (DECISIONS 44), kept per (marker, key)
-            // in `keyed_uses`, not as a token per member (`keyed_use`).
+            // uses under the same key (DECISIONS 44), recorded on this token
+            // and settled onto the parameter markers after the solve
+            // (`settle_keyed_uses`), not as a token per member.
             None => {
                 let w = (r >> 6) as usize;
                 if self.arg_bits.len() <= w {
@@ -1497,14 +1683,21 @@ impl Model {
                 }
             }
         }
+        // A marker before its field node: that node is of the marker.
+        let rany = self.field_any(r);
+        self.add_tok(rany, r);
         r
     }
 
-    /// A use `bits` of what marker `t` reaches through named key `a`
-    /// (design §18.4). A parameter marker records it for its contract; an
-    /// argument marker passes it to each marker it stands for; a reach
-    /// marker reaches itself under every key.
-    pub(crate) fn keyed_use(&mut self, t: Tok, a: Atom, bits: u8) {
+    /// A use `bits` of what argument marker `t` reaches through some named
+    /// key (design §18.4). Each marker it stands for takes the bits: a
+    /// reach marker as a use of itself (it reaches itself under every key),
+    /// an argument marker passes them on, once per bit. A parameter marker
+    /// takes nothing here: which keys it was used under is a fact for its
+    /// contract alone, settled after the solve (`settle_keyed_uses`). So a
+    /// key costs the use that names it, not a walk over every marker the
+    /// argument marker stands for.
+    pub(crate) fn keyed_use(&mut self, t: Tok, bits: u8) {
         let mut st = vec![(t, bits)];
         while let Some((x, b)) = st.pop() {
             // Each marker the walk visits is solve work (113-CWL3).
@@ -1513,24 +1706,139 @@ impl Model {
                 self.mark_use(x, b);
                 continue;
             }
-            let v = self.keyed_uses.entry(x).or_default();
-            let new = match v.iter_mut().find(|(k, _)| *k == a) {
-                Some((_, u)) => {
-                    let new = b & !*u;
-                    *u |= b;
-                    new
-                }
-                None => {
-                    v.push((a, b));
-                    b
-                }
-            };
-            if new == 0 {
+            if !self.is_arg_marker(x) {
                 continue;
             }
-            if self.is_arg_marker(x) {
+            let u = self.keyed_any.entry(x).or_default();
+            let new = b & !*u;
+            *u |= b;
+            if new != 0 {
                 st.extend(self.arg_members[&x].iter().map(|&m| (m, new)));
             }
+        }
+    }
+
+    /// The keyed uses of each parameter marker that some argument marker
+    /// stands for (design §18.4, DECISIONS 44): the keys every argument
+    /// marker standing for it, directly or through other argument markers,
+    /// was used under. Read once the model is final, in one pass over the
+    /// member graph: the markers of a cycle (a recursion passing its
+    /// argument on) stand for each other and have one set of uses, so its
+    /// strongly connected components are taken in topological order and
+    /// each key set moves along each edge between them once.
+    pub(crate) fn settle_keyed_uses(&mut self) {
+        self.keyed_uses.clear();
+        // The argument markers a keyed use walks through (`keyed_use`).
+        let inner = |s: &Self, x: Tok| s.is_arg_marker(x) && !s.reach_marker.contains(&x);
+        let mut ids: Vec<Tok> = self
+            .arg_members
+            .keys()
+            .copied()
+            .filter(|&x| inner(self, x))
+            .collect();
+        ids.sort_unstable();
+        let at: FxHashMap<Tok, usize> = ids.iter().enumerate().map(|(i, &t)| (t, i)).collect();
+        let n = ids.len();
+        let succ: Vec<Vec<usize>> = ids
+            .iter()
+            .map(|x| {
+                self.arg_members[x]
+                    .iter()
+                    .filter_map(|m| at.get(m).copied())
+                    .collect()
+            })
+            .collect();
+        // Tarjan, iterative: a component gets its number after every
+        // component it reaches, so descending numbers are topological.
+        const NONE: usize = usize::MAX;
+        let (mut index, mut low, mut comp) = (vec![NONE; n], vec![0; n], vec![NONE; n]);
+        let mut on = vec![false; n];
+        let (mut stack, mut next, mut ncomp) = (Vec::new(), 0usize, 0usize);
+        for s0 in 0..n {
+            if index[s0] != NONE {
+                continue;
+            }
+            let mut frames = vec![(s0, 0usize)];
+            index[s0] = next;
+            low[s0] = next;
+            next += 1;
+            stack.push(s0);
+            on[s0] = true;
+            while let Some(&(v, e)) = frames.last() {
+                if let Some(&w) = succ[v].get(e) {
+                    frames.last_mut().unwrap().1 += 1;
+                    if index[w] == NONE {
+                        index[w] = next;
+                        low[w] = next;
+                        next += 1;
+                        stack.push(w);
+                        on[w] = true;
+                        frames.push((w, 0));
+                    } else if on[w] {
+                        low[v] = low[v].min(index[w]);
+                    }
+                    continue;
+                }
+                frames.pop();
+                if let Some(&(u, _)) = frames.last() {
+                    low[u] = low[u].min(low[v]);
+                }
+                if low[v] == index[v] {
+                    while let Some(w) = stack.pop() {
+                        on[w] = false;
+                        comp[w] = ncomp;
+                        if w == v {
+                            break;
+                        }
+                    }
+                    ncomp += 1;
+                }
+            }
+        }
+        let mut members_of: Vec<Vec<usize>> = vec![Vec::new(); ncomp];
+        for v in 0..n {
+            members_of[comp[v]].push(v);
+        }
+        let mut acc: Vec<FxHashMap<Atom, u8>> = vec![FxHashMap::default(); ncomp];
+        let mut out: FxHashMap<Tok, FxHashMap<Atom, u8>> = FxHashMap::default();
+        let merge = |into: &mut FxHashMap<Atom, u8>, from: &FxHashMap<Atom, u8>| {
+            for (&a, &b) in from {
+                *into.entry(a).or_default() |= b;
+            }
+        };
+        for c in (0..ncomp).rev() {
+            let mut set = std::mem::take(&mut acc[c]);
+            // Its own uses: what its keyed reach markers were used for.
+            for &v in &members_of[c] {
+                for &(a, r) in self.keyed_reach.get(&ids[v]).into_iter().flatten() {
+                    let u = self.marker_use.get(&r).copied().unwrap_or(0);
+                    if u != 0 {
+                        *set.entry(a).or_default() |= u;
+                    }
+                }
+            }
+            if set.is_empty() {
+                continue;
+            }
+            for &v in &members_of[c] {
+                for &m in &self.arg_members[&ids[v]] {
+                    match at.get(&m) {
+                        Some(&w) if comp[w] != c => merge(&mut acc[comp[w]], &set),
+                        Some(_) => {}
+                        None if self.param_marker.contains_key(&m)
+                            && !self.reach_marker.contains(&m) =>
+                        {
+                            merge(out.entry(m).or_default(), &set)
+                        }
+                        None => {}
+                    }
+                }
+            }
+        }
+        for (p, set) in out {
+            let mut v: Vec<(Atom, u8)> = set.into_iter().collect();
+            v.sort_unstable();
+            self.keyed_uses.insert(p, v);
         }
     }
 
@@ -1546,6 +1854,18 @@ impl Model {
     #[inline]
     pub(crate) fn marker_is_top(&self, t: Tok) -> bool {
         marker_top_bit(&self.marker_top, t)
+    }
+
+    /// An escaped value beside ⊤ is that ⊤ (DECISIONS 42's reason, for a
+    /// value): unknown code holds it, so its fields are ⊤ and sink what they
+    /// get, every function reachable from it runs with ⊤, and its layout is
+    /// escaped; a rule on it at a node that holds ⊤ does nothing the rule on
+    /// ⊤ does not. Left out there, it never rides ⊤ through the unit. A
+    /// marker is decided by `marker_is_top` (its escape may be no sink,
+    /// decision 17).
+    #[inline]
+    pub(crate) fn top_beside(&self, t: Tok) -> bool {
+        self.is_escaped(t) && !self.is_marker(t)
     }
 
     /// A marker that stands for no value of its own (DECISIONS 74): one of
@@ -1565,6 +1885,18 @@ impl Model {
         }
     }
 
+    /// A closed function's parameter marker (decision 13): what its callers
+    /// pass is the values beside it; the marker only records the uses for
+    /// its contract.
+    pub(crate) fn closed_marker(&self, t: Tok) -> bool {
+        self.is_marker(t)
+            && self.marker_members(t).iter().all(|x| {
+                self.param_marker
+                    .get(x)
+                    .is_some_and(|(f, _)| self.closed_params.contains_key(f))
+            })
+    }
+
     /// A parameter marker or an argument marker (DECISIONS 44).
     #[inline]
     pub(crate) fn is_marker(&self, t: Tok) -> bool {
@@ -1577,25 +1909,118 @@ impl Model {
     }
 
     /// The parameter markers token `t` stands for: itself, unless it is an
-    /// argument marker (DECISIONS 44).
+    /// argument marker (DECISIONS 44). What an argument marker reaches under
+    /// a key (its keyed reach marker, whose uses are settled per key and
+    /// which has no members of its own) is part of what it reaches: it
+    /// stands for its reach marker's members.
+    ///
+    /// Settled once per marker over the member graph's strongly connected
+    /// components (a recursion's markers stand for each other and have one
+    /// set), each component's set the union of its members' leaves and its
+    /// successors' sets, shared by its members: the readers after a solve
+    /// ask for the same markers at every site, result and contract.
     pub(crate) fn marker_members(&self, t: Tok) -> Vec<Tok> {
         if !self.is_arg_marker(t) {
             return vec![t];
         }
-        let mut out = Vec::new();
-        let mut seen = crate::pts::FxHashSet::default();
-        let mut st = vec![t];
-        while let Some(x) = st.pop() {
-            if !seen.insert(x) {
+        if let Some(s) = self.members_settled.borrow().get(&t) {
+            return s.to_vec();
+        }
+        self.settle_members_from(t);
+        self.members_settled.borrow()[&t].to_vec()
+    }
+
+    /// The successors of argument marker `x` in the member graph: its
+    /// members, or for a keyed reach marker its argument marker's reach.
+    fn member_succ(&self, x: Tok) -> Vec<Tok> {
+        if let Some(&(p, _)) = self.keyed_parent.get(&x) {
+            return vec![self.marker_reach[&p]];
+        }
+        self.arg_members.get(&x).cloned().unwrap_or_default()
+    }
+
+    /// Tarjan from `root` over the argument markers not settled yet; a
+    /// settled marker and a parameter marker are leaves of the walk.
+    fn settle_members_from(&self, root: Tok) {
+        use crate::pts::{FxHashMap, FxHashSet};
+        let mut index: FxHashMap<Tok, (u32, u32)> = FxHashMap::default();
+        let mut on: FxHashSet<Tok> = FxHashSet::default();
+        let mut stack: Vec<Tok> = Vec::new();
+        let mut next = 0u32;
+        // (marker, its successors, the next successor to visit)
+        let mut frames: Vec<(Tok, Vec<Tok>, usize)> = Vec::new();
+        let succ = self.member_succ(root);
+        index.insert(root, (0, 0));
+        next += 1;
+        stack.push(root);
+        on.insert(root);
+        frames.push((root, succ, 0));
+        while let Some(frame) = frames.last_mut() {
+            let (v, ref ss, ref mut i) = *frame;
+            if *i < ss.len() {
+                let w = ss[*i];
+                *i += 1;
+                if !self.is_arg_marker(w) || self.members_settled.borrow().contains_key(&w) {
+                    continue;
+                }
+                match index.get(&w) {
+                    None => {
+                        index.insert(w, (next, next));
+                        next += 1;
+                        stack.push(w);
+                        on.insert(w);
+                        let ws = self.member_succ(w);
+                        frames.push((w, ws, 0));
+                    }
+                    Some(&(wi, _)) if on.contains(&w) => {
+                        let e = index.get_mut(&v).unwrap();
+                        e.1 = e.1.min(wi);
+                    }
+                    Some(_) => {}
+                }
                 continue;
             }
-            match self.arg_members.get(&x) {
-                Some(ms) => st.extend(ms.iter().copied()),
-                None => out.push(x),
+            let (vi, vlow) = index[&v];
+            frames.pop();
+            if let Some(&(u, _, _)) = frames.last() {
+                let e = index.get_mut(&u).unwrap();
+                e.1 = e.1.min(vlow);
+            }
+            if vlow != vi {
+                continue;
+            }
+            // The component is complete: its leaves and its successors'
+            // settled sets, one set for every member.
+            let mut comp: Vec<Tok> = Vec::new();
+            while let Some(w) = stack.pop() {
+                on.remove(&w);
+                comp.push(w);
+                if w == v {
+                    break;
+                }
+            }
+            let mut set: Vec<Tok> = Vec::new();
+            {
+                let settled = self.members_settled.borrow();
+                for &w in &comp {
+                    for s in self.member_succ(w) {
+                        if !self.is_arg_marker(s) {
+                            set.push(s);
+                        } else if let Some(ss) = settled.get(&s) {
+                            set.extend(ss.iter().copied());
+                        }
+                        // else: a member of this component.
+                    }
+                }
+            }
+            set.sort_unstable();
+            set.dedup();
+            let rc: std::rc::Rc<[Tok]> = set.into();
+            let mut settled = self.members_settled.borrow_mut();
+            for w in comp {
+                settled.insert(w, rc.clone());
             }
         }
-        out.sort_unstable();
-        out
     }
 
     /// Parameter node `n`'s argument marker, with its own reach marker.
@@ -1618,6 +2043,13 @@ impl Model {
         self.marker_reach.insert(t, r);
         self.reach_marker.insert(r);
         self.arg_marker_of.insert(n, t);
+        // A relative parameter's marker is the caller's argument at each
+        // call's result while it stays in its run (DECISIONS 44 (b)).
+        if self.nodes[n as usize].rel {
+            let home = self.nodes[n as usize].frame;
+            self.set_fam(t, t, home);
+            self.set_fam(r, t, home);
+        }
         // It stands for its members alone (DECISIONS 75): beside while it
         // has none, and while each one that links in is beside
         // (`link_marker`). The caller links the arriving markers before
@@ -1638,6 +2070,10 @@ impl Model {
             return;
         }
         self.arg_members.get_mut(&r).unwrap().push(m);
+        // A new link changes the sets settled so far (`marker_members`).
+        if !self.members_settled.get_mut().is_empty() {
+            self.members_settled.get_mut().clear();
+        }
         if self.beside_markers.contains(&r) {
             match self.beside_values(m) {
                 true if !self.param_marker.contains_key(&m) => {
@@ -1656,10 +2092,12 @@ impl Model {
         if (mr, rr) != (m, r) {
             self.link_marker(mr, rr);
         }
-        // And per key (§18.4): what `m` reaches through `k` takes the uses
-        // of what `r` reaches through `k` so far (later ones: `keyed_use`).
-        for (a, b) in self.keyed_uses.get(&r).cloned().unwrap_or_default() {
-            self.keyed_use(m, a, b);
+        // And per key (§18.4): what `m` reaches through a key takes the
+        // uses of what `r` reaches through it so far, as bits (later ones:
+        // `keyed_use`; the keys: `settle_keyed_uses`).
+        let k = self.keyed_any.get(&r).copied().unwrap_or(0);
+        if k != 0 {
+            self.keyed_use(m, k);
         }
     }
 
@@ -1684,6 +2122,113 @@ impl Model {
         }
     }
 
+    fn set_fam(&mut self, t: Tok, base: Tok, home: u32) {
+        let i = t as usize;
+        if self.fam.len() <= i {
+            self.fam.resize(i + 1, (0, 0));
+        }
+        self.fam[i] = (base, home);
+    }
+
+    /// The home of token `t`'s argument marker family (+ 1), 0 for any
+    /// other token (DECISIONS 44 (b)).
+    #[inline]
+    pub(crate) fn fam_home(&self, t: Tok) -> u32 {
+        self.fam.get(t as usize).map_or(0, |&(_, h)| h)
+    }
+
+    /// Marker `t` arriving at node `n` crosses into it as a member of
+    /// `n`'s own marker (MRK; DECISIONS 44 for parameters): a marker is a
+    /// token only inside its run. A parameter takes every marker; a node
+    /// of no run of `t`'s family (another run's node, storage) takes its
+    /// family tokens; a result or storage takes the markers of no run
+    /// (another node's marker, a contract parameter's). Storage is every
+    /// node of no run but an observation node, a sink and a marker's own
+    /// field nodes. Inside its run a family token stays itself, so a
+    /// result can return it relative to each call (44 (b)).
+    #[inline]
+    pub(crate) fn crosses(&self, n: NodeId, t: Tok) -> bool {
+        let node = &self.nodes[n as usize];
+        if node.param {
+            return self.is_marker(t);
+        }
+        if node.obs || node.sink || node.of_marker || !self.is_marker(t) {
+            return false;
+        }
+        match self.fam_home(t) {
+            0 => node.result || node.frame == 0,
+            h => h != node.frame,
+        }
+    }
+
+    /// What a load from marker `m` gives (solve.rs `field`): under a named
+    /// key its keyed reach marker, under a computed key its reach marker;
+    /// a reach marker reaches itself under every key.
+    pub(crate) fn marker_load(&mut self, m: Tok, key: Option<Atom>) -> Tok {
+        if self.reach_marker.contains(&m) {
+            return m;
+        }
+        match key {
+            Some(a) => self.keyed_reach_of(m, a),
+            None => self.marker_reach[&m],
+        }
+    }
+
+    /// What marker `m` reaches under a computed key: its reach marker, or
+    /// itself for a reach marker.
+    pub(crate) fn reach_of(&self, m: Tok) -> Tok {
+        if self.reach_marker.contains(&m) {
+            return m;
+        }
+        self.marker_reach.get(&m).copied().unwrap_or(m)
+    }
+
+    /// Token `t` of argument marker `b`'s family, with marker `m` in place
+    /// of `b`: `m` itself, what `m` reaches, or what it reaches through the
+    /// same key (DECISIONS 44 (b)).
+    pub(crate) fn lift(&mut self, m: Tok, b: Tok, t: Tok) -> Tok {
+        if t == b {
+            return m;
+        }
+        let key = self.keyed_parent.get(&t).map(|&(_, a)| a);
+        self.marker_load(m, key)
+    }
+
+    /// The run of `call` (`Node::frame`): the run its result node belongs
+    /// to (a call an instance made has its own result slot). A temporary
+    /// the solver makes for one call is of that run.
+    pub(crate) fn call_run(&self, call: CallId) -> u32 {
+        let Some(c) = self.calls.get(call as usize) else {
+            return 0;
+        };
+        // Its operands are nodes of the run that made it.
+        let this = match c.this {
+            ThisArg::Node(n) => Some(n),
+            _ => None,
+        };
+        std::iter::once(c.ret)
+            .chain(this)
+            .chain(c.args.iter().copied())
+            .filter(|&n| n != NO_NODE)
+            .map(|n| self.nodes[n as usize].frame)
+            .find(|&f| f != 0)
+            .unwrap_or(0)
+    }
+
+    /// The tokens of argument marker `b`'s family.
+    pub(crate) fn family(&self, b: Tok) -> Vec<Tok> {
+        let mut v = vec![b];
+        v.extend(self.marker_reach.get(&b).copied());
+        v.extend(
+            self.keyed_reach
+                .get(&b)
+                .into_iter()
+                .flatten()
+                .map(|&(_, r)| r),
+        );
+        v
+    }
+
     fn marker_template(&mut self, display: String) -> TmplId {
         let tm = self.tmpls.len() as TmplId;
         self.tmpls.push(Template {
@@ -1695,6 +2240,7 @@ impl Model {
             display,
             birth_keys: Vec::new(),
             definite: Vec::new(),
+            declared: Vec::new(),
             parent: None,
             ctor: None,
             native_parent: None,
@@ -1724,6 +2270,7 @@ impl Model {
             display,
             birth_keys: Vec::new(),
             definite: Vec::new(),
+            declared: Vec::new(),
             parent: None,
             ctor: None,
             native_parent: None,
@@ -1743,15 +2290,16 @@ impl Model {
         reach.display = format!("{}:param{i}:reach", self.funcs[f as usize].name);
         self.tmpls.push(reach);
         let r = self.tok(TokKind::Obj(rm, NO_CTX));
-        let any = self.field_any(t);
-        self.add_tok(any, r);
-        let rany = self.field_any(r);
-        self.add_tok(rany, r);
         self.param_marker.insert(t, (f, i));
         self.param_marker.insert(r, (f, i));
         self.reach_marker.insert(r);
         self.marker_reach.insert(t, r);
         self.marker_of.insert((f, i), t);
+        // Markers before their field nodes: those nodes are of the marker.
+        let any = self.field_any(t);
+        self.add_tok(any, r);
+        let rany = self.field_any(r);
+        self.add_tok(rany, r);
         t
     }
 }
