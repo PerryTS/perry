@@ -1,5 +1,6 @@
 //! Unit tests: small programs lowered from source, facts checked directly.
 
+mod accessor_keys;
 mod array_ctor;
 mod array_length;
 mod array_record;
@@ -1119,13 +1120,15 @@ fn own_descriptor_enumeration_observes_late_accessor_constraints() {
         console.log(target.a.x);
     "#,
     );
-    // The getter ran: its `Value` left through the accessor of the unknown
-    // descriptor value, so the template is escaped. (At the `x` site the
-    // escaped `Value` stands beside ⊤, where it is that ⊤ and left out, so
-    // the receiver list is no witness there.)
-    assert!(pf.sites.iter().any(|s| s.key == "x"), "{}", pf.dump_text());
+    // The getter ran: its `{ value: Value }` is a descriptor
+    // `defineProperties` reads, so `target.a` holds the `Value`. (FVA 4.3a:
+    // `descriptors` gains `a` as an accessor key, so the descriptor value is
+    // the getter's result, not an unknown accessor's.)
+    let x: Vec<_> = pf.sites.iter().filter(|s| s.key == "x").collect();
+    assert!(!x.is_empty(), "{}", pf.dump_text());
     assert!(
-        tmpl(&pf, "Value").escape.as_deref() == Some("accessor of unknown function value"),
+        x.iter()
+            .all(|s| s.receivers.iter().any(|r| r.ends_with(":Value"))),
         "{}",
         pf.dump_text()
     );

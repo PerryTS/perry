@@ -256,6 +256,7 @@ pub fn map_cons(
         },
         Hard { kind, reason } => Hard { kind, reason },
         AddsKeys => AddsKeys,
+        DefineAccessor { key, reason } => DefineAccessor { key, reason },
         Implicit { reason } => Implicit { reason },
         CreateProto { reason } => CreateProto { reason },
         ChainUnion { key, dst } => ChainUnion { key, dst: n(dst) },
@@ -409,6 +410,7 @@ fn gen_kind(c: &Cons) -> bool {
             | ContractThis { .. }
             | TopIfAny { .. }
             | Hard { .. }
+            | DefineAccessor { .. }
             | AddsKeys
             | Implicit { .. }
             | IdxLoad { .. }

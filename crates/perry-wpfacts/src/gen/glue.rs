@@ -19,6 +19,9 @@ impl<'a> Gen<'a> {
     /// `Object.defineProperty(o, key, desc)`: E5 on the target, the
     /// descriptor's value is a post-construction write, and its accessors
     /// become accessors of the target (called with `this` = the target).
+    /// `accessor`: the descriptor is an accessor descriptor (FVA 4.3a): with
+    /// a constant key the definition is an accessor key on every layout that
+    /// does not hold the key as data (`Cons::DefineAccessor`), not E5 HARD.
     pub(crate) fn define_property(
         &mut self,
         fx: &Fx,
@@ -26,14 +29,21 @@ impl<'a> Gen<'a> {
         key: Option<String>,
         desc: NodeId,
         r: u32,
+        accessor: bool,
     ) {
-        self.m.cons(
-            o,
-            Cons::Hard {
-                kind: Hard::E5DefineProperty,
-                reason: r,
-            },
-        );
+        match &key {
+            Some(k) if accessor => {
+                let ka = self.m.atom(k);
+                self.m.cons(o, Cons::DefineAccessor { key: ka, reason: r });
+            }
+            _ => self.m.cons(
+                o,
+                Cons::Hard {
+                    kind: Hard::E5DefineProperty,
+                    reason: r,
+                },
+            ),
+        }
         let va = self.m.atom("value");
         let v = self.load(desc, Key::Named(va));
         let k = match &key {
