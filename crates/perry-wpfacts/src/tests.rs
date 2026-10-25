@@ -17,6 +17,7 @@ mod parent_value;
 mod prim_result;
 mod protocol_calls;
 mod receiver_this;
+mod runtime_helpers;
 mod summary;
 mod super_heritage;
 mod unit_alias;
