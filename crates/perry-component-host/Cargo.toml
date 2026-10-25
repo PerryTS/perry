@@ -21,7 +21,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 perry-wit = { path = "../perry-wit" }
 perry-abi.workspace = true
-wasmtime = { version = "48.0.0", default-features = false, features = ["anyhow", "std", "runtime", "cranelift", "component-model", "gc-drc"] }
+wasmtime = { version = "48.0.7", default-features = false, features = ["anyhow", "std", "runtime", "cranelift", "component-model", "gc-drc"] }
 
 perry-wasi = { path = "../perry-wasi" }
 
