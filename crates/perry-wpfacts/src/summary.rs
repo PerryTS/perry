@@ -130,8 +130,8 @@ pub struct SumState {
     /// plain call at a program site outside every summary (the unsummarized
     /// body's composition: the callee's effect per site, as `compose`
     /// expands a static call into a summary), 1 every other binding (for a
-    /// function with a `this` term the receiver: one object token, else
-    /// its layout, `recv_lay`; without one `LAY_NONE`), 2 unknown-code
+    /// function with a `this` term the receiver: an object as its maker
+    /// key, else its layout, `recv_lay`; without one `LAY_NONE`), 2 unknown-code
     /// entry, 3 setter group, 4 getter group, 5 a birth run (the
     /// constructor chain or field initializer of the object token being
     /// born). Nothing in a key is another instance: the count is (sites +
@@ -620,11 +620,16 @@ impl Model {
     }
 
     /// The lexical context of a method instance for receiver `t`: an
-    /// object is its own context (what the method births is that
-    /// object's), every other value its layout.
+    /// object is its maker key's context (what the method births is that
+    /// object's), every other value its layout. A receiver a method made
+    /// runs its methods as the object its chain of method calls started
+    /// from, as it births as that object's (`maker_key`): every object of
+    /// a persistent structure births the same (site, origin) objects, so
+    /// one instance per origin holds them all. What a method reads from
+    /// its receiver stays per receiver (argument markers, DECISIONS 44).
     pub(crate) fn recv_lay(&self, t: Tok) -> u32 {
         match self.toks[t as usize] {
-            TokKind::Obj(..) if t <= LAY_MASK => LAY_TOK | t,
+            TokKind::Obj(..) if t <= LAY_MASK => LAY_TOK | self.maker_key(t, true),
             _ => self.layout_of(t),
         }
     }
@@ -744,7 +749,7 @@ impl Model {
 
     /// Bind `call` (or no call: `NO_NODE`) to summarized `ft` for receiver
     /// `x` (or the receiver primitives `prim`): the instance of the
-    /// receiver (`recv_lay`: the object, else its layout) gets the
+    /// receiver (`recv_lay`: the object's maker key, else its layout) gets the
     /// receiver, and the call's arguments and result once per (call,
     /// instance).
     pub(crate) fn bind_layout(&mut self, call: CallId, ft: Tok, x: Option<Tok>, prim: u16) {
