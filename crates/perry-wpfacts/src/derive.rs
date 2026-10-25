@@ -538,7 +538,10 @@ fn closed_marker(m: &Model, t: Tok) -> bool {
             m.param_marker.get(x).is_some_and(|&(f, i)| {
                 m.closed_params.contains_key(&f)
                     || (i == u32::MAX && m.this_args.contains_key(&f))
-                    || (i != u32::MAX && m.method_described(f).is_some())
+                    || (i != u32::MAX
+                        && m.method_described(f)
+                            .and_then(|d| d.get(i as usize))
+                            .is_some_and(|&d| d))
             })
         })
 }

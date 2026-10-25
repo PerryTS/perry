@@ -1122,6 +1122,10 @@ pub struct Model {
     /// (`Gen::published_args`): per parameter, its marker stands for no
     /// value of another unit.
     pub method_described: FxHashMap<FnIdx, Vec<bool>>,
+    /// DECISIONS 148: a published method some unit runs: per parameter the
+    /// node holding what the running units pass (`Gen::published_args`),
+    /// `NO_NODE` where some call passes an undescribed value.
+    pub method_params: FxHashMap<FnIdx, Vec<NodeId>>,
     /// DECISIONS 165: the functions a call bound (`bind_args`), in any
     /// context.
     pub called: crate::pts::FxHashSet<FnIdx>,
@@ -1637,7 +1641,11 @@ impl Model {
         match self.toks[t as usize] {
             TokKind::Obj(tm, _) => matches!(
                 self.tmpls[tm as usize].kind,
-                TmplKind::Arr { .. } | TmplKind::BObj { what: "primbox", .. }
+                TmplKind::Arr { .. }
+                    | TmplKind::BObj {
+                        what: "primbox",
+                        ..
+                    }
             ),
             _ => false,
         }
@@ -2007,6 +2015,7 @@ impl Model {
         self.param_marker.get(&t).is_some_and(|&(f, i)| {
             i != u32::MAX
                 && !self.closed_described.contains_key(&f)
+                && !self.method_params.contains_key(&f)
                 && self.method_described(f).is_some()
         })
     }

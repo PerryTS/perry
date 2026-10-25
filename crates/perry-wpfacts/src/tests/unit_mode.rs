@@ -666,15 +666,27 @@ fn a_given_out_instance_receives_what_other_units_methods_do() {
 fn a_class_a_contract_returns_carries_its_methods() {
     // A contract result may be an instance of a published class (`mk`);
     // its reader sees the whole class contract, methods included, even
-    // when it never imports the class: `put` hands its argument to the
-    // defining unit, so the caller's literal leaves.
+    // when it never imports the class: `put` is a method of `C` there.
     // `mk` and `C` share a declaration unit (both write `n`): `mk`'s
     // result is `C` itself, not another unit's stand-in.
+    // DECISIONS 148 (rewritten expectation; was "the caller's literal
+    // leaves"): `m` publishes what it passes to `put`, so `C`'s unit holds
+    // the literal's stand-in, inside its contract (any other unit's use of
+    // it is a census report), and per-unit facts are whole-program facts
+    // (owner 2026-10-23): `own.warm` is proven in both.
     let t = "let n = 0; export class C { v: any = 1; constructor() { n++; } put(x: any) { this.v = x; } } export function mk() { n++; return new C(); }";
     let a = "import { C } from './t'; console.log(new C().v);";
     let m = "import { mk } from './t'; function main() { const own = { n: 1, warm: 2 }; mk().put(own); console.log(own.warm); } main(); main();";
-    let pf = units_of(&[("t", t), ("a", a), ("m", m)]);
-    assert!(!proven(&pf, "warm"), "{}", pf.dump_text());
+    let mods = [("t", t), ("a", a), ("m", m)];
+    let (pf, wp) = (units_of(&mods), whole_of(&mods));
+    assert!(proven(&pf, "put"), "{}", pf.dump_text());
+    assert_eq!(
+        proven(&pf, "warm"),
+        proven(&wp, "warm"),
+        "{}",
+        pf.dump_text()
+    );
+    assert!(pf.broken.is_empty(), "{}", pf.dump_text());
 }
 
 #[test]
@@ -866,14 +878,26 @@ fn a_result_that_is_not_a_literal_layout_escapes() {
     // `mk`'s unit holds C's stand-in and forwards it with C's contract
     // (§17.10 4, DECISIONS 56; this expectation was "the result escapes"
     // before C's contract was forwarded). The principle the test keeps:
-    // `m` may run `set` on it with anything, so C's own unit models that
-    // (its methods run on the receiver with ⊤ arguments): `x` takes any
-    // kind and is written after construction. Its layout does not change.
+    // `m` runs `set` on it, so C's own unit models that: `x` is written
+    // after construction and its layout does not change. DECISIONS 148
+    // (rewritten expectation; was "⊤ arguments, `x` takes any kind"): the
+    // units running `set` publish what they pass (`m`: a string), so `x`
+    // takes number|string, as in the whole program; a caller passing a
+    // value no contract describes leaves the parameter ⊤ (guard test
+    // a_published_methods_parameter_some_caller_passes_unknown_stays_a_marker).
     let a = "class C { x: number; constructor() { this.x = 1; } set(v: any) { this.x = v; } } export function mk() { return new C(); }";
-    let pf = units_of(&[("a", a), ("m", "import { mk } from './a'; mk().set('s');")]);
+    let mods = [("a", a), ("m", "import { mk } from './a'; mk().set('s');")];
+    let (pf, wp) = (units_of(&mods), whole_of(&mods));
     let x = field(tmpl(&pf, "C"), "x");
     assert!(!x.readonly && x.writers_post > 0, "{}", pf.dump_text());
-    assert!(x.kind.top && !x.kind.fixed(), "{}", pf.dump_text());
+    let xw = field(tmpl(&wp, "C"), "x");
+    assert_eq!(
+        format!("{:?}", x.kind),
+        format!("{:?}", xw.kind),
+        "{}",
+        pf.dump_text()
+    );
+    assert!(!x.kind.fixed(), "{}", pf.dump_text());
 }
 
 #[test]
@@ -3055,12 +3079,75 @@ fn a_string_index_step_of_a_stored_path_reads_any_key() {
 }
 
 #[test]
-#[ignore = "DECISIONS 148 open: a published method's parameter is a bare marker per unit"]
 fn a_published_methods_parameter_holds_its_callers_arguments() {
     // DECISIONS 148: `o.items` on `take`'s parameter is proven in the whole
-    // program (o is m's literal); per unit the parameter is a marker only,
-    // as no channel publishes the arguments callers pass to a published
-    // method (107 does it for the receiver).
+    // program (o is m's literal). Per unit, m publishes what it passes to
+    // the method it runs (`method_args_out`, the 107 rule for parameters),
+    // and d's parameter holds that literal's stand-in beside its marker.
+    let b = "export class E { v: number; constructor(v: number) { this.v = v; } }";
+    let d = "export class D { b: any[]; constructor() { this.b = new Array(2); } take(o: any) { this.b[0] = o.items[0]; } }";
+    let m = "import { D } from './d'; import { E } from './b'; function main() { const x = new D(); x.take({ items: [new E(1)] }); console.log(x.b[0].v); } main(); main();";
+    let mods = [("b", b), ("d", d), ("m", m)];
+    let (pu, wp) = (units_of(&mods), whole_of(&mods));
+    assert!(proven(&wp, "items"), "{}", wp.dump_text());
+    assert_eq!(verdicts(&pu, "items"), verdicts(&wp, "items"), "{}", pu.dump_text());
+    assert!(
+        proven_set(&pu).is_subset(&proven_set(&wp)),
+        "{}",
+        pu.dump_text()
+    );
+}
+
+#[test]
+fn a_published_methods_parameter_holds_its_callers_arguments_with_a_rest_parameter() {
+    // DECISIONS 148 for a method the solve does not summarize (a rest
+    // parameter): its contract publication (`escape_fn_params`) puts what
+    // the running units pass beside the marker as the summarized one does.
+    let b = "export class E { v: number; constructor(v: number) { this.v = v; } }";
+    let d = "export class D { b: any[]; constructor() { this.b = new Array(2); } take(o: any, ...more: any[]) { this.b[0] = o.items[0]; } }";
+    let m = "import { D } from './d'; import { E } from './b'; function main() { const x = new D(); x.take({ items: [new E(1)] }); console.log(x.b[0].v); } main(); main();";
+    let mods = [("b", b), ("d", d), ("m", m)];
+    let (pu, wp) = (units_of(&mods), whole_of(&mods));
+    assert!(proven(&wp, "items"), "{}", wp.dump_text());
+    assert_eq!(verdicts(&pu, "items"), verdicts(&wp, "items"), "{}", pu.dump_text());
+    assert!(proven_set(&pu).is_subset(&proven_set(&wp)), "{}", pu.dump_text());
+}
+
+#[test]
+fn a_published_methods_parameter_some_caller_passes_unknown_stays_a_marker() {
+    // DECISIONS 148 guard: n passes a value no contract describes
+    // (`JSON.parse`) for `q`, so the joined argument there is unknown and
+    // `q` stays the bare marker, while `o` (both callers pass literals)
+    // holds them: per unit proves no `.list` the whole program cannot
+    // (soundness: never stronger than the whole program), and `.items`.
+    let b = "export class E { v: number; constructor(v: number) { this.v = v; } }";
+    let d = "export class D { b: any[]; constructor() { this.b = new Array(2); } take(o: any, q: any) { this.b[0] = o.items[0]; this.b[1] = q.list[0]; } }";
+    let m = "import { D } from './d'; import { E } from './b'; import { run } from './n'; function main() { const x = new D(); x.take({ items: [new E(1)] }, { list: [new E(2)] }); run(x); console.log(x.b[0].v); } main(); main();";
+    let n = "export function run(x: any) { x.take({ items: [1] }, JSON.parse(process.argv[2] || '{\"list\":[1]}')); }";
+    let mods = [("b", b), ("d", d), ("n", n), ("m", m)];
+    let (pu, wp) = (units_of(&mods), whole_of(&mods));
+    assert!(!proven(&wp, "list"), "{}", wp.dump_text());
+    assert!(!proven(&pu, "list"), "{}", pu.dump_text());
+    assert_eq!(
+        proven(&pu, "items"),
+        proven(&wp, "items"),
+        "{}",
+        pu.dump_text()
+    );
+    assert!(
+        proven_set(&pu).is_subset(&proven_set(&wp)),
+        "{}",
+        pu.dump_text()
+    );
+}
+
+#[test]
+#[ignore = "DECISIONS 186 open: a stand-in layout's fields hold unknown values per unit"]
+fn a_field_of_a_callers_literal_read_in_a_published_method_is_described() {
+    // DECISIONS 186 (found with 148): after 148, `o` holds m's literal's
+    // stand-in, but its field `items` reads as unknown (a stand-in's fields
+    // hold unknown values), so d's write into D's array cell is unknown and
+    // m loses `x.b[0].v`, which the whole program proves.
     let b = "export class E { v: number; constructor(v: number) { this.v = v; } }";
     let d = "export class D { b: any[]; constructor() { this.b = new Array(2); } take(o: any) { this.b[0] = o.items[0]; } }";
     let m = "import { D } from './d'; import { E } from './b'; function main() { const x = new D(); x.take({ items: [new E(1)] }); console.log(x.b[0].v); } main(); main();";

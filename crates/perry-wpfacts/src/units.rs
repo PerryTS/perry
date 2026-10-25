@@ -758,6 +758,10 @@ pub(crate) struct Published {
     /// DECISIONS 165: the published methods (contract names) some unit
     /// runs, joined (an aborted unit may run any: `this_args_top`).
     pub(crate) method_runs: FxHashSet<String>,
+    /// DECISIONS 148: per published method some unit runs (contract name),
+    /// what the running units' calls pass, joined
+    /// (`ProgramFacts::method_args_out`).
+    pub(crate) method_args: FxHashMap<String, ArgContract>,
     /// The argument contracts of closed functions (decision 13), by
     /// (module path, name): the union over every unit's calls.
     pub(crate) args: FxHashMap<(String, String), ArgContract>,
@@ -1572,6 +1576,29 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
                 }
             }
         }
+        // DECISIONS 148: what the running units pass to published methods,
+        // last round's joined with every unit's latest solve and compared
+        // as values; the owners of a method whose join changed solve again.
+        let mut margs = input.method_args.clone();
+        for u in per_unit.iter().flatten() {
+            for (nm, ac) in &u.method_args_out {
+                margs.entry(nm.clone()).or_default().join(ac);
+            }
+        }
+        let margs_changed: Vec<String> = margs
+            .iter()
+            .filter(|(k, v)| input.method_args.get(*k) != Some(*v))
+            .map(|(k, _)| format!("fn:{k}"))
+            .collect();
+        if !margs_changed.is_empty() {
+            for (si, u) in per_unit.iter().enumerate() {
+                let u = u.as_ref().expect("every unit solved");
+                if !u.stats.aborted && u.fns_defined.iter().any(|d| margs_changed.contains(d)) {
+                    seeds.push(si);
+                }
+            }
+        }
+        input.method_args = margs;
         // Decision 17: the store effects: last round's joined with what
         // every unit's latest solve stores (D16), so they only grow too.
         // The owners of a layout whose effect keys grew perform them,
@@ -1933,6 +1960,9 @@ fn unit_io(
         }
         for n in &u.method_runs_out {
             o.push((format!("runs:{n}"), 0));
+        }
+        for (n, c) in &u.method_args_out {
+            o.push((format!("margs:{n}"), digest(c)));
         }
         for (d, k, kinds) in &u.stores_out {
             o.push((format!("store:{d}.{k}"), digest(kinds)));

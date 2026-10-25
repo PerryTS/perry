@@ -1659,13 +1659,48 @@ impl<'a> Gen<'a> {
                 || fi.params.is_empty()
                 || fi.name.contains("::get ")
                 || fi.name.contains("::set ")
-                || unit_in.method_runs.contains(&fi.name)
                 || unit_in.broken(&format!("fn:{}", fi.name))
             {
                 continue;
             }
             let n = fi.params.len();
-            self.m.method_described.insert(f, vec![true; n]);
+            if !unit_in.method_runs.contains(&fi.name) {
+                self.m.method_described.insert(f, vec![true; n]);
+                continue;
+            }
+            // DECISIONS 148: a method some unit runs: its parameters hold
+            // what the running units pass (`Published::method_args`, their
+            // join), beside the marker, as a closed function's do
+            // (decision 13, `closed_params`). A position some call passes
+            // an undescribed value stays the bare marker; a run that
+            // publishes nothing describable (`top`) leaves them all.
+            let Some(ac) = unit_in.method_args.get(&fi.name).filter(|a| !a.top) else {
+                continue;
+            };
+            let name = fi.name.clone();
+            let described: Vec<bool> = (0..n)
+                .map(|i| !ac.params.get(i).is_some_and(|vc| vc.unknown))
+                .collect();
+            if !described.contains(&true) {
+                continue;
+            }
+            let mut nodes = Vec::with_capacity(n);
+            for i in 0..n {
+                // A call passing fewer arguments passes undefined: its
+                // contract's kinds carry it (DECISIONS 77).
+                let node = match ac.params.get(i) {
+                    Some(_) if !described[i] => NO_NODE,
+                    Some(vc) => self.stand_in_value(0, &format!("{name}:arg{i}"), vc),
+                    None => {
+                        let node = self.m.node_named("arg", || format!("arg{i}({name})"));
+                        self.m.add_prim(node, prim::UNDEF);
+                        node
+                    }
+                };
+                nodes.push(node);
+            }
+            self.m.method_described.insert(f, described);
+            self.m.method_params.insert(f, nodes);
         }
     }
 

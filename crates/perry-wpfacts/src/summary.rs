@@ -1158,6 +1158,14 @@ impl Model {
                     if let Some(mk) = mk {
                         self.add_tok(d, mk);
                     }
+                    // DECISIONS 148: what the running units pass, beside it.
+                    if contract_only {
+                        if let Some(&a) = self.method_params.get(&f).and_then(|v| v.get(i)) {
+                            if a != NO_NODE {
+                                self.edge(a, d);
+                            }
+                        }
+                    }
                 }
             }
         }

@@ -855,6 +855,14 @@ impl Model {
                 }
                 let mk = self.param_marker_tok(f, i as u32);
                 self.add_tok(p, mk);
+                // DECISIONS 148: what the running units pass, beside it.
+                if contract_only {
+                    if let Some(&a) = self.method_params.get(&f).and_then(|v| v.get(i)) {
+                        if a != NO_NODE {
+                            self.edge(a, p);
+                        }
+                    }
+                }
             }
             self.add_top(fi.args_all, why);
             self.contract_rets.push((f, fi.ret));

@@ -207,6 +207,10 @@ pub struct ProgramFacts {
     /// DECISIONS 165: the methods of other units (contract names) this
     /// unit runs.
     pub(crate) method_runs_out: Vec<String>,
+    /// DECISIONS 148: per method of another unit it runs (contract name),
+    /// what its calls pass; `top`: a call no contract describes (a stub
+    /// method, a method reached under no name).
+    pub(crate) method_args_out: Vec<(String, units::ArgContract)>,
     /// The displays in `layouts_out` that are other units' layouts (a
     /// stand-in's contract, forwarded): never over the owner's entry.
     pub(crate) layouts_fwd: Vec<String>,
@@ -596,16 +600,21 @@ fn fn_contract_of(
     // (decision 17): each is a stand-in here, its census (reports, store
     // effects) covers what this body does to it; the marker stands for
     // nothing, so no direct escape is published. What it reaches keeps
-    // its uses.
+    // its uses. DECISIONS 148: a published method's parameter the running
+    // units describe (`Model::method_params`) the same way.
+    let described = g.m.closed_described.get(&f).or_else(|| {
+        g.m.method_params
+            .contains_key(&f)
+            .then(|| g.m.method_described.get(&f))
+            .flatten()
+    });
     let params: Vec<u8> = uses(false)
         .into_iter()
         .enumerate()
-        .map(
-            |(i, u)| match g.m.closed_described.get(&f).and_then(|d| d.get(i)) {
-                Some(true) => u & !model::MARK_ESCAPE,
-                _ => u,
-            },
-        )
+        .map(|(i, u)| match described.and_then(|d| d.get(i)) {
+            Some(true) => u & !model::MARK_ESCAPE,
+            _ => u,
+        })
         .collect();
     // What each parameter reaches, by the key it was read under (§18.4).
     let marker_use = |t: model::Tok| g.m.marker_use.get(&t).copied().unwrap_or(0);
@@ -1385,7 +1394,11 @@ fn value_contract_of_toks(
             // An array (DECISIONS 94): its elements are cell `arr:<display>`.
             model::TokKind::Obj(..) if g.m.is_cell_arr(t) => {
                 let d = g.arr_name(t);
-                let v = if g.m.is_box(t) { &mut vc.boxes } else { &mut vc.arrays };
+                let v = if g.m.is_box(t) {
+                    &mut vc.boxes
+                } else {
+                    &mut vc.arrays
+                };
                 if !v.contains(&d) {
                     v.push(d);
                     v.sort();
@@ -1647,7 +1660,11 @@ fn arg_contract_of(
                 // (`Gen::contract_check`), named as a value contract names it (94).
                 if g.m.is_cell_arr(t) {
                     let d = g.arr_name(t);
-                    let v = if g.m.is_box(t) { &mut vc.boxes } else { &mut vc.arrays };
+                    let v = if g.m.is_box(t) {
+                        &mut vc.boxes
+                    } else {
+                        &mut vc.arrays
+                    };
                     if !v.contains(&d) {
                         v.push(d);
                         v.sort();
@@ -2653,6 +2670,63 @@ pub(crate) fn compute_in<'a>(
         }
         _ => Vec::new(),
     };
+    // DECISIONS 148: what this unit passes to the methods of other units it
+    // runs (the 107 rule for parameters): per contract name, what its calls
+    // of the stand-ins bind (`arg_contract_of`, as for a closed function,
+    // decision 13). A stub method (no function contract) or one called
+    // under no name (through ⊤) passes what no contract describes: `top`.
+    let method_args_out: Vec<(String, units::ArgContract)> = match g.view {
+        Some(_) if cfg.unit && !g.m.aborted => {
+            let mut by: Vec<(String, Vec<model::Tok>)> = Vec::new();
+            for (&t, fc) in &g.stand_in_fc {
+                if !fc.method || !g.m.called.contains(&g.m.tok_fn(t)) {
+                    continue;
+                }
+                match by.iter_mut().find(|(n, _)| *n == fc.name) {
+                    Some((_, v)) => v.push(t),
+                    None => by.push((fc.name.clone(), vec![t])),
+                }
+            }
+            by.sort();
+            let mut out: Vec<(String, units::ArgContract)> = by
+                .into_iter()
+                .map(|(nm, mut toks)| {
+                    toks.sort_unstable();
+                    let ac = arg_contract_of(
+                        &g,
+                        &templates,
+                        toks,
+                        &contracts_out,
+                        &mut layouts_out,
+                        &open_tm,
+                    );
+                    (nm, ac)
+                })
+                .collect();
+            let undescribed: Vec<String> =
+                g.m.stub_methods
+                    .iter()
+                    .filter(|f| g.m.called.contains(f))
+                    .map(|&f| g.m.funcs[f as usize].name.clone())
+                    .chain(unnamed_methods(&g.m).map(|f| g.m.funcs[f as usize].name.clone()))
+                    .collect();
+            for nm in undescribed {
+                match out.iter_mut().find(|(n, _)| *n == nm) {
+                    Some((_, ac)) => ac.top = true,
+                    None => out.push((
+                        nm,
+                        units::ArgContract {
+                            params: Vec::new(),
+                            top: true,
+                        },
+                    )),
+                }
+            }
+            out.sort_by(|a, b| a.0.cmp(&b.0));
+            out
+        }
+        _ => Vec::new(),
+    };
     // A contract class a contract result or value names is published
     // whole (methods, statics): its readers call them on what they get.
     for l in layouts_out.iter_mut() {
@@ -2748,6 +2822,7 @@ pub(crate) fn compute_in<'a>(
         fns_read: std::mem::take(&mut g.fns_read),
         this_args_out,
         method_runs_out,
+        method_args_out,
         layouts_fwd,
         module_digests: Vec::new(),
     };
