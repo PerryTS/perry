@@ -290,8 +290,10 @@ pub(crate) fn lower_module_decl(
                                     )
                                 {
                                     (format!("inspector.{imported}"), None)
-                                } else if matches!(source.as_str(), "fs" | "dns" | "stream")
-                                    && imported == "promises"
+                                } else if matches!(
+                                    source.as_str(),
+                                    "fs" | "dns" | "stream" | "readline" | "timers"
+                                ) && imported == "promises"
                                 {
                                     // `import { promises } from "node:fs"` binds the
                                     // promises SUBMODULE namespace — route it exactly

@@ -18,6 +18,10 @@ pub(crate) fn emit_global_value_installs(ctx: &mut FnCtx<'_>, name: &str) {
     let sym = match name {
         "process" => "js_nm_install_process",
         "console" => "js_nm_install_console",
+        // `performance` is the `perf_hooks` namespace object: `const p = performance;
+        // p.now()` dispatches through the perf bucket, and a call on a module whose
+        // bucket is not installed is an unsupported call, not a silent `undefined`.
+        "performance" => "js_nm_install_perf",
         "globalThis" | "global" | "self" | "window" | "frames" => {
             "js_install_global_value_surfaces"
         }

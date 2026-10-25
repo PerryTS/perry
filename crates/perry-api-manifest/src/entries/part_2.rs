@@ -926,6 +926,7 @@ pub(crate) const API_MANIFEST_PART_2: &[ApiEntry] = &[
         &[p_any("p0")],
         TypeSpec::Any,
     ),
+    property("readline", "promises"),
     method("readline", "clearLine", false, None),
     method("readline", "clearScreenDown", false, None),
     method("readline", "cursorTo", false, None),

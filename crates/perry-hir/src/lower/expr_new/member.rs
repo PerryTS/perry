@@ -84,6 +84,27 @@ pub(crate) fn lower_new_member_native(
                     return Ok(Some(expr));
                 }
             }
+            // `new sd.StringDecoder(enc)` over a `string_decoder` namespace, default
+            // or CommonJS alias constructs the same handle-backed decoder the named
+            // import does. The generic member-callee path built an object with no
+            // decoder state, so `write`/`end` threw ERR_INVALID_THIS.
+            let is_string_decoder_module = ctx.lookup_builtin_module_alias(obj_name)
+                == Some("string_decoder")
+                || ctx
+                    .lookup_native_module(obj_name)
+                    .is_some_and(|(module, export)| {
+                        module == "string_decoder"
+                            && (export.is_none() || export == Some("default"))
+                    });
+            if is_string_decoder_module && prop_ident.sym.as_ref() == "StringDecoder" {
+                return Ok(Some(Expr::New {
+                    class_name: "StringDecoder".to_string(),
+                    args: lower_optional_args(ctx, new_expr.args.as_deref())?,
+                    type_args: Vec::new(),
+                    byte_offset: new_byte_offset,
+                    cap_args_appended: 0,
+                }));
+            }
             if obj_name == "globalThis"
                 && ctx.lookup_local("globalThis").is_none()
                 && is_fetch_constructor_name(prop_ident.sym.as_ref())

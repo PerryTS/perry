@@ -69,6 +69,16 @@ pub fn bound_native_callable_export_value(module_name: &str, property_name: &str
     {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
+    // A module the submodule registry implements (`stream/promises`,
+    // `timers/promises`, `stream/web`, ...) has no dispatch bucket: a
+    // BOUND_METHOD closure minted below would dispatch through a module with no
+    // bucket and resolve `undefined` without running anything. The module value
+    // is the registry namespace, so hand out its own export.
+    if let Some(value) =
+        crate::node_submodules::registry_backed_module_callable(module_name, property_name)
+    {
+        return value;
+    }
     // node:inspector/promises is the callback namespace with Session replaced.
     if module_name == "inspector/promises" && property_name != "Session" {
         return bound_native_callable_export_value("inspector", property_name);
