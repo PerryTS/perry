@@ -238,9 +238,18 @@ pub extern "C" fn js_component_call(owner: f64, interface: f64, function: f64, a
                 args_input.get_nanbox_f64(),
             );
         }
-        args = serde_json::to_vec(&value::encode_for(
+        let retained = scope.root_nanbox_f64(value::retention::new_plan());
+        let world = unsafe { &(*context).world };
+        let signature = context::signature(world, "exports", &interface, &function);
+        let params = signature["params"]
+            .as_array()
+            .unwrap_or_else(|| fail("Invalid WIT parameter manifest"));
+        args = serde_json::to_vec(&value::typed::arguments(
             args_input.get_nanbox_f64(),
+            params,
+            world,
             owner.get_nanbox_f64(),
+            retained.get_nanbox_f64(),
         ))
         .unwrap();
         let mut buffer = Buffer::default();

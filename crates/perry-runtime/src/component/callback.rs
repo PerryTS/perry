@@ -143,24 +143,32 @@ pub(super) unsafe extern "C" fn invoke(
             )));
         }
         values.extend(roots.iter().map(|root| root.get_nanbox_f64()));
-        let result = crate::closure::js_native_call_value(
+        let result = scope.root_nanbox_f64(crate::closure::js_native_call_value(
             callback.get_nanbox_f64(),
             crate::closure::plain_call_receiver(),
             values.as_ptr(),
             values.len(),
-        );
+        ));
         if let Some(request) = request.as_deref() {
             super::asynchronous::imports::register(
                 frame.owner.get_nanbox_f64(),
                 request,
-                result,
+                result.get_nanbox_f64(),
                 lifetime.get_nanbox_f64(),
+                &signature["result"],
             );
             pending = true;
             Vec::new()
         } else {
-            serde_json::to_vec(&value::encode_for(result, frame.owner.get_nanbox_f64()))
-                .expect("component value is JSON")
+            let retained = scope.root_nanbox_f64(value::retention::new_plan());
+            serde_json::to_vec(&value::typed::result(
+                result.get_nanbox_f64(),
+                &signature["result"],
+                world,
+                frame.owner.get_nanbox_f64(),
+                retained.get_nanbox_f64(),
+            ))
+            .expect("component value is JSON")
         }
     });
     if !pending {

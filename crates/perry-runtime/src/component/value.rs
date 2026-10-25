@@ -4,10 +4,14 @@ use crate::exception::catch_js_throw;
 use crate::{gc::RuntimeHandleScope, value::JSValue};
 use serde_json::{json, Value};
 
+pub(super) mod retention;
+pub(super) mod typed;
+
 pub(super) fn encode(value: f64) -> Value {
     encode_at(value, 0, None, None).unwrap_or_else(|error| crate::exception::js_throw(error))
 }
 
+#[cfg(test)]
 pub(super) fn encode_for(value: f64, owner: f64) -> Value {
     let scope = RuntimeHandleScope::new();
     let owner = scope.root_nanbox_f64(owner);
@@ -19,6 +23,7 @@ pub(super) fn encode_for(value: f64, owner: f64) -> Value {
 /// wrappers until native lowering commits ownership. Retain them during this
 /// traversal, including resources produced by getters or later removed from
 /// the caller's mutable argument objects.
+#[cfg(test)]
 pub(super) fn encode_for_retained(value: f64, owner: f64, retained: f64) -> Value {
     let scope = RuntimeHandleScope::new();
     let owner = scope.root_nanbox_f64(owner);
@@ -111,11 +116,11 @@ fn encode_at(
                 owner.map_or_else(super::undefined, |owner| owner.get_nanbox_f64()),
             )
         })? {
-            retain_resource(retained, &root)?;
+            retain_resource(retained, &root, &resource)?;
             return Ok(resource);
         }
         if let Some(resource) = catch_js_throw(|| super::resource::encode(root.get_nanbox_f64()))? {
-            retain_resource(retained, &root)?;
+            retain_resource(retained, &root, &resource)?;
             return Ok(resource);
         }
         let keys = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(catch_js_throw(|| {
@@ -147,14 +152,14 @@ fn encode_at(
 fn retain_resource(
     retained: Option<&crate::gc::RuntimeHandle<'_>>,
     resource: &crate::gc::RuntimeHandle<'_>,
+    identity: &Value,
 ) -> Result<(), f64> {
     if let Some(retained) = retained {
-        catch_js_throw(|| {
-            let array =
-                super::array_pointer(retained.get_nanbox_f64()).expect("retained argument list");
-            let count = unsafe { (*array).length };
-            crate::array::js_array_set_f64_extend(array, count, resource.get_nanbox_f64());
-        })?;
+        retention::retain(
+            retained.get_nanbox_f64(),
+            resource.get_nanbox_f64(),
+            identity,
+        )?;
     }
     Ok(())
 }

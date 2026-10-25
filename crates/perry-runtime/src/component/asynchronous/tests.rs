@@ -540,6 +540,8 @@ fn queued_calls_retain_resource_wrappers_after_the_argument_array_is_mutated() {
     unsafe {
         (&mut (*context::get(component.get_nanbox_f64())).world)["imports"][0]["resources"] =
             serde_json::json!({"item":"r0"});
+        (&mut (*context::get(component.get_nanbox_f64())).world)["exports"][0]["functions"][0]
+            ["params"] = serde_json::json!([{"name":"item", "ty":{"kind":"own", "value":"r0"}}]);
     }
     let args = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
         crate::array::js_array_alloc_with_length(1) as i64,

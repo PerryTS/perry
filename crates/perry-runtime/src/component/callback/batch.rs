@@ -205,4 +205,6 @@ impl<'a> InvocationFrame<'a> {
 }
 
 #[cfg(test)]
+mod root0_tests;
+#[cfg(test)]
 mod tests;

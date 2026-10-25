@@ -16,17 +16,37 @@ fn expire(record: f64) {
         crate::array::js_array_set_f64(array, 0, 0.0);
     }
 }
-pub(crate) fn register(owner: f64, request: &str, value: f64, lifetime: f64) {
+// Drop native scratch normally before propagating a managed allocation error.
+fn encoded_type(ty: &Value) -> f64 {
+    let bytes = serde_json::to_vec(ty).expect("WIT result type");
+    let result = crate::exception::catch_js_throw(|| {
+        crate::value::js_nanbox_string(crate::string::js_string_from_bytes(
+            bytes.as_ptr(),
+            bytes.len() as u32,
+        ) as i64)
+    });
+    drop(bytes);
+    finish(result)
+}
+pub(crate) fn register(owner: f64, request: &str, value: f64, lifetime: f64, ty: &Value) {
     let scope = RuntimeHandleScope::new();
     let owner = scope.root_nanbox_f64(owner);
     let value = scope.root_nanbox_f64(value);
     let lifetime = scope.root_nanbox_f64(lifetime);
+    let result_type = scope.root_nanbox_f64(encoded_type(ty));
     let promise =
         scope.root_raw_mut_ptr(crate::promise::js_promise_resolved(value.get_nanbox_f64()));
     crate::promise::js_promise_mark_internally_handled(promise.get_raw_mut_ptr());
     let record = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
         crate::object::js_object_alloc(0, 0) as i64,
     ));
+    unsafe {
+        owned_state_bag::store(
+            object_pointer(record.get_nanbox_f64()).unwrap() as usize,
+            owned_state_bag::COMPONENT_ASYNC_RESULT_TYPE,
+            result_type.get_nanbox_f64(),
+        );
+    }
     let token = scope.root_string_ptr(crate::string::js_string_from_bytes(
         request.as_ptr(),
         request.len() as u32,
@@ -110,13 +130,25 @@ pub(super) fn drain(operation: f64, component: f64) {
         }
         let mut encoded = Vec::new();
         let mut output = Vec::new();
+        let mut ty = Value::Null;
         let result = crate::exception::catch_js_throw(|| {
             let id = string(field(record.get_nanbox_f64(), b"request"))
                 .parse::<u64>()
                 .unwrap_or_else(|_| fail("Invalid async component request identity"));
             encoded = if state == PromiseState::Fulfilled {
-                serde_json::to_vec(&value::encode_for_retained(
+                let schema = unsafe {
+                    owned_state_bag::load(
+                        object_pointer(record.get_nanbox_f64()).unwrap() as usize,
+                        owned_state_bag::COMPONENT_ASYNC_RESULT_TYPE,
+                    )
+                };
+                ty = serde_json::from_str(&string(schema))
+                    .unwrap_or_else(|_| fail("Invalid saved WIT result type"));
+                let ctx = context::get(component.get_nanbox_f64());
+                serde_json::to_vec(&value::typed::result(
                     value.get_nanbox_f64(),
+                    &ty,
+                    unsafe { &(*ctx).world },
                     component.get_nanbox_f64(),
                     payload::state_get(operation.get_nanbox_f64(), &OPERATION, b"arguments"),
                 ))
@@ -148,7 +180,7 @@ pub(super) fn drain(operation: f64, component: f64) {
             index,
             undefined(),
         );
-        drop((encoded, output));
+        drop((encoded, output, ty));
         if let Err(error) = result {
             remember(operation.get_nanbox_f64(), error);
         }

@@ -105,12 +105,17 @@ fn submit_kind(
     let saved_context = scope.root_nanbox_f64(undefined());
     let mut encoded = Vec::new();
     let result = crate::exception::catch_js_throw(|| {
-        retained.set_nanbox_f64(crate::value::js_nanbox_pointer(
-            crate::array::js_array_alloc(0) as i64,
-        ));
+        retained.set_nanbox_f64(value::retention::new_plan());
         encoded = if http_request.is_null() {
-            serde_json::to_vec(&value::encode_for_retained(
+            let world = unsafe { &(*context::get(component.get_nanbox_f64())).world };
+            let signature = context::signature(world, "exports", interface, function);
+            let params = signature["params"]
+                .as_array()
+                .unwrap_or_else(|| fail("Invalid WIT parameter manifest"));
+            serde_json::to_vec(&value::typed::arguments(
                 args.get_nanbox_f64(),
+                params,
+                world,
                 component.get_nanbox_f64(),
                 retained.get_nanbox_f64(),
             ))

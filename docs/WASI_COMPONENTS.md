@@ -47,6 +47,12 @@ Only the owning thread executes guest code, JavaScript imports or cleanup.
 Pending operation payloads trace the component, result Promise and original
 JavaScript rejection. Argument values are snapshotted at submission, and resource
 wrappers remain traced while queued and while async import results are lowered.
+Snapshots read declared WIT record fields and selected tagged payloads; extra
+getters and void result values are not inspected. Pending imports keep their
+result schema in private traced state. Retained wrappers carry identities saved
+at encoding time under a fixed traced holder, so later matching does not
+re-encode a transferred host wrapper or assume JSON field order matches root
+order. Native driver receipt consumption is still pending.
 Import arguments cross the engine as owned JSON values,
 and borrowed host resources remain valid until their import Promise settles.
 Successful calls retain the Store for reuse. Traps, rejected imports and explicit
@@ -65,7 +71,7 @@ outstanding requests, including queued requests whose futures were dropped.
 Dropping a call before execution skips it; dropping an unconsumed call after it
 starts requests Store retirement. Dropping the last client returns the Host if
 quiescent and retires it otherwise. The existing TypeScript bridge still needs
-per-invocation callback frames before it can use this driver.
+to route public calls and callbacks through this driver.
 
 `DriverClient::retained_origins()` reports native invocation IDs whose callback
 context may still be needed. It combines queued/unpublished requests, guest-root
