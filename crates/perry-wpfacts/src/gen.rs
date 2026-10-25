@@ -1577,6 +1577,40 @@ impl<'a> Gen<'a> {
         }
     }
 
+    /// DECISIONS 165: a published method no unit runs (`Published::method_runs`,
+    /// the join over every unit) is called only by this unit's code: its
+    /// parameter markers stand for no value of another unit (as a closed
+    /// function's with no callers, decision 13), so what this unit passes
+    /// is what its parameters hold (`Model::beside_values`). The join only
+    /// grows, and a newly run method solves the owner again (`units::run`).
+    /// A unit over the bound may run any; a call through an escaped method
+    /// is a census report that breaks it. An accessor runs on a get or a
+    /// set, not a call: not here.
+    pub(crate) fn published_args(&mut self) {
+        let Some(unit_in) = self.unit_in else {
+            return;
+        };
+        if unit_in.this_args_top || unit_in.eval_scopes() {
+            return;
+        }
+        for f in 0..self.m.funcs.len() as FnIdx {
+            let fi = &self.m.funcs[f as usize];
+            if fi.module != 0
+                || fi.func_id == u32::MAX
+                || fi.ctor_of.is_some()
+                || fi.params.is_empty()
+                || fi.name.contains("::get ")
+                || fi.name.contains("::set ")
+                || unit_in.method_runs.contains(&fi.name)
+                || unit_in.broken(&format!("fn:{}", fi.name))
+            {
+                continue;
+            }
+            let n = fi.params.len();
+            self.m.method_described.insert(f, vec![true; n]);
+        }
+    }
+
     /// This unit's own class named by display: a class has one defining
     /// unit (a literal shape may have several, DECISIONS 112).
     fn own_class(&self, display: &str) -> Option<TmplId> {
@@ -1928,6 +1962,8 @@ impl<'a> Gen<'a> {
                 continue;
             }
             let f = self.stub_fn(mi, fname, tm, true, false, c.closed.is_none() || c.forwards, r);
+            // DECISIONS 165: a call of it runs that method.
+            self.m.stub_methods.insert(f);
             let a = self.m.atom(key);
             let n = self.m.field(proto, a);
             let t = self.m.funcs[f as usize].token;

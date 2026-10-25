@@ -210,6 +210,10 @@ pub(crate) struct HandOverArg {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct FnContract {
     pub name: String,
+    /// DECISIONS 165: a method of a published class (its owner's prototype
+    /// holds it): a unit calling it publishes what it passes
+    /// (`ProgramFacts::method_runs_out`), however it got the function.
+    pub method: bool,
     /// Per parameter: what the callee does to the argument itself
     /// (`model::MARK_*`), and to what the argument reaches (its fields,
     /// transitively). Two sets: reading `p.n` and converting it is no
@@ -356,6 +360,7 @@ impl FnContract {
     /// unknown result only grow; the result layouts grow, and a ⊤ result
     /// (`None`) absorbs them; the receiver is unused only if both say so.
     pub(crate) fn join(&mut self, o: &FnContract) {
+        self.method |= o.method;
         for (v, w) in [(&mut self.params, &o.params), (&mut self.reach, &o.reach)] {
             if v.len() < w.len() {
                 v.resize(w.len(), 0);
@@ -718,6 +723,9 @@ pub(crate) struct Published {
     /// over the bound may run any of them on anything.
     pub(crate) this_args: FxHashMap<String, ValueContract>,
     pub(crate) this_args_top: bool,
+    /// DECISIONS 165: the published methods (contract names) some unit
+    /// runs, joined (an aborted unit may run any: `this_args_top`).
+    pub(crate) method_runs: FxHashSet<String>,
     /// The argument contracts of closed functions (decision 13), by
     /// (module path, name): the union over every unit's calls.
     pub(crate) args: FxHashMap<(String, String), ArgContract>,
@@ -1455,6 +1463,24 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
         }
         input.this_args = this_args;
         input.this_args_top = this_top;
+        // DECISIONS 165: the published methods some unit runs, joined the
+        // same way; the owners of a newly run one solve again.
+        let mut runs_changed: Vec<String> = Vec::new();
+        for u in per_unit.iter().flatten() {
+            for nm in &u.method_runs_out {
+                if input.method_runs.insert(nm.clone()) {
+                    runs_changed.push(format!("fn:{nm}"));
+                }
+            }
+        }
+        if !runs_changed.is_empty() {
+            for (si, u) in per_unit.iter().enumerate() {
+                let u = u.as_ref().expect("every unit solved");
+                if !u.stats.aborted && u.fns_defined.iter().any(|d| runs_changed.contains(d)) {
+                    seeds.push(si);
+                }
+            }
+        }
         // Decision 17: the store effects: last round's joined with what
         // every unit's latest solve stores (D16), so they only grow too.
         // The owners of a layout whose effect keys grew perform them,
@@ -1821,6 +1847,9 @@ fn unit_io(
         }
         for (n, c) in &u.this_args_out {
             o.push((format!("this:{n}"), hash(&format!("{c:?}"))));
+        }
+        for n in &u.method_runs_out {
+            o.push((format!("runs:{n}"), 0));
         }
         for (d, k, kinds) in &u.stores_out {
             o.push((format!("store:{d}.{k}"), hash(&format!("{kinds:?}"))));

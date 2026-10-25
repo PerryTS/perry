@@ -924,16 +924,14 @@ fn a_receiver_reach_stored_back_into_a_leaving_field_adds_no_kinds() {
         wf.broken,
         pf.dump_text()
     );
-    // Per-unit facts are whole-program facts (owner 2026-10-23). The reads
-    // inside `rot` through its own parameter are a separate open cause
-    // (a published method's parameter marker no other unit passes to,
-    // nightly/CW2/DECISIONS.md 165): every other site is equal.
-    let rot = ROOT_BACK.find("rot(x").unwrap() as u32..ROOT_BACK.find("sum()").unwrap() as u32;
+    // Per-unit facts are whole-program facts (owner 2026-10-23): every site
+    // equal, the reads inside `rot` through its own parameter included
+    // (DECISIONS 165: no other unit runs `rot`, so nothing but what `put`
+    // passes is beside its parameter marker).
     let v = |f: &ProgramFacts| -> Vec<String> {
         let mut v: Vec<String> = f
             .sites
             .iter()
-            .filter(|s| !rot.contains(&s.byte_offset))
             .map(|s| {
                 let mut r = s.receivers.clone();
                 r.sort();
@@ -945,4 +943,38 @@ fn a_receiver_reach_stored_back_into_a_leaving_field_adds_no_kinds() {
     };
     assert!(v(&wf).iter().any(|s| s.contains(".k T0Mono")), "{:?}", v(&wf));
     assert_eq!(v(&pf), v(&wf), "\n{}", pf.dump_text());
+}
+
+const TWO_FN_KEY: &str = r#"
+    class N { v: number; constructor(v: number) { this.v = v; } }
+    class R { w: number; v: number; constructor(v: number) { this.w = 1; this.v = v; } }
+    class C {
+      constructor() { if (Math.random() > 2) { (C.prototype as any).m = function (y: any): number { return 0; }; } }
+      m(x: any): number { return x.v; }
+      own(): number { return this.m(new N(1)); }
+    }
+    function main() { const c = new C(); console.log(c.own() + c.m(new R(2))); }
+    main();
+    "#;
+
+#[test]
+fn a_method_its_readers_cannot_name_is_run_by_its_owner() {
+    // DECISIONS 165: `C.prototype.m` holds two functions, so C's class
+    // contract lists no `m` (a method is named alone under its key) and
+    // main calls it through ⊤, publishing no run. C's unit publishes `m`
+    // as run itself: its parameter marker still stands for main's R, so
+    // `x.v` is not proven on N alone (it would be, wrongly, if `m` read as
+    // unrun: nothing but `own`'s N beside its marker).
+    let pf = units(TWO_FN_KEY);
+    let wf = facts(TWO_FN_KEY);
+    let at = TWO_FN_KEY.find("m(x").unwrap() as u32..TWO_FN_KEY.find("own()").unwrap() as u32;
+    let site = |f: &ProgramFacts| -> String {
+        let s = f.sites.iter().find(|s| at.contains(&s.byte_offset) && s.key == "v").expect("x.v site");
+        let mut r = s.receivers.clone();
+        r.sort();
+        format!("{:?} {:?}", s.verdict, r)
+    };
+    assert!(site(&wf).contains("R"), "{}", site(&wf));
+    let u = site(&pf);
+    assert!(u.contains("R") || !u.contains("T0"), "{u}\n{}", pf.dump_text());
 }

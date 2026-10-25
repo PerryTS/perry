@@ -204,6 +204,9 @@ pub struct ProgramFacts {
     /// DECISIONS 107: per method of another unit (contract name), the
     /// receivers this unit runs it on.
     pub(crate) this_args_out: Vec<(String, units::ValueContract)>,
+    /// DECISIONS 165: the methods of other units (contract names) this
+    /// unit runs.
+    pub(crate) method_runs_out: Vec<String>,
     /// The displays in `layouts_out` that are other units' layouts (a
     /// stand-in's contract, forwarded): never over the owner's entry.
     pub(crate) layouts_fwd: Vec<String>,
@@ -802,6 +805,7 @@ fn fn_contract_of(
         .map(|(_, i, k)| (*i, k.clone()))
         .collect();
     units::FnContract {
+        method: g.m.published_this.contains_key(&f),
         this_use,
         this_reach,
         this_stores,
@@ -835,11 +839,40 @@ fn fn_contract_of(
 /// The reader takes the owner's entry by the name (`Gen::owner_fn`,
 /// DECISIONS 106); until the owner published one, this entry claims
 /// nothing: every argument escapes, the result is unknown.
+/// DECISIONS 165: this unit's published methods another unit cannot name:
+/// a prototype key holding more than one function (the class contract
+/// lists a method only alone under its key, `ClassContract::methods`) or a
+/// computed member. A reader calls those through ⊤, which publishes no
+/// run, so the owner publishes them as run itself: none reads its
+/// parameter markers as having nothing beside them.
+fn unnamed_methods(m: &model::Model) -> impl Iterator<Item = model::FnIdx> + '_ {
+    let proto = |h: model::Tok| matches!(m.toks[h as usize], model::TokKind::Proto(_));
+    let fns = move |n: model::NodeId| {
+        m.nodes[n as usize]
+            .pts
+            .to_sorted()
+            .into_iter()
+            .map(|t| m.tok_fn(t))
+            .filter(|&f| f != model::NO_FN && m.method_described.contains_key(&f))
+    };
+    m.fields
+        .iter()
+        .filter(move |(&(h, _), &n)| proto(h) && m.nodes[n as usize].pts.to_sorted().len() > 1)
+        .flat_map(move |(_, &n)| fns(n))
+        .chain(
+            m.field_any
+                .iter()
+                .filter(move |(&h, _)| proto(h))
+                .flat_map(move |(_, &n)| fns(n)),
+        )
+}
+
 fn fn_named(g: &gen::Gen, f: model::FnIdx) -> units::FnContract {
     let fi = &g.m.funcs[f as usize];
     let n = fi.params.len();
     let (name, closed) = fn_contract_name(g, f);
     units::FnContract {
+        method: g.m.published_this.contains_key(&f),
         name,
         closed,
         params: vec![model::MARK_ESCAPE; n],
@@ -1739,6 +1772,7 @@ pub(crate) fn compute_in<'a>(
         // function is no escape only once its contract is known.
         g.closed_params();
         g.published_receivers();
+        g.published_args();
         g.unit_boundary(published);
     }
     let gen_ms = t0.elapsed().as_secs_f64() * 1000.0;
@@ -2082,6 +2116,7 @@ pub(crate) fn compute_in<'a>(
                     // No constructor code: the field initializers store the
                     // class's own keys into the receiver, nothing else.
                     None => Some(units::FnContract {
+                        method: false,
                         name: format!("{name}.constructor"),
                         params: Vec::new(),
                         reach: Vec::new(),
@@ -2488,6 +2523,32 @@ pub(crate) fn compute_in<'a>(
         }
         _ => Vec::new(),
     };
+    // DECISIONS 165: the methods of other units this unit runs: a call bound
+    // their stand-in (a method call or a plain one, however this unit got
+    // the function: a class contract, an import, a value). Published to the
+    // method's unit, which reads a method no unit runs as having no
+    // argument of another unit.
+    let method_runs_out: Vec<String> = match g.view {
+        Some(_) if cfg.unit && !g.m.aborted => {
+            let mut v: Vec<String> = g
+                .stand_in_fc
+                .iter()
+                .filter(|(&t, fc)| fc.method && g.m.called.contains(&g.m.tok_fn(t)))
+                .map(|(_, fc)| fc.name.clone())
+                .chain(
+                    g.m.stub_methods
+                        .iter()
+                        .filter(|f| g.m.called.contains(f))
+                        .map(|&f| g.m.funcs[f as usize].name.clone()),
+                )
+                .chain(unnamed_methods(&g.m).map(|f| g.m.funcs[f as usize].name.clone()))
+                .collect();
+            v.sort();
+            v.dedup();
+            v
+        }
+        _ => Vec::new(),
+    };
     // A contract class a contract result or value names is published
     // whole (methods, statics): its readers call them on what they get.
     for l in layouts_out.iter_mut() {
@@ -2582,6 +2643,7 @@ pub(crate) fn compute_in<'a>(
         own_fns_out,
         fns_read: std::mem::take(&mut g.fns_read),
         this_args_out,
+        method_runs_out,
         layouts_fwd,
         module_digests: Vec::new(),
     };

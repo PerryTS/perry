@@ -90,7 +90,7 @@ impl Model {
         self.marker_members(t)
             .into_iter()
             .map(|m| match self.param_marker.get(&m) {
-                _ if self.beside_values(m) => Some(None),
+                _ if self.beside_values(m) && !self.unrun_param(m) => Some(None),
                 Some(&(f, i))
                     if i != u32::MAX
                         && self.marker_of.get(&(f, i)) == Some(&m)
@@ -163,6 +163,7 @@ impl Model {
         let TokKind::Func(f, _) = self.toks[t as usize] else {
             return;
         };
+        self.called.insert(f);
         if !self.sum.ready {
             // Summaries do not exist yet: bind once they do.
             self.sum

@@ -1103,6 +1103,16 @@ pub struct Model {
     /// DECISIONS 107: a published method's receivers as the units running
     /// it published them (`Gen::published_receivers`).
     pub this_args: FxHashMap<FnIdx, NodeId>,
+    /// DECISIONS 165: the published methods no unit runs
+    /// (`Gen::published_args`): per parameter, its marker stands for no
+    /// value of another unit.
+    pub method_described: FxHashMap<FnIdx, Vec<bool>>,
+    /// DECISIONS 165: the functions a call bound (`bind_args`), in any
+    /// context.
+    pub called: crate::pts::FxHashSet<FnIdx>,
+    /// DECISIONS 165: the stand-in methods of other units' classes with no
+    /// function contract (`Gen::stub_fn`): named as the method.
+    pub stub_methods: crate::pts::FxHashSet<FnIdx>,
     pub closed_pub: crate::pts::FxHashSet<Tok>,
     pub contract_rets: Vec<(FnIdx, NodeId)>,
     /// The calls through a contract function's parameter marker
@@ -1944,14 +1954,39 @@ impl Model {
     /// markers (DECISIONS 75), and what that reaches. The callers' values
     /// are the contract's, beside it in every node it reaches (they arrive
     /// together), so it adds no kinds.
+    /// DECISIONS 165: a method no unit runs (`Gen::published_args`), once
+    /// the solve knows it is a method of a published class
+    /// (`published_this`): its parameter markers stand for no value.
+    pub(crate) fn method_described(&self, f: FnIdx) -> Option<&Vec<bool>> {
+        self.published_this
+            .contains_key(&f)
+            .then(|| self.method_described.get(&f))
+            .flatten()
+    }
+
+    /// DECISIONS 165: a parameter marker of a published method no unit
+    /// runs (`method_described`), not of a closed function: nothing is
+    /// beside it because nothing calls it, so the calls through it are
+    /// still recorded for a unit that will run it (DECISIONS 140): the
+    /// assumption narrows what its sites read, never its contract.
+    pub(crate) fn unrun_param(&self, t: Tok) -> bool {
+        self.param_marker.get(&t).is_some_and(|&(f, i)| {
+            i != u32::MAX && !self.closed_described.contains_key(&f) && self.method_described(f).is_some()
+        })
+    }
+
     pub(crate) fn beside_values(&self, t: Tok) -> bool {
         match self.param_marker.get(&t) {
             // A published method's receiver marker whose receivers the
             // running units published (DECISIONS 107): they are beside it.
             Some(&(f, u32::MAX)) if self.this_args.contains_key(&f) => true,
+            // A closed function's or a published method's described
+            // parameter (decision 13, DECISIONS 165): what the callers
+            // pass is beside it.
             Some(&(f, i)) => self
                 .closed_described
                 .get(&f)
+                .or_else(|| self.method_described(f))
                 .and_then(|d| d.get(i as usize))
                 .is_some_and(|&d| d),
             None => self.beside_markers.contains(&t),
