@@ -216,7 +216,7 @@ fn section(triple: &str, elf: &str, mach: &str, win: &str) -> String {
 /// The hash of key `key`'s atom (the runtime's property-atom hash), the
 /// unknown-receiver probe's operand.
 pub(crate) fn atom_hash(key: &str) -> u64 {
-    fnv1a(key.as_bytes())
+    crate::runtime_abi::property_hash::hash(key.as_bytes())
 }
 
 fn fnv1a(bytes: &[u8]) -> u64 {
@@ -274,7 +274,7 @@ fn atom(
     );
     llmod.add_coalesced_global(&name, format!(
         "@{name} = weak_odr global {ATOM_TY} {{ i64 {}, ptr {image}, i8 {}, [3 x i8] [i8 {}, i8 0, i8 0], i32 {} }}, section \"{sect}\", align 8",
-        fnv1a(key.as_bytes()) as i64,
+        atom_hash(key) as i64,
         crate::runtime_abi::ATOM_KIND_STRING,
         u8::from(colour.is_some()),
         // Object model step 5 (case 2c): a coloured key's (mask bit, slot),
@@ -701,7 +701,7 @@ fn emit_desc(
         let Some(k) = k.name() else {
             continue;
         };
-        let mut at = (fnv1a(k.as_bytes()) as usize) & (cap - 1);
+        let mut at = (atom_hash(k) as usize) & (cap - 1);
         while index[at] != u32::MAX {
             at = (at + 1) & (cap - 1);
         }
@@ -855,7 +855,7 @@ pub(crate) fn emit_module_layouts(
                 create_families::ImageKey::Str(k) => (
                     atom(llmod, strings, &mut atoms, k)
                         .expect("an image key is an atom (`create_families::layout_key`)"),
-                    fnv1a(k.as_bytes()),
+                    atom_hash(k),
                 ),
                 key => symbol_atom(llmod, strings, &mut atoms, module_prefix, key),
             };
@@ -1106,7 +1106,7 @@ pub(crate) fn emit_module_layouts(
             .map(|(k, attrs)| {
                 let name = atom(llmod, strings, &mut atoms, k)
                     .expect("a namespace layout key is an atom (`namespace_layout`)");
-                (name, fnv1a(k.as_bytes()), *attrs)
+                (name, atom_hash(k), *attrs)
             })
             .collect();
         // 10.4.6: `@@toStringTag` is an own non-writable, non-enumerable,
@@ -1250,9 +1250,9 @@ fn emit_descriptor(
         let mut index = vec![u32::MAX; cap];
         for (pos, k) in keys.iter().enumerate() {
             let hash = if pos == 0 {
-                first_hash.unwrap_or_else(|| fnv1a(k.as_bytes()))
+                first_hash.unwrap_or_else(|| atom_hash(k))
             } else {
-                fnv1a(k.as_bytes())
+                atom_hash(k)
             };
             let mut at = (hash as usize) & (cap - 1);
             while index[at] != u32::MAX {

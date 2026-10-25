@@ -493,3 +493,121 @@ fn array_intrinsic_length_precedes_named_bag_and_prototypes() {
         );
     });
 }
+
+#[test]
+fn indexed_named_computed_and_inherited_reads_observe_updates() {
+    on_a_fresh_thread(|| unsafe {
+        let _no_move = crate::gc::GcSuppressScope::new();
+        let _ = realm();
+        let names = [
+            "alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta", "iota", "kappa",
+            "lambda", "mu",
+        ];
+        let obj = crate::object::js_object_alloc_plain(16) as usize;
+        for (i, key) in names.iter().enumerate() {
+            set(obj, key, i as f64 + 1.0);
+        }
+        let record = record_of(test_dir(), (*(obj as *const ObjectHeader)).parent_class_id);
+        assert_eq!(
+            (*record).object_kind(),
+            super::super::ShapeObjectKind::Ordinary
+        );
+        assert!((*record).logical_key_count > SCAN_KEYS);
+        let word = probe_word(record);
+        assert_ne!(word & !PROBE_FLAGS, 0, "the fixture must use a key index");
+        let boxed = POINTER_TAG | obj as u64;
+        for (i, key) in names.iter().enumerate() {
+            let bits = atom(key);
+            let hash = crate::string::property_atom_hash((bits & POINTER_MASK) as *const _);
+            let expected = (i as f64 + 1.0).to_bits();
+            assert_eq!(probe(obj, key), expected, "named indexed read of {key}");
+            assert_eq!(
+                perry_probe_get_keyed(test_dir(), boxed, bits).to_bits(),
+                expected,
+                "computed indexed read of {key}"
+            );
+            let memo = site_memo::ReadSiteMemo::EMPTY;
+            assert_eq!(
+                site_memo::perry_probe_get_memo(
+                    test_dir(),
+                    obj.wrapping_sub(perry_abi::RECEIVER_HANDLE_FLOOR) as i64,
+                    bits,
+                    &memo
+                )
+                .to_bits(),
+                expected,
+                "lazy-hash indexed read of {key}"
+            );
+            assert_eq!(
+                perry_probe_set(test_dir(), boxed, bits, hash, i as f64 + 101.0),
+                1,
+                "indexed store of {key} must hit"
+            );
+            assert_eq!(probe(obj, key), (i as f64 + 101.0).to_bits());
+        }
+        // Becoming a prototype changes the receiver's store contract: its
+        // writes use the ordinary funnel that marks prototype changes.
+        // Test the leaf store above while the receiver is still ordinary.
+        let child = crate::object::js_object_create(f64::from_bits(boxed)).to_bits() & POINTER_MASK;
+        for (i, key) in names.iter().enumerate() {
+            assert_eq!(probe(child as usize, key), (i as f64 + 101.0).to_bits());
+            set(obj, key, i as f64 + 201.0);
+            assert_eq!(probe(child as usize, key), (i as f64 + 201.0).to_bits());
+        }
+        assert_eq!(probe(obj, "not_present"), TAG_UNDEFINED);
+        assert_eq!(probe(child as usize, "not_present"), TAG_UNDEFINED);
+    });
+}
+
+#[test]
+fn indexed_accessor_lookup_preserves_the_holder_pair() {
+    unsafe extern "C" fn getter(_: f64) -> f64 {
+        73.0
+    }
+    on_a_fresh_thread(|| unsafe {
+        let _no_move = crate::gc::GcSuppressScope::new();
+        let _ = realm();
+        let obj = crate::object::js_object_alloc_plain(16) as usize;
+        for (i, key) in [
+            "alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta", "iota", "kappa",
+            "lambda", "mu",
+        ]
+        .iter()
+        .enumerate()
+        {
+            set(obj, key, i as f64);
+        }
+        crate::object::descriptor_state::set_builtin_accessor_pair_bytes(
+            obj,
+            b"epsilon",
+            crate::object::accessor_pair::Accessor {
+                raw_get: getter as *const () as usize,
+                ..Default::default()
+            },
+            crate::object::PropertyAttrs::new(true, true, true),
+        );
+        let record = record_of(test_dir(), (*(obj as *const ObjectHeader)).parent_class_id);
+        assert!((*record).logical_key_count > SCAN_KEYS);
+        let word = probe_word(record);
+        assert_ne!(
+            word & !PROBE_FLAGS,
+            0,
+            "the accessor fixture must use a key index"
+        );
+        let key = (atom("epsilon") & POINTER_MASK) as *const crate::StringHeader;
+        assert_eq!(
+            probe(obj, "epsilon"),
+            TAG_HOLE,
+            "the data probe must decline an accessor"
+        );
+        let own = probe_accessor(obj as *const ObjectHeader, key).expect("indexed own accessor");
+        assert_eq!(own.raw_get, getter as *const () as usize);
+        let child = crate::object::js_object_create(f64::from_bits(POINTER_TAG | obj as u64))
+            .to_bits()
+            & POINTER_MASK;
+        let inherited =
+            probe_accessor(child as *const ObjectHeader, key).expect("indexed inherited accessor");
+        assert_eq!(inherited.raw_get, getter as *const () as usize);
+        assert_eq!(probe(obj, "alpha"), 0.0f64.to_bits());
+    });
+}

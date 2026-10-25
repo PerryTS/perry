@@ -7,6 +7,7 @@
 //! with the struct it indexes. No dependencies.
 
 pub mod accessor_guards;
+pub mod property_hash;
 
 /// `object::shapes::SHAPE_ID_BASE`: the first ShapeId.
 pub const SHAPE_ID_BASE: u32 = 0x8000_0000;

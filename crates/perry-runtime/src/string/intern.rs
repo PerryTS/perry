@@ -433,12 +433,7 @@ pub(crate) fn intern_dispatch_bytes(
     let hash = if static_dispatch_id != 0 {
         precomputed_hash
     } else {
-        let mut hash = 0xcbf2_9ce4_8422_2325u64;
-        for &byte in input {
-            hash ^= byte as u64;
-            hash = hash.wrapping_mul(0x0100_0000_01b3);
-        }
-        hash
+        crate::codegen_abi::property_hash::hash(input)
     };
     intern_prehashed_bytes(bytes, byte_len, hash, is_wtf8)
 }
@@ -513,11 +508,11 @@ unsafe fn intern_content_equals(
         == std::slice::from_raw_parts(data_b, byte_len as usize)
 }
 
-/// Compute FNV-1a hash incrementally over concatenated content a||b
+/// Compute the canonical property hash over concatenated content a||b
 /// without allocating the result. Caller guarantees both pointers are
 /// valid when their respective lengths are >0.
 #[inline(always)]
-pub(crate) unsafe fn fnv1a_concat(
+pub(crate) unsafe fn property_hash_concat(
     a: *const StringHeader,
     a_len: u32,
     b: *const StringHeader,
@@ -538,7 +533,7 @@ pub(crate) unsafe fn fnv1a_concat(
             h = h.wrapping_mul(0x100000001b3);
         }
     }
-    h
+    crate::codegen_abi::property_hash::finish(h)
 }
 
 /// Check if concat(a, b) matches the content of an existing interned string.

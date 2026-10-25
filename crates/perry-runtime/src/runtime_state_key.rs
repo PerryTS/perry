@@ -13,16 +13,9 @@ pub(crate) struct NamedStateKey {
     pub(crate) memo: Option<fn() -> *mut crate::object::layout_probe::site_memo::ReadSiteMemo>,
 }
 
-/// `object::key_bytes_hash` (FNV-1a) as a `const fn`, for a fixed key.
+/// The canonical property hash as a const fn, for a fixed key.
 pub(crate) const fn const_key_hash(bytes: &[u8]) -> u64 {
-    let mut h: u64 = 0xcbf29ce484222325;
-    let mut i = 0;
-    while i < bytes.len() {
-        h ^= bytes[i] as u64;
-        h = h.wrapping_mul(0x100000001b3);
-        i += 1;
-    }
-    h
+    crate::codegen_abi::property_hash::hash(bytes)
 }
 
 #[macro_export]

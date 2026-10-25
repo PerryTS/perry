@@ -1,0 +1,1 @@
+- Finalize canonical property hashes once for runtime and compiled images, reducing shape-index collisions without repeating hash folding at every lookup.
