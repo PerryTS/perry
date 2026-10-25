@@ -123,29 +123,57 @@ fn brand_style_nominal_and_all_share_their_emitted_closures() {
 
 #[test]
 fn every_creation_feeds_the_canonical_bodys_captured_shape() {
-    let module = inlined(
-        r#"
+    let source = r#"
         class A { layer = "first"; deps = []; }
         class B { deps = []; layer = "second"; }
-        function factory(input: any) { return () => input.layer; }
-        function indirect(input: any) { return factory(input); }
-        const first = factory(new A());
-        const second = indirect(new B());
-        console.log(first(), second());
-    "#,
-    );
-    let bodies = perry_hir::emitted_closures(&module);
-    assert_eq!(bodies.len(), 1);
-    let perry_hir::Expr::Closure { captures, .. } = bodies[0].1 else {
-        unreachable!()
+        function first() { const input = new A(); return () => input.layer; }
+        function second() { const input = new B(); return () => input.layer; }
+        console.log(first()(), second()());
+    "#;
+    let ast = perry_parser::parse_typescript(source, "captures.ts").unwrap();
+    let mut module = perry_hir::lower_module(&ast, "captures", "captures.ts").unwrap();
+    // Model the post-inlining representation explicitly: these two creation
+    // copies have different outer bindings, and share one emitted body.
+    let a = module
+        .functions
+        .iter()
+        .position(|f| f.name == "first")
+        .unwrap();
+    let b = module
+        .functions
+        .iter()
+        .position(|f| f.name == "second")
+        .unwrap();
+    let perry_hir::Stmt::Return(Some(perry_hir::Expr::Closure {
+        func_id, captures, ..
+    })) = module.functions[a].body.last().unwrap()
+    else {
+        panic!("first creation missing")
     };
-    assert_eq!(captures.len(), 1);
-    let facts = crate::compute_units(&[("copies.ts".into(), &module)], &Default::default());
-    let bindings = facts.bindings_for("copies.ts").unwrap();
+    let (canonical, input_a) = (*func_id, captures[0]);
+    let perry_hir::Stmt::Return(Some(perry_hir::Expr::Closure {
+        func_id, captures, ..
+    })) = module.functions[b].body.last_mut().unwrap()
+    else {
+        panic!("second creation missing")
+    };
+    let input_b = captures[0];
+    assert_ne!(input_a, input_b, "different captured bindings must be live");
+    *func_id = canonical;
+    assert_eq!(perry_hir::emitted_closures(&module).len(), 1);
+    let mut copies = 0;
+    perry_hir::tdz_check::for_each_module_expr(&module, &mut |e| {
+        if matches!(e, perry_hir::Expr::Closure { func_id, .. } if *func_id == canonical) {
+            copies += 1;
+        }
+    });
+    assert_eq!(copies, 2);
+    let facts = crate::compute_units(&[("captures.ts".into(), &module)], &Default::default());
+    let bindings = facts.bindings_for("captures.ts").unwrap();
     let captured = &bindings
         .locals
         .iter()
-        .find(|(id, _)| *id == captures[0])
+        .find(|(id, _)| *id == input_a)
         .unwrap()
         .1;
     let mut expected: Vec<_> = module
