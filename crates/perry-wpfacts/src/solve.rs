@@ -55,6 +55,10 @@ impl Model {
         let node = &mut self.nodes[n as usize];
         let mut changed = false;
         let mut top_new = false;
+        // A family token entering a node of no run of its home: the family
+        // left its frame (DECISIONS 44 (b)).
+        let mut left: Vec<Tok> = Vec::new();
+        let frame = if node.obs || node.sink { u32::MAX } else { node.frame };
         for &t in toks {
             let t = match own {
                 Some(r)
@@ -75,6 +79,11 @@ impl Model {
                 changed = true;
                 self.pts_entries += 1;
                 top_new |= t == TOP;
+                if let Some(&(b, h)) = self.fam.get(t as usize) {
+                    if h != 0 && h != frame && frame != u32::MAX && !marker_top_bit(&self.fam_out, b) {
+                        left.push(b);
+                    }
+                }
             }
         }
         // Beside ⊤ it is that ⊤: every rule does to ⊤ at least what it does
@@ -89,6 +98,11 @@ impl Model {
                         node.delta.push_to(t, &targets);
                         changed = true;
                         self.pts_entries += 1;
+                        if let Some(&(b, h)) = self.fam.get(t as usize) {
+                            if h != 0 && h != frame && frame != u32::MAX && !marker_top_bit(&self.fam_out, b) {
+                                left.push(b);
+                            }
+                        }
                     }
                 }
             }
@@ -117,6 +131,9 @@ impl Model {
         if changed && !node.in_wl {
             node.in_wl = true;
             self.wl.push_back(n);
+        }
+        for b in left {
+            self.leave_frame(b);
         }
     }
 
@@ -263,6 +280,8 @@ impl Model {
                 c,
                 Cons::ThisTo { .. }
                     | Cons::CallArgs { .. }
+                    | Cons::RetInto { .. }
+                    | Cons::ArgInto { .. }
                     | Cons::ThisInst { .. }
                     | Cons::BuiltinCallee
                     | Cons::HolderStep { .. }
@@ -422,6 +441,7 @@ impl Model {
         }
         let n = self.node_named("field", || format!("field({t},{a})"));
         self.nodes[n as usize].obs = self.obs_toks.contains(&t);
+        self.nodes[n as usize].frame = self.fam_home(t);
         self.fields.insert((t, a), n);
         self.field_keys.entry(t).or_default().push(a);
         self.rel(|| format!("fieldnode {n} {t} {a}"));
@@ -501,6 +521,7 @@ impl Model {
         }
         let n = self.node_named("fieldany", || format!("fieldany({t})"));
         self.nodes[n as usize].obs = self.obs_toks.contains(&t);
+        self.nodes[n as usize].frame = self.fam_home(t);
         self.field_any.insert(t, n);
         self.rel(|| format!("fieldany {n} {t}"));
         let all = self.all_fields(t);
@@ -515,6 +536,7 @@ impl Model {
         }
         let n = self.node_named("allfields", || format!("allfields({t})"));
         self.nodes[n as usize].obs = self.obs_toks.contains(&t);
+        self.nodes[n as usize].frame = self.fam_home(t);
         self.all_fields.insert(t, n);
         self.rel(|| format!("allfields {n} {t}"));
         n
@@ -1137,6 +1159,8 @@ impl Model {
                     self.call_args(call, t);
                 }
             }
+            Cons::RetInto { call, run } => self.ret_into(call, run, toks, prim),
+            Cons::ArgInto { call, run, i } => self.arg_into(call, run, i, toks),
             Cons::Spread { into, site } => {
                 for &s in toks {
                     self.cons(into, Cons::SpreadFrom { src: s, site });
@@ -1509,7 +1533,14 @@ impl Model {
         }
         let _ = reason;
         let ret = self.node_named("implicit-ret", || format!("implicit-ret({t})"));
+        // Protocol results go back to the runtime only (touched below).
+        self.nodes[ret as usize].sink = true;
         let arg = self.node_l("implicit-arg");
+        // The protocol calls on a marker family's token are of its run
+        // (`call_run`): what they find on it is the family's.
+        let home = self.fam_home(t);
+        self.nodes[ret as usize].frame = home;
+        self.nodes[arg as usize].frame = home;
         self.add_prim(arg, prim::ALL);
         // Protocol arguments are primitives (hints, keys). The one protocol
         // that hands user code runtime functions, `then(resolve, reject)`,
@@ -1617,6 +1648,8 @@ impl Model {
             Cons::IdxKey { obj, dst } => format!("idxkey {n} {obj} {dst}"),
             Cons::ThisTo { origin } => format!("thisto {n} {origin}"),
             Cons::CallArgs { call } => format!("callargs {n} {call}"),
+            Cons::RetInto { call, run } => format!("retinto {n} {call} {run}"),
+            Cons::ArgInto { call, run, i } => format!("arginto {n} {call} {run} {i}"),
             Cons::Spread { into, site } => format!("spread {n} {into} {site}"),
             Cons::SpreadFrom { src, site } => format!("spreadfrom {n} {src} {site}"),
             Cons::ThisInst { call, ft } => format!("thisinst {n} {call} {ft}"),

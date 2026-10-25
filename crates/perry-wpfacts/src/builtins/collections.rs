@@ -113,6 +113,7 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
 
 fn cb_call(m: &mut Model, by: CallId, cb: NodeId, this: ThisArg, args: Vec<NodeId>) -> NodeId {
     let ret = m.node_l("cb-ret");
+    m.nodes[ret as usize].frame = m.call_run(by);
     let call2 = m.calls.len() as CallId;
     m.solver_call(
         by,
@@ -134,10 +135,12 @@ fn cb_call(m: &mut Model, by: CallId, cb: NodeId, this: ThisArg, args: Vec<NodeI
 pub(super) fn iterate(m: &mut Model, call: CallId, v: NodeId) -> NodeId {
     let site = m.calls[call as usize].site;
     let out = m.node_l("b-iterated");
+    m.nodes[out as usize].frame = m.call_run(call);
     let ik = m.iter_key();
     m.cons(v, Cons::Load { key: ik, dst: out });
     let sub = |m: &mut Model, this: NodeId, key: Key| -> NodeId {
         let ret = m.node_l("b-iter-ret");
+        m.nodes[ret as usize].frame = m.call_run(call);
         let c2 = m.solver_call(
             call,
             CallSite {

@@ -702,6 +702,7 @@ impl Model {
             Some(&r) => r,
             None => {
                 let r = self.node_l("callee-relay");
+                self.nodes[r as usize].frame = self.call_run(call);
                 self.relays.insert(call, r);
                 self.cons(r, Cons::CallArgs { call });
                 r
