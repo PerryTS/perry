@@ -63,8 +63,12 @@ impl Model {
         };
         for &t in toks {
             // A marker that reads as ⊤ (DECISIONS 42) is decided after the
-            // other tokens, once it is known whether ⊤ arrived with them.
-            if marker_top_bit(&self.marker_top, t) {
+            // other tokens, once it is known whether ⊤ arrived with them. So
+            // is an escaped value (`Model::top_beside`): unknown code holds
+            // it, so beside ⊤ it is that ⊤.
+            let escaped_value = marker_top_bit(&self.esc_bits, t)
+                && !(self.param_marker.contains_key(&t) || marker_top_bit(&self.arg_bits, t));
+            if marker_top_bit(&self.marker_top, t) || escaped_value {
                 later.push(t);
                 continue;
             }

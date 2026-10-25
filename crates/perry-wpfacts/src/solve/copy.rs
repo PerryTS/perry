@@ -125,10 +125,10 @@ impl Model {
         {
             return false;
         }
-        if !self.marker_top.is_empty()
+        if (!self.marker_top.is_empty() || !self.escaped.is_empty())
             && Tokens::Delivery(delta, dst)
                 .iter()
-                .any(|&t| self.marker_is_top(t))
+                .any(|&t| self.marker_is_top(t) || self.top_beside(t))
         {
             return false;
         }
