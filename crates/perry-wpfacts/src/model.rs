@@ -331,6 +331,95 @@ impl Hard {
     }
 }
 
+/// What a builtin protocol touch reads on the touched value: the keys it
+/// looks up (getters included) and calls with the value as `this`, and the
+/// values it reads. The site that issues the touch knows its protocol (the
+/// operator, the syntax or the runtime helper); ECMA-262 fixes each key set.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Protocol {
+    /// ToPrimitive (ECMA-262 7.1.1), and through it ToString, ToNumber,
+    /// ToNumeric and ToPropertyKey: `@@toPrimitive`, else
+    /// OrdinaryToPrimitive's `valueOf` and `toString`. What they return is a
+    /// primitive or is discarded: nothing runs on it.
+    ToPrimitive,
+    /// GetIterator (7.4.3): `@@iterator`; it returns an iterator.
+    Iterate,
+    /// IteratorNext / IteratorClose: `next`, `return`, `throw`; they return
+    /// iterator results.
+    IterNext,
+    /// IteratorComplete / IteratorValue: reads `done` and `value`, calls
+    /// nothing.
+    IterResult,
+    /// SerializeJSONProperty (25.5.2.2): `toJSON`; what it returns and every
+    /// value read off the object are serialized in turn.
+    Json,
+    /// InstanceofOperator (13.10.2): `@@hasInstance`. OrdinaryHasInstance
+    /// reads `prototype`, which no program can make an accessor of a
+    /// function (it is non-configurable).
+    HasInstance,
+    /// [[OwnPropertyKeys]] and for-in enumeration: no lookup on an ordinary
+    /// object (a Proxy is ⊤).
+    OwnKeys,
+    /// A runtime helper that reflects over the value or mixes protocols:
+    /// any key, and a function may be called back with anything.
+    Any,
+}
+
+impl Protocol {
+    /// The keys looked up and called; `None`: any key.
+    pub fn keys(self) -> Option<&'static [&'static str]> {
+        Some(match self {
+            Protocol::ToPrimitive => &[WK_TO_PRIMITIVE, "valueOf", "toString"],
+            Protocol::Iterate => &[crate::builtins::WK_ITERATOR],
+            Protocol::IterNext => &["next", "return", "throw"],
+            Protocol::Json => &["toJSON"],
+            Protocol::HasInstance => &[WK_HAS_INSTANCE],
+            Protocol::IterResult | Protocol::OwnKeys => &[],
+            Protocol::Any => return None,
+        })
+    }
+
+    /// The keys whose values are read (and touched again for JSON).
+    pub fn reads(self) -> &'static [&'static str] {
+        match self {
+            Protocol::IterResult => &["done", "value"],
+            _ => &[],
+        }
+    }
+
+    /// The protocol run on what the called methods return.
+    pub fn of_result(self) -> Option<Protocol> {
+        match self {
+            Protocol::Iterate => Some(Protocol::IterNext),
+            Protocol::IterNext => Some(Protocol::IterResult),
+            Protocol::Json => Some(Protocol::Json),
+            Protocol::Any => Some(Protocol::Any),
+            Protocol::ToPrimitive
+            | Protocol::IterResult
+            | Protocol::HasInstance
+            | Protocol::OwnKeys => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Protocol::ToPrimitive => "toprimitive",
+            Protocol::Iterate => "iterate",
+            Protocol::IterNext => "iternext",
+            Protocol::IterResult => "iterresult",
+            Protocol::Json => "json",
+            Protocol::HasInstance => "hasinstance",
+            Protocol::OwnKeys => "ownkeys",
+            Protocol::Any => "any",
+        }
+    }
+}
+
+/// `Symbol.toPrimitive` / `Symbol.hasInstance` as HIR folds them
+/// (`Gen::read_key`).
+pub const WK_TO_PRIMITIVE: &str = "@@__perry_wk_toPrimitive";
+pub const WK_HAS_INSTANCE: &str = "@@__perry_wk_hasInstance";
+
 /// Complex constraints, attached to the node whose new tokens trigger them.
 #[derive(Clone, Copy, Debug)]
 pub enum Cons {
@@ -401,8 +490,8 @@ pub enum Cons {
     DefineAccessor { key: Atom, reason: u32 },
     /// Every token gains keys after birth (computed store …).
     AddsKeys,
-    /// Builtin protocol touch: ToPrimitive / iterator / toJSON / then …
-    Implicit { reason: u32 },
+    /// Builtin protocol touch: what `proto` reads on every token.
+    Implicit { reason: u32, proto: Protocol },
     /// The node holds `Object.create` prototype arguments (E10).
     CreateProto { reason: u32 },
     /// The node is `ProtoNode(t)`: dst ⊇ the values of `key` on each
@@ -706,7 +795,7 @@ pub struct Model {
     // dedup of bindings / chain walks
     pub bind_done: crate::pts::FxHashSet<(CallId, Tok, Tok)>,
     pub chain_done: crate::pts::FxHashSet<(NodeId, Tok, Key, ChainAct)>,
-    pub implicit_done: crate::pts::FxHashSet<Tok>,
+    pub implicit_done: crate::pts::FxHashSet<(Tok, Protocol)>,
     pub construct_done: crate::pts::FxHashSet<(CallId, Tok)>,
     pub idx_done: crate::pts::FxHashSet<(NodeId, Tok, NodeId, u8)>,
     pub callthis_done: crate::pts::FxHashSet<(NodeId, CallId, Tok)>,

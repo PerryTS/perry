@@ -939,7 +939,13 @@ impl<'a> Gen<'a> {
                 continue;
             }
             if u & MARK_TOUCH != 0 {
-                self.m.cons(p, Cons::Implicit { reason: r });
+                self.m.cons(
+                    p,
+                    Cons::Implicit {
+                        reason: r,
+                        proto: Protocol::Any,
+                    },
+                );
             }
             // What the argument reaches, used apart from the argument
             // (DECISIONS 45). An escape is transitive (`escape` sinks every
@@ -980,7 +986,13 @@ impl<'a> Gen<'a> {
                                     dst: q,
                                 },
                             );
-                            self.m.cons(q, Cons::Implicit { reason: r });
+                            self.m.cons(
+                                q,
+                                Cons::Implicit {
+                                    reason: r,
+                                    proto: Protocol::Any,
+                                },
+                            );
                             self.reach_touch = Some(q);
                             q
                         }
@@ -1663,6 +1675,21 @@ impl<'a> Gen<'a> {
         }
     }
 
+    /// The keys a class method is found under. HIR names a well-known-symbol
+    /// method `@@<name>` (`[Symbol.iterator]()` is `@@iterator`); a read
+    /// names the symbol `@@__perry_wk_<name>` (`Gen::read_key`). Both: the
+    /// runtime binds the method to the symbol, and the string key stays
+    /// what HIR registered.
+    fn method_keys(&mut self, name: &str) -> Vec<Atom> {
+        let mut v = vec![self.m.atom(name)];
+        if let Some(wk) = name.strip_prefix("@@") {
+            if !name.starts_with(crate::builtins::WK_PREFIX) {
+                v.push(self.m.atom(&format!("{}{wk}", crate::builtins::WK_PREFIX)));
+            }
+        }
+        v
+    }
+
     pub(crate) fn register_fn(
         &mut self,
         mi: u32,
@@ -1832,19 +1859,21 @@ impl<'a> Gen<'a> {
         }
         for meth in &c.methods {
             let f = self.register_fn(mi, meth.id, &meth.name, &meth.params, false, false);
-            let a = self.m.atom(&meth.name);
-            let n = self.m.field(proto, a);
             let t = self.m.funcs[f as usize].token;
-            self.m.add_tok(n, t);
+            for a in self.method_keys(&meth.name) {
+                let n = self.m.field(proto, a);
+                self.m.add_tok(n, t);
+            }
             let this = self.m.funcs[f as usize].this;
             self.m.this_class.insert(this, tm);
         }
         for meth in &c.static_methods {
             let f = self.register_fn(mi, meth.id, &meth.name, &meth.params, false, false);
-            let a = self.m.atom(&meth.name);
-            let n = self.m.field(cobj, a);
             let t = self.m.funcs[f as usize].token;
-            self.m.add_tok(n, t);
+            for a in self.method_keys(&meth.name) {
+                let n = self.m.field(cobj, a);
+                self.m.add_tok(n, t);
+            }
         }
         for (name, g) in &c.getters {
             let f = self.register_fn(mi, g.id, &g.name, &g.params, false, false);

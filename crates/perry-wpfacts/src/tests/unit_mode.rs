@@ -3368,3 +3368,26 @@ fn a_store_into_the_units_own_literal_publishes_nothing() {
     assert!(proven(&pf, "w"), "{}", pf.dump_text());
     assert!(tmpl(&pf, "Inner").escape.is_none(), "{}", pf.dump_text());
 }
+
+#[test]
+fn another_units_json_of_a_parameter_runs_to_json_and_ends() {
+    // `ser` serializes its parameter: on the marker, the JSON protocol's
+    // reads are what the marker reaches (one touch of the reach, not one
+    // marker per level), and `w.toJSON`, two fields down, runs.
+    let b = "export function ser(p: any) { return JSON.stringify(p); }";
+    let m = "import { ser } from './b'; function main() { const w = { n: 1, toJSON() { this.n = 'x'; return 0; } }; const o = { a: { b: w } }; console.log(ser(o), w.n); } main(); main();";
+    let pf = units_with(
+        &[("b", b), ("m", m)],
+        &FactsConfig {
+            max_work: Some(2_000_000),
+            ..FactsConfig::default()
+        },
+    );
+    assert!(!pf.stats.aborted, "{}", pf.dump_text());
+    let w = pf
+        .templates
+        .iter()
+        .find(|t| t.birth_keys == ["n", "toJSON"])
+        .expect("w literal");
+    assert!(!field(w, "n").readonly, "{}", pf.dump_text());
+}

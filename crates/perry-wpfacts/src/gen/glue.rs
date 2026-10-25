@@ -76,7 +76,13 @@ impl<'a> Gen<'a> {
         let r = self
             .m
             .reason("getOwnPropertyDescriptor (accessors handed out)");
-        self.m.cons(o, Cons::Implicit { reason: r });
+        self.m.cons(
+            o,
+            Cons::Implicit {
+                reason: r,
+                proto: Protocol::Any,
+            },
+        );
         let vals = self.load(o, Key::Any);
         let (t, n) = self.bobj(mi, "descriptor");
         let fa = self.m.field_any(t);

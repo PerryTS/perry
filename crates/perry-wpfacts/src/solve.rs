@@ -476,8 +476,7 @@ impl Model {
             TokKind::Top | TokKind::Builtin(_) | TokKind::BuiltinFn | TokKind::NativeProto(_) => {
                 true
             }
-            TokKind::Obj(tm, _) => matches!(self.tmpls[*tm as usize].kind,
-                TmplKind::BObj { .. }),
+            TokKind::Obj(tm, _) => matches!(self.tmpls[*tm as usize].kind, TmplKind::BObj { .. }),
             _ => false,
         };
         let fa_d = self.field_any(d);
@@ -653,8 +652,9 @@ impl Model {
                         | TokKind::Builtin(_)
                         | TokKind::BuiltinFn
                         | TokKind::NativeProto(_) => true,
-                        TokKind::Obj(tm, _) => matches!(self.tmpls[*tm as usize].kind,
-                            TmplKind::BObj { .. }),
+                        TokKind::Obj(tm, _) => {
+                            matches!(self.tmpls[*tm as usize].kind, TmplKind::BObj { .. })
+                        }
                         _ => false,
                     };
                     if opaque {
@@ -801,13 +801,19 @@ impl Model {
                     }
                 }
             }
-            Cons::Implicit { reason } => {
+            Cons::Implicit { reason, proto } => {
                 for &t in toks {
                     match self.toks[t as usize] {
-                        // A function handed to the runtime: it may be
-                        // called back with anything.
-                        TokKind::Func(_, _) | TokKind::Bound(_) => self.escape(t, reason),
-                        _ => self.implicit(t, reason),
+                        // A function handed to a reflecting runtime helper:
+                        // it may be called back with anything.
+                        TokKind::Func(_, _) | TokKind::Bound(_) if proto == Protocol::Any => {
+                            self.escape(t, reason)
+                        }
+                        // `instanceof` a bound function runs its target's.
+                        TokKind::Bound(_) if proto == Protocol::HasInstance => {
+                            self.escape(t, reason)
+                        }
+                        _ => self.implicit(t, reason, proto),
                     }
                 }
             }
@@ -1419,7 +1425,13 @@ impl Model {
         }
         if self.is_array_length(t, key) {
             let r = self.reason("ToNumber of an array length store");
-            self.cons(src, Cons::Implicit { reason: r });
+            self.cons(
+                src,
+                Cons::Implicit {
+                    reason: r,
+                    proto: Protocol::ToPrimitive,
+                },
+            );
             return;
         }
         match key {
@@ -1588,27 +1600,76 @@ impl Model {
     /// Builtin protocol touch on `t` (ToPrimitive, iteration, toJSON, then,
     /// inspect …): every function reachable as a property of `t` or its
     /// chain runs with `this` = `t` and unknown primitive arguments.
-    pub fn implicit(&mut self, t: Tok, reason: u32) {
+    pub fn implicit(&mut self, t: Tok, reason: u32, proto: Protocol) {
+        // The touch looks up and calls the protocol's keys and reads its
+        // values, nothing else.
+        let keys: Option<Vec<Atom>> = proto
+            .keys()
+            .map(|ks| ks.iter().map(|k| self.atom(k)).collect());
+        let mut reads: Vec<Key> = proto
+            .reads()
+            .iter()
+            .map(|k| Key::Named(self.atom(k)))
+            .collect();
+        if proto == Protocol::Json {
+            reads.push(Key::Any);
+        }
+        let calls = keys.as_ref().is_none_or(|k| !k.is_empty());
+        if !calls && reads.is_empty() {
+            return;
+        }
         self.mark_use(t, crate::model::MARK_TOUCH);
         // A marker: the protocol runs on the values beside it; on the
-        // marker it calls what the marker reaches, an escape of that
-        // (`method_on`, DECISIONS 111).
+        // marker it calls what the marker reaches under the protocol's
+        // keys, an escape of that (`method_on`, DECISIONS 111). It has no
+        // accessors, so its reads run nothing; what JSON serializes in turn
+        // is what it reaches, touched (DECISIONS 45).
         if self.is_marker(t) {
-            let r = self.reach_of(t);
-            self.mark_use(r, crate::model::MARK_ESCAPE);
+            match &keys {
+                None => {
+                    let r = self.reach_of(t);
+                    self.mark_use(r, crate::model::MARK_ESCAPE);
+                }
+                Some(ks) => {
+                    for &a in ks {
+                        let m = self.marker_load(t, Some(a));
+                        self.mark_use(m, crate::model::MARK_ESCAPE);
+                    }
+                }
+            }
+            if proto == Protocol::Json {
+                let r = self.reach_of(t);
+                self.mark_use(r, crate::model::MARK_TOUCH);
+            }
             return;
         }
-        if t == TOP || !self.implicit_done.insert(t) {
+        if t == TOP || !self.implicit_done.insert((t, proto)) {
             return;
         }
-        let _ = reason;
+        // The protocol calls on a marker family's token are of its run
+        // (`call_run`): what they find on it is the family's.
+        let home = self.fam_home(t);
+        // The values the protocol reads (getters run in the load) and, for
+        // JSON, serializes in turn.
+        for key in reads {
+            let recv = self.node_l("implicit-recv");
+            let dst = self.node_l("implicit-read");
+            self.nodes[recv as usize].frame = home;
+            self.nodes[dst as usize].frame = home;
+            self.nodes[dst as usize].sink = true;
+            self.cons(recv, Cons::Load { key, dst });
+            if proto == Protocol::Json {
+                self.cons(dst, Cons::Implicit { reason, proto });
+            }
+            self.add_tok(recv, t);
+        }
+        if !calls {
+            return;
+        }
         let ret = self.node_named("implicit-ret", || format!("implicit-ret({t})"));
         // Protocol results go back to the runtime only (touched below).
         self.nodes[ret as usize].sink = true;
         let arg = self.node_l("implicit-arg");
-        // The protocol calls on a marker family's token are of its run
-        // (`call_run`): what they find on it is the family's.
-        let home = self.fam_home(t);
         self.nodes[ret as usize].frame = home;
         self.nodes[arg as usize].frame = home;
         self.add_prim(arg, prim::ALL);
@@ -1626,10 +1687,26 @@ impl Model {
         });
         self.protocol_calls.insert(call);
         self.rel(|| format!("implicitcall {call} {t} {ret} {arg}"));
-        self.method_on(t, Key::Any, call);
-        // Results of protocol methods flow back to the runtime (iterator
-        // results, ToPrimitive values, then-ables): treat as touched too.
-        self.cons(ret, Cons::Implicit { reason });
+        match keys {
+            None => self.method_on(t, Key::Any, call),
+            Some(ks) => {
+                for a in ks {
+                    self.method_on(t, Key::Named(a), call);
+                }
+            }
+        }
+        // Results of protocol methods flow back to the runtime: what the
+        // protocol runs on them (an iterator's `next`, a result's `value`,
+        // what `toJSON` returns) is a touch of its own.
+        if let Some(next) = proto.of_result() {
+            self.cons(
+                ret,
+                Cons::Implicit {
+                    reason,
+                    proto: next,
+                },
+            );
+        }
     }
 
     pub fn cons_line(&self, n: NodeId, c: &Cons) -> String {
@@ -1670,7 +1747,9 @@ impl Model {
                     self.key_name(Key::Named(*key))
                 )
             }
-            Cons::Implicit { reason } => format!("implicit {n} {reason}"),
+            Cons::Implicit { reason, proto } => {
+                format!("implicit {n} {reason} {}", proto.name())
+            }
             Cons::CreateProto { reason } => format!("createproto {n} {reason}"),
             Cons::ChainUnion { key, dst } => {
                 format!("chainunion {n} {} {dst}", self.key_name(*key))

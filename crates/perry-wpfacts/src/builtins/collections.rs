@@ -388,7 +388,13 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
             if let Some(&cb) = c.args.first() {
                 let r = cb_call(m, call, cb, ThisArg::Undef, vec![elems, elems]);
                 let why = m.reason("sort comparator result");
-                m.cons(r, Cons::Implicit { reason: why });
+                m.cons(
+                    r,
+                    Cons::Implicit {
+                        reason: why,
+                        proto: Protocol::ToPrimitive,
+                    },
+                );
             }
             if name == Some("toSorted") {
                 let out = site_tmpl(m, call, "Array");
@@ -457,8 +463,14 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
         }
         Some("join" | "toString" | "toLocaleString") => {
             let why = m.reason("array join (element ToString)");
-            m.cons(elems, Cons::Implicit { reason: why });
-            implicit_args(m, call, "join separator");
+            m.cons(
+                elems,
+                Cons::Implicit {
+                    reason: why,
+                    proto: Protocol::ToPrimitive,
+                },
+            );
+            implicit_args(m, call, "join separator", Protocol::ToPrimitive);
             ret_prim(m, call, prim::STR);
         }
         Some("keys") => {
@@ -572,7 +584,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             "Date" | "RegExp" | "URL" | "TextCodec" | "builtin" | "BoxedPrimitive" | "Timer",
             Some(n),
         ) if !n.starts_with("on") && n != "addEventListener" => {
-            implicit_args(m, call, "builtin method argument");
+            implicit_args(m, call, "builtin method argument", Protocol::Any);
             ret_prim(m, call, prim::ALL);
             let pb = site_tmpl(m, call, "primbox");
             ret_tok(m, call, pb);
@@ -595,10 +607,10 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             let r = m.reason("B2 buffer transfer/resize");
             m.mark_hard(t, Hard::B2BufferResize, r);
             ret_tok(m, call, t);
-            implicit_args(m, call, "buffer resize argument");
+            implicit_args(m, call, "buffer resize argument", Protocol::ToPrimitive);
         }
         ("TypedArray", Some(_)) => {
-            implicit_args(m, call, "typed array method argument");
+            implicit_args(m, call, "typed array method argument", Protocol::Any);
             ret_prim(m, call, prim::ALL);
             let pb = site_tmpl(m, call, "primbox");
             ret_tok(m, call, pb);

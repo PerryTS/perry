@@ -275,7 +275,7 @@ pub fn map_cons(
         Hard { kind, reason } => Hard { kind, reason },
         AddsKeys => AddsKeys,
         DefineAccessor { key, reason } => DefineAccessor { key, reason },
-        Implicit { reason } => Implicit { reason },
+        Implicit { reason, proto } => Implicit { reason, proto },
         CreateProto { reason } => CreateProto { reason },
         ChainUnion { key, dst } => ChainUnion { key, dst: n(dst) },
         ProtoClosure { dst } => ProtoClosure { dst: n(dst) },
