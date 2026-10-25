@@ -6,7 +6,7 @@ pub use asynchronous::{AsyncImport, AsyncImports};
 mod cleanup;
 mod command;
 pub mod http;
-pub use command::run_command;
+pub use command::{run_command, run_command_async};
 
 mod contract;
 pub mod ffi;

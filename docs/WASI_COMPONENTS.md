@@ -56,8 +56,8 @@ This is a subset of the WASI 0.3 milestone. Enabling `wasi` now links the
 Turnloop-backed 0.3.0 providers as well as the P2 providers, but generic
 `future<T>`, `stream<T>` and `error-context` values are still rejected by WIT
 bindings. Async Perry-authored guest functions also require a rooted canonical
-adapter and are explicitly rejected by `perry-wit --guest-c`. P3 commands and
-the production P3 HTTP handler entry point remain separate work. Do not infer
+adapter and are explicitly rejected by `perry-wit --guest-c`. The production
+P3 HTTP handler entry point remains separate work. Do not infer
 complete P3 support from async function support or the Rust provider receipts.
 
 `scripts/component_async_acceptance.py` exercises a compiled TypeScript host
@@ -89,9 +89,11 @@ const status = runComponentCommand(bytes, {
 });
 ```
 
-This entry point enables Perry's Turnloop-backed P2 providers
-(`wasi:cli@0.2.12`, including `exit-with-code`; the original `exit(result)`
-operation is covered at 0.2.0). Omitted grants
+This entry point enables Perry's Turnloop-backed P2 and P3 providers. It
+accepts the pinned async `wasi:cli/run@0.3.0` contract and the existing P2
+command contract (`wasi:cli@0.2.12`, including `exit-with-code`; the original
+`exit(result)` operation is covered at 0.2.0). Other P3 interface versions are
+not assumed compatible. Omitted grants
 have the same closed filesystem, network, environment and stdio defaults as
 `wasi: {}`. Each call receives independent arguments, environment, preopens
 and resource tables. It does not accept application imports. Reusable
@@ -103,6 +105,22 @@ components, missing/mistyped command exports, guest traps and exhausted
 budgets throw `ERR_COMPONENT`. Export validation happens before component
 initializers execute. Initialization and execution share one fuel budget;
 fuel does not interrupt time spent in synchronous host I/O.
+
+The TypeScript API is synchronous and returns a number after execution ends.
+P3 providers suspend their canonical tasks internally; this API does not return
+a Promise or keep the JavaScript event loop responsive while a command runs.
+Rust embeddings can await `perry_component_host::run_command_async`; dropping
+that future cancels suspended guest tasks before releasing provider resources.
+P2 provider I/O remains synchronous in either Rust entry point.
+
+`scripts/component_p3_command_acceptance.py` exercises a compiled TypeScript
+host with P3 return and exit codes, initializer exits, signature/version
+validation before initialization, real clock suspension, closed defaults and
+exact binary stdin/stdout. The stdio component waits for both stream completion
+futures before reporting success. The [P3 command receipt](validation/wasi-p3-commands-20261025.json)
+records the separate development, production panic-abort and moving-GC checks.
+This qualification covers Linux; other native platforms and final packages
+remain open.
 
 The combined component-host boundary uses ABI 7; compiler, runtime and
 optional host archive must be built together. The separate command feature
@@ -116,8 +134,9 @@ The moving run copies six objects, verifies six evacuation cycles and
 protects retired from-space. Dynamic short strings such as `String(exitCode)`
 are covered, along with closed defaults and independent capability grants.
 The [execution receipt](validation/component-commands-20261021.json) records
-the source revisions and artifact/log hashes. This does not establish HTTP,
-P3 async, other native host platforms or I/O cancellation support.
+the source revisions and artifact/log hashes. That historical P2 receipt does
+not establish HTTP, P3 async, other native host platforms or I/O cancellation
+support; see the newer P3 receipt above.
 
 
 ### Per-instance WASI providers
