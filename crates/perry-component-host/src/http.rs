@@ -1,6 +1,7 @@
 //! Streaming `wasi:http/incoming-handler` invocation on the caller's Store.
 //! The embedding supplies owned native request/response channels. The guest
 //! cannot acquire a listener or outbound authority from receiving a request.
+mod p3;
 #[cfg(test)]
 mod tests;
 

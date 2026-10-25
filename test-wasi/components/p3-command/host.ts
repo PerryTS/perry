@@ -16,7 +16,7 @@ if (process.argv[2] === "stdio") {
     check(runComponentCommand(readFileSync(process.argv[3] + "/" + file + ".wasm")) === status, file);
     gc();
   }
-  for (const file of ["bad-init", "wrong-version"]) {
+  for (const file of ["bad-init", "wrong-version", "late-trap"]) {
     let rejected = false;
     try { runComponentCommand(readFileSync(process.argv[3] + "/" + file + ".wasm")); }
     catch (_) { rejected = true; }

@@ -71,6 +71,7 @@ def main():
                 'wrong-version': immediate(0).replace('@0.3.0', '@0.3.1')}
     for name, fixture in [('clock', 'p3-clock.component.wat'), ('closed-stdio', 'p3-stdio.component.wat')]:
         commands[name] = (root / 'crates/perry-component-host/src/command' / fixture).read_text()
+    commands['late-trap'] = commands['clock'].replace('(call $return (i32.const 0))', '').replace('(global.set $start (call $now))', '(call $return (i32.const 0)) (global.set $start (call $now))').replace('(call $drop-set (global.get $set))', '(call $drop-set (global.get $set)) unreachable')
     for name, source in commands.items():
         (out / (name + '.wat')).write_text(source)
         run('encode-' + name, [args.wat_encoder.resolve(), out / (name + '.wat'), out / (name + '.wasm')])

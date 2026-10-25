@@ -164,7 +164,11 @@ impl Prepared {
                     let mut result = [Val::Bool(false)];
                     store
                         .run_concurrent(async |accessor| {
-                            run.call_concurrent(accessor, &[], &mut result).await
+                            run.call_concurrent(accessor, &[], &mut result).await?;
+                            // Publishing a result does not end its task. Keep
+                            // driving post-return work, including late traps.
+                            std::future::poll_fn(|cx| accessor.poll_no_interesting_tasks(cx)).await;
+                            wasmtime::error::Ok(())
                         })
                         .await??;
                     match &result[0] {

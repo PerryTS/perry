@@ -57,7 +57,8 @@ Turnloop-backed 0.3.0 providers as well as the P2 providers, but generic
 `future<T>`, `stream<T>` and `error-context` values are still rejected by WIT
 bindings. Async Perry-authored guest functions also require a rooted canonical
 adapter and are explicitly rejected by `perry-wit --guest-c`. The production
-P3 HTTP handler entry point remains separate work. Do not infer
+P3 HTTP handler bridge for TypeScript remains separate work; the Rust
+embedding has the separately qualified async entry point below. Do not infer
 complete P3 support from async function support or the Rust provider receipts.
 
 `scripts/component_async_acceptance.py` exercises a compiled TypeScript host
@@ -216,7 +217,26 @@ and [socket qualification](validation/wasi-p3-sockets-20261023.json), plus
 [HTTP qualification](validation/wasi-p3-http-20261023.json). HTTP supports
 canonical body streams, trailers and transmission futures, async client calls
 and Rust handler embedding over Turnloop HTTP/1.1. Generic future/stream
-bindings and the production P3 HTTP handler path remain unfinished.
+bindings and the P3 HTTP bridge for TypeScript remain unfinished. Rust
+embeddings can invoke the pinned handler through `Host::handle_http_async`.
+
+The Rust embedding can await `Host::handle_http_async` for the exact
+`wasi:http/handler@0.3.0` interface. It takes an accepted native `server::Request`
+and its `server::Completion`; it drives the same Store through body transmission
+and post-return task exit. The outer result reports validation or guest traps,
+and the inner result reports transport completion. Successful exchanges and
+explicit guest HTTP errors preserve the instance. Traps, cancelled handling and
+transport failures retire it. Receiving the request supplies no outbound grants.
+The selected manifest must expose the handler's resource identities and result
+contract; this typed Rust entry point does not enable generic application
+`future<T>` or `stream<T>` bindings. The TypeScript HTTP API still supports P2.
+
+The [P3 HTTP embedding receipt](validation/wasi-p3-http-host-20261025.json)
+records live Linux requests with empty, 65,537-byte and 3 MiB bodies, trailers,
+Store reuse, typed errors, preflight checks, cancellation, disconnects, fuel
+exhaustion and traps after a handler publishes its response. One-shot P3 commands
+also wait for task exit after publishing their result; a suspended late trap
+must throw instead of becoming an early status 0.
 
 The Rust embedding API now provides an HTTP/1.1 origin server through
 `perry_wasi::http::server::Server` and canonical handler invocation through

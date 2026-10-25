@@ -195,3 +195,22 @@ fn p3_stdio_command_waits_for_real_stream_and_completion_futures() {
         assert_eq!(output.contents().as_ref(), &payload[..capacity]);
     }
 }
+
+#[test]
+fn p3_command_waits_for_task_exit_and_reports_post_return_traps() {
+    // task.return publishes the result before the task exits. A one-shot
+    // command must keep driving a subsequently suspended task and surface its
+    // eventual trap instead of treating the early result as process success.
+    let source = include_str!("command/p3-clock.component.wat")
+        .replace("(call $return (i32.const 0))", "")
+        .replace(
+            "(global.set $start (call $now))",
+            "(call $return (i32.const 0)) (global.set $start (call $now))",
+        )
+        .replace(
+            "(call $drop-set (global.get $set))",
+            "(call $drop-set (global.get $set)) unreachable",
+        );
+    let error = run_command(&wat::parse_str(source).unwrap(), &Options::default()).unwrap_err();
+    assert!(format!("{error:#}").contains("trapped"));
+}

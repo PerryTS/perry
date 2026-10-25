@@ -5466,6 +5466,7 @@ dependencies = [
  "anyhow",
  "futures-channel",
  "futures-lite",
+ "futures-util",
  "perry-abi",
  "perry-wasi",
  "perry-wit",

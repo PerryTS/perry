@@ -193,9 +193,13 @@ sockets and HTTP through Turnloop. Canonical provider tests cover suspended
 calls, streams, result futures, large transfers and Store retirement. The
 optional Perry component engine now links these providers and exposes native
 async functions through Promise-based TypeScript host bindings. It currently
-permits one pending invocation per component. Generic WIT future/stream values,
-async guest adapters, P3 command/HTTP entry points, concurrent calls within one
-instance and complete host/guest composition remain unfinished.
+permits one pending invocation per component. One-shot 0.3.0 command hosting
+and the typed Rust async HTTP handler entry point have separate Linux
+qualification, including task exit after a result is published. The TypeScript
+HTTP bridge, generic WIT future/stream values, async guest adapters, concurrent
+calls within one instance and complete host/guest composition remain unfinished.
+See [the component qualification record](WASI_COMPONENTS.md) for exact APIs and
+receipts.
 
 Pin an explicit WASI 0.3 interface version and supported Component Model
 feature set. Integrate native async lifting/lowering with Perry's promise

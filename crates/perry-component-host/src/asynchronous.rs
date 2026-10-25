@@ -92,16 +92,16 @@ pub(super) fn link_import(
 /// The guest may still have suspended tasks when a call is cancelled or traps.
 /// Destroy its Store before releasing embedding payloads; guest destructors must
 /// not execute during hard cancellation. Teardown runs on the calling thread.
-struct Invocation<'a> {
-    host: &'a mut Host,
-    live: Option<Live>,
-    before_retire: Option<Box<dyn FnOnce() + 'a>>,
+pub(super) struct Invocation<'a> {
+    pub(super) host: &'a mut Host,
+    pub(super) live: Option<Live>,
+    pub(super) before_retire: Option<Box<dyn FnOnce() + 'a>>,
 }
 impl Invocation<'_> {
-    fn restore(&mut self) {
+    pub(super) fn restore(&mut self) {
         self.host.live = self.live.take();
     }
-    fn retire(&mut self) -> Result<()> {
+    pub(super) fn retire(&mut self) -> Result<()> {
         let Some(live) = self.live.take() else {
             return Ok(());
         };
