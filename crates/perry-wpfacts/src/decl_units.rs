@@ -13,7 +13,8 @@ use perry_hir::{Export, Expr, Import, ImportSpecifier, Module, Stmt};
 /// declaration (module-scope names are unique: lowering keeps one function
 /// and one class per name), and its own declarations other units import.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct UnitView {
+pub(crate) struct UnitView<'a> {
+    pub closure_bodies: FxHashMap<u32, &'a Expr>,
     /// Bindings declared by this unit's source items. Literal-layout classes
     /// copied into the view are analysis context, not owned lexical bodies.
     pub binding_locals: FxHashSet<u32>,
@@ -863,6 +864,7 @@ pub(crate) fn decl_units(module: &Module) -> Vec<Vec<Item>> {
     // items is two bindings (an inlined body is a copy, not shared state).
     // A local no item declares joins every item referring to it.
     let mut inner_refs: FxHashMap<u32, Vec<usize>> = FxHashMap::default();
+    let mut closure_owner = FxHashMap::default();
     let mut decl_of: FxHashMap<u32, Vec<usize>> = FxHashMap::default();
     let mut free: Vec<(usize, u32)> = Vec::new();
     for (i, it) in items.iter().enumerate() {
@@ -924,6 +926,15 @@ pub(crate) fn decl_units(module: &Module) -> Vec<Vec<Item>> {
                         }
                     }
                 }
+            }
+        }
+        // Repeated creation expressions with this FuncId share ONE emitted
+        // body. Its receiver/capture facts must cover every creation/caller.
+        for id in &r.closures {
+            if let Some(&j) = closure_owner.get(id) {
+                edge(j, true);
+            } else {
+                closure_owner.insert(*id, i);
             }
         }
         let own = declared(module, *it, &r);
@@ -1024,7 +1035,8 @@ fn sccs(succ: &[Vec<usize>]) -> Vec<Vec<usize>> {
 /// imports of the other units' declarations it refers to (from
 /// [`unit_path`]), its exports, and synthetic exports of its declarations
 /// other units refer to. Also the units each unit refers to.
-pub(crate) fn views(path: &str, module: &Module) -> Vec<(UnitView, Vec<usize>)> {
+pub(crate) fn views<'a>(path: &str, module: &'a Module) -> Vec<(UnitView<'a>, Vec<usize>)> {
+    let closure_bodies: FxHashMap<_, _> = perry_hir::emitted_closures(module).into_iter().collect();
     let units = decl_units(module);
     let closed = closed_bindings(module);
     let mut owner_name: FxHashMap<&str, usize> = FxHashMap::default();
@@ -1137,6 +1149,11 @@ pub(crate) fn views(path: &str, module: &Module) -> Vec<(UnitView, Vec<usize>)> 
                 }
             }
         }
+        view.closure_bodies.extend(
+            r.closures
+                .iter()
+                .filter_map(|id| closure_bodies.get(id).map(|&body| (*id, body))),
+        );
         view.binding_funcs.extend(r.closures.iter().copied());
         for it in items {
             view.binding_locals.extend(declared(module, *it, &r));

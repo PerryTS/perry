@@ -6176,6 +6176,7 @@ version = "0.5.1663"
 dependencies = [
  "perry-hir",
  "perry-parser",
+ "perry-transform",
 ]
 
 [[package]]

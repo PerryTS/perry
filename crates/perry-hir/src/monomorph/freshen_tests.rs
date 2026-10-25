@@ -8,7 +8,7 @@ fn lowered(src: &str) -> Module {
 }
 
 #[test]
-fn copied_functions_own_their_parameters_catches_and_closure_bindings() {
+fn copied_functions_own_their_parameters_and_catches() {
     let module = lowered(
         r#"
         function make<T>(value: T) {
@@ -34,10 +34,10 @@ fn copied_functions_own_their_parameters_catches_and_closure_bindings() {
     let mut funcs = BTreeSet::new();
     for f in bodies {
         let mut owned = Owned::default();
-        owned.function(f);
+        owned.function_frame(f);
         assert!(
-            owned.locals.len() >= 4,
-            "parameters, let, catch and closure parameter"
+            owned.locals.len() >= 3,
+            "parameters, let and catch belong to this frame"
         );
         for id in owned.locals {
             assert!(locals.insert(id), "two bodies own local {id}");
@@ -74,7 +74,7 @@ fn copied_classes_have_distinct_method_and_constructor_frames() {
     assert!(bodies.len() >= 3);
     for c in bodies {
         let mut owned = Owned::default();
-        owned.class(c);
+        owned.class_frame(c);
         for id in owned.locals {
             assert!(locals.insert(id), "two classes own local {id}");
         }
@@ -117,4 +117,60 @@ fn mapped_arguments_follow_the_specialized_formal_parameter() {
             );
         }
     }
+}
+
+#[test]
+fn copied_functions_keep_their_name_and_async_generator_metadata() {
+    let ast = perry_parser::parse_typescript(
+        "function make<T>(value: T) { return function named() { return value; }; } console.log(make<number>(1));",
+        "metadata.ts",
+    ).unwrap();
+    let mut module = crate::lower_module(&ast, "metadata", "metadata.ts").unwrap();
+    let original = module.functions.iter().find(|f| f.name == "make").unwrap();
+    let root = original.id;
+    let mut owned = Owned::default();
+    owned.function(original);
+    let closure = *owned.funcs.first().expect("named closure");
+    for id in [root, closure] {
+        module.async_step_closures.insert(id);
+        module.async_generator_funcs.insert(id);
+        module.gen_param_prologue_len.insert(id, 2);
+        module.closure_source_text.insert(
+            id,
+            crate::ir::FunctionSourceMetadata {
+                text: "function retained() {}".into(),
+                is_non_strict_ordinary: true,
+            },
+        );
+    }
+    module.closure_display_names.insert(root, "make".into());
+    crate::monomorphize_module(&mut module);
+    let copy = module
+        .functions
+        .iter()
+        .find(|f| f.name.starts_with("make$"))
+        .unwrap();
+    let mut owned = Owned::default();
+    owned.function(copy);
+    let copied_closure = *owned.funcs.first().unwrap();
+    for id in [copy.id, copied_closure] {
+        assert!(module.async_step_closures.contains(&id));
+        assert!(module.async_generator_funcs.contains(&id));
+        assert_eq!(module.gen_param_prologue_len.get(&id), Some(&2));
+        assert!(module.closure_source_text.contains_key(&id));
+    }
+    assert_eq!(
+        module
+            .closure_display_names
+            .get(&copy.id)
+            .map(String::as_str),
+        Some("make")
+    );
+    assert_eq!(
+        module
+            .closure_display_names
+            .get(&copied_closure)
+            .map(String::as_str),
+        Some("named")
+    );
 }

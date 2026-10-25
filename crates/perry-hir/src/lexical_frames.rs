@@ -1,9 +1,53 @@
 //! A specialization is a new lexical body, not another use of its template's
-//! bindings. Keep module-wide LocalIds and body FuncIds unique before facts
-//! are split into declaration units. Free captures keep their original ids.
-use super::*;
+//! bindings. Separately emitted frames get fresh LocalIds/FuncIds. Nested
+//! closures retain their shared emission identity; only their capture sources
+//! follow the enclosing frame's renaming.
+use crate::ir::*;
+use crate::types::FuncId;
 use crate::types::LocalId;
 use std::collections::BTreeSet;
+use std::collections::HashMap;
+
+/// Module-wide allocator for identities of separately emitted lexical frames.
+pub struct FrameIds {
+    next_local_id: LocalId,
+    next_func_id: FuncId,
+}
+
+impl FrameIds {
+    pub fn new(module: &Module) -> Self {
+        let (local, func) = max_ids(module);
+        Self {
+            next_local_id: local.checked_add(1).expect("frame LocalId overflow"),
+            next_func_id: func.checked_add(1000).expect("frame FuncId overflow"),
+        }
+    }
+
+    pub(crate) fn fresh_func_id(&mut self) -> FuncId {
+        let id = self.next_func_id;
+        self.next_func_id = id.checked_add(1).expect("frame FuncId overflow");
+        id
+    }
+
+    /// Relocated bodies can carry source-module ids above the destination's.
+    pub fn reserve_functions(&mut self, functions: &[Function]) {
+        let mut ids = Owned::default();
+        for f in functions {
+            ids.function(f);
+            ids.funcs.insert(f.id);
+        }
+        if let Some(id) = ids.locals.last() {
+            self.next_local_id = self
+                .next_local_id
+                .max(id.checked_add(1).expect("frame LocalId overflow"));
+        }
+        if let Some(id) = ids.funcs.last() {
+            self.next_func_id = self
+                .next_func_id
+                .max(id.checked_add(1).expect("frame FuncId overflow"));
+        }
+    }
+}
 
 #[derive(Default)]
 struct Owned {
@@ -77,6 +121,45 @@ impl Owned {
         }
     }
 
+    fn shared_expr(&mut self, e: &Expr) {
+        if let Expr::Closure {
+            params,
+            body,
+            func_id,
+            ..
+        } = e
+        {
+            self.funcs.insert(*func_id);
+            self.params(params);
+            crate::tdz_check::for_each_stmt_deep(body, &mut |s| self.stmt(s));
+            crate::tdz_check::for_each_stmts_expr(body, &mut |e| self.expr(e));
+            for p in params {
+                if let Some(e) = &p.default {
+                    self.expr_tree(e);
+                }
+            }
+        }
+    }
+
+    fn retain_frame(&mut self, shared: &Owned) {
+        self.locals.retain(|id| !shared.locals.contains(id));
+        self.funcs.retain(|id| !shared.funcs.contains(id));
+    }
+
+    fn function_frame(&mut self, f: &Function) {
+        self.function(f);
+        let mut shared = Owned::default();
+        crate::tdz_check::for_each_function_expr(f, &mut |e| shared.shared_expr(e));
+        self.retain_frame(&shared);
+    }
+
+    fn class_frame(&mut self, c: &Class) {
+        self.class(c);
+        let mut shared = Owned::default();
+        crate::tdz_check::for_each_class_expr(c, &mut |e| shared.shared_expr(e));
+        self.retain_frame(&shared);
+    }
+
     fn class(&mut self, c: &Class) {
         for f in c
             .constructor
@@ -113,7 +196,7 @@ impl Owned {
     }
 }
 
-pub(super) fn max_ids(module: &Module) -> (LocalId, FuncId) {
+pub fn max_ids(module: &Module) -> (LocalId, FuncId) {
     let mut ids = Owned::default();
     for f in &module.functions {
         ids.funcs.insert(f.id);
@@ -154,13 +237,13 @@ pub(super) fn max_ids(module: &Module) -> (LocalId, FuncId) {
     )
 }
 
-pub(super) struct Remap {
+pub struct Remap {
     locals: HashMap<LocalId, LocalId>,
     funcs: HashMap<FuncId, FuncId>,
 }
 
 impl Remap {
-    fn new(ids: Owned, ctx: &mut MonomorphizationContext) -> Self {
+    fn new(ids: Owned, ctx: &mut FrameIds) -> Self {
         Self {
             locals: ids
                 .locals
@@ -406,7 +489,7 @@ impl Remap {
         }
     }
 
-    pub(super) fn metadata(&self, module: &mut Module) {
+    pub fn metadata(&self, module: &mut Module) {
         for (&old, &new) in &self.locals {
             if module.classic_for_lexical_bindings.contains(&old) {
                 module.classic_for_lexical_bindings.insert(new);
@@ -416,6 +499,18 @@ impl Remap {
             }
         }
         for (&old, &new) in &self.funcs {
+            if module.async_step_closures.contains(&old) {
+                module.async_step_closures.insert(new);
+            }
+            if module.async_generator_funcs.contains(&old) {
+                module.async_generator_funcs.insert(new);
+            }
+            if let Some(name) = module.closure_display_names.get(&old).cloned() {
+                module.closure_display_names.insert(new, name);
+            }
+            if let Some(len) = module.gen_param_prologue_len.get(&old).copied() {
+                module.gen_param_prologue_len.insert(new, len);
+            }
             if let Some(source) = module.closure_source_text.get(&old).cloned() {
                 module.closure_source_text.insert(new, source);
             }
@@ -423,17 +518,20 @@ impl Remap {
     }
 }
 
-pub(super) fn function(f: &mut Function, ctx: &mut MonomorphizationContext) -> Remap {
+pub fn function(f: &mut Function, original_id: FuncId, ctx: &mut FrameIds) -> Remap {
     let mut ids = Owned::default();
-    ids.function(f);
-    let map = Remap::new(ids, ctx);
+    ids.function_frame(f);
+    let mut map = Remap::new(ids, ctx);
+    // The driver already allocated the root's new id. Include its origin so
+    // recursive references and module metadata follow the copied body too.
+    map.funcs.insert(original_id, f.id);
     map.function(f);
     map
 }
 
-pub(super) fn class(c: &mut Class, ctx: &mut MonomorphizationContext) -> Remap {
+pub fn class(c: &mut Class, ctx: &mut FrameIds) -> Remap {
     let mut ids = Owned::default();
-    ids.class(c);
+    ids.class_frame(c);
     let map = Remap::new(ids, ctx);
     map.class(c);
     map
@@ -442,7 +540,7 @@ pub(super) fn class(c: &mut Class, ctx: &mut MonomorphizationContext) -> Remap {
 /// Literal-layout constructors use positional scratch ids at lowering. They
 /// are not source lexical declarations, so give their frame its own ids too;
 /// their scratch ids must never acquire another body's source metadata.
-pub(super) fn literal_constructor(f: &mut Function, ctx: &mut MonomorphizationContext) {
+pub fn literal_constructor(f: &mut Function, ctx: &mut FrameIds) {
     let mut ids = Owned::default();
     ids.function(f);
     ids.funcs.insert(f.id);
@@ -450,5 +548,16 @@ pub(super) fn literal_constructor(f: &mut Function, ctx: &mut MonomorphizationCo
 }
 
 #[cfg(test)]
-#[path = "freshen_tests.rs"]
+#[path = "monomorph/freshen_tests.rs"]
 mod tests;
+
+/// Cross-module relocation already assigns fresh function identities. All
+/// lexical bindings in those newly emitted bodies must be destination-owned.
+pub fn relocated_function(f: &mut Function, ids: &mut FrameIds) -> Remap {
+    let mut owned = Owned::default();
+    owned.function(f);
+    owned.funcs.clear();
+    let map = Remap::new(owned, ids);
+    map.function(f);
+    map
+}

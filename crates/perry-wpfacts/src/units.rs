@@ -626,7 +626,7 @@ struct Solve<'a> {
     /// The one module the unit is cut from (its run-once view, N5, when
     /// it has one): borrowed, never copied per unit.
     module: &'a Module,
-    view: crate::decl_units::UnitView,
+    view: crate::decl_units::UnitView<'a>,
     deps: Vec<usize>,
     /// Decision 21: the units of its module it names and, in each module it
     /// imports, the units owning the names it refers to (every unit for a

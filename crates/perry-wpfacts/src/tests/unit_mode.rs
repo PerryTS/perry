@@ -956,12 +956,9 @@ fn a_literal_shape_is_copied_into_each_unit_that_births_it() {
 }
 
 #[test]
-fn an_inlined_copy_does_not_join_its_units() {
-    // An inner local is its declaring item's own (§12.1): a body copied into
-    // another item (inlining keeps the HIR ids) declares the same locals
-    // again, a second binding, not shared state, so the two items stay
-    // apart. A function reading a local it does not declare (a capture of
-    // the enclosing function's local) shares it: one unit.
+fn copies_of_one_emitted_closure_join_their_units() {
+    // Closure creation copies retain FuncId and share one emitted body.
+    // All callers and captures belong to one solve for that emitted body.
     let src = r#"
         function a() { return [1, 2].filter((x) => !!x).length; }
         function b() { return 2; }
@@ -973,7 +970,7 @@ fn an_inlined_copy_does_not_join_its_units() {
     let ka = hir.functions.iter().position(|f| f.name == "a").unwrap();
     let kb = hir.functions.iter().position(|f| f.name == "b").unwrap();
     hir.functions[kb].body = hir.functions[ka].body.clone();
-    assert_eq!(crate::decl_units::decl_units(&hir).len(), base);
+    assert_eq!(crate::decl_units::decl_units(&hir).len(), base - 1);
     let src = r#"
         function outer() { let s = { a: 1 }; function inner() { return s.a; } return inner(); }
         console.log(outer());

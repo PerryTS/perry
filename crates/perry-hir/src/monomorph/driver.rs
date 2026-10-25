@@ -31,7 +31,7 @@ fn monomorphize_with_context(module: &mut Module, ctx: &mut MonomorphizationCont
     for c in &mut module.classes {
         if c.is_literal_shape() {
             if let Some(f) = &mut c.constructor {
-                super::freshen::literal_constructor(f, ctx);
+                crate::lexical_frames::literal_constructor(f, &mut ctx.frame_ids);
             }
         }
     }
@@ -74,7 +74,12 @@ fn monomorphize_with_context(module: &mut Module, ctx: &mut MonomorphizationCont
                 }
                 let mut specialized =
                     specialize_function(original, &request.type_args, request.new_id);
-                super::freshen::function(&mut specialized, ctx).metadata(module);
+                crate::lexical_frames::function(
+                    &mut specialized,
+                    request.original_id,
+                    &mut ctx.frame_ids,
+                )
+                .metadata(module);
                 new_functions.push(specialized);
             }
         }
@@ -132,7 +137,7 @@ fn monomorphize_with_context(module: &mut Module, ctx: &mut MonomorphizationCont
                     new_source_texts.push((new_id, src));
                 }
                 let mut specialized = specialize_class(original, &request.type_args, new_id);
-                super::freshen::class(&mut specialized, ctx).metadata(module);
+                crate::lexical_frames::class(&mut specialized, &mut ctx.frame_ids).metadata(module);
                 new_classes.push(specialized);
             }
         }

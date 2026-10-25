@@ -13,3 +13,4 @@ perry-hir.workspace = true
 
 [dev-dependencies]
 perry-parser.workspace = true
+perry-transform.workspace = true

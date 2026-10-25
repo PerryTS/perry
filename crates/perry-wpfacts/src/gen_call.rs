@@ -176,6 +176,11 @@ impl<'a> Gen<'a> {
 
     /// A closure expression: register, walk its body, return its token.
     pub(crate) fn closure(&mut self, fx: &Fx, e: &Expr) -> NodeId {
+        let Expr::Closure { func_id: id, .. } = e else {
+            return self.m.top_tok_node;
+        };
+        let canonical = self.emitted_closure(fx.module, *id).unwrap_or(e);
+        self.feed_closure_captures(fx.module, e, canonical);
         let Expr::Closure {
             func_id,
             params,
@@ -185,7 +190,7 @@ impl<'a> Gen<'a> {
             is_async,
             is_generator,
             ..
-        } = e
+        } = canonical
         else {
             return self.m.top_tok_node;
         };

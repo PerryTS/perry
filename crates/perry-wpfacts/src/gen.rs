@@ -9,6 +9,9 @@ use perry_hir::{Class, Export, Function, Global, Import, ImportSpecifier, Module
 
 mod export;
 mod glue;
+mod primitives;
+mod shared_closures;
+mod view;
 mod walk;
 pub(crate) use walk::variant_name;
 
@@ -162,7 +165,7 @@ pub struct Gen<'a> {
     pub(crate) unit_in: Option<&'a crate::units::Published>,
     /// A declaration unit's view of its module (design §12.6): the other
     /// units' declarations it names, bound to their imports.
-    pub(crate) view: Option<&'a crate::decl_units::UnitView>,
+    pub(crate) view: Option<&'a crate::decl_units::UnitView<'a>>,
     /// Stand-ins of other units' classes (by template display), with the
     /// tokens whose use beyond the contract is a census report.
     pub stand_ins: FxHashMap<String, (NodeId, TmplId, Vec<Tok>)>,
@@ -171,6 +174,7 @@ pub struct Gen<'a> {
     pub field_init_fn: FxHashMap<TmplId, FnIdx>,
     pub static_init_fn: FxHashMap<TmplId, FnIdx>,
     pub prim_const: [NodeId; 7],
+    pub(crate) shared_closures: shared_closures::SharedClosures<'a>,
     pub walked: crate::pts::FxHashSet<FnIdx>,
     pub class_envs: FxHashMap<String, NodeId>,
     /// The driver's resolution of each module's `export … from "src"`
@@ -221,75 +225,6 @@ pub(crate) struct Fx {
 }
 
 impl<'a> Gen<'a> {
-    /// The unit view of module `mi`, when this is a per-unit solve (one
-    /// module, the view's indices into it). A view borrows the module: the
-    /// items below are read through these, never copied per unit.
-    fn unit_view(&self, mi: usize) -> Option<&'a crate::decl_units::UnitView> {
-        self.view.filter(|_| self.modules.len() == 1 && mi == 0)
-    }
-
-    pub(crate) fn functions_of(&self, mi: usize) -> Vec<&'a Function> {
-        let m = self.modules[mi].1;
-        match self.unit_view(mi) {
-            Some(v) => v.funcs.iter().map(|&k| &m.functions[k]).collect(),
-            None => m.functions.iter().collect(),
-        }
-    }
-
-    pub(crate) fn classes_of(&self, mi: usize) -> Vec<&'a Class> {
-        let m = self.modules[mi].1;
-        match self.unit_view(mi) {
-            Some(v) => v.classes.iter().map(|&k| &m.classes[k]).collect(),
-            None => m.classes.iter().collect(),
-        }
-    }
-
-    pub(crate) fn globals_of(&self, mi: usize) -> Vec<&'a Global> {
-        let m = self.modules[mi].1;
-        match self.unit_view(mi) {
-            Some(v) => v.globals.iter().map(|&k| &m.globals[k]).collect(),
-            None => m.globals.iter().collect(),
-        }
-    }
-
-    pub(crate) fn init_of(&self, mi: usize) -> Vec<&'a Stmt> {
-        let m = self.modules[mi].1;
-        match self.unit_view(mi) {
-            Some(v) => v.init.iter().map(|&k| &m.init[k]).collect(),
-            None => m.init.iter().collect(),
-        }
-    }
-
-    /// The module's imports, then the unit's synthetic ones.
-    pub(crate) fn imports_of(&self, mi: usize) -> Vec<&'a Import> {
-        let m = self.modules[mi].1;
-        match self.unit_view(mi) {
-            Some(v) => m.imports.iter().chain(v.imports.iter()).collect(),
-            None => m.imports.iter().collect(),
-        }
-    }
-
-    pub(crate) fn exports_of(&self, mi: usize) -> &'a [Export] {
-        match self.unit_view(mi) {
-            Some(v) => &v.exports,
-            None => &self.modules[mi].1.exports,
-        }
-    }
-
-    pub(crate) fn exported_functions_of(&self, mi: usize) -> &'a [(String, u32)] {
-        match self.unit_view(mi) {
-            Some(v) => &v.exported_functions,
-            None => &self.modules[mi].1.exported_functions,
-        }
-    }
-
-    pub(crate) fn exported_objects_of(&self, mi: usize) -> &'a [String] {
-        match self.unit_view(mi) {
-            Some(v) => &v.exported_objects,
-            None => &self.modules[mi].1.exported_objects,
-        }
-    }
-
     pub fn new(modules: Vec<(&'a str, &'a Module)>, relations: bool, explain: bool) -> Self {
         let mut m = Model::default();
         m.cur_fn = NO_FN;
@@ -392,6 +327,7 @@ impl<'a> Gen<'a> {
             static_init_fn: FxHashMap::default(),
             prim_const,
             walked: Default::default(),
+            shared_closures: Default::default(),
             class_envs: FxHashMap::default(),
             export_sources: Default::default(),
             iife_birth: FxHashMap::default(),
@@ -406,33 +342,12 @@ impl<'a> Gen<'a> {
         }
     }
 
-    /// A node holding exactly the primitive kinds `p`. A union of kinds is
-    /// its own node: the shared all-primitives node would add `STR` and
-    /// `SYMBOL`, and a string index reads every named member.
-    pub fn prim_node(&mut self, p: u16) -> NodeId {
-        match p {
-            prim::NUM => self.prim_const[0],
-            prim::STR => self.prim_const[1],
-            prim::BOOL => self.prim_const[2],
-            prim::NULL => self.prim_const[3],
-            prim::UNDEF => self.prim_const[4],
-            prim::BIGINT => self.prim_const[5],
-            prim::SYMBOL => self.prim_const[6],
-            prim::ALL => self.m.all_prim_node,
-            _ => {
-                let n = self.m.node_l("PRIMS");
-                self.m.own(n);
-                self.m.add_prim(n, p);
-                n
-            }
-        }
-    }
-
     // ------------------------------------------------------------ registry
 
     /// Register every module's functions, classes and scope before any body
     /// is walked, so cross-references resolve in one pass.
     pub fn register_all(&mut self) {
+        self.index_emitted_closures();
         let modules = self.modules.clone();
         for (mi, (path, module)) in modules.iter().enumerate() {
             let mi = mi as u32;

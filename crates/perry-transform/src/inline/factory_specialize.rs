@@ -1087,7 +1087,11 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
             );
         }
     }
-    // Flush new specialized classes.
+    // Each class name has its own emitted methods and constructors.
+    let mut frame_ids = perry_hir::lexical_frames::FrameIds::new(module);
+    for class in &mut new_classes {
+        perry_hir::lexical_frames::class(class, &mut frame_ids).metadata(module);
+    }
     module.classes.extend(new_classes);
 }
 
