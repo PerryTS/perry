@@ -512,7 +512,6 @@ fn indexed_named_computed_and_inherited_reads_observe_updates() {
         let word = probe_word(record);
         assert_ne!(word & !PROBE_FLAGS, 0, "the fixture must use a key index");
         let boxed = POINTER_TAG | obj as u64;
-        let child = crate::object::js_object_create(f64::from_bits(boxed)).to_bits() & POINTER_MASK;
         for (i, key) in names.iter().enumerate() {
             let bits = atom(key);
             let hash = crate::string::property_atom_hash((bits & POINTER_MASK) as *const _);
@@ -529,23 +528,27 @@ fn indexed_named_computed_and_inherited_reads_observe_updates() {
                     test_dir(),
                     obj.wrapping_sub(perry_abi::RECEIVER_HANDLE_FLOOR) as i64,
                     bits,
-                    &memo,
+                    &memo
                 )
                 .to_bits(),
                 expected,
                 "lazy-hash indexed read of {key}"
             );
             assert_eq!(
-                probe(child as usize, key),
-                expected,
-                "inherited indexed read of {key}"
-            );
-            assert_eq!(
                 perry_probe_set(test_dir(), boxed, bits, hash, i as f64 + 101.0),
                 1,
                 "indexed store of {key} must hit"
             );
+            assert_eq!(probe(obj, key), (i as f64 + 101.0).to_bits());
+        }
+        // Becoming a prototype changes the receiver's store contract: its
+        // writes use the ordinary funnel that marks prototype changes.
+        // Test the leaf store above while the receiver is still ordinary.
+        let child = crate::object::js_object_create(f64::from_bits(boxed)).to_bits() & POINTER_MASK;
+        for (i, key) in names.iter().enumerate() {
             assert_eq!(probe(child as usize, key), (i as f64 + 101.0).to_bits());
+            set(obj, key, i as f64 + 201.0);
+            assert_eq!(probe(child as usize, key), (i as f64 + 201.0).to_bits());
         }
         assert_eq!(probe(obj, "not_present"), TAG_UNDEFINED);
         assert_eq!(probe(child as usize, "not_present"), TAG_UNDEFINED);
