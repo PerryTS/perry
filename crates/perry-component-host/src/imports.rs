@@ -1,6 +1,9 @@
 //! Synchronous WIT imports may suspend a Wasmtime fiber, but JS executes on
 //! the embedding stack through the scoped dispatcher.
-use crate::{asynchronous::dispatch::Dispatcher, host_resources, transport, Import, StoreData};
+use crate::{
+    asynchronous::{dispatch::Dispatcher, origin},
+    host_resources, transport, Import, StoreData,
+};
 use anyhow::{ensure, Result};
 use std::sync::Arc;
 use wasmtime::{
@@ -58,13 +61,21 @@ pub(crate) fn link(
             let callback = callback.clone();
             let dispatcher = dispatcher.clone();
             Box::new(async move {
+                let mut store = store;
+                let captured = origin::capture(store.as_context_mut())?;
                 dispatcher
-                    .run(move || invoke(store, ty, params, results, &callback))
+                    .run(move || {
+                        let _scope = origin::Scope::enter(captured);
+                        invoke(store, ty, params, results, &callback)
+                    })
                     .await?
             })
         })?;
     } else {
         namespace.func_new(name, move |store, ty, params, results| {
+            let mut store = store;
+            let captured = origin::capture(store.as_context_mut())?;
+            let _scope = origin::Scope::enter(captured);
             invoke(store, ty, params, results, &callback)
         })?;
     }

@@ -1,5 +1,6 @@
 //! Async calls own the Store across suspension; only Accessor callbacks borrow it.
 pub(crate) mod dispatch;
+pub(crate) mod origin;
 use crate::{host_resources, transport, Host, Import, Imports, Live, StoreData};
 use anyhow::{ensure, Context, Result};
 use serde_json::Value;
@@ -38,52 +39,56 @@ pub(super) fn link_import(
     namespace.func_new_concurrent(name, move |accessor, ty, params, results| {
         let callback = callback.clone();
         Box::pin(async move {
-            // Wasmtime's eager first poll occurs on the guest's fiber. Once
-            // suspended, concurrent host tasks are polled by run_concurrent
-            // on the embedding stack, with Accessor's Store TLS active.
-            if embedding_stack {
-                futures_lite::future::yield_now().await;
-            }
-            let (args, borrows) = accessor.with(|mut store| {
-                let args = params
-                    .iter()
-                    .map(|v| transport::lift(store.as_context_mut(), v))
-                    .collect::<Result<Vec<_>>>();
-                // Take only this import's newly lifted borrows before yielding.
-                // Another async import may acquire its own borrows meanwhile.
-                let borrows = store.data_mut().resources.take_borrows();
-                (args, borrows)
-            });
-            let value = match args {
-                Ok(args) => callback(args).await,
-                Err(error) => Err(error),
-            };
-            accessor.with(|mut store| {
-                let outcome = (|| -> Result<()> {
-                    let cleanup = host_resources::drain(store.as_context_mut());
-                    let value = value?;
-                    cleanup?;
-                    let types: Vec<_> = ty.results().collect();
-                    ensure!(
-                        results.len() == usize::from(value.is_some()),
-                        "host import result count mismatch"
-                    );
-                    if let Some(value) = value {
-                        let mut lowering = transport::Lowering::new(store.as_context_mut());
-                        results[0] = lowering.value(&value, &types[0])?;
-                        lowering.commit()?;
-                    }
-                    Ok(())
-                })();
-                let mut cleanup = Ok(());
-                for borrow in borrows {
-                    if let Err(error) = borrow.resource_drop(&mut store) {
-                        cleanup = Err(error);
-                    }
+            let captured = accessor.with(|mut store| origin::capture(store.as_context_mut()))?;
+            origin::scoped(captured, async move {
+                // Wasmtime's eager first poll occurs on the guest's fiber. Once
+                // suspended, concurrent host tasks are polled by run_concurrent
+                // on the embedding stack, with Accessor's Store TLS active.
+                if embedding_stack {
+                    futures_lite::future::yield_now().await;
                 }
-                outcome.map_err(wasmtime::Error::from_anyhow)?;
-                cleanup
+                let (args, borrows) = accessor.with(|mut store| {
+                    let args = params
+                        .iter()
+                        .map(|v| transport::lift(store.as_context_mut(), v))
+                        .collect::<Result<Vec<_>>>();
+                    // Take only this import's newly lifted borrows before yielding.
+                    // Another async import may acquire its own borrows meanwhile.
+                    let borrows = store.data_mut().resources.take_borrows();
+                    (args, borrows)
+                });
+                let value = match args {
+                    Ok(args) => callback(args).await,
+                    Err(error) => Err(error),
+                };
+                accessor.with(|mut store| {
+                    let outcome = (|| -> Result<()> {
+                        let cleanup = host_resources::drain(store.as_context_mut());
+                        let value = value?;
+                        cleanup?;
+                        let types: Vec<_> = ty.results().collect();
+                        ensure!(
+                            results.len() == usize::from(value.is_some()),
+                            "host import result count mismatch"
+                        );
+                        if let Some(value) = value {
+                            let mut lowering = transport::Lowering::new(store.as_context_mut());
+                            results[0] = lowering.value(&value, &types[0])?;
+                            lowering.commit()?;
+                        }
+                        Ok(())
+                    })();
+                    let mut cleanup = Ok(());
+                    for borrow in borrows {
+                        if let Err(error) = borrow.resource_drop(&mut store) {
+                            cleanup = Err(error);
+                        }
+                    }
+                    outcome.map_err(wasmtime::Error::from_anyhow)?;
+                    cleanup
+                })
             })
+            .await
         })
     })?;
     Ok(())

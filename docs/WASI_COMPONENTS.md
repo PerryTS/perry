@@ -40,7 +40,7 @@ imports. Synchronous declarations and legacy manifests keep their existing
 calling convention. The native Rust embedding exposes `Host::call_async` and
 `Host::new_with_async_imports`.
 
-Each component permits one pending async invocation. A second async call is
+The TypeScript runtime permits one pending async invocation per component. A second async call is
 rejected until the first settles; independent components can progress through
 the same agent event pump. Native I/O wakes that agent using its identifier.
 Only the owning thread executes guest code, JavaScript imports or cleanup.
@@ -51,6 +51,22 @@ Import arguments cross the engine as owned JSON values,
 and borrowed host resources remain valid until their import Promise settles.
 Successful calls retain the Store for reuse. Traps, rejected imports and explicit
 disposal cancel suspended guest tasks and retire that component's Store.
+
+The Rust embedding can opt into `Host::into_driver()`, which returns an
+owner-thread `Driver` future and a cloneable `DriverClient`. Poll the driver
+while awaiting calls submitted with `client.call(interface, function, args)`.
+The driver accepts concurrent calls and continues polling guest imports after an
+export publishes its result. `Driver::is_active()` distinguishes guest work
+from an idle mailbox. `current_invocation()` identifies the original call in
+synchronous and asynchronous callbacks, including later polls and cancelled import cleanup.
+It contains no JavaScript value or callback frame. Overlapping and post-return
+tasks share one fuel budget, refreshed only after quiescence. The mailbox bounds
+outstanding requests, including queued requests whose futures were dropped.
+Dropping a call before execution skips it; dropping an unconsumed call after it
+starts requests Store retirement. Dropping the last client returns the Host if
+quiescent and retires it otherwise. The existing TypeScript bridge still needs
+per-invocation callback frames before it can use this driver. Generic async
+application values and producer APIs remain unfinished.
 
 This is a subset of the WASI 0.3 milestone. Enabling `wasi` now links the
 Turnloop-backed 0.3.0 providers as well as the P2 providers. WIT manifests

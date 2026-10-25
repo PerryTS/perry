@@ -2,6 +2,9 @@
 //! handles and limits. No Perry heap pointer crosses this crate boundary.
 mod async_values;
 mod asynchronous;
+mod driver;
+pub use asynchronous::origin::{current_invocation, InvocationId};
+pub use driver::{Driver, DriverCall, DriverClient};
 mod imports;
 pub use asynchronous::{AsyncImport, AsyncImports};
 mod cleanup;
@@ -57,6 +60,7 @@ impl Default for Options {
 }
 
 struct StoreData {
+    origins: asynchronous::origin::Origins,
     limits: limits::Limits,
     resources: resources::Resources,
     host_resources: host_resources::HostResources,
@@ -174,11 +178,16 @@ impl Host {
                     namespace.resource_async(
                         name,
                         wasmtime::component::ResourceType::host_dynamic(id),
-                        move |store, rep| {
+                        move |mut store, rep| {
                             let dispatcher = dispatcher.clone();
                             Box::new(async move {
+                                let captured =
+                                    asynchronous::origin::capture(store.as_context_mut())?;
                                 dispatcher
-                                    .run(move || host_resources::destroy(store, rep, id))
+                                    .run(move || {
+                                        let _scope = asynchronous::origin::Scope::enter(captured);
+                                        host_resources::destroy(store, rep, id)
+                                    })
                                     .await?
                                     .map_err(wasmtime::Error::from_anyhow)
                             })
@@ -189,7 +198,9 @@ impl Host {
                 namespace.resource(
                     name,
                     wasmtime::component::ResourceType::host_dynamic(id),
-                    move |store, rep| {
+                    move |mut store, rep| {
+                        let captured = asynchronous::origin::capture(store.as_context_mut())?;
+                        let _scope = asynchronous::origin::Scope::enter(captured);
                         host_resources::destroy(store, rep, id)
                             .map_err(wasmtime::Error::from_anyhow)
                     },
@@ -221,6 +232,7 @@ impl Host {
         let mut store = Store::new(
             &engine,
             StoreData {
+                origins: asynchronous::origin::Origins::default(),
                 limits,
                 resources: resources::Resources::default(),
                 host_resources,
