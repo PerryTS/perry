@@ -1008,26 +1008,33 @@ fn a_literal_method_called_from_another_unit_keeps_its_target() {
     // A published literal's field holding only a function of its unit is a
     // function contract (§11.2 applied to the field, §12 value contracts):
     // the reader's call keeps its single target.
-    for src in [
-        r#"
+    let src = r#"
         const util = { f: (m: any) => m, g: (m: any) => m };
         function a(x: any) { return util.f(x); }
         function b(x: any) { return util.g(x); }
         console.log(a("s"), b(1));
-        "#,
-        r#"
+        "#;
+    let whole = facts(src);
+    assert!(proven(&whole, "f"), "{}", whole.dump_text());
+    let pf = units(src);
+    assert!(pf.units.len() >= 3, "{}", pf.dump_text());
+    assert!(proven(&pf, "f"), "{}", pf.dump_text());
+    // A member stored after birth (TypeScript's namespace): the reader's
+    // field holds the function, not ⊤, but the call is refused in both
+    // modes, as its read is: no slot, `undefined` before the store.
+    let src = r#"
         var eu: any;
         (function (eu: any) { eu.f = (m: any) => m; })(eu || (eu = {}));
         function a(x: any) { return eu.f(x); }
         console.log(a("s"));
-        "#,
-    ] {
-        let whole = facts(src);
-        assert!(proven(&whole, "f"), "{}", whole.dump_text());
-        let pf = units(src);
-        assert!(pf.units.len() >= 3, "{}", pf.dump_text());
-        assert!(proven(&pf, "f"), "{}", pf.dump_text());
-    }
+        "#;
+    let why = "key not a definite birth field";
+    let whole = facts(src);
+    assert!(refused(&whole, "f", why), "{}", whole.dump_text());
+    let pf = units(src);
+    assert!(pf.units.len() >= 3, "{}", pf.dump_text());
+    assert!(holds_fn(&pf, "f"), "{}", pf.dump_text());
+    assert!(refused(&pf, "f", why), "{}", pf.dump_text());
 }
 
 #[test]

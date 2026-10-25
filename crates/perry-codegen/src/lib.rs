@@ -110,7 +110,7 @@ pub use codegen::{
     resolve_target_triple, short_spread_method_capabilities, take_module_static_seeds,
     target_os_of, user_function_symbol, AppMetadata, BirthProto, BirthShape, ClassAccessorNames,
     CompileOptions, ConstFnBirth, ConstructorContracts, CtorAbi, DefinedClassShape, ElisionFacts,
-    ExportedObjectLiteralCapability, FactsClass, FactsField, FactsRecv, FpContractMode,
+    ExportedObjectLiteralCapability, FactsBody, FactsClass, FactsField, FactsRecv, FpContractMode,
     ImportedClass, ImportedObjectLiteral, ImportedObjectLiteralMethod, ModuleBirth, NamespaceEntry,
     NamespaceEntryKind, ObjectLiteralMethodCandidate, ProgramClassShapeIds, ProgramFactsView,
     ResolvedConstructorContracts, ShortSpreadMethodCandidate, TypedMasks, STATIC_SEED_FORMAT,

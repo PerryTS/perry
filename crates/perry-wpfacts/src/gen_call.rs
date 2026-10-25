@@ -128,6 +128,7 @@ impl<'a> Gen<'a> {
                         key: a,
                         recv: o,
                         is_call: true,
+                        value_call: false,
                         func: fx.f,
                     });
                 }
@@ -146,6 +147,26 @@ impl<'a> Gen<'a> {
             }
             _ => {
                 let c = self.expr(fx, callee);
+                // A call through a value is a site: the bodies the callee
+                // node holds. A function named by the source (a declaration,
+                // an import binding, a closure expression) is no value call.
+                if byte_offset != 0
+                    && !matches!(
+                        callee,
+                        Expr::FuncRef(_) | Expr::ExternFuncRef { .. } | Expr::Closure { .. }
+                    )
+                {
+                    let key = self.m.atom("()");
+                    self.read_sites.push(ReadSite {
+                        module: fx.module,
+                        byte_offset,
+                        key,
+                        recv: c,
+                        is_call: true,
+                        value_call: true,
+                        func: fx.f,
+                    });
+                }
                 let r = self.call_value(c, ThisArg::Undef, args, spread);
                 if let Some(a) = lit {
                     let call = self.m.calls.len() as CallId - 1;

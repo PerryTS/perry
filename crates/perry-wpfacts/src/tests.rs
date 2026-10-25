@@ -9,6 +9,7 @@ mod captured;
 mod cjs_require;
 mod closed_world;
 mod closure_context;
+mod function_values;
 mod hub_tokens;
 mod layout_key;
 mod native_proto;
@@ -46,6 +47,25 @@ fn tmpl<'a>(pf: &'a ProgramFacts, name: &str) -> &'a crate::TemplateFacts {
         .iter()
         .find(|t| t.display.ends_with(&format!(":{name}")))
         .unwrap_or_else(|| panic!("template {name} in\n{}", pf.dump_text()))
+}
+
+/// Some layout's field `key` holds a function, and never ⊤.
+fn holds_fn(pf: &ProgramFacts, key: &str) -> bool {
+    let fs: Vec<_> = pf
+        .templates
+        .iter()
+        .flat_map(|t| &t.fields)
+        .filter(|f| f.key == key)
+        .collect();
+    fs.iter().any(|f| f.kind.funcs > 0) && fs.iter().all(|f| !f.kind.top)
+}
+
+/// Every site of `key` is refused, for `why`.
+fn refused(pf: &ProgramFacts, key: &str, why: &str) -> bool {
+    let s: Vec<_> = pf.sites.iter().filter(|s| s.key == key).collect();
+    !s.is_empty()
+        && s.iter()
+            .all(|s| matches!(&s.verdict, Verdict::No(r) if r.starts_with(why)))
 }
 
 fn field<'a>(t: &'a crate::TemplateFacts, k: &str) -> &'a crate::FieldFacts {

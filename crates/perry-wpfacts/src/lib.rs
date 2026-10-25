@@ -37,7 +37,7 @@ mod summary;
 mod tests;
 mod units;
 
-pub use bindings::{BindingFacts, ModuleBindings};
+pub use bindings::{BindingFacts, BodyRef, ModuleBindings};
 pub use derive::{FieldFacts, KindFact, SiteFacts, TemplateFacts, Verdict};
 use perry_hir::Module;
 

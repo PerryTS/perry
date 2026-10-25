@@ -773,6 +773,10 @@ pub struct Model {
     /// element kind (`perry_hir::TYPED_ARRAY_KIND_*`).
     pub ta_elem: FxHashMap<TmplId, u8>,
     pub resolvers: FxHashMap<NodeId, Tok>,
+    /// The bodies of closure expressions and of function declarations
+    /// (`bindings::BodyRef`: what codegen may call without the dispatcher).
+    pub closures: crate::pts::FxHashSet<FnIdx>,
+    pub decls: crate::pts::FxHashSet<FnIdx>,
     pub thrown: NodeId,
     /// E14: interpreted code can run (and patch `Object.prototype`).
     pub dyn_eval: Option<String>,
@@ -1767,6 +1771,18 @@ impl Model {
                 .is_some_and(|&d| d),
             None => self.beside_markers.contains(&t),
         }
+    }
+
+    /// A closed function's parameter marker (decision 13): what its callers
+    /// pass is the values beside it; the marker only records the uses for
+    /// its contract.
+    pub(crate) fn closed_marker(&self, t: Tok) -> bool {
+        self.is_marker(t)
+            && self.marker_members(t).iter().all(|x| {
+                self.param_marker
+                    .get(x)
+                    .is_some_and(|(f, _)| self.closed_params.contains_key(f))
+            })
     }
 
     /// A parameter marker or an argument marker (DECISIONS 44).
