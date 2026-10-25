@@ -204,6 +204,54 @@ fn results_of_results_do_not_chain_makers() {
 }
 
 #[test]
+fn an_alternating_persistent_structure_runs_once_per_class() {
+    // Two node classes whose methods make each other from four sites each
+    // (the HAMT shape: a node's update returns a node of another class).
+    // Every node a method made births the same (site, origin) objects, so
+    // its methods run as that origin, once per class: the method instances
+    // are bounded by the classes, not by the nodes.
+    let pf = facts(
+        r#"
+        declare const k: number;
+        class P { v: any; constructor(v: any) { this.v = v; }
+            m(x: any): any { return k > 1 ? new Q(x) : k > 2 ? new Q(this.v) : k > 3 ? new Q(1) : new Q("p"); } }
+        class Q { v: any; constructor(v: any) { this.v = v; }
+            m(x: any): any { return k > 1 ? new P(x) : k > 2 ? new P(this.v) : k > 3 ? new P(2) : new P("q"); } }
+        let n: any = new P(1);
+        for (let i = 0; i < 9; i++) { n = n.m(i); }
+        console.log(n.v);
+        "#,
+    );
+    assert!(
+        pf.stats.instances < 40,
+        "tokens {} instances {}\n{}",
+        pf.stats.tokens,
+        pf.stats.instances,
+        pf.dump_text()
+    );
+}
+
+#[test]
+fn a_persistent_structures_classes_keep_their_reads_apart() {
+    // Differential: the nodes of one structure run their methods as its
+    // origin, in one instance across their classes, and an inherited
+    // method still reads each node's own fields (a claim that `l2.get()`
+    // may be the C the I nodes hold, or `i.get()` the A, is imprecise; a
+    // claim of fewer is wrong at run time).
+    let pf = facts(&format!(
+        "{CLASSES}
+        class C {{ a = 3; b = \"z\"; }}
+        class N {{ k: any; constructor(k: any) {{ this.k = k; }} get(): any {{ return this.k; }} }}
+        class L extends N {{ m(): any {{ return new I(new C()); }} }}
+        class I extends N {{ m(): any {{ return new L(new A()); }} }}
+        function walk(l: any) {{ const i = l.m(); const l2 = i.m(); console.log(l2.get().a, i.get().b); }}
+        walk(new L(new A()));"
+    ));
+    holds(&pf, "a", &["A"]);
+    holds(&pf, "b", &["C"]);
+}
+
+#[test]
 fn a_recursive_constructor_folds_onto_its_ancestor() {
     // Construction nests (a part of a part is the whole's), so a
     // constructor that constructs its own class, or a class that constructs
