@@ -1155,6 +1155,7 @@ js_disposable_stack_use	f64	ptr,f64
 js_div	i64	i64,i64
 js_dns_get_default_result_order	f64	i64
 js_dns_get_servers	f64	i64
+js_dns_install_exports	void	
 js_dns_lookup	f64	i64
 js_dns_lookup_service	f64	i64
 js_dns_noop	f64	i64

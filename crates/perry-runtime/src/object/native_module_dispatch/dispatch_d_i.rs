@@ -93,6 +93,12 @@ pub(crate) unsafe fn nm_dispatch_dns(ctx: &NmCtx, module_name: &str, method_name
         ("dns" | "dns/promises", "setDefaultResultOrder") => {
             crate::dns::dns_set_default_result_order_value(arg(0))
         }
+        // Callable exports reached through a runtime namespace (the CommonJS
+        // `require`): same FFIs the static native table binds for ESM.
+        ("dns" | "dns/promises", method) => {
+            crate::dns::dispatch_export(module_name == "dns/promises", method, pack_args() as i64)
+                .unwrap_or_else(|| f64::from_bits(JSValue::undefined().bits()))
+        }
 
         // #2130: captured-then-called child_process methods (`const spawn =
         // require('child_process').spawn; spawn(...)`, Node's canonical test

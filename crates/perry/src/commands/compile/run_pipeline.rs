@@ -1278,6 +1278,13 @@ pub fn run_with_parse_cache(
     let mut native_provider_installs: Vec<String> = ctx
         .native_routing
         .wrapper_install_hooks(program_modules.iter().map(String::as_str));
+    // A program that names `dns` arms the router for the lookup/resolve
+    // exports a CommonJS `require('node:dns')` reaches through the dynamic
+    // native module dispatch (`js_dns_install_exports`); one that does not
+    // keeps those FFIs, and the host resolver behind them, out of the link.
+    if ctx.uses_dns {
+        native_provider_installs.push("js_dns_install_exports".to_string());
+    }
     // #11616: only the direct `process.getBuiltinModule(id)` call reaches the
     // devirt entry that arms the install-all hooks. Reached any other way — a
     // `const proc = process` alias, `process?.getBuiltinModule?.(id)` — the

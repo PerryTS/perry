@@ -494,6 +494,23 @@ fn collect_module_one(
         ctx.needs_stdlib = true;
         ctx.native_module_imports.insert(module);
     }
+    // `dns` is runtime-only, so `stdlib_modules` never lists it. Note a literal
+    // `require('dns')` (and a `getBuiltinModule` mention of it) separately: it
+    // arms the dns export router (`js_dns_install_exports`).
+    let is_dns = |spec: &str| {
+        matches!(
+            spec.strip_prefix("node:").unwrap_or(spec),
+            "dns" | "dns/promises"
+        )
+    };
+    ctx.uses_dns |= super::cjs_wrap::extract_require_specifiers(&source)
+        .iter()
+        .any(|spec| is_dns(spec));
+    if source.contains("getBuiltinModule") {
+        ctx.uses_dns |= node_specifier_literals(&source)
+            .into_iter()
+            .any(|spec| is_dns(spec));
+    }
     if let Some(prefix_line_count) = debug_prefix_line_count {
         ctx.cjs_wrap_debug_sources.insert(
             canonical.clone(),
@@ -1924,6 +1941,7 @@ fn collect_module_one(
         }
     }
 
+    ctx.uses_dns |= hir_module.imports.iter().any(|i| is_dns(&i.source));
     ctx.reexport_pruner.imports(&hir_module.imports);
 
     // Process re-exports

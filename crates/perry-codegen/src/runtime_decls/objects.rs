@@ -392,6 +392,7 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function("js_nm_install_worker_threads", VOID, &[]);
     module.declare_function("js_nm_install_all", VOID, &[]);
     module.declare_function("js_nm_enable_install_all", VOID, &[]);
+    module.declare_function("js_dns_install_exports", VOID, &[]);
     // The named read's entries behind the probe (`object/field_get_set/
     // get_slow.rs`): the complete read of a heap receiver the probe declined
     // (payload, key handle); the complete read of any value (bits, key handle,
