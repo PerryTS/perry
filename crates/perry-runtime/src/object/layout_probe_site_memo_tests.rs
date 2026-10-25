@@ -4,7 +4,7 @@ fn atom(name: &[u8]) -> *const crate::StringHeader {
     crate::string::js_string_pool_atom(
         name.as_ptr(),
         name.len() as u32,
-        unsafe { crate::object::key_bytes_hash(name.as_ptr(), name.len()) },
+        crate::object::key_bytes_hash(name.as_ptr(), name.len()),
         0,
     ) as *const _
 }

@@ -78,6 +78,9 @@ fn respond(out: *mut Buffer, result: Result<Vec<u8>>) -> i32 {
     }
 }
 
+/// # Safety
+/// The buffer must be empty or an unconsumed allocation returned by this host.
+/// Its pointer and length must be unchanged, and no borrow may remain.
 #[no_mangle]
 pub unsafe extern "C" fn perry_component_host_buffer_drop(buffer: Buffer) {
     if !buffer.data.is_null() {
@@ -89,6 +92,9 @@ pub unsafe extern "C" fn perry_component_host_buffer_drop(buffer: Buffer) {
 }
 
 /// A command owns its store for this call only; no callback bridge is exposed.
+/// # Safety
+/// Each nonempty input pointer must cover its stated readable byte length.
+/// A nonnull output pointer must be writable and exclusively borrowed.
 #[no_mangle]
 pub unsafe extern "C" fn perry_component_host_run_command(
     wasm: *const u8,
@@ -118,6 +124,11 @@ impl Drop for Reply {
     }
 }
 
+/// # Safety
+/// Each nonempty input pointer must cover its stated readable byte length.
+/// A nonnull error output must be writable. Supplied callbacks and their
+/// context must remain valid until this bridge is dropped; reply buffers must
+/// obey the callback/deallocator ownership contract.
 #[no_mangle]
 pub unsafe extern "C" fn perry_component_host_new(
     wasm: *const u8,
@@ -236,6 +247,10 @@ unsafe fn bridge<'a>(handle: *mut c_void) -> Result<&'a Bridge> {
     Ok(&*handle.cast::<Bridge>())
 }
 
+/// # Safety
+/// The handle must name a live bridge from this host on its owning thread.
+/// Input pointers must cover their stated lengths, and a nonnull output must
+/// be writable and exclusively borrowed for this call.
 #[no_mangle]
 pub unsafe extern "C" fn perry_component_host_call(
     handle: *mut c_void,
@@ -264,6 +279,10 @@ pub unsafe extern "C" fn perry_component_host_call(
     )
 }
 
+/// # Safety
+/// The handle must name a live bridge on its owning thread. A nonnull output
+/// must be writable and exclusively borrowed. This releases the store, not
+/// the bridge allocation; the handle still requires exactly one drop.
 #[no_mangle]
 pub unsafe extern "C" fn perry_component_host_dispose(
     handle: *mut c_void,
@@ -293,6 +312,10 @@ pub unsafe extern "C" fn perry_component_host_dispose(
     }
 }
 
+/// # Safety
+/// The handle must name a live bridge on its owning thread. The token pointer
+/// must cover len readable bytes; a nonnull output must be writable and
+/// exclusively borrowed for this call.
 #[no_mangle]
 pub unsafe extern "C" fn perry_component_host_resource_drop(
     handle: *mut c_void,
@@ -319,6 +342,9 @@ pub unsafe extern "C" fn perry_component_host_resource_drop(
     }
 }
 
+/// # Safety
+/// A nonnull handle must name a live bridge whose allocation cannot be
+/// concurrently destroyed during this call.
 #[no_mangle]
 pub unsafe extern "C" fn perry_component_host_interrupt(handle: *mut c_void) {
     if let Ok(bridge) = bridge(handle) {
@@ -326,6 +352,10 @@ pub unsafe extern "C" fn perry_component_host_interrupt(handle: *mut c_void) {
     }
 }
 
+/// # Safety
+/// The handle must name a live bridge on its owning thread. The request pointer
+/// must cover len readable bytes; a nonnull output must be writable and
+/// exclusively borrowed for this call.
 #[no_mangle]
 pub unsafe extern "C" fn perry_component_host_resource_collect(
     handle: *mut c_void,
@@ -357,6 +387,9 @@ pub unsafe extern "C" fn perry_component_host_resource_collect(
     }
 }
 
+/// # Safety
+/// A nonnull handle must be an unconsumed bridge allocation from this host,
+/// on its owning thread, with no active guest call or outstanding borrower.
 #[no_mangle]
 pub unsafe extern "C" fn perry_component_host_drop(handle: *mut c_void) {
     if !handle.is_null() {
@@ -387,12 +420,14 @@ mod tests;
 #[cfg(not(test))]
 extern "C" {
     fn js_runtime_set_component_host_ops(ops: *const ComponentHostOps);
+    fn js_runtime_component_io_ops() -> *const perry_abi::component_io::Ops;
 }
 
 #[no_mangle]
 pub extern "C" fn perry_component_host_register() {
     #[cfg(not(test))]
     unsafe {
+        crate::sync_wasi::native_io::install(js_runtime_component_io_ops());
         js_runtime_set_component_host_ops(&OPS);
     }
 }

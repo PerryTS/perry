@@ -1039,10 +1039,9 @@ fn computed_generator_receivers_match_named_methods() {
                     count += check_closures(expr, expected_class);
                 }
             }
-            assert!(
-                count >= if is_async { 3 } else { 1 },
-                "must inspect each generator continuation"
-            );
+            // Both protocols now retain one shared resume closure; operation
+            // dispatch belongs to that closure and the generator boundary.
+            assert_eq!(count, 1, "must inspect the shared generator continuation");
         }
     }
 }

@@ -351,7 +351,7 @@ fn listening_queued_for(server: Handle) -> usize {
         .lock()
         .unwrap()
         .iter()
-        .filter(|ev| matches!(ev, PendingWsEvent::Listening(h) if *h == server))
+        .filter(|(_, ev)| matches!(ev, PendingWsEvent::Listening(h) if *h == server))
         .count()
 }
 

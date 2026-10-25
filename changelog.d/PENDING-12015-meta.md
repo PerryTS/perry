@@ -24,4 +24,4 @@ RSS medians have small increases on four drivers (up to 1 MiB) and a 1.34 MiB
 reduction on QS stringify, so the literal all-negative RSS/symmetric-window goal
 is not fully satisfied. Descriptor reflection's micro rises 0.19%.
 Full attribution, before/after/Node micro rows, program medians and baseline
-failure lists: `docs/perf-12015-attribution.md`. Versions are unchanged.
+failure lists: `docs/audits/perf-12015-attribution.md`. Versions are unchanged.

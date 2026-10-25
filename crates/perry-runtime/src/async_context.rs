@@ -51,6 +51,7 @@ pub(crate) fn alloc_snapshot_holder_in<const OLD: bool>(
     } as *mut AsyncSnapshotHolder;
     crate::arena::note_young_owned_store(cell.cast());
     unsafe {
+        // GC_STORE_AUDIT(EXTERNAL_BARRIERED): allocate_snapshot_holder holds GcSuppressScope across allocation and publication; every snapshot store word is visited by runtime_write_barrier_external_slot(cell, slot, bits) before scope exit (async_context.rs37-69).
         std::ptr::write(
             cell,
             AsyncSnapshotHolder {
@@ -77,6 +78,7 @@ pub(crate) unsafe fn snapshot_holder_moved_for_gc(old_user: usize, new_user: usi
         return;
     }
     let old = old_user as *mut AsyncSnapshotHolder;
+    // GC_STORE_AUDIT(POINTER_FREE): Move hook replaces abandoned old.snapshot with AsyncContextSnapshot::default (empty Vec), removing ownership/edges after copy. It introduces no managed pointer; note_owned_store_copied records the new owner.
     std::ptr::write(
         std::ptr::addr_of_mut!((*old).snapshot),
         AsyncContextSnapshot::default(),

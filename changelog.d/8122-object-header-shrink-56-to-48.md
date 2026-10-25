@@ -77,7 +77,7 @@ rather than the quotient.
 Four codegen doc comments claiming "24 on 64-bit, 20 on ILP32" — wrong since
 `meta` landed in #6759 — are corrected, along with `docs/src/platforms/watchos.md`
 (the only user-facing statement of the pair), `docs/object-write-matrix.md`, and
-`TYPE_LOWERING.md`.
+`docs/type-lowering.md`.
 
 #### Two gates that could not have caught this
 

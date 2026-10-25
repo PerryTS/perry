@@ -73,12 +73,12 @@ SEMVER = re.compile(r"^\d+\.\d+\.\d+$")
 # ---------------------------------------------------------------------------
 MIRRORS: tuple[tuple[str, str, str], ...] = (
     (
-        "CLAUDE.md",
+        "AGENTS.md",
         r"The oracle is Node `(\d+\.\d+\.\d+)`",
         "gap",
     ),
     (
-        "CLAUDE.md",
+        "AGENTS.md",
         r"`tools\.node\.version`\s*[—-]\s*currently \*\*(\d+\.\d+\.\d+)\*\*",
         "matrix",
     ),
@@ -337,12 +337,12 @@ def self_test() -> int:
         return lambda path: overrides.get(path, _read(path))
 
     # Rule 1a: a drifted restatement is caught.
-    drifted = _read("CLAUDE.md").replace(
+    drifted = _read("AGENTS.md").replace(
         f"The oracle is Node `{real['gap']}`", "The oracle is Node `22.23.1`", 1
     )
     if not any(
         "states Node 22.23.1" in f
-        for f in check(reader=fake_reader({"CLAUDE.md": drifted}))
+        for f in check(reader=fake_reader({"AGENTS.md": drifted}))
     ):
         failures.append("rule 1 does not catch a drifted version restatement")
 

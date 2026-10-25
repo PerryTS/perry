@@ -1299,8 +1299,10 @@ case "$TEST_SUITE" in
         # strict-mode ESM for Node and for Perry alike. `-name '*.ts'` does NOT
         # match `foo.cts` (the suffix is `.cts`), so such a fixture was invisible
         # to the suite — a dark test, green because it never ran.
+        # Standalone test_*.cjs entries also keep their CommonJS format;
+        # other .cjs files here are support modules, not standalone tests.
         done < <(find "$TEST_DIR" -maxdepth 1 -type f \
-            \( -name '*.ts' -o -name '*.cts' -o -name '*.mts' \) | sort)
+            \( -name '*.ts' -o -name '*.cts' -o -name '*.mts' -o -name 'test_*.cjs' \) | sort)
         ;;
     parity|smoke)
         while IFS= read -r test_file; do
@@ -1417,6 +1419,11 @@ for (( selected_i = 0; selected_i < JOURNAL_TOTAL; selected_i++ )); do
     perry_binary="$PARITY_TMP/perry_parity_$safe_test_id$PERRY_EXE_SUFFIX"
     parity_test_file="$test_file"
     perry_compile_command=()
+    # The legacy filename shortcut accepts TypeScript extensions only.
+    # Standalone CommonJS fixtures must use the explicit compile command.
+    if [[ "$test_file" == *.cjs ]]; then
+        perry_compile_command=(compile)
+    fi
     parity_argv_line=$(sed -n -E 's|^[[:space:]]*//[[:space:]]*parity-argv:[[:space:]]*(.*)$|\1|p' "$test_file" | head -1)
     parity_node_argv_line=$(sed -n -E 's|^[[:space:]]*//[[:space:]]*parity-node-argv:[[:space:]]*(.*)$|\1|p' "$test_file" | head -1)
     parity_env_line=$(sed -n -E 's|^[[:space:]]*//[[:space:]]*parity-env:[[:space:]]*(.*)$|\1|p' "$test_file" | head -1)

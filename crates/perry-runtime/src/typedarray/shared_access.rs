@@ -16,15 +16,19 @@ pub(crate) unsafe fn copy_lane(
     _scope: &crate::buffer::bytes::NoGc<'_>,
 ) {
     match size {
+        // GC_STORE_AUDIT(POINTER_FREE): copy_lane moves one numeric typed-array lane (u8/u16/u32/u64 loaded atomically) into exclusively owned numeric byte storage under NoGc. No boxed GC value is interpreted or stored; all four width arms preserve raw numeric payload.
         1 => dest.write((&*source.cast::<AtomicU8>()).load(Relaxed)),
         2 => dest
             .cast::<u16>()
+            // GC_STORE_AUDIT(POINTER_FREE): copy_lane moves one numeric typed-array lane (u8/u16/u32/u64 loaded atomically) into exclusively owned numeric byte storage under NoGc. No boxed GC value is interpreted or stored; all four width arms preserve raw numeric payload.
             .write((&*source.cast::<AtomicU16>()).load(Relaxed)),
         4 => dest
             .cast::<u32>()
+            // GC_STORE_AUDIT(POINTER_FREE): copy_lane moves one numeric typed-array lane (u8/u16/u32/u64 loaded atomically) into exclusively owned numeric byte storage under NoGc. No boxed GC value is interpreted or stored; all four width arms preserve raw numeric payload.
             .write((&*source.cast::<AtomicU32>()).load(Relaxed)),
         8 => dest
             .cast::<u64>()
+            // GC_STORE_AUDIT(POINTER_FREE): copy_lane moves one numeric typed-array lane (u8/u16/u32/u64 loaded atomically) into exclusively owned numeric byte storage under NoGc. No boxed GC value is interpreted or stored; all four width arms preserve raw numeric payload.
             .write((&*source.cast::<AtomicU64>()).load(Relaxed)),
         _ => unreachable!("typed element width"),
     }

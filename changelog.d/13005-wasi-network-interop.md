@@ -16,5 +16,5 @@ This qualifies the component ABI and host providers, not `node:dgram` inside
 Perry-authored WASI guests, cancellation, HTTP or P3. Linux qualification passed
 23 host tests, 20 runtime component tests and all 21 native acceptance phases,
 including TCP/UDP/DNS in normal and moving-GC runs. The receipt in
-`docs/validation/wasi-network-interop-20261021.json` records the exact tested source,
+`docs/audits/wasi-component-validation-2026-10-21/wasi-network-interop-20261021.json` records the exact tested source,
 artifact hashes and copying/verification/quarantine witnesses.

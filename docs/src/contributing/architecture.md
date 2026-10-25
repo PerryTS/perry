@@ -97,7 +97,16 @@ perry-hir/src/
   lower_decl.rs      # Declaration lowering
 ```
 
+## Adding a native UI widget
+
+A new widget touches four places:
+
+1. Runtime: create the widget in `crates/perry-ui-macos/src/widgets/` and call `register_widget(view)`.
+2. FFI: export `perry_ui_<widget>_create` from `crates/perry-ui-macos/src/lib.rs`.
+3. Codegen: declare the extern and add the `NativeMethodCall` dispatch in `crates/perry-codegen/src/lower_call/native/native_ui_widgets_branch.rs`.
+4. HIR: `crates/perry-hir/src/lower/`, only if the widget has instance methods.
+
 ## Next Steps
 
 - [Building from Source](building.md)
-- See `CLAUDE.md` in the repository root for detailed implementation notes
+- See `AGENTS.md` in the repository root for implementation traps

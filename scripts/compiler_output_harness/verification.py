@@ -669,10 +669,36 @@ def generic_native_rep_contract_results(
             )
 
     allowed_reasons = {str(r) for r in check_spec.get("allow_materialization_reasons", [])}
+    # Reviews are exact single-record proofs, never a reason-wide allowance.
+    review_fields = {
+        "name", "claim", "function", "source_function", "block_label",
+        "expr_kind", "consumer", "native_rep_name", "materialization_reason",
+    }
+    reviewed_records: set[int] = set()
+    review_names: set[str] = set()
+    for review in check_spec.get("review_materializations", []) or []:
+        valid = (
+            isinstance(review, dict)
+            and set(review) == review_fields
+            and all(isinstance(value, str) and value.strip() for value in review.values())
+            and review["materialization_reason"] not in allowed_reasons
+        )
+        name = str(review.get("name", "invalid")) if isinstance(review, dict) else "invalid"
+        matches = [
+            i for i, record in enumerate(materialization_records)
+            if valid and _record_matches_required(record, review)
+        ]
+        unique = len(matches) == 1 and name not in review_names and not reviewed_records.intersection(matches)
+        add(f"native_reps_materialization_review_{name}", valid and unique,
+            f"review={json.dumps(review, sort_keys=True)} matches={len(matches)}")
+        review_names.add(name)
+        if valid and unique:
+            reviewed_records.update(matches)
     unexpected_materializations = [
         r
-        for r in materialization_records
-        if r.get("materialization_reason")
+        for i, r in enumerate(materialization_records)
+        if i not in reviewed_records
+        and r.get("materialization_reason")
         and _field_name(r.get("materialization_reason")) not in allowed_reasons
     ]
     dynamic_fallbacks = [r for r in records if _is_dynamic_fallback(r)]

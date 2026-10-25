@@ -190,6 +190,8 @@ impl ConstructionArray {
     ) -> *mut ArrayHeader {
         self.right_size(batch);
         self.finish_layout(batch);
+        // JSON has no holes: every slot below the length is a parsed value.
+        crate::array::ek_birth_prefix(self.ptr, (*self.ptr).length);
         self.ptr
     }
 

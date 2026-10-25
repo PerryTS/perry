@@ -32,7 +32,7 @@ record index is initialized in its existing open payload, rather than
 replacing that payload through attach and retiring the new record.
 
 The RSS attribution and identical-binary control are recorded in
-`docs/native-payload-lifecycle-rss.md`. `scripts/runtime_rss_ab.py` prepares
+`docs/audits/native-payload-lifecycle-rss.md`. `scripts/runtime_rss_ab.py` prepares
 each executable's file cache identically before interleaved Linux RSS runs;
 copied and linked copies of the same ELF can otherwise differ by over 10 MiB
 of clean file-backed RSS even with anonymous THP disabled.

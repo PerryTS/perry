@@ -40,7 +40,7 @@ EXCLUDED = excluded_members(load_policy(), "linux-test")
 INFRA_PREFIXES = (".github/", "scripts/", "rust-toolchain")
 
 # Top-level files with no effect on which crates to test.
-IGNORABLE_EXACT = {"Cargo.toml", "Cargo.lock", "CHANGELOG.md", "CLAUDE.md", "LICENSE"}
+IGNORABLE_EXACT = {"Cargo.toml", "Cargo.lock", "CHANGELOG.md", "CLAUDE.md", "AGENTS.md", "LICENSE"}
 
 
 def _is_ignorable(path: str) -> bool:

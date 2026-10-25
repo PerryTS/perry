@@ -6,7 +6,7 @@ localized but **not fixed**. It fails at `zod/src/v4/core/parse.ts:65`
 `undefined`), all three observed messages are one loss seen at different points,
 and the failure needs the `new Function` path: `jitless` gives 0/16 against
 8/16 with it. Five hypotheses were tested and refuted or left unsupported; the
-audit trail, including the null results, is in `gc-handoff/ZOD-NOTES.md`.
+audit trail, including the null results, is in `gc-handoff/ZOD-NOTES.md` (removed in #13193; `git show 44fcf437dd:gc-handoff/ZOD-NOTES.md`).
 
 **Two rooting defects found and fixed on the way:**
 
@@ -115,7 +115,7 @@ moves, preserving the slot's stored form. Measured on the pinned zod
 schedule: seeds 1, 2 and 5 flip from ~2/3 aborting to 0 failures (with
 `copying_minors>0` asserted per run); seed 3 retains one residual window,
 characterized to the exact slot, record and creation cycle in
-`gc-handoff/ZOD-NOTES.md` §40.
+`gc-handoff/ZOD-NOTES.md` (removed in #13193; `git show 44fcf437dd:gc-handoff/ZOD-NOTES.md`) §40.
 
 Also landed: the remembered-set rebuild for promoted objects now runs AFTER
 the worklist drain (it previously covered only root-phase promotions —

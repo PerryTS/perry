@@ -370,6 +370,9 @@ pub extern "C" fn js_array_map(
         };
 
         let exotic = crate::array::array_iteration_is_exotic(arr);
+        // The plain result's dense prefix: the leading run of written slots
+        // (a source hole leaves the result's slot a hole).
+        let mut written_run: u32 = 0;
         for i in 0..length as usize {
             let element = if exotic {
                 let arr = rooted.arr();
@@ -403,6 +406,9 @@ pub extern "C" fn js_array_map(
                 // under the array's already-known layout first), so no
                 // separate publish write is needed here.
                 super::header_gc_slots::fill_resolved_array_slot(result, i, mapped.to_bits());
+                if i as u32 == written_run {
+                    written_run += 1;
+                }
             } else {
                 // Custom species container: CreateDataPropertyOrThrow via [[Set]].
                 crate::array::species::species_result_set(
@@ -413,7 +419,14 @@ pub extern "C" fn js_array_map(
             }
         }
 
-        result_arr(&result_rooted)
+        if is_plain {
+            let result = result_arr(&result_rooted);
+            // The plain result is this map's own fill, never seen by the callback.
+            crate::array::ek_birth_prefix(result, written_run);
+            result
+        } else {
+            result_arr(&result_rooted)
+        }
     }
 }
 

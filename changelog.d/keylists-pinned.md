@@ -27,7 +27,7 @@ Both caches pay in deletion probes and remain; owned mutable lists and prototype
 words still require the residual shape scanner. The matched runtime suite
 reproduces seven existing main failures, and the native root corpus reproduces
 two main findings without weaker budgets. Detailed tables, RSS increases,
-shared-runtime text growth and attribution are in lane-keylists/report.md.
+shared-runtime text growth and attribution are in `lane-keylists/report.md` (removed in #13193; `git show 44fcf437dd:lane-keylists/report.md`).
 
 Copying root walks now retain the producer-decoded word and publish diagnostic
 provenance once per producer walk. Alignment, header validation, handle rejection,

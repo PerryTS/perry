@@ -80,9 +80,7 @@ pub fn clear_children(handle: i64) {
         } else if let Some(scrolled) = parent.downcast_ref::<gtk4::ScrolledWindow>() {
             scrolled.set_child(None::<&Widget>);
         } else if let Some(overlay) = parent.downcast_ref::<gtk4::Overlay>() {
-            // ZStack: remove overlays
-            // Note: Overlay doesn't provide iteration of overlays easily,
-            // so we remove the child
+            // ZStack: Overlay cannot enumerate its overlays, so only the main child is cleared.
             overlay.set_child(None::<&Widget>);
         } else if let Some(frame) = parent.downcast_ref::<gtk4::Frame>() {
             // Section: clear the inner box
@@ -100,7 +98,6 @@ pub fn clear_children(handle: i64) {
 /// Add a child widget to a parent widget at a specific index.
 pub fn add_child_at(parent_handle: i64, child_handle: i64, index: i64) {
     if let (Some(parent), Some(child)) = (get_widget(parent_handle), get_widget(child_handle)) {
-        // Unparent if already has a parent
         if child.parent().is_some() {
             child.unparent();
         }
@@ -132,13 +129,11 @@ pub fn add_child_at(parent_handle: i64, child_handle: i64, index: i64) {
 /// Add a child view to a parent view.
 pub fn add_child(parent_handle: i64, child_handle: i64) {
     if let (Some(parent), Some(child)) = (get_widget(parent_handle), get_widget(child_handle)) {
-        // Unparent if already has a parent
         if child.parent().is_some() {
             child.unparent();
         }
 
         if let Some(container) = parent.downcast_ref::<gtk4::Box>() {
-            // Set spacer expand direction based on parent orientation
             if child.has_css_class("perry-spacer") {
                 match container.orientation() {
                     gtk4::Orientation::Horizontal => {
@@ -175,6 +170,8 @@ pub fn add_child(parent_handle: i64, child_handle: i64) {
 }
 
 /// Apply inline CSS to a single widget via a per-widget CssProvider.
+// GTK 4.10 deprecated per-widget style providers without a replacement.
+#[allow(deprecated)]
 pub fn apply_css(widget: &Widget, css: &str) {
     let provider = gtk4::CssProvider::new();
     provider.load_from_data(css);
@@ -190,9 +187,7 @@ pub fn set_enabled(handle: i64, enabled: bool) {
     }
 }
 
-/// Set opacity (issue #185 Phase B). GTK4 has a built-in
-/// `Widget::set_opacity(0.0..=1.0)` that handles compositing on the
-/// platform's behalf; no CSS provider needed.
+/// Set opacity (0.0..=1.0) through GTK's own compositing; no CSS provider needed.
 pub fn set_opacity(handle: i64, opacity: f64) {
     if let Some(widget) = get_widget(handle) {
         widget.set_opacity(opacity);
@@ -209,17 +204,14 @@ thread_local! {
         = RefCell::new(std::collections::HashMap::new());
 }
 
-/// Helper: regenerate the per-handle border CSS provider from current
-/// state. Called from both `set_border_color` and `set_border_width`.
+/// Regenerate the per-handle border CSS from the joint state.
 fn apply_border_css(handle: i64) {
     let Some(widget) = get_widget(handle) else {
         return;
     };
     let (color, width) =
         BORDER_STATE.with(|s| s.borrow().get(&handle).copied().unwrap_or((None, None)));
-    // Defaults match CALayer-ish behavior: width 1.0 if unset,
-    // color black if unset. The cross-platform shape lets users
-    // call either setter alone and still get a visible border.
+    // Defaults (black, 1px) let either setter alone produce a visible border, as on CALayer.
     let (r, g, b, a) = color.unwrap_or((0.0, 0.0, 0.0, 1.0));
     let w = width.unwrap_or(1.0);
     let class_name = format!("perry-bd-{}", handle);
@@ -252,7 +244,7 @@ fn apply_border_css(handle: i64) {
     }
 }
 
-/// Set border color (issue #185 Phase B). Joint state with `set_border_width`.
+/// Set border color. Joint state with `set_border_width`.
 pub fn set_border_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
     BORDER_STATE.with(|s| {
         let mut state = s.borrow_mut();
@@ -262,7 +254,7 @@ pub fn set_border_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
     apply_border_css(handle);
 }
 
-/// Set border width (issue #185 Phase B). Joint state with `set_border_color`.
+/// Set border width. Joint state with `set_border_color`.
 pub fn set_border_width(handle: i64, width: f64) {
     BORDER_STATE.with(|s| {
         let mut state = s.borrow_mut();
@@ -323,20 +315,12 @@ pub fn set_corner_radius(handle: i64, radius: f64) {
     }
 }
 
-/// Set drop shadow on a widget via CSS `box-shadow` (issue #185 Phase B).
-/// `(r, g, b, a)` is shadow color in 0–1 (alpha rides on the rgba() in CSS,
-/// so a non-1 alpha produces the soft tint just like the Apple twin's
-/// shadowOpacity). `blur` is the blur radius (px). `(offset_x, offset_y)`
-/// is the offset (positive y = downward, matching CSS `box-shadow` and
-/// the Apple CALayer twin).
+/// Set a drop shadow via CSS `box-shadow`. Color components are 0–1 (alpha acts like
+/// `shadowOpacity`), `blur` is in px, and positive `offset_y` points down, as on CALayer.
 ///
-/// Pattern mirrors `set_corner_radius`: a per-handle CSS class like
-/// `perry-sh-{handle}` is added to the widget, and a fresh
-/// `CssProvider` emits the `box-shadow` rule scoped to that class.
-/// Display-level `STYLE_PROVIDER_PRIORITY_USER` for buttons (matches
-/// the corner-radius button special-case), widget-level for other
-/// widgets via the shared `apply_css` helper. The class is removed
-/// before re-adding so repeat calls don't pile up stale providers.
+/// Like `set_corner_radius`, the rule is scoped to a per-handle `perry-sh-{handle}` class:
+/// display-level at USER priority for buttons, widget-level otherwise. The class is removed
+/// before re-adding so repeated calls do not pile up stale providers.
 pub fn set_shadow(
     handle: i64,
     r: f64,
@@ -390,12 +374,9 @@ pub fn set_background_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
             (b * 255.0) as u8,
             a
         );
-        // For buttons, make flat first (strips Adwaita chrome), then set background
-        // via a unique CSS class on the display provider at USER priority.
         let is_button = widget.downcast_ref::<gtk4::Button>().is_some();
         if is_button {
-            // Make flat to strip Adwaita chrome, then apply background via
-            // display-level CSS at USER priority to override the theme.
+            // `flat` strips the Adwaita chrome; display-level USER priority overrides the theme.
             widget.add_css_class("flat");
             let class_name = format!("perry-bg-{}", handle);
             widget.add_css_class(&class_name);
@@ -451,11 +432,7 @@ pub fn set_background_gradient(
     }
 }
 
-/// Set an on-hover callback on a widget. As of issue #1868 the
-/// callback receives `(isHovering: boolean)` — fires `true` on enter
-/// and `false` on leave through the same closure. Previously this fired
-/// `1.0` / `0.0` numeric values, which are still truthy-equivalent but
-/// don't satisfy `=== true` checks.
+/// Set an on-hover callback; it receives `true` on enter and `false` on leave.
 pub fn set_on_hover(handle: i64, callback: f64) {
     extern "C" {
         fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
@@ -530,7 +507,7 @@ pub fn set_on_click(handle: i64, callback: f64) {
     }
 }
 
-/// Continuous pointer events (issue #1868). Wires onMouseDown/Up/Move
+/// Continuous pointer events. Wires onMouseDown/Up/Move
 /// using `GtkGestureClick` (for press/release with button info) and
 /// `GtkEventControllerMotion` (for motion).
 ///
@@ -704,10 +681,8 @@ pub fn match_parent_height(handle: i64) {
 pub fn set_height(handle: i64, height: f64) {
     if let Some(widget) = get_widget(handle) {
         let h = height as i32;
-        // Use CSS to enforce both min and max height
         let css = format!("* {{ min-height: {}px; max-height: {}px; }}", h, h);
         apply_css(&widget, &css);
-        // Prevent vertical expansion beyond the requested height
         widget.set_vexpand(false);
         widget.set_valign(gtk4::Align::Center);
     }
@@ -739,7 +714,6 @@ pub fn set_alignment(handle: i64, alignment: i64) {
                     7 => gtk4::Align::Fill,   // Width
                     _ => gtk4::Align::Fill,
                 };
-                // Set halign on all existing children
                 let mut child = container.first_child();
                 while let Some(c) = child {
                     c.set_halign(align);
@@ -763,13 +737,8 @@ pub fn set_alignment(handle: i64, alignment: i64) {
     }
 }
 
-/// Remove a single child widget from its parent. Mirrors macOS
-/// `perry_ui_widget_remove_child`. Dispatches by parent container kind:
-/// Box uses `remove(&child)`; ScrolledWindow / Frame inner-box / Overlay
-/// each clear by their own API. The handle stays registered (we don't
-/// shrink the WIDGETS vec, since handles are positional indices) — only
-/// the GTK4 parent link is severed, mirroring NSView's
-/// `removeFromSuperview`.
+/// Remove a child from its parent, like `removeFromSuperview` on macOS. The handle stays
+/// registered (handles are positional indices into WIDGETS); only the GTK parent link is cut.
 pub fn remove_child(parent_handle: i64, child_handle: i64) {
     if let (Some(parent), Some(child)) = (get_widget(parent_handle), get_widget(child_handle)) {
         if let Some(container) = parent.downcast_ref::<gtk4::Box>() {
@@ -800,13 +769,8 @@ pub fn remove_child(parent_handle: i64, child_handle: i64) {
     }
 }
 
-/// Reorder a child within its parent container by positional index.
-/// Mirrors macOS `perry_ui_widget_reorder_child(parent, from, to)` —
-/// the macOS impl walks `arrangedSubviews` and uses `insertArrangedSubview:atIndex:`.
-/// On GTK4 we walk `parent.first_child()` siblings to locate the child at
-/// `from_index`, then walk again to find the anchor sibling at `to_index`,
-/// and call `Box::reorder_child_after(&child, anchor)`. Out-of-range
-/// indices are clamped: from > N-1 → no-op; to >= N → moves to the end.
+/// Move the child at `from_index` to `to_index` within a Box, matching macOS
+/// `perry_ui_widget_reorder_child`. `from` out of range is a no-op; `to >= N` moves to the end.
 pub fn reorder_child(parent_handle: i64, from_index: i64, to_index: i64) {
     let Some(parent) = get_widget(parent_handle) else {
         return;
@@ -815,7 +779,6 @@ pub fn reorder_child(parent_handle: i64, from_index: i64, to_index: i64) {
         return;
     };
 
-    // Snapshot the sibling list (positional, before mutation).
     let mut siblings: Vec<Widget> = Vec::new();
     let mut cur = container.first_child();
     while let Some(c) = cur {
@@ -848,15 +811,9 @@ pub fn reorder_child(parent_handle: i64, from_index: i64, to_index: i64) {
     }
 }
 
-/// Add an overlay child on top of a parent. Mirrors macOS
-/// `perry_ui_widget_add_overlay` (which uses plain `addSubview`, so the
-/// child floats above arranged subviews). On GTK4 the natural primitive
-/// is `gtk4::Overlay::add_overlay`. If the parent isn't already an
-/// `Overlay`, we cannot retroactively wrap it in one (GTK4 widgets have a
-/// single immutable parent slot), so we log a warning and fall through to
-/// `add_child` — the user will still see their widget, just not floating
-/// above siblings. Use a `ZStack` (which is backed by `gtk4::Overlay`) as
-/// the parent for true overlay semantics.
+/// Float a child above its siblings (macOS `perry_ui_widget_add_overlay`). Only a
+/// `gtk4::Overlay` parent (a `ZStack`) can do that; GTK cannot re-parent a widget into a new
+/// Overlay, so other parents log a warning and fall back to `add_child`.
 pub fn add_overlay(parent_handle: i64, child_handle: i64) {
     if let (Some(parent), Some(child)) = (get_widget(parent_handle), get_widget(child_handle)) {
         if child.parent().is_some() {
@@ -874,16 +831,9 @@ pub fn add_overlay(parent_handle: i64, child_handle: i64) {
     }
 }
 
-/// Position + size an overlay child. Mirrors macOS
-/// `perry_ui_widget_set_overlay_frame` (CGRect on a subview). GTK4's
-/// layout model is constraint-based, not absolute-frame, so we approximate
-/// using `halign/valign = Start` + start/top margins for the (x, y) offset
-/// and `set_size_request(w, h)` for the size. This works correctly when
-/// the parent is a `gtk4::Overlay` (the common case for floating widgets)
-/// because Overlay honors child halign/valign. For other parent types the
-/// approximation may not produce pixel-perfect positioning — true
-/// absolute-frame semantics on a non-Overlay parent need a `gtk4::Fixed`
-/// wrapper, deferred until a use case surfaces.
+/// Position and size an overlay child (macOS `perry_ui_widget_set_overlay_frame`). GTK has no
+/// absolute frames, so this uses Start alignment plus margins and `set_size_request`. That is
+/// exact only inside a `gtk4::Overlay`; other parents would need a `gtk4::Fixed` wrapper.
 pub fn set_overlay_frame(handle: i64, x: f64, y: f64, w: f64, h: f64) {
     if let Some(widget) = get_widget(handle) {
         widget.set_halign(gtk4::Align::Start);

@@ -83,6 +83,8 @@ pub unsafe extern "C" fn js_closure_entry_bundle(
     } else {
         f64::from_bits(crate::value::TAG_UNDEFINED)
     };
+    // GC_STORE_AUDIT(STACK): Only emitted call_entry supplies rest_out as function.alloca_entry(DOUBLE), then loads and binds it as a shadow root before entering body (call_entry.rs120-147). Published after final allocation; rest array held in RuntimeHandleScope across arguments allocation.
     rest_out.write(rest.get_nanbox_f64());
+    // GC_STORE_AUDIT(STACK): Only emitted call_entry supplies arguments_out as second function.alloca_entry(DOUBLE), loads and binds shadow root before entering body. No allocation between final array birth and both output writes.
     arguments_out.write(all);
 }

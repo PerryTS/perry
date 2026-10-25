@@ -8,10 +8,11 @@ publish = false
 
 [dependencies]
 anyhow = "1"
-wasmtime = { version = "=48.0.5", default-features = false, features = ["anyhow", "std", "runtime", "cranelift", "component-model", "gc-drc"] }
-wasmtime-wasi = { version = "=48.0.5", default-features = false, features = ["p2"] }
+wasmtime = { version = "=48.0.6", default-features = false, features = ["anyhow", "std", "runtime", "cranelift", "component-model", "gc-drc"] }
+perry-component-host = { path = "../../../../crates/perry-component-host" }
 wac-graph = "=0.12.0"
 
 [profile.release]
 opt-level = 1
 debug = 1
+

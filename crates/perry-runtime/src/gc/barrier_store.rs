@@ -348,12 +348,7 @@ pub extern "C" fn js_write_barrier_slot_validated_parent(
 /// point lies between the stores and this call: shading and remembering after
 /// the last store is what each per-slot barrier did after its own store.
 #[no_mangle]
-pub extern "C" fn js_write_barrier_birth_slots(
-    parent_user: u64,
-    slots: u64,
-    count: u32,
-    raw: u32,
-) {
+pub extern "C" fn js_write_barrier_birth_slots(parent_user: u64, slots: u64, count: u32, raw: u32) {
     if parent_user == 0 || slots == 0 {
         return;
     }

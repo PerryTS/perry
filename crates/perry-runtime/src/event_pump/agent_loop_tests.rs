@@ -1047,3 +1047,58 @@ fn a_posted_host_job_runs_on_the_owner_not_on_the_poster() {
         "the context was consumed exactly once, by the callback"
     );
 }
+
+#[test]
+fn component_wait_preserves_foreign_completions_and_other_component_operations() {
+    let _serial = serial();
+    reset_for_test();
+    assert!(install_unrouted_for_test(Profile::Net));
+    let (first, second, foreign) = with_net_driver(|driver| {
+        let now = driver.now();
+        let first = driver.timer(now, None, COMPONENT_IO_TOKEN).unwrap();
+        let second = driver.timer(now, None, COMPONENT_IO_TOKEN).unwrap();
+        let foreign = driver.timer(now, None, TIMER_TOKEN).unwrap();
+        (first, second, foreign)
+    })
+    .unwrap();
+    let (first_op, second_op) = with_net_driver(|driver| {
+        (
+            driver.timer_op(first).unwrap(),
+            driver.timer_op(second).unwrap(),
+        )
+    })
+    .unwrap();
+    let deadline = turnloop::Instant::now() + Duration::from_secs(5);
+    let mut selected = Vec::new();
+    while selected.is_empty() {
+        assert!(turnloop::Instant::now() < deadline);
+        selected = component_turn_and_take(&[second_op], &[], Timeout::Until(deadline)).unwrap();
+    }
+    assert_eq!(selected.len(), 1);
+    assert_eq!(selected[0].op, Some(second_op));
+    assert_eq!(
+        stats().timer_expiries,
+        0,
+        "normal timer dispatch ran inside guest wait"
+    );
+    // Discover anything the first backend batch did not include.
+    for _ in 0..3 {
+        let result = component_turn_and_take(&[], &[], Timeout::Now).unwrap();
+        assert!(result.is_empty());
+    }
+    STAGED.with(|staged| {
+        let staged = staged.borrow();
+        assert!(staged.iter().any(|c| c.op == Some(first_op)));
+        assert!(staged.iter().any(|c| c.handle == Some(foreign)));
+        assert!(!staged.iter().any(|c| c.op == Some(second_op)));
+    });
+    dispatch_staged();
+    assert_eq!(stats().timer_expiries, 1);
+    // Normal dispatch retains another component's completion for its owner.
+    let selected = component_turn_and_take(&[first_op], &[], Timeout::Now).unwrap();
+    assert_eq!(selected.len(), 1);
+    assert_eq!(selected[0].op, Some(first_op));
+    dispatch_staged();
+    assert_eq!(stats().timer_expiries, 1, "foreign timer dispatched twice");
+    reset_for_test();
+}

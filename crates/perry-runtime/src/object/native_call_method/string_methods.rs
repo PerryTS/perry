@@ -99,7 +99,15 @@ pub(super) unsafe fn dispatch_string(
                     // and internal Ed/X surrogates as heap strings. For the
                     // high-value Node parity shape (`format: "pem"`), the
                     // stored string is already the exported representation.
-                    return Some(object);
+                    // Export ordinary bytes, not the marked key receiver. Own
+                    // the rooted string's payload across the fresh allocation
+                    // so GC cannot invalidate a borrowed heap slice.
+                    let bytes =
+                        crate::string::OwnedStringBytes::copy_from_header(receiver_string());
+                    let bytes = bytes.as_bytes();
+                    let exported =
+                        crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+                    return Some(f64::from_bits(JSValue::string_ptr(exported).bits()));
                 }
                 "equals" if crate::buffer::asymmetric_key_meta(s_ptr as usize).is_some() => {
                     if args_len == 0 || args_ptr.is_null() {

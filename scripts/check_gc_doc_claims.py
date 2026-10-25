@@ -53,7 +53,7 @@ CURRENT_DOCS = (
     "docs/src/internals/memory-model.md",
     "docs/src/internals/gc-rooting-invariant.md",
     "benchmarks/gc_ratchet/README.md",
-    "CLAUDE.md",
+    "AGENTS.md",
 )
 
 # The operations page is the one a reader is told to trust without reconciling

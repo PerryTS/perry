@@ -16,11 +16,27 @@ workspace = true
 anyhow.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+url.workspace = true
+socket2 = { workspace = true, features = ["all"] }
 perry-wit = { path = "../perry-wit" }
 perry-abi.workspace = true
 wasmtime = { version = "48.0.0", default-features = false, features = ["anyhow", "std", "runtime", "cranelift", "component-model", "gc-drc"] }
 
-wasmtime-wasi = { version = "=48.0.6", default-features = false, features = ["p2"] }
+
+# Reuse the OS randomness provider already selected by the workspace.
+getrandom = "0.4"
+cap-std = "3.4.6"
+cap-time-ext = "3.4.6"
+perry-component-io = { workspace = true, features = ["standalone"] }
+cap-fs-ext = "3.4.6"
+fs-set-times = "0.20.3"
+system-interface = { version = "0.27.3", features = ["cap_std_impls"] }
 
 [dev-dependencies]
 wat = "1.254"
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Networking_WinSock"] }

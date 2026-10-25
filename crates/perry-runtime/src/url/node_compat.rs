@@ -963,24 +963,6 @@ fn opt_string_f64(v: Option<String>) -> f64 {
     }
 }
 
-/// WHATWG `URL.join` of `to` onto base `from`, or `None` when `from` isn't a
-/// parseable absolute URL. Cfg-paired: the off twin returns `None` (no `url`
-/// crate), so the caller falls back to the hand-rolled `resolve_url`.
-#[cfg(feature = "url-engine")]
-fn legacy_url_join(from: &str, to: &str) -> Option<String> {
-    let base = url::Url::parse(from).ok()?;
-    Some(
-        base.join(to)
-            .map(|u| u.to_string())
-            .unwrap_or_else(|_| resolve_url(to, from)),
-    )
-}
-
-#[cfg(not(feature = "url-engine"))]
-fn legacy_url_join(_from: &str, _to: &str) -> Option<String> {
-    None
-}
-
 #[no_mangle]
 pub extern "C" fn js_url_legacy_resolve(from: f64, to: f64) -> f64 {
     if !is_js_string_value(from) {
@@ -991,14 +973,151 @@ pub extern "C" fn js_url_legacy_resolve(from: f64, to: f64) -> f64 {
     }
     let from_s = get_string_content(from);
     let to_s = get_string_content(to);
-    let resolved = if to_s.starts_with('/') && !is_valid_absolute_url(&from_s) {
-        to_s
-    } else if let Some(j) = legacy_url_join(&from_s, &to_s) {
-        j
-    } else {
-        resolve_url(&to_s, &from_s)
+    create_string_f64(&legacy_url_resolve_impl(&from_s, &to_s))
+}
+
+/// Node's legacy `url.resolve`: `from` need not be absolute, so `parse_url`
+/// (which models absolute WHATWG URLs) cannot answer it — `("/a/b", "../c")`
+/// came back as `///c`. This is a port of `Url.prototype.resolveObject`'s
+/// segment walk: the base's scheme/authority are kept, the relative path
+/// replaces the base's last segment, and dot segments are resolved with the
+/// `up` counter that lets a relative base climb above its own root
+/// (`("a/b", "../../c")` is `../c`) while an absolute one cannot.
+fn legacy_url_resolve_impl(from: &str, to: &str) -> String {
+    let base = legacy_url_parse_impl(from, false);
+    if to.is_empty() {
+        return legacy_url_format_impl(&base);
+    }
+    let rel = legacy_url_parse_impl(to, true);
+    // An absolute or protocol-relative target replaces everything but the base
+    // protocol.
+    if rel.protocol.is_some() {
+        return legacy_url_format_impl(&rel);
+    }
+    if rel.slashes == Some(true) {
+        let mut out = rel;
+        out.protocol = base.protocol.clone();
+        return legacy_url_format_impl(&out);
+    }
+
+    let mut out = LegacyUrl {
+        protocol: base.protocol.clone(),
+        slashes: base.slashes,
+        auth: base.auth.clone(),
+        host: base.host.clone(),
+        port: base.port.clone(),
+        hostname: base.hostname.clone(),
+        // Node starts the result as a copy of the base, so a `#hash`-only
+        // reference keeps the base query; the branches below overwrite it.
+        hash: rel.hash.clone(),
+        search: base.search.clone(),
+        query: base.query.clone(),
+        pathname: None,
     };
-    create_string_f64(&resolved)
+
+    let base_path = base.pathname.clone().unwrap_or_default();
+    let rel_path = rel.pathname.clone().unwrap_or_default();
+    let mut src = legacy_split_segments(&base_path);
+    let rel_segs = legacy_split_segments(&rel_path);
+
+    let is_source_abs = base_path.starts_with('/');
+    let is_rel_abs = rel.host.is_some() || rel_path.starts_with('/');
+    let mut must_end_abs =
+        is_rel_abs || is_source_abs || (base.host.is_some() && !rel_path.is_empty());
+
+    if is_rel_abs {
+        if let Some(host) = rel.host.clone() {
+            if base.host.as_deref() != Some(host.as_str()) {
+                out.auth = None;
+            }
+            out.host = Some(host);
+            out.port = rel.port.clone();
+        }
+        if let Some(hostname) = rel.hostname.clone() {
+            if base.hostname.as_deref() != Some(hostname.as_str()) {
+                out.auth = None;
+            }
+            out.hostname = Some(hostname);
+        }
+        src = rel_segs;
+        out.search = rel.search.clone();
+        out.query = rel.query.clone();
+    } else if !rel_segs.is_empty() {
+        src.pop();
+        src.extend(rel_segs);
+        out.search = rel.search.clone();
+        out.query = rel.query.clone();
+    } else if rel.search.is_some() {
+        // `?q` alone keeps the base path verbatim.
+        out.pathname = Some(base_path);
+        out.search = rel.search.clone();
+        out.query = rel.query.clone();
+        return legacy_url_format_impl(&out);
+    }
+
+    if src.is_empty() {
+        return legacy_url_format_impl(&out);
+    }
+
+    let last = src.last().cloned().unwrap_or_default();
+    let has_trailing_slash = (((base.host.is_some() || rel.host.is_some() || src.len() > 1)
+        && (last == "." || last == ".."))
+        || last.is_empty());
+
+    let mut up = 0usize;
+    let mut i = src.len();
+    while i > 0 {
+        i -= 1;
+        match src[i].as_str() {
+            "." => {
+                src.remove(i);
+            }
+            ".." => {
+                src.remove(i);
+                up += 1;
+            }
+            _ if up > 0 => {
+                src.remove(i);
+                up -= 1;
+            }
+            _ => {}
+        }
+    }
+    if !must_end_abs {
+        while up > 0 {
+            src.insert(0, "..".to_string());
+            up -= 1;
+        }
+    }
+    if must_end_abs
+        && src
+            .first()
+            .is_some_and(|s| !s.is_empty() && !s.starts_with('/'))
+    {
+        src.insert(0, String::new());
+    }
+    if has_trailing_slash && !src.join("/").ends_with('/') {
+        src.push(String::new());
+    }
+    let is_absolute = src
+        .first()
+        .is_some_and(|s| s.is_empty() || s.starts_with('/'));
+    must_end_abs = must_end_abs || (base.host.is_some() && !src.is_empty());
+    if must_end_abs && !is_absolute {
+        src.insert(0, String::new());
+    }
+    if !src.is_empty() {
+        out.pathname = Some(src.join("/"));
+    }
+    legacy_url_format_impl(&out)
+}
+
+fn legacy_split_segments(path: &str) -> Vec<String> {
+    if path.is_empty() {
+        Vec::new()
+    } else {
+        path.split('/').map(str::to_string).collect()
+    }
 }
 
 #[no_mangle]

@@ -610,6 +610,7 @@ pub(crate) unsafe fn alloc_symbol(
         crate::gc::GC_TYPE_SYMBOL,
     );
     let ptr = raw as *mut SymbolHeader;
+    // GC_STORE_AUDIT(BARRIERED): alloc_symbol holds GcSuppressScope during fresh initialization; description pointer is then installed through runtime_store_gc_heap_word_slot before scope exits (symbol.rs606-626).
     std::ptr::write(
         ptr,
         SymbolHeader {

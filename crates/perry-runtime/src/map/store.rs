@@ -93,6 +93,7 @@ pub(super) unsafe fn alloc_store_in<const OLD: bool>(capacity: usize) -> *mut Ma
         .cast::<u8>()
         .add(std::mem::size_of::<MapStore>())
         .cast::<f64>();
+    // GC_STORE_AUDIT(INIT): Fresh MapStore header owns empty indexes and entries points to its own inline payload. used=0 and payload is zeroed before return; no existing managed child is copied. Caller roots/no-move contract is stated at alloc_store.
     std::ptr::write(store, MapStore::new(entries, capacity));
     std::ptr::write_bytes(entries, 0, capacity * 2);
     store
@@ -119,6 +120,7 @@ pub(crate) unsafe fn owned_store_moved_for_gc(old_user: usize, new_user: usize) 
 /// the Map's rewrite hook after a pass rewrote the `store` edge.
 pub(crate) unsafe fn refresh_entries_alias(map: *mut MapHeader) {
     if let Some(store) = (*map).store.as_ref() {
+        // GC_STORE_AUDIT(ROOT): Only caller is gc::types::run_gc_rewrite_hook MapEntries after rewriting traced map.store (types.rs1311). entries is re-derived interior payload address from new live store, not an independent ownership edge.
         (*map).entries = store.entries;
     }
 }
@@ -248,6 +250,7 @@ pub(crate) unsafe fn finalize_map_side_allocation_for_gc(map: *mut MapHeader) {
     if !store.is_null() {
         finalize_owned_store(store.cast(), true);
     }
+    // GC_STORE_AUDIT(POINTER_FREE): Reset writes null to map.entries, removing an alias; no new pointer can require a barrier.
     (*map).entries = ptr::null_mut();
     (*map).capacity = 0;
     (*map).size = 0;
@@ -329,5 +332,6 @@ pub(crate) unsafe fn test_init_owned_map_store(map: *mut MapHeader, capacity: u3
     let store = alloc_store_in::<true>(capacity as usize);
     (*store).used = capacity as usize; // Fixtures initialize the whole zeroed extent.
     (*map).store = store;
+    // GC_STORE_AUDIT(INIT): cfg(test) constructor allocates tenured store, zeroes whole payload, sets used=capacity, then initializes test header.store/entries before fixture publication. Store is an old GC allocation; entries only aliases its inline payload. Keep distinction from pointer-free data.
     (*map).entries = (*store).entries;
 }

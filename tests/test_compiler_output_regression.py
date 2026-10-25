@@ -3392,5 +3392,77 @@ class QuotedLlvmLabelBlockBoundaryTests(unittest.TestCase):
         self.assertIn("mod$spec_i32", functions)
 
 
+
+class RawFieldGateTests(unittest.TestCase):
+    def setUp(self):
+        self.ir = (REPO_ROOT / "tests/fixtures/raw_field_gate.ll").read_text()
+        self.records = json.loads((REPO_ROOT / "tests/fixtures/raw_field_gate_records.json").read_text())["records"]
+        self.checks = {c["name"]: c for c in HARNESS.WORKLOADS["raw_numeric_object_fields"]["ir_checks"]}
+
+    def test_current_shapes_and_refusal_paths(self):
+        from compiler_output_harness.verification import _text_check_passes
+        for name, check in self.checks.items():
+            self.assertTrue(_text_check_passes(self.ir, check), name)
+            self.assertFalse(_text_check_passes("declare double @forceDynamicRead(double)\n", check), name)
+
+    def test_bypassing_each_shape_record_and_representation_check_fails(self):
+        import re
+        from compiler_output_harness.verification import _text_check_passes
+        mutations = [
+            ("raw_field_l2c_receiver", "forceDynamicRead", "stack_guard.ok", "br i1 %r10", "br i1 true"),
+            ("raw_field_l2s_receiver", "forceDynamicWrite", "stack_guard.ok", "br i1 %r14", "br i1 true"),
+            ("raw_field_l2c_shape_bound", "forceDynamicRead", "l2c.word", "br i1 %r23", "br i1 true"),
+            ("raw_field_l2s_shape_bound", "forceDynamicWrite", "l2s.word", "br i1 %r27", "br i1 true"),
+            ("raw_field_read_record", "forceDynamicRead", "l2c.record", "br i1 %r29", "br i1 true"),
+            ("raw_field_read_slot", "forceDynamicRead", "l2c.load", "br i1 %r33", "br i1 false"),
+            ("raw_field_read_fallback", "forceDynamicRead", "pget.slow", "@js_object_get_field_value(", "@wrong_get("),
+            ("raw_field_write_record", "forceDynamicWrite", "l2c.record", "br i1 %r33", "br i1 true"),
+            ("raw_field_write_representation", "forceDynamicWrite", "l2s.lane", "br i1 %r36", "br i1 true"),
+            ("raw_field_write_representation", "forceDynamicWrite", "l2s.rep", "br i1 %r41", "br i1 true"),
+            ("raw_field_write_metadata", "forceDynamicWrite", "l2s.meta", "br i1 %r45", "br i1 true"),
+            ("raw_field_write_slot", "forceDynamicWrite", "l2s.load", "br i1 %r49", "br i1 false"),
+            ("raw_field_write_store_and_barrier", "forceDynamicWrite", "l2s.hit", "  store double %r9", "  ; store double %r9"),
+            ("raw_field_write_store_and_barrier", "forceDynamicWrite", "l2s.barrier", "@js_write_barrier_slot_validated_parent(", "@wrong_barrier("),
+            ("raw_field_write_fallback", "forceDynamicWrite", "put.pic.set", "@js_put_value_set(", "@wrong_set("),
+            ("raw_field_family_shape", "rawNumericObjectFieldsChecksum", "class_family.word", "br i1 %r270", "br i1 true"),
+            ("raw_field_family_slot", "rawNumericObjectFieldsChecksum", "class_family.load", "br i1 %r274", "br i1 true"),
+        ]
+        for check, function, block, old, new in mutations:
+            with self.subTest(check=check, block=block):
+                pattern = r"(define double @[^\n]*__"+function+r"\([^\n]*\n[\s\S]*?"+re.escape(block)+r"\.\d+:\n)([\s\S]*?)(?=\n\n|\n})"
+                match = re.search(pattern, self.ir)
+                self.assertIsNotNone(match)
+                self.assertEqual(match[2].count(old), 1)
+                mutated = self.ir[:match.start(2)] + match[2].replace(old,new) + self.ir[match.end(2):]
+                self.assertFalse(_text_check_passes(mutated,self.checks[check]), check)
+
+    def test_exact_materialization_review_and_scalar_requirements(self):
+        import copy
+        from compiler_output_harness.verification import generic_native_rep_contract_results
+        def failures(records, spec=None):
+            results = generic_native_rep_contract_results("raw_numeric_object_fields", records, 1, spec or HARNESS.WORKLOADS)
+            return [r["name"] for r in results if not r["passed"]]
+        self.assertEqual(failures(self.records), [])
+        reviewed = next(r for r in self.records if r["materialization_reason"] == "function_abi")
+        for field in ("function", "source_function", "block_label", "expr_kind", "consumer", "native_rep_name", "materialization_reason"):
+            changed = copy.deepcopy(self.records)
+            next(r for r in changed if r["materialization_reason"] == "function_abi")[field] = "changed"
+            self.assertTrue(failures(changed), field)
+        self.assertTrue(failures([r for r in self.records if r is not reviewed]))
+        self.assertTrue(failures(self.records + [reviewed]))
+        unrelated = copy.deepcopy(reviewed)
+        unrelated["source_function"] = "unreviewedCaller"
+        self.assertTrue(failures(self.records + [unrelated]))
+        for field in ("function", "source_function", "block_label", "expr_kind", "consumer", "native_rep_name", "materialization_reason", "claim"):
+            spec = copy.deepcopy(HARNESS.WORKLOADS)
+            del spec["raw_numeric_object_fields"]["native_rep_checks"]["review_materializations"][0][field]
+            self.assertTrue(failures(self.records, spec), field)
+        spec = copy.deepcopy(HARNESS.WORKLOADS)
+        reviews = spec["raw_numeric_object_fields"]["native_rep_checks"]["review_materializations"]
+        reviews.append(copy.deepcopy(reviews[0]))
+        self.assertTrue(failures(self.records, spec))
+        for kind in ("ScalarObjectFieldGet", "ScalarObjectFieldSet"):
+            self.assertTrue(failures([r for r in self.records if r["expr_kind"] != kind]), kind)
+
 if __name__ == "__main__":
     unittest.main()

@@ -1102,6 +1102,7 @@ unsafe fn alloc_layout_object_sized(
         .add(std::mem::size_of::<ObjectHeader>())
         .cast::<u64>();
     for i in 0..physical_slots {
+        // GC_STORE_AUDIT(POINTER_FREE): All three stores write the immediate TAG_HOLE to physical object slots. They introduce no pointer/child edge; allocation or rooted object custody surrounds the fill and shape publication follows.
         *fields.add(i) = crate::value::TAG_HOLE;
     }
     mark_layout_object_facts(obj, d);
@@ -1224,6 +1225,7 @@ pub(crate) unsafe fn alloc_derived_layout_object(
         .add(std::mem::size_of::<ObjectHeader>())
         .cast::<u64>();
     for i in 0..d.slot_count as usize {
+        // GC_STORE_AUDIT(POINTER_FREE): All three stores write the immediate TAG_HOLE to physical object slots. They introduce no pointer/child edge; allocation or rooted object custody surrounds the fill and shape publication follows.
         *fields.add(i) = crate::value::TAG_HOLE;
     }
     mark_layout_object_facts(obj, d);
@@ -1867,6 +1869,7 @@ pub(crate) unsafe fn adopt_family_layout(obj: *mut ObjectHeader) -> *mut ObjectH
         .add(std::mem::size_of::<ObjectHeader>())
         .cast::<u64>();
     for i in 0..d.slot_count as usize {
+        // GC_STORE_AUDIT(POINTER_FREE): All three stores write the immediate TAG_HOLE to physical object slots. They introduce no pointer/child edge; allocation or rooted object custody surrounds the fill and shape publication follows.
         *fields.add(i) = crate::value::TAG_HOLE;
     }
     super::shapes::stamp_object_shape_id_with_carrier_note(obj, d.layout_id);

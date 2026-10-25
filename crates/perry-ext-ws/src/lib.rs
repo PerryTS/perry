@@ -227,8 +227,9 @@ static WS_CLIENT_PARENT_SERVER: std::sync::LazyLock<Mutex<HashMap<usize, Handle>
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 static WS_CLIENT_LISTENERS: std::sync::LazyLock<Mutex<HashMap<usize, WsClientListeners>>> =
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
-static WS_PENDING_EVENTS: std::sync::LazyLock<Mutex<std::collections::VecDeque<PendingWsEvent>>> =
-    std::sync::LazyLock::new(|| Mutex::new(std::collections::VecDeque::new()));
+static WS_PENDING_EVENTS: std::sync::LazyLock<
+    Mutex<std::collections::VecDeque<(u64, PendingWsEvent)>>,
+> = std::sync::LazyLock::new(|| Mutex::new(std::collections::VecDeque::new()));
 /// The `'listening'` / `'open'` events `js_ws_process_pending` is delivering
 /// right now, innermost last. A drain pops each event before running its
 /// listeners, so without this a listener registered *inside* that event's
@@ -260,6 +261,10 @@ fn ensure_runtime_hooks_registered() {
 }
 
 extern "C" fn retire_socket_edges(agent: u64) {
+    WS_PENDING_EVENTS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .retain(|(owner, _)| *owner != agent);
     let mut connections = WS_CONNECTIONS
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -355,11 +360,9 @@ impl ReplayKey {
 /// does not call a listener added during an emit for that emit.
 fn replay_is_pending(key: ReplayKey) -> bool {
     WS_DISPATCHING.lock().unwrap().contains(&key)
-        || WS_PENDING_EVENTS
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|ev| ReplayKey::of(ev) == Some(key))
+        || WS_PENDING_EVENTS.lock().unwrap().iter().any(|(owner, ev)| {
+            *owner == perry_ffi::agent_post::current_agent() && ReplayKey::of(ev) == Some(key)
+        })
 }
 
 /// Marks one event as being delivered for the life of the guard.
@@ -387,7 +390,12 @@ impl Drop for Dispatching {
 }
 
 fn push_ws_event(ev: PendingWsEvent) {
-    WS_PENDING_EVENTS.lock().unwrap().push_back(ev);
+    // Loop completions belong to the heap of the agent that queued them.
+    // Another worker pumping the shared queue must not run these callbacks.
+    WS_PENDING_EVENTS
+        .lock()
+        .unwrap()
+        .push_back((perry_ffi::agent_post::current_agent(), ev));
     notify_main_thread();
 }
 
@@ -1422,13 +1430,26 @@ pub extern "C" fn js_ws_process_pending() -> i32 {
     // an event a listener queues is delivered on the next tick, as it was when
     // the whole batch was taken at once. Popping singly is what keeps the rest
     // of the batch visible to `replay_is_pending` while each listener runs.
-    let batch = WS_PENDING_EVENTS.lock().unwrap().len();
+    let agent = perry_ffi::agent_post::current_agent();
+    let batch = WS_PENDING_EVENTS
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(owner, _)| *owner == agent)
+        .count();
     if batch == 0 {
         return 0;
     }
     let mut fired = 0;
     for _ in 0..batch {
-        let Some(ev) = WS_PENDING_EVENTS.lock().unwrap().pop_front() else {
+        let ev = {
+            let mut pending = WS_PENDING_EVENTS.lock().unwrap();
+            pending
+                .iter()
+                .position(|(owner, _)| *owner == agent)
+                .and_then(|index| pending.remove(index))
+        };
+        let Some((_, ev)) = ev else {
             break;
         };
         let _dispatching = Dispatching::enter(&ev);
@@ -1678,7 +1699,12 @@ pub extern "C" fn js_ws_process_pending() -> i32 {
 
 #[no_mangle]
 pub extern "C" fn js_ws_has_pending() -> i32 {
-    if !WS_PENDING_EVENTS.lock().unwrap().is_empty() {
+    if WS_PENDING_EVENTS
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|(owner, _)| *owner == perry_ffi::agent_post::current_agent())
+    {
         return 1;
     }
     if WS_ACTIVE_SERVERS.load(Ordering::Relaxed) > 0 {
@@ -1726,6 +1752,8 @@ fn listeners_on_server(handle: Handle, event: &str) -> Vec<i64> {
     .unwrap_or_default()
 }
 
+#[cfg(test)]
+mod agent_event_tests;
 #[cfg(test)]
 mod tests;
 

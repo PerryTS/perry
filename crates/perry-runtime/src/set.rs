@@ -240,6 +240,7 @@ pub(crate) unsafe fn finalize_set_side_allocation_for_gc(set: *mut SetHeader) {
     if !(*set).meta.is_null() {
         (*(*set).meta).native_state = 0;
     }
+    // GC_STORE_AUDIT(POINTER_FREE): Set reset clears elements alias to null; no new edge.
     (*set).elements = ptr::null_mut();
     (*set).size = 0;
     (*set).capacity = 0;
@@ -268,6 +269,7 @@ pub(crate) unsafe fn test_init_owned_set_store(set: *mut SetHeader, capacity: us
     let store = store::alloc_store_in::<true>(capacity);
     (*store).used = capacity; // all zeroed fixture slots are safe to trace
     (*set).store = store;
+    // GC_STORE_AUDIT(INIT): cfg(test) constructor allocates tenured store with zeroed payload, sets used=capacity, then initializes test header.store/elements before fixture publication. elements is derived inline-payload alias, not independent ownership.
     (*set).elements = (*store).elements;
     (*store).elements.cast()
 }
@@ -948,6 +950,7 @@ unsafe fn ensure_capacity(set: *mut SetHeader) -> bool {
         (*next).elements as *mut u64,
         (*next).used,
     );
+    // GC_STORE_AUDIT(POINTER_FREE): Retired previous Set header elements alias cleared to null; no new edge.
     (*previous).elements = ptr::null_mut();
     (*previous).capacity = 0;
     (*previous).used = 0;

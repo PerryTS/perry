@@ -69,6 +69,28 @@ pub(crate) unsafe fn ek_note_slot(arr: *mut ArrayHeader, index: usize, bits: u64
     debug_assert!((*arr).ek_prefix <= (*arr).length.min((*arr).capacity));
 }
 
+/// The birth row (§3.1): the builder of a fresh, unpublished array states P
+/// once, when its fill is done, from its own proof that every slot in
+/// `[0, n)` holds a plain data element. The per-slot init helpers
+/// (`note_array_slot_layout_only`, `fill_resolved_array_slot`) do no EK work:
+/// the array they write is the builder's, and only the builder knows the
+/// whole fill. A fresh array owns no named layout, so no slot below `n` has
+/// an element descriptor.
+///
+/// # Safety
+/// `arr` is a live, forwarding-resolved array head that no other code has
+/// seen yet, and `[0, n)` holds no `TAG_HOLE`.
+#[inline(always)]
+pub(crate) unsafe fn ek_birth_prefix(arr: *mut ArrayHeader, n: u32) {
+    debug_assert!(
+        (*arr).named.is_null(),
+        "EK: a born array owns no named layout"
+    );
+    debug_assert!(n <= (*arr).length.min((*arr).capacity));
+    (*arr).ek_prefix = n.min((*arr).length).min((*arr).capacity);
+    ek_debug_verify(arr);
+}
+
 /// The frontier row for an append that wrote slot `index` and then
 /// published the length covering it (`push`, `append`): [`ek_note_slot`]
 /// with the slot's current bits, now that the slot is live.
@@ -98,6 +120,22 @@ pub(crate) unsafe fn ek_note_descriptor_edits(
     edits: &[crate::object::descriptor_state::AttrsEdit<'_>],
 ) {
     use crate::object::descriptor_state::AttrsEdit;
+    // The keys first: only an index key can touch the prefix, and most
+    // installs are named (`__export` getters), so the owner is classified
+    // only for an edit that gives an index a descriptor.
+    let mut lowest: Option<u32> = None;
+    for edit in edits {
+        let key = match *edit {
+            AttrsEdit::Data(key, _) | AttrsEdit::Accessor(key, _, _) => key,
+            _ => continue,
+        };
+        if let Some(index) = crate::object::field_get_set::canonical_array_index_bytes(key) {
+            lowest = Some(lowest.map_or(index, |low| low.min(index)));
+        }
+    }
+    let Some(lowest) = lowest else {
+        return;
+    };
     let Some(header) = crate::value::addr_class::try_read_tracked_gc_header(owner) else {
         return;
     };
@@ -108,15 +146,7 @@ pub(crate) unsafe fn ek_note_descriptor_edits(
     if arr.is_null() {
         return;
     }
-    for edit in edits {
-        let key = match *edit {
-            AttrsEdit::Data(key, _) | AttrsEdit::Accessor(key, _, _) => key,
-            _ => continue,
-        };
-        if let Some(index) = crate::object::field_get_set::canonical_array_index_bytes(key) {
-            ek_lower_prefix(arr, index);
-        }
-    }
+    ek_lower_prefix(arr, lowest);
 }
 
 /// `splice(s, d, ...k)` (§3.1): `[0, s)` is untouched, `[s, s+k)` holds the

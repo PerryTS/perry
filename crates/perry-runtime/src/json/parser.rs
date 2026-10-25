@@ -901,6 +901,8 @@ impl<'a> DirectParser<'a> {
         }
         self.expect(b']');
         js_arr = parse_root_array_ptr(arr_slot);
+        // JSON has no holes: every slot below the length is a parsed value.
+        crate::array::ek_birth_prefix(js_arr, (*js_arr).length);
         parse_root_restore(saved_roots);
         JSValue::object_ptr(js_arr as *mut u8)
     }

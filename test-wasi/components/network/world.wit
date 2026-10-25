@@ -1,12 +1,14 @@
 package perry:network-probe@1.0.0;
 
 interface probe {
+    wait: func(milliseconds: u32);
     connect: func(port: u16, payload: string) -> result<string, string>;
     resolve: func(name: string) -> result<list<string>, string>;
     exchange: func(port: u16, connected: bool, payload: string) -> result<string, string>;
 }
 
 world plugin {
+    import wasi:clocks/monotonic-clock@0.2.12;
     import wasi:io/poll@0.2.12;
     import wasi:io/streams@0.2.12;
     import wasi:sockets/tcp@0.2.12;

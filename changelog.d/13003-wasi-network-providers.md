@@ -8,4 +8,4 @@ Perry guest UDP/DNS interoperability, blocking-I/O cancellation or additional
 host-platform support. All 22 component-host unit tests passed on Linux x86_64 at
 `bd0d064baa9217a33f5215c819ae890845e7944b`, including these three new tests.
 The source revision and evidence hashes are recorded in
-`docs/validation/wasi-network-providers-20261021.json`.
+`docs/audits/wasi-component-validation-2026-10-21/wasi-network-providers-20261021.json`.

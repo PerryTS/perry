@@ -255,6 +255,7 @@ pub extern "C" fn js_string_pool_atom(
                 .iter_mut()
                 .find(|entry| entry.string_ptr == old as usize)
         }) {
+            // GC_STORE_AUDIT(ROOT): Weak metadata custody, not a strong root: ATOMS is agent TLS. program_atom_image creates pinned long-lived image string, then replaces only weak metadata address. scan_property_atoms registered gc/mod.rs1028 repairs addresses ONLY in metadata rewrite phase; dead_owner.rs249/274 prunes before sweep.
             Some(entry) => entry.string_ptr = atom as usize,
             None => table.insert(hash, atom),
         }
@@ -273,7 +274,9 @@ fn program_atom_image(bytes: *const u8, len: u32, hash: u64) -> *mut StringHeade
         super::init_string_header(string, units, len, len, 0, flags);
         (*string).flags |= IMAGE_ATOM_FLAGS;
         std::ptr::copy_nonoverlapping(bytes, data, len as usize);
+        // GC_STORE_AUDIT(POINTER_FREE): Writes byte0 string terminator into property atom payload; not a managed slot.
         data.add(len as usize).write(0);
+        // GC_STORE_AUDIT(POINTER_FREE): Writes precomputed u64 string hash into trailing payload metadata; hash is consumed as integer, never traced as JSValue.
         std::ptr::write_unaligned(
             ((data.add(len as usize + 1) as usize + 7) & !7) as *mut u64,
             hash,
@@ -763,6 +766,7 @@ pub(crate) unsafe fn property_atom(key: *const StringHeader) -> *const StringHea
                     .iter_mut()
                     .find(|e| e.string_ptr == existing as usize)
                 {
+                    // GC_STORE_AUDIT(ROOT): Weak metadata custody, not a strong root: ATOMS stores canonical PROPERTY_ATOM key as weak metadata, not a retention edge. gc/mod.rs1028 registers metadata-only address repair; dead_owner.rs249/274 prunes dead owners. Agent TLS bounds lifetime.
                     entry.string_ptr = key as usize;
                     return key;
                 }
@@ -786,6 +790,7 @@ pub(crate) unsafe fn property_atom(key: *const StringHeader) -> *const StringHea
         8,
         crate::gc::GC_TYPE_STRING,
     ) as *mut StringHeader;
+    // GC_STORE_AUDIT(POINTER_FREE): StringHeader contains only utf16_len,byte_len,capacity,refcount,flags scalars; newly allocated atom header has no child pointer fields.
     atom.write(StringHeader {
         utf16_len: units,
         byte_len: len as u32,
@@ -794,7 +799,9 @@ pub(crate) unsafe fn property_atom(key: *const StringHeader) -> *const StringHea
         flags: flags | PROPERTY_ATOM,
     });
     std::ptr::copy_nonoverlapping(bytes.as_bytes().as_ptr(), string_data(atom) as *mut u8, len);
+    // GC_STORE_AUDIT(POINTER_FREE): Writes byte0 string terminator into property atom payload; not a managed slot.
     (string_data(atom) as *mut u8).add(len).write(0);
+    // GC_STORE_AUDIT(POINTER_FREE): Writes u64 key hash into trailing payload metadata; scalar data never traced as JSValue.
     std::ptr::write_unaligned(
         (((string_data(atom).add(len + 1) as usize) + 7) & !7) as *mut u64,
         hash,
@@ -807,6 +814,7 @@ pub(crate) unsafe fn property_atom(key: *const StringHeader) -> *const StringHea
                 .iter_mut()
                 .find(|entry| entry.string_ptr == existing as usize)
             {
+                // GC_STORE_AUDIT(ROOT): Weak metadata custody, not a strong root: Fresh atom replaces equivalent plain-string entry in agent-local weak ATOMS. Repair occurs only after trace and dead entries are pruned before sweep (intern.rs893-920, gc/mod.rs1028, dead_owner.rs249/274).
                 entry.string_ptr = atom as usize;
                 return;
             }
@@ -880,6 +888,7 @@ pub unsafe extern "C" fn js_string_register_property_atom(key: *const StringHead
                 .iter_mut()
                 .find(|entry| entry.string_ptr == existing as usize)
             {
+                // GC_STORE_AUDIT(ROOT): Weak metadata custody, not a strong root: Program-name seeding adopts immutable image atom only when existing canonical entry is not already a live data atom. Agent-local weak ATOMS participates in metadata repair and pre-sweep pruning, not marking.
                 entry.string_ptr = key as usize;
                 return;
             }
@@ -909,6 +918,7 @@ pub(crate) fn prune_property_atoms(is_dead: &dyn Fn(usize) -> bool) {
         let mut removed = false;
         for entry in &mut table.slots {
             if entry.string_ptr != 0 && is_dead(entry.string_ptr) {
+                // GC_STORE_AUDIT(POINTER_FREE): Weak atom pruning writes string_ptr=0 after is_dead; removes pointer rather than installing an edge.
                 entry.string_ptr = 0;
                 table.len -= 1;
                 removed = true;

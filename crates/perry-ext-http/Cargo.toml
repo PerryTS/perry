@@ -3,7 +3,7 @@ name = "perry-ext-http"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Native bindings for Node's `http` / `https` modules — callback-style ClientRequest / IncomingMessage over turnloop, with TLS via perry-tls-session."
+description = "Native bindings for Node's `http` / `https` modules — callback-style ClientRequest / IncomingMessage over turnloop."
 
 [lints]
 workspace = true
@@ -26,7 +26,6 @@ rustls_webpki = { package = "rustls-webpki", version = "0.103" }
 rustls-pemfile.workspace = true
 # The client transport (`client_turnloop`): the rustls session that runs
 # `https:` above a turnloop socket, and the URL type requests are parsed into.
-perry-tls-session.workspace = true
 url.workspace = true
 # Response body chunks travel through the streaming event enum as refcounted
 # `Bytes`.

@@ -1001,7 +1001,8 @@ fn retune_nursery_cap_scale(eden_live_bytes: usize, first_round_live_bytes: usiz
                 let level = level.unwrap_or(phase_mean);
                 CAP_GROW_STREAK.with(|s| s.set(0));
                 let mut next = scale * 2;
-                while next < NURSERY_CAP_SCALE_MAX && level.min(eden_live_bytes) > cap_at(next) / 25 {
+                while next < NURSERY_CAP_SCALE_MAX && level.min(eden_live_bytes) > cap_at(next) / 25
+                {
                     next *= 2;
                 }
                 NURSERY_CAP_SCALE.with(|s| s.set(next));
@@ -1022,7 +1023,9 @@ fn retune_nursery_cap_scale(eden_live_bytes: usize, first_round_live_bytes: usiz
                 let level = level.unwrap_or(phase_mean);
                 CAP_SHRINK_STREAK.with(|s| s.set(0));
                 let mut next = scale / 2;
-                while next > NURSERY_CAP_SCALE_MIN && level.max(eden_live_bytes) < cap_at(next) / 100 {
+                while next > NURSERY_CAP_SCALE_MIN
+                    && level.max(eden_live_bytes) < cap_at(next) / 100
+                {
                     next /= 2;
                 }
                 NURSERY_CAP_SCALE.with(|s| s.set(next));
@@ -1139,9 +1142,15 @@ fn note_cap_phase_reading(
     CAP_PHASE_INFLUX_BYTES.with(|c| c.set(sum));
     CAP_PHASE_MINORS.with(|c| c.set(minors));
     let mean = (sum / minors) as usize;
-    let cycles = CAP_PHASE_CYCLES.with(Cell::get).note(eden_live_bytes, cohort_died);
+    let cycles = CAP_PHASE_CYCLES
+        .with(Cell::get)
+        .note(eden_live_bytes, cohort_died);
     CAP_PHASE_CYCLES.with(|c| c.set(cycles));
-    let level = if cycles.all_died { cycles.whole_mean() } else { Some(mean) };
+    let level = if cycles.all_died {
+        cycles.whole_mean()
+    } else {
+        Some(mean)
+    };
     (level, mean)
 }
 
@@ -1905,9 +1914,16 @@ mod tests {
         retune_after_scavenge(floor * 6 / 100, 0, 0);
         assert_eq!(scavenge_nursery_cap_effective_bytes(), two);
         let tooth = [
-            two * 2 / 100, two * 25 / 1000, two * 3 / 100, two * 35 / 1000,
-            two * 39 / 1000, two * 44 / 1000, two * 48 / 1000, two / 200,
-            two / 150, two * 15 / 1000,
+            two * 2 / 100,
+            two * 25 / 1000,
+            two * 3 / 100,
+            two * 35 / 1000,
+            two * 39 / 1000,
+            two * 44 / 1000,
+            two * 48 / 1000,
+            two / 200,
+            two / 150,
+            two * 15 / 1000,
         ];
         // The tip and the trough really are two readings beyond each edge: the
         // per-reading rule alone would grow at one and shrink at the other.

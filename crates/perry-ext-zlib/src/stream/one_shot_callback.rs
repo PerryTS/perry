@@ -49,6 +49,11 @@ pub(crate) unsafe fn queue_one_shot_callback(data: f64, options: f64, callback: 
     }
     js_zlib_validate_callback(callback.get());
     js_zlib_validate_buffer_arg(data.get().to_bits() as i64);
+    let max_output_length = if matches!(codec, Codec::BrotliDecompress) {
+        js_zlib_brotli_max_output_length(options.get())
+    } else {
+        0
+    };
     let owner = roots.root_nanbox(f64::from_bits(
         perry_ffi::alloc_null_proto_object(&[]).bits(),
     ));
@@ -61,16 +66,17 @@ pub(crate) unsafe fn queue_one_shot_callback(data: f64, options: f64, callback: 
         id as f64,
         owner.get(),
         0.0,
+        max_output_length as f64,
     ]);
 }
 
-unsafe fn queue_job(values: &[f64; 7]) {
+unsafe fn queue_job(values: &[f64; 8]) {
     let roots = TransientRootScope::enter();
     let values: Vec<_> = values.iter().map(|v| roots.root_nanbox(*v)).collect();
     let job = roots.root_nanbox(f64::from_bits(
         JsValue::from_object_ptr(perry_ffi::alloc_closure(
             perry_ffi::js_function_info!(job, 0),
-            7,
+            8,
         ))
         .bits(),
     ));
@@ -98,6 +104,7 @@ struct Call {
     owner: perry_ffi::TransientRootedNanbox,
     codec: u32,
     final_phase: bool,
+    max_output_length: usize,
 }
 extern "C" fn job(c: *const RawClosureHeader, _: JsThis) -> f64 {
     let roots = TransientRootScope::enter();
@@ -125,6 +132,7 @@ extern "C" fn job(c: *const RawClosureHeader, _: JsThis) -> f64 {
             owner,
             codec,
             final_phase,
+            max_output_length: perry_ffi::closure_capture_f64(c, 7) as usize,
         };
         let result = if final_phase {
             js_async_hooks_provider_run_catching_deferred_destroy(
@@ -153,6 +161,7 @@ extern "C" fn job(c: *const RawClosureHeader, _: JsThis) -> f64 {
                     id as f64,
                     call.owner.get(),
                     1.0,
+                    call.max_output_length as f64,
                 ]);
             } else {
                 js_async_hooks_provider_defer_destroy(id, 4);
@@ -211,8 +220,8 @@ unsafe extern "C" fn run(context: *mut c_void) -> f64 {
     }
     let engine = roots.root_nanbox(field(call.owner.get(), "engine"));
     let mut consumed = 0;
-    let error = loop {
-        let (status, error, codec_bytes, completion_bytes) = {
+    let (error, output_limit_exceeded) = loop {
+        let (status, error, codec_bytes, completion_bytes, output_limit_exceeded) = {
             // No native borrow survives accounting, property writes or JS.
             let state = np::get_mut::<Completion>(call.owner.get(), &COMPLETION).unwrap();
             let codec = payload(engine.get()).unwrap();
@@ -243,7 +252,10 @@ unsafe extern "C" fn run(context: *mut c_void) -> f64 {
                 &mut out,
             );
             consumed += out.consumed.min(input.len() - consumed);
-            if out.out_len > 0 {
+            // The codec scratch is fixed-size; never append an oversized result.
+            let output_limit_exceeded = call.codec == Codec::BrotliDecompress as u32
+                && out.out_len > call.max_output_length.saturating_sub(state.output.len());
+            if !output_limit_exceeded && out.out_len > 0 {
                 state
                     .output
                     .extend_from_slice(std::slice::from_raw_parts(out.out, out.out_len));
@@ -260,12 +272,13 @@ unsafe extern "C" fn run(context: *mut c_void) -> f64 {
                 std::mem::size_of::<Completion>()
                     + state.input.capacity()
                     + state.output.capacity(),
+                output_limit_exceeded,
             )
         };
         np::set_external_bytes(engine.get(), &CODEC_VTABLE, codec_bytes);
         np::set_external_bytes(call.owner.get(), &COMPLETION_VTABLE, completion_bytes);
-        if error.is_some() || status != ns::StepStatus::MORE {
-            break error;
+        if output_limit_exceeded || error.is_some() || status != ns::StepStatus::MORE {
+            break (error, output_limit_exceeded);
         }
     };
     // WRITE input is no longer needed. Drop its allocation rather than merely
@@ -277,13 +290,25 @@ unsafe extern "C" fn run(context: *mut c_void) -> f64 {
     };
     np::set_external_bytes(call.owner.get(), &COMPLETION_VTABLE, completion_bytes);
     progress(engine.get());
-    if error.is_none() && !call.final_phase {
+    if !output_limit_exceeded && error.is_none() && !call.final_phase {
         return 1.0;
     }
     // The same public engine did the work. Its codec is closed once before
     // allocating the result or invoking possibly reentrant/throwing user code.
     release(engine.get());
-    let err = roots.root_nanbox(if let Some((message, truncated)) = error {
+    let err = roots.root_nanbox(if output_limit_exceeded {
+        f64::from_bits(
+            perry_ffi::error_value_with_code(
+                &format!(
+                    "Cannot create a Buffer larger than {} bytes",
+                    call.max_output_length
+                ),
+                "ERR_BUFFER_TOO_LARGE",
+                ErrorKind::RangeError,
+            )
+            .bits(),
+        )
+    } else if let Some((message, truncated)) = error {
         let err = js_zlib_stream_error(message.as_ptr(), message.len(), i32::from(truncated));
         drop(message);
         err

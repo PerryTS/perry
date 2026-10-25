@@ -365,6 +365,8 @@ pub(crate) unsafe fn build_keys_source_array(
             }
         });
     }
+    // Every slot holds a key string: the new keys and the parent's prefix.
+    crate::array::ek_birth_prefix(arr, total as u32);
     arr
 }
 

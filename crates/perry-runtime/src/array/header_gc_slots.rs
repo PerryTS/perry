@@ -224,8 +224,8 @@ pub(crate) unsafe fn fill_resolved_array_slot(
     // GC_STORE_AUDIT(INIT): bulk fill of a caller-owned array; the layout note
     // and born-old barrier below cover this slot exactly as the layout-only
     // helper does.
+    // No EK row: the builder states the prefix once (`ek_birth_prefix`).
     std::ptr::write(array_elements_ptr(arr).add(index), value_bits);
-    super::ek_note_slot(arr, index, value_bits);
     if number.is_none() {
         // A non-number retires the dense raw-f64 claim, exactly as
         // `note_array_numeric_index_write` does.
@@ -256,7 +256,8 @@ pub(crate) unsafe fn note_array_slot_layout_only(
     let value_bits = canonicalize_array_numeric_store_bits(arr, value_bits);
     // GC_STORE_AUDIT(INIT): layout-only helper is restricted to fresh/suppressed caller sites.
     std::ptr::write(array_elements_ptr(arr).add(index), value_bits);
-    super::ek_note_slot(arr, index, value_bits);
+    // No EK row: the array is the caller's fresh or owned fill, and the
+    // builder states the prefix once when it is done (`ek_birth_prefix`).
     note_array_numeric_index_write(arr, index, value_bits);
     if !array_scalar_store_note_is_noop(arr, value_bits) {
         crate::gc::layout_note_slot(arr as usize, index, value_bits);
