@@ -1720,6 +1720,9 @@ impl LoweringContext {
             .push(std::mem::take(&mut self.forward_lexical_names));
         let local_mark = self.locals.len();
         self.scope_depth += 1;
+        self.fn_scope_saves.push(self.current_fn_scope);
+        self.current_fn_scope = self.next_fn_scope;
+        self.next_fn_scope += 1;
         self.scope_local_marks.push(local_mark);
         // #wall5: parallel mark for the native-module shadow stack, restored in
         // exit_scope (kept off the returned tuple to avoid churning its callers).
@@ -1732,8 +1735,22 @@ impl LoweringContext {
         )
     }
 
+    /// `enter_scope` for a catch clause: a scope of the function it sits in
+    /// rather than a function of its own, so the function identity
+    /// (`current_fn_scope`) stays the enclosing function's.
+    pub(crate) fn enter_catch_scope(&mut self) -> (usize, usize, usize) {
+        let mark = self.enter_scope();
+        if let Some(&enclosing) = self.fn_scope_saves.last() {
+            self.current_fn_scope = enclosing;
+        }
+        mark
+    }
+
     pub(crate) fn exit_scope(&mut self, mark: (usize, usize, usize)) {
         debug_assert!(self.scope_depth > 0, "exit_scope called at module depth");
+        if let Some(enclosing) = self.fn_scope_saves.pop() {
+            self.current_fn_scope = enclosing;
+        }
         // #6062: restore the enclosing block's forward-lexical set saved in the
         // matching `enter_scope`.
         self.forward_lexical_names = self.forward_lexical_saves.pop().unwrap_or_default();

@@ -31,12 +31,14 @@ mod typeof_narrow;
 // (the consumer at `crate::lower::*` would otherwise see nothing). Keep
 // this list in sync with each sibling's `pub fn` declarations.
 pub(crate) use block::{
-    collect_annexb_block_fn_decl_names, collect_lexical_decl_names,
+    cic_function, collect_annexb_block_fn_decl_names, collect_lexical_decl_names,
     collect_var_binding_names_from_pat, collect_var_binding_names_from_stmt,
     compute_prealloc_for_hoisted_closures, enter_class_rename_scope, enter_forward_class_scope,
-    exit_class_rename_scope, exit_forward_class_scope, lower_block_stmt, lower_block_stmt_scoped,
-    lower_fn_body_block_stmt, lower_stmts_using_aware, pre_register_forward_captured_lets,
-    rebind_nested_forward_scope_lets, register_switch_case_tdz_lets, take_forward_class_binding,
+    exit_class_rename_scope, exit_forward_class_scope, is_hidden_pending_binding, lower_block_stmt,
+    lower_block_stmt_scoped, lower_fn_body_block_stmt, lower_stmts_using_aware,
+    pre_register_forward_captured_lets, rebind_nested_forward_scope_lets,
+    register_switch_case_tdz_lets, take_forward_class_binding,
+    with_pending_forward_class_bindings_hidden,
 };
 pub(crate) use body_stmt::gen_capture_scan::forward_referenced_nested_generators;
 pub(crate) use body_stmt::{find_native_return_in_stmts, lower_body_stmt};
@@ -55,7 +57,7 @@ pub(crate) use class_decl::{
 pub(crate) use class_members::{
     lower_class_method, lower_class_method_with_name, lower_class_prop, lower_constructor,
     lower_getter_method, lower_getter_method_with_name, lower_setter_method,
-    lower_setter_method_with_name,
+    lower_setter_method_with_name, lower_static_block_body,
 };
 pub(crate) use class_validation::{
     validate_class_element_early_errors, validate_legacy_decorator_surface,

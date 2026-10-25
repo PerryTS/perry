@@ -180,8 +180,18 @@ fn publish_first_evaluation_captures(
 
 /// Does `value` hold the first evaluation of `template`? One load of the
 /// template's first-evaluation word and one compare; an `i1`.
+///
+/// `value` is the declaration's binding, and the compiler's own guards (the
+/// capture refresh after an assignment or before a return) can ask it before
+/// the declaration has initialized it. That read is internal, not the
+/// program's: a binding still in its dead zone reads as `undefined`, which is
+/// never the first evaluation, instead of throwing the ReferenceError that
+/// only the program's own reads raise.
 pub(crate) fn is_first_i1(ctx: &mut FnCtx<'_>, value: &Expr, template: &str) -> Result<String> {
-    let v = lower_expr(ctx, value)?;
+    ctx.block().call_void("js_tdz_suppress_begin", &[]);
+    let v = lower_expr(ctx, value);
+    ctx.block().call_void("js_tdz_suppress_end", &[]);
+    let v = v?;
     let flag = flag_global_name(template);
     let blk = ctx.block();
     let first = blk.load(I64, &flag);

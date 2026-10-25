@@ -985,55 +985,343 @@ pub(crate) fn rewrite_written_captures_to_cells(body: &mut [Stmt], cells: &HashS
     if cells.is_empty() {
         return;
     }
+    let mut hoisted = HoistedCells::default();
     for s in body.iter_mut() {
-        rewrite_cells_in_stmt(s, cells);
+        each_child_stmt_list_mut(s, &mut |list| {
+            hoist_forward_cell_inits(list, cells, &mut hoisted)
+        });
+    }
+    for s in body.iter_mut() {
+        rewrite_cells_in_stmt(s, cells, &hoisted);
     }
 }
 
-fn rewrite_cells_in_stmt(stmt: &mut Stmt, cells: &HashSet<LocalId>) {
+/// The cells whose box was preallocated before their declaration (see
+/// [`hoist_forward_cell_inits`]).
+#[derive(Default)]
+struct HoistedCells {
+    /// The cell exists from the prealloc site; its declaration, left where it
+    /// is, is the cell's first store rather than the creation of a new cell.
+    declared: HashSet<LocalId>,
+    /// The cells that stand in for a TDZ box (`Stmt::PreallocateTdzBoxes`),
+    /// by id, with the binding's name for the ReferenceError. Such a cell is
+    /// `[value, initialized]`: it is born `[undefined, false]`, and only the
+    /// declaration's store sets the flag. Every access of the program's own
+    /// (read, write, update) is checked against it: `initialized ? access :
+    /// throw`. Perry's internal reads of the binding (class-capture
+    /// snapshots, the first-evaluation guard) take `cell[0]` unchecked, as the
+    /// box they replace is read with the TDZ check suppressed. A cell that
+    /// replaces a plain box (`PreallocateBoxes`) or a declaration with no
+    /// earlier capture has no dead zone to keep and stays `[value]`.
+    checked: HashMap<LocalId, String>,
+}
+
+/// The declaration of `id` among `stmts` or the statement lists nested in
+/// them (in program order; a declaration is unique to its id): give it an
+/// initializer (`let c;` initializes to `undefined`, which
+/// [`rewrite_cells_in_stmt`] turns into the cell's first store) and return its
+/// name, type and mutability for the cell created at the prealloc site.
+fn declare_forward_cell(stmts: &mut [Stmt], id: LocalId) -> Option<(String, Type, bool)> {
+    for stmt in stmts {
+        if let Stmt::Let {
+            id: declared,
+            name,
+            ty,
+            mutable,
+            init,
+        } = stmt
+        {
+            if *declared == id {
+                init.get_or_insert(Expr::Undefined);
+                return Some((name.clone(), ty.clone(), *mutable));
+            }
+            continue;
+        }
+        let mut found = None;
+        each_child_stmt_list_mut(stmt, &mut |list| {
+            if found.is_none() {
+                found = declare_forward_cell(list, id);
+            }
+        });
+        if found.is_some() {
+            return found;
+        }
+    }
+    None
+}
+
+/// A binding that closures capture BEFORE its declaration (a forward-captured
+/// `let` / `const` / class, pre-registered by `forward_class_bindings` and
+/// friends) has its box allocated by a `PreallocateBoxes` /
+/// `PreallocateTdzBoxes` ahead of the first such closure and filled by the
+/// declaration. Backed by a cell, the cell must likewise exist before
+/// the closure is created (the snapshot pass hands the closure the cell
+/// reference), and the declaration must fill THAT cell: a declaration that
+/// built a fresh cell would leave every earlier closure with a stale one.
+/// So the cell is created where the box was preallocated (`let c = [undefined]`
+/// after the rewrite) and the declaration becomes a write to its element: it
+/// stays a `Stmt::Let` with an initializer (`let c;` initializes to
+/// `undefined`), which [`rewrite_cells_in_stmt`] turns into that write, and
+/// which is how it differs from an ordinary assignment of the binding.
+/// The declaration is found among the statements after the prealloc or in
+/// the statement lists nested in them: a block that wraps the rest of its
+/// scope (`using` makes the statements after the resource a `try` body) puts
+/// the declaration in a list of its own, while the prealloc stays at the
+/// scope's entry. A binding of a `PreallocateTdzBoxes` is recorded in
+/// `checked`: its cell keeps the dead zone (see [`HoistedCells`]).
+fn hoist_forward_cell_inits(
+    stmts: &mut Vec<Stmt>,
+    cells: &HashSet<LocalId>,
+    hoisted: &mut HoistedCells,
+) {
+    for s in stmts.iter_mut() {
+        each_child_stmt_list_mut(s, &mut |list| {
+            hoist_forward_cell_inits(list, cells, hoisted)
+        });
+    }
+    let mut at = 0;
+    while at < stmts.len() {
+        let forward: Vec<LocalId> = match &stmts[at] {
+            Stmt::PreallocateBoxes(ids) | Stmt::PreallocateTdzBoxes(ids) => ids
+                .iter()
+                .copied()
+                .filter(|id| cells.contains(id))
+                .collect(),
+            _ => Vec::new(),
+        };
+        let in_dead_zone = matches!(&stmts[at], Stmt::PreallocateTdzBoxes(_));
+        let mut predeclared: Vec<Stmt> = Vec::new();
+        for id in forward {
+            let Some((name, ty, mutable)) = declare_forward_cell(&mut stmts[at + 1..], id) else {
+                continue;
+            };
+            hoisted.declared.insert(id);
+            if in_dead_zone {
+                hoisted.checked.insert(id, name.clone());
+            }
+            predeclared.push(Stmt::Let {
+                id,
+                name,
+                ty,
+                mutable,
+                init: None,
+            });
+            if let Stmt::PreallocateBoxes(ids) | Stmt::PreallocateTdzBoxes(ids) = &mut stmts[at] {
+                ids.retain(|i| *i != id);
+            }
+        }
+        let emptied = matches!(
+            &stmts[at],
+            Stmt::PreallocateBoxes(ids) | Stmt::PreallocateTdzBoxes(ids) if ids.is_empty()
+        );
+        let at_next = at + predeclared.len() + usize::from(!emptied);
+        let insert_at = at + usize::from(!emptied);
+        if emptied {
+            stmts.remove(at);
+        }
+        for (k, decl) in predeclared.into_iter().enumerate() {
+            stmts.insert(insert_at + k, decl);
+        }
+        at = at_next;
+    }
+}
+
+fn rewrite_cells_in_stmt(stmt: &mut Stmt, cells: &HashSet<LocalId>, hoisted: &HoistedCells) {
     match stmt {
+        // The declaration of a cell created earlier, where its box was
+        // preallocated: the cell's first store, which also ends its dead zone.
+        Stmt::Let {
+            id,
+            init: init @ Some(_),
+            ..
+        } if hoisted.declared.contains(id) => {
+            let id = *id;
+            let mut value = init.take().unwrap_or(Expr::Undefined);
+            rewrite_cells_in_expr(&mut value, cells, hoisted);
+            let store = Expr::IndexSet {
+                object: Box::new(Expr::LocalGet(id)),
+                index: Box::new(Expr::Integer(0)),
+                value: Box::new(value),
+            };
+            *stmt = Stmt::Expr(if hoisted.checked.contains_key(&id) {
+                Expr::Sequence(vec![store, cell_flag_set(id)])
+            } else {
+                store
+            });
+            return;
+        }
         // The candidate's declaration: wrap its initializer in a one-element
         // array so the slot holds a fresh cell each iteration. `let c;` (no
-        // init) seeds `[undefined]`.
+        // init) seeds `[undefined]`; a dead-zone cell seeds `[undefined, false]`.
         Stmt::Let { id, init, ty, .. } if cells.contains(id) => {
             let mut inner = init.take().unwrap_or(Expr::Undefined);
-            rewrite_cells_in_expr(&mut inner, cells);
-            *init = Some(Expr::Array(vec![inner], None));
+            rewrite_cells_in_expr(&mut inner, cells, hoisted);
+            let mut slots = vec![inner];
+            if hoisted.checked.contains_key(id) {
+                slots.push(Expr::Bool(false));
+            }
+            *init = Some(Expr::Array(slots, None));
             *ty = Type::Array(Box::new(Type::Any));
         }
         _ => {
-            each_expr_mut(stmt, &mut |e| rewrite_cells_in_expr(e, cells));
+            each_expr_mut(stmt, &mut |e| rewrite_cells_in_expr(e, cells, hoisted));
         }
     }
     each_child_stmt_list_mut(stmt, &mut |list| {
         for s in list.iter_mut() {
-            rewrite_cells_in_stmt(s, cells);
+            rewrite_cells_in_stmt(s, cells, hoisted);
         }
     });
 }
 
-fn rewrite_cells_in_expr(e: &mut Expr, cells: &HashSet<LocalId>) {
+/// `cell[slot]` for the cell bound to `id`.
+fn cell_slot(id: LocalId, slot: i64) -> Expr {
+    Expr::IndexGet {
+        object: Box::new(Expr::LocalGet(id)),
+        index: Box::new(Expr::Integer(slot)),
+    }
+}
+
+/// `cell[1] = true`: the declaration ended the cell's dead zone.
+fn cell_flag_set(id: LocalId) -> Expr {
+    Expr::IndexSet {
+        object: Box::new(Expr::LocalGet(id)),
+        index: Box::new(Expr::Integer(1)),
+        value: Box::new(Expr::Bool(true)),
+    }
+}
+
+/// `cell[1] ? on_initialized : throw ReferenceError`: the program's own
+/// access of a dead-zone cell, where `on_initialized` is the access itself and
+/// `on_dead_zone` runs before the throw.
+fn cell_checked(id: LocalId, name: &str, on_initialized: Expr, on_dead_zone: Option<Expr>) -> Expr {
+    let throw = perry_hir::tdz_check::throw(name);
+    Expr::Conditional {
+        condition: Box::new(cell_slot(id, 1)),
+        then_expr: Box::new(on_initialized),
+        else_expr: Box::new(match on_dead_zone {
+            Some(undo) => Expr::Sequence(vec![undo, throw]),
+            None => throw,
+        }),
+    }
+}
+
+/// A capture operand Perry itself evaluates (a class-capture snapshot or the
+/// capture forwards of `new C()`), not the program: the binding may still be
+/// in its dead zone, as the class is declared before it (`class Holder {
+/// value() { return C } } class C {}`), and the snapshot then holds
+/// `undefined` instead of throwing. Codegen gives the box it replaces the
+/// same treatment with a TDZ-suppression window around the operand, which a
+/// cell's explicit throw would escape, so the cell's value is read directly.
+fn rewrite_capture_operand(e: &mut Expr, cells: &HashSet<LocalId>, hoisted: &HoistedCells) {
+    match e {
+        Expr::LocalGet(id) if cells.contains(id) => *e = cell_slot(*id, 0),
+        _ => rewrite_cells_in_expr(e, cells, hoisted),
+    }
+}
+
+fn rewrite_cells_in_expr(e: &mut Expr, cells: &HashSet<LocalId>, hoisted: &HoistedCells) {
     match e {
         Expr::LocalGet(id) if cells.contains(id) => {
             let id = *id;
-            *e = Expr::IndexGet {
-                object: Box::new(Expr::LocalGet(id)),
-                index: Box::new(Expr::Integer(0)),
+            // A dead-zone cell is read through its flag: the program's own
+            // read before the declaration throws, as the box it replaces did.
+            *e = match hoisted.checked.get(&id) {
+                Some(name) => cell_checked(id, name, cell_slot(id, 0), None),
+                None => cell_slot(id, 0),
             };
             // Do NOT descend — the freshly built `LocalGet(id)` is the cell
             // reference itself, not another read of the (now indexed) binding.
+            return;
+        }
+        // The first-evaluation guard is Perry's own read of a class binding:
+        // in the dead zone it sees `undefined` (not the first evaluation)
+        // instead of throwing, so only the program's own reads are checked.
+        Expr::ClassIsFirstEvaluation { value, .. } => {
+            if let Expr::LocalGet(id) = value.as_ref() {
+                let id = *id;
+                if cells.contains(&id) {
+                    **value = cell_slot(id, 0);
+                    return;
+                }
+            }
+        }
+        Expr::RegisterClassCaptures { captures, .. } => {
+            for capture in captures.iter_mut() {
+                rewrite_capture_operand(capture, cells, hoisted);
+            }
+            return;
+        }
+        Expr::RefreshClassExprCaptures {
+            class_value,
+            captures,
+            ..
+        } => {
+            rewrite_cells_in_expr(class_value, cells, hoisted);
+            for capture in captures.iter_mut() {
+                rewrite_capture_operand(capture, cells, hoisted);
+            }
+            return;
+        }
+        // The operands are rewritten apart from the rest of the node: the
+        // walk below would read the rewritten ones as program reads again.
+        Expr::ClassExprFresh { captured_args, .. } => {
+            let mut operands = std::mem::take(captured_args);
+            for capture in operands.iter_mut() {
+                rewrite_capture_operand(capture, cells, hoisted);
+            }
+            walk_expr_children_mut(e, &mut |child| rewrite_cells_in_expr(child, cells, hoisted));
+            if let Expr::ClassExprFresh { captured_args, .. } = e {
+                *captured_args = operands;
+            }
+            return;
+        }
+        Expr::New {
+            args,
+            cap_args_appended,
+            ..
+        } if *cap_args_appended > 0 => {
+            let forwarded = args.len().saturating_sub(*cap_args_appended as usize);
+            let mut operands = args.split_off(forwarded);
+            for capture in operands.iter_mut() {
+                rewrite_capture_operand(capture, cells, hoisted);
+            }
+            walk_expr_children_mut(e, &mut |child| rewrite_cells_in_expr(child, cells, hoisted));
+            if let Expr::New { args, .. } = e {
+                args.extend(operands);
+            }
             return;
         }
         Expr::LocalSet(id, value) if cells.contains(id) => {
             let id = *id;
             // Rewrite reads of other cells (and of this cell) inside the value
             // BEFORE lifting it out, e.g. `c = c + 1` → `c[0] = c[0] + 1`.
-            rewrite_cells_in_expr(value, cells);
+            rewrite_cells_in_expr(value, cells, hoisted);
             let value = std::mem::replace(value.as_mut(), Expr::Undefined);
-            *e = Expr::IndexSet {
+            let store = Expr::IndexSet {
                 object: Box::new(Expr::LocalGet(id)),
                 index: Box::new(Expr::Integer(0)),
                 value: Box::new(value),
+            };
+            // A write of a dead-zone cell is checked after its value is
+            // evaluated, as `x = rhs` is: the value is staged in the (never
+            // observable) value slot, which the throw puts back to
+            // `undefined`. Only the declaration's store, which is not a
+            // `LocalSet` any more (see `rewrite_cells_in_stmt`), ends the dead
+            // zone. The expression evaluates to the value.
+            *e = match hoisted.checked.get(&id) {
+                Some(name) => {
+                    let unstage = Expr::IndexSet {
+                        object: Box::new(Expr::LocalGet(id)),
+                        index: Box::new(Expr::Integer(0)),
+                        value: Box::new(Expr::Undefined),
+                    };
+                    Expr::Sequence(vec![
+                        store,
+                        cell_checked(id, name, cell_slot(id, 0), Some(unstage)),
+                    ])
+                }
+                None => store,
             };
             return;
         }
@@ -1044,12 +1332,20 @@ fn rewrite_cells_in_expr(e: &mut Expr, cells: &HashSet<LocalId>) {
                 UpdateOp::Decrement => BinaryOp::Sub,
             };
             let prefix = *prefix;
-            *e = Expr::IndexUpdate {
+            let update = Expr::IndexUpdate {
                 object: Box::new(Expr::LocalGet(id)),
                 index: Box::new(Expr::Integer(0)),
                 op,
                 prefix,
                 strict: false,
+            };
+            // `x++` reads `x` first: in the dead zone it throws before it
+            // changes anything.
+            *e = match hoisted.checked.get(&id) {
+                Some(name) => {
+                    Expr::Sequence(vec![cell_checked(id, name, Expr::Undefined, None), update])
+                }
+                None => update,
             };
             return;
         }
@@ -1076,7 +1372,7 @@ fn rewrite_cells_in_expr(e: &mut Expr, cells: &HashSet<LocalId>) {
                 }
             }
             for s in body.iter_mut() {
-                rewrite_cells_in_stmt(s, cells);
+                rewrite_cells_in_stmt(s, cells, hoisted);
             }
             // Fall through to `walk_expr_children_mut`, which for a closure
             // visits ONLY its param defaults (not the body — handled above) —
@@ -1085,7 +1381,7 @@ fn rewrite_cells_in_expr(e: &mut Expr, cells: &HashSet<LocalId>) {
         }
         _ => {}
     }
-    walk_expr_children_mut(e, &mut |child| rewrite_cells_in_expr(child, cells));
+    walk_expr_children_mut(e, &mut |child| rewrite_cells_in_expr(child, cells, hoisted));
 }
 
 #[cfg(test)]
@@ -1134,5 +1430,474 @@ mod tests {
         }];
 
         assert!(!collect_per_iteration_ids(&body).contains(&id));
+    }
+
+    const X: LocalId = 2;
+
+    fn read_x() -> Expr {
+        Expr::LocalGet(X)
+    }
+
+    fn guard_x() -> Expr {
+        Expr::ClassIsFirstEvaluation {
+            value: Box::new(Expr::LocalGet(X)),
+            template: "C".into(),
+        }
+    }
+
+    /// A loop body that declares `x` after a closure (`closure_body`) uses it:
+    /// `prealloc` allocates its box first, and `between` runs after the closure
+    /// and before the declaration. Returns the loop's statements after the cell
+    /// rewrite.
+    fn forward_cell_loop(prealloc: Stmt, closure_body: Vec<Stmt>, between: Vec<Stmt>) -> Vec<Stmt> {
+        forward_cell_loop_in(prealloc, closure_body, between, false)
+    }
+
+    /// [`forward_cell_loop`], optionally with everything after the closure
+    /// wrapped in a `try` the way `using` wraps the rest of its scope: the
+    /// declaration is then in a list of its own, nested under the prealloc's.
+    fn forward_cell_loop_in(
+        prealloc: Stmt,
+        closure_body: Vec<Stmt>,
+        between: Vec<Stmt>,
+        rest_in_try: bool,
+    ) -> Vec<Stmt> {
+        let (x, read) = (X, 3);
+        let closure = Expr::Closure {
+            func_id: 900,
+            params: Vec::new(),
+            return_type: Type::Any,
+            body: closure_body,
+            captures: vec![x],
+            mutable_captures: vec![x],
+            captures_this: false,
+            captures_new_target: false,
+            enclosing_class: None,
+            is_arrow: true,
+            is_strict: false,
+            is_async: false,
+            is_generator: false,
+        };
+        let mut loop_body = vec![
+            prealloc,
+            Stmt::Let {
+                id: read,
+                name: "read".into(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(closure),
+            },
+        ];
+        let mut rest = between;
+        rest.extend([
+            Stmt::Let {
+                id: x,
+                name: "x".into(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::Integer(1)),
+            },
+            Stmt::Expr(Expr::Await(Box::new(Expr::Integer(0)))),
+        ]);
+        if rest_in_try {
+            loop_body.push(Stmt::Try {
+                body: rest,
+                catch: None,
+                finally: Some(vec![Stmt::Expr(Expr::Undefined)]),
+            });
+        } else {
+            loop_body.extend(rest);
+        }
+        let mut body = vec![Stmt::While {
+            condition: Expr::Bool(true),
+            body: loop_body,
+        }];
+        rewrite_written_captures_to_cells(&mut body, &HashSet::from([x]));
+        let Stmt::While { body, .. } = body.remove(0) else {
+            unreachable!("the loop stays a loop");
+        };
+        body
+    }
+
+    fn closure_body(stmts: &[Stmt]) -> &[Stmt] {
+        let Some(Stmt::Let {
+            init: Some(Expr::Closure { body, .. }),
+            ..
+        }) = stmts.iter().find(|s| matches!(s, Stmt::Let { id: 3, .. }))
+        else {
+            panic!("the closure declaration is gone: {stmts:?}");
+        };
+        body
+    }
+
+    fn closure_return(stmts: &[Stmt]) -> &Expr {
+        let [Stmt::Return(Some(read))] = closure_body(stmts) else {
+            panic!("the closure body changed shape: {:?}", closure_body(stmts));
+        };
+        read
+    }
+
+    fn reads_closure(read: Expr) -> Vec<Stmt> {
+        vec![Stmt::Return(Some(read))]
+    }
+
+    fn writes_closure(write: Expr) -> Vec<Stmt> {
+        vec![Stmt::Expr(write)]
+    }
+
+    /// The statements of the loop body that store into slot `slot` of cell `X`.
+    fn count_slot_stores(stmts: &[Stmt], slot: i64) -> usize {
+        format!("{stmts:?}")
+            .matches(&format!(
+                "IndexSet {{ object: LocalGet({X}), index: Integer({slot}), value:"
+            ))
+            .count()
+    }
+
+    // A forward-captured binding whose box was allocated in the dead zone
+    // keeps its dead zone in the cell: born `[undefined, false]`, set by the
+    // declaration, read through the flag.
+    #[test]
+    fn dead_zone_binding_keeps_its_dead_zone_in_the_cell() {
+        let stmts = forward_cell_loop(
+            Stmt::PreallocateTdzBoxes(vec![2]),
+            reads_closure(read_x()),
+            vec![],
+        );
+        assert!(
+            !stmts
+                .iter()
+                .any(|s| matches!(s, Stmt::PreallocateTdzBoxes(_))),
+            "{stmts:?}"
+        );
+        let Stmt::Let {
+            id: 2,
+            init: Some(Expr::Array(slots, _)),
+            ..
+        } = &stmts[0]
+        else {
+            panic!("the cell is not created where the box was: {stmts:?}");
+        };
+        assert!(
+            matches!(slots.as_slice(), [Expr::Undefined, Expr::Bool(false)]),
+            "{slots:?}"
+        );
+        let Expr::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+        } = closure_return(&stmts)
+        else {
+            panic!("the read is not checked: {:?}", closure_return(&stmts));
+        };
+        assert!(
+            matches!(condition.as_ref(), Expr::IndexGet { index, .. } if matches!(index.as_ref(), Expr::Integer(1)))
+        );
+        assert!(
+            matches!(then_expr.as_ref(), Expr::IndexGet { index, .. } if matches!(index.as_ref(), Expr::Integer(0)))
+        );
+        assert!(format!("{else_expr:?}").contains(perry_hir::tdz_check::TDZ_THROW));
+        // the declaration stores the value, then marks the cell initialized
+        let decl = stmts
+            .iter()
+            .find_map(|s| match s {
+                Stmt::Expr(Expr::Sequence(parts)) => Some(parts),
+                _ => None,
+            })
+            .expect("the declaration is a store into the cell");
+        assert!(
+            matches!(
+                decl.as_slice(),
+                [
+                    Expr::IndexSet { .. },
+                    Expr::IndexSet { value, .. },
+                ] if matches!(value.as_ref(), Expr::Bool(true))
+            ),
+            "{decl:?}"
+        );
+    }
+
+    // `using` wraps the statements after its resource in a `try`, which puts a
+    // later declaration in a list of its own while the box is preallocated at
+    // the scope's entry: the declaration still fills the cell that exists
+    // before the closure, rather than building a second one the closure never
+    // sees.
+    #[test]
+    fn declaration_inside_a_try_wrapper_fills_the_cell_created_at_the_prealloc() {
+        let stmts = forward_cell_loop_in(
+            Stmt::PreallocateTdzBoxes(vec![X]),
+            reads_closure(read_x()),
+            vec![],
+            true,
+        );
+        assert!(
+            !stmts
+                .iter()
+                .any(|s| matches!(s, Stmt::PreallocateTdzBoxes(_))),
+            "{stmts:?}"
+        );
+        let Stmt::Let {
+            id: X,
+            init: Some(Expr::Array(slots, _)),
+            ..
+        } = &stmts[0]
+        else {
+            panic!("the cell is not created where the box was: {stmts:?}");
+        };
+        assert!(
+            matches!(slots.as_slice(), [Expr::Undefined, Expr::Bool(false)]),
+            "{slots:?}"
+        );
+        let Some(Stmt::Try { body, .. }) = stmts.iter().find(|s| matches!(s, Stmt::Try { .. }))
+        else {
+            panic!("the wrapper is gone: {stmts:?}");
+        };
+        assert!(
+            !body.iter().any(|s| matches!(s, Stmt::Let { id: X, .. })),
+            "the declaration must not build another cell: {body:?}"
+        );
+        let Some(Stmt::Expr(Expr::Sequence(decl))) = body.first() else {
+            panic!("the declaration is not a store into the cell: {body:?}");
+        };
+        assert!(
+            matches!(
+                decl.as_slice(),
+                [Expr::IndexSet { .. }, Expr::IndexSet { value, .. }]
+                    if matches!(value.as_ref(), Expr::Bool(true))
+            ),
+            "{decl:?}"
+        );
+        assert!(
+            matches!(closure_return(&stmts), Expr::Conditional { .. }),
+            "the read stays checked against the dead zone: {:?}",
+            closure_return(&stmts)
+        );
+    }
+
+    // A box that was never in a dead zone has nothing to keep: a one-slot
+    // cell and plain reads.
+    #[test]
+    fn plain_forward_binding_stays_a_one_slot_cell() {
+        let stmts = forward_cell_loop(
+            Stmt::PreallocateBoxes(vec![2]),
+            reads_closure(read_x()),
+            vec![],
+        );
+        let Stmt::Let {
+            id: 2,
+            init: Some(Expr::Array(slots, _)),
+            ..
+        } = &stmts[0]
+        else {
+            panic!("the cell is not created where the box was: {stmts:?}");
+        };
+        assert!(matches!(slots.as_slice(), [Expr::Undefined]), "{slots:?}");
+        assert!(
+            matches!(closure_return(&stmts), Expr::IndexGet { .. }),
+            "{:?}",
+            closure_return(&stmts)
+        );
+    }
+
+    // The first-evaluation guard is an internal read: in the dead zone it
+    // sees `undefined`, it does not throw.
+    #[test]
+    fn first_evaluation_guard_reads_the_dead_zone_cell_unchecked() {
+        let stmts = forward_cell_loop(
+            Stmt::PreallocateTdzBoxes(vec![2]),
+            reads_closure(guard_x()),
+            vec![],
+        );
+        let Expr::ClassIsFirstEvaluation { value, .. } = closure_return(&stmts) else {
+            panic!("{:?}", closure_return(&stmts));
+        };
+        assert!(
+            matches!(value.as_ref(), Expr::IndexGet { index, .. } if matches!(index.as_ref(), Expr::Integer(0))),
+            "{value:?}"
+        );
+    }
+
+    fn is_cell_value_read(e: &Expr) -> bool {
+        matches!(
+            e,
+            Expr::IndexGet { object, index }
+                if matches!(object.as_ref(), Expr::LocalGet(X))
+                    && matches!(index.as_ref(), Expr::Integer(0))
+        )
+    }
+
+    // A write of a dead-zone cell evaluates its value, then checks the flag
+    // and throws without leaving the value behind; only the declaration's
+    // store sets the flag.
+    #[test]
+    fn dead_zone_write_is_checked_and_only_the_declaration_initializes() {
+        let stmts = forward_cell_loop(
+            Stmt::PreallocateTdzBoxes(vec![X]),
+            writes_closure(Expr::LocalSet(X, Box::new(Expr::Integer(9)))),
+            vec![],
+        );
+        let [Stmt::Expr(Expr::Sequence(write))] = closure_body(&stmts) else {
+            panic!(
+                "the write is not staged and checked: {:?}",
+                closure_body(&stmts)
+            );
+        };
+        let [Expr::IndexSet { value, .. }, Expr::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+        }] = write.as_slice()
+        else {
+            panic!("{write:?}");
+        };
+        assert!(matches!(value.as_ref(), Expr::Integer(9)), "{value:?}");
+        assert!(
+            matches!(condition.as_ref(), Expr::IndexGet { index, .. } if matches!(index.as_ref(), Expr::Integer(1)))
+        );
+        assert!(is_cell_value_read(then_expr), "{then_expr:?}");
+        let Expr::Sequence(throwing) = else_expr.as_ref() else {
+            panic!("{else_expr:?}");
+        };
+        assert!(
+            matches!(
+                throwing.as_slice(),
+                [Expr::IndexSet { value, .. }, _] if matches!(value.as_ref(), Expr::Undefined)
+            ),
+            "the failed write must not leave its value: {throwing:?}"
+        );
+        assert!(format!("{throwing:?}").contains(perry_hir::tdz_check::TDZ_THROW));
+        // the declaration alone raises the flag
+        assert_eq!(count_slot_stores(&stmts, 1), 1, "{stmts:?}");
+    }
+
+    // `x++` reads `x` first, so it throws in the dead zone before it changes
+    // anything.
+    #[test]
+    fn dead_zone_update_is_checked_before_it_changes_the_cell() {
+        let stmts = forward_cell_loop(
+            Stmt::PreallocateTdzBoxes(vec![X]),
+            writes_closure(Expr::Update {
+                id: X,
+                op: UpdateOp::Increment,
+                prefix: false,
+            }),
+            vec![],
+        );
+        let [Stmt::Expr(Expr::Sequence(update))] = closure_body(&stmts) else {
+            panic!("the update is not checked: {:?}", closure_body(&stmts));
+        };
+        let [Expr::Conditional { else_expr, .. }, Expr::IndexUpdate { .. }] = update.as_slice()
+        else {
+            panic!("{update:?}");
+        };
+        assert!(format!("{else_expr:?}").contains(perry_hir::tdz_check::TDZ_THROW));
+        assert_eq!(count_slot_stores(&stmts, 1), 1, "{stmts:?}");
+    }
+
+    // A cell that replaced a plain box has no dead zone: its writes and
+    // updates stay bare element accesses.
+    #[test]
+    fn plain_forward_binding_writes_stay_unchecked() {
+        let stmts = forward_cell_loop(
+            Stmt::PreallocateBoxes(vec![X]),
+            vec![
+                Stmt::Expr(Expr::LocalSet(X, Box::new(Expr::Integer(9)))),
+                Stmt::Expr(Expr::Update {
+                    id: X,
+                    op: UpdateOp::Increment,
+                    prefix: false,
+                }),
+            ],
+            vec![],
+        );
+        assert!(
+            matches!(
+                closure_body(&stmts),
+                [
+                    Stmt::Expr(Expr::IndexSet { .. }),
+                    Stmt::Expr(Expr::IndexUpdate { .. })
+                ]
+            ),
+            "{:?}",
+            closure_body(&stmts)
+        );
+    }
+
+    fn class_new(args: Vec<Expr>, cap_args_appended: u32) -> Expr {
+        Expr::New {
+            class_name: "Holder".into(),
+            args,
+            type_args: Vec::new(),
+            byte_offset: 0,
+            cap_args_appended,
+        }
+    }
+
+    // The class-capture snapshots and the capture forwards of `new C()` are
+    // Perry's own reads: a class declared before a dead-zone binding it
+    // captures snapshots it while it is still `undefined`, so they read the
+    // value slot and do not throw. User arguments are the program's reads.
+    #[test]
+    fn class_capture_operands_read_the_dead_zone_cell_unchecked() {
+        let between = vec![
+            Stmt::Expr(Expr::RegisterClassCaptures {
+                class_name: "Holder".into(),
+                captures: vec![read_x()],
+            }),
+            Stmt::Expr(Expr::RefreshClassExprCaptures {
+                class_value: Box::new(Expr::Undefined),
+                captures: vec![read_x()],
+                env_class: None,
+            }),
+            Stmt::Expr(Expr::ClassExprFresh {
+                template: "Holder".into(),
+                evaluation_owner: None,
+                named_statics: Vec::new(),
+                computed_keys: Vec::new(),
+                computed_statics: Vec::new(),
+                static_init_order: Vec::new(),
+                captured_args: vec![read_x()],
+                shared_first_evaluation: None,
+                evaluated_parent: None,
+                definition_steps: Vec::new(),
+            }),
+            Stmt::Expr(class_new(vec![read_x(), read_x()], 1)),
+        ];
+        let stmts = forward_cell_loop(
+            Stmt::PreallocateTdzBoxes(vec![X]),
+            reads_closure(read_x()),
+            between,
+        );
+        let mut seen = 0;
+        for s in &stmts {
+            let Stmt::Expr(e) = s else { continue };
+            match e {
+                Expr::RegisterClassCaptures { captures, .. }
+                | Expr::RefreshClassExprCaptures { captures, .. }
+                | Expr::ClassExprFresh {
+                    captured_args: captures,
+                    ..
+                } => {
+                    assert!(
+                        matches!(captures.as_slice(), [c] if is_cell_value_read(c)),
+                        "{e:?}"
+                    );
+                    seen += 1;
+                }
+                Expr::New { args, .. } => {
+                    let [user, forwarded] = args.as_slice() else {
+                        panic!("{e:?}");
+                    };
+                    assert!(
+                        matches!(user, Expr::Conditional { .. }),
+                        "the program's own argument is a checked read: {user:?}"
+                    );
+                    assert!(is_cell_value_read(forwarded), "{forwarded:?}");
+                    seen += 1;
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(seen, 4, "{stmts:?}");
     }
 }

@@ -743,6 +743,25 @@ pub struct LoweringContext {
     /// Their TDZ cells are also allocated at block entry, rather than function
     /// entry, to preserve per-entry binding identity and the TDZ in loops.
     pub(crate) nested_forward_scope_ids: HashSet<LocalId>,
+    /// The class bindings `forward_class_bindings` pre-registered whose
+    /// declaration has not been lowered yet (`take_forward_class_binding`
+    /// removes one), each with the function that owns it (`current_fn_scope`
+    /// when it was registered) and its source name. A class member lowered in
+    /// that function while the binding is pending cannot capture it (the
+    /// binding is in its dead zone, and a class snapshots its captures);
+    /// `with_pending_forward_class_bindings_hidden` takes these out of name
+    /// resolution for the member's lowering.
+    pub(crate) pending_forward_class_bindings: HashMap<LocalId, (u32, String)>,
+    /// Identity of the function or closure whose body is being lowered. 0 is
+    /// the module top level. `enter_scope` gives every function-like scope a
+    /// fresh id and `exit_scope` restores the enclosing one; a catch clause
+    /// (`enter_catch_scope`) is a scope of the function it sits in, so it
+    /// keeps that function's id although it bumps `scope_depth`.
+    pub(crate) current_fn_scope: u32,
+    /// The next id `enter_scope` hands out.
+    pub(crate) next_fn_scope: u32,
+    /// The enclosing `current_fn_scope` of every active `enter_scope`.
+    pub(crate) fn_scope_saves: Vec<u32>,
     /// Shadow index: function name -> index in `functions` Vec (last entry for shadowing)
     pub(crate) functions_index: HashMap<String, usize>,
     /// Shadow index: class name -> index in `classes` Vec

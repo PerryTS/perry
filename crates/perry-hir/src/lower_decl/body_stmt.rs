@@ -1103,7 +1103,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
 
             // Lower catch clause (if present)
             let catch = if let Some(ref catch_clause) = try_stmt.handler {
-                let scope_mark = ctx.enter_scope();
+                let scope_mark = ctx.enter_catch_scope();
 
                 // Lower catch parameter (if present)
                 let mut binding_stmts: Vec<Stmt> = Vec::new();

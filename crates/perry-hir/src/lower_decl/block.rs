@@ -16,9 +16,12 @@ mod hoisting_tests;
 mod switch_case_tdz;
 mod var_names;
 
-use closure_ident_scan::{cic_expr, cic_stmt};
-use forward_class_bindings::class_decl_binds_evaluated_class;
-pub(crate) use forward_class_bindings::take_forward_class_binding;
+pub(crate) use closure_ident_scan::cic_function;
+use closure_ident_scan::{cic_expr, cic_stmt, class_binding_reads_stmt, reads_class};
+pub(crate) use forward_class_bindings::{
+    is_hidden_pending_binding, take_forward_class_binding,
+    with_pending_forward_class_bindings_hidden,
+};
 pub(crate) use switch_case_tdz::register_switch_case_tdz_lets;
 pub(crate) use var_names::{
     collect_annexb_block_fn_decl_names, collect_lexical_decl_names,
@@ -134,7 +137,25 @@ pub(crate) fn rebind_nested_forward_scope_lets(
 fn pre_register_forward_captured_lets_in_scope(ctx: &mut LoweringContext, stmts: &[ast::Stmt]) {
     let mut seen_closure_refs = std::collections::HashSet::new();
     let mut registered_here = std::collections::HashSet::new();
+    // What the closures created so far read as a class binding (see
+    // `forward_class_bindings`), as in `pre_register_forward_captured_lets`.
+    let mut class_binding_refs = std::collections::HashSet::new();
     for stmt in stmts {
+        if let ast::Stmt::Decl(ast::Decl::Class(class_decl)) = stmt {
+            let span_lo = class_decl.ident.span.lo.0;
+            if reads_class(&class_binding_refs, class_decl.ident.sym.as_ref())
+                && registered_here.insert(class_decl.ident.sym.to_string())
+                && !ctx.lexical_forward_decls.contains_key(&span_lo)
+            {
+                let id = ctx.fresh_local();
+                ctx.var_hoisted_ids.insert(id);
+                ctx.tdz_forward_ids.insert(id);
+                ctx.nested_forward_scope_ids.insert(id);
+                ctx.lexical_forward_decls.insert(span_lo, id);
+                ctx.pending_forward_class_bindings
+                    .insert(id, (ctx.current_fn_scope, class_decl.ident.sym.to_string()));
+            }
+        }
         if let ast::Stmt::Decl(ast::Decl::Var(var_decl)) = stmt {
             if matches!(
                 var_decl.kind,
@@ -169,6 +190,7 @@ fn pre_register_forward_captured_lets_in_scope(ctx: &mut LoweringContext, stmts:
             }
         }
         cic_stmt(stmt, false, &mut seen_closure_refs);
+        class_binding_reads_stmt(stmt, &mut class_binding_refs);
     }
 }
 
@@ -263,35 +285,19 @@ pub(crate) fn pre_register_forward_captured_lets(
         // set rather than trusting the parser).
         let mut registered_here: std::collections::HashSet<String> =
             std::collections::HashSet::new();
-        // Class declarations of this scope that bind a per-evaluation class
-        // value (see `forward_class_bindings`).
-        let mut evaluated_classes: std::collections::HashSet<String> =
+        // What the closures created so far in this scope read as a class
+        // binding (see `forward_class_bindings`).
+        let mut class_binding_refs: std::collections::HashSet<String> =
             std::collections::HashSet::new();
-        let scope_classes: std::collections::HashSet<String> = scope_stmts
-            .iter()
-            .filter_map(|stmt| match stmt {
-                ast::Stmt::Decl(ast::Decl::Class(class_decl)) => {
-                    Some(class_decl.ident.sym.to_string())
-                }
-                _ => None,
-            })
-            .collect();
         for stmt in scope_stmts {
             if let ast::Stmt::Decl(ast::Decl::Class(class_decl)) = stmt {
                 let name = class_decl.ident.sym.to_string();
-                if class_decl_binds_evaluated_class(
-                    ctx,
-                    class_decl,
-                    &scope_classes,
-                    &evaluated_classes,
-                ) {
-                    evaluated_classes.insert(name.clone());
-                    // A closure created EARLIER in this scope reads the class
-                    // through its binding: pre-register it like a forward
-                    // `let` (boxed, TDZ until the declaration runs).
+                // A closure created EARLIER in this scope reads the class
+                // through its binding: pre-register it like a forward
+                // `let` (boxed, TDZ until the declaration runs).
+                if reads_class(&class_binding_refs, &name) {
                     let span_lo = class_decl.ident.span.lo.0;
-                    if seen_closure_refs.contains(&name)
-                        && !registered_here.contains(&name)
+                    if !registered_here.contains(&name)
                         && !ctx.lexical_forward_decls.contains_key(&span_lo)
                     {
                         if is_nested {
@@ -300,6 +306,8 @@ pub(crate) fn pre_register_forward_captured_lets(
                             ctx.tdz_forward_ids.insert(id);
                             ctx.nested_forward_scope_ids.insert(id);
                             ctx.lexical_forward_decls.insert(span_lo, id);
+                            ctx.pending_forward_class_bindings
+                                .insert(id, (ctx.current_fn_scope, name.clone()));
                             registered_here.insert(name);
                         } else if ctx
                             .locals
@@ -311,6 +319,8 @@ pub(crate) fn pre_register_forward_captured_lets(
                             ctx.tdz_forward_ids.insert(id);
                             forward_boxed_ids.push(id);
                             ctx.lexical_forward_decls.insert(span_lo, id);
+                            ctx.pending_forward_class_bindings
+                                .insert(id, (ctx.current_fn_scope, name.clone()));
                             registered_here.insert(name);
                         }
                     }
@@ -421,6 +431,7 @@ pub(crate) fn pre_register_forward_captured_lets(
             }
             // Record closures introduced by THIS statement for subsequent decls.
             cic_stmt(stmt, false, &mut seen_closure_refs);
+            class_binding_reads_stmt(stmt, &mut class_binding_refs);
         }
     }
     forward_boxed_ids
