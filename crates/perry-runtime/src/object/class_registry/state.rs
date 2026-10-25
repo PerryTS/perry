@@ -1,6 +1,6 @@
 use super::*;
 use crate::object::class_image::{
-    ImageTable, StaticAccessorTable, StaticMethodTable, StringMemberOrderTable,
+    string_member_order, ImageTable, StaticAccessorTable, StaticMethodTable, StringMemberOrderTable,
 };
 use std::collections::HashMap;
 use std::sync::RwLock;
@@ -136,7 +136,7 @@ pub(crate) fn proto_member_has_no_string_key_bytes(class_id: u32, name: &[u8]) -
             .and_then(|guard| {
                 guard
                     .as_ref()
-                    .map(|map| map.contains_key(&(class_id, false, name.to_vec())))
+                    .map(|map| string_member_order(map, class_id, false, name).is_some())
             })
             .unwrap_or(false)
 }
@@ -1125,7 +1125,7 @@ fn order_class_string_member_names(class_id: u32, is_static: bool, names: &mut V
         orders
             .as_ref()
             .and_then(|guard| guard.as_ref())
-            .and_then(|map| map.get(&(class_id, is_static, name.to_vec())).copied())
+            .and_then(|map| string_member_order(map, class_id, is_static, name))
     };
     names.retain(|name| {
         let key = name.as_ref();
@@ -1961,3 +1961,7 @@ mod class_parent_prototype_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "member_order_tests.rs"]
+mod borrowed_member_order_tests;

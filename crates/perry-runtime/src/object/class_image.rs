@@ -103,6 +103,56 @@ pub type StaticNameMap<V> = HashMap<Vec<u8>, V, ahash::RandomState>;
 /// id, which is allocated while walking the class body and therefore orders
 /// entries across the otherwise separate method/getter/setter registries.
 pub type StringMemberOrderTable = HashMap<(u32, bool, Vec<u8>), u32>;
+
+// Borrow the existing composite key without constructing a temporary Vec for
+// every comparison in class reflection. Both views hash the same tuple of
+// class identity, static/instance partition and exact property-name bytes.
+trait StringMemberOrderKey {
+    fn parts(&self) -> (u32, bool, &[u8]);
+}
+
+impl StringMemberOrderKey for (u32, bool, Vec<u8>) {
+    fn parts(&self) -> (u32, bool, &[u8]) {
+        (self.0, self.1, &self.2)
+    }
+}
+
+impl StringMemberOrderKey for (u32, bool, &[u8]) {
+    fn parts(&self) -> (u32, bool, &[u8]) {
+        (self.0, self.1, self.2)
+    }
+}
+
+impl std::hash::Hash for dyn StringMemberOrderKey + '_ {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::hash::Hash::hash(&self.parts(), state);
+    }
+}
+
+impl PartialEq for dyn StringMemberOrderKey + '_ {
+    fn eq(&self, other: &Self) -> bool {
+        self.parts() == other.parts()
+    }
+}
+
+impl Eq for dyn StringMemberOrderKey + '_ {}
+
+impl<'a> std::borrow::Borrow<dyn StringMemberOrderKey + 'a> for (u32, bool, Vec<u8>) {
+    fn borrow(&self) -> &(dyn StringMemberOrderKey + 'a) {
+        self
+    }
+}
+
+pub(crate) fn string_member_order(
+    orders: &StringMemberOrderTable,
+    class_id: u32,
+    is_static: bool,
+    name: &[u8],
+) -> Option<u32> {
+    let key = (class_id, is_static, name);
+    orders.get(&key as &dyn StringMemberOrderKey).copied()
+}
+
 /// class_id -> (ctor func_ptr, total param count, signature capture count).
 pub type ConstructorTable = PtrHashMap<u32, (usize, u32, u32)>;
 /// class_id -> (has_synthetic_arguments, has_rest, parameters before the first
