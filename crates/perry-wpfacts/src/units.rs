@@ -1265,6 +1265,29 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
     let mut round_work: Vec<u64> = Vec::new();
     let mut per_unit: Vec<Option<ProgramFacts>> = (0..solves.len()).map(|_| None).collect();
     let mut dirty = vec![true; solves.len()];
+    // DECISIONS 170 (81 (b)): a unit reads its dependencies' class,
+    // function and value contracts as they stand when its level solves:
+    // those of an earlier level (the others are not published yet in the
+    // round, `input.classes` starts empty). `exports`: each unit's, as a
+    // number per latest solve; `exports_seen`: what a unit saw of them when
+    // it was solved. An importer is solved again when that changed, not
+    // because a dependency was solved: equal inputs repeat the same solve.
+    let mut level_of = vec![0usize; solves.len()];
+    for (l, level) in levels.iter().enumerate() {
+        for &si in level {
+            level_of[si] = l;
+        }
+    }
+    let visible = |si: usize, exports: &[u64]| -> Vec<u64> {
+        solves[si]
+            .deps
+            .iter()
+            .filter(|&&d| level_of[d] < level_of[si])
+            .map(|&d| exports[d])
+            .collect()
+    };
+    let mut exports: Vec<u64> = vec![0; solves.len()];
+    let mut exports_seen: Vec<Vec<u64>> = vec![Vec::new(); solves.len()];
     // The layouts whose entry is their owner's, not a forwarded copy
     // (DECISIONS 106).
     let mut owned_layouts: FxHashSet<String> = FxHashSet::default();
@@ -1289,9 +1312,22 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
         let mut reports: FxHashSet<String> = FxHashSet::default();
         let mut work = 0u64;
         for level in &levels {
+            // A unit over the bound keeps its result (`dependents`).
+            for &si in level {
+                if !dirty[si]
+                    && per_unit[si].as_ref().is_some_and(|u| !u.stats.aborted)
+                    && visible(si, &exports) != exports_seen[si]
+                {
+                    dirty[si] = true;
+                }
+            }
             let todo: Vec<usize> = level.iter().copied().filter(|&si| dirty[si]).collect();
+            for &si in &todo {
+                exports_seen[si] = visible(si, &exports);
+            }
             for (si, u) in solve_level(&todo, &solves, sorted, &ucfg, &input) {
                 work += u.stats.work;
+                exports[si] = digest(&(&u.contracts_out, &u.fn_contracts_out, &u.values_out));
                 per_unit[si] = Some(u);
             }
             // The level's contracts, published in `order` sequence: the
@@ -1683,11 +1719,14 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
             } else {
                 resolve_again(&solves, &per_unit, &fresh)
             };
-            for (si, d) in dependents(&solves, &per_unit, seeds)
-                .into_iter()
-                .enumerate()
-            {
-                dirty[si] |= d;
+            // DECISIONS 170: a seeded unit is solved again; its importers
+            // follow when its outputs change (the level loop above). A
+            // newly broken class still re-solves its owner's importers
+            // (`resolve_again`): they read the broken set itself.
+            for si in seeds {
+                if per_unit[si].as_ref().is_some_and(|u| !u.stats.aborted) {
+                    dirty[si] = true;
+                }
             }
             input.broken.extend(fresh);
             continue;
