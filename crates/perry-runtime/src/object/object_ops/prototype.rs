@@ -883,6 +883,9 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
                 if (*obj).class_id == super::super::native_module::NATIVE_MODULE_CLASS_ID {
                     return namespace_default_prototype();
                 }
+                if let Some(proto) = super::host_prototype::native_host_prototype((*obj).class_id) {
+                    return proto;
+                }
             }
             return obj_value;
         }
@@ -1022,6 +1025,9 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
                 // walk reaches a LEAF_PROTOTYPE and stops.
                 if (*obj).class_id == super::super::native_module::NATIVE_MODULE_CLASS_ID {
                     return namespace_default_prototype();
+                }
+                if let Some(proto) = super::host_prototype::native_host_prototype((*obj).class_id) {
+                    return proto;
                 }
             }
         }

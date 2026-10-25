@@ -20,6 +20,7 @@ mod descriptor_helpers;
 mod descriptor_snapshot_tests;
 mod from_entries;
 pub(crate) mod has_own;
+mod host_prototype;
 mod keys_array;
 mod prototype;
 

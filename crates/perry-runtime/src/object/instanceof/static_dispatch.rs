@@ -129,9 +129,11 @@ fn instanceof_dispatch(
     }
 
     // Form 2: the `Object.defineProperty(C, Symbol.hasInstance, { value: fn })`
-    // form (zod 4) stores the closure in the class static-symbol table. Read it
-    // off the class id (OWN lookup only — never resolves Function.prototype's
-    // default @@hasInstance thunk, so no recursion). A present-but-non-callable
+    // form (zod 4) and a class-body computed `static [Symbol.hasInstance]` store
+    // the closure in the class static-symbol table. Read it off the class id and
+    // its parent classes (OWN lookups only, a static is inherited by a subclass;
+    // never resolves Function.prototype's default @@hasInstance thunk, so no
+    // recursion). A present-but-non-callable
     // value throws; only `null`/`undefined` falls through to the chain.
     //
     // The latch check is what keeps `well_known_symbol("hasInstance")` — a
@@ -144,7 +146,7 @@ fn instanceof_dispatch(
         let hi_sym = crate::symbol::well_known_symbol("hasInstance");
         if !hi_sym.is_null() {
             let hi_f64 = f64::from_bits(crate::value::JSValue::pointer(hi_sym as *const u8).bits());
-            if let Some(vb) = crate::symbol::class_static_symbol_lookup(class_id, hi_f64) {
+            if let Some(vb) = crate::symbol::class_static_symbol_lookup_in_chain(class_id, hi_f64) {
                 let cb = f64::from_bits(vb);
                 if let HasInstanceOutcome::Result(r) = dispatch_own_has_instance(cb, value) {
                     return r;

@@ -566,8 +566,30 @@ fn set_object_field_rooted(
     let key = scope.root_nanbox_f64(f64::from_bits(JSValue::string_ptr(key_ptr).bits()));
     if let Some(obj) = object_ptr_from_value(obj.get_nanbox_f64()) {
         let key_ptr = JSValue::from_bits(key.get_nanbox_f64().to_bits()).as_string_ptr();
-        crate::object::js_object_set_field_by_name(obj, key_ptr, value.get_nanbox_f64());
+        // The stream's snapshot properties (`closed`, `destroyed`, `readable`,
+        // ...) are own data properties. The first store defines them: an
+        // ordinary [[Set]] would find the getter-only accessor of the same
+        // name on `Readable.prototype` / `Writable.prototype` (now on the
+        // stream's chain) and throw. Later stores overwrite the own value.
+        let own = crate::object::js_object_get_own_field_or_undef(
+            obj_value_of(obj),
+            name.as_ptr(),
+            name.len(),
+        );
+        if own.to_bits() == crate::value::TAG_UNDEFINED {
+            crate::proxy::create_data_property(
+                obj_value_of(obj),
+                key.get_nanbox_f64(),
+                value.get_nanbox_f64(),
+            );
+        } else {
+            crate::object::js_object_set_field_by_name(obj, key_ptr, value.get_nanbox_f64());
+        }
     }
+}
+
+fn obj_value_of(obj: *mut ObjectHeader) -> f64 {
+    f64::from_bits(JSValue::pointer(obj as *const u8).bits())
 }
 
 fn set_object_field_str_rooted(
