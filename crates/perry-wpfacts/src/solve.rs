@@ -301,6 +301,7 @@ impl Model {
     pub fn solve(&mut self) {
         self.rel_phase = b'S';
         self.mark_params();
+        self.members_settled.get_mut().clear();
         loop {
             self.fill_instances();
             let Some(n) = self.wl.pop_front() else {
