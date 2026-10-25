@@ -418,8 +418,11 @@ mod abi_table_tests {
 
     #[test]
     fn closure_call_entries_match_the_abi_table() {
-        // `js_closure_call0` is `extern "C-unwind"` in unwinding (test) builds.
+        // Match closure_call_entry!'s ABI in both unwinding and panic-abort tests.
         let call0 = {
+            #[cfg(panic = "abort")]
+            let f: extern "C" fn(*const ClosureHeader, JsThis) -> f64 = js_closure_call0;
+            #[cfg(not(panic = "abort"))]
             let f: extern "C-unwind" fn(*const ClosureHeader, JsThis) -> f64 = js_closure_call0;
             ("js_closure_call0", f as *const u8)
         };

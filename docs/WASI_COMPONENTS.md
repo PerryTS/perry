@@ -163,6 +163,13 @@ requires ABI 9 and does not yet implement traced TypeScript frames, ALS routing,
 future/stream wrappers or their GC cleanup. See the
 [persistent C driver receipt](validation/wasi-persistent-driver-ffi-20261025.json).
 
+The runtime can execute a saved Promise context after the public Promise is
+collected. Captured ALS snapshots and observed async resource-state cells need
+separate traced edges; opaque execution IDs alone do not keep metadata alive.
+The [captured-context checks](validation/wasi-captured-context-20261025.json)
+cover actual moving collection, success, throw and caller-context restoration.
+This primitive does not yet switch TypeScript calls to the persistent driver.
+
 Construct Rust hosts with `Host::new_for_driver` before `into_driver` to
 prepare resource disposal. The C driver constructor selects this path. It
 composes one private helper with the original nominal resource aliases and

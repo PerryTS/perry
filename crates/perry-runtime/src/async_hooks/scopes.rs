@@ -170,9 +170,26 @@ pub(crate) unsafe fn try_run_promise_scope(
         trigger_async_id: (*promise).trigger_async_id,
     };
     let context = crate::promise::context_for_promise(promise);
+    crate::async_hooks::try_run_captured_promise_scope(ids, context, completion)
+}
+
+/// Continue an invocation after its public Promise has been released. The
+/// caller owns the captured snapshot in traced state and supplies its native
+/// execution IDs; the execution scope does not retain or resurrect the Promise.
+/// Observed IDs may be opaque resource-state cell tokens: callers must retain
+/// those cells in traced state across polls, or capture public serial IDs instead.
+/// A resource-state cell holds only a weak edge to its Promise.
+pub(crate) fn try_run_captured_promise_scope(
+    ids: AsyncResourceIds,
+    context: crate::async_context::AsyncContextSnapshot,
+    completion: impl FnOnce() -> f64,
+) -> Result<f64, f64> {
     try_enter_scope_at(crate::exception::frame_mark(), ids, context, true)?;
     try_run_entered_scope(ids, true, completion)
 }
+
+#[cfg(test)]
+mod tests;
 
 fn try_run_entered_scope(
     ids: AsyncResourceIds,
