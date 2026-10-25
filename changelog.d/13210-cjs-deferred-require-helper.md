@@ -1,0 +1,1 @@
+CommonJS modules with deferred `require()` calls now share one registry helper per module instead of inlining the path-registry body into every specifier case, which makes the generated shim much smaller (it grew quadratically on wasm32). Behaviour is unchanged.

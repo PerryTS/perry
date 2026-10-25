@@ -372,4 +372,46 @@ module.exports = { get };
              requires.\n{wrapped}"
         );
     }
+
+    /// The `try`/`finally` around the registry call is emitted once per module,
+    /// not once per deferred specifier.
+    ///
+    /// On wasm32 a `try` makes the enclosing function a returns-twice frame, and
+    /// LLVM's sjlj lowering threads the values of every case in that function
+    /// through one dispatch loop. `require` carries one case per specifier, so
+    /// inlining the `try` into each made it grow with the square of the
+    /// specifier count: a 3 KB barrel module with 16 requires produced a 17 MB
+    /// function, past the 7.6 MB function body limit of wasmtime. The shim's
+    /// behaviour is the same either way (the conditional-require and
+    /// circular-dependency integration tests cover it), so the measurable
+    /// invariant is the shape: the number of `try` statements and registry
+    /// calls in the wrapped module must not grow with the specifier count.
+    #[test]
+    fn deferred_require_cases_share_one_registry_helper() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut shapes = Vec::new();
+        for count in [1usize, 16] {
+            let mut src = String::new();
+            for i in 0..count {
+                std::fs::write(
+                    dir.path().join(format!("dep{i}.js")),
+                    "module.exports = { v: 1 };\n",
+                )
+                .unwrap();
+                src.push_str(&format!(
+                    "function get{i}(flag) {{ if (flag) {{ return require(\"./dep{i}.js\").v; }} return 0; }}\n"
+                ));
+            }
+            src.push_str("module.exports = {};\n");
+            let wrapped = super::super::wrap::wrap_commonjs(&src, &dir.path().join("entry.js"));
+            shapes.push((
+                wrapped.matches("try {").count(),
+                wrapped.matches("__perry_require_path_module(").count(),
+            ));
+        }
+        assert_eq!(
+            shapes[0], shapes[1],
+            "(try statements, registry calls) for 1 and 16 deferred requires: the shim must not repeat them per specifier"
+        );
+    }
 }
