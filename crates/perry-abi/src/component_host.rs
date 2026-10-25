@@ -2,7 +2,7 @@
 //! Byte buffers are freed by the allocator that produced them. Neither WIT
 //! values nor callbacks expose Perry heap addresses to component guests.
 // Combined command, host-resource, HTTP reactor and deferred-cleanup operations.
-pub const ABI_VERSION: u32 = 8;
+pub const ABI_VERSION: u32 = 9;
 
 pub const OK: i32 = 0;
 pub const ERROR: i32 = 1;
@@ -67,6 +67,29 @@ pub type ResourceCallback = unsafe extern "C" fn(
     output: *mut Buffer,
 ) -> i32;
 
+/// Persistent-driver callback. `context` belongs to this poll only; `origin`
+/// identifies the submitting invocation across polls and post-return work.
+/// Origin zero denotes initialization or component-wide retirement. Neither
+/// integer is a guest-visible pointer. Catch exceptions and return normally.
+pub type OriginCallback = unsafe extern "C" fn(
+    context: u64,
+    origin: u64,
+    interface: *const u8,
+    interface_len: usize,
+    function: *const u8,
+    function_len: usize,
+    args: *const u8,
+    args_len: usize,
+    output: *mut Buffer,
+) -> i32;
+pub type OriginResourceCallback = unsafe extern "C" fn(
+    context: u64,
+    origin: u64,
+    event: *const u8,
+    event_len: usize,
+    output: *mut Buffer,
+) -> i32;
+
 #[macro_export]
 macro_rules! component_host_entry_points {
     ($m:ident) => { $m! {
@@ -89,6 +112,11 @@ macro_rules! component_host_entry_points {
         perry_component_http_drop(operation: *mut core::ffi::c_void) -> ();
         perry_component_host_interrupt(handle: *mut core::ffi::c_void) -> ();
         perry_component_host_drop(handle: *mut core::ffi::c_void) -> ();
+        perry_component_driver_new(bytes: *const u8, len: usize, contract: *const u8, contract_len: usize, options: *const u8, options_len: usize, callback: Option<$crate::component_host::OriginCallback>, free_callback: Option<$crate::component_host::FreeCallback>, resource_callback: Option<$crate::component_host::OriginResourceCallback>, context: u64, error: *mut $crate::component_host::Buffer) -> *mut core::ffi::c_void;
+        perry_component_driver_types(handle: *mut core::ffi::c_void, output: *mut $crate::component_host::Buffer) -> i32;
+        perry_component_driver_submit(handle: *mut core::ffi::c_void, request: *const u8, request_len: usize, output: *mut $crate::component_host::Buffer) -> i32;
+        perry_component_driver_poll(handle: *mut core::ffi::c_void, context: u64, cleanup_context: u64, wake: Option<$crate::component_host::WakeCallback>, agent: u64, output: *mut $crate::component_host::Buffer) -> i32;
+        perry_component_driver_cancel(handle: *mut core::ffi::c_void, invocation: u64, output: *mut $crate::component_host::Buffer) -> i32;
     } };
 }
 

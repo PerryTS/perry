@@ -94,6 +94,12 @@ impl Host {
     /// Overlapping and post-return tasks share one fuel budget, replenished
     /// only after the Store becomes quiescent; new calls cannot refill it.
     pub fn into_driver(self) -> Result<(Driver, DriverClient)> {
+        self.into_driver_with_retirement(|| {})
+    }
+    pub(crate) fn into_driver_with_retirement(
+        self,
+        before_retire: impl FnOnce() + 'static,
+    ) -> Result<(Driver, DriverClient)> {
         ensure!(self.live.is_some(), "component is disposed");
         let (send, receive) = mpsc::unbounded();
         let state = Rc::new(State::new(
@@ -126,7 +132,12 @@ impl Host {
         }
         let driver = Driver {
             state: state.clone(),
-            run: Some(Box::pin(run(self, receive, state.clone()))),
+            run: Some(Box::pin(run(
+                self,
+                receive,
+                state.clone(),
+                Box::new(before_retire),
+            ))),
         };
         Ok((driver, DriverClient::new(send, state)))
     }
@@ -235,12 +246,13 @@ async fn run(
     mut host: Host,
     mut receive: mpsc::UnboundedReceiver<requests::Request>,
     state: Rc<State>,
+    before_retire: Box<dyn FnOnce()>,
 ) -> Result<Host> {
     let dispatcher = host.dispatcher.clone();
     let mut invocation = Invocation {
         live: host.live.take(),
         host: &mut host,
-        before_retire: None,
+        before_retire: Some(before_retire),
     };
     let outcome = {
         let live = invocation.live.as_mut().unwrap();

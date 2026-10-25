@@ -329,6 +329,10 @@ pub unsafe extern "C" fn perry_component_http_handle_async_start(
             let bridge = bridge(handle)?;
             bridge.entered(context, cleanup_context, || {
                 ensure!(
+                    bridge.driver.is_none(),
+                    "operation requires a legacy component handle"
+                );
+                ensure!(
                     (&*bridge.pending.get()).is_none(),
                     "component has a pending async call"
                 );

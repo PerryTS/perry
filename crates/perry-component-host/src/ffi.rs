@@ -1,7 +1,11 @@
 //! Allocator-safe callback transport. JS exceptions must be caught by the
 //! runtime callback; every call returns through Wasmtime before JS can throw.
 mod async_calls;
+mod callbacks;
+mod driver;
 use async_calls::*;
+use callbacks::{ImportCallback, LifecycleCallback};
+use driver::*;
 mod http;
 use http::*;
 
@@ -27,6 +31,7 @@ struct Bridge {
     pending: UnsafeCell<Option<async_calls::PendingCall>>,
     cleanup_context: Arc<AtomicU64>,
     async_replies: Arc<async_calls::Replies>,
+    driver: Option<driver::Actor>,
 }
 
 impl Bridge {
@@ -59,6 +64,10 @@ impl Bridge {
     }
     fn with<R>(&self, context: u64, call: impl FnOnce(&mut Host) -> Result<R>) -> Result<R> {
         self.entered(context, context, || {
+            ensure!(
+                self.driver.is_none(),
+                "operation requires a legacy component handle"
+            );
             ensure!(
                 unsafe { (&*self.pending.get()).is_none() },
                 "component has a pending async call"
@@ -177,7 +186,39 @@ pub unsafe extern "C" fn perry_component_host_new(
     context: u64,
     error: *mut Buffer,
 ) -> *mut c_void {
+    new_bridge(
+        wasm,
+        wasm_len,
+        contract,
+        contract_len,
+        options,
+        options_len,
+        callback.map(ImportCallback::Legacy),
+        free_callback,
+        resource_callback.map(LifecycleCallback::Legacy),
+        context,
+        false,
+        error,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe fn new_bridge(
+    wasm: *const u8,
+    wasm_len: usize,
+    contract: *const u8,
+    contract_len: usize,
+    options: *const u8,
+    options_len: usize,
+    callback: Option<ImportCallback>,
+    free_callback: Option<FreeCallback>,
+    resource_callback: Option<LifecycleCallback>,
+    context: u64,
+    persistent: bool,
+    error: *mut Buffer,
+) -> *mut c_void {
     let result = (|| -> Result<Bridge> {
+        let _scope = crate::asynchronous::origin::Scope::enter(None);
         let world: World = serde_json::from_slice(bytes(contract, contract_len)?)?;
         let options: Options = if options_len == 0 {
             Options::default()
@@ -217,6 +258,7 @@ pub unsafe extern "C" fn perry_component_host_new(
                     continue;
                 }
                 let current = current.clone();
+                let failures = async_replies.clone();
                 let handler: Import = Arc::new(move |args| {
                     let context = current.load(Ordering::Acquire);
                     ensure!(
@@ -225,16 +267,14 @@ pub unsafe extern "C" fn perry_component_host_new(
                     );
                     let args = serde_json::to_vec(args)?;
                     let mut reply = Reply(Buffer::default(), free);
-                    let status = callback(
+                    let status = callback.call(
                         context,
-                        interface_name.as_ptr(),
-                        interface_name.len(),
-                        function_name.as_ptr(),
-                        function_name.len(),
-                        args.as_ptr(),
-                        args.len(),
+                        &interface_name,
+                        &function_name,
+                        &args,
                         &mut reply.0,
                     );
+                    failures.callback_status(status);
                     let result = bytes(reply.0.data, reply.0.len)?;
                     if status != OK {
                         bail!("component host import: {}", String::from_utf8_lossy(result));
@@ -249,6 +289,7 @@ pub unsafe extern "C" fn perry_component_host_new(
             }
         }
         let resource_current = current.clone();
+        let failures = async_replies.clone();
         let resource_hook: ResourceHook = Arc::new(move |event| {
             // Older callers without host resources need no lifecycle channel.
             if resource_callback.is_none() && matches!(event, crate::ResourceEvent::Drain) {
@@ -261,7 +302,8 @@ pub unsafe extern "C" fn perry_component_host_new(
             ensure!(context != 0, "resource event outside a live embedding call");
             let event = serde_json::to_vec(&event)?;
             let mut reply = Reply(Buffer::default(), free);
-            let status = callback(context, event.as_ptr(), event.len(), &mut reply.0);
+            let status = callback.call(context, &event, &mut reply.0);
+            failures.callback_status(status);
             if status != OK {
                 bail!(
                     "component resource event: {}",
@@ -270,14 +312,15 @@ pub unsafe extern "C" fn perry_component_host_new(
             }
             Ok(serde_json::from_slice(bytes(reply.0.data, reply.0.len)?)?)
         });
-        let dispatcher = world
-            .imports
-            .iter()
-            .chain(&world.exports)
-            .flat_map(|i| &i.functions)
-            .any(|f| f.async_)
-            .then(|| Arc::new(crate::asynchronous::dispatch::Dispatcher::default()));
-        let host = Host::new_with_dispatcher(
+        let dispatcher = (persistent
+            || world
+                .imports
+                .iter()
+                .chain(&world.exports)
+                .flat_map(|i| &i.functions)
+                .any(|f| f.async_))
+        .then(|| Arc::new(crate::asynchronous::dispatch::Dispatcher::default()));
+        let mut host = Host::new_with_dispatcher(
             bytes(wasm, wasm_len)?,
             &world,
             &imports,
@@ -288,6 +331,20 @@ pub unsafe extern "C" fn perry_component_host_new(
         )?;
         current.store(0, Ordering::Release);
         let interrupt = host.interrupt_handle();
+        let driver = if persistent {
+            let owned = Host {
+                engine: host.engine.clone(),
+                live: host.live.take(),
+                dispatcher: host.dispatcher.clone(),
+            };
+            Some(driver::Actor::new(
+                owned,
+                current.clone(),
+                cleanup_context.clone(),
+            )?)
+        } else {
+            None
+        };
         Ok(Bridge {
             host: UnsafeCell::new(host),
             busy: Cell::new(false),
@@ -296,6 +353,7 @@ pub unsafe extern "C" fn perry_component_host_new(
             pending: UnsafeCell::new(None),
             cleanup_context,
             async_replies,
+            driver,
         })
     })();
     match result {
@@ -369,6 +427,15 @@ pub unsafe extern "C" fn perry_component_host_dispose(
                 bridge.entered(context, context, || {
                     // Cancel suspended guest tasks while the cleanup frame is live.
                     drop(unsafe { (&mut *bridge.pending.get()).take() });
+                    if let Some(driver) = &bridge.driver {
+                        let before = bridge.async_replies.failure_serial();
+                        driver.dispose();
+                        disposed = true;
+                        ensure!(
+                            before == bridge.async_replies.failure_serial(),
+                            "component driver disposal callback failed"
+                        );
+                    }
                     let host = unsafe { &mut *bridge.host.get() };
                     // Host::dispose takes the store before running destructors:
                     // even a trap releases it. A rejected nested call never
@@ -491,6 +558,9 @@ pub unsafe extern "C" fn perry_component_host_drop(handle: *mut c_void) {
         bridge.context.store(0, Ordering::Release);
         bridge.cleanup_context.store(0, Ordering::Release);
         drop((&mut *bridge.pending.get()).take());
+        if let Some(driver) = &bridge.driver {
+            driver.dispose();
+        }
         (&mut *bridge.host.get()).abandon();
         drop(bridge);
     }

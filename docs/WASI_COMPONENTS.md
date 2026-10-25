@@ -129,6 +129,39 @@ real guest reads through imports and exports, and failing controls for late
 cancellation and close races. TypeScript wrappers and producer interfaces remain
 unfinished.
 
+The versioned C boundary now also exposes a persistent driver. Construct it
+with `perry_component_driver_new`, discover local factory indices with
+`perry_component_driver_types`, and submit JSON commands through
+`perry_component_driver_submit`. Supported operations are `call`, `read`,
+`close`, `create`, `write`, `cancel-write`, `close-writer` and `abort-writer`.
+Submission snapshots native JSON and returns a decimal-string invocation ID
+without executing Wasm. Queue-only submission is permitted from a callback;
+recursive execution is rejected. A submission requires an output buffer so its
+accepted invocation ID cannot be lost.
+
+`perry_component_driver_poll` runs on the owner thread with fresh primary and
+cleanup context tokens and a native notification callback. Imports and lifecycle
+callbacks receive their originating invocation ID explicitly. Origin zero means
+initialization or component-wide retirement. All persistent instances use the
+embedding-stack dispatcher, including worlds with only synchronous WIT functions.
+Poll returns `completed`, conservative `retained` IDs, `active`, `retired`, an
+optional driver `error`, and ordered, deduplicated `failedOrigins`. Async import
+rejections keep their origin until reported; retirement uses the cleanup context.
+Consume completed results before trimming context records. Invocation IDs are
+strings in JSON to preserve all 64 bits in JavaScript.
+
+`perry_component_driver_cancel` discards an observer. Before execution it skips
+the request; after execution starts it retires the Store on the next poll.
+Accepted soft cancellation and close commands still execute. Explicit
+`perry_component_host_dispose` retires a driver and reports `RELEASED_ERROR`
+when its embedding destructor fails. Native `host_drop` does not invoke embedding
+callbacks. Legacy execution, resource and HTTP entries reject persistent handles;
+resource collection and HTTP have not yet migrated to driver commands. The
+TypeScript runtime continues using the legacy entry points. This C transport
+requires ABI 9 and does not yet implement traced TypeScript frames, ALS routing,
+future/stream wrappers or their GC cleanup. See the
+[persistent C driver receipt](validation/wasi-persistent-driver-ffi-20261025.json).
+
 This is a subset of the WASI 0.3 milestone. Enabling `wasi` now links the
 Turnloop-backed 0.3.0 providers as well as the P2 providers. WIT manifests
 and generated TypeScript declarations now preserve `future<T>` and `stream<T>`,
@@ -192,7 +225,7 @@ lift/lower, future and stream features required by the
 `scripts/component_async_acceptance.py` exercises a compiled TypeScript host
 against a canonical async component, including a suspended JS import, Store
 reuse, original rejection identity, cancellation, ALS and explicit collection.
-The native host/runtime boundary uses ABI 8; rebuild the matching compiler,
+The native host/runtime boundary uses ABI 9; rebuild the matching compiler,
 runtime and optional engine archives together. Other host platforms and final
 distribution packages still require qualification.
 
@@ -251,7 +284,7 @@ records the separate development, production panic-abort and moving-GC checks.
 This qualification covers Linux; other native platforms and final packages
 remain open.
 
-The combined component-host boundary uses ABI 8; compiler, runtime and
+The combined component-host boundary uses ABI 9; compiler, runtime and
 optional host archive must be built together. The separate command feature
 was qualified using ABI 3; the combined Linux qualification is recorded below.
 This API is native-only. Unit fixtures and
@@ -377,7 +410,7 @@ component tests, 16 WIT tests and strict TypeScript checking. Actual compiled
 TypeScript hosts exercise plain HTTP and verified TLS in ordinary and moving-GC
 modes, including 3 MiB binary bodies and trailers, two suspended imports per
 successful request, explicit error reuse, original rejection identity, traps and
-cancellation. ABI 8 is required; rebuild the compiler, runtime and optional
+cancellation. That receipt covers ABI 8; the current boundary is ABI 9. Rebuild the compiler, runtime and optional
 engine together. Matching archives also pass the full 28 library, nine command
 and eight HTTP P2 regression phases. Other platforms, released Turnloop
 dependencies and final distribution packages remain open.

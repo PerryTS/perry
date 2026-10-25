@@ -17,7 +17,36 @@ type ReplyResult = Result<Option<serde_json::Value>>;
 #[derive(Default)]
 pub(super) struct Replies {
     next: AtomicU64,
-    entries: Mutex<BTreeMap<u64, oneshot::Sender<ReplyResult>>>,
+    entries: Mutex<BTreeMap<u64, PendingReply>>,
+    failures: Mutex<Vec<u64>>,
+    failure_serial: AtomicU64,
+}
+struct PendingReply {
+    origin: u64,
+    send: oneshot::Sender<ReplyResult>,
+}
+impl Replies {
+    pub(super) fn failure_serial(&self) -> u64 {
+        self.failure_serial.load(Ordering::Relaxed)
+    }
+    pub(super) fn failed(&self, origin: u64) {
+        self.failure_serial.fetch_add(1, Ordering::Relaxed);
+        let mut failures = self.failures.lock().unwrap();
+        if !failures.contains(&origin) {
+            failures.push(origin);
+        }
+    }
+    pub(super) fn callback_status(&self, status: i32) {
+        if status != OK && status != ASYNC_PENDING {
+            self.failed(crate::current_invocation().map_or(0, |id| id.as_u64()));
+        }
+    }
+    pub(super) fn take_failures(&self) -> Vec<String> {
+        std::mem::take(&mut *self.failures.lock().unwrap())
+            .into_iter()
+            .map(|id| id.to_string())
+            .collect()
+    }
 }
 struct Request {
     id: u64,
@@ -30,7 +59,7 @@ impl Drop for Request {
 }
 
 pub(super) fn import(
-    callback: Callback,
+    callback: ImportCallback,
     free: FreeCallback,
     context: Arc<AtomicU64>,
     replies: Arc<Replies>,
@@ -51,7 +80,13 @@ pub(super) fn import(
             {
                 let mut entries = replies.entries.lock().unwrap();
                 ensure!(entries.len() < 64, "too many pending component imports");
-                entries.insert(id, send);
+                entries.insert(
+                    id,
+                    PendingReply {
+                        origin: crate::current_invocation().map_or(0, |id| id.as_u64()),
+                        send,
+                    },
+                );
             }
             let request = Request {
                 id,
@@ -61,18 +96,9 @@ pub(super) fn import(
                 &serde_json::json!({"$asyncRequest":id.to_string(),"args":args}),
             )?;
             let mut reply = Reply(Buffer::default(), free);
-            let status = unsafe {
-                callback(
-                    current,
-                    interface.as_ptr(),
-                    interface.len(),
-                    function.as_ptr(),
-                    function.len(),
-                    args.as_ptr(),
-                    args.len(),
-                    &mut reply.0,
-                )
-            };
+            let status =
+                unsafe { callback.call(current, &interface, &function, &args, &mut reply.0) };
+            replies.callback_status(status);
             let result = unsafe { bytes(reply.0.data, reply.0.len)? };
             match status {
                 ASYNC_PENDING => Ok((request, receive, None)),
@@ -112,7 +138,7 @@ pub(super) struct PendingCall {
     pub(super) future: CallFuture,
     pub(super) http: bool,
 }
-struct Notify(WakeCallback, u64);
+pub(super) struct Notify(pub(super) WakeCallback, pub(super) u64);
 impl Wake for Notify {
     fn wake(self: Arc<Self>) {
         unsafe { (self.0)(self.1) }
@@ -190,6 +216,10 @@ pub unsafe extern "C" fn perry_component_host_call_async_start(
         let wake = wake.context("async call requires a native wake callback")?;
         let bridge = bridge(handle)?;
         bridge.entered(context, cleanup_context, || {
+            ensure!(
+                bridge.driver.is_none(),
+                "operation requires a legacy component handle"
+            );
             ensure!(
                 (&*bridge.pending.get()).is_none(),
                 "component has a pending async call"
@@ -288,7 +318,11 @@ pub unsafe extern "C" fn perry_component_host_async_import_resolve(
                 .unwrap()
                 .remove(&request)
                 .context("async import is cancelled, complete, or belongs to another component")?;
-            send.send(result)
+            if !success {
+                bridge.async_replies.failed(send.origin);
+            }
+            send.send
+                .send(result)
                 .map_err(|_| anyhow::anyhow!("async import was cancelled"))?;
             Ok(Vec::new())
         })(),

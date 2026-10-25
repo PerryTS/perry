@@ -269,7 +269,8 @@ impl Host {
                 .chain(&world.exports)
                 .flat_map(|i| &i.functions)
                 .any(|f| f.async_)
-                || prepared.control.is_some();
+                || prepared.control.is_some()
+                || dispatcher.is_some();
             let instance = if needs_async {
                 futures_lite::future::block_on(asynchronous::dispatch::drive(
                     dispatcher.as_ref(),
