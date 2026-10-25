@@ -551,6 +551,13 @@ for raw in sys.stdin:
         # was the first to show it. Same reasoning, same treatment: instrument
         # noise, not program output.
         sed -E '/^\[object-dictionary\]/d' | \
+        # `parity-env: … PERRY_GC_PROTECT_OLD_SWEEP=1` prints a one-time
+        # `[gc-sweep-quarantine] on:` banner on stderr when the first old/malloc
+        # sweep retires a dead object, so whether it appears depends on whether
+        # the run reached such a sweep, not on program output. Only the banner
+        # is stripped: at =1 a touch of retired memory faults, and that report plus
+        # the signal exit are still caught by the exit-status checks.
+        sed -E '/^\[gc-sweep-quarantine\] on: /d' | \
         # Strip Node v22+ MODULE_TYPELESS_PACKAGE_JSON warnings (4 lines
         # printed to stderr when running .ts files without "type":
         # "module" in package.json — pure environmental noise that
