@@ -71,6 +71,7 @@ struct StoreData {
     disposers: Vec<(wasmtime::component::ResourceType, Func)>,
     borrowed: borrowed::Registry,
     retiring: Arc<std::sync::atomic::AtomicBool>,
+    lowering_hook: Option<transport::LoweringHook>,
 }
 
 struct Live {
@@ -306,6 +307,7 @@ impl Host {
                 disposers: Vec::new(),
                 borrowed: borrowed::Registry::default(),
                 retiring: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                lowering_hook: None,
                 origins: asynchronous::origin::Origins::default(),
                 limits,
                 resources: resources::Resources::default(),

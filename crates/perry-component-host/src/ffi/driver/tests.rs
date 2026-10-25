@@ -1,6 +1,7 @@
 use super::*;
 mod disposal_tests;
 mod interop_tests;
+mod ownership_tests;
 use perry_abi::component_host::ASYNC_PENDING;
 
 #[derive(Default)]
@@ -15,6 +16,11 @@ struct State {
     guest_drops: Vec<(u32, u64, u64)>,
     loans: BTreeMap<u64, Value>,
     forward_during_loan: bool,
+    reject_lower: bool,
+    loan_result: Option<Value>,
+    pings: usize,
+    watched_transfer: Option<Value>,
+    early_commit: bool,
 }
 struct Frame {
     state: *mut State,
@@ -86,6 +92,7 @@ unsafe extern "C" fn callback(
     let frame = &*(context as usize as *const Frame);
     let state = &mut *frame.state;
     if bytes(function, function_len).unwrap() == b"ping" {
+        state.pings += 1;
         let args: Value = serde_json::from_slice(bytes(args, args_len).unwrap()).unwrap();
         let value = if args[0].get("$resource").is_some() {
             42
@@ -111,7 +118,10 @@ unsafe extern "C" fn callback(
         state.loans.insert(ticket, args["args"][0].clone());
         if state.forward_during_loan {
             state.nested = Some(submit(state.host, json!({"op":"call","interface":"","function":"inspect","args":[args["args"][0]]})).unwrap());
-            output(out, b"null".to_vec());
+            output(
+                out,
+                serde_json::to_vec(state.loan_result.as_ref().unwrap_or(&Value::Null)).unwrap(),
+            );
             return OK;
         }
         state.requests.insert(
@@ -448,7 +458,21 @@ unsafe extern "C" fn resource_callback(
     let frame = &*(context as usize as *const Frame);
     let state = &mut *frame.state;
     let event: Value = serde_json::from_slice(bytes(event, len).unwrap()).unwrap();
-    let reject = event["kind"] == "drop" && state.reject_drop;
+    if state.watched_transfer.as_ref().is_some_and(|token| {
+        event["guestTransferred"]
+            .as_array()
+            .is_some_and(|tokens| tokens.contains(token))
+    }) && state.pings == 0
+    {
+        state.early_commit = true;
+        output(
+            out,
+            b"ownership committed before borrower execution".to_vec(),
+        );
+        return ERROR;
+    }
+    let reject = (event["kind"] == "drop" && state.reject_drop)
+        || (event["kind"] == "lower" && state.reject_lower);
     state.resources.push((event, origin, frame.marker));
     if reject {
         output(out, b"secondary destructor error".to_vec());

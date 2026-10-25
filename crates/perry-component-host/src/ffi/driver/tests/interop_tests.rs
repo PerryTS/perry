@@ -316,10 +316,8 @@ fn ffi_driver_retiring_pending_import_borrows_cancels_forwarding_and_drops_owner
     }
 }
 
-#[test]
-fn ffi_driver_wasi_resource_import_borrows_use_native_aliases_until_forwarding_finishes() {
-    unsafe {
-        let world = r#"package wasi:sockets@0.2.12;
+pub(super) fn network_fixture() -> (String, String) {
+    let world = r#"package wasi:sockets@0.2.12;
             interface network { resource network; }
             interface instance-network { use network.{network}; instance-network: func() -> own<network>; }
             world plugin {
@@ -330,7 +328,7 @@ fn ffi_driver_wasi_resource_import_borrows_use_native_aliases_until_forwarding_f
                 export inspect: func(value: borrow<network>) -> u32;
                 export get-network: func() -> own<network>;
             }"#;
-        let extra = r#"
+    let extra = r#"
             (import "wasi:sockets/instance-network@0.2.12" (instance $factory
                 (export "instance-network" (func (result (own $item))))))
             (alias export $factory "instance-network" (func $factory))
@@ -343,15 +341,23 @@ fn ffi_driver_wasi_resource_import_borrows_use_native_aliases_until_forwarding_f
             (func (export "get-network") (result (own $item))
                 (canon lift (core func $factory-code "get")))
         "#;
-        let text = borrowed_text()
-            .replace("test:borrowed/items", "wasi:sockets/network@0.2.12")
-            .replace("\"item\"", "\"network\"")
-            .replace(
-                "        (import \"ping\"",
-                &format!("{extra}        (import \"ping\""),
-            );
+    let text = borrowed_text()
+        .replace("test:borrowed/items", "wasi:sockets/network@0.2.12")
+        .replace("\"item\"", "\"network\"")
+        .replace(
+            "        (import \"ping\"",
+            &format!("{extra}        (import \"ping\""),
+        );
+
+    (world.to_string(), text)
+}
+
+#[test]
+fn ffi_driver_wasi_resource_import_borrows_use_native_aliases_until_forwarding_finishes() {
+    unsafe {
+        let (world, text) = network_fixture();
         let mut state = State::default();
-        new_options(&mut state, world, &text, br#"{"wasi":{}}"#);
+        new_options(&mut state, &world, &text, br#"{"wasi":{}}"#);
         for ticket in 7..10 {
             let resource = completed(
                 &mut state,

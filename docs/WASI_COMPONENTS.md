@@ -214,6 +214,23 @@ that reference outer resources without re-exporting them. The unchanged upstream
 composition fixtures also pass. See [vendor provenance](../third_party/wac-graph/VENDORED.md)
 and the [borrow interop receipt](validation/wasi-import-borrows-20261025.json).
 
+Persistent C drivers also extend the existing `lower` lifecycle event with
+optional `guestTransferred` and `asyncTransferred` token arrays. The first uses
+the opaque `$resource` namespace, including provider resources; the second covers
+owned futures and streams. Host `created`/`transferred` references keep their
+existing shape. One callback validates the whole transaction before native
+ownership changes; rejecting it leaves the original capabilities usable. A
+later invalid aggregate member publishes no event. Native-only clients may omit
+the lifecycle callback, and the public Rust `ResourceEvent` contract is unchanged.
+
+The runtime can use these identities to release only the corresponding retained
+import-result wrappers. Resolving an import channel or finishing one poll does
+not prove ownership committed: the import may still be waiting for accepted
+borrowers. The native test returns an owned WASI resource while forwarding a
+borrowed one and verifies the commit follows the borrower under the original
+invocation. See the [ownership receipt qualification](validation/wasi-ownership-receipts-20261025.json).
+The persistent TypeScript runtime must still consume these notifications.
+
 For readable future/stream wrappers, `client.collect_async_value(&value)` and
 the C `collect` command ignore descriptors already consumed, closed or transferred.
 Live pending reads use the same cancellation protocol as explicit `close`.

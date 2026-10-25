@@ -8,6 +8,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use wasmtime::component::{ResourceAny, ResourceDynamic, ResourceType, Type, Val};
 use wasmtime::{AsContextMut, StoreContextMut};
 
+// Private C-driver ownership receipts extend the lower JSON event without
+// changing the public Rust ResourceEvent/ResourceHook contract.
+pub(crate) type LoweringHook = std::sync::Arc<
+    dyn Fn(ResourceEvent, &BTreeSet<String>, &BTreeSet<String>) -> Result<()> + Send + Sync,
+>;
+
 pub(crate) struct Lowering<'a> {
     store: StoreContextMut<'a, StoreData>,
     pending: BTreeMap<String, Entry>,
@@ -198,11 +204,17 @@ impl<'a> Lowering<'a> {
                     .clone()
             })
             .collect::<Vec<_>>();
-        if !created.is_empty() || !transferred.is_empty() {
-            (state.hook)(ResourceEvent::Lower {
+        let host_changes = !created.is_empty() || !transferred.is_empty();
+        if host_changes || !self.guest_transfers.is_empty() || !self.async_transfers.is_empty() {
+            let event = ResourceEvent::Lower {
                 created,
                 transferred,
-            })?;
+            };
+            if let Some(hook) = &self.store.data().lowering_hook {
+                hook(event, &self.guest_transfers, &self.async_transfers)?;
+            } else if host_changes {
+                (state.hook)(event)?;
+            }
         }
         let state = &mut self.store.data_mut().host_resources;
         for (token, entry) in std::mem::take(&mut self.pending) {

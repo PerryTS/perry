@@ -3,6 +3,7 @@
 mod async_calls;
 mod callbacks;
 mod driver;
+mod lifecycle;
 use async_calls::*;
 use callbacks::{ImportCallback, LifecycleCallback};
 use driver::*;
@@ -288,30 +289,12 @@ unsafe fn new_bridge(
                     .insert(function.name.clone(), handler);
             }
         }
-        let resource_current = current.clone();
-        let failures = async_replies.clone();
-        let resource_hook: ResourceHook = Arc::new(move |event| {
-            // Older callers without host resources need no lifecycle channel.
-            if resource_callback.is_none() && matches!(event, crate::ResourceEvent::Drain) {
-                return Ok(Vec::new());
-            }
-            let callback =
-                resource_callback.context("host resources require a resource callback")?;
-            let free = free_callback.context("host resources require a reply deallocator")?;
-            let context = resource_current.load(Ordering::Acquire);
-            ensure!(context != 0, "resource event outside a live embedding call");
-            let event = serde_json::to_vec(&event)?;
-            let mut reply = Reply(Buffer::default(), free);
-            let status = callback.call(context, &event, &mut reply.0);
-            failures.callback_status(status);
-            if status != OK {
-                bail!(
-                    "component resource event: {}",
-                    String::from_utf8_lossy(bytes(reply.0.data, reply.0.len)?)
-                );
-            }
-            Ok(serde_json::from_slice(bytes(reply.0.data, reply.0.len)?)?)
-        });
+        let (resource_hook, lowering_hook) = lifecycle::hooks(
+            resource_callback,
+            free_callback,
+            current.clone(),
+            async_replies.clone(),
+        );
         let dispatcher = (persistent
             || world
                 .imports
@@ -340,6 +323,9 @@ unsafe fn new_bridge(
                 dispatcher,
             )?
         };
+        if persistent {
+            host.live.as_mut().unwrap().store.data_mut().lowering_hook = Some(lowering_hook);
+        }
         current.store(0, Ordering::Release);
         let interrupt = host.interrupt_handle();
         let driver = if persistent {
