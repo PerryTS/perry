@@ -1029,11 +1029,19 @@ mod tests {
         assert!(decode_pcs(b"").is_empty(), "empty blob");
     }
 
+    #[cfg(all(
+        any(target_vendor = "apple", target_os = "linux"),
+        any(target_arch = "aarch64", target_arch = "x86_64")
+    ))]
     #[inline(never)]
     fn unread_error_probe() -> *mut ErrorHeader {
         crate::error::js_error_new()
     }
 
+    #[cfg(all(
+        any(target_vendor = "apple", target_os = "linux"),
+        any(target_arch = "aarch64", target_arch = "x86_64")
+    ))]
     #[test]
     fn constructing_an_error_does_not_resolve_its_captured_names() {
         unsafe {
