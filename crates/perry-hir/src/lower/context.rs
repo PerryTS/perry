@@ -531,6 +531,7 @@ impl LoweringContext {
     /// so `Expr::New { class_name: <let_name> }` can resolve to the
     /// underlying class for capture-forwarding purposes.
     pub(crate) fn register_let_class_alias(&mut self, let_name: String, class_name: String) {
+        self.global_class_aliases.remove(&let_name);
         if let Some(entry) = self
             .let_class_aliases
             .iter_mut()
@@ -540,6 +541,17 @@ impl LoweringContext {
         } else {
             self.let_class_aliases.push((let_name, class_name));
         }
+    }
+
+    /// Register an alias whose value is the global intrinsic `class_name` read
+    /// off `globalThis` (see `global_class_aliases`).
+    pub(crate) fn register_global_class_alias(&mut self, let_name: String, class_name: String) {
+        self.register_let_class_alias(let_name.clone(), class_name);
+        self.global_class_aliases.insert(let_name);
+    }
+
+    pub(crate) fn is_global_class_alias(&self, name: &str) -> bool {
+        self.global_class_aliases.contains(name)
     }
 
     /// Look up the underlying class name for a let/const/var alias. Walks

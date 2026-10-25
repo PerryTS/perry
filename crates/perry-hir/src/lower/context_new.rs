@@ -212,6 +212,7 @@ impl LoweringContext {
             pending_fresh_class_expr: false,
             body_class_expr_captures: Vec::new(),
             let_class_aliases: Vec::new(),
+            global_class_aliases: HashSet::new(),
             global_this_aliases: HashSet::new(),
             prototype_aliases: Default::default(),
             prototype_function_aliases: HashMap::new(),

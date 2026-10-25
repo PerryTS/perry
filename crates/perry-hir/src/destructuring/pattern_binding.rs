@@ -681,7 +681,7 @@ pub(crate) fn lower_pattern_binding_into(
                                         if let Some(class_name) =
                                             global_this_constructor_alias(&key)
                                         {
-                                            ctx.register_let_class_alias(
+                                            ctx.register_global_class_alias(
                                                 alias.id.sym.to_string(),
                                                 class_name.to_string(),
                                             );
@@ -705,7 +705,7 @@ pub(crate) fn lower_pattern_binding_into(
                                         if let Some(class_name) =
                                             global_this_constructor_alias(&key)
                                         {
-                                            ctx.register_let_class_alias(
+                                            ctx.register_global_class_alias(
                                                 alias.id.sym.to_string(),
                                                 class_name.to_string(),
                                             );
@@ -773,7 +773,10 @@ pub(crate) fn lower_pattern_binding_into(
                         static_keys.push(name.clone());
                         if source_is_global_this {
                             if let Some(class_name) = global_this_constructor_alias(&name) {
-                                ctx.register_let_class_alias(name.clone(), class_name.to_string());
+                                ctx.register_global_class_alias(
+                                    name.clone(),
+                                    class_name.to_string(),
+                                );
                                 if is_global_this_fetch_constructor(class_name) {
                                     ctx.uses_fetch = true;
                                 }

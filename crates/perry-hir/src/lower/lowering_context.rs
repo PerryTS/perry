@@ -1093,6 +1093,12 @@ pub struct LoweringContext {
     /// the HIR (where codegen consumes them) rather than being patched in
     /// after lowering.
     pub(crate) let_class_aliases: Vec<(String, String)>,
+    /// Names in `let_class_aliases` whose class is the global intrinsic read
+    /// off `globalThis` (`const NativeHeaders = globalThis.Headers`,
+    /// `const { Headers: H } = globalThis`) rather than a class declared in
+    /// the program. A same-named user binding (`class Headers {}` in the same
+    /// scope) shadows the bare name but not the alias's value.
+    pub(crate) global_class_aliases: HashSet<String>,
     /// LocalIds known to hold the global object (`globalThis`). This lets
     /// value-read recognisers treat `const g = globalThis; g.Response` like
     /// `globalThis.Response` without relying on source-level names.

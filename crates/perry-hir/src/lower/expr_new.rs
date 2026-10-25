@@ -1593,6 +1593,20 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                         if is_fetch_constructor_name(&resolved) {
                             ctx.uses_fetch = true;
                         }
+                        // The alias holds the global (`const NativeHeaders =
+                        // globalThis.Headers`), but `Expr::New` names its class
+                        // by string: a program class of the same name (srvx's
+                        // `class Headers` wrapping the native one) would be
+                        // constructed in its place. Construct the global's value.
+                        if ctx.is_global_class_alias(&class_name)
+                            && global_name_has_user_binding(ctx, &resolved)
+                        {
+                            return Ok(global_property_new_dynamic(
+                                &resolved,
+                                args,
+                                new_byte_offset,
+                            ));
+                        }
                         return Ok(Expr::New {
                             class_name: resolved,
                             args,
