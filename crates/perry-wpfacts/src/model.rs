@@ -814,6 +814,15 @@ pub struct Model {
     /// reads made before.
     pub bf_written: Option<u32>,
     pub bf_reads: Vec<NodeId>,
+    /// Stores into a builtin function value at a node, with their reason:
+    /// the node decides once the worklist is empty (`settle_bf_written`). The
+    /// opaque builtin function value (one token for every one) runs as
+    /// unknown code under every rule, so beside ⊤ it is that ⊤: a node that
+    /// holds ⊤ by then stored into ⊤. Only a store at a node without ⊤ marks
+    /// builtin function values written.
+    pub bf_stores: Vec<(NodeId, u32)>,
+    /// The node a `Cons::Store` runs on, while it runs.
+    pub store_at: Option<NodeId>,
     /// A call's constant first argument (a string), for callees whose
     /// result depends on it (`BuiltinNs::Require`). Compiler data.
     pub call_lit: FxHashMap<CallId, Atom>,

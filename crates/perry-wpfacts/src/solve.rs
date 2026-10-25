@@ -305,7 +305,7 @@ impl Model {
         loop {
             self.fill_instances();
             let Some(n) = self.wl.pop_front() else {
-                if self.sum.pending.is_empty() {
+                if self.sum.pending.is_empty() && !self.settle_bf_written() {
                     break;
                 }
                 continue;
@@ -674,9 +674,11 @@ impl Model {
                 }
             }
             Cons::Store { key, src, site } => {
+                self.store_at = Some(n);
                 for &t in toks {
                     self.store_into(t, key, src, site);
                 }
+                self.store_at = None;
             }
             Cons::Call { call } => {
                 for &t in toks {
@@ -1239,6 +1241,41 @@ impl Model {
         }
     }
 
+    /// Every builtin function value may have been written: every property
+    /// read of one is ⊤ from now on.
+    fn write_builtin_fns(&mut self, r: u32) {
+        if self.bf_written.is_some() {
+            return;
+        }
+        self.bf_written = Some(r);
+        self.bf_stores.clear();
+        for dst in std::mem::take(&mut self.bf_reads) {
+            self.add_top(dst, |_| {
+                "property of a written builtin function value".into()
+            });
+        }
+    }
+
+    /// The stores into a builtin function value, once the worklist is
+    /// empty: one at a node without ⊤ wrote one (true: solve on). A node
+    /// that holds ⊤ keeps it, so its stores are stores into ⊤ for good.
+    fn settle_bf_written(&mut self) -> bool {
+        if self.bf_written.is_some() || self.bf_stores.is_empty() {
+            return false;
+        }
+        let stores = std::mem::take(&mut self.bf_stores);
+        match stores
+            .iter()
+            .find(|&&(n, _)| !self.nodes[n as usize].pts.contains_tok(TOP))
+        {
+            Some(&(_, r)) => {
+                self.write_builtin_fns(r);
+                true
+            }
+            None => false,
+        }
+    }
+
     pub(crate) fn store_into(&mut self, t: Tok, key: Key, src: NodeId, site: SiteId) {
         // A program-owned global: an ordinary field of the global object.
         if let (TokKind::Builtin(BuiltinNs::GlobalThis), Key::Named(a)) =
@@ -1277,12 +1314,13 @@ impl Model {
             // read of such a value is ⊤ from now on (`load_from`).
             let r = self.reason("stored into a builtin function value");
             self.sink_node(src, r);
+            // Beside ⊤ the value is that ⊤ (`Model::top_beside`), but it may
+            // reach the node before ⊤ does: the node decides once the
+            // worklist is empty. A store from no rule's node decides now.
             if self.bf_written.is_none() {
-                self.bf_written = Some(r);
-                for dst in std::mem::take(&mut self.bf_reads) {
-                    self.add_top(dst, |_| {
-                        "property of a written builtin function value".into()
-                    });
+                match self.store_at {
+                    Some(n) => self.bf_stores.push((n, r)),
+                    None => self.write_builtin_fns(r),
                 }
             }
             return;

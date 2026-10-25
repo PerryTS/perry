@@ -3210,3 +3210,38 @@ fn a_result_holds_one_marker() {
         "entries {e8} {e16} {e32}: quadratic in the cells"
     );
 }
+
+/// The unit of `f` (a store) and `r` (a read of a builtin function value's
+/// member, then a read of the result): whether the read site holds ⊤.
+fn builtin_fn_read_top(store: &str) -> bool {
+    let b = format!("{JOIN}export function f(x: any, c: boolean) {{ S.last = 1; const g: any = Math.max; {store} }}\nexport function r() {{ S.last = 2; const m: any = Math.min; const y: any = m.foo; return y.v; }}");
+    let m = "import { f, r } from './b'; function main() { f({ k: 0 }, true); console.log(r()); } main(); main();";
+    let pf = units_of(&[("b", b.as_str()), ("m", m)]);
+    let s = pf
+        .sites
+        .iter()
+        .find(|s| s.key == "v")
+        .unwrap_or_else(|| panic!("{}", pf.dump_text()));
+    s.top
+}
+
+#[test]
+fn a_store_beside_top_writes_no_builtin_function_value() {
+    // `h` holds another unit's value (⊤) and `Math.max` (the opaque builtin
+    // function value, one token for every one). `Math.max` reaches `h`
+    // first (a constant), ⊤ later; once the solve settles `h` holds ⊤, so the
+    // store into it is a store into a value from unmodeled code, not into a
+    // builtin function value, and `Math.min.foo` keeps its builtin members:
+    // `y.v` holds no ⊤. Decided when the store first ran, it marked every
+    // builtin function value written.
+    assert!(
+        !builtin_fn_read_top("const h: any = c ? x : g; h.k = 1;"),
+        "a store into ⊤ marked builtin function values written"
+    );
+    // A store into a builtin function value itself still marks them written
+    // (one token for every one): the read is ⊤.
+    assert!(
+        builtin_fn_read_top("g.k = 1;"),
+        "a store into a builtin function value must mark them written"
+    );
+}
