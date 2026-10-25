@@ -188,8 +188,12 @@ pub(super) fn compile_module_init(
     init_fn.mark_entry_init_boundary();
     let flat_const_ids: std::collections::HashSet<u32> =
         cross_module.flat_const_arrays.keys().copied().collect();
-    let (mut init_shadow_slot_map, _) =
-        enable_module_init_shadow_frame(init_fn, &hir.init, &flat_const_ids);
+    let (mut init_shadow_slot_map, _) = enable_module_init_shadow_frame(
+        init_fn,
+        &hir.init,
+        &flat_const_ids,
+        &cross_module.scope_map,
+    );
     // #10663: module init is the textbook run-once body.
     crate::codegen::helpers::decide_straight_line_store_outline(init_fn, &hir.init);
 
@@ -240,8 +244,11 @@ pub(super) fn compile_module_init(
         &mut init_shadow_slot_map,
         init_native_facts.number_by_construction_locals(),
     );
-    let init_shadow_slot_clears_after_stmt =
-        crate::collectors::collect_shadow_slot_clear_points(&hir.init, &init_shadow_slot_map);
+    let init_shadow_slot_clears_after_stmt = crate::collectors::collect_shadow_slot_clear_points(
+        &hir.init,
+        &init_shadow_slot_map,
+        &cross_module.scope_map,
+    );
 
     // #7109: the module-init body participates in canonical (i32/u32/Str)
     // selection on exactly the per-value rules a function body uses. There
