@@ -45,36 +45,6 @@ fn remember(owner: f64, error: f64) {
     payload::state_set(owner.get_nanbox_f64(), &OPERATION, b"error", error);
     native(owner.get_nanbox_f64()).failed = true;
 }
-/// Cancellation must still run in the submission's ALS context when a before
-/// hook itself threw. Re-running that hook would prevent native retirement.
-fn retire_in_context(promise: f64, completion: impl FnOnce() -> f64) -> Result<f64, f64> {
-    let scope = RuntimeHandleScope::new();
-    let promise = scope.root_nanbox_f64(promise);
-    let captured = scope.root_raw_mut_ptr(crate::async_context::alloc_snapshot_holder(
-        crate::promise::context_for_promise(
-            JSValue::from_bits(promise.get_nanbox_f64().to_bits())
-                .as_pointer::<crate::promise::Promise>()
-                .cast_mut(),
-        ),
-    ));
-    let previous = scope.root_raw_mut_ptr(crate::async_context::alloc_snapshot_holder(
-        crate::async_context::capture_context(),
-    ));
-    unsafe {
-        drop(crate::async_context::enter_context(
-            &(*captured.get_raw_mut_ptr::<crate::async_context::AsyncSnapshotHolder>()).snapshot,
-        ));
-    }
-    let outcome = crate::exception::catch_js_throw(completion);
-    unsafe {
-        crate::async_context::restore_context(
-            (*previous.get_raw_mut_ptr::<crate::async_context::AsyncSnapshotHolder>())
-                .snapshot
-                .clone(),
-        );
-    }
-    outcome
-}
 fn retire(agent: crate::agent::AgentId) {
     if agent == crate::agent::current_agent() {
         PENDING.with(|q| q.borrow_mut().clear());
@@ -248,120 +218,111 @@ fn step(owner: f64) -> bool {
         &OPERATION,
         b"promise",
     ));
-    let primary = callback::Frame::new(&scope, component.get_nanbox_f64());
-    let cleanup = callback::Frame::new(&scope, component.get_nanbox_f64());
+    let primary_batch = callback::FrameBatch::new(&scope, component.get_nanbox_f64());
+    let cleanup_batch = callback::FrameBatch::new(&scope, component.get_nanbox_f64());
+    let primary = primary_batch.for_promise(1, promise.get_nanbox_f64());
+    let cleanup = cleanup_batch.for_promise(1, promise.get_nanbox_f64());
     let result_value = scope.root_nanbox_f64(undefined());
     let mut output = Vec::new();
     let mut parsed = Value::Null;
     let mut status = OK;
-    let outcome = unsafe {
-        crate::async_hooks::try_run_promise_scope(
-            JSValue::from_bits(promise.get_nanbox_f64().to_bits())
-                .as_pointer::<crate::promise::Promise>()
-                .cast_mut(),
-            || {
-                let result = crate::exception::catch_js_throw(|| {
-                    let ctx = context::get(component.get_nanbox_f64());
-                    if (*ctx).host.is_null() || !(*ctx).alive {
-                        fail("Component has been disposed");
-                    }
-                    imports::drain(owner.get_nanbox_f64(), component.get_nanbox_f64());
-                    if native(owner.get_nanbox_f64()).failed {
-                        let mut buffer = Buffer::default();
-                        (host::ops().perry_component_host_dispose)(
-                            (*ctx).host,
-                            cleanup.token(),
-                            &mut buffer,
-                        );
-                        drop(take(buffer));
-                        status = RELEASED_ERROR;
-                        return undefined();
-                    }
-                    let mut buffer = Buffer::default();
-                    status = if !native(owner.get_nanbox_f64()).started {
-                        native(owner.get_nanbox_f64()).started = true;
-                        let op = native(owner.get_nanbox_f64());
-                        if op.http_request.is_null() {
-                            (host::ops().perry_component_host_call_async_start)(
-                                (*ctx).host,
-                                op.interface.as_ptr(),
-                                op.interface.len(),
-                                op.function.as_ptr(),
-                                op.function.len(),
-                                op.args.as_ptr(),
-                                op.args.len(),
-                                primary.token(),
-                                cleanup.token(),
-                                Some(wake),
-                                crate::agent::current_agent(),
-                                &mut buffer,
-                            )
-                        } else {
-                            (host::ops().perry_component_http_handle_async_start)(
-                                (*ctx).host,
-                                op.http_request,
-                                op.interface.as_ptr(),
-                                op.interface.len(),
-                                primary.token(),
-                                cleanup.token(),
-                                Some(wake),
-                                crate::agent::current_agent(),
-                                &mut buffer,
-                            )
-                        }
-                    } else {
-                        (host::ops().perry_component_host_call_async_poll)(
-                            (*ctx).host,
-                            primary.token(),
-                            cleanup.token(),
-                            Some(wake),
-                            crate::agent::current_agent(),
-                            &mut buffer,
-                        )
-                    };
-                    output = take(buffer);
-                    if primary.threw.get() {
-                        remember(owner.get_nanbox_f64(), primary.error.get_nanbox_f64());
-                    }
-                    if status == ASYNC_PENDING {
-                        return undefined();
-                    }
-                    if status != OK {
-                        if !native(owner.get_nanbox_f64()).failed {
-                            fail(&String::from_utf8_lossy(&output));
-                        }
-                        return undefined();
-                    }
-                    parsed = serde_json::from_slice(&output)
-                        .unwrap_or_else(|_| fail("Invalid async component result"));
-                    if parsed["returned"] == true {
-                        let op = native(owner.get_nanbox_f64());
-                        let signature = context::signature(
-                            &(*ctx).world,
-                            "exports",
-                            &op.interface,
-                            &op.function,
-                        );
-                        result_value.set_nanbox_f64(value::decode(
-                            &parsed["value"],
-                            &signature["result"],
-                            &(*ctx).world,
-                            component.get_nanbox_f64(),
-                        ));
-                    }
-                    undefined()
-                });
-                // Finalizers that ran while Wasm was suspended queued native
-                // identities. Drain them after the Store is available again,
-                // under the same captured context and primary-error precedence.
-                if status != ASYNC_PENDING && status != RELEASED_ERROR {
-                    cleanup::finish_call(component.get_nanbox_f64(), result)
+    let outcome = primary.run(|| unsafe {
+        let result = crate::exception::catch_js_throw(|| {
+            let ctx = context::get(component.get_nanbox_f64());
+            if (*ctx).host.is_null() || !(*ctx).alive {
+                fail("Component has been disposed");
+            }
+            imports::drain(owner.get_nanbox_f64(), component.get_nanbox_f64());
+            if native(owner.get_nanbox_f64()).failed {
+                let mut buffer = Buffer::default();
+                (host::ops().perry_component_host_dispose)(
+                    (*ctx).host,
+                    cleanup.token(),
+                    &mut buffer,
+                );
+                drop(take(buffer));
+                status = RELEASED_ERROR;
+                return undefined();
+            }
+            let mut buffer = Buffer::default();
+            status = if !native(owner.get_nanbox_f64()).started {
+                native(owner.get_nanbox_f64()).started = true;
+                let op = native(owner.get_nanbox_f64());
+                if op.http_request.is_null() {
+                    (host::ops().perry_component_host_call_async_start)(
+                        (*ctx).host,
+                        op.interface.as_ptr(),
+                        op.interface.len(),
+                        op.function.as_ptr(),
+                        op.function.len(),
+                        op.args.as_ptr(),
+                        op.args.len(),
+                        primary.token(),
+                        cleanup.token(),
+                        Some(wake),
+                        crate::agent::current_agent(),
+                        &mut buffer,
+                    )
                 } else {
-                    finish(result)
+                    (host::ops().perry_component_http_handle_async_start)(
+                        (*ctx).host,
+                        op.http_request,
+                        op.interface.as_ptr(),
+                        op.interface.len(),
+                        primary.token(),
+                        cleanup.token(),
+                        Some(wake),
+                        crate::agent::current_agent(),
+                        &mut buffer,
+                    )
                 }
-            },
-        )
-    };
+            } else {
+                (host::ops().perry_component_host_call_async_poll)(
+                    (*ctx).host,
+                    primary.token(),
+                    cleanup.token(),
+                    Some(wake),
+                    crate::agent::current_agent(),
+                    &mut buffer,
+                )
+            };
+            output = take(buffer);
+            if primary.threw.get() {
+                remember(owner.get_nanbox_f64(), primary.error.get_nanbox_f64());
+            }
+            if status == ASYNC_PENDING {
+                return undefined();
+            }
+            if status != OK {
+                if !native(owner.get_nanbox_f64()).failed {
+                    fail(&String::from_utf8_lossy(&output));
+                }
+                return undefined();
+            }
+            parsed = serde_json::from_slice(&output)
+                .unwrap_or_else(|_| fail("Invalid async component result"));
+            if parsed["returned"] == true {
+                let op = native(owner.get_nanbox_f64());
+                let signature =
+                    context::signature(&(*ctx).world, "exports", &op.interface, &op.function);
+                result_value.set_nanbox_f64(value::decode(
+                    &parsed["value"],
+                    &signature["result"],
+                    &(*ctx).world,
+                    component.get_nanbox_f64(),
+                ));
+            }
+            undefined()
+        });
+        // Finalizers that ran while Wasm was suspended queued native
+        // identities. Drain them after the Store is available again,
+        // under the same captured context and primary-error precedence.
+        if status != ASYNC_PENDING && status != RELEASED_ERROR {
+            cleanup::finish_call(component.get_nanbox_f64(), result)
+        } else {
+            finish(result)
+        }
+    });
     if let Err(error) = outcome {
         remember(owner.get_nanbox_f64(), error);
     }
@@ -371,7 +332,7 @@ fn step(owner: f64) -> bool {
         && native(owner.get_nanbox_f64()).started
         && unsafe { (*context::get(component.get_nanbox_f64())).alive }
     {
-        let _ = retire_in_context(promise.get_nanbox_f64(), || {
+        let _ = cleanup.run_cleanup(|| {
             let mut buffer = Buffer::default();
             let ctx = context::get(component.get_nanbox_f64());
             unsafe {
@@ -387,7 +348,7 @@ fn step(owner: f64) -> bool {
         status = RELEASED_ERROR;
     }
     if status == RELEASED_ERROR {
-        let disposed = retire_in_context(promise.get_nanbox_f64(), || {
+        let disposed = cleanup.run_cleanup(|| {
             context::finish_disposal(component.get_nanbox_f64(), status);
             cleanup.rethrow();
             undefined()

@@ -2,17 +2,39 @@ use super::*;
 use crate::gc::RuntimeHandle;
 use std::cell::Cell;
 
+mod batch;
+pub(super) use batch::FrameBatch;
+
+pub(super) enum FrameValue<'a> {
+    Root(RuntimeHandle<'a>),
+    Row(batch::RowSlot<'a>),
+}
+impl FrameValue<'_> {
+    pub fn get_nanbox_f64(&self) -> f64 {
+        match self {
+            Self::Root(root) => root.get_nanbox_f64(),
+            Self::Row(slot) => slot.get_nanbox_f64(),
+        }
+    }
+    pub fn set_nanbox_f64(&self, value: f64) {
+        match self {
+            Self::Root(root) => root.set_nanbox_f64(value),
+            Self::Row(slot) => slot.set_nanbox_f64(value),
+        }
+    }
+}
+
 pub(super) struct Frame<'a> {
-    pub owner: RuntimeHandle<'a>,
-    pub error: RuntimeHandle<'a>,
+    pub owner: FrameValue<'a>,
+    pub error: FrameValue<'a>,
     pub threw: Cell<bool>,
 }
 
 impl<'a> Frame<'a> {
     pub fn new(scope: &'a RuntimeHandleScope, owner: f64) -> Self {
         Self {
-            owner: scope.root_nanbox_f64(owner),
-            error: scope.root_nanbox_f64(undefined()),
+            owner: FrameValue::Root(scope.root_nanbox_f64(owner)),
+            error: FrameValue::Root(scope.root_nanbox_f64(undefined())),
             threw: Cell::new(false),
         }
     }

@@ -170,6 +170,14 @@ The [captured-context checks](validation/wasi-captured-context-20261025.json)
 cover actual moving collection, success, throw and caller-context restoration.
 This primitive does not yet switch TypeScript calls to the persistent driver.
 
+The existing async path now uses poll-local batches of stable callback frames.
+Frames created during another callback keep their values in private traced array
+rows: appending an outer-scope runtime handle during a nested callback would
+lose that root when the nested scope returns. Frames preserve separate captured
+contexts and first exceptions, and cleanup can enter saved ALS without retrying
+a failing before hook. These batches prepare origin routing; cross-poll records
+and persistent TypeScript execution still need integration.
+
 Construct Rust hosts with `Host::new_for_driver` before `into_driver` to
 prepare resource disposal. The C driver constructor selects this path. It
 composes one private helper with the original nominal resource aliases and
