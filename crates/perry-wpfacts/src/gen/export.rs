@@ -1449,6 +1449,14 @@ impl<'a> Gen<'a> {
                                     // unknown value): forwarded with its
                                     // owner's contract (DECISIONS 88).
                                     _ if self.forwarded_tok(x) => fwd = true,
+                                    // DECISIONS 164: a marker with values
+                                    // beside it (a published method's
+                                    // receiver reach, DECISIONS 107, or an
+                                    // argument marker's reach over such)
+                                    // stands for no value of its own
+                                    // (DECISIONS 74): the values beside it
+                                    // are judged here themselves.
+                                    _ if self.m.is_marker(x) && self.m.beside_values(x) => {}
                                     _ => {
                                         ok = false;
                                         break 'toks;

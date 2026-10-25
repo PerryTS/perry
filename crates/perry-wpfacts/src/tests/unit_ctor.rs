@@ -891,3 +891,58 @@ fn an_argument_a_callee_stores_into_a_shared_array_is_stored_by_the_callers_unit
     assert!(v(&wf).iter().any(|s| s.contains(".k T0Set") && s.contains("Tag")), "{:?}", v(&wf));
     assert_eq!(v(&pf), v(&wf), "\n{}", pf.dump_text());
 }
+
+const ROOT_BACK: &str = r#"
+    class N { k: number; left: any; right: any; static tag = 1;
+      constructor(k: number) { this.k = k; this.left = null; this.right = null; } }
+    class Tree { root: any; static tag = 2;
+      constructor() { this.root = null; }
+      put(k: number) { const z = new N(k); if (this.root === null) { this.root = z; } else { z.right = this.root; this.root = z; this.rot(this.root); } }
+      rot(x: any) { const y = x.right; if (y !== null) { x.right = y.left; y.left = x; if (x === this.root) { this.root = y; } } }
+      sum(): number { let s = 0; let x = this.root; while (x !== null) { s += x.k; x = x.left; } return s; }
+    }
+    function main() { const t = new Tree(); t.put(1); t.put(2); t.put(3); console.log(t.sum() + N.tag + Tree.tag); }
+    main();
+    "#;
+
+#[test]
+fn a_receiver_reach_stored_back_into_a_leaving_field_adds_no_kinds() {
+    // DECISIONS 164: `Tree.rot` stores what it read through its argument
+    // (`this.root` passed by `put`) back into its receiver's `root`: the
+    // argument marker's reach and the receiver reach marker, beside the
+    // receivers main publishes (DECISIONS 107), land in the field of the
+    // leaving Tree. They stand for no value of their own (DECISIONS 74):
+    // the field is described by the N instances beside them, as the whole
+    // program sees it. Sunk, N broke (the AWFY CD RedBlackTree.root shape:
+    // Node escaped, its class went unknown and every `new Node` was ⊤).
+    let pf = units(ROOT_BACK);
+    let wf = facts(ROOT_BACK);
+    assert!(
+        pf.broken.iter().all(|b| b.starts_with("override ") || wf.broken.contains(b)),
+        "{:?} vs {:?}\n{}",
+        pf.broken,
+        wf.broken,
+        pf.dump_text()
+    );
+    // Per-unit facts are whole-program facts (owner 2026-10-23). The reads
+    // inside `rot` through its own parameter are a separate open cause
+    // (a published method's parameter marker no other unit passes to,
+    // nightly/CW2/DECISIONS.md 165): every other site is equal.
+    let rot = ROOT_BACK.find("rot(x").unwrap() as u32..ROOT_BACK.find("sum()").unwrap() as u32;
+    let v = |f: &ProgramFacts| -> Vec<String> {
+        let mut v: Vec<String> = f
+            .sites
+            .iter()
+            .filter(|s| !rot.contains(&s.byte_offset))
+            .map(|s| {
+                let mut r = s.receivers.clone();
+                r.sort();
+                format!("@{} .{} {:?} {:?}", s.byte_offset, s.key, s.verdict, r)
+            })
+            .collect();
+        v.sort();
+        v
+    };
+    assert!(v(&wf).iter().any(|s| s.contains(".k T0Mono")), "{:?}", v(&wf));
+    assert_eq!(v(&pf), v(&wf), "\n{}", pf.dump_text());
+}
