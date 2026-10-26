@@ -769,3 +769,118 @@ fn a_store_under_a_computed_key_into_a_parameter_reaches_the_callers_value() {
         .expect("schemas");
     assert!(t.escape.is_some(), "{t:?}");
 }
+
+#[test]
+fn a_store_through_an_element_of_a_closed_callees_array_argument_reaches_the_caller() {
+    // `compact` passes an array to the closed `compactQueue` (another unit
+    // of the module, decision 13), which pops each element and stores
+    // through `item.obj[item.prop]`: a computed key on an object the
+    // array's element holds. The caller's `top` is written under `o` and
+    // gains `p` (qs `utils.compact`): per unit, as whole-program, `top` has
+    // no fixed layout and `o` is not readonly.
+    let u = r#"
+        function compactQueue(queue: any) {
+          while (queue.length > 0) {
+            var item = queue.pop();
+            item.obj[item.prop] = "w:" + item.prop;
+          }
+        }
+        export function compact(value: any) {
+          var top: any = { o: value };
+          var queue: any = [{ obj: top, prop: "o" }, { obj: top, prop: "p" }];
+          compactQueue(queue);
+          return top.o;
+        }
+        "#;
+    let m = "import { compact } from \"./u\";\nconsole.log(compact(5));\n";
+    let (pu, _) = assert_not_stronger(&[("u", u), ("main", m)]);
+    let t = pu
+        .templates
+        .iter()
+        .find(|t| t.birth_keys.iter().any(|k| k == "o"))
+        .expect("{ o: value }");
+    assert!(!t.fixed_layout, "{t:?}");
+    assert!(!field(t, "o").readonly, "{t:?}");
+}
+
+#[test]
+fn an_array_passed_to_a_closed_callee_of_another_unit_carries_its_elements() {
+    // DECISIONS 207: `compact` passes an array to the closed `compactQueue`
+    // (another unit of the module, decision 13), whose argument contract
+    // names the array; its elements leave through the array's element cell
+    // (DECISIONS 94), as a published value's do. Without the cell `pop()`
+    // read nothing there, the store `item.obj[item.prop] = ...` reached no
+    // stand-in, no census report came back, and `{ o: value }` kept a fixed
+    // layout and a readonly `o` the whole program refutes (qs `utils.compact`).
+    let u = r#"
+        function compactQueue(queue: any) {
+          var item = queue.pop();
+          item.obj[item.prop] = [1];
+        }
+        export function compact(value: any) {
+          var queue: any = [{ obj: { o: value }, prop: "o" }];
+          compactQueue(queue);
+          return value;
+        }
+        "#;
+    let m = "import { compact } from \"./u\";\nconsole.log(compact({ a: [1, 2] }));\n";
+    let (pu, _) = assert_not_stronger(&[("u", u), ("main", m)]);
+    let t = pu
+        .templates
+        .iter()
+        .find(|t| t.birth_keys.iter().any(|k| k == "o"))
+        .expect("{ o: value }");
+    assert!(!t.fixed_layout, "{t:?}");
+}
+
+/// DECISIONS 208: how many times each layout display is described (its
+/// field values given) inside value contract `vc`.
+fn described(vc: &crate::units::ValueContract, n: &mut std::collections::BTreeMap<String, usize>) {
+    for c in vc.layouts.iter().chain(vc.classes.iter()) {
+        if !c.field_values.is_empty() {
+            *n.entry(c.display.clone()).or_default() += 1;
+        }
+        for (_, v) in c.field_values.iter().chain(c.static_values.iter()) {
+            described(v, n);
+        }
+    }
+}
+
+#[test]
+fn layouts_holding_one_another_are_each_described_once_in_a_contract() {
+    // DECISIONS 208: `mk` returns one of three literal shapes whose two
+    // fields each hold any of them beside another unit's instance (153's
+    // list link, three ways: fast-check's regex tokens). Its result's value
+    // contract describes each shape once and names it elsewhere. Described
+    // once per path instead, each sibling field described the others again:
+    // the description grew with the number of paths (one fast-check cell
+    // contract was 3.6 GB).
+    let u = r#"
+        class Ext { v: number; constructor() { this.v = 1; } }
+        export function mk(n: number): any {
+          let h: any = new Ext();
+          for (let i = 0; i < n; i++) {
+            if (i % 3 === 0) h = { a: h, b: h };
+            else if (i % 3 === 1) h = { c: h, d: h };
+            else h = { e: h, f: h };
+          }
+          return h;
+        }
+        "#;
+    let m = "import { mk } from \"./u\";\nconst h = mk(6);\nconsole.log(h.a === h.b);\n";
+    let (pu, _) = assert_not_stronger(&[("u", u), ("main", m)]);
+    let mut roots = 0;
+    for l in &pu.layouts_out {
+        for (k, vc) in &l.field_values {
+            let mut n = Default::default();
+            described(vc, &mut n);
+            roots += usize::from(!n.is_empty());
+            assert!(n.values().all(|&c| c == 1), "{}.{k}: {n:?}", l.display);
+        }
+    }
+    assert!(
+        roots > 0,
+        "no layout describes another: {:?}",
+        pu.layouts_out
+    );
+}

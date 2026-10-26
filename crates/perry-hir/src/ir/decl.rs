@@ -145,6 +145,21 @@ pub struct Import {
     pub is_adopted_require: bool,
 }
 
+impl Import {
+    /// Runtime-native named bindings have value getters rather than compiled
+    /// function bodies. Node submodules share that rule even when they have
+    /// no native Rust module entry of their own.
+    pub fn has_native_value_bindings(&self) -> bool {
+        !self.type_only
+            && !self.runtime_erased
+            && (self.is_native
+                || (!super::is_bare_prefix_only_builtin(&self.source)
+                    && super::is_node_builtin_module(
+                        self.source.strip_prefix("node:").unwrap_or(&self.source),
+                    )))
+    }
+}
+
 /// Import specifier
 #[derive(Debug, Clone)]
 pub enum ImportSpecifier {

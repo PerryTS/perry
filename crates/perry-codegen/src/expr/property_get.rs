@@ -807,6 +807,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 if let Some(install_sym) = crate::nm_install::nm_install_symbol(module_name) {
                     ctx.block().call_void(install_sym, &[]);
                 }
+                if property == "default" {
+                    for install in crate::nm_install::namespace_value_dependencies(module_name) {
+                        ctx.block().call_void(install, &[]);
+                    }
+                }
                 // `fs.promises` is backed by the `fs_promises` submodule
                 // registry, not the parent fs dispatch bucket. Direct
                 // `node:fs/promises` imports emit their submodule installer at

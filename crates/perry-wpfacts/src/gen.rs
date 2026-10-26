@@ -128,6 +128,11 @@ pub struct Gen<'a> {
     /// element kind, the primitives beside them). `ta_reported`: the fields
     /// a reader's census reported (`ta <key> of <display>`): sunk.
     pub field_tas: FxHashMap<(TmplId, Atom), (Option<u8>, u16)>,
+    /// DECISIONS 208: while a value contract is built
+    /// (`lib::value_contract_of_toks`), the layouts of this unit it
+    /// describes: each stands in `layouts_out` until the outermost one is
+    /// built.
+    pub(crate) describing: std::cell::RefCell<Option<Vec<String>>>,
     pub ta_reported: crate::pts::FxHashSet<(String, String)>,
     /// DECISIONS 126: the stand-ins of other units' typed-array fields
     /// (report, token), one per class and key.
@@ -370,6 +375,7 @@ impl<'a> Gen<'a> {
             field_prims: Default::default(),
             field_values: FxHashMap::default(),
             field_tas: FxHashMap::default(),
+            describing: Default::default(),
             ta_reported: Default::default(),
             stand_in_tas: Vec::new(),
             cells: Vec::new(),

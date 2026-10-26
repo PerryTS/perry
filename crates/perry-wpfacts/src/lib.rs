@@ -1385,7 +1385,43 @@ fn value_contract_of(
 }
 
 /// `value_contract_of` over these values.
+///
+/// DECISIONS 208: a layout of this unit it describes stands in
+/// `layouts_out` until the outermost value contract is built: met again
+/// anywhere in it, it is named, not described again.
 fn value_contract_of_toks(
+    g: &gen::Gen,
+    templates: &[TemplateFacts],
+    prim: u16,
+    toks: Vec<model::Tok>,
+    contracts_out: &[((String, String), units::ClassContract)],
+    layouts_out: &mut Vec<units::ClassContract>,
+    open_tm: &pts::FxHashSet<model::TmplId>,
+) -> units::ValueContract {
+    let outermost = g.describing.borrow().is_none();
+    if outermost {
+        *g.describing.borrow_mut() = Some(Vec::new());
+    }
+    let vc = describe_toks(
+        g,
+        templates,
+        prim,
+        toks,
+        contracts_out,
+        layouts_out,
+        open_tm,
+    );
+    if outermost {
+        for d in g.describing.take().unwrap_or_default() {
+            if let Some(i) = layouts_out.iter().position(|c| c.display == d) {
+                layouts_out.remove(i);
+            }
+        }
+    }
+    vc
+}
+
+fn describe_toks(
     g: &gen::Gen,
     templates: &[TemplateFacts],
     prim: u16,
@@ -1553,18 +1589,38 @@ fn value_contract_of_toks(
             // (`Gen::stand_in_class`). It leaves `layouts_out` afterwards: a
             // value contract's layout is not published. A published layout
             // is the reader's in any case (`Gen::other_layout`, DECISIONS 106).
+            // DECISIONS 208: it stands there until the outermost value
+            // contract is built (`value_contract_of_toks`), not only while
+            // its own fields are described: a layout met again anywhere in
+            // that contract takes the copy. Removed with its own description,
+            // every sibling described it again, once per path: literal shapes
+            // that hold one another (fast-check's regex tokens) made one
+            // cell's contract 3.6 GB.
+            // A layout found there is named, not described again: its facts,
+            // no field contracts. Its description is the enclosing one or
+            // the published one, which the reader takes by display before
+            // any copy (DECISIONS 106); a published one copied whole carried
+            // the copies its own fields held.
             match layouts_out.iter().find(|c| c.display == cc.display) {
-                Some(p) => cc = p.clone(),
+                Some(p) => {
+                    cc = units::ClassContract {
+                        field_fns: Vec::new(),
+                        field_layouts: Vec::new(),
+                        field_values: Vec::new(),
+                        field_tas: Vec::new(),
+                        ..p.clone()
+                    }
+                }
                 None => {
                     layouts_out.push(cc.clone());
+                    if let Some(d) = g.describing.borrow_mut().as_mut() {
+                        d.push(cc.display.clone());
+                    }
                     cc.field_fns =
                         literal_field_fns(&g, templates, &toks, tm, layouts_out, open_tm);
                     cc.field_layouts = nested_layouts(g, templates, tm, layouts_out, open_tm);
                     cc.field_values = field_value_contracts(g, templates, tm, layouts_out, open_tm);
                     cc.field_tas = field_ta_contracts(g, tm);
-                    if let Some(i) = layouts_out.iter().position(|c| c.display == cc.display) {
-                        layouts_out.remove(i);
-                    }
                 }
             }
         }

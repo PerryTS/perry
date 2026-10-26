@@ -185,9 +185,7 @@ pub(crate) fn builtin_submodule_key(module_name: &str) -> Option<&'static str> {
 /// install-all hooks).
 pub(crate) fn builtin_module_value(module_name: &str) -> f64 {
     if let Some(key) = builtin_submodule_key(module_name) {
-        return unsafe {
-            crate::node_submodules::js_node_submodule_namespace(key.as_ptr(), key.len() as u32)
-        };
+        return crate::node_submodules::commonjs_value(key);
     }
     crate::object::native_module_get_builtin_module_value(module_name)
 }
