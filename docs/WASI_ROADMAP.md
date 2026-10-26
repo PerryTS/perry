@@ -14,7 +14,7 @@ See [WASI_SUPPORT.md](WASI_SUPPORT.md) for the implemented standalone profile.
 | WASI 0.1 / Preview 1 input | Native `node:wasi` hosting; see [P1 scope](WASI_P1_HOSTING.md) | No P1 compiler output target; intentionally deferred |
 | WASI 0.2 / Preview 2 output | Standalone commands; staged packages qualified on Linux x86_64, macOS ARM64 and Windows x64 | Requalify changed artifacts before shipping; publication is separate |
 | Typed synchronous components | Native Perry hosts third-party components; Perry libraries import/export WIT services and compose with Rust | Current combined execution qualification is Linux; broader platform/package coverage remains open |
-| WASI 0.3.0 input | Turnloop providers, async calls, native TypeScript future/stream readers and producers, command hosting and supported concurrent HTTP layouts | Nested/imported HTTP implementations use serialized fallback; registry provider repairs and broader platform qualification remain open |
+| WASI 0.3.0 input | Turnloop providers, async calls, native TypeScript future/stream readers and producers, command hosting and supported concurrent HTTP layouts | Nested/imported HTTP implementations use serialized fallback; broader platform qualification and final packages remain open |
 | Async Perry-authored components | Rooted frames and nonblocking Promise observation foundations | Generator still rejects async guest functions and future/stream values; task scheduling, suspension, cancellation and cross-language acceptance remain unfinished |
 
 The 0.3.0 hosting profile does not establish a 0.3 compiler output target or
@@ -154,8 +154,11 @@ HTTP components now pass Linux development and production qualification with
 independent host/guest moving GC. Blocking-I/O cancellation,
 broader platform qualification and engine shipping costs remain open. The Tokio-free Turnloop provider
 replacement is now selected and qualified on Linux in both component directions;
-its [receipt](validation/wasi-turnloop-selected-20261023.json) records the
-validation-only upstream repairs that still require a registry release.
+its [earlier receipt](validation/wasi-turnloop-selected-20261023.json) records
+validation-only upstream repairs. The exact qualified sources now live in the
+repository through [pinned Cargo patches](../third_party/turnloop/VENDORED.md),
+so builds no longer need those external overrides. Released dependency adoption
+remains a future replacement for these local source repairs.
 This milestone is not complete.
 
 Introduce an optional component-capable host boundary, for example a separate

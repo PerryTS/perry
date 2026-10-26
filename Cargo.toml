@@ -96,6 +96,7 @@ members = [
 exclude = [
     "third_party/windows-winui",
     "third_party/wac-graph",
+    "third_party/turnloop",
 ]
 
 # Build only the host-independent product set by default: the compiler and
@@ -473,7 +474,7 @@ perex = "0.1.14"
 # against the publishing workflow going green. The soak skill's rule holds:
 # opting out is a committed, reviewable change and never a silent one, so the
 # override lives here in the diff and the lock pins the exact artifact.
-turnloop = "0.1.0-alpha.9"
+turnloop = "=0.1.0-alpha.9"
 # The optional component engine uses LocalExecutor independently of the Node
 # Loop below. Its TLS adapter receives that same executor handle; it creates no
 # second driver. The following sans-I/O restriction applies to Node Loop paths.
@@ -502,7 +503,7 @@ turnloop = "0.1.0-alpha.9"
 # rustls process-default provider, failing at RUNTIME ("no rustls crypto
 # provider") rather than at compile time. So this line restores exactly what
 # alpha.6 gave Perry; it does not opt into anything new.
-turnloop-http = { version = "0.1.0-alpha.9", default-features = false }
+turnloop-http = { version = "=0.1.0-alpha.9", default-features = false }
 turnloop-tls = { version = "0.1.0-alpha.9", default-features = false, features = [
     "ring",
 ] }
@@ -686,3 +687,9 @@ inherits = "release"
 debug-assertions = true
 lto = false
 codegen-units = 1
+
+# Required provider APIs are not all present in published alpha.10. Keep the
+# exact sources qualified with the component engine; see vendor provenance.
+[patch.crates-io]
+turnloop = { path = "third_party/turnloop/turnloop" }
+turnloop-http = { path = "third_party/turnloop/turnloop-http" }

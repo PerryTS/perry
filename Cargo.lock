@@ -8851,8 +8851,6 @@ dependencies = [
 [[package]]
 name = "turnloop"
 version = "0.1.0-alpha.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1c31584700d452b02385d31829045ac5a5369080617761cc2f368baf50f98782"
 dependencies = [
  "futures-io",
  "js-sys",
@@ -8867,8 +8865,6 @@ dependencies = [
 [[package]]
 name = "turnloop-http"
 version = "0.1.0-alpha.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7dc14bd5b84fd4b7f99251eb35764949eeba7c34e2b799c1a7cd6354a58b3381"
 dependencies = [
  "base64 0.22.1",
  "brotli 8.0.4",

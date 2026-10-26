@@ -164,6 +164,9 @@ crates/perry-runtime/src/object/shapes.rs
 # Pinned wac-graph snapshot with nominal resource-import registration added.
 # Keep the upstream layout for re-diffing; see third_party/wac-graph/VENDORED.md.
 third_party/wac-graph/src/graph.rs
+# Exact qualified Turnloop snapshot; retain upstream layout for comparison.
+# Source hashes and registry provenance: third_party/turnloop/VENDORED.md.
+third_party/turnloop/turnloop/src/driver.rs
 # Machine-generated WinRT metadata bindings for Windows.Foundation.Collections.
 third_party/windows-winui/windows-collections/src/bindings.rs
 # Machine-generated WinRT metadata bindings for Windows.Foundation (IAsyncInfo).

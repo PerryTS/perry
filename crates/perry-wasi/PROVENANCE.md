@@ -1,5 +1,30 @@
 # Provider provenance and migration scope
 
+## Current source selection
+
+The root Cargo manifest selects repository copies of the exact `turnloop` and
+`turnloop-http` alpha.9 Rust sources used for Linux qualification. The direct
+`turnloop-io` alpha.9 registry sources are byte-identical to the qualified copy.
+Builds therefore no longer require the external source overrides described in
+the historical records below. See
+[the pinned source record](../../third_party/turnloop/VENDORED.md) for registry
+checksums, source hashes, licensing and the alpha.10 API comparison. The normal
+workspace lockfile selects these copies; no Tokio or publish-age exception is
+introduced. This is a committed local source repair, not a claim that an
+unmodified published Turnloop version supplies every required API.
+The [self-contained build receipt](../../docs/validation/wasi-self-contained-turnloop-20261026.json)
+records the locked dependency graph, test binaries, source identity checks and
+standalone Rust-host qualification for this selection.
+
+Native P3 engine integration, generated native TypeScript async calls,
+future/stream readers and producers, and supported concurrent HTTP layouts now
+have Linux qualification in [the component record](../../docs/WASI_COMPONENTS.md).
+Async Perry-authored guest adapters, broader host platforms and final packages
+remain open. Later source selection does not retroactively requalify earlier
+receipt snapshots.
+
+## Original provider port and qualification history
+
 This crate adapts WASI contracts and native helpers from Bytecode Alliance
 Wasmtime **48.0.5**, distributed under **Apache-2.0 WITH LLVM-exception**. The
 full license is in `LICENSE`. The source packages are `wasmtime-wasi` and

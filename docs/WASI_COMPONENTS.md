@@ -533,8 +533,9 @@ and `wasi:http/outgoing-handler`; HTTP requests require TCP plus the exact
 destination grants above, and DNS permission when the authority is a hostname.
 Perry's `perry-wasi` providers adapt the WASI 0.2.12 contracts from Wasmtime
 48.0.5 and use Turnloop for native I/O. The selected host dependency graph and
-workspace gate are Tokio-free. The required Turnloop repairs are validated with
-an external patch and must be released before this selection ships; see
+workspace gate are Tokio-free. The required Turnloop repairs now live in pinned
+repository sources selected by the root Cargo manifest; builds need no external
+source override. Published alpha.10 still lacks required provider APIs; see
 [provider provenance](../crates/perry-wasi/PROVENANCE.md). The selected provider
 passes 40 host tests, 181 provider tests and 26/25 driver tests in development
 and production panic-abort on Linux. Fresh matching compiler/runtime builds pass
@@ -542,6 +543,10 @@ all 28 native, nine command/library and 34 guest/composition acceptance phases,
 including eight live moving-GC cases. Both ordinary and moving network runs
 verify six UDP and three TCP payloads. See the
 [selection receipt](validation/wasi-turnloop-selected-20261023.json).
+The later [self-contained source receipt](validation/wasi-self-contained-turnloop-20261026.json)
+records normal locked builds with 277 provider, 189 engine, 26/25 I/O and 22 WIT
+tests, plus standalone Rust-host typed calls and direct composition without an
+external source override.
 Other platform and production-package qualification remain. Historical receipts
 below predate this provider replacement.
 The HTTP client uses bounded owned body channels, verified TLS and Turnloop's

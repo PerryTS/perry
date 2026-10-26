@@ -15,7 +15,7 @@ p3 = ["wasmtime/component-model-async"]
 perry-component-io = { path = "../perry-component-io" }
 turnloop.workspace = true
 turnloop-http.workspace = true
-turnloop-io = "0.1.0-alpha.9"
+turnloop-io = "=0.1.0-alpha.9"
 # This adapter receives the component driver's existing ExecutorHandle.
 turnloop-tls = { workspace = true, features = ["turnloop"] }
 futures-channel = "0.3"

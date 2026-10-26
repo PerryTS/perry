@@ -12,6 +12,11 @@ wasmtime = { version = "=48.0.7", default-features = false, features = ["anyhow"
 perry-wasi = { path = "../../../../crates/perry-wasi" }
 wac-graph = "=0.12.0"
 
+# This standalone workspace must select the same repaired providers as Perry.
+[patch.crates-io]
+turnloop = { path = "../../../../third_party/turnloop/turnloop" }
+turnloop-http = { path = "../../../../third_party/turnloop/turnloop-http" }
+
 [profile.release]
 opt-level = 1
 debug = 1

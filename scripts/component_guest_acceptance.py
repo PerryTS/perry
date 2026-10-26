@@ -17,6 +17,17 @@ import sys
 import time
 
 
+def prepare_rust_host_manifest(path, root):
+    """Retain the standalone fixture's source selection after copying it."""
+    manifest = path.read_text()
+    for relative in ["crates/perry-wasi", "third_party/turnloop/turnloop",
+                     "third_party/turnloop/turnloop-http"]:
+        original = json.dumps("../../../../" + relative)
+        assert manifest.count(original) == 1, f"Rust host path changed: {relative}"
+        manifest = manifest.replace(original, json.dumps(str(root / relative)))
+    path.write_text(manifest)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--perry", required=True, type=Path)
@@ -46,12 +57,7 @@ def main():
                     ignore=shutil.ignore_patterns("target"))
     # Keep the copied fixture executable from an arbitrary output directory.
     # Its in-tree manifest uses the same Turnloop provider as the native host.
-    host_manifest = work / "rust-host/Cargo.toml"
-    provider_path = '"../../../../crates/perry-wasi"'
-    manifest = host_manifest.read_text()
-    assert manifest.count(provider_path) == 1, "Rust host provider path changed"
-    host_manifest.write_text(manifest.replace(provider_path,
-        json.dumps(str(root / "crates/perry-wasi"))))
+    prepare_rust_host_manifest(work / "rust-host/Cargo.toml", root)
     shutil.copytree(fixture / "rust-logger", work / "rust-logger", dirs_exist_ok=True,
                     ignore=shutil.ignore_patterns("target"))
     sdk = args.wasi_sdk.resolve()
