@@ -7,7 +7,7 @@ use super::{ObjectHeader, ShapeRecord, TAG_HOLE};
 ///
 /// # Safety
 /// obj and r describe the same live receiver; no call here can collect.
-#[inline]
+#[inline(always)]
 pub(super) unsafe fn checked_slot(
     obj: *mut ObjectHeader,
     r: *const ShapeRecord,
