@@ -596,3 +596,18 @@ fn a_store_costs_its_readers_not_the_call_path() {
     let (w64, w128) = (w(64), w(128));
     assert!(w128 * 100 < w64 * 225, "work {w64} -> {w128}");
 }
+
+#[test]
+fn a_closed_class_another_unit_extends_publishes_what_its_constructions_pass() {
+    // DECISIONS 198 (scoreboard class_virtual): `Derived` (another unit)
+    // extends closed `Base`, so Base's contract carries its constructor's
+    // function contract and the stand-in constructor is that contract's
+    // stand-in. `new Base(3)` passes 3 to it; the closed construction's
+    // arguments are published from the first stub's parameters. Without
+    // the wiring they were published empty: Base's `scale` read "no
+    // value", stronger than the whole program's number.
+    let a = "class Base { scale: number; constructor(k: number) { this.scale = k; } } class Derived extends Base { }\nfunction kernel(n: number): number { const cs: Base[] = [new Base(3), new Derived(5)]; return cs[n & 1].scale; }\nconsole.log(kernel(10));\n";
+    let (u, _) = assert_not_stronger(&[("a", a)]);
+    let f = field(template(&u, "a.ts:Base"), "scale");
+    assert!(f.kind.prims & crate::model::prim::NUM != 0 || f.kind.top, "{f:?}\n{}", u.dump_text());
+}

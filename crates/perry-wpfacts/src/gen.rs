@@ -2323,6 +2323,19 @@ impl<'a> Gen<'a> {
             self.m.funcs[f as usize].ctor_of = Some(tm);
             self.m.funcs[ctor as usize].ctor_of = None;
             self.m.tmpls[tm as usize].ctor = Some(f);
+            // DECISIONS 198: what a `new` (or a subclass's `super`) passes
+            // the constructor still reaches the stub's parameters: a closed
+            // class's constructions publish them (`closed_ctors`) and hand
+            // over the markers among them (DECISIONS 152).
+            let (fp, sp) = (
+                self.m.funcs[f as usize].params.clone(),
+                self.m.funcs[ctor as usize].params.clone(),
+            );
+            for (&a, &b) in fp.iter().zip(sp.iter()) {
+                if a != NO_NODE && b != NO_NODE {
+                    self.m.edge(a, b);
+                }
+            }
             let stub = self.m.funcs[ctor as usize].token;
             if let Some(e) = self.stand_ins.get_mut(&c.display) {
                 e.2.retain(|&x| x != stub);
