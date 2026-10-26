@@ -670,6 +670,12 @@ impl Model {
                 Key::Any => self.reach_of(t),
             };
             self.mark_use(m, crate::model::MARK_ESCAPE);
+            // That method is an unknown function, as a plain call through a
+            // marker is (`call_tok`): the arguments escape, the result is
+            // unknown (DECISIONS 202).
+            if self.bind_done.insert((call, TOP, u32::MAX - 2)) {
+                self.unknown_callee_args(call, TOP, false);
+            }
             return;
         }
         // Own function-valued fields, then the prototype chain.

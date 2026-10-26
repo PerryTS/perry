@@ -666,3 +666,27 @@ fn a_layout_met_again_in_its_own_description_is_named_once() {
     assert!(inner_l.field_values.is_empty(), "{cut:?}");
     assert_ne!(format!("{cut:?}"), format!("{deep:?}"));
 }
+
+#[test]
+fn a_function_passed_to_a_method_of_a_parameters_field_escapes() {
+    // DECISIONS 202: `p.items` is a marker that is not the parameter's own,
+    // so `p.items.map(cb)` is no call the caller's unit runs (DECISIONS
+    // 144); its method is an unknown function, as a plain call through the
+    // marker is. Before, only the method was marked: `cb` never ran, the
+    // literal it makes was never born, and its facts were stronger than
+    // the whole program's, where `render` runs `List` and `map` runs `cb`
+    // (React `items.map(x => h(Item, { key: x }))`).
+    let d = "export function render(f: any): any { return f({ items: [1] }); }\n";
+    let m = r#"
+        import { render } from "./d";
+        const List = (p: any) => p.items.map((x: any) => (globalThis as any).zz({ key: x }));
+        console.log(render(List));
+        "#;
+    let (u, _) = assert_not_stronger(&[("d", d), ("main", m)]);
+    let t = u
+        .templates
+        .iter()
+        .find(|t| t.display.starts_with("main.ts:__AnonShape") && t.birth_keys.iter().any(|k| k == "key"))
+        .expect("the literal");
+    assert!(t.escape.is_some(), "{t:?}");
+}
