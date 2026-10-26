@@ -1,0 +1,1 @@
+Development builds provision matching Blaze and mbx prebuilts automatically. The development image keeps them outside checkout mounts, and Rust unit-test CI reuses mbx objects. Development retains full unwind tables because Blaze does not support compact synchronous tables. Production compilation retains its existing unwind configuration.
