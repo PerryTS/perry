@@ -4,11 +4,11 @@
 # Use with docker-compose: docker compose run --rm perry-dev bash
 #
 # This image includes:
-# - Rust stable toolchain with rustfmt and clippy
+# - Perry's pinned Rust toolchain with rustfmt and clippy
 # - All build dependencies
 # - Useful development tools
 
-FROM rust:1.75-bookworm
+FROM rust:1.99-bookworm
 
 WORKDIR /perry
 
@@ -22,8 +22,11 @@ RUN apt-get update && apt-get install -y \
     vim \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Rust components
-RUN rustup component add rustfmt clippy
+# Install the repository's compiler before a checkout is mounted over /perry.
+COPY rust-toolchain.toml /opt/perry-toolchain/rust-toolchain.toml
+RUN cd /opt/perry-toolchain \
+    && rustup show active-toolchain \
+    && rustup default "$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)"
 
 # Set up cargo cache volume mount points
 ENV CARGO_HOME=/root/.cargo
