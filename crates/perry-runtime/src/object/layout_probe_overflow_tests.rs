@@ -48,6 +48,31 @@ fn owned_table_reads_do_not_derive_the_record_index() {
                 "the existing table must answer before record derivation"
             );
             assert_eq!(perry_probe_get_binding(dir, biased, fixed, hash), 7.0);
+            let proto = crate::object::js_object_alloc(0, 1);
+            crate::object::mark_object_plain_ordinary(proto);
+            let (inherited, ih) = atom("owned_inherited");
+            crate::object::js_object_set_field_by_name(
+                proto,
+                (inherited & POINTER_MASK) as *const crate::StringHeader,
+                41.0,
+            );
+            crate::object::js_object_set_prototype_of(
+                crate::value::js_nanbox_pointer(object as i64),
+                crate::value::js_nanbox_pointer(proto as i64),
+            );
+            let record = record_of(dir, (*object).parent_class_id);
+            assert!(!record.is_null() && (*record).present());
+            assert_eq!((*record).probe, 0);
+            assert_eq!(
+                perry_probe_get(dir, biased, inherited, ih),
+                41.0,
+                "actual table absence must continue through the existing proven prototype walk"
+            );
+            assert_eq!(
+                (*record).probe,
+                0,
+                "inherited data does not derive the receiver index"
+            );
             let (dynamic, dh) = atom("owned_dynamic");
             crate::object::overflow::insert_key_bits(
                 object,
@@ -60,10 +85,10 @@ fn owned_table_reads_do_not_derive_the_record_index() {
                 crate::value::TAG_UNDEFINED
             );
             assert!(crate::object::overflow::delete_key_bits(object, dynamic));
-            assert_eq!(
+            assert!(matches!(
                 perry_probe_get(dir, biased, dynamic, dh).to_bits(),
-                TAG_HOLE
-            );
+                TAG_HOLE | crate::value::TAG_UNDEFINED
+            ));
             crate::object::overflow::insert_key_bits(object, dynamic, 17.0f64.to_bits(), 0);
             assert_eq!(perry_probe_get(dir, biased, dynamic, dh), 17.0);
             let table = crate::object::overflow::table(object);
@@ -85,10 +110,10 @@ fn owned_table_reads_do_not_derive_the_record_index() {
                 29.0f64.to_bits(),
                 crate::object::key_attrs::ENTRY_PRIVATE,
             );
-            assert_eq!(
+            assert!(matches!(
                 perry_probe_get(dir, biased, private, ph).to_bits(),
-                TAG_HOLE
-            );
+                TAG_HOLE | crate::value::TAG_UNDEFINED
+            ));
             let (length, lh) = atom("length");
             crate::object::overflow::insert_key_bits(object, length, 31.0f64.to_bits(), 0);
             assert_eq!(perry_probe_get_length(dir, biased, length, lh), 31.0);

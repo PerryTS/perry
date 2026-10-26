@@ -61,10 +61,10 @@ console.log("first-getter", firstGetter.first_getter,
   typeof Object.getOwnPropertyDescriptor(firstGetter, "first_getter").get);
 
 const inheritedReceiver: any = fresh(53);
-Object.setPrototypeOf(inheritedReceiver, { get inheritedValue() { return this.first + 2; } });
+Object.setPrototypeOf(inheritedReceiver, { prototypeData: 59, get inheritedValue() { return this.first + 2; } });
 Object.defineProperty(inheritedReceiver, "owned_undefined", { value: undefined });
 Object.defineProperty(inheritedReceiver, "owned_accessor", { get() { return this.first + 4; } });
-console.log("read-fallbacks", inheritedReceiver.inheritedValue, inheritedReceiver.owned_accessor,
+console.log("read-fallbacks", inheritedReceiver.prototypeData, inheritedReceiver.inheritedValue, inheritedReceiver.owned_accessor,
   inheritedReceiver.owned_undefined, inheritedReceiver.missing_value,
   Object.hasOwn(inheritedReceiver, "owned_undefined"));
 

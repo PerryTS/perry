@@ -989,8 +989,14 @@ unsafe fn probe_get_at<const ABSENT: bool, const SITE: bool, const LAZY_HASH: bo
             {
                 return hole();
             }
-            let value = overflow_get(obj, key_bits, site_key_hash::<LAZY_HASH>(key_bits, hash))
-                .unwrap_or_else(hole);
+            let hash = site_key_hash::<LAZY_HASH>(key_bits, hash);
+            let value = match overflow_get(obj, key_bits, hash) {
+                Some(value) => value,
+                // The actual table has proved own absence. Continue through
+                // the existing current-shape prototype walk, without deriving
+                // a redundant receiver-key index or learning an overflow memo.
+                None => inherited_get::<ABSENT>(dir, obj, r, key_bits, hash),
+            };
             return if ABSENT {
                 verify::answer(obj as usize, key_bits, value)
             } else {
