@@ -9,7 +9,7 @@
 
 use crate::gen::{variant_name, Fx, Gen};
 use crate::model::*;
-use perry_hir::Expr;
+use perry_hir::{Expr, Stmt};
 
 fn kids(e: &Expr) -> Vec<&Expr> {
     let mut v = Vec::new();
@@ -46,6 +46,50 @@ impl<'a> Gen<'a> {
         keys.iter()
             .all(|k| matches!(*k, "get" | "set" | "enumerable" | "configurable"))
             && keys.iter().any(|k| matches!(*k, "get" | "set"))
+    }
+
+    /// An accessor descriptor literal (`accessor_descriptor`): its class, its
+    /// constructor arguments, and which of them its own `get` and `set` are
+    /// (a literal shape's constructor stores parameter i under its key).
+    fn accessor_literal<'e>(
+        &self,
+        mi: u32,
+        d: &'e Expr,
+    ) -> Option<(&'e str, &'e [Expr], Option<usize>, Option<usize>)> {
+        let Expr::New {
+            class_name, args, ..
+        } = d
+        else {
+            return None;
+        };
+        if !self.accessor_descriptor(mi, d)
+            || args.iter().any(|a| matches!(a, Expr::LiteralChunks(_)))
+        {
+            return None;
+        }
+        let module = self.modules[mi as usize].1;
+        let ctor = module
+            .classes
+            .iter()
+            .find(|c| &c.name == class_name)?
+            .constructor
+            .as_ref()?;
+        let arg = |key: &str| {
+            ctor.body.iter().find_map(|s| match s {
+                Stmt::Expr(Expr::PropertySet {
+                    object,
+                    property,
+                    value,
+                }) if matches!(object.as_ref(), Expr::This) && property == key => {
+                    match value.as_ref() {
+                        Expr::LocalGet(p) => ctor.params.iter().position(|q| q.id == *p),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            })
+        };
+        Some((class_name, args, arg("get"), arg("set")))
     }
 
     fn prim_kids(&mut self, fx: &Fx, e: &Expr, result: u16, why: &str, proto: Protocol) -> NodeId {
@@ -704,13 +748,31 @@ impl<'a> Gen<'a> {
                         proto: Protocol::ToPrimitive,
                     },
                 );
-                let dn = self.expr(fx, d);
                 let key = match k.as_ref() {
                     Expr::String(s) => Some(s.clone()),
                     _ => None,
                 };
                 let accessor = self.accessor_descriptor(mi, d);
-                self.define_property(fx, on, key, dn, r, accessor);
+                match self.for_in_key_of(mi, k).filter(|_| key.is_none()) {
+                    Some(kp) => {
+                        // An accessor literal's own `get` / `set` is its
+                        // constructor argument: each run defines its own (the
+                        // literal's token, one per birth site, holds them all).
+                        let (dn, own) = match self.accessor_literal(mi, d) {
+                            Some((class_name, args, get, set)) => {
+                                let a = self.evaluate_all(fx, args);
+                                let own = [get, set].map(|i| i.and_then(|i| a.get(i).copied()));
+                                (self.new_named(fx, class_name, a, vec![]), own)
+                            }
+                            None => (self.expr(fx, d), [None, None]),
+                        };
+                        self.define_keyed(fx, on, kp, dn, r, accessor, own);
+                    }
+                    None => {
+                        let dn = self.expr(fx, d);
+                        self.define_property(fx, on, key, dn, r, accessor);
+                    }
+                }
                 on
             }
             Expr::ObjectDefineProperties(o, props) => {
