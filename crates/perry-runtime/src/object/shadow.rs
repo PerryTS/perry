@@ -307,7 +307,7 @@ pub(crate) unsafe fn publish_word(
     id: LayoutWord,
 ) -> LayoutWord {
     let word = carry_shadow(previous, id);
-    if word != id || previous == id.0 {
+    if word.0 != id.0 || previous == id.0 {
         return word;
     }
     let meta = (*obj).meta;
@@ -343,7 +343,7 @@ pub(crate) unsafe fn publish_key_add_word(
     key: *const crate::StringHeader,
 ) -> LayoutWord {
     let word = carry_shadow(previous, id);
-    if word != id || previous == id.0 || key.is_null() {
+    if word.0 != id.0 || previous == id.0 || key.is_null() {
         return word;
     }
     let meta = (*obj).meta;
