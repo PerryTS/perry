@@ -972,6 +972,32 @@ unsafe fn probe_get_at<const ABSENT: bool, const SITE: bool, const LAZY_HASH: bo
             site_key_hash::<LAZY_HASH>(key_bits, hash),
         );
     }
+    // The owned table is the complete own-key/attribute authority. Asking
+    // its existing index first avoids deriving a second record-key index.
+    if word & crate::object::overflow::SHADOW_BIT != 0
+        && (*r).present()
+        && (*r).object_kind() == super::ShapeObjectKind::Ordinary
+    {
+        let meta = (*obj).meta;
+        if !meta.is_null() && (*meta).overflow != 0 {
+            if (*obj).class_id == crate::object::NATIVE_MODULE_CLASS_ID
+                || (*meta).elements != 0
+                || (*meta).flags
+                    & (crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER
+                        | crate::object::OBJECT_META_FLAG_NATIVE_ALIAS)
+                    != 0
+            {
+                return hole();
+            }
+            let value = overflow_get(obj, key_bits, site_key_hash::<LAZY_HASH>(key_bits, hash))
+                .unwrap_or_else(hole);
+            return if ABSENT {
+                verify::answer(obj as usize, key_bits, value)
+            } else {
+                value
+            };
+        }
+    }
     let probe = (*r).probe;
     if probe & (PROBE_READY | PROBE_DECLINE | PROBE_CHECKED) != PROBE_READY {
         if SITE {
@@ -3507,3 +3533,7 @@ static KEEP_PERRY_PROBE_GET_BINDING: unsafe extern "C" fn(*const u8, i64, u64, u
 #[cfg(test)]
 #[path = "builtin_layout_probe_tests.rs"]
 mod builtin_layout_probe_tests;
+
+#[cfg(test)]
+#[path = "layout_probe_overflow_tests.rs"]
+mod overflow_tests;
