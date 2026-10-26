@@ -3969,3 +3969,41 @@ fn a_closed_local_called_only_in_its_unit_costs_its_own_stores() {
     let methods = module_work(&units_of(&[("a", m.as_str()), (bn, b.as_str())]), "a.ts");
     assert!(closed * 4 < methods * 3, "closed {closed} methods {methods}");
 }
+
+#[test]
+fn a_method_run_on_an_argument_marker_makes_one_context() {
+    // DECISIONS 201: `go` runs on the published method's receiver, an
+    // argument marker (DECISIONS 44); its arrow captures `this` in a closure
+    // context, storage that takes its own marker, and runs `go` again on it.
+    // A context per marker receiver made a new instance, context and marker
+    // per lap without end (ajv `compileAsync`: 3.8M instances, the unit over
+    // 24 GB). A marker is no object of this unit: its runs share one context.
+    let a = r#"
+        export class A {
+          refs: any = {};
+          compileAsync(s: any) {
+            return go.call(this, s);
+            function go(x: any): any {
+              const body = () => { check.call(this, x); return go.call(this, x); };
+              return body();
+            }
+            function check(e: any) { if (this.refs[e]) throw new Error("loaded"); }
+          }
+        }
+        "#;
+    let b = "import { A } from \"./a\";\nconsole.log(new A().compileAsync(1));\n";
+    let cfg = FactsConfig {
+        max_work: Some(5_000_000),
+        ..FactsConfig::default()
+    };
+    let pf = units_with(&[("a", a), ("b", b)], &cfg);
+    let us: Vec<_> = pf
+        .units
+        .iter()
+        .filter(|(q, _)| crate::decl_units::module_of(q) == "a.ts")
+        .collect();
+    assert!(!us.is_empty(), "no unit of a.ts");
+    for (q, s) in us {
+        assert!(!s.aborted && s.instances < 64, "{q}: aborted {} instances {}", s.aborted, s.instances);
+    }
+}

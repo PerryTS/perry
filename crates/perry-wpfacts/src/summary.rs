@@ -664,7 +664,15 @@ impl Model {
     /// a persistent structure births the same (site, origin) objects, so
     /// one instance per origin holds them all. What a method reads from
     /// its receiver stays per receiver (argument markers, DECISIONS 44).
+    /// An argument marker is no object of this unit and births nothing
+    /// here: its runs share the context of a call with no receiver
+    /// (DECISIONS 201). There is one per node, and a run's closure context
+    /// is storage that takes its own marker, so a context per marker made
+    /// a new run per run.
     pub(crate) fn recv_lay(&self, t: Tok) -> u32 {
+        if marker_top_bit(&self.arg_bits, t) {
+            return LAY_NONE;
+        }
         match self.toks[t as usize] {
             TokKind::Obj(..) if t <= LAY_MASK => LAY_TOK | self.maker_key(t, true),
             _ => self.layout_of(t),
