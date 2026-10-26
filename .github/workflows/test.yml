@@ -1656,9 +1656,12 @@ jobs:
             # lib test binary would link the runtime for zero tests).
             export CARGO_BUILD_JOBS=1
             # perry-runtime first, single-threaded (process-global state); it is
-            # a lib-only crate, so filter to --lib.
+            # a lib-only crate, so filter to --lib. Blaze currently crashes
+            # while running low-level unwind tests through Perry's naked ABI
+            # trampoline. Keep mbx and the pinned nightly, but use Cargo for
+            # this full runtime harness until Blaze can execute those frames.
             if printf '%s\n' "$scope" | grep -qx 'perry-runtime'; then
-              RUST_TEST_THREADS=1 python3 scripts/runtime_test_batches.py --lib
+              MBX_BLAZE=0 RUST_TEST_THREADS=1 python3 scripts/runtime_test_batches.py --lib
             fi
             rest="$(printf '%s\n' "$scope" | grep -vx 'perry-runtime' \
               | python3 scripts/ci_test_scope.py --with-tests || true)"
