@@ -1363,16 +1363,25 @@ fn ensure_secure_context_prototype() {
 }
 
 pub(crate) fn attach_secure_context_constructor_prototype(constructor_value: f64) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let constructor = scope.root_nanbox_f64(constructor_value);
     ensure_secure_context_prototype();
     let proto = crate::object::class_prototype_object(CLASS_ID_TLS_SECURE_CONTEXT);
     if proto.is_null() {
         return;
     }
-    crate::object::js_object_set_field(proto, 0, JSValue::from_bits(constructor_value.to_bits()));
+    let proto = scope.root_raw_mut_ptr(proto);
+    proto.with_mut_ptr(|proto| {
+        crate::object::js_object_set_field(
+            proto,
+            0,
+            JSValue::from_bits(constructor.get_nanbox_f64().to_bits()),
+        )
+    });
     crate::closure::closure_set_dynamic_prop(
-        (constructor_value.to_bits() & crate::value::POINTER_MASK) as usize,
+        (constructor.get_nanbox_f64().to_bits() & crate::value::POINTER_MASK) as usize,
         "prototype",
-        ptr_value(proto),
+        proto.with_mut_ptr(|proto: *mut ObjectHeader| ptr_value(proto)),
     );
 }
 
@@ -1383,35 +1392,59 @@ pub extern "C" fn js_tls_create_secure_context(options: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_tls_secure_context_new(options: f64) -> f64 {
-    validate_secure_context_options(options);
-    let constructor = crate::object::bound_native_callable_export_value("tls", "SecureContext");
-    attach_secure_context_constructor_prototype(constructor);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let options = scope.root_nanbox_f64(options);
+    validate_secure_context_options(options.get_nanbox_f64());
+    let constructor = scope.root_nanbox_f64(crate::object::bound_native_callable_export_value(
+        "tls",
+        "SecureContext",
+    ));
+    attach_secure_context_constructor_prototype(constructor.get_nanbox_f64());
+    let prototype = crate::object::class_prototype_object(CLASS_ID_TLS_SECURE_CONTEXT);
+    let prototype = (!prototype.is_null()).then(|| scope.root_raw_mut_ptr(prototype));
     let keys = b"context\0";
-    let obj = crate::object::js_object_alloc_class_with_keys(
+    let obj = scope.root_raw_mut_ptr(crate::object::js_object_alloc_class_with_keys(
         CLASS_ID_TLS_SECURE_CONTEXT,
         0,
         1,
         keys.as_ptr(),
         keys.len() as u32,
-    );
-    let context = crate::object::js_object_alloc(0, 0);
-    crate::object::js_object_set_field(obj, 0, JSValue::from_bits(ptr_value(context).to_bits()));
-    if let Some(options_obj) = object_ptr(options) {
-        for name in [
-            "ca",
-            "cert",
-            "key",
-            "minVersion",
-            "maxVersion",
-            "ALPNProtocols",
-        ] {
-            let value = get_field(options_obj, name);
-            if !JSValue::from_bits(value.to_bits()).is_undefined() {
-                crate::object::js_object_set_field_by_name(obj, key(name), value);
-            }
+    ));
+    let context = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
+    obj.with_mut_ptr(|obj| {
+        context.with_mut_ptr(|context: *mut ObjectHeader| {
+            crate::object::js_object_set_field(
+                obj,
+                0,
+                JSValue::from_bits(ptr_value(context).to_bits()),
+            )
+        })
+    });
+    // Native instances own an explicit link, not a class-id role inference.
+    // The existing setter records and traces this edge through collection.
+    if let Some(prototype) = prototype {
+        crate::object::js_object_set_prototype_of(
+            obj.with_mut_ptr(|obj: *mut ObjectHeader| ptr_value(obj)),
+            prototype.with_mut_ptr(|prototype: *mut ObjectHeader| ptr_value(prototype)),
+        );
+    }
+    for name in [
+        "ca",
+        "cert",
+        "key",
+        "minVersion",
+        "maxVersion",
+        "ALPNProtocols",
+    ] {
+        let Some(options_obj) = object_ptr(options.get_nanbox_f64()) else {
+            break;
+        };
+        let value = scope.root_nanbox_f64(get_field(options_obj, name));
+        if !JSValue::from_bits(value.get_nanbox_f64().to_bits()).is_undefined() {
+            unsafe { set_rooted_object_field(&obj, name, value.get_nanbox_f64()) };
         }
     }
-    ptr_value(obj)
+    obj.with_mut_ptr(|obj: *mut ObjectHeader| ptr_value(obj))
 }
 
 pub(crate) unsafe fn construct_registered_tls_class(
