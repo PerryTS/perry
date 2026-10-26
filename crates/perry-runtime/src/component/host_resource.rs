@@ -257,6 +257,21 @@ extern "C" fn dispose(
         }
         token = (id as u32).to_string();
         let context = context::get(frame.owner.get_nanbox_f64());
+        if persistent::enabled(frame.owner.get_nanbox_f64()) {
+            let request = serde_json::json!({"op":"resource-drop","value":{
+                "$hostResource":token,"owned":true,"new":false,
+                "type":string(get(record, payload::TYPE)),"generation":get(record,payload::GENERATION) as u32
+            }});
+            let result = crate::exception::catch_js_throw(|| {
+                persistent::submit::unit(frame.owner.get_nanbox_f64(), &request)
+            });
+            drop(request);
+            if result.is_ok() || !unsafe { (*context).alive } {
+                set(self::fields(resource.get_nanbox_f64()), STATE, DISPOSED);
+                cleanup::unregister(frame.owner.get_nanbox_f64(), resource.get_nanbox_f64());
+            }
+            return finish(result);
+        }
         let mut buffer = Buffer::default();
         let status = unsafe {
             (host::ops().perry_component_host_resource_drop)(

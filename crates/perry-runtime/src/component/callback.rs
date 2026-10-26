@@ -6,7 +6,7 @@ mod batch;
 pub(super) mod saved;
 #[cfg(test)]
 mod saved_tests;
-pub(super) use batch::FrameBatch;
+pub(super) use batch::{FrameBatch, InvocationFrame};
 
 pub(super) enum FrameValue<'a> {
     Root(RuntimeHandle<'a>),
@@ -57,7 +57,7 @@ impl<'a> Frame<'a> {
     }
 }
 
-fn reply(output: *mut Buffer, value: Vec<u8>) {
+pub(super) fn reply(output: *mut Buffer, value: Vec<u8>) {
     let value = value.into_boxed_slice();
     unsafe {
         *output = Buffer {
@@ -86,7 +86,30 @@ pub(super) unsafe extern "C" fn invoke(
     args_len: usize,
     output: *mut Buffer,
 ) -> i32 {
-    let frame = &*(token as usize as *const Frame<'_>);
+    invoke_for(
+        &*(token as usize as *const Frame<'_>),
+        None,
+        interface,
+        interface_len,
+        function,
+        function_len,
+        args,
+        args_len,
+        output,
+    )
+}
+
+pub(super) unsafe fn invoke_for(
+    frame: &Frame<'_>,
+    origin: Option<u64>,
+    interface: *const u8,
+    interface_len: usize,
+    function: *const u8,
+    function_len: usize,
+    args: *const u8,
+    args_len: usize,
+    output: *mut Buffer,
+) -> i32 {
     let scope = RuntimeHandleScope::new();
     let lifetime = scope.root_nanbox_f64(undefined());
     let mut parsed_args: Vec<Value> = Vec::new();
@@ -150,17 +173,32 @@ pub(super) unsafe extern "C" fn invoke(
             values.len(),
         ));
         if let Some(request) = request.as_deref() {
-            super::asynchronous::imports::register(
-                frame.owner.get_nanbox_f64(),
-                request,
-                result.get_nanbox_f64(),
-                lifetime.get_nanbox_f64(),
-                &signature["result"],
-            );
+            if let Some(origin) = origin {
+                super::persistent::imports::register(
+                    frame.owner.get_nanbox_f64(),
+                    origin,
+                    request,
+                    result.get_nanbox_f64(),
+                    lifetime.get_nanbox_f64(),
+                    &signature["result"],
+                );
+            } else {
+                super::asynchronous::imports::register(
+                    frame.owner.get_nanbox_f64(),
+                    request,
+                    result.get_nanbox_f64(),
+                    lifetime.get_nanbox_f64(),
+                    &signature["result"],
+                );
+            }
             pending = true;
             Vec::new()
         } else {
-            let retained = scope.root_nanbox_f64(value::retention::new_plan());
+            let retained = scope.root_nanbox_f64(if let Some(origin) = origin {
+                super::persistent::imports::new_response_plan(frame.owner.get_nanbox_f64(), origin)
+            } else {
+                value::retention::new_plan()
+            });
             serde_json::to_vec(&value::typed::result(
                 result.get_nanbox_f64(),
                 &signature["result"],
@@ -201,7 +239,22 @@ pub(super) unsafe extern "C" fn resource_invoke(
     event_len: usize,
     output: *mut Buffer,
 ) -> i32 {
-    let frame = &*(token as usize as *const Frame<'_>);
+    resource_for(
+        &*(token as usize as *const Frame<'_>),
+        None,
+        event,
+        event_len,
+        output,
+    )
+}
+pub(super) unsafe fn resource_for(
+    frame: &Frame<'_>,
+    origin: Option<u64>,
+    event: *const u8,
+    event_len: usize,
+    output: *mut Buffer,
+) -> i32 {
+    let mut prepared = Vec::new();
     let mut parsed = Value::Null;
     let outcome = crate::exception::catch_js_throw(|| {
         parsed = serde_json::from_slice(std::slice::from_raw_parts(event, event_len))
@@ -210,11 +263,25 @@ pub(super) unsafe extern "C" fn resource_invoke(
             let context = context::get(frame.owner.get_nanbox_f64());
             serde_json::to_vec(&std::mem::take(&mut (*context).pending_resource_drops)).unwrap()
         } else {
+            if let Some(origin) = origin {
+                prepared = super::persistent::imports::prepare_commits(
+                    frame.owner.get_nanbox_f64(),
+                    origin,
+                    &parsed,
+                );
+            }
             super::host_resource::payload::event(frame.owner.get_nanbox_f64(), &parsed);
+            if let Some(origin) = origin {
+                super::persistent::imports::release_commits(
+                    frame.owner.get_nanbox_f64(),
+                    origin,
+                    &prepared,
+                );
+            }
             b"[]".to_vec()
         }
     });
-    drop(parsed);
+    drop((parsed, prepared));
     match outcome {
         Ok(bytes) => {
             reply(output, bytes);

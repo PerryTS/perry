@@ -58,32 +58,27 @@ pub(super) fn retain(plan: f64, wrapper: f64, identity: &Value) -> Result<(), f6
     })
 }
 
-#[cfg(test)]
 pub(in crate::component) fn len(plan: f64) -> u32 {
     crate::array::js_array_length(super::super::array_pointer(list(plan)).unwrap())
 }
 
-#[cfg(test)]
 fn pair(plan: f64, index: u32) -> *mut crate::array::ArrayHeader {
     let entry =
         crate::array::js_array_get_f64(super::super::array_pointer(list(plan)).unwrap(), index);
     super::super::array_pointer(entry).expect("private retention pair")
 }
 
-#[cfg(test)]
 pub(in crate::component) fn identity(plan: f64, index: u32) -> Value {
     let encoded = crate::array::js_array_get_f64(pair(plan, index), 1);
     serde_json::from_str(&string(encoded)).expect("saved native resource identity")
 }
 
-#[cfg(test)]
 pub(in crate::component) fn release(plan: f64, index: u32) {
     crate::array::js_array_set_f64(pair(plan, index), 0, super::super::undefined());
 }
 
 /// Prepare before host ownership validation; release these slots only after
 /// that validation succeeds. Matching never reads the wrapper or calls JS.
-#[cfg(test)]
 pub(in crate::component) fn transferred(plan: f64, event: &Value) -> Vec<u32> {
     if event["kind"] != "lower" {
         return Vec::new();
@@ -114,7 +109,6 @@ pub(in crate::component) fn transferred(plan: f64, event: &Value) -> Vec<u32> {
     slots
 }
 
-#[cfg(test)]
 fn contains(items: &Value, token: &str) -> bool {
     items
         .as_array()
@@ -123,3 +117,11 @@ fn contains(items: &Value, token: &str) -> bool {
 
 #[cfg(test)]
 mod tests;
+
+/// No allocation or application access occurs while inspecting these slots.
+pub(in crate::component) fn is_empty(plan: f64) -> bool {
+    (0..len(plan)).all(|index| {
+        JSValue::from_bits(crate::array::js_array_get_f64(pair(plan, index), 0).to_bits())
+            .is_undefined()
+    })
+}

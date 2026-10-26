@@ -172,32 +172,43 @@ Accepted soft cancellation and close commands still execute. Explicit
 when its embedding destructor fails. Native `host_drop` does not invoke embedding
 callbacks. Legacy execution, resource and HTTP entries reject persistent handles;
 typed resource cleanup now has driver commands; HTTP has not migrated. The
-TypeScript runtime continues using the legacy entry points. This C transport
-requires ABI 9 and does not yet implement traced TypeScript frames, ALS routing,
-future/stream wrappers or their GC cleanup. See the
+TypeScript runtime now uses the persistent driver for standalone component
+worlds, including worlds with synchronous functions. Incoming HTTP worlds still
+use their existing entry points. The current boundary requires matching ABI 10
+runtime and engine archives. The earlier C-only qualification used ABI 9; see the
 [persistent C driver receipt](validation/wasi-persistent-driver-ffi-20261025.json).
+Future/stream wrappers and their GC cleanup remain unfinished. The
+[public runtime receipt](validation/wasi-persistent-runtime-20261026.json)
+records 66 component and 12 async-hooks tests in development and production,
+plus compiled production hosts proving reverse completion, original rejection
+identity and collector cancellation with verified moving GC. Command and plain/TLS
+HTTP regressions also pass with protected from-space pages.
 
 The runtime can execute a saved Promise context after the public Promise is
 collected. Captured ALS snapshots and observed async resource-state cells need
 separate traced edges; opaque execution IDs alone do not keep metadata alive.
 The [captured-context checks](validation/wasi-captured-context-20261025.json)
 cover actual moving collection, success, throw and caller-context restoration.
-This primitive does not yet switch TypeScript calls to the persistent driver.
+The persistent runtime uses this primitive for origin-specific callbacks.
 
 The existing async path now uses poll-local batches of stable callback frames.
 Frames created during another callback keep their values in private traced array
 rows: appending an outer-scope runtime handle during a nested callback would
 lose that root when the nested scope returns. Frames preserve separate captured
 contexts and first exceptions, and cleanup can enter saved ALS without retrying
-a failing before hook. These batches prepare origin routing; persistent
-TypeScript execution still needs integration.
+a failing before hook. The persistent runtime reconstructs these frames from
+managed invocation records for each poll.
 
 Pending operations now own saved context records between polls. The records
 trace snapshots and observed metadata; native fields contain public serial IDs.
 A saved record can reconstruct a fresh poll frame after earlier frames and
 the public Promise have been collected. This separates context retention
-from public-result retention; the persistent driver must still manage per-origin
-records and consume its ownership receipts.
+from public-result retention. Persistent runtime records own each invocation's
+Promise, argument roots, saved context, first error and uncommitted import
+returns. All native-ready results are staged before settlement hooks run, so
+nested disposal cannot erase another completed result. Calls admitted by a
+settlement hook survive the older retention snapshot. Idle drivers release
+their native owner pin; active background work keeps only its required records.
 
 Construct Rust hosts with `Host::new_for_driver` before `into_driver` to
 prepare resource disposal. The C driver constructor selects this path. It
@@ -240,8 +251,9 @@ This applies to JavaScript-backed host resources and provider resources; the
 native C tests forward an actual WASI network resource. Borrow aliases use the
 maintained async cleanup API without retaining a Store borrow across polls.
 The runtime codec keeps their native capability and expiration lifetime in
-private GC-traced state. The TypeScript persistent driver migration is still
-pending; these codec checks do not qualify that public call path.
+private GC-traced state. The persistent runtime now routes these descriptors
+through its queued call boundary; cross-language and platform qualification
+remain separate requirements.
 
 Composition uses the pinned `wac-graph` 0.12.0 source with a local nominal
 resource alias fix. Freestanding functions can borrow or own imported resources,
@@ -265,7 +277,11 @@ not prove ownership committed: the import may still be waiting for accepted
 borrowers. The native test returns an owned WASI resource while forwarding a
 borrowed one and verifies the commit follows the borrower under the original
 invocation. See the [ownership receipt qualification](validation/wasi-ownership-receipts-20261025.json).
-The persistent TypeScript runtime must still consume these notifications.
+The persistent TypeScript runtime consumes these notifications only after
+validating the host ownership transaction. Saved identities match every retained
+alias without re-encoding a wrapper after transfer. Channel acknowledgement
+releases the pending import Promise; the response root plan remains until the
+actual native ownership receipt.
 
 For readable future/stream wrappers, `client.collect_async_value(&value)` and
 the C `collect` command ignore descriptors already consumed, closed or transferred.
@@ -339,7 +355,7 @@ lift/lower, future and stream features required by the
 `scripts/component_async_acceptance.py` exercises a compiled TypeScript host
 against a canonical async component, including a suspended JS import, Store
 reuse, original rejection identity, cancellation, ALS and explicit collection.
-The native host/runtime boundary uses ABI 9; rebuild the matching compiler,
+The native host/runtime boundary uses ABI 10; rebuild the matching compiler,
 runtime and optional engine archives together. Other host platforms and final
 distribution packages still require qualification.
 
@@ -398,7 +414,7 @@ records the separate development, production panic-abort and moving-GC checks.
 This qualification covers Linux; other native platforms and final packages
 remain open.
 
-The combined component-host boundary uses ABI 9; compiler, runtime and
+The combined component-host boundary uses ABI 10; compiler, runtime and
 optional host archive must be built together. The separate command feature
 was qualified using ABI 3; the combined Linux qualification is recorded below.
 This API is native-only. Unit fixtures and
@@ -524,7 +540,7 @@ component tests, 16 WIT tests and strict TypeScript checking. Actual compiled
 TypeScript hosts exercise plain HTTP and verified TLS in ordinary and moving-GC
 modes, including 3 MiB binary bodies and trailers, two suspended imports per
 successful request, explicit error reuse, original rejection identity, traps and
-cancellation. That receipt covers ABI 8; the current boundary is ABI 9. Rebuild the compiler, runtime and optional
+cancellation. That receipt covers ABI 8; the current boundary is ABI 10. Rebuild the compiler, runtime and optional
 engine together. Matching archives also pass the full 28 library, nine command
 and eight HTTP P2 regression phases. Other platforms, released Turnloop
 dependencies and final distribution packages remain open.

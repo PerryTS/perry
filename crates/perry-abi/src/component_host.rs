@@ -2,7 +2,8 @@
 //! Byte buffers are freed by the allocator that produced them. Neither WIT
 //! values nor callbacks expose Perry heap addresses to component guests.
 // Combined command, host-resource, HTTP reactor and deferred-cleanup operations.
-pub const ABI_VERSION: u32 = 9;
+// ABI 10 requires persistent-driver ownership receipts at the runtime boundary.
+pub const ABI_VERSION: u32 = 10;
 
 pub const OK: i32 = 0;
 pub const ERROR: i32 = 1;

@@ -99,6 +99,9 @@ extern "C" fn collected(
 }
 
 pub(super) fn drain(owner: f64) {
+    if persistent::enabled(owner) {
+        return persistent::collections::drain_collections(owner);
+    }
     let scope = RuntimeHandleScope::new();
     let owner = scope.root_nanbox_f64(owner);
     let first_error = scope.root_nanbox_f64(undefined());

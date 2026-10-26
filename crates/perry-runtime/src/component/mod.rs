@@ -10,6 +10,7 @@ mod guest;
 mod host;
 mod host_resource;
 mod http;
+mod persistent;
 mod resource;
 mod value;
 
@@ -155,6 +156,18 @@ pub extern "C" fn js_component_load(bytes: f64, contract: f64, imports: f64, opt
             crate::buffer::bytes::bytes(bytes.get_nanbox_f64(), no_gc).map(<[u8]>::to_vec)
         })
         .unwrap_or_else(|_| fail("Expected component bytes"));
+        let incoming_http = world["exports"].as_array().is_some_and(|items| {
+            items.iter().any(|item| {
+                item["name"].as_str().is_some_and(|name| {
+                    name.starts_with("wasi:http/incoming-handler@")
+                        || name.starts_with("wasi:http/handler@")
+                })
+            })
+        });
+        if !incoming_http {
+            persistent::construct(owner.get_nanbox_f64(), &wasm, contract.as_bytes(), &options);
+            return owner.get_nanbox_f64();
+        }
         let mut buffer = Buffer::default();
         unsafe {
             let pointer = (ops.perry_component_host_new)(
@@ -222,6 +235,22 @@ pub extern "C" fn js_component_call(owner: f64, interface: f64, function: f64, a
         let context = context::get(owner.get_nanbox_f64());
         if unsafe { (*context).host.is_null() } {
             fail("Component is not initialized");
+        }
+        if persistent::enabled(owner.get_nanbox_f64()) {
+            let asynchronous = context::signature(
+                unsafe { &(*context).world },
+                "exports",
+                &interface,
+                &function,
+            )["async"]
+                == true;
+            return persistent::call(
+                owner.get_nanbox_f64(),
+                &interface,
+                &function,
+                args_input.get_nanbox_f64(),
+                asynchronous,
+            );
         }
         if context::signature(
             unsafe { &(*context).world },
@@ -292,6 +321,9 @@ pub extern "C" fn js_component_call(owner: f64, interface: f64, function: f64, a
 
 #[no_mangle]
 pub extern "C" fn js_component_dispose(owner: f64) -> f64 {
+    if persistent::enabled(owner) {
+        return persistent::dispose(owner);
+    }
     let scope = RuntimeHandleScope::new();
     let frame = callback::Frame::new(&scope, owner);
     let mut error = Vec::new();

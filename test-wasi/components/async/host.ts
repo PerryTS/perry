@@ -54,9 +54,6 @@ async function main(): Promise<void> {
     const item = reusable.item();
     const pending = reusable.exports.run(7n, item);
     check(pending instanceof Promise, "async exports return Promises");
-    let overlap = false;
-    try { reusable.exports.run(7n, item); } catch (_) { overlap = true; }
-    check(overlap, "one pending invocation per component");
     gc();
     check(await pending === 100n, "canonical async result");
     check(context.getStore() === expected, "caller context after await");

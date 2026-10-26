@@ -43,3 +43,20 @@ pub(in crate::component) fn capture(promise: f64) -> (f64, AsyncResourceIds) {
         },
     )
 }
+
+/// Initialization and synchronous submissions have a snapshot without a public
+/// Promise. Origin zero preserves the execution scope of the embedding caller.
+pub(in crate::component) fn current() -> f64 {
+    let scope = RuntimeHandleScope::new();
+    let snapshot = scope.root_raw_mut_ptr(als::alloc_snapshot_holder(als::capture_context()));
+    let record = scope.root_raw_mut_ptr(crate::array::js_array_alloc_with_length(2));
+    crate::array::js_array_set_f64(
+        record.get_raw_mut_ptr(),
+        0,
+        crate::value::js_nanbox_pointer(
+            snapshot.get_raw_mut_ptr::<als::AsyncSnapshotHolder>() as i64
+        ),
+    );
+    crate::array::js_array_set_f64(record.get_raw_mut_ptr(), 1, undefined());
+    crate::value::js_nanbox_pointer(record.get_raw_mut_ptr::<crate::array::ArrayHeader>() as i64)
+}

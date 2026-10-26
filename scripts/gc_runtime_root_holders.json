@@ -2968,6 +2968,18 @@
       "name": "PUMPING",
       "verdict": "not_a_gc_pointer",
       "why": "Boolean reentrancy guard only. Prevents callbacks from recursively entering an active component Store through the auxiliary event pump."
+    },
+    {
+      "file": "crates/perry-runtime/src/component/persistent/poll.rs",
+      "name": "DRIVERS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Stable native-payload OwnerLink tokens, each retained with link_ref before queue publication. Native payload cells are pinned and trace/rewrite the ordinary owner back-edge, component, invocation rows and import Promise records. Poll completion unrefs each cell; idle drivers are unpinned, and agent retirement clears tokens before arena teardown. The queue stores no movable JS value or callback frame. Public runtime acceptance tests exercise moving GC and callbacks after the public Promise is collected."
+    },
+    {
+      "file": "crates/perry-runtime/src/component/persistent/poll.rs",
+      "name": "RUNNING",
+      "verdict": "not_a_gc_pointer",
+      "why": "Boolean guard preventing recursive entry into the persistent driver auxiliary pump; never stores an address or JavaScript value."
     }
   ],
   "_FRONTIER_README": "Identity-pinned debt ratchet over new perry-ui* candidates and otherwise-unclassified core raw/Perry TLS declarations (see the census docstring, “The identity-pinned frontier”). A new uncovered holder fails until it is scanned, receives a researched holders verdict, or is deliberately pinned as debt. Moving a researched false positive to holders graduates it from this list. A fixed or classified holder makes its old frontier pin stale, so the receipt must be deleted.",

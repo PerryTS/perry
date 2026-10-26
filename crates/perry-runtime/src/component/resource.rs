@@ -165,6 +165,19 @@ extern "C" fn dispose(
     let mut error = Vec::new();
     let result = crate::exception::catch_js_throw(|| {
         token = string(load(resource.get_nanbox_f64(), TOKEN));
+        if persistent::enabled(frame.owner.get_nanbox_f64()) {
+            let request =
+                serde_json::json!({"op":"resource-drop","value":{"$resource":token,"owned":true}});
+            let result = crate::exception::catch_js_throw(|| {
+                persistent::submit::unit(frame.owner.get_nanbox_f64(), &request)
+            });
+            drop(request);
+            if result.is_ok() || !unsafe { (*context).alive } {
+                store(resource.get_nanbox_f64(), STATE, 2.0);
+                cleanup::unregister(frame.owner.get_nanbox_f64(), resource.get_nanbox_f64());
+            }
+            return finish(result);
+        }
         let mut buffer = Buffer::default();
         let status = unsafe {
             (host::ops().perry_component_host_resource_drop)(
