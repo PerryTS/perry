@@ -19,7 +19,7 @@ WASI versions here mean 0.1 (Preview 1), 0.2 (Preview 2), and 0.3
 | Path | Current contract | Main gap |
 | --- | --- | --- |
 | Browser `wasm` / `web` output | Core Wasm with Perry's JavaScript bridge | Not standalone WASI; raw Wasm output omits generated async JavaScript |
-| WASI 0.1 output | No supported compiler target | Defer until a concrete P1-only deployment requires it |
+| WASI 0.1 output | `--target wasip1` core module, in progress ([#13259](https://github.com/PerryTS/perry/issues/13259)); not yet available. Contract in [WASI_P1_OUTPUT.md](WASI_P1_OUTPUT.md) | Everything lands in steps; opt-in `perry_net` and `perry_host` extensions need an embedder that implements them |
 | WASI 0.1 hosting in native Perry | Operational `node:wasi` over wasmi and wasi-common; all 46 P1 imports dispatch to the provider; Linux qualified | Other host platforms, socket grants, scheduling and execution quotas; see [P1 limits](WASI_P1_HOSTING.md#limits) |
 | WASI 0.2 output | Command components on Linux/macOS/Windows; synchronous library components and resource adapters qualified on Linux | Deferred resource cleanup, HTTP and broader component qualification |
 | WASI 0.2 component hosting | Optional native `perry/component` host with typed WIT values, guest-defined resources and opt-in P2 WASI providers | Host-defined resources, HTTP providers and broader platform qualification |
@@ -30,6 +30,11 @@ not load Wasm components. A command component with a `wasi:cli/run` export
 also does not provide arbitrary typed plugin exports. See
 [the WASI roadmap](WASI_ROADMAP.md) for the proposed hosting and reusable
 component contracts, their priorities, and acceptance criteria.
+
+The planned `--target wasip1` is a sibling output for hosts that take core
+modules; its profile and host contracts are in
+[WASI_P1_OUTPUT.md](WASI_P1_OUTPUT.md). Everything on this page describes
+`--target wasi`.
 
 WASI components run through a host such as Wasmtime. The current repair was
 tested on Linux x86_64 with Wasmtime 48.0.0, wasi-sdk 34,
