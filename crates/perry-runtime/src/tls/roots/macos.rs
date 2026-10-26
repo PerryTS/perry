@@ -343,6 +343,13 @@ impl Api {
     }
 
     unsafe fn inventory(&self) -> Option<Vec<Vec<u8>>> {
+        self.inventory_with_clock(|| SystemTime::now().duration_since(UNIX_EPOCH).ok())
+    }
+
+    unsafe fn inventory_with_clock(
+        &self,
+        now: impl FnOnce() -> Option<std::time::Duration>,
+    ) -> Option<Vec<Vec<u8>>> {
         let keys = [self.class_key, self.limit_key, self.return_ref];
         let values = [self.certificate_class, self.limit_all, self.boolean_true];
         let query = self.owned((self.dictionary_create)(
@@ -370,7 +377,8 @@ impl Api {
         if count < 0 {
             return None;
         }
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).ok()?;
+        // Sample only after the query/count checks, as in the production path.
+        let now = now()?;
         let mut output = Vec::new();
         let mut seen = HashSet::new();
         for index in 0..count {
