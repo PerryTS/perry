@@ -196,6 +196,9 @@ pub struct ProgramFacts {
     /// reads (`Gen::seed_cell`).
     pub(crate) cells_out: Vec<(String, units::ValueContract)>,
     pub(crate) cells_read: Vec<String>,
+    /// DECISIONS 204: the builtin prototypes and keys it stores into, by
+    /// name (`None`: a computed key; `Model::proto_writes`).
+    pub(crate) proto_writes_out: Vec<(String, Option<String>)>,
     /// The layouts it named by display (`Gen::other_layout`, DECISIONS 103).
     pub(crate) layouts_read: Vec<(String, u64)>,
     /// Its own contract functions' contracts, by name (DECISIONS 106): a
@@ -2525,6 +2528,26 @@ pub(crate) fn compute_in<'a>(
             cells_out.push((format!("{key}#named"), vc));
         }
     }
+    // DECISIONS 204: its stores into builtin prototypes, by name. Over the
+    // bound it claims nothing: any key of `Object.prototype`, as unknown
+    // code may write.
+    let mut proto_writes_out: Vec<(String, Option<String>)> = g
+        .m
+        .proto_writes
+        .iter()
+        .map(|&(t, k)| {
+            let p = match &g.m.toks[t as usize] {
+                model::TokKind::NativeProto(n) => format!("native:{n}"),
+                _ => "Object.prototype".to_string(),
+            };
+            (p, k.map(|a| g.m.atoms[a as usize].clone()))
+        })
+        .collect();
+    if g.m.aborted {
+        proto_writes_out.push(("Object.prototype".to_string(), None));
+    }
+    proto_writes_out.sort();
+    proto_writes_out.dedup();
     // What it writes into other units' module-scope bindings (`Gen::local_write`):
     // per binding (its unit's path, its name) a value contract, as of a
     // published binding; ⊤ for one no contract describes, and for every
@@ -2858,6 +2881,7 @@ pub(crate) fn compute_in<'a>(
         stores_out,
         cells_out,
         cells_read: std::mem::take(&mut g.cells_read),
+        proto_writes_out,
         layouts_read: std::mem::take(&mut g.layouts_read),
         own_fns_out,
         fns_read: std::mem::take(&mut g.fns_read),

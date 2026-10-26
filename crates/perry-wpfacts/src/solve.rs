@@ -1762,6 +1762,17 @@ impl Model {
         }
         self.note_fnproto_write(t, Some(key), "store");
         builtins::note_native_write(self, t, Some(key), "store");
+        // DECISIONS 204: the runtime shares the builtin prototypes between
+        // units as it shares the global object: a store into one is
+        // published, and the other units read the key as unknown.
+        if matches!(self.toks[t as usize], TokKind::ObjectProto | TokKind::NativeProto(_)) {
+            let star = self.atom(crate::STAR_KEY);
+            let k = match key {
+                Key::Named(a) if a != star => Some(a),
+                _ => None,
+            };
+            self.proto_writes.insert((t, k));
+        }
         if matches!(key, Key::Any)
             || matches!(key, Key::Named(a) if self.atoms[a as usize] == "__proto__")
         {

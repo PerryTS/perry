@@ -716,3 +716,27 @@ fn a_stand_in_reached_through_a_value_no_contract_describes_is_reported() {
         .expect("objectUtil");
     assert!(t.escape.is_some(), "{t:?}");
 }
+
+#[test]
+fn a_key_another_unit_stores_into_a_builtin_prototype_is_unknown_here() {
+    // DECISIONS 204: `c` stores into `Function.prototype.call` (the builtin
+    // prototypes are one object model-wide). In the whole program `check.call`
+    // then reads that value: an unknown function, so `lit` escapes. Per unit
+    // the store is in `c`'s unit; `a` read the builtin `call` and `lit` kept
+    // facts the whole program refutes (fastify: an `Object.assign` onto
+    // `Object.prototype` makes ajv's `checkOptions.call(this, removedOptions)`
+    // an unknown call).
+    let c = "(Function.prototype as any).call = (globalThis as any).zz;\nexport const c = 1;\n";
+    let a = r#"
+        function check(this: any, o: any) { return o.x; }
+        export function mk() { const lit = { x: 1 }; check.call(null, lit); return 1; }
+        "#;
+    let m = "import { mk } from \"./a\";\nimport { c } from \"./c\";\nconsole.log(mk(), c);\n";
+    let (u, _) = assert_not_stronger(&[("a", a), ("c", c), ("main", m)]);
+    let t = u
+        .templates
+        .iter()
+        .find(|t| t.display.starts_with("a.ts") && t.birth_keys.iter().any(|k| k == "x"))
+        .expect("lit");
+    assert!(t.escape.is_some(), "{t:?}");
+}
