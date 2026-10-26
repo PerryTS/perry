@@ -888,21 +888,20 @@ fn absent_overflow_definition_uses_final_data_entry() {
             crate::object::overflow::ensure(obj);
         });
         let receiver = scope.root_nanbox_u64(
-            crate::value::POINTER_TAG | object.get_raw_mut_ptr::<ObjectHeader>() as u64,
+            object
+                .with_const_ptr(|obj: *const ObjectHeader| crate::value::POINTER_TAG | obj as u64),
         );
         let key = scope.root_nanbox_u64(crate::JSValue::string_ptr(H_C.string.cast_mut()).bits());
         let bag = scope.root_raw_mut_ptr(js_object_alloc(0, 0));
-        bag.with_mut_ptr(|obj| {
-            for (name, value) in [
-                (b"value".as_slice(), 37.0),
-                (b"enumerable", f64::from_bits(TRUE)),
-            ] {
-                let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-                js_object_set_field_by_name(obj, key, value);
-            }
-        });
+        for (name, value) in [
+            (b"value".as_slice(), 37.0),
+            (b"enumerable", f64::from_bits(TRUE)),
+        ] {
+            let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            bag.with_mut_ptr(|obj| js_object_set_field_by_name(obj, key, value));
+        }
         let bag_value = scope.root_nanbox_u64(
-            crate::value::POINTER_TAG | bag.get_raw_mut_ptr::<ObjectHeader>() as u64,
+            bag.with_const_ptr(|obj: *const ObjectHeader| crate::value::POINTER_TAG | obj as u64),
         );
         let desc = crate::object::object_ops::decode_property_descriptor(&scope, &bag_value);
         assert!(
