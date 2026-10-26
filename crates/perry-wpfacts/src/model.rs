@@ -2470,6 +2470,38 @@ impl Model {
         t
     }
 
+    /// DECISIONS 200: drops the settled member sets of `r` and of every
+    /// argument marker whose set includes it (`member_succ` reversed: the
+    /// markers `r` is a member of, a keyed reach's holders, an argument
+    /// reach's keyed reaches). A settled set is built from its successors'
+    /// settled sets, so the settled markers are closed downward: the walk
+    /// ends at a marker with no settled set. Clearing every set at each
+    /// link made a solve that asks between links (`own_param_members`,
+    /// `closed_marker`) settle the whole member graph again each time
+    /// (fastify_inject per unit never finished; main 4.6 s).
+    fn unsettle_up(&mut self, r: Tok) {
+        let mut st = vec![r];
+        while let Some(y) = st.pop() {
+            if self.members_settled.get_mut().remove(&y).is_none() {
+                continue;
+            }
+            st.extend(self.arg_parents.get(&y).into_iter().flatten().copied());
+            if let Some(&(p, a)) = self.keyed_parent.get(&y) {
+                st.extend(
+                    self.arg_keyed_parents
+                        .get(&p)
+                        .into_iter()
+                        .flatten()
+                        .filter(|&&(k, _)| k == a)
+                        .map(|&(_, q)| q),
+                );
+            }
+            if let Some(&p) = self.arg_reach_base.get(&y) {
+                st.extend(self.keyed_reach.get(&p).into_iter().flatten().map(|&(_, kr)| kr));
+            }
+        }
+    }
+
     /// Argument marker `r` stands for marker `m` too: `m` takes every use
     /// of `r`, and what `m` reaches takes every use of what `r` reaches.
     pub(crate) fn link_marker(&mut self, m: Tok, r: Tok) {
@@ -2477,9 +2509,10 @@ impl Model {
             return;
         }
         self.arg_members.get_mut(&r).unwrap().push(m);
-        // A new link changes the sets settled so far (`marker_members`).
+        // A new link changes the sets settled for `r` and the markers above
+        // it (`marker_members`), no others (DECISIONS 200).
         if !self.members_settled.get_mut().is_empty() {
-            self.members_settled.get_mut().clear();
+            self.unsettle_up(r);
         }
         // DECISIONS 193: `r` takes `m`'s readers, and from now on what `m`
         // gains (`replay_marker_links`).
