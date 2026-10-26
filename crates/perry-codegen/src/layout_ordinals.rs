@@ -389,7 +389,15 @@ pub(crate) fn descriptor_word(
         }
         m.plan
             .entry(&input.key)
-            .unwrap_or_else(|| panic!("descriptor full content in image plan: {symbol} {:?}", String::from_utf8_lossy(match &input.key { LayoutKey::Descriptor { content, .. } => content, _ => &[] })))
+            .unwrap_or_else(|| {
+                panic!(
+                    "descriptor full content in image plan: {symbol} {:?}",
+                    String::from_utf8_lossy(match &input.key {
+                        LayoutKey::Descriptor { content, .. } => content,
+                        _ => &[],
+                    })
+                )
+            })
             .word()
     })
 }

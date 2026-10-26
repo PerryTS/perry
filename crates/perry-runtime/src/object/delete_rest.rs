@@ -1522,9 +1522,9 @@ mod shape_transition_tests_6759 {
         }
         let after = (*obj).parent_class_id;
         assert_ne!(after, before, "the full layout word moves (the shadow bit)");
-        assert!(is_layout_word(crate::object::layout_desc::layout_id_of_word(
-            after
-        )));
+        assert!(is_layout_word(
+            crate::object::layout_desc::layout_id_of_word(after)
+        ));
         assert_eq!(
             crate::object::shapes::object_shape_descriptor(obj)
                 .unwrap()

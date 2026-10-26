@@ -240,6 +240,10 @@ fn arguments_birth_cache_word_is_carried_across_full_traces() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _scan = ConservativeScanDisabledGuard::new();
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    // Production `gc_init` registers the shape-table scanner; this window
+    // needs it because it is the scanner that carries the arguments cache's
+    // word.
+    crate::gc::gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
     crate::object::test_clear_arguments_object_roots();
     let word = {
         let scope = RuntimeHandleScope::new();
@@ -253,7 +257,10 @@ fn arguments_birth_cache_word_is_carried_across_full_traces() {
     for round in 0..3 {
         let control = unrooted_semantic_shape();
         collect_synchronous_full_trace();
-        assert!(crate::object::shapes::shape_is_retired(control), "round {round}: control must retire");
+        assert!(
+            crate::object::shapes::shape_is_retired(control),
+            "round {round}: control must retire"
+        );
         assert!(
             !crate::object::shapes::shape_is_retired(word),
             "round {round}: a word held by the arguments cache was retired"
@@ -268,13 +275,15 @@ fn keyless_birth_memo_word_is_carried_across_full_traces() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _scan = ConservativeScanDisabledGuard::new();
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    let word = unsafe {
-        crate::object::shapes::object_shape_stamp(crate::object::object_alloc_plain(0))
-    };
+    let word =
+        unsafe { crate::object::shapes::object_shape_stamp(crate::object::object_alloc_plain(0)) };
     for round in 0..3 {
         let control = unrooted_semantic_shape();
         collect_synchronous_full_trace();
-        assert!(crate::object::shapes::shape_is_retired(control), "round {round}: control must retire");
+        assert!(
+            crate::object::shapes::shape_is_retired(control),
+            "round {round}: control must retire"
+        );
         assert!(
             !crate::object::shapes::shape_is_retired(word),
             "round {round}: the keyless birth memo word was retired"

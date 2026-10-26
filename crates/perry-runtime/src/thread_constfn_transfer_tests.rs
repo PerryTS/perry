@@ -550,10 +550,7 @@ fn constfn_worker_seed_owns_names_across_source_key_relocation() {
         std::thread::spawn(move || {
             let _agent = crate::agent::enter_worker_agent();
             gc::ensure_gc_initialized();
-            assert!(
-                shapes::shape_is_retired(FINAL_ID),
-                "fresh worker premise"
-            );
+            assert!(shapes::shape_is_retired(FINAL_ID), "fresh worker premise");
             shapes::install_worker_shape_seed(&seed);
             let installed = shapes::shape_descriptor_for_word(FINAL_ID)
                 .expect("saved seed must install before object reconstruction can mask a failure");

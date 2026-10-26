@@ -3,8 +3,8 @@
 //! in slot 0 for name/length/construct semantics; slot 1 is the call operand
 //! and slot 5 is its immutable body info (outside the managed heap).
 //! The immutable info distinguishes these layouts from an ordinary bind.
-use crate::object::shapes::shape_object_kind_of_receiver;
 use super::*;
+use crate::object::shapes::shape_object_kind_of_receiver;
 use crate::value::JSValue;
 
 pub(in crate::closure) static CALL_INFO: JsFunctionInfo =

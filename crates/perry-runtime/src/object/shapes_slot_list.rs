@@ -481,7 +481,9 @@ pub(crate) unsafe fn try_update_stable_tombstone_shape(
     }
 
     let table = &crate::state::state().shapes;
-    let record = table.slab().handle_record_ptr(crate::codegen_abi::LayoutWord(id))?;
+    let record = table
+        .slab()
+        .handle_record_ptr(crate::codegen_abi::LayoutWord(id))?;
     // SAFETY: live slab record, single-threaded agent; read then written
     // through the same pointer with nothing else holding a reference.
     let current = unsafe { *record };
@@ -568,7 +570,10 @@ pub(crate) unsafe fn try_update_stable_tombstone_shape_cached(
     // The caller's copy must still name the live record of THIS id: a
     // retired id resolves to nothing, and a record reused under another id
     // (never — ids are not recycled) would resolve to a different address.
-    let live = crate::state::state().shapes.slab().handle_record_ptr(crate::codegen_abi::LayoutWord(id))?;
+    let live = crate::state::state()
+        .shapes
+        .slab()
+        .handle_record_ptr(crate::codegen_abi::LayoutWord(id))?;
     if live as usize != current.record {
         return None;
     }
@@ -625,7 +630,9 @@ pub(crate) unsafe fn rekey_stable_tombstone_shape_after_squeeze(
 
     let table = &crate::state::state().shapes;
     let mut inner = table.inner.borrow_mut();
-    let live_ptr = table.slab().handle_record_ptr(crate::codegen_abi::LayoutWord(old_id))?;
+    let live_ptr = table
+        .slab()
+        .handle_record_ptr(crate::codegen_abi::LayoutWord(old_id))?;
     if live_ptr as usize != current.record {
         return None;
     }
@@ -646,7 +653,11 @@ pub(crate) unsafe fn rekey_stable_tombstone_shape_after_squeeze(
     // (a rewrite the metadata scan has not yet repaired) simply gains the new
     // id under the current one and sheds the old id on that scan.
     // SAFETY: no slab reference is held across these two calls.
-    let mut record = unsafe { table.slab_mut().remove_handle(crate::codegen_abi::LayoutWord(old_id))? };
+    let mut record = unsafe {
+        table
+            .slab_mut()
+            .remove_handle(crate::codegen_abi::LayoutWord(old_id))?
+    };
     record.logical_key_count = logical_key_count;
     record.live_inline_slot_count = live_inline_slot_count;
     record.semantic_generation = generation;
@@ -1022,7 +1033,10 @@ fn rekey_predecessor_for_delete(
         return 0;
     }
     let table = &crate::state::state().shapes;
-    let Some(live_ptr) = table.slab().handle_record_ptr(crate::codegen_abi::LayoutWord(predecessor)) else {
+    let Some(live_ptr) = table
+        .slab()
+        .handle_record_ptr(crate::codegen_abi::LayoutWord(predecessor))
+    else {
         return 0;
     };
     // SAFETY: live slab record, single-threaded agent, read immediately.
@@ -1044,7 +1058,11 @@ fn rekey_predecessor_for_delete(
         inner.facts_remove(live.facts_key_with_keys(keys), predecessor);
     }
     // SAFETY: no slab reference is held across these calls.
-    let Some(mut record) = (unsafe { table.slab_mut().remove_handle(crate::codegen_abi::LayoutWord(predecessor)) }) else {
+    let Some(mut record) = (unsafe {
+        table
+            .slab_mut()
+            .remove_handle(crate::codegen_abi::LayoutWord(predecessor))
+    }) else {
         return 0;
     };
     record.logical_key_count = logical_key_count;
@@ -1189,8 +1207,18 @@ pub(super) fn install_external_shape_id_with_constfn(
     infos: &[super::shapes_store::ConstFnSlotInfo],
     to_any: u32,
 ) -> bool {
-    install_external_layout_with_constfn(identity, None, keys, logical_key_count,
-        live_inline_slot_count, proto_id, object_kind, rep, infos, to_any)
+    install_external_layout_with_constfn(
+        identity,
+        None,
+        keys,
+        logical_key_count,
+        live_inline_slot_count,
+        proto_id,
+        object_kind,
+        rep,
+        infos,
+        to_any,
+    )
 }
 #[allow(clippy::too_many_arguments)]
 pub(super) fn install_external_layout_with_constfn(
@@ -1231,19 +1259,19 @@ pub(super) fn install_external_layout_with_constfn(
     if let Some(existing) = table.slab().record_ptr(identity) {
         let matches = static_word.is_none_or(|w| w.0 == unsafe { (*existing).layout_word })
             && unsafe { &*existing }.facts_match_proto_with_special(
-            keys as usize as u64,
-            logical_key_count,
-            live_inline_slot_count,
-            0,
-            object_kind,
-            0,
-            proto_id,
-            summary,
-            rep,
-            infos,
-            // An externally named id is a birth or seed content: no brand.
-            &[],
-        );
+                keys as usize as u64,
+                logical_key_count,
+                live_inline_slot_count,
+                0,
+                object_kind,
+                0,
+                proto_id,
+                summary,
+                rep,
+                infos,
+                // An externally named id is a birth or seed content: no brand.
+                &[],
+            );
         if matches {
             unsafe { (*existing).set(super::shapes_store::RECORD_FLAG_EXTERNAL_CARRIER, true) };
             for slot in 0..32 {
@@ -1283,7 +1311,8 @@ pub(super) fn install_external_layout_with_constfn(
             Some(word) => table.slab_mut().publish_static(identity, word, record),
             None => table.slab_mut().publish_dynamic(identity, record),
         }
-    }.expect("worker shape publication");
+    }
+    .expect("worker shape publication");
     let id = published.word.0;
     inner.facts_push_front(record.facts_key_with_keys(keys), id);
     inner.family_push_front(keys, id);

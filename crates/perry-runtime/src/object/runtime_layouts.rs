@@ -2659,18 +2659,32 @@ const fn runtime_layout_word(name: &str) -> u32 {
         return crate::codegen_abi::native_layout_word("WRITABLE_STATE_PROTO", 0);
     }
     #[cfg(test)]
-    if same(name, "HOLEY") { return 0x8000007d; }
+    if same(name, "HOLEY") {
+        return 0x8000007d;
+    }
     #[cfg(test)]
-    if same(name, "HOLEY_PERMUTED") { return 0x8000007e; }
+    if same(name, "HOLEY_PERMUTED") {
+        return 0x8000007e;
+    }
     #[cfg(test)]
-    if same(name, "SOLID") { return 0x8000007f; }
+    if same(name, "SOLID") {
+        return 0x8000007f;
+    }
     #[cfg(test)]
-    if same(name, "PERMUTED") { return 0x80000080; }
+    if same(name, "PERMUTED") {
+        return 0x80000080;
+    }
     #[cfg(test)]
-    if same(name, "POSITIONAL") { return 0x80000081; }
+    if same(name, "POSITIONAL") {
+        return 0x80000081;
+    }
     #[cfg(test)]
-    if same(name, "SYMBOL_PERMUTED") { return 0x80000082; }
+    if same(name, "SYMBOL_PERMUTED") {
+        return 0x80000082;
+    }
     #[cfg(test)]
-    if same(name, "PREFIX_MOVED") { return 0x80000083; }
+    if same(name, "PREFIX_MOVED") {
+        return 0x80000083;
+    }
     panic!("runtime descriptor absent from native catalog");
 }

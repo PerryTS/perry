@@ -182,7 +182,8 @@ fn birth_survives_collection_inside_allocation(small: bool) {
     super::runtime_roots::force_next_general_arena_alloc_slow();
     triggers.make_arena_trigger_due();
 
-    let header = (u64::from(crate::codegen_abi::FUNCTION_LAYOUT_WORD) << 32) | u64::from(flags | count);
+    let header =
+        (u64::from(crate::codegen_abi::FUNCTION_LAYOUT_WORD) << 32) | u64::from(flags | count);
     let closure = if small {
         crate::closure::js_closure_alloc_small(
             std::ptr::null(),

@@ -345,7 +345,10 @@ mod c6804_tests {
                 packed.len() as u32,
             );
             let birth_stamp = (*obj).shape_word();
-            assert!(is_layout_word(birth_stamp), "every literal is birth-stamped");
+            assert!(
+                is_layout_word(birth_stamp),
+                "every literal is birth-stamped"
+            );
             assert_eq!(
                 crate::typed_feedback::test_object_shape_token(obj as usize),
                 birth_stamp,
@@ -1210,10 +1213,7 @@ fn shape_lookup_cache_is_invalidated_when_a_record_is_removed() {
             remove_descriptor_and_reverse_indices(&mut inner, id);
         }
 
-        assert!(
-            shape_is_retired(id),
-            "a removed id must not resolve"
-        );
+        assert!(shape_is_retired(id), "a removed id must not resolve");
         assert_eq!(
             shape_record_by_id(identity).map(|r| r.live_inline_slot_count()),
             None,

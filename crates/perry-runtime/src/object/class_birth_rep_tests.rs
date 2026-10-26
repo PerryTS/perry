@@ -331,13 +331,21 @@ fn a_class_birth_with_an_f64_lane_adopts_its_static_id() {
     let k = keys(b"sa\0sb\0", 2);
     let f64_id = crate::object::static_shapes::fixtures::fixture_word(0x3a61);
     let any_id = crate::object::static_shapes::fixtures::fixture_word(0x3a62);
-    let typed = crate::object::static_shapes::fixtures::fixture_object_shape_id_for_class_keys_static(k, 2, 2, CID, f64_id, REP_F64);
+    let typed =
+        crate::object::static_shapes::fixtures::fixture_object_shape_id_for_class_keys_static(
+            k, 2, 2, CID, f64_id, REP_F64,
+        );
     assert_eq!(typed, f64_id, "the F64 birth adopts its static id");
     assert_eq!(rep_of(typed), REP_F64);
-    let untyped = crate::object::static_shapes::fixtures::fixture_object_shape_id_for_class_keys_static(k, 2, 2, CID, any_id, REP_ANY);
+    let untyped =
+        crate::object::static_shapes::fixtures::fixture_object_shape_id_for_class_keys_static(
+            k, 2, 2, CID, any_id, REP_ANY,
+        );
     assert_eq!(untyped, any_id, "the all-Any content is another id");
     assert_eq!(
-        crate::object::static_shapes::fixtures::fixture_object_shape_id_for_class_keys_static(k, 2, 2, CID, f64_id, REP_F64),
+        crate::object::static_shapes::fixtures::fixture_object_shape_id_for_class_keys_static(
+            k, 2, 2, CID, f64_id, REP_F64
+        ),
         typed,
         "a second registration resolves to the same id"
     );
@@ -353,7 +361,10 @@ fn importer_first_birth_keeps_definer_rep_and_stub_slots_distinct() {
     let any_id = crate::object::static_shapes::fixtures::fixture_word(0x3a71);
     let f64_id = crate::object::static_shapes::fixtures::fixture_word(0x3a72);
 
-    let importer = crate::object::static_shapes::fixtures::fixture_object_shape_id_for_class_keys_static(k, 2, 2, CID, any_id, REP_ANY);
+    let importer =
+        crate::object::static_shapes::fixtures::fixture_object_shape_id_for_class_keys_static(
+            k, 2, 2, CID, any_id, REP_ANY,
+        );
     assert_eq!(importer, any_id);
     let imported_birth = unsafe { birth(k, 2, importer) };
     assert_eq!(unsafe { object_shape_stamp(imported_birth) }, any_id);
@@ -362,7 +373,10 @@ fn importer_first_birth_keeps_definer_rep_and_stub_slots_distinct() {
         crate::value::TAG_UNDEFINED
     );
 
-    let definer = crate::object::static_shapes::fixtures::fixture_object_shape_id_for_class_keys_static(k, 2, 2, CID, f64_id, REP_F64);
+    let definer =
+        crate::object::static_shapes::fixtures::fixture_object_shape_id_for_class_keys_static(
+            k, 2, 2, CID, f64_id, REP_F64,
+        );
     assert_eq!(definer, f64_id);
     assert_ne!(definer, importer);
     let defined_birth = unsafe { birth(k, 2, definer) };

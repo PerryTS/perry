@@ -684,6 +684,7 @@ mod ir_tests;
 mod untyped_receiver_dispatch_tests;
 
 const _: () = assert!(
-    crate::runtime_abi::WEAKSET_BIRTH_LAYOUT_WORD == crate::runtime_abi::WEAKMAP_BIRTH_LAYOUT_WORD + 1,
+    crate::runtime_abi::WEAKSET_BIRTH_LAYOUT_WORD
+        == crate::runtime_abi::WEAKMAP_BIRTH_LAYOUT_WORD + 1,
     "method sites test both weak birth words with one range compare"
 );

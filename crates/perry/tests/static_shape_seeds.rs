@@ -10,7 +10,8 @@
 //! fresh objects carry exactly the immediate its guards compare against.
 //!
 //! The seed set must be the same cold and warm (the object cache replays it
-//! from a sidecar), and the test must go red when the seed is sabotaged.
+//! from a sidecar). A sabotaged (empty) seed must not move the literal off
+//! its static word: the static ordinal, not publication order, owns it.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -162,9 +163,11 @@ fn the_seed_makes_a_literals_births_carry_its_guard_immediate_cold_and_warm() {
     }
 
     // Sabotage: empty seed sidecars make the warm link seed nothing. The
-    // early module then takes the literal's facts under a counter id, and
-    // the census must show the literal's mint MISS — the witness above can
-    // fail.
+    // early module then publishes the literal's facts on a dynamic row
+    // first. A static request owns its ordinal (dense layout words), so the
+    // literal's mint must still HIT its compiler-authored word: the static
+    // row is the authority, not publication order. A dynamic record taking
+    // the static word would show here as a miss.
     let objects = dir.path().join("cache");
     let mut emptied = 0;
     for entry in walk(&objects) {
@@ -187,8 +190,8 @@ fn the_seed_makes_a_literals_births_carry_its_guard_immediate_cold_and_warm() {
     );
     let sab_mints = literal_mints(&sab_lines, &ids);
     assert!(
-        !sab_mints.is_empty() && sab_mints.iter().all(|l| l.ends_with(" miss")),
-        "without the seed the literal's mint must miss (else this test cannot fail)\n{sab_lines:#?}"
+        !sab_mints.is_empty() && sab_mints.iter().all(|l| l.ends_with(" hit")),
+        "without the seed the literal's mint must still own its static word\n{sab_lines:#?}"
     );
 }
 

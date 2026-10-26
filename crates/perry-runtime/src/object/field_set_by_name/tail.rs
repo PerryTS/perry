@@ -736,8 +736,10 @@ pub(crate) fn set_field_by_name_object_tail(
             // instance gaining its first by-name property is stamped like
             // any other receiver.
             if !crate::object::overflow::has_overflow(obj)
-                && !super::shapes::shape_descriptor_of_receiver(super::shapes::object_shape_stamp(obj))
-                    .is_some_and(|d| d.special_constfn_mask != 0)
+                && !super::shapes::shape_descriptor_of_receiver(super::shapes::object_shape_stamp(
+                    obj,
+                ))
+                .is_some_and(|d| d.special_constfn_mask != 0)
             {
                 // `publish_key_add_edge` already minted the exact ConstFn
                 // successor after writing the closure. The legacy redundant

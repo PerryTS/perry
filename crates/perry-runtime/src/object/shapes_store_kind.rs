@@ -46,11 +46,11 @@
 //! [`store_facts_agree`] checks receiver inputs against the shape at every
 //! stamp in debug builds and with `shape-fact-audit` in release builds.
 
-use crate::object::shapes::shape_descriptor_of_receiver;
-use crate::object::shapes::shape_record_of_receiver;
 use super::{
     object_shape_stamp, shape_descriptor_for_word, shape_record_for_word, ShapeObjectKind,
 };
+use crate::object::shapes::shape_descriptor_of_receiver;
+use crate::object::shapes::shape_record_of_receiver;
 use crate::object::ObjectHeader;
 
 #[inline(always)]

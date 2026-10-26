@@ -734,9 +734,11 @@ mod tests {
                         proto,
                         shapes::ReceiverFacts::summary(summary),
                     ));
-                assert_eq!(Some(crate::codegen_abi::LayoutWord(interned)),
+                assert_eq!(
+                    Some(crate::codegen_abi::LayoutWord(interned)),
                     shapes::handle_by_identity(crate::codegen_abi::ShapeId(id)),
-                    "interning must use the seeded record");
+                    "interning must use the seeded record"
+                );
             }
         })
         .join()

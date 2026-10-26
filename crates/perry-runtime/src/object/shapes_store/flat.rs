@@ -71,7 +71,10 @@ unsafe fn discard(at: *mut u8, bytes: usize) -> bool {
 }
 #[cfg(unix)]
 unsafe fn unreserve(at: *mut u8, bytes: usize) {
-    assert!(libc::munmap(at.cast(), bytes) == 0, "shape Region release failed");
+    assert!(
+        libc::munmap(at.cast(), bytes) == 0,
+        "shape Region release failed"
+    );
 }
 
 #[cfg(windows)]
@@ -281,7 +284,12 @@ impl Region {
         (self.live.as_ptr().cast(), self.live.len(), self.shift)
     }
     pub(super) fn committed_bytes(&self) -> usize {
-        self.live.iter().flatten().map(|leaf| leaf.used as usize).sum::<usize>() * self.page
+        self.live
+            .iter()
+            .flatten()
+            .map(|leaf| leaf.used as usize)
+            .sum::<usize>()
+            * self.page
     }
 }
 impl Drop for Region {

@@ -24,15 +24,15 @@
 //! optional extension owned by that shape record; `by_facts` remains the
 //! single identity table.
 
-use crate::object::shapes::shape_descriptor_of_receiver;
-use crate::object::shapes::shape_record_of_receiver;
-use crate::object::shapes::shape_rep_of_receiver;
 use super::field_rep::{self, slot_rep, REP_ANY, REP_SLOTS};
 use super::shapes::{
     object_shape_stamp, publish_shape_result, shape_descriptor_for_word, shape_record_for_word,
     shape_rep_for_word, stamp_object_shape_id_with_carrier_note,
 };
 use super::ObjectHeader;
+use crate::object::shapes::shape_descriptor_of_receiver;
+use crate::object::shapes::shape_record_of_receiver;
+use crate::object::shapes::shape_rep_of_receiver;
 
 /// The representation of `obj`'s inline slot `field_index`: its shape's
 /// lane, or `Any` for an unshaped receiver or a slot past the word.

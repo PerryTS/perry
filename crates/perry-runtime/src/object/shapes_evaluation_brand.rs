@@ -82,7 +82,13 @@ pub(crate) fn evaluation_copy_birth_edges(copy: u32, family: u32) -> Option<(u64
     let record = ShapeSlab::agent_record_for_word_present(copy)?;
     // SAFETY: a present record of this agent, read immediately.
     let record = unsafe { &*record };
-    if family == 0 || unsafe { crate::object::layout_desc::evaluation_layout_desc(record.family_desc_index_plus_one) }.map(|d| d.layout_id) != Some(family) {
+    if family == 0
+        || unsafe {
+            crate::object::layout_desc::evaluation_layout_desc(record.family_desc_index_plus_one)
+        }
+        .map(|d| d.layout_id)
+            != Some(family)
+    {
         return None;
     }
     let prototype = identity_prototype_word(record.proto_id);
@@ -206,7 +212,10 @@ mod tests {
             stamp_evaluation_holder(a, holder_b);
             assert_eq!(object_evaluation_brand(a), brand_b);
             assert!(object_has_brand(a, 1 << 63 | 77));
-            assert_eq!(shape_brands_for_word(object_shape_stamp(a)).unwrap().len(), 2);
+            assert_eq!(
+                shape_brands_for_word(object_shape_stamp(a)).unwrap().len(),
+                2
+            );
             // Constructor-returned objects keep their own metadata authority.
             crate::object::stamp_private_evaluation_brand(plain, f64::from_bits(brand_b));
             assert!(!(*plain).meta.is_null());

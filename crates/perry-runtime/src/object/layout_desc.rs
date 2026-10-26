@@ -788,8 +788,14 @@ unsafe fn register_bound(
     use std::sync::atomic::{AtomicU32, Ordering};
     let word = AtomicU32::from_ptr(std::ptr::addr_of!((*desc).shape_id).cast_mut());
     let function = (*desc).variant == crate::codegen_abi::LAYOUT_VARIANT_FUNCTION_CONSTRUCTOR;
-    if function && function_proto.is_none() { return 0; }
-    let existing = if function { None } else { Some(word.load(Ordering::Acquire)).filter(|&id| id != 0) };
+    if function && function_proto.is_none() {
+        return 0;
+    }
+    let existing = if function {
+        None
+    } else {
+        Some(word.load(Ordering::Acquire)).filter(|&id| id != 0)
+    };
     let local = binding_symbol_keys(&*desc);
     if let Some(id) = existing {
         if (local != 0 && bound.is_empty()) || super::shapes::shape_descriptor_by_id(id).is_some() {
@@ -950,9 +956,21 @@ unsafe fn register_bound(
         0
     };
     if function {
-        let word = super::shapes::publish_shape_result(super::shapes::shape_descriptor_intern_with_rep(
-            list, key_count, slot_count, generation, kind, 0, proto_id, summary, rep,
-            &[], None, integrity));
+        let word =
+            super::shapes::publish_shape_result(super::shapes::shape_descriptor_intern_with_rep(
+                list,
+                key_count,
+                slot_count,
+                generation,
+                kind,
+                0,
+                proto_id,
+                summary,
+                rep,
+                &[],
+                None,
+                integrity,
+            ));
         // A per-evaluation record is NOT an external carrier: the objects born
         // on it (and the prototype they name) keep it live, and it retires
         // with the last of them. The caller holds GC suppression from here to
@@ -978,16 +996,23 @@ unsafe fn register_bound(
         match word.compare_exchange(0, proposed, Ordering::AcqRel, Ordering::Acquire) {
             Ok(_) => proposed,
             Err(other) => {
-                assert!(super::shapes::is_shape_id(other), "descriptor identity cell holds a ShapeId");
+                assert!(
+                    super::shapes::is_shape_id(other),
+                    "descriptor identity cell holds a ShapeId"
+                );
                 other
-            },
+            }
         }
     };
     if super::shapes::shape_descriptor_by_id(id).is_none() {
         super::shapes::install_declared_layout(
             id,
             (*desc).layout_id,
-            if (*desc).class_id != 0 { descriptor_index(desc).map_or(0, |i| i + 1) } else { 0 },
+            if (*desc).class_id != 0 {
+                descriptor_index(desc).map_or(0, |i| i + 1)
+            } else {
+                0
+            },
             list,
             key_count,
             slot_count,
@@ -1051,7 +1076,10 @@ unsafe fn alloc_layout_object(d: &PerryLayoutDesc, id: u32) -> *mut ObjectHeader
 /// Function births alone retain the ordinary inline floor. Keep their
 /// sizing and diagnostic work out of the shared class/literal allocator.
 /// `desc` is the registered layout admitted by function_family_birth.
-pub(crate) unsafe fn alloc_function_layout(desc: *const PerryLayoutDesc, id: u32) -> *mut ObjectHeader {
+pub(crate) unsafe fn alloc_function_layout(
+    desc: *const PerryLayoutDesc,
+    id: u32,
+) -> *mut ObjectHeader {
     let d = &*desc;
     let obj =
         alloc_layout_object_sized(d, id, (d.slot_count as usize).max(super::INLINE_SLOT_FLOOR));
@@ -2054,9 +2082,7 @@ pub(crate) unsafe fn evaluation_layout_desc(family: u32) -> Option<&'static Perr
         0 => None,
         // The record names a registered class family layout: only
         // [`note_family_relink`] writes it, from one.
-        family => {
-            Some(&*desc_at(family - 1))
-        }
+        family => Some(&*desc_at(family - 1)),
     }
 }
 
@@ -2065,7 +2091,7 @@ pub(crate) unsafe fn evaluation_layout_desc(family: u32) -> Option<&'static Perr
 /// [`family_own_key`] answers without a shape record?
 #[inline(always)]
 pub(crate) fn word_in_layout_index(word: u32) -> bool {
-    let image = super::class_image::layout_image();
+    let image = super::class_image::agent_layout_image();
     let base = crate::codegen_abi::LAYOUT_TAG | image.family_first;
     word.wrapping_sub(base) < image.family_count
 }
@@ -2077,7 +2103,9 @@ pub(crate) fn word_in_layout_index(word: u32) -> bool {
 /// (`shapes::note_evaluation_layout`), so its objects stay family objects.
 pub(crate) fn note_family_relink(previous: u32, id: u32) {
     let previous = layout_id_of_word(previous);
-    let Some(record) = super::shapes::shape_record_for_word(previous) else { return; };
+    let Some(record) = super::shapes::shape_record_for_word(previous) else {
+        return;
+    };
     let index = record.family_desc_index_plus_one();
     if index != 0 {
         let family_word = unsafe { (*desc_at(index - 1)).layout_id };
@@ -2873,8 +2901,7 @@ unsafe fn family_store_admits(obj: *const ObjectHeader) -> bool {
             return true;
         }
     }
-    super::key_view::summary_may_have_holes(record.summary())
-        && !super::overflow::has_overflow(obj)
+    super::key_view::summary_may_have_holes(record.summary()) && !super::overflow::has_overflow(obj)
 }
 
 /// [`family_store`] for a key passed as a string header.

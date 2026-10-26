@@ -720,17 +720,41 @@ pub(crate) fn bind_layout_image(image: crate::codegen_abi::PerryLayoutImageV1) {
     );
 }
 pub(crate) fn layout_image() -> crate::codegen_abi::PerryLayoutImageV1 {
-    *current()
-        .layout_image
-        .get_or_init(runtime_layout_image)
+    *current().layout_image.get_or_init(runtime_layout_image)
 }
 
+/// The layout image this agent's shape slab was built from, published by
+/// [`publish_agent_layout_image`] when the slab is created. Hot word tests
+/// (family range, static prefix) read it with one thread-pointer-relative
+/// load instead of resolving the thread's image tables; before the agent has
+/// a slab it is the runtime's own image, which [`layout_image`] answers too.
+#[thread_local]
+static AGENT_LAYOUT_IMAGE: std::cell::Cell<crate::codegen_abi::PerryLayoutImageV1> =
+    std::cell::Cell::new(runtime_layout_image());
+
+/// [`AGENT_LAYOUT_IMAGE`]: this agent's bound layout image.
+#[inline(always)]
+pub(crate) fn agent_layout_image() -> crate::codegen_abi::PerryLayoutImageV1 {
+    AGENT_LAYOUT_IMAGE.get()
+}
+
+/// Publish the image an agent's slab was built from (`ShapeSlab::new_agent`).
+pub(crate) fn publish_agent_layout_image(image: crate::codegen_abi::PerryLayoutImageV1) {
+    AGENT_LAYOUT_IMAGE.set(image);
+}
 
 pub(crate) const fn runtime_layout_image() -> crate::codegen_abi::PerryLayoutImageV1 {
     #[cfg(test)]
-    { crate::codegen_abi::PerryLayoutImageV1 { static_rows: 4096, ..crate::codegen_abi::PerryLayoutImageV1::RUNTIME } }
+    {
+        crate::codegen_abi::PerryLayoutImageV1 {
+            static_rows: 4096,
+            ..crate::codegen_abi::PerryLayoutImageV1::RUNTIME
+        }
+    }
     #[cfg(not(test))]
-    { crate::codegen_abi::PerryLayoutImageV1::RUNTIME }
+    {
+        crate::codegen_abi::PerryLayoutImageV1::RUNTIME
+    }
 }
 
 #[cfg(test)]

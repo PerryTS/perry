@@ -6,7 +6,8 @@
 //! did not mints a counter id and never holds the static id under any facts.
 use super::*;
 use crate::object::shapes::{
-    is_layout_word, is_static_shape_id, object_shape_stamp, shape_descriptor_for_word, SHAPE_ID_BASE,
+    is_layout_word, is_static_shape_id, object_shape_stamp, shape_descriptor_for_word,
+    SHAPE_ID_BASE,
 };
 
 const NAMES: [&str; 2] = ["lt4w_left", "lt4w_right"];
@@ -76,7 +77,8 @@ fn receive(wire: SerializedValue, seed_first: bool) -> (u32, bool, bool) {
         let obj =
             crate::value::JSValue::from_bits(bits).as_pointer::<crate::object::ObjectHeader>();
         let stamp = unsafe { object_shape_stamp(obj) };
-        let static_present = crate::object::shapes::shape_descriptor_by_id(REQUESTED + 0x10000).is_some();
+        let static_present =
+            crate::object::shapes::shape_descriptor_by_id(REQUESTED + 0x10000).is_some();
         // Same facts = the stamp names this agent's canonical node for NAMES.
         let canonical = unsafe {
             crate::object::static_shapes::canonical_keys_for_names(&[
@@ -157,7 +159,10 @@ fn constfn_static_seed_uses_same_image_body_in_each_agent() {
     let worker = std::thread::spawn(seed_constfn_here)
         .join()
         .expect("worker ConstFn seed");
-    assert_eq!(main.0, crate::object::static_shapes::fixtures::fixture_word(0x7862));
+    assert_eq!(
+        main.0,
+        crate::object::static_shapes::fixtures::fixture_word(0x7862)
+    );
     assert_eq!(
         worker, main,
         "static id and body info must agree across agents"

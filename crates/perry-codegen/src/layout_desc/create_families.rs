@@ -724,8 +724,12 @@ fn candidate_sites(hir: &Module, m: &ModuleCreateFamilies) -> BTreeMap<String, S
         let Expr::ObjectCreate(proto, None) = target.as_ref() else {
             return;
         };
-        let (Some(p), [Expr::New { class_name, args, .. }]) =
-            (proto_binding(proto), sources.as_slice())
+        let (
+            Some(p),
+            [Expr::New {
+                class_name, args, ..
+            }],
+        ) = (proto_binding(proto), sources.as_slice())
         else {
             return;
         };
@@ -1122,7 +1126,8 @@ pub(crate) fn site(ctx: &FnCtx<'_>, e: &Expr) -> Option<Site> {
         .classes
         .get(class_name)
         .filter(|c| c.is_literal_shape())?;
-    let site = MODULE_CREATE_FAMILIES.with(|m| literal_add_site(&m.borrow(), p, class, args.len()))?;
+    let site =
+        MODULE_CREATE_FAMILIES.with(|m| literal_add_site(&m.borrow(), p, class, args.len()))?;
     use_layout(site.clone());
     Some(site)
 }

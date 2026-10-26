@@ -855,7 +855,8 @@ fn gc_collect_inner_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
 #[cfg(test)]
 pub(crate) fn test_collect_synchronous_full_trace() {
     gc_collect_minor();
-    let _ = gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct));
+    let _ =
+        gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct));
 }
 
 fn gc_collect_full_mark_sweep_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome {
@@ -1845,4 +1846,6 @@ pub fn initialize_runtime_fixture() {
 
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
-static KEEP_JS_GC_INIT_WITH_LAYOUTS: unsafe extern "C" fn(*const crate::codegen_abi::PerryLayoutImageV1) = js_gc_init_with_layouts;
+static KEEP_JS_GC_INIT_WITH_LAYOUTS: unsafe extern "C" fn(
+    *const crate::codegen_abi::PerryLayoutImageV1,
+) = js_gc_init_with_layouts;

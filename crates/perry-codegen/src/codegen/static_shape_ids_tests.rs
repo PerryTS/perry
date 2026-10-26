@@ -922,10 +922,17 @@ fn the_births_pre_pass_requests_no_identity() {
         &[],
         &ProgramClassShapeIds::default(),
     );
-    let plan = crate::ProgramLayoutOrdinals::assign(crate::layout_ordinals::native_inputs(), Vec::new())
-        .unwrap();
+    let plan =
+        crate::ProgramLayoutOrdinals::assign(crate::layout_ordinals::native_inputs(), Vec::new())
+            .unwrap();
     crate::layout_ordinals::begin_module("pre", std::sync::Arc::new(plan), true);
-    assert_eq!(requested_shape_id_for_keys_global("perry_class_keys_probe_pre__C"), None);
+    assert_eq!(
+        requested_shape_id_for_keys_global("perry_class_keys_probe_pre__C"),
+        None
+    );
     crate::layout_ordinals::begin_module("none", Default::default(), false);
-    assert_eq!(requested_shape_id_for_keys_global("perry_class_keys_probe_pre__C"), None);
+    assert_eq!(
+        requested_shape_id_for_keys_global("perry_class_keys_probe_pre__C"),
+        None
+    );
 }

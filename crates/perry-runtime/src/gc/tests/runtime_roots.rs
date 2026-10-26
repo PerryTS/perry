@@ -214,7 +214,7 @@ fn test_scoped_root_scanner_registry_guard_restores_counts() {
         // scanners (the array prototype address cache, the intrinsic
         // prototype roots, and the property atom table), then the handle
         // scanner.
-        assert_eq!(during.1, 5); // + the shape Region rekey scanner
+        assert_eq!(during.1, 4);
         assert_eq!(during.2, before.2);
         assert_eq!(during.3, before.3);
     }

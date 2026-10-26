@@ -1299,17 +1299,23 @@ pub(crate) fn test_accessor_member(
 #[path = "declarations_tests.rs"]
 mod tests;
 
-
-pub(crate) fn class_birth_layout_request(class_id: u32) -> Option<crate::codegen_abi::PublishedShape> {
+pub(crate) fn class_birth_layout_request(
+    class_id: u32,
+) -> Option<crate::codegen_abi::PublishedShape> {
     let d = class_declaration(class_id)?;
     (d.birth_shape != 0).then_some(crate::codegen_abi::PublishedShape {
         identity: crate::codegen_abi::ShapeId(d.birth_shape),
         word: crate::codegen_abi::LayoutWord(d.birth_layout_word),
     })
 }
-const _: () = assert!(std::mem::offset_of!(ClassDeclaration, birth_layout_word)
-    == if cfg!(target_pointer_width = "64") { crate::codegen_abi::CLASS_DECL_BIRTH_LAYOUT_WORD_OFFSET_LP64 }
-       else { crate::codegen_abi::CLASS_DECL_BIRTH_LAYOUT_WORD_OFFSET_ILP32 });
+const _: () = assert!(
+    std::mem::offset_of!(ClassDeclaration, birth_layout_word)
+        == if cfg!(target_pointer_width = "64") {
+            crate::codegen_abi::CLASS_DECL_BIRTH_LAYOUT_WORD_OFFSET_LP64
+        } else {
+            crate::codegen_abi::CLASS_DECL_BIRTH_LAYOUT_WORD_OFFSET_ILP32
+        }
+);
 #[cfg(test)]
 #[path = "declarations_role_tests.rs"]
 mod role_tests;

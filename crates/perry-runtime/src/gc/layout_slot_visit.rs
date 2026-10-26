@@ -514,7 +514,9 @@ unsafe fn visit_gc_rewrite_slot_descriptors_with<const INLINE_LAYOUT: bool>(
                 if let Some(slot) = crate::object::gc_shape_keys_edge_slot(birth) {
                     visit(fixed_slot(slot));
                 }
-                if let Some(slot) = crate::object::gc_shape_prototype_edge_slot(birth, full_trace_active()) {
+                if let Some(slot) =
+                    crate::object::gc_shape_prototype_edge_slot(birth, full_trace_active())
+                {
                     visit(fixed_slot(slot));
                 }
             }

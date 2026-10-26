@@ -107,7 +107,6 @@ pub(in super::super) fn integrity_facts_key(facts: u64, flags: u16) -> u64 {
     }
 }
 
-
 impl ShapeRecord {
     /// A stored local handle is readable for as long as this owner survives.
     pub(in super::super) fn note_handle_carrier(&self, word: u32) {
@@ -118,7 +117,13 @@ impl ShapeRecord {
         }
     }
     pub(in super::super) fn owned_handles(&self) -> [u32; 6] {
-        [self.rollback_parent(), self.created_birth_shape(), self.field_define_target(),
-            self.integrity_target(0), self.integrity_target(1), self.integrity_target(2)]
+        [
+            self.rollback_parent(),
+            self.created_birth_shape(),
+            self.field_define_target(),
+            self.integrity_target(0),
+            self.integrity_target(1),
+            self.integrity_target(2),
+        ]
     }
 }

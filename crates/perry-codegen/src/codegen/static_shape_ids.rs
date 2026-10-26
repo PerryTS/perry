@@ -1087,4 +1087,3 @@ pub(crate) fn has_prototype_method(name: &str) -> bool {
         })
     })
 }
-

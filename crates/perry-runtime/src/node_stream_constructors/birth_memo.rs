@@ -49,7 +49,14 @@ thread_local! {
 }
 /// Claim the shape word every birth memo names (full-trace recompute).
 pub(crate) fn note_birth_carriers() {
-    for site in [&R_EXISTING, &W_EXISTING, &D_EXISTING, &T_EXISTING, &P_EXISTING, &E_EXISTING] {
+    for site in [
+        &R_EXISTING,
+        &W_EXISTING,
+        &D_EXISTING,
+        &T_EXISTING,
+        &P_EXISTING,
+        &E_EXISTING,
+    ] {
         if let Some(b) = site.with(Cell::get) {
             crate::object::shape_carriers::note_shape_id(b.shape);
         }
@@ -433,7 +440,10 @@ mod tests {
         };
         for round in 0..3 {
             crate::gc::test_collect_synchronous_full_trace();
-            assert!(crate::object::shapes::shape_is_retired(control), "control must retire");
+            assert!(
+                crate::object::shapes::shape_is_retired(control),
+                "control must retire"
+            );
             assert!(
                 !crate::object::shapes::shape_is_retired(word),
                 "round {round}: birth memo shape retired"

@@ -246,9 +246,9 @@ unsafe fn chain_method_admitting(
         // A class evaluation's copy of a family layout: the record this walk
         // reads anyway names the family (`layout_desc::family_desc_of`).
         if !static_family && word & crate::object::layout_desc::LAYOUT_SHADOW_BIT == 0 {
-            if let Some(d) =
-                crate::object::layout_desc::evaluation_layout_desc(record.family_desc_index_plus_one())
-            {
+            if let Some(d) = crate::object::layout_desc::evaluation_layout_desc(
+                record.family_desc_index_plus_one(),
+            ) {
                 family = crate::object::layout_desc::desc_own_key(d, key.bytes, None);
                 if let Some(data) = family_data(family) {
                     return data;

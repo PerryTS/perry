@@ -63,7 +63,14 @@ fn seed(requested: u32, names: &[&str]) -> u32 {
         .flat_map(|n| n.bytes().chain(std::iter::once(0)))
         .collect();
     let n = names.len() as u32;
-    crate::object::static_shapes::fixtures::fixture_shape_seed_plain(requested, packed.as_ptr(), packed.len() as u32, n, n, 0)
+    crate::object::static_shapes::fixtures::fixture_shape_seed_plain(
+        requested,
+        packed.as_ptr(),
+        packed.len() as u32,
+        n,
+        n,
+        0,
+    )
 }
 
 /// The literal's module init: its class keys array, then the static mint.
@@ -140,10 +147,18 @@ fn check_seed_survives(order_seed_first: bool, tag: &str, requested: u32) {
 
 #[test]
 fn a_seed_whose_prefixes_a_dead_receiver_published_stays_reachable() {
-    check_seed_survives(true, "sk1", crate::object::static_shapes::fixtures::fixture_word(0x7_1241));
+    check_seed_survives(
+        true,
+        "sk1",
+        crate::object::static_shapes::fixtures::fixture_word(0x7_1241),
+    );
 }
 
 #[test]
 fn a_seed_that_forked_from_a_dead_receivers_prefix_stays_reachable() {
-    check_seed_survives(false, "sk2", crate::object::static_shapes::fixtures::fixture_word(0x7_1242));
+    check_seed_survives(
+        false,
+        "sk2",
+        crate::object::static_shapes::fixtures::fixture_word(0x7_1242),
+    );
 }

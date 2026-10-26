@@ -250,7 +250,12 @@ fn resolve_birth_record(proto_id: u64) -> Option<(u32, *mut ShapeRecord)> {
             proto_id,
             super::ReceiverFacts::NONE,
         ));
-        Some((id, table.slab().handle_record_ptr(crate::codegen_abi::LayoutWord(id))?))
+        Some((
+            id,
+            table
+                .slab()
+                .handle_record_ptr(crate::codegen_abi::LayoutWord(id))?,
+        ))
     })?;
     // Publish the relationship only after its complete immutable proof has
     // resolved. Subsequent uses read the live learner through that proof.
@@ -326,7 +331,9 @@ pub(crate) unsafe fn note_spill_width(obj: *const crate::object::ObjectHeader, w
     }
     let table = &crate::state::state().shapes;
     let slab = table.slab();
-    let Some(record) = slab.handle_record_ptr(crate::codegen_abi::LayoutWord(super::object_shape_stamp(obj))) else {
+    let Some(record) = slab.handle_record_ptr(crate::codegen_abi::LayoutWord(
+        super::object_shape_stamp(obj),
+    )) else {
         return;
     };
     let r = &*record;

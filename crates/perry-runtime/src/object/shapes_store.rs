@@ -1338,6 +1338,7 @@ impl ShapeSlab {
     pub(super) fn new_agent() -> Self {
         let mut slab = Self::new();
         let image = crate::object::class_image::layout_image();
+        crate::object::class_image::publish_agent_layout_image(image);
         // The dynamic base is one process-wide value; an image's static rows
         // lie below it, so images with different S never share a chunk row.
         assert!(
@@ -1585,7 +1586,9 @@ impl ShapeSlab {
                     record.constfn_infos(),
                     record.brands(),
                 );
-            unsafe { record.release_extras(); }
+            unsafe {
+                record.release_extras();
+            }
             return if agrees {
                 Ok(PublishedShape { identity, word })
             } else {
@@ -1862,14 +1865,15 @@ impl ShapeSlab {
         }
         let row = w.row().0 as usize;
         if row >= dir.flat_ids.get()
-            || !flat::RESERVATION_READABLE && !unsafe {
-                flat::committed_in(
-                    AGENT_COMMIT.0.get(),
-                    AGENT_COMMIT.1.get(),
-                    AGENT_COMMIT.2.get(),
-                    row,
-                )
-            }
+            || !flat::RESERVATION_READABLE
+                && !unsafe {
+                    flat::committed_in(
+                        AGENT_COMMIT.0.get(),
+                        AGENT_COMMIT.1.get(),
+                        AGENT_COMMIT.2.get(),
+                        row,
+                    )
+                }
         {
             return None;
         }
@@ -1881,7 +1885,10 @@ impl ShapeSlab {
     #[cold]
     #[inline(never)]
     fn unpublished_record_for_word(word: u32) -> Option<*mut ShapeRecord> {
-        crate::state::state().shapes.slab().handle_record_ptr(LayoutWord(word))
+        crate::state::state()
+            .shapes
+            .slab()
+            .handle_record_ptr(LayoutWord(word))
     }
 
     /// A live receiver's own header word, or zero for an unshaped receiver.
@@ -1922,7 +1929,9 @@ impl ShapeSlab {
     #[cold]
     #[inline(never)]
     fn receiver_row_record_banded(word: u32, bound: usize) -> Option<*mut ShapeRecord> {
-        use crate::codegen_abi::{LAYOUT_BAND_SHIFT, LAYOUT_ROW_MASK, LAYOUT_SHADOW_BIT, LAYOUT_TAG};
+        use crate::codegen_abi::{
+            LAYOUT_BAND_SHIFT, LAYOUT_ROW_MASK, LAYOUT_SHADOW_BIT, LAYOUT_TAG,
+        };
         let w = word & !LAYOUT_SHADOW_BIT;
         if w.wrapping_sub(LAYOUT_TAG) >= 3 << LAYOUT_BAND_SHIFT {
             return None;
@@ -1978,7 +1987,9 @@ impl ShapeSlab {
         let ids = self.ids();
         for id in ids {
             if let Some(mut r) = self.remove(id) {
-                unsafe { r.release_extras(); }
+                unsafe {
+                    r.release_extras();
+                }
             }
         }
         for band in 0..3 {
@@ -2509,7 +2520,8 @@ impl ChunkAllocator {
     pub(super) fn claim(&self, capacity: usize) -> Result<u32, PublishError> {
         use std::sync::atomic::Ordering::Relaxed;
         let fresh = self.next.fetch_update(Relaxed, Relaxed, |k| {
-            let end = u64::from(DYNAMIC_BASE_ROWS) + (u64::from(k) + 1) * u64::from(DYNAMIC_CHUNK_ROWS);
+            let end =
+                u64::from(DYNAMIC_BASE_ROWS) + (u64::from(k) + 1) * u64::from(DYNAMIC_CHUNK_ROWS);
             (end <= capacity as u64).then_some(k + 1)
         });
         // A freed chunk is NEVER handed out again. Process-shared memos (the
@@ -2550,7 +2562,11 @@ struct OwnedChunks {
 }
 impl OwnedChunks {
     const fn new() -> Self {
-        Self { n: 0, first: [0; 4], more: Vec::new() }
+        Self {
+            n: 0,
+            first: [0; 4],
+            more: Vec::new(),
+        }
     }
     fn push(&mut self, start: u32) {
         if self.n < self.first.len() {

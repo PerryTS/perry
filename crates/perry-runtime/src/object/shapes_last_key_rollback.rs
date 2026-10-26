@@ -106,7 +106,8 @@ pub(crate) unsafe fn publish_object_shape_last_key_rollback(
     {
         return 0;
     }
-    let Some(current) = ShapeSlab::agent_record_for_receiver_present(object_shape_stamp(obj)) else {
+    let Some(current) = ShapeSlab::agent_record_for_receiver_present(object_shape_stamp(obj))
+    else {
         return 0;
     };
     let to = (*current).rollback_parent();

@@ -1,8 +1,8 @@
 //! The static-id seeds (design step 4, §7.3): the mint adopts a requested
 //! static id only on a by-facts miss, and a refusal (the id outside its band,
 //! or already naming other facts) aborts: ids are assigned by content.
-use super::*;
 use super::fixtures::*;
+use super::*;
 use crate::object::shapes::{is_layout_word, SHAPE_ID_BASE, STATIC_SHAPE_ID_END};
 
 fn seed(requested: u32, names: &[&str]) -> u32 {
@@ -434,7 +434,11 @@ fn child_aborts_with_refusal(name: &str) {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(!out.status.success(), "the refused static id did not abort");
     assert!(
-        (stderr.contains("static layout publication mismatch") || stderr.contains("republished with other facts") || stderr.contains("invalid static layout") || stderr.contains("static row") || stderr.contains("InvalidWord")),
+        (stderr.contains("static layout publication mismatch")
+            || stderr.contains("republished with other facts")
+            || stderr.contains("invalid static layout")
+            || stderr.contains("static row")
+            || stderr.contains("InvalidWord")),
         "the child died without the refusal message: {stderr}"
     );
 }
@@ -483,7 +487,11 @@ fn a_requested_id_outside_the_static_band_aborts() {
                     BAD[i]
                 );
                 assert!(
-                    (stderr.contains("static layout publication mismatch") || stderr.contains("republished with other facts") || stderr.contains("invalid static layout") || stderr.contains("static row") || stderr.contains("InvalidWord")),
+                    (stderr.contains("static layout publication mismatch")
+                        || stderr.contains("republished with other facts")
+                        || stderr.contains("invalid static layout")
+                        || stderr.contains("static row")
+                        || stderr.contains("InvalidWord")),
                     "the child died without the refusal message: {stderr}"
                 );
             }
@@ -499,7 +507,10 @@ fn a_requested_id_outside_the_static_band_aborts() {
 fn the_counter_never_mints_into_the_static_band() {
     let keys = unsafe { canonical_keys_for_names(&[b"lt4c_only"]) };
     let id = shapes::layout_for_keys_ensure(keys.arr(), 1);
-    assert!(is_layout_word(id) && !shapes::is_static_layout_word(id), "{id:#x}");
+    assert!(
+        is_layout_word(id) && !shapes::is_static_layout_word(id),
+        "{id:#x}"
+    );
 }
 
 #[test]
@@ -509,7 +520,8 @@ fn a_class_seed_takes_the_class_prototype_identity() {
     let keys =
         crate::object::js_build_class_keys_array(SEEDED_CLASS_ID, 2, packed.as_ptr(), 14, 0) as u64;
     let requested = fixture_word(0x3456);
-    let id = fixture_object_shape_id_for_class_keys_static(keys, 2, 2, SEEDED_CLASS_ID, requested, 0);
+    let id =
+        fixture_object_shape_id_for_class_keys_static(keys, 2, 2, SEEDED_CLASS_ID, requested, 0);
     let record = shapes::shape_descriptor_for_word(id).expect("seeded record");
     assert_eq!(record.proto_id, shapes::class_proto_id(SEEDED_CLASS_ID));
     // Registration is idempotent: a second registration (another module

@@ -200,7 +200,10 @@ mod tests {
                 crate::gc::ensure_gc_initialized();
                 super::install_worker_shape_seed(&seed);
                 let descriptor = shape_descriptor_by_id(id).expect("seeded birth shape");
-                let word = crate::object::shapes::handle_by_identity(crate::codegen_abi::ShapeId(id)).unwrap().0;
+                let word =
+                    crate::object::shapes::handle_by_identity(crate::codegen_abi::ShapeId(id))
+                        .unwrap()
+                        .0;
                 assert_ne!(descriptor.keys as usize, source_keys);
                 assert!(
                     unsafe { crate::value::addr_class::try_read_tracked_gc_header(source_keys) }

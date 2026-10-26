@@ -46,9 +46,7 @@ unsafe fn ordinary_receiver_record(obj: *const ObjectHeader) -> Option<shapes::S
         return None;
     }
     let id = shapes::object_shape_stamp(obj);
-    if id.wrapping_sub(shapes::SHAPE_ID_BASE)
-        >= (2 << crate::codegen_abi::LAYOUT_BAND_SHIFT)
-    {
+    if id.wrapping_sub(shapes::SHAPE_ID_BASE) >= (2 << crate::codegen_abi::LAYOUT_BAND_SHIFT) {
         return None;
     }
     shapes::shape_record_for_word(id)
@@ -491,9 +489,7 @@ unsafe fn dynamic_store_receiver(obj: *mut ObjectHeader) -> Option<shapes::Shape
         return None;
     }
     let id = super::layout_desc::layout_id_of_word((*obj).parent_class_id);
-    if id.wrapping_sub(shapes::SHAPE_ID_BASE)
-        >= (2 << crate::codegen_abi::LAYOUT_BAND_SHIFT)
-    {
+    if id.wrapping_sub(shapes::SHAPE_ID_BASE) >= (2 << crate::codegen_abi::LAYOUT_BAND_SHIFT) {
         return None;
     }
     // A live object's own header word: the receiver carries its row.

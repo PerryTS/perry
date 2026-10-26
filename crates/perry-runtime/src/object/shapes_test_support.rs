@@ -126,8 +126,10 @@ pub(crate) fn test_drop_shape_descriptors(keys_id: usize) {
     // does before deciding that a handle is uncarried.
     crate::object::with_transition_cache(|table| unsafe {
         for entry in (*table).iter_mut() {
-            if stale.contains(&entry.prev_shape_id) || stale.contains(&entry.target_shape_id)
-                || crate::object::spread::source_shape(entry).is_some_and(|w| stale.contains(&w)) {
+            if stale.contains(&entry.prev_shape_id)
+                || stale.contains(&entry.target_shape_id)
+                || crate::object::spread::source_shape(entry).is_some_and(|w| stale.contains(&w))
+            {
                 *entry = std::mem::zeroed();
             }
         }
@@ -212,7 +214,11 @@ pub(crate) fn test_unused_external_shape_id() -> crate::codegen_abi::ShapeId {
     // shape, which sites may hold; the dictionary band above it is not. Its
     // plain-kind granule, as a default-identity id is minted.
     let mut id = super::SITE_SHAPE_ID_END - 3 * (1 << super::SHAPE_ID_KIND_SHIFT) - 1;
-    while table.slab().record_ptr(crate::codegen_abi::ShapeId(id)).is_some() {
+    while table
+        .slab()
+        .record_ptr(crate::codegen_abi::ShapeId(id))
+        .is_some()
+    {
         id -= 1;
     }
     crate::codegen_abi::ShapeId(id)
@@ -286,7 +292,10 @@ pub(crate) fn test_shape_record_is_carrier(id: u32) -> bool {
 /// retaining the live authoritative record and its keys family.
 pub(crate) fn test_remove_facts_index(id: u32) {
     let table = &crate::state::state().shapes;
-    let record = table.slab().get_handle(crate::codegen_abi::LayoutWord(id)).unwrap();
+    let record = table
+        .slab()
+        .get_handle(crate::codegen_abi::LayoutWord(id))
+        .unwrap();
     let facts = record.facts_key_with_keys(record.keys);
     table.inner.borrow_mut().facts_remove(facts, id);
 }

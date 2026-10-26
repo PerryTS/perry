@@ -77,7 +77,13 @@ fn two_images_with_different_static_rows_share_no_runtime_memo_answer() {
         let memo = site().memo.unwrap()();
         if !memo.is_null() {
             let (key, hash) = key_bits_and_hash(b"f1_multi_image_x");
-            site_memo::prime(crate::object::shapes::ordinary_dir_addr(), obj, key, hash, &*memo);
+            site_memo::prime(
+                crate::object::shapes::ordinary_dir_addr(),
+                obj,
+                key,
+                hash,
+                &*memo,
+            );
         }
         assert_eq!(site().read_object(obj), 1.0);
     })
@@ -116,14 +122,20 @@ fn the_primary_image_keeps_its_runtime_memo() {
     // image, the owner of the runtime-crate memo storage.
     std::thread::spawn(|| {
         let _ = crate::object::class_image::current_image_id();
-        assert!(!site().memo.unwrap()().is_null(), "the primary image keeps its memo");
+        assert!(
+            !site().memo.unwrap()().is_null(),
+            "the primary image keeps its memo"
+        );
     })
     .join()
     .unwrap();
     // The primary exists now, so this thread enters a second image.
     std::thread::spawn(|| {
         crate::object::class_image::enter_current_thread_image();
-        assert!(site().memo.unwrap()().is_null(), "a second image owns no shared memo");
+        assert!(
+            site().memo.unwrap()().is_null(),
+            "a second image owns no shared memo"
+        );
     })
     .join()
     .unwrap();

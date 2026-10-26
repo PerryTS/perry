@@ -346,7 +346,9 @@ pub(crate) fn finalize_constfn_static(
     let root = scope.root_raw_mut_ptr(object as usize as *mut super::ObjectHeader);
     let requested = Some(requested).filter(|&id| id != 0);
     let existing = requested.and_then(|id| shapes::shape_descriptor_for_word(id).map(|d| (id, d)));
-    if !rebuilt && existing.is_none() { return object; }
+    if !rebuilt && existing.is_none() {
+        return object;
+    }
 
     // A seeded ShapeId already owns the complete body list and key prefix.
     // Packed names and ABI entries bootstrap an unseeded reconstruction;
@@ -828,8 +830,23 @@ pub(crate) unsafe fn resolve_layout_fields(
         word: crate::codegen_abi::LayoutWord(word),
     }
 }
+/// The census line of one static layout request: `requested` is the
+/// compiler-authored word the guards embed, `got` the word published for it.
+fn census_layout_request(
+    path: &str,
+    request: *mut crate::codegen_abi::PerryStaticLayoutRequestV1,
+    word: u32,
+) -> u32 {
+    if !request.is_null() {
+        // SAFETY: a compiler-owned request; its static word is immutable.
+        note_static_request(path, unsafe { (*request).layout_word }, word);
+    }
+    word
+}
+
 #[allow(clippy::too_many_arguments)]
 fn publish_layout_facts(
+    path: &str,
     keys: *const ArrayHeader,
     count: u32,
     live: u32,
@@ -839,11 +856,12 @@ fn publish_layout_facts(
     request: *mut crate::codegen_abi::PerryStaticLayoutRequestV1,
 ) -> u32 {
     if let Some(word) = unsafe { shapes::published_static_request(request, count) } {
-        return word;
+        return census_layout_request(path, request, word);
     }
     let summary = unsafe { super::key_attrs::keys_summary_checked(keys, count) };
+    let static_request = request;
     let request = unsafe { resolve_layout_request(request, proto) };
-    shapes::publish_shape_result(shapes::intern_static_layout(
+    let word = shapes::publish_shape_result(shapes::intern_static_layout(
         keys,
         count,
         live,
@@ -857,7 +875,8 @@ fn publish_layout_facts(
         &[],
         request,
         0,
-    ))
+    ));
+    census_layout_request(path, static_request, word)
 }
 
 #[no_mangle]
@@ -878,6 +897,7 @@ pub extern "C" fn js_object_layout_for_class_keys_static(
         return shapes::publish_shape_result(Err(shapes::ShapeDescriptorError::InvalidFacts));
     }
     publish_layout_facts(
+        "class",
         keys as usize as *const ArrayHeader,
         key_count,
         live.max(key_count),
@@ -900,7 +920,7 @@ pub extern "C" fn js_layout_seed_plain(
         return 0;
     }
     if let Some(word) = unsafe { shapes::published_static_request(request, count) } {
-        return word;
+        return census_layout_request("seed", request, word);
     }
     let names = crate::object::packed_key_names(unsafe {
         std::slice::from_raw_parts(packed, packed_len as usize)
@@ -910,6 +930,7 @@ pub extern "C" fn js_layout_seed_plain(
     }
     let keys = unsafe { canonical_keys_for_names(&names) };
     publish_layout_facts(
+        "seed",
         keys.arr(),
         count,
         live,
@@ -934,7 +955,7 @@ pub extern "C" fn js_layout_seed_plain_constfn(
         invalid_constfn_static_seed();
     }
     if let Some(word) = unsafe { shapes::published_static_request(request, count) } {
-        return word;
+        return census_layout_request("seed-constfn", request, word);
     }
     let names = crate::object::packed_key_names(unsafe {
         std::slice::from_raw_parts(packed, packed_len as usize)
@@ -976,6 +997,7 @@ pub extern "C" fn js_object_final_layout_for_class_keys_static_constfn(
         return shapes::publish_shape_result(Err(shapes::ShapeDescriptorError::InvalidFacts));
     }
     publish_layout_facts(
+        "class-constfn",
         keys as usize as *const ArrayHeader,
         key_count,
         live.max(key_count),
@@ -1077,7 +1099,7 @@ pub extern "C" fn js_object_final_layout_for_class_keys_static_private(
     });
     // SAFETY: `id` was resolved from this agent's live slab record above.
     unsafe { shapes::note_external_carrier_of_word(id) };
-    id
+    census_layout_request("class-private", request, id)
 }
 
 #[cfg(feature = "keepalive-anchors")]

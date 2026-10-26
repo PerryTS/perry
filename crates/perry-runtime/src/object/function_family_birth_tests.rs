@@ -311,7 +311,10 @@ fn per_evaluation_records_retire_and_are_not_seeded() {
             collect();
             collect();
             counts.push(super::super::shapes::test_record_count());
-            assert!(round == 0 || counts[round] <= counts[0] + 8, "records grew: {counts:?}");
+            assert!(
+                round == 0 || counts[round] <= counts[0] + 8,
+                "records grew: {counts:?}"
+            );
         }
         assert_eq!(
             super::super::shapes::test_worker_seed_len(),

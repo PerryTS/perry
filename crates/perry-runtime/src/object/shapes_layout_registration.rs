@@ -83,8 +83,18 @@ mod tests {
         for _ in 0..3 {
             unsafe {
                 install_declared_layout(
-                    id, word, 0, std::ptr::null_mut(), 0, 0,
-                    ShapeObjectKind::Ordinary, PROTO_ID_DEFAULT, 0, 0, 0, 0,
+                    id,
+                    word,
+                    0,
+                    std::ptr::null_mut(),
+                    0,
+                    0,
+                    ShapeObjectKind::Ordinary,
+                    PROTO_ID_DEFAULT,
+                    0,
+                    0,
+                    0,
+                    0,
                 );
             }
         }

@@ -406,16 +406,32 @@ pub struct PerryClassDeclarationPrefixV1 {
     pub birth_layout_word: u32,
 }
 const _: () = {
-    assert!(core::mem::offset_of!(PerryClassDeclarationPrefixV1, birth_layout_word)
-        == if cfg!(target_pointer_width = "64") { CLASS_DECL_BIRTH_LAYOUT_WORD_OFFSET_LP64 }
-           else { CLASS_DECL_BIRTH_LAYOUT_WORD_OFFSET_ILP32 });
+    assert!(
+        core::mem::offset_of!(PerryClassDeclarationPrefixV1, birth_layout_word)
+            == if cfg!(target_pointer_width = "64") {
+                CLASS_DECL_BIRTH_LAYOUT_WORD_OFFSET_LP64
+            } else {
+                CLASS_DECL_BIRTH_LAYOUT_WORD_OFFSET_ILP32
+            }
+    );
 };
 
 /// Explicit dynamic mints: all returns and finalizer carriers are LayoutWords.
 pub mod dynamic_layout_ffi {
     unsafe extern "C" {
         pub fn js_object_layout_for_keys(keys: u64, count: u32) -> u32;
-        pub fn js_object_layout_for_class_keys(keys: u64, count: u32, class_id: u32, rep: u64) -> u32;
-        pub fn js_object_layout_for_class_keys_live(keys: u64, count: u32, live: u32, class_id: u32, rep: u64) -> u32;
+        pub fn js_object_layout_for_class_keys(
+            keys: u64,
+            count: u32,
+            class_id: u32,
+            rep: u64,
+        ) -> u32;
+        pub fn js_object_layout_for_class_keys_live(
+            keys: u64,
+            count: u32,
+            live: u32,
+            class_id: u32,
+            rep: u64,
+        ) -> u32;
     }
 }

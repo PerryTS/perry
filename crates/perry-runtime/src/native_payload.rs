@@ -689,7 +689,9 @@ unsafe fn mint_birth_record(
         // GC_STORE_AUDIT(POINTER_FREE): a class id and a ShapeId, never a heap
         // reference.
         (*meta).instance_birth = u64::from(class_id) | u64::from(shape_id) << 32;
-        crate::object::shapes::note_old_generation_carrier(crate::object::shapes::shape_record_for_word(shape_id));
+        crate::object::shapes::note_old_generation_carrier(
+            crate::object::shapes::shape_record_for_word(shape_id),
+        );
     }
     obj.with_mut_ptr::<ObjectHeader, _>(|obj| obj)
 }

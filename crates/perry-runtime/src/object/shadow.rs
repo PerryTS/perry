@@ -38,12 +38,12 @@
 //! adds one is therefore always a dynamic write, wherever in the runtime the
 //! write lands.
 
-use crate::object::shapes::shape_record_of_receiver;
 use super::layout_desc::{
     carry_shadow, layout_id_of_word, word_is_shadowed, StaticAtom, LAYOUT_SHADOW_BIT,
 };
 use super::shapes::{is_layout_word, is_site_matchable_layout_word};
 use super::ObjectHeader;
+use crate::object::shapes::shape_record_of_receiver;
 
 /// A view of compiler-owned data, never runtime-learned state.
 #[derive(Clone, Copy)]

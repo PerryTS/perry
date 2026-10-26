@@ -6,8 +6,8 @@
 //! shape it cannot validate cheaply and directly simply takes the generic
 //! function fallback.
 
-use crate::object::shapes::shape_descriptor_of_receiver;
 use crate::array::ArrayHeader;
+use crate::object::shapes::shape_descriptor_of_receiver;
 use crate::object::ObjectHeader;
 use crate::value::{JSValue, POINTER_MASK, TAG_FALSE, TAG_HOLE, TAG_TRUE};
 use std::collections::HashSet;

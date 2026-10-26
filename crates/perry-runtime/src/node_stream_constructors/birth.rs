@@ -46,10 +46,7 @@ struct BirthWrite {
     chain: [u32; 8],
     depth: usize,
 }
-pub(crate) struct BirthWriteSite(
-    std::cell::Cell<Option<BirthWrite>>,
-    std::cell::Cell<bool>,
-);
+pub(crate) struct BirthWriteSite(std::cell::Cell<Option<BirthWrite>>, std::cell::Cell<bool>);
 thread_local! {
     /// Sites of this thread that ever held a memo (thread-local statics live as
     /// long as the thread, so the pointers stay valid for every recompute).
@@ -245,14 +242,23 @@ mod tests {
             let obj = crate::object::js_object_alloc(0, 0);
             unsafe { crate::object::shapes::transition_object_shape_semantics(obj) }
         };
-        site.set_memo(BirthWrite { from: 0, to, slot: 0, chain: [0; 8], depth: 0 });
+        site.set_memo(BirthWrite {
+            from: 0,
+            to,
+            slot: 0,
+            chain: [0; 8],
+            depth: 0,
+        });
         let control = {
             let obj = crate::object::js_object_alloc(0, 0);
             unsafe { crate::object::shapes::transition_object_shape_semantics(obj) }
         };
         for round in 0..3 {
             crate::gc::test_collect_synchronous_full_trace();
-            assert!(crate::object::shapes::shape_is_retired(control), "control must retire");
+            assert!(
+                crate::object::shapes::shape_is_retired(control),
+                "control must retire"
+            );
             assert!(
                 !crate::object::shapes::shape_is_retired(to),
                 "round {round}: write memo successor retired"

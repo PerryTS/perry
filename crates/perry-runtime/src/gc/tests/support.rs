@@ -340,10 +340,6 @@ impl ScopedRootScannerRegistryGuard {
         // The property atom table is the same kind of runtime state: weak,
         // address-keyed, filled by any key interned inside the window.
         crate::gc::register_property_atom_scanner();
-        // Static layout words and live metadata handles own Region records.
-        // Their keys/prototype edges are runtime state in every isolated
-        // window, just like the atom and intrinsic-address tables above.
-        gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
         // An explicit gc_init inside the fixture must install the production
         // scanner set into the newly empty registry. Restore the matching
         // initialization state together with the saved registry on drop.

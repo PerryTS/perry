@@ -390,13 +390,19 @@ fn static_prototype_requires_the_candidate_parent_and_its_canonical_holder() {
         )
         .unwrap()
     };
-    assert_eq!(shapes::shape_record_for_word(seed(requested, CHECKED_PARENT)).map(|r| r.identity().0), Some(requested));
+    assert_eq!(
+        shapes::shape_record_for_word(seed(requested, CHECKED_PARENT)).map(|r| r.identity().0),
+        Some(requested)
+    );
     assert!(
         matches(canonical.get_nanbox_f64().to_bits()),
         "a seeded candidate also admits"
     );
     let wrong = requested + 1;
-    assert_eq!(shapes::shape_record_for_word(seed(wrong, CHECKED_PARENT + 1)).map(|r| r.identity().0), Some(wrong));
+    assert_eq!(
+        shapes::shape_record_for_word(seed(wrong, CHECKED_PARENT + 1)).map(|r| r.identity().0),
+        Some(wrong)
+    );
     assert!(
         !super::decl_prototype_birth::static_parent_matches(
             CHECKED_CHILD,

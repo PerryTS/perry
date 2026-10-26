@@ -258,7 +258,8 @@ mod tests {
         unsafe {
             let a = receiver(17.0);
             let b = receiver(19.0);
-            let source = ShapeSlab::agent_record_for_receiver_present(object_shape_stamp(a)).unwrap();
+            let source =
+                ShapeSlab::agent_record_for_receiver_present(object_shape_stamp(a)).unwrap();
             (*source).note_integrity_target(2, u32::MAX);
             assert!(transition_object_integrity(b, INTEGRITY_FLAGS));
             assert!(shape_descriptor_of_receiver(object_shape_stamp(b)).is_some());

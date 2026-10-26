@@ -34,7 +34,11 @@ unsafe fn old_siblings(count: usize) -> (*mut crate::ArrayHeader, Vec<*mut GcHea
         headers.push(header_from_user_ptr(obj.cast()));
     }
     js_shadow_slot_set(1, crate::value::TAG_UNDEFINED);
-    assert!(shapes::test_descriptor_for_retained_word(id).unwrap().old_carrier);
+    assert!(
+        shapes::test_descriptor_for_retained_word(id)
+            .unwrap()
+            .old_carrier
+    );
     (root, headers, id)
 }
 
@@ -167,7 +171,8 @@ fn old_same_shape_graph_survives_copying_minors_and_full_cycles_without_external
                 "reclaim must include clear and restore, even on the synchronous full path"
             );
             let valid = build_valid_pointer_set();
-            let descriptor = shapes::test_descriptor_for_retained_word(id).expect("live shape after full");
+            let descriptor =
+                shapes::test_descriptor_for_retained_word(id).expect("live shape after full");
             assert!(
                 valid.contains(&(descriptor.keys as usize)),
                 "full must retain the keys array"

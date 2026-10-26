@@ -11,16 +11,29 @@ fn prior_dynamic_then_static_preserves_both_and_canonicalizes_static() {
             shape_id: shapes::SHAPE_ID_BASE + 0x7f11,
             layout_word: 0x8000_07d0,
         };
-        let static_word = js_object_layout_for_class_keys_static(
-            keys.arr() as u64, 1, 1, 0, &mut request, 0);
+        let static_word =
+            js_object_layout_for_class_keys_static(keys.arr() as u64, 1, 1, 0, &mut request, 0);
         assert_eq!(static_word, request.layout_word);
         assert_ne!(dynamic, static_word);
-        assert_eq!(shapes::handle_by_identity(ShapeId(dynamic_id)), Some(LayoutWord(dynamic)));
-        assert_eq!(shapes::handle_by_identity(ShapeId(request.shape_id)), Some(LayoutWord(static_word)));
-        assert_eq!(shapes::js_object_layout_for_class_keys(keys.arr() as u64, 1, 0, 0), static_word);
-        assert_eq!(js_object_layout_for_class_keys_static(
-            keys.arr() as u64, 1, 1, 0, &mut request, 0), static_word);
-    }).join().unwrap();
+        assert_eq!(
+            shapes::handle_by_identity(ShapeId(dynamic_id)),
+            Some(LayoutWord(dynamic))
+        );
+        assert_eq!(
+            shapes::handle_by_identity(ShapeId(request.shape_id)),
+            Some(LayoutWord(static_word))
+        );
+        assert_eq!(
+            shapes::js_object_layout_for_class_keys(keys.arr() as u64, 1, 0, 0),
+            static_word
+        );
+        assert_eq!(
+            js_object_layout_for_class_keys_static(keys.arr() as u64, 1, 1, 0, &mut request, 0),
+            static_word
+        );
+    })
+    .join()
+    .unwrap();
 }
 
 #[test]
@@ -48,13 +61,25 @@ fn worker_seed_replays_static_rows_and_allocates_fresh_dynamic_rows() {
                 shapes::js_object_layout_for_class_keys(k.arr() as u64, 1, 0, 0);
             }
             shapes::install_worker_shape_seed(&seed);
-            assert_eq!(shapes::handle_by_identity(ShapeId(request.shape_id)), Some(LayoutWord(static_word)));
+            assert_eq!(
+                shapes::handle_by_identity(ShapeId(request.shape_id)),
+                Some(LayoutWord(static_word))
+            );
             let local = shapes::handle_by_identity(ShapeId(dynamic_id)).unwrap();
             assert_ne!(local.0, dynamic);
             assert!(local.row().0 >= crate::object::class_image::layout_image().static_rows);
-            assert_eq!(shapes::shape_descriptor_by_id(dynamic_id).unwrap().logical_key_count, 1);
-        }).join().unwrap();
-    }).join().unwrap();
+            assert_eq!(
+                shapes::shape_descriptor_by_id(dynamic_id)
+                    .unwrap()
+                    .logical_key_count,
+                1
+            );
+        })
+        .join()
+        .unwrap();
+    })
+    .join()
+    .unwrap();
 }
 
 /// BUG (found by the typed-seam conversion): `declared_class_chain_blocks_store`
@@ -72,8 +97,12 @@ fn declared_class_birth_lookup_uses_the_layout_word_not_the_identity() {
         };
         let word = js_object_layout_for_class_keys_static(0, 0, 3, 0, &mut request, 0);
         assert_eq!(word, request.layout_word);
-        assert_ne!(request.shape_id, request.layout_word, "identity and word must differ");
-        let class_id = crate::object::class_registry::prototype_objects::test_alloc_synthetic_class_id();
+        assert_ne!(
+            request.shape_id, request.layout_word,
+            "identity and word must differ"
+        );
+        let class_id =
+            crate::object::class_registry::prototype_objects::test_alloc_synthetic_class_id();
         crate::object::class_registry::declarations::test_declare_birth_layout(
             class_id,
             request.shape_id,

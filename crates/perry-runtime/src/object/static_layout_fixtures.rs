@@ -38,11 +38,29 @@ pub(crate) fn fixture_shape_seed_plain_constfn(
     entry_count: u32,
 ) -> u32 {
     if requested == 0 {
-        let id = super::js_shape_seed_plain_constfn(requested, packed, packed_len, count, live, rep, entries, entry_count);
+        let id = super::js_shape_seed_plain_constfn(
+            requested,
+            packed,
+            packed_len,
+            count,
+            live,
+            rep,
+            entries,
+            entry_count,
+        );
         return shapes::handle_by_identity(crate::codegen_abi::ShapeId(id)).map_or(0, |w| w.0);
     }
     let mut request = request(requested);
-    super::js_layout_seed_plain_constfn(&mut request, packed, packed_len, count, live, rep, entries, entry_count)
+    super::js_layout_seed_plain_constfn(
+        &mut request,
+        packed,
+        packed_len,
+        count,
+        live,
+        rep,
+        entries,
+        entry_count,
+    )
 }
 
 pub(crate) fn fixture_object_shape_id_for_class_keys_static(
@@ -54,11 +72,20 @@ pub(crate) fn fixture_object_shape_id_for_class_keys_static(
     rep: u64,
 ) -> u32 {
     if requested == 0 {
-        let id = super::js_object_shape_id_for_class_keys_static(keys, key_count, live, class_id, requested, rep);
+        let id = super::js_object_shape_id_for_class_keys_static(
+            keys, key_count, live, class_id, requested, rep,
+        );
         return shapes::handle_by_identity(crate::codegen_abi::ShapeId(id)).map_or(0, |w| w.0);
     }
     let mut request = request(requested);
-    super::js_object_layout_for_class_keys_static(keys, key_count, live, class_id, &mut request, rep)
+    super::js_object_layout_for_class_keys_static(
+        keys,
+        key_count,
+        live,
+        class_id,
+        &mut request,
+        rep,
+    )
 }
 
 pub(crate) fn fixture_object_final_shape_id_for_class_keys_static_constfn(
@@ -72,11 +99,29 @@ pub(crate) fn fixture_object_final_shape_id_for_class_keys_static_constfn(
     entry_count: u32,
 ) -> u32 {
     if requested == 0 {
-        let id = super::js_object_final_shape_id_for_class_keys_static_constfn(keys, key_count, live, class_id, requested, rep, entries, entry_count);
+        let id = super::js_object_final_shape_id_for_class_keys_static_constfn(
+            keys,
+            key_count,
+            live,
+            class_id,
+            requested,
+            rep,
+            entries,
+            entry_count,
+        );
         return shapes::handle_by_identity(crate::codegen_abi::ShapeId(id)).map_or(0, |w| w.0);
     }
     let mut request = request(requested);
-    super::js_object_final_layout_for_class_keys_static_constfn(keys, key_count, live, class_id, &mut request, rep, entries, entry_count)
+    super::js_object_final_layout_for_class_keys_static_constfn(
+        keys,
+        key_count,
+        live,
+        class_id,
+        &mut request,
+        rep,
+        entries,
+        entry_count,
+    )
 }
 
 pub(crate) fn fixture_object_final_shape_id_for_class_keys_static_private(
@@ -92,9 +137,31 @@ pub(crate) fn fixture_object_final_shape_id_for_class_keys_static_private(
     brand_count: u32,
 ) -> u32 {
     if requested == 0 {
-        let id = super::js_object_final_shape_id_for_class_keys_static_private(keys, key_count, live, class_id, requested, rep, private_packed, private_len, brands, brand_count);
+        let id = super::js_object_final_shape_id_for_class_keys_static_private(
+            keys,
+            key_count,
+            live,
+            class_id,
+            requested,
+            rep,
+            private_packed,
+            private_len,
+            brands,
+            brand_count,
+        );
         return shapes::handle_by_identity(crate::codegen_abi::ShapeId(id)).map_or(0, |w| w.0);
     }
     let mut request = request(requested);
-    super::js_object_final_layout_for_class_keys_static_private(keys, key_count, live, class_id, &mut request, rep, private_packed, private_len, brands, brand_count)
+    super::js_object_final_layout_for_class_keys_static_private(
+        keys,
+        key_count,
+        live,
+        class_id,
+        &mut request,
+        rep,
+        private_packed,
+        private_len,
+        brands,
+        brand_count,
+    )
 }
