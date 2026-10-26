@@ -12,7 +12,10 @@ const T1: [(&str, &str); 4] = [
     ("/t1/m.js", include_str!("fixtures/cjs_t1/m.js")),
     ("/t1/a.js", include_str!("fixtures/cjs_t1/a.js")),
     ("/t1/b.js", include_str!("fixtures/cjs_t1/b.js")),
-    ("/t1/perry_cjs.js", include_str!("fixtures/cjs_t1/perry_cjs.js")),
+    (
+        "/t1/perry_cjs.js",
+        include_str!("fixtures/cjs_t1/perry_cjs.js"),
+    ),
 ];
 
 /// DECISIONS 115: `r.js` keeps its classes inside the factory (they name
@@ -23,7 +26,10 @@ const T1: [(&str, &str); 4] = [
 const T2: [(&str, &str); 3] = [
     ("/t2/m.js", include_str!("fixtures/cjs_t2/m.js")),
     ("/t2/r.js", include_str!("fixtures/cjs_t2/r.js")),
-    ("/t2/perry_cjs.js", include_str!("fixtures/cjs_t2/perry_cjs.js")),
+    (
+        "/t2/perry_cjs.js",
+        include_str!("fixtures/cjs_t2/perry_cjs.js"),
+    ),
 ];
 
 /// AWFY Richards as the compiler wraps it: `sa_Richards.js` requires
@@ -42,7 +48,10 @@ const T3: [(&str, &str); 4] = [
         "/t3/benchmark.js",
         include_str!("fixtures/cjs_t3/benchmark.js"),
     ),
-    ("/t3/perry_cjs.js", include_str!("fixtures/cjs_t3/perry_cjs.js")),
+    (
+        "/t3/perry_cjs.js",
+        include_str!("fixtures/cjs_t3/perry_cjs.js"),
+    ),
 ];
 
 /// DECISIONS 127: hidden capture parameters bound at a direct call and in a
@@ -57,7 +66,10 @@ const T5: [(&str, &str); 4] = [
     ("/t5/m.js", include_str!("fixtures/cjs_t5/m.js")),
     ("/t5/r.js", include_str!("fixtures/cjs_t5/r.js")),
     ("/t5/b.js", include_str!("fixtures/cjs_t5/b.js")),
-    ("/t5/perry_cjs.js", include_str!("fixtures/cjs_t5/perry_cjs.js")),
+    (
+        "/t5/perry_cjs.js",
+        include_str!("fixtures/cjs_t5/perry_cjs.js"),
+    ),
 ];
 
 /// AWFY CD as the compiler wraps it: `sa_CD.js` requires `cd.js` (the
@@ -71,7 +83,10 @@ const T6: [(&str, &str); 5] = [
         include_str!("fixtures/cjs_t6/benchmark.js"),
     ),
     ("/t6/som.js", include_str!("fixtures/cjs_t6/som.js")),
-    ("/t6/perry_cjs.js", include_str!("fixtures/cjs_t6/perry_cjs.js")),
+    (
+        "/t6/perry_cjs.js",
+        include_str!("fixtures/cjs_t6/perry_cjs.js"),
+    ),
 ];
 
 fn hirs(mods: &[(&str, &str)]) -> Vec<(String, perry_hir::Module)> {
@@ -116,7 +131,10 @@ fn both(mods: &[(&str, &str)]) -> (ProgramFacts, ProgramFacts) {
 fn assert_cjs_per_unit(w: &ProgramFacts, u: &ProgramFacts, n: usize) {
     let (pw, pu) = (proven_sites(w), proven_sites(u));
     let stronger: Vec<&String> = pu.difference(&pw).collect();
-    assert!(stronger.is_empty(), "per unit claims more than whole-program: {stronger:?}");
+    assert!(
+        stronger.is_empty(),
+        "per unit claims more than whole-program: {stronger:?}"
+    );
     assert_eq!(
         pu.len(),
         n,
@@ -196,8 +214,16 @@ fn a_class_bound_through_its_self_cell_is_a_contract() {
     };
     // Per unit `T.k` reads ⊤ until a class instance's fields cross units
     // (DECISIONS 186); the whole program holds the class and `undefined`.
-    assert_eq!(k_kind(&w), Some((false, crate::model::prim::UNDEF)), "T.k whole-program");
-    assert_eq!(k_kind(&u), Some((true, crate::model::prim::ALL)), "T.k per unit");
+    assert_eq!(
+        k_kind(&w),
+        Some((false, crate::model::prim::UNDEF)),
+        "T.k whole-program"
+    );
+    assert_eq!(
+        k_kind(&u),
+        Some((true, crate::model::prim::ALL)),
+        "T.k per unit"
+    );
 }
 
 /// DECISIONS 171: every unit names the CommonJS registry union `cjs:*`,
@@ -304,7 +330,11 @@ fn a_registry_union_consumed_during_the_solve_is_seeded() {
 #[test]
 fn richards_per_unit_proves_what_the_whole_program_proves() {
     let (w, u) = both(&T3);
-    assert!(proven_sites(&w).len() >= 120, "whole-program proves {}", proven_sites(&w).len());
+    assert!(
+        proven_sites(&w).len() >= 120,
+        "whole-program proves {}",
+        proven_sites(&w).len()
+    );
     assert_cjs_per_unit(&w, &u, 5);
 }
 

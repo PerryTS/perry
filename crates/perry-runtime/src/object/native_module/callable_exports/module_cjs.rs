@@ -55,9 +55,8 @@ pub(crate) fn install_module_cjs_cache_value(cache: f64) {
     let previous = MODULE_CJS_CACHE_VALUE.with(Cell::get);
     if previous != 0 && previous != cache.get_nanbox_f64().to_bits() {
         let previous = scope.root_nanbox_f64(f64::from_bits(previous));
-        let old = || {
-            crate::value::js_nanbox_get_pointer(previous.get_nanbox_f64()) as *mut ObjectHeader
-        };
+        let old =
+            || crate::value::js_nanbox_get_pointer(previous.get_nanbox_f64()) as *mut ObjectHeader;
         let keys = scope.root_raw_mut_ptr(crate::object::js_object_keys(old()));
         let count = keys.with_mut_ptr(|keys: *mut crate::array::ArrayHeader| {
             crate::array::js_array_length(keys)

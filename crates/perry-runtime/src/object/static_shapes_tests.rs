@@ -4,7 +4,7 @@
 use super::fixtures::*;
 use super::*;
 use crate::codegen_abi::LayoutWord;
-use crate::object::shapes::{is_layout_word, SHAPE_ID_BASE, STATIC_SHAPE_ID_END};
+use crate::object::shapes::{is_layout_word, STATIC_SHAPE_ID_END};
 
 fn seed(requested: u32, names: &[&str]) -> u32 {
     seed_with_rep(requested, names, 0)

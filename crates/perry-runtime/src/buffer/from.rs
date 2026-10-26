@@ -1255,7 +1255,7 @@ fn js_buffer_concat_impl(
             arr_ptr
         }
     };
-    if arr_ptr.is_null() || (arr_ptr as u64) < 0x1000 {
+    if !crate::value::addr_class::is_above_handle_band(arr_ptr as usize) {
         return buffer_alloc(0);
     }
     // The list may be a forwarding stub: an array that outgrew its storage
@@ -1265,7 +1265,7 @@ fn js_buffer_concat_impl(
     // `list[1]` as a number (effect's NodeStream pull does exactly this:
     // `Arr.of(item)`, then `push`). Resolve to the live array first.
     let arr_ptr = crate::array::clean_arr_ptr(arr_ptr);
-    if arr_ptr.is_null() || (arr_ptr as u64) < 0x1000 {
+    if arr_ptr.is_null() {
         return buffer_alloc(0);
     }
 

@@ -54,31 +54,15 @@ fn raw(v: f64) -> *mut u8 {
 /// POINTER-tagged value above the handle band.
 #[inline(always)]
 unsafe fn heap_cell(v: f64) -> Option<*const crate::gc::GcHeader> {
-    let bits = v.to_bits();
-    if bits & !POINTER_MASK != POINTER_TAG {
-        return None;
-    }
-    let addr = (bits & POINTER_MASK) as usize;
-    if !crate::value::addr_class::is_above_handle_band(addr) || addr as u64 >= 1u64 << 47 {
-        return None;
-    }
-    let header = (addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    ((*header).gc_flags & crate::gc::GC_FLAG_FORWARDED == 0).then_some(header)
+    let header = crate::value::addr_class::pointer_value_header(v.to_bits())?;
+    (header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0).then_some(header)
 }
 
 /// [`heap_cell`] without the forwarding test (a forwarded array alias is
 /// resolved by [`array_recv`]).
 #[inline(always)]
 unsafe fn heap_cell_any(v: f64) -> Option<*const crate::gc::GcHeader> {
-    let bits = v.to_bits();
-    if bits & !POINTER_MASK != POINTER_TAG {
-        return None;
-    }
-    let addr = (bits & POINTER_MASK) as usize;
-    if !crate::value::addr_class::is_above_handle_band(addr) || addr as u64 >= 1u64 << 47 {
-        return None;
-    }
-    Some((addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader)
+    crate::value::addr_class::pointer_value_header(v.to_bits()).map(|header| header as *const _)
 }
 
 /// A plain array (`Array.prototype` answers every key it does not hold as
@@ -88,28 +72,22 @@ unsafe fn heap_cell_any(v: f64) -> Option<*const crate::gc::GcHeader> {
 #[inline(always)]
 unsafe fn array_recv(v: f64) -> Option<f64> {
     let bits = v.to_bits();
-    if bits & !POINTER_MASK != POINTER_TAG {
+    let mut header = crate::value::addr_class::pointer_value_header(bits)?;
+    if header.obj_type != crate::gc::GC_TYPE_ARRAY {
         return None;
     }
-    let addr = (bits & POINTER_MASK) as usize;
-    if !crate::value::addr_class::is_above_handle_band(addr) || addr as u64 >= 1u64 << 47 {
-        return None;
-    }
-    let mut header = (addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    if (*header).obj_type != crate::gc::GC_TYPE_ARRAY {
-        return None;
-    }
-    let mut live = addr;
-    if (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
-        live = forwarded_head(addr)?;
-        header = (live - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        if (*header).obj_type != crate::gc::GC_TYPE_ARRAY
-            || (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+    let mut live = (bits & POINTER_MASK) as usize;
+    if header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
+        live = forwarded_head(live)?;
+        // `clean_arr_ptr` resolved `live` to the array the alias forwards to.
+        header = crate::value::addr_class::honest_header(live);
+        if header.obj_type != crate::gc::GC_TYPE_ARRAY
+            || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
             return None;
         }
     }
-    ((*header)._reserved & ARRAY_NOT_DEFAULT == 0 && pristine(BuiltinProto::Array))
+    (header._reserved & ARRAY_NOT_DEFAULT == 0 && pristine(BuiltinProto::Array))
         .then(|| f64::from_bits(POINTER_TAG | live as u64))
 }
 

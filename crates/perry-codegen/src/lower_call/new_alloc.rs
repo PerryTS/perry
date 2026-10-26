@@ -345,10 +345,7 @@ pub(crate) fn constructor_added_key_count_in<'c>(
 /// complete constructor is an unobservable assignment prologue. No inferred
 /// constructor property is included in this set: HIR retains actual fields only.
 pub(crate) fn keys_defined_at_birth(class: &Class) -> bool {
-    !class
-        .fields
-        .iter()
-        .any(|f| f.origin.is_reservation())
+    !class.fields.iter().any(|f| f.origin.is_reservation())
         && (class.is_literal_shape()
             || (class
                 .constructor

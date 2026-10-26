@@ -211,3 +211,62 @@ fn an_ip_literal_is_not_a_server_name() {
     server.pump();
     assert_eq!(server.server_name(), None);
 }
+
+#[test]
+fn malformed_records_send_one_alert_and_stay_terminal() {
+    for malformed in [
+        &b"GET / HTTP/1.0\r\n\r\n"[..],
+        &[22, 3, 3, 255, 255][..], // Oversized handshake record.
+    ] {
+        for stage in 0..4 {
+            let mut client = TlsSession::client(client_config(true, &[]), localhost()).unwrap();
+            let mut server = TlsSession::server(server_config(&[])).unwrap();
+            client.pump();
+            let hello = client.take_output();
+            let session = match stage {
+                0 => &mut server,
+                1 => {
+                    server.receive(&hello);
+                    server.pump();
+                    assert!(server.protocol_version().is_some());
+                    assert!(!server.take_output().is_empty());
+                    &mut server
+                }
+                2 => &mut client,
+                _ => {
+                    // A partial handshake leaves deframer offsets into input.
+                    // Draining must preserve that buffer, without parsing it again.
+                    server.receive(&[22, 3, 3, 0, 4, 1, 0, 0, 10]);
+                    server.pump();
+                    assert!(server.failure().is_none());
+                    assert!(!server.has_output());
+                    &mut server
+                }
+            };
+            session.receive(malformed);
+            session.pump();
+            let failure = session.failure().cloned().expect("malformed record fails");
+            let alert = session.take_output();
+            assert!(alert.len() >= 7, "fatal alert missing: stage={stage}");
+            let payload_len = u16::from_be_bytes([alert[3], alert[4]]) as usize;
+            assert_eq!(alert.len(), 5 + payload_len, "exactly one alert record");
+            if session.protocol_version().is_none() {
+                assert_eq!(alert[0], 21, "plaintext alert content type");
+                assert_eq!(alert[5], 2, "fatal alert level");
+            } else {
+                assert_eq!(alert[0], 23, "negotiated TLS 1.3 encrypts the alert");
+            }
+            for _ in 0..3 {
+                session.receive(malformed);
+                session.write(b"ignored after failure");
+                session.close_notify();
+                let progress = session.pump();
+                assert!(!progress.handshake_done);
+                assert_eq!(session.failure(), Some(&failure));
+                assert_eq!(session.pending_plaintext(), 0);
+                assert!(session.take_plaintext().is_empty());
+                assert!(session.take_output().is_empty(), "no duplicate alert");
+            }
+        }
+    }
+}

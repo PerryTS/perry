@@ -38,6 +38,7 @@ fn gc_init_establishes_inline_state_on_each_live_worker_heap() {
                     + 3 * std::mem::size_of::<u64>();
                 let allocated = js_inline_arena_slow_alloc(raw, size, 8);
                 assert!(!allocated.is_null());
+                // GC_STORE_AUDIT(POINTER_FREE): type, flags and size contain no heap references.
                 allocated
                     .cast::<crate::gc::GcHeader>()
                     .write(crate::gc::GcHeader {
@@ -57,6 +58,7 @@ fn gc_init_establishes_inline_state_on_each_live_worker_heap() {
                     ek_kind: 0,
                 });
                 for i in 0..3 {
+                    // GC_STORE_AUDIT(POINTER_FREE): TAG_HOLE is an immediate value.
                     crate::array::array_elements_ptr(array)
                         .cast::<u64>()
                         .add(i)
