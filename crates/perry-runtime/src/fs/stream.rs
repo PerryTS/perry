@@ -120,6 +120,8 @@ pub(crate) struct Utf8StreamState {
     max_write: usize,
     periodic_flush: usize,
     periodic_flush_timer: Option<i64>,
+    // One coalesced next-tick notification for synchronous writes.
+    drain_scheduled: bool,
     mkdir: bool,
     mode_value: f64,
     retry_eagain: f64,
@@ -1203,6 +1205,8 @@ mod stream_errors;
 use stream_errors::*;
 mod utf8_stream;
 pub(crate) use utf8_stream::*;
+#[cfg(test)]
+mod utf8_stream_tests;
 
 pub(crate) extern "C" fn write_stream_close_impl(
     closure: *const ClosureHeader,
@@ -1853,7 +1857,8 @@ fn create_utf8_stream_with_state(state: Utf8StreamState) -> f64 {
             1,
         );
         js_closure_set_capture_ptr(closure, 0, id as i64);
-        let timer = crate::timer::setInterval(closure as i64, periodic_flush as f64);
+        // Unref and cancellation consume a native ID, not a JS Timeout pointer.
+        let timer = crate::timer::schedule_interval_callback(closure as i64, periodic_flush as f64);
         crate::timer::js_timer_unref(timer);
         UTF8_STREAM_REGISTRY.with(|registry| {
             if let Some(state) = registry.borrow_mut().get_mut(&id) {
