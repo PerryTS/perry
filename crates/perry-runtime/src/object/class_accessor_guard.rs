@@ -43,7 +43,7 @@ pub unsafe extern "C" fn js_class_accessor_shape_guard(
         return 0;
     }
     let word = (*obj).parent_class_id;
-    let birth = super::shapes::is_shape_id(expected) && word == expected;
+    let birth = super::shapes::is_layout_word(expected) && word == expected;
     let family_birth =
         family >> 32 != 0 && u64::from((*obj).class_id) | (u64::from(word) << 32) == family;
     if !birth && !family_birth {

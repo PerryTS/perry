@@ -89,7 +89,7 @@ fn method_direct_call_contract(
     let name_hash = hash_bytes(method_bytes);
     if object_addr == 0
         || expected_class_id == 0
-        || !crate::object::shapes::is_shape_id(expected_shape_id)
+        || !crate::object::shapes::is_layout_word(expected_shape_id)
         || expected_func_ptr.is_null()
     {
         return (shape_id, class_id, gc_type, name_hash, false);
@@ -110,7 +110,7 @@ fn method_direct_call_contract(
         }
         if (*obj).class_id == crate::object::NATIVE_MODULE_CLASS_ID
             || (*obj).class_id != expected_class_id
-            || crate::object::shapes::object_shape_id(obj) != expected_shape_id
+            || crate::object::shapes::object_layout_stamp(obj) != expected_shape_id
             || shape_id != expected_shape_id
         {
             return (shape_id, class_id, gc_type, name_hash, false);
@@ -165,7 +165,7 @@ fn class_field_get_contract(
     let object_addr = normalize_raw_object_addr(receiver.to_bits());
     if object_addr == 0
         || expected_class_id == 0
-        || !crate::object::shapes::is_shape_id(expected_shape_id)
+        || !crate::object::shapes::is_layout_word(expected_shape_id)
     {
         return (0, 0, 0, false);
     }
@@ -185,8 +185,8 @@ fn class_field_get_contract(
 
         let obj = object_addr as *mut ObjectHeader;
         let class_id = (*obj).class_id;
-        let shape_id = crate::object::shapes::object_shape_id(obj);
-        let Some(descriptor) = crate::object::shapes::shape_descriptor_by_id(shape_id) else {
+        let shape_id = crate::object::shapes::object_layout_stamp(obj);
+        let Some(descriptor) = crate::object::shapes::shape_descriptor_for_word(shape_id) else {
             return (shape_id, class_id, gc_type, false);
         };
         let key_name = match key_as_str(key) {
@@ -224,7 +224,7 @@ fn class_field_fast_contract(
     let object_addr = normalize_raw_object_addr(receiver.to_bits());
     if object_addr == 0
         || expected_class_id == 0
-        || !crate::object::shapes::is_shape_id(expected_shape_id)
+        || !crate::object::shapes::is_layout_word(expected_shape_id)
     {
         return false;
     }
@@ -312,7 +312,7 @@ pub extern "C" fn js_typed_feedback_class_field_get_guard(
 
 #[inline]
 fn receiver_has_numeric_proof_shape(obj: *const ObjectHeader) -> bool {
-    crate::object::shapes::shape_object_kind_by_id(unsafe {
+    crate::object::shapes::shape_object_kind_of_receiver(unsafe {
         crate::object::shapes::object_shape_stamp(obj)
     }) == Some(crate::object::shapes::ShapeObjectKind::OrdinaryNumericProof)
 }
@@ -615,7 +615,7 @@ pub unsafe extern "C" fn js_method_direct_shape_guard(
     expected_class_id: u32,
     expected_shape_id: u32,
 ) -> i32 {
-    if expected_class_id == 0 || !crate::object::shapes::is_shape_id(expected_shape_id) {
+    if expected_class_id == 0 || !crate::object::shapes::is_layout_word(expected_shape_id) {
         return 0;
     }
     let mut shape_id = 0;

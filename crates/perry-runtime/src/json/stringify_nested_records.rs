@@ -43,7 +43,7 @@ unsafe fn ordinary_object(bits: u64) -> Option<(*const crate::ObjectHeader, usiz
 
 unsafe fn record(bits: u64) -> Option<Record> {
     let (obj, size) = ordinary_object(bits)?;
-    let descriptor = crate::object::shapes::shape_descriptor_by_id(
+    let descriptor = crate::object::shapes::shape_descriptor_of_receiver(
         crate::object::shapes::object_shape_stamp(obj),
     )?;
     let len = key_count(descriptor.keys_view())?;
@@ -146,7 +146,7 @@ impl Emitter {
         shape: u32,
         bucket: usize,
     ) -> Option<usize> {
-        let descriptor = crate::object::shapes::shape_descriptor_by_id(shape)?;
+        let descriptor = crate::object::shapes::shape_descriptor_for_word(shape)?;
         let keys_view = descriptor.keys_view();
         let keys_array = keys_view.arr() as *const crate::ArrayHeader;
         let len = key_count(keys_view)?;

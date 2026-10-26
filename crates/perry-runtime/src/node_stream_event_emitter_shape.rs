@@ -81,7 +81,7 @@ pub(super) fn own_slot_in(
             return None;
         }
         let id = (*obj).shape_word();
-        if !crate::object::shapes::is_site_matchable_shape_id(id) {
+        if !crate::object::shapes::is_site_matchable_layout_word(id) {
             return None;
         }
         // A family object: its layout's index answers, and a slot holding
@@ -94,7 +94,7 @@ pub(super) fn own_slot_in(
                 Some((_, slot)) => Some(Some(slot)),
             };
         }
-        let record = crate::object::shapes::shape_record_by_id(id)?;
+        let record = crate::object::shapes::shape_record_for_word(id)?;
         match record.own_data_slot_of_value(key_bits, bytes)? {
             Some(slot) if slot_bits(obj, slot) == crate::value::TAG_HOLE => None,
             found => Some(found),

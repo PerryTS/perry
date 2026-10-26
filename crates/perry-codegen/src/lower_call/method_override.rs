@@ -39,8 +39,8 @@ pub(super) const GC_OBJECT_METHOD_GUARD_MASK_I32: &str = "134250751"; // 0x0800_
                                                                       // exact word compare already subsumes the descriptor bit; the runtime only
                                                                       // learns a word whose key list lacks the method name, and an accessor or
                                                                       // attribute for that name would have to add the key.
-pub(super) const SHAPE_ID_BASE_NEG_I32: &str = "-2147483648"; // subtract 0x8000_0000
-pub(super) const SHAPE_ID_RANGE_LEN: &str = "1073741824"; // 0x4000_0000
+pub(super) const LAYOUT_TAG_NEG_I32: &str = "-2147483648"; // subtract 0x8000_0000
+pub(super) const ORDINARY_LAYOUT_RANGE_LEN: &str = "268435456"; // ordinary unshadowed layout band
 
 /// A deliberately small constructive Boolean proof for method returns.
 ///
@@ -430,8 +430,8 @@ fn emit_inline_exact_argument_shape_guard(
             &expected_class_shape,
             &[],
         );
-        let shape_id_rel = blk.add(I32, expected_shape_id, SHAPE_ID_BASE_NEG_I32);
-        let shape_valid = blk.icmp_ult(I32, &shape_id_rel, SHAPE_ID_RANGE_LEN);
+        let shape_id_rel = blk.add(I32, expected_shape_id, LAYOUT_TAG_NEG_I32);
+        let shape_valid = blk.icmp_ult(I32, &shape_id_rel, ORDINARY_LAYOUT_RANGE_LEN);
         let pass = blk.and(I1, &gc_header_ok, &class_shape_ok);
         let pass = blk.and(I1, &pass, &shape_valid);
         blk.cond_br(&pass, fast_label, fallback_label);

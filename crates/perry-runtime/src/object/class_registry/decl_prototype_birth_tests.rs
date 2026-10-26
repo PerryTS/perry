@@ -127,7 +127,7 @@ fn a_declared_prototype_is_born_in_its_final_linked_shape() {
             slot(proto, 0),
             crate::object::class_constructor_ref_value(cid).to_bits()
         );
-        let record = crate::object::shapes::shape_record_by_id(
+        let record = crate::object::shapes::shape_record_for_word(
             crate::object::shapes::object_shape_stamp(proto),
         )
         .expect("record");
@@ -308,12 +308,14 @@ static EMPTY_INDEX: [u32; 1] = [u32::MAX];
 )]
 static mut CHECKED_LAYOUT: crate::object::layout_desc::PerryLayoutDesc =
     crate::object::layout_desc::PerryLayoutDesc {
+        shape_id: 0,
+        _layout_pad: 0,
         family: 0x41574202,
         variant: 0,
         kind: 0,
         integrity: 0,
         slot_count: 0,
-        layout_id: crate::object::layout_desc::LAYOUT_ID_CARRIED,
+        layout_id: 0x80000086,
         rep: 0,
         proto: std::ptr::null(),
         keys: EMPTY_KEYS.as_ptr(),
@@ -388,13 +390,19 @@ fn static_prototype_requires_the_candidate_parent_and_its_canonical_holder() {
         )
         .unwrap()
     };
-    assert_eq!(seed(requested, CHECKED_PARENT), requested);
+    assert_eq!(
+        shapes::shape_record_for_word(seed(requested, CHECKED_PARENT)).map(|r| r.identity().0),
+        Some(requested)
+    );
     assert!(
         matches(canonical.get_nanbox_f64().to_bits()),
         "a seeded candidate also admits"
     );
     let wrong = requested + 1;
-    assert_eq!(seed(wrong, CHECKED_PARENT + 1), wrong);
+    assert_eq!(
+        shapes::shape_record_for_word(seed(wrong, CHECKED_PARENT + 1)).map(|r| r.identity().0),
+        Some(wrong)
+    );
     assert!(
         !super::decl_prototype_birth::static_parent_matches(
             CHECKED_CHILD,
@@ -452,6 +460,7 @@ fn a_refused_static_request_keeps_the_general_born_final_shape() {
     assert!(crate::object::shapes::shape_record_by_id(requested).is_none());
     let declaration = Box::leak(Box::new(super::declarations::ClassDeclaration {
         birth_shape: requested,
+        birth_layout_word: crate::object::static_shapes::fixtures::fixture_word(requested),
         ..super::declarations::ClassDeclaration::native(&[])
     }));
     unsafe {

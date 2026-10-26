@@ -504,6 +504,22 @@ unsafe fn visit_gc_rewrite_slot_descriptors_with<const INLINE_LAYOUT: bool>(
             // reference (NaN-boxed pointer, raw pointer, or the TAG_NULL /
             // 0-unset sentinels, which the slot visitor ignores).
             let meta = user_ptr as *mut crate::object::ObjectMeta;
+            let birth_word = ((*meta).instance_birth >> 32) as u32;
+            if birth_word != 0 {
+                let birth = crate::object::shapes::shape_record_for_word(birth_word);
+                if full_trace_active() {
+                    crate::object::shapes::note_full_trace_carrier(birth);
+                }
+                crate::object::shapes::note_old_generation_carrier(birth);
+                if let Some(slot) = crate::object::gc_shape_keys_edge_slot(birth) {
+                    visit(fixed_slot(slot));
+                }
+                if let Some(slot) =
+                    crate::object::gc_shape_prototype_edge_slot(birth, full_trace_active())
+                {
+                    visit(fixed_slot(slot));
+                }
+            }
             visit(fixed_slot(&mut (*meta).prototype as *mut u64));
             // The private boxed primitive is a child edge (string, BigInt,
             // or Symbol), with scalars ignored by the ordinary slot visitor.

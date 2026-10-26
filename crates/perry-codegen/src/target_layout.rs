@@ -595,3 +595,64 @@ mod tests {
         }
     }
 }
+
+/// Appended immutable-template descriptor identity cell; all old fields stay put.
+pub fn layout_descriptor_size_bytes(target: &str) -> usize {
+    if target_is_ilp32(target) {
+        perry_abi::LAYOUT_DESC_SIZE_ILP32
+    } else {
+        perry_abi::LAYOUT_DESC_SIZE_LP64
+    }
+}
+pub fn layout_descriptor_identity_offset(target: &str) -> usize {
+    if target_is_ilp32(target) {
+        perry_abi::LAYOUT_DESC_ID_OFFSET_ILP32
+    } else {
+        perry_abi::LAYOUT_DESC_ID_OFFSET_LP64
+    }
+}
+
+#[cfg(test)]
+mod dense_layout_tests {
+    use super::*;
+    #[test]
+    fn descriptor_and_image_offsets_match_both_pointer_widths() {
+        for target in ["x86_64-unknown-linux-gnu", "aarch64-pc-windows-msvc"] {
+            assert_eq!(layout_descriptor_size_bytes(target), 80);
+            assert_eq!(layout_descriptor_identity_offset(target), 72);
+        }
+        for target in ["wasm32-wasi", "arm64_32-apple-watchos"] {
+            assert_eq!(layout_descriptor_size_bytes(target), 64);
+            assert_eq!(layout_descriptor_identity_offset(target), 56);
+        }
+        use perry_abi::{PerryLayoutImageV1 as Image, PerryStaticLayoutRequestV1 as Request};
+        assert_eq!(std::mem::size_of::<Image>(), 16);
+        assert_eq!(std::mem::align_of::<Image>(), 4);
+        assert_eq!(std::mem::offset_of!(Image, abi_version), 0);
+        assert_eq!(std::mem::offset_of!(Image, static_rows), 4);
+        assert_eq!(std::mem::offset_of!(Image, family_first), 8);
+        assert_eq!(std::mem::offset_of!(Image, family_count), 12);
+        assert_eq!(std::mem::size_of::<Request>(), 8);
+        assert_eq!(std::mem::offset_of!(Request, layout_word), 4);
+    }
+}
+
+#[cfg(all(test, feature = "llvm-inprocess"))]
+#[test]
+fn emitted_descriptor_type_has_exact_llvm_target_layout() {
+    use inkwell::{context::Context, targets::TargetData};
+    for (layout, size, identity) in [("e-p:64:64-i64:64", 80, 72), ("e-p:32:32-i64:64", 64, 56)] {
+        let context = Context::create();
+        let ir = format!(
+            "%Desc = type {}\n@descriptor = global %Desc zeroinitializer\n",
+            crate::layout_desc::DESC_TY
+        );
+        let module = crate::inprocess::parse_ir_text(&context, &ir, "layout_offsets").unwrap();
+        let ty = module.get_struct_type("Desc").unwrap();
+        let data = TargetData::create(layout);
+        assert_eq!(data.get_abi_size(&ty), size);
+        assert_eq!(data.offset_of_element(&ty, 5), Some(12));
+        assert_eq!(data.offset_of_element(&ty, 15), Some(identity));
+        assert_eq!(data.offset_of_element(&ty, 16), Some(identity + 4));
+    }
+}

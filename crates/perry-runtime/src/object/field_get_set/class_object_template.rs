@@ -707,7 +707,7 @@ unsafe fn record_class_object_template(
     let Some(d) = crate::object::shapes::object_shape_descriptor(obj) else {
         return;
     };
-    let final_shape = crate::object::shapes::object_shape_id(obj);
+    let final_shape = crate::object::shapes::object_layout_stamp(obj);
     let count = d.logical_key_count as usize;
     if final_shape == 0
         || d.hole_count != 0
@@ -717,7 +717,7 @@ unsafe fn record_class_object_template(
         || count >= 1 << 16
         || W_FILLS + 2 * count > cell.len()
         || static_field_mask > 0xff
-        || crate::object::shapes::shape_object_kind_by_id(final_shape)
+        || crate::object::shapes::shape_object_kind_of_receiver(final_shape)
             != Some(crate::object::shapes::ShapeObjectKind::Class)
     {
         return;
@@ -810,7 +810,7 @@ pub(crate) unsafe fn class_object_add_internal(
     value: f64,
     cell: Option<TemplateCell>,
 ) {
-    let from = crate::object::shapes::object_shape_id(obj);
+    let from = crate::object::shapes::object_layout_stamp(obj);
     let key_word = key as u64 + 1;
     // The recorded transition from `from` by `key`, and the first free pair
     // when there is none, of a cell this thread owns.
@@ -862,7 +862,7 @@ pub(crate) unsafe fn class_object_add_internal(
         let Some(d) = crate::object::shapes::object_shape_descriptor(obj) else {
             return;
         };
-        let to = crate::object::shapes::object_shape_id(obj);
+        let to = crate::object::shapes::object_layout_stamp(obj);
         let Some(slot) = d.logical_key_count.checked_sub(1) else {
             return;
         };
@@ -878,7 +878,7 @@ pub(crate) unsafe fn class_object_add_internal(
             return;
         }
         crate::object::shapes::note_external_shape_carrier(
-            crate::object::shapes::shape_descriptor_by_id(from),
+            crate::object::shapes::shape_descriptor_of_receiver(from),
         );
         crate::object::shapes::note_external_shape_carrier(Some(d));
         cell.set(W_EDGES + 2 * free, from as u64 | (to as u64) << 32);
@@ -1061,7 +1061,7 @@ pub(crate) unsafe fn record_prototype_template(
     let Some(d) = crate::object::shapes::object_shape_descriptor(proto) else {
         return;
     };
-    let final_shape = crate::object::shapes::object_shape_id(proto);
+    let final_shape = crate::object::shapes::object_layout_stamp(proto);
     let count = d.logical_key_count as usize;
     let meta = (*proto).meta;
     let owner = crate::value::js_nanbox_pointer(class as i64).to_bits();
@@ -1153,7 +1153,8 @@ pub(crate) unsafe fn evaluation_chain_lost_method(
                 )
             });
     let template_facts = template_cell.and_then(|c| c.proto_template());
-    let template = template_facts.and_then(|t| crate::object::shapes::shape_descriptor_by_id(t.1));
+    let template =
+        template_facts.and_then(|t| crate::object::shapes::shape_descriptor_of_receiver(t.1));
     if let Some(template) = template {
         // The template's prototype keys, all still there: marking the
         // prototype (its first instance) restamps its shape but keeps them.
@@ -1436,7 +1437,7 @@ pub(crate) unsafe fn record_instance_link(
     };
     let linked = crate::object::shapes::object_shape_stamp(inst);
     let (Some(from), Some(to)) = (
-        crate::object::shapes::shape_descriptor_by_id(birth),
+        crate::object::shapes::shape_descriptor_of_receiver(birth),
         crate::object::shapes::object_shape_descriptor(inst),
     ) else {
         return;

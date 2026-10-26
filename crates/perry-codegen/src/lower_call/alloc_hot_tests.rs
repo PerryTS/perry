@@ -28,7 +28,7 @@ const OUTLINED_CALL: &str = "call i64 @js_object_alloc_class_inline_keys";
 /// Rung 2's outlined entry has an explicit ShapeId argument.
 const STAMPED_OUTLINED_CALL: &str = "call i64 @js_object_alloc_class_inline_keys_stamped(";
 /// One mint per class at module init, never per allocation.
-const SHAPE_MINT_CALL: &str = "call i32 @js_object_shape_id_for_class_keys(";
+const SHAPE_MINT_CALL: &str = "call i32 @js_object_layout_for_class_keys_static(";
 /// #8122: the inline allocator's 16-byte header prefix — packed GcHeader word
 /// + `class_id | ShapeId << 32` — is composed ONCE at module init into a
 /// per-class `<2 x i64>` global, entry-hoisted like the keys global, and
@@ -46,6 +46,7 @@ const STAGE_FUNC_BASE: u32 = 900;
 fn ir_opts() -> CompileOptions {
     CompileOptions {
         static_shape_ids: Vec::new(),
+        program_layout_ordinals: Default::default(),
         program_class_shape_ids: Default::default(),
         program_facts: Default::default(),
         program_layouts: Default::default(),
@@ -620,7 +621,7 @@ fn the_inline_allocator_stores_its_header_prefix_as_one_vector_image() {
     let ir = ir_for(walk_module(true));
     let compose_count = ir.matches(HEADER_IMAGE_COMPOSE).count();
     assert_eq!(
-        compose_count, 1,
+        compose_count, 0,
         "the header image must be composed exactly once, at module init (found \
          {compose_count} composes):\n{ir}"
     );
@@ -640,13 +641,42 @@ fn the_inline_allocator_stores_its_header_prefix_as_one_vector_image() {
         !allocation_merge.contains("shl i64 1,") && !allocation_merge.contains("lshr i64"),
         "ordinary inline objects must not pay to update the Map-only object-start bitmap:\n{allocation_merge}"
     );
-    // The compose lives beside the ShapeId mint in module init, i.e. after the
-    // mint call and outside the allocating function's own body.
-    let compose_at = ir.find(HEADER_IMAGE_COMPOSE).unwrap();
-    let mint_at = ir.find(SHAPE_MINT_CALL).unwrap();
+    assert!(ir.contains("constant <2 x i64> <i64 "));
+    let plan = crate::layout_ordinals::current_plan();
+    for line in ir
+        .lines()
+        .filter(|l| l.starts_with("@perry_class_header_image_"))
+    {
+        let header: u64 = line
+            .split(", i64 ")
+            .nth(1)
+            .unwrap()
+            .split('>')
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap();
+        let word = (header >> 32) as u32;
+        assert_ne!(word & crate::runtime_abi::LAYOUT_TAG, 0);
+        assert!(
+            (word & crate::runtime_abi::LAYOUT_ROW_MASK) < plan.static_rows(),
+            "shared birth image contains a dynamic suffix row"
+        );
+    }
     assert!(
-        compose_at > mint_at,
-        "the header image must be composed from the ShapeId the mint returned:\n{ir}"
+        !ir.lines()
+            .any(|l| l.contains("store <2 x i64>") && l.contains("@perry_class_header_image_")),
+        "shared image cannot be rewritten"
+    );
+
+    assert!(
+        ir.contains(SHAPE_MINT_CALL),
+        "publication remains before births"
+    );
+    assert!(
+        !ir.lines()
+            .any(|line| line.contains("store i32") && line.contains("@perry_class_shape_id_")),
+        "static word is never rewritten"
     );
     // And the per-function fallback compose (from the ShapeId slot) is NOT
     // used when the module-level image exists: no `shl i64 %x, 32` in the
@@ -741,7 +771,7 @@ fn cold_birth_of_an_unresolved_chain_retains_runtime_sizing() {
     assert!(
         ir.contains(SHAPE_MINT_CALL)
             && ir.contains(HEADER_IMAGE_GLOBAL_LOAD)
-            && ir.contains("@js_object_shape_id_for_class_keys_live(i64 0, i32 0,"),
+            && ir.contains("@js_object_layout_for_class_keys_static(i64 0, i32 0,"),
         "the outlined allocation must use its keyless module-init image: {ir}"
     );
 }

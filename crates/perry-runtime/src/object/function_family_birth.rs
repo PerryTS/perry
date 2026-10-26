@@ -98,6 +98,48 @@ pub(crate) unsafe fn allocate(
     allocate_layout(prototype, closure, tail)
 }
 
+/// Does `record`'s key list hold exactly `bound` at the descriptor's binding
+/// symbol positions (in key order)? A record is interned by its key words, so
+/// another binding of the same body names another record.
+unsafe fn binds_current_symbols(
+    record: super::shapes::ShapeRecordRef,
+    d: &PerryLayoutDesc,
+    bound: &[u64],
+) -> bool {
+    if bound.is_empty() {
+        return true;
+    }
+    let keys = record.keys() as *const crate::array::ArrayHeader;
+    if keys.is_null() {
+        return false;
+    }
+    let words = crate::array::array_elements_ptr(keys);
+    let mut next = 0;
+    for i in 0..d.key_count as usize {
+        if (*(*d.keys.add(i)).atom).kind == crate::codegen_abi::ATOM_KIND_BINDING_SYMBOL {
+            if next >= bound.len() || *words.add(i) != bound[next] {
+                return false;
+            }
+            next += 1;
+        }
+    }
+    true
+}
+
+/// The image address every [`birth_tag`] is relative to.
+static BIRTH_TAG_ANCHOR: u8 = 0;
+
+/// A constructor layout descriptor's identity in 32 bits, for a prototype's
+/// `ObjectMeta::function_layout_birth`: its signed distance from an anchor in
+/// the same image. Descriptors are immutable image data, so the distance is
+/// fixed and distinct per descriptor; one too far away (never, for an image
+/// under 2 GiB) has no holder fact and always interns.
+#[inline]
+fn birth_tag(desc: *const PerryLayoutDesc) -> Option<u32> {
+    let delta = (desc as isize).wrapping_sub(std::ptr::addr_of!(BIRTH_TAG_ANCHOR) as isize);
+    i32::try_from(delta).ok().map(|delta| delta as u32)
+}
+
 unsafe fn allocate_layout(
     prototype: &RuntimeHandle<'_>,
     closure: *const ClosureHeader,
@@ -107,22 +149,11 @@ unsafe fn allocate_layout(
     if d.variant != crate::codegen_abi::LAYOUT_VARIANT_FUNCTION_CONSTRUCTOR || tail.count > 64 {
         return None;
     }
-    let existing = layout_desc::registered_layout_id(layout_desc::load_layout_id(tail.layout));
-    let p = (prototype.get_nanbox_u64() & crate::value::POINTER_MASK) as *const ObjectHeader;
-    let meta = (*p).meta.as_ref()?;
-    let proto_id = meta.proto_serial;
+    let prototype_bits = prototype.get_nanbox_u64();
+    let p = (prototype_bits & crate::value::POINTER_MASK) as *const ObjectHeader;
+    let proto_id = (*p).meta.as_ref()?.proto_serial;
     if proto_id == 0 {
         return None;
-    }
-    if let Some(record) = existing.and_then(super::shapes::shape_record_by_id) {
-        if record.proto_id() != proto_id || record.prototype_word() != prototype.get_nanbox_u64() {
-            return None;
-        }
-        if tail.count == 0 {
-            let object = layout_desc::alloc_function_layout(tail.layout);
-            crate::gc::runtime_shade_external_edge(prototype.get_nanbox_u64());
-            return Some(object);
-        }
     }
     let mut bound = [0u64; 64];
     for i in 0..tail.count as usize {
@@ -135,26 +166,40 @@ unsafe fn allocate_layout(
     let bound = &bound[..tail.count as usize];
     // register_one_bound copies keys under suppression. Existing registrations
     // must match every symbol, including different factories/cross-module aliases.
+    let tag = birth_tag(tail.layout);
     let _no_gc = crate::gc::GcSuppressScope::new();
-    super::shapes::write_identity_word(proto_id, prototype.get_nanbox_u64());
-    let id =
-        layout_desc::register_function_layout(tail.layout, existing.unwrap_or(0), bound, proto_id);
-    if id == 0 {
-        return None;
-    }
-    let shape = super::shapes::shape_descriptor_by_id(id)?;
-    let keys = shape.keys_view();
-    let mut next = 0;
-    for i in 0..d.key_count {
-        if (*(*d.keys.add(i as usize)).atom).kind == crate::codegen_abi::ATOM_KIND_BINDING_SYMBOL {
-            if keys.get(i).bits() != bound[next] {
-                return None;
-            }
-            next += 1;
+    // The record the instances are born with is a fact on the holder (the
+    // prototype's metadata), validated on every use as main validates its
+    // descriptor cell: same layout, the record still present, it names this
+    // prototype identity and serial, and its bound symbol keys are the
+    // current bindings. Otherwise intern by facts and rewrite the holder.
+    let meta = (*p).meta;
+    let held = (*meta).function_layout_birth;
+    let holds = tag.is_some_and(|tag| held >> 32 == u64::from(tag))
+        && super::shapes::shape_record_for_word(held as u32).is_some_and(|record| {
+            record.proto_id() == proto_id
+                && record.prototype_word() == prototype_bits
+                && binds_current_symbols(record, d, bound)
+        });
+    let id = if holds {
+        held as u32
+    } else {
+        super::shapes::write_identity_word(proto_id, prototype_bits);
+        let id = layout_desc::register_function_layout(tail.layout, 0, bound, proto_id);
+        if id == 0 || !binds_current_symbols(super::shapes::shape_record_for_word(id)?, d, bound) {
+            return None;
         }
-    }
+        if let Some(tag) = tag {
+            // GC_STORE_AUDIT(POINTER_FREE): a scalar birth word on the rooted
+            // prototype's own metadata, under suppression; no child edge.
+            (*meta).function_layout_birth = (u64::from(tag) << 32) | u64::from(id);
+        }
+        id
+    };
+    // Suppression stays up through the birth: the record is carried by no one
+    // until the object is stamped with its word.
+    let object = layout_desc::alloc_function_layout(tail.layout, id);
     drop(_no_gc);
-    let object = layout_desc::alloc_function_layout(tail.layout);
     // As for an ordinary Object.create birth, a black newborn shades the
     // existing external prototype edge without allocating receiver metadata.
     crate::gc::runtime_shade_external_edge(prototype.get_nanbox_u64());
@@ -194,27 +239,20 @@ unsafe fn try_symbol_store(
     }
     let obj = address as *mut ObjectHeader;
     let d = &*desc;
-    let id = layout_desc::load_layout_id(desc);
     if d.variant != crate::codegen_abi::LAYOUT_VARIANT_FUNCTION_CONSTRUCTOR
-        || (*obj).parent_class_id != id
         || position >= d.key_count
-    {
-        return false;
-    }
-    let Some(record) = super::shapes::shape_record_by_id(id) else {
-        return false;
-    };
-    let keys = record.keys() as *const crate::array::ArrayHeader;
-    if keys.is_null()
-        || *crate::array::array_elements_ptr(keys).add(position as usize) != key.to_bits()
     {
         return false;
     }
     let k = &*d.keys.add(position as usize);
     if k.attrs != crate::codegen_abi::LAYOUT_KEY_OPTIONAL
+        || k.slot != position
         || k.slot >= super::object_inline_capacity(obj)
         || super::proto_validity::object_is_marked_prototype(address)
     {
+        return false;
+    }
+    if !function_layout_admits_store(obj, d, position, key) {
         return false;
     }
     let slots = obj
@@ -235,6 +273,78 @@ unsafe fn try_symbol_store(
     }
     super::store_object_field_slot(obj, k.slot as usize, value.to_bits());
     true
+}
+
+/// Does the receiver carry exactly this descriptor's function-constructor
+/// layout, with the key at `position` a plain writable data property stored
+/// at slot `position`?
+///
+/// The shared descriptor holds no per-evaluation word (each evaluation's
+/// record is interned by facts), so the fact is on the holder, as for the
+/// birth itself (`allocate_layout`): the receiver's prototype's
+/// `ObjectMeta::function_layout_birth` names this descriptor and holds the
+/// word its instances are born with, and that holder was validated against
+/// the record (prototype identity, serial, current symbol bindings) when it
+/// was written. The receiver's own word equal to it, validated here on every
+/// use, IS that layout: records are immutable facts, so any key add, delete,
+/// attribute change, generalization, prototype change or shadowing restamps
+/// the receiver with another word and fails the compare. The receiver names
+/// its prototype through its own record, so the holder read is the one the
+/// birth wrote for that prototype. The key at `position` is still compared
+/// directly, and the entry must be the descriptor's optional plain data
+/// entry: anything else takes the complete `[[Set]]`.
+#[inline]
+unsafe fn function_layout_admits_store(
+    obj: *const ObjectHeader,
+    d: &PerryLayoutDesc,
+    position: u32,
+    key: f64,
+) -> bool {
+    let word = (*obj).parent_class_id;
+    if !super::shapes::is_site_matchable_layout_word(word)
+        || (position < 32 && (d.rep >> (2 * position)) & 0b11 != 0)
+    {
+        return false;
+    }
+    let meta = (*obj).meta;
+    if !meta.is_null() && (*meta).flags & super::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER != 0 {
+        return false;
+    }
+    let Some(tag) = birth_tag(d) else {
+        return false;
+    };
+    // The receiver is the carrier of its own word.
+    let Some(record) = super::shapes::shape_record_of_receiver(word) else {
+        return false;
+    };
+    let prototype_bits = record.prototype_word();
+    if prototype_bits & crate::value::TAG_MASK != crate::value::POINTER_TAG {
+        return false;
+    }
+    // Any receiver can reach here, so its prototype may be any heap kind;
+    // only an ordinary object carries the holder metadata.
+    let address = (prototype_bits & crate::value::POINTER_MASK) as usize;
+    if crate::value::addr_class::try_read_gc_header(address)
+        .is_none_or(|gc| gc.obj_type != crate::gc::GC_TYPE_OBJECT)
+    {
+        return false;
+    }
+    let prototype = address as *const ObjectHeader;
+    let Some(holder) = (*prototype).meta.as_ref() else {
+        return false;
+    };
+    if holder.function_layout_birth != (u64::from(tag) << 32) | u64::from(word) {
+        return false;
+    }
+    let keys = record.keys() as *const crate::array::ArrayHeader;
+    if keys.is_null()
+        || *crate::array::array_elements_ptr(keys).add(position as usize) != key.to_bits()
+    {
+        return false;
+    }
+    let entry = super::key_attrs::keys_entry(keys, position);
+    entry == super::key_attrs::ENTRY_OPTIONAL
+        && super::key_attrs::entry_is_plain_writable_data(entry)
 }
 
 /// Only ordinary physical prototype layouts are admitted, and every live

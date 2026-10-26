@@ -3,8 +3,8 @@ use super::*;
 use crate::object::{field_rep, shapes, static_shapes};
 
 const PACKED: &[u8] = b"cfwire_method\0cfwire_number\0";
-const FINAL: u32 = shapes::SHAPE_ID_BASE + 0x7971;
-const BASE: u32 = shapes::SHAPE_ID_BASE + 0x7972;
+const FINAL: u32 = crate::object::static_shapes::fixtures::fixture_word(0x7971);
+const BASE: u32 = crate::object::static_shapes::fixtures::fixture_word(0x7972);
 const REP: u64 = field_rep::REP_SPECIAL | (field_rep::REP_F64 << 2);
 
 extern "C" fn capture_body(c: *const ClosureHeader, _this: closure::JsThis) -> f64 {
@@ -19,7 +19,7 @@ fn seed_final() {
         info: info(),
     }];
     assert_eq!(
-        static_shapes::js_shape_seed_plain_constfn(
+        static_shapes::fixtures::fixture_shape_seed_plain_constfn(
             FINAL,
             PACKED.as_ptr(),
             PACKED.len() as u32,
@@ -36,7 +36,7 @@ unsafe fn wire() -> SerializedValue {
     let scope = gc::RuntimeHandleScope::new();
     seed_final();
     assert_eq!(
-        static_shapes::js_shape_seed_plain(
+        static_shapes::fixtures::fixture_shape_seed_plain(
             BASE,
             PACKED.as_ptr(),
             PACKED.len() as u32,
@@ -146,7 +146,7 @@ fn replay(seed_first: bool, production_seed: bool) {
             )
             .as_pointer::<crate::object::ObjectHeader>();
             let id = shapes::object_shape_stamp(object);
-            let d = shapes::shape_descriptor_by_id(id).unwrap();
+            let d = shapes::shape_descriptor_for_word(id).unwrap();
             assert_eq!(d.rep, REP, "F64 and CF must both survive reconstruction");
             assert_eq!(d.constfn_infos()[0].info, info() as usize as u64);
             let fields = (object as *const u8)
@@ -169,8 +169,8 @@ fn replay(seed_first: bool, production_seed: bool) {
         if seed_first || production_seed {
             assert_eq!(ids[0], FINAL);
         } else {
-            assert!(!shapes::is_static_shape_id(ids[0]));
-            assert!(shapes::shape_descriptor_by_id(FINAL).is_none());
+            assert!(!shapes::is_static_layout_word(ids[0]));
+            assert!(shapes::shape_is_retired(FINAL));
             // Object-first must keep its old carriers valid when the external
             // static id arrives, and subsequent reconstructions use that id.
             shapes::install_worker_shape_seed(&seed);
@@ -179,7 +179,7 @@ fn replay(seed_first: bool, production_seed: bool) {
             let obj = JSValue::from_bits(crate::array::js_array_get_f64(array, 0).to_bits())
                 .as_pointer::<crate::object::ObjectHeader>();
             assert_eq!(shapes::object_shape_stamp(obj), FINAL);
-            assert!(shapes::shape_descriptor_by_id(ids[0]).is_some());
+            assert!(shapes::shape_descriptor_for_word(ids[0]).is_some());
         }
     })
     .join()
@@ -313,7 +313,7 @@ fn constfn_transfer_does_not_resurrect_a_deprecated_final_body_fact() {
         assert_eq!(shapes::object_shape_stamp(obj), FINAL);
         crate::object::store_object_field_slot(obj, 0, TAG_TRUE);
         assert_eq!(
-            shapes::shape_descriptor_by_id(FINAL)
+            shapes::shape_descriptor_for_word(FINAL)
                 .unwrap()
                 .deprecation_targets()
                 .1,
@@ -349,8 +349,8 @@ fn constfn_worker_seed_owns_names_across_source_key_relocation() {
     const SHORT: &[u8] = b"n";
     const NAMES: &[u8] = b"cfseed_lifetime_method\0n\0";
     const CLASS: u32 = 0x7991;
-    const BASE_ID: u32 = shapes::SHAPE_ID_BASE + 0x7973;
-    const FINAL_ID: u32 = shapes::SHAPE_ID_BASE + 0x7974;
+    const BASE_ID: u32 = crate::object::static_shapes::fixtures::fixture_word(0x7973);
+    const FINAL_ID: u32 = crate::object::static_shapes::fixtures::fixture_word(0x7974);
     const NUMBER_REP: u64 = field_rep::REP_F64 << 2;
 
     unsafe fn names_at(keys: u64) -> Vec<Vec<u8>> {
@@ -418,7 +418,7 @@ fn constfn_worker_seed_owns_names_across_source_key_relocation() {
         });
         assert_eq!(
             keys.with_mut_ptr::<crate::array::ArrayHeader, _>(|keys_ptr| {
-                static_shapes::js_object_shape_id_for_class_keys_static(
+                static_shapes::fixtures::fixture_object_shape_id_for_class_keys_static(
                     keys_ptr as usize as u64,
                     2,
                     2,
@@ -456,7 +456,7 @@ fn constfn_worker_seed_owns_names_across_source_key_relocation() {
         }];
         assert_eq!(
             keys.with_mut_ptr::<crate::array::ArrayHeader, _>(|keys_ptr| {
-                static_shapes::js_object_final_shape_id_for_class_keys_static_constfn(
+                static_shapes::fixtures::fixture_object_final_shape_id_for_class_keys_static_constfn(
                     keys_ptr as usize as u64,
                     2,
                     2,
@@ -485,7 +485,7 @@ fn constfn_worker_seed_owns_names_across_source_key_relocation() {
             )
         }) as usize as *const crate::object::ObjectHeader;
         assert_eq!(shapes::object_shape_stamp(finalized), FINAL_ID);
-        let before = shapes::shape_descriptor_by_id(FINAL_ID).unwrap();
+        let before = shapes::shape_descriptor_for_word(FINAL_ID).unwrap();
         let before_heap_key = heap_key_at(before.keys);
         assert!(
             crate::arena::pointer_in_nursery(before.keys as usize),
@@ -518,7 +518,7 @@ fn constfn_worker_seed_owns_names_across_source_key_relocation() {
         // no receiving worker has installed it. Neither saved old address is
         // dereferenced after collection.
         gc::gc_collect_minor();
-        let after = shapes::shape_descriptor_by_id(FINAL_ID).unwrap();
+        let after = shapes::shape_descriptor_for_word(FINAL_ID).unwrap();
         assert_ne!(
             after.keys, before.keys,
             "source key list did not actually relocate"
@@ -550,12 +550,9 @@ fn constfn_worker_seed_owns_names_across_source_key_relocation() {
         std::thread::spawn(move || {
             let _agent = crate::agent::enter_worker_agent();
             gc::ensure_gc_initialized();
-            assert!(
-                shapes::shape_descriptor_by_id(FINAL_ID).is_none(),
-                "fresh worker premise"
-            );
+            assert!(shapes::shape_is_retired(FINAL_ID), "fresh worker premise");
             shapes::install_worker_shape_seed(&seed);
-            let installed = shapes::shape_descriptor_by_id(FINAL_ID)
+            let installed = shapes::shape_descriptor_for_word(FINAL_ID)
                 .expect("saved seed must install before object reconstruction can mask a failure");
             assert_ne!(
                 installed.keys, relocated_source_keys,
@@ -602,8 +599,8 @@ fn constfn_worker_seed_owns_names_across_source_key_relocation() {
 #[test]
 fn constfn_transfer_compiled_anon_header_preserves_actual_worker_wire() {
     const ANON: u32 = 2;
-    const ANON_BASE: u32 = shapes::SHAPE_ID_BASE + 0x3c;
-    const ANON_FINAL: u32 = shapes::SHAPE_ID_BASE + 0x46;
+    const ANON_BASE: u32 = crate::object::static_shapes::fixtures::fixture_word(0x3c);
+    const ANON_FINAL: u32 = crate::object::static_shapes::fixtures::fixture_word(0x46);
     const NAMES: &[u8] = b"x\0m\0";
     const ANON_REP: u64 = field_rep::REP_F64 | (field_rep::REP_SPECIAL << 2);
     fn arrow_info() -> *const closure::JsFunctionInfo {
@@ -619,7 +616,7 @@ fn constfn_transfer_compiled_anon_header_preserves_actual_worker_wire() {
         assert_eq!(shapes::class_proto_id(ANON), shapes::class_proto_id(0));
         assert_eq!((*arrow_info()).flags, 6200, "actual producer info flags");
         assert_eq!(
-            static_shapes::js_shape_seed_plain(
+            static_shapes::fixtures::fixture_shape_seed_plain(
                 ANON_BASE,
                 NAMES.as_ptr(),
                 NAMES.len() as u32,
@@ -634,7 +631,7 @@ fn constfn_transfer_compiled_anon_header_preserves_actual_worker_wire() {
             info: arrow_info(),
         }];
         assert_eq!(
-            static_shapes::js_shape_seed_plain_constfn(
+            static_shapes::fixtures::fixture_shape_seed_plain_constfn(
                 ANON_FINAL,
                 NAMES.as_ptr(),
                 NAMES.len() as u32,
@@ -719,7 +716,7 @@ fn constfn_transfer_compiled_anon_header_preserves_actual_worker_wire() {
             gc::ensure_gc_initialized();
             shapes::install_worker_shape_seed(&seed);
             assert_eq!(
-                shapes::shape_descriptor_by_id(ANON_FINAL).unwrap().rep,
+                shapes::shape_descriptor_for_word(ANON_FINAL).unwrap().rep,
                 ANON_REP
             );
             assert_eq!(shapes::class_proto_id(ANON), shapes::class_proto_id(0));

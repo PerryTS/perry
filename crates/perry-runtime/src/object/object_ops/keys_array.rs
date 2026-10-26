@@ -523,7 +523,7 @@ unsafe fn publish_definition_keys(
 /// collector traces that range, so the next collection reads (and rewrites)
 /// memory the object does not own. Keep such a receiver on the private append.
 unsafe fn cached_target_fits(target_shape_id: u32, alloc_limit: u32) -> bool {
-    super::super::shapes::shape_descriptor_by_id(target_shape_id)
+    super::super::shapes::shape_descriptor_for_word(target_shape_id)
         .is_some_and(|target| target.live_inline_slot_count <= alloc_limit)
 }
 
@@ -658,15 +658,16 @@ mod tests {
                 crate::object::object_keys(sibling).arr()
             );
             assert_ne!((*first).shape_word(), sibling_shape);
-            let sibling_descriptor = crate::object::shapes::shape_descriptor_by_id(sibling_shape)
-                .expect("sibling descriptor must remain installed");
+            let sibling_descriptor =
+                crate::object::shapes::shape_descriptor_for_word(sibling_shape)
+                    .expect("sibling descriptor must remain installed");
             assert_eq!(
                 sibling_descriptor.keys,
                 crate::object::object_keys(sibling).arr() as u64
             );
             assert_eq!(sibling_descriptor.logical_key_count, 0);
             let first_descriptor =
-                crate::object::shapes::shape_descriptor_by_id((*first).shape_word())
+                crate::object::shapes::shape_descriptor_of_receiver((*first).shape_word())
                     .expect("defineProperty growth must install an exact descriptor");
             assert_eq!(
                 first_descriptor.keys,

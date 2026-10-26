@@ -192,11 +192,11 @@ fn transition_entry_is_dead(
         // the half that makes weakening it safe.
         || is_dead_owner(entry.next_keys)
         || ((entry.prev_shape_id != 0 || spread::source_shape(entry).is_none())
-            && shapes::shape_descriptor_by_id(entry.prev_shape_id).is_none())
+            && shapes::shape_descriptor_for_word(entry.prev_shape_id).is_none())
         || spread::source_shape(entry)
-            .is_some_and(|id| shapes::shape_descriptor_by_id(id).is_none())
+            .is_some_and(|id| shapes::shape_descriptor_for_word(id).is_none())
         || (entry.target_shape_id != 0
-            && shapes::shape_descriptor_by_id(entry.target_shape_id).is_none())
+            && shapes::shape_descriptor_for_word(entry.target_shape_id).is_none())
 }
 
 /// #8192: death pruning for the transition cache.
@@ -273,6 +273,7 @@ pub(crate) fn test_seed_transition_cache_entry(
     key_ptr: usize,
     next_keys: usize,
 ) {
+    shape_carriers::note_shape_id(prev_shape_id);
     // A synthetic weak key need not contain an initialized StringHeader.
     // This seam tests GC ownership, not lookup, so choose a stable slot from
     // the predecessor alone without dereferencing that synthetic address.

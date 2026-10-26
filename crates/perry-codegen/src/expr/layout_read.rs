@@ -11,11 +11,11 @@
 //!          -> one load at the colour slot -> hole compare
 //! ```
 //!
-//! * The layout word, shadow bit cleared, minus `SHAPE_ID_BASE` indexes the
-//!   agent's flat record array (`shapes_store/flat.rs`): base and committed
-//!   bound sit in the agent's shape directory, which the agent pointer block
-//!   names. Any word that is not an ordinary-band layout id falls past the
-//!   bound.
+//! * Masking the layout word with LAYOUT_PROBE_INDEX_MASK and subtracting
+//!   LAYOUT_TAG produces its row in the agent's dense record Region. The mask
+//!   clears shadow and prototype kind, retaining tag/band for one admission
+//!   against the logical issued-row bound in the existing directory.
+//!   A live ordinary receiver word is the publication authority.
 //! * The mask bit says the layout holds `k` at its colour slot as data; the
 //!   slot's value is the property's value unless it is the hole marker.
 //! * Everything else (a non-object, another layout, the bit clear, a hole)
@@ -81,12 +81,12 @@ fn emit_mask_test_record(
     let id = blk.and(
         I32,
         &word,
-        &((!crate::runtime_abi::LAYOUT_SHADOW_BIT) as i32).to_string(),
+        &(crate::runtime_abi::LAYOUT_PROBE_INDEX_MASK as i32).to_string(),
     );
     let rel = blk.sub(
         I32,
         &id,
-        &(crate::runtime_abi::SHAPE_ID_BASE as i32).to_string(),
+        &(crate::runtime_abi::LAYOUT_TAG as i32).to_string(),
     );
     let rel64 = blk.zext(I32, &rel, I64);
     let dir = crate::expr::agent_ptr::emit_agent_ptr_or(
@@ -729,41 +729,33 @@ fn run_arm(
     (out, run)
 }
 
-/// A layout word a family object without an overflow can carry: a static
-/// layout (a family's own, `[LAYOUT_BASE, +STATIC_SHAPE_ID_COUNT / 2)`), or an
-/// unshadowed linked one (a class evaluation's copy of a family's layout,
-/// `perry-runtime` `layout_desc::family_desc_of`: an ordinary ShapeId below
-/// `UNSHADOWED_WORD_END` whose kind bits are all set, the mixed kind of a
-/// class instance's linked identity). Which family
-/// is the runtime's answer (`perry_family_run_admits`); a word outside both
-/// never names one.
+/// Admit a static PLAIN family word in the image's contiguous family range,
+/// or an ordinary MIXED evaluation word. The runtime recovers the immutable
+/// family descriptor from the live record and verifies the requested family.
 fn emit_family_word_test(blk: &mut crate::block::LlBlock, word: &str) -> String {
-    let base = crate::runtime_abi::SHAPE_ID_BASE + crate::runtime_abi::STATIC_SHAPE_ID_COUNT / 2;
+    let plan = crate::layout_ordinals::current_plan();
+    let base = crate::runtime_abi::LAYOUT_TAG | plan.family_first;
     let rel = blk.sub(I32, word, &(base as i32).to_string());
-    let in_static = blk.icmp_ult(
-        I32,
-        &rel,
-        &(crate::runtime_abi::STATIC_SHAPE_ID_COUNT / 2).to_string(),
-    );
+    let in_static = blk.icmp_ult(I32, &rel, &plan.family_count.to_string());
     let kind = blk.and(
         I32,
         word,
-        &(crate::runtime_abi::SHAPE_ID_KIND_MASK as i32).to_string(),
+        &(crate::runtime_abi::LAYOUT_KIND_MASK as i32).to_string(),
     );
     let linked = blk.icmp_eq(
         I32,
         &kind,
-        &(crate::runtime_abi::SHAPE_ID_KIND_MASK as i32).to_string(),
+        &(crate::runtime_abi::LAYOUT_KIND_MASK as i32).to_string(),
     );
     let ordinary_rel = blk.sub(
         I32,
         word,
-        &(crate::runtime_abi::SHAPE_ID_BASE as i32).to_string(),
+        &(crate::runtime_abi::LAYOUT_TAG as i32).to_string(),
     );
     let unshadowed = blk.icmp_ult(
         I32,
         &ordinary_rel,
-        &((crate::runtime_abi::UNSHADOWED_WORD_END - crate::runtime_abi::SHAPE_ID_BASE) as i32)
+        &((crate::runtime_abi::LAYOUT_ORDINARY_END - crate::runtime_abi::LAYOUT_TAG) as i32)
             .to_string(),
     );
     let copy = blk.and(crate::types::I1, &linked, &unshadowed);

@@ -145,7 +145,7 @@ fn test_f64_lanes_move_with_the_shape_on_copying_minor_and_skip_raw_slots() {
     assert_eq!(first, 10.5);
     assert_eq!(third, -3.25);
     assert_eq!(
-        unsafe { crate::object::shapes::object_shape_id(after as *const _) },
+        unsafe { crate::object::shapes::object_layout_stamp(after as *const _) },
         shape,
         "the copy carries the shape, and with it the F64 lanes"
     );

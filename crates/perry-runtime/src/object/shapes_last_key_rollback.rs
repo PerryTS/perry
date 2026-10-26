@@ -12,8 +12,8 @@ use super::*;
 pub(crate) fn note_last_key_parent(from: u32, parent: u32) {
     unsafe {
         let (Some(from_record), Some(parent_record)) = (
-            ShapeSlab::agent_record_present(from),
-            ShapeSlab::agent_record_present(parent),
+            ShapeSlab::agent_record_for_word_present(from),
+            ShapeSlab::agent_record_for_word_present(parent),
         ) else {
             return;
         };
@@ -56,7 +56,7 @@ pub(crate) fn note_last_key_parent(from: u32, parent: u32) {
         let ambiguous = recorded == u32::MAX
             || (recorded != 0
                 && recorded != parent
-                && ShapeSlab::agent_record_present(recorded).is_some());
+                && ShapeSlab::agent_record_for_word_present(recorded).is_some());
         (*from_record).note_rollback_parent(if ambiguous { u32::MAX } else { parent });
     }
 }
@@ -106,11 +106,12 @@ pub(crate) unsafe fn publish_object_shape_last_key_rollback(
     {
         return 0;
     }
-    let Some(current) = ShapeSlab::agent_record_present(object_shape_stamp(obj)) else {
+    let Some(current) = ShapeSlab::agent_record_for_receiver_present(object_shape_stamp(obj))
+    else {
         return 0;
     };
     let to = (*current).rollback_parent();
-    let Some(parent) = ShapeSlab::agent_record_present(to) else {
+    let Some(parent) = ShapeSlab::agent_record_for_word_present(to) else {
         return 0;
     };
     if (*current).logical_key_count != count || !rollback_pair_matches(&*current, &*parent) {
@@ -173,13 +174,13 @@ mod tests {
             let parent = object_shape_stamp(obj);
             crate::object::js_object_set_field_by_name(obj, b, 2.0);
             let child = object_shape_stamp(obj);
-            let child_record = ShapeSlab::agent_record_present(child).unwrap();
+            let child_record = ShapeSlab::agent_record_for_word_present(child).unwrap();
             assert_eq!(
                 (*child_record).rollback_parent(),
                 parent,
                 "live learned edge"
             );
-            let original = *ShapeSlab::agent_record_present(parent).unwrap();
+            let original = *ShapeSlab::agent_record_for_word_present(parent).unwrap();
             for attributes in [false, true] {
                 let bad = if attributes {
                     original.with_summary(crate::object::key_attrs::SUMMARY_ACCESSOR)
@@ -192,7 +193,7 @@ mod tests {
                 );
                 // Plant the same corrupt facts on the actual target record,
                 // so this also exercises the production cached-use guard.
-                let target = ShapeSlab::agent_record_present(parent).unwrap();
+                let target = ShapeSlab::agent_record_for_word_present(parent).unwrap();
                 *target = bad;
                 let result = publish_object_shape_last_key_rollback(obj, 2);
                 *target = original;
@@ -232,13 +233,15 @@ mod representation_tests {
             );
             let parent = object_shape_stamp(obj);
             assert_eq!(
-                shape_descriptor_by_id(parent).unwrap().special_constfn_mask,
+                shape_descriptor_for_word(parent)
+                    .unwrap()
+                    .special_constfn_mask,
                 1
             );
             crate::object::js_object_set_field_by_name(obj, b, 2.0);
             let child = object_shape_stamp(obj);
             assert_eq!(
-                (*ShapeSlab::agent_record_present(child).unwrap()).rollback_parent(),
+                (*ShapeSlab::agent_record_for_word_present(child).unwrap()).rollback_parent(),
                 parent
             );
             crate::object::js_object_set_field_by_name(obj, a, 17.0);

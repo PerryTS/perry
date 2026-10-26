@@ -794,7 +794,7 @@ pub(crate) fn object_has_individual_class_prototype(obj_ptr: usize) -> bool {
         if (*obj).class_id == 0 {
             return false;
         }
-        let pid = crate::object::shapes::object_shape_identity(obj);
+        let pid = crate::object::shapes::object_proto_identity(obj);
         // CLASS is already the selected origin, DEFAULT/serial describe
         // ordinary chains. A MIXED identity carries a declared class plus
         // its evaluation/override link. No registry re-derives these facts.

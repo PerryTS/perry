@@ -19,9 +19,9 @@ unsafe fn write_fast_path_receiver_kind_ok(
 ) -> bool {
     crate::object::shapes::store_kind::audit::note_admission_read();
     matches!(
-        crate::object::shapes::shape_object_kind_by_id(crate::object::shapes::object_shape_stamp(
-            obj
-        )),
+        crate::object::shapes::shape_object_kind_of_receiver(
+            crate::object::shapes::object_shape_stamp(obj)
+        ),
         Some(
             crate::object::shapes::ShapeObjectKind::Ordinary
                 | crate::object::shapes::ShapeObjectKind::OrdinaryNumericProof

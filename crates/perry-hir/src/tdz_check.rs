@@ -265,6 +265,68 @@ pub fn for_each_stmts_expr_shallow(list: &[Stmt], f: &mut dyn FnMut(&Expr)) {
     }
 }
 
+/// Every statement list of `list` itself and of its nested lists (closure
+/// bodies included), each once: the lists whose statements are lowered in
+/// sequence, so a statement can look at the ones after it.
+pub fn for_each_stmt_list_deep(list: &[Stmt], f: &mut dyn FnMut(&[Stmt])) {
+    f(list);
+    for stmt in list {
+        for_each_stmt_part(stmt, &mut |part| match part {
+            Part::Expr(e) => for_each_expr_stmt_list(e, f),
+            Part::Stmts(inner) => for_each_stmt_list_deep(inner, f),
+        });
+    }
+}
+fn for_each_expr_stmt_list(e: &Expr, f: &mut dyn FnMut(&[Stmt])) {
+    if let Expr::Closure { body, .. } = e {
+        for_each_stmt_list_deep(body, f);
+    }
+    walk_expr_children(e, &mut |child| for_each_expr_stmt_list(child, f));
+}
+fn for_each_function_stmt_list(func: &Function, f: &mut dyn FnMut(&[Stmt])) {
+    for param in &func.params {
+        if let Some(default) = &param.default {
+            for_each_expr_stmt_list(default, f);
+        }
+    }
+    for_each_stmt_list_deep(&func.body, f);
+}
+
+/// Every statement list of `module` (module init, functions, class members),
+/// nested lists and closure bodies included.
+pub fn for_each_module_stmt_list(module: &Module, f: &mut dyn FnMut(&[Stmt])) {
+    for_each_stmt_list_deep(&module.init, f);
+    for func in &module.functions {
+        for_each_function_stmt_list(func, f);
+    }
+    for c in &module.classes {
+        if let Some(extends) = &c.extends_expr {
+            for_each_expr_stmt_list(extends, f);
+        }
+        if let Some(ctor) = &c.constructor {
+            for_each_function_stmt_list(ctor, f);
+        }
+        for m in c.methods.iter().chain(&c.static_methods) {
+            for_each_function_stmt_list(m, f);
+        }
+        for (_, m) in c.getters.iter().chain(&c.setters) {
+            for_each_function_stmt_list(m, f);
+        }
+        for member in &c.computed_members {
+            for_each_expr_stmt_list(&member.key_expr, f);
+            for_each_function_stmt_list(&member.function, f);
+        }
+        for field in c.fields.iter().chain(&c.static_fields) {
+            if let Some(key) = &field.key_expr {
+                for_each_expr_stmt_list(key, f);
+            }
+            if let Some(init) = &field.init {
+                for_each_expr_stmt_list(init, f);
+            }
+        }
+    }
+}
+
 pub fn for_each_module_expr(module: &Module, f: &mut dyn FnMut(&Expr)) {
     for_each_stmts_expr(&module.init, f);
     for func in &module.functions {
