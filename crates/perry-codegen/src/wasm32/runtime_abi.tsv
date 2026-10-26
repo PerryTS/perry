@@ -493,7 +493,6 @@ js_bool_box_get	i32s	ptr
 js_bool_box_release	void	ptr
 js_bool_box_scope_release	void	ptr
 js_bool_box_set	void	ptr,i32s
-js_bootstrap_cjs_main_module_placeholder	void	
 js_borrowed_object_define_getter	f64	f64,f64,f64
 js_borrowed_object_define_setter	f64	f64,f64,f64
 js_borrowed_object_has_own	f64	f64,f64
@@ -738,8 +737,7 @@ js_child_process_validate_command	f64	f64,ptr,i32u
 js_child_process_validate_fork_module	f64	f64
 js_child_process_validate_options	f64	f64,i32s,i32s
 js_child_process_validate_spawn_args	f64	f64,i32s,i32s
-js_cjs_module_record	f64	f64,f64,f64,f64,f64,f64,f64
-js_cjs_record_set_factory	void	f64,f64
+js_cjs_install	f64	f64,f64
 js_class_accessor_shape_guard	i32s	f64,i32u,i64,ptr,usize
 js_class_capture_value	f64	i32u,i32u
 js_class_capture_value_for_receiver	f64	f64,i32u,i32u
@@ -3509,7 +3507,7 @@ js_register_net_socket_handle_probe	void	ptr
 js_register_node_stream_web_adapter_callbacks	void	ptr,ptr,ptr,ptr,ptr,ptr,ptr,ptr,ptr,ptr,ptr
 js_register_path_init	void	ptr,i64,i64
 js_register_path_module	void	f64,f64
-js_register_path_module_partial	void	f64,f64
+js_register_path_module_partial	void	f64,f64,f64
 js_register_prototype_method	void	i32u,ptr,usize,f64
 js_register_readable_handle_predicate	void	ptr
 js_register_set_text_handler	void	ptr
@@ -4674,9 +4672,9 @@ js_zlib_create_inflate_raw	f64	f64
 js_zlib_create_unzip	f64	f64
 js_zlib_create_zstd_compress	f64	f64
 js_zlib_create_zstd_decompress	f64	f64
+js_zlib_decode_completion_options	i32s	f64
 js_zlib_deflate	void	f64,f64,f64
 js_zlib_deflate_init	f64	f64,f64
-js_zlib_decode_completion_options	i32s	f64
 js_zlib_deflate_options	f64	f64,i32s
 js_zlib_deflate_raw	void	f64,f64,f64
 js_zlib_deflate_raw_init	f64	f64,f64
@@ -4719,6 +4717,7 @@ js_zlib_zstd_compress_sync	f64	f64,f64
 js_zlib_zstd_decompress	void	f64,f64,f64
 js_zlib_zstd_decompress_init	f64	f64,f64
 js_zlib_zstd_decompress_sync	f64	f64,f64
+js_zlib_zstd_dictionary	f64	f64
 main	i32s	
 napi_acquire_threadsafe_function	i32s	ptr
 napi_add_async_cleanup_hook	i32s	ptr,ptr,ptr,ptr
@@ -4873,6 +4872,7 @@ node_api_symbol_for	i32s	ptr,ptr,usize,ptr
 node_api_throw_syntax_error	i32s	ptr,ptr,ptr
 perry_alloc_class_family	ptr	ptr,i32u,i32u
 perry_alloc_layout	ptr	ptr
+perry_alloc_literal_layout	ptr	ptr
 perry_alloc_runtime_record	ptr	ptr
 perry_app_group_init	void	ptr,i32s
 perry_app_group_suite_name	ptr	ptr

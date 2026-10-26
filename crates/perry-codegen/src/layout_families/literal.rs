@@ -209,6 +209,10 @@ mod tests {
             ir.contains(&format!("@perry_layout_class_{id}")),
             "literal descriptor must be live"
         );
+        assert!(
+            ir.contains("call ptr @perry_alloc_literal_layout("),
+            "literal birth must use the section/agent publication entry"
+        );
         let descriptor = ir
             .lines()
             .find(|line| line.starts_with(&format!("@perry_layout_class_{id} = global")))

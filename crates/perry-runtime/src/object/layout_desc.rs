@@ -29,6 +29,7 @@
 //! which no ShapeId carries (object model §3.6; set by `object::shadow`).
 
 mod literal_birth;
+pub use literal_birth::perry_alloc_literal_layout;
 mod optional_family;
 
 use super::ObjectHeader;
@@ -1040,12 +1041,7 @@ pub unsafe extern "C" fn perry_alloc_layout(desc: *const PerryLayoutDesc) -> *mu
     #[cfg(test)]
     crate::test_support::bootstrap_test_thread();
     let d = &*desc;
-    let id = if d.class_id != 0 {
-        registered_layout_id(load_layout_id(desc))
-    } else {
-        literal_birth::registered_for_birth(desc)
-    };
-    let Some(id) = id else {
+    let Some(id) = registered_layout_id(load_layout_id(desc)) else {
         eprintln!(
             "Perry internal error: perry_alloc_layout of an unregistered layout (family {:#x})",
             d.family

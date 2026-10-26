@@ -133,10 +133,8 @@ fn literal_index(desc: *const PerryLayoutDesc) -> Option<u32> {
 /// already published the descriptor's existing image word.
 #[inline(never)]
 pub(super) unsafe fn registered_for_birth(desc: *const PerryLayoutDesc) -> Option<u32> {
+    let index = literal_index(desc)?;
     let current = registered_layout_id(load_layout_id(desc));
-    let Some(index) = literal_index(desc) else {
-        return current;
-    };
     if let Some(id) = current {
         if super::super::shapes::shape_descriptor_by_id(id).is_some() {
             return Some(id);
@@ -158,3 +156,30 @@ unsafe fn first_birth(desc: *const PerryLayoutDesc, index: u32) -> Option<u32> {
     let id = register_one(desc, requested);
     (id != 0 && super::super::shapes::shape_descriptor_by_id(id).is_some()).then_some(id)
 }
+
+/// Birth of a literal-section family. The section owns the schema, while
+/// the current agent owns its registered ShapeRecord. Ordinary registered
+/// descriptors use perry_alloc_layout and never enter publication here.
+///
+/// # Safety
+/// desc points to this program's immutable literal descriptor image.
+#[no_mangle]
+pub unsafe extern "C" fn perry_alloc_literal_layout(
+    desc: *const PerryLayoutDesc,
+) -> *mut ObjectHeader {
+    #[cfg(test)]
+    crate::test_support::bootstrap_test_thread();
+    let Some(id) = registered_for_birth(desc) else {
+        eprintln!(
+            "Perry internal error: literal birth requires a valid literal-section descriptor"
+        );
+        std::process::abort();
+    };
+    alloc_layout_object(&*desc, id)
+}
+
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_PERRY_ALLOC_LITERAL_LAYOUT: unsafe extern "C" fn(
+    *const PerryLayoutDesc,
+) -> *mut ObjectHeader = perry_alloc_literal_layout;

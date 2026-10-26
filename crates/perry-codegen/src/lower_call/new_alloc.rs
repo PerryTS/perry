@@ -345,10 +345,7 @@ pub(crate) fn constructor_added_key_count_in<'c>(
 /// complete constructor is an unobservable assignment prologue. No inferred
 /// constructor property is included in this set: HIR retains actual fields only.
 pub(crate) fn keys_defined_at_birth(class: &Class) -> bool {
-    !class
-        .fields
-        .iter()
-        .any(|f| f.origin.is_reservation())
+    !class.fields.iter().any(|f| f.origin.is_reservation())
         && (class.is_literal_shape()
             || (class
                 .constructor
@@ -537,7 +534,9 @@ fn emit_instance_alloc_inner(
             // The image word is shared by agents, while ShapeRecords are
             // agent-local. The allocation operation proves this agent owns
             // the record, installing it on its first birth without a memo.
-            let raw = ctx.block().call(PTR, "perry_alloc_layout", &[(PTR, &desc)]);
+            let raw = ctx
+                .block()
+                .call(PTR, "perry_alloc_literal_layout", &[(PTR, &desc)]);
             *fields_written = None;
             return ctx.block().ptrtoint(&raw, I64);
         }

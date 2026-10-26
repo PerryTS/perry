@@ -62,6 +62,7 @@ js_write_barrier_birth_slots	Leaf	no
 js_write_barrier_slot	Leaf	no
 js_write_barrier_slot_validated_parent	Leaf	no
 perry_alloc_layout	AllocOnly	no
+perry_alloc_literal_layout	AllocOnly	no
 perry_array_iteration_init	Leaf	no
 perry_class_value_dir_cell	Leaf	no
 perry_intrinsic_proto	Leaf	no

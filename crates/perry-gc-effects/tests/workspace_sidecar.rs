@@ -403,3 +403,15 @@ fn quoted_literals(s: &str) -> Vec<&str> {
     }
     out
 }
+
+/// Literal publication is part of allocation, with no JS callback boundary.
+/// This pins the real linked archive, rather than only the unit-test world.
+#[test]
+#[ignore = "requires freshly built workspace archives and sidecar"]
+fn literal_layout_birth_is_allocation_without_user_reentry() {
+    let t = table();
+    let name = "perry_alloc_literal_layout";
+    assert!(t.get(name).is_some(), "the new ABI entry must be present");
+    assert_eq!(effect(&t, name), Effect::AllocNoReentry);
+    assert!(!throws(&t, name));
+}

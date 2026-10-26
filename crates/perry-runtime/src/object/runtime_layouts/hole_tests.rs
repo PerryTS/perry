@@ -653,8 +653,8 @@ fn classless_optional_family_keeps_shape_and_routes_unknown_keys_to_overflow() {
         ));
     });
     let desc = std::ptr::addr_of!(LITERAL_FAMILY);
-    let object =
-        scope.root_raw_mut_ptr(unsafe { crate::object::layout_desc::perry_alloc_layout(desc) });
+    let object = scope
+        .root_raw_mut_ptr(unsafe { crate::object::layout_desc::perry_alloc_literal_layout(desc) });
     object.with_mut_ptr(|obj: *mut ObjectHeader| unsafe {
         assert_eq!((*obj).class_id, 0);
         let word = (*obj).parent_class_id;
@@ -800,7 +800,8 @@ mod first_birth {
                 "ordinary startup must not register an unused literal"
             );
             let scope = crate::gc::RuntimeHandleScope::new();
-            let obj = scope.root_raw_mut_ptr(crate::object::layout_desc::perry_alloc_layout(desc));
+            let obj = scope
+                .root_raw_mut_ptr(crate::object::layout_desc::perry_alloc_literal_layout(desc));
             let id = obj.with_const_ptr(|p: *const ObjectHeader| (*p).parent_class_id);
             assert!(crate::object::shapes::shape_descriptor_by_id(id).is_some());
             assert_eq!(crate::object::layout_desc::load_layout_id(desc), id);
@@ -821,8 +822,8 @@ mod first_birth {
                     "a shared image word must not stand in for this agent's record"
                 );
                 let scope = crate::gc::RuntimeHandleScope::new();
-                let obj =
-                    scope.root_raw_mut_ptr(crate::object::layout_desc::perry_alloc_layout(desc));
+                let obj = scope
+                    .root_raw_mut_ptr(crate::object::layout_desc::perry_alloc_literal_layout(desc));
                 assert!(crate::object::shapes::shape_descriptor_by_id(id).is_some());
                 obj.with_mut_ptr(|p: *mut ObjectHeader| {
                     assert_eq!((*p).parent_class_id, id);
