@@ -887,7 +887,7 @@ fn a_once_invoked_wrapper_splits() {
                 {inner}
                 return module.exports;
             }}
-            const record: any = {{ factory: __perry_cjs_factory }};
+            __perry_register_path_module_partial("t.cjs", {{}}, __perry_cjs_factory);
             return __perry_cjs_factory();
         }})();
         console.log(_cjs);

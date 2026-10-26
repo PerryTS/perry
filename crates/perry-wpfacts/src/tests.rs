@@ -29,6 +29,7 @@ mod unit_alias;
 mod unit_ctor;
 mod unit_effects;
 mod unit_extends;
+mod run_once_closed;
 mod unit_mode;
 mod unit_namespace;
 
