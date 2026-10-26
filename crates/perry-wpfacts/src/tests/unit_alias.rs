@@ -508,3 +508,91 @@ fn the_bar_probe_version() {
         .collect();
     assert!(dead.is_empty(), "{dead:?}\n{}", u.dump_text());
 }
+
+/// DECISIONS 193: `run`'s argument reaches methods of a literal (no closed
+/// functions: their parameters hold argument markers, DECISIONS 44), each
+/// storing a string under its own key, `n` calls deep.
+fn method_chain(n: usize) -> String {
+    let mut a = String::from("export function run(o) {\n  const h = {\n");
+    for i in 0..n {
+        let next = match i + 1 < n {
+            true => format!(" h.f{}(x);", i + 1),
+            false => String::new(),
+        };
+        a += &format!("    f{i}(x) {{ x.k{i} = \"s\";{next} }},\n");
+    }
+    a += "  };\n  h.f0(o);\n}\n";
+    a
+}
+
+fn chain_reader(n: usize) -> String {
+    let keys: Vec<String> = (0..n).map(|i| format!("k{i}: 0")).collect();
+    let reads: Vec<String> = (0..n).map(|i| format!("o.k{i}")).collect();
+    format!(
+        "import {{ run }} from './a'; const o = {{ {} }}; run(o); console.log({});",
+        keys.join(", "),
+        reads.join(", ")
+    )
+}
+
+/// The reader's literal: its field `k` holds a string (the store reached it).
+fn reader_field_holds_str(u: &ProgramFacts, k: &str) -> bool {
+    u.templates
+        .iter()
+        .filter(|t| t.display.starts_with("m.ts"))
+        .flat_map(|t| t.fields.iter())
+        .any(|f| f.key == k && f.kind.prims & crate::model::prim::STR != 0)
+}
+
+#[test]
+fn a_store_two_calls_deep_reaches_the_outer_callers_argument() {
+    // `f1` stores into what `f0` passes it, which is what `run`'s caller
+    // passes: per unit `run`'s contract carries the store two calls deep
+    // (the reader composes `f1`'s parameter into `f0`'s into `run`'s), so
+    // `m`'s `o.k1` holds a string as in the whole program. Without the
+    // composition `o.k1` would be a number only: stronger than whole
+    // program.
+    let (a, m) = (method_chain(2), chain_reader(2));
+    let (u, _) = assert_not_stronger(&[("a", &a), ("m", &m)]);
+    assert!(reader_field_holds_str(&u, "k1"), "{}", u.dump_text());
+}
+
+#[test]
+fn a_store_through_a_recursion_reaches_the_outer_callers_argument() {
+    // `f` and `g` call each other: their argument markers stand for each
+    // other (a cycle in the member graph). `g`'s store reaches `run`'s
+    // caller's object through `f`.
+    let a = r#"
+export function run(o, n) {
+  const h = {
+    f(x, k) { if (k > 0) { h.g(x, k - 1); } },
+    g(y, k) { y.b = "s"; h.f(y, k); },
+  };
+  h.f(o, n);
+}
+"#;
+    let m = "import { run } from './a'; const o = { b: 0 }; run(o, 3); console.log(o.b);";
+    let (u, _) = assert_not_stronger(&[("a", a), ("m", m)]);
+    assert!(reader_field_holds_str(&u, "b"), "{}", u.dump_text());
+}
+
+#[test]
+fn a_store_costs_its_readers_not_the_call_path() {
+    // DECISIONS 193: a store is handed to the readers its argument marker
+    // stands for (here `run`'s parameter alone), not walked up every
+    // argument marker above it (DECISIONS 118/121/187: tsc
+    // typescript.js#u2245 stopped at the 200M work bound). A chain twice as
+    // long costs about twice the work (64 -> 128: x1.98; the walk: x2.56).
+    let w = |n: usize| {
+        let (a, m) = (method_chain(n), chain_reader(n));
+        let u = run(&[("a", &a), ("m", &m)], true, &FactsConfig::default());
+        assert!(reader_field_holds_str(&u, &format!("k{}", n - 1)), "{}", u.dump_text());
+        u.units
+            .iter()
+            .filter(|(p, _)| crate::decl_units::module_of(p) == "a.ts")
+            .map(|(_, s)| s.work)
+            .sum::<u64>()
+    };
+    let (w64, w128) = (w(64), w(128));
+    assert!(w128 * 100 < w64 * 225, "work {w64} -> {w128}");
+}

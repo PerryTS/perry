@@ -1257,12 +1257,16 @@ pub struct Model {
     /// over the member graph as the readers ask (`marker_members`); the
     /// graph only grows while solving, so a solve starts it over.
     pub members_settled: std::cell::RefCell<FxHashMap<Tok, std::rc::Rc<[Tok]>>>,
-    /// DECISIONS 187: per argument marker, the markers whose stores reached
-    /// it (`arg_stores`, the marker the store was made on) and the key they
-    /// reach it under (`None`: the marker itself); `arg_origin_done` keeps
-    /// each (marker, origin, key) once.
-    pub arg_store_origins: FxHashMap<Tok, Vec<(Tok, Option<Atom>)>>,
-    pub arg_origin_done: crate::pts::FxHashSet<(Tok, Tok, Option<Atom>)>,
+    /// DECISIONS 193: per argument marker, the readers it stands for: each
+    /// non-argument marker below it (`None`), or what one reaches under a
+    /// key (an argument marker's keyed reach below it, DECISIONS 121); kept
+    /// once each (`arg_reader_seen`). The argument markers a marker is a
+    /// member of (`arg_parents`; a keyed reach's base by key:
+    /// `arg_keyed_parents`) take the readers it gains.
+    pub arg_readers: FxHashMap<Tok, Vec<(Tok, Option<Atom>)>>,
+    pub arg_reader_seen: crate::pts::FxHashSet<(Tok, Tok, Option<Atom>)>,
+    pub arg_parents: FxHashMap<Tok, Vec<Tok>>,
+    pub arg_keyed_parents: FxHashMap<Tok, Vec<(Atom, Tok)>>,
     pub arg_linked: crate::pts::FxHashSet<(Tok, Tok)>,
     /// Argument markers, a bit per token.
     pub arg_bits: Vec<u64>,
@@ -2477,20 +2481,15 @@ impl Model {
         if !self.members_settled.get_mut().is_empty() {
             self.members_settled.get_mut().clear();
         }
-        // DECISIONS 187: the stores `m` takes are those made on `r`, on its
-        // keyed reaches, and on the markers whose stores reached `r`.
-        let keyed_stores = self.keyed_reach.get(&r).map_or(false, |v| {
-            v.iter().any(|(_, kr)| self.arg_stores.contains_key(kr))
-        });
-        if self.arg_stores.contains_key(&r)
-            || keyed_stores
-            || self.arg_store_origins.contains_key(&r)
-            || self.arg_src_watch.contains_key(&r)
-            || self.handover_watch.contains_key(&r)
-            || self.arg_src_flows.contains_key(&r)
-        {
-            self.marker_links.push((m, r));
+        // DECISIONS 193: `r` takes `m`'s readers, and from now on what `m`
+        // gains (`replay_marker_links`).
+        if self.is_arg_marker(m) {
+            match self.keyed_parent.get(&m).copied() {
+                Some((p, a)) => self.arg_keyed_parents.entry(p).or_default().push((a, r)),
+                None => self.arg_parents.entry(m).or_default().push(r),
+            }
         }
+        self.marker_links.push((m, r));
         if self.beside_markers.contains(&r) {
             match self.beside_values(m) {
                 true if !self.param_marker.contains_key(&m) => {

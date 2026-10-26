@@ -433,8 +433,10 @@ fn a_broken_namespace_field_function_resolves_only_the_units_that_see_it() {
     let w = |p: &str| module_work(&pf, p);
     // Merged head (main's write effects and ResolveExport): round 2 solves
     // fewer units than `a`, `m`, `b` and `c` together; the rounds are pinned.
+    // Rewritten for DECISIONS 196 (each reader an argument marker gains is
+    // solve work): [699, 725, 908, 406, 334] -> the pin below.
     assert!(pf.round_work[1] < w("a.ts") + w("m.ts") + w("b.ts") + w("c.ts"));
-    assert_eq!(pf.round_work, [699, 725, 908, 406, 334], "{:?}", pf.units);
+    assert_eq!(pf.round_work, [709, 731, 914, 410, 334], "{:?}", pf.units);
 }
 
 #[test]
