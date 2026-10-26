@@ -103,15 +103,11 @@ fn locate_names_the_band_and_index_at_every_boundary() {
     for id in [0, 1, SHAPE_ID_BASE - 1] {
         assert_eq!(locate(id).0, 3, "{id:#x}");
     }
-    // Object model step 4: bit 30 is the layout word's shadow bit, which no
-    // ShapeId uses; `locate` reads the layout id under it.
+    // Bit 30 is the layout word's shadow bit; no ShapeId has it, so a word
+    // that still carries it names no identity band.
     let shadow = crate::object::overflow::SHADOW_BIT;
     for (id, _, _) in cases {
-        assert_eq!(
-            locate(id | shadow),
-            locate(id),
-            "{id:#x} under the shadow bit"
-        );
+        assert_eq!(locate(id | shadow).0, 3, "{id:#x} under the shadow bit");
     }
     assert_eq!(locate(SHAPE_ID_END - 1).0, 2);
 }
@@ -130,7 +126,7 @@ fn the_agent_directory_is_the_agent_slab_and_an_absent_id_reads_empty() {
     };
     fn absent(id: u32) {
         // SAFETY: `agent_record` never returns null.
-        let r = unsafe { &*ShapeSlab::agent_record(id) };
+        let r = unsafe { &*ShapeSlab::agent_record(ShapeId(id)) };
         assert!(!r.present(), "{id:#x} reads a present record");
         assert_eq!(r.rep, 0, "{id:#x}: absent rep");
         assert_eq!(r.position_bound(), 0, "{id:#x}: absent position bound");
@@ -165,13 +161,13 @@ fn the_agent_directory_is_the_agent_slab_and_an_absent_id_reads_empty() {
             // Keyless: nothing here ever dereferences a keys word.
             let record = ShapeRecord::new(0, 0, 3, 0, ShapeObjectKind::Ordinary, 0).with_rep(rep);
             // SAFETY: no slab reference is held.
-            unsafe { table.slab_mut().insert(id, record) };
+            unsafe { table.slab_mut().insert(ShapeId(id), record) };
         }
         let check = |ids: &[u32], reps: &[u64]| {
             for (&id, &rep) in ids.iter().zip(reps) {
                 assert_eq!(
-                    table.slab().record_ptr(id),
-                    Some(ShapeSlab::agent_record(id))
+                    table.slab().record_ptr(ShapeId(id)),
+                    Some(ShapeSlab::agent_record(ShapeId(id)))
                 );
                 assert_eq!(shape_rep_by_id(id), rep, "{id:#x}");
                 assert_eq!(
@@ -193,7 +189,7 @@ fn the_agent_directory_is_the_agent_slab_and_an_absent_id_reads_empty() {
         let far = SITE_SHAPE_ID_END - 3 * (1 << super::super::SHAPE_ID_KIND_SHIFT) - 2;
         let record = ShapeRecord::new(0, 0, 3, 0, ShapeObjectKind::Ordinary, 0).with_rep(0b01);
         // SAFETY: no slab reference is held.
-        unsafe { table.slab_mut().insert(far, record) };
+        unsafe { table.slab_mut().insert(ShapeId(far), record) };
         check(&ids, &reps);
         check(&[far], &[0b01]);
         // Another agent sees none of this agent's records, before and
@@ -213,7 +209,7 @@ fn the_agent_directory_is_the_agent_slab_and_an_absent_id_reads_empty() {
         // directory shrinks with the slab.
         for id in ids.into_iter().chain([far]) {
             // SAFETY: no slab reference is held.
-            assert!(unsafe { table.slab_mut().remove(id) }.is_some());
+            assert!(unsafe { table.slab_mut().remove(ShapeId(id)) }.is_some());
             absent(id);
         }
         // SAFETY: no slab reference is held.
@@ -229,8 +225,8 @@ fn the_agent_directory_is_the_agent_slab_and_an_absent_id_reads_empty() {
 #[test]
 fn slab_records_are_addressed_by_id_and_keep_their_address() {
     let mut slab = ShapeSlab::new();
-    let id_a = SHAPE_ID_BASE + 5;
-    let id_b = SHAPE_ID_BASE + 5 + (CHUNK_LEN * PAGE_LEN) as u32 * 3;
+    let id_a = ShapeId(SHAPE_ID_BASE + 5);
+    let id_b = ShapeId(SHAPE_ID_BASE + 5 + (CHUNK_LEN * PAGE_LEN) as u32 * 3);
     assert_eq!(slab.get(id_a), None);
     assert_eq!(
         slab.insert(
@@ -256,9 +252,9 @@ fn slab_records_are_addressed_by_id_and_keep_their_address() {
     assert!(b.facts_match(0x2000, 2, 2, 7, ShapeObjectKind::Class, 1));
     assert!(!b.facts_match(0x2000, 2, 2, 7, ShapeObjectKind::Ordinary, 1));
     // Ids outside the range and never-minted ids resolve to nothing.
-    assert_eq!(slab.get(0), None);
-    assert_eq!(slab.get(SHAPE_ID_BASE + 6), None);
-    assert_eq!(slab.get(super::super::SHAPE_ID_END - 1), None);
+    assert_eq!(slab.get(ShapeId(0)), None);
+    assert_eq!(slab.get(ShapeId(SHAPE_ID_BASE + 6)), None);
+    assert_eq!(slab.get(ShapeId(super::super::SHAPE_ID_END - 1)), None);
     assert_eq!(slab.ids(), vec![id_a, id_b]);
     // Removal clears the record and, once a chunk is empty, the chunk.
     assert_eq!(slab.remove(id_a).map(|r| r.keys), Some(0x1000));
@@ -276,7 +272,7 @@ fn slab_records_are_addressed_by_id_and_keep_their_address() {
 #[test]
 fn lifted_descriptor_mirrors_the_record_and_names_its_address() {
     let mut slab = ShapeSlab::new();
-    let id = SHAPE_ID_BASE + 42;
+    let id = ShapeId(SHAPE_ID_BASE + 42);
     let mut record = ShapeRecord::new(0x3000, 4, 6, 9, ShapeObjectKind::Ordinary, 2);
     record.set(RECORD_FLAG_OLD_CARRIER, true);
     record.set(RECORD_FLAG_CACHE_CARRIER, true);
@@ -324,10 +320,17 @@ fn lifted_descriptor_mirrors_the_record_and_names_its_address() {
 /// 104), facts of the immutable key list computed at mint, not side tables.
 #[test]
 fn the_record_geometry_is_bounded_and_facts_key_is_o1() {
-    assert_eq!(std::mem::size_of::<ShapeRecord>(), 120, "record grew");
+    assert_eq!(
+        std::mem::size_of::<ShapeRecord>(),
+        crate::codegen_abi::SHAPE_RECORD_SIZE,
+        "record grew"
+    );
     assert_eq!(std::mem::align_of::<ShapeRecord>(), 8, "record realigned");
     assert_eq!(std::mem::offset_of!(ShapeRecord, element_kind), 72);
-    assert_eq!(std::mem::offset_of!(ShapeRecord, evaluation_layout_of), 76);
+    assert_eq!(
+        std::mem::offset_of!(ShapeRecord, family_desc_index_plus_one),
+        76
+    );
     assert_eq!(std::mem::offset_of!(ShapeRecord, probe), 80);
     assert_eq!(std::mem::offset_of!(ShapeRecord, colour_mask), 88);
     assert_eq!(std::mem::offset_of!(ShapeRecord, colour_store_mask), 104);
@@ -409,7 +412,10 @@ fn special_body_identity_uses_record_owned_extension() {
     assert_eq!(special.position_bound_raw(), old.position_bound_raw());
     // The ConstFn facts live in the record-owned extension: the record keeps
     // its geometry (see `the_record_geometry_is_bounded_and_facts_key_is_o1`).
-    assert_eq!(std::mem::size_of::<ShapeRecord>(), 120);
+    assert_eq!(
+        std::mem::size_of::<ShapeRecord>(),
+        crate::codegen_abi::SHAPE_RECORD_SIZE
+    );
     assert!(special.facts_match_proto_with_special(
         0x40,
         1,
@@ -791,8 +797,8 @@ fn a_short_spilled_list_builds_no_index() {
 #[test]
 fn a_dictionary_band_id_does_not_grow_the_ordinary_directory() {
     let mut slab = ShapeSlab::new();
-    let ordinary = super::super::SHAPE_ID_BASE + 3;
-    let dict = super::super::SITE_SHAPE_ID_END + 5;
+    let ordinary = ShapeId(super::super::SHAPE_ID_BASE + 3);
+    let dict = ShapeId(super::super::SITE_SHAPE_ID_END + 5);
     slab.insert(ordinary, ShapeRecord::EMPTY);
     slab.insert(dict, ShapeRecord::EMPTY);
     assert_eq!(
@@ -871,7 +877,7 @@ fn symbol_absence_follows_the_layout_and_the_overflow() {
         let key = crate::string::js_string_from_bytes(b"present".as_ptr(), 7);
         crate::object::js_object_set_field_by_name(object, key, 1.0);
         let proof = || {
-            super::super::shape_record_by_id(super::super::object_shape_stamp(object))
+            super::super::shape_record_for_word(super::super::object_shape_stamp(object))
                 .unwrap()
                 .proves_no_symbols()
         };
@@ -1003,7 +1009,7 @@ fn plain_birth_validation_rejects_ids_outside_the_ordinary_directory() {
         u32::MAX,
     ] {
         assert!(
-            super::super::plain_birth_rep_by_id(id, 0).is_none(),
+            super::super::plain_birth_rep_for_word(id, 0).is_none(),
             "id {id:#x}"
         );
     }

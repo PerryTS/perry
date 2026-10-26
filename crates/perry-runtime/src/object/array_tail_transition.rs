@@ -314,10 +314,10 @@ fn canonical_index(key: *const crate::StringHeader) -> Option<u32> {
 
 #[inline]
 fn descriptor_pair_is_exact(entry: ArrayTailTransitionEntry) -> bool {
-    let Some(predecessor) = shapes::shape_descriptor_by_id(entry.predecessor_shape_id) else {
+    let Some(predecessor) = shapes::shape_descriptor_for_word(entry.predecessor_shape_id) else {
         return false;
     };
-    let Some(successor) = shapes::shape_descriptor_by_id(entry.successor_shape_id) else {
+    let Some(successor) = shapes::shape_descriptor_for_word(entry.successor_shape_id) else {
         return false;
     };
     predecessor.keys as usize == entry.predecessor_keys
@@ -355,10 +355,10 @@ pub(crate) fn record_numeric_tail_transition(
     {
         return;
     }
-    let Some(predecessor) = shapes::shape_descriptor_by_id(predecessor_shape_id) else {
+    let Some(predecessor) = shapes::shape_descriptor_for_word(predecessor_shape_id) else {
         return;
     };
-    let Some(successor) = shapes::shape_descriptor_by_id(successor_shape_id) else {
+    let Some(successor) = shapes::shape_descriptor_for_word(successor_shape_id) else {
         return;
     };
     let entry = ArrayTailTransitionEntry {
@@ -590,8 +590,10 @@ unsafe fn note_live_entries(
         if entry.successor_shape_id == 0 {
             continue;
         }
-        shapes::note_cache_carrier(shapes::shape_descriptor_by_id(entry.predecessor_shape_id));
-        shapes::note_cache_carrier(shapes::shape_descriptor_by_id(entry.successor_shape_id));
+        shapes::note_cache_carrier(shapes::shape_descriptor_for_word(
+            entry.predecessor_shape_id,
+        ));
+        shapes::note_cache_carrier(shapes::shape_descriptor_for_word(entry.successor_shape_id));
     }
 }
 

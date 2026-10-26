@@ -1459,7 +1459,7 @@ mod shape_transition_tests_6759 {
     //! resolve a field before reading the stamp — a fresh instance legitimately
     //! reads as unstamped.
     use super::*;
-    use crate::object::shapes::is_shape_id;
+    use crate::object::shapes::is_layout_word;
 
     fn key(name: &str) -> *mut crate::StringHeader {
         crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32)
@@ -1485,7 +1485,7 @@ mod shape_transition_tests_6759 {
             let _ = crate::object::js_object_get_field_by_name(obj, key("del6759_b"));
             let before = (*obj).shape_word();
             assert!(
-                is_shape_id(before),
+                is_layout_word(before),
                 "fixture is vacuous — no shape stamp to transition (got {before:#x})"
             );
 
@@ -1522,9 +1522,9 @@ mod shape_transition_tests_6759 {
         }
         let after = (*obj).parent_class_id;
         assert_ne!(after, before, "the full layout word moves (the shadow bit)");
-        assert!(is_shape_id(crate::object::layout_desc::layout_id_of_word(
-            after
-        )));
+        assert!(is_layout_word(
+            crate::object::layout_desc::layout_id_of_word(after)
+        ));
         assert_eq!(
             crate::object::shapes::object_shape_descriptor(obj)
                 .unwrap()
@@ -1575,7 +1575,7 @@ mod shape_transition_tests_6759 {
             assert_eq!((*obj).class_id, CID, "test premise: a class instance");
             let before = (*obj).shape_word();
             assert!(
-                is_shape_id(before),
+                is_layout_word(before),
                 "test premise: a class instance is stamped AT BIRTH (got \
                  {before:#x}). Rung 2 (#8009 for the compiled path, and the \
                  runtime allocators alongside it) exists because a LAZY stamp \
@@ -1635,7 +1635,7 @@ mod shape_transition_tests_6759 {
             let id_a = (*a).shape_word();
             let id_b = (*b).shape_word();
             assert!(
-                is_shape_id(id_a) && is_shape_id(id_b),
+                is_layout_word(id_a) && is_layout_word(id_b),
                 "both must be stamped"
             );
             assert_eq!(
@@ -1694,7 +1694,7 @@ mod shape_transition_tests_6759 {
             // makes this test stronger than when the word still started as
             // inheritance data — there is no window in which it was correct.
             assert!(
-                is_shape_id((*leaf).shape_word()),
+                is_layout_word((*leaf).shape_word()),
                 "test premise: the newborn's header word was not clobbered by a \
                  birth stamp, so the chain is not actually being stressed"
             );
@@ -1708,7 +1708,7 @@ mod shape_transition_tests_6759 {
             // …and it stays clobbered across a resolve.
             let _ = crate::object::js_object_get_field_by_name(leaf, key("chain6759_p"));
             assert!(
-                is_shape_id((*leaf).shape_word()),
+                is_layout_word((*leaf).shape_word()),
                 "test premise: the word stopped being a stamp, so nothing is being tested"
             );
 

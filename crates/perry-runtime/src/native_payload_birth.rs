@@ -250,7 +250,7 @@ unsafe fn pairs_match(pairs: f64, accessors: &[OwnAccessor]) -> bool {
 /// Do the recorded shape's lanes hold any value in slots `0..count` (no
 /// typed lane), so a newborn's slots take plain initializing stores?
 fn any_lanes(id: u32, count: usize) -> bool {
-    let rep = crate::object::shapes::shape_rep_by_id(id);
+    let rep = crate::object::shapes::shape_rep_for_word(id);
     (0..count as u32).all(|slot| {
         crate::object::field_rep::slot_rep(rep, slot) == crate::object::field_rep::REP_ANY
     })

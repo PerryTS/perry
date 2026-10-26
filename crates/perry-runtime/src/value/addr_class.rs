@@ -890,9 +890,19 @@ mod known_plausible_alignment_tests {
     }
 }
 
+#[cfg(any(test, all(feature = "wasm-image-selftest", target_family = "wasm")))]
+#[path = "addr_class/image_checks.rs"]
+mod image_checks;
 #[cfg(test)]
 #[path = "addr_class/image_tests.rs"]
 mod image_tests;
+
+/// Run the image classifier checks inside the linked program (see
+/// `image_checks.rs`); only an archive built for that purpose carries them.
+#[cfg(all(feature = "wasm-image-selftest", target_family = "wasm"))]
+pub(crate) fn wasm_image_selftest() {
+    image_checks::run_all();
+}
 
 #[path = "addr_class/image.rs"]
 mod image;

@@ -432,7 +432,7 @@ pub(crate) unsafe fn drop_packed_subclass_numeric_proof_record(
     // `obj` is a live GC object by contract: its header needs no admission.
     let header = &*crate::gc::header_from_trusted_user_ptr(obj as *const u8);
     if header.obj_type != crate::gc::GC_TYPE_OBJECT
-        || crate::object::shapes::shape_object_kind_by_id(
+        || crate::object::shapes::shape_object_kind_of_receiver(
             crate::object::shapes::object_shape_stamp(obj),
         ) != Some(crate::object::shapes::ShapeObjectKind::OrdinaryNumericProof)
     {
@@ -471,7 +471,7 @@ unsafe fn subclass_numeric_prefix_is_proven(
     bound: u32,
     require_u32: bool,
 ) -> bool {
-    if crate::object::shapes::shape_object_kind_by_id(shape_id)
+    if crate::object::shapes::shape_object_kind_for_word(shape_id)
         != Some(crate::object::shapes::ShapeObjectKind::OrdinaryNumericProof)
     {
         return false;

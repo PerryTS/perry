@@ -188,7 +188,7 @@ fn hop_identity_pins_link(pid: u64) -> bool {
 
 /// [`admitted_proto_id`], with `obj`'s recorded word.
 pub(crate) unsafe fn admitted_link(obj: *const ObjectHeader) -> Option<(u64, u64)> {
-    let record = crate::object::shapes::shape_record_by_id(object_shape_stamp(obj))?;
+    let record = crate::object::shapes::shape_record_of_receiver(object_shape_stamp(obj))?;
     let pid = record.proto_id();
     if !hop_identity_pins_link(pid) {
         // Only a declaration's immutable parent proof admits bare CLASS.
@@ -225,7 +225,7 @@ pub(crate) unsafe fn admitted_proto_id(obj: *const ObjectHeader) -> Option<u64> 
 /// names its live identity word. Hits compare that word with the recorded
 /// direct holder, then check each hop and holder ShapeId.
 pub(crate) unsafe fn class_link(recv: *const ObjectHeader) -> Option<*const ObjectHeader> {
-    let record = crate::object::shapes::shape_record_by_id(object_shape_stamp(recv))?;
+    let record = crate::object::shapes::shape_record_of_receiver(object_shape_stamp(recv))?;
     let pid = record.proto_id();
     // Most ordinary receivers have serial/default links. Their shape rules
     // out a class entry before any registry-backed identity derivation.

@@ -74,7 +74,7 @@ impl PrivateStorageKey {
             }));
         }
         let slot = self.slot.get().filter(|slot| slot.0 == shape).or_else(|| {
-            if !crate::object::shapes::shape_object_kind_by_id(shape).is_some_and(|kind| {
+            if !crate::object::shapes::shape_object_kind_of_receiver(shape).is_some_and(|kind| {
                 kind.is_ordinary_layout() || kind == crate::object::shapes::ShapeObjectKind::Class
             }) {
                 return None;
@@ -96,7 +96,7 @@ impl PrivateStorageKey {
             {
                 return None;
             }
-            let live = crate::object::shapes::shape_live_inline_slot_count_by_id(shape)?;
+            let live = crate::object::shapes::shape_live_inline_slot_count_of_receiver(shape)?;
             let slot = (shape, unsafe { keys.storage_slot(index) }, live, attrs);
             self.slot.set(Some(slot));
             Some(slot)
@@ -579,7 +579,7 @@ impl IntrinsicPrivateReadSite {
             return Some(value);
         }
         // Honest tags reject unshaped cells without private-name lookup.
-        if !crate::object::shapes::is_shape_id(crate::object::layout_desc::layout_id_of_word(
+        if !crate::object::shapes::is_layout_word(crate::object::layout_desc::layout_id_of_word(
             unsafe { (*object).parent_class_id },
         )) {
             return None;

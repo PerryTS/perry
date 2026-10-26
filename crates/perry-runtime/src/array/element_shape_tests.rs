@@ -709,7 +709,7 @@ fn keys_array(names: &[&str]) -> *mut ArrayHeader {
 /// `(keys, shape_id)` for a plain ordinary shape over `names`.
 fn record_shape(names: &[&str]) -> (*mut ArrayHeader, u32) {
     let keys = keys_array(names);
-    let shape_id = crate::object::shapes::shape_id_for_keys_ensure(keys, names.len() as u32);
+    let shape_id = crate::object::shapes::layout_for_keys_ensure(keys, names.len() as u32);
     assert_ne!(shape_id, 0, "test premise: the keys must mint a shape");
     (keys, shape_id)
 }

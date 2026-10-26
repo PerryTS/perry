@@ -924,11 +924,12 @@ pub(crate) fn static_method_lanes(
     ) else {
         return Vec::new();
     };
-    let Some(birth) = super::static_shape_ids::static_shape_id_for_keys_global(keys_global) else {
+    let Some(birth) = super::static_shape_ids::static_layout_word_for_keys_global(keys_global)
+    else {
         return Vec::new();
     };
     let mut lanes = Vec::new();
-    for (id, shape) in super::compatible_final_shapes(&birth.to_string(), &[]) {
+    for (id, shape) in super::compatible_final_layouts(&birth.to_string(), &[]) {
         let Some(slot) = shape
             .keys
             .split(|&b| b == 0)
@@ -976,7 +977,7 @@ pub(crate) fn birth_literal(
     }
     let mut shape = literal_final(ctx.strings.module_prefix(), props, base_rep)?;
     shape.live = live;
-    let id = super::static_shape_ids::static_final_shape_id(&shape)?;
+    let id = super::static_shape_ids::static_final_shape_identity(&shape)?;
     let desc = format!(
         "@{}",
         crate::layout_desc::literal_desc_symbol(ctx.strings.module_prefix(), id)
@@ -1108,7 +1109,7 @@ pub(crate) fn finalize_class(ctx: &mut crate::expr::FnCtx<'_>, name: &str, boxed
     let Some(shape) = shape else {
         return boxed.to_string();
     };
-    if super::static_shape_ids::static_final_shape_id(&shape).is_none() {
+    if super::static_shape_ids::static_final_shape_identity(&shape).is_none() {
         return boxed.to_string();
     }
     // `boxed` is the completed receiver, including constructor return override.
@@ -1123,7 +1124,7 @@ pub(crate) fn finalize_class(ctx: &mut crate::expr::FnCtx<'_>, name: &str, boxed
 }
 
 fn finalize_shape(ctx: &mut crate::expr::FnCtx<'_>, shape: &BirthShape, object: &str) -> String {
-    let Some(id) = super::static_shape_ids::static_final_shape_id(&shape) else {
+    let Some(id) = super::static_shape_ids::static_final_shape_identity(&shape) else {
         return object.to_string();
     };
     let entries = format!("@{}", entries_symbol(ctx.strings.module_prefix(), id));
@@ -1135,7 +1136,7 @@ fn finalize_shape(ctx: &mut crate::expr::FnCtx<'_>, shape: &BirthShape, object: 
         "js_object_finalize_constfn_static",
         &[
             (I64, object),
-            (I32, &id.to_string()),
+            (I32, &crate::layout_ordinals::static_word(id).to_string()),
             (PTR, &global),
             (I32, &len),
             (I32, &shape.key_count.to_string()),

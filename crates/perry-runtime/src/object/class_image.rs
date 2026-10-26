@@ -182,6 +182,7 @@ pub type ConstructorFlagTable = PtrHashMap<u32, (bool, bool, Option<u32>)>;
 /// that
 /// reach user-visible output, so no caller may rely on their order.
 pub struct ClassImageTables {
+    layout_image: OnceLock<crate::codegen_abi::PerryLayoutImageV1>,
     pub(crate) declarations: RwLock<super::class_registry::declarations::ClassDeclarationIndex>,
     pub(crate) static_methods: RwLock<Option<StaticMethodTable>>,
     pub(crate) static_accessors: RwLock<Option<StaticAccessorTable>>,
@@ -215,6 +216,7 @@ pub struct ClassImageTables {
 impl ClassImageTables {
     fn new() -> Self {
         Self {
+            layout_image: OnceLock::new(),
             declarations: RwLock::new(Default::default()),
             static_methods: RwLock::new(None),
             static_accessors: RwLock::new(None),
@@ -338,6 +340,45 @@ pub fn adopt_image(handle: ClassImageHandle) {
     let _ = CURRENT_IMAGE.try_with(|slot| {
         let _ = slot.set(handle.0);
     });
+}
+
+/// Does the calling thread run the process's primary image?
+#[inline]
+fn runs_primary_image() -> bool {
+    match CURRENT_IMAGE.try_with(|slot| slot.get().map(Arc::as_ptr)) {
+        Ok(Some(own)) => PRIMARY_IMAGE
+            .get()
+            .is_some_and(|primary| Arc::as_ptr(&primary.tables) == own),
+        // No image of its own (or TLS teardown): the thread resolves to the
+        // primary, exactly as `current` does.
+        _ => true,
+    }
+}
+
+/// The calling thread's view of a runtime-crate memo static: the static
+/// itself for the primary image, null (no memo) for any other image.
+///
+/// A LayoutWord read by process-shared runtime state must denote one shape
+/// in the whole process. Native rows (below the catalog's N) do, and dynamic
+/// rows do (process-unique chunks). An image's static rows N..S-1 do NOT:
+/// each image's compiler assigns them to its own layouts, and the ordinals are
+/// compile-time constants of that image's guards, birth images and family
+/// ranges, so no image can be given a range disjoint from images it never
+/// sees. A runtime-crate memo static (`runtime_state_key!`) is shared by all
+/// images of a #8546 host, so it is the primary image's storage: an agent of
+/// another image takes the stateless probe and the complete read instead
+/// (correct, without the memo's chain answers). Compiled site memos live in
+/// their image's own data and need no such rule. Cost on the primary image:
+/// this thread-local read and one pointer compare per memo-backed runtime
+/// fixed-key access; no table, epoch or validity bit.
+#[doc(hidden)]
+#[inline]
+pub fn process_shared_memo<T>(memo: &'static T) -> *mut T {
+    if runs_primary_image() {
+        memo as *const T as *mut T
+    } else {
+        std::ptr::null_mut()
+    }
 }
 
 /// Identity of the image the calling thread currently resolves to.
@@ -669,3 +710,53 @@ mod tests {
         assert_eq!(before, after, "re-entering replaced the thread's image");
     }
 }
+
+pub(crate) fn bind_layout_image(image: crate::codegen_abi::PerryLayoutImageV1) {
+    assert!(image.valid(), "invalid layout image ABI/range");
+    let bound = current().layout_image.get_or_init(|| image);
+    assert_eq!(
+        *bound, image,
+        "repeated module initialization changed the layout image"
+    );
+}
+pub(crate) fn layout_image() -> crate::codegen_abi::PerryLayoutImageV1 {
+    *current().layout_image.get_or_init(runtime_layout_image)
+}
+
+/// The layout image this agent's shape slab was built from, published by
+/// [`publish_agent_layout_image`] when the slab is created. Hot word tests
+/// (family range, static prefix) read it with one thread-pointer-relative
+/// load instead of resolving the thread's image tables; before the agent has
+/// a slab it is the runtime's own image, which [`layout_image`] answers too.
+#[thread_local]
+static AGENT_LAYOUT_IMAGE: std::cell::Cell<crate::codegen_abi::PerryLayoutImageV1> =
+    std::cell::Cell::new(runtime_layout_image());
+
+/// [`AGENT_LAYOUT_IMAGE`]: this agent's bound layout image.
+#[inline(always)]
+pub(crate) fn agent_layout_image() -> crate::codegen_abi::PerryLayoutImageV1 {
+    AGENT_LAYOUT_IMAGE.get()
+}
+
+/// Publish the image an agent's slab was built from (`ShapeSlab::new_agent`).
+pub(crate) fn publish_agent_layout_image(image: crate::codegen_abi::PerryLayoutImageV1) {
+    AGENT_LAYOUT_IMAGE.set(image);
+}
+
+pub(crate) const fn runtime_layout_image() -> crate::codegen_abi::PerryLayoutImageV1 {
+    #[cfg(test)]
+    {
+        crate::codegen_abi::PerryLayoutImageV1 {
+            static_rows: 4096,
+            ..crate::codegen_abi::PerryLayoutImageV1::RUNTIME
+        }
+    }
+    #[cfg(not(test))]
+    {
+        crate::codegen_abi::PerryLayoutImageV1::RUNTIME
+    }
+}
+
+#[cfg(test)]
+#[path = "multi_image_memo_tests.rs"]
+mod multi_image_memo_tests;

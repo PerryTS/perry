@@ -251,7 +251,7 @@ fn the_reverse_indices_follow_a_moved_keys_array() {
     );
     let obj = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::ObjectHeader;
     let id = unsafe { shapes::object_shape_stamp(obj) };
-    assert!(shapes::is_shape_id(id), "the receiver stays stamped");
+    assert!(shapes::is_layout_word(id), "the receiver stays stamped");
     // A family is every descriptor on one keys ARRAY, and one canonical
     // backing serves a whole growth chain: the receiver's `[k0, k1]` shares
     // it with the `[k0]` it grew from. All of them follow the move.
@@ -269,7 +269,7 @@ fn the_reverse_indices_follow_a_moved_keys_array() {
     );
     for member in &family {
         assert_eq!(
-            shapes::shape_descriptor_by_id(*member).map(|d| d.keys),
+            shapes::test_descriptor_for_retained_word(*member).map(|d| d.keys),
             Some(after.keys),
             "#9706: family member {member} still names another array"
         );
@@ -334,7 +334,7 @@ fn a_keys_array_whose_last_carrier_died_is_still_reclaimed() {
     use_owned_fixture_keys(0);
     let obj = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::ObjectHeader;
     let shape_id = unsafe { shapes::object_shape_stamp(obj) };
-    assert!(shapes::shape_descriptor_by_id(shape_id).is_some());
+    assert!(shapes::test_descriptor_for_retained_word(shape_id).is_some());
 
     // Drop the only root. An immortality bug is as real as a use-after-free:
     // if the descriptor table ever became an UNCONDITIONAL root for `keys`,
@@ -350,7 +350,7 @@ fn a_keys_array_whose_last_carrier_died_is_still_reclaimed() {
     );
 
     assert!(
-        shapes::shape_descriptor_by_id(shape_id).is_none(),
+        shapes::shape_is_retired(shape_id),
         "#8112: the descriptor for a shape no live object carries any more must \
          be reclaimed by the dead-key prune; it survived, which is what \
          unconditional table rooting would look like"
@@ -422,7 +422,8 @@ fn collect_recycled_keys_report(suppress_type_check: bool) -> RecycledKeysReport
         copied_objects: trace.copying_nursery.copied_objects,
         old_index_exists: shapes::test_shape_entry_exists(recycled_addr),
         new_index_exists: shapes::test_shape_entry_exists(replacement_after),
-        descriptor_keys: shapes::shape_descriptor_by_id(shape_id).map(|descriptor| descriptor.keys),
+        descriptor_keys: shapes::test_descriptor_for_retained_word(shape_id)
+            .map(|descriptor| descriptor.keys),
     };
 
     shapes::test_clear_shape_table();
@@ -541,7 +542,7 @@ fn build_unrooted_keyless_semantic_shape(slot: u32) -> u32 {
     let shape_id = unsafe { shapes::transition_object_shape_semantics(obj) };
     assert_ne!(shape_id, predecessor, "semantic transition must mint an id");
     assert_ne!(
-        shapes::shape_descriptor_by_id(shape_id)
+        shapes::test_descriptor_for_retained_word(shape_id)
             .expect("semantic descriptor")
             .semantic_generation,
         0,
@@ -565,7 +566,7 @@ fn synchronous_full_trace_retires_only_uncarried_semantic_shapes() {
     let dead_shape = build_unrooted_keyless_semantic_shape(0);
     collect_synchronous_full_trace();
     assert!(
-        shapes::shape_descriptor_by_id(dead_shape).is_none(),
+        shapes::shape_is_retired(dead_shape),
         "#9726: a keyless per-object generation with no live carrier survived a complete full trace"
     );
 
@@ -573,7 +574,7 @@ fn synchronous_full_trace_retires_only_uncarried_semantic_shapes() {
     let live_before = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::ObjectHeader;
     let live_shape = unsafe { shapes::transition_object_shape_semantics(live_before) };
     assert_ne!(
-        shapes::shape_descriptor_by_id(live_shape)
+        shapes::test_descriptor_for_retained_word(live_shape)
             .expect("live semantic descriptor before collection")
             .semantic_generation,
         0
@@ -587,7 +588,7 @@ fn synchronous_full_trace_retires_only_uncarried_semantic_shapes() {
         live_shape
     );
     assert!(
-        shapes::shape_descriptor_by_id(live_shape).is_some(),
+        shapes::test_descriptor_for_retained_word(live_shape).is_some(),
         "#9726/#9200: pruning must not leave a live receiver stamped with an unresolved id"
     );
     let own_keys = crate::object::js_object_keys(live_after);
@@ -622,13 +623,13 @@ fn budgeted_full_trace_does_not_retire_from_a_partial_carrier_census() {
     let completed = complete_budgeted_gc_cycle();
     assert_eq!(completed.status, JS_GC_STEP_STATUS_COMPLETED);
     assert!(
-        shapes::shape_descriptor_by_id(shape_id).is_some(),
+        shapes::test_descriptor_for_retained_word(shape_id).is_some(),
         "#9726: a budgeted trace must not retire from its partial carrier notes"
     );
 
     collect_synchronous_full_trace();
     assert!(
-        shapes::shape_descriptor_by_id(shape_id).is_none(),
+        shapes::shape_is_retired(shape_id),
         "the next complete full trace must retire the same uncarried descriptor"
     );
     shapes::test_clear_shape_table();
@@ -637,7 +638,7 @@ fn budgeted_full_trace_does_not_retire_from_a_partial_carrier_census() {
 fn build_transition_cache_target_then_drop(slot: u32) -> (u32, u32) {
     // Model the process-lifetime module global that can birth the predecessor
     // again after no receiver currently carries it.
-    let predecessor = shapes::js_object_shape_id_for_keys(0, 0);
+    let predecessor = shapes::js_object_layout_for_keys(0, 0);
     // A keys-only mint is `Ordinary` (charter step 3), so its carrier is a
     // plain-ordinary birth.
     js_shadow_slot_set(
@@ -669,10 +670,10 @@ fn transition_cache_target_survives_and_can_restamp_after_full_trace() {
     let (predecessor, target) = build_transition_cache_target_then_drop(0);
     collect_synchronous_full_trace();
     assert!(
-        shapes::shape_descriptor_by_id(predecessor).is_some(),
+        shapes::test_descriptor_for_retained_word(predecessor).is_some(),
         "a process-lifetime generated-code id must remain installed"
     );
-    let cached = shapes::shape_descriptor_by_id(target)
+    let cached = shapes::test_descriptor_for_retained_word(target)
         .expect("a live transition-cache entry must retain its target descriptor");
     assert!(
         cached.cache_carrier,

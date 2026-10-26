@@ -166,7 +166,12 @@ pub(super) fn class_declaration_globals(
             });
         }
         let birth_shape =
-            super::static_shape_ids::static_prototype_shape(cid).map_or(0, |(id, _)| id);
+            super::static_shape_ids::static_prototype_identity(cid).map_or(0, |(id, _)| id);
+        let birth_layout_word = if birth_shape == 0 {
+            0
+        } else {
+            crate::layout_ordinals::static_word(birth_shape)
+        };
         let layout = layouts
             .families
             .get(&cid)
@@ -239,7 +244,7 @@ pub(super) fn class_declaration_globals(
                 0
             };
         let decl_global = format!(
-            "@{symbol} = private unnamed_addr constant {{ ptr, i32, i32, i32, i32, ptr, ptr, ptr }} {{ ptr @{members_symbol}, i32 {}, i32 {birth_shape}, i32 {flags}, i32 0, ptr {layout}, ptr {variants}, ptr {initializer} }}",
+            "@{symbol} = private unnamed_addr constant {{ ptr, i32, i32, i32, i32, ptr, ptr, ptr }} {{ ptr @{members_symbol}, i32 {}, i32 {birth_shape}, i32 {flags}, i32 {birth_layout_word}, ptr {layout}, ptr {variants}, ptr {initializer} }}",
             members.len()
         );
         out.push(ClassDeclarationGlobal {

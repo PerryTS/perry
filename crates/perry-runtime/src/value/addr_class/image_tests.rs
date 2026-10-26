@@ -1,102 +1,25 @@
+use super::image_checks::*;
 use super::*;
-use crate::{gc::GcHeader, string::StringHeader};
-
-#[repr(C, align(8))]
-struct Image {
-    gc: GcHeader,
-    string: StringHeader,
-    bytes: [u8; 8],
-    hash: u64,
-}
-#[used]
-#[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
-#[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_strings"
-)]
-static IMAGE: Image = Image {
-    gc: GcHeader {
-        obj_type: crate::gc::GC_TYPE_STRING,
-        gc_flags: 0x15,
-        _reserved: 0x494d,
-        size: crate::string::image_string_gc_size(7) as u32,
-    },
-    string: StringHeader {
-        utf16_len: 7,
-        byte_len: 7,
-        capacity: 7,
-        refcount: 0,
-        flags: 4,
-    },
-    bytes: *b"literal\0",
-    hash: 0,
-};
+use crate::string::StringHeader;
 
 #[test]
 fn tracked_classifier_accepts_image_heap_and_malloc_strings() {
-    let _scope = crate::gc::GcSuppressScope::new();
-    unsafe {
-        let image = &IMAGE.string as *const _ as usize;
-        assert!(
-            try_read_tracked_gc_header_of_type(image, crate::gc::GC_TYPE_STRING).is_some(),
-            "image string must be admitted"
-        );
-        let heap = crate::string::js_string_from_bytes(b"heap string".as_ptr(), 11) as usize;
-        assert!(try_read_tracked_gc_header_of_type(heap, crate::gc::GC_TYPE_STRING).is_some());
-        let malloc = crate::gc::gc_malloc(32, crate::gc::GC_TYPE_STRING);
-        // GC_STORE_AUDIT(POINTER_FREE): Test malloc StringHeader initialized only with scalar lengths/refcount/flags under GcSuppressScope; no managed children.
-        (malloc as *mut StringHeader).write(StringHeader {
-            utf16_len: 7,
-            byte_len: 7,
-            capacity: 7,
-            refcount: 1,
-            flags: 4,
-        });
-        assert!(
-            try_read_tracked_gc_header_of_type(malloc as usize, crate::gc::GC_TYPE_STRING)
-                .is_some()
-        );
-    }
+    admits_image_heap_and_malloc_strings();
 }
 
 #[test]
 fn tracked_classifier_rejects_null_forged_and_image_edge_addresses() {
-    for addr in [
-        0,
-        1,
-        FETCH_HANDLE_BAND_START,
-        0x0000_0347_0000_0000,
-        usize::MAX,
-        &IMAGE as *const _ as usize,
-        &IMAGE.bytes as *const _ as usize + 7,
-    ] {
-        assert!(
-            unsafe { try_read_tracked_gc_header_of_type(addr, crate::gc::GC_TYPE_STRING) }
-                .is_none(),
-            "forged {addr:#x}"
-        );
-    }
-    // A readable counterfeit marker outside the dedicated image section is
-    // also rejected: recognizing the marker alone is not ownership proof.
-    let fake = Image {
-        gc: GcHeader {
-            obj_type: crate::gc::GC_TYPE_STRING,
-            gc_flags: 0x15,
-            _reserved: 0x494d,
-            size: crate::string::image_string_gc_size(7) as u32,
-        },
-        string: StringHeader {
-            utf16_len: 7,
-            byte_len: 7,
-            capacity: 7,
-            refcount: 0,
-            flags: 4,
-        },
-        bytes: *b"literal\0",
-        hash: 0,
-    };
-    assert!(unsafe { try_read_tracked_gc_header(&fake.string as *const _ as usize) }.is_none());
+    rejects_null_forged_and_image_edge_addresses();
+}
+
+#[test]
+fn section_bounds_hold_the_in_section_image() {
+    section_holds_the_in_section_image();
+}
+
+#[test]
+fn counterfeit_images_are_rejected_in_data_stack_and_heap() {
+    rejects_counterfeits_in_data_stack_and_heap();
 }
 
 /// The layout codegen emits (`string_pool/image.rs`): payload padded to 8,

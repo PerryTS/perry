@@ -227,17 +227,17 @@ unsafe fn derived_instance_layout(word: u32) -> Option<*const PerryLayoutDesc> {
     // A derived shape is minted in the dynamic band; a static id (every
     // registered layout, a class family's) is its own layout or none.
     if word & crate::object::layout_desc::LAYOUT_SHADOW_BIT != 0
-        || crate::object::shapes::is_static_shape_id(word)
+        || crate::object::shapes::is_static_layout_word(word)
     {
         return None;
     }
-    let (keys, count, _) = crate::object::shapes::shape_keys_and_proto_by_id(word)?;
+    let (keys, count, _) = crate::object::shapes::shape_keys_and_proto_for_word(word)?;
     if keys == 0 {
         return None;
     }
     instance_layouts().into_iter().find(|&desc| {
         (*desc).key_count == count
-            && crate::object::shapes::shape_keys_and_proto_by_id((*desc).layout_id)
+            && crate::object::shapes::shape_keys_and_proto_for_word((*desc).layout_id)
                 .is_some_and(|(layout_keys, _, _)| layout_keys == keys)
     })
 }

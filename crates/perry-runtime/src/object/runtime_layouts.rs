@@ -149,9 +149,10 @@ macro_rules! runtime_layout {
         #[export_name = concat!("perry_runtime_layout_", stringify!($name))]
         /// Declared layout of a checked runtime record.
         pub static mut $name: PerryLayoutDesc = PerryLayoutDesc {
+            shape_id: 0, _layout_pad: 0,
             family: $family, variant: $variant, kind: $kind, integrity: 0,
             slot_count: $name::SLOT_COUNT as u32,
-            layout_id: crate::object::layout_desc::LAYOUT_ID_CARRIED,
+            layout_id: crate::object::runtime_layouts::runtime_layout_word(stringify!($name)),
             rep: 0, proto: $proto, keys: $name::KEYS.as_ptr(),
             key_count: $name::SLOT_COUNT as u32,
             index_mask: (layout_index_size($name::SLOT_COUNT) - 1) as u32,
@@ -1303,12 +1304,14 @@ static READABLE_STATE_INDEX: [u32; 16] = [
     link_section = "perry_layouts"
 )]
 pub(crate) static mut READABLE_STATE: PerryLayoutDesc = PerryLayoutDesc {
+    shape_id: 0,
+    _layout_pad: 0,
     family: 0x52540001,
     variant: 0,
     kind: 0,
     integrity: 0,
     slot_count: 6,
-    layout_id: super::layout_desc::LAYOUT_ID_CARRIED,
+    layout_id: crate::codegen_abi::native_layout_word("READABLE_STATE", 1),
     rep: 0,
     proto: &raw const READABLE_STATE_PROTO_FAMILY,
     keys: READABLE_STATE_KEYS.as_ptr(),
@@ -1391,12 +1394,14 @@ static WRITABLE_STATE_INDEX: [u32; 16] = [
     link_section = "perry_layouts"
 )]
 pub(crate) static mut WRITABLE_STATE: PerryLayoutDesc = PerryLayoutDesc {
+    shape_id: 0,
+    _layout_pad: 0,
     family: 0x52540002,
     variant: 0,
     kind: 0,
     integrity: 0,
     slot_count: 7,
-    layout_id: super::layout_desc::LAYOUT_ID_CARRIED,
+    layout_id: crate::codegen_abi::native_layout_word("WRITABLE_STATE", 1),
     rep: 0,
     proto: &raw const WRITABLE_STATE_PROTO_FAMILY,
     keys: WRITABLE_STATE_KEYS.as_ptr(),
@@ -1432,12 +1437,14 @@ static URL_SEARCH_PARAMS_INDEX: [u32; 4] = [0, 1, u32::MAX, u32::MAX];
     link_section = "perry_layouts"
 )]
 pub(crate) static mut URL_SEARCH_PARAMS: PerryLayoutDesc = PerryLayoutDesc {
+    shape_id: 0,
+    _layout_pad: 0,
     family: 0x52540003,
     variant: 0,
     kind: 0,
     integrity: 0,
     slot_count: 2,
-    layout_id: super::layout_desc::LAYOUT_ID_CARRIED,
+    layout_id: crate::codegen_abi::native_layout_word("URL_SEARCH_PARAMS", 1),
     rep: 0,
     proto: &raw const URL_SEARCH_PARAMS_PROTO_FAMILY,
     keys: URL_SEARCH_PARAMS_KEYS.as_ptr(),
@@ -1566,12 +1573,14 @@ static URL_COMPONENTS_INDEX: [u32; 32] = [
     link_section = "perry_layouts"
 )]
 pub(crate) static mut URL_COMPONENTS: PerryLayoutDesc = PerryLayoutDesc {
+    shape_id: 0,
+    _layout_pad: 0,
     family: 0x52540004,
     variant: 0,
     kind: 0,
     integrity: 0,
     slot_count: 12,
-    layout_id: super::layout_desc::LAYOUT_ID_CARRIED,
+    layout_id: crate::codegen_abi::native_layout_word("URL_COMPONENTS", 1),
     rep: 0,
     proto: &raw const URL_PROTO_FAMILY,
     keys: URL_COMPONENTS_KEYS.as_ptr(),
@@ -1607,12 +1616,14 @@ static ITERATOR_RESULT_INDEX: [u32; 4] = [u32::MAX, 1, 0, u32::MAX];
     link_section = "perry_layouts"
 )]
 pub(crate) static mut ITERATOR_RESULT: PerryLayoutDesc = PerryLayoutDesc {
+    shape_id: 0,
+    _layout_pad: 0,
     family: 0x52540005,
     variant: 0,
     kind: 0,
     integrity: 0,
     slot_count: 2,
-    layout_id: super::layout_desc::LAYOUT_ID_CARRIED,
+    layout_id: crate::codegen_abi::native_layout_word("ITERATOR_RESULT", 0),
     rep: 0,
     proto: crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
     keys: ITERATOR_RESULT_KEYS.as_ptr(),
@@ -1648,12 +1659,14 @@ static ITERATOR_RESULT_DONE_FIRST_INDEX: [u32; 4] = [u32::MAX, 0, 1, u32::MAX];
     link_section = "perry_layouts"
 )]
 pub(crate) static mut ITERATOR_RESULT_DONE_FIRST: PerryLayoutDesc = PerryLayoutDesc {
+    shape_id: 0,
+    _layout_pad: 0,
     family: 0x52540006,
     variant: 0,
     kind: 0,
     integrity: 0,
     slot_count: 2,
-    layout_id: super::layout_desc::LAYOUT_ID_CARRIED,
+    layout_id: crate::codegen_abi::native_layout_word("ITERATOR_RESULT_DONE_FIRST", 0),
     rep: 0,
     proto: crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
     keys: ITERATOR_RESULT_DONE_FIRST_KEYS.as_ptr(),
@@ -1676,12 +1689,14 @@ static TIMEOUT_INDEX: [u32; 2] = [u32::MAX, u32::MAX];
     link_section = "perry_layouts"
 )]
 pub(crate) static mut TIMEOUT: PerryLayoutDesc = PerryLayoutDesc {
+    shape_id: 0,
+    _layout_pad: 0,
     family: 0x52540007,
     variant: 0,
     kind: 0,
     integrity: 0,
     slot_count: 0,
-    layout_id: super::layout_desc::LAYOUT_ID_CARRIED,
+    layout_id: crate::codegen_abi::native_layout_word("TIMEOUT", 1),
     rep: 0,
     proto: &raw const TIMEOUT_PROTO_FAMILY,
     keys: TIMEOUT_KEYS.as_ptr(),
@@ -1704,12 +1719,14 @@ static IMMEDIATE_INDEX: [u32; 2] = [u32::MAX, u32::MAX];
     link_section = "perry_layouts"
 )]
 pub(crate) static mut IMMEDIATE: PerryLayoutDesc = PerryLayoutDesc {
+    shape_id: 0,
+    _layout_pad: 0,
     family: 0x52540008,
     variant: 0,
     kind: 0,
     integrity: 0,
     slot_count: 0,
-    layout_id: super::layout_desc::LAYOUT_ID_CARRIED,
+    layout_id: crate::codegen_abi::native_layout_word("IMMEDIATE", 1),
     rep: 0,
     proto: &raw const IMMEDIATE_PROTO_FAMILY,
     keys: IMMEDIATE_KEYS.as_ptr(),
@@ -1890,12 +1907,14 @@ static REGEX_EXEC_NAMED_INDEX: [u32; 8] = [u32::MAX, u32::MAX, u32::MAX, 1, 2, 0
     link_section = "perry_layouts"
 )]
 pub(crate) static mut REGEX_EXEC_NAMED: PerryLayoutDesc = PerryLayoutDesc {
+    shape_id: 0,
+    _layout_pad: 0,
     family: 0x52540009,
     variant: 0,
     kind: 0,
     integrity: 0,
     slot_count: 4,
-    layout_id: super::layout_desc::LAYOUT_ID_CARRIED,
+    layout_id: crate::codegen_abi::native_layout_word("REGEX_EXEC_NAMED", 0),
     rep: 0,
     proto: crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
     keys: REGEX_EXEC_NAMED_KEYS.as_ptr(),
@@ -1966,12 +1985,14 @@ static REGEX_EXEC_INDICES_NAMED_INDEX: [u32; 16] = [
     link_section = "perry_layouts"
 )]
 pub(crate) static mut REGEX_EXEC_INDICES_NAMED: PerryLayoutDesc = PerryLayoutDesc {
+    shape_id: 0,
+    _layout_pad: 0,
     family: 0x5254000A,
     variant: 0,
     kind: 0,
     integrity: 0,
     slot_count: 5,
-    layout_id: super::layout_desc::LAYOUT_ID_CARRIED,
+    layout_id: crate::codegen_abi::native_layout_word("REGEX_EXEC_INDICES_NAMED", 0),
     rep: 0,
     proto: crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
     keys: REGEX_EXEC_INDICES_NAMED_KEYS.as_ptr(),
@@ -2007,12 +2028,14 @@ static REGEX_INDICES_GROUPS_NAMED_INDEX: [u32; 4] = [u32::MAX, 0, 1, u32::MAX];
     link_section = "perry_layouts"
 )]
 pub(crate) static mut REGEX_INDICES_GROUPS_NAMED: PerryLayoutDesc = PerryLayoutDesc {
+    shape_id: 0,
+    _layout_pad: 0,
     family: 0x5254000B,
     variant: 0,
     kind: 0,
     integrity: 0,
     slot_count: 2,
-    layout_id: super::layout_desc::LAYOUT_ID_CARRIED,
+    layout_id: crate::codegen_abi::native_layout_word("REGEX_INDICES_GROUPS_NAMED", 0),
     rep: 0,
     proto: crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
     keys: REGEX_INDICES_GROUPS_NAMED_KEYS.as_ptr(),
@@ -2040,12 +2063,14 @@ static ARRAY_NAMED_INDEX: [u32; 2] = [u32::MAX, 0];
     link_section = "perry_layouts"
 )]
 pub(crate) static mut ARRAY_NAMED: PerryLayoutDesc = PerryLayoutDesc {
+    shape_id: 0,
+    _layout_pad: 0,
     family: 0x5254000D,
     variant: 0,
     kind: 0,
     integrity: 0,
     slot_count: 1,
-    layout_id: super::layout_desc::LAYOUT_ID_CARRIED,
+    layout_id: crate::codegen_abi::native_layout_word("ARRAY_NAMED", 0),
     rep: 0,
     proto: crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
     keys: ARRAY_NAMED_KEYS.as_ptr(),
@@ -2247,12 +2272,14 @@ static SQLITE_COLUMN_INDEX: [u32; 16] = [
     link_section = "perry_layouts"
 )]
 pub static mut SQLITE_COLUMN_METADATA: PerryLayoutDesc = PerryLayoutDesc {
+    shape_id: 0,
+    _layout_pad: 0,
     family: 0x53514c01,
     variant: 0,
     kind: 0,
     integrity: 0,
     slot_count: 5,
-    layout_id: super::layout_desc::LAYOUT_ID_CARRIED,
+    layout_id: crate::codegen_abi::native_layout_word("SQLITE_COLUMN_METADATA", 0),
     rep: 0,
     proto: crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
     keys: SQLITE_COLUMN_KEYS.as_ptr(),
@@ -2272,3 +2299,392 @@ mod slot_order_tests;
 #[cfg(test)]
 #[path = "runtime_layouts/hole_tests.rs"]
 mod hole_tests;
+
+const fn runtime_layout_word(name: &str) -> u32 {
+    const fn same(a: &str, b: &str) -> bool {
+        let a = a.as_bytes();
+        let b = b.as_bytes();
+        if a.len() != b.len() {
+            return false;
+        }
+        let mut i = 0;
+        while i < a.len() {
+            if a[i] != b[i] {
+                return false;
+            }
+            i += 1;
+        }
+        true
+    }
+    if same(name, "ARRAY_NAMED") {
+        return crate::codegen_abi::native_layout_word("ARRAY_NAMED", 0);
+    }
+    if same(name, "ARRAY_PROTOTYPE_NAMED") {
+        return crate::codegen_abi::native_layout_word("ARRAY_PROTOTYPE_NAMED", 0);
+    }
+    if same(name, "CJS_MODULE_RECORD") {
+        return crate::codegen_abi::native_layout_word("CJS_MODULE_RECORD", 0);
+    }
+    if same(name, "DUPLEX") {
+        return crate::codegen_abi::native_layout_word("DUPLEX", 1);
+    }
+    if same(name, "DUPLEX_PROTOTYPE") {
+        return crate::codegen_abi::native_layout_word("DUPLEX_PROTOTYPE", 1);
+    }
+    if same(name, "EE_ASYNC_RESOURCE_PROTO") {
+        return crate::codegen_abi::native_layout_word("EE_ASYNC_RESOURCE_PROTO", 0);
+    }
+    if same(name, "EVENT_EMITTER") {
+        return crate::codegen_abi::native_layout_word("EVENT_EMITTER", 1);
+    }
+    if same(name, "EVENT_EMITTER_PROTOTYPE") {
+        return crate::codegen_abi::native_layout_word("EVENT_EMITTER_PROTOTYPE", 0);
+    }
+    if same(name, "FUNCTION_PROTOTYPE") {
+        return crate::codegen_abi::native_layout_word("FUNCTION_PROTOTYPE", 0);
+    }
+    if same(name, "IMMEDIATE") {
+        return crate::codegen_abi::native_layout_word("IMMEDIATE", 1);
+    }
+    if same(name, "INCOMING_MESSAGE_PROTOTYPE") {
+        return crate::codegen_abi::native_layout_word("INCOMING_MESSAGE_PROTOTYPE", 1);
+    }
+    if same(name, "ITERATOR_RESULT") {
+        return crate::codegen_abi::native_layout_word("ITERATOR_RESULT", 0);
+    }
+    if same(name, "ITERATOR_RESULT_DONE_FIRST") {
+        return crate::codegen_abi::native_layout_word("ITERATOR_RESULT_DONE_FIRST", 0);
+    }
+    if same(name, "LEGACY_STREAM") {
+        return crate::codegen_abi::native_layout_word("LEGACY_STREAM", 1);
+    }
+    if same(name, "NATIVE_CTOR_DUPLEX") {
+        return crate::codegen_abi::native_layout_word("NATIVE_CTOR_DUPLEX", 2);
+    }
+    if same(name, "NATIVE_CTOR_EVENT_EMITTER") {
+        return crate::codegen_abi::native_layout_word("NATIVE_CTOR_EVENT_EMITTER", 2);
+    }
+    if same(name, "NATIVE_CTOR_INCOMING_MESSAGE") {
+        return crate::codegen_abi::native_layout_word("NATIVE_CTOR_INCOMING_MESSAGE", 2);
+    }
+    if same(name, "NATIVE_CTOR_OUTGOING_MESSAGE") {
+        return crate::codegen_abi::native_layout_word("NATIVE_CTOR_OUTGOING_MESSAGE", 2);
+    }
+    if same(name, "NATIVE_CTOR_PASSTHROUGH") {
+        return crate::codegen_abi::native_layout_word("NATIVE_CTOR_PASSTHROUGH", 2);
+    }
+    if same(name, "NATIVE_CTOR_READABLE") {
+        return crate::codegen_abi::native_layout_word("NATIVE_CTOR_READABLE", 2);
+    }
+    if same(name, "NATIVE_CTOR_SERVER_RESPONSE") {
+        return crate::codegen_abi::native_layout_word("NATIVE_CTOR_SERVER_RESPONSE", 2);
+    }
+    if same(name, "NATIVE_CTOR_STREAM") {
+        return crate::codegen_abi::native_layout_word("NATIVE_CTOR_STREAM", 2);
+    }
+    if same(name, "NATIVE_CTOR_TRANSFORM") {
+        return crate::codegen_abi::native_layout_word("NATIVE_CTOR_TRANSFORM", 2);
+    }
+    if same(name, "NATIVE_CTOR_WRITABLE") {
+        return crate::codegen_abi::native_layout_word("NATIVE_CTOR_WRITABLE", 2);
+    }
+    if same(name, "OBJECT_PROTOTYPE") {
+        return crate::codegen_abi::native_layout_word("OBJECT_PROTOTYPE", 2);
+    }
+    if same(name, "OUTGOING_MESSAGE_PROTOTYPE") {
+        return crate::codegen_abi::native_layout_word("OUTGOING_MESSAGE_PROTOTYPE", 1);
+    }
+    if same(name, "PASSTHROUGH") {
+        return crate::codegen_abi::native_layout_word("PASSTHROUGH", 1);
+    }
+    if same(name, "PASSTHROUGH_PROTOTYPE") {
+        return crate::codegen_abi::native_layout_word("PASSTHROUGH_PROTOTYPE", 1);
+    }
+    if same(name, "READABLE") {
+        return crate::codegen_abi::native_layout_word("READABLE", 1);
+    }
+    if same(name, "READABLE_PROTOTYPE") {
+        return crate::codegen_abi::native_layout_word("READABLE_PROTOTYPE", 1);
+    }
+    if same(name, "READABLE_STATE") {
+        return crate::codegen_abi::native_layout_word("READABLE_STATE", 1);
+    }
+    if same(name, "READABLE_STATE_PROTO") {
+        return crate::codegen_abi::native_layout_word("READABLE_STATE_PROTO", 0);
+    }
+    if same(name, "RECORD_F0_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F0_0", 0);
+    }
+    if same(name, "RECORD_F13_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F13_0", 0);
+    }
+    if same(name, "RECORD_F17_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F17_0", 0);
+    }
+    if same(name, "RECORD_F20_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F20_0", 0);
+    }
+    if same(name, "RECORD_F21_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F21_0", 0);
+    }
+    if same(name, "RECORD_F28_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F28_0", 0);
+    }
+    if same(name, "RECORD_F29_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F29_0", 0);
+    }
+    if same(name, "RECORD_F30_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F30_0", 0);
+    }
+    if same(name, "RECORD_F31_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F31_0", 0);
+    }
+    if same(name, "RECORD_F327_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F327_0", 0);
+    }
+    if same(name, "RECORD_F328_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F328_0", 0);
+    }
+    if same(name, "RECORD_F37_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F37_0", 0);
+    }
+    if same(name, "RECORD_F3_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F3_0", 0);
+    }
+    if same(name, "RECORD_F411_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F411_0", 0);
+    }
+    if same(name, "RECORD_F412_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F412_0", 0);
+    }
+    if same(name, "RECORD_F413_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F413_0", 0);
+    }
+    if same(name, "RECORD_F414_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F414_0", 0);
+    }
+    if same(name, "RECORD_F418_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F418_0", 0);
+    }
+    if same(name, "RECORD_F426_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F426_0", 0);
+    }
+    if same(name, "RECORD_F427_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F427_0", 0);
+    }
+    if same(name, "RECORD_F429_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F429_0", 0);
+    }
+    if same(name, "RECORD_F430_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F430_0", 0);
+    }
+    if same(name, "RECORD_F434_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F434_0", 0);
+    }
+    if same(name, "RECORD_F470_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F470_0", 0);
+    }
+    if same(name, "RECORD_F471_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F471_0", 0);
+    }
+    if same(name, "RECORD_F473_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F473_0", 0);
+    }
+    if same(name, "RECORD_F483_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F483_0", 0);
+    }
+    if same(name, "RECORD_F487_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F487_0", 0);
+    }
+    if same(name, "RECORD_F568_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F568_0", 0);
+    }
+    if same(name, "RECORD_F6_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F6_0", 0);
+    }
+    if same(name, "RECORD_F7_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F7_0", 0);
+    }
+    if same(name, "RECORD_PCHECKED031") {
+        return crate::codegen_abi::native_layout_word("RECORD_PCHECKED031", 0);
+    }
+    if same(name, "RECORD_Q435_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q435_0", 0);
+    }
+    if same(name, "RECORD_Q436_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q436_0", 0);
+    }
+    if same(name, "RECORD_Q439_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q439_0", 0);
+    }
+    if same(name, "RECORD_Q440_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q440_0", 0);
+    }
+    if same(name, "RECORD_Q441_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q441_0", 0);
+    }
+    if same(name, "RECORD_Q443_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q443_0", 0);
+    }
+    if same(name, "RECORD_Q448_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q448_0", 0);
+    }
+    if same(name, "RECORD_Q449_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q449_0", 0);
+    }
+    if same(name, "RECORD_Q450_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q450_0", 0);
+    }
+    if same(name, "RECORD_Q451_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q451_0", 0);
+    }
+    if same(name, "RECORD_Q452_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q452_0", 0);
+    }
+    if same(name, "RECORD_Q453_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q453_0", 0);
+    }
+    if same(name, "RECORD_Q454_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q454_0", 0);
+    }
+    if same(name, "RECORD_Q455_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q455_0", 0);
+    }
+    if same(name, "RECORD_Q456_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q456_0", 0);
+    }
+    if same(name, "RECORD_Q457_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q457_0", 0);
+    }
+    if same(name, "RECORD_Q458_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q458_0", 0);
+    }
+    if same(name, "RECORD_Q459_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q459_0", 0);
+    }
+    if same(name, "RECORD_Q460_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q460_0", 0);
+    }
+    if same(name, "RECORD_Q461_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q461_0", 0);
+    }
+    if same(name, "RECORD_Q462_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q462_0", 0);
+    }
+    if same(name, "RECORD_Q463_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q463_0", 0);
+    }
+    if same(name, "RECORD_Q464_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q464_0", 0);
+    }
+    if same(name, "RECORD_Q465_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q465_0", 0);
+    }
+    if same(name, "RECORD_Q466_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q466_0", 0);
+    }
+    if same(name, "RECORD_Q467_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q467_0", 0);
+    }
+    if same(name, "RECORD_Q468_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q468_0", 0);
+    }
+    if same(name, "RECORD_Q468_1") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q468_1", 0);
+    }
+    if same(name, "RECORD_Q468_2") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q468_2", 0);
+    }
+    if same(name, "RECORD_Q468_3") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q468_3", 0);
+    }
+    if same(name, "RECORD_U610") {
+        return crate::codegen_abi::native_layout_word("RECORD_U610", 0);
+    }
+    if same(name, "RECORD_U613") {
+        return crate::codegen_abi::native_layout_word("RECORD_U613", 0);
+    }
+    if same(name, "RECORD_V026") {
+        return crate::codegen_abi::native_layout_word("RECORD_V026", 0);
+    }
+    if same(name, "REGEX_EXEC_INDICES_NAMED") {
+        return crate::codegen_abi::native_layout_word("REGEX_EXEC_INDICES_NAMED", 0);
+    }
+    if same(name, "REGEX_EXEC_NAMED") {
+        return crate::codegen_abi::native_layout_word("REGEX_EXEC_NAMED", 0);
+    }
+    if same(name, "REGEX_INDICES_GROUPS_NAMED") {
+        return crate::codegen_abi::native_layout_word("REGEX_INDICES_GROUPS_NAMED", 0);
+    }
+    if same(name, "SERVER_RESPONSE") {
+        return crate::codegen_abi::native_layout_word("SERVER_RESPONSE", 1);
+    }
+    if same(name, "SERVER_RESPONSE_PROTOTYPE") {
+        return crate::codegen_abi::native_layout_word("SERVER_RESPONSE_PROTOTYPE", 1);
+    }
+    if same(name, "SPAWN_SYNC_RESULT") {
+        return crate::codegen_abi::native_layout_word("SPAWN_SYNC_RESULT", 0);
+    }
+    if same(name, "SQLITE_COLUMN_METADATA") {
+        return crate::codegen_abi::native_layout_word("SQLITE_COLUMN_METADATA", 0);
+    }
+    if same(name, "STREAM_PROTOTYPE") {
+        return crate::codegen_abi::native_layout_word("STREAM_PROTOTYPE", 1);
+    }
+    if same(name, "TIMEOUT") {
+        return crate::codegen_abi::native_layout_word("TIMEOUT", 1);
+    }
+    if same(name, "TRANSFORM") {
+        return crate::codegen_abi::native_layout_word("TRANSFORM", 1);
+    }
+    if same(name, "TRANSFORM_PROTOTYPE") {
+        return crate::codegen_abi::native_layout_word("TRANSFORM_PROTOTYPE", 1);
+    }
+    if same(name, "URL_COMPONENTS") {
+        return crate::codegen_abi::native_layout_word("URL_COMPONENTS", 1);
+    }
+    if same(name, "URL_SEARCH_PARAMS") {
+        return crate::codegen_abi::native_layout_word("URL_SEARCH_PARAMS", 1);
+    }
+    if same(name, "WRITABLE") {
+        return crate::codegen_abi::native_layout_word("WRITABLE", 1);
+    }
+    if same(name, "WRITABLE_PROTOTYPE") {
+        return crate::codegen_abi::native_layout_word("WRITABLE_PROTOTYPE", 1);
+    }
+    if same(name, "WRITABLE_STATE") {
+        return crate::codegen_abi::native_layout_word("WRITABLE_STATE", 1);
+    }
+    if same(name, "WRITABLE_STATE_PROTO") {
+        return crate::codegen_abi::native_layout_word("WRITABLE_STATE_PROTO", 0);
+    }
+    #[cfg(test)]
+    if same(name, "HOLEY") {
+        return 0x8000007d;
+    }
+    #[cfg(test)]
+    if same(name, "HOLEY_PERMUTED") {
+        return 0x8000007e;
+    }
+    #[cfg(test)]
+    if same(name, "SOLID") {
+        return 0x8000007f;
+    }
+    #[cfg(test)]
+    if same(name, "PERMUTED") {
+        return 0x80000080;
+    }
+    #[cfg(test)]
+    if same(name, "POSITIONAL") {
+        return 0x80000081;
+    }
+    #[cfg(test)]
+    if same(name, "SYMBOL_PERMUTED") {
+        return 0x80000082;
+    }
+    #[cfg(test)]
+    if same(name, "PREFIX_MOVED") {
+        return 0x80000083;
+    }
+    panic!("runtime descriptor absent from native catalog");
+}

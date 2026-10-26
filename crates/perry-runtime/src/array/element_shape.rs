@@ -283,7 +283,7 @@ fn element_identity_of_bits(value_bits: u64) -> Option<(u32, u32)> {
         }
         let obj = addr as *const crate::object::ObjectHeader;
         let shape_id = (*obj).shape_word();
-        if !crate::object::shapes::shape_descriptor_by_id(shape_id)
+        if !crate::object::shapes::shape_descriptor_for_word(shape_id)
             .is_some_and(|shape| shape.object_kind.is_ordinary_layout())
         {
             return None;
@@ -295,7 +295,7 @@ fn element_identity_of_bits(value_bits: u64) -> Option<(u32, u32)> {
         // is the reason no element-shape proof was ever established for a
         // parsed record array.
         //
-        // The identity is never `(0, 0)`: `shape_descriptor_by_id` answers
+        // The identity is never `(0, 0)`: `shape_descriptor_for_word` answers
         // `None` for id 0, so the `Ordinary` test above already rejected it.
         // And a class-0 proof cannot be mistaken for a class-keyed one by an
         // existing consumer, because every one of them compares against a
@@ -358,7 +358,7 @@ unsafe fn element_identity_of_validated_object(
     obj: *const crate::object::ObjectHeader,
 ) -> Option<(u32, u32)> {
     let shape_id = (*obj).shape_word();
-    if !crate::object::shapes::shape_object_kind_by_id(shape_id)
+    if !crate::object::shapes::shape_object_kind_for_word(shape_id)
         .is_some_and(|kind| kind.is_ordinary_layout())
     {
         return None;

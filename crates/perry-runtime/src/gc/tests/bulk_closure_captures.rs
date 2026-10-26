@@ -139,7 +139,7 @@ fn small_birth_shades_captures_during_incremental_marking() {
     let captures = [ptr_bits(cell as usize)];
     let closure = crate::closure::js_closure_alloc_small(
         std::ptr::null(),
-        (u64::from(crate::codegen_abi::FUNCTION_SHAPE) << 32) | 1,
+        (u64::from(crate::codegen_abi::FUNCTION_LAYOUT_WORD) << 32) | 1,
         captures[0],
         0,
         0,
@@ -182,7 +182,8 @@ fn birth_survives_collection_inside_allocation(small: bool) {
     super::runtime_roots::force_next_general_arena_alloc_slow();
     triggers.make_arena_trigger_due();
 
-    let header = (u64::from(crate::codegen_abi::FUNCTION_SHAPE) << 32) | u64::from(flags | count);
+    let header =
+        (u64::from(crate::codegen_abi::FUNCTION_LAYOUT_WORD) << 32) | u64::from(flags | count);
     let closure = if small {
         crate::closure::js_closure_alloc_small(
             std::ptr::null(),
@@ -233,7 +234,7 @@ fn birth_survives_collection_inside_allocation(small: bool) {
     let second_captures = [ptr_bits(moved_cell as usize)];
     let second = crate::closure::js_closure_alloc_small(
         std::ptr::null(),
-        (u64::from(crate::codegen_abi::FUNCTION_SHAPE) << 32) | 1,
+        (u64::from(crate::codegen_abi::FUNCTION_LAYOUT_WORD) << 32) | 1,
         second_captures[0],
         0,
         0,

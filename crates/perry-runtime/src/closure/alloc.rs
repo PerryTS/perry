@@ -659,8 +659,8 @@ pub extern "C" fn js_closure_alloc_small(
     let shape_id = (header >> 32) as u32;
     assert!(count <= 3);
     debug_assert!(
-        shape_id >= crate::codegen_abi::FUNCTION_SHAPE_BASE
-            && shape_id < crate::codegen_abi::FUNCTION_SHAPE_BASE + 4
+        shape_id >= crate::codegen_abi::FUNCTION_LAYOUT_WORD
+            && shape_id < crate::codegen_abi::FUNCTION_LAYOUT_WORD + 4
     );
     let Some(raw) = closure_alloc_storage_no_collect(count) else {
         let words = [capture0, capture1, capture2];

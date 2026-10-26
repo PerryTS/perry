@@ -45,8 +45,8 @@ const _: () = assert!(std::mem::size_of::<PerryMethodHolder>() == 8);
 /// The carried descriptor band (including possible class method tables).
 /// This immutable word range rejects runtime and shadowed layouts cheaply.
 #[inline(always)]
-pub(crate) const fn may_have_methods(word: u32) -> bool {
-    word.wrapping_sub(LAYOUT_BASE) < LAYOUT_INDEX_LIMIT
+pub(crate) fn may_have_methods(word: u32) -> bool {
+    super::word_in_layout_index(word)
 }
 
 /// A GC leaf: a layout-indexed method lookup, with no allocation, TLS lookup,

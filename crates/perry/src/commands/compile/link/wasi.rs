@@ -44,6 +44,7 @@ pub(super) fn link_args(
     objects: &[PathBuf],
     runtime: &Path,
     output: &Path,
+    keep_symbols: bool,
 ) -> Vec<String> {
     let mut args = vec![
         "--target=wasm32-wasip2".to_string(),
@@ -52,6 +53,13 @@ pub(super) fn link_args(
     args.extend(objects.iter().map(|o| o.display().to_string()));
     args.push(runtime.display().to_string());
     args.push("-lsetjmp".to_string());
+    if !keep_symbols {
+        // Compression changes instruction offsets and cannot preserve DWARF.
+        args.extend([
+            "-Wl,--strip-all".to_string(),
+            "-Wl,--compress-relocations".to_string(),
+        ]);
+    }
     args.extend([
         // The component adapter allocates through the module's allocator.
         "-Wl,--export=cabi_realloc".to_string(),
@@ -139,7 +147,54 @@ pub(crate) fn link_wasi(
     verbose: u8,
 ) -> Result<()> {
     let sdk = wasi_sdk()?;
-    let args = link_args(&sdk, objects, runtime, output);
+    // Match the native strip escape hatches. In particular, keep DWARF intact:
+    // neither relocation compression nor wasm-opt may rewrite these offsets.
+    let keep_symbols =
+        std::env::var("PERRY_KEEP_SYMBOLS").is_ok() || std::env::var("PERRY_DEBUG_SYMBOLS").is_ok();
+    let optimizer = if keep_symbols {
+        None
+    } else {
+        let wasm_opt = find_tool(&sdk, "wasm-opt");
+        let wasm_tools = find_tool(&sdk, "wasm-tools");
+        match (wasm_opt, wasm_tools) {
+            (Some(opt), Some(component)) => Some((opt, component)),
+            (opt, _) => {
+                if verbose > 0 {
+                    let missing = if opt.is_none() {
+                        "wasm-opt"
+                    } else {
+                        "wasm-tools"
+                    };
+                    eprintln!(
+                        "  wasi: skipping wasm-opt size optimization ({missing} not found in {} or PATH)",
+                        sdk.join("bin").display()
+                    );
+                }
+                None
+            }
+        }
+    };
+    // Each link owns its scratch directory, including concurrent links and
+    // failures. The final output is always a component, even without tools.
+    let scratch = optimizer
+        .as_ref()
+        .map(|_| {
+            tempfile::Builder::new()
+                .prefix("perry-wasi-link-")
+                .tempdir()
+        })
+        .transpose()?;
+    let core = scratch.as_ref().map(|d| d.path().join("core.wasm"));
+    let mut args = link_args(
+        &sdk,
+        objects,
+        runtime,
+        core.as_deref().unwrap_or(output),
+        keep_symbols,
+    );
+    if optimizer.is_some() {
+        args.insert(0, "-Wl,--skip-wit-component".to_string());
+    }
     let clang = sdk_clang(&sdk);
     if verbose > 0 {
         eprintln!("  wasi link: {} {}", clang.display(), args.join(" "));
@@ -159,6 +214,81 @@ pub(crate) fn link_wasi(
         };
         return Err(anyhow!("wasi link failed:\n{}{hint}", stderr.trim_end()));
     }
+    if let Some((wasm_opt, wasm_tools)) = optimizer {
+        let directory = scratch.as_ref().expect("optimizer scratch directory");
+        let optimized = directory.path().join("optimized.wasm");
+        let mut command = Command::new(&wasm_opt);
+        command
+            .arg(core.as_ref().expect("linked core module"))
+            .args(WASM_OPT_ARGS)
+            .arg("-o")
+            .arg(&optimized);
+        run_size_tool(&mut command, verbose, "wasm-opt")?;
+        // Some WASIp2 runtime dependencies still import Preview 1 (for
+        // example getrandom in TCP). Preserve wasm-component-ld's default
+        // reactor adapter (the core exports the Preview 2 run entry, not
+        // `_start`) instead of accepting only pure Preview 2 modules.
+        let adapter = directory.path().join("wasi_snapshot_preview1.reactor.wasm");
+        std::fs::write(
+            &adapter,
+            wasi_preview1_component_adapter_provider::WASI_SNAPSHOT_PREVIEW1_REACTOR_ADAPTER,
+        )?;
+        let mut command = Command::new(&wasm_tools);
+        command
+            .arg("component")
+            .arg("new")
+            .arg(&optimized)
+            .arg("--adapt")
+            .arg(format!("wasi_snapshot_preview1={}", adapter.display()))
+            .arg("-o")
+            .arg(output);
+        run_size_tool(&mut command, verbose, "wasm-tools component new")?;
+    }
+    Ok(())
+}
+
+// Only enable features used by wasi-sdk/Rust. `-all` also enables proposals
+// that the supported Wasmtime host cannot load.
+const WASM_OPT_ARGS: &[&str] = &[
+    "-Oz",
+    "--enable-exception-handling",
+    "--enable-bulk-memory",
+    "--enable-bulk-memory-opt",
+    "--enable-nontrapping-float-to-int",
+    "--enable-sign-ext",
+    "--enable-mutable-globals",
+    "--enable-multivalue",
+    "--enable-reference-types",
+    "--enable-call-indirect-overlong",
+];
+
+/// Prefer companion tools in the configured wasi-sdk; allow standalone tools
+/// on PATH as well. Release packaging can install both beside SDK clang.
+fn find_tool(sdk: &Path, name: &str) -> Option<PathBuf> {
+    let name = if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_string()
+    };
+    std::iter::once(sdk.join("bin"))
+        .chain(
+            std::env::var_os("PATH")
+                .iter()
+                .flat_map(std::env::split_paths),
+        )
+        .map(|directory| directory.join(&name))
+        .find(|path| path.is_file())
+}
+
+fn run_size_tool(command: &mut Command, verbose: u8, stage: &str) -> Result<()> {
+    if verbose > 0 {
+        eprintln!("  wasi {stage}: {command:?}");
+    }
+    let status = super::super::tool_output::run_internal_tool(command, verbose)
+        .with_context(|| format!("running {stage}"))?;
+    if !status.success() {
+        bail!("WASI {stage} failed");
+    }
     Ok(())
 }
 
@@ -173,6 +303,7 @@ mod tests {
             &[PathBuf::from("a.o"), PathBuf::from("b.o")],
             Path::new("/rt/libperry_runtime.a"),
             Path::new("app.wasm"),
+            false,
         );
         assert_eq!(args[0], "--target=wasm32-wasip2");
         assert_eq!(
@@ -187,9 +318,26 @@ mod tests {
             "-Wl,--export=cabi_realloc",
             "-Wl,--stack-first",
             "-Wl,--fatal-warnings",
+            "-Wl,--strip-all",
+            "-Wl,--compress-relocations",
         ] {
             assert!(args.iter().any(|a| a == flag), "{flag} missing: {args:?}");
         }
         assert_eq!(args[args.len() - 2..], ["-o", "app.wasm"]);
+    }
+
+    #[test]
+    fn keeping_symbols_preserves_debug_offsets() {
+        let args = link_args(
+            Path::new("/sdk"),
+            &[],
+            Path::new("runtime.a"),
+            Path::new("app.wasm"),
+            true,
+        );
+        assert!(!args.iter().any(|arg| arg.contains("--strip")));
+        assert!(!args
+            .iter()
+            .any(|arg| arg.contains("--compress-relocations")));
     }
 }

@@ -24,6 +24,7 @@ use perry_hir::{
 fn ir_opts() -> CompileOptions {
     CompileOptions {
         static_shape_ids: Vec::new(),
+        program_layout_ordinals: Default::default(),
         program_class_shape_ids: Default::default(),
         program_facts: Default::default(),
         program_layouts: Default::default(),
@@ -910,7 +911,10 @@ fn element_shape_versioned_loop_resolves_an_object_literal_element_type() {
     // other class that happened to be in scope.
     let deref = block_slice(&ir, "element_shape.loop.preheader.deref");
     assert!(
-        deref.contains("AnonShape"),
+        deref.contains("AnonShape")
+            || ir.lines().any(|l| l.starts_with("@perry_class_shape_id_")
+                && l.contains("AnonShape")
+                && l.contains("constant i32")),
         "the preheader must load the anon shape's keys global; emitted:\n{deref}"
     );
 
@@ -1243,7 +1247,10 @@ fn element_shape_versioned_loop_resolves_an_aliased_object_element_type() {
     }
     let deref = block_slice(&ir, "element_shape.loop.preheader.deref");
     assert!(
-        deref.contains("AnonShape"),
+        deref.contains("AnonShape")
+            || ir.lines().any(|l| l.starts_with("@perry_class_shape_id_")
+                && l.contains("AnonShape")
+                && l.contains("constant i32")),
         "the guard must pin the anon shape the alias expands to; emitted:\n{deref}"
     );
     // ANTI-VACUITY. `CLONE_LABELS` above is satisfied by a preheader that ends

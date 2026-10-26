@@ -1,0 +1,1 @@
+Fix WASI compilation of CommonJS modules by respecting target layout eligibility, refresh the wasm32 runtime ABI table, and adapt imported function wrappers to the same pointer-width ABI as their definitions. Add CommonJS and cross-module object method acceptance fixtures.

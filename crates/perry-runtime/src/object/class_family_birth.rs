@@ -52,12 +52,14 @@ mod tests {
         link_section = "perry_layouts"
     )]
     static mut LAYOUT: PerryLayoutDesc = PerryLayoutDesc {
+        shape_id: 0,
+        _layout_pad: 0,
         family: 0x41574201,
         variant: 0,
         kind: 0,
         integrity: 0,
         slot_count: 0,
-        layout_id: crate::object::layout_desc::LAYOUT_ID_CARRIED,
+        layout_id: 0x80000085,
         rep: 0,
         proto: std::ptr::null(),
         keys: EMPTY_KEYS.as_ptr(),
@@ -124,12 +126,14 @@ mod evaluation_layout_tests {
         link_section = "perry_layouts"
     )]
     static mut LAYOUT: PerryLayoutDesc = PerryLayoutDesc {
+        shape_id: 0,
+        _layout_pad: 0,
         family: 0x41574202,
         variant: 0,
         kind: 0,
         integrity: 0,
         slot_count: 0,
-        layout_id: crate::object::layout_desc::LAYOUT_ID_CARRIED,
+        layout_id: 0x80000084,
         rep: 0,
         proto: std::ptr::null(),
         keys: EMPTY_KEYS.as_ptr(),
@@ -182,7 +186,7 @@ mod evaluation_layout_tests {
                 );
                 assert!(shapes::shape_word_may_be_linked(word));
                 assert!(shapes::proto_id_links_class_instance(
-                    shapes::object_shape_identity(obj),
+                    shapes::object_proto_identity(obj),
                     shapes::class_proto_id(CLASS),
                 ));
                 assert!(
@@ -242,7 +246,13 @@ mod evaluation_layout_tests {
             assert!((*obj).meta.is_null(), "the brand is a shape fact");
             assert_eq!(shapes::object_evaluation_brand(obj), class_bits);
             assert_eq!(shapes::object_prototype_word(obj), proto_bits);
-            assert_eq!(shapes::evaluation_layout_family(copy), (*desc).layout_id);
+            assert_eq!(
+                crate::object::layout_desc::evaluation_layout_desc(
+                    shapes::evaluation_family_desc_index_plus_one(copy)
+                )
+                .map(|d| d.layout_id),
+                Some((*desc).layout_id)
+            );
             assert!(is_family_object(obj));
             assert_eq!(
                 shapes::evaluation_copy_birth_edges(copy, (*desc).layout_id),

@@ -316,6 +316,7 @@ fn object_alloc_with_parent_impl<
         let id = crate::object::shapes::birth_publish_object_shape(ptr, field_count);
         if memo {
             KEYLESS_BIRTH.with(|birth| birth.set(id));
+            crate::object::shape_carriers::note_shape_id(id);
         }
 
         ptr
@@ -325,8 +326,17 @@ fn object_alloc_with_parent_impl<
 thread_local! {
     /// One memo at this allocation site, validated against all birth facts
     /// on every use. A polymorphic allocation misses and replaces the memo;
-    /// there is no count/kind-indexed table.
+    /// there is no count/kind-indexed table. The memo word is dereferenced by
+    /// that validation, so it is a cache carrier (note_keyless_birth_carrier).
     static KEYLESS_BIRTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Claim the layout word the keyless-birth memo names (full-trace recompute).
+pub(crate) fn note_keyless_birth_carrier() {
+    let id = KEYLESS_BIRTH.with(std::cell::Cell::get);
+    if id != 0 {
+        crate::object::shape_carriers::note_shape_id(id);
+    }
 }
 
 /// An object born on a known birth shape: `class_id`, `field_count` live
@@ -341,7 +351,7 @@ pub(crate) fn object_alloc_born(
     object_alloc_born_impl(class_id, field_count, shape_id, false)
 }
 
-/// A plain ordinary receiver on a cached shape, or its keyless birth shape
+/// A plain ordinary receiver on a carried shape, or its keyless birth shape
 /// when the memo is absent or collection pruned it. Returns the receiver
 /// and, when it was born on `shape_id`, that shape's representation word
 /// (read from the same record that validated it).
@@ -357,7 +367,7 @@ pub(crate) fn object_alloc_plain_born(
     shape_id: u32,
 ) -> (*mut ObjectHeader, Option<u64>) {
     // Presence, ordinary kind and width are read from the same record.
-    if let Some(rep) = shapes::plain_birth_rep_by_id(shape_id, field_count) {
+    if let Some(rep) = shapes::plain_birth_rep_for_word(shape_id, field_count) {
         let alloc_width = (field_count as usize).max(crate::object::INLINE_SLOT_FLOOR);
         let size = std::mem::size_of::<ObjectHeader>() + alloc_width * 8;
         let fast = crate::arena::arena_alloc_gc_no_collect(size, 8, crate::gc::GC_TYPE_OBJECT)
@@ -384,7 +394,7 @@ fn object_alloc_plain_born_slow(
     let object = object_alloc_unpublished(0, field_count);
     unsafe {
         crate::object::shapes::store_kind::premark_plain_ordinary(object);
-        let rep = shapes::plain_birth_rep_by_id(shape_id, field_count);
+        let rep = shapes::plain_birth_rep_for_word(shape_id, field_count);
         if rep.is_some() {
             if crate::arena::pointer_in_nursery(object as usize) {
                 // GC_STORE_AUDIT(POINTER_FREE): fresh nursery receiver's scalar ShapeId.
@@ -545,7 +555,7 @@ mod filled_birth_tests {
         let object = crate::JSValue::from_bits(value.to_bits()).as_pointer::<ObjectHeader>();
         unsafe {
             assert!(crate::gc::never_move::lives_old(object as usize));
-            let shape = shapes::shape_record_by_id((*object).shape_word()).unwrap();
+            let shape = shapes::shape_record_of_receiver((*object).shape_word()).unwrap();
             assert_eq!(shape.object_kind(), shapes::ShapeObjectKind::Ordinary);
             let header = crate::gc::header_from_trusted_user_ptr(object.cast());
             assert_eq!((*header).gc_flags & crate::gc::GC_FLAG_PINNED, 0);

@@ -99,11 +99,11 @@ fn class_instance(
 fn stamp_f64_lane(obj: *mut crate::object::ObjectHeader, slot: u32) -> u32 {
     use crate::object::field_rep::{with_slot_rep, REP_ANY, REP_F64};
     use crate::object::shapes::{
-        object_shape_stamp, publish_shape_result, shape_descriptor_by_id,
-        shape_descriptor_ensure_with_rep, stamp_object_shape_id_with_carrier_note,
+        object_shape_stamp, publish_shape_result, shape_descriptor_ensure_with_rep,
+        shape_descriptor_for_word, stamp_object_shape_id_with_carrier_note,
     };
     unsafe {
-        let d = shape_descriptor_by_id(object_shape_stamp(obj)).expect("live shape");
+        let d = shape_descriptor_for_word(object_shape_stamp(obj)).expect("live shape");
         let id = publish_shape_result(shape_descriptor_ensure_with_rep(
             d.keys as usize as *const crate::array::ArrayHeader,
             d.logical_key_count,
@@ -122,7 +122,7 @@ fn stamp_f64_lane(obj: *mut crate::object::ObjectHeader, slot: u32) -> u32 {
 }
 
 fn shape_id(obj: *const crate::object::ObjectHeader) -> u32 {
-    unsafe { crate::object::shapes::object_shape_id(obj) }
+    unsafe { crate::object::shapes::object_layout_stamp(obj) }
 }
 
 unsafe fn register_test_method(class_id: u32, name: &'static [u8]) {

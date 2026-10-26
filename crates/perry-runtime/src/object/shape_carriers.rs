@@ -10,12 +10,15 @@ use super::*;
 
 #[inline]
 pub(crate) fn note_shape_id(shape_id: u32) {
-    unsafe { shapes::note_cache_carrier(shapes::shape_descriptor_by_id(shape_id)) };
+    // The record alone: no descriptor is materialized to set its carrier bit.
+    if let Some(record) = shapes::shape_record_for_word(shape_id) {
+        unsafe { shapes::note_cache_carrier_record(record) };
+    }
 }
 
 #[inline]
 fn target_descriptor_resolves(entry: TransitionEntry, expected_len: u32) -> bool {
-    shapes::shape_descriptor_by_id(entry.target_shape_id).is_some_and(|descriptor| {
+    shapes::shape_descriptor_for_word(entry.target_shape_id).is_some_and(|descriptor| {
         descriptor.keys == entry.next_keys as u64 && descriptor.logical_key_count == expected_len
     })
 }
@@ -28,35 +31,13 @@ pub(crate) fn unstable_target_resolves(entry: TransitionEntry) -> bool {
     target_descriptor_resolves(entry, expected_len)
 }
 
-/// A stabilized entry is a call-free generated-code publisher only while its
-/// exact target array and descriptor facts still agree with the cached edge.
+/// A transition entry owns its target exactly when generated code or the
+/// spread path may publish it without revalidation: a stabilized entry
+/// (`target_len != 0`) or a spread entry. An unstable entry's target is
+/// revalidated by [`unstable_target_resolves`] before use, so it stays weak.
 #[inline]
-fn stable_target_resolves(entry: TransitionEntry) -> bool {
-    let expected_len = if spread::source_shape(&entry).is_some() {
-        entry.target_len
-    } else {
-        (entry.slot_idx & TRANSITION_SLOT_IDX_MASK).wrapping_add(1)
-    };
-    if entry.target_len != expected_len {
-        return false;
-    }
-    let Some(header) =
-        (unsafe { crate::value::addr_class::try_read_tracked_gc_header(entry.next_keys) })
-    else {
-        return false;
-    };
-    unsafe {
-        if (*header.as_ptr()).obj_type != crate::gc::GC_TYPE_ARRAY {
-            return false;
-        }
-        let keys = entry.next_keys as *const ArrayHeader;
-        // The target is the backing's first `expected_len` keys; a canonical
-        // backing that grew past them since (its tip) still holds them.
-        if (*keys).length < expected_len || (*keys).length > (*keys).capacity {
-            return false;
-        }
-    }
-    target_descriptor_resolves(entry, expected_len)
+fn entry_owns_target(entry: &TransitionEntry) -> bool {
+    entry.target_len != 0 || spread::source_shape(entry).is_some()
 }
 
 /// Rebuild transient cache ownership after a full trace. This runs before a
@@ -67,10 +48,15 @@ pub(crate) fn recompute_after_full_trace() {
     // Array-subclass cache. Permanent external owners use a different bit.
     array_tail_transition::recompute_cache_carriers_after_full_trace();
     crate::json::note_parse_shape_cache_carriers();
+    super::arguments::note_arguments_shape_carriers();
+    super::alloc_basic::note_keyless_birth_carrier();
+    crate::node_stream::note_birth_carriers();
 
     with_transition_cache(|table| unsafe {
         for entry in (*table).iter() {
-            if stable_target_resolves(*entry) {
+            if entry.next_keys != 0 && entry_owns_target(entry) {
+                // The same set as `transition_cache_insert` / `spread::learn`:
+                // the target only; predecessor and spread source are weak keys.
                 note_shape_id(entry.target_shape_id);
             }
         }
@@ -87,4 +73,5 @@ pub(crate) fn recompute_after_full_trace() {
             note_shape_id(runtime_shape_id);
         }
     }
+    shapes::recompute_record_handle_carriers();
 }

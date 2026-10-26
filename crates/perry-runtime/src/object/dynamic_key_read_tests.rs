@@ -235,3 +235,67 @@ fn an_own_undefined_value_or_an_index_name_is_never_absent() {
     });
     assert!(lacks.is_some(), "the control must be provable absent");
 }
+
+/// A deleted own slot is not a positional answer: each computed read must
+/// still invoke the inherited getter with the original receiver.
+#[test]
+fn deleted_own_slot_keeps_inherited_getter_live_for_two_computed_reads() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _global = crate::object::js_get_global_this();
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    extern "C" fn getter(
+        _: *const crate::closure::ClosureHeader,
+        this: crate::closure::JsThis,
+    ) -> f64 {
+        let this = this.as_f64();
+        let obj = (this.to_bits() & crate::value::POINTER_MASK) as *mut ObjectHeader;
+        let proto = crate::object::js_object_get_prototype_of(this);
+        let proto = (proto.to_bits() & crate::value::POINTER_MASK) as *mut ObjectHeader;
+        let calls = crate::object::js_object_get_field_f64(proto, 0);
+        crate::object::js_object_set_field_f64(proto, 0, calls + 1.0);
+        crate::object::js_object_get_field_f64(obj, 0) + 30.0
+    }
+    let pad = scope.root_string_ptr(atom(b"dkrPad"));
+    let key = scope.root_string_ptr(atom(b"dkrDel"));
+    let calls = scope.root_string_ptr(atom(b"dkrCnt"));
+    let proto = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 4));
+    set(&proto, &calls, 0.0);
+    set(&proto, &key, 17.0);
+    let created = proto
+        .with_const_ptr(|p: *const ObjectHeader| crate::object::js_object_create(boxed_obj(p)));
+    let obj = scope
+        .root_raw_mut_ptr((created.to_bits() & crate::value::POINTER_MASK) as *mut ObjectHeader);
+    set(&obj, &pad, 2.0);
+    set(&obj, &key, 19.0);
+    assert_eq!(read(&obj, &key), 19.0f64.to_bits());
+    obj.with_mut_ptr(|o: *mut ObjectHeader| {
+        key.with_const_ptr(|k| crate::object::js_object_delete_field(o, k));
+        assert_ne!(
+            unsafe { (*o).parent_class_id } & crate::object::overflow::SHADOW_BIT,
+            0
+        );
+    });
+    let getter = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
+        crate::fn_info!(getter, 0),
+        0,
+    ));
+    proto.with_mut_ptr(|p: *mut ObjectHeader| {
+        getter.with_const_ptr(|g: *const crate::closure::ClosureHeader| {
+            crate::object::descriptor_state::set_accessor_descriptor(
+                p as usize,
+                "dkrDel".to_string(),
+                crate::object::descriptor_state::AccessorDescriptor {
+                    get: crate::value::js_nanbox_pointer(g as i64).to_bits(),
+                    set: 0,
+                },
+            );
+        });
+    });
+    for _ in 0..2 {
+        assert_eq!(read(&obj, &key), 32.0f64.to_bits());
+    }
+    proto.with_const_ptr(|p: *const ObjectHeader| {
+        assert_eq!(crate::object::js_object_get_field_f64(p, 0), 2.0);
+    });
+}

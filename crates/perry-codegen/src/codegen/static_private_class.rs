@@ -17,10 +17,10 @@
 //!   accessors.
 //!
 //! Those facts are a static content like a birth: the driver assigns it an
-//! id, module init mints it by facts (`js_object_final_shape_id_for_class_keys_static_private`),
+//! id, module init mints it by facts (`js_object_final_layout_for_class_keys_static_private`),
 //! and an instance whose construction reaches the same facts is found under
 //! that id by the ordinary transitions. The class guards accept it as a
-//! compatible completed id (`compatible_final_shapes`): its public keys,
+//! compatible completed id (`compatible_final_layouts`): its public keys,
 //! slots and lanes are the birth's. An instance that ends anywhere else (a
 //! fresh class evaluation, a non-number initializer value, a return
 //! override) is simply not on it, and every guard sends it to its fallback.
@@ -256,8 +256,8 @@ pub(crate) fn class_static_private_final(
     let shape = private_final(class, ctx.classes, &birth, &|name| {
         element_class_id_in(ctx.classes, ctx.class_ids, name)
     })?;
-    let id = super::static_shape_ids::static_final_shape_id(&shape)?;
-    Some((id, shape))
+    let id = super::static_shape_ids::static_final_shape_identity(&shape)?;
+    Some((crate::layout_ordinals::static_word(id), shape))
 }
 
 /// Does `class_name` have a static completed content?

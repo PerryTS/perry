@@ -36,27 +36,42 @@ fn early_module() -> perry_hir::Module {
 fn the_birth_rep_is_f64_for_exactly_the_fields_written_before_any_observation() {
     // `class Pair { a: number; b: number }`, both prologue-assigned.
     let ir = emit(&loop_new_module("Pair", Type::Number, Expr::Integer(2)));
-    assert_eq!(mint_rep(&ir, "js_object_shape_id_for_class_keys"), "i64 5");
+    assert_eq!(
+        mint_rep(&ir, "js_object_layout_for_class_keys_static"),
+        "i64 5"
+    );
     // `class Link { a: number; b: string }`: only slot 0 is `number`.
     let ir = emit(&loop_new_module(
         "Link",
         Type::String,
         Expr::String("s".into()),
     ));
-    assert_eq!(mint_rep(&ir, "js_object_shape_id_for_class_keys"), "i64 1");
+    assert_eq!(
+        mint_rep(&ir, "js_object_layout_for_class_keys_static"),
+        "i64 1"
+    );
     // `class Late { a: number; b: number = 3 }`: the literal initializer is
     // `b`'s first write, before anything can read it.
     let mut m = loop_new_module("Late", Type::Number, Expr::Integer(2));
     m.classes[0].fields[1].init = Some(Expr::Number(3.0));
     let ir = emit(&m);
-    assert_eq!(mint_rep(&ir, "js_object_shape_id_for_class_keys"), "i64 5");
+    assert_eq!(
+        mint_rep(&ir, "js_object_layout_for_class_keys_static"),
+        "i64 5"
+    );
     // `class Str { a: number; b: number = "s" }`: a non-Number first write.
     let mut m = loop_new_module("Str", Type::Number, Expr::Integer(2));
     m.classes[0].fields[1].init = Some(Expr::String("s".into()));
     let ir = emit(&m);
-    assert_eq!(mint_rep(&ir, "js_object_shape_id_for_class_keys"), "i64 1");
+    assert_eq!(
+        mint_rep(&ir, "js_object_layout_for_class_keys_static"),
+        "i64 1"
+    );
     let ir = emit(&early_module());
-    assert_eq!(mint_rep(&ir, "js_object_shape_id_for_class_keys"), "i64 0");
+    assert_eq!(
+        mint_rep(&ir, "js_object_layout_for_class_keys_static"),
+        "i64 0"
+    );
 }
 
 /// (c) + (d): the shared initializer receives the exact rep the mint declared.
@@ -66,7 +81,10 @@ fn the_inline_allocation_fills_exactly_the_minted_f64_lanes() {
     let declared = emit(&loop_new_module("Pair", Type::Number, Expr::Integer(2)));
     let late = emit(&early_module());
     for (ir, expected) in [(&declared, "i64 5"), (&late, "i64 0")] {
-        assert_eq!(mint_rep(ir, "js_object_shape_id_for_class_keys"), expected);
+        assert_eq!(
+            mint_rep(ir, "js_object_layout_for_class_keys_static"),
+            expected
+        );
         let calls: Vec<_> = ir
             .lines()
             .filter(|l| l.contains("call preserve_mostcc i64 @perry_birth_class("))
@@ -101,7 +119,7 @@ fn a_store_to_a_reservation_can_observe_later_defaults_through_a_setter() {
     );
     let ir = emit(&m);
     assert_eq!(
-        mint_rep(&ir, "js_object_shape_id_for_class_keys_live"),
+        mint_rep(&ir, "js_object_layout_for_class_keys_static"),
         "i64 0"
     );
 }
@@ -122,12 +140,12 @@ fn numeric_reservations_keep_the_completed_contract_after_constructor_observatio
     );
     let ir = emit(&m);
     assert_eq!(
-        mint_rep(&ir, "js_object_shape_id_for_class_keys_live"),
+        mint_rep(&ir, "js_object_layout_for_class_keys_static"),
         "i64 5"
     );
     assert!(
         ir.lines().any(|line| {
-            line.contains("@js_object_shape_id_for_class_keys_live(i64 0, i32 0,")
+            line.contains("@js_object_layout_for_class_keys_static(i64 0, i32 0,")
                 && line.ends_with("i64 0)")
         }),
         "the reservation birth must stay keyless and Any"

@@ -41,8 +41,9 @@
 use super::layout_desc::{
     carry_shadow, layout_id_of_word, word_is_shadowed, StaticAtom, LAYOUT_SHADOW_BIT,
 };
-use super::shapes::{is_shape_id, is_site_matchable_shape_id, shape_record_by_id};
+use super::shapes::{is_layout_word, is_site_matchable_layout_word};
 use super::ObjectHeader;
+use crate::object::shapes::shape_record_of_receiver;
 
 /// A view of compiler-owned data, never runtime-learned state.
 #[derive(Clone, Copy)]
@@ -232,7 +233,9 @@ unsafe fn change_touches_shadow_name(
     any_member: bool,
     receiver_class: u32,
 ) -> bool {
-    let (Some(a), Some(b)) = (shape_record_by_id(prev), shape_record_by_id(id)) else {
+    // Both words are carried: `prev` is the receiver's header word and `id`
+    // the live layout the stamp funnel is storing into that header.
+    let (Some(a), Some(b)) = (shape_record_of_receiver(prev), shape_record_of_receiver(id)) else {
         return false;
     };
     let (ka, na) = (a.keys(), a.logical_key_count() as usize);
@@ -302,7 +305,7 @@ pub(crate) unsafe fn publish_word(obj: *const ObjectHeader, previous: u32, id: u
     let meta = (*obj).meta;
     let prototype = !meta.is_null() && (*meta).flags & super::OBJECT_META_FLAG_IS_PROTOTYPE != 0;
     if !prototype
-        && shape_record_by_id(id).is_some_and(|r| {
+        && shape_record_of_receiver(id).is_some_and(|r| {
             matches!(
                 r.proto_id(),
                 super::shapes::PROTO_ID_DEFAULT | super::shapes::PROTO_ID_NULL
@@ -364,12 +367,12 @@ unsafe fn key_add_slow(
     bytes: &[u8],
 ) -> u32 {
     let prev = layout_id_of_word(previous);
-    if prev == id || !is_shape_id(prev) || !is_site_matchable_shape_id(id) {
+    if prev == id || !is_layout_word(prev) || !is_site_matchable_layout_word(id) {
         return id;
     }
     // A default/null-prototype data bag has no inherited binding to protect.
     if !prototype
-        && shape_record_by_id(id).is_some_and(|r| {
+        && shape_record_of_receiver(id).is_some_and(|r| {
             matches!(
                 r.proto_id(),
                 super::shapes::PROTO_ID_DEFAULT | super::shapes::PROTO_ID_NULL
@@ -400,7 +403,7 @@ unsafe fn publish_word_slow(
     prototype: bool,
 ) -> u32 {
     let prev = layout_id_of_word(previous);
-    if prev == id || !is_shape_id(prev) || !is_site_matchable_shape_id(id) {
+    if prev == id || !is_layout_word(prev) || !is_site_matchable_layout_word(id) {
         return id;
     }
     // A class instance gains its declared fields by key adds at its birth
@@ -428,7 +431,7 @@ unsafe fn publish_word_slow(
 #[inline]
 pub(crate) unsafe fn set_bit(obj: *mut ObjectHeader) {
     let w = (*obj).parent_class_id;
-    if is_site_matchable_shape_id(w) {
+    if is_site_matchable_layout_word(w) {
         (*obj).parent_class_id = w | LAYOUT_SHADOW_BIT;
     }
 }
@@ -470,7 +473,7 @@ pub(crate) unsafe fn note_prototype_slot_store(
     {
         return;
     }
-    let Some(record) = shape_record_by_id((*obj).shape_word()) else {
+    let Some(record) = shape_record_of_receiver((*obj).shape_word()) else {
         return;
     };
     let n = record.logical_key_count() as usize;
