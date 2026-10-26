@@ -2354,6 +2354,12 @@ pub unsafe extern "C" fn perry_probe_set(
     };
     match own_position(r, key_bits, hash) {
         Ok(pos) => {
+            // An overflow owns the current attributes even for a key whose
+            // value remains in a fixed slot. The layout cannot authorize Set.
+            let meta = (*obj).meta;
+            if !meta.is_null() && (*meta).overflow != 0 {
+                return 0;
+            }
             let keys = (*r).keys as usize as *const crate::array::ArrayHeader;
             if (*r).summary()
                 & (crate::object::key_attrs::SUMMARY_BLOCKS_STORE

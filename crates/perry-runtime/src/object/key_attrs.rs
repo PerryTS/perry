@@ -1393,7 +1393,7 @@ pub(crate) enum AttrsEdit<'a> {
     Accessor(&'a [u8], bool, bool),
     /// `key` stops being an accessor. Data attributes are kept.
     ClearAccessor(&'a [u8]),
-    /// Every string key becomes non-configurable, and with `freeze` also
+    /// Every property key becomes non-configurable, and with `freeze` also
     /// non-writable (`Object.freeze` / `Object.seal`).
     Integrity { freeze: bool },
     /// Every key returns to the default.
@@ -1460,12 +1460,18 @@ unsafe fn slot_key_bytes<'b>(
 }
 
 /// The entry position `pos` of a list takes after `edits`, from `old`.
-/// Whole-list edits apply to string keys only (a hole or a symbol slot keeps
-/// its entry: symbol attributes are the symbol tables').
+/// Whole-list integrity edits include symbol property entries. Byte-keyed
+/// edits compare string keys only; holes and private entries stay untouched.
 #[inline]
 unsafe fn fold_edits(edits: &[AttrsEdit<'_>], slot: crate::JSValue, old: u8) -> u8 {
     let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     let Some(bytes) = slot_key_bytes(slot, &mut sso) else {
+        if slot.is_pointer() && crate::symbol::js_is_symbol(f64::from_bits(slot.bits())) != 0 {
+            return edits
+                .iter()
+                .filter(|edit| matches!(edit, AttrsEdit::Integrity { .. }))
+                .fold(old, |entry, edit| edit.apply(entry));
+        }
         return old;
     };
     let mut entry = old;

@@ -701,6 +701,38 @@ fn classless_optional_family_keeps_shape_and_routes_unknown_keys_to_overflow() {
             31.0
         );
     });
+    object.with_mut_ptr(|obj: *mut ObjectHeader| unsafe {
+        crate::object::set_property_attrs(
+            obj as usize,
+            "holes_a".into(),
+            crate::object::PropertyAttrs::new(false, true, true),
+        );
+        let shape = crate::object::shapes::object_shape_descriptor(obj).unwrap();
+        assert_eq!(shape.object_kind, crate::object::shapes::ShapeObjectKind::Ordinary);
+        assert!(crate::object::overflow::has_overflow(obj));
+        assert_eq!(
+            crate::object::key_attrs::keys_entry(shape.keys as *const crate::array::ArrayHeader, 0)
+                & crate::object::key_attrs::ENTRY_NON_WRITABLE,
+            0,
+            "the immutable layout alone would incorrectly admit this store"
+        );
+        assert!(!crate::object::get_property_attrs(obj as usize, "holes_a")
+            .unwrap()
+            .writable());
+        let atom = crate::string::property_atom(H_A.string);
+        assert_eq!(
+            crate::object::layout_probe::perry_probe_set(
+                crate::object::shapes::ordinary_dir_addr(),
+                crate::value::POINTER_TAG | obj as u64,
+                crate::JSValue::string_ptr(atom.cast_mut()).bits(),
+                crate::string::property_atom_hash(atom),
+                99.0,
+            ),
+            0,
+            "overflow attributes forbid the reserved-slot store"
+        );
+        assert_eq!(js_object_get_field_by_name_f64(obj, H_A.string), 17.0);
+    });
     let mixed = scope.root_raw_mut_ptr(unsafe {
         crate::object::layout_desc::perry_alloc_layout(std::ptr::addr_of!(HOLEY))
     });
