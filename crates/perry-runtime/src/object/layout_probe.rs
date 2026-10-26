@@ -2344,8 +2344,8 @@ pub unsafe extern "C" fn perry_probe_set(
     if r.is_null() || (*r).object_kind() != super::ShapeObjectKind::Ordinary {
         return 0;
     }
-    let gc = (payload - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    if (*gc)._reserved & crate::gc::OBJ_FLAG_FROZEN != 0 {
+    let gc = crate::value::addr_class::honest_header(payload);
+    if gc._reserved & crate::gc::OBJ_FLAG_FROZEN != 0 {
         return 0;
     }
     let bits = if value.to_bits() == POINTER_TAG {
