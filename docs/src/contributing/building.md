@@ -18,8 +18,8 @@
   `llvm-config` is not on `PATH`, set `LLVM_SYS_221_PREFIX` to the LLVM 22
   prefix. On Windows this variable is mandatory and must point at the
   extracted LLVM 22 development archive used by the build.
-- For the cached Make targets, install the pinned Mr Boxington once with
-  `make mbx-deps`.
+- `make build-dev` provisions its pinned build tools automatically. For
+  `make build-prod`, install the pinned Mr Boxington once with `make mbx-deps`.
 
 An external clang is not part of the normal in-process codegen path. Install a
 matching clang only when working on a path that explicitly invokes it (for
@@ -96,8 +96,9 @@ image installs them under `/opt/mbx-blaze`, outside the checkout mount.
 
 Development builds retain `force-unwind-tables=yes` for exception transport.
 They use full unwind tables because Blaze refuses `use-sync-unwind=yes`.
-Production commands retain the repository's compact-table configuration and
-compiler. `PERRY_DEV_RUSTFLAGS` customizes development flags and must preserve
+Host production commands retain the repository's compiler and compact-table
+configuration unless custom Rust flags override it. The development image
+uses full tables by default; use the production Dockerfile for distribution builds. `PERRY_DEV_RUSTFLAGS` customizes development flags and must preserve
 `-C force-unwind-tables=yes`.
 
 The first build loads the workspace. Later supported edits use Blaze while
@@ -244,7 +245,8 @@ The policy is checked by `python3 scripts/check_dev_debug.py` in PR lint.
 
 ## Cached Linux linking
 
-Use `make mbx-deps` and the cached Make targets for local builds. Linux GNU
+The development Make target provisions its cache automatically. Production
+builds use `make mbx-deps` first. Linux GNU
 x86_64 and AArch64 targets use mold 2.42.0 via `.mbx.toml`; install `clang`
 on the build host. MBX downloads the pinned mold release and verifies its
 GitHub SHA-256 digest. macOS, Windows, Android and custom musl linker paths

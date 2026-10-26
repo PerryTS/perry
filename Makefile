@@ -29,8 +29,7 @@ fix-deps:
 	@set -e; v=$$(node -e "console.log(require('./external-tools.json').tools['cargo-fixit'].version)"); \
 	rustup run $(RUSTUP_TOOLCHAIN) cargo install cargo-fixit@$$v --locked
 
-# Install the pinned Mr Boxington Cargo cache used by build-dev/build-prod.
-# The pin also provides the Cargo shim required for optional Blaze routing.
+# Install the pinned production Cargo cache. Development provisions its prebuilts.
 .PHONY: mbx-deps
 mbx-deps:
 	@set -e; v=$$(node -e "console.log(require('./external-tools.json').tools.mbx.version)"); \
@@ -48,7 +47,7 @@ build-dev:
 build-fast: build-dev
 
 build-prod:
-	PATH="$(CARGO_BIN):$$PATH" LLVM_SYS_221_PREFIX="$(LLVM_SYS_221_PREFIX)" mbx build --profile prod -p perry
+	PATH="$(CARGO_BIN):$$PATH" LLVM_SYS_221_PREFIX="$(LLVM_SYS_221_PREFIX)" env -u RUSTC rustup run $(RUSTUP_TOOLCHAIN) mbx build --profile prod -p perry
 
 # Dedicated Linux agent hosts must provision compressed, quota-bounded ZFS
 # before building. Both paths are explicit to avoid using the root filesystem.
