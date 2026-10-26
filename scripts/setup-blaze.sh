@@ -26,6 +26,8 @@ if [ ! -f "$bootstrap/install.py" ] || [ ! -f "$bootstrap/lock.json" ]; then
   done
   mv "$temporary/install.py" "$bootstrap/install.py"
   mv "$temporary/lock.json" "$bootstrap/lock.json"
+  rmdir "$temporary"
+  trap - EXIT INT TERM
 fi
 if [ "${1:-}" = "--github-env" ]; then
   python3 "$bootstrap/install.py" --lock "$bootstrap/lock.json" --root "$root" --github-env
