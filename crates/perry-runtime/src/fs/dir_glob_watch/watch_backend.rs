@@ -210,6 +210,9 @@ pub(super) fn diff_watch_snapshots(
 pub(super) enum EventClass {
     Rename,
     Change,
+    /// FSEvents can retain creation together with a later write across a stream rebuild.
+    #[cfg(target_os = "macos")]
+    FileCreatedAndChanged,
 }
 
 impl EventClass {
@@ -217,7 +220,18 @@ impl EventClass {
         match self {
             EventClass::Rename => "rename",
             EventClass::Change => "change",
+            #[cfg(target_os = "macos")]
+            EventClass::FileCreatedAndChanged => "rename",
         }
+    }
+
+    pub(super) fn node_name_for_target(self, exact_root: bool) -> &'static str {
+        #[cfg(target_os = "macos")]
+        if exact_root && matches!(self, Self::FileCreatedAndChanged) {
+            return "change";
+        }
+        let _ = exact_root;
+        self.node_name()
     }
 }
 
