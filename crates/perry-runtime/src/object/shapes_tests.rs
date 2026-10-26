@@ -1212,7 +1212,7 @@ fn shape_lookup_cache_is_invalidated_when_a_record_is_removed() {
             shape_descriptor_for_word(id).is_some(),
             "the descriptor must resolve before removal"
         );
-        let identity = unsafe { (*ShapeSlab::agent_record_for_word(id)).shape_id };
+        let identity = (*ShapeSlab::agent_record_for_word(id)).shape_id;
         let record = shape_descriptor_for_word(id).unwrap().record;
         assert_ne!(record, 0);
 

@@ -804,7 +804,7 @@ fn a_collection_visits_only_the_current_agents_ws_roots() {
 
         // One client listener table and one server per agent, each pointing
         // at a young closure-like root the collection will move.
-        let mut seed = |agent: u64, client: usize| {
+        let seed = |agent: u64, client: usize| {
             perry_runtime::agent::enter_agent_for_test(agent);
             let for_client = guard.scope.root_raw_mut_ptr(young_gc_root() as *mut u64);
             let for_server = guard.scope.root_raw_mut_ptr(young_gc_root() as *mut u64);
