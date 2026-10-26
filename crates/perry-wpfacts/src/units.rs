@@ -2238,6 +2238,10 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
         }
         for (si, u) in per_unit.into_iter().enumerate() {
             let u = u.expect("every unit solved");
+            // Its layouts, for the tests to read the contracts' form
+            // (DECISIONS 208).
+            #[cfg(test)]
+            pf.layouts_out.extend(u.layouts_out.iter().cloned());
             merge_unit(&mut pf, solves[si].mi, &solves[si].key, &solves[si].view, u);
         }
         for (path, b) in pf.module_paths.iter().zip(&mut pf.bindings) {
