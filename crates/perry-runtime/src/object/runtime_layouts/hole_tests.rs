@@ -125,6 +125,32 @@ runtime_layout!(
     [H_A => OPT, H_B => OPT, H_C => OPT, H_D => OPT]
 );
 
+// Identical key geometry in an ordinary runtime layout is not family authority.
+#[used(linker)]
+#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_litlay")]
+#[cfg_attr(target_os = "windows", link_section = ".perrylit$m")]
+#[cfg_attr(
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
+    link_section = "perry_literal_layouts"
+)]
+static mut LITERAL_FAMILY: PerryLayoutDesc = PerryLayoutDesc {
+    family: 0x7f000016,
+    variant: 0,
+    kind: 0,
+    integrity: 0,
+    slot_count: LITERAL_OPTIONAL::SLOT_COUNT as u32,
+    layout_id: crate::object::layout_desc::LAYOUT_ID_CARRIED,
+    rep: 0,
+    proto: crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
+    keys: LITERAL_OPTIONAL::KEYS.as_ptr(),
+    key_count: LITERAL_OPTIONAL::SLOT_COUNT as u32,
+    index_mask: (LITERAL_OPTIONAL::INDEX.len() - 1) as u32,
+    index: LITERAL_OPTIONAL::INDEX.as_ptr(),
+    class_id: 0,
+    parent_class_id: 0,
+    methods: std::ptr::null(),
+};
+
 const TRUE: u64 = crate::value::TAG_TRUE;
 
 unsafe fn string(value: crate::JSValue) -> String {
@@ -617,7 +643,16 @@ fn absent_layout_methods_throw_or_resolve_an_inherited_method() {
 fn classless_optional_family_keeps_shape_and_routes_unknown_keys_to_overflow() {
     crate::gc::initialize_runtime_fixture();
     let scope = crate::gc::RuntimeHandleScope::new();
-    let desc = std::ptr::addr_of!(LITERAL_OPTIONAL);
+    let ordinary = scope.root_raw_mut_ptr(unsafe {
+        crate::object::layout_desc::perry_alloc_layout(std::ptr::addr_of!(LITERAL_OPTIONAL))
+    });
+    ordinary.with_const_ptr(|obj: *const ObjectHeader| unsafe {
+        assert!(crate::object::layout_desc::family_desc_of(obj).is_none());
+        assert!(!crate::object::layout_desc::is_family_layout_word(
+            (*obj).parent_class_id
+        ));
+    });
+    let desc = std::ptr::addr_of!(LITERAL_FAMILY);
     let object =
         scope.root_raw_mut_ptr(unsafe { crate::object::layout_desc::perry_alloc_layout(desc) });
     object.with_mut_ptr(|obj: *mut ObjectHeader| unsafe {

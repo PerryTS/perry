@@ -82,22 +82,38 @@ fn count((start, end): (usize, usize)) -> u32 {
     (end.saturating_sub(start) / std::mem::size_of::<PerryLayoutDesc>()) as u32
 }
 
+/// Check the band before touching either span; eager records need only
+/// their original section bounds.
 #[inline]
-pub(super) fn descriptor_count() -> u32 {
-    count(layout_bounds()).saturating_add(count(bounds()))
-}
-
-/// Arithmetic only: eager image records precede first-birth image records.
-#[inline]
-pub(super) fn descriptor_at(index: u32) -> *const PerryLayoutDesc {
+pub(super) fn descriptor_at(index: u32) -> Option<*const PerryLayoutDesc> {
+    if index >= LAYOUT_INDEX_LIMIT {
+        return None;
+    }
     let eager = layout_bounds();
     let n = count(eager);
     let (base, offset) = if index < n {
         (eager.0, index)
     } else {
-        (bounds().0, index - n)
+        let literal = bounds();
+        let offset = index - n;
+        if offset >= count(literal) {
+            return None;
+        }
+        (literal.0, offset)
     };
-    (base + offset as usize * std::mem::size_of::<PerryLayoutDesc>()) as *const PerryLayoutDesc
+    Some(
+        (base + offset as usize * std::mem::size_of::<PerryLayoutDesc>()) as *const PerryLayoutDesc,
+    )
+}
+
+/// Section ownership is the immutable classless-family authority.
+#[inline]
+pub(super) fn contains(desc: *const PerryLayoutDesc) -> bool {
+    let (start, end) = bounds();
+    let address = desc as usize;
+    address >= start
+        && address < end
+        && (address - start) % std::mem::size_of::<PerryLayoutDesc>() == 0
 }
 
 #[inline]
@@ -114,7 +130,7 @@ fn literal_index(desc: *const PerryLayoutDesc) -> Option<u32> {
 
 /// Check the current agent's authoritative record, even when another agent
 /// already published the descriptor's existing image word.
-#[inline]
+#[inline(never)]
 pub(super) unsafe fn registered_for_birth(desc: *const PerryLayoutDesc) -> Option<u32> {
     let current = registered_layout_id(load_layout_id(desc));
     let Some(index) = literal_index(desc) else {
@@ -134,7 +150,7 @@ pub(super) unsafe fn registered_for_birth(desc: *const PerryLayoutDesc) -> Optio
 #[inline(never)]
 unsafe fn first_birth(desc: *const PerryLayoutDesc, index: u32) -> Option<u32> {
     let d = &*desc;
-    if !optional_family::is_family(d) || d.family == SENTINEL_FAMILY {
+    if !optional_family::valid_literal(d) || d.family == SENTINEL_FAMILY {
         return None;
     }
     let requested = layout_id_of_index(index)?;

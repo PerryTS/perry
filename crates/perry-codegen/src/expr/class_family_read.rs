@@ -151,7 +151,8 @@ pub(crate) fn begin(
                 &desc,
                 &[(I64, &crate::layout_desc::DESC_LAYOUT_ID_OFFSET.to_string())],
             );
-            let expected = blk.load(I32, &ptr);
+            // First-birth literal publication is shared across agents.
+            let expected = blk.load_atomic_acquire(I32, &ptr, 4);
             // Only a registered ordinary-band layout proves an object. Reject
             // both 0 (declined registration) and u32::MAX (the startup marker).
             let relative = blk.sub(

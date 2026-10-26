@@ -871,7 +871,7 @@ unsafe fn register_bound(
         }
     }
     // Case 2c: a class family's instances have the class's prototype, and
-    // its id is its record's (`layout_index_of_word`).
+    // its id is its descriptor record's.
     let class_family = d.class_id != 0;
     let proto_id = match d.proto.addr() {
         3 => super::shapes::PROTO_ID_DEFAULT,
@@ -986,6 +986,7 @@ unsafe fn register_bound(
     .filter(|&id| {
         super::shapes::is_static_shape_id(id)
             && !class_family
+            && !literal_birth::contains(desc)
             && !image
             && d.variant != crate::codegen_abi::LAYOUT_VARIANT_FUNCTION_CONSTRUCTOR
     });
@@ -1039,7 +1040,12 @@ pub unsafe extern "C" fn perry_alloc_layout(desc: *const PerryLayoutDesc) -> *mu
     #[cfg(test)]
     crate::test_support::bootstrap_test_thread();
     let d = &*desc;
-    let Some(id) = literal_birth::registered_for_birth(desc) else {
+    let id = if d.class_id != 0 {
+        registered_layout_id(load_layout_id(desc))
+    } else {
+        literal_birth::registered_for_birth(desc)
+    };
+    let Some(id) = id else {
         eprintln!(
             "Perry internal error: perry_alloc_layout of an unregistered layout (family {:#x})",
             d.family
@@ -1184,7 +1190,7 @@ pub(crate) unsafe fn alloc_derived_layout_object(
     proto: &crate::gc::RuntimeHandle<'_>,
     recorded: u32,
 ) -> Option<*mut ObjectHeader> {
-    let id = registered_layout_id(d.layout_id)?;
+    let id = registered_layout_id(load_layout_id(d))?;
     let size = std::mem::size_of::<ObjectHeader>() + d.slot_count as usize * 8;
     let obj =
         crate::arena::arena_alloc_gc(size, 8, crate::gc::GC_TYPE_OBJECT).cast::<ObjectHeader>();
@@ -1263,7 +1269,7 @@ pub(crate) unsafe fn alloc_layout_prototype(
     room: u32,
 ) -> *mut ObjectHeader {
     let d = &*desc;
-    let Some(id) = registered_layout_id(d.layout_id) else {
+    let Some(id) = registered_layout_id(load_layout_id(d)) else {
         eprintln!(
             "Perry internal error: a prototype born on an unregistered layout (family {:#x})",
             d.family
@@ -1406,7 +1412,7 @@ pub(crate) unsafe fn prototype_image(
     serial: u64,
     bound: &[u64],
 ) -> Option<f64> {
-    let id = registered_layout_id(d.layout_id)?;
+    let id = registered_layout_id(load_layout_id(d))?;
     if bound.len() != binding_symbol_keys(d)
         || !bound
             .iter()
@@ -1568,7 +1574,7 @@ unsafe fn family_birth(d: &PerryLayoutDesc, proto: f64) -> Option<*mut ObjectHea
     if d.proto.addr() < LAYOUT_PROTO_TAG_END {
         return None;
     }
-    let id = registered_layout_id(d.layout_id)?;
+    let id = registered_layout_id(load_layout_id(d))?;
     let serial = proto_family_serial_registered(d.proto);
     let bits = proto.to_bits();
     if serial == 0 || bits & !crate::value::POINTER_MASK != crate::value::POINTER_TAG {
@@ -1711,19 +1717,10 @@ fn layout_id_of_index(index: u32) -> Option<u32> {
     (index < LAYOUT_INDEX_LIMIT).then_some(LAYOUT_BASE + index)
 }
 
-/// The descriptor record index a layout word names (shadow bit ignored), or
-/// `None` for every word outside the section's ids.
+/// Decode a word once, including the span bounds check.
 #[inline]
-pub(crate) fn layout_index_of_word(word: u32) -> Option<u32> {
-    let index = layout_id_of_word(word).wrapping_sub(LAYOUT_BASE);
-    let count = literal_birth::descriptor_count();
-    (index < count && index < LAYOUT_INDEX_LIMIT).then_some(index)
-}
-
-/// Descriptor `index` of the section.
-#[inline]
-fn desc_at(index: u32) -> *const PerryLayoutDesc {
-    literal_birth::descriptor_at(index)
+fn descriptor_for_word(word: u32) -> Option<*const PerryLayoutDesc> {
+    literal_birth::descriptor_at(layout_id_of_word(word).wrapping_sub(LAYOUT_BASE))
 }
 
 /// The class declaration owns the immutable pointer to its instance layout.
@@ -1880,7 +1877,7 @@ pub(crate) unsafe fn adopt_family_layout(obj: *mut ObjectHeader) -> *mut ObjectH
         // GC_STORE_AUDIT(POINTER_FREE): All three stores write the immediate TAG_HOLE to physical object slots. They introduce no pointer/child edge; allocation or rooted object custody surrounds the fill and shape publication follows.
         *fields.add(i) = crate::value::TAG_HOLE;
     }
-    super::shapes::stamp_object_shape_id_with_carrier_note(obj, d.layout_id);
+    super::shapes::stamp_object_shape_id_with_carrier_note(obj, load_layout_id(d));
     // A birth linked to another prototype (a class evaluation's, a
     // newTarget's) keeps that link as its shape's identity: the funnel moves
     // the object to that evaluation's copy of the layout (or off the family,
@@ -1964,10 +1961,10 @@ static KEEP_PERRY_LAYOUT_INDEX_PROBE: unsafe extern "C" fn(
 /// own id; an evaluation's copy is an object fact, [`is_family_object`])?
 #[inline]
 pub(crate) fn is_family_layout_word(word: u32) -> bool {
-    layout_index_of_word(word).is_some_and(|i| unsafe {
-        let d = &*desc_at(i);
+    descriptor_for_word(word).is_some_and(|desc| unsafe {
+        let d = &*desc;
         optional_family::is_family(d)
-            && registered_layout_id(d.layout_id) == Some(layout_id_of_word(word))
+            && registered_layout_id(load_layout_id(d)) == Some(layout_id_of_word(word))
     })
 }
 
@@ -2010,12 +2007,12 @@ pub(crate) unsafe fn family_desc_of(obj: *const ObjectHeader) -> Option<&'static
         return None;
     }
     let word = (*obj).parent_class_id;
-    let Some(index) = layout_index_of_word(word) else {
+    let Some(desc) = descriptor_for_word(word) else {
         return evaluation_family_desc_of(word);
     };
-    let d = &*desc_at(index);
+    let d = &*desc;
     (optional_family::is_family(d)
-        && registered_layout_id(d.layout_id) == Some(layout_id_of_word(word)))
+        && registered_layout_id(load_layout_id(d)) == Some(layout_id_of_word(word)))
     .then_some(d)
 }
 
@@ -2076,7 +2073,7 @@ pub(crate) unsafe fn evaluation_layout_desc(family: u32) -> Option<&'static Perr
         // [`note_family_relink`] writes it, from one.
         family => {
             debug_assert!(is_family_layout_word(family));
-            Some(&*desc_at(family - LAYOUT_BASE))
+            descriptor_for_word(family).map(|desc| &*desc)
         }
     }
 }
@@ -2566,11 +2563,8 @@ pub(crate) unsafe fn family_own_key_hashed(
     let word = (*obj).parent_class_id;
     let index = word.wrapping_sub(LAYOUT_BASE);
     let d = if index < LAYOUT_INDEX_LIMIT {
-        if index >= literal_birth::descriptor_count() {
-            return None;
-        }
-        let d = &*desc_at(index);
-        if !optional_family::is_family(d) || registered_layout_id(d.layout_id) != Some(word) {
+        let d = &*literal_birth::descriptor_at(index)?;
+        if !optional_family::is_family(d) || registered_layout_id(load_layout_id(d)) != Some(word) {
             return None;
         }
         d

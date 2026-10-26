@@ -195,6 +195,16 @@ mod tests {
             3,
             "each read needs its own current-slot presence test"
         );
+        assert_eq!(
+            walk_ir
+                .lines()
+                .filter(|line| {
+                    line.contains("load atomic i32") && line.contains("acquire, align 4")
+                })
+                .count(),
+            3,
+            "each current-shape guard must acquire the shared publication"
+        );
         assert!(
             ir.contains(&format!("@perry_layout_class_{id}")),
             "literal descriptor must be live"
