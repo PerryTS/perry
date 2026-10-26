@@ -60,8 +60,9 @@ impl LayoutWord {
         LayoutRow(self.0 & LAYOUT_ROW_MASK)
     }
     /// This word with the shadow bit set.
+    #[inline(always)]
     pub const fn shadowed(self) -> Self {
-        Self(self.0 | LAYOUT_SHADOW_BIT)
+        LayoutWord(self.0 | LAYOUT_SHADOW_BIT)
     }
     pub const fn unshadowed(self) -> Self {
         Self(self.0 & !LAYOUT_SHADOW_BIT)
