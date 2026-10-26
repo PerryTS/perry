@@ -417,6 +417,9 @@ impl<'a> Gen<'a> {
         } else {
             self.m.sink_node(thrown, r);
         }
+        // Other units' code reaches the global object and stores into what
+        // this unit gives them: their writes, which they publish
+        // (`Model::shared_replay`).
         let gt = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
         if cells {
             // Design §17.16 (b): a program-owned global is a cell as well.
@@ -436,7 +439,9 @@ impl<'a> Gen<'a> {
             }
             self.m.global_cells = true;
         } else {
+            self.m.shared_replay = true;
             self.m.escape(gt, r);
+            self.m.shared_replay = false;
         }
         // DECISIONS 204: what another unit stores into a builtin prototype
         // (`Object.prototype`, a native class's) is unknown here: the
@@ -471,6 +476,7 @@ impl<'a> Gen<'a> {
             }
         }
         let holder = self.m.node_l("other-unit-receiver");
+        self.m.other_units_store = Some(holder);
         self.m.add_tok(holder, TOP);
         let src = self.m.top_tok_node;
         self.m.cons(
@@ -1453,6 +1459,10 @@ impl<'a> Gen<'a> {
 
     /// A token a value contract describes (`contract_check`).
     fn value_tok_ok(&self, t: Tok) -> bool {
+        // A runtime-owned object: the contract names it (`ValueContract::shared`).
+        if self.m.named_shared(t).is_some() {
+            return true;
+        }
         match self.m.toks[t as usize] {
             // DECISIONS 137: a marker with values beside it (DECISIONS 74)
             // stands for no value of its own: the callers' values arrive

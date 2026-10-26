@@ -1788,6 +1788,12 @@ impl<'a> Gen<'a> {
             let v = self.stand_in_fn(mi, fc);
             self.m.edge(v, n);
         }
+        // The runtime-owned objects it may hold: one object for the whole
+        // program, held here as in the defining unit.
+        for s in &c.shared {
+            let t = self.m.shared_tok(s);
+            self.m.add_tok(n, t);
+        }
         if c.unknown {
             self.m.add_top(n, |_| "value of another unit".into());
         }

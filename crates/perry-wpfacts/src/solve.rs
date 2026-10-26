@@ -13,6 +13,7 @@ mod lookup;
 
 use crate::builtins;
 mod call_and_construct;
+mod shared;
 use crate::delta::{Targets, Tokens};
 use crate::model::*;
 
@@ -749,9 +750,12 @@ impl Model {
                 }
             }
             Cons::TopSink { reason } => {
+                let chain = self.chain_sinks.contains(&n);
+                let saved = std::mem::replace(&mut self.chain_escape, chain);
                 for &t in toks {
                     self.escape(t, reason);
                 }
+                self.chain_escape = saved;
             }
             Cons::OwnOnly { f, dst } => {
                 self.add_prim(dst, prim);
@@ -1221,6 +1225,10 @@ impl Model {
             Cons::AccessorInstall { key, f, setter } => {
                 let star = self.atom(crate::STAR_KEY);
                 for &t in toks {
+                    if let Some(s) = self.shared_of(t) {
+                        let k = self.atoms[key as usize].clone();
+                        self.note_shared(SharedWrite::Accessor(s, k));
+                    }
                     self.note_fnproto_write(t, Some(Key::Named(key)), "accessor");
                     builtins::note_native_write(self, t, Some(Key::Named(key)), "accessor");
                     if t == TOP {
@@ -1672,6 +1680,7 @@ impl Model {
             return;
         }
         self.bf_written = Some(r);
+        self.note_shared(SharedWrite::Store(Shared::BuiltinFn, None));
         self.bf_stores.clear();
         for dst in std::mem::take(&mut self.bf_reads) {
             self.add_top(dst, |_| {
@@ -1829,6 +1838,20 @@ impl Model {
                     Key::Any => None,
                 },
             );
+        }
+        // A store into a builtin function value is decided once the
+        // worklist is empty (`settle_bf_written`): `write_builtin_fns` notes it.
+        // The boundary's store for other units' code is theirs to publish.
+        let theirs = self.store_at.is_some() && self.store_at == self.other_units_store;
+        if let Some(s) = self
+            .shared_of(t)
+            .filter(|s| *s != Shared::BuiltinFn && !theirs)
+        {
+            let k = match key {
+                Key::Named(a) => Some(self.atoms[a as usize].clone()),
+                Key::Any => None,
+            };
+            self.note_shared(SharedWrite::Store(s, k));
         }
         // A program-owned global: an ordinary field of the global object.
         if let (TokKind::Builtin(BuiltinNs::GlobalThis), Key::Named(a)) =

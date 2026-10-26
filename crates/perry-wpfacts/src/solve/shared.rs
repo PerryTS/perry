@@ -1,0 +1,114 @@
+//! The runtime's own objects every unit shares (decision 151): their tokens,
+//! what a unit records of its writes into them, and the replay of the
+//! other units' writes.
+
+use super::*;
+
+impl Model {
+    /// The shared object (decision 151) token `t` is, if any.
+    pub(crate) fn shared_of(&self, t: Tok) -> Option<Shared> {
+        if t == TOP {
+            return Some(Shared::Top);
+        }
+        match &self.toks[t as usize] {
+            TokKind::ObjectProto => Some(Shared::ObjectProto),
+            TokKind::Builtin(ns) => Some(Shared::Builtin(*ns)),
+            TokKind::BuiltinFn => Some(Shared::BuiltinFn),
+            TokKind::NativeProto(n) => Some(Shared::NativeProto(n.clone())),
+            _ => None,
+        }
+    }
+
+    /// The token of shared object `s` (`shared_of` inverted).
+    pub(crate) fn shared_tok(&mut self, s: &Shared) -> Tok {
+        match s {
+            Shared::Top => TOP,
+            Shared::ObjectProto => self.tok(TokKind::ObjectProto),
+            Shared::Builtin(ns) => self.tok(TokKind::Builtin(*ns)),
+            Shared::BuiltinFn => self.tok(TokKind::BuiltinFn),
+            Shared::NativeProto(n) => self.tok(TokKind::NativeProto(n.clone())),
+        }
+    }
+
+    /// The shared object a value contract names for token `t`
+    /// (`ValueContract::shared`): every one but ⊤ and the global object,
+    /// which escaped puts ⊤ in reach of stores into ⊤ (`global_in_top`).
+    pub(crate) fn named_shared(&self, t: Tok) -> Option<Shared> {
+        self.shared_of(t)
+            .filter(|s| !matches!(s, Shared::Top | Shared::Builtin(BuiltinNs::GlobalThis)))
+    }
+
+    pub(crate) fn note_shared(&mut self, w: SharedWrite) {
+        if !self.shared_replay {
+            self.shared_out.insert(w);
+        }
+    }
+
+    /// Another unit's write of a shared object, as if this unit's code did
+    /// it with a value it does not know: a store of ⊤, an accessor of a
+    /// function this unit cannot see (on `Object.prototype` E23, as for any
+    /// accessor there), an unmodeled reach. The value and the function are the other
+    /// unit's: only the write's target and key are this unit's to see.
+    pub(crate) fn replay_shared(&mut self, w: &SharedWrite) {
+        self.shared_replay = true;
+        match w {
+            SharedWrite::Store(s, k) => {
+                let t = self.shared_tok(s);
+                let key = match k {
+                    Some(k) => Key::Named(self.atom(k)),
+                    None => Key::Any,
+                };
+                let v = self.node_l("shared-store");
+                self.add_top(v, |_| "stored by another unit into a shared object".into());
+                self.add_prim(v, prim::ALL);
+                let site = self.anon_post_site("another unit's store into a shared object");
+                let saved = self.store_at.take();
+                self.store_into(t, key, v, site);
+                self.store_at = saved;
+            }
+            SharedWrite::Accessor(s, k) => {
+                let t = self.shared_tok(s);
+                let key = self.atom(k);
+                self.note_fnproto_write(t, Some(Key::Named(key)), "another unit's accessor");
+                builtins::note_native_write(
+                    self,
+                    t,
+                    Some(Key::Named(key)),
+                    "another unit's accessor",
+                );
+                match s {
+                    Shared::Top => {}
+                    // E23: every lookup that reaches it may run the accessor.
+                    Shared::ObjectProto => self.objproto_accessor = true,
+                    // A lookup of the key there runs that unit's function as
+                    // getter or setter (`builtins::other_unit_accessor`).
+                    _ => {
+                        let f = builtins::other_unit_accessor(self);
+                        let holder = self.node_l("shared-accessor-holder");
+                        self.add_tok(holder, t);
+                        for setter in [false, true] {
+                            self.cons(holder, Cons::AccessorInstall { key, f, setter });
+                        }
+                    }
+                }
+            }
+            SharedWrite::Unmodeled(s) => {
+                let t = self.shared_tok(s);
+                let what = "another unit's object reaches unmodeled code";
+                if matches!(s, Shared::ObjectProto) {
+                    self.note_fnproto_write(t, None, what);
+                }
+                if matches!(s, Shared::ObjectProto | Shared::NativeProto(_)) {
+                    builtins::note_native_write(self, t, None, what);
+                }
+                if matches!(s, Shared::Builtin(BuiltinNs::GlobalThis)) {
+                    builtins::note_global_in_top(self);
+                }
+            }
+            // Its effect is the stores and accessors the driver derives
+            // (`units::shared_closure`).
+            SharedWrite::Handed(_) => {}
+        }
+        self.shared_replay = false;
+    }
+}

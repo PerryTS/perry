@@ -121,6 +121,87 @@ pub enum TokKind {
     NativeProto(String),
 }
 
+/// An object every unit shares (decision 151): the runtime's own objects
+/// (`Object.prototype` and the builtin prototypes, the builtin namespaces and
+/// the global object, builtin function values) are one object for the whole
+/// program, and ⊤ may be any of them. A value contract names them
+/// (`ValueContract::shared`); what one unit does to them is every unit's
+/// ([`SharedWrite`]).
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Shared {
+    Top,
+    ObjectProto,
+    Builtin(BuiltinNs),
+    BuiltinFn,
+    NativeProto(String),
+}
+
+/// What a unit's solve can observe of the [`Shared`] objects: the ones its
+/// code reaches (their fields, members, prototype lookups), and the keys of
+/// its lookups that still pass a native prototype or read a program-owned
+/// global (`Model::native_missing`), which a write of ⊤ under the key would
+/// turn opaque. The driver solves a unit again only for a write it can see
+/// (`units::run`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SharedReads {
+    /// The shared objects it reads fields of, by key (`None`: under a
+    /// computed key, so every key).
+    pub objects: std::collections::BTreeMap<Shared, Option<std::collections::BTreeSet<String>>>,
+    pub keys: std::collections::BTreeSet<String>,
+}
+
+impl SharedReads {
+    /// It reads `s` under key `k` (`None`: a computed write, any key).
+    fn reads(&self, s: &Shared, k: Option<&String>) -> bool {
+        match (self.objects.get(s), k) {
+            (None, _) => false,
+            (Some(None), _) | (Some(Some(_)), None) => true,
+            (Some(Some(ks)), Some(k)) => ks.contains(k),
+        }
+    }
+
+    pub fn sees(&self, w: &SharedWrite) -> bool {
+        match w {
+            SharedWrite::Handed(_) => false,
+            // E23: every lookup.
+            SharedWrite::Accessor(Shared::ObjectProto, _) => true,
+            SharedWrite::Store(Shared::Top, k) => match k {
+                Some(k) => self.keys.contains(k),
+                None => !self.keys.is_empty(),
+            },
+            SharedWrite::Accessor(Shared::Top, k) => self.keys.contains(k),
+            SharedWrite::Accessor(s, k) => self.reads(s, Some(k)) || self.keys.contains(k),
+            SharedWrite::Store(s, k) => {
+                self.reads(s, k.as_ref())
+                    || match k {
+                        Some(k) => self.keys.contains(k),
+                        None => !self.keys.is_empty(),
+                    }
+            }
+            SharedWrite::Unmodeled(s) => self.objects.contains_key(s) || !self.keys.is_empty(),
+        }
+    }
+}
+
+/// What a unit does to a [`Shared`] object that other units' lookups can
+/// see: published by every unit (`ProgramFacts::shared_out`) and replayed in
+/// every unit's solve (`Model::replay_shared`), as whole-program facts see
+/// every module's writes in one solve.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum SharedWrite {
+    /// A store under a key (`None`: computed) (`Model::store_into`).
+    Store(Shared, Option<String>),
+    /// An accessor installed under a key (`Cons::AccessorInstall`).
+    Accessor(Shared, String),
+    /// The object reached unmodeled code (`Model::escape`): any key of it
+    /// may be written.
+    Unmodeled(Shared),
+    /// The object escaped (`Model::escape`): unknown code holds it, and per
+    /// unit that includes the other units' code. It is ⊤ there, so every
+    /// unit's store into ⊤ may be a store into it (`units::shared_closure`).
+    Handed(Shared),
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TmplKind {
     /// A HIR class (user class, `__AnonShape_*` literal class, class
@@ -1012,6 +1093,9 @@ pub struct Model {
     /// element kind (`perry_hir::TYPED_ARRAY_KIND_*`).
     pub ta_elem: FxHashMap<TmplId, u8>,
     pub resolvers: FxHashMap<NodeId, Tok>,
+    /// The function standing for another unit's accessors on the shared
+    /// objects (`builtins::other_unit_accessor`).
+    pub other_accessor: Option<Tok>,
     /// The bodies of closure expressions and of function declarations
     /// (`bindings::BodyRef`: what codegen may call without the dispatcher).
     pub closures: crate::pts::FxHashSet<FnIdx>,
@@ -1040,6 +1124,22 @@ pub struct Model {
     /// An accessor was installed on `Object.prototype` while solving: every
     /// lookup in the program may run it. Kills every fact (derive).
     pub objproto_accessor: bool,
+    /// Per unit: what this unit's code does to the shared objects
+    /// ([`SharedWrite`]), not counting what it replays of other units'.
+    pub shared_out: std::collections::BTreeSet<SharedWrite>,
+    /// Writing for other units' code: replaying their shared writes
+    /// (`Model::replay_shared`), or the unit boundary standing in for what
+    /// they do with this unit's values (`Gen::unit_boundary`). Each unit
+    /// publishes its own writes; these are not this unit's.
+    pub shared_replay: bool,
+    /// The boundary's store standing in for other units' stores into what
+    /// this unit gives them (`Gen::unit_boundary`): not this unit's write.
+    pub other_units_store: Option<NodeId>,
+    /// Prototype nodes of escaped values (`Model::escape_inner`): what
+    /// escapes there is reached along a chain, not handed over as a value.
+    pub chain_sinks: crate::pts::FxHashSet<NodeId>,
+    /// Escaping through a node of `chain_sinks`.
+    pub chain_escape: bool,
     /// Why `%Function.prototype%.bind` (or the `name`/`length` it reads off
     /// its target) may not be the builtin's own data property: the first
     /// store, accessor, definition or deletion under one of those keys (or a
@@ -1664,6 +1764,37 @@ impl Model {
             TokKind::ModNs(m) => format!("ns:{m}"),
             TokKind::NativeProto(n) => format!("native:{n}"),
         }
+    }
+
+    /// What this solve can observe of the shared objects ([`SharedReads`]).
+    pub fn shared_reads(&self) -> SharedReads {
+        let mut r = SharedReads::default();
+        // An object's writes reach this solve through its field nodes, by
+        // key (its any-key field: every key); a builtin function value has
+        // none: through its property reads, any of which a write of any
+        // builtin function value turns opaque (`write_builtin_fns`).
+        for (k, &t) in &self.tok_index {
+            let read = match k {
+                TokKind::ObjectProto | TokKind::Builtin(_) | TokKind::NativeProto(_) => {
+                    if self.field_any.contains_key(&t) {
+                        Some(None)
+                    } else {
+                        self.field_keys.get(&t).map(|ks| {
+                            Some(ks.iter().map(|&a| self.atoms[a as usize].clone()).collect())
+                        })
+                    }
+                }
+                TokKind::BuiltinFn => (!self.bf_reads.is_empty()).then_some(None),
+                _ => None,
+            };
+            if let (Some(s), Some(keys)) = (self.shared_of(t), read) {
+                r.objects.insert(s, keys);
+            }
+        }
+        for &(_, a, _) in &self.native_missing {
+            r.keys.insert(self.atoms[a as usize].clone());
+        }
+        r
     }
 
     pub fn anon_post_site(&mut self, desc: &str) -> SiteId {

@@ -220,6 +220,10 @@ pub struct ProgramFacts {
     /// The displays in `layouts_out` that are other units' layouts (a
     /// stand-in's contract, forwarded): never over the owner's entry.
     pub(crate) layouts_fwd: Vec<String>,
+    /// What it does to the objects every unit shares (`model::SharedWrite`).
+    pub(crate) shared_out: Vec<model::SharedWrite>,
+    /// What its solve can observe of them (`model::SharedReads`).
+    pub(crate) shared_reads: model::SharedReads,
     pub(crate) reports: Vec<String>,
     module_digests: Vec<u64>,
 }
@@ -1410,6 +1414,12 @@ fn value_contract_of_toks(
         .filter(|&t| !(top && g.m.top_beside(t)))
         .collect();
     for &t in &toks {
+        // A runtime-owned object, by name (`Model::named_shared`).
+        if let Some(s) = g.m.named_shared(t) {
+            if !vc.shared.contains(&s) {
+                vc.shared.push(s);
+            }
+        }
         let (tm, class) = match g.m.toks[t as usize] {
             model::TokKind::Top | model::TokKind::BuiltinFn => {
                 vc.unknown = true;
@@ -1570,6 +1580,7 @@ fn value_contract_of_toks(
             v.push(cc);
         }
     }
+    vc.shared.sort();
     vc
 }
 
@@ -1659,6 +1670,17 @@ fn arg_contract_of(
                 vc.prim |= model::prim::ALL;
             }
             for t in toks.into_iter().flat_map(|t| g.m.marker_members(t)) {
+                // A runtime-owned object, by name (`Model::named_shared`); a
+                // builtin function value is unknown there besides.
+                if let Some(s) = g.m.named_shared(t) {
+                    let unknown_too = s == model::Shared::BuiltinFn;
+                    if !vc.shared.contains(&s) {
+                        vc.shared.push(s);
+                    }
+                    if !unknown_too {
+                        continue;
+                    }
+                }
                 // Another unit's function value (decision 19): by its
                 // contract; the callee's calls of it publish what they pass
                 // under its name. This unit's own function is unknown there
@@ -1816,6 +1838,9 @@ fn arg_contract_of(
             }
         }
     }
+    for p in &mut ac.params {
+        p.shared.sort();
+    }
     ac
 }
 
@@ -1873,6 +1898,12 @@ pub(crate) fn compute_in<'a>(
         g.published_args();
         g.hold_binding_writes();
         g.unit_boundary(published);
+        // The other units' writes of the shared objects (`model::SharedWrite`).
+        if let Some(p) = published {
+            for w in &p.shared {
+                g.m.replay_shared(w);
+            }
+        }
     }
     let gen_ms = t0.elapsed().as_secs_f64() * 1000.0;
     if cfg.profile {
@@ -1919,14 +1950,15 @@ pub(crate) fn compute_in<'a>(
         );
     }
     if cfg.profile || cfg.explain {
-        let mut kinds = [0usize; 6];
+        // One count per instance key kind (`Summaries::inst_key`).
+        let mut kinds = [0usize; 7];
         let mut fnkeyed = 0;
         for &(k, l, _) in g.m.sum.inst_key.keys() {
             kinds[k as usize] += 1;
             fnkeyed += (k == 1 && l == summary::LAY_NONE) as usize;
         }
         eprintln!(
-            "perry: wpfacts instances {} (site {} layout {} of them function-keyed {}, birth {}, entry {} group {}), program calls {}, calls {}",
+            "perry: wpfacts instances {} (site {} layout {} of them function-keyed {}, birth {}, entry {} group {} for-in {}), program calls {}, calls {}",
             g.m.sum.insts.len(),
             kinds[0],
             kinds[1],
@@ -1934,6 +1966,7 @@ pub(crate) fn compute_in<'a>(
             kinds[5],
             kinds[2],
             kinds[3] + kinds[4],
+            kinds[6],
             g.m.sum.n_prog,
             g.m.calls.len()
         );
@@ -2856,6 +2889,27 @@ pub(crate) fn compute_in<'a>(
         })
         .map(|c| c.display.clone())
         .collect();
+    let shared_reads = if cfg.unit {
+        g.m.shared_reads()
+    } else {
+        Default::default()
+    };
+    // What it does to the objects every unit shares (`model::SharedWrite`);
+    // past the bound it is unknown code, which may write any key of them.
+    let shared_out: Vec<model::SharedWrite> = if !cfg.unit {
+        Vec::new()
+    } else if g.m.aborted {
+        use model::{Shared, SharedWrite};
+        vec![
+            SharedWrite::Store(Shared::Top, None),
+            SharedWrite::Store(Shared::ObjectProto, None),
+            SharedWrite::Store(Shared::BuiltinFn, None),
+            SharedWrite::Unmodeled(Shared::ObjectProto),
+            SharedWrite::Unmodeled(Shared::Builtin(model::BuiltinNs::GlobalThis)),
+        ]
+    } else {
+        std::mem::take(&mut g.m.shared_out).into_iter().collect()
+    };
     let mut pf = ProgramFacts {
         super_unrelinked,
         fnproto_bind_written,
@@ -2895,6 +2949,8 @@ pub(crate) fn compute_in<'a>(
         method_args_out,
         layouts_fwd,
         writes_out,
+        shared_out,
+        shared_reads,
         module_digests: Vec::new(),
     };
     pf.module_digests = dump::module_digests(&pf);

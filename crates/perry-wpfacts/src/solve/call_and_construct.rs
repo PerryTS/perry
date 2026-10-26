@@ -789,12 +789,36 @@ impl Model {
         {
             let what = format!("reaches unmodeled code ({})", self.reasons[reason as usize]);
             crate::builtins::note_native_write(self, t, None, &what);
+            if let Some(s) = self.shared_of(t) {
+                self.note_shared(SharedWrite::Unmodeled(s));
+            }
         }
         if matches!(
             self.toks[t as usize],
             TokKind::Builtin(BuiltinNs::GlobalThis)
         ) {
             crate::builtins::note_global_in_top(self);
+            self.note_shared(SharedWrite::Unmodeled(Shared::Builtin(
+                BuiltinNs::GlobalThis,
+            )));
+        }
+        // Per unit, unknown code includes the other units' code: a
+        // runtime-owned object escaping reaches code that holds it as ⊤, and
+        // that code's stores into ⊤ may land in it (`units::shared_closure`).
+        // A value contract names one instead (`ValueContract::shared`): its
+        // readers hold it, nothing escapes. The runtime's own code never
+        // writes one (above). One reached along an escaped value's prototype
+        // chain is not given: a store into ⊤ is no store into a builtin
+        // prototype, as whole-program facts hold of ⊤ from unknown code. The
+        // global object takes no part: escaped, it already puts ⊤ in reach
+        // of stores into ⊤ (`global_in_top`).
+        if !self.chain_escape {
+            if let Some(s) = self
+                .shared_of(t)
+                .filter(|s| *s != Shared::Builtin(BuiltinNs::GlobalThis))
+            {
+                self.note_shared(SharedWrite::Handed(s));
+            }
         }
         // Runtime-owned objects do not "escape": unknown code already holds
         // them. Object.prototype's unmodeled mutations are E5/E6 (modeled
@@ -1235,6 +1259,7 @@ impl Model {
         }
         // Its prototypes are reachable (`Object.getPrototypeOf`).
         let pn = self.proto_node(t);
+        self.chain_sinks.insert(pn);
         self.cons(pn, Cons::TopSink { reason });
         // Unknown code calls the functions it reaches through `t` (its
         // fields and prototype sink above, so each escapes): they run in

@@ -301,6 +301,9 @@ pub(crate) struct ValueContract {
     pub classes: Vec<ClassContract>,
     pub fns: Vec<FnContract>,
     pub unknown: bool,
+    /// The runtime-owned objects it may hold (`Model::named_shared`), one
+    /// object for the whole program: the reader holds them as well.
+    pub shared: Vec<crate::model::Shared>,
     /// The primitive kinds it may hold (`model::prim` bits).
     pub prim: u16,
     /// The global builtins it may hold (design §17.16 (a)): a builtin is one
@@ -681,6 +684,8 @@ impl ValueContract {
         );
         join_keyed(&mut self.fns, &o.fns, |f| f.name.clone(), FnContract::join);
         self.unknown |= o.unknown;
+        union_into(&mut self.shared, &o.shared);
+        self.shared.sort();
         self.prim |= o.prim;
         // Builtins and arrays (DECISIONS 94): by identity.
         union_into(&mut self.builtins, &o.builtins);
@@ -776,6 +781,9 @@ pub(crate) struct Published {
     /// the value contract of what other units store into it (union over
     /// every unit, `Gen::local_write`).
     pub(crate) writes: FxHashMap<(String, String), ValueContract>,
+    /// What the units do to the objects every unit shares (union over every
+    /// unit, `model::SharedWrite`): each unit's solve replays them.
+    pub(crate) shared: std::collections::BTreeSet<crate::model::SharedWrite>,
     /// Each module's namespace object (design §18.2): its keys, where each
     /// resolves through re-exports (§18.14), and whether it may hold any key
     /// (an `export *` from outside the program).
@@ -1673,6 +1681,11 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
     let mut layouts_of: Vec<Vec<String>> = vec![Vec::new(); solves.len()];
     // The unit whose forwarded copy an entry is (DECISIONS 134).
     let mut copy_of: FxHashMap<String, usize> = FxHashMap::default();
+    // The shared objects' writes each round replayed (`Published::shared`),
+    // and the one each unit's latest solve saw.
+    let mut shared_rounds: Vec<std::collections::BTreeSet<crate::model::SharedWrite>> =
+        vec![Default::default()];
+    let mut shared_seen: Vec<usize> = vec![0; solves.len()];
     loop {
         rounds += 1;
         input.classes.clear();
@@ -1724,6 +1737,7 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
                     }
                 }
                 per_unit[si] = Some(u);
+                shared_seen[si] = shared_rounds.len() - 1;
             }
             // The level's contracts, published in `order` sequence: the
             // next level's one input.
@@ -2184,6 +2198,33 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
         if proto_grew {
             seeds.extend(0..solves.len());
         }
+        // The shared objects' writes (`model::SharedWrite`): last round's
+        // joined with every unit's latest, so they only grow (D16). When
+        // they grew, the units that can see a new one are solved again.
+        let mut shared = input.shared.clone();
+        for u in per_unit.iter().flatten() {
+            shared.extend(u.shared_out.iter().cloned());
+        }
+        shared_closure(&mut shared);
+        if shared != input.shared {
+            // A unit solved again only for a write it has not taken (one it
+            // replayed, or one it performs itself with the replay's effect)
+            // and can see (`model::SharedReads`).
+            for (si, u) in per_unit.iter().enumerate() {
+                let seen = &shared_rounds[shared_seen[si]];
+                let u = u.as_ref().expect("every unit solved");
+                if shared.iter().any(|w| {
+                    !seen.contains(w)
+                        && !(replay_is_own(w) && u.shared_out.contains(w))
+                        && !u.stats.aborted
+                        && u.shared_reads.sees(w)
+                }) {
+                    seeds.push(si);
+                }
+            }
+            shared_rounds.push(shared.clone());
+        }
+        input.shared = shared;
         let fresh: Vec<String> = reports
             .into_iter()
             .filter(|d| !input.broken.contains(d))
@@ -2236,8 +2277,66 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
             b.sort();
             b
         };
+        // The program's writes of the shared objects: every unit's, joined.
+        pf.shared_out = input.shared.iter().cloned().collect();
         return pf;
     }
+}
+
+/// Does replaying `w` (`Model::replay_shared`) do exactly what the unit
+/// performing `w` itself already did? A store or accessor on ⊤, an
+/// unmodeled reach and a handover run the same rules either way; a store
+/// or accessor on one object puts the other unit's unknown value there.
+fn replay_is_own(w: &crate::model::SharedWrite) -> bool {
+    use crate::model::{Shared, SharedWrite};
+    match w {
+        SharedWrite::Store(s, _) | SharedWrite::Accessor(s, _) => *s == Shared::Top,
+        SharedWrite::Unmodeled(_) | SharedWrite::Handed(_) => true,
+    }
+}
+
+/// A runtime-owned object one unit hands to unknown code (`SharedWrite::Handed`)
+/// is ⊤ in the other units' code: each store and accessor any unit performs on
+/// ⊤ is one on that object, as the whole-program solve sees it on the
+/// object's own token. A store under a computed key covers every key of its
+/// object: the stores under one key beside it are dropped, so a write that
+/// says nothing new solves no unit again.
+fn shared_closure(shared: &mut std::collections::BTreeSet<crate::model::SharedWrite>) {
+    use crate::model::{Shared, SharedWrite};
+    let handed: Vec<Shared> = shared
+        .iter()
+        .filter_map(|w| match w {
+            SharedWrite::Handed(s) => Some(s.clone()),
+            _ => None,
+        })
+        .collect();
+    let on_top: Vec<SharedWrite> = shared
+        .iter()
+        .filter(|w| {
+            matches!(
+                w,
+                SharedWrite::Store(Shared::Top, _) | SharedWrite::Accessor(Shared::Top, _)
+            )
+        })
+        .cloned()
+        .collect();
+    for s in &handed {
+        for w in &on_top {
+            shared.insert(match w {
+                SharedWrite::Store(_, k) => SharedWrite::Store(s.clone(), k.clone()),
+                SharedWrite::Accessor(_, k) => SharedWrite::Accessor(s.clone(), k.clone()),
+                _ => unreachable!("only stores and accessors on ⊤"),
+            });
+        }
+    }
+    let computed: Vec<Shared> = shared
+        .iter()
+        .filter_map(|w| match w {
+            SharedWrite::Store(s, None) => Some(s.clone()),
+            _ => None,
+        })
+        .collect();
+    shared.retain(|w| !matches!(w, SharedWrite::Store(s, Some(_)) if computed.contains(s)));
 }
 
 /// Decision 32: the units by dependency level, each level in `order`

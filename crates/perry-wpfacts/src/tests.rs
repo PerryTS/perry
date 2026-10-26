@@ -35,6 +35,7 @@ mod run_once_closed;
 mod unit_mode;
 mod unit_namespace;
 mod unit_this;
+mod unit_shared;
 
 use crate::{compute, FactsConfig, ProgramFacts, Verdict};
 
