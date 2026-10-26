@@ -428,7 +428,7 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
                 method.as_str(),
                 "Readable" | "Writable" | "Duplex" | "Transform" | "PassThrough" | "Stream"
             )
-            && (crate::node_stream::is_classic_stream_instance_of(value, method.as_str())
+            && (crate::stream_hooks::is_classic_stream_instance_of(value, method.as_str())
                 || super::tls_constructor_prototype_is_instance_of(value, method.as_str())
                 // #10798: a genuine `class X extends Stream` subclass is a real
                 // ObjectHeader carrying its own class id, chained through the

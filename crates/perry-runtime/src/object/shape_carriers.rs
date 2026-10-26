@@ -50,7 +50,7 @@ pub(crate) fn recompute_after_full_trace() {
     crate::json::note_parse_shape_cache_carriers();
     super::arguments::note_arguments_shape_carriers();
     super::alloc_basic::note_keyless_birth_carrier();
-    crate::node_stream::note_birth_carriers();
+    crate::stream_hooks::note_birth_carriers();
 
     with_transition_cache(|table| unsafe {
         for entry in (*table).iter() {

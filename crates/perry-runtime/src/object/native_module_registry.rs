@@ -355,6 +355,7 @@ pub extern "C" fn js_nm_install_domain() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_events() {
+    crate::stream_hooks::install();
     super::native_module::install_nm_ee_ops();
     nm_register_ctor(NmBucket::Events, nm_ctor_events);
     nm_register_attach(

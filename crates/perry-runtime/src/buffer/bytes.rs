@@ -617,3 +617,8 @@ pub(crate) fn copy_range_with_collection(
 ) -> Result<f64, NotBytes> {
     copy_value_inner(brand, input, start, length, Init::PoolCopy, collect)
 }
+
+/// Copy bytes into a JS Buffer value.
+pub(crate) fn buffer_from_slice(bytes: &[u8]) -> f64 {
+    from_slice(Brand::Buffer, bytes)
+}

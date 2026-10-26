@@ -1878,7 +1878,7 @@ extern "C" fn finally_cleanup_fulfill(
 
 /// Cleanup-rejected handler: reject `next` with the CLEANUP reason (overrides
 /// the upstream outcome). Captures [next_promise_ptr (i64)].
-extern "C" fn finally_cleanup_reject(
+pub(crate) extern "C" fn finally_cleanup_reject(
     closure: *const crate::closure::ClosureHeader,
     _this: crate::closure::JsThis,
     cleanup_reason: f64,

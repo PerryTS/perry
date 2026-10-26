@@ -329,9 +329,7 @@ fn read_stream_exact_bytes(stream: &RuntimeHandle<'_>, requested: usize) -> f64 
     buffer_value_from_bytes(&consumed)
 }
 
-pub(super) fn buffer_value_from_bytes(bytes: &[u8]) -> f64 {
-    crate::buffer::bytes::from_slice(crate::buffer::bytes::Brand::Buffer, bytes)
-}
+pub(super) use crate::buffer::bytes::buffer_from_slice as buffer_value_from_bytes;
 
 pub(super) fn read_stream_object_mode_chunk(stream: f64) -> f64 {
     let Some(chunks) = readable_hidden_chunks(stream) else {

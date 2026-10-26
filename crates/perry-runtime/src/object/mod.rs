@@ -215,6 +215,7 @@ pub(crate) mod native_call_method;
 pub(crate) mod native_get;
 // `pub(crate)` since #340/#341: a family that owns its prototypes outside this
 // module (`timer.rs`) installs their method names and `.length` through here.
+pub(crate) mod native_method_install;
 pub(crate) mod native_module;
 mod nm_namespace_hooks;
 pub(crate) use native_module::class_ref_id;

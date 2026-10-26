@@ -730,10 +730,10 @@ pub unsafe extern "C-unwind" fn js_fetch_or_value_super(
             };
             match method.as_str() {
                 "EventEmitter" => {
-                    return crate::node_stream::js_event_emitter_subclass_init(this_box, options)
+                    return crate::stream_hooks::js_event_emitter_subclass_init(this_box, options)
                 }
                 "EventEmitterAsyncResource" => {
-                    return crate::node_stream::js_event_emitter_async_resource_subclass_init(
+                    return crate::stream_hooks::js_event_emitter_async_resource_subclass_init(
                         this_box, options,
                     )
                 }

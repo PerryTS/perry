@@ -18,6 +18,7 @@ from pathlib import Path
 import platform
 import re
 import shutil
+import shlex
 import struct
 import subprocess
 import sys
@@ -29,6 +30,7 @@ NEGATIVES = {
     "hello": None,
     "without_math": ["global_math"],
     "without_regex": ["regex_engine"],
+    "without_node_stream": ["node_stream"],
     "fs_promises_without_streams": ["bundled_web_streams"],
 }
 
@@ -57,6 +59,12 @@ def tool(name):
     return value
 
 
+def native_install_hooks():
+    native_source = (ROOT / "crates/perry-codegen/src/nm_install.rs").read_text()
+    native_section = native_source.split("const NM_INSTALL_SYMBOLS:", 1)[1].split("\n];", 1)[0]
+    return set(re.findall(r'"(js_\w+)"', native_section))
+
+
 def inventory():
     source = (ROOT / "crates/perry/src/commands/stdlib_installs.rs").read_text()
     section = source.split("const RUNTIME_INSTALLS:", 1)[1].split("\n];", 1)[0]
@@ -64,6 +72,7 @@ def inventory():
     assert hooks, "RUNTIME_INSTALLS not found"
     stdlib_section = source.split("const INSTALLS:", 1)[1].split("\n];", 1)[0]
     stdlib_hooks = set(re.findall(r'"(js_stdlib_install_\w+)"', stdlib_section))
+    native_hooks = native_install_hooks()
     fixtures = {}
     for path in sorted(FIXTURES.glob("*.ts")):
         if path.stem in NEGATIVES:
@@ -73,20 +82,21 @@ def inventory():
         rule = re.search(r"^// HWS prefixes: (.+)$", source, re.M)
         assert hook and rule, f"{path}: missing hook/prefix declaration"
         hook = hook[1]
-        assert hook in hooks | stdlib_hooks or hook == "none (no hook yet)", f"{path}: unknown hook {hook}"
+        assert hook in hooks | stdlib_hooks | native_hooks or hook == "none (no hook yet)", f"{path}: unknown hook {hook}"
         prefixes = rule[1].split("|")
         assert all(prefixes), f"{path}: empty prefix matches every symbol"
-        if hook in hooks | stdlib_hooks:
+        if hook in hooks | stdlib_hooks | native_hooks:
             prefixes.append(hook)
         companion = re.search(r"^// HWS companion: (.+)$", source, re.M)
         fixtures[path.stem] = {"hook": hook, "prefixes": prefixes,
-                               "companion": companion[1] if companion else None}
+                               "companion": companion[1] if companion else None,
+                               "native_hook": hook in native_hooks}
     for name, fixture in fixtures.items():
         parent = fixture["companion"]
         if parent:
             assert parent in fixtures and parent != name, f"{name}: unknown companion owner {parent}"
             owner = fixtures[parent]
-            assert not owner["companion"] and fixture["hook"] == owner["hook"], f"{name}: companion hook differs"
+            assert not owner["companion"], f"{name}: companion owner is itself a companion"
             assert set(fixture["prefixes"]) <= set(owner["prefixes"]), f"{name}: companion symbols lack an absence rule"
     covered = {f["hook"] for f in fixtures.values()}
     assert hooks <= covered, f"new runtime hooks need positive witnesses: {sorted(hooks-covered)}"
@@ -204,6 +214,22 @@ def compile_witness(args, name, env, extra=""):
         assert "js_stdlib_install_compiled" not in selected, "full stdlib installs invalidate absence check"
         expected_stdlib = str(Path(env["PERRY_RUNTIME_DIR"])/"libperry_stdlib.a").encode()
         assert expected_stdlib in log, f"{name}: did not link the pinned stdlib archive"
+    # Native-module installs are calls in the compiler's program objects,
+    # rather than in its runtime feature object. Read their undefined symbols
+    # from exactly the kept objects named by the actual link invocation. Archive
+    # references cannot count as program selection or exempt leaked code.
+    links = re.findall(rb"^\[link\] invoking: ([^\r\n]*)", log, re.M)
+    assert len(links) == 1, f"{name}: missing unique link command"
+    objects = [Path(word) for word in shlex.split(links[0].decode()) if word.endswith(".o")]
+    assert objects and all(p.is_file() for p in objects), f"{name}: compiler did not keep its program objects"
+    undefined = checked([tool("llvm-nm"), "--undefined-only", "--format=posix", *objects])
+    native_hooks = native_install_hooks()
+    for row in undefined.splitlines():
+        fields = row.split()
+        if len(fields) >= 2 and fields[1] == "U":
+            symbol = fields[0][1:] if sys.platform == "darwin" else fields[0]
+            if symbol in native_hooks:
+                selected.add(symbol)
     return binary, selected, log
 
 

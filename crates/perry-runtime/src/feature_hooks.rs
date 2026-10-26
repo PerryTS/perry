@@ -84,7 +84,10 @@ impl<F: Copy> Hook<F> {
 #[cfg(test)]
 fn install_compiled_for_tests() {
     static ONCE: std::sync::Once = std::sync::Once::new();
-    ONCE.call_once(|| js_runtime_install_compiled());
+    ONCE.call_once(|| {
+        js_runtime_install_compiled();
+        crate::object::js_nm_install_events();
+    });
 }
 
 /// Run `$body` once per process, so installs are idempotent.

@@ -353,24 +353,30 @@ extern "C" fn ns_readable_resume_microtask(
     let scope = crate::gc::RuntimeHandleScope::new();
     let stream =
         scope.root_nanbox_f64(f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64));
-    let s = || stream.get_nanbox_f64();
     set_hidden_value(
-        s(),
+        stream.get_nanbox_f64(),
         hidden_readable_resume_scheduled_key(),
         f64::from_bits(TAG_FALSE),
     );
-    if readable_is_flowing(s()) && !stream_destroyed(s()) {
+    if readable_is_flowing(stream.get_nanbox_f64()) && !stream_destroyed(stream.get_nanbox_f64()) {
         // node's `resume_`: `read(0)` unless a `_read` is in flight, then
         // 'resume', the flow, and `read(0)` again while flowing.
-        let hook = has_read_hook(s());
-        if hook && !read_in_flight(s()) {
-            invoke_read_once(s());
+        let hook = has_read_hook(stream.get_nanbox_f64());
+        if hook && !read_in_flight(stream.get_nanbox_f64()) {
+            invoke_read_once(stream.get_nanbox_f64());
         }
-        let _ = emit_stream_event(s(), literal_string_value(b"resume"), &[]);
-        flush_pending_readable_chunks(s());
-        schedule_readable_from_drain(s());
-        if !hook || (readable_is_flowing(s()) && !read_in_flight(s())) {
-            invoke_read_once(s());
+        let _ = emit_stream_event(
+            stream.get_nanbox_f64(),
+            literal_string_value(b"resume"),
+            &[],
+        );
+        flush_pending_readable_chunks(stream.get_nanbox_f64());
+        schedule_readable_from_drain(stream.get_nanbox_f64());
+        if !hook
+            || (readable_is_flowing(stream.get_nanbox_f64())
+                && !read_in_flight(stream.get_nanbox_f64()))
+        {
+            invoke_read_once(stream.get_nanbox_f64());
         }
     }
     f64::from_bits(TAG_UNDEFINED)
@@ -1202,12 +1208,7 @@ extern "C" fn ns_uncork0(closure: *const ClosureHeader, this: crate::closure::Js
     uncork_stream(this_value(closure, this))
 }
 
-extern "C" fn writable_write_callback_noop(
-    _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
-) -> f64 {
-    f64::from_bits(TAG_UNDEFINED)
-}
+use crate::closure::body_call::native_noop0 as writable_write_callback_noop;
 
 fn invoke_writable_write(stream: f64, chunk: f64, enc: f64, len: f64, callback: f64) {
     let scope = crate::gc::RuntimeHandleScope::new();

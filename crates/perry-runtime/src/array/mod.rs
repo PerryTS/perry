@@ -83,6 +83,7 @@ pub use storage::array_elements_ptr;
 pub(crate) use storage::{array_front_offset, array_physical_capacity, array_truncate_length};
 mod subclass;
 pub(crate) mod subclass_elements;
+pub(crate) mod subclass_init;
 
 #[cfg(test)]
 mod callback_rooting_tests;

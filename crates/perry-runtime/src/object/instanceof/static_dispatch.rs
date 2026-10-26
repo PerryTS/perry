@@ -323,7 +323,7 @@ fn native_instanceof(
         _ => None,
     };
     if let Some(name) = classic_stream_name {
-        return if crate::node_stream::is_classic_stream_instance_of(value, name)
+        return if crate::stream_hooks::is_classic_stream_instance_of(value, name)
             || super::tls_constructor_prototype_is_instance_of(value, name)
         {
             true_val

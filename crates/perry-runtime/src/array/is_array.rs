@@ -83,7 +83,7 @@ mod tests {
             super::js_array_is_array(object).to_bits(),
             crate::value::TAG_FALSE
         );
-        crate::node_stream::js_array_subclass_init(object, 0.0);
+        crate::array::subclass_init::js_array_subclass_init(object, 0.0);
         assert_eq!(
             super::js_array_is_array(object).to_bits(),
             crate::value::TAG_TRUE

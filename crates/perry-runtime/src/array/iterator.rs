@@ -840,9 +840,7 @@ pub extern "C" fn js_get_async_iterator(value: f64) -> f64 {
     }
     // #11620: a readable stream that is a bare handle (a zlib transform) has
     // no properties to hold @@asyncIterator.
-    if let Some(iterator) =
-        crate::node_stream::async_iterator::readable_handle_async_iterator(value)
-    {
+    if let Some(iterator) = crate::stream_hooks::readable_handle_async_iterator(value) {
         return iterator;
     }
 

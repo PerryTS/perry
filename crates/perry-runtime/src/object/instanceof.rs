@@ -642,7 +642,7 @@ fn is_event_emitter_instance_value(value: f64) -> bool {
         return false;
     }
 
-    if crate::node_stream::is_classic_stream_instance_value(value) {
+    if crate::stream_hooks::is_classic_stream_instance_value(value) {
         return true;
     }
     let constructor = crate::object::bound_native_callable_export_value("events", "EventEmitter");

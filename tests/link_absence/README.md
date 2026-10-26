@@ -51,6 +51,7 @@ exercise FileHandle streams (including native property bags) and Brotli output.
 absence checks also reject a wrongly selected streams installer, so compiler
 over-selection cannot silently exempt that negative from the symbol check.
 A `HWS companion` declaration adds an independent positive for an existing
-absence rule. Its hook must match the owner and all its prefixes must be covered
-by that rule. This keeps the FileHandle API-selection test independent of the
+absence rule. Its prefixes, including its hook, must all be covered by that rule. This keeps the FileHandle API-selection test independent of the
 Brotli constructor test while requiring both engines absent in the file read.
+
+Native-module installers are selected in namespace-creation code rather than the runtime feature object. The gate reads their undefined symbols from the compiler-generated objects in the actual link invocation. References originating inside an archive cannot exempt a negative; native positives must both name their installer in a program object and exercise its API. `without_node_stream.ts` checks Array subclasses and ordinary objects with no stream install, while the stream and events-only positives exercise both owning installers.
