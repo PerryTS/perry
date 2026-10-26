@@ -816,6 +816,11 @@ pub struct Model {
     pub accessors: FxHashMap<(Tok, Atom), (Vec<Tok>, Vec<Tok>)>,
     pub accessor_keys: FxHashMap<Tok, Vec<Atom>>,
     pub writers: FxHashMap<(TmplId, Atom), FieldWriters>,
+    /// The same for the template's class object and its prototype: a static
+    /// and an instance field of one name are different properties of
+    /// different objects (FVA Q3), and a prototype member is neither.
+    pub class_writers: FxHashMap<(TmplId, Atom), FieldWriters>,
+    pub proto_writers: FxHashMap<(TmplId, Atom), FieldWriters>,
     pub any_writers: FxHashMap<TmplId, FieldWriters>,
     pub adds_keys: FxHashMap<TmplId, u32>,
     pub hard: FxHashMap<Tok, (Hard, u32)>,

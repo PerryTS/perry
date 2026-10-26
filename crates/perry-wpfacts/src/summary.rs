@@ -1083,7 +1083,7 @@ impl Model {
             .filter_map(|&(_, _, t)| self.tmpl_of(t))
             .collect();
         let mut late: FxHashMap<TmplId, Vec<Atom>> = FxHashMap::default();
-        for &(tm, a) in self.writers.keys() {
+        for &(tm, a) in self.writers.keys().chain(self.proto_writers.keys()) {
             if tms.contains(&tm) {
                 late.entry(tm).or_default().push(a);
             }

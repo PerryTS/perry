@@ -1513,7 +1513,14 @@ impl Model {
                 self.edge(src, f);
                 if let Some(tm) = tm {
                     let ctor = self.stores[site as usize].birth || self.is_ctor_phase(site, tm);
-                    let w = self.writers.entry((tm, a)).or_default();
+                    // Writers per object: an instance's, the class object's,
+                    // the prototype's.
+                    let w = match self.toks[t as usize] {
+                        TokKind::ClassObj(_) => self.class_writers.entry((tm, a)),
+                        TokKind::Proto(_) => self.proto_writers.entry((tm, a)),
+                        _ => self.writers.entry((tm, a)),
+                    }
+                    .or_default();
                     if ctor {
                         if !w.ctor.contains(&site) {
                             w.ctor.push(site);
