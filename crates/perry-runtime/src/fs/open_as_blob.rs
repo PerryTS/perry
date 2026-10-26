@@ -13,7 +13,9 @@ pub extern "C" fn js_fs_open_as_blob(path_value: f64, options_value: f64) -> f64
             Some(path) => path,
             None => validate::throw_invalid_path_arg("path", path_value),
         };
-        let metadata = fs::metadata(&path).unwrap_or_else(|_| throw_open_as_blob_error());
+        let metadata = fs::metadata(&path).unwrap_or_else(|error| {
+            crate::exception::js_throw(build_fs_error_value(&error, "stat", &path))
+        });
         if metadata.is_file() && fs::File::open(&path).is_err() {
             throw_open_as_blob_error();
         }
@@ -33,7 +35,7 @@ unsafe fn open_as_blob_content_type(options_value: f64) -> String {
     if let Some(content_type) = crate::node_submodules::blob::string_from_value(type_value) {
         return content_type;
     }
-    if crate::value::js_is_truthy(type_value) == 0 {
+    if crate::value::JSValue::from_bits(type_value.to_bits()).is_undefined() {
         return String::new();
     }
     let message = format!(
@@ -49,3 +51,6 @@ fn throw_open_as_blob_error() -> ! {
         "ERR_INVALID_ARG_VALUE",
     ))
 }
+
+#[cfg(test)]
+mod tests;
