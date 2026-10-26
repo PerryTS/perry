@@ -20,12 +20,19 @@ const ACCESSOR: u32 = 1 << 31;
 const SPILL: u32 = 1 << 30;
 const SLOT_MASK: u32 = SPILL - 1;
 
-/// Exactly five (ShapeId, slot) pairs. Zero shape means an empty answer.
-/// Shared integer storage, never indexed through a registry. ShapeIds are
-/// process-global and never reused. Each atomic word is a complete proof for
-/// this fixed key; a racing writer can cause a shape mismatch, never a torn
-/// (shape, slot). Every continuation revalidates the live link and next shape.
-/// There is no whole-memo validity bit, epoch, or cached heap address.
+/// Exactly five (LayoutWord, slot) pairs. Zero shape means an empty answer.
+/// Shared integer storage, never indexed through a registry. A LayoutWord is
+/// agent-local storage of a row, but within one image it names one shape in
+/// every agent: static rows are the image's compile-time ordinals, dynamic
+/// rows come from process-unique chunks. A compiled site's memo lives in its
+/// image's data; a runtime-crate memo is shared by every image of the process,
+/// whose static rows N..S-1 differ, so it serves only the primary image
+/// (`class_image::process_shared_memo`). A hit also needs a live receiver
+/// carrying the word, so the row it reads is published in this agent. Each
+/// atomic word is a complete proof for this fixed key; a racing writer can
+/// cause a shape mismatch, never a torn (shape, slot). Every continuation
+/// revalidates the live link and next shape. There is no whole-memo validity
+/// bit, epoch, or cached heap address.
 #[repr(C)]
 pub struct ReadSiteMemo {
     pairs: [AtomicU64; PAIRS],
@@ -75,7 +82,7 @@ unsafe fn ordinary_word(obj: *const ObjectHeader) -> Option<u32> {
     }
     let word = (*obj).parent_class_id;
     // An overflow's SHADOW_BIT deliberately prevents a site comparison.
-    crate::object::shapes::is_site_matchable_shape_id(word).then_some(word)
+    crate::object::shapes::is_site_matchable_layout_word(word).then_some(word)
 }
 
 #[inline(always)]
@@ -158,7 +165,7 @@ unsafe fn declined(obj: *const ObjectHeader, memo: &ReadSiteMemo) -> bool {
 unsafe fn decline(obj: *const ObjectHeader, memo: &ReadSiteMemo) {
     let word = (*obj).parent_class_id;
     let held = memo.pairs[0].load(Relaxed);
-    if crate::object::shapes::is_site_matchable_shape_id(word)
+    if crate::object::shapes::is_site_matchable_layout_word(word)
         && (held == 0 || held as u32 == DECLINE)
     {
         // A decline uses only word zero. Do not clear a racing positive

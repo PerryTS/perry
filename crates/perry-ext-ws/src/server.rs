@@ -179,6 +179,8 @@ pub extern "C" fn js_ws_server_new(opts_f64: f64) -> Handle {
 
     if no_server || attached_server.is_some() || port.is_none() {
         return register_handle(WsServerHandle {
+            owner_agent: perry_ffi::agent_post::current_agent(),
+            counted: false,
             listeners: HashMap::new(),
             port: 0,
             host,
@@ -193,6 +195,8 @@ pub extern "C" fn js_ws_server_new(opts_f64: f64) -> Handle {
     let port = port.unwrap();
 
     let server_handle = register_handle(WsServerHandle {
+        owner_agent: perry_ffi::agent_post::current_agent(),
+        counted: false,
         listeners: HashMap::new(),
         port,
         host: host.clone(),
@@ -237,8 +241,9 @@ pub extern "C" fn js_ws_server_new(opts_f64: f64) -> Handle {
                 server.port = bound.port;
                 server.host = bound.address;
                 server.listener_id = Some(bound.listener_id);
+                server.counted = true;
+                active_servers_add(server.owner_agent);
             }
-            WS_ACTIVE_SERVERS.fetch_add(1, Ordering::Relaxed);
             push_ws_event(PendingWsEvent::Listening(server_handle));
         }
         Err(e) => {

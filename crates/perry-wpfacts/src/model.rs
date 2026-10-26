@@ -356,6 +356,95 @@ impl Hard {
     }
 }
 
+/// What a builtin protocol touch reads on the touched value: the keys it
+/// looks up (getters included) and calls with the value as `this`, and the
+/// values it reads. The site that issues the touch knows its protocol (the
+/// operator, the syntax or the runtime helper); ECMA-262 fixes each key set.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Protocol {
+    /// ToPrimitive (ECMA-262 7.1.1), and through it ToString, ToNumber,
+    /// ToNumeric and ToPropertyKey: `@@toPrimitive`, else
+    /// OrdinaryToPrimitive's `valueOf` and `toString`. What they return is a
+    /// primitive or is discarded: nothing runs on it.
+    ToPrimitive,
+    /// GetIterator (7.4.3): `@@iterator`; it returns an iterator.
+    Iterate,
+    /// IteratorNext / IteratorClose: `next`, `return`, `throw`; they return
+    /// iterator results.
+    IterNext,
+    /// IteratorComplete / IteratorValue: reads `done` and `value`, calls
+    /// nothing.
+    IterResult,
+    /// SerializeJSONProperty (25.5.2.2): `toJSON`; what it returns and every
+    /// value read off the object are serialized in turn.
+    Json,
+    /// InstanceofOperator (13.10.2): `@@hasInstance`. OrdinaryHasInstance
+    /// reads `prototype`, which no program can make an accessor of a
+    /// function (it is non-configurable).
+    HasInstance,
+    /// [[OwnPropertyKeys]] and for-in enumeration: no lookup on an ordinary
+    /// object (a Proxy is ⊤).
+    OwnKeys,
+    /// A runtime helper that reflects over the value or mixes protocols:
+    /// any key, and a function may be called back with anything.
+    Any,
+}
+
+impl Protocol {
+    /// The keys looked up and called; `None`: any key.
+    pub fn keys(self) -> Option<&'static [&'static str]> {
+        Some(match self {
+            Protocol::ToPrimitive => &[WK_TO_PRIMITIVE, "valueOf", "toString"],
+            Protocol::Iterate => &[crate::builtins::WK_ITERATOR],
+            Protocol::IterNext => &["next", "return", "throw"],
+            Protocol::Json => &["toJSON"],
+            Protocol::HasInstance => &[WK_HAS_INSTANCE],
+            Protocol::IterResult | Protocol::OwnKeys => &[],
+            Protocol::Any => return None,
+        })
+    }
+
+    /// The keys whose values are read (and touched again for JSON).
+    pub fn reads(self) -> &'static [&'static str] {
+        match self {
+            Protocol::IterResult => &["done", "value"],
+            _ => &[],
+        }
+    }
+
+    /// The protocol run on what the called methods return.
+    pub fn of_result(self) -> Option<Protocol> {
+        match self {
+            Protocol::Iterate => Some(Protocol::IterNext),
+            Protocol::IterNext => Some(Protocol::IterResult),
+            Protocol::Json => Some(Protocol::Json),
+            Protocol::Any => Some(Protocol::Any),
+            Protocol::ToPrimitive
+            | Protocol::IterResult
+            | Protocol::HasInstance
+            | Protocol::OwnKeys => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Protocol::ToPrimitive => "toprimitive",
+            Protocol::Iterate => "iterate",
+            Protocol::IterNext => "iternext",
+            Protocol::IterResult => "iterresult",
+            Protocol::Json => "json",
+            Protocol::HasInstance => "hasinstance",
+            Protocol::OwnKeys => "ownkeys",
+            Protocol::Any => "any",
+        }
+    }
+}
+
+/// `Symbol.toPrimitive` / `Symbol.hasInstance` as HIR folds them
+/// (`Gen::read_key`).
+pub const WK_TO_PRIMITIVE: &str = "@@__perry_wk_toPrimitive";
+pub const WK_HAS_INSTANCE: &str = "@@__perry_wk_hasInstance";
+
 /// Complex constraints, attached to the node whose new tokens trigger them.
 #[derive(Clone, Copy, Debug)]
 pub enum Cons {
@@ -470,8 +559,8 @@ pub enum Cons {
     DefineAccessor { key: Atom, reason: u32 },
     /// Every token gains keys after birth (computed store …).
     AddsKeys,
-    /// Builtin protocol touch: ToPrimitive / iterator / toJSON / then …
-    Implicit { reason: u32 },
+    /// Builtin protocol touch: what `proto` reads on every token.
+    Implicit { reason: u32, proto: Protocol },
     /// The node holds `Object.create` prototype arguments (E10).
     CreateProto { reason: u32 },
     /// The node is `ProtoNode(t)`: dst ⊇ the values of `key` on each
@@ -532,6 +621,38 @@ pub enum Cons {
     /// The node is the key of `o[k]` for object token `obj`: a string,
     /// symbol or object key runs the full lookup.
     IdxKey { obj: Tok, dst: NodeId },
+    /// The node is the value of a for-in body (FVA 4.3b, `gen/for_in.rs`):
+    /// each body token runs per value of `obj` (`ForInKeys`), its runs bound
+    /// through the template call `call` (one argument: the key).
+    ForInBody { obj: NodeId, call: CallId },
+    /// The node is the object for-in body `ft` iterates: a literal whose keys
+    /// are exactly its birth keys runs the body once per key, that run's key
+    /// parameter holding the one key (`Model::key_nodes`); any other value
+    /// runs it once through `call`, with every key.
+    ForInKeys { ft: Tok, call: CallId },
+    /// The node is the key of `defineProperty(o, k, desc)` in a for-in body:
+    /// a run's one key defines it as a constant key does (`DefineAccessor`
+    /// for an accessor descriptor, else E5 HARD); any other key is E5 HARD.
+    DefineKeyed {
+        o: NodeId,
+        reason: u32,
+        accessor: bool,
+    },
+    /// The node is the key of a store into `o` in a for-in body: a run's one
+    /// key stores under that key, any other under `Key::Any`.
+    StoreKeyed {
+        o: NodeId,
+        src: NodeId,
+        site: SiteId,
+    },
+    /// The node is the key of a definition whose descriptor's get (set) is
+    /// `f`, on the objects of `holder`: a run's one key installs it under
+    /// that key, any other under the computed-key star.
+    AccessorKeyed {
+        holder: NodeId,
+        f: NodeId,
+        setter: bool,
+    },
     /// The node is an arithmetic operand: dst ⊇ the kinds its values turn
     /// into (`+` when `add`: strings concatenate).
     Arith { dst: NodeId, add: bool },
@@ -644,6 +765,11 @@ impl Cons {
             Cons::ArrayLenArg { .. } => "arraylenarg",
             Cons::IdxLoad { .. } => "idxload",
             Cons::IdxKey { .. } => "idxkey",
+            Cons::ForInBody { .. } => "forinbody",
+            Cons::ForInKeys { .. } => "forinkeys",
+            Cons::DefineKeyed { .. } => "definekeyed",
+            Cons::StoreKeyed { .. } => "storekeyed",
+            Cons::AccessorKeyed { .. } => "accessorkeyed",
             Cons::ShareBuffer { .. } => "sharebuffer",
             Cons::ThisTo { .. } => "thisto",
             Cons::CallArgs { .. } => "callargs",
@@ -787,6 +913,11 @@ pub struct Model {
     pub accessors: FxHashMap<(Tok, Atom), (Vec<Tok>, Vec<Tok>)>,
     pub accessor_keys: FxHashMap<Tok, Vec<Atom>>,
     pub writers: FxHashMap<(TmplId, Atom), FieldWriters>,
+    /// The same for the template's class object and its prototype: a static
+    /// and an instance field of one name are different properties of
+    /// different objects (FVA Q3), and a prototype member is neither.
+    pub class_writers: FxHashMap<(TmplId, Atom), FieldWriters>,
+    pub proto_writers: FxHashMap<(TmplId, Atom), FieldWriters>,
     pub any_writers: FxHashMap<TmplId, FieldWriters>,
     pub adds_keys: FxHashMap<TmplId, u32>,
     pub hard: FxHashMap<Tok, (Hard, u32)>,
@@ -803,7 +934,7 @@ pub struct Model {
     // dedup of bindings / chain walks
     pub bind_done: crate::pts::FxHashSet<(CallId, Tok, Tok)>,
     pub chain_done: crate::pts::FxHashSet<(NodeId, Tok, Key, ChainAct)>,
-    pub implicit_done: crate::pts::FxHashSet<Tok>,
+    pub implicit_done: crate::pts::FxHashSet<(Tok, Protocol)>,
     pub construct_done: crate::pts::FxHashSet<(CallId, Tok)>,
     pub idx_done: crate::pts::FxHashSet<(NodeId, Tok, NodeId, u8)>,
     pub callthis_done: crate::pts::FxHashSet<(NodeId, CallId, Tok)>,
@@ -941,6 +1072,27 @@ pub struct Model {
     /// holds ⊤ by then stored into ⊤. Only a store at a node without ⊤ marks
     /// builtin function values written.
     pub bf_stores: Vec<(NodeId, u32)>,
+    /// FVA 4.3b: a for-in body run's copy of its key variable -> the run's one
+    /// key (the variable holds nothing else).
+    pub key_nodes: FxHashMap<NodeId, Atom>,
+    /// For-in bodies run per key: (call, body token, the literal), checked
+    /// again once the worklist is empty (`settle_for_in`).
+    pub for_in_runs: Vec<(CallId, Tok, Tok)>,
+    /// (call, body token) run once with every key.
+    pub for_in_any: crate::pts::FxHashSet<(CallId, Tok)>,
+    /// (object node, body token, call) whose `ForInKeys` is attached.
+    pub for_in_on: crate::pts::FxHashSet<(NodeId, Tok, CallId)>,
+    /// (key node, operand, kind) a keyed rule (`DefineKeyed`, `StoreKeyed`,
+    /// `AccessorKeyed`) has applied once.
+    pub keyed_done: crate::pts::FxHashSet<(NodeId, NodeId, u8)>,
+    /// For-in bodies that define a property under their key.
+    pub for_in_defines: crate::pts::FxHashSet<FnIdx>,
+    /// The key variable of every for-in body: a run's copy of it holds the
+    /// run's key (`key_nodes`).
+    pub for_in_key_vars: crate::pts::FxHashSet<NodeId>,
+    /// The keys such a body may define, accessor keys from generation on
+    /// (`Gen::note_for_in_define_keys`).
+    pub for_in_define_keys: crate::pts::FxHashSet<Atom>,
     /// The node a `Cons::Store` runs on, while it runs.
     pub store_at: Option<NodeId>,
     /// A call's constant first argument (a string), for callees whose

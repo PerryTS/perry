@@ -340,11 +340,13 @@ fn class_name_refs(e: &Expr, r: &mut Refs) {
 /// module scope is module scope for the cut. The callee of a call that is a
 /// statement of its own or a `let`'s initializer, in a run-once position:
 /// a function literal called at its own site (`((module2) => {…})(module)`),
-/// a module function named nowhere else, or a local function named only at
-/// that call or the CommonJS factory (the wrapper `const _cjs =
-/// (function(){ function __perry_cjs_factory(){…} return
-/// __perry_cjs_factory(); })()`, its module record holding the factory),
-/// recursively. The statement becomes the body's statements, the parameters
+/// a closed module function (decision 13) named nowhere else, or a closed
+/// local function named only at that call or the CommonJS factory (the
+/// wrapper `const _cjs = (function(){ function __perry_cjs_factory(){…}
+/// return __perry_cjs_factory(); })()`, its module record holding the
+/// factory), recursively. Named once is not runs once: a function another
+/// module imports, a script global, or one stored or passed as a value
+/// runs for callers the module does not see, so it must be closed too. The statement becomes the body's statements, the parameters
 /// `let`s bound to the arguments and a final `return e` the `let`'s value,
 /// so the body's declarations are the module's: one instance of its locals
 /// exists, as of the module's own. A body that returns anywhere but at its
@@ -353,22 +355,21 @@ fn class_name_refs(e: &Expr, r: &mut Refs) {
 /// nothing runs once. The view serves the analysis only (sites keep their
 /// offsets).
 pub(crate) fn run_once_flat(module: &Module) -> Option<Module> {
-    let mut names: FxHashMap<u32, usize> = FxHashMap::default();
-    let mut locals: FxHashMap<u32, usize> = FxHashMap::default();
-    perry_hir::tdz_check::for_each_module_expr(module, &mut |e| match e {
-        Expr::FuncRef(id) => *names.entry(*id).or_default() += 1,
-        // Every use of a local, in a closure body too (capture lists only
-        // mirror these uses).
-        Expr::LocalGet(id) | Expr::LocalSet(id, _) | Expr::Update { id, .. } => {
-            *locals.entry(*id).or_default() += 1
-        }
-        _ => {}
-    });
+    flatten(module, &closed(module, None, &|_| true).0)
+}
+
+/// [`run_once_flat`] over the closed bindings `closed` (by key, as
+/// [`closed`] gives them).
+pub(crate) fn flatten(module: &Module, closed: &Closed) -> Option<Module> {
+    let uses = Uses::of(module);
     let mut flat = Flat {
         module,
-        names,
-        locals,
+        closed,
+        names: uses.funcs,
+        locals: uses.locals,
+        records: uses.records,
         inlined: FxHashSet::default(),
+        copies: Vec::new(),
         fn_lets: FxHashMap::default(),
         out: Vec::new(),
         changed: false,
@@ -382,15 +383,118 @@ pub(crate) fn run_once_flat(module: &Module) -> Option<Module> {
     let mut m = module.clone();
     m.functions.retain(|f| !flat.inlined.contains(&f.id));
     m.init = flat.out.into_iter().flatten().collect();
+    owns_its_copies(module, &m, &flat.copies);
     Some(m)
+}
+
+/// The references in a module: per module function its `FuncRef`s, per
+/// local its uses (reads, writes), and per local the CommonJS module
+/// records holding it (the factory argument of the wrapper's
+/// `__perry_register_path_module_partial`).
+struct Uses {
+    funcs: FxHashMap<u32, usize>,
+    locals: FxHashMap<u32, usize>,
+    records: FxHashMap<u32, usize>,
+}
+
+impl Uses {
+    fn of(module: &Module) -> Uses {
+        let mut u = Uses {
+            funcs: FxHashMap::default(),
+            locals: FxHashMap::default(),
+            records: FxHashMap::default(),
+        };
+        perry_hir::tdz_check::for_each_module_expr(module, &mut |e| match e {
+            Expr::FuncRef(id) => *u.funcs.entry(*id).or_default() += 1,
+            // Every use of a local, in a closure body too (capture lists only
+            // mirror these uses).
+            Expr::LocalGet(id) | Expr::LocalSet(id, _) | Expr::Update { id, .. } => {
+                *u.locals.entry(*id).or_default() += 1
+            }
+            Expr::NativeMethodCall {
+                module,
+                object: None,
+                method,
+                args,
+                ..
+            } if module == "__perry_runtime" && method == "registerPathModulePartial" => {
+                if let Some(Expr::LocalGet(id)) = args.get(2) {
+                    *u.records.entry(*id).or_default() += 1;
+                }
+            }
+            _ => {}
+        });
+        u
+    }
+}
+
+/// A body the flat view copied into its module scope: a module function
+/// (its id and name), a function literal bound by a `let` (its local id,
+/// and its name when the `let` is a statement of the module scope, which
+/// an export can name), or the CommonJS factory (its local id).
+enum Copy {
+    Func(u32, String),
+    Let(u32, Option<String>),
+    Factory(u32),
+}
+
+/// The copy of a run-once body owns that body's bindings: its locals and
+/// closures keep their ids, and their facts are the emitted body's,
+/// because the copy is its one activation. That holds only while nothing
+/// else reaches the emitted body. A reference to it left in the view (a
+/// `FuncRef`, a use of the dropped `let`, an export by any name, a script
+/// global; for the factory anything but its call and its module records)
+/// is another activation the copy's facts do not describe: an internal
+/// compiler error, never a fact recorded under ids two activations share.
+fn owns_its_copies(module: &Module, flat: &Module, copies: &[Copy]) {
+    let uses = Uses::of(flat);
+    let named = |name: &str| {
+        flat.exports
+            .iter()
+            .any(|e| matches!(e, Export::Named { local, .. } if local == name))
+            || flat.exported_objects.iter().any(|n| n == name)
+    };
+    for c in copies {
+        let reached = match c {
+            Copy::Func(id, name) => {
+                let listed = |l: &[(String, u32)]| l.iter().any(|(_, f)| f == id);
+                uses.funcs.contains_key(id)
+                    || flat.functions.iter().any(|f| f.id == *id)
+                    || listed(&flat.exported_functions)
+                    || listed(&flat.script_global_functions)
+                    || named(name)
+            }
+            Copy::Let(id, name) => {
+                uses.locals.contains_key(id) || name.as_deref().is_some_and(named)
+            }
+            Copy::Factory(id) => uses.locals.get(id) != uses.records.get(id),
+        };
+        if reached {
+            let (what, id) = match c {
+                Copy::Func(id, name) => (format!("function `{name}`"), id),
+                Copy::Let(id, _) => ("function literal".to_string(), id),
+                Copy::Factory(id) => ("CommonJS factory".to_string(), id),
+            };
+            panic!(
+                "internal compiler error: per-unit facts: the run-once view of {} copied the {what} (id {id}) whose emitted body the view still reaches; the copy would own bindings of another activation",
+                module.name
+            );
+        }
+    }
 }
 
 struct Flat<'a> {
     module: &'a Module,
-    /// Uses of each module function and each local (reads, writes).
+    /// The module's closed bindings (decision 13): only these run where
+    /// their one call is.
+    closed: &'a Closed,
+    /// Uses of each module function and each local (reads, writes), and the
+    /// module records holding a local.
     names: FxHashMap<u32, usize>,
     locals: FxHashMap<u32, usize>,
+    records: FxHashMap<u32, usize>,
     inlined: FxHashSet<u32>,
+    copies: Vec<Copy>,
     /// `let f = <function literal>` statements emitted so far (index in
     /// `out`): a call of `f` named nowhere else takes the literal.
     fn_lets: FxHashMap<u32, usize>,
@@ -441,7 +545,9 @@ impl Flat<'_> {
     /// Inline the call if its callee's body runs once here (true).
     fn call(&mut self, callee: &Expr, args: &[Expr], dest: Dest) -> bool {
         let lit = match callee {
-            Expr::FuncRef(id) if self.names.get(id) == Some(&1) => {
+            Expr::FuncRef(id)
+                if self.names.get(id) == Some(&1) && self.closed.contains_key(&(true, *id)) =>
+            {
                 let m = self.module;
                 let Some(f) = m.functions.iter().find(|f| f.id == *id) else {
                     return false;
@@ -450,6 +556,7 @@ impl Flat<'_> {
                     return false;
                 }
                 self.inlined.insert(*id);
+                self.copies.push(Copy::Func(*id, f.name.clone()));
                 self.body(&f.params, args, &f.body, dest);
                 return true;
             }
@@ -458,26 +565,43 @@ impl Flat<'_> {
                     return false;
                 };
                 let Some(Stmt::Let {
-                    init: Some(lit), ..
+                    name,
+                    init: Some(lit),
+                    ..
                 }) = &self.out[k]
                 else {
                     return false;
                 };
-                // Named only at this call (a self-call inside is a second
-                // use), or the CommonJS factory: the module record holds it
-                // too, the runtime's require cache, and a module body runs
-                // once (the invariant perry-hir `run_once` already gives its
-                // classes; `__perry_cjs_factory` no user code can name). Its
-                // binding stays, `undefined` here, so the record's reference
-                // keeps a declaration.
-                let factory = matches!(&self.out[k], Some(Stmt::Let { name, .. }) if name == "__perry_cjs_factory");
-                if self.locals.get(id) != Some(&1) && !factory {
+                // Closed and named only at this call (a self-call inside is a
+                // second use), or the CommonJS factory: the module record
+                // holds it too, the runtime's require cache, and a module
+                // body runs once (the invariant perry-hir `run_once` already
+                // gives its classes; `__perry_cjs_factory` no user code can
+                // name), so its every other use is a record. Its binding
+                // stays, `undefined` here, so the record's reference keeps a
+                // declaration.
+                let factory = name == "__perry_cjs_factory";
+                let uses = self.locals.get(id).copied().unwrap_or(0);
+                let once = match factory {
+                    true => uses == 1 + self.records.get(id).copied().unwrap_or(0),
+                    false => uses == 1 && self.closed.contains_key(&(false, *id)),
+                };
+                if !once {
                     return false;
                 }
                 let lit = lit.clone();
                 if !inline_literal(&lit) {
                     return false;
                 }
+                let top = self
+                    .module
+                    .init
+                    .iter()
+                    .any(|s| matches!(s, Stmt::Let { id: l, .. } if l == id));
+                self.copies.push(match factory {
+                    true => Copy::Factory(*id),
+                    false => Copy::Let(*id, top.then(|| name.clone())),
+                });
                 self.out[k] = match self.out[k].take() {
                     Some(Stmt::Let {
                         id,
@@ -659,6 +783,27 @@ pub(crate) fn closed_bindings(
     unit_of: &dyn Fn(Item) -> usize,
     named: &dyn Fn(&str) -> bool,
 ) -> (FxHashMap<String, u32>, FxHashSet<String>, FxHashSet<String>) {
+    let (_, out, published, passed) = closed(module, Some(unit_of), named);
+    (out, published, passed)
+}
+
+/// The closed bindings by key (`(true, function id)` for a module function,
+/// `(false, local id)` for a `let` bound to a function literal), each with
+/// its name (or closed key) and body id.
+type Closed = FxHashMap<(bool, u32), (String, u32)>;
+
+/// The module's closed bindings by key, and every closed name with its
+/// body's id (classes too), with the closed classes some unit publishes
+/// and the closed ones passed by name as a direct argument
+/// (`closed_bindings`). Without `unit_of` every member access counts as a
+/// use that opens the binding (run-once flattening, `run_once_flat`, as
+/// before DECISIONS 93); `named` says which exports another module names
+/// (DECISIONS 129: every one for the flattening).
+fn closed(
+    module: &Module,
+    unit_of: Option<&dyn Fn(Item) -> usize>,
+    named: &dyn Fn(&str) -> bool,
+) -> (Closed, FxHashMap<String, u32>, FxHashSet<String>, FxHashSet<String>) {
     #[derive(Default)]
     struct Use {
         refs: u32,
@@ -815,7 +960,7 @@ pub(crate) fn closed_bindings(
             .any(|n| n == name && named(n))
     };
     // The candidates: unexported, uniquely named, never written.
-    let mut cand: FxHashMap<(bool, u32), (String, u32)> = FxHashMap::default();
+    let mut cand: Closed = FxHashMap::default();
     // The item declaring a candidate (DECISIONS 93); none for a local `let`.
     let mut decl: FxHashMap<(bool, u32), Item> = FxHashMap::default();
     let unwritten = |u: Option<&Use>| u.is_none_or(|u| !u.written);
@@ -885,8 +1030,8 @@ pub(crate) fn closed_bindings(
     // pass; a callee that lets it escape breaks it in the census). The greatest
     // set: drop a candidate with any other reference until none changes.
     // Member accesses count when all are in the declaring unit (DECISIONS 93).
-    let members = |k: &(bool, u32), u: &Use| match decl.get(k) {
-        Some(&d) if u.member_items.iter().all(|&i| unit_of(i) == unit_of(d)) => {
+    let members = |k: &(bool, u32), u: &Use| match (unit_of, decl.get(k)) {
+        (Some(unit_of), Some(&d)) if u.member_items.iter().all(|&i| unit_of(i) == unit_of(d)) => {
             u.members.saturating_sub(u.receivers)
         }
         _ => 0,
@@ -921,7 +1066,7 @@ pub(crate) fn closed_bindings(
         })
         .map(|(_, (key, _))| key.clone())
         .collect();
-    let mut out: FxHashMap<String, u32> = cand.into_values().collect();
+    let mut out: FxHashMap<String, u32> = cand.values().cloned().collect();
     // Closed classes (design §18.13): a class with a constructor, no export
     // of the module, whose name no other module-scope binding has, with no
     // static member, which no class extends, and whose every naming
@@ -973,7 +1118,7 @@ pub(crate) fn closed_bindings(
         }
         out.insert(c.name.clone(), ctor.id);
     }
-    (out, published, passed)
+    (cand, out, published, passed)
 }
 
 /// The declaration units of `module`, in dependency order (a unit before

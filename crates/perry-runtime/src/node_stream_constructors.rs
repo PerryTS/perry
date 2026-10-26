@@ -421,6 +421,12 @@ pub(super) fn init_abort_signal_state(stream: &RuntimeHandle<'_>, opts: &Runtime
 pub(super) mod birth;
 #[path = "node_stream_constructors/birth_memo.rs"]
 pub(super) mod birth_memo;
+
+/// Re-note every stream birth memo word after a full trace.
+pub(crate) fn note_birth_carriers() {
+    birth::note_write_site_carriers();
+    birth_memo::note_birth_carriers();
+}
 use birth::stream_birth_field;
 
 #[path = "node_stream_constructors/builders.rs"]

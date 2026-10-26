@@ -1044,7 +1044,7 @@ fn a_once_invoked_wrapper_splits() {
                 {inner}
                 return module.exports;
             }}
-            const record: any = {{ factory: __perry_cjs_factory }};
+            __perry_register_path_module_partial("t.cjs", {{}}, __perry_cjs_factory);
             return __perry_cjs_factory();
         }})();
         console.log(_cjs);
@@ -4005,5 +4005,53 @@ fn a_method_run_on_an_argument_marker_makes_one_context() {
     assert!(!us.is_empty(), "no unit of a.ts");
     for (q, s) in us {
         assert!(!s.aborted && s.instances < 64, "{q}: aborted {} instances {}", s.aborted, s.instances);
+    }
+}
+
+#[test]
+fn another_units_json_of_a_parameter_runs_to_json_and_ends() {
+    // `ser` serializes its parameter: on the marker, the JSON protocol's
+    // reads are what the marker reaches (one touch of the reach, not one
+    // marker per level), and `w.toJSON`, two fields down, runs.
+    let b = "export function ser(p: any) { return JSON.stringify(p); }";
+    let m = "import { ser } from './b'; function main() { const w = { n: 1, toJSON() { this.n = 'x'; return 0; } }; const o = { a: { b: w } }; console.log(ser(o), w.n); } main(); main();";
+    let pf = units_with(
+        &[("b", b), ("m", m)],
+        &FactsConfig {
+            max_work: Some(2_000_000),
+            ..FactsConfig::default()
+        },
+    );
+    assert!(!pf.stats.aborted, "{}", pf.dump_text());
+    let w = pf
+        .templates
+        .iter()
+        .find(|t| t.birth_keys == ["n", "toJSON"])
+        .expect("w literal");
+    assert!(!field(w, "n").readonly, "{}", pf.dump_text());
+}
+
+#[test]
+fn a_published_literal_field_may_hold_another_units_layout() {
+    // ts.Diagnostics (diagnosticInformationMap.generated.ts): `diag()`'s
+    // result layout is its unit's; the `Diagnostics` literal of another
+    // unit holds such records in its fields. Forwarded with the owner's
+    // contract (DECISIONS 79), nothing of the literal's unit leaves through
+    // them: the field is described by that layout, the layout stays whole
+    // and a reader of `Diagnostics.A.code` reads its kind. Was: the field
+    // was sunk, the records escaped, the census broke the layout and every
+    // round sank it again.
+    let b = "function diag(code: number, message: string) { return { code, message }; } export const Diagnostics = { A: diag(1, 'a'), B: diag(2, 'b') };";
+    let m = "import { Diagnostics } from './b'; function main() { const d = Diagnostics.A; console.log(d.code + 1, Diagnostics.B.message); } main();";
+    let pf = units_of(&[("b", b), ("m", m)]);
+    assert!(
+        !literal_broken(&pf, &["code", "message"]),
+        "{}",
+        pf.dump_text()
+    );
+    for k in ["code", "message"] {
+        for s in pf.sites.iter().filter(|s| s.key == k) {
+            assert!(!s.top, ".{k} reads ⊤\n{}", pf.dump_text());
+        }
     }
 }

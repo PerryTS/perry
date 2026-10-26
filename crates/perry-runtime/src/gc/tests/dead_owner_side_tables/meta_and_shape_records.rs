@@ -390,7 +390,7 @@ fn test_shape_record_migrates_on_owned_grow() {
         "an append-reallocation must not repoint the old immutable descriptor"
     );
     assert_eq!(
-        crate::object::shapes::shape_descriptor_by_id(id)
+        crate::object::shapes::test_descriptor_for_retained_word(id)
             .expect("grow must not delete a potentially sibling-owned descriptor")
             .keys,
         old_addr as u64,
@@ -468,7 +468,7 @@ fn test_dead_shape_descriptor_churn_returns_to_baseline_after_full_gc() {
     );
     assert!(
         ids.into_iter()
-            .all(|id| crate::object::shapes::shape_descriptor_by_id(id).is_none()),
+            .all(|id| crate::object::shapes::shape_is_retired(id)),
         "a dead shape id still resolved after its keys array was reclaimed"
     );
 }
@@ -511,7 +511,7 @@ fn test_shared_live_shape_descriptor_survives_and_rekeys_once() {
 
     let a_after = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::object::ObjectHeader;
     let b_after = (js_shadow_slot_get(1) & POINTER_MASK) as *mut crate::object::ObjectHeader;
-    let descriptor = crate::object::shapes::shape_descriptor_by_id(id)
+    let descriptor = crate::object::shapes::test_descriptor_for_retained_word(id)
         .expect("live shared descriptor disappeared during evacuation");
     unsafe {
         assert_eq!((*a_after).shape_word(), id);
@@ -609,7 +609,7 @@ fn test_forwarded_keys_capacity_cannot_disturb_the_descriptor_rewrite() {
         rewritten, 1,
         "the authoritative descriptor edge must be enumerated exactly once"
     );
-    let descriptor = crate::object::shapes::shape_descriptor_by_id(id)
+    let descriptor = crate::object::shapes::test_descriptor_for_retained_word(id)
         .expect("rewritten live descriptor disappeared");
     assert_eq!(descriptor.keys, live_keys as u64);
     assert_eq!(

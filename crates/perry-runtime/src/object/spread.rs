@@ -25,9 +25,7 @@ unsafe fn ordinary_shape(value: f64) -> Option<(*const ObjectHeader, u32)> {
     }
     let object = addr as *const ObjectHeader;
     let id = (*object).shape_word();
-    if id.wrapping_sub(shapes::SHAPE_ID_BASE)
-        >= shapes::EXOTIC_SHAPE_ID_BASE - shapes::SHAPE_ID_BASE
-    {
+    if id.wrapping_sub(shapes::SHAPE_ID_BASE) >= 2 << crate::codegen_abi::LAYOUT_BAND_SHIFT {
         return None;
     }
     Some((object, id))
@@ -37,7 +35,7 @@ unsafe fn ordinary_shape(value: f64) -> Option<(*const ObjectHeader, u32)> {
 #[optimize(size)]
 unsafe fn source_record(value: f64) -> Option<(*const ObjectHeader, u32, shapes::ShapeRecordRef)> {
     let (object, id) = ordinary_shape(value)?;
-    let record = shapes::shape_record_by_id(id)?;
+    let record = shapes::shape_record_for_word(id)?;
     record.spread_data().then_some((object, id, record))
 }
 
@@ -96,6 +94,8 @@ fn learn(
             target_len: keys.count(),
         };
     });
+    // The prefix and source are the lookup key (weak, death-pruned); only the
+    // target is owned, as for every transition entry.
     shape_carriers::note_shape_id(shape);
 }
 
@@ -220,7 +220,7 @@ unsafe fn debug_assert_edge(source: *const ObjectHeader, target_shape: u32) {
     #[cfg(debug_assertions)]
     {
         let source = crate::object::object_keys(source);
-        if let Some(target) = shapes::shape_record_by_id(target_shape) {
+        if let Some(target) = shapes::shape_record_for_word(target_shape) {
             let target_keys = target.keys() as usize as *const ArrayHeader;
             if target_keys != source.arr() {
                 key_attrs::debug_assert_positional(source.arr(), source.count());
@@ -347,7 +347,7 @@ unsafe fn spread_general(prefix: f64, source: f64) -> f64 {
                 // the named transition hit does. A leading positional copy
                 // needs no second descriptor probe merely to stamp that id.
                 let result =
-                    previous.and_then(|_| shapes::shape_record_by_id(entry.target_shape_id));
+                    previous.and_then(|_| shapes::shape_record_for_word(entry.target_shape_id));
                 if previous.is_none() || result.is_some() {
                     let size = std::mem::size_of::<ObjectHeader>()
                         + (entry.target_len as usize).max(INLINE_SLOT_FLOOR) * 8;
@@ -397,7 +397,7 @@ unsafe fn birth_cached_collect(prefix: f64, source: f64) -> f64 {
         let (object, _, r) = source_record(p).expect("rooted spread prefix retains its shape");
         Some((object, r))
     };
-    let result = shapes::shape_record_by_id(entry.target_shape_id)
+    let result = shapes::shape_record_for_word(entry.target_shape_id)
         .expect("rooted target keys retain the learned result shape");
     let object = finish_header(raw, entry.target_shape_id);
     if !crate::arena::pointer_in_nursery(object as usize) {
@@ -624,7 +624,7 @@ unsafe fn birth_slow(
     let object = allocate_fields(keys.count());
     shapes::store_kind::premark_plain_ordinary(object);
     shapes::stamp_object_shape_id_with_carrier_note(object, shape);
-    let result = shapes::shape_record_by_id(shape).unwrap();
+    let result = shapes::shape_record_for_word(shape).unwrap();
     let source_keys = positional_source(record, keys.arr());
     copy_slots(object, prefix, source, record, Some(result), source_keys);
     if keys.count() != 0 && source_keys.is_null() {

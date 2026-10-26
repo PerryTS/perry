@@ -663,7 +663,7 @@ fn test_dead_transition_cache_key_pruned_on_full_gc() {
     js_shadow_slot_set(0, ptr_bits(next_keys));
     crate::arena::arena_reset_all_blocks_to_zero();
     let dead_key = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_STRING) as usize;
-    let prev_shape_id = crate::object::shapes::shape_id_for_keys_ensure(std::ptr::null(), 0);
+    let prev_shape_id = crate::object::shapes::layout_for_keys_ensure(std::ptr::null(), 0);
 
     let occupancy_before = crate::object::test_transition_cache_occupancy();
     crate::object::test_seed_transition_cache_entry(prev_shape_id, dead_key, next_keys);
@@ -686,14 +686,18 @@ fn test_dead_transition_cache_key_pruned_on_full_gc() {
 
 #[test]
 fn test_dead_transition_cache_predecessor_shape_pruned_on_full_gc() {
+    // The predecessor is the entry's weak lookup key: the cache owns only its
+    // target, so a predecessor without another carrier retires and takes the
+    // entry with it.
     let _guard = CopyingNurseryTestGuard::new(1);
     gc_register_mutable_root_scanner(crate::object::scan_transition_cache_roots_mut);
+    gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
 
     let next_keys = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_ARRAY) as usize;
     js_shadow_slot_set(0, ptr_bits(next_keys));
     crate::arena::arena_reset_all_blocks_to_zero();
     let dead_predecessor_keys = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_ARRAY) as usize;
-    let prev_shape_id = crate::object::shapes::shape_id_for_keys_ensure(
+    let prev_shape_id = crate::object::shapes::layout_for_keys_ensure(
         dead_predecessor_keys as *const crate::ArrayHeader,
         0,
     );
@@ -708,6 +712,7 @@ fn test_dead_transition_cache_predecessor_shape_pruned_on_full_gc() {
 
     full_gc();
 
+    assert!(crate::object::shapes::shape_is_retired(prev_shape_id));
     assert_eq!(
         crate::object::test_transition_cache_occupancy(),
         occupancy_before,
@@ -726,7 +731,7 @@ fn test_live_transition_cache_entry_survives_full_gc() {
     let live_key = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_STRING) as usize;
     // This predecessor can recur from a generated module global; without such
     // an owner, retiring it and the now-unusable cache entry is intentional.
-    let prev_shape_id = crate::object::shapes::js_object_shape_id_for_keys(0, 0);
+    let prev_shape_id = crate::object::shapes::js_object_layout_for_keys(0, 0);
     js_shadow_slot_set(0, ptr_bits(next_keys));
     js_shadow_slot_set(1, ptr_bits(live_key));
 
@@ -902,7 +907,7 @@ fn object_meta_expando_edge_is_enumerated_by_the_trace_visitor() {
 }
 
 /// `ObjectMeta`'s field offsets are a contract with codegen (there are
-/// `offset_of!` asserts on `spill`, `reserved_48` and
+/// `offset_of!` asserts on `spill`, `function_layout_birth` and
 /// `array_tail_object_hot`). `expando` therefore has to be APPENDED, never
 /// inserted — inserting it after `spill` shifted the 48/56 fields and failed
 /// those compile-time asserts.
@@ -936,7 +941,7 @@ fn object_meta_expando_is_appended_not_inserted() {
 ///
 /// The entry is seeded with a LIVE `prev_shape_id` on purpose. An earlier
 /// version of this test used `prev_shape_id = 0`, which the prune's
-/// pre-existing `shape_descriptor_by_id(..).is_none()` clause already treats as
+/// pre-existing `shape_descriptor_for_word(..).is_none()` clause already treats as
 /// dead — so it passed with the new clause deleted, proving nothing. Sabotage
 /// check: removing `is_dead_owner(entry.next_keys)` must fail this test.
 #[test]
@@ -950,7 +955,7 @@ fn transition_cache_entry_does_not_pin_its_target() {
         let live_shape = crate::object::shapes::test_shape_id_for_keys(keys as usize)
             .expect("a freshly allocated object must have a registered shape");
         assert!(
-            crate::object::shapes::shape_descriptor_by_id(live_shape).is_some(),
+            crate::object::shapes::test_descriptor_for_retained_word(live_shape).is_some(),
             "test premise: prev_shape_id must be LIVE, or the prune's existing \
              dead-shape clause decides the outcome and this test is vacuous"
         );

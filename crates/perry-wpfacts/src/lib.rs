@@ -445,6 +445,11 @@ fn nested_layouts(
         let mut ds = Vec::new();
         for itm in itms {
             let display = g.m.tmpls[itm as usize].display.clone();
+            // Another unit's layout: its owner publishes it.
+            if g.forwarded_layout(itm) {
+                ds.push(display);
+                continue;
+            }
             if !layouts_out.iter().any(|c| c.display == display) {
                 let facts = templates.iter().find(|x| x.id == itm).cloned();
                 // `Gen::nested_ok` admits only literal layouts of this unit.

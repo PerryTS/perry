@@ -309,7 +309,11 @@ impl Model {
             self.fill_instances();
             self.replay_marker_links();
             let Some(n) = self.wl.pop_front() else {
-                if self.sum.pending.is_empty() && self.marker_links.is_empty() && !self.settle_bf_written() {
+                if self.sum.pending.is_empty()
+                    && self.marker_links.is_empty()
+                    && !self.settle_bf_written()
+                    && !self.settle_for_in()
+                {
                     break;
                 }
                 continue;
@@ -485,8 +489,7 @@ impl Model {
             TokKind::Top | TokKind::Builtin(_) | TokKind::BuiltinFn | TokKind::NativeProto(_) => {
                 true
             }
-            TokKind::Obj(tm, _) => matches!(self.tmpls[*tm as usize].kind,
-                TmplKind::BObj { .. }),
+            TokKind::Obj(tm, _) => matches!(self.tmpls[*tm as usize].kind, TmplKind::BObj { .. }),
             _ => false,
         };
         let fa_d = self.field_any(d);
@@ -677,8 +680,9 @@ impl Model {
                         | TokKind::Builtin(_)
                         | TokKind::BuiltinFn
                         | TokKind::NativeProto(_) => true,
-                        TokKind::Obj(tm, _) => matches!(self.tmpls[*tm as usize].kind,
-                            TmplKind::BObj { .. }),
+                        TokKind::Obj(tm, _) => {
+                            matches!(self.tmpls[*tm as usize].kind, TmplKind::BObj { .. })
+                        }
                         _ => false,
                     };
                     if opaque {
@@ -1012,13 +1016,19 @@ impl Model {
                     }
                 }
             }
-            Cons::Implicit { reason } => {
+            Cons::Implicit { reason, proto } => {
                 for &t in toks {
                     match self.toks[t as usize] {
-                        // A function handed to the runtime: it may be
-                        // called back with anything.
-                        TokKind::Func(_, _) | TokKind::Bound(_) => self.escape(t, reason),
-                        _ => self.implicit(t, reason),
+                        // A function handed to a reflecting runtime helper:
+                        // it may be called back with anything.
+                        TokKind::Func(_, _) | TokKind::Bound(_) if proto == Protocol::Any => {
+                            self.escape(t, reason)
+                        }
+                        // `instanceof` a bound function runs its target's.
+                        TokKind::Bound(_) if proto == Protocol::HasInstance => {
+                            self.escape(t, reason)
+                        }
+                        _ => self.implicit(t, reason, proto),
                     }
                 }
             }
@@ -1299,6 +1309,13 @@ impl Model {
                     }
                 }
             }
+            // A for-in run's key (FVA 4.3b): `o[k]` reads that one key.
+            Cons::IdxLoad { idx, dst } if self.key_nodes.contains_key(&idx) => {
+                let a = self.key_nodes[&idx];
+                for &t in toks {
+                    self.load_from(t, t, Key::Named(a), dst);
+                }
+            }
             Cons::IdxLoad { idx, dst } => {
                 for &t in toks {
                     if t == TOP {
@@ -1332,6 +1349,61 @@ impl Model {
                             }
                         }
                     }
+                }
+            }
+            Cons::ForInBody { obj, call } => {
+                for &t in toks {
+                    if matches!(self.toks[t as usize], TokKind::Func(..))
+                        && self.for_in_on.insert((obj, t, call))
+                    {
+                        self.cons(obj, Cons::ForInKeys { ft: t, call });
+                    }
+                }
+            }
+            Cons::ForInKeys { ft, call } => {
+                // A primitive's keys (a string's indices) are no literal's.
+                if prim != 0 {
+                    self.for_in_every_key(call, ft);
+                }
+                for &t in toks {
+                    self.for_in_tok(call, ft, t);
+                }
+            }
+            Cons::DefineKeyed {
+                o,
+                reason,
+                accessor,
+            } => {
+                if let Some(k) = self.keyed_once(n, o, 0) {
+                    match k {
+                        Some(key) if accessor => self.cons(o, Cons::DefineAccessor { key, reason }),
+                        _ => self.cons(
+                            o,
+                            Cons::Hard {
+                                kind: Hard::E5DefineProperty,
+                                reason,
+                            },
+                        ),
+                    }
+                }
+            }
+            Cons::StoreKeyed { o, src, site } => {
+                if let Some(k) = self.keyed_once(n, src, 1) {
+                    let key = k.map_or(Key::Any, Key::Named);
+                    self.cons(o, Cons::Store { key, src, site });
+                }
+            }
+            Cons::AccessorKeyed { holder, f, setter } => {
+                if let Some(k) = self.keyed_once(n, f, 2 + setter as u8) {
+                    let key = k.unwrap_or_else(|| self.atom(crate::STAR_KEY));
+                    self.cons(
+                        f,
+                        Cons::Accessor {
+                            holder,
+                            key,
+                            setter,
+                        },
+                    );
                 }
             }
             Cons::Arith { dst, add } => {
@@ -1738,6 +1810,16 @@ impl Model {
         }
     }
 
+    /// A keyed rule on key node `n` (FVA 4.3b) applies once per operand:
+    /// `Some(Some(k))` for a for-in run's one key, `Some(None)` for any
+    /// other key, `None` when it already applied.
+    fn keyed_once(&mut self, n: NodeId, x: NodeId, kind: u8) -> Option<Option<Atom>> {
+        if !self.keyed_done.insert((n, x, kind)) {
+            return None;
+        }
+        Some(self.key_nodes.get(&n).copied())
+    }
+
     pub(crate) fn store_into(&mut self, t: Tok, key: Key, src: NodeId, site: SiteId) {
         {
             self.virt_revoke(
@@ -2005,7 +2087,13 @@ impl Model {
         }
         if self.is_array_length(t, key) {
             let r = self.reason("ToNumber of an array length store");
-            self.cons(src, Cons::Implicit { reason: r });
+            self.cons(
+                src,
+                Cons::Implicit {
+                    reason: r,
+                    proto: Protocol::ToPrimitive,
+                },
+            );
             return;
         }
         // DECISIONS 94: a named key stored into an array other units hold.
@@ -2025,7 +2113,14 @@ impl Model {
                 self.edge(src, f);
                 if let Some(tm) = tm {
                     let ctor = self.stores[site as usize].birth || self.is_ctor_phase(site, tm);
-                    let w = self.writers.entry((tm, a)).or_default();
+                    // Writers per object: an instance's, the class object's,
+                    // the prototype's.
+                    let w = match self.toks[t as usize] {
+                        TokKind::ClassObj(_) => self.class_writers.entry((tm, a)),
+                        TokKind::Proto(_) => self.proto_writers.entry((tm, a)),
+                        _ => self.writers.entry((tm, a)),
+                    }
+                    .or_default();
                     if ctor {
                         if !w.ctor.contains(&site) {
                             w.ctor.push(site);
@@ -2484,7 +2579,13 @@ impl Model {
             if c.reach & MARK_ESCAPE != 0 {
                 self.sink_node(q, reason);
             } else {
-                self.cons(q, Cons::Implicit { reason });
+                self.cons(
+                    q,
+                    Cons::Implicit {
+                        reason,
+                        proto: Protocol::Any,
+                    },
+                );
             }
             self.add_tok(h, t);
         }
@@ -2727,27 +2828,76 @@ impl Model {
     /// Builtin protocol touch on `t` (ToPrimitive, iteration, toJSON, then,
     /// inspect …): every function reachable as a property of `t` or its
     /// chain runs with `this` = `t` and unknown primitive arguments.
-    pub fn implicit(&mut self, t: Tok, reason: u32) {
+    pub fn implicit(&mut self, t: Tok, reason: u32, proto: Protocol) {
+        // The touch looks up and calls the protocol's keys and reads its
+        // values, nothing else.
+        let keys: Option<Vec<Atom>> = proto
+            .keys()
+            .map(|ks| ks.iter().map(|k| self.atom(k)).collect());
+        let mut reads: Vec<Key> = proto
+            .reads()
+            .iter()
+            .map(|k| Key::Named(self.atom(k)))
+            .collect();
+        if proto == Protocol::Json {
+            reads.push(Key::Any);
+        }
+        let calls = keys.as_ref().is_none_or(|k| !k.is_empty());
+        if !calls && reads.is_empty() {
+            return;
+        }
         self.mark_use(t, crate::model::MARK_TOUCH);
         // A marker: the protocol runs on the values beside it; on the
-        // marker it calls what the marker reaches, an escape of that
-        // (`method_on`, DECISIONS 111).
+        // marker it calls what the marker reaches under the protocol's
+        // keys, an escape of that (`method_on`, DECISIONS 111). It has no
+        // accessors, so its reads run nothing; what JSON serializes in turn
+        // is what it reaches, touched (DECISIONS 45).
         if self.is_marker(t) {
-            let r = self.reach_of(t);
-            self.mark_use(r, crate::model::MARK_ESCAPE);
+            match &keys {
+                None => {
+                    let r = self.reach_of(t);
+                    self.mark_use(r, crate::model::MARK_ESCAPE);
+                }
+                Some(ks) => {
+                    for &a in ks {
+                        let m = self.marker_load(t, Some(a));
+                        self.mark_use(m, crate::model::MARK_ESCAPE);
+                    }
+                }
+            }
+            if proto == Protocol::Json {
+                let r = self.reach_of(t);
+                self.mark_use(r, crate::model::MARK_TOUCH);
+            }
             return;
         }
-        if t == TOP || !self.implicit_done.insert(t) {
+        if t == TOP || !self.implicit_done.insert((t, proto)) {
             return;
         }
-        let _ = reason;
+        // The protocol calls on a marker family's token are of its run
+        // (`call_run`): what they find on it is the family's.
+        let home = self.fam_home(t);
+        // The values the protocol reads (getters run in the load) and, for
+        // JSON, serializes in turn.
+        for key in reads {
+            let recv = self.node_l("implicit-recv");
+            let dst = self.node_l("implicit-read");
+            self.nodes[recv as usize].frame = home;
+            self.nodes[dst as usize].frame = home;
+            self.nodes[dst as usize].sink = true;
+            self.cons(recv, Cons::Load { key, dst });
+            if proto == Protocol::Json {
+                self.cons(dst, Cons::Implicit { reason, proto });
+            }
+            self.add_tok(recv, t);
+        }
+        if !calls {
+            return;
+        }
         let ret = self.node_named("implicit-ret", || format!("implicit-ret({t})"));
         // Protocol results go back to the runtime only (touched below).
         self.nodes[ret as usize].sink = true;
         let arg = self.node_l("implicit-arg");
-        // The protocol calls on a marker family's token are of its run
-        // (`call_run`): what they find on it is the family's.
-        let home = self.fam_home(t);
         self.nodes[ret as usize].frame = home;
         self.nodes[arg as usize].frame = home;
         self.add_prim(arg, prim::ALL);
@@ -2765,10 +2915,26 @@ impl Model {
         });
         self.protocol_calls.insert(call);
         self.rel(|| format!("implicitcall {call} {t} {ret} {arg}"));
-        self.method_on(t, Key::Any, call);
-        // Results of protocol methods flow back to the runtime (iterator
-        // results, ToPrimitive values, then-ables): treat as touched too.
-        self.cons(ret, Cons::Implicit { reason });
+        match keys {
+            None => self.method_on(t, Key::Any, call),
+            Some(ks) => {
+                for a in ks {
+                    self.method_on(t, Key::Named(a), call);
+                }
+            }
+        }
+        // Results of protocol methods flow back to the runtime: what the
+        // protocol runs on them (an iterator's `next`, a result's `value`,
+        // what `toJSON` returns) is a touch of its own.
+        if let Some(next) = proto.of_result() {
+            self.cons(
+                ret,
+                Cons::Implicit {
+                    reason,
+                    proto: next,
+                },
+            );
+        }
     }
 
     pub fn cons_line(&self, n: NodeId, c: &Cons) -> String {
@@ -2831,7 +2997,9 @@ impl Model {
                     self.key_name(Key::Named(*key))
                 )
             }
-            Cons::Implicit { reason } => format!("implicit {n} {reason}"),
+            Cons::Implicit { reason, proto } => {
+                format!("implicit {n} {reason} {}", proto.name())
+            }
             Cons::CreateProto { reason } => format!("createproto {n} {reason}"),
             Cons::ChainUnion { key, dst } => {
                 format!("chainunion {n} {} {dst}", self.key_name(*key))
@@ -2883,6 +3051,17 @@ impl Model {
             Cons::ArrayLenArg { dst } => format!("arraylenarg {n} {dst}"),
             Cons::IdxLoad { idx, dst } => format!("idxload {n} {idx} {dst}"),
             Cons::IdxKey { obj, dst } => format!("idxkey {n} {obj} {dst}"),
+            Cons::ForInBody { obj, call } => format!("forinbody {n} {obj} {call}"),
+            Cons::ForInKeys { ft, call } => format!("forinkeys {n} {ft} {call}"),
+            Cons::DefineKeyed {
+                o,
+                reason,
+                accessor,
+            } => format!("definekeyed {n} {o} {reason} {}", *accessor as u8),
+            Cons::StoreKeyed { o, src, site } => format!("storekeyed {n} {o} {src} {site}"),
+            Cons::AccessorKeyed { holder, f, setter } => {
+                format!("accessorkeyed {n} {holder} {f} {}", *setter as u8)
+            }
             Cons::ThisTo { origin } => format!("thisto {n} {origin}"),
             Cons::CallArgs { call } => format!("callargs {n} {call}"),
             Cons::RetInto { call, run } => format!("retinto {n} {call} {run}"),

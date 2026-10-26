@@ -27,7 +27,7 @@ fn class_kind_survives_static_field_installation_and_deletion() {
         let scope = crate::gc::RuntimeHandleScope::new();
         let obj_handle = scope.root_raw_mut_ptr(crate::object::js_object_alloc(CID, 8));
         let before = obj_handle.with_mut_ptr::<crate::ObjectHeader, _>(|obj| {
-            let before = crate::object::shapes::object_shape_id(obj);
+            let before = crate::object::shapes::object_layout_stamp(obj);
             assert!(crate::object::object_is_regular(obj));
             before
         });
@@ -37,7 +37,7 @@ fn class_kind_survives_static_field_installation_and_deletion() {
                 super::js_object_mark_class(obj as i64)
             })
         });
-        let after = crate::object::shapes::object_shape_id(obj);
+        let after = crate::object::shapes::object_layout_stamp(obj);
         assert_ne!(before, after, "becoming a class object is semantic");
         assert_eq!(
             crate::object::shapes::object_shape_descriptor(obj)

@@ -298,8 +298,11 @@ fn write_cjs_support(
     if ctx.cjs_support_keys.is_empty() {
         return Ok(None);
     }
-    let entry_key = entry_canonical.to_string_lossy();
-    let entry_is_cjs = ctx.cjs_support_keys.iter().any(|k| *k == entry_key);
+    let entry_key = perry_hir::source_remap::baked_path_of(entry_canonical);
+    let entry_is_cjs = ctx
+        .cjs_support_keys
+        .iter()
+        .any(|k| k.as_str() == &*entry_key);
     let source = super::super::cjs_wrap::support::source(&ctx.cjs_support_keys, entry_is_cjs);
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| anyhow!("create {}: {}", dir.display(), e))?;

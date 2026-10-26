@@ -9,7 +9,7 @@
 
 use crate::gen::{variant_name, Fx, Gen};
 use crate::model::*;
-use perry_hir::Expr;
+use perry_hir::{Expr, Stmt};
 
 fn kids(e: &Expr) -> Vec<&Expr> {
     let mut v = Vec::new();
@@ -48,14 +48,58 @@ impl<'a> Gen<'a> {
             && keys.iter().any(|k| matches!(*k, "get" | "set"))
     }
 
-    fn prim_kids(&mut self, fx: &Fx, e: &Expr, result: u16, why: &str) -> NodeId {
-        let ks = kids(e);
-        self.prim_op(fx, &ks, result, why)
+    /// An accessor descriptor literal (`accessor_descriptor`): its class, its
+    /// constructor arguments, and which of them its own `get` and `set` are
+    /// (a literal shape's constructor stores parameter i under its key).
+    fn accessor_literal<'e>(
+        &self,
+        mi: u32,
+        d: &'e Expr,
+    ) -> Option<(&'e str, &'e [Expr], Option<usize>, Option<usize>)> {
+        let Expr::New {
+            class_name, args, ..
+        } = d
+        else {
+            return None;
+        };
+        if !self.accessor_descriptor(mi, d)
+            || args.iter().any(|a| matches!(a, Expr::LiteralChunks(_)))
+        {
+            return None;
+        }
+        let module = self.modules[mi as usize].1;
+        let ctor = module
+            .classes
+            .iter()
+            .find(|c| &c.name == class_name)?
+            .constructor
+            .as_ref()?;
+        let arg = |key: &str| {
+            ctor.body.iter().find_map(|s| match s {
+                Stmt::Expr(Expr::PropertySet {
+                    object,
+                    property,
+                    value,
+                }) if matches!(object.as_ref(), Expr::This) && property == key => {
+                    match value.as_ref() {
+                        Expr::LocalGet(p) => ctor.params.iter().position(|q| q.id == *p),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            })
+        };
+        Some((class_name, args, arg("get"), arg("set")))
     }
 
-    fn primbox_kids(&mut self, fx: &Fx, e: &Expr, why: &str) -> NodeId {
+    fn prim_kids(&mut self, fx: &Fx, e: &Expr, result: u16, why: &str, proto: Protocol) -> NodeId {
         let ks = kids(e);
-        self.prim_box_op(fx, &ks, why)
+        self.prim_op(fx, &ks, result, why, proto)
+    }
+
+    fn primbox_kids(&mut self, fx: &Fx, e: &Expr, why: &str, proto: Protocol) -> NodeId {
+        let ks = kids(e);
+        self.prim_box_op(fx, &ks, why, proto)
     }
 
     pub(crate) fn bobj(&mut self, mi: u32, what: &'static str) -> (Tok, NodeId) {
@@ -257,9 +301,13 @@ impl<'a> Gen<'a> {
                 }
                 None => self.fail_closed(fx, e, "object-literal super"),
             },
-            Expr::EnvGet(_) | Expr::EnvGetDynamic(_) => {
-                self.prim_kids(fx, e, prim::STR | prim::UNDEF, "process.env key")
-            }
+            Expr::EnvGet(_) | Expr::EnvGetDynamic(_) => self.prim_kids(
+                fx,
+                e,
+                prim::STR | prim::UNDEF,
+                "process.env key",
+                Protocol::ToPrimitive,
+            ),
             Expr::ProcessEnv
             | Expr::ProcessArgv
             | Expr::ProcessMemoryUsage
@@ -295,7 +343,17 @@ impl<'a> Gen<'a> {
             | Expr::UrlSearchParamsValues(..)
             | Expr::UrlParse(..)
             | Expr::UrlParseWithBase { .. } => {
-                self.primbox_kids(fx, e, "primitive container builtin")
+                // Own keys and enumeration run no lookup; the others read
+                // elements or dispatch through `@@split` / `@@match`.
+                let proto = match e {
+                    Expr::ObjectKeys(..)
+                    | Expr::ForInKeys(..)
+                    | Expr::ObjectGetOwnPropertyNames(..)
+                    | Expr::ObjectGetOwnPropertySymbols(..)
+                    | Expr::ReflectOwnKeys(..) => Protocol::OwnKeys,
+                    _ => Protocol::Any,
+                };
+                self.primbox_kids(fx, e, "primitive container builtin", proto)
             }
             Expr::NamespacePatched(_) => self.prim_node(prim::BOOL),
             Expr::GlobalThisExpr => {
@@ -536,7 +594,8 @@ impl<'a> Gen<'a> {
             | Expr::ArrayIterationPatched
             | Expr::ImportMetaUrl(..)
             | Expr::ProxyRevoke(..) => {
-                self.prim_kids(fx, e, prim::ALL, "primitive builtin operand")
+                // Mixed: element reads, `raw` / `toISOString` lookups, spreads.
+                self.prim_kids(fx, e, prim::ALL, "primitive builtin operand", Protocol::Any)
             }
             // Every Math function returns a Number (ECMA-262 Math).
             Expr::MathFloor(..)
@@ -574,21 +633,44 @@ impl<'a> Gen<'a> {
             | Expr::MathAsinh(..)
             | Expr::MathAcosh(..)
             | Expr::MathAtanh(..)
-            | Expr::MathExp(..) => self.prim_kids(fx, e, prim::NUM, "primitive builtin operand"),
+            | Expr::MathExp(..) => self.prim_kids(
+                fx,
+                e,
+                prim::NUM,
+                "primitive builtin operand",
+                Protocol::ToPrimitive,
+            ),
             // The global conversions and predicates: the operation fixes the
             // kind of its result (ECMA-262; the HIR operation's contract).
-            Expr::ParseInt { .. }
-            | Expr::ParseFloat(..)
-            | Expr::NumberCoerce(..)
-            | Expr::MathMinSpread(..)
-            | Expr::MathMaxSpread(..) => {
-                self.prim_kids(fx, e, prim::NUM, "primitive builtin operand")
+            Expr::ParseInt { .. } | Expr::ParseFloat(..) | Expr::NumberCoerce(..) => self
+                .prim_kids(
+                    fx,
+                    e,
+                    prim::NUM,
+                    "primitive builtin operand",
+                    Protocol::ToPrimitive,
+                ),
+            // The spread is iterated, then each element is ToNumber'd.
+            Expr::MathMinSpread(..) | Expr::MathMaxSpread(..) => {
+                self.prim_kids(fx, e, prim::NUM, "spread Math operand", Protocol::Any)
             }
-            Expr::BigIntCoerce(..) => {
-                self.prim_kids(fx, e, prim::BIGINT, "primitive builtin operand")
-            }
-            Expr::StringCoerce(..) | Expr::TemplateStringCoerce(..) | Expr::ArrayJoin { .. } => {
-                self.prim_kids(fx, e, prim::STR, "primitive builtin operand")
+            Expr::BigIntCoerce(..) => self.prim_kids(
+                fx,
+                e,
+                prim::BIGINT,
+                "primitive builtin operand",
+                Protocol::ToPrimitive,
+            ),
+            Expr::StringCoerce(..) | Expr::TemplateStringCoerce(..) => self.prim_kids(
+                fx,
+                e,
+                prim::STR,
+                "primitive builtin operand",
+                Protocol::ToPrimitive,
+            ),
+            // The elements are read and each is ToString'd.
+            Expr::ArrayJoin { .. } => {
+                self.prim_kids(fx, e, prim::STR, "array join operand", Protocol::Any)
             }
             Expr::ObjectIs(..)
             | Expr::ObjectHasOwn(..)
@@ -601,9 +683,13 @@ impl<'a> Gen<'a> {
             | Expr::NumberIsFinite(..)
             | Expr::NumberIsInteger(..)
             | Expr::NumberIsSafeInteger(..)
-            | Expr::ReflectHas { .. } => {
-                self.prim_kids(fx, e, prim::BOOL, "primitive builtin operand")
-            }
+            | Expr::ReflectHas { .. } => self.prim_kids(
+                fx,
+                e,
+                prim::BOOL,
+                "primitive builtin operand",
+                Protocol::ToPrimitive,
+            ),
 
             // ------------------------------------------- builtin objects
             Expr::WeakRefNew(x) => {
@@ -655,14 +741,38 @@ impl<'a> Gen<'a> {
                 let on = self.expr(fx, o);
                 let kn = self.expr(fx, k);
                 let r = self.m.reason("E5 Object.defineProperty");
-                self.m.cons(kn, Cons::Implicit { reason: r });
-                let dn = self.expr(fx, d);
+                self.m.cons(
+                    kn,
+                    Cons::Implicit {
+                        reason: r,
+                        proto: Protocol::ToPrimitive,
+                    },
+                );
                 let key = match k.as_ref() {
                     Expr::String(s) => Some(s.clone()),
                     _ => None,
                 };
                 let accessor = self.accessor_descriptor(mi, d);
-                self.define_property(fx, on, key, dn, r, accessor);
+                match self.for_in_key_of(mi, k).filter(|_| key.is_none()) {
+                    Some(kp) => {
+                        // An accessor literal's own `get` / `set` is its
+                        // constructor argument: each run defines its own (the
+                        // literal's token, one per birth site, holds them all).
+                        let (dn, own) = match self.accessor_literal(mi, d) {
+                            Some((class_name, args, get, set)) => {
+                                let a = self.evaluate_all(fx, args);
+                                let own = [get, set].map(|i| i.and_then(|i| a.get(i).copied()));
+                                (self.new_named(fx, class_name, a, vec![]), own)
+                            }
+                            None => (self.expr(fx, d), [None, None]),
+                        };
+                        self.define_keyed(fx, on, kp, dn, r, accessor, own);
+                    }
+                    None => {
+                        let dn = self.expr(fx, d);
+                        self.define_property(fx, on, key, dn, r, accessor);
+                    }
+                }
                 on
             }
             Expr::ObjectDefineProperties(o, props) => {
@@ -782,12 +892,18 @@ impl<'a> Gen<'a> {
                 on
             }
             Expr::JsonParse(..) | Expr::JsonParseTyped { .. } | Expr::JsonRawJson(..) => {
-                let _ = self.prim_kids(fx, e, prim::STR, "JSON.parse text");
+                let _ = self.prim_kids(fx, e, prim::STR, "JSON.parse text", Protocol::ToPrimitive);
                 self.json_value(mi)
             }
             Expr::JsonParseReviver { text, reviver }
             | Expr::JsonParseWithReviver(text, reviver) => {
-                let _ = self.prim_op(fx, &[text], prim::STR, "JSON.parse text");
+                let _ = self.prim_op(
+                    fx,
+                    &[text],
+                    prim::STR,
+                    "JSON.parse text",
+                    Protocol::ToPrimitive,
+                );
                 let rv = self.expr(fx, reviver);
                 let v = self.json_value(mi);
                 let s = self.prim_node(prim::STR);
@@ -808,7 +924,23 @@ impl<'a> Gen<'a> {
             | Expr::JsonStringifyPretty { .. } => {
                 // toJSON / getters run; replacer functions are called by
                 // the runtime with runtime values.
-                self.prim_kids(fx, e, prim::STR | prim::UNDEF, "JSON.stringify value")
+                let ks = kids(e);
+                let out = self.prim_op(
+                    fx,
+                    &ks[..ks.len().min(1)],
+                    prim::STR | prim::UNDEF,
+                    "JSON.stringify value",
+                    Protocol::Json,
+                );
+                let rest = &ks[ks.len().min(1)..];
+                let _ = self.prim_op(
+                    fx,
+                    rest,
+                    prim::ALL,
+                    "JSON.stringify replacer",
+                    Protocol::Any,
+                );
+                out
             }
             Expr::WebAssemblyCompile(..)
             | Expr::WebAssemblyModuleNew(..)
@@ -841,7 +973,13 @@ impl<'a> Gen<'a> {
                 for k in ks {
                     let v = self.expr(fx, k);
                     let r = self.m.reason("typed-array source");
-                    self.m.cons(v, Cons::Implicit { reason: r });
+                    self.m.cons(
+                        v,
+                        Cons::Implicit {
+                            reason: r,
+                            proto: Protocol::Any,
+                        },
+                    );
                     self.m.cons(v, Cons::ShareBuffer { ta: t });
                 }
                 let fa = self.m.field_any(t);
@@ -868,7 +1006,13 @@ impl<'a> Gen<'a> {
                 // reading the source runs getters.
                 let v = self.expr(fx, value);
                 let r = self.m.reason("structuredClone source");
-                self.m.cons(v, Cons::Implicit { reason: r });
+                self.m.cons(
+                    v,
+                    Cons::Implicit {
+                        reason: r,
+                        proto: Protocol::Any,
+                    },
+                );
                 let o = self.expr(fx, options);
                 let rb = self.m.reason("B3 transfer list");
                 let tl = self.load(o, Key::Any);
@@ -1020,19 +1164,25 @@ impl<'a> Gen<'a> {
                 self.fail_closed(fx, e, &name)
             }
             Expr::UrlNew { .. } | Expr::UrlPatternNew { .. } | Expr::UrlSearchParamsNew(..) => {
-                let _ = self.prim_kids(fx, e, prim::ALL, "URL constructor operand");
+                let _ = self.prim_kids(
+                    fx,
+                    e,
+                    prim::ALL,
+                    "URL constructor operand",
+                    Protocol::ToPrimitive,
+                );
                 self.bobj(mi, "URL").1
             }
             Expr::BoxedPrimitiveNew { .. } => {
-                let _ = self.prim_kids(fx, e, prim::ALL, "boxed primitive");
+                let _ = self.prim_kids(fx, e, prim::ALL, "boxed primitive", Protocol::ToPrimitive);
                 self.bobj(mi, "BoxedPrimitive").1
             }
             Expr::DateNew(..) => {
-                let _ = self.prim_kids(fx, e, prim::ALL, "Date operand");
+                let _ = self.prim_kids(fx, e, prim::ALL, "Date operand", Protocol::ToPrimitive);
                 self.bobj(mi, "Date").1
             }
             Expr::RegExp { .. } | Expr::RegExpDynamic { .. } => {
-                let _ = self.prim_kids(fx, e, prim::ALL, "RegExp operand");
+                let _ = self.prim_kids(fx, e, prim::ALL, "RegExp operand", Protocol::Any);
                 self.bobj(mi, "RegExp").1
             }
             Expr::ErrorNew(..)
@@ -1040,18 +1190,30 @@ impl<'a> Gen<'a> {
             | Expr::RangeErrorNew(..)
             | Expr::ReferenceErrorNew(..)
             | Expr::SyntaxErrorNew(..) => {
-                let _ = self.prim_kids(fx, e, prim::ALL, "Error message");
+                let _ = self.prim_kids(fx, e, prim::ALL, "Error message", Protocol::Any);
                 self.error_obj(mi, None)
             }
             Expr::ErrorNewWithCause { message, cause } => {
-                let _ = self.prim_op(fx, &[message], prim::ALL, "Error message");
+                let _ = self.prim_op(
+                    fx,
+                    &[message],
+                    prim::ALL,
+                    "Error message",
+                    Protocol::ToPrimitive,
+                );
                 let c = self.expr(fx, cause);
                 self.error_obj(mi, Some(c))
             }
             Expr::ErrorNewWithOptions {
                 message, options, ..
             } => {
-                let _ = self.prim_op(fx, &[message], prim::ALL, "Error message");
+                let _ = self.prim_op(
+                    fx,
+                    &[message],
+                    prim::ALL,
+                    "Error message",
+                    Protocol::ToPrimitive,
+                );
                 let o = self.expr(fx, options);
                 let ca = self.m.atom("cause");
                 let c = self.load(o, Key::Named(ca));
@@ -1065,7 +1227,13 @@ impl<'a> Gen<'a> {
                 let es = self.expr(fx, errors);
                 let it = self.iterate(es);
                 let arr = self.new_arr_from(mi, "errors", &[it]);
-                let _ = self.prim_op(fx, &[message], prim::ALL, "Error message");
+                let _ = self.prim_op(
+                    fx,
+                    &[message],
+                    prim::ALL,
+                    "Error message",
+                    Protocol::ToPrimitive,
+                );
                 let c = options.as_ref().map(|o| {
                     let on = self.expr(fx, o);
                     let ca = self.m.atom("cause");
@@ -1096,14 +1264,32 @@ impl<'a> Gen<'a> {
                 pattern,
                 replacement,
             } => {
-                let _ = self.prim_op(fx, &[string, pattern], prim::STR, "String.replace");
+                let _ = self.prim_op(
+                    fx,
+                    &[string, pattern],
+                    prim::STR,
+                    "String.replace",
+                    Protocol::Any,
+                );
                 let r = self.expr(fx, replacement);
                 let s = self.prim_node(prim::STR);
                 let ret = self.callback(r, vec![s; 4]);
                 let why = self.m.reason("replace callback result ToString");
-                self.m.cons(ret, Cons::Implicit { reason: why });
+                self.m.cons(
+                    ret,
+                    Cons::Implicit {
+                        reason: why,
+                        proto: Protocol::ToPrimitive,
+                    },
+                );
                 let rc = self.m.reason("replacement ToString");
-                self.m.cons(r, Cons::Implicit { reason: rc });
+                self.m.cons(
+                    r,
+                    Cons::Implicit {
+                        reason: rc,
+                        proto: Protocol::ToPrimitive,
+                    },
+                );
                 self.prim_node(prim::STR)
             }
 
@@ -1134,9 +1320,15 @@ impl<'a> Gen<'a> {
                 array, start, end, ..
             } => {
                 let a = self.expr(fx, array);
-                let _ = self.prim_op(fx, &[start], prim::NUM, "slice index");
+                let _ = self.prim_op(
+                    fx,
+                    &[start],
+                    prim::NUM,
+                    "slice index",
+                    Protocol::ToPrimitive,
+                );
                 if let Some(x) = end {
-                    let _ = self.prim_op(fx, &[x], prim::NUM, "slice index");
+                    let _ = self.prim_op(fx, &[x], prim::NUM, "slice index", Protocol::ToPrimitive);
                 }
                 let el = self.load(a, Key::Any);
                 self.new_arr_from(mi, "slice", &[el])
@@ -1148,9 +1340,16 @@ impl<'a> Gen<'a> {
                 items,
             } => {
                 let a = self.local(mi, *array_id);
-                let _ = self.prim_op(fx, &[start], prim::NUM, "splice index");
+                let _ = self.prim_op(
+                    fx,
+                    &[start],
+                    prim::NUM,
+                    "splice index",
+                    Protocol::ToPrimitive,
+                );
                 if let Some(d) = delete_count {
-                    let _ = self.prim_op(fx, &[d], prim::NUM, "splice count");
+                    let _ =
+                        self.prim_op(fx, &[d], prim::NUM, "splice count", Protocol::ToPrimitive);
                 }
                 for it in items {
                     let v = self.expr(fx, it);
@@ -1198,7 +1397,13 @@ impl<'a> Gen<'a> {
                 let el = self.load(a, Key::Any);
                 let r = self.callback(c, vec![el, el]);
                 let why = self.m.reason("sort comparator result");
-                self.m.cons(r, Cons::Implicit { reason: why });
+                self.m.cons(
+                    r,
+                    Cons::Implicit {
+                        reason: why,
+                        proto: Protocol::ToPrimitive,
+                    },
+                );
                 a
             }
             Expr::ArrayToSorted { array, comparator } => {
@@ -1260,7 +1465,13 @@ impl<'a> Gen<'a> {
                 items,
             } => {
                 let a = self.expr(fx, array);
-                let _ = self.prim_op(fx, &[start, delete_count], prim::NUM, "toSpliced index");
+                let _ = self.prim_op(
+                    fx,
+                    &[start, delete_count],
+                    prim::NUM,
+                    "toSpliced index",
+                    Protocol::ToPrimitive,
+                );
                 let el = self.load(a, Key::Any);
                 let mut parts = vec![el];
                 for it in items {
@@ -1274,14 +1485,14 @@ impl<'a> Gen<'a> {
                 value,
             } => {
                 let a = self.expr(fx, array);
-                let _ = self.prim_op(fx, &[index], prim::NUM, "with index");
+                let _ = self.prim_op(fx, &[index], prim::NUM, "with index", Protocol::ToPrimitive);
                 let v = self.expr(fx, value);
                 let el = self.load(a, Key::Any);
                 self.new_arr_from(mi, "with", &[el, v])
             }
             Expr::ArrayAt { array, index } => {
                 let a = self.expr(fx, array);
-                let _ = self.prim_op(fx, &[index], prim::NUM, "at index");
+                let _ = self.prim_op(fx, &[index], prim::NUM, "at index", Protocol::ToPrimitive);
                 let out = self.load(a, Key::Any);
                 self.m.add_prim(out, prim::UNDEF);
                 out
@@ -1293,9 +1504,15 @@ impl<'a> Gen<'a> {
                 start,
                 end,
             } => {
-                let _ = self.prim_op(fx, &[target, start], prim::NUM, "copyWithin");
+                let _ = self.prim_op(
+                    fx,
+                    &[target, start],
+                    prim::NUM,
+                    "copyWithin",
+                    Protocol::ToPrimitive,
+                );
                 if let Some(x) = end {
-                    let _ = self.prim_op(fx, &[x], prim::NUM, "copyWithin");
+                    let _ = self.prim_op(fx, &[x], prim::NUM, "copyWithin", Protocol::ToPrimitive);
                 }
                 self.local(mi, *array_id)
             }
@@ -1306,9 +1523,15 @@ impl<'a> Gen<'a> {
                 end,
             } => {
                 let r = self.expr(fx, receiver);
-                let _ = self.prim_op(fx, &[target, start], prim::NUM, "copyWithin");
+                let _ = self.prim_op(
+                    fx,
+                    &[target, start],
+                    prim::NUM,
+                    "copyWithin",
+                    Protocol::ToPrimitive,
+                );
                 if let Some(x) = end {
-                    let _ = self.prim_op(fx, &[x], prim::NUM, "copyWithin");
+                    let _ = self.prim_op(fx, &[x], prim::NUM, "copyWithin", Protocol::ToPrimitive);
                 }
                 r
             }
@@ -1328,7 +1551,13 @@ impl<'a> Gen<'a> {
             Expr::ArrayLikeMethod { receiver, args, .. } => {
                 let r = self.expr(fx, receiver);
                 let why = self.m.reason("Array.prototype method on an array-like");
-                self.m.cons(r, Cons::Implicit { reason: why });
+                self.m.cons(
+                    r,
+                    Cons::Implicit {
+                        reason: why,
+                        proto: Protocol::Any,
+                    },
+                );
                 let el = self.load(r, Key::Any);
                 let num = self.prim_node(prim::NUM);
                 let mut outs = vec![el];
@@ -1439,7 +1668,13 @@ impl<'a> Gen<'a> {
                 let num = self.prim_node(prim::NUM);
                 let k = self.callback(f, vec![it, num]);
                 let why = self.m.reason("groupBy key");
-                self.m.cons(k, Cons::Implicit { reason: why });
+                self.m.cons(
+                    k,
+                    Cons::Implicit {
+                        reason: why,
+                        proto: Protocol::ToPrimitive,
+                    },
+                );
                 let group = self.new_arr_from(mi, "group", &[it]);
                 let (t, n) = self.bobj(mi, "groups");
                 let fa = self.m.field_any(t);
@@ -1523,10 +1758,22 @@ impl<'a> Gen<'a> {
                 let t = self.expr(fx, target);
                 let k = self.expr(fx, key);
                 let r = self.m.reason("ToPropertyKey");
-                self.m.cons(k, Cons::Implicit { reason: r });
+                self.m.cons(
+                    k,
+                    Cons::Implicit {
+                        reason: r,
+                        proto: Protocol::ToPrimitive,
+                    },
+                );
                 let rv = self.expr(fx, receiver);
                 let rr = self.m.reason("Reflect.get receiver (getters)");
-                self.m.cons(rv, Cons::Implicit { reason: rr });
+                self.m.cons(
+                    rv,
+                    Cons::Implicit {
+                        reason: rr,
+                        proto: Protocol::Any,
+                    },
+                );
                 let key = match key.as_ref() {
                     Expr::String(s) => Key::Named(self.m.atom(s)),
                     _ => Key::Any,
@@ -1542,7 +1789,13 @@ impl<'a> Gen<'a> {
                 let t = self.expr(fx, target);
                 let k = self.expr(fx, key);
                 let r = self.m.reason("ToPropertyKey");
-                self.m.cons(k, Cons::Implicit { reason: r });
+                self.m.cons(
+                    k,
+                    Cons::Implicit {
+                        reason: r,
+                        proto: Protocol::ToPrimitive,
+                    },
+                );
                 let v = self.expr(fx, value);
                 let rv = self.expr(fx, receiver);
                 let key = match key.as_ref() {
@@ -1598,7 +1851,13 @@ impl<'a> Gen<'a> {
             } => {
                 let a = self.expr(fx, arg);
                 let r = self.m.reason("dynamic import specifier");
-                self.m.cons(a, Cons::Implicit { reason: r });
+                self.m.cons(
+                    a,
+                    Cons::Implicit {
+                        reason: r,
+                        proto: Protocol::ToPrimitive,
+                    },
+                );
                 if let Some(o) = options {
                     let _ = self.expr(fx, o);
                 }

@@ -389,8 +389,28 @@ pub(super) fn has_writable_side(stream: f64) -> bool {
     get_hidden_value(stream, hidden_writable_flag_key()).is_some()
 }
 
+/// Is a `push()` made before the scheduled resume buffered rather than
+/// emitted? node's `state.sync` starts true, so it is; code that clears it
+/// (`_readableState.sync = false`, as `@fastify/busboy`'s multipart parser
+/// does on every part so a part's `'data'` lands before the next part
+/// starts) gets its chunks emitted at once. The write lands as an own
+/// property on the state view, which this reads.
 pub(super) fn should_defer_initial_data_emit(stream: f64) -> bool {
-    has_truthy_hidden(stream, hidden_readable_resume_scheduled_key()) && !has_writable_side(stream)
+    has_truthy_hidden(stream, hidden_readable_resume_scheduled_key())
+        && !has_writable_side(stream)
+        && !readable_state_sync_cleared(stream)
+}
+
+fn readable_state_sync_cleared(stream: f64) -> bool {
+    let Some(obj) = object_ptr_from_value(stream) else {
+        return false;
+    };
+    let view = crate::object::js_object_get_field_by_name_f64(obj, hidden_key(b"_readableState"));
+    let Some(view_obj) = object_ptr_from_value(view) else {
+        return false;
+    };
+    crate::object::js_object_get_field_by_name_f64(view_obj, hidden_key(b"sync")).to_bits()
+        == TAG_FALSE
 }
 
 pub(super) fn set_readable_flowing(stream: f64, value: f64) {

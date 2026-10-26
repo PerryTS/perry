@@ -909,6 +909,14 @@ fn emit_via_method(target: f64, args: &[f64]) {
     }
 }
 
+/// node's `stream.emit(event)` for an event the stream raises itself: it goes
+/// through the receiver's `emit` method, so a subclass that overrides `emit`
+/// (`@fastify/busboy` and its `Dicer` hold back `'finish'` until their parts
+/// have ended) sees the event and decides whether it goes out.
+pub(super) fn emit_stream_event_via_method(stream: f64, event: f64) {
+    emit_via_method(stream, &[event]);
+}
+
 /// `listener.listener ?? listener` — a once wrapper's original.
 fn unwrap_listener(listener: f64) -> f64 {
     if !is_callable_value(listener) {

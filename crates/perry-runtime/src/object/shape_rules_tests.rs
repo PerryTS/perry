@@ -10,7 +10,7 @@
 //! * **Rule 2** — ShapeIds are never reused, AND no other producer mints a u32
 //!   inside the ShapeId range. The second half is what makes an UNSTAMPED
 //!   object safe: its `+4` word holds `parent_class_id`, and the read path
-//!   distinguishes the two by range alone ([`shapes::is_shape_id`]).
+//!   distinguishes the two by range alone ([`shapes::is_layout_word`]).
 //! * **Rule 3** — no pointer-tagged non-object cell holds a value in the
 //!   ShapeId range at payload `+4`, so a shape compare on a mis-typed receiver
 //!   fails instead of aliasing a live shape. (Enforced at the allocation sites;
@@ -37,7 +37,7 @@ unsafe fn shaped_object(keys: &[&str]) -> *mut ObjectHeader {
         js_object_set_field_by_name(obj, key, i as f64);
     }
     assert!(
-        shapes::is_shape_id(shapes::object_shape_stamp(obj)),
+        shapes::is_layout_word(shapes::object_shape_stamp(obj)),
         "test premise: a plain object with data properties must be stamped"
     );
     obj
@@ -57,7 +57,7 @@ fn assert_shape_moves(what: &str, mutate: impl FnOnce(usize)) {
         mutate(obj as usize);
         let after = shapes::object_shape_stamp(obj);
         assert!(
-            shapes::is_shape_id(after),
+            shapes::is_layout_word(after),
             "{what}: the receiver must still carry a real ShapeId, got {after:#x}"
         );
         assert_ne!(
@@ -311,9 +311,9 @@ fn rule1_funnel_covers_array_property_bag_shapes() {
 ///
 /// It matters because the read path tells a stamped object from an unstamped
 /// one by RANGE alone — [`shapes::object_shape_stamp`] returns
-/// `parent_class_id` when `is_shape_id` accepts it, and 0 otherwise. A class
+/// `parent_class_id` when `is_layout_word` accepts it, and 0 otherwise. A class
 /// id inside the range makes an unstamped object claim a live, unrelated
-/// shape: `shape_record_by_id` then answers with someone else's ordered keys
+/// shape: `shape_record_for_word` then answers with someone else's ordered keys
 /// and live-inline-slot bound.
 #[test]
 fn rule2_class_id_producers_stay_out_of_the_shape_id_range() {
@@ -324,8 +324,8 @@ fn rule2_class_id_producers_stay_out_of_the_shape_id_range() {
             || SYNTHETIC_CLASS_ID_END <= shapes::SHAPE_ID_BASE,
         "synthetic class ids and ShapeIds must occupy disjoint u32 ranges"
     );
-    assert!(!shapes::is_shape_id(SYNTHETIC_CLASS_ID_BASE));
-    assert!(!shapes::is_shape_id(SYNTHETIC_CLASS_ID_END - 1));
+    assert!(!shapes::is_layout_word(SYNTHETIC_CLASS_ID_BASE));
+    assert!(!shapes::is_layout_word(SYNTHETIC_CLASS_ID_END - 1));
     // Every other class-id producer: codegen ids start at 1 and grow per
     // module; the builtin bands are 0x7FFF_FF00..=0x7FFF_FFFF and 0xFFFF_0000+.
     for id in [
@@ -339,7 +339,7 @@ fn rule2_class_id_producers_stay_out_of_the_shape_id_range() {
         crate::object::NATIVE_MODULE_CLASS_ID,
     ] {
         assert!(
-            !shapes::is_shape_id(id),
+            !shapes::is_layout_word(id),
             "class id {id:#x} would be read back as a ShapeId"
         );
     }
@@ -355,7 +355,7 @@ fn rule2_minted_synthetic_class_ids_are_never_shape_ids() {
     for _ in 0..4 {
         let id = super::class_registry::test_alloc_synthetic_class_id();
         assert!(
-            !shapes::is_shape_id(id),
+            !shapes::is_layout_word(id),
             "a freshly minted synthetic class id {id:#x} lands in the ShapeId \
              range: an instance born with it as parent_class_id would alias a \
              live shape"
@@ -416,12 +416,12 @@ fn rule2_a_synthetic_parent_class_id_is_not_a_shape_token() {
         .expect("the registry must hold the edge just registered");
     assert_eq!(parent, synthetic);
     assert!(
-        !shapes::is_shape_id(parent),
+        !shapes::is_layout_word(parent),
         "the parent class id {parent:#x} that the dynamic-parent allocator \
          writes to +4 would be read back as a live ShapeId"
     );
     assert!(
-        shapes::shape_record_by_id(parent).is_none(),
+        shapes::shape_is_retired(parent),
         "and it must resolve to no shape record"
     );
 }

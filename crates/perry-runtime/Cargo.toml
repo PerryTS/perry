@@ -52,6 +52,12 @@ attr-census = []
 # collection, and panic on the first disagreement. Also counts how often the
 # store-kind transitions run. Off: every hook compiles to nothing.
 shape-fact-audit = []
+# Test-only, wasm32: run the string-image classifier checks (the same ones the
+# unit tests run) at program start inside the linked wasm module, so the
+# linker-synthesized `perry_strings` bounds and the real data/stack/heap layout
+# are what they classify against. This crate's own test target does not build
+# for wasm32. Never part of a shipped archive.
+wasm-image-selftest = []
 
 # `default` keeps the shipped prebuilt libperry_runtime.a and plain
 # `cargo build`/test full-featured. The auto-optimize path builds with
@@ -270,7 +276,7 @@ ohos-napi = []
 # default builds carry it; the auto-optimize path enables it only when the
 # program contains a deferred dynamic-eval site (the #5206 notice machinery
 # already counts them).
-dyn-eval = ["dep:perry-parser", "dep:perry-diagnostics"]
+dyn-eval = ["dep:perry-parser", "dep:perry-diagnostics", "dep:swc_ecma_visit"]
 
 [dependencies]
 # Replacement/search metadata stays inline until it outgrows the operation stack.
@@ -313,6 +319,7 @@ dirs = { workspace = true, optional = true }
 # generated `new Function` bodies (no second parser). perry-parser depends
 # only on swc + perry-diagnostics — no cycle back into perry-runtime.
 perry-parser = { path = "../perry-parser", optional = true }
+swc_ecma_visit = { workspace = true, optional = true }
 perry-diagnostics = { path = "../perry-diagnostics", optional = true }
 node-semver = { version = "2.2.0", optional = true }
 toml = { workspace = true, optional = true }
@@ -436,6 +443,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Threading",
     # The shape-record reservation (`object/shapes_store/flat.rs`).
     "Win32_System_Memory",
+    "Win32_System_SystemInformation",
 ] }
 
 # #855: libc::mach_host_self is deprecated; the mach2 crate is the

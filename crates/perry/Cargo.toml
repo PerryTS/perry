@@ -71,6 +71,9 @@ perry-base64.workspace = true
 # Keep deflate-flate2: zip/deflate forces a different node:zlib backend (#10810).
 zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
 tempfile.workspace = true
+# Same Preview 1 reactor adapter supplied by wasm-component-ld, embedded for
+# the optional core-optimization/componentization path (no external asset).
+wasi-preview1-component-adapter-provider = { version = "=48.0.0", optional = true }
 libc.workspace = true
 zstd.workspace = true
 semver.workspace = true
@@ -159,7 +162,7 @@ native-cli = []
 # for why this is load-bearing rather than an optimization.
 llvm-inprocess = ["perry-codegen/llvm-inprocess"]
 # Standalone WASI target (#11375). Off by default; see perry-codegen's manifest.
-target-wasi = ["perry-codegen/target-wasi"]
+target-wasi = ["perry-codegen/target-wasi", "dep:wasi-preview1-component-adapter-provider"]
 
 # Codegen backends for non-native targets. Each enables one backend crate;
 # `all-codegen-backends` (in full-cli) turns them all on so the default build is

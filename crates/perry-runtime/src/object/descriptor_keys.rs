@@ -145,7 +145,7 @@ impl<'scope> OwnNamesSnapshot<'scope> {
                 return Self {
                     keys: scope.root_raw_mut_ptr(keys.arr()),
                     count: keys.count(),
-                    shape: shapes::object_shape_id(receiver),
+                    shape: shapes::object_layout_stamp(receiver),
                 };
             }
         }
@@ -179,7 +179,7 @@ impl<'scope> OwnNamesSnapshot<'scope> {
         }
         let receiver =
             crate::value::js_nanbox_get_pointer(object.get_nanbox_f64()) as *const ObjectHeader;
-        if shapes::object_shape_id(receiver) != self.shape {
+        if shapes::object_layout_stamp(receiver) != self.shape {
             return None;
         }
         Some(f64::from_bits(

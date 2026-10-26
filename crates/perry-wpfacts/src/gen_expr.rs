@@ -59,11 +59,12 @@ impl<'a> Gen<'a> {
         operands: &[&Expr],
         result: u16,
         why: &str,
+        proto: Protocol,
     ) -> NodeId {
         let r = self.m.reason(why);
         for o in operands {
             let v = self.expr(fx, o);
-            self.m.cons(v, Cons::Implicit { reason: r });
+            self.m.cons(v, Cons::Implicit { reason: r, proto });
         }
         let out = self.tmp("primop");
         self.m.add_prim(out, result);
@@ -72,8 +73,14 @@ impl<'a> Gen<'a> {
 
     /// A primitive operation whose result may be a runtime container of
     /// primitives (path.parse, os.cpus, process.memoryUsage …).
-    pub(crate) fn prim_box_op(&mut self, fx: &Fx, operands: &[&Expr], why: &str) -> NodeId {
-        let out = self.prim_op(fx, operands, prim::ALL, why);
+    pub(crate) fn prim_box_op(
+        &mut self,
+        fx: &Fx,
+        operands: &[&Expr],
+        why: &str,
+        proto: Protocol,
+    ) -> NodeId {
+        let out = self.prim_op(fx, operands, prim::ALL, why, proto);
         let tm = self.new_bobj_template(fx.module, "primbox");
         let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
         let fa = self.m.field_any(t);
@@ -110,7 +117,13 @@ impl<'a> Gen<'a> {
                 CallArg::Spread(e) => {
                     let v = self.expr(fx, e);
                     let r = self.m.reason("spread argument iteration");
-                    self.m.cons(v, Cons::Implicit { reason: r });
+                    self.m.cons(
+                        v,
+                        Cons::Implicit {
+                            reason: r,
+                            proto: Protocol::Iterate,
+                        },
+                    );
                     s.push(v);
                 }
             }
@@ -409,7 +422,7 @@ impl<'a> Gen<'a> {
             Expr::String(_) | Expr::WtfString(_) => self.prim_node(prim::STR),
             Expr::I18nString { params, .. } => {
                 let ops: Vec<&Expr> = params.iter().map(|(_, e)| e.as_ref()).collect();
-                self.prim_op(fx, &ops, prim::STR, "i18n param")
+                self.prim_op(fx, &ops, prim::STR, "i18n param", Protocol::ToPrimitive)
             }
             Expr::LocalGet(id) => self.local(mi, *id),
             Expr::LocalSet(id, v) => {
@@ -504,7 +517,13 @@ impl<'a> Gen<'a> {
             Expr::Update { id, .. } => {
                 let l = self.local(mi, *id);
                 let r = self.m.reason("ToNumeric");
-                self.m.cons(l, Cons::Implicit { reason: r });
+                self.m.cons(
+                    l,
+                    Cons::Implicit {
+                        reason: r,
+                        proto: Protocol::ToPrimitive,
+                    },
+                );
                 let out = self.tmp("update");
                 self.m.cons(
                     l,
@@ -524,7 +543,13 @@ impl<'a> Gen<'a> {
                 let r = self.m.reason("ToPrimitive operand");
                 for o in [left, right] {
                     let v = self.expr(fx, o);
-                    self.m.cons(v, Cons::Implicit { reason: r });
+                    self.m.cons(
+                        v,
+                        Cons::Implicit {
+                            reason: r,
+                            proto: Protocol::ToPrimitive,
+                        },
+                    );
                     self.m.cons(v, Cons::Arith { dst: out, add });
                 }
                 if shift {
@@ -538,11 +563,19 @@ impl<'a> Gen<'a> {
                     let _ = self.expr(fx, operand);
                     self.prim_node(prim::BOOL)
                 }
-                UnaryOp::Pos => self.prim_op(fx, &[operand], prim::NUM, "ToNumber"),
+                UnaryOp::Pos => {
+                    self.prim_op(fx, &[operand], prim::NUM, "ToNumber", Protocol::ToPrimitive)
+                }
                 _ => {
                     let v = self.expr(fx, operand);
                     let r = self.m.reason("ToNumeric");
-                    self.m.cons(v, Cons::Implicit { reason: r });
+                    self.m.cons(
+                        v,
+                        Cons::Implicit {
+                            reason: r,
+                            proto: Protocol::ToPrimitive,
+                        },
+                    );
                     let out = self.tmp("unary");
                     self.m.cons(
                         v,
@@ -560,7 +593,13 @@ impl<'a> Gen<'a> {
                     let _ = self.expr(fx, right);
                     self.prim_node(prim::BOOL)
                 }
-                _ => self.prim_op(fx, &[left, right], prim::BOOL, "ToPrimitive compare"),
+                _ => self.prim_op(
+                    fx,
+                    &[left, right],
+                    prim::BOOL,
+                    "ToPrimitive compare",
+                    Protocol::ToPrimitive,
+                ),
             },
             Expr::Logical { op, left, right } => {
                 let l = self.expr(fx, left);
@@ -605,14 +644,26 @@ impl<'a> Gen<'a> {
                     let tv = self.expr(fx, t);
                     // Symbol.hasInstance is a protocol method.
                     let r = self.m.reason("Symbol.hasInstance");
-                    self.m.cons(tv, Cons::Implicit { reason: r });
+                    self.m.cons(
+                        tv,
+                        Cons::Implicit {
+                            reason: r,
+                            proto: Protocol::HasInstance,
+                        },
+                    );
                 }
                 self.prim_node(prim::BOOL)
             }
             Expr::In { property, object } => {
                 let p = self.expr(fx, property);
                 let r = self.m.reason("ToPropertyKey");
-                self.m.cons(p, Cons::Implicit { reason: r });
+                self.m.cons(
+                    p,
+                    Cons::Implicit {
+                        reason: r,
+                        proto: Protocol::ToPrimitive,
+                    },
+                );
                 let _ = self.expr(fx, object);
                 self.prim_node(prim::BOOL)
             }
@@ -683,14 +734,29 @@ impl<'a> Gen<'a> {
                 let t = self.expr(fx, target);
                 let k = self.expr(fx, key);
                 let r = self.m.reason("ToPropertyKey");
-                self.m.cons(k, Cons::Implicit { reason: r });
+                self.m.cons(
+                    k,
+                    Cons::Implicit {
+                        reason: r,
+                        proto: Protocol::ToPrimitive,
+                    },
+                );
                 let v = self.expr(fx, value);
                 let rv = self.expr(fx, receiver);
-                let key = self.key_of(key);
                 let owner = self.phase_owner(fx, e, target);
-                self.store_phased(fx, e, target, t, key, v, "putvalue".into(), owner);
-                // A receiver other than the target gets the own data store.
-                self.store_phased(fx, e, target, rv, key, v, "putvalue-receiver".into(), owner);
+                if let Some(kp) = self.for_in_key_of(fx.module, key) {
+                    // A for-in run's key decides the stored key (FVA 4.3b).
+                    for (o, what) in [(t, "putvalue"), (rv, "putvalue-receiver")] {
+                        let site = self.store_site(fx.module, fx.f, what.into(), owner, false);
+                        self.mark_fn_phase(fx, e, target, site);
+                        self.m.cons(kp, Cons::StoreKeyed { o, src: v, site });
+                    }
+                } else {
+                    let key = self.key_of(key);
+                    self.store_phased(fx, e, target, t, key, v, "putvalue".into(), owner);
+                    // A receiver other than the target gets the own data store.
+                    self.store_phased(fx, e, target, rv, key, v, "putvalue-receiver".into(), owner);
+                }
                 v
             }
             Expr::PropertyUpdate {
@@ -700,7 +766,13 @@ impl<'a> Gen<'a> {
                 let a = self.m.atom(property);
                 let cur = self.load(o, Key::Named(a));
                 let r = self.m.reason("ToNumeric");
-                self.m.cons(cur, Cons::Implicit { reason: r });
+                self.m.cons(
+                    cur,
+                    Cons::Implicit {
+                        reason: r,
+                        proto: Protocol::ToPrimitive,
+                    },
+                );
                 let nv2 = self.tmp("update-val");
                 self.m.cons(
                     cur,
@@ -726,12 +798,20 @@ impl<'a> Gen<'a> {
                 let o = self.expr(fx, object);
                 let i = self.expr(fx, index);
                 let r = self.m.reason("ToPropertyKey");
-                self.m.cons(i, Cons::Implicit { reason: r });
+                self.m.cons(
+                    i,
+                    Cons::Implicit {
+                        reason: r,
+                        proto: Protocol::ToPrimitive,
+                    },
+                );
                 match self.read_key(index) {
                     Key::Named(a) => self.load(o, Key::Named(a)),
                     Key::Any => {
                         let dst = self.tmp("idxload");
-                        self.m.cons(o, Cons::IdxLoad { idx: i, dst });
+                        // A for-in run's key is its key parameter (FVA 4.3b).
+                        let idx = self.for_in_key_of(fx.module, index).unwrap_or(i);
+                        self.m.cons(o, Cons::IdxLoad { idx, dst });
                         dst
                     }
                 }
@@ -744,21 +824,47 @@ impl<'a> Gen<'a> {
                 let o = self.expr(fx, object);
                 let i = self.expr(fx, index);
                 let r = self.m.reason("ToPropertyKey");
-                self.m.cons(i, Cons::Implicit { reason: r });
+                self.m.cons(
+                    i,
+                    Cons::Implicit {
+                        reason: r,
+                        proto: Protocol::ToPrimitive,
+                    },
+                );
                 let v = self.expr(fx, value);
-                let key = self.key_of(index);
-                self.store_elem(fx, e, o, key, v, "[]=");
+                if let Some(kp) = self.for_in_key_of(fx.module, index) {
+                    // A for-in run's key decides the stored key (FVA 4.3b);
+                    // rooted as any element store (DECISIONS 149b).
+                    let site = self.store_site(fx.module, fx.f, "[]=".into(), None, false);
+                    self.mark_rooted(e, site);
+                    self.m.cons(kp, Cons::StoreKeyed { o, src: v, site });
+                } else {
+                    let key = self.key_of(index);
+                    self.store_elem(fx, e, o, key, v, "[]=");
+                }
                 v
             }
             Expr::IndexUpdate { object, index, .. } => {
                 let o = self.expr(fx, object);
                 let i = self.expr(fx, index);
                 let r = self.m.reason("ToPropertyKey");
-                self.m.cons(i, Cons::Implicit { reason: r });
+                self.m.cons(
+                    i,
+                    Cons::Implicit {
+                        reason: r,
+                        proto: Protocol::ToPrimitive,
+                    },
+                );
                 let key = self.key_of(index);
                 let cur = self.load(o, key);
                 let r2 = self.m.reason("ToNumeric");
-                self.m.cons(cur, Cons::Implicit { reason: r2 });
+                self.m.cons(
+                    cur,
+                    Cons::Implicit {
+                        reason: r2,
+                        proto: Protocol::ToPrimitive,
+                    },
+                );
                 let nv = self.tmp("update-val");
                 self.m.cons(
                     cur,

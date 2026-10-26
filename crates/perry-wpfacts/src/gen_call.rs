@@ -138,7 +138,13 @@ impl<'a> Gen<'a> {
                 let o = self.expr(fx, object);
                 let i = self.expr(fx, index);
                 let r = self.m.reason("ToPropertyKey");
-                self.m.cons(i, Cons::Implicit { reason: r });
+                self.m.cons(
+                    i,
+                    Cons::Implicit {
+                        reason: r,
+                        proto: Protocol::ToPrimitive,
+                    },
+                );
                 let key = self.read_key(index);
                 self.mcall(o, key, args, spread)
             }
@@ -611,7 +617,13 @@ impl<'a> Gen<'a> {
             "js_object_lookup_getter" | "js_object_lookup_setter" => {
                 let r = self.m.reason("__lookupGetter__ result");
                 for a in &args {
-                    self.m.cons(*a, Cons::Implicit { reason: r });
+                    self.m.cons(
+                        *a,
+                        Cons::Implicit {
+                            reason: r,
+                            proto: Protocol::Any,
+                        },
+                    );
                 }
                 self.m.top_val("__lookupGetter__ result")
             }
@@ -642,7 +654,13 @@ impl<'a> Gen<'a> {
             | "js_set_compaction_epoch" => {
                 let r = self.m.reason("ToPrimitive in runtime helper");
                 for a in &args {
-                    self.m.cons(*a, Cons::Implicit { reason: r });
+                    self.m.cons(
+                        *a,
+                        Cons::Implicit {
+                            reason: r,
+                            proto: Protocol::ToPrimitive,
+                        },
+                    );
                 }
                 let out = self.tmp("rt-prim");
                 self.m.add_prim(out, prim::ALL);

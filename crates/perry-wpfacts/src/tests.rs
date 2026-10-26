@@ -13,6 +13,7 @@ mod cjs_require;
 mod class_statics;
 mod closed_world;
 mod closure_context;
+mod for_in_keys;
 mod function_values;
 mod hub_tokens;
 mod layout_key;
@@ -20,6 +21,7 @@ mod native_proto;
 mod parent_value;
 mod prim_result;
 mod protocol_calls;
+mod protocol_keys;
 mod receiver_this;
 mod runtime_helpers;
 mod summary;
@@ -29,6 +31,7 @@ mod unit_alias;
 mod unit_ctor;
 mod unit_effects;
 mod unit_extends;
+mod run_once_closed;
 mod unit_mode;
 mod unit_namespace;
 mod unit_this;
@@ -1072,7 +1075,11 @@ fn cjs_main_record_reaches_code_through_process_main_module() {
     );
     let x = field(tmpl(&pf, "Value"), "x");
     assert!(!x.readonly, "{}", pf.dump_text());
-    assert!(x.kind.prims & crate::model::prim::STR != 0, "{}", pf.dump_text());
+    assert!(
+        x.kind.prims & crate::model::prim::STR != 0,
+        "{}",
+        pf.dump_text()
+    );
 }
 
 #[test]
@@ -1582,4 +1589,34 @@ fn a_keyed_use_in_a_recursion_walks_each_member_once_per_bit() {
         let v = m.keyed_uses.get(&mk).map_or(0, |v| v.len());
         assert_eq!(v as u64, keys, "a ring member has {v} of {keys} keys");
     }
+}
+
+#[test]
+fn a_protocol_touch_of_an_argument_marker_reads_nothing() {
+    use crate::model::{Protocol, MARK_ESCAPE, MARK_TOUCH};
+    // A marker has no accessors: a touch reads nothing off it (a read node
+    // per touch would take a fresh marker each, `Model::crosses`, and JSON
+    // would touch that one in turn without end). JSON's nested values are
+    // what the marker reaches, touched; `toJSON` is what it reaches under
+    // that key, called: an escape (DECISIONS 111).
+    let mut m = copy_solver_model();
+    m.param_marker.insert(u32::MAX - 1, (0, 0));
+    let n0 = m.node_l("p0");
+    let r = m.arg_marker(n0);
+    let nodes = m.nodes.len();
+    for p in [Protocol::Json, Protocol::IterResult, Protocol::ToPrimitive] {
+        m.implicit(r, 0, p);
+    }
+    let reads = (nodes..m.nodes.len())
+        .filter(|&n| m.labels[n].starts_with("implicit"))
+        .count();
+    assert_eq!(reads, 0, "a touch of a marker made read or call nodes");
+    let reach = m.reach_of(r);
+    assert!(m
+        .marker_use
+        .get(&reach)
+        .is_some_and(|&u| u & MARK_TOUCH != 0));
+    let a = m.atom("toJSON");
+    let tj = m.marker_load(r, Some(a));
+    assert!(m.marker_use.get(&tj).is_some_and(|&u| u & MARK_ESCAPE != 0));
 }

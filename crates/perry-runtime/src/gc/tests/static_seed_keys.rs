@@ -63,7 +63,14 @@ fn seed(requested: u32, names: &[&str]) -> u32 {
         .flat_map(|n| n.bytes().chain(std::iter::once(0)))
         .collect();
     let n = names.len() as u32;
-    js_shape_seed_plain(requested, packed.as_ptr(), packed.len() as u32, n, n, 0)
+    crate::object::static_shapes::fixtures::fixture_shape_seed_plain(
+        requested,
+        packed.as_ptr(),
+        packed.len() as u32,
+        n,
+        n,
+        0,
+    )
 }
 
 /// The literal's module init: its class keys array, then the static mint.
@@ -80,7 +87,7 @@ fn module_init_mint(requested: u32, names: &[&str]) -> u32 {
         packed.len() as u32,
         0,
     );
-    crate::object::static_shapes::js_object_shape_id_for_class_keys_static(
+    crate::object::static_shapes::fixtures::fixture_object_shape_id_for_class_keys_static(
         arr as u64, n, n, 0, requested, 0,
     )
 }
@@ -123,7 +130,7 @@ fn check_seed_survives(order_seed_first: bool, tag: &str, requested: u32) {
         published_after <= published_before,
         "the collection must not publish key lists ({published_before} -> {published_after})"
     );
-    let seeded = shapes::shape_descriptor_by_id(id).map(|d| d.keys);
+    let seeded = shapes::test_descriptor_for_retained_word(id).map(|d| d.keys);
     let names: Vec<&[u8]> = literal.iter().map(|n| n.as_bytes()).collect();
     let walked = unsafe { canonical_keys_for_names(&names) }.arr() as u64;
     assert_eq!(
@@ -140,10 +147,18 @@ fn check_seed_survives(order_seed_first: bool, tag: &str, requested: u32) {
 
 #[test]
 fn a_seed_whose_prefixes_a_dead_receiver_published_stays_reachable() {
-    check_seed_survives(true, "sk1", shapes::SHAPE_ID_BASE + 0x7_1241);
+    check_seed_survives(
+        true,
+        "sk1",
+        crate::object::static_shapes::fixtures::fixture_word(0x7_1241),
+    );
 }
 
 #[test]
 fn a_seed_that_forked_from_a_dead_receivers_prefix_stays_reachable() {
-    check_seed_survives(false, "sk2", shapes::SHAPE_ID_BASE + 0x7_1242);
+    check_seed_survives(
+        false,
+        "sk2",
+        crate::object::static_shapes::fixtures::fixture_word(0x7_1242),
+    );
 }

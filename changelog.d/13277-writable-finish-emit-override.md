@@ -1,0 +1,1 @@
+Fixed a `Writable`'s `'finish'` bypassing a subclass's `emit` override: the event is now raised through the stream's own `emit` method, as in Node, so a subclass that holds `'finish'` back (the multipart parser in `@fastify/busboy` does) controls when it goes out.

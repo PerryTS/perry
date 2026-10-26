@@ -7,8 +7,9 @@
 use super::field_rep::{slot_rep, with_slot_rep, REP_ANY, REP_F64, REP_F64_DEPRECATED};
 use super::field_rep_store::{migrate_deprecated_receiver, normalized_shape};
 use super::shapes::{
-    object_shape_descriptor, object_shape_stamp, publish_shape_result, shape_descriptor_by_id,
-    shape_descriptor_ensure_with_rep, stamp_object_shape_id_with_carrier_note,
+    object_shape_descriptor, object_shape_stamp, publish_shape_result,
+    shape_descriptor_ensure_with_rep, shape_descriptor_for_word,
+    stamp_object_shape_id_with_carrier_note,
 };
 use super::ObjectHeader;
 
@@ -47,7 +48,7 @@ unsafe fn abc() -> (*mut ObjectHeader, u32) {
 
 /// The shape with `id`'s facts and field representation `rep`.
 fn with_rep(id: u32, rep: u64) -> u32 {
-    let d = shape_descriptor_by_id(id).expect("live shape");
+    let d = shape_descriptor_for_word(id).expect("live shape");
     publish_shape_result(shape_descriptor_ensure_with_rep(
         d.keys as usize as *const crate::array::ArrayHeader,
         d.logical_key_count,
@@ -63,7 +64,7 @@ fn with_rep(id: u32, rep: u64) -> u32 {
 }
 
 fn rep_of(id: u32) -> u64 {
-    shape_descriptor_by_id(id).expect("live shape").rep
+    shape_descriptor_for_word(id).expect("live shape").rep
 }
 
 unsafe fn slot_bits(obj: *mut ObjectHeader, index: usize) -> u64 {
@@ -94,7 +95,7 @@ fn constfn_same_body_keeps_shape_and_different_body_deprecates_on_store() {
             f64::from_bits(bits(first)),
         );
         let constfn = object_shape_stamp(obj);
-        let d = shape_descriptor_by_id(constfn).expect("keyed shape");
+        let d = shape_descriptor_for_word(constfn).expect("keyed shape");
         assert_eq!(d.special_constfn_mask, 1, "runtime key-add minted ConstFn");
         assert!(!super::field_rep_store::shape_slot_is_f64(constfn, 0));
         assert_eq!(d.constfn_infos()[0].info, (*first).info as usize as u64);
@@ -155,7 +156,7 @@ fn unloadable_body_stays_any_on_runtime_key_add() {
             key("unloadable_method"),
             crate::value::js_nanbox_pointer(closure as i64),
         );
-        let d = shape_descriptor_by_id(object_shape_stamp(obj)).expect("keyed shape");
+        let d = shape_descriptor_for_word(object_shape_stamp(obj)).expect("keyed shape");
         assert_eq!(d.special_constfn_mask, 0);
         assert_eq!(slot_rep(d.rep, 0), REP_ANY);
     }
@@ -174,7 +175,7 @@ fn rebindable_this_closure_stays_any_on_runtime_key_add() {
             key("rebindable_method"),
             crate::value::js_nanbox_pointer(closure as i64),
         );
-        let d = shape_descriptor_by_id(object_shape_stamp(obj)).expect("keyed shape");
+        let d = shape_descriptor_for_word(object_shape_stamp(obj)).expect("keyed shape");
         assert_eq!(d.special_constfn_mask, 0);
         assert_eq!(slot_rep(d.rep, 0), REP_ANY);
     }

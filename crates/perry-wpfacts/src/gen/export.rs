@@ -1533,6 +1533,15 @@ impl<'a> Gen<'a> {
         }
     }
 
+    /// Another unit's layout a published value's field may hold as its
+    /// owner publishes it (a stand-in no census broke).
+    pub(crate) fn forwarded_layout(&self, tm: TmplId) -> bool {
+        self.stand_in_cc.get(&tm).is_some_and(|c| c.literal_shape)
+            && !self
+                .unit_in
+                .is_some_and(|u| u.broken(&self.m.tmpls[tm as usize].display))
+    }
+
     /// A literal layout of this unit a published value's field may hold
     /// as a nested contract (design §18.7): no census broke it, it is no
     /// stand-in or contract class. (A closed callee of another unit that
@@ -1554,7 +1563,11 @@ impl<'a> Gen<'a> {
     /// key by key, decided per template and key over every instance that
     /// leaves. A field holding only instances of literal layouts this unit
     /// may publish (`nested_ok`, none escaped) is described by those
-    /// layouts, which leave the same way; any other content and the field
+    /// layouts, which leave the same way; instances of another unit's
+    /// layout no census broke (a stand-in) are described by its owner's
+    /// contract, forwarded: nothing of this unit leaves through their
+    /// fields (DECISIONS 79, as for a published value and a contract
+    /// result, `value_tok_ok`); any other content and the field
     /// is sunk for good. A field holding only primitives so far stays
     /// undecided (nothing leaves through it; a reader sees ⊤). Re-run to
     /// the fixpoint by `contract_check`: a described field whose contents

@@ -10,7 +10,7 @@ use perry_hir::{
 };
 
 const DECLARE_CALL: &str = "call void @js_gc_declare_typed_shape_layout(";
-const CLASS_SHAPE_MINT_CALL: &str = "call i32 @js_object_shape_id_for_class_keys(";
+const CLASS_SHAPE_MINT_CALL: &str = "call i32 @js_object_layout_for_class_keys_static(";
 const FORGET_CALL: &str = "call void @js_gc_forget_object_layout(";
 
 /// The packed object header has type, arena flag, and size; object layout
@@ -22,12 +22,13 @@ fn object_header_word() -> String {
     let size =
         8 + crate::target_layout::object_header_size_bytes("aarch64-apple-darwin") + 8 * slots;
     let word = (size << 32) | (GC_FLAG_ARENA << 8) | GC_TYPE_OBJECT;
-    format!("insertelement <2 x i64> <i64 {word}, i64 0>,")
+    format!("constant <2 x i64> <i64 {word}, i64 ")
 }
 
 fn ir_opts() -> CompileOptions {
     CompileOptions {
         static_shape_ids: Vec::new(),
+        program_layout_ordinals: Default::default(),
         program_class_shape_ids: Default::default(),
         program_facts: Default::default(),
         program_layouts: Default::default(),
@@ -495,7 +496,7 @@ fn imported_pointer_layout_does_not_invent_a_consumer_typed_shape_id() {
     let ir =
         String::from_utf8(compile_module(&module, opts).unwrap()).expect("LLVM IR should be UTF-8");
     assert!(
-        ir.contains("call i32 @js_object_shape_id_for_class_keys("),
+        ir.contains("call i32 @js_object_layout_for_class_keys_static("),
         "the consumer must share the producer's canonical structural ShapeId:\n{ir}"
     );
     assert!(
@@ -588,7 +589,11 @@ fn imported_stub_mints_with_the_drivers_static_id_and_registers_no_slots() {
     let mut opts = ir_opts();
     opts.imported_classes.push(imported_remote());
     let births = crate::module_birth_shapes(&module(), opts.clone()).unwrap();
-    assert_eq!(births.len(), 1, "the stub is this module's one class birth");
+    assert_eq!(
+        births.len(),
+        2,
+        "canonical and deferred-width contents are both reserved"
+    );
     assert!(!births[0].defined, "an imported stub is not a definition");
     let stub = births[0].shape.clone();
     assert_eq!(stub.rep, 0, "an imported stub is born all-Any");
@@ -620,7 +625,7 @@ fn imported_stub_mints_with_the_drivers_static_id_and_registers_no_slots() {
             .expect("LLVM IR should be UTF-8");
         let mint = ir
             .lines()
-            .find(|l| l.contains("call i32 @js_object_shape_id_for_class_keys_static("))
+            .find(|l| l.contains("call i32 @js_object_layout_for_class_keys_static("))
             .unwrap_or_else(|| panic!("the stub must mint with its static id:\n{ir}"));
         assert!(
             mint.contains("i32 55,") && mint.ends_with(", i64 0)"),
@@ -638,7 +643,7 @@ fn imported_stub_mints_with_the_drivers_static_id_and_registers_no_slots() {
         );
         let requested = [own, def_id]
             .into_iter()
-            .find(|id| mint.contains(&format!("i32 {id}, i64 0)")))
+            .find(|id| mint.contains(&format!("ptr @perry_layout_request_{id}, i64 0)")))
             .unwrap_or_else(|| panic!("the mint requests neither {own} nor {def_id}:\n{mint}"));
         (requested, own, def_id)
     };

@@ -338,7 +338,7 @@ fn anon_shape_is_registered_before_its_shape_id_is_minted() {
     let ir = compile_ir(&literal_module(method(METHOD, false, false)));
     let register = first_line_with(&ir, &["call void @js_register_class_declaration(i32 1,"])
         .unwrap_or_else(|| panic!("the literal's shape class is never registered:\n{ir}"));
-    let mint = ["@js_object_shape_id_for_class_keys"]
+    let mint = ["@js_object_layout_for_class_keys_static"]
         .iter()
         .filter_map(|callee| first_line_with(&ir, &["call i32 ", callee]))
         .min()

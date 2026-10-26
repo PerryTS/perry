@@ -368,7 +368,7 @@ fn sealed_runtime_prototypes_take_the_store_funnel() {
                 !crate::object::layout_desc::word_is_shadowed(word),
                 "{name}: pristine"
             );
-            let kind = crate::object::shapes::shape_object_kind_by_id(
+            let kind = crate::object::shapes::shape_object_kind_for_word(
                 crate::object::layout_desc::layout_id_of_word(word),
             );
             eprintln!("{name}.prototype kind {kind:?}");

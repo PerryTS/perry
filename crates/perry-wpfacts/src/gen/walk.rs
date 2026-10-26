@@ -546,6 +546,11 @@ impl<'a> Gen<'a> {
                     }
                     None => self.m.add_prim(n, prim::UNDEF),
                 }
+                if let Some(perry_hir::Expr::ForInKeys(o)) = init {
+                    if let perry_hir::Expr::LocalGet(obj) = o.as_ref() {
+                        self.for_in_keys_of.insert((fx.module, *id), *obj);
+                    }
+                }
             }
             Stmt::Expr(e) => {
                 let _ = self.expr(fx, e);
@@ -588,7 +593,10 @@ impl<'a> Gen<'a> {
                 if let Some(u) = update {
                     let _ = self.expr(fx, u);
                 }
-                self.stmts(fx, body);
+                match self.for_in_of(fx, body) {
+                    Some(f) => self.for_in_body(fx, &f),
+                    None => self.stmts(fx, body),
+                }
             }
             Stmt::Labeled { body, .. } => self.stmt(fx, body),
             Stmt::Break

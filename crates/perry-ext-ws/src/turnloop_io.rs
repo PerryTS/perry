@@ -97,6 +97,15 @@ fn with_client<R>(id: i64, f: impl FnOnce(&mut Client) -> R) -> Option<R> {
     map.get_mut(&id).map(f)
 }
 
+/// Agent teardown: drop the in-flight clients of retiring connections. Their
+/// completion tokens are the runtime's to retire, and nothing is settled here.
+pub(crate) fn forget_clients(ws_ids: &std::collections::HashSet<usize>) {
+    clients()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .retain(|_, client| !ws_ids.contains(&client.ws_id));
+}
+
 fn forget(id: i64) -> Option<Client> {
     clients()
         .lock()

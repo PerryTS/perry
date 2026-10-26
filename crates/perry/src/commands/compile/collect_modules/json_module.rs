@@ -25,10 +25,10 @@ pub(super) fn synthesize_json_module(raw: &str, canonical: &Path) -> Result<Stri
             error
         )
     })?;
-    let path = canonical.to_string_lossy();
+    let path = perry_hir::source_remap::baked_path_of(canonical);
     let dir = canonical
         .parent()
-        .map(|p| p.to_string_lossy().into_owned())
+        .map(|p| perry_hir::source_remap::baked_path_of(p).into_owned())
         .unwrap_or_default();
 
     Ok(format!(

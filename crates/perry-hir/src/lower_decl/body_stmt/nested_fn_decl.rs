@@ -302,7 +302,7 @@ pub(super) fn lower_nested_fn_decl(
     let display_name = if func_name == "__perry_cjs_factory" {
         format!(
             "Object.<anonymous> ({})",
-            ctx.source_file_path.replace('\\', "/")
+            ctx.baked_source_path().replace('\\', "/")
         )
     } else {
         func_name.clone()

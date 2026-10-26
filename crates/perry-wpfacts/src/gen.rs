@@ -8,6 +8,7 @@ use crate::pts::FxHashMap;
 use perry_hir::{Class, Export, Function, Global, Import, ImportSpecifier, Module, Stmt};
 
 mod export;
+mod for_in;
 mod glue;
 mod primitives;
 mod shared_closures;
@@ -266,6 +267,13 @@ pub struct Gen<'a> {
     /// wrapper's synthetic require (`Gen::require_helper_body`).
     pub(crate) require_helpers: FxHashMap<(u32, u32), &'a [Stmt]>,
     pub(crate) require_helpers_indexed: std::collections::HashSet<u32>,
+    /// FVA 4.3b: (module, `__keys` local) -> the `__forin_obj` local whose
+    /// `ForInKeys` it holds.
+    pub(crate) for_in_keys_of: FxHashMap<(u32, u32), u32>,
+    /// The for-in bodies being walked: (module, loop variable, key parameter).
+    pub(crate) for_in_key: Vec<(u32, u32, NodeId)>,
+    /// Per module: locals written or captured anywhere (`Gen::for_in_of`).
+    pub(crate) unstable: FxHashMap<u32, crate::pts::FxHashSet<u32>>,
 }
 
 /// Per-function walking context.
@@ -424,6 +432,9 @@ impl<'a> Gen<'a> {
             call_lit_arg: None,
             require_helpers: FxHashMap::default(),
             require_helpers_indexed: std::collections::HashSet::new(),
+            for_in_keys_of: FxHashMap::default(),
+            for_in_key: Vec::new(),
+            unstable: FxHashMap::default(),
         }
     }
 
@@ -460,6 +471,8 @@ impl<'a> Gen<'a> {
             // Closures are registered when the walker meets them.
             let _ = module;
         }
+        // Keys a for-in body may define, before any lookup is generated.
+        self.note_for_in_define_keys();
         // Class parents and native parents (second pass: names resolve).
         for mi in 0..modules.len() {
             for c in self.classes_of(mi) {
@@ -1287,7 +1300,13 @@ impl<'a> Gen<'a> {
                 continue;
             }
             if u & MARK_TOUCH != 0 {
-                self.m.cons(p, Cons::Implicit { reason: r });
+                self.m.cons(
+                    p,
+                    Cons::Implicit {
+                        reason: r,
+                        proto: Protocol::Any,
+                    },
+                );
             }
             // The keys the callee stores into the argument (DECISIONS 84):
             // what it stores under each (DECISIONS 118), a store this unit
@@ -1397,7 +1416,13 @@ impl<'a> Gen<'a> {
                                     dst: q,
                                 },
                             );
-                            self.m.cons(q, Cons::Implicit { reason: r });
+                            self.m.cons(
+                                q,
+                                Cons::Implicit {
+                                    reason: r,
+                                    proto: Protocol::Any,
+                                },
+                            );
                             self.reach_touch = Some(q);
                             q
                         }
@@ -2690,6 +2715,21 @@ impl<'a> Gen<'a> {
         }
     }
 
+    /// The keys a class method is found under. HIR names a well-known-symbol
+    /// method `@@<name>` (`[Symbol.iterator]()` is `@@iterator`); a read
+    /// names the symbol `@@__perry_wk_<name>` (`Gen::read_key`). Both: the
+    /// runtime binds the method to the symbol, and the string key stays
+    /// what HIR registered.
+    fn method_keys(&mut self, name: &str) -> Vec<Atom> {
+        let mut v = vec![self.m.atom(name)];
+        if let Some(wk) = name.strip_prefix("@@") {
+            if !name.starts_with(crate::builtins::WK_PREFIX) {
+                v.push(self.m.atom(&format!("{}{wk}", crate::builtins::WK_PREFIX)));
+            }
+        }
+        v
+    }
+
     pub(crate) fn register_fn(
         &mut self,
         mi: u32,
@@ -2879,20 +2919,22 @@ impl<'a> Gen<'a> {
         for meth in &c.methods {
             let name = format!("{}::{}", c.name, meth.name);
             let f = self.register_fn(mi, meth.id, &name, &meth.params, false, false);
-            let a = self.m.atom(&meth.name);
-            let n = self.m.field(proto, a);
             let t = self.m.funcs[f as usize].token;
-            self.m.add_tok(n, t);
+            for a in self.method_keys(&meth.name) {
+                let n = self.m.field(proto, a);
+                self.m.add_tok(n, t);
+            }
             let this = self.m.funcs[f as usize].this;
             self.m.this_class.insert(this, tm);
         }
         for meth in &c.static_methods {
             let name = format!("{}::static {}", c.name, meth.name);
             let f = self.register_fn(mi, meth.id, &name, &meth.params, false, false);
-            let a = self.m.atom(&meth.name);
-            let n = self.m.field(cobj, a);
             let t = self.m.funcs[f as usize].token;
-            self.m.add_tok(n, t);
+            for a in self.method_keys(&meth.name) {
+                let n = self.m.field(cobj, a);
+                self.m.add_tok(n, t);
+            }
         }
         for (name, g) in &c.getters {
             let fname = format!("{}::get {name}", c.name);
@@ -3153,6 +3195,9 @@ impl<'a> Gen<'a> {
     }
 
     pub(crate) fn local(&mut self, mi: u32, id: u32) -> NodeId {
+        if let Some(n) = self.for_in_key_param(mi, id) {
+            return n;
+        }
         if let Some(name) = self.view.and_then(|v| v.foreign_locals.get(&id)) {
             return self.extern_value(mi, name);
         }

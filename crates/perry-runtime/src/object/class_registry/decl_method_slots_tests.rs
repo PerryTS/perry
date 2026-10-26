@@ -76,7 +76,7 @@ fn decl_prototype_method_slot_is_a_constfn_lane_of_its_body() {
             "m runs its own body's entry"
         );
         let slot = slot_holding(proto, m);
-        let record = crate::object::shapes::shape_record_by_id(
+        let record = crate::object::shapes::shape_record_for_word(
             crate::object::shapes::object_shape_stamp(proto),
         )
         .expect("the prototype is shaped");

@@ -619,6 +619,12 @@ fn collect_module_one(
     let ast_module = forwarding_module.as_ref().unwrap_or(ast_module);
     let file_loader_sources = file_loader_import_sources(ast_module);
     let source_file_path = canonical.to_string_lossy().to_string();
+    if !perry_hir::source_remap::is_covered(&canonical) {
+        eprintln!(
+            "warning: {} is outside --source-root; its real path is baked into the output",
+            canonical.display()
+        );
+    }
     // JavaScript class fields are always [[Define]]; a TypeScript module
     // follows its tsconfig's `useDefineForClassFields`.
     let assign_class_fields = canonical
@@ -1093,9 +1099,12 @@ fn collect_module_one(
                             Some(l) => format!("{}:{}", source_file_path, l),
                             None => source_file_path.clone(),
                         };
+                        // The message is baked into the program, so it names the
+                        // remapped path; the build notice keeps the real one.
+                        let baked_loc = perry_hir::source_remap::baked_path(&loc);
                         let msg = format!(
                             "dynamic import() of a runtime-computed path cannot run in an \
-                             ahead-of-time compiled binary ({loc})"
+                             ahead-of-time compiled binary ({baked_loc})"
                         );
                         perry_hir::record_deferred_aot_site("import(...)", loc);
                         dynamic_path_sets.push(DynImportOutcome::Deferred(msg));

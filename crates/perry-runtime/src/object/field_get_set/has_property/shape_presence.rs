@@ -112,7 +112,7 @@ pub(crate) unsafe fn own_position(
     let reusable = !table_owned
         && !holey
         && shape.hole_count == 0
-        && shapes::is_site_matchable_shape_id(shapes::object_shape_stamp(obj));
+        && shapes::is_site_matchable_layout_word(shapes::object_shape_stamp(obj));
     Some((position, shape.proto_id, shape.object_kind, reusable))
 }
 
@@ -158,7 +158,8 @@ pub(crate) unsafe fn first_possible_holder(
             }
             prototype as *const ObjectHeader
         } else {
-            let Some(record) = shapes::shape_record_by_id(shapes::object_shape_stamp(obj)) else {
+            let Some(record) = shapes::shape_record_of_receiver(shapes::object_shape_stamp(obj))
+            else {
                 return ChainHolder::At(obj);
             };
             // A generator instance's record holds its link.

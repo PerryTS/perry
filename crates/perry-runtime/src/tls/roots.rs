@@ -1,3 +1,6 @@
+#[cfg(test)]
+mod macos_policy;
+
 use std::path::Path;
 use std::sync::OnceLock;
 

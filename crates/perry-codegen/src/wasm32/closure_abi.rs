@@ -54,6 +54,13 @@ pub(super) fn retype_closure_bodies(ir: &str) -> (String, HashMap<String, Retype
             pending = Some(format!("  {param} = ptrtoint ptr {param}.ptr to i64\n"));
             continue;
         }
+        // Another module's body, reached by a guarded direct call: its
+        // definition is retyped there, so route this module's calls through
+        // the same adapter (`abi_adapt` rewrites the declaration too).
+        if let Some((name, ret, mut params)) = imported_body_declare(line) {
+            params[0] = "ptr".to_string();
+            retyped.insert(name, Retyped { ret, params });
+        }
         out.push_str(line);
     }
     (out, retyped)
@@ -119,6 +126,25 @@ fn adapt_indirect_call(line: &str, next: &mut usize) -> Option<(String, String)>
 
 /// `define [linkage …] <ret> @name(i64 %this_closure, <ty> %x, …) … {`
 /// → (name, ret, param types).
+/// `declare <ret> @__perry_wrap_perry_fn_…(i64, i64, …)`: a JS body wrapper
+/// another module defines (every such definition takes `i64 %this_closure`).
+fn imported_body_declare(line: &str) -> Option<(String, String, Vec<String>)> {
+    let rest = line.strip_prefix("declare ")?;
+    let at = rest.find(" @__perry_wrap_perry_fn_")?;
+    let after = &rest[at + 2..];
+    let paren = after.find('(')?;
+    let close = after[paren..].find(')')? + paren;
+    let params: Vec<String> = after[paren + 1..close]
+        .split(',')
+        .map(|p| p.trim().to_string())
+        .collect();
+    if params.len() < 2 || params[0] != "i64" || params[1] != "i64" {
+        return None;
+    }
+    let ret = rest[..at].rsplit(' ').next()?.to_string();
+    Some((after[..paren].to_string(), ret, params))
+}
+
 fn closure_define(line: &str) -> Option<(String, String, Vec<String>, String)> {
     let rest = line.strip_prefix("define ")?;
     let at = rest.find(" @")?;

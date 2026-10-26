@@ -4,6 +4,10 @@
 //! records in linear memory and enumerate their addresses through constructors
 //! instead. WASI's command/reactor initialization runs these before JS starts.
 //! These are immutable image addresses, never pointers into the managed heap.
+//!
+//! This covers the runtime's own images, which live outside the `perry_strings`
+//! section. Program string literals are inside it, and `value::addr_class`
+//! admits them by the linker-synthesized `__start_/__stop_perry_strings` bounds.
 
 #[cfg(target_family = "wasm")]
 mod records {

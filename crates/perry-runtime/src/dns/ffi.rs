@@ -483,7 +483,8 @@ pub extern "C" fn js_dns_promises_lookup_service(args: i64) -> f64 {
 /// Calls the DNS export `method` of `dns` (`promises == false`) or
 /// `dns/promises` (`promises == true`) with `args` (a packed `ArrayHeader`
 /// pointer, the same shape the static native table passes). Returns `None`
-/// when `method` is not a lookup/resolve/reverse export.
+/// when `method` is not a lookup/resolve/reverse export or the `Resolver`
+/// constructor.
 ///
 /// The static native table (`NODE_DNS_ROWS`) resolves these at compile time
 /// for ESM and literal `dns.*` calls. A namespace obtained at runtime (the
@@ -519,6 +520,7 @@ fn route_export(promises: bool, method: &str, args: i64) -> Option<f64> {
         "resolveTlsa" => js_dns_resolve_tlsa, js_dns_promises_resolve_tlsa;
         "resolveTxt" => js_dns_resolve_txt, js_dns_promises_resolve_txt;
         "reverse" => js_dns_reverse, js_dns_promises_reverse;
+        "Resolver" => js_dns_resolver_new, js_dns_promises_resolver_new;
     }
 }
 

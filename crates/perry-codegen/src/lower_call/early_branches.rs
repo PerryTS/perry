@@ -361,6 +361,20 @@ pub fn try_lower_current_step_closure_call(
     Ok(None)
 }
 
+/// The body the closure arm below calls directly for a call of local `id`
+/// with `argc` arguments: the closure the local is bound to, when it has no
+/// rest parameter and declares exactly `argc` parameters. Any other call of
+/// the local there goes through the dispatcher.
+pub(crate) fn direct_closure_body(ctx: &FnCtx<'_>, id: u32, argc: usize) -> Option<u32> {
+    let func_id = ctx.local_closure_func_ids.get(&id).copied()?;
+    let declared = ctx
+        .local_closure_param_counts
+        .get(&id)
+        .copied()
+        .unwrap_or(argc);
+    (!ctx.closure_rest_params.contains_key(&func_id) && declared == argc).then_some(func_id)
+}
+
 pub fn try_lower_closure_typed_local_call(
     ctx: &mut FnCtx<'_>,
     callee: &Expr,
@@ -567,8 +581,7 @@ pub fn try_lower_closure_typed_local_call(
                     .get(id)
                     .copied()
                     .unwrap_or(lowered_args.len());
-                let has_rest = ctx.closure_rest_params.contains_key(&func_id);
-                if !has_rest && declared_count == lowered_args.len() {
+                if direct_closure_body(ctx, *id, lowered_args.len()).is_some() {
                     let closure_fn =
                         crate::symbol_names::closure(&ctx.strings.module_prefix(), func_id);
                     let site_id = emit_typed_feedback_register_site(

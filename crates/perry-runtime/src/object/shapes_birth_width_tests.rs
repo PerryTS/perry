@@ -279,7 +279,11 @@ fn prototype_relationship_revalidates_birth_facts_and_presence() {
     assert!(super::birth_record_for_prototype(id, proto_id).is_none());
     // Leave the prototype shape's real weak relationship naming the retired record.
     unsafe {
-        (*table.slab().record_ptr(producer).unwrap()).note_created_birth_shape(id);
+        (*table
+            .slab()
+            .handle_record_ptr(crate::codegen_abi::LayoutWord(producer))
+            .unwrap())
+        .note_created_birth_shape(id);
     }
     let birth = super::keyless_birth_width(proto_id, producer);
     assert_ne!(birth.shape, id);
@@ -306,7 +310,10 @@ fn prototype_relationship_reads_live_width_and_tracking_count() {
             0
         );
         let table = &crate::state::state().shapes;
-        let record = table.slab().record_ptr(first.shape).unwrap();
+        let record = table
+            .slab()
+            .handle_record_ptr(crate::codegen_abi::LayoutWord(first.shape))
+            .unwrap();
         (*record).note_descendant_width(13);
         let grown = super::keyless_birth_width(proto_id, super::super::object_shape_stamp(proto));
         assert_eq!(grown.shape, first.shape);
@@ -360,7 +367,9 @@ fn resolved_floor_birth_declines_a_foreign_prototype_and_a_retired_shape() {
             &mut table.inner.borrow_mut(),
             birth.shape,
         );
-        assert!(super::shapes_store::ShapeSlab::agent_record_present(birth.shape).is_none());
+        assert!(
+            super::shapes_store::ShapeSlab::agent_record_for_word_present(birth.shape).is_none()
+        );
         let renewed = super::created_birth_shape(first_id, boxed(first).to_bits(), &birth, 0);
         assert_ne!(
             renewed, birth.shape,
@@ -461,7 +470,7 @@ fn recorded_keyless_birth_revalidates_width_serial_and_retirement() {
         );
         let table = &crate::state::state().shapes;
         super::super::remove_descriptor_and_reverse_indices(&mut table.inner.borrow_mut(), wide);
-        assert!(super::shapes_store::ShapeSlab::agent_record_present(wide).is_none());
+        assert!(super::shapes_store::ShapeSlab::agent_record_for_word_present(wide).is_none());
         let renewed = super::created_birth_shape(serial, boxed(proto).to_bits(), &birth, wide);
         assert_ne!(renewed, wide);
         assert!(
@@ -499,7 +508,11 @@ fn validated_birth_relationship_resolves_complete_facts_once() {
         }
         assert_eq!(super::keyless_birth_width(serial, producer).width(), 0);
         let table = &crate::state::state().shapes;
-        (*table.slab().record_ptr(first.shape).unwrap()).note_descendant_width(13);
+        (*table
+            .slab()
+            .handle_record_ptr(crate::codegen_abi::LayoutWord(first.shape))
+            .unwrap())
+        .note_descendant_width(13);
         assert_eq!(
             super::keyless_birth_width(serial, producer).width(),
             13,

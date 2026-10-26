@@ -46,12 +46,10 @@ unsafe fn ordinary_receiver_record(obj: *const ObjectHeader) -> Option<shapes::S
         return None;
     }
     let id = shapes::object_shape_stamp(obj);
-    if id.wrapping_sub(shapes::SHAPE_ID_BASE)
-        >= shapes::EXOTIC_SHAPE_ID_BASE - shapes::SHAPE_ID_BASE
-    {
+    if id.wrapping_sub(shapes::SHAPE_ID_BASE) >= (2 << crate::codegen_abi::LAYOUT_BAND_SHIFT) {
         return None;
     }
-    shapes::shape_record_by_id(id)
+    shapes::shape_record_for_word(id)
 }
 
 /// The store twin of the read front's positional shape answer. The receiver
@@ -491,12 +489,11 @@ unsafe fn dynamic_store_receiver(obj: *mut ObjectHeader) -> Option<shapes::Shape
         return None;
     }
     let id = super::layout_desc::layout_id_of_word((*obj).parent_class_id);
-    if id.wrapping_sub(shapes::SHAPE_ID_BASE)
-        >= shapes::EXOTIC_SHAPE_ID_BASE - shapes::SHAPE_ID_BASE
-    {
+    if id.wrapping_sub(shapes::SHAPE_ID_BASE) >= (2 << crate::codegen_abi::LAYOUT_BAND_SHIFT) {
         return None;
     }
-    let record = shapes::shape_record_by_id(id)?;
+    // A live object's own header word: the receiver carries its row.
+    let record = shapes::shape_record_of_receiver(id)?;
     if !record.object_kind().is_ordinary_layout()
         || (*obj).class_id == super::NATIVE_MODULE_CLASS_ID
     {
@@ -965,7 +962,7 @@ unsafe fn try_function_store(
         return None;
     }
     let closure = ptr as *const crate::closure::ClosureHeader;
-    let descriptor = shapes::shape_descriptor_by_id((*closure).shape_id)?;
+    let descriptor = shapes::shape_descriptor_of_receiver((*closure).shape_id)?;
     if crate::closure::shape::is_class_info((*closure).info) {
         return None;
     }

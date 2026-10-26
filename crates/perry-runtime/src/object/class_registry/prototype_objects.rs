@@ -170,7 +170,7 @@ pub(crate) fn alloc_synthetic_class_id() -> u32 {
             .is_ok()
         {
             debug_assert!(
-                !crate::object::shapes::is_shape_id(id),
+                !crate::object::shapes::is_layout_word(id),
                 "rule 2: a synthetic class id must never be readable as a ShapeId"
             );
             return id;

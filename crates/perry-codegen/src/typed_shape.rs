@@ -243,7 +243,7 @@ const BIRTH_REP_F64: u64 = 0b01;
 /// and Any (`class_birth_image`), independently of this contract.
 ///
 /// This is THE decision. The string pool passes it to the runtime mint
-/// (`js_object_shape_id_for_class_keys{,_live}`),
+/// (`js_object_layout_for_class_keys{,_live}`),
 /// a fused allocation birth-fills its proven `F64` lanes with `+0.0`, ordered
 /// definitions preserve that fill only while it is unobservable, and
 /// every class-field site that reads or writes a lane raw takes its answer
@@ -462,7 +462,7 @@ pub(crate) fn class_shape_id_operand(
 /// (guards only, see [`class_shape_id_operand`]). A keys global of another
 /// module has none here: its guard loads that module's global.
 pub(crate) fn static_class_shape_id(keys_global_name: &str) -> Option<u32> {
-    crate::codegen::static_shape_id_for_keys_global(keys_global_name)
+    crate::codegen::static_layout_word_for_keys_global(keys_global_name)
 }
 
 /// The guard operand for a site that reads the shape global directly on
@@ -523,7 +523,7 @@ pub(crate) fn emit_compatible_shape_eq(
 ) -> String {
     use crate::types::{I1, I32};
     let mut ok: Option<String> = None;
-    for id in crate::codegen::compatible_final_shape_ids(expected, written_slots) {
+    for id in crate::codegen::compatible_final_layout_words(expected, written_slots) {
         let compatible = blk.icmp_eq(I32, actual, &id.to_string());
         ok = Some(match ok {
             Some(prev) => blk.or(I1, &prev, &compatible),
@@ -550,7 +550,7 @@ pub(crate) fn emit_compatible_class_shape_eq(
     use crate::types::{I1, I32, I64};
     // Completed ids first, birth id last (see `emit_compatible_shape_eq`).
     let mut ok: Option<String> = None;
-    for id in crate::codegen::compatible_final_shape_ids(expected_shape, written_slots) {
+    for id in crate::codegen::compatible_final_layout_words(expected_shape, written_slots) {
         let packed = if let Ok(cid) = class_id.parse::<u32>() {
             ((u64::from(id) << 32) | u64::from(cid)).to_string()
         } else {

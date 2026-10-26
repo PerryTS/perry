@@ -4,14 +4,14 @@
 //! invariant's own must-fail test, which manufactures a disagreement.
 
 use super::*;
-use crate::object::shapes::{object_shape_id, shape_descriptor_by_id, ShapeObjectKind};
+use crate::object::shapes::{object_layout_stamp, shape_descriptor_for_word, ShapeObjectKind};
 
 fn key(name: &str) -> *mut crate::StringHeader {
     crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32)
 }
 
 unsafe fn kind_of(obj: *const ObjectHeader) -> ShapeObjectKind {
-    crate::object::shapes::shape_object_kind_by_id(object_shape_id(obj))
+    crate::object::shapes::shape_object_kind_for_word(object_layout_stamp(obj))
         .expect("test premise: a stamped receiver")
 }
 
@@ -40,15 +40,17 @@ fn births_carry_the_kind_their_record_derives() {
         assert_eq!(kind_of(plain), ShapeObjectKind::Ordinary);
         assert!(store_facts_agree(plain));
         assert_eq!(
-            shape_descriptor_by_id(object_shape_id(plain)).unwrap().keys,
-            shape_descriptor_by_id(object_shape_id(unmarked))
+            shape_descriptor_for_word(object_layout_stamp(plain))
+                .unwrap()
+                .keys,
+            shape_descriptor_for_word(object_layout_stamp(unmarked))
                 .unwrap()
                 .keys,
             "test premise: the two receivers differ ONLY in the store fact"
         );
         assert_ne!(
-            object_shape_id(plain),
-            object_shape_id(unmarked),
+            object_layout_stamp(plain),
+            object_layout_stamp(unmarked),
             "distinct store facts must be distinct ShapeIds"
         );
 
@@ -71,15 +73,15 @@ fn marking_moves_a_stamped_receiver_to_its_ordinary_twin() {
     let _gc = crate::gc::GcSuppressScope::new();
     unsafe {
         let obj = with_key(crate::object::js_object_alloc(0, 0), "sk_m");
-        let before = object_shape_id(obj);
+        let before = object_layout_stamp(obj);
         assert_eq!(kind_of(obj), ShapeObjectKind::OrdinaryUnmarked);
         crate::object::mark_object_plain_ordinary(obj);
-        let after = object_shape_id(obj);
+        let after = object_layout_stamp(obj);
         assert_ne!(before, after, "the mark must transition the shape");
         assert_eq!(kind_of(obj), ShapeObjectKind::Ordinary);
         assert_eq!(
-            shape_descriptor_by_id(before).unwrap().keys,
-            shape_descriptor_by_id(after).unwrap().keys
+            shape_descriptor_for_word(before).unwrap().keys,
+            shape_descriptor_for_word(after).unwrap().keys
         );
         assert!(store_facts_agree(obj));
         // Lineage carries the receiver's kind, re-derived.
@@ -121,11 +123,11 @@ fn a_class_id_rewrite_moves_the_store_kind() {
         const ANON: u32 = 0x5F3C;
         crate::object::declarations::test_declare_anonymous(ANON);
         let third = with_key(crate::object::js_object_alloc(0, 0), "sk_c");
-        let proto_before = crate::object::shapes::shape_proto_id(object_shape_id(third));
+        let proto_before = crate::object::shapes::shape_proto_id(object_layout_stamp(third));
         (*third).class_id = ANON;
         crate::object::shapes::restamp_object_proto_id(third);
         assert_eq!(
-            crate::object::shapes::shape_proto_id(object_shape_id(third)),
+            crate::object::shapes::shape_proto_id(object_layout_stamp(third)),
             proto_before,
             "test premise: the rewrite keeps the prototype identity"
         );
@@ -159,11 +161,11 @@ fn the_numeric_proof_is_a_shape_transition() {
     let _gc = crate::gc::GcSuppressScope::new();
     unsafe {
         let obj = with_key(crate::object::js_object_alloc(PLAIN_CLASS, 0), "sk_p");
-        let unproven = object_shape_id(obj);
+        let unproven = object_layout_stamp(obj);
         assert_eq!(kind_of(obj), ShapeObjectKind::Ordinary);
 
         assert_eq!(stamp_numeric_proof_twin(obj), Some(unproven));
-        let proven = object_shape_id(obj);
+        let proven = object_layout_stamp(obj);
         assert_ne!(proven, unproven, "publishing the proof must transition");
         assert_eq!(kind_of(obj), ShapeObjectKind::OrdinaryNumericProof);
         assert!(receiver_carries_numeric_proof(obj));
@@ -171,7 +173,7 @@ fn the_numeric_proof_is_a_shape_transition() {
 
         assert!(crate::array::clear_packed_subclass_numeric_proof(obj));
         assert_eq!(
-            object_shape_id(obj),
+            object_layout_stamp(obj),
             unproven,
             "retire returns to the unproven twin"
         );
@@ -180,7 +182,7 @@ fn the_numeric_proof_is_a_shape_transition() {
 
         // Re-publishing finds the same proof twin (no new mint).
         assert_eq!(stamp_numeric_proof_twin(obj), Some(unproven));
-        assert_eq!(object_shape_id(obj), proven);
+        assert_eq!(object_layout_stamp(obj), proven);
         // A structural change retires the proof in the stamp funnel.
         with_key(obj, "sk_p2");
         assert!(!receiver_carries_numeric_proof(obj));
@@ -246,15 +248,15 @@ fn an_explicit_id_of_the_wrong_kind_is_declined() {
         let keys = crate::array::js_array_alloc_with_length(1);
         let name = key("sk_x");
         crate::array::js_array_set(keys, 0, crate::JSValue::string_ptr(name));
-        let ordinary = crate::object::shapes::shape_id_for_keys_ensure(keys, 1);
+        let ordinary = crate::object::shapes::layout_for_keys_ensure(keys, 1);
         assert_eq!(
-            crate::object::shapes::shape_object_kind_by_id(ordinary),
+            crate::object::shapes::shape_object_kind_for_word(ordinary),
             Some(ShapeObjectKind::Ordinary)
         );
         let unmarked =
             crate::object::js_object_alloc_class_inline_keys_stamped(0, 0, 1, keys, ordinary, 0);
         assert_ne!(
-            object_shape_id(unmarked),
+            object_layout_stamp(unmarked),
             ordinary,
             "the Ordinary id must be declined"
         );
@@ -264,7 +266,7 @@ fn an_explicit_id_of_the_wrong_kind_is_declined() {
         let plain =
             crate::object::alloc_plain::alloc_plain_record_inline_keys_stamped(1, keys, ordinary);
         assert_eq!(
-            object_shape_id(plain),
+            object_layout_stamp(plain),
             ordinary,
             "a marked newborn takes it"
         );

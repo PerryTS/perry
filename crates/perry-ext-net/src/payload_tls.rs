@@ -502,7 +502,7 @@ fn publish(owner: f64, facts: &crate::tls::HandshakeFacts) {
         state.get(),
         "authorizationError",
         if facts.authorized {
-            p::undefined()
+            f64::from_bits(JsValue::NULL.bits())
         } else {
             events::string("DEPTH_ZERO_SELF_SIGNED_CERT")
         },

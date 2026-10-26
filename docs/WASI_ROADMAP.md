@@ -8,20 +8,30 @@ The audited baseline is
 `20fde48d3fa03d0a77699b7374f55e38cb143b59`.
 See [WASI_SUPPORT.md](WASI_SUPPORT.md) for the implemented standalone profile.
 
-## Decision: support P1 inputs, defer P1 output
+## Decision: support P1 inputs and a qualified P1 output
 
 Support WASI 0.1 / Preview 1 as an interoperability format for running
-third-party core modules inside native Perry. Do not introduce a P1 compiler
-output target until an actual deployment requires it. P1 still has broad
-runtime adoption, but it does not supply the typed component interfaces
-needed for reusable plugins. New authoring should use the Component Model,
-with a tested P2 profile and P3 native async as a subsequent milestone.
+third-party core modules inside native Perry. P1 output was deferred until an
+actual deployment required it; one now does, in a Rust embedder that runs
+several Preview 1 guests in one process and cannot take a second WASI layer
+for a single guest. For that deployment shape, a P1 core-module output is
+accepted as `--target wasip1`, a sibling of `--target wasi`, in progress in
+[#13259](https://github.com/PerryTS/perry/issues/13259). Its contract is in
+[WASI_P1_OUTPUT.md](WASI_P1_OUTPUT.md): a baseline profile on standard
+`wasi_snapshot_preview1` imports, qualified on the pinned Wasmtime, plus
+opt-in, documented host extensions for outbound networking and page discard.
 
-P1 output would need its own runtime build, sysroot/link recipe, supported
-API profile, packaging and CI. Reusing a wasm32 layout is not sufficient:
-Perry's P2 networking and exception-handling requirements must also work on
-the proposed P1 host. If a P1-only deployment becomes necessary, qualify that
-specific host and API subset before expanding the public target list.
+P1 does not supply the typed component interfaces needed for reusable
+plugins. The Component Model remains the path for new reusable-component
+authoring, with a tested P2 profile and P3 native async as a subsequent
+milestone; `--target wasip1` is not a second component path.
+
+P1 output needs its own runtime build, sysroot/link recipe, supported API
+profile, packaging and CI. Reusing a wasm32 layout is not sufficient: Perry's
+exception-handling requirement must also work on the P1 host, and the
+networking that Preview 1 cannot express stays outside the standard imports.
+Any other P1-only deployment should be qualified the same way, against its
+specific host and API subset, before the public target list grows further.
 
 This separates three deliverables:
 

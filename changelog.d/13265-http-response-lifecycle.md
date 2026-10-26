@@ -1,0 +1,1 @@
+Keep asynchronous HTTP and HTTPS responses, including live SSE streams, open until they end or their connection closes. Apply request and header timeouts while receiving incomplete requests, return 408 on expiry, and start keep-alive timing after the response ends.

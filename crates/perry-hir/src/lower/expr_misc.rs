@@ -464,7 +464,7 @@ pub(crate) fn import_meta_resolve_value(ctx: &LoweringContext) -> Expr {
         class_name: None,
         object: None,
         method: "importMetaResolveValue".into(),
-        args: vec![Expr::String(ctx.source_file_path.clone())],
+        args: vec![Expr::String(ctx.baked_source_path().into_owned())],
     }
 }
 
@@ -473,7 +473,7 @@ pub(crate) fn import_meta_resolve_value(ctx: &LoweringContext) -> Expr {
 /// `filename` is the absolute file path, `dirname` is its parent directory.
 /// Used by both bare-object synthesis and the member-access fast path.
 pub(crate) fn import_meta_paths(ctx: &LoweringContext) -> (String, String, String) {
-    let mut path = ctx.source_file_path.replace('\\', "/");
+    let mut path = ctx.baked_source_path().replace('\\', "/");
     // `dunce::canonicalize` keeps Windows' verbatim `\\?\` prefix for long
     // bundle paths.  It is a Win32 path decoration, not part of the file URL:
     // `file:////?/C:/x` makes Node-compatible fileURLToPath reject the path as

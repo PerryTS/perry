@@ -221,7 +221,10 @@ unsafe fn tls_preflight(_port: u16, _servername: &str, _options: f64) -> i32 {
 fn preflight_error(code: i32) -> &'static str {
     match code {
         1 => "ERR_TLS_ALPN_CALLBACK_INVALID_RESULT",
-        2 => "ERR_SSL_TLSV1_ALERT_NO_APPLICATION_PROTOCOL",
+        2 => concat!(
+            "ERR_SSL_TLSV1_ALERT_NO_APPLICATION_PROTOCOL:",
+            "ERR_SSL_TLSV1_ALERT_NO_APPLICATION_PROTOCOL"
+        ),
         3 => "ERR_TLS_SNI_CALLBACK_FAILED",
         _ => "ERR_TLS_HANDSHAKE_FAILED",
     }
@@ -259,10 +262,17 @@ fn configured_ca_certificates(data: Option<&TlsClientConfigData>) -> Vec<Vec<u8>
 #[derive(Debug)]
 struct NodeConfiguredCaVerifier {
     inner: Arc<rustls::client::WebPkiServerVerifier>,
-    roots: rustls::RootCertStore,
+    roots: Arc<rustls::RootCertStore>,
     configured: Vec<Vec<u8>>,
     custom_identity: bool,
 }
+
+#[cfg(test)]
+#[path = "tls/rejection_tests.rs"]
+mod rejection_tests;
+
+mod certificate_cause;
+pub(crate) use certificate_cause::node_cause_code;
 
 fn is_ca_used_as_end_entity(error: &rustls::Error) -> bool {
     let rustls::Error::InvalidCertificate(rustls::CertificateError::Other(other)) = error else {
@@ -300,7 +310,9 @@ impl ServerCertVerifier for NodeConfiguredCaVerifier {
                 {
                     return Ok(ServerCertVerified::assertion());
                 }
-                Err(error) => return Err(error),
+                Err(error) => {
+                    return Err(certificate_cause::classify(error, end_entity.as_ref()));
+                }
             }
         }
         match self.inner.verify_server_cert(
@@ -321,7 +333,9 @@ impl ServerCertVerifier for NodeConfiguredCaVerifier {
                 rustls::client::verify_server_name(&parsed, server_name)?;
                 Ok(ServerCertVerified::assertion())
             }
-            result => result,
+            result => {
+                result.map_err(|error| certificate_cause::classify(error, end_entity.as_ref()))
+            }
         }
     }
 
@@ -379,13 +393,23 @@ pub(crate) fn build_client_config(
         #[cfg(target_os = "wasi")]
         root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     }
+    finish_verified_client_config(root_store, data)
+}
+
+fn finish_verified_client_config(
+    root_store: rustls::RootCertStore,
+    data: Option<&TlsClientConfigData>,
+) -> Result<Arc<rustls::ClientConfig>, String> {
+    let root_store = Arc::new(root_store);
     let configured = configured_ca_certificates(data);
     let custom_identity = data.is_some_and(|data| data.custom_identity);
-    let node_verifier = if configured.is_empty() && !custom_identity {
+    // Default clients need cause classification too. Keep rustls's existing
+    // empty-store path, which supports explicit `ca: []` without trusting it.
+    let node_verifier = if root_store.is_empty() && configured.is_empty() && !custom_identity {
         None
     } else {
         Some(NodeConfiguredCaVerifier {
-            inner: rustls::client::WebPkiServerVerifier::builder(Arc::new(root_store.clone()))
+            inner: rustls::client::WebPkiServerVerifier::builder(root_store.clone())
                 .build()
                 .map_err(|error| format!("tls certificate verifier: {error}"))?,
             roots: root_store.clone(),

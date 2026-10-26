@@ -224,7 +224,7 @@ fn assert_literal_width(module: &Module, width: u32) {
             "wrong emitted allocation width: {text}"
         );
         assert!(
-            text.contains(&format!("<i64 {packed}, i64 0>")),
+            text.contains(&format!("<i64 {packed}, i64 ")),
             "emitted allocation and image size must agree: {text}"
         );
     }
@@ -237,7 +237,7 @@ fn assert_literal_width(module: &Module, width: u32) {
     if width > 2 {
         let mints: Vec<_> = text
             .lines()
-            .filter(|l| l.contains("call i32 @js_object_shape_id_for_class_keys_live("))
+            .filter(|l| l.contains("call i32 @js_object_layout_for_class_keys_static("))
             .collect();
         assert_eq!(mints.len(), 1, "fixture must mint one wide birth image");
         assert!(
@@ -247,12 +247,15 @@ fn assert_literal_width(module: &Module, width: u32) {
         );
         let packed = crate::target_layout::inline_alloc_gc_packed("aarch64-apple-darwin", width);
         assert!(
-            text.contains(&format!("<i64 {packed}, i64 0>")),
+            text.contains(&format!("<i64 {packed}, i64 ")),
             "wide allocation and image size must agree"
         );
     } else {
         assert!(
-            !text.contains("call i32 @js_object_shape_id_for_class_keys_live("),
+            !text.lines().any(
+                |l| l.contains("call i32 @js_object_layout_for_class_keys_static(")
+                    && !l.contains(", i32 2, i32 2, i32 ")
+            ),
             "exact literal must not be widened"
         );
     }

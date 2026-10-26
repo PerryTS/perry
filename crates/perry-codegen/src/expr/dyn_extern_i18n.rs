@@ -151,7 +151,9 @@ fn lower_dynamic_require(ctx: &mut FnCtx<'_>, paths: &[String], arg: &Expr) -> R
         .collect();
 
     for (i, (path_str, target_prefix)) in resolved.iter().enumerate() {
-        let key_idx = ctx.strings.intern(path_str);
+        let key_idx = ctx
+            .strings
+            .intern(&perry_hir::source_remap::baked_path(path_str));
         let key_entry = ctx.strings.entry(key_idx);
         let key_handle_global = format!("@{}", key_entry.handle_global);
 
@@ -798,7 +800,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 for (i, (path_str, target_prefix)) in resolved.iter().enumerate() {
                     // Intern the path string so the compare against the
                     // runtime arg works on real StringHeader pointers.
-                    let key_idx = ctx.strings.intern(path_str);
+                    let key_idx = ctx
+                        .strings
+                        .intern(&perry_hir::source_remap::baked_path(path_str));
                     let key_entry = ctx.strings.entry(key_idx);
                     let key_handle_global = format!("@{}", key_entry.handle_global);
 
