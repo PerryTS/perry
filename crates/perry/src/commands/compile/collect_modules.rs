@@ -39,6 +39,7 @@ mod import_meta_require;
 mod import_meta_resolve;
 mod json_module;
 mod native_addon;
+mod native_esm_namespace;
 mod parse_error;
 pub(crate) mod reexport_prune;
 mod script_string;
@@ -617,6 +618,8 @@ fn collect_module_one(
     let forwarding_module =
         reexport_prune::normalize_forwarding_barrel(ast_module, entry_path, ctx);
     let ast_module = forwarding_module.as_ref().unwrap_or(ast_module);
+    let native_namespace_module = native_esm_namespace::rewrite_static(ast_module, &ctx.cache_dir)?;
+    let ast_module = native_namespace_module.as_ref().unwrap_or(ast_module);
     let file_loader_sources = file_loader_import_sources(ast_module);
     let source_file_path = canonical.to_string_lossy().to_string();
     if !perry_hir::source_remap::is_covered(&canonical) {
@@ -1305,11 +1308,13 @@ fn collect_module_one(
         // edge is skipped by init order and export pruning. Folding into one
         // dropped the real `import("./x.ts")` or `new Worker(new URL("./x.ts",
         // ...))` of the same file, so it gets its own dynamic edge instead.
-        if let Some(existing) = hir_module
-            .imports
-            .iter_mut()
-            .find(|i| i.source == source && !i.is_dynamic && !i.type_only && !i.runtime_erased)
-        {
+        if let Some(existing) = hir_module.imports.iter_mut().find(|i| {
+            i.source == source
+                && !i.is_dynamic
+                && !i.type_only
+                && !i.runtime_erased
+                && !native_esm_namespace::is_builtin(&source)
+        }) {
             existing.is_dynamic_target = true;
             continue;
         }
@@ -1341,6 +1346,18 @@ fn collect_module_one(
         if import.source == super::cjs_wrap::support::SPECIFIER {
             import.resolved_path = Some(cjs_support_path(ctx).to_string_lossy().into_owned());
             import.module_kind = ModuleKind::NativeCompiled;
+            continue;
+        }
+        // A native dynamic import owns the same ordinary ESM namespace as
+        // a static namespace import. Keep default/named native imports native:
+        // their binding values and method lowering already have the right ABI.
+        if import.is_dynamic && native_esm_namespace::is_builtin(&import.source) {
+            let path = native_esm_namespace::materialize(&ctx.cache_dir, &import.source)?;
+            let path = path.canonicalize()?;
+            import.resolved_path = Some(path.to_string_lossy().into_owned());
+            import.is_native = false;
+            import.module_kind = ModuleKind::NativeCompiled;
+            pending.push(path);
             continue;
         }
         ensure_bunfs_import_resolves(&import.source, &canonical, ctx)?;

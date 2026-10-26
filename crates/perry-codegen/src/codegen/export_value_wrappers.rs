@@ -76,6 +76,19 @@ pub(super) fn emit_export_value_wrappers(c: ExportValueWrapperCtx<'_>) {
         let getter = llmod.define_function(&getter_name, DOUBLE, vec![]);
         let _ = getter.create_block("entry");
         let blk = getter.block_mut(0).unwrap();
+        // An object-valued native named export can be a builtin submodule
+        // (`fs.promises`, `util.types`, ...). Its namespace getter must arm
+        // that precise submodule before reading the ESM export cell, just as
+        // a direct import of the same subpath does.
+        let subpath = format!("{source}/{imported}");
+        if perry_hir::is_node_builtin_module(&subpath) {
+            let install = crate::nm_install::native_namespace_submodule_key(&subpath)
+                .and_then(crate::nm_install::nm_submod_install_symbol)
+                .or_else(|| crate::nm_install::nm_install_symbol(&subpath));
+            if let Some(install) = install {
+                blk.call_void(install, &[]);
+            }
+        }
         let source_value = blk.load(DOUBLE, &source_handle);
         let imported_value = blk.load(DOUBLE, &imported_handle);
         let value = blk.call(

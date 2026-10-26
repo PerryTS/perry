@@ -1474,6 +1474,30 @@ fn submodule_default_object_value(submod: &'static SubmoduleSpec) -> Option<f64>
     Some(f64::from_bits(JSValue::pointer(obj as *const u8).bits()))
 }
 
+/// The existing CommonJS export value of a registry-backed builtin. Default
+/// imports and computed require must agree on this value; the ESM namespace
+/// remains a separate module object with a default binding pointing here.
+pub(crate) fn commonjs_value(key: &str) -> f64 {
+    run_submod_install_all_hook();
+    let Some(submod) = find_submodule(key) else {
+        return crate::object::js_unresolved_namespace_stub();
+    };
+    if let Some(value) = submodule_default_object_value(submod) {
+        return value;
+    }
+    if let Some(value) = special_export_value(key, "default") {
+        return value;
+    }
+    if let Some(export) = find_export(submod, "default") {
+        return submodule_export_value(submod, export);
+    }
+    if let Some(value) = native_namespace_as_default(submod) {
+        return value;
+    }
+    let obj = ensure_namespace_singleton(submod);
+    f64::from_bits(JSValue::pointer(obj as *const u8).bits())
+}
+
 pub(crate) fn is_diagnostics_channel_constructor_value(value: f64) -> bool {
     let js_value = JSValue::from_bits(value.to_bits());
     if !js_value.is_pointer() {
