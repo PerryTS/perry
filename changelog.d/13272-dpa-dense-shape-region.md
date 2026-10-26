@@ -7,3 +7,5 @@ a stale word can never name a different record, and exhausting the row space is
 fatal rather than silently wrapping. Function constructors keep their instance
 record on the prototype holder (validated per use), so new F() stays O(1).
 Startup instruction counts are unchanged to slightly lower than main.
+
+Computed string reads continue to call inherited getters after deleting an own property.

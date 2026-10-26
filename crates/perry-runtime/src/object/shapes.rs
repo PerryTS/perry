@@ -724,6 +724,11 @@ pub(crate) unsafe fn plain_positional_key_words(
     dir: *const u8,
     shape_id: u32,
 ) -> Option<(PositionalKeys, usize)> {
+    // A shadowed receiver can have deleted or overridden inline properties;
+    // its record alone does not prove a present own data slot.
+    if shape_id & super::overflow::SHADOW_BIT != 0 {
+        return None;
+    }
     let r = ShapeSlab::ordinary_record_in(dir, shape_id)?;
     if r.proto_id == PROTO_ID_PER_OBJECT {
         return None;
