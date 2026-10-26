@@ -440,8 +440,8 @@ bytes, collection inside result getters, immediate and void returns, and idle
 after every round. It also checks verified moving GC and the native host's
 existing policy of retiring the Store and siblings on rejection or dropping a
 started call. This is **not cooperative canonical cancellation**: the
-experimental C scheduler traps on unsupported events. Its profile rejects async
-imports, resources and future/stream guest values. Module initialization is
+experimental C scheduler traps on unsupported events. Its profile rejects
+resources and future/stream guest values. Module initialization is
 synchronous; its unowned jobs can be adopted by the first task. See the
 [generated async export receipt](validation/wasi-generated-async-exports-20261026.json).
 
@@ -450,9 +450,38 @@ guest does not instantiate `AsyncLocalStorage`: its constructor currently lives
 in the native stdlib, and the supported WASI link includes only the runtime
 archive. Attempting that import produced an unresolved
 `js_async_local_storage_new` symbol. The experimental export checks do not
-qualify that guest API, async import callbacks, resource cancellation, other host
+qualify that guest API, resource cancellation, other host
 platforms or distribution packages. Public `--guest-c` async output remains
 guarded while those adapters are completed.
+
+The same experimental generator now supports typed async imports. Each child
+retains its heap frame and typed C parameter/result areas until the maintained
+backend reports subtask return. Pending subtasks join their parent's canonical
+waitable set; completion runs under the original task and import ALS snapshot.
+Inline completion runs directly under the existing task, and its frame is freed
+only after the runtime hands it to C. No runtime task frame is reborrowed from
+its own callback. Argument layouts and calling signatures come from the
+maintained backend, including indirect aggregate parameters.
+
+An async export can return a result while children remain active. Its task and
+frame stay alive through later callbacks and any child chain, until canonical
+`EXIT`. Async imports during module initialization or a synchronous export throw
+before host I/O. On ordinary teardown, the signal reader leaves its waitable set
+before synchronous read cancellation; cancelling while it remains joined is a
+canonical ABI error. Unsupported cancellation events still trap, with the
+embedding host responsible for retiring the Store.
+
+Run the acceptance script above with `--imports` for concurrent reverse-order
+completion, distinct compound parameters, input mutation after lowering,
+collecting getters, parallel children in one task, scalar/void results,
+post-return child chains and native import cancellation during Store retirement.
+Both delayed and immediate-completion paths run with verified moving GC. A
+separate instrumented probe confirms direct completion; the uninstrumented
+component remains the qualification subject. The
+[async import receipt](validation/wasi-generated-async-imports-20261026.json)
+records the exact sources, frozen tools, failed teardown prototype and retained
+export regression. This does not enable public async generation or qualify
+cooperative canonical cancellation, guest resources or future/stream values.
 
 The internal generic-reader checks additionally cover canonical layouts from
 `wit-parser::SizeAlign`, shared metadata for repeated aliases, a reusable

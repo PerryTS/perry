@@ -508,9 +508,8 @@ fn experimental_async_exports_compile_without_changing_the_public_contract() {
 }
 
 #[test]
-fn experimental_async_exports_reject_unqualified_imports_resources_and_async_values() {
+fn experimental_async_exports_reject_unqualified_resources_and_async_values() {
     for (source, expected) in [
-        ("package test:profile; world plugin { import call: async func(); export run: async func(); }", "async imports"),
         ("package test:profile; interface api { resource item; run: async func() -> own<item>; } world plugin { export api; }", "resources"),
         ("package test:profile; world plugin { export run: async func() -> future<u32>; }", "future/stream"),
     ] {
@@ -518,5 +517,29 @@ fn experimental_async_exports_reject_unqualified_imports_resources_and_async_val
         let input = dir.path().join("world.wit");
         std::fs::write(&input, source).unwrap();
         assert!(experimental_async_guest(&input, None).unwrap_err().to_string().contains(expected));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn experimental_async_imports_compile_with_the_backends_indirect_and_flat_signatures() {
+    for source in [
+        "package test:imports; world plugin { import empty: async func(); import scalar: async func(a: u32, b: u64, c: bool) -> u32; import text: async func(input: string) -> string; export run: async func() -> u32; }",
+        "package test:imports; interface api { record payload { text: string, bytes: list<u8>, labels: option<list<string>> } single: async func(input: payload) -> payload; many: async func(a: payload, b: payload, c: payload, d: payload, e: payload) -> result<payload, string>; } world plugin { import api; export run: async func(); }",
+        "package test:imports; world plugin { import unused: async func(); export sync: func() -> u32; }",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("world.wit");
+        std::fs::write(&input, source).unwrap();
+        assert!(canonical_guest(&input, None).is_err());
+        let files = experimental_async_guest(&input, None).unwrap();
+        let adapter = String::from_utf8(files["perry_adapter.c"].clone()).unwrap();
+        assert!(adapter.contains("Async import requires an async export task"));
+        assert!(adapter.contains("perry_component_frame_import_begin(f)"));
+        assert!(adapter.contains("perry_component_frame_import_resolve(f,"));
+        assert!(!adapter.contains("CALLBACK_CODE_YIELD"));
+        for (name, bytes) in files { std::fs::write(dir.path().join(name), bytes).unwrap(); }
+        let output = std::process::Command::new("clang").args(["-std=c11", "-Wall", "-Werror", "-Wno-unused-function", "-fsyntax-only"]).arg(dir.path().join("perry_adapter.c")).output().unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     }
 }

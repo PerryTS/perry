@@ -21,9 +21,9 @@ pub fn canonical_guest(path: &Path, selected: Option<&str>) -> Result<BTreeMap<S
     generate_guest(path, selected, false)
 }
 
-/// Internal acceptance probe for generated async exports. This deliberately
-/// does not enable --guest-c async output: imports, cancellation and async
-/// values still need qualification before the public guard can be removed.
+/// Internal acceptance probe for generated async functions. This deliberately
+/// does not enable --guest-c async output: resources, cooperative cancellation
+/// and async values need qualification before the public guard can be removed.
 #[doc(hidden)]
 pub fn experimental_async_guest(
     path: &Path,
@@ -322,6 +322,10 @@ static void perry_initialize(void *f) {
         );
         if !import && self.anchor.is_some() {
             return self.experimental_export(function, i, f, &cname);
+        }
+        if import && function.kind.is_async() {
+            self.imports.push((i, f));
+            return self.experimental_import(function, i, f, &cname);
         }
         let indirect = function
             .result

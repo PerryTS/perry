@@ -1,15 +1,8 @@
-//! Experimental generated async exports. The public CLI remains fail-closed.
+//! Experimental generated async functions. The public CLI remains fail-closed.
+mod imports;
 use super::*;
 
 pub(super) fn check_profile(world: &crate::World) -> Result<()> {
-    ensure!(
-        world
-            .imports
-            .iter()
-            .flat_map(|i| &i.functions)
-            .all(|f| !f.async_),
-        "experimental async exports do not yet support async imports"
-    );
     ensure!(
         world
             .imports
@@ -98,9 +91,9 @@ impl Generator<'_> {
             emitter.lower(ty, "data->value", "data->result")?;
         }
         emitter.source.push_str("data->arena = arena;\n}\n");
-        writeln!(emitter.source, "static {stem} {stem}_convert(perry_task *t, uint32_t value) {{\n{stem} data = {{0}};\ndata.frame = perry_component_frame_new();\ndata.value = perry_component_frame_copy(data.frame, t->frame, value);\nint32_t status = perry_component_frame_task_resume(t->frame, {stem}_lower, &data);\nif (status < 0 || perry_component_frame_failed(data.frame)) {{\nperry_allocations_end(&data.arena, false);\nperry_component_frame_drop(data.frame);\n__builtin_trap();\n}}\nreturn data;\n}}")?;
+        writeln!(emitter.source, "static {stem} {stem}_convert(perry_task *t, uint32_t value) {{\n{stem} data = {{0}};\ndata.frame = perry_component_frame_new();\ndata.value = perry_component_frame_copy(data.frame, t->frame, value);\nint32_t status = perry_task_resume(t, {stem}_lower, &data);\nif (status < 0 || perry_component_frame_failed(data.frame)) {{\nperry_allocations_end(&data.arena, false);\nperry_component_frame_drop(data.frame);\n__builtin_trap();\n}}\nreturn data;\n}}")?;
         if async_ {
-            writeln!(emitter.source, "static {snake}_callback_code_t {stem}_step(perry_task *t) {{\nuint32_t value = 0;\nif (!perry_task_poll(t, &value)) return perry_task_wait(t);\n{stem} data = {stem}_convert(t, value);\n{cname}_return({});\nperry_allocations_end(&data.arena, false);\nperry_component_frame_drop(data.frame);\n{snake}_context_set_0(NULL);\nperry_task_drop(t);\nreturn {upper}_CALLBACK_CODE_EXIT;\n}}", if result_ty.is_some() { "data.result" } else { "" })?;
+            writeln!(emitter.source, "static {snake}_callback_code_t {stem}_step(perry_task *t) {{\nif (!t->returned) {{\nuint32_t value = 0;\nif (!perry_task_poll(t, &value)) return perry_task_wait(t);\n{stem} data = {stem}_convert(t, value);\nperry_require(perry_task_checkpoint(t) >= 0);\n{cname}_return({});\nperry_allocations_end(&data.arena, false);\nperry_component_frame_drop(data.frame);\nt->returned = true;\n}} else {{\nperry_require(perry_task_checkpoint(t) >= 0);\n}}\nif (t->children) return perry_task_wait(t);\n{snake}_context_set_0(NULL);\nperry_task_drop(t);\nreturn {upper}_CALLBACK_CODE_EXIT;\n}}", if result_ty.is_some() { "data.result" } else { "" })?;
             writeln!(emitter.source, "{snake}_callback_code_t {cname}_callback({snake}_event_t *event) {{\nperry_task *t = {snake}_context_get_0();\nperry_task_event(t, event);\nreturn {stem}_step(t);\n}}")?;
         }
         let indirect = !async_
@@ -138,9 +131,12 @@ impl Generator<'_> {
         }
         writeln!(
             emitter.source,
-            "{ret} {cname}({}) {{\nperry_task *t = perry_task_new();\nvoid *f = t->frame;",
+            "{ret} {cname}({}) {{\nperry_task *t = perry_task_new({async_});\nvoid *f = t->frame;",
             params.join(", ")
         )?;
+        if async_ {
+            writeln!(emitter.source, "{snake}_context_set_0(t);")?;
+        }
         let args = emitter.slot(&format!(
             "perry_component_frame_array(f, {})",
             function.params.len()
@@ -160,9 +156,7 @@ impl Generator<'_> {
                 &format!("{}arg{n}", if indirect { "" } else { "&" }),
             );
         }
-        let value = emitter.slot(&format!(
-            "perry_component_frame_task_call(f, {interface}, {index}, {args})"
-        ));
+        let value = emitter.slot(&format!("perry_task_call(t, {interface}, {index}, {args})"));
         emitter
             .source
             .push_str("perry_require(!perry_component_frame_failed(f));\n");
@@ -172,7 +166,7 @@ impl Generator<'_> {
                 "t->promise = {value};\nreturn {stem}_step(t);\n}}"
             )?;
         } else {
-            writeln!(emitter.source, "perry_require(perry_component_frame_task_checkpoint(f) >= 0);\n{stem} data = {stem}_convert(t, {value});")?;
+            writeln!(emitter.source, "perry_require(perry_task_checkpoint(t) >= 0);\n{stem} data = {stem}_convert(t, {value});\nperry_require(perry_task_checkpoint(t) >= 0);")?;
             if indirect {
                 emitter.source.push_str("*result = data.result;\n");
             }
