@@ -1,1 +1,2 @@
 - Keep bounded late fields of closed literal families in their declared layout, and check that layout at reads through reassigned receivers. Creation-linked late stores bound admission; unused literal descriptors stay in static image data outside startup enumeration and publish each agent’s shape record on first birth.
+- Keep ordinary registered allocation direct, and publish literal schemas only at literal births. Store probes use overflow-owned attributes and share checked fixed-slot stores with ordinary records; symbol properties receive seal/freeze integrity edits.

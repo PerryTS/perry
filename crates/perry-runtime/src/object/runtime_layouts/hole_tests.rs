@@ -702,6 +702,37 @@ fn classless_optional_family_keeps_shape_and_routes_unknown_keys_to_overflow() {
         );
     });
     object.with_mut_ptr(|obj: *mut ObjectHeader| unsafe {
+        let atom = crate::string::property_atom(H_A.string);
+        let key = crate::JSValue::string_ptr(atom.cast_mut()).bits();
+        let hash = crate::string::property_atom_hash(atom);
+        let receiver = crate::value::POINTER_TAG | obj as u64;
+        let dir = crate::object::shapes::ordinary_dir_addr();
+        assert_eq!(
+            crate::object::layout_probe::perry_probe_set(dir, receiver, key, hash, 41.0),
+            1,
+            "a writable overflow reference must use the leaf slot store"
+        );
+        assert_eq!(js_object_get_field_by_name_f64(obj, H_A.string), 41.0);
+        assert_eq!(
+            crate::object::layout_probe::perry_probe_set(dir, receiver, key, hash, 17.0),
+            1
+        );
+        let atom = crate::string::property_atom(extra.get_raw_mut_ptr());
+        let key = crate::JSValue::string_ptr(atom.cast_mut()).bits();
+        let hash = crate::string::property_atom_hash(atom);
+        assert_eq!(
+            crate::object::layout_probe::perry_probe_set(dir, receiver, key, hash, 43.0),
+            1,
+            "a table-owned value keeps its plain-value leaf store"
+        );
+        assert_eq!(
+            js_object_get_field_by_name_f64(obj, extra.get_raw_mut_ptr()),
+            43.0
+        );
+        assert_eq!(
+            crate::object::layout_probe::perry_probe_set(dir, receiver, key, hash, 31.0),
+            1
+        );
         crate::object::set_property_attrs(
             obj as usize,
             "holes_a".into(),

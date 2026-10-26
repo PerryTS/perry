@@ -40,6 +40,8 @@
 mod indexed;
 #[path = "layout_probe_site_memo.rs"]
 pub(crate) mod site_memo;
+#[path = "layout_probe_store.rs"]
+mod store_target;
 #[path = "layout_probe_unloaded.rs"]
 mod unloaded;
 
@@ -2339,7 +2341,8 @@ pub unsafe extern "C" fn perry_probe_set(
         return 0;
     }
     let obj = payload as *mut ObjectHeader;
-    let r = record_of(dir, (*obj).parent_class_id);
+    let word = (*obj).parent_class_id;
+    let r = record_of(dir, word);
     if r.is_null() || (*r).object_kind() != super::ShapeObjectKind::Ordinary {
         return 0;
     }
@@ -2352,14 +2355,23 @@ pub unsafe extern "C" fn perry_probe_set(
     } else {
         value.to_bits()
     };
+    // A clear shadow bit proves there is no overflow. Otherwise its
+    // entries, when present, own every current key and attribute.
+    if word & crate::object::overflow::SHADOW_BIT != 0 {
+        let meta = (*obj).meta;
+        if !meta.is_null() && (*meta).overflow != 0 {
+            return store_target::overflow(
+                obj,
+                r,
+                (*meta).overflow as usize as *mut _,
+                key_bits,
+                hash,
+                bits,
+            );
+        }
+    }
     match own_position(r, key_bits, hash) {
         Ok(pos) => {
-            // An overflow owns the current attributes even for a key whose
-            // value remains in a fixed slot. The layout cannot authorize Set.
-            let meta = (*obj).meta;
-            if !meta.is_null() && (*meta).overflow != 0 {
-                return 0;
-            }
             let keys = (*r).keys as usize as *const crate::array::ArrayHeader;
             if (*r).summary()
                 & (crate::object::key_attrs::SUMMARY_BLOCKS_STORE
@@ -2372,77 +2384,20 @@ pub unsafe extern "C" fn perry_probe_set(
                 return 0;
             }
             let slot = crate::object::key_attrs::key_storage_slot(keys, pos);
-            if slot >= (*r).live_inline_slot_count {
-                // A spilled key: an overwrite of its present value in the
-                // spill storage the object already has (a hole is an absent
-                // key, which `[[Set]]` adds).
-                return i32::from(crate::object::spill::spill_overwrite_present(
-                    obj as usize,
-                    slot as usize,
-                    bits,
-                ));
+            if slot < (*r).live_inline_slot_count {
+                let address = (obj as *const u8)
+                    .add(std::mem::size_of::<ObjectHeader>() + slot as usize * 8)
+                    .cast::<u64>();
+                // Only the static record may admit an absent key's hole fill.
+                if *address == TAG_HOLE
+                    && !hole_fill_admitted(dir, obj, r, keys, pos, key_bits, hash)
+                {
+                    return 0;
+                }
             }
-            let address = (obj as *mut u8)
-                .add(std::mem::size_of::<ObjectHeader>() + slot as usize * 8)
-                .cast::<u64>();
-            // A hole slot: the key is absent (the key view). [[Set]] adds it
-            // in place, in the layout's key order, when nothing on the chain
-            // intercepts it and the object takes new keys without an order
-            // authority of its own (an overflow, a stable-tombstone record).
-            if *address == TAG_HOLE && !hole_fill_admitted(dir, obj, r, keys, pos, key_bits, hash) {
-                return 0;
-            }
-            let rep = crate::object::field_rep::slot_rep((*r).rep, slot);
-            if bits & 0x7ff0_0000_0000_0000 != 0x7ff0_0000_0000_0000
-                && rep != crate::object::field_rep::REP_SPECIAL
-            {
-                crate::object::builtin_proto::note_value_store(
-                    obj,
-                    slot as usize,
-                    false,
-                    "probe store",
-                );
-                // GC_STORE_AUDIT(POINTER_FREE): a canonical finite Number.
-                address.write(bits);
-                return 1;
-            }
-            if rep == crate::object::field_rep::REP_ANY {
-                crate::object::builtin_proto::note_value_store(
-                    obj,
-                    slot as usize,
-                    false,
-                    "probe store",
-                );
-                crate::gc::runtime_store_jsvalue_slot_layout_deferred(
-                    obj as usize,
-                    address as usize,
-                    slot as usize,
-                    bits,
-                );
-                return 1;
-            }
-            0
+            store_target::checked_slot(obj, r, slot, bits)
         }
-        Err(true) => {
-            let meta = (*obj).meta;
-            if meta.is_null() || (*meta).overflow == 0 {
-                // The key is absent from a layout that lists every own key:
-                // a key add, when the chain admits it (§3.7).
-                return i32::from(probe_add(dir, obj, r, key_bits, hash, bits));
-            }
-            let t = (*meta).overflow as usize as *mut crate::object::overflow::Table;
-            let Some(i) = crate::object::overflow::find_hashed(t, key_bits, hash) else {
-                return 0;
-            };
-            if !crate::object::overflow::plain_writable_value(t, i) {
-                return 0;
-            }
-            let slot = crate::object::overflow::value_at(t, i);
-            // GC_STORE_AUDIT(BARRIERED): the table's own value word.
-            *slot = bits;
-            crate::gc::runtime_write_barrier_slot(t as usize, slot as usize, bits);
-            1
-        }
+        Err(true) => i32::from(probe_add(dir, obj, r, key_bits, hash, bits)),
         Err(false) => 0,
     }
 }
