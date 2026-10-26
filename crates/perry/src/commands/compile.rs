@@ -79,6 +79,7 @@ mod sandbox_buildrs;
 mod strip_dedup;
 mod targets;
 mod tool_output;
+mod wasi_flavour;
 pub mod well_known;
 pub(crate) mod widget_build;
 use android_target::{android_target, is_android_target};
