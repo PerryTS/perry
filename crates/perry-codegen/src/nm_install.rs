@@ -230,7 +230,7 @@ pub(crate) fn namespace_value_dependencies(module: &str) -> Vec<&'static str> {
 
 #[cfg(test)]
 mod tests {
-    use super::nm_install_symbol;
+    use super::{namespace_value_dependencies, nm_install_symbol};
 
     #[test]
     fn whole_fs_value_installs_only_its_exposed_promises_submodule() {

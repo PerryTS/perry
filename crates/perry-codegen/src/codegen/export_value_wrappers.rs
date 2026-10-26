@@ -48,7 +48,15 @@ pub(super) fn emit_export_value_wrappers(c: ExportValueWrapperCtx<'_>) {
             continue;
         };
         let native_origin = hir.imports.iter().find_map(|import| {
-            if !import.is_native {
+            if !import.has_native_value_bindings() {
+                return None;
+            }
+            import
+                        .source
+                        .strip_prefix("node:")
+                        .unwrap_or(&import.source),
+                ) && !perry_hir::is_bare_prefix_only_builtin(&import.source))
+            {
                 return None;
             }
             import
@@ -88,6 +96,9 @@ pub(super) fn emit_export_value_wrappers(c: ExportValueWrapperCtx<'_>) {
             if let Some(install) = install {
                 blk.call_void(install, &[]);
             }
+        }
+        if let Some(install) = crate::nm_install::nm_install_symbol(source) {
+            blk.call_void(install, &[]);
         }
         let source_value = blk.load(DOUBLE, &source_handle);
         let imported_value = blk.load(DOUBLE, &imported_handle);
