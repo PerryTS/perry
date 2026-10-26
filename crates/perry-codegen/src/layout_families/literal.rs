@@ -210,7 +210,10 @@ mod tests {
             "literal descriptor must be live"
         );
         assert!(
-            ir.contains("call ptr @perry_alloc_literal_layout("),
+            ir.lines().any(|line| {
+                line.contains("@perry_alloc_literal_layout(")
+                    && (line.contains("call ptr") || line.contains("invoke ptr"))
+            }),
             "literal birth must use the section/agent publication entry"
         );
         let descriptor = ir
