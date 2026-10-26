@@ -23,19 +23,19 @@ mod prim_result;
 mod protocol_calls;
 mod protocol_keys;
 mod receiver_this;
+mod run_once_closed;
 mod runtime_helpers;
 mod summary;
 mod super_heritage;
-mod unit_cjs;
 mod unit_alias;
+mod unit_cjs;
 mod unit_ctor;
 mod unit_effects;
 mod unit_extends;
-mod run_once_closed;
 mod unit_mode;
 mod unit_namespace;
-mod unit_this;
 mod unit_shared;
+mod unit_this;
 
 use crate::{compute, FactsConfig, ProgramFacts, Verdict};
 

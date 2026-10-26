@@ -2780,7 +2780,13 @@ impl Model {
                 );
             }
             if let Some(&p) = self.arg_reach_base.get(&y) {
-                st.extend(self.keyed_reach.get(&p).into_iter().flatten().map(|&(_, kr)| kr));
+                st.extend(
+                    self.keyed_reach
+                        .get(&p)
+                        .into_iter()
+                        .flatten()
+                        .map(|&(_, kr)| kr),
+                );
             }
         }
     }

@@ -400,7 +400,13 @@ fn a_broken_contract_resolves_only_the_units_that_see_it() {
         pf.units
     );
     assert_eq!(pf.round_work.len(), 3, "{:?}", pf.round_work);
-    assert_eq!(pf.round_work[2], w("b.ts"), "{:?} {:?}", pf.round_work, pf.units);
+    assert_eq!(
+        pf.round_work[2],
+        w("b.ts"),
+        "{:?} {:?}",
+        pf.round_work,
+        pf.units
+    );
     assert!(
         verdicts(&pf, "neg").iter().all(|v| v.starts_with("No")),
         "{}",
@@ -3333,7 +3339,12 @@ fn a_published_methods_parameter_holds_its_callers_arguments() {
     let mods = [("b", b), ("d", d), ("m", m)];
     let (pu, wp) = (units_of(&mods), whole_of(&mods));
     assert!(proven(&wp, "items"), "{}", wp.dump_text());
-    assert_eq!(verdicts(&pu, "items"), verdicts(&wp, "items"), "{}", pu.dump_text());
+    assert_eq!(
+        verdicts(&pu, "items"),
+        verdicts(&wp, "items"),
+        "{}",
+        pu.dump_text()
+    );
     assert!(
         proven_set(&pu).is_subset(&proven_set(&wp)),
         "{}",
@@ -3352,8 +3363,17 @@ fn a_published_methods_parameter_holds_its_callers_arguments_with_a_rest_paramet
     let mods = [("b", b), ("d", d), ("m", m)];
     let (pu, wp) = (units_of(&mods), whole_of(&mods));
     assert!(proven(&wp, "items"), "{}", wp.dump_text());
-    assert_eq!(verdicts(&pu, "items"), verdicts(&wp, "items"), "{}", pu.dump_text());
-    assert!(proven_set(&pu).is_subset(&proven_set(&wp)), "{}", pu.dump_text());
+    assert_eq!(
+        verdicts(&pu, "items"),
+        verdicts(&wp, "items"),
+        "{}",
+        pu.dump_text()
+    );
+    assert!(
+        proven_set(&pu).is_subset(&proven_set(&wp)),
+        "{}",
+        pu.dump_text()
+    );
 }
 
 #[test]
@@ -3699,7 +3719,11 @@ fn an_escaped_value_beside_top_is_that_top() {
     // parameter only ⊤ is passed for escapes there (DECISIONS 192, open).
     // Rewritten for #13294 (decision 151: every unit replays the shared
     // objects' writes): (939, 2563, 8115) -> the pin below.
-    assert_eq!((e8, e16, e32), (964, 2612, 8212), "entries {e8} {e16} {e32}");
+    assert_eq!(
+        (e8, e16, e32),
+        (964, 2612, 8212),
+        "entries {e8} {e16} {e32}"
+    );
 }
 
 #[test]
@@ -3990,7 +4014,10 @@ fn a_closed_local_called_only_in_its_unit_costs_its_own_stores() {
     }
     m += "  };\n  h.f0(o);\n}\n";
     let methods = module_work(&units_of(&[("a", m.as_str()), (bn, b.as_str())]), "a.ts");
-    assert!(closed * 4 < methods * 3, "closed {closed} methods {methods}");
+    assert!(
+        closed * 4 < methods * 3,
+        "closed {closed} methods {methods}"
+    );
 }
 
 #[test]
@@ -4027,7 +4054,12 @@ fn a_method_run_on_an_argument_marker_makes_one_context() {
         .collect();
     assert!(!us.is_empty(), "no unit of a.ts");
     for (q, s) in us {
-        assert!(!s.aborted && s.instances < 64, "{q}: aborted {} instances {}", s.aborted, s.instances);
+        assert!(
+            !s.aborted && s.instances < 64,
+            "{q}: aborted {} instances {}",
+            s.aborted,
+            s.instances
+        );
     }
 }
 

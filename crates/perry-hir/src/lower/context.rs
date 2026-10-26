@@ -1170,7 +1170,11 @@ impl LoweringContext {
     /// given order ([`crate::Class::is_declared_keys_record`]).
     /// Content-addressed like the anon-shape classes, so equal key lists
     /// share one name.
-    pub(crate) fn synthesize_declared_keys_class(&mut self, keys: &[String], null_proto: bool) -> String {
+    pub(crate) fn synthesize_declared_keys_class(
+        &mut self,
+        keys: &[String],
+        null_proto: bool,
+    ) -> String {
         let shape_key = format!("@declared-keys:{null_proto}:{}", keys.join("\u{0}"));
         if let Some(existing) = self.anon_shape_classes.get(&shape_key) {
             return existing.clone();
@@ -1227,7 +1231,8 @@ impl LoweringContext {
             alloc_width_hint: 0,
             specialized_from: None,
         });
-        self.anon_shape_classes.insert(shape_key, class_name.clone());
+        self.anon_shape_classes
+            .insert(shape_key, class_name.clone());
         class_name
     }
 

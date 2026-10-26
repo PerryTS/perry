@@ -374,7 +374,9 @@ impl<'a> Gen<'a> {
             let own = support.and_then(|sp| {
                 self.exports
                     .iter()
-                    .find(|(&(mi, a), _)| path_of(self, mi) == sp && self.m.atoms[a as usize] == name)
+                    .find(|(&(mi, a), _)| {
+                        path_of(self, mi) == sp && self.m.atoms[a as usize] == name
+                    })
                     .map(|(_, &b)| b)
             });
             let value = match (cells, own, support) {

@@ -247,7 +247,9 @@ fn computed_relative_requires_are_joined_against_the_module_dir() {
     // The join needs the module's own directory as a literal, handed to the
     // support module's computed-specifier path.
     assert!(
-        wrapped.contains("__perry_cjs_require_computed(specifier, \"/tmp/perry-canary/.next/server\","),
+        wrapped.contains(
+            "__perry_cjs_require_computed(specifier, \"/tmp/perry-canary/.next/server\","
+        ),
         "the wrap lost the module-dir literal the join needs:\n{wrapped}"
     );
     let support = super::support::source(&[path.to_string_lossy().into_owned()], false);

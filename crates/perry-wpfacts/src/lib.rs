@@ -1348,7 +1348,11 @@ fn forwards_of(g: &gen::Gen, mi: u32, tm: model::TmplId) -> bool {
 /// it reads is lost.
 pub(crate) fn cut_described_again(cc: &mut units::ClassContract, path: &mut Vec<String>) {
     path.push(cc.display.clone());
-    for (_, vc) in cc.field_values.iter_mut().chain(cc.static_values.iter_mut()) {
+    for (_, vc) in cc
+        .field_values
+        .iter_mut()
+        .chain(cc.static_values.iter_mut())
+    {
         for inner in vc.layouts.iter_mut().chain(vc.classes.iter_mut()) {
             if path.contains(&inner.display) {
                 inner.field_values.clear();

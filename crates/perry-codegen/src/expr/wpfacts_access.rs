@@ -823,7 +823,11 @@ fn lower_guarded_get(
         // through the prototype chain, which is the generic operation.
         let blk = ctx.block();
         let bits = blk.bitcast_double_to_i64(&fast);
-        let hole = blk.icmp_eq(I64, &bits, &crate::nanbox::i64_literal(crate::nanbox::TAG_HOLE));
+        let hole = blk.icmp_eq(
+            I64,
+            &bits,
+            &crate::nanbox::i64_literal(crate::nanbox::TAG_HOLE),
+        );
         blk.cond_br(&hole, &miss_label, &done_label);
     } else {
         ctx.block().br(&done_label);

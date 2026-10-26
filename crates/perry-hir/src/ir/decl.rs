@@ -344,8 +344,7 @@ impl Class {
     /// A declared-keys record born with a null prototype (otherwise
     /// `%Object.prototype%`).
     pub fn declared_keys_null_proto(&self) -> bool {
-        self.is_declared_keys_record()
-            && !self.name.starts_with(DECLARED_KEYS_OBJECT_CLASS_PREFIX)
+        self.is_declared_keys_record() && !self.name.starts_with(DECLARED_KEYS_OBJECT_CLASS_PREFIX)
     }
 
     /// The shape-only class synthesized for a closed object literal. Check the
@@ -491,7 +490,10 @@ impl ClassFieldOrigin {
     /// The field defines no property at birth (a reservation the
     /// constructor or a later store fills).
     pub fn is_reservation(self) -> bool {
-        matches!(self, ClassFieldOrigin::ConstructorStore | ClassFieldOrigin::Declared)
+        matches!(
+            self,
+            ClassFieldOrigin::ConstructorStore | ClassFieldOrigin::Declared
+        )
     }
 }
 

@@ -1972,7 +1972,15 @@ impl<'a> Gen<'a> {
             if old.methods.iter().any(|(k, f)| k == key && f == fname) {
                 continue;
             }
-            let f = self.stub_fn(mi, fname, tm, true, false, c.closed.is_none() || c.forwards, r);
+            let f = self.stub_fn(
+                mi,
+                fname,
+                tm,
+                true,
+                false,
+                c.closed.is_none() || c.forwards,
+                r,
+            );
             let a = self.m.atom(key);
             let n = self.m.field(proto, a);
             let t = self.m.funcs[f as usize].token;

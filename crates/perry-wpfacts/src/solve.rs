@@ -1737,7 +1737,10 @@ impl Model {
                 self.aborted = true;
                 return;
             }
-            self.arg_readers.entry(x).or_default().extend(fresh.iter().copied());
+            self.arg_readers
+                .entry(x)
+                .or_default()
+                .extend(fresh.iter().copied());
             if let Some(ss) = self.arg_stores.get(&x).cloned() {
                 for &(z, k) in &fresh {
                     self.arg_store_reaches(z, k, None, &ss);
