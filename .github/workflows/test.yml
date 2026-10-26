@@ -1514,9 +1514,6 @@ jobs:
         # - perry-ui-windows-winui: re-exports perry-ui-windows, so it inherits
         #   the same win32 / webview2-com dependency that won't build on Linux.
         env:
-          # Keep test execution on rustc until Blaze can run Perry's libtest
-          # harness reliably. The mbx wrapper still caches these builds.
-          MBX_BLAZE: "0"
           # Preserve diagnostics if an FFI panic or signal aborts before libtest
           # can print its captured failure section. Assertions remain unchanged.
           RUST_TEST_NOCAPTURE: "1"
