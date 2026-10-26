@@ -10,6 +10,9 @@
 use super::crypto_ns::module_uses_global_crypto_namespace;
 use crate::commands::compile::CompilationContext;
 
+#[path = "feature_detect/computed_members.rs"]
+mod computed_members;
+
 fn debug_hir_uses_regex(hir_debug: &str) -> bool {
     hir_debug.contains("RegExp") // RegExp / RegExpDynamic / RegExpEscape / RegExpExec{Index,Groups}
         || hir_debug.contains("StringMatch") // dedicated .match / .matchAll variants
@@ -439,6 +442,9 @@ pub(super) fn detect_optional_feature_usage(
     // false-negative class for every gate at once (the rule is zero false
     // negatives; including more HIR can only over-include a feature).
     let hir_debug = module_hir_debug(hir_module);
+    let computed = computed_members::scan(hir_module);
+    ctx.uses_computed_member_keys |= computed.opaque_members;
+    ctx.uses_file_handle_capability |= computed.file_handles;
 
     // Web Streams constructors and FileHandle.readableWebStream call the
     // stdlib factories. Select them when an API is named, including extracted
@@ -453,6 +459,7 @@ pub(super) fn detect_optional_feature_usage(
     ]
     .iter()
     .any(|name| hir_debug.contains(name))
+        || (ctx.uses_file_handle_capability && ctx.uses_computed_member_keys)
     {
         ctx.needs_stdlib = true;
         ctx.native_module_imports.insert("stream/web".to_string());

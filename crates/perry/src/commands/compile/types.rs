@@ -970,6 +970,9 @@ pub struct CompilationContext {
     /// intrinsics, so a mention means it may be used as a VALUE).
     pub uses_global_math: bool,
     pub uses_global_json: bool,
+    /// Native capabilities and computed member keys may occur in different modules.
+    pub uses_computed_member_keys: bool,
+    pub uses_file_handle_capability: bool,
     pub uses_global_reflect: bool,
     pub uses_global_atomics: bool,
     /// Per-group `globalThis` web-platform member tables (URL / Text* /
@@ -1414,6 +1417,8 @@ impl CompilationContext {
             uses_intl_namespace: false,
             uses_global_math: false,
             uses_global_json: false,
+            uses_computed_member_keys: false,
+            uses_file_handle_capability: false,
             uses_global_reflect: false,
             uses_global_atomics: false,
             uses_global_url: false,

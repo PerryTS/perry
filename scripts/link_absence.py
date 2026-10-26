@@ -89,10 +89,13 @@ def inventory():
         assert all(prefixes), f"{path}: empty prefix matches every symbol"
         if hook in hooks | stdlib_hooks | native_hooks:
             prefixes.append(hook)
+        argv = re.search(r"^// HWS argv: (.+)$", source, re.M)
+        argv = json.loads(argv[1]) if argv else ["world"]
+        assert isinstance(argv, list) and all(isinstance(arg, str) for arg in argv), f"{path}: argv must be a JSON string list"
         companion = re.search(r"^// HWS companion: (.+)$", source, re.M)
         fixtures[path.stem] = {"hook": hook, "prefixes": prefixes,
                                "companion": companion[1] if companion else None,
-                               "native_hook": hook in native_hooks}
+                               "native_hook": hook in native_hooks, "argv": argv}
     for name, fixture in fixtures.items():
         parent = fixture["companion"]
         if parent:
@@ -300,8 +303,9 @@ def main():
     for name in names:
         try:
             binary, selected, _ = compile_witness(args, name, env)
-            oracle = run(["node", args.output/name/"main.ts", "world"], cwd=binary.parent)
-            actual = run([binary, "world"], cwd=binary.parent)
+            witness_argv = fixtures[name]["argv"] if name in fixtures else ["world"]
+            oracle = run(["node", args.output/name/"main.ts", *witness_argv], cwd=binary.parent)
+            actual = run([binary, *witness_argv], cwd=binary.parent)
             (binary.parent/"node.stdout").write_bytes(oracle.stdout)
             (binary.parent/"native.stdout").write_bytes(actual.stdout)
             (binary.parent/"node.stderr").write_bytes(oracle.stderr)

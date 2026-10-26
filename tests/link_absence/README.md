@@ -66,3 +66,9 @@ The existing network installer fills the agent-loop service slots for
 completion dispatch, teardown and diagnostics. A timer-only negative keeps
 the driver live while requiring the network service absent; independent
 listen/close and echo positives exercise installed dispatch and teardown.
+
+A JSON string list in `HWS argv` supplies identical arguments to Node and the
+native witness. Computed API names can then come from argv without appearing
+as literals in the compiled program. FileHandle capabilities and opaque
+member accesses accumulate across modules; an ordinary indexed readFile path
+still requires Web Streams and Brotli absence.
