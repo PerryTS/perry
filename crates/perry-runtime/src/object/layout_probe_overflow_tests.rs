@@ -123,3 +123,122 @@ fn owned_table_reads_do_not_derive_the_record_index() {
         .join()
         .unwrap();
 }
+
+#[test]
+fn owned_fixed_entry_reader_keeps_inline_and_spill_semantics() {
+    std::thread::Builder::new()
+        .stack_size(16 << 20)
+        .spawn(|| unsafe {
+            crate::gc::initialize_runtime_fixture();
+            let _no_move = crate::gc::GcSuppressScope::new();
+            for capacity in [2, 8, 24] {
+                let object = crate::object::js_object_alloc(0, capacity);
+                crate::object::mark_object_plain_ordinary(object);
+                let mut keys = Vec::new();
+                for n in 0..32 {
+                    let (key, hash) = atom(&format!("owned_bound_{capacity}_{n}"));
+                    crate::object::js_object_set_field_by_name(
+                        object,
+                        (key & POINTER_MASK) as *const crate::StringHeader,
+                        n as f64 + 0.25,
+                    );
+                    keys.push((key, hash));
+                }
+                let table = crate::object::overflow::ensure(object);
+                let dir = test_dir();
+                let raw = record_of(dir, (*object).parent_class_id);
+                assert!(!raw.is_null() && (*raw).present());
+                assert_eq!(
+                    (*raw).object_kind(),
+                    super::super::ShapeObjectKind::Ordinary
+                );
+                assert_eq!((*raw).probe, 0);
+                let record = super::super::ShapeRecordRef(std::ptr::NonNull::new_unchecked(raw));
+                let live = record.live_inline_slot_count();
+                let biased =
+                    (object as usize).wrapping_sub(perry_abi::RECEIVER_HANDLE_FLOOR) as i64;
+                let mut inline = 0;
+                let mut spilled = 0;
+                for &(key, hash) in &keys {
+                    let entry = crate::object::overflow::find_hashed(table, key, hash).unwrap();
+                    let fixed = crate::object::overflow::fixed_slot_of(table, entry).unwrap();
+                    if fixed < live {
+                        inline += 1;
+                    } else {
+                        spilled += 1;
+                    }
+                    let expected = crate::object::overflow::get_from(table, object, entry);
+                    assert_eq!(
+                        crate::object::overflow::get_found_from_record(
+                            table, object, entry, record
+                        ),
+                        expected
+                    );
+                    assert_eq!(
+                        Some(perry_probe_get(dir, biased, key, hash).to_bits()),
+                        expected
+                    );
+                    crate::object::overflow::set_entry_attrs(
+                        object,
+                        table,
+                        entry,
+                        crate::object::key_attrs::ENTRY_NON_WRITABLE,
+                    );
+                    assert_eq!(
+                        Some(perry_probe_get_binding(dir, biased, key, hash).to_bits()),
+                        expected
+                    );
+                }
+                assert!(inline > 0 && spilled > 0, "both storage arms must execute");
+                for &(key, hash) in &[keys[0], keys[31]] {
+                    let entry = crate::object::overflow::find_hashed(table, key, hash).unwrap();
+                    let fixed = crate::object::overflow::fixed_slot_of(table, entry).unwrap();
+                    for bits in [
+                        crate::value::TAG_UNDEFINED,
+                        TAG_HOLE,
+                        0x7ff8_0000_0000_0000,
+                        (-0.0f64).to_bits(),
+                    ] {
+                        if fixed < live {
+                            let fields = (object as *mut u8)
+                                .add(std::mem::size_of::<ObjectHeader>())
+                                as *mut u64;
+                            fields.add(fixed as usize).write(bits);
+                        } else {
+                            crate::object::spill::spill_set(object as usize, fixed as usize, bits);
+                        }
+                        let expected = crate::object::overflow::get_from(table, object, entry);
+                        assert_eq!(
+                            crate::object::overflow::get_found_from_record(
+                                table, object, entry, record
+                            ),
+                            expected
+                        );
+                        assert_eq!(
+                            perry_probe_get(dir, biased, key, hash).to_bits(),
+                            expected.unwrap_or(TAG_HOLE)
+                        );
+                    }
+                }
+                let (key, hash) = keys[0];
+                let entry = crate::object::overflow::find_hashed(table, key, hash).unwrap();
+                let fixed = crate::object::overflow::fixed_slot_of(table, entry).unwrap();
+                assert!(fixed < live);
+                let fields =
+                    (object as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;
+                fields.add(fixed as usize).write(0x7ffd_0000_0000_0000);
+                assert_eq!(
+                    perry_probe_get(dir, biased, key, hash).to_bits(),
+                    crate::value::TAG_UNDEFINED
+                );
+                assert_eq!(
+                    (*raw).probe,
+                    0,
+                    "the current record must not acquire a derived index"
+                );
+            }
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}

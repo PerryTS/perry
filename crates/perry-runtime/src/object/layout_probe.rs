@@ -957,6 +957,7 @@ unsafe fn owned_get<const ABSENT: bool, const LAZY_HASH: bool>(
     r: *mut ShapeRecord,
     key_bits: u64,
     hash: u64,
+    table: *const crate::object::overflow::Table,
 ) -> f64 {
     let meta = (*obj).meta;
     if (*obj).class_id == crate::object::NATIVE_MODULE_CLASS_ID
@@ -969,8 +970,23 @@ unsafe fn owned_get<const ABSENT: bool, const LAZY_HASH: bool>(
         return hole();
     }
     let hash = site_key_hash::<LAZY_HASH>(key_bits, hash);
-    let value = match overflow_get(obj, key_bits, hash) {
-        Some(value) => value,
+    let value = match crate::object::overflow::find_hashed(table, key_bits, hash) {
+        Some(entry) => {
+            if *crate::object::overflow::attrs_at(table, entry) as u8
+                & crate::object::key_attrs::ENTRY_ACCESSOR_MASK
+                != 0
+            {
+                hole()
+            } else {
+                // The front proved this current ordinary record and actual
+                // table; find_hashed just proved the live entry. Consume those
+                // same facts through the shared checked entry reader.
+                let record = super::ShapeRecordRef(std::ptr::NonNull::new_unchecked(r));
+                crate::object::overflow::get_found_from_record(table, obj, entry, record)
+                    .map(f64::from_bits)
+                    .unwrap_or_else(hole)
+            }
+        }
         // The actual table has proved own absence. Continue through
         // the existing current-shape prototype walk, without deriving
         // a redundant receiver-key index or learning an overflow memo.
@@ -1015,8 +1031,11 @@ unsafe fn probe_get_at<const ABSENT: bool, const SITE: bool, const LAZY_HASH: bo
         && (*r).object_kind() == super::ShapeObjectKind::Ordinary
     {
         let meta = (*obj).meta;
-        if !meta.is_null() && (*meta).overflow != 0 {
-            return owned_get::<ABSENT, LAZY_HASH>(dir, obj, r, key_bits, hash);
+        if !meta.is_null() {
+            let table = (*meta).overflow as usize as *const crate::object::overflow::Table;
+            if !table.is_null() {
+                return owned_get::<ABSENT, LAZY_HASH>(dir, obj, r, key_bits, hash, table);
+            }
         }
     }
     let probe = (*r).probe;
