@@ -195,16 +195,30 @@ mod tests {
             3,
             "each read needs its own current-slot presence test"
         );
-        assert_eq!(
-            walk_ir
-                .lines()
-                .filter(|line| {
-                    line.contains("load atomic i32") && line.contains("acquire, align 4")
-                })
-                .count(),
-            3,
-            "each current-shape guard must acquire the shared publication"
+        let word_address = format!(
+            "getelementptr i8, ptr @perry_layout_class_{id}, i64 {}",
+            crate::runtime_abi::LAYOUT_DESC_WORD_OFFSET
         );
+        let word_pointers: Vec<_> = walk_ir
+            .lines()
+            .filter(|line| line.contains(&word_address))
+            .map(|line| line.split_once(" = ").unwrap().0.trim())
+            .collect();
+        assert_eq!(
+            word_pointers.len(),
+            3,
+            "each current-shape guard must address the immutable DPA word"
+        );
+        for pointer in word_pointers {
+            assert_eq!(
+                walk_ir
+                    .lines()
+                    .filter(|line| line.ends_with(&format!(" = load i32, ptr {pointer}")))
+                    .count(),
+                1,
+                "each current-shape guard must load its immutable word"
+            );
+        }
         assert!(
             ir.contains(&format!("@perry_layout_class_{id}")),
             "literal descriptor must be live"
@@ -224,9 +238,30 @@ mod tests {
             descriptor.contains(r#"section "perry_literal_layouts""#),
             "unused literal family must be outside startup's descriptor section"
         );
+        let fields: Vec<_> = descriptor
+            .split_once("} { ")
+            .expect("descriptor initializer must be present")
+            .1
+            .split(", ")
+            .collect();
+        let word = fields[5]
+            .strip_prefix("i32 ")
+            .unwrap()
+            .parse::<i32>()
+            .unwrap() as u32;
+        let row = word.wrapping_sub(crate::runtime_abi::LAYOUT_TAG);
         assert!(
-            descriptor.contains("i32 -1, i64 0, i64 0,"),
-            "literal family must register a carried layout with Object.prototype"
+            row >= crate::runtime_abi::NATIVE_LAYOUT_ROWS
+                && row < crate::runtime_abi::LAYOUT_ROW_LIMIT,
+            "literal family must carry an ordinary static DPA word"
+        );
+        assert!(
+            descriptor.contains("i64 0, ptr inttoptr (i64 0 to ptr)"),
+            "literal family must retain Object.prototype"
+        );
+        assert!(
+            descriptor.contains("ptr null, i32 0, i32 0 }"),
+            "the identity cell must remain unpublished until first birth"
         );
         assert!(
             descriptor.contains("i32 0, i32 0, ptr null"),
