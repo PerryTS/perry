@@ -1,11 +1,6 @@
-//! A nominal family is class-owned; a classless family is literal-section-owned.
+//! Literal-section ownership is decoded by literal_birth::family_at.
 //! Validate optional-slot geometry once at first publication.
 use super::PerryLayoutDesc;
-
-#[inline]
-pub(super) unsafe fn is_family(d: &PerryLayoutDesc) -> bool {
-    d.class_id != 0 || super::literal_birth::contains(d)
-}
 
 pub(super) unsafe fn valid_literal(d: &PerryLayoutDesc) -> bool {
     d.class_id == 0

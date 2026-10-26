@@ -82,28 +82,29 @@ fn count((start, end): (usize, usize)) -> u32 {
     (end.saturating_sub(start) / std::mem::size_of::<PerryLayoutDesc>()) as u32
 }
 
-/// Check the band before touching either span; eager records need only
-/// their original section bounds.
+/// Decode and classify a family in one pass. An eager descriptor proves a
+/// family only through its nominal class; an ordinary eager descriptor must
+/// return without reading the literal section. The literal span itself owns
+/// classless family identity.
 #[inline]
-pub(super) fn descriptor_at(index: u32) -> Option<*const PerryLayoutDesc> {
+pub(super) fn family_at(index: u32) -> Option<*const PerryLayoutDesc> {
     if index >= LAYOUT_INDEX_LIMIT {
         return None;
     }
     let eager = layout_bounds();
     let n = count(eager);
-    let (base, offset) = if index < n {
-        (eager.0, index)
-    } else {
-        let literal = bounds();
-        let offset = index - n;
-        if offset >= count(literal) {
-            return None;
-        }
-        (literal.0, offset)
-    };
-    Some(
-        (base + offset as usize * std::mem::size_of::<PerryLayoutDesc>()) as *const PerryLayoutDesc,
-    )
+    let size = std::mem::size_of::<PerryLayoutDesc>();
+    if index < n {
+        let desc = (eager.0 + index as usize * size) as *const PerryLayoutDesc;
+        // The linker span contains complete immutable descriptor records.
+        return unsafe { ((*desc).class_id != 0).then_some(desc) };
+    }
+    let literal = bounds();
+    let offset = index - n;
+    if offset >= count(literal) {
+        return None;
+    }
+    Some((literal.0 + offset as usize * size) as *const PerryLayoutDesc)
 }
 
 /// Section ownership is the immutable classless-family authority.

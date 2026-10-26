@@ -1717,10 +1717,10 @@ fn layout_id_of_index(index: u32) -> Option<u32> {
     (index < LAYOUT_INDEX_LIMIT).then_some(LAYOUT_BASE + index)
 }
 
-/// Decode a word once, including the span bounds check.
+/// Decode and classify a family word once, including the span bounds check.
 #[inline]
-fn descriptor_for_word(word: u32) -> Option<*const PerryLayoutDesc> {
-    literal_birth::descriptor_at(layout_id_of_word(word).wrapping_sub(LAYOUT_BASE))
+fn family_for_word(word: u32) -> Option<*const PerryLayoutDesc> {
+    literal_birth::family_at(layout_id_of_word(word).wrapping_sub(LAYOUT_BASE))
 }
 
 /// The class declaration owns the immutable pointer to its instance layout.
@@ -1961,10 +1961,8 @@ static KEEP_PERRY_LAYOUT_INDEX_PROBE: unsafe extern "C" fn(
 /// own id; an evaluation's copy is an object fact, [`is_family_object`])?
 #[inline]
 pub(crate) fn is_family_layout_word(word: u32) -> bool {
-    descriptor_for_word(word).is_some_and(|desc| unsafe {
-        let d = &*desc;
-        optional_family::is_family(d)
-            && registered_layout_id(load_layout_id(d)) == Some(layout_id_of_word(word))
+    family_for_word(word).is_some_and(|desc| unsafe {
+        registered_layout_id(load_layout_id(desc)) == Some(layout_id_of_word(word))
     })
 }
 
@@ -2007,13 +2005,11 @@ pub(crate) unsafe fn family_desc_of(obj: *const ObjectHeader) -> Option<&'static
         return None;
     }
     let word = (*obj).parent_class_id;
-    let Some(desc) = descriptor_for_word(word) else {
+    let Some(desc) = family_for_word(word) else {
         return evaluation_family_desc_of(word);
     };
     let d = &*desc;
-    (optional_family::is_family(d)
-        && registered_layout_id(load_layout_id(d)) == Some(layout_id_of_word(word)))
-    .then_some(d)
+    (registered_layout_id(load_layout_id(d)) == Some(layout_id_of_word(word))).then_some(d)
 }
 
 /// Is `obj` a class family object: on its family layout, or on a class
@@ -2073,7 +2069,7 @@ pub(crate) unsafe fn evaluation_layout_desc(family: u32) -> Option<&'static Perr
         // [`note_family_relink`] writes it, from one.
         family => {
             debug_assert!(is_family_layout_word(family));
-            descriptor_for_word(family).map(|desc| &*desc)
+            family_for_word(family).map(|desc| &*desc)
         }
     }
 }
@@ -2563,8 +2559,8 @@ pub(crate) unsafe fn family_own_key_hashed(
     let word = (*obj).parent_class_id;
     let index = word.wrapping_sub(LAYOUT_BASE);
     let d = if index < LAYOUT_INDEX_LIMIT {
-        let d = &*literal_birth::descriptor_at(index)?;
-        if !optional_family::is_family(d) || registered_layout_id(load_layout_id(d)) != Some(word) {
+        let d = &*literal_birth::family_at(index)?;
+        if registered_layout_id(load_layout_id(d)) != Some(word) {
             return None;
         }
         d
