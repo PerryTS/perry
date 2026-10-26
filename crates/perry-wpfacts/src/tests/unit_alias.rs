@@ -722,10 +722,11 @@ fn a_key_another_unit_stores_into_a_builtin_prototype_is_unknown_here() {
     // DECISIONS 204: `c` stores into `Function.prototype.call` (the builtin
     // prototypes are one object model-wide). In the whole program `check.call`
     // then reads that value: an unknown function, so `lit` escapes. Per unit
-    // the store is in `c`'s unit; `a` read the builtin `call` and `lit` kept
+    // the store was in `c`'s unit; `a` read the builtin `call` and `lit` kept
     // facts the whole program refutes (fastify: an `Object.assign` onto
     // `Object.prototype` makes ajv's `checkOptions.call(this, removedOptions)`
-    // an unknown call).
+    // an unknown call). Every unit's writes into the runtime's objects now
+    // reach every unit (`model::SharedWrite`, #13294), which carries this.
     let c = "(Function.prototype as any).call = (globalThis as any).zz;\nexport const c = 1;\n";
     let a = r#"
         function check(this: any, o: any) { return o.x; }

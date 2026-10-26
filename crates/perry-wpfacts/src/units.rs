@@ -741,10 +741,6 @@ pub(crate) struct Published {
     /// Templates (by display) the census found used beyond their contract:
     /// published as escapes.
     pub(crate) broken: FxHashSet<String>,
-    /// DECISIONS 204: the builtin prototypes and keys some unit stores into
-    /// (by name, `None`: a computed key) and the units that do, joined:
-    /// every other unit reads them as unknown (`Gen::unit_boundary`).
-    pub(crate) proto_writes: FxHashMap<(String, Option<String>), Vec<String>>,
     /// The class contracts of the units solved so far, by (defining module
     /// path, export name).
     pub(crate) classes: FxHashMap<(String, String), ClassContract>,
@@ -2181,23 +2177,6 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
             seeds.extend(solves.iter().position(|s| &s.key == p));
         }
         input.writes = writes;
-        // DECISIONS 204: a builtin prototype key a unit stores into for the
-        // first time is read by every other unit (`Gen::unit_boundary`): all
-        // are solved again. The set only grows.
-        let mut proto_grew = false;
-        for (si, u) in per_unit.iter().enumerate() {
-            let Some(u) = u else { continue };
-            for w in &u.proto_writes_out {
-                let ws = input.proto_writes.entry(w.clone()).or_default();
-                if !ws.contains(&solves[si].key) {
-                    ws.push(solves[si].key.clone());
-                    proto_grew = true;
-                }
-            }
-        }
-        if proto_grew {
-            seeds.extend(0..solves.len());
-        }
         // The shared objects' writes (`model::SharedWrite`): last round's
         // joined with every unit's latest, so they only grow (D16). When
         // they grew, the units that can see a new one are solved again.

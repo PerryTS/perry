@@ -374,14 +374,33 @@ fn a_broken_contract_resolves_only_the_units_that_see_it() {
     let w = |p: &str| module_work(&pf, p);
     // `b` and `c` are solved again for their own reason, not D's: `c`
     // publishes the receivers it runs `E.has` on (DECISIONS 107), `b` takes
-    // them (its contract gets exact), and `c` reads that contract.
+    // them (its contract gets exact), and `c` reads that contract. After the
+    // break round 2 costs `a` and `m` once more and what `b` and `c` cost
+    // in their round 2 solved alone. Rewritten for #13294 (decision 151:
+    // every unit replays the shared objects' writes): `b`'s receiver round
+    // is round 3 now, so round 2 is no longer every module's last solve
+    // (was: round 2 = `a` + `m` + `b` + `c`).
+    let e = DUAL.replace("class D", "class E").replace("neg", "other");
+    let bc = units_of(&[
+        ("b", &e),
+        (
+            "c",
+            "import { E } from './b'; const e = new E([1]); console.log(e.has(1));",
+        ),
+    ]);
+    // Round 3 solves `b` alone, which replays the other units' shared
+    // writes too (decision 151), so it costs its own last solve, not quite
+    // its cost alone.
     assert_eq!(
         pf.round_work[1],
-        w("a.ts") + w("m.ts") + w("b.ts") + w("c.ts"),
-        "{:?} {:?}",
+        bc.round_work[1] + w("a.ts") + w("m.ts"),
+        "{:?} {:?} {:?}",
         pf.round_work,
+        bc.round_work,
         pf.units
     );
+    assert_eq!(pf.round_work.len(), 3, "{:?}", pf.round_work);
+    assert_eq!(pf.round_work[2], w("b.ts"), "{:?} {:?}", pf.round_work, pf.units);
     assert!(
         verdicts(&pf, "neg").iter().all(|v| v.starts_with("No")),
         "{}",
@@ -434,9 +453,11 @@ fn a_broken_namespace_field_function_resolves_only_the_units_that_see_it() {
     // Merged head (main's write effects and ResolveExport): round 2 solves
     // fewer units than `a`, `m`, `b` and `c` together; the rounds are pinned.
     // Rewritten for DECISIONS 196 (each reader an argument marker gains is
-    // solve work): [699, 725, 908, 406, 334] -> the pin below.
+    // solve work): [699, 725, 908, 406, 334] -> [709, 731, 914, 410, 334];
+    // for #13294 (decision 151: every unit replays the shared objects'
+    // writes) -> the pin below.
     assert!(pf.round_work[1] < w("a.ts") + w("m.ts") + w("b.ts") + w("c.ts"));
-    assert_eq!(pf.round_work, [709, 731, 914, 410, 334], "{:?}", pf.units);
+    assert_eq!(pf.round_work, [709, 779, 956, 443, 392], "{:?}", pf.units);
 }
 
 #[test]
@@ -3676,7 +3697,9 @@ fn an_escaped_value_beside_top_is_that_top() {
     // contract's store flows (DECISIONS 118/151), not escapes, so beside the
     // callers' ⊤ they stay and ride into every array: n² until a store into a
     // parameter only ⊤ is passed for escapes there (DECISIONS 192, open).
-    assert_eq!((e8, e16, e32), (939, 2563, 8115), "entries {e8} {e16} {e32}");
+    // Rewritten for #13294 (decision 151: every unit replays the shared
+    // objects' writes): (939, 2563, 8115) -> the pin below.
+    assert_eq!((e8, e16, e32), (964, 2612, 8212), "entries {e8} {e16} {e32}");
 }
 
 #[test]

@@ -443,38 +443,6 @@ impl<'a> Gen<'a> {
             self.m.escape(gt, r);
             self.m.shared_replay = false;
         }
-        // DECISIONS 204: what another unit stores into a builtin prototype
-        // (`Object.prototype`, a native class's) is unknown here: the
-        // runtime shares those objects between units, and a lookup through
-        // one reads what was stored there, as in the whole program. This
-        // unit's own store is in its own solve.
-        if let Some(u) = self.unit_in {
-            let me = self.view.map(|v| v.key.as_str()).unwrap_or("");
-            let mut pw: Vec<&(String, Option<String>)> = u
-                .proto_writes
-                .iter()
-                .filter(|(_, ws)| ws.iter().any(|w| w != me))
-                .map(|(w, _)| w)
-                .collect();
-            pw.sort();
-            for (p, k) in pw {
-                let t = match p.strip_prefix("native:") {
-                    Some(n) => self.m.tok(TokKind::NativeProto(n.to_string())),
-                    None => self.m.tok(TokKind::ObjectProto),
-                };
-                let (n, key) = match k {
-                    Some(k) => {
-                        let a = self.m.atom(k);
-                        (self.m.field(t, a), Some(Key::Named(a)))
-                    }
-                    None => (self.m.field_any(t), None),
-                };
-                self.m
-                    .add_top(n, |_| "stored into a builtin prototype by another unit".into());
-                self.m.add_prim(n, crate::model::prim::ALL);
-                crate::builtins::note_native_write(&mut self.m, t, key, "stored by another unit");
-            }
-        }
         let holder = self.m.node_l("other-unit-receiver");
         self.m.other_units_store = Some(holder);
         self.m.add_tok(holder, TOP);

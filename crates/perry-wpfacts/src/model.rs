@@ -1232,10 +1232,6 @@ pub struct Model {
     /// publishes `global:*` unknown, as for a global unmodeled code writes.
     pub global_cells: bool,
     pub global_late: bool,
-    /// DECISIONS 204: the builtin prototypes (`Object.prototype`, a native
-    /// class's) and keys (`None`: a computed key) this unit stores into,
-    /// published to every unit (`ProgramFacts::proto_writes_out`).
-    pub proto_writes: crate::pts::FxHashSet<(Tok, Option<Atom>)>,
     /// DECISIONS 94: arrays published through an element cell
     /// (`arr:<name>`, `Gen::arr_leaves`) and other units' arrays this unit
     /// holds, each with the seed of cell `arr:<name>#named`: a named field
