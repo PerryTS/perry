@@ -215,14 +215,20 @@ pub(super) fn forget(id: u64) {
     }
 }
 
-pub(super) fn destroy_notification(id: u64) -> Option<(u64, bool)> {
+pub(super) fn destroy_notification(
+    id: u64,
+) -> Option<(u64, bool, Option<crate::async_context::JobDomainToken>)> {
     unsafe {
         let state = get(id)?;
         if (*state).destroyed {
             return None;
         }
         (*state).destroyed = true;
-        let notification = ((*state).serial, (*state).promise_owner);
+        let notification = (
+            (*state).serial,
+            (*state).promise_owner,
+            (*state).context.job_domain_token(),
+        );
         forget(id);
         Some(notification)
     }
@@ -239,7 +245,11 @@ pub(crate) fn scan_token(id: &mut u64, visitor: &mut crate::gc::RuntimeRootVisit
 /// Native-only idempotent release. Thread teardown skips notifications.
 pub(crate) unsafe fn finalize(state: *mut ResourceState, notify: bool) {
     if notify && (*state).promise_owner && !(*state).destroyed {
-        super::queue_destroy_notification((*state).serial, true);
+        super::queue_destroy_notification(
+            (*state).serial,
+            true,
+            (*state).context.job_domain_token(),
+        );
     }
     (*state).destroyed = true;
     drop(std::mem::take(&mut (*state).context));

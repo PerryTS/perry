@@ -2,6 +2,7 @@
 //! Every potentially throwing operation catches before returning to C.
 use super::super::*;
 mod promise;
+mod task;
 use crate::native_payload::{self as payload, NativePayloadFamily, OwnerLink};
 pub use promise::perry_component_frame_promise_poll;
 use std::{
@@ -12,6 +13,10 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
+};
+pub use task::{
+    perry_component_frame_task_call, perry_component_frame_task_checkpoint,
+    perry_component_frame_task_new, perry_component_frame_task_ready,
 };
 
 static FRAME: NativePayloadFamily = NativePayloadFamily {
@@ -47,6 +52,7 @@ pub(super) struct Frame {
     pub(super) transfers: Vec<u32>,
     pub(super) borrows: Vec<u32>,
     lifetime: Option<u32>,
+    task: Option<task::TaskContext>,
 }
 
 impl Frame {
@@ -82,6 +88,7 @@ impl Frame {
             transfers: Vec::new(),
             borrows: Vec::new(),
             lifetime: None,
+            task: None,
         }
     }
 
@@ -531,8 +538,16 @@ pub unsafe extern "C" fn perry_component_frame_call(
     function: u32,
     args: u32,
 ) -> u32 {
+    let result = call_export(frame(pointer), interface, function, args);
+    frame(pointer).guard(|_| {
+        crate::promise::microtasks::js_promise_run_microtasks_checkpoint();
+    });
+    result
+}
+
+unsafe fn call_export(frame: &mut Frame, interface: u32, function: u32, args: u32) -> u32 {
     let mut values = Vec::new();
-    let result = frame(pointer).guard(|frame| {
+    let result = frame.guard(|frame| {
         let scope = RuntimeHandleScope::new();
         let registry = scope.root_nanbox_f64(super::registry());
         let context = context::get(registry.get_nanbox_f64());
@@ -573,14 +588,6 @@ pub unsafe extern "C" fn perry_component_frame_call(
         frame.add(value)
     });
     drop(values);
-    // A reactor has no command event loop. Complete a job checkpoint after
-    // a successful export while its arguments and result remain rooted in
-    // this frame, before the C adapter reads them. This delivers resource
-    // finalizers recorded by explicit or automatic collection as ordinary
-    // jobs; it does not wait for timers, I/O or asynchronous WIT results.
-    frame(pointer).guard(|_| {
-        crate::promise::microtasks::js_promise_run_microtasks_checkpoint();
-    });
     result
 }
 
@@ -597,7 +604,7 @@ const fn adapter_entry(code: *const ()) -> AdapterEntry {
 }
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
-static KEEP_ADAPTER_ENTRIES: [AdapterEntry; 37] = [
+static KEEP_ADAPTER_ENTRIES: [AdapterEntry; 41] = [
     adapter_entry(super::resources::payload::js_component_resource_create as *const ()),
     adapter_entry(super::resources::payload::js_component_resource_value as *const ()),
     adapter_entry(super::resources::payload::perry_component_frame_resource_destroy as *const ()),
@@ -635,4 +642,8 @@ static KEEP_ADAPTER_ENTRIES: [AdapterEntry; 37] = [
     adapter_entry(perry_component_frame_bytes_copy as *const ()),
     adapter_entry(perry_component_frame_call as *const ()),
     adapter_entry(perry_component_frame_promise_poll as *const ()),
+    adapter_entry(perry_component_frame_task_new as *const ()),
+    adapter_entry(perry_component_frame_task_call as *const ()),
+    adapter_entry(perry_component_frame_task_checkpoint as *const ()),
+    adapter_entry(perry_component_frame_task_ready as *const ()),
 ];

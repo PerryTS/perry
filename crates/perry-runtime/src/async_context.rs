@@ -10,10 +10,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use crate::gc::{RuntimeHandle, RuntimeHandleScope};
+pub(crate) mod job_domain;
+pub use job_domain::JobDomainToken;
 
 #[derive(Clone, Default)]
 pub struct AsyncContextSnapshot {
     entries: Vec<AsyncContextEntry>,
+    job_domain: Option<JobDomainToken>,
 }
 
 /// A native context vector in an ordinary young, movable GC holder. The
@@ -92,7 +95,7 @@ pub(crate) unsafe fn finalize_snapshot_holder(cell: *mut AsyncSnapshotHolder) {
 
 impl AsyncContextSnapshot {
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.entries.is_empty() && self.job_domain.is_none()
     }
 }
 
@@ -164,7 +167,7 @@ pub fn token_from_storage_value(value: f64) -> Option<i64> {
 // as reaching JS. `HotKey::with` is `#[inline(always)]`, and its only indirect
 // call is the audited cold `resolve`.
 crate::perry_thread_local! {
-    static ACTIVE_CONTEXT: RefCell<AsyncContextSnapshot> = const { RefCell::new(AsyncContextSnapshot { entries: Vec::new() }) };
+    static ACTIVE_CONTEXT: RefCell<AsyncContextSnapshot> = const { RefCell::new(AsyncContextSnapshot { entries: Vec::new(), job_domain: None }) };
 }
 
 unsafe fn token_ref(token: i64) -> &'static AsyncLocalStorageTokenInner {
@@ -201,6 +204,8 @@ pub fn enter_context(snapshot: &AsyncContextSnapshot) -> AsyncContextSnapshot {
         let previous = ctx.clone();
         let mut next = snapshot.clone();
         discard_disabled_entries(&mut next);
+        // ALS snapshots restore values, never the canonical task executing JS.
+        next.job_domain = ctx.job_domain.clone();
         *ctx = next;
         previous
     })
@@ -209,6 +214,7 @@ pub fn enter_context(snapshot: &AsyncContextSnapshot) -> AsyncContextSnapshot {
 pub fn restore_context(mut snapshot: AsyncContextSnapshot) {
     discard_disabled_entries(&mut snapshot);
     ACTIVE_CONTEXT.with(|ctx| {
+        snapshot.job_domain = ctx.borrow().job_domain.clone();
         *ctx.borrow_mut() = snapshot;
     });
 }
@@ -376,6 +382,8 @@ pub enum ContextGuardAction {
     RestoreStores(AsyncLocalStoragePayload, Option<(u64, Vec<f64>)>),
     /// `runInAsyncScope()` / snapshot trampoline: restore the full snapshot.
     RestoreSnapshot(AsyncContextSnapshot),
+    /// Native-only canonical task identity; no JS pointers live in this token.
+    RestoreJobDomain(Option<JobDomainToken>),
     /// Silently pop one async_hooks execution-id frame (no `after` hook
     /// callbacks: arbitrary JS must not run in a landing pad).
     RestoreExecutionIds,
@@ -422,6 +430,9 @@ pub fn apply_context_guard(action: ContextGuardAction) {
         ContextGuardAction::PopStore(lease) => pop_store(lease.token()),
         ContextGuardAction::RestoreStores(lease, stores) => restore_store(lease.token(), stores),
         ContextGuardAction::RestoreSnapshot(snapshot) => restore_context(snapshot),
+        ContextGuardAction::RestoreJobDomain(domain) => {
+            job_domain::replace_current(domain);
+        }
         ContextGuardAction::RestoreExecutionIds => crate::async_hooks::unwind_execution_scope(),
         #[cfg(test)]
         ContextGuardAction::TestNoop => {}
@@ -457,7 +468,9 @@ fn scan_context_guard_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>)
     CONTEXT_GUARDS.with(|guards| {
         for action in guards.borrow_mut().iter_mut() {
             match action {
-                ContextGuardAction::PopStore(_) | ContextGuardAction::RestoreExecutionIds => {}
+                ContextGuardAction::PopStore(_)
+                | ContextGuardAction::RestoreExecutionIds
+                | ContextGuardAction::RestoreJobDomain(_) => {}
                 #[cfg(test)]
                 ContextGuardAction::TestNoop => {}
                 ContextGuardAction::RestoreStores(_, stores) => {
@@ -652,6 +665,7 @@ pub fn refresh_snapshot_from_roots(
 pub(crate) fn test_snapshot_with_store(store: f64) -> AsyncContextSnapshot {
     let payload = AsyncLocalStoragePayload::default();
     AsyncContextSnapshot {
+        job_domain: None,
         entries: vec![AsyncContextEntry {
             generation: token_generation(payload.token()),
             token: payload.token,

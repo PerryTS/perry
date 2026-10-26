@@ -208,29 +208,28 @@ pub extern "C" fn js_promise_resolved(value: f64) -> *mut Promise {
             // before its identity short-cut.  An own accessor can throw, and
             // an own non-intrinsic constructor prevents returning x itself.
             let addr = inner as usize;
-            let same_intrinsic_constructor = if super::then::promise_inherited_user_then(addr)
-                .is_some()
-            {
-                false
-            } else if super::promise_has_own_constructor(addr) {
-                let ctor = unsafe {
-                    crate::object::exotic_expando::exotic_get_own_property(
-                        addr,
-                        crate::object::exotic_expando::ExoticKind::Promise,
-                        "constructor",
-                        value_h.get_nanbox_f64(),
-                    )
-                }
-                .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
-                let ctor_h = scope.root_nanbox_f64(ctor);
-                let intrinsic = crate::object::js_get_global_this_builtin_value(
-                    b"Promise".as_ptr(),
-                    b"Promise".len(),
-                );
-                ctor_h.get_nanbox_f64().to_bits() == intrinsic.to_bits()
-            } else {
-                true
-            };
+            let same_intrinsic_constructor =
+                if super::then::promise_inherited_user_then(addr).is_some() {
+                    false
+                } else if super::promise_has_own_constructor(addr) {
+                    let ctor = unsafe {
+                        crate::object::exotic_expando::exotic_get_own_property(
+                            addr,
+                            crate::object::exotic_expando::ExoticKind::Promise,
+                            "constructor",
+                            value_h.get_nanbox_f64(),
+                        )
+                    }
+                    .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
+                    let ctor_h = scope.root_nanbox_f64(ctor);
+                    let intrinsic = crate::object::js_get_global_this_builtin_value(
+                        b"Promise".as_ptr(),
+                        b"Promise".len(),
+                    );
+                    ctor_h.get_nanbox_f64().to_bits() == intrinsic.to_bits()
+                } else {
+                    true
+                };
             if same_intrinsic_constructor {
                 return crate::value::js_nanbox_get_pointer(value_h.get_nanbox_f64())
                     as *mut Promise;
@@ -314,7 +313,7 @@ pub extern "C" fn js_promise_resolved_then(
         // drain via the `Task::Inline` arm.
         let next = js_promise_new();
         TASK_QUEUE.with(|q| {
-            q.borrow_mut().push_back(Task::Inline(
+            q.borrow_mut().enqueue_promise_job(Task::Inline(
                 on_fulfilled,
                 value,
                 next,
@@ -700,7 +699,7 @@ pub extern "C" fn js_async_step_chain(value: f64, step_closure: ClosurePtr) -> *
     };
     crate::r#box::retain_async_box_activation(trap.box_activation);
     TASK_QUEUE.with(|q| {
-        q.borrow_mut().push_back(Task::AsyncStep(
+        q.borrow_mut().enqueue_promise_job(Task::AsyncStep(
             rooted_step(),
             queued_value_handle.get_nanbox_f64(),
             next,

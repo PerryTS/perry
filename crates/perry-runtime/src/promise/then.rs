@@ -278,7 +278,7 @@ pub extern "C" fn js_promise_resolve(promise: *mut Promise, value: f64) {
                 let mut q = q.borrow_mut();
                 for listener in settle_listeners {
                     if !listener.on_fulfilled.is_null() {
-                        q.push_back(Task::Inline(
+                        q.enqueue_promise_job(Task::Inline(
                             listener.on_fulfilled,
                             value,
                             ptr::null_mut(),
@@ -288,7 +288,7 @@ pub extern "C" fn js_promise_resolve(promise: *mut Promise, value: f64) {
                     }
                 }
                 for all_state in promise_all_states {
-                    q.push_back(Task::PromiseAll(
+                    q.enqueue_promise_job(Task::PromiseAll(
                         all_state,
                         value,
                         true,
@@ -296,7 +296,7 @@ pub extern "C" fn js_promise_resolve(promise: *mut Promise, value: f64) {
                     ));
                 }
                 if has_normal_handler {
-                    q.push_back(Task::Promise(promise, value, true, task_context));
+                    q.enqueue_promise_job(Task::Promise(promise, value, true, task_context));
                 } else {
                     clear_promise_context(promise);
                 }
@@ -515,7 +515,7 @@ pub extern "C" fn js_promise_reject(promise: *mut Promise, reason: f64) {
                 let mut q = q.borrow_mut();
                 for listener in settle_listeners {
                     if !listener.on_rejected.is_null() {
-                        q.push_back(Task::Inline(
+                        q.enqueue_promise_job(Task::Inline(
                             listener.on_rejected,
                             reason,
                             ptr::null_mut(),
@@ -525,7 +525,7 @@ pub extern "C" fn js_promise_reject(promise: *mut Promise, reason: f64) {
                     }
                 }
                 for all_state in promise_all_states {
-                    q.push_back(Task::PromiseAll(
+                    q.enqueue_promise_job(Task::PromiseAll(
                         all_state,
                         reason,
                         false,
@@ -533,7 +533,7 @@ pub extern "C" fn js_promise_reject(promise: *mut Promise, reason: f64) {
                     ));
                 }
                 if has_normal_handler {
-                    q.push_back(Task::Promise(promise, reason, false, task_context));
+                    q.enqueue_promise_job(Task::Promise(promise, reason, false, task_context));
                 } else {
                     clear_promise_context(promise);
                 }
@@ -620,7 +620,7 @@ pub extern "C" fn js_promise_then(
                 PromiseState::Fulfilled => {
                     if !on_fulfilled.is_null() || !next.is_null() {
                         TASK_QUEUE.with(|q| {
-                            q.borrow_mut().push_back(Task::Promise(
+                            q.borrow_mut().enqueue_promise_job(Task::Promise(
                                 promise,
                                 (*promise).value,
                                 true,
@@ -632,7 +632,7 @@ pub extern "C" fn js_promise_then(
                 PromiseState::Rejected => {
                     if !on_rejected.is_null() || !next.is_null() {
                         TASK_QUEUE.with(|q| {
-                            q.borrow_mut().push_back(Task::Promise(
+                            q.borrow_mut().enqueue_promise_job(Task::Promise(
                                 promise,
                                 (*promise).reason,
                                 false,
@@ -655,7 +655,7 @@ pub extern "C" fn js_promise_then(
                 PromiseState::Fulfilled => {
                     let value = (*promise).value;
                     TASK_QUEUE.with(|q| {
-                        q.borrow_mut().push_back(Task::Inline(
+                        q.borrow_mut().enqueue_promise_job(Task::Inline(
                             on_fulfilled,
                             value,
                             next,
@@ -667,7 +667,7 @@ pub extern "C" fn js_promise_then(
                 PromiseState::Rejected => {
                     let reason = (*promise).reason;
                     TASK_QUEUE.with(|q| {
-                        q.borrow_mut().push_back(Task::Inline(
+                        q.borrow_mut().enqueue_promise_job(Task::Inline(
                             on_rejected,
                             reason,
                             next,
@@ -736,7 +736,7 @@ pub(crate) fn js_promise_attach_handlers(
                     if !on_fulfilled.is_null() {
                         let value = (*promise).value;
                         TASK_QUEUE.with(|q| {
-                            q.borrow_mut().push_back(Task::Inline(
+                            q.borrow_mut().enqueue_promise_job(Task::Inline(
                                 on_fulfilled,
                                 value,
                                 ptr::null_mut(),
@@ -750,7 +750,7 @@ pub(crate) fn js_promise_attach_handlers(
                     if !on_rejected.is_null() {
                         let reason = (*promise).reason;
                         TASK_QUEUE.with(|q| {
-                            q.borrow_mut().push_back(Task::Inline(
+                            q.borrow_mut().enqueue_promise_job(Task::Inline(
                                 on_rejected,
                                 reason,
                                 ptr::null_mut(),
@@ -781,7 +781,7 @@ pub(crate) fn js_promise_attach_handlers(
             PromiseState::Fulfilled => {
                 if !on_fulfilled.is_null() {
                     TASK_QUEUE.with(|q| {
-                        q.borrow_mut().push_back(Task::Promise(
+                        q.borrow_mut().enqueue_promise_job(Task::Promise(
                             promise,
                             (*promise).value,
                             true,
@@ -793,7 +793,7 @@ pub(crate) fn js_promise_attach_handlers(
             PromiseState::Rejected => {
                 if !on_rejected.is_null() {
                     TASK_QUEUE.with(|q| {
-                        q.borrow_mut().push_back(Task::Promise(
+                        q.borrow_mut().enqueue_promise_job(Task::Promise(
                             promise,
                             (*promise).reason,
                             false,
@@ -973,7 +973,7 @@ unsafe fn register_finally_reactions(
             // an EARLIER reaction on the same promise.
             let context = capture_context();
             TASK_QUEUE.with(|q| {
-                q.borrow_mut().push_back(Task::Inline(
+                q.borrow_mut().enqueue_promise_job(Task::Inline(
                     fulfill_wrap,
                     (*promise).value,
                     ptr::null_mut(),
@@ -985,7 +985,7 @@ unsafe fn register_finally_reactions(
         PromiseState::Rejected => {
             let context = capture_context();
             TASK_QUEUE.with(|q| {
-                q.borrow_mut().push_back(Task::Inline(
+                q.borrow_mut().enqueue_promise_job(Task::Inline(
                     reject_wrap,
                     (*promise).reason,
                     ptr::null_mut(),
@@ -1920,7 +1920,7 @@ extern "C" fn finally_passthrough_fulfill(
             })
         });
         TASK_QUEUE.with(|q| {
-            q.borrow_mut().push_back(Task::AsyncStep(
+            q.borrow_mut().enqueue_promise_job(Task::AsyncStep(
                 std::ptr::null(),
                 value_handle.get_nanbox_f64(),
                 next,
@@ -1958,7 +1958,7 @@ extern "C" fn finally_passthrough_reject(
             })
         });
         TASK_QUEUE.with(|q| {
-            q.borrow_mut().push_back(Task::AsyncStep(
+            q.borrow_mut().enqueue_promise_job(Task::AsyncStep(
                 std::ptr::null(),
                 reason_handle.get_nanbox_f64(),
                 next,

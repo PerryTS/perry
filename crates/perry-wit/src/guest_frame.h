@@ -52,6 +52,14 @@ uint32_t perry_component_frame_call(void *, uint32_t, uint32_t, uint32_t);
    Marks rejection handled. No jobs, thenables or I/O are driven here.
    Rejection keeps the original JS reason; an earlier frame error is preserved. */
 int32_t perry_component_frame_promise_poll(void *, uint32_t, uint32_t *);
+/* Internal async-scheduler foundation; drop through the ordinary frame API.
+   Calls/checkpoints restore ALS and task identity before returning to C.
+   Checkpoint/ready return -1 on frame error. Ready consumes hints and checks
+   runnable jobs; it is not a waitable. No timer or foreign I/O is driven. */
+void *perry_component_frame_task_new(void);
+uint32_t perry_component_frame_task_call(void *, uint32_t, uint32_t, uint32_t);
+int32_t perry_component_frame_task_checkpoint(void *);
+int32_t perry_component_frame_task_ready(void *);
 
 uint32_t perry_component_frame_resource_lift(void *, uint32_t, uint32_t, uint32_t, int32_t);
 uint32_t perry_component_frame_resource_lower(void *, uint32_t, uint32_t, int32_t, int32_t);

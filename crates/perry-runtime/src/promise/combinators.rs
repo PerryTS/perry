@@ -99,7 +99,7 @@ pub(super) fn attach_promise_all_state(promise: *mut Promise, state: PromiseAllS
         match (*promise).state {
             PromiseState::Fulfilled => {
                 TASK_QUEUE.with(|q| {
-                    q.borrow_mut().push_back(Task::PromiseAll(
+                    q.borrow_mut().enqueue_promise_job(Task::PromiseAll(
                         state,
                         (*promise).value,
                         true,
@@ -110,7 +110,7 @@ pub(super) fn attach_promise_all_state(promise: *mut Promise, state: PromiseAllS
             }
             PromiseState::Rejected => {
                 TASK_QUEUE.with(|q| {
-                    q.borrow_mut().push_back(Task::PromiseAll(
+                    q.borrow_mut().enqueue_promise_job(Task::PromiseAll(
                         state,
                         (*promise).reason,
                         false,
@@ -1276,10 +1276,9 @@ pub extern "C" fn js_assimilate_thenable(value: f64) -> f64 {
         let addr = (value.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
         let key = crate::string::js_string_from_bytes(b"then".as_ptr(), 4);
         let user_then = !key.is_null()
-            && crate::object::prototype_chain::resolve_inherited_field(addr, key)
-                .is_some_and(|then| {
-                    crate::array::value_is_own_user_method(f64::from_bits(then.bits()), "then")
-                });
+            && crate::object::prototype_chain::resolve_inherited_field(addr, key).is_some_and(
+                |then| crate::array::value_is_own_user_method(f64::from_bits(then.bits()), "then"),
+            );
         return if user_then {
             assimilate_via_then_property(value)
         } else {

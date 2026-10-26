@@ -244,6 +244,15 @@ traps/unload. Run collections while component tasks are suspended to prove
 their captured Perry values remain rooted. Add cross-language async
 composition and a streaming HTTP example before claiming P3 support.
 
+The internal guest task checkpoint foundation now isolates Promise/nextTick and
+cleanup jobs by canonical task while preserving ALS across C entries. A separate
+maintained-C fixture proves unit-stream wakeups between suspended tasks. These
+are building blocks: stable async import frames, generated callbacks, typed
+future/stream guest values, cancellation and cross-language Perry guest execution
+remain required before removing the guest generator guards. The current
+[component support notes](WASI_COMPONENTS.md) distinguish these internal checks
+from supported public output.
+
 Retain the P2 command/profile tests during adoption. Specify the minor
 version: the official release table records additional Component Model
 features for 0.3.1, so a generic "P3 supported" label is insufficient.

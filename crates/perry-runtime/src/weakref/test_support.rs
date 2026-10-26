@@ -127,16 +127,28 @@ fn empty_checkpoint_delivers_recorded_finalization_job() {
         let registry_ptr = js_nanbox_get_pointer(registry.get_nanbox_f64()) as *mut ObjectHeader;
         let entries = unsafe { object_field_bits(registry_ptr, FINREG_ENTRIES_FIELD) };
         let record = js_array_get_f64((entries & POINTER_MASK) as *mut ArrayHeader, 0);
+        let owner = crate::async_context::job_domain::JobDomain::new();
+        let sibling = crate::async_context::job_domain::JobDomain::new();
         PENDING_FINALIZATION_JOBS.with(|jobs| {
             jobs.borrow_mut().push(PendingFinalizationJob {
                 registry: registry.get_nanbox_f64(),
                 record,
                 callback: callback.get_nanbox_f64(),
                 held: 41.0,
+                domain: Some(owner.token()),
             })
         });
         assert!(!crate::promise::microtasks::empty_checkpoint_eligible_for_test());
-        assert!(crate::promise::js_promise_run_microtasks_event_loop() > 0);
+        sibling.run(|| {
+            assert!(!eligible_finalization_jobs_pending());
+            crate::promise::microtasks::js_promise_run_microtasks_checkpoint();
+            assert_eq!(DELIVERED.load(Ordering::Relaxed), 0);
+            assert_eq!(pending_finalization_jobs_count(), 1);
+        });
+        owner.run(|| {
+            assert!(eligible_finalization_jobs_pending());
+            assert!(crate::promise::js_promise_run_microtasks_event_loop() > 0);
+        });
         assert_eq!(DELIVERED.load(Ordering::Relaxed), 41.0f64.to_bits());
         assert_eq!(pending_finalization_jobs_count(), 0);
     })

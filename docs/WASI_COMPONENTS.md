@@ -379,6 +379,29 @@ plain/TLS combinations of native and guest moving GC. It also preserves
 separate future/stream architecture prototypes; those results do not qualify
 production bindings.
 
+Internal task frames now carry a native job-ownership lease and a traced ALS
+snapshot. Their C call and checkpoint functions restore all Rust scopes before
+returning. Promise jobs, nextTicks and deferred cleanup jobs owned by another
+live task stay parked; settling a Promise from a sibling marks its owner ready.
+User-restored ALS snapshots cannot change the canonical task executing JS.
+Unowned jobs, and jobs whose owner has finished, can run on the next entering
+task. An uncaught job error remains rooted in its task frame instead of exiting
+the embedding process. Error recovery also restores the microtask runner’s native
+counters and activation boundaries before C returns. Task checkpoints do not drive timers or foreign native
+I/O. This internal API does not supply canonical suspension, cancellation or
+async import/export adapters. See the
+[task checkpoint receipt](validation/wasi-guest-task-checkpoints-20261026.json).
+
+A separate C-only acceptance fixture uses the maintained `wit-bindgen-c` backend
+to prove cross-task wakeups through a unit stream and a canonical waitable set.
+It checks reverse completion order, coalesced wakeups before and after arming a
+read, and loading the component against a public world that omits its harmless
+stream-type anchor export. Run `scripts/component_scheduler_wake_acceptance.py`
+with wasi-sdk and a Cargo target directory. This fixture has no Perry JS runtime;
+it does not qualify generated Perry async adapters or cooperative cancellation.
+The [wake receipt](validation/wasi-canonical-wake-20261026.json) records its exact
+source and toolchain. Public async guest generation remains guarded.
+
 The internal generic-reader checks additionally cover canonical layouts from
 `wit-parser::SizeAlign`, shared metadata for repeated aliases, a reusable
 quota-limited Wasm allocator, and task-local frames. They exercise concurrent

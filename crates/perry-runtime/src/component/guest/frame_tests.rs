@@ -550,21 +550,25 @@ fn dropping_a_guest_frame_preserves_later_temporary_handle_scopes() {
 #[test]
 fn guest_frame_drop_after_cell_teardown_never_resolves_its_stale_link() {
     crate::gc::gc_init();
-    let mut frame = Frame::new();
-    let alive = Arc::downgrade(&frame.alive);
-    unsafe {
-        crate::native_handle::finalize_native_handle_at_teardown(
-            frame.owner.0 as *mut crate::native_handle::NativeHandleHeader,
+    let frames = [Box::new(Frame::new()), unsafe {
+        Box::from_raw(perry_component_frame_task_new().cast::<Frame>())
+    }];
+    for mut frame in frames {
+        let alive = Arc::downgrade(&frame.alive);
+        unsafe {
+            crate::native_handle::finalize_native_handle_at_teardown(
+                frame.owner.0 as *mut crate::native_handle::NativeHandleHeader,
+            );
+            assert!(!frame.alive.load(Ordering::Acquire));
+            // The real teardown unmaps the cell. Release its test-only pin while
+            // storage is still mapped, then poison the inert post-teardown token.
+            payload::link_unref(frame.owner);
+        }
+        frame.owner = OwnerLink(usize::MAX);
+        drop(frame);
+        assert!(
+            alive.upgrade().is_none(),
+            "both native anchor references must be released"
         );
-        assert!(!frame.alive.load(Ordering::Acquire));
-        // The real teardown unmaps the cell. Release its test-only pin while
-        // storage is still mapped, then poison the inert post-teardown token.
-        payload::link_unref(frame.owner);
     }
-    frame.owner = OwnerLink(usize::MAX);
-    drop(frame);
-    assert!(
-        alive.upgrade().is_none(),
-        "both native anchor references must be released"
-    );
 }

@@ -573,6 +573,7 @@ fn queue_microtask_with_type(callback: i64, type_name: &str, args: Vec<f64>) {
         scope.root_raw_mut_ptr(state);
     }
     crate::async_context::refresh_snapshot_from_roots(&mut context, &context_roots);
+    context.prepare_job_enqueue();
     QUEUED_MICROTASKS.with(|q| {
         q.borrow_mut().push_back(QueuedMicrotask {
             callback: callback as i64,
@@ -629,7 +630,11 @@ pub(crate) fn drain_queued_microtasks_count() -> i32 {
     };
     let mut ran = 0;
     loop {
-        let task = QUEUED_MICROTASKS.with(|q| q.borrow_mut().pop_front());
+        let task = QUEUED_MICROTASKS.with(|q| {
+            let mut q = q.borrow_mut();
+            let index = q.iter().position(|task| task.context.job_is_eligible())?;
+            q.remove(index)
+        });
         match task {
             Some(QueuedMicrotask {
                 callback: cb,
@@ -765,7 +770,7 @@ pub(crate) fn drain_queued_microtasks_count() -> i32 {
 }
 
 pub(crate) fn queued_microtasks_pending() -> bool {
-    QUEUED_MICROTASKS.with(|q| !q.borrow().is_empty())
+    QUEUED_MICROTASKS.with(|q| q.borrow().iter().any(|task| task.context.job_is_eligible()))
 }
 
 pub fn scan_queued_microtask_roots(mark: &mut dyn FnMut(f64)) {

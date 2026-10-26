@@ -193,7 +193,7 @@ pub(super) fn enqueue_thenable_job(promise: *mut Promise, thenable: f64, then_ac
     let callback = crate::value::js_nanbox_get_pointer(callback.get_nanbox_f64())
         as *mut crate::closure::ClosureHeader;
     TASK_QUEUE.with(|q| {
-        q.borrow_mut().push_back(Task::Microtask {
+        q.borrow_mut().enqueue_promise_job(Task::Microtask {
             callback,
             context,
             async_id: ids.async_id,
@@ -307,7 +307,7 @@ pub(super) fn enqueue_native_adoption_job(outer: *mut Promise, inner: *mut Promi
     let callback = crate::value::js_nanbox_get_pointer(callback.get_nanbox_f64())
         as *mut crate::closure::ClosureHeader;
     TASK_QUEUE.with(|q| {
-        q.borrow_mut().push_back(Task::Microtask {
+        q.borrow_mut().enqueue_promise_job(Task::Microtask {
             callback,
             context,
             async_id: ids.async_id,
@@ -356,7 +356,7 @@ extern "C" fn native_promise_adoption_job(
                     })
                 });
             TASK_QUEUE.with(|q| {
-                q.borrow_mut().push_back(Task::AsyncStep(
+                q.borrow_mut().enqueue_promise_job(Task::AsyncStep(
                     std::ptr::null(),
                     value_handle.get_nanbox_f64(),
                     outer,

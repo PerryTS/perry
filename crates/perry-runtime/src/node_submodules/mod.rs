@@ -1581,7 +1581,7 @@ pub fn scan_node_submodule_singleton_roots(mark: &mut dyn FnMut(f64)) {
 
 pub fn scan_node_submodule_singleton_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     DIAG_PENDING_UNCAUGHT.with(|pending| {
-        for err in pending.borrow_mut().iter_mut() {
+        for (err, _) in pending.borrow_mut().iter_mut() {
             visitor.visit_nanbox_f64_slot(err);
         }
     });
@@ -1671,8 +1671,9 @@ pub(crate) fn test_seed_node_submodule_roots(
     DIAG_PENDING_UNCAUGHT.with(|pending| {
         let mut pending = pending.borrow_mut();
         pending.clear();
-        pending.push(f64::from_bits(
-            JSValue::pointer(namespace as *const u8).bits(),
+        pending.push((
+            f64::from_bits(JSValue::pointer(namespace as *const u8).bits()),
+            None,
         ));
     });
     ANY_SINGLETON_ALLOCATED.store(1, Ordering::Release);
@@ -1690,8 +1691,13 @@ pub(crate) fn test_node_submodule_roots() -> (usize, usize, usize, u64) {
         NAMESPACE_SINGLETONS.with(|m| m.borrow().get(&3).map(|ptr| *ptr as usize).unwrap_or(0));
     let diag =
         DIAG_NOOP_CLOSURE.with(|slot| slot.borrow().as_ref().map(|ptr| *ptr as usize).unwrap_or(0));
-    let pending = DIAG_PENDING_UNCAUGHT
-        .with(|pending| pending.borrow_mut().pop().map(f64::to_bits).unwrap_or(0));
+    let pending = DIAG_PENDING_UNCAUGHT.with(|pending| {
+        pending
+            .borrow_mut()
+            .pop()
+            .map(|(value, _)| value.to_bits())
+            .unwrap_or(0)
+    });
     (closure, namespace, diag, pending)
 }
 
