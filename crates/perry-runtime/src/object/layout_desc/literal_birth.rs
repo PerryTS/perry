@@ -82,29 +82,35 @@ fn count((start, end): (usize, usize)) -> u32 {
     (end.saturating_sub(start) / std::mem::size_of::<PerryLayoutDesc>()) as u32
 }
 
-/// Decode and classify a family in one pass. An eager descriptor proves a
-/// family only through its nominal class; an ordinary eager descriptor must
-/// return without reading the literal section. The literal span itself owns
-/// classless family identity.
+/// One checked byte-offset decoder for both immutable image spans. The
+/// boolean is the selected span's classless-family authority, not object state.
+/// Comparing byte offsets avoids dividing linker span lengths on every read.
 #[inline]
-pub(super) fn family_at(index: u32) -> Option<*const PerryLayoutDesc> {
+pub(super) fn descriptor_at(index: u32) -> Option<(*const PerryLayoutDesc, bool)> {
     if index >= LAYOUT_INDEX_LIMIT {
         return None;
     }
     let eager = layout_bounds();
-    let n = count(eager);
-    let size = std::mem::size_of::<PerryLayoutDesc>();
-    if index < n {
-        let desc = (eager.0 + index as usize * size) as *const PerryLayoutDesc;
-        // The linker span contains complete immutable descriptor records.
-        return unsafe { ((*desc).class_id != 0).then_some(desc) };
+    let bytes = eager.1.saturating_sub(eager.0);
+    // LAYOUT_INDEX_LIMIT bounds this multiplication even on 32-bit targets.
+    let offset = index as usize * std::mem::size_of::<PerryLayoutDesc>();
+    if offset < bytes {
+        return Some(((eager.0 + offset) as *const PerryLayoutDesc, false));
     }
     let literal = bounds();
-    let offset = index - n;
-    if offset >= count(literal) {
+    let offset = offset - bytes;
+    if offset >= literal.1.saturating_sub(literal.0) {
         return None;
     }
-    Some((literal.0 + offset as usize * size) as *const PerryLayoutDesc)
+    Some(((literal.0 + offset) as *const PerryLayoutDesc, true))
+}
+
+/// Generic words need family classification as well as a checked decode.
+/// The literal section owns classless identity; eager families are nominal.
+#[inline]
+pub(super) fn family_at(index: u32) -> Option<*const PerryLayoutDesc> {
+    let (desc, literal) = descriptor_at(index)?;
+    unsafe { (literal || (*desc).class_id != 0).then_some(desc) }
 }
 
 /// Section ownership is the immutable classless-family authority.

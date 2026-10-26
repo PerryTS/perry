@@ -2065,7 +2065,9 @@ pub(crate) unsafe fn evaluation_layout_desc(family: u32) -> Option<&'static Perr
         // [`note_family_relink`] writes it, from one.
         family => {
             debug_assert!(is_family_layout_word(family));
-            family_for_word(family).map(|desc| &*desc)
+            // Publication proved this record's family identity already.
+            // Decode the same checked spans without reclassifying the fact.
+            literal_birth::descriptor_at(family.wrapping_sub(LAYOUT_BASE)).map(|(desc, _)| &*desc)
         }
     }
 }
