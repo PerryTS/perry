@@ -5226,8 +5226,8 @@ jobs:
         if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
           git config http.https://github.com/.extraheader "$auth_header"
         fi
-    - name: Install Rust toolchain with the WASI target
-      run: rustup toolchain install nightly-2026-10-04 --profile minimal --target wasm32-wasip2
+    - name: Install Rust toolchain with the WASI targets
+      run: rustup toolchain install nightly-2026-10-04 --profile minimal --target wasm32-wasip2 --target wasm32-wasip1
     - uses: ./.github/actions/setup-llvm22
     - uses: ./.github/actions/perry/Swatinem/rust-cache
       with:
@@ -5246,13 +5246,23 @@ jobs:
       run: |
         toolchain_env="$(./scripts/wasi_toolchain.sh "$RUNNER_TEMP/wasi")"
         eval "$toolchain_env"
-        for key in WASI_SDK_PATH WASMTIME CC_wasm32_wasip2 AR_wasm32_wasip2 CFLAGS_wasm32_wasip2 CC_SHELL_ESCAPED_FLAGS; do
+        for key in WASI_SDK_PATH WASMTIME CC_wasm32_wasip2 AR_wasm32_wasip2 CFLAGS_wasm32_wasip2 CC_wasm32_wasip1 AR_wasm32_wasip1 CFLAGS_wasm32_wasip1 CC_SHELL_ESCAPED_FLAGS; do
           printf '%s=%s\n' "$key" "${!key}" >> "$GITHUB_ENV"
         done
     - name: Build the runtime for wasm32-wasip2
       run: python scripts/wasi_build_runtime.py
     - name: Image classifier checks as a wasm program
       run: python scripts/wasi_image_selftest.py target/perry-dev/perry
+    - name: Build the runtime for wasm32-wasip1 and check it imports only preview 1
+      shell: bash
+      run: |
+        python scripts/wasi_imports_check.py --self-test
+        archive="$(python scripts/wasi_build_runtime.py wasm32-wasip1 | sed -n 's/^WASI archive: //p' | tail -n 1)"
+        python scripts/wasi_imports_check.py "$archive"
+        # The image classifier checks, built for wasip1. Running them needs a
+        # linked program, which comes with the wasip1 compiler target.
+        CARGO_TARGET_DIR=target/wasi-image-selftest-p1 python scripts/wasi_build_runtime.py wasm32-wasip1 --image-selftest | tee "$RUNNER_TEMP/selftest-p1.log"
+        python scripts/wasi_imports_check.py "$(sed -n 's/^WASI archive: //p' "$RUNNER_TEMP/selftest-p1.log" | tail -n 1)"
     - name: WASI smoke and complete issue 11375 acceptance
       shell: bash
       run: |

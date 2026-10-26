@@ -87,4 +87,7 @@ printf 'export CC_wasm32_wasip2=%q\n' "$DEST/$sdk/bin/clang"
 printf 'export AR_wasm32_wasip2=%q\n' "$DEST/$sdk/bin/llvm-ar"
 printf -v wasi_sysroot_flag '%q' "--sysroot=$DEST/$sdk/share/wasi-sysroot"
 printf 'export CFLAGS_wasm32_wasip2=%q\n' "--target=wasm32-wasip2 $wasi_sysroot_flag"
+printf 'export CC_wasm32_wasip1=%q\n' "$DEST/$sdk/bin/clang"
+printf 'export AR_wasm32_wasip1=%q\n' "$DEST/$sdk/bin/llvm-ar"
+printf 'export CFLAGS_wasm32_wasip1=%q\n' "--target=wasm32-wasip1 $wasi_sysroot_flag"
 printf 'export CC_SHELL_ESCAPED_FLAGS=1\n'
