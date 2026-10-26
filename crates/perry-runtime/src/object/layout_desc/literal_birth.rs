@@ -1,6 +1,6 @@
 //! Literal-family descriptors are image data, published only at first birth.
-//! The two image spans form one arithmetic descriptor index, with the existing
-//! ShapeId band and no address registry or per-agent validity state.
+//! Both image spans share one checked descriptor index. Header words belong
+//! to DPA's whole-image row plan; the agent record owns the descriptor index.
 use super::*;
 
 #[used(linker)]
@@ -26,6 +26,8 @@ static mut SENTINEL: PerryLayoutDesc = PerryLayoutDesc {
     class_id: 0,
     parent_class_id: 0,
     methods: std::ptr::null(),
+    shape_id: 0,
+    _layout_pad: 0,
 };
 
 #[cfg(target_os = "windows")]
@@ -124,7 +126,7 @@ pub(super) fn contains(desc: *const PerryLayoutDesc) -> bool {
 }
 
 #[inline]
-fn literal_index(desc: *const PerryLayoutDesc) -> Option<u32> {
+pub(super) fn literal_index(desc: *const PerryLayoutDesc) -> Option<u32> {
     let (start, end) = bounds();
     let address = desc as usize;
     let size = std::mem::size_of::<PerryLayoutDesc>();
@@ -142,7 +144,7 @@ pub(super) unsafe fn registered_for_birth(desc: *const PerryLayoutDesc) -> Optio
     let index = literal_index(desc)?;
     let current = registered_layout_id(load_layout_id(desc));
     if let Some(id) = current {
-        if super::super::shapes::shape_descriptor_by_id(id).is_some() {
+        if super::super::shapes::shape_descriptor_for_word(id).is_some() {
             return Some(id);
         }
     }
@@ -158,9 +160,18 @@ unsafe fn first_birth(desc: *const PerryLayoutDesc, index: u32) -> Option<u32> {
     if !optional_family::valid_literal(d) || d.family == SENTINEL_FAMILY {
         return None;
     }
-    let requested = layout_id_of_index(index)?;
+    // The immutable word comes from the whole-image DPA ordinal plan. The
+    // existing identity allocator and agent Region publish its shape facts.
+    let requested = super::super::static_shapes::resolve_layout_fields(
+        std::ptr::addr_of!((*desc).shape_id).cast_mut(),
+        d.layout_id,
+        super::super::shapes::PROTO_ID_DEFAULT,
+    )
+    .identity
+    .0;
+    debug_assert_eq!(literal_index(desc), Some(index));
     let id = register_one(desc, requested);
-    (id != 0 && super::super::shapes::shape_descriptor_by_id(id).is_some()).then_some(id)
+    (id != 0 && super::super::shapes::shape_descriptor_for_word(id).is_some()).then_some(id)
 }
 
 /// Birth of a literal-section family. The section owns the schema, while

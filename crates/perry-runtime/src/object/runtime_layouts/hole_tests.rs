@@ -136,12 +136,14 @@ runtime_layout!(
     link_section = "perry_literal_layouts"
 )]
 static mut LITERAL_FAMILY: PerryLayoutDesc = PerryLayoutDesc {
+    shape_id: 0,
+    _layout_pad: 0,
     family: 0x7f000016,
     variant: 0,
     kind: 0,
     integrity: 0,
     slot_count: LITERAL_OPTIONAL::SLOT_COUNT as u32,
-    layout_id: crate::object::layout_desc::LAYOUT_ID_CARRIED,
+    layout_id: 0x8000008b,
     rep: 0,
     proto: crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
     keys: LITERAL_OPTIONAL::KEYS.as_ptr(),
@@ -785,7 +787,7 @@ fn classless_optional_family_keeps_shape_and_routes_unknown_keys_to_overflow() {
 }
 
 // No eager counterpart shares these keys: the second agent must materialize
-// its own record even though the image word was published by the first.
+// its own record while the immutable image word is shared by both agents.
 #[cfg(not(target_family = "wasm"))]
 mod first_birth {
     use super::*;
@@ -808,12 +810,14 @@ mod first_birth {
         link_section = "perry_literal_layouts"
     )]
     static mut LITERAL: PerryLayoutDesc = PerryLayoutDesc {
+        shape_id: 0,
+        _layout_pad: 0,
         family: 0x7f000015,
         variant: 0,
         kind: 0,
         integrity: 0,
         slot_count: 2,
-        layout_id: crate::object::layout_desc::LAYOUT_ID_CARRIED,
+        layout_id: 0x8000008c,
         rep: 0,
         proto: crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
         keys: KEYS.as_ptr(),
@@ -831,16 +835,24 @@ mod first_birth {
         let desc = std::ptr::addr_of!(LITERAL);
         unsafe {
             assert_eq!(
-                crate::object::layout_desc::load_layout_id(desc),
-                crate::object::layout_desc::LAYOUT_ID_CARRIED,
-                "ordinary startup must not register an unused literal"
+                std::sync::atomic::AtomicU32::from_ptr(
+                    std::ptr::addr_of!((*desc).shape_id).cast_mut(),
+                )
+                .load(std::sync::atomic::Ordering::Acquire),
+                0,
+                "ordinary startup must not publish an unused literal identity"
             );
             let scope = crate::gc::RuntimeHandleScope::new();
             let obj = scope
                 .root_raw_mut_ptr(crate::object::layout_desc::perry_alloc_literal_layout(desc));
             let id = obj.with_const_ptr(|p: *const ObjectHeader| (*p).parent_class_id);
-            assert!(crate::object::shapes::shape_descriptor_by_id(id).is_some());
+            assert!(crate::object::shapes::shape_descriptor_for_word(id).is_some());
             assert_eq!(crate::object::layout_desc::load_layout_id(desc), id);
+            assert_ne!(
+                id,
+                (*desc).shape_id,
+                "DPA row and ShapeId identity stay separate"
+            );
             obj.with_mut_ptr(|p: *mut ObjectHeader| {
                 assert!(std::ptr::eq(
                     crate::object::layout_desc::family_desc_of(p).unwrap(),
@@ -854,13 +866,13 @@ mod first_birth {
                 let desc = std::ptr::addr_of!(LITERAL);
                 assert_eq!(crate::object::layout_desc::load_layout_id(desc), id);
                 assert!(
-                    crate::object::shapes::shape_descriptor_by_id(id).is_none(),
+                    crate::object::shapes::shape_descriptor_for_word(id).is_none(),
                     "a shared image word must not stand in for this agent's record"
                 );
                 let scope = crate::gc::RuntimeHandleScope::new();
                 let obj = scope
                     .root_raw_mut_ptr(crate::object::layout_desc::perry_alloc_literal_layout(desc));
-                assert!(crate::object::shapes::shape_descriptor_by_id(id).is_some());
+                assert!(crate::object::shapes::shape_descriptor_for_word(id).is_some());
                 obj.with_mut_ptr(|p: *mut ObjectHeader| {
                     assert_eq!((*p).parent_class_id, id);
                     assert!(std::ptr::eq(

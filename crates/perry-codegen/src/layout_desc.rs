@@ -756,7 +756,8 @@ fn emit_desc(
         format!("{keys:?}|{family}|{slot_count}|{class:?}"),
         0,
         true,
-        class.0 != 0,
+        // Both nominal and admitted classless families carry their DPA word.
+        true,
         0,
     );
     llmod.add_raw_global(format!(
@@ -1065,7 +1066,8 @@ pub(crate) fn emit_module_layouts(
             (fam.class_id, fam.parent_class_id)
         };
         // First-birth literal descriptors are static image data outside the
-        // startup enumeration. The runtime owns their ShapeId publication.
+        // startup enumeration. DPA assigns their immutable row words; the
+        // runtime publishes the current agent's facts only at first birth.
         let family_section = if literal {
             section(
                 &llmod.target_triple,
@@ -1097,7 +1099,7 @@ pub(crate) fn emit_module_layouts(
             let name = format!("perry_layout_class_{}_v{j}", fam.class_id);
             emit_desc(
                 llmod,
-                &sect,
+                &family_section,
                 (
                     &format!("perry_layout_keys_{module_prefix}_{n}"),
                     &format!("perry_layout_index_{module_prefix}_{n}"),

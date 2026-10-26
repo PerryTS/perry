@@ -1012,7 +1012,7 @@ unsafe fn register_bound(
         super::shapes::install_declared_layout(
             id,
             (*desc).layout_id,
-            if (*desc).class_id != 0 {
+            if (*desc).class_id != 0 || literal_birth::contains(desc) {
                 descriptor_index(desc).map_or(0, |i| i + 1)
             } else {
                 0
@@ -1697,11 +1697,10 @@ static KEEP_PERRY_BIND_FAMILY_PROTOTYPE: unsafe extern "C" fn(
 // ---------------------------------------------------------------------------
 // Case 2c (OBJECT_MODEL_2026-10-13.md §3.7): static class families.
 //
-// Every descriptor's layout id is `LAYOUT_BASE + i`, where `i` is its record
-// index in `perry_layouts` (the static band's upper half, which no counter
-// mints from). So a read site maps a layout word to its descriptor with
-// arithmetic: strip the shadow bit, subtract `LAYOUT_BASE`, compare with the
-// record count.
+// The whole-image ordinal plan owns immutable DPA header words. Each agent's
+// current ShapeRecord names its descriptor through family_desc_index_plus_one;
+// the checked decoder spans eager nominal and lazy literal descriptors. ShapeId
+// identities remain separate from both the dense row and descriptor position.
 //
 // A static family's layout word never changes after birth. A key its layout
 // does not hold goes to the object's overflow (`object/overflow.rs`, §3.4):
@@ -1719,21 +1718,15 @@ fn layout_id_of_index(index: u32) -> Option<u32> {
     (index < LAYOUT_INDEX_LIMIT).then_some(LAYOUT_BASE + index)
 }
 
-/// Decode and classify a family word once, including the span bounds check.
+/// The current agent record owns the descriptor index. The header word is
+/// the independent DPA row; generic words receive one checked family decode.
 #[inline]
-pub(crate) fn layout_index_of_word(word: u32) -> Option<u32> {
+fn family_for_word(word: u32) -> Option<*const PerryLayoutDesc> {
     if !super::shapes::is_layout_word(layout_id_of_word(word)) {
         return None;
     }
     let record = super::shapes::shape_record_for_word(word)?;
-    record.family_desc_index_plus_one().checked_sub(1)
-}
-
-/// Descriptor `index` of the section.
-#[inline]
-fn desc_at(index: u32) -> *const PerryLayoutDesc {
-    (layout_bounds().0 + index as usize * std::mem::size_of::<PerryLayoutDesc>())
-        as *const PerryLayoutDesc
+    literal_birth::family_at(record.family_desc_index_plus_one().checked_sub(1)?)
 }
 
 /// The class declaration owns the immutable pointer to its instance layout.
@@ -2025,8 +2018,7 @@ pub(crate) unsafe fn family_desc_of(obj: *const ObjectHeader) -> Option<&'static
     let index = super::shapes::shape_record_of_receiver(word)?
         .family_desc_index_plus_one()
         .checked_sub(1)?;
-    let d = &*desc_at(index);
-    (d.class_id != 0).then_some(d)
+    literal_birth::family_at(index).map(|desc| &*desc)
 }
 
 /// Is `obj` a class family object: on its family layout, or on a class
@@ -2046,12 +2038,10 @@ pub(crate) unsafe fn is_family_object(obj: *const ObjectHeader) -> bool {
 /// `family` is a record's `family_desc_index_plus_one` fact.
 #[inline]
 pub(crate) unsafe fn evaluation_layout_desc(family: u32) -> Option<&'static PerryLayoutDesc> {
-    match family {
-        0 => None,
-        // The record names a registered class family layout: only
-        // [`note_family_relink`] writes it, from one.
-        family => Some(&*desc_at(family - 1)),
-    }
+    // Publication already established family membership. Consume that record
+    // proof with the one checked span decoder, without classifying it again.
+    let index = family.checked_sub(1)?;
+    literal_birth::descriptor_at(index).map(|(desc, _)| &*desc)
 }
 
 /// Is `word` (an `ObjectHeader` layout word) a static class family layout
@@ -2075,9 +2065,8 @@ pub(crate) fn note_family_relink(previous: u32, id: u32) {
         return;
     };
     let index = record.family_desc_index_plus_one();
-    if index != 0 {
-        let family_word = unsafe { (*desc_at(index - 1)).layout_id };
-        super::shapes::note_evaluation_layout(id, family_word);
+    if let Some(desc) = unsafe { evaluation_layout_desc(index) } {
+        super::shapes::note_evaluation_layout(id, desc.layout_id);
     }
 }
 
@@ -2547,10 +2536,7 @@ pub(crate) unsafe fn family_own_key_hashed(
     {
         return None;
     }
-    let d = &*desc_at(layout_index_of_word(word)?);
-    if d.class_id == 0 {
-        return None;
-    }
+    let d = &*family_for_word(word)?;
     desc_own_key(d, bytes, hash)
 }
 
@@ -2865,7 +2851,7 @@ unsafe fn family_store_admits(obj: *const ObjectHeader) -> bool {
         return false;
     };
     if let Some(index) = record.family_desc_index_plus_one().checked_sub(1) {
-        if (*desc_at(index)).class_id != 0 {
+        if literal_birth::family_at(index).is_some() {
             return true;
         }
     }
@@ -2944,8 +2930,12 @@ fn image_layouts() -> impl Iterator<Item = *mut PerryLayoutDesc> {
 fn descriptor_index(desc: *const PerryLayoutDesc) -> Option<u32> {
     let (start, end) = layout_bounds();
     let at = desc as usize;
-    (at >= start && at < end)
-        .then(|| ((at - start) / std::mem::size_of::<PerryLayoutDesc>()) as u32)
+    let size = std::mem::size_of::<PerryLayoutDesc>();
+    if at >= start && at < end && (at - start) % size == 0 {
+        Some(((at - start) / size) as u32)
+    } else {
+        literal_birth::literal_index(desc)
+    }
 }
 const _: () = assert!(
     std::mem::offset_of!(PerryLayoutDesc, shape_id)

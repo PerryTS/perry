@@ -2686,5 +2686,9 @@ const fn runtime_layout_word(name: &str) -> u32 {
     if same(name, "PREFIX_MOVED") {
         return 0x80000083;
     }
+    #[cfg(test)]
+    if same(name, "LITERAL_OPTIONAL") {
+        return 0x8000008a;
+    }
     panic!("runtime descriptor absent from native catalog");
 }
