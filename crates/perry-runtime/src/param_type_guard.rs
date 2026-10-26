@@ -7,6 +7,7 @@
 //! function fallback.
 
 use crate::array::ArrayHeader;
+#[cfg(test)]
 use crate::object::shapes::shape_descriptor_of_receiver;
 use crate::object::ObjectHeader;
 use crate::value::{JSValue, POINTER_MASK, TAG_FALSE, TAG_HOLE, TAG_TRUE};
@@ -910,7 +911,7 @@ mod tests {
         use crate::object::field_rep::{with_slot_rep, REP_ANY, REP_F64};
         use crate::object::shapes::{
             object_shape_stamp, publish_shape_result, shape_descriptor_ensure_with_rep,
-            shape_descriptor_for_word, stamp_object_shape_id_with_carrier_note,
+            stamp_object_shape_id_with_carrier_note,
         };
         let object = crate::object::js_object_alloc(4343, 2);
         for slot in 0..2u32 {

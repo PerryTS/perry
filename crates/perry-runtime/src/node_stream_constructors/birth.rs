@@ -47,7 +47,7 @@ struct BirthWrite {
     depth: usize,
 }
 pub(crate) struct BirthWriteSite(std::cell::Cell<Option<BirthWrite>>, std::cell::Cell<bool>);
-thread_local! {
+crate::perry_thread_local! {
     /// Sites of this thread that ever held a memo (thread-local statics live as
     /// long as the thread, so the pointers stay valid for every recompute).
     static WRITE_SITES: std::cell::RefCell<Vec<*const BirthWriteSite>> =

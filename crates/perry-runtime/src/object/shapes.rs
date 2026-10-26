@@ -54,9 +54,7 @@ pub(crate) use shapes_own_data::{own_data_shape, plain_receiver_miss_is_final};
 
 #[path = "shapes_branded_birth.rs"]
 mod shapes_branded_birth;
-pub(crate) use shapes_branded_birth::{
-    branded_birth_layout, WEAKMAP_BIRTH_LAYOUT, WEAKSET_BIRTH_LAYOUT,
-};
+pub(crate) use shapes_branded_birth::branded_birth_layout;
 #[path = "shapes_birth_width.rs"]
 mod shapes_birth_width;
 #[path = "shapes_last_key_rollback.rs"]
@@ -380,11 +378,6 @@ impl ShapeRecordRef {
     #[inline]
     pub(crate) fn identity(self) -> crate::codegen_abi::ShapeId {
         unsafe { crate::codegen_abi::ShapeId((*self.0.as_ptr()).shape_id) }
-    }
-
-    #[inline]
-    pub(crate) fn layout_word(self) -> crate::codegen_abi::LayoutWord {
-        unsafe { crate::codegen_abi::LayoutWord((*self.0.as_ptr()).layout_word) }
     }
 
     #[inline]
@@ -2788,7 +2781,6 @@ pub(crate) unsafe fn note_external_shape_carrier(descriptor: Option<ShapeDescrip
 /// (`array_tail_transition::recompute_cache_carriers_after_full_trace`), so a
 /// descriptor whose last entry was evicted stops being rooted at the next full
 /// trace — the same cadence as `old_carrier`.
-#[inline]
 /// [`note_cache_carrier`] for a live record handle.
 #[inline]
 pub(crate) unsafe fn note_cache_carrier_record(record: ShapeRecordRef) {
@@ -6647,6 +6639,7 @@ pub(crate) use integrity::{transition_object_integrity, INTEGRITY_FLAGS};
 pub(crate) fn record_by_identity(identity: crate::codegen_abi::ShapeId) -> Option<ShapeRecordRef> {
     std::ptr::NonNull::new(ShapeSlab::agent_record_present(identity)?).map(ShapeRecordRef)
 }
+#[cfg(test)]
 pub(crate) fn handle_by_identity(
     identity: crate::codegen_abi::ShapeId,
 ) -> Option<crate::codegen_abi::LayoutWord> {
@@ -6660,29 +6653,6 @@ pub(crate) fn shape_descriptor_by_id(identity: u32) -> Option<ShapeDescriptor> {
 pub(crate) fn shape_record_by_id(identity: u32) -> Option<ShapeRecordRef> {
     record_by_identity(crate::codegen_abi::ShapeId(identity))
 }
-/// Requires a live carrier, with no intervening retirement.
-pub(crate) unsafe fn record_for_handle(word: crate::codegen_abi::LayoutWord) -> ShapeRecordRef {
-    ShapeRecordRef(std::ptr::NonNull::new_unchecked(
-        ShapeSlab::agent_record_for_handle(word),
-    ))
-}
-pub(crate) unsafe fn ordinary_record_for_handle_in(
-    dir: *const u8,
-    word: crate::codegen_abi::LayoutWord,
-) -> Option<ShapeRecordRef> {
-    ShapeSlab::ordinary_record_in(dir, word.0).map(|r| ShapeRecordRef(std::ptr::NonNull::from(r)))
-}
-pub(crate) unsafe fn object_layout_word(
-    obj: *const crate::object::ObjectHeader,
-) -> crate::codegen_abi::LayoutWord {
-    crate::codegen_abi::LayoutWord((*obj).parent_class_id)
-}
-pub(crate) unsafe fn object_shape_identity(
-    obj: *const crate::object::ObjectHeader,
-) -> Option<crate::codegen_abi::ShapeId> {
-    object_shape_record(obj).map(|r| crate::codegen_abi::ShapeId((*r.0.as_ptr()).shape_id))
-}
-
 /// Publish a static request before generic exact-facts canonicalization.
 /// `facts` is the record's exact-facts key, which the caller already
 /// computed for its request (`record.facts_key_with_keys(record.keys)`).
@@ -6823,9 +6793,11 @@ pub(crate) fn is_static_layout_word(word: u32) -> bool {
             < super::class_image::agent_layout_image().static_rows
 }
 
+#[cfg(test)]
 pub(crate) fn shape_rep_by_id(id: u32) -> u64 {
     shape_record_by_id(id).map_or(0, ShapeRecordRef::rep)
 }
+#[cfg(test)]
 pub(crate) fn shape_object_kind_by_id(id: u32) -> Option<ShapeObjectKind> {
     shape_record_by_id(id).map(ShapeRecordRef::object_kind)
 }

@@ -26,8 +26,7 @@
 
 use super::field_rep::{self, slot_rep, REP_ANY, REP_SLOTS};
 use super::shapes::{
-    object_shape_stamp, publish_shape_result, shape_descriptor_for_word, shape_record_for_word,
-    shape_rep_for_word, stamp_object_shape_id_with_carrier_note,
+    object_shape_stamp, publish_shape_result, stamp_object_shape_id_with_carrier_note,
 };
 use super::ObjectHeader;
 use crate::object::shapes::shape_descriptor_of_receiver;

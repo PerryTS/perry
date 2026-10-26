@@ -1004,14 +1004,6 @@ static EMPTY_PAGE: SharedEmpty<PageSlots> = SharedEmpty(
         std::ptr::NonNull::new_unchecked(std::ptr::addr_of!(EMPTY_CHUNK.0) as *mut ChunkCells)
     }); PAGE_LEN],
 );
-/// The directory entry a lookup reads for a page index past its band's
-/// directory: the shared empty page. Lets [`ShapeSlab::agent_record`] turn
-/// the bounds test into a select instead of an early return.
-static EMPTY_PAGE_ENTRY: SharedEmpty<Page> = SharedEmpty(Slot(
-    // SAFETY: the address of a static is never null.
-    unsafe { std::ptr::NonNull::new_unchecked(std::ptr::addr_of!(EMPTY_PAGE.0) as *mut PageSlots) },
-));
-
 trait Level: Sized + 'static {
     fn shared() -> std::ptr::NonNull<Self>;
     fn fresh() -> Box<Self>;
@@ -1073,12 +1065,6 @@ impl<T: Level> Slot<T> {
         // SAFETY: owned now.
         unsafe { self.0.as_mut() }
     }
-    /// Become the shared empty WITHOUT freeing: the allocation is a window
-    /// of the slab's record reservation (`flat.rs`), which owns the memory.
-    fn forget(&mut self) {
-        self.0 = T::shared();
-    }
-
     /// Free an owned allocation (not its children) and become the shared
     /// empty.
     fn release(&mut self) {
@@ -1411,15 +1397,6 @@ impl ShapeSlab {
         *chunk[slot].get()
     }
 
-    // Retain the same sentinel cell for every index outside the published
-    // directory. Keeping its address calculation cold leaves the valid-page
-    // path as the directory, page and chunk loads alone.
-    #[cold]
-    #[inline(never)]
-    unsafe fn absent_page_record(_chunk: usize, _slot: usize) -> *mut ShapeRecord {
-        std::ptr::null_mut()
-    }
-
     /// Present records.
     #[inline]
     pub(super) fn len(&self) -> usize {
@@ -1442,6 +1419,7 @@ impl ShapeSlab {
 
     /// A copy of the record for `id`.
     #[inline]
+    #[cfg(test)]
     pub(super) fn get(&self, id: ShapeId) -> Option<ShapeRecord> {
         // SAFETY: `record_ptr` only returns a cell of a live chunk.
         self.record_ptr(id).map(|p| unsafe { *p })
@@ -1449,6 +1427,7 @@ impl ShapeSlab {
 
     /// Lift `id` to the by-value descriptor.
     #[inline]
+    #[cfg(test)]
     pub(super) fn lift(&self, id: ShapeId) -> Option<ShapeDescriptor> {
         // SAFETY: as in `get`.
         self.record_ptr(id).map(|p| unsafe { (*p).lift(p) })
@@ -1456,6 +1435,7 @@ impl ShapeSlab {
 
     /// Install `record` under `id`, allocating the page and chunk on first
     /// touch. Returns the record it replaced, if the id was already present.
+    #[cfg(test)]
     pub(super) fn insert(&mut self, id: ShapeId, record: ShapeRecord) -> Option<ShapeRecord> {
         // Identity-boundary compatibility. Receivers never enter here.
         if let Some(ptr) = self.record_ptr(id) {
@@ -1559,7 +1539,7 @@ impl ShapeSlab {
         &mut self,
         identity: ShapeId,
         word: LayoutWord,
-        mut record: ShapeRecord,
+        record: ShapeRecord,
     ) -> Result<PublishedShape, PublishError> {
         if let Some(p) = self.record_ptr(identity) {
             let existing = unsafe { &*p };
@@ -1626,6 +1606,7 @@ impl ShapeSlab {
         self.region.base().add(word.row().0 as usize)
     }
 
+    #[cfg(test)]
     pub(super) fn handle_by_identity(&self, identity: ShapeId) -> Option<LayoutWord> {
         self.record_ptr(identity)
             .map(|p| LayoutWord(unsafe { (*p).layout_word }))
@@ -1825,15 +1806,6 @@ impl ShapeSlab {
         } else {
             ptr
         }
-    }
-
-    /// The live receiver's word names its sole record directly on every platform.
-    #[inline(always)]
-    pub(super) unsafe fn agent_record_for_handle(word: LayoutWord) -> *mut ShapeRecord {
-        AGENT_SHAPE_DIR[0]
-            .flat_base
-            .get()
-            .add(word.row().0 as usize)
     }
 
     /// The record of a held word (memo, record link, parameter): checked
@@ -2519,7 +2491,7 @@ impl ChunkAllocator {
     /// Claim a chunk; returns its first row. `capacity` is the Region's rows.
     pub(super) fn claim(&self, capacity: usize) -> Result<u32, PublishError> {
         use std::sync::atomic::Ordering::Relaxed;
-        let fresh = self.next.fetch_update(Relaxed, Relaxed, |k| {
+        let fresh = self.next.try_update(Relaxed, Relaxed, |k| {
             let end =
                 u64::from(DYNAMIC_BASE_ROWS) + (u64::from(k) + 1) * u64::from(DYNAMIC_CHUNK_ROWS);
             (end <= capacity as u64).then_some(k + 1)

@@ -2037,40 +2037,6 @@ pub(crate) unsafe fn is_family_object(obj: *const ObjectHeader) -> bool {
     family_desc_of(obj).is_some()
 }
 
-/// The family descriptor of an instance of a class EVALUATION (a class
-/// expression evaluated more than once): its layout word is not the family's
-/// own id but the evaluation's copy of that layout, the family's facts at
-/// the identity `MIXED | class | serial` that names the evaluation's
-/// prototype. The prototype funnel moves an instance there when it links it
-/// (`prototype_chain::object_link_class_evaluation_prototype`,
-/// [`adopt_family_layout`]), and the copy's record names the family layout
-/// it was taken from ([`note_family_relink`]): the class's layout or one of
-/// its creation-split layouts. Only a linked word (its kind bits) can be a
-/// copy, so every other receiver answers from its header word.
-///
-/// # Safety
-/// Reads the agent shape directory and this program's descriptor section.
-#[inline(always)]
-unsafe fn evaluation_family_desc_of(word: u32) -> Option<&'static PerryLayoutDesc> {
-    // A copy's identity is `MIXED` (the class and the evaluation prototype's
-    // serial), which only ids of the mixed kind name: every other receiver
-    // answers from its header word.
-    let id = layout_id_of_word(word);
-    if super::shapes::shape_word_kind(id) != super::shapes::SHAPE_ID_KIND_MIXED
-        || !super::shapes::is_layout_word(id)
-    {
-        return None;
-    }
-    evaluation_family_desc_of_record(id)
-}
-
-/// [`evaluation_family_desc_of`]'s record read, out of line so the static
-/// family answer stays inline in every geometry reader.
-#[inline(never)]
-unsafe fn evaluation_family_desc_of_record(id: u32) -> Option<&'static PerryLayoutDesc> {
-    evaluation_layout_desc(super::shapes::evaluation_family_desc_index_plus_one(id))
-}
-
 /// The family descriptor a shape record's `family_desc_index_plus_one` fact names
 /// (`shapes::evaluation_family_desc_index_plus_one`), or `None` for 0.
 ///

@@ -4,6 +4,7 @@
 //! and slot 5 is its immutable body info (outside the managed heap).
 //! The immutable info distinguishes these layouts from an ordinary bind.
 use super::*;
+#[cfg(test)]
 use crate::object::shapes::shape_object_kind_of_receiver;
 use crate::value::JSValue;
 
