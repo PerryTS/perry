@@ -300,7 +300,31 @@ pub fn map_cons(
         },
         Hard { kind, reason } => Hard { kind, reason },
         AddsKeys => AddsKeys,
-        DefineAccessor { key, reason } => DefineAccessor { key, reason },
+        DefineKey { key, data, reason } => DefineKey { key, data, reason },
+        DefineAll {
+            o,
+            descs,
+            value,
+            site,
+            reason,
+        } => DefineAll {
+            o: n(o),
+            descs: n(descs),
+            value: n(value),
+            site,
+            reason,
+        },
+        DefineDesc {
+            o,
+            key,
+            site,
+            reason,
+        } => DefineDesc {
+            o: n(o),
+            key,
+            site,
+            reason,
+        },
         Implicit { reason, proto } => Implicit { reason, proto },
         CreateProto { reason } => CreateProto { reason },
         ChainUnion { key, dst } => ChainUnion { key, dst: n(dst) },
@@ -479,7 +503,8 @@ fn gen_kind(c: &Cons) -> bool {
             | OverrideThis { .. }
             | TopIfAny { .. }
             | Hard { .. }
-            | DefineAccessor { .. }
+            | DefineKey { .. }
+            | DefineAll { .. }
             | AddsKeys
             | Implicit { .. }
             | IdxLoad { .. }

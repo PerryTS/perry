@@ -9,6 +9,7 @@
 //! design section 3.2; `scripts/wpfacts_recompute.py` re-implements them.
 
 mod copy;
+mod define;
 mod lookup;
 
 use crate::builtins;
@@ -314,6 +315,7 @@ impl Model {
                     && self.marker_links.is_empty()
                     && !self.settle_bf_written()
                     && !self.settle_for_in()
+                    && !self.settle_define()
                 {
                     break;
                 }
@@ -531,6 +533,31 @@ impl Model {
         n
     }
 
+    /// dst ⊇ the values of `t`'s own properties (`Cons::OwnValues`).
+    pub(crate) fn own_values_of(&mut self, t: Tok, dst: NodeId) {
+        let opaque = match &self.toks[t as usize] {
+            TokKind::Top | TokKind::Builtin(_) | TokKind::BuiltinFn | TokKind::NativeProto(_) => {
+                true
+            }
+            TokKind::Obj(tm, _) => matches!(self.tmpls[*tm as usize].kind, TmplKind::BObj { .. }),
+            _ => false,
+        };
+        if opaque {
+            self.add_top(dst, |_| "own values of an unmodeled object".into());
+            self.add_prim(dst, prim::ALL);
+        }
+        if t == TOP {
+            return;
+        }
+        let fields = self.all_fields(t);
+        self.edge(fields, dst);
+        let act = ChainAct::Load(dst);
+        // Any-key lookups subscribe through the holder relation;
+        // named-key replay in `visits` does not cover them.
+        self.any_walk_holders.entry(t).or_default().push((t, act));
+        self.accessor_hit(t, t, Key::Any, act);
+    }
+
     pub fn all_fields(&mut self, t: Tok) -> NodeId {
         if let Some(&n) = self.all_fields.get(&t) {
             return n;
@@ -676,30 +703,7 @@ impl Model {
             Cons::OwnValues { dst } => {
                 self.add_prim(dst, prim & prim::STR);
                 for &t in toks {
-                    let opaque = match &self.toks[t as usize] {
-                        TokKind::Top
-                        | TokKind::Builtin(_)
-                        | TokKind::BuiltinFn
-                        | TokKind::NativeProto(_) => true,
-                        TokKind::Obj(tm, _) => {
-                            matches!(self.tmpls[*tm as usize].kind, TmplKind::BObj { .. })
-                        }
-                        _ => false,
-                    };
-                    if opaque {
-                        self.add_top(dst, |_| "own values of an unmodeled object".into());
-                        self.add_prim(dst, prim::ALL);
-                    }
-                    if t == TOP {
-                        continue;
-                    }
-                    let fields = self.all_fields(t);
-                    self.edge(fields, dst);
-                    let act = ChainAct::Load(dst);
-                    // Any-key lookups subscribe through the holder relation;
-                    // named-key replay in `visits` does not cover them.
-                    self.any_walk_holders.entry(t).or_default().push((t, act));
-                    self.accessor_hit(t, t, Key::Any, act);
+                    self.own_values_of(t, dst);
                 }
             }
             Cons::Store { key, src, site } => {
@@ -979,32 +983,73 @@ impl Model {
                     self.mark_hard(t, kind, reason);
                 }
             }
-            Cons::DefineAccessor { key, reason } => {
+            Cons::DefineKey { key, data, reason } => {
                 for &t in toks {
                     // A key the layout already holds as data may move into an
                     // accessor pair in its slot, and a class instance's layout
                     // is the class's: E5 HARD, as any defineProperty was. (On
                     // another unit's layout the accessor is beyond its contract
                     // in any case: the census breaks it.)
-                    let new_key = match self.toks[t as usize] {
-                        TokKind::Obj(tm, _) => {
+                    match self.toks[t as usize] {
+                        TokKind::Obj(tm, _) if !data => {
                             let tpl = &self.tmpls[tm as usize];
-                            matches!(
+                            let new_key = matches!(
                                 tpl.kind,
                                 TmplKind::Lit { .. }
                                     | TmplKind::Class {
                                         literal_shape: true,
                                         ..
                                     }
-                            ) && !tpl.birth_keys.contains(&key)
+                            ) && !tpl.birth_keys.contains(&key);
+                            if new_key {
+                                *self.adds_keys.entry(tm).or_default() += 1;
+                            } else {
+                                self.mark_hard(t, Hard::E5DefineProperty, reason);
+                            }
                         }
-                        _ => false,
-                    };
-                    if !new_key {
-                        self.mark_hard(t, Hard::E5DefineProperty, reason);
-                    } else if let Some(tm) = self.tmpl_of(t) {
-                        *self.adds_keys.entry(tm).or_default() += 1;
+                        // A prototype holds no instance's slots: a key it has
+                        // no method under is a key of the chain that is no
+                        // plain data slot (its getter, or its value under the
+                        // descriptor's attributes), as a class getter is: the
+                        // instances' layouts and lookups treat it as an
+                        // accessor key (derive), not the whole object as HARD.
+                        TokKind::Proto(tm)
+                            if !self.tmpls[tm as usize].proto_members.contains(&key) =>
+                        {
+                            self.virt_revoke(t, Some(key));
+                            let ks = self.accessor_keys.entry(t).or_default();
+                            if !ks.contains(&key) {
+                                ks.push(key);
+                            }
+                        }
+                        _ => self.mark_hard(t, Hard::E5DefineProperty, reason),
                     }
+                }
+            }
+            Cons::DefineAll {
+                o,
+                descs,
+                value,
+                site,
+                reason,
+            } => {
+                // A string's own values are its characters.
+                if prim & prim::STR != 0 {
+                    self.add_prim(descs, prim::STR);
+                    self.define_any_on(o, descs, value, site, reason);
+                }
+                for &t in toks {
+                    self.define_all(t, o, descs, value, site, reason);
+                }
+            }
+            Cons::DefineDesc {
+                o,
+                key,
+                site,
+                reason,
+            } => {
+                for &d in toks {
+                    self.define_desc(d, o, key, site, reason);
                 }
             }
             Cons::AddsKeys => {
@@ -1239,7 +1284,16 @@ impl Model {
                         // it runs as unknown code and every key read through
                         // this holder may yield anything (derive kills the
                         // templates that reach it).
-                        let r = self.reason("accessor under a computed key");
+                        let r = if self.explain {
+                            let why = format!(
+                                "accessor under a computed key ({} on {})",
+                                self.tok_name(f),
+                                self.tok_name(t)
+                            );
+                            self.reason(&why)
+                        } else {
+                            self.reason("accessor under a computed key")
+                        };
                         self.escape(f, r);
                         let fa = self.field_any(t);
                         self.add_top(fa, |_| "accessor under a computed key".into());
@@ -1384,8 +1438,15 @@ impl Model {
             } => {
                 if let Some(k) = self.keyed_once(n, o, 0) {
                     match k {
-                        Some(key) if accessor => self.cons(o, Cons::DefineAccessor { key, reason }),
-                        _ => self.cons(
+                        Some(key) => self.cons(
+                            o,
+                            Cons::DefineKey {
+                                key,
+                                data: !accessor,
+                                reason,
+                            },
+                        ),
+                        None => self.cons(
                             o,
                             Cons::Hard {
                                 kind: Hard::E5DefineProperty,
@@ -3003,12 +3064,29 @@ impl Model {
             ),
             Cons::Hard { kind, reason } => format!("hard {n} {} {reason}", kind.code()),
             Cons::AddsKeys => format!("addskeys {n}"),
-            Cons::DefineAccessor { key, reason } => {
+            Cons::DefineKey { key, data, reason } => {
                 format!(
-                    "defineaccessor {n} {} {reason}",
-                    self.key_name(Key::Named(*key))
+                    "definekey {n} {} {} {reason}",
+                    self.key_name(Key::Named(*key)),
+                    *data as u8
                 )
             }
+            Cons::DefineAll {
+                o,
+                descs,
+                value,
+                site,
+                reason,
+            } => format!("defineall {n} {o} {descs} {value} {site} {reason}"),
+            Cons::DefineDesc {
+                o,
+                key,
+                site,
+                reason,
+            } => format!(
+                "definedesc {n} {o} {} {site} {reason}",
+                self.key_name(Key::Named(*key))
+            ),
             Cons::Implicit { reason, proto } => {
                 format!("implicit {n} {reason} {}", proto.name())
             }

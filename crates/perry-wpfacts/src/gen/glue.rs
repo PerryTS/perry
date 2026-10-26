@@ -21,7 +21,8 @@ impl<'a> Gen<'a> {
     /// become accessors of the target (called with `this` = the target).
     /// `accessor`: the descriptor is an accessor descriptor (FVA 4.3a): with
     /// a constant key the definition is an accessor key on every layout that
-    /// does not hold the key as data (`Cons::DefineAccessor`), not E5 HARD.
+    /// does not hold the key as data, and either descriptor a key of a
+    /// prototype (`Cons::DefineKey`), not E5 HARD.
     pub(crate) fn define_property(
         &mut self,
         fx: &Fx,
@@ -32,11 +33,18 @@ impl<'a> Gen<'a> {
         accessor: bool,
     ) {
         match &key {
-            Some(k) if accessor => {
+            Some(k) => {
                 let ka = self.m.atom(k);
-                self.m.cons(o, Cons::DefineAccessor { key: ka, reason: r });
+                self.m.cons(
+                    o,
+                    Cons::DefineKey {
+                        key: ka,
+                        data: !accessor,
+                        reason: r,
+                    },
+                );
             }
-            _ => self.m.cons(
+            None => self.m.cons(
                 o,
                 Cons::Hard {
                     kind: Hard::E5DefineProperty,
