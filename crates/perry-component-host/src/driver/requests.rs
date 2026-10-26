@@ -35,6 +35,8 @@ pub(super) struct State {
     pub types: Vec<crate::AsyncValueType>,
     retention: crate::asynchronous::retention::Registry,
     borrowed: crate::borrowed::Registry,
+    pub exits: crate::task_exit::Registry,
+    pub tracked_exports: std::collections::BTreeSet<(String, String)>,
 }
 impl Default for State {
     fn default() -> Self {
@@ -52,6 +54,8 @@ impl Default for State {
             types: Vec::new(),
             retention: Default::default(),
             borrowed: Default::default(),
+            exits: Default::default(),
+            tracked_exports: Default::default(),
         }
     }
 }
@@ -60,11 +64,15 @@ impl State {
         types: Vec<crate::AsyncValueType>,
         retention: crate::asynchronous::retention::Registry,
         borrowed: crate::borrowed::Registry,
+        exits: crate::task_exit::Registry,
+        tracked_exports: std::collections::BTreeSet<(String, String)>,
     ) -> Self {
         Self {
             types,
             retention,
             borrowed,
+            exits,
+            tracked_exports,
             ..Self::default()
         }
     }
@@ -81,6 +89,7 @@ impl State {
         self.writers.borrow_mut().remove(token);
     }
     pub fn fail_all(&self, message: &str) {
+        self.exits.fail();
         self.writers.borrow_mut().clear();
         let replies = std::mem::take(&mut *self.replies.borrow_mut());
         for reply in replies.into_values() {
@@ -93,6 +102,9 @@ impl State {
             std::thread::current().id(),
             "component drivers belong to their creating thread"
         );
+    }
+    pub fn acknowledge_exits(&self) -> bool {
+        self.exits.acknowledge(&self.retention)
     }
 }
 
@@ -167,6 +179,7 @@ impl WriterAction {
 #[derive(Clone)]
 pub(super) enum Target {
     Export,
+    Http(Rc<RefCell<Option<super::http::Exchange>>>),
     Factory(crate::AsyncValueType),
     Resource(crate::cleanup::CollectedResource, bool),
     Write(Value, Option<Rc<ReadIntent>>),
@@ -221,7 +234,7 @@ impl Command {
 #[derive(Clone)]
 pub struct DriverClient {
     send: mpsc::UnboundedSender<Request>,
-    state: Rc<State>,
+    pub(super) state: Rc<State>,
 }
 impl DriverClient {
     pub(super) fn new(send: mpsc::UnboundedSender<Request>, state: Rc<State>) -> Self {
@@ -425,7 +438,7 @@ impl DriverClient {
             ),
         )
     }
-    fn submit(
+    pub(super) fn submit(
         &self,
         interface: &str,
         name: &str,
@@ -516,7 +529,7 @@ impl DriverClient {
                     }
                 }
             }
-            Target::Export | Target::Factory(_) | Target::Resource(..) => {}
+            Target::Export | Target::Http(_) | Target::Factory(_) | Target::Resource(..) => {}
         }
 
         let close = matches!(

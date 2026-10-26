@@ -5492,6 +5492,8 @@ dependencies = [
  "serde_json",
  "turnloop-tls",
  "wac-graph",
+ "wasm-encoder 0.258.0",
+ "wasmparser 0.258.0",
  "wasmtime",
  "wat",
 ]

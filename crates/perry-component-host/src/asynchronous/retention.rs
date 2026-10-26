@@ -37,6 +37,15 @@ impl Registry {
         // discard leases retained by host callback futures or their cleanup.
         self.0.lock().unwrap().roots.insert(task, origin);
     }
+    pub fn exact(&self, task: GuestTaskId) -> Option<InvocationId> {
+        self.0.lock().unwrap().roots.get(&task).copied()
+    }
+    pub fn remove(&self, task: GuestTaskId, origin: InvocationId) {
+        let mut state = self.0.lock().unwrap();
+        if state.roots.get(&task) == Some(&origin) {
+            state.roots.remove(&task);
+        }
+    }
     pub fn clear_roots(&self) {
         self.0.lock().unwrap().roots.clear();
     }

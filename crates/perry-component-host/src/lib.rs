@@ -5,7 +5,7 @@ mod asynchronous;
 mod driver;
 pub use async_values::AsyncValueType;
 pub use asynchronous::origin::{current_invocation, InvocationId};
-pub use driver::{Driver, DriverCall, DriverClient};
+pub use driver::{Driver, DriverCall, DriverClient, DriverHttpCall};
 mod imports;
 pub use asynchronous::{AsyncImport, AsyncImports};
 mod borrowed;
@@ -19,6 +19,7 @@ pub mod ffi;
 mod host_resources;
 mod limits;
 mod resources;
+mod task_exit;
 mod transport;
 pub use host_resources::{ResourceEvent, ResourceHook, ResourceRef};
 mod wasi;
@@ -64,6 +65,8 @@ impl Default for Options {
 struct StoreData {
     async_values: async_values::Values,
     origins: asynchronous::origin::Origins,
+    task_exits: task_exit::Registry,
+    tracked_exports: std::collections::BTreeSet<(String, String)>,
     limits: limits::Limits,
     resources: resources::Resources,
     host_resources: host_resources::HostResources,
@@ -204,10 +207,22 @@ impl Host {
             .consume_fuel(true)
             .epoch_interruption(true);
         config.wasm_exceptions(true);
+        // Callback EXIT denotes task exit only for the supported stackless
+        // calling convention; do not accept additional guest threads here.
+        config.wasm_component_model_threading(false);
+        config.wasm_component_model_async_stackful(false);
         let engine = Engine::new(&config)?;
         let component = Component::from_binary(&engine, bytes)
             .map_err(anyhow::Error::from)
             .context("compiling component")?;
+        contract::validate(&engine, &component, world, options.wasi.is_some())?;
+        let exits = task_exit::Prepared::new(bytes, world, disposal)?;
+        let bytes = exits.bytes.as_slice();
+        let component = if exits.targets.is_empty() {
+            component
+        } else {
+            Component::from_binary(&engine, bytes).map_err(anyhow::Error::from)?
+        };
         let identities = contract::validate(&engine, &component, world, options.wasi.is_some())?;
         let prepared = async_values::Prepared::new(
             &engine,
@@ -222,6 +237,7 @@ impl Host {
         let async_values = async_values::Values::new()?;
         let host_resources = host_resources::HostResources::new(world, options, resource_hook)?;
         let mut linker = Linker::<StoreData>::new(&engine);
+        exits.link(&mut linker)?;
         if options.wasi.is_some() {
             perry_wasi::p2::add_to_linker_sync(&mut linker)?;
             perry_wasi::p3::add_to_linker(&mut linker)?;
@@ -309,6 +325,8 @@ impl Host {
                 retiring: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 lowering_hook: None,
                 origins: asynchronous::origin::Origins::default(),
+                task_exits: task_exit::Registry::default(),
+                tracked_exports: exits.targets,
                 limits,
                 resources: resources::Resources::default(),
                 host_resources,

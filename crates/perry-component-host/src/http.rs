@@ -3,7 +3,7 @@
 //! cannot acquire a listener or outbound authority from receiving a request.
 mod p3;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 use crate::Host;
 use anyhow::{ensure, Context, Result};

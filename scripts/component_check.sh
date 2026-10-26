@@ -36,6 +36,11 @@ for suite in persistent async reader producer; do
     --wat-encoder "$CARGO_TARGET_DIR/perry-dev/examples/component_wat" \
     --runtime-dir "$CARGO_TARGET_DIR/perry-dev" --output "$out/$suite" --moving-gc
 done
+python3 scripts/component_http_p3_acceptance.py \
+  --perry "$CARGO_TARGET_DIR/perry-dev/perry" \
+  --wit "$CARGO_TARGET_DIR/perry-dev/perry-wit" \
+  --wat-encoder "$CARGO_TARGET_DIR/perry-dev/examples/component_wat" \
+  --runtime-dir "$CARGO_TARGET_DIR/perry-dev" --output "$out/http-p3" --moving-gc
 python3 scripts/component_host_acceptance.py \
   --perry "$CARGO_TARGET_DIR/perry-dev/perry" \
   --wit "$CARGO_TARGET_DIR/perry-dev/perry-wit" \

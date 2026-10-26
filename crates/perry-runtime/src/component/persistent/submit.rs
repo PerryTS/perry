@@ -25,6 +25,33 @@ pub(super) fn admit(
     reply: &ReplyKind,
     synchronous: bool,
 ) -> u64 {
+    admit_native(
+        component,
+        row,
+        ids,
+        reply,
+        synchronous,
+        |handle, buffer| unsafe {
+            (host::ops().perry_component_driver_submit)(
+                handle,
+                request.as_ptr(),
+                request.len(),
+                buffer,
+            )
+        },
+    )
+}
+
+/// The submission callback only transfers native ownership. It must not run
+/// guest or JS code; publish the row before its accepted ID becomes visible.
+pub(super) fn admit_native(
+    component: f64,
+    row: f64,
+    ids: AsyncResourceIds,
+    reply: &ReplyKind,
+    synchronous: bool,
+    native: impl FnOnce(*mut core::ffi::c_void, *mut Buffer) -> i32,
+) -> u64 {
     let scope = RuntimeHandleScope::new();
     let component = scope.root_nanbox_f64(component);
     let row = scope.root_nanbox_f64(row);
@@ -44,14 +71,10 @@ pub(super) fn admit(
     );
     // There are no JS calls between native acceptance and installing metadata.
     let mut buffer = Buffer::default();
-    let status = unsafe {
-        (host::ops().perry_component_driver_submit)(
-            (*context::get(component.get_nanbox_f64())).host,
-            request.as_ptr(),
-            request.len(),
-            &mut buffer,
-        )
-    };
+    let status = native(
+        unsafe { (*context::get(component.get_nanbox_f64())).host },
+        &mut buffer,
+    );
     let output = unsafe { take(buffer) };
     let parsed: Result<Value, _> = serde_json::from_slice(&output);
     let id = parsed

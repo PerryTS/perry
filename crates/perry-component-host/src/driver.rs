@@ -1,6 +1,7 @@
 //! A persistent, owner-thread Store driver. Results can be published before
 //! guest tasks exit, and subsequent commands share the same run_concurrent.
 mod async_values;
+mod http;
 mod requests;
 mod resources;
 #[cfg(test)]
@@ -13,6 +14,7 @@ use crate::{
 use anyhow::{ensure, Context, Result};
 use futures_channel::mpsc;
 use futures_util::{stream::FuturesUnordered, StreamExt};
+pub use http::DriverHttpCall;
 use requests::{Command, State};
 pub use requests::{DriverCall, DriverClient};
 use serde_json::Value;
@@ -35,7 +37,7 @@ type Run = Pin<Box<dyn Future<Output = Result<Host>>>>;
 /// the last client returns the Host if quiescent and retires it otherwise.
 /// Generic future/stream results use Store-local owned JSON descriptors.
 /// Read or close them through DriverClient; transfer them as call arguments.
-/// TypeScript wrappers and producer interfaces remain unfinished.
+/// TypeScript wrappers and producer factories use the same owned descriptors.
 pub struct Driver {
     state: Rc<State>,
     run: Option<Run>,
@@ -73,6 +75,13 @@ impl Future for Driver {
             self.run.take();
             self.state.alive.set(false);
             self.state.active.set(false);
+        }
+        if matches!(&result, Poll::Ready(Err(_))) {
+            self.state.exits.fail();
+        } else if self.state.acknowledge_exits() {
+            // Wake futures waiting for their own validated EXIT on the next
+            // poll, after the VM has finished all exit checks this time.
+            self.state.waker.wake();
         }
         result
     }
@@ -120,6 +129,14 @@ impl Host {
                 .registry
                 .clone(),
             self.live.as_ref().unwrap().store.data().borrowed.clone(),
+            self.live.as_ref().unwrap().store.data().task_exits.clone(),
+            self.live
+                .as_ref()
+                .unwrap()
+                .store
+                .data()
+                .tracked_exports
+                .clone(),
         ));
         for (token, stream) in self
             .live
@@ -154,6 +171,9 @@ async fn execute(
     fuel: u64,
     reset_budget: bool,
 ) -> Completion {
+    if matches!(command.target, requests::Target::Http(_)) {
+        return http::execute(accessor, command, fuel, reset_budget).await;
+    }
     if !matches!(command.target, requests::Target::Export) {
         return async_values::execute(accessor, command, fuel, reset_budget).await;
     }
@@ -297,7 +317,10 @@ async fn run(
                                 )));
                                 continue;
                             }
-                            if !matches!(request.target, requests::Target::Export) {
+                            if !matches!(
+                                request.target,
+                                requests::Target::Export | requests::Target::Http(_)
+                            ) {
                                 let reset = std::mem::replace(&mut fresh_budget, false);
                                 pending.push(execute(
                                     accessor,

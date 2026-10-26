@@ -167,7 +167,19 @@ pub extern "C" fn js_component_load(bytes: f64, contract: f64, imports: f64, opt
                 })
             })
         });
-        if !incoming_http {
+        let p3_http_only = world["exports"].as_array().is_some_and(|items| {
+            items
+                .iter()
+                .any(|item| item["name"] == "wasi:http/handler@0.3.0")
+                && !items.iter().any(|item| {
+                    item["name"]
+                        .as_str()
+                        .is_some_and(|name| name.starts_with("wasi:http/incoming-handler@"))
+                })
+        });
+        let concurrent_http =
+            incoming_http && p3_http_only && persistent::http::profile(&wasm, contract.as_bytes());
+        if !incoming_http || concurrent_http {
             persistent::construct(owner.get_nanbox_f64(), &wasm, contract.as_bytes(), &options);
             return owner.get_nanbox_f64();
         }

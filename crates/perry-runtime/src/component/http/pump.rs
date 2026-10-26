@@ -162,13 +162,23 @@ fn step(owner: f64) -> bool {
                     let pointer = operation(owner.get_nanbox_f64()).handle.pointer;
                     let component =
                         payload::state_get(owner.get_nanbox_f64(), &OPERATION, b"component");
-                    super::super::asynchronous::submit_http(
-                        component,
-                        &interface,
-                        owner.get_nanbox_f64(),
-                        pointer,
-                        promise.get_nanbox_f64(),
-                    );
+                    if super::super::persistent::enabled(component) {
+                        super::super::persistent::http::submit(
+                            component,
+                            &interface,
+                            owner.get_nanbox_f64(),
+                            pointer,
+                            promise.get_nanbox_f64(),
+                        );
+                    } else {
+                        super::super::asynchronous::submit_http(
+                            component,
+                            &interface,
+                            owner.get_nanbox_f64(),
+                            pointer,
+                            promise.get_nanbox_f64(),
+                        );
+                    }
                     operation(owner.get_nanbox_f64()).delegated = true;
                     return true;
                 }

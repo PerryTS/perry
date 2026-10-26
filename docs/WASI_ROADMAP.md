@@ -192,23 +192,26 @@ The optional provider feature implements 0.3.0 clocks/random, CLI, filesystem,
 sockets and HTTP through Turnloop. Canonical provider tests cover suspended
 calls, streams, result futures, large transfers and Store retirement. The
 optional Perry component engine now links these providers and exposes native
-async functions through Promise-based TypeScript host bindings. It currently
-permits one pending invocation per component. One-shot 0.3.0 command hosting
+async functions through Promise-based TypeScript host bindings. Standalone
+component worlds support concurrent calls, and locally observable P3 HTTP
+handlers now complete requests independently on one Store. P2 incoming handlers
+and nested/imported P3 implementations retain serialized handling. One-shot 0.3.0 command hosting
 and TypeScript/Rust async HTTP handler entry points have separate Linux
 qualification, including task exit after a result is published. The Rust
 persistent driver supports concurrent calls, post-return work and generic WIT
 future/stream reads, transfers and native producer factories. Bounded writes
 preserve backpressure and unconsumed ownership through cancellation, retry and
-peer closure. Traced TypeScript wrappers and producer interfaces, per-invocation
-runtime frames, async guest adapters and complete host/guest composition remain
-unfinished.
+peer closure. Traced TypeScript readers, producer factories/writers and
+per-invocation runtime frames are implemented. Async guest adapters, broader
+handler layout support and complete host/guest composition remain unfinished.
 See [the component qualification record](WASI_COMPONENTS.md) for exact APIs and
 receipts.
 
 Canonical guest frames now own traced slot arrays through stable native links.
 Their lifetime is independent of a native handle scope, and frames can finish
 out of order. This supplies the rooting foundation for suspension; the C async
-adapter and generic future/stream bindings remain separate implementation work.
+guest adapter remains separate implementation work; native host future/stream
+bindings are implemented.
 
 Pin an explicit WASI 0.3 interface version and supported Component Model
 feature set. Integrate native async lifting/lowering with Perry's promise

@@ -3,7 +3,8 @@
 //! values nor callbacks expose Perry heap addresses to component guests.
 // Combined command, host-resource, HTTP reactor and deferred-cleanup operations.
 // ABI 11 also requires stale-safe canonical writer collection commands.
-pub const ABI_VERSION: u32 = 11;
+// ABI 12 adds pre-initialization HTTP profiling and typed persistent handoff.
+pub const ABI_VERSION: u32 = 12;
 /// Queued/in-flight native calls; returned background contexts have a separate
 /// runtime retention limit and do not occupy native admission permits.
 pub const MAX_PENDING_CALLS: usize = 64;
@@ -118,6 +119,8 @@ macro_rules! component_host_entry_points {
         perry_component_host_drop(handle: *mut core::ffi::c_void) -> ();
         perry_component_driver_new(bytes: *const u8, len: usize, contract: *const u8, contract_len: usize, options: *const u8, options_len: usize, callback: Option<$crate::component_host::OriginCallback>, free_callback: Option<$crate::component_host::FreeCallback>, resource_callback: Option<$crate::component_host::OriginResourceCallback>, context: u64, error: *mut $crate::component_host::Buffer) -> *mut core::ffi::c_void;
         perry_component_driver_types(handle: *mut core::ffi::c_void, output: *mut $crate::component_host::Buffer) -> i32;
+        perry_component_driver_http_profile(bytes: *const u8, len: usize, contract: *const u8, contract_len: usize, output: *mut $crate::component_host::Buffer) -> i32;
+        perry_component_driver_http_submit(handle: *mut core::ffi::c_void, operation: *mut core::ffi::c_void, interface: *const u8, interface_len: usize, output: *mut $crate::component_host::Buffer) -> i32;
         perry_component_driver_submit(handle: *mut core::ffi::c_void, request: *const u8, request_len: usize, output: *mut $crate::component_host::Buffer) -> i32;
         perry_component_driver_poll(handle: *mut core::ffi::c_void, context: u64, cleanup_context: u64, wake: Option<$crate::component_host::WakeCallback>, agent: u64, output: *mut $crate::component_host::Buffer) -> i32;
         perry_component_driver_cancel(handle: *mut core::ffi::c_void, invocation: u64, output: *mut $crate::component_host::Buffer) -> i32;

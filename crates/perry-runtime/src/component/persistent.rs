@@ -2,6 +2,7 @@
 //! IDs and row indices; ordinary managed arrays own every JavaScript edge.
 mod callbacks;
 pub(super) mod collections;
+pub(super) mod http;
 pub(super) mod imports;
 pub(super) mod operations;
 mod poll;

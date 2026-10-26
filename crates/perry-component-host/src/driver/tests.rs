@@ -10,6 +10,8 @@ use std::{
         Arc, Mutex,
     },
 };
+#[path = "tests/exit_transform.rs"]
+mod exit_transform;
 
 type Gates = Arc<Mutex<BTreeMap<u64, oneshot::Sender<Result<()>>>>>;
 type Observed = Arc<Mutex<Vec<(u64, InvocationId, &'static str)>>>;
@@ -29,6 +31,10 @@ impl Drop for Probe {
 struct Fixture {
     early_return: bool,
     sync_tail: bool,
+    exit_hook: bool,
+    binary_exit_hook: bool,
+    persistent_exit: bool,
+    omit_return: bool,
     dispatcher: bool,
     spin: u32,
     fuel: Option<u64>,
@@ -44,6 +50,9 @@ fn fixture(config: Fixture) -> (Host, Gates, Observed, Arc<AtomicUsize>) {
     if config.sync_tail {
         source = source.replace("interface clock {", "interface clock { now: func() -> u64;");
     }
+    if config.exit_hook || config.binary_exit_hook {
+        source = source.replace("interface clock {", "interface clock { exited: func();");
+    }
     let world = perry_wit::parse(&source, None).unwrap();
     let heap =
         include_str!("../async_values/heap.wat").replacen("(module", "(core module $heap", 1);
@@ -53,6 +62,9 @@ fn fixture(config: Fixture) -> (Host, Gates, Observed, Arc<AtomicUsize>) {
     if config.early_return {
         component = component.replace("      (call $return (i64.load (local.get $frame)))\n", "");
         component = component.replace("      (local.set $status (call $wait (local.get $value)))", "      (call $return (local.get $value))\n      (local.set $status (call $wait (local.get $value)))");
+    }
+    if config.omit_return {
+        component = component.replace("      (call $return (i64.load (local.get $frame)))\n", "");
     }
     if config.sync_tail {
         component = component.replace(
@@ -75,6 +87,31 @@ fn fixture(config: Fixture) -> (Host, Gates, Observed, Arc<AtomicUsize>) {
     }
     if config.spin > 0 {
         component = component.replace("(param $value i64) (result i32) (local $frame i32) (local $status i32)", &format!("(param $value i64) (result i32) (local $frame i32) (local $status i32) (local $burn i32) (local.set $burn (i32.const {})) (loop $burning (br_if $burning (local.tee $burn (i32.sub (local.get $burn) (i32.const 1)))))", config.spin));
+    }
+    if config.exit_hook || config.binary_exit_hook {
+        component = component.replace(
+            "(instance $clock",
+            "(instance $clock (export \"exited\" (func))",
+        );
+    }
+    if config.exit_hook {
+        component=component.replace("  (core func $return","  (alias export $clock \"exited\" (func $exited))\n  (core func $exited (canon lower (func $exited)))\n  (core func $return");
+        component = component.replace(
+            "\n  (func (export \"run\")",
+            &format!(
+                "\n{}\n  (func (export \"run\")",
+                include_str!("tests/exit_hook.wat")
+            ),
+        );
+        component = component
+            .replace(
+                "(canon lift (core func $code \"run\")",
+                "(canon lift (core func $tracked \"run\")",
+            )
+            .replace(
+                "(callback (core func $code \"callback\"))",
+                "(callback (core func $tracked \"callback\"))",
+            );
     }
     let gates: Gates = Arc::default();
     let pending = gates.clone();
@@ -124,12 +161,34 @@ fn fixture(config: Fixture) -> (Host, Gates, Observed, Arc<AtomicUsize>) {
             BTreeMap::from([("now".into(), now)]),
         );
     }
+    if config.exit_hook || config.binary_exit_hook {
+        let observations = observed.clone();
+        let exited: crate::Import = Arc::new(move |_| {
+            assert_eq!(std::thread::current().id(), owner);
+            observations.lock().unwrap().push((
+                0,
+                current_invocation().expect("exit hook must retain its original invocation"),
+                "exit",
+            ));
+            Ok(None)
+        });
+        synchronous
+            .entry(world.imports[0].name.clone())
+            .or_insert_with(BTreeMap::new)
+            .insert("exited".into(), exited);
+    }
     let options = Options {
         fuel: config.fuel.unwrap_or(10_000_000),
         ..Options::default()
     };
-    let host = Host::new_with_dispatcher(
-        &wat::parse_str(component).unwrap(),
+    let bytes = wat::parse_str(component).unwrap();
+    let bytes = if config.binary_exit_hook {
+        exit_transform::wrap_root_function(&bytes, "run", 0, "exited").unwrap()
+    } else {
+        bytes
+    };
+    let host = Host::new_prepared(
+        &bytes,
         &world,
         &synchronous,
         &imports,
@@ -138,6 +197,7 @@ fn fixture(config: Fixture) -> (Host, Gates, Observed, Arc<AtomicUsize>) {
         config
             .dispatcher
             .then(|| Arc::new(dispatch::Dispatcher::default())),
+        config.persistent_exit,
     )
     .unwrap();
     (host, gates, observed, drops)
@@ -261,6 +321,170 @@ fn results_return_before_background_tasks_exit_and_driver_keeps_polling_imports(
     }
     drop(client);
     assert!(ready(driver).unwrap().live.is_some());
+}
+
+#[test]
+fn callback_exit_notifications_identify_one_finished_invocation_while_its_sibling_stays_active() {
+    for binary_exit_hook in [false, true] {
+        let (host, gates, observed, drops) = fixture(Fixture {
+            early_return: true,
+            exit_hook: !binary_exit_hook,
+            binary_exit_hook,
+            ..Fixture::default()
+        });
+        let (mut driver, client) = host.into_driver().unwrap();
+        let mut first = client.call("", "run", &[json!({"$bigint":"1"})]).unwrap();
+        let mut second = client.call("", "run", &[json!({"$bigint":"2"})]).unwrap();
+        let (a, b) = (first.id(), second.id());
+        assert_eq!(
+            result(&mut driver, &mut first).unwrap(),
+            Some(json!({"$bigint":"1"}))
+        );
+        assert_eq!(
+            result(&mut driver, &mut second).unwrap(),
+            Some(json!({"$bigint":"2"}))
+        );
+        assert!(
+            observed
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|(_, _, event)| *event != "exit"),
+            "task.return is not task exit"
+        );
+        gates
+            .lock()
+            .unwrap()
+            .remove(&2)
+            .unwrap()
+            .send(Ok(()))
+            .unwrap();
+        tick(&mut driver);
+        assert!(
+            driver.is_active(),
+            "the first invocation must still be suspended"
+        );
+        let exits = observed
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, _, event)| *event == "exit")
+            .map(|(_, id, _)| *id)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            exits,
+            vec![b],
+            "the sibling must finish independently under its own origin"
+        );
+        assert!(
+            client.retained_origins().contains(&b),
+            "global retention is not an exit signal"
+        );
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+        gates
+            .lock()
+            .unwrap()
+            .remove(&1)
+            .unwrap()
+            .send(Ok(()))
+            .unwrap();
+        tick(&mut driver);
+        assert!(!driver.is_active());
+        let exits = observed
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, _, event)| *event == "exit")
+            .map(|(_, id, _)| *id)
+            .collect::<Vec<_>>();
+        assert_eq!(exits, vec![b, a]);
+        assert_eq!(drops.load(Ordering::SeqCst), 2);
+        drop(client);
+        assert!(ready(driver).unwrap().live.is_some());
+    }
+}
+
+#[test]
+fn private_binary_exit_releases_only_its_completed_root_and_preserves_sibling_context() {
+    let (host, gates, _, drops) = fixture(Fixture {
+        early_return: true,
+        persistent_exit: true,
+        ..Fixture::default()
+    });
+    let (mut driver, client) = host.into_driver().unwrap();
+    assert!(client
+        .state
+        .tracked_exports
+        .contains(&(String::new(), "run".into())));
+    let mut first = client.call("", "run", &[json!({"$bigint":"1"})]).unwrap();
+    let mut second = client.call("", "run", &[json!({"$bigint":"2"})]).unwrap();
+    let (a, b) = (first.id(), second.id());
+    let mut exited_a = driver.state.exits.wait(a);
+    let mut exited_b = driver.state.exits.wait(b);
+    result(&mut driver, &mut first).unwrap();
+    result(&mut driver, &mut second).unwrap();
+    assert!(block_on(poll_once(&mut exited_a)).is_none());
+    assert!(block_on(poll_once(&mut exited_b)).is_none());
+    gates
+        .lock()
+        .unwrap()
+        .remove(&2)
+        .unwrap()
+        .send(Ok(()))
+        .unwrap();
+    tick(&mut driver);
+    assert_eq!(block_on(poll_once(&mut exited_b)), Some(Ok(())));
+    assert!(block_on(poll_once(&mut exited_a)).is_none());
+    assert!(driver.is_active());
+    assert!(client.retained_origins().contains(&a));
+    assert!(!client.retained_origins().contains(&b));
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
+    gates
+        .lock()
+        .unwrap()
+        .remove(&1)
+        .unwrap()
+        .send(Ok(()))
+        .unwrap();
+    tick(&mut driver);
+    assert_eq!(block_on(poll_once(&mut exited_a)), Some(Ok(())));
+    assert!(!driver.is_active());
+    drop(client);
+    assert!(ready(driver).unwrap().live.is_some());
+}
+
+#[test]
+fn private_exit_candidate_does_not_hide_vm_rejection_after_callback_returns() {
+    let (host, gates, _, _) = fixture(Fixture {
+        persistent_exit: true,
+        omit_return: true,
+        ..Fixture::default()
+    });
+    let (mut driver, client) = host.into_driver().unwrap();
+    let mut call = client.call("", "run", &[json!({"$bigint":"2"})]).unwrap();
+    let mut exited = driver.state.exits.wait(call.id());
+    tick(&mut driver);
+    gates
+        .lock()
+        .unwrap()
+        .remove(&2)
+        .unwrap()
+        .send(Ok(()))
+        .unwrap();
+    let error = loop {
+        if let Some(result) = block_on(poll_once(&mut driver)) {
+            break result.err().unwrap();
+        }
+    };
+    assert!(
+        format!("{error:#}").contains("failed to produce a result"),
+        "{error:#}"
+    );
+    assert!(
+        block_on(poll_once(&mut exited)).unwrap().is_err(),
+        "candidate must never be acknowledged"
+    );
+    assert!(ready(&mut call).is_err());
 }
 
 #[test]

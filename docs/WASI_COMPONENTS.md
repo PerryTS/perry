@@ -177,10 +177,13 @@ Accepted soft cancellation and close commands still execute. Explicit
 `perry_component_host_dispose` retires a driver and reports `RELEASED_ERROR`
 when its embedding destructor fails. Native `host_drop` does not invoke embedding
 callbacks. Legacy execution, resource and HTTP entries reject persistent handles;
-typed resource cleanup now has driver commands; HTTP has not migrated. The
+typed resource cleanup and supported P3 HTTP handlers have driver commands. The
 TypeScript runtime now uses the persistent driver for standalone component
-worlds, including worlds with synchronous functions. Incoming HTTP worlds still
-use their existing entry points. The current boundary requires matching ABI 11
+worlds, including worlds with synchronous functions. P3 HTTP handlers with a
+locally observable callback ABI also use it. P2 incoming handlers and nested or
+imported P3 handler implementations retain their serialized entry points. The
+HTTP profile is selected before initialization, so fallback does not execute
+initializers twice. The current boundary requires matching ABI 12
 runtime and engine archives. The earlier C-only qualification used ABI 9; see the
 [persistent C driver receipt](validation/wasi-persistent-driver-ffi-20261025.json).
 Native future/stream readers, producers and their GC cleanup now use this driver;
@@ -355,7 +358,7 @@ archives. Native admission shares the engine's 64 pending-call limit; up to
 `error-context` remains unsupported. Async Perry-authored guest functions and
 future/stream guest values still require the rooted canonical adapter and are
 explicitly rejected by `perry-wit --guest-c`. The TypeScript
-HTTP bridge and Rust HTTP embedding use the separately qualified entry points
+HTTP bridge and Rust HTTP embedding use the separately qualified typed entry points
 below. Do not infer complete P3 support from async function support or the Rust provider receipts.
 
 The existing C frame API now retains values through frame-owned traced arrays,
@@ -588,13 +591,49 @@ an unresolved JavaScript import; disposing the component also cancels handling.
 A late trap rejects the Promise and retires the Store, but cannot retract bytes
 already flushed to the peer, so that response may be truncated.
 
+Supported P3 handlers can now overlap on one component. A response's public
+Promise waits for its own transport flush and validated task exit while another
+request remains suspended. Async imports, Promise reactions and cleanup retain
+their submitting request's ALS context. Returning the function result is not
+task exit. A private callback wrapper observes canonical `EXIT`; the driver
+acknowledges it only after the VM poll succeeds. Traps during exit validation
+still retire the Store. Completed roots are removed individually, with native
+callback leases retaining context through their own cleanup.
+
+This profile currently covers canonical lifts defined in the component's root,
+including interface instances assembled from those functions. It preserves
+original indices, canonical options and nominal resource identities. Imported
+and nested implementations use the serialized fallback; stackful async,
+component threading and general task-exit observation are not enabled. Private
+wrapper instances count toward the configured instance limit.
+
+For Rust embeddings, construct with `Host::new_for_driver`, call `into_driver`,
+then submit owned native exchanges with `DriverClient::handle_http_async`.
+`DriverHttpCall` preserves the existing outer validation/trap result and inner
+transport result. Unsupported handler layouts reject this explicit driver API;
+`Host::handle_http_async` remains available for serialized handling. ABI 12 adds
+`perry_component_driver_http_profile` and `perry_component_driver_http_submit`:
+profiling runs before instantiation, submission runs no guest code or callbacks,
+and ordinary driver polling publishes the invocation's result. Requests and
+completions cross this boundary as native owners, never application JSON.
+
+The [concurrent HTTP receipt](validation/wasi-concurrent-http-20261026.json)
+records 189 engine and 77 component runtime tests in development and production,
+plus 19 production HTTP phases over plain/TLS and ordinary/moving-GC execution.
+Its 52 exchanges include independent completion with a withheld upload, original
+error identity and nested-handler fallback. Moving runs copied 5,502 objects
+and protected 172 retired page sets. The identical concurrency fixture fails
+against the preserved ABI 11 runtime with a pending-call rejection. Matching
+ABI 12 archives also pass producer, reader, persistent, async and command
+regressions. No Tokio dependency is introduced.
+
 The [TypeScript P3 HTTP receipt](validation/wasi-p3-http-typescript-20261025.json)
 records 75 native host tests in development and production panic-abort, 40 runtime
 component tests, 16 WIT tests and strict TypeScript checking. Actual compiled
 TypeScript hosts exercise plain HTTP and verified TLS in ordinary and moving-GC
 modes, including 3 MiB binary bodies and trailers, two suspended imports per
 successful request, explicit error reuse, original rejection identity, traps and
-cancellation. That receipt covers ABI 8; the current boundary is ABI 11. Rebuild the compiler, runtime and optional
+cancellation. That receipt covers ABI 8; the current boundary is ABI 12. Rebuild the compiler, runtime and optional
 engine together. Matching archives also pass the full 28 library, nine command
 and eight HTTP P2 regression phases. Other platforms, released Turnloop
 dependencies and final distribution packages remain open.

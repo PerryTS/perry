@@ -1,7 +1,7 @@
 //! Persistent owner-thread C transport. Submission touches native queues only;
 //! poll is the sole entry that runs guest code or embedding callbacks.
 use super::*;
-use crate::{Driver, DriverCall, DriverClient};
+use crate::{Driver, DriverClient};
 use perry_abi::component_host::{OriginCallback, OriginResourceCallback, WakeCallback};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -57,8 +57,10 @@ pub(super) struct Actor {
     // mutably polled, but must never poll or destroy that Driver recursively.
     driver: RefCell<Option<Pin<Box<Driver>>>>,
     client: DriverClient,
-    calls: RefCell<BTreeMap<u64, DriverCall>>,
+    calls: RefCell<BTreeMap<u64, PendingCall>>,
+    failure: RefCell<Option<String>>,
 }
+type PendingCall = Pin<Box<dyn Future<Output = Result<Option<Value>>>>>;
 impl Actor {
     pub fn new(host: Host, current: Arc<AtomicU64>, cleanup: Arc<AtomicU64>) -> Result<Self> {
         let (driver, client) = host.into_driver_with_retirement(move || {
@@ -68,6 +70,7 @@ impl Actor {
             driver: RefCell::new(Some(Box::pin(driver))),
             client,
             calls: RefCell::default(),
+            failure: RefCell::default(),
         })
     }
     fn submit(&self, request: Request) -> Result<u64> {
@@ -97,13 +100,33 @@ impl Actor {
             Request::CollectWriter { writer } => self.client.collect_async_writer(&writer)?,
         };
         let id = call.id().as_u64();
-        self.calls.borrow_mut().insert(id, call);
+        self.calls.borrow_mut().insert(id, Box::pin(call));
+        Ok(id)
+    }
+    pub(super) fn submit_http(
+        &self,
+        interface: &str,
+        request: perry_wasi::http::server::Request,
+        completion: perry_wasi::http::server::Completion,
+    ) -> Result<u64> {
+        let call = self
+            .client
+            .handle_http_async(interface, request, completion)?;
+        let id = call.id().as_u64();
+        self.calls.borrow_mut().insert(
+            id,
+            Box::pin(async move {
+                call.await??;
+                Ok(None)
+            }),
+        );
         Ok(id)
     }
     pub fn dispose(&self) {
         // Driver Drop first cancels tasks and retires host-owned resources.
         self.driver.borrow_mut().take();
         self.calls.borrow_mut().clear();
+        self.failure.borrow_mut().take();
     }
     fn poll(&self, wake: WakeCallback, agent: u64) -> Result<Value> {
         let waker = std::task::Waker::from(Arc::new(async_calls::Notify(wake, agent)));
@@ -128,6 +151,9 @@ impl Actor {
                 }
             }
         }
+        if failure.is_some() {
+            *self.failure.borrow_mut() = failure;
+        }
         let ids: Vec<_> = self.calls.borrow().keys().copied().collect();
         let mut completed = Vec::new();
         for id in ids {
@@ -148,7 +174,14 @@ impl Actor {
             }
         }
         let slot = self.driver.borrow();
-        let active = slot.as_ref().is_some_and(|driver| driver.is_active());
+        let active = slot.as_ref().is_some_and(|driver| driver.is_active())
+            || !self.calls.borrow().is_empty();
+        let retired = slot.is_none() && self.calls.borrow().is_empty();
+        let failure = if retired {
+            self.failure.borrow_mut().take()
+        } else {
+            None
+        };
         let collected_writer = self
             .client
             .collected_writer_retirement()
@@ -160,15 +193,44 @@ impl Actor {
             .map(|id| id.as_u64().to_string())
             .collect();
         Ok(
-            json!({"completed":completed,"retained":retained,"active":active,"retired":slot.is_none(),"error":failure,"retiredByWriterCollection":collected_writer}),
+            json!({"completed":completed,"retained":retained,"active":active,"retired":retired,"error":failure,"retiredByWriterCollection":collected_writer}),
         )
     }
 }
-fn actor(bridge: &Bridge) -> Result<&Actor> {
+pub(super) fn actor(bridge: &Bridge) -> Result<&Actor> {
     bridge
         .driver
         .as_ref()
         .context("operation requires a persistent driver handle")
+}
+
+/// Inspect a P3 handler before instantiation. No initializer, guest code,
+/// callback or provider executes. Unsupported layouts retain serialized HTTP.
+/// # Safety
+/// Readable owned byte spans; writable output freed with buffer_drop.
+#[no_mangle]
+pub unsafe extern "C" fn perry_component_driver_http_profile(
+    wasm: *const u8,
+    wasm_len: usize,
+    contract: *const u8,
+    contract_len: usize,
+    out: *mut Buffer,
+) -> i32 {
+    respond(
+        out,
+        (|| {
+            let world: perry_wit::World = serde_json::from_slice(bytes(contract, contract_len)?)?;
+            let prepared = crate::task_exit::Prepared::new(bytes(wasm, wasm_len)?, &world, true)?;
+            let concurrent = world
+                .exports
+                .iter()
+                .any(|interface| interface.name == "wasi:http/handler@0.3.0")
+                && prepared
+                    .targets
+                    .contains(&("wasi:http/handler@0.3.0".into(), "handle".into()));
+            Ok(serde_json::to_vec(&json!({"concurrent":concurrent}))?)
+        })(),
+    )
 }
 
 /// Construct a persistent driver with origin-explicit callbacks. Origin zero
@@ -305,11 +367,13 @@ pub unsafe extern "C" fn perry_component_driver_cancel(
     respond(
         out,
         (|| {
-            actor(bridge(handle)?)?
-                .calls
-                .borrow_mut()
-                .remove(&invocation)
-                .context("unknown or completed component invocation")?;
+            drop(
+                actor(bridge(handle)?)?
+                    .calls
+                    .borrow_mut()
+                    .remove(&invocation)
+                    .context("unknown or completed component invocation")?,
+            );
             Ok(Vec::new())
         })(),
     )

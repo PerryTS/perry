@@ -69,6 +69,48 @@ unsafe fn operation<'a>(pointer: *mut c_void) -> Result<&'a Operation> {
     Ok(&*pointer.cast::<Operation>())
 }
 
+/// Transfer one ready exchange into a persistent driver's native queue. This
+/// never enters Wasm or an embedding callback. The accept remains caller-owned
+/// and consumed after transfer; driver_poll publishes the invocation's result.
+/// # Safety
+/// Live owner-thread handles and readable interface bytes; writable output
+/// freed with buffer_drop. Drop the accept exactly once after submission.
+#[no_mangle]
+pub unsafe extern "C" fn perry_component_driver_http_submit(
+    handle: *mut c_void,
+    op: *mut c_void,
+    interface: *const u8,
+    interface_len: usize,
+    out: *mut Buffer,
+) -> i32 {
+    respond(
+        out,
+        (|| {
+            let interface = std::str::from_utf8(bytes(interface, interface_len)?)?;
+            let actor = super::driver::actor(bridge(handle)?)?;
+            let operation = operation(op)?;
+            ensure!(
+                operation.server_alive.load(Ordering::Acquire),
+                "HTTP server is closed"
+            );
+            let id = operation.with(|state| {
+                ensure!(
+                    matches!(state, State::Ready(..)),
+                    "HTTP request is not ready or was already handled"
+                );
+                let State::Ready(request, completion) = std::mem::replace(state, State::Done)
+                else {
+                    unreachable!()
+                };
+                actor.submit_http(interface, *request, completion)
+            })?;
+            Ok(serde_json::to_vec(
+                &serde_json::json!({"id":id.to_string()}),
+            )?)
+        })(),
+    )
+}
+
 /// Bind an explicit host listener. Success returns an owned server handle and
 /// a JSON local address (including the selected ephemeral port) in `output`.
 /// Failure returns null and UTF-8 diagnostic bytes. Binding never executes JS.

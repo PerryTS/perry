@@ -2,6 +2,7 @@ use super::*;
 use crate::{Imports, Options, WasiOptions};
 use futures_lite::future::{block_on, poll_once};
 use std::{
+    future::Future,
     io::{Read, Write},
     net::{Shutdown, TcpStream},
     time::Duration,
@@ -20,18 +21,29 @@ fn world() -> perry_wit::World {
     perry_wit::parse(&format!("package wasi:http@0.3.0; interface types {{ {} resource request; resource response; }} interface handler {{ use types.{{request, response, error-code}}; handle: async func(request: request) -> result<response, error-code>; }} world selected {{ import types; export handler; }}", &pinned[begin..end]), None).unwrap()
 }
 fn host(source: &str) -> Host {
+    host_mode(source, false)
+}
+fn host_mode(source: &str, persistent: bool) -> Host {
     // The selected WIT handler reexports its two used resource types. The
     // low-level provider fixture only exports its callable function.
     let source = source.replace("(instance $handler (export", "(instance $handler (export \"request\" (type $request)) (export \"response\" (type $response)) (export");
-    Host::new(
-        &wat::parse_str(&source).unwrap(),
-        &world(),
-        &Imports::new(),
-        &Options {
-            wasi: Some(WasiOptions::default()),
-            ..Default::default()
-        },
-    )
+    let bytes = wat::parse_str(&source).unwrap();
+    let options = Options {
+        wasi: Some(WasiOptions::default()),
+        ..Default::default()
+    };
+    if persistent {
+        Host::new_for_driver(
+            &bytes,
+            &world(),
+            &Imports::new(),
+            &crate::AsyncImports::new(),
+            &options,
+            std::sync::Arc::new(|_| Ok(Vec::new())),
+        )
+    } else {
+        Host::new(&bytes, &world(), &Imports::new(), &options)
+    }
     .unwrap()
 }
 fn server() -> server::Server {
@@ -326,5 +338,154 @@ fn p3_http_host_reports_a_task_trap_after_returning_its_response() {
         assert!(format!("{error:#}").contains("trapped"));
         assert!(host.live.is_none());
         let _ = peer.join().unwrap();
+    });
+}
+
+#[test]
+fn p3_http_persistent_driver_finishes_a_request_while_another_upload_is_suspended() {
+    super::super::tests::guarded(|| {
+        let host = host_mode(include_str!("driver.component.wat"), true);
+        let (mut driver, client) = host.into_driver().unwrap();
+        let server = server();
+        let mut slow_peer = TcpStream::connect(server.local_addr()).unwrap();
+        slow_peer
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        slow_peer
+            .write_all(b"POST /slow HTTP/1.1\r\nHost: localhost\r\nContent-Length: 1\r\n\r\n")
+            .unwrap();
+        let (request, done) = block_on(server.accept().unwrap().receive()).unwrap();
+        let mut first = client.handle_http_async(INTERFACE, request, done).unwrap();
+        assert!(block_on(poll_once(&mut driver)).is_none());
+        assert!(block_on(poll_once(&mut first)).is_none());
+        // A second listener grants independent native admission. Both requests
+        // still execute concurrently on the same component Store and memory.
+        let fast_server = super::tests::server();
+        let expected = (0..65537).map(|n| (n * 23 + 59) as u8).collect::<Vec<_>>();
+        let fast_peer = peer(&fast_server, expected.clone(), true);
+        let (request, done) = block_on(fast_server.accept().unwrap().receive()).unwrap();
+        let mut second = client.handle_http_async(INTERFACE, request, done).unwrap();
+        let result = block_on(async {
+            std::future::poll_fn(|cx| {
+                assert!(std::pin::Pin::new(&mut driver).poll(cx).is_pending());
+                std::pin::Pin::new(&mut second).poll(cx)
+            })
+            .await
+        });
+        result.unwrap().unwrap();
+        assert!(driver.is_active(), "slow upload must still be running");
+        assert!(block_on(poll_once(&mut first)).is_none());
+        assert!(!client.retained_origins().contains(&second.id()));
+        let bytes = fast_peer.join().unwrap();
+        let (body, trailers) = decode(&bytes);
+        assert_eq!(body, expected);
+        assert_eq!(trailers, b"x-native: preserved\r\n\r\n");
+        slow_peer.write_all(b"x").unwrap();
+        slow_peer.shutdown(Shutdown::Write).unwrap();
+        let reader = std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            slow_peer.read_to_end(&mut bytes).unwrap();
+            bytes
+        });
+        block_on(std::future::poll_fn(|cx| {
+            assert!(std::pin::Pin::new(&mut driver).poll(cx).is_pending());
+            std::pin::Pin::new(&mut first).poll(cx)
+        }))
+        .unwrap()
+        .unwrap();
+        let bytes = reader.join().unwrap();
+        assert!(bytes.starts_with(b"HTTP/1.1 200 OK\r\n"));
+        let head = bytes.windows(4).position(|p| p == b"\r\n\r\n").unwrap() + 4;
+        assert_eq!(&bytes[head..], b"x");
+        assert!(block_on(poll_once(&mut driver)).is_none());
+        assert!(!driver.is_active());
+        drop(client);
+        let mut host = block_on(driver).unwrap();
+        assert_empty(&mut host);
+        host.dispose().unwrap();
+    });
+}
+
+fn drive_http(
+    driver: &mut crate::Driver,
+    call: &mut crate::DriverHttpCall,
+) -> Result<std::result::Result<(), Error>> {
+    let mut stopped = false;
+    block_on(std::future::poll_fn(|cx| {
+        if !stopped {
+            match std::pin::Pin::new(&mut *driver).poll(cx) {
+                std::task::Poll::Pending => {}
+                std::task::Poll::Ready(Err(_)) => stopped = true,
+                std::task::Poll::Ready(Ok(_)) => panic!("driver retained its client"),
+            }
+        }
+        std::pin::Pin::new(&mut *call).poll(cx)
+    }))
+}
+
+#[test]
+fn p3_http_persistent_driver_preserves_explicit_errors_and_flushes_post_return_traps() {
+    super::super::tests::guarded(|| {
+        for trap in [false, true] {
+            let source = if trap {
+                SOURCE.replace(
+                    "(i32.const 0))\n    (func (export \"handle\")",
+                    "(i32.const 1))\n    (func (export \"handle\")",
+                )
+            } else {
+                immediate_error()
+            };
+            let host = host_mode(&source, true);
+            let (mut driver, client) = host.into_driver().unwrap();
+            for _ in 0..if trap { 1 } else { 2 } {
+                let server = server();
+                let peer = peer(&server, Vec::new(), false);
+                let (request, done) = block_on(server.accept().unwrap().receive()).unwrap();
+                let mut call = client.handle_http_async(INTERFACE, request, done).unwrap();
+                let outcome = drive_http(&mut driver, &mut call);
+                if trap {
+                    let message = format!("{:#}", outcome.unwrap_err());
+                    assert!(message.contains("wasm trap"), "{message}");
+                    let bytes = peer.join().unwrap();
+                    assert!(
+                        bytes.starts_with(b"HTTP/1.1 200"),
+                        "the response was published before its task trapped"
+                    );
+                } else {
+                    assert_eq!(outcome.unwrap(), Err(Error::HttpRequestDenied));
+                    assert!(peer.join().unwrap().starts_with(b"HTTP/1.1 500"));
+                }
+            }
+            if !trap {
+                assert!(block_on(poll_once(&mut driver)).is_none());
+                drop(client);
+                let mut host = block_on(driver).unwrap();
+                assert_empty(&mut host);
+                host.dispose().unwrap();
+            }
+        }
+    });
+}
+
+#[test]
+fn p3_http_persistent_driver_cancellation_retires_store_and_releases_native_admission() {
+    super::super::tests::guarded(|| {
+        let host = host_mode(include_str!("driver.component.wat"), true);
+        let (mut driver, client) = host.into_driver().unwrap();
+        let server = server();
+        let mut peer = TcpStream::connect(server.local_addr()).unwrap();
+        peer.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        peer.write_all(b"POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: 1\r\n\r\n")
+            .unwrap();
+        let (request, done) = block_on(server.accept().unwrap().receive()).unwrap();
+        let mut call = client.handle_http_async(INTERFACE, request, done).unwrap();
+        assert!(block_on(poll_once(&mut driver)).is_none());
+        assert!(block_on(poll_once(&mut call)).is_none());
+        drop(call);
+        assert!(block_on(poll_once(&mut driver)).unwrap().is_err());
+        assert!(client.call("", "absent", &[]).is_err());
+        drop(peer);
+        let pending = server.accept().unwrap();
+        drop(pending);
     });
 }

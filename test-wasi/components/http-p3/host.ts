@@ -60,6 +60,9 @@ async function main(): Promise<void> {
   await request(reusable, server, "large", "ok");
   await request(reusable, server, "reused", "ok");
   reusable.dispose();
+  const nested = instance("nested-echo", "ok", server);
+  await request(nested, server, "nested", "ok");
+  nested.dispose();
   const denied = instance("denied", "ok", server);
   await request(denied, server, "denied", "denied");
   await request(denied, server, "denied-reused", "denied");

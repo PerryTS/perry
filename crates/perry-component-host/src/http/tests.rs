@@ -19,7 +19,7 @@ world proxy { import types; export incoming-handler; export configure: func(mode
 "#;
 const INTERFACE: &str = "wasi:http/incoming-handler@0.2.0";
 
-pub(super) fn guarded(work: impl FnOnce() + Send + 'static) {
+pub(crate) fn guarded(work: impl FnOnce() + Send + 'static) {
     let (send, receive) = std::sync::mpsc::channel();
     let task = std::thread::spawn(move || {
         work();
