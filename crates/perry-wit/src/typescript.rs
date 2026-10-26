@@ -283,7 +283,7 @@ fn generate(world: &World, guest: bool) -> String {
         out.push_str(
             "import { loadComponent, callComponent, disposeComponent, createComponentHostResource, getComponentHostResourceValue } from \"perry/component\";\n",
         );
-        out.push_str("import type { ComponentOptions, ComponentHandle, OwnedResource, BorrowedResource, ComponentFuture, ComponentStream } from \"perry/component\";\n\n");
+        out.push_str("import type { ComponentOptions, ComponentHandle, ComponentAsyncType, OwnedResource, BorrowedResource, ComponentFuture, ComponentStream } from \"perry/component\";\n\n");
         if incoming_http.is_some() {
             out.push_str("import { handleComponentHttpRequest } from \"perry/component\";\nimport type { ComponentHttpServer } from \"perry/component\";\n\n");
         }
@@ -346,11 +346,14 @@ fn generate(world: &World, guest: bool) -> String {
         if incoming_http.is_some() {
             out.push_str("export interface Component { exports: Exports; dispose(): void; handleHttp(server: ComponentHttpServer): Promise<void>; }\n");
         } else {
-            out.push_str("export interface Component { exports: Exports; dispose(): void; }\n");
+            out.push_str("export interface Component { exports: Exports; dispose(): void; asyncTypes(): readonly ComponentAsyncType[]; }\n");
         }
         out.push_str("export type ImportBuilder = (resources: HostResources) => Imports | ApplicationImports;\n");
         out.push_str("export function load(bytes: Uint8Array, imports: Imports | ApplicationImports | ImportBuilder, options?: ComponentOptions): Component {\n  const supplied = typeof imports === \"function\" ? (handle: ComponentHandle) => imports(hostResources(handle)) : imports;\n  const handle = loadComponent(bytes, contract, supplied, options);\n  return {\n    dispose: () => disposeComponent(handle),\n    exports: ");
         out.push_str(&generator.wrappers(&world.exports, "callComponent(handle, "));
+        if incoming_http.is_none() {
+            out.push_str(",\n    asyncTypes: () => handle.asyncTypes(),");
+        }
         if let Some(interface) = incoming_http {
             writeln!(out, ",\n    handleHttp: (server: ComponentHttpServer): Promise<void> => handleComponentHttpRequest(server, handle, {}),", quoted(&interface.name)).unwrap();
         }

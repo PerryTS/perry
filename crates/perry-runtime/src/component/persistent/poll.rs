@@ -119,7 +119,14 @@ fn complete(
                 ));
             }
         }
-        if matches!(kind, ReplyKind::Read { .. })
+        if let ReplyKind::Create { schema } = &kind {
+            result.set_nanbox_f64(super::super::producer::decode(
+                component.get_nanbox_f64(),
+                &reply["value"],
+                schema,
+            ));
+        }
+        if matches!(kind, ReplyKind::Read { .. } | ReplyKind::Write { .. })
             && crate::promise::js_value_is_promise(promise.get_nanbox_f64()) == 0
         {
             // A read can win the race with GC's soft close. Its observer is
@@ -148,17 +155,13 @@ fn complete(
                     }),
                 );
                 if !done {
-                    let ty = serde_json::json!({"kind":"list","value":payload});
-                    let decoded = crate::exception::catch_js_throw(|| {
-                        value::decode(
-                            &reply["value"]["value"],
-                            &ty,
-                            world,
-                            component.get_nanbox_f64(),
-                        )
-                    });
-                    drop(ty);
-                    let decoded = scope.root_nanbox_f64(finish(decoded));
+                    let decoded = scope.root_nanbox_f64(super::super::async_value::chunk(
+                        component.get_nanbox_f64(),
+                        &reply["value"]["value"],
+                        payload,
+                        world,
+                        true,
+                    ));
                     set_field(chunk.get_nanbox_f64(), b"value", decoded.get_nanbox_f64());
                 }
                 result.set_nanbox_f64(chunk.get_nanbox_f64());
@@ -170,6 +173,57 @@ fn complete(
                     component.get_nanbox_f64(),
                 ));
             }
+        }
+        if let ReplyKind::Write { payload, stream } = &kind {
+            let world = unsafe { &(*context::get(component.get_nanbox_f64())).world };
+            let packet = &reply["value"];
+            let written = packet["written"]
+                .as_u64()
+                .filter(|n| *n <= 65536)
+                .unwrap_or_else(|| fail("Invalid write count"));
+            let cancelled = packet["cancelled"]
+                .as_bool()
+                .unwrap_or_else(|| fail("Invalid write cancellation flag"));
+            let closed = packet["closed"]
+                .as_bool()
+                .unwrap_or_else(|| fail("Invalid write closure flag"));
+            let remaining = scope.root_nanbox_f64(super::super::async_value::chunk(
+                component.get_nanbox_f64(),
+                &packet["remaining"],
+                payload,
+                world,
+                *stream,
+            ));
+            let output = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+                crate::object::js_object_alloc(0, 0) as i64,
+            ));
+            for (name, value) in [
+                (b"written".as_slice(), written as f64),
+                (
+                    b"cancelled".as_slice(),
+                    f64::from_bits(if cancelled {
+                        crate::value::TAG_TRUE
+                    } else {
+                        crate::value::TAG_FALSE
+                    }),
+                ),
+                (
+                    b"closed".as_slice(),
+                    f64::from_bits(if closed {
+                        crate::value::TAG_TRUE
+                    } else {
+                        crate::value::TAG_FALSE
+                    }),
+                ),
+            ] {
+                set_field(output.get_nanbox_f64(), name, value);
+            }
+            set_field(
+                output.get_nanbox_f64(),
+                b"remaining",
+                remaining.get_nanbox_f64(),
+            );
+            result.set_nanbox_f64(output.get_nanbox_f64());
         }
         if let ReplyKind::Collection(request) = &kind {
             host_resource::payload::collect_local(component.get_nanbox_f64(), request);
@@ -231,6 +285,15 @@ fn complete(
             *stream,
             closed,
         );
+    }
+    if matches!(kind, ReplyKind::Write { .. }) {
+        super::super::writer::finish_write(
+            component.get_nanbox_f64(),
+            records::get(row.get_nanbox_f64(), records::TARGET),
+            reply["value"]["closed"] == true,
+        );
+    }
+    if matches!(kind, ReplyKind::Read { .. } | ReplyKind::Write { .. }) {
         if crate::promise::js_value_is_promise(promise.get_nanbox_f64()) != 0 {
             cleanup::unregister(component.get_nanbox_f64(), promise.get_nanbox_f64());
             crate::promise::operation_owner::clear(pointer(promise.get_nanbox_f64()));
@@ -360,6 +423,22 @@ fn needed(component: f64) -> bool {
     }
 }
 
+fn intentional_writer_retirement(component: f64, report: &Value) -> bool {
+    if report["retired"] != true {
+        return false;
+    }
+    let Some(origin) = report["retiredByWriterCollection"]
+        .as_str()
+        .and_then(|id| id.parse::<u64>().ok())
+    else {
+        return false;
+    };
+    let data = unsafe { &*state(component) };
+    data.origins.get(&origin).is_some_and(|meta| {
+        matches!(&meta.reply, ReplyKind::Collection(request) if request["kind"] == "async-writer")
+    })
+}
+
 pub(super) fn cycle(component: f64) -> bool {
     let scope = RuntimeHandleScope::new();
     let component = scope.root_nanbox_f64(component);
@@ -374,6 +453,7 @@ pub(super) fn cycle(component: f64) -> bool {
     let first = scope.root_nanbox_f64(undefined());
     let mut failed = false;
     let mut delivered_failure = false;
+    let mut collected_writer_retirement = false;
     let background_before_poll = unsafe {
         (*state(component.get_nanbox_f64()))
             .origins
@@ -415,6 +495,11 @@ pub(super) fn cycle(component: f64) -> bool {
             }
             report = serde_json::from_slice(&output)
                 .unwrap_or_else(|_| fail("Invalid persistent driver report"));
+            // Suppress only the native summary for a known writer collector
+            // which intentionally retired its Store. Callback/destructor
+            // exceptions and public rejections still follow normal handling.
+            collected_writer_retirement =
+                intentional_writer_retirement(component.get_nanbox_f64(), &report);
             let watermark = unsafe { (*state(component.get_nanbox_f64())).admission };
             let completed = report["completed"]
                 .as_array_mut()
@@ -553,7 +638,10 @@ pub(super) fn cycle(component: f64) -> bool {
             }
             failed = true;
         }
-        if !failed && (!delivered_failure || background_before_poll) && report["error"].is_string()
+        if !failed
+            && !collected_writer_retirement
+            && (!delivered_failure || background_before_poll)
+            && report["error"].is_string()
         {
             fail(report["error"].as_str().unwrap());
         }

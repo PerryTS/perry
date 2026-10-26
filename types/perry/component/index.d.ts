@@ -13,7 +13,11 @@ export interface ComponentOptions {
 
 declare const componentBrand: unique symbol;
 declare const resourceBrand: unique symbol;
-export interface ComponentHandle { readonly [componentBrand]: true; }
+export interface ComponentHandle {
+  readonly [componentBrand]: true;
+  /** Native standalone factories for the exact async types in the selected WIT world. */
+  asyncTypes(): ReadonlyArray<ComponentAsyncType>;
+}
 export interface BorrowedResource<T extends string> {
   readonly [resourceBrand]: T;
 }
@@ -40,6 +44,38 @@ export interface ComponentStream<T, Chunk = Array<T>> {
   /** Read a bounded chunk. Only one read may be pending on this stream. */
   read(maxElements?: number): Promise<{ done: false; value: Chunk } | { done: true }>;
   dispose(): void;
+}
+
+export interface ComponentWriteResult<Chunk> {
+  written: number;
+  /** Unconsumed values have fresh ownership after native lowering. */
+  remaining: Chunk;
+  cancelled: boolean;
+  closed: boolean;
+}
+export interface ComponentFutureWriter<T> {
+  write(value: T): Promise<ComponentWriteResult<Array<T>>>;
+  /** Cancel the pending write; await it to recover unconsumed owners. */
+  cancel(): void;
+  /** An unfinished canonical future cannot close: disposal retires its component. */
+  dispose(): void;
+}
+export interface ComponentStreamWriter<T, Chunk = Array<T>> {
+  write(values: Chunk): Promise<ComponentWriteResult<Chunk>>;
+  cancel(): void;
+  /** Close the stream and dispose any unconsumed pending payloads. */
+  close(): void;
+  dispose(): void;
+}
+export type ComponentProducer<T, Chunk = Array<T>> =
+  | { kind: "future"; value: ComponentFuture<T>; writer: ComponentFutureWriter<T> }
+  | { kind: "stream"; value: ComponentStream<T, Chunk>; writer: ComponentStreamWriter<T, Chunk> };
+export interface ComponentAsyncType {
+  readonly kind: "future" | "stream";
+  /** Serialized structural WIT schema; resource identities refer to the generated contract. */
+  readonly schema: string;
+  /** Select T/Chunk to describe this schema. Native writes validate the actual WIT type. */
+  create<T = unknown, Chunk = Array<T>>(): Promise<ComponentProducer<T, Chunk>>;
 }
 
 /** Use generated WIT bindings for application calls. These lower-level entry

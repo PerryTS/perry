@@ -18,6 +18,8 @@ pub(super) enum ReplyKind {
     Unit,
     Collection(Value),
     Read { payload: Value, stream: bool },
+    Create { schema: Value },
+    Write { payload: Value, stream: bool },
 }
 
 pub(super) struct Origin {

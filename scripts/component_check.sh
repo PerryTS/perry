@@ -29,7 +29,7 @@ cargo build --locked --profile perry-dev -p perry-component-host --example compo
 export GC_EFFECTS_BIN="$CARGO_TARGET_DIR/perry-dev/perry-gc-effects"
 scripts/gc_call_effects/sidecars.sh "$CARGO_TARGET_DIR/perry-dev"
 PERRY_INSTR_PACKAGES=runtime scripts/build_instr_runtime.sh '' perry-dev
-for suite in persistent async reader; do
+for suite in persistent async reader producer; do
   python3 "scripts/component_${suite}_acceptance.py" \
     --perry "$CARGO_TARGET_DIR/perry-dev/perry" \
     --wit "$CARGO_TARGET_DIR/perry-dev/perry-wit" \

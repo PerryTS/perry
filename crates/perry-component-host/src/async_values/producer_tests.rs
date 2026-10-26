@@ -191,6 +191,138 @@ fn close_pending_stream_writer_discards_unwritten_owner_and_keeps_store_reusable
 }
 
 #[test]
+fn collecting_stream_writer_cancels_owned_write_and_stale_duplicates_preserve_store() {
+    let (mut driver, client) = instance(true);
+    let ty = client.async_value_types()[0].clone();
+    let (reader, writer) = pair(&mut driver, &client, &ty);
+    let original = owned(&mut driver, &client);
+    let mut write = client.write_async_value(&writer, &[original]).unwrap();
+    assert!(block_on(poll_once(&mut driver)).is_none());
+    assert!(block_on(poll_once(&mut write)).is_none());
+    drop(client.collect_async_writer(&writer).unwrap());
+    drop(client.collect_async_writer(&writer).unwrap());
+    assert!(result(&mut driver, &mut write)
+        .unwrap_err()
+        .to_string()
+        .contains("cancelled"));
+    assert_eq!(drops(&mut driver, &client), json!(1));
+    assert_eq!(
+        result(
+            &mut driver,
+            &mut client.read_async_value(&reader, None).unwrap()
+        )
+        .unwrap(),
+        Some(json!({"done":true}))
+    );
+    assert!(result(
+        &mut driver,
+        &mut client.collect_async_writer(&writer).unwrap()
+    )
+    .is_ok());
+    assert!(result(
+        &mut driver,
+        &mut client
+            .collect_async_writer(&json!({"$writer":"foreign:stale"}))
+            .unwrap()
+    )
+    .is_ok());
+    let next = owned(&mut driver, &client);
+    assert!(result(
+        &mut driver,
+        &mut client.call(NS, "consume", &[next]).unwrap()
+    )
+    .is_ok());
+    assert_eq!(drops(&mut driver, &client), json!(2));
+}
+
+thread_local! {
+    static COLLECT_LATE:RefCell<Option<(DriverClient,Value,crate::InvocationId)>>=const{RefCell::new(None)};
+}
+#[test]
+fn future_writer_collection_rechecks_ownership_after_a_completion_hook_submits_it() {
+    let (mut driver, client) = instance_hook(
+        false,
+        Arc::new(|event| {
+            if matches!(event, crate::ResourceEvent::Drain) {
+                COLLECT_LATE.with(|slot| {
+                    let matches = slot
+                        .borrow()
+                        .as_ref()
+                        .is_some_and(|(_, _, id)| crate::current_invocation() == Some(*id));
+                    if matches {
+                        let (client, writer, _) = slot.borrow_mut().take().unwrap();
+                        CONTROLS.with(|queue| {
+                            queue
+                                .borrow_mut()
+                                .push(client.collect_async_writer(&writer).unwrap())
+                        });
+                    }
+                });
+            }
+            Ok(Vec::new())
+        }),
+    );
+    let ty = client.async_value_types()[0].clone();
+    let (reader, writer) = pair(&mut driver, &client, &ty);
+    let original = owned(&mut driver, &client);
+    let mut write = client.write_async_value(&writer, &[original]).unwrap();
+    COLLECT_LATE.with(|slot| *slot.borrow_mut() = Some((client.clone(), writer, write.id())));
+    let received = result(
+        &mut driver,
+        &mut client.read_async_value(&reader, None).unwrap(),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        result(&mut driver, &mut write).unwrap().unwrap()["written"],
+        1
+    );
+    assert!(
+        COLLECT_LATE.with(|slot| slot.borrow().is_none()),
+        "collect must have been submitted while the future writer was still registered"
+    );
+    for mut control in CONTROLS.with(|queue| std::mem::take(&mut *queue.borrow_mut())) {
+        assert!(result(&mut driver, &mut control).is_ok());
+    }
+    assert!(result(
+        &mut driver,
+        &mut client.call(NS, "consume", &[received]).unwrap()
+    )
+    .is_ok());
+    assert_eq!(drops(&mut driver, &client), json!(1));
+}
+
+#[test]
+fn collecting_live_unfinished_future_writer_uses_the_explicit_store_abort_path() {
+    let (mut driver, client) = instance(false);
+    let ty = client.async_value_types()[0].clone();
+    let (_, writer) = pair(&mut driver, &client, &ty);
+    let mut collect = client.collect_async_writer(&writer).unwrap();
+    let mut retired = false;
+    for _ in 0..128 {
+        if let Some(result) = block_on(poll_once(&mut driver)) {
+            assert!(result
+                .err()
+                .expect("live future must retire")
+                .to_string()
+                .contains("Store retired"));
+            retired = true;
+            break;
+        }
+    }
+    assert!(
+        retired,
+        "an unwritten live future cannot be silently dropped"
+    );
+    assert!(block_on(poll_once(&mut collect))
+        .unwrap()
+        .unwrap_err()
+        .to_string()
+        .contains("producer aborted"));
+    assert!(client.call(NS, "drops", &[]).is_err());
+}
+
+#[test]
 fn production_factories_reject_foreign_types_writers_and_invalid_payloads_without_consuming_owners()
 {
     let (mut first, a) = instance(false);

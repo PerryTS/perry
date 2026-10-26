@@ -1,5 +1,5 @@
 use super::*;
-fn invoke(value: f64, name: &[u8], args: &[f64]) -> f64 {
+pub(super) fn invoke(value: f64, name: &[u8], args: &[f64]) -> f64 {
     let scope = RuntimeHandleScope::new();
     let value = scope.root_nanbox_f64(value);
     unsafe {

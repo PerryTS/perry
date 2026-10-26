@@ -12,8 +12,10 @@ mod host;
 mod host_resource;
 mod http;
 mod persistent;
+mod producer;
 mod resource;
 mod value;
+mod writer;
 
 #[cfg(test)]
 mod cleanup_tests;

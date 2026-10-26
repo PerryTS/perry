@@ -3,6 +3,7 @@
 mod callbacks;
 pub(super) mod collections;
 pub(super) mod imports;
+pub(super) mod operations;
 mod poll;
 mod records;
 pub(super) mod submit;
@@ -201,6 +202,7 @@ pub(super) fn construct(
         if pointer.is_null() {
             fail(&String::from_utf8_lossy(&bytes));
         }
+        super::producer::install(component.get_nanbox_f64());
         poll::schedule(component.get_nanbox_f64());
         pointer
     });

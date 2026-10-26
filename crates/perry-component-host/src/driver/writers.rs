@@ -44,15 +44,17 @@ pub(super) async fn execute(
         if let Target::WriterControl(value,action,intents)=&command.target {
             let valid=accessor.with(|mut store|store.data_mut().async_values.has_writer(value));
             if let Err(error)=valid {
+                if action.collecting() {return Ok(None)}
                 ensure!(intents.iter().any(|i|i.closed.get()),"{error:#}");
                 if *action!=WriterAction::Abort {return Ok(None)}
             }
-            if *action==WriterAction::Abort {
+            if action.aborting() {
+                if action.collecting(){command.state().collected_writer_retirement.set(Some(command.origin));}
                 command.started.set(true);started=true;
                 anyhow::bail!("component producer aborted; Store retired");
             }
             let operations=intents.iter().filter_map(|i|i.operation.get()).collect::<Vec<_>>();
-            let writer=accessor.with(|mut store|store.data_mut().async_values.control_writer(value,*action==WriterAction::Close,&operations))?;
+            let writer=accessor.with(|mut store|store.data_mut().async_values.control_writer(value,action.closing(),&operations))?;
             command.started.set(true);started=true;
             if let Some(writer)=writer {
                 let token=crate::async_values::writers::token(value)?;

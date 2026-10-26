@@ -27,6 +27,7 @@ pub(super) struct State {
     pub abort: Cell<bool>,
     pub active: Cell<bool>,
     pub outstanding: Cell<usize>,
+    pub collected_writer_retirement: Cell<Option<InvocationId>>,
     pub waker: AtomicWaker,
     replies: RefCell<BTreeMap<InvocationId, oneshot::Sender<Reply>>>,
     reads: RefCell<ReadRegistrations>,
@@ -43,6 +44,7 @@ impl Default for State {
             abort: Cell::new(false),
             active: Cell::new(false),
             outstanding: Cell::new(0),
+            collected_writer_retirement: Cell::new(None),
             waker: AtomicWaker::new(),
             replies: RefCell::new(BTreeMap::new()),
             reads: RefCell::new(BTreeMap::new()),
@@ -147,6 +149,19 @@ pub(super) enum WriterAction {
     Cancel,
     Close,
     Abort,
+    CollectClose,
+    CollectAbort,
+}
+impl WriterAction {
+    pub fn collecting(self) -> bool {
+        matches!(self, Self::CollectClose | Self::CollectAbort)
+    }
+    pub fn closing(self) -> bool {
+        matches!(self, Self::Close | Self::CollectClose)
+    }
+    pub fn aborting(self) -> bool {
+        matches!(self, Self::Abort | Self::CollectAbort)
+    }
 }
 
 #[derive(Clone)]
@@ -308,6 +323,10 @@ impl DriverClient {
         self.state.assert_owner();
         &self.state.types
     }
+    pub(crate) fn collected_writer_retirement(&self) -> Option<InvocationId> {
+        self.state.assert_owner();
+        self.state.collected_writer_retirement.get()
+    }
     /// Create a readable descriptor and a private owned writer descriptor:
     /// {value: future_or_stream, writer: writer_descriptor}.
     pub fn create_async_value(&self, ty: &crate::AsyncValueType) -> Result<DriverCall> {
@@ -377,6 +396,35 @@ impl DriverClient {
             Target::WriterControl(writer.clone(), WriterAction::Abort, Vec::new()),
         )
     }
+
+    /// Collect a private writer identity. Stale/closed/foreign tokens are quiet.
+    /// A live stream closes; a live unfinished future uses producer abort,
+    /// because canonical futures cannot drop an unwritten writable end.
+    /// Recheck native ownership during execution before either action occurs.
+    pub fn collect_async_writer(&self, writer: &Value) -> Result<DriverCall> {
+        self.state.assert_owner();
+        let token = crate::async_values::writers::token(writer)?;
+        let stream = self
+            .state
+            .writers
+            .borrow()
+            .get(token)
+            .map(|entry| entry.stream);
+        self.submit(
+            "",
+            "",
+            &[],
+            Target::WriterControl(
+                writer.clone(),
+                if stream == Some(false) {
+                    WriterAction::CollectAbort
+                } else {
+                    WriterAction::CollectClose
+                },
+                Vec::new(),
+            ),
+        )
+    }
     fn submit(
         &self,
         interface: &str,
@@ -390,7 +438,7 @@ impl DriverClient {
             "component driver is retired"
         );
         ensure!(
-            self.state.outstanding.get() < 64,
+            self.state.outstanding.get() < perry_abi::component_host::MAX_PENDING_CALLS,
             "too many pending component calls"
         );
         let borrows = self.state.borrowed.requests(args)?;
@@ -452,21 +500,20 @@ impl DriverClient {
                 if let Some(entries) = self.state.reads.borrow().get(&(2, token.to_string())) {
                     for intent in entries.values().filter_map(Weak::upgrade) {
                         if !intent.committed.get() {
-                            if *action != WriterAction::Abort {
+                            if !action.aborting() {
                                 intent.cancelled.set(true);
-                                intent.close.set(*action == WriterAction::Close);
+                                intent.close.set(action.closing());
                             }
                             intents.push(intent);
                         }
                     }
                 }
                 if *action != WriterAction::Cancel {
-                    self.state
-                        .writers
-                        .borrow_mut()
-                        .get_mut(token)
-                        .context("writer disappeared")?
-                        .closing = true;
+                    if let Some(writer) = self.state.writers.borrow_mut().get_mut(token) {
+                        writer.closing = true;
+                    } else {
+                        ensure!(action.collecting(), "writer disappeared");
+                    }
                 }
             }
             Target::Export | Target::Factory(_) | Target::Resource(..) => {}

@@ -2,8 +2,11 @@
 //! Byte buffers are freed by the allocator that produced them. Neither WIT
 //! values nor callbacks expose Perry heap addresses to component guests.
 // Combined command, host-resource, HTTP reactor and deferred-cleanup operations.
-// ABI 10 requires persistent-driver ownership receipts at the runtime boundary.
-pub const ABI_VERSION: u32 = 10;
+// ABI 11 also requires stale-safe canonical writer collection commands.
+pub const ABI_VERSION: u32 = 11;
+/// Queued/in-flight native calls; returned background contexts have a separate
+/// runtime retention limit and do not occupy native admission permits.
+pub const MAX_PENDING_CALLS: usize = 64;
 
 pub const OK: i32 = 0;
 pub const ERROR: i32 = 1;

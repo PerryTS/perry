@@ -2,9 +2,9 @@
 //! native queue can first observe the request on a later poll.
 use super::*;
 use crate::async_hooks::AsyncResourceIds;
-const LIMIT: usize = 1024;
+const MAX_CONTEXTS: usize = 1024;
 
-fn available(component: f64, synchronous: bool) {
+pub(super) fn available(component: f64, synchronous: bool) {
     let ctx = context::get(component);
     if unsafe { !(*ctx).alive || (*ctx).host.is_null() || (*state(component)).retired } {
         fail("Component is not initialized or has been disposed");
@@ -12,12 +12,12 @@ fn available(component: f64, synchronous: bool) {
     if synchronous && unsafe { (*state(component)).polling || (*state(component)).cycling } {
         fail("Cannot recursively execute a synchronous component operation");
     }
-    if unsafe { (*state(component)).origins.len() >= LIMIT } {
+    if !has_capacity(component) {
         fail("Component invocation limit exceeded");
     }
 }
 
-fn admit(
+pub(super) fn admit(
     component: f64,
     request: &[u8],
     row: f64,
@@ -218,7 +218,14 @@ pub(in crate::component) fn unit(component: f64, request: &Value) -> f64 {
 }
 
 pub(super) fn has_capacity(component: f64) -> bool {
-    unsafe { (*state(component)).origins.len() < LIMIT }
+    let data = unsafe { &*state(component) };
+    data.origins.len() < MAX_CONTEXTS
+        && data
+            .origins
+            .values()
+            .filter(|meta| !meta.ready && !meta.public_done)
+            .count()
+            < perry_abi::component_host::MAX_PENDING_CALLS
 }
 pub(super) fn collection(component: f64, request: &Value) {
     let scope = RuntimeHandleScope::new();
@@ -227,7 +234,11 @@ pub(super) fn collection(component: f64, request: &Value) {
     let reply = ReplyKind::Collection(request.clone());
     let outcome = crate::exception::catch_js_throw(|| {
         available(component.get_nanbox_f64(), false);
-        bytes = serde_json::to_vec(&if request["kind"] == "async-value" {
+        bytes = serde_json::to_vec(&if request["kind"] == "async-writer" {
+            serde_json::json!({"op":"collect-writer","writer":request["writer"]})
+        } else if request["kind"] == "writer-control" {
+            request["request"].clone()
+        } else if request["kind"] == "async-value" {
             serde_json::json!({"op":"collect","value":request["value"]})
         } else {
             serde_json::json!({"op":"resource-collect","request":request})

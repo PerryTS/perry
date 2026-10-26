@@ -255,3 +255,39 @@ pub(super) fn transferred(wrapper: f64) {
         }
     }
 }
+
+/// A void stream carries counts rather than payload bytes. Materialize one
+/// undefined element per unit; ordinary byte streams retain Uint8Array chunks.
+pub(super) fn chunk(
+    owner: f64,
+    input: &Value,
+    payload: &Value,
+    world: &Value,
+    stream: bool,
+) -> f64 {
+    if payload.is_null() {
+        let count = input
+            .as_array()
+            .unwrap_or_else(|| fail("Invalid unit chunk"))
+            .len();
+        let count: u32 = count
+            .try_into()
+            .unwrap_or_else(|_| fail("Async chunk is too large"));
+        let scope = RuntimeHandleScope::new();
+        let array = scope.root_raw_mut_ptr(crate::array::js_array_alloc_with_length(count));
+        for index in 0..count {
+            crate::array::js_array_set_f64(array.get_raw_mut_ptr(), index, undefined());
+        }
+        return crate::value::js_nanbox_pointer(
+            array.get_raw_mut_ptr::<crate::array::ArrayHeader>() as i64,
+        );
+    }
+    let schema = if stream {
+        serde_json::json!({"kind":"list","value":payload})
+    } else {
+        serde_json::json!({"kind":"tuple","value":vec![payload;input.as_array().unwrap_or_else(||fail("Invalid write remainder")).len()]})
+    };
+    let outcome = crate::exception::catch_js_throw(|| value::decode(input, &schema, world, owner));
+    drop(schema);
+    finish(outcome)
+}

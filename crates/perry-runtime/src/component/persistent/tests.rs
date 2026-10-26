@@ -8,6 +8,7 @@ use perry_abi::component_host::{
 use serde_json::json;
 mod disposal;
 mod failures;
+mod producers;
 mod readers;
 
 mod unused {
@@ -30,6 +31,8 @@ struct Engine {
     ready: Vec<u64>,
     replies: BTreeMap<u64, Value>,
     defer_reads: bool,
+    defer_writes: bool,
+    types: Value,
     retained: Vec<u64>,
     imports: Vec<(u64, bool)>,
     events: Vec<(u64, Value)>,
@@ -38,6 +41,7 @@ struct Engine {
     polls: usize,
     disposed: usize,
     trap: bool,
+    collected_writer_retirement: Option<u64>,
     disposal_events: Vec<(u64, Value)>,
     callback: Option<OriginCallback>,
     resource: Option<OriginResourceCallback>,
@@ -93,7 +97,9 @@ unsafe extern "C" fn submit(
     engine.next += 1;
     let id = engine.next;
     if request["function"] == "sync"
-        || (request["op"] != "call" && !(request["op"] == "read" && engine.defer_reads))
+        || (request["op"] != "call"
+            && !(request["op"] == "read" && engine.defer_reads)
+            && !(request["op"] == "write" && engine.defer_writes))
     {
         engine.ready.push(id);
     }
@@ -174,7 +180,7 @@ unsafe extern "C" fn native_poll(
     let retained: Vec<_> = (*engine).retained.iter().map(u64::to_string).collect();
     respond(
         out,
-        &json!({"completed":completed,"retained":retained,"active":!(*engine).trap && (!retained.is_empty() || !(*engine).pending_imports.is_empty()),"retired":(*engine).trap,"error":if (*engine).trap { Some("native driver trap") } else { None },"failedOrigins":[]}),
+        &json!({"completed":completed,"retained":retained,"active":!(*engine).trap && (!retained.is_empty() || !(*engine).pending_imports.is_empty()),"retired":(*engine).trap,"error":if (*engine).trap { Some("native driver trap") } else { None },"failedOrigins":[],"retiredByWriterCollection":(*engine).collected_writer_retirement.map(|id|id.to_string())}),
     );
     OK
 }
@@ -216,6 +222,7 @@ unsafe extern "C" fn native_drop(handle: *mut c_void) {
 static OPS: ComponentHostOps = ComponentHostOps {
     perry_component_driver_new: new_driver,
     perry_component_driver_submit: submit,
+    perry_component_driver_types: type_metadata,
     perry_component_driver_poll: native_poll,
     perry_component_host_async_import_resolve: resolve,
     perry_component_host_dispose: native_dispose,
@@ -223,6 +230,19 @@ static OPS: ComponentHostOps = ComponentHostOps {
     perry_component_host_buffer_drop: callback::free,
     ..unused::OPS
 };
+unsafe extern "C" fn type_metadata(handle: *mut c_void, out: *mut Buffer) -> i32 {
+    let engine = &*handle.cast::<Engine>();
+    let empty = json!([]);
+    respond(
+        out,
+        if engine.types.is_null() {
+            &empty
+        } else {
+            &engine.types
+        },
+    );
+    OK
+}
 fn text(value: &str) -> f64 {
     crate::value::js_nanbox_string(crate::string::js_string_from_bytes(
         value.as_ptr(),
@@ -633,9 +653,12 @@ fn saturated_admission_keeps_collector_identity_until_a_later_poll_accepts_it() 
         context::get(component.get_nanbox_f64()),
         engine(component.get_nanbox_f64()),
     );
-    for _ in 0..1024 {
+    let limit = perry_abi::component_host::MAX_PENDING_CALLS as u64;
+    for _ in 0..limit {
         call(component.get_nanbox_f64(), "run");
     }
+    assert!(crate::exception::catch_js_throw(|| call(component.get_nanbox_f64(), "run")).is_err());
+    assert_eq!(unsafe { (*engine(component.get_nanbox_f64())).next }, limit);
     let request = json!({"kind":"guest","token":"collected:stale"});
     unsafe {
         (*context::get(component.get_nanbox_f64()))
@@ -648,7 +671,7 @@ fn saturated_admission_keeps_collector_identity_until_a_later_poll_accepts_it() 
         &[request]
     );
     unsafe {
-        (*engine(component.get_nanbox_f64())).ready = (1..=1024).collect();
+        (*engine(component.get_nanbox_f64())).ready = (1..=limit).collect();
     }
     poll::poll_components();
     assert_eq!(
@@ -665,7 +688,10 @@ fn saturated_admission_keeps_collector_identity_until_a_later_poll_accepts_it() 
             .pending_collections
             .is_empty()
     });
-    assert_eq!(unsafe { (*engine(component.get_nanbox_f64())).next }, 1025);
+    assert_eq!(
+        unsafe { (*engine(component.get_nanbox_f64())).next },
+        limit + 1
+    );
     poll::schedule(component.get_nanbox_f64());
     finish_component(component.get_nanbox_f64());
 }

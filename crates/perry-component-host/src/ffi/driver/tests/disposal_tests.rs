@@ -409,6 +409,57 @@ fn ffi_driver_async_collection_cancels_pending_reads_after_its_observer_is_disca
     }
 }
 
+#[test]
+fn ffi_writer_collect_rejects_malformed_tokens_ignores_stale_and_executes_without_observer() {
+    unsafe {
+        let mut state = State::default();
+        new(
+            &mut state,
+            SCALAR_WORLD,
+            include_str!("../../../async_values/factory-echo.component.wat"),
+        );
+        let pair = void_pair(&mut state);
+        assert!(submit(
+            state.host,
+            json!({"op":"collect-writer","writer":{"$writer":pair["writer"]["$writer"],"core":0}})
+        )
+        .is_err());
+        let write = submit(
+            state.host,
+            json!({"op":"write","writer":pair["writer"],"values":[null]}),
+        )
+        .unwrap();
+        let read = submit(state.host, json!({"op":"read","value":pair["value"]})).unwrap();
+        let done = poll(&mut state, 10);
+        let replies = done["completed"].as_array().unwrap();
+        assert_eq!(replies.len(), 2);
+        assert!(replies.iter().any(|r| r["id"] == write && r["ok"] == true));
+        assert!(replies.iter().any(|r| r["id"] == read && r["ok"] == true));
+        completed(
+            &mut state,
+            json!({"op":"collect-writer","writer":pair["writer"]}),
+        );
+        assert_eq!(poll(&mut state, 20)["retired"], false);
+        let pair = void_pair(&mut state);
+        let collect = submit(
+            state.host,
+            json!({"op":"collect-writer","writer":pair["writer"]}),
+        )
+        .unwrap();
+        let mut out = Buffer::default();
+        let status = perry_component_driver_cancel(state.host, collect.parse().unwrap(), &mut out);
+        reply(status, out).unwrap();
+        let done = poll(&mut state, 30);
+        assert_eq!(
+            done["retired"], true,
+            "accepted live-future collection must execute after observer drop"
+        );
+        assert_eq!(done["retiredByWriterCollection"], collect);
+        assert!(done["completed"].as_array().unwrap().is_empty());
+        finish(&mut state);
+    }
+}
+
 unsafe fn borrowed_fixture(state: &mut State, early: bool) -> Value {
     let (source, text) = fixture_text(early);
     let source=source.replace("world plugin {","interface tokens { resource token; } world plugin { import tokens; use tokens.{token}; export echo: func(value: own<token>) -> own<token>;")

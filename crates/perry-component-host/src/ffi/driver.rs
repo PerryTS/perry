@@ -47,6 +47,9 @@ enum Request {
     AbortWriter {
         writer: Value,
     },
+    CollectWriter {
+        writer: Value,
+    },
 }
 
 pub(super) struct Actor {
@@ -91,6 +94,7 @@ impl Actor {
             Request::CancelWrite { writer } => self.client.cancel_async_write(&writer)?,
             Request::CloseWriter { writer } => self.client.close_async_writer(&writer)?,
             Request::AbortWriter { writer } => self.client.abort_async_writer(&writer)?,
+            Request::CollectWriter { writer } => self.client.collect_async_writer(&writer)?,
         };
         let id = call.id().as_u64();
         self.calls.borrow_mut().insert(id, call);
@@ -145,6 +149,10 @@ impl Actor {
         }
         let slot = self.driver.borrow();
         let active = slot.as_ref().is_some_and(|driver| driver.is_active());
+        let collected_writer = self
+            .client
+            .collected_writer_retirement()
+            .map(|id| id.as_u64().to_string());
         let retained: Vec<_> = self
             .client
             .retained_origins()
@@ -152,7 +160,7 @@ impl Actor {
             .map(|id| id.as_u64().to_string())
             .collect();
         Ok(
-            json!({"completed":completed,"retained":retained,"active":active,"retired":slot.is_none(),"error":failure}),
+            json!({"completed":completed,"retained":retained,"active":active,"retired":slot.is_none(),"error":failure,"retiredByWriterCollection":collected_writer}),
         )
     }
 }

@@ -198,6 +198,10 @@ pub(super) fn returned(owner: f64, value: &Value) {
                 }
             }
             Value::Object(object) => {
+                if value["$writer"].is_string() {
+                    requests.push(serde_json::json!({"kind":"async-writer","writer":value}));
+                    return;
+                }
                 if value["owned"] == true {
                     if let Some(token) = value["$resource"].as_str() {
                         requests.push(serde_json::json!({"kind":"guest","token":token}));

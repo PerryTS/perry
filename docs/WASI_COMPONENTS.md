@@ -132,15 +132,15 @@ for factories in progress. Writer handles survive quiescent Host recovery and
 restarting its driver. The [native producer receipt](validation/wasi-native-producers-20261025.json)
 records 138 engine and 22 WIT tests in development and production panic-abort,
 real guest reads through imports and exports, and failing controls for late
-cancellation and close races. TypeScript wrappers and producer interfaces remain
-unfinished.
+cancellation and close races. Native TypeScript wrappers and producer interfaces
+have the separate qualification below.
 
 The versioned C boundary now also exposes a persistent driver. Construct it
 with `perry_component_driver_new`, discover local factory indices with
 `perry_component_driver_types`, and submit JSON commands through
 `perry_component_driver_submit`. Supported operations are `call`, `read`,
 `close`, `collect`, `create`, `write`, `cancel-write`, `close-writer`,
-`abort-writer`, `resource-drop` and `resource-collect`.
+`abort-writer`, `collect-writer`, `resource-drop` and `resource-collect`.
 Submission snapshots native JSON and returns a decimal-string invocation ID
 without executing Wasm. Queue-only submission is permitted from a callback;
 recursive execution is rejected. A submission requires an output buffer so its
@@ -156,6 +156,12 @@ optional driver `error`, and ordered, deduplicated `failedOrigins`. Async import
 rejections keep their origin until reported; retirement uses the cleanup context.
 Consume completed results before trimming context records. Invocation IDs are
 strings in JSON to preserve all 64 bits in JavaScript.
+
+`retiredByWriterCollection` identifies an unfinished future writer whose
+collection intentionally retired the Store. Match this origin to an admitted
+writer collector before suppressing the generic retirement summary. Pending
+public operations still reject, and actual callback/destructor errors still
+propagate. An unrelated trap or unmatched marker is not intentional disposal.
 
 Schedule an initial poll after constructing a persistent driver, even before
 submitting an export call. A core start can enqueue an async import which runs
@@ -174,11 +180,11 @@ callbacks. Legacy execution, resource and HTTP entries reject persistent handles
 typed resource cleanup now has driver commands; HTTP has not migrated. The
 TypeScript runtime now uses the persistent driver for standalone component
 worlds, including worlds with synchronous functions. Incoming HTTP worlds still
-use their existing entry points. The current boundary requires matching ABI 10
+use their existing entry points. The current boundary requires matching ABI 11
 runtime and engine archives. The earlier C-only qualification used ABI 9; see the
 [persistent C driver receipt](validation/wasi-persistent-driver-ffi-20261025.json).
-Native future/stream readers and their GC cleanup now use this driver; producers
-and guest adapters remain unfinished. The
+Native future/stream readers, producers and their GC cleanup now use this driver;
+async guest adapters remain unfinished. The
 [public runtime receipt](validation/wasi-persistent-runtime-20261026.json)
 records 66 component and 12 async-hooks tests in development and production,
 plus compiled production hosts proving reverse completion, original rejection
@@ -314,8 +320,37 @@ Ready owned results refused by a hook or left without an observer are collected
 directly. The [reader receipt](validation/wasi-component-readers-20261026.json)
 qualifies compiled Linux production hosts with streams, nested futures, a
 3 MiB Unicode/byte/resource payload, suspended-producer cancellation, component
-reuse, actual evacuation and protected from-space. JavaScript producer factories
-and writable handles remain unfinished.
+reuse, actual evacuation and protected from-space.
+
+Standalone generated components expose `asyncTypes()`. Each component-bound
+factory reports its kind and a serialized structural WIT schema, expanding
+structural aliases while preserving nominal resource keys. `create<T, Chunk>()`
+returns a Promise for `{kind, value, writer}`. Its original schema and native
+factory index stay private; changing the public metadata cannot change the
+created type. Type arguments describe the selected schema; native writes still
+validate its actual WIT type and reject foreign resource identities.
+
+A future writer accepts one `write(value)`; a stream writer accepts a bounded
+`write(chunk)`. Each returns `{written, remaining, cancelled, closed}`. Byte
+streams use `Uint8Array` for chunks and remainders. Payload-free futures read as
+`undefined`; unit streams carry dense arrays of counted `undefined` elements.
+Only one write may be pending per writer. `cancel()` cancels the current write
+and preserves its unconsumed values for retry. After lowering, returned owners
+have new identities and the original owners cannot be reused. Ownership receipts
+release queued payload roots as soon as the native transaction commits.
+
+`close()`/`dispose()` on a stream writer closes its readable endpoint and
+disposes unconsumed pending payloads. Disposing an unfinished future writer
+retires its component quietly: an unwritten canonical future cannot simply drop its
+writable end. GC uses the same policy for abandoned writers or unobserved
+pending writes. Stale finalizers recheck native ownership and do not abort a
+completed future or affect a transferred/newer capability. Observe writes that
+must remain pending; await their result to recover partial/cancelled remainders.
+The [producer receipt](validation/wasi-component-producers-20261026.json)
+records actual guest consumption, nominal resource ownership, nested factories,
+partial writes, cancellation, GC and Store reuse with matching production
+archives. Native admission shares the engine's 64 pending-call limit; up to
+1,024 separately retained invocation contexts can outlive their public results.
 `stream<char>` is explicitly rejected; use bytes with an explicit encoding.
 `error-context` remains unsupported. Async Perry-authored guest functions and
 future/stream guest values still require the rooted canonical adapter and are
@@ -345,8 +380,8 @@ chunks, and nominal resource identity. The helper is now composed into productio
 Rust hosts, with private read/disposal functions sharing the original component's
 resource identities. End-to-end checks cover imported and exported resources,
 pruned provider imports, nested futures, large compound payloads, transactional
-transfers and close races. Traced TypeScript wrappers and their producer
-interfaces remain unfinished.
+transfers and close races. Traced native TypeScript wrappers and producer
+interfaces now use the persistent driver described above.
 
 Private canonical factory/write helpers additionally create readable/writable
 pairs, perform bounded writes with backpressure, and return unconsumed payloads.
@@ -373,7 +408,7 @@ lift/lower, future and stream features required by the
 `scripts/component_async_acceptance.py` exercises a compiled TypeScript host
 against a canonical async component, including a suspended JS import, Store
 reuse, original rejection identity, cancellation, ALS and explicit collection.
-The native host/runtime boundary uses ABI 10; rebuild the matching compiler,
+The native host/runtime boundary uses ABI 11; rebuild the matching compiler,
 runtime and optional engine archives together. Other host platforms and final
 distribution packages still require qualification.
 
@@ -432,7 +467,7 @@ records the separate development, production panic-abort and moving-GC checks.
 This qualification covers Linux; other native platforms and final packages
 remain open.
 
-The combined component-host boundary uses ABI 10; compiler, runtime and
+The combined component-host boundary uses ABI 11; compiler, runtime and
 optional host archive must be built together. The separate command feature
 was qualified using ABI 3; the combined Linux qualification is recorded below.
 This API is native-only. Unit fixtures and
@@ -526,7 +561,7 @@ and [socket qualification](validation/wasi-p3-sockets-20261023.json), plus
 [HTTP qualification](validation/wasi-p3-http-20261023.json). HTTP supports
 canonical body streams, trailers and transmission futures, async client calls
 and Rust handler embedding over Turnloop HTTP/1.1. Native application
-future/stream readers are implemented; JavaScript producers remain unfinished.
+future/stream readers and JavaScript producer factories are implemented.
 Native TypeScript bindings expose
 `Component.handleHttp` for the pinned handler; Rust embeddings can invoke it
 through `Host::handle_http_async`.
@@ -559,7 +594,7 @@ component tests, 16 WIT tests and strict TypeScript checking. Actual compiled
 TypeScript hosts exercise plain HTTP and verified TLS in ordinary and moving-GC
 modes, including 3 MiB binary bodies and trailers, two suspended imports per
 successful request, explicit error reuse, original rejection identity, traps and
-cancellation. That receipt covers ABI 8; the current boundary is ABI 10. Rebuild the compiler, runtime and optional
+cancellation. That receipt covers ABI 8; the current boundary is ABI 11. Rebuild the compiler, runtime and optional
 engine together. Matching archives also pass the full 28 library, nine command
 and eight HTTP P2 regression phases. Other platforms, released Turnloop
 dependencies and final distribution packages remain open.
@@ -699,8 +734,8 @@ tagged objects for options, results, and variants. In particular,
 `some(none)` stays distinct from `none`. Resource wrappers retain private
 ownership tokens; application objects cannot forge a token by adding public
 properties. Native async functions use the Promise mapping above. Native future
-and stream results use owned readable handles. JavaScript producers and async
-guest adapters remain unsupported.
+and stream results use owned readable handles, with component-bound native
+producer factories. Async guest adapters remain unsupported.
 
 ## Disposal and traps
 
@@ -1031,8 +1066,9 @@ and P3 remain open.
 ## Continuous execution checks
 
 `scripts/component_check.sh` builds matching native tools, ordinary and
-instrumented runtime archives, and the WASI runtime, then runs both acceptance
-harnesses. Configure wasi-sdk first, as for the standalone WASI checks. Fixture
+instrumented runtime archives, and the WASI runtime, then runs native, command,
+guest and persistent future/stream acceptance. Configure wasi-sdk first, as for
+the standalone WASI checks. Fixture
 Cargo builds run from the checkout so they use its pinned Rust toolchain and
 unwind configuration; `CARGO_BUILD_JOBS` is respected.
 
