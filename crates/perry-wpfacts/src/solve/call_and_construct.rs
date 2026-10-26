@@ -1360,7 +1360,11 @@ impl Model {
             kind,
             Hard::E5DefineProperty | Hard::E6SetPrototypeOf | Hard::E7Delete | Hard::E15With
         ) {
-            crate::builtins::note_native_write(self, t, None, kind.code());
+            let what = match self.explain {
+                true => format!("{} ({})", kind.code(), self.reasons[reason as usize]),
+                false => kind.code().to_string(),
+            };
+            crate::builtins::note_native_write(self, t, None, &what);
         }
         if t == TOP {
             return;

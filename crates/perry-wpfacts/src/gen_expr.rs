@@ -877,8 +877,19 @@ impl<'a> Gen<'a> {
                 nv
             }
             Expr::Delete(target) => {
-                // E7: the receiver of the deleted reference.
-                let r = self.m.reason("E7 delete");
+                // E7: the receiver of the deleted reference (explain: in
+                // which function).
+                let r = if self.m.explain {
+                    let f = self
+                        .m
+                        .funcs
+                        .get(fx.f as usize)
+                        .map_or("(no function)", |f| f.name.as_str());
+                    let why = format!("E7 delete in {f}");
+                    self.m.reason(&why)
+                } else {
+                    self.m.reason("E7 delete")
+                };
                 match target.as_ref() {
                     Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. } => {
                         let o = self.expr(fx, object);

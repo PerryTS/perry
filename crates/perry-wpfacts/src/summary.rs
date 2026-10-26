@@ -1157,10 +1157,11 @@ impl Model {
     /// exactly `t`'s: a literal not escaped and not HARD, with no key added
     /// after birth or stored under a computed key, no computed member, no
     /// `__proto__`, whose chain gets no enumerable key from the program
-    /// (nothing writes `Object.prototype`); a body defining a property under
-    /// its key also needs each key to be one generation named
-    /// (`for_in_define_keys`). `late`: the keys stored into each template
-    /// (`settle_for_in`; the check before it only knows the cheap facts).
+    /// (nothing writes `Object.prototype`, `object_proto_written`); a body
+    /// defining a property under its key also needs each key to be one
+    /// generation named (`for_in_define_keys`). `late`: the keys stored into
+    /// each template (`settle_for_in`; the check before it only knows the
+    /// cheap facts).
     fn for_in_keys(
         &self,
         f: FnIdx,
@@ -1185,10 +1186,7 @@ impl Model {
             || self.hard.contains_key(&t)
             || self.adds_keys.get(&tm).is_some_and(|&n| n > 0)
             || self.any_writers.contains_key(&tm)
-            || self
-                .native_writes
-                .keys()
-                .any(|&(w, _)| w == TOP || matches!(self.toks[w as usize], TokKind::ObjectProto))
+            || self.object_proto_written()
         {
             return None;
         }
@@ -1222,6 +1220,21 @@ impl Model {
             return None;
         }
         Some(keys)
+    }
+
+    /// May `Object.prototype`, the chain of every literal, hold a key the
+    /// program wrote (`native_writes` on it: a store, an accessor, E5/E6/E7,
+    /// a reach into unmodeled code, another unit's write)? A for-in over a
+    /// literal visits such a key when it is enumerable. A write into ⊤ is
+    /// no such write: ⊤ holds no builtin prototype (`escape`: a runtime
+    /// object reaches unknown code as itself, and what may write it is
+    /// noted on it), and a literal whose keys are exactly its own is not
+    /// escaped, so not in ⊤ either. The write into ⊤ stays a fact about
+    /// ⊤'s members, which lookups through ⊤ already read as anything.
+    fn object_proto_written(&self) -> bool {
+        self.native_writes
+            .keys()
+            .any(|&(w, _)| matches!(self.toks[w as usize], TokKind::ObjectProto))
     }
 
     /// Once the worklist is empty: a literal a for-in body ran per key over

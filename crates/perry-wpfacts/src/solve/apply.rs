@@ -305,6 +305,14 @@ impl Model {
             }
             Cons::Hard { kind, reason } => {
                 for &t in toks {
+                    if self.explain && t == TOP {
+                        eprintln!(
+                            "perry: wpfacts explain: {} on ⊤: {} (receiver: {})",
+                            kind.code(),
+                            self.reasons[reason as usize],
+                            self.top_origin(n)
+                        );
+                    }
                     self.mark_hard(t, kind, reason);
                 }
             }
