@@ -104,8 +104,11 @@ The first build loads the workspace. Later supported edits use Blaze while
 mbx caches dependencies and manages worktree targets. Explicit `--release`
 and `--profile` builds stay on Cargo and mbx. The Rust unit-test CI job uses
 the same prebuilts and mbx object cache. Other production checks retain the
-normal compiler path. The tools remain experimental: passing a small JIT
-probe does not establish compatibility with every Perry crate.
+normal compiler path. The tools remain experimental. In a Linux ARM64 development image,
+`perry-native-registration` passed 27 tests through Blaze. The `no_std`
+`perry-abi` crate passed four tests only after Blaze reported missing
+`lang_start` and fell back to Cargo. Full workspace compatibility is not
+established. Apple Silicon artifacts are still pending hosted-runner capacity.
 
 ### Compiler cache for ephemeral worktrees
 
