@@ -11,7 +11,7 @@
 //!
 //! Only methods whose lowering shape is **identical between the two
 //! sites** live here. Methods that diverge — e.g. dotted-only
-//! `getRandomValues` (rewrites into an instance method on the buffer)
+//! `getRandomValues` (`Expr::CryptoRandomFillSync` without offset/size)
 //! and dotted-only `sha256`/`md5` (dedicated `Expr::CryptoSha256` /
 //! `Expr::CryptoMd5` shortcuts) — stay at their call site.
 

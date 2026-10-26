@@ -783,7 +783,7 @@ pub(crate) unsafe fn nm_dispatch_crypto(ctx: &NmCtx, module_name: &str, method_n
         ("crypto.KeyObject", "from") => {
             super::native_module_crypto_key_object::key_object_from(arg(0))
         }
-        ("crypto.webcrypto", "getRandomValues") if args_len >= 1 => {
+        ("crypto" | "crypto.webcrypto", "getRandomValues") if args_len >= 1 => {
             let undefined = f64::from_bits(JSValue::undefined().bits());
             super::native_module_crypto_random::random_fill_sync(arg(0), undefined, undefined)
         }
