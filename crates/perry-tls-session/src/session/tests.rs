@@ -107,6 +107,45 @@ fn handshake_data_and_close_notify_round_trip() {
 }
 
 #[test]
+fn invalid_content_type_preserves_alert_and_negotiation_facts() {
+    let mut initial = TlsSession::server(server_config(&[])).unwrap();
+    assert!(!initial.failed_with_invalid_content_type());
+    initial.receive(b"GET / HTTP/1.0\r\n\r\n");
+    initial.pump();
+    assert!(initial.failure().is_some());
+    assert!(initial.failed_with_invalid_content_type());
+    assert_eq!(initial.protocol_version(), None);
+    assert!(
+        !initial.take_output().is_empty(),
+        "the codec must retain the fatal alert"
+    );
+
+    let mut client = TlsSession::client(client_config(true, &[]), localhost()).unwrap();
+    let mut started = TlsSession::server(server_config(&[])).unwrap();
+    client.pump();
+    started.receive(&client.take_output());
+    started.pump();
+    assert!(
+        started.protocol_version().is_some(),
+        "the ClientHello selected a protocol"
+    );
+    assert!(
+        !started.take_output().is_empty(),
+        "the handshake produced a server flight"
+    );
+    assert!(!started.failed_with_invalid_content_type());
+    started.receive(b"GET / HTTP/1.0\r\n\r\n");
+    started.pump();
+    assert!(started.failure().is_some());
+    assert!(started.failed_with_invalid_content_type());
+    assert!(started.protocol_version().is_some());
+    assert!(
+        !started.take_output().is_empty(),
+        "a malformed established TLS exchange retains its alert"
+    );
+}
+
+#[test]
 fn rejected_certificate_fails_and_sends_the_alert() {
     let mut client = TlsSession::client(client_config(false, &[]), localhost()).unwrap();
     let mut server = TlsSession::server(server_config(&[])).unwrap();
