@@ -3,6 +3,11 @@
 
 use super::*;
 
+/// What a published value no contract describes escapes with (DECISIONS
+/// 203): unlike a publication (`Model::pub_reason`), nothing it reaches is
+/// read through a contract.
+pub(crate) const UNDESCRIBED: &str = "published to another unit, described by no contract";
+
 impl<'a> Gen<'a> {
     // --------------------------------------------------------- export side
 
@@ -309,7 +314,13 @@ impl<'a> Gen<'a> {
                         self.value_contracts.push(((mi, a), n));
                         continue;
                     }
-                    self.m.sink_node(n, r)
+                    // A class the census broke escapes as everything did in
+                    // P1, beyond any contract (DECISIONS 203).
+                    let rb = match self.export_class.contains_key(&(mi, a)) {
+                        true => self.m.reason(UNDESCRIBED),
+                        false => r,
+                    };
+                    self.m.sink_node(n, rb)
                 }
             }
         }
@@ -1067,11 +1078,16 @@ impl<'a> Gen<'a> {
             }
             // A value no contract describes escapes alone (DECISIONS 174):
             // the binding still describes the others, and its contract says
-            // unknown beside them (`value_contract_of`).
+            // unknown beside them (`value_contract_of`). Its readers find an
+            // unknown value, so nothing it reaches is read through a
+            // contract: it escapes beyond any (DECISIONS 203), and another
+            // unit's stand-in it reaches is this unit's report, not a value
+            // forwarded with its owner's contract (`Model::escape`).
             let (toks, bad): (Vec<Tok>, Vec<Tok>) =
                 toks.into_iter().partition(|&t| self.value_tok_ok(t));
+            let ru = self.m.reason(UNDESCRIBED);
             for t in bad {
-                changed |= self.m.escape_changed(t, r);
+                changed |= self.m.escape_changed(t, ru);
             }
             for t in toks {
                 // Nothing of this unit leaves through a marker (DECISIONS 137).

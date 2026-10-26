@@ -690,3 +690,29 @@ fn a_function_passed_to_a_method_of_a_parameters_field_escapes() {
         .expect("the literal");
     assert!(t.escape.is_some(), "{t:?}");
 }
+
+#[test]
+fn a_stand_in_reached_through_a_value_no_contract_describes_is_reported() {
+    // DECISIONS 203: `b` calls an unknown export with the namespace as its
+    // receiver, so the namespace and every export escape; `z` is broken and
+    // `a` sinks it. Its getter returns `objectUtil`, another unit's stand-in
+    // in `z`'s unit. `z`'s readers find an unknown value, so the stand-in is
+    // not read through its owner's contract: it escapes in `z`'s unit, which
+    // reports it, and its owner sinks it as the whole program does (zod's
+    // `z.objectUtil` behind `z.array(...)`). Before, `z` escaped as a
+    // publication and the stand-in left "with its owner's contract".
+    let a = r#"
+        const objectUtil: any = { mergeShapes: (x: any, y: any) => ({ ...x, ...y }) };
+        const arrayType: any = (globalThis as any).unk;
+        export const z = { get objectUtil() { return objectUtil; } };
+        export { arrayType as array };
+        "#;
+    let b = "import * as zmod from \"./a\";\nconsole.log((zmod as any).array(1));\n";
+    let (u, _) = assert_not_stronger(&[("a", a), ("b", b)]);
+    let t = u
+        .templates
+        .iter()
+        .find(|t| t.birth_keys.iter().any(|k| k == "mergeShapes"))
+        .expect("objectUtil");
+    assert!(t.escape.is_some(), "{t:?}");
+}
