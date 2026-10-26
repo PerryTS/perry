@@ -611,3 +611,58 @@ fn a_closed_class_another_unit_extends_publishes_what_its_constructions_pass() {
     let f = field(template(&u, "a.ts:Base"), "scale");
     assert!(f.kind.prims & crate::model::prim::NUM != 0 || f.kind.top, "{f:?}\n{}", u.dump_text());
 }
+
+#[test]
+fn a_layout_met_again_in_its_own_description_is_named_once() {
+    // DECISIONS 199: L's field holds M, M's field holds L again (each a
+    // copy one level deeper, as a forwarded copy read back every round
+    // builds it). After the cut the inner L keeps its facts but describes
+    // no field values, so the description stops growing.
+    // A layout contract as `value_contract_of_toks` builds one, facts from a solve.
+    let pf = run(&[("a", "const o = { a: 1 }; console.log(o.a);")], true, &FactsConfig::default());
+    let facts = pf.templates.first().cloned().expect("a template");
+    let mk = |d: &str| crate::units::ClassContract {
+        display: d.to_string(),
+        name: d.to_string(),
+        class_id: 0,
+        literal_shape: true,
+        facts: facts.clone(),
+        methods: Vec::new(),
+        native_parent: None,
+        parent: None,
+        field_fns: Vec::new(),
+        field_layouts: Vec::new(),
+        field_values: Vec::new(),
+        field_tas: Vec::new(),
+        open_keys: false,
+        statics: Vec::new(),
+        statics_open: false,
+        static_fns: Vec::new(),
+        static_values: Vec::new(),
+        closed: None,
+        forwards: false,
+        method_fns: Vec::new(),
+        ctor_fn: None,
+        birth_keys: Vec::new(),
+        definite: Vec::new(),
+        ctor_leaks: true,
+        binding_prim: 0,
+    };
+    let with = |mut c: crate::units::ClassContract, inner: crate::units::ClassContract| {
+        let vc = crate::units::ValueContract {
+            layouts: vec![inner],
+            ..Default::default()
+        };
+        c.field_values.push(("next".to_string(), vc));
+        c
+    };
+    let deep = with(mk("L"), with(mk("M"), with(mk("L"), with(mk("M"), mk("L")))));
+    let mut cut = deep.clone();
+    crate::cut_described_again(&mut cut, &mut Vec::new());
+    let m = &cut.field_values[0].1.layouts[0];
+    assert_eq!(m.display, "M");
+    let inner_l = &m.field_values[0].1.layouts[0];
+    assert_eq!(inner_l.display, "L");
+    assert!(inner_l.field_values.is_empty(), "{cut:?}");
+    assert_ne!(format!("{cut:?}"), format!("{deep:?}"));
+}

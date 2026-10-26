@@ -1328,6 +1328,30 @@ fn forwards_of(g: &gen::Gen, mi: u32, tm: model::TmplId) -> bool {
     mi == 0 && g.view.is_some_and(|v| v.published.contains(name))
 }
 
+/// DECISIONS 199: another unit's layout contract, embedded in a value
+/// contract, describes a layout once on its path (as DECISIONS 153 does for
+/// this unit's own): one met again inside its own description keeps its
+/// facts but not its fields' values. A forwarded copy read back as a
+/// stand-in otherwise took one more level of itself every round
+/// (d_react_ssr: two React literal shapes holding each other, the driver
+/// never reached a fixpoint). The reader builds the outer description
+/// first and finds it again by display (`Gen::stand_in_class`), so nothing
+/// it reads is lost.
+pub(crate) fn cut_described_again(cc: &mut units::ClassContract, path: &mut Vec<String>) {
+    path.push(cc.display.clone());
+    for (_, vc) in cc.field_values.iter_mut().chain(cc.static_values.iter_mut()) {
+        for inner in vc.layouts.iter_mut().chain(vc.classes.iter_mut()) {
+            if path.contains(&inner.display) {
+                inner.field_values.clear();
+                inner.static_values.clear();
+            } else {
+                cut_described_again(inner, path);
+            }
+        }
+    }
+    path.pop();
+}
+
 /// The value contract of what a node may hold (design §12): the layouts and
 /// classes of contracts, this unit's contract functions, other units'
 /// stand-ins, builtins, primitive kinds; anything else is unknown.
@@ -1498,6 +1522,9 @@ fn value_contract_of_toks(
             vc.unknown = true;
             continue;
         };
+        if g.stand_in_cc.contains_key(&tm) {
+            cut_described_again(&mut cc, &mut Vec::new());
+        }
         if !class
             && !g.stand_in_cc.contains_key(&tm)
             && !vc.layouts.iter().any(|c| c.display == cc.display)
