@@ -396,7 +396,7 @@ unsafe fn key_add_slow(
     let shadows =
         receiver_class == 0 || receiver_family_declares_name(receiver_class, bytes).unwrap_or(true);
     if shadows && !super::own_override::in_builtin_definition() {
-        id.shadowed()
+        LayoutWord(id.0 | crate::codegen_abi::LAYOUT_SHADOW_BIT)
     } else {
         id
     }
@@ -427,7 +427,7 @@ unsafe fn publish_word_slow(
     if change_touches_shadow_name(LayoutWord(prev), id, any_member, receiver_class)
         && !super::own_override::in_builtin_definition()
     {
-        id.shadowed()
+        LayoutWord(id.0 | crate::codegen_abi::LAYOUT_SHADOW_BIT)
     } else {
         id
     }

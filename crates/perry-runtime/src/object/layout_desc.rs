@@ -158,7 +158,7 @@ pub const fn carry_shadow(previous: u32, id: LayoutWord) -> LayoutWord {
         && id.0 >= super::shapes::SHAPE_ID_BASE
         && id.0 < crate::codegen_abi::LAYOUT_ORDINARY_END
     {
-        id.shadowed()
+        LayoutWord(id.0 | crate::codegen_abi::LAYOUT_SHADOW_BIT)
     } else {
         id
     }
