@@ -202,6 +202,8 @@ pub extern "C" fn js_stdlib_install_external_http_server_pump() {
 #[no_mangle]
 pub extern "C" fn js_stdlib_install_external_net_pump() {
     install_once!({
+        #[cfg(not(target_arch = "wasm32"))]
+        perry_runtime::turnloop_net::install();
         #[cfg(not(any(target_os = "ios", target_os = "android")))]
         super::dispatch::install_external_net();
         #[cfg(all(

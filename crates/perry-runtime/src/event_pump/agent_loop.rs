@@ -495,7 +495,7 @@ fn dispatch_staged() {
         } else if crate::turnloop_post::owns(completion.token) {
             crate::turnloop_post::dispatch(completion);
         } else {
-            crate::turnloop_net::dispatch(completion);
+            super::service_hooks::net_dispatch(completion);
         }
     }
     // Give the emptied allocation back so steady-state dispatch allocates
@@ -744,7 +744,7 @@ fn upgrade_profile(profile: Profile) -> bool {
         return true;
     }
     debug_assert_eq!(
-        crate::turnloop_net::live_handles() + crate::turnloop_proc::live_handles(),
+        super::service_hooks::net_live_handles() + crate::turnloop_proc::live_handles(),
         0,
         "the loop profile is upgraded before the first handle, never under one"
     );
@@ -1277,7 +1277,7 @@ pub fn shutdown_current_thread() {
         // (exactly-once release, DESIGN D4). `Loop::drop` would free the
         // descriptors either way; this is what lets a binding's own
         // bookkeeping see the close rather than inferring it from teardown.
-        crate::turnloop_net::shutdown_current_thread();
+        super::service_hooks::net_shutdown();
         crate::turnloop_proc::shutdown_current_thread();
         // P4: settle every outstanding job before the loop goes away, so a job
         // the pool is still running cannot complete into a closed port and

@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 #[path = "../turnloop_net/abi.rs"]
 pub mod abi;
-#[path = "../turnloop_net/errors.rs"]
+#[path = "../event_pump/service_errors.rs"]
 pub(crate) mod errors;
 #[path = "../turnloop_net/sink.rs"]
 mod sink;

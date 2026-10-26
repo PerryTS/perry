@@ -32,6 +32,7 @@ NEGATIVES = {
     "without_regex": ["regex_engine"],
     "without_node_stream": ["node_stream"],
     "without_json": ["global_json", "json_tape"],
+    "without_turnloop_net": ["turnloop_net"],
     "fs_promises_without_streams": ["bundled_web_streams"],
 }
 

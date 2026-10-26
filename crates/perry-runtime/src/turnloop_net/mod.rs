@@ -89,6 +89,12 @@ pub use sink::{
     NET_FLAG_LINK, NET_FLAG_PLAINTEXT, NET_FLAG_STALE, NET_SHUTDOWN, NET_TIMER, NET_WROTE,
 };
 
+/// Install this service in the common pump before a binding submits work.
+/// Called by the existing net installer and the C-ABI sink installers.
+pub fn install() {
+    crate::event_pump::service_hooks::install_net();
+}
+
 // ── Operation classes, carried in the top 8 bits of every submission token ──
 const OP_ACCEPT: u64 = 1;
 const OP_READ: u64 = 2;
@@ -341,6 +347,7 @@ struct NetState {
 crate::perry_thread_local! {
     /// Per agent, like the loop itself. A socket belongs to the thread that
     /// created it; there is no cross-thread map to race on.
+    #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_tlnet")]
     static NET: RefCell<NetState> = RefCell::new(NetState::default());
 }
 

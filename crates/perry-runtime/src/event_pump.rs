@@ -33,6 +33,10 @@ use std::time::Duration;
 #[cfg(not(target_arch = "wasm32"))]
 mod agent_loop;
 #[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod service_errors;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod service_hooks;
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) use agent_loop::component_turn_and_take;
 #[cfg(not(target_arch = "wasm32"))]
 mod precise_wait;
@@ -323,7 +327,7 @@ pub fn shutdown_wait_driver() {
         // P1's own census. `completions=` on the line above is the driver's
         // whole turn output — net, process, JS timers and pool together — so it
         // cannot say what one request cost. This one can.
-        crate::turnloop_net::census::print_once();
+        service_hooks::net_stats();
     }
     #[cfg(target_arch = "wasm32")]
     {

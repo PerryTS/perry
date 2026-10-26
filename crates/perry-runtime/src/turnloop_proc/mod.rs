@@ -69,7 +69,7 @@ mod registry;
 #[path = "tests.rs"]
 mod tests;
 
-pub use crate::turnloop_net::{map_error, NodeError};
+pub use crate::event_pump::service_errors::{map_error, NodeError};
 pub(crate) use registry::{Owner, StreamEvent};
 
 // ── Operation classes, in the top 8 bits of every submission token ──────────

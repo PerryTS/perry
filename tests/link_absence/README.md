@@ -61,3 +61,8 @@ enter it only through its filled slots. The json_tape positive uses a large
 array, sparse reads, indexed extension and length truncation to exercise the
 existing lazy route. Positives must retain implementation symbols in addition
 to an installer symbol; the hook alone cannot satisfy a witness.
+
+The existing network installer fills the agent-loop service slots for
+completion dispatch, teardown and diagnostics. A timer-only negative keeps
+the driver live while requiring the network service absent; independent
+listen/close and echo positives exercise installed dispatch and teardown.
