@@ -188,3 +188,86 @@ fn a_proven_declaration_is_called_through_its_value_wrapper() {
     // The missing parameter is padded with undefined.
     assert_eq!(call.matches("double ").count(), 3, "{call}");
 }
+
+/// The body of the function whose `define` line names `sym` followed by `(`.
+fn defined<'a>(ir: &'a str, sym: &str) -> &'a str {
+    let pat = format!("{sym}(");
+    let at = ir
+        .match_indices("define ")
+        .map(|(i, _)| i)
+        .find(|&i| ir[i..].lines().next().is_some_and(|l| l.contains(&pat)))
+        .unwrap_or_else(|| panic!("no definition of {sym} in\n{ir}"));
+    let end = ir[at..].find("\n}\n").map_or(ir.len(), |e| at + e);
+    &ir[at..end]
+}
+
+#[test]
+fn a_proven_call_of_a_captured_closure_with_fewer_arguments_is_direct() {
+    // `add` is bound once and captured: the closure arm calls `add(n, 2)`
+    // straight through its body with no test, but `add(n)` passes fewer
+    // arguments than `add` declares, which that arm dispatches. The facts
+    // prove the body, so that call is a direct call of it too.
+    let m = lower(
+        r#"
+        function make() {
+            const add = (a: number, b: number) => a + (b === undefined ? 10 : b);
+            return (n: number) => add(n) + add(n, 2);
+        }
+        console.log(make()(1));
+    "#,
+    );
+    let make = m
+        .functions
+        .iter()
+        .find(|f| f.name == "make")
+        .expect("function make");
+    let (local, add) = make
+        .body
+        .iter()
+        .find_map(|s| match s {
+            Stmt::Let {
+                id,
+                name,
+                init: Some(Expr::Closure { func_id, .. }),
+                ..
+            } if name == "add" => Some((*id, *func_id)),
+            _ => None,
+        })
+        .expect("closure add");
+    let inner = make
+        .body
+        .iter()
+        .find_map(|s| match s {
+            Stmt::Return(Some(Expr::Closure { func_id, .. })) => Some(*func_id),
+            _ => None,
+        })
+        .expect("returned closure");
+    let inner_sym = format!("__{inner}");
+    let without = ir(&m, ElisionFacts::default());
+    assert!(
+        defined(&without, &inner_sym).contains("@js_closure_call1("),
+        "without facts the one-argument call dispatches:\n{}",
+        defined(&without, &inner_sym)
+    );
+    let with = ir(
+        &m,
+        facts_for(
+            local,
+            vec![FactsBody {
+                func_id: add,
+                params: 2,
+                closure: true,
+            }],
+        ),
+    );
+    let body = defined(&with, &inner_sym);
+    assert!(!body.contains("@js_closure_call1("), "{body}");
+    let direct = body
+        .lines()
+        .filter(|l| l.contains("call ") && l.contains(&format!("__{add}(")))
+        .count();
+    assert!(
+        direct >= 2,
+        "both calls are direct calls of add's body (the short one padded):\n{body}"
+    );
+}
