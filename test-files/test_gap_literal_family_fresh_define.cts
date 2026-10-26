@@ -67,3 +67,12 @@ Object.defineProperty(inheritedReceiver, "owned_accessor", { get() { return this
 console.log("read-fallbacks", inheritedReceiver.inheritedValue, inheritedReceiver.owned_accessor,
   inheritedReceiver.owned_undefined, inheritedReceiver.missing_value,
   Object.hasOwn(inheritedReceiver, "owned_undefined"));
+
+Object.seal(inheritedReceiver);
+console.log("sealed-read-fallbacks", Object.isSealed(inheritedReceiver), Object.isFrozen(inheritedReceiver),
+  inheritedReceiver.inheritedValue, inheritedReceiver.owned_accessor,
+  Object.getOwnPropertyDescriptor(inheritedReceiver, "owned_accessor").configurable);
+Object.freeze(firstOutside);
+console.log("first-outside-frozen", Object.isFrozen(firstOutside), firstOutside.first_dynamic,
+  Object.getOwnPropertyDescriptor(firstOutside, "first_dynamic").writable,
+  Object.getOwnPropertyDescriptor(firstOutside, "first_dynamic").configurable);

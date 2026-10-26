@@ -1603,6 +1603,24 @@ pub(crate) unsafe fn apply_edits(obj: *mut crate::object::ObjectHeader, edits: &
     crate::object::set_object_keys(obj, rebuilt.view());
 }
 
+/// Restrict an ordinary holder's owned entries inside its integrity operation.
+/// The caller holds a no-move window and publishes the final shape once after
+/// setting its final integrity flags. Other descriptor edits publish normally.
+///
+/// # Safety
+/// obj owns an overflow table and cannot be observed before final publication.
+pub(crate) unsafe fn restrict_owned_integrity(obj: *mut crate::object::ObjectHeader, freeze: bool) {
+    let table = crate::object::overflow::table(obj);
+    debug_assert!(!table.is_null());
+    edit_private_list(
+        obj,
+        table.cast(),
+        0,
+        (*table).length,
+        &[AttrsEdit::Integrity { freeze }],
+    );
+}
+
 /// Edit a dictionary receiver's PRIVATE list in place from position `from`.
 unsafe fn edit_private_list(
     obj: *mut crate::object::ObjectHeader,
