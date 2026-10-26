@@ -708,7 +708,10 @@ fn classless_optional_family_keeps_shape_and_routes_unknown_keys_to_overflow() {
             crate::object::PropertyAttrs::new(false, true, true),
         );
         let shape = crate::object::shapes::object_shape_descriptor(obj).unwrap();
-        assert_eq!(shape.object_kind, crate::object::shapes::ShapeObjectKind::Ordinary);
+        assert_eq!(
+            shape.object_kind,
+            crate::object::shapes::ShapeObjectKind::Ordinary
+        );
         assert!(crate::object::overflow::has_overflow(obj));
         assert_eq!(
             crate::object::key_attrs::keys_entry(shape.keys as *const crate::array::ArrayHeader, 0)
