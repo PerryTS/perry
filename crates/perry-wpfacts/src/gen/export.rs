@@ -515,8 +515,11 @@ impl<'a> Gen<'a> {
             // A closed local (decision 23) no other unit can name: published
             // where it is created, as a contract function through its closed
             // contract (markers on its parameters, not an escape), so a
-            // passing call's argument contract can describe it.
-            if nm.contains('#') {
+            // passing call's argument contract can describe it. DECISIONS
+            // 195: only one passed by name as an argument can reach another
+            // unit; any other is called here alone, its parameters hold its
+            // callers' values (as in the whole program) and carry no markers.
+            if nm.contains('#') && view.closed_passed.contains(nm) {
                 local.push(fx);
             }
         }

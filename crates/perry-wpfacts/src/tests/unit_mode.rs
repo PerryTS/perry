@@ -3904,3 +3904,66 @@ fn a_store_into_the_units_own_literal_publishes_nothing() {
     assert!(proven(&pf, "w"), "{}", pf.dump_text());
     assert!(tmpl(&pf, "Inner").escape.is_none(), "{}", pf.dump_text());
 }
+
+/// `run(o)` in `a` hands its argument down a chain of `n` closed locals
+/// (decision 23: every reference a direct call, none passed as a value);
+/// each stores its own key into it. `b` passes a literal and reads every key.
+fn closed_chain(n: usize) -> [(&'static str, String); 2] {
+    let mut a = String::from("export function run(o: any) {\n");
+    for i in (0..n).rev() {
+        let next = match i + 1 < n {
+            true => format!(" f{}(x);", i + 1),
+            false => String::new(),
+        };
+        a += &format!("  const f{i} = (x: any) => {{ x.k{i} = {i};{next} }};\n");
+    }
+    a += "  f0(o);\n}\n";
+    let keys: Vec<String> = (0..n).map(|i| format!("k{i}: -1")).collect();
+    let reads: Vec<String> = (0..n).map(|i| format!("o.k{i}")).collect();
+    let b = format!(
+        "import {{ run }} from './a';\nconst o = {{ {} }};\nrun(o);\nconsole.log({});\n",
+        keys.join(", "),
+        reads.join(" + ")
+    );
+    [("a", a), ("b", b)]
+}
+
+#[test]
+fn a_store_deep_in_closed_locals_reaches_the_outer_callers_argument() {
+    // DECISIONS 195: the closed locals of `run` are called only in `a`, so
+    // they carry no parameter markers; the store `x.k2 = 2` two calls deep
+    // lands on what their callers pass, `run`'s own parameter marker, and
+    // `run`'s contract tells `b` its literal is written under k0..k2 with
+    // numbers: `b`'s reads stay proven as in the whole program.
+    let [(an, a), (bn, b)] = closed_chain(3);
+    let mods = [(an, a.as_str()), (bn, b.as_str())];
+    assert_parity(&mods);
+    let pf = units_of(&mods);
+    for k in ["k0", "k1", "k2"] {
+        assert!(proven(&pf, k), "{k}\n{}", pf.dump_text());
+    }
+}
+
+#[test]
+fn a_closed_local_called_only_in_its_unit_costs_its_own_stores() {
+    // DECISIONS 195: the closed locals of `run` carry no parameter markers
+    // (no other unit can call them), so a store through one lands on what
+    // its callers pass; it costs less than the same chain of a literal's
+    // methods, whose parameters take argument markers (DECISIONS 44). With
+    // markers on the closed locals (as before 195) the chain cost more than
+    // the methods (n = 64: 6,986 vs 5,285; now 2,702).
+    let n = 64;
+    let [(an, a), (bn, b)] = closed_chain(n);
+    let closed = module_work(&units_of(&[(an, a.as_str()), (bn, b.as_str())]), "a.ts");
+    let mut m = String::from("export function run(o: any) {\n  const h = {\n");
+    for i in 0..n {
+        let next = match i + 1 < n {
+            true => format!(" h.f{}(x);", i + 1),
+            false => String::new(),
+        };
+        m += &format!("    f{i}(x: any) {{ x.k{i} = {i};{next} }},\n");
+    }
+    m += "  };\n  h.f0(o);\n}\n";
+    let methods = module_work(&units_of(&[("a", m.as_str()), (bn, b.as_str())]), "a.ts");
+    assert!(closed * 4 < methods * 3, "closed {closed} methods {methods}");
+}

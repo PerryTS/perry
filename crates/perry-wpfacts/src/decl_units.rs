@@ -39,6 +39,10 @@ pub(crate) struct UnitView<'a> {
     /// holds its stand-in, which forwards it as an open class's and
     /// publishes what its constructions pass.
     pub published: FxHashSet<String>,
+    /// DECISIONS 195: its closed locals (decision 23) passed by name as a
+    /// direct argument: the only ones whose value can reach another unit's
+    /// code. Any other closed local is called only here.
+    pub closed_passed: FxHashSet<String>,
     /// Its index among its module's units ([`unit_path`]).
     pub unit: usize,
     /// The other units' module-scope bindings it writes (`currentFlow = f`,
@@ -654,7 +658,7 @@ pub(crate) fn closed_bindings(
     module: &Module,
     unit_of: &dyn Fn(Item) -> usize,
     named: &dyn Fn(&str) -> bool,
-) -> (FxHashMap<String, u32>, FxHashSet<String>) {
+) -> (FxHashMap<String, u32>, FxHashSet<String>, FxHashSet<String>) {
     #[derive(Default)]
     struct Use {
         refs: u32,
@@ -908,6 +912,15 @@ pub(crate) fn closed_bindings(
             cand.remove(&k);
         }
     }
+    // DECISIONS 195: the closed ones passed by name as a direct argument.
+    let passed: FxHashSet<String> = cand
+        .iter()
+        .filter(|(k, _)| {
+            uses.get(k)
+                .is_some_and(|u| u.args_of.iter().any(|c| cand.contains_key(c)))
+        })
+        .map(|(_, (key, _))| key.clone())
+        .collect();
     let mut out: FxHashMap<String, u32> = cand.into_values().collect();
     // Closed classes (design §18.13): a class with a constructor, no export
     // of the module, whose name no other module-scope binding has, with no
@@ -960,7 +973,7 @@ pub(crate) fn closed_bindings(
         }
         out.insert(c.name.clone(), ctor.id);
     }
-    (out, published)
+    (out, published, passed)
 }
 
 /// The declaration units of `module`, in dependency order (a unit before
@@ -1231,7 +1244,7 @@ pub(crate) fn views<'a>(
         .enumerate()
         .flat_map(|(u, items)| items.iter().map(move |&it| (it, u)))
         .collect();
-    let (closed, published) = closed_bindings(
+    let (closed, published, passed) = closed_bindings(
         module,
         &|it| unit_of_item.get(&it).copied().unwrap_or(usize::MAX),
         named,
@@ -1342,6 +1355,9 @@ pub(crate) fn views<'a>(
             local_lets(module, *it, &mut ls);
             for (key, id) in ls.into_iter().filter_map(|(_, l)| l) {
                 if closed.get(&key) == Some(&id) {
+                    if passed.contains(&key) {
+                        view.closed_passed.insert(key.clone());
+                    }
                     view.closed.insert(key, id);
                 }
             }
