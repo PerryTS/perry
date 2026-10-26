@@ -45,6 +45,21 @@ fn pointer(promise: f64) -> *mut crate::promise::Promise {
 fn pending(promise: f64) -> bool {
     unsafe { (*pointer(promise)).state == crate::promise::PromiseState::Pending }
 }
+fn public_promise(component: f64, origin: u64) -> f64 {
+    let value = records::get(origin_row(component, origin), records::PROMISE);
+    if unsafe {
+        (*state(component))
+            .origins
+            .get(&origin)
+            .unwrap()
+            .weak_promise
+    } && crate::promise::js_value_is_promise(value) == 0
+    {
+        crate::weakref::js_weakref_deref(value)
+    } else {
+        value
+    }
+}
 fn first_error(component: f64, origin: u64) -> Option<f64> {
     let failed = unsafe {
         (*state(component))
@@ -66,7 +81,7 @@ fn complete(
     let scope = RuntimeHandleScope::new();
     let component = scope.root_nanbox_f64(component);
     let row = scope.root_nanbox_f64(origin_row(component.get_nanbox_f64(), origin));
-    let promise = scope.root_nanbox_f64(records::get(row.get_nanbox_f64(), records::PROMISE));
+    let promise = scope.root_nanbox_f64(public_promise(component.get_nanbox_f64(), origin));
     let result = scope.root_nanbox_f64(undefined());
     let frame = batch.frame(origin);
     let kind = unsafe {
@@ -99,6 +114,58 @@ fn complete(
                 result.set_nanbox_f64(value::decode(
                     &reply["value"],
                     &signature["result"],
+                    world,
+                    component.get_nanbox_f64(),
+                ));
+            }
+        }
+        if matches!(kind, ReplyKind::Read { .. })
+            && crate::promise::js_value_is_promise(promise.get_nanbox_f64()) == 0
+        {
+            // A read can win the race with GC's soft close. Its observer is
+            // gone, so retire owned output directly instead of losing native
+            // capabilities in an unobserved JSON reply.
+            cleanup::returned(component.get_nanbox_f64(), &reply["value"]);
+            cleanup::drain(component.get_nanbox_f64());
+            return undefined();
+        }
+        if let ReplyKind::Read { payload, stream } = &kind {
+            let world = unsafe { &(*context::get(component.get_nanbox_f64())).world };
+            if *stream {
+                let done = reply["value"]["done"]
+                    .as_bool()
+                    .unwrap_or_else(|| fail("Invalid stream read result"));
+                let chunk = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+                    crate::object::js_object_alloc(0, 0) as i64,
+                ));
+                set_field(
+                    chunk.get_nanbox_f64(),
+                    b"done",
+                    f64::from_bits(if done {
+                        crate::value::TAG_TRUE
+                    } else {
+                        crate::value::TAG_FALSE
+                    }),
+                );
+                if !done {
+                    let ty = serde_json::json!({"kind":"list","value":payload});
+                    let decoded = crate::exception::catch_js_throw(|| {
+                        value::decode(
+                            &reply["value"]["value"],
+                            &ty,
+                            world,
+                            component.get_nanbox_f64(),
+                        )
+                    });
+                    drop(ty);
+                    let decoded = scope.root_nanbox_f64(finish(decoded));
+                    set_field(chunk.get_nanbox_f64(), b"value", decoded.get_nanbox_f64());
+                }
+                result.set_nanbox_f64(chunk.get_nanbox_f64());
+            } else if reply["returned"] == true {
+                result.set_nanbox_f64(value::decode(
+                    &reply["value"],
+                    payload,
                     world,
                     component.get_nanbox_f64(),
                 ));
@@ -139,6 +206,34 @@ fn complete(
                     escaped = Some(error);
                 }
             }
+        }
+    }
+    if outcome.is_err()
+        && reply["ok"] == true
+        && (crate::promise::js_value_is_promise(promise.get_nanbox_f64()) == 0
+            || crate::promise::js_promise_state(pointer(promise.get_nanbox_f64())) != 1)
+    {
+        let escaped_root = scope.root_nanbox_f64(escaped.unwrap_or_else(undefined));
+        let _ = frame.run_cleanup(|| {
+            cleanup::returned(component.get_nanbox_f64(), &reply["value"]);
+            cleanup::drain(component.get_nanbox_f64());
+            undefined()
+        });
+        if escaped.is_some() {
+            escaped = Some(escaped_root.get_nanbox_f64());
+        }
+    }
+    if let ReplyKind::Read { stream, .. } = &kind {
+        let closed = reply["ok"] != true || reply["value"]["done"] == true;
+        super::super::async_value::finish_read(
+            component.get_nanbox_f64(),
+            records::get(row.get_nanbox_f64(), records::TARGET),
+            *stream,
+            closed,
+        );
+        if crate::promise::js_value_is_promise(promise.get_nanbox_f64()) != 0 {
+            cleanup::unregister(component.get_nanbox_f64(), promise.get_nanbox_f64());
+            crate::promise::operation_owner::clear(pointer(promise.get_nanbox_f64()));
         }
     }
     // Rejections consume their original callback error. Background work can
@@ -369,17 +464,15 @@ pub(super) fn cycle(component: f64) -> bool {
                     .remove(&id)
                     .unwrap()
             };
-            let observed = unsafe {
-                (*state(component.get_nanbox_f64()))
-                    .origins
-                    .get(&id)
-                    .unwrap()
-                    .synchronous
-            } || !JSValue::from_bits(
-                records::get(origin_row(component.get_nanbox_f64(), id), records::PROMISE)
-                    .to_bits(),
-            )
-            .is_undefined();
+            let observed =
+                unsafe {
+                    (*state(component.get_nanbox_f64()))
+                        .origins
+                        .get(&id)
+                        .unwrap()
+                        .synchronous
+                } || !JSValue::from_bits(public_promise(component.get_nanbox_f64(), id).to_bits())
+                    .is_undefined();
             let native_failure = event["ok"] != true;
             let cancelled = native_failure
                 && unsafe { (*state(component.get_nanbox_f64())).retired }

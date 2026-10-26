@@ -110,6 +110,15 @@ fn encode_at(
         .map_err(|_| encoding_error("Detached component byte list"));
     }
     if object_pointer(root.get_nanbox_f64()).is_some() {
+        if let Some(value) = catch_js_throw(|| {
+            super::async_value::encode(
+                root.get_nanbox_f64(),
+                owner.map_or_else(super::undefined, |owner| owner.get_nanbox_f64()),
+            )
+        })? {
+            retain_resource(retained, &root, &value)?;
+            return Ok(value);
+        }
         if let Some(resource) = catch_js_throw(|| {
             super::host_resource::encode(
                 root.get_nanbox_f64(),
@@ -261,6 +270,18 @@ fn decode_at(
             )
         }
         Value::Object(object) => {
+            if object.contains_key("$future") || object.contains_key("$stream") {
+                let stream = object.contains_key("$stream");
+                if ty["kind"] != if stream { "stream" } else { "future" } {
+                    fail("Async value does not match its WIT type");
+                }
+                return super::async_value::decode(
+                    owner.get_nanbox_f64(),
+                    value,
+                    &ty["value"],
+                    stream,
+                );
+            }
             if object.contains_key("$hostResource") {
                 return super::host_resource::decode(
                     owner.get_nanbox_f64(),

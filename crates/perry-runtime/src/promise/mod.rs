@@ -25,6 +25,7 @@ pub mod combinators;
 mod cross_thread_pin_tests;
 pub mod microtasks;
 pub mod native_async;
+pub(crate) mod operation_owner;
 mod owned_state;
 pub mod reactions;
 pub mod rejection;

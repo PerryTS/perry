@@ -177,7 +177,8 @@ worlds, including worlds with synchronous functions. Incoming HTTP worlds still
 use their existing entry points. The current boundary requires matching ABI 10
 runtime and engine archives. The earlier C-only qualification used ABI 9; see the
 [persistent C driver receipt](validation/wasi-persistent-driver-ffi-20261025.json).
-Future/stream wrappers and their GC cleanup remain unfinished. The
+Native future/stream readers and their GC cleanup now use this driver; producers
+and guest adapters remain unfinished. The
 [public runtime receipt](validation/wasi-persistent-runtime-20261026.json)
 records 66 component and 12 async-hooks tests in development and production,
 plus compiled production hosts proving reverse completion, original rejection
@@ -289,15 +290,32 @@ Live pending reads use the same cancellation protocol as explicit `close`.
 This keeps a late GC request from taking ownership back from a guest or a newer
 wrapper. Explicit close retains its validation errors. The
 [persistent cleanup receipt](validation/wasi-persistent-cleanup-20261025.json)
-records the native boundary checks; traced TypeScript wrapper/GC integration
-is still pending.
+records the native boundary checks. Traced TypeScript readers now use this
+stale-safe collector for explicit disposal and GC cancellation.
 
 This is a subset of the WASI 0.3 milestone. Enabling `wasi` now links the
 Turnloop-backed 0.3.0 providers as well as the P2 providers. WIT manifests
 and generated TypeScript declarations now preserve `future<T>` and `stream<T>`,
-including nested, payload-free and byte-stream types. The declared handles are
-owned and nonthenable. Their TypeScript runtime transport is still unfinished;
-generating declarations does not make their `read()` methods executable.
+including nested, payload-free and byte-stream types. Native application handles
+are owned and nonthenable. `future.read()` consumes one typed value;
+`stream.read(maxElements)` returns a bounded chunk followed by `{done: true}`.
+Byte chunks use `Uint8Array`. Capacities are integers from 1 through 65,536;
+the default stream capacity is 4,096. A second future read, concurrent reads on
+one handle, reads after EOF/disposal, cross-component transfer, and transfer
+while reading are rejected. `dispose()` is idempotent and cancels a pending read
+without retiring the Store. A completed future or transferred reader cannot be
+reused.
+
+An observed read retains its temporary handle across `await` and moving GC.
+An unobserved public read Promise stays weak: collecting it closes its pending
+read even if the handle remains live. Collecting an unread handle closes its
+producer. Ownership receipts invalidate every retained alias on transfer.
+Ready owned results refused by a hook or left without an observer are collected
+directly. The [reader receipt](validation/wasi-component-readers-20261026.json)
+qualifies compiled Linux production hosts with streams, nested futures, a
+3 MiB Unicode/byte/resource payload, suspended-producer cancellation, component
+reuse, actual evacuation and protected from-space. JavaScript producer factories
+and writable handles remain unfinished.
 `stream<char>` is explicitly rejected; use bytes with an explicit encoding.
 `error-context` remains unsupported. Async Perry-authored guest functions and
 future/stream guest values still require the rooted canonical adapter and are
@@ -507,8 +525,9 @@ and the [Linux filesystem qualification](validation/wasi-p3-filesystem-20261023.
 and [socket qualification](validation/wasi-p3-sockets-20261023.json), plus
 [HTTP qualification](validation/wasi-p3-http-20261023.json). HTTP supports
 canonical body streams, trailers and transmission futures, async client calls
-and Rust handler embedding over Turnloop HTTP/1.1. Generic future/stream
-application bindings remain unfinished. Native TypeScript bindings expose
+and Rust handler embedding over Turnloop HTTP/1.1. Native application
+future/stream readers are implemented; JavaScript producers remain unfinished.
+Native TypeScript bindings expose
 `Component.handleHttp` for the pinned handler; Rust embeddings can invoke it
 through `Host::handle_http_async`.
 
@@ -679,8 +698,9 @@ The value mapping uses BigInt for `s64/u64`, Uint8Array for `list<u8>`, and
 tagged objects for options, results, and variants. In particular,
 `some(none)` stays distinct from `none`. Resource wrappers retain private
 ownership tokens; application objects cannot forge a token by adding public
-properties. Native async functions use the Promise mapping above. Futures,
-streams and async guest adapters remain unsupported.
+properties. Native async functions use the Promise mapping above. Native future
+and stream results use owned readable handles. JavaScript producers and async
+guest adapters remain unsupported.
 
 ## Disposal and traps
 

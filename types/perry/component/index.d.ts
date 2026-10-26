@@ -26,8 +26,7 @@ export interface OwnedResource<T extends string> extends BorrowedResource<T> {
 
 declare const futureBrand: unique symbol;
 declare const streamBrand: unique symbol;
-/** Declaration for an owned canonical future; deliberately not thenable.
- * Generic application runtime transport is not yet implemented. */
+/** Owned canonical future returned by a native component; deliberately not thenable. */
 export interface ComponentFuture<T> {
   readonly [futureBrand]: (value: T) => T;
   /** Consume its single value; reading twice is an error. */
@@ -35,8 +34,7 @@ export interface ComponentFuture<T> {
   /** Close the readable end, cancelling an outstanding read if present. */
   dispose(): void;
 }
-/** Declaration for an owned canonical stream. Byte streams use Uint8Array.
- * Generic application runtime transport is not yet implemented. */
+/** Owned canonical stream returned by a native component. Byte streams use Uint8Array. */
 export interface ComponentStream<T, Chunk = Array<T>> {
   readonly [streamBrand]: (value: T) => T;
   /** Read a bounded chunk. Only one read may be pending on this stream. */

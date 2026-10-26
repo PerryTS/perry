@@ -94,6 +94,7 @@ fn admit(
                 error_reported: false,
                 synchronous,
                 retained: true,
+                weak_promise: false,
             },
         );
     }
@@ -226,8 +227,12 @@ pub(super) fn collection(component: f64, request: &Value) {
     let reply = ReplyKind::Collection(request.clone());
     let outcome = crate::exception::catch_js_throw(|| {
         available(component.get_nanbox_f64(), false);
-        bytes = serde_json::to_vec(&serde_json::json!({"op":"resource-collect","request":request}))
-            .unwrap();
+        bytes = serde_json::to_vec(&if request["kind"] == "async-value" {
+            serde_json::json!({"op":"collect","value":request["value"]})
+        } else {
+            serde_json::json!({"op":"resource-collect","request":request})
+        })
+        .unwrap();
         let saved = scope.root_nanbox_f64(callback::saved::current());
         let row = scope.root_nanbox_f64(records::create(
             undefined(),
@@ -250,4 +255,102 @@ pub(super) fn collection(component: f64, request: &Value) {
     if let Err(error) = outcome {
         crate::exception::js_throw(error);
     }
+}
+
+pub(in crate::component) fn read(
+    component: f64,
+    target: f64,
+    value: &Value,
+    payload: &Value,
+    stream: bool,
+    capacity: u32,
+) -> f64 {
+    let scope = RuntimeHandleScope::new();
+    let component = scope.root_nanbox_f64(component);
+    let target = scope.root_nanbox_f64(target);
+    let promise = scope.root_nanbox_f64(undefined());
+    let mut request = Vec::new();
+    let reply = ReplyKind::Read {
+        payload: payload.clone(),
+        stream,
+    };
+    let outcome = crate::exception::catch_js_throw(|| {
+        available(component.get_nanbox_f64(), false);
+        request =
+            serde_json::to_vec(&serde_json::json!({"op":"read","value":value,"capacity":capacity}))
+                .unwrap();
+        let captured = scope.root_raw_mut_ptr(crate::async_context::alloc_snapshot_holder(
+            crate::async_context::capture_context(),
+        ));
+        promise.set_nanbox_f64(crate::value::js_nanbox_pointer(
+            crate::promise::js_promise_new() as i64,
+        ));
+        let pointer = JSValue::from_bits(promise.get_nanbox_f64().to_bits())
+            .as_pointer::<crate::promise::Promise>()
+            .cast_mut();
+        crate::promise::set_promise_context_snapshot(pointer, unsafe {
+            (*captured.get_raw_mut_ptr::<crate::async_context::AsyncSnapshotHolder>())
+                .snapshot
+                .clone()
+        });
+        let (saved, ids) = callback::saved::capture(promise.get_nanbox_f64());
+        let saved = scope.root_nanbox_f64(saved);
+        let weak = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+            crate::weakref::js_weakref_new(promise.get_nanbox_f64()) as i64,
+        ));
+        let row = scope.root_nanbox_f64(records::create(
+            weak.get_nanbox_f64(),
+            undefined(),
+            saved.get_nanbox_f64(),
+        ));
+        let weak_target = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+            crate::weakref::js_weakref_new(target.get_nanbox_f64()) as i64,
+        ));
+        records::set(
+            row.get_nanbox_f64(),
+            records::TARGET,
+            weak_target.get_nanbox_f64(),
+        );
+        crate::promise::operation_owner::register(
+            JSValue::from_bits(promise.get_nanbox_f64().to_bits())
+                .as_pointer::<crate::promise::Promise>()
+                .cast_mut(),
+            row.get_nanbox_f64(),
+            records::PROMISE,
+            target.get_nanbox_f64(),
+        );
+        if !super::super::async_value::pending_read_live(target.get_nanbox_f64()) {
+            fail("Async value was closed during Promise initialization");
+        }
+        let id = admit(
+            component.get_nanbox_f64(),
+            &request,
+            row.get_nanbox_f64(),
+            ids,
+            &reply,
+            false,
+        );
+        unsafe {
+            (*state(component.get_nanbox_f64()))
+                .origins
+                .get_mut(&id)
+                .unwrap()
+                .weak_promise = true;
+        }
+        cleanup::register(
+            component.get_nanbox_f64(),
+            promise.get_nanbox_f64(),
+            serde_json::json!({"kind":"async-value","value":value}),
+        );
+        promise.get_nanbox_f64()
+    });
+    if outcome.is_err() && crate::promise::js_value_is_promise(promise.get_nanbox_f64()) != 0 {
+        crate::promise::operation_owner::clear(
+            JSValue::from_bits(promise.get_nanbox_f64().to_bits())
+                .as_pointer::<crate::promise::Promise>()
+                .cast_mut(),
+        );
+    }
+    drop((request, reply));
+    finish(outcome)
 }

@@ -563,6 +563,7 @@ pub extern "C" fn js_promise_then(
     // Attaching a reaction (`then`/`catch`/`finally`/`await`) marks any prior
     // rejection on `promise` as handled, per HostPromiseRejectionTracker.
     mark_rejection_handled(promise);
+    super::operation_owner::observe(promise);
 
     // `js_promise_new_with_parent` can allocate via the GC and fire
     // `v8.promiseHooks` `init` callbacks (running JS), so root the inputs across
@@ -697,6 +698,7 @@ pub(crate) fn js_promise_attach_handlers(
         return;
     }
     mark_rejection_handled(promise);
+    super::operation_owner::observe(promise);
     unsafe {
         // The inline handler slots are single-valued. Combinators reach here
         // with USER promises (`promise_resolve_for_combinator` returns the

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build matching tools/archives and qualify synchronous P2 components on Linux.
+# Build matching tools/archives and qualify native and guest components on Linux.
 # Requires wasi-sdk configured as for wasi_check.sh. Run heavy local builds
 # through the build host's concurrency gate; CI invokes this after WASI smoke.
 set -euo pipefail
@@ -17,15 +17,25 @@ git rev-parse HEAD > "$out/source-revision.txt"
 rustup target add wasm32-unknown-unknown wasm32-wasip2
 cargo test --locked --profile perry-dev -p perry-component-host -p perry-wit --lib
 cargo test --locked --profile perry-dev -p perry-runtime component:: --lib -- --test-threads=1
+cargo test --locked --profile perry-dev -p perry-runtime promise:: --lib -- --test-threads=1
+cargo test --locked --profile perry-dev -p perry-runtime async_hooks:: --lib -- --test-threads=1
 cargo test --locked --profile perry-dev -p perry-runtime weakref:: --lib -- --test-threads=1
 cargo test --locked --profile perry-dev -p perry-runtime finreg --lib -- --test-threads=1
 cargo build --locked --profile perry-dev -p perry -p perry-runtime-static \
   -p perry-stdlib-static -p perry-component-host -p perry-wit -p perry-gc-effects \
   --features perry/target-wasi
 cargo build --locked --profile perry-dev -p perry-wit --example componentize
+cargo build --locked --profile perry-dev -p perry-component-host --example component_wat
 export GC_EFFECTS_BIN="$CARGO_TARGET_DIR/perry-dev/perry-gc-effects"
 scripts/gc_call_effects/sidecars.sh "$CARGO_TARGET_DIR/perry-dev"
 PERRY_INSTR_PACKAGES=runtime scripts/build_instr_runtime.sh '' perry-dev
+for suite in persistent async reader; do
+  python3 "scripts/component_${suite}_acceptance.py" \
+    --perry "$CARGO_TARGET_DIR/perry-dev/perry" \
+    --wit "$CARGO_TARGET_DIR/perry-dev/perry-wit" \
+    --wat-encoder "$CARGO_TARGET_DIR/perry-dev/examples/component_wat" \
+    --runtime-dir "$CARGO_TARGET_DIR/perry-dev" --output "$out/$suite" --moving-gc
+done
 python3 scripts/component_host_acceptance.py \
   --perry "$CARGO_TARGET_DIR/perry-dev/perry" \
   --wit "$CARGO_TARGET_DIR/perry-dev/perry-wit" \

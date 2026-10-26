@@ -8,6 +8,7 @@ use perry_abi::component_host::{
 use serde_json::json;
 mod disposal;
 mod failures;
+mod readers;
 
 mod unused {
     #![allow(dead_code)]
@@ -27,6 +28,8 @@ struct Engine {
     next: u64,
     requests: BTreeMap<u64, Value>,
     ready: Vec<u64>,
+    replies: BTreeMap<u64, Value>,
+    defer_reads: bool,
     retained: Vec<u64>,
     imports: Vec<(u64, bool)>,
     events: Vec<(u64, Value)>,
@@ -89,7 +92,9 @@ unsafe extern "C" fn submit(
     let request: Value = serde_json::from_slice(std::slice::from_raw_parts(bytes, len)).unwrap();
     engine.next += 1;
     let id = engine.next;
-    if request["function"] == "sync" || request["op"] != "call" {
+    if request["function"] == "sync"
+        || (request["op"] != "call" && !(request["op"] == "read" && engine.defer_reads))
+    {
         engine.ready.push(id);
     }
     engine.requests.insert(id, request);
@@ -159,6 +164,8 @@ unsafe extern "C" fn native_poll(
             assert!((*engine).requests.contains_key(&id));
             if (*engine).trap {
                 json!({"id":id.to_string(),"ok":false,"error":"native trap while invoking import"})
+            } else if let Some(value) = (*engine).replies.remove(&id) {
+                json!({"id":id.to_string(),"ok":true,"returned":true,"value":value})
             } else {
                 json!({"id":id.to_string(),"ok":true,"returned":true,"value":id*10})
             }

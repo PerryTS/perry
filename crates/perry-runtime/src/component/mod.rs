@@ -1,5 +1,6 @@
 //! Perry's typed component boundary. Native engines and guest canonical
 //! adapters are optional; module code owns all JS roots and exceptions.
+mod async_value;
 mod asynchronous;
 mod callback;
 mod cleanup;

@@ -74,6 +74,8 @@ pub(in crate::component) fn identity(plan: f64, index: u32) -> Value {
 }
 
 pub(in crate::component) fn release(plan: f64, index: u32) {
+    let wrapper = crate::array::js_array_get_f64(pair(plan, index), 0);
+    super::super::async_value::transferred(wrapper);
     crate::array::js_array_set_f64(pair(plan, index), 0, super::super::undefined());
 }
 

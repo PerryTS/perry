@@ -9,13 +9,15 @@ pub(super) const CONTEXT: u32 = 2;
 pub(super) const ERROR: u32 = 3;
 pub(super) const IMPORT_RESULTS: u32 = 4;
 pub(super) const RESULT: u32 = 5;
-const LENGTH: u32 = 6;
+pub(super) const TARGET: u32 = 6;
+const LENGTH: u32 = 7;
 
 #[derive(Clone)]
 pub(super) enum ReplyKind {
     Call { interface: String, function: String },
     Unit,
     Collection(Value),
+    Read { payload: Value, stream: bool },
 }
 
 pub(super) struct Origin {
@@ -30,6 +32,7 @@ pub(super) struct Origin {
     pub error_reported: bool,
     pub synchronous: bool,
     pub retained: bool,
+    pub weak_promise: bool,
 }
 
 pub(super) fn table(driver_owner: f64) -> f64 {
@@ -46,6 +49,7 @@ pub(super) fn create(promise: f64, arguments: f64, context: f64) -> f64 {
         promise.get_nanbox_f64(),
         arguments.get_nanbox_f64(),
         context.get_nanbox_f64(),
+        undefined(),
         undefined(),
         undefined(),
         undefined(),

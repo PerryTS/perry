@@ -122,6 +122,7 @@ class CategoryRoutingTests(unittest.TestCase):
                      "test-wasi/components/values/world.wit",
                      "scripts/component_check.sh",
                      "scripts/component_guest_acceptance.py",
+                     "scripts/component_reader_acceptance.py",
                      "scripts/wasi_run.py", "scripts/test_wasi_run.py",
                      "scripts/wasi_acceptance/tcp.ts"]:
             with self.subTest(path=path):
