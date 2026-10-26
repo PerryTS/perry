@@ -214,6 +214,9 @@ pub(crate) unsafe fn define_fresh_own_from_shape(
     use crate::object::object_ops::{DESC_GET, DESC_SET, DESC_VALUE};
     let key_ptr = match definition_admitted(receiver.get_nanbox_u64(), key.get_nanbox_f64()) {
         Some(Admitted::Fresh(key_ptr)) => key_ptr,
+        Some(Admitted::Overflow(key_ptr)) => {
+            return define_fresh_overflow_data(receiver, key_ptr, descriptor)
+        }
         Some(Admitted::Own(pos)) => {
             return redefine_unchanged_own_data(receiver.get_nanbox_u64(), pos, descriptor)
         }
@@ -289,6 +292,8 @@ pub(crate) unsafe fn define_fresh_own_from_shape(
 enum Admitted {
     /// The receiver does not have the key (its interned string).
     Fresh(*const crate::StringHeader),
+    /// Its authoritative overflow has no entry for this key.
+    Overflow(*const crate::StringHeader),
     /// The receiver lists the key at this position.
     Own(u32),
 }
@@ -386,9 +391,6 @@ unsafe fn definition_admitted(obj_bits: u64, key_value: f64) -> Option<Admitted>
     let record = super::shapes::object_shape_record(obj)?;
     if record.object_kind() != super::shapes::ShapeObjectKind::Ordinary
         || (*obj).class_id == super::NATIVE_MODULE_CLASS_ID
-        || (*obj).parent_class_id & super::overflow::SHADOW_BIT != 0
-        || super::overflow::has_overflow(obj)
-        || super::layout_desc::is_family_object(obj)
     {
         return None;
     }
@@ -417,6 +419,18 @@ unsafe fn definition_admitted(obj_bits: u64, key_value: f64) -> Option<Admitted>
     if bytes == b"__proto__" {
         return None;
     }
+    // A reserved hole is absent from the authoritative overflow too. Its
+    // static spelling and slot do not make it a present property.
+    let table = super::overflow::table(obj);
+    if !table.is_null() {
+        let bits = crate::JSValue::string_ptr(key.cast_mut()).bits();
+        return super::overflow::find(table, bits)
+            .is_none()
+            .then_some(Admitted::Overflow(key));
+    }
+    if super::overflow::shadowed(obj) || super::layout_desc::is_family_object(obj) {
+        return None;
+    }
     let keys = super::object_keys(obj);
     if !keys.is_null() {
         if let Some(pos) = super::keys_find_property_slot_by_bytes(keys.arr(), keys.count(), bytes)
@@ -425,4 +439,40 @@ unsafe fn definition_admitted(obj_bits: u64, key_value: f64) -> Option<Admitted>
         }
     }
     Some(Admitted::Fresh(key))
+}
+
+/// An absent overflow key is defined once with its final data attributes.
+/// The fixed optional slot stays a hole; the new entry owns value and order.
+/// Present properties and accessor definitions keep the complete operation.
+unsafe fn define_fresh_overflow_data(
+    receiver: &crate::gc::RuntimeHandle<'_>,
+    key: *const crate::StringHeader,
+    descriptor: &crate::object::object_ops::DescView<'_>,
+) -> bool {
+    use crate::object::object_ops::{DESC_GET, DESC_SET, DESC_VALUE};
+    if descriptor.has(DESC_GET) || descriptor.has(DESC_SET) {
+        return false;
+    }
+    let addr = (receiver.get_nanbox_u64() & crate::value::POINTER_MASK) as usize;
+    let bytes =
+        std::slice::from_raw_parts(crate::string::string_data(key), (*key).byte_len as usize);
+    let attrs = super::PropertyAttrs::new(
+        descriptor.flag(b"writable").unwrap_or(false),
+        descriptor.flag(b"enumerable").unwrap_or(false),
+        descriptor.flag(b"configurable").unwrap_or(false),
+    );
+    super::builtin_proto::note_write_addr(addr, "descriptor");
+    crate::typedarray_named::note_named_mutation(addr, bytes);
+    super::prop_plan::prop_plan_epoch_bump_for_owner(addr);
+    super::descriptor_state::note_attrs_born_with_keys(addr);
+    let entry = super::key_attrs::AttrsEdit::Data(bytes, attrs.bits).apply(0);
+    // insert_key_bits roots owner, key and value before reserve can collect,
+    // publishes membership, and applies the existing table-slot barriers.
+    super::overflow::insert_key_bits(
+        addr as *mut ObjectHeader,
+        crate::JSValue::string_ptr(key.cast_mut()).bits(),
+        descriptor.read(DESC_VALUE).bits(),
+        entry,
+    );
+    true
 }
