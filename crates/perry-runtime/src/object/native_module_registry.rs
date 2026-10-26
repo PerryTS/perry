@@ -634,6 +634,7 @@ pub extern "C" fn js_nm_install_util() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_v8() {
+    nm_register_ctor(NmBucket::V8, crate::node_v8::serde_constructor);
     nm_register_attach(NmBucket::V8, crate::node_v8::attach_v8_constructor);
     NM_DISPATCH_REGISTRY[NmBucket::V8 as usize]
         .store(nm_dispatch_v8 as NmDispatchFn as *mut (), Ordering::Relaxed);

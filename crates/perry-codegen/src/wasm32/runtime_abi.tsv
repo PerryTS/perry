@@ -4595,7 +4595,7 @@ js_util_types_is_weak_map	f64	f64
 js_util_types_is_weak_set	f64	f64
 js_v8_cached_data_version_tag	f64	
 js_v8_deserialize	f64	f64
-js_v8_deserializer_new	f64	f64
+js_v8_deserializer_new	f64	f64,f64
 js_v8_gc_profiler_new	f64	
 js_v8_gc_profiler_report	f64	
 js_v8_gc_profiler_start	f64	f64
