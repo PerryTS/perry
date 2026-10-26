@@ -31,7 +31,7 @@ NEGATIVES = {
     "without_math": ["global_math"],
     "without_regex": ["regex_engine"],
     "without_node_stream": ["node_stream"],
-    "without_json": ["global_json"],
+    "without_json": ["global_json", "json_tape"],
     "fs_promises_without_streams": ["bundled_web_streams"],
 }
 
@@ -314,7 +314,7 @@ def main():
                                           "installs": sorted(selected), "parity": True}
             if name not in NEGATIVES:
                 fixture = fixtures[name]
-                assert any(matches(s, fixture) for s in syms), f"{name}: positive linked no matching symbols"
+                assert any(matches(s, fixture) and s["name"] != fixture["hook"] for s in syms), f"{name}: positive linked no matching symbols"
                 if fixture["hook"].startswith("js_"):
                     assert fixture["hook"] in selected, f"{name}: positive did not install {fixture['hook']}"
             else:

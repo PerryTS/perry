@@ -757,7 +757,7 @@ pub extern "C" fn js_dyn_index_set_strict(obj: f64, index: f64, value: f64, stri
             .is_some_and(|h| unsafe { h.as_ref() }.obj_type == crate::gc::GC_TYPE_LAZY_ARRAY);
         if is_lazy {
             return unsafe {
-                crate::json_tape::set_lazy_index(raw_ptr as *mut _, index, value, strict)
+                crate::json_hooks::set_lazy_index(raw_ptr as *mut _, index, value, strict)
             };
         }
         let target = if jsval.is_pointer() {
@@ -819,7 +819,7 @@ pub extern "C" fn js_dyn_index_set_strict(obj: f64, index: f64, value: f64, stri
     }
     if receiver_tag.is_some_and(|(obj_type, _)| obj_type == crate::gc::GC_TYPE_LAZY_ARRAY) {
         return unsafe {
-            crate::json_tape::set_lazy_index(raw_ptr as *mut _, index, value, strict)
+            crate::json_hooks::set_lazy_index(raw_ptr as *mut _, index, value, strict)
         };
     }
     // An ordinary receiver whose explicit [[Prototype]] is a TypedArray must

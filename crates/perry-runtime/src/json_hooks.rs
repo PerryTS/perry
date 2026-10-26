@@ -19,6 +19,35 @@ pub(crate) unsafe fn lazy_get_rooted(array: *mut LazyArrayHeader, index: u32) ->
         .get()
         .map_or_else(JSValue::undefined, |get| get(array, index))
 }
+// Only the JSON parser creates lazy arrays. An uninstalled program cannot
+// enter these arms; their empty behavior keeps generic array dispatch inert.
+static LAZY_GET: Hook<unsafe fn(*mut LazyArrayHeader, u32) -> JSValue> = Hook::empty();
+static LAZY_SET: Hook<unsafe fn(*mut LazyArrayHeader, f64, f64, i32) -> f64> = Hook::empty();
+static RESOLVE_ARRAY: Hook<unsafe fn(*mut LazyArrayHeader) -> *mut crate::array::ArrayHeader> =
+    Hook::empty();
+
+pub(crate) unsafe fn lazy_get(array: *mut LazyArrayHeader, index: u32) -> JSValue {
+    LAZY_GET
+        .get()
+        .map_or_else(JSValue::undefined, |get| get(array, index))
+}
+pub(crate) unsafe fn set_lazy_index(
+    array: *mut LazyArrayHeader,
+    index: f64,
+    value: f64,
+    strict: i32,
+) -> f64 {
+    LAZY_SET
+        .get()
+        .map_or(value, |set| set(array, index, value, strict))
+}
+pub(crate) unsafe fn resolve_materialized_array(
+    array: *mut LazyArrayHeader,
+) -> *mut crate::array::ArrayHeader {
+    RESOLVE_ARRAY
+        .get()
+        .map_or_else(std::ptr::null_mut, |resolve| resolve(array))
+}
 static PARSE_RESULT: Hook<unsafe fn(*const StringHeader) -> Result<JSValue, f64>> = Hook::empty();
 static PARSE: Hook<unsafe extern "C" fn(*const StringHeader) -> JSValue> = Hook::empty();
 static NOTE_CARRIERS: Hook<fn()> = Hook::empty();
@@ -56,6 +85,9 @@ pub(crate) unsafe fn after_cold_read(array: *mut LazyArrayHeader, flip: bool, co
     }
 }
 pub(crate) fn install() {
+    LAZY_GET.set(crate::json_tape::lazy_get);
+    LAZY_SET.set(crate::json_tape::set_lazy_index);
+    RESOLVE_ARRAY.set(crate::json_tape::resolve_materialized_array);
     FORCE.set(crate::json_tape::force_materialize_lazy_impl);
     COLD_GET.set(crate::json_tape::lazy_get_rooted_impl);
     PARSE.set(crate::json::js_json_parse);

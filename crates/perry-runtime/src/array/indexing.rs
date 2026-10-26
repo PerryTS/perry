@@ -405,7 +405,7 @@ pub extern "C" fn js_array_length(arr: *const ArrayHeader) -> u32 {
                     // access forced it), read the authoritative length
                     // from the materialized tree.
                     if !(*lazy).materialized.is_null() {
-                        let array = crate::json_tape::resolve_materialized_array(lazy.cast_mut());
+                        let array = crate::json_hooks::resolve_materialized_array(lazy.cast_mut());
                         return if array.is_null() { 0 } else { (*array).length };
                     }
                     return (*lazy).cached_length;
@@ -593,7 +593,7 @@ pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
             if (*gc_header).obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
                 let lazy = raw_ptr as *mut crate::json_tape::LazyArrayHeader;
                 if (*lazy).magic == crate::json_tape::LAZY_ARRAY_MAGIC {
-                    let value = crate::json_tape::lazy_get(lazy, index);
+                    let value = crate::json_hooks::lazy_get(lazy, index);
                     return f64::from_bits(value.bits());
                 }
             }

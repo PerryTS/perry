@@ -55,3 +55,9 @@ absence rule. Its prefixes, including its hook, must all be covered by that rule
 Brotli constructor test while requiring both engines absent in the file read.
 
 Native-module installers are selected in namespace-creation code rather than the runtime feature object. The gate reads their undefined symbols from the compiler-generated objects in the actual link invocation. References originating inside an archive cannot exempt a negative; native positives must both name their installer in a program object and exercise its API. `without_node_stream.ts` checks Array subclasses and ordinary objects with no stream install, while the stream and events-only positives exercise both owning installers.
+
+The JSON installer also owns the tape parser: generic array reads and writes
+enter it only through its filled slots. The json_tape positive uses a large
+array, sparse reads, indexed extension and length truncation to exercise the
+existing lazy route. Positives must retain implementation symbols in addition
+to an installer symbol; the hook alone cannot satisfy a witness.
