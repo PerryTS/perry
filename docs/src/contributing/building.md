@@ -82,29 +82,30 @@ units so build-time regressions are visible.
 
 ### Faster development rebuilds with Blaze
 
-Perry's pinned mbx version supports optional [Blaze](https://github.com/indexable-inc/blaze)
-routing for quick rebuilds after editing Rust code. This is an experimental
-path for Linux and macOS Apple silicon. Install Blaze using its instructions,
-then install Perry's pinned mbx with `make mbx-deps`. Run `mbx setup` once
-and follow its instructions to put the Cargo shim before the regular Cargo
-binary on `PATH`.
+`make build-dev` installs verified [Blaze](https://github.com/indexable-inc/blaze)
+and mbx 1.28.0 binaries, selects their matching `nightly-2026-10-25` compiler,
+and activates the Cargo shim automatically. Linux GNU x64/ARM64 and Apple
+Silicon macOS use the prebuilt toolchain pinned in `scripts/build-tools.ref`.
+Setup fails if the download or compiler identity cannot be verified.
 
-mbx shares dependency build results between worktrees and manages each
-checkout's `target/` directory, collecting inactive targets as age and size
-limits are reached.
+The default upstream archive currently targets an older compiler. These
+prebuilts come from the pinned upstream source, built once in the shared
+[jdalton/blaze release workflow](https://github.com/jdalton/blaze/actions/workflows/release.yaml).
+Project builds download them without compiling Blaze. The development Docker
+image installs them under `/opt/mbx-blaze`, outside the checkout mount.
 
-With Blaze's `ra-jit` executable on `PATH`, enable routing for a development
-build with:
+Development builds retain `force-unwind-tables=yes` for exception transport.
+They use full unwind tables because Blaze refuses `use-sync-unwind=yes`.
+Production commands retain the repository's compact-table configuration and
+compiler. `PERRY_DEV_RUSTFLAGS` customizes development flags and must preserve
+`-C force-unwind-tables=yes`.
 
-```sh
-MBX_BLAZE=1 cargo build -p perry
-```
-
-The first build loads the workspace. Later edits can rebuild much faster.
-mbx still caches dependencies while Blaze handles workspace crates. Use the
-default development profile: commands with `--release` or `--profile` stay
-on Cargo and mbx. Blaze uses extra memory and may differ from Cargo, so use
-the normal `make build-dev` or CI build as the final check.
+The first build loads the workspace. Later supported edits use Blaze while
+mbx caches dependencies and manages worktree targets. Explicit `--release`
+and `--profile` builds stay on Cargo and mbx. The Rust unit-test CI job uses
+the same prebuilts and mbx object cache. Other production checks retain the
+normal compiler path. The tools remain experimental: passing a small JIT
+probe does not establish compatibility with every Perry crate.
 
 ### Compiler cache for ephemeral worktrees
 

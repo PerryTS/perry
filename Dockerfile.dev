@@ -20,16 +20,20 @@ RUN apt-get update && apt-get install -y \
     git \
     curl \
     vim \
+    python3 \
     && rm -rf /var/lib/apt/lists/*
 
-# Install the repository's compiler before a checkout is mounted over /perry.
-COPY rust-toolchain.toml /opt/perry-toolchain/rust-toolchain.toml
-RUN cd /opt/perry-toolchain \
-    && rustup show active-toolchain \
-    && rustup default "$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)"
+# Install the matching prebuilt development toolchain outside the checkout mount.
+COPY scripts/setup-blaze.sh scripts/build-tools.ref /opt/perry-build-tools/
+RUN MBX_BLAZE_ROOT=/opt/mbx-blaze sh /opt/perry-build-tools/setup-blaze.sh
+ENV MBX_BLAZE_ROOT=/opt/mbx-blaze
+ENV RUSTFLAGS="-C force-unwind-tables=yes"
 
 # Set up cargo cache volume mount points
 ENV CARGO_HOME=/root/.cargo
+
+# Activate the Cargo shim even for direct `docker compose run ... cargo` commands.
+ENTRYPOINT ["sh", "-c", ". /opt/mbx-blaze/env.sh; exec \"$@\"", "--"]
 
 # Default command
 CMD ["bash"]
