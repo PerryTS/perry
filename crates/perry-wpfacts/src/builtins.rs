@@ -473,6 +473,29 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                 let fc = m.tok(TokKind::Builtin(BuiltinNs::Function));
                 m.add_tok(dst, fc);
             }
+            // DECISIONS 210: another unit's constructor function: its
+            // prototype is its owner's layout's once the owner published it
+            // (a store there is this unit's census report); before that an
+            // unknown value, never a prototype of this unit's own.
+            Some("prototype") if m.foreign_ctor.contains_key(&f) => match m.foreign_ctor[&f] {
+                Some((_, tm)) => {
+                    let p = m.tok(TokKind::Proto(tm));
+                    let a = m.atom("prototype");
+                    let fl = m.field(t, a);
+                    m.add_tok(fl, p);
+                }
+                None => {
+                    // Beyond the contract: the owner's chain would take
+                    // what is stored through it unseen. Reported, so the
+                    // owner escapes the function (its chain is ⊤ there).
+                    m.fn_touched.insert(t);
+                    m.add_top(dst, |_| {
+                        "prototype of another unit's constructor function (layout not published)"
+                            .into()
+                    });
+                    m.add_prim(dst, prim::ALL);
+                }
+            },
             Some("prototype") => {
                 let tm = m.fn_inst_template(f);
                 let p = m.tok(TokKind::Proto(tm));

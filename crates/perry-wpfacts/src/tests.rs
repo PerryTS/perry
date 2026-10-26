@@ -5,6 +5,7 @@ mod array_ctor;
 mod array_elements;
 mod array_length;
 mod array_record;
+mod binding_write_gap;
 mod birth_site;
 mod body_identity;
 mod callback_origin;

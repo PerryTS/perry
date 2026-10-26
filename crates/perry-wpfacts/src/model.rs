@@ -1485,6 +1485,42 @@ pub struct Model {
     /// DECISIONS 165: the functions a call bound (`bind_args`), in any
     /// context.
     pub called: crate::pts::FxHashSet<FnIdx>,
+    /// DECISIONS 210: the stand-ins of other units' contract functions, each
+    /// with the node holding the stand-in instance of its owner's `new <f>`
+    /// layout and that layout's template, `None` until the owner publishes
+    /// it. A `new` of one constructs that layout (`construct`), never a
+    /// template of this unit; the construction is published (`constructed`,
+    /// `ProgramFacts::ctor_runs_out`).
+    pub foreign_ctor: FxHashMap<FnIdx, Option<(NodeId, TmplId)>>,
+    pub constructed: crate::pts::FxHashSet<FnIdx>,
+    /// DECISIONS 210: this unit's constructions of its own contract
+    /// functions for the units that construct them (`Gen::published_ctors`):
+    /// function and result node. The instance's layout is published to them
+    /// (`Gen::contract_check`, `fn_inst_published`).
+    pub own_ctor_runs: Vec<(FnIdx, NodeId)>,
+    pub ctor_run_fns: crate::pts::FxHashSet<FnIdx>,
+    pub fn_inst_published: crate::pts::FxHashSet<TmplId>,
+    /// DECISIONS 210: stand-ins of other units' functions this unit used as
+    /// objects beyond their contract (a store into one, its `prototype`
+    /// read while its owner published no layout): census reports.
+    pub fn_touched: crate::pts::FxHashSet<Tok>,
+    /// DECISIONS 210: this unit's contract functions published to other
+    /// units (`Model::escape_props`): every own property but `prototype`
+    /// left with the function (unknown code reads and writes them), so a
+    /// field made later leaves too; the reason it left.
+    pub props_escaped: FxHashMap<Tok, u32>,
+    /// Solving one unit (`FactsConfig::unit`): what escapes reaches other
+    /// units' code, which the whole program sees.
+    pub per_unit: bool,
+    /// DECISIONS 210: this unit's functions unknown code constructs
+    /// (`Model::construct_unknown`), once each.
+    pub unknown_new: crate::pts::FxHashSet<FnIdx>,
+    /// DECISIONS 210: the `new` calls of other units' functions: no call
+    /// of the function (`called`; their arguments go by `ctor_runs_out`).
+    pub ctor_calls: crate::pts::FxHashSet<CallId>,
+    /// The reason a published literal's field function escapes
+    /// (`Gen::note_field_fns`): a contract publication, as `pub_reason`.
+    pub field_fn_reason: Option<u32>,
     /// DECISIONS 165: the stand-in methods of other units' classes with no
     /// function contract (`Gen::stub_fn`): named as the method.
     pub stub_methods: crate::pts::FxHashSet<FnIdx>,

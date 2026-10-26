@@ -66,6 +66,13 @@ pub(crate) struct ClassContract {
     /// a unit holding its stand-in forwards it as an open class's (the next
     /// unit holds its stand-in too, its constructions publish there).
     pub forwards: bool,
+    /// DECISIONS 210: the layout of a constructor function's instances
+    /// (`new <f>`, `TmplKind::FnInst`): `ctor_fn` is the function's own
+    /// contract. A reader's `new` of the function constructs this layout
+    /// (`Model::foreign_ctor`) and publishes what it passes
+    /// (`ProgramFacts::ctor_runs_out`); the owner constructs it with the
+    /// union of every unit's arguments (`Gen::published_ctors`).
+    pub fn_inst: bool,
     /// The prototype methods with a function contract (key, contract), and
     /// the constructor's (DECISIONS 57): their receiver is a contract
     /// parameter, so another unit's subclass instance can run them.
@@ -765,6 +772,11 @@ pub(crate) struct Published {
     /// what the running units' calls pass, joined
     /// (`ProgramFacts::method_args_out`).
     pub(crate) method_args: FxHashMap<String, ArgContract>,
+    /// DECISIONS 210: per contract function some unit constructs (`new` of
+    /// its stand-in; contract name), what the constructing units pass,
+    /// joined (`ProgramFacts::ctor_runs_out`): its owner constructs it with
+    /// their union on its own `new <f>` layout and publishes that layout.
+    pub(crate) ctor_runs: FxHashMap<String, ArgContract>,
     /// The argument contracts of closed functions (decision 13), by
     /// (module path, name): the union over every unit's calls.
     pub(crate) args: FxHashMap<(String, String), ArgContract>,

@@ -634,6 +634,29 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
             }
         }
         input.method_args = margs;
+        // DECISIONS 210: what the units constructing published functions
+        // pass, joined the same way; the owners of a function whose join
+        // changed solve again (they construct it with the union).
+        let mut news = input.ctor_runs.clone();
+        for u in per_unit.iter().flatten() {
+            for (nm, ac) in &u.ctor_runs_out {
+                news.entry(nm.clone()).or_default().join(ac);
+            }
+        }
+        let news_changed: Vec<String> = news
+            .iter()
+            .filter(|(k, v)| input.ctor_runs.get(*k) != Some(*v))
+            .map(|(k, _)| format!("fn:{k}"))
+            .collect();
+        if !news_changed.is_empty() {
+            for (si, u) in per_unit.iter().enumerate() {
+                let u = u.as_ref().expect("every unit solved");
+                if !u.stats.aborted && u.fns_defined.iter().any(|d| news_changed.contains(d)) {
+                    seeds.push(si);
+                }
+            }
+        }
+        input.ctor_runs = news;
         // Decision 17: the store effects: last round's joined with what
         // every unit's latest solve stores (D16), so they only grow too.
         // The owners of a layout whose effect keys grew perform them,
@@ -1107,6 +1130,9 @@ pub(super) fn unit_io(
         }
         for (n, c) in &u.method_args_out {
             o.push((format!("margs:{n}"), digest(c)));
+        }
+        for (n, c) in &u.ctor_runs_out {
+            o.push((format!("news:{n}"), digest(c)));
         }
         for (d, k, kinds) in &u.stores_out {
             o.push((format!("store:{d}.{k}"), digest(kinds)));

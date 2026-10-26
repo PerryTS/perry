@@ -942,6 +942,18 @@ impl Model {
                             let inst = self.tok(TokKind::Obj(tm, NO_CTX));
                             self.mark_hard(inst, Hard::E11ReflectConstruct, reason);
                         }
+                        // DECISIONS 210: another unit's constructor function:
+                        // the hard mark lands on its owner's layout (a census
+                        // report); unpublished, the function escapes.
+                        TokKind::Func(f, _) if self.foreign_ctor.contains_key(&f) => {
+                            match self.foreign_ctor[&f] {
+                                Some((_, tm)) => {
+                                    let inst = self.tok(TokKind::Obj(tm, NO_CTX));
+                                    self.mark_hard(inst, Hard::E11ReflectConstruct, reason);
+                                }
+                                None => self.escape(t, reason),
+                            }
+                        }
                         TokKind::Func(f, _) => {
                             let tm = self.fn_inst_template(f);
                             let inst = self.tok(TokKind::Obj(tm, NO_CTX));
