@@ -123,13 +123,13 @@ pub(crate) mod normalize_hooked;
 mod pad;
 mod provenance;
 use provenance::{combine_string_flags, raw_string_metadata};
+pub(crate) mod literal_replace;
 #[cfg(test)]
 mod provenance_tests;
 mod raw;
 mod slice_ops;
 mod slice_range;
 mod split;
-pub(crate) mod literal_replace;
 pub(crate) mod suffix_cursor;
 pub(crate) mod trim_cache;
 mod utf16_count;
@@ -1396,3 +1396,7 @@ pub(crate) use intern::{
     is_program_atom, is_property_atom, property_atom, property_atom_from_value, property_atom_hash,
     prune_property_atoms, scan_property_atoms,
 };
+
+pub(crate) mod byte_scan;
+pub(crate) mod quote;
+pub(crate) mod short_copy;

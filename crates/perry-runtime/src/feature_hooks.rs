@@ -187,6 +187,8 @@ pub extern "C" fn js_runtime_install_compiled() {
 /// `Bun.generateHeapSnapshot`, `process.report`): their JSON builders are
 /// reached only through these slots, which `js_runtime_install_diagnostics`
 /// fills, so a program that uses none of them links none of the serializers.
+pub(crate) static JSON_FORMAT_ARG: Hook<unsafe fn(f64) -> String> = Hook::empty();
+
 pub(crate) static HEAP_SNAPSHOT_JSON: Hook<fn(crate::gc::HeapSnapshotFormat) -> String> =
     Hook::empty();
 pub(crate) static PROCESS_REPORT_JSON: Hook<fn(&str, Option<&str>) -> String> = Hook::empty();
@@ -315,8 +317,11 @@ pub extern "C" fn js_runtime_install_global_math() {
 
 #[no_mangle]
 pub extern "C" fn js_runtime_install_global_json() {
+    crate::json_hooks::register_roots();
     perry_install_once!({
         crate::object::global_this::web_hooks::install_json();
+        crate::builtins::install_json_format();
+        crate::json_hooks::install();
     });
 }
 
@@ -364,6 +369,7 @@ pub extern "C" fn js_runtime_install_global_webcrypto() {
 
 #[no_mangle]
 pub extern "C" fn js_runtime_install_global_webfetch() {
+    js_runtime_install_global_json();
     perry_install_once!({
         crate::object::global_this::web_hooks::install_webfetch();
     });

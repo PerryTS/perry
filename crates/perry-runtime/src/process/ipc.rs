@@ -320,6 +320,7 @@ pub(crate) fn process_ipc_property(name: &str) -> Option<f64> {
 /// The `proc-ipc` install.
 pub(crate) fn install() {
     IPC_PROPERTY.set(process_ipc_property_impl);
+    crate::feature_hooks::js_runtime_install_global_json();
 }
 
 fn process_ipc_property_impl(name: &str) -> Option<f64> {
@@ -529,7 +530,7 @@ pub(crate) fn process_ipc_send_raw_json(json: &str) -> bool {
         let advanced = ipc_lock().advanced;
         let frame = if advanced {
             let sh = js_string_from_bytes(json.as_ptr(), json.len() as u32);
-            let message = f64::from_bits(unsafe { crate::json::js_json_parse(sh) }.bits());
+            let message = f64::from_bits(unsafe { crate::json_hooks::parse(sh) }.bits());
             advanced_frame(message)
         } else {
             let mut frame = Vec::with_capacity(json.len() + 1);
@@ -691,7 +692,7 @@ pub extern "C" fn js_process_ipc_drain() -> i32 {
         match event {
             IpcEvent::Message(json) => {
                 let sh = js_string_from_bytes(json.as_ptr(), json.len() as u32);
-                let msg = f64::from_bits(unsafe { crate::json::js_json_parse(sh) }.bits());
+                let msg = f64::from_bits(unsafe { crate::json_hooks::parse(sh) }.bits());
                 crate::os::emit_process_event("message", &[msg]);
                 count = count.saturating_add(1);
             }

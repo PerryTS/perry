@@ -1134,7 +1134,6 @@ pub fn gc_init() {
     // intermittently, and why the from-space reporter blamed
     // `retired_by_minor=#0`.
     reg_scanner!(crate::builtins::arithmetic::scan_typeof_string_roots_mut);
-    reg_scanner!(crate::json::raw_json::scan_raw_json_key_root_mut);
     reg_scanner!(crate::array::scan_template_raw_roots_mut);
     // #6981: the memoized `Array.prototype` / `Object.prototype` addresses in
     // `array::indexing`. Raw addresses of movable objects — a relocating cycle
@@ -1225,7 +1224,6 @@ pub fn gc_init() {
     // #4911: a bound node:dgram socket is reachable only from the dgram
     // reactor's registry while its recv thread runs; scan + rewrite it so a GC
     // between ticks doesn't reclaim the object whose `message` handlers fire.
-    reg_scanner!(json_parse_mutable_root_scanner);
     reg_scanner!(crate::string::scan_utf16_index_roots_mut);
     // #7564: the per-thread `{ value, done }` / `{ done, value }` keys arrays
     // shared by every iterator result the runtime builds. Nothing else in the

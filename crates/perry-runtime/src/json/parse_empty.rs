@@ -5,6 +5,7 @@
 use crate::JSValue;
 
 crate::perry_thread_local! {
+    #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_json")]
     static EMPTY_JSON_SHAPE_ID: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 

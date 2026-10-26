@@ -384,3 +384,6 @@ pub(crate) use iterator_method::array_shape_iterator;
 pub(crate) use iterator_step::js_array_record_iterator_at;
 #[cfg(test)]
 mod fill_descriptor_tests;
+
+mod refresh_head;
+pub use refresh_head::js_array_refresh_local_head;

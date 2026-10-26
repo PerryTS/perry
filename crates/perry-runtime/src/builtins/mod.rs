@@ -112,6 +112,7 @@ mod fn_metadata;
 mod retained_source;
 pub(crate) use fn_metadata::function_registries_census;
 mod formatting;
+pub(crate) use formatting::install_json_format;
 mod globals;
 mod numbers;
 mod table;

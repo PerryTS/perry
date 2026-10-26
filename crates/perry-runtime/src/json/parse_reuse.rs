@@ -5,11 +5,13 @@ crate::perry_thread_local! {
     /// source. Both pointers are ordinary GC roots and are rewritten on a
     /// moving collection. The source length guards the only in-place string
     /// mutation Perry permits; equal-length string contents are immutable.
+    #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_json")]
     static PARSE_STRING_CACHE: RefCell<Option<ParseStringCacheEntry>> = const { RefCell::new(None) };
 
     /// A bounded construction template for repeated parses of the same small
     /// object source. It owns only immutable strings, a canonical key shape,
     /// and inline scalar bits; every mutable object/array is born afresh.
+    #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_json")]
     static PARSE_OBJECT_TEMPLATE: RefCell<Option<ParseObjectTemplate>> = const { RefCell::new(None) };
 }
 

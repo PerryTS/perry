@@ -664,7 +664,7 @@ fn inspect_string_for_received_js(value: f64) -> *mut StringHeader {
             .any(|i| crate::string::js_string_char_code_at(s, i as i32) == b'\'' as f64)
     });
     if has_quote {
-        unsafe { rendered.with_const_ptr(|s| crate::json::js_json_stringify_string(s)) }
+        unsafe { rendered.with_const_ptr(|s| crate::string::quote::quote_header(s)) }
     } else {
         let quote = scope.root_string_ptr(js_string_from_bytes(b"'".as_ptr(), 1));
         let joined = scope.root_string_ptr(quote.with_const_ptr(|a| {

@@ -185,6 +185,7 @@ pub mod wpfacts_check;
 // #6468: the `node:http2` constant tables are only reachable through the
 // `http2` native-module namespace (via `module_hooks`), so a program that never
 // imports `node:http2` links none of them.
+mod json_hooks;
 pub mod node_http2_constants;
 pub mod node_inspector;
 pub mod node_repl;

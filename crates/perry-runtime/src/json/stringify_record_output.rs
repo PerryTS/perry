@@ -91,18 +91,22 @@ crate::perry_thread_local! {
     /// Stable shape IDs index copied native bytes only. No managed pointer or
     /// value survives a stringify call, so the collector has no cache edge to
     /// trace or rewrite.
+    #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_json")]
     static KEY_PREFIX_CACHE: UnsafeCell<[KeyPrefixPlan; KEY_PREFIX_CACHE_SLOTS]> =
         const { UnsafeCell::new([EMPTY_KEY_PREFIX_PLAN; KEY_PREFIX_CACHE_SLOTS]) };
 
     /// A bounded native copy of the last small record result and exact value
     /// tokens. It retains no managed allocation and needs no GC scanning.
+    #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_json")]
     static REPEATED_OUTPUT: UnsafeCell<RepeatedOutput> =
         const { UnsafeCell::new(EMPTY_REPEATED_OUTPUT) };
 }
 
 #[cfg(test)]
 crate::perry_thread_local! {
+    #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_json")]
     static RECEIVER_PROOF_MISSES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_json")]
     static REPEATED_OUTPUT_HITS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 

@@ -47,7 +47,7 @@ pub(crate) fn recompute_after_full_trace() {
     // Clears every transient bit, then re-notes both directions of the
     // Array-subclass cache. Permanent external owners use a different bit.
     array_tail_transition::recompute_cache_carriers_after_full_trace();
-    crate::json::note_parse_shape_cache_carriers();
+    crate::json_hooks::note_carriers();
     super::arguments::note_arguments_shape_carriers();
     super::alloc_basic::note_keyless_birth_carrier();
     crate::stream_hooks::note_birth_carriers();

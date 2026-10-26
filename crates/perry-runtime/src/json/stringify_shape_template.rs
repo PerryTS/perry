@@ -410,12 +410,11 @@ pub(crate) unsafe fn try_emit_shape_element(
     // address.
     //
     // `stringify_object_inner` (json/stringify.rs) has done this correctly
-    // since #6519's rework — handle + a `cur_obj()` re-derivation on every
+    // since #6519's rework — handle + a re-derivation on every
     // access. The template path never got the same treatment; this is that
     // treatment.
     let scope = crate::gc::RuntimeHandleScope::new();
     let elem_handle = scope.root_raw_const_ptr(elem_ptr);
-    let cur_obj = || elem_handle.get_raw_const_ptr::<crate::ObjectHeader>();
 
     // ★ #7268, second holder: the TEMPLATE'S OWN `keys_arr`.
     //
@@ -453,7 +452,7 @@ pub(crate) unsafe fn try_emit_shape_element(
         // Re-derived per access, deliberately. The pre-#7268 code hoisted
         // `fields_ptr` above the loop, which is exactly the address a `toJSON`
         // in an earlier field invalidates.
-        let obj = cur_obj();
+        let obj = elem_handle.get_raw_const_ptr::<crate::ObjectHeader>();
         if (f as u32) < alloc_limit {
             let fields_ptr =
                 (obj as *const u8).add(std::mem::size_of::<crate::ObjectHeader>()) as *const f64;
@@ -564,7 +563,9 @@ pub(crate) unsafe fn try_emit_shape_element(
         // Through the handle: the pre-scan above is allocation-free today, but
         // `elem_ptr` is the pre-collection address and there is no reason for a
         // second name for this object to exist (#7268).
-        if let Some(to_json_val) = object_get_to_json(cur_obj() as *const u8) {
+        if let Some(to_json_val) =
+            object_get_to_json(elem_handle.get_raw_const_ptr::<crate::ObjectHeader>() as *const u8)
+        {
             arm_to_json_result_guard(to_json_val);
             stringify_value_depth(to_json_val, TYPE_UNKNOWN, buf, depth + 1);
             SUPPRESS_NEXT_TO_JSON.with(|c| c.set(false));

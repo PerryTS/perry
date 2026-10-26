@@ -285,11 +285,13 @@ crate::perry_thread_local! {
     /// entered in the dispatch can match it, and nothing between the parent's
     /// probe and that walk runs user code. A GC that moves the object in
     /// between only turns the token into a miss, i.e. the ordinary probe.
+    #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_json")]
     pub(crate) static TO_JSON_RESOLVED_FOR: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
 
     /// Set exactly when the key cache crosses its boundary limit. Tiny parse
     /// completions can test this bit without borrowing the hash table.
+    #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_json")]
     pub(super) static PARSE_KEY_CACHE_OVERSIZED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 
 }

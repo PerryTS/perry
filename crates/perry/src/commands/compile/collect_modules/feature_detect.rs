@@ -264,6 +264,163 @@ fn module_uses_webassembly_namespace(module: &perry_hir::Module) -> bool {
         })
 }
 
+fn module_uses_json_format(module: &perry_hir::Module) -> bool {
+    use perry_hir::walker::{stmt_any_expr, walk_expr_children};
+    use perry_hir::{Expr, Function, Stmt};
+
+    fn formatter_offset(name: &str) -> Option<usize> {
+        match name {
+            "formatWithOptions" | "assert" | "timeLog" => Some(1),
+            "log" | "info" | "warn" | "error" | "debug" | "trace" | "dirxml" | "group"
+            | "groupCollapsed" | "format" => Some(0),
+            _ => None,
+        }
+    }
+    fn format_args_need_json(args: &[Expr], offset: usize) -> bool {
+        if args.len() <= offset + 1 {
+            return false;
+        }
+        match &args[offset] {
+            Expr::String(fmt) => {
+                let bytes = fmt.as_bytes();
+                let mut i = 0;
+                while i + 1 < bytes.len() {
+                    if bytes[i] == b'%' {
+                        if bytes[i + 1] == b'j' {
+                            return true;
+                        }
+                        i += 2;
+                    } else {
+                        i += 1;
+                    }
+                }
+                false
+            }
+            Expr::New { .. }
+            | Expr::NewDynamic { .. }
+            | Expr::NewDynamicSpread { .. }
+            | Expr::Object(_)
+            | Expr::Array(..)
+            | Expr::ArraySpread(_) => false,
+            Expr::Number(_)
+            | Expr::Integer(_)
+            | Expr::BigInt(_)
+            | Expr::Bool(_)
+            | Expr::Null
+            | Expr::Undefined => false,
+            // Runtime strings may contain %j, including through parameters.
+            _ => true,
+        }
+    }
+    fn namespace_value(expr: &Expr) -> bool {
+        matches!(expr, Expr::NativeModuleRef(name)
+            if matches!(name.trim_start_matches("node:"), "util" | "console"))
+            || matches!(expr, Expr::PropertyGet { property, .. } if property == "console")
+    }
+    fn expr_uses_json_format(expr: &Expr) -> bool {
+        if let Expr::Call { callee, args, .. } = expr {
+            if let Expr::PropertyGet {
+                object, property, ..
+            } = callee.as_ref()
+            {
+                if let Some(offset) = formatter_offset(property) {
+                    // The callee is consumed here, rather than escaping as a
+                    // function value. A single argument cannot substitute %j.
+                    return format_args_need_json(args, offset)
+                        || (!namespace_value(object) && expr_uses_json_format(object))
+                        || args.iter().any(expr_uses_json_format);
+                }
+            }
+        }
+        if let Expr::NativeMethodCall {
+            module,
+            method,
+            args,
+            object,
+            ..
+        } = expr
+        {
+            if matches!(module.trim_start_matches("node:"), "util" | "console") {
+                if let Some(offset) = formatter_offset(method) {
+                    return format_args_need_json(args, offset)
+                        || object.as_deref().is_some_and(expr_uses_json_format)
+                        || args.iter().any(expr_uses_json_format);
+                }
+            }
+        }
+        // Extracted formatters and namespaces may be called with runtime
+        // strings later. A computed global lookup can obtain console too.
+        if namespace_value(expr)
+            || matches!(expr, Expr::PropertyGet { property, .. }
+                if formatter_offset(property).is_some())
+            || matches!(expr, Expr::IndexGet { object, .. }
+                if matches!(object.as_ref(), Expr::GlobalGet(0) | Expr::GlobalThisExpr))
+        {
+            return true;
+        }
+        if let Expr::Closure { body, .. } = expr {
+            if stmts_use_json_format(body) {
+                return true;
+            }
+        }
+        let mut found = false;
+        walk_expr_children(expr, &mut |child| {
+            found = found || expr_uses_json_format(child);
+        });
+        found
+    }
+    fn stmts_use_json_format(stmts: &[Stmt]) -> bool {
+        stmts
+            .iter()
+            .any(|stmt| stmt_any_expr(stmt, &mut expr_uses_json_format))
+    }
+
+    fn decorators_use_json_format(decorators: &[perry_hir::Decorator]) -> bool {
+        decorators
+            .iter()
+            .any(|decorator| decorator.args.iter().any(expr_uses_json_format))
+    }
+
+    fn function_uses_json_format(function: &Function) -> bool {
+        function.params.iter().any(|param| {
+            param.default.as_ref().is_some_and(expr_uses_json_format)
+                || decorators_use_json_format(&param.decorators)
+        }) || stmts_use_json_format(&function.body)
+            || decorators_use_json_format(&function.decorators)
+    }
+
+    stmts_use_json_format(&module.init)
+        || module.functions.iter().any(function_uses_json_format)
+        || module.classes.iter().any(|class| {
+            class
+                .extends_expr
+                .as_deref()
+                .is_some_and(expr_uses_json_format)
+                || class
+                    .constructor
+                    .iter()
+                    .chain(&class.methods)
+                    .chain(&class.static_methods)
+                    .chain(class.getters.iter().map(|(_, function)| function))
+                    .chain(class.setters.iter().map(|(_, function)| function))
+                    .any(function_uses_json_format)
+                || class
+                    .fields
+                    .iter()
+                    .chain(&class.static_fields)
+                    .any(|field| {
+                        field.init.as_ref().is_some_and(expr_uses_json_format)
+                            || field.key_expr.as_ref().is_some_and(expr_uses_json_format)
+                            || decorators_use_json_format(&field.decorators)
+                    })
+                || class.computed_members.iter().any(|member| {
+                    expr_uses_json_format(&member.key_expr)
+                        || function_uses_json_format(&member.function)
+                })
+                || decorators_use_json_format(&class.decorators)
+        })
+}
+
 /// Inspect a lowered module and set the optional-feature gates it needs.
 pub(super) fn detect_optional_feature_usage(
     ctx: &mut CompilationContext,
@@ -578,7 +735,20 @@ pub(super) fn detect_optional_feature_usage(
         if hir_debug.contains("\"Math\"") || debug_hir_uses_global_math_member(&hir_debug) {
             ctx.uses_global_math = true;
         }
-        if hir_debug.contains("\"JSON\"") {
+        if hir_debug.contains("\"JSON\"")
+            || hir_debug.contains("JsonParse")
+            || hir_debug.contains("JsonStringify")
+            || hir_debug.contains("JsonRawJson")
+            || hir_debug.contains("JsonIsRawJson")
+            || hir_debug.contains("property: \"json\"")
+            || hir_debug.contains("method: \"json\"")
+            || ["parse", "stringify", "rawJSON", "isRawJSON"]
+                .iter()
+                .any(|name| {
+                    hir_debug.contains(&format!("object: GlobalGet(0), property: \"{name}\""))
+                })
+            || module_uses_json_format(hir_module)
+        {
             ctx.uses_global_json = true;
         }
         if hir_debug.contains("\"Reflect\"") {
@@ -664,6 +834,34 @@ pub(super) fn detect_optional_feature_usage(
             || hir_debug.contains("\"disconnect\"")
             || hir_debug.contains("\"connected\"")
             || hir_debug.contains("\"channel\"")
+        {
+            ctx.uses_proc_ipc = true;
+        }
+        // A process listener can receive IPC without reading process.send.
+        // GlobalGet(0) is the lowered builtin namespace sentinel; local emitter
+        // receivers do not match. An escaping process namespace can name any
+        // channel member later, as can a native process namespace reference.
+        if [
+            "on",
+            "once",
+            "addListener",
+            "prependListener",
+            "prependOnceListener",
+        ]
+        .iter()
+        .any(|name| hir_debug.contains(&format!("object: GlobalGet(0), property: \"{name}\"")))
+            || hir_debug.contains("property: \"process\"")
+            || hir_debug.contains("NativeModuleRef(\"process\")")
+            || (hir_debug.contains("module: \"process\"")
+                && [
+                    "on",
+                    "once",
+                    "addListener",
+                    "prependListener",
+                    "prependOnceListener",
+                ]
+                .iter()
+                .any(|name| hir_debug.contains(&format!("method: \"{name}\""))))
         {
             ctx.uses_proc_ipc = true;
         }

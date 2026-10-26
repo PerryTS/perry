@@ -367,7 +367,7 @@ extern "C" fn bun_file_exists(closure: *const ClosureHeader, _this: crate::closu
 fn json_parse_promise(bytes: &[u8]) -> f64 {
     let text = String::from_utf8_lossy(bytes);
     let text_ptr = js_string_from_bytes(text.as_ptr(), text.len() as u32);
-    match unsafe { crate::json::js_json_parse_result(text_ptr) } {
+    match unsafe { crate::json_hooks::parse_result(text_ptr) } {
         Ok(value) => promise_value(f64::from_bits(value.bits())),
         Err(err) => promise_rejected(err),
     }

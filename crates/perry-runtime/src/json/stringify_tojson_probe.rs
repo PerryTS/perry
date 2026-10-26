@@ -28,9 +28,11 @@ crate::perry_thread_local! {
     /// Address-bearing fields are comparison tokens only: they are never
     /// dereferenced from this cache. Moving GC therefore turns a prior entry
     /// into a signature miss without requiring another collector root.
+    #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_json")]
     static OBJECT_PROTO_TOJSON_SIGNATURE: std::cell::Cell<Option<ObjectProtoToJsonSignature>> =
         const { std::cell::Cell::new(None) };
     #[cfg(test)]
+    #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_json")]
     static OBJECT_PROTO_TOJSON_RECOMPUTES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
@@ -458,10 +460,12 @@ crate::perry_thread_local! {
     /// Per-slot `Cell`s rather than a `Cell<[…; N]>`: the latter copies the
     /// whole table in and out on every probe, and this path runs once per
     /// object visited by `JSON.stringify`.
+    #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_json")]
     static CLASS_CHAIN_TOJSON_MEMO: [std::cell::Cell<ClassChainToJsonEntry>;
         CLASS_CHAIN_TOJSON_SLOTS] =
         const { [const { std::cell::Cell::new(EMPTY_CLASS_CHAIN_TOJSON) }; CLASS_CHAIN_TOJSON_SLOTS] };
     #[cfg(test)]
+    #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_json")]
     static CLASS_CHAIN_TOJSON_RECOMPUTES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 

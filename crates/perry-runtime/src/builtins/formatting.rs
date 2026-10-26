@@ -32,6 +32,7 @@ mod prototype_equality;
 mod strip_vt;
 mod typed_array_equality;
 mod util_format;
+pub(crate) use util_format::install_json_format;
 mod value_repr;
 pub(crate) use value_repr::{int32_or_class_repr, is_array_hole};
 
