@@ -1104,19 +1104,9 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
             .iter()
             .filter_map(|(name, spec)| {
                 let n = require_specs.iter().position(|s| s == spec)?;
-                if builtin_requires.contains(spec) || lazy_specs.contains(spec) {
-                    // #8343 followup: built-in specs no longer hoist a static
-                    // `import _req_N` (the codegen doesn't initialize
-                    // native-module import bindings in CJS-wrapped modules),
-                    // so `export { _req_N as name }` would reference an
-                    // undeclared ESM binding. The IIFE body's
-                    // `exports.name = require("<builtin>")` resolves through
-                    // the synthetic require's `createRequire` arm and populates
-                    // `_cjs.name`, so back the re-export with that — the same
-                    // surface `named_export_decls` uses below. Conditional
-                    // requires also need the actual CJS property: forwarding
-                    // their import binding would bypass the branch and expose
-                    // a dependency that the module never required.
+                if lazy_specs.contains(spec) {
+                    // A conditional require's export is the actual CommonJS
+                    // property: forwarding its import would bypass the branch.
                     Some(export_snapshot(name))
                 } else {
                     Some(format!(
@@ -1176,14 +1166,6 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
             // immutable module-scope `const alias = _req_N;` (the const write
             // would throw) nor strip its declaration below.
             .filter(|(alias, _, _)| !identifier_is_reassigned(source, alias))
-            // #8342: don't surface `const alias = _req_N;` for Node.js built-in
-            // specs — we no longer emit a static `import _req_N from '<builtin>'`
-            // (the codegen doesn't initialize native-module import bindings in
-            // CJS-wrapped modules), so `_req_N` doesn't exist. The body's own
-            // `<kw> alias = require('<builtin>')` stays (builtins are excluded
-            // from the blanking filter below) and resolves through the synthetic
-            // require's `createRequire` arm at runtime.
-            .filter(|(_, spec, _)| !builtin_requires.contains(spec))
             .filter(|(_, spec, _)| !lazy_specs.contains(spec))
             .filter_map(|(alias, spec, _range)| {
                 let idx = require_specs.iter().position(|s| s == spec)?;
@@ -1205,14 +1187,6 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
             .filter(|(_, spec, _)| require_specs.iter().any(|s| s == spec))
             .filter(|(_, spec, _)| !lazy_specs.contains(spec))
             .filter(|(alias, _, _)| !identifier_is_reassigned(source, alias))
-            // #sdxgen: Don't blank alias declarations for Node.js built-in
-            // modules — let them stay in the IIFE body and resolve through
-            // the synthetic require (which uses createRequire for builtins).
-            .filter(|(_, spec, _)| {
-                let normalized = spec.strip_prefix("node:").unwrap_or(spec);
-                perry_hir::is_bare_prefix_only_builtin(spec)
-                    || !perry_hir::is_node_builtin_module(normalized)
-            })
             .map(|(_, _, range)| range)
             .collect::<Vec<_>>();
         (lines, ranges)

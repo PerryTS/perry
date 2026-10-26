@@ -1782,3 +1782,12 @@ fn cjs_wrap_builtin_aliases_and_subpaths_use_ordinary_bindings() {
         "{wrapped}"
     );
 }
+
+#[test]
+fn cjs_wrap_builtin_object_export_keeps_import_identity() {
+    let src = "const fs = require('fs'); module.exports = { fs };";
+    let wrapped = wrap_commonjs(src, &PathBuf::from("/tmp/x/main.cjs"));
+    assert!(wrapped.contains("import fs from 'fs';"), "{wrapped}");
+    assert!(wrapped.contains("export { fs as fs };"), "{wrapped}");
+    assert!(!wrapped.contains("export const fs ="), "{wrapped}");
+}
