@@ -250,104 +250,17 @@ pub(crate) fn lower_module_decl(
                             })
                             .unwrap_or_else(|| local.clone());
                         if is_native {
-                            let is_node_core = perry_api_manifest::is_node_core_module(&source);
-                            if typescript::should_defer_unknown_named_import(
+                            if !static_import_bindings::register_native_named_import(
+                                ctx,
+                                module,
                                 &source,
+                                &raw_source,
                                 &imported,
-                                is_node_core,
+                                &local,
+                                named.span,
                             ) {
-                                // Almost always a TS TYPE in a mixed import —
-                                // `import { createCipheriv, BinaryLike } from "crypto"`.
-                                // tsc/esbuild/Bun all erase such a specifier; bailing here
-                                // failed the whole file. Defer: record it, bind nothing, and
-                                // let `lower_ident_expr` raise this same error if the local is
-                                // ever referenced as a VALUE (type positions are erased before
-                                // expression lowering, so a genuine bad import still errors).
-                                ctx.deferred_unknown_native_imports.insert(
-                                    local.clone(),
-                                    (imported.clone(), raw_source.clone(), named.span),
-                                );
                                 continue;
                             }
-                            // Register as native module function with the original method name
-                            // e.g., import { v4 as uuid } from 'uuid' -> uuid maps to uuid.v4.
-                            //
-                            // Some named exports are object-valued submodule namespaces rather
-                            // than callables. Route those locals to the canonical submodule so
-                            // `import { types } from "node:util"; types.isX()` uses the same
-                            // dispatch as `node:util/types` and `util.types.isX()`.
-                            let (native_module, native_method) =
-                                if is_node_core && imported == "default" {
-                                    (source.clone(), None)
-                                } else if source == "util" && imported == "types" {
-                                    ("util.types".to_string(), None)
-                                } else if source == "punycode" && imported == "ucs2" {
-                                    ("punycode.ucs2".to_string(), None)
-                                } else if source == "inspector"
-                                    && matches!(
-                                        imported.as_str(),
-                                        "Network" | "NetworkResources" | "DOMStorage"
-                                    )
-                                {
-                                    (format!("inspector.{imported}"), None)
-                                } else if matches!(
-                                    source.as_str(),
-                                    "fs" | "dns" | "stream" | "readline" | "timers"
-                                ) && imported == "promises"
-                                {
-                                    // `import { promises } from "node:fs"` binds the
-                                    // promises SUBMODULE namespace — route it exactly
-                                    // like `import * as x from "node:fs/promises"`.
-                                    // The generic arm below made it a native METHOD
-                                    // (`fs.promises`), so `promises.realpath(p)`
-                                    // dispatched the callback-API `fs.realpath` and
-                                    // resolved `undefined` (the compiled CLI's file cache
-                                    // normalized every path to `undefined` and every
-                                    // later fs call threw).
-                                    (format!("{source}/promises"), None)
-                                } else {
-                                    (source.clone(), Some(imported.clone()))
-                                };
-                            init_named_cell(module, &source, &imported, native_method.as_ref());
-                            ctx.register_native_module(local.clone(), native_module, native_method);
-                            // #1991: `perry/ui` exposes these as numeric
-                            // `const enum`s in `types/perry/ui/index.d.ts`.
-                            // Native modules do not have source HIR enum
-                            // declarations, so register the imported binding as
-                            // a real HIR enum at the import site. That lets the
-                            // existing enum-member lowering/codegen path handle
-                            // `Key.Space`, including aliases like
-                            // `import { Key as K } from "perry/ui"; K.Space`,
-                            // instead of treating it as a runtime property read
-                            // from a non-existent native-module object.
-                            if source == "perry/ui" {
-                                if let Some(model_members) =
-                                    perry_ui_model::const_enum_members(&imported)
-                                {
-                                    let enum_id = ctx.fresh_enum();
-                                    let members: Vec<EnumMember> = model_members
-                                        .into_iter()
-                                        .map(|member| EnumMember {
-                                            name: member.name.to_string(),
-                                            value: EnumValue::Number(member.value as f64),
-                                        })
-                                        .collect();
-                                    let member_values = members
-                                        .iter()
-                                        .map(|m| (m.name.clone(), m.value.clone()))
-                                        .collect();
-                                    ctx.define_enum(local.clone(), enum_id, member_values);
-                                    module.enums.push(Enum {
-                                        id: enum_id,
-                                        name: local.clone(),
-                                        members,
-                                        is_exported: false,
-                                    });
-                                }
-                            }
-                            typescript::register_runtime_enum(
-                                ctx, module, &source, &local, &imported,
-                            );
                         } else {
                             if !bare_prefix_only && is_node_builtin_module(&source) {
                                 ctx.register_builtin_named_import(
