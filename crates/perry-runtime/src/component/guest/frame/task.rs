@@ -110,5 +110,30 @@ pub unsafe extern "C" fn perry_component_frame_task_ready(pointer: *mut c_void) 
     }
 }
 
+/// Execute a finite C completion callback under this task's saved context.
+/// The callback may lift values into a DISTINCT import frame and settle its
+/// Promise. It must return before the canonical scheduler chooses WAIT/EXIT.
+/// # Safety
+/// `pointer` is an open task frame on its creating agent. A non-null callback
+/// and `data` are valid for this synchronous invocation. The callback must not
+/// reenter any frame API with `pointer`, drop it, or canonically suspend.
+#[no_mangle]
+pub unsafe extern "C" fn perry_component_frame_task_resume(
+    pointer: *mut c_void,
+    callback: Option<unsafe extern "C" fn(*mut c_void)>,
+    data: *mut c_void,
+) -> i32 {
+    let owner = frame(pointer);
+    owner.task_guard(|_| {
+        let callback = callback.unwrap_or_else(|| fail("Missing component task callback"));
+        callback(data);
+    });
+    if owner.failed {
+        -1
+    } else {
+        0
+    }
+}
+
 #[cfg(test)]
 mod tests;

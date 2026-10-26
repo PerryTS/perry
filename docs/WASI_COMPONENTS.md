@@ -392,6 +392,27 @@ I/O. This internal API does not supply canonical suspension, cancellation or
 async import/export adapters. See the
 [task checkpoint receipt](validation/wasi-guest-task-checkpoints-20261026.json).
 
+Canonical import callbacks now receive a stable heap frame. An internal C
+`import_begin` operation retains its Promise and captured ALS in that frame;
+the runtime hands the frame to C after the import callback returns. This also
+applies when the result is available immediately: C must wait for the handoff
+before dropping the frame. Synchronous imports still release their frame when
+the callback finishes. A later `task_resume` operation runs a finite C completion
+callback under its parent task, and import settlement checks that the original
+task is still live. The callback operates on a distinct import frame and returns
+before canonical suspension. It cannot reenter or drop its parent frame.
+
+Resolution uses the existing Promise resolution algorithm, including thenable
+assimilation, without draining jobs. Duplicate completion and invalid slots keep
+the first outcome/error; an expired or foreign task cannot settle the import.
+C must retain typed argument/result buffers until canonical use ends, then drop
+the frame exactly once. These runtime operations do not implement that generated
+C scheduler or its cancellation policy. The
+[deferred import receipt](validation/wasi-guest-import-frames-20261026.json)
+records native runtime tests, a WASI archive with the new symbols, and fresh
+synchronous Perry guest execution from Rust, including verified moving GC and
+resource cleanup. It does not qualify generated async guest execution.
+
 A separate C-only acceptance fixture uses the maintained `wit-bindgen-c` backend
 to prove cross-task wakeups through a unit stream and a canonical waitable set.
 It checks reverse completion order, coalesced wakeups before and after arming a

@@ -2,6 +2,7 @@
 //! Every potentially throwing operation catches before returning to C.
 use super::super::*;
 mod promise;
+mod suspended;
 mod task;
 use crate::native_payload::{self as payload, NativePayloadFamily, OwnerLink};
 pub use promise::perry_component_frame_promise_poll;
@@ -14,9 +15,14 @@ use std::{
         Arc,
     },
 };
+pub use suspended::{
+    perry_component_frame_import_begin, perry_component_frame_import_reject,
+    perry_component_frame_import_resolve,
+};
 pub use task::{
     perry_component_frame_task_call, perry_component_frame_task_checkpoint,
     perry_component_frame_task_new, perry_component_frame_task_ready,
+    perry_component_frame_task_resume,
 };
 
 static FRAME: NativePayloadFamily = NativePayloadFamily {
@@ -53,6 +59,7 @@ pub(super) struct Frame {
     pub(super) borrows: Vec<u32>,
     lifetime: Option<u32>,
     task: Option<task::TaskContext>,
+    suspended: Option<suspended::SuspendedImport>,
 }
 
 impl Frame {
@@ -89,6 +96,16 @@ impl Frame {
             borrows: Vec::new(),
             lifetime: None,
             task: None,
+            suspended: None,
+        }
+    }
+
+    /// An async C import owns this stable heap frame until its canonical child
+    /// and typed result storage are retired. Sync imports release immediately.
+    /// The callback must retain the same pointer before beginning deferral.
+    pub(super) fn release_import(self: Box<Self>) {
+        if self.suspended.is_some() {
+            let _ = Box::into_raw(self);
         }
     }
 
@@ -604,7 +621,7 @@ const fn adapter_entry(code: *const ()) -> AdapterEntry {
 }
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
-static KEEP_ADAPTER_ENTRIES: [AdapterEntry; 41] = [
+static KEEP_ADAPTER_ENTRIES: [AdapterEntry; 45] = [
     adapter_entry(super::resources::payload::js_component_resource_create as *const ()),
     adapter_entry(super::resources::payload::js_component_resource_value as *const ()),
     adapter_entry(super::resources::payload::perry_component_frame_resource_destroy as *const ()),
@@ -646,4 +663,8 @@ static KEEP_ADAPTER_ENTRIES: [AdapterEntry; 41] = [
     adapter_entry(perry_component_frame_task_call as *const ()),
     adapter_entry(perry_component_frame_task_checkpoint as *const ()),
     adapter_entry(perry_component_frame_task_ready as *const ()),
+    adapter_entry(perry_component_frame_task_resume as *const ()),
+    adapter_entry(perry_component_frame_import_begin as *const ()),
+    adapter_entry(perry_component_frame_import_resolve as *const ()),
+    adapter_entry(perry_component_frame_import_reject as *const ()),
 ];

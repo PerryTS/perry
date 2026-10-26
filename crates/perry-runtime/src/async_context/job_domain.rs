@@ -12,6 +12,13 @@ struct State {
 #[derive(Clone)]
 pub struct JobDomainToken(Arc<State>);
 
+impl JobDomainToken {
+    pub(crate) fn is_current_live(&self) -> bool {
+        self.0.live.load(Ordering::Acquire)
+            && current().is_some_and(|active| Arc::ptr_eq(&self.0, &active.0))
+    }
+}
+
 /// One canonical task owns this lease. Snapshots can outlive its EXIT without
 /// retaining a task or a native registry entry. The lease stays on its agent.
 pub(crate) struct JobDomain {

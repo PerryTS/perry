@@ -60,6 +60,20 @@ void *perry_component_frame_task_new(void);
 uint32_t perry_component_frame_task_call(void *, uint32_t, uint32_t, uint32_t);
 int32_t perry_component_frame_task_checkpoint(void *);
 int32_t perry_component_frame_task_ready(void *);
+/* Finite synchronous callback under the task's saved ALS/domain. No canonical
+   suspension, or reentry/drop of that same task frame, is allowed in callback. */
+int32_t perry_component_frame_task_resume(void *, void (*)(void *), void *);
+/* Begin ONLY on a heap import frame whose C owner retains the same pointer.
+   Requires a live current task; returns a rooted Promise slot (0 on error).
+   Runtime transfers this frame to C after its import callback returns, even
+   for immediate completion. C drops it only after all canonical/native use.
+   Resolve/reject require its live originating task and return 0/-1. They run
+   normal Promise settlement hooks/thenable assimilation, but no job drain.
+   Use task_resume for a later callback; immediate completion is already scoped.
+   Failed/duplicate completion is inert apart from the recorded frame error. */
+uint32_t perry_component_frame_import_begin(void *);
+int32_t perry_component_frame_import_resolve(void *, uint32_t);
+int32_t perry_component_frame_import_reject(void *, uint32_t);
 
 uint32_t perry_component_frame_resource_lift(void *, uint32_t, uint32_t, uint32_t, int32_t);
 uint32_t perry_component_frame_resource_lower(void *, uint32_t, uint32_t, int32_t, int32_t);

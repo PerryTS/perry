@@ -550,9 +550,15 @@ fn dropping_a_guest_frame_preserves_later_temporary_handle_scopes() {
 #[test]
 fn guest_frame_drop_after_cell_teardown_never_resolves_its_stale_link() {
     crate::gc::gc_init();
-    let frames = [Box::new(Frame::new()), unsafe {
-        Box::from_raw(perry_component_frame_task_new().cast::<Frame>())
-    }];
+    let domain = crate::async_context::job_domain::JobDomain::new();
+    let mut deferred = Box::new(Frame::new());
+    let pointer = (&raw mut *deferred).cast();
+    assert!(domain.run(|| unsafe { perry_component_frame_import_begin(pointer) }) > 0);
+    let frames = [
+        Box::new(Frame::new()),
+        unsafe { Box::from_raw(perry_component_frame_task_new().cast::<Frame>()) },
+        deferred,
+    ];
     for mut frame in frames {
         let alive = Arc::downgrade(&frame.alive);
         unsafe {
