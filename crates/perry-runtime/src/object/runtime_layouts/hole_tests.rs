@@ -940,5 +940,60 @@ fn absent_overflow_definition_uses_final_data_entry() {
             ),
             "present overflow keys retain complete definition semantics"
         );
+        let unreserved = scope.root_nanbox_u64(
+            crate::JSValue::string_ptr(
+                crate::string::intern_ascii_literal(b"first_unreserved").cast_mut(),
+            )
+            .bits(),
+        );
+        let first = scope.root_raw_mut_ptr(crate::object::layout_desc::perry_alloc_literal_layout(
+            std::ptr::addr_of!(LITERAL_FAMILY),
+        ));
+        first.with_const_ptr(|obj: *const ObjectHeader| {
+            assert!(!crate::object::overflow::has_overflow(obj));
+        });
+        let first_value = scope.root_nanbox_u64(
+            first.with_const_ptr(|obj: *const ObjectHeader| crate::value::POINTER_TAG | obj as u64),
+        );
+        assert!(
+            crate::object::define_own_data::define_fresh_own_from_shape(
+                &scope,
+                &first_value,
+                &unreserved,
+                &desc,
+            ),
+            "the first unreserved family definition must use the same fresh insertion"
+        );
+        assert!(
+            !crate::object::define_own_data::define_fresh_own_from_shape(
+                &scope,
+                &first_value,
+                &unreserved,
+                &desc,
+            ),
+            "an interned non-atom spelling must find the existing authoritative property"
+        );
+        first.with_const_ptr(|obj: *const ObjectHeader| {
+            let table = crate::object::overflow::table(obj);
+            assert!(!table.is_null());
+            let atom = crate::string::existing_property_atom(
+                crate::JSValue::from_bits(unreserved.get_nanbox_u64()).as_string_ptr(),
+            )
+            .unwrap();
+            let i = crate::object::overflow::find(
+                table,
+                crate::JSValue::string_ptr(atom.cast_mut()).bits(),
+            )
+            .unwrap();
+            assert_eq!(
+                crate::object::overflow::get(obj, i),
+                Some(37.0f64.to_bits())
+            );
+            assert_eq!(
+                crate::object::overflow::entry_attrs(table.cast(), i),
+                crate::object::key_attrs::ENTRY_NON_WRITABLE
+                    | crate::object::key_attrs::ENTRY_NON_CONFIGURABLE
+            );
+        });
     }
 }

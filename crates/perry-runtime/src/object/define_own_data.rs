@@ -199,9 +199,10 @@ unsafe fn define_listed_key_by_content(
 ///
 /// `false`, having changed nothing, for anything else: the key is present,
 /// the receiver is not a plain ordinary extensible object (exotic, typed
-/// array, arguments, prototype, family, dictionary, native module), or the
-/// key is not an interned ordinary name. The caller then runs the general
-/// definition.
+/// array, arguments, prototype, native module), or the key is not an interned
+/// ordinary name. An authoritative absent overflow entry, or an absent family
+/// key before its first overflow, uses the same final-data insertion. Accessors
+/// in those cases retain the general definition.
 ///
 /// # Safety
 /// `receiver`, `key` and `descriptor` are live rooted values.
@@ -292,7 +293,7 @@ pub(crate) unsafe fn define_fresh_own_from_shape(
 enum Admitted {
     /// The receiver does not have the key (its interned string).
     Fresh(*const crate::StringHeader),
-    /// Its authoritative overflow has no entry for this key.
+    /// An absent key defined through the owned overflow, installed if needed.
     Overflow(*const crate::StringHeader),
     /// The receiver lists the key at this position.
     Own(u32),
@@ -423,13 +424,24 @@ unsafe fn definition_admitted(obj_bits: u64, key_value: f64) -> Option<Admitted>
     // static spelling and slot do not make it a present property.
     let table = super::overflow::table(obj);
     if !table.is_null() {
-        let bits = crate::JSValue::string_ptr(key.cast_mut()).bits();
-        return super::overflow::find(table, bits)
-            .is_none()
-            .then_some(Admitted::Overflow(key));
+        let present = crate::string::existing_property_atom(key).is_some_and(|atom| {
+            super::overflow::find(table, crate::JSValue::string_ptr(atom.cast_mut()).bits())
+                .is_some()
+        });
+        return (!present).then_some(Admitted::Overflow(key));
     }
-    if super::overflow::shadowed(obj) || super::layout_desc::is_family_object(obj) {
+    if super::overflow::shadowed(obj) {
         return None;
+    }
+    if super::layout_desc::is_family_object(obj) {
+        // Before its first overflow, the checked family descriptor proves
+        // an unlisted name absent. An optional listed slot must be a hole.
+        let absent = matches!(super::layout_desc::family_own_key(obj, bytes), Some(None))
+            || super::key_view::own_key_is_hole(
+                obj,
+                crate::JSValue::from_bits(key_value.to_bits()),
+            );
+        return absent.then_some(Admitted::Overflow(key));
     }
     let keys = super::object_keys(obj);
     if !keys.is_null() {
@@ -441,7 +453,8 @@ unsafe fn definition_admitted(obj_bits: u64, key_value: f64) -> Option<Admitted>
     Some(Admitted::Fresh(key))
 }
 
-/// An absent overflow key is defined once with its final data attributes.
+/// An absent owned key is defined once with its final data attributes.
+/// A checked family absence may establish its overflow for the first time.
 /// The fixed optional slot stays a hole; the new entry owns value and order.
 /// Present properties and accessor definitions keep the complete operation.
 unsafe fn define_fresh_overflow_data(
@@ -466,11 +479,11 @@ unsafe fn define_fresh_overflow_data(
     super::prop_plan::prop_plan_epoch_bump_for_owner(addr);
     super::descriptor_state::note_attrs_born_with_keys(addr);
     let entry = super::key_attrs::AttrsEdit::Data(bytes, attrs.bits).apply(0);
-    // insert_key_bits roots owner, key and value before reserve can collect,
-    // publishes membership, and applies the existing table-slot barriers.
-    super::overflow::insert_key_bits(
+    // insert roots owner/value before canonicalizing an interned spelling
+    // to its property atom, then uses the existing insertion and barriers.
+    super::overflow::insert(
         addr as *mut ObjectHeader,
-        crate::JSValue::string_ptr(key.cast_mut()).bits(),
+        key,
         descriptor.read(DESC_VALUE).bits(),
         entry,
     );

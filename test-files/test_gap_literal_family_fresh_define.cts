@@ -40,3 +40,22 @@ Object.defineProperty(accessor, "reserved", { get() { return 31; }, configurable
 console.log("accessor", accessor.reserved, Object.getOwnPropertyDescriptor(accessor, "reserved").get !== undefined);
 Object.defineProperty(accessor, "reserved", { value: 37 });
 report("converted", accessor);
+
+// The first name outside a family establishes its overflow, without a prior
+// reserved-hole definition to make the receiver a dictionary first.
+const firstOutside: any = fresh(7);
+Object.defineProperty(firstOutside, "first_dynamic", { value: 41, enumerable: true });
+const firstDescriptor = Object.getOwnPropertyDescriptor(firstOutside, "first_dynamic");
+console.log("first-outside", Object.keys(firstOutside).join(","), firstOutside.first_dynamic,
+  firstDescriptor.writable, firstDescriptor.enumerable, firstDescriptor.configurable,
+  Reflect.set(firstOutside, "first_dynamic", 43));
+const firstOmitted: any = fresh(8);
+Object.defineProperty(firstOmitted, "first_omitted", {});
+const omittedDescriptor = Object.getOwnPropertyDescriptor(firstOmitted, "first_omitted");
+console.log("first-omitted", Object.getOwnPropertyNames(firstOmitted).join(","),
+  omittedDescriptor.value, omittedDescriptor.writable, omittedDescriptor.enumerable,
+  omittedDescriptor.configurable);
+const firstGetter: any = fresh(9);
+Object.defineProperty(firstGetter, "first_getter", { get() { return 47; } });
+console.log("first-getter", firstGetter.first_getter,
+  typeof Object.getOwnPropertyDescriptor(firstGetter, "first_getter").get);
