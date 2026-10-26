@@ -846,7 +846,10 @@ mod first_birth {
             let obj = scope
                 .root_raw_mut_ptr(crate::object::layout_desc::perry_alloc_literal_layout(desc));
             let id = obj.with_const_ptr(|p: *const ObjectHeader| (*p).parent_class_id);
-            assert!(crate::object::shapes::shape_descriptor_for_word(id).is_some());
+            assert!(
+                crate::object::shapes::shape_descriptor_for_word(perry_abi::LayoutWord(id))
+                    .is_some()
+            );
             assert_eq!(crate::object::layout_desc::load_layout_id(desc), id);
             assert_ne!(
                 id,
@@ -866,13 +869,17 @@ mod first_birth {
                 let desc = std::ptr::addr_of!(LITERAL);
                 assert_eq!(crate::object::layout_desc::load_layout_id(desc), id);
                 assert!(
-                    crate::object::shapes::shape_descriptor_for_word(id).is_none(),
+                    crate::object::shapes::shape_descriptor_for_word(perry_abi::LayoutWord(id))
+                        .is_none(),
                     "a shared image word must not stand in for this agent's record"
                 );
                 let scope = crate::gc::RuntimeHandleScope::new();
                 let obj = scope
                     .root_raw_mut_ptr(crate::object::layout_desc::perry_alloc_literal_layout(desc));
-                assert!(crate::object::shapes::shape_descriptor_for_word(id).is_some());
+                assert!(
+                    crate::object::shapes::shape_descriptor_for_word(perry_abi::LayoutWord(id))
+                        .is_some()
+                );
                 obj.with_mut_ptr(|p: *mut ObjectHeader| {
                     assert_eq!((*p).parent_class_id, id);
                     assert!(std::ptr::eq(

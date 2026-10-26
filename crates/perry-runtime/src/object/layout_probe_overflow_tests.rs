@@ -32,7 +32,7 @@ fn owned_table_reads_do_not_derive_the_record_index() {
                 crate::object::key_attrs::ENTRY_NON_WRITABLE,
             );
             let dir = test_dir();
-            let record = record_of(dir, (*object).parent_class_id);
+            let record = record_of(dir, perry_abi::LayoutWord((*object).parent_class_id));
             assert!(!record.is_null());
             assert!((*record).present());
             assert_eq!(
@@ -60,7 +60,7 @@ fn owned_table_reads_do_not_derive_the_record_index() {
                 crate::value::js_nanbox_pointer(object as i64),
                 crate::value::js_nanbox_pointer(proto as i64),
             );
-            let record = record_of(dir, (*object).parent_class_id);
+            let record = record_of(dir, perry_abi::LayoutWord((*object).parent_class_id));
             assert!(!record.is_null() && (*record).present());
             assert_eq!((*record).probe, 0);
             assert_eq!(
@@ -146,7 +146,7 @@ fn owned_fixed_entry_reader_keeps_inline_and_spill_semantics() {
                 }
                 let table = crate::object::overflow::ensure(object);
                 let dir = test_dir();
-                let raw = record_of(dir, (*object).parent_class_id);
+                let raw = record_of(dir, perry_abi::LayoutWord((*object).parent_class_id));
                 assert!(!raw.is_null() && (*raw).present());
                 assert_eq!(
                     (*raw).object_kind(),

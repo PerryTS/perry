@@ -46,4 +46,3 @@ for (let level = 0; level < 3; level++) {
   console.log("symbol-set", level, Reflect.set(o, data, 37), Reflect.set(o, access, 41),
     o[data], o[access], Object.getOwnPropertyDescriptor(o, access)!.configurable);
 }
-

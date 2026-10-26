@@ -144,7 +144,7 @@ pub(super) unsafe fn registered_for_birth(desc: *const PerryLayoutDesc) -> Optio
     let index = literal_index(desc)?;
     let current = registered_layout_id(load_layout_id(desc));
     if let Some(id) = current {
-        if super::super::shapes::shape_descriptor_for_word(id).is_some() {
+        if super::super::shapes::shape_descriptor_for_word(LayoutWord(id)).is_some() {
             return Some(id);
         }
     }
@@ -164,14 +164,15 @@ unsafe fn first_birth(desc: *const PerryLayoutDesc, index: u32) -> Option<u32> {
     // existing identity allocator and agent Region publish its shape facts.
     let requested = super::super::static_shapes::resolve_layout_fields(
         std::ptr::addr_of!((*desc).shape_id).cast_mut(),
-        d.layout_id,
+        LayoutWord(d.layout_id),
         super::super::shapes::PROTO_ID_DEFAULT,
     )
     .identity
     .0;
     debug_assert_eq!(literal_index(desc), Some(index));
     let id = register_one(desc, requested);
-    (id != 0 && super::super::shapes::shape_descriptor_for_word(id).is_some()).then_some(id)
+    (id != 0 && super::super::shapes::shape_descriptor_for_word(LayoutWord(id)).is_some())
+        .then_some(id)
 }
 
 /// Birth of a literal-section family. The section owns the schema, while
@@ -192,7 +193,7 @@ pub unsafe extern "C" fn perry_alloc_literal_layout(
         );
         std::process::abort();
     };
-    alloc_layout_object(&*desc, id)
+    alloc_layout_object(&*desc, LayoutWord(id))
 }
 
 #[cfg(feature = "keepalive-anchors")]
