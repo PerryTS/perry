@@ -34,6 +34,7 @@ NEGATIVES = {
     "without_json": ["global_json", "json_tape"],
     "bun_file_without_json": ["global_json", "json_tape"],
     "without_turnloop_net": ["turnloop_net"],
+    "without_turnloop": ["turnloop"],
     "fs_promises_without_streams": ["bundled_web_streams"],
 }
 

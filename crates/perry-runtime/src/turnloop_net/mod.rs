@@ -92,6 +92,7 @@ pub use sink::{
 /// Install this service in the common pump before a binding submits work.
 /// Called by the existing net installer and the C-ABI sink installers.
 pub fn install() {
+    crate::feature_hooks::js_runtime_install_turnloop();
     crate::event_pump::service_hooks::install_net();
 }
 

@@ -155,6 +155,7 @@ pub extern "C" fn js_runtime_install_compiled() {
     js_runtime_install_string_normalize();
     js_runtime_install_intl_segmenter();
     js_runtime_install_intl_locale();
+    js_runtime_install_turnloop();
     js_runtime_install_global_math();
     js_runtime_install_global_json();
     js_runtime_install_global_reflect();
@@ -177,6 +178,16 @@ pub extern "C" fn js_runtime_install_compiled() {
     // features: perry installs them by name for the programs that need them,
     // so installing "everything compiled" (the core archive's installer) must
     // not pull them in.
+}
+
+/// Exact-deadline waits and native IO, selected by the compiler or an owning
+/// module installer. Empty operation slots leave a program with no IO inert.
+#[no_mangle]
+pub extern "C" fn js_runtime_install_turnloop() {
+    #[cfg(not(target_arch = "wasm32"))]
+    perry_install_once!({
+        crate::event_pump::loop_hooks::install();
+    });
 }
 
 /// Root scanners an optional feature contributes. The root-scanner registry
@@ -203,6 +214,8 @@ pub(crate) static NODE_TEST_ROOT_SCANNER: Hook<crate::gc::MutableRootScanner> = 
 /// shutdown. perry installs it for a program with an approved native addon.
 #[no_mangle]
 pub extern "C" fn js_runtime_install_node_api_host() {
+    js_runtime_install_turnloop();
+    crate::os::os_process_emitter::install_process_signal_sync();
     perry_install_once!({
         crate::node_api_host::install();
     });
@@ -378,6 +391,7 @@ pub extern "C" fn js_runtime_install_global_webfetch() {
 #[no_mangle]
 pub extern "C" fn js_runtime_install_proc_ipc() {
     perry_install_once!({
+        crate::os::os_process_emitter::install_process_signal_sync();
         crate::process::ipc::install();
     });
 }

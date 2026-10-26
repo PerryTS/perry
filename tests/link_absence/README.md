@@ -78,3 +78,8 @@ only Bun API. The gate copies and runs that oracle separately, keeping its
 JSON.parse out of the native compilation. Bun JSON positives include computed
 and extracted methods, TOML and JSONL adapters; a text-only Bun file read
 requires both the JSON engine and tape parser absent.
+
+The turnloop driver is installed for native I/O, timers, agents and process
+listeners. Generic event-pump operations call its installer-filled slots.
+A promise-only negative requires the driver absent, while timers and a real
+self-delivered process signal exercise installed waits and signal dispatch.

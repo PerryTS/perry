@@ -974,6 +974,7 @@ pub struct CompilationContext {
     pub uses_computed_member_keys: bool,
     pub uses_file_handle_capability: bool,
     pub uses_bun_file_capability: bool,
+    pub uses_turnloop: bool,
     pub uses_global_reflect: bool,
     pub uses_global_atomics: bool,
     /// Per-group `globalThis` web-platform member tables (URL / Text* /
@@ -1421,6 +1422,7 @@ impl CompilationContext {
             uses_computed_member_keys: false,
             uses_file_handle_capability: false,
             uses_bun_file_capability: false,
+            uses_turnloop: false,
             uses_global_reflect: false,
             uses_global_atomics: false,
             uses_global_url: false,

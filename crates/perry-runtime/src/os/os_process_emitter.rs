@@ -236,7 +236,20 @@ fn process_listener_count(event: &str) -> usize {
     })
 }
 
+static PROCESS_SIGNAL_SYNC: crate::feature_hooks::Hook<fn(&str)> =
+    crate::feature_hooks::Hook::empty();
+
+pub(crate) fn install_process_signal_sync() {
+    PROCESS_SIGNAL_SYNC.set(sync_process_signal_listener_impl);
+}
+
 fn sync_process_signal_listener(event: &str) {
+    if let Some(sync) = PROCESS_SIGNAL_SYNC.get() {
+        sync(event);
+    }
+}
+
+fn sync_process_signal_listener_impl(event: &str) {
     if super::signal::is_process_signal_name(event) {
         super::signal::set_process_signal_listener_count(event, process_listener_count(event));
     }

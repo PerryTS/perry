@@ -677,6 +677,46 @@ pub(super) fn detect_optional_feature_usage(
         }
     }
 
+    // A timer, abort deadline or agent can wait without a native-module import.
+    if [
+        "setTimeout",
+        "setInterval",
+        "setImmediate",
+        "timeout",
+        "Worker",
+        "MessageChannel",
+        "MessagePort",
+    ]
+    .iter()
+    .any(|name| hir_debug.contains(name))
+    {
+        ctx.uses_turnloop = true;
+    }
+    // Runtime-only imports do not enter native_module_imports.
+    if [
+        "net",
+        "tls",
+        "http",
+        "https",
+        "http2",
+        "dgram",
+        "dns",
+        "fs",
+        "fs/promises",
+        "child_process",
+        "worker_threads",
+        "bun",
+        "crypto",
+        "zlib",
+    ]
+    .iter()
+    .any(|name| {
+        hir_debug.contains(&format!(r#"module: "{name}""#))
+            || hir_debug.contains(&format!(r#"NativeModuleRef("{name}")"#))
+    }) {
+        ctx.uses_turnloop = true;
+    }
+
     // Detect WHATWG URL API usage. The `url`+`idna` host-canonicalization
     // engine (~195 KB) is gated behind `perry-runtime/url-engine`; Perry's URL
     // parsing is otherwise hand-rolled, so a program with no URL API links none

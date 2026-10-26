@@ -33,6 +33,8 @@ use std::time::Duration;
 #[cfg(not(target_arch = "wasm32"))]
 mod agent_loop;
 #[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod loop_hooks;
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod service_errors;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod service_hooks;
@@ -41,14 +43,16 @@ pub(crate) use agent_loop::component_turn_and_take;
 #[cfg(not(target_arch = "wasm32"))]
 mod precise_wait;
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) use agent_loop::arm_timer as arm_agent_timer;
+pub(crate) use loop_hooks::arm_timer as arm_agent_timer;
 /// The wasm arm has no agent loop to arm: the legacy park recomputes its own
 /// timeout from the timer store on every pass, so there is no timer handle
 /// to re-arm and nothing to do here.
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn arm_agent_timer(_at: Option<std::time::Instant>) {}
 #[cfg(not(target_arch = "wasm32"))]
-pub use agent_loop::{loop_statistics, LoopStats};
+pub use agent_loop::LoopStats;
+#[cfg(not(target_arch = "wasm32"))]
+pub use loop_hooks::loop_statistics;
 // turnloop P6: perry-stdlib's outbound-client counters reach the stats line
 // through this, because the dependency edge runs stdlib → runtime.
 #[cfg(not(target_arch = "wasm32"))]
@@ -58,7 +62,9 @@ pub use agent_loop::{register_stats_reporter, StatsReporter};
 // owner — is the single root cause behind 19 of the remaining tokio edges, and
 // this is what those bindings convert to instead of keeping a tokio fallback.
 #[cfg(not(target_arch = "wasm32"))]
-pub use agent_loop::{has_route, post_to_agent, PostToAgentError};
+pub use agent_loop::{post_to_agent, PostToAgentError};
+#[cfg(not(target_arch = "wasm32"))]
+pub use loop_hooks::has_route;
 // P3's timer token, so P10's token-space test can name the real constant it
 // must not collide with rather than restate `u64::MAX` and drift from it.
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -150,7 +156,7 @@ pub extern "C" fn js_native_work_submitted() {
     #[cfg(not(target_arch = "wasm32"))]
     {
         loop_stats::note_notify();
-        agent_loop::wake_parked_agents();
+        loop_hooks::wake();
     }
 }
 
@@ -190,13 +196,13 @@ pub(crate) fn with_pool_driver<R>(f: impl FnOnce(&mut turnloop::Loop) -> R) -> O
 /// flight (a socket, a pool job): something only a turn here will complete.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn agent_loop_has_outstanding_work() -> bool {
-    agent_loop::has_outstanding_work()
+    loop_hooks::has_outstanding_work()
 }
 
 /// Wake `agent`'s loop; see `agent_loop::notify_agent`.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn notify_agent_loop(agent: crate::agent::AgentId) {
-    agent_loop::notify_agent(agent);
+    loop_hooks::notify_agent(agent);
 }
 
 /// Announce work queued for `agent` by another agent (a Worker's event for
@@ -212,7 +218,7 @@ pub fn notify_agent_loop(agent: crate::agent::AgentId) {
 /// mode. A target with no route falls back to the broadcast.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn notify_agent_work(agent: crate::agent::AgentId) {
-    if !agent_loop::notify_agent(agent) {
+    if !loop_hooks::notify_agent(agent) {
         js_notify_main_thread();
         return;
     }
@@ -232,7 +238,7 @@ pub fn notify_agent_work(agent: crate::agent::AgentId) {
 /// before its loop exists; see `agent_loop::claim_route_for_wakes`.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn claim_agent_loop_route() -> bool {
-    agent_loop::claim_route_for_wakes()
+    loop_hooks::claim_route()
 }
 
 /// turnloop P4 (DESIGN §9, "`run_pending` becomes a bounded `turn`"): drive
@@ -246,29 +252,7 @@ pub fn claim_agent_loop_route() -> bool {
 /// no loop, so the caller's legacy poll still works.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn js_loop_turn_bounded(budget_ms: u64) {
-    if !agent_loop::eligible() || !agent_loop::ensure_loop() {
-        return;
-    }
-    if budget_ms == 0 || !agent_loop::has_outstanding_work() {
-        // Nothing to wait *for*: collect anything already queued and
-        // return rather than burning the caller's budget in an OS wait.
-        agent_loop::settle_turn();
-        return;
-    }
-    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(budget_ms);
-    if agent_loop::park_until(deadline) == agent_loop::Park::Notified {
-        // #11417: the park declines to WAIT when a main-thread notify is
-        // pending or tokio-owned work appeared, and leaves the flag for
-        // `js_wait_for_event` — but it also skips the turn, and a turn is the
-        // only thing that collects a completion. A caller of this function is
-        // not `js_wait_for_event`: it is a native API (or a pool waiter) that
-        // loops on it until its own completion lands, and nothing in that loop
-        // consumes the flag. So every call returned without turning, and the
-        // caller spun until someone else happened to clear a process-global
-        // flag — for ever, on a thread that is not the primary agent's. Still
-        // do not block (the pending wake is real), but collect what is ready.
-        agent_loop::settle_turn();
-    }
+    loop_hooks::turn_bounded(budget_ms);
 }
 
 /// Test-only: install an unrouted net-profile loop on this thread.
@@ -294,14 +278,14 @@ pub(crate) fn reset_net_loop_for_test() {
 /// `turnloop_proc::close_and_settle`.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn settle_loop_once() {
-    agent_loop::settle_turn();
+    loop_hooks::settle();
 }
 
 /// turnloop P1: whether this thread can take the turnloop net path, asked
 /// without creating a loop.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn net_loop_available() -> bool {
-    agent_loop::net_available()
+    loop_hooks::net_available()
 }
 
 /// turnloop P9: destroy the calling *worker* agent's loop at
@@ -313,7 +297,7 @@ pub(crate) fn net_loop_available() -> bool {
 /// line still is — it is the only evidence a worker agent's loop ever ran.
 pub fn shutdown_agent_loop() {
     #[cfg(not(target_arch = "wasm32"))]
-    agent_loop::shutdown_current_thread();
+    loop_hooks::shutdown();
 }
 
 /// Destroy the calling thread's agent loop at the process-exit funnel and, with
@@ -322,7 +306,7 @@ pub fn shutdown_agent_loop() {
 pub fn shutdown_wait_driver() {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        agent_loop::shutdown_current_thread();
+        loop_hooks::shutdown();
         loop_stats::print_once("turnloop");
         // P1's own census. `completions=` on the line above is the driver's
         // whole turn output — net, process, JS timers and pool together — so it
@@ -546,7 +530,7 @@ pub extern "C" fn js_notify_main_thread() {
     // turnloop P0: wake the primary agent's loop if it is inside a turn. One
     // atomic load otherwise; must follow the `NOTIFIED` store above.
     #[cfg(not(target_arch = "wasm32"))]
-    agent_loop::wake_parked_agents();
+    loop_hooks::wake();
     // Hot path: no consumer is currently in `cvar.wait_timeout`, so
     // we don't need to take the mutex or signal the cvar — the next
     // call to `js_wait_for_event` will see `NOTIFIED == true` on the
@@ -757,7 +741,7 @@ pub extern "C" fn js_wait_for_event() {
             PROFILE_WAIT_FAST_COUNT.fetch_add(1, Ordering::Relaxed);
         }
         #[cfg(not(target_arch = "wasm32"))]
-        agent_loop::fast_turn();
+        loop_hooks::fast();
         return;
     }
 
@@ -765,7 +749,7 @@ pub extern "C" fn js_wait_for_event() {
     // own loop. A second thread acting for an agent another thread already owns
     // (a host pump thread) falls through to the legacy park.
     #[cfg(not(target_arch = "wasm32"))]
-    if agent_loop::eligible() && precise_wait::park() {
+    if loop_hooks::park() {
         return;
     }
 
@@ -852,7 +836,7 @@ fn zero_budget_return() {
     // Even a due-timer loop must drive native I/O. This does not reset the
     // spin streak: only a real park counts as progress for the throttle.
     #[cfg(not(target_arch = "wasm32"))]
-    agent_loop::fast_turn();
+    loop_hooks::fast();
 }
 
 /// The condvar park (#84) for `budget`, shared by the legacy path and the

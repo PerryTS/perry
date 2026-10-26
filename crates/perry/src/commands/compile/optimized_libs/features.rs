@@ -196,6 +196,38 @@ pub(crate) fn auto_optimized_cross_features(
     if ctx.uses_intl_namespace || needs_dyn_eval {
         cross_features.push("perry-runtime/intl-namespace".to_string());
     }
+    let io_module = ctx.native_module_imports.iter().any(|module| {
+        matches!(
+            module.as_str(),
+            "net"
+                | "tls"
+                | "http"
+                | "https"
+                | "http2"
+                | "dgram"
+                | "dns"
+                | "dns/promises"
+                | "fs"
+                | "fs/promises"
+                | "child_process"
+                | "worker_threads"
+                | "readline"
+                | "readline/promises"
+                | "node-pty"
+                | "zlib"
+                | "crypto"
+        )
+    });
+    if ctx.uses_turnloop
+        || io_module
+        || ctx.uses_fetch
+        || ctx.uses_proc_ipc
+        || ctx.uses_get_builtin_module
+        || features.contains("async-runtime")
+        || needs_dyn_eval
+    {
+        cross_features.push("perry-runtime/turnloop".to_string());
+    }
     // Per-namespace globalThis member tables — see perry-runtime's `global-*`.
     // A deferred dynamic-code site can reach any namespace by runtime string,
     // so force all four on there (mirrors the intl-namespace rule).
@@ -210,7 +242,7 @@ pub(crate) fn auto_optimized_cross_features(
         (ctx.uses_global_websocket, "global-websocket"),
         (ctx.uses_global_webcrypto, "global-webcrypto"),
         (ctx.uses_global_webfetch, "global-webfetch"),
-        (ctx.uses_proc_ipc, "proc-ipc"),
+        (ctx.uses_proc_ipc || ctx.uses_get_builtin_module, "proc-ipc"),
     ] {
         if used || dynamic_code {
             cross_features.push(format!("perry-runtime/{feat}"));
