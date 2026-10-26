@@ -384,8 +384,8 @@ mod tests {
             cert.with_mut_ptr(|cert| unsafe {
                 perry_runtime::js_object_set_field_by_name(
                     cert,
-                    JSValue::from_bits(key.get_nanbox_f64().to_bits())
-                        .as_pointer::<perry_runtime::StringHeader>(),
+                    perry_runtime::js_get_string_pointer_unified(key.get_nanbox_f64())
+                        as *const perry_runtime::StringHeader,
                     san.get_nanbox_f64(),
                 )
             });
