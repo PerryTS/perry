@@ -395,6 +395,31 @@ pub unsafe extern "C" fn perry_component_frame_array_get(
 pub unsafe extern "C" fn perry_component_frame_array_len(pointer: *mut c_void, list: u32) -> u32 {
     frame(pointer).guard(|frame| crate::array::js_array_length(array(frame.get(list))))
 }
+
+/// Copy a rooted value into an independently owned frame. This permits C to
+/// convert a task result in a distinct frame under task_resume without
+/// reborrowing the task frame. No JS or jobs run here.
+/// # Safety
+/// Both pointers are open frames on this agent, with no outstanding borrows.
+/// They may be equal. The slot belongs to source; errors belong to destination.
+#[no_mangle]
+pub unsafe extern "C" fn perry_component_frame_copy(
+    destination: *mut c_void,
+    source: *mut c_void,
+    slot: u32,
+) -> u32 {
+    // End the source borrow before taking the destination borrow (which may
+    // alias it). add roots the incoming value before its first allocation.
+    frame(destination).guard(|destination| {
+        // In the equal-pointer case use the existing exclusive borrow.
+        let value = if std::ptr::eq(destination as *mut Frame, source.cast()) {
+            destination.get(slot)
+        } else {
+            frame(source).get(slot)
+        };
+        destination.add(value)
+    })
+}
 #[no_mangle]
 pub unsafe extern "C" fn perry_component_frame_get_number(pointer: *mut c_void, slot: u32) -> f64 {
     frame(pointer).guard(|frame| {
@@ -621,7 +646,7 @@ const fn adapter_entry(code: *const ()) -> AdapterEntry {
 }
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
-static KEEP_ADAPTER_ENTRIES: [AdapterEntry; 45] = [
+static KEEP_ADAPTER_ENTRIES: [AdapterEntry; 46] = [
     adapter_entry(super::resources::payload::js_component_resource_create as *const ()),
     adapter_entry(super::resources::payload::js_component_resource_value as *const ()),
     adapter_entry(super::resources::payload::perry_component_frame_resource_destroy as *const ()),
@@ -647,6 +672,7 @@ static KEEP_ADAPTER_ENTRIES: [AdapterEntry; 45] = [
     adapter_entry(perry_component_frame_array_set as *const ()),
     adapter_entry(perry_component_frame_array_get as *const ()),
     adapter_entry(perry_component_frame_array_len as *const ()),
+    adapter_entry(perry_component_frame_copy as *const ()),
     adapter_entry(perry_component_frame_get_number as *const ()),
     adapter_entry(perry_component_frame_get_integer as *const ()),
     adapter_entry(perry_component_frame_get_bool as *const ()),

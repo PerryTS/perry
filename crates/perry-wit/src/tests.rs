@@ -481,3 +481,42 @@ fn character_streams_are_rejected_before_emitting_unloadable_bindings() {
     )
     .is_ok());
 }
+
+#[cfg(unix)]
+#[test]
+fn experimental_async_exports_compile_without_changing_the_public_contract() {
+    for source in [
+        "package test:async-export; world plugin { export run: async func(id: u32) -> u32; export wake: func(id: u32); export perry-scheduler-signal-0: func(); }",
+        "package test:async-export; interface api { record data { text: string, bytes: list<u8> } run: async func(input: data) -> result<data, string>; sync: func() -> data; empty: async func(); } world plugin { import log: func(text: string); export api; }",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("world.wit");
+        std::fs::write(&input, source).unwrap();
+        assert!(canonical_guest(&input, None).unwrap_err().to_string().contains("async guest functions"));
+        let world = parse(source, None).unwrap();
+        let files = experimental_async_guest(&input, None).unwrap();
+        let adapter = String::from_utf8(files["perry_adapter.c"].clone()).unwrap();
+        let contract = serde_json::to_vec(&world).unwrap().iter().map(u8::to_string).collect::<Vec<_>>().join(",");
+        assert!(adapter.contains(&format!("perry_contract[] = {{{contract}}}")));
+        assert!(adapter.contains("perry_component_frame_task_checkpoint"));
+        assert!(!adapter.contains("perry_component_frame_call(f,"));
+        assert!(!adapter.contains("CALLBACK_CODE_YIELD"));
+        for (name, bytes) in files { std::fs::write(dir.path().join(name), bytes).unwrap(); }
+        let output = std::process::Command::new("clang").args(["-std=c11", "-Wall", "-Werror", "-Wno-unused-function", "-fsyntax-only"]).arg(dir.path().join("perry_adapter.c")).output().unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    }
+}
+
+#[test]
+fn experimental_async_exports_reject_unqualified_imports_resources_and_async_values() {
+    for (source, expected) in [
+        ("package test:profile; world plugin { import call: async func(); export run: async func(); }", "async imports"),
+        ("package test:profile; interface api { resource item; run: async func() -> own<item>; } world plugin { export api; }", "resources"),
+        ("package test:profile; world plugin { export run: async func() -> future<u32>; }", "future/stream"),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("world.wit");
+        std::fs::write(&input, source).unwrap();
+        assert!(experimental_async_guest(&input, None).unwrap_err().to_string().contains(expected));
+    }
+}

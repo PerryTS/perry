@@ -36,6 +36,9 @@ uint32_t perry_component_frame_get(void *, uint32_t, const uint8_t *, size_t);
 void perry_component_frame_array_set(void *, uint32_t, uint32_t, uint32_t);
 uint32_t perry_component_frame_array_get(void *, uint32_t, uint32_t);
 uint32_t perry_component_frame_array_len(void *, uint32_t);
+/* Copy into a distinct conversion frame before entering task_resume. The
+   source and destination may also be equal. No JS or jobs are driven. */
+uint32_t perry_component_frame_copy(void *destination, void *source, uint32_t);
 double perry_component_frame_get_number(void *, uint32_t);
 double perry_component_frame_get_integer(void *, uint32_t, double, double);
 int32_t perry_component_frame_get_bool(void *, uint32_t);

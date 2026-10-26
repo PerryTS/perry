@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 pub use guest_c::canonical_guest;
+#[doc(hidden)]
+pub use guest_c::experimental_async_guest;
 pub use resolve::{parse, parse_file};
 pub use typescript::{typescript, typescript_guest};
 

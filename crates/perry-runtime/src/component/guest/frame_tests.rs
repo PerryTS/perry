@@ -578,3 +578,45 @@ fn guest_frame_drop_after_cell_teardown_never_resolves_its_stale_link() {
         );
     }
 }
+
+#[test]
+fn copied_frame_slots_survive_source_drop_and_moving_gc_including_self_copy() {
+    let _nursery = crate::gc::CopyingNurseryTestGuard::new(0);
+    let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _evacuate = crate::gc::knob_overrides::ForcedEvacuationTestGuard::on();
+    crate::gc::gc_init();
+    unsafe {
+        let source = perry_component_frame_new();
+        let destination = perry_component_frame_new();
+        let text = "independent frame ownership 🌍";
+        let value = perry_component_frame_string(source, text.as_ptr(), text.len());
+        let copied = perry_component_frame_copy(destination, source, value);
+        perry_component_frame_drop(source);
+        let before = super::frame(destination).get(copied).to_bits();
+        crate::gc::gc_collect_minor();
+        assert_ne!(before, super::frame(destination).get(copied).to_bits());
+        let copied = perry_component_frame_copy(destination, destination, copied);
+        let mut output = vec![0; text.len()];
+        perry_component_frame_string_copy(destination, copied, output.as_mut_ptr(), output.len());
+        assert_eq!(output, text.as_bytes());
+        assert_eq!(perry_component_frame_failed(destination), 0);
+        perry_component_frame_drop(destination);
+    }
+}
+
+#[test]
+fn copying_an_invalid_slot_fails_only_the_destination_and_preserves_its_first_error() {
+    crate::gc::gc_init();
+    unsafe {
+        let source = perry_component_frame_new();
+        let destination = perry_component_frame_new();
+        assert_eq!(perry_component_frame_copy(destination, source, u32::MAX), 0);
+        assert_eq!(perry_component_frame_failed(source), 0);
+        assert_eq!(perry_component_frame_failed(destination), 1);
+        let error = super::frame(destination).error().unwrap().to_bits();
+        assert_eq!(perry_component_frame_copy(destination, source, u32::MAX), 0);
+        assert_eq!(super::frame(destination).error().unwrap().to_bits(), error);
+        perry_component_frame_drop(destination);
+        perry_component_frame_drop(source);
+    }
+}

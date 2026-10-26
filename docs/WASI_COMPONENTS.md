@@ -406,7 +406,7 @@ Resolution uses the existing Promise resolution algorithm, including thenable
 assimilation, without draining jobs. Duplicate completion and invalid slots keep
 the first outcome/error; an expired or foreign task cannot settle the import.
 C must retain typed argument/result buffers until canonical use ends, then drop
-the frame exactly once. These runtime operations do not implement that generated
+the frame exactly once. These runtime operations alone do not implement a generated
 C scheduler or its cancellation policy. The
 [deferred import receipt](validation/wasi-guest-import-frames-20261026.json)
 records native runtime tests, a WASI archive with the new symbols, and fresh
@@ -422,6 +422,37 @@ with wasi-sdk and a Cargo target directory. This fixture has no Perry JS runtime
 it does not qualify generated Perry async adapters or cooperative cancellation.
 The [wake receipt](validation/wasi-canonical-wake-20261026.json) records its exact
 source and toolchain. Public async guest generation remains guarded.
+
+An experimental generator (the `perry-wit` crate's `async_guest` example,
+separate from the public CLI) now connects the maintained C backend to Perry task
+frames for async exports. Each call owns its frame and canonical waitable set. Unit-stream
+wakeups resume the owning task without repeated `YIELD` or guest clock polling;
+synchronous sibling exports use task-scoped checkpoints too. A private closed
+stream export supplies the maintained backend's stream helpers without changing
+the public manifest or its registration indices. Result conversion uses a
+distinct rooted frame under `task_resume`, then leaves Rust before canonical
+`task.return` and `EXIT`.
+
+Run `scripts/component_async_guest_exports_acceptance.py` with a WASI compiler,
+matching runtime archive, wasi-sdk and Cargo target directory. The actual Perry
+guest exercises reverse-order completion, a still-pending sibling, Unicode and
+bytes, collection inside result getters, immediate and void returns, and idle
+after every round. It also checks verified moving GC and the native host's
+existing policy of retiring the Store and siblings on rejection or dropping a
+started call. This is **not cooperative canonical cancellation**: the
+experimental C scheduler traps on unsupported events. Its profile rejects async
+imports, resources and future/stream guest values. Module initialization is
+synchronous; its unowned jobs can be adopted by the first task. See the
+[generated async export receipt](validation/wasi-generated-async-exports-20261026.json).
+
+Native runtime tests verify ALS restoration across task callbacks. This WASI
+guest does not instantiate `AsyncLocalStorage`: its constructor currently lives
+in the native stdlib, and the supported WASI link includes only the runtime
+archive. Attempting that import produced an unresolved
+`js_async_local_storage_new` symbol. The experimental export checks do not
+qualify that guest API, async import callbacks, resource cancellation, other host
+platforms or distribution packages. Public `--guest-c` async output remains
+guarded while those adapters are completed.
 
 The internal generic-reader checks additionally cover canonical layouts from
 `wit-parser::SizeAlign`, shared metadata for repeated aliases, a reusable

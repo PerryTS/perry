@@ -1,5 +1,6 @@
 //! The maintained C backend owns the canonical ABI. This module connects its
 //! typed C functions to Perry's rooted frame API; it never invents Wasm layouts.
+mod asynchronous;
 mod values;
 
 use anyhow::{ensure, Result};
@@ -17,6 +18,25 @@ use wit_parser::{
 type Names = BTreeMap<TypeId, String>;
 
 pub fn canonical_guest(path: &Path, selected: Option<&str>) -> Result<BTreeMap<String, Vec<u8>>> {
+    generate_guest(path, selected, false)
+}
+
+/// Internal acceptance probe for generated async exports. This deliberately
+/// does not enable --guest-c async output: imports, cancellation and async
+/// values still need qualification before the public guard can be removed.
+#[doc(hidden)]
+pub fn experimental_async_guest(
+    path: &Path,
+    selected: Option<&str>,
+) -> Result<BTreeMap<String, Vec<u8>>> {
+    generate_guest(path, selected, true)
+}
+
+fn generate_guest(
+    path: &Path,
+    selected: Option<&str>,
+    experimental: bool,
+) -> Result<BTreeMap<String, Vec<u8>>> {
     let mut resolve = Resolve::default();
     let (package, _) = resolve.push_path(path)?;
     let id = resolve.select_world(&[package], selected)?;
@@ -32,14 +52,21 @@ pub fn canonical_guest(path: &Path, selected: Option<&str>) -> Result<BTreeMap<S
         "future/stream guest values require the P3 rooted-frame adapter"
     );
     ensure!(
-        world
-            .imports
-            .iter()
-            .chain(&world.exports)
-            .flat_map(|i| &i.functions)
-            .all(|f| !f.async_),
+        experimental
+            || world
+                .imports
+                .iter()
+                .chain(&world.exports)
+                .flat_map(|i| &i.functions)
+                .all(|f| !f.async_),
         "async guest functions require the P3 rooted-frame adapter"
     );
+    let anchor = if experimental {
+        asynchronous::check_profile(&world)?;
+        Some(asynchronous::add_wake_anchor(&mut resolve, id)?)
+    } else {
+        None
+    };
     let mut files = Files::default();
     wit_bindgen_c::Opts {
         no_sig_flattening: true,
@@ -62,6 +89,7 @@ pub fn canonical_guest(path: &Path, selected: Option<&str>) -> Result<BTreeMap<S
         resource_operations: BTreeMap::new(),
         source: format!("#include \"{snake}.h\"\n#include \"perry_component_frame.h\"\n"),
         imports: Vec::new(),
+        anchor,
     };
     generator.generate()?;
     output.insert("perry_adapter.c".into(), generator.source.into_bytes());
@@ -90,6 +118,7 @@ struct Generator<'a> {
     resource_operations: BTreeMap<u32, Resource>,
     source: String,
     imports: Vec<(usize, usize)>,
+    anchor: Option<String>,
 }
 
 impl Generator<'_> {
@@ -137,6 +166,12 @@ impl Generator<'_> {
     fn generate(&mut self) -> Result<()> {
         self.source
             .push_str("static void perry_initialize(void *f);\n");
+        if let Some(anchor) = &self.anchor {
+            self.source.push_str(&asynchronous::scheduler(
+                &self.resolve.worlds[self.id].name.to_snake_case(),
+                anchor,
+            ));
+        }
         let world = &self.resolve.worlds[self.id];
         // Match WorldGenerator's visitation order, including the separate
         // namespaces when an interface is both imported and exported.
@@ -172,6 +207,9 @@ impl Generator<'_> {
             self.define(live, None, import);
             for item in items.values() {
                 if let WorldItem::Function(function) = item {
+                    if !import && self.anchor.as_deref() == Some(&function.name) {
+                        continue;
+                    }
                     self.function(None, function, import)?;
                 }
             }
@@ -282,6 +320,9 @@ static void perry_initialize(void *f) {
             function,
             &HashMap::new(),
         );
+        if !import && self.anchor.is_some() {
+            return self.experimental_export(function, i, f, &cname);
+        }
         let indirect = function
             .result
             .is_some_and(|ty| wit_bindgen_c::is_arg_by_pointer(self.resolve, &ty));
