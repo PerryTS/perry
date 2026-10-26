@@ -315,17 +315,16 @@ impl<'a> Gen<'a> {
                 // it computes. The main record is what `process.mainModule`
                 // reads (`builtins`). The result is `require.extensions`.
                 if let Some(cache) = arg(0) {
+                    // The runtime caches a record under its own canonical
+                    // path only: a compiled module's record is the slot's
+                    // birth publication already, and a module outside the
+                    // graph is cached under a key no static read names. So
+                    // a static edge's read of its target's slot (CJL2) sees
+                    // that target's record, never the registry summary; the
+                    // summary is reached through the computed paths only
+                    // (`requirePathModule`, the program's `require` with a
+                    // computed specifier, DECISIONS 150).
                     self.m.edge(cache, self.m.cjs_cache);
-                    let registry = self.cjs_registry;
-                    self.store(
-                        fx,
-                        cache,
-                        Key::Any,
-                        registry,
-                        "records the runtime caches".into(),
-                        None,
-                        false,
-                    );
                 }
                 if let Some(main) = arg(1) {
                     self.m.edge(main, self.m.cjs_main);
