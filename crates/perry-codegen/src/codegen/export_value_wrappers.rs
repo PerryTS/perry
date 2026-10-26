@@ -52,14 +52,6 @@ pub(super) fn emit_export_value_wrappers(c: ExportValueWrapperCtx<'_>) {
                 return None;
             }
             import
-                        .source
-                        .strip_prefix("node:")
-                        .unwrap_or(&import.source),
-                ) && !perry_hir::is_bare_prefix_only_builtin(&import.source))
-            {
-                return None;
-            }
-            import
                 .specifiers
                 .iter()
                 .find_map(|specifier| match specifier {
