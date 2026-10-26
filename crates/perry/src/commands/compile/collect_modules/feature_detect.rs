@@ -283,15 +283,16 @@ pub(super) fn detect_optional_feature_usage(
     // negatives; including more HIR can only over-include a feature).
     let hir_debug = module_hir_debug(hir_module);
 
-    // #11125: these global constructors call stdlib stream FFIs without an
-    // import or a NativeMethodCall. Discover them before entry codegen emits
-    // dispatcher initialization; link-time symbol discovery is too late.
-    // Include value-form constructors and uses nested in class/function bodies.
+    // Web Streams constructors and FileHandle.readableWebStream call the
+    // stdlib factories. Select them when an API is named, including extracted
+    // methods and uses in class/function bodies, rather than for every
+    // fs/promises import. The FileHandle reaches the factory through its slot.
     if [
         "CompressionStream",
         "DecompressionStream",
         "TextEncoderStream",
         "TextDecoderStream",
+        "readableWebStream",
     ]
     .iter()
     .any(|name| hir_debug.contains(name))

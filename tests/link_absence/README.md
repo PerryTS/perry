@@ -44,3 +44,13 @@ for the subsystem's largest symbol and prints the real linker chain. Full
 build logs stay in the output directory. `--record-known-failures` is only for
 reviewed baseline measurement; CI never passes it. `--negative-only` is a diagnostic
 and sabotage shortcut; CI always executes all positive witnesses.
+
+The explicit stdlib witnesses `bundled_web_streams.ts` and `brotli_streams.ts`
+exercise FileHandle streams (including native property bags) and Brotli output.
+`fs_promises_without_streams.ts` reads a file without a stream API. Its required
+absence checks also reject a wrongly selected streams installer, so compiler
+over-selection cannot silently exempt that negative from the symbol check.
+A `HWS companion` declaration adds an independent positive for an existing
+absence rule. Its hook must match the owner and all its prefixes must be covered
+by that rule. This keeps the FileHandle API-selection test independent of the
+Brotli constructor test while requiring both engines absent in the file read.

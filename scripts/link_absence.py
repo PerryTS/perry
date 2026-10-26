@@ -25,6 +25,12 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "tests/link_absence"
+NEGATIVES = {
+    "hello": None,
+    "without_math": ["global_math"],
+    "without_regex": ["regex_engine"],
+    "fs_promises_without_streams": ["bundled_web_streams"],
+}
 
 
 def run(cmd, *, cwd=None, env=None, timeout=180):
@@ -56,21 +62,32 @@ def inventory():
     section = source.split("const RUNTIME_INSTALLS:", 1)[1].split("\n];", 1)[0]
     hooks = set(re.findall(r'"(js_runtime_install_\w+)"', section))
     assert hooks, "RUNTIME_INSTALLS not found"
+    stdlib_section = source.split("const INSTALLS:", 1)[1].split("\n];", 1)[0]
+    stdlib_hooks = set(re.findall(r'"(js_stdlib_install_\w+)"', stdlib_section))
     fixtures = {}
     for path in sorted(FIXTURES.glob("*.ts")):
-        if path.stem in ("hello", "without_math", "without_regex"):
+        if path.stem in NEGATIVES:
             continue
         source = path.read_text()
         hook = re.search(r"^// HWS hook: (.+)$", source, re.M)
         rule = re.search(r"^// HWS prefixes: (.+)$", source, re.M)
         assert hook and rule, f"{path}: missing hook/prefix declaration"
         hook = hook[1]
-        assert hook in hooks or hook == "none (no hook yet)", f"{path}: unknown hook {hook}"
+        assert hook in hooks | stdlib_hooks or hook == "none (no hook yet)", f"{path}: unknown hook {hook}"
         prefixes = rule[1].split("|")
         assert all(prefixes), f"{path}: empty prefix matches every symbol"
-        if hook in hooks:
+        if hook in hooks | stdlib_hooks:
             prefixes.append(hook)
-        fixtures[path.stem] = {"hook": hook, "prefixes": prefixes}
+        companion = re.search(r"^// HWS companion: (.+)$", source, re.M)
+        fixtures[path.stem] = {"hook": hook, "prefixes": prefixes,
+                               "companion": companion[1] if companion else None}
+    for name, fixture in fixtures.items():
+        parent = fixture["companion"]
+        if parent:
+            assert parent in fixtures and parent != name, f"{name}: unknown companion owner {parent}"
+            owner = fixtures[parent]
+            assert not owner["companion"] and fixture["hook"] == owner["hook"], f"{name}: companion hook differs"
+            assert set(fixture["prefixes"]) <= set(owner["prefixes"]), f"{name}: companion symbols lack an absence rule"
     covered = {f["hook"] for f in fixtures.values()}
     assert hooks <= covered, f"new runtime hooks need positive witnesses: {sorted(hooks-covered)}"
     return fixtures
@@ -180,6 +197,13 @@ def compile_witness(args, name, env, extra=""):
     assert len(installs) == 1, f"{name}: missing selected runtime install evidence"
     selected = set(installs[0].decode().split(", ")) - {""}
     assert "js_runtime_install_compiled" not in selected, "full installs invalidate absence check"
+    stdlib_installs = re.findall(rb"stdlib installs: ([^\r\n]*)", log)
+    assert len(stdlib_installs) <= 1, f"{name}: duplicate stdlib install evidence"
+    if stdlib_installs:
+        selected.update(set(stdlib_installs[0].decode().split(", ")) - {""})
+        assert "js_stdlib_install_compiled" not in selected, "full stdlib installs invalidate absence check"
+        expected_stdlib = str(Path(env["PERRY_RUNTIME_DIR"])/"libperry_stdlib.a").encode()
+        assert expected_stdlib in log, f"{name}: did not link the pinned stdlib archive"
     return binary, selected, log
 
 
@@ -188,12 +212,16 @@ def why_live(args, name, symbol, env, demangler):
     if sys.platform == "darwin":
         # Apple's final symbol table drops LTO's .llvm.<id> suffix. why_live
         # needs the input atom spelling, not that renamed output symbol.
-        archive = Path(env["PERRY_RUNTIME_DIR"])/"libperry_runtime.a"
-        listing = checked([tool("llvm-nm"), "--format=posix", "--defined-only", archive])
-        candidates = [line.split()[0] for line in listing.splitlines()
-                      if line.split() and line.split()[0].startswith(raw+".llvm.")]
-        if candidates:
-            raw = candidates[0]
+        for filename in ("libperry_runtime.a", "libperry_stdlib.a"):
+            archive = Path(env["PERRY_RUNTIME_DIR"])/filename
+            if not archive.is_file():
+                continue
+            listing = checked([tool("llvm-nm"), "--format=posix", "--defined-only", archive])
+            candidates = [line.split()[0] for line in listing.splitlines()
+                          if line.split() and line.split()[0].startswith(raw+".llvm.")]
+            if candidates:
+                raw = candidates[0]
+                break
         flags = f"-Wl,-why_live,{raw}"
     else:
         flags = f"-fuse-ld=lld -Wl,--why-live={raw}"
@@ -234,13 +262,13 @@ def main():
     known_path = FIXTURES / "known-failing" / (key+".json")
     known = json.loads(known_path.read_text()) if known_path.exists() else {"lane": "HWS2", "symbols": {}}
     assert known["lane"] == "HWS2", "unknown exception owner"
-    assert set(known["symbols"]) <= set(fixtures), "exceptions for removed subsystem rules"
+    assert set(known["symbols"]) <= {n for n,f in fixtures.items() if not f["companion"]}, "exceptions for removed subsystem rules"
     env = dict(os.environ)
     env["PATH"] = str(Path(nm).parent) + os.pathsep + env.get("PATH", "")
     env.setdefault("PERRY_RUNTIME_DIR", str(Path(args.perry).parent))
     report = {"platform": key, "node": node_version, "witnesses": {}, "subsystems": {}, "failures": []}
     exceptions = {}
-    names = ["hello", "without_math", "without_regex"] + ([] if args.negative_only else list(fixtures))
+    names = list(NEGATIVES) + ([] if args.negative_only else list(fixtures))
     for name in names:
         try:
             binary, selected, _ = compile_witness(args, name, env)
@@ -257,36 +285,37 @@ def main():
             syms, text = symbols(binary, nm, demangler)
             report["witnesses"][name] = {"text_bytes": text, "binary_bytes": binary.stat().st_size,
                                           "installs": sorted(selected), "parity": True}
-            if name not in ("hello", "without_math", "without_regex"):
+            if name not in NEGATIVES:
                 fixture = fixtures[name]
                 assert any(matches(s, fixture) for s in syms), f"{name}: positive linked no matching symbols"
                 if fixture["hook"].startswith("js_"):
                     assert fixture["hook"] in selected, f"{name}: positive did not install {fixture['hook']}"
             else:
-                candidates = (fixtures.items() if name == "hello" else
-                              [("global_math", fixtures["global_math"])] if name == "without_math" else
-                              [("regex_engine", fixtures["regex_engine"])])
+                candidates = (((n,f) for n,f in fixtures.items() if not f["companion"]) if NEGATIVES[name] is None else
+                              [(subsystem, fixtures[subsystem]) for subsystem in NEGATIVES[name]])
                 for subsystem, fixture in candidates:
                     hit = [s for s in syms if matches(s, fixture)]
                     installed = fixture["hook"] in selected
-                    if name != "hello":
-                        assert not installed, f"{name}: negative witness unexpectedly installs {subsystem}"
-                    observed = sorted({s["name"] for s in hit}) if not installed else []
+                    forced_absent = name != "hello"
+                    checked_absence = not installed or forced_absent
+                    observed = sorted({s["name"] for s in hit}) if checked_absence else []
                     allowed = known["symbols"].get(subsystem, [])
                     new = sorted(set(observed)-set(allowed))
-                    failure = not installed and bool(new)
-                    stale = not installed and bool(allowed) and not observed
+                    failure = checked_absence and (bool(new) or (forced_absent and installed))
+                    stale = checked_absence and bool(allowed) and not observed
                     row = {"hook": fixture["hook"], "installed": installed, "linked": bool(hit),
                            "bytes": sum({s["address"]:s["bytes"] for s in hit}.values()),
                            "symbols": len(observed), "new_symbols": new,
-                           "status": "installed" if installed else "HWS2" if observed and not failure else "FAIL" if failure else "absent"}
+                           "status": "FAIL" if failure else "installed" if installed else "HWS2" if observed else "absent"}
                     if name == "hello":
                         report["subsystems"][subsystem] = row
                     else:
-                        report["math_negative" if name == "without_math" else "regex_negative"] = row
+                        report.setdefault("negative_witnesses", {}).setdefault(name, {})[subsystem] = row
+                        if name in ("without_math", "without_regex"):
+                            report["math_negative" if name == "without_math" else "regex_negative"] = row
                     if observed:
                         exceptions[subsystem] = observed
-                    if hit and not installed and (args.record_known_failures or failure):
+                    if hit and checked_absence and (args.record_known_failures or failure):
                         largest = max(hit, key=lambda s:s["bytes"])
                         row["largest"] = largest
                         row["why_live"] = why_live(args, name, largest, env, demangler)
@@ -295,7 +324,8 @@ def main():
                         if failure and not args.record_known_failures:
                             print(f"FAIL {subsystem}: new linked symbols {new[:3]}; largest={largest['name']}\n{row['why_live']}", flush=True)
                     if failure and not args.record_known_failures:
-                        report["failures"].append(f"{subsystem}: uninstalled subsystem has new linked symbols")
+                        reason = "negative witness selected a forbidden install" if forced_absent and installed else "uninstalled subsystem has new linked symbols"
+                        report["failures"].append(f"{subsystem}: {reason}")
                     if stale and not args.record_known_failures:
                         report["failures"].append(f"{subsystem}: fixed; remove HWS2 exception to lock in absence")
             print(f"{name}: parity ok, text={text}, installs={len(selected)}", flush=True)
