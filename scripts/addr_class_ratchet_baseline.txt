@@ -137,7 +137,7 @@ handle-floor | crates/perry-runtime/src/object/object_ops/keys_array.rs | 6
 handle-floor | crates/perry-runtime/src/object/object_ops_frozen.rs | 4
 handle-floor | crates/perry-runtime/src/object/polymorphic_index.rs | 2
 handle-floor | crates/perry-runtime/src/object/property_key.rs | 1
-handle-floor | crates/perry-runtime/src/object/prototype_chain.rs | 2
+handle-floor | crates/perry-runtime/src/object/prototype_chain.rs | 1
 handle-floor | crates/perry-runtime/src/object/prototype_helpers.rs | 1
 handle-floor | crates/perry-runtime/src/object/reflect_support.rs | 2
 handle-floor | crates/perry-runtime/src/object/to_string_tag.rs | 10
@@ -238,7 +238,6 @@ lone-valid-obj-ptr | crates/perry-runtime/src/object/object_ops/from_entries.rs 
 lone-valid-obj-ptr | crates/perry-runtime/src/object/object_ops/has_own.rs | 2
 lone-valid-obj-ptr | crates/perry-runtime/src/object/object_ops/keys_array.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/object/polymorphic_index.rs | 1
-lone-valid-obj-ptr | crates/perry-runtime/src/object/prototype_chain.rs | 2
 lone-valid-obj-ptr | crates/perry-runtime/src/object/util_types.rs | 3
 lone-valid-obj-ptr | crates/perry-runtime/src/process/env_misc.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/proxy.rs | 2
