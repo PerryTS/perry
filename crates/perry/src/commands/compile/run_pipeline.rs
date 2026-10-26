@@ -3826,11 +3826,6 @@ pub fn run_with_parse_cache(
                 .iter()
                 .filter(|(p, module)| {
                     module.init_kind == perry_hir::ModuleInitKind::Deferred
-                            // A require edge runs its target's init directly;
-                            // only a program that can require by path (not
-                            // closed) needs the path anchor for it.
-                            || (module.init_kind == perry_hir::ModuleInitKind::OnDemand
-                                && !ctx.cjs_closed)
                             || self::collect_modules::is_nextjs_runtime_module(p)
                             // A `perry.compilePackages` module may be reachable
                             // ONLY through a runtime-computed require (Next's
@@ -3844,6 +3839,19 @@ pub fn run_with_parse_cache(
                                 .any(|dir| p.starts_with(dir))
                 })
                 .map(|(p, m)| (p.to_string_lossy().into_owned(), sanitize_name(&m.name)))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        // A require edge runs its target's init directly; only a program that
+        // can require by path (not closed) needs the anchor of an on-demand
+        // module, and only once it looks a path up: registered lazily.
+        let lazy_path_init_modules: Vec<(String, String)> = if is_entry && !ctx.cjs_closed {
+            ctx.native_modules
+                .iter()
+                .filter(|(_, module)| module.init_kind == perry_hir::ModuleInitKind::OnDemand)
+                .map(|(p, m)| (p.to_string_lossy().into_owned(), sanitize_name(&m.name)))
+                .filter(|pair| !nextjs_path_init_modules.contains(pair))
                 .collect()
         } else {
             Vec::new()
@@ -6202,6 +6210,7 @@ pub fn run_with_parse_cache(
                 .cloned()
                 .unwrap_or_default(),
             nextjs_path_init_modules,
+            lazy_path_init_modules,
             deferred_module_prefixes,
             module_init_deps,
             // Issue #842: signal side-effect-only dynamic-import
