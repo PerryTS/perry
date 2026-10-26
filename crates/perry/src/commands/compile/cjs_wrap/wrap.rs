@@ -1499,12 +1499,14 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
     } else {
         "    if (__perry_cjs_open()) {\n        __cjs_module.parent = __perry_cjs_take_pending();\n    }"
     };
-    // Module scope: the record binding, the cold-path loader, and one link
+    // Module scope: the record binding (a `var`: a requiring module reads it
+    // before evaluation in a program that is not closed), the cold-path
+    // loader, and one link
     // flag and one edge per (this module, target) pair (design CJS_LINK
     // §2.2). Nothing here allocates at startup; the edges are functions of
     // the module, not closures of the factory.
     let mut cjs_link_decls = format!(
-        r#"export let {record};
+        r#"export var {record};
 // This module's own loader for the cold paths (a reload after
 // `delete require.cache[...]`, a computed specifier outside the graph),
 // created on first use: `createRequire` costs ~117k instructions.
@@ -1560,7 +1562,10 @@ function __perry_require_static_{i}() {{
         // a new record, so the parent link is a scan.
         const cached = __perry_cjs_cache[{path}];
         if (cached !== undefined) {{ __perry_cjs_link(__perry_cjs_record, cached); {warn_cached}return cached.exports; }}
-        if (__perry_has_path_module({path})) return __perry_cjs_reloader()({path});
+        // Evaluated before (its record binding is set) and its entry is gone:
+        // Node re-runs it. A `var`, so the read before evaluation is
+        // `undefined`, with no lookup in the path registry.
+        if (__perry_cjs_rec_{i} !== undefined) return __perry_cjs_reloader()({path});
         {handoff_init}
         __perry_cjs_link(__perry_cjs_record, record);
         {warn_record}return record.exports;

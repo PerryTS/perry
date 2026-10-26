@@ -16,7 +16,7 @@ fn a_literal_require_in_the_body_is_the_edge_not_a_call_of_require() {
     let source = wrapped("const a = 1;\nconsole.log(require('./x.cjs').value);\n");
     assert!(source.contains("console.log(__perry_require_static_0().value);"), "{source}");
     assert!(source.contains("import { __perry_cjs_record as __perry_cjs_rec_0 } from"), "{source}");
-    assert!(source.contains("export let __perry_cjs_record;"), "{source}");
+    assert!(source.contains("export var __perry_cjs_record;"), "{source}");
     // The `require` function's arm is the same edge, for `require` as a value.
     assert!(source.contains("if (specifier === \"./x.cjs\") return __perry_require_static_0();"), "{source}");
 }

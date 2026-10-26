@@ -33,7 +33,7 @@ fn run(h: &[(String, Module)], unit: bool) -> ProgramFacts {
 // factory before the body.
 fn target(class: &str, value: &str) -> String {
     format!(
-        "class {class} {{ x = {value}; }}\nexport let __perry_cjs_record;\n(function () {{ __perry_cjs_record = {{ exports: new {class}(), loaded: false }}; }})();\n"
+        "class {class} {{ x = {value}; }}\nexport var __perry_cjs_record;\n(function () {{ __perry_cjs_record = {{ exports: new {class}(), loaded: false }}; }})();\n"
     )
 }
 
