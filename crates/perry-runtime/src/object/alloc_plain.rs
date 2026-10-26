@@ -8,6 +8,7 @@
 
 use super::*;
 use crate::array::ArrayHeader;
+use crate::codegen_abi::LayoutWord;
 
 /// #8098: mark `obj` as an ORDINARY plain object — class-less, but with no
 /// per-object `[[Set]]` semantics of its own, so the object-write fast paths
@@ -51,7 +52,7 @@ pub(crate) fn alloc_plain_record_with_keys(
 pub(crate) fn alloc_plain_record_inline_keys_stamped(
     field_count: u32,
     keys_array: *mut ArrayHeader,
-    shape_id: u32,
+    shape_id: LayoutWord,
 ) -> *mut ObjectHeader {
     let rep = super::field_rep::REP_ANY;
     alloc_class_inline_keys_stamped_impl(0, 0, field_count, keys_array, shape_id, rep, true)
@@ -83,12 +84,12 @@ pub(super) fn class_keys_birth_rep(
     if id == 0 || cached.arr() != keys.arr() || cached.count() != keys.count() {
         return super::field_rep::REP_ANY;
     }
-    shape_rep_of(id)
+    shape_rep_of(LayoutWord(id))
 }
 
 /// The birth rep an id names (`F64` for a lane its lineage has since
 /// deprecated: a birth still carries it, `birth_fill_f64_lanes`).
-pub(super) fn shape_rep_of(shape_id: u32) -> u64 {
+pub(super) fn shape_rep_of(shape_id: LayoutWord) -> u64 {
     crate::object::shapes::shape_record_for_word(shape_id).map_or(super::field_rep::REP_ANY, |r| {
         super::field_rep::identity(r.rep())
     })
@@ -109,7 +110,7 @@ pub(super) fn alloc_class_instance_with_keys_impl(
         parent_class_id,
         field_count,
         keys,
-        0,
+        LayoutWord(0),
         premark_plain,
     );
     unsafe {
@@ -140,7 +141,7 @@ pub(super) fn alloc_class_inline_keys_stamped_impl(
     parent_class_id: u32,
     field_count: u32,
     keys_array: *mut ArrayHeader,
-    shape_id: u32,
+    shape_id: LayoutWord,
     rep: u64,
     premark_plain: bool,
 ) -> *mut ObjectHeader {
@@ -173,7 +174,7 @@ pub(super) fn alloc_class_inline_keys_stamped_impl(
 #[inline]
 fn preinstalled_class_keys(
     keys_array: *mut ArrayHeader,
-    shape_id: u32,
+    shape_id: LayoutWord,
 ) -> crate::object::ObjectKeys {
     let descriptor = crate::object::shapes::shape_descriptor_for_word(shape_id);
     if let Some(descriptor) = descriptor {

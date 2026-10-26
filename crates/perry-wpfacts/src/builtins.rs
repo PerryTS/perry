@@ -72,16 +72,40 @@ pub fn set_dyn_eval(m: &mut Model, why: &str) {
 }
 
 fn unknown_method(m: &mut Model, call: CallId, why: &str) {
+    unknown_method_proto(m, call, why, None, false)
+}
+
+/// `unknown_method`, where argument `proto` becomes a prototype
+/// (`Object.create`, `setPrototypeOf`): reachable only along the prototype
+/// chain of the object it ends up in, it escapes as the prototypes of an
+/// escaped value do (`Model::chain_sinks`), no runtime-owned object given
+/// to unknown code. `own`: the method is the runtime's own method of its
+/// receiver (a builtin namespace's, a builtin function's), which gives that
+/// object to no one.
+fn unknown_method_proto(m: &mut Model, call: CallId, why: &str, proto: Option<usize>, own: bool) {
     let c = m.calls[call as usize].clone();
     let r = m.reason(why);
-    for &a in c.args.iter().chain(c.spread.iter()) {
+    for (i, &a) in c.args.iter().enumerate() {
+        if proto == Some(i) {
+            let n = m.node_l("proto-arg");
+            m.chain_sinks.insert(n);
+            m.cons(n, Cons::TopSink { reason: r });
+            m.edge(a, n);
+        } else {
+            m.sink_node(a, r);
+        }
+    }
+    for &a in &c.spread {
         m.sink_node(a, r);
     }
     // A method run on one receiver token sees that token as `this`, not
     // every token of the receiver node.
+    let kept = |m: &Model, t: Tok| own && m.named_shared(t).is_some();
     match (m.cur_this, &c.this) {
+        (Some(t), _) if kept(m, t) => {}
         (Some(t), _) => m.escape(t, r),
         (None, ThisArg::Node(n)) => m.sink_node(*n, r),
+        (None, ThisArg::Tok(t)) if kept(m, *t) => {}
         (None, ThisArg::Tok(t)) => m.escape(*t, r),
         (None, ThisArg::Undef) => {}
     }
@@ -204,11 +228,56 @@ pub fn resolver(m: &mut Model, dst: NodeId) -> Tok {
         lexical_this: true,
         no_summary: false,
         gen_step: false,
+        captures: Vec::new(),
         forwards_super: false,
         parent: NO_FN,
+        forwarded: false,
     });
     m.add_prim(ret, prim::UNDEF);
     m.resolvers.insert(dst, tok);
+    tok
+}
+
+/// Another unit's accessor on a shared object (`Model::replay_shared`), a
+/// function this unit cannot see: what a lookup reached it from (its
+/// receiver) and what a setter is given reach that unit's code, and a
+/// getter returns an unknown value.
+pub fn other_unit_accessor(m: &mut Model) -> Tok {
+    if let Some(t) = m.other_accessor {
+        return t;
+    }
+    let fx = m.funcs.len() as FnIdx;
+    let tok = m.tok(TokKind::Func(fx, NO_CTX));
+    let this = m.node_l("this(another unit's accessor)");
+    let ret = m.node_l("ret(another unit's accessor)");
+    let args_all = m.node_l("args(another unit's accessor)");
+    let p = m.node_l("another unit's accessor-param");
+    let r = m.reason("given to another unit's accessor");
+    m.sink_node(this, r);
+    m.sink_node(p, r);
+    m.add_top(ret, |_| "result of another unit's accessor".into());
+    m.add_prim(ret, prim::ALL);
+    m.funcs.push(FuncInfo {
+        module: 0,
+        func_id: u32::MAX,
+        name: "<another unit's accessor>".into(),
+        params: vec![p],
+        rest: None,
+        this,
+        ret,
+        args_all,
+        has_arguments: false,
+        token: tok,
+        ctor_of: None,
+        lexical_this: false,
+        no_summary: true,
+        gen_step: false,
+        captures: Vec::new(),
+        forwards_super: false,
+        parent: NO_FN,
+        forwarded: false,
+    });
+    m.other_accessor = Some(tok);
     tok
 }
 
@@ -518,7 +587,7 @@ pub fn tok_store(m: &mut Model, t: Tok, _key: Key, src: NodeId) {
         | TokKind::ModNs(_)
         | TokKind::NativeProto(_) => {
             // E20: stored where the runtime / unmodeled code reads it.
-            if m.explain {
+            if m.explain && !m.shared_replay {
                 let kn = match _key {
                     Key::Named(a) => m.atoms[a as usize].clone(),
                     Key::Any => "[computed]".into(),
@@ -583,10 +652,12 @@ fn own_method_inner(m: &mut Model, t: Tok, key: Key, call: CallId) {
         TokKind::Func(_, _) | TokKind::Bound(_) => function_method(m, t, name.as_deref(), call),
         TokKind::BuiltinFn => match name.as_deref() {
             None => {}
-            Some(n) => unknown_method(
+            Some(n) => unknown_method_proto(
                 m,
                 call,
                 &format!("method {n} of an opaque builtin function"),
+                None,
+                true,
             ),
         },
         TokKind::NativeProto(_) => {}
@@ -739,6 +810,16 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
         (BuiltinNs::Object, "isFrozen" | "isSealed" | "isExtensible" | "is" | "hasOwn") => {
             ret_prim(m, call, prim::BOOL);
         }
+        (BuiltinNs::Object, "create") => {
+            unknown_method_proto(m, call, "argument of builtin Object.create", Some(0), true)
+        }
+        (BuiltinNs::Object | BuiltinNs::Reflect, "setPrototypeOf") => unknown_method_proto(
+            m,
+            call,
+            &format!("argument of builtin {ns:?}.setPrototypeOf"),
+            Some(1),
+            true,
+        ),
         (BuiltinNs::Object, "getPrototypeOf") | (BuiltinNs::Reflect, "getPrototypeOf") => {
             if let Some(o) = arg(m, call, 0) {
                 let ret = m.calls[call as usize].ret;
@@ -970,7 +1051,13 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
         (BuiltinNs::Function, _) => {
             // Not a method of the Function constructor (TypeError).
         }
-        (_, n) => unknown_method(m, call, &format!("argument of builtin {ns:?}.{n}")),
+        (_, n) => unknown_method_proto(
+            m,
+            call,
+            &format!("argument of builtin {ns:?}.{n}"),
+            None,
+            true,
+        ),
     }
 }
 
@@ -1395,7 +1482,7 @@ pub fn note_native_write(m: &mut Model, t: Tok, key: Option<Key>, what: &str) {
     } else {
         m.tok_name(t)
     };
-    if m.explain {
+    if m.explain && !m.shared_replay {
         eprintln!(
             "perry: wpfacts explain: may be written: {what} on {on} key {:?}",
             k.map(|a| m.atoms[a as usize].clone())
@@ -1436,7 +1523,7 @@ fn replay_native_missing(m: &mut Model) {
                 }
                 NativeMiss::Global(dst, f) => {
                     let name = m.atoms[a as usize].clone();
-                    if m.explain {
+                    if m.explain && !m.shared_replay {
                         let ws: Vec<String> = m
                             .native_writes
                             .iter()
@@ -1551,6 +1638,13 @@ pub fn global_field(m: &mut Model, g: Tok, a: Atom) -> NodeId {
     }
     let n = m.field(g, a);
     m.global_fields.push((a, n));
+    if m.global_cells {
+        m.global_late = true;
+        m.add_top(n, |_| "global named after the unit boundary".into());
+        m.add_prim(n, prim::ALL);
+        let r = m.reason("stored into a global named after the unit boundary");
+        m.sink_node(n, r);
+    }
     n
 }
 

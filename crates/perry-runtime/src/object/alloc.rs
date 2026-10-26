@@ -11,6 +11,7 @@ pub use super::alloc_basic::{
     js_object_alloc_with_parent, js_object_coerce,
 };
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 // Storage: `ObjectHotTables::class_keys_by_id` (this agent's class_id ->
 // (keys array address, field count) memo). See its field docs for why it is
@@ -411,7 +412,7 @@ pub(super) fn object_alloc_class_inline_keys_impl(
     parent_class_id: u32,
     field_count: u32,
     keys: crate::object::ObjectKeys,
-    preinstalled_shape_id: u32,
+    preinstalled_shape_id: LayoutWord,
     premark_plain: bool,
 ) -> (*mut ObjectHeader, u32, bool, crate::object::ObjectKeys) {
     if parent_class_id != 0 {
@@ -452,7 +453,7 @@ pub(super) fn object_alloc_class_inline_keys_impl(
         // descriptor directly when its keys facts and live-slot bound still
         // match; learned instance widening, key-count drift, and worker-local
         // first installs retain the exact mint-and-validate fallback.
-        let used_preinstalled_shape = preinstalled_shape_id != 0
+        let used_preinstalled_shape = preinstalled_shape_id != LayoutWord(0)
             && crate::object::shapes::try_birth_stamp_preinstalled_shape(
                 ptr,
                 preinstalled_shape_id,
@@ -551,6 +552,8 @@ pub extern "C" fn js_object_alloc_class_inline_keys_stamped(
     shape_id: u32,
     rep: u64,
 ) -> *mut ObjectHeader {
+    let shape_id = LayoutWord(shape_id);
+
     // The key count comes from the shape the module-init code minted beside
     // this keys global: the global holds only the array, and the array can
     // be a canonical backing longer than this class's list.
@@ -699,7 +702,7 @@ pub extern "C" fn js_object_alloc_class_with_keys(
     };
     // The entry's shape carries the class's birth rep (a module-init entry,
     // `js_build_class_keys_array`); every birth from it carries that rep too.
-    let rep = super::alloc_plain::shape_rep_of(runtime_shape_id);
+    let rep = super::alloc_plain::shape_rep_of(LayoutWord(runtime_shape_id));
 
     let (ptr, arr) = alloc_instance_keeping_keys(total_size, keys_arr.arr());
     let keys_arr = crate::object::ObjectKeys::new(arr, keys_arr.count());
@@ -716,7 +719,12 @@ pub extern "C" fn js_object_alloc_class_with_keys(
         // for every class that lands here — and a split population is a
         // permanent PIC miss, not a slow start. See
         // `shapes::birth_stamp_object_shape`.
-        crate::object::shapes::birth_stamp_object_shape(ptr, runtime_shape_id, field_count, rep);
+        crate::object::shapes::birth_stamp_object_shape(
+            ptr,
+            LayoutWord(runtime_shape_id),
+            field_count,
+            rep,
+        );
         if rep != super::field_rep::REP_ANY {
             super::field_rep_store::birth_fill_f64_lanes(ptr);
         }
@@ -835,7 +843,12 @@ pub extern "C" fn js_object_alloc_class_dynamic_parent(
         // The dynamically-parented subclass shape needs the same birth stamp
         // as every other class instance, or its sites split the same way.
         let rep = super::field_rep::REP_ANY;
-        crate::object::shapes::birth_stamp_object_shape(ptr, runtime_shape_id, field_count, rep);
+        crate::object::shapes::birth_stamp_object_shape(
+            ptr,
+            LayoutWord(runtime_shape_id),
+            field_count,
+            rep,
+        );
     }
     remember_class_keys(class_id, field_count, merged_arr);
     ptr
@@ -934,7 +947,7 @@ pub extern "C" fn js_object_alloc_with_shape(
         let stamped_from_cache = runtime_shape_id != 0
             && crate::object::shapes::try_birth_stamp_preinstalled_shape(
                 obj_ptr,
-                runtime_shape_id,
+                LayoutWord(runtime_shape_id),
                 keys_arr,
                 field_count,
             );
@@ -949,7 +962,7 @@ pub extern "C" fn js_object_alloc_with_shape(
             let rep = super::field_rep::REP_ANY;
             crate::object::shapes::birth_stamp_object_shape(
                 obj_ptr,
-                runtime_shape_id,
+                LayoutWord(runtime_shape_id),
                 field_count,
                 rep,
             );

@@ -199,8 +199,8 @@ pub(crate) struct ShapeRecord {
     /// an `F64` lane must be a plain double: the site tests the lane (`rep`,
     /// offset 48) unless it is. Offset 104.
     pub(crate) colour_store_mask: [u64; 2],
-    pub(crate) shape_id: u32,
-    pub(crate) layout_word: u32,
+    pub(crate) shape_id: ShapeId,
+    pub(crate) layout_word: LayoutWord,
 }
 
 // Derived once from the immutable key prefix on slab publication. Owned
@@ -309,8 +309,8 @@ impl ShapeRecord {
         probe: 0,
         colour_mask: [0; 2],
         colour_store_mask: [0; 2],
-        shape_id: 0,
-        layout_word: 0,
+        shape_id: ShapeId(0),
+        layout_word: LayoutWord(0),
     };
 
     #[inline]
@@ -435,8 +435,8 @@ impl ShapeRecord {
             probe: 0,
             colour_mask: [0; 2],
             colour_store_mask: [0; 2],
-            shape_id: 0,
-            layout_word: 0,
+            shape_id: ShapeId(0),
+            layout_word: LayoutWord(0),
         };
         record.refresh_positional();
         record
@@ -1440,7 +1440,7 @@ impl ShapeSlab {
         // Identity-boundary compatibility. Receivers never enter here.
         if let Some(ptr) = self.record_ptr(id) {
             let previous = unsafe { *ptr };
-            self.write_record(ptr, id.0, LayoutWord(previous.layout_word), record);
+            self.write_record(ptr, id.0, previous.layout_word, record);
             Some(previous)
         } else {
             self.publish_dynamic(id, record)
@@ -1462,8 +1462,8 @@ impl ShapeSlab {
             .identity_slot_ensure(record.proto_id)
             .map_or(0, |slot| slot as usize as u64);
         record.set(RECORD_FLAG_PRESENT, true);
-        record.shape_id = id;
-        record.layout_word = word.0;
+        record.shape_id = ShapeId(id);
+        record.layout_word = word;
         record.refresh_positional();
         record.refresh_symbol_presence();
         record.refresh_element_kind();
@@ -1543,7 +1543,7 @@ impl ShapeSlab {
     ) -> Result<PublishedShape, PublishError> {
         if let Some(p) = self.record_ptr(identity) {
             let existing = unsafe { &*p };
-            let agrees = existing.layout_word == word.0
+            let agrees = existing.layout_word == word
                 && existing.integrity_flags() == record.integrity_flags()
                 && existing.facts_match_proto_with_special(
                     // An empty key list is the same fact whether the request
@@ -1609,7 +1609,7 @@ impl ShapeSlab {
     #[cfg(test)]
     pub(super) fn handle_by_identity(&self, identity: ShapeId) -> Option<LayoutWord> {
         self.record_ptr(identity)
-            .map(|p| LayoutWord(unsafe { (*p).layout_word }))
+            .map(|p| unsafe { (*p).layout_word })
     }
 
     /// Clear the record under `id`, returning it if it was present.
@@ -1631,8 +1631,7 @@ impl ShapeSlab {
             *p = ShapeRecord::EMPTY;
         }
         self.len -= 1;
-        self.region
-            .retired(LayoutWord(previous.layout_word).row().0 as usize);
+        self.region.retired(previous.layout_word.row().0 as usize);
         Some(previous)
     }
 
@@ -1774,10 +1773,10 @@ impl ShapeSlab {
     #[inline(always)]
     pub(super) unsafe fn ordinary_record_in<'a>(
         dir: *const u8,
-        word: u32,
+        word: LayoutWord,
     ) -> Option<&'a ShapeRecord> {
         let dir = &*(dir as *const BandDir);
-        let row = LayoutWord(word).ordinary_row(dir.flat_ids.get())?;
+        let row = LayoutWord(word.0).ordinary_row(dir.flat_ids.get())?;
         Some(&*dir.flat_base.get().add(row.0 as usize))
     }
 
@@ -1813,13 +1812,13 @@ impl ShapeSlab {
     /// other-agent word answers absent: its row reads the zero (absent)
     /// record of a readable reservation, or on Windows, where a reservation
     /// cannot be read, the page bookkeeping answers first.
-    pub(super) fn agent_record_for_word(word: u32) -> *mut ShapeRecord {
+    pub(super) fn agent_record_for_word(word: LayoutWord) -> *mut ShapeRecord {
         Self::agent_record_for_word_present(word)
             .unwrap_or(std::ptr::addr_of!(EMPTY_RECORD.0).cast_mut())
     }
     #[inline]
-    pub(super) fn agent_record_for_word_present(word: u32) -> Option<*mut ShapeRecord> {
-        if word & crate::codegen_abi::LAYOUT_TAG == 0 {
+    pub(super) fn agent_record_for_word_present(word: LayoutWord) -> Option<*mut ShapeRecord> {
+        if word.0 & crate::codegen_abi::LAYOUT_TAG == 0 {
             return None;
         }
         // The checked read of a held word, answered from this thread's
@@ -1829,9 +1828,9 @@ impl ShapeSlab {
         let dir = &AGENT_SHAPE_DIR[0];
         let base = dir.flat_base.get();
         if base.is_null() {
-            return Self::unpublished_record_for_word(word);
+            return Self::unpublished_record_for_word((word).0);
         }
-        let w = LayoutWord(word);
+        let w = word;
         if w.band() >= 3 {
             return None;
         }
@@ -1940,9 +1939,9 @@ impl ShapeSlab {
     }
     pub(super) fn remove_handle(&mut self, word: LayoutWord) -> Option<ShapeRecord> {
         let p = self.handle_record_ptr(word)?;
-        self.remove(ShapeId(unsafe { (*p).shape_id }))
+        self.remove(unsafe { (*p).shape_id })
     }
-    pub(super) fn for_each_handle(&self, mut f: impl FnMut(u32, *mut ShapeRecord)) {
+    pub(super) fn for_each_handle(&self, mut f: impl FnMut(LayoutWord, *mut ShapeRecord)) {
         self.for_each(|_, p| f(unsafe { (*p).layout_word }, p));
     }
 
@@ -1958,7 +1957,7 @@ impl ShapeSlab {
     pub(super) fn clear(&mut self) {
         let ids = self.ids();
         for id in ids {
-            if let Some(mut r) = self.remove(id) {
+            if let Some(r) = self.remove(id) {
                 unsafe {
                     r.release_extras();
                 }
@@ -2098,7 +2097,7 @@ pub(crate) fn id_list_report() {
 /// handful of entries the scan is a single cache line and the map is not.
 #[derive(Clone, Debug, Default)]
 pub(super) struct SpillList {
-    ids: Vec<u32>,
+    ids: Vec<LayoutWord>,
     /// Empty while `ids.len() < SPILL_INDEX_MIN`; complete above it.
     ///
     /// `PtrHasher` (#8125) is the right hasher here for the same reason it is
@@ -2127,7 +2126,7 @@ impl SpillList {
         if self.pos.is_empty() && self.ids.len() >= SPILL_INDEX_MIN {
             self.pos.reserve(self.ids.len());
             for (i, &id) in self.ids.iter().enumerate() {
-                self.pos.insert(id, i as u32);
+                self.pos.insert(id.0, i as u32);
             }
         }
     }
@@ -2135,20 +2134,20 @@ impl SpillList {
     /// Position of `id`, O(1) when indexed and a counted linear scan below the
     /// threshold.
     #[inline]
-    fn position(&self, id: u32) -> Option<usize> {
+    fn position(&self, id: LayoutWord) -> Option<usize> {
         if self.indexed() {
-            return self.pos.get(&id).map(|&i| i as usize);
+            return self.pos.get(&id.0).map(|&i| i as usize);
         }
         note_scan(self.ids.len());
         self.ids.iter().position(|&x| x == id)
     }
 
     #[inline]
-    fn push(&mut self, id: u32) {
+    fn push(&mut self, id: LayoutWord) {
         let i = self.ids.len();
         self.ids.push(id);
         if self.indexed() {
-            self.pos.insert(id, i as u32);
+            self.pos.insert(id.0, i as u32);
         } else {
             self.maybe_build_index();
         }
@@ -2157,15 +2156,15 @@ impl SpillList {
     /// ORDER-PRESERVING removal, for a list whose order is load-bearing.
     /// O(n) in the tail by construction — that is what "preserve the order"
     /// costs — and it reindexes the shifted suffix.
-    fn remove_ordered(&mut self, id: u32) -> Option<usize> {
+    fn remove_ordered(&mut self, id: LayoutWord) -> Option<usize> {
         let pos = self.position(id)?;
         let moved = self.ids.len() - 1 - pos;
         note_removal(moved);
         self.ids.remove(pos);
         if self.indexed() {
-            self.pos.remove(&id);
+            self.pos.remove(&id.0);
             for (i, &other) in self.ids.iter().enumerate().skip(pos) {
-                self.pos.insert(other, i as u32);
+                self.pos.insert(other.0, i as u32);
             }
         }
         Some(pos)
@@ -2182,30 +2181,30 @@ impl SpillList {
     /// that moved 16 GB, so bytes moved is necessary but not sufficient for
     /// the slow mode. This removes work that is unambiguously wasted; how much
     /// TIME it removes is the A/B's to say.
-    fn remove_unordered(&mut self, id: u32) -> Option<usize> {
+    fn remove_unordered(&mut self, id: LayoutWord) -> Option<usize> {
         let pos = self.position(id)?;
         note_removal(if pos + 1 == self.ids.len() { 0 } else { 1 });
         let last = self.ids.len() - 1;
         self.ids.swap_remove(pos);
         if self.indexed() {
-            self.pos.remove(&id);
+            self.pos.remove(&id.0);
             if pos != last {
                 // The element that was last now lives at `pos`.
-                self.pos.insert(self.ids[pos], pos as u32);
+                self.pos.insert(self.ids[pos].0, pos as u32);
             }
         }
         Some(pos)
     }
 
     #[inline]
-    fn replace(&mut self, old: u32, new: u32) -> bool {
+    fn replace(&mut self, old: LayoutWord, new: LayoutWord) -> bool {
         let Some(pos) = self.position(old) else {
             return false;
         };
         self.ids[pos] = new;
         if self.indexed() {
-            self.pos.remove(&old);
-            self.pos.insert(new, pos as u32);
+            self.pos.remove(&old.0);
+            self.pos.insert(new.0, pos as u32);
         }
         true
     }
@@ -2234,7 +2233,7 @@ impl SpillList {
 /// guessed would be the bug.
 #[derive(Clone, Debug)]
 pub(super) enum IdList {
-    Inline { len: u8, ids: [u32; 3] },
+    Inline { len: u8, ids: [LayoutWord; 3] },
     // The `Box` is the point: an inline `SpillList` is far wider and would make
     // every bucket pay for it; the spill is the rare case, so its extra
     // indirection is cheaper than those bytes on every family.
@@ -2247,14 +2246,14 @@ impl Default for IdList {
     fn default() -> Self {
         IdList::Inline {
             len: 0,
-            ids: [0; 3],
+            ids: [LayoutWord(0); 3],
         }
     }
 }
 
 impl IdList {
     #[inline]
-    pub(super) fn as_slice(&self) -> &[u32] {
+    pub(super) fn as_slice(&self) -> &[LayoutWord] {
         match self {
             IdList::Inline { len, ids } => &ids[..*len as usize],
             IdList::Spill(v) => v.ids.as_slice(),
@@ -2272,7 +2271,7 @@ impl IdList {
     }
 
     #[inline]
-    pub(super) fn contains(&self, id: u32) -> bool {
+    pub(super) fn contains(&self, id: LayoutWord) -> bool {
         match self {
             IdList::Inline { len, ids } => ids[..*len as usize].contains(&id),
             IdList::Spill(v) => v.position(id).is_some(),
@@ -2294,7 +2293,7 @@ impl IdList {
     }
 
     /// Append `id` unless already present.
-    pub(super) fn push_back(&mut self, id: u32) {
+    pub(super) fn push_back(&mut self, id: LayoutWord) {
         if self.contains(id) {
             return;
         }
@@ -2323,7 +2322,7 @@ impl IdList {
     /// Callers that re-file an EXISTING id (the metadata rekey when a keys
     /// array moves) must keep using [`push_back`]: those ids can already be in
     /// the destination list.
-    pub(super) fn append_unchecked(&mut self, id: u32) {
+    pub(super) fn append_unchecked(&mut self, id: LayoutWord) {
         match self {
             IdList::Inline { len, ids } if (*len as usize) < ids.len() => {
                 ids[*len as usize] = id;
@@ -2336,7 +2335,7 @@ impl IdList {
     /// Prepend `id` unless already present. Order-preserving by definition, so
     /// it stays O(n) on a spilled list; only `by_facts` and the external-id
     /// install use it, and neither is on a hot path.
-    pub(super) fn push_front(&mut self, id: u32) {
+    pub(super) fn push_front(&mut self, id: LayoutWord) {
         if self.contains(id) {
             return;
         }
@@ -2360,7 +2359,7 @@ impl IdList {
     /// [`Self::push_front`] for an id the caller knows is in no list: a
     /// freshly published word (rows are never reissued, see
     /// [`Self::append_unchecked`]). An empty list is the common case.
-    pub(super) fn push_front_fresh(&mut self, id: u32) {
+    pub(super) fn push_front_fresh(&mut self, id: LayoutWord) {
         if let IdList::Inline { len, ids } = self {
             if *len == 0 {
                 ids[0] = id;
@@ -2374,7 +2373,7 @@ impl IdList {
     /// Drop `id` if present, PRESERVING the order of what remains; returns
     /// whether it was there. For a list whose order is load-bearing —
     /// `by_facts`, where the first entry is the canonical answer.
-    pub(super) fn remove_ordered(&mut self, id: u32) -> bool {
+    pub(super) fn remove_ordered(&mut self, id: LayoutWord) -> bool {
         match self {
             IdList::Inline { len, ids } => Self::remove_inline(len, ids, id),
             IdList::Spill(v) => v.remove_ordered(id).is_some(),
@@ -2386,7 +2385,7 @@ impl IdList {
     ///
     /// This is the change: on a spilled list it moves ONE element instead of
     /// the whole tail.
-    pub(super) fn remove_unordered(&mut self, id: u32) -> bool {
+    pub(super) fn remove_unordered(&mut self, id: LayoutWord) -> bool {
         match self {
             // Three entries: the inline shift is a single register move and
             // there is nothing to gain from disturbing the order.
@@ -2396,7 +2395,7 @@ impl IdList {
     }
 
     #[inline]
-    fn remove_inline(len: &mut u8, ids: &mut [u32; 3], id: u32) -> bool {
+    fn remove_inline(len: &mut u8, ids: &mut [LayoutWord; 3], id: LayoutWord) -> bool {
         let n = *len as usize;
         note_scan(n);
         let Some(pos) = ids[..n].iter().position(|&x| x == id) else {
@@ -2404,14 +2403,14 @@ impl IdList {
         };
         note_removal(n - 1 - pos);
         ids.copy_within(pos + 1..n, pos);
-        ids[n - 1] = 0;
+        ids[n - 1] = LayoutWord(0);
         *len -= 1;
         true
     }
 
     /// Replace `old` with `new` in place (keeps its position); returns
     /// whether `old` was present.
-    pub(super) fn replace(&mut self, old: u32, new: u32) -> bool {
+    pub(super) fn replace(&mut self, old: LayoutWord, new: LayoutWord) -> bool {
         match self {
             IdList::Inline { len, ids } => {
                 let n = *len as usize;

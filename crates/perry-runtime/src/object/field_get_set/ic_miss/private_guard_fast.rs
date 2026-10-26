@@ -118,7 +118,7 @@ fn private_template_may_be_evaluated(class_id: u32) -> bool {
 /// shape lists the private field, or carries the class brand (#11791).
 #[derive(Clone, Copy)]
 struct PrivateShapeProof {
-    shape_id: u32,
+    shape_id: LayoutWord,
     class_id: u32,
     /// The caller's name address. A hit also compares `name`'s bytes, so a
     /// buffer recycled for another spelling can only miss.
@@ -137,7 +137,7 @@ const NO_ELEMENT_SLOT: u32 = u32::MAX;
 
 impl PrivateShapeProof {
     const EMPTY: Self = Self {
-        shape_id: 0,
+        shape_id: LayoutWord(0),
         class_id: 0,
         site_name: 0,
         name: "",
@@ -172,7 +172,7 @@ fn private_proof_cache_set(shape_id: u32, class_id: u32, site_name: usize) -> us
 
 impl PrivateShapeProof {
     #[inline(always)]
-    fn matches(&self, shape_id: u32, class_id: u32, name: &[u8], is_field: bool) -> bool {
+    fn matches(&self, shape_id: LayoutWord, class_id: u32, name: &[u8], is_field: bool) -> bool {
         self.shape_id == shape_id
             && self.class_id == class_id
             && self.site_name == name.as_ptr() as usize
@@ -205,7 +205,7 @@ fn private_lexical_brand_is_inert(class_id: u32) -> bool {
 /// `GC_TYPE_OBJECT` but not the `ObjectHeader` layout, so they are rejected
 /// before the shape word is read.
 #[inline]
-unsafe fn private_plain_receiver_shape(obj: f64) -> Option<(*const ObjectHeader, u32)> {
+unsafe fn private_plain_receiver_shape(obj: f64) -> Option<(*const ObjectHeader, LayoutWord)> {
     let bits = obj.to_bits();
     if (bits & !crate::value::POINTER_MASK) != crate::value::POINTER_TAG {
         return None;
@@ -219,7 +219,7 @@ unsafe fn private_plain_receiver_shape(obj: f64) -> Option<(*const ObjectHeader,
     }
     let object = addr as *const ObjectHeader;
     let shape_id = crate::object::shapes::object_shape_stamp(object);
-    (shape_id != 0).then_some((object, shape_id))
+    (shape_id != LayoutWord(0)).then_some((object, shape_id))
 }
 
 /// The receiver's own evaluation brand is absent: `private_evaluation_brand`
@@ -267,7 +267,7 @@ fn private_instance_access_is_proven(
         }
     }
     let is_field = kind == 0;
-    let set = private_proof_cache_set(shape_id, class_id, name.as_ptr() as usize);
+    let set = private_proof_cache_set(shape_id.0, class_id, name.as_ptr() as usize);
     let cached = PRIVATE_PROOF_CACHE.with(|cache| {
         let [first, second] = &cache[set];
         let first = first.get();
@@ -298,7 +298,7 @@ fn private_instance_access_is_proven(
 #[inline(never)]
 fn private_shape_proof_learn(
     object: *const ObjectHeader,
-    shape_id: u32,
+    shape_id: LayoutWord,
     class_id: u32,
     name: &[u8],
     is_field: bool,
@@ -308,7 +308,7 @@ fn private_shape_proof_learn(
     // ordinary shapes are proven; the kind is part of the ShapeId, so a cache
     // hit can only be an ordinary object too.
     let interned = intern_private_name(name)?;
-    if !crate::object::shapes::shape_object_kind_of_receiver(shape_id)
+    if !crate::object::shapes::shape_object_kind_of_receiver((shape_id).0)
         .is_some_and(|kind| kind.is_ordinary_layout())
     {
         return None;
@@ -387,7 +387,7 @@ unsafe fn private_site_hit(obj: f64, class_id: u32, site: *const u64) -> bool {
     };
     // A field site's word also carries the slot (see
     // [`private_field_site_word`]); the ShapeId is its low half.
-    shape_id == word as u32
+    shape_id == LayoutWord(word as u32)
 }
 
 /// Publish a proven receiver shape to `site`.
@@ -397,7 +397,7 @@ unsafe fn private_site_publish(class_id: u32, site: *mut u64, proof: PrivateShap
         return;
     }
     (*(site as *const std::sync::atomic::AtomicU64)).store(
-        u64::from(proof.shape_id),
+        u64::from(proof.shape_id.0),
         std::sync::atomic::Ordering::Relaxed,
     );
 }
@@ -420,7 +420,7 @@ pub(crate) const PRIVATE_FIELD_SITE_SLOT_MASK: u64 = 0xFFFF;
 /// or ConstFn) publishes nothing; such receivers keep the runtime path.
 unsafe fn private_field_site_word(
     object: *const ObjectHeader,
-    shape_id: u32,
+    shape_id: LayoutWord,
     class_id: u32,
     name: &'static str,
 ) -> u64 {
@@ -428,7 +428,7 @@ unsafe fn private_field_site_word(
     {
         return 0;
     }
-    let Some(d) = crate::object::shapes::shape_descriptor_of_receiver(shape_id) else {
+    let Some(d) = crate::object::shapes::shape_descriptor_of_receiver((shape_id).0) else {
         return 0;
     };
     if !d.object_kind.is_ordinary_layout() {
@@ -465,7 +465,7 @@ unsafe fn private_field_site_word(
         crate::object::field_rep::REP_F64 => PRIVATE_FIELD_SITE_F64,
         _ => return 0,
     };
-    u64::from(shape_id) | (u64::from(slot) << 32) | lane_bit
+    u64::from(shape_id.0) | (u64::from(slot) << 32) | lane_bit
 }
 
 /// Publish a proven receiver shape to a FIELD site, with its slot and lane.
@@ -802,7 +802,7 @@ pub unsafe extern "C-unwind" fn js_private_method_call(
 #[inline]
 fn private_receiver_evaluation_brand(receiver: f64) -> Option<f64> {
     if let Some((object, shape_id)) = unsafe { private_plain_receiver_shape(receiver) } {
-        if crate::object::shapes::shape_object_kind_of_receiver(shape_id)
+        if crate::object::shapes::shape_object_kind_of_receiver((shape_id).0)
             .is_some_and(|kind| kind.is_ordinary_layout())
         {
             let brand = f64::from_bits(unsafe { private_receiver_evaluation_bits(object) });
@@ -1055,7 +1055,9 @@ mod private_guard_fast_tests {
             fields.push("#out");
             let obj = instance_with(CID, &fields, false);
             let (_, shape_id) = private_plain_receiver_shape(obj).unwrap();
-            let live = crate::object::shapes::shape_live_inline_slot_count_of_receiver(shape_id).unwrap();
+            let live =
+                crate::object::shapes::shape_live_inline_slot_count_of_receiver((shape_id).0)
+                    .unwrap();
             assert!(
                 live < fields.len() as u32,
                 "fixture must spill its last field"
@@ -1081,7 +1083,11 @@ mod private_guard_fast_tests {
                     assert_eq!(site, 0, "a spilled field publishes no site word");
                     continue;
                 }
-                assert_eq!(site as u32, shape_id, "a proven access publishes its shape");
+                assert_eq!(
+                    LayoutWord(site as u32),
+                    shape_id,
+                    "a proven access publishes its shape"
+                );
                 assert_eq!(
                     (site >> 32) & PRIVATE_FIELD_SITE_SLOT_MASK,
                     0,

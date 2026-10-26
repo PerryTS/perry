@@ -625,6 +625,13 @@ unsafe fn array_sort_spec_path(
 /// `Object.prototype` numeric-key pollution case that only matters when the
 /// array actually has holes for an inherited element to show through.
 unsafe fn sort_needs_spec_path(arr: *const ArrayHeader, objproto_keys: &[u32]) -> bool {
+    // Frozen indexed properties must go through strict Set/Delete, even when
+    // their storage is dense. Preserve the trivial-array early return: Node
+    // does not attempt indexed writes when the receiver has fewer than two
+    // elements. All-hole arrays still succeed via deletion of absent keys.
+    if (*arr).length > 1 && crate::array::array_is_frozen(arr) {
+        return true;
+    }
     if crate::array::array_iteration_is_exotic(arr) {
         return true;
     }

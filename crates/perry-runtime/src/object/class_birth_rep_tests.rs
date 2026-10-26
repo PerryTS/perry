@@ -21,6 +21,7 @@ use super::shapes::{
     js_object_layout_for_class_keys, object_shape_stamp, shape_descriptor_for_word,
 };
 use super::ObjectHeader;
+use crate::codegen_abi::LayoutWord;
 
 const CID: u32 = 0x5117;
 const F64_A_B: u64 = REP_F64 | (REP_F64 << 2);
@@ -70,7 +71,7 @@ fn mixed_ordered_definitions_retain_preceding_numeric_lanes() {
     }
     assert_eq!(
         unsafe { object_shape_stamp(obj.get_raw_mut_ptr()) },
-        completed
+        LayoutWord(completed)
     );
 }
 
@@ -117,7 +118,7 @@ fn ordered_definitions_reach_the_completed_class_contract_and_mutations_revoke_i
     }
     assert_eq!(
         unsafe { object_shape_stamp(obj.get_raw_mut_ptr()) },
-        completed
+        LayoutWord(completed)
     );
     assert_eq!(admitted(), 1, "the completed shape admits the raw field");
     // A post-construction contradiction must move the receiver off the contract.
@@ -135,7 +136,7 @@ fn keys(packed: &[u8], count: u32) -> u64 {
         as usize as u64
 }
 
-fn rep_of(id: u32) -> u64 {
+fn rep_of(id: LayoutWord) -> u64 {
     shape_descriptor_for_word(id).expect("live shape").rep
 }
 
@@ -144,13 +145,13 @@ unsafe fn slot_bits(obj: *mut ObjectHeader, index: usize) -> u64 {
     *fields.add(index)
 }
 
-unsafe fn birth(keys: u64, count: u32, id: u32) -> *mut ObjectHeader {
+unsafe fn birth(keys: u64, count: u32, id: LayoutWord) -> *mut ObjectHeader {
     crate::object::js_object_alloc_class_inline_keys_stamped(
         CID,
         0,
         count,
         keys as usize as *mut crate::array::ArrayHeader,
-        id,
+        id.0,
         super::field_rep::identity(rep_of(id)),
     )
 }
@@ -164,16 +165,16 @@ fn a_class_birth_id_carries_its_minted_rep_and_births_fill_its_f64_lanes() {
     let typed = js_object_layout_for_class_keys(k, 3, CID, F64_A_B);
     let untyped = js_object_layout_for_class_keys(k, 3, CID, REP_ANY);
     assert_ne!(typed, untyped, "the rep is shape identity");
-    assert_eq!(rep_of(typed), F64_A_B);
-    assert_eq!(rep_of(untyped), REP_ANY);
+    assert_eq!(rep_of(LayoutWord(typed)), F64_A_B);
+    assert_eq!(rep_of(LayoutWord(untyped)), REP_ANY);
     assert_eq!(js_object_layout_for_class_keys(k, 3, CID, F64_A_B), typed);
     unsafe {
-        let obj = birth(k, 3, typed);
-        assert_eq!(object_shape_stamp(obj), typed);
+        let obj = birth(k, 3, LayoutWord(typed));
+        assert_eq!(object_shape_stamp(obj), LayoutWord(typed));
         assert_eq!(slot_bits(obj, 0), 0.0f64.to_bits());
         assert_eq!(slot_bits(obj, 1), 0.0f64.to_bits());
         assert_eq!(slot_bits(obj, 2), crate::value::TAG_UNDEFINED);
-        let plain = birth(k, 3, untyped);
+        let plain = birth(k, 3, LayoutWord(untyped));
         assert_eq!(slot_bits(plain, 0), crate::value::TAG_UNDEFINED);
     }
 }
@@ -188,12 +189,12 @@ fn generalizing_an_instance_moves_the_instance_not_the_class_birth_id() {
     let k = keys(b"u\0v\0", 2);
     let id = js_object_layout_for_class_keys(k, 2, CID, F64_A_B);
     unsafe {
-        let obj = birth(k, 2, id);
+        let obj = birth(k, 2, LayoutWord(id));
         let key_v = crate::string::js_string_from_bytes(b"v".as_ptr(), 1);
         crate::object::js_object_set_field_by_name(obj, key_v, f64::INFINITY);
         assert_eq!(
             object_shape_stamp(obj),
-            id,
+            LayoutWord(id),
             "Infinity is a Number: lane kept"
         );
         assert_eq!(slot_bits(obj, 1), f64::INFINITY.to_bits());
@@ -202,18 +203,18 @@ fn generalizing_an_instance_moves_the_instance_not_the_class_birth_id() {
         let boxed = f64::from_bits(crate::value::js_nanbox_string(s as i64).to_bits());
         crate::object::js_object_set_field_by_name(obj, key_u, boxed);
         let moved = object_shape_stamp(obj);
-        assert_ne!(moved, id, "the instance left the birth id");
+        assert_ne!(moved, LayoutWord(id), "the instance left the birth id");
         assert_eq!(slot_rep(rep_of(moved), 0), REP_ANY);
         assert_eq!(slot_rep(rep_of(moved), 1), REP_F64);
         assert_eq!(
-            super::field_rep::identity(rep_of(id)),
+            super::field_rep::identity(rep_of(LayoutWord(id))),
             F64_A_B,
             "the birth id's identity never changes"
         );
-        let next = birth(k, 2, id);
+        let next = birth(k, 2, LayoutWord(id));
         assert_eq!(
             object_shape_stamp(next),
-            id,
+            LayoutWord(id),
             "the next birth still gets the F64 id"
         );
         assert_eq!(slot_bits(next, 0), 0.0f64.to_bits());
@@ -314,7 +315,7 @@ fn a_region_prime_value_tests_a_requested_number_read_on_a_non_identity_lane() {
 
     // A deprecated lane is no longer an identity fact for a new learned
     // region: its R is served by the value test.
-    assert!(super::shapes::shape_record_for_word(typed)
+    assert!(super::shapes::shape_record_for_word(LayoutWord(typed))
         .expect("typed shape record")
         .deprecate_rep_slot(0));
     let word = prime(typed, a, 0, 0, 1);
@@ -336,7 +337,7 @@ fn a_class_birth_with_an_f64_lane_adopts_its_static_id() {
             k, 2, 2, CID, f64_id, REP_F64,
         );
     assert_eq!(typed, f64_id, "the F64 birth adopts its static id");
-    assert_eq!(rep_of(typed), REP_F64);
+    assert_eq!(rep_of(LayoutWord(typed)), REP_F64);
     let untyped =
         crate::object::static_shapes::fixtures::fixture_object_shape_id_for_class_keys_static(
             k, 2, 2, CID, any_id, REP_ANY,
@@ -366,8 +367,11 @@ fn importer_first_birth_keeps_definer_rep_and_stub_slots_distinct() {
             k, 2, 2, CID, any_id, REP_ANY,
         );
     assert_eq!(importer, any_id);
-    let imported_birth = unsafe { birth(k, 2, importer) };
-    assert_eq!(unsafe { object_shape_stamp(imported_birth) }, any_id);
+    let imported_birth = unsafe { birth(k, 2, LayoutWord(importer)) };
+    assert_eq!(
+        unsafe { object_shape_stamp(imported_birth) },
+        LayoutWord(any_id)
+    );
     assert_eq!(
         unsafe { slot_bits(imported_birth, 0) },
         crate::value::TAG_UNDEFINED
@@ -379,15 +383,18 @@ fn importer_first_birth_keeps_definer_rep_and_stub_slots_distinct() {
         );
     assert_eq!(definer, f64_id);
     assert_ne!(definer, importer);
-    let defined_birth = unsafe { birth(k, 2, definer) };
-    assert_eq!(unsafe { object_shape_stamp(defined_birth) }, f64_id);
+    let defined_birth = unsafe { birth(k, 2, LayoutWord(definer)) };
+    assert_eq!(
+        unsafe { object_shape_stamp(defined_birth) },
+        LayoutWord(f64_id)
+    );
     assert_eq!(unsafe { slot_bits(defined_birth, 0) }, 0.0f64.to_bits());
     assert_eq!(
         unsafe { slot_bits(defined_birth, 1) },
         crate::value::TAG_UNDEFINED
     );
-    assert_eq!(rep_of(importer), REP_ANY);
-    assert_eq!(rep_of(definer), REP_F64);
+    assert_eq!(rep_of(LayoutWord(importer)), REP_ANY);
+    assert_eq!(rep_of(LayoutWord(definer)), REP_F64);
 }
 
 /// (e) The shape is the truth: a literal (anonymous shape class) or a class
@@ -418,10 +425,14 @@ fn every_birth_path_of_a_rep_literal_and_class_stamps_one_shape_and_fills_its_f6
         ) as usize as u64;
         // Module init's birth id (what the inline `new` bakes in).
         let id = js_object_layout_for_class_keys(k, 3, cid, F64_A_B);
-        assert_eq!(rep_of(id), F64_A_B);
+        assert_eq!(rep_of(LayoutWord(id)), F64_A_B);
         let (_, cache_id) =
             super::shape_cache_get_with_id(super::alloc_plain::class_keys_cache_slot(cid, 3));
-        assert_eq!(rep_of(cache_id), F64_A_B, "the cache mint carries the rep");
+        assert_eq!(
+            rep_of(LayoutWord(cache_id)),
+            F64_A_B,
+            "the cache mint carries the rep"
+        );
         assert_eq!(
             cache_id == id,
             literal,
@@ -454,7 +465,7 @@ fn every_birth_path_of_a_rep_literal_and_class_stamps_one_shape_and_fills_its_f6
             ] {
                 assert_eq!(
                     object_shape_stamp(obj),
-                    id,
+                    LayoutWord(id),
                     "{path} (literal={literal}): one birth shape"
                 );
                 assert_eq!(slot_bits(obj, 0), 0.0f64.to_bits(), "{path}: F64 lane");
@@ -463,7 +474,7 @@ fn every_birth_path_of_a_rep_literal_and_class_stamps_one_shape_and_fills_its_f6
                 crate::object::store_object_field_slot(obj, 1, crate::value::INT32_TAG | 7);
                 assert_eq!(
                     object_shape_stamp(obj),
-                    id,
+                    LayoutWord(id),
                     "{path}: a Number keeps the lane"
                 );
                 assert_eq!(
@@ -509,7 +520,7 @@ fn a_region_constfn_shape_keeps_numeric_admission_and_refuses_special_stores() {
         entries.as_ptr(),
         1,
     );
-    let descriptor = shape_descriptor_for_word(completed).expect("completed CF record");
+    let descriptor = shape_descriptor_for_word(LayoutWord(completed)).expect("completed CF record");
     assert_eq!(descriptor.special_constfn_mask, 1);
     assert_eq!(descriptor.rep, rep);
     assert_eq!(descriptor.constfn_infos()[0].info, info as usize as u64);

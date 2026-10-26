@@ -134,7 +134,7 @@ unsafe fn malloc_parent(bits: u64) -> (*mut GcHeader, GcMutableSlot) {
     let parent = gc_malloc(payload, GC_TYPE_OBJECT).cast::<crate::object::ObjectHeader>();
     std::ptr::write_bytes(parent.cast::<u8>(), 0, payload);
     crate::object::shapes::store_kind::premark_plain_ordinary(parent);
-    (*parent).parent_class_id = shape_id;
+    (*parent).parent_class_id = shape_id.0;
     let fields = parent
         .cast::<u8>()
         .add(std::mem::size_of::<crate::object::ObjectHeader>())

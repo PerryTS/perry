@@ -22,6 +22,9 @@
 //! delete, an accessor/descriptor install, a recorded [[Prototype]]. The kind
 //! of a cell is its GC type byte — never a magic word in its payload.
 use super::ClosureHeader;
+use crate::codegen_abi::LayoutWord;
+#[cfg(test)]
+use crate::codegen_abi::ShapeId;
 use crate::object::shapes::{self, ShapeObjectKind};
 
 /// Intrinsic-prototype serials (`ObjectMeta.proto_serial`) assigned at
@@ -198,14 +201,16 @@ fn base_slot(index: usize) -> u32 {
 
 /// The base ShapeId for a closure of `kind`'s bodies.
 #[inline]
-pub(crate) fn function_base_shape(kind: FunctionProtoKind) -> u32 {
-    crate::codegen_abi::intrinsic_function_layout_word(kind as u32)
+pub(crate) fn function_base_shape(kind: FunctionProtoKind) -> LayoutWord {
+    LayoutWord(crate::codegen_abi::intrinsic_function_layout_word(
+        kind as u32,
+    ))
 }
 
 /// The shared FunctionDictionary ShapeId: "ask the object".
 #[inline]
-pub(crate) fn function_dictionary_shape() -> u32 {
-    crate::codegen_abi::intrinsic_function_layout_word(4)
+pub(crate) fn function_dictionary_shape() -> LayoutWord {
+    LayoutWord(crate::codegen_abi::intrinsic_function_layout_word(4))
 }
 
 /// The ShapeId of every class function object (`object::class_value`): its
@@ -215,8 +220,8 @@ pub(crate) fn function_dictionary_shape() -> u32 {
 /// that compares ShapeIds tells a class constructor from any other function
 /// with that one compare.
 #[inline]
-pub(crate) fn function_class_shape() -> u32 {
-    crate::codegen_abi::intrinsic_function_layout_word(8)
+pub(crate) fn function_class_shape() -> LayoutWord {
+    LayoutWord(crate::codegen_abi::intrinsic_function_layout_word(8))
 }
 
 /// Is `info` the class function object info — i.e. is a closure carrying it a
@@ -230,23 +235,23 @@ pub(crate) fn is_class_info(info: *const super::JsFunctionInfo) -> bool {
 
 /// Ordinary bound layout, including inline partial arguments.
 #[inline(always)]
-pub(crate) fn function_bound_shape() -> u32 {
-    crate::codegen_abi::intrinsic_function_layout_word(7)
+pub(crate) fn function_bound_shape() -> LayoutWord {
+    LayoutWord(crate::codegen_abi::intrinsic_function_layout_word(7))
 }
 
 /// The ShapeId a fresh closure of the body `info` describes is born with.
 #[inline]
-pub(crate) fn birth_shape_for_body(info: *const super::JsFunctionInfo) -> u32 {
+pub(crate) fn birth_shape_for_body(info: *const super::JsFunctionInfo) -> LayoutWord {
     // Only the bound-function sentinel can carry the resolved layouts.
     // Ordinary bodies need one code admission, not both layout comparisons.
     if unsafe { info.as_ref() }.is_some_and(|body| body.code == super::BOUND_FUNCTION_FUNC_PTR) {
         if std::ptr::eq(info, &super::dispatch::bound_intrinsic::CALL_INFO) {
-            return crate::codegen_abi::intrinsic_function_layout_word(5);
+            return LayoutWord(crate::codegen_abi::intrinsic_function_layout_word(5));
         }
         if std::ptr::eq(info, &super::dispatch::bound_intrinsic::APPLY_INFO) {
-            return crate::codegen_abi::intrinsic_function_layout_word(6);
+            return LayoutWord(crate::codegen_abi::intrinsic_function_layout_word(6));
         }
-        return crate::codegen_abi::intrinsic_function_layout_word(7);
+        return LayoutWord(crate::codegen_abi::intrinsic_function_layout_word(7));
     }
     // SAFETY: a non-null info is a static one (the allocation entries' contract).
     let kind = match unsafe { info.as_ref() } {
@@ -370,7 +375,7 @@ pub(crate) fn refresh_closure_shape(ptr: usize) {
                         // nothing), there is nothing to mint.
                         let current = (*closure).shape_id;
                         if current != base
-                            && shapes::shape_descriptor_of_receiver(current).is_some_and(|f| {
+                            && shapes::shape_descriptor_of_receiver((current).0).is_some_and(|f| {
                                 f.object_kind == base_kind
                                     && f.keys == d.keys
                                     && f.logical_key_count == d.logical_key_count
@@ -397,7 +402,7 @@ pub(crate) fn refresh_closure_shape(ptr: usize) {
                                 ),
                             ),
                         );
-                        shapes::note_external_carrier_of_word(id);
+                        shapes::note_external_carrier_of_word((id).0);
                         id
                     }
                 }
@@ -413,7 +418,7 @@ pub(crate) fn refresh_closure_shape(ptr: usize) {
 /// from `Function.prototype`? True for a base or keyed (never dictionary)
 /// Function shape whose prototype identity is Function.prototype's and whose
 /// own key list does not contain `key`.
-pub(crate) fn function_shape_inherits_from_function_prototype(id: u32, key: &[u8]) -> bool {
+pub(crate) fn function_shape_inherits_from_function_prototype(id: LayoutWord, key: &[u8]) -> bool {
     // The common receiver: no own keys, Function.prototype — one compare.
     if id == function_base_shape(FunctionProtoKind::Function) {
         return true;
@@ -439,7 +444,7 @@ pub(crate) fn function_shape_inherits_from_function_prototype(id: u32, key: &[u8
 /// of `Function.prototype`'s `bind`, `call` and `apply`. An async, generator
 /// or async-generator function inherits those through its kind's intrinsic
 /// prototype, which defines none of them itself.
-pub(crate) fn function_shape_kind_lacking(id: u32, key: &[u8]) -> Option<FunctionProtoKind> {
+pub(crate) fn function_shape_kind_lacking(id: LayoutWord, key: &[u8]) -> Option<FunctionProtoKind> {
     let kinds = [
         FunctionProtoKind::Function,
         FunctionProtoKind::AsyncFunction,
@@ -467,8 +472,8 @@ pub(crate) fn function_shape_kind_lacking(id: u32, key: &[u8]) -> Option<Functio
 /// one of the four function kinds' intrinsic prototypes (and which, and
 /// whether that is `Function.prototype`), and which of the three intrinsics
 /// it lacks as own keys. A fact of the (immutable) ShapeId, cached per agent.
-fn keyed_shape_verdict(id: u32) -> u8 {
-    let slot = (id as usize).wrapping_mul(0x9E37_79B9) >> 26 & (VERDICT_CACHE_LEN - 1);
+fn keyed_shape_verdict(id: LayoutWord) -> u8 {
+    let slot = (id.0 as usize).wrapping_mul(0x9E37_79B9) >> 26 & (VERDICT_CACHE_LEN - 1);
     // Index in place: `Cell::get` would copy the whole 64-entry array.
     // SAFETY: this agent's own cell; no reference to it outlives the read.
     let cached = VERDICT_CACHE.with(|c| unsafe { (*c.as_ptr())[slot] });
@@ -529,19 +534,19 @@ crate::perry_thread_local! {
     /// Per-agent cache of keyed Function ShapeIds' verdicts for the
     /// Function.prototype intrinsics (ShapeIds are never reused, so an entry
     /// can only go unused, never wrong).
-    static VERDICT_CACHE: std::cell::Cell<[(u32, u8); VERDICT_CACHE_LEN]> =
-        const { std::cell::Cell::new([(0, 0); VERDICT_CACHE_LEN]) };
+    static VERDICT_CACHE: std::cell::Cell<[(LayoutWord, u8); VERDICT_CACHE_LEN]> =
+        const { std::cell::Cell::new([(LayoutWord(0), 0); VERDICT_CACHE_LEN]) };
 }
 
 /// A keyed Function shape naming Function.prototype whose key list lacks `key`.
-fn keyed_shape_lacks_key(id: u32, key: &[u8]) -> bool {
+fn keyed_shape_lacks_key(id: LayoutWord, key: &[u8]) -> bool {
     shapes::shape_descriptor_for_word(id).is_some_and(|d| {
         d.object_kind.is_function_layout() && d.proto_id == INTRINSIC_SERIAL_FUNCTION
     }) && keyed_shape_key_list_lacks(id, key)
 }
 
 /// A shape whose key list lacks `key`.
-fn keyed_shape_key_list_lacks(id: u32, key: &[u8]) -> bool {
+fn keyed_shape_key_list_lacks(id: LayoutWord, key: &[u8]) -> bool {
     let Some(descriptor) = shapes::shape_descriptor_for_word(id) else {
         return false;
     };
@@ -585,10 +590,10 @@ pub(crate) unsafe fn closure_own_prototype_by_shape(
     if id == function_dictionary_shape() {
         return super::props::bag_get(closure as usize, b"prototype").map(Some);
     }
-    let slot = (id as usize).wrapping_mul(0x9E37_79B9) >> 26 & (VERDICT_CACHE_LEN - 1);
+    let slot = (id.0 as usize).wrapping_mul(0x9E37_79B9) >> 26 & (VERDICT_CACHE_LEN - 1);
     // SAFETY: this agent's own cell; no reference to it outlives the read.
     let cached = PROTOTYPE_SLOT_CACHE.with(|c| (*c.as_ptr())[slot]);
-    let index = if cached.0 == id && id != 0 {
+    let index = if cached.0 == id && id != LayoutWord(0) {
         cached.1
     } else {
         let index = prototype_slot_of_shape(closure, id);
@@ -615,15 +620,15 @@ crate::perry_thread_local! {
     /// Per-agent cache of Function ShapeIds' inline slot of `prototype`
     /// ([`closure_own_prototype_by_shape`]); ShapeIds are never reused, so an
     /// entry can only go unused, never wrong.
-    static PROTOTYPE_SLOT_CACHE: std::cell::Cell<[(u32, u32); VERDICT_CACHE_LEN]> =
-        const { std::cell::Cell::new([(0, 0); VERDICT_CACHE_LEN]) };
+    static PROTOTYPE_SLOT_CACHE: std::cell::Cell<[(LayoutWord, u32); VERDICT_CACHE_LEN]> =
+        const { std::cell::Cell::new([(LayoutWord(0), 0); VERDICT_CACHE_LEN]) };
 }
 
 /// The inline slot of `prototype` the Function ShapeId `id` describes, or
 /// one of the two markers.
 #[cold]
 #[inline(never)]
-unsafe fn prototype_slot_of_shape(closure: *const ClosureHeader, id: u32) -> u32 {
+unsafe fn prototype_slot_of_shape(closure: *const ClosureHeader, id: LayoutWord) -> u32 {
     if id == function_dictionary_shape() || is_class_info((*closure).info) {
         return PROTOTYPE_SLOT_UNKNOWN;
     }
@@ -698,7 +703,7 @@ mod tests {
     }
 
     fn kind_of(c: *const ClosureHeader) -> Option<ShapeObjectKind> {
-        shapes::shape_object_kind_of_receiver(unsafe { (*c).shape_id })
+        shapes::shape_object_kind_of_receiver(unsafe { ((*c).shape_id).0 })
     }
 
     static PLAIN_BODY: crate::closure::JsFunctionInfo = crate::closure::JsFunctionInfo::of(
@@ -720,7 +725,7 @@ mod tests {
         std::thread::spawn(|| {
             let _ = crate::state::state();
             for (id, kind, proto, summary) in intrinsic_shapes() {
-                let descriptor = shapes::shape_descriptor_by_id(id).unwrap();
+                let descriptor = shapes::shape_descriptor_by_id(ShapeId(id)).unwrap();
                 assert_eq!(descriptor.object_kind, kind);
                 assert_eq!(descriptor.proto_id, proto);
                 assert_eq!(descriptor.logical_key_count, 0);
@@ -735,8 +740,8 @@ mod tests {
                         shapes::ReceiverFacts::summary(summary),
                     ));
                 assert_eq!(
-                    Some(crate::codegen_abi::LayoutWord(interned)),
-                    shapes::handle_by_identity(crate::codegen_abi::ShapeId(id)),
+                    Some(interned),
+                    shapes::handle_by_identity(ShapeId(id)),
                     "interning must use the seeded record"
                 );
             }
@@ -759,7 +764,7 @@ mod tests {
         );
         assert_eq!(kind_of(c), Some(ShapeObjectKind::Function));
         assert_eq!(
-            shapes::shape_proto_id(word),
+            shapes::shape_proto_id(LayoutWord(word)),
             Some(INTRINSIC_SERIAL_FUNCTION)
         );
         assert!(unsafe { closure_on_base_shape(c) });
@@ -848,7 +853,9 @@ mod tests {
         assert_ne!(ka, base, "an own key leaves the base shape");
         assert_eq!(ka, unsafe { (*b).shape_id }, "same keys, same ShapeId");
         assert_eq!(kind_of(a), Some(ShapeObjectKind::Function));
-        assert!(shapes::is_exotic_layout_word(ka) && !shapes::is_site_matchable_layout_word(ka));
+        assert!(
+            shapes::is_exotic_layout_word(ka.0) && !shapes::is_site_matchable_layout_word(ka.0)
+        );
         assert_eq!(shapes::shape_proto_id(ka), Some(INTRINSIC_SERIAL_FUNCTION));
         assert!(unsafe { closure_on_base_shape(a) });
         assert!(!function_shape_inherits_from_function_prototype(ka, b"tag"));
@@ -865,7 +872,7 @@ mod tests {
         assert_eq!(kind_of(a), Some(ShapeObjectKind::Function));
         let bag = unsafe { (*a).props };
         let bag_desc = unsafe { shapes::object_shape_descriptor(bag) }.unwrap();
-        let fn_desc = shapes::shape_descriptor_of_receiver(unsafe { (*a).shape_id }).unwrap();
+        let fn_desc = shapes::shape_descriptor_of_receiver(unsafe { ((*a).shape_id).0 }).unwrap();
         assert_eq!(fn_desc.keys, bag_desc.keys);
         assert_eq!(fn_desc.logical_key_count, bag_desc.logical_key_count);
         assert_eq!(
@@ -958,7 +965,7 @@ mod tests {
         // still says OBJECT, so it is not a function.
         unsafe {
             let saved = (*obj).parent_class_id;
-            (*obj).parent_class_id = function_base_shape(FunctionProtoKind::Function);
+            (*obj).parent_class_id = function_base_shape(FunctionProtoKind::Function).0;
             assert!(!crate::closure::is_closure_ptr(obj as usize));
             assert!(!closure_kind_probe(obj as usize));
             (*obj).parent_class_id = saved;

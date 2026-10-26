@@ -784,7 +784,7 @@ pub(crate) fn object_has_individual_class_prototype(obj_ptr: usize) -> bool {
         let stamp = crate::object::shapes::object_shape_stamp(obj);
         // The null identity is already encoded in the ShapeId. Read that
         // fact before the class eligibility guard, without fetching a slab.
-        if crate::object::shapes::shape_word_kind(stamp)
+        if crate::object::shapes::shape_word_kind(stamp.0)
             == crate::object::shapes::SHAPE_ID_KIND_NULL
         {
             return true;

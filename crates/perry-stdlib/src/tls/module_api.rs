@@ -152,7 +152,11 @@ pub unsafe extern "C" fn js_tls_check_server_identity(hostname_bits: i64, cert_b
     let hostname = scope.root_nanbox_f64(f64_from_raw_bits(hostname_bits));
     let cert = scope.root_nanbox_f64(f64_from_raw_bits(cert_bits));
     let host = value_to_string(hostname.get_nanbox_f64()).unwrap_or_default();
-    let match_host = perry_runtime::tls::tls_domain_to_ascii(&host);
+    // IPv6 literals are not DNS names; keep them out of DNS canonicalization.
+    let match_host = host
+        .parse::<std::net::IpAddr>()
+        .map(|ip| ip.to_string())
+        .unwrap_or_else(|_| perry_runtime::tls::tls_domain_to_ascii(&host));
     let san = object_field_string(cert.get_nanbox_f64(), "subjectaltname").unwrap_or_default();
     let san_entries = split_subject_alt_names(&san);
     let ip_names: Vec<String> = san_entries
@@ -350,3 +354,69 @@ pub unsafe extern "C" fn js_tls_native_dispatch(
 
 #[allow(unused_imports)]
 use crate::common::wrapper_imports::*;
+
+#[cfg(test)]
+mod tests {
+    use super::super::nanbox_str;
+    use super::*;
+
+    #[test]
+    fn identity_ip_literals_match_canonical_sans() {
+        perry_runtime::gc::gc_init();
+        extern "C" {
+            fn js_shape_run_static_seed();
+        }
+        unsafe { js_shape_run_static_seed() };
+        for (host, san, matches) in [
+            ("::1", "IP Address:0:0:0:0:0:0:0:1", true),
+            ("0:0:0:0:0:0:0:1", "IP Address:::1", true),
+            ("::2", "IP Address:::1", false),
+            ("::1", "DNS:::1", false),
+            ("127.0.0.1", "IP Address:127.0.0.1", true),
+            ("127.0.0.2", "IP Address:127.0.0.1", false),
+            ("a.example", "DNS:a.example", true),
+            ("other.example", "DNS:a.example", false),
+        ] {
+            let scope = perry_runtime::gc::RuntimeHandleScope::new();
+            let cert = scope.root_raw_mut_ptr(perry_runtime::js_object_alloc(0, 0));
+            let key = scope.root_nanbox_f64(nanbox_str("subjectaltname"));
+            let san = scope.root_nanbox_f64(nanbox_str(san));
+            cert.with_mut_ptr(|cert| unsafe {
+                perry_runtime::js_object_set_field_by_name(
+                    cert,
+                    perry_runtime::js_get_string_pointer_unified(key.get_nanbox_f64())
+                        as *const perry_runtime::StringHeader,
+                    san.get_nanbox_f64(),
+                )
+            });
+            let hostname = scope.root_nanbox_f64(nanbox_str(host));
+            let cert_bits = cert.with_mut_ptr(|cert: *mut ObjectHeader| {
+                perry_runtime::js_nanbox_pointer(cert as i64)
+            });
+            let result = scope.root_nanbox_f64(unsafe {
+                js_tls_check_server_identity(
+                    hostname.get_nanbox_f64().to_bits() as i64,
+                    cert_bits.to_bits() as i64,
+                )
+            });
+            assert_eq!(
+                JSValue::from_bits(result.get_nanbox_f64().to_bits()).is_undefined(),
+                matches,
+                "host={host}"
+            );
+            if !matches {
+                let code = scope.root_nanbox_f64(unsafe {
+                    perry_runtime::value::js_get_property(
+                        result.get_nanbox_f64(),
+                        b"code".as_ptr() as i64,
+                        4,
+                    )
+                });
+                assert_eq!(
+                    unsafe { value_to_string(code.get_nanbox_f64()) }.as_deref(),
+                    Some("ERR_TLS_CERT_ALTNAME_INVALID")
+                );
+            }
+        }
+    }
+}

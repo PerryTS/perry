@@ -13,6 +13,7 @@ mod lookup;
 
 use crate::builtins;
 mod call_and_construct;
+mod shared;
 use crate::delta::{Targets, Tokens};
 use crate::model::*;
 
@@ -278,6 +279,9 @@ impl Model {
             self.rel(|| line);
         }
         self.nodes[n as usize].cons.push(c);
+        if !self.cell_watch.is_empty() && self.cell_watch.remove(&n) {
+            self.cell_woken.push(n);
+        }
         if self.aborted {
             return;
         }
@@ -304,8 +308,12 @@ impl Model {
         self.members_settled.get_mut().clear();
         loop {
             self.fill_instances();
+            self.replay_marker_links();
             let Some(n) = self.wl.pop_front() else {
-                if self.sum.pending.is_empty() && !self.settle_bf_written() && !self.settle_for_in()
+                if self.sum.pending.is_empty()
+                    && self.marker_links.is_empty()
+                    && !self.settle_bf_written()
+                    && !self.settle_for_in()
                 {
                     break;
                 }
@@ -436,7 +444,8 @@ impl Model {
         // A marker has no fields (`store_into`): its any-key field holds
         // only its reach marker. Under a named key it holds that key's
         // reach marker instead (design §18.4).
-        if self.is_marker(t) && !self.reach_marker.contains(&t) {
+        // A path marker's named field holds its step (DECISIONS 158).
+        if self.is_marker(t) && (!self.reach_marker.contains(&t) || self.is_path_marker(t)) {
             let r = self.keyed_reach_of(t, a);
             self.add_tok(n, r);
         } else {
@@ -450,6 +459,10 @@ impl Model {
             for (d, site) in v {
                 self.store_into(d, Key::Named(a), n, site);
             }
+        }
+        // DECISIONS 94: a named field of an array whose elements are a cell.
+        if let Some(&seed) = self.cell_arrs.get(&t) {
+            self.edge(seed, n);
         }
         n
     }
@@ -528,6 +541,12 @@ impl Model {
         self.nodes[n as usize].of_marker = self.is_marker(t);
         self.all_fields.insert(t, n);
         self.rel(|| format!("allfields {n} {t}"));
+        // A path marker read under a computed key: its `[]` step
+        // (DECISIONS 158).
+        if self.is_path_marker(t) {
+            let s = self.path_step_of(t, None);
+            self.add_tok(n, s);
+        }
         n
     }
 
@@ -555,8 +574,17 @@ impl Model {
                     let fp = self.field(ftok, a);
                     self.edge(fp, n);
                 }
-                // Object.create / literal prototypes are added by gen.
-                _ => self.add_tok(n, objproto),
+                // Object.create / literal prototypes are added by gen. A
+                // receiver token or marker has its classes' (DECISIONS 59).
+                _ => match self.virt_protos.get(&t).cloned() {
+                    Some(ps) => {
+                        for p in ps {
+                            let pt = self.tok(TokKind::Proto(p));
+                            self.add_tok(n, pt);
+                        }
+                    }
+                    None => self.add_tok(n, objproto),
+                },
             },
             TokKind::Proto(tm) => match (
                 self.tmpls[tm as usize].parent,
@@ -722,28 +750,218 @@ impl Model {
                 }
             }
             Cons::TopSink { reason } => {
+                let chain = self.chain_sinks.contains(&n);
+                let saved = std::mem::replace(&mut self.chain_escape, chain);
                 for &t in toks {
                     self.escape(t, reason);
                 }
+                self.chain_escape = saved;
             }
-            Cons::HandOver { reason } => {
+            Cons::OwnOnly { f, dst } => {
+                self.add_prim(dst, prim);
                 for &t in toks {
+                    let flow = self.is_arg_marker(t)
+                        || self
+                            .param_marker
+                            .get(&t)
+                            .is_some_and(|&(g, j)| g == f && j != u32::MAX);
+                    if !flow {
+                        self.add_tok(dst, t);
+                    }
+                }
+            }
+            Cons::HandOver { reason, ctor, arg } => {
+                for &t in toks {
+                    if self.is_marker(t) {
+                        self.handed.insert((t, ctor, arg));
+                        self.hand_over_marker(t, reason);
+                        continue;
+                    }
                     let stand_in = matches!(self.toks[t as usize], TokKind::Obj(tm, _)
                         if self.foreign.contains_key(&tm));
-                    if !stand_in {
+                    // DECISIONS 149e: an array leaves by its element cell,
+                    // a primitive method's container too (184).
+                    let arr = self.is_cell_arr(t);
+                    if !stand_in && !arr {
                         self.escape(t, reason);
                     }
                 }
+            }
+            Cons::StoreOut {
+                f,
+                dst,
+                reach,
+                via,
+                key,
+                reason,
+                at,
+                to,
+            } => {
+                let mut from = Vec::new();
+                let mut from_reach = Vec::new();
+                let mut top = false;
+                let mut vals = Vec::new();
+                for &t in toks {
+                    // The argument marker of `f`'s parameter node `j` is
+                    // argument `j`; its other members (the markers this
+                    // unit's own calls pass) escape, as they link in.
+                    let arg = match self.reach_marker.contains(&t) || !self.is_arg_marker(t) {
+                        true => None,
+                        false => self.arg_param_of(t, f),
+                    };
+                    if let Some(j) = arg {
+                        from.push(j);
+                        let w = self.arg_src_watch.entry(t).or_default();
+                        if !w.contains(&(f, j, reason)) {
+                            w.push((f, j, reason));
+                            let own = self.marker_of.get(&(f, j)).copied();
+                            for m in self.arg_members.get(&t).cloned().unwrap_or_default() {
+                                if Some(m) != own {
+                                    self.escape(m, reason);
+                                }
+                            }
+                        }
+                        continue;
+                    }
+                    match self.param_marker.get(&t) {
+                        Some(&(g, j))
+                            if g == f && j != u32::MAX && !self.reach_marker.contains(&t) =>
+                        {
+                            from.push(j)
+                        }
+                        // DECISIONS 136: what the parameter's argument
+                        // reaches (`y.left = y.left.right`) is a value of
+                        // the reader too: it stores its own, as the whole
+                        // program does, not a value of this unit.
+                        Some(&(g, j)) if g == f && j != u32::MAX => {
+                            from_reach.push((j, self.param_reach_key(f, j, t)));
+                        }
+                        // DECISIONS 179: the receiver, and what it
+                        // reaches, stored into the receiver (or into what
+                        // it reaches) is the reader's own value too: the
+                        // reader replays the store on its own receiver.
+                        // An own reach flow keeps DECISIONS 149 (below).
+                        Some(&(g, u32::MAX)) if g == f && dst == u32::MAX && !reach => {
+                            match self.reach_marker.contains(&t) {
+                                true => from_reach
+                                    .push((u32::MAX, self.param_reach_key(f, u32::MAX, t))),
+                                false => from.push(u32::MAX),
+                            }
+                        }
+                        // DECISIONS 136: an argument marker, and what it
+                        // reaches, is its members and what they reach
+                        // (DECISIONS 44); each one is a source of the flow,
+                        // as it links in.
+                        _ if self.is_arg_marker(t) => {
+                            let own = (dst == u32::MAX && to == at).then_some(at);
+                            self.store_out_arg_reach(
+                                t,
+                                (f, dst, reach, via, key),
+                                reason,
+                                own,
+                                None,
+                            );
+                        }
+                        // DECISIONS 149: only the arguments are the
+                        // reader's own values in what its receiver reaches;
+                        // this unit's value stored there takes the path of
+                        // a store into the receiver's reach marker (its
+                        // reach escapes, the value goes where the
+                        // receiver's beside values take it).
+                        // DECISIONS 149b: a value of this unit a rooted store
+                        // put into another function's marker or ⊤ goes there
+                        // as before: ⊤ to the reader, and it escapes (below).
+                        _ if dst == u32::MAX && reach && to == at => {
+                            self.mark_use(at, crate::model::MARK_ESCAPE);
+                        }
+                        // Another function's marker: another unit's value
+                        // the reader cannot follow (DECISIONS 149b).
+                        _ if self.is_marker(t) => {
+                            top = true;
+                            self.escape(t, reason);
+                        }
+                        // DECISIONS 176: a value of this unit goes to the
+                        // reader's object as a result goes to the caller
+                        // (DECISIONS 140): checked after the solve
+                        // (`Gen::contract_check`), described by the flow.
+                        _ => vals.push(t),
+                    }
+                }
+                if !vals.is_empty() {
+                    let k = (f, dst, reach, via, key);
+                    let v = match self.store_flows.get(&k).and_then(|fl| fl.vals) {
+                        Some(v) => v,
+                        None => {
+                            let v = self.node_named("stored", || "stored-vals".into());
+                            self.node_fn[v as usize] = f;
+                            self.store_flows.entry(k).or_default().vals = Some(v);
+                            v
+                        }
+                    };
+                    for t in vals {
+                        self.add_tok(v, t);
+                    }
+                }
+                let fl = self
+                    .store_flows
+                    .entry((f, dst, reach, via, key))
+                    .or_default();
+                for j in from {
+                    if !fl.from.contains(&j) {
+                        fl.from.push(j);
+                    }
+                }
+                for r in from_reach {
+                    if !fl.from_reach.contains(&r) {
+                        fl.from_reach.push(r);
+                    }
+                }
+                fl.top |= top;
+                fl.prim |= prim;
             }
             Cons::ContractThis {
                 tmpl,
                 reason,
                 statics,
+                this,
             } => {
                 for &t in toks {
                     let own_class = statics && self.toks[t as usize] == TokKind::ClassObj(tmpl);
-                    if self.tmpl_of(t) != Some(tmpl) && !own_class {
+                    if self.tmpl_of(t) == Some(tmpl) || own_class {
+                        // DECISIONS 107: what this unit runs the method on.
+                        if !statics && this != u32::MAX {
+                            self.this_admitted.push((this, t));
+                        }
+                        continue;
+                    }
+                    let admitted = self.admit_this(t, tmpl, this, reason);
+                    if admitted {
+                        self.this_admitted.push((this, t));
+                    }
+                    if !admitted {
                         self.escape(t, reason);
+                        // A receiver the method's contract does not admit:
+                        // its unit runs it on a value it never saw, so the
+                        // contract is reported (census, DECISIONS 85).
+                        if let Some(&ft) = self.this_contract_fns.get(this as usize) {
+                            self.escape(ft, reason);
+                        }
+                    }
+                }
+            }
+            Cons::OverrideThis { tmpl, key, reason } => {
+                for &t in toks {
+                    if self.recv_class.get(&t) == Some(&tmpl) {
+                        continue;
+                    }
+                    match self.param_marker.get(&t) {
+                        Some(&(f, u32::MAX)) if !self.reach_marker.contains(&t) => {
+                            let ks = self.this_calls.entry(f).or_default();
+                            if !ks.contains(&key) {
+                                ks.push(key);
+                            }
+                        }
+                        _ => self.escape(t, reason),
                     }
                 }
             }
@@ -1007,6 +1225,10 @@ impl Model {
             Cons::AccessorInstall { key, f, setter } => {
                 let star = self.atom(crate::STAR_KEY);
                 for &t in toks {
+                    if let Some(s) = self.shared_of(t) {
+                        let k = self.atoms[key as usize].clone();
+                        self.note_shared(SharedWrite::Accessor(s, k));
+                    }
                     self.note_fnproto_write(t, Some(Key::Named(key)), "accessor");
                     builtins::note_native_write(self, t, Some(Key::Named(key)), "accessor");
                     if t == TOP {
@@ -1338,6 +1560,119 @@ impl Model {
         }
     }
 
+    /// DECISIONS 118/149: `src` stored under `key` into parameter `i`'s
+    /// argument of contract function `f` (or what it reaches, marker `t`)
+    /// is a flow of `f`'s contract (`Cons::StoreOut`).
+    #[allow(clippy::too_many_arguments)]
+    fn store_flow_out(
+        &mut self,
+        t: Tok,
+        to: Tok,
+        f: FnIdx,
+        i: u32,
+        reach: bool,
+        key: Key,
+        src: NodeId,
+    ) {
+        // Into the parameter's own keyed reach: under `a` of what the
+        // argument holds under `via`, not into all it reaches.
+        let via = self.param_reach_key(f, i, to);
+        self.store_flows.entry((f, i, reach, via, key)).or_default();
+        if self.store_out_done.insert((src, f, i, reach, via, key, to)) {
+            let reason = self.reason("stored into another unit's value");
+            self.cons(
+                src,
+                Cons::StoreOut {
+                    f,
+                    dst: i,
+                    reach,
+                    via,
+                    key,
+                    reason,
+                    at: t,
+                    to,
+                },
+            );
+        }
+    }
+
+    /// DECISIONS 149b: a receiver-rooted store (its object is reached from
+    /// its function G's `this` by loads) is G's store into what its
+    /// receiver reaches, which the whole program runs in the caller's own
+    /// objects: a contract function's marker it meets there (a
+    /// constructor's argument kept in a field), or ⊤ (a value another unit
+    /// gave), is the caller's value. G's parameters stored there are G's
+    /// receiver flow; any other value takes the path it took before
+    /// (`Cons::StoreOut`). Whether the target is reached is the reader's
+    /// own solve: its view of the receiver, ⊤ fields included.
+    fn rooted_store(&mut self, t: Tok, key: Key, src: NodeId, site: SiteId) -> bool {
+        // A replayed summary keeps no store sites: nothing there is rooted.
+        let Some(s) = self.stores.get(site as usize) else {
+            return false;
+        };
+        let g = s.func;
+        if !s.rooted || self.closed_params.contains_key(&g) {
+            return false;
+        }
+        match self.param_marker.get(&t) {
+            Some(&(f, _)) if self.closed_params.contains_key(&f) => return false,
+            // G's own receiver (and what it reaches) is DECISIONS 149's.
+            Some(&(f, u32::MAX)) if f == g => return false,
+            Some(_) => {}
+            None if t == TOP => {}
+            None => return false,
+        }
+        let Some(at) = self
+            .marker_of
+            .get(&(g, u32::MAX))
+            .and_then(|m| self.marker_reach.get(m))
+            .copied()
+        else {
+            return false;
+        };
+        self.store_flow_out(at, t, g, u32::MAX, true, key, src);
+        true
+    }
+
+    /// DECISIONS 149d: a deep receiver-rooted store of contract function G
+    /// (its object is loaded from `this`, `rooted.rs`) into an object of
+    /// this unit (`this.storage[n] = e`, the storage G's constructor made). Its caller's argument is the caller's value,
+    /// which the whole program stores into the caller's view of that object:
+    /// G's parameter (and argument) markers are not stored there: they are
+    /// G's receiver flow, which the reader replays on what its receiver
+    /// reaches (a published field's stand-in, whose stores come back here
+    /// through their contract, or ⊤, where it escapes). The flow is the
+    /// store's into the receiver's keyed reach marker, which the store's
+    /// object holds beside this object by construction (it is loaded from
+    /// G's `this` marker, and a load from a marker reads its reach markers,
+    /// DECISIONS 111). Every other value is stored as before. Returns the
+    /// node to store.
+    fn rooted_own_store(&mut self, t: Tok, src: NodeId, site: SiteId) -> NodeId {
+        if t == TOP || !matches!(self.toks[t as usize], TokKind::Obj(..)) {
+            return src;
+        }
+        let Some(s) = self.stores.get(site as usize) else {
+            return src;
+        };
+        let g = s.func;
+        if !s.deep || self.closed_params.contains_key(&g) {
+            return src;
+        }
+        if !self.marker_of.contains_key(&(g, u32::MAX)) {
+            return src;
+        }
+        let own = match self.rooted_own.get(&(src, g)) {
+            Some(&n) => n,
+            None => {
+                let n = self.node_named("rooted", || format!("rooted-own({src})"));
+                self.rooted_own.insert((src, g), n);
+                self.cons(src, Cons::OwnOnly { f: g, dst: n });
+                n
+            }
+        };
+        own
+    }
+
     /// Every builtin function value may have been written: every property
     /// read of one is ⊤ from now on.
     fn write_builtin_fns(&mut self, r: u32) {
@@ -1345,6 +1680,7 @@ impl Model {
             return;
         }
         self.bf_written = Some(r);
+        self.note_shared(SharedWrite::Store(Shared::BuiltinFn, None));
         self.bf_stores.clear();
         for dst in std::mem::take(&mut self.bf_reads) {
             self.add_top(dst, |_| {
@@ -1355,21 +1691,131 @@ impl Model {
 
     /// The stores into a builtin function value, once the worklist is
     /// empty: one at a node without ⊤ wrote one (true: solve on). A node
-    /// that holds ⊤ keeps it, so its stores are stores into ⊤ for good.
+    /// that holds ⊤ keeps it, so its stores are stores into ⊤ for good. So
+    /// does one holding a bare marker: another unit's argument whole, which
+    /// every rule reads as ⊤ (DECISIONS 119).
     fn settle_bf_written(&mut self) -> bool {
         if self.bf_written.is_some() || self.bf_stores.is_empty() {
             return false;
         }
         let stores = std::mem::take(&mut self.bf_stores);
-        match stores
-            .iter()
-            .find(|&&(n, _)| !self.nodes[n as usize].pts.contains_tok(TOP))
-        {
+        let holds_top = |m: &Self, n: NodeId| {
+            let pts = &m.nodes[n as usize].pts;
+            pts.contains_tok(TOP) || pts.to_sorted().into_iter().any(|t| m.bare_marker(t))
+        };
+        match stores.iter().find(|&&(n, _)| !holds_top(self, n)) {
             Some(&(_, r)) => {
                 self.write_builtin_fns(r);
                 true
             }
             None => false,
+        }
+    }
+
+    /// DECISIONS 193: the readers argument marker `x` stands for gain
+    /// `new` (a marker below it, or a keyed reach of one, `arg_readers`):
+    /// the stores made on `x` and on its keyed reaches reach them, and so do
+    /// those of each argument marker `x` is a member of, which gains them in
+    /// turn. Each (marker, reader) is added once and each is solve work, so
+    /// a store costs its readers, and a link the readers it brings to the
+    /// markers above it; no argument marker on the way keeps a store.
+    pub(crate) fn arg_readers_add(&mut self, x: Tok, new: Vec<(Tok, Option<Atom>)>) {
+        let mut st = vec![(x, new)];
+        while let Some((x, zs)) = st.pop() {
+            if self.aborted {
+                return;
+            }
+            let fresh: Vec<(Tok, Option<Atom>)> = zs
+                .into_iter()
+                .filter(|&(z, k)| self.arg_reader_seen.insert((x, z, k)))
+                .collect();
+            if fresh.is_empty() {
+                continue;
+            }
+            self.work += fresh.len() as u64;
+            if self.max_work != 0 && self.work > self.max_work {
+                self.aborted = true;
+                return;
+            }
+            self.arg_readers.entry(x).or_default().extend(fresh.iter().copied());
+            if let Some(ss) = self.arg_stores.get(&x).cloned() {
+                for &(z, k) in &fresh {
+                    self.arg_store_reaches(z, k, None, &ss);
+                }
+            }
+            for (a, kr) in self.keyed_reach.get(&x).cloned().unwrap_or_default() {
+                if let Some(ss) = self.arg_stores.get(&kr).cloned() {
+                    for &(z, k) in &fresh {
+                        self.arg_store_reaches(z, k, Some(a), &ss);
+                    }
+                }
+            }
+            for q in self.arg_parents.get(&x).cloned().unwrap_or_default() {
+                st.push((q, fresh.clone()));
+            }
+            // `x`'s keyed reach under `a` is a member of `q`: `q` stands for
+            // what each marker below `x` reaches under `a` (DECISIONS 121).
+            for (a, q) in self.arg_keyed_parents.get(&x).cloned().unwrap_or_default() {
+                let v: Vec<(Tok, Option<Atom>)> = fresh
+                    .iter()
+                    .filter(|&&(_, k)| k.is_none())
+                    .map(|&(z, _)| (z, Some(a)))
+                    .collect();
+                if !v.is_empty() {
+                    st.push((q, v));
+                }
+            }
+        }
+    }
+
+    /// The readers marker `m` brings to the argument marker it links into:
+    /// itself (a parameter's marker or its reach), what an argument marker
+    /// stands for, or for an argument marker's keyed reach under `a` what
+    /// the markers below its base reach under `a`.
+    /// DECISIONS 194: a closed function no other unit calls has every
+    /// caller here; a store through its parameter composes on their values
+    /// beside its marker, and no flow crosses a unit edge: its marker reads
+    /// no store.
+    fn arg_readers_of(&self, m: Tok) -> Vec<(Tok, Option<Atom>)> {
+        if !self.is_arg_marker(m) {
+            if self.param_marker.get(&m).is_some_and(|&(f, _)| {
+                self.closed_params.contains_key(&f) && !self.closed_called_out.contains(&f)
+            }) {
+                return Vec::new();
+            }
+            return vec![(m, None)];
+        }
+        match self.keyed_parent.get(&m).copied() {
+            Some((p, a)) => self
+                .arg_readers
+                .get(&p)
+                .into_iter()
+                .flatten()
+                .filter(|&&(_, k)| k.is_none())
+                .map(|&(z, _)| (z, Some(a)))
+                .collect(),
+            None => self.arg_readers.get(&m).cloned().unwrap_or_default(),
+        }
+    }
+
+    /// Stores `ss`, made on an argument marker (`k`: on its keyed reach
+    /// under `k`), reaching reader `z` (`kz`: what `z` reaches under `kz`).
+    /// A keyed reach's own keyed reach: no member stands under it.
+    fn arg_store_reaches(
+        &mut self,
+        z: Tok,
+        kz: Option<Atom>,
+        k: Option<Atom>,
+        ss: &[(Key, NodeId, SiteId)],
+    ) {
+        let y = match (kz, k) {
+            (None, None) => z,
+            (Some(a), None) | (None, Some(a)) => self.keyed_reach_of(z, a),
+            (Some(_), Some(_)) => return,
+        };
+        for &(key, src, site) in ss {
+            self.work += 1;
+            self.store_into(y, key, src, site);
         }
     }
 
@@ -1384,6 +1830,29 @@ impl Model {
     }
 
     pub(crate) fn store_into(&mut self, t: Tok, key: Key, src: NodeId, site: SiteId) {
+        {
+            self.virt_revoke(
+                t,
+                match key {
+                    Key::Named(a) => Some(a),
+                    Key::Any => None,
+                },
+            );
+        }
+        // A store into a builtin function value is decided once the
+        // worklist is empty (`settle_bf_written`): `write_builtin_fns` notes it.
+        // The boundary's store for other units' code is theirs to publish.
+        let theirs = self.store_at.is_some() && self.store_at == self.other_units_store;
+        if let Some(s) = self
+            .shared_of(t)
+            .filter(|s| *s != Shared::BuiltinFn && !theirs)
+        {
+            let k = match key {
+                Key::Named(a) => Some(self.atoms[a as usize].clone()),
+                Key::Any => None,
+            };
+            self.note_shared(SharedWrite::Store(s, k));
+        }
         // A program-owned global: an ordinary field of the global object.
         if let (TokKind::Builtin(BuiltinNs::GlobalThis), Key::Named(a)) =
             (&self.toks[t as usize], key)
@@ -1411,6 +1880,10 @@ impl Model {
             }
         }
         if t == TOP {
+            // DECISIONS 149b: ⊤ reached from the receiver is the reader's.
+            if self.rooted_store(t, key, src, site) {
+                return;
+            }
             let r = self.reason("stored into a value from unmodeled code");
             self.sink_node(src, r);
             return;
@@ -1441,6 +1914,115 @@ impl Model {
                 self.store_into(i, key, src, site);
             }
         }
+        // DECISIONS 118: an argument marker stands for its members (DECISIONS
+        // 44): a store into it under a named key is a store into each one,
+        // replayed on each one that links in later. A store into its keyed
+        // reach under `k` goes into each member's keyed reach under `k`
+        // alone, not into all its members reach (DECISIONS 121). Under a
+        // computed key, the same into each member under any key (DECISIONS
+        // 205): the marker has no fields, and no value sits beside it to
+        // take the store, so it went nowhere. It still marks the argument
+        // escaped, as before.
+        if self.is_arg_marker(t) {
+            if self.aborted {
+                return;
+            }
+            if key == Key::Any {
+                self.mark_use(t, crate::model::MARK_ESCAPE);
+            }
+            if self.arg_store_done.insert((t, key, src)) {
+                // DECISIONS 187/193: kept on `t` alone, where it was made,
+                // and handed to the readers `t` stands for (a keyed reach:
+                // its base's readers, under its key); a reader that comes
+                // later takes it from `t` (`arg_readers_add`).
+                self.arg_stores.entry(t).or_default().push((key, src, site));
+                let s = [(key, src, site)];
+                match self.keyed_parent.get(&t).copied() {
+                    Some((p, k)) => {
+                        for (z, kz) in self.arg_readers.get(&p).cloned().unwrap_or_default() {
+                            self.arg_store_reaches(z, kz, Some(k), &s);
+                        }
+                    }
+                    None => {
+                        for (z, kz) in self.arg_readers.get(&t).cloned().unwrap_or_default() {
+                            self.arg_store_reaches(z, kz, None, &s);
+                        }
+                    }
+                }
+            }
+            return;
+        }
+        // A store into a published method's receiver marker is a key of its
+        // receiver contract, not an escape (DECISIONS 57): the reader puts
+        // what the method stores under the key of the instance it admits.
+        // DECISIONS 179: under a named key, what it stores is a flow of the
+        // contract, as for a parameter (DECISIONS 118, 176): the reader's
+        // arguments and receiver it names, this unit's values given out.
+        if let Some(&(f, u32::MAX)) = self.param_marker.get(&t) {
+            if !self.reach_marker.contains(&t) {
+                match key {
+                    Key::Named(a) => {
+                        let ks = self.this_stores.entry(f).or_default();
+                        if !ks.contains(&a) {
+                            ks.push(a);
+                        }
+                        // A closed constructor too: a subclass instance
+                        // of another unit runs it on the reader's object.
+                        self.store_flow_out(t, t, f, u32::MAX, false, key, src);
+                    }
+                    Key::Any => {
+                        self.this_open.insert(f);
+                    }
+                }
+                return;
+            }
+        }
+        // DECISIONS 149b: a receiver-rooted store meeting a marker.
+        if self.param_marker.contains_key(&t) && self.rooted_store(t, key, src, site) {
+            return;
+        }
+        // The same for a contract function's parameter (DECISIONS 84): the
+        // reader stores an unknown value under the key of its argument. The
+        // stored value goes into another unit's object: it escapes. A
+        // closed function's callers' values are beside its marker: the
+        // store reaches them there (decision 13).
+        if let Some(&(f, i)) = self.param_marker.get(&t) {
+            // DECISIONS 118: under a named key, the store is a flow of the
+            // contract. A parameter's argument stored into another's (or
+            // into what that reaches) is the reader's store of its own
+            // values, as the whole program runs it; any other stored value
+            // goes into another unit's object: it escapes (`Cons::StoreOut`).
+            // DECISIONS 149: so is a store into what an argument or the
+            // receiver reaches under a computed key (`this.items[i] = e`):
+            // the reader stores into its own object under any key, as the
+            // whole program does. (A store into the receiver itself is a
+            // key of its receiver contract, above.)
+            let reach = self.reach_marker.contains(&t);
+            if !self.closed_params.contains_key(&f)
+                && (i != u32::MAX || reach)
+                && (reach || matches!(key, Key::Named(_)))
+            {
+                if let (false, Key::Named(a)) = (reach, key) {
+                    let ks = self.param_stores.entry((f, i)).or_default();
+                    if !ks.contains(&a) {
+                        ks.push(a);
+                    }
+                }
+                self.store_flow_out(t, t, f, i, reach, key, src);
+                return;
+            }
+            if !self.reach_marker.contains(&t) && !self.closed_params.contains_key(&f) {
+                match key {
+                    Key::Named(_) => unreachable!("a named store is a flow (DECISIONS 118)"),
+                    Key::Any => {
+                        self.param_open.insert((f, i));
+                    }
+                }
+                let r = self.reason("stored into another unit's value");
+                self.sink_node(src, r);
+                return;
+            }
+        }
         self.mark_use(t, crate::model::MARK_ESCAPE);
         // A parameter marker stands for another unit's value (design §11.2):
         // it has no fields in this unit. The store is its contract's escape
@@ -1452,6 +2034,7 @@ impl Model {
         if self.is_marker(t) {
             return;
         }
+        let src = self.rooted_own_store(t, src, site);
         // A store into another unit's instance, class object or prototype
         // is beyond its contract (census report).
         let tm = match self.toks[t as usize] {
@@ -1465,7 +2048,9 @@ impl Model {
         // (`Gen::contract_check`: a value no contract describes escapes, and
         // the field holds an unknown value). A class instance's
         // field is existing when every instance holds it from its birth
-        // (definite): the store adds no key (CW2 C, binarytrees_arena).
+        // (definite) or its slot is born with it, present or a hole
+        // (declared, `__perry_declared_keys`: DECISIONS 188): the store adds
+        // no key (CW2 C, binarytrees_arena; the CommonJS cache).
         // A literal layout's new data key is a shape transition its defining
         // unit performs the same way (design §16, DECISIONS 66): the layout
         // gains the key. `__proto__` and an accessor key store no data.
@@ -1480,15 +2065,31 @@ impl Model {
                     "class" => facts
                         .fields
                         .iter()
-                        .any(|f| f.data_field && &f.key == k && f.definite),
+                        .any(|f| f.data_field && &f.key == k && (f.definite || f.declared)),
                     _ => false,
                 }
+            }
+            // DECISIONS 188: a declared-keys object (`__perry_declared_keys`,
+            // the CommonJS cache) under a computed key: a store its defining
+            // unit performs as one under a computed key into its own object
+            // (the runtime caching a record under a path it computes,
+            // `cjsInstall`); published under `*`, it opens the keys there as
+            // the whole program does. Any other layout a computed key opens:
+            // a census report (§5).
+            (Some(facts), Key::Any) if matches!(self.toks[t as usize], TokKind::Obj(..)) => {
+                facts.kind == "class" && facts.fields.iter().any(|f| f.declared)
             }
             _ => false,
         };
         if let Some(tm) = tm.filter(|tm| self.foreign.contains_key(tm)) {
             match key {
+                // The stored value is published with the effect, checked
+                // as a published value (`Gen::contract_check`, §17.16 (c)).
                 Key::Named(a) if effect => {
+                    self.foreign_stores.insert((tm, a, src));
+                }
+                Key::Any if effect => {
+                    let a = self.atom(crate::STAR_KEY);
                     self.foreign_stores.insert((tm, a, src));
                 }
                 _ => {
@@ -1506,6 +2107,17 @@ impl Model {
                 },
             );
             return;
+        }
+        // DECISIONS 94: a named key stored into an array other units hold.
+        if matches!(key, Key::Named(_)) && self.global_cells {
+            if self.cell_arrs.contains_key(&t) {
+                self.arr_named.insert(t);
+                let r =
+                    self.reason("stored into a named field of an array shared with other units");
+                self.sink_node(src, r);
+            } else if self.is_cell_arr(t) {
+                self.arr_named_srcs.entry(t).or_default().push(src);
+            }
         }
         match key {
             Key::Named(a) => {
@@ -1544,7 +2156,11 @@ impl Model {
                         w.ctor.push(site);
                     } else {
                         w.post.push(site);
-                        *self.adds_keys.entry(tm).or_default() += 1;
+                        // A store effect (DECISIONS 188): its defining unit
+                        // opens the key set, performing it.
+                        if !effect {
+                            *self.adds_keys.entry(tm).or_default() += 1;
+                        }
                     }
                 }
             }
@@ -1634,6 +2250,227 @@ impl Model {
         }
     }
 
+    /// `t`, a receiver token or a receiver marker, stands for instances of
+    /// `classes` (DECISIONS 59): its prototypes are theirs, and a named load
+    /// on it finds the chain's value; the own field (unknown for these
+    /// tokens) only once the key may be an own key of such an instance
+    /// (`virt_load`).
+    pub(crate) fn register_virt(&mut self, t: Tok, classes: &[TmplId]) {
+        let ps = self.virt_protos.entry(t).or_default();
+        let fresh: Vec<TmplId> = classes
+            .iter()
+            .copied()
+            .filter(|c| !ps.contains(c))
+            .collect();
+        ps.extend(fresh.iter().copied());
+        for &c in &fresh {
+            self.virt_by_class.entry(c).or_default().push(t);
+        }
+        if let Some(&pn) = self.proto_node.get(&t) {
+            for p in fresh {
+                let pt = self.tok(TokKind::Proto(p));
+                self.add_tok(pn, pt);
+            }
+        }
+    }
+
+    /// The load node of key `a` on receiver token / marker `t` (`None`: `t`
+    /// is neither). It holds the chain's values, and the own field once `a`
+    /// may be an own key of an instance `t` stands for: the class code
+    /// stores `a` (or a computed key) into one, uses a hard operation on one
+    /// or lets one escape; a subclass of another unit defines `a` (census,
+    /// `override_keys`); an accessor on the chain may answer it.
+    pub(crate) fn virt_load(&mut self, t: Tok, a: Atom) -> Option<NodeId> {
+        let classes = self.virt_protos.get(&t)?.clone();
+        if let Some(&n) = self.virt_nodes.get(&(t, a)) {
+            return Some(n);
+        }
+        let n = self.node_l("virt-load");
+        self.virt_nodes.insert((t, a), n);
+        self.virt_tok_keys.entry(t).or_default().push(a);
+        let cv = self.cv(t, Key::Named(a));
+        self.edge(cv, n);
+        let own = self.virt_own(&classes, a);
+        if own {
+            let f = self.field(t, a);
+            self.edge(f, n);
+        }
+        Some(n)
+    }
+
+    /// Key `a` may be an own key of the instances a receiver of `classes`
+    /// stands for in this unit's view: the class code stores it, uses a
+    /// hard operation on one or lets one escape, or an accessor on the
+    /// chain may answer it.
+    fn virt_own(&self, classes: &[TmplId], a: Atom) -> bool {
+        classes.iter().any(|&p| {
+            self.virt_open.contains(&p)
+                || self.virt_revoked.contains(&(p, a))
+                || self.chain_accessor_key(p, a)
+        })
+    }
+
+    /// The classes of receiver token / marker `t` that another unit's
+    /// subclass overrides `a` of (census, `override_keys`).
+    pub(crate) fn virt_overriders(&mut self, t: Tok, a: Atom) -> Vec<TmplId> {
+        let star = self.atom(crate::STAR_KEY);
+        let Some(classes) = self.virt_protos.get(&t) else {
+            return Vec::new();
+        };
+        classes
+            .iter()
+            .copied()
+            .filter(|p| {
+                self.override_keys
+                    .get(p)
+                    .is_some_and(|v| v.contains(&a) || v.contains(&star))
+            })
+            .collect()
+    }
+
+    /// The callee of `t.a(...)` beyond the chain, on receiver token /
+    /// marker `t` (DECISIONS 97): when `a` is own only because another
+    /// unit's subclass defines it, the call runs that subclass's method on
+    /// a subclass instance, i.e. the override token of each such class
+    /// (`override_node`); else nothing (`virt_load` holds the own field).
+    pub(crate) fn virt_call(&mut self, t: Tok, a: Atom) -> Vec<NodeId> {
+        let classes = self.virt_protos.get(&t).cloned().unwrap_or_default();
+        if self.virt_own(&classes, a) {
+            return Vec::new();
+        }
+        let ps = self.virt_overriders(t, a);
+        ps.into_iter().map(|p| self.override_node(p, a)).collect()
+    }
+
+    /// The node holding the override token of key `a` of published class
+    /// `tm` (DECISIONS 97): the function another unit's subclass defines
+    /// under `a`, as a call through a receiver of `tm` sees it. That unit
+    /// runs it unseen: the arguments escape, the result is unknown, and its
+    /// receiver is checked (`Cons::OverrideThis`).
+    fn override_node(&mut self, tm: TmplId, a: Atom) -> NodeId {
+        if let Some(&n) = self.override_fns.get(&(tm, a)) {
+            return n;
+        }
+        let fx = self.funcs.len() as FnIdx;
+        let tok = self.tok(TokKind::Func(fx, NO_CTX));
+        let this = self.node_l("this(override)");
+        let ret = self.node_l("ret(override)");
+        let args_all = self.node_l("args(override)");
+        let name = format!(
+            "<override {} of {}>",
+            self.atoms[a as usize], self.tmpls[tm as usize].display
+        );
+        self.funcs.push(FuncInfo {
+            module: 0,
+            func_id: u32::MAX,
+            name,
+            params: Vec::new(),
+            rest: None,
+            this,
+            ret,
+            args_all,
+            has_arguments: true,
+            token: tok,
+            ctor_of: None,
+            lexical_this: false,
+            no_summary: true,
+            gen_step: false,
+            captures: Vec::new(),
+            forwards_super: false,
+            parent: NO_FN,
+            forwarded: false,
+        });
+        let r = self.reason("passed to an unknown function");
+        self.sink_node(args_all, r);
+        self.add_top(ret, |_| "result of an unknown function".to_string());
+        self.add_prim(ret, prim::ALL);
+        let rt = self.reason("receiver of a call of an unknown function value");
+        self.cons(
+            this,
+            Cons::OverrideThis {
+                tmpl: tm,
+                key: a,
+                reason: rt,
+            },
+        );
+        let n = self.node_l("override-callee");
+        self.add_tok(n, tok);
+        self.override_fns.insert((tm, a), n);
+        n
+    }
+
+    fn chain_accessor_key(&self, tm: TmplId, a: Atom) -> bool {
+        let mut cur = Some(tm);
+        while let Some(c) = cur {
+            let t = &self.tmpls[c as usize];
+            if t.accessor_keys.contains(&a) || t.has_computed_members {
+                return true;
+            }
+            cur = t.parent;
+        }
+        false
+    }
+
+    /// `t` gains own key `a` (`None`: any key): for each published class
+    /// whose instances `t` is or stands for, the key is open on its
+    /// receiver token and markers from now on (`virt_load`).
+    pub(crate) fn virt_revoke(&mut self, t: Tok, key: Option<Atom>) {
+        if self.virt_by_class.is_empty() {
+            return;
+        }
+        let classes: Vec<TmplId> = match self.virt_protos.get(&t) {
+            Some(ps) => ps.clone(),
+            None => {
+                let Some(tm) = self.tmpl_of(t) else { return };
+                let mut out = Vec::new();
+                let mut work = vec![tm];
+                let mut seen: Vec<TmplId> = Vec::new();
+                while let Some(c) = work.pop() {
+                    if seen.contains(&c) {
+                        continue;
+                    }
+                    seen.push(c);
+                    if self.virt_by_class.contains_key(&c) {
+                        out.push(c);
+                    }
+                    let tp = &self.tmpls[c as usize];
+                    work.extend(tp.parent);
+                    work.extend(tp.parent_links.iter().copied());
+                }
+                out
+            }
+        };
+        for p in classes {
+            if self.virt_open.contains(&p) {
+                continue;
+            }
+            let opened: Option<Atom> = match key {
+                Some(a) => {
+                    if !self.virt_revoked.insert((p, a)) {
+                        continue;
+                    }
+                    Some(a)
+                }
+                None => {
+                    self.virt_open.insert(p);
+                    None
+                }
+            };
+            for vt in self.virt_by_class.get(&p).cloned().unwrap_or_default() {
+                let keys: Vec<Atom> = match opened {
+                    Some(a) => vec![a],
+                    None => self.virt_tok_keys.get(&vt).cloned().unwrap_or_default(),
+                };
+                for a in keys {
+                    if let Some(&n) = self.virt_nodes.get(&(vt, a)) {
+                        let f = self.field(vt, a);
+                        self.edge(f, n);
+                    }
+                }
+            }
+        }
+    }
+
     /// Is `owner` `tm` or an ancestor of it: the static parent, then the
     /// parents `super()` ran (`parent_links`, §17.2).
     pub(crate) fn has_ancestor(&self, tm: TmplId, owner: TmplId) -> bool {
@@ -1654,6 +2491,328 @@ impl Model {
         false
     }
 
+    /// `t` reaches `this` of another unit's method of class `tmpl` whose
+    /// receiver contract is `this` (DECISIONS 57): admitted when `t` is an
+    /// instance of a subclass of `tmpl` and the method neither uses its
+    /// receiver beyond reading it nor reads a key a subclass accessor may
+    /// answer; then the method's published effects happen to `t` (the
+    /// stored keys hold unknown values, what it reaches is escaped or
+    /// touched as published). False: `t` escapes.
+    pub(crate) fn admit_this(&mut self, t: Tok, tmpl: TmplId, this: u32, reason: u32) -> bool {
+        use crate::model::{MARK_ESCAPE, MARK_READ, MARK_TOUCH};
+        let Some(c) = self.this_contracts.get(this as usize).cloned() else {
+            return false;
+        };
+        if c.uses & (MARK_ESCAPE | MARK_TOUCH) != 0 {
+            return false;
+        }
+        // A published receiver token stands for its class's instances; a
+        // receiver marker for its classes' (DECISIONS 59): the method runs
+        // on them, so its published effects on its receiver are the
+        // marker's own (they compose, as arguments do).
+        let marker = matches!(self.param_marker.get(&t), Some(&(_, u32::MAX)))
+            && !self.reach_marker.contains(&t);
+        let classes: Vec<TmplId> = match self.toks[t as usize] {
+            _ if marker => self.virt_protos.get(&t).cloned().unwrap_or_default(),
+            _ if self.recv_class.contains_key(&t) => vec![self.recv_class[&t]],
+            TokKind::Obj(tm, _) if tm != tmpl => vec![tm],
+            _ => Vec::new(),
+        };
+        if classes.is_empty()
+            || classes
+                .iter()
+                .any(|&tm| !self.has_ancestor(tm, tmpl) || (!marker && tm == tmpl))
+        {
+            return false;
+        }
+        // A read may run a subclass getter unseen by the method's unit.
+        if c.uses & MARK_READ != 0 && classes.iter().any(|&tm| self.chain_has_accessors(tm, tmpl)) {
+            return false;
+        }
+        if marker {
+            let (f, _) = self.param_marker[&t];
+            self.mark_use(t, c.uses);
+            if let Some(&r) = self.marker_reach.get(&t) {
+                self.mark_use(r, c.reach);
+            }
+            match &c.stores {
+                Some(ks) => {
+                    for k in ks {
+                        let a = self.atom(k);
+                        self.virt_revoke(t, Some(a));
+                        let ks = self.this_stores.entry(f).or_default();
+                        if !ks.contains(&a) {
+                            ks.push(a);
+                        }
+                    }
+                }
+                None => {
+                    self.virt_revoke(t, None);
+                    self.this_open.insert(f);
+                }
+            }
+            return true;
+        }
+        let why = |_: &Self| "field of another unit's class".to_string();
+        let top = self.node_l("admitted-this-store");
+        self.add_top(top, why);
+        self.add_prim(top, prim::ALL);
+        let site = self.anon_post_site("store by another unit's method");
+        match &c.stores {
+            Some(ks) => {
+                // DECISIONS 179: what the method's flow stores there.
+                for (i, k) in ks.iter().enumerate() {
+                    let a = self.atom(k);
+                    let v = c.values.get(i).copied().unwrap_or(top);
+                    self.store_into(t, Key::Named(a), v, site);
+                }
+            }
+            None => self.store_into(t, Key::Any, top, site),
+        }
+        // What the receiver reaches (its fields, transitively), as for an
+        // argument (gen.rs `stand_in_fn_of`).
+        if c.reach & (MARK_ESCAPE | MARK_TOUCH) != 0 {
+            let h = self.node_l("admitted-this");
+            let q = self.node_l("admitted-this-reach");
+            self.cons(
+                h,
+                Cons::Load {
+                    key: Key::Any,
+                    dst: q,
+                },
+            );
+            self.cons(
+                q,
+                Cons::Load {
+                    key: Key::Any,
+                    dst: q,
+                },
+            );
+            if c.reach & MARK_ESCAPE != 0 {
+                self.sink_node(q, reason);
+            } else {
+                self.cons(
+                    q,
+                    Cons::Implicit {
+                        reason,
+                        proto: Protocol::Any,
+                    },
+                );
+            }
+            self.add_tok(h, t);
+        }
+        true
+    }
+
+    /// A template from `tm` up to (not including) ancestor `owner` defines
+    /// an accessor or computed members.
+    fn chain_has_accessors(&self, tm: TmplId, owner: TmplId) -> bool {
+        let mut work = vec![tm];
+        let mut seen: Vec<TmplId> = Vec::new();
+        while let Some(c) = work.pop() {
+            if c == owner || seen.contains(&c) {
+                continue;
+            }
+            seen.push(c);
+            let t = &self.tmpls[c as usize];
+            if !t.accessor_keys.is_empty() || t.has_computed_members {
+                return true;
+            }
+            work.extend(t.parent);
+            work.extend(t.parent_links.iter().copied());
+        }
+        false
+    }
+
+    /// DECISIONS 118: what an argument marker's stores and `StoreOut`s do
+    /// to each marker that linked in since (`link_marker`).
+    fn replay_marker_links(&mut self) {
+        while let Some((m, r)) = self.marker_links.pop() {
+            if self.aborted {
+                self.marker_links.clear();
+                return;
+            }
+            // DECISIONS 193: `r` and the argument markers above it stand for
+            // the readers `m` brings; the stores made on them reach those.
+            let zs = self.arg_readers_of(m);
+            if !zs.is_empty() {
+                self.arg_readers_add(r, zs);
+            }
+            // DECISIONS 136: a flow whose stored value `r`'s members stand for.
+            // Only `m` is new below `r`: the walk from `r`'s base has seen
+            // the rest, and what it found is recorded (XUC-3).
+            for (t, flow, reason, own) in self.arg_src_flows.get(&r).cloned().unwrap_or_default() {
+                self.store_out_arg_reach(t, flow, reason, own, Some(m));
+            }
+            for (f, j, reason) in self.arg_src_watch.get(&r).cloned().unwrap_or_default() {
+                if self.marker_of.get(&(f, j)) != Some(&m) {
+                    self.escape(m, reason);
+                }
+            }
+            for reason in self.handover_watch.get(&r).cloned().unwrap_or_default() {
+                self.hand_over_marker(m, reason);
+            }
+        }
+    }
+
+    /// DECISIONS 152: marker `t` handed to a closed class's constructor
+    /// (`Cons::HandOver`). A parameter's own marker is its function's: that
+    /// function's contract hands it over, and each caller's unit passes
+    /// what it holds to the constructor itself. What a parameter reaches
+    /// is not the parameter (its keyed reach marker shares the parameter's
+    /// entry, §18.4). An argument marker stands
+    /// for its members, also those that link in later
+    /// (`replay_marker_links`). DECISIONS 155: a reach with values beside
+    /// it (a published method's receivers, DECISIONS 107; a closed
+    /// function's described parameter, 74) stands for no value of its own:
+    /// the values beside it reach the constructor themselves, path by path,
+    /// and its argument contract reads it as them (142). Any other marker
+    /// (the receiver itself, a bare reach, an argument marker's reach)
+    /// escapes, as a value no contract describes does.
+    fn hand_over_marker(&mut self, t: Tok, reason: u32) {
+        if self.is_arg_marker(t) && !self.reach_marker.contains(&t) {
+            let w = self.handover_watch.entry(t).or_default();
+            if w.contains(&reason) {
+                return;
+            }
+            w.push(reason);
+            for m in self.arg_members.get(&t).cloned().unwrap_or_default() {
+                self.hand_over_marker(m, reason);
+            }
+            return;
+        }
+        let own = self
+            .param_marker
+            .get(&t)
+            .is_some_and(|&(f, j)| j != u32::MAX && self.marker_of.get(&(f, j)) == Some(&t));
+        let beside = self.reach_marker.contains(&t) && self.beside_values(t);
+        if !own && !beside {
+            self.escape(t, reason);
+        }
+    }
+
+    /// The key `t` is the keyed reach of parameter `j` of `f` under, if
+    /// it is one (`None`: its reach through any key).
+    fn param_reach_key(&self, f: FnIdx, j: u32, t: Tok) -> Option<Atom> {
+        self.marker_of
+            .get(&(f, j))
+            .and_then(|mk| self.keyed_reach.get(mk))
+            .and_then(|v| v.iter().find(|&&(_, r)| r == self.path_root(t)))
+            .map(|&(k, _)| k)
+    }
+
+    /// DECISIONS 136: stored value `t`, an argument marker or its reach
+    /// (under a key, or any), stands for each member or that reach of it:
+    /// `f`'s own parameter, or its reach, is a source of the flow (the
+    /// reader stores its own value), any other member's escapes. The
+    /// members that link in later are replayed (`replay_marker_links`).
+    ///
+    /// `from`: a member that linked in under a marker this flow already
+    /// walked (`replay_marker_links`); the walk covers what is new, `from`
+    /// and below (XUC-3). Each marker visited is solve work (113-CWL3).
+    /// DECISIONS 151: a member is a source as a value stored directly is:
+    /// in a store into the receiver's reach marker it met (`own`), a value
+    /// of this unit takes the path of that store (`Cons::StoreOut`,
+    /// DECISIONS 149), not an escape.
+    fn store_out_arg_reach(
+        &mut self,
+        t: Tok,
+        flow: StoreFlowKey,
+        reason: u32,
+        own: Option<Tok>,
+        from: Option<Tok>,
+    ) {
+        let (f, dst, reach, ..) = flow;
+        // `None`: the members themselves; `Some(k)`: their reach under key
+        // `k`, or any key.
+        let (base, k) = match self.keyed_parent.get(&t).copied() {
+            Some((p, k)) => (p, Some(Some(k))),
+            None => match self.arg_reach_base.get(&t).copied() {
+                Some(p) => (p, Some(None)),
+                None => (t, None),
+            },
+        };
+        let mut st = vec![from.unwrap_or(base)];
+        let mut seen = crate::pts::FxHashSet::default();
+        let mut srcs = Vec::new();
+        while let Some(x) = st.pop() {
+            if !seen.insert(x) {
+                continue;
+            }
+            self.work += 1;
+            if self.max_work != 0 && self.work > self.max_work {
+                self.aborted = true;
+                return;
+            }
+            match self.arg_members.get(&x).cloned() {
+                Some(ms) => {
+                    if self.arg_src_flow_done.insert((x, t, flow, reason, own)) {
+                        self.arg_src_flows
+                            .entry(x)
+                            .or_default()
+                            .push((t, flow, reason, own));
+                    }
+                    st.extend(ms);
+                }
+                // A reach marker reaches itself under every key.
+                None if self.reach_marker.contains(&x) => srcs.push(x),
+                None => srcs.push(match k {
+                    None => x,
+                    Some(Some(k)) => self.keyed_reach_of(x, k),
+                    Some(None) => match self.marker_reach.get(&x) {
+                        Some(&r) => r,
+                        None => x,
+                    },
+                }),
+            }
+        }
+        let (mut from, mut from_reach) = (Vec::new(), Vec::new());
+        let mut top = false;
+        for s in srcs {
+            match self.param_marker.get(&s).copied() {
+                // DECISIONS 179: as in `Cons::StoreOut`.
+                Some((g, u32::MAX)) if g == f && dst == u32::MAX && !reach => {
+                    match self.reach_marker.contains(&s) {
+                        true => from_reach.push((u32::MAX, self.param_reach_key(f, u32::MAX, s))),
+                        false => from.push(u32::MAX),
+                    }
+                }
+                Some((g, j)) if g == f && j != u32::MAX && self.reach_marker.contains(&s) => {
+                    from_reach.push((j, self.param_reach_key(f, j, s)));
+                }
+                Some((g, j)) if g == f && j != u32::MAX => from.push(j),
+                _ => match own {
+                    Some(at) => self.mark_use(at, crate::model::MARK_ESCAPE),
+                    None => {
+                        top = true;
+                        self.escape(s, reason);
+                    }
+                },
+            }
+        }
+        let fl = self.store_flows.entry(flow).or_default();
+        for j in from {
+            if !fl.from.contains(&j) {
+                fl.from.push(j);
+            }
+        }
+        for r in from_reach {
+            if !fl.from_reach.contains(&r) {
+                fl.from_reach.push(r);
+            }
+        }
+        fl.top |= top;
+    }
+
+    /// The parameter of `f` whose node argument marker `t` is the marker of.
+    fn arg_param_of(&self, t: Tok, f: FnIdx) -> Option<u32> {
+        let n = *self.arg_marker_node.get(&t)?;
+        match self.param_at.get(&n) {
+            Some(&(g, j)) if g == f => Some(j),
+            _ => None,
+        }
+    }
+
     /// Every function's parameter nodes hold their argument marker
     /// (DECISIONS 44), from before the first binding reaches them: the
     /// queued bindings run when the summaries exist, before the solve.
@@ -1663,6 +2822,7 @@ impl Model {
                 let p = self.funcs[f].params[i];
                 if p != NO_NODE {
                     self.nodes[p as usize].param = true;
+                    self.param_at.insert(p, (f as FnIdx, i as u32));
                 }
             }
         }
@@ -1809,12 +2969,34 @@ impl Model {
                 format!("chain {n} {origin} {} {act:?}", self.key_name(*key))
             }
             Cons::TopSink { reason } => format!("top {n} {reason}"),
-            Cons::HandOver { reason } => format!("handover {n} {reason}"),
+            Cons::HandOver { reason, ctor, arg } => format!("handover {n} {reason} {ctor} {arg}"),
+            Cons::OwnOnly { f, dst } => format!("ownonly {n} {f} {dst}"),
+            Cons::StoreOut {
+                f,
+                dst,
+                reach,
+                via,
+                key,
+                reason,
+                ..
+            } => format!(
+                "storeout {n} {f} {dst} {reach} {} {} {reason}",
+                via.map_or("-".to_string(), |v| esc_key(&self.atoms[v as usize])),
+                self.key_name(*key)
+            ),
             Cons::ContractThis {
                 tmpl,
                 reason,
                 statics,
-            } => format!("contractthis {n} {tmpl} {reason} {}", *statics as u8),
+                this,
+            } => format!(
+                "contractthis {n} {tmpl} {reason} {} {}",
+                *statics as u8, *this as i64
+            ),
+            Cons::OverrideThis { tmpl, key, reason } => format!(
+                "overridethis {n} {tmpl} {} {reason}",
+                self.key_name(Key::Named(*key))
+            ),
             Cons::TopIfAny { dst, from, reason } => format!(
                 "topifany {n} {dst} {from} {}",
                 reason.map_or(-1, |r| r as i64)

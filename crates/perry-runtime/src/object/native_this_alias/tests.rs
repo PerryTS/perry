@@ -1,4 +1,5 @@
 use super::*;
+use crate::codegen_abi::LayoutWord;
 use crate::object::shapes::store_kind::receiver_admits_plain_store;
 use crate::object::shapes::{object_shape_stamp, shape_object_kind_for_word, ShapeObjectKind};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -41,7 +42,7 @@ fn read_key(obj: &crate::gc::RuntimeHandle<'_>, key: &crate::gc::RuntimeHandle<'
     })
 }
 
-fn kind_of(obj: &crate::gc::RuntimeHandle<'_>) -> (u32, Option<ShapeObjectKind>, bool) {
+fn kind_of(obj: &crate::gc::RuntimeHandle<'_>) -> (LayoutWord, Option<ShapeObjectKind>, bool) {
     obj.with_const_ptr(|o: *const super::super::ObjectHeader| unsafe {
         let id = object_shape_stamp(o);
         (

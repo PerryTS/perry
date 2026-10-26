@@ -15,6 +15,7 @@ use super::*;
 use crate::object::ObjectHeader;
 use crate::string::StringHeader;
 
+use crate::codegen_abi::LayoutWord;
 fn heap_string(bytes: &[u8]) -> *mut StringHeader {
     crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
 }
@@ -36,7 +37,7 @@ fn collect_synchronous_full_trace() {
 /// An uncarried semantic shape: the control that a trace retires records.
 fn unrooted_semantic_shape() -> u32 {
     let obj = crate::object::js_object_alloc(0, 0);
-    unsafe { crate::object::shapes::transition_object_shape_semantics(obj) }
+    unsafe { crate::object::shapes::transition_object_shape_semantics(obj).0 }
 }
 
 #[test]
@@ -47,15 +48,17 @@ fn regexp_birth_shape_survives_full_traces_with_no_live_regexp() {
     super::perex_public::register_host_roots();
 
     let first = unsafe { crate::object::shapes::object_shape_stamp(birth()) };
-    assert_ne!(first, 0);
+    assert_ne!(first, LayoutWord(0));
     for round in 0..4 {
         // The control: this full trace retires uncarried records, so a birth
         // record that survives it survives because it is carried.
         let control = unrooted_semantic_shape();
-        assert!(crate::object::shapes::test_descriptor_for_retained_word(control).is_some());
+        assert!(
+            crate::object::shapes::test_descriptor_for_retained_word(LayoutWord(control)).is_some()
+        );
         collect_synchronous_full_trace();
         assert!(
-            crate::object::shapes::shape_is_retired(control),
+            crate::object::shapes::shape_is_retired(LayoutWord(control)),
             "round {round}: the full trace did not retire an uncarried shape, so it proves nothing"
         );
         assert!(
@@ -258,7 +261,7 @@ fn arguments_birth_cache_word_is_carried_across_full_traces() {
         let control = unrooted_semantic_shape();
         collect_synchronous_full_trace();
         assert!(
-            crate::object::shapes::shape_is_retired(control),
+            crate::object::shapes::shape_is_retired(LayoutWord(control)),
             "round {round}: control must retire"
         );
         assert!(
@@ -281,7 +284,7 @@ fn keyless_birth_memo_word_is_carried_across_full_traces() {
         let control = unrooted_semantic_shape();
         collect_synchronous_full_trace();
         assert!(
-            crate::object::shapes::shape_is_retired(control),
+            crate::object::shapes::shape_is_retired(LayoutWord(control)),
             "round {round}: control must retire"
         );
         assert!(
@@ -310,13 +313,15 @@ fn held_word_helpers_are_checked_for_retired_decommitted_rows() {
         "no row page was decommitted, the test proves nothing"
     );
     for &w in &words {
-        assert!(sh::shape_is_retired(w));
-        assert!(sh::shape_descriptor_for_word(w).is_none());
-        assert!(sh::shape_record_for_word(w).is_none());
-        assert!(sh::shape_object_kind_for_word(w).is_none());
-        assert!(sh::shape_brands_for_word(w).is_none());
-        assert!(sh::shape_keys_and_proto_for_word(w).is_none());
-        assert!(sh::shape_live_inline_slot_count_for_word(w).is_none());
-        assert_eq!(sh::shape_rep_for_word(w), 0);
+        assert!(sh::shape_is_retired(crate::codegen_abi::LayoutWord(w)));
+        assert!(sh::shape_descriptor_for_word(crate::codegen_abi::LayoutWord(w)).is_none());
+        assert!(sh::shape_record_for_word(crate::codegen_abi::LayoutWord(w)).is_none());
+        assert!(sh::shape_object_kind_for_word(crate::codegen_abi::LayoutWord(w)).is_none());
+        assert!(sh::shape_brands_for_word(crate::codegen_abi::LayoutWord(w)).is_none());
+        assert!(sh::shape_keys_and_proto_for_word(crate::codegen_abi::LayoutWord(w)).is_none());
+        assert!(
+            sh::shape_live_inline_slot_count_for_word(crate::codegen_abi::LayoutWord(w)).is_none()
+        );
+        assert_eq!(sh::shape_rep_for_word(crate::codegen_abi::LayoutWord(w)), 0);
     }
 }

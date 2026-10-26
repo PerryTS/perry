@@ -2,14 +2,15 @@
 //! complete input before entering the allocator, so no source borrow or
 //! intermediate managed value needs to survive collection.
 
+use crate::codegen_abi::LayoutWord;
 use crate::JSValue;
 
 crate::perry_thread_local! {
     static EMPTY_JSON_SHAPE_ID: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
-pub(crate) fn cached_shape_id() -> u32 {
-    EMPTY_JSON_SHAPE_ID.with(std::cell::Cell::get)
+pub(crate) fn cached_shape_id() -> LayoutWord {
+    LayoutWord(EMPTY_JSON_SHAPE_ID.with(std::cell::Cell::get))
 }
 
 #[inline(always)]
@@ -63,13 +64,13 @@ pub(super) unsafe fn allocate_empty_object() -> JSValue {
     // Charter step 3: born marked plain-ordinary, so the cached id below is
     // the `Ordinary` one and every later birth stamps it directly.
     let object = if shape_id != 0 {
-        crate::object::try_empty_json_object_preinstalled(shape_id)
+        crate::object::try_empty_json_object_preinstalled(LayoutWord(shape_id))
             .unwrap_or_else(|| crate::object::object_alloc_plain(0))
     } else {
         let object = crate::object::object_alloc_plain(0);
         let shape_id = crate::object::shapes::object_shape_stamp(object);
-        debug_assert_ne!(shape_id, 0);
-        EMPTY_JSON_SHAPE_ID.with(|cached| cached.set(shape_id));
+        debug_assert_ne!(shape_id, LayoutWord(0));
+        EMPTY_JSON_SHAPE_ID.with(|cached| cached.set(shape_id.0));
         crate::object::shape_carriers::note_shape_id(shape_id);
         object
     };

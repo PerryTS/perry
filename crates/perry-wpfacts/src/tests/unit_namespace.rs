@@ -368,18 +368,63 @@ fn a_nested_contract_field_keeps_its_primitive_kinds_and_argument_literals_leave
     // A literal another unit's closed function also gets as an argument is
     // described there with no nested fields: its fields leave as before, so
     // that callee's store under a nested literal is no unknown write.
-    let a = "import { use } from './b';\nexport function get(n: number) { const inner = { deep: { facts: n } }; use(inner); return { t: inner }; }";
+    let a = "import { use } from './b';\nexport function get(n: number) { const inner = { deep: { facts: n }, other: { q: n } }; use(inner); return { t: inner }; }";
     let b = "export function use(x: any) { x.deep.facts = 'z'; }";
     let u =
         "import { get } from './a'; function k() { return get(2).t.deep.facts; } console.log(k());";
-    let pf = units_of(&[("a", a), ("b", b), ("u", u)]);
-    let deep = pf
-        .templates
-        .iter()
-        .find(|t| t.fields.iter().any(|f| f.key == "facts"))
-        .unwrap_or_else(|| panic!("{}", pf.dump_text()));
-    let f = deep.fields.iter().find(|f| f.key == "facts").unwrap();
-    assert!(!f.readonly && f.kind.top, "{}", pf.dump_text());
+    let mods = [("a", a), ("b", b), ("u", u)];
+    let (pf, wp) = (units_of(&mods), super::unit_mode::whole_of(&mods));
+    let with = |pf: &ProgramFacts, k: &str| {
+        pf.templates
+            .iter()
+            .find(|t| t.fields.iter().any(|f| f.key == k))
+            .unwrap_or_else(|| panic!("{}", pf.dump_text()))
+            .clone()
+    };
+    // DECISIONS 118: the reader runs `use`'s store `x.deep.facts = 'z'` on
+    // its argument (a flow of `use`'s contract through the keyed reach
+    // `deep`, no unknown write): `facts` is written with a string, and
+    // `inner` gains no key, exactly as in the whole program.
+    let (d, dw) = (with(&pf, "deep"), with(&wp, "deep"));
+    assert!(
+        d.fields.iter().all(|f| f.key == "deep" || f.key == "other"),
+        "{}",
+        pf.dump_text()
+    );
+    // Through `deep` only: `other` gains no key `facts`.
+    let (o, ow) = (with(&pf, "q"), with(&wp, "q"));
+    assert!(o.fields.iter().all(|f| f.key == "q"), "{}", pf.dump_text());
+    assert_eq!(
+        (o.fixed_layout, o.prefix_stable),
+        (ow.fixed_layout, ow.prefix_stable)
+    );
+    assert_eq!(
+        (d.fixed_layout, d.prefix_stable),
+        (dw.fixed_layout, dw.prefix_stable)
+    );
+    let f = with(&pf, "facts")
+        .fields
+        .into_iter()
+        .find(|f| f.key == "facts")
+        .unwrap();
+    let w = with(&wp, "facts")
+        .fields
+        .into_iter()
+        .find(|f| f.key == "facts")
+        .unwrap();
+    assert!(!f.readonly && !w.readonly, "{}", pf.dump_text());
+    assert!(
+        w.kind.prims & crate::model::prim::STR != 0,
+        "{}",
+        wp.dump_text()
+    );
+    // Its number is `get`'s parameter, another unit's value per unit (⊤):
+    // an open per-unit gap (reports/2026-10-22-CW2-perunit-parity.md).
+    assert!(
+        f.kind.top || f.kind.prims & crate::model::prim::STR != 0,
+        "{}",
+        pf.dump_text()
+    );
 }
 
 #[test]

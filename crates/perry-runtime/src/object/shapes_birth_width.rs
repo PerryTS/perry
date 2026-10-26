@@ -50,6 +50,7 @@
 use super::shapes_store::{self, ShapeRecord, RECORD_FLAG_BIRTH_OWNER, RECORD_FLAG_FACTS_INDEXED};
 use super::{ShapeObjectKind, ShapeTableInner, PROTO_ID_CLASS, PROTO_ID_DEFAULT};
 
+use crate::codegen_abi::LayoutWord;
 /// How many births of a keyless birth shape are served while tracking.
 pub(crate) const TRACKING_BIRTHS: u32 = 8;
 /// The width a birth is served while tracking (unless more was learned).
@@ -73,12 +74,12 @@ fn find_birth_record(
     inner: &ShapeTableInner,
     slab: &shapes_store::ShapeSlab,
     proto_id: u64,
-) -> Option<(u32, *mut ShapeRecord)> {
+) -> Option<(LayoutWord, *mut ShapeRecord)> {
     let facts =
         shapes_store::facts_key_proto(0, 0, 0, 0, ShapeObjectKind::Ordinary, 0, proto_id, 0, 0);
     let ids = inner.by_facts.get(&facts)?;
     for &id in ids.as_slice() {
-        let Some(record) = slab.handle_record_ptr(crate::codegen_abi::LayoutWord(id)) else {
+        let Some(record) = slab.handle_record_ptr(id) else {
             continue;
         };
         // SAFETY: a live slab record, read immediately on this agent.
@@ -113,7 +114,7 @@ pub(super) fn note_descendant_width(
 /// logical live bound; the width is the allocation this birth was served.
 /// These may differ while tracking or after descendants grow past the floor.
 pub(crate) struct KeylessBirth {
-    shape: u32,
+    shape: LayoutWord,
     width: u32,
     proto_id: u64,
 }
@@ -123,7 +124,7 @@ impl KeylessBirth {
     /// through the same final-birth interner, without a prior shape proof.
     pub(crate) fn untracked() -> Self {
         Self {
-            shape: 0,
+            shape: LayoutWord(0),
             width: 0,
             proto_id: 0,
         }
@@ -143,7 +144,7 @@ impl KeylessBirth {
 /// `prototype_shape` is the header word of the live, rooted prototype object
 /// (both callers read it from the rooted prototype): the prototype carries
 /// that row, so its record is read without the held-word check.
-pub(crate) fn keyless_birth_width(proto_id: u64, prototype_shape: u32) -> KeylessBirth {
+pub(crate) fn keyless_birth_width(proto_id: u64, prototype_shape: LayoutWord) -> KeylessBirth {
     if !is_prototype_serial(proto_id) {
         return KeylessBirth::untracked();
     }
@@ -151,8 +152,10 @@ pub(crate) fn keyless_birth_width(proto_id: u64, prototype_shape: u32) -> Keyles
     // a weak scalar relationship, not a carrier: pruning still retires the
     // birth record. Resolution validates the complete immutable facts;
     // reuse checks presence and the actual prototype serial.
-    let prior = shapes_store::ShapeSlab::agent_record_for_receiver_present(prototype_shape)
-        .map_or(0, |record| unsafe { (*record).created_birth_shape() });
+    let prior = shapes_store::ShapeSlab::agent_record_for_receiver_present(prototype_shape.0)
+        .map_or(LayoutWord(0), |record| unsafe {
+            (*record).created_birth_shape()
+        });
     let resolved = linked_birth_record(prior, proto_id);
     let Some((id, record)) = resolved.or_else(|| resolve_birth_record(proto_id)) else {
         return KeylessBirth::untracked();
@@ -179,7 +182,7 @@ pub(crate) fn keyless_birth_width(proto_id: u64, prototype_shape: u32) -> Keyles
         // only a ShapeId; its extension allocation is Rust-owned metadata,
         // with no nursery allocation or collection point.
         if let Some(prototype) =
-            shapes_store::ShapeSlab::agent_record_for_receiver_present(prototype_shape)
+            shapes_store::ShapeSlab::agent_record_for_receiver_present(prototype_shape.0)
         {
             unsafe { (*prototype).note_created_birth_shape(id) };
         }
@@ -196,8 +199,8 @@ pub(crate) fn keyless_birth_width(proto_id: u64, prototype_shape: u32) -> Keyles
 /// are immutable. A shared producer layout can name another prototype's
 /// relationship, so every reuse still checks the actual serial and presence.
 #[inline]
-fn linked_birth_record(id: u32, proto_id: u64) -> Option<(u32, *mut ShapeRecord)> {
-    if id == 0 {
+fn linked_birth_record(id: LayoutWord, proto_id: u64) -> Option<(LayoutWord, *mut ShapeRecord)> {
+    if id == LayoutWord(0) {
         return None;
     }
     let record = shapes_store::ShapeSlab::agent_record_for_word_present(id)?;
@@ -216,10 +219,13 @@ thread_local! {
 /// tracking state remain solely on the referenced live birth record.
 #[cold]
 #[inline(never)]
-fn birth_record_for_prototype(id: u32, proto_id: u64) -> Option<(u32, *mut ShapeRecord)> {
+fn birth_record_for_prototype(
+    id: LayoutWord,
+    proto_id: u64,
+) -> Option<(LayoutWord, *mut ShapeRecord)> {
     #[cfg(test)]
     COMPLETE_BIRTH_PROOFS.with(|n| n.set(n.get() + 1));
-    if id == 0 {
+    if id == LayoutWord(0) {
         return None;
     }
     let record = shapes_store::ShapeSlab::agent_record_for_word_present(id)?;
@@ -234,7 +240,7 @@ fn birth_record_for_prototype(id: u32, proto_id: u64) -> Option<(u32, *mut Shape
 /// exact index/interner. No second index or allocation path is introduced.
 #[cold]
 #[inline(never)]
-fn resolve_birth_record(proto_id: u64) -> Option<(u32, *mut ShapeRecord)> {
+fn resolve_birth_record(proto_id: u64) -> Option<(LayoutWord, *mut ShapeRecord)> {
     let table = &crate::state::state().shapes;
     let resolved = {
         let inner = table.inner.borrow();
@@ -250,12 +256,7 @@ fn resolve_birth_record(proto_id: u64) -> Option<(u32, *mut ShapeRecord)> {
             proto_id,
             super::ReceiverFacts::NONE,
         ));
-        Some((
-            id,
-            table
-                .slab()
-                .handle_record_ptr(crate::codegen_abi::LayoutWord(id))?,
-        ))
+        Some((id, table.slab().handle_record_ptr(id)?))
     })?;
     // Publish the relationship only after its complete immutable proof has
     // resolved. Subsequent uses read the live learner through that proof.
@@ -270,7 +271,7 @@ pub(crate) fn created_birth_shape(
     proto_id: u64,
     proto_bits: u64,
     birth: &KeylessBirth,
-    recorded: u32,
+    recorded: LayoutWord,
 ) -> u32 {
     // An identity names one prototype for its lifetime. GC rewrites its word;
     // another birth need not write it or append another young-log entry.
@@ -287,13 +288,13 @@ pub(crate) fn created_birth_shape(
         && birth.proto_id == proto_id
         && shapes_store::ShapeSlab::agent_record_for_word_present(birth.shape).is_some()
     {
-        return birth.shape;
+        return birth.shape.0;
     }
     // An ordinary function already recorded its final-width birth shape.
     // Consume that proof here, before allocation, instead of validating it
     // again in a second replay allocator. Width still comes from the live
     // learner, and the actual serial remains part of this complete check.
-    if recorded != 0
+    if recorded != LayoutWord(0)
         && super::shape_is_keyless_birth_of(
             recorded,
             proto_id,
@@ -301,7 +302,7 @@ pub(crate) fn created_birth_shape(
             ShapeObjectKind::Ordinary,
         )
     {
-        return recorded;
+        return recorded.0;
     }
     super::publish_shape_result(super::shape_descriptor_ensure_with_generation(
         std::ptr::null(),
@@ -312,6 +313,7 @@ pub(crate) fn created_birth_shape(
         proto_id,
         super::ReceiverFacts::NONE,
     ))
+    .0
 }
 
 /// A spill at `width` slots on `obj` teaches its keyless birth record, so a
@@ -331,9 +333,7 @@ pub(crate) unsafe fn note_spill_width(obj: *const crate::object::ObjectHeader, w
     }
     let table = &crate::state::state().shapes;
     let slab = table.slab();
-    let Some(record) = slab.handle_record_ptr(crate::codegen_abi::LayoutWord(
-        super::object_shape_stamp(obj),
-    )) else {
+    let Some(record) = slab.handle_record_ptr(super::object_shape_stamp(obj)) else {
         return;
     };
     let r = &*record;

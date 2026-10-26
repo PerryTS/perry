@@ -1,3 +1,4 @@
+use crate::codegen_abi::LayoutWord;
 /// Construct an exact class evaluation, before the unrelated builtin tower.
 unsafe fn construct_class_object(
     func_value: f64,
@@ -153,8 +154,9 @@ fn construct_class_object_instance(
     let prototype = scope.root_nanbox_u64(prototype.bits());
     // The evaluation's brand and prototype are one transition (one shape
     // minted per evaluation); the stamp below then has nothing to do.
-    let holder_brand =
-        unsafe { crate::object::shapes::prepare_evaluation_holder(class.get_nanbox_f64().to_bits()) };
+    let holder_brand = unsafe {
+        crate::object::shapes::prepare_evaluation_holder(class.get_nanbox_f64().to_bits())
+    };
     let birth = instance.with_mut_ptr::<ObjectHeader, _>(|instance| unsafe {
         crate::object::shapes::object_shape_stamp(instance)
     });
@@ -213,14 +215,17 @@ fn born_on_evaluation_layout(
     args: &[f64],
 ) -> Option<*mut ObjectHeader> {
     let cell = cell?;
-    let class = crate::value::JSValue::from_bits(class_value.to_bits()).as_pointer::<ObjectHeader>();
+    let class =
+        crate::value::JSValue::from_bits(class_value.to_bits()).as_pointer::<ObjectHeader>();
     let copy = unsafe { super::super::field_get_set::evaluation_instance_layout(cell, class) }?;
     let desc = crate::object::layout_desc::family_birth_desc(class_cid, args)?;
     let family = crate::object::layout_desc::registered_layout_id(unsafe {
         crate::object::layout_desc::load_layout_id(desc)
     })?;
-    let (prototype, holder) = crate::object::shapes::evaluation_copy_birth_edges(copy, family)?;
-    let inst = unsafe { crate::object::layout_desc::alloc_family_layout_copy(desc, copy) };
+    let (prototype, holder) =
+        crate::object::shapes::evaluation_copy_birth_edges(LayoutWord(copy), family)?;
+    let inst =
+        unsafe { crate::object::layout_desc::alloc_family_layout_copy(desc, LayoutWord(copy)) };
     // As the ordinary link and brand stamp do: the edges live in the record.
     crate::gc::runtime_shade_external_edge(prototype);
     crate::gc::runtime_shade_external_edge(holder);
@@ -243,7 +248,7 @@ unsafe fn evaluation_layout_to_record(inst: *const ObjectHeader) -> Option<u32> 
     let copy = crate::object::shapes::object_shape_stamp(inst);
     (crate::object::shapes::evaluation_family_desc_index_plus_one(copy) != 0
         && crate::object::shapes::object_evaluation_brand(inst) != 0)
-        .then_some(copy)
+        .then_some(copy.0)
 }
 
 /// Reserve declared/learned capacity; constructor stores and field definitions

@@ -24,6 +24,7 @@
 //! identity, takes the general path, which builds the same object key by key.
 
 use super::*;
+use crate::codegen_abi::ShapeId;
 
 /// The attribute entry of a ClassBody method and of `constructor`:
 /// `{ writable: true, enumerable: false, configurable: true }`.
@@ -33,7 +34,7 @@ const METHOD_ENTRY: u8 = crate::object::key_attrs::ENTRY_NON_ENUMERABLE;
 /// from the shape when seeded, or from the class's immutable family when no
 /// guard needed a seed. Both are existing semantic data, not learned facts.
 /// Missing proof takes ordinary prototype birth. This check cannot allocate.
-pub(super) fn static_parent_matches(class_id: u32, requested: u32, parent_bits: u64) -> bool {
+pub(super) fn static_parent_matches(class_id: u32, requested: ShapeId, parent_bits: u64) -> bool {
     use crate::object::shapes::{
         shape_record_by_id, PROTO_ID_CLASS, PROTO_ID_DEFAULT, PROTO_ID_MIXED,
     };
@@ -102,7 +103,7 @@ pub(super) fn decl_prototype_born_final(class_id: u32, parent_bits: u64) -> Opti
     // as it did before a static candidate existed. Preserve that allocation
     // path instead of rebuilding every member through transient key shapes.
     let requested = super::declarations::class_birth_layout_request(class_id)
-        .filter(|r| static_parent_matches(class_id, r.identity.0, parent_bits));
+        .filter(|r| static_parent_matches(class_id, r.identity, parent_bits));
     let members = class_prototype_member_names(class_id);
     if members.iter().any(|(name, accessor)| {
         name == b"constructor" || (!*accessor && class_method_entry_bytes(class_id, name).is_none())

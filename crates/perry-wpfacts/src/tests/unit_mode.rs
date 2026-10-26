@@ -109,22 +109,83 @@ fn units_of(mods: &[(&str, &str)]) -> ProgramFacts {
 }
 
 fn units_with(mods: &[(&str, &str)], cfg: &FactsConfig) -> ProgramFacts {
-    program_of(mods, cfg, crate::compute_units)
+    let hirs = hirs_of(mods);
+    let list: Vec<(String, &perry_hir::Module)> =
+        hirs.iter().map(|(p, h)| (p.clone(), h)).collect();
+    crate::compute_units(&list, cfg)
 }
 
-/// The whole-program facts of the same modules: the bar per-unit facts may
-/// never be stronger than.
-fn whole_of(mods: &[(&str, &str)]) -> ProgramFacts {
-    program_of(mods, &FactsConfig::default(), crate::compute)
+/// The same modules solved as one whole program: what per-unit mode must
+/// reach (owner 2026-10-23).
+pub(super) fn whole_of(mods: &[(&str, &str)]) -> ProgramFacts {
+    let hirs = hirs_of(mods);
+    let list: Vec<(String, &perry_hir::Module)> =
+        hirs.iter().map(|(p, h)| (p.clone(), h)).collect();
+    crate::compute(&list, &FactsConfig::default())
 }
 
-fn program_of(
-    mods: &[(&str, &str)],
-    cfg: &FactsConfig,
-    run: fn(&[(String, &perry_hir::Module)], &FactsConfig) -> ProgramFacts,
-) -> ProgramFacts {
-    let hirs: Vec<(String, perry_hir::Module)> = mods
+/// The proven sites, named by module path, offset and key.
+fn proven_set(pf: &ProgramFacts) -> std::collections::BTreeSet<String> {
+    pf.sites
         .iter()
+        .filter(|s| matches!(s.verdict, Verdict::T0Mono | Verdict::T0Set))
+        .map(|s| {
+            format!(
+                "{}@{}.{}",
+                pf.module_paths[s.module as usize], s.byte_offset, s.key
+            )
+        })
+        .collect()
+}
+
+/// Per unit proves at least what the whole program proves (owner
+/// 2026-10-23), and the census breaks nothing. An `override k of C` report
+/// breaks nothing: it is the key a subclass of another unit holds, which
+/// `C`'s unit reads through its override token (DECISIONS 59); what it
+/// costs shows in `lost`.
+fn assert_parity(mods: &[(&str, &str)]) {
+    let (pf, wp) = (units_of(mods), whole_of(mods));
+    let lost: Vec<_> = proven_set(&wp)
+        .difference(&proven_set(&pf))
+        .cloned()
+        .collect();
+    let broken: Vec<_> = pf
+        .broken
+        .iter()
+        .filter(|d| !d.starts_with("override "))
+        .collect();
+    assert!(!proven_set(&wp).is_empty(), "{}", wp.dump_text());
+    assert!(
+        lost.is_empty() && broken.is_empty(),
+        "lost {lost:?} broken {broken:?}\n{}",
+        pf.dump_text()
+    );
+}
+
+#[test]
+#[ignore = "DECISIONS 122: append is an exported function its importers only call; per unit its parameters are open contract markers (decision 13 covers module-private functions only)"]
+fn a_parameter_stored_into_another_parameters_reach_is_a_flow() {
+    // AWFY Richards `RBObject.append(packet, queue)`: `m.link = p` stores
+    // the first argument into what the second reaches. DECISIONS 118: a
+    // flow of the contract the reader replays; DECISIONS 119: `m` is the
+    // argument's marker alone (no ⊤ beside it to store `p` into).
+    let b = "export function append(p: any, q: any) { p.link = null; if (q === null) return p; let m = q; while (m.link !== null) m = m.link; m.link = p; return q; }";
+    let m = "import { append } from './b'; function main() { const a = { link: null as any, v: 1 }; const c = { link: null as any, v: 2 }; const q = append(a, c); console.log(q.v, a.v, c.link.v); } main(); main();";
+    assert_parity(&[("b", b), ("m", m)]);
+}
+
+#[test]
+fn a_subclass_published_with_another_units_parent_forwards_it() {
+    // DECISIONS 120 (B): publishing `S` publishes its parent `R`, a stand-in
+    // in `b`: it leaves with `a`'s contract, no census report breaks `R`.
+    let a = "export class R { v = 0; get() { return this.v; } }";
+    let b = "import { R } from './a'; export class S extends R { constructor() { super(); this.v = 1; } }";
+    let m = "import { S } from './b'; function main() { const s = new S(); console.log(s.get(), s.v); } main(); main();";
+    assert_parity(&[("a", a), ("b", b), ("m", m)]);
+}
+
+fn hirs_of(mods: &[(&str, &str)]) -> Vec<(String, perry_hir::Module)> {
+    mods.iter()
         .map(|(name, src)| {
             let path = format!("{name}.ts");
             let module = perry_parser::parse_typescript(src, &path).expect("parses");
@@ -136,10 +197,7 @@ fn program_of(
             }
             (path, hir)
         })
-        .collect();
-    let list: Vec<(String, &perry_hir::Module)> =
-        hirs.iter().map(|(p, h)| (p.clone(), h)).collect();
-    run(&list, cfg)
+        .collect()
 }
 
 #[test]
@@ -174,7 +232,11 @@ fn an_export_no_unit_names_stays_inside() {
         ("a", a),
         ("m", "import { Ball } from './a'; console.log(new Ball(1));"),
     ]);
-    assert!(!proven(&named, "x"), "{}", named.dump_text());
+    // DECISIONS 157: an imported class takes its constructions from the
+    // units holding it (its stand-in publishes what each `new` passes):
+    // m passes a number, so the constructor's `this.x = r` stays proven
+    // (it went generic while other units constructed it with ⊤ arguments).
+    assert!(proven(&named, "x"), "{}", named.dump_text());
 }
 
 /// The census broke the literal layout born with keys `keys`.
@@ -214,7 +276,10 @@ fn a_published_class_is_a_contract_not_an_escape() {
         ),
     ]);
     assert!(proven(&pf, "pos"), "{}", pf.dump_text());
-    assert_eq!(verdicts(&pf, "neg"), ["E0"], "{}", pf.dump_text());
+    // DECISIONS 107: `m` publishes what it runs `has` on (D's instances):
+    // the receivers are the shapes the running units saw, so `this.neg` is
+    // proven exactly, as in the whole program.
+    assert_eq!(verdicts(&pf, "neg"), ["T0Mono"], "{}", pf.dump_text());
     assert!(tmpl(&pf, "D").prefix_stable, "{}", pf.dump_text());
 }
 
@@ -247,7 +312,14 @@ fn an_importer_sees_a_class_through_its_contract() {
         .find(|s| s.module == mi && s.key == "has")
         .expect("the call in m");
     assert_eq!(site.verdict, crate::Verdict::T0Mono, "{}", pf.dump_text());
-    assert_eq!((pf.rounds, pf.broken.len()), (1, 0));
+    // DECISIONS 107: `m` publishes the receivers it runs `has` on, and `z`
+    // is solved again with them (the reader-to-owner channel, a round as
+    // decision 13's arguments); nothing breaks. Rewritten for DECISIONS 125
+    // (principle: a contract states what the body does to the receivers it
+    // runs on): with them `this.neg` is the constructor's Map, `has` passes
+    // `k` to `Map.has`, so its parameter contract changes in round 2 and `m`
+    // reads it in round 3.
+    assert_eq!((pf.rounds, pf.broken.len()), (3, 0));
 }
 
 #[test]
@@ -266,6 +338,20 @@ fn a_store_beyond_the_contract_breaks_the_class() {
     );
 }
 
+/// The rounds of the larger of two independent pairs solved alone: the
+/// breaking pair `ab` and the unrelated `b`/`c` (`DUAL` as `E`).
+fn alone_rounds(ab: &[(&str, &str)]) -> usize {
+    let e = DUAL.replace("class D", "class E").replace("neg", "other");
+    let bc = units_of(&[
+        ("b", &e),
+        (
+            "c",
+            "import { E } from './b'; const e = new E([1]); console.log(e.has(1));",
+        ),
+    ]);
+    units_of(ab).round_work.len().max(bc.round_work.len())
+}
+
 #[test]
 fn a_broken_contract_resolves_only_the_units_that_see_it() {
     // `m` breaks D (a census report against `a`): `a` and its importer `m`
@@ -279,17 +365,42 @@ fn a_broken_contract_resolves_only_the_units_that_see_it() {
         ("c", "import { E } from './b'; const e = new E([1]); console.log(e.has(1));"),
     ]);
     assert_eq!(pf.broken, ["a.ts:D"], "{}", pf.dump_text());
-    assert_eq!(pf.round_work.len(), 2);
+    // Rewritten for DECISIONS 125 (principle: a break solves only the units
+    // that see it): `b`/`c` take their own receiver rounds (DECISIONS 107),
+    // so the run takes the rounds of the slower pair solved alone, no more.
+    assert_eq!(pf.round_work.len(), alone_rounds(&[("a", DUAL), ("m", "import { D } from './a'; const d = new D([1]); (d as any).extra = 1; console.log(d.has(1));")]));
     // Every declaration unit of `a` and `m` sees D (§12.3: a module's work
     // is its units' work).
     let w = |p: &str| module_work(&pf, p);
+    // `b` and `c` are solved again for their own reason, not D's: `c`
+    // publishes the receivers it runs `E.has` on (DECISIONS 107), `b` takes
+    // them (its contract gets exact), and `c` reads that contract. After the
+    // break round 2 costs `a` and `m` once more and what `b` and `c` cost
+    // in their round 2 solved alone. Rewritten for #13294 (decision 151:
+    // every unit replays the shared objects' writes): `b`'s receiver round
+    // is round 3 now, so round 2 is no longer every module's last solve
+    // (was: round 2 = `a` + `m` + `b` + `c`).
+    let e = DUAL.replace("class D", "class E").replace("neg", "other");
+    let bc = units_of(&[
+        ("b", &e),
+        (
+            "c",
+            "import { E } from './b'; const e = new E([1]); console.log(e.has(1));",
+        ),
+    ]);
+    // Round 3 solves `b` alone, which replays the other units' shared
+    // writes too (decision 151), so it costs its own last solve, not quite
+    // its cost alone.
     assert_eq!(
         pf.round_work[1],
-        w("a.ts") + w("m.ts"),
-        "{:?} {:?}",
+        bc.round_work[1] + w("a.ts") + w("m.ts"),
+        "{:?} {:?} {:?}",
         pf.round_work,
+        bc.round_work,
         pf.units
     );
+    assert_eq!(pf.round_work.len(), 3, "{:?}", pf.round_work);
+    assert_eq!(pf.round_work[2], w("b.ts"), "{:?} {:?}", pf.round_work, pf.units);
     assert!(
         verdicts(&pf, "neg").iter().all(|v| v.starts_with("No")),
         "{}",
@@ -324,25 +435,29 @@ fn a_broken_namespace_field_function_resolves_only_the_units_that_see_it() {
             "import { E } from './b'; const e = new E([1]); console.log(e.has(1));",
         ),
     ]);
+    // Rewritten for DECISIONS 108 (principle: a function's name is its
+    // identity): a nested function declaration carries its function id.
     assert!(
-        pf.broken.iter().any(|d| d == "fn:a.ts:get"),
+        pf.broken.iter().any(|d| d.starts_with("fn:a.ts:get#")),
         "{}",
         pf.dump_text()
     );
-    // Rewritten for NSS (principle: `util = {}` and `util.get = get` are
-    // effects of their own units, the write effect and the store effect,
-    // each taking the round after the unit making it): the rounds after the
-    // first solve `a` and `m` only, as the same program without `b` and `c`
-    // does round for round.
-    let am = units_of(&[("a", a), ("m", m)]);
-    assert!(pf.round_work.len() >= 2, "{:?}", pf.round_work);
+    // DECISIONS 125: as in `a_broken_contract_resolves_only_the_units_that_see_it`.
     assert_eq!(
-        pf.round_work[1..],
-        am.round_work[1..],
-        "{:?} {:?}",
-        pf.round_work,
-        am.round_work
+        pf.round_work.len(),
+        alone_rounds(&[("a", "export var util: any;\n(function (util: any) {\n  function get(x: any) { return x.k; }\n  util.get = get;\n})(util || (util = {}));\n"), ("m", "import { util } from './a'; (globalThis as any).g = util.get; console.log(util.get({ k: 1 }));")]),
+        "{:?}",
+        pf.round_work
     );
+    let w = |p: &str| module_work(&pf, p);
+    // Merged head (main's write effects and ResolveExport): round 2 solves
+    // fewer units than `a`, `m`, `b` and `c` together; the rounds are pinned.
+    // Rewritten for DECISIONS 196 (each reader an argument marker gains is
+    // solve work): [699, 725, 908, 406, 334] -> [709, 731, 914, 410, 334];
+    // for #13294 (decision 151: every unit replays the shared objects'
+    // writes) -> the pin below.
+    assert!(pf.round_work[1] < w("a.ts") + w("m.ts") + w("b.ts") + w("c.ts"));
+    assert_eq!(pf.round_work, [709, 779, 956, 443, 392], "{:?}", pf.units);
 }
 
 #[test]
@@ -404,7 +519,16 @@ fn a_unit_over_the_bound_is_not_solved_again() {
         "{:?}",
         pf.units
     );
-    assert_eq!(pf.broken, ["a.ts:D"], "{}", pf.dump_text());
+    // An aborted unit reports every contract it consumed (§11.3); `o` calls
+    // `D.has`, a published method with its own contract (DECISIONS 57).
+    // Rewritten for DECISIONS 108 (principle: a function's name is its
+    // identity): a method is named by its class.
+    assert_eq!(
+        pf.broken,
+        ["a.ts:D", "fn:a.ts:D::has"],
+        "{}",
+        pf.dump_text()
+    );
     // Round 2 is `a`, `m` and the units of `o` under the bound (a unit
     // depends on every unit of each module its module imports, §12.6).
     let small_o: u64 = pf
@@ -454,12 +578,20 @@ fn what_a_method_does_to_its_receiver_happens_to_the_instance() {
         ),
     ]);
     assert!(!tmpl(&pf, "D").fixed_layout, "{}", pf.dump_text());
+    // The unknown code is `ext`: printing the instance is no escape, in the
+    // whole program as per unit (per-unit facts are whole-program facts,
+    // owner 2026-10-23; the expectation was round-1 pessimism, DECISIONS 125).
     let b = "export class D { pos: number; constructor() { this.pos = 1; } me() { return this; } }";
-    let pf = units_of(&[
+    let mods = [
         ("a", b),
-        ("m", "import { D } from './a'; console.log(new D().me());"),
-    ]);
+        (
+            "m",
+            "import { D } from './a'; declare const ext: any; ext(new D().me());",
+        ),
+    ];
+    let pf = units_of(&mods);
     assert!(!tmpl(&pf, "D").prefix_stable, "{}", pf.dump_text());
+    assert!(!tmpl(&whole_of(&mods), "D").prefix_stable);
 }
 
 const BENCH: &str = r#"
@@ -550,24 +682,42 @@ fn a_given_out_instance_receives_what_other_units_methods_do() {
     // In one function: a module-scope `own` read by another declaration
     // unit would be ⊤ there anyway (§12.3), and the test could not fail;
     // called twice, so N5 does not run it as module scope.
-    let m = "import { C } from './t'; function main() { C.make(); const own = { n: 1, warm: 2 }; C.peek().k = own; console.log(own.warm); } main(); main();";
+    // `m` does call `set` with an unknown value on the instance `make`
+    // gave it (without that call `keep.v` holds 1 and the whole program
+    // proves `warm`; per-unit facts are whole-program facts, owner
+    // 2026-10-23). `set` runs on published receivers (DECISIONS 107) and on
+    // the instances given out (DECISIONS 125).
+    let m = "import { C } from './t'; declare const ext: any; function main() { C.make().set(ext); const own = { n: 1, warm: 2 }; C.peek().k = own; console.log(own.warm); } main(); main();";
     let pf = units_of(&[("t", t), ("m", m)]);
     assert!(!proven(&pf, "warm"), "{}", pf.dump_text());
+    assert!(!proven(&whole_of(&[("t", t), ("m", m)]), "warm"));
 }
 
 #[test]
 fn a_class_a_contract_returns_carries_its_methods() {
     // A contract result may be an instance of a published class (`mk`);
     // its reader sees the whole class contract, methods included, even
-    // when it never imports the class: `put` hands its argument to the
-    // defining unit, so the caller's literal leaves.
+    // when it never imports the class: `put` is a method of `C` there.
     // `mk` and `C` share a declaration unit (both write `n`): `mk`'s
     // result is `C` itself, not another unit's stand-in.
+    // DECISIONS 148 (rewritten expectation; was "the caller's literal
+    // leaves"): `m` publishes what it passes to `put`, so `C`'s unit holds
+    // the literal's stand-in, inside its contract (any other unit's use of
+    // it is a census report), and per-unit facts are whole-program facts
+    // (owner 2026-10-23): `own.warm` is proven in both.
     let t = "let n = 0; export class C { v: any = 1; constructor() { n++; } put(x: any) { this.v = x; } } export function mk() { n++; return new C(); }";
     let a = "import { C } from './t'; console.log(new C().v);";
     let m = "import { mk } from './t'; function main() { const own = { n: 1, warm: 2 }; mk().put(own); console.log(own.warm); } main(); main();";
-    let pf = units_of(&[("t", t), ("a", a), ("m", m)]);
-    assert!(!proven(&pf, "warm"), "{}", pf.dump_text());
+    let mods = [("t", t), ("a", a), ("m", m)];
+    let (pf, wp) = (units_of(&mods), whole_of(&mods));
+    assert!(proven(&pf, "put"), "{}", pf.dump_text());
+    assert_eq!(
+        proven(&pf, "warm"),
+        proven(&wp, "warm"),
+        "{}",
+        pf.dump_text()
+    );
+    assert!(pf.broken.is_empty(), "{}", pf.dump_text());
 }
 
 #[test]
@@ -635,7 +785,7 @@ fn a_unit_view_carries_only_its_own_table_entries() {
     let m = perry_parser::parse_typescript(src, "a.ts").expect("parses");
     let hir = perry_hir::lower_module(&m, "a", "a.ts").expect("lowers");
     assert_eq!(hir.exported_objects, ["cfg"]);
-    let vs = crate::decl_units::views("a.ts", &hir);
+    let vs = crate::decl_units::views("a.ts", &hir, &|_| true);
     assert!(vs.len() >= 3, "{}", vs.len());
     assert_eq!(
         vs.iter()
@@ -657,7 +807,7 @@ fn a_unit_view_is_indices_into_the_one_module() {
     let src = "export const cfg = { a: 1 }; export function g() { return { b: 2 }; } export function h() { return g().b + cfg.a; } export function k() { return { b: 3 }; }";
     let m = perry_parser::parse_typescript(src, "a.ts").expect("parses");
     let hir = perry_hir::lower_module(&m, "a", "a.ts").expect("lowers");
-    let vs = crate::decl_units::views("a.ts", &hir);
+    let vs = crate::decl_units::views("a.ts", &hir, &|_| true);
     assert!(vs.len() >= 3, "{}", vs.len());
     let sorted = |f: &dyn Fn(&crate::decl_units::UnitView) -> Vec<usize>| {
         let mut all: Vec<usize> = vs.iter().flat_map(|(v, _)| f(v)).collect();
@@ -700,15 +850,31 @@ fn a_unit_view_is_indices_into_the_one_module() {
 }
 
 #[test]
-fn an_argument_the_callee_writes_escapes() {
-    // `bump` stores into what it is given: the caller's literal escapes.
+fn an_argument_the_callee_writes_is_written_by_the_reader() {
+    // `bump` stores a number into what it is given. DECISIONS 118: that
+    // store is a flow of its contract, and the reader runs it on its own
+    // argument, as the whole program runs `bump`: the caller's literal does
+    // not escape, so `own.warm` is proven exactly as the whole program
+    // proves it (it was an escape before 118).
     let b = "export function bump(o: { n: number }) { o.n = o.n + 1; }";
     // In one function: a module-scope `own` would be ⊤ to the reader's
     // declaration unit (§12.3) and the test could not fail; called twice,
     // so N5 does not run it as module scope.
     let m = "import { bump } from './b'; function main() { const own = { n: 1, warm: 2 }; bump(own); console.log(own.warm); } main(); main();";
-    let pf = units_of(&[("b", b), ("m", m)]);
-    assert!(!proven(&pf, "warm"), "{}", pf.dump_text());
+    let mods = [("b", b), ("m", m)];
+    let (pf, wp) = (units_of(&mods), whole_of(&mods));
+    assert!(proven(&wp, "warm"), "{}", wp.dump_text());
+    assert!(proven(&pf, "warm"), "{}", pf.dump_text());
+    // DECISIONS 176: a value of the callee's own unit stored into the
+    // argument goes to the reader as a result does: the reader's field
+    // holds the stand-in of its layout, so `own.n.k` is proven as the
+    // whole program proves it (it was ⊤ before 176).
+    let b = "export function bump(o: { n: any }) { o.n = { k: 1 }; }";
+    let m = "import { bump } from './b'; function main() { const own = { n: 1 as any, warm: 2 }; bump(own); console.log(own.n.k); } main(); main();";
+    let mods = [("b", b), ("m", m)];
+    let (pf, wp) = (units_of(&mods), whole_of(&mods));
+    assert!(proven(&wp, "k"), "{}", wp.dump_text());
+    assert!(proven(&pf, "k"), "{}", pf.dump_text());
 }
 
 #[test]
@@ -743,14 +909,26 @@ fn a_result_that_is_not_a_literal_layout_escapes() {
     // `mk`'s unit holds C's stand-in and forwards it with C's contract
     // (§17.10 4, DECISIONS 56; this expectation was "the result escapes"
     // before C's contract was forwarded). The principle the test keeps:
-    // `m` may run `set` on it with anything, so C's own unit models that
-    // (its methods run on the receiver with ⊤ arguments): `x` takes any
-    // kind and is written after construction. Its layout does not change.
+    // `m` runs `set` on it, so C's own unit models that: `x` is written
+    // after construction and its layout does not change. DECISIONS 148
+    // (rewritten expectation; was "⊤ arguments, `x` takes any kind"): the
+    // units running `set` publish what they pass (`m`: a string), so `x`
+    // takes number|string, as in the whole program; a caller passing a
+    // value no contract describes leaves the parameter ⊤ (guard test
+    // a_published_methods_parameter_some_caller_passes_unknown_stays_a_marker).
     let a = "class C { x: number; constructor() { this.x = 1; } set(v: any) { this.x = v; } } export function mk() { return new C(); }";
-    let pf = units_of(&[("a", a), ("m", "import { mk } from './a'; mk().set('s');")]);
+    let mods = [("a", a), ("m", "import { mk } from './a'; mk().set('s');")];
+    let (pf, wp) = (units_of(&mods), whole_of(&mods));
     let x = field(tmpl(&pf, "C"), "x");
     assert!(!x.readonly && x.writers_post > 0, "{}", pf.dump_text());
-    assert!(x.kind.top && !x.kind.fixed(), "{}", pf.dump_text());
+    let xw = field(tmpl(&wp, "C"), "x");
+    assert_eq!(
+        format!("{:?}", x.kind),
+        format!("{:?}", xw.kind),
+        "{}",
+        pf.dump_text()
+    );
+    assert!(!x.kind.fixed(), "{}", pf.dump_text());
 }
 
 #[test]
@@ -1231,23 +1409,23 @@ fn a_store_into_an_existing_field_is_a_store_effect() {
         "#;
     let pf = units(src);
     assert!(pf.units.len() >= 3, "{}", pf.dump_text());
-    // Rewritten for NSS (principle: a store effect carries the stored
-    // value's contract, as a published binding's value): the head is not
-    // broken; the node's layout is, where `main` logs it beyond its
-    // contract.
-    assert!(!literal_broken(&pf, &["next"]), "{:?}", pf.broken);
+    assert!(pf.broken.is_empty(), "{:?}\n{}", pf.broken, pf.dump_text());
     assert!(
         !verdicts(&pf, "next").is_empty() && proven(&pf, "next"),
         "{}",
         pf.dump_text()
     );
-    // The stored value escapes: other units read that field as unknown.
+    // The stored value does not escape (DECISIONS 88, design §17.16 (c),
+    // (c')): the effect carries its value contract, and the head leaves its
+    // unit with that contract under `next`; every reader's use is checked
+    // against it (census). A contract describes what a field holds as it
+    // describes what a binding holds.
     let node = pf
         .templates
         .iter()
         .find(|t| t.birth_keys == ["key"])
         .expect("node literal");
-    assert!(node.escape.is_some(), "{}", pf.dump_text());
+    assert!(node.escape.is_none(), "{}", pf.dump_text());
     // Soundness: the owner performs the effect. `main` (the head's unit)
     // reads `h.next.key`; its literal put `{ key: 1 }` there, but `setNode`
     // stored another object: `.key` must not hold on the inner layout.
@@ -2411,12 +2589,20 @@ fn an_argument_contract_ascends_so_the_units_reach_a_fixpoint() {
     // Joined with last round's (it only grows), the run ends: rounds 1-3
     // pass the contracts on, round 4 changes nothing. Bounded by the test,
     // so a driver that cycles fails here instead of hanging the suite.
+    // DECISIONS 140: `onevent`'s `done(err, ee, event, args)` is a call
+    // through `listener`'s parameter, published as one more contract input
+    // that ascends (D16: every input joins with last round's): it is passed
+    // on one round later, so round 5 is the one that changes nothing.
+    // DECISIONS 147: `listener`'s result `onevent` is a function handed to
+    // the caller's unit, now a contract function (its markers, its own
+    // contract) rather than a sunk result: one more input passed on a round
+    // later, so round 6 is the one that changes nothing.
     let m = r#"import first from "./ee";
         const t = first([[process, "exit"]], function (err: any) { console.log(err); });
         t.cancel();"#;
     let pf = bounded(60, move || units_of(&[("ee", EE_FIRST), ("m", m)]))
         .expect("D16: the per-unit fixpoint did not end in 60 s");
-    assert_eq!(pf.rounds, 4, "rounds {:?}", pf.round_work);
+    assert_eq!(pf.rounds, 6, "rounds {:?}", pf.round_work);
 }
 
 #[test]
@@ -2589,6 +2775,98 @@ fn a_closed_class_constructor_holds_what_its_news_pass() {
         !field(tmpl(&pf, "Arena"), "left").ta_stable,
         "{}",
         pf.dump_text()
+    );
+}
+
+#[test]
+fn a_published_method_has_no_receiver_before_its_readers_publish_one() {
+    // DECISIONS 123 setting: `A::run` is published; its receivers are what
+    // its readers publish (107), none before they have (round 1). It stores
+    // another unit's instance into its receiver: per unit `B` holds its
+    // contract and `b.v` is proven, as in the whole program (parity
+    // witness; arm A123 does not fail here, this shape's round-1 store does
+    // not reach `B`'s stand-in: A123's catching test is the cjs_t3 one).
+    let mods = [
+        ("c", "export class B { v: number = 1; }\n"),
+        (
+            "b",
+            "import { B } from './c';\nexport class A { keep: any = null; run(): number { const b = new B(); this.keep = b; return b.v; } }\n",
+        ),
+        ("m", "import { A } from './b';\nconst a = new A();\nconsole.log(a.run());\n"),
+    ];
+    let w = whole_of(&mods);
+    let u = units_of(&mods);
+    assert!(proven(&w, "v"), "{}", w.dump_text());
+    assert!(
+        !u.broken.iter().any(|d| d.ends_with(":B")),
+        "{:?}",
+        u.broken
+    );
+    assert!(proven(&u, "v"), "{:?}\n{}", u.broken, u.dump_text());
+}
+
+#[test]
+fn a_reader_that_exposes_a_typed_array_field_breaks_ta_stable() {
+    // DECISIONS 126: Arena's typed-array fields leave described (the owner's
+    // typed arrays), so the reader's uses count: `peek` reads `a.left.buffer`
+    // (B1, the buffer can be detached or wrapped), its census reports the
+    // field and the owner drops `ta_stable` for `left`, as the whole-program
+    // solve does. `right`, which no reader exposes, stays stable (the test is
+    // not vacuous: the description holds where nothing breaks it).
+    let src = r#"
+        class Arena {
+          left: Int32Array; right: Int32Array;
+          constructor(n: number) { this.left = new Int32Array(n); this.right = new Int32Array(n); }
+        }
+        function fresh(k: number): Arena { return new Arena(1 << k); }
+        function peek(a: Arena): number { const b: any = a.left.buffer; return b.byteLength + a.right[0]; }
+        const s = fresh(6);
+        console.log(peek(s));
+        "#;
+    let w = whole_of(&[("t", src)]);
+    let u = units(src);
+    for pf in [&w, &u] {
+        assert!(
+            !field(tmpl(pf, "Arena"), "left").ta_stable,
+            "{}",
+            pf.dump_text()
+        );
+        assert!(
+            field(tmpl(pf, "Arena"), "right").ta_stable,
+            "{}",
+            pf.dump_text()
+        );
+    }
+    assert!(
+        u.broken.iter().any(|d| d.starts_with("ta left of ")),
+        "{:?}",
+        u.broken
+    );
+    // A value a reader stores under a named key of the typed array is one
+    // the owner's solve does not see: reported too (the field is sunk), so
+    // the owner's flow through `left.tag` stays sound.
+    let src = r#"
+        class Arena {
+          left: Int32Array; right: Int32Array;
+          constructor(n: number) { this.left = new Int32Array(n); this.right = new Int32Array(n); }
+          tag(): any { return (this.left as any).tag; }
+        }
+        function fresh(k: number): Arena { return new Arena(1 << k); }
+        function mark(a: Arena): number { (a.left as any).tag = "x"; return a.right[0]; }
+        const s = fresh(6);
+        console.log(mark(s), s.tag());
+        "#;
+    let u = units(src);
+    assert!(
+        u.broken.iter().any(|d| d.starts_with("ta left of ")),
+        "{:?}\n{}",
+        u.broken,
+        u.dump_text()
+    );
+    assert!(
+        field(tmpl(&u, "Arena"), "right").ta_stable,
+        "{}",
+        u.dump_text()
     );
 }
 
@@ -2877,6 +3155,287 @@ fn a_member_function_returning_its_own_layout_is_built_once() {
     assert_eq!(pf.rounds, 2, "rounds {:?}", pf.round_work);
 }
 
+/// DECISIONS 113: every unit storing under a computed global key writes ⊤
+/// into `global:*`, and every unit reading a program-owned global (a
+/// `__` key, `builtins::global_user_key`) reads that cell. The
+/// reader took one stand-in value per writing unit (effect: ~9500 units,
+/// 19k nodes in each reader, quadratic per round); the writes are grouped
+/// by contract, so the reader's solve does not grow with the writers.
+#[test]
+fn a_cell_written_alike_by_many_units_is_read_once() {
+    let reader_nodes = |n: usize| {
+        let srcs: Vec<(String, String)> = (0..n)
+            .map(|i| {
+                (
+                    format!("w{i}"),
+                    format!(
+                        "(globalThis as any)[String(Math.random())] = {i}; export const v{i} = 1;"
+                    ),
+                )
+            })
+            .chain(std::iter::once((
+                "r".to_string(),
+                "console.log((globalThis as any).__g);".to_string(),
+            )))
+            .collect();
+        let mods: Vec<(&str, &str)> = srcs.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+        let pf = units_of(&mods);
+        let (_, st) = pf
+            .units
+            .iter()
+            .find(|(p, _)| p.starts_with("r.ts"))
+            .expect("the reader is a unit");
+        (st.nodes, pf.dump_text())
+    };
+    let (few, _) = reader_nodes(4);
+    let (many, dump) = reader_nodes(16);
+    assert_eq!(few, many, "{dump}");
+}
+
+/// DECISIONS 114: the driver compares what a unit read with what is
+/// published now. Each layout and function contract is digested once per
+/// round, so those compares do not grow with the readers (awfy_Richards:
+/// 58544 reads of 39 layouts, 125 s a round); a cell is viewed per reader
+/// only in a round its writes changed.
+#[test]
+fn the_driver_compares_each_contract_once_per_round() {
+    let compares = |n: usize, writer: &str, reader: &str| {
+        let srcs: Vec<(String, String)> = std::iter::once(("a".to_string(), writer.to_string()))
+            .chain((0..n).map(|i| (format!("r{i}"), reader.replace("I", &i.to_string()))))
+            .collect();
+        let mods: Vec<(&str, &str)> = srcs.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+        let pf = units_of(&mods);
+        (pf.compares, pf.rounds, pf.dump_text())
+    };
+    let class = "export class P { x = 1; y = 'p'; } export function mk() { return new P(); }";
+    let (few, r1, _) = compares(
+        4,
+        class,
+        "import { mk } from './a'; export const vI = mk().x;",
+    );
+    let (many, r2, dump) = compares(
+        16,
+        class,
+        "import { mk } from './a'; export const vI = mk().x;",
+    );
+    assert_eq!(r1, r2, "{dump}");
+    assert_eq!(few, many, "layouts and functions: {dump}");
+    let global = "(globalThis as any)[String(Math.random())] = 1;";
+    let (few, r1, _) = compares(4, global, "export const vI = (globalThis as any).__g;");
+    let (many, r2, dump) = compares(16, global, "export const vI = (globalThis as any).__g;");
+    assert_eq!(r1, r2, "{dump}");
+    // A reader is viewed at most once per round boundary: only a cell
+    // whose writes changed is viewed, and the first changed view seeds it.
+    let bound = (16 - 4) * (r1 as u64 - 1);
+    assert!(
+        many - few <= bound,
+        "cells: {few} -> {many}, rounds {r1}: {dump}"
+    );
+}
+
+#[test]
+fn a_static_instance_is_a_value_binding_of_its_class() {
+    // DECISIONS 173: `P.D` is a binding on the class object, part of P's
+    // contract (§11.2), checked as an export binding is: the instance it
+    // gives out does not escape with its prototype chain, so `Q`, a
+    // subclass of another unit, finds `P` unbroken.
+    let b = "export class P { v: number; constructor() { this.v = 1; } get(): number { return this.v; } static D = new P(); }";
+    let m = "import { P } from './b'; class Q extends P { w: number = 2; } function main() { const d = P.D; console.log(d.get()); const q = new Q(); console.log(q.v, q.w, q.get()); } main(); main();";
+    assert_parity(&[("b", b), ("m", m)]);
+}
+
+#[test]
+fn a_value_no_contract_describes_escapes_alone() {
+    // DECISIONS 174: a published union is its members. `pick` holds an `A`
+    // or a runtime-made Error, which no contract describes: the Error
+    // escapes alone, the binding describes the `A` and says unknown beside
+    // it, so `A` stays unbroken.
+    let b = "export class A { n: number; constructor() { this.n = 1; } } export const pick: any = Math.random() > 2 ? new A() : new Error('e'); export function own(): number { const a = new A(); return a.n; }";
+    let m = "import { pick, own } from './b'; function main() { console.log(pick.n, own()); } main(); main();";
+    assert_parity(&[("b", b), ("m", m)]);
+    // The thrown values are a cell (174): the catching unit reads the
+    // `A` another unit throws beside an Error.
+    let b = "export class A { n: number; constructor() { this.n = 1; } } export function f(k: number): number { if (k > 1) throw new A(); if (k < 0) throw new Error('e'); const a = new A(); return a.n; }";
+    let m = "import { f } from './b'; function main() { try { console.log(f(2)); } catch (e: any) { console.log(e.n); } } main(); main();";
+    assert_parity(&[("b", b), ("m", m)]);
+}
+
+#[test]
+fn a_result_value_no_contract_describes_escapes_alone() {
+    // DECISIONS 175: 174's rule for a contract function's result. `mk`
+    // returns an `A` or a primitive method's box (`primbox`, on a string of
+    // its own: `k` is a marker per unit, no primitive receiver): the box
+    // escapes alone, the result describes the `A`: it is given out, not
+    // escaped, so `a.n` in `mk` is proven as the whole program proves it.
+    let b = "export class A { n: number; constructor() { this.n = 1; } } export function mk(k: number): any { const a = new A(); console.log(a.n); return k > 1 ? a : 'ab'.slice(k); } export function own(): number { const a = new A(); return a.n; }";
+    let m = "import { mk, own } from './b'; function main() { const v = mk(2); console.log(v.n, own()); } main(); main();";
+    assert_parity(&[("b", b), ("m", m)]);
+}
+
+#[test]
+fn a_callees_rooted_store_on_its_callers_receiver_is_the_callers_flow() {
+    // AWFY som.js Dictionary::resize -> transferEntries: `move` runs on
+    // `grow`'s receiver and stores what that receiver reaches into what it
+    // reaches. The reader replays it on its own object (DECISIONS 179:
+    // receiver flows; 181: `d`'s own `D` stand-in is
+    // `D2`'s parent, so `D2` runs `d`'s published `move`), as the whole
+    // program moves the entries inside one `D`; `E`, a class of a third
+    // unit, is not escaped by it.
+    let b = "export class E { v: number; constructor(v: number) { this.v = v; } }";
+    let d = "import { E } from './b'; export class D { b: any[]; constructor() { this.b = new Array(2); } put(k: number, v: number) { this.b[k] = new E(v); } grow() { const o = this.b; this.b = new Array(4); this.move(o); } move(o: any[]) { this.b[0] = o[0]; } }";
+    let m = "import { D } from './d'; class D2 extends D { w: number = 1; } function main() { const x = new D2(); x.put(0, 1); x.grow(); console.log(x.b[0].v, x.w); } main(); main();";
+    assert_parity(&[("b", b), ("d", d), ("m", m)]);
+}
+
+#[test]
+fn a_numeric_index_step_of_a_stored_path_is_the_element() {
+    // DECISIONS 179/181: `copy` on a `D2` (another unit's subclass) is
+    // replayed on the reader's own object, whose `a` holds `E` only: the
+    // element read gives `E`, as in the whole program.
+    let b = "export class E { v: number; constructor(v: number) { this.v = v; } }";
+    let d = "import { E } from './b'; export class D { a: any[]; b: any[]; constructor() { this.a = new Array(2); this.b = new Array(2); } put(v: number) { this.a[0] = new E(v); } copy() { const o = this.a; this.b[0] = o[0]; } }";
+    let m = "import { D } from './d'; class D2 extends D { w: number = 1; } function main() { const x = new D2(); x.put(1); x.copy(); console.log(x.b[0].v, x.w); } main(); main();";
+    assert_parity(&[("b", b), ("d", d), ("m", m)]);
+}
+
+#[test]
+fn a_string_index_step_of_a_stored_path_reads_any_key() {
+    // Soundness of the replay (DECISIONS 179-181): `o[k]` with a string `k`
+    // may name a prototype member (`push`): the reader's replay of `move`
+    // on its `D2` finds the array's builtin methods beside its elements, as
+    // the whole program does. `x.b[0].v` is proven in neither mode.
+    let b = "export class E { v: number; constructor(v: number) { this.v = v; } }";
+    let d = "import { E } from './b'; export class D { b: any[]; constructor() { this.b = new Array(2); } put(k: number, v: number) { this.b[k] = new E(v); } grow(k: string) { const o = this.b; this.b = new Array(4); this.move(o, k); } move(o: any[], k: string) { this.b[0] = (o as any)[k]; } }";
+    let m = "import { D } from './d'; class D2 extends D { w: number = 1; } function main(k: string) { const x = new D2(); x.put(0, 1); x.grow(k); console.log(x.b[0].v, x.w); } main('push'); main('0');";
+    let mods = [("b", b), ("d", d), ("m", m)];
+    let (wp, pu) = (whole_of(&mods), units_of(&mods));
+    let read = |pf: &ProgramFacts| {
+        proven_set(pf)
+            .iter()
+            .any(|s| s.starts_with("m.ts@") && s.ends_with(".v"))
+    };
+    assert!(!read(&wp), "whole program reads a builtin method beside E");
+    assert!(
+        !read(&pu),
+        "per unit must not prove what the whole program cannot"
+    );
+}
+
+#[test]
+fn a_published_methods_parameter_holds_its_callers_arguments() {
+    // DECISIONS 148: `o.items` on `take`'s parameter is proven in the whole
+    // program (o is m's literal). Per unit, m publishes what it passes to
+    // the method it runs (`method_args_out`, the 107 rule for parameters),
+    // and d's parameter holds that literal's stand-in beside its marker.
+    let b = "export class E { v: number; constructor(v: number) { this.v = v; } }";
+    let d = "export class D { b: any[]; constructor() { this.b = new Array(2); } take(o: any) { this.b[0] = o.items[0]; } }";
+    let m = "import { D } from './d'; import { E } from './b'; function main() { const x = new D(); x.take({ items: [new E(1)] }); console.log(x.b[0].v); } main(); main();";
+    let mods = [("b", b), ("d", d), ("m", m)];
+    let (pu, wp) = (units_of(&mods), whole_of(&mods));
+    assert!(proven(&wp, "items"), "{}", wp.dump_text());
+    assert_eq!(verdicts(&pu, "items"), verdicts(&wp, "items"), "{}", pu.dump_text());
+    assert!(
+        proven_set(&pu).is_subset(&proven_set(&wp)),
+        "{}",
+        pu.dump_text()
+    );
+}
+
+#[test]
+fn a_published_methods_parameter_holds_its_callers_arguments_with_a_rest_parameter() {
+    // DECISIONS 148 for a method the solve does not summarize (a rest
+    // parameter): its contract publication (`escape_fn_params`) puts what
+    // the running units pass beside the marker as the summarized one does.
+    let b = "export class E { v: number; constructor(v: number) { this.v = v; } }";
+    let d = "export class D { b: any[]; constructor() { this.b = new Array(2); } take(o: any, ...more: any[]) { this.b[0] = o.items[0]; } }";
+    let m = "import { D } from './d'; import { E } from './b'; function main() { const x = new D(); x.take({ items: [new E(1)] }); console.log(x.b[0].v); } main(); main();";
+    let mods = [("b", b), ("d", d), ("m", m)];
+    let (pu, wp) = (units_of(&mods), whole_of(&mods));
+    assert!(proven(&wp, "items"), "{}", wp.dump_text());
+    assert_eq!(verdicts(&pu, "items"), verdicts(&wp, "items"), "{}", pu.dump_text());
+    assert!(proven_set(&pu).is_subset(&proven_set(&wp)), "{}", pu.dump_text());
+}
+
+#[test]
+fn a_published_methods_parameter_some_caller_passes_unknown_stays_a_marker() {
+    // DECISIONS 148 guard: n passes a value no contract describes
+    // (`JSON.parse`) for `q`, so the joined argument there is unknown and
+    // `q` stays the bare marker, while `o` (both callers pass literals)
+    // holds them: per unit proves no `.list` the whole program cannot
+    // (soundness: never stronger than the whole program), and `.items`.
+    let b = "export class E { v: number; constructor(v: number) { this.v = v; } }";
+    let d = "export class D { b: any[]; constructor() { this.b = new Array(2); } take(o: any, q: any) { this.b[0] = o.items[0]; this.b[1] = q.list[0]; } }";
+    let m = "import { D } from './d'; import { E } from './b'; import { run } from './n'; function main() { const x = new D(); x.take({ items: [new E(1)] }, { list: [new E(2)] }); run(x); console.log(x.b[0].v); } main(); main();";
+    let n = "export function run(x: any) { x.take({ items: [1] }, JSON.parse(process.argv[2] || '{\"list\":[1]}')); }";
+    let mods = [("b", b), ("d", d), ("n", n), ("m", m)];
+    let (pu, wp) = (units_of(&mods), whole_of(&mods));
+    assert!(!proven(&wp, "list"), "{}", wp.dump_text());
+    assert!(!proven(&pu, "list"), "{}", pu.dump_text());
+    assert_eq!(
+        proven(&pu, "items"),
+        proven(&wp, "items"),
+        "{}",
+        pu.dump_text()
+    );
+    assert!(
+        proven_set(&pu).is_subset(&proven_set(&wp)),
+        "{}",
+        pu.dump_text()
+    );
+}
+
+#[test]
+#[ignore = "DECISIONS 186 open: a stand-in layout's fields hold unknown values per unit"]
+fn a_field_of_a_callers_literal_read_in_a_published_method_is_described() {
+    // DECISIONS 186 (found with 148): after 148, `o` holds m's literal's
+    // stand-in, but its field `items` reads as unknown (a stand-in's fields
+    // hold unknown values), so d's write into D's array cell is unknown and
+    // m loses `x.b[0].v`, which the whole program proves.
+    let b = "export class E { v: number; constructor(v: number) { this.v = v; } }";
+    let d = "export class D { b: any[]; constructor() { this.b = new Array(2); } take(o: any) { this.b[0] = o.items[0]; } }";
+    let m = "import { D } from './d'; import { E } from './b'; function main() { const x = new D(); x.take({ items: [new E(1)] }); console.log(x.b[0].v); } main(); main();";
+    assert_parity(&[("b", b), ("d", d), ("m", m)]);
+}
+
+#[test]
+fn a_published_cell_holding_another_units_prototype_terminates() {
+    // DECISIONS 180 (found with it): a cell holding a stand-in published
+    // onward (another unit's class prototype) is undescribed, and its
+    // escape is a no-op: only an escape that took effect is a change of
+    // the unit's contract check, so the check ends.
+    let b = "export class E { v: number; constructor(v: number) { this.v = v; } }";
+    let d = "import { E } from './b'; export let p: any = E.prototype; export function set(q: any) { p = q; }";
+    let m = "import { p, set } from './d'; import { E } from './b'; function main() { set(Object.getPrototypeOf(new E(1))); console.log(p.constructor, new E(2).v); } main(); main();";
+    let pu = units_of(&[("b", b), ("d", d), ("m", m)]);
+    assert!(!pu.sites.is_empty());
+}
+
+#[test]
+fn a_primitive_method_container_crosses_units_as_a_container() {
+    // DECISIONS 184: `parts` returns `split`'s array (a `primbox`). Its
+    // contract describes it (cell `box:<name>`, as an array's, DECISIONS
+    // 94), so `m` holds a container of its own kind, not an unknown value:
+    // `forEach` calls the closure with primitives and `a` stays this unit's,
+    // as in the whole program.
+    let b = "export function parts(s: string): any { return s.split(','); }";
+    let m = "import { parts } from './b'; class A { n = 0; inc(x: any) { this.n = this.n + x.length; } } function main() { const a = new A(); const p = parts(process.argv.length > 9 ? 'a' : 'a,b'); p.forEach((x: any) => a.inc(x)); console.log(a.n); } main(); main();";
+    assert_parity(&[("b", b), ("m", m)]);
+}
+
+#[test]
+fn a_primitive_method_box_in_another_units_storage_keeps_its_elements_described() {
+    // DECISIONS 184 (AWFY Json: json.js#u18 appends `input.substring(..)`
+    // to som.js's Vector): `m` stores a `primbox` and an instance of `a`'s
+    // `P` into `a`'s Vector storage. The storage cell's write describes the
+    // box (cell `box:<name>`), so `a` reads no ⊤ element: `storage.slice`
+    // (a named read that sees the elements, Key::Any) calls no unknown
+    // callee, the storage and its `P` stay unescaped, as in the whole
+    // program.
+    let a = "export class P { x: number; constructor(x: number) { this.x = x; } get(): number { return this.x; } } export class Vector { storage: any[]; n: number; constructor() { this.storage = new Array(2); this.n = 0; } append(e: any) { if (this.n >= this.storage.length) { const s = this.storage.slice(); this.storage = new Array(this.n * 2); for (let i = 0; i < this.n; i++) this.storage[i] = s[i]; } this.storage[this.n] = e; this.n = this.n + 1; } at(i: number): any { return this.storage[i]; } }";
+    let m = "import { P, Vector } from './a'; class J { input: string; v: Vector; constructor(s: string) { this.input = s; this.v = new Vector(); } run() { for (let i = 0; i < 4; i++) { this.v.append(new P(i)); this.v.append(this.input.substring(i, i + 1)); } return this.v.at(0).get(); } } function main() { const j = new J(process.argv.length > 9 ? 'abcdef' : 'xyzuvw'); console.log(j.run()); } main(); main();";
+    assert_parity(&[("a", a), ("m", m)]);
+}
+
 #[test]
 fn a_nested_initializer_and_its_hoisted_var_are_one_emitted_binding() {
     let src = r#"
@@ -3134,11 +3693,13 @@ fn an_escaped_value_beside_top_is_that_top() {
         escaped_beside_top_entries(16),
         escaped_beside_top_entries(32),
     );
-    let (d1, d2) = (e16 - e8, e32 - e16);
-    assert!(
-        d1 > 0 && d2 < 3 * d1,
-        "entries {e8} {e16} {e32}: quadratic in the escaped values"
-    );
+    // Merged head: per unit `f`'s literals stored into its argument are its
+    // contract's store flows (DECISIONS 118/151), not escapes, so beside the
+    // callers' ⊤ they stay and ride into every array: n² until a store into a
+    // parameter only ⊤ is passed for escapes there (DECISIONS 192, open).
+    // Rewritten for #13294 (decision 151: every unit replays the shared
+    // objects' writes): (939, 2563, 8115) -> the pin below.
+    assert_eq!((e8, e16, e32), (964, 2612, 8212), "entries {e8} {e16} {e32}");
 }
 
 #[test]
@@ -3236,7 +3797,7 @@ fn a_result_holds_one_marker() {
 /// member, then a read of the result): whether the read site holds ⊤.
 fn builtin_fn_read_top(store: &str) -> bool {
     let b = format!("{JOIN}export function f(x: any, c: boolean) {{ S.last = 1; const g: any = Math.max; {store} }}\nexport function r() {{ S.last = 2; const m: any = Math.min; const y: any = m.foo; return y.v; }}");
-    let m = "import { f, r } from './b'; function main() { f({ k: 0 }, true); console.log(r()); } main(); main();";
+    let m = "import { f, r } from './b'; function main() { f((globalThis as any).u, true); console.log(r()); } main(); main();";
     let pf = units_of(&[("b", b.as_str()), ("m", m)]);
     let s = pf
         .sites
@@ -3367,6 +3928,107 @@ fn a_store_into_the_units_own_literal_publishes_nothing() {
     assert_eq!(verdicts(&pf, "w"), verdicts(&w, "w"), "{}", pf.dump_text());
     assert!(proven(&pf, "w"), "{}", pf.dump_text());
     assert!(tmpl(&pf, "Inner").escape.is_none(), "{}", pf.dump_text());
+}
+
+/// `run(o)` in `a` hands its argument down a chain of `n` closed locals
+/// (decision 23: every reference a direct call, none passed as a value);
+/// each stores its own key into it. `b` passes a literal and reads every key.
+fn closed_chain(n: usize) -> [(&'static str, String); 2] {
+    let mut a = String::from("export function run(o: any) {\n");
+    for i in (0..n).rev() {
+        let next = match i + 1 < n {
+            true => format!(" f{}(x);", i + 1),
+            false => String::new(),
+        };
+        a += &format!("  const f{i} = (x: any) => {{ x.k{i} = {i};{next} }};\n");
+    }
+    a += "  f0(o);\n}\n";
+    let keys: Vec<String> = (0..n).map(|i| format!("k{i}: -1")).collect();
+    let reads: Vec<String> = (0..n).map(|i| format!("o.k{i}")).collect();
+    let b = format!(
+        "import {{ run }} from './a';\nconst o = {{ {} }};\nrun(o);\nconsole.log({});\n",
+        keys.join(", "),
+        reads.join(" + ")
+    );
+    [("a", a), ("b", b)]
+}
+
+#[test]
+fn a_store_deep_in_closed_locals_reaches_the_outer_callers_argument() {
+    // DECISIONS 195: the closed locals of `run` are called only in `a`, so
+    // they carry no parameter markers; the store `x.k2 = 2` two calls deep
+    // lands on what their callers pass, `run`'s own parameter marker, and
+    // `run`'s contract tells `b` its literal is written under k0..k2 with
+    // numbers: `b`'s reads stay proven as in the whole program.
+    let [(an, a), (bn, b)] = closed_chain(3);
+    let mods = [(an, a.as_str()), (bn, b.as_str())];
+    assert_parity(&mods);
+    let pf = units_of(&mods);
+    for k in ["k0", "k1", "k2"] {
+        assert!(proven(&pf, k), "{k}\n{}", pf.dump_text());
+    }
+}
+
+#[test]
+fn a_closed_local_called_only_in_its_unit_costs_its_own_stores() {
+    // DECISIONS 195: the closed locals of `run` carry no parameter markers
+    // (no other unit can call them), so a store through one lands on what
+    // its callers pass; it costs less than the same chain of a literal's
+    // methods, whose parameters take argument markers (DECISIONS 44). With
+    // markers on the closed locals (as before 195) the chain cost more than
+    // the methods (n = 64: 6,986 vs 5,285; now 2,702).
+    let n = 64;
+    let [(an, a), (bn, b)] = closed_chain(n);
+    let closed = module_work(&units_of(&[(an, a.as_str()), (bn, b.as_str())]), "a.ts");
+    let mut m = String::from("export function run(o: any) {\n  const h = {\n");
+    for i in 0..n {
+        let next = match i + 1 < n {
+            true => format!(" h.f{}(x);", i + 1),
+            false => String::new(),
+        };
+        m += &format!("    f{i}(x: any) {{ x.k{i} = {i};{next} }},\n");
+    }
+    m += "  };\n  h.f0(o);\n}\n";
+    let methods = module_work(&units_of(&[("a", m.as_str()), (bn, b.as_str())]), "a.ts");
+    assert!(closed * 4 < methods * 3, "closed {closed} methods {methods}");
+}
+
+#[test]
+fn a_method_run_on_an_argument_marker_makes_one_context() {
+    // DECISIONS 201: `go` runs on the published method's receiver, an
+    // argument marker (DECISIONS 44); its arrow captures `this` in a closure
+    // context, storage that takes its own marker, and runs `go` again on it.
+    // A context per marker receiver made a new instance, context and marker
+    // per lap without end (ajv `compileAsync`: 3.8M instances, the unit over
+    // 24 GB). A marker is no object of this unit: its runs share one context.
+    let a = r#"
+        export class A {
+          refs: any = {};
+          compileAsync(s: any) {
+            return go.call(this, s);
+            function go(x: any): any {
+              const body = () => { check.call(this, x); return go.call(this, x); };
+              return body();
+            }
+            function check(e: any) { if (this.refs[e]) throw new Error("loaded"); }
+          }
+        }
+        "#;
+    let b = "import { A } from \"./a\";\nconsole.log(new A().compileAsync(1));\n";
+    let cfg = FactsConfig {
+        max_work: Some(5_000_000),
+        ..FactsConfig::default()
+    };
+    let pf = units_with(&[("a", a), ("b", b)], &cfg);
+    let us: Vec<_> = pf
+        .units
+        .iter()
+        .filter(|(q, _)| crate::decl_units::module_of(q) == "a.ts")
+        .collect();
+    assert!(!us.is_empty(), "no unit of a.ts");
+    for (q, s) in us {
+        assert!(!s.aborted && s.instances < 64, "{q}: aborted {} instances {}", s.aborted, s.instances);
+    }
 }
 
 #[test]

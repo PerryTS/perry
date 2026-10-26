@@ -27,6 +27,7 @@ use super::descriptor_state::{
     set_property_attrs_batch, AccessorDescriptor, PropertyAttrs,
 };
 use super::{js_object_alloc, js_object_set_field_by_name, shapes, ObjectHeader};
+use crate::codegen_abi::LayoutWord;
 
 /// An ordinary, shaped, stamped object carrying `keys` as plain data
 /// properties — the receiver every rule-1 assertion is about.
@@ -37,7 +38,7 @@ unsafe fn shaped_object(keys: &[&str]) -> *mut ObjectHeader {
         js_object_set_field_by_name(obj, key, i as f64);
     }
     assert!(
-        shapes::is_layout_word(shapes::object_shape_stamp(obj)),
+        shapes::is_layout_word(shapes::object_shape_stamp(obj).0),
         "test premise: a plain object with data properties must be stamped"
     );
     obj
@@ -57,7 +58,7 @@ fn assert_shape_moves(what: &str, mutate: impl FnOnce(usize)) {
         mutate(obj as usize);
         let after = shapes::object_shape_stamp(obj);
         assert!(
-            shapes::is_layout_word(after),
+            shapes::is_layout_word(after.0),
             "{what}: the receiver must still carry a real ShapeId, got {after:#x}"
         );
         assert_ne!(
@@ -390,7 +391,7 @@ fn rule2_unstamped_object_never_matches_a_cached_shape() {
         (*obj).parent_class_id = PARENT;
         assert_eq!(
             shapes::object_shape_stamp(obj),
-            0,
+            LayoutWord(0),
             "an unstamped object must report NO shape, so no cached token can match"
         );
         assert!(
@@ -421,7 +422,7 @@ fn rule2_a_synthetic_parent_class_id_is_not_a_shape_token() {
          writes to +4 would be read back as a live ShapeId"
     );
     assert!(
-        shapes::shape_is_retired(parent),
+        shapes::shape_is_retired(LayoutWord(parent)),
         "and it must resolve to no shape record"
     );
 }

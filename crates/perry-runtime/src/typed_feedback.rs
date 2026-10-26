@@ -12,6 +12,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{LazyLock, Mutex};
 
 use crate::array::ArrayHeader;
+use crate::codegen_abi::LayoutWord;
 use crate::object::ObjectHeader;
 use crate::value::{
     BIGINT_TAG, INT32_TAG, JS_HANDLE_TAG, POINTER_MASK, POINTER_TAG, SHORT_STRING_TAG, STRING_TAG,
@@ -154,7 +155,7 @@ enum ObservationSource {
 // non-reused ShapeId; no observation keeps an arena address alive.
 struct Observation {
     source: ObservationSource,
-    shape_id: u32,
+    shape_id: LayoutWord,
     key_hash: u64,
     class_id: u32,
     heap_type: u16,
@@ -208,7 +209,7 @@ impl Observation {
     }
     fn affected_by_representation_change(
         &self,
-        shape_id: u32,
+        shape_id: LayoutWord,
         class_id: u32,
         heap_type: u16,
     ) -> bool {
@@ -220,10 +221,10 @@ impl Observation {
         if !self.is_shape_keyed() {
             return false;
         }
-        if shape_id != 0 {
+        if shape_id != LayoutWord(0) {
             return self.shape_id == shape_id;
         }
-        self.shape_id == 0
+        self.shape_id == LayoutWord(0)
             && (class_id == 0 || self.class_id == 0 || self.class_id == class_id)
             && (heap_type == 0 || self.heap_type == 0 || self.heap_type == heap_type)
     }
@@ -688,30 +689,30 @@ fn classify_array(addr: usize, index: Option<u32>) -> (u32, u16, u64, u16) {
     }
 }
 
-fn helper_return_facts(bits: u64) -> (u32, u32, u16, u64, u16) {
+fn helper_return_facts(bits: u64) -> (LayoutWord, u32, u16, u64, u16) {
     let value_kind = stable_value_kind(bits);
     let addr = value_pointer(bits);
     if addr == 0 {
-        return (0, 0, 0, 0, value_kind);
+        return (LayoutWord(0), 0, 0, 0, value_kind);
     }
 
     if crate::buffer::is_registered_buffer(addr)
         || crate::typedarray::lookup_typed_array_kind(addr).is_some()
     {
         let (class_id, heap_type, aux, element_kind) = classify_array(addr, None);
-        return (0, class_id, heap_type, aux, element_kind);
+        return (LayoutWord(0), class_id, heap_type, aux, element_kind);
     }
 
     match raw_heap_type(addr) as u8 {
         crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY => {
             let (class_id, heap_type, aux, element_kind) = classify_array(addr, None);
-            (0, class_id, heap_type, aux, element_kind)
+            (LayoutWord(0), class_id, heap_type, aux, element_kind)
         }
         crate::gc::GC_TYPE_OBJECT => {
             let (shape_id, class_id, heap_type) = object_shape(addr);
             (shape_id, class_id, heap_type, 0, value_kind)
         }
-        heap_type => (0, 0, heap_type as u16, 0, value_kind),
+        heap_type => (LayoutWord(0), 0, heap_type as u16, 0, value_kind),
     }
 }
 
@@ -747,19 +748,19 @@ fn normalize_raw_object_addr(bits: u64) -> usize {
     }
 }
 
-fn object_shape(addr: usize) -> (u32, u32, u16) {
+fn object_shape(addr: usize) -> (LayoutWord, u32, u16) {
     if addr == 0 {
-        return (0, 0, 0);
+        return (LayoutWord(0), 0, 0);
     }
     let ptr = addr as *const ObjectHeader;
     if !crate::object::is_valid_obj_ptr(ptr as *const u8) {
-        return (0, 0, 0);
+        return (LayoutWord(0), 0, 0);
     }
     unsafe {
         let gc = (ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         let gc_type = (*gc).obj_type as u16;
         if (*gc).obj_type != crate::gc::GC_TYPE_OBJECT {
-            return (0, 0, gc_type);
+            return (LayoutWord(0), 0, gc_type);
         }
         let class_id = (*ptr).class_id;
         // #8067 rung 3: every genuine ObjectHeader uses one token domain.
@@ -782,7 +783,7 @@ fn object_shape(addr: usize) -> (u32, u32, u16) {
 
 #[cfg(test)]
 pub(crate) fn test_object_shape_token(addr: usize) -> u32 {
-    object_shape(addr).0
+    object_shape(addr).0 .0
 }
 
 fn observe(site_id: u64, fallback_kind: TypedFeedbackSiteKind, observation: Observation) {
@@ -1603,7 +1604,7 @@ fn packed_f64_range_dense_guard_impl(
     let observation = Observation {
         source: ObservationSource::Array,
 
-        shape_id: 0,
+        shape_id: LayoutWord(0),
         key_hash: 0,
         class_id,
         heap_type,
@@ -1721,7 +1722,7 @@ pub extern "C" fn js_typed_feedback_masked_window_ta_kind(
         let observation = Observation {
             source: ObservationSource::Array,
 
-            shape_id: 0,
+            shape_id: LayoutWord(0),
             key_hash: 0,
             class_id,
             heap_type,
@@ -1850,7 +1851,7 @@ fn object_key_matches_field(
     }
     let object_addr = normalize_raw_object_addr(obj as u64);
     let (shape_id, _, heap_type) = object_shape(object_addr);
-    if heap_type != crate::gc::GC_TYPE_OBJECT as u16 || shape_id == 0 {
+    if heap_type != crate::gc::GC_TYPE_OBJECT as u16 || shape_id == LayoutWord(0) {
         return false;
     }
     unsafe {
@@ -1900,7 +1901,7 @@ fn observe_array(site_id: u64, arr: *const ArrayHeader, index: u32) {
         Observation {
             source: ObservationSource::Array,
 
-            shape_id: 0,
+            shape_id: LayoutWord(0),
             key_hash: 0,
             class_id,
             heap_type,
@@ -1932,7 +1933,7 @@ pub extern "C" fn js_typed_feedback_array_get_f64(
     let observation = Observation {
         source: ObservationSource::Array,
 
-        shape_id: 0,
+        shape_id: LayoutWord(0),
         key_hash: 0,
         class_id,
         heap_type,
@@ -1985,7 +1986,7 @@ fn plain_array_index_get_guard_impl(
     let observation = Observation {
         source: ObservationSource::Array,
 
-        shape_id: 0,
+        shape_id: LayoutWord(0),
         key_hash: 0,
         class_id,
         heap_type,
@@ -2051,7 +2052,7 @@ fn numeric_array_index_get_guard_impl(
     let observation = Observation {
         source: ObservationSource::Array,
 
-        shape_id: 0,
+        shape_id: LayoutWord(0),
         key_hash: 0,
         class_id,
         heap_type,
@@ -2091,7 +2092,7 @@ pub extern "C" fn js_typed_feedback_packed_f64_array_loop_guard(
     let observation = Observation {
         source: ObservationSource::Array,
 
-        shape_id: 0,
+        shape_id: LayoutWord(0),
         key_hash: 0,
         class_id,
         heap_type,
@@ -2134,7 +2135,7 @@ pub extern "C" fn js_typed_feedback_packed_f64_range_loop_guard(
     let observation = Observation {
         source: ObservationSource::Array,
 
-        shape_id: 0,
+        shape_id: LayoutWord(0),
         key_hash: 0,
         class_id,
         heap_type,
@@ -2180,7 +2181,7 @@ pub extern "C" fn js_typed_feedback_packed_i32_array_loop_guard(
     let observation = Observation {
         source: ObservationSource::Array,
 
-        shape_id: 0,
+        shape_id: LayoutWord(0),
         key_hash: 0,
         class_id,
         heap_type,
@@ -2218,7 +2219,7 @@ pub extern "C" fn js_typed_feedback_packed_u32_array_loop_guard(
     let observation = Observation {
         source: ObservationSource::Array,
 
-        shape_id: 0,
+        shape_id: LayoutWord(0),
         key_hash: 0,
         class_id,
         heap_type,
@@ -2418,7 +2419,7 @@ pub extern "C" fn js_typed_feedback_array_set_f64(
     let observation = Observation {
         source: ObservationSource::Array,
 
-        shape_id: 0,
+        shape_id: LayoutWord(0),
         key_hash: 0,
         class_id,
         heap_type,
@@ -2455,7 +2456,7 @@ pub extern "C" fn js_typed_feedback_array_set_f64_extend(
     let observation = Observation {
         source: ObservationSource::Array,
 
-        shape_id: 0,
+        shape_id: LayoutWord(0),
         key_hash: 0,
         class_id,
         heap_type,
@@ -2499,7 +2500,7 @@ pub extern "C" fn js_typed_feedback_plain_array_index_set_guard(
     let observation = Observation {
         source: ObservationSource::Array,
 
-        shape_id: 0,
+        shape_id: LayoutWord(0),
         key_hash: 0,
         class_id,
         heap_type,
@@ -2548,7 +2549,7 @@ pub extern "C" fn js_typed_feedback_numeric_array_index_set_guard(
     let observation = Observation {
         source: ObservationSource::Array,
 
-        shape_id: 0,
+        shape_id: LayoutWord(0),
         key_hash: 0,
         class_id,
         heap_type,
@@ -2600,7 +2601,7 @@ pub extern "C" fn js_typed_feedback_numeric_array_push_guard(
     let observation = Observation {
         source: ObservationSource::Array,
 
-        shape_id: 0,
+        shape_id: LayoutWord(0),
         key_hash: 0,
         class_id,
         heap_type,

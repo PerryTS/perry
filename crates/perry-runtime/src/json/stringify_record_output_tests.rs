@@ -1,4 +1,5 @@
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 unsafe fn parse(text: &str) -> JSValue {
     let source = js_string_from_bytes(text.as_ptr(), text.len() as u32);
@@ -298,7 +299,7 @@ fn cached_key_prefixes_follow_shape_changes_and_slot_replacement() {
         // More unique five-field shapes than cache slots guarantee a direct-map
         // collision. Alternating the colliding shapes must rebuild complete
         // prefixes rather than combining either entry with stale bytes.
-        let mut seen: [Option<(u32, String)>; KEY_PREFIX_CACHE_SLOTS] = Default::default();
+        let mut seen: [Option<(LayoutWord, String)>; KEY_PREFIX_CACHE_SLOTS] = Default::default();
         let mut collision = None;
         for n in 0..KEY_PREFIX_CACHE_SLOTS + 1 {
             let text = format!(r#"{{"key_{n}":{n},"b":2,"c":3,"d":4,"e":5}}"#);
@@ -307,7 +308,7 @@ fn cached_key_prefixes_follow_shape_changes_and_slot_replacement() {
                 value.as_pointer::<crate::ObjectHeader>(),
             );
             let cache_slot =
-                (shape.wrapping_mul(0x9e37_79b9) as usize) & (KEY_PREFIX_CACHE_SLOTS - 1);
+                (shape.0.wrapping_mul(0x9e37_79b9) as usize) & (KEY_PREFIX_CACHE_SLOTS - 1);
             if let Some((other_shape, other_text)) = seen[cache_slot].take() {
                 if other_shape != shape {
                     collision = Some((other_text, text));

@@ -28,6 +28,7 @@ fix-deps:
 	rustup run $(RUSTUP_TOOLCHAIN) cargo install cargo-fixit@$$v --locked
 
 # Install the pinned Mr Boxington Cargo cache used by build-dev/build-prod.
+# The pin also provides the Cargo shim required for optional Blaze routing.
 .PHONY: mbx-deps
 mbx-deps:
 	@set -e; v=$$(node -e "console.log(require('./external-tools.json').tools.mbx.version)"); \

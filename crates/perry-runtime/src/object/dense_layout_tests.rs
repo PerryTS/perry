@@ -6,7 +6,10 @@ fn prior_dynamic_then_static_preserves_both_and_canonicalizes_static() {
     std::thread::spawn(|| {
         let keys = unsafe { canonical_keys_for_names(&[b"dpa_prior_dynamic"]) };
         let dynamic = shapes::js_object_layout_for_class_keys(keys.arr() as u64, 1, 0, 0);
-        let dynamic_id = shapes::shape_record_for_word(dynamic).unwrap().identity().0;
+        let dynamic_id = shapes::shape_record_for_word(LayoutWord(dynamic))
+            .unwrap()
+            .identity()
+            .0;
         let mut request = PerryStaticLayoutRequestV1 {
             shape_id: shapes::SHAPE_ID_BASE + 0x7f11,
             layout_word: 0x8000_07d0,
@@ -48,7 +51,10 @@ fn worker_seed_replays_static_rows_and_allocates_fresh_dynamic_rows() {
         let static_word = js_object_layout_for_class_keys_static(0, 0, 3, 0, &mut request, 0);
         let keys = unsafe { canonical_keys_for_names(&[b"dpa_seed_dynamic"]) };
         let dynamic = shapes::js_object_layout_for_class_keys(keys.arr() as u64, 1, 0, 0);
-        let dynamic_id = shapes::shape_record_for_word(dynamic).unwrap().identity().0;
+        let dynamic_id = shapes::shape_record_for_word(LayoutWord(dynamic))
+            .unwrap()
+            .identity()
+            .0;
         let seed = shapes::worker_shape_seed();
         let image = crate::object::class_image::current_image_handle();
         std::thread::spawn(move || {
@@ -69,7 +75,7 @@ fn worker_seed_replays_static_rows_and_allocates_fresh_dynamic_rows() {
             assert_ne!(local.0, dynamic);
             assert!(local.row().0 >= crate::object::class_image::layout_image().static_rows);
             assert_eq!(
-                shapes::shape_descriptor_by_id(dynamic_id)
+                shapes::shape_descriptor_by_id(ShapeId(dynamic_id))
                     .unwrap()
                     .logical_key_count,
                 1

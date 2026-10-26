@@ -2,6 +2,7 @@
 //! this table; each entry names the complete static holder chain and its slot.
 //! A changed holder word, or a shadowed receiver, takes ordinary dispatch.
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 #[repr(C)]
 pub struct PerryFamilyMethods {
@@ -19,7 +20,7 @@ pub struct PerryFamilyMethod {
 #[repr(C)]
 pub struct PerryMethodHolder {
     pub class_id: u32,
-    pub word: u32,
+    pub word: LayoutWord,
 }
 unsafe impl Sync for PerryFamilyMethods {}
 unsafe impl Sync for PerryFamilyMethod {}
@@ -115,7 +116,7 @@ pub unsafe extern "C" fn perry_probe_family_method(
             return 0;
         }
         holder = (bits & crate::value::POINTER_MASK) as *const ObjectHeader;
-        if (*holder).parent_class_id != guard.word {
+        if (*holder).parent_class_id != guard.word.0 {
             return 0;
         }
     }

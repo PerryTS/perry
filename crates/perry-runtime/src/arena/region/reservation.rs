@@ -126,7 +126,7 @@ impl Reservation {
                 len = (len / 2) & !(ALIGN - 1);
                 continue;
             }
-            assert_eq!(libc::madvise(committed, prefix, libc::MADV_NOHUGEPAGE), 0);
+            super::advise_thp(committed, prefix, libc::MADV_NOHUGEPAGE);
             return Some(Box::new(Self {
                 descriptors: aligned,
                 base: aligned + prefix,

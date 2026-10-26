@@ -226,7 +226,9 @@ impl<'a> Gen<'a> {
             .1
             .closure_display_names
             .get(func_id)
-            .cloned()
+            // DECISIONS 108: local functions of one name are different
+            // functions (decision 23): the name carries the function id.
+            .map(|n| format!("{n}#{func_id}"))
             .unwrap_or_else(|| format!("closure{func_id}"));
         let f = self.register_fn(mi, *func_id, &name, params, *is_arrow, true);
         let info = self.m.funcs[f as usize].clone();

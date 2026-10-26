@@ -606,7 +606,7 @@ pub(super) fn emit_string_pool(
         let cid_str = class_id.to_string();
         // A literal birth names the plain prototype (`BirthProto::Literal`), so
         // its shape mints pass class id 0, exactly as the startup literal seed
-        // (`js_shape_seed_plain`) does. Passing the anonymous class's own id was
+        // (`js_layout_seed_plain`) does. Passing the anonymous class's own id was
         // equivalent only while that id had no vtable class: per-module class
         // ids collide, so an `__AnonShape_*` id can also be another module's
         // DECLARED class, and the mint then derived that class's prototype --

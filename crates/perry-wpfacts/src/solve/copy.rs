@@ -46,6 +46,9 @@ impl Model {
             }
             node.succ.push(b);
         }
+        if !self.cell_watch.is_empty() && self.cell_watch.remove(&a) {
+            self.cell_woken.push(a);
+        }
         if log {
             self.rel(|| format!("copy {a} {b}"));
         }

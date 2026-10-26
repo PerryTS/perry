@@ -5,7 +5,7 @@ use crate::gen::Gen;
 use crate::model::*;
 use crate::pts::{FxHashMap, FxHashSet};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct KindFact {
     pub prims: u16,
     /// Object templates the field can hold (display names), sorted.
@@ -70,7 +70,7 @@ impl KindFact {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Hash)]
 pub struct FieldFacts {
     pub key: String,
     pub slot: Option<u32>,
@@ -96,7 +96,7 @@ pub struct FieldFacts {
     pub fns: Vec<crate::bindings::BodyRef>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Hash)]
 pub struct TemplateFacts {
     pub id: TmplId,
     pub display: String,
@@ -119,7 +119,7 @@ pub struct TemplateFacts {
     pub ancestors: Vec<u32>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Verdict {
     T0Mono,
     T0Set,
@@ -645,6 +645,16 @@ fn field_kind(m: &Model, ts: &[Tok], a: Atom, definite: bool) -> KindFact {
             }
             match &m.toks[x as usize] {
                 TokKind::Top => k.top = true,
+                // A closed function's parameter marker (decision 13): what
+                // its callers pass is beside it; the marker only records
+                // the uses for its contract (as for a receiver, `site_facts`).
+                TokKind::Obj(..) if m.closed_marker(x) => {}
+                // Any other marker stands for another unit's values with
+                // nothing beside it (DECISIONS 119): it reads as ⊤.
+                TokKind::Obj(..) if m.is_marker(x) => {
+                    k.top = true;
+                    k.prims |= prim::ALL;
+                }
                 TokKind::Obj(tm, _) if m.tmpls[*tm as usize].kind.is_fact_unit() => {
                     objs.push(m.tmpls[*tm as usize].display.clone())
                 }
@@ -825,7 +835,20 @@ fn judge(
                     }
                 });
             }
+            // A closed function's parameter marker (decision 13): what
+            // its callers pass is the stand-ins beside it; the marker
+            // only records the uses for its contract. A published method's
+            // receiver marker with published receivers too (DECISIONS 107).
             TokKind::Obj(..) if m.closed_marker(t) => {}
+            // Any other marker stands for another unit's values with
+            // nothing beside it (DECISIONS 119): it reads as ⊤.
+            TokKind::Obj(..) if m.is_marker(t) => {
+                top = true;
+                receivers.push(m.tok_name(t));
+                verdict.get_or_insert(Verdict::No(
+                    "receiver is another unit's value (marker)".into(),
+                ));
+            }
             TokKind::Obj(tm, _) => {
                 let Some(tf) = by_id.get(tm) else {
                     receivers.push(m.tok_name(t));

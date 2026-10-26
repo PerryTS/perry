@@ -5,6 +5,7 @@
 //! that ran the seed resolves the replayed object to the static id; one that
 //! did not mints a counter id and never holds the static id under any facts.
 use super::*;
+use crate::codegen_abi::{LayoutWord, ShapeId};
 use crate::object::shapes::{
     is_layout_word, is_static_shape_id, object_shape_stamp, shape_descriptor_for_word,
     SHAPE_ID_BASE,
@@ -43,7 +44,7 @@ fn replayable() -> SerializedValue {
         crate::object::js_object_set_keys(obj, keys.arr() as *mut _);
         assert_eq!(
             object_shape_stamp(obj),
-            REQUESTED,
+            LayoutWord(REQUESTED),
             "fixture is vacuous: the sent object does not carry the static id"
         );
         let bits = crate::value::js_nanbox_pointer(obj as i64).to_bits();
@@ -64,7 +65,7 @@ fn replayable() -> SerializedValue {
 }
 
 /// Runs in a fresh agent (a new thread has its own runtime state).
-fn receive(wire: SerializedValue, seed_first: bool) -> (u32, bool, bool) {
+fn receive(wire: SerializedValue, seed_first: bool) -> (LayoutWord, bool, bool) {
     std::thread::spawn(move || {
         if seed_first {
             assert_eq!(
@@ -78,7 +79,7 @@ fn receive(wire: SerializedValue, seed_first: bool) -> (u32, bool, bool) {
             crate::value::JSValue::from_bits(bits).as_pointer::<crate::object::ObjectHeader>();
         let stamp = unsafe { object_shape_stamp(obj) };
         let static_present =
-            crate::object::shapes::shape_descriptor_by_id(REQUESTED + 0x10000).is_some();
+            crate::object::shapes::shape_descriptor_by_id(ShapeId(REQUESTED + 0x10000)).is_some();
         // Same facts = the stamp names this agent's canonical node for NAMES.
         let canonical = unsafe {
             crate::object::static_shapes::canonical_keys_for_names(&[
@@ -102,7 +103,8 @@ fn a_seeded_worker_resolves_a_replayed_object_to_the_static_id() {
         "the replayed object is not stamped with the canonical key list"
     );
     assert_eq!(
-        stamp, REQUESTED,
+        stamp,
+        LayoutWord(REQUESTED),
         "the receiving agent ran the seed, so minting the replayed object's facts must find it"
     );
     assert!(present);
@@ -116,7 +118,7 @@ fn an_unseeded_worker_mints_a_replayed_object_by_facts_and_never_aliases_the_sta
         "the replayed object is not stamped with the canonical key list"
     );
     assert!(
-        is_layout_word(stamp) && !crate::object::shapes::is_static_layout_word(stamp),
+        is_layout_word(stamp.0) && !crate::object::shapes::is_static_layout_word(stamp.0),
         "an unseeded agent must mint a counter id by facts, got {stamp:#x}"
     );
     assert!(
@@ -148,7 +150,8 @@ fn seed_constfn_here() -> (u32, u64) {
         entries.as_ptr(),
         1,
     );
-    let record = shape_descriptor_for_word(id).expect("agent-local ConstFn seed record");
+    let record =
+        shape_descriptor_for_word(LayoutWord(id)).expect("agent-local ConstFn seed record");
     (id, record.constfn_infos()[0].info)
 }
 

@@ -1,4 +1,5 @@
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 #[test]
 fn declared_branded_births_keep_prototype_brand_and_fresh_identity() {
@@ -14,7 +15,7 @@ fn declared_branded_births_keep_prototype_brand_and_fresh_identity() {
         assert_ne!(a, b);
         unsafe {
             let shape = object_shape_stamp(a);
-            assert_eq!(shape, branded_birth_layout(class));
+            assert_eq!(shape, LayoutWord(branded_birth_layout(class)));
             assert_eq!(shape, object_shape_stamp(b));
             let record = shapes_store::ShapeSlab::agent_record_for_word_present(shape).unwrap();
             let record = &*record;
@@ -34,7 +35,8 @@ fn declared_branded_layouts_survive_shape_table_reset() {
         crate::weakref::CLASS_ID_WEAKSET,
     ] {
         let id = branded_birth_layout(class);
-        let record = shapes_store::ShapeSlab::agent_record_for_word_present(id).unwrap();
+        let record =
+            shapes_store::ShapeSlab::agent_record_for_word_present(LayoutWord(id)).unwrap();
         assert_eq!(unsafe { &*record }.brands(), [u64::from(class)]);
     }
 }

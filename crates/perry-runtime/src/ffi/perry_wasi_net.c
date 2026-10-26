@@ -1,5 +1,45 @@
 /* wasi-sdk's libc implements WASIp2 name lookup. Rust std's resolver on
  * this target is still unsupported; keep libc layouts on the C side. */
+/* wasm32-wasip1 has no socket creation, connect, bind or name resolution in
+ * wasi_snapshot_preview1, so every operation here reports "not supported" and
+ * the module imports nothing beyond preview 1. A listener that no host
+ * pre-opened reports EADDRNOTAVAIL. Negative results are WASI errno values,
+ * as in the WASIp2 arm below. */
+#if defined(__wasip1__)
+#include <errno.h>
+
+int perry_wasi_resolve(const char *hostname, int family, void *ctx,
+                      void (*push)(void *, int, const unsigned char *)) {
+    (void)hostname; (void)family; (void)ctx; (void)push;
+    return ENOTSUP;
+}
+
+int perry_wasi_socket_nonblock(int fd) { (void)fd; return -ENOTSUP; }
+
+int perry_wasi_tcp_open(const char *host, unsigned short port, int listening,
+                        int backlog, int reuse_port, int nodelay, int *pending) {
+    (void)host; (void)port; (void)backlog; (void)reuse_port; (void)nodelay;
+    (void)pending;
+    return listening ? -EADDRNOTAVAIL : -ENOTSUP;
+}
+
+int perry_wasi_socket_connect_ready(int fd) { (void)fd; return -ENOTSUP; }
+int perry_wasi_socket_accept(int fd, int nodelay) { (void)fd; (void)nodelay; return -ENOTSUP; }
+int perry_wasi_socket_read(int fd, unsigned char *bytes, unsigned len) {
+    (void)fd; (void)bytes; (void)len;
+    return -ENOTSUP;
+}
+int perry_wasi_socket_write(int fd, const unsigned char *bytes, unsigned len) {
+    (void)fd; (void)bytes; (void)len;
+    return -ENOTSUP;
+}
+int perry_wasi_socket_shutdown(int fd) { (void)fd; return -ENOTSUP; }
+int perry_wasi_socket_close(int fd) { (void)fd; return -ENOTSUP; }
+int perry_wasi_socket_address(int fd, int peer, char *text, unsigned cap, unsigned short *port) {
+    (void)fd; (void)peer; (void)text; (void)cap; (void)port;
+    return -ENOTSUP;
+}
+#else
 #include <netdb.h>
 #include <netinet/in.h>
 #include <string.h>
@@ -129,3 +169,4 @@ int perry_wasi_socket_address(int fd, int peer, char *text, unsigned cap, unsign
     } else return -EAFNOSUPPORT;
     return inet_ntop(storage.ss_family, ip, text, cap) ? 0 : -errno;
 }
+#endif

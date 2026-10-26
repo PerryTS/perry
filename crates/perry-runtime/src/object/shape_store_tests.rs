@@ -1,5 +1,6 @@
 //! Shape-store regressions; the module path remains `shape_store::tests`.
 use super::*;
+use crate::codegen_abi::LayoutWord;
 #[test]
 fn function_recreated_data_key_clears_the_deletion_marker() {
     let _lock = crate::gc::global_side_table_test_lock();
@@ -614,14 +615,14 @@ fn own_slot_plan_cannot_hide_a_later_declaration() {
     let record = unsafe { shapes::object_shape_record(obj).unwrap() };
     let actual_keys = record.keys() as usize;
     super::super::prop_plan::read_plan_record(
-        unsafe { (*obj).shape_word() },
+        unsafe { LayoutWord((*obj).shape_word()) },
         actual_keys,
         key as usize,
         0,
     );
     assert_eq!(
         super::super::prop_plan::read_plan_lookup(
-            unsafe { (*obj).shape_word() },
+            unsafe { LayoutWord((*obj).shape_word()) },
             actual_keys,
             key as usize,
             2

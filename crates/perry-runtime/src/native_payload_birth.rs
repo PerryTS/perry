@@ -16,6 +16,7 @@
 //! stops replaying.
 
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 /// One own accessor an instance is born with. The getter and setter are the
 /// per-realm singleton closures of `get` / `set`.
@@ -128,7 +129,7 @@ pub(super) fn alloc_born<T: 'static>(
         let instance = crate::object::shapes::object_shape_stamp(obj);
         let state_shape = crate::object::shapes::object_shape_stamp(state_obj);
         // Every later birth validates the record before it replays it.
-        memo.with(|m| m.set(u64::from(instance) << 32 | u64::from(state_shape)));
+        memo.with(|m| m.set(u64::from(instance.0) << 32 | u64::from(state_shape.0)));
     }
     value.get_nanbox_f64()
 }
@@ -150,10 +151,10 @@ unsafe fn unpublished_state(count: u32) -> *mut ObjectHeader {
 }
 
 /// Stamp a fresh, unobserved object with `id`.
-unsafe fn stamp(obj: *mut ObjectHeader, id: u32) {
+unsafe fn stamp(obj: *mut ObjectHeader, id: LayoutWord) {
     if crate::arena::pointer_in_nursery(obj as usize) {
         // GC_STORE_AUDIT(POINTER_FREE): a ShapeId, never a heap reference.
-        (*obj).parent_class_id = id;
+        (*obj).parent_class_id = id.0;
     } else {
         crate::object::shapes::stamp_object_shape_id_with_carrier_note(obj, id);
     }
@@ -249,7 +250,7 @@ unsafe fn pairs_match(pairs: f64, accessors: &[OwnAccessor]) -> bool {
 
 /// Do the recorded shape's lanes hold any value in slots `0..count` (no
 /// typed lane), so a newborn's slots take plain initializing stores?
-fn any_lanes(id: u32, count: usize) -> bool {
+fn any_lanes(id: LayoutWord, count: usize) -> bool {
     let rep = crate::object::shapes::shape_rep_for_word(id);
     (0..count as u32).all(|slot| {
         crate::object::field_rep::slot_rep(rep, slot) == crate::object::field_rep::REP_ANY
@@ -289,15 +290,15 @@ unsafe fn born_final(
     let state_obj = unpublished_state(state.len() as u32);
     let kind = crate::object::shapes::store_kind::receiver_ordinary_kind(state_obj);
     if !crate::object::shapes::shape_is_filled_birth(
-        state_id,
+        LayoutWord(state_id),
         crate::object::shapes::PROTO_ID_NULL,
         state.len() as u32,
         kind,
-    ) || !any_lanes(state_id, state.len())
+    ) || !any_lanes(LayoutWord(state_id), state.len())
     {
         return None;
     }
-    stamp(state_obj, state_id);
+    stamp(state_obj, LayoutWord(state_id));
     for (i, value) in state.iter().enumerate() {
         init_slot(state_obj, i, value.get_nanbox_u64());
     }
@@ -307,11 +308,11 @@ unsafe fn born_final(
     let proto_id = family_proto_id(family_prototype(family))?;
     let kind = crate::object::shapes::store_kind::receiver_ordinary_kind(obj);
     if !crate::object::shapes::shape_is_attributed_filled_birth(
-        instance_id,
+        LayoutWord(instance_id),
         proto_id,
         count as u32,
         kind,
-    ) || !any_lanes(instance_id, count)
+    ) || !any_lanes(LayoutWord(instance_id), count)
     {
         return None;
     }
@@ -322,7 +323,7 @@ unsafe fn born_final(
         let gc = crate::gc::header_from_trusted_user_ptr(obj.cast()).cast_mut();
         (*gc)._reserved |= crate::gc::OBJ_FLAG_HAS_DESCRIPTORS;
     }
-    stamp(obj, instance_id);
+    stamp(obj, LayoutWord(instance_id));
     for (i, value) in own.iter().enumerate() {
         init_slot(obj, i, value.get_nanbox_u64());
     }

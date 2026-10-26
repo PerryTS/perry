@@ -70,25 +70,44 @@ impl Model {
             self.add_prim(dst, prim::UNDEF);
         }
         match key {
-            Key::Named(a) => {
-                let f = self.field(t, a);
-                self.edge(f, dst);
-            }
+            // A method key on a published receiver finds the class chain's
+            // value, not the receiver's unknown own field (DECISIONS 59).
+            Key::Named(a) => match self.virt_load(t, a) {
+                Some(v) => {
+                    self.edge(v, dst);
+                    // A key another unit's subclass defines: a read finds an
+                    // unknown own value (only a call through the receiver
+                    // is that subclass's method, `virt_call`, DECISIONS 97).
+                    if !self.virt_overriders(t, a).is_empty() {
+                        let f = self.field(t, a);
+                        self.edge(f, dst);
+                    }
+                }
+                None => {
+                    let f = self.field(t, a);
+                    self.edge(f, dst);
+                }
+            },
             Key::Any => {
                 let all = self.all_fields(t);
                 self.edge(all, dst);
             }
         }
-        // A marker (decision 13, DECISIONS 44) is use tracking, not a value:
-        // the values it stands for sit beside it (DECISIONS 74, 76) or
-        // arrive with ⊤, and a load from them reads what the parameter
-        // holds. A load from the marker reads its fields only, the reach
-        // markers of what the argument reaches (`field`): no builtin
-        // member, no prototype chain (DECISIONS 111).
-        if self.is_marker(t) {
+        // A marker is use tracking, not a value (DECISIONS 111): a load from
+        // it reads its fields only. A parameter marker has no prototype here
+        // (DECISIONS 119): what
+        // its argument inherits is the reader's, which replays the load on
+        // it (the keyed reach above); values beside a marker walk their own
+        // chains. A receiver marker's chain is its classes' (`virt_protos`).
+        if self.is_marker(t) && !self.virt_protos.contains_key(&t) {
             return;
         }
-        self.with_b(|m| builtins::tok_load(m, t, key, dst));
+        // DECISIONS 124: a receiver marker with values beside it stands for
+        // instances of its classes, whose builtin members are the chain's
+        // (`cv` below reaches Object.prototype): no builtin object's.
+        if !(self.is_marker(t) && self.beside_values(t)) {
+            self.with_b(|m| builtins::tok_load(m, t, key, dst));
+        }
         // Element reads of array-likes stop at their own elements: their
         // builtin prototype members are approximated by `tok_load`.
         if key == Key::Any && self.is_array_like(t) {

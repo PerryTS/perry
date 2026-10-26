@@ -2,6 +2,7 @@
 //! These ids name immutable scalar facts and are retained by the layout,
 //! just like the intrinsic function layouts. Nothing is learned at use.
 use super::*;
+use crate::codegen_abi::{LayoutWord, ShapeId};
 
 // The first plain granule after the compiler's reserved static band.
 pub(crate) const WEAKMAP_BIRTH_LAYOUT: u32 = SHAPE_ID_BASE + (4 << 20);
@@ -39,18 +40,15 @@ impl ShapeTable {
                 .with_proto_id(proto)
                 .with_special_facts(rep, &[], &brands);
             record.set(RECORD_FLAG_EXTERNAL_CARRIER, true);
-            let word = crate::codegen_abi::LayoutWord(if id == WEAKMAP_BIRTH_LAYOUT {
+            let word = LayoutWord(if id == WEAKMAP_BIRTH_LAYOUT {
                 crate::codegen_abi::WEAKMAP_BIRTH_LAYOUT_WORD
             } else {
                 crate::codegen_abi::WEAKSET_BIRTH_LAYOUT_WORD
             });
-            let id = unsafe {
-                self.slab_mut()
-                    .publish_static(crate::codegen_abi::ShapeId(id), word, record)
-            }
-            .expect("weak collection layout publication")
-            .word
-            .0;
+            let id = unsafe { self.slab_mut().publish_static(ShapeId(id), word, record) }
+                .expect("weak collection layout publication")
+                .word
+                .0;
             let facts = shapes_store::integrity_facts_key(
                 shapes_store::facts_key_proto_with_special(
                     0,
@@ -67,8 +65,8 @@ impl ShapeTable {
                 ),
                 0,
             );
-            inner.facts_append_fresh(facts, id);
-            inner.family_append_fresh(0, id);
+            inner.facts_append_fresh(facts, LayoutWord(id));
+            inner.family_append_fresh(0, LayoutWord(id));
         }
     }
 }

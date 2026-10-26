@@ -5,6 +5,7 @@
 //! absent-property verdict: the caller must run the existing generic Get.
 
 use super::{shapes, ObjectHeader};
+use crate::codegen_abi::LayoutWord;
 use crate::value::JSValue;
 
 /// Read using an already materialized property key. String keys, including
@@ -165,7 +166,7 @@ unsafe fn try_data_lookup_key(
             // describe this layout. Their generic callers still own Get.
             return None;
         }
-        let own_shape = shapes::own_data_shape(shapes::ordinary_dir_addr(), shape_id);
+        let own_shape = shapes::own_data_shape(shapes::ordinary_dir_addr(), LayoutWord(shape_id));
         if let Some(own_shape) = own_shape {
             // A live nonordinary shape cannot use this data lane. Its caller
             // still handles class getters and other special receiver reads.

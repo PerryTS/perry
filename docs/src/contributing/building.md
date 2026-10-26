@@ -80,6 +80,32 @@ CI, tooling, and reproducible investigations.
 After a `--timings` build, `scripts/cargo_timing_summary.py` prints the slowest
 units so build-time regressions are visible.
 
+### Faster development rebuilds with Blaze
+
+Perry's pinned mbx version supports optional [Blaze](https://github.com/indexable-inc/blaze)
+routing for quick rebuilds after editing Rust code. This is an experimental
+path for Linux and macOS Apple silicon. Install Blaze using its instructions,
+then install Perry's pinned mbx with `make mbx-deps`. Run `mbx setup` once
+and follow its instructions to put the Cargo shim before the regular Cargo
+binary on `PATH`.
+
+mbx shares dependency build results between worktrees and manages each
+checkout's `target/` directory, collecting inactive targets as age and size
+limits are reached.
+
+With Blaze's `ra-jit` executable on `PATH`, enable routing for a development
+build with:
+
+```sh
+MBX_BLAZE=1 cargo build -p perry
+```
+
+The first build loads the workspace. Later edits can rebuild much faster.
+mbx still caches dependencies while Blaze handles workspace crates. Use the
+default development profile: commands with `--release` or `--profile` stay
+on Cargo and mbx. Blaze uses extra memory and may differ from Cargo, so use
+the normal `make build-dev` or CI build as the final check.
+
 ### Compiler cache for ephemeral worktrees
 
 Short-lived worktrees and coding agents can opt into a compiler cache shared

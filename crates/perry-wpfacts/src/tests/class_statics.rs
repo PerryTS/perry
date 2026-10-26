@@ -43,7 +43,7 @@ fn a_constant_static_called_through_a_value_is_proven() {
     assert!(proven(&pf, "x"), "{}", pf.dump_text());
     let of = sites(&pf, "of");
     assert!(
-        of[0].targets.iter().any(|t| t.contains(":of#")),
+        of[0].targets.iter().any(|t| t.contains("::static of#")),
         "{:?}",
         of[0]
     );

@@ -4,6 +4,7 @@
 //! the ordinary receiver-aware `[[Set]]` walk.
 
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 mod dense_array;
 
@@ -20,7 +21,7 @@ unsafe fn write_fast_path_receiver_kind_ok(
     crate::object::shapes::store_kind::audit::note_admission_read();
     matches!(
         crate::object::shapes::shape_object_kind_of_receiver(
-            crate::object::shapes::object_shape_stamp(obj)
+            (crate::object::shapes::object_shape_stamp(obj)).0
         ),
         Some(
             crate::object::shapes::ShapeObjectKind::Ordinary
@@ -641,11 +642,11 @@ mod tests {
             );
             let after = unsafe { crate::object::shapes::object_shape_stamp(obj) };
             assert_eq!(
-                crate::object::layout_desc::layout_id_of_word(after),
-                crate::object::layout_desc::layout_id_of_word(before),
+                crate::object::layout_desc::layout_id_of_word(after.0),
+                crate::object::layout_desc::layout_id_of_word(before.0),
                 "the layout id does not change"
             );
-            assert_ne!(after & crate::object::overflow::SHADOW_BIT, 0);
+            assert_ne!(after.0 & crate::object::overflow::SHADOW_BIT, 0);
             assert_eq!(read(obj), value);
         }
         assert_eq!(crate::object::test_transition_fast_hits(), 0);
@@ -827,7 +828,7 @@ fn object_array_numeric_write_slots(
         }
         Some((
             obj,
-            shape_id,
+            shape_id.0,
             keys,
             shape.logical_key_count,
             shape.live_inline_slot_count,
@@ -859,7 +860,7 @@ fn object_array_numeric_write_slots(
             unsafe { validated_object(first_bits) },
             "first receiver is not an eligible regular shared-shape object",
         )?;
-    let shared_rep = crate::object::field_rep_store::shape_rep(shared_shape_id);
+    let shared_rep = crate::object::field_rep_store::shape_rep(LayoutWord(shared_shape_id));
     let mut slots = [0u16; 4];
     for index in 0..keys.len() {
         // `find_slot` caps the shared keys array at 4096 entries, so every

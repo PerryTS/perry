@@ -180,8 +180,25 @@ impl<'a> Gen<'a> {
     ) -> SiteId {
         let site = self.store_site(fx.module, fx.f, desc, owner, false);
         self.mark_fn_phase(fx, e, object, site);
+        self.mark_rooted(e, site);
         self.m.cons(recv, Cons::Store { key, src, site });
         site
+    }
+
+    /// DECISIONS 149b: a receiver-rooted store's site says so before its
+    /// constraint exists (generation solves online).
+    fn mark_rooted(&mut self, e: &Expr, site: SiteId) {
+        if let Some(&deep) = self.rooted_stores.get(&(e as *const Expr as usize)) {
+            self.m.stores[site as usize].rooted = true;
+            self.m.stores[site as usize].deep = deep;
+        }
+    }
+
+    /// An element store (`o[k] = v`): no construction phase, maybe rooted.
+    fn store_elem(&mut self, fx: &Fx, e: &Expr, recv: NodeId, key: Key, src: NodeId, desc: &str) {
+        let site = self.store_site(fx.module, fx.f, desc.into(), None, false);
+        self.mark_rooted(e, site);
+        self.m.cons(recv, Cons::Store { key, src, site });
     }
 
     /// A `this.k = v` store in a function `new` may call, before `this`
@@ -279,7 +296,14 @@ impl<'a> Gen<'a> {
                 site,
                 enum_image: false,
             },
-            display: format!("{}:{{lit#{site}}}", self.mods[mi as usize].path_short()),
+            // Per unit the site ordinal counts this unit's literals only, so
+            // the unit names the literal (DECISIONS 94: a published plain
+            // literal is a layout contract, its display the key).
+            display: format!(
+                "{}{}:{{lit#{site}}}",
+                self.mods[mi as usize].path_short(),
+                self.unit_suffix()
+            ),
             birth_keys: atoms.clone(),
             definite: atoms,
             declared: Vec::new(),
@@ -809,12 +833,14 @@ impl<'a> Gen<'a> {
                 );
                 let v = self.expr(fx, value);
                 if let Some(kp) = self.for_in_key_of(fx.module, index) {
-                    // A for-in run's key decides the stored key (FVA 4.3b).
+                    // A for-in run's key decides the stored key (FVA 4.3b);
+                    // rooted as any element store (DECISIONS 149b).
                     let site = self.store_site(fx.module, fx.f, "[]=".into(), None, false);
+                    self.mark_rooted(e, site);
                     self.m.cons(kp, Cons::StoreKeyed { o, src: v, site });
                 } else {
                     let key = self.key_of(index);
-                    self.store(fx, o, key, v, "[]=".into(), None, false);
+                    self.store_elem(fx, e, o, key, v, "[]=");
                 }
                 v
             }
@@ -847,7 +873,7 @@ impl<'a> Gen<'a> {
                         add: false,
                     },
                 );
-                self.store(fx, o, key, nv, "[]++".into(), None, false);
+                self.store_elem(fx, e, o, key, nv, "[]++");
                 nv
             }
             Expr::Delete(target) => {
@@ -1158,7 +1184,9 @@ impl<'a> Gen<'a> {
             } => {
                 let p = self.expr(fx, parent_expr);
                 let tm = self.resolve_class_name(mi, class_name);
-                self.feed_parent(p, tm, "E11 dynamic class parent");
+                if !self.parent_to_cell(mi, class_name, tm, p) {
+                    self.feed_parent(p, tm, "E11 dynamic class parent");
+                }
                 self.prim_node(prim::UNDEF)
             }
             Expr::RegisterClassCaptures {
@@ -1319,7 +1347,9 @@ impl<'a> Gen<'a> {
                 if let Some(p) = evaluated_parent {
                     let v = self.expr(fx, p);
                     let tm = self.resolve_class_name(mi, template);
-                    self.feed_parent(v, tm, "E11 class expression with an evaluated parent");
+                    if !self.parent_to_cell(mi, template, tm, v) {
+                        self.feed_parent(v, tm, "E11 class expression with an evaluated parent");
+                    }
                 }
                 for d in definition_steps {
                     let _ = self.expr(fx, d);

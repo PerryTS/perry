@@ -4,6 +4,7 @@
 //! `array_tail_transition.rs`.)
 
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 #[test]
 fn fresh_thread_transition_cache_reads_empty_everywhere() {
@@ -19,7 +20,7 @@ fn fresh_thread_transition_cache_reads_empty_everywhere() {
                         entry.slot_idx,
                         entry.target_len,
                     ),
-                    (0, 0, 0, 0, 0, 0)
+                    (0, 0, LayoutWord(0), LayoutWord(0), 0, 0)
                 );
             }
         });

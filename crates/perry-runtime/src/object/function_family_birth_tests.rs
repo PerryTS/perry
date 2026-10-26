@@ -1,4 +1,5 @@
 use super::*;
+use crate::codegen_abi::LayoutWord;
 use crate::gc::RuntimeHandleScope;
 use crate::object::layout_desc::{PerryLayoutKey, StaticAtom};
 
@@ -152,7 +153,7 @@ fn family_birth_keeps_holes_and_live_prototype_and_checks_symbol_identity() {
             assert_eq!((*std::ptr::addr_of!(LAYOUT)).layout_id, 0);
             assert!(super::super::shapes::is_layout_word((*o).parent_class_id));
             assert_eq!(
-                super::super::shapes::shape_object_kind_for_word((*o).parent_class_id),
+                super::super::shapes::shape_object_kind_for_word(LayoutWord((*o).parent_class_id)),
                 Some(super::super::shapes::ShapeObjectKind::Ordinary)
             );
             assert!(

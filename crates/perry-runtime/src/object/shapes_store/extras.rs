@@ -1,4 +1,5 @@
 use super::{new_extras, ConstFnSlotInfo, ShapeRecord};
+use crate::codegen_abi::LayoutWord;
 
 /// Optional, record-owned extension. It has no keyed lookup: a method-site
 /// hit reads only the receiver's shape and current closure slot. The learned
@@ -48,14 +49,16 @@ impl ShapeRecord {
     }
 
     #[inline]
-    pub(in crate::object) fn created_birth_shape(&self) -> u32 {
+    pub(in crate::object) fn created_birth_shape(&self) -> LayoutWord {
         if !self.has_boxed_extras() {
-            return 0;
+            return LayoutWord(0);
         }
         // SAFETY: this live record owns its stable Rust extension.
-        unsafe { &*(self.extras as usize as *const ShapeExtras) }
-            .created_birth_shape
-            .load(std::sync::atomic::Ordering::Relaxed)
+        LayoutWord(
+            unsafe { &*(self.extras as usize as *const ShapeExtras) }
+                .created_birth_shape
+                .load(std::sync::atomic::Ordering::Relaxed),
+        )
     }
 
     /// Record a weak shape relationship on the prototype's shape. An
@@ -63,7 +66,7 @@ impl ShapeRecord {
     /// extension, preserving its scalar rollback edge.
     #[cold]
     #[inline(never)]
-    pub(in crate::object) fn note_created_birth_shape(&mut self, birth: u32) {
+    pub(in crate::object) fn note_created_birth_shape(&mut self, birth: LayoutWord) {
         self.note_handle_carrier(birth);
         if !self.has_boxed_extras() {
             let rollback = self.rollback_parent();
@@ -73,6 +76,6 @@ impl ShapeRecord {
         // SAFETY: the present record owns this Rust extension, not GC storage.
         unsafe { &*(self.extras as usize as *const ShapeExtras) }
             .created_birth_shape
-            .store(birth, std::sync::atomic::Ordering::Relaxed);
+            .store(birth.0, std::sync::atomic::Ordering::Relaxed);
     }
 }

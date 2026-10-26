@@ -2,6 +2,7 @@
 //! the repo's 2000-line-per-file cap. Moved verbatim.
 
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 #[cfg(test)]
 mod c3c_tests {
@@ -60,7 +61,7 @@ mod c3c_tests {
         let b: usize = 0xC3C0_0000_0000_2000;
         let ida = layout_for_keys_ensure(a as *const ArrayHeader, 4);
         let idb = layout_for_keys_ensure(b as *const ArrayHeader, 4);
-        assert!(is_layout_word(ida) && is_layout_word(idb));
+        assert!(is_layout_word(ida.0) && is_layout_word(idb.0));
         assert_ne!(ida, idb);
         assert_eq!(layout_for_keys_ensure(a as *const ArrayHeader, 4), ida);
         // Real class-id space must never classify as a shape id.
@@ -148,7 +149,7 @@ mod c3c_tests {
 
             assert!(try_birth_stamp_preinstalled_shape(
                 obj,
-                shape_id,
+                LayoutWord(shape_id),
                 crate::object::ObjectKeys::owned(keys),
                 2
             ));
@@ -183,7 +184,7 @@ mod c3c_tests {
             actual_id, narrow_id,
             "a narrow module ShapeId must not describe a wider allocation"
         );
-        let descriptor = shape_descriptor_for_word(actual_id)
+        let descriptor = shape_descriptor_for_word(LayoutWord(actual_id))
             .expect("the widened fallback must publish an exact descriptor");
         assert_eq!(descriptor.keys, keys as u64);
         assert_eq!(descriptor.logical_key_count, 2);
@@ -222,7 +223,7 @@ mod c3c_tests {
             actual_id, stale_id,
             "a stale logical key count must not be published on the newborn"
         );
-        let descriptor = shape_descriptor_for_word(actual_id)
+        let descriptor = shape_descriptor_for_word(LayoutWord(actual_id))
             .expect("the count-mismatch fallback must publish an exact descriptor");
         assert_eq!(descriptor.keys, keys as u64);
         assert_eq!(descriptor.logical_key_count, 0);
@@ -257,7 +258,7 @@ mod c3c_tests {
             let stamp2 = (*obj).shape_word();
             if stamp2 != 0 {
                 assert!(is_layout_word(stamp2));
-                let descriptor = shape_descriptor_for_word(stamp2)
+                let descriptor = shape_descriptor_for_word(LayoutWord(stamp2))
                     .expect("a surviving stamp must resolve in this agent");
                 assert_eq!(
                     descriptor.keys,
@@ -355,7 +356,7 @@ mod c6804_tests {
                 "the observed token is the birth stamp — no split to heal"
             );
             assert_eq!(
-                shape_descriptor_for_word(birth_stamp)
+                shape_descriptor_for_word(LayoutWord(birth_stamp))
                     .expect("birth descriptor")
                     .live_inline_slot_count,
                 2
@@ -423,7 +424,10 @@ mod descriptor_tests_8067 {
                 crate::object::js_object_alloc_fast_with_parent(0x8067_0102, 0, 0),
             ] {
                 let id = object_layout_stamp(obj);
-                assert!(is_layout_word(id), "newborn keyless object has no ShapeId");
+                assert!(
+                    is_layout_word(id.0),
+                    "newborn keyless object has no ShapeId"
+                );
                 let facts = object_shape_descriptor(obj).expect("keyless descriptor");
                 assert_eq!(facts.keys, 0);
                 assert_eq!(facts.logical_key_count, 0);
@@ -562,7 +566,7 @@ mod descriptor_tests_8067 {
                     alloc_exotic_shape_id(proto_id).unwrap(),
                 ] {
                     assert_eq!(
-                        (id & SHAPE_ID_KIND_MASK) >> SHAPE_ID_KIND_SHIFT,
+                        (id.0 & SHAPE_ID_KIND_MASK) >> SHAPE_ID_KIND_SHIFT,
                         kind,
                         "{id:#x}"
                     );
@@ -574,18 +578,18 @@ mod descriptor_tests_8067 {
         let g = 1u32 << SHAPE_ID_KIND_SHIFT;
         let next = std::sync::atomic::AtomicU32::new(SHAPE_ID_BASE + g - 1);
         let plain = |next: &std::sync::atomic::AtomicU32| {
-            alloc_shape_id_of_kind(next, SHAPE_ID_END, SHAPE_ID_KIND_PLAIN)
+            alloc_shape_id_of_kind(next, SHAPE_ID_END, SHAPE_ID_KIND_PLAIN).map(|id| id.0)
         };
         assert_eq!(plain(&next), Ok(SHAPE_ID_BASE + g - 1));
         assert_eq!(plain(&next), Ok(SHAPE_ID_BASE + 4 * g));
         let next = std::sync::atomic::AtomicU32::new(SHAPE_ID_BASE + g);
         assert_eq!(
-            alloc_shape_id_of_kind(&next, SHAPE_ID_END, SHAPE_ID_KIND_NULL),
+            alloc_shape_id_of_kind(&next, SHAPE_ID_END, SHAPE_ID_KIND_NULL).map(|id| id.0),
             Ok(SHAPE_ID_BASE + 2 * g)
         );
         let next = std::sync::atomic::AtomicU32::new(SHAPE_ID_BASE + 3 * g);
         assert_eq!(
-            alloc_shape_id_of_kind(&next, SHAPE_ID_END, SHAPE_ID_KIND_WORD),
+            alloc_shape_id_of_kind(&next, SHAPE_ID_END, SHAPE_ID_KIND_WORD).map(|id| id.0),
             Ok(SHAPE_ID_BASE + 5 * g)
         );
         let next = std::sync::atomic::AtomicU32::new(SHAPE_ID_END - 1);
@@ -600,7 +604,7 @@ mod descriptor_tests_8067 {
     fn exhaustion_parks_without_reuse_or_alias() {
         let next = std::sync::atomic::AtomicU32::new(SHAPE_ID_END - 1);
         assert_eq!(
-            alloc_shape_id_from(&next, SHAPE_ID_END),
+            alloc_shape_id_from(&next, SHAPE_ID_END).map(|id| id.0),
             Ok(SHAPE_ID_END - 1)
         );
         assert_eq!(
@@ -635,7 +639,7 @@ mod descriptor_tests_8067 {
         let external =
             alloc_shape_id(PROTO_ID_DEFAULT).expect("shape range unexpectedly exhausted");
         assert!(shapes_slot_list::install_external_shape_id(
-            crate::codegen_abi::ShapeId(external),
+            external,
             keys as *const ArrayHeader,
             1,
             1,
@@ -650,7 +654,7 @@ mod descriptor_tests_8067 {
         assert_ne!(preferred, local);
         assert_eq!(
             shape_record_for_word(preferred).unwrap().identity(),
-            crate::codegen_abi::ShapeId(external),
+            external,
             "the process-global id should be preferred for later births"
         );
         assert_eq!(
@@ -761,7 +765,7 @@ mod descriptor_tests_8067 {
         // A retired word may address decommitted Region pages (words are only
         // read through a live carrier); the retired record is read by identity.
         assert_eq!(
-            shape_object_kind_by_id(identity.0),
+            shape_object_kind_by_id(identity),
             None,
             "a retired record must have no kind"
         );
@@ -788,7 +792,7 @@ mod descriptor_tests_8067 {
                 crate::object::field_rep::REP_ANY,
             ));
             assert_eq!(
-                shape_descriptor_by_id(module_identity.0).unwrap().keys,
+                shape_descriptor_by_id(module_identity).unwrap().keys,
                 worker_keys as u64,
                 "worker resolved a module ShapeId to another agent's keys pointer"
             );
@@ -807,8 +811,11 @@ mod descriptor_tests_8067 {
 
         // A foreign / never-minted id has no slot: the collector emits no edge
         // rather than rewriting an unrelated record.
-        assert_eq!(shape_descriptor_keys_slot(0), None);
-        assert_eq!(shape_descriptor_keys_slot(SHAPE_ID_END - 1), None);
+        assert_eq!(shape_descriptor_keys_slot(LayoutWord(0)), None);
+        assert_eq!(
+            shape_descriptor_keys_slot(LayoutWord(SHAPE_ID_END - 1)),
+            None
+        );
 
         let slot = shape_descriptor_keys_slot(id).expect("minted id has a keys slot");
         assert_eq!(
@@ -1020,13 +1027,15 @@ mod descriptor_tests_8067 {
             );
             let keys = crate::object::object_keys(obj).arr() as usize;
             let before = (*obj).shape_word();
-            let before_descriptor = shape_descriptor_for_word(before).expect("birth descriptor");
+            let before_descriptor =
+                shape_descriptor_for_word(LayoutWord(before)).expect("birth descriptor");
             assert_eq!(before_descriptor.live_inline_slot_count, 1);
 
             crate::object::js_object_set_field(obj, 1, crate::JSValue::string_ptr(key("value")));
             let after = (*obj).shape_word();
             assert_ne!(before, after);
-            let after_descriptor = shape_descriptor_for_word(after).expect("grown descriptor");
+            let after_descriptor =
+                shape_descriptor_for_word(LayoutWord(after)).expect("grown descriptor");
             assert_eq!(after_descriptor.keys, keys as u64);
             assert_eq!(after_descriptor.logical_key_count, 1);
             assert_eq!(after_descriptor.live_inline_slot_count, 2);
@@ -1063,13 +1072,13 @@ mod descriptor_tests_8067 {
             assert_eq!((*b).shape_word(), shared_id);
             assert_ne!((*a).shape_word(), shared_id);
             assert_eq!(
-                shape_descriptor_for_word(shared_id)
+                shape_descriptor_for_word(LayoutWord(shared_id))
                     .expect("untouched sibling descriptor")
                     .logical_key_count,
                 1
             );
-            let transitioned =
-                shape_descriptor_for_word((*a).shape_word()).expect("transitioned descriptor");
+            let transitioned = shape_descriptor_for_word(LayoutWord((*a).shape_word()))
+                .expect("transitioned descriptor");
             assert_eq!(
                 transitioned.keys,
                 crate::object::object_keys(a).arr() as u64
@@ -1271,7 +1280,7 @@ fn the_ordinary_slot_query_declines_a_class_kind_shape() {
         let key_bits = crate::JSValue::string_ptr(name).bits();
         let ordinary = layout_for_keys_ensure(keys, 1);
         assert_eq!(
-            js_shape_ordinary_inline_slot_for_key(ordinary, key_bits),
+            js_shape_ordinary_inline_slot_for_key(ordinary.0, key_bits),
             0,
             "test premise: the ORDINARY shape answers slot 0 for its only key — \
              otherwise the negative below is vacuous"
@@ -1285,7 +1294,11 @@ fn the_ordinary_slot_query_declines_a_class_kind_shape() {
         // step 3).
         let obj =
             crate::object::alloc_plain::alloc_plain_record_inline_keys_stamped(1, keys, ordinary);
-        assert_eq!((*obj).shape_word(), ordinary, "test premise: stamped");
+        assert_eq!(
+            LayoutWord((*obj).shape_word()),
+            ordinary,
+            "test premise: stamped"
+        );
         let class_kind = transition_object_shape_to_class(obj);
         assert_ne!(
             ordinary, class_kind,
@@ -1296,7 +1309,7 @@ fn the_ordinary_slot_query_declines_a_class_kind_shape() {
             Some(ShapeObjectKind::Class)
         );
         assert_eq!(
-            js_shape_ordinary_inline_slot_for_key(class_kind, key_bits),
+            js_shape_ordinary_inline_slot_for_key(class_kind.0, key_bits),
             -1,
             "a class-kind shape names a class layout, not key positions"
         );
@@ -1358,6 +1371,7 @@ mod prototype_identity_tests {
             crate::object::shapes::ReceiverFacts::NONE,
             None,
         ))
+        .0
     }
 
     /// THE UNSOUND CASE. Two receivers with identical layouts and DIFFERENT
@@ -1371,8 +1385,8 @@ mod prototype_identity_tests {
         assert_ne!(a, b);
         assert_ne!(mint(PROTO_ID_DEFAULT), a);
         assert_ne!(mint(PROTO_ID_NULL), mint(PROTO_ID_DEFAULT));
-        assert_eq!(shape_proto_id(a), Some(7));
-        assert_eq!(shape_proto_id(b), Some(8));
+        assert_eq!(shape_proto_id(LayoutWord(a)), Some(7));
+        assert_eq!(shape_proto_id(LayoutWord(b)), Some(8));
     }
 
     /// The same layout over the same prototype is one shape, so receivers
@@ -1441,6 +1455,7 @@ mod field_rep_identity_tests {
             rep,
             None,
         ))
+        .0
     }
 
     #[test]
@@ -1456,10 +1471,13 @@ mod field_rep_identity_tests {
             "a deprecated lane is a learned fact: it finds the F64 record"
         );
         assert_eq!(
-            shape_descriptor_for_word(typed).map(|d| d.rep),
+            shape_descriptor_for_word(LayoutWord(typed)).map(|d| d.rep),
             Some(f64_at_1)
         );
-        assert_eq!(shape_descriptor_for_word(any).map(|d| d.rep), Some(REP_ANY));
+        assert_eq!(
+            shape_descriptor_for_word(LayoutWord(any)).map(|d| d.rep),
+            Some(REP_ANY)
+        );
     }
 
     /// POSBOUND is a fact of every record, a rep-typed one included: a shape
@@ -1516,7 +1534,7 @@ mod field_rep_identity_tests {
             crate::object::shapes::ReceiverFacts::NONE,
             None,
         ));
-        assert_eq!(explicit, legacy);
+        assert_eq!(LayoutWord(explicit), legacy);
     }
 
     #[test]

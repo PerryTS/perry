@@ -112,21 +112,33 @@ pub(super) unsafe fn advise(data: *mut u8, len: usize, kind: Kind) {
         let _ = kind;
         let dense = len / ALIGN * ALIGN;
         if dense != 0 {
-            assert_eq!(libc::madvise(data.cast(), dense, libc::MADV_HUGEPAGE), 0);
+            advise_thp(data.cast(), dense, libc::MADV_HUGEPAGE);
         }
         if dense < mapped {
-            assert_eq!(
-                libc::madvise(
-                    data.add(dense).cast(),
-                    mapped - dense,
-                    libc::MADV_NOHUGEPAGE
-                ),
-                0
+            advise_thp(
+                data.add(dense).cast(),
+                mapped - dense,
+                libc::MADV_NOHUGEPAGE,
             );
         }
     }
     #[cfg(not(target_os = "linux"))]
     let _ = (data, len, kind);
+}
+
+/// THP advice is a hint: kernels built without CONFIG_TRANSPARENT_HUGEPAGE
+/// reject it with EINVAL and the mapping stays usable (#12863). Any other
+/// failure still means a bad range.
+#[cfg(target_os = "linux")]
+unsafe fn advise_thp(data: *mut libc::c_void, len: usize, advice: libc::c_int) {
+    if libc::madvise(data, len, advice) != 0 {
+        let err = std::io::Error::last_os_error();
+        assert_eq!(
+            err.raw_os_error(),
+            Some(libc::EINVAL),
+            "madvise failed: {err}"
+        );
+    }
 }
 
 /// Fresh private anonymous backing, or null on refusal. This entry never
@@ -369,6 +381,44 @@ mod tests {
                 }
                 unmap(data, len);
             }
+        }
+    }
+
+    fn page() -> *mut libc::c_void {
+        let page = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                4096,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                -1,
+                0,
+            )
+        };
+        assert_ne!(page, libc::MAP_FAILED);
+        page
+    }
+
+    #[test]
+    fn thp_advice_tolerates_einval() {
+        // An unaligned start is EINVAL on every kernel, the same errno a
+        // kernel without THP returns for the advice itself.
+        let page = page();
+        unsafe {
+            advise_thp(page.cast::<u8>().add(1).cast(), 1, libc::MADV_HUGEPAGE);
+            advise_thp(page.cast::<u8>().add(1).cast(), 1, libc::MADV_NOHUGEPAGE);
+            libc::munmap(page, 4096);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "madvise failed")]
+    fn thp_advice_still_rejects_an_unmapped_range() {
+        let page = page();
+        unsafe {
+            libc::munmap(page, 4096);
+            // MADV_NORMAL keeps this ENOMEM on kernels without THP too.
+            advise_thp(page, 4096, libc::MADV_NORMAL);
         }
     }
 }

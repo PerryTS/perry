@@ -292,7 +292,7 @@ fn class_inline_keys_birth_keeps_old_backing(stamped: bool) {
         arm_collection_on_next_block(&trigger);
         let obj = if stamped {
             crate::object::js_object_alloc_class_inline_keys_stamped(
-                class_id, 0, 2, before, shape_id, 0,
+                class_id, 0, 2, before, shape_id.0, 0,
             )
         } else {
             crate::object::js_object_alloc_class_inline_keys(class_id, 0, 2, before)

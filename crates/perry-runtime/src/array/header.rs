@@ -5,6 +5,7 @@
 pub(crate) use super::header_gc_slots::*;
 pub(super) use super::storage::array_elements_ptr;
 
+use crate::codegen_abi::LayoutWord;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -142,7 +143,7 @@ unsafe fn named_layout_holds_element_descriptors(
         return super::named_props::keys_hold_element_descriptors(table, (*table).length);
     }
     let word = crate::object::layout_desc::layout_id_of_word((*named).parent_class_id);
-    let Some(record) = crate::object::shapes::layout_record(word) else {
+    let Some(record) = crate::object::shapes::layout_record(LayoutWord(word)) else {
         return true;
     };
     match record.element_kind() {

@@ -1,6 +1,7 @@
 //! Read-only numeric words use own-slot proof without granting store rights.
 
 use super::*;
+use crate::codegen_abi::LayoutWord;
 use crate::object::field_rep::{slot_rep, REP_ANY, REP_F64};
 use core::sync::atomic::{AtomicU64, Ordering};
 
@@ -37,7 +38,7 @@ unsafe fn record(name: &str) -> (*mut crate::ObjectHeader, *mut crate::StringHea
 unsafe fn prime(site: &AtomicU64, obj: *const crate::ObjectHeader, key: u64) -> u64 {
     js_region_loop_prime(
         site,
-        object_shape_stamp(obj),
+        object_shape_stamp(obj).0,
         1,
         key,
         0,
@@ -61,7 +62,7 @@ fn unmarked_numeric_read_publishes_and_reads_the_production_slot() {
         let word = prime(&site, obj, bits(key));
         assert_ne!(word, REGION_GUARD_WORD_EMPTY);
         assert_eq!(site.load(Ordering::Relaxed), word);
-        assert_eq!(word as u32, object_shape_stamp(obj));
+        assert_eq!(LayoutWord(word as u32), object_shape_stamp(obj));
         let slot = ((word >> 32) & 63) as usize;
         assert_eq!(
             slot, 1,
@@ -166,7 +167,7 @@ fn unmarked_numeric_read_refuses_accessors_and_value_tests_deprecated_lanes() {
             undefined,
             undefined,
         );
-        assert_ne!(object_shape_stamp(obj), before as u32);
+        assert_ne!(object_shape_stamp(obj), LayoutWord(before as u32));
         assert_ne!(object_shape_descriptor(obj).unwrap().summary, 0);
         assert_eq!(prime(&site, obj, bits(key)), REGION_GUARD_WORD_EMPTY);
 
@@ -200,7 +201,7 @@ fn unmarked_numeric_read_word_misses_after_mutation_or_exotic_reclassification()
             boxed,
             0,
         );
-        assert_ne!(object_shape_stamp(obj), before as u32);
+        assert_ne!(object_shape_stamp(obj), LayoutWord(before as u32));
         // The generalized lane is served only through the guard's value test,
         // which `true` fails.
         let after = prime(&site, obj, bits(key));
@@ -213,7 +214,7 @@ fn unmarked_numeric_read_word_misses_after_mutation_or_exotic_reclassification()
             crate::value::js_nanbox_pointer(proto as i64),
             f64::from_bits(crate::value::TAG_NULL),
         );
-        assert_ne!(object_shape_stamp(proto), before as u32);
+        assert_ne!(object_shape_stamp(proto), LayoutWord(before as u32));
         assert_eq!(
             object_shape_descriptor(proto).unwrap().proto_id,
             PROTO_ID_NULL
@@ -222,7 +223,7 @@ fn unmarked_numeric_read_word_misses_after_mutation_or_exotic_reclassification()
         let (exotic, exotic_key) = record("rnr_exotic");
         let before = prime(&site, exotic, bits(exotic_key));
         crate::object::proto_validity::mark_exotic_read_receiver(exotic as usize);
-        assert_ne!(object_shape_stamp(exotic), before as u32);
+        assert_ne!(object_shape_stamp(exotic), LayoutWord(before as u32));
         assert_eq!(
             object_shape_descriptor(exotic).unwrap().proto_id,
             PROTO_ID_PER_OBJECT

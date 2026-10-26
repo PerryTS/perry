@@ -252,8 +252,10 @@ impl<'a> Gen<'a> {
             lexical_this: true,
             no_summary: false,
             gen_step: false,
+            captures: Vec::new(),
             forwards_super: false,
             parent: fx.f,
+            forwarded: false,
         });
         // The enclosing `this`, read as an arrow reads it.
         if f.body.iter().any(crate::gen_call::stmt_reads_this) {

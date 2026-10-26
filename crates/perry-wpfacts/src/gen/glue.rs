@@ -359,29 +359,29 @@ impl<'a> Gen<'a> {
                     Some(Some(crate::gen_const::Const::Str(s))) => Some(Expr::String(s)),
                     _ => None,
                 };
-                let registry = match known.as_ref().or(source_args.first()) {
+                // A path node holds publications: a record's live exports or
+                // a raw value, unwrapped once at registration. The registry
+                // union holds the published values themselves (records, for
+                // `require.cache`), so a read of it unwraps a record as the
+                // runtime does, including an exports replacement during a
+                // cycle, and never yields the record (DECISIONS 100).
+                let out = self.tmp("require");
+                let whole_registry = match known.as_ref().or(source_args.first()) {
                     Some(Expr::String(path)) if std::path::Path::new(path).is_absolute() => {
                         let named = self.cjs_path_node(path);
-                        let r = self.tmp("cjs-path-read");
-                        self.m.edge(named, r);
-                        self.m.edge(self.cjs_unknown_path, r);
+                        self.m.edge(named, out);
+                        self.m.edge(self.cjs_unknown_path, out);
                         // The runtime also accepts directory package-main and
                         // index paths. Keep those on the summary until their
                         // resolver is modeled here as well.
-                        if std::path::Path::new(path).is_dir() {
-                            self.m.edge(self.cjs_registry, r);
-                        }
-                        r
+                        std::path::Path::new(path).is_dir()
                     }
-                    _ => self.cjs_registry,
+                    _ => true,
                 };
-                let out = self.tmp("require");
-                // Raw publications remain supported; CJS records unwrap their
-                // live exports, including replacements during a cycle.
-                self.m.edge(registry, out);
-                let ea = self.m.atom("exports");
-                let ex = self.load(registry, Key::Named(ea));
-                self.m.edge(ex, out);
+                if whole_registry {
+                    self.m
+                        .cons(self.cjs_registry, Cons::CjsPublish { dst: out });
+                }
                 self.m.add_prim(out, prim::UNDEF);
                 out
             }

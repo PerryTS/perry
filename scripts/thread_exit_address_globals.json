@@ -37,7 +37,10 @@
     "REGIONS"
    ],
    "verdict": "allocation_lifetime",
-   "boundary_calls": ["region::map", "region::unmap"],
+   "boundary_calls": [
+    "region::map",
+    "region::unmap"
+   ],
    "why": "Non-Linux mapping extents, not object identities. region::register records each native map; region::unmap removes its start key before apple::unmap or allocator dealloc. arena/block.rs routes pool overflow, pool drain, allocation failure and TLS teardown through that release path. Pooled mappings remain live and listed across agent reuse. The source pins bind the registry and all production region allocation/release callers to this audit.",
    "source_pins": {
     "crates/perry-runtime/src/arena/region.rs": "b68ddd1cb6fb89e90d3e7821f7e88c61b76c895c4a6bb2f6ebe17e3f73da0bf8",
@@ -743,7 +746,7 @@
     "OVERRIDES"
    ],
    "verdict": "no_heap_address",
-   "why": "function_name_overrides: func_ptr -> Arc<[u8]> owned name, written by js_register_function_name / register_function_name_if_absent; all callers key by ClosureHeader.func_ptr or thunk addresses (symbol/properties.rs:278, keys_array.rs:692, util_promisify.rs:168, populate.rs:658) \u2014 code addresses, not the closure. | (second declaration) function_source_overrides (fn_metadata.rs:358): func_ptr code address -> Arc<[u8]> copied source + non-strict flag, written by js_register_function_source; keys are code addresses."
+   "why": "function_name_overrides: func_ptr -> Arc<[u8]> owned name, written by js_register_function_name / register_function_name_if_absent; all callers key by ClosureHeader.func_ptr or thunk addresses (symbol/properties.rs:278, keys_array.rs:692, util_promisify.rs:168, populate.rs:658) — code addresses, not the closure. | (second declaration) function_source_overrides (fn_metadata.rs:358): func_ptr code address -> Arc<[u8]> copied source + non-strict flag, written by js_register_function_source; keys are code addresses."
   },
   {
    "file": "crates/perry-runtime/src/tls_hot.rs",
@@ -1775,7 +1778,7 @@
     "SITES"
    ],
    "verdict": "process_global_allocation",
-   "why": "Sampled allocation-site table; `live` maps pointers returned by the process GlobalAlloc (CensusAlloc wrapping the system/mimalloc allocator, alloc_census.rs:232) to site ids, and record_free (:265) removes the entry on every dealloc \u2014 including arena blocks released through the allocator \u2014 so addresses are never stale."
+   "why": "Sampled allocation-site table; `live` maps pointers returned by the process GlobalAlloc (CensusAlloc wrapping the system/mimalloc allocator, alloc_census.rs:232) to site ids, and record_free (:265) removes the entry on every dealloc — including arena blocks released through the allocator — so addresses are never stale."
   },
   {
    "file": "crates/perry-runtime/src/dgram_reactor.rs",
@@ -1922,7 +1925,7 @@
     "MT_RUN_COUNT"
    ],
    "verdict": "no_heap_address",
-   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit \u2014 never an address."
+   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit — never an address."
   },
   {
    "file": "crates/perry-runtime/src/promise/mod.rs",
@@ -1930,7 +1933,7 @@
     "MT_DRAIN_COUNT"
    ],
    "verdict": "no_heap_address",
-   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit \u2014 never an address."
+   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit — never an address."
   },
   {
    "file": "crates/perry-runtime/src/promise/mod.rs",
@@ -1938,7 +1941,7 @@
     "MT_EMPTY_DRAIN_COUNT"
    ],
    "verdict": "no_heap_address",
-   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit \u2014 never an address."
+   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit — never an address."
   },
   {
    "file": "crates/perry-runtime/src/promise/mod.rs",
@@ -1946,7 +1949,7 @@
     "MT_THENABLE_PROBE_COUNT"
    ],
    "verdict": "no_heap_address",
-   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit \u2014 never an address."
+   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit — never an address."
   },
   {
    "file": "crates/perry-runtime/src/promise/mod.rs",
@@ -1954,7 +1957,7 @@
     "MT_PROMISE_NEW_COUNT"
    ],
    "verdict": "no_heap_address",
-   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit \u2014 never an address."
+   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit — never an address."
   },
   {
    "file": "crates/perry-runtime/src/promise/mod.rs",
@@ -1962,7 +1965,7 @@
     "MT_PROMISE_THEN_COUNT"
    ],
    "verdict": "no_heap_address",
-   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit \u2014 never an address."
+   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit — never an address."
   },
   {
    "file": "crates/perry-runtime/src/promise/mod.rs",
@@ -1970,7 +1973,7 @@
     "MT_PROMISE_RESOLVED_COUNT"
    ],
    "verdict": "no_heap_address",
-   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit \u2014 never an address."
+   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit — never an address."
   },
   {
    "file": "crates/perry-runtime/src/promise/mod.rs",
@@ -1978,7 +1981,7 @@
     "MT_FAST_PATH_HIT"
    ],
    "verdict": "no_heap_address",
-   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit \u2014 never an address."
+   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit — never an address."
   },
   {
    "file": "crates/perry-runtime/src/promise/mod.rs",
@@ -1986,7 +1989,7 @@
     "MT_FAST_PATH_MISS"
    ],
    "verdict": "no_heap_address",
-   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit \u2014 never an address."
+   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit — never an address."
   },
   {
    "file": "crates/perry-runtime/src/promise/mod.rs",
@@ -1994,7 +1997,7 @@
     "MT_STEP_CHAIN_REUSE_HIT"
    ],
    "verdict": "no_heap_address",
-   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit \u2014 never an address."
+   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit — never an address."
   },
   {
    "file": "crates/perry-runtime/src/promise/mod.rs",
@@ -2002,7 +2005,7 @@
     "MT_STEP_CHAIN_REUSE_MISS"
    ],
    "verdict": "no_heap_address",
-   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit \u2014 never an address."
+   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit — never an address."
   },
   {
    "file": "crates/perry-runtime/src/promise/mod.rs",
@@ -2010,7 +2013,7 @@
     "MT_STEP_DONE_REUSE_HIT"
    ],
    "verdict": "no_heap_address",
-   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit \u2014 never an address."
+   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit — never an address."
   },
   {
    "file": "crates/perry-runtime/src/promise/mod.rs",
@@ -2018,7 +2021,7 @@
     "MT_STEP_DONE_REUSE_MISS"
    ],
    "verdict": "no_heap_address",
-   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit \u2014 never an address."
+   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit — never an address."
   },
   {
    "file": "crates/perry-runtime/src/promise/mod.rs",
@@ -2199,7 +2202,7 @@
     "PENDING_DEFERRED"
    ],
    "verdict": "thread_exit_invalidated",
-   "why": "Queue of (owner AgentId, promise_ptr, converter) \u2014 purged per agent by async_bridge.rs purge_agent_resolutions from agent.rs:retire_agent at worker exit.",
+   "why": "Queue of (owner AgentId, promise_ptr, converter) — purged per agent by async_bridge.rs purge_agent_resolutions from agent.rs:retire_agent at worker exit.",
    "hook": "purge_agent_resolutions"
   },
   {
@@ -3913,6 +3916,22 @@
    ],
    "verdict": "no_heap_address",
    "why": "Startup code function pointer for the native-owner bag adapter. It stores only an extern C function address, never a payload, property bag or GC address."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/layout_desc.rs",
+   "names": [
+    "LAYOUT_START"
+   ],
+   "verdict": "no_heap_address",
+   "why": "LAYOUT_START is a zero-filled COFF boundary word; layout_bounds takes only its address and no code writes its contents. Mutability selects the writable linker section, not heap-address custody."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/layout_desc.rs",
+   "names": [
+    "LAYOUT_END"
+   ],
+   "verdict": "no_heap_address",
+   "why": "LAYOUT_END is a zero-filled COFF boundary word; layout_bounds takes only its address and no code writes its contents. Mutability selects the writable linker section, not heap-address custody."
   },
   {
    "file": "crates/perry-runtime/src/object/layout_desc/literal_birth.rs",

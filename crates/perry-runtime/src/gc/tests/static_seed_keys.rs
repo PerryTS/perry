@@ -18,9 +18,10 @@
 
 use super::super::*;
 use super::support::*;
+use crate::codegen_abi::LayoutWord;
 use crate::gc::RuntimeHandleScope;
 use crate::object::shapes;
-use crate::object::static_shapes::{canonical_keys_for_names, js_shape_seed_plain};
+use crate::object::static_shapes::canonical_keys_for_names;
 
 fn register_object_model_scanners() {
     register_runtime_handle_root_scanner_for_tests();
@@ -130,7 +131,7 @@ fn check_seed_survives(order_seed_first: bool, tag: &str, requested: u32) {
         published_after <= published_before,
         "the collection must not publish key lists ({published_before} -> {published_after})"
     );
-    let seeded = shapes::test_descriptor_for_retained_word(id).map(|d| d.keys);
+    let seeded = shapes::test_descriptor_for_retained_word(LayoutWord(id)).map(|d| d.keys);
     let names: Vec<&[u8]> = literal.iter().map(|n| n.as_bytes()).collect();
     let walked = unsafe { canonical_keys_for_names(&names) }.arr() as u64;
     assert_eq!(

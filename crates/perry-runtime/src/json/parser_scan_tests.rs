@@ -1,4 +1,5 @@
 use super::nesting_depth_exceeds;
+use crate::codegen_abi::LayoutWord;
 
 // An intentionally scalar state machine serves as an independent oracle for
 // malformed as well as valid input. The preflight does not validate JSON.
@@ -336,7 +337,7 @@ fn bounded_root_record_reuses_the_warm_shape_during_one_pass_parse() {
             .collect();
         let keys_array = parse_shape_keys_array(&keys);
         let shape_id = PARSE_SHAPE_CACHE.with(|cache| cache.borrow().last().unwrap().shape_id);
-        assert_ne!(shape_id, 0);
+        assert_ne!(shape_id, LayoutWord(0));
 
         let mut parser = super::DirectParser::new_batched(input);
         assert!(parser.warm_record_shape_pending);
@@ -346,7 +347,7 @@ fn bounded_root_record_reuses_the_warm_shape_during_one_pass_parse() {
         assert!(parser.finish());
         let object = value.as_pointer::<crate::ObjectHeader>();
         assert_eq!(crate::object::object_keys(object).arr(), keys_array);
-        assert_eq!((*object).parent_class_id, shape_id);
+        assert_eq!(LayoutWord((*object).parent_class_id), shape_id);
 
         PARSE_SHAPE_CACHE.with(|cache| cache.borrow_mut().clear());
         crate::gc::gc_unsuppress();

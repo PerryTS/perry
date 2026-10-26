@@ -1,6 +1,7 @@
 //! The shapes' walk for a computed key: the receiver's chain, proved hop by
 //! hop from shape facts, without allocating or running anything.
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 #[derive(Clone, Copy)]
 pub(super) enum KeyRef<'a> {
@@ -45,7 +46,7 @@ pub(super) unsafe fn walk_to_key(
     debug_assert!(max_depth <= WALK_HOPS + 1);
     let mut w = Walk {
         holder: 0,
-        holder_shape: 0,
+        holder_shape: LayoutWord(0),
         slot: None,
         hops: NO_HOPS,
         depth: 0,
@@ -79,7 +80,7 @@ pub(super) unsafe fn walk_to_key(
             let (h, sh) = w.hops[depth - 2];
             w.hops[depth - 2] = (0, 0);
             w.holder = h;
-            w.holder_shape = sh;
+            w.holder_shape = LayoutWord(sh);
             w.depth = depth - 1;
             return Some(w);
         }
@@ -100,7 +101,7 @@ pub(super) unsafe fn walk_to_key(
         // A hop whose layout can have holes holds or lacks its optional keys
         // per object (`key_view`): no walk describes it.
         if !shape.object_kind.is_ordinary_layout()
-            || object_shape_stamp(next) == 0
+            || object_shape_stamp(next) == LayoutWord(0)
             || crate::object::key_view::summary_may_have_holes(shape.summary)
         {
             return None;
@@ -121,7 +122,7 @@ pub(super) unsafe fn walk_to_key(
                     shape.live_inline_slot_count,
                 )?;
                 w.holder = next as usize;
-                w.holder_shape = object_shape_stamp(next);
+                w.holder_shape = LayoutWord(object_shape_stamp(next).0);
                 w.slot = Some(s);
                 w.depth = depth;
                 return Some(w);
@@ -134,11 +135,11 @@ pub(super) unsafe fn walk_to_key(
                 return None;
             }
             w.holder = next as usize;
-            w.holder_shape = object_shape_stamp(next);
+            w.holder_shape = LayoutWord(object_shape_stamp(next).0);
             w.depth = depth;
             return Some(w);
         }
-        w.hops[depth - 1] = (next as usize, object_shape_stamp(next));
+        w.hops[depth - 1] = (next as usize, object_shape_stamp(next).0);
         current = next;
     }
     None

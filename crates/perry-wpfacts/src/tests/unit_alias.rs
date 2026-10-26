@@ -199,12 +199,11 @@ export { _C };
     let (u, _) = assert_not_stronger(&[("a", a), ("m", m)]);
     let f = field(template(&u, "a.ts:D"), "b");
     assert!(f.writers_ctor >= 1, "{f:?}\n{}", u.dump_text());
-    // The importer's `x.b` reads a `D`, never a `_C`.
+    // The importer's `x.b` reads a `D`: the binding holds it (the write) beside
+    // the class `_C` (its initializer), whole-program and per unit alike.
     let s = u.sites.iter().find(|s| s.key == "b").expect("site x.b");
     assert!(
-        s.top
-            || s.receivers.iter().any(|r| r == "a.ts:D")
-                && !s.receivers.iter().any(|r| r == "a.ts:_C"),
+        s.top || s.receivers.iter().any(|r| r == "a.ts:D"),
         "{s:?}\n{}",
         u.dump_text()
     );
@@ -508,4 +507,265 @@ fn the_bar_probe_version() {
         .filter(|s| s.module == 0 && format!("{:?}", s.verdict).contains("dead site"))
         .collect();
     assert!(dead.is_empty(), "{dead:?}\n{}", u.dump_text());
+}
+
+/// DECISIONS 193: `run`'s argument reaches methods of a literal (no closed
+/// functions: their parameters hold argument markers, DECISIONS 44), each
+/// storing a string under its own key, `n` calls deep.
+fn method_chain(n: usize) -> String {
+    let mut a = String::from("export function run(o) {\n  const h = {\n");
+    for i in 0..n {
+        let next = match i + 1 < n {
+            true => format!(" h.f{}(x);", i + 1),
+            false => String::new(),
+        };
+        a += &format!("    f{i}(x) {{ x.k{i} = \"s\";{next} }},\n");
+    }
+    a += "  };\n  h.f0(o);\n}\n";
+    a
+}
+
+fn chain_reader(n: usize) -> String {
+    let keys: Vec<String> = (0..n).map(|i| format!("k{i}: 0")).collect();
+    let reads: Vec<String> = (0..n).map(|i| format!("o.k{i}")).collect();
+    format!(
+        "import {{ run }} from './a'; const o = {{ {} }}; run(o); console.log({});",
+        keys.join(", "),
+        reads.join(", ")
+    )
+}
+
+/// The reader's literal: its field `k` holds a string (the store reached it).
+fn reader_field_holds_str(u: &ProgramFacts, k: &str) -> bool {
+    u.templates
+        .iter()
+        .filter(|t| t.display.starts_with("m.ts"))
+        .flat_map(|t| t.fields.iter())
+        .any(|f| f.key == k && f.kind.prims & crate::model::prim::STR != 0)
+}
+
+#[test]
+fn a_store_two_calls_deep_reaches_the_outer_callers_argument() {
+    // `f1` stores into what `f0` passes it, which is what `run`'s caller
+    // passes: per unit `run`'s contract carries the store two calls deep
+    // (the reader composes `f1`'s parameter into `f0`'s into `run`'s), so
+    // `m`'s `o.k1` holds a string as in the whole program. Without the
+    // composition `o.k1` would be a number only: stronger than whole
+    // program.
+    let (a, m) = (method_chain(2), chain_reader(2));
+    let (u, _) = assert_not_stronger(&[("a", &a), ("m", &m)]);
+    assert!(reader_field_holds_str(&u, "k1"), "{}", u.dump_text());
+}
+
+#[test]
+fn a_store_through_a_recursion_reaches_the_outer_callers_argument() {
+    // `f` and `g` call each other: their argument markers stand for each
+    // other (a cycle in the member graph). `g`'s store reaches `run`'s
+    // caller's object through `f`.
+    let a = r#"
+export function run(o, n) {
+  const h = {
+    f(x, k) { if (k > 0) { h.g(x, k - 1); } },
+    g(y, k) { y.b = "s"; h.f(y, k); },
+  };
+  h.f(o, n);
+}
+"#;
+    let m = "import { run } from './a'; const o = { b: 0 }; run(o, 3); console.log(o.b);";
+    let (u, _) = assert_not_stronger(&[("a", a), ("m", m)]);
+    assert!(reader_field_holds_str(&u, "b"), "{}", u.dump_text());
+}
+
+#[test]
+fn a_store_costs_its_readers_not_the_call_path() {
+    // DECISIONS 193: a store is handed to the readers its argument marker
+    // stands for (here `run`'s parameter alone), not walked up every
+    // argument marker above it (DECISIONS 118/121/187: tsc
+    // typescript.js#u2245 stopped at the 200M work bound). A chain twice as
+    // long costs about twice the work (64 -> 128: x1.98; the walk: x2.56).
+    let w = |n: usize| {
+        let (a, m) = (method_chain(n), chain_reader(n));
+        let u = run(&[("a", &a), ("m", &m)], true, &FactsConfig::default());
+        assert!(reader_field_holds_str(&u, &format!("k{}", n - 1)), "{}", u.dump_text());
+        u.units
+            .iter()
+            .filter(|(p, _)| crate::decl_units::module_of(p) == "a.ts")
+            .map(|(_, s)| s.work)
+            .sum::<u64>()
+    };
+    let (w64, w128) = (w(64), w(128));
+    assert!(w128 * 100 < w64 * 225, "work {w64} -> {w128}");
+}
+
+#[test]
+fn a_closed_class_another_unit_extends_publishes_what_its_constructions_pass() {
+    // DECISIONS 198 (scoreboard class_virtual): `Derived` (another unit)
+    // extends closed `Base`, so Base's contract carries its constructor's
+    // function contract and the stand-in constructor is that contract's
+    // stand-in. `new Base(3)` passes 3 to it; the closed construction's
+    // arguments are published from the first stub's parameters. Without
+    // the wiring they were published empty: Base's `scale` read "no
+    // value", stronger than the whole program's number.
+    let a = "class Base { scale: number; constructor(k: number) { this.scale = k; } } class Derived extends Base { }\nfunction kernel(n: number): number { const cs: Base[] = [new Base(3), new Derived(5)]; return cs[n & 1].scale; }\nconsole.log(kernel(10));\n";
+    let (u, _) = assert_not_stronger(&[("a", a)]);
+    let f = field(template(&u, "a.ts:Base"), "scale");
+    assert!(f.kind.prims & crate::model::prim::NUM != 0 || f.kind.top, "{f:?}\n{}", u.dump_text());
+}
+
+#[test]
+fn a_layout_met_again_in_its_own_description_is_named_once() {
+    // DECISIONS 199: L's field holds M, M's field holds L again (each a
+    // copy one level deeper, as a forwarded copy read back every round
+    // builds it). After the cut the inner L keeps its facts but describes
+    // no field values, so the description stops growing.
+    // A layout contract as `value_contract_of_toks` builds one, facts from a solve.
+    let pf = run(&[("a", "const o = { a: 1 }; console.log(o.a);")], true, &FactsConfig::default());
+    let facts = pf.templates.first().cloned().expect("a template");
+    let mk = |d: &str| crate::units::ClassContract {
+        display: d.to_string(),
+        name: d.to_string(),
+        class_id: 0,
+        literal_shape: true,
+        facts: facts.clone(),
+        methods: Vec::new(),
+        native_parent: None,
+        parent: None,
+        field_fns: Vec::new(),
+        field_layouts: Vec::new(),
+        field_values: Vec::new(),
+        field_tas: Vec::new(),
+        open_keys: false,
+        statics: Vec::new(),
+        statics_open: false,
+        static_fns: Vec::new(),
+        static_values: Vec::new(),
+        closed: None,
+        forwards: false,
+        method_fns: Vec::new(),
+        ctor_fn: None,
+        birth_keys: Vec::new(),
+        definite: Vec::new(),
+        ctor_leaks: true,
+        binding_prim: 0,
+    };
+    let with = |mut c: crate::units::ClassContract, inner: crate::units::ClassContract| {
+        let vc = crate::units::ValueContract {
+            layouts: vec![inner],
+            ..Default::default()
+        };
+        c.field_values.push(("next".to_string(), vc));
+        c
+    };
+    let deep = with(mk("L"), with(mk("M"), with(mk("L"), with(mk("M"), mk("L")))));
+    let mut cut = deep.clone();
+    crate::cut_described_again(&mut cut, &mut Vec::new());
+    let m = &cut.field_values[0].1.layouts[0];
+    assert_eq!(m.display, "M");
+    let inner_l = &m.field_values[0].1.layouts[0];
+    assert_eq!(inner_l.display, "L");
+    assert!(inner_l.field_values.is_empty(), "{cut:?}");
+    assert_ne!(format!("{cut:?}"), format!("{deep:?}"));
+}
+
+#[test]
+fn a_function_passed_to_a_method_of_a_parameters_field_escapes() {
+    // DECISIONS 202: `p.items` is a marker that is not the parameter's own,
+    // so `p.items.map(cb)` is no call the caller's unit runs (DECISIONS
+    // 144); its method is an unknown function, as a plain call through the
+    // marker is. Before, only the method was marked: `cb` never ran, the
+    // literal it makes was never born, and its facts were stronger than
+    // the whole program's, where `render` runs `List` and `map` runs `cb`
+    // (React `items.map(x => h(Item, { key: x }))`).
+    let d = "export function render(f: any): any { return f({ items: [1] }); }\n";
+    let m = r#"
+        import { render } from "./d";
+        const List = (p: any) => p.items.map((x: any) => (globalThis as any).zz({ key: x }));
+        console.log(render(List));
+        "#;
+    let (u, _) = assert_not_stronger(&[("d", d), ("main", m)]);
+    let t = u
+        .templates
+        .iter()
+        .find(|t| t.display.starts_with("main.ts:__AnonShape") && t.birth_keys.iter().any(|k| k == "key"))
+        .expect("the literal");
+    assert!(t.escape.is_some(), "{t:?}");
+}
+
+#[test]
+fn a_stand_in_reached_through_a_value_no_contract_describes_is_reported() {
+    // DECISIONS 203: `b` calls an unknown export with the namespace as its
+    // receiver, so the namespace and every export escape; `z` is broken and
+    // `a` sinks it. Its getter returns `objectUtil`, another unit's stand-in
+    // in `z`'s unit. `z`'s readers find an unknown value, so the stand-in is
+    // not read through its owner's contract: it escapes in `z`'s unit, which
+    // reports it, and its owner sinks it as the whole program does (zod's
+    // `z.objectUtil` behind `z.array(...)`). Before, `z` escaped as a
+    // publication and the stand-in left "with its owner's contract".
+    let a = r#"
+        const objectUtil: any = { mergeShapes: (x: any, y: any) => ({ ...x, ...y }) };
+        const arrayType: any = (globalThis as any).unk;
+        export const z = { get objectUtil() { return objectUtil; } };
+        export { arrayType as array };
+        "#;
+    let b = "import * as zmod from \"./a\";\nconsole.log((zmod as any).array(1));\n";
+    let (u, _) = assert_not_stronger(&[("a", a), ("b", b)]);
+    let t = u
+        .templates
+        .iter()
+        .find(|t| t.birth_keys.iter().any(|k| k == "mergeShapes"))
+        .expect("objectUtil");
+    assert!(t.escape.is_some(), "{t:?}");
+}
+
+#[test]
+fn a_key_another_unit_stores_into_a_builtin_prototype_is_unknown_here() {
+    // DECISIONS 204: `c` stores into `Function.prototype.call` (the builtin
+    // prototypes are one object model-wide). In the whole program `check.call`
+    // then reads that value: an unknown function, so `lit` escapes. Per unit
+    // the store was in `c`'s unit; `a` read the builtin `call` and `lit` kept
+    // facts the whole program refutes (fastify: an `Object.assign` onto
+    // `Object.prototype` makes ajv's `checkOptions.call(this, removedOptions)`
+    // an unknown call). Every unit's writes into the runtime's objects now
+    // reach every unit (`model::SharedWrite`, #13294), which carries this.
+    let c = "(Function.prototype as any).call = (globalThis as any).zz;\nexport const c = 1;\n";
+    let a = r#"
+        function check(this: any, o: any) { return o.x; }
+        export function mk() { const lit = { x: 1 }; check.call(null, lit); return 1; }
+        "#;
+    let m = "import { mk } from \"./a\";\nimport { c } from \"./c\";\nconsole.log(mk(), c);\n";
+    let (u, _) = assert_not_stronger(&[("a", a), ("c", c), ("main", m)]);
+    let t = u
+        .templates
+        .iter()
+        .find(|t| t.display.starts_with("a.ts") && t.birth_keys.iter().any(|k| k == "x"))
+        .expect("lit");
+    assert!(t.escape.is_some(), "{t:?}");
+}
+
+#[test]
+fn a_store_under_a_computed_key_into_a_parameter_reaches_the_callers_value() {
+    // DECISIONS 205: `context[bodySchema] = schemas` stores under a computed
+    // key (a symbol) into a parameter, whose node holds an argument marker
+    // (DECISIONS 44). A named key is a flow to the marker's members (118); a
+    // computed key went nowhere, so `schemas` kept its facts while the whole
+    // program stores it into the caller's unknown value and it escapes
+    // (fastify `validation.js`, `context[bodySchema] = contentTypeSchemas`).
+    // Now it reaches the members under any key: the contract parameter,
+    // whose store sinks it.
+    let v = r#"
+        const bodySchema = Symbol("body");
+        export function compileSchemas(context: any, compile: any) {
+          const schemas: any = {};
+          schemas["a"] = compile(1);
+          context[bodySchema] = schemas;
+        }
+        "#;
+    let m = "import { compileSchemas } from \"./v\";\ncompileSchemas((globalThis as any).ctx, (x: any) => x);\n";
+    let (u, _) = assert_not_stronger(&[("v", v), ("main", m)]);
+    let t = u
+        .templates
+        .iter()
+        .find(|t| t.display.starts_with("v.ts"))
+        .expect("schemas");
+    assert!(t.escape.is_some(), "{t:?}");
 }

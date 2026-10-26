@@ -443,6 +443,11 @@ fn stdin_reader_claim_start() -> bool {
 }
 
 fn ensure_stdin_reader() {
+    // wasm32-wasip1 cannot spawn the background reader: stdin delivers nothing
+    // instead of the spawn panicking.
+    if cfg!(all(target_os = "wasi", target_env = "p1")) {
+        return;
+    }
     // A previous reader may have exited (EOF, error, or explicit detach), which
     // resets `STDIN_READER_STARTED` to false so a later `resume()`/`on(...)`
     // can spin up a fresh reader. The claim is atomic with a live reader's

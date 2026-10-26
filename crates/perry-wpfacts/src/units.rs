@@ -8,7 +8,7 @@ use perry_hir::{Export, Import, ImportSpecifier, Module};
 /// A published class as its importers see it (design §11.2): its template
 /// and the facts its defining unit proved, its prototype methods (key,
 /// function name) along the chain inside that unit, and its native parent.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Hash)]
 pub(crate) struct ClassContract {
     pub display: String,
     pub name: String,
@@ -17,6 +17,12 @@ pub(crate) struct ClassContract {
     pub facts: TemplateFacts,
     pub methods: Vec<(String, String)>,
     pub native_parent: Option<(String, String)>,
+    /// Its parent class when that class is another unit's (DECISIONS 104):
+    /// the parent's display, its contract published beside this one. The
+    /// chain inside the defining unit is in `methods`; past it, a reader
+    /// finds inherited methods on the parent's stand-in, as the defining
+    /// unit does.
+    pub parent: Option<String>,
     /// Fields that hold exactly these functions of the defining unit, each
     /// a function contract (a literal's methods: `errorUtil.errToObj`);
     /// every other field holds unknown values for the reader.
@@ -25,6 +31,15 @@ pub(crate) struct ClassContract {
     /// unit (key, their displays, whether primitives too): nested
     /// contracts (design §18.7, `Gen::nested_fields`).
     pub field_layouts: Vec<(String, Vec<String>, bool)>,
+    /// Fields that hold other units' stand-ins (builtins, unknown values,
+    /// primitives) and nothing of the defining unit: what they hold, as a
+    /// value contract (DECISIONS 88), the reader seeds them with.
+    pub field_values: Vec<(String, ValueContract)>,
+    /// Fields that hold only the defining unit's typed arrays, none escaped
+    /// or hard (DECISIONS 126): key, their one element kind, the primitives
+    /// beside them. The reader holds one stand-in typed array per class and
+    /// key; its census reports `ta <key> of <display>` for what it does.
+    pub field_tas: Vec<(String, Option<u8>, u16)>,
     /// The defining unit stores under computed keys: a reader may find any
     /// key (unknown values). Otherwise the keys are the facts' fields.
     pub open_keys: bool,
@@ -38,12 +53,39 @@ pub(crate) struct ClassContract {
     /// defining unit checked their results (an instance of a contract
     /// class is given out, `Model::give_out`).
     pub static_fns: Vec<(String, FnContract)>,
+    /// The data statics with a value contract (key, contract, DECISIONS
+    /// 173): the defining unit checked what they hold after its solve.
+    pub static_values: Vec<(String, ValueContract)>,
     /// A closed class (design §18.13, `decl_units::closed_bindings`): its
     /// defining module's path and binding name, and its constructor's
     /// parameter count. Every unit constructing it (by name or through an
     /// instance's `constructor`) publishes what it passes under that key
     /// (`ProgramFacts::ctor_args_out`).
     pub closed: Option<(String, String, u32)>,
+    /// DECISIONS 157: `closed` is a published class (`UnitView::published`):
+    /// a unit holding its stand-in forwards it as an open class's (the next
+    /// unit holds its stand-in too, its constructions publish there).
+    pub forwards: bool,
+    /// The prototype methods with a function contract (key, contract), and
+    /// the constructor's (DECISIONS 57): their receiver is a contract
+    /// parameter, so another unit's subclass instance can run them.
+    pub method_fns: Vec<(String, FnContract)>,
+    pub ctor_fn: Option<FnContract>,
+    /// Its instances' birth keys in birth order and the definite ones, and
+    /// whether its constructor or one up its chain leaks `this`, as its own
+    /// unit computed them (`compute_birth_keys`, `ctor_phase`): a subclass
+    /// in another unit takes them as its layout prefix, as a subclass in
+    /// the same unit does.
+    pub birth_keys: Vec<String>,
+    pub definite: Vec<String>,
+    pub ctor_leaks: bool,
+    /// The primitive kinds the published binding may hold beside the
+    /// class (DECISIONS 115): a nested class whose members name it binds
+    /// itself through a one-element cell that holds `undefined` until the
+    /// class is evaluated (DECISIONS 50). A reader's import holds them as
+    /// the defining unit's binding does; a layout reached any other way
+    /// has none.
+    pub binding_prim: u16,
 }
 
 /// A published function as its callers see it (design §11.2): per
@@ -52,9 +94,132 @@ pub(crate) struct ClassContract {
 /// then it escapes), whether its body reads `arguments` (`variadic`: all
 /// arguments escape) or has a rest parameter (`rest`: the arguments past
 /// the parameters escape), and the layouts it returns (`None`: ⊤).
-#[derive(Clone, Debug, PartialEq)]
+/// DECISIONS 118: one key a contract function stores into parameter
+/// `dst`'s argument (`reach`: into what it reaches). The reader stores the
+/// arguments of the parameters `from` under it, ⊤ when `top`, and `prim`.
+/// DECISIONS 149: `dst` `u32::MAX` is the receiver (into what it reaches),
+/// `key` `None` a computed key.
+#[derive(Clone, Debug, PartialEq, Hash)]
+pub(crate) struct StoreFlow {
+    pub dst: u32,
+    pub reach: bool,
+    /// Into what the argument holds under this key (a keyed reach, design
+    /// §18.4), not into all it reaches.
+    pub via: Option<String>,
+    pub key: Option<String>,
+    pub from: Vec<u32>,
+    /// DECISIONS 136: what parameter `j`'s argument holds under the key
+    /// (and reaches from there), or reaches (`None`), is stored too.
+    pub from_reach: Vec<(u32, Option<String>)>,
+    pub top: bool,
+    pub prim: u16,
+    /// DECISIONS 176: the values of the defining unit it stores, described
+    /// as a result is (DECISIONS 140).
+    pub value: Option<Described>,
+}
+
+/// DECISIONS 140: a value a contract function hands the caller's unit, its
+/// result or an argument of a call through a parameter, as the reader sees
+/// it: the layouts it may be (`None`: ⊤), the parameters (`u32::MAX`: the
+/// receiver) it may be or whose reach it may hold, what it holds through
+/// one named key of one (then the keys read on it, DECISIONS 138), an
+/// unknown value beside, the builtins, program objects and arrays
+/// (DECISIONS 94), and its primitive kinds.
+/// What a value holds through a parameter's reach (DECISIONS 138, 158):
+/// the parameter (`u32::MAX`: the receiver), its first named key, the keys
+/// the path repeats there (`Some`; `None`: any key), then each further
+/// step's key (`None`: a computed key) with the keys repeated there. The
+/// reader walks the same keys on its argument.
+pub(crate) type ReachKey = (
+    u32,
+    String,
+    Option<Vec<String>>,
+    Vec<(Option<String>, Option<Vec<String>>)>,
+);
+
+#[derive(Clone, Debug, Default, PartialEq, Hash)]
+pub(crate) struct Described {
+    pub layouts: Option<Vec<String>>,
+    pub params: Vec<u32>,
+    pub reach: Vec<u32>,
+    pub reach_keys: Vec<ReachKey>,
+    pub unknown: bool,
+    pub value: ValueContract,
+    pub prim: u16,
+}
+
+impl Described {
+    /// Every value either may be: a ⊤ (`None`) absorbs the layouts.
+    pub(crate) fn join(&mut self, o: &Described) {
+        match (&mut self.layouts, &o.layouts) {
+            (Some(r), Some(s)) => {
+                union_into(r, s);
+                r.sort();
+            }
+            (r, _) => *r = None,
+        }
+        for (v, w) in [(&mut self.params, &o.params), (&mut self.reach, &o.reach)] {
+            union_into(v, w);
+            v.sort_unstable();
+        }
+        union_into(&mut self.reach_keys, &o.reach_keys);
+        self.reach_keys.sort();
+        self.unknown |= o.unknown;
+        self.value.join(&o.value);
+        self.prim |= o.prim;
+    }
+}
+
+/// DECISIONS 140: the body calls parameter `param`'s argument with these
+/// arguments (no receiver: `fn(a, b)`), so the caller's unit, which knows
+/// the function it passed, runs that call; one entry per (parameter, key,
+/// number of arguments), its arguments joined over the calls. With `key`
+/// the body calls that method of the argument (`p.k(a, b)`, DECISIONS 144).
+#[derive(Clone, Debug, PartialEq, Hash)]
+pub(crate) struct ParamCall {
+    pub param: u32,
+    pub key: Option<String>,
+    pub args: Vec<Described>,
+}
+
+impl ParamCall {
+    pub(crate) fn join(&mut self, o: &ParamCall) {
+        for (x, y) in self.args.iter_mut().zip(&o.args) {
+            x.join(y);
+        }
+    }
+}
+
+/// Joins `b`'s calls into `a` by (parameter, key, number of arguments).
+pub(crate) fn join_param_calls(a: &mut Vec<ParamCall>, b: &[ParamCall]) {
+    join_keyed(
+        a,
+        b,
+        |x| (x.param, x.key.clone(), x.args.len()),
+        |x, y| x.join(y),
+    );
+    a.sort_by(|x, y| (x.param, &x.key, x.args.len()).cmp(&(y.param, &y.key, y.args.len())));
+}
+
+/// DECISIONS 152: the body hands parameter `param`'s argument to argument
+/// `arg` of the constructor of closed class `class` (another unit's, by its
+/// key, design §18.13): the caller's unit, which holds the value, passes it
+/// there itself, so it reaches that constructor's argument contract as the
+/// caller's own construction would.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct HandOverArg {
+    pub param: u32,
+    pub class: (String, String),
+    pub arg: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Hash)]
 pub(crate) struct FnContract {
     pub name: String,
+    /// DECISIONS 165: a method of a published class (its owner's prototype
+    /// holds it): a unit calling it publishes what it passes
+    /// (`ProgramFacts::method_runs_out`), however it got the function.
+    pub method: bool,
     /// Per parameter: what the callee does to the argument itself
     /// (`model::MARK_*`), and to what the argument reaches (its fields,
     /// transitively). Two sets: reading `p.n` and converting it is no
@@ -73,14 +238,50 @@ pub(crate) struct FnContract {
     /// transfers, the caller's own objects come back, nothing escapes.
     pub ret_params: Vec<u32>,
     pub ret_reach: Vec<u32>,
+    /// What the result may hold through one named key of a parameter
+    /// (`return p.k`, `u32::MAX`: the receiver): the reader loads that key
+    /// of its argument, not everything the argument reaches (its
+    /// prototype's methods, its class), as for `reach_keys` (§18.4).
+    /// Then the keys the body read on that reach, repeatedly (`Some`), or
+    /// any key (`None`, a computed-key read): `x = p.k; while (x.left) x =
+    /// x.left; return x` is `p.k` then `left`* (DECISIONS 138).
+    pub ret_reach_keys: Vec<ReachKey>,
     /// The result may also be an unknown value (⊤ to the caller).
     pub ret_unknown: bool,
+    /// The global builtins, program objects and arrays it may return
+    /// (DECISIONS 94, as a value contract holds them).
+    pub ret_value: ValueContract,
     /// The primitive kinds the result may be (`model::prim`), when `ret`
     /// names its layouts; with no layouts (⊤) any.
     pub ret_prim: u16,
     /// Its receiver is not used: an arrow function, or a body that never
     /// reads `this` (§18.2).
     pub lexical_this: bool,
+    /// What the body does to its receiver and to what that reaches
+    /// (`model::MARK_*`; ESCAPE when it has no receiver marker), and the
+    /// keys it stores into it (`None`: a computed key) (DECISIONS 57).
+    pub this_use: u8,
+    pub this_reach: u8,
+    pub this_stores: Option<Vec<String>>,
+    /// The keys the body calls on its receiver that only another unit's
+    /// subclass defines (DECISIONS 97): a reader runs `this.<key>(⊤)` on
+    /// each receiver it admits, the call the defining unit cannot see.
+    pub this_calls: Vec<String>,
+    /// Per parameter, the keys the body stores into the argument (`None`:
+    /// a computed key); a stored value escapes (DECISIONS 84).
+    pub param_stores: Vec<Option<Vec<String>>>,
+    /// What the body stores under a named key into an argument or into
+    /// what it reaches: the arguments of other parameters, or an unknown
+    /// value, or primitives (DECISIONS 118).
+    pub param_flows: Vec<StoreFlow>,
+    /// The calls the body makes through a parameter (DECISIONS 140).
+    pub param_calls: Vec<ParamCall>,
+    /// The arguments it hands to a closed class's constructor (DECISIONS 152).
+    pub param_handovers: Vec<HandOverArg>,
+    /// The array cells (`arr:<name>`, DECISIONS 94) the body stores an
+    /// argument into, per parameter (DECISIONS 162): a caller's unit stores
+    /// its argument into that cell, as the whole program runs the store.
+    pub param_cells: Vec<(u32, String)>,
     /// The binding name of a closed function (decision 19): a unit that
     /// calls it as a value publishes what it passes under this name.
     pub closed: Option<String>,
@@ -94,14 +295,33 @@ pub(crate) struct FnContract {
 /// may hold, and whether it may hold an unknown value (⊤ to the reader).
 /// The layouts' fields hold unknown values for the reader; a store or an
 /// opening operation through them is the reader's census report.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Hash)]
 pub(crate) struct ValueContract {
     pub layouts: Vec<ClassContract>,
     pub classes: Vec<ClassContract>,
     pub fns: Vec<FnContract>,
     pub unknown: bool,
+    /// The runtime-owned objects it may hold (`Model::named_shared`), one
+    /// object for the whole program: the reader holds them as well.
+    pub shared: Vec<crate::model::Shared>,
     /// The primitive kinds it may hold (`model::prim` bits).
     pub prim: u16,
+    /// The global builtins it may hold (design §17.16 (a)): a builtin is one
+    /// runtime object for the whole program, the same token in every unit.
+    pub builtins: Vec<crate::model::BuiltinNs>,
+    /// The arrays of other units it may hold (DECISIONS 94), by template
+    /// display: their elements are cell `arr:<display>`.
+    pub arrays: Vec<String>,
+    /// DECISIONS 184: the primitive method containers (`primbox`) it may
+    /// hold, by name as `arrays`: their elements are cell `arr:<name>`; a
+    /// reader's stand-in is a container of its own kind.
+    pub boxes: Vec<String>,
+}
+
+/// Keeps the prefix `a` and `b` share.
+fn common_prefix(a: &mut Vec<String>, b: &[String]) {
+    let n = a.iter().zip(b).take_while(|(x, y)| x == y).count();
+    a.truncate(n);
 }
 
 /// What the calls of a closed function pass (decision 13,
@@ -110,7 +330,7 @@ pub(crate) struct ValueContract {
 /// it through ⊤ or a broken contract, or claims nothing over the bound).
 /// One unit publishes its calls' (`ProgramFacts::args_out`); the callee
 /// takes the union over every unit.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Hash)]
 pub(crate) struct ArgContract {
     pub params: Vec<ValueContract>,
     pub top: bool,
@@ -149,6 +369,7 @@ impl FnContract {
     /// unknown result only grow; the result layouts grow, and a ⊤ result
     /// (`None`) absorbs them; the receiver is unused only if both say so.
     pub(crate) fn join(&mut self, o: &FnContract) {
+        self.method |= o.method;
         for (v, w) in [(&mut self.params, &o.params), (&mut self.reach, &o.reach)] {
             if v.len() < w.len() {
                 v.resize(w.len(), 0);
@@ -180,10 +401,73 @@ impl FnContract {
         union_into(&mut self.ret_params, &o.ret_params);
         union_into(&mut self.ret_reach, &o.ret_reach);
         self.ret_unknown |= o.ret_unknown;
+        union_into(&mut self.ret_reach_keys, &o.ret_reach_keys);
+        self.ret_reach_keys.sort();
+        self.ret_value.join(&o.ret_value);
         self.lexical_this &= o.lexical_this;
+        // The receiver (DECISIONS 57, 97): the marks and the calls grow; a
+        // computed-key store (`None`) absorbs the named keys.
+        self.this_use |= o.this_use;
+        self.this_reach |= o.this_reach;
+        join_stores(&mut self.this_stores, &o.this_stores);
+        union_into(&mut self.this_calls, &o.this_calls);
+        self.this_calls.sort();
+        if self.param_stores.len() < o.param_stores.len() {
+            self.param_stores
+                .resize(o.param_stores.len(), Some(Vec::new()));
+        }
+        for (x, y) in self.param_stores.iter_mut().zip(&o.param_stores) {
+            join_stores(x, y);
+        }
+        // DECISIONS 118: a store flow per (parameter, key): its sources,
+        // ⊤ and primitives grow.
+        for y in &o.param_flows {
+            let same = |x: &StoreFlow| {
+                (x.dst, x.reach, &x.via, &x.key) == (y.dst, y.reach, &y.via, &y.key)
+            };
+            match self.param_flows.iter_mut().find(|x| same(x)) {
+                Some(x) => {
+                    union_into(&mut x.from, &y.from);
+                    x.from.sort_unstable();
+                    for r in &y.from_reach {
+                        if !x.from_reach.contains(r) {
+                            x.from_reach.push(r.clone());
+                        }
+                    }
+                    x.from_reach.sort();
+                    x.top |= y.top;
+                    x.prim |= y.prim;
+                    match (&mut x.value, &y.value) {
+                        (Some(a), Some(b)) => a.join(b),
+                        (a @ None, Some(b)) => *a = Some(b.clone()),
+                        _ => {}
+                    }
+                }
+                None => self.param_flows.push(y.clone()),
+            }
+        }
+        self.param_flows.sort_by(|x, y| {
+            (x.dst, x.reach, &x.via, &x.key).cmp(&(y.dst, y.reach, &y.via, &y.key))
+        });
+        join_param_calls(&mut self.param_calls, &o.param_calls);
+        union_into(&mut self.param_handovers, &o.param_handovers);
+        self.param_handovers.sort();
+        union_into(&mut self.param_cells, &o.param_cells);
+        self.param_cells.sort();
         if self.closed.is_none() {
             self.closed = o.closed.clone();
         }
+    }
+}
+
+/// The keys stored into a value: `None` (a computed key) absorbs.
+fn join_stores(a: &mut Option<Vec<String>>, b: &Option<Vec<String>>) {
+    match (a.as_mut(), b) {
+        (Some(x), Some(y)) => {
+            union_into(x, y);
+            x.sort();
+        }
+        _ => *a = None,
     }
 }
 
@@ -194,6 +478,7 @@ impl FnContract {
 enum StaticMember {
     Fn(FnContract),
     Stub(String),
+    Value(ValueContract),
     Top,
 }
 
@@ -227,6 +512,10 @@ impl ClassContract {
             let (_, m) = c.statics.iter().find(|(q, _)| q == k)?;
             Some(match c.static_fns.iter().find(|(q, _)| q == k) {
                 Some((_, fc)) => StaticMember::Fn(fc.clone()),
+                None if c.static_values.iter().any(|(q, _)| q == k) => {
+                    let (_, vc) = c.static_values.iter().find(|(q, _)| q == k).unwrap();
+                    StaticMember::Value(vc.clone())
+                }
                 None => match m {
                     Some(f) => StaticMember::Stub(f.clone()),
                     None => StaticMember::Top,
@@ -235,6 +524,7 @@ impl ClassContract {
         };
         let mut statics: Vec<(String, Option<String>)> = Vec::new();
         let mut static_fns: Vec<(String, FnContract)> = Vec::new();
+        let mut static_values: Vec<(String, ValueContract)> = Vec::new();
         for (k, _) in self.statics.iter().chain(o.statics.iter()) {
             if statics.iter().any(|(q, _)| q == k) {
                 continue;
@@ -244,6 +534,10 @@ impl ClassContract {
                 (Some(StaticMember::Fn(mut f)), Some(StaticMember::Fn(g))) if f.name == g.name => {
                     f.join(&g);
                     StaticMember::Fn(f)
+                }
+                (Some(StaticMember::Value(mut v)), Some(StaticMember::Value(w))) => {
+                    v.join(&w);
+                    StaticMember::Value(v)
                 }
                 (Some(x), Some(y)) if x == y => x,
                 _ => StaticMember::Top,
@@ -260,6 +554,10 @@ impl ClassContract {
                     static_fns.push((k.clone(), f));
                 }
                 StaticMember::Stub(f) => statics.push((k.clone(), Some(f))),
+                StaticMember::Value(v) => {
+                    statics.push((k.clone(), None));
+                    static_values.push((k.clone(), v));
+                }
                 StaticMember::Top => statics.push((k.clone(), None)),
             }
         }
@@ -285,9 +583,75 @@ impl ClassContract {
             }
         }
         field_layouts.sort();
+        // Nested values (DECISIONS 94) and typed-array fields, as the
+        // layouts: a field one side's facts have without them holds unknown
+        // values; an element kind the two disagree on is none.
+        let plain_v = |c: &ClassContract, k: &str| {
+            c.facts.fields.iter().any(|f| f.key == k) && !c.field_values.iter().any(|(q, _)| q == k)
+        };
+        let mut field_values: Vec<(String, ValueContract)> = Vec::new();
+        for (k, v) in self.field_values.iter().chain(o.field_values.iter()) {
+            if plain_v(self, k) || plain_v(o, k) {
+                continue;
+            }
+            match field_values.iter_mut().find(|(q, _)| q == k) {
+                Some((_, x)) => x.join(v),
+                None => field_values.push((k.clone(), v.clone())),
+            }
+        }
+        field_values.sort_by(|x, y| x.0.cmp(&y.0));
+        let plain_t = |c: &ClassContract, k: &str| {
+            c.facts.fields.iter().any(|f| f.key == k) && !c.field_tas.iter().any(|(q, _, _)| q == k)
+        };
+        let mut field_tas: Vec<(String, Option<u8>, u16)> = Vec::new();
+        for (k, e, p) in self.field_tas.iter().chain(o.field_tas.iter()) {
+            if plain_t(self, k) || plain_t(o, k) {
+                continue;
+            }
+            match field_tas.iter_mut().find(|(q, _, _)| q == k) {
+                Some((_, f, q)) => {
+                    if f != e {
+                        *f = None;
+                    }
+                    *q |= *p;
+                }
+                None => field_tas.push((k.clone(), *e, *p)),
+            }
+        }
+        field_tas.sort();
+        // The methods with a receiver contract and the constructor's
+        // (DECISIONS 57): one function joined; two different ones, the
+        // reader's stub.
+        let mut method_fns: Vec<(String, FnContract)> = Vec::new();
+        for (k, f) in self.method_fns.iter().chain(o.method_fns.iter()) {
+            match method_fns.iter().position(|(q, _)| q == k) {
+                Some(i) if method_fns[i].1.name == f.name => method_fns[i].1.join(f),
+                Some(i) => method_fns[i].1.name.clear(),
+                None => method_fns.push((k.clone(), f.clone())),
+            }
+        }
+        method_fns.retain(|(_, f)| !f.name.is_empty());
+        method_fns.sort_by(|x, y| x.0.cmp(&y.0));
+        match (&mut self.ctor_fn, &o.ctor_fn) {
+            (Some(f), Some(g)) if f.name == g.name => f.join(g),
+            (f, _) => *f = None,
+        }
+        if self.parent != o.parent {
+            self.parent = None;
+        }
+        // The layout prefix a subclass in another unit takes: the common
+        // birth keys, definite in both; a leak in either leaks.
+        common_prefix(&mut self.birth_keys, &o.birth_keys);
+        self.definite.retain(|k| o.definite.contains(k));
+        self.ctor_leaks |= o.ctor_leaks;
+        self.binding_prim |= o.binding_prim;
+        self.field_values = field_values;
+        self.field_tas = field_tas;
+        self.method_fns = method_fns;
         // A closed class (§18.13) only where both say so, the same binding.
-        if self.closed != o.closed {
+        if self.closed != o.closed || self.forwards != o.forwards {
             self.closed = None;
+            self.forwards = false;
         }
         self.facts.join(&o.facts);
         union_into(&mut self.methods, &o.methods);
@@ -297,6 +661,7 @@ impl ClassContract {
         self.statics = statics;
         self.statics_open |= o.statics_open;
         self.static_fns = static_fns;
+        self.static_values = static_values;
     }
 }
 
@@ -319,7 +684,16 @@ impl ValueContract {
         );
         join_keyed(&mut self.fns, &o.fns, |f| f.name.clone(), FnContract::join);
         self.unknown |= o.unknown;
+        union_into(&mut self.shared, &o.shared);
+        self.shared.sort();
         self.prim |= o.prim;
+        // Builtins and arrays (DECISIONS 94): by identity.
+        union_into(&mut self.builtins, &o.builtins);
+        union_into(&mut self.arrays, &o.arrays);
+        union_into(&mut self.boxes, &o.boxes);
+        self.builtins.sort();
+        self.arrays.sort();
+        self.boxes.sort();
         self.layouts.sort_by(|x, y| x.display.cmp(&y.display));
         self.classes.sort_by(|x, y| x.display.cmp(&y.display));
         self.fns.sort_by(|x, y| x.name.cmp(&y.name));
@@ -350,6 +724,10 @@ impl ArgContract {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Published {
     whole: FxHashSet<String>,
+    /// DECISIONS 188: the CommonJS support module (the module every wrapped
+    /// module imports as `perry:cjs`): its `cache` and `main` are the
+    /// program's `require.cache` and main record.
+    pub(crate) cjs_support: Option<String>,
     /// Modules whose namespace object itself reaches other units as a value
     /// no contract describes: a dynamic `import()` or an `export * as`
     /// re-export. A static namespace import is described (§18.2).
@@ -371,22 +749,55 @@ pub(crate) struct Published {
     /// Their value contracts, by (defining module path, export name).
     pub(crate) values: FxHashMap<(String, String), ValueContract>,
     /// The layouts contract functions return, by template display.
-    pub(crate) layouts: FxHashMap<String, ClassContract>,
+    pub(crate) layouts: FxHashMap<String, Digested<ClassContract>>,
+    /// The function contracts by name, each its defining unit's
+    /// (DECISIONS 106), kept across rounds as `layouts`.
+    pub(crate) own_fns: FxHashMap<String, Digested<FnContract>>,
+    /// DECISIONS 107: per published method (contract name), the receivers
+    /// the units running it published, joined; `this_args_top`: a unit
+    /// over the bound may run any of them on anything.
+    pub(crate) this_args: FxHashMap<String, ValueContract>,
+    pub(crate) this_args_top: bool,
+    /// DECISIONS 165: the published methods (contract names) some unit
+    /// runs, joined (an aborted unit may run any: `this_args_top`).
+    pub(crate) method_runs: FxHashSet<String>,
+    /// DECISIONS 148: per published method some unit runs (contract name),
+    /// what the running units' calls pass, joined
+    /// (`ProgramFacts::method_args_out`).
+    pub(crate) method_args: FxHashMap<String, ArgContract>,
     /// The argument contracts of closed functions (decision 13), by
     /// (module path, name): the union over every unit's calls.
     pub(crate) args: FxHashMap<(String, String), ArgContract>,
     /// Store effects (decision 17): per literal layout or class display,
     /// the existing keys other units store into and the value contract of
-    /// what they store (union over every unit; its kinds, DECISIONS 73).
+    /// what they store (union over every unit; DECISIONS 73 is its `prim`,
+    /// design §17.16 (c)).
     pub(crate) stores: FxHashMap<String, Vec<(String, ValueContract)>>,
     /// Write effects: per module-scope binding (its unit's path, its name)
     /// the value contract of what other units store into it (union over
     /// every unit, `Gen::local_write`).
     pub(crate) writes: FxHashMap<(String, String), ValueContract>,
+    /// What the units do to the objects every unit shares (union over every
+    /// unit, `model::SharedWrite`): each unit's solve replays them.
+    pub(crate) shared: std::collections::BTreeSet<crate::model::SharedWrite>,
     /// Each module's namespace object (design §18.2): its keys, where each
     /// resolves through re-exports (§18.14), and whether it may hold any key
     /// (an `export *` from outside the program).
     pub(crate) exports: Exports,
+    /// The classes (defining module path, export name) a class of another
+    /// unit names in its `extends` (DECISIONS 57): their constructor is a
+    /// contract too, run on any receiver.
+    pub(crate) extended: FxHashSet<(String, String)>,
+    /// Cells (design §17.16 (b)): a runtime location every unit names the
+    /// same way (`cjs:<path>`, the registry union `cjs:*`, a computed path
+    /// `cjs:?`), the value contracts written, each with the units writing
+    /// it (their keys, sorted). A reader joins the other units' writes.
+    /// Grouped by contract (DECISIONS 113): every unit may write one cell
+    /// (`global:*`), and a reader takes each distinct write once.
+    pub(crate) cells: FxHashMap<String, Vec<CellWrite>>,
+    /// A unit solve went over the bound: what it writes is unknown, so
+    /// every cell may hold an unknown value.
+    pub(crate) cells_top: bool,
 }
 
 impl Published {
@@ -403,11 +814,44 @@ impl Published {
     }
 
     pub(crate) fn layout(&self, display: &str) -> Option<&ClassContract> {
-        self.layouts.get(display)
+        self.layouts.get(display).map(|e| &e.c)
+    }
+
+    /// What a reader of layout `display` records (DECISIONS 114): its
+    /// digest, or the digest of no entry.
+    pub(crate) fn layout_seen(&self, display: &str) -> u64 {
+        self.layouts
+            .get(display)
+            .map_or_else(|| digest(&None::<&ClassContract>), |e| e.digest)
+    }
+
+    pub(crate) fn own_fn(&self, name: &str) -> Option<&FnContract> {
+        self.own_fns.get(name).map(|e| &e.c)
+    }
+
+    /// What a reader of function contract `name` records, as `layout_seen`.
+    pub(crate) fn own_fn_seen(&self, name: &str) -> u64 {
+        self.own_fns
+            .get(name)
+            .map_or_else(|| digest(&None::<&FnContract>), |e| e.digest)
     }
 
     pub(crate) fn class_contract(&self, path: &str, name: &str) -> Option<&ClassContract> {
         self.classes.get(&(path.to_string(), name.to_string()))
+    }
+
+    /// The closed class `(path, name)` (`ClassContract::closed`): its
+    /// contract under the module's path, or, when the class is no export of
+    /// the module (published under its unit's path alone, `unit_exports`),
+    /// the one whose `closed` names it.
+    pub(crate) fn closed_class(&self, path: &str, name: &str) -> Option<&ClassContract> {
+        self.class_contract(path, name).or_else(|| {
+            self.classes.values().find(|c| {
+                c.closed
+                    .as_ref()
+                    .is_some_and(|(p, n, _)| p == path && n == name)
+            })
+        })
     }
 
     pub(crate) fn arg_contract(&self, path: &str, name: &str) -> Option<&ArgContract> {
@@ -452,6 +896,11 @@ impl Published {
         self.broken.contains(display)
     }
 
+    pub(crate) fn extended(&self, path: &str, name: &str) -> bool {
+        self.extended
+            .contains(&(path.to_string(), name.to_string()))
+    }
+
     pub(crate) fn names(&self, path: &str, name: &str) -> bool {
         self.whole(path) || self.names.get(path).is_some_and(|n| n.contains(name))
     }
@@ -494,6 +943,11 @@ pub(crate) fn published_surface(
             reexport_source(&cfg.export_sources, path, imports.iter().copied(), source)
         };
         for imp in imports.iter().copied() {
+            if imp.source == "perry:cjs" {
+                if let Some(t) = &imp.resolved_path {
+                    p.cjs_support = Some(t.clone());
+                }
+            }
             let Some(t) = imp.resolved_path.as_ref().filter(|t| t.as_str() != *path) else {
                 continue;
             };
@@ -912,22 +1366,38 @@ struct Solve<'a> {
 
 /// The unit of module range `t` exporting `name`; a re-export goes with
 /// the first unit (`decl_units::views`).
+/// The unit of module range `t` that exports `name` as an export of the
+/// module: a unit exporting it to the module's own units only
+/// (`UnitView::unit_exports`) is not the module's binding of that name
+/// (`var _C = class _C {..}; export { _C }`: the class unit exports `_C` to
+/// the binding's unit, which the module exports).
 fn owner_of(out: &[Solve], t: &std::ops::Range<usize>, name: &str) -> Option<usize> {
     t.clone().find(|&si| {
-        out[si].view.exports.iter().any(|e| match e {
-            Export::Named { exported, .. } | Export::ReExport { exported, .. } => exported == name,
-            Export::NamespaceReExport { name: n, .. } => n == name,
-            _ => false,
-        })
+        !out[si].view.unit_exports.contains(name)
+            && out[si].view.exports.iter().any(|e| match e {
+                Export::Named { exported, .. } | Export::ReExport { exported, .. } => {
+                    exported == name
+                }
+                Export::NamespaceReExport { name: n, .. } => n == name,
+                _ => false,
+            })
     })
 }
 
 fn solves<'a>(
     sorted: &[(&'a str, &'a Module)],
     flats: &'a [Option<Module>],
-    es: &crate::ExportSources,
+    cfg: &FactsConfig,
     ex: &Exports,
 ) -> Vec<Solve<'a>> {
+    // DECISIONS 129: what other modules can name of each module, from the
+    // modules' own imports and re-exports (a unit's imports of its own
+    // module's units are not another module's).
+    let own: Vec<(&str, Vec<&Import>, &[Export])> = sorted
+        .iter()
+        .map(|(p, m)| (*p, m.imports.iter().collect(), m.exports.as_slice()))
+        .collect();
+    let reach = published_surface(&own, cfg, ex);
     let index: FxHashMap<&str, usize> = sorted
         .iter()
         .enumerate()
@@ -941,7 +1411,8 @@ fn solves<'a>(
         // for the cut (N5, §12.5): the module's run-once view, one per
         // module, shared by all its units.
         let module: &'a Module = flats[mi].as_ref().unwrap_or(module);
-        for (k, (view, deps)) in crate::decl_units::views(path, module)
+        let named = |n: &str| reach.eval_scopes || reach.names(path, n);
+        for (k, (view, deps)) in crate::decl_units::views(path, module, &named)
             .into_iter()
             .enumerate()
         {
@@ -950,7 +1421,10 @@ fn solves<'a>(
                 mi,
                 key: crate::decl_units::unit_path(path, k),
                 module,
-                view,
+                view: crate::decl_units::UnitView {
+                    key: crate::decl_units::unit_path(path, k),
+                    ..view
+                },
                 after: deps.clone(),
                 deps,
             });
@@ -1036,10 +1510,11 @@ fn solves<'a>(
                 if module.imports.iter().any(|i| &i.source == source) {
                     continue;
                 }
-                let Some(&t) = reexport_source(es, path, std::iter::empty(), source)
-                    .as_deref()
-                    .filter(|t| *t != path)
-                    .and_then(|t| index.get(t))
+                let Some(&t) =
+                    reexport_source(&cfg.export_sources, path, std::iter::empty(), source)
+                        .as_deref()
+                        .filter(|t| *t != path)
+                        .and_then(|t| index.get(t))
                 else {
                     continue;
                 };
@@ -1114,7 +1589,7 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
         .map(|(_, m)| crate::decl_units::run_once_flat(m))
         .collect();
     let exports = module_exports(sorted, &cfg.export_sources);
-    let solves = solves(sorted, &flats, &cfg.export_sources, &exports);
+    let solves = solves(sorted, &flats, cfg, &exports);
     let viewed: Vec<(&str, Vec<&Import>, &[Export])> = solves
         .iter()
         .map(|s| {
@@ -1131,25 +1606,134 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
         .collect();
     let mut input = published_surface(&viewed, cfg, &exports);
     input.exports = exports;
+    // The classes another unit's class extends, through the import its
+    // `extends` names (DECISIONS 57).
+    for s in &solves {
+        for &k in &s.view.classes {
+            let Some(e) = s
+                .module
+                .classes
+                .get(k)
+                .and_then(|c| c.extends_name.as_ref())
+            else {
+                continue;
+            };
+            for imp in s.module.imports.iter().chain(s.view.imports.iter()) {
+                let Some(t) = imp.resolved_path.as_deref() else {
+                    continue;
+                };
+                for sp in &imp.specifiers {
+                    let name = match sp {
+                        ImportSpecifier::Named { imported, local } if local == e => {
+                            imported.clone()
+                        }
+                        ImportSpecifier::Default { local } if local == e => "default".into(),
+                        _ => continue,
+                    };
+                    input
+                        .extended
+                        .insert((crate::decl_units::module_of(t).to_string(), name));
+                }
+            }
+        }
+    }
     let order = dependency_order(&solves);
     let levels = dependency_levels(&solves, &order);
     let mut rounds = 0u32;
+    let compares = std::cell::Cell::new(0u64);
     let mut round_work: Vec<u64> = Vec::new();
     let mut per_unit: Vec<Option<ProgramFacts>> = (0..solves.len()).map(|_| None).collect();
     let mut dirty = vec![true; solves.len()];
+    // DECISIONS 170 (81 (b)): a unit reads its dependencies' class,
+    // function and value contracts as they stand when its level solves:
+    // those of an earlier level (the others are not published yet in the
+    // round, `input.classes` starts empty). `exports`: each unit's, as a
+    // number per latest solve; `exports_seen`: what a unit saw of them when
+    // it was solved. An importer is solved again when that changed, not
+    // because a dependency was solved: equal inputs repeat the same solve.
+    let mut level_of = vec![0usize; solves.len()];
+    for (l, level) in levels.iter().enumerate() {
+        for &si in level {
+            level_of[si] = l;
+        }
+    }
+    let visible = |si: usize, exports: &[u64]| -> Vec<u64> {
+        solves[si]
+            .deps
+            .iter()
+            .filter(|&&d| level_of[d] < level_of[si])
+            .map(|&d| exports[d])
+            .collect()
+    };
+    let mut exports: Vec<u64> = vec![0; solves.len()];
+    let mut exports_seen: Vec<Vec<u64>> = vec![Vec::new(); solves.len()];
+    // The layouts whose entry is their owner's, not a forwarded copy
+    // (DECISIONS 106).
+    let mut owned_layouts: FxHashSet<String> = FxHashSet::default();
+    // The function contracts each unit published at its latest solve
+    // (DECISIONS 134).
+    let mut fns_of: Vec<Vec<String>> = vec![Vec::new(); solves.len()];
+    // The layouts each unit published as their owner at its latest solve.
+    let mut layouts_of: Vec<Vec<String>> = vec![Vec::new(); solves.len()];
+    // The unit whose forwarded copy an entry is (DECISIONS 134).
+    let mut copy_of: FxHashMap<String, usize> = FxHashMap::default();
+    // The shared objects' writes each round replayed (`Published::shared`),
+    // and the one each unit's latest solve saw.
+    let mut shared_rounds: Vec<std::collections::BTreeSet<crate::model::SharedWrite>> =
+        vec![Default::default()];
+    let mut shared_seen: Vec<usize> = vec![0; solves.len()];
     loop {
         rounds += 1;
         input.classes.clear();
         input.fns.clear();
         input.values.clear();
-        input.layouts.clear();
+        // Layouts stay from the last round (DECISIONS 103): a contract a
+        // cell carries names its layouts by display, and their publisher
+        // may solve after the reader: each reader recorded what it read.
+        let mut published_layouts: FxHashSet<String> = FxHashSet::default();
+        let mut owned_now: FxHashSet<String> = FxHashSet::default();
+        let mut published_fns: FxHashSet<String> = FxHashSet::default();
         let mut reports: FxHashSet<String> = FxHashSet::default();
         let mut work = 0u64;
         for level in &levels {
+            // A unit over the bound keeps its result (`dependents`).
+            for &si in level {
+                if !dirty[si]
+                    && per_unit[si].as_ref().is_some_and(|u| !u.stats.aborted)
+                    && visible(si, &exports) != exports_seen[si]
+                {
+                    dirty[si] = true;
+                }
+            }
             let todo: Vec<usize> = level.iter().copied().filter(|&si| dirty[si]).collect();
-            for (si, u) in solve_level(&todo, &solves, sorted, &ucfg, &input) {
+            for &si in &todo {
+                exports_seen[si] = visible(si, &exports);
+            }
+            for (si, mut u) in solve_level(&todo, &solves, sorted, &ucfg, &input) {
                 work += u.stats.work;
+                exports[si] = digest(&(&u.contracts_out, &u.fn_contracts_out, &u.values_out));
+                // DECISIONS 197: a unit's write into a cell is its last
+                // write joined with what its latest solve writes, as its
+                // argument contracts are (D16): a cell only grows, and a
+                // value one writer took from another's earlier write cannot
+                // pass back and forth between them after its source stopped
+                // writing it (tsc typescript.js#u4336/#u4339, period 2).
+                if let Some(old) = per_unit[si].take() {
+                    let at: FxHashMap<String, usize> = u
+                        .cells_out
+                        .iter()
+                        .enumerate()
+                        .map(|(i, (k, _))| (k.clone(), i))
+                        .collect();
+                    for (k, c) in old.cells_out {
+                        match at.get(&k) {
+                            Some(&i) => u.cells_out[i].1.join(&c),
+                            None => u.cells_out.push((k, c)),
+                        }
+                    }
+                }
                 per_unit[si] = Some(u);
+                shared_seen[si] = shared_rounds.len() - 1;
             }
             // The level's contracts, published in `order` sequence: the
             // next level's one input.
@@ -1183,16 +1767,70 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
                         input.values.insert((p.clone(), n.clone()), c.clone());
                     }
                 }
-                // Several units describe one layout (literals of one shape
-                // in different units): a reader relies only on what all of
-                // them say, and a field holds every unit's functions.
-                for c in &u.layouts_out {
-                    match input.layouts.get_mut(&c.display) {
-                        Some(have) => have.join(c),
-                        None => {
-                            input.layouts.insert(c.display.clone(), c.clone());
-                        }
+                // DECISIONS 134: a layout this unit owned at its last solve
+                // and no longer publishes is gone now, unless another unit
+                // births it too (DECISIONS 112).
+                let now: Vec<String> = u
+                    .layouts_out
+                    .iter()
+                    .filter(|c| !u.layouts_fwd.contains(&c.display))
+                    .map(|c| c.display.clone())
+                    .collect();
+                for d in std::mem::replace(&mut layouts_of[si], now) {
+                    if !layouts_of.iter().any(|v| v.contains(&d)) {
+                        input.layouts.remove(&d);
+                        owned_layouts.remove(&d);
+                        copy_of.remove(&d);
                     }
+                }
+                for c in &u.layouts_out {
+                    published_layouts.insert(c.display.clone());
+                    if u.layouts_fwd.contains(&c.display) {
+                        if !owned_layouts.contains(&c.display) {
+                            input
+                                .layouts
+                                .insert(c.display.clone(), Digested::new(c.clone()));
+                            copy_of.insert(c.display.clone(), si);
+                        }
+                        continue;
+                    }
+                    owned_now.insert(c.display.clone());
+                    copy_of.remove(&c.display);
+                    // Several units birth one literal shape (DECISIONS 112):
+                    // its entry is the join of their contracts, ascending
+                    // from the last round's owned entry, so a reader between
+                    // two owners reads at the fixpoint what the last one
+                    // leaves. A class has one defining unit: its latest solve.
+                    let e = match input.layouts.get(&c.display).map(|e| &e.c) {
+                        Some(p)
+                            if c.literal_shape
+                                && p.literal_shape
+                                && owned_layouts.contains(&c.display) =>
+                        {
+                            let mut j = p.clone();
+                            j.join(c);
+                            j
+                        }
+                        _ => c.clone(),
+                    };
+                    owned_layouts.insert(c.display.clone());
+                    input.layouts.insert(c.display.clone(), Digested::new(e));
+                }
+                // DECISIONS 134: a contract this unit published at its last
+                // solve and no longer publishes is gone now, not at the end
+                // of the round: a reader solving later in this round reads
+                // what this solve left, and needs no round to see it go.
+                let now: Vec<String> = u.own_fns_out.iter().map(|c| c.name.clone()).collect();
+                for nm in std::mem::replace(&mut fns_of[si], now) {
+                    if !u.own_fns_out.iter().any(|c| c.name == nm) {
+                        input.own_fns.remove(&nm);
+                    }
+                }
+                for c in &u.own_fns_out {
+                    published_fns.insert(c.name.clone());
+                    input
+                        .own_fns
+                        .insert(c.name.clone(), Digested::new(c.clone()));
                 }
                 reports.extend(u.reports.iter().cloned());
             }
@@ -1208,10 +1846,12 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
         // on it; at the fixpoint every closed function's parameters hold
         // what its calls pass.
         let mut latest: FxHashMap<(String, String), ArgContract> = FxHashMap::default();
+        let mut aborted = false;
         for (si, s) in solves.iter().enumerate() {
             let path = sorted[s.mi].0;
             let u = per_unit[si].as_ref().expect("every unit solved");
             if u.stats.aborted {
+                aborted = true;
                 for nm in &s.view.closed_refs {
                     latest
                         .entry((path.to_string(), nm.clone()))
@@ -1231,6 +1871,20 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
                 latest.entry(k.clone()).or_default().join(ac);
             }
         }
+        // DECISIONS 157: an aborted unit may hold any published class (it
+        // need not name it: a namespace, a value), and its constructions
+        // publish nothing.
+        if aborted {
+            for s in &solves {
+                let path = sorted[s.mi].0;
+                for nm in &s.view.published {
+                    latest
+                        .entry((path.to_string(), nm.clone()))
+                        .or_default()
+                        .top = true;
+                }
+            }
+        }
         let mut args = input.args.clone();
         for (k, ac) in &latest {
             args.entry(k.clone()).or_default().join(ac);
@@ -1247,17 +1901,93 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
             }
         }
         input.args = args;
+        // DECISIONS 107: the receivers of published methods: last round's
+        // joined with every unit's latest solve (D16), so they only grow.
+        // The owners of a method whose join changed are solved again.
+        let mut this_args = input.this_args.clone();
+        let mut this_top = input.this_args_top;
+        for u in per_unit.iter().flatten() {
+            if u.stats.aborted {
+                this_top = true;
+                continue;
+            }
+            for (nm, vc) in &u.this_args_out {
+                this_args.entry(nm.clone()).or_default().join(vc);
+            }
+        }
+        let mut keys: Vec<&String> = this_args.keys().chain(input.this_args.keys()).collect();
+        keys.sort_unstable();
+        keys.dedup();
+        let recv_changed: Vec<String> = keys
+            .into_iter()
+            .filter(|k| {
+                this_top != input.this_args_top
+                    || digest(&this_args.get(*k)) != digest(&input.this_args.get(*k))
+            })
+            .map(|k| format!("fn:{k}"))
+            .collect();
+        if !recv_changed.is_empty() {
+            for (si, u) in per_unit.iter().enumerate() {
+                let u = u.as_ref().expect("every unit solved");
+                if !u.stats.aborted && u.fns_defined.iter().any(|d| recv_changed.contains(d)) {
+                    seeds.push(si);
+                }
+            }
+        }
+        input.this_args = this_args;
+        input.this_args_top = this_top;
+        // DECISIONS 165: the published methods some unit runs, joined the
+        // same way; the owners of a newly run one solve again.
+        let mut runs_changed: Vec<String> = Vec::new();
+        for u in per_unit.iter().flatten() {
+            for nm in &u.method_runs_out {
+                if input.method_runs.insert(nm.clone()) {
+                    runs_changed.push(format!("fn:{nm}"));
+                }
+            }
+        }
+        if !runs_changed.is_empty() {
+            for (si, u) in per_unit.iter().enumerate() {
+                let u = u.as_ref().expect("every unit solved");
+                if !u.stats.aborted && u.fns_defined.iter().any(|d| runs_changed.contains(d)) {
+                    seeds.push(si);
+                }
+            }
+        }
+        // DECISIONS 148: what the running units pass to published methods,
+        // last round's joined with every unit's latest solve and compared
+        // as values; the owners of a method whose join changed solve again.
+        let mut margs = input.method_args.clone();
+        for u in per_unit.iter().flatten() {
+            for (nm, ac) in &u.method_args_out {
+                margs.entry(nm.clone()).or_default().join(ac);
+            }
+        }
+        let margs_changed: Vec<String> = margs
+            .iter()
+            .filter(|(k, v)| input.method_args.get(*k) != Some(*v))
+            .map(|(k, _)| format!("fn:{k}"))
+            .collect();
+        if !margs_changed.is_empty() {
+            for (si, u) in per_unit.iter().enumerate() {
+                let u = u.as_ref().expect("every unit solved");
+                if !u.stats.aborted && u.fns_defined.iter().any(|d| margs_changed.contains(d)) {
+                    seeds.push(si);
+                }
+            }
+        }
+        input.method_args = margs;
         // Decision 17: the store effects: last round's joined with what
         // every unit's latest solve stores (D16), so they only grow too.
         // The owners of a layout whose effect keys grew perform them,
         // solved again with their dependents.
         let mut stores = input.stores.clone();
         for u in per_unit.iter().flatten() {
-            for (d, k, vc) in &u.stores_out {
+            for (d, k, c) in &u.stores_out {
                 let v = stores.entry(d.clone()).or_default();
                 match v.iter_mut().find(|(k2, _)| k2 == k) {
-                    Some((_, e)) => e.join(vc),
-                    None => v.push((k.clone(), vc.clone())),
+                    Some((_, e)) => e.join(c),
+                    None => v.push((k.clone(), c.clone())),
                 }
             }
         }
@@ -1284,6 +2014,147 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
             }
         }
         input.stores = stores;
+        // Design §17.16 (b): the cells, from every unit's writes so far
+        // (DECISIONS 197). The units reading a cell whose writes changed are
+        // solved again.
+        let mut cells: FxHashMap<String, Vec<CellWrite>> = FxHashMap::default();
+        for (si, s) in solves.iter().enumerate() {
+            let u = per_unit[si].as_ref().expect("every unit solved");
+            for (k, c) in &u.cells_out {
+                let v = cells.entry(k.clone()).or_default();
+                let d = digest(c);
+                let i = match v.iter().position(|w| w.digest == d && w.c == *c) {
+                    Some(i) => i,
+                    None => {
+                        v.push(CellWrite::new(c.clone(), d));
+                        v.len() - 1
+                    }
+                };
+                v[i].writers.push(s.key.clone());
+            }
+        }
+        for v in cells.values_mut() {
+            for w in v.iter_mut() {
+                w.writers.sort_unstable();
+            }
+            v.sort_by(|x, y| x.writers.cmp(&y.writers));
+        }
+        let cells_top = per_unit.iter().flatten().any(|u| u.stats.aborted);
+        // A unit is solved again when what it READS of a cell changed: the
+        // other writers' contracts (its own write is in its own solve,
+        // DECISIONS 89), an unknown one or a unit over the bound being ⊤
+        // that absorbs every other unknown. A reader forwarding the ⊤ it
+        // was seeded with changes no other reader's view.
+        // DECISIONS 169: the view is the writes' digests (taken once per
+        // round, `CellWrite`), not their contracts cloned and sorted per
+        // reader: AWFY rounds 2-4 viewed 180K cell reads, 18.8 s of 26.6.
+        let view = |cells: &FxHashMap<String, Vec<CellWrite>>, top: bool, me: &str, k: &str| {
+            let others: Vec<&CellWrite> = cells
+                .get(k)
+                .into_iter()
+                .flatten()
+                .filter(|w| !(w.writers.len() == 1 && w.writers[0] == me))
+                .collect();
+            let pure = |c: &ValueContract| {
+                c.unknown
+                    && c.layouts.is_empty()
+                    && c.classes.is_empty()
+                    && c.fns.is_empty()
+                    && c.builtins.is_empty()
+                    && c.arrays.is_empty()
+                    && c.boxes.is_empty()
+            };
+            let top = top || others.iter().any(|w| pure(&w.c));
+            let mut v: Vec<u64> = others
+                .into_iter()
+                .filter(|w| !pure(&w.c))
+                .map(|w| if top { w.top } else { w.digest })
+                .collect();
+            v.sort_unstable();
+            v.dedup();
+            (top, v)
+        };
+        // A layout no unit published this round is gone; a unit that read
+        // a layout which changed during the round read it before its
+        // publisher solved, or the old one: solved again (DECISIONS 103).
+        input.layouts.retain(|k, _| published_layouts.contains(k));
+        copy_of.retain(|k, _| input.layouts.contains_key(k));
+        owned_layouts.retain(|k| owned_now.contains(k));
+        input.own_fns.retain(|k, _| published_fns.contains(k));
+        // DECISIONS 114: each contract is digested once per round, as its
+        // readers recorded it (`Gen::owner_fn`, `Gen::other_layout`): a
+        // read compares two numbers, so the round does not grow with the
+        // reads (awfy_Richards: 58544 reads of 39 layouts, each digest the
+        // Debug text of a whole contract).
+        let gone = digest(&None::<&ClassContract>);
+        let fns_now: FxHashMap<&str, u64> = input
+            .own_fns
+            .iter()
+            .map(|(k, e)| (k.as_str(), e.digest))
+            .collect();
+        let layouts_now: FxHashMap<&str, u64> = input
+            .layouts
+            .iter()
+            .map(|(k, e)| (k.as_str(), e.digest))
+            .collect();
+        compares.set(compares.get() + (fns_now.len() + layouts_now.len()) as u64);
+        let fn_changed =
+            |(k, h): &(String, u64)| fns_now.get(k.as_str()).copied().unwrap_or(gone) != *h;
+        for (si, u) in per_unit.iter().enumerate() {
+            let u = u.as_ref().expect("every unit solved");
+            // A unit over the bound keeps its result (`dependents`): what it
+            // read changes nothing it publishes.
+            if !u.stats.aborted && u.fns_read.iter().any(fn_changed) {
+                seeds.push(si);
+            }
+        }
+        let layout_changed =
+            |(k, h): &(String, u64)| layouts_now.get(k.as_str()).copied().unwrap_or(gone) != *h;
+        for (si, u) in per_unit.iter().enumerate() {
+            let u = u.as_ref().expect("every unit solved");
+            // A unit over the bound keeps its result (`dependents`): what it
+            // read changes nothing it publishes.
+            // DECISIONS 134: a unit's own forwarded copy is built from
+            // what it read through the other channels, each tracked: it
+            // does not solve its publisher again.
+            let own_copy = |(k, _): &&(String, u64)| copy_of.get(k.as_str()) == Some(&si);
+            if !u.stats.aborted
+                && u.layouts_read
+                    .iter()
+                    .filter(|r| !own_copy(r))
+                    .any(layout_changed)
+            {
+                seeds.push(si);
+            }
+        }
+        // A cell whose writes and whose ⊤ are as last round reads alike in
+        // every unit: only the changed ones are viewed per reader
+        // (DECISIONS 114).
+        let mut keys: Vec<&String> = cells.keys().chain(input.cells.keys()).collect();
+        keys.sort_unstable();
+        keys.dedup();
+        compares.set(compares.get() + keys.len() as u64);
+        let changed: FxHashSet<&str> = keys
+            .into_iter()
+            .filter(|k| input.cells.get(*k) != cells.get(*k))
+            .map(|k| k.as_str())
+            .collect();
+        let top_changed = input.cells_top != cells_top;
+        for (si, u) in per_unit.iter().enumerate() {
+            let u = u.as_ref().expect("every unit solved");
+            let me = solves[si].key.as_str();
+            if u.cells_read.iter().any(|k| {
+                (top_changed || changed.contains(k.as_str())) && {
+                    compares.set(compares.get() + 1);
+                    view(&input.cells, input.cells_top, me, k) != view(&cells, cells_top, me, k)
+                }
+            }) {
+                seeds.push(si);
+            }
+        }
+        drop(changed);
+        input.cells = cells;
+        input.cells_top = cells_top;
         // The write effects: last round's joined with what every unit's
         // latest solve stores into other units' bindings (an aborted unit:
         // any value into each it writes), so they only grow (D16, as the
@@ -1306,6 +2177,33 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
             seeds.extend(solves.iter().position(|s| &s.key == p));
         }
         input.writes = writes;
+        // The shared objects' writes (`model::SharedWrite`): last round's
+        // joined with every unit's latest, so they only grow (D16). When
+        // they grew, the units that can see a new one are solved again.
+        let mut shared = input.shared.clone();
+        for u in per_unit.iter().flatten() {
+            shared.extend(u.shared_out.iter().cloned());
+        }
+        shared_closure(&mut shared);
+        if shared != input.shared {
+            // A unit solved again only for a write it has not taken (one it
+            // replayed, or one it performs itself with the replay's effect)
+            // and can see (`model::SharedReads`).
+            for (si, u) in per_unit.iter().enumerate() {
+                let seen = &shared_rounds[shared_seen[si]];
+                let u = u.as_ref().expect("every unit solved");
+                if shared.iter().any(|w| {
+                    !seen.contains(w)
+                        && !(replay_is_own(w) && u.shared_out.contains(w))
+                        && !u.stats.aborted
+                        && u.shared_reads.sees(w)
+                }) {
+                    seeds.push(si);
+                }
+            }
+            shared_rounds.push(shared.clone());
+        }
+        input.shared = shared;
         let fresh: Vec<String> = reports
             .into_iter()
             .filter(|d| !input.broken.contains(d))
@@ -1316,11 +2214,14 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
             } else {
                 resolve_again(&solves, &per_unit, &fresh)
             };
-            for (si, d) in dependents(&solves, &per_unit, seeds)
-                .into_iter()
-                .enumerate()
-            {
-                dirty[si] |= d;
+            // DECISIONS 170: a seeded unit is solved again; its importers
+            // follow when its outputs change (the level loop above). A
+            // newly broken class still re-solves its owner's importers
+            // (`resolve_again`): they read the broken set itself.
+            for si in seeds {
+                if per_unit[si].as_ref().is_some_and(|u| !u.stats.aborted) {
+                    dirty[si] = true;
+                }
             }
             input.broken.extend(fresh);
             continue;
@@ -1349,13 +2250,72 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
         // The cost of the run is every round's.
         pf.stats.work = round_work.iter().sum();
         pf.round_work = round_work;
+        pf.compares = compares.get();
         pf.broken = {
             let mut b: Vec<String> = input.broken.iter().cloned().collect();
             b.sort();
             b
         };
+        // The program's writes of the shared objects: every unit's, joined.
+        pf.shared_out = input.shared.iter().cloned().collect();
         return pf;
     }
+}
+
+/// Does replaying `w` (`Model::replay_shared`) do exactly what the unit
+/// performing `w` itself already did? A store or accessor on ⊤, an
+/// unmodeled reach and a handover run the same rules either way; a store
+/// or accessor on one object puts the other unit's unknown value there.
+fn replay_is_own(w: &crate::model::SharedWrite) -> bool {
+    use crate::model::{Shared, SharedWrite};
+    match w {
+        SharedWrite::Store(s, _) | SharedWrite::Accessor(s, _) => *s == Shared::Top,
+        SharedWrite::Unmodeled(_) | SharedWrite::Handed(_) => true,
+    }
+}
+
+/// A runtime-owned object one unit hands to unknown code (`SharedWrite::Handed`)
+/// is ⊤ in the other units' code: each store and accessor any unit performs on
+/// ⊤ is one on that object, as the whole-program solve sees it on the
+/// object's own token. A store under a computed key covers every key of its
+/// object: the stores under one key beside it are dropped, so a write that
+/// says nothing new solves no unit again.
+fn shared_closure(shared: &mut std::collections::BTreeSet<crate::model::SharedWrite>) {
+    use crate::model::{Shared, SharedWrite};
+    let handed: Vec<Shared> = shared
+        .iter()
+        .filter_map(|w| match w {
+            SharedWrite::Handed(s) => Some(s.clone()),
+            _ => None,
+        })
+        .collect();
+    let on_top: Vec<SharedWrite> = shared
+        .iter()
+        .filter(|w| {
+            matches!(
+                w,
+                SharedWrite::Store(Shared::Top, _) | SharedWrite::Accessor(Shared::Top, _)
+            )
+        })
+        .cloned()
+        .collect();
+    for s in &handed {
+        for w in &on_top {
+            shared.insert(match w {
+                SharedWrite::Store(_, k) => SharedWrite::Store(s.clone(), k.clone()),
+                SharedWrite::Accessor(_, k) => SharedWrite::Accessor(s.clone(), k.clone()),
+                _ => unreachable!("only stores and accessors on ⊤"),
+            });
+        }
+    }
+    let computed: Vec<Shared> = shared
+        .iter()
+        .filter_map(|w| match w {
+            SharedWrite::Store(s, None) => Some(s.clone()),
+            _ => None,
+        })
+        .collect();
+    shared.retain(|w| !matches!(w, SharedWrite::Store(s, Some(_)) if computed.contains(s)));
 }
 
 /// Decision 32: the units by dependency level, each level in `order`
@@ -1455,39 +2415,46 @@ fn unit_io(
     for (p, &si) in order.iter().enumerate() {
         pos[si] = p;
     }
-    let hash = |s: &str| {
-        let mut h = FNV_OFFSET;
-        fnv(&mut h, s);
-        h
-    };
     let mut outs: Vec<Vec<(String, u64)>> = Vec::with_capacity(solves.len());
     let mut owned: Vec<Vec<String>> = Vec::with_capacity(solves.len());
     for u in per_unit {
         let u = u.as_ref().expect("every unit solved");
         let mut o: Vec<(String, u64)> = Vec::new();
         for ((_, n), c) in &u.contracts_out {
-            o.push((format!("class:{n}"), hash(&format!("{c:?}"))));
+            o.push((format!("class:{n}"), digest(c)));
         }
         for ((_, n), c) in &u.fn_contracts_out {
-            o.push((format!("fn:{n}"), hash(&format!("{c:?}"))));
+            o.push((format!("fn:{n}"), digest(c)));
         }
         for ((_, n), c) in &u.values_out {
-            o.push((format!("value:{n}"), hash(&format!("{c:?}"))));
+            o.push((format!("value:{n}"), digest(c)));
         }
         for c in &u.layouts_out {
-            o.push((format!("layout:{}", c.display), hash(&format!("{c:?}"))));
+            o.push((format!("layout:{}", c.display), digest(c)));
         }
         for (n, c) in &u.args_out {
-            o.push((format!("args:{n}"), hash(&format!("{c:?}"))));
+            o.push((format!("args:{n}"), digest(c)));
         }
         for ((p, n), c) in &u.ctor_args_out {
-            o.push((format!("args:{p}:{n}"), hash(&format!("{c:?}"))));
+            o.push((format!("args:{p}:{n}"), digest(c)));
         }
-        for (d, k, vc) in &u.stores_out {
-            o.push((format!("store:{d}.{k}"), hash(&format!("{vc:?}"))));
+        for (n, c) in &u.this_args_out {
+            o.push((format!("this:{n}"), digest(c)));
+        }
+        for n in &u.method_runs_out {
+            o.push((format!("runs:{n}"), 0));
+        }
+        for (n, c) in &u.method_args_out {
+            o.push((format!("margs:{n}"), digest(c)));
+        }
+        for (d, k, kinds) in &u.stores_out {
+            o.push((format!("store:{d}.{k}"), digest(kinds)));
+        }
+        for (k, c) in &u.cells_out {
+            o.push((format!("cell:{k}"), digest(c)));
         }
         for ((p, n), vc) in &u.writes_out {
-            o.push((format!("write:{p}.{n}"), hash(&format!("{vc:?}"))));
+            o.push((format!("write:{p}.{n}"), digest(vc)));
         }
         for d in &u.reports {
             o.push((format!("report:{d}"), 0));
@@ -1601,6 +2568,13 @@ fn unit_io(
         for (n, x) in &outs[si] {
             lines.push(format!("# uout {} {n} {x:016x}", s.key));
         }
+        // The cells it read (DECISIONS 171: the ones its solve consumed).
+        let mut reads: Vec<&String> = u.cells_read.iter().collect();
+        reads.sort();
+        reads.dedup();
+        for k in reads {
+            lines.push(format!("# uread {} cell:{k}", s.key));
+        }
     }
     lines
 }
@@ -1620,6 +2594,14 @@ fn resolve_again(
     let owner = owners(per_unit);
     let mut work: Vec<usize> = Vec::new();
     for d in fresh {
+        // An override report changes the overridden class's unit
+        // (DECISIONS 59).
+        // So does a typed-array field report (DECISIONS 126).
+        let d = d
+            .strip_prefix("override ")
+            .or_else(|| d.strip_prefix("ta "))
+            .and_then(|r| r.split_once(" of "))
+            .map_or(d.as_str(), |(_, c)| c);
         match owner.get(d) {
             Some(sis) => work.extend(sis.iter().copied()),
             // No unit owns it: every unit again, but a unit over the bound
@@ -1634,6 +2616,59 @@ fn resolve_again(
         }
     }
     dependents(solves, per_unit, work)
+}
+
+/// A published contract and its digest (DECISIONS 114), taken once when
+/// it is published: its readers record the number (`Published::layout_seen`)
+/// and the round compares numbers, not contracts.
+#[derive(Clone, Debug)]
+pub(crate) struct Digested<T> {
+    pub c: T,
+    pub digest: u64,
+}
+
+impl<T: std::hash::Hash> Digested<T> {
+    pub(crate) fn new(c: T) -> Self {
+        let digest = digest(&Some(&c));
+        Digested { c, digest }
+    }
+}
+
+/// One distinct write of a cell (design §17.16 (b)): its contract and the
+/// units writing it (their keys, sorted). DECISIONS 169: its digests are
+/// taken once, when the round groups the writes (`digest`; `top`: with
+/// the unknown value and the primitives dropped, as a reader whose view is
+/// ⊤ sees it), so a reader's view of the cell compares numbers, as a
+/// layout read does (DECISIONS 166).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct CellWrite {
+    pub digest: u64,
+    pub top: u64,
+    pub writers: Vec<String>,
+    pub c: ValueContract,
+}
+
+impl CellWrite {
+    fn new(c: ValueContract, digest: u64) -> Self {
+        let mut t = c.clone();
+        t.unknown = false;
+        t.prim = 0;
+        CellWrite {
+            digest,
+            top: self::digest(&t),
+            writers: Vec::new(),
+            c,
+        }
+    }
+}
+
+/// What a reader saw of an entry read by name (a layout, a function
+/// contract, DECISIONS 103/106): it is solved again when the entry differs.
+pub(crate) fn digest<T: std::hash::Hash>(v: &T) -> u64 {
+    use std::hash::Hasher;
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    v.hash(&mut h);
+    h.finish()
 }
 
 /// The units defining each display. A display may have several owners:
