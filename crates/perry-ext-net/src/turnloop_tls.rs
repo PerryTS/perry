@@ -494,7 +494,7 @@ fn flush_scratch(b: &mut Buffers) {
 /// Node's cause code plus rustls's own text, the shape `net`/`tls` already
 /// reports for a handshake failure.
 pub fn node_message(error: &rustls::Error) -> String {
-    format!("{}: {error}", turnloop_tls::node_error_code(error))
+    format!("{}: {error}", node_code(error))
 }
 
 /// Parse a Node `servername` into the rustls type, keeping Node's error text.
@@ -508,7 +508,7 @@ pub fn server_name(name: &str) -> Result<rustls::pki_types::ServerName<'static>,
 
 /// Node's cause code alone, for `err.code`.
 pub fn node_code(error: &rustls::Error) -> &'static str {
-    turnloop_tls::node_error_code(error)
+    crate::tls::node_cause_code(error).unwrap_or_else(|| turnloop_tls::node_error_code(error))
 }
 
 /// Construct a pure client codec for an independently owned phase-C transport.

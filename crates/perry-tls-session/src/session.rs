@@ -86,6 +86,7 @@ struct Buffers {
     peer_closed: bool,
     grow_scratch: Option<usize>,
     failed: Option<Failure>,
+    invalid_content_type: bool,
     alert_drained: bool,
 }
 
@@ -170,6 +171,7 @@ impl TlsSession {
                 peer_closed: false,
                 grow_scratch: None,
                 failed: None,
+                invalid_content_type: false,
                 alert_drained: false,
             },
             handshaking: true,
@@ -227,6 +229,13 @@ impl TlsSession {
     /// plaintext and refuses writes; any alert it queued is in the output.
     pub fn failure(&self) -> Option<&Failure> {
         self.buffers.failed.as_ref()
+    }
+
+    /// Whether rustls rejected a record's content type. Hosts can distinguish
+    /// initial non-TLS input from a failed TLS handshake using this fact and
+    /// [`Self::protocol_version`]; the codec still exposes any queued alert.
+    pub fn failed_with_invalid_content_type(&self) -> bool {
+        self.buffers.invalid_content_type
     }
 
     /// Hand ciphertext that arrived on the transport to the session.
@@ -327,6 +336,14 @@ fn failure_of(error: &rustls::Error) -> Failure {
     }
 }
 
+fn record_failure(buffers: &mut Buffers, error: &rustls::Error) {
+    buffers.invalid_content_type = matches!(
+        error,
+        rustls::Error::InvalidMessage(rustls::InvalidMessage::InvalidContentType)
+    );
+    buffers.failed = Some(failure_of(error));
+}
+
 fn internal_failure(message: String) -> Failure {
     Failure {
         code: "ERR_SSL_PROTOCOL_ERROR",
@@ -370,7 +387,7 @@ fn step<E: Endpoint>(tls: &mut E, b: &mut Buffers) -> Action {
     let mut discard = discard;
     let action = match state {
         Err(error) => {
-            b.failed = Some(failure_of(&error));
+            record_failure(b, &error);
             Action::Blocked
         }
         Ok(ConnectionState::EncodeTlsData(mut encode)) => {
@@ -418,7 +435,7 @@ fn step<E: Endpoint>(tls: &mut E, b: &mut Buffers) -> Action {
                             b.plain.extend_from_slice(record.payload);
                         }
                     }
-                    Err(e) => b.failed = Some(failure_of(&e)),
+                    Err(e) => record_failure(b, &e),
                 }
             }
             Action::Progress

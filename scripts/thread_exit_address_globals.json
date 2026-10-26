@@ -37,7 +37,10 @@
     "REGIONS"
    ],
    "verdict": "allocation_lifetime",
-   "boundary_calls": ["region::map", "region::unmap"],
+   "boundary_calls": [
+    "region::map",
+    "region::unmap"
+   ],
    "why": "Non-Linux mapping extents, not object identities. region::register records each native map; region::unmap removes its start key before apple::unmap or allocator dealloc. arena/block.rs routes pool overflow, pool drain, allocation failure and TLS teardown through that release path. Pooled mappings remain live and listed across agent reuse. The source pins bind the registry and all production region allocation/release callers to this audit.",
    "source_pins": {
     "crates/perry-runtime/src/arena/region.rs": "b68ddd1cb6fb89e90d3e7821f7e88c61b76c895c4a6bb2f6ebe17e3f73da0bf8",
@@ -3913,6 +3916,22 @@
    ],
    "verdict": "no_heap_address",
    "why": "Startup code function pointer for the native-owner bag adapter. It stores only an extern C function address, never a payload, property bag or GC address."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/layout_desc.rs",
+   "names": [
+    "LAYOUT_START"
+   ],
+   "verdict": "no_heap_address",
+   "why": "LAYOUT_START is a zero-filled COFF boundary word; layout_bounds takes only its address and no code writes its contents. Mutability selects the writable linker section, not heap-address custody."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/layout_desc.rs",
+   "names": [
+    "LAYOUT_END"
+   ],
+   "verdict": "no_heap_address",
+   "why": "LAYOUT_END is a zero-filled COFF boundary word; layout_bounds takes only its address and no code writes its contents. Mutability selects the writable linker section, not heap-address custody."
   }
  ]
 }

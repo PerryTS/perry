@@ -779,6 +779,12 @@ pub extern "C" fn js_atomics_wait_async(
             view.get_numeric(idx) == expected_i32
         }
     };
+    // The waiter below is a background thread, and wasm32-wasip1 cannot spawn
+    // one. Fail loudly before any waiter is enqueued rather than panic in the
+    // spawn.
+    if cfg!(all(target_os = "wasi", target_env = "p1")) {
+        throw_type_error(b"Atomics.waitAsync is not supported on wasip1");
+    }
     let addr = view.slot_addr(idx);
     let handle = if addr == 0 {
         None
