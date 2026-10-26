@@ -632,12 +632,38 @@ pub enum Cons {
     },
     /// Every object token reaches a HARD operation.
     Hard { kind: Hard, reason: u32 },
-    /// `Object.defineProperty(o, key, {get/set})` with a constant key and an
-    /// accessor descriptor (FVA 4.3a): on a token whose layout does not hold
-    /// `key` as data the key becomes an accessor key (the getter and setter
-    /// are installed by `Accessor`) and the layout gains it; on any other
-    /// token (a key it holds as data, a class instance, ⊤) it is E5 HARD.
-    DefineAccessor { key: Atom, reason: u32 },
+    /// `Object.defineProperty(o, key, desc)` with a constant key (FVA 4.3a).
+    /// An accessor descriptor (`data` false) on a literal layout that does
+    /// not hold `key` as data: the key becomes an accessor key (the getter
+    /// and setter are installed by `Accessor`) and the layout gains it. On a
+    /// prototype that has no method `key`, either descriptor: `key` is a key
+    /// of the prototype that is no plain data slot (an accessor, or a value
+    /// whose attributes are the descriptor's), as a class getter is; the
+    /// value is stored by the caller. Any other token (a key it holds as
+    /// data, a class instance, ⊤, a data descriptor on a literal): E5 HARD.
+    DefineKey { key: Atom, data: bool, reason: u32 },
+    /// `Object.defineProperties(o, map)`: the node holds the maps. A literal
+    /// with exactly its birth keys defines each of them by the descriptor
+    /// under it (`DefineDesc`); any other map defines its own values
+    /// (`descs`) under a computed key: E5 HARD on `o`, the descriptors'
+    /// values (`value`, a load of `descs`) stored under any key at `site`.
+    DefineAll {
+        o: NodeId,
+        descs: NodeId,
+        value: NodeId,
+        site: SiteId,
+        reason: u32,
+    },
+    /// Internal: the node holds the descriptors `defineProperties` defines
+    /// `key` of `o` by. An accessor descriptor literal is a `DefineKey`
+    /// accessor; any other descriptor is a data definition (its `value`
+    /// stored under `key` at `site`); either installs its get/set.
+    DefineDesc {
+        o: NodeId,
+        key: Atom,
+        site: SiteId,
+        reason: u32,
+    },
     /// Every token gains keys after birth (computed store …).
     AddsKeys,
     /// Builtin protocol touch: what `proto` reads on every token.
@@ -712,8 +738,8 @@ pub enum Cons {
     /// runs it once through `call`, with every key.
     ForInKeys { ft: Tok, call: CallId },
     /// The node is the key of `defineProperty(o, k, desc)` in a for-in body:
-    /// a run's one key defines it as a constant key does (`DefineAccessor`
-    /// for an accessor descriptor, else E5 HARD); any other key is E5 HARD.
+    /// a run's one key defines it as a constant key does (`DefineKey`);
+    /// any other key is E5 HARD.
     DefineKeyed {
         o: NodeId,
         reason: u32,
@@ -823,7 +849,9 @@ impl Cons {
             Cons::TopIfAny { .. } => "topifany",
             Cons::Hard { .. } => "hard",
             Cons::AddsKeys => "addskeys",
-            Cons::DefineAccessor { .. } => "defineaccessor",
+            Cons::DefineKey { .. } => "definekey",
+            Cons::DefineAll { .. } => "defineall",
+            Cons::DefineDesc { .. } => "definedesc",
             Cons::Implicit { .. } => "implicit",
             Cons::CreateProto { .. } => "createproto",
             Cons::ChainUnion { .. } => "chainunion",
@@ -1193,6 +1221,21 @@ pub struct Model {
     /// The keys such a body may define, accessor keys from generation on
     /// (`Gen::note_for_in_define_keys`).
     pub for_in_define_keys: crate::pts::FxHashSet<Atom>,
+    /// `defineProperties` maps defined key by key: (map, o, descs, value,
+    /// site, reason) of the `DefineAll`, checked again once the worklist is
+    /// empty (`settle_define`).
+    pub define_runs: Vec<(Tok, NodeId, NodeId, NodeId, SiteId, u32)>,
+    /// (descs, map) defined under any key; descs whose E5 and store under
+    /// any key are attached.
+    pub define_any: crate::pts::FxHashSet<(NodeId, Tok)>,
+    pub define_any_on: crate::pts::FxHashSet<NodeId>,
+    /// Accessor descriptors a `DefineDesc` defined by: (descriptor, o, key,
+    /// site, reason), checked again once the worklist is empty.
+    pub desc_runs: Vec<(Tok, NodeId, Atom, SiteId, u32)>,
+    /// (o, key, descriptor) defined as data.
+    pub desc_data: crate::pts::FxHashSet<(NodeId, Atom, Tok)>,
+    /// (o, key, data) whose `DefineKey` is attached.
+    pub define_on: crate::pts::FxHashSet<(NodeId, Atom, bool)>,
     /// The node a `Cons::Store` runs on, while it runs.
     pub store_at: Option<NodeId>,
     /// A call's constant first argument (a string), for callees whose

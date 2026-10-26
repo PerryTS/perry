@@ -7,6 +7,7 @@ use crate::model::*;
 use crate::pts::FxHashMap;
 use perry_hir::{Class, Export, Function, Global, Import, ImportSpecifier, Module, Stmt};
 
+mod define_keys;
 mod export;
 mod for_in;
 mod glue;
@@ -277,6 +278,9 @@ pub struct Gen<'a> {
     pub(crate) for_in_keys_of: FxHashMap<(u32, u32), u32>,
     /// The for-in bodies being walked: (module, loop variable, key parameter).
     pub(crate) for_in_key: Vec<(u32, u32, NodeId)>,
+    /// Constant bindings' initializers: (module, global, id) -> init
+    /// (`Gen::note_define_keys`, `Gen::const_key`).
+    pub(crate) const_inits: FxHashMap<(u32, bool, u32), define_keys::ConstInit>,
     /// Per module: locals written or captured anywhere (`Gen::for_in_of`).
     pub(crate) unstable: FxHashMap<u32, crate::pts::FxHashSet<u32>>,
 }
@@ -446,6 +450,7 @@ impl<'a> Gen<'a> {
             require_helpers_indexed: std::collections::HashSet::new(),
             for_in_keys_of: FxHashMap::default(),
             for_in_key: Vec::new(),
+            const_inits: FxHashMap::default(),
             unstable: FxHashMap::default(),
         }
     }
@@ -456,6 +461,7 @@ impl<'a> Gen<'a> {
     /// is walked, so cross-references resolve in one pass.
     pub fn register_all(&mut self) {
         self.index_emitted_closures();
+        self.note_const_inits();
         let modules = self.modules.clone();
         for (mi, (path, module)) in modules.iter().enumerate() {
             let mi = mi as u32;
@@ -485,6 +491,8 @@ impl<'a> Gen<'a> {
         }
         // Keys a for-in body may define, before any lookup is generated.
         self.note_for_in_define_keys();
+        // Keys a definition names by a constant, before any lookup too.
+        self.note_define_keys();
         // Class parents and native parents (second pass: names resolve).
         for mi in 0..modules.len() {
             for c in self.classes_of(mi) {
@@ -993,6 +1001,14 @@ impl<'a> Gen<'a> {
                 accessor_keys.push(a);
             }
         }
+        let named: Vec<Option<(Atom, bool)>> = c
+            .computed_members
+            .iter()
+            .map(|cm| self.named_computed(mi, cm))
+            .collect();
+        for &(a, _) in named.iter().flatten() {
+            push_unique(&mut accessor_keys, a);
+        }
         let proto_members = {
             let mut v = accessor_keys.clone();
             for meth in &c.methods {
@@ -1021,7 +1037,7 @@ impl<'a> Gen<'a> {
             ctor: None,
             native_parent: c.native_extends.clone(),
             accessor_keys: accessor_keys.clone(),
-            has_computed_members: !c.computed_members.is_empty(),
+            has_computed_members: named.iter().any(|n| n.is_none()),
             field_init: None,
             proto_members,
             parent_value: None,
@@ -1110,7 +1126,7 @@ impl<'a> Gen<'a> {
             self.m.accessors.entry((proto, a)).or_default().1.push(ft);
             push_unique(self.m.accessor_keys.entry(proto).or_default(), a);
         }
-        for cm in &c.computed_members {
+        for (cm, named) in c.computed_members.iter().zip(named) {
             let f = self.register_fn(
                 mi,
                 cm.function.id,
@@ -1119,6 +1135,17 @@ impl<'a> Gen<'a> {
                 false,
                 false,
             );
+            if let Some((a, setter)) = named {
+                // Under a constant key: that key's accessor.
+                let this = self.m.funcs[f as usize].this;
+                self.m.this_class.insert(this, tm);
+                self.m.accessor_atoms.insert(a);
+                let ft = self.m.funcs[f as usize].token;
+                let e = self.m.accessors.entry((proto, a)).or_default();
+                if setter { &mut e.1 } else { &mut e.0 }.push(ft);
+                push_unique(self.m.accessor_keys.entry(proto).or_default(), a);
+                continue;
+            }
             let holder = if cm.is_static { cobj } else { proto };
             let any = self.m.field_any(holder);
             let t = self.m.funcs[f as usize].token;

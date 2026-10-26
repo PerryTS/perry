@@ -1286,7 +1286,10 @@ impl<'a> Gen<'a> {
                 ..
             } => {
                 let _ = self.expr(fx, key_expr);
-                if let Some(tm) = self.resolve_class_name(mi, class_name) {
+                // Under a constant key it is that key's accessor, installed
+                // with the class (`Gen::named_computed`).
+                let named = !*is_static && self.const_key(mi, key_expr).is_some();
+                if let (false, Some(tm)) = (named, self.resolve_class_name(mi, class_name)) {
                     self.computed_accessor(mi, tm, *is_static, getter_name, setter_name);
                 }
                 self.prim_node(prim::UNDEF)
