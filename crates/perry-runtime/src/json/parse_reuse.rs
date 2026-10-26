@@ -1,4 +1,5 @@
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 crate::perry_thread_local! {
     /// One reusable immutable string token from the most recently parsed
@@ -49,7 +50,7 @@ struct ParseObjectTemplate {
     source: *const StringHeader,
     source_len: u16,
     keys_array: *mut crate::array::ArrayHeader,
-    shape_id: u32,
+    shape_id: LayoutWord,
     values: [ParseTemplateValue; PARSE_OBJECT_TEMPLATE_MAX_FIELDS],
     len: u8,
 }
@@ -204,7 +205,7 @@ pub(crate) unsafe fn remember_parse_object_template(
         source,
         source_len: source_len as u16,
         keys_array: crate::object::object_keys(object).arr(),
-        shape_id: crate::object::shapes::object_shape_stamp(object),
+        shape_id: LayoutWord(crate::object::shapes::object_shape_stamp(object).0),
         values,
         len: len as u8,
     };
@@ -327,7 +328,7 @@ pub(crate) fn test_seed_root_scanner_slots(
             source: template_source,
             source_len: 1,
             keys_array: keys,
-            shape_id: 0,
+            shape_id: LayoutWord(0),
             values,
             len: 2,
         });

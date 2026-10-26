@@ -1,5 +1,6 @@
 use super::spread::js_object_spread_fresh_leading;
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 unsafe fn object(entries: &[(&str, f64)]) -> f64 {
     let obj = js_object_alloc_plain(entries.len() as u32);
@@ -180,8 +181,8 @@ fn spread_namespace_is_not_rewritten_as_a_heap_key_and_prunes_retired_source() {
         js_object_freeze(source);
         let result = js_object_spread_fresh_leading(empty_prefix(), source);
         let id = shapes::object_shape_stamp(receiver(source));
-        let kid = id as usize;
-        let slot = spread::cache_slot(0, id);
+        let kid = id.0 as usize;
+        let slot = spread::cache_slot(LayoutWord(0), id.0);
         let entry = with_transition_cache(|t| (*t)[slot]);
         assert_eq!(spread::source_shape(&entry), Some(id));
         assert_eq!(

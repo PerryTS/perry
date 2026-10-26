@@ -1,5 +1,6 @@
 //! Real serializer/rebuilder gates, not synthetic seed-id equality.
 use super::*;
+use crate::codegen_abi::LayoutWord;
 use crate::object::{field_rep, shapes, static_shapes};
 
 const PACKED: &[u8] = b"cfwire_method\0cfwire_number\0";
@@ -51,7 +52,11 @@ unsafe fn wire() -> SerializedValue {
     let mut objects = Vec::new();
     for n in [17.0f64, 29.0] {
         let object = keys.with_mut_ptr(|keys_ptr| {
-            crate::object::alloc_plain::alloc_plain_record_inline_keys_stamped(2, keys_ptr, BASE)
+            crate::object::alloc_plain::alloc_plain_record_inline_keys_stamped(
+                2,
+                keys_ptr,
+                LayoutWord(BASE),
+            )
         });
         let object = scope.root_raw_mut_ptr(object);
         let birth = object
@@ -59,7 +64,7 @@ unsafe fn wire() -> SerializedValue {
             .unwrap();
         assert_eq!(
             object.with_mut_ptr(|object_ptr| shapes::object_shape_stamp(object_ptr)),
-            BASE,
+            LayoutWord(BASE),
             "plain birth must use the installed carrier"
         );
         assert_eq!(birth.object_kind, shapes::ShapeObjectKind::Ordinary);
@@ -101,7 +106,7 @@ unsafe fn wire() -> SerializedValue {
         }) as usize as *mut crate::object::ObjectHeader;
         assert_eq!(
             shapes::object_shape_stamp(obj),
-            FINAL,
+            LayoutWord(FINAL),
             "source must carry the real final shape"
         );
         let serialized = serialize_nanbox_for_thread(JSValue::object_ptr(obj.cast()).bits());
@@ -167,10 +172,10 @@ fn replay(seed_first: bool, production_seed: bool) {
             "rebuilt closures must keep distinct captures"
         );
         if seed_first || production_seed {
-            assert_eq!(ids[0], FINAL);
+            assert_eq!(ids[0], LayoutWord(FINAL));
         } else {
-            assert!(!shapes::is_static_layout_word(ids[0]));
-            assert!(shapes::shape_is_retired(FINAL));
+            assert!(!shapes::is_static_layout_word((ids[0]).0));
+            assert!(shapes::shape_is_retired(LayoutWord(FINAL)));
             // Object-first must keep its old carriers valid when the external
             // static id arrives, and subsequent reconstructions use that id.
             shapes::install_worker_shape_seed(&seed);
@@ -178,7 +183,7 @@ fn replay(seed_first: bool, production_seed: bool) {
             let array = JSValue::from_bits(bits).as_pointer::<crate::array::ArrayHeader>();
             let obj = JSValue::from_bits(crate::array::js_array_get_f64(array, 0).to_bits())
                 .as_pointer::<crate::object::ObjectHeader>();
-            assert_eq!(shapes::object_shape_stamp(obj), FINAL);
+            assert_eq!(shapes::object_shape_stamp(obj), LayoutWord(FINAL));
             assert!(shapes::shape_descriptor_for_word(ids[0]).is_some());
         }
     })
@@ -219,7 +224,7 @@ fn constfn_transfer_refuses_rebuilt_numeric_contradiction() {
         let object = JSValue::from_bits(crate::array::js_array_get_f64(array, 0).to_bits())
             .as_pointer::<crate::object::ObjectHeader>();
         let d = shapes::object_shape_descriptor(object).unwrap();
-        assert_ne!(shapes::object_shape_stamp(object), FINAL);
+        assert_ne!(shapes::object_shape_stamp(object), LayoutWord(FINAL));
         assert_eq!(
             d.special_constfn_mask, 0,
             "a wire fact cannot override a current field value"
@@ -284,7 +289,7 @@ fn constfn_transfer_final_slots_rewrite_the_actual_closures_on_moving_gc() {
             assert_ne!(old.0, new.0, "actual receiver {i} did not relocate");
             assert_ne!(old.1, new.1, "current closure slot {i} did not rewrite");
             let obj = new.0 as *const crate::object::ObjectHeader;
-            assert_eq!(shapes::object_shape_stamp(obj), FINAL);
+            assert_eq!(shapes::object_shape_stamp(obj), LayoutWord(FINAL));
             assert_eq!(
                 capture_body(new.1 as *const ClosureHeader, closure::JsThis::UNDEFINED),
                 [17.0, 29.0][i]
@@ -310,10 +315,10 @@ fn constfn_transfer_does_not_resurrect_a_deprecated_final_body_fact() {
         )
         .as_pointer::<crate::object::ObjectHeader>()
             as *mut crate::object::ObjectHeader;
-        assert_eq!(shapes::object_shape_stamp(obj), FINAL);
+        assert_eq!(shapes::object_shape_stamp(obj), LayoutWord(FINAL));
         crate::object::store_object_field_slot(obj, 0, TAG_TRUE);
         assert_eq!(
-            shapes::shape_descriptor_for_word(FINAL)
+            shapes::shape_descriptor_for_word(LayoutWord(FINAL))
                 .unwrap()
                 .deprecation_targets()
                 .1,
@@ -325,7 +330,7 @@ fn constfn_transfer_does_not_resurrect_a_deprecated_final_body_fact() {
             .as_pointer::<crate::object::ObjectHeader>();
         assert_ne!(
             shapes::object_shape_stamp(obj),
-            FINAL,
+            LayoutWord(FINAL),
             "a learned final record cannot be republished on a new receiver"
         );
         assert_eq!(
@@ -484,8 +489,8 @@ fn constfn_worker_seed_owns_names_across_source_key_relocation() {
                 1,
             )
         }) as usize as *const crate::object::ObjectHeader;
-        assert_eq!(shapes::object_shape_stamp(finalized), FINAL_ID);
-        let before = shapes::shape_descriptor_for_word(FINAL_ID).unwrap();
+        assert_eq!(shapes::object_shape_stamp(finalized), LayoutWord(FINAL_ID));
+        let before = shapes::shape_descriptor_for_word(LayoutWord(FINAL_ID)).unwrap();
         let before_heap_key = heap_key_at(before.keys);
         assert!(
             crate::arena::pointer_in_nursery(before.keys as usize),
@@ -518,7 +523,7 @@ fn constfn_worker_seed_owns_names_across_source_key_relocation() {
         // no receiving worker has installed it. Neither saved old address is
         // dereferenced after collection.
         gc::gc_collect_minor();
-        let after = shapes::shape_descriptor_for_word(FINAL_ID).unwrap();
+        let after = shapes::shape_descriptor_for_word(LayoutWord(FINAL_ID)).unwrap();
         assert_ne!(
             after.keys, before.keys,
             "source key list did not actually relocate"
@@ -543,16 +548,19 @@ fn constfn_worker_seed_owns_names_across_source_key_relocation() {
                 None,
             )
             .unwrap(),
-            FINAL_ID,
+            LayoutWord(FINAL_ID),
             "source facts accelerator must be rekeyed, not mint a second descriptor"
         );
         let relocated_source_keys = after.keys;
         std::thread::spawn(move || {
             let _agent = crate::agent::enter_worker_agent();
             gc::ensure_gc_initialized();
-            assert!(shapes::shape_is_retired(FINAL_ID), "fresh worker premise");
+            assert!(
+                shapes::shape_is_retired(LayoutWord(FINAL_ID)),
+                "fresh worker premise"
+            );
             shapes::install_worker_shape_seed(&seed);
-            let installed = shapes::shape_descriptor_for_word(FINAL_ID)
+            let installed = shapes::shape_descriptor_for_word(LayoutWord(FINAL_ID))
                 .expect("saved seed must install before object reconstruction can mask a failure");
             assert_ne!(
                 installed.keys, relocated_source_keys,
@@ -577,7 +585,7 @@ fn constfn_worker_seed_owns_names_across_source_key_relocation() {
             );
             let bits = deserialize_nanbox_on_current_thread(&payload);
             let object = JSValue::from_bits(bits).as_pointer::<crate::object::ObjectHeader>();
-            assert_eq!(shapes::object_shape_stamp(object), FINAL_ID);
+            assert_eq!(shapes::object_shape_stamp(object), LayoutWord(FINAL_ID));
             let fields = (object as *const u8)
                 .add(std::mem::size_of::<crate::object::ObjectHeader>())
                 as *const u64;
@@ -698,7 +706,7 @@ fn constfn_transfer_compiled_anon_header_preserves_actual_worker_wire() {
                 ANON,
                 "real producer header must survive"
             );
-            assert_eq!(shapes::object_shape_stamp(object), ANON_FINAL);
+            assert_eq!(shapes::object_shape_stamp(object), LayoutWord(ANON_FINAL));
             let payload = serialize_nanbox_for_thread(JSValue::pointer(object.cast()).bits());
             assert!(
                 matches!(&payload, SerializedValue::Object {
@@ -716,7 +724,9 @@ fn constfn_transfer_compiled_anon_header_preserves_actual_worker_wire() {
             gc::ensure_gc_initialized();
             shapes::install_worker_shape_seed(&seed);
             assert_eq!(
-                shapes::shape_descriptor_for_word(ANON_FINAL).unwrap().rep,
+                shapes::shape_descriptor_for_word(LayoutWord(ANON_FINAL))
+                    .unwrap()
+                    .rep,
                 ANON_REP
             );
             assert_eq!(shapes::class_proto_id(ANON), shapes::class_proto_id(0));
@@ -732,7 +742,7 @@ fn constfn_transfer_compiled_anon_header_preserves_actual_worker_wire() {
                     assert_eq!((*object).class_id, ANON);
                     assert_eq!(
                         shapes::object_shape_stamp(object),
-                        ANON_FINAL,
+                        LayoutWord(ANON_FINAL),
                         "worker must republish actual final facts after validating current slots"
                     );
                     let d = shapes::object_shape_descriptor(object).unwrap();

@@ -218,7 +218,7 @@ fn path_module_wrap_publishes_partial_then_final_exports_and_tracks_undefined() 
     // mismatch here would resolve the value from one path and the
     // exists-but-undefined bit from another.
     // The computed-specifier path lives once in the support module.
-    let support = super::support::source(&[path.to_string_lossy().into_owned()], false, true);
+    let support = super::support::source(&[path.to_string_lossy().into_owned()], false);
     assert!(
         support.contains("pathModule !== undefined || __perry_has_path_module(path)"),
         "an exported undefined value must not be mistaken for a registry miss\n{support}"
@@ -247,10 +247,12 @@ fn computed_relative_requires_are_joined_against_the_module_dir() {
     // The join needs the module's own directory as a literal, handed to the
     // support module's computed-specifier path.
     assert!(
-        wrapped.contains("__perry_cjs_require_computed(specifier, \"/tmp/perry-canary/.next/server\","),
+        wrapped.contains(
+            "__perry_cjs_require_computed(specifier, \"/tmp/perry-canary/.next/server\","
+        ),
         "the wrap lost the module-dir literal the join needs:\n{wrapped}"
     );
-    let support = super::support::source(&[path.to_string_lossy().into_owned()], false, true);
+    let support = super::support::source(&[path.to_string_lossy().into_owned()], false);
     // Anti-vacuity: the computed path still consults the registry.
     assert!(
         support.contains("__perry_require_path_module("),

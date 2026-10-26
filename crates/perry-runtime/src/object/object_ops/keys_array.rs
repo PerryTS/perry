@@ -1,6 +1,7 @@
 //! keys_array maintenance helpers shared by the descriptor-define paths:
 //! `ensure_key_in_keys_array`, `install_builtin_getter`, `own_key_present`.
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 /// Ensure a key appears in the object's keys_array. Used by `Object.defineProperty`
 /// so the property is enumerable-filterable and discoverable by `getOwnPropertyNames`
@@ -138,9 +139,9 @@ unsafe fn ensure_key_in_keys_array_inner(
             let prev_shape_id = if transition_eligible_first {
                 super::super::shapes::object_shape_stamp(obj)
             } else {
-                0
+                LayoutWord(0)
             };
-            let interned = if prev_shape_id != 0 {
+            let interned = if prev_shape_id != LayoutWord(0) {
                 let interned = intern_define_key(&scope, key);
                 refresh_define_property_roots!();
                 interned
@@ -217,7 +218,7 @@ unsafe fn ensure_key_in_keys_array_inner(
             if let Some(handle) = interned.as_ref() {
                 let target_shape_id = super::super::shapes::object_shape_stamp(obj);
                 let published_keys = crate::object::object_keys(obj).arr();
-                if target_shape_id != 0
+                if target_shape_id != LayoutWord(0)
                     && target_shape_id != prev_shape_id
                     && !published_keys.is_null()
                 {
@@ -316,14 +317,18 @@ unsafe fn ensure_key_in_keys_array_inner(
             // Interning can collect, so the keys edge and the receiver's stamp
             // are re-read here rather than reused from above.
             if crate::object::object_keys(obj) == keys {
-                prev_shape_id = super::super::shapes::object_shape_stamp(obj);
+                prev_shape_id = super::super::shapes::object_shape_stamp(obj).0;
                 interned_handle = interned;
             }
         }
     }
     if let (Some(handle), true) = (interned_handle.as_ref(), prev_shape_id != 0) {
         let probe = handle.with_const_ptr::<crate::StringHeader, _>(|interned| {
-            super::super::transition_cache_lookup_for_value(prev_shape_id, interned, numeric)
+            super::super::transition_cache_lookup_for_value(
+                LayoutWord(prev_shape_id),
+                interned,
+                numeric,
+            )
         });
         if let Some((next_keys, slot_idx, target_shape_id)) = probe {
             let live = crate::object::object_live_slot_count(obj);
@@ -342,7 +347,7 @@ unsafe fn ensure_key_in_keys_array_inner(
                 }
                 if !super::super::shapes::install_cached_object_shape_transition(
                     obj,
-                    prev_shape_id,
+                    LayoutWord(prev_shape_id),
                     target_shape_id,
                     next_keys,
                 ) {
@@ -471,12 +476,14 @@ unsafe fn ensure_key_in_keys_array_inner(
             } else {
                 "PUBLISHED an edge"
             });
-            if target_shape_id != 0 && target_shape_id != prev_shape_id && !published_keys.is_null()
+            if target_shape_id != LayoutWord(0)
+                && target_shape_id != LayoutWord(prev_shape_id)
+                && !published_keys.is_null()
             {
                 handle.with_const_ptr::<crate::StringHeader, _>(|interned_key| {
                     super::super::transition_cache_insert(
                         std::ptr::null(),
-                        prev_shape_id,
+                        LayoutWord(prev_shape_id),
                         interned_key,
                         published_keys as usize,
                         new_index,
@@ -522,7 +529,7 @@ unsafe fn publish_definition_keys(
 /// allocation would publish payload slots past the end of the object: the
 /// collector traces that range, so the next collection reads (and rewrites)
 /// memory the object does not own. Keep such a receiver on the private append.
-unsafe fn cached_target_fits(target_shape_id: u32, alloc_limit: u32) -> bool {
+unsafe fn cached_target_fits(target_shape_id: LayoutWord, alloc_limit: u32) -> bool {
     super::super::shapes::shape_descriptor_for_word(target_shape_id)
         .is_some_and(|target| target.live_inline_slot_count <= alloc_limit)
 }
@@ -659,7 +666,7 @@ mod tests {
             );
             assert_ne!((*first).shape_word(), sibling_shape);
             let sibling_descriptor =
-                crate::object::shapes::shape_descriptor_for_word(sibling_shape)
+                crate::object::shapes::shape_descriptor_for_word(LayoutWord(sibling_shape))
                     .expect("sibling descriptor must remain installed");
             assert_eq!(
                 sibling_descriptor.keys,
@@ -786,7 +793,7 @@ pub(crate) unsafe fn install_own_builtin_accessor(
     setter_bits: u64,
     attrs: PropertyAttrs,
 ) {
-    if obj.is_null() || (obj as usize) < 0x10000 || key_str.is_null() {
+    if !crate::value::addr_class::is_above_handle_band(obj as usize) || key_str.is_null() {
         return;
     }
     let entry = crate::object::key_attrs::AttrsEdit::Data(&[], attrs.bits).apply(

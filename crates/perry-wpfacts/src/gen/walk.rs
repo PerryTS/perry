@@ -80,7 +80,8 @@ impl<'a> Gen<'a> {
     }
 
     fn compute_birth_keys(&mut self, tm: TmplId, module: &Module) {
-        if !self.m.tmpls[tm as usize].birth_keys.is_empty() {
+        // Another unit's class: its keys are its contract's.
+        if !self.m.tmpls[tm as usize].birth_keys.is_empty() || self.stand_in_cc.contains_key(&tm) {
             return;
         }
         let mut keys = Vec::new();
@@ -176,6 +177,12 @@ impl<'a> Gen<'a> {
     /// A constructor up `tm`'s chain may leak `this` before `tm`'s own
     /// stores run: one that leaks, a native parent, a parent value not
     /// settled, or another unit's class (its constructor is not seen).
+    /// Whether `tm`'s constructor or one up its chain leaks `this`
+    /// (published as `ClassContract::ctor_leaks`).
+    pub(crate) fn chain_leaks(&self, tm: TmplId) -> bool {
+        self.ctor_phase.get(&tm).map_or(true, |ph| ph.leaks) || self.parent_chain_leaks(tm)
+    }
+
     fn parent_chain_leaks(&self, tm: TmplId) -> bool {
         if self.m.tmpls[tm as usize].native_parent.is_some() || self.parent_pending(tm) {
             return true;
@@ -183,7 +190,7 @@ impl<'a> Gen<'a> {
         let mut cur = self.m.tmpls[tm as usize].parent;
         while let Some(p) = cur {
             if self.ctor_phase.get(&p).is_some_and(|ph| ph.leaks)
-                || self.stand_in_cc.contains_key(&p)
+                || self.stand_in_cc.get(&p).is_some_and(|c| c.ctor_leaks)
                 || self.m.tmpls[p as usize].native_parent.is_some()
             {
                 return true;
@@ -233,6 +240,7 @@ impl<'a> Gen<'a> {
         if fn_ctor {
             self.note_fn_phase(fxi, crate::ctor_phase::analyze_fn(f));
         }
+        self.rooted_stores.extend(crate::rooted::stores(&f.body));
         let fx = Fx {
             module: mi,
             f: fxi,
@@ -455,6 +463,8 @@ impl<'a> Gen<'a> {
             ctor_phase_of,
             birth,
             ctor_fn: None,
+            rooted: false,
+            deep: false,
         });
         id
     }

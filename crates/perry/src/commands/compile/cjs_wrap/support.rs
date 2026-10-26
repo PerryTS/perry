@@ -26,22 +26,23 @@ use std::fmt::Write as _;
 pub(crate) const SPECIFIER: &str = "perry:cjs";
 
 /// The import every wrapped module carries first.
-pub(super) const SUPPORT_IMPORT: &str = "import { cache as __perry_cjs_cache, main as __perry_cjs_main, extensions as __perry_cjs_extensions, setPending as __perry_cjs_set_pending, takePending as __perry_cjs_take_pending, builtin as __perry_cjs_builtin, link as __perry_cjs_link, requireComputed as __perry_cjs_require_computed, requireError as __perry_cjs_require_error, reload as __perry_cjs_reload } from 'perry:cjs';";
+pub(super) const SUPPORT_IMPORT: &str = "import { cache as __perry_cjs_cache, main as __perry_cjs_main, extensions as __perry_cjs_extensions, setPending as __perry_cjs_set_pending, takePending as __perry_cjs_take_pending, link as __perry_cjs_link, requireComputed as __perry_cjs_require_computed, requireError as __perry_cjs_require_error, reload as __perry_cjs_reload } from 'perry:cjs';";
 
 /// The support module's source for a graph whose CommonJS modules are
 /// `paths` (canonical source paths, as the wrapper spells its cache key).
 /// `entry_is_cjs`: the program entry is one of them (`require.main` is its
 /// record; otherwise `undefined`, as for an ESM entry in Node).
-/// `builtin_used`: some wrapped module has a literal builtin `require` arm;
-/// otherwise `builtin` keeps no `createRequire` loader (and no native module
-/// dispatcher is linked for it).
-pub(crate) fn source(paths: &[String], entry_is_cjs: bool, builtin_used: bool) -> String {
+pub(crate) fn source(paths: &[String], entry_is_cjs: bool) -> String {
     let mut keys = String::new();
     for (i, p) in paths.iter().enumerate() {
         if i > 0 {
             keys.push_str(", ");
         }
-        let _ = write!(keys, "{}", serde_json::to_string(p).expect("path is JSON encodable"));
+        let _ = write!(
+            keys,
+            "{}",
+            serde_json::to_string(p).expect("path is JSON encodable")
+        );
     }
     let main = if entry_is_cjs {
         "{ exports: undefined, __perry_cjs_record: true, id: undefined, path: undefined, filename: undefined, loaded: false, children: undefined, parent: undefined, paths: undefined, require: undefined }"
@@ -52,13 +53,6 @@ pub(crate) fn source(paths: &[String], entry_is_cjs: bool, builtin_used: bool) -
     // `require.resolve` base, which builtins never use.
     let base_path = serde_json::to_string(paths.first().map_or("/", String::as_str))
         .expect("path is JSON encodable");
-    let builtin = if builtin_used {
-        format!(
-            "export function builtin(specifier) {{\n    if (base === undefined) base = __perry_cjs_support_create_require({base_path});\n    return base(specifier);\n}}"
-        )
-    } else {
-        "export function builtin(specifier) {\n    throw requireError('error', 'MODULE_NOT_FOUND', \"Cannot find module '\" + specifier + \"'\");\n}".to_string()
-    };
     format!(
         r#"import {{ createRequire as __perry_cjs_support_create_require }} from 'node:module';
 export const cache = __perry_declared_keys({keys});
@@ -80,7 +74,17 @@ export function takePending() {{
     return record;
 }}
 let base;
-{builtin}
+// A literal builtin `require` is a static native binding (#13296); only a
+// computed specifier reaches this loader, and only a program that is not
+// closed has one. A closed program links no `createRequire`.
+export function builtin(specifier) {{
+    if (__perry_cjs_open()) {{
+        if (base === undefined) base = __perry_cjs_support_create_require({base_path});
+        return base(specifier);
+    }} else {{
+        throw requireError('error', 'MODULE_NOT_FOUND', "Cannot find module '" + specifier + "'");
+    }}
+}}
 // A static edge whose module was evaluated and then deleted from the cache
 // re-runs it, as Node does: one program-wide loader, the path is absolute.
 let reloader;
@@ -172,17 +176,23 @@ mod tests {
     #[test]
     fn the_source_is_a_function_of_the_graph_only() {
         let paths = vec!["/p/a.js".to_string(), "/p/b.js".to_string()];
-        assert_eq!(source(&paths, true, true), source(&paths, true, true));
-        let s = source(&paths, true, true);
-        assert!(s.contains(r#"__perry_declared_keys("/p/a.js", "/p/b.js")"#), "{s}");
-        assert!(s.contains("export const main = { exports: undefined"), "{s}");
-        assert!(source(&paths, false, true).contains("export const main = undefined;"));
+        assert_eq!(source(&paths, true), source(&paths, true));
+        let s = source(&paths, true);
+        assert!(
+            s.contains(r#"__perry_declared_keys("/p/a.js", "/p/b.js")"#),
+            "{s}"
+        );
+        assert!(
+            s.contains("export const main = { exports: undefined"),
+            "{s}"
+        );
+        assert!(source(&paths, false).contains("export const main = undefined;"));
     }
 
     #[test]
     fn the_support_module_is_not_recognised_as_a_wrapped_module() {
         // `is_cjs_wrapped_module` keys on the wrapper's createRequire alias.
-        let s = source(&["/p/a.js".to_string()], false, true);
+        let s = source(&["/p/a.js".to_string()], false);
         assert!(!s.contains("__perry_cjs_create_require"));
         assert!(!s.contains("__perry_cjs_strict_require"));
     }

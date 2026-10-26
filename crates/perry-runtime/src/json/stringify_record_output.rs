@@ -6,6 +6,7 @@ use super::stringify_flat::{
     bounded_keys_are_dense, emit_piece, key_piece, scalar_piece, slot, Piece,
 };
 use super::*;
+use crate::codegen_abi::LayoutWord;
 use crate::string::{
     init_string_header, json_output_storage_alloc, string_storage_alloc,
     JSON_MALLOC_OUTPUT_THRESHOLD,
@@ -23,8 +24,8 @@ const ARRAY_BYTES: usize = std::mem::size_of::<crate::ArrayHeader>();
 
 #[derive(Clone, Copy)]
 struct KeyPrefixPlan {
-    shape: u32,
-    candidate: u32,
+    shape: LayoutWord,
+    candidate: LayoutWord,
     /// Address token for the last receiver that passed the complete prototype
     /// proof. Never dereferenced; movement turns it into a cache miss.
     receiver: usize,
@@ -38,8 +39,8 @@ struct KeyPrefixPlan {
 }
 
 const EMPTY_KEY_PREFIX_PLAN: KeyPrefixPlan = KeyPrefixPlan {
-    shape: 0,
-    candidate: 0,
+    shape: LayoutWord(0),
+    candidate: LayoutWord(0),
     receiver: 0,
     receiver_epoch: 0,
     fields: 0,
@@ -59,7 +60,7 @@ struct RepeatedOutput {
     epoch: u64,
     candidate_signature: u64,
     candidate_misses: u8,
-    shape: u32,
+    shape: LayoutWord,
     fields: u8,
     bytes: u16,
     units: u16,
@@ -75,7 +76,7 @@ const EMPTY_REPEATED_OUTPUT: RepeatedOutput = RepeatedOutput {
     epoch: 0,
     candidate_signature: 0,
     candidate_misses: 0,
-    shape: 0,
+    shape: LayoutWord(0),
     fields: 0,
     bytes: 0,
     units: 0,
@@ -216,7 +217,7 @@ unsafe fn emit_empty_object(obj: *const crate::ObjectHeader) -> Option<JSValue> 
         let cached = &mut *entry.get();
         cached.receiver = 0;
         cached.epoch = crate::object::prop_plan::prop_plan_semantic_epoch();
-        cached.shape = crate::object::shapes::object_shape_stamp(obj);
+        cached.shape = LayoutWord(crate::object::shapes::object_shape_stamp(obj).0);
         cached.fields = 0;
         cached.bytes = 2;
         cached.units = 2;
@@ -261,12 +262,13 @@ unsafe fn key_prefix_plan(
     fields: usize,
 ) -> Option<*mut KeyPrefixPlan> {
     let shape = crate::object::shapes::object_shape_stamp(obj);
-    if shape == 0 {
+    if shape == LayoutWord(0) {
         return None;
     }
     KEY_PREFIX_CACHE.with(|cache| {
         let plans = &mut *cache.get();
-        let cache_slot = (shape.wrapping_mul(0x9e37_79b9) as usize) & (KEY_PREFIX_CACHE_SLOTS - 1);
+        let cache_slot =
+            (shape.0.wrapping_mul(0x9e37_79b9) as usize) & (KEY_PREFIX_CACHE_SLOTS - 1);
         let cached = &mut plans[cache_slot];
         if cached.shape == shape {
             if cached.fields as usize == fields {
@@ -316,7 +318,7 @@ unsafe fn key_prefix_plan(
         })();
         let Some(plan) = built else {
             cached.shape = shape;
-            cached.candidate = 0;
+            cached.candidate = LayoutWord(0);
             cached.fields = 0;
             return None;
         };
@@ -570,7 +572,7 @@ unsafe fn emit_cached_record_memo(
     init_string_header(result, units, bytes, bytes, 0, 0);
     let value = input.with_const_ptr(|obj: *const crate::ObjectHeader| {
         let mut at = 0usize;
-        let mut signature = (*prefix).shape as u64 ^ fields as u64;
+        let mut signature = (*prefix).shape.0 as u64 ^ fields as u64;
         for i in 0..fields {
             let start = (*prefix).offsets[i] as usize;
             let end = (*prefix).offsets[i + 1] as usize;
@@ -657,7 +659,7 @@ unsafe fn emit_cached_record_memo(
                 }
                 super::stringify_copy::copy_bytes(output, cached.data.as_mut_ptr(), bytes as usize);
                 cached.epoch = crate::object::prop_plan::prop_plan_semantic_epoch();
-                cached.shape = (*prefix).shape;
+                cached.shape = LayoutWord(((*prefix).shape).0);
                 cached.fields = fields as u8;
                 cached.bytes = bytes as u16;
                 cached.units = units as u16;

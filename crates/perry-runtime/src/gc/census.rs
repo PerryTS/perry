@@ -41,6 +41,7 @@
 #![cfg_attr(not(perry_gc_instruments), allow(dead_code, unused_imports))]
 
 use super::*;
+use crate::codegen_abi::LayoutWord;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 
@@ -398,7 +399,7 @@ struct Census {
     /// ShapeId stamp of every live shaped object (duplicates included; sorted
     /// and deduplicated once the walk is over). Feeds the shape table's
     /// "carried by a live object" rows (#9706).
-    live_shape_ids: Vec<u32>,
+    live_shape_ids: Vec<LayoutWord>,
     /// Charter step 5, stage 0 (`census_field_repr`).
     field_repr: super::census_field_repr::FieldReprCensus,
 }

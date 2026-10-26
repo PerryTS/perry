@@ -111,6 +111,13 @@ fn facts_of(g: &Gen, n: u32) -> BindingFacts {
         if m.beside_values(t) {
             continue;
         }
+        // Any other marker is another unit's argument whole (DECISIONS
+        // 119): any value, any primitive.
+        if m.bare_marker(t) {
+            out.other = true;
+            out.prims |= crate::model::prim::ALL;
+            continue;
+        }
         match &m.toks[t as usize] {
             TokKind::Obj(tm, _) => match m.tmpls[*tm as usize].kind {
                 TmplKind::Class { class_id, .. } => out.class_ids.push(class_id),

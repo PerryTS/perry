@@ -3,6 +3,7 @@
 //! to keep it under the 2,000-line cap (#10750); pure relocation.
 
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 /// #6759 Phase B: a shaped object's recorded `[[Prototype]]` lives in its
 /// per-object `ObjectMeta` record. A copied minor moves the owner, the meta
@@ -376,7 +377,7 @@ fn test_shape_record_migrates_on_owned_grow() {
     crate::object::shapes::test_seed_shape_entry(old_addr);
     let id = crate::object::shapes::test_shape_id_for_keys(old_addr)
         .expect("seeded entry must have an id");
-    assert!(id != 0, "shape ids are 1-based");
+    assert!(id != LayoutWord(0), "shape ids are 1-based");
 
     crate::object::shapes::shape_keys_grown(old_addr, new_addr as *const crate::array::ArrayHeader);
 
@@ -489,8 +490,8 @@ fn test_shared_live_shape_descriptor_survives_and_rekeys_once() {
     let (a, _) = unsafe { alloc_nursery_test_object(0) };
     let (b, _) = unsafe { alloc_nursery_test_object(0) };
     unsafe {
-        (*a).parent_class_id = id;
-        (*b).parent_class_id = id;
+        (*a).parent_class_id = id.0;
+        (*b).parent_class_id = id.0;
     }
     assert_eq!(
         crate::gc::test_gc_rewrite_slot_addresses(a as usize),
@@ -514,8 +515,8 @@ fn test_shared_live_shape_descriptor_survives_and_rekeys_once() {
     let descriptor = crate::object::shapes::test_descriptor_for_retained_word(id)
         .expect("live shared descriptor disappeared during evacuation");
     unsafe {
-        assert_eq!((*a_after).shape_word(), id);
-        assert_eq!((*b_after).shape_word(), id);
+        assert_eq!(LayoutWord((*a_after).shape_word()), id);
+        assert_eq!(LayoutWord((*b_after).shape_word()), id);
         assert_eq!(
             crate::object::object_keys(a_after).arr(),
             crate::object::object_keys(b_after).arr()
@@ -576,7 +577,7 @@ fn test_forwarded_keys_capacity_cannot_disturb_the_descriptor_rewrite() {
     }
     let (owner, _) = unsafe { alloc_nursery_test_object(0) };
     unsafe {
-        (*owner).parent_class_id = id;
+        (*owner).parent_class_id = id.0;
     }
 
     let old_header = unsafe { header_from_user_ptr(old_keys.cast()) } as *mut GcHeader;
@@ -645,7 +646,7 @@ fn test_deferred_shape_slot_enumeration_survives_descriptor_table_reallocation()
         .expect("shape range unexpectedly exhausted");
     let (owner, _) = unsafe { alloc_nursery_test_object(0) };
     unsafe {
-        (*owner).parent_class_id = id;
+        (*owner).parent_class_id = id.0;
     }
     js_shadow_slot_set(0, ptr_bits(owner as usize));
     let saved_slots = crate::gc::test_gc_rewrite_slot_addresses(owner as usize)

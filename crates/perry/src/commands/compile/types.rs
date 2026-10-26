@@ -1083,9 +1083,6 @@ pub struct CompilationContext {
     /// The program's CommonJS closed-world fact (`cjs_link`), decided once
     /// every module is collected; `false` until then.
     pub cjs_closed: bool,
-    /// Some wrapped module calls the support module's `builtin` (a literal
-    /// builtin `require`): only then does it keep a `createRequire` loader.
-    pub cjs_support_builtin_used: bool,
     /// Extra perry-stdlib Cargo features the codegen-side FFI registry
     /// (`perry-codegen::ext_registry`) recorded during compilation.
     /// Populated by the drain right before `build_optimized_libs` from
@@ -1448,7 +1445,6 @@ impl CompilationContext {
             cjs_support_path: None,
             cjs_support_keys: Vec::new(),
             cjs_closed: false,
-            cjs_support_builtin_used: false,
             extra_stdlib_features: BTreeSet::new(),
             // #5263: default-allow dynamic stdlib member access. Dynamic
             // `fs[name]` over the *linked* namespace can only select among

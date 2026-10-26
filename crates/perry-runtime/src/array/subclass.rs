@@ -30,6 +30,7 @@ pub(super) mod packed_index;
 pub(super) use packed_index::js_packed_arraylike_index_get;
 // The loop-guard entry points are exported C symbols; only the unit tests
 // reach them through Rust paths.
+use crate::codegen_abi::LayoutWord;
 #[cfg(test)]
 pub(crate) use loop_guard::{js_packed_arraylike_loop_guard, js_packed_ecs_u32_loop_guard};
 
@@ -413,7 +414,7 @@ pub(crate) unsafe fn clear_packed_subclass_numeric_proof(obj: *mut ObjectHeader)
     };
     // Charter step 3: the proof is a shape fact, so retiring it is a
     // transition back to the receiver's unproven twin (allocation-free).
-    crate::object::shapes::store_kind::restore_unproven_twin(obj, unproven);
+    crate::object::shapes::store_kind::restore_unproven_twin(obj, LayoutWord(unproven));
     true
 }
 
@@ -433,7 +434,7 @@ pub(crate) unsafe fn drop_packed_subclass_numeric_proof_record(
     let header = &*crate::gc::header_from_trusted_user_ptr(obj as *const u8);
     if header.obj_type != crate::gc::GC_TYPE_OBJECT
         || crate::object::shapes::shape_object_kind_of_receiver(
-            crate::object::shapes::object_shape_stamp(obj),
+            (crate::object::shapes::object_shape_stamp(obj)).0,
         ) != Some(crate::object::shapes::ShapeObjectKind::OrdinaryNumericProof)
     {
         return None;
@@ -467,7 +468,7 @@ pub(crate) unsafe fn note_packed_subclass_spill_store(
 #[inline]
 unsafe fn subclass_numeric_prefix_is_proven(
     obj: *const ObjectHeader,
-    shape_id: u32,
+    shape_id: LayoutWord,
     bound: u32,
     require_u32: bool,
 ) -> bool {
@@ -498,7 +499,7 @@ unsafe fn subclass_numeric_prefix_is_proven(
 #[inline]
 unsafe fn publish_subclass_numeric_prefix(
     obj: *const ObjectHeader,
-    shape_id: u32,
+    shape_id: LayoutWord,
     bound: u32,
     exact_u32: bool,
 ) -> bool {
@@ -517,7 +518,7 @@ unsafe fn publish_subclass_numeric_prefix(
             0
         }
         | (u64::from(bound) << PACKED_NUMERIC_META_BOUND_SHIFT)
-        | (u64::from(shape_id) << 32);
+        | (u64::from(shape_id.0) << 32);
     // Charter step 3: publishing the proof is a shape transition to the
     // proof twin, which is the sole authority.
     match crate::object::shapes::store_kind::stamp_numeric_proof_twin(obj as *mut ObjectHeader) {
@@ -550,7 +551,7 @@ unsafe fn ensure_subclass_numeric_prefix(
         return true;
     }
     let shape_id = (*obj).shape_word();
-    if subclass_numeric_prefix_is_proven(obj, shape_id, bound, require_u32) {
+    if subclass_numeric_prefix_is_proven(obj, LayoutWord(shape_id), bound, require_u32) {
         return true;
     }
     for index in 0..bound {
@@ -621,7 +622,7 @@ unsafe fn ensure_subclass_numeric_prefix(
     // back to its unproven twin (charter step 3), so `shape_id` may name the
     // proof shape it no longer carries.
     let _ = shape_id;
-    publish_subclass_numeric_prefix(obj, (*obj).shape_word(), bound, require_u32)
+    publish_subclass_numeric_prefix(obj, LayoutWord((*obj).shape_word()), bound, require_u32)
 }
 
 #[inline]
@@ -1038,7 +1039,7 @@ fn array_subclass_fast_push_one_validated(
     let predecessor_shape_id = unsafe { (*obj).shape_word() };
     let transition = crate::object::array_tail_transition::lookup_forward_for_owner(
         obj,
-        predecessor_shape_id,
+        LayoutWord(predecessor_shape_id),
         length,
     )?;
     if length != 0 && transition.slot != layout.element_base.checked_add(length)? {
@@ -1061,7 +1062,7 @@ fn array_subclass_fast_push_one_validated(
     let installed = unsafe {
         crate::object::shapes::install_cache_carried_object_shape_version(
             obj,
-            predecessor_shape_id,
+            LayoutWord(predecessor_shape_id),
             transition.successor_shape_id,
             transition.successor_keys as *mut ArrayHeader,
             transition.slot.saturating_add(1),
@@ -1167,8 +1168,10 @@ fn array_subclass_fast_pop_validated(receiver: ValidatedObjectReceiver) -> Optio
         crate::object::prop_plan::prop_plan_epoch_bump();
     }
     let successor_shape_id = unsafe { (*obj).shape_word() };
-    let transition =
-        crate::object::array_tail_transition::lookup_reverse_for_owner(obj, successor_shape_id)?;
+    let transition = crate::object::array_tail_transition::lookup_reverse_for_owner(
+        obj,
+        LayoutWord(successor_shape_id),
+    )?;
     if transition.array_index != index
         || transition.slot != layout.element_base.checked_add(index)?
     {
@@ -1194,7 +1197,7 @@ fn array_subclass_fast_pop_validated(receiver: ValidatedObjectReceiver) -> Optio
     let installed = unsafe {
         crate::object::shapes::install_cache_carried_object_shape_version(
             obj,
-            successor_shape_id,
+            LayoutWord(successor_shape_id),
             transition.predecessor_shape_id,
             transition.predecessor_keys as *mut ArrayHeader,
             transition.slot,

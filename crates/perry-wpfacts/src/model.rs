@@ -318,9 +318,22 @@ pub struct FuncInfo {
     /// (DECISIONS 49). Its body is not walked: `run_ctor_chain` runs the
     /// parent with the `new` call itself.
     pub forwards_super: bool,
+    /// A class constructor's hidden trailing parameters, one per value the
+    /// class captures (`__perry_cap_*`, perry-hir `synthesize_class_captures`):
+    /// the class environment slot each one is filled from. A construction
+    /// from another module passes the class's own snapshot there, whatever
+    /// arguments it was given (`construct_registered_class_resolved` fills
+    /// only the user slots from them), so another unit never chooses these
+    /// values (DECISIONS 117).
+    pub captures: Vec<NodeId>,
     /// The function whose body creates this closure (`NO_FN` for
     /// declarations, methods and builtins).
     pub parent: FnIdx,
+    /// Another unit's function seen through a contract that lets any unit
+    /// use it (a stand-in's method, a function contract's stand-in; not a
+    /// closed one, whose users its owner knows): published onward, it
+    /// leaves with that contract (DECISIONS 120, `Model::escape`).
+    pub forwarded: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -346,6 +359,18 @@ pub enum RecvEffect {
     Store(Key, NodeId, SiteId),
     Hard(Hard, u32),
     Escape(u32),
+}
+
+/// What another unit's method does to its receiver (DECISIONS 57): its use
+/// and reach marks (`MARK_*`) and the keys it stores (`None`: any key).
+#[derive(Clone, Debug)]
+pub struct ThisContract {
+    pub uses: u8,
+    pub reach: u8,
+    pub stores: Option<Vec<String>>,
+    /// What the method stores under each key of `stores`, in order
+    /// (DECISIONS 179): the values its flow describes, ⊤ where none does.
+    pub values: Vec<NodeId>,
 }
 
 /// A property key: a named atom, or any key (computed).
@@ -504,6 +529,26 @@ pub const WK_HAS_INSTANCE: &str = "@@__perry_wk_hasInstance";
 /// Complex constraints, attached to the node whose new tokens trigger them.
 #[derive(Clone, Copy, Debug)]
 pub enum Cons {
+    /// The node is the value a contract function `f` stores under `key`
+    /// into its parameter `dst`'s argument (`reach`: into what it reaches)
+    /// (DECISIONS 118; `dst` `u32::MAX`: into what its receiver reaches,
+    /// and `Key::Any` a computed key, DECISIONS 149): a marker of one of
+    /// `f`'s parameters is that argument, which the reader stores; any
+    /// other value escapes.
+    StoreOut {
+        f: FnIdx,
+        dst: u32,
+        reach: bool,
+        /// A keyed reach (design §18.4): what the argument holds under it.
+        via: Option<Atom>,
+        key: Key,
+        reason: u32,
+        /// The receiver's reach marker stored into (`dst` `u32::MAX`).
+        at: Tok,
+        /// What the store met: `at`, or (a receiver-rooted store, DECISIONS
+        /// 149b) another function's marker or ⊤.
+        to: Tok,
+    },
     /// dst ⊇ read(t, key) for every t in the node.
     Load { key: Key, dst: NodeId },
     /// Values of own properties only (enumerability over-approximated).
@@ -539,18 +584,42 @@ pub enum Cons {
     /// DECISIONS 109): an instance of another unit's contract (a stand-in)
     /// goes to the defining unit's constructor through the argument
     /// contract, which describes it there as the same stand-in, so that
-    /// unit's census covers what the constructor does with it; any other
-    /// token escapes, with the reason.
-    HandOver { reason: u32 },
+    /// unit's census covers what the constructor does with it; an array
+    /// leaves by its element cell (DECISIONS 94, 149e: the parameter is
+    /// checked as a published value, `Gen::check_value`, and the argument
+    /// contract names it); any other token escapes, with the reason.
+    /// DECISIONS 152: a parameter marker of this unit's function (its
+    /// callers' value) is handed over by that function's contract
+    /// (`FnContract::param_handovers`): the callers' units pass what they
+    /// hold to argument `arg` of the constructor `ctor` themselves.
+    HandOver { reason: u32, ctor: Tok, arg: u32 },
+    /// DECISIONS 149d: what a receiver-rooted store of function `f` puts
+    /// into an object of this unit: every value but `f`'s parameter and
+    /// argument markers, which are `f`'s receiver flow (`Cons::StoreOut`).
+    OwnOnly { f: FnIdx, dst: NodeId },
     /// The `this` of a contract stand-in of another unit's class `tmpl`
     /// (design §11.2): its instances are inside the contract; any other
     /// receiver escapes (that unit runs the method on it unseen).
     /// `this` of another unit's method: only that class's instances (and,
     /// for a static method, its class object); any other receiver escapes.
+    /// `this` (`Model::this_contracts`, `u32::MAX`: none) is the method's
+    /// receiver contract (DECISIONS 57): a token of a subclass of `tmpl` is
+    /// admitted with the published effects on it.
     ContractThis {
         tmpl: TmplId,
         reason: u32,
         statics: bool,
+        this: u32,
+    },
+    /// `this` of the override token of (`tmpl`, `key`) (DECISIONS 97): a
+    /// method's receiver marker records the call (`Model::this_calls`);
+    /// `tmpl`'s receiver token passes (it stands for the class's own
+    /// instances, which no subclass key reaches); any other receiver
+    /// escapes with `reason`, as for an unknown callee.
+    OverrideThis {
+        tmpl: TmplId,
+        key: Atom,
+        reason: u32,
     },
     /// Once anything (a token or a primitive) reaches the node, `dst` holds
     /// ⊤ and everything `from` holds: the result of a call that exists only
@@ -747,7 +816,10 @@ impl Cons {
             Cons::Chain { .. } => "chain",
             Cons::TopSink { .. } => "top",
             Cons::HandOver { .. } => "handover",
+            Cons::OwnOnly { .. } => "ownonly",
+            Cons::StoreOut { .. } => "storeout",
             Cons::ContractThis { .. } => "contractthis",
+            Cons::OverrideThis { .. } => "overridethis",
             Cons::TopIfAny { .. } => "topifany",
             Cons::Hard { .. } => "hard",
             Cons::AddsKeys => "addskeys",
@@ -793,6 +865,25 @@ impl Cons {
             Cons::VisitStop { .. } => "visitstop",
         }
     }
+}
+
+/// DECISIONS 118: (function, parameter, into its reach, via, key).
+pub type StoreFlowKey = (FnIdx, u32, bool, Option<Atom>, Key);
+
+/// DECISIONS 118: one stored key of a contract function's parameter.
+#[derive(Clone, Debug, Default)]
+pub struct StoreFlow {
+    pub from: Vec<u32>,
+    /// DECISIONS 136: what parameter `j`'s argument holds under `via`
+    /// (its keyed reach), or reaches (`None`), stored here.
+    pub from_reach: Vec<(u32, Option<Atom>)>,
+    pub top: bool,
+    pub prim: u16,
+    /// DECISIONS 176: this unit's values stored here (its own instances,
+    /// other units' stand-ins), handed to the caller's unit as a result is
+    /// (`Gen::publish_result`); `vals_top` once no contract describes them.
+    pub vals: Option<NodeId>,
+    pub vals_top: bool,
 }
 
 #[derive(Default, Clone, Debug)]
@@ -856,6 +947,12 @@ pub struct StoreSite {
     /// `this.f = v` in this function's body before `this` leaks: a
     /// construction-phase writer for `new f()` instances.
     pub ctor_fn: Option<FnIdx>,
+    /// DECISIONS 149b: the object stored into is reached from `func`'s
+    /// receiver by a chain of loads (`rooted.rs`).
+    pub rooted: bool,
+    /// DECISIONS 149d: rooted, and the object is a load (not `this`): it
+    /// holds a reach marker of the receiver.
+    pub deep: bool,
 }
 
 #[derive(Default, Clone, Debug)]
@@ -1009,6 +1106,11 @@ pub struct Model {
     pub thrown: NodeId,
     /// E14: interpreted code can run (and patch `Object.prototype`).
     pub dyn_eval: Option<String>,
+    /// No interpreted code can run in the program (no dynamic code, no
+    /// dynamic code reach, no direct eval scope): what this unit publishes
+    /// reaches compiled units only, which use another unit's stand-in
+    /// through its contract (DECISIONS 120, `Model::escape`).
+    pub interp_free: bool,
     pub bound_index: FxHashMap<(CallId, Tok), u32>,
     /// Calls the solver makes through a bound value's target (`call_bound`,
     /// `construct`): a bound target reached by one of them goes through
@@ -1101,6 +1203,11 @@ pub struct Model {
     /// published under each constant path (`Gen::cjs_path_node`).
     pub cjs_union: NodeId,
     pub cjs_unknown: NodeId,
+    /// DECISIONS 171: cell nodes nothing in the unit consumed when it was
+    /// seeded (`Gen::seed_cell`); the first successor or constraint of one
+    /// moves it to `cell_woken`, and the unit seeds it then.
+    pub cell_watch: crate::pts::FxHashSet<NodeId>,
+    pub cell_woken: Vec<NodeId>,
     pub cjs_paths: FxHashMap<Atom, NodeId>,
     /// `require.cache` / `require.extensions` of [`BuiltinNs::Require`]:
     /// the runtime's own objects, opaque, when no CommonJS support module
@@ -1119,6 +1226,23 @@ pub struct Model {
     /// dynamic code may hand it out (`Function('return this')()`). Until
     /// then a store into ⊤ cannot write a global.
     pub global_in_top: bool,
+    /// Per unit (design §17.16 (b)): the global object's program-owned
+    /// fields are cells (`global:<key>`), made at the unit boundary. A field
+    /// first named later holds ⊤ and sets `global_late`: the unit then
+    /// publishes `global:*` unknown, as for a global unmodeled code writes.
+    pub global_cells: bool,
+    pub global_late: bool,
+    /// DECISIONS 94: arrays published through an element cell
+    /// (`arr:<name>`, `Gen::arr_leaves`) and other units' arrays this unit
+    /// holds, each with the seed of cell `arr:<name>#named`: a named field
+    /// of one holds what that seed holds (⊤ once another unit stored a
+    /// named key) and what is stored there escapes (no contract describes
+    /// it). `arr_named`: the ones this unit stored a named key into.
+    pub cell_arrs: FxHashMap<Tok, NodeId>,
+    pub arr_named: crate::pts::FxHashSet<Tok>,
+    /// What was stored under a named key into an array, per array (in unit
+    /// mode; sunk if the array turns out to be shared, `Gen::arr_leaves`).
+    pub arr_named_srcs: FxHashMap<Tok, Vec<NodeId>>,
     /// Targets of a possible [[Prototype]] write (TOP included).
     pub super_relink: crate::pts::FxHashSet<Tok>,
     /// Source constructor of a type-specialized instance layout (compiler data).
@@ -1145,8 +1269,32 @@ pub struct Model {
     pub label_work: FxHashMap<&'static str, (u64, u64, u64)>,
     pub fn_inst: FxHashMap<FnIdx, TmplId>,
     /// Per-unit contracts (design §11.2): the methods of a published class
-    /// run on its receiver token (`Model::publish_class`).
-    pub published_this: FxHashMap<FnIdx, Tok>,
+    /// run on its receiver token (`Model::publish_class`), one per published
+    /// class whose chain inside the unit holds the method.
+    pub published_this: FxHashMap<FnIdx, Vec<Tok>>,
+    /// A published class's receiver token -> its class.
+    pub recv_class: FxHashMap<Tok, TmplId>,
+    /// Receiver tokens and receiver markers (DECISIONS 59): their prototype
+    /// chain (the published classes they stand for), and the method keys a
+    /// named load resolves through it instead of the own field.
+    pub virt_protos: FxHashMap<Tok, Vec<TmplId>>,
+    pub virt_by_class: FxHashMap<TmplId, Vec<Tok>>,
+    /// Named-load nodes on those tokens, and their keys per token.
+    pub virt_nodes: FxHashMap<(Tok, Atom), NodeId>,
+    pub virt_tok_keys: FxHashMap<Tok, Vec<Atom>>,
+    /// Keys an instance of a published class may hold as own keys (stored
+    /// by the class code), and classes whose instances may hold any key (a
+    /// computed store, a hard operation, an escape).
+    pub virt_revoked: crate::pts::FxHashSet<(TmplId, Atom)>,
+    pub virt_open: crate::pts::FxHashSet<TmplId>,
+    /// Census: keys a subclass of another unit defines, per published
+    /// class (`override <k> of <display>`; `*`: any key).
+    pub override_keys: FxHashMap<TmplId, Vec<Atom>>,
+    /// The callee node of a call of an override-only key on a receiver of
+    /// a published class (`Model::override_node`, DECISIONS 97): it holds
+    /// one function token per (class, key), the method another unit's
+    /// subclass defines under the key.
+    pub override_fns: FxHashMap<(TmplId, Atom), NodeId>,
     /// A published class's receiver token -> the instances other units
     /// hold: the one they construct, then each one this unit gives them
     /// through a contract (`Model::give_out`). What a method does to its
@@ -1157,6 +1305,78 @@ pub struct Model {
     pub recv_log: FxHashMap<Tok, Vec<RecvEffect>>,
     /// A published class -> its receiver token.
     pub contract_recv_of: FxHashMap<TmplId, Tok>,
+    /// DECISIONS 125: the call by which other units construct a published
+    /// class (`Model::publish_class`): its instance is the class's own
+    /// token `Obj(tm, NO_CTX)`, the one its receiver token and the
+    /// published receivers (DECISIONS 107) stand for (`Model::site_tok`).
+    pub contract_new: crate::pts::FxHashSet<CallId>,
+    /// DECISIONS 116: published classes no other unit names (given out
+    /// through a contract result or value): their methods run on the
+    /// instances given out only.
+    pub sealed: crate::pts::FxHashSet<TmplId>,
+    /// The `this` nodes of the methods that run on the instances given out
+    /// (`Model::escape_this`: a sealed class's methods, DECISIONS 116, and
+    /// the methods run on published receivers, DECISIONS 125), which every
+    /// later `give_out` reaches.
+    pub given_this: FxHashMap<FnIdx, Vec<NodeId>>,
+    /// The receiver contracts of other units' methods this unit calls
+    /// (`Cons::ContractThis`'s `this`, DECISIONS 57).
+    pub this_contracts: Vec<ThisContract>,
+    /// The keys a published method stores into its receiver marker
+    /// (DECISIONS 57); in `this_open` when a key is computed.
+    pub this_stores: FxHashMap<FnIdx, Vec<Atom>>,
+    /// The override-only keys a published method calls on its receiver
+    /// (DECISIONS 97): only another unit's subclass defines them, so the
+    /// readers run the call (`FnContract::this_calls`).
+    pub this_calls: FxHashMap<FnIdx, Vec<Atom>>,
+    pub this_open: crate::pts::FxHashSet<FnIdx>,
+    /// The same for a contract function's parameter (DECISIONS 84): the
+    /// keys it stores into the argument, by (function, parameter index).
+    pub param_stores: FxHashMap<(FnIdx, u32), Vec<Atom>>,
+    pub param_open: crate::pts::FxHashSet<(FnIdx, u32)>,
+    /// What a contract function stores under a named key into its argument
+    /// or into what that reaches (DECISIONS 118), under any key into what
+    /// an argument or its receiver reaches (DECISIONS 149), by (function,
+    /// parameter, into its reach, key): the parameters whose arguments are
+    /// stored, and whether another value (⊤ to the reader) or primitives
+    /// are.
+    pub store_flows: FxHashMap<StoreFlowKey, StoreFlow>,
+    pub store_out_done: crate::pts::FxHashSet<(NodeId, FnIdx, u32, bool, Option<Atom>, Key, Tok)>,
+    /// DECISIONS 149d: per (stored node, function) the node of its values
+    /// that are not the function's markers (`Cons::OwnOnly`).
+    pub rooted_own: FxHashMap<(NodeId, FnIdx), NodeId>,
+    /// DECISIONS 118, argument markers: the named-key stores into one (each
+    /// replayed on every marker that links in later), the `StoreOut`s it is
+    /// the source of (function, parameter, reason: a member other than that
+    /// parameter's marker escapes), the parameter node it is the marker of,
+    /// and the links not replayed yet (the solver loop replays them).
+    pub arg_stores: FxHashMap<Tok, Vec<(Key, NodeId, SiteId)>>,
+    pub arg_store_done: crate::pts::FxHashSet<(Tok, Key, NodeId)>,
+    pub arg_src_watch: FxHashMap<Tok, Vec<(FnIdx, u32, u32)>>,
+    /// DECISIONS 152: the markers handed to a closed class's constructor
+    /// (marker, constructor token, argument), published per parameter by
+    /// the function the marker is of; per argument marker the reasons a
+    /// member that is no parameter marker escapes with, as members link in.
+    pub handed: crate::pts::FxHashSet<(Tok, Tok, u32)>,
+    pub handover_watch: FxHashMap<Tok, Vec<u32>>,
+    /// DECISIONS 136: a store flow whose stored value is (what) an argument
+    /// marker (reaches): (stored marker, flow, reason) per argument marker
+    /// whose members it stands for, replayed as members link in; the
+    /// receiver reach marker stored into when the store met it
+    /// (DECISIONS 151).
+    pub arg_src_flows: FxHashMap<Tok, Vec<(Tok, StoreFlowKey, u32, Option<Tok>)>>,
+    /// `arg_src_flows` entries by (argument marker, entry): each once.
+    pub arg_src_flow_done: crate::pts::FxHashSet<(Tok, Tok, StoreFlowKey, u32, Option<Tok>)>,
+    /// An argument marker's reach marker -> the argument marker.
+    pub arg_reach_base: FxHashMap<Tok, Tok>,
+    pub arg_marker_node: FxHashMap<Tok, NodeId>,
+    /// The function and parameter index of each parameter node: the
+    /// function's own and each summary instance's (a method run through an
+    /// instance holds its argument marker on the instance's node).
+    pub param_at: FxHashMap<NodeId, (FnIdx, u32)>,
+    pub marker_links: Vec<(Tok, Tok)>,
+    /// Published classes whose constructor is a contract (DECISIONS 57).
+    pub ctor_published: crate::pts::FxHashSet<TmplId>,
     /// Another unit's templates this unit sees through a contract, with the
     /// facts their defining unit published (design §11.2).
     pub foreign: FxHashMap<TmplId, crate::TemplateFacts>,
@@ -1173,6 +1393,10 @@ pub struct Model {
     /// Closed functions (decision 13): per parameter the node holding what
     /// the other units' calls pass (`Gen::closed_params`), instead of ⊤.
     pub closed_params: FxHashMap<FnIdx, Vec<NodeId>>,
+    /// DECISIONS 194: the closed functions another unit's code calls (an
+    /// argument contract names them): only their parameters carry store
+    /// flows across the unit edge.
+    pub closed_called_out: crate::pts::FxHashSet<FnIdx>,
     /// Per closed function: which parameters every caller passes a
     /// described value (no unknown one) (decision 17).
     pub closed_described: FxHashMap<FnIdx, Vec<bool>>,
@@ -1192,8 +1416,42 @@ pub struct Model {
     /// stand-ins (`escape_fn_params`). Any other escape is a real one
     /// (unknown code may call it): ⊤ parameters.
     pub closed_pub_reason: Option<u32>,
+    /// The reason of a publication to another unit (`unit_boundary`): a
+    /// published method's receiver is its contract's then (DECISIONS 85).
+    pub pub_reason: Option<u32>,
+    /// The function contracts the census broke (`fn:<name>`): published as
+    /// escapes, not contracts.
+    pub broken_fns: crate::pts::FxHashSet<String>,
+    /// The stand-in function of each `this_contracts` entry: a receiver
+    /// its contract does not admit is a use beyond it (DECISIONS 85).
+    pub this_contract_fns: Vec<Tok>,
+    /// DECISIONS 107: (`this_contracts` index, receiver) for every receiver
+    /// this unit runs another unit's method on.
+    pub this_admitted: Vec<(u32, Tok)>,
+    /// DECISIONS 107: a published method's receivers as the units running
+    /// it published them (`Gen::published_receivers`).
+    pub this_args: FxHashMap<FnIdx, NodeId>,
+    /// DECISIONS 165: the published methods no unit runs
+    /// (`Gen::published_args`): per parameter, its marker stands for no
+    /// value of another unit.
+    pub method_described: FxHashMap<FnIdx, Vec<bool>>,
+    /// DECISIONS 148: a published method some unit runs: per parameter the
+    /// node holding what the running units pass (`Gen::published_args`),
+    /// `NO_NODE` where some call passes an undescribed value.
+    pub method_params: FxHashMap<FnIdx, Vec<NodeId>>,
+    /// DECISIONS 165: the functions a call bound (`bind_args`), in any
+    /// context.
+    pub called: crate::pts::FxHashSet<FnIdx>,
+    /// DECISIONS 165: the stand-in methods of other units' classes with no
+    /// function contract (`Gen::stub_fn`): named as the method.
+    pub stub_methods: crate::pts::FxHashSet<FnIdx>,
     pub closed_pub: crate::pts::FxHashSet<Tok>,
     pub contract_rets: Vec<(FnIdx, NodeId)>,
+    /// The calls through a contract function's parameter marker
+    /// (function, parameter, method key, call): `p(..)` (no key, DECISIONS
+    /// 140) or `p.k(..)` (DECISIONS 144). Their arguments go to the
+    /// caller's unit, described as the result is.
+    pub marker_calls: Vec<(FnIdx, u32, Option<Atom>, CallId)>,
     /// A contract function's parameter markers: one object token per
     /// parameter standing for everything the caller passes (anything read
     /// from it is the marker again), and what the callee did with it
@@ -1212,6 +1470,19 @@ pub struct Model {
     pub keyed_reach: FxHashMap<Tok, Vec<(Atom, Tok)>>,
     /// An argument marker's keyed reach marker -> (the argument marker, key).
     pub keyed_parent: FxHashMap<Tok, (Tok, Atom)>,
+    /// DECISIONS 158: a parameter's keyed reach marker, and each step below
+    /// it -> (the marker it was read from, the key; `None`: a computed
+    /// key). A path marker stands for the values at its path in the
+    /// argument (the shape's path), not for everything read from them.
+    pub path_parent: FxHashMap<Tok, (Tok, Option<Atom>)>,
+    /// A path marker's step under a key: a marker of its own, or the
+    /// earlier marker on its path read under the same key (the fold).
+    pub path_step: FxHashMap<(Tok, Option<Atom>), Tok>,
+    /// The steps made below each path marker (not the folds).
+    pub path_steps: FxHashMap<Tok, Vec<Tok>>,
+    /// The keys a fold repeats at a path marker: the path goes on through
+    /// them any number of times there.
+    pub path_loops: FxHashMap<Tok, Vec<Option<Atom>>>,
     /// A parameter marker's uses under a named key that reach it through
     /// argument markers, settled after the solve (`settle_keyed_uses`):
     /// the contract publishes them.
@@ -1238,6 +1509,16 @@ pub struct Model {
     /// over the member graph as the readers ask (`marker_members`); the
     /// graph only grows while solving, so a solve starts it over.
     pub members_settled: std::cell::RefCell<FxHashMap<Tok, std::rc::Rc<[Tok]>>>,
+    /// DECISIONS 193: per argument marker, the readers it stands for: each
+    /// non-argument marker below it (`None`), or what one reaches under a
+    /// key (an argument marker's keyed reach below it, DECISIONS 121); kept
+    /// once each (`arg_reader_seen`). The argument markers a marker is a
+    /// member of (`arg_parents`; a keyed reach's base by key:
+    /// `arg_keyed_parents`) take the readers it gains.
+    pub arg_readers: FxHashMap<Tok, Vec<(Tok, Option<Atom>)>>,
+    pub arg_reader_seen: crate::pts::FxHashSet<(Tok, Tok, Option<Atom>)>,
+    pub arg_parents: FxHashMap<Tok, Vec<Tok>>,
+    pub arg_keyed_parents: FxHashMap<Tok, Vec<(Atom, Tok)>>,
     pub arg_linked: crate::pts::FxHashSet<(Tok, Tok)>,
     /// Argument markers, a bit per token.
     pub arg_bits: Vec<u64>,
@@ -1297,428 +1578,8 @@ pub const FN_RUN: u32 = 1 << 31;
 /// a stop check at the start prototype, unlike a receiver's own walk).
 pub const SUPER_BIT: Tok = 1 << 31;
 
-impl Model {
-    /// Record a write under `key` onto `t` that may reach
-    /// `%Function.prototype%`'s `bind`, `name` or `length`
-    /// ([`Model::fnproto_write`]). `key` `None`: an operation whose key the
-    /// model does not keep (a definition, a deletion).
-    pub fn note_fnproto_write(&mut self, t: Tok, key: Option<Key>, what: &str) {
-        if self.fnproto_write.is_some()
-            || !(t == TOP || matches!(self.toks[t as usize], TokKind::ObjectProto))
-        {
-            return;
-        }
-        let hits = match key {
-            None | Some(Key::Any) => true,
-            Some(Key::Named(a)) => matches!(
-                self.atoms[a as usize].as_str(),
-                "bind" | "name" | "length" | crate::STAR_KEY
-            ),
-        };
-        if hits {
-            let on = if t == TOP {
-                "a value from unmodeled code"
-            } else {
-                "a builtin prototype"
-            };
-            self.fnproto_write = Some(self.reason(&format!("{what} on {on}")));
-        }
-    }
-
-    /// The element key: an element read of an array-like (iteration, array
-    /// callbacks) sees its elements, not the builtin methods a computed key
-    /// could also name; on anything else it is a computed read (`Key::Any`).
-    pub fn elem_key(&mut self) -> Key {
-        Key::Named(self.atom(ELEM))
-    }
-
-    pub fn is_elem_key(&self, k: Key) -> bool {
-        matches!(k, Key::Named(a) if self.atoms[a as usize] == ELEM)
-    }
-
-    /// The iteration key: what iterating a value yields WITHOUT its
-    /// protocol (`Gen::iterate` models `[Symbol.iterator]().next().value`
-    /// beside it): an array-like's elements; a program object or function
-    /// yields nothing that way; a runtime object is a computed read.
-    pub fn iter_key(&mut self) -> Key {
-        Key::Named(self.atom(ITER_ELEM))
-    }
-
-    pub fn is_iter_key(&self, k: Key) -> bool {
-        matches!(k, Key::Named(a) if self.atoms[a as usize] == ITER_ELEM)
-    }
-
-    pub fn atom(&mut self, s: &str) -> Atom {
-        if let Some(&a) = self.atom_index.get(s) {
-            return a;
-        }
-        let a = self.atoms.len() as Atom;
-        self.atoms.push(s.to_string());
-        self.atom_index.insert(s.to_string(), a);
-        a
-    }
-
-    /// Record one relation line, tagged with the current phase.
-    #[inline]
-    pub fn rel(&mut self, line: impl FnOnce() -> String) {
-        if let Some(r) = self.relations.as_mut() {
-            let mut l = String::with_capacity(48);
-            l.push(self.rel_phase as char);
-            l.push(' ');
-            l.push_str(&line());
-            r.push(l);
-        }
-    }
-
-    pub fn reason(&mut self, s: &str) -> u32 {
-        if let Some(&r) = self.reason_index.get(s) {
-            return r;
-        }
-        let r = self.reasons.len() as u32;
-        self.reasons.push(s.to_string());
-        self.reason_index.insert(s.to_string(), r);
-        r
-    }
-
-    pub fn constructor_origin(&self, mut class: TmplId) -> TmplId {
-        for _ in 0..self.constructor_origins.len() {
-            let Some(&origin) = self.constructor_origins.get(&class) else {
-                break;
-            };
-            class = origin;
-        }
-        class
-    }
-
-    pub fn tok(&mut self, k: TokKind) -> Tok {
-        if let Some(&t) = self.tok_index.get(&k) {
-            return t;
-        }
-        let t = self.toks.len() as Tok;
-        if let TokKind::Obj(tm, ctx) = k {
-            if ctx != NO_CTX {
-                self.site_toks.entry(tm).or_default().push(t);
-            }
-        }
-        self.toks.push(k.clone());
-        self.tok_index.insert(k, t);
-        t
-    }
-
-    /// The template token of `tm` and every birth-site token of it.
-    pub fn tmpl_toks(&self, tm: TmplId) -> Vec<Tok> {
-        let mut v: Vec<Tok> = self
-            .tok_index
-            .get(&TokKind::Obj(tm, NO_CTX))
-            .copied()
-            .into_iter()
-            .collect();
-        if let Some(s) = self.site_toks.get(&tm) {
-            v.extend_from_slice(s);
-        }
-        v
-    }
-
-    pub fn node(&mut self, name: impl FnOnce() -> String) -> NodeId {
-        self.node_named("other", name)
-    }
-
-    /// A node with a static label (diagnostics: the biggest points-to sets
-    /// are reported by label).
-    pub fn node_named(&mut self, label: &'static str, name: impl FnOnce() -> String) -> NodeId {
-        let id = self.nodes.len() as NodeId;
-        if self.max_nodes != 0 && self.nodes.len() > self.max_nodes {
-            // Work bound: the program gets no facts (checked by the solver).
-            self.aborted = true;
-        }
-        self.nodes.push(Node::default());
-        self.node_fn.push(NO_FN);
-        self.labels.push(label);
-        if self.relations.is_some() {
-            self.node_names.push(name());
-        }
-        id
-    }
-
-    /// `n` belongs to the body generation is walking.
-    pub fn own(&mut self, n: NodeId) {
-        self.node_fn[n as usize] = self.cur_fn;
-    }
-
-    pub fn node_l(&mut self, label: &'static str) -> NodeId {
-        self.node_named(label, || label.to_string())
-    }
-
-    /// A key as one whitespace-free relation token.
-    pub fn key_name(&self, k: Key) -> String {
-        match k {
-            Key::Named(a) => esc_key(&self.atoms[a as usize]),
-            Key::Any => "*".to_string(),
-        }
-    }
-
-    /// The function of a function token (`NO_FN` for any other token).
-    pub fn tok_fn(&self, t: Tok) -> FnIdx {
-        match self.toks[t as usize] {
-            TokKind::Func(f, _) => f,
-            _ => NO_FN,
-        }
-    }
-
-    pub fn tok_name(&self, t: Tok) -> String {
-        match &self.toks[t as usize] {
-            TokKind::Top => "TOP".into(),
-            TokKind::Obj(tm, _) => format!("obj:{}", self.tmpls[*tm as usize].display),
-            TokKind::Func(f, _) => format!("fn:{}", self.funcs[*f as usize].name),
-            TokKind::Bound(b) => format!("bound:{b}"),
-            TokKind::ClassObj(tm) => format!("class:{}", self.tmpls[*tm as usize].display),
-            TokKind::Proto(tm) => format!("proto:{}", self.tmpls[*tm as usize].display),
-            TokKind::ObjectProto => "Object.prototype".into(),
-            TokKind::Builtin(b) => format!("builtin:{b:?}"),
-            TokKind::BuiltinFn => "builtin-fn".into(),
-            TokKind::ModNs(m) => format!("ns:{m}"),
-            TokKind::NativeProto(n) => format!("native:{n}"),
-        }
-    }
-
-    /// What this solve can observe of the shared objects ([`SharedReads`]).
-    pub fn shared_reads(&self) -> SharedReads {
-        let mut r = SharedReads::default();
-        // An object's writes reach this solve through its field nodes, by
-        // key (its any-key field: every key); a builtin function value has
-        // none: through its property reads, any of which a write of any
-        // builtin function value turns opaque (`write_builtin_fns`).
-        for (k, &t) in &self.tok_index {
-            let read = match k {
-                TokKind::ObjectProto | TokKind::Builtin(_) | TokKind::NativeProto(_) => {
-                    if self.field_any.contains_key(&t) {
-                        Some(None)
-                    } else {
-                        self.field_keys.get(&t).map(|ks| {
-                            Some(ks.iter().map(|&a| self.atoms[a as usize].clone()).collect())
-                        })
-                    }
-                }
-                TokKind::BuiltinFn => (!self.bf_reads.is_empty()).then_some(None),
-                _ => None,
-            };
-            if let (Some(s), Some(keys)) = (self.shared_of(t), read) {
-                r.objects.insert(s, keys);
-            }
-        }
-        for &(_, a, _) in &self.native_missing {
-            r.keys.insert(self.atoms[a as usize].clone());
-        }
-        r
-    }
-
-    pub fn anon_post_site(&mut self, desc: &str) -> SiteId {
-        let id = self.stores.len() as SiteId;
-        self.stores.push(StoreSite {
-            module: u32::MAX,
-            func: u32::MAX,
-            desc: desc.to_string(),
-            ctor_phase_of: None,
-            birth: false,
-            ctor_fn: None,
-        });
-        id
-    }
-
-    pub fn anon_birth_site(&mut self, desc: &str) -> SiteId {
-        let id = self.stores.len() as SiteId;
-        self.stores.push(StoreSite {
-            module: u32::MAX,
-            func: u32::MAX,
-            desc: desc.to_string(),
-            ctor_phase_of: None,
-            birth: true,
-            ctor_fn: None,
-        });
-        id
-    }
-
-    /// Metadata for the independent checker: every token, template,
-    /// function, call site, store site and reason (tag `M`).
-    pub fn dump_meta(&mut self) {
-        if self.relations.is_none() {
-            return;
-        }
-        let mut out: Vec<String> = Vec::new();
-        for (i, a) in self.atoms.iter().enumerate() {
-            out.push(format!("M atom {i} {}", esc_key(a)));
-        }
-        for (i, r) in self.reasons.iter().enumerate() {
-            out.push(format!("M reason {i} {}", r.replace(['\n', '\r'], " ")));
-        }
-        for (i, k) in self.toks.iter().enumerate() {
-            let d = match k {
-                TokKind::Top => "top -".to_string(),
-                TokKind::Obj(t, NO_CTX) => format!("obj {t}"),
-                TokKind::Obj(t, c) => format!("obj {t}@{c}"),
-                TokKind::Func(f, NO_CTX) => format!("func {f}"),
-                TokKind::Func(f, c) => format!("func {f}@{c}"),
-                TokKind::Bound(b) => format!("bound {b}"),
-                TokKind::ClassObj(t) => format!("classobj {t}"),
-                TokKind::Proto(t) => format!("proto {t}"),
-                TokKind::ObjectProto => "objectproto -".into(),
-                TokKind::Builtin(b) => format!("builtin {b:?}"),
-                TokKind::BuiltinFn => "builtinfn -".into(),
-                TokKind::ModNs(m) => format!("modns {m}"),
-                TokKind::NativeProto(n) => format!("nativeproto {n}"),
-            };
-            out.push(format!("M tok {i} {d}"));
-        }
-        let join = |v: &[u32]| {
-            if v.is_empty() {
-                "-".to_string()
-            } else {
-                v.iter()
-                    .map(|x| x.to_string())
-                    .collect::<Vec<_>>()
-                    .join(",")
-            }
-        };
-        for (i, t) in self.tmpls.iter().enumerate() {
-            let kind = match &t.kind {
-                TmplKind::Class { class_id, .. } => format!("class {class_id}"),
-                TmplKind::Lit { .. } => "lit -".into(),
-                TmplKind::FnInst { func } => format!("fninst {func}"),
-                TmplKind::ObjCreate { .. } => "objcreate -".into(),
-                TmplKind::Arr { .. } => "arr -".into(),
-                TmplKind::BObj { what, .. } => format!("bobj {what}"),
-            };
-            out.push(format!(
-                "M tmpl {i} {kind} birth={} definite={} parent={} ctor={} native={} acc={} computed={} fieldinit={} pm={} display={}",
-                join(&t.birth_keys),
-                join(&t.definite),
-                t.parent.map(|p| p.to_string()).unwrap_or_else(|| "-".into()),
-                t.ctor.map(|p| p.to_string()).unwrap_or_else(|| "-".into()),
-                t.native_parent.as_ref().map(|(_, n)| n.clone()).unwrap_or_else(|| "-".into()),
-                join(&t.accessor_keys),
-                t.has_computed_members as u8,
-                t.field_init.map(|p| p.to_string()).unwrap_or_else(|| "-".into()),
-                join(&t.proto_members),
-                t.display.replace(' ', "\\s"),
-            ));
-        }
-        for (i, f) in self.funcs.iter().enumerate() {
-            out.push(format!(
-                "M func {i} tok={} this={} ret={} args={} arguments={} rest={} lexical={} ctor_of={} params={}",
-                f.token,
-                f.this,
-                f.ret,
-                f.args_all,
-                f.has_arguments as u8,
-                f.rest.map(|r| r.to_string()).unwrap_or_else(|| "-".into()),
-                f.lexical_this as u8,
-                f.ctor_of
-                    .map(|r| r.to_string())
-                    .unwrap_or_else(|| "-".into()),
-                join(&f.params),
-            ));
-        }
-        for (f, (b, d)) in &self.fn_birth {
-            out.push(format!(
-                "M fnbirth {f} birth={} definite={}",
-                join(b),
-                join(d)
-            ));
-        }
-        for (i, c) in self.calls.iter().enumerate() {
-            let this = match c.this {
-                ThisArg::Undef => "u".to_string(),
-                ThisArg::Node(n) => format!("n{n}"),
-                ThisArg::Tok(t) => format!("t{t}"),
-            };
-            out.push(format!(
-                "M call {i} this={this} ret={} args={} spread={}",
-                c.ret,
-                join(&c.args),
-                join(&c.spread)
-            ));
-        }
-        for (i, s) in self.stores.iter().enumerate() {
-            out.push(format!(
-                "M store {i} birth={} ctor_phase_of={} ctor_fn={}",
-                s.birth as u8,
-                s.ctor_phase_of
-                    .map(|r| r.to_string())
-                    .unwrap_or_else(|| "-".into()),
-                s.ctor_fn
-                    .map(|r| r.to_string())
-                    .unwrap_or_else(|| "-".into()),
-            ));
-        }
-        for (i, (t, th, a)) in self.bound.iter().enumerate() {
-            out.push(format!("M bound {i} target={t} this={th} args={}", join(a)));
-        }
-        out.push(format!(
-            "M special thrown={} toptok={}",
-            self.thrown, self.top_tok_node
-        ));
-        self.relations.as_mut().unwrap().extend(out);
-    }
-
-    /// The accessors installed by generation (class getters/setters …),
-    /// logged before solving as checker inputs.
-    pub fn log_seed_accessors(&mut self) {
-        if self.relations.is_none() {
-            return;
-        }
-        let mut v: Vec<String> = Vec::new();
-        for ((h, k), (g, s)) in &self.accessors {
-            for &t in g {
-                v.push(format!("G accseed {h} {k} {} 0", self.tok_fn(t)));
-            }
-            for &t in s {
-                v.push(format!("G accseed {h} {k} {} 1", self.tok_fn(t)));
-            }
-        }
-        v.sort();
-        self.relations.as_mut().unwrap().extend(v);
-    }
-
-    /// Diagnostics: follow the first-arrival chain of ⊤ back to its origin.
-    pub fn top_origin(&self, start: NodeId) -> String {
-        let mut n = start;
-        let mut seen: crate::pts::FxHashSet<NodeId> = Default::default();
-        let mut hops = 0usize;
-        loop {
-            if !seen.insert(n) {
-                return format!("(cycle after {hops} hops at {})", self.labels[n as usize]);
-            }
-            let Some(&(src, why)) = self.top_pred.get(&n) else {
-                return format!("(no record at {})", self.labels[n as usize]);
-            };
-            if why != u32::MAX {
-                return self.reasons[why as usize].replace(['\n', '\r'], " ");
-            }
-            if src == NO_NODE {
-                return format!("(seed at {})", self.labels[n as usize]);
-            }
-            if !self.top_pred.contains_key(&src) {
-                return format!("(rule on {} without TOP)", self.labels[src as usize]);
-            }
-            n = src;
-            hops += 1;
-        }
-    }
-
-    #[inline]
-    pub fn is_escaped(&self, t: Tok) -> bool {
-        self.esc_bits
-            .get((t >> 6) as usize)
-            .is_some_and(|w| w & (1 << (t & 63)) != 0)
-    }
-
-    pub fn tmpl_of(&self, t: Tok) -> Option<TmplId> {
-        match self.toks[t as usize] {
-            TokKind::Obj(tm, _) => Some(tm),
-            _ => None,
-        }
-    }
-}
+#[path = "model/operations.rs"]
+mod operations;
 
 /// A property key as one whitespace-free token for the dump and the
 /// relations (`scripts/wpfacts_recompute.py` `unesc` is the inverse):
@@ -1761,739 +1622,3 @@ pub(crate) fn marker_top_bit(bits: &[u64], t: Tok) -> bool {
 }
 pub const MARK_TOUCH: u8 = 2;
 pub const MARK_ESCAPE: u8 = 4;
-
-impl Model {
-    /// Record what the callee did to a parameter marker.
-    #[inline]
-    pub(crate) fn mark_use(&mut self, t: Tok, bits: u8) {
-        if self.param_marker.is_empty() {
-            return;
-        }
-        // An argument marker's use is a use of each marker it stands for.
-        if self.is_arg_marker(t) {
-            let mut st = vec![(t, bits)];
-            while let Some((x, b)) = st.pop() {
-                // Each marker the walk visits is solve work (113-CWL3).
-                self.work += 1;
-                if !self.is_arg_marker(x) {
-                    self.mark_use(x, b);
-                    continue;
-                }
-                // A use of what argument marker `p` reaches under one key is
-                // recorded on that key's reach marker `x`, the token the use
-                // names: a repeated use costs this step alone.
-                if let Some(&(p, _)) = self.keyed_parent.get(&x) {
-                    let u = self.marker_use.entry(x).or_default();
-                    let new = b & !*u;
-                    *u |= b;
-                    if new != 0 {
-                        self.keyed_use(p, new);
-                    }
-                    continue;
-                }
-                let u = self.marker_use.entry(x).or_default();
-                let new = b & !*u;
-                *u |= b;
-                if new != 0 {
-                    st.extend(self.arg_members[&x].iter().map(|&m| (m, new)));
-                }
-            }
-            return;
-        }
-        let Some(&(f, i)) = self.param_marker.get(&t) else {
-            return;
-        };
-        let u = self.marker_use.entry(t).or_default();
-        let new = bits & !*u;
-        *u |= bits;
-        // An escaped argument is sunk by the contract's consumer, which
-        // then reads none of its other uses, results or reached values
-        // (gen.rs `stand_in_fn_of`): the marker, and for the argument
-        // itself its reach marker, read as ⊤ from now on (DECISIONS 42).
-        // A closed function's described parameter keeps its uses: its
-        // contract drops the escape (decision 17), and its callers' values
-        // are beside the marker, not ⊤.
-        let described = self
-            .closed_described
-            .get(&f)
-            .and_then(|d| d.get(i as usize))
-            .is_some_and(|&d| d);
-        if new & MARK_ESCAPE != 0 && !described {
-            self.set_marker_top(t);
-            if let Some(&r) = self.marker_reach.get(&t) {
-                self.set_marker_top(r);
-            }
-        }
-    }
-
-    /// Parameter marker `t`'s reach marker for named key `a` (design
-    /// §18.4): the value of `p.a`, and everything read from it. Its uses
-    /// are published per key, so the caller applies them to its argument's
-    /// `a` alone, not to everything the argument reaches (its prototype,
-    /// its class).
-    pub(crate) fn keyed_reach_of(&mut self, t: Tok, a: Atom) -> Tok {
-        if let Some(&(_, r)) = self
-            .keyed_reach
-            .get(&t)
-            .and_then(|v| v.iter().find(|(k, _)| *k == a))
-        {
-            return r;
-        }
-        let TokKind::Obj(tm, _) = self.toks[t as usize] else {
-            unreachable!("a marker is an object token")
-        };
-        let display = format!(
-            "{}:reach.{}",
-            self.tmpls[tm as usize].display, self.atoms[a as usize]
-        );
-        let rm = self.marker_template(display);
-        let r = self.tok(TokKind::Obj(rm, NO_CTX));
-        // What an argument marker reaches is of its family (its field
-        // nodes are of the same run).
-        let home = self.fam_home(t);
-        if home != 0 {
-            self.set_fam(r, t, home);
-        }
-        self.reach_marker.insert(r);
-        self.keyed_reach.entry(t).or_default().push((a, r));
-        match self.param_marker.get(&t).copied() {
-            Some(fi) => {
-                self.param_marker.insert(r, fi);
-            }
-            // An argument marker's keyed reach: its uses are its members'
-            // uses under the same key (DECISIONS 44), recorded on this token
-            // and settled onto the parameter markers after the solve
-            // (`settle_keyed_uses`), not as a token per member.
-            None => {
-                let w = (r >> 6) as usize;
-                if self.arg_bits.len() <= w {
-                    self.arg_bits.resize(w + 1, 0);
-                }
-                self.arg_bits[w] |= 1 << (r & 63);
-                self.arg_members.insert(r, Vec::new());
-                self.keyed_parent.insert(r, (t, a));
-                if self.beside_markers.contains(&t) {
-                    self.beside_markers.insert(r);
-                }
-            }
-        }
-        // A marker before its field node: that node is of the marker.
-        let rany = self.field_any(r);
-        self.add_tok(rany, r);
-        r
-    }
-
-    /// A use `bits` of what argument marker `t` reaches through some named
-    /// key (design §18.4). Each marker it stands for takes the bits: a
-    /// reach marker as a use of itself (it reaches itself under every key),
-    /// an argument marker passes them on, once per bit. A parameter marker
-    /// takes nothing here: which keys it was used under is a fact for its
-    /// contract alone, settled after the solve (`settle_keyed_uses`). So a
-    /// key costs the use that names it, not a walk over every marker the
-    /// argument marker stands for.
-    pub(crate) fn keyed_use(&mut self, t: Tok, bits: u8) {
-        let mut st = vec![(t, bits)];
-        while let Some((x, b)) = st.pop() {
-            // Each marker the walk visits is solve work (113-CWL3).
-            self.work += 1;
-            if self.reach_marker.contains(&x) {
-                self.mark_use(x, b);
-                continue;
-            }
-            if !self.is_arg_marker(x) {
-                continue;
-            }
-            let u = self.keyed_any.entry(x).or_default();
-            let new = b & !*u;
-            *u |= b;
-            if new != 0 {
-                st.extend(self.arg_members[&x].iter().map(|&m| (m, new)));
-            }
-        }
-    }
-
-    /// The keyed uses of each parameter marker that some argument marker
-    /// stands for (design §18.4, DECISIONS 44): the keys every argument
-    /// marker standing for it, directly or through other argument markers,
-    /// was used under. Read once the model is final, in one pass over the
-    /// member graph: the markers of a cycle (a recursion passing its
-    /// argument on) stand for each other and have one set of uses, so its
-    /// strongly connected components are taken in topological order and
-    /// each key set moves along each edge between them once.
-    pub(crate) fn settle_keyed_uses(&mut self) {
-        self.keyed_uses.clear();
-        // The argument markers a keyed use walks through (`keyed_use`).
-        let inner = |s: &Self, x: Tok| s.is_arg_marker(x) && !s.reach_marker.contains(&x);
-        let mut ids: Vec<Tok> = self
-            .arg_members
-            .keys()
-            .copied()
-            .filter(|&x| inner(self, x))
-            .collect();
-        ids.sort_unstable();
-        let at: FxHashMap<Tok, usize> = ids.iter().enumerate().map(|(i, &t)| (t, i)).collect();
-        let n = ids.len();
-        let succ: Vec<Vec<usize>> = ids
-            .iter()
-            .map(|x| {
-                self.arg_members[x]
-                    .iter()
-                    .filter_map(|m| at.get(m).copied())
-                    .collect()
-            })
-            .collect();
-        // Tarjan, iterative: a component gets its number after every
-        // component it reaches, so descending numbers are topological.
-        const NONE: usize = usize::MAX;
-        let (mut index, mut low, mut comp) = (vec![NONE; n], vec![0; n], vec![NONE; n]);
-        let mut on = vec![false; n];
-        let (mut stack, mut next, mut ncomp) = (Vec::new(), 0usize, 0usize);
-        for s0 in 0..n {
-            if index[s0] != NONE {
-                continue;
-            }
-            let mut frames = vec![(s0, 0usize)];
-            index[s0] = next;
-            low[s0] = next;
-            next += 1;
-            stack.push(s0);
-            on[s0] = true;
-            while let Some(&(v, e)) = frames.last() {
-                if let Some(&w) = succ[v].get(e) {
-                    frames.last_mut().unwrap().1 += 1;
-                    if index[w] == NONE {
-                        index[w] = next;
-                        low[w] = next;
-                        next += 1;
-                        stack.push(w);
-                        on[w] = true;
-                        frames.push((w, 0));
-                    } else if on[w] {
-                        low[v] = low[v].min(index[w]);
-                    }
-                    continue;
-                }
-                frames.pop();
-                if let Some(&(u, _)) = frames.last() {
-                    low[u] = low[u].min(low[v]);
-                }
-                if low[v] == index[v] {
-                    while let Some(w) = stack.pop() {
-                        on[w] = false;
-                        comp[w] = ncomp;
-                        if w == v {
-                            break;
-                        }
-                    }
-                    ncomp += 1;
-                }
-            }
-        }
-        let mut members_of: Vec<Vec<usize>> = vec![Vec::new(); ncomp];
-        for v in 0..n {
-            members_of[comp[v]].push(v);
-        }
-        let mut acc: Vec<FxHashMap<Atom, u8>> = vec![FxHashMap::default(); ncomp];
-        let mut out: FxHashMap<Tok, FxHashMap<Atom, u8>> = FxHashMap::default();
-        let merge = |into: &mut FxHashMap<Atom, u8>, from: &FxHashMap<Atom, u8>| {
-            for (&a, &b) in from {
-                *into.entry(a).or_default() |= b;
-            }
-        };
-        for c in (0..ncomp).rev() {
-            let mut set = std::mem::take(&mut acc[c]);
-            // Its own uses: what its keyed reach markers were used for.
-            for &v in &members_of[c] {
-                for &(a, r) in self.keyed_reach.get(&ids[v]).into_iter().flatten() {
-                    let u = self.marker_use.get(&r).copied().unwrap_or(0);
-                    if u != 0 {
-                        *set.entry(a).or_default() |= u;
-                    }
-                }
-            }
-            if set.is_empty() {
-                continue;
-            }
-            for &v in &members_of[c] {
-                for &m in &self.arg_members[&ids[v]] {
-                    match at.get(&m) {
-                        Some(&w) if comp[w] != c => merge(&mut acc[comp[w]], &set),
-                        Some(_) => {}
-                        None if self.param_marker.contains_key(&m)
-                            && !self.reach_marker.contains(&m) =>
-                        {
-                            merge(out.entry(m).or_default(), &set)
-                        }
-                        None => {}
-                    }
-                }
-            }
-        }
-        for (p, set) in out {
-            let mut v: Vec<(Atom, u8)> = set.into_iter().collect();
-            v.sort_unstable();
-            self.keyed_uses.insert(p, v);
-        }
-    }
-
-    pub(crate) fn set_marker_top(&mut self, t: Tok) {
-        let w = (t >> 6) as usize;
-        if self.marker_top.len() <= w {
-            self.marker_top.resize(w + 1, 0);
-        }
-        self.marker_top[w] |= 1 << (t & 63);
-    }
-
-    /// A marker that reads as ⊤ (DECISIONS 42).
-    #[inline]
-    pub(crate) fn marker_is_top(&self, t: Tok) -> bool {
-        marker_top_bit(&self.marker_top, t)
-    }
-
-    /// An escaped value beside ⊤ is that ⊤ (DECISIONS 42's reason, for a
-    /// value): unknown code holds it, so its fields are ⊤ and sink what they
-    /// get, every function reachable from it runs with ⊤, and its layout is
-    /// escaped; a rule on it at a node that holds ⊤ does nothing the rule on
-    /// ⊤ does not. Left out there, it never rides ⊤ through the unit. A
-    /// marker is decided by `marker_is_top` (its escape may be no sink,
-    /// decision 17).
-    #[inline]
-    pub(crate) fn top_beside(&self, t: Tok) -> bool {
-        self.is_escaped(t) && !self.is_marker(t)
-    }
-
-    /// A marker that stands for no value of its own (DECISIONS 74): one of
-    /// a closed function's described parameter (decision 17), what it
-    /// reaches, or an argument marker all of whose members are such
-    /// markers (DECISIONS 75), and what that reaches. The callers' values
-    /// are the contract's, beside it in every node it reaches (they arrive
-    /// together), so it adds no kinds.
-    pub(crate) fn beside_values(&self, t: Tok) -> bool {
-        match self.param_marker.get(&t) {
-            Some(&(f, i)) => self
-                .closed_described
-                .get(&f)
-                .and_then(|d| d.get(i as usize))
-                .is_some_and(|&d| d),
-            None => self.beside_markers.contains(&t),
-        }
-    }
-
-    /// A closed function's parameter marker (decision 13): what its callers
-    /// pass is the values beside it; the marker only records the uses for
-    /// its contract.
-    pub(crate) fn closed_marker(&self, t: Tok) -> bool {
-        self.is_marker(t)
-            && self.marker_members(t).iter().all(|x| {
-                self.param_marker
-                    .get(x)
-                    .is_some_and(|(f, _)| self.closed_params.contains_key(f))
-            })
-    }
-
-    /// A parameter marker or an argument marker (DECISIONS 44).
-    #[inline]
-    pub(crate) fn is_marker(&self, t: Tok) -> bool {
-        self.param_marker.contains_key(&t) || self.is_arg_marker(t)
-    }
-
-    #[inline]
-    pub(crate) fn is_arg_marker(&self, t: Tok) -> bool {
-        marker_top_bit(&self.arg_bits, t)
-    }
-
-    /// The parameter markers token `t` stands for: itself, unless it is an
-    /// argument marker (DECISIONS 44). What an argument marker reaches under
-    /// a key (its keyed reach marker, whose uses are settled per key and
-    /// which has no members of its own) is part of what it reaches: it
-    /// stands for its reach marker's members.
-    ///
-    /// Settled once per marker over the member graph's strongly connected
-    /// components (a recursion's markers stand for each other and have one
-    /// set), each component's set the union of its members' leaves and its
-    /// successors' sets, shared by its members: the readers after a solve
-    /// ask for the same markers at every site, result and contract.
-    pub(crate) fn marker_members(&self, t: Tok) -> Vec<Tok> {
-        if !self.is_arg_marker(t) {
-            return vec![t];
-        }
-        if let Some(s) = self.members_settled.borrow().get(&t) {
-            return s.to_vec();
-        }
-        self.settle_members_from(t);
-        self.members_settled.borrow()[&t].to_vec()
-    }
-
-    /// The successors of argument marker `x` in the member graph: its
-    /// members, or for a keyed reach marker its argument marker's reach.
-    fn member_succ(&self, x: Tok) -> Vec<Tok> {
-        if let Some(&(p, _)) = self.keyed_parent.get(&x) {
-            return vec![self.marker_reach[&p]];
-        }
-        self.arg_members.get(&x).cloned().unwrap_or_default()
-    }
-
-    /// Tarjan from `root` over the argument markers not settled yet; a
-    /// settled marker and a parameter marker are leaves of the walk.
-    fn settle_members_from(&self, root: Tok) {
-        use crate::pts::{FxHashMap, FxHashSet};
-        let mut index: FxHashMap<Tok, (u32, u32)> = FxHashMap::default();
-        let mut on: FxHashSet<Tok> = FxHashSet::default();
-        let mut stack: Vec<Tok> = Vec::new();
-        let mut next = 0u32;
-        // (marker, its successors, the next successor to visit)
-        let mut frames: Vec<(Tok, Vec<Tok>, usize)> = Vec::new();
-        let succ = self.member_succ(root);
-        index.insert(root, (0, 0));
-        next += 1;
-        stack.push(root);
-        on.insert(root);
-        frames.push((root, succ, 0));
-        while let Some(frame) = frames.last_mut() {
-            let (v, ref ss, ref mut i) = *frame;
-            if *i < ss.len() {
-                let w = ss[*i];
-                *i += 1;
-                if !self.is_arg_marker(w) || self.members_settled.borrow().contains_key(&w) {
-                    continue;
-                }
-                match index.get(&w) {
-                    None => {
-                        index.insert(w, (next, next));
-                        next += 1;
-                        stack.push(w);
-                        on.insert(w);
-                        let ws = self.member_succ(w);
-                        frames.push((w, ws, 0));
-                    }
-                    Some(&(wi, _)) if on.contains(&w) => {
-                        let e = index.get_mut(&v).unwrap();
-                        e.1 = e.1.min(wi);
-                    }
-                    Some(_) => {}
-                }
-                continue;
-            }
-            let (vi, vlow) = index[&v];
-            frames.pop();
-            if let Some(&(u, _, _)) = frames.last() {
-                let e = index.get_mut(&u).unwrap();
-                e.1 = e.1.min(vlow);
-            }
-            if vlow != vi {
-                continue;
-            }
-            // The component is complete: its leaves and its successors'
-            // settled sets, one set for every member.
-            let mut comp: Vec<Tok> = Vec::new();
-            while let Some(w) = stack.pop() {
-                on.remove(&w);
-                comp.push(w);
-                if w == v {
-                    break;
-                }
-            }
-            let mut set: Vec<Tok> = Vec::new();
-            {
-                let settled = self.members_settled.borrow();
-                for &w in &comp {
-                    for s in self.member_succ(w) {
-                        if !self.is_arg_marker(s) {
-                            set.push(s);
-                        } else if let Some(ss) = settled.get(&s) {
-                            set.extend(ss.iter().copied());
-                        }
-                        // else: a member of this component.
-                    }
-                }
-            }
-            set.sort_unstable();
-            set.dedup();
-            let rc: std::rc::Rc<[Tok]> = set.into();
-            let mut settled = self.members_settled.borrow_mut();
-            for w in comp {
-                settled.insert(w, rc.clone());
-            }
-        }
-    }
-
-    /// Parameter node `n`'s argument marker, with its own reach marker.
-    pub(crate) fn arg_marker(&mut self, n: NodeId) -> Tok {
-        if let Some(&t) = self.arg_marker_of.get(&n) {
-            return t;
-        }
-        let tm = self.marker_template(format!("args{n}"));
-        let t = self.tok(TokKind::Obj(tm, NO_CTX));
-        let rm = self.marker_template(format!("args{n}:reach"));
-        let r = self.tok(TokKind::Obj(rm, NO_CTX));
-        for x in [t, r] {
-            let w = (x >> 6) as usize;
-            if self.arg_bits.len() <= w {
-                self.arg_bits.resize(w + 1, 0);
-            }
-            self.arg_bits[w] |= 1 << (x & 63);
-            self.arg_members.insert(x, Vec::new());
-        }
-        self.marker_reach.insert(t, r);
-        self.reach_marker.insert(r);
-        self.arg_marker_of.insert(n, t);
-        // A relative parameter's marker is the caller's argument at each
-        // call's result while it stays in its run (DECISIONS 44 (b)).
-        if self.nodes[n as usize].rel {
-            let home = self.nodes[n as usize].frame;
-            self.set_fam(t, t, home);
-            self.set_fam(r, t, home);
-        }
-        // It stands for its members alone (DECISIONS 75): beside while it
-        // has none, and while each one that links in is beside
-        // (`link_marker`). The caller links the arriving markers before
-        // the marker reaches any node.
-        self.beside_markers.insert(t);
-        self.beside_markers.insert(r);
-        let any = self.field_any(t);
-        self.add_tok(any, r);
-        let rany = self.field_any(r);
-        self.add_tok(rany, r);
-        t
-    }
-
-    /// Argument marker `r` stands for marker `m` too: `m` takes every use
-    /// of `r`, and what `m` reaches takes every use of what `r` reaches.
-    pub(crate) fn link_marker(&mut self, m: Tok, r: Tok) {
-        if m == r || !self.arg_linked.insert((r, m)) {
-            return;
-        }
-        self.arg_members.get_mut(&r).unwrap().push(m);
-        // A new link changes the sets settled so far (`marker_members`).
-        if !self.members_settled.get_mut().is_empty() {
-            self.members_settled.get_mut().clear();
-        }
-        if self.beside_markers.contains(&r) {
-            match self.beside_values(m) {
-                true if !self.param_marker.contains_key(&m) => {
-                    self.beside_up.entry(m).or_default().push(r)
-                }
-                true => {}
-                false => self.leave_beside(r),
-            }
-        }
-        let u = self.marker_use.get(&r).copied().unwrap_or(0);
-        if u != 0 {
-            self.mark_use(m, u);
-        }
-        let reach = |s: &Self, x: Tok| s.marker_reach.get(&x).copied().unwrap_or(x);
-        let (mr, rr) = (reach(self, m), reach(self, r));
-        if (mr, rr) != (m, r) {
-            self.link_marker(mr, rr);
-        }
-        // And per key (§18.4): what `m` reaches through a key takes the
-        // uses of what `r` reaches through it so far, as bits (later ones:
-        // `keyed_use`; the keys: `settle_keyed_uses`).
-        let k = self.keyed_any.get(&r).copied().unwrap_or(0);
-        if k != 0 {
-            self.keyed_use(m, k);
-        }
-    }
-
-    /// Argument marker `t` stands for a value of its own now (DECISIONS
-    /// 75): so do what it reaches and the argument markers it is a member
-    /// of, and each arithmetic result that skipped it takes the object
-    /// kinds it would have taken. Beside only ever turns off: monotone.
-    pub(crate) fn leave_beside(&mut self, t: Tok) {
-        let mut st = vec![t];
-        while let Some(x) = st.pop() {
-            if !self.beside_markers.remove(&x) {
-                continue;
-            }
-            for (dst, out) in self.beside_arith.remove(&x).unwrap_or_default() {
-                self.add_prim(dst, out);
-            }
-            st.extend(self.beside_up.remove(&x).unwrap_or_default());
-            st.extend(self.marker_reach.get(&x).copied());
-            if let Some(ks) = self.keyed_reach.get(&x) {
-                st.extend(ks.iter().map(|&(_, r)| r));
-            }
-        }
-    }
-
-    fn set_fam(&mut self, t: Tok, base: Tok, home: u32) {
-        let i = t as usize;
-        if self.fam.len() <= i {
-            self.fam.resize(i + 1, (0, 0));
-        }
-        self.fam[i] = (base, home);
-    }
-
-    /// The home of token `t`'s argument marker family (+ 1), 0 for any
-    /// other token (DECISIONS 44 (b)).
-    #[inline]
-    pub(crate) fn fam_home(&self, t: Tok) -> u32 {
-        self.fam.get(t as usize).map_or(0, |&(_, h)| h)
-    }
-
-    /// Marker `t` arriving at node `n` crosses into it as a member of
-    /// `n`'s own marker (MRK; DECISIONS 44 for parameters): a marker is a
-    /// token only inside its run. A parameter takes every marker; a node
-    /// of no run of `t`'s family (another run's node, storage) takes its
-    /// family tokens; a result or storage takes the markers of no run
-    /// (another node's marker, a contract parameter's). Storage is every
-    /// node of no run but an observation node, a sink and a marker's own
-    /// field nodes. Inside its run a family token stays itself, so a
-    /// result can return it relative to each call (44 (b)).
-    #[inline]
-    pub(crate) fn crosses(&self, n: NodeId, t: Tok) -> bool {
-        let node = &self.nodes[n as usize];
-        if node.param {
-            return self.is_marker(t);
-        }
-        if node.obs || node.sink || node.of_marker || !self.is_marker(t) {
-            return false;
-        }
-        match self.fam_home(t) {
-            0 => node.result || node.frame == 0,
-            h => h != node.frame,
-        }
-    }
-
-    /// What a load from marker `m` gives (solve.rs `field`): under a named
-    /// key its keyed reach marker, under a computed key its reach marker;
-    /// a reach marker reaches itself under every key.
-    pub(crate) fn marker_load(&mut self, m: Tok, key: Option<Atom>) -> Tok {
-        if self.reach_marker.contains(&m) {
-            return m;
-        }
-        match key {
-            Some(a) => self.keyed_reach_of(m, a),
-            None => self.marker_reach[&m],
-        }
-    }
-
-    /// What marker `m` reaches under a computed key: its reach marker, or
-    /// itself for a reach marker.
-    pub(crate) fn reach_of(&self, m: Tok) -> Tok {
-        if self.reach_marker.contains(&m) {
-            return m;
-        }
-        self.marker_reach.get(&m).copied().unwrap_or(m)
-    }
-
-    /// Token `t` of argument marker `b`'s family, with marker `m` in place
-    /// of `b`: `m` itself, what `m` reaches, or what it reaches through the
-    /// same key (DECISIONS 44 (b)).
-    pub(crate) fn lift(&mut self, m: Tok, b: Tok, t: Tok) -> Tok {
-        if t == b {
-            return m;
-        }
-        let key = self.keyed_parent.get(&t).map(|&(_, a)| a);
-        self.marker_load(m, key)
-    }
-
-    /// The run of `call` (`Node::frame`): the run its result node belongs
-    /// to (a call an instance made has its own result slot). A temporary
-    /// the solver makes for one call is of that run.
-    pub(crate) fn call_run(&self, call: CallId) -> u32 {
-        let Some(c) = self.calls.get(call as usize) else {
-            return 0;
-        };
-        // Its operands are nodes of the run that made it.
-        let this = match c.this {
-            ThisArg::Node(n) => Some(n),
-            _ => None,
-        };
-        std::iter::once(c.ret)
-            .chain(this)
-            .chain(c.args.iter().copied())
-            .filter(|&n| n != NO_NODE)
-            .map(|n| self.nodes[n as usize].frame)
-            .find(|&f| f != 0)
-            .unwrap_or(0)
-    }
-
-    /// The tokens of argument marker `b`'s family.
-    pub(crate) fn family(&self, b: Tok) -> Vec<Tok> {
-        let mut v = vec![b];
-        v.extend(self.marker_reach.get(&b).copied());
-        v.extend(
-            self.keyed_reach
-                .get(&b)
-                .into_iter()
-                .flatten()
-                .map(|&(_, r)| r),
-        );
-        v
-    }
-
-    fn marker_template(&mut self, display: String) -> TmplId {
-        let tm = self.tmpls.len() as TmplId;
-        self.tmpls.push(Template {
-            kind: TmplKind::BObj {
-                module: 0,
-                site: 0,
-                what: "parameter marker",
-            },
-            display,
-            birth_keys: Vec::new(),
-            definite: Vec::new(),
-            declared: Vec::new(),
-            parent: None,
-            ctor: None,
-            native_parent: None,
-            accessor_keys: Vec::new(),
-            has_computed_members: false,
-            field_init: None,
-            proto_members: Vec::new(),
-            parent_value: None,
-            parent_links: Vec::new(),
-        });
-        tm
-    }
-
-    /// The marker of parameter `i` of contract function `f`.
-    pub(crate) fn param_marker_tok(&mut self, f: FnIdx, i: u32) -> Tok {
-        if let Some(&t) = self.marker_of.get(&(f, i)) {
-            return t;
-        }
-        let tm = self.tmpls.len() as TmplId;
-        let display = format!("{}:param{i}", self.funcs[f as usize].name);
-        self.tmpls.push(Template {
-            kind: TmplKind::BObj {
-                module: 0,
-                site: 0,
-                what: "parameter marker",
-            },
-            display,
-            birth_keys: Vec::new(),
-            definite: Vec::new(),
-            declared: Vec::new(),
-            parent: None,
-            ctor: None,
-            native_parent: None,
-            accessor_keys: Vec::new(),
-            has_computed_members: false,
-            field_init: None,
-            proto_members: Vec::new(),
-            parent_value: None,
-            parent_links: Vec::new(),
-        });
-        let t = self.tok(TokKind::Obj(tm, NO_CTX));
-        // What the argument reaches has its own marker (fields of fields
-        // reach it again), so a result can tell the argument itself from
-        // values reachable from it (§11.2 "the return").
-        let rm = self.tmpls.len() as TmplId;
-        let mut reach = self.tmpls[tm as usize].clone();
-        reach.display = format!("{}:param{i}:reach", self.funcs[f as usize].name);
-        self.tmpls.push(reach);
-        let r = self.tok(TokKind::Obj(rm, NO_CTX));
-        self.param_marker.insert(t, (f, i));
-        self.param_marker.insert(r, (f, i));
-        self.reach_marker.insert(r);
-        self.marker_reach.insert(t, r);
-        self.marker_of.insert((f, i), t);
-        // Markers before their field nodes: those nodes are of the marker.
-        let any = self.field_any(t);
-        self.add_tok(any, r);
-        let rany = self.field_any(r);
-        self.add_tok(rany, r);
-        t
-    }
-}

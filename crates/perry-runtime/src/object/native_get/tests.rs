@@ -1,4 +1,5 @@
 use super::*;
+use crate::codegen_abi::LayoutWord;
 use crate::object::{
     js_object_alloc, js_object_create, js_object_delete_field, js_object_freeze,
     js_object_set_field_by_name,
@@ -41,11 +42,14 @@ fn own_data_slot_proof_comes_from_live_shape_and_retires_on_accessor() {
     let object = object("value", 7.0);
     let key = key("value");
     let slot = || unsafe {
-        shapes::own_data_shape(shapes::ordinary_dir_addr(), (*object).shape_word())
-            .flatten()
-            .and_then(|shape| {
-                shape.plain_slot(crate::value::nanbox_string_key(key).to_bits(), b"value")
-            })
+        shapes::own_data_shape(
+            shapes::ordinary_dir_addr(),
+            LayoutWord((*object).shape_word()),
+        )
+        .flatten()
+        .and_then(|shape| {
+            shape.plain_slot(crate::value::nanbox_string_key(key).to_bits(), b"value")
+        })
     };
     assert_eq!(slot().map(|(slot, _)| slot), Some(0));
     let byte_reads = crate::string::test_key_byte_reads();
@@ -143,9 +147,12 @@ fn an_own_absence_proof_is_not_searched_again_before_the_holder() {
     let child_ptr = crate::value::js_nanbox_get_pointer(child) as *mut ObjectHeader;
     js_object_set_field_by_name(child_ptr, key("other"), 1.0);
     let shape = unsafe {
-        shapes::own_data_shape(shapes::ordinary_dir_addr(), (*child_ptr).shape_word())
-            .flatten()
-            .unwrap()
+        shapes::own_data_shape(
+            shapes::ordinary_dir_addr(),
+            LayoutWord((*child_ptr).shape_word()),
+        )
+        .flatten()
+        .unwrap()
     };
     let before = crate::string::test_key_byte_reads();
     assert_eq!(unsafe { shape.plain_lookup(0, b"value") }, Some(None));
@@ -887,7 +894,7 @@ fn a_class_extending_a_native_never_settles() {
 }
 
 /// A native registry id in the id band, as `new Headers()` hands one out.
-const RAW_NATIVE_ID: usize = 0x40000;
+const RAW_NATIVE_ID: usize = crate::value::addr_class::FETCH_HANDLE_BAND_START;
 
 unsafe extern "C" fn raw_id_property(handle: i64, key: *const u8, len: usize) -> f64 {
     if handle as usize == RAW_NATIVE_ID && std::slice::from_raw_parts(key, len) == b"length" {

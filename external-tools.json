@@ -249,10 +249,15 @@
       "description": "Mr Boxington shared Cargo build cache, pinned to match socket-wheelhouse. Uses GitHub Actions cache for release builds and learned incremental reuse for local edit loops.",
       "release": "cargo-install",
       "crate": "mbx",
-      "version": "1.22.0",
+      "version": "1.28.0",
       "binary": "mbx",
       "repository": "github:jdx/mr-boxington",
-      "notes": "Install with cargo install mbx@1.22.0 --locked. CI uses Perry's specialized local composite action, backed by the sparse-vendored upstream mr-boxington-action at a recorded immutable commit."
+      "notes": "Install with cargo install mbx@1.28.0 --locked. This pin enables optional Blaze routing for local development; CI keeps using mbx directly. CI uses Perry's specialized local composite action, backed by the sparse-vendored upstream mr-boxington-action at a recorded immutable commit.",
+      "soakBypass": {
+        "version": "1.28.0",
+        "published": "2026-10-26",
+        "removable": "2026-11-02"
+      }
     },
     "tak": {
       "description": "tak CLI used for Perry command instruction-count and wall-time history reports.",

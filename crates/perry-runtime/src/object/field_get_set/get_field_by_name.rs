@@ -6,6 +6,7 @@ use super::*;
 
 mod class_wtf8;
 mod shape_inherited;
+use crate::codegen_abi::LayoutWord;
 use class_wtf8::class_value_get_wtf8_field;
 
 /// Wall 10 — read a property a framework attached to a native registry handle
@@ -774,7 +775,7 @@ fn get_field_by_name_past_data_probe(
                         {
                             let alloc_limit = crate::object::object_inline_capacity(o) as usize;
                             if let Some(idx) = super::super::prop_plan::read_plan_lookup(
-                                (*o).shape_word(),
+                                LayoutWord((*o).shape_word()),
                                 keys as usize,
                                 key as usize,
                                 keys_view.count(),
@@ -813,7 +814,7 @@ fn get_field_by_name_past_data_probe(
                                         )
                                     {
                                         super::super::prop_plan::read_plan_record(
-                                            (*o).shape_word(),
+                                            LayoutWord((*o).shape_word()),
                                             keys as usize,
                                             key as usize,
                                             i,

@@ -3,6 +3,7 @@
 //! shapes answer.
 
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 /// `value` as a live ordinary object: an arena cell whose header says an
 /// unforwarded `GC_TYPE_OBJECT`, with its header's object flags.
@@ -94,7 +95,7 @@ pub(super) fn own_slot_in(
                 Some((_, slot)) => Some(Some(slot)),
             };
         }
-        let record = crate::object::shapes::shape_record_for_word(id)?;
+        let record = crate::object::shapes::shape_record_for_word(LayoutWord(id))?;
         match record.own_data_slot_of_value(key_bits, bytes)? {
             Some(slot) if slot_bits(obj, slot) == crate::value::TAG_HOLE => None,
             found => Some(found),

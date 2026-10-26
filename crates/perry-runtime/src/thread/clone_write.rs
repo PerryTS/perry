@@ -414,7 +414,7 @@ impl Writer<'_> {
         }
         if tag == STRING_TAG {
             let ptr = (bits & POINTER_MASK) as *const crate::string::StringHeader;
-            if ptr.is_null() || (ptr as usize) < 0x1000 {
+            if !crate::value::addr_class::is_above_handle_band(ptr as usize) {
                 return SerializedValue::String(Vec::new());
             }
             if self.mode == CloneMode::Message {
@@ -459,11 +459,11 @@ impl Writer<'_> {
     #[optimize(size)]
     unsafe fn pointer(&mut self, bits: u64) -> SerializedValue {
         let addr = (bits & POINTER_MASK) as usize;
-        if addr < 0x1000 {
+        if addr == 0 {
             return SerializedValue::Inline(TAG_UNDEFINED);
         }
         // A handle id (fetch, zlib, Proxy, …) is not heap memory.
-        if crate::value::addr_class::is_small_handle(addr) || addr < 0x10000 {
+        if crate::value::addr_class::is_small_handle(addr) {
             return SerializedValue::Unsupported("native handle");
         }
         if let Some(refuse) = self.uncloneable {
@@ -586,7 +586,7 @@ impl Writer<'_> {
         if holder.is_null() {
             0
         } else {
-            crate::object::shapes::object_shape_stamp(holder)
+            crate::object::shapes::object_shape_stamp(holder).0
         }
     }
 
@@ -1008,7 +1008,7 @@ impl Writer<'_> {
         let eligible = descriptor.is_some_and(|d| {
             (d.object_kind.is_ordinary_layout()
                 || d.object_kind == crate::object::shapes::ShapeObjectKind::Class)
-                && crate::object::shapes::is_site_matchable_layout_word(id)
+                && crate::object::shapes::is_site_matchable_layout_word(id.0)
                 && d.hole_count == 0
                 && d.brands().is_empty()
                 && d.record_ref()

@@ -81,7 +81,11 @@ fn a_static_edge_takes_its_target_record() {
     let pu = run(&h, true);
     for s in x_sites(&pu, "main.ts") {
         if s.verdict == Verdict::T0Mono {
-            assert!(s.receivers.iter().all(|r| r.ends_with(":Left")), "{}", pu.dump_text());
+            assert!(
+                s.receivers.iter().all(|r| r.ends_with(":Left")),
+                "{}",
+                pu.dump_text()
+            );
         }
     }
 }

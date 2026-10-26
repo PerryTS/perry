@@ -29,8 +29,8 @@ pub(crate) mod sync_program;
 // `pub(crate)` so `commands::deps` can reuse `cjs_wrap::detect`'s
 // comment/string masker for its source scans (D005) instead of duplicating a
 // subtle scanner.
-pub(crate) mod cjs_wrap;
 mod cjs_link;
+pub(crate) mod cjs_wrap;
 mod class_imports;
 mod codegen_steps;
 mod collect_modules;

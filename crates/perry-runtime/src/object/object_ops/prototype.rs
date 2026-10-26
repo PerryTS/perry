@@ -1,6 +1,7 @@
 //! `Object.create`, `Object.getPrototypeOf`, and the globalThis-builtin lookup.
 use super::super::native_module::native_module_namespace_default_prototype as namespace_default_prototype;
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 /// Look up the canonical NaN-boxed value of a built-in constructor /
 /// namespace stored on `globalThis` (the singleton populated by
@@ -138,7 +139,8 @@ pub extern "C" fn js_object_create(proto_value: f64) -> f64 {
         crate::object::shapes::keyless_birth_width(proto_id, producer)
     });
     let proto_id = serial.unwrap_or_else(crate::object::shapes::fresh_unique_proto_id);
-    let born = crate::object::alloc_basic::object_alloc_created(&proto, proto_id, birth, 0);
+    let born =
+        crate::object::alloc_basic::object_alloc_created(&proto, proto_id, birth, LayoutWord(0));
     crate::value::js_nanbox_pointer(born as i64)
 }
 
@@ -219,7 +221,7 @@ fn net_socket_prototype_value() -> f64 {
 /// `obj` is a live `GC_TYPE_OBJECT` cell.
 unsafe fn shape_link_prototype(obj: *const ObjectHeader, default_only: bool) -> Option<f64> {
     use crate::object::shapes as s;
-    let record = s::shape_record_of_receiver(s::object_shape_stamp(obj))?;
+    let record = s::shape_record_of_receiver((s::object_shape_stamp(obj)).0)?;
     if !record.object_kind().is_ordinary_layout() || record.weak_collection_brand().is_some() {
         return None;
     }

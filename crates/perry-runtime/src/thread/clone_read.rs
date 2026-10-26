@@ -11,6 +11,7 @@ use std::ptr;
 use super::{fs_thread_codec, store_thread_array_slot, store_thread_object_field};
 use super::{CloneMessage, CloneNode, CloneSlot, SerializedValue, VIEW_KIND_DATA_VIEW};
 use super::{BIGINT_TAG, POINTER_MASK, TAG_UNDEFINED};
+use crate::codegen_abi::LayoutWord;
 use crate::gc::{RuntimeHandle, RuntimeHandleScope};
 use crate::value::{JSValue, POINTER_TAG};
 
@@ -276,7 +277,7 @@ impl<'s, 'm> Reader<'s, 'm> {
                 crate::object::ObjectKeys::new(keys.get_raw_mut_ptr(), names.len() as u32),
             );
             let id = crate::object::shapes::object_shape_stamp(seed);
-            self.shapes.push((self.scope.root_raw_mut_ptr(seed), id));
+            self.shapes.push((self.scope.root_raw_mut_ptr(seed), id.0));
         }
     }
 
@@ -337,7 +338,7 @@ impl<'s, 'm> Reader<'s, 'm> {
         let obj = crate::object::alloc_plain::alloc_plain_record_inline_keys_stamped(
             count as u32,
             keys,
-            *id,
+            LayoutWord(*id),
         );
         self.fill(slot, JSValue::pointer(obj.cast()).bits(), Made::Value);
         for i in 0..count {

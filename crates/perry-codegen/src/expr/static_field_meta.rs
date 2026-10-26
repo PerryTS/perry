@@ -892,6 +892,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     &[(PTR, &submod_bytes_global), (I32, &submod_len)],
                 ));
             }
+            let dependencies = crate::nm_install::namespace_value_dependencies(name);
             let mod_idx = ctx.strings.intern(name);
             let mod_bytes_global = format!("@{}", ctx.strings.entry(mod_idx).bytes_global);
             let mod_len_str = name.len().to_string();
@@ -902,6 +903,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let blk = ctx.block();
             if let Some(s) = install_sym {
                 blk.call_void(s, &[]);
+            }
+            for install in dependencies {
+                blk.call_void(install, &[]);
             }
             Ok(blk.call(
                 DOUBLE,

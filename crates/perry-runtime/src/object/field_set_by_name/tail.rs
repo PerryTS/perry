@@ -13,6 +13,7 @@ use super::write_helpers::{
     closure_set_field_by_name, key_to_str_for_diag, mirror_class_object_static_write,
 };
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 /// Bits to publish into an overflow slot for a NEWLY appended key.
 ///
@@ -288,7 +289,7 @@ pub(crate) fn set_field_by_name_object_tail(
         // receiver on another chain can only meet another plan.
         let plan_fast = plan_eligible
             && super::prop_plan::store_plan_check(
-                super::shapes::object_shape_stamp(obj),
+                LayoutWord(super::shapes::object_shape_stamp(obj).0),
                 interned_key as usize,
             );
 
@@ -578,7 +579,7 @@ pub(crate) fn set_field_by_name_object_tail(
                 && desc_gate_ok;
             if !plan_fast && record_plan_eligible {
                 super::prop_plan::store_plan_record(
-                    super::shapes::object_shape_stamp(obj),
+                    LayoutWord(super::shapes::object_shape_stamp(obj).0),
                     interned_key as usize,
                 );
             }
@@ -736,9 +737,9 @@ pub(crate) fn set_field_by_name_object_tail(
             // instance gaining its first by-name property is stamped like
             // any other receiver.
             if !crate::object::overflow::has_overflow(obj)
-                && !super::shapes::shape_descriptor_of_receiver(super::shapes::object_shape_stamp(
-                    obj,
-                ))
+                && !super::shapes::shape_descriptor_of_receiver(
+                    (super::shapes::object_shape_stamp(obj)).0,
+                )
                 .is_some_and(|d| d.special_constfn_mask != 0)
             {
                 // `publish_key_add_edge` already minted the exact ConstFn

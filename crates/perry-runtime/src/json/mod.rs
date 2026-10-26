@@ -89,6 +89,7 @@ pub(crate) use parse_api::test_json_parse_direct;
 pub(crate) unsafe fn test_json_stringify_record_output(bits: u64) -> Option<JSValue> {
     stringify_record_output::try_object(bits)
 }
+use crate::codegen_abi::LayoutWord;
 pub(crate) use parse_reuse::{
     cached_parse_string, remember_parse_object_template, remember_parse_string,
     try_reuse_parse_object_template, ParseStringReuse,
@@ -297,7 +298,7 @@ crate::perry_thread_local! {
 pub(crate) struct ParseShapeCacheEntry {
     pub(crate) keys: Vec<*const StringHeader>,
     pub(crate) keys_array: *mut crate::ArrayHeader,
-    pub(crate) shape_id: u32,
+    pub(crate) shape_id: LayoutWord,
     /// Exact NaN-box bits when this is one inline key; zero otherwise.
     pub(crate) one_field_key_bits: u64,
 }
@@ -478,7 +479,7 @@ pub(crate) unsafe fn parse_shape_keys_array(
 #[inline]
 pub(crate) unsafe fn parse_shape_keys_array_with_id(
     keys: &[*const StringHeader],
-) -> (*mut crate::ArrayHeader, u32) {
+) -> (*mut crate::ArrayHeader, LayoutWord) {
     debug_assert!(crate::gc::gc_is_suppressed());
     if keys.len() > PARSE_SHAPE_CACHE_KEY_BUDGET {
         let arr = allocate_parse_shape_keys_array(keys);
@@ -541,7 +542,7 @@ pub(crate) fn note_parse_shape_cache_carriers() {
         }
     });
     let empty = parse_empty::cached_shape_id();
-    if empty != 0 {
+    if empty != LayoutWord(0) {
         crate::object::shape_carriers::note_shape_id(empty);
     }
     parse_reuse::note_shape_carrier();

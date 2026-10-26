@@ -39,7 +39,12 @@ fn comdat_atoms_preserve_identity_and_keep_local_bindings_distinct() {
         );
         let units = m.render_codegen_units(2);
         for name in &weak {
-            let definition = format!("@{name} = weak_odr global");
+            let storage = if target.contains("windows") {
+                "constant"
+            } else {
+                "global"
+            };
+            let definition = format!("@{name} = weak_odr {storage}");
             assert!(whole.contains(&definition));
             assert!(units.iter().any(|ir| ir.contains(&definition)));
             for ir in std::iter::once(&whole).chain(units.iter()) {
@@ -57,7 +62,12 @@ fn comdat_atoms_preserve_identity_and_keep_local_bindings_distinct() {
             }
         }
         for name in [a, b] {
-            assert!(whole.contains(&format!("@{name} = internal global")));
+            let storage = if target.contains("windows") {
+                "constant"
+            } else {
+                "global"
+            };
+            assert!(whole.contains(&format!("@{name} = internal {storage}")));
             assert!(!whole.contains(&format!("${name} = comdat")));
             assert!(!whole.contains(&format!(" /INCLUDE:{name}")));
         }
@@ -71,7 +81,7 @@ fn coff_comdat_atom_retention_survives_object_emission() {
     let mut m = LlModule::new(target);
     m.add_coalesced_global(
         "iteration_atom",
-        "@iteration_atom = weak_odr global i64 123, section \".perryatm$m\", align 8".into(),
+        "@iteration_atom = weak_odr constant i64 123, section \".perryatm$m\", align 8".into(),
     );
     // Literal contents must never be mistaken for the global's attributes.
     m.add_coalesced_global(

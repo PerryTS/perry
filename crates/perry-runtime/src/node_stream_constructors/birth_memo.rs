@@ -2,16 +2,17 @@
 //! key and descriptor; the memo holds only input ShapeIds and hook presence.
 use super::birth::{walk_shapes, Kind};
 use super::*;
+use crate::codegen_abi::LayoutWord;
 use crate::object::ObjectHeader;
 use std::cell::Cell;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Input {
-    source: u32,
-    options: u32,
-    option_chain: [u32; 8],
+    source: LayoutWord,
+    options: LayoutWord,
+    option_chain: [LayoutWord; 8],
     option_depth: usize,
-    prototypes: [u32; 8],
+    prototypes: [LayoutWord; 8],
     prototype_depth: usize,
     presence: u16,
 }
@@ -34,7 +35,7 @@ fn matches_input(a: Input, b: Input) -> bool {
 #[derive(Clone, Copy)]
 struct Birth {
     input: Input,
-    shape: u32,
+    shape: LayoutWord,
     count: u32,
     #[allow(dead_code)] // part of the memo identity
     inline: u32,
@@ -170,11 +171,11 @@ fn input(source: Option<f64>, proto: f64, opts: f64, previous: Option<Birth>) ->
                 crate::object::field_get_set::runtime_read_site::object_receiver(s).unwrap(),
             )
         })
-        .unwrap_or(0);
+        .unwrap_or(LayoutWord(0));
     let (prototypes, prototype_depth) = walk_shapes(proto.to_bits(), None)?;
     let (options, option_chain, option_depth) =
         if opts.to_bits() == TAG_UNDEFINED || opts.to_bits() == TAG_NULL {
-            (0, [0; 8], 0)
+            (LayoutWord(0), [LayoutWord(0); 8], 0)
         } else {
             let obj = crate::object::field_get_set::runtime_read_site::object_receiver(opts)?;
             let options = unsafe { crate::object::shapes::object_shape_stamp(obj) };
@@ -199,7 +200,7 @@ fn input(source: Option<f64>, proto: f64, opts: f64, previous: Option<Birth>) ->
                 return None;
             }
         }
-        if options != 0 {
+        if options != LayoutWord(0) {
             if !plain_chain(opts.to_bits(), OPTIONS, false) {
                 return None;
             }
@@ -324,7 +325,7 @@ fn remember(site: &'static std::thread::LocalKey<Cell<Option<Birth>>>, input: In
 /// Direct allocation replays the exact final ordinary transition chain. The
 /// body still normalizes options and fills its slots in the original order.
 #[inline(never)]
-fn seed_new_count(stream: f64, proto: f64, source_shape: Option<u32>) {
+fn seed_new_count(stream: f64, proto: f64, source_shape: Option<LayoutWord>) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let stream = scope.root_nanbox_f64(stream);
     let proto = scope.root_nanbox_f64(proto);
@@ -419,11 +420,11 @@ mod tests {
     fn birth_memo_shape_is_carried_across_full_traces() {
         let _guard = crate::gc::CopyingNurseryTestGuard::new(0);
         let input = Input {
-            source: 0,
-            options: 0,
-            option_chain: [0; 8],
+            source: LayoutWord(0),
+            options: LayoutWord(0),
+            option_chain: [LayoutWord(0); 8],
             option_depth: 0,
-            prototypes: [0; 8],
+            prototypes: [LayoutWord(0); 8],
             prototype_depth: 0,
             presence: 0,
         };

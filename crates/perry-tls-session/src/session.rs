@@ -97,11 +97,15 @@ enum Action {
 
 trait Endpoint {
     type Data;
+    fn wants_write(&self) -> bool;
     fn process<'c, 'i>(&'c mut self, input: &'i mut [u8]) -> UnbufferedStatus<'c, 'i, Self::Data>;
 }
 
 impl Endpoint for rustls::client::UnbufferedClientConnection {
     type Data = rustls::client::ClientConnectionData;
+    fn wants_write(&self) -> bool {
+        rustls::CommonState::wants_write(self)
+    }
     fn process<'c, 'i>(&'c mut self, input: &'i mut [u8]) -> UnbufferedStatus<'c, 'i, Self::Data> {
         self.process_tls_records(input)
     }
@@ -109,6 +113,9 @@ impl Endpoint for rustls::client::UnbufferedClientConnection {
 
 impl Endpoint for rustls::server::UnbufferedServerConnection {
     type Data = rustls::server::ServerConnectionData;
+    fn wants_write(&self) -> bool {
+        rustls::CommonState::wants_write(self)
+    }
     fn process<'c, 'i>(&'c mut self, input: &'i mut [u8]) -> UnbufferedStatus<'c, 'i, Self::Data> {
         self.process_tls_records(input)
     }
@@ -357,6 +364,12 @@ fn internal_failure(message: String) -> Failure {
 fn drain_alert<E: Endpoint>(tls: &mut E, b: &mut Buffers) {
     flush_scratch(b);
     for _ in 0..ALERT_DRAIN_LIMIT {
+        // Once queued output is empty, process would deframe the rejected
+        // input again and try to send a second fatal alert. A terminal session
+        // only drains records; it must never resume processing peer input.
+        if !tls.wants_write() {
+            break;
+        }
         // The same input buffer, not an empty one: rustls's handshake
         // deframer holds positions into it across calls.
         let input_len = b.input.len();

@@ -29,9 +29,12 @@ fn solve(sources: &[(&str, &str)]) -> (tempfile::TempDir, Vec<String>, ProgramFa
             p
         })
         .collect();
-    let keys: Vec<String> = paths.iter().map(|p| p.to_string_lossy().into_owned()).collect();
+    let keys: Vec<String> = paths
+        .iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
     let support_path = root.join("perry-cjs.mjs");
-    let support_src = support::source(&keys, true, true);
+    let support_src = support::source(&keys, true);
     let mut texts = vec![(support_path.clone(), support_src)];
     for (i, (_, src)) in sources.iter().enumerate() {
         let entry = i + 1 == sources.len();
@@ -76,7 +79,9 @@ fn support_index(pf: &ProgramFacts) -> u32 {
         .filter_map(|l| l.strip_prefix("M "))
         .find_map(|l| {
             let (i, path) = l.split_once(' ')?;
-            path.ends_with("perry-cjs.mjs").then(|| i.parse().ok()).flatten()
+            path.ends_with("perry-cjs.mjs")
+                .then(|| i.parse().ok())
+                .flatten()
         })
         .expect("the support module is one of the solved modules")
 }
@@ -92,7 +97,12 @@ const A: &str = "const b = require('./b.js');\nconst c = require('./c.js');\ncon
 #[test]
 fn the_wrappers_own_reads_are_proven_one_load_sites() {
     let (dir, names, pf) = solve(&[("b.js", B), ("c.js", C), ("a.js", A)]);
-    let root = dir.path().canonicalize().unwrap().to_string_lossy().into_owned();
+    let root = dir
+        .path()
+        .canonicalize()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
     let dump = pf.dump_text();
     let support = support_index(&pf);
     let wrapped = |s: &perry_wpfacts::SiteFacts| s.module != support;
@@ -105,9 +115,15 @@ fn the_wrappers_own_reads_are_proven_one_load_sites() {
     // a.js requires b and c, c.js requires b: three static cases.
     assert_eq!(cache_reads.len(), 3, "{names:?}\n{dump}");
     for s in &cache_reads {
-        assert!(proven(&s.verdict), "cache read {} not proven\n{dump}", s.key);
         assert!(
-            s.receivers.iter().all(|r| r.contains("__PerryDeclaredKeys_")),
+            proven(&s.verdict),
+            "cache read {} not proven\n{dump}",
+            s.key
+        );
+        assert!(
+            s.receivers
+                .iter()
+                .all(|r| r.contains("__PerryDeclaredKeys_")),
             "cache read {} on {:?}\n{dump}",
             s.key,
             s.receivers
@@ -168,7 +184,10 @@ fn a_key_one_record_adds_is_not_read_at_a_shared_slot() {
         .collect();
     assert!(!extra.is_empty(), "{dump}");
     for s in extra {
-        assert!(!proven(&s.verdict), "an added record key was proven\n{dump}");
+        assert!(
+            !proven(&s.verdict),
+            "an added record key was proven\n{dump}"
+        );
     }
     // The records' shared keys stay proven around it.
     assert!(
@@ -204,7 +223,11 @@ fn the_born_exports_object_has_the_module_s_export_contract() {
         .sites
         .iter()
         .filter(|s| s.key == "name" && !s.is_call)
-        .filter(|s| s.receivers.iter().all(|r| r.contains("__PerryDeclaredKeysObject_")))
+        .filter(|s| {
+            s.receivers
+                .iter()
+                .all(|r| r.contains("__PerryDeclaredKeysObject_"))
+        })
         .collect();
     assert!(!reads.is_empty(), "{dump}");
     for s in reads {
@@ -223,11 +246,18 @@ fn the_exports_contract_does_not_follow_a_replacement() {
         .sites
         .iter()
         .filter(|s| s.key == "a" && !s.is_call)
-        .filter(|s| s.receivers.iter().any(|r| !r.contains("__PerryDeclaredKeysObject_")))
+        .filter(|s| {
+            s.receivers
+                .iter()
+                .any(|r| !r.contains("__PerryDeclaredKeysObject_"))
+        })
         .collect();
     assert!(!reads.is_empty(), "{dump}");
     for s in reads {
-        assert!(!proven(&s.verdict), "a replaced exports read was proven\n{dump}");
+        assert!(
+            !proven(&s.verdict),
+            "a replaced exports read was proven\n{dump}"
+        );
     }
 }
 
@@ -242,11 +272,18 @@ fn a_declared_export_redefined_as_an_accessor_is_not_a_slot() {
         .sites
         .iter()
         .filter(|s| s.key == "v" && !s.is_call)
-        .filter(|s| s.receivers.iter().any(|r| r.contains("__PerryDeclaredKeysObject_")))
+        .filter(|s| {
+            s.receivers
+                .iter()
+                .any(|r| r.contains("__PerryDeclaredKeysObject_"))
+        })
         .collect();
     assert!(!reads.is_empty(), "{dump}");
     for s in reads {
-        assert!(!proven(&s.verdict), "an accessor export was read as a slot\n{dump}");
+        assert!(
+            !proven(&s.verdict),
+            "an accessor export was read as a slot\n{dump}"
+        );
     }
 }
 
@@ -259,9 +296,10 @@ fn a_computed_exports_store_keeps_declared_reads_sound() {
     let (_dir, _names, pf) = solve(&[("b.js", b), ("c.js", C), ("a.js", A)]);
     let dump = pf.dump_text();
     assert!(
-        pf.sites
-            .iter()
-            .any(|s| s.key == "x" && s.receivers.iter().any(|r| r.contains("__PerryDeclaredKeysObject_"))),
+        pf.sites.iter().any(|s| s.key == "x"
+            && s.receivers
+                .iter()
+                .any(|r| r.contains("__PerryDeclaredKeysObject_"))),
         "{dump}"
     );
 }

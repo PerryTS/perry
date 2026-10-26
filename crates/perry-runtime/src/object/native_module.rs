@@ -47,11 +47,12 @@ pub(crate) use callable_exports::{
     buffer_intrinsic_prototype_value, buffer_original_prototype_value,
     builtin_closure_is_non_constructable_value, builtin_closure_length,
     cached_buffer_intrinsic_prototype_value, fs_namespace_descriptor_getter_value,
-    fs_namespace_descriptor_setter_value, is_buffer_constructor_value, is_cluster_emitter_method,
-    install_module_cjs_cache_value, module_builtin_modules_value, module_cjs_cache_value, module_cjs_extensions_value,
-    module_cjs_global_paths_value, module_cjs_path_cache_value, module_cjs_prototype_for_instance,
-    module_constants_value, native_string_value, scan_tls_derived_prototype_roots_mut,
-    set_bound_native_closure_metadata, set_bound_native_closure_name, set_builtin_closure_length,
+    fs_namespace_descriptor_setter_value, install_module_cjs_cache_value,
+    is_buffer_constructor_value, is_cluster_emitter_method, module_builtin_modules_value,
+    module_cjs_cache_value, module_cjs_extensions_value, module_cjs_global_paths_value,
+    module_cjs_path_cache_value, module_cjs_prototype_for_instance, module_constants_value,
+    native_string_value, scan_tls_derived_prototype_roots_mut, set_bound_native_closure_metadata,
+    set_bound_native_closure_name, set_builtin_closure_length,
     set_builtin_closure_non_constructable, timers_promises_parent_namespace,
     tls_constructor_prototype_is_instance_of, util_inspect_default_options_value,
     zlib_codes_object, BoundNativeParent,
@@ -888,24 +889,17 @@ unsafe fn native_module_property_by_name_impl(
     // `stream.promises.pipeline` / `.finished` read as callable exports
     // (same dispatch the `import ... from "node:stream/promises"` form uses).
     if module_name == "stream" && property_name == "promises" {
-        let submodule = "stream/promises";
-        return js_create_native_module_namespace(submodule.as_ptr(), submodule.len());
+        return crate::node_submodules::commonjs_value("stream_promises");
     }
     // #2133: same shape for `node:fs.promises`. Route to the populated
     // `fs_promises` singleton so destructured exports + FileHandle methods
     // dispatch correctly.
     if module_name == "fs" && property_name == "promises" {
-        return unsafe {
-            crate::node_submodules::js_node_submodule_namespace(
-                b"fs_promises".as_ptr(),
-                "fs_promises".len() as u32,
-            )
-        };
+        return crate::node_submodules::commonjs_value("fs_promises");
     }
     // `readline.promises` is the `readline/promises` submodule namespace.
     if module_name == "readline" && property_name == "promises" {
-        let submodule = "readline/promises";
-        return js_create_native_module_namespace(submodule.as_ptr(), submodule.len());
+        return crate::node_submodules::commonjs_value("readline_promises");
     }
     if module_name == "dns" && property_name == "promises" {
         crate::dns::dns_promises_init_servers_from_callback_if_unset();

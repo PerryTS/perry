@@ -24,6 +24,7 @@ fn options(target: Option<&str>) -> CompileOptions {
         namespace_node_submodules: Default::default(),
         namespace_v8_specifiers: Default::default(),
         namespace_member_prefixes: Default::default(),
+        namespace_source_prefixes: Default::default(),
         namespace_member_origin_names: Default::default(),
         emit_ir_only: true,
         verify_native_regions: false,

@@ -219,7 +219,8 @@ unsafe extern "C" fn lazy_path_init_test_registrar() {
 fn a_lazy_registrar_runs_at_the_first_path_lookup() {
     let _lock = crate::gc::global_side_table_test_lock();
     unsafe { js_register_path_inits_lazily(lazy_path_init_test_registrar) };
-    let registered = || MODULE_PATH_REGISTRY.with(|registry| registry.contains_registered(LAZY_KEY));
+    let registered =
+        || MODULE_PATH_REGISTRY.with(|registry| registry.contains_registered(LAZY_KEY));
     assert!(!registered(), "registered before any lookup");
     let _ = module_lookup_key(LAZY_KEY);
     assert!(registered(), "the first lookup runs the registrar");

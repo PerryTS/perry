@@ -53,6 +53,7 @@ pub(crate) use own_keys::{
 };
 pub use prototype::js_reflect_set_prototype_of;
 
+use crate::codegen_abi::LayoutWord;
 pub(crate) use json::{
     js_proxy_checked_target, js_proxy_checked_target_for_is_array, js_proxy_own_keys_for_json,
 };
@@ -1838,8 +1839,11 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                                 && interned != 0;
                             let verdict = if plan_eligible
                                 && crate::object::prop_plan::store_plan_check(
-                                    crate::object::shapes::object_shape_stamp(
-                                        addr as *const crate::ObjectHeader,
+                                    LayoutWord(
+                                        (crate::object::shapes::object_shape_stamp(
+                                            addr as *const crate::ObjectHeader,
+                                        ))
+                                        .0,
                                     ),
                                     interned,
                                 ) {
@@ -1850,8 +1854,11 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                                 );
                                 if clear && plan_eligible {
                                     crate::object::prop_plan::store_plan_record(
-                                        crate::object::shapes::object_shape_stamp(
-                                            cur_addr() as *const crate::ObjectHeader
+                                        LayoutWord(
+                                            (crate::object::shapes::object_shape_stamp(
+                                                cur_addr() as *const crate::ObjectHeader
+                                            ))
+                                            .0,
                                         ),
                                         interned,
                                     );
@@ -2621,7 +2628,7 @@ mod tests {
             );
             assert_ne!(
                 crate::object::shapes::object_shape_stamp(objects[0]),
-                0,
+                LayoutWord(0),
                 "the premise: #8067/#8086 birth-stamps them with a real ShapeId"
             );
             for object in &objects[1..] {

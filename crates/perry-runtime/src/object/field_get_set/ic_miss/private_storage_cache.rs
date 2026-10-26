@@ -12,7 +12,7 @@ struct PrivateStorageKey {
     // The last word is the entry: a layout's optional element (a class
     // family's) is present only while its slot holds no hole, which every
     // hit reads from the object.
-    slot: std::cell::Cell<Option<(u32, u32, u32, u8)>>,
+    slot: std::cell::Cell<Option<(LayoutWord, u32, u32, u8)>>,
 }
 
 impl std::ops::Deref for PrivateStorageKey {
@@ -74,9 +74,12 @@ impl PrivateStorageKey {
             }));
         }
         let slot = self.slot.get().filter(|slot| slot.0 == shape).or_else(|| {
-            if !crate::object::shapes::shape_object_kind_of_receiver(shape).is_some_and(|kind| {
-                kind.is_ordinary_layout() || kind == crate::object::shapes::ShapeObjectKind::Class
-            }) {
+            if !crate::object::shapes::shape_object_kind_of_receiver((shape).0).is_some_and(
+                |kind| {
+                    kind.is_ordinary_layout()
+                        || kind == crate::object::shapes::ShapeObjectKind::Class
+                },
+            ) {
                 return None;
             }
             let keys = unsafe { crate::object::object_keys(object) };
@@ -96,7 +99,7 @@ impl PrivateStorageKey {
             {
                 return None;
             }
-            let live = crate::object::shapes::shape_live_inline_slot_count_of_receiver(shape)?;
+            let live = crate::object::shapes::shape_live_inline_slot_count_of_receiver((shape).0)?;
             let slot = (shape, unsafe { keys.storage_slot(index) }, live, attrs);
             self.slot.set(Some(slot));
             Some(slot)

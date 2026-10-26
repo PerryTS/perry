@@ -629,6 +629,18 @@ fn compute_object_cache_key_with_env(
         );
     }
 
+    // The owning namespace module can differ from all member origins (barrels).
+    {
+        let mut values: Vec<_> = opts.namespace_source_prefixes.iter().collect();
+        values.sort_by(|a, b| a.0.cmp(b.0));
+        let value = values
+            .iter()
+            .map(|(local, prefix)| format!("{local}={prefix}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        h.field("namespace_source_prefixes", &value);
+    }
+
     // Import function prefixes (HashMap — MUST sort).
     {
         let mut v: Vec<(&String, &String)> = opts.import_function_prefixes.iter().collect();

@@ -348,7 +348,8 @@ pub(super) fn compile_module_entry(
         // generated function registers their initializers, which the runtime
         // runs at its first path lookup (`js_register_path_inits_lazily`), so
         // startup pays one call, not a registry insert per module.
-        let lazy_path_registrar: Option<String> = if cross_module.lazy_path_init_modules.is_empty() {
+        let lazy_path_registrar: Option<String> = if cross_module.lazy_path_init_modules.is_empty()
+        {
             None
         } else {
             let inits: Vec<(String, usize, String)> = cross_module
@@ -893,6 +894,7 @@ pub(super) fn compile_module_entry(
             object_literal_locals: HashSet::new(),
             constructed_kind_locals: HashMap::new(),
             namespace_imports: &cross_module.namespace_imports,
+            namespace_source_prefixes: &cross_module.namespace_source_prefixes,
             namespace_member_prefixes: &cross_module.namespace_member_prefixes,
             namespace_member_nested: &cross_module.namespace_member_nested,
             cjs_interop_namespaces: &cross_module.cjs_interop_namespaces,

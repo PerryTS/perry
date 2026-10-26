@@ -1,5 +1,6 @@
 //! Completed plain-record construction in the JSON suppression window.
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 /// Build the pointer-free object used by the bounded inline JSON parser.
 ///
@@ -17,7 +18,7 @@ use super::*;
 unsafe fn finish_inline_json_object(
     object: *mut ObjectHeader,
     keys: *mut ArrayHeader,
-    shape_id: u32,
+    shape_id: LayoutWord,
     fields: &[(JSValue, JSValue)],
 ) -> *mut ObjectHeader {
     debug_assert!(crate::gc::gc_is_suppressed());
@@ -79,10 +80,10 @@ fn inline_json_object_size(field_count: usize) -> usize {
 /// edge needs to be reminted after movement.
 #[inline(never)]
 pub(crate) unsafe fn try_object_from_prevalidated_one_field(
-    shape_id: u32,
+    shape_id: LayoutWord,
     value: JSValue,
 ) -> Option<*mut ObjectHeader> {
-    debug_assert_ne!(shape_id, 0);
+    debug_assert_ne!(shape_id, LayoutWord(0));
     debug_assert!(!value.is_pointer() && !value.is_string());
     let raw = crate::arena::arena_alloc_gc_no_collect(
         inline_json_object_size(1),
@@ -94,7 +95,7 @@ pub(crate) unsafe fn try_object_from_prevalidated_one_field(
     }
     let object = raw.cast::<ObjectHeader>();
     (*object).class_id = 0;
-    (*object).parent_class_id = shape_id;
+    (*object).parent_class_id = shape_id.0;
     (*object).meta = ptr::null_mut();
     // Charter step 3: the cached id is an `Ordinary` (marked) record's.
     shapes::store_kind::premark_plain_ordinary(object);
@@ -116,9 +117,9 @@ pub(crate) unsafe fn try_object_from_prevalidated_one_field(
 /// collection or old-generation carrier bookkeeping can intervene.
 #[inline(always)]
 pub(crate) unsafe fn try_empty_json_object_preinstalled(
-    shape_id: u32,
+    shape_id: LayoutWord,
 ) -> Option<*mut ObjectHeader> {
-    debug_assert_ne!(shape_id, 0);
+    debug_assert_ne!(shape_id, LayoutWord(0));
     let raw = crate::arena::arena_alloc_gc_no_collect(
         inline_json_object_size(0),
         8,
@@ -129,7 +130,7 @@ pub(crate) unsafe fn try_empty_json_object_preinstalled(
     }
     let object = raw.cast::<ObjectHeader>();
     (*object).class_id = 0;
-    (*object).parent_class_id = shape_id;
+    (*object).parent_class_id = shape_id.0;
     (*object).meta = ptr::null_mut();
     // Charter step 3: a keyless JSON object is born marked plain-ordinary,
     // and its cached id (`parse_empty`) is the marked record's.
@@ -153,7 +154,7 @@ pub(crate) unsafe fn try_empty_json_object_preinstalled(
 #[inline(never)]
 pub(crate) unsafe fn try_object_from_inline_json_fields(
     keys: *mut ArrayHeader,
-    shape_id: u32,
+    shape_id: LayoutWord,
     fields: &[(JSValue, JSValue)],
 ) -> Option<*mut ObjectHeader> {
     let raw = crate::arena::arena_alloc_gc_no_collect(
@@ -177,7 +178,7 @@ pub(crate) unsafe fn try_object_from_inline_json_fields(
 #[inline(never)]
 pub(crate) unsafe fn object_from_inline_json_fields(
     keys: *mut ArrayHeader,
-    shape_id: u32,
+    shape_id: LayoutWord,
     fields: &[(JSValue, JSValue)],
 ) -> *mut ObjectHeader {
     let raw = crate::arena::arena_alloc_gc(
@@ -191,7 +192,7 @@ pub(crate) unsafe fn object_from_inline_json_fields(
 pub(crate) unsafe fn object_from_json_fields_preinstalled(
     batch: &mut Option<crate::arena::ConstructionBatch>,
     keys: *mut ArrayHeader,
-    shape_id: u32,
+    shape_id: LayoutWord,
     values: &[JSValue],
 ) -> *mut ObjectHeader {
     let count = values.len();

@@ -456,7 +456,11 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function("js_import_meta_resolve_value", DOUBLE, &[DOUBLE]);
     module.declare_function("js_globalthis_seed_async_local_storage", VOID, &[]);
     // Next.js wall 54: runtime `require(absolutePath.js)` -> AOT-compiled module.
-    module.declare_function("js_register_path_module_partial", VOID, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_register_path_module_partial",
+        VOID,
+        &[DOUBLE, DOUBLE, DOUBLE],
+    );
     module.declare_function("js_register_path_module", VOID, &[DOUBLE, DOUBLE]);
     // #6769: parent linking, emitted in the preamble ahead of the body.
     module.declare_function("js_link_path_module_parent", VOID, &[DOUBLE]);

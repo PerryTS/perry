@@ -3,6 +3,8 @@
 //! Four native words, no heap pointers: shape, template identity plus capture
 //! slot, compiled code, and signature. Captures come from the current evaluation.
 use super::*;
+#[cfg(test)]
+use crate::codegen_abi::LayoutWord;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 type Constructor = (usize, u32, u32);
@@ -30,7 +32,7 @@ pub(super) unsafe fn validated_class_entry(
     let header = crate::value::addr_class::try_read_gc_header(object as usize)?;
     if header.obj_type != crate::gc::GC_TYPE_OBJECT
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
-        || crate::object::shapes::object_shape_stamp(object) as u64 != shape
+        || crate::object::shapes::object_shape_stamp(object).0 as u64 != shape
         || (*object).class_id != (*site.add(1)).load(Ordering::Relaxed) as u32
     {
         return None;
@@ -49,9 +51,9 @@ pub(super) unsafe fn site_constructor(
     }
     let shape = crate::object::shapes::object_shape_stamp(object);
     let cid = (*object).class_id;
-    let hit = (*site).load(Ordering::Relaxed) == shape as u64
+    let hit = (*site).load(Ordering::Relaxed) == shape.0 as u64
         && (*site.add(1)).load(Ordering::Relaxed) as u32 == cid;
-    let entry = resolved_site_constructor(site, shape as u64, cid)?;
+    let entry = resolved_site_constructor(site, shape.0 as u64, cid)?;
     if !hit && entry.2 != 0 {
         let slot = crate::object::shapes::shape_record_for_word(shape)
             .and_then(|record| record.own_data_slot_of_value(0, b"__perry_ctor_caps"))
@@ -383,7 +385,10 @@ mod tests {
                 class.with_mut_ptr::<ObjectHeader, _>(|class| {
                     assert_eq!(site_constructor(site.as_ptr(), class), Some((16, 2, 1)));
                     let (shape, slot) = capture_slot(site.as_ptr()).expect("own capture data slot");
-                    assert_eq!(shape, crate::object::shapes::object_shape_stamp(class));
+                    assert_eq!(
+                        LayoutWord(shape),
+                        crate::object::shapes::object_shape_stamp(class)
+                    );
                     assert_eq!(
                         crate::object::js_object_get_field(class, slot).as_number(),
                         expected

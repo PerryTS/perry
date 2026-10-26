@@ -1,4 +1,5 @@
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 fn atom(name: &[u8]) -> *const crate::StringHeader {
     crate::string::js_string_pool_atom(
@@ -109,7 +110,7 @@ fn accessor_hits_reload_the_holder_pair() {
         );
         // Mutate the live pair through the holder's slot without touching
         // the memo. A memo of a callable would incorrectly retain first.
-        let record = record_of(dir, (*proto).parent_class_id);
+        let record = record_of(dir, LayoutWord((*proto).parent_class_id));
         let (pos, _) = own_entry(
             record,
             STRING_TAG | key as u64,
@@ -269,7 +270,7 @@ fn an_own_hole_reads_live_presence_before_using_its_tail() {
             crate::value::js_nanbox_pointer(proto as i64).to_bits(),
         );
         let shape = (*recv).parent_class_id;
-        let record = record_of(dir, shape);
+        let record = record_of(dir, LayoutWord(shape));
         let (pos, _) = own_entry(record, word, hash).unwrap();
         let keys = (*record).keys as usize as *const crate::array::ArrayHeader;
         assert_ne!(
@@ -523,7 +524,7 @@ fn four_argument_leaf_uses_the_atoms_hash_for_indexed_keys() {
             assert_eq!(actual.to_bits(), expected.to_bits(), "{name}");
         }
         assert_ne!(
-            (*record_of(dir, (*obj).parent_class_id)).probe & !PROBE_FLAGS,
+            (*record_of(dir, LayoutWord((*obj).parent_class_id))).probe & !PROBE_FLAGS,
             0,
             "the fixture must exercise the indexed hash path"
         );
@@ -551,7 +552,7 @@ fn indexed_collisions_preserve_each_distinct_slots_value() {
         }
         assert_eq!(keys.len(), 16);
         let dir = crate::object::shapes::ordinary_dir_addr();
-        let r = record_of(dir, (*obj).parent_class_id);
+        let r = record_of(dir, LayoutWord((*obj).parent_class_id));
         let table = (probe_word(r) & !PROBE_FLAGS) as *const KeyIndex;
         assert!(!table.is_null());
         assert!((*table).mask <= 127, "all fixture keys must collide");

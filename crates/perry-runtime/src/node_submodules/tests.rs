@@ -277,12 +277,15 @@ fn fs_parent_promises_property_exposes_namespace() {
     let ns_value = boxed_ptr(ns as *const u8);
     assert_fs_promises_namespace_exports(ns_value);
 
-    let direct =
-        unsafe { js_node_submodule_namespace(b"fs_promises".as_ptr(), "fs_promises".len() as u32) };
+    let direct = commonjs_value("fs_promises");
+    let default = unsafe {
+        js_node_submodule_export_as_function(b"fs_promises".as_ptr(), 11, b"default".as_ptr(), 7)
+    };
+    assert_eq!(value.to_bits(), direct.to_bits());
     assert_eq!(
         value.to_bits(),
-        direct.to_bits(),
-        "fs.promises should reuse the direct fs_promises namespace singleton"
+        default.to_bits(),
+        "fs.promises, require and the ESM default must share the existing CommonJS object"
     );
 }
 

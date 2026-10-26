@@ -334,6 +334,8 @@ pub struct CompileOptions {
     /// Codegen uses this to know that `X.foo()` should be dispatched as
     /// a cross-module call rather than an object method call.
     pub namespace_imports: Vec<String>,
+    /// Namespace local -> owning compiled module prefix, before following re-exports.
+    pub namespace_source_prefixes: std::collections::HashMap<String, String>,
     /// #7189: `(namespace local, member)` pairs whose member is itself a MODULE
     /// NAMESPACE, from `export * as ns from "./m.ts"` in the imported module.
     ///
@@ -974,6 +976,7 @@ pub(crate) struct CrossModuleCtx {
     /// both tables are final, before any function body is lowered.
     pub class_hierarchy: super::class_hierarchy::ClassHierarchy,
     pub namespace_imports: std::collections::HashSet<String>,
+    pub namespace_source_prefixes: std::collections::HashMap<String, String>,
     /// #7189: `(namespace local, member)` pairs whose member is itself a MODULE
     /// NAMESPACE, from `export * as ns from "./m.ts"` in the imported module.
     ///

@@ -31,10 +31,20 @@ pub(super) fn program_is_closed<'a>(
             eprintln!("perry: CommonJS not closed: the program has dynamic code sites");
         }
         for (_, module) in modules {
-            match module.class_family_syntax.as_ref().map(|s| s.module_capability_uses) {
+            match module
+                .class_family_syntax
+                .as_ref()
+                .map(|s| s.module_capability_uses)
+            {
                 Some(0) => {}
-                Some(n) => eprintln!("perry: CommonJS not closed: {}: {n} capability uses", module.name),
-                None => eprintln!("perry: CommonJS not closed: {} has no original-source census", module.name),
+                Some(n) => eprintln!(
+                    "perry: CommonJS not closed: {}: {n} capability uses",
+                    module.name
+                ),
+                None => eprintln!(
+                    "perry: CommonJS not closed: {} has no original-source census",
+                    module.name
+                ),
             }
         }
     }
@@ -97,7 +107,9 @@ fn drop_unused_loader_preloads(module: &mut Module) {
         .filter(|i| builtin(&i.source))
         .flat_map(|i| i.specifiers.iter())
         .filter_map(|s| match s {
-            perry_hir::ImportSpecifier::Named { imported, local } if local.starts_with("__perry_cjs") => {
+            perry_hir::ImportSpecifier::Named { imported, local }
+                if local.starts_with("__perry_cjs") =>
+            {
                 Some((imported.clone(), local.clone()))
             }
             _ => None,

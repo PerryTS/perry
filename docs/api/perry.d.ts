@@ -4415,7 +4415,7 @@ declare module "zlib" {
   /** stdlib */
   export function gunzip(buffer: any, options?: any, callback?: any): void;
   /** stdlib */
-  export function gunzipSync(p0: any): Buffer;
+  export function gunzipSync(p0: any, options?: any): Buffer;
   /** stdlib */
   export function gzip(buffer: any, options?: any, callback?: any): void;
   /** stdlib */
@@ -4425,7 +4425,7 @@ declare module "zlib" {
   /** stdlib */
   export function inflateRaw(buffer: any, options?: any, callback?: any): void;
   /** stdlib */
-  export function inflateRawSync(p0: string): Buffer;
+  export function inflateRawSync(p0: string, options?: any): Buffer;
   /** stdlib */
   export function inflateSync(p0: any, options?: any): Buffer;
   /** stdlib */

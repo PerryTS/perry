@@ -1,6 +1,7 @@
 //! Own string keys retained from an ordinary data shape, or from the
 //! family's public name snapshot. One enumeration loop consumes either.
 use super::{shapes, ObjectHeader, ObjectKeys};
+use crate::codegen_abi::LayoutWord;
 use crate::gc::{RuntimeHandle, RuntimeHandleScope};
 
 /// Property facts owned by descriptor resolution. Exotic families keep their
@@ -94,7 +95,7 @@ impl OwnProperty {
 pub(crate) struct OwnNamesSnapshot<'scope> {
     keys: RuntimeHandle<'scope>,
     count: u32,
-    shape: u32,
+    shape: LayoutWord,
 }
 
 /// A plain ordinary data-key list answers own presence, attributes and slot
@@ -145,7 +146,7 @@ impl<'scope> OwnNamesSnapshot<'scope> {
                 return Self {
                     keys: scope.root_raw_mut_ptr(keys.arr()),
                     count: keys.count(),
-                    shape: shapes::object_layout_stamp(receiver),
+                    shape: LayoutWord(shapes::object_layout_stamp(receiver).0),
                 };
             }
         }
@@ -155,7 +156,7 @@ impl<'scope> OwnNamesSnapshot<'scope> {
         Self {
             keys: scope.root_raw_mut_ptr(names),
             count: keys.count(),
-            shape: 0,
+            shape: LayoutWord(0),
         }
     }
 
@@ -174,7 +175,7 @@ impl<'scope> OwnNamesSnapshot<'scope> {
     /// matching ShapeId proves this key still has default own-data attrs;
     /// its value is read now, so value-only mutations remain observable.
     pub(crate) unsafe fn data_value(&self, object: &RuntimeHandle<'_>, index: u32) -> Option<f64> {
-        if self.shape == 0 {
+        if self.shape == LayoutWord(0) {
             return None;
         }
         let receiver =
@@ -213,7 +214,7 @@ impl<'scope> OwnNamesSnapshot<'scope> {
         &self,
         scope: &'result RuntimeHandleScope,
     ) -> RuntimeHandle<'result> {
-        if self.shape == 0 {
+        if self.shape == LayoutWord(0) {
             return scope.root_raw_mut_ptr(super::js_object_alloc(0, 0));
         }
         let result =
@@ -234,6 +235,6 @@ impl<'scope> OwnNamesSnapshot<'scope> {
     }
 
     pub(crate) fn has_final_result_keys(&self) -> bool {
-        self.shape != 0
+        self.shape != LayoutWord(0)
     }
 }

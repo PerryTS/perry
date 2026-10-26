@@ -342,8 +342,8 @@ pub(super) fn try_global_builtins(
                         }
                     }
                 }
-                let class_name = ctx
-                    .synthesize_declared_keys_class(&keys, func_name == "__perry_declared_keys");
+                let class_name =
+                    ctx.synthesize_declared_keys_class(&keys, func_name == "__perry_declared_keys");
                 return Ok(Ok(Expr::New {
                     class_name,
                     args: Vec::new(),

@@ -814,7 +814,7 @@ fn a_literal_birth_mints_its_shape_with_the_plain_prototype_on_both_routes() {
     // facts and the second aborted ("the static ShapeId ... was refused by the
     // shape mint"; OpenCode's TUI: ajv's and json5's `{ x }` literals). A
     // literal birth names the plain prototype, as the startup literal seed
-    // (`js_shape_seed_plain`) does: class id 0.
+    // (`js_layout_seed_plain`) does: class id 0.
     let hir = literal_and_declared_module();
 
     // Lazy route (no static id): `(keys, field_count, class_id, rep)`.

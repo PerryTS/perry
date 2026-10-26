@@ -87,7 +87,13 @@ fn analyze(
             .calls
             .into_iter()
             .filter(|(lo, hi, _)| !shadows.iter().any(|(s, e)| s <= lo && hi <= e))
-            .map(|(lo, hi, spec)| (lo.saturating_sub(1) as usize, hi.saturating_sub(1) as usize, spec))
+            .map(|(lo, hi, spec)| {
+                (
+                    lo.saturating_sub(1) as usize,
+                    hi.saturating_sub(1) as usize,
+                    spec,
+                )
+            })
             .collect()
     };
     RequireSites {
@@ -427,10 +433,23 @@ module.exports = { get };
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("dep.js"), "module.exports = { v: 1 };\n").unwrap();
         let wrapped = super::super::wrap::wrap_commonjs(src, &dir.path().join("entry.js"));
-        assert!(wrapped.contains("return __perry_require_static_0().v;"), "{wrapped}");
-        assert!(wrapped.contains("function __perry_require_static_0() {"), "{wrapped}");
-        for absent in ["__perry_cjs_require_deferred", "__rec", "__perry_require_path_module("] {
-            assert!(!wrapped.contains(absent), "`{absent}` is the registry path:\n{wrapped}");
+        assert!(
+            wrapped.contains("return __perry_require_static_0().v;"),
+            "{wrapped}"
+        );
+        assert!(
+            wrapped.contains("function __perry_require_static_0() {"),
+            "{wrapped}"
+        );
+        for absent in [
+            "__perry_cjs_require_deferred",
+            "__rec",
+            "__perry_require_path_module(",
+        ] {
+            assert!(
+                !wrapped.contains(absent),
+                "`{absent}` is the registry path:\n{wrapped}"
+            );
         }
         perry_parser::parse_typescript(&wrapped, "wrapped.cjs").unwrap();
     }
@@ -459,10 +478,20 @@ module.exports = { get };
             }
             src.push_str("module.exports = {};\n");
             let wrapped = super::super::wrap::wrap_commonjs(&src, &dir.path().join("entry.js"));
-            let start = wrapped.find("function require(specifier) {").expect("require function");
+            let start = wrapped
+                .find("function require(specifier) {")
+                .expect("require function");
             let end = start + wrapped[start..].find("\n    }\n").expect("its end");
-            assert!(!wrapped[start..end].contains("try"), "{count}: {}", &wrapped[start..end]);
-            assert_eq!(wrapped.matches("__perry_require_path_module(").count(), 0, "{wrapped}");
+            assert!(
+                !wrapped[start..end].contains("try"),
+                "{count}: {}",
+                &wrapped[start..end]
+            );
+            assert_eq!(
+                wrapped.matches("__perry_require_path_module(").count(),
+                0,
+                "{wrapped}"
+            );
         }
     }
 }

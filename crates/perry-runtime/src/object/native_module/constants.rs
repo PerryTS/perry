@@ -575,12 +575,7 @@ pub(crate) unsafe fn get_native_module_constant(
             "constants" => Some(create_sub_namespace("fs.constants")),
             // #2133: `fs.promises` — populated `fs_promises` singleton so
             // `const { open } = fs.promises` (and FileHandle dispatch) work.
-            "promises" => Some(unsafe {
-                crate::node_submodules::js_node_submodule_namespace(
-                    b"fs_promises".as_ptr(),
-                    "fs_promises".len() as u32,
-                )
-            }),
+            "promises" => Some(crate::node_submodules::commonjs_value("fs_promises")),
             _ => fs_const(property).or_else(|| fs_const_tail(property)),
         },
         "fs.constants" => fs_const(property).or_else(|| fs_const_tail(property)),
@@ -598,12 +593,7 @@ pub(crate) unsafe fn get_native_module_constant(
             _ => None,
         },
         "timers" => match property {
-            "promises" => Some(unsafe {
-                crate::node_submodules::js_node_submodule_namespace(
-                    b"timers_promises".as_ptr(),
-                    "timers_promises".len() as u32,
-                )
-            }),
+            "promises" => Some(crate::node_submodules::commonjs_value("timers_promises")),
             _ => None,
         },
         "buffer.constants" => match property {
@@ -730,10 +720,7 @@ pub(crate) unsafe fn get_native_module_constant(
         },
         "stream" => match property {
             "Stream" | "default" => Some(bound_native_callable_export_value("stream", "Stream")),
-            "promises" => Some(crate::object::js_create_native_module_namespace(
-                "stream/promises".as_ptr(),
-                "stream/promises".len(),
-            )),
+            "promises" => Some(crate::node_submodules::commonjs_value("stream_promises")),
             _ => None,
         },
         "repl" => match property {

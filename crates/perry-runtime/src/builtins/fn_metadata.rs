@@ -40,6 +40,8 @@
 //! precedence on read: an owned entry can only come from an explicit runtime
 //! registration, which is the more specific statement about that function.
 
+#[cfg(test)]
+use crate::codegen_abi::LayoutWord;
 /// `PERRY_EAGER_FN_METADATA_UTF8=1` restores UTF-8 validation at registration
 /// time, for A/B measurement of the startup cost #9187 moved to the read side.
 fn eager_fn_metadata_validation() -> bool {
@@ -808,7 +810,7 @@ mod descriptor_name_tests {
             image.tail[slot + 1] = 5;
             let closure = crate::closure::ClosureHeader {
                 capture_count: 0,
-                shape_id: crate::codegen_abi::FUNCTION_LAYOUT_WORD,
+                shape_id: LayoutWord(crate::codegen_abi::FUNCTION_LAYOUT_WORD),
                 info: std::ptr::addr_of!(image.info),
                 props: std::ptr::null_mut(),
             };

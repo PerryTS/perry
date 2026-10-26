@@ -3002,6 +3002,7 @@ fn lower_module(
         program_has_thread_agents: thread_agents,
         class_hierarchy: class_hierarchy::ClassHierarchy::default(),
         namespace_imports: opts.namespace_imports.iter().cloned().collect(),
+        namespace_source_prefixes: opts.namespace_source_prefixes,
         namespace_member_nested: opts.namespace_member_nested.iter().cloned().collect(),
         cjs_interop_namespaces: opts.cjs_interop_namespaces.iter().cloned().collect(),
         namespace_member_prefixes: opts.namespace_member_prefixes,
@@ -4241,13 +4242,12 @@ fn lower_module(
             .filter_map(|e| match e {
                 perry_hir::Export::Named { local, exported }
                     // #11044: matches the broadened getter-emission gate in
-                    // artifacts.rs — `import.is_native` alone, not restricted
-                    // to node-core builtins, since non-core Perry-native
-                    // packages (ws, ioredis, ...) get the same synthetic
-                    // Import+Export pair from module_decl.rs's re-export
-                    // handling and must skip this dead-stub arm too.
+                    // export_value_wrappers.rs: native modules and runtime
+                    // Node submodules publish ordinary value getters. Reserve
+                    // those symbols for the getter emitter instead of claiming
+                    // them here with undefined-returning fallback stubs.
                     if !hir.imports.iter().any(|import| {
-                        import.is_native
+                        import.has_native_value_bindings()
                             && import.specifiers.iter().any(|specifier| {
                                 matches!(
                                     specifier,

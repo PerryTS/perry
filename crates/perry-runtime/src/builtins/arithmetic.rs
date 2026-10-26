@@ -938,12 +938,12 @@ mod rel_numeric_fastpath_tests {
             let fn_shape = crate::closure::shape::function_base_shape(
                 crate::closure::shape::FunctionProtoKind::Function,
             );
-            assert!(crate::object::shapes::is_exotic_layout_word(fn_shape));
+            assert!(crate::object::shapes::is_exotic_layout_word(fn_shape.0));
             let err = crate::error::js_error_new() as *mut u8;
             let word = err.add(crate::closure::CLOSURE_SHAPE_OFFSET) as *mut u32;
             let saved = word.read();
             // GC_STORE_AUDIT(POINTER_FREE): plants a u32 ShapeId in a non-pointer word.
-            word.write(fn_shape);
+            word.write(fn_shape.0);
             assert!(!crate::closure::is_closure_ptr(err as usize));
             let err_v = crate::value::js_nanbox_pointer(err as i64);
             assert_eq!(classify_value_typeof(err_v), ValueTypeofTag::Object);

@@ -163,7 +163,7 @@ pub use cmp::{
 };
 
 // ---- Re-exports: random / swap mutators ----
-pub use mutate::{js_buffer_fill_random, js_buffer_swap16, js_buffer_swap32, js_buffer_swap64};
+pub use mutate::{js_buffer_swap16, js_buffer_swap32, js_buffer_swap64};
 
 // ---- Re-exports: numeric read/write (typed-array view ops) ----
 pub use numeric::{

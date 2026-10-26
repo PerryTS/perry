@@ -6,6 +6,7 @@
 //! or mutation boundary. Values and results are never cached across calls.
 
 use super::*;
+use crate::codegen_abi::LayoutWord;
 use std::mem::MaybeUninit;
 
 const MAX_FIELDS: usize = 32;
@@ -44,7 +45,7 @@ unsafe fn ordinary_object(bits: u64) -> Option<(*const crate::ObjectHeader, usiz
 unsafe fn record(bits: u64) -> Option<Record> {
     let (obj, size) = ordinary_object(bits)?;
     let descriptor = crate::object::shapes::shape_descriptor_of_receiver(
-        crate::object::shapes::object_shape_stamp(obj),
+        (crate::object::shapes::object_shape_stamp(obj)).0,
     )?;
     let len = key_count(descriptor.keys_view())?;
     if len > descriptor.live_inline_slot_count as usize
@@ -93,7 +94,7 @@ unsafe fn key_count(view: crate::object::ObjectKeys) -> Option<usize> {
 
 #[derive(Clone, Copy)]
 struct KeyPlan {
-    shape: u32,
+    shape: LayoutWord,
     len: u32,
     offsets: [u32; MAX_FIELDS + 1],
 }
@@ -125,10 +126,10 @@ impl Emitter {
 
     unsafe fn plan(&mut self, object: *const crate::ObjectHeader) -> Option<usize> {
         let shape = crate::object::shapes::object_shape_stamp(object);
-        if shape == 0 {
+        if shape == LayoutWord(0) {
             return None;
         }
-        let mut bucket = (shape.wrapping_mul(0x9e37_79b9) >> 25) as usize;
+        let mut bucket = (shape.0.wrapping_mul(0x9e37_79b9) >> 25) as usize;
         while self.indices[bucket] != 0 {
             let index = (self.indices[bucket] - 1) as usize;
             if self.get(index).shape == shape {
@@ -143,7 +144,7 @@ impl Emitter {
     unsafe fn add_plan(
         &mut self,
         object: *const crate::ObjectHeader,
-        shape: u32,
+        shape: LayoutWord,
         bucket: usize,
     ) -> Option<usize> {
         let descriptor = crate::object::shapes::shape_descriptor_for_word(shape)?;

@@ -303,11 +303,7 @@ fn write_cjs_support(
         .cjs_support_keys
         .iter()
         .any(|k| k.as_str() == &*entry_key);
-    let source = super::super::cjs_wrap::support::source(
-        &ctx.cjs_support_keys,
-        entry_is_cjs,
-        ctx.cjs_support_builtin_used,
-    );
+    let source = super::super::cjs_wrap::support::source(&ctx.cjs_support_keys, entry_is_cjs);
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| anyhow!("create {}: {}", dir.display(), e))?;
     }

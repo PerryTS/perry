@@ -5,6 +5,7 @@
 //! No behaviour change; moved verbatim.
 
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 fn fixed_slot(slot: *mut u64) -> GcMutableSlotDescriptor {
     GcMutableSlotDescriptor::Slot(GcMutableSlot::new(slot, None))
@@ -506,7 +507,7 @@ unsafe fn visit_gc_rewrite_slot_descriptors_with<const INLINE_LAYOUT: bool>(
             let meta = user_ptr as *mut crate::object::ObjectMeta;
             let birth_word = ((*meta).instance_birth >> 32) as u32;
             if birth_word != 0 {
-                let birth = crate::object::shapes::shape_record_for_word(birth_word);
+                let birth = crate::object::shapes::shape_record_for_word(LayoutWord(birth_word));
                 if full_trace_active() {
                     crate::object::shapes::note_full_trace_carrier(birth);
                 }

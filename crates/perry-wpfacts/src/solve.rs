@@ -17,6 +17,12 @@ mod shared;
 use crate::delta::{Targets, Tokens};
 use crate::model::*;
 
+#[path = "solve/apply.rs"]
+mod apply;
+
+#[path = "solve/store.rs"]
+mod store;
+
 impl Model {
     // ---------------------------------------------------------------- nodes
 
@@ -279,6 +285,9 @@ impl Model {
             self.rel(|| line);
         }
         self.nodes[n as usize].cons.push(c);
+        if !self.cell_watch.is_empty() && self.cell_watch.remove(&n) {
+            self.cell_woken.push(n);
+        }
         if self.aborted {
             return;
         }
@@ -305,8 +314,12 @@ impl Model {
         self.members_settled.get_mut().clear();
         loop {
             self.fill_instances();
+            self.replay_marker_links();
             let Some(n) = self.wl.pop_front() else {
-                if self.sum.pending.is_empty() && !self.settle_bf_written() && !self.settle_for_in()
+                if self.sum.pending.is_empty()
+                    && self.marker_links.is_empty()
+                    && !self.settle_bf_written()
+                    && !self.settle_for_in()
                 {
                     break;
                 }
@@ -437,7 +450,8 @@ impl Model {
         // A marker has no fields (`store_into`): its any-key field holds
         // only its reach marker. Under a named key it holds that key's
         // reach marker instead (design §18.4).
-        if self.is_marker(t) && !self.reach_marker.contains(&t) {
+        // A path marker's named field holds its step (DECISIONS 158).
+        if self.is_marker(t) && (!self.reach_marker.contains(&t) || self.is_path_marker(t)) {
             let r = self.keyed_reach_of(t, a);
             self.add_tok(n, r);
         } else {
@@ -451,6 +465,10 @@ impl Model {
             for (d, site) in v {
                 self.store_into(d, Key::Named(a), n, site);
             }
+        }
+        // DECISIONS 94: a named field of an array whose elements are a cell.
+        if let Some(&seed) = self.cell_arrs.get(&t) {
+            self.edge(seed, n);
         }
         n
     }
@@ -529,6 +547,12 @@ impl Model {
         self.nodes[n as usize].of_marker = self.is_marker(t);
         self.all_fields.insert(t, n);
         self.rel(|| format!("allfields {n} {t}"));
+        // A path marker read under a computed key: its `[]` step
+        // (DECISIONS 158).
+        if self.is_path_marker(t) {
+            let s = self.path_step_of(t, None);
+            self.add_tok(n, s);
+        }
         n
     }
 
@@ -556,8 +580,17 @@ impl Model {
                     let fp = self.field(ftok, a);
                     self.edge(fp, n);
                 }
-                // Object.create / literal prototypes are added by gen.
-                _ => self.add_tok(n, objproto),
+                // Object.create / literal prototypes are added by gen. A
+                // receiver token or marker has its classes' (DECISIONS 59).
+                _ => match self.virt_protos.get(&t).cloned() {
+                    Some(ps) => {
+                        for p in ps {
+                            let pt = self.tok(TokKind::Proto(p));
+                            self.add_tok(n, pt);
+                        }
+                    }
+                    None => self.add_tok(n, objproto),
+                },
             },
             TokKind::Proto(tm) => match (
                 self.tmpls[tm as usize].parent,
@@ -620,967 +653,6 @@ impl Model {
             return;
         }
         self.apply_inner(n, c, toks, prim);
-    }
-
-    fn apply_inner(&mut self, n: NodeId, c: &Cons, toks: Tokens<'_>, prim: u16) {
-        match *c {
-            Cons::Load { key, dst } => {
-                if prim != 0 {
-                    self.with_b(|m| builtins::prim_load(m, prim, key, dst));
-                }
-                for &t in toks {
-                    self.load_from(t, t, key, dst);
-                }
-            }
-            Cons::CjsPublish { dst } => {
-                self.add_prim(dst, prim);
-                let marker = self.atom("__perry_cjs_record");
-                let ea = self.atom("exports");
-                for &t in toks {
-                    let record = matches!(self.toks[t as usize], TokKind::Obj(tm, _)
-                        if self.tmpls[tm as usize].birth_keys.contains(&marker));
-                    if record {
-                        self.load_from(t, t, Key::Named(ea), dst);
-                    } else {
-                        self.add_tok(dst, t);
-                    }
-                }
-            }
-            Cons::OwnValues { dst } => {
-                self.add_prim(dst, prim & prim::STR);
-                for &t in toks {
-                    let opaque = match &self.toks[t as usize] {
-                        TokKind::Top
-                        | TokKind::Builtin(_)
-                        | TokKind::BuiltinFn
-                        | TokKind::NativeProto(_) => true,
-                        TokKind::Obj(tm, _) => {
-                            matches!(self.tmpls[*tm as usize].kind, TmplKind::BObj { .. })
-                        }
-                        _ => false,
-                    };
-                    if opaque {
-                        self.add_top(dst, |_| "own values of an unmodeled object".into());
-                        self.add_prim(dst, prim::ALL);
-                    }
-                    if t == TOP {
-                        continue;
-                    }
-                    let fields = self.all_fields(t);
-                    self.edge(fields, dst);
-                    let act = ChainAct::Load(dst);
-                    // Any-key lookups subscribe through the holder relation;
-                    // named-key replay in `visits` does not cover them.
-                    self.any_walk_holders.entry(t).or_default().push((t, act));
-                    self.accessor_hit(t, t, Key::Any, act);
-                }
-            }
-            Cons::Store { key, src, site } => {
-                self.store_at = Some(n);
-                for &t in toks {
-                    self.store_into(t, key, src, site);
-                }
-                self.store_at = None;
-            }
-            Cons::Call { call } => {
-                for &t in toks {
-                    self.call_tok(call, t, None);
-                }
-            }
-            Cons::CallThis { call, this } => {
-                for &t in toks {
-                    self.call_tok(call, t, Some(this));
-                }
-            }
-            Cons::New { call } => {
-                for &t in toks {
-                    self.construct(call, t);
-                }
-            }
-            Cons::NewNamed { name, call } => {
-                if !toks.is_empty() {
-                    self.new_named(name, call);
-                }
-            }
-            Cons::MCall { key, call } => {
-                // The primitive kinds beside ⊤ add nothing to the call: the
-                // call of the unknown value escapes the arguments and returns
-                // ⊤ with every kind, which covers the primitive method's touch,
-                // its primitive result and its container of primitives
-                // (DECISIONS 42's reason, for a receiver's kinds). Made anyway,
-                // the container is a value of its own at every ⊤ site the
-                // result reaches: one per call site, each with field storage.
-                if prim != 0 && !self.nodes[n as usize].pts.contains_tok(TOP) {
-                    self.with_b(|m| builtins::prim_method(m, prim, key, call));
-                }
-                for &t in toks {
-                    self.method_on(t, key, call);
-                }
-            }
-            Cons::Chain { origin, key, act } => {
-                for &p in toks {
-                    self.chain_step(n, origin, p, key, act);
-                }
-            }
-            Cons::TopSink { reason } => {
-                let chain = self.chain_sinks.contains(&n);
-                let saved = std::mem::replace(&mut self.chain_escape, chain);
-                for &t in toks {
-                    self.escape(t, reason);
-                }
-                self.chain_escape = saved;
-            }
-            Cons::HandOver { reason } => {
-                for &t in toks {
-                    let stand_in = matches!(self.toks[t as usize], TokKind::Obj(tm, _)
-                        if self.foreign.contains_key(&tm));
-                    if !stand_in {
-                        self.escape(t, reason);
-                    }
-                }
-            }
-            Cons::ContractThis {
-                tmpl,
-                reason,
-                statics,
-            } => {
-                for &t in toks {
-                    let own_class = statics && self.toks[t as usize] == TokKind::ClassObj(tmpl);
-                    if self.tmpl_of(t) != Some(tmpl) && !own_class {
-                        self.escape(t, reason);
-                    }
-                }
-            }
-            Cons::TopIfAny { dst, from, reason } => {
-                if !toks.is_empty() || prim != 0 {
-                    if let Some(r) = reason {
-                        self.add_top(dst, |m| m.reasons[r as usize].clone());
-                        self.add_prim(dst, prim::ALL);
-                    }
-                    self.edge(from, dst);
-                }
-            }
-            Cons::Hard { kind, reason } => {
-                for &t in toks {
-                    self.mark_hard(t, kind, reason);
-                }
-            }
-            Cons::DefineAccessor { key, reason } => {
-                for &t in toks {
-                    // A key the layout already holds as data may move into an
-                    // accessor pair in its slot, and a class instance's layout
-                    // is the class's: E5 HARD, as any defineProperty was. (On
-                    // another unit's layout the accessor is beyond its contract
-                    // in any case: the census breaks it.)
-                    let new_key = match self.toks[t as usize] {
-                        TokKind::Obj(tm, _) => {
-                            let tpl = &self.tmpls[tm as usize];
-                            matches!(
-                                tpl.kind,
-                                TmplKind::Lit { .. }
-                                    | TmplKind::Class {
-                                        literal_shape: true,
-                                        ..
-                                    }
-                            ) && !tpl.birth_keys.contains(&key)
-                        }
-                        _ => false,
-                    };
-                    if !new_key {
-                        self.mark_hard(t, Hard::E5DefineProperty, reason);
-                    } else if let Some(tm) = self.tmpl_of(t) {
-                        *self.adds_keys.entry(tm).or_default() += 1;
-                    }
-                }
-            }
-            Cons::AddsKeys => {
-                for &t in toks {
-                    let t = self
-                        .contract_recv
-                        .get(&t)
-                        .and_then(|v| v.first())
-                        .copied()
-                        .unwrap_or(t);
-                    if let Some(tm) = self.tmpl_of(t) {
-                        *self.adds_keys.entry(tm).or_default() += 1;
-                    }
-                }
-            }
-            Cons::Implicit { reason, proto } => {
-                for &t in toks {
-                    match self.toks[t as usize] {
-                        // A function handed to a reflecting runtime helper:
-                        // it may be called back with anything.
-                        TokKind::Func(_, _) | TokKind::Bound(_) if proto == Protocol::Any => {
-                            self.escape(t, reason)
-                        }
-                        // `instanceof` a bound function runs its target's.
-                        TokKind::Bound(_) if proto == Protocol::HasInstance => {
-                            self.escape(t, reason)
-                        }
-                        _ => self.implicit(t, reason, proto),
-                    }
-                }
-            }
-            Cons::CreateProto { reason } => {
-                for &t in toks {
-                    // E10: every template whose prototype this is can now
-                    // have instances born without its constructor.
-                    if let TokKind::Proto(tm) = self.toks[t as usize] {
-                        let inst = self.tok(TokKind::Obj(tm, NO_CTX));
-                        self.mark_hard(inst, Hard::E10ObjectCreate, reason);
-                    }
-                }
-            }
-            Cons::ChainUnion { key, dst } => {
-                for &q in toks {
-                    if q == TOP {
-                        self.add_tok(dst, TOP);
-                        if self.is_constructor_key(key) {
-                            let f = self.tok(TokKind::Builtin(BuiltinNs::Function));
-                            self.add_tok(dst, f);
-                        }
-                        continue;
-                    }
-                    if self.is_array_length(q, key) {
-                        self.add_prim(dst, prim::NUM);
-                        continue;
-                    }
-                    let f = match key {
-                        Key::Named(a) => self.field(q, a),
-                        Key::Any => self.all_fields(q),
-                    };
-                    self.edge(f, dst);
-                    self.with_b(|m| builtins::tok_load(m, q, key, dst));
-                    if self.stops_at(q, key) {
-                        self.stopped_shared.entry(q).or_default().push((key, dst));
-                    } else {
-                        let up = self.cv(q, key);
-                        self.edge(up, dst);
-                    }
-                }
-            }
-            Cons::ProtoClosure { dst } => {
-                for &q in toks {
-                    self.add_tok(dst, q);
-                    if q != TOP {
-                        let up = self.cp(q);
-                        self.edge(up, dst);
-                    }
-                }
-            }
-            Cons::AnyAccessors { origin, act } => {
-                for &q in toks {
-                    if q != TOP {
-                        self.any_walk_holders
-                            .entry(q)
-                            .or_default()
-                            .push((origin, act));
-                    }
-                    if q != TOP && self.accessor_keys.get(&q).is_some_and(|k| !k.is_empty()) {
-                        self.accessor_hit(origin, q, Key::Any, act);
-                    }
-                }
-            }
-            Cons::ProtoMethods { origin, key, call } => {
-                for &q in toks {
-                    if matches!(
-                        self.toks[q as usize],
-                        TokKind::ObjectProto | TokKind::NativeProto(_)
-                    ) {
-                        self.with_b(|m| builtins::proto_method(m, q, origin, key, call));
-                    }
-                }
-            }
-            Cons::StoreTopProto { origin, src } => {
-                if toks.contains(&TOP) {
-                    let r = self.reason("store through an unknown prototype chain");
-                    self.sink_node(src, r);
-                    self.escape(origin, r);
-                }
-            }
-            Cons::Super { start, key, act } => {
-                for &t in toks {
-                    self.super_lookup(t, start, key, act);
-                }
-            }
-            Cons::SuperCtor { class, call } => {
-                for &t in toks {
-                    let owner_class = self.constructor_origin(class);
-                    let owner = self.tok(TokKind::ClassObj(owner_class));
-                    let parent = self.proto_node(owner);
-                    self.cons(
-                        parent,
-                        Cons::SuperCtorParent {
-                            class,
-                            call,
-                            origin: t,
-                        },
-                    );
-                    if self.tmpls[class as usize].native_parent.is_some() {
-                        self.with_b(|m| crate::builtins::native_parent_ctor(m, class, call, t));
-                    }
-                }
-            }
-            Cons::SuperCtorParent {
-                class,
-                call,
-                origin,
-            } => {
-                let owner_class = self.constructor_origin(class);
-                let owner = self.tok(TokKind::ClassObj(owner_class));
-                if self.super_relink.contains(&owner) || self.is_escaped(owner) {
-                    let reason = self.reason("E6 constructor follows live superclass");
-                    self.mark_hard(origin, Hard::E6SetPrototypeOf, reason);
-                }
-                for &parent in toks {
-                    match self.toks[parent as usize] {
-                        TokKind::ClassObj(tm) => {
-                            // Record the link before the parent's stores
-                            // reach the instance (§17.2 item 2).
-                            let oc = &mut self.tmpls[owner_class as usize];
-                            if oc.parent.is_none() && !oc.parent_links.contains(&tm) {
-                                oc.parent_links.push(tm);
-                            }
-                            self.run_ctor_chain_this(call, tm, origin)
-                        }
-                        TokKind::Func(_, _) => self.call_tok(call, parent, Some(origin)),
-                        TokKind::Bound(_) => self.construct(call, parent),
-                        TokKind::Top | TokKind::BuiltinFn | TokKind::Builtin(_) => {
-                            self.call_tok(call, parent, Some(origin));
-                            let ret = self.calls[call as usize].ret;
-                            self.add_tok(ret, TOP);
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            Cons::BirthField { key, src } => {
-                for &t in toks {
-                    if t == TOP {
-                        continue;
-                    }
-                    let f = match key {
-                        Key::Named(a) => self.field(t, a),
-                        Key::Any => self.field_any(t),
-                    };
-                    self.edge(src, f);
-                }
-            }
-            Cons::ThisFrom { recv } => {
-                for &t in toks {
-                    if let TokKind::Func(f, _) = self.toks[t as usize] {
-                        if !self.funcs[f as usize].lexical_this {
-                            let this = self.this_any(t);
-                            self.edge(recv, this);
-                        }
-                    }
-                }
-            }
-            Cons::Accessor {
-                holder,
-                key,
-                setter,
-            } => {
-                for &t in toks {
-                    match self.toks[t as usize] {
-                        TokKind::Func(_, _) => {
-                            self.cons(holder, Cons::AccessorInstall { key, f: t, setter });
-                        }
-                        TokKind::Top | TokKind::BuiltinFn | TokKind::Bound(_) => {
-                            // An unknown accessor: reads of any key on the
-                            // holder return ⊤ and stores escape.
-                            let r = self.reason("accessor of unknown function value");
-                            let fa = self.node_l("acc-unknown");
-                            self.add_top(fa, |_| "accessor of unknown function value".into());
-                            let site = self.anon_post_site("unknown accessor");
-                            self.cons(
-                                holder,
-                                Cons::Store {
-                                    key: Key::Any,
-                                    src: fa,
-                                    site,
-                                },
-                            );
-                            self.cons(holder, Cons::TopSink { reason: r });
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            Cons::AccessorInstall { key, f, setter } => {
-                let star = self.atom(crate::STAR_KEY);
-                for &t in toks {
-                    if let Some(s) = self.shared_of(t) {
-                        let k = self.atoms[key as usize].clone();
-                        self.note_shared(SharedWrite::Accessor(s, k));
-                    }
-                    self.note_fnproto_write(t, Some(Key::Named(key)), "accessor");
-                    builtins::note_native_write(self, t, Some(Key::Named(key)), "accessor");
-                    if t == TOP {
-                        continue;
-                    }
-                    if key == star {
-                        // A computed-key accessor: it may answer any key, so
-                        // it runs as unknown code and every key read through
-                        // this holder may yield anything (derive kills the
-                        // templates that reach it).
-                        let r = self.reason("accessor under a computed key");
-                        self.escape(f, r);
-                        let fa = self.field_any(t);
-                        self.add_top(fa, |_| "accessor under a computed key".into());
-                        self.add_prim(fa, prim::ALL);
-                        let ks = self.accessor_keys.entry(t).or_default();
-                        if !ks.contains(&star) {
-                            ks.push(star);
-                        }
-                        continue;
-                    }
-                    let entry = self.accessors.entry((t, key)).or_default();
-                    let list = if setter { &mut entry.1 } else { &mut entry.0 };
-                    if list.contains(&f) {
-                        continue;
-                    }
-                    list.push(f);
-                    let ks = self.accessor_keys.entry(t).or_default();
-                    if !ks.contains(&key) {
-                        ks.push(key);
-                    }
-                    let objproto = matches!(self.toks[t as usize], TokKind::ObjectProto);
-                    if objproto {
-                        // Every lookup reaches Object.prototype: rather than
-                        // replay them all, the derivation turns every fact
-                        // off (an accessor on Object.prototype is E23).
-                        self.objproto_accessor = true;
-                    }
-                    self.accessor_installed(t, key, f, setter, !objproto);
-                }
-            }
-            Cons::ProtoFrom { src } => {
-                for &t in toks {
-                    // `%Object.prototype%` is an immutable prototype exotic
-                    // object: setting its [[Prototype]] to anything but its
-                    // own (null) throws.
-                    if t == TOP || matches!(self.toks[t as usize], TokKind::ObjectProto) {
-                        continue;
-                    }
-                    let pn = self.proto_node(t);
-                    self.edge(src, pn);
-                    if let TokKind::ClassObj(tm) = self.toks[t as usize] {
-                        let instance = self.tok(TokKind::Obj(tm, NO_CTX));
-                        let reason =
-                            self.reason("E6 live superclass may change constructor birth fields");
-                        self.mark_hard(instance, Hard::E6SetPrototypeOf, reason);
-                    }
-                }
-            }
-            Cons::ProtoOf { dst } => {
-                for &t in toks {
-                    if t == TOP {
-                        self.add_tok(dst, TOP);
-                        continue;
-                    }
-                    let pn = self.proto_node(t);
-                    self.edge(pn, dst);
-                }
-            }
-            Cons::IterNext { dst } => {
-                for &t in toks {
-                    match self.toks[t as usize].clone() {
-                        TokKind::Top => self.add_tok(dst, TOP),
-                        TokKind::Func(_, _) | TokKind::Bound(_) => self.add_tok(dst, t),
-                        TokKind::Obj(tm, _) => match self.tmpls[tm as usize].kind {
-                            _ if self.is_array_like(t) => {}
-                            _ => {
-                                let a = self.atom("next");
-                                self.load_from(t, t, Key::Named(a), dst);
-                            }
-                        },
-                        _ => {
-                            let a = self.atom("next");
-                            self.load_from(t, t, Key::Named(a), dst);
-                        }
-                    }
-                }
-            }
-            // A for-in run's key (FVA 4.3b): `o[k]` reads that one key.
-            Cons::IdxLoad { idx, dst } if self.key_nodes.contains_key(&idx) => {
-                let a = self.key_nodes[&idx];
-                for &t in toks {
-                    self.load_from(t, t, Key::Named(a), dst);
-                }
-            }
-            Cons::IdxLoad { idx, dst } => {
-                for &t in toks {
-                    if t == TOP {
-                        self.add_tok(dst, TOP);
-                        continue;
-                    }
-                    let all = self.all_fields(t);
-                    self.edge(all, dst);
-                    self.add_prim(dst, prim::UNDEF);
-                    if self.idx_done.insert((idx, t, dst, 0)) {
-                        self.cons(idx, Cons::IdxKey { obj: t, dst });
-                    }
-                }
-            }
-            Cons::IdxKey { obj, dst } => {
-                let named = prim & (prim::STR | prim::SYMBOL) != 0 || !toks.is_empty();
-                if named && self.idx_done.insert((n, obj, dst, 1)) {
-                    self.load_from(obj, obj, Key::Any, dst);
-                }
-                // ToPropertyKey of `true`, `null`, `undefined` is a named key.
-                if !named {
-                    for (bit, keys) in [
-                        (prim::BOOL, &["true", "false"][..]),
-                        (prim::NULL, &["null"][..]),
-                        (prim::UNDEF, &["undefined"][..]),
-                    ] {
-                        if prim & bit != 0 && self.idx_done.insert((n, obj, dst, 2 + bit as u8)) {
-                            for k in keys {
-                                let a = self.atom(k);
-                                self.load_program_key(obj, a, dst);
-                            }
-                        }
-                    }
-                }
-            }
-            Cons::ForInBody { obj, call } => {
-                for &t in toks {
-                    if matches!(self.toks[t as usize], TokKind::Func(..))
-                        && self.for_in_on.insert((obj, t, call))
-                    {
-                        self.cons(obj, Cons::ForInKeys { ft: t, call });
-                    }
-                }
-            }
-            Cons::ForInKeys { ft, call } => {
-                // A primitive's keys (a string's indices) are no literal's.
-                if prim != 0 {
-                    self.for_in_every_key(call, ft);
-                }
-                for &t in toks {
-                    self.for_in_tok(call, ft, t);
-                }
-            }
-            Cons::DefineKeyed {
-                o,
-                reason,
-                accessor,
-            } => {
-                if let Some(k) = self.keyed_once(n, o, 0) {
-                    match k {
-                        Some(key) if accessor => self.cons(o, Cons::DefineAccessor { key, reason }),
-                        _ => self.cons(
-                            o,
-                            Cons::Hard {
-                                kind: Hard::E5DefineProperty,
-                                reason,
-                            },
-                        ),
-                    }
-                }
-            }
-            Cons::StoreKeyed { o, src, site } => {
-                if let Some(k) = self.keyed_once(n, src, 1) {
-                    let key = k.map_or(Key::Any, Key::Named);
-                    self.cons(o, Cons::Store { key, src, site });
-                }
-            }
-            Cons::AccessorKeyed { holder, f, setter } => {
-                if let Some(k) = self.keyed_once(n, f, 2 + setter as u8) {
-                    let key = k.unwrap_or_else(|| self.atom(crate::STAR_KEY));
-                    self.cons(
-                        f,
-                        Cons::Accessor {
-                            holder,
-                            key,
-                            setter,
-                        },
-                    );
-                }
-            }
-            Cons::Arith { dst, add } => {
-                let mut out = 0u16;
-                // Objects go through ToPrimitive (user valueOf/toString).
-                let objs = prim::NUM | prim::BIGINT | if add { prim::STR } else { 0 };
-                // A described parameter's marker is no value (DECISIONS 74);
-                // an argument marker is none while it stands for such
-                // markers alone, and adds the kinds if it leaves (75).
-                if toks.iter().any(|&t| !self.beside_values(t)) {
-                    out |= objs;
-                } else {
-                    for &t in toks {
-                        if self.beside_markers.contains(&t) {
-                            self.beside_arith.entry(t).or_default().push((dst, objs));
-                        }
-                    }
-                }
-                if prim & prim::BIGINT != 0 {
-                    out |= prim::BIGINT;
-                }
-                if prim & (prim::NUM | prim::BOOL | prim::NULL | prim::UNDEF) != 0 {
-                    out |= prim::NUM;
-                }
-                if prim & prim::STR != 0 {
-                    out |= if add { prim::STR } else { prim::NUM };
-                }
-                if out != 0 {
-                    self.add_prim(dst, out);
-                }
-            }
-            Cons::ArrayLenArg { dst } => {
-                self.add_tokens(dst, toks, prim & !prim::NUM);
-            }
-            Cons::ShareBuffer { ta } => {
-                for &t in toks {
-                    let shared = t == TOP
-                        || matches!(self.toks[t as usize], TokKind::Obj(tm, _)
-                            if matches!(self.tmpls[tm as usize].kind, TmplKind::BObj { what: "TypedArray", .. }));
-                    if shared {
-                        let r = self.reason("B1 typed array over a shared buffer");
-                        self.mark_hard(ta, Hard::B1Exposed, r);
-                    }
-                }
-            }
-            Cons::ThisTo { origin } => {
-                let calls = self
-                    .via_calls
-                    .get(&(n, origin))
-                    .cloned()
-                    .unwrap_or_default();
-                for &t in toks {
-                    // Each receiver binds every call looked up through
-                    // this node: solve work per call.
-                    self.work += calls.len() as u64;
-                    self.this_to(t, origin);
-                    self.this_calls(t, origin, &calls);
-                }
-            }
-            Cons::CallArgs { call } => {
-                for &t in toks {
-                    self.call_args(call, t);
-                }
-            }
-            Cons::RetInto { call, run } => self.ret_into(call, run, toks, prim),
-            Cons::ArgInto { call, run, i } => self.arg_into(call, run, i, toks),
-            Cons::Spread { into, site } => {
-                for &s in toks {
-                    self.cons(into, Cons::SpreadFrom { src: s, site });
-                }
-            }
-            Cons::SpreadFrom { src, site } => {
-                for &d in toks {
-                    self.spread_into(src, d, site);
-                }
-            }
-            Cons::ThisInst { call, ft } => {
-                for &t in toks {
-                    self.bind_layout(call, ft, Some(t), 0);
-                }
-                if prim != 0 {
-                    self.bind_layout(call, ft, None, prim);
-                }
-            }
-            Cons::HolderStep { key, pass, stop } => {
-                for &q in toks {
-                    if q == TOP {
-                        self.add(pass, &[TOP], 0);
-                    } else if self.stops_at(q, key) {
-                        self.add(stop, &[q], 0);
-                        self.stopped_holders
-                            .entry(q)
-                            .or_default()
-                            .push((key, pass, stop));
-                    } else {
-                        let (p2, s2) = self.holders(q, key);
-                        self.edge_quiet(p2, pass);
-                        self.edge_quiet(s2, stop);
-                    }
-                }
-            }
-            Cons::VisitHolders { origin, key, act } => {
-                for &h in toks {
-                    if h == TOP {
-                        self.chain_step(0, origin, TOP, key, act);
-                        continue;
-                    }
-                    if !matches!(self.toks[h as usize], TokKind::ObjectProto) {
-                        self.visits.entry(h).or_default().insert((origin, key, act));
-                    }
-                    self.accessor_hit(origin, h, key, act);
-                }
-            }
-            Cons::VisitStop { origin, key, act } => {
-                for &h in toks {
-                    self.accessor_hit(origin, h, key, act);
-                }
-            }
-            Cons::BuiltinCallee => {
-                for &t in toks {
-                    if matches!(self.toks[t as usize], TokKind::Builtin(_)) {
-                        self.builtin_callee.insert(n);
-                        let sites = self.callee_sites.get(&n).cloned().unwrap_or_default();
-                        for (call, origin) in sites {
-                            self.call_tok(call, t, Some(origin));
-                        }
-                    }
-                }
-            }
-            Cons::NewTargetHard { reason } => {
-                for &t in toks {
-                    match self.toks[t as usize] {
-                        TokKind::ClassObj(tm) => {
-                            let inst = self.tok(TokKind::Obj(tm, NO_CTX));
-                            self.mark_hard(inst, Hard::E11ReflectConstruct, reason);
-                        }
-                        TokKind::Func(f, _) => {
-                            let tm = self.fn_inst_template(f);
-                            let inst = self.tok(TokKind::Obj(tm, NO_CTX));
-                            self.mark_hard(inst, Hard::E11ReflectConstruct, reason);
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
-    }
-
-    /// Every builtin function value may have been written: every property
-    /// read of one is ⊤ from now on.
-    fn write_builtin_fns(&mut self, r: u32) {
-        if self.bf_written.is_some() {
-            return;
-        }
-        self.bf_written = Some(r);
-        self.note_shared(SharedWrite::Store(Shared::BuiltinFn, None));
-        self.bf_stores.clear();
-        for dst in std::mem::take(&mut self.bf_reads) {
-            self.add_top(dst, |_| {
-                "property of a written builtin function value".into()
-            });
-        }
-    }
-
-    /// The stores into a builtin function value, once the worklist is
-    /// empty: one at a node without ⊤ wrote one (true: solve on). A node
-    /// that holds ⊤ keeps it, so its stores are stores into ⊤ for good.
-    fn settle_bf_written(&mut self) -> bool {
-        if self.bf_written.is_some() || self.bf_stores.is_empty() {
-            return false;
-        }
-        let stores = std::mem::take(&mut self.bf_stores);
-        match stores
-            .iter()
-            .find(|&&(n, _)| !self.nodes[n as usize].pts.contains_tok(TOP))
-        {
-            Some(&(_, r)) => {
-                self.write_builtin_fns(r);
-                true
-            }
-            None => false,
-        }
-    }
-
-    /// A keyed rule on key node `n` (FVA 4.3b) applies once per operand:
-    /// `Some(Some(k))` for a for-in run's one key, `Some(None)` for any
-    /// other key, `None` when it already applied.
-    fn keyed_once(&mut self, n: NodeId, x: NodeId, kind: u8) -> Option<Option<Atom>> {
-        if !self.keyed_done.insert((n, x, kind)) {
-            return None;
-        }
-        Some(self.key_nodes.get(&n).copied())
-    }
-
-    pub(crate) fn store_into(&mut self, t: Tok, key: Key, src: NodeId, site: SiteId) {
-        // A store into a builtin function value is decided once the
-        // worklist is empty (`settle_bf_written`): `write_builtin_fns` notes it.
-        // The boundary's store for other units' code is theirs to publish.
-        let theirs = self.store_at.is_some() && self.store_at == self.other_units_store;
-        if let Some(s) = self
-            .shared_of(t)
-            .filter(|s| *s != Shared::BuiltinFn && !theirs)
-        {
-            let k = match key {
-                Key::Named(a) => Some(self.atoms[a as usize].clone()),
-                Key::Any => None,
-            };
-            self.note_shared(SharedWrite::Store(s, k));
-        }
-        // A program-owned global: an ordinary field of the global object.
-        if let (TokKind::Builtin(BuiltinNs::GlobalThis), Key::Named(a)) =
-            (&self.toks[t as usize], key)
-        {
-            if builtins::global_user_key(&self.atoms[a as usize])
-                && !builtins::native_written(self, t, a)
-            {
-                let f = builtins::global_field(self, t, a);
-                self.edge(src, f);
-                return;
-            }
-        }
-        self.note_fnproto_write(t, Some(key), "store");
-        builtins::note_native_write(self, t, Some(key), "store");
-        if matches!(key, Key::Any)
-            || matches!(key, Key::Named(a) if self.atoms[a as usize] == "__proto__")
-        {
-            self.super_relink.insert(t);
-            if let TokKind::ClassObj(tm) = self.toks[t as usize] {
-                let parent = self.proto_node(t);
-                self.edge(src, parent);
-                let instance = self.tok(TokKind::Obj(tm, NO_CTX));
-                let reason = self.reason("E6 possible computed superclass write");
-                self.mark_hard(instance, Hard::E6SetPrototypeOf, reason);
-            }
-        }
-        if t == TOP {
-            let r = self.reason("stored into a value from unmodeled code");
-            self.sink_node(src, r);
-            return;
-        }
-        if matches!(self.toks[t as usize], TokKind::BuiltinFn) {
-            // A builtin function value is opaque: it has no field storage
-            // here. The value is gone to the runtime, and every property
-            // read of such a value is ⊤ from now on (`load_from`).
-            let r = self.reason("stored into a builtin function value");
-            self.sink_node(src, r);
-            // Beside ⊤ the value is that ⊤ (`Model::top_beside`), but it may
-            // reach the node before ⊤ does: the node decides once the
-            // worklist is empty. A store from no rule's node decides now.
-            if self.bf_written.is_none() {
-                match self.store_at {
-                    Some(n) => self.bf_stores.push((n, r)),
-                    None => self.write_builtin_fns(r),
-                }
-            }
-            return;
-        }
-        if let Some(is) = self.contract_recv.get(&t).cloned() {
-            self.recv_log
-                .entry(t)
-                .or_default()
-                .push(crate::model::RecvEffect::Store(key, src, site));
-            for i in is {
-                self.store_into(i, key, src, site);
-            }
-        }
-        self.mark_use(t, crate::model::MARK_ESCAPE);
-        // A parameter marker stands for another unit's value (design §11.2):
-        // it has no fields in this unit. The store is its contract's escape
-        // (above), and the stored value goes where the receiver's other
-        // values take it: ⊤ beside a contract parameter's marker (stored into
-        // unmodeled code: it escapes), a closed function's callers' values
-        // beside its marker (decision 13). A field of the marker would only
-        // hold every value stored into any marker it meets (DECISIONS 41).
-        if self.is_marker(t) {
-            return;
-        }
-        // A store into another unit's instance, class object or prototype
-        // is beyond its contract (census report).
-        let tm = match self.toks[t as usize] {
-            TokKind::Obj(tm, _) | TokKind::ClassObj(tm) | TokKind::Proto(tm) => Some(tm),
-            _ => None,
-        };
-        // A store into an existing data field of another unit's literal
-        // layout opens nothing (§5): a store effect its defining unit
-        // performs (decision 17) with what the stored value's contract
-        // describes, published as a published binding's value is
-        // (`Gen::contract_check`: a value no contract describes escapes, and
-        // the field holds an unknown value). A class instance's
-        // field is existing when every instance holds it from its birth
-        // (definite): the store adds no key (CW2 C, binarytrees_arena).
-        // A literal layout's new data key is a shape transition its defining
-        // unit performs the same way (design §16, DECISIONS 66): the layout
-        // gains the key. `__proto__` and an accessor key store no data.
-        let effect = match (tm.and_then(|tm| self.foreign.get(&tm)), key) {
-            (Some(facts), Key::Named(a)) if matches!(self.toks[t as usize], TokKind::Obj(..)) => {
-                let k = &self.atoms[a as usize];
-                match facts.kind {
-                    "litclass" | "lit" => {
-                        k != "__proto__"
-                            && !facts.fields.iter().any(|f| !f.data_field && &f.key == k)
-                    }
-                    "class" => facts
-                        .fields
-                        .iter()
-                        .any(|f| f.data_field && &f.key == k && f.definite),
-                    _ => false,
-                }
-            }
-            _ => false,
-        };
-        if let Some(tm) = tm.filter(|tm| self.foreign.contains_key(tm)) {
-            match key {
-                Key::Named(a) if effect => {
-                    self.foreign_stores.insert((tm, a, src));
-                }
-                _ => {
-                    self.foreign_written.insert(tm);
-                }
-            }
-        }
-        if self.is_array_length(t, key) {
-            let r = self.reason("ToNumber of an array length store");
-            self.cons(
-                src,
-                Cons::Implicit {
-                    reason: r,
-                    proto: Protocol::ToPrimitive,
-                },
-            );
-            return;
-        }
-        match key {
-            Key::Named(a) => {
-                let f = self.field(t, a);
-                self.edge(src, f);
-                if let Some(tm) = tm {
-                    let ctor = self.stores[site as usize].birth || self.is_ctor_phase(site, tm);
-                    // Writers per object: an instance's, the class object's,
-                    // the prototype's.
-                    let w = match self.toks[t as usize] {
-                        TokKind::ClassObj(_) => self.class_writers.entry((tm, a)),
-                        TokKind::Proto(_) => self.proto_writers.entry((tm, a)),
-                        _ => self.writers.entry((tm, a)),
-                    }
-                    .or_default();
-                    if ctor {
-                        if !w.ctor.contains(&site) {
-                            w.ctor.push(site);
-                        }
-                    } else if !w.post.contains(&site) {
-                        w.post.push(site);
-                    }
-                    // A store effect's key exists in the defining unit's layout.
-                    if !self.tmpls[tm as usize].birth_keys.contains(&a) && !ctor && !effect {
-                        *self.adds_keys.entry(tm).or_default() += 1;
-                    }
-                }
-            }
-            Key::Any => {
-                let f = self.field_any(t);
-                self.edge(src, f);
-                if let Some(tm) = tm {
-                    let birth = self.stores[site as usize].birth;
-                    let w = self.any_writers.entry(tm).or_default();
-                    if birth {
-                        w.ctor.push(site);
-                    } else {
-                        w.post.push(site);
-                        *self.adds_keys.entry(tm).or_default() += 1;
-                    }
-                }
-            }
-        }
-        // Setters on the chain (and own accessors).
-        self.accessor_walk(t, t, key, ChainAct::Store(src));
-        if !self.is_array_like(t) {
-            let cp = self.cp(t);
-            if self.callthis_done.insert((cp, u32::MAX, t)) {
-                self.cons(cp, Cons::StoreTopProto { origin: t, src });
-            }
-        }
-        self.with_b(|m| builtins::tok_store(m, t, key, src));
     }
 
     /// Is `site` a construction-phase writer for instances of `tm`?
@@ -1657,6 +729,227 @@ impl Model {
         }
     }
 
+    /// `t`, a receiver token or a receiver marker, stands for instances of
+    /// `classes` (DECISIONS 59): its prototypes are theirs, and a named load
+    /// on it finds the chain's value; the own field (unknown for these
+    /// tokens) only once the key may be an own key of such an instance
+    /// (`virt_load`).
+    pub(crate) fn register_virt(&mut self, t: Tok, classes: &[TmplId]) {
+        let ps = self.virt_protos.entry(t).or_default();
+        let fresh: Vec<TmplId> = classes
+            .iter()
+            .copied()
+            .filter(|c| !ps.contains(c))
+            .collect();
+        ps.extend(fresh.iter().copied());
+        for &c in &fresh {
+            self.virt_by_class.entry(c).or_default().push(t);
+        }
+        if let Some(&pn) = self.proto_node.get(&t) {
+            for p in fresh {
+                let pt = self.tok(TokKind::Proto(p));
+                self.add_tok(pn, pt);
+            }
+        }
+    }
+
+    /// The load node of key `a` on receiver token / marker `t` (`None`: `t`
+    /// is neither). It holds the chain's values, and the own field once `a`
+    /// may be an own key of an instance `t` stands for: the class code
+    /// stores `a` (or a computed key) into one, uses a hard operation on one
+    /// or lets one escape; a subclass of another unit defines `a` (census,
+    /// `override_keys`); an accessor on the chain may answer it.
+    pub(crate) fn virt_load(&mut self, t: Tok, a: Atom) -> Option<NodeId> {
+        let classes = self.virt_protos.get(&t)?.clone();
+        if let Some(&n) = self.virt_nodes.get(&(t, a)) {
+            return Some(n);
+        }
+        let n = self.node_l("virt-load");
+        self.virt_nodes.insert((t, a), n);
+        self.virt_tok_keys.entry(t).or_default().push(a);
+        let cv = self.cv(t, Key::Named(a));
+        self.edge(cv, n);
+        let own = self.virt_own(&classes, a);
+        if own {
+            let f = self.field(t, a);
+            self.edge(f, n);
+        }
+        Some(n)
+    }
+
+    /// Key `a` may be an own key of the instances a receiver of `classes`
+    /// stands for in this unit's view: the class code stores it, uses a
+    /// hard operation on one or lets one escape, or an accessor on the
+    /// chain may answer it.
+    fn virt_own(&self, classes: &[TmplId], a: Atom) -> bool {
+        classes.iter().any(|&p| {
+            self.virt_open.contains(&p)
+                || self.virt_revoked.contains(&(p, a))
+                || self.chain_accessor_key(p, a)
+        })
+    }
+
+    /// The classes of receiver token / marker `t` that another unit's
+    /// subclass overrides `a` of (census, `override_keys`).
+    pub(crate) fn virt_overriders(&mut self, t: Tok, a: Atom) -> Vec<TmplId> {
+        let star = self.atom(crate::STAR_KEY);
+        let Some(classes) = self.virt_protos.get(&t) else {
+            return Vec::new();
+        };
+        classes
+            .iter()
+            .copied()
+            .filter(|p| {
+                self.override_keys
+                    .get(p)
+                    .is_some_and(|v| v.contains(&a) || v.contains(&star))
+            })
+            .collect()
+    }
+
+    /// The callee of `t.a(...)` beyond the chain, on receiver token /
+    /// marker `t` (DECISIONS 97): when `a` is own only because another
+    /// unit's subclass defines it, the call runs that subclass's method on
+    /// a subclass instance, i.e. the override token of each such class
+    /// (`override_node`); else nothing (`virt_load` holds the own field).
+    pub(crate) fn virt_call(&mut self, t: Tok, a: Atom) -> Vec<NodeId> {
+        let classes = self.virt_protos.get(&t).cloned().unwrap_or_default();
+        if self.virt_own(&classes, a) {
+            return Vec::new();
+        }
+        let ps = self.virt_overriders(t, a);
+        ps.into_iter().map(|p| self.override_node(p, a)).collect()
+    }
+
+    /// The node holding the override token of key `a` of published class
+    /// `tm` (DECISIONS 97): the function another unit's subclass defines
+    /// under `a`, as a call through a receiver of `tm` sees it. That unit
+    /// runs it unseen: the arguments escape, the result is unknown, and its
+    /// receiver is checked (`Cons::OverrideThis`).
+    fn override_node(&mut self, tm: TmplId, a: Atom) -> NodeId {
+        if let Some(&n) = self.override_fns.get(&(tm, a)) {
+            return n;
+        }
+        let fx = self.funcs.len() as FnIdx;
+        let tok = self.tok(TokKind::Func(fx, NO_CTX));
+        let this = self.node_l("this(override)");
+        let ret = self.node_l("ret(override)");
+        let args_all = self.node_l("args(override)");
+        let name = format!(
+            "<override {} of {}>",
+            self.atoms[a as usize], self.tmpls[tm as usize].display
+        );
+        self.funcs.push(FuncInfo {
+            module: 0,
+            func_id: u32::MAX,
+            name,
+            params: Vec::new(),
+            rest: None,
+            this,
+            ret,
+            args_all,
+            has_arguments: true,
+            token: tok,
+            ctor_of: None,
+            lexical_this: false,
+            no_summary: true,
+            gen_step: false,
+            captures: Vec::new(),
+            forwards_super: false,
+            parent: NO_FN,
+            forwarded: false,
+        });
+        let r = self.reason("passed to an unknown function");
+        self.sink_node(args_all, r);
+        self.add_top(ret, |_| "result of an unknown function".to_string());
+        self.add_prim(ret, prim::ALL);
+        let rt = self.reason("receiver of a call of an unknown function value");
+        self.cons(
+            this,
+            Cons::OverrideThis {
+                tmpl: tm,
+                key: a,
+                reason: rt,
+            },
+        );
+        let n = self.node_l("override-callee");
+        self.add_tok(n, tok);
+        self.override_fns.insert((tm, a), n);
+        n
+    }
+
+    fn chain_accessor_key(&self, tm: TmplId, a: Atom) -> bool {
+        let mut cur = Some(tm);
+        while let Some(c) = cur {
+            let t = &self.tmpls[c as usize];
+            if t.accessor_keys.contains(&a) || t.has_computed_members {
+                return true;
+            }
+            cur = t.parent;
+        }
+        false
+    }
+
+    /// `t` gains own key `a` (`None`: any key): for each published class
+    /// whose instances `t` is or stands for, the key is open on its
+    /// receiver token and markers from now on (`virt_load`).
+    pub(crate) fn virt_revoke(&mut self, t: Tok, key: Option<Atom>) {
+        if self.virt_by_class.is_empty() {
+            return;
+        }
+        let classes: Vec<TmplId> = match self.virt_protos.get(&t) {
+            Some(ps) => ps.clone(),
+            None => {
+                let Some(tm) = self.tmpl_of(t) else { return };
+                let mut out = Vec::new();
+                let mut work = vec![tm];
+                let mut seen: Vec<TmplId> = Vec::new();
+                while let Some(c) = work.pop() {
+                    if seen.contains(&c) {
+                        continue;
+                    }
+                    seen.push(c);
+                    if self.virt_by_class.contains_key(&c) {
+                        out.push(c);
+                    }
+                    let tp = &self.tmpls[c as usize];
+                    work.extend(tp.parent);
+                    work.extend(tp.parent_links.iter().copied());
+                }
+                out
+            }
+        };
+        for p in classes {
+            if self.virt_open.contains(&p) {
+                continue;
+            }
+            let opened: Option<Atom> = match key {
+                Some(a) => {
+                    if !self.virt_revoked.insert((p, a)) {
+                        continue;
+                    }
+                    Some(a)
+                }
+                None => {
+                    self.virt_open.insert(p);
+                    None
+                }
+            };
+            for vt in self.virt_by_class.get(&p).cloned().unwrap_or_default() {
+                let keys: Vec<Atom> = match opened {
+                    Some(a) => vec![a],
+                    None => self.virt_tok_keys.get(&vt).cloned().unwrap_or_default(),
+                };
+                for a in keys {
+                    if let Some(&n) = self.virt_nodes.get(&(vt, a)) {
+                        let f = self.field(vt, a);
+                        self.edge(f, n);
+                    }
+                }
+            }
+        }
+    }
+
     /// Is `owner` `tm` or an ancestor of it: the static parent, then the
     /// parents `super()` ran (`parent_links`, §17.2).
     pub(crate) fn has_ancestor(&self, tm: TmplId, owner: TmplId) -> bool {
@@ -1677,6 +970,328 @@ impl Model {
         false
     }
 
+    /// `t` reaches `this` of another unit's method of class `tmpl` whose
+    /// receiver contract is `this` (DECISIONS 57): admitted when `t` is an
+    /// instance of a subclass of `tmpl` and the method neither uses its
+    /// receiver beyond reading it nor reads a key a subclass accessor may
+    /// answer; then the method's published effects happen to `t` (the
+    /// stored keys hold unknown values, what it reaches is escaped or
+    /// touched as published). False: `t` escapes.
+    pub(crate) fn admit_this(&mut self, t: Tok, tmpl: TmplId, this: u32, reason: u32) -> bool {
+        use crate::model::{MARK_ESCAPE, MARK_READ, MARK_TOUCH};
+        let Some(c) = self.this_contracts.get(this as usize).cloned() else {
+            return false;
+        };
+        if c.uses & (MARK_ESCAPE | MARK_TOUCH) != 0 {
+            return false;
+        }
+        // A published receiver token stands for its class's instances; a
+        // receiver marker for its classes' (DECISIONS 59): the method runs
+        // on them, so its published effects on its receiver are the
+        // marker's own (they compose, as arguments do).
+        let marker = matches!(self.param_marker.get(&t), Some(&(_, u32::MAX)))
+            && !self.reach_marker.contains(&t);
+        let classes: Vec<TmplId> = match self.toks[t as usize] {
+            _ if marker => self.virt_protos.get(&t).cloned().unwrap_or_default(),
+            _ if self.recv_class.contains_key(&t) => vec![self.recv_class[&t]],
+            TokKind::Obj(tm, _) if tm != tmpl => vec![tm],
+            _ => Vec::new(),
+        };
+        if classes.is_empty()
+            || classes
+                .iter()
+                .any(|&tm| !self.has_ancestor(tm, tmpl) || (!marker && tm == tmpl))
+        {
+            return false;
+        }
+        // A read may run a subclass getter unseen by the method's unit.
+        if c.uses & MARK_READ != 0 && classes.iter().any(|&tm| self.chain_has_accessors(tm, tmpl)) {
+            return false;
+        }
+        if marker {
+            let (f, _) = self.param_marker[&t];
+            self.mark_use(t, c.uses);
+            if let Some(&r) = self.marker_reach.get(&t) {
+                self.mark_use(r, c.reach);
+            }
+            match &c.stores {
+                Some(ks) => {
+                    for k in ks {
+                        let a = self.atom(k);
+                        self.virt_revoke(t, Some(a));
+                        let ks = self.this_stores.entry(f).or_default();
+                        if !ks.contains(&a) {
+                            ks.push(a);
+                        }
+                    }
+                }
+                None => {
+                    self.virt_revoke(t, None);
+                    self.this_open.insert(f);
+                }
+            }
+            return true;
+        }
+        let why = |_: &Self| "field of another unit's class".to_string();
+        let top = self.node_l("admitted-this-store");
+        self.add_top(top, why);
+        self.add_prim(top, prim::ALL);
+        let site = self.anon_post_site("store by another unit's method");
+        match &c.stores {
+            Some(ks) => {
+                // DECISIONS 179: what the method's flow stores there.
+                for (i, k) in ks.iter().enumerate() {
+                    let a = self.atom(k);
+                    let v = c.values.get(i).copied().unwrap_or(top);
+                    self.store_into(t, Key::Named(a), v, site);
+                }
+            }
+            None => self.store_into(t, Key::Any, top, site),
+        }
+        // What the receiver reaches (its fields, transitively), as for an
+        // argument (gen.rs `stand_in_fn_of`).
+        if c.reach & (MARK_ESCAPE | MARK_TOUCH) != 0 {
+            let h = self.node_l("admitted-this");
+            let q = self.node_l("admitted-this-reach");
+            self.cons(
+                h,
+                Cons::Load {
+                    key: Key::Any,
+                    dst: q,
+                },
+            );
+            self.cons(
+                q,
+                Cons::Load {
+                    key: Key::Any,
+                    dst: q,
+                },
+            );
+            if c.reach & MARK_ESCAPE != 0 {
+                self.sink_node(q, reason);
+            } else {
+                self.cons(
+                    q,
+                    Cons::Implicit {
+                        reason,
+                        proto: Protocol::Any,
+                    },
+                );
+            }
+            self.add_tok(h, t);
+        }
+        true
+    }
+
+    /// A template from `tm` up to (not including) ancestor `owner` defines
+    /// an accessor or computed members.
+    fn chain_has_accessors(&self, tm: TmplId, owner: TmplId) -> bool {
+        let mut work = vec![tm];
+        let mut seen: Vec<TmplId> = Vec::new();
+        while let Some(c) = work.pop() {
+            if c == owner || seen.contains(&c) {
+                continue;
+            }
+            seen.push(c);
+            let t = &self.tmpls[c as usize];
+            if !t.accessor_keys.is_empty() || t.has_computed_members {
+                return true;
+            }
+            work.extend(t.parent);
+            work.extend(t.parent_links.iter().copied());
+        }
+        false
+    }
+
+    /// DECISIONS 118: what an argument marker's stores and `StoreOut`s do
+    /// to each marker that linked in since (`link_marker`).
+    fn replay_marker_links(&mut self) {
+        while let Some((m, r)) = self.marker_links.pop() {
+            if self.aborted {
+                self.marker_links.clear();
+                return;
+            }
+            // DECISIONS 193: `r` and the argument markers above it stand for
+            // the readers `m` brings; the stores made on them reach those.
+            let zs = self.arg_readers_of(m);
+            if !zs.is_empty() {
+                self.arg_readers_add(r, zs);
+            }
+            // DECISIONS 136: a flow whose stored value `r`'s members stand for.
+            // Only `m` is new below `r`: the walk from `r`'s base has seen
+            // the rest, and what it found is recorded (XUC-3).
+            for (t, flow, reason, own) in self.arg_src_flows.get(&r).cloned().unwrap_or_default() {
+                self.store_out_arg_reach(t, flow, reason, own, Some(m));
+            }
+            for (f, j, reason) in self.arg_src_watch.get(&r).cloned().unwrap_or_default() {
+                if self.marker_of.get(&(f, j)) != Some(&m) {
+                    self.escape(m, reason);
+                }
+            }
+            for reason in self.handover_watch.get(&r).cloned().unwrap_or_default() {
+                self.hand_over_marker(m, reason);
+            }
+        }
+    }
+
+    /// DECISIONS 152: marker `t` handed to a closed class's constructor
+    /// (`Cons::HandOver`). A parameter's own marker is its function's: that
+    /// function's contract hands it over, and each caller's unit passes
+    /// what it holds to the constructor itself. What a parameter reaches
+    /// is not the parameter (its keyed reach marker shares the parameter's
+    /// entry, §18.4). An argument marker stands
+    /// for its members, also those that link in later
+    /// (`replay_marker_links`). DECISIONS 155: a reach with values beside
+    /// it (a published method's receivers, DECISIONS 107; a closed
+    /// function's described parameter, 74) stands for no value of its own:
+    /// the values beside it reach the constructor themselves, path by path,
+    /// and its argument contract reads it as them (142). Any other marker
+    /// (the receiver itself, a bare reach, an argument marker's reach)
+    /// escapes, as a value no contract describes does.
+    fn hand_over_marker(&mut self, t: Tok, reason: u32) {
+        if self.is_arg_marker(t) && !self.reach_marker.contains(&t) {
+            let w = self.handover_watch.entry(t).or_default();
+            if w.contains(&reason) {
+                return;
+            }
+            w.push(reason);
+            for m in self.arg_members.get(&t).cloned().unwrap_or_default() {
+                self.hand_over_marker(m, reason);
+            }
+            return;
+        }
+        let own = self
+            .param_marker
+            .get(&t)
+            .is_some_and(|&(f, j)| j != u32::MAX && self.marker_of.get(&(f, j)) == Some(&t));
+        let beside = self.reach_marker.contains(&t) && self.beside_values(t);
+        if !own && !beside {
+            self.escape(t, reason);
+        }
+    }
+
+    /// The key `t` is the keyed reach of parameter `j` of `f` under, if
+    /// it is one (`None`: its reach through any key).
+    fn param_reach_key(&self, f: FnIdx, j: u32, t: Tok) -> Option<Atom> {
+        self.marker_of
+            .get(&(f, j))
+            .and_then(|mk| self.keyed_reach.get(mk))
+            .and_then(|v| v.iter().find(|&&(_, r)| r == self.path_root(t)))
+            .map(|&(k, _)| k)
+    }
+
+    /// DECISIONS 136: stored value `t`, an argument marker or its reach
+    /// (under a key, or any), stands for each member or that reach of it:
+    /// `f`'s own parameter, or its reach, is a source of the flow (the
+    /// reader stores its own value), any other member's escapes. The
+    /// members that link in later are replayed (`replay_marker_links`).
+    ///
+    /// `from`: a member that linked in under a marker this flow already
+    /// walked (`replay_marker_links`); the walk covers what is new, `from`
+    /// and below (XUC-3). Each marker visited is solve work (113-CWL3).
+    /// DECISIONS 151: a member is a source as a value stored directly is:
+    /// in a store into the receiver's reach marker it met (`own`), a value
+    /// of this unit takes the path of that store (`Cons::StoreOut`,
+    /// DECISIONS 149), not an escape.
+    fn store_out_arg_reach(
+        &mut self,
+        t: Tok,
+        flow: StoreFlowKey,
+        reason: u32,
+        own: Option<Tok>,
+        from: Option<Tok>,
+    ) {
+        let (f, dst, reach, ..) = flow;
+        // `None`: the members themselves; `Some(k)`: their reach under key
+        // `k`, or any key.
+        let (base, k) = match self.keyed_parent.get(&t).copied() {
+            Some((p, k)) => (p, Some(Some(k))),
+            None => match self.arg_reach_base.get(&t).copied() {
+                Some(p) => (p, Some(None)),
+                None => (t, None),
+            },
+        };
+        let mut st = vec![from.unwrap_or(base)];
+        let mut seen = crate::pts::FxHashSet::default();
+        let mut srcs = Vec::new();
+        while let Some(x) = st.pop() {
+            if !seen.insert(x) {
+                continue;
+            }
+            self.work += 1;
+            if self.max_work != 0 && self.work > self.max_work {
+                self.aborted = true;
+                return;
+            }
+            match self.arg_members.get(&x).cloned() {
+                Some(ms) => {
+                    if self.arg_src_flow_done.insert((x, t, flow, reason, own)) {
+                        self.arg_src_flows
+                            .entry(x)
+                            .or_default()
+                            .push((t, flow, reason, own));
+                    }
+                    st.extend(ms);
+                }
+                // A reach marker reaches itself under every key.
+                None if self.reach_marker.contains(&x) => srcs.push(x),
+                None => srcs.push(match k {
+                    None => x,
+                    Some(Some(k)) => self.keyed_reach_of(x, k),
+                    Some(None) => match self.marker_reach.get(&x) {
+                        Some(&r) => r,
+                        None => x,
+                    },
+                }),
+            }
+        }
+        let (mut from, mut from_reach) = (Vec::new(), Vec::new());
+        let mut top = false;
+        for s in srcs {
+            match self.param_marker.get(&s).copied() {
+                // DECISIONS 179: as in `Cons::StoreOut`.
+                Some((g, u32::MAX)) if g == f && dst == u32::MAX && !reach => {
+                    match self.reach_marker.contains(&s) {
+                        true => from_reach.push((u32::MAX, self.param_reach_key(f, u32::MAX, s))),
+                        false => from.push(u32::MAX),
+                    }
+                }
+                Some((g, j)) if g == f && j != u32::MAX && self.reach_marker.contains(&s) => {
+                    from_reach.push((j, self.param_reach_key(f, j, s)));
+                }
+                Some((g, j)) if g == f && j != u32::MAX => from.push(j),
+                _ => match own {
+                    Some(at) => self.mark_use(at, crate::model::MARK_ESCAPE),
+                    None => {
+                        top = true;
+                        self.escape(s, reason);
+                    }
+                },
+            }
+        }
+        let fl = self.store_flows.entry(flow).or_default();
+        for j in from {
+            if !fl.from.contains(&j) {
+                fl.from.push(j);
+            }
+        }
+        for r in from_reach {
+            if !fl.from_reach.contains(&r) {
+                fl.from_reach.push(r);
+            }
+        }
+        fl.top |= top;
+    }
+
+    /// The parameter of `f` whose node argument marker `t` is the marker of.
+    fn arg_param_of(&self, t: Tok, f: FnIdx) -> Option<u32> {
+        let n = *self.arg_marker_node.get(&t)?;
+        match self.param_at.get(&n) {
+            Some(&(g, j)) if g == f => Some(j),
+            _ => None,
+        }
+    }
+
     /// Every function's parameter nodes hold their argument marker
     /// (DECISIONS 44), from before the first binding reaches them: the
     /// queued bindings run when the summaries exist, before the solve.
@@ -1686,6 +1301,7 @@ impl Model {
                 let p = self.funcs[f].params[i];
                 if p != NO_NODE {
                     self.nodes[p as usize].param = true;
+                    self.param_at.insert(p, (f as FnIdx, i as u32));
                 }
             }
         }
@@ -1832,12 +1448,34 @@ impl Model {
                 format!("chain {n} {origin} {} {act:?}", self.key_name(*key))
             }
             Cons::TopSink { reason } => format!("top {n} {reason}"),
-            Cons::HandOver { reason } => format!("handover {n} {reason}"),
+            Cons::HandOver { reason, ctor, arg } => format!("handover {n} {reason} {ctor} {arg}"),
+            Cons::OwnOnly { f, dst } => format!("ownonly {n} {f} {dst}"),
+            Cons::StoreOut {
+                f,
+                dst,
+                reach,
+                via,
+                key,
+                reason,
+                ..
+            } => format!(
+                "storeout {n} {f} {dst} {reach} {} {} {reason}",
+                via.map_or("-".to_string(), |v| esc_key(&self.atoms[v as usize])),
+                self.key_name(*key)
+            ),
             Cons::ContractThis {
                 tmpl,
                 reason,
                 statics,
-            } => format!("contractthis {n} {tmpl} {reason} {}", *statics as u8),
+                this,
+            } => format!(
+                "contractthis {n} {tmpl} {reason} {} {}",
+                *statics as u8, *this as i64
+            ),
+            Cons::OverrideThis { tmpl, key, reason } => format!(
+                "overridethis {n} {tmpl} {} {reason}",
+                self.key_name(Key::Named(*key))
+            ),
             Cons::TopIfAny { dst, from, reason } => format!(
                 "topifany {n} {dst} {from} {}",
                 reason.map_or(-1, |r| r as i64)

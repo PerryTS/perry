@@ -12,6 +12,8 @@
 #[cfg(any(debug_assertions, test))]
 use super::layout_pointer_bearing_bits;
 use super::{HeapPayloadSlotSelection, HeapSlotRange, LayoutSlotMask};
+#[cfg(test)]
+use crate::codegen_abi::LayoutWord;
 use crate::object::field_rep;
 use crate::object::shapes::ShapeRecordRef;
 
@@ -192,7 +194,7 @@ mod tests {
         let text = crate::string::js_string_from_bytes(b"txt".as_ptr(), 3);
         let text = f64::from_bits(crate::JSValue::string_ptr(text).bits());
         crate::object::js_object_set_field_by_name(obj, key("byshape_s"), text);
-        (obj, crate::object::shapes::object_shape_stamp(obj))
+        (obj, crate::object::shapes::object_shape_stamp(obj).0)
     }
 
     unsafe fn header_of(obj: *mut crate::object::ObjectHeader) -> *mut GcHeader {
@@ -208,7 +210,7 @@ mod tests {
         let _lock = crate::gc::global_side_table_test_lock();
         unsafe {
             let (obj, id) = number_and_string();
-            let rep = crate::object::shapes::shape_descriptor_for_word(id)
+            let rep = crate::object::shapes::shape_descriptor_for_word(LayoutWord(id))
                 .expect("shape")
                 .rep;
             assert_eq!(
@@ -229,7 +231,8 @@ mod tests {
             let correct_ok = skipped_pointer_slot(payload, &correct).is_none();
 
             // Sabotage: the same keys with BOTH lanes F64, stamped on the object.
-            let d = crate::object::shapes::shape_descriptor_for_word(id).expect("shape");
+            let d =
+                crate::object::shapes::shape_descriptor_for_word(LayoutWord(id)).expect("shape");
             let wrong = crate::object::shapes::publish_shape_result(
                 crate::object::shapes::shape_descriptor_ensure_with_rep(
                     d.keys as usize as *const crate::array::ArrayHeader,
@@ -250,7 +253,7 @@ mod tests {
             let record = crate::object::shapes::object_shape_record(obj);
             let sabotaged = selection_by_shape(record, payload);
             let found = skipped_pointer_slot(payload, &sabotaged);
-            crate::object::shapes::stamp_object_shape_id_with_carrier_note(obj, id);
+            crate::object::shapes::stamp_object_shape_id_with_carrier_note(obj, LayoutWord(id));
 
             assert!(masked, "By shape, only the Any lane is traced");
             assert!(correct_ok, "a correct object: no pointer is skipped");

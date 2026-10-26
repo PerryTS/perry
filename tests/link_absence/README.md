@@ -1,0 +1,44 @@
+# Runtime link absence (HWS)
+
+Build the compiler and coherent archives, generate the GC sidecars, then run:
+
+```sh
+cargo build-perry --release
+scripts/gc_call_effects/sidecars.sh target/release
+PERRY_RUNTIME_DIR="$PWD/target/release" python3 scripts/link_absence.py \
+  --perry target/release/perry --output target/link-absence
+```
+
+Use the repository's `.node-version` and LLVM 22 (`LLVM_SYS_221_PREFIX` locates
+its tools). ELF diagnostics also require `ld.lld` from that directory. The
+required full-tier `binary-size` matrix runs this command on Ubuntu and macOS;
+its artifacts include compile logs, Node/native output and `report.json`.
+
+`without_math.ts` uses stdout to prove Math absence independently of the
+compiler's conservative `log` property detection. `hello.ts` reads argv to exercise the normal runtime rather than the tiny
+program path. Every runtime hook in `stdlib_installs.rs::RUNTIME_INSTALLS` must
+have a positive fixture. Each fixture declares its hook and symbol prefixes;
+explicit unhooked fixtures say `none (no hook yet)`. Prefixes match demangled
+text symbols, including C entry points. Text bytes are section size; attributed
+bytes are symbol address spans in that section, deduplicated at aliased
+addresses. Rules can overlap, so subsystem bytes must not be summed.
+
+The gate keeps symbols, disables compiler caches, verifies selected install
+entry points, compares every positive's stdout and exit status with Node, and
+requires its rule to find a linked symbol. Missing tools, failed compilation,
+missing install evidence, failed Node execution and empty positive matches
+fail the test. Native warning text on stderr is recorded separately; stdout is the deterministic parity oracle.
+
+Current bypasses are explicit symbol-name exceptions owned by **HWS2**, per
+platform under `known-failing/`. New matching symbols fail even inside a
+subsystem with existing exceptions. When a subsystem disappears entirely,
+the stale exception fails: remove it in the fix to lock in absence. A regression
+then fails. Rust disambiguation hashes are excluded from exception names.
+An unchanged whitelisted symbol set cannot reveal an additional retaining edge;
+these exceptions are debt to remove, not evidence that existing leaks are safe.
+
+A failure relinks the negative witness with the platform's `why_live` option
+for the subsystem's largest symbol and prints the real linker chain. Full
+build logs stay in the output directory. `--record-known-failures` is only for
+reviewed baseline measurement; CI never passes it. `--negative-only` is a diagnostic
+and sabotage shortcut; CI always executes all positive witnesses.

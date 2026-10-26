@@ -1,4 +1,5 @@
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 fn object_has_own_key_bytes(obj: *const ObjectHeader, key_bytes: &[u8]) -> bool {
     if obj.is_null() || key_bytes.is_empty() || key_bytes.len() > 4096 {
@@ -6,7 +7,7 @@ fn object_has_own_key_bytes(obj: *const ObjectHeader, key_bytes: &[u8]) -> bool 
     }
     let object_addr = normalize_raw_object_addr(obj as u64);
     let (shape_id, _, heap_type) = object_shape(object_addr);
-    if heap_type != crate::gc::GC_TYPE_OBJECT as u16 || shape_id == 0 {
+    if heap_type != crate::gc::GC_TYPE_OBJECT as u16 || shape_id == LayoutWord(0) {
         return false;
     }
     unsafe {
@@ -73,11 +74,11 @@ fn declared_method_resolves_to(class_id: u32, method_name: &str, expected_func_p
 fn method_direct_call_contract(
     receiver: f64,
     expected_class_id: u32,
-    expected_shape_id: u32,
+    expected_shape_id: LayoutWord,
     method_name_ptr: *const i8,
     method_name_len: usize,
     expected_func_ptr: *const u8,
-) -> (u32, u32, u16, u64, bool) {
+) -> (LayoutWord, u32, u16, u64, bool) {
     let object_addr = normalize_raw_object_addr(receiver.to_bits());
     let (shape_id, class_id, gc_type) = object_shape(object_addr);
     let Some(method_bytes) = method_name_bytes(method_name_ptr, method_name_len) else {
@@ -89,7 +90,7 @@ fn method_direct_call_contract(
     let name_hash = hash_bytes(method_bytes);
     if object_addr == 0
         || expected_class_id == 0
-        || !crate::object::shapes::is_layout_word(expected_shape_id)
+        || !crate::object::shapes::is_layout_word(expected_shape_id.0)
         || expected_func_ptr.is_null()
     {
         return (shape_id, class_id, gc_type, name_hash, false);
@@ -146,7 +147,7 @@ fn descriptor_blocks_class_field_get(obj_addr: usize, _class_id: u32, key_name: 
 /// F64 lanes are a fact of that shape; stores generalize it before writing
 /// values that would violate its representation.
 fn class_field_raw_f64_layout_contract(
-    expected_shape_id: u32,
+    expected_shape_id: LayoutWord,
     field_index: u32,
     require_raw_f64: bool,
 ) -> bool {
@@ -157,30 +158,30 @@ fn class_field_raw_f64_layout_contract(
 fn class_field_get_contract(
     receiver: f64,
     expected_class_id: u32,
-    expected_shape_id: u32,
+    expected_shape_id: LayoutWord,
     key: *const crate::StringHeader,
     expected_field_index: u32,
     require_raw_f64: bool,
-) -> (u32, u32, u16, bool) {
+) -> (LayoutWord, u32, u16, bool) {
     let object_addr = normalize_raw_object_addr(receiver.to_bits());
     if object_addr == 0
         || expected_class_id == 0
-        || !crate::object::shapes::is_layout_word(expected_shape_id)
+        || !crate::object::shapes::is_layout_word(expected_shape_id.0)
     {
-        return (0, 0, 0, false);
+        return (LayoutWord(0), 0, 0, false);
     }
     let Some(gc_header) = gc_header_for_user_addr(object_addr) else {
-        return (0, 0, 0, false);
+        return (LayoutWord(0), 0, 0, false);
     };
     unsafe {
         let gc_type = (*gc_header).obj_type as u16;
         if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT {
-            return (0, 0, gc_type, false);
+            return (LayoutWord(0), 0, gc_type, false);
         }
         if (*gc_header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
             || (*gc_header)._reserved & crate::gc::OBJ_FLAG_STABLE_TOMBSTONES != 0
         {
-            return (0, 0, gc_type, false);
+            return (LayoutWord(0), 0, gc_type, false);
         }
 
         let obj = object_addr as *mut ObjectHeader;
@@ -217,14 +218,14 @@ fn class_field_get_contract(
 fn class_field_fast_contract(
     receiver: f64,
     expected_class_id: u32,
-    expected_shape_id: u32,
+    expected_shape_id: LayoutWord,
     expected_field_index: u32,
     require_raw_f64: bool,
 ) -> bool {
     let object_addr = normalize_raw_object_addr(receiver.to_bits());
     if object_addr == 0
         || expected_class_id == 0
-        || !crate::object::shapes::is_layout_word(expected_shape_id)
+        || !crate::object::shapes::is_layout_word(expected_shape_id.0)
     {
         return false;
     }
@@ -272,6 +273,8 @@ pub extern "C" fn js_typed_feedback_class_field_get_guard(
     expected_field_index: u32,
     require_raw_f64: i32,
 ) -> i32 {
+    let expected_shape_id = LayoutWord(expected_shape_id);
+
     if !typed_feedback_enabled() {
         return class_field_fast_contract(
             receiver,
@@ -313,7 +316,7 @@ pub extern "C" fn js_typed_feedback_class_field_get_guard(
 #[inline]
 fn receiver_has_numeric_proof_shape(obj: *const ObjectHeader) -> bool {
     crate::object::shapes::shape_object_kind_of_receiver(unsafe {
-        crate::object::shapes::object_shape_stamp(obj)
+        (crate::object::shapes::object_shape_stamp(obj)).0
     }) == Some(crate::object::shapes::ShapeObjectKind::OrdinaryNumericProof)
 }
 
@@ -508,6 +511,8 @@ pub unsafe extern "C" fn js_typed_feedback_method_direct_call_guard(
     method_name_len: usize,
     expected_func_ptr: *const u8,
 ) -> i32 {
+    let expected_shape_id = LayoutWord(expected_shape_id);
+
     let bits = receiver.to_bits();
     let (shape_id, class_id, gc_type, name_hash, contract_valid) = method_direct_call_contract(
         receiver,
@@ -600,11 +605,11 @@ pub unsafe extern "C" fn js_method_direct_shape_class(
     // alias an ordinary instance's expected id: the class-kind transition
     // mints its own semantic successor ShapeId.
     let shape_id = crate::object::shapes::object_shape_stamp(obj);
-    if shape_id == 0 || receiver_has_numeric_proof_shape(obj) {
+    if shape_id == LayoutWord(0) || receiver_has_numeric_proof_shape(obj) {
         return 0;
     }
     if !out_shape_id.is_null() {
-        *out_shape_id = shape_id;
+        *out_shape_id = shape_id.0;
     }
     class_id
 }
@@ -655,7 +660,7 @@ pub extern "C" fn js_typed_feedback_closure_direct_call_guard(
     let observation = Observation {
         source: ObservationSource::Closure,
 
-        shape_id: 0,
+        shape_id: LayoutWord(0),
         key_hash: 0,
         class_id: 0,
         heap_type: if func_ptr.is_null() {

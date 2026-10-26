@@ -260,16 +260,39 @@ pub fn map_cons(
             act: act_map(act, &mut n, &mut k),
         },
         TopSink { reason } => TopSink { reason },
-        HandOver { reason } => HandOver { reason },
+        HandOver { reason, ctor, arg } => HandOver { reason, ctor, arg },
+        OwnOnly { f, dst } => OwnOnly { f, dst: n(dst) },
+        StoreOut {
+            f,
+            dst,
+            reach,
+            via,
+            key,
+            reason,
+            at,
+            to,
+        } => StoreOut {
+            f,
+            dst,
+            reach,
+            via,
+            key,
+            reason,
+            at,
+            to,
+        },
         ContractThis {
             tmpl,
             reason,
             statics,
+            this,
         } => ContractThis {
             tmpl,
             reason,
             statics,
+            this,
         },
+        OverrideThis { tmpl, key, reason } => OverrideThis { tmpl, key, reason },
         TopIfAny { dst, from, reason } => TopIfAny {
             dst: n(dst),
             from: n(from),
@@ -453,6 +476,7 @@ fn gen_kind(c: &Cons) -> bool {
             | TopSink { .. }
             | HandOver { .. }
             | ContractThis { .. }
+            | OverrideThis { .. }
             | TopIfAny { .. }
             | Hard { .. }
             | DefineAccessor { .. }
@@ -673,7 +697,15 @@ impl Model {
     /// a persistent structure births the same (site, origin) objects, so
     /// one instance per origin holds them all. What a method reads from
     /// its receiver stays per receiver (argument markers, DECISIONS 44).
+    /// An argument marker is no object of this unit and births nothing
+    /// here: its runs share the context of a call with no receiver
+    /// (DECISIONS 201). There is one per node, and a run's closure context
+    /// is storage that takes its own marker, so a context per marker made
+    /// a new run per run.
     pub(crate) fn recv_lay(&self, t: Tok) -> u32 {
+        if marker_top_bit(&self.arg_bits, t) {
+            return LAY_NONE;
+        }
         match self.toks[t as usize] {
             TokKind::Obj(..) if t <= LAY_MASK => LAY_TOK | self.maker_key(t, true),
             _ => self.layout_of(t),
@@ -784,11 +816,12 @@ impl Model {
         }
         // Its parameters hold argument markers (DECISIONS 44), relative
         // ones while only the calls write them (44 (b)).
-        for (i, &p) in s.params.iter().enumerate() {
+        for (j, &p) in s.params.iter().enumerate() {
             if is_slot(p) {
                 let n = &mut self.nodes[tr(p) as usize];
                 n.param = true;
-                n.rel = s.rel.get(i).is_some_and(|&r| r) && n.frame == inst + 1;
+                n.rel = s.rel.get(j).is_some_and(|&r| r) && n.frame == inst + 1;
+                self.param_at.insert(tr(p), (f, j as u32));
             }
         }
         let lay = match key.0 {
@@ -939,6 +972,35 @@ impl Model {
 
     /// Unknown code calls `f`: its `this` is ⊤ (the unknown-code instance's
     /// and the shared node).
+    /// DECISIONS 116: a contract method published with sealed classes'
+    /// receivers only.
+    pub(crate) fn sealed_method(&self, f: FnIdx) -> bool {
+        self.contract_fns.contains(&f)
+            && self.published_this.get(&f).is_some_and(|rs| {
+                !rs.is_empty()
+                    && rs.iter().all(|r| {
+                        self.recv_class
+                            .get(r)
+                            .is_some_and(|c| self.sealed.contains(c))
+                    })
+            })
+    }
+
+    /// DECISIONS 125: a method run on published receivers runs on an
+    /// instance `t` this unit gave out when the join names `t`'s class (its
+    /// own token `Obj(tm, NO_CTX)` is in the join, `Gen::published_receivers`).
+    pub(crate) fn join_holds(&self, f: FnIdx, t: Tok) -> bool {
+        let Some(&n) = self.this_args.get(&f) else {
+            return true;
+        };
+        let Some(tm) = self.tmpl_of(t) else {
+            return false;
+        };
+        self.tok_index
+            .get(&TokKind::Obj(tm, NO_CTX))
+            .is_some_and(|&w| self.nodes[n as usize].pts.contains_tok(w))
+    }
+
     pub(crate) fn escape_this(&mut self, ft: Tok, reason: u32) {
         if !self.sum.ready {
             self.sum.deferred.push(Deferred::EscapeThis(ft, reason));
@@ -951,12 +1013,79 @@ impl Model {
             let inst = self.instance((2, 0, ft));
             dsts.push(self.sum.insts[inst as usize].this);
         }
-        let inst = self.published_this.get(&f).copied();
+        let insts = self.published_this.get(&f).cloned().unwrap_or_default();
+        // DECISIONS 116: a method of sealed classes only, published through
+        // its contract, runs on the instances this unit gave out (and the
+        // ones it gives out later, `give_out`): no other unit constructs or
+        // extends them, and a reader's `ContractThis` admits nothing else.
+        if self.pub_reason == Some(reason) && self.sealed_method(f) {
+            let given: Vec<Tok> = insts
+                .iter()
+                .flat_map(|r| self.contract_recv.get(r).cloned().unwrap_or_default())
+                .collect();
+            for &d in &dsts {
+                for &t in &given {
+                    self.add_tok(d, t);
+                }
+            }
+            self.given_this.entry(f).or_default().extend(dsts);
+            return;
+        }
+        // A published method's receiver is one more contract parameter
+        // (DECISIONS 57): its marker records what the body does to it, and
+        // stands for instances of the classes it is published with
+        // (DECISIONS 59).
+        let mk = (!insts.is_empty() && self.contract_fns.contains(&f)).then(|| {
+            let mk = self.param_marker_tok(f, u32::MAX);
+            let classes: Vec<TmplId> = insts
+                .iter()
+                .filter_map(|r| self.recv_class.get(r).copied())
+                .collect();
+            self.register_virt(mk, &classes);
+            mk
+        });
+        // Published through its contract, the receiver is the class's
+        // instances (the receiver token) or what the marker stands for: a
+        // reader's `ContractThis` admits nothing else, and reports a use
+        // beyond that (DECISIONS 85). Any other escape lets unknown code
+        // call it with any receiver.
+        let contract_only = mk.is_some() && self.pub_reason == Some(reason);
+        let joined = contract_only && self.this_args.contains_key(&f);
+        if joined {
+            self.given_this
+                .entry(f)
+                .or_default()
+                .extend(dsts.iter().copied());
+        }
         for d in dsts {
-            self.add_top(d, why);
-            self.add_prim(d, prim::ALL);
-            if let Some(i) = inst {
-                self.add_tok(d, i);
+            if !contract_only {
+                self.add_top(d, why);
+                self.add_prim(d, prim::ALL);
+            }
+            // DECISIONS 107: the receivers the running units published.
+            // DECISIONS 125: they include the instances this unit gave out
+            // (a published class's instance another unit holds may be one
+            // of them), and the ones it gives out later (`give_out`).
+            match self.this_args.get(&f) {
+                Some(&n) if joined => {
+                    self.edge(n, d);
+                    let given: Vec<Tok> = insts
+                        .iter()
+                        .flat_map(|r| self.contract_recv.get(r).cloned().unwrap_or_default())
+                        .filter(|&t| self.join_holds(f, t))
+                        .collect();
+                    for t in given {
+                        self.add_tok(d, t);
+                    }
+                }
+                _ => {
+                    for &i in &insts {
+                        self.add_tok(d, i);
+                    }
+                }
+            }
+            if let Some(mk) = mk {
+                self.add_tok(d, mk);
             }
         }
     }
@@ -1243,6 +1372,10 @@ impl Model {
         let fparams = self.funcs[f as usize].params.clone();
         let c = call as usize;
         let nargs = self.calls[c].args.len();
+        // A hidden capture parameter holds its class environment slot,
+        // not what the call passes (DECISIONS 117, 127).
+        let caps: Vec<Option<NodeId>> =
+            (0..terms.len()).map(|i| self.capture_param(f, i)).collect();
         for i in 0..terms.len() {
             let mut dsts = Vec::with_capacity(2);
             if terms[i] != NO_NODE {
@@ -1252,7 +1385,9 @@ impl Model {
                 dsts.push(fparams[i]);
             }
             for &d in &dsts {
-                if i < nargs {
+                if let Some(env) = caps[i] {
+                    self.edge(env, d);
+                } else if i < nargs {
                     let a = self.calls[c].args[i];
                     self.edge(a, d);
                 } else {
@@ -1271,6 +1406,9 @@ impl Model {
                 },
             );
             for i in 0..terms.len() {
+                if caps[i].is_some() {
+                    continue;
+                }
                 if terms[i] != NO_NODE {
                     self.edge(elems, terms[i]);
                 }
@@ -1492,6 +1630,12 @@ impl Model {
         let terms = self.sum.insts[inst as usize].params.clone();
         let fparams = self.funcs[f as usize].params.clone();
         let contract = self.contract_fns.contains(&f);
+        // DECISIONS 119: published through its contract only, a parameter
+        // is its marker, which stands for the whole argument (an object,
+        // a function or a primitive): no ⊤ and no primitive kinds beside it.
+        // The reader replays what the body does to it; emitters read it as
+        // ⊤ (`Model::bare_marker`).
+        let contract_only = contract && self.pub_reason == Some(reason);
         // A closed function's callers are known: what they pass, through
         // its publication only (decision 19).
         let closed = if self.closed_pub_reason == Some(reason) {
@@ -1500,18 +1644,38 @@ impl Model {
             None
         };
         for (i, &p) in fparams.iter().enumerate() {
+            // A hidden capture parameter holds its class environment slot
+            // whoever constructs (DECISIONS 117).
+            if let Some(env) = self.capture_param(f, i) {
+                for d in [terms[i], p] {
+                    if d != NO_NODE {
+                        self.edge(env, d);
+                    }
+                }
+                continue;
+            }
             let mk = contract.then(|| self.param_marker_tok(f, i as u32));
             for d in [terms[i], p] {
                 if d != NO_NODE {
                     match closed.as_ref().and_then(|c| c.get(i).copied()) {
                         Some(a) => self.edge(a, d),
                         None => {
-                            self.add_top(d, why);
-                            self.add_prim(d, prim::ALL);
+                            if !contract_only {
+                                self.add_top(d, why);
+                                self.add_prim(d, prim::ALL);
+                            }
                         }
                     }
                     if let Some(mk) = mk {
                         self.add_tok(d, mk);
+                    }
+                    // DECISIONS 148: what the running units pass, beside it.
+                    if contract_only {
+                        if let Some(&a) = self.method_params.get(&f).and_then(|v| v.get(i)) {
+                            if a != NO_NODE {
+                                self.edge(a, d);
+                            }
+                        }
                     }
                 }
             }
@@ -1618,478 +1782,7 @@ impl Model {
     }
 }
 
-/// The summarized functions a summary's call `i` reaches through a callee
-/// node that is not a slot: `(i, functions)` for its own calls.
-fn static_callees(m: &Model, s: &Summary) -> Vec<(usize, Vec<FnIdx>)> {
-    let mut out: Vec<(usize, Vec<FnIdx>)> = Vec::new();
-    for (h, c) in &s.cons {
-        let Cons::Call { call } = *c else { continue };
-        if call == NO_NODE || call & CALL == 0 || is_slot(*h) || *h == NO_NODE {
-            continue;
-        }
-        let mut gs: Vec<FnIdx> = m.nodes[*h as usize]
-            .pts
-            .to_sorted()
-            .into_iter()
-            .filter_map(|t| match m.toks[t as usize] {
-                // A closure with outer terms is bound per context, never
-                // expanded into a caller.
-                TokKind::Func(g, _) if m.sum.of.get(&g).is_some_and(|s| s.outer.is_empty()) => {
-                    Some(g)
-                }
-                _ => None,
-            })
-            .collect();
-        gs.sort_unstable();
-        gs.dedup();
-        if !gs.is_empty() {
-            out.push(((call & !CALL) as usize, gs));
-        }
-    }
-    out.sort_unstable();
-    out
-}
-
-/// Expand every call to a summarized function outside the caller's SCC
-/// into the caller's summary (design CW2 3.2), one level (design §14.3):
-/// the callee's own body, before its composition. The static calls inside
-/// it are copied as calls its caller's instances bind: below a site's own
-/// callee, the shape is the context, not the call string.
-/// Returns (expanded calls, SCCs).
-fn compose(m: &mut Model, obs_of: &dyn Fn(FnIdx, &Model) -> Vec<NodeId>) -> (usize, usize) {
-    let mut fs: Vec<FnIdx> = m.sum.of.keys().copied().collect();
-    fs.sort_unstable();
-    let direct: FxHashMap<FnIdx, Vec<(usize, Vec<FnIdx>)>> = fs
-        .iter()
-        .map(|&f| (f, static_callees(m, &m.sum.of[&f])))
-        .collect();
-    // Tarjan, iterative.
-    let mut index: FxHashMap<FnIdx, u32> = FxHashMap::default();
-    let mut low: FxHashMap<FnIdx, u32> = FxHashMap::default();
-    let mut on: FxHashSet<FnIdx> = FxHashSet::default();
-    let mut stack: Vec<FnIdx> = Vec::new();
-    let mut order: Vec<Vec<FnIdx>> = Vec::new();
-    let mut next = 0u32;
-    for &root in &fs {
-        if index.contains_key(&root) {
-            continue;
-        }
-        let succ = |f: FnIdx| -> Vec<FnIdx> {
-            let mut v: Vec<FnIdx> = direct[&f]
-                .iter()
-                .flat_map(|(_, gs)| gs.iter().copied())
-                .collect();
-            v.sort_unstable();
-            v.dedup();
-            v
-        };
-        let mut work: Vec<(FnIdx, Vec<FnIdx>, usize)> = vec![(root, succ(root), 0)];
-        index.insert(root, next);
-        low.insert(root, next);
-        next += 1;
-        stack.push(root);
-        on.insert(root);
-        while let Some((f, ss, i)) = work.last_mut() {
-            let f = *f;
-            if *i < ss.len() {
-                let g = ss[*i];
-                *i += 1;
-                if !index.contains_key(&g) {
-                    index.insert(g, next);
-                    low.insert(g, next);
-                    next += 1;
-                    stack.push(g);
-                    on.insert(g);
-                    let sg = succ(g);
-                    work.push((g, sg, 0));
-                } else if on.contains(&g) {
-                    let l = low[&f].min(index[&g]);
-                    low.insert(f, l);
-                }
-                continue;
-            }
-            work.pop();
-            if let Some((p, _, _)) = work.last() {
-                let l = low[p].min(low[&f]);
-                low.insert(*p, l);
-            }
-            if low[&f] == index[&f] {
-                let mut c = Vec::new();
-                loop {
-                    let x = stack.pop().unwrap();
-                    on.remove(&x);
-                    c.push(x);
-                    if x == f {
-                        break;
-                    }
-                }
-                c.sort_unstable();
-                order.push(c);
-            }
-        }
-    }
-    for (i, c) in order.iter().enumerate() {
-        for &f in c {
-            m.sum.scc.insert(f, i as u32);
-        }
-    }
-    let own_of: FxHashMap<FnIdx, Rc<Summary>> = m.sum.of.clone();
-    let mut n = 0usize;
-    for c in &order {
-        for &f in c {
-            let mut s: Summary = (*m.sum.of[&f]).clone();
-            let mut any = false;
-            for (ci, gs) in &direct[&f] {
-                for &g in gs {
-                    if m.sum.scc[&g] == m.sum.scc[&f] {
-                        continue;
-                    }
-                    s.expanded.push((*ci as u32, g));
-                    let sg = own_of[&g].clone();
-                    expand(&mut s, *ci, &sg, &obs_of(g, m));
-                    any = true;
-                    n += 1;
-                }
-            }
-            if any {
-                compress(&mut s);
-                m.sum.of.insert(f, Rc::new(s));
-            }
-        }
-    }
-    m.sum.ncomposed = n;
-    (n, order.len())
-}
-
-/// Copy `g`'s summary into `s` over fresh slots and wire call `ci`'s
-/// operands to it the way a binding would: arguments into the parameters
-/// (and into `g`'s observation parameters `gobs`), missing ones undefined,
-/// spread elements into every parameter, `g`'s result into the call's.
-fn expand(s: &mut Summary, ci: usize, g: &Summary, gobs: &[NodeId]) {
-    let off = s.nslots;
-    let coff = s.calls.len() as u32;
-    let tr = |x: NodeId| {
-        if is_slot(x) {
-            SLOT | (off + (x & !SLOT))
-        } else {
-            x
-        }
-    };
-    let kr = |k: CallId| {
-        if k != NO_NODE && k & CALL != 0 {
-            CALL | (coff + (k & !CALL))
-        } else {
-            k
-        }
-    };
-    s.nslots += g.nslots;
-    s.orig.extend_from_slice(&g.orig);
-    for (i, t, p) in &g.seeds {
-        s.seeds.push((off + i, t.clone(), *p));
-    }
-    for &(a, b) in &g.edges {
-        s.edges.push((tr(a), tr(b)));
-    }
-    for (h, c) in &g.cons {
-        s.cons.push((tr(*h), map_cons(c, tr, kr)));
-    }
-    for (t, cs) in &g.calls {
-        s.calls.push((*t, map_call(cs, tr)));
-    }
-    for (c, h, terms, cap) in &g.closures {
-        s.closures
-            .push((off + c, *h, terms.iter().map(|&x| tr(x)).collect(), *cap));
-    }
-    for &(i, h) in &g.expanded {
-        s.expanded.push((coff + i, h));
-    }
-    for &(b, tm) in &g.births {
-        s.births.push((off + b, tm));
-    }
-    let call = s.calls[ci].1.clone();
-    let fresh = |s: &mut Summary| {
-        let i = s.nslots;
-        s.nslots += 1;
-        s.orig.push(NO_NODE);
-        SLOT | i
-    };
-    let dsts: Vec<Vec<NodeId>> = (0..g.params.len())
-        .map(|i| {
-            [tr(g.params[i]), gobs.get(i).copied().unwrap_or(NO_NODE)]
-                .into_iter()
-                .filter(|&d| d != NO_NODE)
-                .collect()
-        })
-        .collect();
-    let mut undef = NO_NODE;
-    for (i, ds) in dsts.iter().enumerate() {
-        for &d in ds {
-            if i < call.args.len() {
-                if call.args[i] != NO_NODE {
-                    s.edges.push((call.args[i], d));
-                }
-            } else {
-                if undef == NO_NODE {
-                    undef = fresh(s);
-                    s.seeds.push((undef & !SLOT, Vec::new(), prim::UNDEF));
-                }
-                s.edges.push((undef, d));
-            }
-        }
-    }
-    for &sp in &call.spread {
-        let elems = fresh(s);
-        s.cons.push((
-            sp,
-            Cons::Load {
-                key: Key::Any,
-                dst: elems,
-            },
-        ));
-        for ds in &dsts {
-            for &d in ds {
-                s.edges.push((elems, d));
-            }
-        }
-    }
-    let tdsts: Vec<NodeId> = [
-        tr(g.this),
-        gobs.get(g.params.len()).copied().unwrap_or(NO_NODE),
-    ]
-    .into_iter()
-    .filter(|&d| d != NO_NODE)
-    .collect();
-    if !tdsts.is_empty() {
-        let src = match call.this {
-            ThisArg::Node(n) => n,
-            ThisArg::Tok(x) => {
-                let n = fresh(s);
-                s.seeds.push((n & !SLOT, vec![x], 0));
-                n
-            }
-            ThisArg::Undef => {
-                let n = fresh(s);
-                s.seeds.push((n & !SLOT, Vec::new(), prim::UNDEF));
-                n
-            }
-        };
-        for d in tdsts {
-            s.edges.push((src, d));
-        }
-    }
-    let r = tr(g.ret);
-    if r != NO_NODE && call.ret != NO_NODE {
-        s.edges.push((r, call.ret));
-    }
-}
-
-/// Remove what an instance does not need: relays inside the slice become
-/// direct edges, slots that reach nothing go, and read rules into such
-/// slots go (the observation layer runs them on a superset of tokens).
-pub fn compress(s: &mut Summary) {
-    let n = s.nslots as usize;
-    let sl = |x: NodeId| {
-        if is_slot(x) {
-            Some((x & !SLOT) as usize)
-        } else {
-            None
-        }
-    };
-    let mut pinned = vec![false; n];
-    for &p in s.params.iter().chain([&s.ret, &s.this]) {
-        if let Some(i) = sl(p) {
-            pinned[i] = true;
-        }
-    }
-    // Outer slots are the context's nodes; closure values and their terms
-    // are read when an instance is filled.
-    for &o in &s.outer {
-        pinned[o as usize] = true;
-    }
-    for &(b, _) in &s.births {
-        pinned[b as usize] = true;
-    }
-    for (c, _, terms, _) in &s.closures {
-        pinned[*c as usize] = true;
-        for &x in terms {
-            if let Some(i) = sl(x) {
-                pinned[i] = true;
-            }
-        }
-    }
-    let mut seeded = vec![false; n];
-    for &(i, _, _) in &s.seeds {
-        seeded[i as usize] = true;
-    }
-    // Uses as a rule holder or field, or a call operand.
-    let mut uses = vec![0u32; n];
-    let mut cons: Vec<Option<(NodeId, Cons)>> = s.cons.drain(..).map(Some).collect();
-    for (h, c) in cons.iter().flatten() {
-        for x in std::iter::once(*h).chain(cons_fields(c).0) {
-            if let Some(i) = sl(x) {
-                uses[i] += 1;
-            }
-        }
-    }
-    for (_, cs) in &s.calls {
-        for x in call_nodes(cs) {
-            if let Some(i) = sl(x) {
-                uses[i] += 1;
-            }
-        }
-    }
-    let mut out: Vec<FxHashSet<NodeId>> = vec![FxHashSet::default(); n];
-    let mut inn: Vec<FxHashSet<NodeId>> = vec![FxHashSet::default(); n];
-    let mut abs_edges: FxHashSet<(NodeId, NodeId)> = FxHashSet::default();
-    let add_edge = |a: NodeId,
-                    b: NodeId,
-                    out: &mut Vec<FxHashSet<NodeId>>,
-                    inn: &mut Vec<FxHashSet<NodeId>>,
-                    abs_edges: &mut FxHashSet<(NodeId, NodeId)>| {
-        if a == b {
-            return;
-        }
-        match (sl(a), sl(b)) {
-            (None, None) => {
-                abs_edges.insert((a, b));
-            }
-            (ia, ib) => {
-                if let Some(i) = ia {
-                    out[i].insert(b);
-                }
-                if let Some(j) = ib {
-                    inn[j].insert(a);
-                }
-            }
-        }
-    };
-    for &(a, b) in &s.edges {
-        add_edge(a, b, &mut out, &mut inn, &mut abs_edges);
-    }
-    let mut dead = vec![false; n];
-    let mut changed = true;
-    while changed {
-        changed = false;
-        // (c) read rules into slots that reach nothing.
-        for k in 0..cons.len() {
-            let Some((_, c)) = &cons[k] else { continue };
-            let Some(i) = read_dst(c).and_then(sl) else {
-                continue;
-            };
-            if pinned[i] || !out[i].is_empty() || uses[i] != 1 {
-                continue;
-            }
-            let (h, c) = cons[k].take().unwrap();
-            for x in std::iter::once(h).chain(cons_fields(&c).0) {
-                if let Some(j) = sl(x) {
-                    uses[j] -= 1;
-                }
-            }
-            changed = true;
-        }
-        for i in 0..n {
-            if dead[i] || pinned[i] || uses[i] != 0 {
-                continue;
-            }
-            if out[i].is_empty() {
-                // (b) reaches nothing.
-                for a in std::mem::take(&mut inn[i]) {
-                    if let Some(j) = sl(a) {
-                        out[j].remove(&(SLOT | i as u32));
-                    }
-                }
-                dead[i] = true;
-                changed = true;
-            } else if !seeded[i] && (inn[i].len() <= 1 || out[i].len() == 1) {
-                // (a) a relay: predecessors straight to successors.
-                let ins = std::mem::take(&mut inn[i]);
-                let outs = std::mem::take(&mut out[i]);
-                let me = SLOT | i as u32;
-                for &a in &ins {
-                    if let Some(j) = sl(a) {
-                        out[j].remove(&me);
-                    }
-                }
-                for &b in &outs {
-                    if let Some(j) = sl(b) {
-                        inn[j].remove(&me);
-                    }
-                }
-                for &a in &ins {
-                    for &b in &outs {
-                        add_edge(a, b, &mut out, &mut inn, &mut abs_edges);
-                    }
-                }
-                dead[i] = true;
-                changed = true;
-            }
-        }
-    }
-    // Renumber the live slots.
-    let mut map = vec![u32::MAX; n];
-    let mut orig = Vec::new();
-    for i in 0..n {
-        if !dead[i] {
-            map[i] = orig.len() as u32;
-            orig.push(s.orig[i]);
-        }
-    }
-    let rn = |x: NodeId| match sl(x) {
-        Some(i) if map[i] != u32::MAX => SLOT | map[i],
-        Some(_) => NO_NODE,
-        None => x,
-    };
-    let mut edges: Vec<(NodeId, NodeId)> = Vec::new();
-    for i in 0..n {
-        if dead[i] {
-            continue;
-        }
-        let mut v: Vec<NodeId> = out[i].iter().copied().collect();
-        v.sort_unstable();
-        for b in v {
-            edges.push((rn(SLOT | i as u32), rn(b)));
-        }
-        let mut v: Vec<NodeId> = inn[i]
-            .iter()
-            .copied()
-            .filter(|&a| sl(a).is_none())
-            .collect();
-        v.sort_unstable();
-        for a in v {
-            edges.push((a, rn(SLOT | i as u32)));
-        }
-    }
-    let mut ae: Vec<_> = abs_edges.into_iter().collect();
-    ae.sort_unstable();
-    edges.extend(ae);
-    s.edges = edges;
-    s.cons = cons
-        .into_iter()
-        .flatten()
-        .map(|(h, c)| (rn(h), map_cons(&c, rn, |k| k)))
-        .collect();
-    for (_, cs) in s.calls.iter_mut() {
-        *cs = map_call(cs, rn);
-    }
-    s.seeds = s
-        .seeds
-        .drain(..)
-        .filter(|(i, _, _)| !dead[*i as usize])
-        .map(|(i, t, p)| (map[i as usize], t, p))
-        .collect();
-    s.params = s.params.iter().map(|&p| rn(p)).collect();
-    s.ret = rn(s.ret);
-    s.this = rn(s.this);
-    s.outer = s.outer.iter().map(|&o| map[o as usize]).collect();
-    for (b, _) in s.births.iter_mut() {
-        *b = map[*b as usize];
-    }
-    for (c, _, terms, _) in s.closures.iter_mut() {
-        *c = map[*c as usize];
-        for x in terms.iter_mut() {
-            *x = rn(*x);
-        }
-    }
-    s.nslots = orig.len() as u32;
-    s.orig = orig;
-}
+#[path = "summary/compose.rs"]
+mod compose;
+use compose::compose;
+pub use compose::compress;

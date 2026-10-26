@@ -61,9 +61,10 @@ pub use widget::{
 
 // ---- decl.rs ----
 pub use decl::{
-    ArgumentsObjectMeta, Class, ClassComputedMember, ClassComputedMemberKind, ClassField,
-    ClassFieldOrigin, Decorator, Enum, EnumMember, EnumValue, Export, Function, Global, Import,
-    ImportSpecifier, is_cjs_record_export, CJS_RECORD_EXPORT, DECLARED_KEYS_CLASS_PREFIX, DECLARED_KEYS_OBJECT_CLASS_PREFIX, Interface, InterfaceMethod, InterfaceProperty, Param, TypeAlias,
+    is_cjs_record_export, ArgumentsObjectMeta, Class, ClassComputedMember, ClassComputedMemberKind,
+    ClassField, ClassFieldOrigin, Decorator, Enum, EnumMember, EnumValue, Export, Function, Global,
+    Import, ImportSpecifier, Interface, InterfaceMethod, InterfaceProperty, Param, TypeAlias,
+    CJS_RECORD_EXPORT, DECLARED_KEYS_CLASS_PREFIX, DECLARED_KEYS_OBJECT_CLASS_PREFIX,
 };
 
 // ---- stmt.rs ----

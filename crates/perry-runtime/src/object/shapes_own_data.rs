@@ -1,6 +1,7 @@
 //! Positive own-slot lookup whose authority is the receiver's live shape.
 use super::{ShapeObjectKind, ShapeSlab, PROTO_ID_DEFAULT, PROTO_ID_NULL, PROTO_ID_PER_OBJECT};
 use crate::array::ArrayHeader;
+use crate::codegen_abi::LayoutWord;
 use crate::object::ObjectHeader;
 
 /// Owner facts borrowed for one callback-free read. No allocation or shape
@@ -22,7 +23,10 @@ pub(crate) struct OwnDataShape {
 /// Rule 3 permits asking the shape directory with the receiver's +4 word
 /// before classifying the cell: only shaped objects can carry a live ShapeId.
 #[inline]
-pub(crate) unsafe fn own_data_shape(dir: *const u8, shape_id: u32) -> Option<Option<OwnDataShape>> {
+pub(crate) unsafe fn own_data_shape(
+    dir: *const u8,
+    shape_id: LayoutWord,
+) -> Option<Option<OwnDataShape>> {
     let record = ShapeSlab::ordinary_record_in(dir, shape_id)?;
     let bound = record.position_bound_raw();
     if bound == 0 {
@@ -116,7 +120,10 @@ pub(crate) unsafe fn plain_receiver_miss_is_final(object: *const ObjectHeader, k
         return false;
     }
     let shape_id = crate::object::layout_desc::layout_id_of_word((*object).parent_class_id);
-    let Some(record) = ShapeSlab::ordinary_record_in(super::ordinary_dir_addr(), shape_id) else {
+    let Some(record) = ShapeSlab::ordinary_record_in(
+        super::ordinary_dir_addr(),
+        crate::codegen_abi::LayoutWord(shape_id),
+    ) else {
         return false;
     };
     if !classless && !super::shape_is_plain_record(class_id, record.proto_id, record.object_kind())

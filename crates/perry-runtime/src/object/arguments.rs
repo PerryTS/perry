@@ -5,12 +5,13 @@
 
 use super::descriptors::{build_accessor_descriptor, build_data_descriptor};
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 #[repr(C)]
 struct ArgumentsTail {
     len: u32,
     /// Immutable birth layout; the live shape must still equal this identity.
-    birth_shape: u32,
+    birth_shape: LayoutWord,
     /// TAG_TRUE / TAG_FALSE for unmapped objects; a boxed alias array otherwise.
     state: u64,
 }
@@ -175,7 +176,7 @@ pub fn scan_arguments_object_roots_mut(visitor: &mut crate::gc::RuntimeRootVisit
 pub(crate) fn note_arguments_shape_carriers() {
     ARGUMENTS_SHAPES.with(|ids| {
         for &id in ids.borrow().iter().filter(|&&id| id != 0) {
-            crate::object::shape_carriers::note_shape_id(id);
+            crate::object::shape_carriers::note_shape_id(LayoutWord(id));
         }
     });
 }
@@ -402,7 +403,7 @@ fn unstamped_arguments_object(slots: u32) -> *mut ObjectHeader {
         // GC_STORE_AUDIT(INIT): private tail starts pointer-free, before any mint.
         arguments_tail(obj).write(ArgumentsTail {
             len: slots - 2,
-            birth_shape: 0,
+            birth_shape: LayoutWord(0),
             state: ARGUMENTS_UNMAPPED,
         });
         (*obj).parent_class_id = 0;
@@ -496,14 +497,17 @@ pub(crate) fn arguments_object_alloc_rooted(
             // and remembers the id.
             if cached == 0
                 || !crate::object::shapes::try_birth_stamp_preinstalled_shape(
-                    obj, cached, keys, slots,
+                    obj,
+                    LayoutWord(cached),
+                    keys,
+                    slots,
                 )
             {
                 set_object_keys_with_live(obj, keys, slots);
                 let id = crate::object::shapes::object_shape_stamp(obj);
                 ARGUMENTS_SHAPES.with(|ids| {
                     if let Some(index) = cache_index {
-                        ids.borrow_mut()[index] = id;
+                        ids.borrow_mut()[index] = id.0;
                         crate::object::shape_carriers::note_shape_id(id);
                     }
                 });
@@ -531,7 +535,8 @@ pub(crate) fn arguments_object_alloc_rooted(
                         .to_bits()
                 },
             ));
-        (*arguments_tail(obj)).birth_shape = crate::object::shapes::object_shape_stamp(obj);
+        (*arguments_tail(obj)).birth_shape =
+            LayoutWord(crate::object::shapes::object_shape_stamp(obj).0);
         // Attributes are already in the birth shape. No empty descriptor edit.
         let header = (obj as *mut u8)
             .sub(crate::gc::GC_HEADER_SIZE)
@@ -750,7 +755,7 @@ pub(crate) fn test_arguments_registry_probe_count() -> u64 {
 unsafe fn born_arguments_len(obj: *const ObjectHeader) -> Option<u32> {
     let tail = &*arguments_tail(obj);
     let born = tail.birth_shape;
-    (born != 0 && (*obj).shape_word() == born).then_some(tail.len)
+    (born != LayoutWord(0) && LayoutWord((*obj).shape_word()) == born).then_some(tail.len)
 }
 
 unsafe fn born_arguments_index(obj: *const ObjectHeader, index: u32) -> f64 {
