@@ -1440,6 +1440,8 @@ pub extern "C" fn js_gc_init() {
     crate::node_submodules::diagnostics_channel_init_main_thread();
     crate::node_submodules::init_trace_events_runtime();
     gc_init();
+    #[cfg(all(feature = "wasm-image-selftest", target_family = "wasm"))]
+    crate::value::addr_class::wasm_image_selftest();
     // Optional runtime features install from the program's generated
     // installer (see `crate::feature_hooks`), before any user code runs.
     crate::feature_hooks::run_feature_installer();
