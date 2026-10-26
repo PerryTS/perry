@@ -1696,9 +1696,29 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
             for &si in &todo {
                 exports_seen[si] = visible(si, &exports);
             }
-            for (si, u) in solve_level(&todo, &solves, sorted, &ucfg, &input) {
+            for (si, mut u) in solve_level(&todo, &solves, sorted, &ucfg, &input) {
                 work += u.stats.work;
                 exports[si] = digest(&(&u.contracts_out, &u.fn_contracts_out, &u.values_out));
+                // DECISIONS 197: a unit's write into a cell is its last
+                // write joined with what its latest solve writes, as its
+                // argument contracts are (D16): a cell only grows, and a
+                // value one writer took from another's earlier write cannot
+                // pass back and forth between them after its source stopped
+                // writing it (tsc typescript.js#u4336/#u4339, period 2).
+                if let Some(old) = per_unit[si].take() {
+                    let at: FxHashMap<String, usize> = u
+                        .cells_out
+                        .iter()
+                        .enumerate()
+                        .map(|(i, (k, _))| (k.clone(), i))
+                        .collect();
+                    for (k, c) in old.cells_out {
+                        match at.get(&k) {
+                            Some(&i) => u.cells_out[i].1.join(&c),
+                            None => u.cells_out.push((k, c)),
+                        }
+                    }
+                }
                 per_unit[si] = Some(u);
             }
             // The level's contracts, published in `order` sequence: the
@@ -1980,8 +2000,9 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
             }
         }
         input.stores = stores;
-        // Design §17.16 (b): the cells, from every unit's latest solve. The
-        // units reading a cell whose writes changed are solved again.
+        // Design §17.16 (b): the cells, from every unit's writes so far
+        // (DECISIONS 197). The units reading a cell whose writes changed are
+        // solved again.
         let mut cells: FxHashMap<String, Vec<CellWrite>> = FxHashMap::default();
         for (si, s) in solves.iter().enumerate() {
             let u = per_unit[si].as_ref().expect("every unit solved");
