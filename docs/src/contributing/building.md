@@ -109,7 +109,8 @@ normal compiler path. The tools remain experimental. In a Linux ARM64 developmen
 `perry-native-registration` passed 27 tests through Blaze. The `no_std`
 `perry-abi` crate passed four tests only after Blaze reported missing
 `lang_start` and fell back to Cargo. Full workspace compatibility is not
-established. Apple Silicon artifacts are still pending hosted-runner capacity.
+established. Linux ARM64 and Apple Silicon passed a separate edited-program
+probe that also verifies an mbx dependency cache hit.
 
 ### Compiler cache for ephemeral worktrees
 
