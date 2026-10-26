@@ -323,11 +323,9 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
     if !dead_platform_requires.is_empty() {
         require_specs.retain(|spec| !dead_platform_requires.contains(spec));
     }
-    // #sdxgen: Identify Node.js built-in requires (`require("process")`,
-    // `require("os")`, etc.) so the synthetic `require` function can resolve
-    // them via `createRequire` at runtime instead of relying on the hoisted
-    // static import binding (which the codegen does not initialize for
-    // native modules inside CJS-wrapped modules).
+    // Literal builtins use ordinary hoisted ESM default bindings. The
+    // synthetic require returns that binding; only computed specifiers need
+    // the support module's runtime builtin resolver.
     let builtin_requires: Vec<String> = require_specs
         .iter()
         .filter(|spec| {
@@ -481,18 +479,6 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
             // Don't adopt a function-local alias — keep it lazy (see above).
             continue;
         }
-        // #sdxgen: Don't adopt aliases for Node.js built-in modules. The
-        // codegen doesn't initialize native-module import bindings inside
-        // CJS-wrapped modules, so an adopted alias would be undefined at
-        // runtime. Keeping the alias un-adopted means the declaration stays
-        // in the IIFE body and `require("process")` goes through the
-        // synthetic require, which resolves builtins via createRequire.
-        let normalized = spec.strip_prefix("node:").unwrap_or(spec);
-        if !perry_hir::is_bare_prefix_only_builtin(spec)
-            && perry_hir::is_node_builtin_module(normalized)
-        {
-            continue;
-        }
         if import_local_names.iter().any(|n| n == alias) {
             continue;
         }
@@ -541,13 +527,6 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
     let imports = require_specs
         .iter()
         .zip(import_local_names.iter())
-        // #8342: don't emit a static `import _req_N from 'process'` for Node.js
-        // built-in specs. The codegen does not initialize native-module import
-        // bindings inside CJS-wrapped modules, so the binding would be dropped
-        // by the HIR / left undefined at runtime. Builtins resolve through the
-        // synthetic require's `createRequire` arm instead (see `require_cases`),
-        // which never references the import local.
-        .filter(|(spec, _)| !builtin_requires.contains(spec))
         .filter(|(spec, _)| resolved_native_addon(source_path, spec, native_addon_paths).is_none())
         .map(|(spec, local)| {
             // #4904: Node's underscore-prefixed internal http modules are
@@ -752,12 +731,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
                 None
             };
             let required_value = if builtin_requires.contains(spec) {
-                // #sdxgen: For Node.js built-in modules, resolve via createRequire
-                // at runtime instead of the hoisted import binding (which the
-                // codegen does not initialize for native modules in CJS-wrapped
-                // modules). createRequire calls js_create_native_module_namespace
-                // under the hood — the same path Node.js uses for require("process").
-                format!("{link_child}return __perry_cjs_builtin(specifier);")
+                format!("{link_child}return {local};")
             } else if needs_runtime_record {
                 runtime_require.clone().unwrap_or_else(|| format!("return {local};"))
             } else if let Some(target) = resolved_target.as_ref() {
@@ -772,11 +746,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
                 format!("{link_child}return {local};")
             };
             if builtin_requires.contains(spec) {
-                // #8342: builtins have no static import binding (we skip emitting
-                // one above), so never reference `{local}` here — always go through
-                // the `createRequire`-backed `required_value`. The try-site
-                // `typeof {local} === 'boolean'` sentinel guard does not apply
-                // (builtins are never the pruned-build TRUE sentinel).
+                // A builtin binding is never the pruned-build TRUE sentinel.
                 format!("        if (specifier === '{spec}') {{ {required_value} }}")
             } else if require_site_in_try(source, spec) && runtime_require.is_none() {
                 format!(
