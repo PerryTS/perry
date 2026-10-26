@@ -13,6 +13,7 @@ mod cjs_require;
 mod class_statics;
 mod closed_world;
 mod closure_context;
+mod for_in_keys;
 mod function_values;
 mod hub_tokens;
 mod layout_key;
@@ -29,6 +30,7 @@ mod unit_alias;
 mod unit_ctor;
 mod unit_effects;
 mod unit_extends;
+mod run_once_closed;
 mod unit_mode;
 mod unit_namespace;
 

@@ -134,3 +134,45 @@ fn a_computed_static_member_or_a_static_accessor_is_not_constant() {
         "{r:?}"
     );
 }
+
+#[test]
+fn a_static_method_named_like_a_written_instance_field_is_constant() {
+    // DeltaBlue's `Variable.value`: the instance field `value` is written
+    // after construction; the static method `value` is the class object's
+    // own property, which nothing stores.
+    let src = r#"
+        class Variable {
+            value: number = 0;
+            static value(n: number) { return n * 2; }
+        }
+        function useIt(k: any) { return k.value(3); }
+        const v = new Variable();
+        v.value = 7;
+        console.log(useIt(Variable), v.value);
+    "#;
+    let pf = facts(src);
+    assert!(
+        tmpl(&pf, "Variable").statics.iter().any(|k| k == "value"),
+        "{}",
+        pf.dump_text()
+    );
+    let call: Vec<_> = sites(&pf, "value")
+        .into_iter()
+        .filter(|s| s.is_call)
+        .collect();
+    assert!(
+        !call.is_empty()
+            && call
+                .iter()
+                .all(|s| matches!(s.verdict, Verdict::T0Mono | Verdict::T0Set)),
+        "{}",
+        pf.dump_text()
+    );
+    // The instance field stays a written field.
+    let f = tmpl(&pf, "Variable")
+        .fields
+        .iter()
+        .find(|f| f.key == "value")
+        .expect("the field");
+    assert!(!f.readonly && f.writers_post > 0, "{f:?}");
+}

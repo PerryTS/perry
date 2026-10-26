@@ -1,67 +1,17 @@
-//! Object model step 1 (OBJECT_MODEL_2026-10-13.md §3.2, §3.6):
-//! `Object.create(P)` families whose `P` is a module's prototype binding.
+//! Object.create(P) families (OBJECT_MODEL_2026-10-13.md §3.2, §3.6).
 //!
-//! Two creation points make a family:
+//! [`collect`] derives prototype facts from module HIR; [`CreateState`] follows
+//! bindings and subsequent stores, while [`site`] reads Object.assign literals.
+//! Fixed layouts name ordered keys and P's identity, shared by matching births
+//! and emitted by [`emission`]. Imported keys come from [`program_proto_exports`].
 //!
-//! * `Object.assign(Object.create(P), { k1: e1, …, kn: en })` with `P` a
-//!   top-level `const` bound to a closed object literal: its objects are born
-//!   with the keys `k1…kn` in that order ([`site`], [`lower_assign`]);
-//! * `const a = Object.create(P)` followed by stores `a.k1 = …; a.k2 = …`
-//!   among the statements after it (Option's `some`): born with one slot per
-//!   key, on the state "no key yet", and each add, in source order, moves it
-//!   to the next state ([`before_stmt`], [`lower_create`], [`lower_add`]).
-//!   Here `P` is any top-level `const` whose initializer the compiler follows
-//!   ([`born`]: literals with spreads, computed data keys, methods and
-//!   accessors, `Object.create(Q)` of another such binding, `Object.assign`
-//!   with literal sources, `Object.defineProperty` with a static key), so the
-//!   accessors and possibly non-writable keys of every prototype on `P`'s
-//!   chain are known at the binding.
-//!
-//! The family's layouts are fixed here: the keys, one slot each, and `P`'s
-//! identity (`PerryProtoFamily`), registered at startup like every carried
-//! layout. Each one is named by its content (the module, `P`'s binding and
-//! the keys), so every creation point with the same family shares it, and
-//! the module emits the ones its code used ([`emission`]).
-//!
-//! Each key add is a `[[Set]]` on the new object, and whether a prototype
-//! intercepts it is a compile-time fact: no prototype of the chain names the
-//! key as an accessor or a possibly non-writable property at its binding,
-//! `%Object.prototype%`'s only accessor is `__proto__`, and only a
-//! definition of that name, an integrity operation, a relink or dynamic code
-//! anywhere in the program could change that (`ProtoCensus::
-//! create_add_free`). When the census proves every key free, the add is a
-//! slot store and no chain is read at run time.
-//!
-//! Otherwise the add takes the checked proof (decision 150): each prototype
-//! of the chain is born on its **carried layout** (§3.6, decision 147), the
-//! compile-time [`image`] of its initializer (every own key in order, its
-//! attributes, accessors and symbol keys included, and its [[Prototype]]),
-//! and the add compares each prototype's layout word with that layout's id
-//! (plus `%Object.prototype%`'s shadow bit) before the slot store. Every
-//! change to such a prototype's own keys, attributes, extensibility or
-//! [[Prototype]] moves it off the layout (a new id, or the shadow bit with an
-//! overflow), so a changed chain fails the compare and takes the ordinary
-//! `[[Set]]`. An initializer whose result the compiler cannot predict
-//! exactly gets no image; the runtime births `P` on its image only when the
-//! object built is exactly it (`perry_bind_family_prototype`), so a wrong
-//! prediction (a spread source that changed) costs the proof, never
-//! correctness. Keys of other modules' constants and literals (an imported
-//! computed key, a spread of an imported literal) come from the program's
-//! export facts ([`program_proto_exports`]), derived by the driver from
-//! every module before any is lowered.
-//!
-//! `P` takes the family's prototype serial at its birth
-//! (`perry_bind_family_prototype`, emitted after the binding's
-//! initialization), and `perry_create_family` checks that the `P` it is
-//! handed carries it. A `P` that does not (unbound, or any other value)
-//! takes the ordinary `Object.create`; the creation point then performs the
-//! ordinary `[[Set]]`s, so its semantics never depend on the check.
-//!
-//! Nothing here is looked up by an expression's address or kept past one
-//! module's lowering: the module's prototype facts are derived once from its
-//! HIR ([`collect`]), a binding's family is read off its `let` and the
-//! statements after it while that body is lowered ([`CreateState`]), and an
-//! `Object.assign` site's from the expression itself.
+//! ProtoCensus::create_add_free proves keys cannot be intercepted; otherwise
+//! [`emit_chain_proof`] checks carried prototype layouts from [`image`] before
+//! stores. Mutated chains, unpredictable initializers and changed spread sources
+//! decline to ordinary [[Set]]. perry_bind_family_prototype binds and validates
+//! P's image and serial; perry_create_family checks that serial, falling back to
+//! ordinary Object.create and [[Set]] when it differs. Facts never outlive module
+//! lowering and no lookup depends on an expression's address.
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -351,6 +301,9 @@ struct ModuleCreateFamilies {
     bound: BTreeSet<u32>,
     /// The layouts lowering used, by descriptor name.
     used: BTreeMap<String, Site>,
+    /// Every layout lowering could use (a superset of `used`): the births
+    /// pre-pass reserves their ordinals because it does not lower bodies.
+    candidates: BTreeMap<String, Site>,
     /// Checked proofs are emitted (not on 32-bit targets).
     checked: bool,
 }
@@ -676,7 +629,73 @@ pub(crate) fn collect(hir: &Module, module_prefix: &str, target_triple: &str) {
             }
         });
     }
+    if !state.borns.is_empty() {
+        state.candidates = candidate_sites(hir, &state);
+    }
     MODULE_CREATE_FAMILIES.with(|m| *m.borrow_mut() = state);
+}
+
+/// Every layout the module's creation points and literal adds could use:
+/// the states of each `const a = Object.create(P)` family
+/// ([`before_stmt`]) and each literal add's layout ([`site`]).
+fn candidate_sites(hir: &Module, m: &ModuleCreateFamilies) -> BTreeMap<String, Site> {
+    let mut out = BTreeMap::new();
+    perry_hir::tdz_check::for_each_module_stmt_list(hir, &mut |stmts| {
+        for (i, stmt) in stmts.iter().enumerate() {
+            let Stmt::Let {
+                id,
+                mutable: false,
+                init: Some(Expr::ObjectCreate(proto, None)),
+                ..
+            } = stmt
+            else {
+                continue;
+            };
+            let Some(p) = proto_binding(proto) else {
+                continue;
+            };
+            let Some(family) = binding_family(m, *id, p, &stmts[i + 1..]) else {
+                continue;
+            };
+            for (n, desc) in family.states.iter().enumerate() {
+                out.entry(desc.clone()).or_insert_with(|| Site {
+                    desc_global: desc.clone(),
+                    keys: family.keys[..n].to_vec(),
+                    slots: family.keys.len() as u32,
+                    proto_global: family.proto_global.clone(),
+                });
+            }
+        }
+    });
+    perry_hir::for_each_module_expr(hir, &mut |e| {
+        let Expr::ObjectAssign { target, sources } = e else {
+            return;
+        };
+        let Expr::ObjectCreate(proto, None) = target.as_ref() else {
+            return;
+        };
+        let (
+            Some(p),
+            [Expr::New {
+                class_name, args, ..
+            }],
+        ) = (proto_binding(proto), sources.as_slice())
+        else {
+            return;
+        };
+        let Some(class) = hir
+            .classes
+            .iter()
+            .find(|c| &c.name == class_name)
+            .filter(|c| c.is_literal_shape())
+        else {
+            return;
+        };
+        if let Some(site) = literal_add_site(m, p, class, args.len()) {
+            out.entry(site.desc_global.clone()).or_insert(site);
+        }
+    });
+    out
 }
 
 /// Must the top-level binding `id` be a module global (a prototype born on
@@ -1006,6 +1025,36 @@ pub(crate) fn lower_holder_read(
 
 /// The family of `Object.assign(Object.create(P), { k1: e1, … })`, when `P`
 /// is bound to a closed literal and every key's add is free.
+/// The layout of `Object.assign(Object.create(P), new Literal(..))` when `P`
+/// is a closed literal and the literal's keys are free adds.
+fn literal_add_site(
+    m: &ModuleCreateFamilies,
+    p: u32,
+    class: &perry_hir::Class,
+    arg_count: usize,
+) -> Option<Site> {
+    let keys: Vec<String> = class.fields.iter().map(|f| f.name.clone()).collect();
+    if keys.is_empty()
+        || keys.len() != arg_count
+        || class.fields.iter().any(|f| f.key_expr.is_some())
+        || !keys.iter().all(|k| layout_key(k))
+        || (1..keys.len()).any(|i| keys[..i].contains(&keys[i]))
+        || !keys.iter().all(|k| add_free(k))
+    {
+        return None;
+    }
+    m.literals.contains(&p).then(|| Site {
+        desc_global: format!(
+            "perry_layout_create_{}_{p}_{:08x}",
+            m.prefix,
+            super::fnv1a(keys.join("\u{1}").as_bytes()) as u32
+        ),
+        slots: keys.len() as u32,
+        keys,
+        proto_global: format!("perry_protofam_{}_{p}", m.prefix),
+    })
+}
+
 pub(crate) fn site(ctx: &FnCtx<'_>, e: &Expr) -> Option<Site> {
     let Expr::ObjectAssign { target, sources } = e else {
         return None;
@@ -1027,29 +1076,8 @@ pub(crate) fn site(ctx: &FnCtx<'_>, e: &Expr) -> Option<Site> {
         .classes
         .get(class_name)
         .filter(|c| c.is_literal_shape())?;
-    let keys: Vec<String> = class.fields.iter().map(|f| f.name.clone()).collect();
-    if keys.is_empty()
-        || keys.len() != args.len()
-        || class.fields.iter().any(|f| f.key_expr.is_some())
-        || !keys.iter().all(|k| layout_key(k))
-        || (1..keys.len()).any(|i| keys[..i].contains(&keys[i]))
-        || !keys.iter().all(|k| add_free(k))
-    {
-        return None;
-    }
-    let site = MODULE_CREATE_FAMILIES.with(|m| {
-        let m = m.borrow();
-        m.literals.contains(&p).then(|| Site {
-            desc_global: format!(
-                "perry_layout_create_{}_{p}_{:08x}",
-                m.prefix,
-                super::fnv1a(keys.join("\u{1}").as_bytes()) as u32
-            ),
-            slots: keys.len() as u32,
-            keys,
-            proto_global: format!("perry_protofam_{}_{p}", m.prefix),
-        })
-    })?;
+    let site =
+        MODULE_CREATE_FAMILIES.with(|m| literal_add_site(&m.borrow(), p, class, args.len()))?;
     use_layout(site.clone());
     Some(site)
 }
@@ -1097,7 +1125,12 @@ pub(crate) fn emission() -> (Vec<String>, Vec<Site>, Vec<ImageDesc>) {
                 })
             })
             .collect();
-        (protos, m.used.values().cloned().collect(), images)
+        let sites = if crate::layout_ordinals::collecting() {
+            m.candidates.values().cloned().collect()
+        } else {
+            m.used.values().cloned().collect()
+        };
+        (protos, sites, images)
     })
 }
 

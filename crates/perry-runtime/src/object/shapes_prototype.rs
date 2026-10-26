@@ -309,7 +309,7 @@ pub(crate) fn identity_prototype_word(proto_id: u64) -> u64 {
 pub(crate) fn shape_prototype_word(id: u32) -> u64 {
     // SAFETY: `agent_record` never returns null; an absent id reads the
     // shared empty record, whose identity is the default.
-    unsafe { (*super::shapes_store::ShapeSlab::agent_record(id)).prototype_word() }
+    unsafe { (*super::shapes_store::ShapeSlab::agent_record_for_word(id)).prototype_word() }
 }
 
 impl super::shapes_store::ShapeRecord {

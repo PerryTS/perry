@@ -137,6 +137,13 @@ impl LoweringContext {
 }
 
 impl LoweringContext {
+    /// The module path to bake into the program (`__dirname`, `import.meta.*`,
+    /// the runtime `require` base, stack-frame labels, runtime error text):
+    /// `source_file_path`, rebased by the installed `--source-root` remap.
+    pub(crate) fn baked_source_path(&self) -> std::borrow::Cow<'_, str> {
+        crate::source_remap::baked_path(&self.source_file_path)
+    }
+
     pub(crate) fn fresh_local(&mut self) -> LocalId {
         let id = self.next_local_id;
         self.next_local_id += 1;
@@ -1013,7 +1020,7 @@ impl LoweringContext {
         byte_offset: u32,
         width_hint: u32,
     ) -> String {
-        let site_key = format!("@empty-site:{}:{}", self.source_file_path, byte_offset);
+        let site_key = format!("@empty-site:{}:{}", self.baked_source_path(), byte_offset);
         self.mint_anon_shape_class(site_key, &[], width_hint)
     }
 

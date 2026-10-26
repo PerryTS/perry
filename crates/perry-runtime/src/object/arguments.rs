@@ -53,7 +53,9 @@ crate::perry_thread_local! {
     // born with (0 = none yet). A ShapeId is a number, never reused, and
     // `shapes::try_birth_stamp_preinstalled_shape` re-checks every structural
     // fact against the live descriptor, so a stale or pruned id only costs
-    // one publish: nothing here needs rooting.
+    // one publish. The word is dereferenced by that re-check, so the cache is
+    // a cache carrier (note_arguments_shape_carriers): a held word is never
+    // retired while this table names it.
     static ARGUMENTS_SHAPES: RefCell<[u32; 130]> = RefCell::new([0; 130]);
 }
 
@@ -167,6 +169,15 @@ pub fn scan_arguments_object_roots_mut(visitor: &mut crate::gc::RuntimeRootVisit
         }
     });
     RESTRICTED_CALLEE_PAIR.with(|pair| visitor.visit_raw_mut_ptr_slot(&mut *pair.borrow_mut()));
+}
+
+/// Claim every layout word the birth cache still names (full-trace recompute).
+pub(crate) fn note_arguments_shape_carriers() {
+    ARGUMENTS_SHAPES.with(|ids| {
+        for &id in ids.borrow().iter().filter(|&&id| id != 0) {
+            crate::object::shape_carriers::note_shape_id(id);
+        }
+    });
 }
 
 #[cfg(test)]
@@ -493,6 +504,7 @@ pub(crate) fn arguments_object_alloc_rooted(
                 ARGUMENTS_SHAPES.with(|ids| {
                     if let Some(index) = cache_index {
                         ids.borrow_mut()[index] = id;
+                        crate::object::shape_carriers::note_shape_id(id);
                     }
                 });
             }

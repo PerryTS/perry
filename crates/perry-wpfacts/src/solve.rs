@@ -305,7 +305,8 @@ impl Model {
         loop {
             self.fill_instances();
             let Some(n) = self.wl.pop_front() else {
-                if self.sum.pending.is_empty() && !self.settle_bf_written() {
+                if self.sum.pending.is_empty() && !self.settle_bf_written() && !self.settle_for_in()
+                {
                     break;
                 }
                 continue;
@@ -1094,6 +1095,13 @@ impl Model {
                     }
                 }
             }
+            // A for-in run's key (FVA 4.3b): `o[k]` reads that one key.
+            Cons::IdxLoad { idx, dst } if self.key_nodes.contains_key(&idx) => {
+                let a = self.key_nodes[&idx];
+                for &t in toks {
+                    self.load_from(t, t, Key::Named(a), dst);
+                }
+            }
             Cons::IdxLoad { idx, dst } => {
                 for &t in toks {
                     if t == TOP {
@@ -1127,6 +1135,61 @@ impl Model {
                             }
                         }
                     }
+                }
+            }
+            Cons::ForInBody { obj, call } => {
+                for &t in toks {
+                    if matches!(self.toks[t as usize], TokKind::Func(..))
+                        && self.for_in_on.insert((obj, t, call))
+                    {
+                        self.cons(obj, Cons::ForInKeys { ft: t, call });
+                    }
+                }
+            }
+            Cons::ForInKeys { ft, call } => {
+                // A primitive's keys (a string's indices) are no literal's.
+                if prim != 0 {
+                    self.for_in_every_key(call, ft);
+                }
+                for &t in toks {
+                    self.for_in_tok(call, ft, t);
+                }
+            }
+            Cons::DefineKeyed {
+                o,
+                reason,
+                accessor,
+            } => {
+                if let Some(k) = self.keyed_once(n, o, 0) {
+                    match k {
+                        Some(key) if accessor => self.cons(o, Cons::DefineAccessor { key, reason }),
+                        _ => self.cons(
+                            o,
+                            Cons::Hard {
+                                kind: Hard::E5DefineProperty,
+                                reason,
+                            },
+                        ),
+                    }
+                }
+            }
+            Cons::StoreKeyed { o, src, site } => {
+                if let Some(k) = self.keyed_once(n, src, 1) {
+                    let key = k.map_or(Key::Any, Key::Named);
+                    self.cons(o, Cons::Store { key, src, site });
+                }
+            }
+            Cons::AccessorKeyed { holder, f, setter } => {
+                if let Some(k) = self.keyed_once(n, f, 2 + setter as u8) {
+                    let key = k.unwrap_or_else(|| self.atom(crate::STAR_KEY));
+                    self.cons(
+                        f,
+                        Cons::Accessor {
+                            holder,
+                            key,
+                            setter,
+                        },
+                    );
                 }
             }
             Cons::Arith { dst, add } => {
@@ -1310,6 +1373,16 @@ impl Model {
         }
     }
 
+    /// A keyed rule on key node `n` (FVA 4.3b) applies once per operand:
+    /// `Some(Some(k))` for a for-in run's one key, `Some(None)` for any
+    /// other key, `None` when it already applied.
+    fn keyed_once(&mut self, n: NodeId, x: NodeId, kind: u8) -> Option<Option<Atom>> {
+        if !self.keyed_done.insert((n, x, kind)) {
+            return None;
+        }
+        Some(self.key_nodes.get(&n).copied())
+    }
+
     pub(crate) fn store_into(&mut self, t: Tok, key: Key, src: NodeId, site: SiteId) {
         // A program-owned global: an ordinary field of the global object.
         if let (TokKind::Builtin(BuiltinNs::GlobalThis), Key::Named(a)) =
@@ -1440,7 +1513,14 @@ impl Model {
                 self.edge(src, f);
                 if let Some(tm) = tm {
                     let ctor = self.stores[site as usize].birth || self.is_ctor_phase(site, tm);
-                    let w = self.writers.entry((tm, a)).or_default();
+                    // Writers per object: an instance's, the class object's,
+                    // the prototype's.
+                    let w = match self.toks[t as usize] {
+                        TokKind::ClassObj(_) => self.class_writers.entry((tm, a)),
+                        TokKind::Proto(_) => self.proto_writers.entry((tm, a)),
+                        _ => self.writers.entry((tm, a)),
+                    }
+                    .or_default();
                     if ctor {
                         if !w.ctor.contains(&site) {
                             w.ctor.push(site);
@@ -1801,6 +1881,17 @@ impl Model {
             Cons::ArrayLenArg { dst } => format!("arraylenarg {n} {dst}"),
             Cons::IdxLoad { idx, dst } => format!("idxload {n} {idx} {dst}"),
             Cons::IdxKey { obj, dst } => format!("idxkey {n} {obj} {dst}"),
+            Cons::ForInBody { obj, call } => format!("forinbody {n} {obj} {call}"),
+            Cons::ForInKeys { ft, call } => format!("forinkeys {n} {ft} {call}"),
+            Cons::DefineKeyed {
+                o,
+                reason,
+                accessor,
+            } => format!("definekeyed {n} {o} {reason} {}", *accessor as u8),
+            Cons::StoreKeyed { o, src, site } => format!("storekeyed {n} {o} {src} {site}"),
+            Cons::AccessorKeyed { holder, f, setter } => {
+                format!("accessorkeyed {n} {holder} {f} {}", *setter as u8)
+            }
             Cons::ThisTo { origin } => format!("thisto {n} {origin}"),
             Cons::CallArgs { call } => format!("callargs {n} {call}"),
             Cons::RetInto { call, run } => format!("retinto {n} {call} {run}"),

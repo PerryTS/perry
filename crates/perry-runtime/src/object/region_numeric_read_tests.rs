@@ -171,7 +171,7 @@ fn unmarked_numeric_read_refuses_accessors_and_value_tests_deprecated_lanes() {
         assert_eq!(prime(&site, obj, bits(key)), REGION_GUARD_WORD_EMPTY);
 
         let (other, other_key) = record("rnr_deprecated");
-        shape_record_by_id(object_shape_stamp(other))
+        shape_record_for_word(object_shape_stamp(other))
             .unwrap()
             .deprecate_rep_slot(1);
         let word = prime(&site, other, bits(other_key));

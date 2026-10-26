@@ -95,7 +95,7 @@ fn new_f_and_object_create_of_its_prototype_share_a_shape() {
     let created = crate::object::js_object_create(f64::from_bits(bits(proto)));
     let created = crate::value::JSValue::from_bits(created.to_bits()).as_pointer::<ObjectHeader>()
         as *mut ObjectHeader;
-    let width = crate::object::shapes::shape_live_inline_slot_count_by_id(unsafe {
+    let width = crate::object::shapes::shape_live_inline_slot_count_for_word(unsafe {
         super::super::object_shape_stamp(created)
     })
     .unwrap();
@@ -167,7 +167,7 @@ fn c3_identity_cell_is_stable_across_directory_growth_and_gc_rewrite() {
     let receiver = js_object_alloc(0, 0);
     object_link_class_default_prototype(receiver as usize, bits(proto));
     let stamp = unsafe { super::super::object_shape_stamp(receiver) };
-    let record = super::super::ShapeSlab::agent_record(stamp);
+    let record = super::super::ShapeSlab::agent_record_for_word(stamp);
     let cell = unsafe { (*record).proto_cell as usize as *mut u64 };
     assert!(!cell.is_null());
     assert_eq!(unsafe { *cell }, bits(proto));
@@ -202,7 +202,7 @@ fn c3_unrooted_prototype_collection_clears_the_stable_cell() {
         let receiver = js_object_alloc(0, 0);
         object_link_class_default_prototype(receiver as usize, bits(proto));
         let stamp = unsafe { super::super::object_shape_stamp(receiver) };
-        let record = super::super::ShapeSlab::agent_record(stamp);
+        let record = super::super::ShapeSlab::agent_record_for_word(stamp);
         let cell = unsafe { (*record).proto_cell as usize as *const u64 };
         assert_eq!(unsafe { *cell }, bits(proto));
         cell

@@ -158,9 +158,9 @@ pub(crate) fn begin(
             let relative = blk.sub(
                 I32,
                 &expected,
-                &(crate::runtime_abi::SHAPE_ID_BASE as i32).to_string(),
+                &(crate::runtime_abi::LAYOUT_TAG as i32).to_string(),
             );
-            let registered = blk.icmp_ult(I32, &relative, "1073741824");
+            let registered = blk.icmp_ult(I32, &relative, "268435456");
             let equal = blk.icmp_eq(I32, &word, &expected);
             let equal = blk.and(I1, &registered, &equal);
             accepted = blk.or(I1, &accepted, &equal);

@@ -100,12 +100,14 @@ runtime_layout!(
     link_section = "perry_layouts"
 )]
 static mut CLASS_HOLEY: PerryLayoutDesc = PerryLayoutDesc {
+    shape_id: 0,
+    _layout_pad: 0,
     family: 0x41574203,
     variant: 0,
     kind: 0,
     integrity: 0,
     slot_count: HOLEY::SLOT_COUNT as u32,
-    layout_id: crate::object::layout_desc::LAYOUT_ID_CARRIED,
+    layout_id: 0x80000088,
     rep: 0,
     proto: crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
     keys: HOLEY::KEYS.as_ptr(),

@@ -582,7 +582,7 @@ pub extern "C" fn js_array_entries_iter_obj(arr: *const ArrayHeader) -> i64 {
 
 // #7564: `build_iter_result` lived here, rooted by #7475 but still allocating
 // the two key strings and the keys array on EVERY call — and minting a fresh
-// shape id per call, because `shape_id_for_keys_ensure` keys the shape table on
+// shape id per call, because `layout_for_keys_ensure` keys the shape table on
 // the keys array's address. Both constructors now come from the single
 // `crate::iter_result` implementation, which shares one keys array (and so one
 // shape) per key order per thread and allocates only the result object.

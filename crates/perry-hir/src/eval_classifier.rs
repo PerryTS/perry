@@ -553,7 +553,10 @@ pub fn check_unimplemented_api(
     location: &str,
     byte_offset: u32,
 ) -> UnimplementedDecision {
-    let runtime_msg = unimplemented_runtime_error_message(api, location);
+    // The runtime message is baked into the program, so it names the remapped
+    // path; the end-of-compile notice below keeps the real one.
+    let runtime_msg =
+        unimplemented_runtime_error_message(api, &crate::source_remap::baked_path(location));
 
     // Tree-shake deferral (mirrors `check_site`): when the sink is armed for a
     // node_modules module lowered under tree-shaking, record the refusal and

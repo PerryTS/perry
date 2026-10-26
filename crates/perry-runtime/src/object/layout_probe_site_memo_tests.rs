@@ -431,6 +431,8 @@ fn keyed_ways_never_rebind_a_published_proofs_key() {
     }
 }
 
+// This test is that witness: dynamic rows are process-unique (chunked), so
+// the shared memo word names one shape in every agent.
 #[test]
 fn shared_keyed_ways_do_not_mix_different_keys_proofs() {
     let _lock = crate::gc::global_side_table_test_lock();

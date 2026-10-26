@@ -63,9 +63,9 @@ pub(crate) unsafe fn transition_object_integrity(
     // prefix can authorize an edge learned before such a later mutation.
     let shared = from.keys == 0 || keys_prefix_is_immutable(from.keys as *const ArrayHeader);
     if shared {
-        let source = ShapeSlab::agent_record_present(predecessor).unwrap();
+        let source = ShapeSlab::agent_record_for_word_present(predecessor).unwrap();
         let target = (*source).integrity_target(edge);
-        if let Some(to) = shape_descriptor_by_id(target) {
+        if let Some(to) = shape_descriptor_for_word(target) {
             if edge_matches(&from, &to, flags)
                 && install_cached_object_shape_transition(obj, predecessor, target, to.keys_view())
             {
@@ -127,7 +127,7 @@ pub(crate) unsafe fn transition_object_integrity(
     }
     crate::object::prop_plan::prop_plan_epoch_bump_for_owner(obj as usize);
     if shared {
-        if let Some(source) = ShapeSlab::agent_record_present(predecessor) {
+        if let Some(source) = ShapeSlab::agent_record_for_word_present(predecessor) {
             (*source).note_integrity_target(edge, target);
         }
     }
@@ -263,7 +263,7 @@ mod tests {
             transition_object_integrity(wrong, crate::gc::OBJ_FLAG_NO_EXTEND);
             let wrong_id = object_shape_stamp(wrong);
             transition_object_integrity(a, INTEGRITY_FLAGS);
-            let source = ShapeSlab::agent_record_present(predecessor).unwrap();
+            let source = ShapeSlab::agent_record_for_word_present(predecessor).unwrap();
             (*source).note_integrity_target(2, wrong_id);
             transition_object_integrity(b, INTEGRITY_FLAGS);
             let result = object_shape_descriptor(b).unwrap();
@@ -338,10 +338,11 @@ mod tests {
         unsafe {
             let a = receiver(17.0);
             let b = receiver(19.0);
-            let source = ShapeSlab::agent_record_present(object_shape_stamp(a)).unwrap();
+            let source =
+                ShapeSlab::agent_record_for_receiver_present(object_shape_stamp(a)).unwrap();
             (*source).note_integrity_target(2, u32::MAX);
             assert!(transition_object_integrity(b, INTEGRITY_FLAGS));
-            assert!(shape_descriptor_by_id(object_shape_stamp(b)).is_some());
+            assert!(shape_descriptor_of_receiver(object_shape_stamp(b)).is_some());
         }
     }
 }

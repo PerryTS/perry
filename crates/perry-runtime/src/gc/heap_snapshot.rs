@@ -474,7 +474,7 @@ pub(crate) fn gc_build_v8_heap_snapshot_json_with_format(format: HeapSnapshotFor
     if matches!(format, HeapSnapshotFormat::PerryDiagnostic) {
         out.push_str(&format!(
             r#","pid":{},"thread_id":{},"agent_id":{}"#,
-            std::process::id(),
+            crate::os::current_process_id(),
             thread_id,
             crate::agent::current_agent()
         ));

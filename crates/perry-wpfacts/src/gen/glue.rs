@@ -44,13 +44,16 @@ impl<'a> Gen<'a> {
                 },
             ),
         }
-        let va = self.m.atom("value");
-        let v = self.load(desc, Key::Named(va));
-        let k = match &key {
-            Some(s) => Key::Named(self.m.atom(s)),
-            None => Key::Any,
-        };
-        self.store(fx, o, k, v, "defineProperty".into(), None, false);
+        // An accessor descriptor has no value: the getter is the read.
+        if !accessor {
+            let va = self.m.atom("value");
+            let v = self.load(desc, Key::Named(va));
+            let k = match &key {
+                Some(s) => Key::Named(self.m.atom(s)),
+                None => Key::Any,
+            };
+            self.store(fx, o, k, v, "defineProperty".into(), None, false);
+        }
         let ka = match &key {
             Some(s) => self.m.atom(s),
             None => self.m.atom(crate::STAR_KEY),
@@ -66,6 +69,57 @@ impl<'a> Gen<'a> {
                 Cons::Accessor {
                     holder: o,
                     key: ka,
+                    setter,
+                },
+            );
+        }
+    }
+
+    /// `Object.defineProperty(o, k, desc)` where `k` is the key of the
+    /// for-in body being walked (FVA 4.3b): each run decides on its key node
+    /// `kn`. The run of one key defines it as `define_property` does a
+    /// constant key; any other run defines a computed key. `own`: the
+    /// descriptor's own get and set values when it is a literal written in
+    /// place (else they are read from `desc`).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn define_keyed(
+        &mut self,
+        fx: &Fx,
+        o: NodeId,
+        kn: NodeId,
+        desc: NodeId,
+        r: u32,
+        accessor: bool,
+        own: [Option<NodeId>; 2],
+    ) {
+        self.m.for_in_defines.insert(fx.f);
+        self.m.cons(
+            kn,
+            Cons::DefineKeyed {
+                o,
+                reason: r,
+                accessor,
+            },
+        );
+        if !accessor {
+            let va = self.m.atom("value");
+            let v = self.load(desc, Key::Named(va));
+            let site = self.store_site(fx.module, fx.f, "defineProperty".into(), None, false);
+            self.m.cons(kn, Cons::StoreKeyed { o, src: v, site });
+        }
+        for ((name, setter), own) in [("get", false), ("set", true)].into_iter().zip(own) {
+            let f = match own {
+                Some(f) => f,
+                None => {
+                    let a = self.m.atom(name);
+                    self.load(desc, Key::Named(a))
+                }
+            };
+            self.m.cons(
+                kn,
+                Cons::AccessorKeyed {
+                    holder: o,
+                    f,
                     setter,
                 },
             );

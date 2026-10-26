@@ -53,7 +53,8 @@ pub extern "C" fn js_object_shape_id_for_class_keys_static(
         Some(requested).filter(|&id| id != 0),
     ));
     // SAFETY: `id` was resolved from this agent's live slab record above.
-    unsafe { shapes::note_external_shape_carrier(shapes::shape_descriptor_by_id(id)) };
+    unsafe { shapes::note_external_carrier_of_word(id) };
+    let id = shapes::shape_record_for_word(id).map_or(0, |r| r.identity().0);
     note_static_request("class", requested, id);
     id
 }
@@ -101,7 +102,8 @@ pub extern "C" fn js_shape_seed_plain(
         Some(requested),
     ));
     // SAFETY: as above.
-    unsafe { shapes::note_external_shape_carrier(shapes::shape_descriptor_by_id(id)) };
+    unsafe { shapes::note_external_carrier_of_word(id) };
+    let id = shapes::shape_record_for_word(id).map_or(0, |r| r.identity().0);
     note_static_request("seed", requested, id);
     id
 }
@@ -109,12 +111,7 @@ pub extern "C" fn js_shape_seed_plain(
 /// LLVM's `{ i32, ptr }` entry in the generated static seed unit. The
 /// pointer names the defining body's one image-owned `JsFunctionInfo`, not a
 /// closure object; fresh factory closures with the same body share it.
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct ConstFnStaticEntry {
-    pub slot: u32,
-    pub info: *const crate::closure::JsFunctionInfo,
-}
+pub use crate::codegen_abi::ConstFnStaticEntry;
 
 /// Seed final shape facts before user code. This never allocates or stamps an
 /// object; only the post-construction finalizer may publish these facts on a
@@ -152,7 +149,8 @@ pub extern "C" fn js_shape_seed_plain_constfn(
         Some(requested),
     ));
     // SAFETY: `id` was resolved from this agent's live slab record above.
-    unsafe { shapes::note_external_shape_carrier(shapes::shape_descriptor_by_id(id)) };
+    unsafe { shapes::note_external_carrier_of_word(id) };
+    let id = shapes::shape_record_for_word(id).map_or(0, |r| r.identity().0);
     note_static_request("seed-constfn", requested, id);
     id
 }
@@ -256,7 +254,8 @@ pub extern "C" fn js_object_final_shape_id_for_class_keys_static_private(
         ))
     });
     // SAFETY: `id` was resolved from this agent's live slab record above.
-    unsafe { shapes::note_external_shape_carrier(shapes::shape_descriptor_by_id(id)) };
+    unsafe { shapes::note_external_carrier_of_word(id) };
+    let id = shapes::shape_record_for_word(id).map_or(0, |r| r.identity().0);
     note_static_request("class-private", requested, id);
     id
 }
@@ -287,7 +286,8 @@ pub extern "C" fn js_object_final_shape_id_for_class_keys_static_constfn(
         Some(requested).filter(|&id| id != 0),
     ));
     // SAFETY: `id` was resolved from this agent's live slab record above.
-    unsafe { shapes::note_external_shape_carrier(shapes::shape_descriptor_by_id(id)) };
+    unsafe { shapes::note_external_carrier_of_word(id) };
+    let id = shapes::shape_record_for_word(id).map_or(0, |r| r.identity().0);
     note_static_request("class-constfn", requested, id);
     id
 }
@@ -345,7 +345,11 @@ pub(crate) fn finalize_constfn_static(
     let scope = crate::gc::RuntimeHandleScope::new();
     let root = scope.root_raw_mut_ptr(object as usize as *mut super::ObjectHeader);
     let requested = Some(requested).filter(|&id| id != 0);
-    let existing = requested.and_then(|id| shapes::shape_descriptor_by_id(id).map(|d| (id, d)));
+    let existing = requested.and_then(|id| shapes::shape_descriptor_for_word(id).map(|d| (id, d)));
+    if !rebuilt && existing.is_none() {
+        return object;
+    }
+
     // A seeded ShapeId already owns the complete body list and key prefix.
     // Packed names and ABI entries bootstrap an unseeded reconstruction;
     // reparsing them on every factory invocation duplicates shape authority.
@@ -417,7 +421,7 @@ pub(crate) fn finalize_constfn_static(
             class_id,
             rep,
             infos,
-            requested,
+            None,
         )
     });
     // Reload and revalidate after the mint; no closure address spans it.
@@ -429,7 +433,7 @@ pub(crate) fn finalize_constfn_static(
         if let Ok(id) = minted {
             // Still check the complete record here, including learned
             // deprecation, before publication.
-            if shapes::shape_descriptor_by_id(id)
+            if shapes::shape_descriptor_for_word(id)
                 .is_some_and(|d| final_record_names_receiver(&d, &current, count, live, rep, infos))
             {
                 unsafe { shapes::stamp_object_shape_id_with_carrier_note(obj, id) };
@@ -793,3 +797,378 @@ static KEEP_JS_OBJECT_FINALIZE_CONSTFN_STATIC: extern "C" fn(
 #[cfg(all(test, target_os = "linux"))]
 #[path = "constfn_unload_tests.rs"]
 mod unload_tests;
+
+/// Reserve the owning declaration's identity without reading its Region row.
+pub(crate) unsafe fn resolve_layout_request(
+    request: *mut crate::codegen_abi::PerryStaticLayoutRequestV1,
+    proto: u64,
+) -> crate::codegen_abi::PublishedShape {
+    assert!(!request.is_null(), "missing static layout request");
+    resolve_layout_fields(
+        std::ptr::addr_of_mut!((*request).shape_id),
+        (*request).layout_word,
+        proto,
+    )
+}
+pub(crate) unsafe fn resolve_layout_fields(
+    identity: *mut u32,
+    word: u32,
+    proto: u64,
+) -> crate::codegen_abi::PublishedShape {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    let cell = AtomicU32::from_ptr(identity);
+    let mut id = cell.load(Ordering::Acquire);
+    if id == 0 {
+        let proposed = shapes::allocate_declared_layout_id(proto);
+        id = match cell.compare_exchange(0, proposed, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => proposed,
+            Err(id) => id,
+        };
+    }
+    crate::codegen_abi::PublishedShape {
+        identity: crate::codegen_abi::ShapeId(id),
+        word: crate::codegen_abi::LayoutWord(word),
+    }
+}
+/// The census line of one static layout request: `requested` is the
+/// compiler-authored word the guards embed, `got` the word published for it.
+fn census_layout_request(
+    path: &str,
+    request: *mut crate::codegen_abi::PerryStaticLayoutRequestV1,
+    word: u32,
+) -> u32 {
+    if !request.is_null() {
+        // SAFETY: a compiler-owned request; its static word is immutable.
+        note_static_request(path, unsafe { (*request).layout_word }, word);
+    }
+    word
+}
+
+#[allow(clippy::too_many_arguments)]
+fn publish_layout_facts(
+    path: &str,
+    keys: *const ArrayHeader,
+    count: u32,
+    live: u32,
+    proto: u64,
+    rep: u64,
+    infos: &[shapes::ConstFnSlotInfo],
+    request: *mut crate::codegen_abi::PerryStaticLayoutRequestV1,
+) -> u32 {
+    if let Some(word) = unsafe { shapes::published_static_request(request, count) } {
+        return census_layout_request(path, request, word);
+    }
+    let summary = unsafe { super::key_attrs::keys_summary_checked(keys, count) };
+    let static_request = request;
+    let request = unsafe { resolve_layout_request(request, proto) };
+    let word = shapes::publish_shape_result(shapes::intern_static_layout(
+        keys,
+        count,
+        live,
+        0,
+        shapes::ShapeObjectKind::Ordinary,
+        0,
+        proto,
+        summary,
+        rep,
+        infos,
+        &[],
+        request,
+        0,
+    ));
+    census_layout_request(path, static_request, word)
+}
+
+#[no_mangle]
+pub extern "C" fn js_object_layout_for_class_keys_static(
+    keys: u64,
+    key_count: u32,
+    live: u32,
+    class_id: u32,
+    request: *mut crate::codegen_abi::PerryStaticLayoutRequestV1,
+    rep: u64,
+) -> u32 {
+    let lanes = if key_count >= super::field_rep::REP_SLOTS {
+        u64::MAX
+    } else {
+        super::field_rep::lanes_below(key_count)
+    };
+    if rep & !lanes != 0 {
+        return shapes::publish_shape_result(Err(shapes::ShapeDescriptorError::InvalidFacts));
+    }
+    publish_layout_facts(
+        "class",
+        keys as usize as *const ArrayHeader,
+        key_count,
+        live.max(key_count),
+        shapes::class_proto_id(class_id),
+        rep,
+        &[],
+        request,
+    )
+}
+#[no_mangle]
+pub extern "C" fn js_layout_seed_plain(
+    request: *mut crate::codegen_abi::PerryStaticLayoutRequestV1,
+    packed: *const u8,
+    packed_len: u32,
+    count: u32,
+    live: u32,
+    rep: u64,
+) -> u32 {
+    if count == 0 || packed.is_null() || packed_len == 0 {
+        return 0;
+    }
+    if let Some(word) = unsafe { shapes::published_static_request(request, count) } {
+        return census_layout_request("seed", request, word);
+    }
+    let names = crate::object::packed_key_names(unsafe {
+        std::slice::from_raw_parts(packed, packed_len as usize)
+    });
+    if names.len() != count as usize {
+        return 0;
+    }
+    let keys = unsafe { canonical_keys_for_names(&names) };
+    publish_layout_facts(
+        "seed",
+        keys.arr(),
+        count,
+        live,
+        shapes::PROTO_ID_DEFAULT,
+        rep,
+        &[],
+        request,
+    )
+}
+#[no_mangle]
+pub extern "C" fn js_layout_seed_plain_constfn(
+    request: *mut crate::codegen_abi::PerryStaticLayoutRequestV1,
+    packed: *const u8,
+    packed_len: u32,
+    count: u32,
+    live: u32,
+    rep: u64,
+    entries: *const ConstFnStaticEntry,
+    entry_count: u32,
+) -> u32 {
+    if count == 0 || packed.is_null() || packed_len == 0 {
+        invalid_constfn_static_seed();
+    }
+    if let Some(word) = unsafe { shapes::published_static_request(request, count) } {
+        return census_layout_request("seed-constfn", request, word);
+    }
+    let names = crate::object::packed_key_names(unsafe {
+        std::slice::from_raw_parts(packed, packed_len as usize)
+    });
+    if names.len() != count as usize {
+        invalid_constfn_static_seed();
+    }
+    let keys = unsafe { canonical_keys_for_names(&names) };
+    js_object_final_layout_for_class_keys_static_constfn(
+        keys.arr() as usize as u64,
+        count,
+        live,
+        0,
+        request,
+        rep,
+        entries,
+        entry_count,
+    )
+}
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn js_object_final_layout_for_class_keys_static_constfn(
+    keys: u64,
+    key_count: u32,
+    live: u32,
+    class_id: u32,
+    request: *mut crate::codegen_abi::PerryStaticLayoutRequestV1,
+    rep: u64,
+    entries: *const ConstFnStaticEntry,
+    entry_count: u32,
+) -> u32 {
+    let infos = checked_constfn_static_entries(entries, entry_count);
+    let lanes = if key_count >= super::field_rep::REP_SLOTS {
+        u64::MAX
+    } else {
+        super::field_rep::lanes_below(key_count)
+    };
+    if infos.is_empty() || rep & !lanes != 0 || keys == 0 || key_count == 0 {
+        return shapes::publish_shape_result(Err(shapes::ShapeDescriptorError::InvalidFacts));
+    }
+    publish_layout_facts(
+        "class-constfn",
+        keys as usize as *const ArrayHeader,
+        key_count,
+        live.max(key_count),
+        shapes::class_proto_id(class_id),
+        rep,
+        &infos,
+        request,
+    )
+}
+
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn js_object_final_layout_for_class_keys_static_private(
+    keys: u64,
+    key_count: u32,
+    live: u32,
+    class_id: u32,
+    request: *mut crate::codegen_abi::PerryStaticLayoutRequestV1,
+    rep: u64,
+    private_packed: *const u8,
+    private_len: u32,
+    brands: *const u64,
+    brand_count: u32,
+) -> u32 {
+    let requested = unsafe { resolve_layout_request(request, shapes::class_proto_id(class_id)) };
+    if private_packed.is_null() && private_len != 0 || brands.is_null() && brand_count != 0 {
+        return 0;
+    }
+    let names: Vec<Vec<u8>> = if private_len == 0 {
+        Vec::new()
+    } else {
+        // SAFETY: compiler-owned rodata of `private_len` bytes.
+        let bytes = unsafe { std::slice::from_raw_parts(private_packed, private_len as usize) };
+        crate::object::packed_key_names(bytes)
+            .into_iter()
+            .map(|name| name.to_vec())
+            .collect()
+    };
+    let mut brand_list: Vec<u64> = if brand_count == 0 {
+        Vec::new()
+    } else {
+        // SAFETY: compiler-owned rodata of `brand_count` words.
+        unsafe { std::slice::from_raw_parts(brands, brand_count as usize) }.to_vec()
+    };
+    brand_list.sort_unstable();
+    brand_list.dedup();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let proof = super::canonical_keys::SharedLayout::shape_cache_entry();
+    // The receiver's first claim extends the canonical form of its birth list
+    // (`ensure_key_in_keys_array_inner`); so does this.
+    let (mut list_root, mut count) = if names.is_empty() {
+        (
+            scope.root_raw_mut_ptr(keys as usize as *mut ArrayHeader),
+            key_count,
+        )
+    } else {
+        let base = unsafe {
+            super::canonical_keys::canonicalize(
+                &proof,
+                keys as usize as *mut ArrayHeader,
+                key_count,
+            )
+        };
+        (scope.root_raw_mut_ptr(base.as_ptr()), base.len())
+    };
+    for name in &names {
+        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        let key = scope.root_string_ptr(key);
+        let next = list_root.with_mut_ptr::<ArrayHeader, _>(|list| {
+            key.with_const_ptr::<crate::StringHeader, _>(|key| unsafe {
+                super::canonical_keys::extend_key_with_entry(
+                    &proof,
+                    super::canonical_keys::CanonicalKeys::from_rooted(list, count),
+                    key,
+                    super::key_attrs::PRIVATE_FIELD_ENTRY,
+                )
+            })
+        });
+        count = next.len();
+        list_root = scope.root_raw_mut_ptr(next.as_ptr());
+    }
+    let id = list_root.with_const_ptr::<ArrayHeader, _>(|list| {
+        let summary = unsafe { super::key_attrs::keys_summary_checked(list, count) };
+        shapes::publish_shape_result(shapes::intern_static_layout(
+            list,
+            count,
+            live.max(count),
+            0,
+            shapes::ShapeObjectKind::Ordinary,
+            0,
+            shapes::class_proto_id(class_id),
+            summary,
+            rep,
+            &[],
+            &brand_list,
+            requested,
+            0,
+        ))
+    });
+    // SAFETY: `id` was resolved from this agent's live slab record above.
+    unsafe { shapes::note_external_carrier_of_word(id) };
+    census_layout_request("class-private", request, id)
+}
+
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_OBJECT_LAYOUT_FOR_CLASS_KEYS_STATIC: extern "C" fn(
+    u64,
+    u32,
+    u32,
+    u32,
+    *mut crate::codegen_abi::PerryStaticLayoutRequestV1,
+    u64,
+) -> u32 = js_object_layout_for_class_keys_static;
+
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_LAYOUT_SEED_PLAIN: extern "C" fn(
+    *mut crate::codegen_abi::PerryStaticLayoutRequestV1,
+    *const u8,
+    u32,
+    u32,
+    u32,
+    u64,
+) -> u32 = js_layout_seed_plain;
+
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_LAYOUT_SEED_PLAIN_CONSTFN: extern "C" fn(
+    *mut crate::codegen_abi::PerryStaticLayoutRequestV1,
+    *const u8,
+    u32,
+    u32,
+    u32,
+    u64,
+    *const ConstFnStaticEntry,
+    u32,
+) -> u32 = js_layout_seed_plain_constfn;
+
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_OBJECT_FINAL_LAYOUT_FOR_CLASS_KEYS_STATIC_PRIVATE: extern "C" fn(
+    u64,
+    u32,
+    u32,
+    u32,
+    *mut crate::codegen_abi::PerryStaticLayoutRequestV1,
+    u64,
+    *const u8,
+    u32,
+    *const u64,
+    u32,
+) -> u32 = js_object_final_layout_for_class_keys_static_private;
+
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_OBJECT_FINAL_LAYOUT_FOR_CLASS_KEYS_STATIC_CONSTFN: extern "C" fn(
+    u64,
+    u32,
+    u32,
+    u32,
+    *mut crate::codegen_abi::PerryStaticLayoutRequestV1,
+    u64,
+    *const ConstFnStaticEntry,
+    u32,
+) -> u32 = js_object_final_layout_for_class_keys_static_constfn;
+
+#[cfg(test)]
+#[path = "dense_layout_tests.rs"]
+mod dense_layout_tests;
+
+#[cfg(test)]
+#[path = "static_layout_fixtures.rs"]
+pub(crate) mod fixtures;

@@ -1408,7 +1408,7 @@ impl GcCycleTrace {
         });
         serde_json::json!({
             "event": "gc_cycle",
-            "pid": std::process::id(),
+            "pid": crate::os::current_process_id(),
             "thread_id": crate::agent::current_thread_native_id(),
             "agent_id": crate::agent::current_agent(),
             "collection_kind": self.collection_kind.as_str(),
@@ -1831,7 +1831,10 @@ mod thread_identity_tests {
             main["thread_id"].as_u64(),
             Some(crate::agent::current_thread_native_id())
         );
-        assert_eq!(main["pid"].as_u64(), Some(std::process::id() as u64));
+        assert_eq!(
+            main["pid"].as_u64(),
+            Some(crate::os::current_process_id() as u64)
+        );
         let worker = std::thread::spawn(|| {
             let agent = crate::agent::enter_worker_agent();
             let event = record();

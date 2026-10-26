@@ -152,7 +152,10 @@ fn wrapper_proves_live_false_field_and_clone_erases_default_and_branch() {
 
     assert!(wrapper.contains(&crate::nanbox::TAG_UNDEFINED_I64.to_string()));
     assert!(wrapper.contains(&crate::nanbox::TAG_FALSE_I64.to_string()));
-    assert!(wrapper.contains("load i32, ptr @perry_class_shape_id_"));
+    assert!(wrapper.contains("icmp eq i32"));
+    assert!(ir
+        .lines()
+        .any(|l| l.starts_with("@perry_class_shape_id_") && l.contains("constant i32")));
     assert!(wrapper.contains(&format!("@{specialized}(")));
     assert!(wrapper.contains(&format!("@{index}(")));
     assert!(ordinary.contains("@js_is_truthy("), "{ordinary}");

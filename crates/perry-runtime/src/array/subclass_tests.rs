@@ -57,7 +57,7 @@ fn object_header_still_overlays_array_header_length_and_capacity() {
             "#8113: ArrayHeader.capacity must alias the ObjectHeader shape word"
         );
         assert!(
-            crate::object::shapes::is_shape_id((*obj).shape_word()),
+            crate::object::shapes::is_layout_word((*obj).shape_word()),
             "test premise: a birth-stamped object carries a ShapeId in word 1, \
              which is what keeps the forged capacity above the forged length"
         );
@@ -384,7 +384,7 @@ fn numeric_proof_retires_before_exact_tail_transition_lookup() {
     );
     let proven_shape = unsafe { (*obj).shape_word() };
     assert!(
-        crate::object::shapes::shape_object_kind_by_id(proven_shape)
+        crate::object::shapes::shape_object_kind_for_word(proven_shape)
             == Some(crate::object::shapes::ShapeObjectKind::OrdinaryNumericProof)
     );
     assert_ne!(proven_shape, ordinary_shapes[3]);
@@ -398,7 +398,7 @@ fn numeric_proof_retires_before_exact_tail_transition_lookup() {
     );
     let proven_shape = unsafe { (*obj).shape_word() };
     assert!(
-        crate::object::shapes::shape_object_kind_by_id(proven_shape)
+        crate::object::shapes::shape_object_kind_for_word(proven_shape)
             == Some(crate::object::shapes::ShapeObjectKind::OrdinaryNumericProof)
     );
     assert_ne!(proven_shape, ordinary_shapes[2]);
@@ -554,7 +554,7 @@ fn transition_cache_carrier_bits_follow_live_occupancy_across_full_trace_recompu
     let after = unsafe { (*obj).shape_word() };
     assert_ne!(before, after);
     let carrier = |id: u32| {
-        crate::object::shapes::shape_descriptor_by_id(id)
+        crate::object::shapes::shape_descriptor_for_word(id)
             .expect("shape exists")
             .cache_carrier
     };
@@ -783,7 +783,7 @@ fn dense_array_subclass_tail_transition_edges_survive_moving_gc() {
     assert_eq!(array_subclass_fast_pop(live_receiver), Some(33.0));
     assert_eq!(array_subclass_fast_push_one(live_receiver, 44.0), Some(3.0));
     assert_eq!(array_subclass_fast_index_get(live_receiver, 2), Some(44.0));
-    assert!(crate::object::shapes::is_shape_id(unsafe {
+    assert!(crate::object::shapes::is_layout_word(unsafe {
         (*live_obj).shape_word()
     }));
 }
@@ -827,7 +827,7 @@ fn packed_numeric_proof_is_retired_by_sso_index_overwrite() {
         unsafe { crate::object::shapes::object_shape_stamp(live_raw as *const ObjectHeader) };
     assert_ne!(proof_shape, initial_shape);
     assert!(
-        crate::object::shapes::shape_object_kind_by_id(proof_shape)
+        crate::object::shapes::shape_object_kind_for_word(proof_shape)
             == Some(crate::object::shapes::ShapeObjectKind::OrdinaryNumericProof)
     );
 
@@ -850,7 +850,7 @@ fn packed_numeric_proof_is_retired_by_sso_index_overwrite() {
     let retired_shape =
         unsafe { crate::object::shapes::object_shape_stamp(live_raw as *const ObjectHeader) };
     assert!(
-        crate::object::shapes::shape_object_kind_by_id(retired_shape)
+        crate::object::shapes::shape_object_kind_for_word(retired_shape)
             != Some(crate::object::shapes::ShapeObjectKind::OrdinaryNumericProof)
     );
     assert_eq!(
@@ -882,7 +882,7 @@ fn packed_numeric_proof_survives_pointer_free_index_swap() {
         2
     );
     assert_eq!(
-        crate::object::shapes::shape_object_kind_by_id(unsafe {
+        crate::object::shapes::shape_object_kind_for_word(unsafe {
             crate::object::shapes::object_shape_stamp(obj)
         },),
         Some(crate::object::shapes::ShapeObjectKind::OrdinaryNumericProof)
@@ -891,7 +891,7 @@ fn packed_numeric_proof_survives_pointer_free_index_swap() {
     assert!(array_subclass_fast_index_set(receiver, 1, 33.0));
     assert_eq!(array_subclass_fast_index_get(receiver, 1), Some(33.0));
     assert_eq!(
-        crate::object::shapes::shape_object_kind_by_id(unsafe {
+        crate::object::shapes::shape_object_kind_for_word(unsafe {
             crate::object::shapes::object_shape_stamp(obj)
         },),
         Some(crate::object::shapes::ShapeObjectKind::OrdinaryNumericProof),

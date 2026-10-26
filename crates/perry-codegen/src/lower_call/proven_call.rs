@@ -63,9 +63,12 @@ pub(crate) fn try_lower_proven_value_call(
     if ctx.wpfacts_off || !native_abi(ctx) || ctx.local_func_ref_ids.contains_key(id) {
         return Ok(None);
     }
-    // A let-bound closure codegen already calls directly (with its typed
-    // variants) keeps that lowering.
-    if ctx.guard_free_closure_bindings.contains(id) && ctx.local_closure_func_ids.contains_key(id) {
+    // A local bound once to a closure keeps the closure arm's direct call
+    // (with its typed variants) where the arm makes one; any other call of
+    // it (an argument count other than its parameters) dispatches there.
+    if ctx.guard_free_closure_bindings.contains(id)
+        && super::early_branches::direct_closure_body(ctx, *id, args.len()).is_some()
+    {
         return Ok(None);
     }
     let Some(bodies) = ctx.wpfacts.local_bodies.get(id).cloned() else {

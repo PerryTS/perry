@@ -600,6 +600,8 @@ pub struct CompileOptions {
     /// module's class-birth contents (`module_birth_shapes`), sorted. Empty
     /// when the driver ran no pre-pass: every class then mints as before.
     pub static_shape_ids: Vec<(super::BirthShape, u32)>,
+    /// One immutable whole-image ordinal plan, shared by every package.
+    pub program_layout_ordinals: std::sync::Arc<crate::ProgramLayoutOrdinals>,
     /// Decision 16: this module's slice of the program-wide map of each
     /// class's static id as its defining module assigns it (typed or plain):
     /// the ids its importer guards and foreign shape globals compare against.

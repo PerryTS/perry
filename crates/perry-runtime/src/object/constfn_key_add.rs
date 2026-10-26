@@ -17,7 +17,7 @@ unsafe fn try_cached_constfn_key_add(
     bits: u64,
 ) -> bool {
     let (keys, slot, target) = hit;
-    let Some(d) = shapes::shape_descriptor_by_id(target) else {
+    let Some(d) = shapes::shape_descriptor_for_word(target) else {
         return false;
     };
     // Reuse an edge whose only ConstFn lane is the appended slot. Other
@@ -41,7 +41,7 @@ unsafe fn try_cached_constfn_key_add(
     // the Any shape the closure is written under, so the target is installed
     // straight over it with no intermediate publication.
     if slot < super::object_live_slot_count(obj)
-        && field_rep::slot_rep(shapes::shape_rep_by_id(predecessor), slot) == field_rep::REP_ANY
+        && field_rep::slot_rep(shapes::shape_rep_for_word(predecessor), slot) == field_rep::REP_ANY
     {
         super::slot_store::store_object_field_slot(obj, slot as usize, bits);
         if shapes::install_cached_object_shape_transition(obj, predecessor, target, keys) {
@@ -70,7 +70,7 @@ unsafe fn try_cached_constfn_key_add(
         // it through the rooted slow path rather than cache a second edge.
         return false;
     };
-    if !shapes::shape_descriptor_by_id(any).is_some_and(|base| {
+    if !shapes::shape_descriptor_for_word(any).is_some_and(|base| {
         base.rep == base_rep
             && base.special_constfn_mask == 0
             && base.deprecation_targets() == (0, 0)

@@ -31,9 +31,11 @@ macro_rules! runtime_state_key {
         const KEY: &[u8] = $key;
         const HASH: u64 = $crate::runtime_state_key::const_key_hash(KEY);
         fn site_memo() -> *mut $crate::object::layout_probe::site_memo::ReadSiteMemo {
+            // Process-shared storage: the primary image's (see
+            // `class_image::process_shared_memo`).
             static MEMO: $crate::object::layout_probe::site_memo::ReadSiteMemo =
                 $crate::object::layout_probe::site_memo::ReadSiteMemo::EMPTY;
-            &MEMO as *const _ as *mut _
+            $crate::object::class_image::process_shared_memo(&MEMO)
         }
         $crate::runtime_state_key::NamedStateKey {
             bytes: KEY,

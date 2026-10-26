@@ -291,9 +291,9 @@ pub fn derive(g: &mut Gen) -> (Vec<TemplateFacts>, Vec<SiteFacts>) {
 /// unknown code (which could write or delete them), carries no HARD
 /// operation (defineProperty, delete), has no computed static member, and
 /// the key is no accessor. A static method (or `prototype`) is its
-/// declaration for the program's life: no store of the key exists (stores of
-/// it on the class's instances count too, the writers being per template),
-/// so a call of it is the declaration's body. A declared static field is
+/// declaration for the program's life: no store of the key on the class
+/// object exists (`Model::class_writers`: an instance field of that name is
+/// another object's property), so a call of it is the declaration's body. A declared static field is
 /// one load whatever stores it later: they widen its value set, which every
 /// reader already takes (the HIR stores the definition where the class is
 /// evaluated, once or more for a nested class).
@@ -321,7 +321,7 @@ fn constant_statics(m: &Model, tm: TmplId) -> Vec<String> {
             continue;
         }
         let stored = m
-            .writers
+            .class_writers
             .get(&(tm, a))
             .is_some_and(|w| !w.ctor.is_empty() || !w.post.is_empty());
         if m.static_fields.contains(&(tm, a)) || !stored {

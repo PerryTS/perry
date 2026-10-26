@@ -27,7 +27,7 @@ pub(crate) fn collect_module_finish(
         .iter()
         .any(|i| i.source == super::super::cjs_wrap::support::SPECIFIER)
     {
-        let key = canonical.to_string_lossy().into_owned();
+        let key = perry_hir::source_remap::baked_path_of(&canonical).into_owned();
         if !ctx.cjs_support_keys.contains(&key) {
             ctx.cjs_support_keys.push(key);
         }

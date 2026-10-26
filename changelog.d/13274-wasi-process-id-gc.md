@@ -1,0 +1,1 @@
+Fixed the GC trace (`PERRY_GC_TRACE`), the heap census (`PERRY_GC_CENSUS`) and `Bun.generateHeapSnapshot` aborting on wasm32-wasi, where `std::process::id()` panics: their records report process id 0, like `process.pid`.

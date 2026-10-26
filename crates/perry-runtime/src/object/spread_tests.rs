@@ -60,7 +60,7 @@ fn spread_tail_retains_the_confirmed_image_key_in_its_shape_owner() {
         let source = object(&[("xkey_1", 3.0), ("y", 5.0), ("z", 7.0)]);
         let result = js_object_spread_fresh_leading(empty_prefix(), source);
         let id = shapes::object_shape_stamp(receiver(result));
-        let record = shapes::shape_record_by_id(id).unwrap();
+        let record = shapes::shape_record_for_word(id).unwrap();
         let key = crate::JSValue::string_ptr(&IMAGE.string as *const _ as *mut _);
         assert_eq!(record.plain_own_identity_slot(key.bits()), None);
         js_object_literal_define(result, f64::from_bits(key.bits()), 9.0);
@@ -98,7 +98,7 @@ fn spread_birth_reuses_shape_and_keeps_all_values_inline() {
             assert_eq!(get(b, name), value);
         }
         assert_eq!(
-            shapes::shape_record_by_id(shapes::object_shape_stamp(receiver(b)))
+            shapes::shape_record_for_word(shapes::object_shape_stamp(receiver(b)))
                 .unwrap()
                 .summary(),
             0
@@ -140,7 +140,7 @@ fn spread_frozen_source_births_default_writable_attributes() {
         js_object_freeze(source);
         let result = js_object_spread_fresh_leading(empty_prefix(), source);
         let record =
-            shapes::shape_record_by_id(shapes::object_shape_stamp(receiver(result))).unwrap();
+            shapes::shape_record_for_word(shapes::object_shape_stamp(receiver(result))).unwrap();
         assert_eq!(record.summary(), 0);
         let key = crate::string::js_string_from_bytes(b"x".as_ptr(), 1);
         js_object_set_field_by_name(receiver(result), key, 9.0);
@@ -158,7 +158,7 @@ fn spread_number_copy_refuses_a_generalized_source_shape() {
         let first = js_object_spread_fresh_leading(empty_prefix(), source);
         let second = js_object_spread_fresh_leading(empty_prefix(), source);
         let record =
-            shapes::shape_record_by_id(shapes::object_shape_stamp(receiver(second))).unwrap();
+            shapes::shape_record_for_word(shapes::object_shape_stamp(receiver(second))).unwrap();
         assert_eq!(field_rep::slot_rep(record.rep(), 0), field_rep::REP_F64);
         assert_eq!(get(second, "number_copy_x"), 3.0);
         let child = object(&[("value", 17.0)]);
@@ -205,8 +205,8 @@ fn spread_namespace_is_not_rewritten_as_a_heap_key_and_prunes_retired_source() {
             object_keys(receiver(result)).arr()
         );
         shapes::test_drop_shape_descriptors(object_keys(receiver(source)).arr() as usize);
-        assert!(shapes::shape_record_by_id(entry.target_shape_id).is_some());
-        assert!(shapes::shape_record_by_id(id).is_none());
+        assert!(shapes::shape_record_for_word(entry.target_shape_id).is_some());
+        assert!(shapes::shape_is_retired(id));
         prune_dead_transition_cache_entries(&|_| false);
         assert_eq!(with_transition_cache(|t| (*t)[slot].next_keys), 0);
     }

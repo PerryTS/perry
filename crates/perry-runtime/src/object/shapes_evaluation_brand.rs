@@ -57,7 +57,7 @@ pub(crate) unsafe fn object_evaluation_brand(obj: *const crate::object::ObjectHe
     {
         return (*meta).private_evaluation_brand;
     }
-    let Some(identity) = shape_brands_by_id(object_shape_stamp(obj)).and_then(holder_identity)
+    let Some(identity) = shape_brands_for_word(object_shape_stamp(obj)).and_then(holder_identity)
     else {
         return 0;
     };
@@ -72,17 +72,23 @@ pub(crate) unsafe fn object_evaluation_brand(obj: *const crate::object::ObjectHe
 /// ShapeId `copy`, which a class evaluation's class object names for its
 /// instances (`InternalKey::EvaluationInstanceLayout`)? Yes when `copy` is a
 /// present record of this agent that is an evaluation copy of `family`
-/// (`evaluation_layout_family`) and the identity words of its prototype and of
+/// (`evaluation_family_desc_index_plus_one`) and the identity words of its prototype and of
 /// its evaluation holder still name their objects. ShapeIds are never
 /// reused, so a present `copy` has the facts it had when the class object
 /// recorded it: the evaluation's prototype and brand. Returns the prototype
 /// and holder words, which the birth shades as the ordinary link and brand
 /// stamp do. One directory read.
 pub(crate) fn evaluation_copy_birth_edges(copy: u32, family: u32) -> Option<(u64, u64)> {
-    let record = ShapeSlab::agent_record_present(copy)?;
+    let record = ShapeSlab::agent_record_for_word_present(copy)?;
     // SAFETY: a present record of this agent, read immediately.
     let record = unsafe { &*record };
-    if record.evaluation_layout_of != family || family == 0 {
+    if family == 0
+        || unsafe {
+            crate::object::layout_desc::evaluation_layout_desc(record.family_desc_index_plus_one)
+        }
+        .map(|d| d.layout_id)
+            != Some(family)
+    {
         return None;
     }
     let prototype = identity_prototype_word(record.proto_id);
@@ -206,7 +212,10 @@ mod tests {
             stamp_evaluation_holder(a, holder_b);
             assert_eq!(object_evaluation_brand(a), brand_b);
             assert!(object_has_brand(a, 1 << 63 | 77));
-            assert_eq!(shape_brands_by_id(object_shape_stamp(a)).unwrap().len(), 2);
+            assert_eq!(
+                shape_brands_for_word(object_shape_stamp(a)).unwrap().len(),
+                2
+            );
             // Constructor-returned objects keep their own metadata authority.
             crate::object::stamp_private_evaluation_brand(plain, f64::from_bits(brand_b));
             assert!(!(*plain).meta.is_null());

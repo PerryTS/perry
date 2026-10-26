@@ -61,7 +61,7 @@ fn generator_fixed_state_record_and_capture_follow_a_copying_minor() {
     // The birth layout names no prototype: the record's control holds the
     // owner function, whose original prototype nothing has materialized.
     let object = crate::value::js_nanbox_get_pointer(value) as *const crate::object::ObjectHeader;
-    let shape = crate::object::shapes::shape_record_by_id(unsafe {
+    let shape = crate::object::shapes::shape_record_for_word(unsafe {
         crate::object::shapes::object_shape_stamp(object)
     })
     .unwrap();

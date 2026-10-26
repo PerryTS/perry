@@ -719,11 +719,20 @@ impl<'a> Gen<'a> {
                 );
                 let v = self.expr(fx, value);
                 let rv = self.expr(fx, receiver);
-                let key = self.key_of(key);
                 let owner = self.phase_owner(fx, e, target);
-                self.store_phased(fx, e, target, t, key, v, "putvalue".into(), owner);
-                // A receiver other than the target gets the own data store.
-                self.store_phased(fx, e, target, rv, key, v, "putvalue-receiver".into(), owner);
+                if let Some(kp) = self.for_in_key_of(fx.module, key) {
+                    // A for-in run's key decides the stored key (FVA 4.3b).
+                    for (o, what) in [(t, "putvalue"), (rv, "putvalue-receiver")] {
+                        let site = self.store_site(fx.module, fx.f, what.into(), owner, false);
+                        self.mark_fn_phase(fx, e, target, site);
+                        self.m.cons(kp, Cons::StoreKeyed { o, src: v, site });
+                    }
+                } else {
+                    let key = self.key_of(key);
+                    self.store_phased(fx, e, target, t, key, v, "putvalue".into(), owner);
+                    // A receiver other than the target gets the own data store.
+                    self.store_phased(fx, e, target, rv, key, v, "putvalue-receiver".into(), owner);
+                }
                 v
             }
             Expr::PropertyUpdate {
@@ -776,7 +785,9 @@ impl<'a> Gen<'a> {
                     Key::Named(a) => self.load(o, Key::Named(a)),
                     Key::Any => {
                         let dst = self.tmp("idxload");
-                        self.m.cons(o, Cons::IdxLoad { idx: i, dst });
+                        // A for-in run's key is its key parameter (FVA 4.3b).
+                        let idx = self.for_in_key_of(fx.module, index).unwrap_or(i);
+                        self.m.cons(o, Cons::IdxLoad { idx, dst });
                         dst
                     }
                 }
@@ -797,8 +808,14 @@ impl<'a> Gen<'a> {
                     },
                 );
                 let v = self.expr(fx, value);
-                let key = self.key_of(index);
-                self.store(fx, o, key, v, "[]=".into(), None, false);
+                if let Some(kp) = self.for_in_key_of(fx.module, index) {
+                    // A for-in run's key decides the stored key (FVA 4.3b).
+                    let site = self.store_site(fx.module, fx.f, "[]=".into(), None, false);
+                    self.m.cons(kp, Cons::StoreKeyed { o, src: v, site });
+                } else {
+                    let key = self.key_of(index);
+                    self.store(fx, o, key, v, "[]=".into(), None, false);
+                }
                 v
             }
             Expr::IndexUpdate { object, index, .. } => {

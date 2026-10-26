@@ -724,8 +724,8 @@ unsafe fn bucket_matches(
 unsafe fn record_of(dir: *const u8, word: u32) -> *mut ShapeRecord {
     let base = *(dir.add(FLAT_BASE_OFFSET) as *const *mut ShapeRecord);
     let ids = *(dir.add(FLAT_BASE_OFFSET + 8) as *const usize);
-    let rel =
-        (word & !crate::object::overflow::SHADOW_BIT).wrapping_sub(super::SHAPE_ID_BASE) as usize;
+    let rel = (word & crate::codegen_abi::LAYOUT_PROBE_INDEX_MASK)
+        .wrapping_sub(crate::codegen_abi::LAYOUT_TAG) as usize;
     if rel >= ids {
         return std::ptr::null_mut();
     }

@@ -27,7 +27,7 @@ unsafe fn receiver_record(receiver: f64) -> Option<(*mut ObjectHeader, shapes::S
         return None;
     }
     let obj = addr as *mut ObjectHeader;
-    let record = shapes::shape_record_by_id((*obj).shape_word())?;
+    let record = shapes::shape_record_of_receiver((*obj).shape_word())?;
     if record.object_kind() != shapes::ShapeObjectKind::Ordinary || record.summary() != 0 {
         return None;
     }
@@ -40,7 +40,7 @@ pub(super) unsafe fn try_define(receiver: f64, key: f64, value: f64) -> bool {
         return false;
     };
     let target = from.field_define_target();
-    let Some(to) = shapes::shape_record_by_id(target) else {
+    let Some(to) = shapes::shape_record_of_receiver(target) else {
         return false;
     };
     let slot = from.logical_key_count();
@@ -118,8 +118,8 @@ pub(super) unsafe fn learn(predecessor: u32, receiver: f64, key: f64) {
         return;
     }
     let (Some(from), Some(to)) = (
-        shapes::shape_descriptor_by_id(predecessor),
-        shapes::shape_descriptor_by_id(target),
+        shapes::shape_descriptor_of_receiver(predecessor),
+        shapes::shape_descriptor_of_receiver(target),
     ) else {
         return;
     };
@@ -187,7 +187,7 @@ pub(super) unsafe fn learn(predecessor: u32, receiver: f64, key: f64) {
             }
         }
     }
-    if let Some(record) = shapes::shape_record_by_id(predecessor) {
+    if let Some(record) = shapes::shape_record_of_receiver(predecessor) {
         record.note_field_define_target(target);
     }
 }
@@ -274,7 +274,7 @@ mod tests {
             let first = birth();
             crate::object::js_class_field_add(first, a, 1.0);
             let second = birth();
-            let from = shapes::shape_record_by_id(predecessor(second)).unwrap();
+            let from = shapes::shape_record_of_receiver(predecessor(second)).unwrap();
             assert!(
                 try_define(second, a, 2.0),
                 "control must first witness a hit"

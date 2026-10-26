@@ -882,7 +882,7 @@ pub extern "C" fn js_private_field_add(
     }
     // The claim allocates the key (inside its own no-move window); the store
     // re-reads the holder from its handle.
-    let pred_rep = crate::object::shapes::shape_rep_by_id(unsafe {
+    let pred_rep = crate::object::shapes::shape_rep_of_receiver(unsafe {
         crate::object::shapes::object_shape_stamp(holder)
     });
     let holder = scope.root_raw_mut_ptr(holder);
@@ -1279,7 +1279,7 @@ mod private_evaluation_brand_tests {
             ));
 
             let instance = crate::object::js_object_alloc(CID, 2);
-            let shape_before = crate::object::shapes::object_shape_id(instance);
+            let shape_before = crate::object::shapes::object_layout_stamp(instance);
             let keys_before_view = crate::object::object_keys(instance);
             let keys_before = keys_before_view.arr();
             let slots_before = crate::object::object_live_slot_count(instance);
@@ -1287,7 +1287,7 @@ mod private_evaluation_brand_tests {
             stamp_private_evaluation_brand(instance, class_value);
 
             assert_eq!(
-                crate::object::shapes::object_shape_id(instance),
+                crate::object::shapes::object_layout_stamp(instance),
                 shape_before
             );
             assert_eq!(crate::object::object_keys(instance).arr(), keys_before);

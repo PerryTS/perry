@@ -410,6 +410,13 @@ def expand_macros(text: str) -> list[tuple[int, str]]:
     return out
 
 
+# One row of an array_entries!/string_entries! list:
+#   `js_x_m_name / js_x_b_name = b"name", [own|any,] recv(a, ...) => body;`
+PROTO_ENTRY_RE = re.compile(
+    r"\b(\w+)\s*/\s*(\w+)\s*=\s*b\"[^\"]*\"\s*,\s*(?:(?:own|any)\s*,\s*)?\w+\(([^)]*)\)\s*=>"
+)
+
+
 def expand_signature_macros(text: str) -> list[tuple[int, str]]:
     """Read the two exported-entry forms the simple local expander cannot.
 
@@ -418,6 +425,18 @@ def expand_signature_macros(text: str) -> list[tuple[int, str]]:
     derive those types from that arm, not a second hardcoded ABI signature.
     """
     out = []
+    # array_entries!/string_entries! define a `$m / $b` pair of exported
+    # entries per row, `$recv: f64` plus one `f64` per listed argument, `-> f64`
+    # (fixed by the macro definitions; the rows carry only the argument names).
+    for inv in re.finditer(r"\b(?:array|string)_entries!\s*\{", text):
+        end = balanced(text, inv.end() - 1, "{", "}")
+        if end < 0:
+            raise ValueError("unterminated prototype-entry invocation")
+        for row in PROTO_ENTRY_RE.finditer(text[inv.end():end - 1]):
+            params = ", ".join(["recv: f64"] + [f"{a.strip()}: f64" for a in row.group(3).split(",") if a.strip()])
+            for name in (row.group(1), row.group(2)):
+                out.append((inv.start(), f'#[no_mangle] pub extern "C" fn {name}({params}) -> f64 {{}}'))
+
     for inv in re.finditer(r"\bkind_entry!\s*([({])", text):
         opener = inv.group(1)
         end = balanced(text, inv.end() - 1, opener, {"(": ")", "{": "}"}[opener])
@@ -1182,6 +1201,20 @@ def self_test() -> int:
         entries = macro_defs.get(name, [])
         if len(entries) != 1 or entries[0].params != params or entries[0].ret != ret:
             failures.append(f"{name}: incorrect kind-entry signature: {entries}")
+    proto_defs, _ = parse_rust({"proto.rs": """
+        array_entries! {
+            js_array_m_probe0 / js_array_b_probe0 = b"probe", recv() => { UNDEFINED };
+            js_array_m_probe2 / js_array_b_probe2 = b"probe", recv(a, b) => { UNDEFINED };
+        }
+        string_entries! {
+            js_string_m_probe1 / js_string_b_probe1 = b"probe", own, recv(a) => probe(recv, a);
+        }
+    """})
+    for name, arity in (("js_array_m_probe0", 0), ("js_array_b_probe0", 0), ("js_array_m_probe2", 2),
+                        ("js_array_b_probe2", 2), ("js_string_m_probe1", 1), ("js_string_b_probe1", 1)):
+        entries = proto_defs.get(name, [])
+        if len(entries) != 1 or entries[0].params != ["f64"] * (1 + arity) or entries[0].ret != "f64":
+            failures.append(f"{name}: incorrect prototype-entry signature: {entries}")
     if failures:
         print("runtime_abi_check self-test FAILED:", file=sys.stderr)
         for f in failures:

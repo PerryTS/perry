@@ -552,6 +552,38 @@ pub enum Cons {
     /// The node is the key of `o[k]` for object token `obj`: a string,
     /// symbol or object key runs the full lookup.
     IdxKey { obj: Tok, dst: NodeId },
+    /// The node is the value of a for-in body (FVA 4.3b, `gen/for_in.rs`):
+    /// each body token runs per value of `obj` (`ForInKeys`), its runs bound
+    /// through the template call `call` (one argument: the key).
+    ForInBody { obj: NodeId, call: CallId },
+    /// The node is the object for-in body `ft` iterates: a literal whose keys
+    /// are exactly its birth keys runs the body once per key, that run's key
+    /// parameter holding the one key (`Model::key_nodes`); any other value
+    /// runs it once through `call`, with every key.
+    ForInKeys { ft: Tok, call: CallId },
+    /// The node is the key of `defineProperty(o, k, desc)` in a for-in body:
+    /// a run's one key defines it as a constant key does (`DefineAccessor`
+    /// for an accessor descriptor, else E5 HARD); any other key is E5 HARD.
+    DefineKeyed {
+        o: NodeId,
+        reason: u32,
+        accessor: bool,
+    },
+    /// The node is the key of a store into `o` in a for-in body: a run's one
+    /// key stores under that key, any other under `Key::Any`.
+    StoreKeyed {
+        o: NodeId,
+        src: NodeId,
+        site: SiteId,
+    },
+    /// The node is the key of a definition whose descriptor's get (set) is
+    /// `f`, on the objects of `holder`: a run's one key installs it under
+    /// that key, any other under the computed-key star.
+    AccessorKeyed {
+        holder: NodeId,
+        f: NodeId,
+        setter: bool,
+    },
     /// The node is an arithmetic operand: dst ⊇ the kinds its values turn
     /// into (`+` when `add`: strings concatenate).
     Arith { dst: NodeId, add: bool },
@@ -661,6 +693,11 @@ impl Cons {
             Cons::ArrayLenArg { .. } => "arraylenarg",
             Cons::IdxLoad { .. } => "idxload",
             Cons::IdxKey { .. } => "idxkey",
+            Cons::ForInBody { .. } => "forinbody",
+            Cons::ForInKeys { .. } => "forinkeys",
+            Cons::DefineKeyed { .. } => "definekeyed",
+            Cons::StoreKeyed { .. } => "storekeyed",
+            Cons::AccessorKeyed { .. } => "accessorkeyed",
             Cons::ShareBuffer { .. } => "sharebuffer",
             Cons::ThisTo { .. } => "thisto",
             Cons::CallArgs { .. } => "callargs",
@@ -779,6 +816,11 @@ pub struct Model {
     pub accessors: FxHashMap<(Tok, Atom), (Vec<Tok>, Vec<Tok>)>,
     pub accessor_keys: FxHashMap<Tok, Vec<Atom>>,
     pub writers: FxHashMap<(TmplId, Atom), FieldWriters>,
+    /// The same for the template's class object and its prototype: a static
+    /// and an instance field of one name are different properties of
+    /// different objects (FVA Q3), and a prototype member is neither.
+    pub class_writers: FxHashMap<(TmplId, Atom), FieldWriters>,
+    pub proto_writers: FxHashMap<(TmplId, Atom), FieldWriters>,
     pub any_writers: FxHashMap<TmplId, FieldWriters>,
     pub adds_keys: FxHashMap<TmplId, u32>,
     pub hard: FxHashMap<Tok, (Hard, u32)>,
@@ -928,6 +970,27 @@ pub struct Model {
     /// holds ⊤ by then stored into ⊤. Only a store at a node without ⊤ marks
     /// builtin function values written.
     pub bf_stores: Vec<(NodeId, u32)>,
+    /// FVA 4.3b: a for-in body run's copy of its key variable -> the run's one
+    /// key (the variable holds nothing else).
+    pub key_nodes: FxHashMap<NodeId, Atom>,
+    /// For-in bodies run per key: (call, body token, the literal), checked
+    /// again once the worklist is empty (`settle_for_in`).
+    pub for_in_runs: Vec<(CallId, Tok, Tok)>,
+    /// (call, body token) run once with every key.
+    pub for_in_any: crate::pts::FxHashSet<(CallId, Tok)>,
+    /// (object node, body token, call) whose `ForInKeys` is attached.
+    pub for_in_on: crate::pts::FxHashSet<(NodeId, Tok, CallId)>,
+    /// (key node, operand, kind) a keyed rule (`DefineKeyed`, `StoreKeyed`,
+    /// `AccessorKeyed`) has applied once.
+    pub keyed_done: crate::pts::FxHashSet<(NodeId, NodeId, u8)>,
+    /// For-in bodies that define a property under their key.
+    pub for_in_defines: crate::pts::FxHashSet<FnIdx>,
+    /// The key variable of every for-in body: a run's copy of it holds the
+    /// run's key (`key_nodes`).
+    pub for_in_key_vars: crate::pts::FxHashSet<NodeId>,
+    /// The keys such a body may define, accessor keys from generation on
+    /// (`Gen::note_for_in_define_keys`).
+    pub for_in_define_keys: crate::pts::FxHashSet<Atom>,
     /// The node a `Cons::Store` runs on, while it runs.
     pub store_at: Option<NodeId>,
     /// A call's constant first argument (a string), for callees whose

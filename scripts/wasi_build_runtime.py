@@ -11,12 +11,8 @@ import sys
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--gc-instruments", action="store_true", help="include GC instruments for execution qualification")
-    args = parser.parse_args()
-    if not os.environ.get("CC_wasm32_wasip2"):
-        sys.exit("Configure wasi-sdk first (scripts/wasi_toolchain.ps1 or wasi_toolchain.sh)")
+def runtime_features() -> list[str]:
+    """The perry-runtime default features that build for wasm32."""
     metadata = json.loads(subprocess.check_output(
         ["cargo", "metadata", "--format-version", "1", "--no-deps", "--locked"], cwd=ROOT))
     runtime = next(p for p in metadata["packages"] if p["name"] == "perry-runtime")
@@ -27,9 +23,23 @@ def main() -> int:
     excluded = {"alloc-mimalloc"}
     if excluded - set(defaults):
         sys.exit("Stale WASI feature exclusions; update wasi_check.sh and this script")
-    features = ",".join(f"perry-runtime/{f}" for f in defaults if f not in excluded)
+    return [f for f in defaults if f not in excluded]
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--gc-instruments", action="store_true", help="include GC instruments for execution qualification")
+    parser.add_argument("--image-selftest", action="store_true",
+                        help="build the archive that runs the string-image classifier checks at program start "
+                             "(use a separate CARGO_TARGET_DIR; see wasi_image_selftest.py)")
+    args = parser.parse_args()
+    if not os.environ.get("CC_wasm32_wasip2"):
+        sys.exit("Configure wasi-sdk first (scripts/wasi_toolchain.ps1 or wasi_toolchain.sh)")
+    features = ",".join(f"perry-runtime/{f}" for f in runtime_features())
     if args.gc_instruments:
         features += ",perry-runtime/gc-instruments"
+    if args.image_selftest:
+        features += ",perry-runtime/wasm-image-selftest"
     command = ["cargo", "build", "--locked", "--release", "-p", "perry-runtime-static",
                "--target", "wasm32-wasip2", "--no-default-features", "--features", features,
                "--message-format=json-render-diagnostics"]

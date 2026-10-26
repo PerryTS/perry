@@ -1,0 +1,7 @@
+alpha/beta/gamma.txt
+file.txt .gz /x/y
+/base/leaf
+1 two first=1&second=two&third=three
+literal contents true
+false
+exit 0

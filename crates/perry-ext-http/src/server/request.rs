@@ -62,6 +62,11 @@ pub struct IncomingMessage {
     /// listener — used to dedupe synchronous emit on multiple
     /// `req.on('data', …)` registrations.
     pub data_emitted: bool,
+    /// True once `req.pipe(dest)` or `req.read()` took the buffered body.
+    /// `'data'` listeners do not set it: the body reaches them synchronously
+    /// when they register, so a `pipe` wired up right after still has to
+    /// deliver it (`req.once('data', f); req.pipe(busboy)`).
+    pub body_taken: bool,
     /// True once `'end'` has fired.
     pub end_emitted: bool,
     /// Pause/resume flag — toggled by `.pause()` / `.resume()`. Phase 1
@@ -122,6 +127,7 @@ impl IncomingMessage {
             remote_port,
             listeners: HashMap::new(),
             data_emitted: false,
+            body_taken: false,
             end_emitted: false,
             paused: false,
             encoding: None,
@@ -611,8 +617,11 @@ pub extern "C" fn js_node_http_im_destroy(handle: i64) {
 /// when the handler runs, so piping writes it to `dest` as one chunk and ends
 /// `dest` (unless `options.end === false`), the way a Readable flows into its
 /// destination. Returns `dest`, per Node's pipe-returns-destination contract.
-/// A body a `'data'` listener or an earlier pipe already consumed is not sent
-/// twice.
+/// A body an earlier pipe or `read()` already took is not sent twice. A body
+/// already delivered to a `'data'` listener is still piped: the listener got it
+/// when it registered, and Node's flowing stream hands each chunk to every
+/// listener and pipe destination alike (`@fastify/multipart` registers
+/// `once('data')` and then pipes the request into busboy).
 ///
 /// # Safety
 /// `dest` and `options` are NaN-boxed JS values; `handle` names a live
@@ -622,7 +631,8 @@ pub unsafe fn js_node_http_im_pipe(handle: i64, dest: f64, options: f64) -> f64 
     let dest = scope.root_nanbox(dest);
     let options = scope.root_nanbox(options);
     let (body, encoding) = match get_handle_mut::<IncomingMessage>(handle) {
-        Some(im) if !im.data_emitted => {
+        Some(im) if !im.body_taken => {
+            im.body_taken = true;
             im.data_emitted = true;
             im.end_emitted = true;
             im.complete = true;
@@ -919,6 +929,7 @@ pub extern "C" fn js_node_http_im_read(handle: i64) -> f64 {
             if im.data_emitted {
                 return f64::from_bits(crate::server::types::TAG_NULL);
             }
+            im.body_taken = true;
             im.data_emitted = true;
             (im.body_bytes.clone(), im.encoding.clone())
         }
