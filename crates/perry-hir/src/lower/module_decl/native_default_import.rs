@@ -102,16 +102,15 @@ mod tests {
     }
 
     #[test]
+    fn callable_core_defaults_use_the_canonical_commonjs_export() {
+        for source in ["assert", "assert/strict", "events", "stream"] {
+            assert!(is_cjs_style_native_default_import(source), "{source}");
+        }
+    }
+
+    #[test]
     fn plain_esm_shaped_builtins_are_not() {
-        for module in [
-            "fs",
-            "fs/promises",
-            "crypto",
-            "http",
-            "stream",
-            "test",
-            "buffer",
-        ] {
+        for module in ["fs", "fs/promises", "crypto", "http", "test", "buffer"] {
             assert!(!is_cjs_style_native_default_import(module), "{module}");
         }
     }

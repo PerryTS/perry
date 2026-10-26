@@ -271,3 +271,16 @@ console.log(typeof require("stream"));
     );
     assert_eq!(stdout, "function\nfunction\nfunction\nfunction\n");
 }
+
+#[test]
+fn cjs_wrap_destructured_fs_promises_is_available_without_another_import() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let stdout = compile_and_run_cjs(
+        dir.path(),
+        r#"
+const { promises } = require("fs");
+console.log(typeof promises.readFile);
+"#,
+    );
+    assert_eq!(stdout, "function\n");
+}

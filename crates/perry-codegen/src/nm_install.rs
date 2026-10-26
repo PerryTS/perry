@@ -203,9 +203,44 @@ pub(crate) const NM_SUBMOD_INSTALL_SYMBOLS: &[&str] = &[
     "js_node_submod_enable_install_all",
 ];
 
+/// A native module used as a whole value must expose its object-valued builtin
+/// submodules too. Derive those edges from the same public export manifest as
+/// ESM bindings, and install only their precise submodule buckets. Direct
+/// member lowering keeps its existing per-member installs and dead stripping.
+pub(crate) fn namespace_value_dependencies(module: &str) -> Vec<&'static str> {
+    let module = module.strip_prefix("node:").unwrap_or(module);
+    let mut installs = Vec::new();
+    for entry in perry_api_manifest::entries_for_module(module) {
+        if !perry_api_manifest::module_has_public_named_export(module, entry.name) {
+            continue;
+        }
+        let source = format!("{module}/{}", entry.name);
+        if perry_hir::is_node_builtin_module(&source) {
+            if let Some(install) =
+                native_namespace_submodule_key(&source).and_then(nm_submod_install_symbol)
+            {
+                installs.push(install);
+            }
+        }
+    }
+    installs.sort_unstable();
+    installs.dedup();
+    installs
+}
+
 #[cfg(test)]
 mod tests {
     use super::nm_install_symbol;
+
+    #[test]
+    fn whole_fs_value_installs_only_its_exposed_promises_submodule() {
+        assert_eq!(
+            namespace_value_dependencies("fs"),
+            vec!["js_node_submod_install_fs_promises"]
+        );
+        assert!(namespace_value_dependencies("process").is_empty());
+        assert!(namespace_value_dependencies("path").is_empty());
+    }
 
     #[test]
     fn worker_constructor_import_installs_its_parent_surface() {

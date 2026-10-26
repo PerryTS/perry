@@ -889,8 +889,7 @@ unsafe fn native_module_property_by_name_impl(
     // `stream.promises.pipeline` / `.finished` read as callable exports
     // (same dispatch the `import ... from "node:stream/promises"` form uses).
     if module_name == "stream" && property_name == "promises" {
-        let submodule = "stream/promises";
-        return js_create_native_module_namespace(submodule.as_ptr(), submodule.len());
+        return crate::node_submodules::commonjs_value("stream_promises");
     }
     // #2133: same shape for `node:fs.promises`. Route to the populated
     // `fs_promises` singleton so destructured exports + FileHandle methods
@@ -900,8 +899,7 @@ unsafe fn native_module_property_by_name_impl(
     }
     // `readline.promises` is the `readline/promises` submodule namespace.
     if module_name == "readline" && property_name == "promises" {
-        let submodule = "readline/promises";
-        return js_create_native_module_namespace(submodule.as_ptr(), submodule.len());
+        return crate::node_submodules::commonjs_value("readline_promises");
     }
     if module_name == "dns" && property_name == "promises" {
         crate::dns::dns_promises_init_servers_from_callback_if_unset();
