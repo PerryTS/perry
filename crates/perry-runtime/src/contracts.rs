@@ -372,7 +372,7 @@ fn kind_of(v: f64) -> u16 {
 /// The class id of an ordinary object behind `addr`, proven by the
 /// allocator (never an unchecked header read).
 fn class_id_at(addr: usize) -> Option<u32> {
-    if addr < 0x1000 {
+    if crate::value::addr_class::is_handle_band(addr) {
         return None;
     }
     unsafe {
@@ -661,7 +661,7 @@ fn key_bytes(v: f64) -> Option<Vec<u8>> {
         return None;
     }
     let ptr = crate::value::js_get_string_pointer_unified(v) as *const crate::StringHeader;
-    if ptr.is_null() || (ptr as usize) < 0x10000 {
+    if !crate::value::addr_class::is_above_handle_band(ptr as usize) {
         return None;
     }
     unsafe {

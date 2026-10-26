@@ -228,6 +228,8 @@ fn a_stale_registry_entry_over_recycled_bytes_does_not_read_as_a_map() {
     // Restore the Map shape so teardown's side-allocation release stays sound.
     unsafe {
         set_gc_obj_type(addr, crate::gc::GC_TYPE_MAP);
+        // GC_STORE_AUDIT(INIT): restore the test fixture under GcSuppressScope;
+        // no collection or publication can intervene before teardown.
         std::ptr::write(map, saved_header);
     }
     assert!(crate::map::is_registered_map(addr));

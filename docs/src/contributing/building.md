@@ -18,8 +18,8 @@
   `llvm-config` is not on `PATH`, set `LLVM_SYS_221_PREFIX` to the LLVM 22
   prefix. On Windows this variable is mandatory and must point at the
   extracted LLVM 22 development archive used by the build.
-- For the cached Make targets, install the pinned Mr Boxington once with
-  `make mbx-deps`.
+- `make build-dev` provisions its pinned build tools automatically. For
+  `make build-prod`, install the pinned Mr Boxington once with `make mbx-deps`.
 
 An external clang is not part of the normal in-process codegen path. Install a
 matching clang only when working on a path that explicitly invokes it (for
@@ -82,29 +82,35 @@ units so build-time regressions are visible.
 
 ### Faster development rebuilds with Blaze
 
-Perry's pinned mbx version supports optional [Blaze](https://github.com/indexable-inc/blaze)
-routing for quick rebuilds after editing Rust code. This is an experimental
-path for Linux and macOS Apple silicon. Install Blaze using its instructions,
-then install Perry's pinned mbx with `make mbx-deps`. Run `mbx setup` once
-and follow its instructions to put the Cargo shim before the regular Cargo
-binary on `PATH`.
+`make build-dev` installs verified [Blaze](https://github.com/indexable-inc/blaze)
+and mbx 1.28.0 binaries, selects their matching `nightly-2026-10-25` compiler,
+and activates the Cargo shim automatically. Linux GNU x64/ARM64 and Apple
+Silicon macOS use the prebuilt toolchain pinned in `scripts/build-tools.ref`.
+Setup fails if the download or compiler identity cannot be verified.
 
-mbx shares dependency build results between worktrees and manages each
-checkout's `target/` directory, collecting inactive targets as age and size
-limits are reached.
+The default upstream archive currently targets an older compiler. These
+prebuilts come from the pinned upstream source, built once in the shared
+[jdalton/blaze release workflow](https://github.com/jdalton/blaze/actions/workflows/release.yaml).
+Project builds download them without compiling Blaze. The development Docker
+image installs them under `/opt/mbx-blaze`, outside the checkout mount.
 
-With Blaze's `ra-jit` executable on `PATH`, enable routing for a development
-build with:
+Development builds retain `force-unwind-tables=yes` for exception transport.
+They use full unwind tables because Blaze refuses `use-sync-unwind=yes`.
+Host production commands retain the repository's compiler and compact-table
+configuration unless custom Rust flags override it. The development image
+uses full tables by default; use the production Dockerfile for distribution builds. `PERRY_DEV_RUSTFLAGS` customizes development flags and must preserve
+`-C force-unwind-tables=yes`.
 
-```sh
-MBX_BLAZE=1 cargo build -p perry
-```
-
-The first build loads the workspace. Later edits can rebuild much faster.
-mbx still caches dependencies while Blaze handles workspace crates. Use the
-default development profile: commands with `--release` or `--profile` stay
-on Cargo and mbx. Blaze uses extra memory and may differ from Cargo, so use
-the normal `make build-dev` or CI build as the final check.
+The first build loads the workspace. Later supported edits use Blaze while
+mbx caches dependencies and manages worktree targets. Explicit `--release`
+and `--profile` builds stay on Cargo and mbx. The Rust unit-test CI job uses
+the same prebuilts and mbx object cache. Other production checks retain the
+normal compiler path. The tools remain experimental. In a Linux ARM64 development image,
+`perry-native-registration` passed 27 tests through Blaze. The `no_std`
+`perry-abi` crate passed four tests only after Blaze reported missing
+`lang_start` and fell back to Cargo. Full workspace compatibility is not
+established. Linux ARM64 and Apple Silicon passed a separate edited-program
+probe that also verifies an mbx dependency cache hit.
 
 ### Compiler cache for ephemeral worktrees
 
@@ -240,7 +246,8 @@ The policy is checked by `python3 scripts/check_dev_debug.py` in PR lint.
 
 ## Cached Linux linking
 
-Use `make mbx-deps` and the cached Make targets for local builds. Linux GNU
+The development Make target provisions its cache automatically. Production
+builds use `make mbx-deps` first. Linux GNU
 x86_64 and AArch64 targets use mold 2.42.0 via `.mbx.toml`; install `clang`
 on the build host. MBX downloads the pinned mold release and verifies its
 GitHub SHA-256 digest. macOS, Windows, Android and custom musl linker paths

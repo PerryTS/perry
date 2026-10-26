@@ -465,6 +465,8 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
         + clean["crates/perry-runtime/src/object/shapes_slot_list.rs"]
         + "\n"
         + clean["crates/perry-runtime/src/object/shapes_store.rs"]
+        + "\n"
+        + clean["crates/perry-runtime/src/object/shapes_store/slab.rs"]
     )
     object_mod = clean["crates/perry-runtime/src/object/mod.rs"]
     live_slots = clean["crates/perry-runtime/src/object/live_slots.rs"]

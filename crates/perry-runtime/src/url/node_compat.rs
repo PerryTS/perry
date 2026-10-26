@@ -4,7 +4,7 @@
 
 use super::*;
 
-use super::parse::{create_url_object, is_valid_absolute_url, resolve_url};
+use super::parse::create_url_object;
 use super::search_params::url_decode;
 
 const QUERYSTRING_ESCAPE_HEX: &[u8; 16] = b"0123456789ABCDEF";
@@ -1060,9 +1060,9 @@ fn legacy_url_resolve_impl(from: &str, to: &str) -> String {
     }
 
     let last = src.last().cloned().unwrap_or_default();
-    let has_trailing_slash = (((base.host.is_some() || rel.host.is_some() || src.len() > 1)
+    let has_trailing_slash = ((base.host.is_some() || rel.host.is_some() || src.len() > 1)
         && (last == "." || last == ".."))
-        || last.is_empty());
+        || last.is_empty();
 
     let mut up = 0usize;
     let mut i = src.len();
