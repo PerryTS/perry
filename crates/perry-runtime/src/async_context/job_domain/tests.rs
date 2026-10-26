@@ -1,5 +1,6 @@
 use super::*;
 use crate::{gc::RuntimeHandleScope, value::JSValue};
+mod cancellation;
 
 fn array(value: f64) -> *mut crate::array::ArrayHeader {
     JSValue::from_bits(value.to_bits())

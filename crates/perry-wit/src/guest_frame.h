@@ -63,6 +63,7 @@ void *perry_component_frame_task_new(void);
 uint32_t perry_component_frame_task_call(void *, uint32_t, uint32_t, uint32_t);
 int32_t perry_component_frame_task_checkpoint(void *);
 int32_t perry_component_frame_task_ready(void *);
+int32_t perry_component_frame_task_cancel(void *);
 /* Finite synchronous callback under the task's saved ALS/domain. No canonical
    suspension, or reentry/drop of that same task frame, is allowed in callback. */
 int32_t perry_component_frame_task_resume(void *, void (*)(void *), void *);

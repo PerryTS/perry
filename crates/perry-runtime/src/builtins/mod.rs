@@ -186,7 +186,9 @@ pub use globals::{
     scan_queued_microtask_roots_mut,
 };
 
-pub(crate) use globals::{drain_queued_microtasks_count, queued_microtasks_pending};
+pub(crate) use globals::{
+    discard_cancelled_microtasks, drain_queued_microtasks_count, queued_microtasks_pending,
+};
 
 /// #6943: inertness predicate for the `js_string_coerce`-as-property-key
 /// rooting family. Crate-internal — callers use it to skip a

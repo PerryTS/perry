@@ -16,6 +16,9 @@ impl Frame {
         let Some(task) = &self.task else {
             return self.guard(|_| fail("Expected a component task frame"));
         };
+        if task.domain.is_cancelled() {
+            return self.guard(|_| fail("Component task is cancelled"));
+        }
         let token = task.domain.token();
         let slot = task.snapshot;
         let snapshot = unsafe {
@@ -97,6 +100,9 @@ pub unsafe extern "C" fn perry_component_frame_task_ready(pointer: *mut c_void) 
             .as_ref()
             .unwrap_or_else(|| fail("Expected a component task frame"));
         let hint = task.domain.take_ready();
+        if task.domain.is_cancelled() {
+            fail("Component task is cancelled");
+        }
         let queued = job_domain::run(
             task.domain.token(),
             crate::promise::eligible_guest_jobs_pending,
@@ -107,6 +113,31 @@ pub unsafe extern "C" fn perry_component_frame_task_ready(pointer: *mut c_void) 
         -1
     } else {
         ready
+    }
+}
+
+/// Stop this task's queued JS jobs before canonical child cancellation. This
+/// does not free the task/import frames or acknowledge native child storage;
+/// C retains them until each child has returned or acknowledged cancellation.
+/// Repeated cancellation is harmless. No JS callback is invoked.
+/// # Safety
+/// `pointer` is an open task frame on its creating agent, exclusively borrowed;
+/// no task call/checkpoint/resume may still be active on the C stack.
+#[no_mangle]
+pub unsafe extern "C" fn perry_component_frame_task_cancel(pointer: *mut c_void) -> i32 {
+    let owner = frame(pointer);
+    owner.guard(|owner| {
+        let task = owner
+            .task
+            .as_ref()
+            .unwrap_or_else(|| fail("Expected a component task frame"));
+        task.domain.cancel();
+        crate::promise::discard_cancelled_guest_jobs();
+    });
+    if owner.failed {
+        -1
+    } else {
+        0
     }
 }
 
@@ -135,5 +166,7 @@ pub unsafe extern "C" fn perry_component_frame_task_resume(
     }
 }
 
+#[cfg(test)]
+mod cancellation_tests;
 #[cfg(test)]
 mod tests;

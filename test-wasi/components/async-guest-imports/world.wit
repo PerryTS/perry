@@ -15,4 +15,6 @@ world plugin {
     export background: async func(id: u32, input: payload) -> u32;
     export guarded: func() -> u32;
     export status: func() -> u32;
+    export cancel-probe: async func(id: u32, input: payload) -> payload;
+    export cancel-poke: func() -> u32;
 }

@@ -1,10 +1,18 @@
 //! Canonical guest task ownership, separate from user-restorable ALS values.
 //! Tokens contain native flags only; the snapshot's existing slots own all JS.
 use super::*;
-use std::{marker::PhantomData, rc::Rc, sync::atomic::AtomicBool};
+use std::{
+    marker::PhantomData,
+    rc::Rc,
+    sync::atomic::{AtomicBool, AtomicU8},
+};
+
+const LIVE: u8 = 0;
+const EXITED: u8 = 1;
+const CANCELLED: u8 = 2;
 
 struct State {
-    live: AtomicBool,
+    status: AtomicU8,
     ready: AtomicBool,
 }
 
@@ -14,7 +22,7 @@ pub struct JobDomainToken(Arc<State>);
 
 impl JobDomainToken {
     pub(crate) fn is_current_live(&self) -> bool {
-        self.0.live.load(Ordering::Acquire)
+        self.0.status.load(Ordering::Acquire) == LIVE
             && current().is_some_and(|active| Arc::ptr_eq(&self.0, &active.0))
     }
 }
@@ -30,7 +38,7 @@ impl JobDomain {
     pub(crate) fn new() -> Self {
         Self {
             token: JobDomainToken(Arc::new(State {
-                live: AtomicBool::new(true),
+                status: AtomicU8::new(LIVE),
                 ready: AtomicBool::new(false),
             })),
             _agent: PhantomData,
@@ -52,6 +60,15 @@ impl JobDomain {
         self.token.0.ready.swap(false, Ordering::AcqRel)
     }
 
+    pub(crate) fn cancel(&self) {
+        self.token.0.status.store(CANCELLED, Ordering::Release);
+        self.token.0.ready.store(false, Ordering::Release);
+    }
+
+    pub(crate) fn is_cancelled(&self) -> bool {
+        cancelled(&Some(self.token()))
+    }
+
     #[cfg(test)]
     pub(crate) fn is_current(&self) -> bool {
         current().is_some_and(|token| Arc::ptr_eq(&token.0, &self.token.0))
@@ -60,7 +77,13 @@ impl JobDomain {
 
 impl Drop for JobDomain {
     fn drop(&mut self) {
-        self.token.0.live.store(false, Ordering::Release);
+        // EXIT permits adoption. Cancellation is terminal even after the
+        // affine lease disappears and only reaction snapshots retain a token.
+        let _ =
+            self.token
+                .0
+                .status
+                .compare_exchange(LIVE, EXITED, Ordering::AcqRel, Ordering::Acquire);
     }
 }
 
@@ -86,22 +109,40 @@ pub(super) fn replace_current(domain: Option<JobDomainToken>) -> Option<JobDomai
 /// Unowned jobs and jobs left after EXIT can run on the next entering task.
 /// Jobs of another live canonical task remain parked, in their original order.
 pub(crate) fn eligible(domain: &Option<JobDomainToken>) -> bool {
-    domain.as_ref().is_none_or(|owner| {
-        !owner.0.live.load(Ordering::Acquire)
-            || current().is_some_and(|active| Arc::ptr_eq(&owner.0, &active.0))
-    })
+    domain
+        .as_ref()
+        .is_none_or(|owner| match owner.0.status.load(Ordering::Acquire) {
+            EXITED => true,
+            LIVE => current().is_some_and(|active| Arc::ptr_eq(&owner.0, &active.0)),
+            _ => false,
+        })
 }
 
-pub(crate) fn prepare_enqueue(domain: &mut Option<JobDomainToken>) {
+pub(crate) fn cancelled(domain: &Option<JobDomainToken>) -> bool {
+    domain
+        .as_ref()
+        .is_some_and(|owner| owner.0.status.load(Ordering::Acquire) == CANCELLED)
+}
+
+/// Cancelled reactions must retain their owner identity, including when a
+/// sibling settles their Promise after the original task frame was dropped.
+pub(crate) fn prepare_enqueue(domain: &mut Option<JobDomainToken>) -> bool {
+    if cancelled(domain) {
+        return false;
+    }
     if domain
         .as_ref()
-        .is_none_or(|owner| !owner.0.live.load(Ordering::Acquire))
+        .is_none_or(|owner| owner.0.status.load(Ordering::Acquire) == EXITED)
     {
         *domain = current();
+    }
+    if cancelled(domain) {
+        return false;
     }
     if let Some(owner) = domain {
         owner.0.ready.store(true, Ordering::Release);
     }
+    true
 }
 
 impl AsyncContextSnapshot {
@@ -109,8 +150,12 @@ impl AsyncContextSnapshot {
         eligible(&self.job_domain)
     }
 
-    pub(crate) fn prepare_job_enqueue(&mut self) {
-        prepare_enqueue(&mut self.job_domain);
+    pub(crate) fn job_is_cancelled(&self) -> bool {
+        cancelled(&self.job_domain)
+    }
+
+    pub(crate) fn prepare_job_enqueue(&mut self) -> bool {
+        prepare_enqueue(&mut self.job_domain)
     }
 
     pub(crate) fn job_domain_token(&self) -> Option<JobDomainToken> {

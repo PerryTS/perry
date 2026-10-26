@@ -4,7 +4,7 @@ typedef struct perry_child {
     void *frame;
     struct perry_child *next;
     $W_subtask_t handle;
-    bool complete;
+    bool complete, result_ready;
     void (*finish)(void *);
     void (*destroy)(struct perry_child *);
 } perry_child;
@@ -16,7 +16,7 @@ struct perry_task {
     $W_waitable_set_t set;
     $W_stream_void_t reader;
     $W_stream_void_writer_t writer;
-    bool asynchronous, returned, has_set, waiting, armed, read_pending;
+    bool asynchronous, returned, cancelled, has_set, waiting, armed, read_pending;
 };
 static perry_task *perry_tasks;
 /* Installed only around finite runtime calls, restored before canonical WAIT.
@@ -89,7 +89,7 @@ static perry_task *perry_task_new(bool asynchronous) {
 }
 static void perry_wake_all(void) {
     for (perry_task *t = perry_tasks; t; t = t->next) {
-        if (!t->armed) continue;
+        if (!t->armed || t->cancelled) continue;
         int32_t ready = perry_component_frame_task_ready(t->frame);
         perry_require(ready >= 0);
         if (!ready) continue;
@@ -129,7 +129,7 @@ static void perry_child_start(perry_task *t, perry_child *child, $W_subtask_stat
     if (state == $U_SUBTASK_RETURNED) {
         if (child->handle) $W_subtask_drop(child->handle);
         child->handle = 0;
-        child->complete = true;
+        child->complete = child->result_ready = true;
         /* Already inside the original task. Reentering its Rust frame here
            would alias an outstanding borrow. The import frame is distinct. */
         child->finish(child);
@@ -149,8 +149,6 @@ static void perry_child_complete(void *pointer) {
 }
 static void perry_task_event(perry_task *t, $W_event_t *event) {
     perry_require(t && t->waiting);
-    /* Cooperative cancellation remains unqualified; unsupported events trap
-       and the host retires the Store, including every native child. */
     if (event->event == $U_EVENT_SUBTASK) {
         perry_child *child = t->children;
         while (child && child->handle != event->waitable) child = child->next;
@@ -160,7 +158,7 @@ static void perry_task_event(perry_task *t, $W_event_t *event) {
         $W_waitable_join(child->handle, 0);
         $W_subtask_drop(child->handle);
         child->handle = 0;
-        child->complete = true;
+        child->complete = child->result_ready = true;
         perry_require(perry_task_resume(t, perry_child_complete, child) >= 0);
         return;
     }
@@ -169,6 +167,30 @@ static void perry_task_event(perry_task *t, $W_event_t *event) {
     perry_require($U_WAITABLE_STATE(event->code) == $U_WAITABLE_COMPLETED);
     perry_require($U_WAITABLE_COUNT(event->code) == 1);
     t->read_pending = false;
+}
+static $W_callback_code_t perry_task_cancel(perry_task *t) {
+    perry_require(t && t->waiting && !t->returned && !t->cancelled);
+    t->cancelled = true;
+    /* End every runtime scope before a synchronous canonical cancel can
+       suspend or let another guest task enter this instance. */
+    perry_require(perry_component_frame_task_cancel(t->frame) == 0);
+    for (perry_child *child = t->children; child; child = child->next) {
+        perry_require(!child->complete && child->handle != 0);
+        $W_waitable_join(child->handle, 0);
+        $W_subtask_state_t state = $U_SUBTASK_STATE($W_subtask_cancel(child->handle));
+        perry_require(state == $U_SUBTASK_RETURNED || state == $U_SUBTASK_STARTED_CANCELLED || state == $U_SUBTASK_RETURNED_CANCELLED);
+        /* Cancellation may lose to a successful return. Only that status
+           initializes the typed result and requires result deallocation. */
+        child->result_ready = state == $U_SUBTASK_RETURNED;
+        $W_subtask_drop(child->handle);
+        child->handle = 0;
+        child->complete = true;
+    }
+    perry_task_reap(t);
+    $W_task_cancel();
+    $W_context_set_0(NULL);
+    perry_task_drop(t);
+    return $U_CALLBACK_CODE_EXIT;
 }
 static int32_t perry_task_poll(perry_task *t, uint32_t *result) {
     /* Observe/mark the exported Promise handled before running jobs. An

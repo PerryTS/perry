@@ -573,7 +573,9 @@ fn queue_microtask_with_type(callback: i64, type_name: &str, args: Vec<f64>) {
         scope.root_raw_mut_ptr(state);
     }
     crate::async_context::refresh_snapshot_from_roots(&mut context, &context_roots);
-    context.prepare_job_enqueue();
+    if !context.prepare_job_enqueue() {
+        return;
+    }
     QUEUED_MICROTASKS.with(|q| {
         q.borrow_mut().push_back(QueuedMicrotask {
             callback: callback as i64,
@@ -613,6 +615,10 @@ pub fn restore_queued_microtask_contexts() {
             crate::async_context::restore_context(previous);
         }
     });
+}
+
+pub(crate) fn discard_cancelled_microtasks() {
+    QUEUED_MICROTASKS.with(|q| q.borrow_mut().retain(|job| !job.context.job_is_cancelled()));
 }
 
 /// Drain queued nextTick jobs. Called by `js_promise_run_microtasks` before

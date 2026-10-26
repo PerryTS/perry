@@ -219,7 +219,7 @@ persistent driver supports concurrent calls, post-return work and generic WIT
 future/stream reads, transfers and native producer factories. Bounded writes
 preserve backpressure and unconsumed ownership through cancellation, retry and
 peer closure. Traced TypeScript readers, producer factories/writers and
-per-invocation runtime frames are implemented. Async guest adapters, broader
+per-invocation runtime frames are implemented. Resource/future/stream guest adapters, broader
 handler layout support and complete host/guest composition remain unfinished.
 See [the component qualification record](WASI_COMPONENTS.md) for exact APIs and
 receipts.
@@ -228,9 +228,11 @@ Canonical guest frames now own traced slot arrays through stable native links.
 Their lifetime is independent of a native handle scope, and frames can finish
 out of order. A nonblocking C Promise poll preserves fulfilled values and the
 original rejection in those frames without running another task's jobs. These
-supply the rooting and observation foundations for suspension; the C async guest
-adapter still needs task scheduling, canonical suspension and cancellation.
-Native host future/stream bindings are implemented.
+supply the rooting and observation foundations for suspension. An internal
+generated C adapter now schedules async imports/exports with canonical waits,
+typed child storage and cooperative cancellation. Public async generation stays
+guarded while resource and future/stream guest ownership is completed. Native
+host future/stream bindings are implemented.
 
 Pin an explicit WASI 0.3 interface version and supported Component Model
 feature set. Integrate native async lifting/lowering with Perry's promise
@@ -247,9 +249,11 @@ composition and a streaming HTTP example before claiming P3 support.
 The internal guest task checkpoint foundation now isolates Promise/nextTick and
 cleanup jobs by canonical task while preserving ALS across C entries. A separate
 maintained-C fixture proves unit-stream wakeups between suspended tasks. These
-are building blocks: stable async import frames, generated callbacks, typed
-future/stream guest values, cancellation and cross-language Perry guest execution
-remain required before removing the guest generator guards. The current
+are now connected to stable async import frames and generated callbacks, with
+actual Perry guest execution and a C caller exercising canonical cancellation.
+Typed resource/future/stream guest ownership, broader cross-language value
+profiles and platform/package qualification remain required before removing the
+guest generator guards. The current
 [component support notes](WASI_COMPONENTS.md) distinguish these internal checks
 from supported public output.
 

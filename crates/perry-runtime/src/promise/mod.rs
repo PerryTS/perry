@@ -22,6 +22,7 @@ pub mod async_step;
 pub mod checked_dispatch;
 pub mod combinators;
 mod job_queue;
+pub(crate) use job_queue::discard_cancelled_guest_jobs;
 pub(crate) use job_queue::eligible_guest_jobs_pending;
 use job_queue::EnqueuePromiseJob;
 #[cfg(test)]

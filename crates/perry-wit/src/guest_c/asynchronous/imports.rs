@@ -42,7 +42,9 @@ impl Generator<'_> {
         };
         writeln!(emitter.source, "(void)perry_component_frame_import_resolve(f, {result});\n}}\nstatic void {stem}_destroy(perry_child *child) {{\n{stem}_state *data = ({stem}_state *)child;")?;
         if let Some(ty) = function.result {
+            emitter.source.push_str("if (child->result_ready) {\n");
             emitter.free(ty, "&data->result");
+            emitter.source.push_str("}\n");
         }
         emitter.source.push_str("perry_allocations_end(&data->arena, false);\nperry_component_frame_drop(child->frame);\nfree(data);\n}\n");
         writeln!(emitter.source, "static uint32_t {stem}(void *f, uint32_t args) {{\nperry_task *parent = perry_active_task;\nif (!parent || !parent->asynchronous) {{ perry_bad(f, \"Async import requires an async export task\"); return 0; }}\n{stem}_state *data = calloc(1, sizeof(*data));\nif (!data) {{ perry_bad(f, \"Component allocation failed\"); return 0; }}\nperry_allocations arena = {{0}};\n(void)args;\ndata->base.frame = f;\ndata->base.finish = {stem}_finish;\ndata->base.destroy = {stem}_destroy;")?;

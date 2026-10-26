@@ -1237,6 +1237,7 @@ unsafe fn process_finreg_record_after_mark(
 }
 
 pub(crate) fn queue_pending_finalization_callbacks_after_gc() -> usize {
+    discard_cancelled_finalization_jobs();
     let jobs: Vec<_> = PENDING_FINALIZATION_JOBS.with(|jobs| {
         jobs.borrow_mut()
             .extract_if(.., |job| {
@@ -1275,6 +1276,35 @@ pub(crate) fn queue_pending_finalization_callbacks_after_gc() -> usize {
         );
     }
     count
+}
+
+pub(crate) fn discard_cancelled_finalization_jobs() {
+    let jobs: Vec<_> = PENDING_FINALIZATION_JOBS.with(|jobs| {
+        jobs.borrow_mut()
+            .extract_if(.., |job| {
+                crate::async_context::job_domain::cancelled(&job.domain)
+            })
+            .collect()
+    });
+    let scope = crate::gc::RuntimeHandleScope::new();
+    // Removing a private record allocates. Root the entire extracted batch
+    // before the first removal, then release held values without callbacks.
+    let rooted: Vec<_> = jobs
+        .iter()
+        .map(|job| {
+            (
+                scope.root_nanbox_f64(job.registry),
+                scope.root_nanbox_f64(job.record),
+            )
+        })
+        .collect();
+    drop(jobs);
+    for (registry, record) in rooted {
+        remove_finalization_record_from_registry(
+            registry.get_nanbox_f64(),
+            record.get_nanbox_f64(),
+        );
+    }
 }
 
 fn remove_finalization_record_from_registry(registry: f64, record: f64) {

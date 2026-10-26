@@ -439,8 +439,8 @@ guest exercises reverse-order completion, a still-pending sibling, Unicode and
 bytes, collection inside result getters, immediate and void returns, and idle
 after every round. It also checks verified moving GC and the native host's
 existing policy of retiring the Store and siblings on rejection or dropping a
-started call. This is **not cooperative canonical cancellation**: the
-experimental C scheduler traps on unsupported events. Its profile rejects
+started call. That receipt covers Store retirement rather than cooperative
+canonical cancellation; the later cancellation checks are described below. Its profile rejects
 resources and future/stream guest values. Module initialization is
 synchronous; its unowned jobs can be adopted by the first task. See the
 [generated async export receipt](validation/wasi-generated-async-exports-20261026.json).
@@ -468,8 +468,8 @@ frame stay alive through later callbacks and any child chain, until canonical
 `EXIT`. Async imports during module initialization or a synchronous export throw
 before host I/O. On ordinary teardown, the signal reader leaves its waitable set
 before synchronous read cancellation; cancelling while it remains joined is a
-canonical ABI error. Unsupported cancellation events still trap, with the
-embedding host responsible for retiring the Store.
+canonical ABI error. Traps and failed calls retain the embedding host's Store
+retirement policy.
 
 Run the acceptance script above with `--imports` for concurrent reverse-order
 completion, distinct compound parameters, input mutation after lowering,
@@ -480,8 +480,33 @@ separate instrumented probe confirms direct completion; the uninstrumented
 component remains the qualification subject. The
 [async import receipt](validation/wasi-generated-async-imports-20261026.json)
 records the exact sources, frozen tools, failed teardown prototype and retained
-export regression. This does not enable public async generation or qualify
-cooperative canonical cancellation, guest resources or future/stream values.
+export regression. That receipt does not qualify cooperative canonical
+cancellation, guest resources or future/stream values.
+
+The experimental scheduler now handles canonical `CANCEL` before `task.return`.
+It marks the task's native job domain cancelled, removes queued Promise/nextTick,
+destroy, finalization and uncaught-error jobs, and rejects late reactions carrying
+that token. Dropping a cancelled lease cannot make its jobs adoptable by a
+sibling. Ordinary completed-task adoption keeps its existing behavior. Each
+native child leaves its waitable set before synchronous `subtask.cancel`; its
+argument buffers and rooted import frame survive until the terminal
+acknowledgement. A successful return racing cancellation initializes an owned
+result; cancelled statuses do not. Cleanup drops only initialized result areas,
+then acknowledges `task.cancel` and exits without settling cancelled imports.
+No Rust task scope survives a canonical suspension.
+
+`scripts/component_async_guest_cancellation_acceptance.py` composes an actual
+Perry guest with a maintained-C caller. The caller cancels one task with two
+pending native imports while a sibling remains active. Late native sends fail,
+the sibling returns successfully, and late JS reactions remain suppressed after
+the cancelled task exits. Repeated rounds reuse the same Store. The
+[cancellation receipt](validation/wasi-cooperative-guest-cancellation-20261027.json)
+records native runtime checks, actual moving GC, ordinary import/export
+regressions and a negative probe that removes cancelled-job ownership. This
+adds guest-to-guest canonical cancellation; dropping a public native
+`DriverCall` still retires its Store. Resource and future/stream guest values,
+WASI ALS constructor packaging and public async CLI generation remain separate
+unfinished work.
 
 The internal generic-reader checks additionally cover canonical layouts from
 `wit-parser::SizeAlign`, shared metadata for repeated aliases, a reusable

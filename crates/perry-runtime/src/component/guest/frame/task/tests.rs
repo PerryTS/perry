@@ -283,7 +283,7 @@ fn uncaught_task_jobs_preserve_the_original_error_without_exiting_the_host_or_fa
     }
 }
 
-extern "C-unwind" fn record_unowned_job(
+pub(super) extern "C-unwind" fn record_unowned_job(
     closure: *const crate::closure::ClosureHeader,
     _: crate::closure::JsThis,
 ) -> f64 {

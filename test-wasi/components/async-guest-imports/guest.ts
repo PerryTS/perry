@@ -11,6 +11,8 @@ function part(input: Payload, suffix: string): Payload {
 
 const service = imports["test:async-guest-imports/service@1.0.0"];
 let completed = 0;
+let cancelledJobs = 0;
+let cancelResolve: () => void = () => {};
 let initializationGuard = 0;
 try { imports.empty(); } catch { initializationGuard = 10000; }
 
@@ -59,6 +61,19 @@ const exports: Exports = {
     try { imports.empty(); } catch { return 77; }
     return 0;
   },
-  status() { return initializationGuard + completed; }
+  status() { return initializationGuard + completed; },
+  async "cancel-probe"(id, input) {
+    // A sibling settles this after canonical cancellation and task EXIT.
+    // Its reaction must retain the cancelled owner instead of being adopted.
+    new Promise<void>(resolve => { cancelResolve = resolve; }).then(() => {
+      collect();
+      cancelledJobs += 1;
+    });
+    const a = service.many(id, input, part(input, "b"), part(input, "c"), part(input, "d"), part(input, "e"));
+    const b = service.many(id + 1, input, part(input, "b"), part(input, "c"), part(input, "d"), part(input, "e"));
+    await b;
+    return await a;
+  },
+  "cancel-poke"() { cancelResolve(); collect(); return cancelledJobs; }
 };
 register(exports);

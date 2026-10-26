@@ -1312,7 +1312,9 @@ fn queue_destroy_notification(
     promise: bool,
     mut domain: Option<crate::async_context::JobDomainToken>,
 ) {
-    crate::async_context::job_domain::prepare_enqueue(&mut domain);
+    if !crate::async_context::job_domain::prepare_enqueue(&mut domain) {
+        return;
+    }
     GC_DESTROY_QUEUE
         .lock()
         .unwrap()
@@ -1340,6 +1342,13 @@ pub(crate) fn gc_destroy_work_pending() -> bool {
         .unwrap()
         .iter()
         .any(|(_, _, domain)| crate::async_context::job_domain::eligible(domain))
+}
+
+pub(crate) fn discard_cancelled_destroy_notifications() {
+    GC_DESTROY_QUEUE
+        .lock()
+        .unwrap()
+        .retain(|(_, _, domain)| !crate::async_context::job_domain::cancelled(domain));
 }
 
 pub fn drain_gc_destroy_queue() -> i32 {

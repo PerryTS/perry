@@ -20,9 +20,9 @@ pub use suspended::{
     perry_component_frame_import_resolve,
 };
 pub use task::{
-    perry_component_frame_task_call, perry_component_frame_task_checkpoint,
-    perry_component_frame_task_new, perry_component_frame_task_ready,
-    perry_component_frame_task_resume,
+    perry_component_frame_task_call, perry_component_frame_task_cancel,
+    perry_component_frame_task_checkpoint, perry_component_frame_task_new,
+    perry_component_frame_task_ready, perry_component_frame_task_resume,
 };
 
 static FRAME: NativePayloadFamily = NativePayloadFamily {
@@ -646,7 +646,7 @@ const fn adapter_entry(code: *const ()) -> AdapterEntry {
 }
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
-static KEEP_ADAPTER_ENTRIES: [AdapterEntry; 46] = [
+static KEEP_ADAPTER_ENTRIES: [AdapterEntry; 47] = [
     adapter_entry(super::resources::payload::js_component_resource_create as *const ()),
     adapter_entry(super::resources::payload::js_component_resource_value as *const ()),
     adapter_entry(super::resources::payload::perry_component_frame_resource_destroy as *const ()),
@@ -690,6 +690,7 @@ static KEEP_ADAPTER_ENTRIES: [AdapterEntry; 46] = [
     adapter_entry(perry_component_frame_task_checkpoint as *const ()),
     adapter_entry(perry_component_frame_task_ready as *const ()),
     adapter_entry(perry_component_frame_task_resume as *const ()),
+    adapter_entry(perry_component_frame_task_cancel as *const ()),
     adapter_entry(perry_component_frame_import_begin as *const ()),
     adapter_entry(perry_component_frame_import_resolve as *const ()),
     adapter_entry(perry_component_frame_import_reject as *const ()),

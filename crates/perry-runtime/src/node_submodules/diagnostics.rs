@@ -720,7 +720,9 @@ pub(crate) extern "C" fn throw_captured_error(
 
 pub(crate) fn schedule_uncaught(err: f64) {
     let mut domain = crate::async_context::job_domain::current();
-    crate::async_context::job_domain::prepare_enqueue(&mut domain);
+    if !crate::async_context::job_domain::prepare_enqueue(&mut domain) {
+        return;
+    }
     DIAG_PENDING_UNCAUGHT.with(|q| q.borrow_mut().push((err, domain)));
 }
 
@@ -731,6 +733,13 @@ pub(crate) fn uncaught_work_pending() -> bool {
             .iter()
             .any(|(_, domain)| crate::async_context::job_domain::eligible(domain))
     })
+}
+
+pub(crate) fn discard_cancelled_uncaught() {
+    DIAG_PENDING_UNCAUGHT.with(|q| {
+        q.borrow_mut()
+            .retain(|(_, domain)| !crate::async_context::job_domain::cancelled(domain))
+    });
 }
 
 pub fn diagnostics_channel_drain_uncaught() {

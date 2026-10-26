@@ -30,9 +30,23 @@ pub(super) trait EnqueuePromiseJob {
 
 impl EnqueuePromiseJob for std::collections::VecDeque<Task> {
     fn enqueue_promise_job(&mut self, mut task: Task) {
-        task.job_context_mut().prepare_job_enqueue();
-        self.push_back(task);
+        if task.job_context_mut().prepare_job_enqueue() {
+            self.push_back(task);
+        }
     }
+}
+
+/// Retire roots without invoking cancelled callbacks. Late producers reject
+/// the same tokens at enqueue, so dropping the task cannot resurrect its jobs.
+pub(crate) fn discard_cancelled_guest_jobs() {
+    TASK_QUEUE.with(|q| {
+        q.borrow_mut()
+            .retain(|job| !job.job_context().job_is_cancelled())
+    });
+    crate::builtins::discard_cancelled_microtasks();
+    crate::async_hooks::discard_cancelled_destroy_notifications();
+    crate::node_submodules::diagnostics::discard_cancelled_uncaught();
+    crate::weakref::discard_cancelled_finalization_jobs();
 }
 
 pub(super) fn pop_task() -> Option<Task> {
