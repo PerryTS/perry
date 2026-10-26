@@ -41,7 +41,7 @@ handle-floor | crates/perry-runtime/src/buffer/access.rs | 1
 handle-floor | crates/perry-runtime/src/buffer/cmp.rs | 2
 handle-floor | crates/perry-runtime/src/buffer/copy_bytes.rs | 1
 handle-floor | crates/perry-runtime/src/buffer/encode.rs | 6
-handle-floor | crates/perry-runtime/src/buffer/from.rs | 9
+handle-floor | crates/perry-runtime/src/buffer/from.rs | 8
 handle-floor | crates/perry-runtime/src/buffer/iter.rs | 1
 handle-floor | crates/perry-runtime/src/buffer/query.rs | 7
 handle-floor | crates/perry-runtime/src/buffer/transcode.rs | 3
