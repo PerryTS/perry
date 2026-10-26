@@ -89,7 +89,7 @@ pub(super) fn class_keys_birth_rep(
 /// The birth rep an id names (`F64` for a lane its lineage has since
 /// deprecated: a birth still carries it, `birth_fill_f64_lanes`).
 pub(super) fn shape_rep_of(shape_id: u32) -> u64 {
-    crate::object::shapes::shape_record_by_id(shape_id).map_or(super::field_rep::REP_ANY, |r| {
+    crate::object::shapes::shape_record_for_word(shape_id).map_or(super::field_rep::REP_ANY, |r| {
         super::field_rep::identity(r.rep())
     })
 }
@@ -175,7 +175,7 @@ fn preinstalled_class_keys(
     keys_array: *mut ArrayHeader,
     shape_id: u32,
 ) -> crate::object::ObjectKeys {
-    let descriptor = crate::object::shapes::shape_descriptor_by_id(shape_id);
+    let descriptor = crate::object::shapes::shape_descriptor_for_word(shape_id);
     if let Some(descriptor) = descriptor {
         if descriptor.keys != keys_array as u64
             && !keys_array.is_null()

@@ -60,6 +60,51 @@ struct Claim {
     keys: Vec<KeyClaim>,
 }
 
+impl Claim {
+    /// Several records describe one class id (structurally identical literal
+    /// classes of several modules share it; per-unit facts describe a class
+    /// once per unit that declares it, each for its own instances): every
+    /// instance is checked against what all of them claim, the weakest.
+    fn meet(&mut self, o: Claim) {
+        self.prefix_stable &= o.prefix_stable;
+        let same_keys = self.keys.len() == o.keys.len()
+            && self
+                .keys
+                .iter()
+                .all(|k| o.keys.iter().any(|ok| ok.key == k.key));
+        self.fixed_layout &= o.fixed_layout && same_keys;
+        for a in o.ancestors {
+            if !self.ancestors.contains(&a) {
+                self.ancestors.push(a);
+            }
+        }
+        for k in self.keys.iter_mut() {
+            match o.keys.iter().find(|ok| ok.key == k.key) {
+                Some(ok) => {
+                    k.readonly &= ok.readonly;
+                    k.birth &= ok.birth;
+                    k.kind |= ok.kind;
+                }
+                None => {
+                    k.readonly = false;
+                    k.birth = false;
+                    k.kind = 0xFFFF;
+                }
+            }
+        }
+        for ok in o.keys {
+            if !self.keys.iter().any(|k| k.key == ok.key) {
+                self.keys.push(KeyClaim {
+                    key: ok.key,
+                    readonly: false,
+                    birth: false,
+                    kind: 0xFFFF,
+                });
+            }
+        }
+    }
+}
+
 /// Every contract build references this symbol from its `.perry_facts`
 /// blob (`perry-codegen` `emit_contract_section`), so a contract build
 /// linked against a runtime without `contract-checks` is a link error that
@@ -171,16 +216,19 @@ fn parse_blob(b: &[u8], at: &mut usize, out: &mut HashMap<u32, Claim>) -> Option
                 kind,
             });
         }
-        out.insert(
-            cid,
-            Claim {
-                name,
-                prefix_stable: flags & 1 != 0,
-                fixed_layout: flags & 2 != 0,
-                ancestors,
-                keys,
-            },
-        );
+        let claim = Claim {
+            name,
+            prefix_stable: flags & 1 != 0,
+            fixed_layout: flags & 2 != 0,
+            ancestors,
+            keys,
+        };
+        match out.entry(cid) {
+            std::collections::hash_map::Entry::Vacant(v) => {
+                v.insert(claim);
+            }
+            std::collections::hash_map::Entry::Occupied(mut o) => o.get_mut().meet(claim),
+        }
     }
     Some(*at)
 }
@@ -630,12 +678,17 @@ mod tests {
     /// A blob in the compiler's `.perry_facts` v2 layout
     /// (`perry-wpfacts` `dump::contract_section`).
     fn blob() -> Vec<u8> {
+        blob_with(3, 0b111, K_NUM)
+    }
+
+    /// Class 7 with key `x`: class flags, key flags and kind given.
+    fn blob_with(flags: u32, key_flags: u8, kind: u16) -> Vec<u8> {
         let mut r = Vec::new();
         r.extend_from_slice(b"PFCT");
         r.extend_from_slice(&2u32.to_le_bytes());
         r.extend_from_slice(&1u32.to_le_bytes());
         r.extend_from_slice(&7u32.to_le_bytes()); // class id
-        r.extend_from_slice(&3u32.to_le_bytes()); // prefix_stable | fixed_layout
+        r.extend_from_slice(&flags.to_le_bytes()); // prefix_stable | fixed_layout
         r.extend_from_slice(&1u16.to_le_bytes()); // one ancestor
         r.extend_from_slice(&5u32.to_le_bytes());
         r.extend_from_slice(&3u16.to_le_bytes());
@@ -643,12 +696,33 @@ mod tests {
         r.extend_from_slice(&1u16.to_le_bytes());
         r.extend_from_slice(&1u16.to_le_bytes());
         r.extend_from_slice(b"x");
-        r.push(0b111);
-        r.extend_from_slice(&K_NUM.to_le_bytes());
+        r.push(key_flags);
+        r.extend_from_slice(&kind.to_le_bytes());
         while r.len() % 8 != 0 {
             r.push(0);
         }
         r
+    }
+
+    /// Two records of one class id (two units' copies of a literal class):
+    /// the instances are checked against the weakest claim, whichever record
+    /// the linker placed last. One copy holds no instance (kind none, every
+    /// claim vacuous), the other's are written with strings.
+    #[test]
+    fn records_of_one_class_meet() {
+        let vacuous = blob_with(3, 0b111, 0);
+        let written = blob_with(0, 0b010, K_STR);
+        for (a, b) in [(&vacuous, &written), (&written, &vacuous)] {
+            let mut sec = a.clone();
+            sec.extend(b.iter().copied());
+            let mut out = HashMap::new();
+            parse_into(&sec, &mut out);
+            let c = out.get(&7).expect("claim for class 7");
+            assert!(!c.prefix_stable && !c.fixed_layout);
+            assert_eq!(c.keys.len(), 1);
+            assert!(!c.keys[0].readonly && !c.keys[0].birth);
+            assert_eq!(c.keys[0].kind, K_STR);
+        }
     }
 
     #[test]

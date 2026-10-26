@@ -52,14 +52,14 @@ fn regexp_birth_shape_survives_full_traces_with_no_live_regexp() {
         // The control: this full trace retires uncarried records, so a birth
         // record that survives it survives because it is carried.
         let control = unrooted_semantic_shape();
-        assert!(crate::object::shapes::shape_descriptor_by_id(control).is_some());
+        assert!(crate::object::shapes::test_descriptor_for_retained_word(control).is_some());
         collect_synchronous_full_trace();
         assert!(
-            crate::object::shapes::shape_descriptor_by_id(control).is_none(),
+            crate::object::shapes::shape_is_retired(control),
             "round {round}: the full trace did not retire an uncarried shape, so it proves nothing"
         );
         assert!(
-            crate::object::shapes::shape_descriptor_by_id(first).is_some(),
+            crate::object::shapes::test_descriptor_for_retained_word(first).is_some(),
             "#12313 round {round}: the RegExp birth record was retired with no live RegExp"
         );
         let next = unsafe { crate::object::shapes::object_shape_stamp(birth()) };
@@ -117,6 +117,10 @@ fn regexp_birth_shape_prototype_word_follows_evacuation_with_no_live_regexp() {
     assert_eq!(prototypes.len(), 1, "the never-move RegExp prototype moved");
 }
 
+/// A birth memo holds an agent-lifetime carrier (the intrinsic birth records
+/// do); an uncarried shape retires, and its LayoutWord must then never be
+/// dereferenced. The identity is what outlives the record: it reads None
+/// without forming a Region address, and a birth takes publication instead.
 #[test]
 fn plain_birth_rejects_a_retired_shape_after_full_collection() {
     let _guard = CopyingNurseryTestGuard::new(0);
@@ -124,17 +128,18 @@ fn plain_birth_rejects_a_retired_shape_after_full_collection() {
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let object = crate::object::object_alloc_plain(0);
     let shape = unsafe { crate::object::shapes::transition_object_shape_semantics(object) };
-    assert!(crate::object::shapes::plain_birth_rep_by_id(shape, 0).is_some());
+    assert!(crate::object::shapes::plain_birth_rep_for_word(shape, 0).is_some());
+    let identity = crate::object::shapes::shape_record_for_word(shape)
+        .expect("live record")
+        .identity();
     collect_synchronous_full_trace();
     assert!(
         crate::object::shapes::shape_is_retired(shape),
         "control shape must retire"
     );
-    let (next, rep) = crate::object::object_alloc_plain_born(0, shape);
-    assert!(rep.is_none(), "a retired memo must take birth publication");
-    assert_ne!(
-        unsafe { crate::object::shapes::object_shape_stamp(next) },
-        shape
+    assert!(
+        crate::object::shapes::handle_by_identity(identity).is_none(),
+        "a retired identity reads absent without touching the Region"
     );
 }
 
@@ -224,4 +229,94 @@ fn regexp_birth_observes_prototype_edits_and_replaced_parent_after_gc() {
     prototype.with_mut_ptr::<ObjectHeader, _>(|p| {
         key.with_const_ptr(|k| crate::object::js_object_delete_field(p, k));
     });
+}
+
+/// Retirement safety: a layout word still named by a runtime birth cache (here
+/// the arguments cache) is a cache carrier, so a full trace with no live
+/// receiver must not retire or decommit its row. Fails if a holder dereferences
+/// words nothing carries.
+#[test]
+fn arguments_birth_cache_word_is_carried_across_full_traces() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _scan = ConservativeScanDisabledGuard::new();
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    // Production `gc_init` registers the shape-table scanner; this window
+    // needs it because it is the scanner that carries the arguments cache's
+    // word.
+    crate::gc::gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
+    crate::object::test_clear_arguments_object_roots();
+    let word = {
+        let scope = RuntimeHandleScope::new();
+        let callee = f64::from_bits(crate::value::TAG_UNDEFINED);
+        let obj = crate::object::arguments_object_alloc_rooted(&[], callee, false, 0);
+        let obj = scope.root_raw_mut_ptr(obj);
+        obj.with_const_ptr::<ObjectHeader, _>(|o| unsafe {
+            crate::object::shapes::object_shape_stamp(o)
+        })
+    };
+    for round in 0..3 {
+        let control = unrooted_semantic_shape();
+        collect_synchronous_full_trace();
+        assert!(
+            crate::object::shapes::shape_is_retired(control),
+            "round {round}: control must retire"
+        );
+        assert!(
+            !crate::object::shapes::shape_is_retired(word),
+            "round {round}: a word held by the arguments cache was retired"
+        );
+    }
+}
+
+/// Same contract for the keyless-birth allocation memo: the word it names is
+/// dereferenced on the next birth, so a full trace must not retire it.
+#[test]
+fn keyless_birth_memo_word_is_carried_across_full_traces() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _scan = ConservativeScanDisabledGuard::new();
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let word =
+        unsafe { crate::object::shapes::object_shape_stamp(crate::object::object_alloc_plain(0)) };
+    for round in 0..3 {
+        let control = unrooted_semantic_shape();
+        collect_synchronous_full_trace();
+        assert!(
+            crate::object::shapes::shape_is_retired(control),
+            "round {round}: control must retire"
+        );
+        assert!(
+            !crate::object::shapes::shape_is_retired(word),
+            "round {round}: the keyless birth memo word was retired"
+        );
+        // The next birth validates the memo word by dereference.
+        let _ = crate::object::object_alloc_plain(0);
+    }
+}
+
+/// #6 (DPA review): every held-word helper answers absent for a retired word
+/// whose page was decommitted; none may touch the PROT_NONE page.
+#[test]
+fn held_word_helpers_are_checked_for_retired_decommitted_rows() {
+    use crate::object::shapes as sh;
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _scan = ConservativeScanDisabledGuard::new();
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    // More than two chunks of dead semantic shapes: at least one whole chunk
+    // page has no live record after the trace.
+    let words: Vec<u32> = (0..100).map(|_| unrooted_semantic_shape()).collect();
+    collect_synchronous_full_trace();
+    assert!(
+        words.iter().any(|&w| !sh::test_row_committed(w)),
+        "no row page was decommitted, the test proves nothing"
+    );
+    for &w in &words {
+        assert!(sh::shape_is_retired(w));
+        assert!(sh::shape_descriptor_for_word(w).is_none());
+        assert!(sh::shape_record_for_word(w).is_none());
+        assert!(sh::shape_object_kind_for_word(w).is_none());
+        assert!(sh::shape_brands_for_word(w).is_none());
+        assert!(sh::shape_keys_and_proto_for_word(w).is_none());
+        assert!(sh::shape_live_inline_slot_count_for_word(w).is_none());
+        assert_eq!(sh::shape_rep_for_word(w), 0);
+    }
 }

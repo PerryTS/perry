@@ -347,11 +347,15 @@ fn no_entry_module_root_is_live_before_the_gc_is_initialized() {
         // generated GC call-effects table proves it cannot collect, so it is
         // now a leaf call; anchor it by its position in `main` instead: it must
         // come before the first safepoint's call. Index -1 = before all.
-        let gc_init: isize = match points.iter().position(|sp| sp.callee == "js_gc_init") {
+        let gc_init: isize = match points
+            .iter()
+            .position(|sp| sp.callee == "js_gc_init_with_layouts")
+        {
             Some(p) => p as isize,
             None => {
                 assert_eq!(
-                    crate::gc_call_effects::test_effects().classify_direct_callee("js_gc_init"),
+                    crate::gc_call_effects::test_effects()
+                        .classify_direct_callee("js_gc_init_with_layouts"),
                     crate::gc_call_effects::GcCallEffect::CannotCollect,
                     "[{target}] entry `main` must initialize the GC: {:?}",
                     callees()
@@ -360,7 +364,7 @@ fn no_entry_module_root_is_live_before_the_gc_is_initialized() {
                 let body = &ir[start..];
                 let body = &body[..body.find("\n}\n").unwrap_or(body.len())];
                 let init_at = body
-                    .find("@js_gc_init(")
+                    .find("@js_gc_init_with_layouts(")
                     .unwrap_or_else(|| panic!("[{target}] entry `main` must initialize the GC"));
                 let first_sp = body
                     .find(&format!(

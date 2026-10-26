@@ -46,7 +46,9 @@
 //! [`store_facts_agree`] checks receiver inputs against the shape at every
 //! stamp in debug builds and with `shape-fact-audit` in release builds.
 
-use super::{object_shape_stamp, shape_descriptor_by_id, shape_record_by_id, ShapeObjectKind};
+use super::{object_shape_stamp, ShapeObjectKind};
+use crate::object::shapes::shape_descriptor_of_receiver;
+use crate::object::shapes::shape_record_of_receiver;
 use crate::object::ObjectHeader;
 
 #[inline(always)]
@@ -82,7 +84,7 @@ pub(crate) unsafe fn receiver_admits_plain_store(obj: *const ObjectHeader) -> bo
 /// `obj` is a live `GC_TYPE_OBJECT` `ObjectHeader`.
 #[inline]
 pub(crate) unsafe fn receiver_carries_numeric_proof(obj: *const ObjectHeader) -> bool {
-    super::shape_object_kind_by_id(object_shape_stamp(obj))
+    super::shape_object_kind_of_receiver(object_shape_stamp(obj))
         == Some(ShapeObjectKind::OrdinaryNumericProof)
 }
 
@@ -142,7 +144,7 @@ pub(crate) unsafe fn store_facts_agree(obj: *const ObjectHeader) -> bool {
     if !crate::gc::GC_OBJECT_CALLABLE_IS_DISJOINT {
         return false;
     }
-    let Some(kind) = super::shape_object_kind_by_id(object_shape_stamp(obj)) else {
+    let Some(kind) = super::shape_object_kind_of_receiver(object_shape_stamp(obj)) else {
         return true;
     };
     if ((*gc_header(obj))._reserved & crate::gc::GC_OBJECT_CALLABLE != 0)
@@ -200,7 +202,7 @@ unsafe fn report_disagreement(obj: *const ObjectHeader) -> ! {
         "shape store facts disagree: obj={:#x} shape={:#x} kind={:?} class_id={:#x} reserved={:#06x}",
         obj as usize,
         id,
-        super::shape_object_kind_by_id(id),
+        super::shape_object_kind_of_receiver(id),
         (*obj).class_id,
         (*gc_header(obj))._reserved
     );
@@ -216,7 +218,7 @@ unsafe fn report_disagreement(obj: *const ObjectHeader) -> ! {
 unsafe fn stamp_twin(obj: *mut ObjectHeader, id: u32) {
     (*obj).parent_class_id = crate::object::layout_desc::carry_shadow((*obj).parent_class_id, id);
     if !crate::arena::pointer_in_nursery(obj as usize) {
-        let record = shape_record_by_id(id);
+        let record = shape_record_of_receiver(id);
         super::note_old_generation_carrier(record);
         if let Some(record) = record {
             super::note_shape_carrier_candidate(record.keys());
@@ -228,7 +230,7 @@ unsafe fn stamp_twin(obj: *mut ObjectHeader, id: u32) {
 /// array (see [`super::shape_descriptor_kind_twin`]), so it is safe on the
 /// proof-retire path inside the owner store funnel.
 fn twin_of(shape_id: u32, kind: ShapeObjectKind) -> Option<u32> {
-    if super::shape_object_kind_by_id(shape_id)? != kind {
+    if super::shape_object_kind_of_receiver(shape_id)? != kind {
         audit::note_twin_mint();
     }
     super::shape_descriptor_kind_twin(shape_id, kind)
@@ -246,7 +248,7 @@ pub(crate) unsafe fn restamp_object_store_kind(obj: *mut ObjectHeader) {
         return;
     }
     let id = object_shape_stamp(obj);
-    let Some(kind) = super::shape_object_kind_by_id(id) else {
+    let Some(kind) = super::shape_object_kind_of_receiver(id) else {
         return;
     };
     if !kind.is_ordinary_layout() {
@@ -303,7 +305,7 @@ pub(crate) unsafe fn premark_plain_ordinary(obj: *mut ObjectHeader) {
 /// runtime record carries it too); the shape answers.
 #[inline]
 pub(crate) fn shape_proves_ordinary_null_proto(shape_id: u32) -> bool {
-    super::shape_record_by_id(shape_id).is_some_and(|record| {
+    super::shape_record_of_receiver(shape_id).is_some_and(|record| {
         record.object_kind() == ShapeObjectKind::Ordinary
             && record.proto_id() == super::PROTO_ID_NULL
     })
@@ -347,7 +349,7 @@ pub(crate) unsafe fn born_null_shape_proven(obj: *const ObjectHeader, reserved: 
 /// `obj` is a live shaped `GC_TYPE_OBJECT` `ObjectHeader`.
 pub(crate) unsafe fn stamp_numeric_proof_twin(obj: *mut ObjectHeader) -> Option<u32> {
     let unproven = object_shape_stamp(obj);
-    if super::shape_object_kind_by_id(unproven) != Some(ShapeObjectKind::Ordinary) {
+    if super::shape_object_kind_of_receiver(unproven) != Some(ShapeObjectKind::Ordinary) {
         return None;
     }
     let proven = twin_of(unproven, ShapeObjectKind::OrdinaryNumericProof)?;
@@ -366,7 +368,7 @@ pub(crate) unsafe fn stamp_numeric_proof_twin(obj: *mut ObjectHeader) -> Option<
 /// is clear.
 pub(crate) unsafe fn restore_unproven_twin(obj: *mut ObjectHeader, unproven: u32) {
     let current = object_shape_stamp(obj);
-    let Some(cur) = shape_descriptor_by_id(current) else {
+    let Some(cur) = shape_descriptor_of_receiver(current) else {
         return;
     };
     if cur.object_kind != ShapeObjectKind::OrdinaryNumericProof {
@@ -376,7 +378,7 @@ pub(crate) unsafe fn restore_unproven_twin(obj: *mut ObjectHeader, unproven: u32
     }
     audit::note_proof_retire();
     let target = receiver_ordinary_kind(obj);
-    let direct = shape_descriptor_by_id(unproven).is_some_and(|u| {
+    let direct = shape_descriptor_of_receiver(unproven).is_some_and(|u| {
         u.object_kind == target
             && u.keys == cur.keys
             && u.logical_key_count == cur.logical_key_count
@@ -419,7 +421,7 @@ unsafe fn retire_proof_before_stamp_slow(obj: *mut ObjectHeader, new_id: u32) {
     if (*gc_header(obj)).obj_type != crate::gc::GC_TYPE_OBJECT {
         return;
     }
-    if super::shape_object_kind_by_id(new_id) == Some(ShapeObjectKind::OrdinaryNumericProof) {
+    if super::shape_object_kind_of_receiver(new_id) == Some(ShapeObjectKind::OrdinaryNumericProof) {
         return;
     }
     let _ = crate::array::drop_packed_subclass_numeric_proof_record(obj);

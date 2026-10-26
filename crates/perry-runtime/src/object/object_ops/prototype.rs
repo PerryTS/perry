@@ -219,7 +219,7 @@ fn net_socket_prototype_value() -> f64 {
 /// `obj` is a live `GC_TYPE_OBJECT` cell.
 unsafe fn shape_link_prototype(obj: *const ObjectHeader, default_only: bool) -> Option<f64> {
     use crate::object::shapes as s;
-    let record = s::shape_record_by_id(s::object_shape_stamp(obj))?;
+    let record = s::shape_record_of_receiver(s::object_shape_stamp(obj))?;
     if !record.object_kind().is_ordinary_layout() || record.weak_collection_brand().is_some() {
         return None;
     }
@@ -280,8 +280,7 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
                 // decline without consulting their registries on this arm.
                 let id = unsafe { (*addr).shape_word() };
                 if id.wrapping_sub(crate::object::shapes::SHAPE_ID_BASE)
-                    < crate::object::shapes::SITE_SHAPE_ID_END
-                        - crate::object::shapes::SHAPE_ID_BASE
+                    < crate::codegen_abi::LAYOUT_ORDINARY_END - crate::codegen_abi::LAYOUT_TAG
                 {
                     if let Some(proto) = unsafe { shape_link_prototype(addr, false) } {
                         return proto;

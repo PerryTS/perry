@@ -163,7 +163,7 @@ use perry_hir::{Class, ClassField, Expr, Module, ModuleInitKind, Stmt};
 /// the round-trip so a fixture that stopped exercising the inline allocator
 /// fails loudly instead of passing vacuously (CLAUDE.md: a gate must assert
 /// its subject was live).
-const HEADER_IMAGE_COMPOSE: &str = "insertelement <2 x i64> <i64 ";
+const HEADER_IMAGE_COMPOSE: &str = "constant <2 x i64> <i64 ";
 
 fn cell_class() -> Class {
     Class {

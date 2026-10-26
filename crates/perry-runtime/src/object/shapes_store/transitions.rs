@@ -13,6 +13,7 @@ impl ShapeRecord {
 
     #[cold]
     pub(in super::super) fn note_field_define_target(&mut self, target: u32) {
+        self.note_handle_carrier(target);
         if !self.has_boxed_extras() {
             let parent = self.rollback_parent();
             self.extras = new_extras(&[], &[]);
@@ -67,6 +68,7 @@ impl ShapeRecord {
     }
 
     pub(in super::super) fn note_rollback_parent(&mut self, parent: u32) {
+        self.note_handle_carrier(parent);
         if !self.has_boxed_extras() {
             self.extras = (u64::from(parent) << 1) | 1;
             return;
@@ -84,6 +86,7 @@ impl ShapeRecord {
     }
 
     pub(in super::super) fn note_integrity_target(&mut self, level: usize, target: u32) {
+        self.note_handle_carrier(target);
         if !self.has_boxed_extras() {
             let parent = self.rollback_parent();
             self.extras = new_extras(&[], &[]);
@@ -101,5 +104,26 @@ pub(in super::super) fn integrity_facts_key(facts: u64, flags: u16) -> u64 {
         facts
     } else {
         (facts ^ (0x494e_5445_4752_0000 | u64::from(flags))).wrapping_mul(0x9e37_79b9_7f4a_7c15)
+    }
+}
+
+impl ShapeRecord {
+    /// A stored local handle is readable for as long as this owner survives.
+    pub(in super::super) fn note_handle_carrier(&self, word: u32) {
+        if self.layout_word != 0 && super::super::is_layout_word(word) {
+            unsafe {
+                super::super::note_cache_carrier(super::super::shape_descriptor_for_word(word));
+            }
+        }
+    }
+    pub(in super::super) fn owned_handles(&self) -> [u32; 6] {
+        [
+            self.rollback_parent(),
+            self.created_birth_shape(),
+            self.field_define_target(),
+            self.integrity_target(0),
+            self.integrity_target(1),
+            self.integrity_target(2),
+        ]
     }
 }

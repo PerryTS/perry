@@ -305,9 +305,15 @@ impl<'a> Gen<'a> {
         }
         let thrown = self.thrown;
         self.m.sink_node(thrown, r);
+        // Other units' code reaches the global object and stores into what
+        // this unit gives them: their writes, which they publish
+        // (`Model::shared_replay`).
         let gt = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+        self.m.shared_replay = true;
         self.m.escape(gt, r);
+        self.m.shared_replay = false;
         let holder = self.m.node_l("other-unit-receiver");
+        self.m.other_units_store = Some(holder);
         self.m.add_tok(holder, TOP);
         let src = self.m.top_tok_node;
         self.m.cons(
@@ -857,6 +863,10 @@ impl<'a> Gen<'a> {
 
     /// A token a value contract describes (`contract_check`).
     fn value_tok_ok(&self, t: Tok) -> bool {
+        // A runtime-owned object: the contract names it (`ValueContract::shared`).
+        if self.m.named_shared(t).is_some() {
+            return true;
+        }
         match self.m.toks[t as usize] {
             TokKind::Top | TokKind::BuiltinFn => true,
             TokKind::Obj(tm, _) | TokKind::ClassObj(tm) if self.stand_in_cc.contains_key(&tm) => {

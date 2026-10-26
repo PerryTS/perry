@@ -6117,6 +6117,7 @@ pub fn run_with_parse_cache(
             constructor_param_counts: Default::default(),
             // Filled per module after the static-shape pre-pass.
             static_shape_ids: Vec::new(),
+            program_layout_ordinals: Default::default(),
             program_class_shape_ids: Default::default(),
             program_facts: Default::default(),
             program_layouts: Default::default(),
@@ -6318,19 +6319,12 @@ pub fn run_with_parse_cache(
         }
     };
     program_step("births pre-pass", None);
+    let descriptor_inputs = std::sync::Mutex::new(Vec::new());
     let module_births: Vec<(&PathBuf, Vec<perry_codegen::ModuleBirth>)> = module_pool
         .install(|| {
             ctx.native_modules
                 .par_iter()
                 .map(|(path, hir_module)| -> Result<_, String> {
-                    if std::env::var("PERRY_CONSTFN_SHAPE").as_deref() == Ok("0")
-                        && hir_module.classes.is_empty()
-                        && prepare_module(path, hir_module, true)?
-                            .imported_classes
-                            .is_empty()
-                    {
-                        return Ok((path, Vec::new()));
-                    }
                     let mut opts = prepare_module(path, hir_module, false)?;
                     constructor_contracts.apply(
                         &compute_module_prefix(
@@ -6344,6 +6338,10 @@ pub fn run_with_parse_cache(
                     opts.program_layouts = std::sync::Arc::clone(&program_layouts);
                     let births = perry_codegen::module_birth_shapes(hir_module, opts)
                         .map_err(|e| format!("{}: {e:#}", path.display()))?;
+                    descriptor_inputs
+                        .lock()
+                        .unwrap()
+                        .extend(perry_codegen::layout_ordinals::take_module_layout_inputs());
                     Ok((path, births))
                 })
                 .collect::<Result<Vec<_>, String>>()
@@ -6359,6 +6357,19 @@ pub fn run_with_parse_cache(
                     .values()
                     .filter_map(|c| c.final_shape.as_ref()),
             ),
+    );
+    let mut ordinal_inputs = descriptor_inputs.into_inner().unwrap();
+    ordinal_inputs.extend(
+        static_shape_ids
+            .iter()
+            .map(|(shape, id)| perry_codegen::layout_ordinals::identity_input(shape, *id)),
+    );
+    let program_layout_ordinals = std::sync::Arc::new(
+        perry_codegen::ProgramLayoutOrdinals::assign(
+            perry_codegen::layout_ordinals::native_inputs(),
+            ordinal_inputs,
+        )
+        .map_err(|error| anyhow!(error))?,
     );
     // Completed guard facts stay separate from class allocation suppliers.
     // Include a foreign class's final content in an importer's cache inputs,
@@ -6481,6 +6492,7 @@ pub fn run_with_parse_cache(
     // short-spread candidate, so prepared for all modules at once it held
     // the program's class shapes once per module.
     let slice_shape_ids = |path: &PathBuf, opts: &mut perry_codegen::CompileOptions| {
+        opts.program_layout_ordinals = std::sync::Arc::clone(&program_layout_ordinals);
         if let Some((ids, class_ids)) = static_shape_ids_by_module.get(path) {
             opts.static_shape_ids = ids.clone();
             let foreign: BTreeSet<u32> = opts
@@ -7355,8 +7367,9 @@ pub fn run_with_parse_cache(
         if matches!(format, OutputFormat::Text) && verbose > 0 {
             eprintln!("  static shape seeds: {}", program_static_seeds.len());
         }
-        let seed_bytes = perry_codegen::stubs::generate_static_shape_seed_object(
+        let seed_bytes = perry_codegen::stubs::generate_static_shape_seed_object_with_plan(
             &program_static_seeds,
+            &program_layout_ordinals,
             target.as_deref(),
         )?;
         let seed_path = object_output_dir.join("_perry_static_shape_seeds.o");

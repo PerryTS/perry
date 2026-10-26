@@ -852,6 +852,13 @@ fn gc_collect_inner_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
     gc_collect_full_mark_sweep_with_trigger(trigger)
 }
 
+#[cfg(test)]
+pub(crate) fn test_collect_synchronous_full_trace() {
+    gc_collect_minor();
+    let _ =
+        gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct));
+}
+
 fn gc_collect_full_mark_sweep_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome {
     // Build the stack-map index if it is still owed. This is the chokepoint:
     // every collection funnels through one of these three entries, and here
@@ -1382,12 +1389,22 @@ fn raise_default_thread_stack_floor() {
 
 #[no_mangle]
 pub extern "C" fn js_gc_init() {
+    unsafe { js_gc_init_with_layouts(&crate::object::class_image::runtime_layout_image()) };
+}
+/// The image header must be bound before any runtime state / ShapeTable exists.
+#[no_mangle]
+pub unsafe extern "C" fn js_gc_init_with_layouts(
+    image: *const crate::codegen_abi::PerryLayoutImageV1,
+) {
+    assert!(!image.is_null(), "null layout image");
+
     // #8546: this is the first runtime call of every `main` / `perry_module_init`,
     // on the thread about to run that image's module init — so it is where the
     // thread claims its own class-registry image before any `js_register_class_*`
     // call lands. A host that loads several application images on several
     // threads gets one image per thread; a plain executable gets one.
     crate::object::class_image::enter_current_thread_image();
+    crate::object::class_image::bind_layout_image(*image);
     // #10399: raise the floor for every thread this process will spawn, before
     // it spawns one.
     //
@@ -1440,6 +1457,8 @@ pub extern "C" fn js_gc_init() {
     crate::node_submodules::diagnostics_channel_init_main_thread();
     crate::node_submodules::init_trace_events_runtime();
     gc_init();
+    #[cfg(all(feature = "wasm-image-selftest", target_family = "wasm"))]
+    crate::value::addr_class::wasm_image_selftest();
     // Optional runtime features install from the program's generated
     // installer (see `crate::feature_hooks`), before any user code runs.
     crate::feature_hooks::run_feature_installer();
@@ -1826,3 +1845,9 @@ pub fn initialize_runtime_fixture() {
     gc_init();
     crate::object::static_shapes::js_shape_run_static_seed();
 }
+
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_GC_INIT_WITH_LAYOUTS: unsafe extern "C" fn(
+    *const crate::codegen_abi::PerryLayoutImageV1,
+) = js_gc_init_with_layouts;

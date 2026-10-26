@@ -10,8 +10,8 @@ use perry_hir::{ArrayLikeSource, Expr, Stmt};
 use crate::temp_root_coverage::main_ir_for;
 
 /// The shadow-bit compare: `icmp uge i32 %word, UNSHADOWED_WORD_END`.
-const PATCHED: &str = "-1342177280";
-const _: () = assert!(crate::runtime_abi::UNSHADOWED_WORD_END as i32 == -1342177280);
+const PATCHED: &str = "-1879048192";
+const _: () = assert!(crate::runtime_abi::LAYOUT_ORDINARY_END as i32 == -1879048192);
 
 fn let_local(id: u32, name: &str, ty: Type, init: Expr) -> Stmt {
     Stmt::Let {

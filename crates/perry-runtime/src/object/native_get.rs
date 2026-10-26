@@ -158,7 +158,7 @@ unsafe fn try_data_lookup_key(
         // cannot supply this proof. Decline from the owner word before paying
         // for the agent directory; no registry determines this classification.
         let ordinary_id = shape_id.wrapping_sub(shapes::SHAPE_ID_BASE)
-            < shapes::SITE_SHAPE_ID_END - shapes::SHAPE_ID_BASE;
+            < crate::codegen_abi::LAYOUT_ORDINARY_END - crate::codegen_abi::LAYOUT_TAG;
         if !ordinary_id {
             // The data walk needs an ordinary-band descriptor. Unstamped
             // cells have none; dictionary and function namespaces never

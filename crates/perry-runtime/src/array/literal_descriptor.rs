@@ -290,7 +290,7 @@ mod tests {
         ) as *const u8)
         .bits();
         crate::gc::js_gc_register_global_root(&mut keys as *mut u64 as i64);
-        let shape_id = crate::object::shapes::js_object_shape_id_for_class_keys_live(
+        let shape_id = crate::object::shapes::js_object_layout_for_class_keys_live(
             JSValue::from_bits(keys).as_pointer::<crate::array::ArrayHeader>() as u64,
             2,
             3,

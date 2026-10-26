@@ -55,9 +55,10 @@ pub(crate) unsafe fn define_own_data_from_shape(
     // admission instead of scanning all preceding own keys at each birth.
     let record = if (*obj).class_id == 0
         && id.wrapping_sub(super::shapes::SHAPE_ID_BASE)
-            < super::shapes::EXOTIC_SHAPE_ID_BASE - super::shapes::SHAPE_ID_BASE
+            < (2 << crate::codegen_abi::LAYOUT_BAND_SHIFT)
     {
-        super::shapes::shape_record_by_id(id)
+        // `obj`'s own header word: the receiver carries its row.
+        super::shapes::shape_record_of_receiver(id)
     } else {
         None
     };

@@ -8,7 +8,7 @@ fn distinct_descriptor_roles_are_projected_when_shapes_are_minted() {
     unsafe { crate::object::declarations::test_declare_anonymous(id) };
     let before = crate::object::js_object_alloc(id, 0);
     assert_eq!(
-        unsafe { crate::object::shapes::object_shape_identity(before) },
+        unsafe { crate::object::shapes::object_proto_identity(before) },
         crate::object::shapes::PROTO_ID_DEFAULT
     );
     assert!(
@@ -24,7 +24,7 @@ fn distinct_descriptor_roles_are_projected_when_shapes_are_minted() {
     );
     let after = crate::object::js_object_alloc(declared, 0);
     assert_eq!(
-        unsafe { crate::object::shapes::object_shape_identity(after) },
+        unsafe { crate::object::shapes::object_proto_identity(after) },
         crate::object::shapes::PROTO_ID_CLASS | u64::from(declared)
     );
     assert_eq!(
@@ -33,7 +33,7 @@ fn distinct_descriptor_roles_are_projected_when_shapes_are_minted() {
         "class resolution retains its generation guard"
     );
     assert_eq!(
-        unsafe { crate::object::shapes::object_shape_identity(before) },
+        unsafe { crate::object::shapes::object_proto_identity(before) },
         crate::object::shapes::PROTO_ID_DEFAULT,
         "the earlier anonymous object retains its birth shape"
     );

@@ -67,7 +67,7 @@ fn new_slow(shape: u32, data: impl FnOnce() -> *const RegExpData) -> *mut RegExp
         if unsafe { crate::object::shapes::object_shape_stamp(receiver) } != shape {
             receiver = prepare_shape(receiver);
         }
-        crate::object::shapes::shape_rep_by_id(unsafe {
+        crate::object::shapes::shape_rep_of_receiver(unsafe {
             crate::object::shapes::object_shape_stamp(receiver)
         })
     });
@@ -148,10 +148,10 @@ fn prepare_shape(receiver: *mut RegExpHeader) -> *mut RegExpHeader {
         // ShapeId (#12313). Its keys and prototype words stay repaired by the
         // shape table's scanner while no receiver carries it.
         crate::object::shapes::note_external_shape_carrier(
-            crate::object::shapes::shape_descriptor_by_id(shape),
+            crate::object::shapes::shape_descriptor_for_word(shape),
         );
         assert_eq!(
-            crate::object::shapes::shape_rep_by_id(shape),
+            crate::object::shapes::shape_rep_for_word(shape),
             0,
             "the fixed RegExp birth must have only Any lanes"
         );

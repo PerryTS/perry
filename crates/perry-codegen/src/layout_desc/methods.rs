@@ -17,7 +17,7 @@ pub(super) fn emit(
         if !seen.insert(cid) {
             break;
         }
-        let Some((word, shape)) = crate::codegen::static_shape_ids::static_prototype_shape(cid)
+        let Some((word, shape)) = crate::codegen::static_shape_ids::static_prototype_layout(cid)
         else {
             break;
         };
@@ -132,6 +132,14 @@ mod tests {
                 100001,
             ));
         }
+        let plan = crate::ProgramLayoutOrdinals::assign(
+            crate::layout_ordinals::native_inputs(),
+            shapes
+                .iter()
+                .map(|(s, id)| crate::layout_ordinals::identity_input(s, *id)),
+        )
+        .unwrap();
+        crate::layout_ordinals::begin_module("test", std::sync::Arc::new(plan), false);
         crate::codegen::static_shape_ids::set_module_static_ids(
             "test",
             &[],
@@ -173,8 +181,14 @@ mod tests {
     #[test]
     fn family_method_index_keeps_complete_inherited_proofs_and_stops_at_accessors() {
         let ir = table(&[], true);
-        assert!(ir.contains("i32 701, i32 100001"));
-        assert!(ir.contains("i32 700, i32 100000"));
+        assert!(ir.contains(&format!(
+            "i32 701, i32 {}",
+            crate::layout_ordinals::static_word(100001)
+        )));
+        assert!(ir.contains(&format!(
+            "i32 700, i32 {}",
+            crate::layout_ordinals::static_word(100000)
+        )));
         assert!(
             ir.contains("i32 2, i32 1"),
             "inherited m needs both holder words"

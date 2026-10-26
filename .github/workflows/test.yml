@@ -5251,6 +5251,8 @@ jobs:
         done
     - name: Build the runtime for wasm32-wasip2
       run: python scripts/wasi_build_runtime.py
+    - name: Image classifier checks as a wasm program
+      run: python scripts/wasi_image_selftest.py target/perry-dev/perry
     - name: WASI smoke and complete issue 11375 acceptance
       shell: bash
       run: |

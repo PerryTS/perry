@@ -52,6 +52,12 @@ attr-census = []
 # collection, and panic on the first disagreement. Also counts how often the
 # store-kind transitions run. Off: every hook compiles to nothing.
 shape-fact-audit = []
+# Test-only, wasm32: run the string-image classifier checks (the same ones the
+# unit tests run) at program start inside the linked wasm module, so the
+# linker-synthesized `perry_strings` bounds and the real data/stack/heap layout
+# are what they classify against. This crate's own test target does not build
+# for wasm32. Never part of a shipped archive.
+wasm-image-selftest = []
 
 # `default` keeps the shipped prebuilt libperry_runtime.a and plain
 # `cargo build`/test full-featured. The auto-optimize path builds with
@@ -437,6 +443,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Threading",
     # The shape-record reservation (`object/shapes_store/flat.rs`).
     "Win32_System_Memory",
+    "Win32_System_SystemInformation",
 ] }
 
 # #855: libc::mach_host_self is deprecated; the mach2 crate is the

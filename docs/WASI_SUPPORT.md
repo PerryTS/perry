@@ -94,6 +94,26 @@ This was a build-only staging run with no tag or publication. Older published
 releases may not contain these assets; qualification of staged archives does
 not establish their availability in a published release.
 
+## Output size and debugging
+
+Command links strip symbols and DWARF and compress relocations by default.
+When both Binaryen's `wasm-opt` and `wasm-tools` are installed, Perry links a
+core module, runs `wasm-opt -Oz` with an explicit set of WASI-compatible
+features, then creates the WASIp2 component with `wasm-tools component new`.
+The compiler embeds the Preview 1 reactor adapter for runtime dependencies
+that still use Preview 1 imports, including TCP random initialization.
+It checks `$WASI_SDK_PATH/bin` (or `/opt/wasi-sdk/bin`) first, then `PATH`.
+The qualified versions are Binaryen 133 and wasm-tools 1.262.0. Release
+packaging should ship host-specific copies of both alongside SDK clang, or
+place them on `PATH`, to provide the full size reduction out of the box.
+
+If either tool is absent, compilation still produces a stripped component
+with compressed relocations; `--verbose` reports the skipped optimization
+once. If an installed tool fails, compilation fails with its diagnostics.
+Set `PERRY_KEEP_SYMBOLS=1` to preserve names and existing DWARF. This also
+skips relocation compression and wasm-opt, which change debug offsets.
+`PERRY_DEBUG_SYMBOLS` honors the same preservation path.
+
 ## Implemented contracts
 
 - Arguments, environment variables, standard output, and filesystem access

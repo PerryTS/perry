@@ -241,7 +241,7 @@ unsafe fn evaluation_layout_to_record(inst: *const ObjectHeader) -> Option<u32> 
         return None;
     }
     let copy = crate::object::shapes::object_shape_stamp(inst);
-    (crate::object::shapes::evaluation_layout_family(copy) != 0
+    (crate::object::shapes::evaluation_family_desc_index_plus_one(copy) != 0
         && crate::object::shapes::object_evaluation_brand(inst) != 0)
         .then_some(copy)
 }

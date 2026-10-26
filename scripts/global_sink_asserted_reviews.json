@@ -20,14 +20,14 @@
     "claim": "Both image descriptors use LAYOUT_ID_CARRIED and immutable keys/index/prototype fields; registration carries per-agent shape identity without modifying these static descriptors.",
     "source_sha256": {
       "crates/perry-runtime/src/object/class_family_birth.rs": "5476e6bc6f415cf10ea22af0dc0ae5979d4d0b2a4cfb69475d220738735a9dcf",
-      "crates/perry-runtime/src/object/layout_desc.rs": "bd362792350ac353fd20f11797f7fe5cc0a091e3f8cd4e5d4fda68b67bff898c"
+      "crates/perry-runtime/src/object/layout_desc.rs": "2b9340972d32b7811a8869abf68a56f7ba42bfcca1776399cd7692f132c328e7"
     }
   },
   "crates/perry-runtime/src/object/function_family_birth_tests.rs::LAYOUT": {
     "claim": "Image descriptor address is embedded in function birth metadata; LAYOUT_ID_CARRIED remains unchanged while per-agent bindings and semantic checks vary.",
     "source_sha256": {
       "crates/perry-runtime/src/object/function_family_birth_tests.rs": "3010644c11a939622c8bff625e04d3dc383a4f764aa68fca887f2ab2ed23ab8a",
-      "crates/perry-runtime/src/object/layout_desc.rs": "bd362792350ac353fd20f11797f7fe5cc0a091e3f8cd4e5d4fda68b67bff898c"
+      "crates/perry-runtime/src/object/layout_desc.rs": "2b9340972d32b7811a8869abf68a56f7ba42bfcca1776399cd7692f132c328e7"
     }
   },
   "crates/perry-runtime/src/object/own_override.rs::PERRY_OWN_NAMED_PROP_INSTALLED": {
@@ -41,7 +41,7 @@
     "claim": "Image descriptor uses LAYOUT_ID_CARRIED with static prototype/keys/index; tests inspect immutable fields and registration does not rewrite its carried ID.",
     "source_sha256": {
       "crates/perry-runtime/src/object/runtime_layouts.rs": "55220940aed1360bede2b4cfc2ef62dbdd07d3fb9554e2aed23f9e982ff54321",
-      "crates/perry-runtime/src/object/layout_desc.rs": "bd362792350ac353fd20f11797f7fe5cc0a091e3f8cd4e5d4fda68b67bff898c",
+      "crates/perry-runtime/src/object/layout_desc.rs": "2b9340972d32b7811a8869abf68a56f7ba42bfcca1776399cd7692f132c328e7",
       "crates/perry-runtime/src/object/layout_desc_tests.rs": "b119ba3ebaea0423b66ff1590d88528a5da4a359d8020088d3c8cc500455a170"
     }
   },

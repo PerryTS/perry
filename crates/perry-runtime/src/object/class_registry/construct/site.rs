@@ -53,7 +53,7 @@ pub(super) unsafe fn site_constructor(
         && (*site.add(1)).load(Ordering::Relaxed) as u32 == cid;
     let entry = resolved_site_constructor(site, shape as u64, cid)?;
     if !hit && entry.2 != 0 {
-        let slot = crate::object::shapes::shape_record_by_id(shape)
+        let slot = crate::object::shapes::shape_record_for_word(shape)
             .and_then(|record| record.own_data_slot_of_value(0, b"__perry_ctor_caps"))
             .flatten()
             .or_else(|| {
@@ -61,7 +61,7 @@ pub(super) unsafe fn site_constructor(
                 // retain the ordinary slot layout. The general own-slot
                 // reader deliberately declines this kind; prove only this
                 // compiler-owned capture data slot from the same descriptor.
-                let d = crate::object::shapes::shape_descriptor_by_id(shape)?;
+                let d = crate::object::shapes::shape_descriptor_for_word(shape)?;
                 if d.object_kind != crate::object::shapes::ShapeObjectKind::Class
                     || d.summary & crate::object::key_attrs::SUMMARY_ACCESSOR != 0
                 {

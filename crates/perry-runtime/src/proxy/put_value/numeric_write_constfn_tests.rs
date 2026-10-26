@@ -104,7 +104,7 @@ fn numeric_write_guards_refuse_constfn_targets_and_preserve_mixed_shapes() {
     for object in &objects {
         unsafe { shapes::stamp_object_shape_id_with_carrier_note(*object, completed) };
     }
-    let facts = shapes::shape_descriptor_by_id(completed).unwrap();
+    let facts = shapes::shape_descriptor_for_word(completed).unwrap();
     assert_eq!(facts.object_kind, shapes::ShapeObjectKind::Ordinary);
     assert_eq!(
         facts.special_constfn_mask, 1,

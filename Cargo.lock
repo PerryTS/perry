@@ -5252,6 +5252,7 @@ dependencies = [
  "toml",
  "url",
  "walkdir",
+ "wasi-preview1-component-adapter-provider",
  "windows-sys 0.61.2",
  "winresource",
  "zip",
@@ -9094,6 +9095,12 @@ dependencies = [
  "wiggle",
  "windows-sys 0.60.2",
 ]
+
+[[package]]
+name = "wasi-preview1-component-adapter-provider"
+version = "48.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "db2d85e480435143ae4623c86e8ff8b34950e2b12cc89d527be6879ce28f0288"
 
 [[package]]
 name = "wasip2"

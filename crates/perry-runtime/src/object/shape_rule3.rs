@@ -379,7 +379,7 @@ pub(crate) const RULE3_KINDS: &[(u8, &str, &str, Rule3Word)] = &[
 #[inline]
 pub(crate) fn debug_assert_not_shape_id_word(kind: &'static str, word: u32) {
     debug_assert!(
-        !crate::object::shapes::is_shape_id(word),
+        !crate::object::shapes::is_layout_word(word),
         "rule 3: {kind} stored {word:#x} at payload +4, which the emitted read \
          path cannot distinguish from a live ShapeId"
     );
@@ -434,7 +434,7 @@ fn throw_plus_four_range_error(message: &'static [u8]) -> ! {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::object::shapes::{is_shape_id, SHAPE_ID_END};
+    use crate::object::shapes::{is_layout_word, SHAPE_ID_END};
 
     /// The message of a thrown `RangeError`, read straight out of the
     /// `ErrorHeader` (the pattern `global_this_webassembly`'s tests use).
@@ -546,20 +546,20 @@ mod tests {
             let word_at = |addr: usize| -> u32 { *((addr + 4) as *const u32) };
 
             let arr = crate::array::js_array_alloc(8) as usize;
-            assert!(!is_shape_id(word_at(arr)), "array capacity");
+            assert!(!is_layout_word(word_at(arr)), "array capacity");
 
             let buf = crate::buffer::js_buffer_alloc(64, 0) as usize;
-            assert!(!is_shape_id(word_at(buf)), "buffer capacity");
+            assert!(!is_layout_word(word_at(buf)), "buffer capacity");
 
             let map = crate::map::js_map_alloc(8) as usize;
-            assert!(!is_shape_id(word_at(map)), "map capacity");
+            assert!(!is_layout_word(word_at(map)), "map capacity");
 
             let set = crate::set::js_set_alloc(8) as usize;
-            assert!(!is_shape_id(word_at(set)), "set capacity");
+            assert!(!is_layout_word(word_at(set)), "set capacity");
 
             let ta =
                 crate::typedarray::typed_array_alloc(crate::typedarray::KIND_INT8, 32) as usize;
-            assert!(!is_shape_id(word_at(ta)), "typed array capacity");
+            assert!(!is_layout_word(word_at(ta)), "typed array capacity");
 
             // A Promise's +4 is struct padding: `arena_alloc_gc` hands back
             // reused, non-zeroed memory, so without an explicit zero field a
@@ -585,10 +585,10 @@ mod tests {
             (i32::MAX as u32) < SHAPE_ID_BASE,
             "the typed-array element cap must stay below the ShapeId floor"
         );
-        assert!(!is_shape_id(i32::MAX as u32));
+        assert!(!is_layout_word(i32::MAX as u32));
         assert_eq!(MAX_PLUS_FOUR_WORD, i32::MAX as u32);
-        assert!(!is_shape_id(MAX_PLUS_FOUR_WORD));
-        assert!(is_shape_id(MAX_PLUS_FOUR_WORD + 1));
+        assert!(!is_layout_word(MAX_PLUS_FOUR_WORD));
+        assert!(is_layout_word(MAX_PLUS_FOUR_WORD + 1));
     }
 
     /// `SHAPE_ID_BASE` is the first capacity every count-carrying kind must
@@ -715,8 +715,8 @@ mod tests {
 
     /// `DateCell`'s relayout, with the value that motivated it.
     ///
-    /// `-1.0` is `0xBFF0_0000_0000_0000`: with the timestamp at `+0` its high
-    /// word landed at `+4` as `0xBFF0_0000`, a live-looking ShapeId. The
+    /// `-0.0` is `0x8000_0000_0000_0000`: with the timestamp at `+0` its high
+    /// word landed at `+4` as `0x8000_0000`, a live-looking layout word. The
     /// first assertion pins that the witness is real, so this test cannot
     /// quietly stop testing anything; the rest check every date the JS spec
     /// admits and that the value still round-trips through the new layout.
@@ -724,9 +724,9 @@ mod tests {
     fn rule3_date_cell_never_carries_a_shape_id_at_plus_four() {
         let _lock = crate::gc::global_side_table_test_lock();
         assert!(
-            is_shape_id((f64::to_bits(-1.0) >> 32) as u32),
-            "the witness must still be a witness: the high word of -1.0 is \
-             inside the ShapeId range, which is why the timestamp cannot live \
+            is_layout_word((f64::to_bits(-0.0) >> 32) as u32),
+            "the witness must still be a witness: the high word of -0.0 is \
+             a valid layout word, which is why the timestamp cannot live \
              at payload +0"
         );
 
@@ -748,7 +748,7 @@ mod tests {
             assert!(addr != 0, "a Date is a NaN-boxed cell pointer");
             let word = unsafe { *((addr + 4) as *const u32) };
             assert!(
-                !is_shape_id(word),
+                !is_layout_word(word),
                 "DateCell for ts {ts} put {word:#x} at payload +4"
             );
             let read_back = crate::date::date_cell_timestamp(value);
@@ -775,6 +775,6 @@ mod tests {
             "a real GC address must sit under the ceiling the \
              StructurallySmall pointer rows appeal to"
         );
-        assert!(!is_shape_id((arr >> 32) as u32));
+        assert!(!is_layout_word((arr >> 32) as u32));
     }
 }

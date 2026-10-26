@@ -34,7 +34,7 @@ unsafe fn sealed(family: BuiltinProto) -> *mut ObjectHeader {
     let key = crate::string::js_string_from_bytes(b"k".as_ptr(), 1);
     crate::object::js_object_set_field_by_name(proto, key, 1.0);
     assert!(
-        crate::object::shapes::is_site_matchable_shape_id((*proto).parent_class_id),
+        crate::object::shapes::is_site_matchable_layout_word((*proto).parent_class_id),
         "premise: an ordinary layout word"
     );
     seal_object(proto, family);

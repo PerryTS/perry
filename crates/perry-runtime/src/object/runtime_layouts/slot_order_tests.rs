@@ -360,12 +360,14 @@ fn static_layout_slot_order_rejects_slots_that_are_not_a_permutation() {
         },
     ];
     let mut desc = PerryLayoutDesc {
+        shape_id: 0,
+        _layout_pad: 0,
         family: 0x7f000005,
         variant: 0,
         kind: 0,
         integrity: 0,
         slot_count: 5,
-        layout_id: crate::object::layout_desc::LAYOUT_ID_CARRIED,
+        layout_id: 0x80000089,
         rep: 0,
         proto: crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
         keys: std::ptr::null(),

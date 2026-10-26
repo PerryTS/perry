@@ -193,8 +193,9 @@ fn declared_numeric_row_hint_still_requires_its_live_shape() {
         "the nominee must have two F64 lanes"
     );
     let ids = crate::assign_static_shape_ids(births.iter().map(|b| &b.shape));
-    let expected = ids[&numeric.shape].to_string();
+    let identity = ids[&numeric.shape];
     let ir = ir(&m);
+    let expected = crate::layout_ordinals::static_word(identity).to_string();
     // Step 7 deleted the element regions; the row receivers' object regions
     // still compare the live shape rather than trusting the declaration.
     assert!(

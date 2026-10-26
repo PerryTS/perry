@@ -23,7 +23,8 @@ pub(crate) fn try_lower(
     let Some(method) = candidate.methods.iter().find(|m| m.name == property) else {
         return Ok(None);
     };
-    let Some(layout) = crate::codegen::static_shape_ids::static_content_id(&candidate.shape) else {
+    let Some(layout) = crate::codegen::static_shape_ids::static_content_word(&candidate.shape)
+    else {
         return Ok(None);
     };
     ctx.pending_declares.push((

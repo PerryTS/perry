@@ -683,13 +683,21 @@ pub(super) fn emit_string_pool(
             };
             blk.call(
                 I32,
-                "js_object_shape_id_for_class_keys_static",
+                "js_object_layout_for_class_keys_static",
                 &[
                     (I64, &arr),
                     (I32, &fc_str),
                     (I32, &live.to_string()),
                     (I32, &mint_cid_str),
-                    (I32, &requested),
+                    (
+                        PTR,
+                        &format!(
+                            "@{}",
+                            crate::layout_ordinals::request_symbol(
+                                requested.parse().expect("identity")
+                            )
+                        ),
+                    ),
                     (I64, &rep_str),
                 ],
             )
@@ -702,7 +710,7 @@ pub(super) fn emit_string_pool(
             match birth.wide_live {
                 birth_live if birth_live > 0 => blk.call(
                     I32,
-                    "js_object_shape_id_for_class_keys_live",
+                    "js_object_layout_for_class_keys_live",
                     &[
                         (I64, &arr),
                         (I32, &fc_str),
@@ -713,7 +721,7 @@ pub(super) fn emit_string_pool(
                 ),
                 _ => blk.call(
                     I32,
-                    "js_object_shape_id_for_class_keys",
+                    "js_object_layout_for_class_keys",
                     &[
                         (I64, &arr),
                         (I32, &fc_str),
@@ -727,7 +735,9 @@ pub(super) fn emit_string_pool(
             "@{}",
             crate::typed_shape::shape_id_global_name_from_keys_global(global_name)
         );
-        blk.store(I32, &shape_id, &shape_global);
+        if requested == "0" {
+            blk.store(I32, &shape_id, &shape_global);
+        }
 
         // #8122: compose the class's inline-`new` header image —
         // `[packed GcHeader word | class_id | ShapeId << 32]` — beside the
@@ -1602,7 +1612,7 @@ pub(super) fn emit_string_pool(
             {
                 continue;
             }
-            let Some(id) = super::static_shape_ids::static_final_shape_id(&shape) else {
+            let Some(id) = super::static_shape_ids::static_final_shape_identity(&shape) else {
                 continue;
             };
             chunker.roll_if_full();
@@ -1613,13 +1623,16 @@ pub(super) fn emit_string_pool(
             let keys = crate::expr::unbox_to_i64(blk, &keys_value);
             blk.call(
                 I32,
-                "js_object_final_shape_id_for_class_keys_static_constfn",
+                "js_object_final_layout_for_class_keys_static_constfn",
                 &[
                     (I64, &keys),
                     (I32, &shape.key_count.to_string()),
                     (I32, &shape.live.to_string()),
                     (I32, &birth.class_id.to_string()),
-                    (I32, &id.to_string()),
+                    (
+                        PTR,
+                        &format!("@{}", crate::layout_ordinals::request_symbol(id)),
+                    ),
                     (I64, &shape.rep.to_string()),
                     (
                         PTR,
@@ -1664,7 +1677,7 @@ pub(super) fn emit_string_pool(
             else {
                 continue;
             };
-            let Some(id) = super::static_shape_ids::static_final_shape_id(&shape) else {
+            let Some(id) = super::static_shape_ids::static_final_shape_identity(&shape) else {
                 continue;
             };
             super::static_private_class::emit_final_constants(
@@ -1692,13 +1705,16 @@ pub(super) fn emit_string_pool(
             let keys = crate::expr::unbox_to_i64(blk, &keys_value);
             blk.call(
                 I32,
-                "js_object_final_shape_id_for_class_keys_static_private",
+                "js_object_final_layout_for_class_keys_static_private",
                 &[
                     (I64, &keys),
                     (I32, &shape.key_count.to_string()),
                     (I32, &shape.live.to_string()),
                     (I32, &birth.class_id.to_string()),
-                    (I32, &id.to_string()),
+                    (
+                        PTR,
+                        &format!("@{}", crate::layout_ordinals::request_symbol(id)),
+                    ),
                     (I64, &shape.rep.to_string()),
                     (PTR, &private_ptr),
                     (I32, &shape.private.len().to_string()),

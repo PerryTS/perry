@@ -808,7 +808,7 @@ mod descriptor_name_tests {
             image.tail[slot + 1] = 5;
             let closure = crate::closure::ClosureHeader {
                 capture_count: 0,
-                shape_id: crate::codegen_abi::FUNCTION_SHAPE,
+                shape_id: crate::codegen_abi::FUNCTION_LAYOUT_WORD,
                 info: std::ptr::addr_of!(image.info),
                 props: std::ptr::null_mut(),
             };

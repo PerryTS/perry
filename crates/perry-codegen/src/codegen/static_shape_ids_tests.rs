@@ -38,6 +38,25 @@ fn many(prefix: &str, n: u32) -> Vec<BirthShape> {
         .collect()
 }
 
+fn install_test_ordinals() {
+    let mut inputs = MODULE_STATIC_IDS.with(|m| {
+        m.borrow()
+            .values()
+            .map(|(id, s)| crate::layout_ordinals::identity_input(s, *id))
+            .collect::<Vec<_>>()
+    });
+    inputs.extend(MODULE_FINAL_IDS.with(|m| {
+        m.borrow()
+            .iter()
+            .map(|(s, id)| crate::layout_ordinals::identity_input(s, *id))
+            .collect::<Vec<_>>()
+    }));
+    let plan =
+        crate::ProgramLayoutOrdinals::assign(crate::layout_ordinals::native_inputs(), inputs)
+            .unwrap();
+    crate::layout_ordinals::begin_module("fixture", std::sync::Arc::new(plan), false);
+}
+
 #[test]
 fn the_band_is_the_next_power_of_two_of_four_per_content() {
     assert_eq!(static_band_size(0), MIN_STATIC_BAND);
@@ -332,7 +351,7 @@ fn constfn_birth_cannot_publish_a_static_guard_or_seed() {
         m.borrow_mut().insert(key.to_string(), (0x1000_0099, shape));
     });
     MODULE_SEEDS.with(|s| s.borrow_mut().clear());
-    assert_eq!(static_shape_id_for_keys_global(key), None);
+    assert_eq!(static_layout_word_for_keys_global(key), None);
     assert_eq!(requested_shape_id_for_keys_global(key), None);
     assert_eq!(static_region_slots(key, &["method".into()], 0), None);
     assert!(take_module_static_seeds().is_empty());
@@ -437,7 +456,7 @@ fn a_class_id_defined_twice_has_no_program_entry() {
 }
 
 #[test]
-fn class_birth_names_anon_shapes_as_literals_and_skips_class_zero() {
+fn class_birth_names_anon_shapes_and_class_zero_as_literals() {
     let prefix = "m";
     let mut class_ids = HashMap::new();
     class_ids.insert("__AnonShape_3".to_string(), 55u32);
@@ -487,8 +506,10 @@ fn class_birth_names_anon_shapes_as_literals_and_skips_class_zero() {
         &HashMap::new(),
         &ClassIdsByKeysName::new(&class_ids),
     );
+    // A keys global that resolves to no class is minted on the plain
+    // prototype: compile-time-known content, so it carries a static ordinal.
     assert_eq!(o.class_id, 0);
-    assert!(o.shape.is_none());
+    assert_eq!(o.shape.unwrap().proto, BirthProto::Literal);
 }
 
 #[test]
@@ -523,9 +544,13 @@ fn compatible_final_guards_preserve_allocation_identity_and_refuse_special_write
         .into_iter()
         .collect();
     });
+    install_test_ordinals();
     let (region_id, slots, r_mask) = static_region_slots(&key, &["x".into(), "m".into()], 0)
         .expect("ordinary birth supplies exact numeric slots");
-    assert_eq!(region_id, SHAPE_ID_BASE + 4);
+    assert_eq!(
+        region_id,
+        crate::layout_ordinals::static_word(SHAPE_ID_BASE + 4)
+    );
     assert_eq!(slots, vec![1, 0]);
     assert_eq!(r_mask, 1, "the method lane never supplies a Number fact");
     assert!(static_region_slots(&key, &["x".into()], 1).is_none());
@@ -535,16 +560,26 @@ fn compatible_final_guards_preserve_allocation_identity_and_refuse_special_write
         "allocation supplier cannot request final id"
     );
     assert_eq!(
-        compatible_final_shape_ids(&(SHAPE_ID_BASE + 4).to_string(), &[]),
-        vec![SHAPE_ID_BASE + 5]
+        compatible_final_layout_words(
+            &crate::layout_ordinals::static_word(SHAPE_ID_BASE + 4).to_string(),
+            &[]
+        ),
+        vec![crate::layout_ordinals::static_word(SHAPE_ID_BASE + 5)]
     );
     assert_eq!(
-        compatible_final_shape_ids(&(SHAPE_ID_BASE + 4).to_string(), &[1]),
-        vec![SHAPE_ID_BASE + 5],
+        compatible_final_layout_words(
+            &crate::layout_ordinals::static_word(SHAPE_ID_BASE + 4).to_string(),
+            &[1]
+        ),
+        vec![crate::layout_ordinals::static_word(SHAPE_ID_BASE + 5)],
         "numeric stores preserve completed facts"
     );
     assert!(
-        compatible_final_shape_ids(&(SHAPE_ID_BASE + 4).to_string(), &[0]).is_empty(),
+        compatible_final_layout_words(
+            &crate::layout_ordinals::static_word(SHAPE_ID_BASE + 4).to_string(),
+            &[0]
+        )
+        .is_empty(),
         "CF stores require checked deprecation before writing"
     );
     assert!(slot_may_be_constfn(&key, 0));
@@ -565,6 +600,7 @@ fn region_static_r_is_the_exact_birth_shapes_f64_key_mask() {
         m.borrow_mut()
             .insert(global.clone(), (SHAPE_ID_BASE + 917, shape));
     });
+    install_test_ordinals();
     let keys = vec!["rc".to_string(), "rb".to_string(), "ra".to_string()];
     let (_, slots, r) = static_region_slots(&global, &keys, 0).expect("birth keys are inline");
     assert_eq!(slots, vec![2, 1, 0]);
@@ -793,9 +829,13 @@ fn a_literal_birth_mints_its_shape_with_the_plain_prototype_on_both_routes() {
         .expect("module compiles"),
     )
     .expect("UTF-8 IR");
-    let calls = mint_calls(&lazy, "js_object_shape_id_for_class_keys");
-    assert_eq!(calls.len(), 2, "one lazy mint per birth class:\n{lazy}");
-    let class_ids: Vec<&str> = calls.iter().map(|args| args[2].as_str()).collect();
+    let calls = mint_calls(&lazy, "js_object_layout_for_class_keys_static");
+    assert_eq!(
+        calls.len(),
+        2,
+        "one publication for each actual birth:\n{lazy}"
+    );
+    let class_ids: Vec<&str> = calls.iter().map(|args| args[3].as_str()).collect();
     assert!(
         class_ids.contains(&"0"),
         "the literal's mint must name class id 0: {calls:?}"
@@ -832,10 +872,10 @@ fn a_literal_birth_mints_its_shape_with_the_plain_prototype_on_both_routes() {
     )
     .expect("UTF-8 IR");
     // `(keys, field_count, live, class_id, requested, rep)`
-    let calls = mint_calls(&stat, "js_object_shape_id_for_class_keys_static");
+    let calls = mint_calls(&stat, "js_object_layout_for_class_keys_static");
     let literal: Vec<&Vec<String>> = calls
         .iter()
-        .filter(|args| args[4] == requested.to_string())
+        .filter(|args| args[4] == format!("@perry_layout_request_{requested}"))
         .collect();
     assert_eq!(
         literal.len(),
@@ -845,5 +885,54 @@ fn a_literal_birth_mints_its_shape_with_the_plain_prototype_on_both_routes() {
     assert_eq!(
         literal[0][3], "0",
         "the literal's static mint must name class id 0, as its seed does: {calls:?}"
+    );
+}
+
+/// DPA-F1 #1: a class keys global of an image build always names a static
+/// ordinal. A missing identity used to fall back to a runtime mint stored in
+/// a module-state global, which every agent of the image shares (perry/thread
+/// workers never run module init), while the minted word names a row of the
+/// minting agent only.
+#[test]
+#[should_panic(expected = "no static layout identity")]
+fn an_image_build_never_requests_a_dynamic_class_word() {
+    set_module_static_ids(
+        "probe_lost",
+        &[],
+        &HashMap::new(),
+        &HashMap::new(),
+        &HashMap::new(),
+        &[],
+        &ProgramClassShapeIds::default(),
+    );
+    install_test_ordinals();
+    let _ = requested_shape_id_for_keys_global("perry_class_keys_probe_lost__Lost");
+}
+
+/// The births pre-pass and a compile without a program plan have no static
+/// identities to request; neither is an image build.
+#[test]
+fn the_births_pre_pass_requests_no_identity() {
+    set_module_static_ids(
+        "probe_pre",
+        &[],
+        &HashMap::new(),
+        &HashMap::new(),
+        &HashMap::new(),
+        &[],
+        &ProgramClassShapeIds::default(),
+    );
+    let plan =
+        crate::ProgramLayoutOrdinals::assign(crate::layout_ordinals::native_inputs(), Vec::new())
+            .unwrap();
+    crate::layout_ordinals::begin_module("pre", std::sync::Arc::new(plan), true);
+    assert_eq!(
+        requested_shape_id_for_keys_global("perry_class_keys_probe_pre__C"),
+        None
+    );
+    crate::layout_ordinals::begin_module("none", Default::default(), false);
+    assert_eq!(
+        requested_shape_id_for_keys_global("perry_class_keys_probe_pre__C"),
+        None
     );
 }

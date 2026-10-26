@@ -1870,6 +1870,7 @@ pub(crate) use json_stream::*;
 
 #[path = "node_stream_constructors.rs"]
 mod constructors;
+pub(crate) use constructors::note_birth_carriers;
 pub use constructors::*;
 
 #[path = "node_stream_keepalive.rs"]

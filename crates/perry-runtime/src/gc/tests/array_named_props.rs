@@ -50,6 +50,10 @@ fn test_array_named_property_value_survives_full_gc_through_its_live_owner() {
     let _scan = ConservativeScanDisabledGuard::new();
     let _side_tables = ArraySideTableTestGuard::new();
     register_array_side_table_scanners();
+    // Production `gc_init` registers the shape-table scanner; this window
+    // needs it because the owner's Region record keeps its key list across
+    // the full collection.
+    crate::gc::gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
     crate::arena::arena_reset_all_blocks_to_zero();
 
     let value = unsafe { alloc_malloc_test_object() };
