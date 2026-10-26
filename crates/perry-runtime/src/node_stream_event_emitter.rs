@@ -22,68 +22,12 @@ pub extern "C" fn js_node_stream_method_set_max_listeners(stream_handle: i64, va
     set_stream_max_listeners(super::stream_value_from_handle(stream_handle), value)
 }
 
-fn set_stream_max_listeners(stream: f64, value: f64) -> f64 {
-    let value = validate_max_listeners(value);
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let stream = scope.root_nanbox_f64(stream);
-    state_set(
-        stream.get_nanbox_f64(),
-        crate::runtime_state_key!(MAX_LISTENERS_KEY),
-        value,
-    );
-    stream.get_nanbox_f64()
-}
-
-fn format_max_listeners_received(n: f64) -> String {
-    if n.is_nan() {
-        return "NaN".to_string();
-    }
-    if n.is_infinite() {
-        return if n.is_sign_negative() {
-            "-Infinity"
-        } else {
-            "Infinity"
-        }
-        .to_string();
-    }
-    if n.fract() == 0.0 && n.abs() < 1e21 {
-        format!("{}", n as i64)
-    } else {
-        format!("{}", n)
-    }
-}
-
-fn throw_max_listeners_invalid_type(value: f64) -> ! {
-    let message = format!(
-        "The \"setMaxListeners\" argument must be of type number. Received {}",
-        crate::fs::validate::describe_received(value)
-    );
-    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
-}
-
-fn throw_max_listeners_out_of_range(n: f64) -> ! {
-    let message = format!(
-        "The value of \"setMaxListeners\" is out of range. It must be >= 0. Received {}",
-        format_max_listeners_received(n)
-    );
-    crate::fs::validate::throw_range_error_with_code(&message)
-}
-
-pub(crate) fn validate_max_listeners(value: f64) -> f64 {
-    let js_value = JSValue::from_bits(value.to_bits());
-    if !crate::fs::validate::is_numeric(js_value) {
-        throw_max_listeners_invalid_type(value);
-    }
-    let n = if js_value.is_int32() {
-        js_value.as_int32() as f64
-    } else {
-        js_value.as_number()
-    };
-    if n.is_nan() || n < 0.0 {
-        throw_max_listeners_out_of_range(n);
-    }
-    n
-}
+#[path = "node_stream_event_emitter/max_listeners.rs"]
+mod max_listeners;
+use max_listeners::format_max_listeners_received;
+use max_listeners::set_stream_max_listeners;
+use max_listeners::stream_max_listeners;
+pub(crate) use max_listeners::validate_max_listeners;
 
 pub(super) extern "C" fn ns_get_max_listeners(
     closure: *const ClosureHeader,
@@ -95,16 +39,6 @@ pub(super) extern "C" fn ns_get_max_listeners(
 #[no_mangle]
 pub extern "C" fn js_node_stream_method_get_max_listeners(stream_handle: i64) -> f64 {
     stream_max_listeners(super::stream_value_from_handle(stream_handle))
-}
-
-fn stream_max_listeners(stream: f64) -> f64 {
-    // node: `_maxListeners === undefined ? defaultMaxListeners : _maxListeners`.
-    let max = state_get(stream, crate::runtime_state_key!(MAX_LISTENERS_KEY));
-    if is_undefined(max) {
-        default_max_listeners()
-    } else {
-        max
-    }
 }
 
 /// `EventEmitter.defaultMaxListeners`, which a program may reassign. Until

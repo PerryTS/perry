@@ -80,7 +80,8 @@ handle-floor | crates/perry-runtime/src/node_inspector.rs | 1
 handle-floor | crates/perry-runtime/src/node_repl.rs | 1
 handle-floor | crates/perry-runtime/src/node_stream.rs | 1
 handle-floor | crates/perry-runtime/src/node_stream_constructors/introspection.rs | 1
-handle-floor | crates/perry-runtime/src/node_stream_readwrite.rs | 2
+handle-floor | crates/perry-runtime/src/node_stream_readwrite.rs | 1
+handle-floor | crates/perry-runtime/src/node_stream_readwrite/keys.rs | 1
 handle-floor | crates/perry-runtime/src/node_submodules/blob.rs | 1
 handle-floor | crates/perry-runtime/src/node_submodules/consumers.rs | 1
 handle-floor | crates/perry-runtime/src/node_submodules/diagnostics.rs | 1

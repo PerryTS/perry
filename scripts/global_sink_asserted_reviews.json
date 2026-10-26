@@ -20,14 +20,20 @@
     "claim": "Both image descriptors use LAYOUT_ID_CARRIED and immutable keys/index/prototype fields; registration carries per-agent shape identity without modifying these static descriptors.",
     "source_sha256": {
       "crates/perry-runtime/src/object/class_family_birth.rs": "5476e6bc6f415cf10ea22af0dc0ae5979d4d0b2a4cfb69475d220738735a9dcf",
-      "crates/perry-runtime/src/object/layout_desc.rs": "efc8552bfc1493cf4ad705930a55e09b4ef2bde45a55fb2cb5b614f44bfbf1ad"
+      "crates/perry-runtime/src/object/layout_desc.rs": "efc8552bfc1493cf4ad705930a55e09b4ef2bde45a55fb2cb5b614f44bfbf1ad",
+      "crates/perry-runtime/src/object/layout_desc/registration.rs": "bd6bd0f940ecd09ca03786d9385f534bd356b71e683ad21ad4eb7e33274b34ae",
+      "crates/perry-runtime/src/object/layout_desc/diagnostics.rs": "d9addb82c0bd301f11684388586bd30a80d25785f65631b4092cb9dd7797f36f",
+      "crates/perry-runtime/src/object/layout_desc/store.rs": "b984c61287a05b267a5874976316415767222c94953f2e1fe907f08dc7d1456f"
     }
   },
   "crates/perry-runtime/src/object/function_family_birth_tests.rs::LAYOUT": {
     "claim": "Image descriptor address is embedded in function birth metadata; LAYOUT_ID_CARRIED remains unchanged while per-agent bindings and semantic checks vary.",
     "source_sha256": {
       "crates/perry-runtime/src/object/function_family_birth_tests.rs": "3010644c11a939622c8bff625e04d3dc383a4f764aa68fca887f2ab2ed23ab8a",
-      "crates/perry-runtime/src/object/layout_desc.rs": "efc8552bfc1493cf4ad705930a55e09b4ef2bde45a55fb2cb5b614f44bfbf1ad"
+      "crates/perry-runtime/src/object/layout_desc.rs": "efc8552bfc1493cf4ad705930a55e09b4ef2bde45a55fb2cb5b614f44bfbf1ad",
+      "crates/perry-runtime/src/object/layout_desc/registration.rs": "bd6bd0f940ecd09ca03786d9385f534bd356b71e683ad21ad4eb7e33274b34ae",
+      "crates/perry-runtime/src/object/layout_desc/diagnostics.rs": "d9addb82c0bd301f11684388586bd30a80d25785f65631b4092cb9dd7797f36f",
+      "crates/perry-runtime/src/object/layout_desc/store.rs": "b984c61287a05b267a5874976316415767222c94953f2e1fe907f08dc7d1456f"
     }
   },
   "crates/perry-runtime/src/object/own_override.rs::PERRY_OWN_NAMED_PROP_INSTALLED": {
@@ -40,9 +46,13 @@
   "crates/perry-runtime/src/object/runtime_layouts.rs::READABLE_STATE": {
     "claim": "Image descriptor uses LAYOUT_ID_CARRIED with static prototype/keys/index; tests inspect immutable fields and registration does not rewrite its carried ID.",
     "source_sha256": {
-      "crates/perry-runtime/src/object/runtime_layouts.rs": "8a6fe5ccddb6121e52cc01f30f77a962a1b94586bb36a0d1e15e64f8f0d9480a",
+      "crates/perry-runtime/src/object/runtime_layouts.rs": "aa476d269eca1ce21102f7625ab4a0dac6e043063c5a893373606d2b0c197852",
       "crates/perry-runtime/src/object/layout_desc.rs": "efc8552bfc1493cf4ad705930a55e09b4ef2bde45a55fb2cb5b614f44bfbf1ad",
-      "crates/perry-runtime/src/object/layout_desc_tests.rs": "b119ba3ebaea0423b66ff1590d88528a5da4a359d8020088d3c8cc500455a170"
+      "crates/perry-runtime/src/object/layout_desc_tests.rs": "b119ba3ebaea0423b66ff1590d88528a5da4a359d8020088d3c8cc500455a170",
+      "crates/perry-runtime/src/object/layout_desc/registration.rs": "bd6bd0f940ecd09ca03786d9385f534bd356b71e683ad21ad4eb7e33274b34ae",
+      "crates/perry-runtime/src/object/layout_desc/diagnostics.rs": "d9addb82c0bd301f11684388586bd30a80d25785f65631b4092cb9dd7797f36f",
+      "crates/perry-runtime/src/object/layout_desc/store.rs": "b984c61287a05b267a5874976316415767222c94953f2e1fe907f08dc7d1456f",
+      "crates/perry-runtime/src/object/runtime_layouts/literal_atoms.rs": "2ecc5215cc794d9a3e842240915f6e4de4e9e986a00b58116355504a41d108ec"
     }
   },
   "crates/perry-runtime/src/tls_os_pool/tests.rs::DROPS": {
