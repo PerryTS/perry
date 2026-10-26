@@ -40,9 +40,11 @@ imports. Synchronous declarations and legacy manifests keep their existing
 calling convention. The native Rust embedding exposes `Host::call_async` and
 `Host::new_with_async_imports`.
 
-The TypeScript runtime permits one pending async invocation per component. A second async call is
-rejected until the first settles; independent components can progress through
-the same agent event pump. Native I/O wakes that agent using its identifier.
+Generated standalone component bindings use the persistent driver described
+below and permit concurrent async invocations. The legacy TypeScript path
+permits one pending async invocation per component and rejects a second until
+the first settles. Independent components can progress through the same agent
+event pump. Native I/O wakes that agent using its identifier.
 Only the owning thread executes guest code, JavaScript imports or cleanup.
 Pending operation payloads trace the component, result Promise and original
 JavaScript rejection. Argument values are snapshotted at submission, and resource
@@ -52,7 +54,7 @@ getters and void result values are not inspected. Pending imports keep their
 result schema in private traced state. Retained wrappers carry identities saved
 at encoding time under a fixed traced holder, so later matching does not
 re-encode a transferred host wrapper or assume JSON field order matches root
-order. Native driver receipt consumption is still pending.
+order. The persistent path consumes native ownership receipts as described below.
 Import arguments cross the engine as owned JSON values,
 and borrowed host resources remain valid until their import Promise settles.
 Successful calls retain the Store for reuse. Traps, rejected imports and explicit
@@ -70,16 +72,17 @@ tasks share one fuel budget, refreshed only after quiescence. The mailbox bounds
 outstanding requests, including queued requests whose futures were dropped.
 Dropping a call before execution skips it; dropping an unconsumed call after it
 starts requests Store retirement. Dropping the last client returns the Host if
-quiescent and retires it otherwise. The existing TypeScript bridge still needs
-to route public calls and callbacks through this driver.
+quiescent and retires it otherwise. The TypeScript bridge routes standalone
+public calls and callbacks through this driver.
 
 `DriverClient::retained_origins()` reports native invocation IDs whose callback
 context may still be needed. It combines queued/unpublished requests, guest-root
 bindings and leases held by captured host futures. Reused engine task IDs replace
 old bindings, so completed calls can release their context while older background
-work continues. This is conservative bookkeeping, not a task-exit notification:
-a completed root binding can remain until its ID is reused or the Store becomes
-quiescent. Embeddings must also retain context for results they have not consumed.
+work continues. With `Host::new_for_driver`, locally observable callback exports
+also report validated task exit through a private wrapper. Other layouts retain
+conservative bindings until their IDs are reused or the Store becomes quiescent.
+Embeddings must also retain context for results they have not consumed.
 Store retirement clears guest roots; captured callback context remains available
 until future cleanup finishes, including futures dropped before their first poll.
 
@@ -87,8 +90,9 @@ The [native context-retention receipt](validation/wasi-native-context-retention-
 records 142 engine and 22 WIT tests in development and production panic-abort,
 a 512-call workload with older background work still active, and independently
 failing controls for context accumulation and premature cleanup. The registry
-contains IDs and counts only. It does not yet wire TypeScript frame allocation,
-ALS snapshots, error routing or wrapper GC.
+contains IDs and counts only. That earlier receipt qualifies the Rust boundary;
+the later persistent-runtime receipts below cover TypeScript frames, ALS
+snapshots, error routing and wrapper GC.
 
 The Rust driver transports generic `future<T>` and `stream<T>` values as owned,
 Store-local JSON descriptors. Use `client.read_async_value(&value, capacity)`
@@ -911,6 +915,16 @@ Promise jobs without a command event loop. It leaves timers and immediates
 pending, does not wait for I/O, and does not implement asynchronous WIT
 results. Linux execution qualification of these cleanup and checkpoint paths
 is recorded below.
+
+The internal C frame API also provides `perry_component_frame_promise_poll`.
+It returns pending, a fresh rooted fulfillment slot, or a frame error holding
+the original rejection. Polling marks an actual Promise handled without running
+jobs, invoking thenables or waiting for I/O. This is an async adapter foundation;
+the public generator still rejects async guest functions and future/stream
+values until task scheduling and canonical suspension are implemented.
+The [Promise observation receipt](validation/wasi-guest-promise-observation-20261026.json)
+records Linux development and production panic-abort tests for real moving
+collection, independent result ownership, rejection identity and invalid inputs.
 
 Collection timing is nondeterministic, and payloads or destructors that retain
 their own wrapper can keep it reachable. Explicit disposal provides predictable

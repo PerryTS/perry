@@ -1,12 +1,26 @@
 # WASI hosting and reusable components
 
-Implementation roadmap, 2026-10-21. The P2 restoration is implemented in
-main, and P1 hosting is now implemented. The initial synchronous typed
-component profile is qualified on Linux. The remaining P2 component work
-and P3 native async are still in progress.
+Implementation roadmap, updated 2026-10-26. P2 commands and P1 hosting are
+implemented. Typed components work in both directions for the synchronous
+Linux profile. Native P3 hosting includes concurrent calls, typed future/stream
+readers and producers, and supported concurrent HTTP handlers. Async
+Perry-authored guest adapters and full platform/package qualification remain open.
 The audited baseline is
 `20fde48d3fa03d0a77699b7374f55e38cb143b59`.
 See [WASI_SUPPORT.md](WASI_SUPPORT.md) for the implemented standalone profile.
+
+| Format and direction | Implemented profile | Remaining gap |
+| --- | --- | --- |
+| WASI 0.1 / Preview 1 input | Native `node:wasi` hosting; see [P1 scope](WASI_P1_HOSTING.md) | No P1 compiler output target; intentionally deferred |
+| WASI 0.2 / Preview 2 output | Standalone commands; staged packages qualified on Linux x86_64, macOS ARM64 and Windows x64 | Requalify changed artifacts before shipping; publication is separate |
+| Typed synchronous components | Native Perry hosts third-party components; Perry libraries import/export WIT services and compose with Rust | Current combined execution qualification is Linux; broader platform/package coverage remains open |
+| WASI 0.3.0 input | Turnloop providers, async calls, native TypeScript future/stream readers and producers, command hosting and supported concurrent HTTP layouts | Nested/imported HTTP implementations use serialized fallback; registry provider repairs and broader platform qualification remain open |
+| Async Perry-authored components | Rooted frames and nonblocking Promise observation foundations | Generator still rejects async guest functions and future/stream values; task scheduling, suspension, cancellation and cross-language acceptance remain unfinished |
+
+The 0.3.0 hosting profile does not establish a 0.3 compiler output target or
+complete bidirectional async support. Detailed current evidence is linked from
+[the component record](WASI_COMPONENTS.md); older receipts describe their own
+source snapshots and should not be treated as qualification of every later change.
 
 ## Decision: support P1 inputs, defer P1 output
 
@@ -209,9 +223,11 @@ receipts.
 
 Canonical guest frames now own traced slot arrays through stable native links.
 Their lifetime is independent of a native handle scope, and frames can finish
-out of order. This supplies the rooting foundation for suspension; the C async
-guest adapter remains separate implementation work; native host future/stream
-bindings are implemented.
+out of order. A nonblocking C Promise poll preserves fulfilled values and the
+original rejection in those frames without running another task's jobs. These
+supply the rooting and observation foundations for suspension; the C async guest
+adapter still needs task scheduling, canonical suspension and cancellation.
+Native host future/stream bindings are implemented.
 
 Pin an explicit WASI 0.3 interface version and supported Component Model
 feature set. Integrate native async lifting/lowering with Perry's promise

@@ -1,5 +1,186 @@
 use super::*;
 
+unsafe fn promise_in_frame(owner: *mut c_void, slot: u32) -> *mut crate::promise::Promise {
+    JSValue::from_bits(super::frame(owner).get(slot).to_bits())
+        .as_pointer::<crate::promise::Promise>()
+        .cast_mut()
+}
+
+#[test]
+fn promise_poll_never_drives_jobs_and_owns_its_result_after_the_promise_is_released() {
+    let _nursery = crate::gc::CopyingNurseryTestGuard::new(0);
+    let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _evacuate = crate::gc::knob_overrides::ForcedEvacuationTestGuard::on();
+    crate::gc::gc_init();
+    let scope = RuntimeHandleScope::new();
+    let jobs = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+        crate::array::js_array_alloc_with_length(1) as i64,
+    ));
+    crate::array::js_array_set_f64(array(jobs.get_nanbox_f64()), 0, 0.0);
+    let callback = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
+        crate::fn_info!(unwind record_checkpoint_job, 0),
+        1,
+    ));
+    crate::closure::js_closure_set_capture_f64(
+        callback.get_raw_mut_ptr(),
+        0,
+        jobs.get_nanbox_f64(),
+    );
+    crate::builtins::js_queue_microtask(
+        callback.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64,
+    );
+    unsafe {
+        let owner = perry_component_frame_new();
+        let promise = super::frame(owner).add(crate::value::js_nanbox_pointer(
+            crate::promise::js_promise_new() as i64,
+        ));
+        let mut output = u32::MAX;
+        assert_eq!(
+            perry_component_frame_promise_poll(owner, promise, &mut output),
+            0
+        );
+        assert_eq!(output, 0);
+        let input = perry_component_frame_new();
+        let value = perry_component_frame_array(input, 1);
+        let text = "Promise result retained across moving GC 🌍";
+        let string = perry_component_frame_string(input, text.as_ptr(), text.len());
+        perry_component_frame_array_set(input, value, 0, string);
+        crate::promise::js_promise_resolve(
+            promise_in_frame(owner, promise),
+            super::frame(input).get(value),
+        );
+        perry_component_frame_drop(input);
+        let before = super::frame(owner).get(promise).to_bits();
+        crate::gc::gc_collect_minor();
+        assert_ne!(
+            before,
+            super::frame(owner).get(promise).to_bits(),
+            "the Promise must really move"
+        );
+        assert_eq!(
+            perry_component_frame_promise_poll(owner, promise, &mut output),
+            1
+        );
+        assert_ne!(output, 0);
+        assert_eq!(
+            crate::array::js_array_get_f64(array(jobs.get_nanbox_f64()), 0),
+            0.0,
+            "polling must not run another task's jobs"
+        );
+        // Discard the Promise's only frame edge. Its array result now belongs
+        // to the fresh output slot independently of the original input frame.
+        let values = super::frame(owner).values();
+        crate::array::js_array_set_f64(array(values), promise, undefined());
+        crate::promise::microtasks::js_promise_run_microtasks_checkpoint();
+        assert_eq!(
+            crate::array::js_array_get_f64(array(jobs.get_nanbox_f64()), 0),
+            1.0
+        );
+        let string = perry_component_frame_array_get(owner, output, 0);
+        let mut bytes = vec![0; perry_component_frame_string_len(owner, string)];
+        perry_component_frame_string_copy(owner, string, bytes.as_mut_ptr(), bytes.len());
+        assert_eq!(bytes, text.as_bytes());
+        assert_eq!(perry_component_frame_failed(owner), 0);
+        perry_component_frame_drop(owner);
+    }
+}
+
+#[test]
+fn promise_poll_handles_pending_rejection_and_preserves_the_original_error_through_gc_and_cleanup()
+{
+    let _nursery = crate::gc::CopyingNurseryTestGuard::new(0);
+    let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _evacuate = crate::gc::knob_overrides::ForcedEvacuationTestGuard::on();
+    crate::gc::gc_init();
+    unsafe {
+        let owner = perry_component_frame_new();
+        let promise = super::frame(owner).add(crate::value::js_nanbox_pointer(
+            crate::promise::js_promise_new() as i64,
+        ));
+        let mut output = u32::MAX;
+        assert_eq!(
+            perry_component_frame_promise_poll(owner, promise, &mut output),
+            0
+        );
+        let input = perry_component_frame_new();
+        let reason = perry_component_frame_object(input);
+        let number = perry_component_frame_number(input, 123.0);
+        perry_component_frame_set(input, reason, b"marker".as_ptr(), 6, number);
+        let unhandled = crate::promise::rejection::unhandled_rejection_count();
+        crate::promise::js_promise_reject(
+            promise_in_frame(owner, promise),
+            super::frame(input).get(reason),
+        );
+        assert_eq!(
+            crate::promise::rejection::unhandled_rejection_count(),
+            unhandled,
+            "the C observer handles rejection even before it settles"
+        );
+        perry_component_frame_drop(input);
+        crate::gc::gc_collect_minor();
+        assert_eq!(
+            perry_component_frame_promise_poll(owner, promise, &mut output),
+            -1
+        );
+        assert_eq!(output, 0);
+        assert_eq!(
+            super::frame(owner).error().unwrap().to_bits(),
+            (*promise_in_frame(owner, promise)).reason.to_bits()
+        );
+        crate::gc::gc_collect_minor();
+        // Invalid cleanup must not overwrite the already recorded rejection.
+        assert_eq!(
+            perry_component_frame_promise_poll(owner, u32::MAX, std::ptr::null_mut()),
+            -1
+        );
+        assert_eq!(
+            super::frame(owner).error().unwrap().to_bits(),
+            (*promise_in_frame(owner, promise)).reason.to_bits()
+        );
+        assert_eq!(
+            field(super::frame(owner).error().unwrap(), b"marker"),
+            123.0
+        );
+        perry_component_frame_drop(owner);
+    }
+}
+
+#[test]
+fn promise_poll_reports_invalid_c_output_type_and_slot_without_crossing_the_c_error_boundary() {
+    crate::gc::gc_init();
+    unsafe {
+        for kind in 0..3 {
+            let owner = perry_component_frame_new();
+            let value = perry_component_frame_number(owner, 42.0);
+            let mut output = 123;
+            let status = match kind {
+                0 => perry_component_frame_promise_poll(owner, value, std::ptr::null_mut()),
+                1 => perry_component_frame_promise_poll(owner, value, &mut output),
+                _ => perry_component_frame_promise_poll(owner, u32::MAX, &mut output),
+            };
+            assert_eq!(status, -1);
+            assert_eq!(perry_component_frame_failed(owner), 1);
+            assert_eq!(output, if kind == 0 { 123 } else { 0 });
+            let error = super::frame(owner).error().unwrap();
+            let message = crate::error::js_error_get_message(
+                JSValue::from_bits(error.to_bits())
+                    .as_pointer::<crate::error::ErrorHeader>()
+                    .cast_mut(),
+            );
+            let message = string(crate::value::js_nanbox_string(message as i64));
+            assert!(
+                message.contains(match kind {
+                    0 => "Missing component Promise output slot",
+                    1 => "Expected a Promise in the component frame",
+                    _ => "Invalid component frame slot",
+                }),
+                "{message}"
+            );
+            perry_component_frame_drop(owner);
+        }
+    }
+}
+
 extern "C-unwind" fn returned_array(
     closure: *const crate::closure::ClosureHeader,
     _: crate::closure::JsThis,

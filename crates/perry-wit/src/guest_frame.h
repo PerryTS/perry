@@ -47,6 +47,11 @@ void perry_component_frame_string_copy(void *, uint32_t, uint8_t *, size_t);
 size_t perry_component_frame_bytes_len(void *, uint32_t);
 void perry_component_frame_bytes_copy(void *, uint32_t, uint8_t *, size_t);
 uint32_t perry_component_frame_call(void *, uint32_t, uint32_t, uint32_t);
+/* Observe an actual Promise: 0 pending, 1 fulfilled with a fresh rooted result
+   slot, -1 frame error. Non-null output is zeroed first; null is a frame error.
+   Marks rejection handled. No jobs, thenables or I/O are driven here.
+   Rejection keeps the original JS reason; an earlier frame error is preserved. */
+int32_t perry_component_frame_promise_poll(void *, uint32_t, uint32_t *);
 
 uint32_t perry_component_frame_resource_lift(void *, uint32_t, uint32_t, uint32_t, int32_t);
 uint32_t perry_component_frame_resource_lower(void *, uint32_t, uint32_t, int32_t, int32_t);

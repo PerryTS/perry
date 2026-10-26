@@ -1,7 +1,9 @@
 //! Owned traced arrays retain canonical values across suspension and interleaving.
 //! Every potentially throwing operation catches before returning to C.
 use super::super::*;
+mod promise;
 use crate::native_payload::{self as payload, NativePayloadFamily, OwnerLink};
+pub use promise::perry_component_frame_promise_poll;
 use std::{
     ffi::c_void,
     marker::PhantomData,
@@ -595,7 +597,7 @@ const fn adapter_entry(code: *const ()) -> AdapterEntry {
 }
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
-static KEEP_ADAPTER_ENTRIES: [AdapterEntry; 36] = [
+static KEEP_ADAPTER_ENTRIES: [AdapterEntry; 37] = [
     adapter_entry(super::resources::payload::js_component_resource_create as *const ()),
     adapter_entry(super::resources::payload::js_component_resource_value as *const ()),
     adapter_entry(super::resources::payload::perry_component_frame_resource_destroy as *const ()),
@@ -632,4 +634,5 @@ static KEEP_ADAPTER_ENTRIES: [AdapterEntry; 36] = [
     adapter_entry(perry_component_frame_bytes_len as *const ()),
     adapter_entry(perry_component_frame_bytes_copy as *const ()),
     adapter_entry(perry_component_frame_call as *const ()),
+    adapter_entry(perry_component_frame_promise_poll as *const ()),
 ];
