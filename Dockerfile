@@ -23,6 +23,11 @@ RUN apt-get update && apt-get install -y \
     libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
+COPY scripts/install-llvm22-debian.sh /opt/perry-build-tools/install-llvm22-debian.sh
+RUN sh /opt/perry-build-tools/install-llvm22-debian.sh
+ENV LLVM_SYS_221_PREFIX=/usr/lib/llvm-22
+ENV PATH="/usr/lib/llvm-22/bin:${PATH}"
+
 # Copy Cargo files first for dependency caching
 COPY rust-toolchain.toml ./
 RUN rustup show active-toolchain

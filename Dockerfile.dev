@@ -23,6 +23,11 @@ RUN apt-get update && apt-get install -y \
     python3 \
     && rm -rf /var/lib/apt/lists/*
 
+COPY scripts/install-llvm22-debian.sh /opt/perry-build-tools/install-llvm22-debian.sh
+RUN sh /opt/perry-build-tools/install-llvm22-debian.sh
+ENV LLVM_SYS_221_PREFIX=/usr/lib/llvm-22
+ENV PATH="/usr/lib/llvm-22/bin:${PATH}"
+
 # Install the matching prebuilt development toolchain outside the checkout mount.
 COPY scripts/setup-blaze.sh scripts/build-tools.ref /opt/perry-build-tools/
 RUN MBX_BLAZE_ROOT=/opt/mbx-blaze sh /opt/perry-build-tools/setup-blaze.sh
