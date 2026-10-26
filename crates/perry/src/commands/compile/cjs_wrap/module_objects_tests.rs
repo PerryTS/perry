@@ -112,8 +112,9 @@ fn the_wrappers_own_reads_are_proven_one_load_sites() {
         .iter()
         .filter(|s| wrapped(s) && s.key.starts_with(&root))
         .collect();
-    // a.js requires b and c, c.js requires b: three static cases.
-    assert_eq!(cache_reads.len(), 3, "{names:?}\n{dump}");
+    // a.js requires b and c, c.js requires b: three static edges, each
+    // reading the live entry and, after a reload, the new one.
+    assert_eq!(cache_reads.len(), 6, "{names:?}\n{dump}");
     for s in &cache_reads {
         assert!(
             proven(&s.verdict),

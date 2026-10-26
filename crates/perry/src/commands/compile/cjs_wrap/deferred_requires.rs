@@ -13,7 +13,7 @@ use swc_ecma_visit::{Visit, VisitWith};
 /// function-local classification (some CJS sources need wrapping to parse).
 #[cfg(test)]
 fn deferred_require_specs(source: &str) -> HashSet<String> {
-    analyze_require_specs(source, std::path::Path::new(""), &mut Vec::new(), None)
+    analyze(source, std::path::Path::new(""), &mut Vec::new(), None).deferred
 }
 
 /// Recoverable parse warnings go to `messages` and computed-require warnings
@@ -40,15 +40,12 @@ pub(super) struct RequireSites {
     /// these into static edges (design CJS_LINK §2.2). Empty on a parse
     /// failure: every call then keeps the `require` function.
     pub(super) calls: Vec<(usize, usize, String)>,
-}
-
-fn analyze_require_specs(
-    source: &str,
-    path: &std::path::Path,
-    messages: &mut Vec<String>,
-    computed_require_warnings: Option<&mut Vec<String>>,
-) -> HashSet<String> {
-    analyze(source, path, messages, computed_require_warnings).deferred
+    /// The module's loader-capability census (`run_once_syntax`): zero when
+    /// nothing in it can reach the loader, so only its own static edges link
+    /// records into its `children`. `u32::MAX` on a parse failure.
+    pub(super) capability_uses: u32,
+    /// Function-scope bindings (byte range of the scope in `source`, name).
+    pub(super) function_bindings: Vec<((usize, usize), String)>,
 }
 
 fn analyze(
@@ -62,6 +59,8 @@ fn analyze(
         return RequireSites {
             deferred: super::extract_requires::function_local_specs(source),
             calls: Vec::new(),
+            capability_uses: u32::MAX,
+            function_bindings: Vec::new(),
         };
     };
     let mut visitor = Requires::default();
@@ -79,6 +78,16 @@ fn analyze(
             ));
         }
     }
+    let function_bindings = visitor
+        .bindings
+        .iter()
+        .map(|((lo, hi), name)| {
+            (
+                (lo.saturating_sub(1) as usize, hi.saturating_sub(1) as usize),
+                name.clone(),
+            )
+        })
+        .collect();
     let calls = if visitor.shadowed_at_top {
         Vec::new()
     } else {
@@ -103,6 +112,8 @@ fn analyze(
             .filter_map(|(specifier, deferred)| deferred.then_some(specifier))
             .collect(),
         calls,
+        capability_uses: super::run_once_syntax::module_capability_uses(&module),
+        function_bindings,
     }
 }
 
@@ -121,6 +132,10 @@ struct Requires {
     shadowing_scopes: Vec<(u32, u32)>,
     /// The module scope binds `require`: no call is the wrapper's.
     shadowed_at_top: bool,
+    /// Every function-scope binding (scope span, name): a literal builtin
+    /// `require` inside a scope that binds its import's local name keeps the
+    /// `require` function (the rewrite would read that local).
+    bindings: Vec<((u32, u32), String)>,
 }
 
 impl Requires {
@@ -138,6 +153,9 @@ impl Requires {
     }
 
     fn binds(&mut self, name: &str) {
+        if let Some(scope) = self.scopes.last() {
+            self.bindings.push((*scope, name.to_string()));
+        }
         if name != "require" {
             return;
         }

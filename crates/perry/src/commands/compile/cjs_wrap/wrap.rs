@@ -488,6 +488,12 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
     let require_sites =
         deferred_require_specs_for_path(source, source_path, messages, computed_require_warnings);
     let mut lazy_specs = require_sites.deferred;
+    // A requiring module's `children` gains records through its own static
+    // edges (one flag per target) and, only if it can require by a computed
+    // path or hand its `require` out, through the runtime loader's own link.
+    // Only then must an edge's first link of a cached record scan `children`
+    // (Node's updateChildren), as the loader may have linked it already.
+    let scan_links = require_sites.capability_uses > 0;
     let cyclic_specs = cyclic_require_specs(&all_require_specs, source_path);
     let parent_sensitive_specs = parent_sensitive_require_specs(&all_require_specs, source_path);
     lazy_specs.extend(cyclic_specs.iter().cloned());
@@ -500,11 +506,22 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
         .iter()
         .map(|spec| static_edge_target(spec, source_path, compile_packages, native_addon_paths))
         .collect();
+    // Two specifiers naming one target (`./x` and `./x.js`) are one edge:
+    // Node links a module into its requirer's `children` once per module,
+    // so the flag and the edge function belong to the first specifier.
+    let edge_fn: Vec<Option<usize>> = edge_targets
+        .iter()
+        .map(|target| {
+            target
+                .as_ref()
+                .and_then(|t| edge_targets.iter().position(|u| u.as_ref() == Some(t)))
+        })
+        .collect();
     let edge_index = |spec: &str| {
         require_specs
             .iter()
             .position(|s| s == spec)
-            .filter(|&i| edge_targets[i].is_some())
+            .and_then(|i| edge_fn[i])
     };
 
     let mut import_local_names: Vec<String> = require_specs
@@ -549,6 +566,33 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
             {
                 import_local_names[i] = format!("_lazyreq_{i}");
             }
+        }
+    }
+
+    // A literal builtin `require` in the body reads its hoisted native
+    // binding (#13296): the `require` function's arm returned that binding
+    // as a value, which linked the builtin's whole surface into every
+    // program (1.06 MB for `fs`). The arm stays live for a call the rewrite
+    // leaves (the local is bound again where the call is) and, where
+    // `require` is a value, in a program that is not closed.
+    let mut builtin_rewrites: Vec<(usize, usize, String)> = Vec::new();
+    let mut builtin_arms_live: HashSet<String> = HashSet::new();
+    for (start, end, spec) in &require_sites.calls {
+        if !builtin_requires.contains(spec) {
+            continue;
+        }
+        let Some(idx) = require_specs.iter().position(|s| s == spec) else {
+            continue;
+        };
+        let local = &import_local_names[idx];
+        let bound_here = require_sites
+            .function_bindings
+            .iter()
+            .any(|((lo, hi), name)| name == local && lo <= start && end <= hi);
+        if bound_here {
+            builtin_arms_live.insert(spec.clone());
+        } else {
+            builtin_rewrites.push((*start, *end, local.clone()));
         }
     }
 
@@ -694,11 +738,11 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
         .zip(import_local_names.iter())
         .enumerate()
         .map(|(i, (spec, local))| {
-            if edge_targets[i].is_some() {
+            if let Some(edge) = edge_fn[i] {
                 let specifier =
                     serde_json::to_string(spec).expect("require specifier is JSON encodable");
                 return format!(
-                    "        if (specifier === {specifier}) return __perry_require_static_{i}();"
+                    "        if (specifier === {specifier}) return __perry_require_static_{edge}();"
                 );
             }
             if let Some((_target, logical_id)) = resolved_native_addon(source_path, spec, native_addon_paths) {
@@ -814,7 +858,17 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
             };
             if builtin_requires.contains(spec) {
                 // A builtin binding is never the pruned-build TRUE sentinel.
-                format!("        if (specifier === '{spec}') {{ {required_value} }}")
+                // The arm hands the namespace out as a value, which links its
+                // whole surface: the body reads the binding instead
+                // (`builtin_rewrites`), so only a call the rewrite left, or
+                // `require` as a value (not closed), reaches the arm.
+                if builtin_arms_live.contains(spec) {
+                    format!("        if (specifier === '{spec}') {{ {required_value} }}")
+                } else {
+                    format!(
+                        "        if (__perry_cjs_open()) {{ if (specifier === '{spec}') {{ {required_value} }} }}"
+                    )
+                }
             } else if require_site_in_try(source, spec) && runtime_require.is_none() {
                 format!(
                     "        if (specifier === '{spec}') {{ if (typeof {local} === 'boolean') \
@@ -1299,6 +1353,11 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
                 }
             }
         }
+        for (start, end, local) in &builtin_rewrites {
+            if body_for_iife.get(*start..*end) == source.get(*start..*end) {
+                edits.push((*start, *end, local.clone()));
+            }
+        }
         for (start, end) in &blanked_alias_ranges {
             let Some(i) = raw_aliases
                 .iter()
@@ -1451,15 +1510,33 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
     // loader, and one link
     // flag and one edge per (this module, target) pair (design CJS_LINK
     // §2.2). Nothing here allocates at startup; the edges are functions of
-    // the module, not closures of the factory. A reload goes through the
-    // support module's one loader (`reload`): the path is absolute.
+    // the module, not closures of the factory. A reload goes through this
+    // module's own loader, so the new record's parent is this module and the
+    // edge keeps its literal path.
     let mut cjs_link_decls = format!(
         r#"export var {record};
+// This module's own loader for the cold paths of `require` (a computed
+// specifier outside the graph, relative to this module) and for a static
+// edge whose target was deleted from the cache, created on first use:
+// `createRequire` costs ~117k instructions. Only a program that is not
+// closed can compute a specifier or reload.
+var __perry_cjs_reload_require;
+function __perry_cjs_reloader() {{
+    if (__perry_cjs_open()) {{
+        if (__perry_cjs_reload_require === undefined) __perry_cjs_reload_require = {create_require}({module_filename_literal});
+        return __perry_cjs_reload_require;
+    }} else {{
+        throw __perry_cjs_require_error('error', 'ERR_PERRY_CJS_CLOSED', 'a closed program has no CommonJS loader');
+    }}
+}}
 "#,
         record = perry_hir::CJS_RECORD_EXPORT,
     );
     for (i, (spec, target)) in require_specs.iter().zip(edge_targets.iter()).enumerate() {
         let Some(target) = target else { continue };
+        if edge_fn[i] != Some(i) {
+            continue;
+        }
         let path = format!("{:?}", perry_hir::source_remap::baked_path_of(target));
         // #10178: a cyclic target still initialising reports the properties
         // the cycle can read before they exist.
@@ -1490,22 +1567,46 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
             format!("const record = __perry_cjs_init(__perry_cjs_rec_{i});")
         };
         let (warn_cached, warn_record) = (warn("cached"), warn("record"));
+        let link_cached = if scan_links {
+            "__perry_cjs_link(__perry_cjs_record, cached);"
+        } else {
+            "if (cached.parent === undefined) cached.parent = __perry_cjs_record; __perry_cjs_record.children.push(cached);"
+        };
         let _ = write!(
             cjs_link_decls,
             r#"let __perry_cjs_lk_{i} = false;
 function __perry_require_static_{i}() {{
     if (__perry_cjs_open()) {{
         // Not closed: the cache entry is the link (a deletion or replacement
-        // is visible), a deleted entry re-runs the module, and a reload makes
-        // a new record, so the parent link is a scan.
+        // is visible) and a deleted entry re-runs the module. The flag is the
+        // record this edge linked: the same record is linked once (what Node's
+        // updateChildren scan finds), a new one (a reload, a replaced entry)
+        // again. After the first call, one compare.
         const cached = __perry_cjs_cache[{path}];
-        if (cached !== undefined) {{ __perry_cjs_link(__perry_cjs_record, cached); {warn_cached}return cached.exports; }}
+        if (cached !== undefined) {{
+            if (__perry_cjs_lk_{i} !== cached) {{ __perry_cjs_lk_{i} = cached; {link_cached} }}
+            {warn_cached}return cached.exports;
+        }}
         // Evaluated before (its record binding is set) and its entry is gone:
-        // Node re-runs it. A `var`, so the read before evaluation is
-        // `undefined`, with no lookup in the path registry.
-        if (__perry_cjs_rec_{i} !== undefined) return __perry_cjs_reload({path});
+        // Node re-runs it with this module as its parent (the handoff, as a
+        // fresh evaluation below); the loader may link the new record into
+        // `children` as it loads, so the scan keeps it once. A `var`, so the
+        // read before evaluation is `undefined`, with no lookup in the path
+        // registry.
+        if (__perry_cjs_rec_{i} !== undefined) {{
+            __perry_cjs_set_pending(__perry_cjs_record);
+            let required;
+            try {{ required = __perry_cjs_reloader()({path}); }} finally {{ __perry_cjs_set_pending(undefined); }}
+            const fresh = __perry_cjs_cache[{path}];
+            if (fresh !== undefined && __perry_cjs_lk_{i} !== fresh) {{ __perry_cjs_lk_{i} = fresh; __perry_cjs_link(__perry_cjs_record, fresh); }}
+            return required;
+        }}
         {edge_init}
-        __perry_cjs_link(__perry_cjs_record, record);
+        if (__perry_cjs_lk_{i} !== record) {{
+            __perry_cjs_lk_{i} = record;
+            if (record.parent === undefined) record.parent = __perry_cjs_record;
+            __perry_cjs_record.children.push(record);
+        }}
         {warn_record}return record.exports;
     }} else {{
         {edge_init}
@@ -1524,8 +1625,8 @@ function __perry_require_static_{i}() {{
     // binding they can read (an alias of it) is evaluated first, as before.
     // Its edge in the body then only links it.
     if !hoisted_class_block.is_empty() {
-        for (i, target) in edge_targets.iter().enumerate() {
-            if target.is_some()
+        for i in 0..edge_targets.len() {
+            if edge_fn[i] == Some(i)
                 && raw_aliases
                     .iter()
                     .any(|(_, spec, _)| spec == &require_specs[i])
@@ -1570,19 +1671,6 @@ function __perry_require_static_{i}() {{
     const __perry_cjs_c = __perry_cjs_cache;
     __perry_cjs_c[{module_filename_literal}] = __cjs_module;
 {lazy_cache_decls}
-    // This module's own loader for the cold paths of `require` (a computed
-    // specifier outside the graph, relative to this module), created on
-    // first use: `createRequire` costs ~117k instructions. Only a program
-    // that is not closed can compute a specifier or reload.
-    let __perry_cjs_reload_require;
-    function __perry_cjs_reloader() {{
-        if (__perry_cjs_open()) {{
-            if (__perry_cjs_reload_require === undefined) __perry_cjs_reload_require = {create_require}({module_filename_literal});
-            return __perry_cjs_reload_require;
-        }} else {{
-            throw __perry_cjs_require_error('error', 'ERR_PERRY_CJS_CLOSED', 'a closed program has no CommonJS loader');
-        }}
-    }}
 {deferred_helper}    function require(specifier) {{
         if (typeof specifier !== 'string') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_TYPE', 'The "id" argument must be of type string.');
         if (specifier === '') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_VALUE', 'The argument "id" must be a non-empty string.');
