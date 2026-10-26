@@ -108,7 +108,13 @@ fn born_exports_objects_keep_node_semantics() {
     let dir = tempfile::tempdir().expect("tempdir");
     let stdout = compile_and_run(
         dir.path(),
-        &[("ord.js", ORD), ("comp.js", COMP), ("esb.js", ESB), ("repl.js", REPL), ("main.js", MAIN)],
+        &[
+            ("ord.js", ORD),
+            ("comp.js", COMP),
+            ("esb.js", ESB),
+            ("repl.js", REPL),
+            ("main.js", MAIN),
+        ],
         "main.js",
     );
     assert_eq!(

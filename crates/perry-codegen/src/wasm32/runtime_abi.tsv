@@ -606,7 +606,6 @@ js_buffer_copy_bytes_from	ptr	f64,f64,f64
 js_buffer_entries	f64	f64
 js_buffer_equals	i32s	ptr,ptr
 js_buffer_fill	ptr	ptr,i32s
-js_buffer_fill_random	f64	f64
 js_buffer_fill_range	ptr	ptr,i32s,i32s,i32s
 js_buffer_fill_value_range	ptr	ptr,f64,i32s,i32s,i32s
 js_buffer_from_array	ptr	ptr

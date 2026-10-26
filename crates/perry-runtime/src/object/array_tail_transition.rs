@@ -8,6 +8,7 @@
 //! subclass fast path separately proves the receiver brand, dense layout,
 //! descriptors, prototype state, live length, and physical value slot.
 
+use crate::codegen_abi::LayoutWord;
 use crate::object::shapes;
 
 pub(crate) const ARRAY_TAIL_TRANSITION_CACHE_SIZE: usize = 8192;
@@ -26,14 +27,14 @@ const _: () = assert!(ARRAY_TAIL_TRANSITION_CACHE_SIZE <= u16::MAX as usize);
 #[derive(Clone, Copy)]
 #[cfg_attr(test, derive(PartialEq, Debug))]
 pub(crate) struct ArrayTailDirectIndex {
-    shape_id: u32,
+    shape_id: LayoutWord,
     forward: u16,
     reverse: u16,
 }
 
 impl ArrayTailDirectIndex {
     pub(crate) const EMPTY: Self = Self {
-        shape_id: 0,
+        shape_id: LayoutWord(0),
         forward: ARRAY_TAIL_DIRECT_INDEX_MISS,
         reverse: ARRAY_TAIL_DIRECT_INDEX_MISS,
     };
@@ -67,8 +68,8 @@ unsafe impl crate::zeroed_cache::ZeroEmpty for ArrayTailDirectIndex {}
 pub(crate) struct ArrayTailTransitionEntry {
     pub(crate) predecessor_keys: usize,
     pub(crate) successor_keys: usize,
-    pub(crate) predecessor_shape_id: u32,
-    pub(crate) successor_shape_id: u32,
+    pub(crate) predecessor_shape_id: LayoutWord,
+    pub(crate) successor_shape_id: LayoutWord,
     pub(crate) slot: u32,
     pub(crate) array_index: u32,
     pub(crate) predecessor_live_inline_slots: u32,
@@ -80,8 +81,8 @@ impl ArrayTailTransitionEntry {
     pub(crate) const EMPTY: Self = Self {
         predecessor_keys: 0,
         successor_keys: 0,
-        predecessor_shape_id: 0,
-        successor_shape_id: 0,
+        predecessor_shape_id: LayoutWord(0),
+        successor_shape_id: LayoutWord(0),
         slot: 0,
         array_index: 0,
         predecessor_live_inline_slots: 0,
@@ -94,8 +95,8 @@ impl ArrayTailTransitionEntry {
     const TOMBSTONE: Self = Self {
         predecessor_keys: usize::MAX,
         successor_keys: 0,
-        predecessor_shape_id: 0,
-        successor_shape_id: 0,
+        predecessor_shape_id: LayoutWord(0),
+        successor_shape_id: LayoutWord(0),
         slot: 0,
         array_index: 0,
         predecessor_live_inline_slots: 0,
@@ -104,12 +105,12 @@ impl ArrayTailTransitionEntry {
 
     #[inline(always)]
     fn is_empty(self) -> bool {
-        self.successor_shape_id == 0 && self.predecessor_keys == 0
+        self.successor_shape_id == LayoutWord(0) && self.predecessor_keys == 0
     }
 
     #[inline(always)]
     fn is_tombstone(self) -> bool {
-        self.successor_shape_id == 0 && self.predecessor_keys == usize::MAX
+        self.successor_shape_id == LayoutWord(0) && self.predecessor_keys == usize::MAX
     }
 }
 
@@ -124,8 +125,8 @@ fn forward_slot(shape_id: u32, index: u32) -> usize {
 }
 
 #[inline(always)]
-fn reverse_slot(shape_id: u32) -> usize {
-    let mixed = u64::from(shape_id).wrapping_mul(0xD6E8_FEB8_6659_FD93);
+fn reverse_slot(shape_id: LayoutWord) -> usize {
+    let mixed = u64::from(shape_id.0).wrapping_mul(0xD6E8_FEB8_6659_FD93);
     (mixed ^ (mixed >> 32)) as usize & ARRAY_TAIL_TRANSITION_CACHE_MASK
 }
 
@@ -145,14 +146,14 @@ unsafe fn insert_forward(
     table: *mut [ArrayTailTransitionEntry; ARRAY_TAIL_TRANSITION_CACHE_SIZE],
     entry: ArrayTailTransitionEntry,
 ) -> Option<usize> {
-    let start = forward_slot(entry.predecessor_shape_id, entry.array_index);
+    let start = forward_slot(entry.predecessor_shape_id.0, entry.array_index);
     let mut tombstone = None;
     for offset in 0..ARRAY_TAIL_TRANSITION_CACHE_SIZE {
         let index = (start + offset) & ARRAY_TAIL_TRANSITION_CACHE_MASK;
         let candidate = (*table)[index];
         if candidate.predecessor_shape_id == entry.predecessor_shape_id
             && candidate.array_index == entry.array_index
-            && candidate.successor_shape_id != 0
+            && candidate.successor_shape_id != LayoutWord(0)
         {
             publish_entry(&mut (*table)[index], entry);
             return Some(index);
@@ -276,14 +277,14 @@ fn with_reverse_for_owner<R>(
 }
 
 #[inline(always)]
-fn direct_slot(shape_id: u32) -> usize {
-    shape_id as usize & ARRAY_TAIL_TRANSITION_CACHE_MASK
+fn direct_slot(shape_id: LayoutWord) -> usize {
+    shape_id.0 as usize & ARRAY_TAIL_TRANSITION_CACHE_MASK
 }
 
 #[inline]
 fn publish_direct_index(
     owner: *const crate::object::ObjectHeader,
-    shape_id: u32,
+    shape_id: LayoutWord,
     forward: Option<usize>,
     reverse: Option<usize>,
 ) {
@@ -341,8 +342,8 @@ fn descriptor_pair_is_exact(entry: ArrayTailTransitionEntry) -> bool {
 
 pub(crate) fn record_numeric_tail_transition(
     owner: *const crate::object::ObjectHeader,
-    predecessor_shape_id: u32,
-    successor_shape_id: u32,
+    predecessor_shape_id: LayoutWord,
+    successor_shape_id: LayoutWord,
     key: *const crate::StringHeader,
     successor_keys: usize,
     slot: u32,
@@ -410,7 +411,7 @@ pub(crate) fn record_numeric_tail_transition(
 #[inline]
 pub(crate) fn lookup_forward_for_owner(
     owner: *const crate::object::ObjectHeader,
-    predecessor_shape_id: u32,
+    predecessor_shape_id: LayoutWord,
     array_index: u32,
 ) -> Option<ArrayTailTransitionEntry> {
     let hot = object_hot_for_owner(owner);
@@ -424,12 +425,12 @@ pub(crate) fn lookup_forward_for_owner(
         let entry = table[index];
         if entry.predecessor_shape_id == predecessor_shape_id
             && entry.array_index == array_index
-            && entry.successor_shape_id != 0
+            && entry.successor_shape_id != LayoutWord(0)
         {
             return Some(entry);
         }
     }
-    let start = forward_slot(predecessor_shape_id, array_index);
+    let start = forward_slot(predecessor_shape_id.0, array_index);
     for offset in 0..ARRAY_TAIL_TRANSITION_CACHE_SIZE {
         let entry = table[(start + offset) & ARRAY_TAIL_TRANSITION_CACHE_MASK];
         if entry.is_empty() {
@@ -444,7 +445,7 @@ pub(crate) fn lookup_forward_for_owner(
 
 #[cfg(test)]
 #[inline]
-pub(crate) fn lookup_reverse(successor_shape_id: u32) -> Option<ArrayTailTransitionEntry> {
+pub(crate) fn lookup_reverse(successor_shape_id: LayoutWord) -> Option<ArrayTailTransitionEntry> {
     with_reverse(|table| unsafe {
         let start = reverse_slot(successor_shape_id);
         for offset in 0..ARRAY_TAIL_TRANSITION_CACHE_SIZE {
@@ -463,7 +464,7 @@ pub(crate) fn lookup_reverse(successor_shape_id: u32) -> Option<ArrayTailTransit
 #[inline]
 pub(crate) fn lookup_reverse_for_owner(
     owner: *const crate::object::ObjectHeader,
-    successor_shape_id: u32,
+    successor_shape_id: LayoutWord,
 ) -> Option<ArrayTailTransitionEntry> {
     let hot = object_hot_for_owner(owner);
     let direct = unsafe { &*hot.array_tail_direct.get() };
@@ -497,7 +498,7 @@ unsafe fn scan_table(
 ) {
     for index in 0..ARRAY_TAIL_TRANSITION_CACHE_SIZE {
         let entry = &mut (*table)[index];
-        if entry.successor_shape_id != 0 {
+        if entry.successor_shape_id != LayoutWord(0) {
             visitor.visit_usize_slot(&mut entry.predecessor_keys);
             visitor.visit_usize_slot(&mut entry.successor_keys);
         }
@@ -560,7 +561,7 @@ pub(crate) fn scan_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
 unsafe fn prune_table(table: *mut [ArrayTailTransitionEntry; ARRAY_TAIL_TRANSITION_CACHE_SIZE]) {
     for index in 0..ARRAY_TAIL_TRANSITION_CACHE_SIZE {
         let entry = &mut (*table)[index];
-        if entry.successor_shape_id != 0 && !descriptor_pair_is_exact(*entry) {
+        if entry.successor_shape_id != LayoutWord(0) && !descriptor_pair_is_exact(*entry) {
             *entry = ArrayTailTransitionEntry::TOMBSTONE;
         }
     }
@@ -587,7 +588,7 @@ unsafe fn note_live_entries(
 ) {
     for entry in (*table).iter() {
         // `EMPTY` and `TOMBSTONE` both carry a zero successor ShapeId.
-        if entry.successor_shape_id == 0 {
+        if entry.successor_shape_id == LayoutWord(0) {
             continue;
         }
         shapes::note_cache_carrier(shapes::shape_descriptor_for_word(
@@ -635,12 +636,12 @@ pub(crate) fn test_prune() {
 }
 
 #[cfg(test)]
-fn test_entry(shape_id: u32) -> ArrayTailTransitionEntry {
+fn test_entry(shape_id: LayoutWord) -> ArrayTailTransitionEntry {
     ArrayTailTransitionEntry {
         predecessor_keys: 0,
         successor_keys: 0,
         predecessor_shape_id: shape_id,
-        successor_shape_id: shape_id + 1,
+        successor_shape_id: LayoutWord(shape_id.0 + 1),
         slot: 0,
         array_index: 0,
         predecessor_live_inline_slots: 0,
@@ -650,13 +651,13 @@ fn test_entry(shape_id: u32) -> ArrayTailTransitionEntry {
 
 /// A writer that forgets to arm: publish straight into the forward table.
 #[cfg(test)]
-pub(crate) fn test_publish_without_arming(shape_id: u32) {
+pub(crate) fn test_publish_without_arming(shape_id: LayoutWord) {
     with_forward(|table| unsafe { insert_forward(table, test_entry(shape_id)) });
 }
 
 /// Arm exactly as `record_numeric_tail_transition` does, then publish.
 #[cfg(test)]
-pub(crate) fn test_arm_and_publish(shape_id: u32) {
+pub(crate) fn test_arm_and_publish(shape_id: LayoutWord) {
     object_hot_for_owner(std::ptr::null())
         .array_tail_occupied
         .set(true);
@@ -701,7 +702,7 @@ mod zeroed_table_tests {
     fn direct_index_round_trips_first_and_last_table_index() {
         for index in [0, 1, ARRAY_TAIL_TRANSITION_CACHE_SIZE - 1] {
             let entry = ArrayTailDirectIndex {
-                shape_id: 7,
+                shape_id: LayoutWord(7),
                 forward: ArrayTailDirectIndex::encode(index),
                 reverse: ArrayTailDirectIndex::encode(index),
             };

@@ -63,7 +63,8 @@ pub unsafe fn object_live_slot_count(obj: *const ObjectHeader) -> u32 {
     // whole ~48-byte descriptor to discard all but four bytes of it. This is
     // the bound consulted on essentially every property read and write, and
     // `shape_descriptor_for_word` was 10.1% of an isolated property-read loop.
-    shapes::shape_live_inline_slot_count_of_receiver(shapes::object_shape_stamp(obj)).unwrap_or(0)
+    shapes::shape_live_inline_slot_count_of_receiver((shapes::object_shape_stamp(obj)).0)
+        .unwrap_or(0)
 }
 
 /// C-ABI accessor for [`object_live_slot_count`], for out-of-runtime consumers

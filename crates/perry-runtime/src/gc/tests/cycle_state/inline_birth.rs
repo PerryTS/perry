@@ -1,6 +1,7 @@
 //! The same allocation sequence as codegen, with an adversarial early-drain
 //! control: a seed consumed before payload initialization loses the real child.
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 unsafe fn raw_birth(kind: u8, shape: u32, child: *mut u8, premature_drain: bool) -> *mut u8 {
     let slots = if kind == GC_TYPE_ARRAY { 2 } else { 8 };
@@ -66,7 +67,7 @@ fn child_survives(kind: u8, premature_drain: bool) -> bool {
     let shape = if kind == GC_TYPE_OBJECT {
         crate::object::shapes::shape_descriptor_ensure(std::ptr::null(), 0, 8).unwrap()
     } else {
-        0
+        LayoutWord(0)
     };
     let child = alloc_tracked_test_closure();
     let mut state = GcCycleState::new_full(trace_snapshot(GcTriggerKind::Manual));
@@ -76,7 +77,7 @@ fn child_survives(kind: u8, premature_drain: bool) -> bool {
         !incremental_mark_barrier_active(),
         "must exercise barrier-disabled births"
     );
-    let parent = unsafe { raw_birth(kind, shape, child, premature_drain) };
+    let parent = unsafe { raw_birth(kind, shape.0, child, premature_drain) };
     assert_marked_user_ptr(parent as usize, "inline live-cell birth");
     // Parent has no root or insertion barrier. Birth color retains the parent,
     // and ONLY its post-initialization seed can discover the white child.

@@ -68,12 +68,19 @@ pub(crate) fn namespace_value_for_prefix(ctx: &mut FnCtx<'_>, prefix: &str) -> S
 /// What `require` returns for a compiled target: its `module.exports` when the
 /// namespace carries that alias (CommonJS and JSON targets), else the
 /// namespace itself, which is what `require` of an ES module returns.
-fn require_value_for_prefix(ctx: &mut FnCtx<'_>, prefix: &str) -> String {
+fn require_value_for_prefix(ctx: &mut FnCtx<'_>, prefix: &str, source: &str) -> String {
     let ns = namespace_value_for_prefix(ctx, prefix);
     if prefix.starts_with("__node_submod__") || prefix.starts_with("__native_mod__") {
         return ns;
     }
-    let key_idx = ctx.strings.intern("module.exports");
+    // A known builtin's dynamic-import edge points at its ordinary ESM
+    // facade. A synchronous require of the same candidate returns that
+    // facade's canonical CommonJS default, not the ESM namespace object.
+    let builtin = !perry_hir::is_bare_prefix_only_builtin(source)
+        && perry_hir::is_node_builtin_module(source.strip_prefix("node:").unwrap_or(source));
+    let key_idx = ctx
+        .strings
+        .intern(if builtin { "default" } else { "module.exports" });
     let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
     let blk = ctx.block();
     let ns_bits = blk.bitcast_double_to_i64(&ns);
@@ -118,7 +125,7 @@ fn lower_dynamic_require(ctx: &mut FnCtx<'_>, paths: &[String], arg: &Expr) -> R
         let spec_val = lower_expr(ctx, arg)?;
         let target_prefix = ctx.dynamic_import_path_to_prefix.get(&paths[0]).cloned();
         return Ok(match target_prefix {
-            Some(prefix) => require_value_for_prefix(ctx, &prefix),
+            Some(prefix) => require_value_for_prefix(ctx, &prefix, &paths[0]),
             None => ctx.block().call(
                 DOUBLE,
                 "js_module_ambient_require_apply",
@@ -179,7 +186,7 @@ fn lower_dynamic_require(ctx: &mut FnCtx<'_>, paths: &[String], arg: &Expr) -> R
 
         ctx.current_block = match_block_idx;
         let join_label = ctx.block_label(join_block_idx);
-        let ns_val = require_value_for_prefix(ctx, target_prefix);
+        let ns_val = require_value_for_prefix(ctx, target_prefix, path_str);
         let blk = ctx.block();
         blk.store(DOUBLE, &ns_val, &result_slot);
         blk.br(&join_label);
@@ -503,6 +510,13 @@ fn emit_i18n_row_value(
 /// prefix for direct-call compatibility, so whole-value reads must take this
 /// path before generic imported function/variable lowering.
 fn materialize_compiled_namespace(ctx: &mut FnCtx<'_>, name: &str) -> Result<Option<String>> {
+    if let Some(prefix) = ctx.namespace_source_prefixes.get(name).cloned() {
+        // The module graph owns one namespace and its init guard. Reading a
+        // static namespace must load that same object as dynamic import(),
+        // rather than rebuilding a projection of its members in the consumer.
+        return Ok(Some(namespace_value_for_prefix(ctx, &prefix)));
+    }
+
     let mut members: Vec<String> = ctx
         .namespace_member_prefixes
         .keys()

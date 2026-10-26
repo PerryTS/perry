@@ -2,6 +2,7 @@
 //! Fixed layout and optional hook keys use the existing shape transition authority.
 //! Instances retain the two-slot inline prefix and canonical overflow layout.
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 #[derive(Clone, Copy)]
 pub(crate) enum Kind {
@@ -40,10 +41,10 @@ impl Kind {
 /// as the successor's presence in this agent's shape directory.
 #[derive(Clone, Copy)]
 struct BirthWrite {
-    from: u32,
-    to: u32,
+    from: LayoutWord,
+    to: LayoutWord,
     slot: u32,
-    chain: [u32; 8],
+    chain: [LayoutWord; 8],
     depth: usize,
 }
 pub(crate) struct BirthWriteSite(std::cell::Cell<Option<BirthWrite>>, std::cell::Cell<bool>);
@@ -174,7 +175,7 @@ impl BirthWriteSite {
 
 /// Validate the ordered chain without keeping heap addresses. A setter or
 /// non-writable data property on the key refuses birth replay.
-pub(super) fn chain_shapes(stream: f64, key: Option<&[u8]>) -> Option<([u32; 8], usize)> {
+pub(super) fn chain_shapes(stream: f64, key: Option<&[u8]>) -> Option<([LayoutWord; 8], usize)> {
     let _no_move = crate::gc::GcSuppressScope::new();
     let obj = object_ptr_from_value(stream)?;
     let mut bits = unsafe { crate::object::shapes::object_prototype_word(obj) };
@@ -183,9 +184,9 @@ pub(super) fn chain_shapes(stream: f64, key: Option<&[u8]>) -> Option<([u32; 8],
     }
     walk_shapes(bits, key)
 }
-pub(super) fn walk_shapes(mut bits: u64, key: Option<&[u8]>) -> Option<([u32; 8], usize)> {
+pub(super) fn walk_shapes(mut bits: u64, key: Option<&[u8]>) -> Option<([LayoutWord; 8], usize)> {
     let _no_move = crate::gc::GcSuppressScope::new();
-    let mut chain = [0; 8];
+    let mut chain = [LayoutWord(0); 8];
     let mut depth = 0;
     while bits != TAG_NULL && bits != 0 && bits != TAG_UNDEFINED {
         let proto = object_ptr_from_value(f64::from_bits(bits))?;
@@ -243,10 +244,10 @@ mod tests {
             unsafe { crate::object::shapes::transition_object_shape_semantics(obj) }
         };
         site.set_memo(BirthWrite {
-            from: 0,
+            from: LayoutWord(0),
             to,
             slot: 0,
-            chain: [0; 8],
+            chain: [LayoutWord(0); 8],
             depth: 0,
         });
         let control = {

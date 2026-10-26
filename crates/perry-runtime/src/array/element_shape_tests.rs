@@ -21,6 +21,7 @@ use crate::array::{
     js_array_alloc, js_array_delete, js_array_get_f64, js_array_push_f64, js_array_set_f64,
     js_array_set_length,
 };
+use crate::codegen_abi::LayoutWord;
 
 /// Two distinct shaped classes, chosen well clear of the ids the runtime
 /// registers for itself.
@@ -710,15 +711,19 @@ fn keys_array(names: &[&str]) -> *mut ArrayHeader {
 fn record_shape(names: &[&str]) -> (*mut ArrayHeader, u32) {
     let keys = keys_array(names);
     let shape_id = crate::object::shapes::layout_for_keys_ensure(keys, names.len() as u32);
-    assert_ne!(shape_id, 0, "test premise: the keys must mint a shape");
-    (keys, shape_id)
+    assert_ne!(
+        shape_id,
+        LayoutWord(0),
+        "test premise: the keys must mint a shape"
+    );
+    (keys, shape_id.0)
 }
 
 /// One class-0 ordinary record, birthed exactly the way
 /// `object/json_construction.rs` births a parsed one: class 0, marked
 /// plain-ordinary before the shape is stamped from the canonical keys array,
 /// values in key order.
-fn json_like_record(keys: *mut ArrayHeader, shape_id: u32, field_count: u32) -> f64 {
+fn json_like_record(keys: *mut ArrayHeader, shape_id: LayoutWord, field_count: u32) -> f64 {
     let obj = crate::object::alloc_plain::alloc_plain_record_inline_keys_stamped(
         field_count,
         keys,
@@ -731,7 +736,7 @@ fn json_like_record(keys: *mut ArrayHeader, shape_id: u32, field_count: u32) -> 
             "test premise: the fixture record must be class 0"
         );
         assert_eq!(
-            (*obj).shape_word(),
+            LayoutWord((*obj).shape_word()),
             shape_id,
             "test premise: the fixture record must carry the requested shape"
         );
@@ -745,7 +750,7 @@ fn a_homogeneous_class_zero_record_array_proves_on_its_shape_id() {
     let (keys, shape_id) = record_shape(&["id", "name"]);
     let mut arr = js_array_alloc(4);
     for _ in 0..4 {
-        arr = push(arr, json_like_record(keys, shape_id, 2));
+        arr = push(arr, json_like_record(keys, LayoutWord(shape_id), 2));
     }
 
     let established = unsafe { ensure_element_shape(arr) }
@@ -754,7 +759,7 @@ fn a_homogeneous_class_zero_record_array_proves_on_its_shape_id() {
         established.class_id, 0,
         "the proof stays class 0 — every class-keyed consumer must read it as `no class`"
     );
-    assert_eq!(established.ordinary_shape_id, shape_id);
+    assert_eq!(established.ordinary_shape_id, LayoutWord(shape_id));
     assert_eq!(established.verified_len, 4);
 
     // The FFI the clone's shape-keyed preheader calls.
@@ -779,9 +784,9 @@ fn a_mixed_shape_class_zero_record_array_declines() {
     let (keys_b, shape_b) = record_shape(&["id", "name", "extra"]);
     assert_ne!(shape_a, shape_b, "test premise: two distinct shapes");
     let mut arr = js_array_alloc(4);
-    arr = push(arr, json_like_record(keys_a, shape_a, 2));
-    arr = push(arr, json_like_record(keys_a, shape_a, 2));
-    arr = push(arr, json_like_record(keys_b, shape_b, 3));
+    arr = push(arr, json_like_record(keys_a, LayoutWord(shape_a), 2));
+    arr = push(arr, json_like_record(keys_a, LayoutWord(shape_a), 2));
+    arr = push(arr, json_like_record(keys_b, LayoutWord(shape_b), 3));
 
     assert!(
         unsafe { ensure_element_shape(arr) }.is_none(),
@@ -803,16 +808,16 @@ fn class_zero_record_declines_a_different_shape() {
     assert_ne!(shape_a, shape_b);
     let mut arr = js_array_alloc(4);
     for _ in 0..3 {
-        arr = push(arr, json_like_record(keys_a, shape_a, 2));
+        arr = push(arr, json_like_record(keys_a, LayoutWord(shape_a), 2));
     }
     assert_eq!(
         unsafe { ensure_element_shape(arr) }
             .expect("proven")
             .ordinary_shape_id,
-        shape_a
+        LayoutWord(shape_a)
     );
 
-    js_array_set_f64(arr, 1, json_like_record(keys_b, shape_b, 2));
+    js_array_set_f64(arr, 1, json_like_record(keys_b, LayoutWord(shape_b), 2));
 
     assert!(
         proof(arr).is_none(),
@@ -827,14 +832,14 @@ fn class_zero_proof_keeps_a_same_shape_store_and_clears_a_primitive_one() {
     let (keys, shape_id) = record_shape(&["id", "name"]);
     let mut arr = js_array_alloc(4);
     for _ in 0..3 {
-        arr = push(arr, json_like_record(keys, shape_id, 2));
+        arr = push(arr, json_like_record(keys, LayoutWord(shape_id), 2));
     }
     let established = unsafe { ensure_element_shape(arr) }.expect("proven");
 
-    js_array_set_f64(arr, 1, json_like_record(keys, shape_id, 2));
+    js_array_set_f64(arr, 1, json_like_record(keys, LayoutWord(shape_id), 2));
     let kept = proof(arr).expect("a same-shape store must keep the proof");
     assert_eq!(kept.epoch, established.epoch, "the proof identity survives");
-    assert_eq!(kept.ordinary_shape_id, shape_id);
+    assert_eq!(kept.ordinary_shape_id, LayoutWord(shape_id));
 
     js_array_set_f64(arr, 1, 42.0);
     assert!(
@@ -871,7 +876,8 @@ fn class_zero_admission_does_not_disturb_class_keyed_proofs() {
     let established = proof(arr).expect("proven");
     assert_eq!(established.class_id, CLASS_A);
     assert_ne!(
-        established.ordinary_shape_id, 0,
+        established.ordinary_shape_id,
+        LayoutWord(0),
         "a class instance still carries an exact ordinary shape id"
     );
 

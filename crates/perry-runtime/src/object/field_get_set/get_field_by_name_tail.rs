@@ -2,6 +2,7 @@
 //! handle dispatch, and the full ObjectHeader property walk (#1103 split).
 
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 /// Object-deref tail of `js_object_get_field_by_name`.
 pub(crate) fn get_field_by_name_object_tail(
@@ -1508,7 +1509,11 @@ pub(crate) fn get_field_by_name_object_tail(
         // a fresh id, so it can no longer collide with a pristine sibling's
         // cache entries.
         let stamp = super::super::shapes::object_shape_stamp(obj);
-        let shape_key = if stamp != 0 { stamp as usize } else { keys_id };
+        let shape_key = if stamp != LayoutWord(0) {
+            stamp.0 as usize
+        } else {
+            keys_id
+        };
 
         // Clamp the keys length to capacity so a bogus/oversized length can't
         // drive the wide-key map build or the linear scan below into unbounded
@@ -1526,7 +1531,8 @@ pub(crate) fn get_field_by_name_object_tail(
         // nursery reset can reuse a keys-array address, so cache hits still
         // validate the key slot before returning a field.
         let st = crate::state::state();
-        let cache_idx = (stamp as usize).wrapping_add(key_hash as usize) % super::FIELD_CACHE_SIZE;
+        let cache_idx =
+            (stamp.0 as usize).wrapping_add(key_hash as usize) % super::FIELD_CACHE_SIZE;
         let cached = if table_owned {
             None
         } else {
@@ -1617,7 +1623,7 @@ pub(crate) fn get_field_by_name_object_tail(
                     // keys-array address, which for a dictionary receiver is
                     // per-object by construction.
                     let id = if crate::object::overflow::has_overflow(obj as *const _) {
-                        0
+                        LayoutWord(0)
                     } else {
                         super::super::shapes::stamp_object_shape(
                             obj as *mut ObjectHeader,
@@ -1626,9 +1632,13 @@ pub(crate) fn get_field_by_name_object_tail(
                             live_slots,
                         )
                     };
-                    let store_key = if id != 0 { id as usize } else { keys_id };
+                    let store_key = if id != LayoutWord(0) {
+                        id.0 as usize
+                    } else {
+                        keys_id
+                    };
                     let store_idx =
-                        (id as usize).wrapping_add(key_hash as usize) % super::FIELD_CACHE_SIZE;
+                        (id.0 as usize).wrapping_add(key_hash as usize) % super::FIELD_CACHE_SIZE;
                     let cache = &mut *st.field_lookup.field_cache.get();
                     cache[store_idx] = (store_key, key_hash, i as u32);
                 }

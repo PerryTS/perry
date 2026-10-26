@@ -20,6 +20,7 @@
 //! through the chain and keep their data in the instance's `_events`; the
 //! native response fires `finish`/`close` through `this.emit`.
 use crate::closure::ClosureHeader;
+use crate::codegen_abi::LayoutWord;
 use crate::object::runtime_layouts as layouts;
 use crate::object::ObjectHeader;
 use crate::value::JSValue;
@@ -406,7 +407,7 @@ pub extern "C" fn js_node_http_response_layout_receiver(receiver: f64) -> i32 {
     };
     unsafe {
         let word = (*obj).parent_class_id;
-        if !crate::object::shapes::shape_object_kind_for_word(word)
+        if !crate::object::shapes::shape_object_kind_for_word(LayoutWord(word))
             .is_some_and(|kind| kind.is_ordinary_layout())
         {
             return 0;

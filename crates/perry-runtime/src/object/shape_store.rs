@@ -46,7 +46,7 @@ unsafe fn ordinary_receiver_record(obj: *const ObjectHeader) -> Option<shapes::S
         return None;
     }
     let id = shapes::object_shape_stamp(obj);
-    if id.wrapping_sub(shapes::SHAPE_ID_BASE) >= (2 << crate::codegen_abi::LAYOUT_BAND_SHIFT) {
+    if id.0.wrapping_sub(shapes::SHAPE_ID_BASE) >= (2 << crate::codegen_abi::LAYOUT_BAND_SHIFT) {
         return None;
     }
     shapes::shape_record_for_word(id)
@@ -962,7 +962,7 @@ unsafe fn try_function_store(
         return None;
     }
     let closure = ptr as *const crate::closure::ClosureHeader;
-    let descriptor = shapes::shape_descriptor_of_receiver((*closure).shape_id)?;
+    let descriptor = shapes::shape_descriptor_of_receiver(((*closure).shape_id).0)?;
     if crate::closure::shape::is_class_info((*closure).info) {
         return None;
     }

@@ -7,6 +7,7 @@
 
 use super::generator::*;
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 // Private evaluation brands occupy the low serial range. Reserve a high
 // identity for the intrinsic sync-generator brand, carried by all transitions.
@@ -199,19 +200,19 @@ pub(crate) fn generator_original_prototype_key() -> &'static str {
 /// private slot, the generator brand, extensible, and a [[Prototype]] its
 /// record holds (`PROTO_ID_RECORD_HELD`): the shape names no prototype, so
 /// a birth neither hashes a prototype identity nor mints a shape.
-fn birth_shape() -> u32 {
+fn birth_shape() -> LayoutWord {
     let shape = BIRTH_SHAPE.with(std::cell::Cell::get);
     if shape != 0 {
-        return shape;
+        return LayoutWord(shape);
     }
     prepare_birth_shape()
 }
 
 #[cold]
 #[inline(never)]
-fn prepare_birth_shape() -> u32 {
+fn prepare_birth_shape() -> LayoutWord {
     let shape = record_birth_shape(GENERATOR_STATE_BRAND);
-    BIRTH_SHAPE.with(|memo| memo.set(shape));
+    BIRTH_SHAPE.with(|memo| memo.set(shape.0));
     shape
 }
 
@@ -220,7 +221,7 @@ fn prepare_birth_shape() -> u32 {
 /// by the record. Published once per agent per kind and kept for its life.
 #[cold]
 #[inline(never)]
-pub(super) fn record_birth_shape(brand: u64) -> u32 {
+pub(super) fn record_birth_shape(brand: u64) -> LayoutWord {
     use crate::object::canonical_keys::{CanonicalKeys, SharedLayout};
     let _no_move = crate::gc::GcSuppressScope::new();
     let proof = SharedLayout::shape_cache_entry();
@@ -264,12 +265,12 @@ pub(super) fn record_birth_shape(brand: u64) -> u32 {
 /// The fallback layout for a prototype the record cannot hold unambiguously
 /// (a function, or a non-heap object such as a Proxy): the shape names it, as
 /// every ordinary object's shape does. Rare; one intern per birth.
-fn shape_held_birth_shape(proto: f64) -> u32 {
+fn shape_held_birth_shape(proto: f64) -> LayoutWord {
     shape_held_birth_shape_for(proto, GENERATOR_STATE_BRAND)
 }
 
 /// [`shape_held_birth_shape`] for a generator kind's `brand`.
-pub(super) fn shape_held_birth_shape_for(proto: f64, brand: u64) -> u32 {
+pub(super) fn shape_held_birth_shape_for(proto: f64, brand: u64) -> LayoutWord {
     use crate::object::canonical_keys::{CanonicalKeys, SharedLayout};
     let scope = crate::gc::RuntimeHandleScope::new();
     let proto = scope.root_nanbox_f64(proto);
@@ -338,7 +339,8 @@ pub(crate) unsafe fn fixed_generator_state_of_object(
     obj: *const ObjectHeader,
 ) -> Option<*const crate::closure::ClosureHeader> {
     let shape = BIRTH_SHAPE.with(std::cell::Cell::get);
-    let bits = if shape != 0 && crate::object::shapes::object_shape_stamp(obj) == shape {
+    let bits = if shape != 0 && crate::object::shapes::object_shape_stamp(obj) == LayoutWord(shape)
+    {
         *(obj as *const u8)
             .add(std::mem::size_of::<ObjectHeader>())
             .cast::<u64>()
@@ -388,7 +390,7 @@ pub(crate) unsafe fn generator_record_prototype_word(obj: *const ObjectHeader) -
     // A sync birth layout answers from its own kind alone; every other
     // record-held instance (async, or transitioned) resolves its kind first.
     let sync_shape = BIRTH_SHAPE.with(std::cell::Cell::get);
-    if sync_shape != 0 && crate::object::shapes::object_shape_stamp(obj) == sync_shape {
+    if sync_shape != 0 && crate::object::shapes::object_shape_stamp(obj) == LayoutWord(sync_shape) {
         return record_prototype_word::<false>(birth_record_bits(obj));
     }
     other_record_prototype_word(obj)
@@ -435,7 +437,7 @@ unsafe fn record_of_record_held(
 ) -> Option<(*const crate::closure::ClosureHeader, bool)> {
     let stamp = crate::object::shapes::object_shape_stamp(obj);
     let sync_shape = BIRTH_SHAPE.with(std::cell::Cell::get);
-    let (bits, is_async) = if sync_shape != 0 && stamp == sync_shape {
+    let (bits, is_async) = if sync_shape != 0 && stamp == LayoutWord(sync_shape) {
         (birth_record_bits(obj), false)
     } else {
         async_or_transitioned_record_bits(obj, stamp)?
@@ -466,10 +468,10 @@ unsafe fn birth_record_bits(obj: *const ObjectHeader) -> u64 {
 #[inline(never)]
 unsafe fn async_or_transitioned_record_bits(
     obj: *const ObjectHeader,
-    stamp: u32,
+    stamp: LayoutWord,
 ) -> Option<(u64, bool)> {
     let async_shape = super::async_generator_state::published_birth_shape();
-    if async_shape != 0 && stamp == async_shape {
+    if async_shape != LayoutWord(0) && stamp == async_shape {
         return Some((birth_record_bits(obj), true));
     }
     transitioned_record_held_bits(obj)

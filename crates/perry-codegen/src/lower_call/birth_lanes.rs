@@ -110,10 +110,7 @@ pub(crate) fn chain_birth_f64_fields(
     let completed_reservations = resolved
         .iter()
         .flat_map(|class| &class.fields)
-        .filter(|field| {
-            field.origin.is_reservation()
-                && candidate.contains(&field.name)
-        })
+        .filter(|field| field.origin.is_reservation() && candidate.contains(&field.name))
         .map(|field| field.name.clone())
         .collect();
     let mut walk = Walk {

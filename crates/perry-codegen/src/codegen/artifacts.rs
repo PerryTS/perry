@@ -574,9 +574,16 @@ pub(super) fn emit_module_artifacts(
             }
         }
     }
-    if !cross_module.dynamic_import_path_to_prefix.is_empty() || !nested_prefixes.is_empty() {
+    if !cross_module.dynamic_import_path_to_prefix.is_empty()
+        || !cross_module.namespace_source_prefixes.is_empty()
+        || !nested_prefixes.is_empty()
+    {
         let mut foreign_prefixes: std::collections::BTreeSet<String> = nested_prefixes;
-        for prefix in cross_module.dynamic_import_path_to_prefix.values() {
+        for prefix in cross_module
+            .dynamic_import_path_to_prefix
+            .values()
+            .chain(cross_module.namespace_source_prefixes.values())
+        {
             if prefix != module_prefix.as_str() {
                 foreign_prefixes.insert(prefix.clone());
             }

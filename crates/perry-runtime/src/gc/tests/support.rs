@@ -1,4 +1,5 @@
 use super::super::*;
+use crate::codegen_abi::LayoutWord;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 static YOUNG_LEAF_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -959,7 +960,7 @@ pub(super) unsafe fn alloc_old_test_object(
     // either way — and minting one would perturb the descriptor-count
     // accounting that sibling tests assert on.
     let shape_id = if field_count == 0 {
-        0
+        LayoutWord(0)
     } else {
         crate::object::shapes::shape_descriptor_ensure(std::ptr::null(), 0, field_count)
             .expect("shape id range exhausted in a test fixture")
@@ -982,7 +983,7 @@ pub(super) unsafe fn alloc_old_test_object(
     // The fixture uses an Ordinary ShapeId; mark its newborn store kind
     // before publishing that id, as the production plain-record allocator does.
     crate::object::shapes::store_kind::premark_plain_ordinary(obj);
-    (*obj).parent_class_id = shape_id;
+    (*obj).parent_class_id = shape_id.0;
     (*obj).meta = std::ptr::null_mut();
     let fields =
         (obj as *mut u8).add(std::mem::size_of::<crate::object::ObjectHeader>()) as *mut u64;
@@ -1001,7 +1002,7 @@ pub(super) unsafe fn alloc_nursery_test_object(
     // either way — and minting one would perturb the descriptor-count
     // accounting that sibling tests assert on.
     let shape_id = if field_count == 0 {
-        0
+        LayoutWord(0)
     } else {
         crate::object::shapes::shape_descriptor_ensure(std::ptr::null(), 0, field_count)
             .expect("shape id range exhausted in a test fixture")
@@ -1024,7 +1025,7 @@ pub(super) unsafe fn alloc_nursery_test_object(
     // The fixture uses an Ordinary ShapeId; mark its newborn store kind
     // before publishing that id, as the production plain-record allocator does.
     crate::object::shapes::store_kind::premark_plain_ordinary(obj);
-    (*obj).parent_class_id = shape_id;
+    (*obj).parent_class_id = shape_id.0;
     (*obj).meta = std::ptr::null_mut();
     let fields =
         (obj as *mut u8).add(std::mem::size_of::<crate::object::ObjectHeader>()) as *mut u64;
@@ -1174,7 +1175,7 @@ pub(super) unsafe fn restamp_with_rep(obj: *mut crate::object::ObjectHeader, rep
         None,
     ));
     stamp_object_shape_id_with_carrier_note(obj, id);
-    id
+    id.0
 }
 
 /// A field representation with an `F64` lane on each of `slots`.

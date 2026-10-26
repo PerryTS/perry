@@ -27,6 +27,7 @@ use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Mutex, OnceLock};
 
+use crate::codegen_abi::ShapeId;
 use crate::hot_diag::{sink_from_env, write_sink, Sink};
 
 // 0 = not yet resolved, 1 = off, 2 = on. Three states rather than two
@@ -503,7 +504,7 @@ pub(crate) fn classify_mint(
 /// Record one mint against complete sibling facts under this keys address.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn note_mint(
-    id: u32,
+    id: ShapeId,
     keys: u64,
     key_list_hash: u64,
     layout_hash: u64,
@@ -534,7 +535,7 @@ pub(crate) fn note_mint(
             line: site_line,
         };
         c.layout_by_id.insert(
-            id,
+            id.0,
             LayoutObservation {
                 hash: layout_hash,
                 origin: current,
@@ -565,7 +566,7 @@ pub(crate) fn note_mint(
         .entry(key_list_hash)
         .or_insert((0, logical_key_count));
     e.0 += 1;
-    c.mint_index_of.insert(id, index);
+    c.mint_index_of.insert(id.0, index);
 
     if index % (1 << 20) == 0 {
         drop(c);
@@ -573,7 +574,7 @@ pub(crate) fn note_mint(
     }
 }
 
-pub(crate) fn note_retire(id: u32) {
+pub(crate) fn note_retire(id: ShapeId) {
     if !armed() {
         return;
     }
@@ -581,7 +582,7 @@ pub(crate) fn note_retire(id: u32) {
     let Ok(mut c) = census().lock() else {
         return;
     };
-    if let Some(retired) = c.layout_by_id.remove(&id) {
+    if let Some(retired) = c.layout_by_id.remove(&id.0) {
         let origin = retired.origin;
         if !c
             .layout_by_id
@@ -603,7 +604,7 @@ pub(crate) fn note_retire(id: u32) {
         }
     }
     c.retires += 1;
-    if let Some(born) = c.mint_index_of.remove(&id) {
+    if let Some(born) = c.mint_index_of.remove(&id.0) {
         let b = bucket(now.saturating_sub(born));
         c.age_hist[b] += 1;
     }

@@ -22,6 +22,7 @@ mod write_helpers;
 // `object::field_set_by_name::…` paths keep resolving through
 // `object/mod.rs`'s `pub use field_set_by_name::*`, and so the sub-modules
 // can reach the shared helpers via their own `use super::*;`.
+use crate::codegen_abi::LayoutWord;
 pub use attr_variants::{
     js_object_set_field_by_name_nonconfigurable, js_object_set_field_by_name_nonenum,
 };
@@ -232,12 +233,12 @@ pub extern "C" fn js_object_set_field_by_name(
                         // index below the floor.
                         && crate::object::reserved_slot_floor_for_class_id(class_id) == 0
                         && super::prop_plan::store_plan_check(
-                            super::shapes::object_shape_stamp(o),
+                            LayoutWord(super::shapes::object_shape_stamp(o).0),
                             key as usize,
                         )
                     {
                         let prev_shape_id = super::shapes::object_shape_stamp(o);
-                        if prev_shape_id != 0 {
+                        if prev_shape_id != LayoutWord(0) {
                             if let Some(edge) = transition_cache_lookup(prev_shape_id, key)
                                 .and_then(|hit| {
                                     super::constfn_key_add::admit_or_store(

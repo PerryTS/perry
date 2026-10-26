@@ -352,15 +352,10 @@ pub(crate) extern "C" fn webcrypto_get_random_values_thunk(
     this: crate::closure::JsThis,
     array: f64,
 ) -> f64 {
-    let this_value = require_webcrypto_this(this);
+    require_webcrypto_this(this);
+    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
     unsafe {
-        js_native_call_method(
-            this_value,
-            b"getRandomValues".as_ptr() as *const i8,
-            "getRandomValues".len(),
-            &array,
-            1,
-        )
+        super::super::native_module_crypto_random::random_fill_sync(array, undefined, undefined)
     }
 }
 

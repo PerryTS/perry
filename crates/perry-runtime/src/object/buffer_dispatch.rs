@@ -1015,8 +1015,6 @@ pub unsafe fn dispatch_buffer_method(
             crate::buffer::js_buffer_swap64(buf_f64);
             buf_f64
         }
-        // Synthetic method emitted by lower.rs for `crypto.getRandomValues(buf)`.
-        "$$cryptoFillRandom" => crate::buffer::js_buffer_fill_random(buf_f64),
         "readUInt8" | "readUint8" => crate::buffer::js_buffer_read_uint8(buf_f64, arg_i32(0)),
         "readInt8" => crate::buffer::js_buffer_read_int8(buf_f64, arg_i32(0)),
         "readUInt16BE" | "readUint16BE" => {

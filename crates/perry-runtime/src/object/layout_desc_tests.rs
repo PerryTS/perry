@@ -2,6 +2,7 @@ use super::layout_desc::*;
 use super::*;
 
 use super::runtime_layouts::{atom_hash, layout_id};
+use crate::codegen_abi::LayoutWord;
 
 #[test]
 fn static_layout_real_abi_and_dynamic_atom_identity() {
@@ -206,7 +207,7 @@ fn static_layout_names_a_sealed_runtime_prototype() {
         let id = (*object).parent_class_id;
         assert_eq!(id, layout_id(descriptor));
         assert_eq!(
-            shapes::shape_proto_id(id),
+            shapes::shape_proto_id(LayoutWord(id)),
             Some(serial),
             "the serial is the identity"
         );
@@ -311,7 +312,10 @@ fn static_layout_runtime_prototype_families_keep_their_reserved_serials() {
     ] {
         unsafe {
             assert_eq!((*(*desc).proto).serial, serial);
-            assert_eq!(shapes::shape_proto_id(layout_id(desc)), Some(serial));
+            assert_eq!(
+                shapes::shape_proto_id(LayoutWord(layout_id(desc))),
+                Some(serial)
+            );
         }
     }
 }

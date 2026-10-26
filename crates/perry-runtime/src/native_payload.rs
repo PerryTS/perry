@@ -56,6 +56,7 @@ mod birth;
 pub use birth::{BirthMemo, OwnAccessor};
 #[path = "native_payload_slots.rs"]
 mod callback_slots;
+use crate::codegen_abi::LayoutWord;
 pub use crate::native_payload_buffer::{PayloadBuffer, PayloadBufferOwner};
 pub use callback_slots::{call_callback, callback_at, callback_from_link};
 pub(crate) use callback_slots::{callback_slot_address, NativeCallbackCell};
@@ -650,9 +651,13 @@ pub(crate) unsafe fn born_instance(
         let shape_id = (word >> 32) as u32;
         if word != 0
             && word as u32 == class_id
-            && crate::object::shapes::shape_is_keyless_birth(shape_id, (*meta).proto_serial, slots)
+            && crate::object::shapes::shape_is_keyless_birth(
+                LayoutWord(shape_id),
+                (*meta).proto_serial,
+                slots,
+            )
         {
-            return crate::object::object_alloc_born(class_id, slots, shape_id);
+            return crate::object::object_alloc_born(class_id, slots, LayoutWord(shape_id));
         }
     }
     mint_birth_record(class_id, proto, slots)
@@ -688,7 +693,7 @@ unsafe fn mint_birth_record(
     if !meta.is_null() {
         // GC_STORE_AUDIT(POINTER_FREE): a class id and a ShapeId, never a heap
         // reference.
-        (*meta).instance_birth = u64::from(class_id) | u64::from(shape_id) << 32;
+        (*meta).instance_birth = u64::from(class_id) | u64::from(shape_id.0) << 32;
         crate::object::shapes::note_old_generation_carrier(
             crate::object::shapes::shape_record_for_word(shape_id),
         );

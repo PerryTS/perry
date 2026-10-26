@@ -255,7 +255,7 @@ pub fn generate_feature_installer_object(
 }
 
 /// The LLVM IR of the program's static shape seed unit (design step 4): one
-/// `js_shape_seed_plain` per seed (literal contents the guards embed as
+/// `js_layout_seed_plain` per seed (literal contents the guards embed as
 /// immediates, each with its birth rep), in a function a `global_ctors` entry REGISTERS with the
 /// runtime. The constructor only stores the pointer — it runs before
 /// `js_gc_init`, when no agent heap exists — and each agent runs the function

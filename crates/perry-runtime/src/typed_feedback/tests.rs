@@ -1,4 +1,5 @@
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 // Keep the two direct-call fixtures distinguishable under MSVC's identical
 // COMDAT folding: their different Rust signatures otherwise lower to the same
@@ -117,12 +118,12 @@ fn stamp_f64_lane(obj: *mut crate::object::ObjectHeader, slot: u32) -> u32 {
             None,
         ));
         stamp_object_shape_id_with_carrier_note(obj, id);
-        id
+        id.0
     }
 }
 
 fn shape_id(obj: *const crate::object::ObjectHeader) -> u32 {
-    unsafe { crate::object::shapes::object_layout_stamp(obj) }
+    unsafe { crate::object::shapes::object_layout_stamp(obj).0 }
 }
 
 unsafe fn register_test_method(class_id: u32, name: &'static [u8]) {
@@ -239,7 +240,7 @@ fn typed_feedback_state_transitions_to_megamorphic() {
             Observation {
                 source: ObservationSource::HelperReturn,
 
-                shape_id: 0,
+                shape_id: LayoutWord(0),
                 key_hash: 0,
                 class_id: 0,
                 heap_type: 0,
@@ -255,7 +256,7 @@ fn typed_feedback_state_transitions_to_megamorphic() {
         Observation {
             source: ObservationSource::HelperReturn,
 
-            shape_id: 0,
+            shape_id: LayoutWord(0),
             key_hash: 0,
             class_id: 0,
             heap_type: 0,
@@ -277,7 +278,7 @@ fn typed_feedback_invalidation_counters_are_site_attributed() {
         Observation {
             source: ObservationSource::Method,
 
-            shape_id: 0,
+            shape_id: LayoutWord(0),
             key_hash: 1,
             class_id: 42,
             heap_type: 0,
@@ -304,7 +305,7 @@ fn typed_feedback_property_and_method_keys_ignore_receiver_identity() {
             Observation {
                 source: ObservationSource::Property,
 
-                shape_id: 0xCAFE,
+                shape_id: LayoutWord(0xCAFE),
                 key_hash: 0xA11C_E,
                 class_id: 7,
                 heap_type: crate::gc::GC_TYPE_OBJECT as u16,
@@ -318,7 +319,7 @@ fn typed_feedback_property_and_method_keys_ignore_receiver_identity() {
             Observation {
                 source: ObservationSource::Method,
 
-                shape_id: 0xCAFE,
+                shape_id: LayoutWord(0xCAFE),
                 key_hash: 0xBEE,
                 class_id: 7,
                 heap_type: crate::gc::GC_TYPE_OBJECT as u16,
@@ -392,7 +393,7 @@ fn typed_feedback_helper_return_keys_use_shape_facts_not_sample_identity() {
     let reg = registry();
     let observation = reg.sites.get(&8).unwrap().observations[0];
     assert_eq!(observation.heap_type, crate::gc::GC_TYPE_OBJECT as u16);
-    assert_ne!(observation.shape_id, 0);
+    assert_ne!(observation.shape_id, LayoutWord(0));
 }
 
 #[test]
@@ -2158,7 +2159,7 @@ fn typed_feedback_method_direct_guard_fails_after_megamorphic_site() {
             Observation {
                 source: ObservationSource::Method,
 
-                shape_id: 0x1000 + i as u32,
+                shape_id: LayoutWord(0x1000 + i as u32),
                 key_hash: i as u64,
                 class_id: i as u32 + 1,
                 heap_type: crate::gc::GC_TYPE_OBJECT as u16,

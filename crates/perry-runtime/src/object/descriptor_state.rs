@@ -616,10 +616,10 @@ pub(crate) unsafe fn declared_class_chain_blocks_store(
     for _ in 0..64 {
         class = super::class_generic_origin(class).unwrap_or(class);
         let word = class_registry::declarations::class_birth_word(class);
-        let record = super::shapes::shape_record_for_word(word)?;
+        let record = super::shapes::shape_record_for_word(LayoutWord(word.0))?;
         let holder = class_registry::class_decl_prototype_object(class);
         if !holder.is_null() {
-            if (*holder).parent_class_id != word {
+            if (*holder).parent_class_id != word.0 {
                 return None;
             }
             let meta = (*holder).meta;

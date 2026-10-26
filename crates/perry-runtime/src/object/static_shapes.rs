@@ -50,61 +50,12 @@ pub extern "C" fn js_object_shape_id_for_class_keys_static(
         live,
         class_id,
         rep,
-        Some(requested).filter(|&id| id != 0),
+        Some(ShapeId(requested)).filter(|id| id.0 != 0),
     ));
     // SAFETY: `id` was resolved from this agent's live slab record above.
-    unsafe { shapes::note_external_carrier_of_word(id) };
+    unsafe { shapes::note_external_carrier_of_word((id).0) };
     let id = shapes::shape_record_for_word(id).map_or(0, |r| r.identity().0);
     note_static_request("class", requested, id);
-    id
-}
-
-/// Seed compiler-owned plain-object contents under the static id `requested`.
-/// `packed` names `count` keys in slot order; `live` is the exact inline bound
-/// and `rep` describes those inline lanes. Literal births have `live >= count`.
-/// Source-ordered builders can finish with `live < count`: their remaining
-/// keys occupy the owner's traced spill buffer at the same absolute indices.
-///
-/// This publishes immutable layout facts before user code, never stamps an
-/// object or learns a call-site observation. Ordinary birth/key-add mints of
-/// equal (keys, live, rep, prototype, attributes) adopt this same ShapeId.
-/// Preserving `live` is essential: widening it to the key count would describe
-/// different storage and the builder's exact layout guard could never match.
-#[no_mangle]
-pub extern "C" fn js_shape_seed_plain(
-    requested: u32,
-    packed: *const u8,
-    packed_len: u32,
-    count: u32,
-    live: u32,
-    rep: u64,
-) -> u32 {
-    if count == 0 || packed.is_null() || packed_len == 0 {
-        return 0;
-    }
-    // SAFETY: compiler-owned static data of `packed_len` bytes.
-    let bytes = unsafe { std::slice::from_raw_parts(packed, packed_len as usize) };
-    let names: Vec<&[u8]> = crate::object::packed_key_names(bytes);
-    if names.len() != count as usize {
-        return 0;
-    }
-    let keys = unsafe { canonical_keys_for_names(&names) };
-    let id = shapes::publish_shape_result(shapes::shape_descriptor_ensure_with_rep(
-        keys.arr(),
-        keys.count(),
-        live,
-        0,
-        shapes::ShapeObjectKind::Ordinary,
-        0,
-        shapes::PROTO_ID_DEFAULT,
-        shapes::ReceiverFacts::NONE,
-        rep,
-        Some(requested),
-    ));
-    // SAFETY: as above.
-    unsafe { shapes::note_external_carrier_of_word(id) };
-    let id = shapes::shape_record_for_word(id).map_or(0, |r| r.identity().0);
-    note_static_request("seed", requested, id);
     id
 }
 
@@ -112,48 +63,7 @@ pub extern "C" fn js_shape_seed_plain(
 /// pointer names the defining body's one image-owned `JsFunctionInfo`, not a
 /// closure object; fresh factory closures with the same body share it.
 pub use crate::codegen_abi::ConstFnStaticEntry;
-
-/// Seed final shape facts before user code. This never allocates or stamps an
-/// object; only the post-construction finalizer may publish these facts on a
-/// receiver. All entries must name a permanent executable image.
-#[no_mangle]
-#[allow(clippy::too_many_arguments)]
-pub extern "C" fn js_shape_seed_plain_constfn(
-    requested: u32,
-    packed: *const u8,
-    packed_len: u32,
-    count: u32,
-    live: u32,
-    rep: u64,
-    entries: *const ConstFnStaticEntry,
-    entry_count: u32,
-) -> u32 {
-    if requested == 0 || count == 0 || packed.is_null() || packed_len == 0 {
-        invalid_constfn_static_seed();
-    }
-    // SAFETY: compiler-owned static data of `packed_len` bytes.
-    let bytes = unsafe { std::slice::from_raw_parts(packed, packed_len as usize) };
-    let names: Vec<&[u8]> = crate::object::packed_key_names(bytes);
-    if names.len() != count as usize {
-        invalid_constfn_static_seed();
-    }
-    let infos = checked_constfn_static_entries(entries, entry_count);
-    let keys = unsafe { canonical_keys_for_names(&names) };
-    let id = shapes::publish_shape_result(shapes::final_shape_ensure_constfn(
-        keys.arr(),
-        keys.count(),
-        live,
-        0,
-        rep,
-        &infos,
-        Some(requested),
-    ));
-    // SAFETY: `id` was resolved from this agent's live slab record above.
-    unsafe { shapes::note_external_carrier_of_word(id) };
-    let id = shapes::shape_record_for_word(id).map_or(0, |r| r.identity().0);
-    note_static_request("seed-constfn", requested, id);
-    id
-}
+use crate::codegen_abi::{LayoutWord, ShapeId};
 
 /// Seed the FINAL shape of a class with private elements (#11791) under the
 /// static id `requested`: the class's birth keys (`keys`, `key_count`, the
@@ -249,12 +159,12 @@ pub extern "C" fn js_object_final_shape_id_for_class_keys_static_private(
             rep,
             &[],
             &brand_list,
-            Some(requested).filter(|&id| id != 0),
+            Some(ShapeId(requested)).filter(|id| id.0 != 0),
             0,
         ))
     });
     // SAFETY: `id` was resolved from this agent's live slab record above.
-    unsafe { shapes::note_external_carrier_of_word(id) };
+    unsafe { shapes::note_external_carrier_of_word((id).0) };
     let id = shapes::shape_record_for_word(id).map_or(0, |r| r.identity().0);
     note_static_request("class-private", requested, id);
     id
@@ -283,10 +193,10 @@ pub extern "C" fn js_object_final_shape_id_for_class_keys_static_constfn(
         class_id,
         rep,
         &infos,
-        Some(requested).filter(|&id| id != 0),
+        Some(ShapeId(requested)).filter(|id| id.0 != 0),
     ));
     // SAFETY: `id` was resolved from this agent's live slab record above.
-    unsafe { shapes::note_external_carrier_of_word(id) };
+    unsafe { shapes::note_external_carrier_of_word((id).0) };
     let id = shapes::shape_record_for_word(id).map_or(0, |r| r.identity().0);
     note_static_request("class-constfn", requested, id);
     id
@@ -345,7 +255,8 @@ pub(crate) fn finalize_constfn_static(
     let scope = crate::gc::RuntimeHandleScope::new();
     let root = scope.root_raw_mut_ptr(object as usize as *mut super::ObjectHeader);
     let requested = Some(requested).filter(|&id| id != 0);
-    let existing = requested.and_then(|id| shapes::shape_descriptor_for_word(id).map(|d| (id, d)));
+    let existing =
+        requested.and_then(|id| shapes::shape_descriptor_for_word(LayoutWord(id)).map(|d| (id, d)));
     if !rebuilt && existing.is_none() {
         return object;
     }
@@ -399,7 +310,7 @@ pub(crate) fn finalize_constfn_static(
             if final_record_names_receiver(&existing, &current, count, live, rep, infos) {
                 // SAFETY: `obj` is the rooted receiver validated above;
                 // nothing between that validation and here can collect.
-                unsafe { shapes::stamp_object_shape_id_with_carrier_note(obj, id) };
+                unsafe { shapes::stamp_object_shape_id_with_carrier_note(obj, LayoutWord(id)) };
                 note_static_request("finalized-constfn", id, id);
             }
             obj as usize as u64
@@ -437,7 +348,7 @@ pub(crate) fn finalize_constfn_static(
                 .is_some_and(|d| final_record_names_receiver(&d, &current, count, live, rep, infos))
             {
                 unsafe { shapes::stamp_object_shape_id_with_carrier_note(obj, id) };
-                note_static_request("finalized-constfn", requested.unwrap_or(0), id);
+                note_static_request("finalized-constfn", requested.unwrap_or(0), id.0);
             }
         }
     }
@@ -737,24 +648,6 @@ static KEEP_JS_OBJECT_SHAPE_ID_FOR_CLASS_KEYS_STATIC: extern "C" fn(
 
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
-static KEEP_JS_SHAPE_SEED_PLAIN: extern "C" fn(u32, *const u8, u32, u32, u32, u64) -> u32 =
-    js_shape_seed_plain;
-
-#[cfg(feature = "keepalive-anchors")]
-#[used(compiler)]
-static KEEP_JS_SHAPE_SEED_PLAIN_CONSTFN: extern "C" fn(
-    u32,
-    *const u8,
-    u32,
-    u32,
-    u32,
-    u64,
-    *const ConstFnStaticEntry,
-    u32,
-) -> u32 = js_shape_seed_plain_constfn;
-
-#[cfg(feature = "keepalive-anchors")]
-#[used(compiler)]
 static KEEP_JS_OBJECT_FINAL_SHAPE_ID_FOR_CLASS_KEYS_STATIC_CONSTFN: extern "C" fn(
     u64,
     u32,
@@ -806,28 +699,28 @@ pub(crate) unsafe fn resolve_layout_request(
     assert!(!request.is_null(), "missing static layout request");
     resolve_layout_fields(
         std::ptr::addr_of_mut!((*request).shape_id),
-        (*request).layout_word,
+        LayoutWord((*request).layout_word),
         proto,
     )
 }
 pub(crate) unsafe fn resolve_layout_fields(
     identity: *mut u32,
-    word: u32,
+    word: LayoutWord,
     proto: u64,
 ) -> crate::codegen_abi::PublishedShape {
     use std::sync::atomic::{AtomicU32, Ordering};
     let cell = AtomicU32::from_ptr(identity);
     let mut id = cell.load(Ordering::Acquire);
     if id == 0 {
-        let proposed = shapes::allocate_declared_layout_id(proto);
+        let proposed = shapes::allocate_declared_layout_id(proto).0;
         id = match cell.compare_exchange(0, proposed, Ordering::AcqRel, Ordering::Acquire) {
             Ok(_) => proposed,
             Err(id) => id,
         };
     }
     crate::codegen_abi::PublishedShape {
-        identity: crate::codegen_abi::ShapeId(id),
-        word: crate::codegen_abi::LayoutWord(word),
+        identity: ShapeId(id),
+        word,
     }
 }
 /// The census line of one static layout request: `requested` is the
@@ -876,7 +769,7 @@ fn publish_layout_facts(
         request,
         0,
     ));
-    census_layout_request(path, static_request, word)
+    census_layout_request(path, static_request, (word).0)
 }
 
 #[no_mangle]
@@ -894,7 +787,7 @@ pub extern "C" fn js_object_layout_for_class_keys_static(
         super::field_rep::lanes_below(key_count)
     };
     if rep & !lanes != 0 {
-        return shapes::publish_shape_result(Err(shapes::ShapeDescriptorError::InvalidFacts));
+        return shapes::publish_shape_result(Err(shapes::ShapeDescriptorError::InvalidFacts)).0;
     }
     publish_layout_facts(
         "class",
@@ -994,7 +887,7 @@ pub extern "C" fn js_object_final_layout_for_class_keys_static_constfn(
         super::field_rep::lanes_below(key_count)
     };
     if infos.is_empty() || rep & !lanes != 0 || keys == 0 || key_count == 0 {
-        return shapes::publish_shape_result(Err(shapes::ShapeDescriptorError::InvalidFacts));
+        return shapes::publish_shape_result(Err(shapes::ShapeDescriptorError::InvalidFacts)).0;
     }
     publish_layout_facts(
         "class-constfn",
@@ -1098,8 +991,8 @@ pub extern "C" fn js_object_final_layout_for_class_keys_static_private(
         ))
     });
     // SAFETY: `id` was resolved from this agent's live slab record above.
-    unsafe { shapes::note_external_carrier_of_word(id) };
-    census_layout_request("class-private", request, id)
+    unsafe { shapes::note_external_carrier_of_word((id).0) };
+    census_layout_request("class-private", request, (id).0)
 }
 
 #[cfg(feature = "keepalive-anchors")]

@@ -38,7 +38,6 @@ const TREE: &str = r#"
     console.log(check(bottomUp(4)));
     "#;
 
-
 /// The merged head (main's call and marker rules over 03a's contracts): per
 /// unit proves no site the whole program does not, and breaks `broken`.
 /// DECISIONS 190 (callbacks and method calls through a described
@@ -55,7 +54,11 @@ fn assert_merged(pf: &ProgramFacts, wf: &ProgramFacts, broken: &[&str]) {
     };
     let (pu, pw) = (proven(pf), proven(wf));
     let stronger: Vec<&String> = pu.difference(&pw).collect();
-    assert!(stronger.is_empty(), "per unit claims more: {stronger:?}\n{}", pf.dump_text());
+    assert!(
+        stronger.is_empty(),
+        "per unit claims more: {stronger:?}\n{}",
+        pf.dump_text()
+    );
     assert_eq!(pf.broken, broken, "{}", pf.dump_text());
 }
 
@@ -607,8 +610,14 @@ fn a_layout_whose_link_holds_it_beside_another_units_instance_is_described_once(
     // program has its layout (no proof either way): DECISIONS 190.
     let (pf, wf) = (units(LOOP_LIST), facts(LOOP_LIST));
     assert_merged(&pf, &wf, &[]);
-    assert_eq!(verdicts(&pf, "next"), ["No(\"receiver from unmodeled code (TOP)\")"]);
-    assert_eq!(verdicts(&wf, "next"), ["No(\"key not a definite birth field\")"]);
+    assert_eq!(
+        verdicts(&pf, "next"),
+        ["No(\"receiver from unmodeled code (TOP)\")"]
+    );
+    assert_eq!(
+        verdicts(&wf, "next"),
+        ["No(\"key not a definite birth field\")"]
+    );
 }
 
 /// DECISIONS 152: a closed class's constructor handed a value of the
@@ -871,7 +880,12 @@ fn an_argument_a_callee_stores_into_a_shared_array_is_stored_by_the_callers_unit
     assert_merged(
         &pf,
         &wf,
-        &["override contains of t.ts:Bag", "override items of t.ts:Bag", "t.ts:Item", "t.ts:Tag"],
+        &[
+            "override contains of t.ts:Bag",
+            "override items of t.ts:Bag",
+            "t.ts:Item",
+            "t.ts:Tag",
+        ],
     );
 }
 

@@ -3,6 +3,8 @@
 //! cached heap pointer. Each keys slot holds a JSValue word. Every invocation
 //! creates fresh arrays and objects.
 
+#[cfg(test)]
+use crate::codegen_abi::LayoutWord;
 use crate::value::JSValue;
 
 /// Keep in sync with perry-codegen::expr::literal_descriptor::SHAPE_TYPE.
@@ -338,7 +340,7 @@ mod tests {
         assert_eq!(unsafe { (*a_ptr).class_id }, CLASS_ID);
         assert_eq!(
             unsafe { crate::object::shapes::object_shape_stamp(a_ptr) },
-            shape_id
+            LayoutWord(shape_id)
         );
         assert_eq!(unsafe { crate::object::object_live_slot_count(a_ptr) }, 3);
         assert_eq!(

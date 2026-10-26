@@ -1,24 +1,7 @@
-//! #8342: a CJS-wrapped module that does a bare top-level
-//! `require("process")` (and other Node.js built-ins) must resolve the
-//! built-in to the real namespace at runtime via the wrap's synthetic
-//! `createRequire`-backed require arm.
-//!
-//! Pre-fix the HIR's destructuring `var`/`let`/`const` pass intercepted
-//! `let node_process = require("process")` BEFORE call lowering and stole it
-//! into a native-module namespace binding (`register_require_namespace_binding`
-//! → `remove_local_binding`), mirroring `import * as node_process from
-//! "process"`. But the codegen does not initialize native-module import
-//! bindings inside CJS-wrapped modules, so `node_process` resolved to nothing
-//! at runtime — `ReferenceError: node_process is not defined` — which blocked
-//! `sdxgen --help` (the rolldown-bundled `@socketsecurity/lib` external-pack.js
-//! starts with `let node_process = require("process"); node_process =
-//! __toESM(node_process, 1)`).
-//!
-//! The fix gates the destructuring native-require fast path on `require` being
-//! the bare global (not shadowed by the wrap's synthetic `function require`),
-//! and the wrap no longer hoists a static `import _req_N from '<builtin>'` for
-//! built-in specs. The body's `require("<builtin>")` call flows through to the
-//! synthetic require, whose per-spec case resolves via `createRequire`.
+//! Literal builtin requires use hoisted ordinary ESM default bindings.
+//! Mutable/reassigned aliases and destructuring retain their runtime locals,
+//! while the synthetic require returns the imported canonical builtin value.
+//! Computed specifiers continue through the createRequire-backed escape.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -137,9 +120,8 @@ module.exports = { platform: node_process.platform };
 
 /// Destructured built-in require: `const { platform } = require("process")`
 /// in a CJS-wrapped module. The destructuring native-require fast path must
-/// also bail when `require` is shadowed by the wrap's synthetic require, so
-/// `platform` binds from the runtime `require("process")` result instead of a
-/// native-module alias that isn't initialized in a CJS-wrapped module.
+/// also respect the wrap's synthetic require, so `platform` binds from its
+/// result and ordinary user-defined require bindings keep their semantics.
 #[test]
 fn cjs_wrap_destructured_builtin_require_resolves() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -273,4 +255,32 @@ console.log("typeof:", typeof mod);
 "#,
     );
     assert_eq!(stdout, "typeof: object\n");
+}
+
+#[test]
+fn cjs_wrap_callable_builtin_defaults_keep_their_commonjs_values() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let stdout = compile_and_run_cjs(
+        dir.path(),
+        r#"
+console.log(typeof require("assert"));
+console.log(typeof require("assert/strict"));
+console.log(typeof require("events"));
+console.log(typeof require("stream"));
+"#,
+    );
+    assert_eq!(stdout, "function\nfunction\nfunction\nfunction\n");
+}
+
+#[test]
+fn cjs_wrap_destructured_fs_promises_is_available_without_another_import() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let stdout = compile_and_run_cjs(
+        dir.path(),
+        r#"
+const { promises } = require("fs");
+console.log(typeof promises.readFile);
+"#,
+    );
+    assert_eq!(stdout, "function\n");
 }

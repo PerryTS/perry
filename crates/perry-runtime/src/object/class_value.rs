@@ -778,7 +778,7 @@ fn static_call_shape_code(class_id: u32) -> u32 {
             if bag.is_null() {
                 u32::MAX - 1
             } else {
-                super::shapes::object_shape_stamp(bag)
+                super::shapes::object_shape_stamp(bag).0
             }
         },
     }

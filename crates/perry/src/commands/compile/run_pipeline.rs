@@ -2005,7 +2005,7 @@ pub fn run_with_parse_cache(
                 continue;
             };
             let is_named_native_import = hir_module.imports.iter().any(|import| {
-                import.is_native
+                import.has_native_value_bindings()
                     && import.specifiers.iter().any(|specifier| {
                         matches!(
                             specifier,
@@ -3060,11 +3060,22 @@ pub fn run_with_parse_cache(
             // `is_dynamic_target` (#1672) covers a static edge that is
             // ALSO the target of a dynamic `import()` in the same module.
             // Both need the target to emit `@__perry_ns_<prefix>`.
-            if !(import.is_dynamic || import.is_dynamic_target) {
+            if import.type_only || import.runtime_erased {
                 continue;
             }
             if let Some(rp) = &import.resolved_path {
-                dyn_target_paths.insert(PathBuf::from(rp));
+                // A static namespace value uses the same module-owned object
+                // even when no dynamic import happens to request it too.
+                let static_namespace = import.specifiers.iter().any(|specifier| match specifier {
+                    perry_hir::ImportSpecifier::Namespace { .. } => true,
+                    perry_hir::ImportSpecifier::Default { .. } => !all_module_exports
+                        .get(rp)
+                        .is_some_and(|exports| exports.contains_key("default")),
+                    _ => false,
+                });
+                if import.is_dynamic || import.is_dynamic_target || static_namespace {
+                    dyn_target_paths.insert(PathBuf::from(rp));
+                }
             }
         }
     }
@@ -4028,6 +4039,7 @@ pub fn run_with_parse_cache(
         let mut namespace_member_origin_names: std::collections::HashMap<(String, String), String> =
             std::collections::HashMap::new();
         let mut namespace_imports: Vec<String> = Vec::new();
+        let mut namespace_source_prefixes = HashMap::new();
         // #7189: members of a namespace whose value is ITSELF a module
         // namespace, from `export * as ns from "./m.ts"` in the imported
         // module. They resolve to `@__perry_ns_<target>` rather than to a
@@ -4238,6 +4250,14 @@ pub fn run_with_parse_cache(
                 };
                 if let Some(local) = namespace_like_local {
                     namespace_imports.push(local.clone());
+                    namespace_source_prefixes.insert(
+                        local.clone(),
+                        compute_module_prefix(
+                            &resolved_path_str,
+                            &ctx.project_root,
+                            &ctx.module_prefix_overrides,
+                        ),
+                    );
                     // Issue #6586: a namespace import of a CommonJS module
                     // whose `module.exports` value is itself the export
                     // (`module.exports = function equal(){}`, no
@@ -6111,6 +6131,7 @@ pub fn run_with_parse_cache(
             verify_native_regions,
             disable_buffer_fast_path,
             namespace_imports,
+            namespace_source_prefixes,
             namespace_member_nested: namespace_member_nested.into_iter().collect(),
             cjs_interop_namespaces: cjs_interop_namespaces.into_iter().collect(),
             imported_classes,

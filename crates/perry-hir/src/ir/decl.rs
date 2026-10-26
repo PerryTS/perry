@@ -145,6 +145,21 @@ pub struct Import {
     pub is_adopted_require: bool,
 }
 
+impl Import {
+    /// Runtime-native named bindings have value getters rather than compiled
+    /// function bodies. Node submodules share that rule even when they have
+    /// no native Rust module entry of their own.
+    pub fn has_native_value_bindings(&self) -> bool {
+        !self.type_only
+            && !self.runtime_erased
+            && (self.is_native
+                || (!super::is_bare_prefix_only_builtin(&self.source)
+                    && super::is_node_builtin_module(
+                        self.source.strip_prefix("node:").unwrap_or(&self.source),
+                    )))
+    }
+}
+
 /// Import specifier
 #[derive(Debug, Clone)]
 pub enum ImportSpecifier {
@@ -329,8 +344,7 @@ impl Class {
     /// A declared-keys record born with a null prototype (otherwise
     /// `%Object.prototype%`).
     pub fn declared_keys_null_proto(&self) -> bool {
-        self.is_declared_keys_record()
-            && !self.name.starts_with(DECLARED_KEYS_OBJECT_CLASS_PREFIX)
+        self.is_declared_keys_record() && !self.name.starts_with(DECLARED_KEYS_OBJECT_CLASS_PREFIX)
     }
 
     /// The shape-only class synthesized for a closed object literal. Check the
@@ -476,7 +490,10 @@ impl ClassFieldOrigin {
     /// The field defines no property at birth (a reservation the
     /// constructor or a later store fills).
     pub fn is_reservation(self) -> bool {
-        matches!(self, ClassFieldOrigin::ConstructorStore | ClassFieldOrigin::Declared)
+        matches!(
+            self,
+            ClassFieldOrigin::ConstructorStore | ClassFieldOrigin::Declared
+        )
     }
 }
 

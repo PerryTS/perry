@@ -7,6 +7,7 @@
 //! passes the memo instead of a hash: short own lists need neither; other
 //! paths load the atom's existing creation hash. Keyed leaves stay stateless.
 use super::*;
+use crate::codegen_abi::LayoutWord;
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 
 const PAIRS: usize = 5;
@@ -136,7 +137,7 @@ pub(crate) unsafe fn lookup(
                 return None;
             }
         }
-        let r = record_of(dir, shape);
+        let r = record_of(dir, LayoutWord(shape));
         if r.is_null() {
             return None;
         }
@@ -217,7 +218,7 @@ pub(crate) unsafe fn prime(
     let mut learned = [0u64; PAIRS];
     for i in 0..PAIRS {
         let shape = ordinary_word(obj)?;
-        let r = record_of(dir, shape);
+        let r = record_of(dir, LayoutWord(shape));
         if r.is_null()
             || !(*r).present()
             || !positional_layout(&*r)
@@ -383,7 +384,14 @@ pub(super) unsafe fn miss_underived<const ABSENT_OK: bool, const LAZY_HASH: bool
     }
     let hash = site_key_hash::<LAZY_HASH>(key_bits, hash);
     let word = (*obj).parent_class_id;
-    probe_get_underived::<ABSENT_OK>(dir, obj, word, record_of(dir, word), key_bits, hash)
+    probe_get_underived::<ABSENT_OK>(
+        dir,
+        obj,
+        LayoutWord(word),
+        record_of(dir, LayoutWord(word)),
+        key_bits,
+        hash,
+    )
 }
 
 #[inline(never)]
@@ -399,7 +407,14 @@ unsafe fn miss_underived_matched<const ABSENT_OK: bool, const LAZY_HASH: bool>(
     }
     let hash = site_key_hash::<LAZY_HASH>(key_bits, hash);
     let word = (*obj).parent_class_id;
-    probe_get_underived::<ABSENT_OK>(dir, obj, word, record_of(dir, word), key_bits, hash)
+    probe_get_underived::<ABSENT_OK>(
+        dir,
+        obj,
+        LayoutWord(word),
+        record_of(dir, LayoutWord(word)),
+        key_bits,
+        hash,
+    )
 }
 
 /// The own slot at position `pos` read a hole.
@@ -420,7 +435,7 @@ pub(super) unsafe fn miss_hole<const ABSENT_OK: bool, const LAZY_HASH: bool>(
     own_hole::<ABSENT_OK>(
         dir,
         obj,
-        record_of(dir, (*obj).parent_class_id),
+        record_of(dir, LayoutWord((*obj).parent_class_id)),
         pos,
         key_bits,
         hash,
@@ -443,7 +458,7 @@ unsafe fn miss_hole_matched<const ABSENT_OK: bool, const LAZY_HASH: bool>(
     own_hole::<ABSENT_OK>(
         dir,
         obj,
-        record_of(dir, (*obj).parent_class_id),
+        record_of(dir, LayoutWord((*obj).parent_class_id)),
         pos,
         key_bits,
         hash,

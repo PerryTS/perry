@@ -2,6 +2,7 @@
 //! class's function object, and found again from either end in O(1).
 
 use super::*;
+use crate::codegen_abi::{LayoutWord, ShapeId};
 
 extern "C" fn entry_a(
     _: *const crate::closure::ClosureHeader,
@@ -345,7 +346,7 @@ fn static_prototype_requires_the_candidate_parent_and_its_canonical_holder() {
     crate::object::js_register_class_parent(CHECKED_CHILD, CHECKED_PARENT);
     let canonical = scope.root_nanbox_f64(class_decl_prototype_value(CHECKED_PARENT));
     // No guard needed a seed: the family still supplies the exact candidate.
-    let requested = crate::object::shapes::SHAPE_ID_BASE + 1991;
+    let requested = ShapeId(crate::object::shapes::SHAPE_ID_BASE + 1991);
     assert!(crate::object::shapes::shape_record_by_id(requested).is_none());
     let matches =
         |bits| super::decl_prototype_birth::static_parent_matches(CHECKED_CHILD, requested, bits);
@@ -391,16 +392,16 @@ fn static_prototype_requires_the_candidate_parent_and_its_canonical_holder() {
         .unwrap()
     };
     assert_eq!(
-        shapes::shape_record_for_word(seed(requested, CHECKED_PARENT)).map(|r| r.identity().0),
+        shapes::shape_record_for_word(seed(requested, CHECKED_PARENT)).map(|r| r.identity()),
         Some(requested)
     );
     assert!(
         matches(canonical.get_nanbox_f64().to_bits()),
         "a seeded candidate also admits"
     );
-    let wrong = requested + 1;
+    let wrong = ShapeId(requested.0 + 1);
     assert_eq!(
-        shapes::shape_record_for_word(seed(wrong, CHECKED_PARENT + 1)).map(|r| r.identity().0),
+        shapes::shape_record_for_word(seed(wrong, CHECKED_PARENT + 1)).map(|r| r.identity()),
         Some(wrong)
     );
     assert!(
@@ -420,7 +421,7 @@ fn static_root_parent_uses_the_realm_intrinsic_identity() {
     use crate::object::shapes;
     let cid = 0x6e90;
     register(cid, b"CheckedRoot");
-    let requested = shapes::SHAPE_ID_BASE + 1995;
+    let requested = ShapeId(shapes::SHAPE_ID_BASE + 1995);
     shapes::shape_descriptor_ensure_with_holes(
         std::ptr::null(),
         0,
@@ -456,11 +457,13 @@ fn a_refused_static_request_keeps_the_general_born_final_shape() {
     let _lock = crate::gc::global_side_table_test_lock();
     let cid = 0x6e91;
     register(cid, b"RefusedStaticRequest");
-    let requested = crate::object::shapes::SHAPE_ID_BASE + 1996;
+    let requested = ShapeId(crate::object::shapes::SHAPE_ID_BASE + 1996);
     assert!(crate::object::shapes::shape_record_by_id(requested).is_none());
     let declaration = Box::leak(Box::new(super::declarations::ClassDeclaration {
         birth_shape: requested,
-        birth_layout_word: crate::object::static_shapes::fixtures::fixture_word(requested),
+        birth_layout_word: LayoutWord(crate::object::static_shapes::fixtures::fixture_word(
+            requested.0,
+        )),
         ..super::declarations::ClassDeclaration::native(&[])
     }));
     unsafe {
@@ -477,7 +480,7 @@ fn a_refused_static_request_keeps_the_general_born_final_shape() {
         .expect("the actual-parent shape needs no compiled identity");
     let obj = object_of(value);
     unsafe {
-        assert_ne!((*obj).parent_class_id, requested);
+        assert_ne!((*obj).parent_class_id, requested.0);
         assert_eq!(
             crate::object::shapes::object_proto_id(obj),
             crate::object::shapes::PROTO_ID_NULL

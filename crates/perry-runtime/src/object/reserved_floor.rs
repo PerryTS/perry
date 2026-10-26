@@ -159,7 +159,7 @@ unsafe fn stamp_reserved_floor_shape(
         obj,
         super::ObjectKeys::new(keys as *mut ArrayHeader, floor),
     );
-    id
+    id.0
 }
 
 #[cfg(test)]

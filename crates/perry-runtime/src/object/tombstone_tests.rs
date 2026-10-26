@@ -35,7 +35,9 @@ unsafe fn receiver_20(class_id: u32, prefix: &str) -> *mut crate::object::Object
 }
 
 fn layout_of(obj: *const crate::object::ObjectHeader) -> u32 {
-    crate::object::layout_desc::layout_id_of_word(unsafe { super::shapes::object_shape_stamp(obj) })
+    crate::object::layout_desc::layout_id_of_word(unsafe {
+        super::shapes::object_shape_stamp(obj).0
+    })
 }
 
 unsafe fn own_names(obj: *mut crate::object::ObjectHeader) -> Vec<String> {
@@ -468,15 +470,15 @@ fn an_old_receiver_keeps_its_overflow_at_every_page_offset() {
     unsafe {
         let mut pages = Vec::new();
         for round in 0..256usize {
-            let _filler = crate::arena::arena_alloc_gc_old(
-                8 * (1 + round % 7),
-                8,
-                crate::gc::GC_TYPE_STRING,
-            );
+            let _filler =
+                crate::arena::arena_alloc_gc_old(8 * (1 + round % 7), 8, crate::gc::GC_TYPE_STRING);
             let obj = old_receiver_with_young_overflow();
             let meta_slot = std::ptr::addr_of!((*obj).meta) as usize;
             let at = format!("round {round}, meta slot {meta_slot:#x}");
-            assert!(crate::arena::pointer_in_nursery((*obj).meta as usize), "premise, {at}");
+            assert!(
+                crate::arena::pointer_in_nursery((*obj).meta as usize),
+                "premise, {at}"
+            );
             assert!(
                 crate::gc::old_slot_page_is_remembered_for_test(meta_slot),
                 "the young metadata edge is not remembered, {at}"
@@ -491,6 +493,9 @@ fn an_old_receiver_keeps_its_overflow_at_every_page_offset() {
                 return;
             }
         }
-        panic!("premise: the sweep visited only {} generation pages", pages.len());
+        panic!(
+            "premise: the sweep visited only {} generation pages",
+            pages.len()
+        );
     }
 }

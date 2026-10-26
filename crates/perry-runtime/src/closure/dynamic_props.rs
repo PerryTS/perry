@@ -790,9 +790,12 @@ mod tests_1802 {
             // so there is nothing for a barrier to track.
             let word = (error as *mut u8).add(super::super::CLOSURE_SHAPE_OFFSET) as *mut u32;
             let saved = word.read();
-            word.write(super::super::shape::function_base_shape(
-                super::super::shape::FunctionProtoKind::Function,
-            ));
+            word.write(
+                super::super::shape::function_base_shape(
+                    super::super::shape::FunctionProtoKind::Function,
+                )
+                .0,
+            );
 
             assert!(!is_closure_ptr(error as usize));
             // GC_STORE_AUDIT(POINTER_FREE): restores the scalar error_kind word.

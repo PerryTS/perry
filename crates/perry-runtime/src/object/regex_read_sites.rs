@@ -156,13 +156,13 @@ fn flag_accessors_are_builtin() -> bool {
     let epoch = crate::object::prop_plan::prop_plan_semantic_epoch();
     let stamp = unsafe { crate::object::shapes::object_shape_stamp(object) };
     let (seen_epoch, seen_stamp, verdict) = FLAG_ACCESSORS.with(std::cell::Cell::get);
-    if seen_epoch == epoch && seen_stamp == stamp {
+    if seen_epoch == epoch && seen_stamp == stamp.0 {
         return verdict;
     }
     let verdict = flag_accessors().iter().all(|&(index, thunk)| {
         matches!(probe(prototype, index), Some(Answer::Getter(bits)) if native(bits, thunk))
     });
-    FLAG_ACCESSORS.with(|memo| memo.set((epoch, stamp, verdict)));
+    FLAG_ACCESSORS.with(|memo| memo.set((epoch, (stamp).0, verdict)));
     verdict
 }
 

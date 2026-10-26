@@ -1,5 +1,6 @@
 //! Slot placement depends on key content; identity remains a separate check.
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 /// Two valid headers separated by an exact old slot period. Raw-pointer
 /// hashing maps them to the same transition slot regardless of ASLR.
@@ -33,8 +34,8 @@ pub(super) fn relocated_keys(a: &[u8], b: &[u8]) -> (Vec<u64>, usize, usize) {
 fn transition_slots_distinguish_content_at_old_pointer_collision() {
     let (_storage, a, b) = relocated_keys(b"first-property", b"other-property");
     assert_ne!(
-        transition_cache_slot(0x8000_0042, a, 0),
-        transition_cache_slot(0x8000_0042, b, 0),
+        transition_cache_slot(LayoutWord(0x8000_0042), a, 0),
+        transition_cache_slot(LayoutWord(0x8000_0042), b, 0),
         "an exact pointer-table period must not force different names to collide"
     );
 }
@@ -44,21 +45,27 @@ fn slots_follow_content_when_a_key_moves() {
     let (_storage, a, b) = relocated_keys(b"same-property", b"same-property");
     assert_eq!(interned_key_slot_hash(a), interned_key_slot_hash(b));
     assert_eq!(
-        transition_cache_slot(0x8000_0042, a, 0),
-        transition_cache_slot(0x8000_0042, b, 0),
+        transition_cache_slot(LayoutWord(0x8000_0042), a, 0),
+        transition_cache_slot(LayoutWord(0x8000_0042), b, 0),
     );
     // These are deliberately noncanonical strings. Equal content chooses a
     // slot but must not let one pointer borrow the other's store verdict.
-    prop_plan::store_plan_record(0x8000_0042, a);
-    assert!(prop_plan::store_plan_check(0x8000_0042, a));
-    assert!(!prop_plan::store_plan_check(0x8000_0042, b));
-    prop_plan::read_plan_record(0x8000_0042, 0x1234, a, 2);
+    prop_plan::store_plan_record(LayoutWord(0x8000_0042), a);
+    assert!(prop_plan::store_plan_check(LayoutWord(0x8000_0042), a));
+    assert!(!prop_plan::store_plan_check(LayoutWord(0x8000_0042), b));
+    prop_plan::read_plan_record(LayoutWord(0x8000_0042), 0x1234, a, 2);
     assert_eq!(
-        prop_plan::read_plan_lookup(0x8000_0042, 0x1234, a, 3),
+        prop_plan::read_plan_lookup(LayoutWord(0x8000_0042), 0x1234, a, 3),
         Some(2)
     );
-    assert_eq!(prop_plan::read_plan_lookup(0x8000_0042, 0x1234, b, 3), None);
-    assert_eq!(prop_plan::read_plan_lookup(0x8000_0042, 0x5678, a, 3), None);
+    assert_eq!(
+        prop_plan::read_plan_lookup(LayoutWord(0x8000_0042), 0x1234, b, 3),
+        None
+    );
+    assert_eq!(
+        prop_plan::read_plan_lookup(LayoutWord(0x8000_0042), 0x5678, a, 3),
+        None
+    );
     // The synthetic headers are Rust-owned rather than GC-owned; invalidate
     // their weak plan metadata before releasing that storage.
     prop_plan::prop_plan_epoch_bump();

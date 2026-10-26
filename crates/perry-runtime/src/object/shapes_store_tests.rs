@@ -1,11 +1,12 @@
 use super::*;
+use crate::codegen_abi::{LayoutWord, ShapeId};
 
 #[test]
 fn scalar_reverse_edges_do_not_allocate_or_masquerade_as_owned_extensions() {
     let mut record = ShapeRecord::new(0x1000, 1, 1, 0, ShapeObjectKind::Ordinary, 0);
     for parent in [SHAPE_ID_BASE, u32::MAX, 0] {
-        record.note_rollback_parent(parent);
-        assert_eq!(record.rollback_parent(), parent);
+        record.note_rollback_parent(LayoutWord(parent));
+        assert_eq!(record.rollback_parent(), LayoutWord(parent));
         assert!(!record.has_boxed_extras());
         assert!(record.constfn_infos().is_empty());
         assert!(record.brands().is_empty());
@@ -22,9 +23,9 @@ fn scalar_reverse_edges_do_not_allocate_or_masquerade_as_owned_extensions() {
 
     let mut branded = ShapeRecord::new(0x1000, 1, 1, 0, ShapeObjectKind::Ordinary, 0)
         .with_special_facts(0, &[], &[17]);
-    branded.note_rollback_parent(SHAPE_ID_BASE);
+    branded.note_rollback_parent(LayoutWord(SHAPE_ID_BASE));
     assert!(branded.has_boxed_extras());
-    assert_eq!(branded.rollback_parent(), SHAPE_ID_BASE);
+    assert_eq!(branded.rollback_parent(), LayoutWord(SHAPE_ID_BASE));
     assert_eq!(branded.brands(), &[17]);
     assert!(branded.constfn_infos().is_empty());
     let at = std::ptr::addr_of_mut!(branded);
@@ -130,8 +131,8 @@ fn the_agent_directory_is_the_agent_slab_and_an_absent_id_reads_empty() {
         assert!(!r.present(), "{id:#x} reads a present record");
         assert_eq!(r.rep, 0, "{id:#x}: absent rep");
         assert_eq!(r.position_bound(), 0, "{id:#x}: absent position bound");
-        assert!(shape_record_by_id(id).is_none(), "{id:#x}");
-        assert_eq!(shape_rep_by_id(id), 0, "{id:#x}");
+        assert!(shape_record_by_id(ShapeId(id)).is_none(), "{id:#x}");
+        assert_eq!(shape_rep_by_id(ShapeId(id)), 0, "{id:#x}");
     }
     // Ids no counter reaches in a test process, in and around every band.
     const NEVER: [u32; 10] = [
@@ -153,8 +154,10 @@ fn the_agent_directory_is_the_agent_slab_and_an_absent_id_reads_empty() {
         }
         let table = &crate::state::state().shapes;
         let ids = [
-            alloc_shape_id(super::super::PROTO_ID_DEFAULT).unwrap(),
-            alloc_exotic_shape_id(super::super::PROTO_ID_DEFAULT).unwrap(),
+            alloc_shape_id(super::super::PROTO_ID_DEFAULT).unwrap().0,
+            alloc_exotic_shape_id(super::super::PROTO_ID_DEFAULT)
+                .unwrap()
+                .0,
         ];
         let reps = [0b01u64, 0b10 << 4];
         for (&id, &rep) in ids.iter().zip(&reps) {
@@ -169,9 +172,9 @@ fn the_agent_directory_is_the_agent_slab_and_an_absent_id_reads_empty() {
                     table.slab().record_ptr(ShapeId(id)),
                     Some(ShapeSlab::agent_record(ShapeId(id)))
                 );
-                assert_eq!(shape_rep_by_id(id), rep, "{id:#x}");
+                assert_eq!(shape_rep_by_id(ShapeId(id)), rep, "{id:#x}");
                 assert_eq!(
-                    shape_record_by_id(id).map(|r| r.live_inline_slot_count()),
+                    shape_record_by_id(ShapeId(id)).map(|r| r.live_inline_slot_count()),
                     Some(3)
                 );
                 // The id's chunk neighbour is allocated and absent.
@@ -633,37 +636,58 @@ fn facts_key_folds_every_field() {
 fn id_list_keeps_order_across_the_inline_to_spill_boundary() {
     let mut list = IdList::default();
     assert!(list.is_empty());
-    list.push_back(2);
-    list.push_back(3);
-    list.push_front(1);
-    list.push_back(2); // duplicate ignored
-    assert_eq!(list.as_slice(), &[1, 2, 3]);
+    list.push_back(LayoutWord(2));
+    list.push_back(LayoutWord(3));
+    list.push_front(LayoutWord(1));
+    list.push_back(LayoutWord(2)); // duplicate ignored
+    assert_eq!(
+        list.as_slice(),
+        &[LayoutWord(1), LayoutWord(2), LayoutWord(3)]
+    );
     assert!(matches!(list, IdList::Inline { .. }));
-    list.push_back(4);
+    list.push_back(LayoutWord(4));
     assert!(matches!(list, IdList::Spill(_)));
-    assert_eq!(list.as_slice(), &[1, 2, 3, 4]);
-    list.push_front(0);
-    assert_eq!(list.as_slice(), &[0, 1, 2, 3, 4]);
+    assert_eq!(
+        list.as_slice(),
+        &[LayoutWord(1), LayoutWord(2), LayoutWord(3), LayoutWord(4)]
+    );
+    list.push_front(LayoutWord(0));
+    assert_eq!(
+        list.as_slice(),
+        &[
+            LayoutWord(0),
+            LayoutWord(1),
+            LayoutWord(2),
+            LayoutWord(3),
+            LayoutWord(4)
+        ]
+    );
     // The ORDERED removal keeps this list's order, which is what
     // `by_facts` depends on.
-    assert!(list.remove_ordered(2));
-    assert!(!list.remove_ordered(2));
-    assert_eq!(list.as_slice(), &[0, 1, 3, 4]);
-    assert!(list.replace(3, 30));
-    assert!(!list.replace(3, 300));
-    assert_eq!(list.as_slice(), &[0, 1, 30, 4]);
+    assert!(list.remove_ordered(LayoutWord(2)));
+    assert!(!list.remove_ordered(LayoutWord(2)));
+    assert_eq!(
+        list.as_slice(),
+        &[LayoutWord(0), LayoutWord(1), LayoutWord(3), LayoutWord(4)]
+    );
+    assert!(list.replace(LayoutWord(3), LayoutWord(30)));
+    assert!(!list.replace(LayoutWord(3), LayoutWord(300)));
+    assert_eq!(
+        list.as_slice(),
+        &[LayoutWord(0), LayoutWord(1), LayoutWord(30), LayoutWord(4)]
+    );
     assert!(list.heap_bytes() >= 4 * 4);
 
     let mut inline = IdList::default();
-    inline.push_back(7);
-    inline.push_back(8);
-    inline.push_back(9);
-    assert!(inline.remove_ordered(8));
-    assert_eq!(inline.as_slice(), &[7, 9]);
-    assert!(inline.replace(9, 10));
-    assert_eq!(inline.as_slice(), &[7, 10]);
-    assert!(inline.remove_ordered(7));
-    assert!(inline.remove_ordered(10));
+    inline.push_back(LayoutWord(7));
+    inline.push_back(LayoutWord(8));
+    inline.push_back(LayoutWord(9));
+    assert!(inline.remove_ordered(LayoutWord(8)));
+    assert_eq!(inline.as_slice(), &[LayoutWord(7), LayoutWord(9)]);
+    assert!(inline.replace(LayoutWord(9), LayoutWord(10)));
+    assert_eq!(inline.as_slice(), &[LayoutWord(7), LayoutWord(10)]);
+    assert!(inline.remove_ordered(LayoutWord(7)));
+    assert!(inline.remove_ordered(LayoutWord(10)));
     assert!(inline.is_empty());
     assert_eq!(inline.heap_bytes(), 0);
 }
@@ -690,14 +714,17 @@ fn unordered_removal_moves_o1_elements_and_scans_o1_entries() {
     let mut list = IdList::default();
     for id in 1..=N {
         // The interning sites' entry point: no membership probe.
-        list.append_unchecked(id);
+        list.append_unchecked(LayoutWord(id));
     }
     assert_eq!(list.len(), N as usize);
     assert!(matches!(list, IdList::Spill(_)));
 
     // Remove every id from the FRONT of the list, in insertion order.
     for id in 1..=N {
-        assert!(list.remove_unordered(id), "id {id} was not present");
+        assert!(
+            list.remove_unordered(LayoutWord(id)),
+            "id {id} was not present"
+        );
     }
     assert!(list.is_empty());
 
@@ -739,12 +766,12 @@ fn the_spill_index_agrees_with_the_vector_after_every_operation() {
     let mut list = IdList::default();
     let mut oracle: Vec<u32> = Vec::new();
     for id in 1..=200u32 {
-        list.append_unchecked(id);
+        list.append_unchecked(LayoutWord(id));
         oracle.push(id);
     }
     // Remove a scattered third of them, front, middle and back.
     for &id in &[1u32, 2, 3, 100, 101, 199, 200, 50, 150, 7] {
-        assert!(list.remove_unordered(id));
+        assert!(list.remove_unordered(LayoutWord(id)));
         oracle.retain(|&x| x != id);
     }
     // Same SET, whatever the order.
@@ -752,19 +779,25 @@ fn the_spill_index_agrees_with_the_vector_after_every_operation() {
     got.sort_unstable();
     let mut want = oracle.clone();
     want.sort_unstable();
-    assert_eq!(got, want);
+    assert_eq!(got.iter().map(|w| w.0).collect::<Vec<_>>(), want);
     // And every survivor is still findable through the index.
     for &id in &want {
-        assert!(list.contains(id), "id {id} lost its index entry");
+        assert!(
+            list.contains(LayoutWord(id)),
+            "id {id} lost its index entry"
+        );
     }
     for &id in &[1u32, 2, 3, 100, 101, 199, 200, 50, 150, 7] {
-        assert!(!list.contains(id), "removed id {id} is still findable");
+        assert!(
+            !list.contains(LayoutWord(id)),
+            "removed id {id} is still findable"
+        );
     }
     // `replace` must keep the index coherent too.
     let survivor = want[0];
-    assert!(list.replace(survivor, 9_999));
-    assert!(!list.contains(survivor));
-    assert!(list.contains(9_999));
+    assert!(list.replace(LayoutWord(survivor), LayoutWord(9_999)));
+    assert!(!list.contains(LayoutWord(survivor)));
+    assert!(list.contains(LayoutWord(9_999)));
 }
 
 /// A list that never reaches `SPILL_INDEX_MIN` must not allocate an index
@@ -775,7 +808,7 @@ fn the_spill_index_agrees_with_the_vector_after_every_operation() {
 fn a_short_spilled_list_builds_no_index() {
     let mut list = IdList::default();
     for id in 1..=8u32 {
-        list.append_unchecked(id);
+        list.append_unchecked(LayoutWord(id));
     }
     assert!(matches!(list, IdList::Spill(_)));
     match &list {
@@ -786,9 +819,9 @@ fn a_short_spilled_list_builds_no_index() {
         IdList::Inline { .. } => unreachable!(),
     }
     // Still correct without one.
-    assert!(list.remove_unordered(4));
-    assert!(!list.contains(4));
-    assert!(list.contains(8));
+    assert!(list.remove_unordered(LayoutWord(4)));
+    assert!(!list.contains(LayoutWord(4)));
+    assert!(list.contains(LayoutWord(8)));
 }
 
 /// A dictionary-band id lives in its own directory: inserting one must not
@@ -828,7 +861,7 @@ fn weak_collection_summary_agrees_with_shape_brands() {
                 Some(brand as u32)
             };
             assert_eq!(record.weak_collection_brand(), expected);
-            record.note_rollback_parent(SHAPE_ID_BASE);
+            record.note_rollback_parent(LayoutWord(SHAPE_ID_BASE));
             record.set_tracked_births(8);
             record.note_descendant_width(64);
             assert_eq!(record.descendant_width(), 64);
@@ -911,12 +944,12 @@ fn symbol_absence_follows_the_layout_and_the_overflow() {
 fn created_birth_relationship_preserves_identity_and_rollback_edge() {
     let mut record = ShapeRecord::new(0, 0, 0, 7, ShapeObjectKind::Ordinary, 0);
     let parent = 0x8000_1245;
-    record.note_rollback_parent(parent);
+    record.note_rollback_parent(LayoutWord(parent));
     let facts = record.facts_key_with_keys(0);
-    assert_eq!(record.created_birth_shape(), 0);
-    record.note_created_birth_shape(0x8000_3456);
-    assert_eq!(record.created_birth_shape(), 0x8000_3456);
-    assert_eq!(record.rollback_parent(), parent);
+    assert_eq!(record.created_birth_shape(), LayoutWord(0));
+    record.note_created_birth_shape(LayoutWord(0x8000_3456));
+    assert_eq!(record.created_birth_shape(), LayoutWord(0x8000_3456));
+    assert_eq!(record.rollback_parent(), LayoutWord(parent));
     assert_eq!(
         record.facts_key_with_keys(0),
         facts,
@@ -924,10 +957,10 @@ fn created_birth_relationship_preserves_identity_and_rollback_edge() {
     );
     assert!(record.constfn_infos().is_empty());
     assert!(record.brands().is_empty());
-    record.note_created_birth_shape(0x8000_789a);
-    record.note_rollback_parent(parent + 1);
-    assert_eq!(record.created_birth_shape(), 0x8000_789a);
-    assert_eq!(record.rollback_parent(), parent + 1);
+    record.note_created_birth_shape(LayoutWord(0x8000_789a));
+    record.note_rollback_parent(LayoutWord(parent + 1));
+    assert_eq!(record.created_birth_shape(), LayoutWord(0x8000_789a));
+    assert_eq!(record.rollback_parent(), LayoutWord(parent + 1));
     unsafe { record.release_extras() };
 }
 
@@ -1009,7 +1042,7 @@ fn plain_birth_validation_rejects_ids_outside_the_ordinary_directory() {
         u32::MAX,
     ] {
         assert!(
-            super::super::plain_birth_rep_for_word(id, 0).is_none(),
+            super::super::plain_birth_rep_for_word(LayoutWord(id), 0).is_none(),
             "id {id:#x}"
         );
     }
@@ -1019,27 +1052,27 @@ fn plain_birth_validation_rejects_ids_outside_the_ordinary_directory() {
 fn cold_integrity_preserves_packed_facts_and_existing_weak_relationships() {
     let mut record = ShapeRecord::new(0, 0, 0, 7, ShapeObjectKind::Ordinary, 0);
     let parent = 0x8000_1245;
-    record.note_rollback_parent(parent);
+    record.note_rollback_parent(LayoutWord(parent));
     assert!(!record.has_boxed_extras());
     assert_eq!(record.integrity_flags(), 0);
     let ordinary = record.facts_key_with_keys(0);
     record.set_integrity_flags(crate::gc::OBJ_FLAG_NO_EXTEND);
-    assert_eq!(record.rollback_parent(), parent);
-    record.note_created_birth_shape(0x8000_3456);
+    assert_eq!(record.rollback_parent(), LayoutWord(parent));
+    record.note_created_birth_shape(LayoutWord(0x8000_3456));
     record.note_descendant_width(33);
-    record.note_integrity_target(1, 0x8000_4567);
+    record.note_integrity_target(1, LayoutWord(0x8000_4567));
     let flags = crate::gc::OBJ_FLAG_NO_EXTEND | crate::gc::OBJ_FLAG_SEALED;
     record.set_integrity_flags(flags);
     assert_eq!(record.integrity_flags(), flags);
     assert_eq!(record.object_kind(), ShapeObjectKind::Ordinary);
     assert_eq!(record.descendant_width(), 33);
-    assert_eq!(record.created_birth_shape(), 0x8000_3456);
-    assert_eq!(record.integrity_target(1), 0x8000_4567);
-    assert_eq!(record.rollback_parent(), parent);
+    assert_eq!(record.created_birth_shape(), LayoutWord(0x8000_3456));
+    assert_eq!(record.integrity_target(1), LayoutWord(0x8000_4567));
+    assert_eq!(record.rollback_parent(), LayoutWord(parent));
     assert_ne!(record.facts_key_with_keys(0), ordinary);
     record.set_integrity_flags(0);
     assert_eq!(record.integrity_flags(), 0);
     assert_eq!(record.facts_key_with_keys(0), ordinary);
-    assert_eq!(record.created_birth_shape(), 0x8000_3456);
+    assert_eq!(record.created_birth_shape(), LayoutWord(0x8000_3456));
     unsafe { record.release_extras() };
 }

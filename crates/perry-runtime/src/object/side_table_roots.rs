@@ -13,6 +13,7 @@
 //! logs and their per-entry helpers stay private to `object`.
 
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 /// GC root scanner for the transition cache. Same contract as
 /// `scan_shape_cache_roots` — without this the mark phase would free
@@ -140,8 +141,8 @@ unsafe fn scan_transition_cache_slot(
         *entry = TransitionEntry {
             key_ptr: 0,
             next_keys: 0,
-            prev_shape_id: 0,
-            target_shape_id: 0,
+            prev_shape_id: LayoutWord(0),
+            target_shape_id: LayoutWord(0),
             slot_idx: 0,
             target_len: 0,
         };
@@ -166,8 +167,8 @@ pub(crate) fn prune_dead_transition_cache_entries_young(is_dead_owner: &dyn Fn(u
                 *entry = TransitionEntry {
                     key_ptr: 0,
                     next_keys: 0,
-                    prev_shape_id: 0,
-                    target_shape_id: 0,
+                    prev_shape_id: LayoutWord(0),
+                    target_shape_id: LayoutWord(0),
                     slot_idx: 0,
                     target_len: 0,
                 };
@@ -191,11 +192,11 @@ fn transition_entry_is_dead(
         // dead target is now possible and must be reaped here — this is
         // the half that makes weakening it safe.
         || is_dead_owner(entry.next_keys)
-        || ((entry.prev_shape_id != 0 || spread::source_shape(entry).is_none())
+        || ((entry.prev_shape_id != LayoutWord(0) || spread::source_shape(entry).is_none())
             && shapes::shape_descriptor_for_word(entry.prev_shape_id).is_none())
         || spread::source_shape(entry)
             .is_some_and(|id| shapes::shape_descriptor_for_word(id).is_none())
-        || (entry.target_shape_id != 0
+        || (entry.target_shape_id != LayoutWord(0)
             && shapes::shape_descriptor_for_word(entry.target_shape_id).is_none())
 }
 
@@ -227,8 +228,8 @@ pub(crate) fn prune_dead_transition_cache_entries(is_dead_owner: &dyn Fn(usize) 
                 *entry = TransitionEntry {
                     key_ptr: 0,
                     next_keys: 0,
-                    prev_shape_id: 0,
-                    target_shape_id: 0,
+                    prev_shape_id: LayoutWord(0),
+                    target_shape_id: LayoutWord(0),
                     slot_idx: 0,
                     target_len: 0,
                 };
@@ -251,11 +252,11 @@ pub(crate) fn test_transition_cache_occupancy() -> usize {
 /// call, so it cannot drift from the writer it stands in for.
 #[cfg(test)]
 pub(crate) fn test_transition_cache_insert(
-    prev_shape_id: u32,
+    prev_shape_id: LayoutWord,
     interned_key: *const crate::StringHeader,
     next_keys: usize,
     slot_idx: u32,
-    target_shape_id: u32,
+    target_shape_id: LayoutWord,
 ) {
     super::transition_cache_insert(
         std::ptr::null(),
@@ -269,7 +270,7 @@ pub(crate) fn test_transition_cache_insert(
 
 #[cfg(test)]
 pub(crate) fn test_seed_transition_cache_entry(
-    prev_shape_id: u32,
+    prev_shape_id: LayoutWord,
     key_ptr: usize,
     next_keys: usize,
 ) {
@@ -286,7 +287,7 @@ pub(crate) fn test_seed_transition_cache_entry(
             key_ptr,
             next_keys,
             prev_shape_id,
-            target_shape_id: 0,
+            target_shape_id: LayoutWord(0),
             slot_idx: 0,
             target_len: 1,
         };

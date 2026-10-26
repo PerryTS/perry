@@ -36,6 +36,7 @@ fn empty_opts() -> CompileOptions {
         verify_native_regions: false,
         disable_buffer_fast_path: false,
         namespace_imports: Vec::new(),
+        namespace_source_prefixes: Default::default(),
         namespace_member_nested: Vec::new(),
         cjs_interop_namespaces: Vec::new(),
         imported_classes: Vec::new(),
@@ -1442,4 +1443,14 @@ fn whole_image_layout_plan_changes_every_package_cache_key() {
         key,
         compute_object_cache_key(&package, 1, "dense-layout-test")
     );
+}
+
+#[test]
+fn namespace_owner_is_part_of_the_object_key() {
+    let mut options = empty_opts();
+    let before = compute_object_cache_key(&options, 1, "0.5.156");
+    options
+        .namespace_source_prefixes
+        .insert("ns".into(), "owner".into());
+    assert_ne!(before, compute_object_cache_key(&options, 1, "0.5.156"));
 }

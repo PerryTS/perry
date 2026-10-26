@@ -26,7 +26,7 @@ use std::fmt::Write as _;
 pub(crate) const SPECIFIER: &str = "perry:cjs";
 
 /// The import every wrapped module carries first.
-pub(super) const SUPPORT_IMPORT: &str = "import { cache as __perry_cjs_cache, main as __perry_cjs_main, extensions as __perry_cjs_extensions, setPending as __perry_cjs_set_pending, takePending as __perry_cjs_take_pending, builtin as __perry_cjs_builtin, link as __perry_cjs_link, requireComputed as __perry_cjs_require_computed, requireError as __perry_cjs_require_error } from 'perry:cjs';";
+pub(super) const SUPPORT_IMPORT: &str = "import { cache as __perry_cjs_cache, main as __perry_cjs_main, extensions as __perry_cjs_extensions, setPending as __perry_cjs_set_pending, takePending as __perry_cjs_take_pending, link as __perry_cjs_link, requireComputed as __perry_cjs_require_computed, requireError as __perry_cjs_require_error } from 'perry:cjs';";
 
 /// The support module's source for a graph whose CommonJS modules are
 /// `paths` (canonical source paths, as the wrapper spells its cache key).
@@ -38,7 +38,11 @@ pub(crate) fn source(paths: &[String], entry_is_cjs: bool) -> String {
         if i > 0 {
             keys.push_str(", ");
         }
-        let _ = write!(keys, "{}", serde_json::to_string(p).expect("path is JSON encodable"));
+        let _ = write!(
+            keys,
+            "{}",
+            serde_json::to_string(p).expect("path is JSON encodable")
+        );
     }
     let main = if entry_is_cjs {
         "{ exports: undefined, __perry_cjs_record: true, id: undefined, path: undefined, filename: undefined, loaded: false, children: undefined, parent: undefined, paths: undefined, require: undefined }"
@@ -141,8 +145,14 @@ mod tests {
         let paths = vec!["/p/a.js".to_string(), "/p/b.js".to_string()];
         assert_eq!(source(&paths, true), source(&paths, true));
         let s = source(&paths, true);
-        assert!(s.contains(r#"__perry_declared_keys("/p/a.js", "/p/b.js")"#), "{s}");
-        assert!(s.contains("export const main = { exports: undefined"), "{s}");
+        assert!(
+            s.contains(r#"__perry_declared_keys("/p/a.js", "/p/b.js")"#),
+            "{s}"
+        );
+        assert!(
+            s.contains("export const main = { exports: undefined"),
+            "{s}"
+        );
         assert!(source(&paths, false).contains("export const main = undefined;"));
     }
 

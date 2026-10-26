@@ -8,8 +8,9 @@
 
 use super::*;
 
+use crate::codegen_abi::LayoutWord;
 #[inline]
-pub(crate) fn note_shape_id(shape_id: u32) {
+pub(crate) fn note_shape_id(shape_id: LayoutWord) {
     // The record alone: no descriptor is materialized to set its carrier bit.
     if let Some(record) = shapes::shape_record_for_word(shape_id) {
         unsafe { shapes::note_cache_carrier_record(record) };
@@ -70,7 +71,7 @@ pub(crate) fn recompute_after_full_trace() {
     }
     for &(keys, runtime_shape_id, _) in state.object_hot.shape_cache_overflow.borrow().values() {
         if !keys.is_null() {
-            note_shape_id(runtime_shape_id);
+            note_shape_id(LayoutWord(runtime_shape_id));
         }
     }
     shapes::recompute_record_handle_carriers();

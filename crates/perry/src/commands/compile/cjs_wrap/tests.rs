@@ -1736,52 +1736,58 @@ fn hoist_keeps_inheritance_chain_with_iife_local_parent_together() {
     );
 }
 
-// #8342: a CJS-wrapped module that does `let node_process = require("process");
-// node_process = __toESM(node_process, 1)` (the rolldown-bundled
-// `@socketsecurity/lib` shape) must NOT hoist a static
-// `import _req_N from 'process'` for the Node.js built-in. The codegen does not
-// initialize native-module import bindings inside CJS-wrapped modules, so the
-// hoisted binding would be undefined at runtime and the HIR's destructuring
-// var-decl pass would steal `node_process` into a native-module namespace
-// binding (dropping the runtime local) — producing
-// `ReferenceError: node_process is not defined`. The wrap must instead keep the
-// body's `let node_process = require("process")` declaration and route the
-// built-in through the synthetic require's `createRequire` arm.
+// Mutable aliases remain runtime locals; their literal require arm returns
+// the same hoisted native binding an ordinary ESM module uses.
 #[test]
-fn cjs_wrap_builtin_require_not_hoisted_as_static_import() {
+fn cjs_wrap_builtin_require_uses_static_import() {
     let src = "let node_process = require(\"process\");\n\
                node_process = __toESM(node_process, 1);\n\
                module.exports = { platform: node_process.platform };\n";
     let path = PathBuf::from("/tmp/x/external-pack.js");
     let wrapped = wrap_commonjs(src, &path);
-
-    // (1) No static ESM import of the built-in is emitted. The only import
-    // from a `node:` spec should be the wrap's own `createRequire` helper.
     assert!(
-        !wrapped.contains("from 'process'"),
-        "built-in `process` must not be hoisted as a static import; got:\n{wrapped}"
+        wrapped.contains("import _req_0 from 'process';"),
+        "{wrapped}"
     );
-    assert!(
-        !wrapped.contains("import _req_"),
-        "no synthetic `_req_N` import should be emitted for built-ins; got:\n{wrapped}"
-    );
-
-    // (2) The body's `let node_process = require(\"process\")` declaration
-    // survives (is not blanked) so it runs inside the IIFE and calls the
-    // synthetic require at runtime.
     assert!(
         wrapped.contains("let node_process = require(\"process\");"),
-        "the built-in require declaration must stay in the IIFE body; got:\n{wrapped}"
+        "{wrapped}"
     );
+    assert!(
+        wrapped.contains("if (specifier === 'process') { return _req_0; }"),
+        "{wrapped}"
+    );
+    assert!(
+        !wrapped.contains("return __perry_cjs_builtin(specifier)"),
+        "{wrapped}"
+    );
+}
 
-    // (3) The synthetic require's per-spec case for `process` resolves via
-    // `createRequire`, not by returning the (non-existent) import local.
+#[test]
+fn cjs_wrap_builtin_aliases_and_subpaths_use_ordinary_bindings() {
+    let src = "const fs = require('fs'); const other = require('node:fs'); \
+               const promises = require('fs/promises'); module.exports = {fs, other, promises};";
+    let path = PathBuf::from("/tmp/x/main.cjs");
+    let wrapped = wrap_commonjs(src, &path);
+    for spec in ["fs", "node:fs", "fs/promises"] {
+        assert!(wrapped.contains(&format!("from '{spec}';")), "{wrapped}");
+    }
     assert!(
-        wrapped.contains("__perry_cjs_create_require("),
-        "the built-in require case must use createRequire; got:\n{wrapped}"
+        !wrapped.contains("return __perry_cjs_builtin(specifier)"),
+        "{wrapped}"
     );
+    // The computed escape remains available, independently of literal arms.
     assert!(
-        !wrapped.contains("return _req_0;"),
-        "the built-in require case must not reference the dropped import local; got:\n{wrapped}"
+        wrapped.contains("return __perry_cjs_require_computed(specifier,"),
+        "{wrapped}"
     );
+}
+
+#[test]
+fn cjs_wrap_builtin_object_export_keeps_import_identity() {
+    let src = "const fs = require('fs');\nmodule.exports = { fs };\n";
+    let wrapped = wrap_commonjs(src, &PathBuf::from("/tmp/x/main.cjs"));
+    assert!(wrapped.contains("import fs from 'fs';"), "{wrapped}");
+    assert!(wrapped.contains("export { fs as fs };"), "{wrapped}");
+    assert!(!wrapped.contains("export const fs ="), "{wrapped}");
 }

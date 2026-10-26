@@ -97,6 +97,7 @@
 
 use super::header::{array_elements_ptr, array_gc_header, clean_arr_ptr, clean_arr_ptr_mut};
 use super::ArrayHeader;
+use crate::codegen_abi::LayoutWord;
 use crate::gc::GC_ARRAY_ELEMENT_SHAPE;
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -117,7 +118,7 @@ struct ElementShapeRecord {
     /// without probing the global shape table. A same-class value with a
     /// different shape still takes the complete classifier below; this word
     /// narrows no existing class-level proof.
-    ordinary_shape_id: u32,
+    ordinary_shape_id: LayoutWord,
     /// The `length` this record was verified against. A query requires the
     /// array's current `length` to still equal it, so every length-changing
     /// mutation invalidates the proof without needing its own call site.
@@ -147,7 +148,7 @@ pub(crate) struct ElementShapeProof {
     /// class-keyed proof too, but it is the WHOLE identity of a `class_id == 0`
     /// one (#10123) — the element-shape loop clone keys its per-element
     /// residual check on it.
-    pub(crate) ordinary_shape_id: u32,
+    pub(crate) ordinary_shape_id: LayoutWord,
     pub(crate) verified_len: u32,
     pub(crate) epoch: u64,
 }
@@ -263,7 +264,7 @@ pub(crate) fn invalidate_all_element_shapes() {
 /// identity. The header is validated once; after that, the descriptor probe
 /// supplies the authoritative ordinary-vs-class-object distinction.
 #[inline]
-fn element_identity_of_bits(value_bits: u64) -> Option<(u32, u32)> {
+fn element_identity_of_bits(value_bits: u64) -> Option<(u32, LayoutWord)> {
     if value_bits & crate::value::TAG_MASK != crate::value::POINTER_TAG {
         return None;
     }
@@ -282,7 +283,7 @@ fn element_identity_of_bits(value_bits: u64) -> Option<(u32, u32)> {
             return None;
         }
         let obj = addr as *const crate::object::ObjectHeader;
-        let shape_id = (*obj).shape_word();
+        let shape_id = LayoutWord((*obj).shape_word());
         if !crate::object::shapes::shape_descriptor_for_word(shape_id)
             .is_some_and(|shape| shape.object_kind.is_ordinary_layout())
         {
@@ -332,7 +333,7 @@ fn element_matches_record(value_bits: u64, record: ElementShapeRecord) -> bool {
         if (*obj).class_id != record.class_id {
             return false;
         }
-        if (*obj).shape_word() == record.ordinary_shape_id {
+        if LayoutWord((*obj).shape_word()) == record.ordinary_shape_id {
             #[cfg(test)]
             EXACT_SHAPE_STORE_HITS.with(|hits| hits.set(hits.get().wrapping_add(1)));
             return true;
@@ -356,8 +357,8 @@ fn element_matches_record(value_bits: u64, record: ElementShapeRecord) -> bool {
 #[inline]
 unsafe fn element_identity_of_validated_object(
     obj: *const crate::object::ObjectHeader,
-) -> Option<(u32, u32)> {
-    let shape_id = (*obj).shape_word();
+) -> Option<(u32, LayoutWord)> {
+    let shape_id = LayoutWord((*obj).shape_word());
     if !crate::object::shapes::shape_object_kind_for_word(shape_id)
         .is_some_and(|kind| kind.is_ordinary_layout())
     {
@@ -461,7 +462,7 @@ pub(crate) unsafe fn forget_element_shape_after_full_prune(user_ptr: usize) {
 unsafe fn establish(
     arr: *mut ArrayHeader,
     class_id: u32,
-    ordinary_shape_id: u32,
+    ordinary_shape_id: LayoutWord,
     verified_len: u32,
 ) {
     let Some(header) = array_gc_header(arr) else {
@@ -765,7 +766,7 @@ pub extern "C" fn js_array_ensure_element_shape(arr: *mut ArrayHeader) -> i32 {
 pub extern "C" fn js_array_ensure_element_shape_ordinary(arr: *mut ArrayHeader) -> i32 {
     unsafe {
         match ensure_element_shape(arr) {
-            Some(proof) if proof.class_id == 0 => proof.ordinary_shape_id as i32,
+            Some(proof) if proof.class_id == 0 => proof.ordinary_shape_id.0 as i32,
             _ => 0,
         }
     }
@@ -833,7 +834,7 @@ pub(crate) fn test_element_shape_record_exists(owner: usize) -> bool {
 /// elements — a fixture for the collector's side-table tests.
 #[cfg(test)]
 pub(crate) fn test_seed_element_shape_record(owner: usize) {
-    unsafe { establish(owner as *mut ArrayHeader, 1, 0, 0) };
+    unsafe { establish(owner as *mut ArrayHeader, 1, LayoutWord(0), 0) };
 }
 
 #[cfg(test)]

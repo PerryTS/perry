@@ -323,11 +323,9 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
     if !dead_platform_requires.is_empty() {
         require_specs.retain(|spec| !dead_platform_requires.contains(spec));
     }
-    // #sdxgen: Identify Node.js built-in requires (`require("process")`,
-    // `require("os")`, etc.) so the synthetic `require` function can resolve
-    // them via `createRequire` at runtime instead of relying on the hoisted
-    // static import binding (which the codegen does not initialize for
-    // native modules inside CJS-wrapped modules).
+    // Literal builtins use ordinary hoisted ESM default bindings. The
+    // synthetic require returns that binding; only computed specifiers need
+    // the support module's runtime builtin resolver.
     let builtin_requires: Vec<String> = require_specs
         .iter()
         .filter(|spec| {
@@ -481,18 +479,6 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
             // Don't adopt a function-local alias — keep it lazy (see above).
             continue;
         }
-        // #sdxgen: Don't adopt aliases for Node.js built-in modules. The
-        // codegen doesn't initialize native-module import bindings inside
-        // CJS-wrapped modules, so an adopted alias would be undefined at
-        // runtime. Keeping the alias un-adopted means the declaration stays
-        // in the IIFE body and `require("process")` goes through the
-        // synthetic require, which resolves builtins via createRequire.
-        let normalized = spec.strip_prefix("node:").unwrap_or(spec);
-        if !perry_hir::is_bare_prefix_only_builtin(spec)
-            && perry_hir::is_node_builtin_module(normalized)
-        {
-            continue;
-        }
         if import_local_names.iter().any(|n| n == alias) {
             continue;
         }
@@ -541,13 +527,6 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
     let imports = require_specs
         .iter()
         .zip(import_local_names.iter())
-        // #8342: don't emit a static `import _req_N from 'process'` for Node.js
-        // built-in specs. The codegen does not initialize native-module import
-        // bindings inside CJS-wrapped modules, so the binding would be dropped
-        // by the HIR / left undefined at runtime. Builtins resolve through the
-        // synthetic require's `createRequire` arm instead (see `require_cases`),
-        // which never references the import local.
-        .filter(|(spec, _)| !builtin_requires.contains(spec))
         .filter(|(spec, _)| resolved_native_addon(source_path, spec, native_addon_paths).is_none())
         .map(|(spec, local)| {
             // #4904: Node's underscore-prefixed internal http modules are
@@ -752,12 +731,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
                 None
             };
             let required_value = if builtin_requires.contains(spec) {
-                // #sdxgen: For Node.js built-in modules, resolve via createRequire
-                // at runtime instead of the hoisted import binding (which the
-                // codegen does not initialize for native modules in CJS-wrapped
-                // modules). createRequire calls js_create_native_module_namespace
-                // under the hood — the same path Node.js uses for require("process").
-                format!("{link_child}return __perry_cjs_builtin(specifier);")
+                format!("{link_child}return {local};")
             } else if needs_runtime_record {
                 runtime_require.clone().unwrap_or_else(|| format!("return {local};"))
             } else if let Some(target) = resolved_target.as_ref() {
@@ -772,11 +746,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
                 format!("{link_child}return {local};")
             };
             if builtin_requires.contains(spec) {
-                // #8342: builtins have no static import binding (we skip emitting
-                // one above), so never reference `{local}` here — always go through
-                // the `createRequire`-backed `required_value`. The try-site
-                // `typeof {local} === 'boolean'` sentinel guard does not apply
-                // (builtins are never the pruned-build TRUE sentinel).
+                // A builtin binding is never the pruned-build TRUE sentinel.
                 format!("        if (specifier === '{spec}') {{ {required_value} }}")
             } else if require_site_in_try(source, spec) && runtime_require.is_none() {
                 format!(
@@ -1134,19 +1104,9 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
             .iter()
             .filter_map(|(name, spec)| {
                 let n = require_specs.iter().position(|s| s == spec)?;
-                if builtin_requires.contains(spec) || lazy_specs.contains(spec) {
-                    // #8343 followup: built-in specs no longer hoist a static
-                    // `import _req_N` (the codegen doesn't initialize
-                    // native-module import bindings in CJS-wrapped modules),
-                    // so `export { _req_N as name }` would reference an
-                    // undeclared ESM binding. The IIFE body's
-                    // `exports.name = require("<builtin>")` resolves through
-                    // the synthetic require's `createRequire` arm and populates
-                    // `_cjs.name`, so back the re-export with that — the same
-                    // surface `named_export_decls` uses below. Conditional
-                    // requires also need the actual CJS property: forwarding
-                    // their import binding would bypass the branch and expose
-                    // a dependency that the module never required.
+                if lazy_specs.contains(spec) {
+                    // A conditional require's export is the actual CommonJS
+                    // property: forwarding its import would bypass the branch.
                     Some(export_snapshot(name))
                 } else {
                     Some(format!(
@@ -1206,14 +1166,6 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
             // immutable module-scope `const alias = _req_N;` (the const write
             // would throw) nor strip its declaration below.
             .filter(|(alias, _, _)| !identifier_is_reassigned(source, alias))
-            // #8342: don't surface `const alias = _req_N;` for Node.js built-in
-            // specs — we no longer emit a static `import _req_N from '<builtin>'`
-            // (the codegen doesn't initialize native-module import bindings in
-            // CJS-wrapped modules), so `_req_N` doesn't exist. The body's own
-            // `<kw> alias = require('<builtin>')` stays (builtins are excluded
-            // from the blanking filter below) and resolves through the synthetic
-            // require's `createRequire` arm at runtime.
-            .filter(|(_, spec, _)| !builtin_requires.contains(spec))
             .filter(|(_, spec, _)| !lazy_specs.contains(spec))
             .filter_map(|(alias, spec, _range)| {
                 let idx = require_specs.iter().position(|s| s == spec)?;
@@ -1235,14 +1187,6 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
             .filter(|(_, spec, _)| require_specs.iter().any(|s| s == spec))
             .filter(|(_, spec, _)| !lazy_specs.contains(spec))
             .filter(|(alias, _, _)| !identifier_is_reassigned(source, alias))
-            // #sdxgen: Don't blank alias declarations for Node.js built-in
-            // modules — let them stay in the IIFE body and resolve through
-            // the synthetic require (which uses createRequire for builtins).
-            .filter(|(_, spec, _)| {
-                let normalized = spec.strip_prefix("node:").unwrap_or(spec);
-                perry_hir::is_bare_prefix_only_builtin(spec)
-                    || !perry_hir::is_node_builtin_module(normalized)
-            })
             .map(|(_, _, range)| range)
             .collect::<Vec<_>>();
         (lines, ranges)

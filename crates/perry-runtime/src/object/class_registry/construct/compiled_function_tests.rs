@@ -1,5 +1,6 @@
 //! #10507: ordinary compiled function construction and `instanceof`.
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 extern "C" fn empty_body(_closure: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
     f64::from_bits(crate::value::TAG_UNDEFINED)
@@ -53,7 +54,7 @@ fn construction_is_born_from_the_prototype_birth_record() {
         assert_eq!((*second).class_id, word as u32);
         assert_eq!(
             crate::object::shapes::object_shape_stamp(second),
-            (word >> 32) as u32,
+            LayoutWord((word >> 32) as u32),
             "a construction is stamped with the record's birth shape"
         );
         assert_eq!(

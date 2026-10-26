@@ -374,7 +374,9 @@ impl<'a> Gen<'a> {
             let own = support.and_then(|sp| {
                 self.exports
                     .iter()
-                    .find(|(&(mi, a), _)| path_of(self, mi) == sp && self.m.atoms[a as usize] == name)
+                    .find(|(&(mi, a), _)| {
+                        path_of(self, mi) == sp && self.m.atoms[a as usize] == name
+                    })
                     .map(|(_, &b)| b)
             });
             let value = match (cells, own, support) {
@@ -938,8 +940,15 @@ impl<'a> Gen<'a> {
         // A literal of this unit passed to another unit's closed function
         // (decision 13) is described by the argument contract as a value
         // contract describes a published literal: its field functions are
-        // contract functions the callee calls through their contract.
+        // contract functions the callee calls through their contract. An
+        // array leaves through its element cell, as a published value's and
+        // a contract result's do (DECISIONS 94, 207): the argument contract
+        // names it, and the callee reads its elements from the cell.
         for t in self.closed_arg_literals() {
+            if self.arr_ok(t) {
+                changed |= self.arr_leaves(t);
+                continue;
+            }
             if !self.field_fns.keys().any(|&(ft, _)| ft == t) {
                 changed |= self.note_field_fns(t);
             }

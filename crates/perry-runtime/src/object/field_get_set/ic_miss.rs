@@ -2,6 +2,7 @@
 //! Pure relocation out of field_get_set.rs (issue #1103 split).
 
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 /// Get a field by its string key name, returned as f64 (raw JSValue bits)
 /// This preserves the NaN-boxing for strings and other pointer types
@@ -883,7 +884,7 @@ pub extern "C" fn js_private_field_add(
     // The claim allocates the key (inside its own no-move window); the store
     // re-reads the holder from its handle.
     let pred_rep = crate::object::shapes::shape_rep_of_receiver(unsafe {
-        crate::object::shapes::object_shape_stamp(holder)
+        (crate::object::shapes::object_shape_stamp(holder)).0
     });
     let holder = scope.root_raw_mut_ptr(holder);
     holder.with_mut_ptr::<ObjectHeader, _>(|holder| unsafe {
@@ -997,7 +998,7 @@ fn class_field_add_slow(receiver: f64, key: f64, value: f64) -> f64 {
     {
         throw_private_type_error("Cannot define class field on receiver");
     }
-    if predecessor != 0 {
+    if predecessor != LayoutWord(0) {
         unsafe {
             class_field_chain::learn(predecessor, receiver.get_nanbox_f64(), key.get_nanbox_f64());
         }

@@ -40,7 +40,7 @@ pub(super) unsafe fn ordinary_compiled_function_at_site(
             let header = crate::value::addr_class::try_read_gc_header(closure as usize)?;
             if header.obj_type == crate::gc::GC_TYPE_CLOSURE
                 && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
-                && ((*closure).shape_id as u64 | FUNCTION_SITE) == (*site).load(Ordering::Relaxed)
+                && ((*closure).shape_id.0 as u64 | FUNCTION_SITE) == (*site).load(Ordering::Relaxed)
                 && (*closure).info as u64 == (*site.add(1)).load(Ordering::Relaxed)
             {
                 return Some(closure as usize);
@@ -59,13 +59,13 @@ unsafe fn site_prototype_object(
 ) -> Option<*mut ObjectHeader> {
     if site.is_null()
         || (*site).load(Ordering::Relaxed)
-            != (FUNCTION_SITE | (*(closure as *const ClosureHeader)).shape_id as u64)
+            != (FUNCTION_SITE | (*(closure as *const ClosureHeader)).shape_id.0 as u64)
     {
         return None;
     }
     let proof = (*site.add(2)).load(Ordering::Relaxed);
     let bag = (*(closure as *const ClosureHeader)).props;
-    if bag.is_null() || crate::object::shapes::object_shape_stamp(bag) != proof as u32 {
+    if bag.is_null() || crate::object::shapes::object_shape_stamp(bag) != LayoutWord(proof as u32) {
         return None;
     }
     let slot = (proof >> 32) as u32;
@@ -78,7 +78,8 @@ unsafe fn site_prototype_object(
     let proto = value.as_pointer::<ObjectHeader>() as *mut ObjectHeader;
     let header = crate::value::addr_class::try_read_gc_header(proto as usize)?;
     (header.obj_type == crate::gc::GC_TYPE_OBJECT
-        && crate::object::shapes::object_shape_stamp(proto) as u64 == prototype_proof as u32 as u64)
+        && crate::object::shapes::object_shape_stamp(proto).0 as u64
+            == prototype_proof as u32 as u64)
         .then_some(proto)
 }
 
@@ -100,17 +101,18 @@ unsafe fn prime_function_site(closure: usize, proto: *const ObjectHeader, site: 
         return;
     };
     (*site.add(1)).store((*closure).info as u64, Ordering::Relaxed);
-    (*site.add(2)).store(shape as u64 | (slot as u64) << 32, Ordering::Relaxed);
+    (*site.add(2)).store(shape.0 as u64 | (slot as u64) << 32, Ordering::Relaxed);
     (*site.add(3)).store(
-        crate::object::shapes::object_shape_stamp(proto) as u64
+        crate::object::shapes::object_shape_stamp(proto).0 as u64
             | (record.live_inline_slot_count() as u64) << 32,
         Ordering::Relaxed,
     );
     (*site).store(
-        FUNCTION_SITE | (*closure).shape_id as u64,
+        FUNCTION_SITE | (*closure).shape_id.0 as u64,
         Ordering::Relaxed,
     );
 }
+use crate::codegen_abi::LayoutWord;
 use crate::codegen_abi::{
     FN_ARROW, FN_ASYNC, FN_ASYNC_GENERATOR, FN_BUILTIN, FN_COMPILED_BODY, FN_GENERATOR,
     FN_NON_CONSTRUCTOR,
@@ -240,14 +242,14 @@ pub(super) unsafe fn construct_ordinary_compiled_function(
                 &*layout,
                 serial,
                 &proto_handle,
-                recorded,
+                LayoutWord(recorded),
             ) {
                 let shape = crate::object::shapes::object_shape_stamp(obj);
-                if shape != recorded {
+                if shape != LayoutWord(recorded) {
                     let ptr = crate::value::JSValue::from_bits(proto_handle.get_nanbox_u64())
                         .as_pointer::<ObjectHeader>();
                     // GC_STORE_AUDIT(POINTER_FREE): the existing weak class-id-zero / ShapeId pair.
-                    (*(*ptr).meta).instance_birth = u64::from(shape) << 32;
+                    (*(*ptr).meta).instance_birth = u64::from(shape.0) << 32;
                     crate::object::shapes::note_old_generation_carrier(
                         crate::object::shapes::shape_record_for_word(shape),
                     );
@@ -280,14 +282,18 @@ pub(super) unsafe fn construct_ordinary_compiled_function(
     // allocator as Object.create. It validates the chosen width and actual
     // prototype serial once, then revalidates after any collecting allocation.
     let recorded = ((*(*proto).meta).instance_birth >> 32) as u32;
-    let obj =
-        crate::object::alloc_basic::object_alloc_created(&proto_handle, serial, birth, recorded);
+    let obj = crate::object::alloc_basic::object_alloc_created(
+        &proto_handle,
+        serial,
+        birth,
+        LayoutWord(recorded),
+    );
     let shape = crate::object::shapes::object_shape_stamp(obj);
-    if shape != recorded {
+    if shape != LayoutWord(recorded) {
         let ptr = crate::value::JSValue::from_bits(proto_handle.get_nanbox_u64())
             .as_pointer::<ObjectHeader>();
         // GC_STORE_AUDIT(POINTER_FREE): the existing weak class-id-zero / ShapeId pair.
-        (*(*ptr).meta).instance_birth = u64::from(shape) << 32;
+        (*(*ptr).meta).instance_birth = u64::from(shape.0) << 32;
         crate::object::shapes::note_old_generation_carrier(
             crate::object::shapes::shape_record_for_word(shape),
         );
