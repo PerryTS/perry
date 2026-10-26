@@ -1,4 +1,6 @@
-#[cfg(test)]
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(any(target_os = "macos", test))]
 mod macos_policy;
 
 use std::path::Path;
@@ -72,8 +74,19 @@ pub(crate) fn bundled_certificates() -> &'static [String] {
 
 pub(crate) fn system_certificates() -> &'static [String] {
     SYSTEM_CERTS
-        .get_or_init(|| multi_cert_or_fallback(load_first_existing_bundle()))
+        .get_or_init(load_system_certificates)
         .as_slice()
+}
+
+fn load_system_certificates() -> Vec<String> {
+    #[cfg(target_os = "macos")]
+    {
+        macos::load()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        multi_cert_or_fallback(load_first_existing_bundle())
+    }
 }
 
 pub(crate) fn extra_certificates() -> &'static [String] {
