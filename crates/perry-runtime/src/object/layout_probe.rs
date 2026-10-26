@@ -947,6 +947,42 @@ unsafe fn site_key_hash<const LAZY_HASH: bool>(key_bits: u64, hash: u64) -> u64 
     }
 }
 
+/// Actual table ownership was proved by the front on this NoCollect path.
+/// Keep the operation's inherited-call/verify register needs out of receivers
+/// whose ordinary record already answers without an owned table.
+#[inline(never)]
+unsafe fn owned_get<const ABSENT: bool, const LAZY_HASH: bool>(
+    dir: *const u8,
+    obj: *const ObjectHeader,
+    r: *mut ShapeRecord,
+    key_bits: u64,
+    hash: u64,
+) -> f64 {
+    let meta = (*obj).meta;
+    if (*obj).class_id == crate::object::NATIVE_MODULE_CLASS_ID
+        || (*meta).elements != 0
+        || (*meta).flags
+            & (crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER
+                | crate::object::OBJECT_META_FLAG_NATIVE_ALIAS)
+            != 0
+    {
+        return hole();
+    }
+    let hash = site_key_hash::<LAZY_HASH>(key_bits, hash);
+    let value = match overflow_get(obj, key_bits, hash) {
+        Some(value) => value,
+        // The actual table has proved own absence. Continue through
+        // the existing current-shape prototype walk, without deriving
+        // a redundant receiver-key index or learning an overflow memo.
+        None => inherited_get::<ABSENT>(dir, obj, r, key_bits, hash),
+    };
+    if ABSENT {
+        verify::answer(obj as usize, key_bits, value)
+    } else {
+        value
+    }
+}
+
 /// The own-data front. With `SITE` (a compile-time choice) every own miss
 /// first asks the site's shape/slot memo (`site_memo`), then continues
 /// exactly as the stateless probe; an own hit never reads the memo.
@@ -980,28 +1016,7 @@ unsafe fn probe_get_at<const ABSENT: bool, const SITE: bool, const LAZY_HASH: bo
     {
         let meta = (*obj).meta;
         if !meta.is_null() && (*meta).overflow != 0 {
-            if (*obj).class_id == crate::object::NATIVE_MODULE_CLASS_ID
-                || (*meta).elements != 0
-                || (*meta).flags
-                    & (crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER
-                        | crate::object::OBJECT_META_FLAG_NATIVE_ALIAS)
-                    != 0
-            {
-                return hole();
-            }
-            let hash = site_key_hash::<LAZY_HASH>(key_bits, hash);
-            let value = match overflow_get(obj, key_bits, hash) {
-                Some(value) => value,
-                // The actual table has proved own absence. Continue through
-                // the existing current-shape prototype walk, without deriving
-                // a redundant receiver-key index or learning an overflow memo.
-                None => inherited_get::<ABSENT>(dir, obj, r, key_bits, hash),
-            };
-            return if ABSENT {
-                verify::answer(obj as usize, key_bits, value)
-            } else {
-                value
-            };
+            return owned_get::<ABSENT, LAZY_HASH>(dir, obj, r, key_bits, hash);
         }
     }
     let probe = (*r).probe;
