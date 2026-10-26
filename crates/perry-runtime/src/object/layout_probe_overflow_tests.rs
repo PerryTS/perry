@@ -203,6 +203,8 @@ fn owned_fixed_entry_reader_keeps_inline_and_spill_semantics() {
                             let fields = (object as *mut u8)
                                 .add(std::mem::size_of::<ObjectHeader>())
                                 as *mut u64;
+                            // GC_STORE_AUDIT(POINTER_FREE): the closed list above
+                            // contains only undefined, hole, canonical NaN and -0.
                             fields.add(fixed as usize).write(bits);
                         } else {
                             crate::object::spill::spill_set(object as usize, fixed as usize, bits);
@@ -226,6 +228,8 @@ fn owned_fixed_entry_reader_keeps_inline_and_spill_semantics() {
                 assert!(fixed < live);
                 let fields =
                     (object as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;
+                // GC_STORE_AUDIT(POINTER_FREE): a null-pointer sentinel has no
+                // child edge; this fixture exercises the reader's default.
                 fields.add(fixed as usize).write(0x7ffd_0000_0000_0000);
                 assert_eq!(
                     perry_probe_get(dir, biased, key, hash).to_bits(),
