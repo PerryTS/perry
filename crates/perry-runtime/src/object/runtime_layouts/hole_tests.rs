@@ -684,8 +684,10 @@ fn classless_optional_family_keeps_shape_and_routes_unknown_keys_to_overflow() {
         b"holes_extra".as_ptr(),
         11,
     ));
+    object.with_mut_ptr(|obj: *mut ObjectHeader| {
+        extra.with_const_ptr(|name| js_object_set_field_by_name(obj, name, 31.0));
+    });
     object.with_mut_ptr(|obj: *mut ObjectHeader| unsafe {
-        js_object_set_field_by_name(obj, extra.get_raw_mut_ptr(), 31.0);
         assert!(
             !(*obj).meta.is_null() && (*(*obj).meta).overflow != 0,
             "an unmodeled key must enter the authoritative overflow"
@@ -696,11 +698,13 @@ fn classless_optional_family_keeps_shape_and_routes_unknown_keys_to_overflow() {
     crate::gc::js_gc_collect();
     object.with_mut_ptr(|obj: *mut ObjectHeader| unsafe {
         assert_order(obj, &["holes_a", "holes_b", "holes_extra"]);
-        assert_eq!(
-            js_object_get_field_by_name_f64(obj, extra.get_raw_mut_ptr()),
-            31.0
-        );
     });
+    object.with_mut_ptr(|obj: *mut ObjectHeader| {
+        extra.with_const_ptr(|name| {
+            assert_eq!(js_object_get_field_by_name_f64(obj, name), 31.0);
+        });
+    });
+    let extra_atom = extra.with_const_ptr(|name| unsafe { crate::string::property_atom(name) });
     object.with_mut_ptr(|obj: *mut ObjectHeader| unsafe {
         let atom = crate::string::property_atom(H_A.string);
         let key = crate::JSValue::string_ptr(atom.cast_mut()).bits();
@@ -717,7 +721,7 @@ fn classless_optional_family_keeps_shape_and_routes_unknown_keys_to_overflow() {
             crate::object::layout_probe::perry_probe_set(dir, receiver, key, hash, 17.0),
             1
         );
-        let atom = crate::string::property_atom(extra.get_raw_mut_ptr());
+        let atom = extra_atom;
         let key = crate::JSValue::string_ptr(atom.cast_mut()).bits();
         let hash = crate::string::property_atom_hash(atom);
         assert_eq!(
@@ -725,10 +729,9 @@ fn classless_optional_family_keeps_shape_and_routes_unknown_keys_to_overflow() {
             1,
             "a table-owned value keeps its plain-value leaf store"
         );
-        assert_eq!(
-            js_object_get_field_by_name_f64(obj, extra.get_raw_mut_ptr()),
-            43.0
-        );
+        extra.with_const_ptr(|name| {
+            assert_eq!(js_object_get_field_by_name_f64(obj, name), 43.0);
+        });
         assert_eq!(
             crate::object::layout_probe::perry_probe_set(dir, receiver, key, hash, 31.0),
             1
