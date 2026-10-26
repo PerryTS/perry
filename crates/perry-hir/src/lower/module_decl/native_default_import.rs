@@ -26,21 +26,18 @@ pub(crate) fn canonicalize_native_import_source(raw_source: &str) -> String {
 /// needs a line here.
 pub(crate) fn is_cjs_style_native_default_import(module_name: &str) -> bool {
     match module_name {
-        // `events`' CommonJS export is the `EventEmitter` class itself
-        // (`cjs_default_export_value("events")`), not a `<mod>.default`
-        // namespace, but the default import is still CJS-shaped.
-        "events" => true,
+        // These CommonJS defaults are callable exports, rather than distinct
+        // `<mod>.default` namespace objects. They still use the canonical
+        // default export, exactly as require() does.
+        "assert" | "assert/strict" | "events" | "stream" => true,
         // Aliases the runtime folds before any table lookup
         // (`normalize_native_module_name`: `sys` → `util`, `path/posix` →
         // `path.posix`, `path/win32` → `path.win32`); the HIR sees the
         // import's own spelling.
         "sys" | "path/posix" | "path/win32" => true,
-        // Table rows whose default import the HIR keeps on the namespace
-        // object: `process` has its own lowering (the `source == "process"`
-        // arms in `module_decl.rs`); `node-pty`, `repl` and `sea` never took
-        // the CJS-style path — flipping them is a lowering change, not a
-        // dedup, and is left for a follow-up.
-        "node-pty" | "process" | "repl" | "sea" => false,
+        // process's canonical CommonJS value is its plain namespace; the
+        // non-Node node-pty package retains its existing import convention.
+        "node-pty" | "process" => false,
         other => perry_dispatch::has_cjs_default_namespace(other),
     }
 }
@@ -60,7 +57,7 @@ mod tests {
     /// default. Adding a row to the table classifies it CJS-style unless it
     /// is listed here — so this list, not the table, is what a lowering
     /// decision edits.
-    const NAMESPACE_OBJECT_DEFAULT_ROWS: &[&str] = &["node-pty", "process", "repl", "sea"];
+    const NAMESPACE_OBJECT_DEFAULT_ROWS: &[&str] = &["node-pty", "process"];
 
     #[test]
     fn every_shared_table_row_is_classified() {

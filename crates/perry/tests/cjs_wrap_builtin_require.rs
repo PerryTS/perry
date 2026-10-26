@@ -256,3 +256,18 @@ console.log("typeof:", typeof mod);
     );
     assert_eq!(stdout, "typeof: object\n");
 }
+
+#[test]
+fn cjs_wrap_callable_builtin_defaults_keep_their_commonjs_values() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let stdout = compile_and_run_cjs(
+        dir.path(),
+        r#"
+console.log(typeof require("assert"));
+console.log(typeof require("assert/strict"));
+console.log(typeof require("events"));
+console.log(typeof require("stream"));
+"#,
+    );
+    assert_eq!(stdout, "function\nfunction\nfunction\nfunction\n");
+}
