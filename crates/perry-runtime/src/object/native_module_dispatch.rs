@@ -346,6 +346,15 @@ pub(crate) unsafe fn dispatch_native_module_method(
     };
     match super::native_module_registry::nm_dispatch_lookup(module_name) {
         Some(f) => f(&ctx, module_name, method_name),
+        // The runtime creates the global `crypto` object itself, so a program
+        // that never names the crypto module never installs its bucket (#13313).
+        None if module_name == "crypto.webcrypto"
+            && method_name == "getRandomValues"
+            && args_len >= 1 =>
+        {
+            let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+            super::native_module_crypto_random::random_fill_sync(*args_ptr, undefined, undefined)
+        }
         // No bucket and no registry export: answering `undefined` hid a missing
         // implementation behind a call that appeared to succeed.
         None => crate::collection_iter::throw_type_error(&format!(
