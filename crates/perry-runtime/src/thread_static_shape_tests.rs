@@ -6,10 +6,7 @@
 //! did not mints a counter id and never holds the static id under any facts.
 use super::*;
 use crate::codegen_abi::{LayoutWord, ShapeId};
-use crate::object::shapes::{
-    is_layout_word, is_static_shape_id, object_shape_stamp, shape_descriptor_for_word,
-    SHAPE_ID_BASE,
-};
+use crate::object::shapes::{is_layout_word, object_shape_stamp, shape_descriptor_for_word};
 
 const NAMES: [&str; 2] = ["lt4w_left", "lt4w_right"];
 const REQUESTED: u32 = crate::object::static_shapes::fixtures::fixture_word(0x4567);

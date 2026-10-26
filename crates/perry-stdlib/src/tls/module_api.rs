@@ -381,7 +381,7 @@ mod tests {
             let cert = scope.root_raw_mut_ptr(perry_runtime::js_object_alloc(0, 0));
             let key = scope.root_nanbox_f64(nanbox_str("subjectaltname"));
             let san = scope.root_nanbox_f64(nanbox_str(san));
-            cert.with_mut_ptr(|cert| unsafe {
+            cert.with_mut_ptr(|cert| {
                 perry_runtime::js_object_set_field_by_name(
                     cert,
                     perry_runtime::js_get_string_pointer_unified(key.get_nanbox_f64())

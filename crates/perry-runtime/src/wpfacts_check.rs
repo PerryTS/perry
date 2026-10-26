@@ -74,7 +74,7 @@ fn kind_of(bits: u64) -> u32 {
 }
 
 fn string_bytes(ptr: *const StringHeader) -> Option<Vec<u8>> {
-    if ptr.is_null() || (ptr as usize) < 0x10000 {
+    if !crate::value::addr_class::is_above_handle_band(ptr as usize) {
         return None;
     }
     unsafe {
@@ -158,7 +158,7 @@ pub extern "C" fn perry_wpfacts_check_field(
     }
     let addr = (bits & POINTER_MASK) as usize;
     let cid = unsafe {
-        if addr < 0x1000
+        if crate::value::addr_class::is_handle_band(addr)
             || crate::value::addr_class::try_read_tracked_gc_header_of_type(
                 addr,
                 crate::gc::GC_TYPE_OBJECT,

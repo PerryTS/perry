@@ -53,7 +53,7 @@ use std::sync::{Mutex, OnceLock};
 /// SharedArrayBuffer block) — proven before the header is read.
 #[inline]
 pub(crate) fn byte_word_address(bits: u64) -> Option<usize> {
-    if bits < 0x1000 {
+    if bits < crate::value::addr_class::HANDLE_BAND_MAX as u64 {
         return None;
     }
     if (bits & crate::value::TAG_MASK) == crate::value::POINTER_TAG {

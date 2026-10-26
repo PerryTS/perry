@@ -328,7 +328,6 @@ fn a_region_prime_value_tests_a_requested_number_read_on_a_non_identity_lane() {
 /// the same keys with the other rep are another content under another id.
 #[test]
 fn a_class_birth_with_an_f64_lane_adopts_its_static_id() {
-    use super::static_shapes::fixtures::fixture_object_shape_id_for_class_keys_static;
     let k = keys(b"sa\0sb\0", 2);
     let f64_id = crate::object::static_shapes::fixtures::fixture_word(0x3a61);
     let any_id = crate::object::static_shapes::fixtures::fixture_word(0x3a62);
@@ -357,7 +356,6 @@ fn a_class_birth_with_an_f64_lane_adopts_its_static_id() {
 /// the later definer's F64 birth keeps its distinct id and +0.0 birth fill.
 #[test]
 fn importer_first_birth_keeps_definer_rep_and_stub_slots_distinct() {
-    use super::static_shapes::fixtures::fixture_object_shape_id_for_class_keys_static;
     let k = keys(b"ifa\0ifb\0", 2);
     let any_id = crate::object::static_shapes::fixtures::fixture_word(0x3a71);
     let f64_id = crate::object::static_shapes::fixtures::fixture_word(0x3a72);
@@ -494,9 +492,7 @@ fn every_birth_path_of_a_rep_literal_and_class_stamps_one_shape_and_fills_its_f6
 fn a_region_constfn_shape_keeps_numeric_admission_and_refuses_special_stores() {
     use super::field_rep::REP_SPECIAL;
     use super::shapes::{js_region_loop_pack, js_region_loop_prime, REGION_GUARD_WORD_EMPTY};
-    use super::static_shapes::{
-        js_object_final_shape_id_for_class_keys_static_constfn, ConstFnStaticEntry,
-    };
+    use super::static_shapes::ConstFnStaticEntry;
     use core::sync::atomic::{AtomicU64, Ordering};
 
     extern "C" fn body(

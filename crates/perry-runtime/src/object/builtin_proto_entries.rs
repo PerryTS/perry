@@ -606,12 +606,10 @@ unsafe fn array_fast_admits(recv: f64) -> bool {
     if bits & !POINTER_MASK != POINTER_TAG {
         return true;
     }
-    let addr = (bits & POINTER_MASK) as usize;
-    if !crate::value::addr_class::is_above_handle_band(addr) || addr as u64 >= 1u64 << 47 {
+    let Some(header) = crate::value::addr_class::pointer_value_header(bits) else {
         return false;
-    }
-    let header = (addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    (*header).obj_type == crate::gc::GC_TYPE_ARRAY && (*header)._reserved & ARRAY_NOT_DEFAULT == 0
+    };
+    header.obj_type == crate::gc::GC_TYPE_ARRAY && header._reserved & ARRAY_NOT_DEFAULT == 0
 }
 
 /// The out-of-line half: the exact admission, and on a miss the real `Get`

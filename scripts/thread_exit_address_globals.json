@@ -128,7 +128,7 @@
    "why": "web_hooks::Slots contains only function-pointer Hook slots. Registration stores native code addresses, never JsValue or arena data."
   },
   {
-   "file": "crates/perry-runtime/src/object/layout_desc.rs",
+   "file": "crates/perry-runtime/src/object/layout_desc/diagnostics.rs",
    "names": [
     "FAMILY_DIAG"
    ],
@@ -136,7 +136,7 @@
    "why": "FamilyDiag contains nine AtomicU64 counters; writers only numeric increments and reader loads, no JSValue/address fields (layout_desc.rs counters/report)."
   },
   {
-   "file": "crates/perry-runtime/src/object/layout_desc.rs",
+   "file": "crates/perry-runtime/src/object/layout_desc/diagnostics.rs",
    "names": [
     "OUT_OF_ORDER_PAIRS"
    ],
@@ -144,7 +144,7 @@
    "why": "Keys (u32,String,String) derived from static family classID and owned key spellings; valuesu64 counters. Native owned strings, no borrowed arena address. Bounded by descriptor key pairs."
   },
   {
-   "file": "crates/perry-runtime/src/object/layout_desc.rs",
+   "file": "crates/perry-runtime/src/object/layout_desc/diagnostics.rs",
    "names": [
     "RUN_DIAG"
    ],
@@ -152,7 +152,7 @@
    "why": "[AtomicU64;8] outcome counters increment/load only; no pointer storage. Array shape prevents scalar counter auto-discharge."
   },
   {
-   "file": "crates/perry-runtime/src/object/layout_desc.rs",
+   "file": "crates/perry-runtime/src/object/layout_desc/diagnostics.rs",
    "names": [
     "INSTALLS_BY_CAUSE"
    ],
@@ -160,7 +160,7 @@
    "why": "[AtomicU64;8] installation-cause counters indexed by fixed enum, increment/load only; no pointer storage."
   },
   {
-   "file": "crates/perry-runtime/src/object/layout_desc.rs",
+   "file": "crates/perry-runtime/src/object/layout_desc/diagnostics.rs",
    "names": [
     "OTHER_KEYS"
    ],

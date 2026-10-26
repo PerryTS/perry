@@ -31,13 +31,6 @@ fn cut(src: &str) -> (perry_hir::Module, Vec<Vec<Item>>) {
     (h, u)
 }
 
-fn proven(pf: &ProgramFacts, key: &str) -> bool {
-    let s: Vec<_> = pf.sites.iter().filter(|s| s.key == key).collect();
-    !s.is_empty()
-        && s.iter()
-            .all(|s| matches!(s.verdict, Verdict::T0Mono | Verdict::T0Set))
-}
-
 /// The prims a field of the literal with birth keys `keys` may hold, or
 /// `None` when it may hold anything.
 fn field_prims(pf: &ProgramFacts, keys: &[&str], key: &str) -> Option<u16> {
