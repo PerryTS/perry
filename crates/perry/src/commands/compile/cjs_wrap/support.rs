@@ -32,7 +32,10 @@ pub(super) const SUPPORT_IMPORT: &str = "import { cache as __perry_cjs_cache, ma
 /// `paths` (canonical source paths, as the wrapper spells its cache key).
 /// `entry_is_cjs`: the program entry is one of them (`require.main` is its
 /// record; otherwise `undefined`, as for an ESM entry in Node).
-pub(crate) fn source(paths: &[String], entry_is_cjs: bool) -> String {
+/// `builtin_used`: some wrapped module has a literal builtin `require` arm;
+/// otherwise `builtin` keeps no `createRequire` loader (and no native module
+/// dispatcher is linked for it).
+pub(crate) fn source(paths: &[String], entry_is_cjs: bool, builtin_used: bool) -> String {
     let mut keys = String::new();
     for (i, p) in paths.iter().enumerate() {
         if i > 0 {
@@ -49,11 +52,24 @@ pub(crate) fn source(paths: &[String], entry_is_cjs: bool) -> String {
     // `require.resolve` base, which builtins never use.
     let base_path = serde_json::to_string(paths.first().map_or("/", String::as_str))
         .expect("path is JSON encodable");
+    let builtin = if builtin_used {
+        format!(
+            "export function builtin(specifier) {{\n    if (base === undefined) base = __perry_cjs_support_create_require({base_path});\n    return base(specifier);\n}}"
+        )
+    } else {
+        "export function builtin(specifier) {\n    throw requireError('error', 'MODULE_NOT_FOUND', \"Cannot find module '\" + specifier + \"'\");\n}".to_string()
+    };
     format!(
-        r#"import {{ createRequire as __perry_cjs_support_create_require, isBuiltin as __perry_cjs_support_is_builtin }} from 'node:module';
+        r#"import {{ createRequire as __perry_cjs_support_create_require }} from 'node:module';
 export const cache = __perry_declared_keys({keys});
 export const main = {main};
-export const extensions = __perry_cjs_install(cache, main);
+// The runtime's `Module._cache`, `process.mainModule` and
+// `require.extensions` exist only for a program that can reach them (not
+// closed): a closed program reads none of them by census.
+export let extensions;
+if (__perry_cjs_open()) {{
+    extensions = __perry_cjs_install(cache, main);
+}}
 let pendingParent;
 export function setPending(record) {{
     pendingParent = record;
@@ -64,10 +80,7 @@ export function takePending() {{
     return record;
 }}
 let base;
-export function builtin(specifier) {{
-    if (base === undefined) base = __perry_cjs_support_create_require({base_path});
-    return base(specifier);
-}}
+{builtin}
 // Node's updateChildren: a required child is linked once to its first parent
 // and appears once in each requiring module's children.
 export function link(module, child) {{
@@ -79,10 +92,14 @@ export function link(module, child) {{
 // through the requiring module's own loader. (A wrapper's static cases do the
 // same with their literal path, so each reads its own cache slot.)
 function refresh(path, value, reloader) {{
-    const cached = cache[path];
-    if (cached !== undefined) return cached.exports;
-    if (!__perry_has_path_module(path)) return value;
-    return reloader()(path);
+    if (__perry_cjs_open()) {{
+        const cached = cache[path];
+        if (cached !== undefined) return cached.exports;
+        if (!__perry_has_path_module(path)) return value;
+        return reloader()(path);
+    }} else {{
+        return value;
+    }}
 }}
 export function requireError(kind, code, message) {{
     const err = kind === 'type' ? new TypeError(message) : new Error(message);
@@ -90,11 +107,13 @@ export function requireError(kind, code, message) {{
     return err;
 }}
 export function requireComputed(specifier, dir, reloader) {{
+    // A closed program has no computed require (design CJS_LINK §2.5).
+    if (__perry_cjs_open()) {{
     // Builtins not hoisted as static imports resolve through createRequire,
     // which calls js_create_native_module_namespace, as Node's
     // require("process") does. The original spelling is kept: prefix-only
     // builtins are packages when requested without `node:` (#10410).
-    if (__perry_cjs_support_is_builtin(specifier)) return builtin(specifier);
+    if (__perry_is_builtin(specifier)) return builtin(specifier);
     // Native addons resolve through the same authenticated manifest and cache
     // as createRequire and process.dlopen, including computed paths.
     if (specifier.slice(-5) === '.node') return reloader()(specifier);
@@ -127,6 +146,9 @@ export function requireComputed(specifier, dir, reloader) {{
     // A computed bare platform package can name a manifest-listed addon
     // through package.json main, without a .node suffix in the request.
     return reloader()(specifier);
+    }} else {{
+        throw requireError('error', 'MODULE_NOT_FOUND', "Cannot find module '" + specifier + "'");
+    }}
 }}
 "#
     )
@@ -139,17 +161,17 @@ mod tests {
     #[test]
     fn the_source_is_a_function_of_the_graph_only() {
         let paths = vec!["/p/a.js".to_string(), "/p/b.js".to_string()];
-        assert_eq!(source(&paths, true), source(&paths, true));
-        let s = source(&paths, true);
+        assert_eq!(source(&paths, true, true), source(&paths, true, true));
+        let s = source(&paths, true, true);
         assert!(s.contains(r#"__perry_declared_keys("/p/a.js", "/p/b.js")"#), "{s}");
         assert!(s.contains("export const main = { exports: undefined"), "{s}");
-        assert!(source(&paths, false).contains("export const main = undefined;"));
+        assert!(source(&paths, false, true).contains("export const main = undefined;"));
     }
 
     #[test]
     fn the_support_module_is_not_recognised_as_a_wrapped_module() {
         // `is_cjs_wrapped_module` keys on the wrapper's createRequire alias.
-        let s = source(&["/p/a.js".to_string()], false);
+        let s = source(&["/p/a.js".to_string()], false, true);
         assert!(!s.contains("__perry_cjs_create_require"));
         assert!(!s.contains("__perry_cjs_strict_require"));
     }

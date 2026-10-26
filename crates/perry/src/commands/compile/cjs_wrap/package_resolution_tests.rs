@@ -100,12 +100,13 @@ fn lazy_require_of_compiled_package_uses_resolved_path_after_sources_are_removed
         .expect("canonical target");
     let target = serde_json::to_string(&target.to_string_lossy()).unwrap();
     assert!(
-        wrapped.contains(&format!("__perry_cjs_require_deferred({target}, ")),
+        wrapped.contains(&format!("__perry_cjs_cache[{target}]"))
+            && wrapped.contains(&format!("__perry_has_path_module({target})")),
         "lazy compiled-package require must resolve through its compiled path after source removal:\n{wrapped}"
     );
     assert!(
-        wrapped.contains(&format!("let _lazyreq_0__rec;")),
-        "lazy compiled-package require needs a resolved-record memo:\n{wrapped}"
+        wrapped.contains("return __perry_require_static_0();"),
+        "a lazy compiled-package require is its static edge:\n{wrapped}"
     );
 
     fs::remove_dir_all(dir.path().join("node_modules")).expect("remove source package tree");

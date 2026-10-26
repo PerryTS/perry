@@ -194,7 +194,7 @@ impl<'a> Gen<'a> {
     ) -> NodeId {
         let arg = |i: usize| args.get(i).copied();
         match method {
-            "arrayRecordNeedsIterator" | "arrayRecordForBound" | "hasPathModule" => {
+            "arrayRecordNeedsIterator" | "arrayRecordForBound" | "hasPathModule" | "isBuiltin" => {
                 self.prim_node(prim::BOOL)
             }
             // What codegen lowers them to: the cursor itself, the payload's
@@ -274,6 +274,13 @@ impl<'a> Gen<'a> {
                 }
                 out
             }
+            // A literal CommonJS require (design CJS_LINK §3): the target's
+            // init runs (every module body is in the program), and the value
+            // is a read of its record binding; the caller reads `.exports`.
+            "cjsRequireEdge" => match arg(0) {
+                Some(record) => record,
+                None => self.m.top_val("cjsRequireEdge without its record binding"),
+            },
             "registerPathModule" | "registerPathModulePartial" => {
                 if let Some(value) = arg(1) {
                     let registry = match source_args.first() {

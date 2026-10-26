@@ -93,9 +93,59 @@ pub(super) fn classify_eager_modules(ctx: &mut CompilationContext, entry_path: &
             break;
         }
     }
+    // OnDemand: what the eager modules reach through require edges (and
+    // whatever those reach by any non-dynamic edge), minus the eager set. An
+    // ESM import of a CommonJS module keeps it Eager, as in Node.
+    let mut reached = eager.clone();
+    let mut work: Vec<PathBuf> = reached.iter().cloned().collect();
+    while let Some(path) = work.pop() {
+        let Some(module) = ctx.native_modules.get(&path) else {
+            continue;
+        };
+        // A require edge imports its target's record binding
+        // (`__perry_cjs_rec_N`). Other deferred requires (`_lazyreq_N`, a
+        // target that is not wrapped CommonJS) load through the path registry
+        // and stay Deferred.
+        let edge_sources: HashSet<&str> = module
+            .imports
+            .iter()
+            .filter(|i| {
+                i.specifiers.iter().any(|s| {
+                    matches!(s, perry_hir::ImportSpecifier::Named { local, .. }
+                        if local.starts_with("__perry_cjs_rec_"))
+                })
+            })
+            .map(|i| i.source.as_str())
+            .collect();
+        let mut next: Vec<PathBuf> = module
+            .imports
+            .iter()
+            .filter(|i| !i.is_dynamic && !i.type_only && !i.runtime_erased)
+            .filter(|i| !i.is_deferred_require || edge_sources.contains(i.source.as_str()))
+            .filter_map(|i| i.resolved_path.as_ref().map(PathBuf::from))
+            .collect();
+        for e in &module.exports {
+            let source = match e {
+                perry_hir::Export::ExportAll { source }
+                | perry_hir::Export::ReExport { source, .. }
+                | perry_hir::Export::NamespaceReExport { source, .. } => source,
+                perry_hir::Export::Named { .. } => continue,
+            };
+            if let Some((resolved, _)) = resolve_import_with_context(source, &path, ctx) {
+                next.push(resolved);
+            }
+        }
+        for target in next {
+            if ctx.native_modules.contains_key(&target) && reached.insert(target.clone()) {
+                work.push(target);
+            }
+        }
+    }
     for (path, module) in ctx.native_modules.iter_mut() {
         module.init_kind = if eager.contains(path) {
             perry_hir::ModuleInitKind::Eager
+        } else if reached.contains(path) {
+            perry_hir::ModuleInitKind::OnDemand
         } else {
             perry_hir::ModuleInitKind::Deferred
         };

@@ -1111,7 +1111,7 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
     };
     let flats: Vec<Option<Module>> = sorted
         .iter()
-        .map(|(_, m)| crate::decl_units::run_once_flat(m))
+        .map(|(_, m)| crate::decl_units::run_once_flat(m, cfg.cjs_closed))
         .collect();
     let exports = module_exports(sorted, &cfg.export_sources);
     let solves = solves(sorted, &flats, &cfg.export_sources, &exports);

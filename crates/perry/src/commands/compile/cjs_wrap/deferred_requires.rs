@@ -25,8 +25,21 @@ pub(super) fn deferred_require_specs_for_path(
     path: &std::path::Path,
     messages: &mut Vec<String>,
     computed_require_warnings: Option<&mut Vec<String>>,
-) -> HashSet<String> {
-    analyze_require_specs(source, path, messages, computed_require_warnings)
+) -> RequireSites {
+    analyze(source, path, messages, computed_require_warnings)
+}
+
+/// What one parse of a CommonJS source says about its literal requires.
+#[derive(Default)]
+pub(super) struct RequireSites {
+    /// Specifiers whose every call is conditional or inside a function.
+    pub(super) deferred: HashSet<String>,
+    /// `require('<literal>')` calls whose callee is the wrapper's own
+    /// `require` (no binding of that name in any enclosing scope): byte
+    /// range of the call in `source`, and its specifier. The wrapper turns
+    /// these into static edges (design CJS_LINK §2.2). Empty on a parse
+    /// failure: every call then keeps the `require` function.
+    pub(super) calls: Vec<(usize, usize, String)>,
 }
 
 fn analyze_require_specs(
@@ -35,9 +48,21 @@ fn analyze_require_specs(
     messages: &mut Vec<String>,
     computed_require_warnings: Option<&mut Vec<String>>,
 ) -> HashSet<String> {
+    analyze(source, path, messages, computed_require_warnings).deferred
+}
+
+fn analyze(
+    source: &str,
+    path: &std::path::Path,
+    messages: &mut Vec<String>,
+    computed_require_warnings: Option<&mut Vec<String>>,
+) -> RequireSites {
     let Ok(module) = perry_parser::parse_typescript_with_warnings(source, "requires.cjs", messages)
     else {
-        return super::extract_requires::function_local_specs(source);
+        return RequireSites {
+            deferred: super::extract_requires::function_local_specs(source),
+            calls: Vec::new(),
+        };
     };
     let mut visitor = Requires::default();
     module.visit_with(&mut visitor);
@@ -54,11 +79,25 @@ fn analyze_require_specs(
             ));
         }
     }
-    visitor
-        .sites
-        .into_iter()
-        .filter_map(|(specifier, deferred)| deferred.then_some(specifier))
-        .collect()
+    let calls = if visitor.shadowed_at_top {
+        Vec::new()
+    } else {
+        let shadows = &visitor.shadowing_scopes;
+        visitor
+            .calls
+            .into_iter()
+            .filter(|(lo, hi, _)| !shadows.iter().any(|(s, e)| s <= lo && hi <= e))
+            .map(|(lo, hi, spec)| (lo.saturating_sub(1) as usize, hi.saturating_sub(1) as usize, spec))
+            .collect()
+    };
+    RequireSites {
+        deferred: visitor
+            .sites
+            .into_iter()
+            .filter_map(|(specifier, deferred)| deferred.then_some(specifier))
+            .collect(),
+        calls,
+    }
 }
 
 #[derive(Default)]
@@ -66,6 +105,16 @@ struct Requires {
     deferred: bool,
     sites: HashMap<String, bool>,
     computed_call_candidate: bool,
+    /// Literal require calls (SWC span) for [`RequireSites::calls`].
+    calls: Vec<(u32, u32, String)>,
+    /// Enclosing function scopes (SWC span), innermost last.
+    scopes: Vec<(u32, u32)>,
+    /// Function scopes that bind `require` anywhere in them (a parameter, a
+    /// declaration in any block, a catch parameter): conservative, a call
+    /// anywhere inside keeps the `require` function.
+    shadowing_scopes: Vec<(u32, u32)>,
+    /// The module scope binds `require`: no call is the wrapper's.
+    shadowed_at_top: bool,
 }
 
 impl Requires {
@@ -74,6 +123,22 @@ impl Requires {
         self.deferred = true;
         visit(self);
         self.deferred = previous;
+    }
+
+    fn scope(&mut self, span: swc_common::Span, visit: impl FnOnce(&mut Self)) {
+        self.scopes.push((span.lo.0, span.hi.0));
+        visit(self);
+        self.scopes.pop();
+    }
+
+    fn binds(&mut self, name: &str) {
+        if name != "require" {
+            return;
+        }
+        match self.scopes.last() {
+            Some(scope) => self.shadowing_scopes.push(*scope),
+            None => self.shadowed_at_top = true,
+        }
     }
 }
 
@@ -90,6 +155,11 @@ impl Visit for Requires {
                 if let [arg] = call.args.as_slice() {
                     if arg.spread.is_none() {
                         if let ast::Expr::Lit(ast::Lit::Str(specifier)) = arg.expr.as_ref() {
+                            self.calls.push((
+                                call.span.lo.0,
+                                call.span.hi.0,
+                                specifier.value.to_string_lossy().into_owned(),
+                            ));
                             self.sites
                                 .entry(specifier.value.to_string_lossy().into_owned())
                                 .and_modify(|deferred| *deferred &= self.deferred)
@@ -105,27 +175,52 @@ impl Visit for Requires {
     fn visit_function(&mut self, function: &ast::Function) {
         function.decorators.visit_with(self);
         self.defer(|visitor| {
-            function.params.visit_with(visitor);
-            function.body.visit_with(visitor);
+            visitor.scope(function.span, |visitor| {
+                function.params.visit_with(visitor);
+                function.body.visit_with(visitor);
+            });
         });
     }
 
     fn visit_arrow_expr(&mut self, arrow: &ast::ArrowExpr) {
-        self.defer(|visitor| arrow.visit_children_with(visitor));
+        self.defer(|visitor| visitor.scope(arrow.span, |v| arrow.visit_children_with(v)));
     }
 
     fn visit_constructor(&mut self, constructor: &ast::Constructor) {
-        self.defer(|visitor| constructor.visit_children_with(visitor));
+        self.defer(|visitor| {
+            visitor.scope(constructor.span, |v| constructor.visit_children_with(v))
+        });
     }
 
     fn visit_getter_prop(&mut self, getter: &ast::GetterProp) {
         getter.key.visit_with(self);
-        self.defer(|visitor| getter.function.body.visit_with(visitor));
+        self.defer(|visitor| visitor.scope(getter.span, |v| getter.function.body.visit_with(v)));
     }
 
     fn visit_setter_prop(&mut self, setter: &ast::SetterProp) {
         setter.key.visit_with(self);
-        self.defer(|visitor| setter.function.body.visit_with(visitor));
+        self.defer(|visitor| {
+            visitor.scope(setter.span, |v| {
+                setter.function.params.visit_with(v);
+                setter.function.body.visit_with(v);
+            })
+        });
+    }
+
+    fn visit_binding_ident(&mut self, id: &ast::BindingIdent) {
+        self.binds(id.id.sym.as_ref());
+        id.visit_children_with(self);
+    }
+
+    // Declaration names are plain identifiers, bound in the enclosing scope.
+    fn visit_fn_decl(&mut self, decl: &ast::FnDecl) {
+        self.binds(decl.ident.sym.as_ref());
+        decl.visit_children_with(self);
+    }
+
+    fn visit_class_decl(&mut self, decl: &ast::ClassDecl) {
+        self.binds(decl.ident.sym.as_ref());
+        decl.visit_children_with(self);
     }
 
     fn visit_if_stmt(&mut self, stmt: &ast::IfStmt) {
@@ -315,20 +410,13 @@ mod tests {
         perry_parser::parse_typescript(&wrapped, "wrapped.cjs").unwrap();
     }
 
-    /// A deferred require must not re-enter the path registry on every call.
-    ///
-    /// Deferring a conditional require routes it through
-    /// `__perry_require_path_module`, which is a registry lookup plus a
-    /// `globalThis` write pair inside a `try`/`finally`. That is needed only until
-    /// the target is loaded; without the memo it ran on EVERY call and cost 3.4x on
-    /// a hot require (1.43 B -> 4.86 B instructions over 300k calls).
-    ///
-    /// Nothing else pins the memo — delete it and every other test still passes,
-    /// the only symptom being that hot requires get slow again. So assert the
-    /// emitted shape: the cache slot is declared, the case is fronted by the
-    /// short-circuit, and the record is only cached once `loaded === true`.
+    /// A conditional or function-local require of a compiled CommonJS module
+    /// is the same static edge as an unconditional one (design CJS_LINK
+    /// §2.6): no path-registry call, no per-site memo, no parent handoff
+    /// through the support module in a closed program. The target evaluates
+    /// when the edge first runs.
     #[test]
-    fn a_deferred_require_case_is_fronted_by_its_memo() {
+    fn a_deferred_require_of_a_commonjs_module_is_its_static_edge() {
         let src = r#"
 function get(flag) {
   if (flag) { return require("./dep.js").v; }
@@ -336,60 +424,27 @@ function get(flag) {
 }
 module.exports = { get };
 "#;
-        // The target must RESOLVE: the memo lives in the runtime-record arm, which
-        // is only emitted for a specifier that resolves to a real file.
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("dep.js"), "module.exports = { v: 1 };\n").unwrap();
         let wrapped = super::super::wrap::wrap_commonjs(src, &dir.path().join("entry.js"));
-
-        for (needle, why) in [
-            ("__rec;", "the per-site memo slot declaration"),
-            (
-                "__rec !== undefined && __perry_cjs_c[",
-                "the short-circuit that skips the registry",
-            ),
-            (
-                ".loaded === true",
-                "the guard that refuses to cache a half-loaded target",
-            ),
-        ] {
-            assert!(
-                wrapped.contains(needle),
-                "the deferred-require memo no longer emits `{needle}` ({why}).\n\
-                 Without it every call to a deferred require re-enters \
-                 `__perry_require_path_module`, which measured 3.4x slower on a hot \
-                 require. If the memo moved, update this test; if it was removed on \
-                 purpose, delete this test and say why in the PR.\n{wrapped}"
-            );
+        assert!(wrapped.contains("return __perry_require_static_0().v;"), "{wrapped}");
+        assert!(wrapped.contains("function __perry_require_static_0() {"), "{wrapped}");
+        for absent in ["__perry_cjs_require_deferred", "__rec", "__perry_require_path_module("] {
+            assert!(!wrapped.contains(absent), "`{absent}` is the registry path:\n{wrapped}");
         }
-
-        // The record, not the exports: a module that replaces `module.exports`
-        // after evaluation must still read through, as it does in Node.
-        assert!(
-            wrapped.contains("__rec.exports"),
-            "the memo must return `record.exports`, not a cached exports value, or a \
-             post-evaluation `module.exports = X` would be invisible to later \
-             requires.\n{wrapped}"
-        );
+        perry_parser::parse_typescript(&wrapped, "wrapped.cjs").unwrap();
     }
 
-    /// The `try`/`finally` around the registry call is emitted once per module,
-    /// not once per deferred specifier.
+    /// No `try` inside `require(specifier)`, whatever the specifier count.
     ///
     /// On wasm32 a `try` makes the enclosing function a returns-twice frame, and
     /// LLVM's sjlj lowering threads the values of every case in that function
-    /// through one dispatch loop. `require` carries one case per specifier, so
-    /// inlining the `try` into each made it grow with the square of the
-    /// specifier count: a 3 KB barrel module with 16 requires produced a 17 MB
-    /// function, past the 7.6 MB function body limit of wasmtime. The shim's
-    /// behaviour is the same either way (the conditional-require and
-    /// circular-dependency integration tests cover it), so the measurable
-    /// invariant is the shape: the number of `try` statements and registry
-    /// calls in the wrapped module must not grow with the specifier count.
+    /// through one dispatch loop: one per specifier made `require` grow with
+    /// the square of the specifier count (a 3 KB barrel module produced a
+    /// 17 MB function). An edge's handoff `try` lives in its own small function.
     #[test]
-    fn deferred_require_cases_share_one_registry_helper() {
+    fn the_require_function_has_no_try_at_any_specifier_count() {
         let dir = tempfile::tempdir().unwrap();
-        let mut shapes = Vec::new();
         for count in [1usize, 16] {
             let mut src = String::new();
             for i in 0..count {
@@ -404,14 +459,10 @@ module.exports = { get };
             }
             src.push_str("module.exports = {};\n");
             let wrapped = super::super::wrap::wrap_commonjs(&src, &dir.path().join("entry.js"));
-            shapes.push((
-                wrapped.matches("try {").count(),
-                wrapped.matches("__perry_require_path_module(").count(),
-            ));
+            let start = wrapped.find("function require(specifier) {").expect("require function");
+            let end = start + wrapped[start..].find("\n    }\n").expect("its end");
+            assert!(!wrapped[start..end].contains("try"), "{count}: {}", &wrapped[start..end]);
+            assert_eq!(wrapped.matches("__perry_require_path_module(").count(), 0, "{wrapped}");
         }
-        assert_eq!(
-            shapes[0], shapes[1],
-            "(try statements, registry calls) for 1 and 16 deferred requires: the shim must not repeat them per specifier"
-        );
     }
 }

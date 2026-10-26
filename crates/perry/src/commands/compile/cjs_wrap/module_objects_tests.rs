@@ -31,7 +31,7 @@ fn solve(sources: &[(&str, &str)]) -> (tempfile::TempDir, Vec<String>, ProgramFa
         .collect();
     let keys: Vec<String> = paths.iter().map(|p| p.to_string_lossy().into_owned()).collect();
     let support_path = root.join("perry-cjs.mjs");
-    let support_src = support::source(&keys, true);
+    let support_src = support::source(&keys, true, true);
     let mut texts = vec![(support_path.clone(), support_src)];
     for (i, (_, src)) in sources.iter().enumerate() {
         let entry = i + 1 == sources.len();

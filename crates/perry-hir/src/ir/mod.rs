@@ -46,7 +46,9 @@ pub use constants::{
 };
 
 // ---- module.rs ----
-pub use module::{ClassFamilySyntax, FunctionSourceMetadata, LocalSourceSpan, Module};
+pub use module::{
+    program_is_cjs_closed, ClassFamilySyntax, FunctionSourceMetadata, LocalSourceSpan, Module,
+};
 pub use source_text::SourceText;
 
 // ---- widget.rs ----
@@ -61,7 +63,7 @@ pub use widget::{
 pub use decl::{
     ArgumentsObjectMeta, Class, ClassComputedMember, ClassComputedMemberKind, ClassField,
     ClassFieldOrigin, Decorator, Enum, EnumMember, EnumValue, Export, Function, Global, Import,
-    ImportSpecifier, DECLARED_KEYS_CLASS_PREFIX, DECLARED_KEYS_OBJECT_CLASS_PREFIX, Interface, InterfaceMethod, InterfaceProperty, Param, TypeAlias,
+    ImportSpecifier, is_cjs_record_export, CJS_RECORD_EXPORT, DECLARED_KEYS_CLASS_PREFIX, DECLARED_KEYS_OBJECT_CLASS_PREFIX, Interface, InterfaceMethod, InterfaceProperty, Param, TypeAlias,
 };
 
 // ---- stmt.rs ----

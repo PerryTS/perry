@@ -865,6 +865,13 @@ fn collect_module_one(
         }
     };
     hir_module.class_family_syntax = class_family_syntax;
+    // The CommonJS support module is the wrapper's own loader surface, like
+    // the wrapper text the census never sees (`cjs_link`).
+    if ctx.cjs_support_path.as_deref() == Some(canonical.as_path()) {
+        if let Some(syntax) = &mut hir_module.class_family_syntax {
+            syntax.module_capability_uses = 0;
+        }
+    }
     *next_class_id = new_next_class_id; // Update the global class_id counter
 
     // #9599: Bun platform mode is a real global mode, not merely a direct-call
@@ -1952,6 +1959,28 @@ fn collect_module_one(
     // Limited to Perry-compiled (`NativeCompiled`) targets — native stdlib /
     // V8 modules have their own init paths.
     {
+        let local_of = |s: &perry_hir::ImportSpecifier| match s {
+            perry_hir::ImportSpecifier::Default { local } => local.clone(),
+            perry_hir::ImportSpecifier::Namespace { local } => local.clone(),
+            perry_hir::ImportSpecifier::Named { local, .. } => local.clone(),
+        };
+        // A static CommonJS edge (design CJS_LINK §2.2) imports its target's
+        // record binding as `__perry_cjs_rec_N`: the target evaluates when an
+        // edge first runs, so no import of it is an init-order edge.
+        let edge_sources: HashSet<String> = if was_cjs_wrapped {
+            hir_module
+                .imports
+                .iter()
+                .filter(|i| {
+                    i.specifiers
+                        .iter()
+                        .any(|s| local_of(s).starts_with("__perry_cjs_rec_"))
+                })
+                .map(|i| i.source.clone())
+                .collect()
+        } else {
+            HashSet::new()
+        };
         for import in &mut hir_module.imports {
             if import.type_only
                 || import.is_dynamic
@@ -1961,14 +1990,11 @@ fn collect_module_one(
             {
                 continue;
             }
-            let is_lazy = import.specifiers.iter().any(|s| {
-                let local = match s {
-                    perry_hir::ImportSpecifier::Default { local } => local,
-                    perry_hir::ImportSpecifier::Namespace { local } => local,
-                    perry_hir::ImportSpecifier::Named { local, .. } => local,
-                };
-                local.starts_with("_lazyreq_")
-            });
+            let is_lazy = edge_sources.contains(&import.source)
+                || import
+                    .specifiers
+                    .iter()
+                    .any(|s| local_of(s).starts_with("_lazyreq_"));
             if is_lazy {
                 import.is_deferred_require = true;
             }

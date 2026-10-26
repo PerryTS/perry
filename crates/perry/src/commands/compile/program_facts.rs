@@ -129,6 +129,7 @@ pub(crate) fn run(
         // else the budget's CPU slots, else cores bounded by memory).
         jobs: perry_codegen::workers::unit_workers(),
         unit_io: dump.is_some(),
+        cjs_closed: perry_hir::program_is_cjs_closed(modules.values()),
     };
     let list: Vec<(String, &perry_hir::Module)> = modules
         .iter()

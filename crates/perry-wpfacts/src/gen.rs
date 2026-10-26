@@ -216,10 +216,6 @@ pub struct Gen<'a> {
     /// The constant first argument of the call `call_expr` is lowering,
     /// taken by `call_with` (`Model::call_lit`).
     pub(crate) call_lit_arg: Option<Atom>,
-    /// `(module, local)` of a `let require = <closure>` binding, the
-    /// wrapper's synthetic require (`Gen::require_helper_body`).
-    pub(crate) require_helpers: FxHashMap<(u32, u32), &'a [Stmt]>,
-    pub(crate) require_helpers_indexed: std::collections::HashSet<u32>,
     /// FVA 4.3b: (module, `__keys` local) -> the `__forin_obj` local whose
     /// `ForInKeys` it holds.
     pub(crate) for_in_keys_of: FxHashMap<(u32, u32), u32>,
@@ -365,8 +361,6 @@ impl<'a> Gen<'a> {
             cell_locals: Default::default(),
             lit_births: FxHashMap::default(),
             call_lit_arg: None,
-            require_helpers: FxHashMap::default(),
-            require_helpers_indexed: std::collections::HashSet::new(),
             for_in_keys_of: FxHashMap::default(),
             for_in_key: Vec::new(),
             unstable: FxHashMap::default(),

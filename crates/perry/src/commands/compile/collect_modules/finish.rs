@@ -31,6 +31,14 @@ pub(crate) fn collect_module_finish(
         if !ctx.cjs_support_keys.contains(&key) {
             ctx.cjs_support_keys.push(key);
         }
+        if !ctx.cjs_support_builtin_used {
+            perry_hir::tdz_check::for_each_module_expr(&hir_module, &mut |e| {
+                if matches!(e, perry_hir::Expr::ExternFuncRef { name, .. } if name == "__perry_cjs_builtin")
+                {
+                    ctx.cjs_support_builtin_used = true;
+                }
+            });
+        }
     }
 
     // Issue #535 — `perry/ui` `state<T>` desugar pass.

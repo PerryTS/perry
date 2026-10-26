@@ -66,7 +66,7 @@ fn computed_relative_require_uses_the_calling_module_directory() {
         "computed relative require must carry the calling module's directory\n{wrapped}"
     );
     // ... which rebases before the path-registry lookup.
-    let support = super::support::source(&[path.to_string_lossy().into_owned()], false);
+    let support = super::support::source(&[path.to_string_lossy().into_owned()], false, true);
     assert!(
         support.contains("path = dir + '/' + specifier.slice(2);"),
         "computed relative require must be rebased before the path-registry lookup\n{support}"
@@ -88,7 +88,7 @@ fn computed_bare_directory_requires_use_the_calling_module_directory() {
         wrapped.contains("__perry_cjs_require_computed(specifier, \"/fixture/.next/server\","),
         "computed require must carry the calling module's directory\n{wrapped}"
     );
-    let support = super::support::source(&[path.to_string_lossy().into_owned()], false);
+    let support = super::support::source(&[path.to_string_lossy().into_owned()], false, true);
     for specifier in ["specifier === '.'", "specifier === '..'"] {
         assert!(
             support.contains(specifier),
