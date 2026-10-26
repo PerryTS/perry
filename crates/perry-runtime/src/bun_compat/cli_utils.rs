@@ -172,7 +172,7 @@ pub(crate) fn toml_parse_result_impl(source: &str) -> Result<f64, f64> {
         }
     };
     let source = js_string_from_bytes(json.as_ptr(), json.len() as u32);
-    match unsafe { crate::json::js_json_parse_result(source) } {
+    match unsafe { crate::json_hooks::parse_result(source) } {
         Ok(value) => Ok(f64::from_bits(value.bits())),
         Err(error) => Err(error),
     }
@@ -726,7 +726,7 @@ fn jsonl_parse_chunk(input: f64, start: f64, end: f64) -> f64 {
         scope.root_nanbox_f64(f64::from_bits(JSValue::pointer(values as *const u8).bits()));
     for (index, (start, end)) in spans.into_iter().enumerate() {
         let source = js_string_from_bytes(bytes[start..end].as_ptr(), (end - start) as u32);
-        let value = match unsafe { crate::json::js_json_parse_result(source) } {
+        let value = match unsafe { crate::json_hooks::parse_result(source) } {
             Ok(value) => f64::from_bits(value.bits()),
             Err(error) => crate::exception::js_throw(error),
         };

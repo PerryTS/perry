@@ -72,3 +72,9 @@ native witness. Computed API names can then come from argv without appearing
 as literals in the compiled program. FileHandle capabilities and opaque
 member accesses accumulate across modules; an ordinary indexed readFile path
 still requires Web Streams and Brotli absence.
+
+A `HWS node` sibling source supplies the explicit Node equivalent of a native-
+only Bun API. The gate copies and runs that oracle separately, keeping its
+JSON.parse out of the native compilation. Bun JSON positives include computed
+and extracted methods, TOML and JSONL adapters; a text-only Bun file read
+requires both the JSON engine and tape parser absent.

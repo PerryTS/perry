@@ -445,6 +445,10 @@ pub(super) fn detect_optional_feature_usage(
     let computed = computed_members::scan(hir_module);
     ctx.uses_computed_member_keys |= computed.opaque_members;
     ctx.uses_file_handle_capability |= computed.file_handles;
+    ctx.uses_bun_file_capability |= computed.bun_files;
+    if computed.json_members || (ctx.uses_bun_file_capability && ctx.uses_computed_member_keys) {
+        ctx.uses_global_json = true;
+    }
 
     // Web Streams constructors and FileHandle.readableWebStream call the
     // stdlib factories. Select them when an API is named, including extracted

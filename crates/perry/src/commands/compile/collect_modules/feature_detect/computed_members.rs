@@ -6,6 +6,8 @@ use perry_hir::{Expr, Function, Module, Stmt};
 pub(super) struct Capabilities {
     pub opaque_members: bool,
     pub file_handles: bool,
+    pub bun_files: bool,
+    pub json_members: bool,
 }
 
 pub(super) fn scan(module: &Module) -> Capabilities {
@@ -28,7 +30,42 @@ pub(super) fn scan(module: &Module) -> Capabilities {
         .collect();
     let mut caps = Capabilities::default();
     for_each_expr(module, &mut |expr| {
+        if let Expr::IndexGet { index, .. }
+        | Expr::ReflectGet { key: index, .. }
+        | Expr::ReflectGetOwnPropertyDescriptor { key: index, .. }
+        | Expr::ObjectGetOwnPropertyDescriptor(_, index) = expr
+        {
+            caps.json_members |= matches!(index.as_ref(), Expr::String(name) if name == "json");
+        }
         match expr {
+            Expr::PropertyGet { property, .. } if matches!(property.as_str(), "TOML" | "JSONL") => {
+                caps.json_members = true
+            }
+            Expr::NativeMethodCall {
+                module,
+                class_name,
+                method,
+                ..
+            } if module.trim_start_matches("node:") == "bun"
+                && (class_name
+                    .as_deref()
+                    .is_some_and(|name| matches!(name, "TOML" | "JSONL"))
+                    || method.contains("toml")
+                    || method.contains("TOML")
+                    || method.contains("JSONL")) =>
+            {
+                caps.json_members = true
+            }
+            Expr::NativeMethodCall { module, method, .. }
+                if module.trim_start_matches("node:") == "bun"
+                    && matches!(method.as_str(), "file" | "stdin" | "stdout" | "stderr") =>
+            {
+                caps.bun_files = true
+            }
+            Expr::NativeModuleRef(module) if module.trim_start_matches("node:") == "bun" => {
+                caps.bun_files = true
+            }
+            Expr::PropertyGet { property, .. } if property == "Bun" => caps.bun_files = true,
             // Numeric and literal keys do not hide a new API name. Literal
             // readableWebStream is already selected by the ordinary detector.
             Expr::IndexGet { index, .. } => caps.opaque_members |= opaque_key(index),
@@ -206,6 +243,43 @@ mod tests {
                 detect(&mut ctx, sources[i], &format!("module{i}.ts"));
             }
             assert!(ctx.native_module_imports.contains("stream/web"));
+        }
+    }
+    #[test]
+    fn bun_file_computed_json_and_extracted_factory_select_json() {
+        for source in [
+            r#"function f(key) { return Bun.file("x")[key](); }"#,
+            r#"const make = Bun.file; function f(key) { return make("x")[key](); }"#,
+            r#"function f(key) { return Bun.stdin[key](); }"#,
+            r#"Bun.file("x")["json"]();"#,
+            r#"Bun.TOML.parse('answer = 42');"#,
+            r#"Bun.JSONL.parseChunk('{"answer":42}\n');"#,
+        ] {
+            let mut ctx = context();
+            detect(&mut ctx, source, "bun.ts");
+            assert!(ctx.uses_global_json, "{source}");
+        }
+        for source in [
+            r#"Bun.file(process.argv[2]).text();"#,
+            r#"function f(values, index) { Bun.which("node"); return values[index]; }"#,
+        ] {
+            let mut ctx = context();
+            detect(&mut ctx, source, "bun.ts");
+            assert!(!ctx.uses_global_json, "{source}");
+        }
+    }
+    #[test]
+    fn bun_file_and_computed_lookup_accumulate_across_modules() {
+        let sources = [
+            "export function make() { return Bun.file('x'); }",
+            "export function invoke(value, key) { return value[key](); }",
+        ];
+        for order in [[0, 1], [1, 0]] {
+            let mut ctx = context();
+            for i in order {
+                detect(&mut ctx, sources[i], &format!("bun{i}.ts"));
+            }
+            assert!(ctx.uses_global_json);
         }
     }
 }

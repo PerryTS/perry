@@ -32,6 +32,7 @@ NEGATIVES = {
     "without_regex": ["regex_engine"],
     "without_node_stream": ["node_stream"],
     "without_json": ["global_json", "json_tape"],
+    "bun_file_without_json": ["global_json", "json_tape"],
     "without_turnloop_net": ["turnloop_net"],
     "fs_promises_without_streams": ["bundled_web_streams"],
 }
@@ -67,6 +68,19 @@ def native_install_hooks():
     return set(re.findall(r'"(js_\w+)"', native_section))
 
 
+def witness_options(path):
+    source = path.read_text()
+    argv = re.search(r"^// HWS argv: (.+)$", source, re.M)
+    argv = json.loads(argv[1]) if argv else ["world"]
+    assert isinstance(argv, list) and all(isinstance(arg, str) for arg in argv), f"{path}: argv must be a JSON string list"
+    oracle = re.search(r"^// HWS node: (.+)$", source, re.M)
+    oracle = oracle[1] if oracle else None
+    if oracle:
+        assert Path(oracle).name == oracle and Path(oracle).suffix in (".js", ".mjs", ".ts"), f"{path}: Node oracle must be a sibling source filename"
+        assert (FIXTURES / oracle).is_file(), f"{path}: missing Node oracle {oracle}"
+    return {"argv": argv, "node": oracle}
+
+
 def inventory():
     source = (ROOT / "crates/perry/src/commands/stdlib_installs.rs").read_text()
     section = source.split("const RUNTIME_INSTALLS:", 1)[1].split("\n];", 1)[0]
@@ -89,13 +103,11 @@ def inventory():
         assert all(prefixes), f"{path}: empty prefix matches every symbol"
         if hook in hooks | stdlib_hooks | native_hooks:
             prefixes.append(hook)
-        argv = re.search(r"^// HWS argv: (.+)$", source, re.M)
-        argv = json.loads(argv[1]) if argv else ["world"]
-        assert isinstance(argv, list) and all(isinstance(arg, str) for arg in argv), f"{path}: argv must be a JSON string list"
+        options = witness_options(path)
         companion = re.search(r"^// HWS companion: (.+)$", source, re.M)
         fixtures[path.stem] = {"hook": hook, "prefixes": prefixes,
                                "companion": companion[1] if companion else None,
-                               "native_hook": hook in native_hooks, "argv": argv}
+                               "native_hook": hook in native_hooks, "argv": options["argv"]}
     for name, fixture in fixtures.items():
         parent = fixture["companion"]
         if parent:
@@ -303,8 +315,13 @@ def main():
     for name in names:
         try:
             binary, selected, _ = compile_witness(args, name, env)
-            witness_argv = fixtures[name]["argv"] if name in fixtures else ["world"]
-            oracle = run(["node", args.output/name/"main.ts", *witness_argv], cwd=binary.parent)
+            options = witness_options(FIXTURES / (name+".ts"))
+            witness_argv = options["argv"]
+            oracle_source = args.output/name/"main.ts"
+            if options["node"]:
+                oracle_source = args.output/name/options["node"]
+                shutil.copyfile(FIXTURES/options["node"], oracle_source)
+            oracle = run(["node", oracle_source, *witness_argv], cwd=binary.parent)
             actual = run([binary, *witness_argv], cwd=binary.parent)
             (binary.parent/"node.stdout").write_bytes(oracle.stdout)
             (binary.parent/"native.stdout").write_bytes(actual.stdout)
