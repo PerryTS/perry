@@ -334,18 +334,17 @@ fn class_name_refs(e: &Expr, r: &mut Refs) {
 /// or has a rest or defaulted parameter stays one declaration. `None` when
 /// nothing runs once. The view serves the analysis only (sites keep their
 /// offsets).
-pub(crate) fn run_once_flat(module: &Module, cjs_closed: bool) -> Option<Module> {
-    flatten(module, &closed(module).0, cjs_closed)
+pub(crate) fn run_once_flat(module: &Module) -> Option<Module> {
+    flatten(module, &closed(module).0)
 }
 
 /// [`run_once_flat`] over the closed bindings `closed` (by key, as
 /// [`closed`] gives them).
-pub(crate) fn flatten(module: &Module, closed: &Closed, cjs_closed: bool) -> Option<Module> {
+pub(crate) fn flatten(module: &Module, closed: &Closed) -> Option<Module> {
     let uses = Uses::of(module);
     let mut flat = Flat {
         module,
         closed,
-        cjs_closed,
         names: uses.funcs,
         locals: uses.locals,
         records: uses.records,
@@ -469,8 +468,6 @@ struct Flat<'a> {
     /// The module's closed bindings (decision 13): only these run where
     /// their one call is.
     closed: &'a Closed,
-    /// The program is CommonJS-closed: no reload, so the factory runs once.
-    cjs_closed: bool,
     /// Uses of each module function and each local (reads, writes), and the
     /// module records holding a local.
     names: FxHashMap<u32, usize>,
@@ -566,13 +563,14 @@ impl Flat<'_> {
                 let factory = name == "__perry_cjs_factory";
                 let uses = self.locals.get(id).copied().unwrap_or(0);
                 let once = match factory {
-                    // Runs once only in a closed program (design CJS_LINK
-                    // §2.5): otherwise a reload can run it again, and its
-                    // facts are per evaluation.
-                    true => {
-                        self.cjs_closed
-                            && uses == 1 + self.records.get(id).copied().unwrap_or(0)
-                    }
+                    // In a closed program this is the program fact
+                    // `cjs_closed` (design CJS_LINK §2.5). In one that is not
+                    // closed a reload can run the factory again, and the view
+                    // still flattens it, as before CJS_LINK: an unflattened
+                    // factory meets the per-unit gap pinned in
+                    // `tests/binding_write_gap.rs` (CWN decision (b),
+                    // 2026-10-26); the ownership ICE stays the guard.
+                    true => uses == 1 + self.records.get(id).copied().unwrap_or(0),
                     false => uses == 1 && self.closed.contains_key(&(false, *id)),
                 };
                 if !once {

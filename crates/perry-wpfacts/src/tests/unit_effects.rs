@@ -26,7 +26,7 @@ fn whole(src: &str) -> ProgramFacts {
 
 fn cut(src: &str) -> (perry_hir::Module, Vec<Vec<Item>>) {
     let h = hir(src);
-    let h = crate::decl_units::run_once_flat(&h, true).unwrap_or(h);
+    let h = crate::decl_units::run_once_flat(&h).unwrap_or(h);
     let u = crate::decl_units::decl_units(&h);
     (h, u)
 }

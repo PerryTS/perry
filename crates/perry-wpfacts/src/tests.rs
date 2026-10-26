@@ -9,6 +9,7 @@ mod birth_site;
 mod body_identity;
 mod callback_origin;
 mod captured;
+mod binding_write_gap;
 mod cjs_require;
 mod class_statics;
 mod closed_world;

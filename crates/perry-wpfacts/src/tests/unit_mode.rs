@@ -869,7 +869,7 @@ fn a_once_invoked_wrapper_splits() {
     let at_scope = |src: &str| {
         let m = perry_parser::parse_typescript(&wrapped(src), "t.ts").expect("parses");
         let hir = perry_hir::lower_module(&m, "t", "t.ts").expect("lowers");
-        let flat = crate::decl_units::run_once_flat(&hir, true).unwrap_or(hir);
+        let flat = crate::decl_units::run_once_flat(&hir).unwrap_or(hir);
         flat.init
             .iter()
             .any(|s| matches!(s, perry_hir::Stmt::Let { name, .. } if name == "a"))

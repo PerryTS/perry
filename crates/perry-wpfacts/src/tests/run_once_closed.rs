@@ -45,7 +45,7 @@ fn literal_lets(m: &Module, name: &str) -> usize {
 /// Whether the run-once view of `m` still declares the function or the
 /// module-scope `let` named `name` (not copied into module scope).
 fn kept(m: &Module, name: &str) -> bool {
-    let flat = crate::decl_units::run_once_flat(m, true).unwrap_or_else(|| m.clone());
+    let flat = crate::decl_units::run_once_flat(m).unwrap_or_else(|| m.clone());
     flat.functions.iter().any(|f| f.name == name)
         || flat
             .init
@@ -254,7 +254,7 @@ fn the_commonjs_export_is_not_flattened() {
         module.exports.flag = cached(() => true);
     "#);
     let h = hirs(&[("twin", &twin)]);
-    let flat = crate::decl_units::run_once_flat(&h[0].1, true).expect("the factory runs once");
+    let flat = crate::decl_units::run_once_flat(&h[0].1).expect("the factory runs once");
     assert_eq!(
         literal_lets(&flat, "__perry_cjs_factory"),
         0,
@@ -266,26 +266,6 @@ fn the_commonjs_export_is_not_flattened() {
 }
 
 #[test]
-fn the_factory_runs_once_only_in_a_closed_program() {
-    // Design CJS_LINK §2.5: "runs once" is the program's closed-world fact.
-    // A closed program's wrapper has no registry publication (the factory is
-    // held by nobody); a program that is not closed can reload the module, so
-    // its factory stays a declaration whatever the module's own shape.
-    let closed = cjs("module.exports.k = 1;").replace(
-        "__perry_register_path_module_partial(\"t.cjs\", {}, __perry_cjs_factory);",
-        "",
-    );
-    let h = hirs(&[("closed", &closed)]);
-    let flat = crate::decl_units::run_once_flat(&h[0].1, true).expect("closed: the factory runs once");
-    assert_eq!(literal_lets(&flat, "__perry_cjs_factory"), 0, "{:#?}", flat.init);
-    let open = crate::decl_units::run_once_flat(&h[0].1, false).unwrap_or_else(|| h[0].1.clone());
-    assert_eq!(literal_lets(&open, "__perry_cjs_factory"), 1, "{:#?}", open.init);
-    let h = hirs(&[("open", &cjs("module.exports.k = 1;"))]);
-    let open = crate::decl_units::run_once_flat(&h[0].1, false).unwrap_or_else(|| h[0].1.clone());
-    assert_eq!(literal_lets(&open, "__perry_cjs_factory"), 1, "{:#?}", open.init);
-}
-
-#[test]
 fn a_factory_held_beyond_its_record_is_not_flattened() {
     // Every use of the factory but its call is a module record; a value use
     // of it is a caller the module does not see.
@@ -294,7 +274,7 @@ fn a_factory_held_beyond_its_record_is_not_flattened() {
         "(globalThis as any).again = __perry_cjs_factory; return __perry_cjs_factory();",
     );
     let h = hirs(&[("held", &src)]);
-    let flat = crate::decl_units::run_once_flat(&h[0].1, true).unwrap_or_else(|| h[0].1.clone());
+    let flat = crate::decl_units::run_once_flat(&h[0].1).unwrap_or_else(|| h[0].1.clone());
     assert_eq!(
         literal_lets(&flat, "__perry_cjs_factory"),
         1,
@@ -339,5 +319,5 @@ fn a_copy_of_a_published_body_is_an_internal_compiler_error() {
         .iter()
         .map(|f| ((true, f.id), (f.name.clone(), f.id)))
         .collect();
-    crate::decl_units::flatten(m, &all, true);
+    crate::decl_units::flatten(m, &all);
 }

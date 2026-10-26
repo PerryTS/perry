@@ -84,11 +84,6 @@ pub struct FactsConfig {
     /// Per-unit inputs/outputs digests in the dump (`# uio` / `# uout`):
     /// what an edit changes, unit by unit (design §13.3).
     pub unit_io: bool,
-    /// The program's CommonJS closed-world fact
-    /// (`perry_hir::program_is_cjs_closed`): no module can reach the loader,
-    /// so every CommonJS factory runs once (the premise of the run-once
-    /// view's factory case, `decl_units::run_once_flat`).
-    pub cjs_closed: bool,
 }
 
 /// Module path → `export … from` source → the module path it resolves to.
