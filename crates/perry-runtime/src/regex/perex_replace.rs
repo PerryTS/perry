@@ -520,11 +520,9 @@ pub(crate) extern "C" fn regexp_thunk(
     api::finish(regexp(this.as_f64(), input, replacement))
 }
 
-#[no_mangle]
 pub extern "C" fn js_string_replace_js(receiver: f64, search: f64, replacement: f64) -> f64 {
     api::finish(string(false, receiver, search, replacement))
 }
-#[no_mangle]
 pub extern "C" fn js_string_replace_all_js(receiver: f64, search: f64, replacement: f64) -> f64 {
     api::finish(string(true, receiver, search, replacement))
 }

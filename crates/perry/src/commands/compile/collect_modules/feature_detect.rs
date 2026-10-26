@@ -434,7 +434,21 @@ pub(super) fn detect_optional_feature_usage(
         // local binding name. Use the structured import record for provenance
         // instead of treating every unrelated external named `glob` as
         // `node:fs/promises.glob`.
-        if debug_hir_uses_regex(&hir_debug) || imports_fs_promises_glob(hir_module) {
+        let receives_regexp = hir_module.imports.iter().any(|import| {
+            !import.type_only
+                && !import.runtime_erased
+                && matches!(
+                    import
+                        .source
+                        .strip_prefix("node:")
+                        .unwrap_or(&import.source),
+                    "v8" | "worker_threads"
+                )
+        });
+        if debug_hir_uses_regex(&hir_debug)
+            || imports_fs_promises_glob(hir_module)
+            || receives_regexp
+        {
             ctx.uses_regex = true;
         }
     }

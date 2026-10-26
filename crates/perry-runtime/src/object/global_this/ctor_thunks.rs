@@ -50,7 +50,7 @@ pub(crate) extern "C" fn regexp_constructor_call_thunk(
     pattern: f64,
     flags: f64,
 ) -> f64 {
-    crate::value::js_nanbox_pointer(crate::regex::js_regexp_construct_call(pattern, flags) as i64)
+    crate::value::js_nanbox_pointer(crate::regex::hooked::construct_call(pattern, flags) as i64)
 }
 
 /// Without the regex engine there is no RegExp to construct — keep the

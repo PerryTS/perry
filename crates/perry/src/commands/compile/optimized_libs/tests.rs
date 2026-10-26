@@ -860,3 +860,25 @@ fn the_instrumented_variant_names_its_archives_with_an_instr_suffix() {
     // A name that is not an archive is left alone.
     assert_eq!(name("perry", true), "perry");
 }
+
+#[test]
+fn deserializers_install_regex_without_a_regex_literal() {
+    let dir = tempfile::tempdir().unwrap();
+    let features = BTreeSet::new();
+    let plain = CompilationContext::new(dir.path().to_path_buf());
+    assert!(!auto_optimized_cross_features(&plain, &features, &[])
+        .iter()
+        .any(|f| f == "perry-runtime/regex-engine"));
+    for module in ["v8", "worker_threads"] {
+        let mut ctx = CompilationContext::new(dir.path().to_path_buf());
+        ctx.native_module_imports.insert(module.to_string());
+        assert!(auto_optimized_cross_features(&ctx, &features, &[])
+            .iter()
+            .any(|f| f == "perry-runtime/regex-engine"));
+    }
+    let mut ipc = CompilationContext::new(dir.path().to_path_buf());
+    ipc.uses_proc_ipc = true;
+    assert!(auto_optimized_cross_features(&ipc, &features, &[])
+        .iter()
+        .any(|f| f == "perry-runtime/regex-engine"));
+}

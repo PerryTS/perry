@@ -16,7 +16,9 @@ its artifacts include compile logs, Node/native output and `report.json`.
 
 `without_math.ts` uses stdout to prove Math absence independently of the
 compiler's conservative `log` property detection. `hello.ts` reads argv to exercise the normal runtime rather than the tiny
-program path. Every runtime hook in `stdlib_installs.rs::RUNTIME_INSTALLS` must
+program path. `without_regex.ts` checks literal replacement, callbacks, custom
+symbol methods and UTF-16 splitting with no regex install. Deserializers that can
+receive a RegExp from another program (V8, IPC and workers) select that install. Every runtime hook in `stdlib_installs.rs::RUNTIME_INSTALLS` must
 have a positive fixture. Each fixture declares its hook and symbol prefixes;
 explicit unhooked fixtures say `none (no hook yet)`. Prefixes match demangled
 text symbols, including C entry points. Text bytes are section size; attributed

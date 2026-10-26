@@ -284,7 +284,7 @@ pub(super) unsafe fn construct(
                 .copied()
                 .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
             return Some(crate::value::js_nanbox_pointer(
-                crate::regex::js_regexp_construct(pattern, flags) as i64,
+                crate::regex::hooked::construct(pattern, flags) as i64,
             ));
         }
         // #2889: `new (rebound TypedArray)(lengthOrSource)`.

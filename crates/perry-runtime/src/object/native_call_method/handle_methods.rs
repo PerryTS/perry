@@ -893,10 +893,7 @@ pub(super) unsafe fn dispatch_handle(
             if (*obj).class_id == crate::regex::REGEXP_STRING_ITERATOR_CLASS_ID
                 && crate::collection_iter_object::is_intrinsic_iterator_method(method_name)
             {
-                return Some(crate::regex::dispatch_regexp_string_iterator_method(
-                    obj as *mut ObjectHeader,
-                    method_name,
-                ));
+                return crate::regex::hooked_iterator_method(obj as *mut ObjectHeader, method_name);
             }
             // #2874: lazy iterator-helper objects (`Iterator.from(x)` and the
             // chain it produces: `.map`/`.filter`/`.take`/`.drop`/`.flatMap`/

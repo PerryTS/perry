@@ -31,7 +31,7 @@ use super::builtin_proto::{pristine, redirect_or_refresh, BuiltinProto};
 use crate::string::StringHeader;
 use crate::value::{JSValue, POINTER_MASK, POINTER_TAG, STRING_TAG, TAG_UNDEFINED};
 
-use crate::regex::{js_string_match_all_js, js_string_match_js, js_string_search_js};
+use crate::regex::hooked::{js_string_match_all_js, js_string_match_js, js_string_search_js};
 use crate::string::{
     js_string_at, js_string_char_at, js_string_char_code_at, js_string_code_point_at,
     js_string_concat, js_string_ends_with, js_string_ends_with_at, js_string_index_of,

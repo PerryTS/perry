@@ -1117,12 +1117,10 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             date_proto_thunks::install_date_proto_to_primitive(proto_obj);
         }
         "RegExp" => {
-            // Real accessor getters (`source`/`flags`/`global`/…) so reflection
-            // (`getOwnPropertyDescriptor(RegExp.prototype, "source").get`) and
-            // brand-checked `.call(this)` work, and instances inherit them.
-            super::super::regex_proto_thunks::install_regex_proto_accessors(proto_obj);
-            // Real brand-checking `exec`/`test`/`toString`/`compile` (Annex B).
-            super::super::regex_proto_thunks::install_regex_proto_methods(proto_obj);
+            // The regex installer owns the accessors and real methods,
+            // including the symbol methods; this always-live builder must
+            // not retain their function tables without that install.
+            crate::regex::hooked::install_proto(proto_obj);
             // `compile` is installed as a real brand-checking thunk by
             // `install_regex_proto_methods` when `regex-engine` is on; without an
             // engine it falls back to the Annex-B no-op here.

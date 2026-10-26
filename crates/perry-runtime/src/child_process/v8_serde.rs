@@ -908,7 +908,7 @@ impl<'a> Deserializer<'a> {
             crate::string::js_string_from_bytes(flag_bytes.as_ptr(), flag_bytes.len() as u32);
         #[cfg(feature = "regex-engine")]
         {
-            let re = crate::regex::js_regexp_new(source, flags);
+            let re = crate::regex::hooked::new(source, flags);
             let boxed = cp_box_ptr(re as *const u8);
             self.id_table.push(boxed);
             Some(boxed)

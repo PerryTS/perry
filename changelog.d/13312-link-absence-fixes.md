@@ -1,0 +1,1 @@
+Programs that cannot reach the regular-expression engine now omit it from their native binaries, while string replacement, splitting, custom symbol methods and regex programs preserve Node output. Hello-world executable text loses 0.439 MB on Linux and 0.380 MB on macOS; compiler-selected installer slots keep the unused engine and its resolver records out of the link.

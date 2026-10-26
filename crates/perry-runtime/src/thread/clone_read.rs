@@ -549,7 +549,7 @@ impl<'s, 'm> Reader<'s, 'm> {
     unsafe fn regexp(&mut self, source: &[u8], flags: &[u8]) -> u64 {
         let source = self.scope.root_nanbox_u64(string_bits(source));
         let flags = string_bits(flags);
-        let re = crate::regex::js_regexp_new(
+        let re = crate::regex::hooked::new(
             (source.get_nanbox_u64() & POINTER_MASK) as *const _,
             (flags & POINTER_MASK) as *const _,
         );

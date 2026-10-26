@@ -58,7 +58,7 @@ def inventory():
     assert hooks, "RUNTIME_INSTALLS not found"
     fixtures = {}
     for path in sorted(FIXTURES.glob("*.ts")):
-        if path.stem in ("hello", "without_math"):
+        if path.stem in ("hello", "without_math", "without_regex"):
             continue
         source = path.read_text()
         hook = re.search(r"^// HWS hook: (.+)$", source, re.M)
@@ -240,7 +240,7 @@ def main():
     env.setdefault("PERRY_RUNTIME_DIR", str(Path(args.perry).parent))
     report = {"platform": key, "node": node_version, "witnesses": {}, "subsystems": {}, "failures": []}
     exceptions = {}
-    names = ["hello", "without_math"] + ([] if args.negative_only else list(fixtures))
+    names = ["hello", "without_math", "without_regex"] + ([] if args.negative_only else list(fixtures))
     for name in names:
         try:
             binary, selected, _ = compile_witness(args, name, env)
@@ -257,18 +257,20 @@ def main():
             syms, text = symbols(binary, nm, demangler)
             report["witnesses"][name] = {"text_bytes": text, "binary_bytes": binary.stat().st_size,
                                           "installs": sorted(selected), "parity": True}
-            if name not in ("hello", "without_math"):
+            if name not in ("hello", "without_math", "without_regex"):
                 fixture = fixtures[name]
                 assert any(matches(s, fixture) for s in syms), f"{name}: positive linked no matching symbols"
                 if fixture["hook"].startswith("js_"):
                     assert fixture["hook"] in selected, f"{name}: positive did not install {fixture['hook']}"
             else:
-                candidates = fixtures.items() if name == "hello" else [("global_math", fixtures["global_math"])]
+                candidates = (fixtures.items() if name == "hello" else
+                              [("global_math", fixtures["global_math"])] if name == "without_math" else
+                              [("regex_engine", fixtures["regex_engine"])])
                 for subsystem, fixture in candidates:
                     hit = [s for s in syms if matches(s, fixture)]
                     installed = fixture["hook"] in selected
-                    if name == "without_math":
-                        assert not installed, "Math's negative witness unexpectedly installs Math"
+                    if name != "hello":
+                        assert not installed, f"{name}: negative witness unexpectedly installs {subsystem}"
                     observed = sorted({s["name"] for s in hit}) if not installed else []
                     allowed = known["symbols"].get(subsystem, [])
                     new = sorted(set(observed)-set(allowed))
@@ -281,7 +283,7 @@ def main():
                     if name == "hello":
                         report["subsystems"][subsystem] = row
                     else:
-                        report["math_negative"] = row
+                        report["math_negative" if name == "without_math" else "regex_negative"] = row
                     if observed:
                         exceptions[subsystem] = observed
                     if hit and not installed and (args.record_known_failures or failure):

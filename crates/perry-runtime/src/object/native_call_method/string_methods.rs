@@ -208,12 +208,12 @@ pub(super) unsafe fn dispatch_string(
                     {
                         let pattern_val = _pattern_val;
                         if method_name == "matchAll" {
-                            return Some(crate::regex::js_string_match_all_js(
+                            return Some(crate::regex::hooked::js_string_match_all_js(
                                 object_handle.get_nanbox_f64(),
                                 pattern_val,
                             ));
                         }
-                        return Some(crate::regex::js_string_match_js(
+                        return Some(crate::regex::hooked::js_string_match_js(
                             object_handle.get_nanbox_f64(),
                             pattern_val,
                         ));
@@ -229,7 +229,7 @@ pub(super) unsafe fn dispatch_string(
                         arg_at(0).unwrap_or_else(|| f64::from_bits(JSValue::undefined().bits()));
                     #[cfg(feature = "regex-engine")]
                     {
-                        return Some(crate::regex::js_string_search_js(
+                        return Some(crate::regex::hooked::js_string_search_js(
                             object_handle.get_nanbox_f64(),
                             _regex_val,
                         ));
@@ -465,9 +465,9 @@ pub(super) unsafe fn dispatch_string(
                     let search = arg_at(0).unwrap_or(undefined);
                     let replacement = arg_at(1).unwrap_or(undefined);
                     return Some(if method_name == "replaceAll" {
-                        crate::regex::js_string_replace_all_js(receiver, search, replacement)
+                        crate::regex::hooked::js_string_replace_all_js(receiver, search, replacement)
                     } else {
-                        crate::regex::js_string_replace_js(receiver, search, replacement)
+                        crate::regex::hooked::js_string_replace_js(receiver, search, replacement)
                     });
                 }
                 // Methods with only a codegen fast path (no native arm) — needed

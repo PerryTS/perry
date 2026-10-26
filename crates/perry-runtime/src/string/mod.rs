@@ -129,6 +129,7 @@ mod raw;
 mod slice_ops;
 mod slice_range;
 mod split;
+pub(crate) mod literal_replace;
 pub(crate) mod suffix_cursor;
 pub(crate) mod trim_cache;
 mod utf16_count;
@@ -230,7 +231,7 @@ pub(crate) fn canonical_key(name: &[u8]) -> *mut StringHeader {
     intern::intern_prehashed_bytes(name.as_ptr(), name.len(), hash, false) as *mut StringHeader
 }
 #[cfg(feature = "regex-engine")]
-pub use crate::regex::{js_string_split_js, js_string_split_n};
+pub use crate::regex::hooked::{js_string_split_js, js_string_split_n};
 #[cfg(test)]
 pub(crate) use format::{
     debug_assert_small_string_caches_not_minor_relevant, test_write_small_int_cache_slot,

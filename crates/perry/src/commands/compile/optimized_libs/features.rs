@@ -165,7 +165,14 @@ pub(crate) fn auto_optimized_cross_features(
     }
     // Binary-size feature gating (kept in sync with the inline list on `main`):
     // each engine/table is linked only when the program actually uses it.
-    if ctx.uses_regex {
+    // V8/IPC/worker deserialization can materialize a RegExp supplied by
+    // another program, even when this program has no RegExp literal.
+    if ctx.uses_regex
+        || ctx.uses_proc_ipc
+        || ctx.uses_get_builtin_module
+        || ctx.native_module_imports.contains("v8")
+        || ctx.native_module_imports.contains("worker_threads")
+    {
         cross_features.push("perry-runtime/regex-engine".to_string());
     }
     if ctx.uses_temporal {
