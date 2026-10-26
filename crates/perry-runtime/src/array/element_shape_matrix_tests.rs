@@ -38,10 +38,11 @@
 
 use super::*;
 use crate::array::{
-    js_array_alloc, js_array_copy_within, js_array_delete, js_array_fill, js_array_fill_range,
-    js_array_pop_f64, js_array_push_f64, js_array_reverse, js_array_set_f64,
-    js_array_set_f64_unchecked, js_array_set_length, js_array_shift_f64, js_array_sort_default,
-    js_array_splice, js_array_unshift_f64,
+    array_has_own_index, js_array_alloc, js_array_copy_within, js_array_delete, js_array_fill,
+    js_array_fill_range, js_array_get_f64, js_array_pop_f64, js_array_push_f64, js_array_reverse,
+    js_array_set_f64, js_array_set_f64_unchecked, js_array_set_length, js_array_shift_f64,
+    js_array_sort_default, js_array_sort_with_comparator, js_array_splice,
+    js_array_to_sorted_default, js_array_to_sorted_with_comparator, js_array_unshift_f64,
 };
 
 /// Two distinct shaped classes, matching the ids `element_shape_tests` uses.
@@ -551,5 +552,132 @@ fn matrix_every_bulk_family_revokes() {
         let before = element_shape_epoch();
         let arr = op(arr);
         assert_revoked(arr, before, name);
+    }
+}
+
+extern "C" fn frozen_sort_compare(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    a: f64,
+    b: f64,
+) -> f64 {
+    a - b
+}
+
+/// Exercise both public sort entry points, not merely their routing predicate.
+/// Frozen arrays may still sort successfully when no indexed write is needed.
+#[test]
+fn matrix_frozen_sort_preserves_elements_and_throws_only_on_writes() {
+    let _serialized = test_serialize();
+    let hole = f64::from_bits(crate::value::TAG_HOLE);
+    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let cases: &[(&str, &[f64], bool)] = &[
+        ("empty", &[], false),
+        ("singleton", &[1.0], false),
+        ("dense", &[2.0, 1.0], true),
+        ("holes", &[hole, hole], false),
+        ("sparse", &[hole, 1.0], true),
+        ("undefined", &[undefined, 1.0], true),
+    ];
+    for comparator in [false, true] {
+        for &(label, values, throws) in cases {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let arr = scope.root_raw_mut_ptr(crate::array::alloc::js_array_from_values(
+                values.as_ptr(),
+                values.len() as u32,
+            ));
+            crate::object::js_object_freeze(crate::value::js_nanbox_pointer(
+                arr.get_raw_mut_ptr::<ArrayHeader>() as i64,
+            ));
+            let cmp = scope.root_raw_const_ptr(crate::closure::js_closure_alloc(
+                crate::fn_info!(frozen_sort_compare, 2),
+                0,
+            ));
+            let result = crate::exception::catch_js_throw(|| {
+                if comparator {
+                    js_array_sort_with_comparator(
+                        arr.get_raw_mut_ptr::<ArrayHeader>(),
+                        cmp.get_raw_const_ptr(),
+                    )
+                } else {
+                    js_array_sort_default(arr.get_raw_mut_ptr::<ArrayHeader>())
+                }
+            });
+            assert_eq!(result.is_err(), throws, "{label}, comparator={comparator}");
+            match result {
+                Ok(out) => assert_eq!(out, arr.get_raw_mut_ptr::<ArrayHeader>()),
+                Err(error) => unsafe {
+                    let address = (error.to_bits() & crate::value::POINTER_MASK) as usize;
+                    assert!(crate::error::ptr_is_native_error(address));
+                    assert_eq!(
+                        (*(address as *const crate::error::ErrorHeader)).error_kind,
+                        crate::error::ERROR_KIND_TYPE_ERROR,
+                    );
+                },
+            }
+            let live = arr.get_raw_mut_ptr::<ArrayHeader>();
+            assert_eq!(unsafe { (*live).length }, values.len() as u32);
+            for (index, value) in values.iter().enumerate() {
+                assert_eq!(
+                    unsafe { array_has_own_index(live, index as u32) },
+                    value.to_bits() != crate::value::TAG_HOLE,
+                    "{label}: presence at {index}"
+                );
+                if value.to_bits() != crate::value::TAG_HOLE {
+                    assert_eq!(
+                        js_array_get_f64(live, index as u32).to_bits(),
+                        value.to_bits()
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn matrix_sort_mutable_and_frozen_to_sorted_controls() {
+    let _serialized = test_serialize();
+    for comparator in [false, true] {
+        for copy in [false, true] {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let values = [2.0, 1.0];
+            let arr = scope.root_raw_mut_ptr(crate::array::alloc::js_array_from_values(
+                values.as_ptr(),
+                2,
+            ));
+            if copy {
+                crate::object::js_object_freeze(crate::value::js_nanbox_pointer(
+                    arr.get_raw_mut_ptr::<ArrayHeader>() as i64,
+                ));
+            }
+            let cmp = scope.root_raw_const_ptr(crate::closure::js_closure_alloc(
+                crate::fn_info!(frozen_sort_compare, 2),
+                0,
+            ));
+            let out = match (copy, comparator) {
+                (false, false) => js_array_sort_default(arr.get_raw_mut_ptr::<ArrayHeader>()),
+                (false, true) => js_array_sort_with_comparator(
+                    arr.get_raw_mut_ptr::<ArrayHeader>(),
+                    cmp.get_raw_const_ptr(),
+                ),
+                (true, false) => js_array_to_sorted_default(arr.get_raw_mut_ptr::<ArrayHeader>()),
+                (true, true) => js_array_to_sorted_with_comparator(
+                    arr.get_raw_mut_ptr::<ArrayHeader>(),
+                    cmp.get_raw_const_ptr(),
+                ),
+            };
+            assert_eq!(out == arr.get_raw_mut_ptr::<ArrayHeader>(), !copy);
+            assert_eq!(unsafe { (*out).length }, 2);
+            assert_eq!(js_array_get_f64(out, 0), 1.0);
+            assert_eq!(js_array_get_f64(out, 1), 2.0);
+            assert_eq!(
+                js_array_get_f64(arr.get_raw_mut_ptr::<ArrayHeader>(), 0),
+                if copy { 2.0 } else { 1.0 }
+            );
+            assert_eq!(
+                js_array_get_f64(arr.get_raw_mut_ptr::<ArrayHeader>(), 1),
+                if copy { 1.0 } else { 2.0 }
+            );
+        }
     }
 }
