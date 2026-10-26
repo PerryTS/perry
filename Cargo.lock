@@ -5573,6 +5573,7 @@ dependencies = [
  "serde_json",
  "turnloop-tls",
  "webpki-roots",
+ "x509-cert",
 ]
 
 [[package]]
