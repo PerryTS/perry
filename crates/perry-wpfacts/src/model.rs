@@ -1102,8 +1102,8 @@ pub struct Model {
     /// the source of (function, parameter, reason: a member other than that
     /// parameter's marker escapes), the parameter node it is the marker of,
     /// and the links not replayed yet (the solver loop replays them).
-    pub arg_stores: FxHashMap<Tok, Vec<(Atom, NodeId, SiteId)>>,
-    pub arg_store_done: crate::pts::FxHashSet<(Tok, Atom, NodeId)>,
+    pub arg_stores: FxHashMap<Tok, Vec<(Key, NodeId, SiteId)>>,
+    pub arg_store_done: crate::pts::FxHashSet<(Tok, Key, NodeId)>,
     pub arg_src_watch: FxHashMap<Tok, Vec<(FnIdx, u32, u32)>>,
     /// DECISIONS 152: the markers handed to a closed class's constructor
     /// (marker, constructor token, argument), published per parameter by

@@ -740,3 +740,31 @@ fn a_key_another_unit_stores_into_a_builtin_prototype_is_unknown_here() {
         .expect("lit");
     assert!(t.escape.is_some(), "{t:?}");
 }
+
+#[test]
+fn a_store_under_a_computed_key_into_a_parameter_reaches_the_callers_value() {
+    // DECISIONS 205: `context[bodySchema] = schemas` stores under a computed
+    // key (a symbol) into a parameter, whose node holds an argument marker
+    // (DECISIONS 44). A named key is a flow to the marker's members (118); a
+    // computed key went nowhere, so `schemas` kept its facts while the whole
+    // program stores it into the caller's unknown value and it escapes
+    // (fastify `validation.js`, `context[bodySchema] = contentTypeSchemas`).
+    // Now it reaches the members under any key: the contract parameter,
+    // whose store sinks it.
+    let v = r#"
+        const bodySchema = Symbol("body");
+        export function compileSchemas(context: any, compile: any) {
+          const schemas: any = {};
+          schemas["a"] = compile(1);
+          context[bodySchema] = schemas;
+        }
+        "#;
+    let m = "import { compileSchemas } from \"./v\";\ncompileSchemas((globalThis as any).ctx, (x: any) => x);\n";
+    let (u, _) = assert_not_stronger(&[("v", v), ("main", m)]);
+    let t = u
+        .templates
+        .iter()
+        .find(|t| t.display.starts_with("v.ts"))
+        .expect("schemas");
+    assert!(t.escape.is_some(), "{t:?}");
+}

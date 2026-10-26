@@ -1725,16 +1725,16 @@ impl Model {
         z: Tok,
         kz: Option<Atom>,
         k: Option<Atom>,
-        ss: &[(Atom, NodeId, SiteId)],
+        ss: &[(Key, NodeId, SiteId)],
     ) {
         let y = match (kz, k) {
             (None, None) => z,
             (Some(a), None) | (None, Some(a)) => self.keyed_reach_of(z, a),
             (Some(_), Some(_)) => return,
         };
-        for &(a, src, site) in ss {
+        for &(key, src, site) in ss {
             self.work += 1;
-            self.store_into(y, Key::Named(a), src, site);
+            self.store_into(y, key, src, site);
         }
     }
 
@@ -1824,18 +1824,25 @@ impl Model {
         // 44): a store into it under a named key is a store into each one,
         // replayed on each one that links in later. A store into its keyed
         // reach under `k` goes into each member's keyed reach under `k`
-        // alone, not into all its members reach (DECISIONS 121).
-        if let (Key::Named(a), true) = (key, self.is_arg_marker(t)) {
+        // alone, not into all its members reach (DECISIONS 121). Under a
+        // computed key, the same into each member under any key (DECISIONS
+        // 205): the marker has no fields, and no value sits beside it to
+        // take the store, so it went nowhere. It still marks the argument
+        // escaped, as before.
+        if self.is_arg_marker(t) {
             if self.aborted {
                 return;
             }
-            if self.arg_store_done.insert((t, a, src)) {
+            if key == Key::Any {
+                self.mark_use(t, crate::model::MARK_ESCAPE);
+            }
+            if self.arg_store_done.insert((t, key, src)) {
                 // DECISIONS 187/193: kept on `t` alone, where it was made,
                 // and handed to the readers `t` stands for (a keyed reach:
                 // its base's readers, under its key); a reader that comes
                 // later takes it from `t` (`arg_readers_add`).
-                self.arg_stores.entry(t).or_default().push((a, src, site));
-                let s = [(a, src, site)];
+                self.arg_stores.entry(t).or_default().push((key, src, site));
+                let s = [(key, src, site)];
                 match self.keyed_parent.get(&t).copied() {
                     Some((p, k)) => {
                         for (z, kz) in self.arg_readers.get(&p).cloned().unwrap_or_default() {
