@@ -13,11 +13,16 @@ interface local {
 world plugin {
     import foreign;
     import wait: async func(id: u32);
+    import submitted: func(id: u32);
     use foreign.{item};
     export local;
     export create: async func(value: u32) -> own<item>;
     export echo: async func(value: own<item>) -> own<item>;
     export exchange: async func(id: u32, value: own<item>) -> own<item>;
+    export cancel-exchange: async func(id: u32, value: own<item>) -> own<item>;
+    export published: func() -> u32;
+    export cancel-loan: async func(id: u32, value: borrow<item>) -> u32;
+    export cancelled-expired: func() -> bool;
     export loan: async func(id: u32, value: borrow<item>) -> u32;
     export loans: async func(id: u32, values: list<borrow<item>>) -> list<u32>;
     export loan-background: async func(id: u32, value: borrow<item>) -> u32;
