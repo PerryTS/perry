@@ -1246,7 +1246,7 @@ pub fn gc_init() {
     // #8282/#8294: process EventEmitter listener closures live as raw
     // `*const ClosureHeader` in a TLS map. The scanner existed but was never
     // called, so the table stayed invisible to the collector.
-    crate::os::os_process_emitter::register_process_emitter_root_scanner();
+    crate::os_hook_slots::register_installed_roots();
     reg_scanner!(crate::weakref::scan_pending_finalization_jobs_roots_mut);
     // #6182: keep the weak-holder registry's stored holder ADDRESSES current
     // across evacuation. Metadata-only (non-rooting) — it rewrites forwarded
@@ -1310,7 +1310,7 @@ pub fn gc_init() {
     // `*const ClosureHeader` in a TLS `HashMap` — invisible to the precise
     // root map. Without this scanner a copying minor that evacuates a
     // listener closure leaves the raw pointer stale.
-    reg_scanner!(crate::os::process_emitter_root_scanner);
+
     // #7231: the raw `Error` constructor address behind
     // `Error.prepareStackTrace`. The closure is reachable through `globalThis`
     // so it is not swept, but this duplicate lives outside the object graph
@@ -1334,11 +1334,11 @@ pub fn gc_init() {
     reg_scanner!(crate::object::scan_current_new_target_root_mut);
     reg_scanner!(crate::object::scan_accessor_receiver_override_root_mut);
     reg_scanner!(crate::object::scan_pending_fetch_signal_root_mut);
-    reg_scanner!(crate::os::scan_process_event_listener_roots_mut);
+
     // #6077: keep promises tracked for an unhandled rejection alive + address-
     // stable until reported, so the program-end report is not a stale/UAF read.
     reg_scanner!(crate::promise::scan_unhandled_rejection_roots_mut);
-    reg_scanner!(crate::os::scan_process_stream_singleton_roots_mut);
+
     crate::perf_hook_slots::register_installed_roots();
     if let Some(register) = crate::feature_hooks::FS_REGISTER_ROOTS.peek() {
         register();
@@ -1424,7 +1424,7 @@ pub unsafe extern "C" fn js_gc_init_with_layouts(
     // any truncating consumer (`| head`, `| grep -q`, a closed socket) kills
     // the writer mid-write. Node ignores the signal and surfaces `EPIPE` to
     // the writer instead; do the same before a single byte can be written.
-    crate::os::ignore_sigpipe_at_startup();
+    crate::process_startup::ignore_sigpipe_at_startup();
     // Prime the process wall-clock epoch NOW: it lazily initializes on first
     // read, and the first read is otherwise whatever GC event happens to
     // consult it — which would make the exit-time GC-share denominator start

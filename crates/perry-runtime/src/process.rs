@@ -767,9 +767,9 @@ static PROCESS_STDIO_HOOK: std::sync::atomic::AtomicPtr<()> =
 
 fn process_stdio_value(property: &str) -> f64 {
     match property {
-        "stdin" => crate::os::js_process_stdin(),
-        "stdout" => crate::os::js_process_stdout(),
-        _ => crate::os::js_process_stderr(),
+        "stdin" => crate::os_hook_slots::js_process_stdin(),
+        "stdout" => crate::os_hook_slots::js_process_stdout(),
+        _ => crate::os_hook_slots::js_process_stderr(),
     }
 }
 
@@ -988,3 +988,5 @@ mod builtin_module_list_tests {
         }
     }
 }
+
+pub(crate) mod tick_args;

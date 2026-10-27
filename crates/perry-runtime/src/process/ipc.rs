@@ -508,7 +508,7 @@ fn process_ipc_send_message(message: f64) -> bool {
             }
         };
         if emit_disconnect {
-            crate::os::emit_process_event("disconnect", &[]);
+            crate::os_hook_slots::emit_process_event("disconnect", &[]);
         }
         ok
     }
@@ -636,7 +636,7 @@ fn process_ipc_disconnect_local() {
     }
 
     if mark_disconnect_emitted() {
-        crate::os::emit_process_event("disconnect", &[]);
+        crate::os_hook_slots::emit_process_event("disconnect", &[]);
     }
 }
 
@@ -693,18 +693,18 @@ pub extern "C" fn js_process_ipc_drain() -> i32 {
             IpcEvent::Message(json) => {
                 let sh = js_string_from_bytes(json.as_ptr(), json.len() as u32);
                 let msg = f64::from_bits(unsafe { crate::json_hooks::parse(sh) }.bits());
-                crate::os::emit_process_event("message", &[msg]);
+                crate::os_hook_slots::emit_process_event("message", &[msg]);
                 count = count.saturating_add(1);
             }
             IpcEvent::MessageAdvanced(bytes) => {
                 let msg = crate::child_process::v8_deserialize(&bytes);
-                crate::os::emit_process_event("message", &[msg]);
+                crate::os_hook_slots::emit_process_event("message", &[msg]);
                 count = count.saturating_add(1);
             }
             IpcEvent::Closed => {
                 let unexpected = mark_closed_from_event();
                 if unexpected {
-                    crate::os::emit_process_event("disconnect", &[]);
+                    crate::os_hook_slots::emit_process_event("disconnect", &[]);
                 }
                 crate::cluster::exit_worker_on_unexpected_primary_disconnect(unexpected);
                 count = count.saturating_add(1);

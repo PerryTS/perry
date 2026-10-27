@@ -733,35 +733,43 @@ pub(crate) unsafe fn nm_dispatch_process(ctx: &NmCtx, module_name: &str, method_
         typed_kind
     );
     match (module_name, method_name) {
-        ("process", "on") => crate::os::js_process_on(arg_bits(0), arg_bits(1)),
-        ("process", "addListener") => crate::os::js_process_add_listener(arg_bits(0), arg_bits(1)),
-        ("process", "once") => crate::os::js_process_once(arg_bits(0), arg_bits(1)),
+        ("process", "on") => crate::os_hook_slots::js_process_on(arg_bits(0), arg_bits(1)),
+        ("process", "addListener") => {
+            crate::os_hook_slots::js_process_add_listener(arg_bits(0), arg_bits(1))
+        }
+        ("process", "once") => crate::os_hook_slots::js_process_once(arg_bits(0), arg_bits(1)),
         ("process", "prependListener") => {
-            crate::os::js_process_prepend_listener(arg_bits(0), arg_bits(1))
+            crate::os_hook_slots::js_process_prepend_listener(arg_bits(0), arg_bits(1))
         }
         ("process", "prependOnceListener") => {
-            crate::os::js_process_prepend_once_listener(arg_bits(0), arg_bits(1))
+            crate::os_hook_slots::js_process_prepend_once_listener(arg_bits(0), arg_bits(1))
         }
-        ("process", "emit") => crate::os::js_process_emit(arg_bits(0), pack_args_from(1)),
+        ("process", "emit") => {
+            crate::os_hook_slots::js_process_emit(arg_bits(0), pack_args_from(1))
+        }
         ("process", "removeListener") => {
-            crate::os::js_process_remove_listener(arg_bits(0), arg_bits(1))
+            crate::os_hook_slots::js_process_remove_listener(arg_bits(0), arg_bits(1))
         }
-        ("process", "off") => crate::os::js_process_off(arg_bits(0), arg_bits(1)),
+        ("process", "off") => crate::os_hook_slots::js_process_off(arg_bits(0), arg_bits(1)),
         ("process", "removeAllListeners") => {
-            crate::os::js_process_remove_all_listeners(arg_bits(0))
+            crate::os_hook_slots::js_process_remove_all_listeners(arg_bits(0))
         }
         ("process", "listenerCount") => {
-            crate::os::js_process_listener_count(arg_bits(0), arg_bits(1))
+            crate::os_hook_slots::js_process_listener_count(arg_bits(0), arg_bits(1))
         }
         ("process", "listeners") => {
-            ptr_to_f64(crate::os::js_process_listeners(arg_bits(0)) as *const u8)
+            ptr_to_f64(crate::os_hook_slots::js_process_listeners(arg_bits(0)) as *const u8)
         }
         ("process", "rawListeners") => {
-            ptr_to_f64(crate::os::js_process_raw_listeners(arg_bits(0)) as *const u8)
+            ptr_to_f64(crate::os_hook_slots::js_process_raw_listeners(arg_bits(0)) as *const u8)
         }
-        ("process", "eventNames") => ptr_to_f64(crate::os::js_process_event_names() as *const u8),
-        ("process", "setMaxListeners") => crate::os::js_process_set_max_listeners(arg(0)),
-        ("process", "getMaxListeners") => crate::os::js_process_get_max_listeners(),
+        ("process", "eventNames") => {
+            ptr_to_f64(crate::os_hook_slots::js_process_event_names() as *const u8)
+        }
+        ("process", "setMaxListeners") => {
+            crate::os_hook_slots::js_process_set_max_listeners(arg(0))
+        }
+        ("process", "getMaxListeners") => crate::os_hook_slots::js_process_get_max_listeners(),
         ("process", "send") => {
             crate::process::process_ipc_send_call(arg(0), arg(1), arg(2), arg(3))
         }
@@ -822,7 +830,9 @@ pub(crate) unsafe fn nm_dispatch_process(ctx: &NmCtx, module_name: &str, method_
         }
         ("process", "nextTick") => {
             // Validate the callback and forward trailing args (#3046).
-            unsafe { crate::os::js_process_next_tick(arg_bits(0), pack_args_from(1)) };
+            unsafe {
+                crate::process::tick_args::js_process_next_tick(arg_bits(0), pack_args_from(1))
+            };
             f64::from_bits(crate::value::TAG_UNDEFINED)
         }
         ("process", "chdir") => {
@@ -868,7 +878,7 @@ pub(crate) unsafe fn nm_dispatch_process(ctx: &NmCtx, module_name: &str, method_
             crate::process::js_process_initgroups(arg(0), arg(1));
             f64::from_bits(crate::value::TAG_UNDEFINED)
         }
-        ("process", "kill") => crate::os::js_process_kill(arg(0), arg(1)),
+        ("process", "kill") => crate::os_hook_slots::js_process_kill(arg(0), arg(1)),
         ("process", "exit") => {
             crate::process::js_process_exit(arg(0));
             f64::from_bits(crate::value::TAG_UNDEFINED)

@@ -143,6 +143,7 @@ pub extern "C" fn js_runtime_install_compiled() {
     js_runtime_install_thread();
     js_runtime_install_date();
     js_runtime_install_perf_hooks();
+    js_runtime_install_os();
     #[cfg(feature = "dyn-eval")]
     js_runtime_install_dyn_eval();
     #[cfg(feature = "bun-cli-utils")]
@@ -223,7 +224,7 @@ pub(crate) static NODE_TEST_ROOT_SCANNER: Hook<crate::gc::MutableRootScanner> = 
 pub extern "C" fn js_runtime_install_node_api_host() {
     js_runtime_install_bigint();
     js_runtime_install_turnloop();
-    crate::os::os_process_emitter::install_process_signal_sync();
+    js_runtime_install_os();
     perry_install_once!({
         crate::node_api_host::install();
     });
@@ -398,7 +399,7 @@ pub extern "C" fn js_runtime_install_global_webfetch() {
 pub extern "C" fn js_runtime_install_proc_ipc() {
     js_runtime_install_bigint();
     perry_install_once!({
-        crate::os::os_process_emitter::install_process_signal_sync();
+        js_runtime_install_os();
         crate::process::ipc::install();
     });
 }
@@ -504,4 +505,9 @@ pub extern "C" fn js_runtime_install_date() {
 #[no_mangle]
 pub extern "C" fn js_runtime_install_perf_hooks() {
     crate::perf_hook_slots::install();
+}
+
+#[no_mangle]
+pub extern "C" fn js_runtime_install_os() {
+    crate::os_hook_slots::install();
 }

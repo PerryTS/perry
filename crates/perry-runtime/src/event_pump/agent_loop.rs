@@ -1384,7 +1384,7 @@ fn print_stats(id: AgentId, stats: LoopStats) {
         crate::turnloop_proc::adopted_total(),
         crate::turnloop_proc::live_handles(),
         dgram_sockets_on_turnloop(),
-        crate::os::signal::signals_on_turnloop(),
+        crate::os_hook_slots::signals_on_turnloop(),
     );
     // P4's own "the subject ran" line. `completions` above cannot distinguish a
     // socket P1 carried from a blocking job P4 carried, and a program that ran

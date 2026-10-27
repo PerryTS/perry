@@ -163,7 +163,7 @@ pub(crate) fn run_check_phase() -> i32 {
     // #input: dispatch buffered keyboard input on `process.stdin` at the same
     // safe event-loop point the callback phase always used. The reader thread
     // notifies on each keypress; this is a cheap empty-buffer check otherwise.
-    crate::os::pump_process_stdin();
+    crate::os_hook_slots::pump_process_stdin();
     if fired != 0 && crate::promise::mt_profile_enabled() {
         use std::sync::atomic::Ordering;
         PROFILE_CALLBACK_TIMERS_FIRED.fetch_add(fired as u64, Ordering::Relaxed);

@@ -85,7 +85,7 @@ fn event_exception(error: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let error = scope.root_nanbox_f64(error);
     match crate::exception::catch_js_throw(|| {
-        crate::os::emit_process_event("uncaughtException", &[error.get_nanbox_f64()])
+        crate::os_hook_slots::emit_process_event("uncaughtException", &[error.get_nanbox_f64()])
     }) {
         Ok(true) => f64::from_bits(crate::value::TAG_UNDEFINED),
         Ok(false) => crate::exception::exit_on_uncaught(error.get_nanbox_f64()),

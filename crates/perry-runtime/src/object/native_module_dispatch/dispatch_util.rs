@@ -50,7 +50,7 @@ pub(crate) unsafe fn nm_dispatch_util(ctx: &NmCtx, module_name: &str, method_nam
         }
         ("util", "inspect") => crate::builtins::js_util_inspect(arg(0), arg(1)),
         ("util", "convertProcessSignalToExitCode") => {
-            crate::os::js_util_convert_process_signal_to_exit_code(arg(0))
+            crate::os_hook_slots::js_util_convert_process_signal_to_exit_code(arg(0))
         }
         // #2514: libuv-style errno → name/message/map helpers.
         ("util", "getSystemErrorName") => crate::util_syserr::js_util_get_system_error_name(arg(0)),

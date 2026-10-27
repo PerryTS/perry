@@ -732,7 +732,7 @@ pub fn diagnostics_channel_drain_uncaught() {
     }
     let pending = DIAG_PENDING_UNCAUGHT.with(|q| std::mem::take(&mut *q.borrow_mut()));
     for err in pending {
-        if !crate::os::emit_process_event("uncaughtException", &[err]) {
+        if !crate::os_hook_slots::emit_process_event("uncaughtException", &[err]) {
             crate::exception::exit_on_uncaught(err);
         }
     }

@@ -368,7 +368,7 @@ fn with_watcher_uncaught_trap<F: FnOnce()>(f: F) {
             } else {
                 let exc = crate::exception::js_get_exception();
                 crate::exception::js_clear_exception();
-                crate::os::emit_process_uncaught_exception(exc);
+                crate::os_hook_slots::emit_process_uncaught_exception(exc);
             }
         });
         if completed.is_some() {
@@ -934,7 +934,7 @@ fn emit_fs_watch_error(
     let err_handle = scope.root_nanbox_f64(err_value);
     with_fs_watch_scope(ids, state.as_ref(), || {
         if callbacks.is_empty() {
-            crate::os::emit_process_uncaught_exception(err_handle.get_nanbox_f64());
+            crate::os_hook_slots::emit_process_uncaught_exception(err_handle.get_nanbox_f64());
             return;
         }
         for callback in &callback_handles {

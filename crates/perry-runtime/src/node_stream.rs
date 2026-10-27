@@ -1482,7 +1482,7 @@ fn stream_value_from_handle(stream_handle: i64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_node_stream_method_emit(stream_handle: i64, event: f64, arg: f64) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
-    if let Some(result) = crate::fs::utf8_stream_emit_value(stream, event, arg) {
+    if let Some(result) = crate::fs_hook_slots::utf8_stream_emit_value(stream, event, arg) {
         return result;
     }
     let mut args = crate::array::js_array_alloc(0);
@@ -1509,7 +1509,7 @@ pub extern "C" fn js_node_stream_method_emit_args(
             f64::from_bits(TAG_UNDEFINED)
         }
     };
-    if let Some(result) = crate::fs::utf8_stream_emit_value(stream, event, first_arg) {
+    if let Some(result) = crate::fs_hook_slots::utf8_stream_emit_value(stream, event, first_arg) {
         return result;
     }
     emit_stream_event_from_array(stream, event, args_ptr as *const crate::array::ArrayHeader)
@@ -1764,7 +1764,7 @@ pub extern "C" fn js_node_stream_method_write(
     cb: f64,
 ) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
-    if let Some(result) = crate::fs::utf8_stream_write_value(stream, chunk) {
+    if let Some(result) = crate::fs_hook_slots::utf8_stream_write_value(stream, chunk) {
         return result;
     }
     write_writable_chunk(stream, chunk, enc, cb)
@@ -1783,7 +1783,7 @@ pub extern "C" fn js_node_stream_method_write3(
 #[no_mangle]
 pub extern "C" fn js_node_stream_method_end(stream_handle: i64, chunk: f64) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
-    if let Some(result) = crate::fs::utf8_stream_end_value(stream, chunk) {
+    if let Some(result) = crate::fs_hook_slots::utf8_stream_end_value(stream, chunk) {
         return result;
     }
     finish_stream_with_args(
@@ -1803,7 +1803,7 @@ pub extern "C" fn js_node_stream_method_end3(
     cb: f64,
 ) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
-    if let Some(result) = crate::fs::utf8_stream_end_value(stream, chunk) {
+    if let Some(result) = crate::fs_hook_slots::utf8_stream_end_value(stream, chunk) {
         return result;
     }
     finish_stream_with_args(stream, chunk, encoding, cb);

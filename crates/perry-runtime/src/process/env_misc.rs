@@ -135,13 +135,13 @@ pub extern "C" fn js_process_exit(code: f64) {
 ///    `process.exit(3)` and an uncaught throw into status 9).
 ///
 /// Only SYNCHRONOUS work inside a listener is honoured; see
-/// `crate::os::js_process_emit_exit` for why that needs no suppression.
+/// `crate::os_hook_slots::js_process_emit_exit` for why that needs no suppression.
 pub(crate) fn run_process_exit_sequence(publish: Option<i32>) -> i32 {
     if let Some(code) = publish {
         PROCESS_EXIT_CODE.with(|c| c.set(JSValue::number(code as f64).bits()));
     }
     let code = js_process_pending_exit_code();
-    crate::os::js_process_emit_exit(code as f64);
+    crate::os_hook_slots::js_process_emit_exit(code as f64);
     js_process_pending_exit_code()
 }
 
@@ -636,7 +636,7 @@ extern "C" fn process_warning_callback(
         let _ = writeln!(stderr, "{hint}");
     }
 
-    crate::os::emit_process_event("warning", &[warning_handle.get_nanbox_f64()]);
+    crate::os_hook_slots::emit_process_event("warning", &[warning_handle.get_nanbox_f64()]);
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 

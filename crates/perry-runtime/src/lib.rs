@@ -867,7 +867,7 @@ pub(crate) mod stdlib_pump {
         debug_assert!(!outermost || ACTIVE_OUTER_PUMPS.load(Ordering::Acquire) > 0);
         crate::promise::js_native_async_process_pending();
         crate::node_api_host::hooks::process_pending();
-        crate::os::js_process_signal_drain();
+        crate::os_hook_slots::js_process_signal_drain();
         // Drain the tty resize-pending flag (#347 Phase 3). Lives in
         // perry-runtime, not stdlib, so it runs even when stdlib isn't
         // linked — a TUI program that uses process.stdout.on('resize')
@@ -970,13 +970,13 @@ pub(crate) mod stdlib_pump {
         // once stdin is detached (`pause`/`unref`/`destroy`), and false again
         // after EOF has been seen and the terminal `'end'`/`'close'` dispatch
         // has run.
-        if crate::os::stdin_listeners_keep_loop_alive() {
+        if crate::os_hook_slots::stdin_listeners_keep_loop_alive() {
             return 1;
         }
         if crate::process::js_process_ipc_has_active() != 0 {
             return 1;
         }
-        if crate::os::js_process_signal_has_active() != 0 {
+        if crate::os_hook_slots::js_process_signal_has_active() != 0 {
             return 1;
         }
         // #9591: a ref'd `fs.watch` handle / started `fsPromises.watch`
@@ -1376,3 +1376,7 @@ mod date_layout;
 
 mod perf_clock;
 mod perf_hook_slots;
+
+mod event_emitter_error;
+mod os_hook_slots;
+mod process_startup;

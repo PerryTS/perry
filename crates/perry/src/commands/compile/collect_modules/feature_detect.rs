@@ -444,6 +444,65 @@ pub(super) fn detect_optional_feature_usage(
     // false-negative class for every gate at once (the rule is zero false
     // negatives; including more HIR can only over-include a feature).
     let hir_debug = module_hir_debug(hir_module);
+    ctx.uses_os |= global_object::may_escape(hir_module)
+        || hir_debug
+            .as_bytes()
+            .windows(3)
+            .any(|word| &word[..2] == b"Os" && word[2].is_ascii_uppercase())
+        || hir_module.imports.iter().any(|import| {
+            !import.type_only
+                && !import.runtime_erased
+                && matches!(
+                    import
+                        .source
+                        .strip_prefix("node:")
+                        .unwrap_or(&import.source),
+                    "os" | "process"
+                        | "tty"
+                        | "readline"
+                        | "readline/promises"
+                        | "repl"
+                        | "node-pty"
+                        | "@lydell/node-pty"
+                        | "bun-pty"
+                )
+        })
+        || [
+            "ProcessOn",
+            "ProcessOnce",
+            "ProcessStdin",
+            "ProcessStdout",
+            "ProcessStderr",
+            "ProcessKill",
+            "ProcessEmit",
+            "ProcessFinalization",
+        ]
+        .iter()
+        .any(|name| hir_debug.contains(name))
+        || [
+            "on",
+            "once",
+            "off",
+            "emit",
+            "stdin",
+            "stdout",
+            "stderr",
+            "addListener",
+            "removeListener",
+            "removeAllListeners",
+            "prependListener",
+            "prependOnceListener",
+            "listeners",
+            "rawListeners",
+            "eventNames",
+            "listenerCount",
+            "setMaxListeners",
+            "getMaxListeners",
+            "kill",
+            "finalization",
+        ]
+        .iter()
+        .any(|name| hir_debug.contains(&format!("\"{name}\"")));
     ctx.uses_perf_hooks |= global_object::may_escape(hir_module)
         || hir_debug.contains(r#""performance""#)
         || hir_debug.contains(r#""perf_hooks""#);

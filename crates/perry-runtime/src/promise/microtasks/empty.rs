@@ -29,7 +29,7 @@ pub(super) fn can_skip_callback_phases() -> bool {
         || crate::async_hook_slots::gc_destroy_work_pending()
         || crate::thread_hook_slots::diagnostics_channel_has_pending_publishes()
         || crate::node_submodules::diagnostics::uncaught_work_pending()
-        || crate::os::process_stdin_needs_pump()
+        || crate::os_hook_slots::process_stdin_needs_pump()
         || crate::timer::timer_phase_work_pending())
 }
 
@@ -209,7 +209,7 @@ mod tests {
 
             let callback = crate::closure::js_closure_alloc(crate::fn_info!(callback, 1), 0);
             crate::os::test_set_stdin_data_listener(Some(callback as i64));
-            crate::os::stdin_push_bytes(b"input");
+            crate::os_hook_slots::stdin_push_bytes(b"input");
             assert!(!crate::timer::timer_phase_work_pending());
             assert!(!can_skip_callback_phases());
             // turnloop P3: buffered stdin is dispatched at the same
@@ -222,7 +222,7 @@ mod tests {
             crate::timer::js_event_loop_poll_callbacks();
             crate::timer::js_event_loop_check_phase();
             assert_eq!(CALLED.load(Ordering::Relaxed), 1);
-            assert!(!crate::os::process_stdin_needs_pump());
+            assert!(!crate::os_hook_slots::process_stdin_needs_pump());
             crate::os::test_set_stdin_data_listener(None);
         });
     }

@@ -42,15 +42,16 @@ NEGATIVES = {
     "without_thread": ["thread"],
     "without_date": ["date"],
     "without_perf_hooks": ["perf_hooks"],
+    "without_os": ["os"],
     "without_async_hooks": ["async_hooks"],
     "without_bigint_querystring": ["bigint"],
     "fs_promises_without_streams": ["bundled_web_streams"],
 }
 
 
-def run(cmd, *, cwd=None, env=None, timeout=180):
+def run(cmd, *, cwd=None, env=None, timeout=180, input=None):
     return subprocess.run([str(x) for x in cmd], cwd=cwd, env=env,
-                          capture_output=True, timeout=timeout)
+                          capture_output=True, timeout=timeout, input=input)
 
 
 def checked(cmd, **kwargs):
@@ -88,7 +89,10 @@ def witness_options(path):
     if oracle:
         assert Path(oracle).name == oracle and Path(oracle).suffix in (".js", ".mjs", ".ts"), f"{path}: Node oracle must be a sibling source filename"
         assert (FIXTURES / oracle).is_file(), f"{path}: missing Node oracle {oracle}"
-    return {"argv": argv, "node": oracle}
+    stdin=re.search(r"^// HWS stdin: (.+)$",source,re.M)
+    stdin=json.loads(stdin[1]) if stdin else None
+    assert stdin is None or isinstance(stdin,str), f"{path}: stdin must be a JSON string"
+    return {"argv": argv, "node": oracle,"stdin":stdin}
 
 
 def inventory():
@@ -331,8 +335,8 @@ def main():
             if options["node"]:
                 oracle_source = args.output/name/options["node"]
                 shutil.copyfile(FIXTURES/options["node"], oracle_source)
-            oracle = run(["node", oracle_source, *witness_argv], cwd=binary.parent)
-            actual = run([binary, *witness_argv], cwd=binary.parent)
+            oracle = run(["node", oracle_source, *witness_argv], cwd=binary.parent, input=options["stdin"].encode() if options["stdin"] is not None else None)
+            actual = run([binary, *witness_argv], cwd=binary.parent, input=options["stdin"].encode() if options["stdin"] is not None else None)
             (binary.parent/"node.stdout").write_bytes(oracle.stdout)
             (binary.parent/"native.stdout").write_bytes(actual.stdout)
             (binary.parent/"node.stderr").write_bytes(oracle.stderr)

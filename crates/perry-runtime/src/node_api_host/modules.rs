@@ -129,7 +129,7 @@ fn report_uncaught_exception(mut error: f64) {
     // and is delivered again, as the timer and watcher pumps do.
     loop {
         match crate::exception::js_call_catching(|| {
-            crate::os::emit_process_uncaught_exception(error);
+            crate::os_hook_slots::emit_process_uncaught_exception(error);
             f64::from_bits(crate::value::TAG_UNDEFINED)
         }) {
             Ok(_) => return,
