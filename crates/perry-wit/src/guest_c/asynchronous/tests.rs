@@ -33,6 +33,33 @@ fn custody_files(source: &str) -> BTreeMap<String, Vec<u8>> {
     generate_resolved(resolve, id, world, Some(anchor)).unwrap()
 }
 
+/// Produce a real resource-bearing guest below the retained shipping guard.
+/// The external acceptance harness compiles/executes it with matching tools;
+/// generating these files alone is never a passing component qualification.
+#[test]
+#[ignore = "fixture producer for source-matched WASI resource qualification"]
+fn async_resource_guest_fixture() {
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../test-wasi/components/async-guest-resources");
+    let source = std::fs::read_to_string(fixture.join("world.wit")).unwrap();
+    let files = custody_files(&source);
+    let output = tempfile::tempdir().unwrap().keep();
+    let generated = output.join("generated");
+    std::fs::create_dir(&generated).unwrap();
+    for (name, bytes) in files {
+        std::fs::write(generated.join(name), bytes).unwrap();
+    }
+    std::fs::write(
+        generated.join("guest.ts"),
+        crate::typescript_guest(&crate::parse(&source, None).unwrap()),
+    )
+    .unwrap();
+    for name in ["world.wit", "guest.ts"] {
+        std::fs::copy(fixture.join(name), output.join(name)).unwrap();
+    }
+    println!("PERRY_ASYNC_RESOURCE_FIXTURE={}", output.display());
+}
+
 #[test]
 fn guarded_async_resource_cleanup_compiles_with_imported_and_local_handles() {
     for source in [
