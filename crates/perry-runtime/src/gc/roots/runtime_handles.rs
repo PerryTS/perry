@@ -61,8 +61,10 @@ fn runtime_handle_stack() -> StackRef {
 }
 
 /// Fallback arm of [`runtime_handle_stack`]: the raw `thread_local!` lookup,
-/// reached only before this thread's `HotTls` is published (or from inside
-/// `HotTls::fill` itself). `#[inline(never)]` on purpose, not just `#[cold]`.
+/// reached before this thread's `HotTls` is published, from inside
+/// `HotTls::fill`, and always on targets without the published shortcut.
+/// On targets with an expensive TLS resolver it is `#[inline(never)]` on
+/// purpose, not just `#[cold]`.
 ///
 /// `RuntimeHandleScope::new()` is called from dozens of arms throughout the
 /// runtime, many of them small and gated behind a cheap guard deep inside an
@@ -81,8 +83,13 @@ fn runtime_handle_stack() -> StackRef {
 /// `js_object_get_field_by_name`'s prologue. Keeping this arm opaque to the
 /// inliner is what lets the FAST (published) arm above stay `#[inline(always)]`
 /// without dragging the raw TLS call along with it at every call site.
-#[inline(never)]
-#[cold]
+// Linux resolves this const-initialized, non-dropping TLS cell at a fixed
+// offset. Inline that address calculation into the scope owner instead of
+// calling an outlined fallback on every resume. Darwin keeps the opaque
+// fallback so its expensive TLV lookup cannot escape caller guards.
+#[cfg_attr(target_os = "linux", inline(always))]
+#[cfg_attr(not(target_os = "linux"), inline(never))]
+#[cfg_attr(not(target_os = "linux"), cold)]
 #[cfg(not(any(target_os = "android", target_env = "ohos")))]
 fn runtime_handle_stack_cold() -> StackRef {
     RUNTIME_HANDLE_STACK.with(|stack| {

@@ -531,7 +531,7 @@ fn pump_protected(mode: MicrotaskDrainMode, reentrant: bool, landed: bool, ran: 
                     let task_scope = crate::gc::RuntimeHandleScope::new();
                     let task_promise_handle = task_scope.root_nanbox_f64(boxed_promise(promise));
                     let task_value_handle = task_scope.root_nanbox_f64(value);
-                    enter_microtask_context(&task_context);
+                    enter_microtask_context(task_context);
                     let promise = rooted_promise(&task_promise_handle);
                     let value = task_value_handle.get_nanbox_f64();
                     unsafe {
@@ -716,7 +716,7 @@ fn pump_protected(mode: MicrotaskDrainMode, reentrant: bool, landed: bool, ran: 
                     let state_arr_h = task_scope
                         .root_nanbox_f64(crate::value::js_nanbox_pointer(state.state_arr as i64));
                     let value_h = task_scope.root_nanbox_f64(value);
-                    enter_microtask_context(&task_context);
+                    enter_microtask_context(task_context);
                     state.result_promise = rooted_promise(&result_h);
                     state.results_arr =
                         crate::value::js_nanbox_get_pointer(results_h.get_nanbox_f64())
@@ -737,7 +737,7 @@ fn pump_protected(mode: MicrotaskDrainMode, reentrant: bool, landed: bool, ran: 
                     let callback_handle = trap_scope.root_nanbox_f64(boxed_closure(callback));
                     let value_handle = trap_scope.root_nanbox_f64(value);
                     let next_handle = trap_scope.root_nanbox_f64(boxed_promise(next));
-                    enter_microtask_context(&task_context);
+                    enter_microtask_context(task_context);
                     let callback = rooted_closure(&callback_handle);
                     let value = value_handle.get_nanbox_f64();
                     let next = rooted_promise(&next_handle);
@@ -870,7 +870,7 @@ fn pump_protected(mode: MicrotaskDrainMode, reentrant: bool, landed: bool, ran: 
                     }
                     let resource_handle = scope.root_nanbox_f64(resource);
                     let callback_handle = scope.root_nanbox_f64(boxed_closure(callback));
-                    enter_microtask_context(&context);
+                    enter_microtask_context(context);
                     let callback = rooted_closure(&callback_handle);
                     let prev_promise = CURRENT_MICROTASK_PROMISE.with(|c| c.get());
                     let prev_callback = CURRENT_MICROTASK_CALLBACK.with(|c| c.get());
@@ -933,7 +933,7 @@ fn pump_protected(mode: MicrotaskDrainMode, reentrant: bool, landed: bool, ran: 
                     let step_handle = trap_scope.root_nanbox_f64(boxed_closure(step_closure));
                     let value_handle = trap_scope.root_nanbox_f64(value);
                     let next_handle = trap_scope.root_nanbox_f64(boxed_promise(next));
-                    enter_microtask_context(&task_context);
+                    enter_microtask_context(task_context);
                     let step_closure = rooted_closure(&step_handle);
                     let value = value_handle.get_nanbox_f64();
                     let next = rooted_promise(&next_handle);
