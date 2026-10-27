@@ -571,6 +571,9 @@ fn guest_frame_drop_after_cell_teardown_never_resolves_its_stale_link() {
             payload::link_unref(frame.owner);
         }
         frame.owner = OwnerLink(usize::MAX);
+        // Loan retirement must also remain native-only after teardown. Even
+        // poisoned slot metadata may be dropped without resolving the owner.
+        frame.committed_borrows.push((u32::MAX, u32::MAX));
         drop(frame);
         assert!(
             alive.upgrade().is_none(),

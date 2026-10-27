@@ -61,7 +61,9 @@ impl Generator<'_> {
         // Publish only after typed parameter allocation/conversion succeeds.
         // An error before begin leaves the frame owned by the runtime.
         emitter.source.push_str("uint32_t promise = perry_component_frame_import_begin(f);\nif (!promise) { perry_allocations_end(&data->arena, false); free(data); return 0; }\n");
-        emitter.source.push_str("data->base.next = parent->children;\nparent->children = &data->base;\nperry_component_frame_resource_commit(f);\n");
+        emitter
+            .source
+            .push_str("data->base.next = parent->children;\nparent->children = &data->base;\n");
         let mut args: Vec<String> = if aggregate {
             vec!["&data->args".into()]
         } else {

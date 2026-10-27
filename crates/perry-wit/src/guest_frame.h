@@ -69,6 +69,8 @@ int32_t perry_component_frame_task_cancel(void *);
 int32_t perry_component_frame_task_resume(void *, void (*)(void *), void *);
 /* Begin ONLY on a heap import frame whose C owner retains the same pointer.
    Requires a live current task; returns a rooted Promise slot (0 on error).
+   Commits staged resource ownership/borrow leases after Promise hooks succeed,
+   before publishing deferral. Failure leaves the frame owned by the runtime.
    Runtime transfers this frame to C after its import callback returns, even
    for immediate completion. C drops it only after all canonical/native use.
    Resolve/reject require its live originating task and return 0/-1. They run

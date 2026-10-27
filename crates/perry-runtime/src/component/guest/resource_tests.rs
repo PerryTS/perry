@@ -2,6 +2,8 @@ use super::*;
 
 #[path = "resource_cleanup_tests.rs"]
 mod cleanup_tests;
+#[path = "resource_loan_tests.rs"]
+mod loan_tests;
 
 struct Registry<'a> {
     global: crate::gc::RuntimeHandle<'a>,

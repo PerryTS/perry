@@ -508,6 +508,25 @@ adds guest-to-guest canonical cancellation; dropping a public native
 WASI ALS constructor packaging and public async CLI generation remain separate
 unfinished work.
 
+Guest frames now retain committed canonical borrow leases independently of
+Promise settlement and task cancellation. Each frame roots the wrapper and
+private owner state; concurrent frames acquire separate loans, while repeated
+aliases within one frame share a loan. An outstanding loan prevents disposal or
+owned transfer. Frame retirement releases it without invoking JavaScript or
+looking up the current registry, and skips managed state after heap teardown.
+
+Async import `begin` constructs its Promise and captured context first, then
+revalidates and commits all resource arguments before publishing deferral. A
+throwing initialization hook, a hook disposing a staged owner, or a newly active
+borrow cannot partially consume the other owners or hand a failed frame to C.
+The generated C adapter starts native I/O only after `begin` succeeds. See the
+[resource loan receipt](validation/wasi-guest-resource-loans-20261027.json) for
+native ownership tests and actual guest regressions. These are runtime
+prerequisites: the experimental resource-profile guard remains. Generated
+resource transfers before callee start, cancellation racing owned results, and
+borrow expiration at `task.return` still need adapter qualification before
+async resource interfaces can be enabled.
+
 The internal generic-reader checks additionally cover canonical layouts from
 `wit-parser::SizeAlign`, shared metadata for repeated aliases, a reusable
 quota-limited Wasm allocator, and task-local frames. They exercise concurrent

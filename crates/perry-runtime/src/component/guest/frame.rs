@@ -57,6 +57,10 @@ pub(super) struct Frame {
     failed: bool,
     pub(super) transfers: Vec<u32>,
     pub(super) borrows: Vec<u32>,
+    // Each entry roots both its wrapper and its private owner state in slots.
+    // Native metadata never caches a managed address across suspension.
+    pub(super) borrow_states: Vec<u32>,
+    pub(super) committed_borrows: Vec<(u32, u32)>,
     lifetime: Option<u32>,
     task: Option<task::TaskContext>,
     suspended: Option<suspended::SuspendedImport>,
@@ -94,6 +98,8 @@ impl Frame {
             failed: false,
             transfers: Vec::new(),
             borrows: Vec::new(),
+            borrow_states: Vec::new(),
+            committed_borrows: Vec::new(),
             lifetime: None,
             task: None,
             suspended: None,
@@ -107,6 +113,16 @@ impl Frame {
         if self.suspended.is_some() {
             let _ = Box::into_raw(self);
         }
+    }
+
+    #[cfg(test)]
+    pub(super) fn import_is_deferred(&self) -> bool {
+        self.suspended.is_some()
+    }
+
+    #[cfg(test)]
+    pub(super) fn weak_anchor(&self) -> std::sync::Weak<AtomicBool> {
+        Arc::downgrade(&self.alive)
     }
 
     // This read never allocates or calls JS: the private state object has only
@@ -198,6 +214,7 @@ impl Drop for Frame {
         // The GC-cell finalizer flips this flag before heap unmapping. A late
         // native C-task drop must free only Rust state after that point.
         if self.alive.load(Ordering::Acquire) {
+            super::resources::release_borrows(self);
             if let Some(slot) = self.lifetime {
                 crate::array::js_array_set_f64(array(self.get(slot)), 0, 0.0);
             }

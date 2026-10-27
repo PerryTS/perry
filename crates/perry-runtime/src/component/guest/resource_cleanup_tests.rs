@@ -3,9 +3,14 @@ use perry_abi::component_guest::ComponentGuestOps;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 // Each small handle has its own byte-sized count; this never holds an address.
-static COLLECTED: AtomicU64 = AtomicU64::new(0);
+pub(super) static COLLECTED: AtomicU64 = AtomicU64::new(0);
 
-unsafe extern "C" fn record_drop(_: *mut c_void, _: u32, operation: u32, handle: u32) -> u32 {
+pub(super) unsafe extern "C" fn record_drop(
+    _: *mut c_void,
+    _: u32,
+    operation: u32,
+    handle: u32,
+) -> u32 {
     assert_eq!(operation, 1);
     assert!(handle < 8);
     COLLECTED.fetch_add(1 << (8 * handle), Ordering::SeqCst);
@@ -18,12 +23,12 @@ unsafe extern "C" fn throwing_drop(pointer: *mut c_void, ty: u32, op: u32, handl
     0
 }
 
-struct TestOps {
+pub(super) struct TestOps {
     _table: Box<ComponentGuestOps>,
     previous: *mut ComponentGuestOps,
 }
 impl TestOps {
-    fn new(resource: unsafe extern "C" fn(*mut c_void, u32, u32, u32) -> u32) -> Self {
+    pub(super) fn new(resource: unsafe extern "C" fn(*mut c_void, u32, u32, u32) -> u32) -> Self {
         let mut table = Box::new(ComponentGuestOps {
             abi_version: perry_abi::component_guest::GUEST_ABI_VERSION,
             size: std::mem::size_of::<ComponentGuestOps>(),
@@ -46,7 +51,7 @@ impl Drop for TestOps {
     }
 }
 
-fn method(value: f64, name: &[u8]) -> f64 {
+pub(super) fn method(value: f64, name: &[u8]) -> f64 {
     unsafe {
         crate::closure::js_native_call_value(
             field(value, name),

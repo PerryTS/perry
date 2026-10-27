@@ -30,6 +30,13 @@ pub unsafe extern "C" fn perry_component_frame_import_begin(pointer: *mut c_void
         ));
         let saved = als::alloc_snapshot_holder(als::capture_context());
         let snapshot = owner.add(crate::value::js_nanbox_pointer(saved as i64));
+        // Promise init hooks can throw, dispose a staged owner, or establish
+        // another loan. Revalidate and commit only after all managed setup,
+        // before publishing deferral or letting C issue canonical I/O.
+        if !job_domain::current().is_some_and(|token| token.is_current_live()) {
+            fail("Async component import requires a live canonical task");
+        }
+        super::super::resources::commit(owner);
         owner.suspended = Some(SuspendedImport {
             snapshot,
             promise,
