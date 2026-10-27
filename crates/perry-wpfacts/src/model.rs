@@ -292,6 +292,11 @@ pub struct Template {
     /// Classes whose constructor chain `super()` ran on this class's
     /// instances during the solve (the parent value's class tokens).
     pub parent_links: Vec<TmplId>,
+    /// A declared-keys record born with a null prototype
+    /// (`Class::declared_keys_null_proto`: `require.cache`): its prototype
+    /// stand-in has no members and no prototype, so a lookup through it ends
+    /// there and never reaches `Object.prototype`.
+    pub null_proto: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1579,10 +1584,7 @@ pub struct Model {
     /// left with the function (unknown code reads and writes them); the
     /// reason it left.
     pub props_escaped: FxHashMap<Tok, u32>,
-    /// Solving one unit (`FactsConfig::unit`): what escapes reaches other
-    /// units' code, which the whole program sees.
-    pub per_unit: bool,
-    /// DECISIONS 210: this unit's functions unknown code constructs
+    /// DECISIONS 210/211: the functions unknown code constructs
     /// (`Model::construct_unknown`), once each.
     pub unknown_new: crate::pts::FxHashSet<FnIdx>,
     /// DECISIONS 210: the `new` calls of other units' functions: no call

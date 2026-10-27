@@ -17,6 +17,7 @@ mod class_statics;
 mod closed_world;
 mod closure_context;
 mod dynamic_code;
+mod escaped_constructor;
 mod escaped_method_this;
 mod escaped_contract_result;
 mod export_star;
@@ -1053,6 +1054,68 @@ fn cjs_registry_summary_does_not_reach_every_module() {
     }
     let site = pf.sites.iter().find(|s| s.key == "x").expect("site");
     assert_eq!(site.verdict, Verdict::T0Mono, "{}", pf.dump_text());
+}
+
+#[test]
+fn cjs_cache_slot_holds_its_own_record() {
+    // CJL2: a static edge of a program that is not closed reads its target's
+    // cache slot by its literal path. The runtime caches a record under its
+    // own canonical path only, so that slot holds the record published under
+    // it (and whatever user code stores there), never every record the
+    // registry summary holds.
+    let pf = facts(
+        r#"
+        class A { x = 1; }
+        class B { x = 2; }
+        const cache = __perry_declared_keys("/cjsc-a.js", "/cjsc-b.js");
+        const ra = { exports: new A(), __perry_cjs_record: true };
+        const rb = { exports: new B(), __perry_cjs_record: true };
+        cache["/cjsc-a.js"] = ra;
+        cache["/cjsc-b.js"] = rb;
+        __perry_register_path_module("/cjsc-a.js", ra);
+        __perry_register_path_module("/cjsc-b.js", rb);
+        __perry_cjs_install(cache, undefined);
+        const cached = cache["/cjsc-a.js"];
+        console.log(cached.exports.x);
+    "#,
+    );
+    let site = pf.sites.iter().find(|s| s.key == "x").expect("site");
+    assert_eq!(site.receivers.len(), 1, "{}", pf.dump_text());
+    assert_eq!(site.verdict, Verdict::T0Mono, "{}", pf.dump_text());
+}
+
+/// `require.cache` (`__perry_declared_keys`) has a null prototype: a read by
+/// a computed key holds the records and `undefined`, never what
+/// `Object.prototype` holds (its `constructor`: `Object`, `Function`). A
+/// store on what such a read returns (the loader's `child.parent = module`)
+/// is then a store on a record, not on a builtin (E20), and a call of it is
+/// no `Function(...)` call (E14). With `Object.prototype` as the prototype
+/// (`__perry_declared_keys_object`) the same read reaches the builtins.
+fn null_proto_read(births: &str) -> Option<String> {
+    let pf = facts(&format!(
+        r#"
+        class Parent {{ x = 1; }}
+        class Child {{ y = 2; }}
+        const cache = {births}("/npr-a.js", "/npr-b.js");
+        cache["/npr-a.js"] = new Child();
+        function read(path) {{ return cache[path]; }}
+        const parent = new Parent();
+        const got = read(String(Math.random()));
+        if (got !== undefined) got.parent = parent;
+        console.log(parent.x);
+    "#
+    ));
+    tmpl(&pf, "Parent").escape.clone()
+}
+
+#[test]
+fn a_computed_read_of_a_null_prototype_record_stops_at_the_record() {
+    assert_eq!(null_proto_read("__perry_declared_keys"), None);
+    let escape = null_proto_read("__perry_declared_keys_object");
+    assert!(
+        escape.as_deref().is_some_and(|e| e.contains("E20")),
+        "{escape:?}"
+    );
 }
 
 #[test]

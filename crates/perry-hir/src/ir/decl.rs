@@ -312,6 +312,16 @@ pub const DECLARED_KEYS_CLASS_PREFIX: &str = "__PerryDeclaredKeys_";
 /// ... or `%Object.prototype%` (a module's `exports`).
 pub const DECLARED_KEYS_OBJECT_CLASS_PREFIX: &str = "__PerryDeclaredKeysObject_";
 
+/// A CommonJS-wrapped module's record binding (`export let
+/// __perry_cjs_record`): the channel a literal `require` of the module reads
+/// (design CJS_LINK §2.1). It is compiler plumbing, never a member of the
+/// module's namespace object.
+pub const CJS_RECORD_EXPORT: &str = "__perry_cjs_record";
+
+pub fn is_cjs_record_export(name: &str) -> bool {
+    name == CJS_RECORD_EXPORT
+}
+
 impl Class {
     /// The class `__perry_declared_keys(k1, k2, ...)` births: an object with
     /// a null prototype whose keys are exactly the declared ones, each absent

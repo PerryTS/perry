@@ -645,6 +645,7 @@ impl Model {
             proto_members: vec![],
             parent_value: None,
             parent_links: Vec::new(),
+            null_proto: false,
         });
         self.fn_inst.insert(f, id);
         // DECISIONS 210: a layout made for a function that already left.
@@ -1146,6 +1147,7 @@ impl Model {
             proto_members: Vec::new(),
             parent_value: None,
             parent_links: Vec::new(),
+            null_proto: false,
         });
         let recv = self.tok(TokKind::Obj(rt, NO_CTX));
         let any = self.field_any(recv);
@@ -1327,11 +1329,19 @@ impl Model {
         named
     }
 
-    /// DECISIONS 210: per unit, a function of this unit that escaped is
-    /// held by other units' code too, which may construct it (the whole
-    /// program sees that `new`): unknown code constructs it with unknown
-    /// arguments and its instance escapes, as for an escaped class
-    /// (`escape_inner`). Only a function with a construction layout: one
+    /// DECISIONS 210/211: unknown code constructs a function of this unit
+    /// that escaped, with unknown arguments, and its instance escapes, as
+    /// for an escaped class (`escape_inner`). The one path for "unknown code
+    /// constructs an escaped function", in both modes: whole program, code
+    /// nothing models holds it (an escaped `F` nothing here constructs
+    /// still has instances of its layout); per unit, other units' code holds
+    /// it too and may construct it (the whole program sees that `new`;
+    /// fastify `new Reply`, escaped through `Module._cache`: the units
+    /// constructing it hold it as an unknown value, so only the units
+    /// writing `Reply.prototype` hold the layout, with no instance of their
+    /// own). Callers: an escape (`escape_inner`), a template made after the
+    /// escape (`fn_inst_template`), and a contract-only escape that later
+    /// leaves through no contract (`escape`). Only a function with a construction layout: one
     /// whose body stores into `this` (`fn_birth`) or whose `new <f>`
     /// template exists (`fn_inst_template` constructs it when made later);
     /// any other one's instances would hold nothing a layout claims. Never
@@ -1344,8 +1354,7 @@ impl Model {
         // Published through its contract, the units constructing it pass
         // their arguments (`ctor_runs`): constructed by `Gen::published_ctors`.
         let published = self.pub_reason == Some(reason) || self.field_fn_reason == Some(reason);
-        if !self.per_unit
-            || published
+        if published
             || fi.lexical_this
             || fi.gen_step
             || fi.ctor_of.is_some()

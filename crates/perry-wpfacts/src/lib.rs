@@ -302,7 +302,6 @@ pub(crate) fn compute_in<'a>(
             g.m.tok(model::TokKind::Builtin(model::BuiltinNs::GlobalThis));
         builtins::note_native_write(&mut g.m, gt, None, "interpreted code may run");
     }
-    g.m.per_unit = cfg.unit;
     g.register_all();
     g.link_exports();
     g.walk_all();

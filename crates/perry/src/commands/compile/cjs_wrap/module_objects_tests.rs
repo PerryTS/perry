@@ -112,8 +112,9 @@ fn the_wrappers_own_reads_are_proven_one_load_sites() {
         .iter()
         .filter(|s| wrapped(s) && s.key.starts_with(&root))
         .collect();
-    // a.js requires b and c, c.js requires b: three static cases.
-    assert_eq!(cache_reads.len(), 3, "{names:?}\n{dump}");
+    // a.js requires b and c, c.js requires b: three static edges, each
+    // reading the live entry and, after a reload, the new one.
+    assert_eq!(cache_reads.len(), 6, "{names:?}\n{dump}");
     for s in &cache_reads {
         assert!(
             proven(&s.verdict),
@@ -302,4 +303,97 @@ fn a_computed_exports_store_keeps_declared_reads_sound() {
                 .any(|r| r.contains("__PerryDeclaredKeysObject_"))),
         "{dump}"
     );
+}
+
+/// Regenerates `perry-wpfacts`'s CommonJS fixtures (`tests/fixtures/cjs_t*`,
+/// the per-unit CommonJS tests of `tests/unit_cjs.rs`) from the sources under
+/// `tests/fixtures/cjs_src/t*`: the real wrapper output and support module,
+/// paths shortened to `/tN`, the `__perry_cjs_open()` arms spliced for a
+/// closed program as `cjs_link::resolve_open_sites` does (none of the sets
+/// can reach the loader). The entry of a set is its last file.
+/// `cargo test -p perry --bin perry -- regenerate_wpfacts_cjs_fixtures --ignored`
+#[test]
+#[ignore]
+fn regenerate_wpfacts_cjs_fixtures() {
+    let fixtures =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../perry-wpfacts/src/tests/fixtures");
+    // `t6`'s entry requires by a computed specifier: a program that is not
+    // closed, its wrappers keep the open arms.
+    // `t7`'s `b.js` requires `module` (Node's `Module._cache`): not closed.
+    let sets: [(&str, &[&str], bool); 6] = [
+        ("t1", &["b.js", "a.js", "m.js"], false),
+        ("t2", &["r.js", "m.js"], false),
+        ("t3", &["benchmark.js", "richards.js", "sa_Richards.js"], false),
+        ("t5", &["b.js", "r.js", "m.js"], false),
+        ("t6", &["benchmark.js", "som.js", "cd.js", "sa_CD.js"], true),
+        ("t7", &["a.js", "b.js", "m.js"], true),
+    ];
+    for (t, files, open) in sets {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().canonicalize().expect("canonical tempdir");
+        let root_text = root.to_string_lossy().into_owned();
+        let short = format!("/{t}");
+        let mut keys = Vec::new();
+        for f in files {
+            let src = std::fs::read_to_string(fixtures.join("cjs_src").join(t).join(f))
+                .expect("fixture source");
+            std::fs::write(root.join(f), src).expect("write source");
+            keys.push(root.join(f).to_string_lossy().into_owned());
+        }
+        let out = fixtures.join(format!("cjs_{t}"));
+        for (i, f) in files.iter().enumerate() {
+            let src = std::fs::read_to_string(root.join(f)).expect("source");
+            let entry = i + 1 == files.len();
+            let (wrapped, _) =
+                wrap_commonjs_with_body_offset(&src, &root.join(f), None, entry, None);
+            let text = resolve_open(&wrapped, open).replace(&root_text, &short);
+            std::fs::write(out.join(f), text).expect("write fixture");
+        }
+        let support =
+            resolve_open(&support::source(&keys, true), open).replace(&root_text, &short);
+        std::fs::write(out.join("perry_cjs.js"), support).expect("write support fixture");
+    }
+}
+
+/// Keep the arm of every `if (__perry_cjs_open()) { … } else { … }` a closed
+/// (or, `open_program`, a not closed) program takes, in text (the HIR pass
+/// does the same on the lowered module).
+fn resolve_open(text: &str, open_program: bool) -> String {
+    let marker = "if (__perry_cjs_open()) {";
+    let mut text = text.to_string();
+    while let Some(start) = text.find(marker) {
+        let open = start + marker.len() - 1;
+        let close = matching_brace(&text, open);
+        let after = &text[close + 1..];
+        let trimmed = after.trim_start();
+        let then_arm = text[open + 1..close].to_string();
+        let (end, replacement) = if let Some(rest) = trimmed.strip_prefix("else {") {
+            let else_open = text.len() - rest.len() - 1;
+            let else_close = matching_brace(&text, else_open);
+            let else_arm = text[else_open + 1..else_close].to_string();
+            (else_close + 1, if open_program { then_arm } else { else_arm })
+        } else {
+            (close + 1, if open_program { then_arm } else { String::new() })
+        };
+        text.replace_range(start..end, &replacement);
+    }
+    text
+}
+
+fn matching_brace(text: &str, open: usize) -> usize {
+    let bytes = text.as_bytes();
+    let mut depth = 0usize;
+    for (i, &b) in bytes.iter().enumerate().skip(open) {
+        match b {
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return i;
+                }
+            }
+            _ => {}
+        }
+    }
+    panic!("unbalanced braces after offset {open}");
 }

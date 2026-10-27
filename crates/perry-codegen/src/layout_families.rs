@@ -1621,12 +1621,7 @@ pub fn compute<'a>(
     layouts.refused = refused;
     // A module body is once per record; exposing the CommonJS loader/cache
     // can create another record. Refuse globally under any such capability.
-    let closed = !perry_hir::has_deferred_dynamic_code_sites()
-        && modules.iter().all(|m| {
-            m.class_family_syntax
-                .as_ref()
-                .is_some_and(|s| s.module_capability_uses == 0)
-        });
+    let closed = perry_hir::program_is_cjs_closed(modules.iter().copied());
     if std::env::var("PERRY_LAYOUT_REPORT").as_deref() == Ok("2") {
         for module in &modules {
             if let Some(s) = &module.class_family_syntax {

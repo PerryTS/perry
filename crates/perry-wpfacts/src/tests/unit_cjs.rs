@@ -4,6 +4,9 @@
 //! `cjs_wrap` output of three modules (`b.js` exports `Base`, `a.js` has
 //! `class Main extends Base` and `exports.newInstance = () => new Main()`,
 //! `m.js` calls `require("./a").newInstance().run()`), paths shortened to `/t1`.
+//! Their sources are under `fixtures/cjs_src/`; the wrapper regenerates them
+//! (`perry`'s `module_objects_tests::regenerate_wpfacts_cjs_fixtures`,
+//! ignored) with the `__perry_cjs_open()` arms spliced for a closed program.
 
 use super::*;
 use std::collections::BTreeSet;
@@ -89,6 +92,19 @@ const T6: [(&str, &str); 5] = [
     ),
 ];
 
+/// CJL3: `a.js` hands out the constructor function `Reply` (its body writes
+/// `Reply.prototype.f`), `b.js` requires `module` (Node's `Module._cache`:
+/// every record escapes, so `Reply` does), `m.js` runs `new Reply(1)`.
+const T7: [(&str, &str); 4] = [
+    ("/t7/m.js", include_str!("fixtures/cjs_t7/m.js")),
+    ("/t7/a.js", include_str!("fixtures/cjs_t7/a.js")),
+    ("/t7/b.js", include_str!("fixtures/cjs_t7/b.js")),
+    (
+        "/t7/perry_cjs.js",
+        include_str!("fixtures/cjs_t7/perry_cjs.js"),
+    ),
+];
+
 fn hirs(mods: &[(&str, &str)]) -> Vec<(String, perry_hir::Module)> {
     mods.iter()
         .map(|(path, src)| {
@@ -99,6 +115,10 @@ fn hirs(mods: &[(&str, &str)]) -> Vec<(String, perry_hir::Module)> {
             for imp in &mut hir.imports {
                 if let Some(n) = imp.source.strip_prefix("./") {
                     imp.resolved_path = Some(format!("{dir}/{n}.js"));
+                } else if imp.source.starts_with(&format!("{dir}/")) {
+                    // A static edge's record-binding import names its target
+                    // by path (design CJS_LINK §2.2).
+                    imp.resolved_path = Some(imp.source.clone());
                 } else if imp.source == "perry:cjs" {
                     // The CommonJS support module every wrapped module
                     // imports first (`cjs_wrap::support`).
@@ -179,9 +199,14 @@ fn escaped(pf: &ProgramFacts) -> BTreeSet<String> {
 
 #[test]
 fn a_commonjs_unit_proves_what_the_whole_program_proves() {
+    // CJL2: static edges. Against the dispatching `require` of main's wrap
+    // the wrapper's own sites change (the dispatch call and its cache read
+    // go, each edge's `children`/`parent`/`exports` come), and the user's
+    // `this.go()` (b.js) and `b.run()` (m.js) are proven whole-program. Per
+    // unit the four lost sites are the dispatch's (no user site).
     let (w, u) = both(&T1);
-    assert_eq!(proven_sites(&w).len(), 27);
-    assert_cjs_per_unit(&w, &u, 9);
+    assert_eq!(proven_sites(&w).len(), 25);
+    assert_cjs_per_unit(&w, &u, 7);
 }
 
 /// DECISIONS 115: a class whose binding may hold `undefined` beside the
@@ -202,7 +227,16 @@ fn a_class_bound_through_its_self_cell_is_a_contract() {
     };
     assert!(pw.len() >= 8, "whole-program proves {:?}", pw);
     let _ = (lost, classes);
-    assert_cjs_per_unit(&w, &u, 3);
+    // Per unit 7 of 13. `T::run` calls `a.append(b, NONE)` with `a` read
+    // from `this.k`, which per unit is ⊤ (DECISIONS 186): a ⊤ callee, so
+    // the `S` instance `a` also holds escapes as its receiver, which
+    // reports `S` and its parent `R`. Broken, `super()` in the `S` and `T`
+    // constructors is ⊤, and `this.v = v`, `this.k = S` store into ⊤: under
+    // the static ⊤-store rule (#13338) that writes `v` and `k` on every
+    // intrinsic prototype, so the read `this.k` in `run` is no longer
+    // proven per unit (it was the 8th site before the rule). Whole program
+    // proves all 13.
+    assert_cjs_per_unit(&w, &u, 7);
     // `T.k = S` holds the class and the cell's `undefined` both ways: the
     // reader's import carries the binding's primitives.
     let k_kind = |pf: &ProgramFacts| {
@@ -254,19 +288,18 @@ fn only_a_unit_consuming_the_registry_union_reads_it() {
         .filter_map(|k| k.split_once('#').map(|x| x.0))
         .collect();
     modules.dedup();
-    // On main's support module the wrappers' computed-specifier arms and the
-    // support module's own `requireComputed` and `refresh` consume it too:
-    // still only the consuming units read it (DECISIONS 171). A wrapper's
-    // parent link reads no registry writes: per unit the parent is another
-    // unit's record (`linkPathModuleParent`), and a computed require's
-    // result another unit's exports (`requirePathModule`).
+    // The program is not closed (`sa_CD.js` requires by a computed
+    // specifier). Static edges (CJL) read the cache by their literal paths,
+    // so a module's consumers are the support module's loader units alone:
+    // a wrapper's parent link reads no registry writes (per unit the parent
+    // is another unit's record, `linkPathModuleParent`), and its computed
+    // arm's `require` result is another unit's exports (`requirePathModule`):
+    // 2 of some 200 units.
     assert_eq!(
         readers,
         [
-            "/t6/cd.js#u17",
             "/t6/perry_cjs.js#u4",
-            "/t6/perry_cjs.js#u14",
-            "/t6/sa_CD.js#u9",
+            "/t6/perry_cjs.js#u6"
         ],
         "{units} units, modules {modules:?}"
     );
@@ -333,7 +366,9 @@ fn richards_per_unit_proves_what_the_whole_program_proves() {
         "whole-program proves {}",
         proven_sites(&w).len()
     );
-    assert_cjs_per_unit(&w, &u, 5);
+    // CJL2: whole-program 22 -> 129 with static edges (the records no
+    // longer meet in the dispatch); per unit the dispatch's 4 sites go.
+    assert_cjs_per_unit(&w, &u, 3);
 }
 
 #[test]
@@ -344,8 +379,8 @@ fn capture_parameters_bound_directly_or_composed_hold_the_class_environment() {
     // unit hands back; reading `P` through it would make `new P(n)` a `new`
     // of an unknown constructor and sink `P`.
     let (w, u) = both(&T5);
-    assert_eq!(proven_sites(&w).len(), 32);
-    assert_cjs_per_unit(&w, &u, 5);
+    assert_eq!(proven_sites(&w).len(), 31);
+    assert_cjs_per_unit(&w, &u, 13);
 }
 
 #[test]
@@ -576,6 +611,34 @@ fn a_property_of_a_broken_function_holds_anything() {
         .find(|t| t.display.starts_with("/t10/index.js:") && t.birth_keys.iter().any(|k| k == "aliases"))
         .expect("the parse result literal");
     assert!(lit.escape.is_some(), "{lit:?}");
+}
+
+/// CJL3 (fastify `new Reply`): whole program, `new Reply` escapes (its
+/// prototype comes from unknown code: `Reply` escaped through
+/// `Module._cache`). Per unit `m.js` holds `Reply` as an unknown value
+/// (`new` of it is ⊤) and the unit writing `Reply.prototype.f` holds the
+/// layout with no instance of its own: unknown code constructs the escaped
+/// function there, so its copy is escaped too, never a clean layout.
+#[test]
+fn a_constructor_function_escaped_through_the_cache_is_escaped_in_every_unit() {
+    let (w, u) = both(&T7);
+    let wt = super::escaped_constructor::fn_inst(&w, "Reply#9");
+    assert!(
+        !wt.is_empty() && wt.iter().all(|t| t.escape.is_some() && !t.prefix_stable),
+        "{}",
+        w.dump_text()
+    );
+    let ut = super::escaped_constructor::fn_inst(&u, "Reply#9");
+    assert!(!ut.is_empty(), "{}", u.dump_text());
+    for t in ut {
+        assert!(
+            t.escape.is_some() && !t.prefix_stable && !t.fixed_layout,
+            "per unit {} is stronger than whole-program\n{}",
+            t.display,
+            u.dump_text()
+        );
+    }
+    assert_cjs_per_unit(&w, &u, proven_sites(&u).len());
 }
 
 /// DECISIONS 210: `rep` of CJL as the compiler wraps it, the factory held

@@ -202,7 +202,7 @@ impl<'a> Gen<'a> {
     ) -> NodeId {
         let arg = |i: usize| args.get(i).copied();
         match method {
-            "arrayRecordNeedsIterator" | "arrayRecordForBound" | "hasPathModule" => {
+            "arrayRecordNeedsIterator" | "arrayRecordForBound" | "hasPathModule" | "isBuiltin" => {
                 self.prim_node(prim::BOOL)
             }
             // What codegen lowers them to: the cursor itself, the payload's
@@ -302,6 +302,13 @@ impl<'a> Gen<'a> {
                 }
                 out
             }
+            // A literal CommonJS require (design CJS_LINK §3): the target's
+            // init runs (every module body is in the program), and the value
+            // is a read of its record binding; the caller reads `.exports`.
+            "cjsRequireEdge" => match arg(0) {
+                Some(record) => record,
+                None => self.m.top_val("cjsRequireEdge without its record binding"),
+            },
             "registerPathModule" | "registerPathModulePartial" => {
                 if let Some(value) = arg(1) {
                     let registry = match source_args.first() {
@@ -336,17 +343,16 @@ impl<'a> Gen<'a> {
                 // it computes. The main record is what `process.mainModule`
                 // reads (`builtins`). The result is `require.extensions`.
                 if let Some(cache) = arg(0) {
+                    // The runtime caches a record under its own canonical
+                    // path only: a compiled module's record is the slot's
+                    // birth publication already, and a module outside the
+                    // graph is cached under a key no static read names. So
+                    // a static edge's read of its target's slot (CJL2) sees
+                    // that target's record, never the registry summary; the
+                    // summary is reached through the computed paths only
+                    // (`requirePathModule`, the program's `require` with a
+                    // computed specifier, DECISIONS 150).
                     self.m.edge(cache, self.m.cjs_cache);
-                    let registry = self.cjs_registry;
-                    self.store(
-                        fx,
-                        cache,
-                        Key::Any,
-                        registry,
-                        "records the runtime caches".into(),
-                        None,
-                        false,
-                    );
                 }
                 if let Some(main) = arg(1) {
                     self.m.edge(main, self.m.cjs_main);
