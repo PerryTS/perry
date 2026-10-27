@@ -130,9 +130,13 @@ pub(crate) fn run(
         jobs: perry_codegen::workers::unit_workers(),
         unit_io: dump.is_some(),
     };
-    let list: Vec<(String, &perry_hir::Module)> = modules
+    // Entry outlining moves module bindings into compiler-owned functions.
+    // Facts need the same logical module scope that codegen's globals and
+    // export getters use; retain the emitted HIR unchanged for codegen.
+    let inputs = facts_inputs(modules);
+    let list: Vec<(String, &perry_hir::Module)> = inputs
         .iter()
-        .map(|(p, m)| (p.display().to_string(), m))
+        .map(|(p, m)| (p.clone(), m.as_ref()))
         .collect();
     let pf = if per_unit_facts(std::env::var("PERRY_FACTS_UNITS").ok().as_deref()) {
         perry_wpfacts::compute_units(&list, &cfg)
@@ -441,4 +445,23 @@ mod facts_mode_tests {
     fn whole_program_is_an_explicit_opt_in() {
         assert!(!per_unit_facts(Some("0")));
     }
+}
+
+#[cfg(test)]
+#[path = "program_facts/outlined_tests.rs"]
+mod outlined_tests;
+
+/// Borrow ordinary modules; reconstruct only outlined module entries.
+fn facts_inputs(
+    modules: &BTreeMap<PathBuf, perry_hir::Module>,
+) -> Vec<(String, std::borrow::Cow<'_, perry_hir::Module>)> {
+    modules
+        .iter()
+        .map(|(p, m)| {
+            (
+                p.display().to_string(),
+                perry_codegen::codegen::entry_outline::logical_entry_module(m),
+            )
+        })
+        .collect()
 }
