@@ -1,0 +1,5 @@
+Add canonical resource disposal and deferred cleanup to the persistent component driver. Compose one private helper with the original nominal resource aliases, preserving legacy host construction. New typed disposal descriptors keep guest and host capabilities distinct even when token text collides, validate host generations and ignore stale collector requests. Accepted disposal survives observer drop; destructor failures retire the Store with the originating callback context.
+
+Track export argument borrows until the canonical result boundary. Reject concurrent owned transfer/disposal safely, defer GC cleanup until all borrowers return, and release guards before background task exit. Readable future/stream collection ignores consumed or transferred descriptors and cancels pending reads without retiring the Store.
+
+This prepares native cleanup for the TypeScript integration; traced wrappers, ALS/error routing, HTTP migration, guest async adapters and final platform/package validation remain open. The existing shipping-lock crypto-bigint advisory remains unresolved.

@@ -1,0 +1,238 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-10-26",
+  "scope": "Public TypeScript standalone persistent component runtime on Linux",
+  "status": "qualified integration step; full WASI 0.3 integration remains open",
+  "sourceParent": "9ae452703a32ad0092c73fce7c4e410c73c702b2",
+  "qualifiedSnapshot": "v338",
+  "componentHostAbi": 10,
+  "changes": [
+    "Standalone component construction, synchronous calls, concurrent asynchronous calls and disposal use the persistent driver; incoming HTTP keeps its existing path.",
+    "Managed invocation records retain saved context, arguments, first errors and uncommitted import returns; native metadata contains identities and indices only.",
+    "All native-ready replies are staged before settlement hooks; nested disposal and new admissions preserve their individual results.",
+    "Import reply acknowledgement releases its Promise; matching validated ownership receipts release retained aliases.",
+    "Idle drivers release their native owner pin; queued collectors retry admission and their retirement cancellation is not a public error.",
+    "Current-poll callback errors from any origin precede secondary cleanup failures; native retirement does not duplicate an already delivered rejection."
+  ],
+  "development": {
+    "component": 66,
+    "asyncHooks": 12
+  },
+  "production": {
+    "component": 66,
+    "asyncHooks": 12,
+    "closureAbi": 1,
+    "nativeClassGuard": 1,
+    "uid": 65534,
+    "gid": 65534,
+    "panicAbort": true
+  },
+  "nonTestComponentWarnings": 0,
+  "compiledProduction": {
+    "persistent": {
+      "phases": 6,
+      "allPassed": true,
+      "copiedObjects": 3331,
+      "protectedFromspaceEvents": 7
+    },
+    "async": {
+      "phases": 6,
+      "allPassed": true,
+      "copiedObjects": 3937,
+      "protectedFromspaceEvents": 19
+    },
+    "p3-command": {
+      "phases": 12,
+      "allPassed": true
+    },
+    "p3-http": {
+      "phases": 8,
+      "allPassed": true
+    },
+    "p3-command-gc": {
+      "phases": 15,
+      "allPassed": true
+    },
+    "p3-http-gc": {
+      "phases": 11,
+      "allPassed": true,
+      "movingModes": [
+        {
+          "phase": "plain-moving",
+          "copiedObjects": 1925,
+          "responses": 10
+        },
+        {
+          "phase": "tls-moving",
+          "copiedObjects": 1925,
+          "responses": 10
+        }
+      ]
+    }
+  },
+  "beforeFixControls": {
+    "secondary-retirement": {
+      "beforeSnapshot": "v333",
+      "diagnostic": "secondary destructor failure",
+      "programSha256": "8dd1aaef35b5297d186e1cf06d4947936708883c7258f66ce276ca2ee1a9076a",
+      "componentSha256": "bb6718d064d60b9f0db240fad92e7f37d1d2bcf48cefbd46ff04a06f2e43780f"
+    },
+    "collector-cancellation": {
+      "beforeSnapshot": "v334",
+      "diagnostic": "Component has been disposed",
+      "programSha256": "39f900074be8ecb55903325b621826ad9cb7689528c2653e7f123f3297a341ed",
+      "componentSha256": "bb6718d064d60b9f0db240fad92e7f37d1d2bcf48cefbd46ff04a06f2e43780f"
+    }
+  },
+  "evidence": {
+    "file": "perry-persistent-runtime-v338-evidence.tar.gz",
+    "sha256": "2db6cce77fed6b45acc37e7604f6f88e0cbed71e831879f9007660dde543c8a9",
+    "bytes": 3193910,
+    "members": 208
+  },
+  "runtimeTestBinary": {
+    "path": "/root/codex-components-p2-20261021/async-runtime-target/prod/build/perry-runtime/d71d6d2d7042b42b/out/perry_runtime-d71d6d2d7042b42b",
+    "sha256": "e1558272709e30c82da0de5c112555e6a78caa66518d919da122b70d862d9cc8",
+    "fresh": false,
+    "uid": 65534,
+    "gid": 65534,
+    "protectedPath": "/root/codex-components-p2-20261021/perry-persistent-v338-artifacts/perry-runtime-tests"
+  },
+  "nativeArtifactHashes": {
+    "/root/codex-components-p2-20261021/perry-persistent-v338-native-artifacts/toolchain/perry": "341bdf1a2666bf6f098290e477dc0d2a2485a8cc20a458ffd3798068b1979f57",
+    "/root/codex-components-p2-20261021/perry-persistent-v338-native-artifacts/toolchain/perry-wit": "f88a1d8b0649c9bda6752cb1f7a1752924cb7114c483bb9cc5d02e0e980eea5a",
+    "/root/codex-components-p2-20261021/perry-persistent-v338-native-artifacts/toolchain/perry-gc-effects": "4ad22c8634e14ba54bf6b937d36c7c35b1d82d52eac406f27a01e2c5b6c6b28e",
+    "/root/codex-components-p2-20261021/perry-persistent-v338-native-artifacts/toolchain/libperry_runtime.a": "ff5311bff22a3827780e4e2bdc8ee97a06746e36c584f83b1be38528e4f75371",
+    "/root/codex-components-p2-20261021/perry-persistent-v338-native-artifacts/toolchain/libperry_stdlib.a": "da8158f390de8207f397187714cd9323f5863d7022632c4c0a8cea1144cbaca4",
+    "/root/codex-components-p2-20261021/perry-persistent-v338-native-artifacts/toolchain/libperry_component_host.a": "41e53e952fa5e96ffd5503b33f02bbed387b56e07699a80116043c50ee85168d",
+    "/root/codex-components-p2-20261021/perry-persistent-v338-native-artifacts/toolchain/libperry_runtime_instr.a": "e8a5c43c9e99147dcb2689ffcdde2914360c2244f0a5fc9be998abd6602bdf5a",
+    "/root/codex-components-p2-20261021/perry-persistent-v338-native-artifacts/toolchain/libperry_stdlib_instr.a": "f661ec872274b282074bc17f817348a2689089fff6b01bd3682b321c32dda48d",
+    "/root/codex-components-p2-20261021/perry-persistent-v338-native-artifacts/toolchain/component_wat": "344f5f143c8022cf623586d82aaf3e8f7d2f815491999f924687120273da54a1",
+    "/root/codex-components-p2-20261021/perry-persistent-v338-native-artifacts/toolchain/libperry_runtime.a.gc-effects": "546effd952c9926b3044521c957585fd5d718c5eab9777915eb78198c618b0f0",
+    "/root/codex-components-p2-20261021/perry-persistent-v338-native-artifacts/toolchain/libperry_runtime_instr.a.gc-effects": "a281953be822313516d9066bfe498e913a367750b7cb7fa421337579cffd2723",
+    "/root/codex-components-p2-20261021/perry-persistent-v338-native-artifacts/persistent/host-ordinary": "50610ec31ee5e5dde6b6f45c5c23babacab1ecef1a121e449f5e057ffd765bd8",
+    "/root/codex-components-p2-20261021/perry-persistent-v338-native-artifacts/persistent/host-moving": "a6fcc3fba71b4b9572a80f31ea66f05d9008458a628a1957e11db8c5f299d37b",
+    "/root/codex-components-p2-20261021/perry-persistent-v338-native-artifacts/async/host-ordinary": "9350d022ed951e345de7b5a64af17029009abf26c888ea4f2ed9dc68e69563b5",
+    "/root/codex-components-p2-20261021/perry-persistent-v338-native-artifacts/async/host-moving": "921c824373f2b9aa62cac3099eecc00bf53921afb89ecccee690f0ab367b74ae",
+    "/root/codex-components-p2-20261021/perry-persistent-v338-native-artifacts/p3-command/host-ordinary": "440612cb3a1b120b25e963ae23f5d0c1e9802771ae1bf9e820c42a1636e60d96",
+    "/root/codex-components-p2-20261021/perry-persistent-v338-native-artifacts/p3-http/host-ordinary": "e8c3b4fe8c17d8d9886342584347ea4498a8543c01e87f40a7de9f63c219f2ec",
+    "/root/codex-components-p2-20261021/perry-persistent-v338-native-artifacts/p3-command-gc/host-ordinary": "7d1e124b7a576ab99ec73baf861077a019d8cefbfbb6f5141a3335f4dcf6f76a",
+    "/root/codex-components-p2-20261021/perry-persistent-v338-native-artifacts/p3-command-gc/host-moving": "27179f5cd1781f20b3fe57e92c4185fcceafddad53f7662cd97fae7b86172050",
+    "/root/codex-components-p2-20261021/perry-persistent-v338-native-artifacts/p3-http-gc/host-ordinary": "35d63cbf23b4c728c26c17d39e3d8e91740a576de68a66ba08fbabd0a4bdffcb",
+    "/root/codex-components-p2-20261021/perry-persistent-v338-native-artifacts/p3-http-gc/host-moving": "ee9b06a6e3fd6e19a119338bed13f3ec27dadb55a0b63761018ca08c3ac32551",
+    "/root/codex-components-p2-20261021/perry-persistent-v338-native-artifacts/controls/secondary-retirement/host-ordinary": "8dd1aaef35b5297d186e1cf06d4947936708883c7258f66ce276ca2ee1a9076a",
+    "/root/codex-components-p2-20261021/perry-persistent-v338-native-artifacts/controls/secondary-retirement/clock.wasm": "bb6718d064d60b9f0db240fad92e7f37d1d2bcf48cefbd46ff04a06f2e43780f",
+    "/root/codex-components-p2-20261021/perry-persistent-v338-native-artifacts/controls/collector-cancellation/host-moving": "39f900074be8ecb55903325b621826ad9cb7689528c2653e7f123f3297a341ed",
+    "/root/codex-components-p2-20261021/perry-persistent-v338-native-artifacts/controls/collector-cancellation/clock.wasm": "bb6718d064d60b9f0db240fad92e7f37d1d2bcf48cefbd46ff04a06f2e43780f"
+  },
+  "qualifiedSourceHashes": {
+    "changelog.d/PENDING-wasi-persistent-runtime.md": "b3af78171fc3b82d68a651ed07a0b3169b63d8bb3dec83a6bbb9e4fcb351ebb5",
+    "crates/perry-abi/src/component_host.rs": "6d39b7a3953b783deaf80c0e23e56fbee5b6b360eda3e0eb6d1ec55ef177de5f",
+    "crates/perry-runtime/src/component/callback.rs": "3fb688edb7eb28f728c71ed3acf7a7b81035afd94fbd12132f60b6f20599e988",
+    "crates/perry-runtime/src/component/callback/saved.rs": "9d68354b6779c597a9c63d3f19aff2f94457edbbee44a865720d9d66fc613f8a",
+    "crates/perry-runtime/src/component/cleanup.rs": "b28ed5ff63d3d1277874aea0e72cf0b547f889527e43615e95ee5bf171105415",
+    "crates/perry-runtime/src/component/context.rs": "115b0e7f83a7cc3ade02456d2f6bb0e35c1d88bf9e283a93e79379d5a0e636c5",
+    "crates/perry-runtime/src/component/host_resource.rs": "3dec6e1cb6e557ec61d40bf6db9fd8abf9ec69db53654daca697dfc647264cd8",
+    "crates/perry-runtime/src/component/mod.rs": "149d2951379fae78106ce6f710af9e193eb31e2a3dd4740f0bcd9db0685dd989",
+    "crates/perry-runtime/src/component/persistent.rs": "f2da94cfa79a6c035f6c0b3927e36366f8a67dd667411b1f963bcff861680951",
+    "crates/perry-runtime/src/component/persistent/callbacks.rs": "5a5e8cda33e74d83c4670706e1eac58c01320df66015321ce50bee2a437cfe9f",
+    "crates/perry-runtime/src/component/persistent/collections.rs": "a1658605788165e5bd243f0e4132a16e06e5e868e0dd306e15c0a846f38aa37c",
+    "crates/perry-runtime/src/component/persistent/imports.rs": "67536491b45e8101a396154d2980722bbf6274dec36288f2304d328cf8cd5f41",
+    "crates/perry-runtime/src/component/persistent/poll.rs": "514f9726ee92e15ff62132388b1e692632a20137716a291227880d6fa08ddb37",
+    "crates/perry-runtime/src/component/persistent/records.rs": "71ca07db08a26198f282dd6aa706e64a220755de72bef83180f20b758442e8c0",
+    "crates/perry-runtime/src/component/persistent/submit.rs": "140afd0d06b836586ef1230d2ee87454a5b111ed75795142c3e21fb96fa5914e",
+    "crates/perry-runtime/src/component/persistent/tests.rs": "d6c294bec6cdb391c2058f50af42586ef38d20fce6d573e0d5d118f76b3ced80",
+    "crates/perry-runtime/src/component/persistent/tests/disposal.rs": "af10e64819c2d40c3d527014481d7e87f2a6bd267911e751ce5fca35e8ef8fe7",
+    "crates/perry-runtime/src/component/persistent/tests/failures.rs": "3da3675fb2e8a5e9f0747381d1febbf2e4070c7fbee3b3fe19f235a029d78ee1",
+    "crates/perry-runtime/src/component/resource.rs": "79b063cd9a345be0a0a62fffc2faf6de007f5674fc955cb773ece24ece3df4d4",
+    "crates/perry-runtime/src/component/value/retention.rs": "400fda2ff84439326d78b698f92f830b38d73004ec8b813eaa26f0c0a602b149",
+    "crates/perry-runtime/src/native_class_ids.rs": "3b021452050c2a8bb71bb78dc581737410b5be383d65769a65d9d06b7d758ba0",
+    "crates/perry-runtime/src/object/owned_state_bag.rs": "109d1e23a298b9492a90178a97b601400b19e1a38ef3bf4c7984890cce656f95",
+    "docs/WASI_COMPONENTS.md": "20f5f0040f45f0c8b98ee2dcc8990da4fc84a2a905e8d3ff6b4537c6ef095ed4",
+    "scripts/component_persistent_acceptance.py": "cde5d3bf50339c97f870d53d096e40acda651533e65e2d2ed528b136865f2de2",
+    "scripts/gc_runtime_root_holders.json": "91b595cbf6260a1f53021b9464fdc757856c684f6281ec0a242f35bdf5430dff",
+    "test-wasi/components/async/host.ts": "79b1e69b0ad6111b70e80fa9b4243a89e8d43c08bffe90b02d551b3ef221ab04",
+    "test-wasi/components/persistent/host.ts": "b992b8f4a1c59ba929c6eb2dcef3ea5671ae4ffc53f43e96387094443eed51b4",
+    "test-wasi/components/persistent/world.wit": "77a628c5b44e67b7665654a82d5624f5f82bf90d8c3ef0144a4c431f62193b79"
+  },
+  "lint": {
+    "phases": [
+      {
+        "phase": "address",
+        "exitCode": 1,
+        "identicalToParent": true
+      },
+      {
+        "phase": "holders",
+        "exitCode": 1,
+        "identicalToParent": true
+      },
+      {
+        "phase": "tokio",
+        "exitCode": 0,
+        "identicalToParent": true
+      },
+      {
+        "phase": "node",
+        "exitCode": 0,
+        "identicalToParent": true
+      },
+      {
+        "phase": "size",
+        "exitCode": 1,
+        "identicalToParent": false
+      }
+    ],
+    "changedRustFileLines": {
+      "crates/perry-abi/src/component_host.rs": 134,
+      "crates/perry-runtime/src/component/callback.rs": 296,
+      "crates/perry-runtime/src/component/callback/saved.rs": 62,
+      "crates/perry-runtime/src/component/cleanup.rs": 187,
+      "crates/perry-runtime/src/component/context.rs": 232,
+      "crates/perry-runtime/src/component/host_resource.rs": 322,
+      "crates/perry-runtime/src/component/mod.rs": 372,
+      "crates/perry-runtime/src/component/persistent.rs": 292,
+      "crates/perry-runtime/src/component/persistent/callbacks.rs": 151,
+      "crates/perry-runtime/src/component/persistent/collections.rs": 35,
+      "crates/perry-runtime/src/component/persistent/imports.rs": 287,
+      "crates/perry-runtime/src/component/persistent/poll.rs": 583,
+      "crates/perry-runtime/src/component/persistent/records.rs": 106,
+      "crates/perry-runtime/src/component/persistent/submit.rs": 253,
+      "crates/perry-runtime/src/component/persistent/tests.rs": 880,
+      "crates/perry-runtime/src/component/persistent/tests/disposal.rs": 173,
+      "crates/perry-runtime/src/component/persistent/tests/failures.rs": 86,
+      "crates/perry-runtime/src/component/resource.rs": 207,
+      "crates/perry-runtime/src/component/value/retention.rs": 127,
+      "crates/perry-runtime/src/native_class_ids.rs": 282,
+      "crates/perry-runtime/src/object/owned_state_bag.rs": 83
+    },
+    "baselineOversizedFilesByteUnchanged": [
+      "crates/perry-codegen/src/codegen/closure.rs",
+      "crates/perry-codegen/src/lower_call/console_promise.rs",
+      "crates/perry-hir/src/lower/module_decl.rs",
+      "crates/perry-runtime/src/arena/page_meta/mod.rs",
+      "crates/perry-runtime/src/arena/tests.rs",
+      "crates/perry-runtime/src/array/header.rs",
+      "crates/perry-runtime/src/json/replacer.rs",
+      "crates/perry-runtime/src/node_stream_event_emitter.rs",
+      "crates/perry-runtime/src/node_stream_readwrite.rs",
+      "crates/perry-runtime/src/object/field_get_set/enumeration.rs",
+      "crates/perry-runtime/src/object/layout_desc.rs",
+      "crates/perry-runtime/src/object/layout_probe.rs",
+      "crates/perry-runtime/src/object/runtime_layouts.rs",
+      "crates/perry-runtime/src/object/shapes_store.rs",
+      "crates/perry/src/commands/compile/resolve/tests.rs"
+    ],
+    "newCustodyVerdicts": [
+      "component/persistent/poll.rs:DRIVERS",
+      "component/persistent/poll.rs:RUNNING"
+    ],
+    "shippingCargoLockSha256": "c0c77b202d422016fdb7fc1e3312f5fc500d35fbb8923c17a851f6917b2626ab"
+  },
+  "limits": [
+    "This receipt qualifies Linux native standalone hosting and regression coverage for existing P3 command/HTTP entry points.",
+    "Future/stream JavaScript readers and producers, persistent concurrent HTTP handoff, and maintained async guest adapters remain unfinished.",
+    "macOS, Windows, final WASM/npm distribution packages and released Turnloop adoption still need qualification.",
+    "Existing address-classification/root-custody/file-size gate failures and the previously recorded crypto-bigint advisory remain open; no waiver or dependency change is introduced."
+  ]
+}

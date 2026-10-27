@@ -1,0 +1,45 @@
+[package]
+name = "perry-wasi"
+version.workspace = true
+edition.workspace = true
+license = "Apache-2.0 WITH LLVM-exception"
+description = "Turnloop WASI providers for Perry's optional component engine"
+
+[lints]
+workspace = true
+
+[features]
+p3 = ["wasmtime/component-model-async"]
+
+[dependencies]
+perry-component-io = { path = "../perry-component-io" }
+turnloop.workspace = true
+turnloop-http.workspace = true
+turnloop-io = "=0.1.0-alpha.9"
+# This adapter receives the component driver's existing ExecutorHandle.
+turnloop-tls = { workspace = true, features = ["turnloop"] }
+futures-channel = "0.3"
+url.workspace = true
+http.workspace = true
+wasmtime = { version = "=48.0.7", default-features = false, features = ["anyhow", "std", "runtime", "component-model", "async"] }
+wasmtime-wasi-io = { version = "=48.0.7", default-features = false, features = ["std"] }
+async-trait = "0.1.89"
+bytes = "1"
+futures-util = { workspace = true, features = ["io"] }
+futures-lite = "2"
+rand = { version = "0.10.1", features = ["std_rng", "thread_rng"] }
+tracing = "0.1"
+bitflags = "2"
+socket2 = { version = "0.6", features = ["all"] }
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1", features = ["time", "fs", "event", "net"] }
+rustix-linux-procfs = { version = "0.1.1" }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_System_Performance", "Wdk_Storage_FileSystem", "Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Ioctl", "Win32_Networking_WinSock"] }
+winx = { version = "0.36.0" }
+
+[dev-dependencies]
+tempfile = "3.27.0"
+wasmtime = { version = "=48.0.7", default-features = false, features = ["cranelift", "wat"] }

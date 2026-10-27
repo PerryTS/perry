@@ -6,7 +6,9 @@ use crate::resources::Resources;
 use anyhow::{bail, ensure, Context, Result};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
-use wasmtime::component::{ResourceAny, ResourceType, Type, Val};
+#[cfg(test)]
+use wasmtime::component::ResourceType;
+use wasmtime::component::{ResourceAny, Type, Val};
 
 #[cfg(test)]
 pub(crate) fn lower(
@@ -23,22 +25,35 @@ pub(crate) fn lower(
     })
 }
 
+#[cfg(test)]
 pub(crate) fn lower_with(
     value: &Value,
     ty: &Type,
     resource: &mut impl FnMut(&Value, ResourceType, bool) -> Result<ResourceAny>,
 ) -> Result<Val> {
-    lower_at(value, ty, resource, 0)
+    lower_typed(value, ty, &mut |value, ty| match ty {
+        Type::Own(r) | Type::Borrow(r) => {
+            resource(value, *r, matches!(ty, Type::Own(_))).map(Val::Resource)
+        }
+        _ => bail!("unsupported managed value"),
+    })
+}
+pub(crate) fn lower_typed(
+    value: &Value,
+    ty: &Type,
+    managed: &mut impl FnMut(&Value, &Type) -> Result<Val>,
+) -> Result<Val> {
+    lower_at(value, ty, managed, 0)
 }
 
 fn lower_at(
     value: &Value,
     ty: &Type,
-    resource: &mut impl FnMut(&Value, ResourceType, bool) -> Result<ResourceAny>,
+    managed: &mut impl FnMut(&Value, &Type) -> Result<Val>,
     depth: usize,
 ) -> Result<Val> {
     ensure!(depth < 128, "component value nesting exceeds 128");
-    let mut nested = |value: &Value, ty: &Type| lower_at(value, ty, resource, depth + 1);
+    let mut nested = |value: &Value, ty: &Type| lower_at(value, ty, managed, depth + 1);
     macro_rules! integer {
         ($name:ident, $native:ty, $read:ident) => {
             Val::$name(
@@ -171,14 +186,15 @@ fn lower_at(
             "err" => Err(payload(value, result.err().as_ref(), &mut nested)?),
             _ => bail!("result tag must be ok or err"),
         }),
-        Type::Own(resource_ty) | Type::Borrow(resource_ty) => {
+        Type::Own(_) | Type::Borrow(_) => {
             ensure!(
                 !matches!(ty, Type::Own(_)) || value["owned"] == true,
                 "a borrowed resource cannot be transferred as an owner"
             );
-            Val::Resource(resource(value, *resource_ty, matches!(ty, Type::Own(_)))?)
+            managed(value, ty)?
         }
-        _ => bail!("type is unsupported by the synchronous P2 transport: {ty:?}"),
+        Type::Future(_) | Type::Stream(_) => managed(value, ty)?,
+        _ => bail!("type is unsupported by the component transport: {ty:?}"),
     })
 }
 
@@ -288,4 +304,79 @@ pub(crate) fn lift_with(
         Val::Resource(v) => resource(*v)?,
         _ => bail!("value is unsupported by the synchronous P2 transport"),
     })
+}
+
+/// The actual instantiated type is required for async handles at every depth.
+pub(crate) fn lift_typed(
+    value: &Val,
+    ty: &Type,
+    managed: &mut impl FnMut(&Val, &Type) -> Result<Value>,
+) -> Result<Value> {
+    fn at(
+        value: &Val,
+        ty: &Type,
+        managed: &mut impl FnMut(&Val, &Type) -> Result<Value>,
+        depth: usize,
+    ) -> Result<Value> {
+        ensure!(depth < 128, "component value nesting exceeds 128");
+        let mut nested = |v: &Val, t: &Type| at(v, t, managed, depth + 1);
+        Ok(match (value, ty) {
+            (Val::Resource(_), Type::Own(_) | Type::Borrow(_))
+            | (Val::Future(_), Type::Future(_))
+            | (Val::Stream(_), Type::Stream(_)) => managed(value, ty)?,
+            (Val::List(values), Type::List(list)) => Value::Array(
+                values
+                    .iter()
+                    .map(|v| nested(v, &list.ty()))
+                    .collect::<Result<_>>()?,
+            ),
+            (Val::Tuple(values), Type::Tuple(tuple)) => Value::Array(
+                values
+                    .iter()
+                    .zip(tuple.types())
+                    .map(|(v, t)| nested(v, &t))
+                    .collect::<Result<_>>()?,
+            ),
+            (Val::Record(values), Type::Record(record)) => Value::Object(
+                values
+                    .iter()
+                    .zip(record.fields())
+                    .map(|((name, v), field)| {
+                        ensure!(name == field.name, "canonical record name mismatch");
+                        Ok((name.clone(), nested(v, &field.ty)?))
+                    })
+                    .collect::<Result<_>>()?,
+            ),
+            (Val::Option(value), Type::Option(option)) => match value {
+                Some(v) => json!({"tag":"some","value":nested(v,&option.ty())?}),
+                None => json!({"tag":"none"}),
+            },
+            (Val::Result(value), Type::Result(result)) => {
+                let (tag, value, ty) = match value {
+                    Ok(v) => ("ok", v, result.ok()),
+                    Err(v) => ("err", v, result.err()),
+                };
+                match (value, ty) {
+                    (Some(v), Some(t)) => json!({"tag":tag,"value":nested(v,&t)?}),
+                    (None, None) => json!({"tag":tag}),
+                    _ => bail!("canonical result payload mismatch"),
+                }
+            }
+            (Val::Variant(tag, value), Type::Variant(variant)) => {
+                let case = variant
+                    .cases()
+                    .find(|c| c.name == tag)
+                    .context("unknown canonical variant")?;
+                match (value, case.ty) {
+                    (Some(v), Some(t)) => json!({"tag":tag,"value":nested(v,&t)?}),
+                    (None, None) => json!({"tag":tag}),
+                    _ => bail!("canonical variant payload mismatch"),
+                }
+            }
+            _ => lift_with(value, &mut |_| {
+                bail!("canonical managed value/type mismatch")
+            })?,
+        })
+    }
+    at(value, ty, managed, 0)
 }

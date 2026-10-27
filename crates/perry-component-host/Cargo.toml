@@ -14,13 +14,17 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
+futures-channel = "0.3"
+futures-lite = "2"
+futures-util.workspace = true
+turnloop-tls.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 url.workspace = true
 socket2 = { workspace = true, features = ["all"] }
 perry-wit = { path = "../perry-wit" }
 perry-abi.workspace = true
-wasmtime = { version = "48.0.0", default-features = false, features = ["anyhow", "std", "runtime", "cranelift", "component-model", "gc-drc"] }
+wasmtime = { version = "48.0.7", default-features = false, features = ["anyhow", "std", "runtime", "cranelift", "component-model", "gc-drc"] }
 
 
 # Reuse the OS randomness provider already selected by the workspace.
@@ -31,8 +35,10 @@ perry-component-io = { workspace = true, features = ["standalone"] }
 cap-fs-ext = "3.4.6"
 fs-set-times = "0.20.3"
 system-interface = { version = "0.27.3", features = ["cap_std_impls"] }
+perry-wasi = { path = "../perry-wasi", features = ["p3"] }
 
-[dev-dependencies]
+
+wac-graph = { version = "=0.12.0", path = "../../third_party/wac-graph" }
 wat = "1.254"
 
 [target.'cfg(unix)'.dependencies]
@@ -40,3 +46,5 @@ libc.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Networking_WinSock"] }
+wasm-encoder = { version = "=0.258.0", features = ["wasmparser"] }
+wasmparser = "=0.258.0"

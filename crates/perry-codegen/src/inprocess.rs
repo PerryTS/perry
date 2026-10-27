@@ -15,6 +15,7 @@
 //! IR and flags this pipeline produces objects byte-identical to Homebrew
 //! clang 22's `clang -c`.
 
+mod coff;
 #[cfg(test)]
 mod dead_statepoint_tests;
 mod function_layout;
