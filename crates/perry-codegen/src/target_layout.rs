@@ -626,12 +626,18 @@ mod dense_layout_tests {
             assert_eq!(layout_descriptor_identity_offset(target), 56);
         }
         use perry_abi::{PerryLayoutImageV1 as Image, PerryStaticLayoutRequestV1 as Request};
-        assert_eq!(std::mem::size_of::<Image>(), 16);
-        assert_eq!(std::mem::align_of::<Image>(), 4);
+        // Four words, then the seed table pointer (WRT step 2): 24 bytes on
+        // LP64, 20 on ILP32, pointer-aligned either way.
+        assert_eq!(
+            std::mem::size_of::<Image>(),
+            16 + std::mem::size_of::<usize>()
+        );
+        assert_eq!(std::mem::align_of::<Image>(), std::mem::size_of::<usize>());
         assert_eq!(std::mem::offset_of!(Image, abi_version), 0);
         assert_eq!(std::mem::offset_of!(Image, static_rows), 4);
         assert_eq!(std::mem::offset_of!(Image, family_first), 8);
         assert_eq!(std::mem::offset_of!(Image, family_count), 12);
+        assert_eq!(std::mem::offset_of!(Image, seeds), 16);
         assert_eq!(std::mem::size_of::<Request>(), 8);
         assert_eq!(std::mem::offset_of!(Request, layout_word), 4);
     }
