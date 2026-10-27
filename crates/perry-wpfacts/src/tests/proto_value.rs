@@ -172,6 +172,27 @@ fn a_number_key_calls_no_object_prototype_method() {
 }
 
 #[test]
+fn a_number_key_reads_what_a_store_into_an_intrinsic_wrote() {
+    // A store under a computed key onto Object.prototype may write "0".
+    let pf = facts(
+        "class E { z = 3; }
+        const k = String(Math.random());
+        const n = Math.random() > 0.5 ? 0 : 1;
+        (Object.prototype as any)[k] = new E();
+        const table: any = { a: 1 };
+        const r = table[n];
+        if (r) console.log(r.z);",
+    );
+    let s: Vec<_> = pf.sites.iter().filter(|s| s.key == "z").collect();
+    assert_eq!(s.len(), 1, "{}", pf.dump_text());
+    assert!(
+        s[0].top || s[0].receivers.iter().any(|r| r.ends_with(":E")),
+        "{}",
+        pf.dump_text()
+    );
+}
+
+#[test]
 fn a_number_key_calls_what_a_store_into_an_intrinsic_wrote() {
     // A store under a computed key onto Object.prototype may write "0".
     let table = "const table: any = { a: 1 };
@@ -198,6 +219,37 @@ fn a_parameters_prototype_is_its_arguments_in_every_unit() {
             const p: any = {get};
             p.y = new E();
             const q: any = {{}};
+            const r = q.y;
+            if (r) console.log(r.z);"
+        );
+        let mods = [("a", PROTO_OF_PARAM), ("m", m.as_str())];
+        let (u, w) = super::unit_alias::assert_not_stronger(&mods);
+        for (mode, pf) in [("per unit", &u), ("whole", &w)] {
+            let s: Vec<_> = pf.sites.iter().filter(|s| s.key == "z").collect();
+            assert_eq!(s.len(), 1, "{get} {mode}\n{}", pf.dump_text());
+            assert!(
+                s[0].top || s[0].receivers.iter().any(|r| r.ends_with(":E")),
+                "{get} {mode}: {:?}\n{}",
+                s[0].receivers,
+                pf.dump_text()
+            );
+        }
+    }
+}
+
+#[test]
+fn a_parameters_prototype_is_its_class_prototype_in_every_unit() {
+    // The argument is a class instance: its prototype is `C.prototype`,
+    // which `new C().y` reads; `Object.prototype` would not be seen there.
+    for get in ["protoOf(c)", "getProto(c)"] {
+        let m = format!(
+            "import {{ protoOf, at, getProto }} from './a';
+            class E {{ z = 3; }}
+            class C {{ a = 1; }}
+            const c: any = new C();
+            const p: any = {get};
+            p.y = new E();
+            const q: any = new C();
             const r = q.y;
             if (r) console.log(r.z);"
         );
