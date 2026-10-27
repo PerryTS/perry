@@ -24,6 +24,33 @@ path = "src/lib.rs"
 # the `dep/feature` form because perry-runtime is in this crate's dependency
 # graph), so no per-feature forwarding is needed here.
 default = ["perry-runtime/default"]
+# wasm32-wasip1 only: fold perry-stdlib and the Node module crates into this
+# one archive, under one allocator. The perry-stdlib features are listed here
+# (and only here); `scripts/wasi_build_runtime.py` turns this feature on for
+# `wasm32-wasip1` and `perry --target wasip1` installs against the result.
+# Native and wasm32-wasip2 builds leave it off, so they do not compile the
+# extra crates.
+wasi-node-modules = [
+    "dep:perry-stdlib",
+    "dep:perry-ext-http",
+    "dep:perry-http-server",
+    "dep:perry-ext-undici",
+    "dep:perry-ext-zlib",
+    "dep:perry-ext-ws",
+    "perry-stdlib/async-bridge",
+    "perry-stdlib/bundled-events",
+    "perry-stdlib/bundled-streams",
+    "perry-stdlib/crypto",
+    "perry-stdlib/http-server",
+    "perry-stdlib/web-fetch",
+    "perry-stdlib/external-http-client-pump",
+    "perry-stdlib/external-http-server-pump",
+    "perry-stdlib/external-net-pump",
+    "perry-stdlib/external-net-tls",
+    "perry-stdlib/external-tls-server",
+    "perry-stdlib/external-ws-pump",
+    "perry-stdlib/external-zlib-pump",
+]
 
 [dependencies]
 # default-features = false so `--no-default-features` on this wrapper actually
@@ -36,3 +63,9 @@ perry-runtime = { path = "../perry-runtime", default-features = false }
 # Rust staticlibs both define allocator shims; one staticlib keeps a single
 # allocator and a single copy of std without permitting duplicate symbols.
 perry-ext-net = { path = "../perry-ext-net" }
+perry-stdlib = { path = "../perry-stdlib", default-features = false, optional = true }
+perry-ext-http = { path = "../perry-ext-http", optional = true }
+perry-http-server = { path = "../perry-http-server", optional = true }
+perry-ext-undici = { path = "../perry-ext-undici", optional = true }
+perry-ext-zlib = { path = "../perry-ext-zlib", optional = true }
+perry-ext-ws = { path = "../perry-ext-ws", optional = true }

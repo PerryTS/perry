@@ -5241,7 +5241,7 @@ jobs:
       run: python scripts/wasi_build_runtime.py
     - name: Image classifier checks as a wasm program
       run: python scripts/wasi_image_selftest.py target/perry-dev/perry
-    - name: Build the runtime for wasm32-wasip1 and check it imports only preview 1
+    - name: Build the bundled runtime for wasm32-wasip1 and check it imports only preview 1
       shell: bash
       run: |
         python scripts/wasi_imports_check.py --self-test

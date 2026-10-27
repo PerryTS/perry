@@ -4097,6 +4097,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "libz-rs-sys"
+version = "0.6.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "434324ee61a8e4a05dd3fdf03d51c073ea7fdaf5a35b2ca33c4ca9f3f37def4a"
+dependencies = [
+ "zlib-rs",
+]
+
+[[package]]
 name = "linux-raw-sys"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5669,6 +5678,7 @@ dependencies = [
  "brotli 9.0.0",
  "flate2",
  "libz-ng-sys",
+ "libz-rs-sys",
  "miniz_oxide 0.9.1",
  "perry-ffi",
  "perry-runtime",
@@ -5852,8 +5862,14 @@ dependencies = [
 name = "perry-runtime-static"
 version = "0.5.1663"
 dependencies = [
+ "perry-ext-http",
  "perry-ext-net",
+ "perry-ext-undici",
+ "perry-ext-ws",
+ "perry-ext-zlib",
+ "perry-http-server",
  "perry-runtime",
+ "perry-stdlib",
 ]
 
 [[package]]
