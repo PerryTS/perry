@@ -234,6 +234,35 @@ jobs:
           python3 scripts/ci_plan.py "${args[@]}"
 
 
+  # The dependency ban is independent of the build planner and Rust setup.
+  # Every PR must pass it, including docs-only and custom-suite runs.
+  tokio-ban:
+    needs: route
+    if: always() && (github.event_name == 'pull_request' || needs.route.outputs.run_core == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository for the dependency ban
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --depth 1 origin "$CHECKOUT_REF"
+          git checkout --detach FETCH_HEAD
+      - name: Prove the ban catches regressions
+        run: python3 scripts/tokio_inventory.py --self-test
+      - name: Prove offline rejection and mandatory CI results
+        run: python3 scripts/test_tokio_gate.py
+      - name: Reject Tokio across repository dependencies and sources
+        run: python3 scripts/tokio_inventory.py --offline
+
   # ---------------------------------------------------------------------------
   # Lint: cargo fmt --check, no-compile audits, and a Windows type-check.
   # Runs in EVERY tier, including docs-only PRs (it is the one job the plan
@@ -5288,6 +5317,7 @@ jobs:
       - route
       - plan
       - lint
+      - tokio-ban
       - check
       - warnings
       - cargo-test
@@ -5332,6 +5362,11 @@ jobs:
           fi
           if [ "$plan_result" != "success" ]; then
             echo "::error::the plan job did not succeed ($plan_result); nothing below it ran, so this is a red run, not a green one."
+            exit 1
+          fi
+          tokio_result="$(echo "$NEEDS" | jq -r '.["tokio-ban"].result')"
+          if [ "$tokio_result" != "success" ]; then
+            echo "::error::the mandatory no-Tokio gate did not pass ($tokio_result)."
             exit 1
           fi
           wasi_planned="$(echo "$NEEDS" | jq -r '.plan.outputs.plan | fromjson | .jobs.wasi_execution')"
