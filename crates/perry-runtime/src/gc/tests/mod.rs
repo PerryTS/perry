@@ -73,6 +73,7 @@ mod layout_trace;
 mod lazy_intrinsic_towers;
 mod lazy_tape_side_alloc;
 mod leaf_marks;
+mod image_cells;
 mod malloc_parent_remembering;
 mod retired_handle_carrier;
 mod map_store;

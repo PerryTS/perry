@@ -249,6 +249,11 @@ pub(crate) use cycle_malloc_trim::{
 };
 mod verify;
 mod verify_diag;
+/// WRT: the realm image's remembered set and the worker-realm evacuation.
+pub(crate) mod image_cells;
+// Step 3 (worker realms) is the production caller; until then the tests are.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) mod image_evacuate;
 #[cfg(any(test, perry_check_contracts))]
 mod verify_honest;
 use verify_diag::*;

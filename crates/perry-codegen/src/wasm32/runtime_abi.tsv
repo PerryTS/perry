@@ -3480,6 +3480,7 @@ js_readline_stdin_unref	f64
 js_readline_terminal	f64	i64
 js_readline_write	f64	i64,f64
 js_readonly_set_has	f64	f64,f64
+js_realm_test_fixture_publish	void	f64
 js_receiver_may_own_named_method	i32s	f64,f64
 js_recv_route_note	void	i32u
 js_referenceerror_new	ptr	ptr
