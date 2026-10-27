@@ -3,7 +3,9 @@ import { imports, register } from "./generated/guest";
 const foreign = imports["test:async-compound-resources/foreign@1.0.0"];
 let publications = 0;
 let cancelledBorrow: any;
-function check(ok: boolean): void { if (!ok) throw new Error("compound ownership invariant"); }
+function check(ok: boolean, message: string): void {
+  if (!ok) { console.error(message); throw new Error(message); }
+}
 function read(value: any): number { return foreign["[method]item.read"](value.borrow()); }
 register({
   async "cancel-exchange"(id, value) {
@@ -14,20 +16,22 @@ register({
     const expected = read(first);
     const expectedOther = read(other);
     let rejected = false;
+    let failure = "duplicate request unexpectedly accepted";
     try {
       foreign.exchange(id + 50, {
         owners: [{ first, second: other, label: "duplicate" }],
-        fallback: first, choice: value.choice
+        fallback: { tag: "some", value: first }, choice: value.choice
       });
     } catch (error) {
-      rejected = String(error).includes("transferred more than once");
+      failure = String(error);
+      rejected = failure.includes("transferred more than once");
     }
-    check(rejected);
+    check(rejected, failure);
     collect();
-    check(read(first) === expected && read(other) === expectedOther);
-    check(read(value.owners[1].first) === expected + 3);
-    check(read(value.owners[1].second) === expected + 4);
-    check(read(value.fallback) === expected + 5);
+    check(read(first) === expected && read(other) === expectedOther, "staged owners changed after rejection");
+    check(read(value.owners[1].first) === expected + 3, "third owner changed");
+    check(read(value.owners[1].second) === expected + 4, "fourth owner changed");
+    check(value.fallback.tag === "some" && read(value.fallback.value) === expected + 5, "fallback owner changed");
     imports.rejected(id);
     const pending = foreign.exchange(id, value);
     imports.submitted(id);
