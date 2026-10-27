@@ -13,8 +13,6 @@ use crate::string::js_string_from_bytes;
 #[cfg(any(unix, windows))]
 use crate::string::StringHeader;
 use crate::value::{JSValue, TAG_FALSE, TAG_NULL, TAG_TRUE, TAG_UNDEFINED};
-use std::collections::VecDeque;
-use std::sync::{Mutex, MutexGuard, OnceLock};
 
 #[cfg(any(unix, windows))]
 use std::io::{BufRead, Read, Write};
@@ -22,58 +20,6 @@ use std::io::{BufRead, Read, Write};
 use std::os::fd::FromRawFd;
 #[cfg(unix)]
 use std::os::unix::net::UnixStream;
-
-#[cfg(unix)]
-type IpcStream = UnixStream;
-#[cfg(windows)]
-type IpcStream = crate::child_process::ipc_transport::IpcStream;
-
-enum IpcEvent {
-    Message(String),
-    MessageAdvanced(Vec<u8>),
-    Closed,
-}
-
-struct ChildIpcState {
-    initialized: bool,
-    available: bool,
-    connected: bool,
-    refed: bool,
-    disconnect_emitted: bool,
-    advanced: bool,
-    #[cfg(any(unix, windows))]
-    send: Option<IpcStream>,
-    queue: VecDeque<IpcEvent>,
-}
-
-impl ChildIpcState {
-    fn new() -> Self {
-        Self {
-            initialized: false,
-            available: false,
-            connected: false,
-            refed: false,
-            disconnect_emitted: false,
-            advanced: false,
-            #[cfg(any(unix, windows))]
-            send: None,
-            queue: VecDeque::new(),
-        }
-    }
-}
-
-static CHILD_IPC: OnceLock<Mutex<ChildIpcState>> = OnceLock::new();
-
-fn ipc_state() -> &'static Mutex<ChildIpcState> {
-    crate::once_init::get_or_init(&CHILD_IPC, || Mutex::new(ChildIpcState::new()))
-}
-
-fn ipc_lock() -> MutexGuard<'static, ChildIpcState> {
-    match ipc_state().lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
-    }
-}
 
 fn undefined_value() -> f64 {
     f64::from_bits(TAG_UNDEFINED)
@@ -100,45 +46,8 @@ fn ipc_function(name: &str, info: *const crate::closure::JsFunctionInfo, length:
     crate::value::js_nanbox_pointer(closure as i64)
 }
 
-/// Initialize the inherited child IPC channel once. This also removes Node's
-/// bootstrap-only env vars so `process.env.NODE_CHANNEL_FD` follows Node.
-/// turnloop P0: whether `process_ipc_ensure_initialized` has finished probing
-/// for an inherited IPC channel, and whether it found one. `available` never
-/// reverts once set, so after a probe that found no channel the per-turn
-/// keep-alive check answers from these two atomics without the IPC lock.
-static IPC_PROBED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-static IPC_AVAILABLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-pub(crate) fn process_ipc_ensure_initialized() {
-    {
-        let mut state = ipc_lock();
-        if state.initialized {
-            return;
-        }
-        state.initialized = true;
-    }
-
-    let fd_var = std::env::var("NODE_CHANNEL_FD").ok();
-    let serialization_mode =
-        std::env::var("NODE_CHANNEL_SERIALIZATION_MODE").unwrap_or_else(|_| "json".to_string());
-    std::env::remove_var("NODE_CHANNEL_FD");
-    std::env::remove_var("NODE_CHANNEL_SERIALIZATION_MODE");
-
-    #[cfg(unix)]
-    initialize_unix_ipc(fd_var, &serialization_mode);
-
-    #[cfg(windows)]
-    initialize_windows_ipc(fd_var, &serialization_mode);
-
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = (fd_var, serialization_mode);
-    }
-    IPC_PROBED.store(true, std::sync::atomic::Ordering::Release);
-}
-
 #[cfg(unix)]
-fn initialize_unix_ipc(fd_var: Option<String>, serialization_mode: &str) {
+pub(super) fn initialize_unix_ipc(fd_var: Option<String>, serialization_mode: &str) {
     let Some(fd) = fd_var
         .and_then(|s| s.parse::<i32>().ok())
         .filter(|fd| *fd >= 0)
@@ -165,7 +74,7 @@ fn initialize_unix_ipc(fd_var: Option<String>, serialization_mode: &str) {
 }
 
 #[cfg(windows)]
-fn initialize_windows_ipc(fd_var: Option<String>, serialization_mode: &str) {
+pub(super) fn initialize_windows_ipc(fd_var: Option<String>, serialization_mode: &str) {
     use windows_sys::Win32::Foundation::{
         DuplicateHandle, DUPLICATE_SAME_ACCESS, HANDLE, INVALID_HANDLE_VALUE,
     };
@@ -304,26 +213,13 @@ fn ipc_is_connected() -> bool {
     state.available && state.connected
 }
 
-/// IPC-backed `process` properties, through a slot the `proc-ipc` install
-/// fills (the compiler installs it on any `process.send` / `disconnect` /
-/// `connected` / `channel` token). With no install the channel can never be
-/// used by this program, so returning `None` keeps the always-live
-/// process-namespace lookup from statically pinning the IPC send path and,
-/// through it, the JSON serializer.
-static IPC_PROPERTY: crate::feature_hooks::Hook<fn(&str) -> Option<f64>> =
-    crate::feature_hooks::Hook::empty();
-
-pub(crate) fn process_ipc_property(name: &str) -> Option<f64> {
-    IPC_PROPERTY.get().and_then(|f| f(name))
-}
-
 /// The `proc-ipc` install.
 pub(crate) fn install() {
-    IPC_PROPERTY.set(process_ipc_property_impl);
+    super::ipc_hooks::install();
     crate::feature_hooks::install_json_engine();
 }
 
-fn process_ipc_property_impl(name: &str) -> Option<f64> {
+pub(super) fn process_ipc_property_impl(name: &str) -> Option<f64> {
     match name {
         "send" | "disconnect" | "connected" | "channel" => {}
         _ => return None,
@@ -429,7 +325,7 @@ extern "C" fn process_ipc_disconnect_fn(
     _closure: *const ClosureHeader,
     _this: crate::closure::JsThis,
 ) -> f64 {
-    process_ipc_disconnect_call()
+    process_ipc_disconnect_call_impl()
 }
 
 extern "C" fn process_ipc_send_fn(
@@ -440,10 +336,10 @@ extern "C" fn process_ipc_send_fn(
     a3: f64,
     a4: f64,
 ) -> f64 {
-    process_ipc_send_call(message, a2, a3, a4)
+    process_ipc_send_call_impl(message, a2, a3, a4)
 }
 
-pub(crate) fn process_ipc_send_call(message: f64, a2: f64, a3: f64, a4: f64) -> f64 {
+pub(crate) fn process_ipc_send_call_impl(message: f64, a2: f64, a3: f64, a4: f64) -> f64 {
     let callback = [a4, a3, a2].into_iter().find(|v| {
         JSValue::from_bits(v.to_bits()).is_pointer()
             && !crate::fs::extract_closure_ptr(*v).is_null()
@@ -455,7 +351,7 @@ pub(crate) fn process_ipc_send_call(message: f64, a2: f64, a3: f64, a4: f64) -> 
     bool_value(ok)
 }
 
-pub(crate) fn process_ipc_disconnect_call() -> f64 {
+pub(crate) fn process_ipc_disconnect_call_impl() -> f64 {
     process_ipc_disconnect_local();
     undefined_value()
 }
@@ -518,7 +414,7 @@ fn process_ipc_send_message(message: f64) -> bool {
 /// the child IPC channel. Used by `node:cluster` internal messages
 /// (`{cmd:"NODE_CLUSTER", ...}`, #4914) where the payload is built in Rust and
 /// never exists as a JS value.
-pub(crate) fn process_ipc_send_raw_json(json: &str) -> bool {
+pub(crate) fn process_ipc_send_raw_json_impl(json: &str) -> bool {
     process_ipc_ensure_initialized();
     #[cfg(not(any(unix, windows)))]
     {
@@ -669,7 +565,7 @@ fn mark_disconnect_emitted() -> bool {
     }
 }
 
-pub(crate) fn process_ipc_note_listener(event: &str) {
+pub(crate) fn process_ipc_note_listener_impl(event: &str) {
     if !matches!(event, "message" | "disconnect") {
         return;
     }
@@ -680,8 +576,7 @@ pub(crate) fn process_ipc_note_listener(event: &str) {
     }
 }
 
-#[no_mangle]
-pub extern "C" fn js_process_ipc_drain() -> i32 {
+pub(crate) extern "C" fn js_process_ipc_drain_impl() -> i32 {
     process_ipc_ensure_initialized();
     let events = {
         let mut state = ipc_lock();
@@ -714,8 +609,7 @@ pub extern "C" fn js_process_ipc_drain() -> i32 {
     count
 }
 
-#[no_mangle]
-pub extern "C" fn js_process_ipc_has_active() -> i32 {
+pub(crate) extern "C" fn js_process_ipc_has_active_impl() -> i32 {
     if IPC_PROBED.load(std::sync::atomic::Ordering::Acquire)
         && !IPC_AVAILABLE.load(std::sync::atomic::Ordering::Acquire)
     {
@@ -729,3 +623,13 @@ pub extern "C" fn js_process_ipc_has_active() -> i32 {
         0
     }
 }
+
+pub(crate) use super::ipc_bootstrap::process_ipc_ensure_initialized;
+#[cfg(any(unix, windows))]
+use super::ipc_bootstrap::IpcStream;
+use super::ipc_bootstrap::{ipc_lock, IpcEvent, IPC_AVAILABLE, IPC_PROBED};
+
+pub(crate) use super::ipc_hooks::{
+    process_ipc_disconnect_call, process_ipc_note_listener, process_ipc_property,
+    process_ipc_send_call, process_ipc_send_raw_json,
+};

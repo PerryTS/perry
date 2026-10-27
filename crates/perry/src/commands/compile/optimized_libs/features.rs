@@ -329,6 +329,7 @@ pub(crate) fn auto_optimized_cross_features(
         cross_features.push("perry-runtime/event-target".to_string());
     }
     if ctx.uses_typedarray
+        || ctx.uses_proc_ipc
         || ctx.uses_get_builtin_module
         || ctx.uses_thread_codec
         || ctx.uses_fetch
@@ -441,7 +442,14 @@ pub(crate) fn auto_optimized_cross_features(
         (ctx.uses_global_websocket, "global-websocket"),
         (ctx.uses_global_webcrypto, "global-webcrypto"),
         (ctx.uses_global_webfetch, "global-webfetch"),
-        (ctx.uses_proc_ipc || ctx.uses_get_builtin_module, "proc-ipc"),
+        (
+            ctx.uses_proc_ipc
+                || ctx.uses_get_builtin_module
+                || ctx.native_module_imports.contains("cluster")
+                || needs_dyn_eval
+                || !ctx.native_addons.is_empty(),
+            "proc-ipc",
+        ),
     ] {
         if used || dynamic_code {
             cross_features.push(format!("perry-runtime/{feat}"));

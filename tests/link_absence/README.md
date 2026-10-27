@@ -93,3 +93,14 @@ exercise installed paths, including constructor names supplied through argv.
 The performance rule covers both timeline and histogram implementations and their `js_perf_` C entry points. The old `js_performance_` prefix named only the shared numeric `performance.now()` clock, which remains Core. `without_perf_hooks.ts` executes that clock and promises while requiring every timeline/histogram implementation absent. Timerify, histogram recording and mark detail remain covered by the installed positive. Shared clock relocation receives no size credit.
 
 A JSON string in `HWS stdin` supplies identical bytes and EOF to Node and the compiled witness. `os_stdin.ts` requires its installed stdin pump to deliver the data and end events before a failing timeout. `without_os.ts` keeps argv, environment, pid, nextTick and promise paths live while requiring the OS backend absent.
+
+A `HWS ipc` JSON object creates an inherited Node-compatible IPC socket and sends
+one framed message to both runtimes. The message witness must deliver its callback
+before its deadline; the environment-only negative checks Node's bootstrap-only
+variable removal while requiring the IPC implementation absent. A `HWS ipc reply`
+object also requires one matching outgoing JSON frame, alongside the send callback
+and disconnect event.
+
+A `HWS ipc driver` sibling `.mjs` runs the supplied command through Node's
+advanced IPC transport. Its receiving program names no typed-array constructor,
+so successful deserialization checks the IPC installer's transitive dependency.

@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 import platform
 import re
+import socket
 import shutil
 import shlex
 import struct
@@ -46,6 +47,7 @@ NEGATIVES = {
     "without_wasi": ["wasi"],
     "without_event_target": ["event_target"],
     "without_typedarray": ["typedarray"],
+    "without_proc_ipc": ["proc_ipc"],
     "without_messaging": ["messaging"],
     "without_async_hooks": ["async_hooks"],
     "without_bigint_querystring": ["bigint"],
@@ -56,6 +58,43 @@ NEGATIVES = {
 def run(cmd, *, cwd=None, env=None, timeout=180, input=None):
     return subprocess.run([str(x) for x in cmd], cwd=cwd, env=env,
                           capture_output=True, timeout=timeout, input=input)
+
+
+def run_witness(cmd, *, cwd, options):
+    data = options["stdin"].encode() if options["stdin"] is not None else None
+    if options["ipc_driver"]:
+        driver = cwd / options["ipc_driver"]
+        shutil.copyfile(FIXTURES / options["ipc_driver"], driver)
+        return run(["node", driver, json.dumps([str(x) for x in cmd])], cwd=cwd,
+                   input=data, timeout=10)
+    if options["ipc"] is None:
+        return run(cmd, cwd=cwd, input=data)
+    # Node and Perry adopt the same inherited fd and newline JSON framing.
+    # Keep the parent endpoint open until the child exits, so EOF cannot race
+    # the callback. A missing delivery times out instead of passing silently.
+    parent, child = socket.socketpair()
+    with parent, child:
+        env = {**os.environ, "NODE_CHANNEL_FD": str(child.fileno()),
+               "NODE_CHANNEL_SERIALIZATION_MODE": "json"}
+        with subprocess.Popen([str(x) for x in cmd], cwd=cwd, env=env,
+                              pass_fds=(child.fileno(),), stdin=subprocess.PIPE,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
+            child.close()
+            try:
+                parent.sendall((json.dumps(options["ipc"])+"\n").encode())
+                stdout, stderr = process.communicate(data, timeout=10)
+                if options["ipc_reply"] is not None:
+                    parent.settimeout(1)
+                    payload = bytearray()
+                    while chunk := parent.recv(65536):
+                        payload.extend(chunk)
+                    messages = [json.loads(line) for line in payload.splitlines() if line]
+                    assert messages == [options["ipc_reply"]], f"IPC reply mismatch: {messages!r}"
+            except BaseException:
+                process.kill()
+                process.communicate()
+                raise
+            return subprocess.CompletedProcess(cmd, process.returncode, stdout, stderr)
 
 
 def checked(cmd, **kwargs):
@@ -96,7 +135,20 @@ def witness_options(path):
     stdin=re.search(r"^// HWS stdin: (.+)$",source,re.M)
     stdin=json.loads(stdin[1]) if stdin else None
     assert stdin is None or isinstance(stdin,str), f"{path}: stdin must be a JSON string"
-    return {"argv": argv, "node": oracle,"stdin":stdin}
+    ipc = re.search(r"^// HWS ipc: (.+)$", source, re.M)
+    ipc = json.loads(ipc[1]) if ipc else None
+    assert ipc is None or isinstance(ipc, dict), f"{path}: ipc must be a JSON object"
+    reply = re.search(r"^// HWS ipc reply: (.+)$", source, re.M)
+    reply = json.loads(reply[1]) if reply else None
+    assert reply is None or isinstance(reply, dict), f"{path}: ipc reply must be a JSON object"
+    assert reply is None or ipc is not None, f"{path}: ipc reply requires an inherited IPC channel"
+    driver = re.search(r"^// HWS ipc driver: (.+)$", source, re.M)
+    driver = driver[1] if driver else None
+    if driver:
+        assert Path(driver).name == driver and Path(driver).suffix == ".mjs", f"{path}: IPC driver must be a sibling .mjs"
+        assert (FIXTURES / driver).is_file(), f"{path}: missing IPC driver {driver}"
+        assert ipc is None and reply is None, f"{path}: use a driver or JSON IPC transport"
+    return {"argv": argv, "node": oracle,"stdin":stdin,"ipc":ipc,"ipc_reply":reply,"ipc_driver":driver}
 
 
 def inventory():
@@ -339,8 +391,8 @@ def main():
             if options["node"]:
                 oracle_source = args.output/name/options["node"]
                 shutil.copyfile(FIXTURES/options["node"], oracle_source)
-            oracle = run(["node", oracle_source, *witness_argv], cwd=binary.parent, input=options["stdin"].encode() if options["stdin"] is not None else None)
-            actual = run([binary, *witness_argv], cwd=binary.parent, input=options["stdin"].encode() if options["stdin"] is not None else None)
+            oracle = run_witness(["node", oracle_source, *witness_argv], cwd=binary.parent, options=options)
+            actual = run_witness([binary, *witness_argv], cwd=binary.parent, options=options)
             (binary.parent/"node.stdout").write_bytes(oracle.stdout)
             (binary.parent/"native.stdout").write_bytes(actual.stdout)
             (binary.parent/"node.stderr").write_bytes(oracle.stderr)

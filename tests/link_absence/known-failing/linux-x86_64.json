@@ -215,11 +215,6 @@
       "perry_runtime::node_api_host::metadata::PENDING_FINALIZERS::resolve",
       "perry_runtime::node_api_host::metadata::enqueue_finalizer"
     ],
-    "proc_ipc": [
-      "<perry_runtime::process::ipc::ipc_state::{closure#0} as core::ops::function::FnOnce<()>>::call_once",
-      "perry_runtime::process::ipc::process_ipc_ensure_initialized",
-      "perry_runtime::process::ipc::push_ipc_event"
-    ],
     "string_normalize": [
       "perry_runtime::string::normalize_hooked::ccc"
     ],

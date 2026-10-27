@@ -23,6 +23,9 @@ pub(crate) use env_misc::{
 };
 mod finalization;
 pub(crate) mod ipc;
+mod ipc_bootstrap;
+mod ipc_hooks;
+pub use ipc_hooks::{js_process_ipc_drain, js_process_ipc_has_active};
 mod node_module;
 mod permission;
 pub(crate) mod report;

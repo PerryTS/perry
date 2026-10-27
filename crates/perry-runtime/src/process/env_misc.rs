@@ -1417,7 +1417,7 @@ fn env_name_is_settable(name: &str) -> bool {
 }
 
 fn js_process_env_impl() -> f64 {
-    ipc::process_ipc_ensure_initialized();
+    super::ipc_hooks::ensure_initialized();
     let cached = CACHED_ENV.with(|c| c.get());
     if cached != 0.0 {
         return cached;
